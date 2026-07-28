@@ -8,6 +8,9 @@ const defaultCatalogPath = path.resolve(
   scriptDirectory,
   '../samples/workflow/workflow-samples.json'
 )
+const sampleAssetRemark = 'ApprovaPlat 可验收审批样例'
+const formPageSize = 50
+const maxFormSearchRows = 1000
 
 /**
  * 读取命令行参数并限制只接受脚本公开的配置项。
@@ -102,35 +105,127 @@ function createApiClient(baseUrl) {
 async function getOrCreateCategory(api, category) {
   const response = await api.request('GET', '/workflow/category/listAll')
   const existing = (response.data || []).find(item => item.code === category.code)
-  if (!existing) {
-    await api.request('POST', '/workflow/category', {
-      categoryName: category.name,
-      code: category.code,
-      remark: 'ApprovaPlat 可验收审批样例'
-    })
+  if (existing) {
+    if (existing.categoryName !== category.name) {
+      throw new Error(`流程分类内容漂移: ${category.code}`)
+    }
+    return category.code
   }
+
+  await api.request('POST', '/workflow/category', {
+    categoryName: category.name,
+    code: category.code,
+    remark: sampleAssetRemark
+  })
   return category.code
 }
 
 /**
- * 按表单名称查询或创建经过服务端校验的正式流程表单。
+ * 对 JSON 对象键递归排序，数组顺序保持业务语义不变。
+ * @param {unknown} value 待规范化的 JSON 值。
+ * @returns {unknown} 可稳定序列化比较的 JSON 值。
+ */
+function canonicalizeJson(value) {
+  if (Array.isArray(value)) return value.map(item => canonicalizeJson(item))
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort((left, right) => left.localeCompare(right))
+      .map(key => [key, canonicalizeJson(value[key])])
+  )
+}
+
+/**
+ * 解析并稳定序列化表单 JSON，用于识别同名资产的真实内容漂移。
+ * @param {string} content 待解析的表单 JSON 正文。
+ * @param {string} formName 错误信息使用的表单名称。
+ * @returns {string} 键顺序稳定的 JSON 字符串。
+ */
+function normalizeFormContent(content, formName) {
+  try {
+    return JSON.stringify(canonicalizeJson(JSON.parse(content)))
+  } catch {
+    throw new Error(`正式表单 JSON 无法解析: ${formName}`)
+  }
+}
+
+/**
+ * 分页读取全部名称过滤结果，再按精确名称筛选正式表单。
+ * @param {{request: Function}} api 已登录 API 客户端。
+ * @param {string} formName 待查询的精确表单名称。
+ * @returns {Promise<object[]>} 所有精确同名的有效正式表单摘要。
+ */
+async function listExactForms(api, formName) {
+  const matches = []
+  let pageNum = 1
+  let total = 0
+  do {
+    const response = await api.request(
+      'GET',
+      `/workflow/form/list?pageNum=${pageNum}&pageSize=${formPageSize}&formName=${encodeURIComponent(formName)}`
+    )
+    total = Number(response.total)
+    if (!Number.isSafeInteger(total) || total < 0 || total > maxFormSearchRows) {
+      throw new Error(`表单名称查询结果超出安全范围: ${formName}`)
+    }
+    const rows = Array.isArray(response.rows) ? response.rows : []
+    matches.push(...rows.filter(item => item.formName === formName))
+    pageNum += 1
+  } while ((pageNum - 1) * formPageSize < total)
+  return matches
+}
+
+/**
+ * 读取正式表单详情并核验目录定义，禁止静默复用同名异内容资产。
+ * @param {{request: Function}} api 已登录 API 客户端。
+ * @param {number} formId 待核验的正式表单主键。
+ * @param {object} sample 包含 formName 和 form 的样例定义。
+ * @returns {Promise<void>} 内容一致时完成；漂移时抛出异常。
+ */
+async function assertFormMatches(api, formId, sample) {
+  const response = await api.request('GET', `/workflow/form/${encodeURIComponent(formId)}`)
+  const form = response.data
+  const expectedContent = JSON.stringify(canonicalizeJson(sample.form))
+  const actualContent = normalizeFormContent(form?.content, sample.formName)
+  if (form?.formName !== sample.formName || actualContent !== expectedContent) {
+    throw new Error(`流程表单内容漂移: ${sample.formName}`)
+  }
+}
+
+/**
+ * 按表单名称查询或创建经过服务端校验的正式流程表单，并拒绝重复或内容漂移。
  * @param {{request: Function}} api 已登录 API 客户端。
  * @param {object} sample 包含 formName 和 form 的样例定义。
  * @returns {Promise<number>} 正式表单主键。
  */
 async function getOrCreateForm(api, sample) {
-  const response = await api.request(
-    'GET',
-    `/workflow/form/list?pageNum=1&pageSize=50&formName=${encodeURIComponent(sample.formName)}`
-  )
-  const existing = (response.rows || []).find(item => item.formName === sample.formName)
-  if (existing) return Number(existing.formId)
+  const existingForms = await listExactForms(api, sample.formName)
+  if (existingForms.length > 1) {
+    throw new Error(`存在多个同名正式表单，拒绝继续部署: ${sample.formName}`)
+  }
+  if (existingForms.length === 1) {
+    const formId = Number(existingForms[0].formId)
+    await assertFormMatches(api, formId, sample)
+    return formId
+  }
+
   const created = await api.request('POST', '/workflow/form', {
     formName: sample.formName,
     content: JSON.stringify(sample.form),
-    remark: 'ApprovaPlat 可验收审批样例'
+    remark: sampleAssetRemark
   })
-  return Number(created.data.formId)
+  const formId = Number(created.data?.formId)
+  if (!Number.isSafeInteger(formId) || formId <= 0) {
+    throw new Error(`创建表单响应缺少有效主键: ${sample.formName}`)
+  }
+
+  // 创建后重新读取名称集合，发现并发重复时停止，避免错误表单继续绑定到模型。
+  const verifiedForms = await listExactForms(api, sample.formName)
+  if (verifiedForms.length !== 1 || Number(verifiedForms[0].formId) !== formId) {
+    throw new Error(`表单创建发生并发冲突，拒绝继续部署: ${sample.formName}`)
+  }
+  await assertFormMatches(api, formId, sample)
+  return formId
 }
 
 /**
@@ -188,6 +283,9 @@ function escapeXml(value) {
 function collectMenuAncestors(menu, menusById, targetIds) {
   let current = menu
   while (current && Number(current.menuId) > 0) {
+    if (String(current.status) !== '0') {
+      throw new Error(`办理权限依赖的菜单已停用: ${current.menuName || current.menuId}`)
+    }
     targetIds.add(Number(current.menuId))
     const parentId = Number(current.parentId)
     if (parentId <= 0) break
@@ -196,34 +294,11 @@ function collectMenuAncestors(menu, menusById, targetIds) {
 }
 
 /**
- * 按角色管理页面的“选中 + 半选”语义重建完整菜单集合，防止回写时丢失父路由。
- * @param {object[]} nodes 菜单树当前层节点。
- * @param {Set<number>} checkedLeafIds 接口返回的选中叶子主键。
- * @param {Set<number>} selectedIds 待写入的完整菜单主键集合。
- * @returns {boolean} 当前分支是否包含已选中的节点。
- */
-function collectSelectedTreeBranch(nodes, checkedLeafIds, selectedIds) {
-  let branchSelected = false
-  for (const node of Array.isArray(nodes) ? nodes : []) {
-    const nodeId = Number(node.id)
-    const childSelected = collectSelectedTreeBranch(
-      Array.isArray(node.children) ? node.children : [],
-      checkedLeafIds,
-      selectedIds
-    )
-    const currentSelected = checkedLeafIds.has(nodeId) || childSelected
-    if (currentSelected) selectedIds.add(nodeId)
-    branchSelected ||= currentSelected
-  }
-  return branchSelected
-}
-
-/**
  * 通过角色管理 API 合并参与者办理权限，避免真实角色被身份目录资格查询过滤。
  * @param {{request: Function}} api 已登录 API 客户端。
  * @param {object} catalog 包含角色键和办理权限的样例目录。
  * @param {object[]} roles 系统有效角色列表。
- * @returns {Promise<{aligned: number}>} 完成增量合并的角色数。
+ * @returns {Promise<{aligned: number, added: number}>} 处理角色数及真实新增权限关联数。
  */
 async function alignParticipantRolePermissions(api, catalog, roles) {
   const roleKeys = Array.isArray(catalog.participantRoleKeys)
@@ -248,34 +323,23 @@ async function alignParticipantRolePermissions(api, catalog, roles) {
     collectMenuAncestors(matchingMenus[0], menusById, requiredMenuIds)
   }
 
+  let added = 0
   for (const roleKey of roleKeys) {
     const roleRow = roles.find(item =>
       item.roleKey === roleKey && String(item.status) === '0'
     )
     if (!roleRow) throw new Error(`未找到有效参与者角色: ${roleKey}`)
-    const [detailResponse, treeResponse] = await Promise.all([
-      api.request('GET', `/system/role/${encodeURIComponent(roleRow.roleId)}`),
-      api.request('GET', `/system/menu/roleMenuTreeselect/${encodeURIComponent(roleRow.roleId)}`)
-    ])
-    const role = detailResponse.data
-    const checkedLeafIds = new Set((treeResponse.checkedKeys || []).map(Number))
-    // roleMenuTreeselect 只返回叶子；先复原半选父节点，保持与角色管理页面提交逻辑一致。
-    const existingIds = new Set()
-    collectSelectedTreeBranch(treeResponse.menus || [], checkedLeafIds, existingIds)
-    requiredMenuIds.forEach(menuId => existingIds.add(menuId))
-    await api.request('PUT', '/system/role', {
-      roleId: role.roleId,
-      roleName: role.roleName,
-      roleKey: role.roleKey,
-      roleSort: Number(role.roleSort),
-      status: role.status,
-      menuIds: [...existingIds].sort((left, right) => left - right),
-      menuCheckStrictly: Boolean(role.menuCheckStrictly),
-      deptCheckStrictly: Boolean(role.deptCheckStrictly),
-      remark: role.remark
+    // 专用接口只执行 INSERT IGNORE，不读取或替换目标角色的既有菜单集合。
+    const response = await api.request('PUT', `/system/role/${encodeURIComponent(roleRow.roleId)}/menus/grant`, {
+      menuIds: [...requiredMenuIds].sort((left, right) => left - right)
     })
+    const addedForRole = Number(response.data?.added)
+    if (!Number.isSafeInteger(addedForRole) || addedForRole < 0) {
+      throw new Error(`角色增量授权响应不完整: ${roleKey}`)
+    }
+    added += addedForRole
   }
-  return { aligned: roleKeys.length }
+  return { aligned: roleKeys.length, added }
 }
 
 /**
@@ -348,7 +412,89 @@ ${edges.join('\n')}
 }
 
 /**
- * 创建或复用模型，保存安全 BPMN，并部署一个可直接发起的审批样例。
+ * 核验同标识模型的业务元数据和表单内容，禁止接管不属于当前目录的资产。
+ * @param {object} model 模型详情接口返回的正式模型。
+ * @param {object} sample 当前审批样例定义。
+ * @param {string} category 已核验的正式分类编码。
+ * @param {number} formId 已核验的正式表单主键。
+ * @returns {void} 内容一致时完成；碰撞或漂移时抛出异常。
+ */
+function assertModelMetadataMatches(model, sample, category, formId) {
+  const metadataMatches = model?.modelName === sample.modelName &&
+    model?.modelKey === sample.modelKey &&
+    model?.category === category &&
+    Number(model?.formType) === 0 &&
+    Number(model?.formId) === formId &&
+    model?.description === sample.description
+  const expectedFormContent = JSON.stringify(canonicalizeJson(sample.form))
+  const actualFormContent = normalizeFormContent(model?.content, sample.formName)
+  if (!metadataMatches || actualFormContent !== expectedFormContent) {
+    throw new Error(`流程模型元数据或表单内容漂移: ${sample.modelKey}`)
+  }
+}
+
+/**
+ * 查询并核验样例当前最新部署，返回可追踪的真实部署主键。
+ * @param {{request: Function}} api 已登录 API 客户端。
+ * @param {object} sample 当前审批样例定义。
+ * @param {string} category 已核验的正式分类编码。
+ * @param {number} formId 已核验的正式表单主键。
+ * @param {string} expectedBpmn 目录和当前身份主数据生成的 BPMN XML。
+ * @returns {Promise<string>} 已发布且内容一致的真实部署主键。
+ */
+async function getVerifiedDeployment(api, sample, category, formId, expectedBpmn) {
+  const response = await api.request(
+    'GET',
+    `/workflow/deploy/publishList?pageNum=1&pageSize=200&processKey=${encodeURIComponent(sample.modelKey)}`
+  )
+  const deployments = (response.rows || []).filter(item => item.processKey === sample.modelKey)
+  if (deployments.length !== 1 || Number(response.total) !== 1) {
+    throw new Error(`流程部署记录缺失或重复: ${sample.modelKey}`)
+  }
+  const deployment = deployments[0]
+  const deploymentMatches = deployment.processName === sample.modelName &&
+    deployment.category === category &&
+    Number(deployment.version) === 1 &&
+    Number(deployment.formId) === formId &&
+    deployment.formName === sample.formName &&
+    deployment.suspended === false &&
+    typeof deployment.deploymentId === 'string' && deployment.deploymentId.length > 0 &&
+    typeof deployment.definitionId === 'string' && deployment.definitionId.length > 0
+  if (!deploymentMatches) {
+    throw new Error(`流程部署元数据漂移: ${sample.modelKey}`)
+  }
+  const bpmnResponse = await api.request(
+    'GET',
+    `/workflow/deploy/bpmnXml/${encodeURIComponent(deployment.definitionId)}`
+  )
+  if (bpmnResponse.data !== expectedBpmn) {
+    throw new Error(`已部署 BPMN 内容漂移: ${sample.modelKey}`)
+  }
+
+  // 发起表单接口只读取 wf_deploy_form，不回连当前模板；据此核验不可变部署快照正文。
+  const formResponse = await api.request(
+    'GET',
+    `/workflow/process/getProcessForm?definitionId=${encodeURIComponent(deployment.definitionId)}` +
+      `&deployId=${encodeURIComponent(deployment.deploymentId)}`
+  )
+  const snapshot = formResponse.data
+  const expectedFormContent = JSON.stringify(canonicalizeJson(sample.form))
+  const actualFormContent = normalizeFormContent(snapshot?.content, sample.formName)
+  const snapshotMatches = snapshot?.definitionId === deployment.definitionId &&
+    snapshot?.deploymentId === deployment.deploymentId &&
+    Number(snapshot?.formId) === formId &&
+    snapshot?.formKey === `key_${formId}` &&
+    snapshot?.nodeKey === 'start' &&
+    snapshot?.formName === sample.formName &&
+    actualFormContent === expectedFormContent
+  if (!snapshotMatches) {
+    throw new Error(`部署表单快照内容漂移: ${sample.modelKey}`)
+  }
+  return deployment.deploymentId
+}
+
+/**
+ * 创建或复用受管样例模型，核验安全 BPMN 后部署一个可直接发起的审批样例。
  * @param {{request: Function}} api 已登录 API 客户端。
  * @param {object} sample 完整样例定义。
  * @param {{users: object[], roles: object[], depts: object[]}} directory 正式身份主数据。
@@ -357,20 +503,50 @@ ${edges.join('\n')}
 async function installSample(api, sample, directory) {
   const category = await getOrCreateCategory(api, sample.category)
   const formId = await getOrCreateForm(api, sample)
+  const resolvedTasks = sample.tasks.map(task => ({
+    id: task.id,
+    name: task.name,
+    identity: resolveTaskIdentity(task, directory)
+  }))
+  const expectedBpmn = createBpmnXml(sample, formId, resolvedTasks)
   const response = await api.request(
     'GET',
     `/workflow/model/list?pageNum=1&pageSize=200&modelKey=${encodeURIComponent(sample.modelKey)}`
   )
-  const existing = (response.rows || []).find(item => item.modelKey === sample.modelKey)
-  if (existing?.deployed) {
-    return {
-      modelKey: sample.modelKey,
-      status: 'already-deployed',
-      deploymentId: String(existing.deploymentId || '')
+  const existingModels = (response.rows || []).filter(item => item.modelKey === sample.modelKey)
+  if (existingModels.length > 1 || Number(response.total) !== existingModels.length) {
+    throw new Error(`流程模型标识查询结果异常: ${sample.modelKey}`)
+  }
+  const existing = existingModels[0]
+  if (existing) {
+    const detailResponse = await api.request(
+      'GET',
+      `/workflow/model/${encodeURIComponent(existing.modelId)}`
+    )
+    const model = detailResponse.data
+    assertModelMetadataMatches(model, sample, category, formId)
+    if (model.deployed) {
+      if (model.bpmnXml !== expectedBpmn) {
+        throw new Error(`已部署模型 BPMN 内容漂移: ${sample.modelKey}`)
+      }
+      const deploymentId = await getVerifiedDeployment(
+        api,
+        sample,
+        category,
+        formId,
+        expectedBpmn
+      )
+      return {
+        modelKey: sample.modelKey,
+        status: 'already-deployed',
+        deploymentId
+      }
+    }
+    if (model.bpmnXml !== expectedBpmn) {
+      throw new Error(`未部署模型 BPMN 内容漂移: ${sample.modelKey}`)
     }
   }
 
-  let modelId = existing?.modelId
   const metadata = {
     modelName: sample.modelName,
     modelKey: sample.modelKey,
@@ -379,31 +555,53 @@ async function installSample(api, sample, directory) {
     formType: 0,
     formId
   }
-  if (modelId) {
-    await api.request('PUT', '/workflow/model', { ...metadata, modelId })
-  } else {
+  let modelId = existing?.modelId
+  if (!modelId) {
     const created = await api.request('POST', '/workflow/model', metadata)
-    modelId = created.data.modelId
+    modelId = created.data?.modelId
+    if (typeof modelId !== 'string' || !modelId) {
+      throw new Error(`创建模型响应缺少有效主键: ${sample.modelKey}`)
+    }
+    const createdDetail = await api.request(
+      'GET',
+      `/workflow/model/${encodeURIComponent(modelId)}`
+    )
+    assertModelMetadataMatches(createdDetail.data, sample, category, formId)
   }
 
-  const resolvedTasks = sample.tasks.map(task => ({
-    id: task.id,
-    name: task.name,
-    identity: resolveTaskIdentity(task, directory)
-  }))
+  // 只允许保存本次新建模型，或 BPMN 已与目录一致的既有未部署模型，禁止覆盖人工草稿。
   await api.request('POST', '/workflow/model/save', {
     modelId,
-    bpmnXml: createBpmnXml(sample, formId, resolvedTasks),
+    bpmnXml: expectedBpmn,
     newVersion: false
   })
+  const savedDetail = await api.request(
+    'GET',
+    `/workflow/model/${encodeURIComponent(modelId)}`
+  )
+  assertModelMetadataMatches(savedDetail.data, sample, category, formId)
+  if (savedDetail.data?.bpmnXml !== expectedBpmn || savedDetail.data?.deployed) {
+    throw new Error(`模型保存状态不一致: ${sample.modelKey}`)
+  }
+
   const deployed = await api.request(
     'POST',
     `/workflow/model/deploy?modelId=${encodeURIComponent(modelId)}`
   )
+  const deploymentId = await getVerifiedDeployment(
+    api,
+    sample,
+    category,
+    formId,
+    expectedBpmn
+  )
+  if (String(deployed.data?.deploymentId || '') !== deploymentId) {
+    throw new Error(`模型部署主键与查询结果不一致: ${sample.modelKey}`)
+  }
   return {
     modelKey: sample.modelKey,
     status: 'deployed',
-    deploymentId: String(deployed.data.deploymentId)
+    deploymentId
   }
 }
 
@@ -443,7 +641,9 @@ async function main() {
   for (const sample of catalog.samples) {
     results.push(await installSample(api, sample, directory))
   }
-  console.log(`参与者角色权限已合并: ${permissionResult.aligned}`)
+  console.log(
+    `参与者角色已核验: ${permissionResult.aligned}，新增菜单关联: ${permissionResult.added}`
+  )
   console.table(results)
 }
 

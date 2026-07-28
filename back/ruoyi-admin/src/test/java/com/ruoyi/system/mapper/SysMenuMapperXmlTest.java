@@ -53,4 +53,38 @@ class SysMenuMapperXmlTest
                 .contains("u.del_flag = '0'")
                 .contains("ur.user_id = ?");
     }
+
+    /**
+     * 验证角色编辑菜单目录只来源于当前用户的启用且未删除角色。
+     *
+     * @return void，无返回值；XML 无法解析或缺少角色有效状态条件时测试失败
+     * @throws Exception 读取 Mapper XML 资源失败
+     */
+    @Test
+    void filtersInactiveOrDeletedRolesFromGrantableMenuList() throws Exception
+    {
+        String resource = "mapper/system/SysMenuMapper.xml";
+        Configuration configuration = new Configuration();
+        configuration.getTypeAliasRegistry().registerAlias("SysMenu", SysMenu.class);
+        try (Reader reader = Resources.getResourceAsReader(resource))
+        {
+            XMLMapperBuilder mapperBuilder = new XMLMapperBuilder(
+                    reader, configuration, resource, configuration.getSqlFragments());
+            mapperBuilder.parse();
+        }
+
+        SysMenu query = new SysMenu();
+        query.getParams().put("userId", 7L);
+        MappedStatement statement = configuration.getMappedStatement(
+                SysMenuMapper.class.getName() + ".selectMenuListByUserId");
+        String normalizedSql = statement.getBoundSql(query).getSql()
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toLowerCase(Locale.ROOT);
+
+        assertThat(normalizedSql)
+                .contains("ur.user_id = ?")
+                .contains("ro.status = '0'")
+                .contains("ro.del_flag = '0'");
+    }
 }
