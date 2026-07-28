@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper">
+
+    <resultMap id="WorkflowHistoricSubmissionMetadataResult"
+               type="com.ruoyi.flowable.domain.WorkflowHistoricSubmissionRow">
+        <constructor>
+            <arg column="detail_id" javaType="java.lang.String"/>
+            <arg column="process_instance_id" javaType="java.lang.String"/>
+            <arg column="activity_instance_id" javaType="java.lang.String"/>
+            <arg column="task_id" javaType="java.lang.String"/>
+            <arg column="variable_name" javaType="java.lang.String"/>
+            <arg column="revision" javaType="java.lang.Integer"/>
+            <arg column="variable_type_name" javaType="java.lang.String"/>
+            <arg column="submitted_at" javaType="java.util.Date"/>
+            <arg column="detail_type" javaType="java.lang.String"/>
+            <arg column="byte_array_id" javaType="java.lang.String"/>
+            <arg column="text_present" javaType="java.lang.Integer"/>
+            <arg column="text2_present" javaType="java.lang.Integer"/>
+            <arg column="text_bytes" javaType="java.lang.Long"/>
+            <arg column="byte_array_present" javaType="java.lang.Integer"/>
+            <arg column="byte_array_body_present" javaType="java.lang.Integer"/>
+            <arg column="stored_bytes" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="WorkflowCurrentVariableMetadataResult"
+               type="com.ruoyi.flowable.domain.WorkflowCurrentVariableMetadataRow">
+        <constructor>
+            <arg column="variable_id" javaType="java.lang.String"/>
+            <arg column="process_instance_id" javaType="java.lang.String"/>
+            <arg column="execution_id" javaType="java.lang.String"/>
+            <arg column="task_id" javaType="java.lang.String"/>
+            <arg column="sub_scope_id" javaType="java.lang.String"/>
+            <arg column="variable_name" javaType="java.lang.String"/>
+            <arg column="variable_type_name" javaType="java.lang.String"/>
+            <arg column="byte_array_id" javaType="java.lang.String"/>
+            <arg column="text_present" javaType="java.lang.Integer"/>
+            <arg column="text2_present" javaType="java.lang.Integer"/>
+            <arg column="text_bytes" javaType="java.lang.Long"/>
+            <arg column="byte_array_present" javaType="java.lang.Integer"/>
+            <arg column="byte_array_body_present" javaType="java.lang.Integer"/>
+            <arg column="stored_bytes" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="WorkflowHistoricVariableBodyResult"
+               type="com.ruoyi.flowable.domain.WorkflowHistoricVariableBodyRow">
+        <constructor>
+            <arg column="row_id" javaType="java.lang.String"/>
+            <arg column="stored_text" javaType="java.lang.String"/>
+            <arg column="stored_bytes" javaType="[B" jdbcType="LONGVARBINARY"/>
+        </constructor>
+    </resultMap>
+
+    <!-- 第一阶段只读取固定变量名的全部行及存储统计，不能在 SQL 中隐藏损坏行。 -->
+    <select id="selectSubmissionMetadata" resultMap="WorkflowHistoricSubmissionMetadataResult">
+        select d.ID_ as detail_id,
+               d.PROC_INST_ID_ as process_instance_id,
+               d.ACT_INST_ID_ as activity_instance_id,
+               d.TASK_ID_ as task_id,
+               d.NAME_ as variable_name,
+               d.REV_ as revision,
+               d.VAR_TYPE_ as variable_type_name,
+               d.TIME_ as submitted_at,
+               d.TYPE_ as detail_type,
+               d.BYTEARRAY_ID_ as byte_array_id,
+               case when d.TEXT_ is null then 0 else 1 end as text_present,
+               case when d.TEXT2_ is null then 0 else 1 end as text2_present,
+               octet_length(d.TEXT_) as text_bytes,
+               case when b.ID_ is null then 0 else 1 end as byte_array_present,
+               case when b.BYTES_ is null then 0 else 1 end as byte_array_body_present,
+               octet_length(b.BYTES_) as stored_bytes
+        from ACT_HI_DETAIL d
+        left join ACT_GE_BYTEARRAY b on b.ID_ = d.BYTEARRAY_ID_
+        where d.PROC_INST_ID_ = #{processInstanceId}
+          and d.NAME_ = #{variableName}
+        order by d.TIME_, d.REV_, d.ID_
+        limit #{rowLimit}
+    </select>
+
+    <!-- 第二阶段只允许按第一阶段已经校验的主键读取正文。 -->
+    <select id="selectSubmissionBodies" resultMap="WorkflowHistoricVariableBodyResult">
+        select d.ID_ as row_id,
+               d.TEXT_ as stored_text,
+               b.BYTES_ as stored_bytes
+        from ACT_HI_DETAIL d
+        left join ACT_GE_BYTEARRAY b on b.ID_ = d.BYTEARRAY_ID_
+        where d.PROC_INST_ID_ = #{processInstanceId}
+          and d.NAME_ = #{variableName}
+          and d.ID_ in
+          <foreach collection="rowIds" item="rowId" open="(" separator="," close=")">
+              #{rowId}
+          </foreach>
+        order by d.ID_
+    </select>
+
+    <!-- 活动表单只查询已授权作用域且命中部署 schema 白名单的变量元数据。 -->
+    <select id="selectCurrentVariableMetadata" resultMap="WorkflowCurrentVariableMetadataResult">
+        select v.ID_ as variable_id,
+               v.PROC_INST_ID_ as process_instance_id,
+               v.EXECUTION_ID_ as execution_id,
+               v.TASK_ID_ as task_id,
+               v.SUB_SCOPE_ID_ as sub_scope_id,
+               v.NAME_ as variable_name,
+               v.VAR_TYPE_ as variable_type_name,
+               v.BYTEARRAY_ID_ as byte_array_id,
+               case when v.TEXT_ is null then 0 else 1 end as text_present,
+               case when v.TEXT2_ is null then 0 else 1 end as text2_present,
+               octet_length(v.TEXT_) as text_bytes,
+               case when b.ID_ is null then 0 else 1 end as byte_array_present,
+               case when b.BYTES_ is null then 0 else 1 end as byte_array_body_present,
+               octet_length(b.BYTES_) as stored_bytes
+        from ACT_HI_VARINST v
+        left join ACT_GE_BYTEARRAY b on b.ID_ = v.BYTEARRAY_ID_
+        where v.PROC_INST_ID_ = #{processInstanceId}
+          and v.NAME_ in
+          <foreach collection="variableNames" item="variableName" open="(" separator="," close=")">
+              #{variableName}
+          </foreach>
+        <choose>
+            <when test="taskLocal">
+                and v.TASK_ID_ = #{taskId}
+            </when>
+            <otherwise>
+                and v.TASK_ID_ is null
+                and v.EXECUTION_ID_ = v.PROC_INST_ID_
+                and v.SUB_SCOPE_ID_ is null
+            </otherwise>
+        </choose>
+        order by v.NAME_, v.ID_
+        limit #{rowLimit}
+    </select>
+
+    <!-- 活动表单正文查询重复绑定授权作用域、字段白名单和已验证主键。 -->
+    <select id="selectCurrentVariableBodies" resultMap="WorkflowHistoricVariableBodyResult">
+        select v.ID_ as row_id,
+               v.TEXT_ as stored_text,
+               b.BYTES_ as stored_bytes
+        from ACT_HI_VARINST v
+        left join ACT_GE_BYTEARRAY b on b.ID_ = v.BYTEARRAY_ID_
+        where v.PROC_INST_ID_ = #{processInstanceId}
+          and v.NAME_ in
+          <foreach collection="variableNames" item="variableName" open="(" separator="," close=")">
+              #{variableName}
+          </foreach>
+          and v.ID_ in
+          <foreach collection="rowIds" item="rowId" open="(" separator="," close=")">
+              #{rowId}
+          </foreach>
+        <choose>
+            <when test="taskLocal">
+                and v.TASK_ID_ = #{taskId}
+            </when>
+            <otherwise>
+                and v.TASK_ID_ is null
+                and v.EXECUTION_ID_ = v.PROC_INST_ID_
+                and v.SUB_SCOPE_ID_ is null
+            </otherwise>
+        </choose>
+        order by v.ID_
+    </select>
+
+</mapper>

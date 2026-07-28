@@ -1,0 +1,457 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WorkflowIdentityMapper">
+
+    <resultMap id="WorkflowIdentityOptionViewResult"
+               type="com.ruoyi.flowable.domain.vo.WorkflowIdentityOptionView">
+        <constructor>
+            <arg column="option_value" javaType="java.lang.String" />
+            <arg column="option_label" javaType="java.lang.String" />
+            <arg column="option_type" javaType="java.lang.String" />
+        </constructor>
+    </resultMap>
+
+    <!--
+      直接办理资格必须与真实待办主路径一致：用户 1 是超级管理员；
+      其他用户可跨全部有效角色聚合 todoList、query、approval 三项权限。
+    -->
+    <sql id="approvalEligibilityPredicate">
+        and (
+            u.user_id = 1
+            or 3 = (
+                select count(distinct approval_m.perms)
+                from sys_user_role approval_ur
+                inner join sys_role approval_r
+                    on approval_r.role_id = approval_ur.role_id
+                inner join sys_role_menu approval_rm
+                    on approval_rm.role_id = approval_r.role_id
+                inner join sys_menu approval_m
+                    on approval_m.menu_id = approval_rm.menu_id
+                where approval_ur.user_id = u.user_id
+                  and approval_r.status = '0'
+                  and approval_r.del_flag = '0'
+                  and approval_r.role_id &lt;&gt; 1
+                  and approval_m.status = '0'
+                  and approval_m.perms in (
+                      'workflow:process:todoList',
+                      'workflow:process:query',
+                      'workflow:process:approval'
+                  )
+            )
+        )
+    </sql>
+
+    <!--
+      候选认领资格在直接办理资格上增加 claimList 和 claim；权限仍按用户全部有效角色并集计算。
+    -->
+    <sql id="claimEligibilityPredicate">
+        and (
+            u.user_id = 1
+            or 5 = (
+                select count(distinct claim_m.perms)
+                from sys_user_role claim_ur
+                inner join sys_role claim_r
+                    on claim_r.role_id = claim_ur.role_id
+                inner join sys_role_menu claim_rm
+                    on claim_rm.role_id = claim_r.role_id
+                inner join sys_menu claim_m
+                    on claim_m.menu_id = claim_rm.menu_id
+                where claim_ur.user_id = u.user_id
+                  and claim_r.status = '0'
+                  and claim_r.del_flag = '0'
+                  and claim_r.role_id &lt;&gt; 1
+                  and claim_m.status = '0'
+                  and claim_m.perms in (
+                      'workflow:process:claimList',
+                      'workflow:process:claim',
+                      'workflow:process:todoList',
+                      'workflow:process:query',
+                      'workflow:process:approval'
+                  )
+            )
+        )
+    </sql>
+
+    <select id="countActiveIdentityOptions" resultType="long">
+        <choose>
+            <when test="type == 'user'">
+                select count(*)
+                from sys_user u
+                where u.status = '0'
+                  and u.del_flag = '0'
+                <if test="keyword != null and keyword != ''">
+                  and (u.nick_name like concat('%', #{keyword}, '%')
+                    or u.user_name like concat('%', #{keyword}, '%'))
+                </if>
+            </when>
+            <when test="type == 'role'">
+                select count(*)
+                from sys_role r
+                where r.status = '0'
+                  and r.del_flag = '0'
+                <if test="keyword != null and keyword != ''">
+                  and (r.role_name like concat('%', #{keyword}, '%')
+                    or r.role_key like concat('%', #{keyword}, '%'))
+                </if>
+            </when>
+            <otherwise>
+                select count(*)
+                from sys_dept d
+                where d.status = '0'
+                  and d.del_flag = '0'
+                <if test="keyword != null and keyword != ''">
+                  and d.dept_name like concat('%', #{keyword}, '%')
+                </if>
+            </otherwise>
+        </choose>
+    </select>
+
+    <select id="selectActiveIdentityOptions" resultMap="WorkflowIdentityOptionViewResult">
+        <choose>
+            <when test="type == 'user'">
+                select cast(u.user_id as char) as option_value,
+                       concat(u.nick_name, ' (', u.user_name, ')') as option_label,
+                       'user' as option_type
+                from sys_user u
+                where u.status = '0'
+                  and u.del_flag = '0'
+                <if test="keyword != null and keyword != ''">
+                  and (u.nick_name like concat('%', #{keyword}, '%')
+                    or u.user_name like concat('%', #{keyword}, '%'))
+                </if>
+                order by u.user_name, u.user_id
+            </when>
+            <when test="type == 'role'">
+                select concat('ROLE', r.role_id) as option_value,
+                       concat('角色: ', r.role_name) as option_label,
+                       'role' as option_type
+                from sys_role r
+                where r.status = '0'
+                  and r.del_flag = '0'
+                <if test="keyword != null and keyword != ''">
+                  and (r.role_name like concat('%', #{keyword}, '%')
+                    or r.role_key like concat('%', #{keyword}, '%'))
+                </if>
+                order by r.role_sort, r.role_id
+            </when>
+            <otherwise>
+                select concat('DEPT', d.dept_id) as option_value,
+                       concat('部门: ', d.dept_name) as option_label,
+                       'dept' as option_type
+                from sys_dept d
+                where d.status = '0'
+                  and d.del_flag = '0'
+                <if test="keyword != null and keyword != ''">
+                  and d.dept_name like concat('%', #{keyword}, '%')
+                </if>
+                order by d.order_num, d.dept_id
+            </otherwise>
+        </choose>
+        limit #{offset}, #{pageSize}
+    </select>
+
+    <select id="countApprovalEligibleUserOptions" resultType="long">
+        select count(*)
+        from sys_user u
+        where u.status = '0'
+          and u.del_flag = '0'
+        <include refid="approvalEligibilityPredicate" />
+        <if test="keyword != null and keyword != ''">
+          and (u.nick_name like concat('%', #{keyword}, '%')
+            or u.user_name like concat('%', #{keyword}, '%'))
+        </if>
+    </select>
+
+    <select id="selectApprovalEligibleUserOptions"
+            resultMap="WorkflowIdentityOptionViewResult">
+        select cast(u.user_id as char) as option_value,
+               concat(u.nick_name, ' (', u.user_name, ')') as option_label,
+               'user' as option_type
+        from sys_user u
+        where u.status = '0'
+          and u.del_flag = '0'
+        <include refid="approvalEligibilityPredicate" />
+        <if test="keyword != null and keyword != ''">
+          and (u.nick_name like concat('%', #{keyword}, '%')
+            or u.user_name like concat('%', #{keyword}, '%'))
+        </if>
+        order by u.user_name, u.user_id
+        limit #{offset}, #{pageSize}
+    </select>
+
+    <select id="countClaimEligibleIdentityOptions" resultType="long">
+        <choose>
+            <when test="type == 'user'">
+                select count(*)
+                from sys_user u
+                where u.status = '0'
+                  and u.del_flag = '0'
+                <include refid="claimEligibilityPredicate" />
+                <if test="keyword != null and keyword != ''">
+                  and (u.nick_name like concat('%', #{keyword}, '%')
+                    or u.user_name like concat('%', #{keyword}, '%'))
+                </if>
+            </when>
+            <when test="type == 'role'">
+                select count(*)
+                from sys_role r
+                where r.status = '0'
+                  and r.del_flag = '0'
+                  and exists (
+                      select 1
+                      from sys_user_role member_ur
+                      inner join sys_user u on u.user_id = member_ur.user_id
+                      where member_ur.role_id = r.role_id
+                        and u.status = '0'
+                        and u.del_flag = '0'
+                        <include refid="claimEligibilityPredicate" />
+                  )
+                <if test="keyword != null and keyword != ''">
+                  and (r.role_name like concat('%', #{keyword}, '%')
+                    or r.role_key like concat('%', #{keyword}, '%'))
+                </if>
+            </when>
+            <otherwise>
+                select count(*)
+                from sys_dept d
+                where d.status = '0'
+                  and d.del_flag = '0'
+                  and exists (
+                      select 1
+                      from sys_user u
+                      where u.dept_id = d.dept_id
+                        and u.status = '0'
+                        and u.del_flag = '0'
+                        <include refid="claimEligibilityPredicate" />
+                  )
+                <if test="keyword != null and keyword != ''">
+                  and d.dept_name like concat('%', #{keyword}, '%')
+                </if>
+            </otherwise>
+        </choose>
+    </select>
+
+    <select id="selectClaimEligibleIdentityOptions"
+            resultMap="WorkflowIdentityOptionViewResult">
+        <choose>
+            <when test="type == 'user'">
+                select cast(u.user_id as char) as option_value,
+                       concat(u.nick_name, ' (', u.user_name, ')') as option_label,
+                       'user' as option_type
+                from sys_user u
+                where u.status = '0'
+                  and u.del_flag = '0'
+                <include refid="claimEligibilityPredicate" />
+                <if test="keyword != null and keyword != ''">
+                  and (u.nick_name like concat('%', #{keyword}, '%')
+                    or u.user_name like concat('%', #{keyword}, '%'))
+                </if>
+                order by u.user_name, u.user_id
+            </when>
+            <when test="type == 'role'">
+                select concat('ROLE', r.role_id) as option_value,
+                       concat('角色: ', r.role_name) as option_label,
+                       'role' as option_type
+                from sys_role r
+                where r.status = '0'
+                  and r.del_flag = '0'
+                  and exists (
+                      select 1
+                      from sys_user_role member_ur
+                      inner join sys_user u on u.user_id = member_ur.user_id
+                      where member_ur.role_id = r.role_id
+                        and u.status = '0'
+                        and u.del_flag = '0'
+                        <include refid="claimEligibilityPredicate" />
+                  )
+                <if test="keyword != null and keyword != ''">
+                  and (r.role_name like concat('%', #{keyword}, '%')
+                    or r.role_key like concat('%', #{keyword}, '%'))
+                </if>
+                order by r.role_sort, r.role_id
+            </when>
+            <otherwise>
+                select concat('DEPT', d.dept_id) as option_value,
+                       concat('部门: ', d.dept_name) as option_label,
+                       'dept' as option_type
+                from sys_dept d
+                where d.status = '0'
+                  and d.del_flag = '0'
+                  and exists (
+                      select 1
+                      from sys_user u
+                      where u.dept_id = d.dept_id
+                        and u.status = '0'
+                        and u.del_flag = '0'
+                        <include refid="claimEligibilityPredicate" />
+                  )
+                <if test="keyword != null and keyword != ''">
+                  and d.dept_name like concat('%', #{keyword}, '%')
+                </if>
+                order by d.order_num, d.dept_id
+            </otherwise>
+        </choose>
+        limit #{offset}, #{pageSize}
+    </select>
+
+    <select id="selectActiveUserIdsByUserIds" resultType="java.lang.Long">
+        select distinct u.user_id
+        from sys_user u
+        where u.user_id in
+        <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+            #{userId}
+        </foreach>
+          and u.status = '0'
+          and u.del_flag = '0'
+        order by u.user_id
+    </select>
+
+    <select id="selectApprovalEligibleUserIdsByUserIds" resultType="java.lang.Long">
+        select distinct u.user_id
+        from sys_user u
+        where u.user_id in
+        <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+            #{userId}
+        </foreach>
+          and u.status = '0'
+          and u.del_flag = '0'
+        <include refid="approvalEligibilityPredicate" />
+        order by u.user_id
+    </select>
+
+    <select id="selectClaimEligibleUserIdsByUserIds" resultType="java.lang.Long">
+        select distinct u.user_id
+        from sys_user u
+        where u.user_id in
+        <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+            #{userId}
+        </foreach>
+          and u.status = '0'
+          and u.del_flag = '0'
+        <include refid="claimEligibilityPredicate" />
+        order by u.user_id
+    </select>
+
+    <select id="selectClaimEligibleRoleIdsByRoleIds" resultType="java.lang.Long">
+        select distinct r.role_id
+        from sys_role r
+        where r.role_id in
+        <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
+            #{roleId}
+        </foreach>
+          and r.status = '0'
+          and r.del_flag = '0'
+          and exists (
+              select 1
+              from sys_user_role member_ur
+              inner join sys_user u on u.user_id = member_ur.user_id
+              where member_ur.role_id = r.role_id
+                and u.status = '0'
+                and u.del_flag = '0'
+                <include refid="claimEligibilityPredicate" />
+          )
+        order by r.role_id
+    </select>
+
+    <select id="selectClaimEligibleDeptIdsByDeptIds" resultType="java.lang.Long">
+        select distinct d.dept_id
+        from sys_dept d
+        where d.dept_id in
+        <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+            #{deptId}
+        </foreach>
+          and d.status = '0'
+          and d.del_flag = '0'
+          and exists (
+              select 1
+              from sys_user u
+              where u.dept_id = d.dept_id
+                and u.status = '0'
+                and u.del_flag = '0'
+                <include refid="claimEligibilityPredicate" />
+          )
+        order by d.dept_id
+    </select>
+
+    <select id="selectActiveRoleIdsByRoleIds" resultType="java.lang.Long">
+        select distinct r.role_id
+        from sys_role r
+        where r.role_id in
+        <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
+            #{roleId}
+        </foreach>
+          and r.status = '0'
+          and r.del_flag = '0'
+        order by r.role_id
+    </select>
+
+    <select id="selectActiveDeptIdsByDeptIds" resultType="java.lang.Long">
+        select distinct d.dept_id
+        from sys_dept d
+        where d.dept_id in
+        <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+            #{deptId}
+        </foreach>
+          and d.status = '0'
+          and d.del_flag = '0'
+        order by d.dept_id
+    </select>
+
+    <select id="selectActiveUserIdsByRoleIds" resultType="java.lang.Long">
+        select distinct u.user_id
+        from sys_user u
+        inner join sys_user_role ur on ur.user_id = u.user_id
+        inner join sys_role r on r.role_id = ur.role_id
+        where ur.role_id in
+        <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
+            #{roleId}
+        </foreach>
+          and u.status = '0'
+          and u.del_flag = '0'
+          and r.status = '0'
+          and r.del_flag = '0'
+        order by u.user_id
+    </select>
+
+    <select id="selectActiveUserIdsByDeptIds" resultType="java.lang.Long">
+        select distinct u.user_id
+        from sys_user u
+        inner join sys_dept d on d.dept_id = u.dept_id
+        where u.dept_id in
+        <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+            #{deptId}
+        </foreach>
+          and u.status = '0'
+          and u.del_flag = '0'
+          and d.status = '0'
+          and d.del_flag = '0'
+        order by u.user_id
+    </select>
+
+    <select id="selectActiveRoleIdsByUserId" resultType="java.lang.Long">
+        select distinct r.role_id
+        from sys_user u
+        inner join sys_user_role ur on ur.user_id = u.user_id
+        inner join sys_role r on r.role_id = ur.role_id
+        where u.user_id = #{userId}
+          and u.status = '0'
+          and u.del_flag = '0'
+          and r.status = '0'
+          and r.del_flag = '0'
+        order by r.role_id
+    </select>
+
+    <select id="selectActiveDeptIdsByUserId" resultType="java.lang.Long">
+        select d.dept_id
+        from sys_user u
+        inner join sys_dept d on d.dept_id = u.dept_id
+        where u.user_id = #{userId}
+          and u.status = '0'
+          and u.del_flag = '0'
+          and d.status = '0'
+          and d.del_flag = '0'
+    </select>
+
+</mapper>

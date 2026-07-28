@@ -1,0 +1,26 @@
+[Unit]
+Description=ApprovaPlat backend service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ruoyi
+Group=ruoyi
+WorkingDirectory=/var/lib/ruoyi/current
+# 敏感数据库密码与令牌密钥仅由 root 可读的环境文件提供。
+EnvironmentFile=/etc/ruoyi/ruoyi.env
+ExecStart=/usr/bin/java -Xms256m -Xmx512m -XX:+ExitOnOutOfMemoryError -jar /var/lib/ruoyi/current/ruoyi-admin.jar --spring.config.additional-location=file:/etc/ruoyi/
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=143
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/ruoyi/uploadPath /var/lib/ruoyi/logs
+
+[Install]
+WantedBy=multi-user.target

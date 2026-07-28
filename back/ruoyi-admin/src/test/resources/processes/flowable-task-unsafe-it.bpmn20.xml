@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="https://approvaplat.example/flowable/task-unsafe-integration-test">
+  <process id="flowableParallelLifecycleIntegration" name="并行流转拒绝集成测试" isExecutable="true">
+    <startEvent id="parallelStart"/>
+    <sequenceFlow id="parallelToFork" sourceRef="parallelStart" targetRef="parallelFork"/>
+    <parallelGateway id="parallelFork"/>
+    <sequenceFlow id="forkToFirst" sourceRef="parallelFork" targetRef="parallelFirst"/>
+    <sequenceFlow id="forkToSecond" sourceRef="parallelFork" targetRef="parallelSecond"/>
+    <userTask id="parallelFirst" name="并行初审" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <userTask id="parallelSecond" name="并行复审" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="firstToJoin" sourceRef="parallelFirst" targetRef="parallelJoin"/>
+    <sequenceFlow id="secondToJoin" sourceRef="parallelSecond" targetRef="parallelJoin"/>
+    <parallelGateway id="parallelJoin"/>
+    <sequenceFlow id="joinToEnd" sourceRef="parallelJoin" targetRef="parallelEnd"/>
+    <endEvent id="parallelEnd"/>
+  </process>
+
+  <process id="flowableMultiInstanceLifecycleIntegration" name="多实例流转拒绝集成测试" isExecutable="true">
+    <startEvent id="multiStart"/>
+    <sequenceFlow id="multiToReview" sourceRef="multiStart" targetRef="multiReview"/>
+    <userTask id="multiReview" name="会签审核" flowable:assignee="${reviewer}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="true"
+                                        flowable:collection="reviewers"
+                                        flowable:elementVariable="reviewer"/>
+    </userTask>
+    <sequenceFlow id="multiToEnd" sourceRef="multiReview" targetRef="multiEnd"/>
+    <endEvent id="multiEnd"/>
+  </process>
+
+  <process id="flowableParallelRevokeIntegration" name="安全并行撤回集成测试" isExecutable="true">
+    <startEvent id="revokeStart"/>
+    <sequenceFlow id="revokeToSource" sourceRef="revokeStart" targetRef="revokeSource"/>
+    <userTask id="revokeSource" name="撤回来源" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="sourceToFork" sourceRef="revokeSource" targetRef="revokeFork"/>
+    <parallelGateway id="revokeFork"/>
+    <sequenceFlow id="forkToBusiness" sourceRef="revokeFork" targetRef="revokeBusiness"/>
+    <sequenceFlow id="forkToFinance" sourceRef="revokeFork" targetRef="revokeFinance"/>
+    <userTask id="revokeBusiness" name="业务复核" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <userTask id="revokeFinance" name="财务复核" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="businessToJoin" sourceRef="revokeBusiness" targetRef="revokeJoin"/>
+    <sequenceFlow id="financeToJoin" sourceRef="revokeFinance" targetRef="revokeJoin"/>
+    <parallelGateway id="revokeJoin"/>
+    <sequenceFlow id="revokeJoinToEnd" sourceRef="revokeJoin" targetRef="revokeEnd"/>
+    <endEvent id="revokeEnd"/>
+  </process>
+
+  <process id="flowableServiceReturnIntegration" name="服务任务退回拒绝集成测试" isExecutable="true">
+    <startEvent id="serviceReturnStart"/>
+    <sequenceFlow id="serviceReturnToSource" sourceRef="serviceReturnStart" targetRef="serviceReturnSource"/>
+    <userTask id="serviceReturnSource" name="服务前审批" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="sourceToSideEffect" sourceRef="serviceReturnSource" targetRef="serviceSideEffect"/>
+    <serviceTask id="serviceSideEffect" name="不可重复服务" flowable:expression="${true}"/>
+    <sequenceFlow id="sideEffectToCurrent" sourceRef="serviceSideEffect" targetRef="serviceReturnCurrent"/>
+    <userTask id="serviceReturnCurrent" name="服务后审批" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="serviceCurrentToEnd" sourceRef="serviceReturnCurrent" targetRef="serviceReturnEnd"/>
+    <endEvent id="serviceReturnEnd"/>
+  </process>
+
+  <process id="flowableBoundaryReturnIntegration" name="边界事件退回拒绝集成测试" isExecutable="true">
+    <startEvent id="boundaryReturnStart"/>
+    <sequenceFlow id="boundaryReturnToSource" sourceRef="boundaryReturnStart" targetRef="boundaryReturnSource"/>
+    <userTask id="boundaryReturnSource" name="带超时审批" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <boundaryEvent id="boundaryTimeout" attachedToRef="boundaryReturnSource" cancelActivity="true">
+      <timerEventDefinition>
+        <timeDuration>PT1H</timeDuration>
+      </timerEventDefinition>
+    </boundaryEvent>
+    <sequenceFlow id="boundaryTimeoutToEnd" sourceRef="boundaryTimeout" targetRef="boundaryTimeoutEnd"/>
+    <endEvent id="boundaryTimeoutEnd"/>
+    <sequenceFlow id="boundarySourceToCurrent" sourceRef="boundaryReturnSource" targetRef="boundaryReturnCurrent"/>
+    <userTask id="boundaryReturnCurrent" name="边界后审批" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="boundaryCurrentToEnd" sourceRef="boundaryReturnCurrent" targetRef="boundaryReturnEnd"/>
+    <endEvent id="boundaryReturnEnd"/>
+  </process>
+
+  <process id="flowableCallChildLifecycleIntegration" name="被调用审批子流程" isExecutable="true">
+    <startEvent id="callChildStart"/>
+    <sequenceFlow id="callChildToReview" sourceRef="callChildStart" targetRef="callChildReview"/>
+    <userTask id="callChildReview" name="子流程审批" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="callChildReviewToEnd" sourceRef="callChildReview" targetRef="callChildEnd"/>
+    <endEvent id="callChildEnd"/>
+  </process>
+
+  <process id="flowableCallParentLifecycleIntegration" name="调用活动整实例驳回集成测试" isExecutable="true">
+    <startEvent id="callParentStart"/>
+    <sequenceFlow id="callParentToChild" sourceRef="callParentStart" targetRef="invokeApprovalChild"/>
+    <callActivity id="invokeApprovalChild" name="调用审批子流程"
+                  calledElement="flowableCallChildLifecycleIntegration"/>
+    <sequenceFlow id="callChildToParentEnd" sourceRef="invokeApprovalChild" targetRef="callParentEnd"/>
+    <endEvent id="callParentEnd"/>
+  </process>
+
+  <process id="flowableRevokeClaimRaceIntegration" name="撤回认领竞态集成测试" isExecutable="true">
+    <startEvent id="revokeRaceStart"/>
+    <sequenceFlow id="revokeRaceToSource" sourceRef="revokeRaceStart" targetRef="revokeRaceSource"/>
+    <userTask id="revokeRaceSource" name="竞态来源" flowable:assignee="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="revokeRaceToCandidate" sourceRef="revokeRaceSource" targetRef="revokeRaceCandidate"/>
+    <userTask id="revokeRaceCandidate" name="待认领后继" flowable:candidateUsers="1">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="revokeRaceToEnd" sourceRef="revokeRaceCandidate" targetRef="revokeRaceEnd"/>
+    <endEvent id="revokeRaceEnd"/>
+  </process>
+</definitions>

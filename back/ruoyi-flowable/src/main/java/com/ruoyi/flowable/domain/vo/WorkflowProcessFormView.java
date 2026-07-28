@@ -1,0 +1,31 @@
+package com.ruoyi.flowable.domain.vo;
+
+import java.time.Instant;
+
+/**
+ * 从 {@code wf_deploy_form} 原样读取的不可变部署表单快照视图。
+ *
+ * @param definitionId String，流程定义主键
+ * @param deploymentId String，部署主键
+ * @param processInstanceId String，详情场景的实例主键，首次发起时为空
+ * @param formId Long，快照来源表单主键
+ * @param formKey String，BPMN 表单键
+ * @param nodeKey String，BPMN 开始节点主键
+ * @param formName String，部署时表单名称
+ * @param nodeName String，部署时节点名称
+ * @param content String，部署时固化且不回连当前模板的表单 JSON
+ * @param snapshotTime Instant，部署快照创建时间
+ */
+public record WorkflowProcessFormView(
+        String definitionId,
+        String deploymentId,
+        String processInstanceId,
+        Long formId,
+        String formKey,
+        String nodeKey,
+        String formName,
+        String nodeName,
+        String content,
+        Instant snapshotTime)
+{
+}

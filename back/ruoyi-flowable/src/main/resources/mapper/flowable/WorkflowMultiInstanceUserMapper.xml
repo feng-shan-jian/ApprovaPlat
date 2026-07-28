@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper">
+
+    <resultMap id="WorkflowMultiInstanceUserRowResult"
+               type="com.ruoyi.flowable.domain.WorkflowMultiInstanceUserRow">
+        <constructor>
+            <arg column="user_id" javaType="java.lang.Long" />
+            <arg column="display_name" javaType="java.lang.String" />
+        </constructor>
+    </resultMap>
+
+    <select id="selectUserNamesByIds" resultMap="WorkflowMultiInstanceUserRowResult">
+        select u.user_id,
+               coalesce(nullif(trim(u.nick_name), ''),
+                        nullif(trim(u.user_name), ''),
+                        cast(u.user_id as char)) as display_name
+        from sys_user u
+        where u.user_id in
+        <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+            #{userId}
+        </foreach>
+        order by u.user_id
+    </select>
+
+</mapper>

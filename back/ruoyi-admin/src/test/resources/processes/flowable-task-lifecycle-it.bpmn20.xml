@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="https://approvaplat.example/flowable/task-lifecycle-integration-test">
+  <process id="flowableTaskLifecycleIntegration" name="任务生命周期集成测试" isExecutable="true">
+    <startEvent id="start" name="发起申请"
+                flowable:formKey="key_91001"
+                flowable:initiator="initiator"/>
+    <sequenceFlow id="toFirstReview" sourceRef="start" targetRef="firstReview"/>
+    <userTask id="firstReview" name="初审" flowable:assignee="1"
+              flowable:formKey="key_91002">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="toFinalReview" sourceRef="firstReview" targetRef="finalReview"/>
+    <userTask id="finalReview" name="复审" flowable:assignee="1"
+              flowable:formKey="key_91003">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="toEnd" sourceRef="finalReview" targetRef="end"/>
+    <endEvent id="end" name="结束"/>
+  </process>
+
+  <bpmndi:BPMNDiagram id="TaskLifecycleDiagram">
+    <bpmndi:BPMNPlane id="TaskLifecyclePlane" bpmnElement="flowableTaskLifecycleIntegration">
+      <bpmndi:BPMNShape id="startShape" bpmnElement="start">
+        <dc:Bounds x="100" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="firstReviewShape" bpmnElement="firstReview">
+        <dc:Bounds x="190" y="80" width="110" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="finalReviewShape" bpmnElement="finalReview">
+        <dc:Bounds x="360" y="80" width="110" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="endShape" bpmnElement="end">
+        <dc:Bounds x="530" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="toFirstReviewEdge" bpmnElement="toFirstReview">
+        <di:waypoint x="136" y="120"/>
+        <di:waypoint x="190" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="toFinalReviewEdge" bpmnElement="toFinalReview">
+        <di:waypoint x="300" y="120"/>
+        <di:waypoint x="360" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="toEndEdge" bpmnElement="toEnd">
+        <di:waypoint x="470" y="120"/>
+        <di:waypoint x="530" y="120"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>

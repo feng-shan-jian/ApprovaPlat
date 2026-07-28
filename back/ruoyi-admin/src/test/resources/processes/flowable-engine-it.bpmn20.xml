@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="https://approvaplat.example/flowable/integration-test">
+  <process id="flowableEngineIntegration" name="Flowable 引擎集成测试" isExecutable="true">
+    <startEvent id="start"/>
+    <sequenceFlow id="toReview" sourceRef="start" targetRef="review"/>
+    <userTask id="review" name="审核" flowable:candidateUsers="1">
+      <extensionElements>
+        <flowable:taskListener event="create"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete"
+                               delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="toEnd" sourceRef="review" targetRef="end"/>
+    <endEvent id="end"/>
+  </process>
+</definitions>

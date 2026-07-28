@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfFormMapper">
+
+    <resultMap id="WfFormResult" type="com.ruoyi.flowable.domain.WfForm">
+        <id property="formId" column="form_id"/>
+        <result property="formName" column="form_name"/>
+        <result property="content" column="content"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+        <result property="remark" column="remark"/>
+        <result property="delFlag" column="del_flag"/>
+    </resultMap>
+
+    <sql id="formColumns">
+        form_id, form_name, content, create_by, create_time,
+        update_by, update_time, remark, del_flag
+    </sql>
+
+    <select id="selectById" resultMap="WfFormResult">
+        select <include refid="formColumns"/>
+        from wf_form
+        where form_id = #{formId}
+          and del_flag = '0'
+    </select>
+
+    <select id="selectList" resultMap="WfFormResult">
+        select <include refid="formColumns"/>
+        from wf_form
+        where del_flag = '0'
+        <if test="filter != null and filter.formName != null and filter.formName != ''">
+            and form_name like concat('%', #{filter.formName}, '%')
+        </if>
+        order by form_id
+    </select>
+
+    <select id="selectSummaryList" resultMap="WfFormResult">
+        select form_id, form_name, create_by, create_time,
+               update_by, update_time, remark, del_flag
+        from wf_form
+        where del_flag = '0'
+        <if test="filter != null and filter.formName != null and filter.formName != ''">
+            and form_name like concat('%', #{filter.formName}, '%')
+        </if>
+        order by form_id
+        limit #{limit}
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="form.formId">
+        insert into wf_form
+            (form_name, content, create_by, create_time, remark, del_flag)
+        values
+            (#{form.formName}, #{form.content}, #{form.createBy},
+             current_timestamp, #{form.remark}, '0')
+    </insert>
+
+    <update id="update">
+        update wf_form
+        set form_name = #{form.formName},
+            content = #{form.content},
+            update_by = #{form.updateBy},
+            update_time = current_timestamp,
+            remark = #{form.remark}
+        where form_id = #{form.formId}
+          and del_flag = '0'
+    </update>
+
+    <update id="logicalDelete">
+        update wf_form
+        set del_flag = '2',
+            update_by = #{updateBy},
+            update_time = current_timestamp
+        where del_flag = '0'
+        <choose>
+            <when test="formIds != null and formIds.size() > 0">
+                and form_id in
+                <foreach collection="formIds" item="formId" open="(" separator="," close=")">
+                    #{formId}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1 = 0
+            </otherwise>
+        </choose>
+    </update>
+
+    <select id="countActiveByIds" resultType="java.lang.Integer">
+        select count(*)
+        from wf_form
+        where del_flag = '0'
+        <choose>
+            <when test="formIds != null and formIds.size() > 0">
+                and form_id in
+                <foreach collection="formIds" item="formId" open="(" separator="," close=")">
+                    #{formId}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1 = 0
+            </otherwise>
+        </choose>
+    </select>
+
+</mapper>

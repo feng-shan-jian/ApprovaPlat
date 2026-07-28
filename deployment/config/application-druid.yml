@@ -1,0 +1,9 @@
+# 数据源凭据由 /etc/ruoyi/ruoyi.env 注入，不写入源码或 Git 工作区。
+spring:
+  datasource:
+    druid:
+      master:
+        # MySQL 8 本机无 TLS 连接使用 caching_sha2_password 时需允许获取公钥。
+        url: ${RUOYI_DB_URL}
+        username: ${RUOYI_DB_USERNAME}
+        password: ${RUOYI_DB_PASSWORD}
