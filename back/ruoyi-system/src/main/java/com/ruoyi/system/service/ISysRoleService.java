@@ -1,5 +1,6 @@
 package com.ruoyi.system.service;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import com.ruoyi.common.core.domain.entity.SysRole;
@@ -112,6 +113,15 @@ public interface ISysRoleService
      * @return 结果
      */
     public int updateRole(SysRole role);
+
+    /**
+     * 只追加角色尚未拥有的菜单关联，不覆盖或删除既有权限。
+     *
+     * @param roleId Long，目标正式角色主键
+     * @param menuIds Collection&lt;Long&gt;，待追加的正式菜单主键集合
+     * @return int，本次真实新增的角色菜单关联数
+     */
+    public int grantRoleMenus(Long roleId, Collection<Long> menuIds);
 
     /**
      * 修改角色状态
