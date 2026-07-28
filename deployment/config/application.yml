@@ -1,0 +1,128 @@
+# 生产部署覆盖配置：与应用源码分离，避免环境差异进入默认配置。
+server:
+  # 后端只绑定回环地址，外部流量统一经过 Nginx TLS 入口。
+  address: 127.0.0.1
+  forward-headers-strategy: framework
+
+# Actuator 使用独立回环端口，禁止与 8080 业务入口或 Nginx 公网代理复用。
+management:
+  server:
+    address: 127.0.0.1
+    port: ${RUOYI_MANAGEMENT_PORT:18080}
+  endpoints:
+    enabled-by-default: false
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      enabled: true
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState,ping
+        readiness:
+          include: readinessState,db,redis,workflowRuntime
+    prometheus:
+      enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+ruoyi:
+  # 上传文件落到 WSL 持久化目录，避免写入源码目录。
+  profile: ${RUOYI_PROFILE:/var/lib/ruoyi/uploadPath}
+
+spring:
+  servlet:
+    multipart:
+      # 与 50 MiB 工作流业务上限一致；请求上限额外保留 5 MiB multipart 开销。
+      max-file-size: ${SPRING_MULTIPART_MAX_FILE_SIZE:52428800B}
+      max-request-size: ${SPRING_MULTIPART_MAX_REQUEST_SIZE:57671680B}
+  devtools:
+    restart:
+      # 生产服务不启用开发期热重载，避免运行中重启。
+      enabled: false
+  data:
+    redis:
+      # Redis 可位于本机或受控内网，连接参数全部由环境文件提供。
+      host: ${SPRING_DATA_REDIS_HOST}
+      port: ${SPRING_DATA_REDIS_PORT}
+      database: ${SPRING_DATA_REDIS_DATABASE}
+      username: ${SPRING_DATA_REDIS_USERNAME:default}
+      password: ${SPRING_DATA_REDIS_PASSWORD}
+      ssl:
+        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}
+
+  datasource:
+    druid:
+      webStatFilter:
+        # 禁止生产环境收集页面访问统计。
+        enabled: false
+      statViewServlet:
+        # 禁止暴露 Druid 数据库连接池控制台。
+        enabled: false
+
+flowable:
+  # 生产库只允许发布系统执行已审计 SQL，禁止应用启动自动建表或升级。
+  database-schema-update: "false"
+  check-process-definitions: false
+  rest-api-enabled: false
+  async-executor-activate: ${FLOWABLE_ASYNC_EXECUTOR_ACTIVATE:false}
+  async-history-executor-activate: ${FLOWABLE_ASYNC_HISTORY_EXECUTOR_ACTIVATE:false}
+  history-level: full
+  variable-json-mapper: jackson2
+  db-identity-used: false
+  idm:
+    enabled: false
+  eventregistry:
+    enabled: false
+  process:
+    enable-safe-xml: true
+  attachment:
+    # 生产容量必须来自已评审环境文件，不提供应用内回退值。
+    max-size: ${FLOWABLE_ATTACHMENT_MAX_SIZE}
+    max-temporary-count: ${FLOWABLE_ATTACHMENT_MAX_TEMPORARY_COUNT}
+    max-temporary-bytes: ${FLOWABLE_ATTACHMENT_MAX_TEMPORARY_BYTES}
+    max-total-bytes: ${FLOWABLE_ATTACHMENT_MAX_TOTAL_BYTES}
+    min-free-bytes: ${FLOWABLE_ATTACHMENT_MIN_FREE_BYTES}
+    cleanup-batch-size: ${FLOWABLE_ATTACHMENT_CLEANUP_BATCH_SIZE:100}
+    cleanup-retry-initial-delay: ${FLOWABLE_ATTACHMENT_CLEANUP_RETRY_INITIAL_DELAY:PT1M}
+    cleanup-retry-max-delay: ${FLOWABLE_ATTACHMENT_CLEANUP_RETRY_MAX_DELAY:PT6H}
+    cleanup-initial-delay: ${FLOWABLE_ATTACHMENT_CLEANUP_INITIAL_DELAY:PT1M}
+    cleanup-fixed-delay: ${FLOWABLE_ATTACHMENT_CLEANUP_FIXED_DELAY:PT10M}
+  runtime:
+    # 生产覆盖固定开启门禁；任一非法组合会在 ApplicationContext 完成前失败。
+    production-gate-enabled: true
+    deployment-topology: ${FLOWABLE_RUNTIME_DEPLOYMENT_TOPOLOGY}
+    executor-topology: ${FLOWABLE_RUNTIME_EXECUTOR_TOPOLOGY}
+    node-id: ${FLOWABLE_RUNTIME_NODE_ID}
+    approval-reference: ${FLOWABLE_RUNTIME_APPROVAL_REFERENCE:}
+    capacity-approval-reference: ${FLOWABLE_RUNTIME_CAPACITY_APPROVAL_REFERENCE}
+    attachment-storage-mode: ${FLOWABLE_ATTACHMENT_STORAGE_MODE}
+    attachment-storage-id: ${FLOWABLE_ATTACHMENT_STORAGE_ID:}
+    attachment-cleanup-lock-mode: ${FLOWABLE_ATTACHMENT_CLEANUP_LOCK_MODE}
+    attachment-cleanup-lock-name: ${FLOWABLE_ATTACHMENT_CLEANUP_LOCK_NAME}
+    metrics-refresh-initial-delay: ${FLOWABLE_RUNTIME_METRICS_REFRESH_INITIAL_DELAY:PT10S}
+    metrics-refresh-interval: ${FLOWABLE_RUNTIME_METRICS_REFRESH_INTERVAL:PT1M}
+    metrics-snapshot-max-age: ${FLOWABLE_RUNTIME_METRICS_SNAPSHOT_MAX_AGE:PT3M}
+
+# 生产环境不生成 OpenAPI 文档，也不挂载 Swagger UI 静态资源。
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+token:
+  # 令牌密钥由 systemd 的受限环境文件注入，不能使用上游默认值。
+  secret: ${RUOYI_TOKEN_SECRET}
+
+logging:
+  level:
+    # 正式运行降低业务日志级别，保留必要的告警与异常信息。
+    com.ruoyi: info

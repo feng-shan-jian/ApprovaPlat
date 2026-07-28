@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfCategoryMapper">
+
+    <resultMap id="WfCategoryResult" type="com.ruoyi.flowable.domain.WfCategory">
+        <id property="categoryId" column="category_id"/>
+        <result property="categoryName" column="category_name"/>
+        <result property="code" column="code"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+        <result property="remark" column="remark"/>
+        <result property="delFlag" column="del_flag"/>
+    </resultMap>
+
+    <sql id="categoryColumns">
+        category_id, category_name, code, create_by, create_time,
+        update_by, update_time, remark, del_flag
+    </sql>
+
+    <select id="selectById" resultMap="WfCategoryResult">
+        select <include refid="categoryColumns"/>
+        from wf_category
+        where category_id = #{categoryId}
+          and del_flag = '0'
+    </select>
+
+    <select id="selectList" resultMap="WfCategoryResult">
+        select <include refid="categoryColumns"/>
+        from wf_category
+        where del_flag = '0'
+        <if test="filter != null and filter.categoryName != null and filter.categoryName != ''">
+            and category_name like concat('%', #{filter.categoryName}, '%')
+        </if>
+        <if test="filter != null and filter.code != null and filter.code != ''">
+            and code = #{filter.code}
+        </if>
+        order by category_id
+    </select>
+
+    <select id="selectExportList" resultMap="WfCategoryResult">
+        select <include refid="categoryColumns"/>
+        from wf_category
+        where del_flag = '0'
+        <if test="filter != null and filter.categoryName != null and filter.categoryName != ''">
+            and category_name like concat('%', #{filter.categoryName}, '%')
+        </if>
+        <if test="filter != null and filter.code != null and filter.code != ''">
+            and code = #{filter.code}
+        </if>
+        order by category_id
+        limit #{limit}
+    </select>
+
+    <select id="selectByCode" resultMap="WfCategoryResult">
+        select <include refid="categoryColumns"/>
+        from wf_category
+        where code = #{code}
+          and del_flag = '0'
+        limit 1
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="category.categoryId">
+        insert into wf_category
+            (category_name, code, create_by, create_time, remark, del_flag)
+        values
+            (#{category.categoryName}, #{category.code}, #{category.createBy},
+             current_timestamp, #{category.remark}, '0')
+    </insert>
+
+    <update id="update">
+        update wf_category
+        set category_name = #{category.categoryName},
+            code = #{category.code},
+            update_by = #{category.updateBy},
+            update_time = current_timestamp,
+            remark = #{category.remark}
+        where category_id = #{category.categoryId}
+          and del_flag = '0'
+    </update>
+
+    <update id="logicalDelete">
+        update wf_category
+        set del_flag = '2',
+            update_by = #{updateBy},
+            update_time = current_timestamp
+        where del_flag = '0'
+        <choose>
+            <when test="categoryIds != null and categoryIds.size() > 0">
+                and category_id in
+                <foreach collection="categoryIds" item="categoryId" open="(" separator="," close=")">
+                    #{categoryId}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1 = 0
+            </otherwise>
+        </choose>
+    </update>
+
+    <select id="countActiveByIds" resultType="java.lang.Integer">
+        select count(*)
+        from wf_category
+        where del_flag = '0'
+        <choose>
+            <when test="categoryIds != null and categoryIds.size() > 0">
+                and category_id in
+                <foreach collection="categoryIds" item="categoryId" open="(" separator="," close=")">
+                    #{categoryId}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1 = 0
+            </otherwise>
+        </choose>
+    </select>
+
+</mapper>

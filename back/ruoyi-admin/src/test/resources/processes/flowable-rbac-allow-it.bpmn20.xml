@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="https://approvaplat.example/flowable/rbac-allow-integration-test">
+  <process id="workflowRbacStartIntegration"
+           name="RBAC真实发起复核流程"
+           isExecutable="true">
+    <startEvent id="start" name="发起申请"
+                flowable:formKey="key_92001"
+                flowable:initiator="initiator"/>
+    <sequenceFlow id="startToReview" sourceRef="start" targetRef="startReview"/>
+    <userTask id="startReview" name="申请复核"
+              flowable:formKey="key_92002"
+              flowable:assignee="${reviewAssignee}">
+      <extensionElements>
+        <flowable:taskListener event="create"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete"
+                               delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="startToEnd" sourceRef="startReview" targetRef="startEnd"/>
+    <endEvent id="startEnd" name="结束"/>
+  </process>
+
+  <process id="workflowRbacSerialIntegration"
+           name="RBAC串行审批流程"
+           isExecutable="true">
+    <startEvent id="serialStart" name="发起申请"
+                flowable:formKey="key_92011"
+                flowable:initiator="initiator"/>
+    <sequenceFlow id="serialToFirst" sourceRef="serialStart" targetRef="firstReview"/>
+    <userTask id="firstReview" name="初审"
+              flowable:formKey="key_92012"
+              flowable:assignee="${firstAssignee}">
+      <extensionElements>
+        <flowable:taskListener event="create"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete"
+                               delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="serialToSecond" sourceRef="firstReview" targetRef="secondReview"/>
+    <userTask id="secondReview" name="复审"
+              flowable:formKey="key_92013"
+              flowable:assignee="${secondAssignee}">
+      <extensionElements>
+        <flowable:taskListener event="create"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete"
+                               delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="serialToEnd" sourceRef="secondReview" targetRef="serialEnd"/>
+    <endEvent id="serialEnd" name="结束"/>
+  </process>
+
+  <process id="workflowRbacClaimIntegration"
+           name="RBAC候选认领流程"
+           isExecutable="true">
+    <startEvent id="claimStart" name="开始"
+                flowable:formKey="key_92020"
+                flowable:initiator="initiator"/>
+    <sequenceFlow id="claimToTask" sourceRef="claimStart" targetRef="claimReview"/>
+    <userTask id="claimReview" name="候选审批"
+              flowable:formKey="key_92021"
+              flowable:candidateUsers="${candidateUser}">
+      <extensionElements>
+        <flowable:taskListener event="create"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete"
+                               delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="claimToEnd" sourceRef="claimReview" targetRef="claimEnd"/>
+    <endEvent id="claimEnd" name="结束"/>
+  </process>
+
+  <process id="workflowRbacMultiIntegration"
+           name="RBAC动态会签流程"
+           isExecutable="true">
+    <startEvent id="multiStart" name="开始"
+                flowable:formKey="key_92030"
+                flowable:initiator="initiator"/>
+    <sequenceFlow id="multiToSource" sourceRef="multiStart" targetRef="multiSource"/>
+    <userTask id="multiSource" name="选择会签人"
+              flowable:formKey="key_92031"
+              flowable:assignee="${sourceAssignee}">
+      <extensionElements>
+        <flowable:taskListener event="create"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete"
+                               delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="multiToReview" sourceRef="multiSource" targetRef="multiReview"/>
+    <userTask id="multiReview" name="动态会签"
+              flowable:formKey="key_92032"
+              flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment"
+                               delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete"
+                               delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics
+          isSequential="false"
+          flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+          flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression">${nrOfCompletedInstances == nrOfInstances}</completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <sequenceFlow id="multiToEnd" sourceRef="multiReview" targetRef="multiEnd"/>
+    <endEvent id="multiEnd" name="结束"/>
+  </process>
+
+  <bpmndi:BPMNDiagram id="RbacStartDiagram">
+    <bpmndi:BPMNPlane id="RbacStartPlane" bpmnElement="workflowRbacStartIntegration">
+      <bpmndi:BPMNShape id="startShape" bpmnElement="start">
+        <dc:Bounds x="100" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="startReviewShape" bpmnElement="startReview">
+        <dc:Bounds x="190" y="80" width="110" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="startEndShape" bpmnElement="startEnd">
+        <dc:Bounds x="360" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="startToReviewEdge" bpmnElement="startToReview">
+        <di:waypoint x="136" y="120"/>
+        <di:waypoint x="190" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="startToEndEdge" bpmnElement="startToEnd">
+        <di:waypoint x="300" y="120"/>
+        <di:waypoint x="360" y="120"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+  <bpmndi:BPMNDiagram id="RbacSerialDiagram">
+    <bpmndi:BPMNPlane id="RbacSerialPlane" bpmnElement="workflowRbacSerialIntegration">
+      <bpmndi:BPMNShape id="serialStartShape" bpmnElement="serialStart">
+        <dc:Bounds x="100" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="firstReviewShape" bpmnElement="firstReview">
+        <dc:Bounds x="190" y="80" width="110" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="secondReviewShape" bpmnElement="secondReview">
+        <dc:Bounds x="360" y="80" width="110" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="serialEndShape" bpmnElement="serialEnd">
+        <dc:Bounds x="530" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="serialToFirstEdge" bpmnElement="serialToFirst">
+        <di:waypoint x="136" y="120"/>
+        <di:waypoint x="190" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="serialToSecondEdge" bpmnElement="serialToSecond">
+        <di:waypoint x="300" y="120"/>
+        <di:waypoint x="360" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="serialToEndEdge" bpmnElement="serialToEnd">
+        <di:waypoint x="470" y="120"/>
+        <di:waypoint x="530" y="120"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+  <bpmndi:BPMNDiagram id="RbacClaimDiagram">
+    <bpmndi:BPMNPlane id="RbacClaimPlane" bpmnElement="workflowRbacClaimIntegration">
+      <bpmndi:BPMNShape id="claimStartShape" bpmnElement="claimStart">
+        <dc:Bounds x="100" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="claimReviewShape" bpmnElement="claimReview">
+        <dc:Bounds x="190" y="80" width="110" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="claimEndShape" bpmnElement="claimEnd">
+        <dc:Bounds x="360" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="claimToTaskEdge" bpmnElement="claimToTask">
+        <di:waypoint x="136" y="120"/>
+        <di:waypoint x="190" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="claimToEndEdge" bpmnElement="claimToEnd">
+        <di:waypoint x="300" y="120"/>
+        <di:waypoint x="360" y="120"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+  <bpmndi:BPMNDiagram id="RbacMultiDiagram">
+    <bpmndi:BPMNPlane id="RbacMultiPlane" bpmnElement="workflowRbacMultiIntegration">
+      <bpmndi:BPMNShape id="multiStartShape" bpmnElement="multiStart">
+        <dc:Bounds x="100" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="multiSourceShape" bpmnElement="multiSource">
+        <dc:Bounds x="190" y="80" width="110" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="multiReviewShape" bpmnElement="multiReview">
+        <dc:Bounds x="360" y="80" width="110" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="multiEndShape" bpmnElement="multiEnd">
+        <dc:Bounds x="530" y="102" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="multiToSourceEdge" bpmnElement="multiToSource">
+        <di:waypoint x="136" y="120"/>
+        <di:waypoint x="190" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="multiToReviewEdge" bpmnElement="multiToReview">
+        <di:waypoint x="300" y="120"/>
+        <di:waypoint x="360" y="120"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="multiToEndEdge" bpmnElement="multiToEnd">
+        <di:waypoint x="470" y="120"/>
+        <di:waypoint x="530" y="120"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>

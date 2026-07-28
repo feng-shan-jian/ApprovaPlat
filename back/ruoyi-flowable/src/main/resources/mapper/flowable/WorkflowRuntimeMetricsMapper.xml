@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WorkflowRuntimeMetricsMapper">
+
+    <resultMap id="WorkflowRuntimeMetricValuesResult"
+            type="com.ruoyi.flowable.runtime.WorkflowRuntimeMetricValues">
+        <constructor>
+            <arg column="active_process_instances" javaType="_long"/>
+            <arg column="active_tasks" javaType="_long"/>
+            <arg column="executable_jobs" javaType="_long"/>
+            <arg column="timer_jobs" javaType="_long"/>
+            <arg column="suspended_jobs" javaType="_long"/>
+            <arg column="deadletter_jobs" javaType="_long"/>
+            <arg column="external_worker_jobs" javaType="_long"/>
+            <arg column="history_jobs" javaType="_long"/>
+            <arg column="temporary_attachments" javaType="_long"/>
+            <arg column="bound_attachments" javaType="_long"/>
+            <arg column="expired_attachments" javaType="_long"/>
+            <arg column="deleted_attachments" javaType="_long"/>
+            <arg column="undeleted_attachment_bytes" javaType="_long"/>
+            <arg column="pending_attachment_cleanup" javaType="_long"/>
+            <arg column="deferred_attachment_cleanup" javaType="_long"/>
+        </constructor>
+    </resultMap>
+
+    <select id="selectRuntimeMetricValues" resultMap="WorkflowRuntimeMetricValuesResult"
+            timeout="10">
+        select
+            (select count(*) from ACT_RU_EXECUTION
+              where ID_ = PROC_INST_ID_
+                and SUSPENSION_STATE_ = 1) as active_process_instances,
+            (select count(*) from ACT_RU_TASK
+              where SUSPENSION_STATE_ = 1) as active_tasks,
+            (select count(*) from ACT_RU_JOB) as executable_jobs,
+            (select count(*) from ACT_RU_TIMER_JOB) as timer_jobs,
+            (select count(*) from ACT_RU_SUSPENDED_JOB) as suspended_jobs,
+            (select count(*) from ACT_RU_DEADLETTER_JOB) as deadletter_jobs,
+            (select count(*) from ACT_RU_EXTERNAL_JOB) as external_worker_jobs,
+            (select count(*) from ACT_RU_HISTORY_JOB) as history_jobs,
+            attachment_metrics.temporary_attachments,
+            attachment_metrics.bound_attachments,
+            attachment_metrics.expired_attachments,
+            attachment_metrics.deleted_attachments,
+            attachment_metrics.undeleted_attachment_bytes,
+            attachment_metrics.pending_attachment_cleanup,
+            attachment_metrics.deferred_attachment_cleanup
+        from
+        (
+            select
+                coalesce(sum(case when attachment_status = 'TEMP' then 1 else 0 end), 0)
+                    as temporary_attachments,
+                coalesce(sum(case when attachment_status = 'BOUND' then 1 else 0 end), 0)
+                    as bound_attachments,
+                coalesce(sum(case when attachment_status = 'EXPIRED' then 1 else 0 end), 0)
+                    as expired_attachments,
+                coalesce(sum(case when attachment_status = 'DELETED' then 1 else 0 end), 0)
+                    as deleted_attachments,
+                coalesce(sum(case when storage_deleted_time is null
+                    then file_size else 0 end), 0) as undeleted_attachment_bytes,
+                coalesce(sum(case when attachment_status in ('EXPIRED', 'DELETED')
+                                       and storage_deleted_time is null
+                    then 1 else 0 end), 0) as pending_attachment_cleanup,
+                coalesce(sum(case when attachment_status in ('EXPIRED', 'DELETED')
+                                       and storage_deleted_time is null
+                                       and cleanup_next_retry_time > current_timestamp(3)
+                    then 1 else 0 end), 0) as deferred_attachment_cleanup
+            from wf_attachment
+        ) attachment_metrics
+    </select>
+
+</mapper>

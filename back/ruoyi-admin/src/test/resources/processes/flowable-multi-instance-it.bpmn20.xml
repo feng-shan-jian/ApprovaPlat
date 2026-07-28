@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="https://approvaplat.example/flowable/multi-instance-integration-test">
+  <process id="flowableMultiInstanceAllIntegration"
+           name="动态会签集成测试"
+           isExecutable="true">
+    <startEvent id="allStart" name="开始"/>
+    <sequenceFlow id="allToSource" sourceRef="allStart" targetRef="allSource"/>
+    <userTask id="allSource" name="会签发起任务" flowable:assignee="81"/>
+    <sequenceFlow id="allToApprove" sourceRef="allSource" targetRef="allApprove"/>
+    <userTask id="allApprove" name="动态会签" flowable:assignee="${assignee}">
+      <multiInstanceLoopCharacteristics
+          isSequential="false"
+          flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+          flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression">${nrOfCompletedInstances == nrOfInstances}</completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <sequenceFlow id="allToEnd" sourceRef="allApprove" targetRef="allEnd"/>
+    <endEvent id="allEnd" name="结束"/>
+  </process>
+
+  <process id="flowableMultiInstanceAnyIntegration"
+           name="动态或签集成测试"
+           isExecutable="true">
+    <startEvent id="anyStart" name="开始"/>
+    <sequenceFlow id="anyToSource" sourceRef="anyStart" targetRef="anySource"/>
+    <userTask id="anySource" name="或签发起任务" flowable:assignee="81"/>
+    <sequenceFlow id="anyToApprove" sourceRef="anySource" targetRef="anyApprove"/>
+    <userTask id="anyApprove" name="动态或签" flowable:assignee="${assignee}">
+      <multiInstanceLoopCharacteristics
+          isSequential="false"
+          flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+          flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression">${nrOfCompletedInstances &gt; 0}</completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <sequenceFlow id="anyToEnd" sourceRef="anyApprove" targetRef="anyEnd"/>
+    <endEvent id="anyEnd" name="结束"/>
+  </process>
+</definitions>

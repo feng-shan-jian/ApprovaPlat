@@ -1,0 +1,275 @@
+{
+  "participantRoleKeys": [
+    "company_general_manager",
+    "company_executive_office",
+    "company_document_controller",
+    "company_department_manager",
+    "company_employee"
+  ],
+  "participantPermissions": [
+    "workflow:process:todoList",
+    "workflow:process:claimList",
+    "workflow:process:query",
+    "workflow:process:approval",
+    "workflow:process:claim"
+  ],
+  "samples": [
+    {
+      "modelKey": "sample_leave_approval",
+      "modelName": "请假申请",
+      "description": "员工请假由部门负责人审核，再由总经理审批。",
+      "category": { "code": "sample_hr", "name": "人事审批" },
+      "formName": "请假申请表",
+      "form": {
+        "labelPosition": "right",
+        "labelWidth": 110,
+        "size": "default",
+        "gutter": 16,
+        "fields": [
+          {
+            "__vModel__": "leaveType",
+            "__config__": { "layout": "colFormItem", "tag": "el-select", "label": "请假类型", "span": 12, "required": true },
+            "placeholder": "请选择请假类型",
+            "clearable": true,
+            "__slot__": { "options": [
+              { "label": "年假", "value": "annual" },
+              { "label": "事假", "value": "personal" },
+              { "label": "病假", "value": "sick" }
+            ] }
+          },
+          {
+            "__vModel__": "leaveRange",
+            "__config__": { "layout": "colFormItem", "tag": "el-date-picker", "label": "请假日期", "span": 12, "required": true },
+            "type": "daterange",
+            "value-format": "YYYY-MM-DD",
+            "range-separator": "至",
+            "start-placeholder": "开始日期",
+            "end-placeholder": "结束日期"
+          },
+          {
+            "__vModel__": "leaveReason",
+            "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "请假事由", "span": 24, "required": true },
+            "type": "textarea",
+            "rows": 4,
+            "maxlength": 500,
+            "show-word-limit": true,
+            "placeholder": "请输入请假事由"
+          }
+        ]
+      },
+      "tasks": [
+        { "id": "department_review", "name": "部门负责人审核", "identityType": "role", "identityKey": "company_department_manager" },
+        { "id": "general_manager_review", "name": "总经理审批", "identityType": "role", "identityKey": "company_general_manager" }
+      ]
+    },
+    {
+      "modelKey": "sample_expense_reimbursement",
+      "modelName": "费用报销",
+      "description": "财务部候选成员认领复核后，由总经理审批报销。",
+      "category": { "code": "sample_finance", "name": "财务审批" },
+      "formName": "费用报销表",
+      "form": {
+        "labelPosition": "right",
+        "labelWidth": 110,
+        "size": "default",
+        "gutter": 16,
+        "fields": [
+          {
+            "__vModel__": "expenseType",
+            "__config__": { "layout": "colFormItem", "tag": "el-select", "label": "费用类型", "span": 12, "required": true },
+            "placeholder": "请选择费用类型",
+            "__slot__": { "options": [
+              { "label": "差旅费", "value": "travel" },
+              { "label": "招待费", "value": "entertainment" },
+              { "label": "办公费", "value": "office" }
+            ] }
+          },
+          {
+            "__vModel__": "expenseAmount",
+            "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "报销金额", "span": 12, "required": true },
+            "min": 0.01,
+            "max": 10000000,
+            "precision": 2,
+            "step": 100
+          },
+          {
+            "__vModel__": "expenseDate",
+            "__config__": { "layout": "colFormItem", "tag": "el-date-picker", "label": "发生日期", "span": 12, "required": true },
+            "type": "date",
+            "value-format": "YYYY-MM-DD",
+            "placeholder": "请选择发生日期"
+          },
+          {
+            "__vModel__": "expenseDescription",
+            "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "费用说明", "span": 24, "required": true },
+            "type": "textarea",
+            "rows": 4,
+            "maxlength": 500,
+            "show-word-limit": true,
+            "placeholder": "请输入费用说明"
+          }
+        ]
+      },
+      "tasks": [
+        { "id": "finance_review", "name": "财务部复核", "identityType": "dept", "identityKey": "财务部" },
+        { "id": "general_manager_review", "name": "总经理审批", "identityType": "user", "identityKey": "general_manager" }
+      ]
+    },
+    {
+      "modelKey": "sample_purchase_request",
+      "modelName": "采购申请",
+      "description": "采购负责人、财务负责人和总经理三级串行审批。",
+      "category": { "code": "sample_business", "name": "业务审批" },
+      "formName": "采购申请表",
+      "form": {
+        "labelPosition": "right",
+        "labelWidth": 110,
+        "size": "default",
+        "gutter": 16,
+        "fields": [
+          {
+            "__vModel__": "itemName",
+            "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "采购项目", "span": 12, "required": true },
+            "maxlength": 100,
+            "show-word-limit": true,
+            "placeholder": "请输入采购项目"
+          },
+          {
+            "__vModel__": "quantity",
+            "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "采购数量", "span": 12, "required": true },
+            "min": 1,
+            "max": 100000,
+            "step": 1,
+            "precision": 0
+          },
+          {
+            "__vModel__": "estimatedAmount",
+            "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "预计金额", "span": 12, "required": true },
+            "min": 0.01,
+            "max": 100000000,
+            "precision": 2,
+            "step": 100
+          },
+          {
+            "__vModel__": "purchaseReason",
+            "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "采购原因", "span": 24, "required": true },
+            "type": "textarea",
+            "rows": 4,
+            "maxlength": 500,
+            "show-word-limit": true,
+            "placeholder": "请输入采购原因"
+          }
+        ]
+      },
+      "tasks": [
+        { "id": "purchase_review", "name": "采购负责人审核", "identityType": "user", "identityKey": "purchase_manager" },
+        { "id": "finance_review", "name": "财务负责人复核", "identityType": "user", "identityKey": "finance_manager" },
+        { "id": "general_manager_review", "name": "总经理审批", "identityType": "user", "identityKey": "general_manager" }
+      ]
+    },
+    {
+      "modelKey": "sample_contract_approval",
+      "modelName": "合同审批",
+      "description": "文控专员、总经办和总经理三级审核合同。",
+      "category": { "code": "sample_business", "name": "业务审批" },
+      "formName": "合同审批表",
+      "form": {
+        "labelPosition": "right",
+        "labelWidth": 110,
+        "size": "default",
+        "gutter": 16,
+        "fields": [
+          {
+            "__vModel__": "contractName",
+            "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "合同名称", "span": 12, "required": true },
+            "maxlength": 120,
+            "show-word-limit": true,
+            "placeholder": "请输入合同名称"
+          },
+          {
+            "__vModel__": "counterparty",
+            "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "合同相对方", "span": 12, "required": true },
+            "maxlength": 120,
+            "show-word-limit": true,
+            "placeholder": "请输入合同相对方"
+          },
+          {
+            "__vModel__": "contractAmount",
+            "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "合同金额", "span": 12, "required": true },
+            "min": 0,
+            "max": 1000000000,
+            "precision": 2,
+            "step": 1000
+          },
+          {
+            "__vModel__": "contractSummary",
+            "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "合同摘要", "span": 24, "required": true },
+            "type": "textarea",
+            "rows": 5,
+            "maxlength": 1000,
+            "show-word-limit": true,
+            "placeholder": "请输入合同主要条款"
+          }
+        ]
+      },
+      "tasks": [
+        { "id": "document_review", "name": "文控专员审核", "identityType": "user", "identityKey": "document_controller" },
+        { "id": "executive_office_review", "name": "总经办复核", "identityType": "user", "identityKey": "executive_office" },
+        { "id": "general_manager_review", "name": "总经理审批", "identityType": "user", "identityKey": "general_manager" }
+      ]
+    },
+    {
+      "modelKey": "sample_seal_request",
+      "modelName": "用印申请",
+      "description": "文控角色候选成员认领审核后，由总经办审批。",
+      "category": { "code": "sample_admin", "name": "行政审批" },
+      "formName": "用印申请表",
+      "form": {
+        "labelPosition": "right",
+        "labelWidth": 110,
+        "size": "default",
+        "gutter": 16,
+        "fields": [
+          {
+            "__vModel__": "documentName",
+            "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "文件名称", "span": 12, "required": true },
+            "maxlength": 120,
+            "show-word-limit": true,
+            "placeholder": "请输入文件名称"
+          },
+          {
+            "__vModel__": "sealType",
+            "__config__": { "layout": "colFormItem", "tag": "el-select", "label": "印章类型", "span": 12, "required": true },
+            "placeholder": "请选择印章类型",
+            "__slot__": { "options": [
+              { "label": "公章", "value": "company" },
+              { "label": "合同章", "value": "contract" },
+              { "label": "财务章", "value": "finance" }
+            ] }
+          },
+          {
+            "__vModel__": "copyCount",
+            "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "用印份数", "span": 12, "required": true },
+            "min": 1,
+            "max": 1000,
+            "step": 1,
+            "precision": 0
+          },
+          {
+            "__vModel__": "sealPurpose",
+            "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "用印事由", "span": 24, "required": true },
+            "type": "textarea",
+            "rows": 4,
+            "maxlength": 500,
+            "show-word-limit": true,
+            "placeholder": "请输入用印事由"
+          }
+        ]
+      },
+      "tasks": [
+        { "id": "document_control_review", "name": "文控审核", "identityType": "role", "identityKey": "company_document_controller" },
+        { "id": "executive_office_review", "name": "总经办审批", "identityType": "role", "identityKey": "company_executive_office" }
+      ]
+    }
+  ]
+}

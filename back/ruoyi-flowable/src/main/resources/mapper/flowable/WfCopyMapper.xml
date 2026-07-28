@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfCopyMapper">
+
+    <resultMap id="WfCopyResult" type="com.ruoyi.flowable.domain.WfCopy">
+        <id property="copyId" column="copy_id"/>
+        <result property="copyEventId" column="copy_event_id"/>
+        <result property="title" column="title"/>
+        <result property="processId" column="process_id"/>
+        <result property="processName" column="process_name"/>
+        <result property="categoryId" column="category_id"/>
+        <result property="deploymentId" column="deployment_id"/>
+        <result property="instanceId" column="instance_id"/>
+        <result property="taskId" column="task_id"/>
+        <result property="userId" column="user_id"/>
+        <result property="originatorId" column="originator_id"/>
+        <result property="originatorName" column="originator_name"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+        <result property="remark" column="remark"/>
+        <result property="delFlag" column="del_flag"/>
+    </resultMap>
+
+    <sql id="copyColumns">
+        copy_id, copy_event_id, title, process_id, process_name, category_id,
+        deployment_id, instance_id, task_id, user_id, originator_id,
+        originator_name, create_by, create_time, update_by, update_time,
+        remark, del_flag
+    </sql>
+
+    <select id="selectById" resultMap="WfCopyResult">
+        select <include refid="copyColumns"/>
+        from wf_copy
+        where copy_id = #{copyId}
+          and del_flag = '0'
+    </select>
+
+    <insert id="insertBatch">
+        <choose>
+            <when test="copies != null and copies.size() > 0">
+                insert into wf_copy
+                    (copy_event_id, title, process_id, process_name, category_id,
+                     deployment_id, instance_id, task_id, user_id, originator_id,
+                     originator_name, create_by, create_time, remark, del_flag)
+                values
+                <foreach collection="copies" item="copy" separator=",">
+                    (#{copy.copyEventId}, #{copy.title}, #{copy.processId}, #{copy.processName},
+                     #{copy.categoryId}, #{copy.deploymentId}, #{copy.instanceId}, #{copy.taskId},
+                     #{copy.userId}, #{copy.originatorId}, #{copy.originatorName}, #{copy.createBy},
+                     current_timestamp, #{copy.remark}, '0')
+                </foreach>
+            </when>
+            <otherwise>
+                insert into wf_copy
+                    (copy_event_id, title, process_id, process_name, category_id,
+                     deployment_id, instance_id, task_id, user_id, originator_id,
+                     originator_name, create_by, create_time, remark, del_flag)
+                select '', '', '', '', '', '', '', null, 0, 0, '', '',
+                       current_timestamp, null, '0'
+                where 1 = 0
+            </otherwise>
+        </choose>
+    </insert>
+
+    <sql id="copyListConditions">
+        where user_id = #{userId}
+          and del_flag = '0'
+        <if test="filter != null and filter.title != null and filter.title != ''">
+            and title like concat('%', #{filter.title}, '%')
+        </if>
+        <if test="filter != null and filter.processId != null and filter.processId != ''">
+            and process_id = #{filter.processId}
+        </if>
+        <if test="filter != null and filter.processName != null and filter.processName != ''">
+            and process_name like concat('%', #{filter.processName}, '%')
+        </if>
+        <if test="filter != null and filter.originatorName != null and filter.originatorName != ''">
+            and originator_name like concat('%', #{filter.originatorName}, '%')
+        </if>
+        <if test="filter != null and filter.instanceId != null and filter.instanceId != ''">
+            and instance_id = #{filter.instanceId}
+        </if>
+        <if test="filter != null and filter.taskId != null and filter.taskId != ''">
+            and task_id = #{filter.taskId}
+        </if>
+        <if test="filter != null and filter.categoryId != null and filter.categoryId != ''">
+            and category_id = #{filter.categoryId}
+        </if>
+        <if test="filter != null and filter.deploymentId != null and filter.deploymentId != ''">
+            and deployment_id = #{filter.deploymentId}
+        </if>
+    </sql>
+
+    <select id="selectListByUserId" resultMap="WfCopyResult">
+        select <include refid="copyColumns"/>
+        from wf_copy
+        <include refid="copyListConditions"/>
+        order by create_time desc, copy_id desc
+    </select>
+
+    <select id="countListByUserId" resultType="java.lang.Long">
+        select count(*)
+        from wf_copy
+        <include refid="copyListConditions"/>
+    </select>
+
+    <select id="selectPageByUserId" resultMap="WfCopyResult">
+        select <include refid="copyColumns"/>
+        from wf_copy
+        <include refid="copyListConditions"/>
+        order by create_time desc, copy_id desc
+        limit #{offset}, #{limit}
+    </select>
+
+    <update id="logicalDelete">
+        update wf_copy
+        set del_flag = '2',
+            update_by = #{updateBy},
+            update_time = current_timestamp
+        where del_flag = '0'
+        <choose>
+            <when test="copyIds != null and copyIds.size() > 0">
+                and copy_id in
+                <foreach collection="copyIds" item="copyId" open="(" separator="," close=")">
+                    #{copyId}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1 = 0
+            </otherwise>
+        </choose>
+    </update>
+
+    <select id="countActiveByInstanceAndUser" resultType="java.lang.Long">
+        select count(*)
+        from wf_copy
+        where instance_id = #{instanceId}
+          and user_id = #{userId}
+          and del_flag = '0'
+    </select>
+
+    <select id="countActiveByInstanceIds" resultType="java.lang.Long">
+        select count(*)
+        from wf_copy
+        where del_flag = '0'
+        <choose>
+            <when test="instanceIds != null and instanceIds.size() > 0">
+                and instance_id in
+                <foreach collection="instanceIds" item="instanceId" open="(" separator="," close=")">
+                    #{instanceId}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1 = 0
+            </otherwise>
+        </choose>
+    </select>
+
+    <update id="logicalDeleteByInstanceIds">
+        update wf_copy
+        set del_flag = '2',
+            update_by = #{updateBy},
+            update_time = current_timestamp
+        where del_flag = '0'
+        <choose>
+            <when test="instanceIds != null and instanceIds.size() > 0">
+                and instance_id in
+                <foreach collection="instanceIds" item="instanceId" open="(" separator="," close=")">
+                    #{instanceId}
+                </foreach>
+            </when>
+            <otherwise>
+                and 1 = 0
+            </otherwise>
+        </choose>
+    </update>
+
+</mapper>

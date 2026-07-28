@@ -1,0 +1,33 @@
+.DS_Store
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+**/*.log
+.playwright-cli/
+output/
+/mysql-root.txt
+/mysql-password.txt
+/mysql-app.txt
+/testcount/*.local.md
+
+# Repository-local operational documents excluded from published history
+/docs/workflow-production/
+/back/sql/flowable/README.md
+/deployment/scripts/workflow-release-gate.sh
+/deployment/k6/README.md
+/testcount/
+
+tests/**/coverage/
+tests/e2e/reports
+selenium-debug.log
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.local

@@ -1,0 +1,2 @@
+ApprovaPlat ${ruoyi.version}
+Spring Boot ${spring-boot.version}

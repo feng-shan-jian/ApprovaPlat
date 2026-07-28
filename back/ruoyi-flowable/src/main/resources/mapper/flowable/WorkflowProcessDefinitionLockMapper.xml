@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper">
+
+    <resultMap id="WorkflowProcessDefinitionLockRowResult"
+               type="com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow">
+        <constructor>
+            <arg column="definition_id" javaType="java.lang.String" />
+            <arg column="deployment_id" javaType="java.lang.String" />
+            <arg column="suspension_state" javaType="java.lang.Integer" />
+        </constructor>
+    </resultMap>
+
+    <!--
+      REPEATABLE_READ 下普通查询会停留在旧快照；锁定读必须使用流程定义唯一索引，
+      既读取当前已提交最新版，也持有该 key 的 next-key lock 到发起事务结束。
+    -->
+    <select id="selectLatestDefaultTenantDefinitionForUpdate"
+            resultMap="WorkflowProcessDefinitionLockRowResult" timeout="10">
+        select ID_ as definition_id,
+               DEPLOYMENT_ID_ as deployment_id,
+               SUSPENSION_STATE_ as suspension_state
+        from ACT_RE_PROCDEF force index (ACT_UNIQ_PROCDEF)
+        where KEY_ = #{processKey}
+          and TENANT_ID_ = ''
+        order by VERSION_ desc, DERIVED_VERSION_ desc
+        limit 1
+        for update
+    </select>
+
+</mapper>
