@@ -179,6 +179,106 @@ function escapeXml(value) {
 }
 
 /**
+ * 递归收集目标菜单及全部父菜单，确保页面路由和按钮权限同时可达。
+ * @param {object} menu 需要授权的正式菜单记录。
+ * @param {Map<string, object>} menusById 菜单主键到记录的映射。
+ * @param {Set<number>} targetIds 待合并的菜单主键集合。
+ * @returns {void} 目标集合原位增加当前菜单及其父菜单。
+ */
+function collectMenuAncestors(menu, menusById, targetIds) {
+  let current = menu
+  while (current && Number(current.menuId) > 0) {
+    targetIds.add(Number(current.menuId))
+    const parentId = Number(current.parentId)
+    if (parentId <= 0) break
+    current = menusById.get(String(parentId))
+  }
+}
+
+/**
+ * 按角色管理页面的“选中 + 半选”语义重建完整菜单集合，防止回写时丢失父路由。
+ * @param {object[]} nodes 菜单树当前层节点。
+ * @param {Set<number>} checkedLeafIds 接口返回的选中叶子主键。
+ * @param {Set<number>} selectedIds 待写入的完整菜单主键集合。
+ * @returns {boolean} 当前分支是否包含已选中的节点。
+ */
+function collectSelectedTreeBranch(nodes, checkedLeafIds, selectedIds) {
+  let branchSelected = false
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    const nodeId = Number(node.id)
+    const childSelected = collectSelectedTreeBranch(
+      Array.isArray(node.children) ? node.children : [],
+      checkedLeafIds,
+      selectedIds
+    )
+    const currentSelected = checkedLeafIds.has(nodeId) || childSelected
+    if (currentSelected) selectedIds.add(nodeId)
+    branchSelected ||= currentSelected
+  }
+  return branchSelected
+}
+
+/**
+ * 通过角色管理 API 合并参与者办理权限，避免真实角色被身份目录资格查询过滤。
+ * @param {{request: Function}} api 已登录 API 客户端。
+ * @param {object} catalog 包含角色键和办理权限的样例目录。
+ * @param {object[]} roles 系统有效角色列表。
+ * @returns {Promise<{aligned: number}>} 完成增量合并的角色数。
+ */
+async function alignParticipantRolePermissions(api, catalog, roles) {
+  const roleKeys = Array.isArray(catalog.participantRoleKeys)
+    ? catalog.participantRoleKeys
+    : []
+  const permissions = new Set(
+    Array.isArray(catalog.participantPermissions) ? catalog.participantPermissions : []
+  )
+  if (roleKeys.length === 0 || permissions.size === 0) {
+    throw new Error('审批样例目录缺少参与者角色或办理权限契约')
+  }
+
+  const menuResponse = await api.request('GET', '/system/menu/list')
+  const menus = menuResponse.data || []
+  const menusById = new Map(menus.map(menu => [String(menu.menuId), menu]))
+  const requiredMenuIds = new Set()
+  for (const permission of permissions) {
+    const matchingMenus = menus.filter(menu => menu.perms === permission)
+    if (matchingMenus.length !== 1) {
+      throw new Error(`办理权限菜单缺失或重复: ${permission}`)
+    }
+    collectMenuAncestors(matchingMenus[0], menusById, requiredMenuIds)
+  }
+
+  for (const roleKey of roleKeys) {
+    const roleRow = roles.find(item =>
+      item.roleKey === roleKey && String(item.status) === '0'
+    )
+    if (!roleRow) throw new Error(`未找到有效参与者角色: ${roleKey}`)
+    const [detailResponse, treeResponse] = await Promise.all([
+      api.request('GET', `/system/role/${encodeURIComponent(roleRow.roleId)}`),
+      api.request('GET', `/system/menu/roleMenuTreeselect/${encodeURIComponent(roleRow.roleId)}`)
+    ])
+    const role = detailResponse.data
+    const checkedLeafIds = new Set((treeResponse.checkedKeys || []).map(Number))
+    // roleMenuTreeselect 只返回叶子；先复原半选父节点，保持与角色管理页面提交逻辑一致。
+    const existingIds = new Set()
+    collectSelectedTreeBranch(treeResponse.menus || [], checkedLeafIds, existingIds)
+    requiredMenuIds.forEach(menuId => existingIds.add(menuId))
+    await api.request('PUT', '/system/role', {
+      roleId: role.roleId,
+      roleName: role.roleName,
+      roleKey: role.roleKey,
+      roleSort: Number(role.roleSort),
+      status: role.status,
+      menuIds: [...existingIds].sort((left, right) => left - right),
+      menuCheckStrictly: Boolean(role.menuCheckStrictly),
+      deptCheckStrictly: Boolean(role.deptCheckStrictly),
+      remark: role.remark
+    })
+  }
+  return { aligned: roleKeys.length }
+}
+
+/**
  * 生成带固定审计监听器、表单键和真实静态身份的串行 BPMN 2.0 XML。
  * @param {object} sample 样例模型和节点定义。
  * @param {number} formId 开始节点引用的正式表单主键。
@@ -334,10 +434,16 @@ async function main() {
     roles: roleResponse.rows || [],
     depts: deptResponse.data || []
   }
+  const permissionResult = await alignParticipantRolePermissions(
+    api,
+    catalog,
+    directory.roles
+  )
   const results = []
   for (const sample of catalog.samples) {
     results.push(await installSample(api, sample, directory))
   }
+  console.log(`参与者角色权限已合并: ${permissionResult.aligned}`)
   console.table(results)
 }
 

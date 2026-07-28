@@ -1,4 +1,18 @@
 {
+  "participantRoleKeys": [
+    "company_general_manager",
+    "company_executive_office",
+    "company_document_controller",
+    "company_department_manager",
+    "company_employee"
+  ],
+  "participantPermissions": [
+    "workflow:process:todoList",
+    "workflow:process:claimList",
+    "workflow:process:query",
+    "workflow:process:approval",
+    "workflow:process:claim"
+  ],
   "samples": [
     {
       "modelKey": "sample_leave_approval",
