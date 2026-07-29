@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-基于 ruoyi vue前后端分离 + Spring Boot 4 集成 Flowable 8 构建的工业端审批中台。
+基于 Flowable 8 与 Spring Boot 4 构建的企业级审批平台。
 
 ApprovaPlat 聚焦 Flowable 8 在 Spring Boot 4 技术栈中的工程化集成与生产落地。希望可以完整覆盖流程设计、申请发起、任务审批、会签、退回、抄送、附件、权限隔离和审计追踪的完整审批应用。
 
@@ -55,10 +55,10 @@ ApprovaPlat/
 
 以下账号仅用于本地 ApprovaPlat 测试环境：
 
-| 角色  | 账号                    | 密码         |
-|-----|-----------------------|------------|
-| 管理员 | `admin`               | `aprova**` |
-| 文控  | `document_controller` | `aprova**` |
+| 角色 | 账号 | 密码 |
+| --- | --- | --- |
+| 管理员 | `admin` | `aprova**` |
+| 文控 | `document_controller` | `aprova**` |
 
 ## 构建
 

@@ -1,7 +1,10 @@
 <template>
   <div class="login">
     <el-form ref="loginRef" :model="loginForm" :rules="loginRules" class="login-form">
-      <h3 class="title">{{ title }}</h3>
+      <div class="login-brand">
+        <span class="login-brand-mark" aria-hidden="true">AP</span>
+        <h1 class="title">{{ title }}</h1>
+      </div>
       <el-form-item prop="username">
         <el-input
           v-model="loginForm.username"
@@ -25,34 +28,43 @@
           <template #prefix><svg-icon icon-class="password" class="el-input__icon input-icon" /></template>
         </el-input>
       </el-form-item>
-      <el-form-item prop="code" v-if="captchaEnabled">
+      <el-form-item prop="code" v-if="captchaEnabled" class="captcha-item">
         <el-input
           v-model="loginForm.code"
+          class="captcha-input"
           size="large"
           auto-complete="off"
           placeholder="验证码"
-          style="width: 63%"
           @keyup.enter="handleLogin"
         >
           <template #prefix><svg-icon icon-class="validCode" class="el-input__icon input-icon" /></template>
         </el-input>
         <div class="login-code">
-          <img :src="codeUrl" @click="getCode" class="login-code-img"/>
+          <img
+            :src="codeUrl"
+            alt="点击刷新验证码"
+            class="login-code-img"
+            role="button"
+            tabindex="0"
+            @click="getCode"
+            @keydown.enter="getCode"
+            @keydown.space.prevent="getCode"
+          />
         </div>
       </el-form-item>
-      <el-checkbox v-model="loginForm.rememberMe" style="margin:0px 0px 25px 0px;">记住密码</el-checkbox>
-      <el-form-item style="width:100%;">
+      <el-checkbox v-model="loginForm.rememberMe" class="remember-option">记住密码</el-checkbox>
+      <el-form-item class="submit-row">
         <el-button
           :loading="loading"
+          class="login-button"
           size="large"
           type="primary"
-          style="width:100%;"
           @click.prevent="handleLogin"
         >
-          <span v-if="!loading">登 录</span>
-          <span v-else>登 录 中...</span>
+          <span v-if="!loading">登录</span>
+          <span v-else>登录中...</span>
         </el-button>
-        <div style="float: right;" v-if="register">
+        <div class="register-link" v-if="register">
           <router-link class="link-type" :to="'/register'">立即注册</router-link>
         </div>
       </el-form-item>
@@ -167,73 +179,224 @@ getCookie()
 
 <style lang='scss' scoped>
 .login {
+  position: relative;
   display: flex;
-  justify-content: center;
   align-items: center;
-  height: 100%;
+  justify-content: flex-end;
+  min-height: 100%;
+  padding: 48px clamp(48px, 9vw, 144px);
+  overflow: hidden;
   background-image: url("../assets/images/login-background.jpg");
+  background-position: center;
   background-size: cover;
+  isolation: isolate;
+
+  &::before {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    content: "";
+    background: rgb(12 22 18 / 48%);
+  }
 }
+
+.login-brand {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.login-brand-mark {
+  display: inline-flex;
+  flex: 0 0 38px;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  color: #173b32;
+  font-size: 12px;
+  font-weight: 750;
+  background: #b9e4d7;
+  border-radius: 6px;
+}
+
 .title {
-  margin: 0px auto 30px auto;
-  text-align: center;
-  color: #707070;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--app-text);
+  font-size: 23px;
+  font-weight: 680;
+  line-height: 1.25;
+  letter-spacing: 0;
 }
 
 .login-form {
-  border-radius: 6px;
-  background: #ffffff;
-  width: 400px;
-  padding: 25px 25px 5px 25px;
   z-index: 1;
+  width: min(408px, 100%);
+  padding: 36px 38px 30px;
+  background: rgb(255 255 255 / 96%);
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgb(8 20 15 / 28%);
+  backdrop-filter: blur(14px);
+  animation: login-panel-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+
+  :deep(.el-form-item) {
+    margin-bottom: 18px;
+  }
+
   .el-input {
-    height: 40px;
-    input {
-      height: 40px;
-    }
+    height: 44px;
   }
+
+  :deep(.el-input__wrapper) {
+    padding: 0 14px;
+    background: color-mix(in srgb, var(--app-surface) 92%, transparent);
+  }
+
+  :deep(.el-input__inner) {
+    height: 44px;
+  }
+
   .input-icon {
-    height: 39px;
-    width: 14px;
-    margin-left: 0px;
+    width: 15px;
+    height: 44px;
+    margin-left: 0;
+    color: var(--app-text-muted);
   }
-}
-.login-tip {
-  font-size: 13px;
-  text-align: center;
-  color: #bfbfbf;
-}
-.login-code {
-  width: 33%;
-  height: 40px;
-  float: right;
-  img {
-    cursor: pointer;
-    vertical-align: middle;
-  }
-}
-.el-login-footer {
-  height: 40px;
-  line-height: 40px;
-  position: fixed;
-  bottom: 0;
-  width: 100%;
-  text-align: center;
-  color: #fff;
-  font-family: Arial;
-  font-size: 12px;
-  letter-spacing: 1px;
-}
-.login-code-img {
-  height: 40px;
-  padding-left: 12px;
 }
 
-html.dark .login {
-  background-image: linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.55)), url("../assets/images/login-background.jpg");
+.captcha-item :deep(.el-form-item__content) {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  width: 100%;
+}
+
+.captcha-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.login-code {
+  flex: 0 0 112px;
+  width: 112px;
+  height: 44px;
+  overflow: hidden;
+  background: var(--app-surface-soft);
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+}
+
+.login-code-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  cursor: pointer;
+  object-fit: contain;
+}
+
+.remember-option {
+  margin: 0 0 24px;
+  color: var(--app-text-secondary);
+}
+
+.submit-row {
+  width: 100%;
+  margin-bottom: 0 !important;
+}
+
+.login-button {
+  width: 100%;
+  height: 44px;
+  font-size: 15px;
+}
+
+.register-link {
+  width: 100%;
+  margin-top: 14px;
+  text-align: right;
+}
+
+.el-login-footer {
+  position: fixed;
+  bottom: 14px;
+  left: 0;
+  width: 100%;
+  min-height: 24px;
+  padding: 0 16px;
+  text-align: center;
+  color: rgb(255 255 255 / 76%);
+  font-size: 12px;
+  line-height: 24px;
+  letter-spacing: 0;
+  text-shadow: 0 1px 8px rgb(0 0 0 / 36%);
+}
+
+:global(html.dark) .login {
+  &::before {
+    background: rgb(0 0 0 / 62%);
+  }
+
   .login-form {
-    background: var(--el-bg-color-overlay) !important;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    background: color-mix(in srgb, var(--app-surface) 94%, transparent);
+    border-color: var(--app-border);
+    box-shadow: 0 24px 70px rgb(0 0 0 / 46%);
+  }
+}
+
+@keyframes login-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 640px) {
+  .login {
+    justify-content: center;
+    padding: 24px 16px 58px;
+    background-position: 58% center;
+  }
+
+  .login-form {
+    padding: 30px 24px 24px;
+  }
+
+  .login-brand {
+    margin-bottom: 26px;
+  }
+
+  .title {
+    font-size: 21px;
+  }
+
+  .login-code {
+    flex-basis: 104px;
+    width: 104px;
+  }
+
+  .el-login-footer {
+    bottom: 8px;
+    font-size: 11px;
+  }
+}
+
+@media (max-height: 620px) {
+  .login {
+    align-items: flex-start;
+    overflow-y: auto;
+  }
+
+  .el-login-footer {
+    position: absolute;
   }
 }
 </style>
