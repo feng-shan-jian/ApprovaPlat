@@ -4,15 +4,11 @@
 
 基于 Flowable 8 与 Spring Boot 4 构建的企业级审批平台。
 
-ApprovaPlat 聚焦 Flowable 8 在 Spring Boot 4 技术栈中的工程化集成与生产落地。它不是一个仅能演示流程流转的示例项目，而是覆盖流程设计、申请发起、任务审批、会签、退回、抄送、附件、权限隔离和审计追踪的完整审批应用。
+ApprovaPlat 聚焦 Flowable 8 在 Spring Boot 4 技术栈中的工程化集成与生产落地。希望可以完整覆盖流程设计、申请发起、任务审批、会签、退回、抄送、附件、权限隔离和审计追踪的完整审批应用。
 
-ApprovaPlat 希望为新项目选型、系统现代化升级和 Flowable 8 落地提供一套可运行、可验证、可持续演进的参考实现。
+希望为新项目选型、系统现代化升级和 Flowable 8 落地提供一套可运行、可验证、可持续演进的参考实现。
 
-## 为什么选择 ApprovaPlat
-
-许多工作流项目止步于流程引擎基础 API 演示，而生产级审批平台还必须在并发和异常场景下保证引擎状态、业务状态、权限、附件与审计记录一致。
-
-ApprovaPlat 将这些问题作为核心能力实现：
+## 核心功能
 
 - Flowable 8 流程执行与 Spring Boot 4 工程集成
 - 流程建模、部署、版本管理与受控启停
@@ -23,7 +19,6 @@ ApprovaPlat 将这些问题作为核心能力实现：
 - 附件访问控制、存储配额与生命周期管理
 - 抄送、审批意见、操作日志与审计追踪
 - 流程引擎数据与业务数据的事务一致性
-- 真实服务集成测试与生产发布门禁
 
 ## 技术栈
 
@@ -44,9 +39,7 @@ ApprovaPlat 将这些问题作为核心能力实现：
 ApprovaPlat/
 |- back/         Spring Boot 后端与数据库脚本
 |- vite/         Vue 3 前端
-|- deployment/   生产配置与发布门禁
-|- docs/         架构、安装、验收和回滚文档
-`- testcount/    受控的本地测试账号文档
+`- deployment/   生产配置与发布门禁
 ```
 
 ## 环境要求
@@ -57,6 +50,15 @@ ApprovaPlat/
 - npm 10 或更高版本
 - MySQL 8
 - Redis 6 或更高版本
+
+## 测试账号
+
+以下账号仅用于本地 ApprovaPlat 测试环境：
+
+| 角色 | 账号 | 密码 |
+| --- | --- | --- |
+| 管理员 | `admin` | `aprova**` |
+| 文控 | `document_controller` | `aprova**` |
 
 ## 构建
 
@@ -75,17 +77,6 @@ npm install
 npm run build:prod
 ```
 
-数据库初始化、运行配置、首位管理员初始化、部署、验收和回滚必须遵循完整生产流程。禁止将真实凭据写入受 Git 管理的配置文件。
-
-## 文档
-
-- [Flowable 8 生产文档](docs/workflow-production/README.md)
-- [全新安装手册](docs/workflow-production/04-fresh-install-runbook.md)
-- [发布与回滚手册](docs/workflow-production/05-release-rollback-runbook.md)
-- [Flowable 8 数据库脚本](back/sql/flowable/README.md)
-- [发布门禁脚本](deployment/scripts/workflow-release-gate.sh)
-- [负载与生命周期验收](deployment/k6/README.md)
-
 ## 许可证
 
-ApprovaPlat 使用 [MIT License](LICENSE)。
+[MIT License](LICENSE)

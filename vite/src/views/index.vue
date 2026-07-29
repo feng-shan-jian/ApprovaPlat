@@ -68,10 +68,9 @@ const userStore = useUserStore()
 <style scoped lang="scss">
 .workspace-home {
   min-height: calc(100vh - 84px);
-  padding: 28px;
+  padding: 28px 30px 34px;
   color: var(--el-text-color-primary);
-  background: var(--el-bg-color-page);
-  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  background: var(--app-page-bg);
 }
 
 .welcome-strip {
@@ -79,19 +78,21 @@ const userStore = useUserStore()
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 176px;
-  padding: 32px 36px;
+  min-height: 184px;
+  padding: 34px 38px;
   overflow: hidden;
   color: #f7fbf9;
-  background: #17231f;
-  border: 1px solid #2c3b36;
-  border-radius: 6px;
+  background: #16231e;
+  border: 1px solid #2a3a34;
+  border-radius: 8px;
+  box-shadow: 0 14px 34px rgb(24 41 35 / 11%);
+  animation: workspace-enter 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 
   &::after {
     position: absolute;
     right: 0;
     bottom: 0;
-    width: 176px;
+    width: 184px;
     height: 4px;
     content: "";
     background: #e36b4f;
@@ -100,24 +101,24 @@ const userStore = useUserStore()
 
 .identity {
   display: flex;
-  gap: 20px;
+  gap: 22px;
   align-items: center;
   min-width: 0;
 }
 
 .identity-mark {
   display: inline-flex;
-  flex: 0 0 52px;
+  flex: 0 0 56px;
   align-items: center;
   justify-content: center;
-  width: 52px;
-  height: 52px;
+  width: 56px;
+  height: 56px;
   color: #173b32;
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 750;
   letter-spacing: 0;
   background: #b9e4d7;
-  border-radius: 6px;
+  border-radius: 7px;
 }
 
 .product-name,
@@ -136,8 +137,8 @@ const userStore = useUserStore()
 h1 {
   margin: 8px 0 6px;
   overflow-wrap: anywhere;
-  font-size: 30px;
-  font-weight: 650;
+  font-size: 29px;
+  font-weight: 680;
   line-height: 1.35;
   letter-spacing: 0;
 }
@@ -161,22 +162,24 @@ h1 {
   text-decoration: none;
   border: 1px solid #53635d;
   border-radius: 6px;
-  transition: border-color 160ms ease, background-color 160ms ease;
+  transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
 
   &:hover,
   &:focus-visible {
     background: #24342e;
     border-color: #b9e4d7;
     outline: none;
+    transform: translateY(-1px);
   }
 }
 
 .quick-section {
-  margin-top: 30px;
+  margin-top: 28px;
 }
 
 .section-heading {
-  margin-bottom: 14px;
+  margin-bottom: 15px;
+  animation: workspace-enter 360ms 70ms cubic-bezier(0.22, 1, 0.36, 1) both;
 
   p {
     color: #d85f45;
@@ -187,7 +190,7 @@ h1 {
   h2 {
     margin: 5px 0 0;
     font-size: 20px;
-    font-weight: 650;
+    font-weight: 680;
     letter-spacing: 0;
   }
 }
@@ -195,7 +198,7 @@ h1 {
 .quick-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 13px;
 }
 
 .quick-link {
@@ -203,19 +206,26 @@ h1 {
   grid-template-columns: 40px minmax(0, 1fr) 18px;
   gap: 12px;
   align-items: center;
-  min-height: 72px;
-  padding: 14px;
+  min-height: 76px;
+  padding: 16px;
   color: var(--el-text-color-primary);
   text-decoration: none;
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 6px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  box-shadow: var(--app-shadow-sm);
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  animation: workspace-enter 360ms 110ms cubic-bezier(0.22, 1, 0.36, 1) both;
+
+  &:nth-child(2) { animation-delay: 140ms; }
+  &:nth-child(3) { animation-delay: 170ms; }
+  &:nth-child(4) { animation-delay: 200ms; }
+  &:nth-child(5) { animation-delay: 230ms; }
 
   &:hover,
   &:focus-visible {
-    border-color: #6d8e84;
-    box-shadow: 0 8px 20px rgb(29 48 42 / 8%);
+    border-color: var(--el-color-primary-light-5);
+    box-shadow: 0 10px 24px rgb(29 48 42 / 9%);
     outline: none;
     transform: translateY(-1px);
   }
@@ -263,7 +273,38 @@ h1 {
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 650;
+}
+
+@keyframes workspace-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+:global(html.dark) .quick-icon--teal {
+  color: #8fd6c4;
+  background: #19372f;
+}
+
+:global(html.dark) .quick-icon--coral {
+  color: #f0a08d;
+  background: #42271f;
+}
+
+:global(html.dark) .quick-icon--gold {
+  color: #e5c66f;
+  background: #3b321b;
+}
+
+:global(html.dark) .quick-icon--ink {
+  color: #bcc9d2;
+  background: #273038;
 }
 
 @media (max-width: 960px) {
