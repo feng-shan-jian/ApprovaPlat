@@ -13,9 +13,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
@@ -89,7 +90,7 @@ public class WorkflowStartVariableValidator
     public WorkflowStartVariableValidator(WorkflowFormTemplateValidator templateValidator)
     {
         this.templateValidator = templateValidator;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = JsonMapper.shared();
     }
 
     /**
@@ -191,7 +192,7 @@ public class WorkflowStartVariableValidator
             templateValidator.validate(snapshotContent);
             return objectMapper.readTree(snapshotContent);
         }
-        catch (ServiceException | JsonProcessingException exception)
+        catch (ServiceException | JacksonException exception)
         {
             throw invalidSnapshot(exception);
         }
@@ -721,7 +722,7 @@ public class WorkflowStartVariableValidator
                 throw invalidVariable("流程变量总大小不能超过1 MiB");
             }
         }
-        catch (JsonProcessingException exception)
+        catch (JacksonException exception)
         {
             ServiceException failure = new ServiceException("流程变量序列化失败", HttpStatus.ERROR);
             failure.initCause(exception);

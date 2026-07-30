@@ -29,7 +29,10 @@ public class WorkflowModelDto
     /** BPMN 2.0 XML 正文。 */
     private String bpmnXml;
 
-    /** 保存设计时是否创建新模型版本。 */
+    /** 用户本次保存意图的 UUID 幂等键。 */
+    private String saveRequestId;
+
+    /** 保存设计时是否显式创建新模型版本；已部署或历史版本会由服务端自动创建新版本。 */
     private Boolean newVersion;
 
     /**
@@ -201,9 +204,30 @@ public class WorkflowModelDto
     }
 
     /**
+     * 获取用户本次保存意图的幂等键。
+     *
+     * @return String，符合 UUID 格式的保存请求主键
+     */
+    public String getSaveRequestId()
+    {
+        return saveRequestId;
+    }
+
+    /**
+     * 设置用户本次保存意图的幂等键。
+     *
+     * @param saveRequestId String，符合 UUID 格式的保存请求主键
+     * @return 无返回值
+     */
+    public void setSaveRequestId(String saveRequestId)
+    {
+        this.saveRequestId = saveRequestId;
+    }
+
+    /**
      * 获取是否创建新模型版本。
      *
-     * @return Boolean，true 表示创建新版本，false 表示覆盖未部署版本
+     * @return Boolean，true 表示显式创建新版本，false 仍会由服务端按部署和历史版本状态判定
      */
     public Boolean getNewVersion()
     {
@@ -213,7 +237,7 @@ public class WorkflowModelDto
     /**
      * 设置是否创建新模型版本。
      *
-     * @param newVersion Boolean，true 表示创建新版本，false 表示覆盖未部署版本
+     * @param newVersion Boolean，true 表示显式创建新版本，false 表示由服务端按版本状态自动判定
      * @return 无返回值
      */
     public void setNewVersion(Boolean newVersion)

@@ -8,6 +8,9 @@ const ROLE_ENV_SUFFIX = Object.freeze({
 
 export const WORKFLOW_ROLE_KEYS = Object.freeze(Object.keys(ROLE_ENV_SUFFIX))
 
+// 本地验收账号统一密码，避免测试任务反复生成和重置随机复杂密码。
+const WORKFLOW_TEST_ACCOUNT_PASSWORD = 'wang'
+
 /**
  * 读取必填 E2E 环境变量，错误信息只包含变量名，绝不回显凭据值。
  * @param {string} name 环境变量名称。
@@ -22,7 +25,7 @@ function requireEnvironmentValue(name) {
 }
 
 /**
- * 加载五个预登记职责分离账号；测试只消费进程环境，不读取或修改本机凭据文件。
+ * 加载五个预登记职责分离账号；用户名由环境注入，密码统一使用本地验收口令 wang。
  * @returns {Readonly<Record<string, Readonly<{roleKey: string, username: string, password: string}>>>} 按角色索引的只读登录凭据。
  */
 export function loadWorkflowAccounts() {
@@ -36,7 +39,7 @@ export function loadWorkflowAccounts() {
     return [roleKey, Object.freeze({
       roleKey,
       username: requireEnvironmentValue(`FLOWABLE_RBAC_${suffix}_USERNAME`),
-      password: requireEnvironmentValue(`FLOWABLE_RBAC_${suffix}_PASSWORD`)
+      password: WORKFLOW_TEST_ACCOUNT_PASSWORD
     })]
   }))
   const uniqueUsernames = new Set(Object.values(accounts).map(account => account.username))

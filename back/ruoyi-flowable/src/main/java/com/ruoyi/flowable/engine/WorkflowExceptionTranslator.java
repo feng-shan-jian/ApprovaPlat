@@ -148,11 +148,16 @@ public class WorkflowExceptionTranslator
      * 判断完整 cause 链是否代表允许客户端刷新后重试的真实并发失败。
      *
      * @param exception Throwable，原始异常或已经翻译并保留 cause 的 ServiceException
-     * @return boolean，仅 Flowable 乐观锁、Spring 并发异常或数据库事务冲突返回 true
+     * @return boolean，仅 Flowable 乐观锁、模型版本唯一键、Spring 并发异常或数据库事务冲突返回 true
      */
     public boolean isRetryableConcurrencyConflict(Throwable exception)
     {
         Objects.requireNonNull(exception, "并发异常不能为空");
+        // 模型版本唯一键可能在 MyBatis flush 或事务提交阶段绕过 FlowableException 包装。
+        if (isModelVersionConflict(exception))
+        {
+            return true;
+        }
         Throwable current = exception;
         while (current != null)
         {

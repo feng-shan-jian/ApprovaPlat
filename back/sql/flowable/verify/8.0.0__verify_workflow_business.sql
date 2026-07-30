@@ -6,6 +6,7 @@ WITH expected_tables AS (
     UNION ALL SELECT 'wf_form'
     UNION ALL SELECT 'wf_deploy_form'
     UNION ALL SELECT 'wf_copy'
+    UNION ALL SELECT 'wf_model_save_idempotency'
     UNION ALL SELECT 'wf_attachment_quota_guard'
     UNION ALL SELECT 'wf_attachment'
 ),
@@ -14,14 +15,15 @@ actual_tables AS (
     FROM information_schema.TABLES
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME IN ('wf_category', 'wf_form', 'wf_deploy_form', 'wf_copy',
-                         'wf_attachment_quota_guard', 'wf_attachment')
+                         'wf_model_save_idempotency', 'wf_attachment_quota_guard',
+                         'wf_attachment')
 )
 SELECT
     'workflow_business_tables' AS check_name,
     CASE
-        WHEN COUNT(a.table_name) = 6
-         AND SUM(a.ENGINE = 'InnoDB') = 6
-         AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 6
+        WHEN COUNT(a.table_name) = 7
+         AND SUM(a.ENGINE = 'InnoDB') = 7
+         AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 7
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -58,6 +60,13 @@ WITH expected_columns AS (
     UNION ALL SELECT 'wf_copy', 'user_id'
     UNION ALL SELECT 'wf_copy', 'originator_id'
     UNION ALL SELECT 'wf_copy', 'del_flag'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'request_id'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'user_id'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'source_model_id'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'payload_sha256'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'saved_model_id'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'create_time'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'complete_time'
     UNION ALL SELECT 'wf_attachment_quota_guard', 'owner_user_id'
     UNION ALL SELECT 'wf_attachment_quota_guard', 'create_time'
     UNION ALL SELECT 'wf_attachment', 'attachment_id'
@@ -86,6 +95,71 @@ missing_columns AS (
       ON c.TABLE_SCHEMA = DATABASE()
      AND c.TABLE_NAME = e.table_name
      AND c.COLUMN_NAME = e.column_name
+     AND (
+         e.table_name <> 'wf_model_save_idempotency'
+         OR
+         CASE e.column_name
+             WHEN 'request_id' THEN
+                 c.DATA_TYPE = 'char'
+                 AND c.CHARACTER_MAXIMUM_LENGTH = 36
+                 AND c.CHARACTER_SET_NAME = 'ascii'
+                 AND c.COLLATION_NAME = 'ascii_bin'
+                 AND c.IS_NULLABLE = 'NO'
+                 AND c.COLUMN_DEFAULT IS NULL
+                 AND c.EXTRA = ''
+                 AND c.GENERATION_EXPRESSION = ''
+             WHEN 'user_id' THEN
+                 c.DATA_TYPE = 'varchar'
+                 AND c.CHARACTER_MAXIMUM_LENGTH = 64
+                 AND c.CHARACTER_SET_NAME = 'ascii'
+                 AND c.COLLATION_NAME = 'ascii_bin'
+                 AND c.IS_NULLABLE = 'NO'
+                 AND c.COLUMN_DEFAULT IS NULL
+                 AND c.EXTRA = ''
+                 AND c.GENERATION_EXPRESSION = ''
+             WHEN 'source_model_id' THEN
+                 c.DATA_TYPE = 'varchar'
+                 AND c.CHARACTER_MAXIMUM_LENGTH = 64
+                 AND c.CHARACTER_SET_NAME = 'ascii'
+                 AND c.COLLATION_NAME = 'ascii_bin'
+                 AND c.IS_NULLABLE = 'NO'
+                 AND c.COLUMN_DEFAULT IS NULL
+                 AND c.EXTRA = ''
+                 AND c.GENERATION_EXPRESSION = ''
+             WHEN 'payload_sha256' THEN
+                 c.DATA_TYPE = 'char'
+                 AND c.CHARACTER_MAXIMUM_LENGTH = 64
+                 AND c.CHARACTER_SET_NAME = 'ascii'
+                 AND c.COLLATION_NAME = 'ascii_bin'
+                 AND c.IS_NULLABLE = 'NO'
+                 AND c.COLUMN_DEFAULT IS NULL
+                 AND c.EXTRA = ''
+                 AND c.GENERATION_EXPRESSION = ''
+             WHEN 'saved_model_id' THEN
+                 c.DATA_TYPE = 'varchar'
+                 AND c.CHARACTER_MAXIMUM_LENGTH = 64
+                 AND c.CHARACTER_SET_NAME = 'ascii'
+                 AND c.COLLATION_NAME = 'ascii_bin'
+                 AND c.IS_NULLABLE = 'YES'
+                 AND c.COLUMN_DEFAULT IS NULL
+                 AND c.EXTRA = ''
+                 AND c.GENERATION_EXPRESSION = ''
+             WHEN 'create_time' THEN
+                 c.DATA_TYPE = 'datetime'
+                 AND c.DATETIME_PRECISION = 3
+                 AND c.IS_NULLABLE = 'NO'
+                 AND LOWER(c.COLUMN_DEFAULT) = 'current_timestamp(3)'
+                 AND c.GENERATION_EXPRESSION = ''
+             WHEN 'complete_time' THEN
+                 c.DATA_TYPE = 'datetime'
+                 AND c.DATETIME_PRECISION = 3
+                 AND c.IS_NULLABLE = 'YES'
+                 AND c.COLUMN_DEFAULT IS NULL
+                 AND c.EXTRA = ''
+                 AND c.GENERATION_EXPRESSION = ''
+             ELSE FALSE
+         END
+     )
     WHERE c.COLUMN_NAME IS NULL
 )
 SELECT
@@ -192,7 +266,8 @@ WITH actual_indexes AS (
     FROM information_schema.STATISTICS
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME IN ('wf_category', 'wf_form', 'wf_deploy_form', 'wf_copy',
-                         'wf_attachment_quota_guard', 'wf_attachment')
+                         'wf_model_save_idempotency', 'wf_attachment_quota_guard',
+                         'wf_attachment')
     GROUP BY TABLE_NAME, INDEX_NAME
 ),
 expected_indexes AS (
@@ -209,6 +284,13 @@ expected_indexes AS (
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_instance', 1, 'instance_id,del_flag'
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_task', 1, 'task_id,del_flag'
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_deployment', 1, 'deployment_id,del_flag'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'PRIMARY', 0, 'request_id'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'idx_wf_model_save_user_time', 1,
+                     'user_id,create_time'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'idx_wf_model_save_source_time', 1,
+                     'source_model_id,create_time'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'idx_wf_model_save_saved_model', 1,
+                     'saved_model_id'
     UNION ALL SELECT 'wf_attachment_quota_guard', 'PRIMARY', 0, 'owner_user_id'
     UNION ALL SELECT 'wf_attachment', 'PRIMARY', 0, 'attachment_id'
     UNION ALL SELECT 'wf_attachment', 'uk_wf_attachment_storage_key', 0, 'storage_key'
@@ -259,6 +341,11 @@ WITH expected_checks AS (
     UNION ALL SELECT 'wf_deploy_form', 'chk_wf_deploy_form_content_json'
     UNION ALL SELECT 'wf_deploy_form', 'chk_wf_deploy_form_del_flag'
     UNION ALL SELECT 'wf_copy', 'chk_wf_copy_del_flag'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_request_id'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_user_id'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_source_id'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_payload_sha256'
+    UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_completion'
     UNION ALL SELECT 'wf_attachment_quota_guard',
                      'chk_wf_attachment_quota_guard_owner'
     UNION ALL SELECT 'wf_attachment', 'chk_wf_attachment_status'
@@ -400,6 +487,33 @@ WITH integrity_issues AS (
     FROM wf_copy c
     LEFT JOIN sys_user u ON u.user_id = c.user_id
     WHERE c.del_flag = '0' AND u.user_id IS NULL
+
+    UNION ALL
+
+    SELECT 'wf_model_save_invalid_row', COUNT(*)
+    FROM wf_model_save_idempotency r
+    WHERE r.request_id NOT REGEXP
+              '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+       OR r.user_id NOT REGEXP '^[1-9][0-9]{0,18}$'
+       OR CHAR_LENGTH(r.source_model_id) NOT BETWEEN 1 AND 64
+       OR r.payload_sha256 NOT REGEXP '^[0-9a-f]{64}$'
+       OR ((r.saved_model_id IS NULL) <> (r.complete_time IS NULL))
+       OR (r.saved_model_id IS NOT NULL
+           AND (CHAR_LENGTH(r.saved_model_id) NOT BETWEEN 1 AND 64
+                OR r.complete_time < r.create_time))
+
+    UNION ALL
+
+    SELECT 'wf_model_save_incomplete_record', COUNT(*)
+    FROM wf_model_save_idempotency
+    WHERE saved_model_id IS NULL OR complete_time IS NULL
+
+    UNION ALL
+
+    SELECT 'wf_model_save_missing_user', COUNT(*)
+    FROM wf_model_save_idempotency r
+    LEFT JOIN sys_user u ON u.user_id = CAST(r.user_id AS UNSIGNED)
+    WHERE u.user_id IS NULL
 
     UNION ALL
 

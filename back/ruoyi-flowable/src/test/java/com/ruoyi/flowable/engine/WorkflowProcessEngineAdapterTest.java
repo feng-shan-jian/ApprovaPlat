@@ -19,8 +19,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.SubProcess;
@@ -1321,7 +1321,7 @@ class WorkflowProcessEngineAdapterTest
         verify(taskService).addComment(eq(TASK_ID), eq("process-1"), eq(commentType), auditCaptor.capture());
         try
         {
-            JsonNode audit = new ObjectMapper().readTree(auditCaptor.getValue());
+            JsonNode audit = JsonMapper.shared().readTree(auditCaptor.getValue());
             assertThat(audit.path("action").asText()).isEqualTo(action);
             assertThat(audit.path("actorUserId").asText()).isEqualTo("7");
             assertThat(audit.path("opinion").asText()).isEqualTo(opinion);

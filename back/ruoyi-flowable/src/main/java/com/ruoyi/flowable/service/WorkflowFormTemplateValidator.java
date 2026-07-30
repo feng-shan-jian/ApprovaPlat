@@ -10,13 +10,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Component;
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.StreamReadConstraints;
-import com.fasterxml.jackson.core.StreamReadFeature;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.StreamReadConstraints;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.core.json.JsonFactory;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 
@@ -176,7 +177,7 @@ public class WorkflowFormTemplateValidator
             }
             return root;
         }
-        catch (JsonProcessingException exception)
+        catch (JacksonException exception)
         {
             throw invalid("表单内容必须是合法且无重复键的 JSON 对象");
         }
@@ -338,7 +339,9 @@ public class WorkflowFormTemplateValidator
                 .streamReadConstraints(constraints)
                 .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                 .build();
-        return new ObjectMapper(factory).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+        return JsonMapper.builder(factory)
+                .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                .build();
     }
 
     /**

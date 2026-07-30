@@ -77,12 +77,6 @@
             <artifactId>poi-ooxml</artifactId>
         </dependency>
 
-        <!-- Token生成与解析-->
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt</artifactId>
-        </dependency>
-
         <!-- Jaxb -->
         <dependency>
             <groupId>javax.xml.bind</groupId>

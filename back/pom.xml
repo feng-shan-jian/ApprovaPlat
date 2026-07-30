@@ -29,9 +29,9 @@
         <commons.io.version>2.22.0</commons.io.version>
         <poi.version>4.1.2</poi.version>
         <velocity.version>2.3</velocity.version>
-        <jwt.version>0.9.1</jwt.version>
+        <jwt.version>0.13.0</jwt.version>
         <jaxb-api.version>2.3.1</jaxb-api.version>
-        <springdoc.version>3.0.3</springdoc.version>
+        <springdoc.version>4.0.0</springdoc.version>
     </properties>
 
     <!-- 依赖声明 -->
@@ -93,9 +93,9 @@
                 <version>${oshi.version}</version>
             </dependency>
 
-            <!-- spring-doc -->
+            <!-- 官方 Springdoc 尚未发布 Jackson 3 版本；固定使用 Boot 4.0.x 对齐的 Jackson 3 分支。 -->
             <dependency>
-                <groupId>org.springdoc</groupId>
+                <groupId>io.github.vpelikh</groupId>
                 <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
                 <version>${springdoc.version}</version>
             </dependency>
@@ -131,7 +131,13 @@
             <!-- Token生成与解析-->
             <dependency>
                 <groupId>io.jsonwebtoken</groupId>
-                <artifactId>jjwt</artifactId>
+                <artifactId>jjwt-api</artifactId>
+                <version>${jwt.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-impl</artifactId>
                 <version>${jwt.version}</version>
             </dependency>
 
@@ -210,6 +216,38 @@
                     <target>${java.version}</target>
                     <encoding>${project.build.sourceEncoding}</encoding>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.6.3</version>
+                <executions>
+                    <execution>
+                        <id>ban-jackson-2-runtime</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <!-- Jackson 3 仍正式复用 jackson-annotations；其余 Jackson 2 运行库一律禁止。 -->
+                                <bannedDependencies>
+                                    <searchTransitive>true</searchTransitive>
+                                    <excludes>
+                                        <exclude>com.fasterxml.jackson.core:jackson-core</exclude>
+                                        <exclude>com.fasterxml.jackson.core:jackson-databind</exclude>
+                                        <exclude>com.fasterxml.jackson.dataformat:*</exclude>
+                                        <exclude>com.fasterxml.jackson.datatype:*</exclude>
+                                        <exclude>com.fasterxml.jackson.module:*</exclude>
+                                        <exclude>com.fasterxml.jackson.jakarta.rs:*</exclude>
+                                        <exclude>com.fasterxml.jackson.jaxrs:*</exclude>
+                                    </excludes>
+                                    <message>后端统一使用 Jackson 3，禁止 Jackson 2 core/databind 及其扩展依赖回流。</message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

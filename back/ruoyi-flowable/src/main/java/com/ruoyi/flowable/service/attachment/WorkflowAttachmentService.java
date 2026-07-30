@@ -22,9 +22,10 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
@@ -92,7 +93,7 @@ public class WorkflowAttachmentService
         this.properties.validateCleanupRetryBackoff();
         this.identityResolver = identityResolver;
         this.processAccessService = processAccessService;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = JsonMapper.shared();
     }
 
     /**

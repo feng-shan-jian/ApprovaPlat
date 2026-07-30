@@ -26,8 +26,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RepositoryService;
@@ -86,7 +87,7 @@ import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
             "flowable.it.ddl-username=${FLOWABLE_IT_DDL_USERNAME}",
             "flowable.it.ddl-password=${FLOWABLE_IT_DDL_PASSWORD}",
             // 固定公开材料只用于装配 TokenService，本 IT 不创建登录 Token，禁止复用于任何部署环境。
-            "token.secret=workflow-attachment-it-public-test-material-never-use-in-production-0001",
+        "token.secret=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eA==",
             "flowable.database-schema-update=false",
             "flowable.async-executor-activate=false",
             "flowable.async-history-executor-activate=false",
@@ -147,7 +148,7 @@ class WorkflowAttachmentIT
     private final WorkflowTaskLifecycleService taskLifecycleService;
     private final WorkflowProcessInstanceService processInstanceService;
     private final WfAttachmentMapper attachmentMapper;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = JsonMapper.shared();
     private final String expectedSchema;
     /** 仅用于隔离 schema 故障约束的 JDBC URL，不得复用应用运行账号。 */
     private final String ddlJdbcUrl;

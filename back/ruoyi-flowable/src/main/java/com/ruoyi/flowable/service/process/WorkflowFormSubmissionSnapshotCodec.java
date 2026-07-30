@@ -18,21 +18,22 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.BigIntegerNode;
-import com.fasterxml.jackson.databind.node.BooleanNode;
-import com.fasterxml.jackson.databind.node.DecimalNode;
-import com.fasterxml.jackson.databind.node.DoubleNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.LongNode;
-import com.fasterxml.jackson.databind.node.NullNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.databind.node.TextNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.BigIntegerNode;
+import tools.jackson.databind.node.BooleanNode;
+import tools.jackson.databind.node.DecimalNode;
+import tools.jackson.databind.node.DoubleNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.LongNode;
+import tools.jackson.databind.node.NullNode;
+import tools.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.node.StringNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 
@@ -84,9 +85,10 @@ public final class WorkflowFormSubmissionSnapshotCodec
             "__proto__", "prototype", "constructor");
 
     /** 严格拒绝重复 JSON 字段和合法根节点后尾随内容的专用解析器。 */
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final ObjectMapper MAPPER = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .build();
 
     /**
      * 禁止实例化纯静态编解码器。
@@ -147,7 +149,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
         {
             parsed = MAPPER.readTree(encoded);
         }
-        catch (JsonProcessingException exception)
+        catch (JacksonException exception)
         {
             throw dataError("工作流表单提交快照正文损坏", exception);
         }
@@ -155,7 +157,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
         {
             throw dataError("工作流表单提交快照结构异常");
         }
-        Iterator<String> fieldNames = root.fieldNames();
+        Iterator<String> fieldNames = root.propertyNames().iterator();
         while (fieldNames.hasNext())
         {
             if (!ROOT_FIELDS.contains(fieldNames.next()))
@@ -253,7 +255,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
             requireSnapshotSize(encoded);
             return encoded;
         }
-        catch (JsonProcessingException exception)
+        catch (JacksonException exception)
         {
             throw dataError("工作流表单提交快照编码失败", exception);
         }
@@ -296,7 +298,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
         }
         LinkedHashMap<String, JsonNode> decoded = new LinkedHashMap<>();
         NodeCounter counter = new NodeCounter();
-        Iterator<Map.Entry<String, JsonNode>> fields = values.fields();
+        Iterator<Map.Entry<String, JsonNode>> fields = values.properties().iterator();
         while (fields.hasNext())
         {
             Map.Entry<String, JsonNode> field = fields.next();
@@ -328,7 +330,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
         if (value instanceof CharSequence text)
         {
             requireTextSize(text.toString());
-            return TextNode.valueOf(text.toString());
+            return StringNode.valueOf(text.toString());
         }
         if (value instanceof Boolean bool)
         {
@@ -358,13 +360,13 @@ public final class WorkflowFormSubmissionSnapshotCodec
         }
         if (value instanceof Date date)
         {
-            return TextNode.valueOf(date.toInstant().toString());
+            return StringNode.valueOf(date.toInstant().toString());
         }
         if (value instanceof Instant || value instanceof LocalDate
                 || value instanceof LocalDateTime || value instanceof OffsetDateTime
                 || value instanceof ZonedDateTime || value instanceof UUID)
         {
-            return TextNode.valueOf(value.toString());
+            return StringNode.valueOf(value.toString());
         }
         if (value instanceof Map<?, ?> map)
         {
@@ -431,7 +433,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
         if (node.isTextual())
         {
             requireTextSize(node.textValue());
-            return TextNode.valueOf(node.textValue());
+            return StringNode.valueOf(node.textValue());
         }
         if (node.isBoolean())
         {
@@ -459,7 +461,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
                 throw dataError("工作流表单提交快照对象成员过多");
             }
             ObjectNode object = JsonNodeFactory.instance.objectNode();
-            Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+            Iterator<Map.Entry<String, JsonNode>> fields = node.properties().iterator();
             while (fields.hasNext())
             {
                 Map.Entry<String, JsonNode> field = fields.next();

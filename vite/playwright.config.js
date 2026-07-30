@@ -51,8 +51,9 @@ export default defineConfig({
     acceptDownloads: true,
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
-    screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    // 登录表单包含真实验收账号，禁止自动截图或视频把输入内容固化到失败证据。
+    screenshot: 'off',
+    video: 'off',
     trace: 'off'
   },
   projects: [
@@ -68,7 +69,7 @@ export default defineConfig({
         timeout: 120_000,
         reuseExistingServer: !process.env.CI,
         env: {
-          ...process.env,
+          // 仅持久化 Vite 所需开关，避免 JSON/HTML reporter 序列化父进程中的测试凭据。
           VITE_OPEN_BROWSER: 'false'
         }
       }

@@ -141,23 +141,6 @@
               <el-form-item label="优先级">
                 <el-input v-model="propertyState.priority" maxlength="128" @change="updateUserTaskProperties" />
               </el-form-item>
-              <el-form-item label="任务审计事件" required>
-                <div class="process-designer__listener-control">
-                  <el-checkbox-group
-                    v-model="propertyState.taskListenerEvents"
-                    :min="APPROVED_TASK_LISTENER_EVENTS.length"
-                    :max="APPROVED_TASK_LISTENER_EVENTS.length"
-                    @change="updateTaskListeners"
-                  >
-                    <el-checkbox v-for="option in taskListenerOptions" :key="option.value" :value="option.value">
-                      {{ option.label }}
-                    </el-checkbox>
-                  </el-checkbox-group>
-                  <el-tooltip v-if="propertyState.hasUnsupportedTaskListener" content="恢复标准任务审计" placement="top">
-                    <el-button circle text icon="Refresh" aria-label="恢复标准任务审计" @click="restoreTaskListeners" />
-                  </el-tooltip>
-                </div>
-              </el-form-item>
             </template>
 
             <template v-if="isServiceTask">
@@ -194,6 +177,7 @@ import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css'
 import 'diagram-js-minimap/assets/diagram-js-minimap.css'
 import Download from '@/plugins/download'
 import flowableModdle from './bpmn/flowableModdle'
+import { normalizeTaskListenerXml } from './taskListenerXml'
 
 // 动态多实例的技术属性由设计器固定写入，页面不向设计者开放任意方法或变量名。
 const CONTROLLED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getUserIds(execution)}'
@@ -201,10 +185,6 @@ const CONTROLLED_MULTI_INSTANCE_ASSIGNEE = '${assignee}'
 const CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE = 'assignee'
 const CONTROLLED_MULTI_INSTANCE_ALL_CONDITION = '${nrOfCompletedInstances == nrOfInstances}'
 const CONTROLLED_MULTI_INSTANCE_ANY_CONDITION = '${nrOfCompletedInstances > 0}'
-
-// 任务监听器只允许固定 Bean 和三个生产审计事件，其他导入配置会在保存前被拒绝。
-const CONTROLLED_TASK_LISTENER_EXPRESSION = '${userTaskListener}'
-const APPROVED_TASK_LISTENER_EVENTS = Object.freeze(['create', 'assignment', 'complete'])
 
 const props = defineProps({
   /** 设计器当前 BPMN XML。 */
@@ -263,12 +243,6 @@ const multiInstanceApprovalOptions = [
   { label: '会签', value: 'all' },
   { label: '或签', value: 'any' }
 ]
-// 仅允许 userTaskListener 的三个生产审计事件，保存时统一写入受控 Bean 表达式。
-const taskListenerOptions = [
-  { label: '创建', value: 'create' },
-  { label: '分配', value: 'assignment' },
-  { label: '完成', value: 'complete' }
-]
 const implementationOptions = [
   { label: 'Java 类', value: 'class' },
   { label: 'Spring Bean', value: 'delegateExpression' }
@@ -309,9 +283,7 @@ function createEmptyPropertyState() {
     multiInstanceApprovalMode: 'all',
     collection: '',
     elementVariable: '',
-    completionCondition: '',
-    taskListenerEvents: [],
-    hasUnsupportedTaskListener: false
+    completionCondition: ''
   }
 }
 
@@ -433,10 +405,6 @@ function createModeler() {
   })
   const eventBus = modeler.get('eventBus')
   eventBus.on('selection.changed', event => selectElement(event.newSelection?.[0]))
-  eventBus.on('shape.added', event => {
-    // 导入 XML 时保持原模型不变；仅为用户从画布新建的任务补齐后端强制要求的审计监听器。
-    if (!importing) initializeCreatedUserTask(event.element)
-  })
   eventBus.on('element.changed', event => {
     if (event.element === selectedElement.value) loadPropertyState(event.element)
   })
@@ -493,7 +461,7 @@ function updateCommandState() {
 }
 
 /**
- * 导出当前 XML 并同步 v-model。
+ * 导出当前画布 XML 并同步 v-model，保留设计器原始建模状态。
  * @param {boolean} notifyChange 是否同时触发 change 事件。
  * @returns {Promise<string>} 格式化后的 BPMN XML。
  */
@@ -504,6 +472,21 @@ async function emitXmlChange(notifyChange) {
   emit('update:modelValue', xml)
   if (notifyChange) emit('change', xml)
   return xml
+}
+
+/**
+ * 导出可持久化 XML，并自动补齐后台任务身份审计监听器。
+ * @returns {Promise<string>} 已满足后端保存门禁的 BPMN XML。
+ */
+async function emitPersistedXml() {
+  const rawXml = await emitXmlChange(false)
+  const persistedXml = normalizeTaskListenerXml(rawXml)
+  if (persistedXml !== rawXml) {
+    // 持久化快照必须回写给父页面，避免保存请求和页面状态使用不同 XML。
+    lastExportedXml.value = persistedXml
+    emit('update:modelValue', persistedXml)
+  }
+  return persistedXml
 }
 
 /**
@@ -556,7 +539,6 @@ function loadPropertyState(element) {
       propertyState.multiInstanceType = loop.isSequential ? 'sequential' : 'parallel'
     }
   }
-  loadTaskListenerState(businessObject)
 }
 
 /**
@@ -566,37 +548,6 @@ function loadPropertyState(element) {
  */
 function isControlledMultiInstanceLoop(loop) {
   return Boolean(loop && String(loop.get?.('flowable:collection') || '').trim() === CONTROLLED_MULTI_INSTANCE_COLLECTION)
-}
-
-/**
- * 从用户任务扩展元素读取批准监听事件，并标记任意事件、实现、字段或重复配置。
- * @param {object} businessObject 当前用户任务业务对象。
- * @returns {void} 结果写入属性面板状态，不修改导入模型。
- */
-function loadTaskListenerState(businessObject) {
-  const listeners = (businessObject.extensionElements?.values || [])
-    .filter(value => value?.$type === 'flowable:TaskListener')
-  const selectedEvents = []
-  const seenEvents = new Set()
-  let unsupported = false
-  for (const listener of listeners) {
-    const event = String(listener.event || '').trim()
-    const fields = Array.isArray(listener.fields) ? listener.fields : []
-    const approved = APPROVED_TASK_LISTENER_EVENTS.includes(event)
-      && listener.delegateExpression === CONTROLLED_TASK_LISTENER_EXPRESSION
-      && !listener.class
-      && !listener.expression
-      && fields.length === 0
-      && !seenEvents.has(event)
-    if (!approved) {
-      unsupported = true
-      continue
-    }
-    seenEvents.add(event)
-    selectedEvents.push(event)
-  }
-  propertyState.taskListenerEvents = selectedEvents
-  propertyState.hasUnsupportedTaskListener = unsupported
 }
 
 /**
@@ -862,66 +813,6 @@ function resetControlledAssignment(changes) {
 }
 
 /**
- * 按指定事件创建用户任务监听扩展，同时保留同一节点上的其他扩展元素。
- * @param {object} businessObject 当前用户任务业务对象。
- * @param {string[]} selectedEvents 已按白名单顺序排列的任务监听事件。
- * @returns {object|undefined} 包含固定监听器的 ExtensionElements；无扩展时返回 undefined。
- */
-function createTaskListenerExtensionElements(businessObject, selectedEvents) {
-  const moddle = modeler.get('moddle')
-  const preservedValues = (businessObject.extensionElements?.values || [])
-    .filter(value => value?.$type !== 'flowable:TaskListener')
-  const listeners = selectedEvents.map(event => moddle.create('flowable:TaskListener', {
-    event,
-    delegateExpression: CONTROLLED_TASK_LISTENER_EXPRESSION
-  }))
-  const extensionValues = [...preservedValues, ...listeners]
-  return extensionValues.length
-    ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
-    : undefined
-}
-
-/**
- * 用批准事件重建当前用户任务监听扩展，保留同一节点上的其他非监听扩展元素。
- * @returns {void} 监听器 Bean、事件和字段结构均由设计器固定生成。
- */
-function updateTaskListeners() {
-  if (!modeler || !selectedBusinessObject.value) return
-  const businessObject = selectedBusinessObject.value
-  const selectedEvents = APPROVED_TASK_LISTENER_EVENTS
-    .filter(event => propertyState.taskListenerEvents.includes(event))
-  const extensionElements = createTaskListenerExtensionElements(businessObject, selectedEvents)
-  propertyState.taskListenerEvents = selectedEvents
-  propertyState.hasUnsupportedTaskListener = false
-  updateProperties({ extensionElements })
-}
-
-/**
- * 把当前用户任务恢复为完整的生产审计监听器集合，清理导入模型中的不受支持实现。
- * @returns {void} 当前节点写入 create、assignment、complete 三个固定监听器。
- */
-function restoreTaskListeners() {
-  propertyState.taskListenerEvents = [...APPROVED_TASK_LISTENER_EVENTS]
-  updateTaskListeners()
-}
-
-/**
- * 为画布中新建的用户任务写入完整监听器，避免正常建模直到保存时才被后端拒绝。
- * @param {object|undefined} element bpmn-js 新增图形元素。
- * @returns {void} 非用户任务、复制后已带监听器的任务或设计器未就绪时不处理。
- */
-function initializeCreatedUserTask(element) {
-  if (!modeler || element?.type !== 'bpmn:UserTask') return
-  const businessObject = element.businessObject
-  const existingListeners = (businessObject?.extensionElements?.values || [])
-    .filter(value => value?.$type === 'flowable:TaskListener')
-  if (!businessObject || existingListeners.length) return
-  const extensionElements = createTaskListenerExtensionElements(
-    businessObject, APPROVED_TASK_LISTENER_EVENTS)
-  modeler.get('modeling').updateProperties(element, { extensionElements })
-}
-
-/**
  * 撤销最近一次设计命令。
  * @returns {void} 无可撤销命令时不执行。
  */
@@ -957,13 +848,13 @@ function zoomBy(factor) {
 }
 
 /**
- * 导出当前 BPMN XML 文件。
+ * 导出可被后端再次保存或部署的 BPMN XML 文件。
  * @returns {Promise<void>} 导出失败时触发 error。
  */
 async function downloadXml() {
   if (designerLocked.value) return
   try {
-    const xml = await emitXmlChange(false)
+    const xml = await emitPersistedXml()
     const name = props.model.modelKey || 'workflow'
     Download.saveAs(new Blob([xml], { type: 'application/xml;charset=utf-8' }), `${name}.bpmn20.xml`)
   } catch (error) {
@@ -983,7 +874,7 @@ async function requestSave() {
   try {
     const error = validateDiagram()
     if (error) throw new Error(error)
-    emit('save', await emitXmlChange(false))
+    emit('save', await emitPersistedXml())
   } catch (error) {
     emit('error', error)
   } finally {
@@ -1023,8 +914,6 @@ function validateDiagram() {
     const task = element.businessObject
     const loopError = validateUserTaskMultiInstance(task)
     if (loopError) return loopError
-    const listenerError = validateUserTaskListeners(task)
-    if (listenerError) return listenerError
   }
   return ''
 }
@@ -1062,37 +951,6 @@ function validateUserTaskMultiInstance(task) {
   return ''
 }
 
-/**
- * 校验用户任务完整包含三个固定 Bean 监听事件，且没有字段注入、重复或额外实现。
- * @param {object} task bpmn-js 用户任务业务对象。
- * @returns {string} 空串表示通过，否则返回稳定业务错误。
- */
-function validateUserTaskListeners(task) {
-  const listeners = (task.extensionElements?.values || [])
-    .filter(value => value?.$type === 'flowable:TaskListener')
-  if (listeners.length !== APPROVED_TASK_LISTENER_EVENTS.length) {
-    return '用户任务必须配置创建、分配、完成审计事件'
-  }
-  const seenEvents = new Set()
-  for (const listener of listeners) {
-    const event = String(listener.event || '').trim()
-    const fields = Array.isArray(listener.fields) ? listener.fields : []
-    if (!APPROVED_TASK_LISTENER_EVENTS.includes(event)
-      || seenEvents.has(event)
-      || listener.delegateExpression !== CONTROLLED_TASK_LISTENER_EXPRESSION
-      || listener.class
-      || listener.expression
-      || fields.length > 0) {
-      return '任务监听器未列入安全白名单'
-    }
-    seenEvents.add(event)
-  }
-  if (seenEvents.size !== APPROVED_TASK_LISTENER_EVENTS.length) {
-    return '用户任务必须配置创建、分配、完成审计事件'
-  }
-  return ''
-}
-
 watch(() => props.modelValue, value => {
   if (value && value !== lastExportedXml.value && modeler) importXml(value)
 })
@@ -1107,7 +965,7 @@ onBeforeUnmount(() => {
   modeler = undefined
 })
 
-defineExpose({ requestSave, downloadXml, fitViewport, getXml: () => emitXmlChange(false) })
+defineExpose({ requestSave, downloadXml, fitViewport, getXml: () => emitPersistedXml() })
 </script>
 
 <style scoped lang="scss">
@@ -1183,15 +1041,6 @@ defineExpose({ requestSave, downloadXml, fitViewport, getXml: () => emitXmlChang
 .process-designer__form :deep(.el-select),
 .process-designer__form :deep(.el-segmented) {
   width: 100%;
-}
-
-.process-designer__listener-control {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
 }
 
 :deep(.djs-minimap) {

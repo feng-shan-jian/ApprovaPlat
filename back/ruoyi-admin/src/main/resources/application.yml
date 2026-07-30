@@ -12,11 +12,6 @@ ruoyi:
   addressEnabled: false
   # 验证码类型 math 数字计算 char 字符验证
   captchaType: math
-  # 全新安装时显式开启一次性管理员初始化；完成后必须关闭并移除明文密码环境变量。
-  bootstrap-admin:
-    enabled: ${RUOYI_BOOTSTRAP_ADMIN_ENABLED:false}
-    password: ${RUOYI_BOOTSTRAP_ADMIN_PASSWORD:}
-
 # 开发环境配置
 server:
   # 服务器的HTTP端口，默认为8080
@@ -141,8 +136,8 @@ flowable:
   async-executor-activate: false
   async-history-executor-activate: false
   history-level: full
-  # 迁移期保留旧 Flowable JSON 变量的 Jackson 2 类型语义。
-  variable-json-mapper: jackson2
+  # Flowable 变量与 Spring Boot 4 统一使用 Jackson 3，禁止重新引入已弃用的 Jackson 2 mapper。
+  variable-json-mapper: jackson
   db-identity-used: false
   idm:
     enabled: false
@@ -158,7 +153,7 @@ flowable:
     max-total-bytes: 53687091200
     min-free-bytes: 1073741824
 
-# Springdoc配置
+# OpenAPI 文档配置
 springdoc:
   api-docs:
     path: /v3/api-docs
@@ -168,9 +163,9 @@ springdoc:
     tags-sorter: alpha
   group-configs:
     - group: 'default'
-      display-name: '测试模块'
+      display-name: '全部接口'
       paths-to-match: '/**'
-      packages-to-scan: com.ruoyi.web.controller.tool
+      packages-to-scan: com.ruoyi.web.controller
 
 # 防盗链配置
 referer:

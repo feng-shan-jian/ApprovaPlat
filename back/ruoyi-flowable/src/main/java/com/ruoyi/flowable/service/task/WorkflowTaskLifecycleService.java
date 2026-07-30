@@ -10,9 +10,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.ExtensionAttribute;
 import org.flowable.bpmn.model.FlowElement;
@@ -110,7 +111,7 @@ public class WorkflowTaskLifecycleService
             HttpStatus.NOT_FOUND, HttpStatus.CONFLICT);
 
     /** 服务端审计 JSON 序列化器，客户端不能控制字段结构。 */
-    private static final ObjectMapper AUDIT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper AUDIT_MAPPER = JsonMapper.shared();
 
     private final WorkflowEngineOperations engineOperations;
 

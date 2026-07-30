@@ -12,7 +12,6 @@
           </div>
         </div>
       </div>
-      <el-checkbox v-model="saveAsNewVersion" :disabled="Boolean(model.deployed)">保存为新版本</el-checkbox>
     </div>
 
     <ProcessDesigner
@@ -49,8 +48,9 @@ const formOptions = ref([])
 const identityOptions = reactive({ assignees: [], candidateUsers: [], candidateGroups: [] })
 const identityPending = ref(0)
 const identityLoading = computed(() => identityPending.value > 0)
-const saveAsNewVersion = ref(false)
 const identityRequestVersion = { assignees: 0, candidateUsers: 0, candidateGroups: 0 }
+// pendingSaveRequest 保存尚未取得完整成功响应的用户保存意图，网络重试必须复用同一幂等键。
+let pendingSaveRequest
 
 /**
  * 获取当前路由中的 Flowable 模型主键。
@@ -58,6 +58,27 @@ const identityRequestVersion = { assignees: 0, candidateUsers: 0, candidateGroup
  */
 function currentModelId() {
   return String(route.params.modelId || '').trim()
+}
+
+/**
+ * 为当前保存意图创建或复用稳定 UUID，只有来源模型或 XML 改变时才形成新意图。
+ * @param {string} modelId 当前设计页打开的 Flowable 模型主键。
+ * @param {string} xml 本次准备持久化的完整 BPMN XML。
+ * @returns {string} 可在失败重试中复用的 UUID 保存请求主键。
+ */
+function resolveSaveRequestId(modelId, xml) {
+  if (pendingSaveRequest?.modelId === modelId && pendingSaveRequest?.xml === xml) {
+    return pendingSaveRequest.requestId
+  }
+  if (typeof globalThis.crypto?.randomUUID !== 'function') {
+    throw new Error('当前浏览器不支持安全保存请求标识')
+  }
+  pendingSaveRequest = Object.freeze({
+    modelId,
+    xml,
+    requestId: globalThis.crypto.randomUUID()
+  })
+  return pendingSaveRequest.requestId
 }
 
 /**
@@ -156,7 +177,6 @@ async function loadDesigner() {
     Object.keys(model).forEach(key => delete model[key])
     Object.assign(model, modelResponse.data || {})
     bpmnXml.value = xmlResponse.data || ''
-    saveAsNewVersion.value = Boolean(model.deployed)
     ready.value = true
   } finally {
     loading.value = false
@@ -171,12 +191,23 @@ async function loadDesigner() {
 async function saveDesign(xml) {
   saving.value = true
   try {
+    const sourceModelId = currentModelId()
+    const requestId = resolveSaveRequestId(sourceModelId, xml)
     const response = await saveModel({
-      modelId: currentModelId(),
+      requestId,
+      modelId: sourceModelId,
       bpmnXml: xml,
-      newVersion: Boolean(model.deployed || saveAsNewVersion.value)
+      // 前端不再暴露手动版本开关；后端按已部署或历史版本状态自动另存并返回实际模型主键。
+      newVersion: false
     })
-    const savedModelId = String(response.data?.modelId || currentModelId())
+    // savedModelId 是后端本次真实落库版本；缺失时不能回退旧路由并伪装保存成功。
+    const savedModelId = String(response.data?.modelId || '').trim()
+    if (!savedModelId) {
+      proxy.$modal.msgError('流程模型保存结果不完整')
+      return
+    }
+    // 只有后端返回真实落库主键后才结束该保存意图；响应丢失时下次点击会复用 requestId。
+    pendingSaveRequest = undefined
     proxy.$modal.msgSuccess('流程设计保存成功')
     if (savedModelId !== currentModelId()) {
       await router.replace({ name: 'WorkflowModelDesign', params: { modelId: savedModelId } })

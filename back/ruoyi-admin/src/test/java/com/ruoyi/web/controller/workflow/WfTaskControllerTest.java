@@ -38,7 +38,6 @@ import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.config.WorkflowJsonSerializationConfig;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessCancelRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessRevokeRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowMultiInstanceAdjustmentRequest;
@@ -58,9 +57,9 @@ import com.ruoyi.flowable.service.task.WorkflowTaskActionService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.flowable.service.task.WorkflowTaskReadService;
 import com.ruoyi.framework.web.exception.GlobalExceptionHandler;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.TextNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.StringNode;
 import tools.jackson.databind.json.JsonMapper;
 
 class WfTaskControllerTest
@@ -233,7 +232,7 @@ class WfTaskControllerTest
     void returnsAuthorizedProcessVariablesThroughAjaxResult() throws Exception
     {
         Map<String, JsonNode> variables = new LinkedHashMap<>();
-        variables.put("reason", TextNode.valueOf("真实变量"));
+        variables.put("reason", StringNode.valueOf("真实变量"));
         variables.put("files", JsonNodeFactory.instance.arrayNode().add("attachment-uuid-1"));
         when(taskReadService.getProcessVariables("task-1")).thenReturn(variables);
 
@@ -381,16 +380,14 @@ class WfTaskControllerTest
     }
 
     /**
-     * 使用生产工作流 Jackson 模块创建旧变量接口的真实 JSON 响应测试链路。
+     * 使用 Jackson 3 创建旧变量接口的真实 JSON 响应测试链路。
      *
-     * @return MockMvc，已注册 Jackson 2 JsonNode 到 Jackson 3 的安全序列化桥接
+     * @return MockMvc，使用 Jackson 3 原生 JsonNode 的独立 MVC 实例
      */
     private MockMvc workflowJsonMockMvc()
     {
         JsonMapper mapper = JsonMapper.builder()
                 .findAndAddModules()
-                .addModule(new WorkflowJsonSerializationConfig()
-                        .workflowJackson2JsonNodeModule())
                 .build();
         return MockMvcBuilders.standaloneSetup(new WfTaskController(taskActionService,
                         taskLifecycleService, taskReadService, multiInstanceService))

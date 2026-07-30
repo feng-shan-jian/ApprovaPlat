@@ -80,7 +80,12 @@ async function searchIdentityDirectory({ type, capability, keyword = '' }) {
 async function saveToServer(xml) {
   saving.value = true
   try {
-    await saveModel({ modelId: props.modelId, bpmnXml: xml, newVersion: false })
+    await saveModel({
+      requestId: crypto.randomUUID(),
+      modelId: props.modelId,
+      bpmnXml: xml,
+      newVersion: false
+    })
     ElMessage.success('流程设计保存成功')
   } finally {
     saving.value = false
@@ -140,7 +145,7 @@ onMounted(async () => {
 | 方法 | 返回值 | 说明 |
 | --- | --- | --- |
 | `requestSave()` | `Promise<void>` | 执行即时门禁并触发 `save`。 |
-| `getXml()` | `Promise<string>` | 获取格式化 BPMN XML。 |
+| `getXml()` | `Promise<string>` | 获取已补齐内部任务审计监听器、可直接保存或部署的 BPMN XML。 |
 | `downloadXml()` | `Promise<void>` | 下载 `.bpmn20.xml` 文件。 |
 | `fitViewport()` | `void` | 将流程完整适配到画布。 |
 
@@ -152,11 +157,12 @@ onMounted(async () => {
 - 从动态模式切换为串行或普通并行时会同时清理固定 handler、元素变量、完成条件和办理人，避免属性回读把静态模式错误恢复为动态模式。
 - 串行和普通并行多实例保留静态集合、元素变量和完成条件编辑能力，但不能引用 `multiInstanceHandler`；最终表达式白名单由后端再次强制校验。
 - 更新已导入的静态多实例时只修改面板负责的核心字段，不替换整个循环对象，因此未编辑的标准数据引用、索引变量和 `loopCardinality` 可以稳定往返。
-- 新模型的默认用户任务及画布中新建用户任务会自动写入“创建、分配、完成”三个固定审计事件；导入模型缺少事件时可在属性面板补齐，存在非法实现时可恢复标准配置。组件为每个事件生成唯一 `delegateExpression="${userTaskListener}"`，保存前要求三项完整并拒绝任意 Bean、class、expression、字段注入或重复事件，与后端模型门禁保持一致。
+- 用户任务的“创建、分配、完成”审计监听器是后端运行时身份审计的内部技术字段，不在属性面板展示。保存、下载和 `getXml()` 会无条件重建每个用户任务的固定 `delegateExpression="${userTaskListener}"` 三项监听器，因而错误命名空间、未知属性、字段注入、重复事件和非法实现都不会进入持久化结果；其他业务扩展保持不变。
 - 切换办理方式时会立即清理旧身份属性；在新身份尚未选择前，属性面板仍保留用户刚选择的模式，避免同步回读把界面错误重置为“办理人”。
 - 身份选择器禁止自由创建值，并对远程检索做 250ms 防抖；用户审批资格及身份真伪仍由保存、部署后端校验兜底。
 - 新建流程只有在 `model.formId` 明确指定时才预绑定发起表单，不会隐式选择表单列表第一项。
 - 服务任务只提供受控 Java 类和 `delegateExpression` 两种入口，最终安全白名单仍由后端强制执行。
 - 保存事件只交付 XML，不在组件内绕过页面权限或直接调用接口。
+- 页面必须为一次用户保存意图生成 UUID `requestId`；响应丢失后的同内容重试复用该值，只有取得后端真实 `modelId` 后才清除，服务端据此返回首次落库结果而不重复建版。
 - XML 序列化开始至后端保存结束期间锁定画布、属性面板和命令栈，阻止重复保存以及“已保存响应覆盖保存期间新修改”的竞态。
 - 保存按钮要求 `workflow:model:save` 权限；`workflow:model:designer` 只负责进入设计页并读取设计上下文，后端继续独立校验保存权限。

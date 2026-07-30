@@ -63,6 +63,30 @@ class WorkflowExceptionTranslatorTest
     }
 
     /**
+     * 验证事务提交阶段直接暴露的模型版本唯一键异常同样稳定翻译为 409。
+     *
+     * @return 无返回值；MyBatis 或 Spring 包装路径回退为 500 时测试失败
+     */
+    @org.junit.jupiter.api.Test
+    void mapsRuntimeWrappedModelVersionConstraintViolationToConflict()
+    {
+        SQLException databaseCause = new SQLException(
+                "Duplicate entry 'expense-2' for key 'ACT_RE_MODEL.ACT_UNIQ_MODEL'",
+                "23000", 1062);
+        RuntimeException source = new RuntimeException("transaction commit failed", databaseCause);
+
+        assertThat(translator.translateRetryableConcurrencyConflict(source))
+                .hasValueSatisfying(translated ->
+                {
+                    assertThat(translated.getCode()).isEqualTo(409);
+                    assertThat(translated.getMessage())
+                            .isEqualTo(WorkflowExceptionTranslator.CONFLICT_MESSAGE)
+                            .doesNotContain("ACT_UNIQ_MODEL", "expense");
+                    assertThat(translated.getCause()).isSameAs(source);
+                });
+    }
+
+    /**
      * 验证 MyBatis 外层运行时异常包装的 MySQL 死锁被翻译为稳定 409。
      *
      * @return 无返回值；死锁未识别、SQL 信息泄露或非并发异常被误翻译时测试失败

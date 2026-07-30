@@ -13,8 +13,8 @@ import static org.mockito.Mockito.when;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import org.flowable.common.engine.impl.identity.Authentication;
 import org.flowable.engine.TaskService;
 import org.flowable.identitylink.api.IdentityLink;
@@ -80,7 +80,7 @@ class WorkflowUserTaskAuditServiceTest
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
         verify(taskService).addComment(eq("task-7"), eq("instance-8"),
                 eq(WorkflowUserTaskAuditService.COMMENT_TYPE), body.capture());
-        JsonNode audit = new ObjectMapper().readTree(body.getValue());
+        JsonNode audit = JsonMapper.shared().readTree(body.getValue());
         assertThat(audit.path("schemaVersion").intValue()).isEqualTo(1);
         assertThat(audit.path("action").textValue()).isEqualTo("USER_TASK_COMPLETE");
         assertThat(audit.path("event").textValue()).isEqualTo("complete");

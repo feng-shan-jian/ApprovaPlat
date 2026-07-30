@@ -61,8 +61,8 @@ export function updateModel(data) {
 }
 
 /**
- * 原子保存 BPMN XML，并按需创建新模型版本。
- * @param {object} data modelId、bpmnXml 和 newVersion。
+ * 原子保存 BPMN XML；已部署或历史版本由后端自动创建新模型版本。
+ * @param {object} data requestId、modelId、bpmnXml 和兼容旧客户端的 newVersion。
  * @returns {Promise<object>} data.modelId 为实际保存版本主键的响应。
  */
 export function saveModel(data) {

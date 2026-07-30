@@ -24,21 +24,25 @@ const PWD_RULES = {
   '4': { pattern: /^(?=.*[A-Za-z])(?=.*\d)(?=.*[~!@#$%^&*()\-=_+])[A-Za-z\d~!@#$%^&*()\-=_+]+$/, message: '密码必须同时包含字母、数字和特殊字符（~!@#$%^&*()-=_+）' }
 }
 
+/**
+ * 生成账号创建、密码重置、个人中心和注册页面共用的密码校验规则。
+ * @returns {{pwdChrType: import('vue').Ref<string>, pwdValidator: import('vue').ComputedRef<object[]>, infoPwdValidator: import('vue').ComputedRef<object[]>, pwdPromptValidator: (value: string) => string|undefined, registerPwdValidator: import('vue').ComputedRef<object[]>}} 各密码入口共用的响应式校验器。
+ */
 export function usePasswordRule() {
   // 默认密码校验
   const pwdValidator = computed(() => {
     const rule = PWD_RULES[pwdChrType.value] || PWD_RULES['0']
     return [
       { required: true, message: '密码不能为空', trigger: 'blur' },
-      { min: 6, max: 20, message: '密码长度必须介于 6 和 20 之间', trigger: 'blur' },
+      { min: 4, max: 20, message: '密码长度必须介于 4 和 20 之间', trigger: 'blur' },
       { pattern: rule.pattern, message: rule.message, trigger: 'blur' }
     ]
   })
   // 校验prompt的inputValidator函数
   const pwdPromptValidator = (value) => {
     const rule = PWD_RULES['0']
-    if (!value || value.length < 6 || value.length > 20) {
-      return '密码长度必须介于 6 和 20 之间'
+    if (!value || value.length < 4 || value.length > 20) {
+      return '密码长度必须介于 4 和 20 之间'
     }
     if (!rule.pattern.test(value)) {
       return rule.message
@@ -49,7 +53,7 @@ export function usePasswordRule() {
     const rule = PWD_RULES[pwdChrType.value] || PWD_RULES['0']
     return [
       { required: true, message: '新密码不能为空', trigger: 'blur' },
-      { min: 6, max: 20, message: '新密码长度必须介于 6 和 20 之间', trigger: 'blur' },
+      { min: 4, max: 20, message: '新密码长度必须介于 4 和 20 之间', trigger: 'blur' },
       { pattern: rule.pattern, message: rule.message, trigger: 'blur' }
     ]
   })
@@ -58,7 +62,7 @@ export function usePasswordRule() {
     const rule = PWD_RULES['0']
     return [
       { required: true, message: '请输入您的密码', trigger: 'blur' },
-      { min: 6, max: 20, message: '用户密码长度必须介于 6 和 20 之间', trigger: 'blur' },
+      { min: 4, max: 20, message: '用户密码长度必须介于 4 和 20 之间', trigger: 'blur' },
       { pattern: rule.pattern, message: rule.message, trigger: 'blur' }
     ]
   })

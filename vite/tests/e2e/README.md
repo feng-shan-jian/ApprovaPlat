@@ -19,23 +19,18 @@
 
 ## 强制环境变量
 
-账号变量与 `WorkflowRbacHttpIT` 共用，全部由执行进程注入：
+用户名变量与 `WorkflowRbacHttpIT` 共用，全部由执行进程注入；五个本地验收账号的密码固定为 `wang`：
 
 ```text
 FLOWABLE_RBAC_ACCOUNTS_REGISTERED=true
 FLOWABLE_RBAC_WORKFLOW_ADMIN_USERNAME
-FLOWABLE_RBAC_WORKFLOW_ADMIN_PASSWORD
 FLOWABLE_RBAC_WORKFLOW_DESIGNER_USERNAME
-FLOWABLE_RBAC_WORKFLOW_DESIGNER_PASSWORD
 FLOWABLE_RBAC_WORKFLOW_STARTER_USERNAME
-FLOWABLE_RBAC_WORKFLOW_STARTER_PASSWORD
 FLOWABLE_RBAC_WORKFLOW_APPROVER_USERNAME
-FLOWABLE_RBAC_WORKFLOW_APPROVER_PASSWORD
 FLOWABLE_RBAC_WORKFLOW_AUDITOR_USERNAME
-FLOWABLE_RBAC_WORKFLOW_AUDITOR_PASSWORD
 ```
 
-任一变量缺失、五个用户名不唯一、登记门禁不为 `true`、验证码开启、账号角色不唯一或真实登录失败时，测试明确失败，不会 skip。账号或密码如发生生成或重置，必须在首次使用前写入仓库根目录下被 Git 忽略的 `testcount/accounts.local.md`。
+任一变量缺失、五个用户名不唯一、登记门禁不为 `true`、验证码开启、账号角色不唯一或真实登录失败时，测试明确失败，不会 skip。测试账号不得在任务中生成随机密码或另行重置，统一使用 `wang`。
 
 默认由 Playwright 在 `127.0.0.1:1024` 启动 Vite，Vite 继续把 `/dev-api` 代理到真实 `localhost:8080`。隔离环境可通过 `VITE_PROXY_TARGET` 指定另一个真实后端，并用 `FLOWABLE_E2E_BASE_URL` 选择未占用的本机前端端口；自动启动模式只接受本机 HTTP 根地址。验证已部署环境时设置：
 
@@ -48,7 +43,7 @@ FLOWABLE_E2E_BASE_URL=https://受控验收域名
 
 运行 `workflow-lifecycle-actions.spec.js` 前必须同时满足：
 
-- 五角色账号已经在正式用户、角色、菜单和数据权限中预登记，凭据已在首次使用前写入被 Git 忽略的 `testcount/accounts.local.md`，执行进程只通过上述环境变量注入凭据。
+- 五角色账号已经在正式用户、角色、菜单和数据权限中预登记，执行进程只通过上述环境变量注入用户名，密码固定为 `wang`。
 - 真实 MySQL、Redis 和后端均已启动，数据库已执行当前工作流正式迁移与校验脚本；后端可通过 Vite 的 `/dev-api` 代理访问，验证码在受控 E2E 环境中关闭。
 - 后端已加载正式 `userTaskListener`、任务动作、对象授权、身份目录、模型部署、实例运维和历史删除能力；不得使用旧后端进程验证新前端或新测试代码。
 - `workflow_designer` 可创建及删除分类、表单、模型和部署，`workflow_starter` 可发起流程，`workflow_approver` 与 `workflow_admin` 具备各自动作权限，管理员具备失败清理所需的实例终止和历史删除权限。

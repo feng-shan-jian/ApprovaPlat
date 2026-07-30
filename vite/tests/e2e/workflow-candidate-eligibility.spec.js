@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { expect, test } from '@playwright/test'
 import {
   callWorkflowApi,
@@ -242,6 +243,7 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
     resources.modelIds.push(rejectedModelId)
     await callWorkflowApi(pages.designer, 'POST', '/workflow/model/save', {
       data: {
+        requestId: randomUUID(),
         modelId: rejectedModelId,
         bpmnXml: buildCandidateGroupBpmn({
           processKey: rejectedProcessKey,
@@ -274,6 +276,7 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
     resources.modelIds.push(modelId)
     await callWorkflowApi(pages.designer, 'POST', '/workflow/model/save', {
       data: {
+        requestId: randomUUID(),
         modelId,
         bpmnXml: buildCandidateGroupBpmn({
           processKey,

@@ -37,7 +37,9 @@ public class SysRegisterService
     private RedisCache redisCache;
 
     /**
-     * 注册
+     * 校验注册请求并创建使用 BCrypt 持久化密码的新用户。
+     * @param registerBody RegisterBody，包含用户名、密码和验证码信息的注册请求
+     * @return String，注册成功返回空字符串，失败返回可展示的业务错误信息
      */
     public String register(RegisterBody registerBody)
     {
@@ -68,7 +70,7 @@ public class SysRegisterService
         else if (password.length() < UserConstants.PASSWORD_MIN_LENGTH
                 || password.length() > UserConstants.PASSWORD_MAX_LENGTH)
         {
-            msg = "密码长度必须在5到20个字符之间";
+            msg = "密码长度必须在4到20个字符之间";
         }
         else if (!userService.checkUserNameUnique(sysUser))
         {

@@ -75,7 +75,8 @@ flowable:
   async-executor-activate: ${FLOWABLE_ASYNC_EXECUTOR_ACTIVATE:false}
   async-history-executor-activate: ${FLOWABLE_ASYNC_HISTORY_EXECUTOR_ACTIVATE:false}
   history-level: full
-  variable-json-mapper: jackson2
+  # 生产流程变量与 HTTP JSON 边界统一使用 Jackson 3。
+  variable-json-mapper: jackson
   db-identity-used: false
   idm:
     enabled: false

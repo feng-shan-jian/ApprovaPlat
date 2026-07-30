@@ -22,8 +22,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.BoundaryEvent;
 import org.flowable.bpmn.model.CallActivity;
@@ -90,7 +91,7 @@ class WorkflowTaskLifecycleServiceTest
 
     private static final String PROCESS_KEY = "approval";
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /** 单元测试中模拟同一事务可回查的 Flowable 结构化意见。 */
     private List<Comment> persistedComments;

@@ -47,21 +47,22 @@ import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.variable.api.history.HistoricVariableInstance;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.BigIntegerNode;
-import com.fasterxml.jackson.databind.node.BooleanNode;
-import com.fasterxml.jackson.databind.node.DecimalNode;
-import com.fasterxml.jackson.databind.node.DoubleNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.LongNode;
-import com.fasterxml.jackson.databind.node.NullNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.databind.node.TextNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.BigIntegerNode;
+import tools.jackson.databind.node.BooleanNode;
+import tools.jackson.databind.node.DecimalNode;
+import tools.jackson.databind.node.DoubleNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.LongNode;
+import tools.jackson.databind.node.NullNode;
+import tools.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.node.StringNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.exception.ServiceException;
@@ -239,9 +240,10 @@ public class WorkflowProcessDetailService
     private final WorkflowTaskLifecycleService taskLifecycleService;
 
     /** 严格拒绝重复字段和根节点后尾随内容的变量 JSON 解析器。 */
-    private final ObjectMapper safeJsonMapper = new ObjectMapper()
-            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private final ObjectMapper safeJsonMapper = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .build();
 
     /**
      * 创建流程实例详情服务。
@@ -688,7 +690,7 @@ public class WorkflowProcessDetailService
                 }
             }
         }
-        catch (IOException exception)
+        catch (JacksonException exception)
         {
             // 历史纯文本可能以左花括号开头；解析失败仍按原始业务意见兼容展示。
         }
@@ -1644,7 +1646,7 @@ public class WorkflowProcessDetailService
                 parsed = safeJsonMapper.readTree(json);
             }
         }
-        catch (IOException exception)
+        catch (JacksonException exception)
         {
             ServiceException failure = dataError("活动表单 JSON 变量正文损坏");
             failure.initCause(exception);
@@ -1789,7 +1791,7 @@ public class WorkflowProcessDetailService
         if (value instanceof CharSequence text)
         {
             requireSafeText(text.toString());
-            return TextNode.valueOf(text.toString());
+            return StringNode.valueOf(text.toString());
         }
         if (value instanceof Boolean bool)
         {
@@ -1819,13 +1821,13 @@ public class WorkflowProcessDetailService
         }
         if (value instanceof Date date)
         {
-            return TextNode.valueOf(date.toInstant().toString());
+            return StringNode.valueOf(date.toInstant().toString());
         }
         if (value instanceof Instant || value instanceof LocalDate
                 || value instanceof LocalDateTime || value instanceof OffsetDateTime
                 || value instanceof ZonedDateTime || value instanceof UUID)
         {
-            return TextNode.valueOf(value.toString());
+            return StringNode.valueOf(value.toString());
         }
         if (value instanceof Map<?, ?> map)
         {
@@ -1893,7 +1895,7 @@ public class WorkflowProcessDetailService
         if (node.isTextual())
         {
             requireSafeText(node.textValue());
-            return TextNode.valueOf(node.textValue());
+            return StringNode.valueOf(node.textValue());
         }
         if (node.isBinary() || node.isPojo() || node.isMissingNode())
         {
@@ -1981,7 +1983,7 @@ public class WorkflowProcessDetailService
         {
             return safeJsonMapper.writeValueAsBytes(node).length;
         }
-        catch (JsonProcessingException exception)
+        catch (JacksonException exception)
         {
             throw dataError("表单变量 JSON 序列化失败");
         }

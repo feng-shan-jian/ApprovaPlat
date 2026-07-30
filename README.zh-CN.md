@@ -57,8 +57,8 @@ ApprovaPlat/
 
 | 角色 | 账号 | 密码 |
 | --- | --- | --- |
-| 管理员 | `admin` | `aprova**` |
-| 文控 | `document_controller` | `aprova**` |
+| 管理员 | `admin` | `wang` |
+| 文控 | `document_controller` | `wang` |
 
 ## 构建
 

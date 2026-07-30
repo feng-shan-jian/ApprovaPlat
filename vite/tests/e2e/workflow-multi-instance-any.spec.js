@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { test, expect } from './fixtures/workflow.js'
 import { loadWorkflowAccounts } from './support/environment.js'
 import {
@@ -239,6 +240,7 @@ async function createAndDeployMultiInstanceModel(page, input) {
   input.resourceRegistry.modelId = modelId
   await callWorkflowApi(page, 'POST', '/workflow/model/save', {
     data: {
+      requestId: randomUUID(),
       modelId,
       bpmnXml: buildDynamicMultiInstanceBpmn(input),
       newVersion: false

@@ -12,7 +12,7 @@ import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 
 /**
- * Swagger2的接口配置
+ * 开发环境 OpenAPI 接口文档配置。
  * 
  * @author ruoyi
  */
@@ -35,15 +35,19 @@ public class SwaggerConfig
             .addSecurityItem(new SecurityRequirement().addList("apikey"))
             .info(getApiInfo());
     }
-    
+
+    /**
+     * 构建与实际 Spring Security JWT 认证链一致的 HTTP Bearer 方案。
+     *
+     * @return SecurityScheme，使用 Authorization: Bearer &lt;JWT&gt; 的 OpenAPI 认证定义
+     */
     @Bean
     public SecurityScheme securityScheme()
     {
         return new SecurityScheme()
-            .type(SecurityScheme.Type.APIKEY)
-            .name("Authorization")
-            .in(SecurityScheme.In.HEADER)
-            .scheme("Bearer");
+            .type(SecurityScheme.Type.HTTP)
+            .scheme("bearer")
+            .bearerFormat("JWT");
     }
     
     /**

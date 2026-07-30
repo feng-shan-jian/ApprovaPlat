@@ -21,10 +21,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.StreamSupport;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.flowable.engine.ProcessEngine;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -83,23 +86,21 @@ import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class WorkflowRbacHttpIT
 {
-    /** 五角色预登记账号的环境变量契约，不包含任何真实账号值。 */
+    /** 五角色本地验收账号统一密码，禁止测试任务生成随机复杂密码。 */
+    private static final String TEST_ACCOUNT_PASSWORD = "wang";
+
+    /** 五角色预登记账号的用户名环境变量契约，不包含任何真实账号值。 */
     private static final List<AccountEnvironment> ACCOUNT_ENVIRONMENTS = List.of(
             new AccountEnvironment("workflow_admin",
-                    "FLOWABLE_RBAC_WORKFLOW_ADMIN_USERNAME",
-                    "FLOWABLE_RBAC_WORKFLOW_ADMIN_PASSWORD"),
+                    "FLOWABLE_RBAC_WORKFLOW_ADMIN_USERNAME"),
             new AccountEnvironment("workflow_designer",
-                    "FLOWABLE_RBAC_WORKFLOW_DESIGNER_USERNAME",
-                    "FLOWABLE_RBAC_WORKFLOW_DESIGNER_PASSWORD"),
+                    "FLOWABLE_RBAC_WORKFLOW_DESIGNER_USERNAME"),
             new AccountEnvironment("workflow_starter",
-                    "FLOWABLE_RBAC_WORKFLOW_STARTER_USERNAME",
-                    "FLOWABLE_RBAC_WORKFLOW_STARTER_PASSWORD"),
+                    "FLOWABLE_RBAC_WORKFLOW_STARTER_USERNAME"),
             new AccountEnvironment("workflow_approver",
-                    "FLOWABLE_RBAC_WORKFLOW_APPROVER_USERNAME",
-                    "FLOWABLE_RBAC_WORKFLOW_APPROVER_PASSWORD"),
+                    "FLOWABLE_RBAC_WORKFLOW_APPROVER_USERNAME"),
             new AccountEnvironment("workflow_auditor",
-                    "FLOWABLE_RBAC_WORKFLOW_AUDITOR_USERNAME",
-                    "FLOWABLE_RBAC_WORKFLOW_AUDITOR_PASSWORD"));
+                    "FLOWABLE_RBAC_WORKFLOW_AUDITOR_USERNAME"));
 
     /** 业务副作用快照允许读取的表名格式，表名本身来自 information_schema。 */
     private static final Pattern SAFE_TABLE_NAME = Pattern.compile("[A-Za-z0-9_]+");
@@ -134,7 +135,7 @@ class WorkflowRbacHttpIT
     private WorkflowAttachmentStorage attachmentStorage;
 
     /** 测试专用 JSON 解析器，不依赖应用使用的 Jackson 3 Spring Bean。 */
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = JsonMapper.shared();
 
     @Value("${flowable.rbac.expected-schema}")
     private String expectedSchema;
@@ -208,7 +209,6 @@ class WorkflowRbacHttpIT
         for (AccountEnvironment account : ACCOUNT_ENVIRONMENTS)
         {
             String username = requireEnvironment(account.usernameVariable());
-            String password = requireEnvironment(account.passwordVariable());
             long userId = validatePreRegisteredAccount(account.roleKey(), username);
             assertThat(accountIds.add(userId))
                     .as("五角色必须使用五个不同的预登记账号")
@@ -216,7 +216,7 @@ class WorkflowRbacHttpIT
             roleUserIds.put(account.roleKey(), userId);
             roleUsernames.put(account.roleKey(), username);
 
-            String token = login(account.roleKey(), username, password);
+            String token = login(account.roleKey(), username, TEST_ACCOUNT_PASSWORD);
             validateAuthenticatedRoleAndPermissions(account.roleKey(), token);
             roleTokens.put(account.roleKey(), token);
         }
@@ -1084,7 +1084,8 @@ class WorkflowRbacHttpIT
                 "{\"modelId\":\"" + STRING_ID + "\","
                         + "\"modelName\":\"RBAC拒绝探针\"}";
             case "WfModelController#save" ->
-                "{\"modelId\":\"" + STRING_ID + "\","
+                "{\"requestId\":\"" + UUID.randomUUID() + "\","
+                        + "\"modelId\":\"" + STRING_ID + "\","
                         + "\"bpmnXml\":\"<definitions/>\",\"newVersion\":false}";
             case "WfProcessController#start" -> "{}";
             case "WfTaskController#stopProcess" ->
@@ -1379,7 +1380,7 @@ class WorkflowRbacHttpIT
             JsonNode code = objectMapper.readTree(response.body()).path("code");
             return code.isIntegralNumber() ? code.intValue() : null;
         }
-        catch (IOException exception)
+        catch (JacksonException exception)
         {
             return null;
         }
@@ -1390,10 +1391,8 @@ class WorkflowRbacHttpIT
      *
      * @param roleKey String，受管工作流角色键
      * @param usernameVariable String，用户名环境变量名
-     * @param passwordVariable String，密码环境变量名
      */
-    private record AccountEnvironment(String roleKey, String usernameVariable,
-            String passwordVariable)
+    private record AccountEnvironment(String roleKey, String usernameVariable)
     {
     }
 

@@ -59,6 +59,24 @@
             <artifactId>ruoyi-system</artifactId>
         </dependency>
 
+        <!-- JWT 公共 API 与运行实现；JSON 编解码由框架内 Jackson 3 适配器提供。 -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- JWT 编解码器直接使用 Jackson 3，不依赖其他模块的传递依赖。 -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
     </dependencies>
 
 </project>
