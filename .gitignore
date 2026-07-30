@@ -16,14 +16,12 @@ output/
 # Repository-local operational documents excluded from published history
 /docs/workflow-production/
 /back/sql/flowable/README.md
-/deployment/scripts/workflow-release-gate.sh
 /deployment/k6/README.md
 /testcount/
 
 # Repository-local operational documents excluded from published history
 /docs/workflow-production/
 /back/sql/flowable/README.md
-/deployment/scripts/workflow-release-gate.sh
 /deployment/k6/README.md
 /testcount/
 

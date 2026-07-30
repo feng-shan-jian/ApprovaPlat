@@ -40,9 +40,9 @@
             <artifactId>micrometer-core</artifactId>
         </dependency>
 
-        <!-- 兼容旧 Flowable JSON 变量，Boot 4 的业务 JSON 仍使用 Jackson 3。 -->
+        <!-- 工作流 JSON 变量、模型元数据和表单快照统一使用 Jackson 3。 -->
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
+            <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
 

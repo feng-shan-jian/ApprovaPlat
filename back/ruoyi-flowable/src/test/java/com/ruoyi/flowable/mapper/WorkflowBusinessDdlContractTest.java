@@ -27,6 +27,7 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_form`",
                 "create table if not exists `wf_deploy_form`",
                 "create table if not exists `wf_copy`",
+                "create table if not exists `wf_model_save_idempotency`",
                 "create table if not exists `wf_attachment_quota_guard`",
                 "create table if not exists `wf_attachment`")
                 .doesNotContain("drop table");
@@ -71,6 +72,9 @@ class WorkflowBusinessDdlContractTest
                 "wf_deploy_form_missing_deployment",
                 "wf_copy_missing_process_instance",
                 "wf_copy_missing_recipient",
+                "wf_model_save_invalid_row",
+                "wf_model_save_incomplete_record",
+                "wf_model_save_missing_user",
                 "wf_attachment_quota_guard_invalid_owner",
                 "wf_attachment_quota_guard_global_missing");
     }

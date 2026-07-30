@@ -2,13 +2,11 @@ package com.ruoyi.framework.config;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.CacheControl;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
@@ -33,7 +31,7 @@ public class ResourcesConfig implements WebMvcConfigurer
     private RepeatSubmitInterceptor repeatSubmitInterceptor;
 
     /**
-     * 注册公开 profile 资源与 Swagger 资源，并从公开资源解析链排除工作流私有附件目录。
+     * 注册公开 profile 资源，并从公开资源解析链排除工作流私有附件目录。
      *
      * @param registry ResourceHandlerRegistry，Spring MVC 静态资源注册器
      * @return void，无返回值
@@ -46,11 +44,6 @@ public class ResourcesConfig implements WebMvcConfigurer
                 .addResourceLocations("file:" + RuoYiConfig.getProfile() + "/")
                 .resourceChain(true)
                 .addResolver(new ProtectedProfilePathResourceResolver());
-
-        /** swagger配置 */
-        registry.addResourceHandler("/swagger-ui/**")
-                .addResourceLocations("classpath:/META-INF/resources/webjars/springfox-swagger-ui/")
-                .setCacheControl(CacheControl.maxAge(5, TimeUnit.HOURS).cachePublic());
     }
 
     /**

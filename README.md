@@ -57,8 +57,8 @@ The following accounts are intended only for the local ApprovaPlat test environm
 
 | Role | Username | Password |
 | --- | --- | --- |
-| Administrator | `admin` | `aprova**` |
-| Document controller | `document_controller` | `aprova**` |
+| Administrator | `admin` | `wang` |
+| Document controller | `document_controller` | `wang` |
 
 ## Build
 

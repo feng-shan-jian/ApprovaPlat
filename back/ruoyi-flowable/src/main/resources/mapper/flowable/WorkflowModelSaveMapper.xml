@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WorkflowModelSaveMapper">
+
+    <resultMap id="WorkflowModelLockRowResult"
+               type="com.ruoyi.flowable.domain.WorkflowModelLockRow">
+        <constructor>
+            <arg column="model_id" javaType="java.lang.String" />
+            <arg column="revision" javaType="java.lang.Integer" />
+            <arg column="model_key" javaType="java.lang.String" />
+            <arg column="model_version" javaType="java.lang.Integer" />
+            <arg column="deployment_id" javaType="java.lang.String" />
+            <arg column="model_name" javaType="java.lang.String" />
+            <arg column="category" javaType="java.lang.String" />
+            <arg column="meta_info" javaType="java.lang.String" />
+            <arg column="tenant_id" javaType="java.lang.String" />
+        </constructor>
+    </resultMap>
+
+    <resultMap id="WorkflowModelSaveRecordResult"
+               type="com.ruoyi.flowable.domain.WorkflowModelSaveRecord">
+        <constructor>
+            <arg column="request_id" javaType="java.lang.String" />
+            <arg column="user_id" javaType="java.lang.String" />
+            <arg column="source_model_id" javaType="java.lang.String" />
+            <arg column="payload_sha256" javaType="java.lang.String" />
+            <arg column="saved_model_id" javaType="java.lang.String" />
+        </constructor>
+    </resultMap>
+
+    <sql id="modelLockColumns">
+        ID_ as model_id,
+        REV_ as revision,
+        KEY_ as model_key,
+        VERSION_ as model_version,
+        DEPLOYMENT_ID_ as deployment_id,
+        NAME_ as model_name,
+        CATEGORY_ as category,
+        META_INFO_ as meta_info,
+        TENANT_ID_ as tenant_id
+    </sql>
+
+    <!--
+      所有保存事务的固定锁顺序由服务层统一保证：先 ensure 并锁定 requestId，
+      再锁定同 key 的最早版本稳定锚点，然后读取最高版本，最后按主键锁定来源模型。
+      禁止跳过稳定锚点直接锁定会向右移动的最高版本范围，否则插入下一版本时可能死锁。
+    -->
+    <insert id="ensureSaveRequest" timeout="10">
+        insert into wf_model_save_idempotency
+            (request_id, user_id, source_model_id, payload_sha256)
+        values
+            (#{requestId}, #{userId}, #{sourceModelId}, #{payloadSha256})
+        on duplicate key update request_id = request_id
+    </insert>
+
+    <select id="selectSaveRequestForUpdate"
+            resultMap="WorkflowModelSaveRecordResult" timeout="10">
+        select request_id, user_id, source_model_id, payload_sha256, saved_model_id
+        from wf_model_save_idempotency force index (PRIMARY)
+        where request_id = #{requestId}
+        limit 1
+        for update
+    </select>
+
+    <!--
+      最早版本行是同 key 保存事务的稳定锚点；新版本只向更高版本号插入，不会进入
+      该查询的左侧间隙。先锁定锚点可避免多个最高版本范围锁与新版本插入形成死锁环。
+    -->
+    <select id="selectOldestDefaultTenantModelForUpdate"
+            resultMap="WorkflowModelLockRowResult" timeout="10">
+        select <include refid="modelLockColumns" />
+        from ACT_RE_MODEL force index (ACT_UNIQ_MODEL)
+        where KEY_ = #{modelKey}
+          and TENANT_ID_ = ''
+        order by VERSION_ asc
+        limit 1
+        for update
+    </select>
+
+    <!-- 锚点已串行化同 key 写入，此处当前读可安全取得等待期间提交的新最高版本。 -->
+    <select id="selectLatestDefaultTenantModelForUpdate"
+            resultMap="WorkflowModelLockRowResult" timeout="10">
+        select <include refid="modelLockColumns" />
+        from ACT_RE_MODEL force index (ACT_UNIQ_MODEL)
+        where KEY_ = #{modelKey}
+          and TENANT_ID_ = ''
+        order by VERSION_ desc
+        limit 1
+        for update
+    </select>
+
+    <!-- 来源行只能在锚点和最高版本之后锁定；默认租户条件阻止跨租户主键被误保存。 -->
+    <select id="selectDefaultTenantModelForUpdate"
+            resultMap="WorkflowModelLockRowResult" timeout="10">
+        select <include refid="modelLockColumns" />
+        from ACT_RE_MODEL force index (PRIMARY)
+        where ID_ = #{modelId}
+          and TENANT_ID_ = ''
+        limit 1
+        for update
+    </select>
+
+    <update id="completeSaveRequest" timeout="10">
+        update wf_model_save_idempotency
+        set saved_model_id = #{savedModelId},
+            complete_time = current_timestamp(3)
+        where request_id = #{requestId}
+          and saved_model_id is null
+          and complete_time is null
+    </update>
+
+</mapper>

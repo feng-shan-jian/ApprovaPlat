@@ -10,8 +10,8 @@
     "build:prod": "vite build",
     "build:stage": "vite build --mode staging",
     "preview": "vite preview",
-    "test:contracts": "node --test tests/contracts/workflow-approval-eligibility.test.js",
-    "test:e2e": "playwright test",
+    "test:contracts": "node --test tests/contracts/workflow-approval-eligibility.test.js tests/contracts/playwright-config-secrets.test.js tests/contracts/workflow-test-account-password.test.js",
+    "test:e2e": "node tests/e2e/support/run-e2e.js",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report output/playwright/html"
   },

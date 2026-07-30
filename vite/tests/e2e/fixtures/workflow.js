@@ -32,6 +32,28 @@ async function dismissPasswordNotice(page) {
 }
 
 /**
+ * 向登录输入框写入真实凭据，同时避免 Playwright reporter 把账号或密码参数写入步骤标题。
+ * @param {import('@playwright/test').Locator} input 用户名或密码输入框定位器。
+ * @param {string} credential 当前预登记账号的用户名或密码。
+ * @returns {Promise<void>} 输入事件与变更事件派发完成后结束。
+ */
+async function fillCredentialInput(input, credential) {
+  await input.evaluate((element, value) => {
+    if (!(element instanceof HTMLInputElement)) {
+      throw new Error('登录凭据只能写入 HTMLInputElement')
+    }
+    // 调用原生 value setter 并派发真实表单事件，保持 Vue 双向绑定与用户输入行为一致。
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    if (!valueSetter) {
+      throw new Error('当前浏览器不支持登录输入框原生 value setter')
+    }
+    valueSetter.call(element, value)
+    element.dispatchEvent(new Event('input', { bubbles: true, composed: true }))
+    element.dispatchEvent(new Event('change', { bubbles: true, composed: true }))
+  }, credential)
+}
+
+/**
  * 通过登录页、真实 `/login`、JWT/Redis 和动态路由完成职责分离角色登录。
  * @param {import('@playwright/test').Page} page 新建且无预置 Token 的浏览器页面。
  * @param {{roleKey: string, username: string, password: string}} account 进程环境注入的预登记账号。
@@ -43,8 +65,8 @@ export async function loginThroughUi(page, account) {
   const captchaPayload = await expectAjaxSuccess(await captchaPromise, '/captchaImage')
   expect(captchaPayload.captchaEnabled, 'E2E 隔离环境必须关闭验证码').toBe(false)
 
-  await page.locator('input[type="text"]').first().fill(account.username)
-  await page.locator('input[type="password"]').fill(account.password)
+  await fillCredentialInput(page.locator('input[type="text"]').first(), account.username)
+  await fillCredentialInput(page.locator('input[type="password"]'), account.password)
 
   const loginPromise = page.waitForResponse(response => matchesEndpoint(response, '/login', 'POST'))
   const infoPromise = page.waitForResponse(response => matchesEndpoint(response, '/getInfo', 'GET'))

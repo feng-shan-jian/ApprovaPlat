@@ -31,12 +31,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
-import org.flowable.common.engine.impl.json.VariableJsonMapper;
-import org.flowable.common.engine.impl.json.jackson2.Jackson2VariableJsonMapper;
+import org.flowable.common.engine.impl.json.jackson3.Jackson3VariableJsonMapper;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.ManagementService;
 import org.flowable.engine.ProcessEngine;
@@ -44,6 +44,7 @@ import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.repository.Deployment;
+import org.flowable.engine.repository.Model;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.engine.task.Comment;
 import org.flowable.job.service.impl.asyncexecutor.AsyncExecutor;
@@ -86,6 +87,7 @@ import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowInstanceState;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
 import com.ruoyi.flowable.domain.dto.WorkflowInstanceStateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowInstanceTerminateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessCancelRequest;
@@ -108,6 +110,7 @@ import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.engine.WorkflowTaskSnapshot;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
+import com.ruoyi.flowable.service.model.WorkflowModelService;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.process.WorkflowProcessDetailService;
 import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
@@ -128,7 +131,7 @@ import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
         "flowable.it.expected-schema=${FLOWABLE_IT_EXPECTED_SCHEMA}",
         "flowable.it.expected-redis-database=${FLOWABLE_IT_REDIS_DATABASE:15}",
         // 固定公开材料只用于装配 TokenService，本 IT 不创建登录 Token，禁止复用于任何部署环境。
-        "token.secret=workflow-engine-it-public-test-material-never-use-in-production-0001",
+        "token.secret=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eA==",
         "flowable.database-schema-update=false",
         "flowable.async-executor-activate=true",
         "flowable.async-history-executor-activate=false",
@@ -239,6 +242,19 @@ class FlowableEngineIT
     private static final String JSON_VARIABLE_NAME = "approvalPayload";
     /** Redis 自动清理验证使用的唯一测试键。 */
     private static final String REDIS_MARKER_KEY = "flowable:it:cleanup-marker";
+    /** 模型保存并发集成场景使用的完整可执行 BPMN，不依赖测试 schema 中的表单正文。 */
+    private static final String MODEL_SAVE_BPMN_XML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                     xmlns:flowable="http://flowable.org/bpmn"
+                     targetNamespace="https://approvaplat.example/model-save-integration-test">
+          <process id="modelSaveConcurrency" name="模型保存并发集成测试" isExecutable="true">
+            <startEvent id="start" name="提交" flowable:formKey="key_1"/>
+            <sequenceFlow id="toEnd" sourceRef="start" targetRef="end"/>
+            <endEvent id="end"/>
+          </process>
+        </definitions>
+        """;
     /** timer/job 自动执行的最大等待时间，覆盖执行器一次正常轮询周期。 */
     private static final Duration ASYNC_EXECUTION_TIMEOUT = Duration.ofSeconds(40);
     /** Mapper 集成测试用户主键，依次表示两个正常用户、停用用户、删除用户、停用部门用户和删除部门用户。 */
@@ -265,14 +281,14 @@ class FlowableEngineIT
     private final WorkflowEngineOperations workflowEngineOperations;
     private final WorkflowProcessEngineAdapter workflowProcessEngineAdapter;
     private final WorkflowProcessStartService workflowProcessStartService;
+    /** 真实模型保存服务，用于验证 MySQL 行锁、Flowable 模型和幂等记录的同事务闭环。 */
+    private final WorkflowModelService workflowModelService;
     /** 真实历史提交快照详情服务。 */
     private final WorkflowProcessDetailService workflowProcessDetailService;
     private final WorkflowProcessInstanceService workflowProcessInstanceService;
     private final WorkflowTaskActionService workflowTaskActionService;
     private final WorkflowTaskLifecycleService workflowTaskLifecycleService;
     private final WorkflowTaskReadService workflowTaskReadService;
-    /** Flowable 实际使用的 JSON 映射器，用于防止升级后序列化实现漂移。 */
-    private final VariableJsonMapper variableJsonMapper;
     private final ConfigurableApplicationContext applicationContext;
     private final RedisConnectionFactory redisConnectionFactory;
     private final RedisTemplate<Object, Object> redisTemplate;
@@ -293,12 +309,12 @@ class FlowableEngineIT
      * @param workflowEngineOperations WorkflowEngineOperations，统一只读事务与异常翻译边界
      * @param workflowProcessEngineAdapter WorkflowProcessEngineAdapter，P2 流程引擎公共适配器
      * @param workflowProcessStartService WorkflowProcessStartService，P14 真实流程发起服务
+     * @param workflowModelService WorkflowModelService，真实流程模型保存服务
      * @param workflowProcessDetailService WorkflowProcessDetailService，历史表单快照详情服务
      * @param workflowProcessInstanceService WorkflowProcessInstanceService，I01/I02/P15 实例写服务
      * @param workflowTaskActionService WorkflowTaskActionService，T09-T12 任务动作应用服务
      * @param workflowTaskLifecycleService WorkflowTaskLifecycleService，完成及状态迁移应用服务
      * @param workflowTaskReadService WorkflowTaskReadService，变量投影和流程图读取服务
-     * @param variableJsonMapper VariableJsonMapper，Flowable 实际使用的 JSON 变量映射器
      * @param applicationContext ConfigurableApplicationContext，当前 Spring 应用上下文
      * @param redisConnectionFactory RedisConnectionFactory，当前 Redis 连接工厂
      * @param redisTemplate RedisTemplate，写入自动清理验证键的正式 Redis 客户端
@@ -317,12 +333,12 @@ class FlowableEngineIT
         WorkflowEngineOperations workflowEngineOperations,
         WorkflowProcessEngineAdapter workflowProcessEngineAdapter,
         WorkflowProcessStartService workflowProcessStartService,
+        WorkflowModelService workflowModelService,
         WorkflowProcessDetailService workflowProcessDetailService,
         WorkflowProcessInstanceService workflowProcessInstanceService,
         WorkflowTaskActionService workflowTaskActionService,
         WorkflowTaskLifecycleService workflowTaskLifecycleService,
         WorkflowTaskReadService workflowTaskReadService,
-        VariableJsonMapper variableJsonMapper,
         ConfigurableApplicationContext applicationContext,
         RedisConnectionFactory redisConnectionFactory,
         @Qualifier("redisTemplate") RedisTemplate<Object, Object> redisTemplate,
@@ -339,12 +355,12 @@ class FlowableEngineIT
         this.workflowEngineOperations = workflowEngineOperations;
         this.workflowProcessEngineAdapter = workflowProcessEngineAdapter;
         this.workflowProcessStartService = workflowProcessStartService;
+        this.workflowModelService = workflowModelService;
         this.workflowProcessDetailService = workflowProcessDetailService;
         this.workflowProcessInstanceService = workflowProcessInstanceService;
         this.workflowTaskActionService = workflowTaskActionService;
         this.workflowTaskLifecycleService = workflowTaskLifecycleService;
         this.workflowTaskReadService = workflowTaskReadService;
-        this.variableJsonMapper = variableJsonMapper;
         this.applicationContext = applicationContext;
         this.redisConnectionFactory = redisConnectionFactory;
         this.redisTemplate = redisTemplate;
@@ -539,7 +555,7 @@ class FlowableEngineIT
     }
 
     /**
-     * 在第一个 Spring 上下文中持久化 Jackson 2 JsonNode 变量，并保留流程记录供重启后读取。
+     * 在第一个 Spring 上下文中持久化 Jackson 3 JsonNode 变量，并保留流程记录供重启后读取。
      *
      * @return 无返回值；方法结束后由 @DirtiesContext 关闭当前 Spring 上下文
      */
@@ -2922,7 +2938,7 @@ class FlowableEngineIT
             List<String> cumulativeVariableNames = List.of(
                 "cumulativePayloadOne", "cumulativePayloadTwo", "cumulativePayloadThree");
             String cumulativeText = "x".repeat(CUMULATIVE_CURRENT_JSON_TEXT_LENGTH);
-            ObjectMapper cumulativeMapper = new ObjectMapper();
+            ObjectMapper cumulativeMapper = JsonMapper.shared();
             for (String variableName : cumulativeVariableNames)
             {
                 ObjectNode payload = cumulativeMapper.createObjectNode();
@@ -3296,6 +3312,186 @@ class FlowableEngineIT
         assertThat(jdbcTemplate.queryForObject(
             "select count(*) from wf_copy where copy_event_id = ?",
             Long.class, copyEventId)).isZero();
+    }
+
+    /**
+     * 使用真实 MySQL 并发保存模型，验证 requestId 幂等锁和版本组锁保持数据一致。
+     *
+     * @return 无返回值；重复写入、版本冲突、幂等记录不一致或清理残留时测试失败
+     * @throws Exception 并发线程等待、执行或关闭失败时传播给 JUnit
+     */
+    @Test
+    @Order(56)
+    void serializesConcurrentModelSavesWithPersistentIdempotency() throws Exception
+    {
+        RepositoryService repositoryService = processEngine.getRepositoryService();
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dynamicDataSource);
+        // modelKey 和 categoryCode 都带随机 UUID，只允许本场景查询和清理自己的正式记录。
+        String modelKey = "model_save_it_" + UUID.randomUUID().toString().replace("-", "");
+        String categoryCode = "model_save_category_it_"
+            + UUID.randomUUID().toString().replace("-", "");
+        String sourceModelId = null;
+        boolean categoryInserted = false;
+
+        try
+        {
+            jdbcTemplate.update(
+                "insert into wf_category (category_name, code, create_by, del_flag) values (?, ?, ?, '0')",
+                "模型保存并发集成测试分类", categoryCode, "1");
+            categoryInserted = true;
+            Model source = repositoryService.newModel();
+            source.setName("模型保存并发集成测试");
+            source.setKey(modelKey);
+            source.setCategory(categoryCode);
+            source.setMetaInfo("{}");
+            source.setTenantId("");
+            source.setVersion(1);
+            repositoryService.saveModel(source);
+            sourceModelId = source.getId();
+
+            // 同一保存意图的两个真实事务必须复用同一结果，只允许创建一个新版本。
+            String replayRequestId = UUID.randomUUID().toString();
+            WorkflowModelDto replayRequest = modelSaveRequest(sourceModelId, replayRequestId);
+            List<String> replayResults = runConcurrentModelSaves(replayRequest, replayRequest);
+            assertThat(replayResults).hasSize(2).containsOnly(replayResults.get(0));
+            assertThat(repositoryService.createModelQuery().modelKey(modelKey).list())
+                .extracting(Model::getVersion).containsExactlyInAnyOrder(1, 2);
+            assertThat(jdbcTemplate.queryForObject(
+                "select saved_model_id from wf_model_save_idempotency where request_id = ?",
+                String.class, replayRequestId)).isEqualTo(replayResults.get(0));
+
+            // 不同保存意图竞争同一版本组时必须串行分配后续版本，且每条幂等记录指向真实模型。
+            String firstRequestId = UUID.randomUUID().toString();
+            String secondRequestId = UUID.randomUUID().toString();
+            List<String> versionResults = runConcurrentModelSaves(
+                modelSaveRequest(sourceModelId, firstRequestId),
+                modelSaveRequest(sourceModelId, secondRequestId));
+            assertThat(versionResults).doesNotHaveDuplicates();
+            List<Model> savedModels = repositoryService.createModelQuery().modelKey(modelKey).list();
+            assertThat(savedModels).extracting(Model::getVersion)
+                .containsExactlyInAnyOrder(1, 2, 3, 4);
+            assertThat(savedModels).extracting(Model::getId).containsAll(versionResults);
+            assertThat(jdbcTemplate.queryForList(
+                "select saved_model_id from wf_model_save_idempotency where source_model_id = ?",
+                String.class, sourceModelId))
+                .containsExactlyInAnyOrder(replayResults.get(0), versionResults.get(0), versionResults.get(1));
+            assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_model_save_idempotency "
+                    + "where source_model_id = ? and complete_time is not null",
+                Long.class, sourceModelId)).isEqualTo(3L);
+            for (String savedModelId : new LinkedHashSet<>(List.of(
+                    replayResults.get(0), versionResults.get(0), versionResults.get(1))))
+            {
+                assertThat(repositoryService.getModelEditorSource(savedModelId))
+                    .as("每条完成的幂等记录必须指向已持久化的相同 BPMN 正文")
+                    .isEqualTo(MODEL_SAVE_BPMN_XML.strip().getBytes(
+                        java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
+        finally
+        {
+            SecurityContextHolder.clearContext();
+            // 幂等表对模型使用审计软引用，先按唯一来源主键清理，再删除本场景的全部模型版本。
+            jdbcTemplate.update(
+                "delete from wf_model_save_idempotency where source_model_id = ?", sourceModelId);
+            for (Model model : repositoryService.createModelQuery().modelKey(modelKey).list())
+            {
+                repositoryService.deleteModel(model.getId());
+            }
+            if (categoryInserted)
+            {
+                jdbcTemplate.update("delete from wf_category where code = ?", categoryCode);
+            }
+        }
+
+        assertThat(jdbcTemplate.queryForObject(
+            "select count(*) from wf_model_save_idempotency where source_model_id = ?",
+            Long.class, sourceModelId)).isZero();
+        assertThat(repositoryService.createModelQuery().modelKey(modelKey).count()).isZero();
+    }
+
+    /**
+     * 同时释放两个模型保存线程，并等待两个真实事务返回稳定模型主键。
+     *
+     * @param firstRequest WorkflowModelDto，第一个保存事务使用的完整请求
+     * @param secondRequest WorkflowModelDto，第二个保存事务使用的完整请求
+     * @return List&lt;String&gt;，两个事务各自返回的真实 Flowable 模型主键
+     * @throws Exception 线程就绪、保存执行或线程池关闭失败时抛出
+     */
+    private List<String> runConcurrentModelSaves(WorkflowModelDto firstRequest,
+            WorkflowModelDto secondRequest) throws Exception
+    {
+        CountDownLatch workersReady = new CountDownLatch(2);
+        CountDownLatch releaseWorkers = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try
+        {
+            Future<String> firstResult = executor.submit(
+                () -> attemptConcurrentModelSave(firstRequest, workersReady, releaseWorkers));
+            Future<String> secondResult = executor.submit(
+                () -> attemptConcurrentModelSave(secondRequest, workersReady, releaseWorkers));
+            assertThat(workersReady.await(10, TimeUnit.SECONDS))
+                .as("两个模型保存线程必须在超时前同时就绪").isTrue();
+            releaseWorkers.countDown();
+            return List.of(firstResult.get(20, TimeUnit.SECONDS),
+                secondResult.get(20, TimeUnit.SECONDS));
+        }
+        finally
+        {
+            releaseWorkers.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS))
+                .as("模型保存并发线程池必须完整退出").isTrue();
+        }
+    }
+
+    /**
+     * 在独立线程的真实 SecurityContext 中执行一次模型保存事务。
+     *
+     * @param request WorkflowModelDto，模型主键、BPMN 正文、新版本标志和幂等键
+     * @param workersReady CountDownLatch，通知主线程当前保存线程已经就绪
+     * @param releaseWorkers CountDownLatch，由主线程同时释放两个保存线程
+     * @return String，真实保存成功的 Flowable 模型主键
+     */
+    private String attemptConcurrentModelSave(WorkflowModelDto request,
+            CountDownLatch workersReady, CountDownLatch releaseWorkers)
+    {
+        try
+        {
+            setSecurityContextUser(1L);
+            workersReady.countDown();
+            if (!releaseWorkers.await(10, TimeUnit.SECONDS))
+            {
+                throw new IllegalStateException("等待模型并发保存开始信号超时");
+            }
+            return workflowModelService.saveModel(request);
+        }
+        catch (InterruptedException exception)
+        {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("模型并发保存线程被中断", exception);
+        }
+        finally
+        {
+            SecurityContextHolder.clearContext();
+        }
+    }
+
+    /**
+     * 构造显式创建新版本的模型保存请求。
+     *
+     * @param sourceModelId String，所有并发事务共同指向的来源模型主键
+     * @param requestId String，当前保存意图使用的唯一 UUID 幂等键
+     * @return WorkflowModelDto，可直接提交真实模型保存服务的完整请求
+     */
+    private WorkflowModelDto modelSaveRequest(String sourceModelId, String requestId)
+    {
+        WorkflowModelDto request = new WorkflowModelDto();
+        request.setModelId(sourceModelId);
+        request.setSaveRequestId(requestId);
+        request.setBpmnXml(MODEL_SAVE_BPMN_XML);
+        request.setNewVersion(true);
+        return request;
     }
 
     /**
@@ -4130,7 +4326,7 @@ class FlowableEngineIT
     {
         try
         {
-            return new ObjectMapper().readTree(payload);
+            return JsonMapper.shared().readTree(payload);
         }
         catch (Exception exception)
         {
@@ -4434,7 +4630,7 @@ class FlowableEngineIT
     }
 
     /**
-     * 验证 Flowable 最终使用若依主路由数据源、统一事务管理器和 Jackson 2 mapper。
+     * 验证 Flowable 最终使用若依主路由数据源、统一事务管理器和 Jackson 3 mapper。
      *
      * @return 无返回值；基础设施不一致时测试失败
      */
@@ -4459,7 +4655,8 @@ class FlowableEngineIT
             assertThat(engineDataSource).isSameAs(dynamicDataSource);
         }
         assertThat(engineConfiguration.getTransactionManager()).isSameAs(transactionManager);
-        assertThat(variableJsonMapper).isInstanceOf(Jackson2VariableJsonMapper.class);
+        assertThat(engineConfiguration.getVariableJsonMapper())
+                .isInstanceOf(Jackson3VariableJsonMapper.class);
     }
 
     /**
@@ -4703,13 +4900,13 @@ class FlowableEngineIT
     }
 
     /**
-     * 创建具备嵌套对象和数组的 Jackson 2 JSON 变量，覆盖常见审批数据结构。
+     * 创建具备嵌套对象和数组的 Jackson 3 JSON 变量，覆盖常见审批数据结构。
      *
      * @return ObjectNode，待由 Flowable JSON variable type 持久化的审批数据
      */
     private ObjectNode createApprovalPayload()
     {
-        ObjectMapper objectMapper = new ObjectMapper();
+        ObjectMapper objectMapper = JsonMapper.shared();
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("applicantId", 1L);
         payload.put("subject", "采购审批");
@@ -4719,7 +4916,7 @@ class FlowableEngineIT
     }
 
     /**
-     * 校验跨上下文读取的 JSON 变量仍为 Jackson 2 JsonNode 且业务字段完整。
+     * 校验跨上下文读取的 JSON 变量仍为 Jackson 3 JsonNode 且业务字段完整。
      *
      * @param persistedValue Object，从 Flowable 运行或历史变量 API 读取的实际值
      * @return 无返回值；变量类型或字段值发生漂移时测试失败

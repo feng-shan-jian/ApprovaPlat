@@ -17,8 +17,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.flowable.common.engine.api.FlowableException;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.ProcessEngine;
@@ -74,7 +75,7 @@ import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
         "spring.data.redis.database=${FLOWABLE_IT_REDIS_DATABASE:15}",
         "flowable.it.expected-schema=${FLOWABLE_IT_EXPECTED_SCHEMA}",
         // 固定值只用于装配未参与本 IT 的 TokenService，不是账号、随机密码或生产密钥。
-        "token.secret=workflow-compatibility-it-public-test-material-never-use-in-production-0001",
+        "token.secret=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eA==",
         "flowable.database-schema-update=false",
         "flowable.async-executor-activate=false",
         "flowable.async-history-executor-activate=false",
@@ -659,7 +660,7 @@ class WorkflowCompatibilityIT
     {
         List<Comment> comments = listenerComments(processInstanceId);
         assertThat(comments).hasSize(expectedActions.size());
-        ObjectMapper objectMapper = new ObjectMapper();
+        ObjectMapper objectMapper = JsonMapper.shared();
         LinkedHashSet<String> actualActions = new LinkedHashSet<>();
         for (Comment comment : comments)
         {

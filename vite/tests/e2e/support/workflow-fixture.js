@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { expect } from '@playwright/test'
 import { loginThroughUi, logoutThroughUi } from '../fixtures/workflow.js'
 import { loadWorkflowAccounts } from './environment.js'
@@ -313,7 +314,7 @@ export async function createAndDeployWorkflowModel(page, input) {
   // 模型一经正式落库立即登记，后续保存或部署失败时 finally 仍可回收半成品。
   if (input.resourceRegistry) input.resourceRegistry.modelIds.push(modelId)
   await callWorkflowApi(page, 'POST', '/workflow/model/save', {
-    data: { modelId, bpmnXml: input.bpmnXml, newVersion: false }
+    data: { requestId: randomUUID(), modelId, bpmnXml: input.bpmnXml, newVersion: false }
   })
   const deployed = await callWorkflowApi(page, 'POST', '/workflow/model/deploy', {
     query: { modelId }

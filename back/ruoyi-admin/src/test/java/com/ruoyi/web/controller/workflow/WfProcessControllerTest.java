@@ -48,7 +48,6 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.config.WorkflowJsonSerializationConfig;
 import com.ruoyi.flowable.domain.dto.WorkflowAssignedTaskQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnXmlQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowClaimableTaskQueryDto;
@@ -77,11 +76,11 @@ import com.ruoyi.flowable.service.process.WorkflowProcessDetailService;
 import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
 import com.ruoyi.flowable.service.process.WorkflowProcessQueryService;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.databind.node.TextNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.node.StringNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -317,7 +316,7 @@ class WfProcessControllerTest
     void serializesLegacyJacksonFormValuesAsNativeJson() throws Exception
     {
         Map<String, JsonNode> values = new LinkedHashMap<>();
-        values.put("reason", TextNode.valueOf("真实审批原因"));
+        values.put("reason", StringNode.valueOf("真实审批原因"));
         ArrayNode files = JsonNodeFactory.instance.arrayNode().add("attachment-uuid-1");
         values.put("files", files);
         ObjectNode decision = JsonNodeFactory.instance.objectNode();
@@ -686,16 +685,14 @@ class WfProcessControllerTest
     }
 
     /**
-     * 使用生产配置中的 Jackson 2/3 桥接创建 Controller 级 JSON 响应测试链路。
+     * 使用 Jackson 3 创建 Controller 级 JSON 响应测试链路。
      *
-     * @return MockMvc，已注册工作流 JsonNode 序列化模块的独立 MVC 实例
+     * @return MockMvc，使用 Jackson 3 原生 JsonNode 的独立 MVC 实例
      */
     private MockMvc workflowJsonMockMvc()
     {
         JsonMapper mapper = JsonMapper.builder()
                 .findAndAddModules()
-                .addModule(new WorkflowJsonSerializationConfig()
-                        .workflowJackson2JsonNodeModule())
                 .build();
         return MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new JacksonJsonHttpMessageConverter(mapper))

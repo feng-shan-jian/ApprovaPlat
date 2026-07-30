@@ -7,8 +7,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.UserTask;
@@ -49,7 +50,7 @@ public class WorkflowProcessEngineAdapter
     private static final int MAX_AUDIT_OPINION_LENGTH = 500;
 
     /** 服务端审计 JSON 序列化器，客户端不能控制审计字段结构。 */
-    private static final ObjectMapper AUDIT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper AUDIT_MAPPER = JsonMapper.shared();
 
     private final RepositoryService repositoryService;
 

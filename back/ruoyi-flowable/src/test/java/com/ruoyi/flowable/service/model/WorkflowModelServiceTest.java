@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -16,8 +17,10 @@ import java.sql.Connection;
 import java.util.Date;
 import java.util.List;
 import java.util.Set;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowableListener;
 import org.flowable.bpmn.model.ImplementationType;
@@ -40,6 +43,8 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCategory;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfForm;
+import com.ruoyi.flowable.domain.WorkflowModelLockRow;
+import com.ruoyi.flowable.domain.WorkflowModelSaveRecord;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
@@ -51,6 +56,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCategoryMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WfFormMapper;
+import com.ruoyi.flowable.mapper.WorkflowModelSaveMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 
 class WorkflowModelServiceTest
@@ -68,6 +74,8 @@ class WorkflowModelServiceTest
     private WorkflowFormTemplateValidator formTemplateValidator;
 
     private WorkflowBpmnIdentityValidator bpmnIdentityValidator;
+
+    private WorkflowModelSaveMapper modelSaveMapper;
 
     private WorkflowModelService service;
 
@@ -91,6 +99,7 @@ class WorkflowModelServiceTest
         deployFormMapper = mock(WfDeployFormMapper.class);
         formTemplateValidator = mock(WorkflowFormTemplateValidator.class);
         bpmnIdentityValidator = mock(WorkflowBpmnIdentityValidator.class);
+        modelSaveMapper = mock(WorkflowModelSaveMapper.class);
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2")));
@@ -100,7 +109,7 @@ class WorkflowModelServiceTest
         WorkflowEngineOperations operations = new WorkflowEngineOperations(authenticationContext,
                 new WorkflowExceptionTranslator(), identityResolver);
         service = new WorkflowModelService(operations, repositoryService, bpmnService,
-                bpmnIdentityValidator, categoryMapper, formMapper, deployFormMapper,
+                bpmnIdentityValidator, modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
                 formTemplateValidator);
     }
 
@@ -164,7 +173,7 @@ class WorkflowModelServiceTest
         assertThat(service.createModel(request)).isEqualTo("model-1");
 
         verify(target).setMetaInfo(metadata.capture());
-        JsonNode json = new ObjectMapper().readTree(metadata.getValue());
+        JsonNode json = JsonMapper.shared().readTree(metadata.getValue());
         assertThat(json.get("createUser").asText()).isEqualTo("7");
         assertThat(json.get("formId").asLong()).isEqualTo(12L);
         verify(repositoryService).saveModel(target);
@@ -318,21 +327,22 @@ class WorkflowModelServiceTest
         service.updateModel(request);
 
         verify(model).setMetaInfo(metadata.capture());
-        JsonNode json = new ObjectMapper().readTree(metadata.getValue());
+        JsonNode json = JsonMapper.shared().readTree(metadata.getValue());
         assertThat(json.get("formType").asInt()).isEqualTo(2);
         assertThat(json.has("formId")).isFalse();
         assertThat(json.get("futureField").asText()).isEqualTo("keep");
     }
 
     /**
-     * 验证已部署模型不能覆盖原版本 BPMN，必须显式创建新版本。
+     * 验证已部署模型保存时自动创建新版本并返回新模型主键。
      *
-     * @return 无返回值；部署状态门禁未生效时测试失败
+     * @return 无返回值；已部署来源被覆盖或未切换到新版本时测试失败
      */
     @Test
-    void rejectsOverwritingDeployedModel()
+    void savesDeployedModelAsNewVersionAutomatically()
     {
         WorkflowModelDto request = new WorkflowModelDto();
+        request.setSaveRequestId(UUID.randomUUID().toString());
         request.setModelId("model-1");
         request.setBpmnXml("<definitions/>");
         request.setNewVersion(false);
@@ -340,11 +350,19 @@ class WorkflowModelServiceTest
         when(repositoryService.getModel("model-1")).thenReturn(source);
         when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
         when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        WorkflowModelLockRow lockedSource = lockedModel(
+                "model-1", "expense", "报销审批", "finance", 1, "deployment-1");
+        stubPendingSaveRequest(request, lockedSource, lockedSource, 1);
+        Model target = mock(Model.class);
+        when(target.getId()).thenReturn("model-2");
+        when(repositoryService.newModel()).thenReturn(target);
 
-        assertThatThrownBy(() -> service.saveModel(request))
-                .isInstanceOfSatisfying(ServiceException.class,
-                        exception -> assertThat(exception.getCode()).isEqualTo(409));
-        verify(repositoryService, never()).addModelEditorSource(any(), any());
+        assertThat(service.saveModel(request)).isEqualTo("model-2");
+
+        verify(target).setVersion(2);
+        verify(repositoryService).saveModel(target);
+        verify(repositoryService).addModelEditorSource("model-2",
+                "<definitions/>".getBytes(StandardCharsets.UTF_8));
     }
 
     /**
@@ -356,6 +374,7 @@ class WorkflowModelServiceTest
     void savesAsVersionAfterCurrentLatest()
     {
         WorkflowModelDto request = new WorkflowModelDto();
+        request.setSaveRequestId(UUID.randomUUID().toString());
         request.setModelId("model-1");
         request.setBpmnXml("<definitions/>");
         request.setNewVersion(true);
@@ -364,10 +383,11 @@ class WorkflowModelServiceTest
         when(repositoryService.getModel("model-1")).thenReturn(source);
         when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
         when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
-        Model latest = model("model-3", "expense", "当前报销", "finance", 3, null);
-        ModelQuery latestQuery = modelQuery();
-        when(repositoryService.createModelQuery()).thenReturn(latestQuery);
-        when(latestQuery.singleResult()).thenReturn(latest);
+        WorkflowModelLockRow lockedSource = lockedModel(
+                "model-1", "expense", "旧报销", "finance", 1, "deployment-1");
+        WorkflowModelLockRow lockedLatest = lockedModel(
+                "model-3", "expense", "当前报销", "finance", 3, null);
+        stubPendingSaveRequest(request, lockedSource, lockedLatest, 1);
         Model target = mock(Model.class);
         when(target.getId()).thenReturn("model-4");
         when(repositoryService.newModel()).thenReturn(target);
@@ -378,6 +398,250 @@ class WorkflowModelServiceTest
         verify(repositoryService).saveModel(target);
         verify(repositoryService).addModelEditorSource("model-4",
                 "<definitions/>".getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 验证历史版本即使按覆盖保存提交，也会自动复制为新的最高版本。
+     *
+     * @return 无返回值；历史版本被原地覆盖或未按最高版本递增时测试失败
+     */
+    @Test
+    void savesHistoricalModelAsNewLatestVersionAutomatically()
+    {
+        WorkflowModelDto request = new WorkflowModelDto();
+        request.setSaveRequestId(UUID.randomUUID().toString());
+        request.setModelId("model-1");
+        request.setBpmnXml("<definitions/>");
+        request.setNewVersion(false);
+        Model source = model("model-1", "expense", "旧报销", "finance", 1, null);
+        when(repositoryService.getModel("model-1")).thenReturn(source);
+        when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
+        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        WorkflowModelLockRow lockedSource = lockedModel(
+                "model-1", "expense", "旧报销", "finance", 1, null);
+        WorkflowModelLockRow lockedLatest = lockedModel(
+                "model-3", "expense", "当前报销", "finance", 3, null);
+        stubPendingSaveRequest(request, lockedSource, lockedLatest, 1);
+        Model target = mock(Model.class);
+        when(target.getId()).thenReturn("model-4");
+        when(repositoryService.newModel()).thenReturn(target);
+
+        assertThat(service.saveModel(request)).isEqualTo("model-4");
+
+        verify(target).setVersion(4);
+        verify(repositoryService).saveModel(target);
+        verify(repositoryService).addModelEditorSource("model-4",
+                "<definitions/>".getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 验证最新且未部署的模型仍按普通保存覆盖当前版本。
+     *
+     * @return 无返回值；未部署最新版被错误另存时测试失败
+     */
+    @Test
+    void overwritesCurrentUndeployedLatestModel()
+    {
+        WorkflowModelDto request = new WorkflowModelDto();
+        request.setSaveRequestId(UUID.randomUUID().toString());
+        request.setModelId("model-3");
+        request.setBpmnXml("<definitions/>");
+        request.setNewVersion(false);
+        Model source = model("model-3", "expense", "当前报销", "finance", 3, null);
+        when(repositoryService.getModel("model-3")).thenReturn(source);
+        when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
+        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        WorkflowModelLockRow lockedSource = lockedModel(
+                "model-3", "expense", "当前报销", "finance", 3, null);
+        stubPendingSaveRequest(request, lockedSource, lockedSource, 1);
+
+        assertThat(service.saveModel(request)).isEqualTo("model-3");
+
+        verify(repositoryService, never()).newModel();
+        verify(repositoryService).saveModel(source);
+        verify(repositoryService).addModelEditorSource("model-3",
+                "<definitions/>".getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 验证普通快照仍指向原最新版、锁内当前读已出现更高版本时不会覆盖来源。
+     *
+     * @return 无返回值；来源被原地覆盖或新版本未按锁内最高版本递增时测试失败
+     */
+    @Test
+    void createsNextVersionWhenLockedSourceHasBecomeHistorical()
+    {
+        WorkflowModelDto request = saveRequest("model-3", false);
+        Model sourceSnapshot = model("model-3", "expense", "快照报销", "finance", 3, null);
+        when(repositoryService.getModel("model-3")).thenReturn(sourceSnapshot);
+        when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
+        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        WorkflowModelLockRow lockedSource = lockedModel(
+                "model-3", "expense", "锁内来源", "finance", 3, null);
+        WorkflowModelLockRow lockedLatest = lockedModel(
+                "model-4", "expense", "并发最新版", "finance", 4, null);
+        stubPendingSaveRequest(request, lockedSource, lockedLatest, 1);
+        Model target = mock(Model.class);
+        when(target.getId()).thenReturn("model-5");
+        when(repositoryService.newModel()).thenReturn(target);
+
+        assertThat(service.saveModel(request)).isEqualTo("model-5");
+
+        verify(target).setVersion(5);
+        verify(repositoryService).saveModel(target);
+        verify(repositoryService, never()).saveModel(sourceSnapshot);
+        verify(repositoryService).addModelEditorSource("model-5",
+                "<definitions/>".getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 验证已完成幂等请求直接返回首次保存结果，不再读取或写入 Flowable 模型。
+     *
+     * @return 无返回值；重放再次执行模型保存或源码写入时测试失败
+     */
+    @Test
+    void returnsCompletedSaveRequestWithoutModelWrite()
+    {
+        WorkflowModelDto request = saveRequest("model-1", false);
+        stubSaveRecord(request, "model-2");
+
+        assertThat(service.saveModel(request)).isEqualTo("model-2");
+
+        verify(repositoryService, never()).getModel(any());
+        verify(repositoryService, never()).saveModel(any());
+        verify(repositoryService, never()).addModelEditorSource(any(), any());
+        verify(modelSaveMapper, never()).selectOldestDefaultTenantModelForUpdate(any());
+        verify(modelSaveMapper, never()).selectLatestDefaultTenantModelForUpdate(any());
+        verify(modelSaveMapper, never()).selectDefaultTenantModelForUpdate(any());
+        verify(modelSaveMapper, never()).completeSaveRequest(any(), any());
+    }
+
+    /**
+     * 验证同一个 requestId 被不同保存载荷复用时返回冲突且不产生模型副作用。
+     *
+     * @return 无返回值；冲突请求进入模型读写链或未返回 409 时测试失败
+     */
+    @Test
+    void rejectsSaveRequestIdReusedWithDifferentPayload()
+    {
+        WorkflowModelDto request = saveRequest("model-1", false);
+        when(modelSaveMapper.ensureSaveRequest(
+                eq(request.getSaveRequestId()), eq("7"), eq("model-1"), any()))
+                .thenReturn(1);
+        when(modelSaveMapper.selectSaveRequestForUpdate(request.getSaveRequestId()))
+                .thenReturn(new WorkflowModelSaveRecord(
+                        request.getSaveRequestId(), "7", "model-1", "0".repeat(64), null));
+
+        assertThatThrownBy(() -> service.saveModel(request))
+                .isInstanceOfSatisfying(ServiceException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(409));
+
+        verify(repositoryService, never()).getModel(any());
+        verify(repositoryService, never()).saveModel(any());
+        verify(modelSaveMapper, never()).selectOldestDefaultTenantModelForUpdate(any());
+        verify(modelSaveMapper, never()).selectLatestDefaultTenantModelForUpdate(any());
+        verify(modelSaveMapper, never()).completeSaveRequest(any(), any());
+    }
+
+    /**
+     * 验证保存严格按幂等行、稳定版本组锚点、最高版本、来源模型顺序加锁。
+     *
+     * @return 无返回值；移动的最高版本范围在稳定锚点之前加锁时测试失败
+     */
+    @Test
+    void locksStableGroupAnchorBeforeLatestAndSource()
+    {
+        WorkflowModelDto request = saveRequest("model-3", false);
+        Model sourceSnapshot = model("model-3", "expense", "快照报销", "finance", 3, null);
+        when(repositoryService.getModel("model-3")).thenReturn(sourceSnapshot);
+        when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
+        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        WorkflowModelLockRow groupAnchor = lockedModel(
+                "model-1", "expense", "初始报销", "finance", 1, "deployment-1");
+        WorkflowModelLockRow lockedSource = lockedModel(
+                "model-3", "expense", "锁内来源", "finance", 3, null);
+        WorkflowModelLockRow lockedLatest = lockedModel(
+                "model-4", "expense", "并发最新版", "finance", 4, null);
+        stubSaveRecord(request, null);
+        when(modelSaveMapper.selectOldestDefaultTenantModelForUpdate("expense"))
+                .thenReturn(groupAnchor);
+        when(modelSaveMapper.selectLatestDefaultTenantModelForUpdate("expense"))
+                .thenReturn(lockedLatest);
+        when(modelSaveMapper.selectDefaultTenantModelForUpdate("model-3"))
+                .thenReturn(lockedSource);
+        when(modelSaveMapper.completeSaveRequest(eq(request.getSaveRequestId()), any()))
+                .thenReturn(1);
+        Model target = mock(Model.class);
+        when(target.getId()).thenReturn("model-5");
+        when(repositoryService.newModel()).thenReturn(target);
+
+        assertThat(service.saveModel(request)).isEqualTo("model-5");
+
+        var lockOrder = inOrder(modelSaveMapper);
+        lockOrder.verify(modelSaveMapper).ensureSaveRequest(
+                eq(request.getSaveRequestId()), eq("7"), eq("model-3"), any());
+        lockOrder.verify(modelSaveMapper).selectSaveRequestForUpdate(request.getSaveRequestId());
+        lockOrder.verify(modelSaveMapper).selectOldestDefaultTenantModelForUpdate("expense");
+        lockOrder.verify(modelSaveMapper).selectLatestDefaultTenantModelForUpdate("expense");
+        lockOrder.verify(modelSaveMapper).selectDefaultTenantModelForUpdate("model-3");
+        lockOrder.verify(modelSaveMapper).completeSaveRequest(request.getSaveRequestId(), "model-5");
+    }
+
+    /**
+     * 验证版本组锚点缺失时在读取移动的最高版本范围前立即终止保存。
+     *
+     * @return 无返回值；缺失锚点仍进入最高版本锁或产生模型副作用时测试失败
+     */
+    @Test
+    void rejectsMissingGroupAnchorBeforeLatestRangeLock()
+    {
+        WorkflowModelDto request = saveRequest("model-3", false);
+        Model sourceSnapshot = model("model-3", "expense", "快照报销", "finance", 3, null);
+        when(repositoryService.getModel("model-3")).thenReturn(sourceSnapshot);
+        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        stubSaveRecord(request, null);
+        when(modelSaveMapper.selectOldestDefaultTenantModelForUpdate("expense"))
+                .thenReturn(null);
+
+        assertThatThrownBy(() -> service.saveModel(request))
+                .isInstanceOfSatisfying(ServiceException.class,
+                        exception -> assertThat(exception.getCode()).isEqualTo(409));
+
+        verify(modelSaveMapper, never()).selectLatestDefaultTenantModelForUpdate(any());
+        verify(modelSaveMapper, never()).selectDefaultTenantModelForUpdate(any());
+        verify(repositoryService, never()).saveModel(any());
+        verify(repositoryService, never()).addModelEditorSource(any(), any());
+        verify(modelSaveMapper, never()).completeSaveRequest(any(), any());
+    }
+
+    /**
+     * 验证模型和源码写入后无法完成幂等状态时保存整体报告失败。
+     *
+     * @return 无返回值；完成数异常仍返回成功或未执行真实模型写入时测试失败
+     */
+    @Test
+    void failsSaveWhenIdempotencyCompletionUpdatesNoRow()
+    {
+        WorkflowModelDto request = saveRequest("model-3", false);
+        Model source = model("model-3", "expense", "当前报销", "finance", 3, null);
+        when(repositoryService.getModel("model-3")).thenReturn(source);
+        when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
+        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        WorkflowModelLockRow lockedSource = lockedModel(
+                "model-3", "expense", "当前报销", "finance", 3, null);
+        stubPendingSaveRequest(request, lockedSource, lockedSource, 0);
+
+        assertThatThrownBy(() -> service.saveModel(request))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(500);
+                    assertThat(exception.getMessage()).isEqualTo("流程模型保存幂等状态异常");
+                });
+
+        verify(repositoryService).saveModel(source);
+        verify(repositoryService).addModelEditorSource("model-3",
+                "<definitions/>".getBytes(StandardCharsets.UTF_8));
+        verify(modelSaveMapper).completeSaveRequest(request.getSaveRequestId(), "model-3");
     }
 
     /**
@@ -545,6 +809,88 @@ class WorkflowModelServiceTest
         when(query.asc()).thenReturn(query);
         when(query.desc()).thenReturn(query);
         return query;
+    }
+
+    /**
+     * 构造一次具有稳定 UUID、来源模型和 BPMN 正文的保存请求。
+     *
+     * @param modelId String，保存请求指向的来源模型主键
+     * @param newVersion boolean，是否显式要求创建新版本
+     * @return WorkflowModelDto，可直接提交给模型服务的保存请求
+     */
+    private WorkflowModelDto saveRequest(String modelId, boolean newVersion)
+    {
+        WorkflowModelDto request = new WorkflowModelDto();
+        request.setSaveRequestId(UUID.randomUUID().toString());
+        request.setModelId(modelId);
+        request.setBpmnXml("<definitions/>");
+        request.setNewVersion(newVersion);
+        return request;
+    }
+
+    /**
+     * 模拟幂等登记和锁定读取，并使用服务真实传入的摘要构造匹配记录。
+     *
+     * @param request WorkflowModelDto，包含幂等主键和保存载荷的请求
+     * @param savedModelId String，已完成请求的结果模型主键；待处理请求为 null
+     * @return 无返回值；后续服务调用将读取匹配的持久化幂等投影
+     */
+    private void stubSaveRecord(WorkflowModelDto request, String savedModelId)
+    {
+        // payloadSha256 保存服务端实际生成的摘要，测试不复制生产摘要算法。
+        AtomicReference<String> payloadSha256 = new AtomicReference<>();
+        when(modelSaveMapper.ensureSaveRequest(
+                eq(request.getSaveRequestId()), eq("7"), eq(request.getModelId()), any()))
+                .thenAnswer(invocation ->
+                {
+                    payloadSha256.set(invocation.getArgument(3, String.class));
+                    return 1;
+                });
+        when(modelSaveMapper.selectSaveRequestForUpdate(request.getSaveRequestId()))
+                .thenAnswer(invocation -> new WorkflowModelSaveRecord(
+                        request.getSaveRequestId(), "7", request.getModelId(),
+                        payloadSha256.get(), savedModelId));
+    }
+
+    /**
+     * 模拟待处理幂等请求、固定顺序的三条模型锁查询和最终完成更新。
+     *
+     * @param request WorkflowModelDto，待执行的保存请求
+     * @param source WorkflowModelLockRow，锁内来源模型当前读投影
+     * @param latest WorkflowModelLockRow，锁内最高版本当前读投影
+     * @param completionCount int，完成幂等请求时数据库返回的影响行数
+     * @return 无返回值；保存链将使用给定锁状态和完成结果
+     */
+    private void stubPendingSaveRequest(WorkflowModelDto request,
+            WorkflowModelLockRow source, WorkflowModelLockRow latest, int completionCount)
+    {
+        stubSaveRecord(request, null);
+        when(modelSaveMapper.selectOldestDefaultTenantModelForUpdate(source.modelKey()))
+                .thenReturn(source);
+        when(modelSaveMapper.selectLatestDefaultTenantModelForUpdate(source.modelKey()))
+                .thenReturn(latest);
+        when(modelSaveMapper.selectDefaultTenantModelForUpdate(source.modelId()))
+                .thenReturn(source);
+        when(modelSaveMapper.completeSaveRequest(eq(request.getSaveRequestId()), any()))
+                .thenReturn(completionCount);
+    }
+
+    /**
+     * 构造默认租户下可用于保存决策的模型当前读锁投影。
+     *
+     * @param id String，模型主键
+     * @param key String，模型版本分组 key
+     * @param name String，模型名称
+     * @param category String，分类编码
+     * @param version int，业务版本号
+     * @param deploymentId String，部署主键；未部署时为 null
+     * @return WorkflowModelLockRow，字段完整且租户为空字符串的锁投影
+     */
+    private WorkflowModelLockRow lockedModel(String id, String key, String name,
+            String category, int version, String deploymentId)
+    {
+        return new WorkflowModelLockRow(id, version, key, version, deploymentId,
+                name, category, "{}", "");
     }
 
     /**

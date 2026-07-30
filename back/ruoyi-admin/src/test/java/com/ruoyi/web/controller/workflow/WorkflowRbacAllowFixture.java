@@ -24,8 +24,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
@@ -140,6 +141,8 @@ final class WorkflowRbacAllowFixture
     /** 精确清理集合；只登记本类已确认创建成功的对象主键。 */
     private final Set<String> deploymentIds = new LinkedHashSet<>();
     private final Set<String> modelIds = new LinkedHashSet<>();
+    /** 本轮真实保存 API 使用的幂等请求主键，仅用于精确回收测试创建的正式记录。 */
+    private final Set<String> modelSaveRequestIds = new LinkedHashSet<>();
     private final Set<Long> categoryIds = new LinkedHashSet<>();
     private final Set<Long> formIds = new LinkedHashSet<>();
     private final Set<Long> copyIds = new LinkedHashSet<>();
@@ -165,7 +168,7 @@ final class WorkflowRbacAllowFixture
      * @param serverPort int，SpringBootTest 随机真实端口
      * @param httpTimeout Duration，单次真实 HTTP 超时
      * @param httpClient HttpClient，不带 Cookie 和重试的客户端
-     * @param objectMapper ObjectMapper，测试侧 Jackson 2 解析器
+     * @param objectMapper ObjectMapper，测试侧 Jackson 3 解析器
      * @param jdbcTemplate JdbcTemplate，隔离 MySQL 连接
      * @param processEngine ProcessEngine，共享真实 Flowable 引擎
      * @param attachmentStorage WorkflowAttachmentStorage，测试专用私有附件目录
@@ -748,7 +751,8 @@ final class WorkflowRbacAllowFixture
                 ModelFixture fixture = createModel(roleKey, "保存模型");
                 String xml = modelXml(fixture.id());
                 JsonNode body = callJson(roleKey, endpoint, "/workflow/model/save",
-                        json(Map.of("modelId", fixture.id(), "bpmnXml", xml,
+                        json(Map.of("requestId", newModelSaveRequestId(),
+                                "modelId", fixture.id(), "bpmnXml", xml,
                                 "newVersion", false)));
                 assertThat(body.path("data").path("modelId").asText())
                         .isEqualTo(fixture.id());
@@ -1445,7 +1449,8 @@ final class WorkflowRbacAllowFixture
     }
 
     /**
-     * 精确清理本类创建的附件、抄送、部署、模型、表单、分类、配额行和操作日志。
+     * 精确清理本类创建的附件、抄送、部署、模型、模型保存幂等记录、表单、分类、
+     * 配额行和操作日志。
      *
      * @return void，无返回值；清理后仍有任一精确对象残留即失败
      */
@@ -1503,6 +1508,13 @@ final class WorkflowRbacAllowFixture
                 repositoryService.deleteModel(modelId);
             }
         }
+        // 幂等记录是模型的审计软引用，不随 ACT_RE_MODEL 级联；fixture 必须按已登记 UUID 精确回收。
+        for (String requestId : List.copyOf(modelSaveRequestIds))
+        {
+            jdbcTemplate.update(
+                    "delete from wf_model_save_idempotency where request_id = ?",
+                    requestId);
+        }
         for (Long formId : List.copyOf(formIds))
         {
             jdbcTemplate.update("delete from wf_form where form_id = ?", formId);
@@ -1542,6 +1554,13 @@ final class WorkflowRbacAllowFixture
                     "select count(*) from wf_attachment where attachment_id in ("
                             + placeholders(attachmentIds.size()) + ")",
                     Long.class, attachmentIds.toArray())).isZero();
+        }
+        if (!modelSaveRequestIds.isEmpty())
+        {
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_model_save_idempotency where request_id in ("
+                            + placeholders(modelSaveRequestIds.size()) + ")",
+                    Long.class, modelSaveRequestIds.toArray())).isZero();
         }
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from sys_oper_log where oper_id > ? "
@@ -1591,7 +1610,8 @@ final class WorkflowRbacAllowFixture
             throws IOException, InterruptedException
     {
         JsonNode body = callJsonRaw(roleKey, "/workflow/model/save", "POST",
-                json(Map.of("modelId", original.id(), "bpmnXml", modelXml(original.id()),
+                json(Map.of("requestId", newModelSaveRequestId(),
+                        "modelId", original.id(), "bpmnXml", modelXml(original.id()),
                         "newVersion", true)), true);
         String id = body.path("data").path("modelId").asText();
         modelIds.add(id);
@@ -1630,9 +1650,23 @@ final class WorkflowRbacAllowFixture
                 converter.convertToXML(bpmnModel, StandardCharsets.UTF_8.name()),
                 StandardCharsets.UTF_8);
         JsonNode body = callJsonRaw(roleKey, "/workflow/model/save", "POST",
-                json(Map.of("modelId", fixture.id(), "bpmnXml", deployableXml,
+                json(Map.of("requestId", newModelSaveRequestId(),
+                        "modelId", fixture.id(), "bpmnXml", deployableXml,
                         "newVersion", false)), true);
         assertThat(body.path("data").path("modelId").asText()).isEqualTo(fixture.id());
+    }
+
+    /**
+     * 生成并登记本轮真实模型保存请求的 UUID，确保持久化幂等记录可按请求边界精确清理。
+     *
+     * @return String，符合后端保存契约的随机 UUID
+     */
+    private String newModelSaveRequestId()
+    {
+        // requestId 同时是业务幂等键和测试清理边界，必须在发出 HTTP 请求前登记。
+        String requestId = UUID.randomUUID().toString();
+        modelSaveRequestIds.add(requestId);
+        return requestId;
     }
 
     /**
@@ -2241,9 +2275,8 @@ final class WorkflowRbacAllowFixture
      *
      * @param response HttpResponse&lt;byte[]&gt;，真实 HTTP 字节响应
      * @return JsonNode，业务 code 为 200 的完整 AjaxResult
-     * @throws IOException 响应不是合法 UTF-8 JSON 时抛出
      */
-    private JsonNode parseSuccessfulJson(HttpResponse<byte[]> response) throws IOException
+    private JsonNode parseSuccessfulJson(HttpResponse<byte[]> response)
     {
         int transportStatus = response.statusCode();
         if (response.body() == null || response.body().length == 0)
@@ -2257,7 +2290,7 @@ final class WorkflowRbacAllowFixture
         {
             body = objectMapper.readTree(response.body());
         }
-        catch (IOException exception)
+        catch (JacksonException exception)
         {
             // 响应正文可能包含敏感业务数据，只报告其不是合法 JSON，不透传正文或解析异常消息。
             throw new AllowHttpResponseException(transportStatus, null,
@@ -2562,7 +2595,7 @@ final class WorkflowRbacAllowFixture
         {
             return objectMapper.writeValueAsString(value);
         }
-        catch (IOException exception)
+        catch (JacksonException exception)
         {
             throw new IllegalStateException("RBAC IT JSON 序列化失败", exception);
         }

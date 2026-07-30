@@ -173,14 +173,13 @@ public class WfModelController extends BaseController
     }
 
     /**
-     * 原子保存模型 BPMN，并按请求决定是否创建新版本。
+     * 原子保存模型 BPMN；已部署或历史版本由服务端自动创建新的最高版本。
      *
      * @param request WorkflowModelSaveRequest，模型主键、BPMN XML 和版本策略
      * @return AjaxResult，包含实际保存模型主键的响应
      */
     @PreAuthorize("@ss.hasPermi('workflow:model:save')")
     @Log(title = "保存流程模型", businessType = BusinessType.UPDATE)
-    @RepeatSubmit
     @PostMapping("/save")
     public AjaxResult save(@Valid @RequestBody WorkflowModelSaveRequest request)
     {
@@ -356,7 +355,7 @@ public class WfModelController extends BaseController
     }
 
     /**
-     * 将设计保存请求映射为只含模型主键和 BPMN 的领域 DTO。
+     * 将设计保存请求映射为只含幂等键、模型主键和 BPMN 的领域 DTO。
      *
      * @param request WorkflowModelSaveRequest，已通过 Web 校验的设计保存请求
      * @return WorkflowModelDto，模型服务保存参数
@@ -364,6 +363,7 @@ public class WfModelController extends BaseController
     private WorkflowModelDto toModelDto(WorkflowModelSaveRequest request)
     {
         WorkflowModelDto dto = new WorkflowModelDto();
+        dto.setSaveRequestId(request.requestId());
         dto.setModelId(request.modelId());
         dto.setBpmnXml(request.bpmnXml());
         dto.setNewVersion(request.newVersion());

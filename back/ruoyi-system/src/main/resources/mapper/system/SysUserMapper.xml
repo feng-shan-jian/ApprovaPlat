@@ -213,20 +213,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
  		update sys_user set pwd_update_date = sysdate(), password = #{password}, update_time = sysdate() where user_id = #{userId}
 	</update>
 
-	<update id="initializeBootstrapAdminCredential">
-		update sys_user
-		set password = #{newPassword},
-			status = '0',
-			pwd_update_date = sysdate(),
-			update_by = 'bootstrap',
-			update_time = sysdate()
-		where user_id = #{userId}
-		  and user_name = #{userName}
-		  and password = #{expectedPassword}
-		  and status = '1'
-		  and del_flag = '0'
-	</update>
-	
 	<delete id="deleteUserById" parameterType="Long">
  		update sys_user set del_flag = '2' where user_id = #{userId}
  	</delete>

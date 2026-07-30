@@ -25,8 +25,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
@@ -965,7 +965,7 @@ class WorkflowMultiInstanceServiceTest
         ArgumentCaptor<String> commentCaptor = ArgumentCaptor.forClass(String.class);
         verify(taskService).addComment(eq("task-8"), eq(INSTANCE_ID), eq("1"),
                 commentCaptor.capture());
-        JsonNode audit = new ObjectMapper().readTree(commentCaptor.getValue());
+        JsonNode audit = JsonMapper.shared().readTree(commentCaptor.getValue());
         assertThat(audit.path("action").asText()).isEqualTo(action);
         assertThat(audit.path("actorUserId").asText()).isEqualTo("8");
         assertThat(audit.path("activityId").asText()).isEqualTo(ACTIVITY_ID);

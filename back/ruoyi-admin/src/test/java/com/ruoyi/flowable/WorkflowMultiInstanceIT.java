@@ -19,8 +19,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RepositoryService;
@@ -77,7 +78,7 @@ import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
         "flowable.it.expected-schema=${FLOWABLE_IT_EXPECTED_SCHEMA}",
         "flowable.it.accounts-registered=${FLOWABLE_IT_ACCOUNTS_REGISTERED:false}",
         // 固定公开材料只用于装配 TokenService，本 IT 不创建登录 Token，禁止复用于任何部署环境。
-        "token.secret=workflow-multi-instance-it-public-test-material-never-use-in-production-0001",
+        "token.secret=eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eA==",
         "flowable.database-schema-update=false",
         "flowable.async-executor-activate=false",
         "flowable.async-history-executor-activate=false",
@@ -121,7 +122,7 @@ class WorkflowMultiInstanceIT
             Set.of("workflow:process:approval");
 
     /** 解析结构化 Flowable comment 的 JSON 映射器。 */
-    private static final ObjectMapper AUDIT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper AUDIT_MAPPER = JsonMapper.shared();
 
     @Autowired
     private ProcessEngine processEngine;

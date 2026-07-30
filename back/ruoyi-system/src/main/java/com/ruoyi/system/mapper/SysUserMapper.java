@@ -106,20 +106,6 @@ public interface SysUserMapper
     public int resetUserPwd(@Param("userId") Long userId, @Param("password") String password);
 
     /**
-     * 仅在预置管理员仍处于停用和待初始化状态时，原子写入首次随机密码并启用账号。
-     *
-     * @param userId Long，固定预置管理员主键
-     * @param userName String，固定预置管理员账号
-     * @param expectedPassword String，SQL 基线中的不可登录密码标记
-     * @param newPassword String，应用内生成的 BCrypt 密码摘要
-     * @return int，满足全部前置并更新成功返回 1，否则返回 0
-     */
-    public int initializeBootstrapAdminCredential(@Param("userId") Long userId,
-            @Param("userName") String userName,
-            @Param("expectedPassword") String expectedPassword,
-            @Param("newPassword") String newPassword);
-
-    /**
      * 通过用户ID删除用户
      * 
      * @param userId 用户ID

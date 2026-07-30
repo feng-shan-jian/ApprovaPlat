@@ -82,10 +82,14 @@ create_bundle() {
     "$bundle_dir/deployment/scripts/tests"
   printf 'test jar asset\n' > "$bundle_dir/ruoyi-admin.jar"
   printf '<!doctype html><title>test</title>\n' > "$bundle_dir/frontend/index.html"
-  printf 'flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql\n' \
-    > "$bundle_dir/sql/release-order.txt"
+  {
+    printf 'flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql\n'
+    printf 'flowable/business/8.0.0.4__workflow_model_save_idempotency.sql\n'
+  } > "$bundle_dir/sql/release-order.txt"
   printf 'ALTER TABLE wf_attachment ADD COLUMN cleanup_retry_count INT;\n' \
     > "$bundle_dir/sql/flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql"
+  printf 'CREATE TABLE wf_model_save_idempotency (request_id VARCHAR(64) PRIMARY KEY);\n' \
+    > "$bundle_dir/sql/flowable/business/8.0.0.4__workflow_model_save_idempotency.sql"
   {
     printf 'server:\n'
     printf '  address: 127.0.0.1\n'
@@ -98,6 +102,8 @@ create_bundle() {
     printf '      exposure:\n'
     printf '        include: health,prometheus\n'
     printf 'flowable:\n'
+    printf '  database-schema-update: "false"\n'
+    printf '  variable-json-mapper: jackson\n'
     printf '  runtime:\n'
     printf '    production-gate-enabled: true\n'
     printf '    metrics-snapshot-max-age: ${FLOWABLE_RUNTIME_METRICS_SNAPSHOT_MAX_AGE:PT3M}\n'
@@ -115,8 +121,6 @@ create_bundle() {
     printf 'RUOYI_MANAGEMENT_PORT=18080\n'
     printf 'FLOWABLE_RUNTIME_METRICS_SNAPSHOT_MAX_AGE=PT3M\n'
     printf '%s%s\n' 'RUOYI_TOKEN_' 'SECRET='
-    printf 'RUOYI_BOOTSTRAP_ADMIN_ENABLED=false\n'
-    printf '%s%s\n' 'RUOYI_BOOTSTRAP_ADMIN_' 'PASSWORD='
     printf '%s%s\n' 'DRUID_MONITOR_' 'PASSWORD='
   } > "$bundle_dir/deployment/config/ruoyi.env.example"
   {
@@ -401,12 +405,12 @@ create_fresh_install_evidence() {
   printf '%064d  backup-smoke/schema.sql\n' 1 \
     > "$evidence_dir/backup-smoke/schema-sha256.txt"
   : > "$evidence_dir/backup-smoke/mysqlcheck.txt"
-  for ((table_number = 1; table_number <= 69; table_number++)); do
+  for ((table_number = 1; table_number <= 70; table_number++)); do
     printf 'ry_vue_backup_verify.table_%02d OK\n' "$table_number" \
       >> "$evidence_dir/backup-smoke/mysqlcheck.txt"
   done
   printf 'empty_schema_table_count=0\n' > "$evidence_dir/empty-schema-check.txt"
-  printf '69\t20\t11\t32\t6\n' > "$evidence_dir/table-counts.tsv"
+  printf '70\t20\t11\t32\t7\n' > "$evidence_dir/table-counts.tsv"
   printf 'PONG\n' > "$evidence_dir/redis-ping.txt"
   if [[ "$previous_release_id" != 'NONE' || -n "$previous_release_dir" ]]; then
     preflight_arguments+=(
@@ -1142,12 +1146,37 @@ main() {
   expect_failure 'additional unapproved SQL release order entry fails' \
     run_preflight_gate "$bundle_dir" 'extra-sql-order'
 
+  bundle_dir="$TEST_ROOT/reversed-approved-sql-order"
+  create_bundle "$bundle_dir" 'reversed-approved-sql-order' 'NONE'
+  {
+    printf 'flowable/business/8.0.0.4__workflow_model_save_idempotency.sql\n'
+    printf 'flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql\n'
+  } > "$bundle_dir/sql/release-order.txt"
+  refresh_bundle_manifest "$bundle_dir"
+  expect_failure 'approved SQL migrations in reversed order fail' \
+    run_preflight_gate "$bundle_dir" 'reversed-approved-sql-order'
+
+  bundle_dir="$TEST_ROOT/missing-approved-dot4-order"
+  create_bundle "$bundle_dir" 'missing-approved-dot4-order' 'NONE'
+  printf 'flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql\n' \
+    > "$bundle_dir/sql/release-order.txt"
+  refresh_bundle_manifest "$bundle_dir"
+  expect_failure 'release order missing approved 8.0.0.4 migration fails' \
+    run_preflight_gate "$bundle_dir" 'missing-approved-dot4-order'
+
   bundle_dir="$TEST_ROOT/missing-required-migration"
   create_bundle "$bundle_dir" 'missing-required-migration' 'NONE'
   rm -f -- "$bundle_dir/sql/flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql"
   refresh_bundle_manifest "$bundle_dir"
   expect_failure 'missing approved 8.0.0.3 migration fails' \
     run_preflight_gate "$bundle_dir" 'missing-required-migration'
+
+  bundle_dir="$TEST_ROOT/missing-required-dot4-migration"
+  create_bundle "$bundle_dir" 'missing-required-dot4-migration' 'NONE'
+  rm -f -- "$bundle_dir/sql/flowable/business/8.0.0.4__workflow_model_save_idempotency.sql"
+  refresh_bundle_manifest "$bundle_dir"
+  expect_failure 'missing approved 8.0.0.4 migration fails' \
+    run_preflight_gate "$bundle_dir" 'missing-required-dot4-migration'
 
   bundle_dir="$TEST_ROOT/missing-sql"
   create_bundle "$bundle_dir" 'missing-sql' 'NONE'
@@ -1189,6 +1218,22 @@ main() {
   expect_failure 'disabled production runtime gate fails' \
     run_preflight_gate "$bundle_dir" 'production-gate-disabled'
 
+  bundle_dir="$TEST_ROOT/automatic-flowable-schema"
+  create_bundle "$bundle_dir" 'automatic-flowable-schema' 'NONE'
+  sed -i 's/database-schema-update: "false"/database-schema-update: "true"/' \
+    "$bundle_dir/deployment/config/application.yml"
+  refresh_bundle_manifest "$bundle_dir"
+  expect_failure 'automatic Flowable schema update fails' \
+    run_preflight_gate "$bundle_dir" 'automatic-flowable-schema'
+
+  bundle_dir="$TEST_ROOT/deprecated-jackson2-mapper"
+  create_bundle "$bundle_dir" 'deprecated-jackson2-mapper' 'NONE'
+  sed -i 's/variable-json-mapper: jackson/variable-json-mapper: jackson2/' \
+    "$bundle_dir/deployment/config/application.yml"
+  refresh_bundle_manifest "$bundle_dir"
+  expect_failure 'deprecated Flowable Jackson 2 mapper fails' \
+    run_preflight_gate "$bundle_dir" 'deprecated-jackson2-mapper'
+
   bundle_dir="$TEST_ROOT/public-management-bind"
   create_bundle "$bundle_dir" 'public-management-bind' 'NONE'
   sed -i '0,/address: 127.0.0.1/{//b}; s/address: 127.0.0.1/address: 0.0.0.0/' \
@@ -1212,14 +1257,6 @@ main() {
   refresh_bundle_manifest "$bundle_dir"
   expect_failure 'hardcoded token secret configuration fails' \
     run_preflight_gate "$bundle_dir" 'hardcoded-token-secret'
-
-  bundle_dir="$TEST_ROOT/bootstrap-enabled"
-  create_bundle "$bundle_dir" 'bootstrap-enabled' 'NONE'
-  sed -i 's/RUOYI_BOOTSTRAP_ADMIN_ENABLED=false/RUOYI_BOOTSTRAP_ADMIN_ENABLED=true/' \
-    "$bundle_dir/deployment/config/ruoyi.env.example"
-  refresh_bundle_manifest "$bundle_dir"
-  expect_failure 'enabled bootstrap admin in release template fails' \
-    run_preflight_gate "$bundle_dir" 'bootstrap-enabled'
 
   bundle_dir="$TEST_ROOT/hardcoded-druid-password"
   create_bundle "$bundle_dir" 'hardcoded-druid-password' 'NONE'
@@ -1353,15 +1390,6 @@ main() {
   expect_failure 'sensitive value in evidence archive fails' \
     run_fresh_evidence_gate "$evidence_dir" fresh-install
 
-  evidence_dir="$TEST_ROOT/evidence-bootstrap-secret"
-  create_fresh_install_evidence \
-    "$evidence_dir" "$TEST_ROOT/fresh-1" 'fresh-1'
-  printf '%s%s\n' 'RUOYI_BOOTSTRAP_ADMIN_' 'PASSWORD=FORBIDDEN_TEST_SENTINEL' \
-    > "$evidence_dir/bootstrap-output.txt"
-  refresh_evidence_manifest "$evidence_dir"
-  expect_failure 'bootstrap password assignment in evidence fails' \
-    run_fresh_evidence_gate "$evidence_dir" fresh-install
-
   evidence_dir="$TEST_ROOT/evidence-druid-secret"
   create_fresh_install_evidence \
     "$evidence_dir" "$TEST_ROOT/fresh-1" 'fresh-1'
@@ -1427,7 +1455,7 @@ main() {
 
   evidence_dir="$TEST_ROOT/rehearsal-invalid-fresh-counts"
   cp -a -- "$TEST_REHEARSAL_ONE_DIR" "$evidence_dir"
-  printf '68\t20\t11\t31\t6\n' \
+  printf '69\t20\t11\t32\t6\n' \
     > "$evidence_dir/fresh-install/table-counts.tsv"
   refresh_rehearsal_manifests "$evidence_dir"
   expect_failure 'rehearsal with invalid namespaced table counts fails' \
@@ -1445,7 +1473,7 @@ main() {
   printf 'ry_vue_backup_verify.table_01 OK\n' \
     > "$evidence_dir/fresh-install/backup-smoke/mysqlcheck.txt"
   refresh_rehearsal_manifests "$evidence_dir"
-  expect_failure 'rehearsal without 69-table restore verification fails' \
+  expect_failure 'rehearsal without 70-table restore verification fails' \
     run_release_evidence_gate "$evidence_dir" rehearsal
 
   evidence_dir="$TEST_ROOT/rehearsal-fresh-attachment-diff"

@@ -11,9 +11,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.UserTask;
@@ -76,7 +77,7 @@ public class WorkflowMultiInstanceService
             "No multi instance execution found for activity id ";
 
     /** 结构化审计专用 JSON 序列化器。 */
-    private static final ObjectMapper AUDIT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper AUDIT_MAPPER = JsonMapper.shared();
 
     private final WorkflowEngineOperations engineOperations;
 

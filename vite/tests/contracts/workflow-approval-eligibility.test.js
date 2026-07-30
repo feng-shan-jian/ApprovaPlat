@@ -1,18 +1,25 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import {
   APPROVAL_USER_CAPABILITY,
   CLAIM_IDENTITY_CAPABILITY,
   buildApprovalUserQuery,
   buildClaimIdentityQuery
 } from '../../src/api/workflow/identityQuery.js'
+import { normalizeTaskListenerXml } from '../../src/components/workflow/taskListenerXml.js'
+
+// Node 合同测试复用浏览器同构 DOM API，直接执行设计器的正式 XML 标准化函数。
+globalThis.DOMParser = DOMParser
+globalThis.XMLSerializer = XMLSerializer
 
 // 静态契约只读取正式源码，确保页面没有绕回通用用户目录或按本地角色名猜测审批资格。
 const detailSource = readFileSync(new URL('../../src/views/workflow/work/detail.vue', import.meta.url), 'utf8')
 const requestSource = readFileSync(new URL('../../src/utils/request.js', import.meta.url), 'utf8')
 const designPageSource = readFileSync(new URL('../../src/views/workflow/model/design.vue', import.meta.url), 'utf8')
 const designerSource = readFileSync(new URL('../../src/components/workflow/ProcessDesigner.vue', import.meta.url), 'utf8')
+const taskListenerXmlSource = readFileSync(new URL('../../src/components/workflow/taskListenerXml.js', import.meta.url), 'utf8')
 
 /**
  * 验证审批目录查询保留允许的分页和检索参数，并写入固定能力契约。
@@ -210,4 +217,115 @@ test('流程设计器按办理方式隔离身份资格目录', () => {
   assert.doesNotMatch(designerSource, /identityOptions\.(?:users|groups)/)
   assert.doesNotMatch(`${detailSource}\n${designPageSource}\n${designerSource}`,
     /workflow_approver|workflow:process:approval.*(?:option|filter)/i)
+})
+
+/**
+ * 验证内部任务审计监听器不再作为设计者可编辑字段暴露，全部持久化出口由组件自动补齐。
+ * @returns {void} 页面重新出现审计面板、嵌套 shape 命令或任一持久化出口缺少标准化时断言失败。
+ */
+test('流程设计器隐藏内部任务审计监听器并自动标准化', () => {
+  assert.doesNotMatch(designerSource, /任务审计事件|恢复标准任务审计/)
+  assert.doesNotMatch(designerSource,
+    /restoreTaskListeners|updateTaskListeners|initializeCreatedUserTask/)
+  assert.doesNotMatch(designerSource, /eventBus\.on\('shape\.added'/)
+  assert.match(designerSource,
+    /import \{ normalizeTaskListenerXml \} from '\.\/taskListenerXml'/)
+  assert.match(taskListenerXmlSource,
+    /export function normalizeTaskListenerXml\(xml\)[\s\S]*?appendApprovedTaskListeners\(document, extensionElements\)/)
+  assert.match(designerSource,
+    /async function emitPersistedXml\(\)[\s\S]*?normalizeTaskListenerXml\(rawXml\)/)
+  assert.match(designerSource,
+    /async function requestSave\(\)[\s\S]*?emit\('save', await emitPersistedXml\(\)\)/)
+  assert.match(designerSource,
+    /async function downloadXml\(\)[\s\S]*?const xml = await emitPersistedXml\(\)/)
+  assert.match(designerSource,
+    /defineExpose\(\{[\s\S]*?getXml: \(\) => emitPersistedXml\(\)[\s\S]*?\}\)/)
+})
+
+/**
+ * 验证持久化标准化无条件重建内部监听器，清理全部非法实现并保留其他业务扩展。
+ * @returns {void} 任一用户任务监听器不完整、危险属性残留或非监听扩展丢失时断言失败。
+ */
+test('任务审计监听器按固定运行时契约重建', () => {
+  const source = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:unsafe="urn:unsafe"
+             xmlns:vendor="urn:vendor"
+             targetNamespace="http://example.com">
+  <process id="Process_1" isExecutable="true">
+    <extensionElements>
+      <vendor:userTask vendor:flag="keep"><vendor:payload /></vendor:userTask>
+    </extensionElements>
+    <userTask id="Task_1">
+      <extensionElements>
+        <flowable:formProperty id="keep" />
+        <flowable:taskListener event="create" delegateExpression="\${userTaskListener}" onTransaction="committed" />
+        <flowable:taskListener event="assignment" class="unsafe.Listener" />
+        <unsafe:taskListener event="complete" delegateExpression="\${userTaskListener}">
+          <unsafe:field />
+        </unsafe:taskListener>
+      </extensionElements>
+    </userTask>
+    <userTask id="Task_2" />
+  </process>
+</definitions>`
+
+  // normalized 是所有可能送往后端的出口共用的正式持久化 XML。
+  const normalized = normalizeTaskListenerXml(source)
+  const document = new DOMParser().parseFromString(normalized, 'application/xml')
+  const userTasks = Array.from(document.getElementsByTagNameNS(
+    'http://www.omg.org/spec/BPMN/20100524/MODEL', 'userTask'))
+
+  assert.equal(userTasks.length, 2)
+  for (const userTask of userTasks) {
+    const extensionElements = Array.from(userTask.childNodes).find(child =>
+      child.nodeType === 1
+      && child.namespaceURI === 'http://www.omg.org/spec/BPMN/20100524/MODEL'
+      && child.localName === 'extensionElements')
+    assert.ok(extensionElements)
+    const listeners = Array.from(extensionElements.childNodes).filter(child =>
+      child.nodeType === 1 && child.localName === 'taskListener')
+    assert.deepEqual(listeners.map(listener => listener.getAttribute('event')),
+      ['create', 'assignment', 'complete'])
+    for (const listener of listeners) {
+      assert.equal(listener.namespaceURI, 'http://flowable.org/bpmn')
+      assert.equal(listener.getAttribute('delegateExpression'), '${userTaskListener}')
+      assert.deepEqual(Array.from(listener.attributes).map(attribute => attribute.name).sort(),
+        ['delegateExpression', 'event'])
+      assert.equal(Array.from(listener.childNodes).filter(child => child.nodeType === 1).length, 0)
+    }
+  }
+  assert.equal(document.getElementsByTagNameNS('http://flowable.org/bpmn', 'formProperty').length, 1)
+  // 第三方扩展中的同名 userTask 不是 BPMN 节点，标准化不得向其中注入任何内容。
+  const vendorUserTask = document.getElementsByTagNameNS('urn:vendor', 'userTask')[0]
+  assert.ok(vendorUserTask)
+  assert.equal(vendorUserTask.getAttributeNS('urn:vendor', 'flag'), 'keep')
+  assert.deepEqual(Array.from(vendorUserTask.childNodes)
+    .filter(child => child.nodeType === 1)
+    .map(child => [child.namespaceURI, child.localName]), [['urn:vendor', 'payload']])
+  assert.equal(normalizeTaskListenerXml(normalized), normalized)
+})
+
+/**
+ * 验证模型设计页不再依赖人工“保存为新版本”开关，并对缺失的新版本主键失败关闭。
+ * @returns {void} 手动版本开关回归、保存参数漂移或响应主键缺失被静默忽略时断言失败。
+ */
+test('模型设计保存不再暴露手动新版本开关', () => {
+  assert.doesNotMatch(designPageSource, /saveAsNewVersion|保存为新版本/)
+  assert.match(designPageSource,
+    /const requestId = resolveSaveRequestId\(sourceModelId, xml\)[\s\S]*?saveModel\(\{\s*requestId,\s*modelId: sourceModelId,\s*bpmnXml: xml,[\s\S]*?newVersion: false\s*\}\)/)
+  assert.match(designPageSource,
+    /pendingSaveRequest\?\.modelId === modelId[\s\S]*?pendingSaveRequest\?\.xml === xml[\s\S]*?return pendingSaveRequest\.requestId/)
+  assert.match(designPageSource, /globalThis\.crypto\.randomUUID\(\)/)
+  assert.match(designPageSource,
+    /pendingSaveRequest = undefined\s*proxy\.\$modal\.msgSuccess\('流程设计保存成功'\)/)
+  assert.match(designPageSource,
+    /const savedModelId = String\(response\.data\?\.modelId \|\| ''\)\.trim\(\)/)
+  assert.match(designPageSource,
+    /if \(!savedModelId\) \{\s*proxy\.\$modal\.msgError\('流程模型保存结果不完整'\)\s*return\s*\}/)
+  assert.doesNotMatch(designPageSource,
+    /response\.data\?\.modelId \|\| currentModelId\(\)/)
+  assert.match(designPageSource,
+    /if \(savedModelId !== currentModelId\(\)\)[\s\S]*?router\.replace/)
 })
