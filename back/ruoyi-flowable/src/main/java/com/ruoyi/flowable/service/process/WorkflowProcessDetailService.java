@@ -370,7 +370,8 @@ public class WorkflowProcessDetailService
         String startUserName = resolveUserName(instance.startUserId(), userNames);
         List<WorkflowProcessActivityView> timeline = buildTimeline(activities, tasksById,
                 commentsByTask, instance, startUserName, userNames);
-        WorkflowProcessViewerView viewer = buildViewer(activities, tasksById, commentsByTask);
+        WorkflowProcessViewerView viewer = buildViewer(activities, tasksById, commentsByTask,
+                "returned".equals(normalizeProcessStatus(instance)));
         String bpmnXml = deploymentService.getBpmnXml(definition.getId());
 
         Instant startTime = instance.startTime();
@@ -2155,11 +2156,13 @@ public class WorkflowProcessDetailService
      * @param activities List&lt;HistoricActivityInstance&gt;，实例全部历史活动
      * @param tasksById Map&lt;String, HistoricTaskInstance&gt;，历史任务主键索引
      * @param commentsByTask Map&lt;String, List&lt;WorkflowProcessCommentView&gt;&gt;，受控意见索引
+     * @param applicationReturned boolean，当前是否仍处于申请人退回修改阶段
      * @return WorkflowProcessViewerView，已完成、未完成、驳回和退回活动集合
      */
     private WorkflowProcessViewerView buildViewer(List<HistoricActivityInstance> activities,
             Map<String, HistoricTaskInstance> tasksById,
-            Map<String, List<WorkflowProcessCommentView>> commentsByTask)
+            Map<String, List<WorkflowProcessCommentView>> commentsByTask,
+            boolean applicationReturned)
     {
         Set<String> finishedActivities = new LinkedHashSet<>();
         Set<String> finishedSequenceFlows = new LinkedHashSet<>();
@@ -2199,6 +2202,11 @@ public class WorkflowProcessDetailService
         });
         rejectedActivities.remove(null);
         returnedActivities.remove(null);
+        if (!applicationReturned)
+        {
+            // 重新提交后首审批节点会复用退回前的 BPMN id；当前办理态必须覆盖历史退回轨迹。
+            returnedActivities.removeAll(unfinishedActivities);
+        }
         return new WorkflowProcessViewerView(finishedActivities, finishedSequenceFlows,
                 unfinishedActivities, rejectedActivities, returnedActivities);
     }

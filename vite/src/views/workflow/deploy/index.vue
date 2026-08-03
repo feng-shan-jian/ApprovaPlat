@@ -117,6 +117,8 @@ const versionTotal = ref(0)
 const versionProcessName = ref('')
 const queryParams = reactive({ pageNum: 1, pageSize: 10, processName: '', processKey: '', category: '', state: '' })
 const versionQuery = reactive({ pageNum: 1, pageSize: 10, processKey: '' })
+// 部署页会被页签缓存；首次请求结束后，重新进入页面必须读取最新发布状态。
+let pageInitialized = false
 
 /**
  * 分页加载每个流程标识的最新部署定义。
@@ -269,7 +271,20 @@ function showViewerError(error) {
   proxy.$modal.msgError(error?.message || '流程图加载失败')
 }
 
-Promise.all([loadCategories(), loadList()])
+const initialLoad = Promise.all([loadCategories(), loadList()]).finally(() => {
+  pageInitialized = true
+})
+
+/**
+ * 页签重新激活时刷新部署和分类；版本弹窗打开时同步刷新其中的历史版本状态。
+ * @returns {Promise<void>} 服务端最新部署状态写回当前页面。
+ */
+onActivated(async () => {
+  if (!pageInitialized) return initialLoad
+  const requests = [loadCategories(), loadList()]
+  if (versionsOpen.value && versionQuery.processKey) requests.push(loadVersions())
+  await Promise.all(requests)
+})
 </script>
 
 <style scoped>

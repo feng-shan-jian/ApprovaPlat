@@ -423,6 +423,8 @@ const multiInstanceUserOptions = ref([])
 let approvalUserSearchSequence = 0
 let copyUserSearchSequence = 0
 let detailLoadSequence = 0
+// 详情页由页签缓存；首次请求完成后，重新进入同一路由也必须重新读取运行时轨迹。
+let detailPageInitialized = false
 // 加签身份检索与成员快照各自使用递增序号，禁止旧结果覆盖当前任务 revision。
 let multiInstanceUserSearchSequence = 0
 let multiInstanceRefreshSequence = 0
@@ -1875,7 +1877,18 @@ async function closePage() {
 }
 
 watch(() => route.fullPath, () => loadDetail())
-loadDetail()
+const initialDetailLoad = loadDetail().finally(() => {
+  detailPageInitialized = true
+})
+
+/**
+ * 页签重新激活时重新查询实例详情，使退回、重提和审批后的流程图状态立即一致。
+ * @returns {Promise<void>} 首次加载后从真实详情接口刷新页面状态。
+ */
+onActivated(async () => {
+  if (!detailPageInitialized) return initialDetailLoad
+  await loadDetail()
+})
 </script>
 
 <style scoped lang="scss">

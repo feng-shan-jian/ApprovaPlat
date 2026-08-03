@@ -627,7 +627,7 @@ public class WorkflowModelService
     }
 
     /**
-     * 校验模型、分类和全部节点表单后部署 BPMN，并在同一事务保存不可变表单快照。
+     * 校验模型、分类和全部节点表单后部署 BPMN，保存快照并停用同流程标识的历史定义。
      *
      * @param modelId String，待部署 Flowable 模型主键
      * @return String，新 Flowable 部署主键
@@ -637,7 +637,8 @@ public class WorkflowModelService
         String normalizedId = requireText(modelId, "模型主键不能为空");
         return engineOperations.writeAsCurrentUser(identity ->
         {
-            Model model = requireModel(normalizedId);
+            // 部署与模型保存共用稳定版本组锁，禁止同 key 并发发布出多个活动最新版。
+            Model model = lockDeployableModel(normalizedId);
             if (isDeployed(model))
             {
                 throw new ServiceException("当前模型版本已经部署", HttpStatus.CONFLICT);
@@ -648,6 +649,8 @@ public class WorkflowModelService
             // 部署前重新核验所有静态身份，避免设计后主数据停用造成无人可办任务。
             bpmnIdentityValidator.validate(document);
             List<FormSnapshotSource> snapshotSources = loadSnapshotSources(document.formReferences());
+            Map<String, List<ProcessDefinition>> activeHistoryByKey =
+                    loadActiveDefinitionsByProcessKey(document);
 
             DeploymentBuilder builder = repositoryService.createDeployment()
                     .name(model.getName())
@@ -685,8 +688,72 @@ public class WorkflowModelService
             // 记录最近一次部署关系，后续模型编辑和安全删除据此执行状态门禁。
             model.setDeploymentId(deployment.getId());
             repositoryService.saveModel(model);
+
+            // 新定义默认保持活动；旧定义只禁止承接新实例，不冻结仍在办理的历史版本实例。
+            Set<String> newDefinitionIds = definitions.stream()
+                    .map(ProcessDefinition::getId).collect(java.util.stream.Collectors.toSet());
+            activeHistoryByKey.values().stream().flatMap(Collection::stream)
+                    .filter(definition -> !newDefinitionIds.contains(definition.getId()))
+                    .forEach(definition -> repositoryService.suspendProcessDefinitionById(
+                            definition.getId(), false, null));
             return deployment.getId();
         });
+    }
+
+    /**
+     * 锁定待部署模型所属版本组并重新读取模型，串行化同流程标识的保存与部署。
+     *
+     * @param modelId String，待部署 Flowable 模型主键
+     * @return Model，锁内重新读取且尚未部署的模型
+     */
+    private Model lockDeployableModel(String modelId)
+    {
+        Model snapshot = requireModel(modelId);
+        String modelKey = requireText(snapshot.getKey(), "流程模型标识不能为空");
+        WorkflowModelLockRow groupAnchor = modelSaveMapper
+                .selectOldestDefaultTenantModelForUpdate(modelKey);
+        WorkflowModelLockRow lockedModel = modelSaveMapper
+                .selectDefaultTenantModelForUpdate(modelId);
+        if (groupAnchor == null || lockedModel == null
+                || !Objects.equals(modelKey, lockedModel.modelKey()))
+        {
+            throw new ServiceException("流程模型版本状态异常", HttpStatus.CONFLICT);
+        }
+        if (hasText(lockedModel.deploymentId()))
+        {
+            throw new ServiceException("当前模型版本已经部署", HttpStatus.CONFLICT);
+        }
+        Model current = requireModel(modelId);
+        if (!Objects.equals(lockedModel.modelKey(), current.getKey())
+                || !Objects.equals(lockedModel.version(), current.getVersion()))
+        {
+            throw new ServiceException("流程模型版本状态异常", HttpStatus.CONFLICT);
+        }
+        return current;
+    }
+
+    /**
+     * 查询本次 BPMN 中每个可执行流程标识当前仍活动的历史定义。
+     *
+     * @param document WorkflowBpmnDocument，已通过安全与结构校验的部署文档
+     * @return Map&lt;String, List&lt;ProcessDefinition&gt;&gt;，流程标识到部署前活动定义的稳定映射
+     */
+    private Map<String, List<ProcessDefinition>> loadActiveDefinitionsByProcessKey(
+            WorkflowBpmnDocument document)
+    {
+        Map<String, List<ProcessDefinition>> definitionsByKey = new LinkedHashMap<>();
+        document.bpmnModel().getProcesses().stream().filter(Process::isExecutable).forEach(process ->
+        {
+            String processKey = requireText(process.getId(), "可执行流程标识不能为空");
+            List<ProcessDefinition> activeDefinitions = repositoryService
+                    .createProcessDefinitionQuery()
+                    .processDefinitionKey(processKey)
+                    .active()
+                    .list();
+            definitionsByKey.put(processKey, activeDefinitions == null
+                    ? List.of() : List.copyOf(activeDefinitions));
+        });
+        return Map.copyOf(definitionsByKey);
     }
 
     /**

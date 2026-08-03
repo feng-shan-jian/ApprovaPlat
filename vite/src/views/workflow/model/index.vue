@@ -168,6 +168,8 @@ const queryParams = reactive({ pageNum: 1, pageSize: 10, modelName: '', modelKey
 const historyQuery = reactive({ pageNum: 1, pageSize: 10, modelKey: '' })
 const form = reactive(createEmptyForm())
 const formRef = ref(null)
+// 页面由页签 keep-alive 缓存；首次请求完成后，每次重新进入都必须查询服务端最新模型状态。
+let pageInitialized = false
 const rules = {
   modelName: [{ required: true, message: '模型名称不能为空', trigger: 'blur' }],
   modelKey: [
@@ -423,7 +425,18 @@ function exportModels() {
   proxy.download('/workflow/model/export', { ...queryParams }, `workflow_model_${Date.now()}.xlsx`)
 }
 
-Promise.all([loadOptions(), loadList()])
+const initialLoad = Promise.all([loadOptions(), loadList()]).finally(() => {
+  pageInitialized = true
+})
+
+/**
+ * 页签重新激活时刷新模型、分类和表单，避免跨页面更新后继续展示旧缓存。
+ * @returns {Promise<void>} 首次加载后重新查询全部当前页面数据。
+ */
+onActivated(async () => {
+  if (!pageInitialized) return initialLoad
+  await Promise.all([loadOptions(), loadList()])
+})
 </script>
 
 <style scoped>
