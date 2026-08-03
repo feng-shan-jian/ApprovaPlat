@@ -120,12 +120,12 @@ test('任务详情页隔离审批对象与抄送对象目录', () => {
 })
 
 /**
- * 验证退回查询、普通动作提交和取消认领确认都冻结任务上下文，禁止晚到响应改绑其他任务。
+ * 验证直接退回、普通动作提交和取消认领确认都冻结任务上下文，禁止晚到响应改绑其他任务。
  * @returns {void} 任一异步动作重新读取可变任务主键或缺少上下文复核时断言失败。
  */
 test('任务详情异步动作冻结流程任务上下文', () => {
   assert.match(detailSource,
-    /const returnContext = freezeCurrentTaskContext\(\)[\s\S]*?listReturnableTasks\(\{ taskId: returnContext\.taskId \}\)[\s\S]*?if \(!isCurrentTaskContext\(returnContext\)\) return[\s\S]*?bindActionDialogTaskContext\(returnContext\)/)
+    /const returnContext = freezeCurrentTaskContext\(\)[\s\S]*?if \(!isCurrentTaskContext\(returnContext\)\) return[\s\S]*?bindActionDialogTaskContext\(returnContext\)/)
   assert.match(detailSource,
     /const actionContext = currentActionDialogTaskContext\(\)[\s\S]*?const taskId = actionContext\.taskId[\s\S]*?if \(!currentActionDialogTaskContext\(\)[\s\S]*?returnTask\(\{ taskId,/)
   assert.match(detailSource,

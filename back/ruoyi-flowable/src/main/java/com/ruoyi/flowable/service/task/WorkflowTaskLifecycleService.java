@@ -20,6 +20,7 @@ import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.FlowNode;
 import org.flowable.bpmn.model.ParallelGateway;
 import org.flowable.bpmn.model.SequenceFlow;
+import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.engine.HistoryService;
@@ -34,6 +35,8 @@ import org.flowable.engine.task.Comment;
 import org.flowable.task.api.DelegationState;
 import org.flowable.task.api.Task;
 import org.flowable.task.api.history.HistoricTaskInstance;
+import org.flowable.identitylink.api.IdentityLink;
+import org.flowable.identitylink.api.IdentityLinkType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
@@ -41,12 +44,11 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessCancelRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowApplicationResubmitRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessRevokeRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskRejectRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnListRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnRequest;
-import com.ruoyi.flowable.domain.vo.WorkflowReturnNodeView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
@@ -99,6 +101,20 @@ public class WorkflowTaskLifecycleService
 
     /** 驳回后的稳定流程状态，必须与管理员终止 terminated 保持不同业务语义。 */
     private static final String REJECTED_STATUS = "rejected";
+
+    /** 申请退回发起人修改期间的稳定业务状态。 */
+    static final String RETURNED_STATUS = "returned";
+
+    /** 退回任务局部保存首审原办理配置的内部变量。 */
+    static final String RETURN_ASSIGNMENT_VARIABLE =
+            "__ruoyi_workflow_return_assignment";
+
+    /** 退回任务局部保存原发起人主键，供任务监听器严格识别非审批办理人。 */
+    static final String RETURN_APPLICANT_VARIABLE =
+            "__ruoyi_workflow_return_applicant";
+
+    /** 重新提交由系统生成的审计说明，申请人无需填写审批意见。 */
+    private static final String RESUBMIT_AUDIT_OPINION = "申请人修改原表单后重新提交";
 
     /** 已办列表计算撤回能力时可安全降级为 false 的预期业务状态码。 */
     private static final Set<Integer> REVOKE_INELIGIBLE_STATUS_CODES = Set.of(
@@ -632,28 +648,35 @@ public class WorkflowTaskLifecycleService
             throw invalidArgument();
         }
         String taskId = requireId(request.taskId());
-        String requestedTarget = requireId(request.targetKey());
         String opinion = requireOpinion(request.comment());
         engineOperations.writeAsCurrentUser(actor ->
         {
             Task task = requireActiveTask(taskId);
-            requireActiveProcessInstance(task.getProcessInstanceId());
+            ProcessInstance processInstance = requireActiveProcessInstance(task.getProcessInstanceId());
             requireCurrentAssignee(task, actor);
             requireMovableTask(task);
-
+            if (!WorkflowProcessStartService.RUNNING_STATUS.equals(runtimeService.getVariable(
+                    processInstance.getId(), WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)))
+            {
+                throw conflict();
+            }
+            if (!StringUtils.hasText(processInstance.getStartUserId()))
+            {
+                throw dataError();
+            }
             BpmnContext context = requireBpmnContext(task.getProcessDefinitionId());
             UserTask currentNode = movementPolicy.requireMainProcessReturnSource(context.model(),
                     context.definition().getKey(), task.getTaskDefinitionKey());
-            ReturnExecutionPlan returnPlan = prepareReturnExecutionPlan(task, currentNode);
-            List<WorkflowReturnNodeView> legalNodes = findLegalReturnNodes(task, context, currentNode);
-            String targetKey = movementPolicy.requireLegalReturnTarget(requestedTarget, legalNodes);
+            String targetKey = requireFirstApprovalNode(task, context, currentNode);
+            List<Task> activeTasks = requireReturnableActiveTasks(task);
+            String executionId = activeTasks.get(0).getExecutionId();
             WorkflowTaskCopyService.CopyPlan copyPlan = taskCopyService.prepare(
                     WorkflowTaskCopyAction.RETURN, task, actor, request.copyUserIds());
 
             executeConcurrentSensitive(() ->
             {
-                // 退回只接受单一安全 execution；多实例与并行来源在任何审计和引擎写入前返回 409。
-                for (Task activeTask : returnPlan.activeTasks())
+                // 退回只处理唯一活动审批分支；并行、会签和多实例结构在写审计前已被拒绝。
+                for (Task activeTask : activeTasks)
                 {
                     // 退回任务关系已由 Flowable comment 的 taskId 固化；sourceTaskId 仅表示撤回来源，不能混入退回契约。
                     addAuditComment(activeTask, RETURN_COMMENT_TYPE, "RETURN",
@@ -661,31 +684,102 @@ public class WorkflowTaskLifecycleService
                 }
                 var stateBuilder = runtimeService.createChangeActivityStateBuilder()
                         .processInstanceId(task.getProcessInstanceId());
-                stateBuilder.moveExecutionToActivityId(
-                        returnPlan.executionIds().get(0), targetKey);
+                stateBuilder.moveExecutionToActivityId(executionId, targetKey);
                 stateBuilder.changeState();
+                Task returnedTask = requireSingleActiveTask(task.getProcessInstanceId(), targetKey);
+                ReturnedAssignmentSnapshot assignment = captureAssignment(returnedTask);
+                taskService.setVariableLocal(returnedTask.getId(), RETURN_ASSIGNMENT_VARIABLE,
+                        encodeReturnedAssignment(assignment));
+                taskService.setVariableLocal(returnedTask.getId(), RETURN_APPLICANT_VARIABLE,
+                        processInstance.getStartUserId());
+                removeCandidateLinks(returnedTask.getId());
+                taskService.setOwner(returnedTask.getId(), null);
+                runtimeService.setVariable(task.getProcessInstanceId(),
+                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, RETURNED_STATUS);
+                runtimeService.updateBusinessStatus(task.getProcessInstanceId(), RETURNED_STATUS);
+                // 内部发起人标记已落到同一任务后再改派，监听器只对该受控退回场景放宽审批资格。
+                taskService.setAssignee(returnedTask.getId(), processInstance.getStartUserId());
                 taskCopyService.persist(copyPlan);
-                verifyReturnResult(task.getProcessInstanceId(), targetKey,
-                        returnPlan.activeTasks());
+                verifyReturnedApplication(returnedTask.getId(), processInstance.getStartUserId());
             });
             return null;
         });
     }
 
     /**
-     * 为当前办理人查询同一事务快照下的实时合法可退节点。
+     * 由发起人保存修改后的原申请表，并恢复首个审批节点在退回前固化的办理配置。
      *
-     * @param request WorkflowTaskReturnListRequest，当前活动任务主键
-     * @return List&lt;WorkflowReturnNodeView&gt;，按最近历史优先排列的可退节点
+     * @param request WorkflowApplicationResubmitRequest，退回任务和覆盖后的开始表单变量
+     * @return 无返回值，表单变量、附件、快照、审计、办理配置和流程状态同事务提交
      */
-    public List<WorkflowReturnNodeView> findReturnTaskList(WorkflowTaskReturnListRequest request)
+    public void resubmitApplication(WorkflowApplicationResubmitRequest request)
     {
         if (request == null)
         {
             throw invalidArgument();
         }
         String taskId = requireId(request.taskId());
-        return engineOperations.read(() -> loadReturnTaskList(taskId));
+        engineOperations.writeAsCurrentUser(actor ->
+        {
+            Task task = requireActiveTask(taskId);
+            ProcessInstance instance = requireActiveProcessInstance(task.getProcessInstanceId());
+            requireCurrentAssignee(task, actor);
+            if (!actor.userId().equals(instance.getStartUserId()))
+            {
+                throw forbidden();
+            }
+            if (!RETURNED_STATUS.equals(runtimeService.getVariable(
+                    instance.getId(), WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)))
+            {
+                throw conflict();
+            }
+            Object rawAssignment = taskService.getVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE);
+            if (!(rawAssignment instanceof String assignmentJson) || !StringUtils.hasText(assignmentJson))
+            {
+                throw conflict();
+            }
+            Object returnedApplicant = taskService.getVariableLocal(taskId,
+                    RETURN_APPLICANT_VARIABLE);
+            if (!actor.userId().equals(returnedApplicant)
+                    || !instance.getStartUserId().equals(returnedApplicant))
+            {
+                throw conflict();
+            }
+            ReturnedAssignmentSnapshot assignment = decodeReturnedAssignment(assignmentJson);
+            WfDeployForm startForm = requireStartFormSnapshot(task);
+            WorkflowValidatedStartVariables validated = variableValidator.validateForStart(
+                    startForm.getContent(), request.variables());
+            Map<String, Object> projected = attachmentService.prepareTaskVariables(
+                    actor.userId(), instance.getId(), validated.variables(),
+                    validated.attachmentIdsByField());
+
+            executeConcurrentSensitive(() ->
+            {
+                // 开始表单附件允许复用同实例已绑定文件，新文件仍与本次真实重新提交任务绑定并参与回滚。
+                attachmentService.bindTaskAttachments(actor.userId(), instance.getId(), taskId,
+                        startForm.getNodeKey(), validated.attachmentIdsByField());
+                replaceStartFormVariables(instance, startForm, projected);
+                runtimeService.setVariable(instance.getId(),
+                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
+                        WorkflowFormSubmissionSnapshotCodec.encodeStart(
+                                instance.getDeploymentId(), startForm.getFormId(),
+                                startForm.getFormKey(), startForm.getNodeKey(), projected));
+                addAuditComment(task, COMPLETE_COMMENT_TYPE, "RESUBMIT",
+                        actor.userId(), RESUBMIT_AUDIT_OPINION,
+                        task.getTaskDefinitionKey(), null);
+                // 先删除退回专用标记，恢复首审批人时必须重新走完整审批资格校验。
+                taskService.removeVariableLocal(taskId, RETURN_APPLICANT_VARIABLE);
+                restoreAssignment(taskId, assignment);
+                taskService.removeVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE);
+                runtimeService.setVariable(instance.getId(),
+                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
+                        WorkflowProcessStartService.RUNNING_STATUS);
+                runtimeService.updateBusinessStatus(instance.getId(),
+                        WorkflowProcessStartService.RUNNING_STATUS);
+                verifyResubmittedApplication(taskId, assignment);
+            });
+            return null;
+        });
     }
 
     /**
@@ -698,9 +792,28 @@ public class WorkflowTaskLifecycleService
     {
         return engineOperations.readWithServiceExceptionHandler(() ->
         {
-            // 能力投影与正式 returnList 复用同一准备链，页面不能依据多实例字段近似猜测。
+            // 能力投影复用直接退回发起人的对象、执行树和首审批历史准备链。
             String normalizedTaskId = requireId(taskId);
-            return !loadReturnTaskList(normalizedTaskId).isEmpty();
+            WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
+            Task task = requireActiveTask(normalizedTaskId);
+            ProcessInstance instance = requireActiveProcessInstance(task.getProcessInstanceId());
+            requireCurrentAssignee(task, actor);
+            requireMovableTask(task);
+            if (!WorkflowProcessStartService.RUNNING_STATUS.equals(runtimeService.getVariable(
+                    instance.getId(), WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)))
+            {
+                throw conflict();
+            }
+            if (!StringUtils.hasText(instance.getStartUserId()))
+            {
+                throw dataError();
+            }
+            BpmnContext context = requireBpmnContext(task.getProcessDefinitionId());
+            UserTask currentNode = movementPolicy.requireMainProcessReturnSource(context.model(),
+                    context.definition().getKey(), task.getTaskDefinitionKey());
+            requireFirstApprovalNode(task, context, currentNode);
+            requireReturnableActiveTasks(task);
+            return true;
         }, exception ->
         {
             // 预期权限、对象和状态分支只关闭按钮；数据损坏类 500 必须继续阻断详情。
@@ -710,27 +823,6 @@ public class WorkflowTaskLifecycleService
             }
             throw exception;
         });
-    }
-
-    /**
-     * 在当前只读事务快照中执行正式退回的全部查询前置校验并计算合法目标。
-     *
-     * @param taskId String，已经过长度和非空校验的活动任务主键
-     * @return List&lt;WorkflowReturnNodeView&gt;，按最近历史优先排列的合法退回目标
-     */
-    private List<WorkflowReturnNodeView> loadReturnTaskList(String taskId)
-    {
-        WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-        Task task = requireActiveTask(taskId);
-        requireActiveProcessInstance(task.getProcessInstanceId());
-        requireCurrentAssignee(task, actor);
-        requireMovableTask(task);
-
-        BpmnContext context = requireBpmnContext(task.getProcessDefinitionId());
-        UserTask currentNode = movementPolicy.requireMainProcessReturnSource(context.model(),
-                context.definition().getKey(), task.getTaskDefinitionKey());
-        prepareReturnExecutionPlan(task, currentNode);
-        return findLegalReturnNodes(task, context, currentNode);
     }
 
     /**
@@ -851,42 +943,6 @@ public class WorkflowTaskLifecycleService
         }
         String value = localScope.get(0).getValue();
         return "true".equalsIgnoreCase(value) || "1".equals(value);
-    }
-
-    /**
-     * 读取当前任务之前正常结束的历史任务并计算合法可退节点。
-     *
-     * @param task Task，当前活动任务
-     * @param context BpmnContext，当前任务对应的定义和 BPMN 主流程
-     * @param currentNode UserTask，当前活动 BPMN 用户任务节点
-     * @return List&lt;WorkflowReturnNodeView&gt;，实时合法可退节点
-     */
-    private List<WorkflowReturnNodeView> findLegalReturnNodes(Task task, BpmnContext context,
-            UserTask currentNode)
-    {
-        List<HistoricTaskInstance> historicTasks = historyService.createHistoricTaskInstanceQuery()
-                .processInstanceId(task.getProcessInstanceId())
-                .finished()
-                .orderByHistoricTaskInstanceEndTime()
-                .desc()
-                .list();
-        if (historicTasks == null)
-        {
-            throw dataError();
-        }
-        Date currentCreateTime = task.getCreateTime();
-        List<HistoricTaskInstance> completedBeforeCurrent = new ArrayList<>();
-        for (HistoricTaskInstance historicTask : historicTasks)
-        {
-            if (historicTask != null && historicTask.getEndTime() != null
-                    && task.getProcessDefinitionId().equals(historicTask.getProcessDefinitionId())
-                    && (currentCreateTime == null || !historicTask.getEndTime().after(currentCreateTime)))
-            {
-                completedBeforeCurrent.add(historicTask);
-            }
-        }
-        return movementPolicy.findLegalReturnNodes(context.process(), currentNode,
-                completedBeforeCurrent);
     }
 
     /**
@@ -1768,6 +1824,341 @@ public class WorkflowTaskLifecycleService
     }
 
     /**
+     * 从当前实例真实历史中确定首个审批节点，避免按静态网关条件猜测重新流转入口。
+     *
+     * @param task Task，当前审批任务
+     * @param context BpmnContext，当前部署 BPMN 上下文
+     * @param currentNode UserTask，当前活动且已通过安全边界校验的审批节点
+     * @return String，该实例最早创建的主流程用户任务节点 key
+     */
+    private String requireFirstApprovalNode(Task task, BpmnContext context, UserTask currentNode)
+    {
+        List<HistoricTaskInstance> historicTasks = historyService.createHistoricTaskInstanceQuery()
+                .processInstanceId(task.getProcessInstanceId())
+                .orderByHistoricTaskInstanceStartTime().asc()
+                .listPage(0, 500);
+        if (historicTasks == null || historicTasks.isEmpty() || historicTasks.size() > 500)
+        {
+            throw conflict();
+        }
+        for (HistoricTaskInstance historicTask : historicTasks)
+        {
+            if (historicTask != null && StringUtils.hasText(historicTask.getTaskDefinitionKey())
+                    && context.process().getFlowElement(
+                            historicTask.getTaskDefinitionKey(), false) instanceof UserTask targetNode)
+            {
+                // 重新执行前只允许首个历史审批节点到当前节点存在完整安全路径，避免重建服务任务、边界事件或并行副作用。
+                movementPolicy.requireSafeDirectReturnPath(context.process(), targetNode, currentNode);
+                return historicTask.getTaskDefinitionKey();
+            }
+        }
+        throw conflict();
+    }
+
+    /**
+     * 冻结同一主流程实例的唯一活动审批任务及 execution，供整申请一次性退回。
+     *
+     * @param sourceTask Task，触发退回的当前任务
+     * @return List&lt;Task&gt;，只包含当前来源任务的不可变单元素集合
+     */
+    private List<Task> requireReturnableActiveTasks(Task sourceTask)
+    {
+        List<Task> activeTasks = taskService.createTaskQuery()
+                .processInstanceId(sourceTask.getProcessInstanceId()).active().list();
+        if (activeTasks == null || activeTasks.size() != 1
+                || activeTasks.get(0) == null
+                || !sourceTask.getId().equals(activeTasks.get(0).getId())
+                || !StringUtils.hasText(activeTasks.get(0).getExecutionId())
+                || !sourceTask.getProcessDefinitionId().equals(
+                        activeTasks.get(0).getProcessDefinitionId()))
+        {
+            throw conflict();
+        }
+        return List.copyOf(activeTasks);
+    }
+
+    /**
+     * 读取状态迁移后唯一的首审批任务，拒绝引擎未合并或节点关系漂移。
+     *
+     * @param processInstanceId String，流程实例主键
+     * @param targetKey String，首个审批节点 key
+     * @return Task，重新创建的唯一活动任务
+     */
+    private Task requireSingleActiveTask(String processInstanceId, String targetKey)
+    {
+        List<Task> tasks = taskService.createTaskQuery().processInstanceId(processInstanceId)
+                .active().list();
+        if (tasks == null || tasks.size() != 1
+                || !targetKey.equals(tasks.get(0).getTaskDefinitionKey()))
+        {
+            throw conflict();
+        }
+        return tasks.get(0);
+    }
+
+    /**
+     * 固化首审批任务由 BPMN 创建出的原办理人、所有者和候选关系。
+     *
+     * @param task Task，状态迁移后刚创建的首审批任务
+     * @return ReturnedAssignmentSnapshot，可在发起人重新提交时精确恢复的身份快照
+     */
+    private ReturnedAssignmentSnapshot captureAssignment(Task task)
+    {
+        List<IdentityLink> links = taskService.getIdentityLinksForTask(task.getId());
+        if (links == null)
+        {
+            throw dataError();
+        }
+        LinkedHashSet<String> candidateUsers = new LinkedHashSet<>();
+        LinkedHashSet<String> candidateGroups = new LinkedHashSet<>();
+        for (IdentityLink link : links)
+        {
+            if (link == null || !IdentityLinkType.CANDIDATE.equals(link.getType()))
+            {
+                continue;
+            }
+            if (StringUtils.hasText(link.getUserId()))
+            {
+                candidateUsers.add(link.getUserId());
+            }
+            else if (StringUtils.hasText(link.getGroupId()))
+            {
+                candidateGroups.add(link.getGroupId());
+            }
+            else
+            {
+                throw dataError();
+            }
+        }
+        if (!StringUtils.hasText(task.getAssignee()) && candidateUsers.isEmpty()
+                && candidateGroups.isEmpty())
+        {
+            throw conflict();
+        }
+        return new ReturnedAssignmentSnapshot(task.getAssignee(), task.getOwner(),
+                List.copyOf(candidateUsers), List.copyOf(candidateGroups));
+    }
+
+    /**
+     * 删除任务的候选关系，使退回修改期间只有发起人能看到和操作该任务。
+     *
+     * @param taskId String，退回后首审批任务主键
+     * @return 无返回值，候选关系异常时抛出数据错误并回滚
+     */
+    private void removeCandidateLinks(String taskId)
+    {
+        List<IdentityLink> links = taskService.getIdentityLinksForTask(taskId);
+        if (links == null)
+        {
+            throw dataError();
+        }
+        for (IdentityLink link : links)
+        {
+            if (link == null || !IdentityLinkType.CANDIDATE.equals(link.getType()))
+            {
+                continue;
+            }
+            if (StringUtils.hasText(link.getUserId()))
+            {
+                taskService.deleteCandidateUser(taskId, link.getUserId());
+            }
+            else if (StringUtils.hasText(link.getGroupId()))
+            {
+                taskService.deleteCandidateGroup(taskId, link.getGroupId());
+            }
+            else
+            {
+                throw dataError();
+            }
+        }
+    }
+
+    /**
+     * 恢复退回前由 BPMN 首审批节点生成的正式办理配置。
+     *
+     * @param taskId String，发起人修改任务主键
+     * @param assignment ReturnedAssignmentSnapshot，退回时固化的原办理配置
+     * @return 无返回值，恢复结果由后续写后校验确认
+     */
+    private void restoreAssignment(String taskId, ReturnedAssignmentSnapshot assignment)
+    {
+        taskService.setOwner(taskId, assignment.owner());
+        taskService.setAssignee(taskId, assignment.assignee());
+        assignment.candidateUserIds().forEach(userId ->
+                taskService.addCandidateUser(taskId, userId));
+        assignment.candidateGroupIds().forEach(groupId ->
+                taskService.addCandidateGroup(taskId, groupId));
+    }
+
+    /**
+     * 查询该实例实际执行的开始节点对应部署表单快照。
+     *
+     * @param task Task，退回修改任务
+     * @return WfDeployForm，原部署开始表单的不可变快照
+     */
+    private WfDeployForm requireStartFormSnapshot(Task task)
+    {
+        var starts = historyService.createHistoricActivityInstanceQuery()
+                .processInstanceId(task.getProcessInstanceId()).activityType("startEvent")
+                .orderByHistoricActivityInstanceStartTime().asc().listPage(0, 2);
+        if (starts == null || starts.size() != 1
+                || !StringUtils.hasText(starts.get(0).getActivityId()))
+        {
+            throw dataError();
+        }
+        BpmnContext context = requireBpmnContext(task.getProcessDefinitionId());
+        if (!(context.process().getFlowElement(starts.get(0).getActivityId(), false)
+                instanceof StartEvent))
+        {
+            throw dataError();
+        }
+        List<WfDeployForm> snapshots = deployFormMapper.selectByDeploymentId(
+                context.definition().getDeploymentId());
+        if (snapshots == null)
+        {
+            throw dataError();
+        }
+        List<WfDeployForm> matches = snapshots.stream().filter(snapshot -> snapshot != null
+                && starts.get(0).getActivityId().equals(snapshot.getNodeKey())).toList();
+        if (matches.size() != 1 || !StringUtils.hasText(matches.get(0).getContent()))
+        {
+            throw conflict();
+        }
+        return matches.get(0);
+    }
+
+    /**
+     * 使用最新提交完整覆盖原开始表单变量，同时保留流程状态等服务端内部变量。
+     *
+     * @param instance ProcessInstance，当前退回修改流程实例
+     * @param startForm WfDeployForm，原部署开始表单不可变快照
+     * @param projected Map&lt;String, Object&gt;，校验及附件投影后的完整新表单值
+     * @return 无返回值，旧表单中已删除的字段被移除，新字段和值随后同事务写入
+     */
+    private void replaceStartFormVariables(ProcessInstance instance, WfDeployForm startForm,
+            Map<String, Object> projected)
+    {
+        Object rawSnapshot = runtimeService.getVariable(instance.getId(),
+                WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME);
+        if (!(rawSnapshot instanceof String encodedSnapshot)
+                || !StringUtils.hasText(encodedSnapshot))
+        {
+            throw dataError();
+        }
+        WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot previous =
+                WorkflowFormSubmissionSnapshotCodec.decode(encodedSnapshot);
+        if (previous.kind() != WorkflowFormSubmissionSnapshotCodec.SnapshotKind.START
+                || !Objects.equals(instance.getDeploymentId(), previous.deploymentId())
+                || !Objects.equals(startForm.getFormId(), previous.formId())
+                || !Objects.equals(startForm.getFormKey(), previous.formKey())
+                || !Objects.equals(startForm.getNodeKey(), previous.nodeKey()))
+        {
+            throw dataError();
+        }
+
+        // 只删除上一次开始表单快照确认拥有的字段，不能触碰流程状态、办理配置等内部变量。
+        LinkedHashSet<String> removedFields = new LinkedHashSet<>(previous.values().keySet());
+        removedFields.removeAll(projected.keySet());
+        if (!removedFields.isEmpty())
+        {
+            runtimeService.removeVariables(instance.getId(), removedFields);
+        }
+        if (!projected.isEmpty())
+        {
+            runtimeService.setVariables(instance.getId(), projected);
+        }
+    }
+
+    /**
+     * 序列化退回首审批办理配置，供同一任务局部变量持久化。
+     *
+     * @param assignment ReturnedAssignmentSnapshot，原办理配置
+     * @return String，受控 JSON 正文
+     */
+    private String encodeReturnedAssignment(ReturnedAssignmentSnapshot assignment)
+    {
+        try
+        {
+            return AUDIT_MAPPER.writeValueAsString(assignment);
+        }
+        catch (RuntimeException exception)
+        {
+            throw dataError();
+        }
+    }
+
+    /**
+     * 解码并校验退回首审批办理配置。
+     *
+     * @param encoded String，任务局部变量中的受控 JSON
+     * @return ReturnedAssignmentSnapshot，结构完整的原办理配置
+     */
+    private ReturnedAssignmentSnapshot decodeReturnedAssignment(String encoded)
+    {
+        try
+        {
+            ReturnedAssignmentSnapshot snapshot = AUDIT_MAPPER.readValue(
+                    encoded, ReturnedAssignmentSnapshot.class);
+            if (snapshot == null || (!StringUtils.hasText(snapshot.assignee())
+                    && snapshot.candidateUserIds().isEmpty()
+                    && snapshot.candidateGroupIds().isEmpty()))
+            {
+                throw conflict();
+            }
+            return snapshot;
+        }
+        catch (ServiceException exception)
+        {
+            throw exception;
+        }
+        catch (RuntimeException exception)
+        {
+            throw dataError();
+        }
+    }
+
+    /**
+     * 校验退回后任务、独占办理人和流程状态均已真实写入。
+     *
+     * @param taskId String，退回后任务主键
+     * @param startUserId String，流程发起人主键
+     * @return 无返回值，不一致时抛出冲突并回滚
+     */
+    private void verifyReturnedApplication(String taskId, String startUserId)
+    {
+        Task task = taskService.createTaskQuery().taskId(taskId).active().singleResult();
+        if (task == null || !startUserId.equals(task.getAssignee())
+                || !startUserId.equals(taskService.getVariableLocal(
+                        taskId, RETURN_APPLICANT_VARIABLE))
+                || !RETURNED_STATUS.equals(runtimeService.getVariable(
+                        task.getProcessInstanceId(),
+                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)))
+        {
+            throw conflict();
+        }
+    }
+
+    /**
+     * 校验重新提交后首审批办理配置及运行状态已经恢复。
+     *
+     * @param taskId String，重新开放的首审批任务主键
+     * @param assignment ReturnedAssignmentSnapshot，预期原办理配置
+     * @return 无返回值，不一致时抛出冲突并回滚
+     */
+    private void verifyResubmittedApplication(String taskId,
+            ReturnedAssignmentSnapshot assignment)
+    {
+        Task task = taskService.createTaskQuery().taskId(taskId).active().singleResult();
+        if (task == null || !Objects.equals(assignment.assignee(), task.getAssignee())
+                || !WorkflowProcessStartService.RUNNING_STATUS.equals(runtimeService.getVariable(
+                        task.getProcessInstanceId(),
+                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)))
+        {
+            throw conflict();
+        }
+    }
+
+    /**
      * 把服务端固定动作、当前身份和受控业务意见序列化为结构化审计 JSON。
      *
      * @param action String，服务端固定动作编码
@@ -2007,6 +2398,33 @@ public class WorkflowTaskLifecycleService
     private record BpmnContext(ProcessDefinition definition, BpmnModel model,
             org.flowable.bpmn.model.Process process)
     {
+    }
+
+    /**
+     * 退回时固化的首审批任务办理配置。
+     *
+     * @param assignee String，原直接办理人，候选任务时为空
+     * @param owner String，原任务所有者，允许为空
+     * @param candidateUserIds List&lt;String&gt;，原候选用户主键
+     * @param candidateGroupIds List&lt;String&gt;，原候选组编码
+     */
+    private record ReturnedAssignmentSnapshot(String assignee, String owner,
+            List<String> candidateUserIds, List<String> candidateGroupIds)
+    {
+        /**
+         * 创建不可变办理配置并拒绝空集合引用。
+         *
+         * @param assignee String，原直接办理人
+         * @param owner String，原所有者
+         * @param candidateUserIds List&lt;String&gt;，原候选用户
+         * @param candidateGroupIds List&lt;String&gt;，原候选组
+         * @return 无返回值，候选集合复制为不可修改集合
+         */
+        private ReturnedAssignmentSnapshot
+        {
+            candidateUserIds = List.copyOf(Objects.requireNonNull(candidateUserIds));
+            candidateGroupIds = List.copyOf(Objects.requireNonNull(candidateGroupIds));
+        }
     }
 
     /**

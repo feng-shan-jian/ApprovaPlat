@@ -114,7 +114,7 @@ final class WorkflowRbacAllowFixture
             "WfTaskController#getMultiInstanceState",
             "WfTaskController#adjustMultiInstance", "WfTaskController#complete",
             "WfTaskController#reject", "WfTaskController#returnTask",
-            "WfTaskController#returnList", "WfTaskController#claim",
+            "WfTaskController#resubmit", "WfTaskController#claim",
             "WfTaskController#unClaim", "WfTaskController#resolve",
             "WfTaskController#delegate", "WfTaskController#transfer",
             "WfTaskController#diagram");
@@ -1236,7 +1236,6 @@ final class WorkflowRbacAllowFixture
                 ProcessFixture fixture = secondTaskReady(roleKey);
                 callJson(roleKey, endpoint, "/workflow/task/return",
                         json(Map.of("taskId", fixture.taskId(),
-                                "targetKey", "firstReview",
                                 "comment", "RBAC真实退回", "copyUserIds", List.of())));
                 Task returned = taskService.createTaskQuery()
                         .processInstanceId(fixture.instanceId())
@@ -1245,12 +1244,45 @@ final class WorkflowRbacAllowFixture
                 assertHasComments(fixture.instanceId());
                 yield Execution.passedJson();
             }
-            case "returnList" ->
+            case "resubmit" ->
             {
-                ProcessFixture fixture = secondTaskReady(roleKey);
-                JsonNode body = callJson(roleKey, endpoint, "/workflow/task/returnList",
-                        json(Map.of("taskId", fixture.taskId())));
-                assertThat(arrayContains(body.path("data"), "id", "firstReview")).isTrue();
+                ProcessDefinition definition = definition(START_KEY);
+                String taskRole = approvalAssigneeRole(roleKey);
+                String businessKey = uniqueBusinessKey("http-resubmit");
+                JsonNode startBody = callJsonRaw(roleKey,
+                        "/workflow/process/start/" + encode(definition.getId()), "POST",
+                        json(Map.of("businessKey", businessKey,
+                                "variables", Map.of("note", "退回前内容",
+                                        "reviewAssignee", String.valueOf(
+                                                roleUserIds.get(taskRole))))), true);
+                String instanceId = startBody.path("data").path("processInstanceId").asText();
+                Task approvalTask = taskService.createTaskQuery()
+                        .processInstanceId(instanceId).active().singleResult();
+                requireFixture(approvalTask != null,
+                        "ALLOW_FIXTURE_RESUBMIT_APPROVAL_TASK_MISSING");
+                callJsonRaw(taskRole, "/workflow/task/return", "POST",
+                        json(Map.of("taskId", approvalTask.getId(),
+                                "comment", "请修改原表单", "copyUserIds", List.of())), true);
+                Task returnedTask = taskService.createTaskQuery()
+                        .processInstanceId(instanceId).active()
+                        .taskAssignee(String.valueOf(roleUserIds.get(roleKey))).singleResult();
+                requireFixture(returnedTask != null,
+                        "ALLOW_FIXTURE_RESUBMIT_RETURNED_TASK_MISSING");
+
+                callJson(roleKey, endpoint, "/workflow/task/resubmit",
+                        json(Map.of("taskId", returnedTask.getId(),
+                                "variables", Map.of("note", "修改后内容",
+                                        "reviewAssignee", String.valueOf(
+                                                roleUserIds.get(taskRole))))));
+                Task restoredTask = taskService.createTaskQuery()
+                        .processInstanceId(instanceId).active().singleResult();
+                requireFixture(restoredTask != null
+                                && String.valueOf(roleUserIds.get(taskRole))
+                                        .equals(restoredTask.getAssignee()),
+                        "ALLOW_FIXTURE_RESUBMIT_ASSIGNMENT_NOT_RESTORED");
+                requireFixture("running".equals(runtimeService.getVariable(
+                                instanceId, "processStatus")),
+                        "ALLOW_FIXTURE_RESUBMIT_STATUS_NOT_RUNNING");
                 yield Execution.passedJson();
             }
             case "claim" ->

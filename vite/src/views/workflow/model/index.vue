@@ -288,10 +288,12 @@ function resetQuery() {
 }
 
 /**
- * 打开新增模型对话框。
- * @returns {void} 清空旧编辑状态后显示对话框。
+ * 使用最新分类和表单选项打开新增模型对话框。
+ * @returns {Promise<void>} 基础选项刷新成功后清空旧编辑状态并显示对话框。
  */
-function openCreate() {
+async function openCreate() {
+  // 模型页会被页签缓存；打开对话框前重新查询，确保刚新增的分类无需刷新页面即可选择。
+  await loadOptions()
   Object.assign(form, createEmptyForm())
   dialogOpen.value = true
   nextTick(() => formRef.value?.clearValidate())
@@ -304,7 +306,8 @@ function openCreate() {
  */
 async function openEdit(row) {
   const modelId = row?.modelId || selectedIds.value[0]
-  const response = await getModel(modelId)
+  // 详情与选项并行刷新，既保证分类数据最新，也避免串行请求拖慢编辑入口。
+  const [response] = await Promise.all([getModel(modelId), loadOptions()])
   Object.assign(form, createEmptyForm(), response.data)
   dialogOpen.value = true
   nextTick(() => formRef.value?.clearValidate())

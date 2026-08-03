@@ -137,27 +137,16 @@ async function submitUserTaskAction(page, action, targetRoleKey, targetOption, c
 }
 
 /**
- * 在详情页查询服务端实时可退节点并提交退回动作。
+ * 在详情页直接把整条申请退回发起人修改。
  * @param {import('@playwright/test').Page} page 当前任务办理人页面。
- * @param {string} targetNodeName 服务端返回的目标节点显示名称。
  * @param {string} comment 退回原因。
- * @returns {Promise<void>} 可退节点查询和退回写接口均成功后结束。
+ * @returns {Promise<void>} 退回写接口成功且弹窗关闭后结束。
  */
-async function returnTaskThroughUi(page, targetNodeName, comment) {
-  const returnListPromise = page.waitForResponse(response => matchesEndpoint(
-    response, '/workflow/task/returnList', 'POST'))
+async function returnTaskThroughUi(page, comment) {
   await page.getByRole('button', { name: '退回', exact: true }).click()
-  await expectAjaxSuccess(await returnListPromise, '/workflow/task/returnList')
   const dialog = page.getByRole('dialog', { name: '退回任务' })
   await expect(dialog).toBeVisible()
-  // Element Plus 的实际指针点击面是 wrapper；内部只读 input 可能被占位层覆盖，但仍用于校验控件角色唯一。
-  const targetField = dialog.locator('.el-form-item').filter({ hasText: '退回节点' })
-  const targetSelect = targetField.getByRole('combobox')
-  await expect(targetSelect, '退回弹窗必须展示唯一服务端节点选择器').toHaveCount(1)
-  await targetField.locator('.el-select__wrapper').click()
-  const option = page.locator('.el-select-dropdown:visible').getByText(targetNodeName, { exact: true })
-  await expect(option, '服务端实时可退节点必须包含目标节点').toBeVisible()
-  await option.click()
+  await expect(dialog.locator('.el-form-item').filter({ hasText: '退回节点' })).toHaveCount(0)
   await dialog.getByPlaceholder('请输入退回原因').fill(comment)
   const responsePromise = page.waitForResponse(response => matchesEndpoint(
     response, '/workflow/task/return', 'POST'))
@@ -346,8 +335,10 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
     // 静态办理人、委派对象、转办对象和候选人全部来自实时审批资格目录。
     const approver = await findWorkflowUserOption(pages.designer, 'workflow_approver', true)
     const admin = await findWorkflowUserOption(pages.designer, 'workflow_admin', true)
+    const starter = await findWorkflowUserOption(pages.designer, 'workflow_starter', false)
     expect(approver, '审批角色必须具备流程办理资格').not.toBeNull()
     expect(admin, '超级管理员必须遵循若依超级管理员审批权限语义').not.toBeNull()
+    expect(starter, '流程发起人必须存在于有效用户目录').not.toBeNull()
 
     const categoryName = `P3生命周期-${runId}`
     const categoryCode = `p3life_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
@@ -466,7 +457,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
         }), copyReadablePages)
     evidence.push({ scenario: 'normal', finalStatus: completedNormal.processStatus, deniedCode: 403, staleCode: 409 })
 
-    // 场景二：二级节点只允许管理员退回真实历史一级节点，旧任务重复退回必须冲突且无副作用。
+    // 场景二：二级审批直接退回发起人，发起人修改后重新提交并从一级审批重新开始。
     const returned = await startTrackedScenario(
       pages.starter, sequentialDefinition, formName, runId, 'return', resources.processInstanceIds)
     const returnA = await findAssignedWorkflowTask(
@@ -481,15 +472,28 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
     await expectRejectedWorkflowActionWithoutSideEffects(
       pages.admin, returned.processInstanceId, returnB.taskId, 403, expectedCode => callWorkflowApi(
         pages.approver, 'POST', '/workflow/task/return', {
-          data: { taskId: returnB.taskId, targetKey: 'reviewA', comment: '越权退回必须拒绝', copyUserIds: [] },
+          data: { taskId: returnB.taskId, comment: '越权退回必须拒绝', copyUserIds: [] },
           expectedCode
         }), copyReadablePages)
     await openTaskDetail(pages.admin, returned.processInstanceId, returnB.taskId)
-    await returnTaskThroughUi(pages.admin, '一级审批', '退回一级重新核验')
+    await returnTaskThroughUi(pages.admin, '申请资料需要修改')
+    const returnedDetail = await getWorkflowDetail(pages.starter, returned.processInstanceId)
+    expect(returnedDetail.processStatus).toBe('returned')
+    expect(returnedDetail.currentTask?.assignee).toBe(String(starter.value))
+    await pages.starter.goto(`/workflow/process-detail/${encodeURIComponent(returned.processInstanceId)}?source=own`)
+    await expect(pages.starter.getByText('待修改', { exact: true })).toBeVisible()
+    // 只编辑当前办理表单，避免同字段名的只读历史快照干扰用户操作。
+    await pages.starter.getByRole('tabpanel', { name: '办理表单' })
+      .getByPlaceholder('请输入申请主题').fill(`重新提交-${runId}`)
+    await pages.starter.getByRole('button', { name: '重新提交', exact: true }).click()
+    const resubmitPromise = pages.starter.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/task/resubmit', 'POST'))
+    await pages.starter.locator('.el-message-box').getByRole('button', { name: '确定', exact: true }).click()
+    await expectAjaxSuccess(await resubmitPromise, '/workflow/task/resubmit')
     const returnedA = await findAssignedWorkflowTask(
       pages.approver, sequentialProcessKey, 'reviewA', returned.processInstanceId)
     expect(String(returnedA.taskId)).not.toBe(String(returnA.taskId))
-    await expectActiveTaskState(pages.admin, returned.processInstanceId, returnedA.taskId, {
+    await expectActiveTaskState(pages.approver, returned.processInstanceId, returnedA.taskId, {
       taskDefinitionKey: 'reviewA', assignee: String(approver.value)
     })
     await expectWorkflowAudit(pages.admin, returned.processInstanceId, {
@@ -497,16 +501,16 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
       type: '2',
       action: 'RETURN',
       actorUserId: admin.value,
-      opinion: '退回一级重新核验',
+      opinion: '申请资料需要修改',
       targetNodeKey: 'reviewA'
     })
     await expectRejectedWorkflowActionWithoutSideEffects(
       pages.admin, returned.processInstanceId, returnedA.taskId, 409, expectedCode => callWorkflowApi(
         pages.admin, 'POST', '/workflow/task/return', {
-          data: { taskId: returnB.taskId, targetKey: 'reviewA', comment: '旧任务重复退回', copyUserIds: [] },
+          data: { taskId: returnB.taskId, comment: '旧任务重复退回', copyUserIds: [] },
           expectedCode
         }), copyReadablePages)
-    evidence.push({ scenario: 'return', finalStatus: 'running', activeNode: 'reviewA', deniedCode: 403, staleCode: 409 })
+    evidence.push({ scenario: 'return-resubmit', finalStatus: 'running', activeNode: 'reviewA', deniedCode: 403, staleCode: 409 })
 
     // 场景三：一级办理人从页面驳回整实例，持久化 rejected 终态并拒绝越权及终态重复驳回。
     const rejected = await startTrackedScenario(

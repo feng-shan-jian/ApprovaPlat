@@ -97,13 +97,11 @@ import com.ruoyi.flowable.domain.dto.WorkflowTaskClaimRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskDelegateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskRejectRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnListRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskTransferRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskUnclaimRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentityOptionView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
-import com.ruoyi.flowable.domain.vo.WorkflowReturnNodeView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowProcessEngineAdapter;
 import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
@@ -1607,11 +1605,8 @@ class FlowableEngineIT
             assertPersistedCommentCount(jdbcTemplate, completionInstance.getId(),
                 duplicateCompletionCommentBaseline);
 
-            List<WorkflowReturnNodeView> returnNodes = workflowTaskLifecycleService.findReturnTaskList(
-                new WorkflowTaskReturnListRequest(completionFinalTask.getId()));
-            assertThat(returnNodes).containsExactly(new WorkflowReturnNodeView("firstReview", "初审"));
             workflowTaskLifecycleService.returnTask(new WorkflowTaskReturnRequest(
-                completionFinalTask.getId(), "firstReview", "资料需要补充",
+                completionFinalTask.getId(), "资料需要补充",
                 List.of(ADAPTER_NON_CANDIDATE_USER_ID)));
             requireSingleTask(taskService, completionInstance.getId(), "firstReview");
             assertLifecycleAuditComment(taskService, completionInstance.getId(),
@@ -1828,8 +1823,8 @@ class FlowableEngineIT
             long parallelReturnCommentBaseline = countPersistedComments(
                 jdbcTemplate, parallelInstance.getId());
             assertWorkflowBusinessError(
-                () -> workflowTaskLifecycleService.findReturnTaskList(
-                    new WorkflowTaskReturnListRequest(parallelTask.getId())),
+                () -> workflowTaskLifecycleService.returnTask(new WorkflowTaskReturnRequest(
+                    parallelTask.getId(), "并行结构禁止退回")),
                 HttpStatus.CONFLICT,
                 "工作流状态已发生变化，请刷新后重试"
             );
@@ -1897,8 +1892,8 @@ class FlowableEngineIT
             long multiReturnCommentBaseline = countPersistedComments(
                 jdbcTemplate, multiInstance.getId());
             assertWorkflowBusinessError(
-                () -> workflowTaskLifecycleService.findReturnTaskList(
-                    new WorkflowTaskReturnListRequest(multiTask.getId())),
+                () -> workflowTaskLifecycleService.returnTask(new WorkflowTaskReturnRequest(
+                    multiTask.getId(), "多实例结构禁止退回")),
                 HttpStatus.CONFLICT,
                 "当前流程结构不支持该流转操作"
             );
@@ -1996,13 +1991,11 @@ class FlowableEngineIT
             long serviceCommentCount = jdbcTemplate.queryForObject(
                 "select count(*) from ACT_HI_COMMENT where PROC_INST_ID_ = ?",
                 Long.class, serviceInstance.getId());
-            assertThat(workflowTaskLifecycleService.findReturnTaskList(
-                new WorkflowTaskReturnListRequest(serviceCurrent.getId()))).isEmpty();
             assertWorkflowBusinessError(
                 () -> workflowTaskLifecycleService.returnTask(new WorkflowTaskReturnRequest(
-                    serviceCurrent.getId(), "serviceReturnSource", "禁止重复执行服务任务")),
+                    serviceCurrent.getId(), "禁止重复执行服务任务")),
                 HttpStatus.CONFLICT,
-                "退回节点已失效，请刷新后重试"
+                "当前流程结构不支持该流转操作"
             );
             assertThat(taskService.createTaskQuery().taskId(serviceCurrent.getId()).count()).isOne();
             assertThat(runtimeService.createExecutionQuery()
@@ -2022,13 +2015,11 @@ class FlowableEngineIT
             long boundaryCommentCount = jdbcTemplate.queryForObject(
                 "select count(*) from ACT_HI_COMMENT where PROC_INST_ID_ = ?",
                 Long.class, boundaryInstance.getId());
-            assertThat(workflowTaskLifecycleService.findReturnTaskList(
-                new WorkflowTaskReturnListRequest(boundaryCurrent.getId()))).isEmpty();
             assertWorkflowBusinessError(
                 () -> workflowTaskLifecycleService.returnTask(new WorkflowTaskReturnRequest(
-                    boundaryCurrent.getId(), "boundaryReturnSource", "禁止重建边界事件")),
+                    boundaryCurrent.getId(), "禁止重建边界事件")),
                 HttpStatus.CONFLICT,
-                "退回节点已失效，请刷新后重试"
+                "当前流程结构不支持该流转操作"
             );
             assertThat(taskService.createTaskQuery().taskId(boundaryCurrent.getId()).count()).isOne();
             assertThat(jdbcTemplate.queryForObject(

@@ -8,13 +8,16 @@ Type=simple
 User=ruoyi
 Group=ruoyi
 WorkingDirectory=/var/lib/ruoyi/current
-# 敏感数据库密码与令牌密钥仅由 root 可读的环境文件提供。
+# 数据库密码由 root 可读环境文件提供；Token 密钥可显式注入或由私有状态目录自动生成。
 EnvironmentFile=/etc/ruoyi/ruoyi.env
 ExecStart=/usr/bin/java -Xms256m -Xmx512m -XX:+ExitOnOutOfMemoryError -jar /var/lib/ruoyi/current/ruoyi-admin.jar --spring.config.additional-location=file:/etc/ruoyi/
 Restart=on-failure
 RestartSec=5
 SuccessExitStatus=143
 UMask=0077
+# 由 systemd 自动创建并持久化私有密钥目录，部署者无需手工创建或授权。
+StateDirectory=ruoyi-secrets
+StateDirectoryMode=0700
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

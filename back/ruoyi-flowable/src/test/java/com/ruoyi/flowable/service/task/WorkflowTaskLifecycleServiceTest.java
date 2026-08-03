@@ -34,6 +34,7 @@ import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.ParallelGateway;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.ServiceTask;
+import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.SubProcess;
 import org.flowable.bpmn.model.TimerEventDefinition;
 import org.flowable.bpmn.model.UserTask;
@@ -55,6 +56,8 @@ import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.task.api.history.HistoricTaskInstanceQuery;
 import org.flowable.engine.history.HistoricProcessInstanceQuery;
 import org.flowable.engine.history.HistoricProcessInstance;
+import org.flowable.engine.history.HistoricActivityInstance;
+import org.flowable.engine.history.HistoricActivityInstanceQuery;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -67,6 +70,7 @@ import com.ruoyi.flowable.domain.WfCopy;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessCancelRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessRevokeRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowApplicationResubmitRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskRejectRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnRequest;
@@ -118,6 +122,8 @@ class WorkflowTaskLifecycleServiceTest
 
     private HistoricProcessInstanceQuery historicProcessQuery;
 
+    private HistoricActivityInstanceQuery historicActivityQuery;
+
     private WfDeployFormMapper deployFormMapper;
 
     private WorkflowStartVariableValidator variableValidator;
@@ -154,6 +160,7 @@ class WorkflowTaskLifecycleServiceTest
         executionQuery = mock(ExecutionQuery.class, RETURNS_SELF);
         historicTaskQuery = mock(HistoricTaskInstanceQuery.class, RETURNS_SELF);
         historicProcessQuery = mock(HistoricProcessInstanceQuery.class, RETURNS_SELF);
+        historicActivityQuery = mock(HistoricActivityInstanceQuery.class, RETURNS_SELF);
         deployFormMapper = mock(WfDeployFormMapper.class);
         variableValidator = mock(WorkflowStartVariableValidator.class);
         attachmentService = mock(WorkflowAttachmentService.class);
@@ -168,6 +175,7 @@ class WorkflowTaskLifecycleServiceTest
         when(runtimeService.createExecutionQuery()).thenReturn(executionQuery);
         when(historyService.createHistoricTaskInstanceQuery()).thenReturn(historicTaskQuery);
         when(historyService.createHistoricProcessInstanceQuery()).thenReturn(historicProcessQuery);
+        when(historyService.createHistoricActivityInstanceQuery()).thenReturn(historicActivityQuery);
         // Flowable 部分查询方法声明在泛型父接口中，显式返回自身可避免 Mockito 擦除后返回 null。
         when(taskQuery.taskId(any())).thenReturn(taskQuery);
         when(taskQuery.processInstanceId(any())).thenReturn(taskQuery);
@@ -184,6 +192,11 @@ class WorkflowTaskLifecycleServiceTest
         when(historicTaskQuery.orderByHistoricTaskInstanceEndTime()).thenReturn(historicTaskQuery);
         when(historicTaskQuery.desc()).thenReturn(historicTaskQuery);
         when(historicProcessQuery.processInstanceId(any())).thenReturn(historicProcessQuery);
+        when(historicActivityQuery.processInstanceId(any())).thenReturn(historicActivityQuery);
+        when(historicActivityQuery.activityType(any())).thenReturn(historicActivityQuery);
+        when(historicActivityQuery.orderByHistoricActivityInstanceStartTime())
+                .thenReturn(historicActivityQuery);
+        when(historicActivityQuery.asc()).thenReturn(historicActivityQuery);
         when(taskService.getTaskAttachments(any())).thenReturn(List.of());
         when(taskService.getTaskComments(any())).thenReturn(List.of());
         when(taskService.getSubTasks(any())).thenReturn(List.of());
@@ -625,7 +638,7 @@ class WorkflowTaskLifecycleServiceTest
     }
 
     /**
-     * 验证退回执行前使用实时历史和 BPMN 重算目标并迁移当前唯一执行。
+     * 验证退回执行前使用实例最早审批历史并直接把任务交给发起人修改。
      *
      * @return 无返回值，目标、意见或执行迁移不一致时测试失败
      * @throws Exception 审计 JSON 解析失败时抛出
@@ -649,9 +662,15 @@ class WorkflowTaskLifecycleServiceTest
         HistoricTaskInstance sourceHistory = historicTask("historic-apply", "apply",
                 new Date(1_000L), ACTOR_ID, null);
         when(historyService.createHistoricTaskInstanceQuery()
-                .processInstanceId(INSTANCE_ID).finished()
-                .orderByHistoricTaskInstanceEndTime().desc().list())
+                .processInstanceId(INSTANCE_ID)
+                .orderByHistoricTaskInstanceStartTime().asc().listPage(0, 500))
                 .thenReturn(List.of(sourceHistory));
+        when(taskService.getIdentityLinksForTask("returned-apply")).thenReturn(List.of());
+        when(taskService.getVariableLocal("returned-apply",
+                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE)).thenReturn(ACTOR_ID);
+        when(taskQuery.singleResult()).thenReturn(task, returnedTask);
+        when(runtimeService.getVariable(INSTANCE_ID, "processStatus"))
+                .thenReturn("running", "returned");
         ChangeActivityStateBuilder builder = stateBuilder();
         WorkflowTaskCopyService.CopyPlan copyPlan = new WorkflowTaskCopyService.CopyPlan(
                 List.of(new WfCopy()));
@@ -659,7 +678,7 @@ class WorkflowTaskLifecycleServiceTest
                 List.of(9L))).thenReturn(copyPlan);
 
         lifecycleService.returnTask(new WorkflowTaskReturnRequest(
-                TASK_ID, "apply", "资料需补充", List.of(9L)));
+                TASK_ID, "资料需补充", List.of(9L)));
 
         verify(builder).moveExecutionToActivityId("execution-1", "apply");
         JsonNode audit = capturedAudit("2");
@@ -667,6 +686,157 @@ class WorkflowTaskLifecycleServiceTest
         assertThat(audit.path("targetNodeKey").asText()).isEqualTo("apply");
         assertThat(audit.has("sourceTaskId")).isFalse();
         verify(taskCopyService).persist(copyPlan);
+        verify(taskService).setAssignee("returned-apply", ACTOR_ID);
+        verify(runtimeService).updateBusinessStatus(INSTANCE_ID, "returned");
+    }
+
+    /**
+     * 验证并行审批不能合并成单一首审任务，避免重新提交后丢失原审批分支。
+     *
+     * @return 无返回值，并行结构发生审计、复制或状态迁移副作用时测试失败
+     */
+    @Test
+    void rejectsReturnWhenProcessHasParallelActiveTasks()
+    {
+        Task sourceTask = activeTask(TASK_ID, "review", ACTOR_ID);
+        Task siblingTask = activeTask("task-2", "finance", "8");
+        stubActiveTask(sourceTask);
+        stubActiveInstance(INSTANCE_ID, ACTOR_ID);
+        when(runtimeService.getVariable(INSTANCE_ID, "processStatus")).thenReturn("running");
+        when(taskService.createTaskQuery().processInstanceId(INSTANCE_ID).active().list())
+                .thenReturn(List.of(sourceTask, siblingTask));
+        BpmnFixture fixture = twoTaskFixture();
+        stubDefinition(fixture.model());
+        HistoricTaskInstance sourceHistory = historicTask("historic-apply", "apply",
+                new Date(1_000L), ACTOR_ID, null);
+        when(historyService.createHistoricTaskInstanceQuery()
+                .processInstanceId(INSTANCE_ID)
+                .orderByHistoricTaskInstanceStartTime().asc().listPage(0, 500))
+                .thenReturn(List.of(sourceHistory));
+
+        assertBusinessError(() -> lifecycleService.returnTask(
+                new WorkflowTaskReturnRequest(TASK_ID, "资料需补充")),
+                HttpStatus.CONFLICT);
+
+        verify(runtimeService, never()).createChangeActivityStateBuilder();
+        verify(taskCopyService, never()).prepare(any(), any(), any(), any());
+        verify(taskService, never()).addComment(any(), any(), any(), any());
+    }
+
+    /**
+     * 验证发起人重新提交会校验原开始表单、绑定附件并恢复首审批办理配置和运行状态。
+     *
+     * @return 无返回值，任一正式持久化、副作用或审计契约缺失时测试失败
+     * @throws Exception 审计 JSON 解析失败时抛出
+     */
+    @Test
+    void resubmitsReturnedApplicationAndRestoresFirstApprovalAssignment() throws Exception
+    {
+        String attachmentId = "47e812d0-ae8f-43d1-aea2-232b16244ad2";
+        Task task = activeTask(TASK_ID, "apply", ACTOR_ID);
+        when(task.getAssignee()).thenReturn(ACTOR_ID, "8");
+        stubActiveTask(task);
+        ProcessInstance instance = stubActiveInstance(INSTANCE_ID, ACTOR_ID);
+        when(instance.getDeploymentId()).thenReturn("deployment-1");
+        when(runtimeService.getVariable(INSTANCE_ID, "processStatus"))
+                .thenReturn("returned", "running");
+        when(taskService.getVariableLocal(TASK_ID, "__ruoyi_workflow_return_assignment"))
+                .thenReturn("{\"assignee\":\"8\",\"owner\":\"6\","
+                        + "\"candidateUserIds\":[\"9\"],"
+                        + "\"candidateGroupIds\":[\"finance\"]}");
+        when(taskService.getVariableLocal(TASK_ID,
+                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE)).thenReturn(ACTOR_ID);
+
+        BpmnFixture fixture = bpmnFixture("apply", "申请", null);
+        StartEvent startEvent = new StartEvent();
+        startEvent.setId("start");
+        fixture.process().addFlowElement(startEvent);
+        stubDefinition(fixture.model());
+        HistoricActivityInstance historicStart = mock(HistoricActivityInstance.class);
+        when(historicStart.getActivityId()).thenReturn("start");
+        when(historicActivityQuery.listPage(0, 2)).thenReturn(List.of(historicStart));
+        WfDeployForm snapshot = snapshot("start", "start_form", "{\"fields\":[]}");
+        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+                .thenReturn(List.of(snapshot));
+
+        Map<String, Object> submitted = Map.of("amount", 1200,
+                "files", List.of(attachmentId));
+        // 开始表单快照包含本次已删除字段；覆盖保存必须只删除该字段，不能删除流程内部状态。
+        Map<String, Object> previous = Map.of("amount", 900, "obsoleteField", "旧值");
+        when(runtimeService.getVariable(INSTANCE_ID,
+                WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME)).thenReturn(
+                        WorkflowFormSubmissionSnapshotCodec.encodeStart(
+                                "deployment-1", snapshot.getFormId(), snapshot.getFormKey(),
+                                snapshot.getNodeKey(), previous));
+        Map<String, List<String>> references = Map.of("files", List.of(attachmentId));
+        Map<String, Object> projected = Map.of("amount", 1200,
+                "files", List.of(Map.of("attachmentId", attachmentId)));
+        when(variableValidator.validateForStart(snapshot.getContent(), submitted))
+                .thenReturn(new WorkflowValidatedStartVariables(submitted, references));
+        when(attachmentService.prepareTaskVariables(ACTOR_ID, INSTANCE_ID,
+                submitted, references)).thenReturn(projected);
+        when(taskQuery.singleResult()).thenReturn(task, task);
+
+        lifecycleService.resubmitApplication(new WorkflowApplicationResubmitRequest(
+                TASK_ID, submitted));
+
+        verify(attachmentService).bindTaskAttachments(ACTOR_ID, INSTANCE_ID, TASK_ID,
+                "start", references);
+        verify(runtimeService).setVariables(INSTANCE_ID, projected);
+        verify(runtimeService).removeVariables(INSTANCE_ID, java.util.Set.of("obsoleteField"));
+        verify(taskService).setOwner(TASK_ID, "6");
+        verify(taskService).setAssignee(TASK_ID, "8");
+        verify(taskService).addCandidateUser(TASK_ID, "9");
+        verify(taskService).addCandidateGroup(TASK_ID, "finance");
+        verify(taskService).removeVariableLocal(
+                TASK_ID, "__ruoyi_workflow_return_assignment");
+        verify(taskService).removeVariableLocal(
+                TASK_ID, WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE);
+        verify(runtimeService).updateBusinessStatus(INSTANCE_ID, "running");
+        JsonNode audit = capturedAudit("1");
+        assertThat(audit.path("action").asText()).isEqualTo("RESUBMIT");
+        assertThat(audit.path("opinion").asText()).isEqualTo("申请人修改原表单后重新提交");
+    }
+
+    /**
+     * 验证退回只能由原发起人重新提交，当前任务被误分配也不能越权修改原表单。
+     *
+     * @return 无返回值，非发起人未收到 403 或发生任何写入时测试失败
+     */
+    @Test
+    void forbidsResubmitByNonApplicant()
+    {
+        Task task = activeTask(TASK_ID, "apply", ACTOR_ID);
+        stubActiveTask(task);
+        stubActiveInstance(INSTANCE_ID, "8");
+
+        assertBusinessError(() -> lifecycleService.resubmitApplication(
+                new WorkflowApplicationResubmitRequest(TASK_ID, Map.of())),
+                HttpStatus.FORBIDDEN);
+
+        verify(taskService, never()).getVariableLocal(any(), any());
+        verify(runtimeService, never()).setVariables(any(), anyMap());
+    }
+
+    /**
+     * 验证仅 returned 状态允许重新提交，防止重复提交或运行中任务绕过正常审批动作。
+     *
+     * @return 无返回值，非法状态未收到 409 或发生任何写入时测试失败
+     */
+    @Test
+    void rejectsResubmitWhenProcessIsNotReturned()
+    {
+        Task task = activeTask(TASK_ID, "apply", ACTOR_ID);
+        stubActiveTask(task);
+        stubActiveInstance(INSTANCE_ID, ACTOR_ID);
+        when(runtimeService.getVariable(INSTANCE_ID, "processStatus")).thenReturn("running");
+
+        assertBusinessError(() -> lifecycleService.resubmitApplication(
+                new WorkflowApplicationResubmitRequest(TASK_ID, Map.of())),
+                HttpStatus.CONFLICT);
+
+        verify(taskService, never()).getVariableLocal(any(), any());
+        verify(runtimeService, never()).setVariables(any(), anyMap());
     }
 
     /**

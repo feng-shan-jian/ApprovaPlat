@@ -1106,10 +1106,11 @@ class WorkflowRbacHttpIT
                 "{\"taskId\":\"" + STRING_ID + "\","
                         + "\"comment\":\"RBAC拒绝探针\",\"copyUserIds\":[]}";
             case "WfTaskController#returnTask" ->
-                "{\"taskId\":\"" + STRING_ID + "\",\"targetKey\":\"review\","
+                "{\"taskId\":\"" + STRING_ID + "\","
                         + "\"comment\":\"RBAC拒绝探针\",\"copyUserIds\":[]}";
-            case "WfTaskController#returnList", "WfTaskController#claim",
-                    "WfTaskController#unClaim" ->
+            case "WfTaskController#resubmit" ->
+                "{\"taskId\":\"" + STRING_ID + "\",\"variables\":{}}";
+            case "WfTaskController#claim", "WfTaskController#unClaim" ->
                 "{\"taskId\":\"" + STRING_ID + "\"}";
             case "WfTaskController#resolve" ->
                 "{\"taskId\":\"" + STRING_ID + "\","
@@ -1496,7 +1497,7 @@ class WorkflowRbacHttpIT
      * @param zeroSideEffects boolean，前后业务表行数是否完全一致
      * @param tableRowsBefore Map&lt;String, Long&gt;，执行前业务表快照
      * @param tableRowsAfter Map&lt;String, Long&gt;，执行后业务表快照
-     * @param cells List&lt;CellResult&gt;，350 个脱敏矩阵结果
+     * @param cells List&lt;CellResult&gt;，355 个脱敏矩阵结果
      */
     private record MatrixReport(String schemaVersion, String generatedAt,
             String databaseSchema, int redisDatabase, int controllerCount,

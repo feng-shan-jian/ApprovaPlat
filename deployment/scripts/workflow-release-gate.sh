@@ -761,8 +761,13 @@ gate_validate_release_configuration() {
     'flowable.runtime.metrics-snapshot-max-age' \
     '${FLOWABLE_RUNTIME_METRICS_SNAPSHOT_MAX_AGE:PT3M}' \
     "$label metrics snapshot max age"
-  gate_require_yaml_scalar "$application_file" 'token.secret' '${RUOYI_TOKEN_SECRET}' \
+  gate_require_yaml_scalar "$application_file" 'token.secret' '${RUOYI_TOKEN_SECRET:}' \
     "$label token secret injection"
+  gate_require_yaml_scalar "$application_file" 'token.secret-file.enabled' 'true' \
+    "$label token secret file enablement"
+  gate_require_yaml_scalar "$application_file" 'token.secret-file.path' \
+    '${RUOYI_TOKEN_SECRET_FILE:/var/lib/ruoyi-secrets/token-secret}' \
+    "$label token secret file path"
   gate_require_yaml_scalar "$druid_file" 'spring.datasource.druid.master.password' \
     '${RUOYI_DB_PASSWORD}' "$label datasource password injection"
   gate_require_env_assignment "$environment_file" 'RUOYI_MANAGEMENT_PORT' '18080' \
@@ -772,6 +777,8 @@ gate_validate_release_configuration() {
     "$label metrics max-age environment value"
   gate_require_env_assignment "$environment_file" 'RUOYI_TOKEN_SECRET' '' \
     "$label token secret example"
+  gate_require_env_assignment "$environment_file" 'RUOYI_TOKEN_SECRET_FILE' \
+    '/var/lib/ruoyi-secrets/token-secret' "$label token secret file example"
   gate_require_env_assignment "$environment_file" 'DRUID_MONITOR_PASSWORD' '' \
     "$label Druid monitor password example"
   gate_validate_nginx_actuator_denial "$nginx_file" "$label Nginx configuration"
@@ -791,7 +798,7 @@ gate_validate_sensitive_content() {
   local authentication_pattern
   local sensitive_file
 
-  sensitive_assignment_pattern='(RUOYI_TOKEN_SECRET|RUOYI_DB_PASSWORD|SPRING_DATA_REDIS_PASSWORD|DRUID_MONITOR_PASSWORD)[[:space:]]*=[[:space:]]*[^[:space:]#$]|(token[._-]?secret|druid[_a-z.-]*password)[[:space:]]*[:=][[:space:]]*[^[:space:]#$]'
+  sensitive_assignment_pattern='(RUOYI_TOKEN_SECRET|RUOYI_DB_PASSWORD|SPRING_DATA_REDIS_PASSWORD|DRUID_MONITOR_PASSWORD)[[:space:]]*=[[:space:]]*[^[:space:]#$]|(^|[^A-Za-z0-9_])(token[._-]?secret|druid[_a-z.-]*password)[[:space:]]*[:=][[:space:]]*[^[:space:]#$]'
   authentication_pattern='(Authorization|Proxy-Authorization)[[:space:]]*:[[:space:]]*(Basic|Bearer)[[:space:]]+[A-Za-z0-9+/._=-]{8,}|(Cookie|Set-Cookie)[[:space:]]*:[[:space:]]*[^[:space:]]+|(JSESSIONID|rememberMe|Admin-Token)=[^[:space:];]+'
 
   while IFS= read -r -d '' file; do
@@ -831,6 +838,7 @@ gate_validate_release_bundle() {
   case "$bundle_role" in
     current)
       required_assets+=(
+        deployment/README.md
         deployment/config/application.yml
         deployment/config/application-druid.yml
         deployment/config/ruoyi.env.example

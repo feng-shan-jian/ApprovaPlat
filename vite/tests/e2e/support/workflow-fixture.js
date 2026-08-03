@@ -776,7 +776,9 @@ export async function cleanupWorkflowResources(pages, resources) {
             data: { instanceId: processInstanceId, state: 'ACTIVE' }
           }))
       }
-      if (['running', 'suspended'].includes(detail?.processStatus)) {
+      // returned 仍保留活动申请人任务，必须先终止实例才能继续删除历史和设计资源。
+      // 详情本身损坏时仍要尝试终止本用例登记的唯一实例，避免后续设计资源无法回收。
+      if (!detail || ['running', 'returned', 'suspended'].includes(detail.processStatus)) {
         await attempt(`终止流程 ${processInstanceId}`, () => callWorkflowApi(
           pages.admin, 'POST', '/workflow/instance/terminate', {
             data: { instanceId: processInstanceId, reason: 'P3 生命周期 E2E 清理' }

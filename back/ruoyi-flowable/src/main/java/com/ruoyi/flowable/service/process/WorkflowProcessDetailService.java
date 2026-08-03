@@ -316,6 +316,19 @@ public class WorkflowProcessDetailService
                 processAccessService.requireReadableInstance(instanceId);
         WorkflowTaskAccessSnapshot requestedTask = taskId == null ? null
                 : processAccessService.requireReadableTask(taskId);
+        if (requestedTask == null && "returned".equals(instance.businessStatus())
+                && StringUtils.hasText(instance.startUserId()))
+        {
+            // “我的流程”详情不携带 taskId；退回态由服务端定位发起人独占任务并再次走对象授权。
+            List<Task> returnedTasks = taskService.createTaskQuery()
+                    .processInstanceId(instance.processInstanceId()).active()
+                    .taskAssignee(instance.startUserId()).list();
+            if (returnedTasks == null || returnedTasks.size() != 1)
+            {
+                throw dataError("退回任务状态异常");
+            }
+            requestedTask = processAccessService.requireReadableTask(returnedTasks.get(0).getId());
+        }
         if (requestedTask != null)
         {
             requireSame(instance.processInstanceId(), requestedTask.processInstanceId(),
@@ -348,6 +361,10 @@ public class WorkflowProcessDetailService
         WorkflowProcessFormSnapshotView currentTaskForm = requestedTask == null ? null
                 : buildCurrentTaskForm(requestedTask, tasksById, bpmn.process(), snapshots,
                         variables, instance.deploymentId(), responseBudget);
+        if (requestedTask != null && "returned".equals(instance.businessStatus()))
+        {
+            currentTaskForm = buildReturnedStartForm(processForms, requestedTask.taskId());
+        }
 
         Map<String, String> userNames = new HashMap<>();
         String startUserName = resolveUserName(instance.startUserId(), userNames);
@@ -812,10 +829,22 @@ public class WorkflowProcessDetailService
                     row.taskId());
             if (snapshot.kind() == SnapshotKind.START)
             {
-                if (StringUtils.hasText(row.taskId()) || startSubmission != null)
+                if (StringUtils.hasText(row.taskId()))
                 {
-                    throw dataError("流程开始表单提交快照不唯一");
+                    throw dataError("流程开始表单提交快照任务关联异常");
                 }
+                if (startSubmission != null)
+                {
+                    SubmissionSnapshot previous = startSubmission.snapshot();
+                    if (!Objects.equals(previous.deploymentId(), snapshot.deploymentId())
+                            || !Objects.equals(previous.formId(), snapshot.formId())
+                            || !Objects.equals(previous.formKey(), snapshot.formKey())
+                            || !Objects.equals(previous.nodeKey(), snapshot.nodeKey()))
+                    {
+                        throw dataError("流程开始表单提交快照版本关联不一致");
+                    }
+                }
+                // SQL 已按写入时间、revision 和主键稳定升序排列，最后一条就是用户重新提交后的覆盖版本。
                 startSubmission = stored;
             }
             else
@@ -1115,6 +1144,28 @@ public class WorkflowProcessDetailService
                     deploymentId, budget));
         }
         return List.copyOf(forms);
+    }
+
+    /**
+     * 将原开始表单快照投影为退回修改任务的可编辑表单，字段仍只来自已审计的开始提交快照。
+     *
+     * @param processForms List&lt;WorkflowProcessFormSnapshotView&gt;，已授权并完成白名单过滤的历史表单
+     * @param returnedTaskId String，发起人当前独占的退回修改任务主键
+     * @return WorkflowProcessFormSnapshotView，绑定当前任务且 snapshotTime 为空的开始表单
+     */
+    private WorkflowProcessFormSnapshotView buildReturnedStartForm(
+            List<WorkflowProcessFormSnapshotView> processForms, String returnedTaskId)
+    {
+        List<WorkflowProcessFormSnapshotView> starts = processForms.stream()
+                .filter(form -> form != null && form.taskId() == null).toList();
+        if (starts.size() != 1)
+        {
+            throw dataError("退回开始表单快照异常");
+        }
+        WorkflowProcessFormSnapshotView start = starts.get(0);
+        return new WorkflowProcessFormSnapshotView(start.activityId(), returnedTaskId,
+                start.formId(), start.formKey(), start.nodeKey(), start.formName(),
+                start.nodeName(), start.content(), false, start.values(), null);
     }
 
     /**

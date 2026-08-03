@@ -62,7 +62,7 @@ WfTaskController,adjustMultiInstance,POST,/workflow/task/multiInstance/adjust,SI
 WfTaskController,complete,POST,/workflow/task/complete,SINGLE,workflow:process:approval,ALLOW,DENY,DENY,ALLOW,DENY
 WfTaskController,reject,POST,/workflow/task/reject,SINGLE,workflow:process:approval,ALLOW,DENY,DENY,ALLOW,DENY
 WfTaskController,returnTask,POST,/workflow/task/return,SINGLE,workflow:process:approval,ALLOW,DENY,DENY,ALLOW,DENY
-WfTaskController,returnList,POST,/workflow/task/returnList,SINGLE,workflow:process:approval,ALLOW,DENY,DENY,ALLOW,DENY
+WfTaskController,resubmit,POST,/workflow/task/resubmit,SINGLE,workflow:process:start,ALLOW,DENY,ALLOW,DENY,DENY
 WfTaskController,claim,POST,/workflow/task/claim,SINGLE,workflow:process:claim,ALLOW,DENY,DENY,ALLOW,DENY
 WfTaskController,unClaim,POST,/workflow/task/unClaim,SINGLE,workflow:process:claim,ALLOW,DENY,DENY,ALLOW,DENY
 WfTaskController,resolve,POST,/workflow/task/resolve,SINGLE,workflow:process:approval,ALLOW,DENY,DENY,ALLOW,DENY

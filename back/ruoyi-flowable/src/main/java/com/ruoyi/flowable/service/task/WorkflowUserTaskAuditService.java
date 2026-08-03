@@ -84,9 +84,16 @@ public class WorkflowUserTaskAuditService
         String normalizedOwner = requireCanonicalOptionalUserId(owner);
         String actorUserId = normalizeAuthenticatedActor(eventName);
 
-        // complete 操作人和任务身份在写 comment 前一次性查正式主数据，权限被撤销的用户不能留下成功审计。
-        requireApprovalEligibleTaskUsers(normalizedAssignee, normalizedOwner,
-                "complete".equals(eventName) ? actorUserId : null);
+        // 退回修改任务允许原发起人临时成为 assignee，但仍要求发起人有效且退回操作人具备审批资格。
+        boolean returnedApplicantAssignment = validateReturnedApplicantAssignment(
+                eventName, normalizedTaskId, normalizedAssignee,
+                normalizedOwner, actorUserId);
+        if (!returnedApplicantAssignment)
+        {
+            // complete 操作人和普通任务身份在写 comment 前一次性查正式主数据，权限撤销后不能留下成功审计。
+            requireApprovalEligibleTaskUsers(normalizedAssignee, normalizedOwner,
+                    "complete".equals(eventName) ? actorUserId : null);
+        }
         requireClaimEligibleCandidates(eventName, normalizedTaskId, normalizedAssignee);
 
         ObjectNode audit = JsonNodeFactory.instance.objectNode();
@@ -221,6 +228,62 @@ public class WorkflowUserTaskAuditService
         {
             throw invalidTaskIdentity(null);
         }
+    }
+
+    /**
+     * 识别并校验服务端直接退回发起人的受控 assignment 事件。
+     *
+     * @param eventName String，当前 Flowable 监听事件
+     * @param taskId String，当前用户任务主键
+     * @param assignee String，已规范化的当前办理人主键
+     * @param owner String，已规范化的当前所有者主键
+     * @param actorUserId String，当前 Flowable 认证操作人主键
+     * @return boolean，仅受控任务局部标记与 assignee 一致且身份校验通过时返回 true
+     */
+    private boolean validateReturnedApplicantAssignment(String eventName, String taskId,
+            String assignee, String owner, String actorUserId)
+    {
+        if (!"assignment".equals(eventName) || assignee == null)
+        {
+            return false;
+        }
+        Object marker = taskService.getVariableLocal(taskId,
+                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE);
+        if (marker == null)
+        {
+            return false;
+        }
+        if (!(marker instanceof String applicantUserId)
+                || !assignee.equals(applicantUserId)
+                || owner != null || actorUserId == null)
+        {
+            throw dataError();
+        }
+
+        Set<String> activeApplicantIds;
+        try
+        {
+            activeApplicantIds = identityResolver.resolveActiveUserIds(
+                    List.of(applicantUserId), List.of());
+        }
+        catch (ServiceException exception)
+        {
+            if (Integer.valueOf(HttpStatus.ERROR).equals(exception.getCode()))
+            {
+                ServiceException failure = dataError();
+                failure.initCause(exception);
+                throw failure;
+            }
+            throw invalidTaskIdentity(exception);
+        }
+        if (!Set.of(applicantUserId).equals(activeApplicantIds))
+        {
+            throw invalidTaskIdentity(null);
+        }
+
+        // 非审批发起人只能被合格审批人执行退回时接管任务，不能借内部标记绕过操作人资格。
+        requireApprovalEligibleTaskUsers(null, null, actorUserId);
+        return true;
     }
 
     /**

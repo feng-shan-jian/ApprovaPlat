@@ -238,6 +238,57 @@ class WorkflowUserTaskAuditServiceTest
     }
 
     /**
+     * 验证受控退回任务允许有效原发起人临时接管，同时仍实时核验退回操作人的审批资格。
+     *
+     * @return void，发起人被误要求审批权限或退回操作人未重新校验时测试失败
+     */
+    @Test
+    void allowsActiveReturnedApplicantAssignedByEligibleApprover()
+    {
+        when(taskService.getVariableLocal("task-7",
+                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE)).thenReturn("7");
+        when(identityResolver.resolveActiveUserIds(eq(List.of("7")), eq(List.of())))
+                .thenReturn(Set.of("7"));
+        LinkedHashSet<String> approver = new LinkedHashSet<>(List.of("9"));
+        when(identityResolver.resolveApprovalEligibleUserIds(eq(approver)))
+                .thenReturn(approver);
+        Authentication.setAuthenticatedUserId("9");
+
+        service.recordAudit("assignment", "task-7", "instance-8",
+                "expense:3:12001", "approveTask", "7", null);
+
+        verify(identityResolver).resolveActiveUserIds(List.of("7"), List.of());
+        verify(identityResolver).resolveApprovalEligibleUserIds(approver);
+        verify(taskService).addComment(eq("task-7"), eq("instance-8"),
+                eq(WorkflowUserTaskAuditService.COMMENT_TYPE), anyString());
+    }
+
+    /**
+     * 验证退回任务的原发起人停用或删除后不能接管审批任务。
+     *
+     * @return void，无效发起人仍完成 assignment 或写入监听审计时测试失败
+     */
+    @Test
+    void rejectsInactiveReturnedApplicant()
+    {
+        when(taskService.getVariableLocal("task-7",
+                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE)).thenReturn("7");
+        when(identityResolver.resolveActiveUserIds(eq(List.of("7")), eq(List.of())))
+                .thenReturn(Set.of());
+        Authentication.setAuthenticatedUserId("9");
+
+        assertThatThrownBy(() -> service.recordAudit("assignment", "task-7", "instance-8",
+                "expense:3:12001", "approveTask", "7", null))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(exception.getMessage()).isEqualTo("用户任务办理身份无效");
+                });
+
+        verify(taskService, never()).addComment(anyString(), anyString(), anyString(), anyString());
+    }
+
+    /**
      * 验证监听器拒绝前导零等非规范办理人，避免审计规范化后引擎仍保存不可查询身份。
      *
      * @return void，非规范 assignee 被写入任务或 comment 时测试失败

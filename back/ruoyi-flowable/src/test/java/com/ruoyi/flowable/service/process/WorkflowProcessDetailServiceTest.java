@@ -210,6 +210,10 @@ class WorkflowProcessDetailServiceTest
         stubVariableQueries(List.of(applicant, internalStatus, secret, binary,
                         notANumber, infinity),
                 List.of(decision, unsafeLocal));
+        WorkflowHistoricSubmissionRow originalStartSubmission = submissionUpdate(
+                "detail-start-original", "2026-07-25T08:00:00Z", null, "start-activity",
+                WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-1", 1L,
+                        "key_1", "start", Map.of("applicant", "李四")));
         WorkflowHistoricSubmissionRow startSubmission = submissionUpdate("detail-start",
                 "2026-07-25T08:00:01Z", null, "start-activity",
                 WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-1", 1L,
@@ -219,7 +223,7 @@ class WorkflowProcessDetailServiceTest
                 WorkflowFormSubmissionSnapshotCodec.encodeTask("deployment-1", 2L,
                         "key_2", "approve", "task-1", true,
                         Map.of("decision", Map.of("approved", true))));
-        stubSubmissionUpdates(List.of(startSubmission, taskSubmission));
+        stubSubmissionUpdates(List.of(originalStartSubmission, startSubmission, taskSubmission));
 
         Comment comment = mock(Comment.class);
         when(comment.getId()).thenReturn("comment-1");
@@ -251,6 +255,7 @@ class WorkflowProcessDetailServiceTest
         assertThat(detail.processFormList()).hasSize(2);
         WorkflowProcessFormSnapshotView startForm = detail.processFormList().get(0);
         assertThat(startForm.values()).containsOnlyKeys("applicant");
+        // 重新提交保留底层审计版本，但用户详情必须只投影最后一次覆盖后的原表单。
         assertThat(startForm.values().get("applicant").textValue()).isEqualTo("张三");
         assertThat(startForm.snapshotTime())
                 .isEqualTo(Instant.parse("2026-07-25T08:00:01Z"));
