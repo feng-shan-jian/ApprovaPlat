@@ -35,8 +35,8 @@ class WorkflowRbacMatrixContractTest
     private static final Map<String, Long> EXPECTED_ALLOW_COUNTS = Map.of(
             "workflow_admin", 70L,
             "workflow_designer", 30L,
-            "workflow_starter", 19L,
-            "workflow_approver", 30L,
+            "workflow_starter", 20L,
+            "workflow_approver", 29L,
             "workflow_auditor", 17L);
 
     /**

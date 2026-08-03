@@ -168,6 +168,8 @@ const queryParams = reactive({ pageNum: 1, pageSize: 10, modelName: '', modelKey
 const historyQuery = reactive({ pageNum: 1, pageSize: 10, modelKey: '' })
 const form = reactive(createEmptyForm())
 const formRef = ref(null)
+// 页面由页签 keep-alive 缓存；首次请求完成后，每次重新进入都必须查询服务端最新模型状态。
+let pageInitialized = false
 const rules = {
   modelName: [{ required: true, message: '模型名称不能为空', trigger: 'blur' }],
   modelKey: [
@@ -288,10 +290,12 @@ function resetQuery() {
 }
 
 /**
- * 打开新增模型对话框。
- * @returns {void} 清空旧编辑状态后显示对话框。
+ * 使用最新分类和表单选项打开新增模型对话框。
+ * @returns {Promise<void>} 基础选项刷新成功后清空旧编辑状态并显示对话框。
  */
-function openCreate() {
+async function openCreate() {
+  // 模型页会被页签缓存；打开对话框前重新查询，确保刚新增的分类无需刷新页面即可选择。
+  await loadOptions()
   Object.assign(form, createEmptyForm())
   dialogOpen.value = true
   nextTick(() => formRef.value?.clearValidate())
@@ -304,7 +308,8 @@ function openCreate() {
  */
 async function openEdit(row) {
   const modelId = row?.modelId || selectedIds.value[0]
-  const response = await getModel(modelId)
+  // 详情与选项并行刷新，既保证分类数据最新，也避免串行请求拖慢编辑入口。
+  const [response] = await Promise.all([getModel(modelId), loadOptions()])
   Object.assign(form, createEmptyForm(), response.data)
   dialogOpen.value = true
   nextTick(() => formRef.value?.clearValidate())
@@ -420,7 +425,18 @@ function exportModels() {
   proxy.download('/workflow/model/export', { ...queryParams }, `workflow_model_${Date.now()}.xlsx`)
 }
 
-Promise.all([loadOptions(), loadList()])
+const initialLoad = Promise.all([loadOptions(), loadList()]).finally(() => {
+  pageInitialized = true
+})
+
+/**
+ * 页签重新激活时刷新模型、分类和表单，避免跨页面更新后继续展示旧缓存。
+ * @returns {Promise<void>} 首次加载后重新查询全部当前页面数据。
+ */
+onActivated(async () => {
+  if (!pageInitialized) return initialLoad
+  await Promise.all([loadOptions(), loadList()])
+})
 </script>
 
 <style scoped>

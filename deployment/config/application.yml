@@ -120,8 +120,12 @@ springdoc:
     enabled: false
 
 token:
-  # 令牌密钥由 systemd 的受限环境文件注入，不能使用上游默认值。
-  secret: ${RUOYI_TOKEN_SECRET}
+  # 显式环境密钥优先；标准单节点部署未提供时从持久化文件自动生成并复用。
+  secret: ${RUOYI_TOKEN_SECRET:}
+  secret-file:
+    enabled: true
+    # 目录由 systemd StateDirectory 自动创建并归运行账户独占，升级和重启不得删除该文件。
+    path: ${RUOYI_TOKEN_SECRET_FILE:/var/lib/ruoyi-secrets/token-secret}
 
 logging:
   level:

@@ -115,21 +115,21 @@ export function rejectTask(data) {
 }
 
 /**
- * 将当前任务退回到 returnList 返回的合法历史节点。
- * @param {object} data taskId、targetKey、退回意见 comment 和可选 copyUserIds。
- * @returns {Promise<object>} 合法节点复核、状态迁移、审计和抄送原子写入结果。
+ * 将整条申请直接退回发起人修改。
+ * @param {object} data taskId、退回意见 comment 和可选 copyUserIds。
+ * @returns {Promise<object>} 发起人任务创建、状态迁移、审计和抄送原子写入结果。
  */
 export function returnTask(data) {
   return request({ url: '/workflow/task/return', method: 'post', data })
 }
 
 /**
- * 查询当前办理任务可退回的真实历史节点。
- * @param {object} data 至少包含 taskId 的请求。
- * @returns {Promise<object>} data 为可退节点数组。
+ * 由流程发起人保存原表单修改，并重新开放首个审批节点。
+ * @param {object} data taskId 和覆盖后的原开始表单 variables。
+ * @returns {Promise<object>} 表单、附件、审计、办理配置和流程状态同事务恢复结果。
  */
-export function listReturnableTasks(data) {
-  return request({ url: '/workflow/task/returnList', method: 'post', data })
+export function resubmitApplication(data) {
+  return request({ url: '/workflow/task/resubmit', method: 'post', data })
 }
 
 /**

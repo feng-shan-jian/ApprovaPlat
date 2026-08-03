@@ -26,8 +26,8 @@ import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskDelegateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskRejectRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskResolveRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnListRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowApplicationResubmitRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskTransferRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskUnclaimRequest;
 import com.ruoyi.flowable.service.task.WorkflowTaskActionService;
@@ -183,9 +183,9 @@ public class WfTaskController extends BaseController
     }
 
     /**
-     * 由当前办理人把单一安全执行分支退回实时合法历史节点。
+     * 由当前办理人把整条申请直接退回发起人修改。
      *
-     * @param request WorkflowTaskReturnRequest，任务、目标节点和退回原因
+     * @param request WorkflowTaskReturnRequest，任务、退回原因和可选抄送人
      * @return AjaxResult，操作成功响应
      */
     @PreAuthorize("@ss.hasPermi('workflow:process:approval')")
@@ -198,17 +198,18 @@ public class WfTaskController extends BaseController
     }
 
     /**
-     * 查询当前办理任务同一时刻允许退回的历史用户任务节点。
+     * 由流程发起人修改原申请表后恢复首个审批节点的正式办理配置。
      *
-     * @param request WorkflowTaskReturnListRequest，当前活动任务主键
-     * @return AjaxResult，data 为兼容旧页面 id/name 字段的可退节点列表
+     * @param request WorkflowApplicationResubmitRequest，退回任务和原开始表单变量
+     * @return AjaxResult，操作成功响应
      */
-    @PreAuthorize("@ss.hasPermi('workflow:process:approval')")
-    @Log(title = "查询流程可退节点", businessType = BusinessType.OTHER)
-    @PostMapping("/returnList")
-    public AjaxResult returnList(@Valid @RequestBody WorkflowTaskReturnListRequest request)
+    @PreAuthorize("@ss.hasPermi('workflow:process:start')")
+    @Log(title = "重新提交流程", businessType = BusinessType.UPDATE)
+    @PostMapping("/resubmit")
+    public AjaxResult resubmit(@Valid @RequestBody WorkflowApplicationResubmitRequest request)
     {
-        return success(taskLifecycleService.findReturnTaskList(request));
+        taskLifecycleService.resubmitApplication(request);
+        return success();
     }
 
     /**

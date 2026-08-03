@@ -16,7 +16,7 @@ final class WorkflowProcessStatusNormalizer
 
     /** 对外接口允许直接回显的稳定状态集合。 */
     private static final Set<String> STABLE_STATES = Set.of(
-            "running", "suspended", "completed", "canceled", "rejected", "terminated");
+            "running", "returned", "suspended", "completed", "canceled", "rejected", "terminated");
 
     /**
      * 禁止实例化状态规范器，所有状态转换均通过无状态静态方法完成。
@@ -45,6 +45,11 @@ final class WorkflowProcessStatusNormalizer
         // 取消、驳回和终止均可能让引擎呈现 completed/terminated，必须以服务端业务终态为准。
         if (normalizedBusinessStatus != null
                 && BUSINESS_TERMINAL_STATES.contains(normalizedBusinessStatus))
+        {
+            return normalizedBusinessStatus;
+        }
+        // returned 是仍有活动任务的业务暂停态，必须优先于引擎仍报告的 running。
+        if ("returned".equals(normalizedBusinessStatus))
         {
             return normalizedBusinessStatus;
         }

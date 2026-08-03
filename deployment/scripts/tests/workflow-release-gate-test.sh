@@ -82,6 +82,8 @@ create_bundle() {
     "$bundle_dir/deployment/scripts/tests"
   printf 'test jar asset\n' > "$bundle_dir/ruoyi-admin.jar"
   printf '<!doctype html><title>test</title>\n' > "$bundle_dir/frontend/index.html"
+  printf '# Deployment\n\nToken secret files are generated and persisted by the service.\n' \
+    > "$bundle_dir/deployment/README.md"
   {
     printf 'flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql\n'
     printf 'flowable/business/8.0.0.4__workflow_model_save_idempotency.sql\n'
@@ -108,7 +110,10 @@ create_bundle() {
     printf '    production-gate-enabled: true\n'
     printf '    metrics-snapshot-max-age: ${FLOWABLE_RUNTIME_METRICS_SNAPSHOT_MAX_AGE:PT3M}\n'
     printf 'token:\n'
-    printf '  secret: ${RUOYI_TOKEN_SECRET}\n'
+    printf '  secret: ${RUOYI_TOKEN_SECRET:}\n'
+    printf '  secret-file:\n'
+    printf '    enabled: true\n'
+    printf '    path: ${RUOYI_TOKEN_SECRET_FILE:/var/lib/ruoyi-secrets/token-secret}\n'
   } > "$bundle_dir/deployment/config/application.yml"
   {
     printf 'spring:\n'
@@ -121,6 +126,7 @@ create_bundle() {
     printf 'RUOYI_MANAGEMENT_PORT=18080\n'
     printf 'FLOWABLE_RUNTIME_METRICS_SNAPSHOT_MAX_AGE=PT3M\n'
     printf '%s%s\n' 'RUOYI_TOKEN_' 'SECRET='
+    printf 'RUOYI_TOKEN_SECRET_FILE=/var/lib/ruoyi-secrets/token-secret\n'
     printf '%s%s\n' 'DRUID_MONITOR_' 'PASSWORD='
   } > "$bundle_dir/deployment/config/ruoyi.env.example"
   {
@@ -1252,11 +1258,28 @@ main() {
 
   bundle_dir="$TEST_ROOT/hardcoded-token-secret"
   create_bundle "$bundle_dir" 'hardcoded-token-secret' 'NONE'
-  sed -i 's/${RUOYI_TOKEN_SECRET}/FORBIDDEN_TEST_SENTINEL/' \
+  sed -i 's/${RUOYI_TOKEN_SECRET:}/FORBIDDEN_TEST_SENTINEL/' \
     "$bundle_dir/deployment/config/application.yml"
   refresh_bundle_manifest "$bundle_dir"
   expect_failure 'hardcoded token secret configuration fails' \
     run_preflight_gate "$bundle_dir" 'hardcoded-token-secret'
+
+  bundle_dir="$TEST_ROOT/token-secret-file-disabled"
+  create_bundle "$bundle_dir" 'token-secret-file-disabled' 'NONE'
+  sed -i 's/^    enabled: true$/    enabled: false/' \
+    "$bundle_dir/deployment/config/application.yml"
+  refresh_bundle_manifest "$bundle_dir"
+  expect_failure 'disabled token secret file generation fails' \
+    run_preflight_gate "$bundle_dir" 'token-secret-file-disabled'
+
+  bundle_dir="$TEST_ROOT/token-secret-file-path-drift"
+  create_bundle "$bundle_dir" 'token-secret-file-path-drift' 'NONE'
+  sed -i 's@/var/lib/ruoyi-secrets/token-secret@/tmp/token-secret@g' \
+    "$bundle_dir/deployment/config/application.yml" \
+    "$bundle_dir/deployment/config/ruoyi.env.example"
+  refresh_bundle_manifest "$bundle_dir"
+  expect_failure 'unapproved token secret file path fails' \
+    run_preflight_gate "$bundle_dir" 'token-secret-file-path-drift'
 
   bundle_dir="$TEST_ROOT/hardcoded-druid-password"
   create_bundle "$bundle_dir" 'hardcoded-druid-password' 'NONE'

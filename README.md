@@ -77,6 +77,19 @@ npm install
 npm run build:prod
 ```
 
+## Local Token Secret
+
+Developers do not need to generate `RUOYI_TOKEN_SECRET` manually. On the first backend start,
+the application creates a random 64-byte secret under `.approvaplat/token-secret` in the current
+user's home directory and reuses it on subsequent starts. The file stays outside the repository
+and build artifacts. An explicit `RUOYI_TOKEN_SECRET` environment variable always takes priority.
+
+Set `RUOYI_TOKEN_SECRET_FILE` to use another persistent directory. Do not delete an active secret
+file, because tokens issued before the next backend restart will become invalid.
+
+See [deployment/README.md](deployment/README.md) for the standard production configuration and
+systemd unit, which also create and persist the secret automatically.
+
 ## License
 
 [MIT License](LICENSE)

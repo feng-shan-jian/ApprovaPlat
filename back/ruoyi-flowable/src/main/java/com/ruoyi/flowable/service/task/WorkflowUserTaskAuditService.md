@@ -23,6 +23,7 @@ auditService.recordAudit(
 
 - assignee 和 owner 可未设置；一旦设置，必须是无前导零、空白或符号的规范正整数若依用户 ID。
 - 两者在一次正式身份查询中去重校验，用户必须同时满足 `sys_user.status='0'`、`del_flag='0'`，并实时具备待办列表、任务详情和审批三项直接办理权限。
+- 唯一例外是服务端“退回”动作写入受控任务局部变量后，将首审批任务临时分配给原发起人；此时原发起人只需保持有效，执行退回的操作人仍必须具备完整审批资格。重新提交会先删除该内部标记，再按普通审批规则恢复首审批办理配置。
 - 任一用户不存在、停用、删除或办理权限已撤销时整次事件失败，comment 和任务状态均不提交。
 - `complete` 必须存在 Flowable 当前认证操作人，且该操作人会与 assignee/owner 一并重新核验为当前具备流程办理权限的用户；create/assignment 的引擎系统事件可没有操作人。
 - `create` 事件若没有 assignee，必须至少存在一个 candidate identity link；每个 `candidateUser` 均须具备 `claimList`、`claim` 及三项直接办理权限。
@@ -40,7 +41,7 @@ comment 类型固定为 `USER_TASK_LISTENER`，JSON schema 版本为 `1`。正�
 
 ## 状态与事务
 
-服务只通过 `TaskService` 读取当前任务 identity links 并写入 comment，不依赖 `RuntimeService`，不读写 `processStatus`，不会把 canceled、rejected、terminated 等显式业务终态改成 completed。Flowable 8 在执行 `create` 监听前已写入 candidate identity links；监听校验和 comment 使用同一个 Flowable/Spring 命令事务，任何异常都会回滚任务事件。
+服务只通过 `TaskService` 读取当前任务 identity links、受控退回任务局部变量并写入 comment，不依赖 `RuntimeService`，不读写 `processStatus`，不会把 returned、canceled、rejected、terminated 等显式业务状态改成 completed。Flowable 8 在执行 `create` 监听前已写入 candidate identity links；监听校验和 comment 使用同一个 Flowable/Spring 命令事务，任何异常都会回滚任务事件。
 
 ## 异常语义
 

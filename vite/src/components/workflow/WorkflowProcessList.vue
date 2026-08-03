@@ -568,7 +568,7 @@ function exportRows() {
  * @returns {string} 中文状态名称或原状态。
  */
 function statusLabel(status) {
-  return ({ running: '运行中', suspended: '已挂起', completed: '已完成', rejected: '已驳回', terminated: '已终止', canceled: '已取消' })[status] || status || '-'
+  return ({ running: '运行中', returned: '待修改', suspended: '已挂起', completed: '已完成', rejected: '已驳回', terminated: '已终止', canceled: '已取消' })[status] || status || '-'
 }
 
 /**
@@ -577,7 +577,7 @@ function statusLabel(status) {
  * @returns {string} 标签视觉类型。
  */
 function statusType(status) {
-  return ({ running: 'primary', suspended: 'warning', completed: 'success', rejected: 'danger', terminated: 'danger', canceled: 'info' })[status] || 'info'
+  return ({ running: 'primary', returned: 'warning', suspended: 'warning', completed: 'success', rejected: 'danger', terminated: 'danger', canceled: 'info' })[status] || 'info'
 }
 
 /**

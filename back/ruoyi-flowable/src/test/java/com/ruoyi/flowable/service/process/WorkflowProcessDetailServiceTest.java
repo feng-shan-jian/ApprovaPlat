@@ -210,6 +210,10 @@ class WorkflowProcessDetailServiceTest
         stubVariableQueries(List.of(applicant, internalStatus, secret, binary,
                         notANumber, infinity),
                 List.of(decision, unsafeLocal));
+        WorkflowHistoricSubmissionRow originalStartSubmission = submissionUpdate(
+                "detail-start-original", "2026-07-25T08:00:00Z", null, "start-activity",
+                WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-1", 1L,
+                        "key_1", "start", Map.of("applicant", "李四")));
         WorkflowHistoricSubmissionRow startSubmission = submissionUpdate("detail-start",
                 "2026-07-25T08:00:01Z", null, "start-activity",
                 WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-1", 1L,
@@ -219,7 +223,7 @@ class WorkflowProcessDetailServiceTest
                 WorkflowFormSubmissionSnapshotCodec.encodeTask("deployment-1", 2L,
                         "key_2", "approve", "task-1", true,
                         Map.of("decision", Map.of("approved", true))));
-        stubSubmissionUpdates(List.of(startSubmission, taskSubmission));
+        stubSubmissionUpdates(List.of(originalStartSubmission, startSubmission, taskSubmission));
 
         Comment comment = mock(Comment.class);
         when(comment.getId()).thenReturn("comment-1");
@@ -251,6 +255,7 @@ class WorkflowProcessDetailServiceTest
         assertThat(detail.processFormList()).hasSize(2);
         WorkflowProcessFormSnapshotView startForm = detail.processFormList().get(0);
         assertThat(startForm.values()).containsOnlyKeys("applicant");
+        // 重新提交保留底层审计版本，但用户详情必须只投影最后一次覆盖后的原表单。
         assertThat(startForm.values().get("applicant").textValue()).isEqualTo("张三");
         assertThat(startForm.snapshotTime())
                 .isEqualTo(Instant.parse("2026-07-25T08:00:01Z"));
@@ -400,7 +405,7 @@ class WorkflowProcessDetailServiceTest
     }
 
     /**
-     * 验证活动任务使用当前变量回显、投影正式退回能力且 snapshotTime 为空。
+     * 验证重新提交后的活动任务覆盖同节点历史退回标记，并继续回显当前变量与正式退回能力。
      *
      * @return 无返回值，活动任务不得伪装成已提交快照或由前端猜测退回能力
      */
@@ -417,10 +422,24 @@ class WorkflowProcessDetailServiceTest
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
         when(deployFormMapper.selectByDeploymentId("deployment-1"))
                 .thenReturn(List.of(taskSnapshot()));
-        stubActivityQuery(List.of(activity("approve-active", "approve", "审批",
-                "userTask", "task-active", "2026-07-25T08:01:00Z", null)));
-        stubHistoricTaskQuery(List.of(historicTask("task-active", "approve", null)));
-        when(taskService.getProcessInstanceComments("instance-1")).thenReturn(List.of());
+        stubActivityQuery(List.of(
+                activity("approve-returned", "approve", "审批", "userTask", "task-returned",
+                        "2026-07-25T08:01:00Z", "2026-07-25T08:30:00Z"),
+                activity("approve-active", "approve", "审批", "userTask", "task-active",
+                        "2026-07-25T08:31:00Z", null)));
+        stubHistoricTaskQuery(List.of(
+                historicTask("task-returned", "approve", "2026-07-25T08:30:00Z"),
+                historicTask("task-active", "approve", null)));
+        Comment returnComment = mock(Comment.class);
+        when(returnComment.getId()).thenReturn("comment-return");
+        when(returnComment.getProcessInstanceId()).thenReturn("instance-1");
+        when(returnComment.getTaskId()).thenReturn("task-returned");
+        when(returnComment.getType()).thenReturn("2");
+        when(returnComment.getFullMessage()).thenReturn("材料修改后重新提交");
+        when(returnComment.getTime()).thenReturn(
+                Date.from(Instant.parse("2026-07-25T08:30:00Z")));
+        when(taskService.getProcessInstanceComments("instance-1"))
+                .thenReturn(List.of(returnComment));
         HistoricVariableInstance currentDecision = variable(
                 "decision", "json", Map.of("approved", false), "task-active");
         HistoricVariableInstance unsafeCurrent = variable(
@@ -440,6 +459,8 @@ class WorkflowProcessDetailServiceTest
         assertThat(detail.currentTaskForm()).isNotNull();
         assertThat(detail.currentTaskForm().snapshotTime()).isNull();
         assertThat(detail.returnAllowed()).isTrue();
+        assertThat(detail.flowViewer().unfinishedActivityIds()).contains("approve");
+        assertThat(detail.flowViewer().returnedActivityIds()).doesNotContain("approve");
         assertThat(detail.currentTaskForm().values().get("decision")
                 .get("approved").booleanValue()).isFalse();
         verify(currentDecision, never()).getValue();

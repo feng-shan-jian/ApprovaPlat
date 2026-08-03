@@ -47,7 +47,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
     /** 服务端内部变量统一前缀，客户端变量和表单字段不得使用。 */
     public static final String RESERVED_VARIABLE_PREFIX = "__ruoyi_workflow_";
 
-    /** 每个流程实例和每个任务只允许写入一次的表单提交快照变量名。 */
+    /** 表单提交快照变量名；开始表单重新提交会产生同实例的新版本，任务表单仍只写入一次。 */
     public static final String VARIABLE_NAME = RESERVED_VARIABLE_PREFIX + "form_submission_v1";
 
     /** 当前快照结构版本。 */

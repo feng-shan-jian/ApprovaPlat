@@ -316,6 +316,19 @@ public class WorkflowProcessDetailService
                 processAccessService.requireReadableInstance(instanceId);
         WorkflowTaskAccessSnapshot requestedTask = taskId == null ? null
                 : processAccessService.requireReadableTask(taskId);
+        if (requestedTask == null && "returned".equals(instance.businessStatus())
+                && StringUtils.hasText(instance.startUserId()))
+        {
+            // “我的流程”详情不携带 taskId；退回态由服务端定位发起人独占任务并再次走对象授权。
+            List<Task> returnedTasks = taskService.createTaskQuery()
+                    .processInstanceId(instance.processInstanceId()).active()
+                    .taskAssignee(instance.startUserId()).list();
+            if (returnedTasks == null || returnedTasks.size() != 1)
+            {
+                throw dataError("退回任务状态异常");
+            }
+            requestedTask = processAccessService.requireReadableTask(returnedTasks.get(0).getId());
+        }
         if (requestedTask != null)
         {
             requireSame(instance.processInstanceId(), requestedTask.processInstanceId(),
@@ -348,12 +361,17 @@ public class WorkflowProcessDetailService
         WorkflowProcessFormSnapshotView currentTaskForm = requestedTask == null ? null
                 : buildCurrentTaskForm(requestedTask, tasksById, bpmn.process(), snapshots,
                         variables, instance.deploymentId(), responseBudget);
+        if (requestedTask != null && "returned".equals(instance.businessStatus()))
+        {
+            currentTaskForm = buildReturnedStartForm(processForms, requestedTask.taskId());
+        }
 
         Map<String, String> userNames = new HashMap<>();
         String startUserName = resolveUserName(instance.startUserId(), userNames);
         List<WorkflowProcessActivityView> timeline = buildTimeline(activities, tasksById,
                 commentsByTask, instance, startUserName, userNames);
-        WorkflowProcessViewerView viewer = buildViewer(activities, tasksById, commentsByTask);
+        WorkflowProcessViewerView viewer = buildViewer(activities, tasksById, commentsByTask,
+                "returned".equals(normalizeProcessStatus(instance)));
         String bpmnXml = deploymentService.getBpmnXml(definition.getId());
 
         Instant startTime = instance.startTime();
@@ -812,10 +830,22 @@ public class WorkflowProcessDetailService
                     row.taskId());
             if (snapshot.kind() == SnapshotKind.START)
             {
-                if (StringUtils.hasText(row.taskId()) || startSubmission != null)
+                if (StringUtils.hasText(row.taskId()))
                 {
-                    throw dataError("流程开始表单提交快照不唯一");
+                    throw dataError("流程开始表单提交快照任务关联异常");
                 }
+                if (startSubmission != null)
+                {
+                    SubmissionSnapshot previous = startSubmission.snapshot();
+                    if (!Objects.equals(previous.deploymentId(), snapshot.deploymentId())
+                            || !Objects.equals(previous.formId(), snapshot.formId())
+                            || !Objects.equals(previous.formKey(), snapshot.formKey())
+                            || !Objects.equals(previous.nodeKey(), snapshot.nodeKey()))
+                    {
+                        throw dataError("流程开始表单提交快照版本关联不一致");
+                    }
+                }
+                // SQL 已按写入时间、revision 和主键稳定升序排列，最后一条就是用户重新提交后的覆盖版本。
                 startSubmission = stored;
             }
             else
@@ -1115,6 +1145,28 @@ public class WorkflowProcessDetailService
                     deploymentId, budget));
         }
         return List.copyOf(forms);
+    }
+
+    /**
+     * 将原开始表单快照投影为退回修改任务的可编辑表单，字段仍只来自已审计的开始提交快照。
+     *
+     * @param processForms List&lt;WorkflowProcessFormSnapshotView&gt;，已授权并完成白名单过滤的历史表单
+     * @param returnedTaskId String，发起人当前独占的退回修改任务主键
+     * @return WorkflowProcessFormSnapshotView，绑定当前任务且 snapshotTime 为空的开始表单
+     */
+    private WorkflowProcessFormSnapshotView buildReturnedStartForm(
+            List<WorkflowProcessFormSnapshotView> processForms, String returnedTaskId)
+    {
+        List<WorkflowProcessFormSnapshotView> starts = processForms.stream()
+                .filter(form -> form != null && form.taskId() == null).toList();
+        if (starts.size() != 1)
+        {
+            throw dataError("退回开始表单快照异常");
+        }
+        WorkflowProcessFormSnapshotView start = starts.get(0);
+        return new WorkflowProcessFormSnapshotView(start.activityId(), returnedTaskId,
+                start.formId(), start.formKey(), start.nodeKey(), start.formName(),
+                start.nodeName(), start.content(), false, start.values(), null);
     }
 
     /**
@@ -2104,11 +2156,13 @@ public class WorkflowProcessDetailService
      * @param activities List&lt;HistoricActivityInstance&gt;，实例全部历史活动
      * @param tasksById Map&lt;String, HistoricTaskInstance&gt;，历史任务主键索引
      * @param commentsByTask Map&lt;String, List&lt;WorkflowProcessCommentView&gt;&gt;，受控意见索引
+     * @param applicationReturned boolean，当前是否仍处于申请人退回修改阶段
      * @return WorkflowProcessViewerView，已完成、未完成、驳回和退回活动集合
      */
     private WorkflowProcessViewerView buildViewer(List<HistoricActivityInstance> activities,
             Map<String, HistoricTaskInstance> tasksById,
-            Map<String, List<WorkflowProcessCommentView>> commentsByTask)
+            Map<String, List<WorkflowProcessCommentView>> commentsByTask,
+            boolean applicationReturned)
     {
         Set<String> finishedActivities = new LinkedHashSet<>();
         Set<String> finishedSequenceFlows = new LinkedHashSet<>();
@@ -2148,6 +2202,11 @@ public class WorkflowProcessDetailService
         });
         rejectedActivities.remove(null);
         returnedActivities.remove(null);
+        if (!applicationReturned)
+        {
+            // 重新提交后首审批节点会复用退回前的 BPMN id；当前办理态必须覆盖历史退回轨迹。
+            returnedActivities.removeAll(unfinishedActivities);
+        }
         return new WorkflowProcessViewerView(finishedActivities, finishedSequenceFlows,
                 unfinishedActivities, rejectedActivities, returnedActivities);
     }

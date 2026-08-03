@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures/workflow.js'
+import { randomUUID } from 'node:crypto'
 import { expectAjaxSuccess, matchesEndpoint } from './support/http.js'
 import {
   buildCandidateLifecycleBpmn,
@@ -137,27 +138,16 @@ async function submitUserTaskAction(page, action, targetRoleKey, targetOption, c
 }
 
 /**
- * 在详情页查询服务端实时可退节点并提交退回动作。
+ * 在详情页直接把整条申请退回发起人修改。
  * @param {import('@playwright/test').Page} page 当前任务办理人页面。
- * @param {string} targetNodeName 服务端返回的目标节点显示名称。
  * @param {string} comment 退回原因。
- * @returns {Promise<void>} 可退节点查询和退回写接口均成功后结束。
+ * @returns {Promise<void>} 退回写接口成功且弹窗关闭后结束。
  */
-async function returnTaskThroughUi(page, targetNodeName, comment) {
-  const returnListPromise = page.waitForResponse(response => matchesEndpoint(
-    response, '/workflow/task/returnList', 'POST'))
+async function returnTaskThroughUi(page, comment) {
   await page.getByRole('button', { name: '退回', exact: true }).click()
-  await expectAjaxSuccess(await returnListPromise, '/workflow/task/returnList')
   const dialog = page.getByRole('dialog', { name: '退回任务' })
   await expect(dialog).toBeVisible()
-  // Element Plus 的实际指针点击面是 wrapper；内部只读 input 可能被占位层覆盖，但仍用于校验控件角色唯一。
-  const targetField = dialog.locator('.el-form-item').filter({ hasText: '退回节点' })
-  const targetSelect = targetField.getByRole('combobox')
-  await expect(targetSelect, '退回弹窗必须展示唯一服务端节点选择器').toHaveCount(1)
-  await targetField.locator('.el-select__wrapper').click()
-  const option = page.locator('.el-select-dropdown:visible').getByText(targetNodeName, { exact: true })
-  await expect(option, '服务端实时可退节点必须包含目标节点').toBeVisible()
-  await option.click()
+  await expect(dialog.locator('.el-form-item').filter({ hasText: '退回节点' })).toHaveCount(0)
   await dialog.getByPlaceholder('请输入退回原因').fill(comment)
   const responsePromise = page.waitForResponse(response => matchesEndpoint(
     response, '/workflow/task/return', 'POST'))
@@ -346,8 +336,10 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
     // 静态办理人、委派对象、转办对象和候选人全部来自实时审批资格目录。
     const approver = await findWorkflowUserOption(pages.designer, 'workflow_approver', true)
     const admin = await findWorkflowUserOption(pages.designer, 'workflow_admin', true)
+    const starter = await findWorkflowUserOption(pages.designer, 'workflow_starter', false)
     expect(approver, '审批角色必须具备流程办理资格').not.toBeNull()
     expect(admin, '超级管理员必须遵循若依超级管理员审批权限语义').not.toBeNull()
+    expect(starter, '流程发起人必须存在于有效用户目录').not.toBeNull()
 
     const categoryName = `P3生命周期-${runId}`
     const categoryCode = `p3life_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
@@ -358,18 +350,20 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
       pages.designer, categoryName, categoryCode, resources)
     resources.formId = await createWorkflowForm(pages.designer, formName, resources)
 
+    // 顺序流程 XML 后续用于从已部署 V1 保存 V2，验证真实版本切换和历史定义自动挂起。
+    const sequentialBpmnXml = buildSequentialLifecycleBpmn({
+      processKey: sequentialProcessKey,
+      processName: `P3普通审批-${runId}`,
+      formId: resources.formId,
+      approverUserId: approver.value,
+      adminUserId: admin.value
+    })
     const sequentialModel = await createAndDeployWorkflowModel(pages.designer, {
       processKey: sequentialProcessKey,
       processName: `P3普通审批-${runId}`,
       categoryCode,
       formId: resources.formId,
-      bpmnXml: buildSequentialLifecycleBpmn({
-        processKey: sequentialProcessKey,
-        processName: `P3普通审批-${runId}`,
-        formId: resources.formId,
-        approverUserId: approver.value,
-        adminUserId: admin.value
-      }),
+      bpmnXml: sequentialBpmnXml,
       resourceRegistry: resources
     })
     const candidateModel = await createAndDeployWorkflowModel(pages.designer, {
@@ -466,7 +460,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
         }), copyReadablePages)
     evidence.push({ scenario: 'normal', finalStatus: completedNormal.processStatus, deniedCode: 403, staleCode: 409 })
 
-    // 场景二：二级节点只允许管理员退回真实历史一级节点，旧任务重复退回必须冲突且无副作用。
+    // 场景二：二级审批直接退回发起人，发起人修改后重新提交并从一级审批重新开始。
     const returned = await startTrackedScenario(
       pages.starter, sequentialDefinition, formName, runId, 'return', resources.processInstanceIds)
     const returnA = await findAssignedWorkflowTask(
@@ -481,32 +475,57 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
     await expectRejectedWorkflowActionWithoutSideEffects(
       pages.admin, returned.processInstanceId, returnB.taskId, 403, expectedCode => callWorkflowApi(
         pages.approver, 'POST', '/workflow/task/return', {
-          data: { taskId: returnB.taskId, targetKey: 'reviewA', comment: '越权退回必须拒绝', copyUserIds: [] },
+          data: { taskId: returnB.taskId, comment: '越权退回必须拒绝', copyUserIds: [] },
           expectedCode
         }), copyReadablePages)
     await openTaskDetail(pages.admin, returned.processInstanceId, returnB.taskId)
-    await returnTaskThroughUi(pages.admin, '一级审批', '退回一级重新核验')
+    await returnTaskThroughUi(pages.admin, '申请资料需要修改')
+    const returnedDetail = await getWorkflowDetail(pages.starter, returned.processInstanceId)
+    expect(returnedDetail.processStatus).toBe('returned')
+    expect(returnedDetail.currentTask?.assignee).toBe(String(starter.value))
+    await pages.starter.goto(`/workflow/process-detail/${encodeURIComponent(returned.processInstanceId)}?source=own`)
+    await expect(pages.starter.getByText('待修改', { exact: true })).toBeVisible()
+    // 只编辑当前办理表单，避免同字段名的只读历史快照干扰用户操作。
+    await pages.starter.getByRole('tabpanel', { name: '办理表单' })
+      .getByPlaceholder('请输入申请主题').fill(`重新提交-${runId}`)
+    await pages.starter.getByRole('button', { name: '重新提交', exact: true }).click()
+    const resubmitPromise = pages.starter.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/task/resubmit', 'POST'))
+    await pages.starter.locator('.el-message-box').getByRole('button', { name: '确定', exact: true }).click()
+    await expectAjaxSuccess(await resubmitPromise, '/workflow/task/resubmit')
     const returnedA = await findAssignedWorkflowTask(
       pages.approver, sequentialProcessKey, 'reviewA', returned.processInstanceId)
     expect(String(returnedA.taskId)).not.toBe(String(returnA.taskId))
-    await expectActiveTaskState(pages.admin, returned.processInstanceId, returnedA.taskId, {
+    const resubmittedDetail = await expectActiveTaskState(
+      pages.approver, returned.processInstanceId, returnedA.taskId, {
       taskDefinitionKey: 'reviewA', assignee: String(approver.value)
     })
+    expect(resubmittedDetail.flowViewer?.unfinishedActivityIds,
+      '重新提交后的一级审批必须投影为当前节点').toContain('reviewA')
+    expect(resubmittedDetail.flowViewer?.returnedActivityIds,
+      '重新提交后当前一级审批不能继续保留历史退回标记').not.toContain('reviewA')
+    await openTaskDetail(pages.approver, returned.processInstanceId, returnedA.taskId)
+    await pages.approver.getByRole('tab', { name: '流程图', exact: true }).click()
+    const resubmittedReviewA = pages.approver.locator(
+      '.workflow-viewer__canvas .djs-element[data-element-id="reviewA"]')
+    await expect(resubmittedReviewA, '流程图必须渲染重新提交后的当前一级审批节点').toBeVisible()
+    await expect(resubmittedReviewA).toHaveClass(/workflow-current/)
+    await expect(resubmittedReviewA).not.toHaveClass(/workflow-returned/)
     await expectWorkflowAudit(pages.admin, returned.processInstanceId, {
       taskId: returnB.taskId,
       type: '2',
       action: 'RETURN',
       actorUserId: admin.value,
-      opinion: '退回一级重新核验',
+      opinion: '申请资料需要修改',
       targetNodeKey: 'reviewA'
     })
     await expectRejectedWorkflowActionWithoutSideEffects(
       pages.admin, returned.processInstanceId, returnedA.taskId, 409, expectedCode => callWorkflowApi(
         pages.admin, 'POST', '/workflow/task/return', {
-          data: { taskId: returnB.taskId, targetKey: 'reviewA', comment: '旧任务重复退回', copyUserIds: [] },
+          data: { taskId: returnB.taskId, comment: '旧任务重复退回', copyUserIds: [] },
           expectedCode
         }), copyReadablePages)
-    evidence.push({ scenario: 'return', finalStatus: 'running', activeNode: 'reviewA', deniedCode: 403, staleCode: 409 })
+    evidence.push({ scenario: 'return-resubmit', finalStatus: 'running', activeNode: 'reviewA', deniedCode: 403, staleCode: 409 })
 
     // 场景三：一级办理人从页面驳回整实例，持久化 rejected 终态并拒绝越权及终态重复驳回。
     const rejected = await startTrackedScenario(
@@ -761,6 +780,105 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
           data: { taskId: candidateTask.taskId }, expectedCode
         }), copyReadablePages)
     evidence.push({ scenario: 'claim-unclaim', finalStatus: 'running', assignee: null, deniedCode: 403, staleCode: 409 })
+
+    // 场景八：缓存部署页和模型页后创建 V2，经模型页真实部署按钮发布，并在返回部署页时自动刷新。
+    const deploymentListPromise = pages.designer.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/deploy/list', 'GET'))
+    await pages.designer.goto('/workflow/deploy')
+    await expectAjaxSuccess(await deploymentListPromise, '/workflow/deploy/list')
+    await pages.designer.getByPlaceholder('请输入流程标识').fill(sequentialProcessKey)
+    const filteredDeploymentPromise = pages.designer.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/deploy/list', 'GET'))
+    await pages.designer.getByRole('button', { name: '搜索', exact: true }).click()
+    await expectAjaxSuccess(await filteredDeploymentPromise, '/workflow/deploy/list')
+    await expect(pages.designer.locator('.el-table__body-wrapper tbody tr').filter({
+      hasText: sequentialProcessKey
+    }).first()).toContainText('V1')
+
+    const initialModelListPromise = pages.designer.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/model/list', 'GET'))
+    await pages.designer.locator('.sidebar-container a[href="/workflow/model"]').click()
+    await expectAjaxSuccess(await initialModelListPromise, '/workflow/model/list')
+    await pages.designer.getByPlaceholder('请输入模型标识').fill(sequentialProcessKey)
+    const filteredModelPromise = pages.designer.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/model/list', 'GET'))
+    await pages.designer.getByRole('button', { name: '搜索', exact: true }).click()
+    await expectAjaxSuccess(await filteredModelPromise, '/workflow/model/list')
+
+    const savedVersion = await callWorkflowApi(pages.designer, 'POST', '/workflow/model/save', {
+      data: {
+        requestId: randomUUID(),
+        modelId: sequentialModel.modelId,
+        bpmnXml: sequentialBpmnXml,
+        newVersion: false
+      }
+    })
+    const versionTwoModelId = String(savedVersion.data?.modelId || '')
+    expect(versionTwoModelId, '从已部署 V1 保存必须返回正式 V2 模型主键').not.toBe('')
+    expect(versionTwoModelId).not.toBe(sequentialModel.modelId)
+    resources.modelIds.push(versionTwoModelId)
+
+    const cachedDeploymentPromise = pages.designer.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/deploy/list', 'GET'))
+    await pages.designer.locator('.sidebar-container a[href="/workflow/deploy"]').click()
+    await expectAjaxSuccess(await cachedDeploymentPromise, '/workflow/deploy/list')
+    const cachedModelPromise = pages.designer.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/model/list', 'GET'))
+    await pages.designer.locator('.sidebar-container a[href="/workflow/model"]').click()
+    await expectAjaxSuccess(await cachedModelPromise, '/workflow/model/list')
+    const versionTwoModelRow = pages.designer.locator('.el-table__body-wrapper tbody tr').filter({
+      hasText: sequentialProcessKey
+    }).first()
+    await expect(versionTwoModelRow, '重新进入缓存模型页必须自动显示最新 V2').toContainText('V2')
+    await expect(versionTwoModelRow).toContainText('未部署')
+
+    const deployVersionTwoPromise = pages.designer.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/model/deploy', 'POST'))
+    await versionTwoModelRow.locator('button.el-button--success').click()
+    const deploymentConfirmation = pages.designer.locator('.el-message-box')
+    await expect(deploymentConfirmation).toContainText('V2')
+    await deploymentConfirmation.getByRole('button', { name: '确定', exact: true }).click()
+    const deployedVersionTwo = await expectAjaxSuccess(
+      await deployVersionTwoPromise, '/workflow/model/deploy')
+    const versionTwoDeploymentId = String(deployedVersionTwo.data?.deploymentId || '')
+    expect(versionTwoDeploymentId, 'V2 部署必须返回正式部署主键').not.toBe('')
+    resources.deploymentIds.push(versionTwoDeploymentId)
+
+    const refreshedDeploymentPromise = pages.designer.waitForResponse(response => matchesEndpoint(
+      response, '/workflow/deploy/list', 'GET'))
+    await pages.designer.locator('.sidebar-container a[href="/workflow/deploy"]').click()
+    await expectAjaxSuccess(await refreshedDeploymentPromise, '/workflow/deploy/list')
+    const versionTwoDeploymentRow = pages.designer.locator('.el-table__body-wrapper tbody tr').filter({
+      hasText: sequentialProcessKey
+    }).first()
+    await expect(versionTwoDeploymentRow, '返回缓存部署页必须自动显示最新发布版本').toContainText('V2')
+    await expect(versionTwoDeploymentRow).toContainText('已激活')
+
+    const published = await callWorkflowApi(pages.designer, 'GET', '/workflow/deploy/publishList', {
+      query: { processKey: sequentialProcessKey, pageNum: 1, pageSize: 20 }
+    })
+    const publishedVersions = (published.rows || []).filter(row => row.processKey === sequentialProcessKey)
+    expect(publishedVersions, '唯一流程标识必须保留两个可追踪发布版本').toHaveLength(2)
+    const publishedV1 = publishedVersions.find(row => Number(row.version) === 1)
+    const publishedV2 = publishedVersions.find(row => Number(row.version) === 2)
+    expect(publishedV1?.suspended, '发布 V2 后历史 V1 必须自动挂起').toBe(true)
+    expect(publishedV2?.suspended, '发布 V2 后最新定义必须保持激活').toBe(false)
+    expect(String(publishedV1?.definitionId || '')).toBe(sequentialDefinition.definitionId)
+
+    const latestSequentialDefinition = await findStartableWorkflowDefinition(
+      pages.starter, sequentialProcessKey)
+    expect(latestSequentialDefinition.definitionId).toBe(String(publishedV2.definitionId))
+    expect(latestSequentialDefinition.deploymentId).toBe(versionTwoDeploymentId)
+    await expectActiveTaskState(pages.approver, returned.processInstanceId, returnedA.taskId, {
+      taskDefinitionKey: 'reviewA', assignee: String(approver.value)
+    })
+    evidence.push({
+      scenario: 'deploy-version-refresh',
+      latestVersion: 2,
+      latestState: 'active',
+      historicalState: 'suspended',
+      oldVersionInstanceState: 'running'
+    })
 
     await testInfo.attach('workflow-lifecycle-evidence.json', {
       body: Buffer.from(JSON.stringify({ runId, scenarios: evidence }, null, 2)),

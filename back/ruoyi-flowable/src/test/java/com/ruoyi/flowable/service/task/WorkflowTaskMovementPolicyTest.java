@@ -2,10 +2,6 @@ package com.ruoyi.flowable.service.task;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-
-import java.util.List;
 import org.flowable.bpmn.model.BoundaryEvent;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.EndEvent;
@@ -14,7 +10,6 @@ import org.flowable.bpmn.model.ParallelGateway;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.bpmn.model.UserTask;
-import org.flowable.task.api.history.HistoricTaskInstance;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.constant.HttpStatus;
@@ -36,33 +31,12 @@ class WorkflowTaskMovementPolicyTest
     }
 
     /**
-     * 验证串行历史节点按输入顺序返回，状态迁移删除记录不会成为候选节点。
-     *
-     * @return 无返回值，候选节点错误时测试失败
-     */
-    @Test
-    void findsOnlyNormallyCompletedSerialReturnNodes()
-    {
-        BpmnFixture fixture = serialFixture();
-        HistoricTaskInstance nearest = historicTask("historic-b", "task-b", "复核", null);
-        HistoricTaskInstance earliest = historicTask("historic-a", "task-a", "申请", null);
-        HistoricTaskInstance moved = historicTask("historic-moved", "task-a", "申请", "Change activity");
-
-        assertThat(movementPolicy.findLegalReturnNodes(fixture.process(), fixture.currentTask(),
-                List.of(nearest, moved, earliest)))
-                .extracting("id", "name")
-                .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple("task-b", "复核"),
-                        org.assertj.core.groups.Tuple.tuple("task-a", "申请"));
-    }
-
-    /**
      * 验证候选节点到当前任务穿越并行网关时不会进入可退节点列表。
      *
      * @return 无返回值，并行路径被错误放行时测试失败
      */
     @Test
-    void excludesReturnPathAcrossParallelGateway()
+    void rejectsDirectReturnPathAcrossParallelGateway()
     {
         BpmnModel model = new BpmnModel();
         org.flowable.bpmn.model.Process process = process(model);
@@ -74,9 +48,8 @@ class WorkflowTaskMovementPolicyTest
         connect(process, source, parallel, "flow-1");
         connect(process, parallel, current, "flow-2");
 
-        assertThat(movementPolicy.findLegalReturnNodes(process, current,
-                List.of(historicTask("historic-source", "source", "来源", null))))
-                .isEmpty();
+        assertConflict(() -> movementPolicy.requireSafeDirectReturnPath(
+                process, source, current));
     }
 
     /**
@@ -102,7 +75,7 @@ class WorkflowTaskMovementPolicyTest
      * @return 无返回值，服务任务路径仍被列为合法退回目标时测试失败
      */
     @Test
-    void excludesReturnPathAcrossServiceTask()
+    void rejectsDirectReturnPathAcrossServiceTask()
     {
         BpmnModel model = new BpmnModel();
         org.flowable.bpmn.model.Process process = process(model);
@@ -114,9 +87,8 @@ class WorkflowTaskMovementPolicyTest
         connect(process, source, sideEffect, "flow-source-service");
         connect(process, sideEffect, current, "flow-service-current");
 
-        assertThat(movementPolicy.findLegalReturnNodes(process, current,
-                List.of(historicTask("historic-source", "source", "来源", null))))
-                .isEmpty();
+        assertConflict(() -> movementPolicy.requireSafeDirectReturnPath(
+                process, source, current));
     }
 
     /**
@@ -188,18 +160,6 @@ class WorkflowTaskMovementPolicyTest
 
         assertConflict(() -> movementPolicy.requireRejectEndEvent(
                 fixture.process(), fixture.currentTask()));
-    }
-
-    /**
-     * 验证退回执行前必须使用实时列表匹配目标，过期目标返回状态冲突。
-     *
-     * @return 无返回值，过期目标被放行时测试失败
-     */
-    @Test
-    void rejectsTargetMissingFromRecomputedReturnList()
-    {
-        assertConflict(() -> movementPolicy.requireLegalReturnTarget(
-                "stale-target", List.of()));
     }
 
     /**
@@ -286,26 +246,6 @@ class WorkflowTaskMovementPolicyTest
         source.getOutgoingFlows().add(flow);
         target.getIncomingFlows().add(flow);
         process.addFlowElement(flow);
-    }
-
-    /**
-     * 创建指定节点的历史任务替身。
-     *
-     * @param id String，历史任务主键
-     * @param taskDefinitionKey String，BPMN 用户任务节点 key
-     * @param name String，历史任务名称
-     * @param deleteReason String，可为空的任务删除原因
-     * @return HistoricTaskInstance，具有策略所需字段的历史任务替身
-     */
-    private HistoricTaskInstance historicTask(String id, String taskDefinitionKey,
-            String name, String deleteReason)
-    {
-        HistoricTaskInstance task = mock(HistoricTaskInstance.class);
-        when(task.getId()).thenReturn(id);
-        when(task.getTaskDefinitionKey()).thenReturn(taskDefinitionKey);
-        when(task.getName()).thenReturn(name);
-        when(task.getDeleteReason()).thenReturn(deleteReason);
-        return task;
     }
 
     /**

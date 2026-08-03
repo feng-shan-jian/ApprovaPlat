@@ -59,6 +59,14 @@ public class TokenService
     @Value("${token.secret}")
     private String secret;
 
+    /** 未显式注入密钥时，是否允许从持久化文件读取或首次生成。 */
+    @Value("${token.secret-file.enabled:false}")
+    private boolean secretFileEnabled;
+
+    /** 自动生成密钥的持久化文件路径，必须位于运行账户可写的私有目录。 */
+    @Value("${token.secret-file.path:}")
+    private String secretFilePath;
+
     /** 由受控 Base64 密钥材料生成的 HS512 对称签名密钥。 */
     private SecretKey signingKey;
 
@@ -76,20 +84,43 @@ public class TokenService
     private RedisCache redisCache;
 
     /**
-     * 在应用对外提供登录能力前按既有 Base64/Base64URL 配置语义校验并初始化 HS512 密钥。
+     * 在应用对外提供登录能力前解析显式配置或持久化密钥文件，并初始化 HS512 密钥。
      *
-     * @return void，无返回值；密钥编码非法或解码后不足 64 字节时中止应用启动
+     * @return void，无返回值；密钥来源不可用、编码非法或解码后不足 64 字节时中止应用启动
      */
     @PostConstruct
     public void validateSecret()
     {
-        byte[] secretBytes = decodeConfiguredSecret(secret);
+        // 运维显式注入的密钥始终优先；空值才允许进入自动持久化分支。
+        String effectiveSecret = resolveEffectiveSecret();
+        byte[] secretBytes = decodeConfiguredSecret(effectiveSecret);
         if (secretBytes.length < MIN_TOKEN_SECRET_BYTES)
         {
             throw new IllegalStateException(
                     "RUOYI_TOKEN_SECRET 必须是合法 Base64 或 Base64URL，且解码后至少包含 64 个字节");
         }
         this.signingKey = Keys.hmacShaKeyFor(secretBytes);
+    }
+
+    /**
+     * 解析当前进程唯一有效的 Token 密钥来源。
+     *
+     * @return String，显式配置或持久化文件中的 Base64/Base64URL 密钥
+     */
+    private String resolveEffectiveSecret()
+    {
+        String configuredSecret = secret == null ? "" : secret.trim();
+        if (StringUtils.isNotEmpty(configuredSecret))
+        {
+            return configuredSecret;
+        }
+        if (!secretFileEnabled)
+        {
+            throw new IllegalStateException(
+                    "RUOYI_TOKEN_SECRET 未配置，且 token.secret-file.enabled 未开启");
+        }
+        // 文件存储负责跨进程互斥、原子写入和权限收紧，确保首次启动后稳定复用。
+        return new TokenSecretFileStore().loadOrCreate(secretFilePath);
     }
 
     /**

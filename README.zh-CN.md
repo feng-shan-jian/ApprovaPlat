@@ -77,6 +77,17 @@ npm install
 npm run build:prod
 ```
 
+## 本地启动安全密钥
+
+开发者无需手工生成 `RUOYI_TOKEN_SECRET`。后端首次启动时会自动生成 64 字节随机密钥，
+保存到当前用户目录的 `.approvaplat/token-secret`，后续启动稳定复用。该文件不位于仓库中，
+不会进入 Git 或构建产物；显式设置 `RUOYI_TOKEN_SECRET` 时始终以环境变量为准。
+
+可通过 `RUOYI_TOKEN_SECRET_FILE` 将密钥文件改到其他持久化目录。不要删除正在使用的密钥文件，
+否则已签发的登录 Token 会在后端重启后失效。
+
+标准生产配置和 systemd 单元见 [deployment/README.md](deployment/README.md)，默认同样自动创建并持久化密钥。
+
 ## 许可证
 
 [MIT License](LICENSE)

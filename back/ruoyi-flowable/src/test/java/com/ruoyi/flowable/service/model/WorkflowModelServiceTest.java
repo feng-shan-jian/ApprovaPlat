@@ -710,7 +710,7 @@ class WorkflowModelServiceTest
     }
 
     /**
-     * 验证部署会校验全部真实表单、设置全部定义分类并批量保存不可变快照。
+     * 验证部署会保存不可变快照并自动停用旧定义，同时不冻结旧版本在途实例。
      *
      * @return 无返回值；部署或快照闭环不完整时测试失败
      */
@@ -719,6 +719,12 @@ class WorkflowModelServiceTest
     {
         Model model = model("model-1", "expense", "报销审批", "finance", 2, null);
         when(repositoryService.getModel("model-1")).thenReturn(model);
+        WorkflowModelLockRow lockedModel = lockedModel(
+                "model-1", "expense", "报销审批", "finance", 2, null);
+        when(modelSaveMapper.selectOldestDefaultTenantModelForUpdate("expense"))
+                .thenReturn(lockedModel);
+        when(modelSaveMapper.selectDefaultTenantModelForUpdate("model-1"))
+                .thenReturn(lockedModel);
         ModelQuery deployedQuery = modelQuery();
         when(repositoryService.createModelQuery()).thenReturn(deployedQuery);
         when(deployedQuery.count()).thenReturn(0L);
@@ -741,19 +747,30 @@ class WorkflowModelServiceTest
         Deployment deployment = mock(Deployment.class);
         when(deployment.getId()).thenReturn("deployment-1");
         when(builder.deploy()).thenReturn(deployment);
+        ProcessDefinition oldDefinition = mock(ProcessDefinition.class);
+        when(oldDefinition.getId()).thenReturn("expense:1:9");
+        ProcessDefinitionQuery activeDefinitionQuery = mock(ProcessDefinitionQuery.class);
+        when(activeDefinitionQuery.processDefinitionKey("expense"))
+                .thenReturn(activeDefinitionQuery);
+        when(activeDefinitionQuery.active()).thenReturn(activeDefinitionQuery);
+        when(activeDefinitionQuery.list()).thenReturn(List.of(oldDefinition));
         ProcessDefinition definition = mock(ProcessDefinition.class);
-        when(definition.getId()).thenReturn("expense:1:10");
-        ProcessDefinitionQuery definitionQuery = mock(ProcessDefinitionQuery.class);
-        when(repositoryService.createProcessDefinitionQuery()).thenReturn(definitionQuery);
-        when(definitionQuery.deploymentId("deployment-1")).thenReturn(definitionQuery);
-        when(definitionQuery.list()).thenReturn(List.of(definition));
+        when(definition.getId()).thenReturn("expense:2:10");
+        when(definition.getKey()).thenReturn("expense");
+        ProcessDefinitionQuery deployedDefinitionQuery = mock(ProcessDefinitionQuery.class);
+        when(deployedDefinitionQuery.deploymentId("deployment-1"))
+                .thenReturn(deployedDefinitionQuery);
+        when(deployedDefinitionQuery.list()).thenReturn(List.of(definition));
+        when(repositoryService.createProcessDefinitionQuery())
+                .thenReturn(activeDefinitionQuery, deployedDefinitionQuery);
         when(deployFormMapper.insertBatch(anyList())).thenAnswer(invocation ->
                 ((List<?>) invocation.getArgument(0)).size());
         ArgumentCaptor<List<WfDeployForm>> snapshots = snapshotCaptor();
 
         assertThat(service.deployModel("model-1")).isEqualTo("deployment-1");
 
-        verify(repositoryService).setProcessDefinitionCategory("expense:1:10", "finance");
+        verify(repositoryService).setProcessDefinitionCategory("expense:2:10", "finance");
+        verify(repositoryService).suspendProcessDefinitionById("expense:1:9", false, null);
         verify(formTemplateValidator).validate("{\"v\":1}");
         verify(formTemplateValidator).validate("{\"v\":2}");
         verify(deployFormMapper).insertBatch(snapshots.capture());

@@ -40,13 +40,13 @@ import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessCancelRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessRevokeRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowApplicationResubmitRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowMultiInstanceAdjustmentRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskClaimRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskDelegateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskRejectRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskResolveRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnListRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskTransferRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskUnclaimRequest;
@@ -119,7 +119,7 @@ class WfTaskControllerTest
                 .andExpect(status().isBadRequest());
         mockMvc.perform(post("/workflow/task/return").contentType(APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest());
-        mockMvc.perform(post("/workflow/task/returnList").contentType(APPLICATION_JSON).content("{}"))
+        mockMvc.perform(post("/workflow/task/resubmit").contentType(APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest());
         mockMvc.perform(post("/workflow/task/multiInstance/adjust")
                         .contentType(APPLICATION_JSON).content("{}"))
@@ -163,8 +163,8 @@ class WfTaskControllerTest
                 "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
         assertPostEndpointContract("returnTask", WorkflowTaskReturnRequest.class, "/return",
                 "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
-        assertPostEndpointContract("returnList", WorkflowTaskReturnListRequest.class, "/returnList",
-                "@ss.hasPermi('workflow:process:approval')", BusinessType.OTHER);
+        assertPostEndpointContract("resubmit", WorkflowApplicationResubmitRequest.class, "/resubmit",
+                "@ss.hasPermi('workflow:process:start')", BusinessType.UPDATE);
         assertPostEndpointContract("adjustMultiInstance",
                 WorkflowMultiInstanceAdjustmentRequest.class, "/multiInstance/adjust",
                 "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
@@ -174,6 +174,41 @@ class WfTaskControllerTest
                 "@ss.hasPermi('workflow:process:query')", BusinessType.OTHER);
         assertGetEndpointContract("getMultiInstanceState", "/multiInstance/{taskId}",
                 "@ss.hasPermi('workflow:process:approval')", BusinessType.OTHER);
+    }
+
+    /**
+     * 验证退回和重新提交 JSON 契约不再接收用户选择的目标节点或审批意见。
+     *
+     * @return 无返回值；字段绑定或业务服务入参漂移时测试失败
+     * @throws Exception MockMvc 执行请求失败时抛出
+     */
+    @Test
+    void bindsDirectReturnAndFormOnlyResubmitContracts() throws Exception
+    {
+        mockMvc.perform(post("/workflow/task/return")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"taskId":"task-return","comment":"请修改资料","copyUserIds":[9]}
+                                """))
+                .andExpect(status().isOk());
+        ArgumentCaptor<WorkflowTaskReturnRequest> returnCaptor =
+                ArgumentCaptor.forClass(WorkflowTaskReturnRequest.class);
+        verify(taskLifecycleService).returnTask(returnCaptor.capture());
+        assertThat(returnCaptor.getValue().taskId()).isEqualTo("task-return");
+        assertThat(returnCaptor.getValue().comment()).isEqualTo("请修改资料");
+        assertThat(returnCaptor.getValue().copyUserIds()).containsExactly(9L);
+
+        mockMvc.perform(post("/workflow/task/resubmit")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"taskId":"task-returned","variables":{"amount":1200}}
+                                """))
+                .andExpect(status().isOk());
+        ArgumentCaptor<WorkflowApplicationResubmitRequest> resubmitCaptor =
+                ArgumentCaptor.forClass(WorkflowApplicationResubmitRequest.class);
+        verify(taskLifecycleService).resubmitApplication(resubmitCaptor.capture());
+        assertThat(resubmitCaptor.getValue().taskId()).isEqualTo("task-returned");
+        assertThat(resubmitCaptor.getValue().variables()).containsEntry("amount", 1200);
     }
 
     /**

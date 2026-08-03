@@ -2,9 +2,7 @@ package com.ruoyi.flowable.service.task;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.flowable.bpmn.model.Activity;
 import org.flowable.bpmn.model.BpmnModel;
@@ -16,12 +14,10 @@ import org.flowable.bpmn.model.FlowNode;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.SubProcess;
 import org.flowable.bpmn.model.UserTask;
-import org.flowable.task.api.history.HistoricTaskInstance;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.domain.vo.WorkflowReturnNodeView;
 
 /**
  * 使用已部署 BPMN 模型计算保守且可证明安全的任务状态迁移边界。
@@ -32,14 +28,8 @@ public class WorkflowTaskMovementPolicy
     /** 单次图遍历允许访问的最大节点数，防止异常 BPMN 消耗无限资源。 */
     private static final int MAX_TRAVERSAL_NODES = 2048;
 
-    /** 单次可退节点计算允许读取的最大历史任务数。 */
-    private static final int MAX_HISTORIC_TASKS = 2000;
-
     /** 不支持的执行树或 BPMN 结构使用稳定的冲突提示。 */
     private static final String UNSUPPORTED_MOVEMENT_MESSAGE = "当前流程结构不支持该流转操作";
-
-    /** 客户端提交的目标不在实时可退列表中时使用的稳定提示。 */
-    private static final String ILLEGAL_RETURN_TARGET_MESSAGE = "退回节点已失效，请刷新后重试";
 
     /**
      * 从流程定义中解析主流程及指定的普通用户任务节点。
@@ -103,66 +93,21 @@ public class WorkflowTaskMovementPolicy
     }
 
     /**
-     * 计算当前任务允许退回的已完成用户任务节点，结果顺序沿用历史任务输入顺序。
+     * 校验服务端自动选择的首个审批节点可以安全回到当前节点。
      *
      * @param process Process，当前流程定义中的主流程
-     * @param currentTask UserTask，当前活动用户任务节点
-     * @param historicTasks List&lt;HistoricTaskInstance&gt;，当前任务创建前正常完成的历史任务
-     * @return List&lt;WorkflowReturnNodeView&gt;，去重后的实时合法可退节点
+     * @param target UserTask，实例真实历史中的首个审批节点
+     * @param current UserTask，当前触发退回的审批节点
+     * @return 无返回值，节点或路径存在不可逆副作用时抛出 HTTP 409
      */
-    public List<WorkflowReturnNodeView> findLegalReturnNodes(
-            org.flowable.bpmn.model.Process process, UserTask currentTask,
-            List<HistoricTaskInstance> historicTasks)
+    public void requireSafeDirectReturnPath(org.flowable.bpmn.model.Process process,
+            UserTask target, UserTask current)
     {
-        requireSafeReturnSource(process, currentTask);
-        if (historicTasks == null || historicTasks.size() > MAX_HISTORIC_TASKS)
+        if (!isSafeNode(process, target) || !isSafeNode(process, current)
+                || !isSafeReturnReachable(process, target, current))
         {
             throw unsupportedMovement();
         }
-
-        Map<String, WorkflowReturnNodeView> candidates = new LinkedHashMap<>();
-        for (HistoricTaskInstance historicTask : historicTasks)
-        {
-            if (historicTask == null || !StringUtils.hasText(historicTask.getTaskDefinitionKey())
-                    || StringUtils.hasText(historicTask.getDeleteReason())
-                    || currentTask.getId().equals(historicTask.getTaskDefinitionKey()))
-            {
-                // 被状态迁移删除的任务不是一次正常审批完成，不允许再次作为回退目标。
-                continue;
-            }
-            FlowElement element = process.getFlowElement(historicTask.getTaskDefinitionKey(), true);
-            if (!(element instanceof UserTask targetTask) || !isSafeNode(process, targetTask)
-                    || !isSafeReturnReachable(process, targetTask, currentTask))
-            {
-                continue;
-            }
-            String nodeName = StringUtils.hasText(targetTask.getName())
-                    ? targetTask.getName().trim() : targetTask.getId();
-            candidates.putIfAbsent(targetTask.getId(),
-                    new WorkflowReturnNodeView(targetTask.getId(), nodeName));
-        }
-        return List.copyOf(candidates.values());
-    }
-
-    /**
-     * 从实时可退列表中校验客户端提交的退回目标并返回规范节点 key。
-     *
-     * @param targetKey String，客户端提交的 BPMN 目标节点 key
-     * @param legalNodes List&lt;WorkflowReturnNodeView&gt;，同一事务内重新计算的可退节点
-     * @return String，列表中匹配的规范目标节点 key
-     */
-    public String requireLegalReturnTarget(String targetKey, List<WorkflowReturnNodeView> legalNodes)
-    {
-        if (!StringUtils.hasText(targetKey) || legalNodes == null)
-        {
-            throw illegalReturnTarget();
-        }
-        String normalizedTarget = targetKey.trim();
-        return legalNodes.stream()
-                .map(WorkflowReturnNodeView::id)
-                .filter(normalizedTarget::equals)
-                .findFirst()
-                .orElseThrow(this::illegalReturnTarget);
     }
 
     /**
@@ -372,22 +317,6 @@ public class WorkflowTaskMovementPolicy
     }
 
     /**
-     * 校验退回来源属于主流程普通安全用户任务。
-     *
-     * @param process Process，当前流程定义中的主流程
-     * @param source UserTask，当前退回来源任务节点
-     * @return 无返回值，不受支持时抛出 HTTP 409 业务异常
-     */
-    private void requireSafeReturnSource(org.flowable.bpmn.model.Process process,
-            UserTask source)
-    {
-        if (!isSafeNode(process, source))
-        {
-            throw unsupportedMovement();
-        }
-    }
-
-    /**
      * 判断节点是否声明进入或离开时的异步执行语义。
      *
      * @param node FlowNode，待核验的用户任务、网关或其他流程节点
@@ -409,16 +338,6 @@ public class WorkflowTaskMovementPolicy
     private ServiceException unsupportedMovement()
     {
         return new ServiceException(UNSUPPORTED_MOVEMENT_MESSAGE, HttpStatus.CONFLICT);
-    }
-
-    /**
-     * 创建退回目标失效的稳定冲突异常。
-     *
-     * @return ServiceException，HTTP 409 业务异常
-     */
-    private ServiceException illegalReturnTarget()
-    {
-        return new ServiceException(ILLEGAL_RETURN_TARGET_MESSAGE, HttpStatus.CONFLICT);
     }
 
     /**

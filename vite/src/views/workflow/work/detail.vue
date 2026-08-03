@@ -23,8 +23,9 @@
         <el-button v-if="canResolve" type="primary" :loading="actionBusy" @click="openActionDialog('resolve')">完成委派</el-button>
         <el-button v-if="canManageTask" @click="openUserAction('delegate')">委派</el-button>
         <el-button v-if="canManageTask" @click="openUserAction('transfer')">转办</el-button>
-        <el-button v-if="canReturnTask" @click="openReturnDialog">退回</el-button>
+        <el-button v-if="canReturnTask" type="danger" plain @click="openReturnDialog">退回</el-button>
         <el-button v-if="canMoveTask" type="danger" plain @click="openActionDialog('reject')">驳回</el-button>
+        <el-button v-if="canResubmit" type="primary" :loading="actionBusy" @click="confirmResubmit">重新提交</el-button>
         <el-button v-if="canComplete" type="primary" @click="openActionDialog('complete')">通过</el-button>
       </div>
     </div>
@@ -124,13 +125,13 @@
               <h3>{{ detail.currentTaskForm.formName || detail.currentTaskForm.nodeName || '当前任务表单' }}</h3>
               <span>{{ detail.currentTaskForm.nodeName || detail.currentTask?.taskName }}</span>
             </div>
-            <el-tag v-if="!canComplete" type="info">只读</el-tag>
+            <el-tag v-if="!canComplete && !canResubmit" type="info">只读</el-tag>
           </div>
           <ProcessFormRenderer
             ref="taskFormRef"
             v-model="taskFormValues"
             :content="detail.currentTaskForm.content"
-            :readonly="!canComplete"
+            :readonly="!canComplete && !canResubmit"
             @error="showComponentError"
           />
         </div>
@@ -217,11 +218,6 @@
       @closed="handleActionDialogClosed"
     >
       <el-form ref="actionFormRef" :model="actionDialog" label-width="96px">
-        <el-form-item v-if="actionDialog.type === 'return'" label="退回节点" required>
-          <el-select v-model="actionDialog.targetKey" placeholder="请选择服务端返回的可退节点" style="width: 100%">
-            <el-option v-for="node in returnableNodes" :key="node.id" :label="node.name" :value="node.id" />
-          </el-select>
-        </el-form-item>
         <el-form-item v-if="isUserAction" label="目标用户" required>
           <el-select
             v-model="actionDialog.userId"
@@ -381,7 +377,7 @@ import {
   completeTask,
   delegateTask,
   getMultiInstanceState,
-  listReturnableTasks,
+  resubmitApplication,
   rejectTask,
   resolveTask,
   returnTask,
@@ -410,7 +406,6 @@ const taskFormValues = ref({})
 const historyForms = ref([])
 const taskFormRef = ref(null)
 const actionFormRef = ref(null)
-const returnableNodes = ref([])
 // 审批办理对象与普通抄送对象使用独立目录状态，禁止通用启用用户混入任务分配请求。
 const approvalUserOptions = ref([])
 const approvalUserLoading = ref(false)
@@ -428,6 +423,8 @@ const multiInstanceUserOptions = ref([])
 let approvalUserSearchSequence = 0
 let copyUserSearchSequence = 0
 let detailLoadSequence = 0
+// 详情页由页签缓存；首次请求完成后，重新进入同一路由也必须重新读取运行时轨迹。
+let detailPageInitialized = false
 // 加签身份检索与成员快照各自使用递增序号，禁止旧结果覆盖当前任务 revision。
 let multiInstanceUserSearchSequence = 0
 let multiInstanceRefreshSequence = 0
@@ -455,7 +452,6 @@ const actionDialog = reactive({
   visible: false,
   type: '',
   comment: '',
-  targetKey: '',
   userId: '',
   copyUserIds: [],
   nextUserIds: [],
@@ -482,6 +478,7 @@ const multiInstanceDialog = reactive({
 // 将服务端稳定流程状态映射为用户可见标签和 Element Plus 语义色。
 const statusMeta = computed(() => ({
   running: { label: '进行中', type: 'primary' },
+  returned: { label: '待修改', type: 'warning' },
   suspended: { label: '已挂起', type: 'warning' },
   completed: { label: '已完成', type: 'success' },
   rejected: { label: '已驳回', type: 'danger' },
@@ -535,6 +532,11 @@ const canOperateTask = computed(() => currentTaskOwned.value
   && hasPermission('workflow:process:approval'))
 // 完成、节点移动和管理动作根据委派上下文进一步收窄，页面门禁与后端状态校验保持一致。
 const canComplete = computed(() => canOperateTask.value && !pendingDelegation.value)
+// 退回修改任务只对原发起人开放，并使用流程发起权限而不是审批权限。
+const canResubmit = computed(() => currentTaskOwned.value
+  && detail.processStatus === 'returned'
+  && String(detail.startUserId || '') === currentUserId.value
+  && hasPermission('workflow:process:start'))
 const canMoveTask = computed(() => canOperateTask.value && !hasDelegationContext.value)
 // 退回能力由后端复用正式动作准备链投影，前端不再把缺少动态多实例状态误判为普通安全任务。
 const canReturnTask = computed(() => canMoveTask.value && detail.returnAllowed === true)
@@ -554,7 +556,7 @@ const canResolve = computed(() => currentTaskOwned.value
   && detail.processStatus === 'running'
   && pendingDelegation.value
   && hasPermission('workflow:process:approval'))
-const hasAnyTaskAction = computed(() => canComplete.value || canMoveTask.value || canManageTask.value || canUnclaim.value || canResolve.value)
+const hasAnyTaskAction = computed(() => canComplete.value || canResubmit.value || canMoveTask.value || canManageTask.value || canUnclaim.value || canResolve.value)
 // 用户选择与抄送字段按动作白名单显示，未列入的动作不会向后端发送额外身份参数。
 const isUserAction = computed(() => ['delegate', 'transfer'].includes(actionDialog.type))
 const supportsCopyAction = computed(() => ['complete', 'reject', 'return', 'delegate', 'resolve', 'transfer'].includes(actionDialog.type))
@@ -863,32 +865,45 @@ async function openActionDialog(type) {
 }
 
 /**
- * 查询服务端实时可退节点并打开退回对话框，不复用历史缓存推断目标。
- * @returns {Promise<void>} 合法节点加载成功后显示退回对话框。
+ * 打开直接退回发起人的确认对话框，目标由后端根据流程发起人和真实首审批历史确定。
+ * @returns {Promise<void>} 当前任务上下文有效时显示退回对话框。
  */
 async function openReturnDialog() {
   if (!assertActionAllowed('return')) return
-  // returnContext 是本次可退节点查询唯一允许绑定的流程任务，路由切换后响应必须直接丢弃。
   const returnContext = freezeCurrentTaskContext()
   if (!isCurrentTaskContext(returnContext)) return denyAction('当前任务状态已变化，请刷新后重试')
+  actionDialog.type = 'return'
+  bindActionDialogTaskContext(returnContext)
+  actionDialog.visible = true
+  await loadActionIdentityOptions('return')
+}
+
+/**
+ * 校验并覆盖保存当前原申请表单，不要求申请人填写任何审批意见。
+ * @returns {Promise<void>} 用户确认且后端同事务恢复首审批配置后返回来源列表。
+ */
+async function confirmResubmit() {
+  if (!assertActionAllowed('resubmit')) return
+  const taskContext = freezeCurrentTaskContext()
+  if (!isCurrentTaskContext(taskContext)) return denyAction('当前任务状态已变化，请刷新后重试')
+  if (!detail.currentTaskForm || !taskFormRef.value) return denyAction('原申请表单尚未就绪')
+
   actionBusy.value = true
   try {
-    const response = await listReturnableTasks({ taskId: returnContext.taskId })
-    if (!isCurrentTaskContext(returnContext)) return
-    const safeReturnableNodes = Array.isArray(response.data) ? response.data.filter(node => {
-      const id = String(node?.id || '')
-      const name = String(node?.name || '')
-      return id.length > 0 && id.length <= 255 && name.length > 0 && name.length <= 512
-    }) : []
-    if (!safeReturnableNodes.length) {
-      proxy.$modal.msgWarning('当前任务没有可退回的历史节点')
-      return
+    const valid = await taskFormRef.value.validate().catch(error => {
+      showComponentError(error)
+      return false
+    })
+    if (!valid) return
+    const variables = taskFormRef.value.getValues()
+    await proxy.$modal.confirm('确认使用当前表单内容重新提交吗？')
+    // 表单校验和用户确认均为异步步骤，写入前必须再次确认仍是同一退回任务。
+    if (!isCurrentTaskContext(taskContext) || !canResubmit.value) {
+      return denyAction('当前任务已切换，本次修改未提交')
     }
-    returnableNodes.value = safeReturnableNodes
-    actionDialog.type = 'return'
-    bindActionDialogTaskContext(returnContext)
-    actionDialog.visible = true
-    await loadActionIdentityOptions('return')
+    await resubmitApplication({ taskId: taskContext.taskId, variables })
+    proxy.$modal.msgSuccess('重新提交成功')
+    await closePage()
   } finally {
     actionBusy.value = false
   }
@@ -1460,7 +1475,7 @@ async function submitAction() {
       await completeTask(request)
     }
     if (type === 'reject') await rejectTask({ taskId, comment, copyUserIds })
-    if (type === 'return') await returnTask({ taskId, targetKey: actionDialog.targetKey, comment, copyUserIds })
+    if (type === 'return') await returnTask({ taskId, comment, copyUserIds })
     if (type === 'delegate') {
       await delegateTask({ taskId, userId: Number(actionDialog.userId), comment, copyUserIds })
     }
@@ -1470,7 +1485,7 @@ async function submitAction() {
     }
     proxy.$modal.msgSuccess(`${actionTitle}成功`)
     actionDialog.visible = false
-    if (['delegate', 'resolve', 'transfer'].includes(type)) {
+    if (['delegate', 'resolve', 'transfer', 'return'].includes(type)) {
       // 委派、办结或转办后当前用户立即失去活动任务对象权限，直接返回来源列表。
       await closePage()
       return
@@ -1527,16 +1542,19 @@ async function confirmUnclaim() {
  * @returns {boolean} 当前页面快照允许继续发起请求时返回 true。
  */
 function assertActionAllowed(type, validateInput = false) {
-  if (!['complete', 'reject', 'return', 'delegate', 'resolve', 'transfer', 'unclaim'].includes(type)) {
+  if (!['complete', 'reject', 'return', 'delegate', 'resolve', 'transfer', 'unclaim', 'resubmit'].includes(type)) {
     return denyAction('任务动作不合法')
   }
-  const requiredPermission = type === 'unclaim' ? 'workflow:process:claim' : 'workflow:process:approval'
+  const requiredPermission = type === 'unclaim' ? 'workflow:process:claim'
+    : type === 'resubmit' ? 'workflow:process:start' : 'workflow:process:approval'
   if (!ready.value || loading.value) return denyAction('流程详情尚未就绪')
   if (!hasPermission(requiredPermission)) return denyAction('没有执行该操作的权限')
   if (actionBusy.value || multiInstanceBusy.value) return denyAction('任务正在处理中，请勿重复提交')
-  if (detail.processStatus !== 'running' || !detail.currentTask?.active) return denyAction('当前任务已不处于可办理状态')
+  const expectedStatus = type === 'resubmit' ? 'returned' : 'running'
+  if (detail.processStatus !== expectedStatus || !detail.currentTask?.active) return denyAction('当前任务已不处于可办理状态')
   if (!detail.currentTask.taskId || String(detail.currentTask.taskId).length > 64) return denyAction('当前任务主键不合法')
   if (!currentTaskOwned.value) return denyAction('当前任务不属于登录用户')
+  if (type === 'resubmit' && !canResubmit.value) return denyAction('当前申请不允许重新提交')
   if (type === 'complete' && pendingDelegation.value) {
     return denyAction('待处理委派任务不能直接完成')
   }
@@ -1561,9 +1579,6 @@ function assertActionAllowed(type, validateInput = false) {
     if (revision !== null && (!Number.isInteger(revision) || revision < 0 || revision > 2147483647)) {
       return denyAction('会签成员版本不合法，请刷新后重试')
     }
-  }
-  if (type === 'return' && !returnableNodes.value.some(node => node.id === actionDialog.targetKey)) {
-    return denyAction('请选择服务端返回的有效退回节点')
   }
   if (['delegate', 'transfer'].includes(type)) {
     if (!positiveUserId(actionDialog.userId)) return denyAction('请选择有效的目标用户')
@@ -1651,7 +1666,6 @@ function positiveUserId(value) {
 function resetActionDialog() {
   actionDialog.type = ''
   actionDialog.comment = ''
-  actionDialog.targetKey = ''
   actionDialog.userId = ''
   actionDialog.copyUserIds = []
   actionDialog.nextUserIds = []
@@ -1660,7 +1674,6 @@ function resetActionDialog() {
   actionDialog.boundTaskId = ''
   actionDialog.boundDetailSequence = -1
   actionDialog.error = ''
-  returnableNodes.value = []
   approvalUserOptions.value = []
   approvalUserOptionCache.clear()
   verifiedApprovalUserIds.clear()
@@ -1864,7 +1877,18 @@ async function closePage() {
 }
 
 watch(() => route.fullPath, () => loadDetail())
-loadDetail()
+const initialDetailLoad = loadDetail().finally(() => {
+  detailPageInitialized = true
+})
+
+/**
+ * 页签重新激活时重新查询实例详情，使退回、重提和审批后的流程图状态立即一致。
+ * @returns {Promise<void>} 首次加载后从真实详情接口刷新页面状态。
+ */
+onActivated(async () => {
+  if (!detailPageInitialized) return initialDetailLoad
+  await loadDetail()
+})
 </script>
 
 <style scoped lang="scss">
