@@ -34,6 +34,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowInstanceTerminateView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfAttachmentMapper;
+import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.framework.web.service.PermissionService;
 
@@ -97,6 +98,8 @@ public class WorkflowProcessInstanceService
 
     private final WfCopyMapper copyMapper;
 
+    private final WfControlledLoopExecutionMapper controlledLoopExecutionMapper;
+
     private final PermissionService permissionService;
 
     /**
@@ -108,13 +111,16 @@ public class WorkflowProcessInstanceService
      * @param taskService TaskService，流程级结构化审计 comment 公共 API
      * @param attachmentMapper WfAttachmentMapper，已绑定审计附件引用检查 Mapper
      * @param copyMapper WfCopyMapper，正式抄送记录引用检查和逻辑删除 Mapper
+     * @param controlledLoopExecutionMapper WfControlledLoopExecutionMapper，受控循环逐轮审计 Mapper
      * @param permissionService PermissionService，Token 权限与当前正式主数据的统一复核服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessInstanceService(WorkflowEngineOperations engineOperations,
             HistoryService historyService, RuntimeService runtimeService,
             TaskService taskService, WfAttachmentMapper attachmentMapper,
-            WfCopyMapper copyMapper, PermissionService permissionService)
+            WfCopyMapper copyMapper,
+            WfControlledLoopExecutionMapper controlledLoopExecutionMapper,
+            PermissionService permissionService)
     {
         this.engineOperations = engineOperations;
         this.historyService = historyService;
@@ -122,6 +128,7 @@ public class WorkflowProcessInstanceService
         this.taskService = taskService;
         this.attachmentMapper = attachmentMapper;
         this.copyMapper = copyMapper;
+        this.controlledLoopExecutionMapper = controlledLoopExecutionMapper;
         this.permissionService = permissionService;
     }
 
@@ -156,10 +163,24 @@ public class WorkflowProcessInstanceService
                 throw new ServiceException("流程抄送引用数量超过可删除范围", HttpStatus.CONFLICT);
             }
 
+            long controlledLoopCount = controlledLoopExecutionMapper
+                    .countByProcessInstanceIds(allIds);
+            if (controlledLoopCount > Integer.MAX_VALUE)
+            {
+                throw new ServiceException("循环审计记录数量超过可删除范围", HttpStatus.CONFLICT);
+            }
+
             int deletedCopyCount = copyMapper.logicalDeleteByInstanceIds(allIds, actor.userId());
             if (deletedCopyCount != (int) activeCopyCount)
             {
                 throw conflict("流程抄送引用已发生变化，请刷新后重试");
+            }
+
+            int deletedControlledLoopCount = controlledLoopExecutionMapper
+                    .deleteByProcessInstanceIds(allIds);
+            if (deletedControlledLoopCount != (int) controlledLoopCount)
+            {
+                throw conflict("循环审计记录已发生变化，请刷新后重试");
             }
 
             // 只删除请求集合中的顶层根；Flowable 会递归删除其调用活动子流程历史。
@@ -179,7 +200,10 @@ public class WorkflowProcessInstanceService
                     .processInstanceIds(allIds)
                     .count();
             long remainingCopies = copyMapper.countActiveByInstanceIds(allIds);
-            if (remainingHistory != 0 || remainingCopies != 0)
+            long remainingControlledLoops = controlledLoopExecutionMapper
+                    .countByProcessInstanceIds(allIds);
+            if (remainingHistory != 0 || remainingCopies != 0
+                    || remainingControlledLoops != 0)
             {
                 throw conflict("流程历史删除结果不完整，请刷新后重试");
             }

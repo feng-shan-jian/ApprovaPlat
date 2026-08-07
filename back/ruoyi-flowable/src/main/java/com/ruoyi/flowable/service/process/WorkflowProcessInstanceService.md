@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `updateState(request)` | 必须拥有 `workflow:process:state`；实例必须存在且仍在运行 | 使用 Flowable 公共 API 激活或挂起；相同状态返回 `changed=false` |
 | `terminate(request)` | `workflow:process:terminate` 按管理员终止，写 `terminated`；`workflow:process:cancel` 仅允许根实例真实发起人取消本人业务树，写 `canceled` | 子实例请求提升到根实例，更新根历史变量、写类型 `6` 的结构化 comment、级联删除完整运行树并保留结束历史 |
-| `deleteCompletedHistory(ids)` | 必须拥有 `workflow:process:remove`；整批实例及子流程必须全部结束，且不存在 `BOUND` 附件 | 同事务逻辑删除 `wf_copy` 并物理删除 Flowable 历史，随后复核无残留 |
+| `deleteCompletedHistory(ids)` | 必须拥有 `workflow:process:remove`；整批实例及子流程必须全部结束，且不存在 `BOUND` 附件 | 同事务逻辑删除 `wf_copy`、物理删除 `wf_controlled_loop_execution` 与 Flowable 历史，随后复核无残留 |
 
 ## 请求示例
 
@@ -44,4 +44,4 @@
 
 ## 历史删除一致性
 
-删除入口先对整批实例执行完整预检，再展开调用活动产生的所有子流程。运行中的根实例或子流程都会阻止整批删除。删除图中任一实例存在 `BOUND` 附件时，在抄送或 Flowable 写入前返回 `409`，保留附件及其历史审计链；后续只有在单独批准附件保留期和合规清理策略后才能改变该规则。`wf_copy` 删除数量、Flowable 历史删除结果和最终残留数量必须完全一致，否则事务回滚。单批最多接收 100 个目标，展开后的历史图最多 1000 个实例。
+删除入口先对整批实例执行完整预检，再展开调用活动产生的所有子流程。运行中的根实例或子流程都会阻止整批删除。删除图中任一实例存在 `BOUND` 附件时，在抄送或 Flowable 写入前返回 `409`，保留附件及其历史审计链；后续只有在单独批准附件保留期和合规清理策略后才能改变该规则。`wf_copy`、`wf_controlled_loop_execution` 与 Flowable 历史的预检数量、实际删除数量和最终残留数量必须完全一致，否则事务回滚，避免循环审计成为无实例或无部署配置的孤儿。单批最多接收 100 个目标，展开后的历史图最多 1000 个实例。

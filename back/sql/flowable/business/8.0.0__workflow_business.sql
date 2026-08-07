@@ -70,6 +70,68 @@ CREATE TABLE IF NOT EXISTS `wf_deploy_form`
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '流程部署节点表单不可变快照';
 
+CREATE TABLE IF NOT EXISTS `wf_deploy_controlled_loop`
+(
+    `loop_id`            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '受控循环部署快照主键',
+    `deploy_id`          VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_key`        VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN 可执行流程标识',
+    `activity_id`        VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '循环用户任务标识',
+    `activity_name`      VARCHAR(255) NOT NULL DEFAULT '' COMMENT '部署时节点名称快照',
+    `decision_variable`  VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '决定再次进入或退出的任务表单变量',
+    `repeat_value`       VARCHAR(128) NOT NULL COMMENT '再次进入条件精确值',
+    `exit_value`         VARCHAR(128) NOT NULL COMMENT '退出条件精确值',
+    `max_iterations`     INT          NOT NULL COMMENT '单实例允许完成该节点的最大轮次',
+    `route_variable`     VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '编译网关使用的保留布尔变量',
+    `iteration_variable` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '已完成轮次保留变量',
+    `create_by`          VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '部署操作人正式用户主键',
+    `create_time`        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '快照创建时间',
+    PRIMARY KEY (`loop_id`),
+    UNIQUE KEY `uk_wf_deploy_controlled_loop_node` (`deploy_id`, `process_key`, `activity_id`),
+    UNIQUE KEY `uk_wf_deploy_controlled_loop_route` (`deploy_id`, `route_variable`),
+    CONSTRAINT `chk_wf_deploy_controlled_loop_variable` CHECK
+        (`decision_variable` REGEXP '^[A-Za-z_][A-Za-z0-9_]{0,127}$'),
+    CONSTRAINT `chk_wf_deploy_controlled_loop_values` CHECK
+        (`repeat_value` <> `exit_value` AND CHAR_LENGTH(`repeat_value`) BETWEEN 1 AND 128
+            AND CHAR_LENGTH(`exit_value`) BETWEEN 1 AND 128),
+    CONSTRAINT `chk_wf_deploy_controlled_loop_iterations` CHECK (`max_iterations` BETWEEN 2 AND 50),
+    CONSTRAINT `chk_wf_deploy_controlled_loop_route` CHECK
+        (`route_variable` REGEXP '^__approva_loop_route_[0-9a-f]{24}$'),
+    CONSTRAINT `chk_wf_deploy_controlled_loop_iteration_var` CHECK
+        (`iteration_variable` REGEXP '^__approva_loop_iteration_[0-9a-f]{24}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '受控重复审批循环不可变部署快照';
+
+CREATE TABLE IF NOT EXISTS `wf_controlled_loop_execution`
+(
+    `execution_id`          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '循环轮次审计主键',
+    `deploy_id`             VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_definition_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程定义主键',
+    `process_instance_id`   VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程实例主键',
+    `activity_id`           VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '循环用户任务标识',
+    `task_id`               VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '本轮真实任务主键',
+    `iteration_no`          INT          NOT NULL COMMENT '本节点在该流程实例内从 1 开始的完成轮次',
+    `actor_user_id`         VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '本轮真实完成人主键',
+    `decision_value`        VARCHAR(128) NOT NULL COMMENT '经表单 schema 校验后的判断字段值',
+    `outcome`               VARCHAR(16)  NOT NULL COMMENT '本轮结果：REPEAT 再次进入、EXIT 退出',
+    `create_time`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '本轮完成时间',
+    PRIMARY KEY (`execution_id`),
+    UNIQUE KEY `uk_wf_controlled_loop_task` (`task_id`),
+    UNIQUE KEY `uk_wf_controlled_loop_iteration`
+        (`process_instance_id`, `activity_id`, `iteration_no`),
+    KEY `idx_wf_controlled_loop_instance_time` (`process_instance_id`, `create_time`),
+    KEY `idx_wf_controlled_loop_deploy` (`deploy_id`, `activity_id`),
+    CONSTRAINT `chk_wf_controlled_loop_iteration_no` CHECK (`iteration_no` BETWEEN 1 AND 50),
+    CONSTRAINT `chk_wf_controlled_loop_actor` CHECK (`actor_user_id` REGEXP '^[1-9][0-9]{0,18}$'),
+    CONSTRAINT `chk_wf_controlled_loop_outcome` CHECK (`outcome` IN ('REPEAT', 'EXIT')),
+    CONSTRAINT `chk_wf_controlled_loop_decision_value` CHECK
+        (CHAR_LENGTH(`decision_value`) BETWEEN 1 AND 128)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '受控重复审批循环逐轮运行审计';
+
 CREATE TABLE IF NOT EXISTS `wf_bpmn_extension`
 (
     `extension_id`   BIGINT       NOT NULL AUTO_INCREMENT COMMENT 'BPMN 扩展目录主键',

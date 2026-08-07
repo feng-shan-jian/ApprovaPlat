@@ -76,10 +76,10 @@ class WorkflowModelSaveDdlContractTest
         Pattern checkName = Pattern.compile("(?i)'[^']+'\\s+as\\s+check_name");
 
         assertThat(mutation.matcher(verification).find()).isFalse();
-        assertThat(checkName.matcher(verification).results().count()).isEqualTo(27L);
+        assertThat(checkName.matcher(verification).results().count()).isEqualTo(28L);
         assertThat(normalized).contains(
                 "union all select 'wf_model_save_idempotency'",
-                "when count(a.table_name) = 8",
+                "when count(a.table_name) = 10",
                 "idx_wf_model_save_user_time",
                 "idx_wf_model_save_source_time",
                 "idx_wf_model_save_saved_model",

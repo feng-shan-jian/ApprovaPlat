@@ -216,7 +216,7 @@
 
           <el-collapse-item v-if="flags.activity" title="执行配置" name="execution">
             <el-form-item label="循环方式">
-              <el-select v-model="state.multiInstanceType" @change="emit('multi-instance-change')">
+              <el-select v-model="state.multiInstanceType" @change="handleLoopTypeChange">
                 <el-option
                   v-for="option in activityLoopOptions"
                   :key="option.value"
@@ -235,6 +235,86 @@
               <el-form-item label="执行前检查条件">
                 <el-switch v-model="state.testBefore" @change="emit('multi-instance-change')" />
               </el-form-item>
+            </template>
+            <template v-if="state.multiInstanceType === 'approvalLoop'">
+              <el-alert
+                type="info"
+                show-icon
+                :closable="false"
+                title="任务首次正常进入；每次提交后按正式表单字段决定再次整改或退出。达到上限时拒绝继续整改，不会强制放行。配置完成后请点击应用。"
+              />
+              <el-form-item label="最大办理轮次" required>
+                <el-input-number
+                  v-model="state.controlledLoopMaxIterations"
+                  :min="2"
+                  :max="50"
+                  controls-position="right"
+                />
+              </el-form-item>
+              <el-form-item label="循环判断字段" required>
+                <el-select
+                  v-model="state.controlledLoopDecisionVariable"
+                  filterable
+                  placeholder="请选择当前节点表单字段"
+                  @change="handleControlledLoopFieldChange"
+                >
+                  <el-option
+                    v-for="field in controlledLoopFieldOptions"
+                    :key="field.value"
+                    :label="field.label"
+                    :value="field.value"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="再次进入条件" required>
+                <el-select
+                  v-if="controlledLoopValueOptions.length"
+                  v-model="state.controlledLoopRepeatValue"
+                  filterable
+                  :allow-create="!controlledLoopValueRestricted"
+                  placeholder="字段等于此值时再次整改"
+                >
+                  <el-option v-for="item in controlledLoopValueOptions" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+                <el-input
+                  v-else
+                  v-model="state.controlledLoopRepeatValue"
+                  maxlength="128"
+                  placeholder="字段等于此值时再次整改"
+                />
+              </el-form-item>
+              <el-form-item label="退出条件" required>
+                <el-select
+                  v-if="controlledLoopValueOptions.length"
+                  v-model="state.controlledLoopExitValue"
+                  filterable
+                  :allow-create="!controlledLoopValueRestricted"
+                  placeholder="字段等于此值时退出循环"
+                >
+                  <el-option v-for="item in controlledLoopValueOptions" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+                <el-input
+                  v-else
+                  v-model="state.controlledLoopExitValue"
+                  maxlength="128"
+                  placeholder="字段等于此值时退出循环"
+                />
+              </el-form-item>
+              <el-alert
+                v-if="!controlledLoopFieldOptions.length"
+                type="warning"
+                show-icon
+                :closable="false"
+                title="请先为当前用户任务配置包含判断字段的正式表单。"
+              />
+              <el-button
+                type="primary"
+                plain
+                :disabled="!controlledLoopConfigurationReady"
+                @click="emit('multi-instance-change')"
+              >
+                应用整改循环配置
+              </el-button>
             </template>
             <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType) && !flags.userTask">
               <el-form-item label="集合表达式">
@@ -315,6 +395,7 @@ const props = defineProps({
   assignmentOptions: { type: Array, default: () => [] },
   multiInstanceOptions: { type: Array, default: () => [] },
   multiInstanceApprovalOptions: { type: Array, default: () => [] },
+  controlledLoopFieldOptions: { type: Array, default: () => [] },
   extensionOptions: { type: Array, default: () => [] },
   formFieldOptions: { type: Array, default: () => [] },
   connectorEndpoints: { type: Array, default: () => [] },
@@ -358,8 +439,30 @@ const businessEventOptions = computed(() => (
 ))
 // 动态多实例只能用于 UserTask；其他活动仍可配置标准串行或并行多实例。
 const activityLoopOptions = computed(() => props.multiInstanceOptions.filter(option => (
-  option.value !== 'controlled' || props.flags.userTask
+  !['controlled', 'approvalLoop'].includes(option.value) || props.flags.userTask
 )))
+// 条件值选项跟随当前正式表单字段；自由文本字段仍允许输入受限标量值。
+const controlledLoopValueOptions = computed(() => props.controlledLoopFieldOptions.find(option => (
+  option.value === props.state.controlledLoopDecisionVariable
+))?.values || [])
+// 静态枚举字段只能选择正式表单给出的值；自由文本和普通标量字段仍由后端执行类型与长度校验。
+const controlledLoopValueRestricted = computed(() => props.controlledLoopFieldOptions.find(option => (
+  option.value === props.state.controlledLoopDecisionVariable
+))?.valueRestricted === true)
+// 应用按钮只在五项受控属性均完整时开放，避免半成品配置进入 BPMN 命令栈或被保存。
+const controlledLoopConfigurationReady = computed(() => {
+  const maxIterations = Number(props.state.controlledLoopMaxIterations)
+  const decisionVariable = String(props.state.controlledLoopDecisionVariable || '').trim()
+  const repeatValue = String(props.state.controlledLoopRepeatValue || '').trim()
+  const exitValue = String(props.state.controlledLoopExitValue || '').trim()
+  return Number.isInteger(maxIterations)
+    && maxIterations >= 2
+    && maxIterations <= 50
+    && Boolean(decisionVariable)
+    && Boolean(repeatValue)
+    && Boolean(exitValue)
+    && repeatValue !== exitValue
+})
 const eventDefinitionLabel = computed(() => ({
   'bpmn:MessageEventDefinition': '消息',
   'bpmn:SignalEventDefinition': '信号',
@@ -394,6 +497,24 @@ function searchCandidateUsers(keyword) {
  */
 function searchCandidateGroups(keyword) {
   emit('identity-search', { target: 'candidateGroups', keyword })
+}
+
+/**
+ * 切换循环判断字段时清空旧字段条件，避免不同字段的枚举值被静默复用。
+ * @returns {void} 清理条件后保留面板草稿，等待设计者显式应用完整配置。
+ */
+function handleControlledLoopFieldChange() {
+  props.state.controlledLoopRepeatValue = ''
+  props.state.controlledLoopExitValue = ''
+}
+
+/**
+ * 切换循环类型；受控整改循环先保留面板草稿，其他类型沿用即时写入命令栈。
+ * @param {string} value 当前选中的循环类型。
+ * @returns {void} 受控整改循环等待显式应用，其他类型立即通知父组件。
+ */
+function handleLoopTypeChange(value) {
+  if (value !== 'approvalLoop') emit('multi-instance-change')
 }
 </script>
 
@@ -453,7 +574,8 @@ function searchCandidateGroups(keyword) {
 }
 
 .designer-properties-panel__form :deep(.el-select),
-.designer-properties-panel__form :deep(.el-segmented) {
+.designer-properties-panel__form :deep(.el-segmented),
+.designer-properties-panel__form :deep(.el-input-number) {
   width: 100%;
 }
 </style>

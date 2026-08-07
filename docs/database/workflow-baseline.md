@@ -30,14 +30,16 @@
 | 若依 | 20 |
 | Quartz | 11 |
 | Flowable Common/Process/History/DMN | 36 |
-| ApprovaPlat `wf_*` | 20 |
-| 合计 | 87 |
+| ApprovaPlat `wf_*` | 22 |
+| 合计 | 89 |
 
-20 张业务表：
+22 张业务表：
 
 - `wf_category`
 - `wf_form`
 - `wf_deploy_form`
+- `wf_deploy_controlled_loop`
+- `wf_controlled_loop_execution`
 - `wf_copy`
 - `wf_model_save_idempotency`
 - `wf_attachment_quota_guard`
@@ -73,7 +75,7 @@
 2. `back/sql/flowable/verify/8.0.0__verify_workflow_business.sql`
 3. `back/sql/flowable/verify/8.0.0__verify_workflow_menu.sql`
 
-三组脚本共定义 38 项只读检查，所有结果都必须为 `PASS`。还必须核对总表数 87、分项表数 `20/11/36/20`、菜单 77 条以及应用账号只拥有目标 schema 的最小 DML 权限。
+三组脚本共定义 40 项只读检查，所有结果都必须为 `PASS`。表数检查固定核对总表数 89、分项表数 `20/11/36/22`，受控循环以及 BPMN 错误和升级正式表均归入 ApprovaPlat `wf_*`；还必须核对菜单 77 条以及应用账号只拥有目标 schema 的最小 DML 权限。
 
 静态契约测试和发布门禁自测不能代替真实 MySQL 空库安装。正式发布前必须保存真实执行日志、表清单、约束结果、`mysqlcheck`、备份恢复和三组验收输出。
 

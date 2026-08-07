@@ -129,6 +129,7 @@ public final class WorkflowEmbeddedFormConverter
         if (!hasText(variable) || !variable.equals(variable.trim())
                 || !VARIABLE_PATTERN.matcher(variable).matches()
                 || RESERVED_VARIABLES.contains(variable)
+                || WorkflowControlledLoopBpmnContract.isReservedRuntimeVariable(variable)
                 || WorkflowMultiInstanceVariables.isReservedVariableName(variable)
                 || WorkflowFormSubmissionSnapshotCodec.isReservedVariableName(variable)
                 || !variables.add(variable))
