@@ -121,9 +121,9 @@ async function registerUnexpectedWorkflowResources(pages, processKey, resources)
 }
 
 /**
- * 验证无完整认领成员的有效角色会被阻断，而合格候选角色可真实发起并认领任务。
+ * 验证无完整认领成员的有效角色在保存门禁被阻断，而合格候选角色可真实发起并认领任务。
  * @param {{browser: import('@playwright/test').Browser}} fixtures Playwright 浏览器夹具。
- * @returns {Promise<void>} 负向部署、正向认领和清理后零残留断言全部通过后结束。
+ * @returns {Promise<void>} 负向保存、正向认领和清理后零残留断言全部通过后结束。
  */
 test('候选组阻断无人可办配置并允许合格角色真实认领', async ({ browser }) => {
   test.setTimeout(180_000)
@@ -239,9 +239,10 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
     })
     const rejectedModelId = String(rejectedCreated.data?.modelId || '')
     expect(rejectedModelId, '负向回归模型创建必须返回正式主键').not.toBe('')
-    // 模型创建成功后立即登记，后续保存或部署断言失败时仍由 finally 删除正式半成品。
+    // 模型创建成功后立即登记，后续保存门禁断言失败时仍由 finally 删除正式半成品。
     resources.modelIds.push(rejectedModelId)
     await callWorkflowApi(pages.designer, 'POST', '/workflow/model/save', {
+      expectedCode: 409,
       data: {
         requestId: randomUUID(),
         modelId: rejectedModelId,
@@ -253,10 +254,6 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
         }),
         newVersion: false
       }
-    })
-    await callWorkflowApi(pages.designer, 'POST', '/workflow/model/deploy', {
-      query: { modelId: rejectedModelId },
-      expectedCode: 409
     })
     await expectNoWorkflowResidues(pages, rejectedProcessKey)
 

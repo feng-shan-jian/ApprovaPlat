@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.FormProperty;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
@@ -605,6 +606,7 @@ class WorkflowProcessQueryServiceTest
         when(repositoryService.getBpmnModel("definition-1")).thenReturn(startFormModel("leave"));
         WfDeployForm snapshot = new WfDeployForm();
         snapshot.setDeployId("deploy-1");
+        snapshot.setSourceType("TEMPLATE");
         snapshot.setFormId(12L);
         snapshot.setFormKey("key_12");
         snapshot.setNodeKey("start");
@@ -618,6 +620,53 @@ class WorkflowProcessQueryServiceTest
         assertThat(result.formId()).isEqualTo(12L);
         assertThat(result.content()).isEqualTo("{\"fields\":[]}");
         verify(deployFormMapper).selectByDeploymentId("deploy-1");
+    }
+
+    /**
+     * 验证内嵌 FormData 后续发生模型修改时，发起页仍只返回部署时冻结的渲染快照。
+     *
+     * @return 无返回值，模型当前字段不得覆盖 wf_deploy_form 中的不可变内容
+     */
+    @Test
+    void returnsFrozenEmbeddedStartFormAfterModelPropertiesChange()
+    {
+        ProcessDefinition definition = definition("definition-1", "leave", "deploy-1", false);
+        when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
+        when(definitionQuery.singleResult()).thenReturn(definition);
+        when(repositoryService.getIdentityLinksForProcessDefinition("definition-1"))
+                .thenReturn(List.of());
+        BpmnModel model = startFormModel("leave");
+        StartEvent start = (StartEvent) model.getProcessById("leave")
+                .getFlowElement("start", false);
+        start.setFormKey(null);
+        FormProperty changedProperty = new FormProperty();
+        changedProperty.setId("changedAfterDeployment");
+        changedProperty.setVariable("changedAfterDeployment");
+        changedProperty.setType("string");
+        start.setFormProperties(List.of(changedProperty));
+        when(repositoryService.getBpmnModel("definition-1")).thenReturn(model);
+
+        String frozenContent = "{\"fields\":[{\"__vModel__\":\"originalField\","
+                + "\"__config__\":{\"layout\":\"colFormItem\",\"tag\":\"el-input\"}}]}";
+        WfDeployForm snapshot = new WfDeployForm();
+        snapshot.setDeployId("deploy-1");
+        snapshot.setSourceType("EMBEDDED");
+        snapshot.setFormId(null);
+        snapshot.setFormKey("embedded");
+        snapshot.setNodeKey("start");
+        snapshot.setFormName("部署时内嵌表单");
+        snapshot.setContent(frozenContent);
+        when(deployFormMapper.selectByDeploymentId("deploy-1")).thenReturn(List.of(snapshot));
+
+        WorkflowProcessFormView result = service.getProcessForm(
+                new WorkflowProcessFormQueryDto("definition-1", "deploy-1", null));
+
+        assertThat(result.sourceType()).isEqualTo("EMBEDDED");
+        assertThat(result.formId()).isNull();
+        assertThat(result.formKey()).isEqualTo("embedded");
+        assertThat(result.content()).isEqualTo(frozenContent)
+                .contains("originalField")
+                .doesNotContain("changedAfterDeployment");
     }
 
     /**

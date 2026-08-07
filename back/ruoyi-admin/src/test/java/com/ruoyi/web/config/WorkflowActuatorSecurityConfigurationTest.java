@@ -154,6 +154,8 @@ class WorkflowActuatorSecurityConfigurationTest
             "org.springframework.boot.quartz.autoconfigure.QuartzAutoConfiguration",
             "org.flowable.spring.boot.ProcessEngineAutoConfiguration",
             "org.flowable.spring.boot.ProcessEngineServicesAutoConfiguration",
+            "org.flowable.spring.boot.dmn.DmnEngineAutoConfiguration",
+            "org.flowable.spring.boot.dmn.DmnEngineServicesAutoConfiguration",
             "org.flowable.spring.boot.EndpointAutoConfiguration"
     })
     @Import({ WorkflowActuatorSecurityConfiguration.class,

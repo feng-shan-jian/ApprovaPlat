@@ -150,7 +150,7 @@ class WorkflowRbacHttpIT
     /** 真实 HttpClient，不配置 Cookie 或重试，所有身份仅通过 Authorization 头传递。 */
     private HttpClient httpClient;
 
-    /** 70 个正式入口的机器可读矩阵。 */
+    /** 103 个正式入口的机器可读矩阵。 */
     private List<Endpoint> matrix;
 
     /** 正式菜单 SQL 解析出的五角色 workflow 权限集合。 */
@@ -187,7 +187,7 @@ class WorkflowRbacHttpIT
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
 
-        assertThat(matrix).hasSize(70);
+        assertThat(matrix).hasSize(103);
         assertThat(jdbcTemplate.queryForObject("select database()", String.class))
                 .as("RBAC IT 只能连接显式批准的隔离 schema")
                 .isEqualTo(expectedSchema);
@@ -515,7 +515,7 @@ class WorkflowRbacHttpIT
         }
         finally
         {
-            // 无论请求或副作用断言是否失败，都恢复唯一 terminate 映射，避免污染 350/350 矩阵。
+            // 无论请求或副作用断言是否失败，都恢复唯一 terminate 映射，避免污染 510/510 矩阵。
             if (removed == 1)
             {
                 int restored = jdbcTemplate.update(
@@ -605,7 +605,7 @@ class WorkflowRbacHttpIT
     }
 
     /**
-     * 真实执行 184 个 URL 权限拒绝单元和 166 个允许单元，并在两阶段之间冻结拒绝零副作用证据。
+     * 真实执行 291 个 URL 权限拒绝单元和 219 个允许单元，并在两阶段之间冻结拒绝零副作用证据。
      *
      * @return void，无返回值；拒绝语义、报告数量或业务表零副作用任一失败即测试失败
      * @throws Exception HTTP、JSON、SQL 快照或报告写入失败时测试失败
@@ -616,7 +616,7 @@ class WorkflowRbacHttpIT
             throws Exception
     {
         Map<String, Long> beforeDenied = snapshotWorkflowTables();
-        List<CellResult> results = new ArrayList<>(350);
+        List<CellResult> results = new ArrayList<>(510);
         List<String> failures = new ArrayList<>();
 
         // 第一阶段只执行 URL 权限拒绝，随后立即对账，避免 ALLOW 的正式业务写入掩盖拒绝副作用。
@@ -678,9 +678,10 @@ class WorkflowRbacHttpIT
 
         writeReport(results, beforeDenied, afterDenied);
 
-        assertThat(results).hasSize(350);
+        int expectedCellCount = matrix.size() * WorkflowRbacMatrix.ROLE_KEYS.size();
+        assertThat(results).hasSize(expectedCellCount);
         assertThat(results.stream().filter(result -> "PASSED".equals(
-                result.executionStatus()))).hasSize(350);
+                result.executionStatus()))).hasSize(expectedCellCount);
         assertThat(results.stream().filter(result -> "NOT_EXECUTED_FIXTURE_REQUIRED".equals(
                 result.executionStatus()))).isEmpty();
         assertThat(failures).isEmpty();
@@ -998,6 +999,11 @@ class WorkflowRbacHttpIT
                 .replace("{categoryId}", "1")
                 .replace("{formIds}", "1")
                 .replace("{formId}", "1")
+                .replace("{extensionId}", "1")
+                .replace("{endpointId}", "1")
+                .replace("{credentialId}", "1")
+                .replace("{deploymentId}", STRING_ID)
+                .replace("{dataSourceId}", "1")
                 .replace("{deployIds}", STRING_ID)
                 .replace("{definitionId}", STRING_ID)
                 .replace("{modelIds}", STRING_ID)
@@ -1087,6 +1093,43 @@ class WorkflowRbacHttpIT
                 "{\"requestId\":\"" + UUID.randomUUID() + "\","
                         + "\"modelId\":\"" + STRING_ID + "\","
                         + "\"bpmnXml\":\"<definitions/>\",\"newVersion\":false}";
+            case "WfModelController#validate" ->
+                "{\"bpmnXml\":\"<definitions/>\"}";
+            case "WfDesignerController#savePreference" ->
+                "{\"theme\":\"SYSTEM\",\"gridEnabled\":true,"
+                        + "\"minimapEnabled\":true,\"lintEnabled\":true,"
+                        + "\"tokenSimulationEnabled\":false,"
+                        + "\"propertiesCollapsed\":false}";
+            case "WfConnectorController#create", "WfConnectorController#update" ->
+                "{\"endpointKey\":\"rbac.denied.probe\","
+                        + "\"endpointName\":\"RBAC拒绝探针\","
+                        + "\"baseUrl\":\"https://example.com/api\","
+                        + "\"allowedMethods\":[\"GET\"],\"pathPrefix\":\"/v1\","
+                        + "\"authType\":\"NONE\",\"connectTimeoutMs\":1000,"
+                        + "\"requestTimeoutMs\":5000,\"networkScope\":\"PUBLIC\"}";
+            case "WfConnectorController#status" -> "{\"enabled\":false}";
+            case "WfDmnController#deploy" ->
+                "{\"resourceName\":\"rbac-denied-probe.dmn\",\"category\":\"rbac\","
+                        + "\"dmnXml\":\"<definitions xmlns=\\\"https://www.omg.org/spec/DMN/20191111/MODEL/\\\" />\"}";
+            case "WfSqlDataSourceController#create", "WfSqlDataSourceController#update" ->
+                "{\"dataSourceKey\":\"rbac.denied.probe\","
+                        + "\"dataSourceName\":\"RBAC拒绝探针\","
+                        + "\"connectionType\":\"PRIMARY\","
+                        + "\"allowedTables\":[\"wf_category\"],"
+                        + "\"connectTimeoutMs\":1000,\"queryTimeoutSeconds\":5}";
+            case "WfSqlDataSourceController#status" -> "{\"enabled\":false}";
+            case "WfIntegrationCredentialController#create" ->
+                "{\"credentialName\":\"RBAC拒绝探针\","
+                        + "\"scopes\":[\"MESSAGE\"],\"allowedVariables\":[],"
+                        + "\"rateLimitPerMinute\":1}";
+            case "WfIntegrationCredentialController#rotate" -> "{}";
+            case "WfExtensionController#create" ->
+                "{\"extensionKey\":\"rbac.denied.probe\"," +
+                        "\"extensionName\":\"RBAC拒绝探针\"," +
+                        "\"extensionType\":\"JAVA\"}";
+            case "WfExtensionController#createVersion" ->
+                "{\"implementationKey\":\"SET_VARIABLE\"}";
+            case "WfExtensionController#changeStatus" -> "{\"enabled\":false}";
             case "WfProcessController#start" -> "{}";
             case "WfTaskController#stopProcess" ->
                 "{\"procInsId\":\"" + STRING_ID + "\","
@@ -1290,7 +1333,7 @@ class WorkflowRbacHttpIT
     }
 
     /**
-     * 将 350 单元执行状态、传输/业务状态及副作用快照写入 target JSON 报告。
+     * 将 510 单元执行状态、传输/业务状态及副作用快照写入 target JSON 报告。
      *
      * @param results List&lt;CellResult&gt;，按入口和五角色固定顺序排列的结果
      * @param before Map&lt;String, Long&gt;，拒绝探针前业务表行数
@@ -1315,7 +1358,9 @@ class WorkflowRbacHttpIT
                 .filter(result -> "FAILED".equals(result.executionStatus())).count();
         MatrixReport report = new MatrixReport(
                 "workflow-rbac-http-report/v1", Instant.now().toString(),
-                expectedSchema, expectedRedisDatabase, 9, 70, 5, 350,
+                expectedSchema, expectedRedisDatabase,
+                WorkflowRbacMatrix.CONTROLLERS.size(), matrix.size(),
+                WorkflowRbacMatrix.ROLE_KEYS.size(), results.size(),
                 passed, notExecuted, failed, before.equals(after),
                 before, after, List.copyOf(results));
         objectMapper.writerWithDefaultPrettyPrinter().writeValue(REPORT_PATH.toFile(), report);
@@ -1497,7 +1542,7 @@ class WorkflowRbacHttpIT
      * @param zeroSideEffects boolean，前后业务表行数是否完全一致
      * @param tableRowsBefore Map&lt;String, Long&gt;，执行前业务表快照
      * @param tableRowsAfter Map&lt;String, Long&gt;，执行后业务表快照
-     * @param cells List&lt;CellResult&gt;，355 个脱敏矩阵结果
+     * @param cells List&lt;CellResult&gt;，510 个脱敏矩阵结果
      */
     private record MatrixReport(String schemaVersion, String generatedAt,
             String databaseSchema, int redisDatabase, int controllerCount,

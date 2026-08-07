@@ -187,8 +187,8 @@ public class WorkflowProcessStartService
         // 快照与业务变量随同一次 start 命令写入，启动或附件绑定失败时由外层事务整体回滚。
         engineVariables.put(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
                 WorkflowFormSubmissionSnapshotCodec.encodeStart(deploymentId,
-                        startForm.formId(), startForm.formKey(), startForm.nodeKey(),
-                        clientVariables));
+                        startForm.sourceType(), startForm.formId(), startForm.formKey(),
+                        startForm.nodeKey(), clientVariables));
         Map<String, Object> immutableVariables = Collections.unmodifiableMap(engineVariables);
 
         ProcessInstance processInstance = runtimeService.startProcessInstanceById(

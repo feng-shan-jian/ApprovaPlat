@@ -26,19 +26,24 @@ import org.flowable.bpmn.model.FieldExtension;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.FlowNode;
 import org.flowable.bpmn.model.FlowableListener;
+import org.flowable.bpmn.model.FormProperty;
 import org.flowable.bpmn.model.ImplementationType;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.ScriptTask;
+import org.flowable.bpmn.model.SendTask;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.RepositoryService;
 import org.flowable.validation.ValidationError;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue;
+import com.ruoyi.flowable.extension.WorkflowExtensionBpmnContract;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 /**
@@ -53,13 +58,18 @@ public class WorkflowBpmnService
     /** 表单键必须严格使用 key_正Long。 */
     private static final Pattern FORM_KEY_PATTERN = Pattern.compile("key_([1-9][0-9]*)");
 
-    /** 允许的 Java 类全限定名语法。 */
-    private static final Pattern JAVA_CLASS_PATTERN = Pattern.compile(
-            "[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+");
+    /** Flowable BPMN 扩展命名空间，其他引擎私有扩展只允许作者往返。 */
+    private static final String FLOWABLE_NAMESPACE = "http://flowable.org/bpmn";
 
-    /** delegateExpression 只允许引用 workflow 前缀的受控 Spring Bean。 */
-    private static final Pattern WORKFLOW_BEAN_PATTERN = Pattern.compile(
-            "[$#]\\{workflow[A-Za-z0-9_]{1,127}}");
+    /** 通用扩展属性名只允许稳定 ASCII 标识，保留 approva.* 给平台内部契约。 */
+    private static final Pattern EXTENSION_PROPERTY_NAME_PATTERN =
+            Pattern.compile("[A-Za-z][A-Za-z0-9_.-]{0,63}");
+
+    /** 单个 properties 容器最多保存的普通元数据条目数。 */
+    private static final int MAX_EXTENSION_PROPERTIES = 32;
+
+    /** 单个普通扩展属性值最大字符数。 */
+    private static final int MAX_EXTENSION_PROPERTY_VALUE_LENGTH = 1024;
 
     /** 任务监听器只允许引用生产兼容入口，不接受任意 Spring Bean。 */
     private static final String USER_TASK_LISTENER_EXPRESSION = "${userTaskListener}";
@@ -72,18 +82,23 @@ public class WorkflowBpmnService
     private static final Pattern SAFE_EXPRESSION_PATTERN = Pattern.compile(
             "[$#]\\{[A-Za-z0-9_.$#{}\\[\\]'\"\\s=!<>+\\-*/%?:,&|;]+}");
 
-    /** 允许执行的业务委托类命名空间。 */
-    private static final List<String> ALLOWED_CLASS_PREFIXES = List.of(
-            "com.ruoyi.flowable.delegate.",
-            "com.ruoyi.flowable.listener.");
-
     /** 即使表达式语法受限也不允许出现的敏感对象和反射入口。 */
     private static final List<String> DANGEROUS_EXPRESSION_TOKENS = List.of(
             "java.", "javax.", "jakarta.", "runtime", "processbuilder", "system.",
             "getclass", "classloader", "forname", "applicationcontext", "beanfactory",
             "scriptengine", "jndi", "reflection", ".class", "exec", "new ");
 
+    /** BPMN 资源所处阶段，用于区分作者字段与部署编译结果的互斥契约。 */
+    private enum ValidationContext
+    {
+        AUTHOR,
+        COMPILED_DEPLOYMENT
+    }
+
     private final RepositoryService repositoryService;
+
+    /** 正式自定义表单字段目录解析器；纯解析单测可不启用。 */
+    private final WorkflowFormFieldExtensionService formFieldExtensionService;
 
     /**
      * 创建 BPMN 安全校验组件。
@@ -93,7 +108,21 @@ public class WorkflowBpmnService
      */
     public WorkflowBpmnService(RepositoryService repositoryService)
     {
+        this(repositoryService, null);
+    }
+
+    /**
+     * 创建接入正式自定义表单字段目录的 BPMN 安全校验组件。
+     * @param repositoryService RepositoryService，Flowable 官方模型校验公共 API
+     * @param formFieldExtensionService WorkflowFormFieldExtensionService，自定义字段目录解析器
+     * @return 无返回值，构造后由 Spring 管理
+     */
+    @Autowired
+    public WorkflowBpmnService(RepositoryService repositoryService,
+            WorkflowFormFieldExtensionService formFieldExtensionService)
+    {
         this.repositoryService = repositoryService;
+        this.formFieldExtensionService = formFieldExtensionService;
     }
 
     /**
@@ -104,7 +133,21 @@ public class WorkflowBpmnService
      */
     public WorkflowBpmnDocument validate(byte[] bpmnBytes)
     {
-        return validateDocument(bpmnBytes, true);
+        WorkflowBpmnDocument document = validateDocument(
+                bpmnBytes, true, ValidationContext.AUTHOR);
+        validateDeployable(document);
+        return document;
+    }
+
+    /**
+     * 校验作者 XML 是否可以安全保存和回显，不要求所有元素均可由 Flowable 8 执行。
+     *
+     * @param bpmnBytes byte[]，客户端提交的 BPMN UTF-8 原始字节
+     * @return WorkflowBpmnDocument，通过安全、表单和业务约束的作者文档
+     */
+    public WorkflowBpmnDocument validateForSave(byte[] bpmnBytes)
+    {
+        return validateDocument(bpmnBytes, true, ValidationContext.AUTHOR);
     }
 
     /**
@@ -115,17 +158,33 @@ public class WorkflowBpmnService
      */
     public WorkflowBpmnDocument validateDraft(byte[] bpmnBytes)
     {
-        return validateDocument(bpmnBytes, false);
+        return validateDocument(bpmnBytes, false, ValidationContext.AUTHOR);
     }
 
     /**
-     * 执行统一的 BPMN 解码、解析、安全扫描和 Flowable 官方校验。
+     * 校验部署编译器生成的可执行 BPMN；固定调度器必须保留，作者扩展字段必须已经剥离。
+     *
+     * @param bpmnBytes byte[]，Flowable 部署仓储中读取的已编译 BPMN UTF-8 字节
+     * @return WorkflowBpmnDocument，通过安全、编译契约、兼容性和 Flowable 官方校验的部署文档
+     */
+    public WorkflowBpmnDocument validateCompiledDeployment(byte[] bpmnBytes)
+    {
+        WorkflowBpmnDocument document = validateDocument(
+                bpmnBytes, true, ValidationContext.COMPILED_DEPLOYMENT);
+        validateDeployable(document);
+        return document;
+    }
+
+    /**
+     * 执行统一的 BPMN 解码、解析和安全扫描；部署层另行执行执行兼容性与官方校验。
      *
      * @param bpmnBytes byte[]，待校验的 BPMN UTF-8 原始字节
      * @param requireStartForm boolean，true 表示保存或部署场景必须配置开始表单
+     * @param validationContext ValidationContext，作者资源或部署编译资源的字段契约
      * @return WorkflowBpmnDocument，通过指定校验强度的 BPMN 文档和表单引用
      */
-    private WorkflowBpmnDocument validateDocument(byte[] bpmnBytes, boolean requireStartForm)
+    private WorkflowBpmnDocument validateDocument(byte[] bpmnBytes, boolean requireStartForm,
+            ValidationContext validationContext)
     {
         if (bpmnBytes == null || bpmnBytes.length == 0)
         {
@@ -145,11 +204,12 @@ public class WorkflowBpmnService
         }
         try
         {
+            validateRawExtensionProperties(bpmnXml);
             org.flowable.bpmn.model.BpmnModel bpmnModel = parseSecurely(bpmnXml);
-            List<WorkflowBpmnFormReference> references = validateModel(bpmnModel, requireStartForm);
+            List<WorkflowBpmnFormReference> references = validateModel(
+                    bpmnModel, requireStartForm, validationContext);
             validateRawExpressions(bpmnXml,
                     countControlledMultiInstanceCollections(bpmnModel));
-            validateWithFlowable(bpmnModel);
             return new WorkflowBpmnDocument(bpmnModel, bpmnXml, references);
         }
         catch (ServiceException exception)
@@ -161,6 +221,244 @@ public class WorkflowBpmnService
             // 解析器或转换器的原始消息可能包含 XML 正文和内部类名，对外只返回稳定提示。
             throw invalidBpmn("BPMN XML 解析失败", exception);
         }
+    }
+
+    /**
+     * 返回 Flowable 8 无法执行、但允许在作者 XML 中稳定往返的元素诊断。
+     *
+     * @param document WorkflowBpmnDocument，已经通过保存安全校验的作者文档
+     * @return List&lt;WorkflowBpmnValidationIssue&gt;，按流程顺序返回的不可部署警告
+     */
+    public List<WorkflowBpmnValidationIssue> deploymentCompatibilityIssues(
+            WorkflowBpmnDocument document)
+    {
+        if (document == null || document.bpmnModel() == null)
+        {
+            throw invalidBpmn("BPMN 文档不能为空", null);
+        }
+        List<WorkflowBpmnValidationIssue> issues = new ArrayList<>();
+        XMLStreamReader reader = null;
+        try
+        {
+            reader = createSecureXmlInputFactory().createXMLStreamReader(
+                    new java.io.StringReader(document.bpmnXml()));
+            ArrayDeque<String> ownerElementIds = new ArrayDeque<>();
+            while (reader.hasNext())
+            {
+                if (reader.isStartElement())
+                {
+                    String localName = reader.getLocalName();
+                    String parentElementId = ownerElementIds.isEmpty()
+                            ? "" : ownerElementIds.peek();
+                    String currentElementId = trimToEmpty(
+                            reader.getAttributeValue(null, "id"));
+                    if ("complexGateway".equals(localName))
+                    {
+                        issues.add(new WorkflowBpmnValidationIssue(
+                                "BPMN_ELEMENT_NOT_EXECUTABLE", "WARNING",
+                                reader.getAttributeValue(null, "id"),
+                                "ComplexGateway 可编辑和导出，但 Flowable 8 不支持部署执行"));
+                    }
+                    else if ("standardLoopCharacteristics".equals(localName))
+                    {
+                        issues.add(new WorkflowBpmnValidationIssue(
+                                "BPMN_ELEMENT_NOT_EXECUTABLE", "WARNING",
+                                parentElementId.isEmpty() ? null : parentElementId,
+                                "标准循环可编辑和导出，但 Flowable 8 不提供可执行模型，禁止部署"));
+                    }
+                    ownerElementIds.push(currentElementId.isEmpty()
+                            ? parentElementId : currentElementId);
+                }
+                else if (reader.isEndElement() && !ownerElementIds.isEmpty())
+                {
+                    ownerElementIds.pop();
+                }
+                reader.next();
+            }
+            issues.addAll(scanForeignPrivateExtensions(document.bpmnXml()));
+        }
+        catch (XMLStreamException exception)
+        {
+            throw invalidBpmn("BPMN XML 兼容性扫描失败", exception);
+        }
+        finally
+        {
+            closeXmlReader(reader);
+        }
+        return List.copyOf(issues);
+    }
+
+    /**
+     * 校验 flowable:properties 仅包含有界、唯一、非保留的普通名值元数据。
+     * @param bpmnXml String，已经通过严格 UTF-8 解码的作者 XML
+     * @return void，结构、数量、名称或值越界时抛出稳定 400
+     */
+    private void validateRawExtensionProperties(String bpmnXml)
+    {
+        XMLStreamReader reader = null;
+        try
+        {
+            reader = createSecureXmlInputFactory().createXMLStreamReader(
+                    new java.io.StringReader(bpmnXml));
+            int depth = 0;
+            int propertiesDepth = -1;
+            int propertyCount = 0;
+            Set<String> propertyNames = new HashSet<>();
+            while (reader.hasNext())
+            {
+                if (reader.isStartElement())
+                {
+                    depth++;
+                    if (FLOWABLE_NAMESPACE.equals(reader.getNamespaceURI())
+                            && "properties".equals(reader.getLocalName()))
+                    {
+                        if (propertiesDepth >= 0)
+                        {
+                            throw invalidBpmn("通用扩展属性容器不允许嵌套", null);
+                        }
+                        propertiesDepth = depth;
+                        propertyCount = 0;
+                        propertyNames.clear();
+                    }
+                    else if (propertiesDepth >= 0)
+                    {
+                        if (depth != propertiesDepth + 1
+                                || !FLOWABLE_NAMESPACE.equals(reader.getNamespaceURI())
+                                || !"property".equals(reader.getLocalName()))
+                        {
+                            throw invalidBpmn("通用扩展属性只允许 property 名值项", null);
+                        }
+                        validateRawExtensionProperty(reader, ++propertyCount, propertyNames);
+                    }
+                }
+                else if (reader.isEndElement())
+                {
+                    if (depth == propertiesDepth)
+                    {
+                        propertiesDepth = -1;
+                        propertyNames.clear();
+                    }
+                    depth--;
+                }
+                reader.next();
+            }
+        }
+        catch (XMLStreamException exception)
+        {
+            throw invalidBpmn("BPMN XML 扩展属性扫描失败", exception);
+        }
+        finally
+        {
+            closeXmlReader(reader);
+        }
+    }
+
+    /**
+     * 校验单条 flowable:property 的名称、值、重复和数量边界。
+     * @param reader XMLStreamReader，当前定位在 property 开始标签
+     * @param propertyCount int，当前容器内从 1 开始的属性数量
+     * @param propertyNames Set&lt;String&gt;，当前容器已出现的属性名
+     * @return void，任一约束不满足时抛出稳定 400
+     */
+    private void validateRawExtensionProperty(XMLStreamReader reader, int propertyCount,
+            Set<String> propertyNames)
+    {
+        if (propertyCount > MAX_EXTENSION_PROPERTIES)
+        {
+            throw invalidBpmn("单个元素最多允许 32 个通用扩展属性", null);
+        }
+        String name = trimToEmpty(reader.getAttributeValue(null, "name"));
+        String value = reader.getAttributeValue(null, "value");
+        if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
+                || name.startsWith("approva."))
+        {
+            throw invalidBpmn("通用扩展属性名不合法或使用了平台保留前缀", null);
+        }
+        if (!propertyNames.add(name))
+        {
+            throw invalidBpmn("同一元素的通用扩展属性名不能重复", null);
+        }
+        if (value == null || value.length() > MAX_EXTENSION_PROPERTY_VALUE_LENGTH)
+        {
+            throw invalidBpmn("通用扩展属性值缺失或超过长度限制", null);
+        }
+    }
+
+    /**
+     * 扫描 extensionElements 中非 BPMN、非 Flowable 命名空间的私有扩展。
+     * @param bpmnXml String，已经通过保存门禁的作者 XML
+     * @return List&lt;WorkflowBpmnValidationIssue&gt;，部署阶段不兼容诊断
+     */
+    private List<WorkflowBpmnValidationIssue> scanForeignPrivateExtensions(String bpmnXml)
+    {
+        List<WorkflowBpmnValidationIssue> issues = new ArrayList<>();
+        XMLStreamReader reader = null;
+        try
+        {
+            reader = createSecureXmlInputFactory().createXMLStreamReader(
+                    new java.io.StringReader(bpmnXml));
+            int depth = 0;
+            int extensionDepth = -1;
+            while (reader.hasNext())
+            {
+                if (reader.isStartElement())
+                {
+                    depth++;
+                    if ("extensionElements".equals(reader.getLocalName()))
+                    {
+                        extensionDepth = depth;
+                    }
+                    else if (extensionDepth >= 0 && depth == extensionDepth + 1)
+                    {
+                        String namespace = trimToEmpty(reader.getNamespaceURI());
+                        if (!FLOWABLE_NAMESPACE.equals(namespace)
+                                && !"http://www.omg.org/spec/BPMN/20100524/MODEL".equals(namespace))
+                        {
+                            issues.add(new WorkflowBpmnValidationIssue(
+                                    "BPMN_PRIVATE_EXTENSION_NOT_COMPATIBLE", "WARNING", null,
+                                    "检测到其他引擎私有扩展 " + reader.getName()
+                                            + "，可导入和导出但禁止部署"));
+                        }
+                    }
+                }
+                else if (reader.isEndElement())
+                {
+                    if (depth == extensionDepth)
+                    {
+                        extensionDepth = -1;
+                    }
+                    depth--;
+                }
+                reader.next();
+            }
+        }
+        catch (XMLStreamException exception)
+        {
+            throw invalidBpmn("BPMN XML 私有扩展扫描失败", exception);
+        }
+        finally
+        {
+            closeXmlReader(reader);
+        }
+        return issues;
+    }
+
+    /**
+     * 对已通过保存校验的作者文档执行部署兼容性和 Flowable 官方规则门禁。
+     *
+     * @param document WorkflowBpmnDocument，待部署的安全作者文档
+     * @return void，通过时无返回；发现不可执行元素或官方错误时抛出 400
+     */
+    public void validateDeployable(WorkflowBpmnDocument document)
+    {
+        List<WorkflowBpmnValidationIssue> issues = deploymentCompatibilityIssues(document);
+        if (!issues.isEmpty())
+        {
+            WorkflowBpmnValidationIssue issue = issues.get(0);
+            throw new ServiceException(issue.message(), HttpStatus.BAD_REQUEST)
+                    .setSubCode(issue.code());
+        }
+        validateWithFlowable(document.bpmnModel());
     }
 
     /**
@@ -196,14 +494,7 @@ public class WorkflowBpmnService
         XMLStreamReader reader = null;
         try
         {
-            XMLInputFactory factory = XMLInputFactory.newFactory();
-            factory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
-            factory.setProperty("javax.xml.stream.isSupportingExternalEntities", false);
-            factory.setProperty(XMLInputFactory.IS_REPLACING_ENTITY_REFERENCES, false);
-            factory.setXMLResolver((publicId, systemId, baseUri, namespace) ->
-            {
-                throw new XMLStreamException("external resources disabled");
-            });
+            XMLInputFactory factory = createSecureXmlInputFactory();
             reader = factory.createXMLStreamReader(new java.io.StringReader(bpmnXml));
             return new BpmnXMLConverter().convertToBpmnModel(reader);
         }
@@ -213,17 +504,47 @@ public class WorkflowBpmnService
         }
         finally
         {
-            if (reader != null)
-            {
-                try
-                {
-                    reader.close();
-                }
-                catch (XMLStreamException ignored)
-                {
-                    // Reader 关闭失败不覆盖已经产生的业务校验结果。
-                }
-            }
+            closeXmlReader(reader);
+        }
+    }
+
+    /**
+     * 创建统一禁用 DTD、外部实体和实体替换的 StAX 工厂。
+     *
+     * @return XMLInputFactory，可用于 Flowable 转换和作者 XML 兼容性扫描的安全工厂
+     */
+    private XMLInputFactory createSecureXmlInputFactory()
+    {
+        XMLInputFactory factory = XMLInputFactory.newFactory();
+        factory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+        factory.setProperty("javax.xml.stream.isSupportingExternalEntities", false);
+        factory.setProperty(XMLInputFactory.IS_REPLACING_ENTITY_REFERENCES, false);
+        factory.setXMLResolver((publicId, systemId, baseUri, namespace) ->
+        {
+            throw new XMLStreamException("external resources disabled");
+        });
+        return factory;
+    }
+
+    /**
+     * 关闭 StAX Reader，关闭失败不得覆盖已经形成的业务结果。
+     *
+     * @param reader XMLStreamReader，允许为空的 XML Reader
+     * @return void，关闭失败时静默结束
+     */
+    private void closeXmlReader(XMLStreamReader reader)
+    {
+        if (reader == null)
+        {
+            return;
+        }
+        try
+        {
+            reader.close();
+        }
+        catch (XMLStreamException ignored)
+        {
+            // Reader 关闭失败不覆盖已经产生的业务校验结果。
         }
     }
 
@@ -232,10 +553,12 @@ public class WorkflowBpmnService
      *
      * @param bpmnModel org.flowable.bpmn.model.BpmnModel，安全 XML Reader 解析后的模型
      * @param requireStartForm boolean，是否要求每个流程的开始节点已经配置表单
+     * @param validationContext ValidationContext，作者资源或部署编译资源的字段契约
      * @return List&lt;WorkflowBpmnFormReference&gt;，按流程和节点顺序提取的表单引用
      */
     private List<WorkflowBpmnFormReference> validateModel(
-            org.flowable.bpmn.model.BpmnModel bpmnModel, boolean requireStartForm)
+            org.flowable.bpmn.model.BpmnModel bpmnModel, boolean requireStartForm,
+            ValidationContext validationContext)
     {
         List<Process> processes = bpmnModel.getProcesses();
         if (processes == null || processes.isEmpty()
@@ -248,13 +571,19 @@ public class WorkflowBpmnService
         Set<String> uniqueReferences = new HashSet<>();
         for (Process process : processes)
         {
-            List<StartEvent> startEvents = process.findFlowElementsOfType(StartEvent.class, true);
+            // 主流程唯一开始节点只统计顶层元素；事件子流程和嵌入子流程拥有各自合法的开始事件。
+            List<StartEvent> startEvents = process.getFlowElements().stream()
+                    .filter(StartEvent.class::isInstance)
+                    .map(StartEvent.class::cast)
+                    .toList();
             if (startEvents.size() != 1)
             {
                 throw invalidBpmn("每个流程必须且只能包含一个开始节点", null);
             }
             StartEvent startEvent = startEvents.get(0);
-            if (!hasText(startEvent.getFormKey()))
+            boolean startHasTemplate = hasText(startEvent.getFormKey());
+            boolean startHasEmbedded = hasFormProperties(startEvent.getFormProperties());
+            if (!startHasTemplate && !startHasEmbedded)
             {
                 if (requireStartForm)
                 {
@@ -263,29 +592,30 @@ public class WorkflowBpmnService
             }
             else
             {
-                addFormReference(startEvent.getFormKey(), startEvent.getId(), startEvent.getName(),
-                        references, uniqueReferences);
+                addNodeFormReference(process.getId(), startEvent.getFormKey(), startEvent.getFormProperties(),
+                        startEvent.getId(), startEvent.getName(), references, uniqueReferences);
             }
 
             for (UserTask userTask : process.findFlowElementsOfType(UserTask.class, true))
             {
-                if (hasText(userTask.getFormKey()))
+                if (hasText(userTask.getFormKey())
+                        || hasFormProperties(userTask.getFormProperties()))
                 {
-                    addFormReference(userTask.getFormKey(), userTask.getId(), userTask.getName(),
-                            references, uniqueReferences);
+                    addNodeFormReference(process.getId(), userTask.getFormKey(), userTask.getFormProperties(),
+                            userTask.getId(), userTask.getName(), references, uniqueReferences);
                 }
-                validateTaskListeners(userTask.getTaskListeners());
+                validateTaskListeners(userTask.getTaskListeners(), validationContext);
             }
             if (!process.findFlowElementsOfType(ScriptTask.class, true).isEmpty())
             {
                 throw invalidBpmn("流程不允许使用脚本任务", null);
             }
 
-            validateListeners(process.getExecutionListeners());
+            validateListeners(process.getExecutionListeners(), validationContext);
             for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
             {
-                validateListeners(element.getExecutionListeners());
-                validateFlowElement(process, element);
+                validateListeners(element.getExecutionListeners(), validationContext);
+                validateFlowElement(process, element, validationContext);
             }
         }
         return List.copyOf(references);
@@ -296,13 +626,19 @@ public class WorkflowBpmnService
      *
      * @param process Process，元素所属的可执行流程，用于核验动态多实例初始化拓扑
      * @param element FlowElement，待校验流程元素
+     * @param validationContext ValidationContext，作者资源或部署编译资源的字段契约
      * @return 无返回值
      */
-    private void validateFlowElement(Process process, FlowElement element)
+    private void validateFlowElement(Process process, FlowElement element,
+            ValidationContext validationContext)
     {
         if (element instanceof ServiceTask serviceTask)
         {
-            validateServiceTask(serviceTask);
+            validateServiceTask(serviceTask, validationContext);
+        }
+        if (element instanceof SendTask sendTask)
+        {
+            validateSendTask(sendTask, validationContext);
         }
         if (element instanceof SequenceFlow sequenceFlow)
         {
@@ -334,6 +670,27 @@ public class WorkflowBpmnService
                 validateMultiInstance(process, activity, loop);
             }
         }
+    }
+
+    /**
+     * 校验作者 SendTask 只能携带受控扩展字段，禁止 WebService、任意实现类型和操作引用。
+     * @param task SendTask，待校验发送任务
+     * @param validationContext ValidationContext，作者资源或部署编译资源字段契约
+     * @return void，发现不受控实现或部署副本仍含 SendTask 时抛出 HTTP 400
+     */
+    private void validateSendTask(SendTask task, ValidationContext validationContext)
+    {
+        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+        {
+            throw invalidBpmn("已编译执行资源不允许保留发送任务", null);
+        }
+        if (hasText(task.getType()) || hasText(task.getImplementationType())
+                || hasText(task.getOperationRef()))
+        {
+            // 标准 WebService SendTask 和引擎私有实现均不可绕过扩展注册表直接执行。
+            throw invalidBpmn("发送任务必须从受控扩展注册表选择", null);
+        }
+        validateExtensionFields(task.getFieldExtensions());
     }
 
     /**
@@ -560,20 +917,83 @@ public class WorkflowBpmnService
     }
 
     /**
-     * 校验服务任务只能使用受控 Java 类或 workflow 前缀 Bean，禁止内建外部执行类型。
+     * 校验服务任务只能使用固定扩展调度器，并按资源阶段执行互斥字段契约。
      *
      * @param task ServiceTask，待校验服务任务
+     * @param validationContext ValidationContext，作者资源要求受控字段，编译资源要求字段已剥离
      * @return 无返回值
      */
-    private void validateServiceTask(ServiceTask task)
+    private void validateServiceTask(ServiceTask task, ValidationContext validationContext)
     {
         if (hasText(task.getType()))
         {
             throw invalidBpmn("服务任务类型未列入安全白名单", null);
         }
-        validateImplementation(task.getImplementationType(), task.getImplementation());
+        if (!ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(
+                task.getImplementationType())
+                || !WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION.equals(
+                        trimToEmpty(task.getImplementation())))
+        {
+            // 作者 BPMN 不再接受类名或任意 Bean；真实实现只能由部署快照解析服务端注册表。
+            throw invalidBpmn("服务任务必须从受控扩展注册表选择", null);
+        }
         validateExpression(task.getSkipExpression());
-        validateFieldExtensions(task.getFieldExtensions());
+        List<FieldExtension> fields = task.getFieldExtensions();
+        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+        {
+            // 部署快照已经固化精确扩展版本和配置，执行 XML 不得再次携带可篡改的作者字段。
+            if (fields != null && !fields.isEmpty())
+            {
+                throw invalidBpmn("已编译服务任务不允许保留作者扩展字段", null);
+            }
+            return;
+        }
+        validateExtensionFields(fields);
+    }
+
+    /**
+     * 校验 ServiceTask 作者配置只包含唯一扩展键和可选配置 JSON 字符串。
+     * @param fields List&lt;FieldExtension&gt;，服务任务作者字段集合
+     * @return 无返回值；字段注入、表达式、重复或缺失扩展键时拒绝
+     */
+    private void validateExtensionFields(List<FieldExtension> fields)
+    {
+        boolean extensionKeySeen = false;
+        boolean extensionConfigSeen = false;
+        if (fields != null)
+        {
+            for (FieldExtension field : fields)
+            {
+                if (hasText(field.getExpression()))
+                {
+                    throw invalidBpmn("服务任务扩展配置不允许表达式", null);
+                }
+                if (WorkflowExtensionBpmnContract.EXTENSION_KEY_FIELD.equals(field.getFieldName()))
+                {
+                    if (extensionKeySeen || !hasText(field.getStringValue()))
+                    {
+                        throw invalidBpmn("服务任务扩展标识缺失或重复", null);
+                    }
+                    extensionKeySeen = true;
+                }
+                else if (WorkflowExtensionBpmnContract.EXTENSION_CONFIG_FIELD.equals(field.getFieldName()))
+                {
+                    if (extensionConfigSeen || !hasText(field.getStringValue()))
+                    {
+                        throw invalidBpmn("服务任务扩展配置缺失或重复", null);
+                    }
+                    extensionConfigSeen = true;
+                }
+                else
+                {
+                    throw invalidBpmn("服务任务包含未注册的字段注入", null);
+                }
+            }
+        }
+        if (!extensionKeySeen)
+        {
+            throw invalidBpmn("服务任务必须选择受控扩展", null);
+        }
     }
 
     /**
@@ -582,25 +1002,21 @@ public class WorkflowBpmnService
      * @param listeners List&lt;FlowableListener&gt;，监听器集合，允许为空
      * @return 无返回值
      */
-    private void validateListeners(List<FlowableListener> listeners)
+    private void validateListeners(List<FlowableListener> listeners,
+            ValidationContext validationContext)
     {
         if (listeners == null)
         {
             return;
         }
+        Set<String> businessEvents = new HashSet<>();
         for (FlowableListener listener : listeners)
         {
-            validateImplementation(listener.getImplementationType(), listener.getImplementation());
-            validateFieldExtensions(listener.getFieldExtensions());
-            if (listener.getScriptInfo() != null)
+            if (!businessEvents.add(trimToEmpty(listener.getEvent())))
             {
-                throw invalidBpmn("监听器不允许执行脚本", null);
+                throw invalidBpmn("同一元素的执行业务监听器事件不能重复", null);
             }
-            if (hasText(listener.getCustomPropertiesResolverImplementation()))
-            {
-                validateImplementation(listener.getCustomPropertiesResolverImplementationType(),
-                        listener.getCustomPropertiesResolverImplementation());
-            }
+            validateBusinessListener(listener, validationContext, "执行");
         }
     }
 
@@ -611,17 +1027,28 @@ public class WorkflowBpmnService
      * @param listeners List&lt;FlowableListener&gt;，用户任务监听器集合，必须完整包含三个固定事件
      * @return 无返回值；监听器缺失、重复或实现漂移时拒绝模型
      */
-    private void validateTaskListeners(List<FlowableListener> listeners)
+    private void validateTaskListeners(List<FlowableListener> listeners,
+            ValidationContext validationContext)
     {
-        if (listeners == null || listeners.size() != USER_TASK_LISTENER_EVENTS.size())
+        if (listeners == null)
         {
             throw invalidBpmn("用户任务必须配置固定身份审计任务监听器", null);
         }
         Set<String> seenEvents = new HashSet<>();
+        Set<String> businessEvents = new HashSet<>();
         for (FlowableListener listener : listeners)
         {
             String event = trimToEmpty(listener.getEvent());
             String implementation = trimToEmpty(listener.getImplementation());
+            if (!USER_TASK_LISTENER_EXPRESSION.equals(implementation))
+            {
+                if (!businessEvents.add(event))
+                {
+                    throw invalidBpmn("同一用户任务的业务监听器事件不能重复", null);
+                }
+                validateBusinessListener(listener, validationContext, "任务");
+                continue;
+            }
             boolean hasFields = listener.getFieldExtensions() != null
                     && !listener.getFieldExtensions().isEmpty();
             boolean hasCustomResolver = hasText(listener.getCustomPropertiesResolverImplementationType())
@@ -647,38 +1074,85 @@ public class WorkflowBpmnService
     }
 
     /**
-     * 校验 class 或 delegateExpression 实现，只允许明确白名单。
-     *
-     * @param implementationType String，Flowable 实现类型
-     * @param implementation String，实现类名或委托表达式
-     * @return 无返回值
+     * 校验单个受控业务监听器，区分作者字段形态和编译后固定 Bean 形态。
+     * @param listener FlowableListener，待校验的执行或任务监听器
+     * @param validationContext ValidationContext，作者或编译执行资源阶段
+     * @param listenerLabel String，异常提示中的监听器种类
+     * @return 无返回值，发现任意实现、脚本、字段或生命周期回调越权时抛出
      */
-    private void validateImplementation(String implementationType, String implementation)
+    private void validateBusinessListener(FlowableListener listener,
+            ValidationContext validationContext, String listenerLabel)
     {
-        if (!hasText(implementationType) || !hasText(implementation))
+        boolean fixedDelegate = ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(
+                listener.getImplementationType())
+                && WorkflowExtensionBpmnContract.BUSINESS_LISTENER_DELEGATE_EXPRESSION.equals(
+                        trimToEmpty(listener.getImplementation()));
+        if (!fixedDelegate)
         {
-            throw invalidBpmn("流程实现配置不完整", null);
+            throw invalidBpmn(listenerLabel + "监听器必须从受控业务扩展注册表选择", null);
         }
-        if (ImplementationType.IMPLEMENTATION_TYPE_CLASS.equals(implementationType))
+        if (listener.getScriptInfo() != null
+                || hasText(listener.getCustomPropertiesResolverImplementation())
+                || hasText(listener.getOnTransaction())
+                || listener.getInstance() != null)
         {
-            String className = implementation.trim();
-            boolean allowedPrefix = ALLOWED_CLASS_PREFIXES.stream().anyMatch(className::startsWith);
-            if (!JAVA_CLASS_PATTERN.matcher(className).matches() || !allowedPrefix)
+            throw invalidBpmn(listenerLabel + "监听器不允许脚本、事务回调或实例注入", null);
+        }
+        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+        {
+            if (listener.getFieldExtensions() != null && !listener.getFieldExtensions().isEmpty())
             {
-                throw invalidBpmn("流程实现类未列入安全白名单", null);
+                throw invalidBpmn("已编译业务监听器不允许保留作者扩展字段", null);
             }
             return;
         }
-        if (ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(implementationType))
+        validateListenerExtensionFields(listener.getFieldExtensions(), listenerLabel);
+    }
+
+    /**
+     * 校验业务监听器只能携带唯一稳定扩展键和可选 JSON 配置字段。
+     * @param fields List&lt;FieldExtension&gt;，业务监听器字段集合
+     * @param listenerLabel String，异常提示中的监听器种类
+     * @return 无返回值，字段表达式、重复字段和未知字段均被拒绝
+     */
+    private void validateListenerExtensionFields(List<FieldExtension> fields, String listenerLabel)
+    {
+        boolean keySeen = false;
+        boolean configSeen = false;
+        if (fields != null)
         {
-            if (!WORKFLOW_BEAN_PATTERN.matcher(implementation.trim()).matches())
+            for (FieldExtension field : fields)
             {
-                throw invalidBpmn("流程委托 Bean 未列入安全白名单", null);
+                if (hasText(field.getExpression()))
+                {
+                    throw invalidBpmn(listenerLabel + "监听器字段不允许表达式", null);
+                }
+                if (WorkflowExtensionBpmnContract.EXTENSION_KEY_FIELD.equals(field.getFieldName()))
+                {
+                    if (keySeen || !hasText(field.getStringValue()))
+                    {
+                        throw invalidBpmn(listenerLabel + "监听器扩展标识缺失或重复", null);
+                    }
+                    keySeen = true;
+                }
+                else if (WorkflowExtensionBpmnContract.EXTENSION_CONFIG_FIELD.equals(field.getFieldName()))
+                {
+                    if (configSeen || !hasText(field.getStringValue()))
+                    {
+                        throw invalidBpmn(listenerLabel + "监听器扩展配置缺失或重复", null);
+                    }
+                    configSeen = true;
+                }
+                else
+                {
+                    throw invalidBpmn(listenerLabel + "监听器包含未注册字段", null);
+                }
             }
-            return;
         }
-        // expression、script、instance 等类型可调用任意运行时对象，本阶段统一禁止。
-        throw invalidBpmn("流程实现类型未列入安全白名单", null);
+        if (!keySeen)
+        {
+            throw invalidBpmn(listenerLabel + "监听器必须选择受控业务扩展", null);
+        }
     }
 
     /**
@@ -833,6 +1307,7 @@ public class WorkflowBpmnService
     /**
      * 解析并添加严格格式的节点表单引用，同时拒绝重复快照主键。
      *
+     * @param processKey String，表单节点所属可执行流程标识
      * @param formKey String，BPMN 表单键
      * @param nodeKey String，BPMN 节点主键
      * @param nodeName String，BPMN 节点名称，允许为空
@@ -840,7 +1315,7 @@ public class WorkflowBpmnService
      * @param uniqueReferences Set&lt;String&gt;，部署快照业务唯一键集合
      * @return 无返回值
      */
-    private void addFormReference(String formKey, String nodeKey, String nodeName,
+    private void addFormReference(String processKey, String formKey, String nodeKey, String nodeName,
             List<WorkflowBpmnFormReference> references, Set<String> uniqueReferences)
     {
         Matcher matcher = FORM_KEY_PATTERN.matcher(formKey.trim());
@@ -861,13 +1336,76 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("流程表单主键超出有效范围", exception);
         }
-        String uniqueKey = formKey.trim() + '\u0000' + nodeKey.trim();
+        String normalizedProcessKey = requireElementId(processKey, "可执行流程标识不能为空");
+        String uniqueKey = normalizedProcessKey + '\u0000' + formKey.trim()
+                + '\u0000' + nodeKey.trim();
         if (!uniqueReferences.add(uniqueKey))
         {
             throw invalidBpmn("流程包含重复的节点表单引用", null);
         }
-        references.add(new WorkflowBpmnFormReference(
-                formId, formKey.trim(), nodeKey.trim(), nodeName == null ? "" : nodeName));
+        references.add(new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE,
+                formId, formKey.trim(), nodeKey.trim(), nodeName == null ? "" : nodeName,
+                null, normalizedProcessKey));
+    }
+
+    /**
+     * 按节点配置选择正式模板或 BPMN 内嵌表单，并拒绝双重来源歧义。
+     *
+     * @param processKey String，表单节点所属可执行流程标识
+     * @param formKey String，正式 wf_form 引用键；未配置时为空
+     * @param properties List&lt;FormProperty&gt;，Flowable FormData 字段；未配置时为空
+     * @param nodeKey String，BPMN 节点主键
+     * @param nodeName String，BPMN 节点名称
+     * @param references List&lt;WorkflowBpmnFormReference&gt;，待写入的已校验引用
+     * @param uniqueReferences Set&lt;String&gt;，部署快照业务唯一键集合
+     * @return 无返回值，配置歧义或内容非法时抛出稳定 400
+     */
+    private void addNodeFormReference(String processKey, String formKey, List<FormProperty> properties,
+            String nodeKey, String nodeName, List<WorkflowBpmnFormReference> references,
+            Set<String> uniqueReferences)
+    {
+        boolean hasTemplate = hasText(formKey);
+        boolean hasEmbedded = hasFormProperties(properties);
+        if (hasTemplate && hasEmbedded)
+        {
+            throw invalidBpmn("同一节点不能同时配置正式表单和 BPMN 内嵌表单", null);
+        }
+        if (hasTemplate)
+        {
+            addFormReference(processKey, formKey, nodeKey, nodeName, references, uniqueReferences);
+            return;
+        }
+        if (!hasText(nodeKey))
+        {
+            throw invalidBpmn("表单节点主键不能为空", null);
+        }
+        String normalizedNodeKey = nodeKey.trim();
+        String formKeyForSnapshot = WorkflowFormSourceType.EMBEDDED_FORM_KEY;
+        String normalizedProcessKey = requireElementId(processKey, "可执行流程标识不能为空");
+        String uniqueKey = normalizedProcessKey + '\u0000' + formKeyForSnapshot
+                + '\u0000' + normalizedNodeKey;
+        if (!uniqueReferences.add(uniqueKey))
+        {
+            throw invalidBpmn("流程包含重复的节点表单引用", null);
+        }
+        String embeddedContent = formFieldExtensionService == null
+                ? WorkflowEmbeddedFormConverter.convert(properties)
+                : WorkflowEmbeddedFormConverter.convert(properties,
+                        formFieldExtensionService::resolveForAuthor);
+        references.add(new WorkflowBpmnFormReference(WorkflowFormSourceType.EMBEDDED,
+                null, formKeyForSnapshot, normalizedNodeKey,
+                nodeName == null ? "" : nodeName, embeddedContent, normalizedProcessKey));
+    }
+
+    /**
+     * 判断 Flowable 节点是否声明了内嵌 FormData 字段。
+     *
+     * @param properties List&lt;FormProperty&gt;，节点解析出的表单字段
+     * @return boolean，至少包含一个字段时返回 true
+     */
+    private boolean hasFormProperties(List<FormProperty> properties)
+    {
+        return properties != null && !properties.isEmpty();
     }
 
     /**
@@ -911,6 +1449,21 @@ public class WorkflowBpmnService
     private static boolean hasText(String value)
     {
         return value != null && !value.isBlank();
+    }
+
+    /**
+     * 规范化流程或节点标识，避免跨流程快照唯一键出现空值歧义。
+     * @param value String，待校验的 BPMN 标识
+     * @param message String，标识为空时返回的业务提示
+     * @return String，去除首尾空白后的非空标识
+     */
+    private String requireElementId(String value, String message)
+    {
+        if (!hasText(value))
+        {
+            throw invalidBpmn(message, null);
+        }
+        return value.trim();
     }
 
     /**

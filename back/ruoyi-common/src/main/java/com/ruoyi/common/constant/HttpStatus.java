@@ -78,6 +78,11 @@ public class HttpStatus
     public static final int UNSUPPORTED_TYPE = 415;
 
     /**
+     * 请求过于频繁。
+     */
+    public static final int TOO_MANY_REQUESTS = 429;
+
+    /**
      * 系统内部错误
      */
     public static final int ERROR = 500;

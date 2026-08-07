@@ -29,6 +29,7 @@ import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.BoundaryEvent;
 import org.flowable.bpmn.model.CallActivity;
 import org.flowable.bpmn.model.EndEvent;
+import org.flowable.bpmn.model.FormProperty;
 import org.flowable.bpmn.model.IntermediateCatchEvent;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.ParallelGateway;
@@ -316,6 +317,57 @@ class WorkflowTaskLifecycleServiceTest
                 TASK_ID, ACTOR_ID, Map.of("approved", true), false);
         postCompleteOrder.verify(nextTaskAssignmentService).apply(assignmentPlan);
         postCompleteOrder.verify(taskCopyService).persist(copyPlan);
+    }
+
+    /**
+     * 验证内嵌任务表单只按部署快照校验，模型字段变化不会改变在途实例的提交协议。
+     *
+     * @return 无返回值，冻结内容、来源类型和空 formId 任一漂移时测试失败
+     */
+    @Test
+    void completesEmbeddedTaskAgainstFrozenSnapshotAfterModelPropertiesChange()
+    {
+        Task task = activeTask(TASK_ID, "review", ACTOR_ID);
+        stubActiveTask(task);
+        stubActiveInstance(INSTANCE_ID, ACTOR_ID);
+        BpmnFixture fixture = bpmnFixture("review", "审核", null);
+        FormProperty changedProperty = new FormProperty();
+        changedProperty.setId("changedAfterDeployment");
+        changedProperty.setVariable("changedAfterDeployment");
+        changedProperty.setType("string");
+        fixture.currentTask().setFormProperties(List.of(changedProperty));
+        stubDefinition(fixture.model());
+
+        String frozenContent = "{\"fields\":[{\"__vModel__\":\"originalField\","
+                + "\"__config__\":{\"layout\":\"colFormItem\",\"tag\":\"el-input\","
+                + "\"workflowReadable\":true,\"workflowWritable\":true}}]}";
+        WfDeployForm snapshot = snapshot("review", "embedded", frozenContent);
+        snapshot.setSourceType("EMBEDDED");
+        snapshot.setFormId(null);
+        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+                .thenReturn(List.of(snapshot));
+        when(variableValidator.validateForStart(frozenContent,
+                Map.of("originalField", "部署时字段值")))
+                .thenReturn(new WorkflowValidatedStartVariables(
+                        Map.of("originalField", "部署时字段值"), Map.of()));
+
+        lifecycleService.completeTask(new WorkflowTaskCompleteRequest(
+                TASK_ID, "同意", Map.of("originalField", "部署时字段值"),
+                List.of(), List.of()));
+
+        verify(variableValidator).validateForStart(frozenContent,
+                Map.of("originalField", "部署时字段值"));
+        ArgumentCaptor<Object> submissionCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(taskService).setVariableLocal(eq(TASK_ID),
+                eq(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME),
+                submissionCaptor.capture());
+        var submission = WorkflowFormSubmissionSnapshotCodec.decode(
+                (String) submissionCaptor.getValue());
+        assertThat(submission.sourceType()).isEqualTo("EMBEDDED");
+        assertThat(submission.formId()).isNull();
+        assertThat(submission.formKey()).isEqualTo("embedded");
+        assertThat(submission.values().get("originalField").textValue())
+                .isEqualTo("部署时字段值");
     }
 
     /**
@@ -1629,6 +1681,7 @@ class WorkflowTaskLifecycleServiceTest
     {
         WfDeployForm snapshot = new WfDeployForm();
         snapshot.setDeployId("deployment-1");
+        snapshot.setSourceType("TEMPLATE");
         snapshot.setFormId(20L);
         snapshot.setNodeKey(nodeKey);
         snapshot.setFormKey(formKey);

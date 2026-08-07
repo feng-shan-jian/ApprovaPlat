@@ -29,20 +29,30 @@ class WorkflowAttachmentStorageTest
     Path profileRoot;
 
     /**
-     * 验证共享模式只接受运维预置 storage-id，并真实完成无残留写入、回读和原子移动探针。
+     * 按当前文件系统能力验证共享模式：支持安全目录句柄时完成预置身份和原子写探针，
+     * 不支持时必须失败关闭且不创建临时目录。
      *
-     * @return void，应用自动伪造标识、探针未执行或遗留临时文件时测试失败
+     * @return void，支持平台未完成探针或不支持平台仍接受共享模式时测试失败
      * @throws Exception 预置共享卷身份或遍历临时目录失败
      */
     @Test
-    void verifiesPreprovisionedSharedStorageIdentityAndAtomicWriteProbe() throws Exception
+    void verifiesSharedStorageAgainstSecureDirectoryCapability() throws Exception
     {
         WorkflowAttachmentStorage storage = new WorkflowAttachmentStorage(profileRoot, 1024L);
         Path privateRoot = profileRoot.resolve(WorkflowAttachmentStorage.PRIVATE_DIRECTORY_NAME);
         Path marker = privateRoot.resolve(WorkflowAttachmentStorage.STORAGE_ID_MARKER_NAME);
         Files.writeString(marker, "shared-storage-a\n", StandardCharsets.UTF_8);
-        assumeTrue(supportsSecureDirectoryStream(privateRoot),
-                "共享卷必须提供 SecureDirectoryStream，Linux 目标文件系统必须执行该回归");
+        boolean secureDirectorySupported = supportsSecureDirectoryStream(privateRoot);
+        if (!secureDirectorySupported)
+        {
+            // Windows 默认文件系统没有 SecureDirectoryStream，必须证明共享模式拒绝启动而非跳过门禁。
+            assertThatThrownBy(() -> storage.verifyRuntimeReadiness(
+                    "shared-storage-a", 0L))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("工作流附件生产存储就绪校验失败");
+            assertThat(privateRoot.resolve(".tmp")).doesNotExist();
+            return;
+        }
 
         storage.verifyRuntimeReadiness("shared-storage-a", 0L);
 
@@ -83,29 +93,6 @@ class WorkflowAttachmentStorageTest
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("工作流附件生产存储就绪校验失败");
         assertThat(marker).hasContent("shared-storage-b\n");
-    }
-
-    /**
-     * 验证不支持安全目录句柄的平台不能承载共享卷模式，避免词法路径回退留下父目录 ABA 窗口。
-     *
-     * @return void，共享模式在不具备安全目录句柄时仍通过启动门禁则测试失败
-     * @throws Exception 写入共享卷标识或探测目录能力失败
-     */
-    @Test
-    void rejectsSharedStorageWithoutSecureDirectoryStream() throws Exception
-    {
-        WorkflowAttachmentStorage storage = new WorkflowAttachmentStorage(profileRoot, 1024L);
-        Path privateRoot = profileRoot.resolve(WorkflowAttachmentStorage.PRIVATE_DIRECTORY_NAME);
-        Path marker = privateRoot.resolve(WorkflowAttachmentStorage.STORAGE_ID_MARKER_NAME);
-        Files.writeString(marker, "shared-storage-a\n", StandardCharsets.UTF_8);
-        assumeTrue(!supportsSecureDirectoryStream(privateRoot),
-                "当前文件系统支持安全目录句柄，本分支由共享卷正向测试覆盖");
-
-        assertThatThrownBy(() -> storage.verifyRuntimeReadiness(
-                "shared-storage-a", 0L))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("工作流附件生产存储就绪校验失败");
-        assertThat(privateRoot.resolve(".tmp")).doesNotExist();
     }
 
     /**

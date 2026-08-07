@@ -46,7 +46,7 @@ CREATE TEMPORARY TABLE tmp_workflow_menu_seed
     PRIMARY KEY (seed_key)
 ) ENGINE = InnoDB;
 
--- 两个目录、十一个菜单页和四十个真实按钮权限，共五十三条目标记录。
+-- 两个目录、十七个菜单页和五十三个真实按钮权限，共七十二条目标记录。
 INSERT INTO tmp_workflow_menu_seed
     (seed_key, parent_key, menu_name, order_num, path, component, route_name,
      menu_type, perms, icon, remark)
@@ -68,7 +68,25 @@ VALUES
     ('workflow:deploy:list', 'workflow', '部署管理', 4, 'deploy',
      'workflow/deploy/index', 'WorkflowDeploy', 'C', 'workflow:deploy:list',
      'server', '流程部署管理菜单'),
-    ('workflow:process:manageList', 'workflow', '实例运维', 5, 'instance',
+    ('workflow:extension:list', 'workflow', '扩展注册表', 5, 'extension',
+     'workflow/extension/index', 'WorkflowExtension', 'C', 'workflow:extension:list',
+     'connection', 'BPMN 受控扩展目录与不可变版本管理菜单'),
+    ('workflow:connector:list', 'workflow', '连接端点', 6, 'connector',
+     'workflow/connector/index', 'WorkflowConnector', 'C', 'workflow:connector:list',
+     'link', 'HTTP 连接器端点白名单与不可回退修订管理菜单'),
+    ('workflow:sqlDatasource:list', 'workflow', 'SQL 数据源', 7, 'sqlDatasource',
+     'workflow/sqlDatasource/index', 'WorkflowSqlDatasource', 'C', 'workflow:sqlDatasource:list',
+     'database', 'SQL 连接器数据源白名单与不可回退修订管理菜单'),
+    ('workflow:dmn:list', 'workflow', 'DMN 决策', 8, 'dmn',
+     'workflow/dmn/index', 'WorkflowDmn', 'C', 'workflow:dmn:list',
+     'fork', 'Flowable 官方 DMN 决策版本管理菜单'),
+    ('workflow:integrationCredential:list', 'workflow', '集成账号', 9, 'integrationCredential',
+     'workflow/integrationCredential/index', 'WorkflowIntegrationCredential', 'C',
+     'workflow:integrationCredential:list', 'key', '集成 Token 范围、轮换、吊销和限流管理菜单'),
+    ('workflow:runtimeEvent:list', 'workflow', '运行事件', 10, 'runtimeEvent',
+     'workflow/runtimeEvent/index', 'WorkflowRuntimeEvent', 'C', 'workflow:runtimeEvent:list',
+     'list', '消息、信号和 ReceiveTask 运行事件脱敏审计菜单'),
+    ('workflow:process:manageList', 'workflow', '实例运维', 11, 'instance',
      'workflow/work/manage', 'WorkflowManage', 'C', 'workflow:process:manageList',
      'list', '流程管理员跨用户实例运维菜单'),
     ('workflow:process:startList', 'office', '新建流程', 1, 'create',
@@ -128,6 +146,40 @@ VALUES
      'F', 'workflow:model:save', '#', '原子保存并管理模型版本'),
     ('workflow:model:deploy', 'workflow:model:list', '流程部署', 8, '', NULL, '',
      'F', 'workflow:model:deploy', '#', '部署模型并固化表单快照'),
+
+    ('workflow:extension:add', 'workflow:extension:list', '扩展新增', 1, '', NULL, '',
+     'F', 'workflow:extension:add', '#', '新增受控 BPMN 扩展目录'),
+    ('workflow:extension:edit', 'workflow:extension:list', '扩展状态', 2, '', NULL, '',
+     'F', 'workflow:extension:edit', '#', '启用或停用扩展目录'),
+    ('workflow:extension:version:add', 'workflow:extension:list', '扩展版本发布', 3, '', NULL, '',
+     'F', 'workflow:extension:version:add', '#', '从服务端已安装处理器发布不可变扩展版本'),
+    ('workflow:extension:remove', 'workflow:extension:list', '扩展删除', 4, '', NULL, '',
+     'F', 'workflow:extension:remove', '#', '删除未被部署快照引用的停用扩展目录'),
+
+    ('workflow:connector:add', 'workflow:connector:list', '端点新增', 1, '', NULL, '',
+     'F', 'workflow:connector:add', '#', '新增 HTTP 连接器端点白名单'),
+    ('workflow:connector:edit', 'workflow:connector:list', '端点修订', 2, '', NULL, '',
+     'F', 'workflow:connector:edit', '#', '发布 HTTP 端点新修订或变更启用状态'),
+
+    ('workflow:sqlDatasource:add', 'workflow:sqlDatasource:list', '数据源新增', 1, '', NULL, '',
+     'F', 'workflow:sqlDatasource:add', '#', '新增 SQL 连接器受控数据源'),
+    ('workflow:sqlDatasource:edit', 'workflow:sqlDatasource:list', '数据源修订', 2, '', NULL, '',
+     'F', 'workflow:sqlDatasource:edit', '#', '发布 SQL 数据源新修订或变更启用状态'),
+
+    ('workflow:dmn:add', 'workflow:dmn:list', 'DMN 部署', 1, '', NULL, '',
+     'F', 'workflow:dmn:add', '#', '部署经过 XML 安全门禁的官方 DMN 决策'),
+    ('workflow:dmn:remove', 'workflow:dmn:list', 'DMN 删除', 2, '', NULL, '',
+     'F', 'workflow:dmn:remove', '#', '删除未被流程冻结快照引用的 DMN 来源部署'),
+
+    ('workflow:integrationCredential:add', 'workflow:integrationCredential:list',
+     '集成账号新增', 1, '', NULL, '', 'F', 'workflow:integrationCredential:add', '#',
+     '创建仅返回一次明文 Token 的工作流集成账号'),
+    ('workflow:integrationCredential:rotate', 'workflow:integrationCredential:list',
+     '集成 Token 轮换', 2, '', NULL, '', 'F', 'workflow:integrationCredential:rotate', '#',
+     '原子轮换 Token 并立即使旧 Token 失效'),
+    ('workflow:integrationCredential:revoke', 'workflow:integrationCredential:list',
+     '集成账号吊销', 3, '', NULL, '', 'F', 'workflow:integrationCredential:revoke', '#',
+     '永久吊销 Token 并保留历史运行事件审计'),
 
     ('workflow:deploy:query', 'workflow:deploy:list', '部署查询', 1, '', NULL, '',
      'F', 'workflow:deploy:query', '#', '查询部署版本和 BPMN'),
@@ -350,7 +402,7 @@ CREATE TEMPORARY TABLE tmp_workflow_role_menu_seed
 INSERT INTO tmp_workflow_role_menu_seed (role_key, seed_key)
 SELECT 'workflow_admin', seed_key FROM tmp_workflow_menu_seed;
 
--- 流程设计者仅管理分类、表单、模型和部署，不获得实例运维或办理权限。
+-- 流程设计者仅管理分类、表单、模型和部署写能力，并只读查看扩展注册表。
 INSERT INTO tmp_workflow_role_menu_seed (role_key, seed_key)
 SELECT 'workflow_designer', seed_key
 FROM tmp_workflow_menu_seed
@@ -364,7 +416,9 @@ WHERE seed_key IN (
     'workflow:model:edit', 'workflow:model:remove', 'workflow:model:export',
     'workflow:model:designer', 'workflow:model:save', 'workflow:model:deploy',
     'workflow:deploy:list', 'workflow:deploy:query', 'workflow:deploy:remove',
-    'workflow:deploy:state'
+    'workflow:deploy:state', 'workflow:extension:list', 'workflow:connector:list',
+    'workflow:sqlDatasource:list', 'workflow:sqlDatasource:add', 'workflow:sqlDatasource:edit',
+    'workflow:dmn:list', 'workflow:dmn:add', 'workflow:dmn:remove'
 );
 
 -- 发起人只发起、查看、取消和导出自己的实例，不获得历史物理删除权限。
@@ -401,6 +455,7 @@ INSERT INTO tmp_workflow_role_menu_seed (role_key, seed_key)
 SELECT 'workflow_auditor', seed_key
 FROM tmp_workflow_menu_seed
 WHERE seed_key IN (
+    'workflow', 'workflow:runtimeEvent:list',
     'office', 'workflow:process:ownList', 'workflow:process:todoList',
     'workflow:process:claimList', 'workflow:process:finishedList',
     'workflow:process:copyList', 'workflow:process:query',

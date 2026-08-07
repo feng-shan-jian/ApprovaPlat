@@ -84,6 +84,7 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
+import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract;
@@ -517,7 +518,7 @@ public class WorkflowProcessDetailService
         for (WfDeployForm row : rows)
         {
             if (row == null || !deploymentId.equals(row.getDeployId())
-                    || row.getFormId() == null || row.getFormId() <= 0
+                    || !WorkflowFormSourceType.isConsistent(row.getSourceType(), row.getFormId())
                     || !StringUtils.hasText(row.getNodeKey())
                     || !StringUtils.hasText(row.getFormKey())
                     || !StringUtils.hasText(row.getContent()))
@@ -525,8 +526,11 @@ public class WorkflowProcessDetailService
                 throw dataError("部署表单快照关联数据异常");
             }
             Set<String> variableNames = formTemplateValidator.extractVariableNames(row.getContent());
+            Set<String> readableVariableNames =
+                    formTemplateValidator.extractReadableVariableNames(row.getContent());
             NodeFormKey key = new NodeFormKey(row.getNodeKey(), row.getFormKey());
-            if (indexed.putIfAbsent(key, new SnapshotSchema(row, variableNames)) != null)
+            if (indexed.putIfAbsent(key,
+                    new SnapshotSchema(row, variableNames, readableVariableNames)) != null)
             {
                 throw dataError("部署表单快照节点关系不唯一");
             }
@@ -838,6 +842,7 @@ public class WorkflowProcessDetailService
                 {
                     SubmissionSnapshot previous = startSubmission.snapshot();
                     if (!Objects.equals(previous.deploymentId(), snapshot.deploymentId())
+                            || !Objects.equals(previous.sourceType(), snapshot.sourceType())
                             || !Objects.equals(previous.formId(), snapshot.formId())
                             || !Objects.equals(previous.formKey(), snapshot.formKey())
                             || !Objects.equals(previous.nodeKey(), snapshot.nodeKey()))
@@ -1165,7 +1170,7 @@ public class WorkflowProcessDetailService
         }
         WorkflowProcessFormSnapshotView start = starts.get(0);
         return new WorkflowProcessFormSnapshotView(start.activityId(), returnedTaskId,
-                start.formId(), start.formKey(), start.nodeKey(), start.formName(),
+                start.sourceType(), start.formId(), start.formKey(), start.nodeKey(), start.formName(),
                 start.nodeName(), start.content(), false, start.values(), null);
     }
 
@@ -1249,7 +1254,7 @@ public class WorkflowProcessDetailService
                 ? variables.taskVariables().getOrDefault(taskId, Map.of())
                 : variables.processVariables();
         Map<String, JsonNode> values = buildSafeValues(instanceId, taskId, taskLocal,
-                schema.variableNames(), source, budget);
+                schema.readableVariableNames(), source, budget);
         return toFormView(activityId, taskId, schema.snapshot(), taskLocal, values,
                 null, budget);
     }
@@ -1280,7 +1285,8 @@ public class WorkflowProcessDetailService
                 ? SnapshotKind.START : SnapshotKind.TASK;
         if (submitted.kind() != expectedKind
                 || !deploymentId.equals(submitted.deploymentId())
-                || !schema.snapshot().getFormId().equals(submitted.formId())
+                || !Objects.equals(schema.snapshot().getSourceType(), submitted.sourceType())
+                || !Objects.equals(schema.snapshot().getFormId(), submitted.formId())
                 || !formKey.equals(submitted.formKey())
                 || !element.getId().equals(submitted.nodeKey())
                 || !Objects.equals(taskId, submitted.taskId())
@@ -1293,7 +1299,8 @@ public class WorkflowProcessDetailService
             throw dataError("流程表单提交快照与历史节点关系不一致");
         }
         Map<String, JsonNode> values = buildSubmittedValues(
-                schema.variableNames(), submitted.values(), budget);
+                schema.variableNames(), schema.readableVariableNames(),
+                submitted.values(), budget);
         return toFormView(activityId, taskId, schema.snapshot(), taskLocal, values,
                 submission.submittedAt(), budget);
     }
@@ -1320,13 +1327,15 @@ public class WorkflowProcessDetailService
     /**
      * 按部署 schema 顺序复制提交值，并拒绝快照携带未声明或内部字段。
      *
-     * @param allowedNames Set&lt;String&gt;，部署表单声明字段名
+     * @param allowedNames Set&lt;String&gt;，部署表单声明的全部字段名
+     * @param readableNames Set&lt;String&gt;，允许向当前用户响应回显的字段名
      * @param submittedValues Map&lt;String, JsonNode&gt;，提交快照中的安全字段值
      * @param budget DetailResponseBudget，详情累计变量 JSON 大小预算
      * @return Map&lt;String, JsonNode&gt;，仅包含 schema 字段的不可变有序映射
      */
     private Map<String, JsonNode> buildSubmittedValues(Set<String> allowedNames,
-            Map<String, JsonNode> submittedValues, DetailResponseBudget budget)
+            Set<String> readableNames, Map<String, JsonNode> submittedValues,
+            DetailResponseBudget budget)
     {
         for (String submittedName : submittedValues.keySet())
         {
@@ -1336,7 +1345,7 @@ public class WorkflowProcessDetailService
             }
         }
         Map<String, JsonNode> values = new LinkedHashMap<>();
-        for (String allowedName : allowedNames)
+        for (String allowedName : readableNames)
         {
             JsonNode value = submittedValues.get(allowedName);
             if (value != null && !isInternalVariableName(allowedName))
@@ -1366,8 +1375,8 @@ public class WorkflowProcessDetailService
             Instant snapshotTime, DetailResponseBudget budget)
     {
         budget.addFormBytes(snapshot.getContent());
-        return new WorkflowProcessFormSnapshotView(activityId, taskId, snapshot.getFormId(),
-                snapshot.getFormKey(), snapshot.getNodeKey(), snapshot.getFormName(),
+        return new WorkflowProcessFormSnapshotView(activityId, taskId, snapshot.getSourceType(),
+                snapshot.getFormId(), snapshot.getFormKey(), snapshot.getNodeKey(), snapshot.getFormName(),
                 snapshot.getNodeName(), snapshot.getContent(), taskLocal, values, snapshotTime);
     }
 
@@ -2236,13 +2245,36 @@ public class WorkflowProcessDetailService
     {
         if (element instanceof StartEvent startEvent)
         {
-            return startEvent.getFormKey();
+            return resolveFormKey(startEvent.getFormKey(), startEvent.getFormProperties());
         }
         if (element instanceof UserTask userTask)
         {
-            return userTask.getFormKey();
+            return resolveFormKey(userTask.getFormKey(), userTask.getFormProperties());
         }
         return null;
+    }
+
+    /**
+     * 将 BPMN 节点表单来源规范为部署快照键，并拒绝双来源歧义。
+     *
+     * @param configuredFormKey String，正式模板 formKey
+     * @param formProperties List&lt;org.flowable.bpmn.model.FormProperty&gt;，内嵌 FormData 字段
+     * @return String，模板键、内嵌稳定键或无表单时的 null
+     */
+    private String resolveFormKey(String configuredFormKey,
+            List<org.flowable.bpmn.model.FormProperty> formProperties)
+    {
+        boolean hasTemplate = StringUtils.hasText(configuredFormKey);
+        boolean hasEmbedded = formProperties != null && !formProperties.isEmpty();
+        if (hasTemplate && hasEmbedded)
+        {
+            throw dataError("流程节点表单来源异常");
+        }
+        if (hasTemplate)
+        {
+            return configuredFormKey;
+        }
+        return hasEmbedded ? WorkflowFormSourceType.EMBEDDED_FORM_KEY : null;
     }
 
     /**
@@ -2460,9 +2492,11 @@ public class WorkflowProcessDetailService
      * 不可变部署快照及从 schema 提取的字段白名单。
      *
      * @param snapshot WfDeployForm，部署时固化的快照实体
-     * @param variableNames Set&lt;String&gt;，表单组件声明的字段名
+     * @param variableNames Set&lt;String&gt;，表单组件声明的全部字段名
+     * @param readableVariableNames Set&lt;String&gt;，允许通过详情接口回显的字段名
      */
-    private record SnapshotSchema(WfDeployForm snapshot, Set<String> variableNames)
+    private record SnapshotSchema(WfDeployForm snapshot, Set<String> variableNames,
+            Set<String> readableVariableNames)
     {
     }
 

@@ -12,7 +12,10 @@ public class WfDeployForm extends BaseEntity
     /** Flowable 部署主键，沿用旧字段名 deployId。 */
     private String deployId;
 
-    /** 快照来源表单主键。 */
+    /** 快照来源类型：TEMPLATE 或 EMBEDDED。 */
+    private String sourceType;
+
+    /** 快照来源表单主键；内嵌表单为空。 */
     private Long formId;
 
     /** BPMN 中配置的表单键。 */
@@ -50,6 +53,25 @@ public class WfDeployForm extends BaseEntity
     public void setDeployId(String deployId)
     {
         this.deployId = deployId;
+    }
+
+    /**
+     * 获取快照来源类型。
+     * @return String，TEMPLATE 或 EMBEDDED
+     */
+    public String getSourceType()
+    {
+        return sourceType;
+    }
+
+    /**
+     * 设置快照来源类型。
+     * @param sourceType String，TEMPLATE 或 EMBEDDED
+     * @return void，无返回值
+     */
+    public void setSourceType(String sourceType)
+    {
+        this.sourceType = sourceType;
     }
 
     /**

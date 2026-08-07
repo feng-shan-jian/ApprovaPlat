@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfSqlDataSourceMapper">
+    <resultMap id="DataSourceResult" type="com.ruoyi.flowable.domain.WfSqlDataSource">
+        <id property="dataSourceId" column="datasource_id"/>
+        <result property="dataSourceKey" column="datasource_key"/>
+        <result property="dataSourceName" column="datasource_name"/>
+        <result property="connectionType" column="connection_type"/>
+        <result property="jdbcUrlRef" column="jdbc_url_ref"/>
+        <result property="usernameRef" column="username_ref"/>
+        <result property="passwordRef" column="password_ref"/>
+        <result property="allowedTables" column="allowed_tables"/>
+        <result property="connectTimeoutMs" column="connect_timeout_ms"/>
+        <result property="queryTimeoutSeconds" column="query_timeout_seconds"/>
+        <result property="revisionNo" column="revision_no"/>
+        <result property="status" column="status"/>
+        <result property="checksum" column="checksum"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <sql id="Columns">
+        datasource_id, datasource_key, datasource_name, connection_type, jdbc_url_ref,
+        username_ref, password_ref, allowed_tables, connect_timeout_ms,
+        query_timeout_seconds, revision_no, status, checksum, create_by, create_time,
+        update_by, update_time
+    </sql>
+
+    <select id="selectList" resultMap="DataSourceResult">
+        select <include refid="Columns"/>
+        from wf_sql_datasource
+        order by datasource_name, datasource_key
+    </select>
+
+    <select id="selectEnabledOptions" resultMap="DataSourceResult">
+        select <include refid="Columns"/>
+        from wf_sql_datasource
+        where status = 'ENABLED'
+        order by datasource_name, datasource_key
+    </select>
+
+    <select id="selectByIdForUpdate" resultMap="DataSourceResult">
+        select <include refid="Columns"/>
+        from wf_sql_datasource
+        where datasource_id = #{dataSourceId}
+        for update
+    </select>
+
+    <select id="selectEnabledByKeyForUpdate" resultMap="DataSourceResult">
+        select <include refid="Columns"/>
+        from wf_sql_datasource
+        where datasource_key = #{dataSourceKey} and status = 'ENABLED'
+        for update
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="dataSourceId">
+        insert into wf_sql_datasource
+            (datasource_key, datasource_name, connection_type, jdbc_url_ref, username_ref,
+             password_ref, allowed_tables, connect_timeout_ms, query_timeout_seconds,
+             revision_no, status, checksum, create_by, create_time)
+        values
+            (#{dataSourceKey}, #{dataSourceName}, #{connectionType}, #{jdbcUrlRef}, #{usernameRef},
+             #{passwordRef}, #{allowedTables}, #{connectTimeoutMs}, #{queryTimeoutSeconds},
+             #{revisionNo}, #{status}, #{checksum}, #{createBy}, current_timestamp(3))
+    </insert>
+
+    <update id="updateRevision">
+        update wf_sql_datasource
+        set datasource_name = #{item.dataSourceName}, connection_type = #{item.connectionType},
+            jdbc_url_ref = #{item.jdbcUrlRef}, username_ref = #{item.usernameRef},
+            password_ref = #{item.passwordRef}, allowed_tables = #{item.allowedTables},
+            connect_timeout_ms = #{item.connectTimeoutMs},
+            query_timeout_seconds = #{item.queryTimeoutSeconds}, revision_no = #{item.revisionNo},
+            checksum = #{item.checksum}, update_by = #{item.updateBy},
+            update_time = current_timestamp(3)
+        where datasource_id = #{item.dataSourceId} and revision_no = #{expectedRevision}
+    </update>
+
+    <update id="updateStatus">
+        update wf_sql_datasource
+        set status = #{status}, update_by = #{updateBy}, update_time = current_timestamp(3)
+        where datasource_id = #{dataSourceId}
+    </update>
+</mapper>

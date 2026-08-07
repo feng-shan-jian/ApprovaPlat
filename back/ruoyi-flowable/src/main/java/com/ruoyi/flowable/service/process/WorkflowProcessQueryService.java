@@ -58,6 +58,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
+import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.system.service.ISysUserService;
 
@@ -411,7 +412,7 @@ public class WorkflowProcessQueryService
             }
             WfDeployForm snapshot = requireStartFormSnapshot(definition, deploymentId);
             return new WorkflowProcessFormView(definitionId, deploymentId, instanceId,
-                    snapshot.getFormId(), snapshot.getFormKey(), snapshot.getNodeKey(),
+                    snapshot.getSourceType(), snapshot.getFormId(), snapshot.getFormKey(), snapshot.getNodeKey(),
                     snapshot.getFormName(), snapshot.getNodeName(), snapshot.getContent(),
                     toInstant(snapshot.getCreateTime()));
         });
@@ -1133,10 +1134,11 @@ public class WorkflowProcessQueryService
             throw dataError("流程开始节点数据异常");
         }
         StartEvent startEvent = startEvents.get(0);
-        if (!StringUtils.hasText(startEvent.getId()) || !StringUtils.hasText(startEvent.getFormKey()))
+        if (!StringUtils.hasText(startEvent.getId()))
         {
             throw dataError("流程开始节点缺少表单配置");
         }
+        String formKey = resolveFormKey(startEvent);
         List<WfDeployForm> snapshots = deployFormMapper.selectByDeploymentId(deploymentId);
         if (snapshots == null)
         {
@@ -1146,19 +1148,38 @@ public class WorkflowProcessQueryService
                 .filter(snapshot -> snapshot != null
                         && deploymentId.equals(snapshot.getDeployId())
                         && startEvent.getId().equals(snapshot.getNodeKey())
-                        && startEvent.getFormKey().equals(snapshot.getFormKey()))
+                        && formKey.equals(snapshot.getFormKey()))
                 .toList();
         if (matches.size() != 1)
         {
             throw dataError("流程开始表单快照不存在或不唯一");
         }
         WfDeployForm snapshot = matches.get(0);
-        if (snapshot.getFormId() == null || snapshot.getFormId() <= 0
+        if (!WorkflowFormSourceType.isConsistent(snapshot.getSourceType(), snapshot.getFormId())
                 || !StringUtils.hasText(snapshot.getContent()))
         {
             throw dataError("流程开始表单快照内容异常");
         }
         return snapshot;
+    }
+
+    /**
+     * 解析开始节点实际使用的部署表单键，并拒绝模板与内嵌 FormData 同时存在。
+     *
+     * @param startEvent StartEvent，定义中唯一开始节点
+     * @return String，正式模板原始 formKey 或内嵌表单稳定键
+     */
+    private String resolveFormKey(StartEvent startEvent)
+    {
+        boolean hasTemplate = StringUtils.hasText(startEvent.getFormKey());
+        boolean hasEmbedded = startEvent.getFormProperties() != null
+                && !startEvent.getFormProperties().isEmpty();
+        if (hasTemplate == hasEmbedded)
+        {
+            throw dataError("流程开始节点表单来源异常");
+        }
+        return hasTemplate ? startEvent.getFormKey()
+                : WorkflowFormSourceType.EMBEDDED_FORM_KEY;
     }
 
     /**

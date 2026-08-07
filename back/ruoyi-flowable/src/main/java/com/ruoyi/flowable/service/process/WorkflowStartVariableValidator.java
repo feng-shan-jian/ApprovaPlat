@@ -53,6 +53,18 @@ public class WorkflowStartVariableValidator
     private static final int DEFAULT_TEMPORAL_LENGTH = 128;
     private static final int MAX_FIELD_NAME_LENGTH = 128;
 
+    /** Flowable integer 的有符号 32 位边界。 */
+    private static final BigDecimal INTEGER_MINIMUM = BigDecimal.valueOf(Integer.MIN_VALUE);
+
+    /** Flowable integer 的有符号 32 位边界。 */
+    private static final BigDecimal INTEGER_MAXIMUM = BigDecimal.valueOf(Integer.MAX_VALUE);
+
+    /** Flowable long 的有符号 64 位边界。 */
+    private static final BigDecimal LONG_MINIMUM = BigDecimal.valueOf(Long.MIN_VALUE);
+
+    /** Flowable long 的有符号 64 位边界。 */
+    private static final BigDecimal LONG_MAXIMUM = BigDecimal.valueOf(Long.MAX_VALUE);
+
     private static final String CONFIG_FIELD = "__config__";
     private static final String CHILDREN_FIELD = "children";
     private static final String MODEL_FIELD = "__vModel__";
@@ -148,6 +160,10 @@ public class WorkflowStartVariableValidator
             if (fieldSpec == null)
             {
                 throw invalidVariable("流程变量字段不在开始表单中: " + fieldName);
+            }
+            if (!fieldSpec.writable())
+            {
+                throw invalidVariable("流程变量字段为只读字段: " + fieldName);
             }
 
             Object normalizedValue = normalizeJsonValue(entry.getValue(), 1, budget);
@@ -273,12 +289,14 @@ public class WorkflowStartVariableValidator
         }
         String tag = tagNode.textValue();
         boolean required = optionalBoolean(config, REQUIRED_FIELD, false);
+        boolean writable = optionalBoolean(config, "workflowWritable", true);
         FieldType fieldType;
         int defaultMaxLength = DEFAULT_TEXT_LENGTH;
         int minItems = 0;
         int maxItems = MAX_COLLECTION_SIZE;
         BigDecimal minimum = null;
         BigDecimal maximum = null;
+        NumericType numericType = NumericType.DECIMAL;
 
         switch (tag)
         {
@@ -298,6 +316,7 @@ public class WorkflowStartVariableValidator
                 fieldType = FieldType.NUMBER;
                 minimum = optionalDecimal(component, "min");
                 maximum = optionalDecimal(component, "max");
+                numericType = requireNumericType(config);
             }
             case "el-slider" ->
             {
@@ -362,8 +381,35 @@ public class WorkflowStartVariableValidator
         {
             throw invalidSnapshot(null);
         }
-        return new FieldSpec(fieldName, fieldType, required, minLength, maxLength,
-                minItems, maxItems, minimum, maximum);
+        Set<String> enumValues = optionalBoolean(config, "workflowEnum", false)
+                ? requireStaticEnumValues(component) : Set.of();
+        return new FieldSpec(fieldName, fieldType, required, writable, minLength, maxLength,
+                minItems, maxItems, minimum, maximum, numericType, enumValues);
+    }
+
+    /**
+     * 读取内嵌 FormData 冻结的数值类型；正式表单未声明时保持通用小数语义。
+     *
+     * @param config JsonNode，组件 __config__ 配置节点
+     * @return NumericType，通用数值、32 位整数或 64 位整数语义
+     */
+    private NumericType requireNumericType(JsonNode config)
+    {
+        JsonNode typeNode = config.get("workflowNumberType");
+        if (typeNode == null || typeNode.isNull())
+        {
+            return NumericType.DECIMAL;
+        }
+        if (!typeNode.isTextual())
+        {
+            throw invalidSnapshot(null);
+        }
+        return switch (typeNode.textValue())
+        {
+            case "integer" -> NumericType.INTEGER;
+            case "long" -> NumericType.LONG;
+            default -> throw invalidSnapshot(null);
+        };
     }
 
     /**
@@ -505,6 +551,20 @@ public class WorkflowStartVariableValidator
             throw invalidType(fieldSpec);
         }
         BigDecimal decimal = decimalValue(number);
+        if (fieldSpec.numericType() != NumericType.DECIMAL
+                && decimal.stripTrailingZeros().scale() > 0)
+        {
+            throw invalidVariable("流程变量必须为整数: " + fieldSpec.name());
+        }
+        if ((fieldSpec.numericType() == NumericType.INTEGER
+                && (decimal.compareTo(INTEGER_MINIMUM) < 0
+                || decimal.compareTo(INTEGER_MAXIMUM) > 0))
+                || (fieldSpec.numericType() == NumericType.LONG
+                && (decimal.compareTo(LONG_MINIMUM) < 0
+                || decimal.compareTo(LONG_MAXIMUM) > 0)))
+        {
+            throw invalidVariable("流程变量整数范围不合法: " + fieldSpec.name());
+        }
         if ((fieldSpec.minimum() != null && decimal.compareTo(fieldSpec.minimum()) < 0)
                 || (fieldSpec.maximum() != null && decimal.compareTo(fieldSpec.maximum()) > 0))
         {
@@ -524,6 +584,11 @@ public class WorkflowStartVariableValidator
         if (value instanceof String)
         {
             requireTextValue(fieldSpec, value);
+            if (!fieldSpec.enumValues().isEmpty()
+                    && !fieldSpec.enumValues().contains(value))
+            {
+                throw invalidVariable("流程变量枚举值不合法: " + fieldSpec.name());
+            }
             return;
         }
         if (value instanceof Number number && isSupportedNumber(number))
@@ -535,6 +600,37 @@ public class WorkflowStartVariableValidator
         {
             throw invalidType(fieldSpec);
         }
+        if (!fieldSpec.enumValues().isEmpty())
+        {
+            throw invalidType(fieldSpec);
+        }
+    }
+
+    /**
+     * 提取内嵌 enum 转换器生成的静态字符串选项，并拒绝空值、重复和动态结构。
+     *
+     * @param component JsonNode，当前 el-select 组件
+     * @return Set&lt;String&gt;，按声明顺序保存的不可变允许值
+     */
+    private Set<String> requireStaticEnumValues(JsonNode component)
+    {
+        JsonNode options = component.path("__slot__").get("options");
+        if (options == null || !options.isArray() || options.isEmpty()
+                || options.size() > MAX_VARIABLE_FIELDS)
+        {
+            throw invalidSnapshot(null);
+        }
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        for (JsonNode option : options)
+        {
+            JsonNode value = option == null ? null : option.get("value");
+            if (value == null || !value.isTextual() || value.textValue().isBlank()
+                    || value.textValue().length() > 255 || !values.add(value.textValue()))
+            {
+                throw invalidSnapshot(null);
+            }
+        }
+        return Collections.unmodifiableSet(values);
     }
 
     /**
@@ -954,17 +1050,32 @@ public class WorkflowStartVariableValidator
      * @param name String，Flowable 变量名
      * @param type FieldType，服务端允许的字段类型
      * @param required boolean，是否必填
+     * @param writable boolean，客户端是否允许提交该字段
      * @param minLength int，文本最小字符数
      * @param maxLength int，文本最大字符数
      * @param minItems int，集合最小元素数
      * @param maxItems int，集合最大元素数
      * @param minimum BigDecimal，可为空的最小数值
      * @param maximum BigDecimal，可为空的最大数值
+     * @param numericType NumericType，通用数值或 Flowable 整数类型约束
+     * @param enumValues Set&lt;String&gt;，内嵌 enum 的静态允许值；其他字段为空
      */
-    private record FieldSpec(String name, FieldType type, boolean required,
+    private record FieldSpec(String name, FieldType type, boolean required, boolean writable,
             int minLength, int maxLength, int minItems, int maxItems,
-            BigDecimal minimum, BigDecimal maximum)
+            BigDecimal minimum, BigDecimal maximum, NumericType numericType,
+            Set<String> enumValues)
     {
+    }
+
+    /** 部署表单数值字段的服务端执行语义。 */
+    private enum NumericType
+    {
+        /** 正式表单的通用有限数值，允许小数。 */
+        DECIMAL,
+        /** Flowable FormData integer，要求有符号 32 位整数。 */
+        INTEGER,
+        /** Flowable FormData long，要求有符号 64 位整数。 */
+        LONG
     }
 
     /** 开始表单字段在服务端允许的顶层数据形态。 */

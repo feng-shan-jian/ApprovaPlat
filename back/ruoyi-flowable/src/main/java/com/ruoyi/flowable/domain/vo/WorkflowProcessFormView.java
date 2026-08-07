@@ -8,6 +8,7 @@ import java.time.Instant;
  * @param definitionId String，流程定义主键
  * @param deploymentId String，部署主键
  * @param processInstanceId String，详情场景的实例主键，首次发起时为空
+ * @param sourceType String，TEMPLATE 或 EMBEDDED
  * @param formId Long，快照来源表单主键
  * @param formKey String，BPMN 表单键
  * @param nodeKey String，BPMN 开始节点主键
@@ -20,6 +21,7 @@ public record WorkflowProcessFormView(
         String definitionId,
         String deploymentId,
         String processInstanceId,
+        String sourceType,
         Long formId,
         String formKey,
         String nodeKey,
@@ -28,4 +30,26 @@ public record WorkflowProcessFormView(
         String content,
         Instant snapshotTime)
 {
+    /**
+     * 兼容既有正式模板视图构造调用。
+     *
+     * @param definitionId String，流程定义主键
+     * @param deploymentId String，部署主键
+     * @param processInstanceId String，可为空的实例主键
+     * @param formId Long，正式表单主键
+     * @param formKey String，BPMN 表单键
+     * @param nodeKey String，开始节点主键
+     * @param formName String，表单名称
+     * @param nodeName String，节点名称
+     * @param content String，部署快照 JSON
+     * @param snapshotTime Instant，快照时间
+     * @return 无返回值，构造 TEMPLATE 来源视图
+     */
+    public WorkflowProcessFormView(String definitionId, String deploymentId,
+            String processInstanceId, Long formId, String formKey, String nodeKey,
+            String formName, String nodeName, String content, Instant snapshotTime)
+    {
+        this(definitionId, deploymentId, processInstanceId, "TEMPLATE", formId,
+                formKey, nodeKey, formName, nodeName, content, snapshotTime);
+    }
 }

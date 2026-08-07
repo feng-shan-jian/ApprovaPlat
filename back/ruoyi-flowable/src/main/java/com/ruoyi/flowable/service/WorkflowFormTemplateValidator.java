@@ -97,6 +97,23 @@ public class WorkflowFormTemplateValidator
     }
 
     /**
+     * 校验表单快照并提取允许向用户回显的变量字段名。
+     *
+     * 正式 wf_form 未声明 workflowReadable 时保持原有全量可读语义；BPMN 内嵌 FormData
+     * 会显式写入该标志，防止 write-only 字段进入详情响应。
+     *
+     * @param content String，部署时固化的完整表单 JSON
+     * @return Set&lt;String&gt;，按组件顺序保存的可读变量名不可变集合
+     */
+    public Set<String> extractReadableVariableNames(String content)
+    {
+        JsonNode root = validateAndParse(content);
+        LinkedHashSet<String> variableNames = new LinkedHashSet<>();
+        collectReadableVariableNames(root.get(FIELDS_FIELD), variableNames);
+        return Collections.unmodifiableSet(variableNames);
+    }
+
+    /**
      * 校验表单 JSON 的全部安全约束并返回已解析根节点，供只读字段提取复用。
      *
      * @param content String，旧表单生成器产生的完整 JSON 文本
@@ -157,6 +174,46 @@ public class WorkflowFormTemplateValidator
             if (children != null && children.isArray() && !children.isEmpty())
             {
                 collectVariableNames(children, variableNames);
+            }
+        }
+    }
+
+    /**
+     * 递归提取可读字段，并严格校验内嵌表单的 workflowReadable 标志。
+     *
+     * @param components JsonNode，当前层组件数组
+     * @param variableNames Set&lt;String&gt;，全表单共享的有序可读字段集合
+     * @return 无返回值，标志类型错误时抛出稳定 400
+     */
+    private void collectReadableVariableNames(JsonNode components, Set<String> variableNames)
+    {
+        for (JsonNode component : components)
+        {
+            JsonNode variableNode = component.get(VARIABLE_FIELD);
+            JsonNode config = component.path(CONFIG_FIELD);
+            JsonNode readableNode = config.get("workflowReadable");
+            boolean readable = true;
+            if (readableNode != null && !readableNode.isNull())
+            {
+                if (!readableNode.isBoolean())
+                {
+                    throw invalid("表单组件可读标志不合法");
+                }
+                readable = readableNode.booleanValue();
+            }
+            if (readable && variableNode != null && !variableNode.isNull())
+            {
+                if (!variableNode.isTextual() || variableNode.textValue().isBlank()
+                        || variableNode.textValue().length() > MAX_VARIABLE_NAME_LENGTH)
+                {
+                    throw invalid("表单组件变量名不合法");
+                }
+                variableNames.add(variableNode.textValue().trim());
+            }
+            JsonNode children = config.get(CHILDREN_FIELD);
+            if (children != null && children.isArray() && !children.isEmpty())
+            {
+                collectReadableVariableNames(children, variableNames);
             }
         }
     }

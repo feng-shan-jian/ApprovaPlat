@@ -7,7 +7,7 @@ import { captureResponse, expectAjaxSuccess } from './support/http.js'
  * 核对一个角色的菜单、允许页面、直接 URL 拒绝和禁止 API 零调用矩阵。
  * @param {import('@playwright/test').Page} page 已通过真实 UI 登录的页面。
  * @param {string} roleKey 当前职责分离角色键。
- * @returns {Promise<void>} 11 个页面单元全部通过后结束。
+ * @returns {Promise<void>} 12 个页面单元全部通过后结束。
  */
 async function verifyRoleRouteMatrix(page, roleKey) {
   for (const contract of WORKFLOW_ROUTE_CONTRACTS) {
@@ -54,9 +54,9 @@ for (const roleKey of WORKFLOW_ROLE_KEYS) {
     /**
      * 使用当前角色执行完整页面矩阵。
      * @param {{workflowPage: import('@playwright/test').Page}} fixtures 已完成真实登录的 Playwright fixture。
-     * @returns {Promise<void>} 当前角色 11 个页面单元全部通过后结束。
+     * @returns {Promise<void>} 当前角色 12 个页面单元全部通过后结束。
      */
-    test('11 个工作流页面与七工作台遵循正式菜单授权', async ({ workflowPage }) => {
+    test('12 个工作流页面与七工作台遵循正式菜单授权', async ({ workflowPage }) => {
       await verifyRoleRouteMatrix(workflowPage, roleKey)
     })
   })

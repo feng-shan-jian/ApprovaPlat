@@ -70,6 +70,20 @@ export function saveModel(data) {
 }
 
 /**
+ * 使用保存和部署共同服务端门禁校验 BPMN，不产生模型或部署写副作用。
+ * @param {string} bpmnXml 完整 BPMN 2.0 XML。
+ * @returns {Promise<object>} data.valid 和 data.issues 为结构化诊断结果。
+ */
+export function validateModelBpmn(bpmnXml) {
+  return request({
+    url: '/workflow/model/validate',
+    method: 'post',
+    data: { bpmnXml },
+    headers: { repeatSubmit: false }
+  })
+}
+
+/**
  * 将指定历史模型复制为新的最高版本。
  * @param {string} modelId 待提升的历史模型主键。
  * @returns {Promise<object>} data.modelId 为新版本主键的响应。

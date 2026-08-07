@@ -46,7 +46,9 @@ import com.ruoyi.flowable.domain.WfForm;
 import com.ruoyi.flowable.domain.WorkflowModelLockRow;
 import com.ruoyi.flowable.domain.WorkflowModelSaveRecord;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
+import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
+import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationReport;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
@@ -77,6 +79,10 @@ class WorkflowModelServiceTest
 
     private WorkflowModelSaveMapper modelSaveMapper;
 
+    private WorkflowExtensionDeploymentService extensionDeploymentService;
+
+    private WorkflowDmnDecisionService dmnDecisionService;
+
     private WorkflowModelService service;
 
     /**
@@ -100,6 +106,16 @@ class WorkflowModelServiceTest
         formTemplateValidator = mock(WorkflowFormTemplateValidator.class);
         bpmnIdentityValidator = mock(WorkflowBpmnIdentityValidator.class);
         modelSaveMapper = mock(WorkflowModelSaveMapper.class);
+        extensionDeploymentService = mock(WorkflowExtensionDeploymentService.class);
+        dmnDecisionService = mock(WorkflowDmnDecisionService.class);
+        when(extensionDeploymentService.prepare(any(), eq("7"))).thenAnswer(invocation ->
+        {
+            WorkflowBpmnDocument document = invocation.getArgument(0);
+            return new WorkflowPreparedExtensionDeployment(
+                    document.bpmnXml().getBytes(StandardCharsets.UTF_8), List.of());
+        });
+        when(dmnDecisionService.prepare(any(byte[].class))).thenAnswer(invocation ->
+                new WorkflowPreparedDmnDeployment(invocation.getArgument(0), List.of()));
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2")));
@@ -110,7 +126,7 @@ class WorkflowModelServiceTest
                 new WorkflowExceptionTranslator(), identityResolver);
         service = new WorkflowModelService(operations, repositoryService, bpmnService,
                 bpmnIdentityValidator, modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
-                formTemplateValidator);
+                formTemplateValidator, extensionDeploymentService, dmnDecisionService);
     }
 
     /**
@@ -145,6 +161,75 @@ class WorkflowModelServiceTest
         assertThat(result.rows()).hasSize(1);
         verify(query).count();
         verify(query).listPage(20, 10);
+    }
+
+    /**
+     * 验证显式校验复用 BPMN、身份和表单共同门禁，并返回无问题的结构化报告。
+     * @return void，校验通过仍产生写入或未执行共同门禁时测试失败
+     */
+    @Test
+    void validatesBpmnThroughSharedDeploymentGate()
+    {
+        WorkflowBpmnDocument document = new WorkflowBpmnDocument(
+                new BpmnModel(), "<definitions />", List.of());
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document);
+        when(bpmnService.deploymentCompatibilityIssues(document)).thenReturn(List.of());
+
+        WorkflowBpmnValidationReport report = service.validateBpmn("<definitions />");
+
+        assertThat(report.valid()).isTrue();
+        assertThat(report.issues()).isEmpty();
+        verify(bpmnIdentityValidator).validate(document);
+        verify(bpmnService).validateDeployable(document);
+        verify(repositoryService, never()).saveModel(any());
+    }
+
+    /**
+     * 验证显式校验把 round-trip-only 元素作为可保存但不可部署的精确警告返回。
+     *
+     * @return void，警告丢失、valid 被误置为 false 或错误调用部署校验时测试失败
+     */
+    @Test
+    void returnsDeploymentCompatibilityWarningForRoundTripOnlyElement()
+    {
+        WorkflowBpmnDocument document = new WorkflowBpmnDocument(
+                new BpmnModel(), "<definitions />", List.of());
+        WorkflowBpmnValidationIssue warning = new WorkflowBpmnValidationIssue(
+                "BPMN_ELEMENT_NOT_EXECUTABLE", "WARNING", "complexGateway_1",
+                "ComplexGateway 可编辑和导出，但 Flowable 8 不支持部署执行");
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document);
+        when(bpmnService.deploymentCompatibilityIssues(document))
+                .thenReturn(List.of(warning));
+
+        WorkflowBpmnValidationReport report = service.validateBpmn("<definitions />");
+
+        assertThat(report.valid()).isTrue();
+        assertThat(report.issues()).containsExactly(warning);
+        verify(bpmnIdentityValidator).validate(document);
+        verify(bpmnService, never()).validateDeployable(document);
+        verify(repositoryService, never()).saveModel(any());
+    }
+
+    /**
+     * 验证预期 BPMN 业务失败转换为稳定诊断，不把异常伪装为接口成功且 valid=true。
+     * @return void，错误分类或消息缺失时测试失败
+     */
+    @Test
+    void returnsStructuredIssueForInvalidBpmn()
+    {
+        when(bpmnService.validateForSave(any(byte[].class))).thenThrow(
+                new ServiceException("BPMN XML 不允许 DTD 或实体声明", 400));
+
+        WorkflowBpmnValidationReport report = service.validateBpmn("<!DOCTYPE x>");
+
+        assertThat(report.valid()).isFalse();
+        assertThat(report.issues()).singleElement().satisfies(issue ->
+        {
+            assertThat(issue.code()).isEqualTo("BPMN_XML_INVALID");
+            assertThat(issue.severity()).isEqualTo("ERROR");
+            assertThat(issue.elementId()).isNull();
+            assertThat(issue.message()).contains("DTD");
+        });
     }
 
     /**
@@ -198,7 +283,8 @@ class WorkflowModelServiceTest
             assertThat(listener.getImplementation()).isEqualTo("${userTaskListener}");
         });
         assertThat(initialDocument.formReferences()).containsExactly(
-                new WorkflowBpmnFormReference(12L, "key_12", "start", "提交申请"));
+                new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE, 12L,
+                        "key_12", "start", "提交申请", null, "expense"));
     }
 
     /**
@@ -349,7 +435,7 @@ class WorkflowModelServiceTest
         Model source = model("model-1", "expense", "报销审批", "finance", 1, "deployment-1");
         when(repositoryService.getModel("model-1")).thenReturn(source);
         when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
-        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document(List.of()));
         WorkflowModelLockRow lockedSource = lockedModel(
                 "model-1", "expense", "报销审批", "finance", 1, "deployment-1");
         stubPendingSaveRequest(request, lockedSource, lockedSource, 1);
@@ -382,7 +468,7 @@ class WorkflowModelServiceTest
         when(source.getMetaInfo()).thenReturn("{}");
         when(repositoryService.getModel("model-1")).thenReturn(source);
         when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
-        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document(List.of()));
         WorkflowModelLockRow lockedSource = lockedModel(
                 "model-1", "expense", "旧报销", "finance", 1, "deployment-1");
         WorkflowModelLockRow lockedLatest = lockedModel(
@@ -416,7 +502,7 @@ class WorkflowModelServiceTest
         Model source = model("model-1", "expense", "旧报销", "finance", 1, null);
         when(repositoryService.getModel("model-1")).thenReturn(source);
         when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
-        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document(List.of()));
         WorkflowModelLockRow lockedSource = lockedModel(
                 "model-1", "expense", "旧报销", "finance", 1, null);
         WorkflowModelLockRow lockedLatest = lockedModel(
@@ -450,7 +536,7 @@ class WorkflowModelServiceTest
         Model source = model("model-3", "expense", "当前报销", "finance", 3, null);
         when(repositoryService.getModel("model-3")).thenReturn(source);
         when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
-        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document(List.of()));
         WorkflowModelLockRow lockedSource = lockedModel(
                 "model-3", "expense", "当前报销", "finance", 3, null);
         stubPendingSaveRequest(request, lockedSource, lockedSource, 1);
@@ -475,7 +561,7 @@ class WorkflowModelServiceTest
         Model sourceSnapshot = model("model-3", "expense", "快照报销", "finance", 3, null);
         when(repositoryService.getModel("model-3")).thenReturn(sourceSnapshot);
         when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
-        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document(List.of()));
         WorkflowModelLockRow lockedSource = lockedModel(
                 "model-3", "expense", "锁内来源", "finance", 3, null);
         WorkflowModelLockRow lockedLatest = lockedModel(
@@ -555,7 +641,7 @@ class WorkflowModelServiceTest
         Model sourceSnapshot = model("model-3", "expense", "快照报销", "finance", 3, null);
         when(repositoryService.getModel("model-3")).thenReturn(sourceSnapshot);
         when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
-        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document(List.of()));
         WorkflowModelLockRow groupAnchor = lockedModel(
                 "model-1", "expense", "初始报销", "finance", 1, "deployment-1");
         WorkflowModelLockRow lockedSource = lockedModel(
@@ -598,7 +684,7 @@ class WorkflowModelServiceTest
         WorkflowModelDto request = saveRequest("model-3", false);
         Model sourceSnapshot = model("model-3", "expense", "快照报销", "finance", 3, null);
         when(repositoryService.getModel("model-3")).thenReturn(sourceSnapshot);
-        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document(List.of()));
         stubSaveRecord(request, null);
         when(modelSaveMapper.selectOldestDefaultTenantModelForUpdate("expense"))
                 .thenReturn(null);
@@ -626,7 +712,7 @@ class WorkflowModelServiceTest
         Model source = model("model-3", "expense", "当前报销", "finance", 3, null);
         when(repositoryService.getModel("model-3")).thenReturn(source);
         when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
-        when(bpmnService.validate(any(byte[].class))).thenReturn(document(List.of()));
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(document(List.of()));
         WorkflowModelLockRow lockedSource = lockedModel(
                 "model-3", "expense", "当前报销", "finance", 3, null);
         stubPendingSaveRequest(request, lockedSource, lockedSource, 0);
@@ -710,6 +796,32 @@ class WorkflowModelServiceTest
     }
 
     /**
+     * 验证删除含安全草稿资源的未部署模型不会错误要求开始节点已经配置流程表单。
+     *
+     * @return 无返回值；删除草稿复用保存或部署门禁时测试失败
+     */
+    @Test
+    void deletesSafeDraftWithoutRequiringDeployableStartForm()
+    {
+        Model model = model("model-1", "expense", "报销审批", "finance", 1, null);
+        byte[] source = "<definitions/>".getBytes(StandardCharsets.UTF_8);
+        when(repositoryService.getModel("model-1")).thenReturn(model);
+        ModelQuery deployedQuery = modelQuery();
+        when(repositoryService.createModelQuery()).thenReturn(deployedQuery);
+        when(deployedQuery.count()).thenReturn(0L);
+        when(repositoryService.getModelEditorSource("model-1")).thenReturn(source);
+        WorkflowBpmnDocument draft = new WorkflowBpmnDocument(
+                new BpmnModel(), "<definitions/>", List.of());
+        when(bpmnService.validateDraft(source)).thenReturn(draft);
+
+        service.deleteModels(List.of("model-1"));
+
+        verify(bpmnService).validateDraft(source);
+        verify(bpmnService, never()).validate(source);
+        verify(repositoryService).deleteModel("model-1");
+    }
+
+    /**
      * 验证部署会保存不可变快照并自动停用旧定义，同时不冻结旧版本在途实例。
      *
      * @return 无返回值；部署或快照闭环不完整时测试失败
@@ -733,10 +845,11 @@ class WorkflowModelServiceTest
         when(repositoryService.getModelEditorSource("model-1")).thenReturn(source);
         List<WorkflowBpmnFormReference> references = List.of(
                 new WorkflowBpmnFormReference(1L, "key_1", "start", "提交"),
-                new WorkflowBpmnFormReference(2L, "key_2", "approve", "审批"));
+                new WorkflowBpmnFormReference(WorkflowFormSourceType.EMBEDDED, null,
+                        WorkflowFormSourceType.EMBEDDED_FORM_KEY, "approve", "审批",
+                        "{\"fields\":[]}"));
         when(bpmnService.validate(source)).thenReturn(document(references));
         when(formMapper.selectById(1L)).thenReturn(activeForm(1L, "申请表", "{\"v\":1}"));
-        when(formMapper.selectById(2L)).thenReturn(activeForm(2L, "审批表", "{\"v\":2}"));
 
         DeploymentBuilder builder = mock(DeploymentBuilder.class);
         when(repositoryService.createDeployment()).thenReturn(builder);
@@ -772,10 +885,16 @@ class WorkflowModelServiceTest
         verify(repositoryService).setProcessDefinitionCategory("expense:2:10", "finance");
         verify(repositoryService).suspendProcessDefinitionById("expense:1:9", false, null);
         verify(formTemplateValidator).validate("{\"v\":1}");
-        verify(formTemplateValidator).validate("{\"v\":2}");
+        verify(formTemplateValidator).validate("{\"fields\":[]}");
         verify(deployFormMapper).insertBatch(snapshots.capture());
+        verify(extensionDeploymentService).persist(eq("deployment-1"), any(), anyList());
+        verify(dmnDecisionService).persist(eq("deployment-1"), any(), eq("7"));
         assertThat(snapshots.getValue()).extracting(WfDeployForm::getContent)
-                .containsExactly("{\"v\":1}", "{\"v\":2}");
+                .containsExactly("{\"v\":1}", "{\"fields\":[]}");
+        assertThat(snapshots.getValue()).extracting(WfDeployForm::getSourceType)
+                .containsExactly("TEMPLATE", "EMBEDDED");
+        assertThat(snapshots.getValue()).extracting(WfDeployForm::getFormId)
+                .containsExactly(1L, null);
         assertThat(snapshots.getValue()).allSatisfy(snapshot ->
         {
             assertThat(snapshot.getDeployId()).isEqualTo("deployment-1");

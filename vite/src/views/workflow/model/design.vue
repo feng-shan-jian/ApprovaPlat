@@ -22,8 +22,11 @@
       :identity-options="identityOptions"
       :identity-loading="identityLoading"
       :saving="saving"
-      height="calc(100vh - 148px)"
+      :preference="designerPreference"
+      :preference-saving="preferenceSaving"
+      height="calc(100vh - 178px)"
       @identity-search="searchIdentityDirectory"
+      @preference-save="savePreference"
       @save="saveDesign"
       @error="showDesignerError"
     />
@@ -34,6 +37,7 @@
 import { listForms } from '@/api/workflow/form'
 import { listApprovalUserOptions, listClaimableIdentityOptions } from '@/api/workflow/identity'
 import { getModel, getModelBpmnXml, saveModel } from '@/api/workflow/model'
+import { getDesignerPreference, saveDesignerPreference } from '@/api/workflow/designer'
 import ProcessDesigner from '@/components/workflow/ProcessDesigner.vue'
 
 const route = useRoute()
@@ -41,6 +45,7 @@ const router = useRouter()
 const { proxy } = getCurrentInstance()
 const loading = ref(false)
 const saving = ref(false)
+const preferenceSaving = ref(false)
 const ready = ref(false)
 const bpmnXml = ref('')
 const model = reactive({})
@@ -48,6 +53,15 @@ const formOptions = ref([])
 const identityOptions = reactive({ assignees: [], candidateUsers: [], candidateGroups: [] })
 const identityPending = ref(0)
 const identityLoading = computed(() => identityPending.value > 0)
+// designerPreference 只接收服务端默认值或数据库回读值，不使用浏览器本地状态兜底。
+const designerPreference = reactive({
+  theme: 'SYSTEM',
+  gridEnabled: true,
+  minimapEnabled: true,
+  lintEnabled: true,
+  tokenSimulationEnabled: false,
+  propertiesCollapsed: false
+})
 const identityRequestVersion = { assignees: 0, candidateUsers: 0, candidateGroups: 0 }
 // pendingSaveRequest 保存尚未取得完整成功响应的用户保存意图，网络重试必须复用同一幂等键。
 let pendingSaveRequest
@@ -166,9 +180,10 @@ async function loadDesigner() {
   loading.value = true
   ready.value = false
   try {
-    const [modelResponse, xmlResponse] = await Promise.all([
+    const [modelResponse, xmlResponse, preferenceResponse] = await Promise.all([
       getModel(modelId),
       getModelBpmnXml(modelId),
+      getDesignerPreference(),
       loadAllForms(),
       searchIdentityDirectory({ type: 'user', capability: 'approval', keyword: '' }),
       searchIdentityDirectory({ type: 'user', capability: 'claim', keyword: '' }),
@@ -176,10 +191,27 @@ async function loadDesigner() {
     ])
     Object.keys(model).forEach(key => delete model[key])
     Object.assign(model, modelResponse.data || {})
+    Object.assign(designerPreference, preferenceResponse.data || {})
     bpmnXml.value = xmlResponse.data || ''
     ready.value = true
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 原子保存当前用户的完整设计器偏好，并只采用数据库回读结果。
+ * @param {object} preference 主题、网格、小地图、Lint、Token 模拟和属性面板状态。
+ * @returns {Promise<void>} 服务端成功后回写真实偏好，失败时保持原状态。
+ */
+async function savePreference(preference) {
+  preferenceSaving.value = true
+  try {
+    const response = await saveDesignerPreference(preference)
+    Object.assign(designerPreference, response.data || {})
+    proxy.$modal.msgSuccess('设计器设置已保存')
+  } finally {
+    preferenceSaving.value = false
   }
 }
 

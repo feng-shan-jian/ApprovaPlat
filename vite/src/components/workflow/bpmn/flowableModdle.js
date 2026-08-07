@@ -36,13 +36,24 @@ export default {
     {
       name: 'ServiceTaskLike',
       isAbstract: true,
-      extends: ['bpmn:ServiceTask', 'bpmn:BusinessRuleTask', 'bpmn:SendTask'],
+      extends: ['bpmn:ServiceTask', 'bpmn:SendTask'],
       properties: [
         { name: 'class', isAttr: true, type: 'String' },
         { name: 'delegateExpression', isAttr: true, type: 'String' },
         { name: 'expression', isAttr: true, type: 'String' },
         { name: 'resultVariable', isAttr: true, type: 'String' },
         { name: 'skipExpression', isAttr: true, type: 'String' }
+      ]
+    },
+    {
+      name: 'BusinessRuleTask',
+      isAbstract: true,
+      extends: ['bpmn:BusinessRuleTask'],
+      properties: [
+        { name: 'rules', isAttr: true, type: 'String' },
+        { name: 'class', isAttr: true, type: 'String' },
+        { name: 'ruleVariablesInput', isAttr: true, type: 'String' },
+        { name: 'exclude', isAttr: true, type: 'Boolean', default: false }
       ]
     },
     {
@@ -54,6 +65,16 @@ export default {
         { name: 'candidateStarterGroups', isAttr: true, type: 'String' },
         { name: 'processCategory', isAttr: true, type: 'String' },
         { name: 'versionTag', isAttr: true, type: 'String' }
+      ]
+    },
+    {
+      name: 'Activity',
+      isAbstract: true,
+      extends: ['bpmn:Activity'],
+      properties: [
+        { name: 'async', isAttr: true, type: 'Boolean', default: false },
+        { name: 'asyncLeave', isAttr: true, type: 'Boolean', default: false },
+        { name: 'exclusive', isAttr: true, type: 'Boolean', default: true }
       ]
     },
     {
@@ -92,6 +113,31 @@ export default {
       ]
     },
     {
+      name: 'FormProperty',
+      superClass: ['Element'],
+      properties: [
+        { name: 'id', isAttr: true, type: 'String' },
+        { name: 'name', isAttr: true, type: 'String' },
+        { name: 'type', isAttr: true, type: 'String' },
+        { name: 'variable', isAttr: true, type: 'String' },
+        { name: 'expression', isAttr: true, type: 'String' },
+        { name: 'defaultExpression', isAttr: true, type: 'String' },
+        { name: 'datePattern', isAttr: true, type: 'String' },
+        { name: 'readable', isAttr: true, type: 'Boolean', default: true },
+        { name: 'writable', isAttr: true, type: 'Boolean', default: true },
+        { name: 'required', isAttr: true, type: 'Boolean', default: false },
+        { name: 'values', type: 'Value', isMany: true }
+      ]
+    },
+    {
+      name: 'Value',
+      superClass: ['Element'],
+      properties: [
+        { name: 'id', isAttr: true, type: 'String' },
+        { name: 'name', isAttr: true, type: 'String' }
+      ]
+    },
+    {
       name: 'ExecutionListener',
       superClass: ['Element'],
       properties: [
@@ -117,6 +163,19 @@ export default {
       name: 'FailedJobRetryTimeCycle',
       superClass: ['Element'],
       properties: [{ name: 'body', isBody: true, type: 'String' }]
+    },
+    {
+      name: 'Properties',
+      superClass: ['Element'],
+      properties: [{ name: 'values', type: 'Property', isMany: true }]
+    },
+    {
+      name: 'Property',
+      superClass: ['Element'],
+      properties: [
+        { name: 'name', isAttr: true, type: 'String' },
+        { name: 'value', isAttr: true, type: 'String' }
+      ]
     }
   ],
   enumerations: [],

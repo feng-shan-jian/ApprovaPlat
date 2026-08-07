@@ -1,183 +1,143 @@
 <template>
-  <div class="process-designer" :style="designerStyle">
-    <header class="process-designer__toolbar">
-      <div class="process-designer__toolbar-group">
-        <el-tooltip content="撤销" placement="bottom">
-          <el-button circle text icon="RefreshLeft" aria-label="撤销" :disabled="designerLocked || !canUndo" @click="undo" />
-        </el-tooltip>
-        <el-tooltip content="重做" placement="bottom">
-          <el-button circle text icon="RefreshRight" aria-label="重做" :disabled="designerLocked || !canRedo" @click="redo" />
-        </el-tooltip>
-        <el-divider direction="vertical" />
-        <el-tooltip content="缩小" placement="bottom">
-          <el-button circle text icon="ZoomOut" aria-label="缩小流程图" :disabled="designerLocked" @click="zoomBy(0.85)" />
-        </el-tooltip>
-        <el-tooltip content="适应窗口" placement="bottom">
-          <el-button circle text icon="FullScreen" aria-label="适应窗口" :disabled="designerLocked" @click="fitViewport" />
-        </el-tooltip>
-        <el-tooltip content="放大" placement="bottom">
-          <el-button circle text icon="ZoomIn" aria-label="放大流程图" :disabled="designerLocked" @click="zoomBy(1.15)" />
-        </el-tooltip>
-      </div>
-      <div class="process-designer__toolbar-group">
-        <el-tooltip content="下载 BPMN" placement="bottom">
-          <el-button circle text icon="Download" aria-label="下载 BPMN" :disabled="designerLocked" @click="downloadXml" />
-        </el-tooltip>
-        <el-button
-          v-hasPermi="['workflow:model:save']"
-          type="primary"
-          icon="Check"
-          :loading="designerLocked"
-          @click="requestSave"
-        >保存</el-button>
-      </div>
-    </header>
+  <div class="process-designer" :class="designerClasses" :style="designerStyle">
+    <DesignerToolbar
+      :locked="designerLocked"
+      :can-undo="canUndo"
+      :can-redo="canRedo"
+      :selection-count="selectionCount"
+      :simulation-active="simulationActive"
+      :properties-collapsed="appliedPreference.propertiesCollapsed"
+      :issue-count="totalIssueCount"
+      :validating="validating"
+      @import="openImportPicker"
+      @export="exportDiagram"
+      @preview="openPreview"
+      @clear="clearDiagram"
+      @undo="undo"
+      @redo="redo"
+      @zoom="zoomBy"
+      @fit="fitViewport"
+      @align="alignSelection"
+      @distribute="distributeSelection"
+      @toggle-simulation="toggleSimulation"
+      @validate="runServerValidation(true)"
+      @settings="settingsVisible = true"
+      @toggle-properties="toggleProperties"
+      @save="requestSave"
+    />
+    <input ref="importInputRef" class="process-designer__file-input" type="file" accept=".bpmn,.xml,.bpmn20.xml,application/xml,text/xml" @change="handleImportFile" />
 
     <div
       ref="bodyRef"
       v-loading="designerLocked"
       class="process-designer__body"
+      :class="{ 'process-designer__body--properties-collapsed': appliedPreference.propertiesCollapsed }"
       :inert="designerLocked"
       :aria-busy="designerLocked"
     >
-      <div ref="canvasRef" class="process-designer__canvas" v-loading="loading" />
-      <aside class="process-designer__properties">
-        <div class="process-designer__properties-title">
-          <span>{{ selectedTypeLabel }}</span>
-          <el-tag v-if="propertyState.id" size="small" type="info">{{ propertyState.id }}</el-tag>
-        </div>
-
-        <el-scrollbar v-if="selectedElement" class="process-designer__properties-scroll">
-          <el-form label-position="top" size="small" class="process-designer__form">
-            <el-form-item label="元素名称">
-              <el-input v-model="propertyState.name" maxlength="255" @change="updateCommonProperties" />
-            </el-form-item>
-            <el-form-item label="元素标识">
-              <el-input v-model="propertyState.id" maxlength="128" @change="updateElementId" />
-            </el-form-item>
-
-            <template v-if="isProcess">
-              <el-form-item label="可执行流程">
-                <el-switch v-model="propertyState.executable" @change="updateProcessProperties" />
-              </el-form-item>
-            </template>
-
-            <template v-if="isStartEvent || isUserTask">
-              <el-form-item :label="isStartEvent ? '发起表单' : '节点表单'" :required="isStartEvent">
-                <el-select v-model="propertyState.formKey" filterable clearable @change="updateFormKey">
-                  <el-option v-for="form in forms" :key="form.formId" :label="form.formName" :value="`key_${form.formId}`" />
-                </el-select>
-              </el-form-item>
-            </template>
-
-            <template v-if="isUserTask">
-              <el-form-item label="多实例">
-                <el-segmented v-model="propertyState.multiInstanceType" :options="multiInstanceOptions" @change="updateMultiInstance" />
-              </el-form-item>
-              <el-form-item v-if="propertyState.multiInstanceType === 'controlled'" label="签署规则">
-                <el-segmented v-model="propertyState.multiInstanceApprovalMode" :options="multiInstanceApprovalOptions" @change="updateMultiInstance" />
-              </el-form-item>
-              <template v-if="['sequential', 'parallel'].includes(propertyState.multiInstanceType)">
-                <el-form-item label="集合表达式">
-                  <el-input v-model="propertyState.collection" maxlength="256" @change="updateMultiInstance" />
-                </el-form-item>
-                <el-form-item label="元素变量">
-                  <el-input v-model="propertyState.elementVariable" maxlength="128" @change="updateMultiInstance" />
-                </el-form-item>
-                <el-form-item label="完成条件">
-                  <el-input v-model="propertyState.completionCondition" type="textarea" :rows="2" maxlength="512" @change="updateMultiInstance" />
-                </el-form-item>
-              </template>
-              <template v-if="propertyState.multiInstanceType !== 'controlled'">
-                <el-form-item label="办理方式">
-                  <el-segmented v-model="propertyState.assignmentType" :options="assignmentOptions" @change="updateAssignment" />
-                </el-form-item>
-                <el-form-item v-if="propertyState.assignmentType === 'assignee'" label="办理人">
-                <el-select
-                  v-model="propertyState.assignee"
-                  filterable
-                  clearable
-                  remote
-                  reserve-keyword
-                  :remote-method="searchAssignees"
-                  :loading="identityLoading"
-                  @change="updateAssignment"
-                >
-                  <el-option v-for="user in identityOptions.assignees" :key="user.value" :label="user.label" :value="String(user.value)" />
-                </el-select>
-                </el-form-item>
-                <el-form-item v-if="propertyState.assignmentType === 'users'" label="候选用户">
-                <el-select
-                  v-model="propertyState.candidateUsers"
-                  multiple
-                  filterable
-                  remote
-                  reserve-keyword
-                  :remote-method="searchCandidateUsers"
-                  :loading="identityLoading"
-                  @change="updateAssignment"
-                >
-                  <el-option v-for="user in identityOptions.candidateUsers" :key="user.value" :label="user.label" :value="String(user.value)" />
-                </el-select>
-                </el-form-item>
-                <el-form-item v-if="propertyState.assignmentType === 'groups'" label="候选角色或部门">
-                <el-select
-                  v-model="propertyState.candidateGroups"
-                  multiple
-                  filterable
-                  remote
-                  reserve-keyword
-                  :remote-method="searchCandidateGroups"
-                  :loading="identityLoading"
-                  @change="updateAssignment"
-                >
-                  <el-option v-for="group in identityOptions.candidateGroups" :key="group.value" :label="group.label" :value="group.value" />
-                </el-select>
-                </el-form-item>
-              </template>
-              <el-form-item label="到期时间">
-                <el-input v-model="propertyState.dueDate" maxlength="128" @change="updateUserTaskProperties" />
-              </el-form-item>
-              <el-form-item label="优先级">
-                <el-input v-model="propertyState.priority" maxlength="128" @change="updateUserTaskProperties" />
-              </el-form-item>
-            </template>
-
-            <template v-if="isServiceTask">
-              <el-form-item label="实现方式">
-                <el-segmented v-model="propertyState.implementationType" :options="implementationOptions" @change="updateServiceTask" />
-              </el-form-item>
-              <el-form-item label="实现配置">
-                <el-input v-model="propertyState.implementation" maxlength="255" @change="updateServiceTask" />
-              </el-form-item>
-            </template>
-
-            <template v-if="isSequenceFlow">
-              <el-form-item label="流转条件">
-                <el-input v-model="propertyState.conditionExpression" type="textarea" :rows="3" maxlength="1024" @change="updateCondition" />
-              </el-form-item>
-            </template>
-
-            <el-form-item label="说明">
-              <el-input v-model="propertyState.documentation" type="textarea" :rows="3" maxlength="1000" @change="updateDocumentation" />
-            </el-form-item>
-          </el-form>
-        </el-scrollbar>
-        <el-empty v-else description="未选择流程元素" :image-size="64" />
-      </aside>
+      <div ref="canvasRef" class="process-designer__canvas" tabindex="0" v-loading="loading" />
+      <AdvancedElementPalette :disabled="designerLocked" @create="createAdvancedElement" />
+      <DesignerPropertiesPanel
+        v-show="!appliedPreference.propertiesCollapsed"
+        :selected="Boolean(selectedElement)"
+        :title="selectedTypeLabel"
+        :state="propertyState"
+        :flags="propertyFlags"
+        :forms="forms"
+        :identity-options="identityOptions"
+        :identity-loading="identityLoading"
+        :assignment-options="assignmentOptions"
+        :multi-instance-options="multiInstanceOptions"
+        :multi-instance-approval-options="multiInstanceApprovalOptions"
+        :extension-options="extensionOptions"
+        :form-field-options="formFieldOptions"
+        :connector-endpoints="connectorEndpoints"
+        :sql-data-sources="sqlDataSources"
+        :extension-loading="extensionLoading"
+        :dmn-options="dmnOptions"
+        :dmn-loading="dmnLoading"
+        :listener-options="businessListenerOptions"
+        :listener-loading="extensionLoading"
+        @common-change="updateCommonProperties"
+        @id-change="updateElementId"
+        @process-change="updateProcessProperties"
+        @form-source-change="updateFormSource"
+        @form-change="updateFormKey"
+        @embedded-form-change="updateEmbeddedForm"
+        @assignment-change="updateAssignment"
+        @user-task-change="updateUserTaskProperties"
+        @extension-selection-change="updateExtensionSelection"
+        @service-task-change="updateServiceTask"
+        @condition-change="updateCondition"
+        @documentation-change="updateDocumentation"
+        @multi-instance-change="updateMultiInstance"
+        @activity-change="updateActivityProperties"
+        @call-activity-change="updateCallActivityProperties"
+        @event-change="updateEventProperties"
+        @dmn-change="updateDmnDecision"
+        @business-execution-listener-change="updateBusinessExecutionListeners"
+        @business-task-listener-change="updateBusinessTaskListeners"
+        @extension-properties-change="updateExtensionProperties"
+        @identity-search="handlePanelIdentitySearch"
+      />
     </div>
+
+    <DesignerSettingsDrawer
+      v-model="settingsVisible"
+      :preference="appliedPreference"
+      :saving="preferenceSaving"
+      @save="requestPreferenceSave"
+    />
+
+    <el-dialog v-model="previewVisible" :title="previewTitle" width="min(920px, 86vw)" append-to-body>
+      <el-input class="process-designer__source" :model-value="previewContent" type="textarea" :rows="24" readonly resize="none" />
+      <template #footer>
+        <el-button icon="DocumentCopy" @click="copyPreview">复制</el-button>
+        <el-button type="primary" @click="previewVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="validationVisible" title="流程校验" width="min(720px, 82vw)" append-to-body>
+      <el-result v-if="!validationIssues.length" icon="success" title="校验通过" />
+      <el-table v-else :data="validationIssues" max-height="460">
+        <el-table-column label="级别" width="88">
+          <template #default="scope">
+            <el-tag size="small" :type="scope.row.severity === 'ERROR' ? 'danger' : 'warning'">{{ scope.row.severity }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="code" label="编码" width="190" />
+        <el-table-column prop="elementId" label="元素" width="150" show-overflow-tooltip />
+        <el-table-column prop="message" label="问题" min-width="260" show-overflow-tooltip />
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
 <script setup name="ProcessDesigner">
 import Modeler from 'bpmn-js/lib/Modeler'
 import minimapModule from 'diagram-js-minimap'
+import gridSnappingModule from 'bpmn-js/lib/features/grid-snapping'
+import lintModule from 'bpmn-js-bpmnlint'
+import tokenSimulationModule from 'bpmn-js-token-simulation'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import 'bpmn-js/dist/assets/diagram-js.css'
 import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css'
 import 'diagram-js-minimap/assets/diagram-js-minimap.css'
+import 'bpmn-js-bpmnlint/dist/assets/css/bpmn-js-bpmnlint.css'
+import 'bpmn-js-token-simulation/assets/css/bpmn-js-token-simulation.css'
 import Download from '@/plugins/download'
+import { validateModelBpmn } from '@/api/workflow/model'
+import { listCelExtensionOptions, listFormFieldExtensionOptions, listHttpExtensionOptions, listJavaExtensionOptions, listSqlExtensionOptions } from '@/api/workflow/extension'
+import { listConnectorEndpointOptions } from '@/api/workflow/connector'
+import { listSqlDataSourceOptions } from '@/api/workflow/sqlDatasource'
+import { listDmnDecisionOptions } from '@/api/workflow/dmn'
 import flowableModdle from './bpmn/flowableModdle'
 import { normalizeTaskListenerXml } from './taskListenerXml'
+import DesignerToolbar from './designer/DesignerToolbar.vue'
+import DesignerSettingsDrawer from './designer/DesignerSettingsDrawer.vue'
+import AdvancedElementPalette from './designer/AdvancedElementPalette.vue'
+import DesignerPropertiesPanel from './designer/DesignerPropertiesPanel.vue'
+import bpmnlintConfig from './designer/bpmnlintConfig'
 
 // 动态多实例的技术属性由设计器固定写入，页面不向设计者开放任意方法或变量名。
 const CONTROLLED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getUserIds(execution)}'
@@ -185,6 +145,34 @@ const CONTROLLED_MULTI_INSTANCE_ASSIGNEE = '${assignee}'
 const CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE = 'assignee'
 const CONTROLLED_MULTI_INSTANCE_ALL_CONDITION = '${nrOfCompletedInstances == nrOfInstances}'
 const CONTROLLED_MULTI_INSTANCE_ANY_CONDITION = '${nrOfCompletedInstances > 0}'
+// 业务监听器的作者 XML 只允许固定调度 Bean；后端部署时会冻结版本并剥离字段。
+const BUSINESS_LISTENER_DELEGATE_EXPRESSION = '${workflowBusinessListener}'
+
+// 内嵌字段类型、变量和日期格式与后端 WorkflowEmbeddedFormConverter 使用同一安全边界。
+const EMBEDDED_FORM_TYPES = Object.freeze(['string', 'long', 'integer', 'boolean', 'date', 'enum'])
+const EMBEDDED_FORM_VARIABLE_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
+const EMBEDDED_FORM_DATE_PATTERN = /^[A-Za-z0-9 /:._-]{1,64}$/
+const EMBEDDED_FORM_RESERVED_VARIABLES = new Set([
+  'initiator', 'processStatus', 'processInstanceId', 'processDefinitionId',
+  'deploymentId', 'startUserId', 'authenticatedUserId', 'businessKey',
+  'assignee', 'nrOfInstances', 'nrOfActiveInstances', 'nrOfCompletedInstances',
+  'loopCounter', '_FLOWABLE_SKIP_EXPRESSION_ENABLED'
+])
+const EMBEDDED_FORM_RESERVED_PREFIXES = Object.freeze([
+  'wfMiUsers_', '_wfMiMembers_', '_wfMiRevision_', '_wfMiMode_', '__ruoyi_workflow_'
+])
+const EXTENSION_PROPERTY_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/
+
+// 作者 BPMN 只保存稳定键和配置；部署版本、实现和校验和均由后端注册表冻结。
+const EXTENSION_DELEGATE_EXPRESSION = '${workflowExtensionDelegate}'
+const EXTENSION_KEY_FIELD = 'approvaExtensionKey'
+const EXTENSION_CONFIG_FIELD = 'approvaExtensionConfig'
+const CEL_DEFAULT_CONFIG = Object.freeze({
+  expression: 'true',
+  resultVariable: 'celResult',
+  resultType: 'BOOL',
+  variables: []
+})
 
 const props = defineProps({
   /** 设计器当前 BPMN XML。 */
@@ -203,28 +191,89 @@ const props = defineProps({
   /** 保存请求是否正在执行。 */
   saving: { type: Boolean, default: false },
   /** 页面是否正在查询正式用户、角色或部门主数据。 */
-  identityLoading: { type: Boolean, default: false }
+  identityLoading: { type: Boolean, default: false },
+  /** 服务端回读的正式设计器偏好。 */
+  preference: {
+    type: Object,
+    default: () => ({
+      theme: 'SYSTEM',
+      gridEnabled: true,
+      minimapEnabled: true,
+      lintEnabled: true,
+      tokenSimulationEnabled: false,
+      propertiesCollapsed: false
+    })
+  },
+  /** 设计器偏好是否正在写入正式数据库。 */
+  preferenceSaving: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['update:modelValue', 'change', 'save', 'error', 'identity-search'])
+const emit = defineEmits([
+  'update:modelValue', 'change', 'save', 'error', 'identity-search', 'preference-save'
+])
 const canvasRef = ref(null)
 const bodyRef = ref(null)
+const importInputRef = ref(null)
 const loading = ref(false)
 // savePreparing 覆盖保存前 XML 序列化窗口，避免父页面 saving 回写前产生重复保存命令。
 const savePreparing = ref(false)
 const canUndo = ref(false)
 const canRedo = ref(false)
+const selectionCount = ref(0)
+const settingsVisible = ref(false)
+const previewVisible = ref(false)
+const previewTitle = ref('')
+const previewContent = ref('')
+const validationVisible = ref(false)
+const validationIssues = ref([])
+const clientLintIssues = ref([])
+const validating = ref(false)
+const simulationActive = ref(false)
+const systemDark = ref(false)
 const selectedElement = shallowRef(null)
 const lastExportedXml = ref('')
 const propertyState = reactive(createEmptyPropertyState())
 const designerStyle = computed(() => ({ height: props.height }))
 const designerLocked = computed(() => props.saving || savePreparing.value)
+const appliedPreference = computed(() => normalizePreference(props.preference))
+const totalIssueCount = computed(() => validationIssues.value.length + clientLintIssues.value.length)
+const designerClasses = computed(() => ({
+  'process-designer--dark': appliedPreference.value.theme === 'DARK'
+    || (appliedPreference.value.theme === 'SYSTEM' && systemDark.value),
+  'process-designer--grid': appliedPreference.value.gridEnabled
+}))
 const selectedBusinessObject = computed(() => selectedElement.value?.businessObject)
 const isProcess = computed(() => isType('bpmn:Process'))
 const isStartEvent = computed(() => isType('bpmn:StartEvent'))
 const isUserTask = computed(() => isType('bpmn:UserTask'))
 const isServiceTask = computed(() => isType('bpmn:ServiceTask'))
+const isBusinessRuleTask = computed(() => isType('bpmn:BusinessRuleTask'))
 const isSequenceFlow = computed(() => isType('bpmn:SequenceFlow'))
+const propertyFlags = computed(() => {
+  const eventDefinitionType = propertyState.eventDefinitionType
+  return Object.freeze({
+    process: isProcess.value,
+    startEvent: isStartEvent.value,
+    userTask: isUserTask.value,
+    serviceTaskLike: isType('bpmn:ServiceTask') || isType('bpmn:SendTask'),
+    businessRuleTask: isBusinessRuleTask.value,
+    formSupported: isStartEvent.value || isUserTask.value,
+    sequenceFlow: isSequenceFlow.value,
+    callActivity: isType('bpmn:CallActivity'),
+    activity: isType('bpmn:Activity'),
+    event: isType('bpmn:Event'),
+    referenceEvent: [
+      'bpmn:MessageEventDefinition',
+      'bpmn:SignalEventDefinition',
+      'bpmn:ErrorEventDefinition',
+      'bpmn:EscalationEventDefinition'
+    ].includes(eventDefinitionType),
+    timerEvent: eventDefinitionType === 'bpmn:TimerEventDefinition',
+    boundaryEvent: isType('bpmn:BoundaryEvent'),
+    listenerSupported: isProcess.value || isType('bpmn:FlowNode'),
+    extensionPropertiesSupported: isProcess.value || isType('bpmn:FlowElement')
+  })
+})
 const selectedTypeLabel = computed(() => typeLabel(selectedBusinessObject.value?.$type))
 const assignmentOptions = [
   { label: '办理人', value: 'assignee' },
@@ -234,6 +283,7 @@ const assignmentOptions = [
 // none/sequential/parallel 对应标准 BPMN 多实例；controlled 冻结为 multiInstanceHandler 动态成员契约。
 const multiInstanceOptions = [
   { label: '无', value: 'none' },
+  { label: '标准循环（仅往返）', value: 'standard' },
   { label: '串行', value: 'sequential' },
   { label: '并行', value: 'parallel' },
   { label: '动态', value: 'controlled' }
@@ -243,12 +293,22 @@ const multiInstanceApprovalOptions = [
   { label: '会签', value: 'all' },
   { label: '或签', value: 'any' }
 ]
-const implementationOptions = [
-  { label: 'Java 类', value: 'class' },
-  { label: 'Spring Bean', value: 'delegateExpression' }
-]
+const extensionOptions = ref([])
+// 监听器仅允许选择后端明确安装的 JAVA 处理器，CEL/HTTP/SQL 不进入生命周期回调。
+const businessListenerOptions = computed(() => extensionOptions.value.filter(option => option.extensionType === 'JAVA'))
+// formFieldOptions 只包含后端 FORM_FIELD 注册表选项，不接受本地组件名或模板。
+const formFieldOptions = ref([])
+// connectorEndpoints 只保存后端白名单元数据，接口从不返回认证密钥正文。
+const connectorEndpoints = ref([])
+// sqlDataSources 只保存数据源环境引用和白名单元数据，不包含连接凭据正文。
+const sqlDataSources = ref([])
+const extensionLoading = ref(false)
+// dmnOptions 只包含服务端过滤后的来源决策最新版本，每项仍以精确 decisionId 作为作者引用。
+const dmnOptions = ref([])
+const dmnLoading = ref(false)
 let modeler
 let changeTimer
+let systemThemeQuery
 const identitySearchTimers = new Map()
 let importing = false
 
@@ -260,6 +320,22 @@ const IDENTITY_SEARCH_CONTRACTS = Object.freeze({
 })
 
 /**
+ * 规范化服务端设计器偏好，拒绝未知主题并为旧版本缺失字段提供服务端契约默认值。
+ * @param {object|undefined} preference 页面从正式偏好接口回读的数据。
+ * @returns {object} 字段完整、可直接应用到 Modeler 的只读偏好值。
+ */
+function normalizePreference(preference) {
+  return Object.freeze({
+    theme: ['LIGHT', 'DARK', 'SYSTEM'].includes(preference?.theme) ? preference.theme : 'SYSTEM',
+    gridEnabled: preference?.gridEnabled !== false,
+    minimapEnabled: preference?.minimapEnabled !== false,
+    lintEnabled: preference?.lintEnabled !== false,
+    tokenSimulationEnabled: preference?.tokenSimulationEnabled === true,
+    propertiesCollapsed: preference?.propertiesCollapsed === true
+  })
+}
+
+/**
  * 创建属性面板的稳定初始状态。
  * @returns {object} 不携带上一元素值的新状态对象。
  */
@@ -268,22 +344,47 @@ function createEmptyPropertyState() {
     id: '',
     name: '',
     executable: true,
+    versionTag: '',
+    formSource: 'TEMPLATE',
     formKey: '',
+    embeddedFields: [],
     assignmentType: 'assignee',
     assignee: '',
     candidateUsers: [],
     candidateGroups: [],
     dueDate: '',
     priority: '',
-    implementationType: 'class',
-    implementation: '',
+    taskCategory: '',
+    skipExpression: '',
+    localScope: false,
+    extensionKey: '',
+    extensionConfig: '{}',
+    dmnDecisionId: '',
+    calledElement: '',
+    businessKey: '',
+    processInstanceName: '',
     conditionExpression: '',
     documentation: '',
+    asyncBefore: false,
+    asyncAfter: false,
+    exclusive: true,
+    forCompensation: false,
+    eventDefinitionType: '',
+    eventReference: '',
+    timerDefinitionType: 'timeDuration',
+    timerDefinition: '',
+    cancelActivity: true,
     multiInstanceType: 'none',
     multiInstanceApprovalMode: 'all',
     collection: '',
     elementVariable: '',
-    completionCondition: ''
+    completionCondition: '',
+    loopMaximum: '',
+    loopCondition: '',
+    testBefore: false,
+    businessExecutionListeners: [],
+    businessTaskListeners: [],
+    extensionProperties: []
   }
 }
 
@@ -366,30 +467,14 @@ function scheduleIdentitySearch(target, keyword) {
 }
 
 /**
- * 检索具备直接任务办理资格的启用用户。
- * @param {string} keyword 用户姓名、账号或编号关键字。
- * @returns {void} 请求通过 identity-search 事件交由页面执行。
+ * 接收属性面板的身份检索请求并转入受控资格目录。
+ * @param {{target:string, keyword:string}|undefined} request 属性面板给出的目标池和检索词。
+ * @returns {void} 未知目标会被拒绝，不向页面发出降级目录请求。
  */
-function searchAssignees(keyword) {
-  scheduleIdentitySearch('assignees', keyword)
-}
-
-/**
- * 检索具备完整认领和后续办理资格的候选用户。
- * @param {string} keyword 用户姓名、账号或编号关键字。
- * @returns {void} 请求通过 identity-search 事件交由页面执行。
- */
-function searchCandidateUsers(keyword) {
-  scheduleIdentitySearch('candidateUsers', keyword)
-}
-
-/**
- * 检索至少包含一名完整可认领办理成员的候选角色和部门。
- * @param {string} keyword 角色或部门名称、编码关键字。
- * @returns {void} 请求通过 identity-search 事件交由页面执行。
- */
-function searchCandidateGroups(keyword) {
-  scheduleIdentitySearch('candidateGroups', keyword)
+function handlePanelIdentitySearch(request) {
+  const target = request?.target
+  if (!IDENTITY_SEARCH_CONTRACTS[target]) return
+  scheduleIdentitySearch(target, request?.keyword)
 }
 
 /**
@@ -400,15 +485,26 @@ function createModeler() {
   if (modeler || !canvasRef.value) return
   modeler = new Modeler({
     container: canvasRef.value,
-    additionalModules: [minimapModule],
+    linting: { bpmnlint: bpmnlintConfig },
+    gridSnapping: { active: appliedPreference.value.gridEnabled },
+    additionalModules: [minimapModule, gridSnappingModule, lintModule, tokenSimulationModule],
     moddleExtensions: { flowable: flowableModdle }
   })
   const eventBus = modeler.get('eventBus')
-  eventBus.on('selection.changed', event => selectElement(event.newSelection?.[0]))
+  eventBus.on('selection.changed', event => {
+    selectionCount.value = event.newSelection?.length || 0
+    selectElement(event.newSelection?.[0])
+  })
   eventBus.on('element.changed', event => {
     if (event.element === selectedElement.value) loadPropertyState(event.element)
   })
   eventBus.on('commandStack.changed', handleCommandStackChanged)
+  eventBus.on('linting.completed', event => {
+    clientLintIssues.value = Object.values(event.issues || {}).flat()
+  })
+  eventBus.on('tokenSimulation.toggleMode', event => {
+    simulationActive.value = Boolean(event.active)
+  })
 }
 
 /**
@@ -424,6 +520,7 @@ async function importXml(xml) {
   try {
     const source = xml?.trim() ? xml : createInitialXml()
     await modeler.importXML(source)
+    applyDesignerPreference()
     fitViewport()
     const processElement = modeler.get('elementRegistry').getAll().find(element => element.type === 'bpmn:Process')
     selectElement(processElement)
@@ -445,6 +542,8 @@ async function importXml(xml) {
 function handleCommandStackChanged() {
   updateCommandState()
   if (importing) return
+  // 任何建模变更都会使上一次服务端诊断失效，禁止显示过期的“已通过”结果。
+  validationIssues.value = []
   window.clearTimeout(changeTimer)
   changeTimer = window.setTimeout(() => emitXmlChange(true), 180)
 }
@@ -511,7 +610,10 @@ function loadPropertyState(element) {
   propertyState.id = businessObject.id || ''
   propertyState.name = businessObject.name || ''
   propertyState.executable = businessObject.isExecutable !== false
+  propertyState.versionTag = businessObject.get('flowable:versionTag') || ''
   propertyState.formKey = businessObject.get('flowable:formKey') || ''
+  propertyState.embeddedFields = readEmbeddedFormFields(businessObject)
+  propertyState.formSource = propertyState.embeddedFields.length ? 'EMBEDDED' : 'TEMPLATE'
   propertyState.assignee = businessObject.get('flowable:assignee') || ''
   propertyState.candidateUsers = splitValues(businessObject.get('flowable:candidateUsers'))
   propertyState.candidateGroups = splitValues(businessObject.get('flowable:candidateGroups'))
@@ -520,13 +622,36 @@ function loadPropertyState(element) {
     : propertyState.candidateUsers.length ? 'users' : 'assignee'
   propertyState.dueDate = businessObject.get('flowable:dueDate') || ''
   propertyState.priority = businessObject.get('flowable:priority') || ''
+  propertyState.taskCategory = businessObject.get('flowable:category') || ''
+  propertyState.skipExpression = businessObject.get('flowable:skipExpression') || ''
+  propertyState.localScope = businessObject.get('flowable:localScope') === true
   propertyState.documentation = businessObject.documentation?.[0]?.text || ''
   propertyState.conditionExpression = businessObject.conditionExpression?.body || ''
-  const delegateExpression = businessObject.get('flowable:delegateExpression') || ''
-  propertyState.implementationType = delegateExpression ? 'delegateExpression' : 'class'
-  propertyState.implementation = delegateExpression || businessObject.get('flowable:class') || ''
+  const serviceExtension = readServiceTaskExtension(businessObject)
+  propertyState.extensionKey = serviceExtension.extensionKey
+  propertyState.extensionConfig = serviceExtension.extensionConfig
+  propertyState.businessExecutionListeners = readBusinessListeners(businessObject, 'flowable:ExecutionListener')
+  propertyState.businessTaskListeners = readBusinessListeners(businessObject, 'flowable:TaskListener')
+  propertyState.extensionProperties = readExtensionProperties(businessObject)
+  propertyState.dmnDecisionId = businessObject.get('flowable:rules') || ''
+  propertyState.calledElement = businessObject.calledElement || ''
+  propertyState.businessKey = businessObject.get('flowable:businessKey') || ''
+  propertyState.processInstanceName = businessObject.get('flowable:processInstanceName') || ''
+  propertyState.asyncBefore = businessObject.get('flowable:async') === true
+  propertyState.asyncAfter = businessObject.get('flowable:asyncLeave') === true
+  propertyState.exclusive = businessObject.get('flowable:exclusive') !== false
+  propertyState.forCompensation = businessObject.isForCompensation === true
+  propertyState.cancelActivity = businessObject.cancelActivity !== false
+  loadEventPropertyState(businessObject)
   const loop = businessObject.loopCharacteristics
   if (loop) {
+    if (loop.$type === 'bpmn:StandardLoopCharacteristics') {
+      propertyState.multiInstanceType = 'standard'
+      propertyState.loopMaximum = loop.loopMaximum == null ? '' : String(loop.loopMaximum)
+      propertyState.loopCondition = loop.loopCondition?.body || ''
+      propertyState.testBefore = loop.testBefore === true
+      return
+    }
     propertyState.collection = loop.get('flowable:collection') || ''
     propertyState.elementVariable = loop.get('flowable:elementVariable') || ''
     propertyState.completionCondition = loop.completionCondition?.body || ''
@@ -539,6 +664,82 @@ function loadPropertyState(element) {
       propertyState.multiInstanceType = loop.isSequential ? 'sequential' : 'parallel'
     }
   }
+}
+
+/**
+ * 从当前元素读取受限的 Flowable 通用扩展属性。
+ * @param {object} businessObject 当前 BPMN 流程或流程元素业务对象。
+ * @returns {Array<{name:string,value:string}>} 保持 XML 顺序的名值列表。
+ */
+function readExtensionProperties(businessObject) {
+  const containers = (businessObject?.extensionElements?.values || [])
+    .filter(value => value?.$type === 'flowable:Properties')
+  return containers.flatMap(container => (container.values || []).map(property => ({
+    name: property.name || '',
+    value: property.value || ''
+  })))
+}
+
+/**
+ * 从 ServiceTask 的受控 Flowable Field 回读作者扩展键和配置。
+ * @param {object} businessObject 当前 BPMN 业务对象。
+ * @returns {{extensionKey: string, extensionConfig: string}} 稳定作者配置；缺失时使用空键和空对象。
+ */
+function readServiceTaskExtension(businessObject) {
+  const result = { extensionKey: '', extensionConfig: '{}' }
+  for (const value of businessObject?.extensionElements?.values || []) {
+    if (value?.$type !== 'flowable:Field') continue
+    if (value.name === EXTENSION_KEY_FIELD) result.extensionKey = value.stringValue || ''
+    if (value.name === EXTENSION_CONFIG_FIELD) result.extensionConfig = value.stringValue || '{}'
+  }
+  return result
+}
+
+/**
+ * 从 moddle 监听器集合回读固定业务监听器，系统审计和未知实现不会进入可编辑状态。
+ * @param {object} businessObject 当前 BPMN 元素业务对象。
+ * @param {string} listenerType flowable:ExecutionListener 或 flowable:TaskListener。
+ * @returns {Array<object>} 包含 event、extensionKey 和 config 的业务监听器数组。
+ */
+function readBusinessListeners(businessObject, listenerType) {
+  return (businessObject?.extensionElements?.values || [])
+    .filter(listener => listener?.$type === listenerType)
+    .filter(listener => listener?.delegateExpression === BUSINESS_LISTENER_DELEGATE_EXPRESSION)
+    .map(listener => {
+      const fields = Array.isArray(listener.fields) ? listener.fields : []
+      const keyField = fields.find(field => field?.name === EXTENSION_KEY_FIELD)
+      const configField = fields.find(field => field?.name === EXTENSION_CONFIG_FIELD)
+      return {
+        event: listener.event || '',
+        extensionKey: keyField?.stringValue || '',
+        config: configField?.stringValue || '{}'
+      }
+    })
+}
+
+/**
+ * 从当前 BPMN 元素的 extensionElements 回读 Flowable FormData。
+ * @param {object} businessObject StartEvent 或 UserTask 的 moddle 业务对象。
+ * @returns {Array<object>} 可供字段编辑器使用的确定性字段列表。
+ */
+function readEmbeddedFormFields(businessObject) {
+  const extensionValues = businessObject?.extensionElements?.values || []
+  return extensionValues
+    .filter(value => value?.$type === 'flowable:FormProperty')
+    .map(property => ({
+      id: property.id || '',
+      variable: property.variable || '',
+      name: property.name || property.id || property.variable || '',
+      type: String(property.type || 'string').toLowerCase(),
+      required: property.required === true,
+      readable: property.readable !== false,
+      writable: property.writable !== false,
+      datePattern: property.datePattern || '',
+      values: (property.values || []).map(value => ({
+        id: value.id || '',
+        name: value.name || value.id || ''
+      }))
+    }))
 }
 
 /**
@@ -580,10 +781,22 @@ function typeLabel(type) {
     'bpmn:EndEvent': '结束节点',
     'bpmn:UserTask': '用户任务',
     'bpmn:ServiceTask': '服务任务',
+    'bpmn:ManualTask': '手工任务',
+    'bpmn:ReceiveTask': '接收任务',
+    'bpmn:SendTask': '发送任务',
+    'bpmn:BusinessRuleTask': '业务规则任务',
+    'bpmn:CallActivity': '调用活动',
     'bpmn:ExclusiveGateway': '排他网关',
     'bpmn:ParallelGateway': '并行网关',
+    'bpmn:InclusiveGateway': '包容网关',
+    'bpmn:EventBasedGateway': '事件网关',
+    'bpmn:ComplexGateway': '复杂网关',
     'bpmn:SequenceFlow': '顺序流',
-    'bpmn:SubProcess': '子流程'
+    'bpmn:SubProcess': '子流程',
+    'bpmn:Transaction': '事务子流程',
+    'bpmn:IntermediateCatchEvent': '捕获事件',
+    'bpmn:IntermediateThrowEvent': '抛出事件',
+    'bpmn:BoundaryEvent': '边界事件'
   }
   return labels[type] || '元素属性'
 }
@@ -625,15 +838,160 @@ function updateElementId() {
  * @returns {void} 无返回值。
  */
 function updateProcessProperties() {
-  updateProperties({ isExecutable: Boolean(propertyState.executable) })
+  updateProperties({
+    isExecutable: Boolean(propertyState.executable),
+    'flowable:versionTag': propertyState.versionTag.trim() || undefined
+  })
 }
 
 /**
- * 更新开始节点或用户任务的正式表单键。
- * @returns {void} 无返回值。
+ * 切换正式模板或内嵌 FormData，并在一条命令中清理另一来源。
+ * @returns {void} 来源非法或当前元素不支持表单时恢复 BPMN 原值。
+ */
+function updateFormSource() {
+  if (!['TEMPLATE', 'EMBEDDED'].includes(propertyState.formSource) || !propertyFlags.value.formSupported) {
+    loadPropertyState(selectedElement.value)
+    return
+  }
+  if (propertyState.formSource === 'EMBEDDED' && !propertyState.embeddedFields.length) {
+    // 空 FormData 无法在 XML 中表达来源；切换时创建首个合法字段，后续可继续编辑或删除。
+    propertyState.embeddedFields = [{
+      id: 'field1', variable: '', name: '字段 1', type: 'string', required: false,
+      readable: true, writable: true, datePattern: '', values: []
+    }]
+  }
+  syncFormDefinition()
+}
+
+/**
+ * 更新开始节点或用户任务的正式表单键，并确保不存在内嵌字段。
+ * @returns {void} 当前来源不是正式模板时不执行。
  */
 function updateFormKey() {
-  updateProperties({ 'flowable:formKey': propertyState.formKey || undefined })
+  if (propertyState.formSource !== 'TEMPLATE') return
+  syncFormDefinition()
+}
+
+/**
+ * 接收字段编辑器的完整值，执行与后端一致的即时门禁后写入 BPMN。
+ * @param {Array<object>} fields 用户编辑后的完整内嵌字段列表。
+ * @returns {void} 校验失败时恢复当前 BPMN 值并触发 error。
+ */
+function updateEmbeddedForm(fields) {
+  try {
+    validateEmbeddedFormFields(fields)
+    propertyState.embeddedFields = fields.map(field => ({
+      ...field,
+      values: (field.values || []).map(value => ({ ...value }))
+    }))
+    propertyState.formSource = 'EMBEDDED'
+    syncFormDefinition()
+  } catch (error) {
+    loadPropertyState(selectedElement.value)
+    emit('error', error)
+  }
+}
+
+/**
+ * 校验内嵌字段数量、变量、类型、日期格式和静态枚举完整性。
+ * @param {Array<object>} fields 待写入 BPMN 的内嵌字段列表。
+ * @returns {void} 任一字段违反后端协议时抛出业务错误。
+ */
+function validateEmbeddedFormFields(fields) {
+  if (!Array.isArray(fields) || !fields.length || fields.length > 500) {
+    throw new Error('内嵌表单必须包含 1 至 500 个字段')
+  }
+  const fieldIds = new Set()
+  const variables = new Set()
+  for (const field of fields) {
+    const fieldId = String(field?.id || '')
+    if (!EMBEDDED_FORM_VARIABLE_PATTERN.test(fieldId) || fieldIds.has(fieldId)) {
+      throw new Error('内嵌表单字段标识非法或重复')
+    }
+    fieldIds.add(fieldId)
+    const configuredVariable = String(field?.variable || '')
+    const variable = configuredVariable || fieldId
+    const reserved = EMBEDDED_FORM_RESERVED_VARIABLES.has(variable)
+      || EMBEDDED_FORM_RESERVED_PREFIXES.some(prefix => variable.startsWith(prefix))
+    if ((configuredVariable && configuredVariable !== configuredVariable.trim())
+      || !EMBEDDED_FORM_VARIABLE_PATTERN.test(variable) || reserved || variables.has(variable)) {
+      throw new Error('内嵌表单变量名非法、重复或属于保留变量')
+    }
+    variables.add(variable)
+    if (!String(field.name || '').trim() || String(field.name).trim().length > 255) {
+      throw new Error('内嵌表单字段名称不能为空且不能超过 255 个字符')
+    }
+    const customType = String(field.type || '').startsWith('custom:')
+      && formFieldOptions.value.some(option => `custom:${option.extensionKey}` === field.type)
+    if (!EMBEDDED_FORM_TYPES.includes(field.type) && !customType) {
+      throw new Error(`内嵌表单字段类型不受支持: ${field.type || ''}`)
+    }
+    if (field.type === 'date' && !EMBEDDED_FORM_DATE_PATTERN.test(String(field.datePattern || '').trim())) {
+      throw new Error('内嵌表单日期格式不合法')
+    }
+    if (field.type !== 'enum') continue
+    const values = field.values || []
+    if (!values.length || values.length > 500) throw new Error('内嵌枚举字段必须配置 1 至 500 个静态选项')
+    const optionIds = new Set()
+    for (const value of values) {
+      const id = String(value?.id || '')
+      const name = String(value?.name || '').trim()
+      if (!id || id !== id.trim() || id.length > 255 || optionIds.has(id) || !name || name.length > 255) {
+        throw new Error('内嵌枚举选项非法或重复')
+      }
+      optionIds.add(id)
+    }
+  }
+}
+
+/**
+ * 把一个已校验字段转换为 Flowable FormProperty moddle 对象。
+ * @param {object} field 字段编辑器中的确定性字段值。
+ * @returns {object} 可放入 bpmn:ExtensionElements.values 的 FormProperty。
+ */
+function createEmbeddedFormProperty(field) {
+  const moddle = modeler.get('moddle')
+  const values = field.type === 'enum'
+    ? field.values.map(value => moddle.create('flowable:Value', {
+      id: value.id,
+      name: value.name.trim()
+    }))
+    : []
+  return moddle.create('flowable:FormProperty', {
+    id: field.id,
+    variable: field.variable?.trim() || undefined,
+    name: field.name.trim(),
+    type: field.type,
+    required: Boolean(field.required && field.writable),
+    readable: Boolean(field.readable),
+    writable: Boolean(field.writable),
+    datePattern: field.type === 'date' ? field.datePattern.trim() : undefined,
+    values
+  })
+}
+
+/**
+ * 同步当前表单定义，保留审计监听器等非表单扩展并原子互斥两种来源。
+ * @returns {void} 未选中可配置元素或设计器锁定时不执行。
+ */
+function syncFormDefinition() {
+  if (designerLocked.value || !modeler || !selectedElement.value || !propertyFlags.value.formSupported) return
+  const businessObject = selectedBusinessObject.value
+  const preservedValues = (businessObject.extensionElements?.values || [])
+    .filter(value => value?.$type !== 'flowable:FormProperty')
+  const formValues = propertyState.formSource === 'EMBEDDED'
+    ? propertyState.embeddedFields.map(createEmbeddedFormProperty)
+    : []
+  const extensionValues = [...formValues, ...preservedValues]
+  const extensionElements = extensionValues.length
+    ? modeler.get('moddle').create('bpmn:ExtensionElements', { values: extensionValues })
+    : undefined
+  modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
+    'flowable:formKey': propertyState.formSource === 'TEMPLATE'
+      ? propertyState.formKey || undefined
+      : undefined,
+    extensionElements
+  })
 }
 
 /**
@@ -660,20 +1018,411 @@ function updateAssignment() {
 function updateUserTaskProperties() {
   updateProperties({
     'flowable:dueDate': propertyState.dueDate.trim() || undefined,
-    'flowable:priority': propertyState.priority.trim() || undefined
+    'flowable:priority': propertyState.priority.trim() || undefined,
+    'flowable:category': propertyState.taskCategory.trim() || undefined,
+    'flowable:skipExpression': propertyState.skipExpression.trim() || undefined,
+    'flowable:localScope': Boolean(propertyState.localScope)
   })
 }
 
 /**
- * 更新服务任务受控 Java 类或 Spring Bean 实现。
- * @returns {void} 互斥清理另一种实现属性。
+ * 将服务任务扩展键和 JSON 配置写入作者 XML，并固定为系统调度器。
+ * @returns {void} 校验失败时恢复当前 BPMN 值并触发 error。
  */
 function updateServiceTask() {
-  const implementation = propertyState.implementation.trim() || undefined
+  try {
+    const extensionKey = propertyState.extensionKey.trim()
+    const configText = propertyState.extensionConfig.trim() || '{}'
+    const config = JSON.parse(configText)
+    if (!config || Array.isArray(config) || typeof config !== 'object') {
+      throw new Error('处理器配置必须是 JSON 对象')
+    }
+    const businessObject = selectedBusinessObject.value
+    const preservedValues = (businessObject.extensionElements?.values || []).filter(value => (
+      value?.$type !== 'flowable:Field'
+      || ![EXTENSION_KEY_FIELD, EXTENSION_CONFIG_FIELD].includes(value.name)
+    ))
+    const moddle = modeler.get('moddle')
+    const extensionValues = extensionKey
+      ? [
+          moddle.create('flowable:Field', { name: EXTENSION_KEY_FIELD, stringValue: extensionKey }),
+          moddle.create('flowable:Field', { name: EXTENSION_CONFIG_FIELD, stringValue: JSON.stringify(config) }),
+          ...preservedValues
+        ]
+      : preservedValues
+    const extensionElements = extensionValues.length
+      ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
+      : undefined
+    modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
+      'flowable:class': undefined,
+      'flowable:delegateExpression': extensionKey ? EXTENSION_DELEGATE_EXPRESSION : undefined,
+      'flowable:expression': undefined,
+      'flowable:resultVariable': undefined,
+      extensionElements
+    })
+  } catch (error) {
+    loadPropertyState(selectedElement.value)
+    emit('error', error)
+  }
+}
+
+/**
+ * 切换受控扩展类型时建立与服务端 Schema 一致的初始配置。
+ * @returns {void} 更新编辑状态并通过命令栈写入作者 BPMN。
+ */
+function updateExtensionSelection() {
+  const selectedOption = extensionOptions.value.find(option => (
+    option.extensionKey === propertyState.extensionKey
+  ))
+  if (selectedOption?.extensionType === 'CEL') {
+    propertyState.extensionConfig = JSON.stringify(CEL_DEFAULT_CONFIG)
+  } else if (selectedOption?.extensionType === 'HTTP') {
+    const endpoint = connectorEndpoints.value[0]
+    // HTTP 外部副作用必须交给 Flowable Job 重试；该技术约束由系统自动维护。
+    propertyState.asyncBefore = true
+    updateProperties({ 'flowable:async': true })
+    propertyState.extensionConfig = JSON.stringify({
+      endpointKey: endpoint?.endpointKey || '',
+      method: String(endpoint?.allowedMethods || '').split(',').filter(Boolean)[0] || '',
+      path: endpoint?.pathPrefix || '/'
+    })
+  } else if (selectedOption?.extensionType === 'SQL') {
+    const source = sqlDataSources.value[0]
+    propertyState.extensionConfig = JSON.stringify({
+      dataSourceKey: source?.dataSourceKey || '',
+      sql: '',
+      parameters: {},
+      maxRows: 100
+    })
+  } else {
+    propertyState.extensionConfig = '{}'
+  }
+  updateServiceTask()
+}
+
+/**
+ * 将业务规则任务绑定到一个服务端目录中的精确 DMN 来源版本。
+ * @returns {void} 非 BusinessRuleTask、未知 decisionId 或多值引用会恢复当前 BPMN 状态。
+ */
+function updateDmnDecision() {
+  if (!propertyFlags.value.businessRuleTask) return
+  const decisionId = String(propertyState.dmnDecisionId || '').trim()
+  const selected = dmnOptions.value.find(option => option.decisionId === decisionId)
+  if (!selected || decisionId.includes(',')) {
+    loadPropertyState(selectedElement.value)
+    emit('error', new Error('请选择一个正式 DMN 决策精确版本'))
+    return
+  }
   updateProperties({
-    'flowable:class': propertyState.implementationType === 'class' ? implementation : undefined,
-    'flowable:delegateExpression': propertyState.implementationType === 'delegateExpression' ? implementation : undefined,
-    'flowable:expression': undefined
+    'flowable:rules': decisionId,
+    'flowable:class': undefined,
+    'flowable:ruleVariablesInput': undefined,
+    'flowable:exclude': false
+  })
+}
+
+/**
+ * 从正式后端加载每个 DMN key 的最新来源版本供设计器选择。
+ * @returns {Promise<void>} 失败时清空选项并向页面上报，不使用本地回退目录。
+ */
+async function loadDmnOptions() {
+  dmnLoading.value = true
+  try {
+    const response = await listDmnDecisionOptions()
+    dmnOptions.value = Array.isArray(response?.data) ? response.data : []
+  } catch (error) {
+    dmnOptions.value = []
+    emit('error', error)
+  } finally {
+    dmnLoading.value = false
+  }
+}
+
+/**
+ * 从正式后端加载可选择的 Java、CEL、HTTP 扩展和 HTTP 端点白名单。
+ * @returns {Promise<void>} 请求完成后更新扩展选项；失败时不提供本地伪造回退。
+ */
+async function loadExtensionOptions() {
+  extensionLoading.value = true
+  try {
+    const [javaResponse, celResponse, httpResponse, sqlResponse, formFieldResponse, endpointResponse, sqlSourceResponse] = await Promise.all([
+      listJavaExtensionOptions(),
+      listCelExtensionOptions(),
+      listHttpExtensionOptions(),
+      listSqlExtensionOptions(),
+      listFormFieldExtensionOptions(),
+      listConnectorEndpointOptions(),
+      listSqlDataSourceOptions()
+    ])
+    extensionOptions.value = [
+      ...(Array.isArray(javaResponse?.data) ? javaResponse.data : []),
+      ...(Array.isArray(celResponse?.data) ? celResponse.data : []),
+      ...(Array.isArray(httpResponse?.data) ? httpResponse.data : []),
+      ...(Array.isArray(sqlResponse?.data) ? sqlResponse.data : [])
+    ]
+    formFieldOptions.value = Array.isArray(formFieldResponse?.data) ? formFieldResponse.data : []
+    connectorEndpoints.value = Array.isArray(endpointResponse?.data) ? endpointResponse.data : []
+    sqlDataSources.value = Array.isArray(sqlSourceResponse?.data) ? sqlSourceResponse.data : []
+  } catch (error) {
+    extensionOptions.value = []
+    formFieldOptions.value = []
+    connectorEndpoints.value = []
+    sqlDataSources.value = []
+    emit('error', error)
+  } finally {
+    extensionLoading.value = false
+  }
+}
+
+/**
+ * 更新活动的 Flowable 异步作业属性和标准补偿标志。
+ * @returns {void} 所有字段通过 bpmn-js 命令栈写入并支持撤销、重做。
+ */
+function updateActivityProperties() {
+  updateProperties({
+    'flowable:async': Boolean(propertyState.asyncBefore),
+    'flowable:asyncLeave': Boolean(propertyState.asyncAfter),
+    'flowable:exclusive': Boolean(propertyState.exclusive),
+    isForCompensation: Boolean(propertyState.forCompensation)
+  })
+}
+
+/**
+ * 更新当前 FlowNode 的受控执行监听器。
+ * @param {Array<object>} listeners 属性面板提交的事件、扩展键和 JSON 配置数组。
+ * @returns {void} 配置合法时通过 moddle 命令栈写入，异常时恢复当前 BPMN 状态。
+ */
+function updateBusinessExecutionListeners(listeners) {
+  updateBusinessListeners('EXECUTION', listeners)
+}
+
+/**
+ * 更新当前 UserTask 的受控任务监听器，同时保留系统身份审计监听器。
+ * @param {Array<object>} listeners 属性面板提交的事件、扩展键和 JSON 配置数组。
+ * @returns {void} 配置合法时通过 moddle 命令栈写入，异常时恢复当前 BPMN 状态。
+ */
+function updateBusinessTaskListeners(listeners) {
+  updateBusinessListeners('TASK', listeners)
+}
+
+/**
+ * 校验并写入当前流程或元素的 Flowable 通用扩展属性。
+ * @param {Array<{name:string,value:string}>} properties 属性编辑器提交的完整名值列表。
+ * @returns {void} 非法名称、重复名称、超长值或超量输入会恢复当前 XML 并上报错误。
+ */
+function updateExtensionProperties(properties) {
+  if (designerLocked.value || !modeler || !selectedElement.value) return
+  try {
+    if (!Array.isArray(properties) || properties.length > 32) {
+      throw new Error('单个元素最多允许 32 个扩展属性')
+    }
+    const normalized = properties.map(item => ({
+      name: String(item?.name || '').trim(),
+      value: String(item?.value || '')
+    }))
+    const names = new Set()
+    for (const item of normalized) {
+      if (!EXTENSION_PROPERTY_NAME_PATTERN.test(item.name) || item.name.startsWith('approva.')) {
+        throw new Error('扩展属性名必须为合法非保留标识')
+      }
+      if (item.value.length > 1024) throw new Error('扩展属性值不能超过 1024 个字符')
+      if (names.has(item.name)) throw new Error('同一元素的扩展属性名不能重复')
+      names.add(item.name)
+    }
+
+    const businessObject = selectedBusinessObject.value
+    const moddle = modeler.get('moddle')
+    const preservedValues = (businessObject.extensionElements?.values || [])
+      .filter(value => value?.$type !== 'flowable:Properties')
+    const propertyContainer = normalized.length
+      ? moddle.create('flowable:Properties', {
+          values: normalized.map(item => moddle.create('flowable:Property', item))
+        })
+      : undefined
+    const extensionValues = propertyContainer
+      ? [...preservedValues, propertyContainer]
+      : preservedValues
+    const extensionElements = extensionValues.length
+      ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
+      : undefined
+    modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
+      extensionElements
+    })
+  } catch (error) {
+    loadPropertyState(selectedElement.value)
+    emit('error', error)
+  }
+}
+
+/**
+ * 校验并写入固定 Bean 业务监听器，禁止重复事件、未知目录和非对象 JSON 配置。
+ * @param {'EXECUTION'|'TASK'} kind 监听器种类，决定 moddle 类型和目标属性。
+ * @param {Array<object>} listeners 待写入的业务监听器编辑值。
+ * @returns {void} 无返回值；失败时向页面上报稳定错误并回读原状态。
+ */
+function updateBusinessListeners(kind, listeners) {
+  if (designerLocked.value || !modeler || !selectedElement.value) return
+  try {
+    const allowedEvents = kind === 'TASK'
+      ? new Set(['create', 'assignment', 'complete', 'delete'])
+      : new Set(['start', 'end', 'take'])
+    const seenEvents = new Set()
+    const moddle = modeler.get('moddle')
+    const generated = (Array.isArray(listeners) ? listeners : []).map(listener => {
+      const event = String(listener?.event || '').trim()
+      const extensionKey = String(listener?.extensionKey || '').trim()
+      if (!allowedEvents.has(event) || !seenEvents.add(event)) {
+        throw new Error('同一元素的业务监听器事件必须合法且唯一')
+      }
+      const option = businessListenerOptions.value.find(item => item.extensionKey === extensionKey)
+      if (!option) throw new Error('请选择已启用的 Java 业务监听处理器')
+      const config = JSON.parse(String(listener?.config || '{}'))
+      if (!config || Array.isArray(config) || typeof config !== 'object') {
+        throw new Error('业务监听器配置必须是 JSON 对象')
+      }
+      return moddle.create(kind === 'TASK' ? 'flowable:TaskListener' : 'flowable:ExecutionListener', {
+        event,
+        delegateExpression: BUSINESS_LISTENER_DELEGATE_EXPRESSION,
+        fields: [
+          moddle.create('flowable:Field', { name: EXTENSION_KEY_FIELD, stringValue: extensionKey }),
+          moddle.create('flowable:Field', { name: EXTENSION_CONFIG_FIELD, stringValue: JSON.stringify(config) })
+        ]
+      })
+    })
+    const businessObject = selectedBusinessObject.value
+    const listenerType = kind === 'TASK' ? 'flowable:TaskListener' : 'flowable:ExecutionListener'
+    const preserved = (businessObject.extensionElements?.values || []).filter(value => (
+      value?.$type !== listenerType
+      || value?.delegateExpression !== BUSINESS_LISTENER_DELEGATE_EXPRESSION
+    ))
+    const extensionValues = [...preserved, ...generated]
+    const extensionElements = extensionValues.length
+      ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
+      : undefined
+    modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
+      extensionElements
+    })
+  } catch (error) {
+    loadPropertyState(selectedElement.value)
+    emit('error', error)
+  }
+}
+
+/**
+ * 更新调用活动的标准流程引用和 Flowable 实例关联属性。
+ * @returns {void} 空值会删除对应属性，部署门禁负责校验必填引用是否存在。
+ */
+function updateCallActivityProperties() {
+  updateProperties({
+    calledElement: propertyState.calledElement.trim() || undefined,
+    'flowable:businessKey': propertyState.businessKey.trim() || undefined,
+    'flowable:processInstanceName': propertyState.processInstanceName.trim() || undefined
+  })
+}
+
+/**
+ * 返回引用型事件的根元素类型、引用属性和业务键字段。
+ * @param {string} eventDefinitionType BPMN 事件定义类型。
+ * @returns {object|undefined} 引用配置；非引用型事件返回 undefined。
+ */
+function eventReferenceConfig(eventDefinitionType) {
+  return {
+    'bpmn:MessageEventDefinition': {
+      rootType: 'bpmn:Message', referenceProperty: 'messageRef', keyProperty: 'name', idPrefix: 'Message'
+    },
+    'bpmn:SignalEventDefinition': {
+      rootType: 'bpmn:Signal', referenceProperty: 'signalRef', keyProperty: 'name', idPrefix: 'Signal'
+    },
+    'bpmn:ErrorEventDefinition': {
+      rootType: 'bpmn:Error', referenceProperty: 'errorRef', keyProperty: 'errorCode', idPrefix: 'Error'
+    },
+    'bpmn:EscalationEventDefinition': {
+      rootType: 'bpmn:Escalation', referenceProperty: 'escalationRef', keyProperty: 'escalationCode', idPrefix: 'Escalation'
+    }
+  }[eventDefinitionType]
+}
+
+/**
+ * 沿 moddle 父级查找 Definitions，供事件引用登记为 BPMN 根元素。
+ * @param {object|undefined} businessObject 当前事件业务对象。
+ * @returns {object|undefined} BPMN Definitions；找不到时返回 undefined。
+ */
+function findDefinitions(businessObject) {
+  let current = businessObject
+  while (current && current.$type !== 'bpmn:Definitions') current = current.$parent
+  return current
+}
+
+/**
+ * 将业务键转换为稳定且合法的 BPMN 根元素标识片段。
+ * @param {string} value 消息、信号、错误或升级的业务键。
+ * @returns {string} 可用于 BPMN id 的非空片段。
+ */
+function eventReferenceIdPart(value) {
+  const normalized = value.replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^[^A-Za-z_]+/, '')
+  return normalized || 'Reference'
+}
+
+/**
+ * 查找或创建消息、信号、错误、升级根元素，并通过命令栈登记到 Definitions。
+ * @param {object} eventDefinition 当前事件定义。
+ * @param {object} config 引用类型配置。
+ * @param {string} key 用户维护的稳定业务键。
+ * @returns {object|undefined} 可写入事件定义的根元素；空键返回 undefined。
+ */
+function resolveEventRootReference(eventDefinition, config, key) {
+  if (!key) return undefined
+  const definitions = findDefinitions(eventDefinition)
+  if (!definitions) return undefined
+  const roots = Array.isArray(definitions.rootElements) ? definitions.rootElements : []
+  const existing = roots.find(root => root.$type === config.rootType
+    && (root[config.keyProperty] === key || root.name === key || root.id === key))
+  if (existing) return existing
+  const reference = modeler.get('moddle').create(config.rootType, {
+    id: `${config.idPrefix}_${eventReferenceIdPart(key)}`,
+    [config.keyProperty]: key,
+    ...(config.keyProperty === 'name' ? {} : { name: key })
+  })
+  modeler.get('modeling').updateModdleProperties(selectedElement.value, definitions, {
+    rootElements: [...roots, reference]
+  })
+  return reference
+}
+
+/**
+ * 更新当前事件定义的根引用、定时表达式和边界中断语义。
+ * @returns {void} 事件内部对象使用 updateModdleProperties，确保 XML 与撤销栈一致。
+ */
+function updateEventProperties() {
+  if (designerLocked.value || !modeler || !selectedElement.value) return
+  const businessObject = selectedBusinessObject.value
+  const eventDefinition = businessObject?.eventDefinitions?.[0]
+  if (isType('bpmn:BoundaryEvent')) {
+    updateProperties({ cancelActivity: Boolean(propertyState.cancelActivity) })
+  }
+  if (!eventDefinition) return
+  const modeling = modeler.get('modeling')
+  const config = eventReferenceConfig(eventDefinition.$type)
+  if (config) {
+    const key = propertyState.eventReference.trim()
+    const reference = resolveEventRootReference(eventDefinition, config, key)
+    modeling.updateModdleProperties(selectedElement.value, eventDefinition, {
+      [config.referenceProperty]: reference
+    })
+    return
+  }
+  if (eventDefinition.$type !== 'bpmn:TimerEventDefinition') return
+  const timerType = ['timeDate', 'timeDuration', 'timeCycle'].includes(propertyState.timerDefinitionType)
+    ? propertyState.timerDefinitionType
+    : 'timeDuration'
+  const expression = propertyState.timerDefinition.trim()
+  const formalExpression = expression
+    ? modeler.get('moddle').create('bpmn:FormalExpression', { body: expression })
+    : undefined
+  modeling.updateModdleProperties(selectedElement.value, eventDefinition, {
+    timeDate: timerType === 'timeDate' ? formalExpression : undefined,
+    timeDuration: timerType === 'timeDuration' ? formalExpression : undefined,
+    timeCycle: timerType === 'timeCycle' ? formalExpression : undefined
   })
 }
 
@@ -702,7 +1451,7 @@ function updateDocumentation() {
 }
 
 /**
- * 创建、更新或删除用户任务多实例配置；动态模式一次写入完整固定技术契约。
+ * 创建、更新或删除活动循环配置；动态模式一次写入完整固定技术契约。
  * @returns {void} 无返回值。
  */
 function updateMultiInstance() {
@@ -715,6 +1464,27 @@ function updateMultiInstance() {
     return
   }
   const moddle = modeler.get('moddle')
+  if (propertyState.multiInstanceType === 'standard') {
+    const maximumText = propertyState.loopMaximum.trim()
+    const maximum = maximumText ? Number(maximumText) : undefined
+    if (maximumText && (!Number.isInteger(maximum) || maximum < 1 || maximum > 10000)) {
+      loadPropertyState(selectedElement.value)
+      emit('error', new Error('最大循环次数必须是 1 至 10000 的整数'))
+      return
+    }
+    const loopCondition = propertyState.loopCondition.trim()
+    const standardLoop = moddle.create('bpmn:StandardLoopCharacteristics', {
+      testBefore: Boolean(propertyState.testBefore),
+      loopMaximum: maximum,
+      loopCondition: loopCondition
+        ? moddle.create('bpmn:FormalExpression', { body: loopCondition })
+        : undefined
+    })
+    const changes = { loopCharacteristics: standardLoop }
+    if (wasControlled) resetControlledAssignment(changes)
+    updateProperties(changes)
+    return
+  }
   const controlled = propertyState.multiInstanceType === 'controlled'
   const leavingControlled = !controlled && wasControlled
   let collection = controlled
@@ -833,7 +1603,115 @@ function redo() {
  * @returns {void} 无返回值。
  */
 function fitViewport() {
-  if (!designerLocked.value && modeler) modeler.get('canvas').zoom('fit-viewport')
+  if (designerLocked.value || !modeler) return
+  const canvas = modeler.get('canvas')
+  canvas.zoom('fit-viewport')
+  // 浏览器下一帧才能得到缩放后的真实矩形，再据此避开 Palette、小地图和画布边缘。
+  window.requestAnimationFrame(() => reserveOverlaySafeArea(canvas))
+}
+
+/**
+ * 使用 bpmn-js 元素工厂开始高级元素、展开容器或全局连接工具的真实建模命令。
+ * @param {object} definition AdvancedElementPalette 提供的标准 BPMN 类型和受控创建提示。
+ * @param {MouseEvent} event 菜单项鼠标事件，作为 Modeler 拖放创建起点。
+ * @returns {void} 无返回值；设计器锁定或定义不合法时拒绝启动命令。
+ */
+function createAdvancedElement(definition, event) {
+  if (designerLocked.value || !modeler || !definition || !event) return
+  if (definition.action === 'global-connect') {
+    modeler.get('globalConnect').start(event)
+    return
+  }
+  if (definition.action === 'add-lane') {
+    const selected = selectedElement.value
+    if (!selected || !['bpmn:Participant', 'bpmn:Lane'].includes(selected.businessObject?.$type)) {
+      emit('error', new Error('请先选择池或现有泳道'))
+      return
+    }
+    modeler.get('modeling').addLane(selected, 'bottom')
+    return
+  }
+  if (!/^bpmn:[A-Za-z]+$/.test(definition.type || '')) {
+    emit('error', new Error('高级元素类型不合法'))
+    return
+  }
+
+  const elementFactory = modeler.get('elementFactory')
+  const create = modeler.get('create')
+  if (definition.participant) {
+    create.start(event, elementFactory.createParticipantShape())
+    return
+  }
+
+  const options = {
+    type: definition.type,
+    isExpanded: definition.withStartEvent === true,
+    triggeredByEvent: definition.triggeredByEvent === true,
+    cancelActivity: definition.cancelActivity,
+    eventDefinitionType: definition.eventDefinitionType
+  }
+  if (!definition.withStartEvent) {
+    create.start(event, elementFactory.createShape(options))
+    return
+  }
+
+  // 展开子流程、事件子流程和事务创建时同步放入开始事件，保证容器初始结构可继续建模。
+  const container = elementFactory.createShape({ ...options, x: 0, y: 0 })
+  const startEvent = elementFactory.createShape({
+    type: 'bpmn:StartEvent',
+    x: 40,
+    y: 82,
+    parent: container
+  })
+  create.start(event, [container, startEvent], { hints: { autoSelect: [container] } })
+}
+
+/**
+ * 把流程内容缩放并居中到画布浮层之外的安全区域。
+ * @param {import('diagram-js/lib/core/Canvas').default} canvas bpmn-js 当前画布服务。
+ * @returns {void} 没有可见流程元素或组件已卸载时不调整视口。
+ */
+function reserveOverlaySafeArea(canvas) {
+  if (!modeler || !canvasRef.value) return
+  const canvasBounds = canvasRef.value.getBoundingClientRect()
+  const paletteBounds = canvasRef.value.querySelector('.djs-palette')?.getBoundingClientRect()
+  const minimapBounds = canvasRef.value.querySelector('.djs-minimap')?.getBoundingClientRect()
+  // visibleBounds 表示当前缩放后全部图形和连线的屏幕矩形，用于判断是否仍会被浮层遮挡。
+  const visibleBounds = [...canvasRef.value.querySelectorAll('.djs-element')]
+    .map(element => element.getBoundingClientRect())
+    .filter(bounds => bounds.width > 0 && bounds.height > 0)
+  if (!visibleBounds.length) return
+
+  const safeLeft = Math.max(canvasBounds.left + 20, (paletteBounds?.right || canvasBounds.left) + 20)
+  const safeRight = canvasBounds.right - 20
+  const safeTop = canvasBounds.top + 32
+  const safeBottom = Math.min(canvasBounds.bottom - 32, (minimapBounds?.top || canvasBounds.bottom) - 20)
+  let contentLeft = Math.min(...visibleBounds.map(bounds => bounds.left))
+  let contentRight = Math.max(...visibleBounds.map(bounds => bounds.right))
+  let contentTop = Math.min(...visibleBounds.map(bounds => bounds.top))
+  let contentBottom = Math.max(...visibleBounds.map(bounds => bounds.bottom))
+  const safeWidth = Math.max(1, safeRight - safeLeft)
+  const safeHeight = Math.max(1, safeBottom - safeTop)
+  const contentWidth = Math.max(1, contentRight - contentLeft)
+  const contentHeight = Math.max(1, contentBottom - contentTop)
+  const safeScale = Math.min(1, safeWidth / contentWidth, safeHeight / contentHeight)
+
+  if (safeScale < 1) {
+    canvas.zoom(canvas.zoom() * safeScale * 0.96)
+    const resizedBounds = [...canvasRef.value.querySelectorAll('.djs-element')]
+      .map(element => element.getBoundingClientRect())
+      .filter(bounds => bounds.width > 0 && bounds.height > 0)
+    contentLeft = Math.min(...resizedBounds.map(bounds => bounds.left))
+    contentRight = Math.max(...resizedBounds.map(bounds => bounds.right))
+    contentTop = Math.min(...resizedBounds.map(bounds => bounds.top))
+    contentBottom = Math.max(...resizedBounds.map(bounds => bounds.bottom))
+  }
+
+  // scroll 使用屏幕像素平移，将内容中心对齐安全区域中心，左右端节点保持同时可见。
+  canvas.scroll({
+    dx: (safeLeft + safeRight - contentLeft - contentRight) / 2,
+    dy: (safeTop + safeBottom - contentTop - contentBottom) / 2
+  })
 }
 
 /**
@@ -848,14 +1726,297 @@ function zoomBy(factor) {
 }
 
 /**
+ * 打开系统文件选择器并清除上次选择，保证可连续导入同名 BPMN 文件。
+ * @returns {void} 设计器锁定时不执行。
+ */
+function openImportPicker() {
+  if (designerLocked.value || !importInputRef.value) return
+  importInputRef.value.value = ''
+  importInputRef.value.click()
+}
+
+/**
+ * 读取不超过 2 MiB 的 XML/BPMN 文件并导入真实 Modeler。
+ * @param {Event} event 文件输入框 change 事件。
+ * @returns {Promise<void>} 导入完成后同步 XML；非法文件不修改当前画布。
+ */
+async function handleImportFile(event) {
+  const file = event.target?.files?.[0]
+  if (!file) return
+  if (file.size <= 0 || file.size > 2 * 1024 * 1024) {
+    emit('error', new Error('BPMN 文件大小必须在 2 MiB 以内'))
+    return
+  }
+  try {
+    const xml = await file.text()
+    if (!xml.trim().startsWith('<?xml') && !xml.includes('<definitions')) {
+      throw new Error('所选文件不是 BPMN 2.0 XML')
+    }
+    await importXml(xml)
+  } catch (error) {
+    emit('error', error)
+  }
+}
+
+/**
+ * 从当前事件定义读取引用或定时表达式，保证属性面板与作者 XML 保持一致。
+ * @param {object} businessObject 当前选中 BPMN 元素的业务对象。
+ * @returns {void} 非事件或无事件定义时保留空状态。
+ */
+function loadEventPropertyState(businessObject) {
+  const eventDefinition = businessObject.eventDefinitions?.[0]
+  if (!eventDefinition) return
+  propertyState.eventDefinitionType = eventDefinition.$type || ''
+  const referenceConfig = eventReferenceConfig(eventDefinition.$type)
+  if (referenceConfig) {
+    const reference = eventDefinition[referenceConfig.referenceProperty]
+    propertyState.eventReference = reference?.[referenceConfig.keyProperty]
+      || reference?.name
+      || reference?.id
+      || ''
+    return
+  }
+  if (eventDefinition.$type !== 'bpmn:TimerEventDefinition') return
+  const timerType = ['timeDate', 'timeDuration', 'timeCycle']
+    .find(type => eventDefinition[type]) || 'timeDuration'
+  propertyState.timerDefinitionType = timerType
+  propertyState.timerDefinition = eventDefinition[timerType]?.body || ''
+}
+
+/**
+ * 将画布恢复为只包含一个可执行流程的空 BPMN 文档。
+ * @returns {Promise<void>} 用户确认后替换当前画布并进入可撤销的新设计状态。
+ */
+async function clearDiagram() {
+  if (designerLocked.value) return
+  try {
+    await ElMessageBox.confirm('清空后当前未保存的流程元素将丢失。', '清空画布', {
+      type: 'warning',
+      confirmButtonText: '清空',
+      cancelButtonText: '取消'
+    })
+    const processId = String(props.model.modelKey || 'workflow_process').replace(/[^A-Za-z0-9_.-]/g, '_')
+    const processName = escapeXml(props.model.modelName || '新流程')
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  xmlns:flowable="http://flowable.org/bpmn"
+  targetNamespace="http://ruoyi.example/workflow">
+  <process id="${escapeXml(processId)}" name="${processName}" isExecutable="true" />
+  <bpmndi:BPMNDiagram id="BPMNDiagram_${escapeXml(processId)}">
+    <bpmndi:BPMNPlane id="BPMNPlane_${escapeXml(processId)}" bpmnElement="${escapeXml(processId)}" />
+  </bpmndi:BPMNDiagram>
+</definitions>`
+    await importXml(xml)
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') emit('error', error)
+  }
+}
+
+/**
+ * 对当前选择的可移动图形执行 bpmn-js 原生命令栈对齐。
+ * @param {'left'|'center'|'right'|'top'|'middle'|'bottom'} type 对齐方向。
+ * @returns {void} 不足两个元素或设计器锁定时不执行。
+ */
+function alignSelection(type) {
+  if (designerLocked.value || !modeler) return
+  const elements = modeler.get('selection').get()
+  if (elements.length >= 2) modeler.get('alignElements').trigger(elements, type)
+}
+
+/**
+ * 对当前选择的可移动图形执行 bpmn-js 原生命令栈等距分布。
+ * @param {'horizontal'|'vertical'} orientation 水平或垂直分布方向。
+ * @returns {void} 不足三个元素或设计器锁定时不执行。
+ */
+function distributeSelection(orientation) {
+  if (designerLocked.value || !modeler) return
+  const elements = modeler.get('selection').get()
+  if (elements.length >= 3) modeler.get('distributeElements').trigger(elements, orientation)
+}
+
+/**
+ * 按指定格式导出 BPMN/XML 或当前画布 SVG。
+ * @param {'bpmn'|'xml'|'svg'} format 导出格式。
+ * @returns {Promise<void>} 下载失败时触发 error。
+ */
+async function exportDiagram(format) {
+  if (designerLocked.value || !modeler) return
+  try {
+    const name = String(props.model.modelKey || 'workflow').replace(/[^A-Za-z0-9_.-]/g, '_')
+    if (format === 'svg') {
+      const { svg } = await modeler.saveSVG()
+      Download.saveAs(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }), `${name}.svg`)
+      return
+    }
+    const xml = await emitPersistedXml()
+    const extension = format === 'xml' ? 'xml' : 'bpmn20.xml'
+    Download.saveAs(new Blob([xml], { type: 'application/xml;charset=utf-8' }), `${name}.${extension}`)
+  } catch (error) {
+    emit('error', error)
+  }
+}
+
+/**
+ * 将 XML Element 递归转换为无循环的 JSON 预览结构。
+ * @param {Element} element 当前 XML 元素。
+ * @returns {object} 包含节点名、属性、文本和子节点的结构化对象。
+ */
+function xmlElementToJson(element) {
+  const attributes = Object.fromEntries([...element.attributes].map(item => [item.name, item.value]))
+  const children = [...element.children].map(xmlElementToJson)
+  const directText = [...element.childNodes]
+    .filter(node => node.nodeType === Node.TEXT_NODE)
+    .map(node => node.textContent.trim())
+    .filter(Boolean)
+    .join(' ')
+  const result = { name: element.tagName }
+  if (Object.keys(attributes).length) result.attributes = attributes
+  if (directText) result.text = directText
+  if (children.length) result.children = children
+  return result
+}
+
+/**
+ * 打开 XML 或结构化 JSON 预览，不使用字符串替换伪造 BPMN 结构。
+ * @param {'xml'|'json'} format 预览格式。
+ * @returns {Promise<void>} 序列化或解析失败时触发 error。
+ */
+async function openPreview(format) {
+  if (designerLocked.value) return
+  try {
+    const xml = await emitPersistedXml()
+    previewTitle.value = format === 'json' ? 'JSON 预览' : 'XML 预览'
+    if (format === 'json') {
+      const documentNode = new DOMParser().parseFromString(xml, 'application/xml')
+      if (documentNode.querySelector('parsererror')) throw new Error('BPMN XML 无法转换为 JSON')
+      previewContent.value = JSON.stringify(xmlElementToJson(documentNode.documentElement), null, 2)
+    } else {
+      previewContent.value = xml
+    }
+    previewVisible.value = true
+  } catch (error) {
+    emit('error', error)
+  }
+}
+
+/**
+ * 把当前源码预览复制到系统剪贴板。
+ * @returns {Promise<void>} 浏览器不允许剪贴板访问时报告错误。
+ */
+async function copyPreview() {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('当前浏览器不支持剪贴板写入')
+    await navigator.clipboard.writeText(previewContent.value)
+    ElMessage.success('已复制')
+  } catch (error) {
+    emit('error', error)
+  }
+}
+
+/**
+ * 调用无副作用服务端编译校验，并保存结构化诊断供用户定位。
+ * @param {boolean} showResult 是否打开校验结果弹窗。
+ * @returns {Promise<boolean>} true 表示通过保存和部署共同门禁。
+ */
+async function runServerValidation(showResult) {
+  if (props.saving) return false
+  validating.value = true
+  try {
+    const xml = await emitPersistedXml()
+    const response = await validateModelBpmn(xml)
+    const report = response.data || {}
+    validationIssues.value = Array.isArray(report.issues) ? report.issues : []
+    if (showResult) validationVisible.value = true
+    return report.valid === true
+      && validationIssues.value.every(issue => issue.severity !== 'ERROR')
+  } finally {
+    validating.value = false
+  }
+}
+
+/**
+ * 同步系统深色主题媒体查询，仅在偏好为 SYSTEM 时影响设计器外观。
+ * @param {MediaQueryListEvent|MediaQueryList} event 系统颜色方案媒体查询结果。
+ * @returns {void} 更新响应式主题状态。
+ */
+function handleSystemTheme(event) {
+  systemDark.value = Boolean(event.matches)
+}
+
+/**
+ * 处理设计器级快捷键，Ctrl/Cmd+S 走完整本地与服务端保存门禁。
+ * @param {KeyboardEvent} event 浏览器键盘事件。
+ * @returns {void} 焦点不在设计器主体或正在保存时不接管浏览器行为。
+ */
+function handleDesignerShortcut(event) {
+  const activeElement = document.activeElement
+  if (!bodyRef.value?.contains(activeElement)) return
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    requestSave()
+  }
+}
+
+/**
+ * 请求页面把字段完整的偏好写入正式数据库。
+ * @param {object} preference 设计器设置抽屉提交的完整偏好。
+ * @returns {void} 真实结果由 preference Prop 回写后应用。
+ */
+function requestPreferenceSave(preference) {
+  emit('preference-save', normalizePreference(preference))
+}
+
+/**
+ * 切换属性面板折叠状态，并要求页面持久化完整偏好。
+ * @returns {void} 服务端成功前不改变已应用状态。
+ */
+function toggleProperties() {
+  requestPreferenceSave({
+    ...appliedPreference.value,
+    propertiesCollapsed: !appliedPreference.value.propertiesCollapsed
+  })
+}
+
+/**
+ * 切换 Token 流程模拟，并要求页面持久化完整偏好。
+ * @returns {void} 服务端成功后由偏好监听器进入或退出模拟。
+ */
+function toggleSimulation() {
+  requestPreferenceSave({
+    ...appliedPreference.value,
+    tokenSimulationEnabled: !appliedPreference.value.tokenSimulationEnabled
+  })
+}
+
+/**
+ * 把服务端偏好同步到网格、小地图、Lint 和 Token 模拟服务。
+ * @returns {void} Modeler 尚未初始化时只保留 Prop 状态。
+ */
+function applyDesignerPreference() {
+  if (!modeler) return
+  const preference = appliedPreference.value
+  modeler.get('gridSnapping').setActive(preference.gridEnabled)
+  modeler.get('minimap').toggle(preference.minimapEnabled)
+  modeler.get('linting').toggle(preference.lintEnabled)
+  const toggleMode = modeler.get('toggleMode')
+  if (simulationActive.value !== preference.tokenSimulationEnabled) {
+    toggleMode.toggleMode(preference.tokenSimulationEnabled)
+  }
+}
+
+/**
  * 导出可被后端再次保存或部署的 BPMN XML 文件。
  * @returns {Promise<void>} 导出失败时触发 error。
  */
 async function downloadXml() {
   if (designerLocked.value) return
   try {
+    // 公开下载方法必须在自身边界显式标准化内部审计监听器，避免调用方绕过通用导出分支。
     const xml = await emitPersistedXml()
-    const name = props.model.modelKey || 'workflow'
+    const name = String(props.model.modelKey || 'workflow').replace(/[^A-Za-z0-9_.-]/g, '_')
     Download.saveAs(new Blob([xml], { type: 'application/xml;charset=utf-8' }), `${name}.bpmn20.xml`)
   } catch (error) {
     emit('error', error)
@@ -874,6 +2035,11 @@ async function requestSave() {
   try {
     const error = validateDiagram()
     if (error) throw new Error(error)
+    const serverValid = await runServerValidation(false)
+    if (!serverValid) {
+      validationVisible.value = true
+      return
+    }
     emit('save', await emitPersistedXml())
   } catch (error) {
     emit('error', error)
@@ -907,7 +2073,10 @@ function validateDiagram() {
     const flowElements = process.businessObject.flowElements || []
     const startEvents = flowElements.filter(item => item.$type === 'bpmn:StartEvent')
     if (startEvents.length !== 1) return '每个流程必须且只能包含一个开始节点'
-    if (!startEvents[0].get('flowable:formKey')) return '开始节点必须配置发起表单'
+    const startEvent = startEvents[0]
+    if (!startEvent.get('flowable:formKey') && !hasEmbeddedFormFields(startEvent)) {
+      return '开始节点必须配置发起表单'
+    }
   }
   const userTasks = registry.filter(element => element.type === 'bpmn:UserTask')
   for (const element of userTasks) {
@@ -916,6 +2085,16 @@ function validateDiagram() {
     if (loopError) return loopError
   }
   return ''
+}
+
+/**
+ * 判断 BPMN 元素是否包含至少一个 Flowable 内嵌表单字段。
+ * @param {object} businessObject StartEvent 或 UserTask 的 moddle 业务对象。
+ * @returns {boolean} extensionElements 中存在 FormProperty 时返回 true。
+ */
+function hasEmbeddedFormFields(businessObject) {
+  return (businessObject?.extensionElements?.values || [])
+    .some(value => value?.$type === 'flowable:FormProperty')
 }
 
 /**
@@ -954,18 +2133,40 @@ function validateUserTaskMultiInstance(task) {
 watch(() => props.modelValue, value => {
   if (value && value !== lastExportedXml.value && modeler) importXml(value)
 })
+watch(() => props.preference, () => {
+  applyDesignerPreference()
+  settingsVisible.value = false
+}, { deep: true })
 watch(designerLocked, handleDesignerLock)
 
-onMounted(() => importXml(props.modelValue))
+onMounted(() => {
+  systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
+  handleSystemTheme(systemThemeQuery)
+  systemThemeQuery.addEventListener('change', handleSystemTheme)
+  window.addEventListener('keydown', handleDesignerShortcut)
+  loadExtensionOptions()
+  loadDmnOptions()
+  importXml(props.modelValue)
+})
 onBeforeUnmount(() => {
   window.clearTimeout(changeTimer)
+  window.removeEventListener('keydown', handleDesignerShortcut)
+  systemThemeQuery?.removeEventListener('change', handleSystemTheme)
   identitySearchTimers.forEach(timer => window.clearTimeout(timer))
   identitySearchTimers.clear()
   if (modeler) modeler.destroy()
   modeler = undefined
 })
 
-defineExpose({ requestSave, downloadXml, fitViewport, getXml: () => emitPersistedXml() })
+defineExpose({
+  requestSave,
+  downloadXml,
+  exportDiagram,
+  openPreview,
+  runServerValidation,
+  fitViewport,
+  getXml: () => emitPersistedXml()
+})
 </script>
 
 <style scoped lang="scss">
@@ -979,68 +2180,78 @@ defineExpose({ requestSave, downloadXml, fitViewport, getXml: () => emitPersiste
   border-radius: 6px;
 }
 
-.process-designer__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px 0 8px;
-  border-bottom: 1px solid var(--el-border-color-light);
+.process-designer--dark {
+  --el-bg-color: #181a1f;
+  --el-bg-color-overlay: #202329;
+  --el-fill-color-light: #292d34;
+  --el-border-color-light: #343941;
+  --el-border-color-lighter: #2d3239;
+  --el-text-color-primary: #e7e9ed;
+  --el-text-color-regular: #c3c8d0;
+  --el-text-color-secondary: #9299a4;
 }
 
-.process-designer__toolbar-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+.process-designer__file-input {
+  display: none;
 }
 
 .process-designer__body {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   min-height: 0;
+}
+
+.process-designer__body--properties-collapsed {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .process-designer__canvas {
   min-width: 0;
   min-height: 0;
   background-color: #fbfcfd;
+  outline: none;
+}
+
+.process-designer--grid .process-designer__canvas {
   background-image: linear-gradient(#eef1f4 1px, transparent 1px), linear-gradient(90deg, #eef1f4 1px, transparent 1px);
   background-size: 20px 20px;
 }
 
-.process-designer__properties {
-  min-width: 0;
-  overflow: hidden;
-  border-left: 1px solid var(--el-border-color-light);
+.process-designer--dark .process-designer__canvas {
+  background-color: #15171b;
 }
 
-.process-designer__properties-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 46px;
-  padding: 0 14px;
-  font-size: 14px;
-  font-weight: 600;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+.process-designer--dark.process-designer--grid .process-designer__canvas {
+  background-image: linear-gradient(#252930 1px, transparent 1px), linear-gradient(90deg, #252930 1px, transparent 1px);
 }
 
-.process-designer__properties-title .el-tag {
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.process-designer__source :deep(textarea) {
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
-.process-designer__properties-scroll {
-  height: calc(100% - 46px);
+:deep(.bts-toggle-mode) {
+  display: none;
 }
 
-.process-designer__form {
-  padding: 14px;
+.process-designer--dark :deep(.djs-palette),
+.process-designer--dark :deep(.djs-context-pad),
+.process-designer--dark :deep(.djs-popup),
+.process-designer--dark :deep(.djs-minimap) {
+  color: #d7dbe2;
+  background: #202329;
+  border-color: #343941;
 }
 
-.process-designer__form :deep(.el-select),
-.process-designer__form :deep(.el-segmented) {
-  width: 100%;
+.process-designer--dark :deep(.djs-element .djs-visual > :first-child) {
+  fill: #202329 !important;
+  stroke: #aeb5c0 !important;
+}
+
+.process-designer--dark :deep(.djs-label) {
+  fill: #e7e9ed !important;
 }
 
 :deep(.djs-minimap) {
@@ -1050,19 +2261,29 @@ defineExpose({ requestSave, downloadXml, fitViewport, getXml: () => emitPersiste
   border-color: var(--el-border-color-light);
 }
 
-@media (max-width: 900px) {
+:deep(.djs-minimap .toggle) {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  color: var(--el-text-color-regular);
+  font-size: 0;
+}
+
+:deep(.djs-minimap .toggle::before) {
+  content: "\00d7";
+  font-size: 18px;
+  line-height: 1;
+}
+
+:deep(.djs-minimap:not(.open) .toggle::before) {
+  content: "+";
+}
+
+@media (max-width: 1365px) {
   .process-designer {
-    height: auto !important;
-  }
-
-  .process-designer__body {
-    grid-template-columns: 1fr;
-    grid-template-rows: 560px 360px;
-  }
-
-  .process-designer__properties {
-    border-top: 1px solid var(--el-border-color-light);
-    border-left: 0;
+    min-width: 1040px;
   }
 }
 </style>

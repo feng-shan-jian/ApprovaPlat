@@ -15,44 +15,51 @@ import com.ruoyi.web.controller.workflow.WorkflowRbacMatrix.InventoryEndpoint;
 import com.ruoyi.web.controller.workflow.WorkflowRbacMatrix.PermissionMode;
 
 /**
- * 工作流 9 个 Controller、70 个 mapping 和 5x70 URL 权限矩阵的静态契约测试。
+ * 工作流 16 个 Controller、103 个 mapping 和 5x103 URL 权限矩阵的静态契约测试。
  */
 class WorkflowRbacMatrixContractTest
 {
     /** 每个正式工作流 Controller 的方法级 mapping 冻结数量。 */
-    private static final Map<String, Long> EXPECTED_CONTROLLER_COUNTS = Map.of(
-            "WfAttachmentController", 4L,
-            "WfCategoryController", 7L,
-            "WfDeployController", 5L,
-            "WfFormController", 6L,
-            "WfIdentityController", 1L,
-            "WfInstanceController", 2L,
-            "WfModelController", 11L,
-            "WfProcessController", 19L,
-            "WfTaskController", 15L);
+    private static final Map<String, Long> EXPECTED_CONTROLLER_COUNTS = Map.ofEntries(
+            Map.entry("WfAttachmentController", 4L),
+            Map.entry("WfCategoryController", 7L),
+            Map.entry("WfDeployController", 5L),
+            Map.entry("WfDesignerController", 2L),
+            Map.entry("WfConnectorController", 5L),
+            Map.entry("WfDmnController", 4L),
+            Map.entry("WfExtensionController", 11L),
+            Map.entry("WfSqlDataSourceController", 5L),
+            Map.entry("WfIntegrationCredentialController", 4L),
+            Map.entry("WfRuntimeEventAuditController", 1L),
+            Map.entry("WfFormController", 6L),
+            Map.entry("WfIdentityController", 1L),
+            Map.entry("WfInstanceController", 2L),
+            Map.entry("WfModelController", 12L),
+            Map.entry("WfProcessController", 19L),
+            Map.entry("WfTaskController", 15L));
 
     /** 每个角色按正式职责分离 SQL 应得到的 URL 层允许入口数量。 */
     private static final Map<String, Long> EXPECTED_ALLOW_COUNTS = Map.of(
-            "workflow_admin", 70L,
-            "workflow_designer", 30L,
+            "workflow_admin", 103L,
+            "workflow_designer", 51L,
             "workflow_starter", 20L,
             "workflow_approver", 29L,
-            "workflow_auditor", 17L);
+            "workflow_auditor", 18L);
 
     /**
      * 逐项冻结 Controller、handler、HTTP 动词、完整路径及 PreAuthorize 规则。
      *
-     * @return void，无返回值；源码与 70 行正式矩阵任一漂移时测试失败
+     * @return void，无返回值；源码与 103 行正式矩阵任一漂移时测试失败
      */
     @Test
-    void freezesNineControllersAndSeventyMappings()
+    void freezesSixteenControllersAndOneHundredTwoMappings()
     {
         List<Endpoint> matrix = WorkflowRbacMatrix.load();
         Map<String, InventoryEndpoint> inventory = WorkflowRbacMatrix.reflectInventory();
 
-        assertThat(WorkflowRbacMatrix.CONTROLLERS).hasSize(9);
-        assertThat(matrix).hasSize(70);
-        assertThat(inventory).hasSize(70);
+        assertThat(WorkflowRbacMatrix.CONTROLLERS).hasSize(16);
+        assertThat(matrix).hasSize(103);
+        assertThat(inventory).hasSize(103);
         assertThat(matrix.stream().collect(Collectors.groupingBy(
                 Endpoint::controller, Collectors.counting())))
                 .containsExactlyInAnyOrderEntriesOf(EXPECTED_CONTROLLER_COUNTS);
@@ -82,12 +89,12 @@ class WorkflowRbacMatrixContractTest
     }
 
     /**
-     * 用正式菜单角色 SQL 反向核对 350 个矩阵单元并冻结允许、拒绝总量。
+     * 用正式菜单角色 SQL 反向核对 515 个矩阵单元并冻结允许、拒绝总量。
      *
      * @return void，无返回值；矩阵与正式职责分离角色授权不一致时测试失败
      */
     @Test
-    void derivesAllThreeHundredFiftyCellsFromProductionRoleSql()
+    void derivesAllFiveHundredTenCellsFromProductionRoleSql()
     {
         List<Endpoint> matrix = WorkflowRbacMatrix.load();
         Map<String, Set<String>> rolePermissions = WorkflowRbacMatrix.loadRolePermissions();
@@ -122,9 +129,9 @@ class WorkflowRbacMatrixContractTest
             allowCounts.put(roleKey, roleAllows);
         }
 
-        assertThat(cellCount).isEqualTo(350L);
+        assertThat(cellCount).isEqualTo(515L);
         assertThat(allowCounts).containsExactlyInAnyOrderEntriesOf(EXPECTED_ALLOW_COUNTS);
-        assertThat(denyCount).isEqualTo(184L);
+        assertThat(denyCount).isEqualTo(294L);
     }
 
     /**

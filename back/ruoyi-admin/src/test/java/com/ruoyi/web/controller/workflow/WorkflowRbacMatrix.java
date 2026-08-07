@@ -43,6 +43,13 @@ final class WorkflowRbacMatrix
             WfAttachmentController.class,
             WfCategoryController.class,
             WfDeployController.class,
+            WfDesignerController.class,
+            WfConnectorController.class,
+            WfDmnController.class,
+            WfExtensionController.class,
+            WfSqlDataSourceController.class,
+            WfIntegrationCredentialController.class,
+            WfRuntimeEventAuditController.class,
             WfFormController.class,
             WfIdentityController.class,
             WfInstanceController.class,
@@ -70,7 +77,7 @@ final class WorkflowRbacMatrix
     }
 
     /**
-     * 从 UTF-8 classpath 资源读取并严格解析 5x70 权限矩阵。
+     * 从 UTF-8 classpath 资源读取并严格解析 5x102 权限矩阵。
      *
      * @return List&lt;Endpoint&gt;，保持 CSV 顺序且每行包含五角色显式预期
      */

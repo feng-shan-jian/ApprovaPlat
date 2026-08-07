@@ -10,6 +10,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 
 class WorkflowFormSubmissionSnapshotCodecTest
 {
@@ -72,6 +73,36 @@ class WorkflowFormSubmissionSnapshotCodecTest
         assertThat(reread.has("injected")).isFalse();
         assertThatThrownBy(() -> snapshot.values().put("extra", reread))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    /**
+     * 验证版本 2 可编码内嵌表单空 formId，同时仍可读取升级前版本 1 模板快照。
+     * @return 无返回值，双来源组合或历史兼容解码错误时测试失败
+     */
+    @Test
+    void supportsEmbeddedSourceAndDecodesLegacyTemplateSnapshot()
+    {
+        String embedded = WorkflowFormSubmissionSnapshotCodec.encodeStart(
+                "deployment-2", WorkflowFormSourceType.EMBEDDED.name(), null,
+                WorkflowFormSourceType.EMBEDDED_FORM_KEY, "start", Map.of("reason", "采购"));
+        WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot embeddedSnapshot =
+                WorkflowFormSubmissionSnapshotCodec.decode(embedded);
+        assertThat(embeddedSnapshot.sourceType()).isEqualTo("EMBEDDED");
+        assertThat(embeddedSnapshot.formId()).isNull();
+
+        String legacy = """
+                {"version":1,"kind":"START","deploymentId":"deployment-1",\
+                "formId":1,"formKey":"key_1","nodeKey":"start","taskId":null,\
+                "taskLocal":false,"values":{"reason":"采购"}}
+                """;
+        WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot legacySnapshot =
+                WorkflowFormSubmissionSnapshotCodec.decode(legacy);
+        assertThat(legacySnapshot.sourceType()).isEqualTo("TEMPLATE");
+        assertThat(legacySnapshot.formId()).isEqualTo(1L);
+
+        assertDataError(() -> WorkflowFormSubmissionSnapshotCodec.encodeStart(
+                "deployment-2", WorkflowFormSourceType.EMBEDDED.name(), 1L,
+                WorkflowFormSourceType.EMBEDDED_FORM_KEY, "start", Map.of()));
     }
 
     /**

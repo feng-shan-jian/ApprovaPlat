@@ -104,7 +104,18 @@ final class WorkflowRbacAllowFixture
             "WfModelController#add", "WfModelController#edit",
             "WfModelController#save", "WfModelController#latest",
             "WfModelController#remove", "WfModelController#deployModel",
-            "WfModelController#export", "WfProcessController#startExport",
+            "WfModelController#export", "WfExtensionController#create",
+            "WfExtensionController#createVersion", "WfExtensionController#changeStatus",
+            "WfExtensionController#remove",
+            "WfConnectorController#create", "WfConnectorController#update",
+            "WfConnectorController#status",
+            "WfDmnController#deploy", "WfDmnController#delete",
+            "WfSqlDataSourceController#create", "WfSqlDataSourceController#update",
+            "WfSqlDataSourceController#status",
+            "WfIntegrationCredentialController#create",
+            "WfIntegrationCredentialController#rotate",
+            "WfIntegrationCredentialController#revoke",
+            "WfProcessController#startExport",
             "WfProcessController#ownExport", "WfProcessController#managedExport",
             "WfProcessController#todoExport", "WfProcessController#claimExport",
             "WfProcessController#finishedExport", "WfProcessController#copyExport",
@@ -268,6 +279,13 @@ final class WorkflowRbacAllowFixture
                 case "WfAttachmentController" -> executeAttachment(roleKey, endpoint);
                 case "WfCategoryController" -> executeCategory(roleKey, endpoint);
                 case "WfDeployController" -> executeDeploy(roleKey, endpoint);
+                case "WfDesignerController" -> executeDesigner(roleKey, endpoint);
+                case "WfConnectorController" -> executeConnector(roleKey, endpoint);
+                case "WfDmnController" -> executeDmn(roleKey, endpoint);
+                case "WfExtensionController" -> executeExtension(roleKey, endpoint);
+                case "WfSqlDataSourceController" -> executeSqlDataSource(roleKey, endpoint);
+                case "WfIntegrationCredentialController" -> executeIntegrationCredential(roleKey, endpoint);
+                case "WfRuntimeEventAuditController" -> executeRuntimeEventAudit(roleKey, endpoint);
                 case "WfFormController" -> executeForm(roleKey, endpoint);
                 case "WfIdentityController" -> executeIdentity(roleKey, endpoint);
                 case "WfInstanceController" -> executeInstance(roleKey, endpoint);
@@ -304,6 +322,875 @@ final class WorkflowRbacAllowFixture
         {
             return Execution.failed("ALLOW_FIXTURE_RUNTIME_FAILURE");
         }
+    }
+
+    /**
+     * 执行集成账号脱敏列表、一次性 Token 创建、轮换和吊销真实链路。
+     * @param roleKey String，当前管理员角色
+     * @param endpoint Endpoint，集成账号管理入口
+     * @return Execution，真实 HTTP、数据库状态和 Token 保密断言结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeIntegrationCredential(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        String name = PREFIX + "credential-" + sequence.incrementAndGet();
+        Long credentialId = null;
+        try
+        {
+            return switch (endpoint.handler())
+            {
+                case "list" ->
+                {
+                    credentialId = insertIntegrationCredentialFixture(name);
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/integration-credential/list", null);
+                    requireFixture(arrayContains(body.path("data"), "credentialId",
+                            String.valueOf(credentialId)), "INTEGRATION_LIST_ROW_MISSING");
+                    yield Execution.passedJson();
+                }
+                case "create" ->
+                {
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/integration-credential",
+                            json(Map.of("credentialName", name,
+                                    "scopes", List.of("MESSAGE", "RECEIVE"),
+                                    "allowedVariables", List.of("amount", "approved"),
+                                    "rateLimitPerMinute", 60)));
+                    credentialId = body.path("data").path("credentialId").asLong();
+                    String token = body.path("data").path("token").asText();
+                    requireFixture(credentialId > 0 && token.length() >= 32,
+                            "INTEGRATION_CREATE_SECRET_MISSING");
+                    Map<String, Object> stored = jdbcTemplate.queryForMap(
+                            "select token_prefix, token_hash from wf_integration_credential "
+                                    + "where credential_id = ?", credentialId);
+                    requireFixture(token.startsWith(String.valueOf(stored.get("token_prefix")))
+                                    && !token.equals(String.valueOf(stored.get("token_hash"))),
+                            "INTEGRATION_CREATE_PLAINTEXT_PERSISTED");
+                    yield Execution.passedJson();
+                }
+                case "rotate" ->
+                {
+                    credentialId = insertIntegrationCredentialFixture(name);
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/integration-credential/" + credentialId + "/rotate", "{}");
+                    String token = body.path("data").path("token").asText();
+                    Map<String, Object> stored = jdbcTemplate.queryForMap(
+                            "select revision_no, token_prefix, token_hash "
+                                    + "from wf_integration_credential where credential_id = ?",
+                            credentialId);
+                    requireFixture(((Number) stored.get("revision_no")).intValue() == 2
+                                    && token.length() >= 32
+                                    && token.startsWith(String.valueOf(stored.get("token_prefix")))
+                                    && !"a".repeat(64).equals(stored.get("token_hash")),
+                            "INTEGRATION_ROTATE_STATE_MISMATCH");
+                    yield Execution.passedJson();
+                }
+                case "revoke" ->
+                {
+                    credentialId = insertIntegrationCredentialFixture(name);
+                    callJson(roleKey, endpoint,
+                            "/workflow/integration-credential/" + credentialId, null);
+                    Integer revoked = jdbcTemplate.queryForObject(
+                            "select count(*) from wf_integration_credential "
+                                    + "where credential_id = ? and revoked_at is not null",
+                            Integer.class, credentialId);
+                    requireFixture(Integer.valueOf(1).equals(revoked),
+                            "INTEGRATION_REVOKE_STATE_MISSING");
+                    yield Execution.passedJson();
+                }
+                default -> throw new AssertionError("未知集成账号 ALLOW 入口");
+            };
+        }
+        finally
+        {
+            cleanupIntegrationCredentialFixture(credentialId, name);
+        }
+    }
+
+    /**
+     * 执行运行事件审计只读入口并核对失败台账已脱敏返回。
+     * @param roleKey String，管理员或审计角色
+     * @param endpoint Endpoint，运行事件审计列表入口
+     * @return Execution，真实 HTTP 和正式数据库行对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeRuntimeEventAudit(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        String name = PREFIX + "runtime-audit-" + sequence.incrementAndGet();
+        Long credentialId = insertIntegrationCredentialFixture(name);
+        String requestId = UUID.randomUUID().toString();
+        try
+        {
+            jdbcTemplate.update("insert into wf_runtime_event_request "
+                            + "(request_id, credential_id, event_type, event_name, "
+                            + "correlation_type, correlation_value, variables_sha256, status, "
+                            + "result_code, result_summary, create_time, complete_time) "
+                            + "values (?, ?, 'MESSAGE', 'rbac-audit-message', 'BUSINESS_KEY', "
+                            + "?, ?, 'FAILED', 'RBAC_AUDIT_FIXTURE', '测试审计摘要', now(3), now(3))",
+                    requestId, credentialId, PREFIX + runId, "b".repeat(64));
+            JsonNode body = callJson(roleKey, endpoint,
+                    "/workflow/runtime-event-audit/list", null);
+            requireFixture(arrayContains(body.path("data"), "requestId", requestId),
+                    "RUNTIME_EVENT_AUDIT_ROW_MISSING");
+            String serialized = body.path("data").toString();
+            requireFixture(!serialized.contains("token_hash")
+                            && !serialized.contains("variables_sha256"),
+                    "RUNTIME_EVENT_AUDIT_SENSITIVE_FIELD_EXPOSED");
+            return Execution.passedJson();
+        }
+        finally
+        {
+            jdbcTemplate.update("delete from wf_runtime_event_request where request_id = ?",
+                    requestId);
+            cleanupIntegrationCredentialFixture(credentialId, name);
+        }
+    }
+
+    /**
+     * 直接插入只含 Token 摘要的有效凭据，供管理和审计 HTTP fixture 使用。
+     * @param name String，本轮唯一账号名称
+     * @return Long，正式凭据主键
+     */
+    private Long insertIntegrationCredentialFixture(String name)
+    {
+        String prefix = "rb" + String.format("%010d", sequence.incrementAndGet());
+        jdbcTemplate.update("insert into wf_integration_credential "
+                        + "(credential_name, token_prefix, token_hash, scopes, allowed_variables, "
+                        + "rate_limit_per_minute, rate_window_start, rate_window_count, "
+                        + "revision_no, create_by, create_time) values (?, ?, ?, "
+                        + "'MESSAGE,RECEIVE,SIGNAL', 'amount,approved', 100, now(3), 0, 1, ?, now(3))",
+                name, prefix, "a".repeat(64),
+                String.valueOf(roleUserIds.get("workflow_admin")));
+        Long credentialId = jdbcTemplate.queryForObject(
+                "select credential_id from wf_integration_credential where token_prefix = ?",
+                Long.class, prefix);
+        assertThat(credentialId).isPositive();
+        return credentialId;
+    }
+
+    /**
+     * 按主键和唯一名称精确清理凭据及其运行事件台账。
+     * @param credentialId Long，可空正式凭据主键
+     * @param name String，本轮唯一账号名称
+     * @return void，清理后同名正式行必须为零
+     */
+    private void cleanupIntegrationCredentialFixture(Long credentialId, String name)
+    {
+        if (credentialId != null && credentialId > 0)
+        {
+            jdbcTemplate.update("delete from wf_runtime_event_request where credential_id = ?",
+                    credentialId);
+            jdbcTemplate.update("delete from wf_integration_credential "
+                    + "where credential_id = ? and credential_name = ?", credentialId, name);
+        }
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_integration_credential where credential_name = ?",
+                Integer.class, name)).isZero();
+    }
+
+    /**
+     * 执行扩展注册表只读入口和真实目录/版本/状态写入，并精确清理测试数据。
+     *
+     * @param roleKey String，当前角色
+     * @param endpoint Endpoint，扩展注册表入口
+     * @return Execution，真实 HTTP 与数据库对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeExtension(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        return switch (endpoint.handler())
+        {
+            case "javaOptions" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/extension/options/java", null);
+                assertThat(body.path("data").isArray()).isTrue();
+                assertThat(body.path("data").toString()).contains("approva.set-variable");
+                yield Execution.passedJson();
+            }
+            case "celOptions" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/extension/options/cel", null);
+                assertThat(body.path("data").isArray()).isTrue();
+                assertThat(body.path("data").toString()).contains("approva.cel-expression");
+                yield Execution.passedJson();
+            }
+            case "httpOptions" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/extension/options/http", null);
+                assertThat(body.path("data").isArray()).isTrue();
+                assertThat(body.path("data").toString()).contains("approva.http-connector");
+                yield Execution.passedJson();
+            }
+            case "sqlOptions" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/extension/options/sql", null);
+                assertThat(body.path("data").isArray()).isTrue();
+                assertThat(body.path("data").toString()).contains("approva.sql-connector");
+                yield Execution.passedJson();
+            }
+            case "formFieldOptions" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/extension/options/form-field", null);
+                assertThat(body.path("data").isArray()).isTrue();
+                assertThat(body.path("data").toString()).contains("approva.form.textarea");
+                yield Execution.passedJson();
+            }
+            case "list" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/extension/list", null);
+                assertThat(body.path("data").isArray()).isTrue();
+                assertThat(body.path("data").toString()).contains("approva.set-variable");
+                yield Execution.passedJson();
+            }
+            case "installedJavaHandlers" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/extension/installed-handlers/java", null);
+                assertThat(body.path("data").isArray()).isTrue();
+                assertThat(body.path("data").toString()).contains("SET_VARIABLE");
+                yield Execution.passedJson();
+            }
+            case "create" -> executeExtensionCreate(roleKey, endpoint);
+            case "createVersion" -> executeExtensionVersionCreate(roleKey, endpoint);
+            case "changeStatus" -> executeExtensionStatusChange(roleKey, endpoint);
+            case "remove" -> executeExtensionRemove(roleKey, endpoint);
+            default -> throw new AssertionError("未知扩展注册表入口");
+        };
+    }
+
+    /**
+     * 执行 HTTP 端点列表、设计选项和真实新增、修订、停用链路，并精确清理夹具。
+     * @param roleKey String，当前角色
+     * @param endpoint Endpoint，连接端点入口
+     * @return Execution，真实 JSON 成功结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeConnector(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        String key = PREFIX + "connector-" + UUID.randomUUID().toString().substring(0, 8);
+        Long endpointId = null;
+        try
+        {
+            if ("create".equals(endpoint.handler()))
+            {
+                JsonNode body = callJson(roleKey, endpoint, "/workflow/connector",
+                        connectorJson(key, "RBAC 端点新增", "/api", 1000, 3000));
+                endpointId = body.path("data").path("endpointId").longValue();
+                assertThat(jdbcTemplate.queryForObject(
+                        "select count(*) from wf_connector_endpoint where endpoint_id = ? "
+                                + "and endpoint_key = ? and revision_no = 1 and status = 'ENABLED'",
+                        Integer.class, endpointId, key)).isEqualTo(1);
+                return Execution.passedJson();
+            }
+
+            endpointId = insertConnectorFixture(key);
+            return switch (endpoint.handler())
+            {
+                case "list" ->
+                {
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/connector/list", null);
+                    assertThat(arrayContains(body.path("data"), "endpointId",
+                            String.valueOf(endpointId))).isTrue();
+                    yield Execution.passedJson();
+                }
+                case "options" ->
+                {
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/connector/options", null);
+                    assertThat(arrayContains(body.path("data"), "endpointId",
+                            String.valueOf(endpointId))).isTrue();
+                    yield Execution.passedJson();
+                }
+                case "update" ->
+                {
+                    callJson(roleKey, endpoint, "/workflow/connector/" + endpointId,
+                            connectorJson(key, "RBAC 端点修订", "/api/v2", 1200, 3500));
+                    assertThat(jdbcTemplate.queryForMap(
+                            "select endpoint_name, path_prefix, revision_no from "
+                                    + "wf_connector_endpoint where endpoint_id = ?", endpointId))
+                            .containsEntry("endpoint_name", "RBAC 端点修订")
+                            .containsEntry("path_prefix", "/api/v2")
+                            .containsEntry("revision_no", 2);
+                    yield Execution.passedJson();
+                }
+                case "status" ->
+                {
+                    callJson(roleKey, endpoint,
+                            "/workflow/connector/" + endpointId + "/status",
+                            json(Map.of("enabled", false)));
+                    assertThat(jdbcTemplate.queryForObject(
+                            "select status from wf_connector_endpoint where endpoint_id = ?",
+                            String.class, endpointId)).isEqualTo("DISABLED");
+                    yield Execution.passedJson();
+                }
+                default -> throw new AssertionError("未知连接端点入口");
+            };
+        }
+        finally
+        {
+            cleanupConnectorFixture(endpointId, key);
+        }
+    }
+
+    /**
+     * 执行 DMN 来源目录、设计选项、官方部署和受保护删除的真实 HTTP 链路。
+     * @param roleKey String，当前管理员或流程设计者角色
+     * @param endpoint Endpoint，DMN 管理入口
+     * @return Execution，真实 HTTP、Flowable DMN 表和清理对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeDmn(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        String decisionKey = "rbacDecision" + suffix;
+        String resourceName = decisionKey + ".dmn";
+        String deploymentId = null;
+        try
+        {
+            if ("deploy".equals(endpoint.handler()))
+            {
+                JsonNode body = callJson(roleKey, endpoint, "/workflow/dmn",
+                        dmnDeploymentJson(resourceName, decisionKey));
+                deploymentId = body.path("data").path("deploymentId").asText();
+                assertThat(deploymentId).isNotBlank();
+                assertThat(jdbcTemplate.queryForObject(
+                        "select count(*) from ACT_DMN_DEPLOYMENT where ID_ = ?",
+                        Integer.class, deploymentId)).isEqualTo(1);
+                return Execution.passedJson();
+            }
+
+            JsonNode created = callJsonRaw(roleKey, "/workflow/dmn", "POST",
+                    dmnDeploymentJson(resourceName, decisionKey), false);
+            deploymentId = created.path("data").path("deploymentId").asText();
+            final String fixtureDeploymentId = deploymentId;
+            return switch (endpoint.handler())
+            {
+                case "list" ->
+                {
+                    JsonNode body = callJson(roleKey, endpoint, "/workflow/dmn/list", null);
+                    assertThat(arrayContains(body.path("data"), "deploymentId",
+                            fixtureDeploymentId)).isTrue();
+                    yield Execution.passedJson();
+                }
+                case "options" ->
+                {
+                    JsonNode body = callJson(roleKey, endpoint, "/workflow/dmn/options", null);
+                    assertThat(arrayContains(body.path("data"), "deploymentId",
+                            fixtureDeploymentId)).isTrue();
+                    yield Execution.passedJson();
+                }
+                case "delete" ->
+                {
+                    callJson(roleKey, endpoint, "/workflow/dmn/" + fixtureDeploymentId, null);
+                    assertThat(jdbcTemplate.queryForObject(
+                            "select count(*) from ACT_DMN_DEPLOYMENT where ID_ = ?",
+                            Integer.class, fixtureDeploymentId)).isZero();
+                    deploymentId = null;
+                    yield Execution.passedJson();
+                }
+                default -> throw new AssertionError("未知 DMN 管理入口");
+            };
+        }
+        finally
+        {
+            if (deploymentId != null && !deploymentId.isBlank()
+                    && jdbcTemplate.queryForObject(
+                            "select count(*) from ACT_DMN_DEPLOYMENT where ID_ = ?",
+                            Integer.class, deploymentId) > 0)
+            {
+                callJsonRaw(roleKey, "/workflow/dmn/" + deploymentId,
+                        "DELETE", null, false);
+            }
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from ACT_DMN_DEPLOYMENT where NAME_ = ?",
+                    Integer.class, resourceName)).isZero();
+        }
+    }
+
+    /**
+     * 生成可由 Flowable 8 官方 DMN Engine 部署的单规则决策请求。
+     * @param resourceName String，唯一 .dmn 资源名
+     * @param decisionKey String，唯一决策 key
+     * @return String，包含资源元数据和完整 XML 的 JSON 请求
+     */
+    private String dmnDeploymentJson(String resourceName, String decisionKey)
+    {
+        String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                + "<definitions xmlns=\"https://www.omg.org/spec/DMN/20191111/MODEL/\" "
+                + "id=\"definitions_" + decisionKey + "\" name=\"RBAC Decision\" "
+                + "namespace=\"https://approvaplat.local/rbac/dmn/" + decisionKey + "\">"
+                + "<decision id=\"" + decisionKey + "\" name=\"RBAC Decision\">"
+                + "<decisionTable id=\"table_" + decisionKey + "\" hitPolicy=\"FIRST\">"
+                + "<input id=\"input_amount\"><inputExpression id=\"expr_amount\" "
+                + "typeRef=\"integer\"><text>amount</text></inputExpression></input>"
+                + "<output id=\"output_result\" name=\"result\" typeRef=\"string\"/>"
+                + "<rule id=\"rule_default\"><inputEntry id=\"input_default\"><text>-</text>"
+                + "</inputEntry><outputEntry id=\"output_default\"><text>\"ok\"</text>"
+                + "</outputEntry></rule></decisionTable></decision></definitions>";
+        return json(Map.of("resourceName", resourceName, "category", "rbac", "dmnXml", xml));
+    }
+
+    /**
+     * 直接插入满足正式约束的启用端点，为只读、修订和状态接口提供前置对象。
+     * @param key String，测试唯一端点键
+     * @return Long，数据库生成端点主键
+     */
+    private Long insertConnectorFixture(String key)
+    {
+        jdbcTemplate.update("insert into wf_connector_endpoint "
+                + "(endpoint_key, endpoint_name, base_url, allowed_methods, path_prefix, "
+                + "auth_type, secret_ref, api_key_header, connect_timeout_ms, request_timeout_ms, "
+                + "network_scope, revision_no, status, checksum, create_by, create_time, "
+                + "update_by, update_time) values (?, 'RBAC 端点夹具', 'http://127.0.0.1:9', "
+                + "'POST', '/api', 'NONE', null, null, 1000, 3000, 'PRIVATE', 1, 'ENABLED', "
+                + "?, 'rbac-fixture', current_timestamp(3), '', null)", key, "0".repeat(64));
+        return jdbcTemplate.queryForObject(
+                "select endpoint_id from wf_connector_endpoint where endpoint_key = ?",
+                Long.class, key);
+    }
+
+    /**
+     * 生成连接端点正式 API 使用的 JSON 请求。
+     * @param key String，稳定端点键
+     * @param name String，端点名称
+     * @param pathPrefix String，允许路径前缀
+     * @param connectTimeout int，连接超时毫秒
+     * @param requestTimeout int，请求超时毫秒
+     * @return String，字段完整且不含密钥正文的 JSON
+     */
+    private String connectorJson(String key, String name, String pathPrefix,
+            int connectTimeout, int requestTimeout)
+    {
+        return json(Map.of(
+                "endpointKey", key,
+                "endpointName", name,
+                "baseUrl", "http://127.0.0.1:9",
+                "allowedMethods", List.of("POST"),
+                "pathPrefix", pathPrefix,
+                "authType", "NONE",
+                "connectTimeoutMs", connectTimeout,
+                "requestTimeoutMs", requestTimeout,
+                "networkScope", "PRIVATE"));
+    }
+
+    /**
+     * 精确删除当前测试创建且尚无调用台账引用的连接端点。
+     * @param endpointId Long，测试端点主键；创建失败时可为空
+     * @param key String，测试唯一端点键
+     * @return void，清理后同键端点必须为零
+     */
+    private void cleanupConnectorFixture(Long endpointId, String key)
+    {
+        if (endpointId != null && endpointId > 0)
+        {
+            jdbcTemplate.update("delete from wf_connector_endpoint "
+                    + "where endpoint_id = ? and endpoint_key = ?", endpointId, key);
+        }
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_connector_endpoint where endpoint_key = ?",
+                Integer.class, key)).isZero();
+    }
+
+    /**
+     * 执行 SQL 数据源管理的列表、选项、新增、修订和停用真实链路。
+     * @param roleKey String，当前角色
+     * @param endpoint Endpoint，SQL 数据源入口
+     * @return Execution，真实 HTTP 与数据库对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeSqlDataSource(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        String key = PREFIX + "sql-" + UUID.randomUUID().toString().substring(0, 8);
+        Long dataSourceId = null;
+        try
+        {
+            if ("create".equals(endpoint.handler()))
+            {
+                JsonNode body = callJson(roleKey, endpoint, "/workflow/sql-datasource",
+                        sqlDataSourceJson(key, "RBAC SQL 新增", List.of("wf_copy"), 1000, 10));
+                dataSourceId = body.path("data").path("dataSourceId").longValue();
+                assertThat(jdbcTemplate.queryForObject(
+                        "select count(*) from wf_sql_datasource where datasource_id = ? "
+                                + "and datasource_key = ? and revision_no = 1 and status = 'ENABLED'",
+                        Integer.class, dataSourceId, key)).isEqualTo(1);
+                return Execution.passedJson();
+            }
+
+            dataSourceId = insertSqlDataSourceFixture(key);
+            final Long fixtureId = dataSourceId;
+            return switch (endpoint.handler())
+            {
+                case "list" ->
+                {
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/sql-datasource/list", null);
+                    assertThat(arrayContains(body.path("data"), "dataSourceId",
+                            String.valueOf(fixtureId))).isTrue();
+                    yield Execution.passedJson();
+                }
+                case "options" ->
+                {
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/sql-datasource/options", null);
+                    assertThat(arrayContains(body.path("data"), "dataSourceId",
+                            String.valueOf(fixtureId))).isTrue();
+                    yield Execution.passedJson();
+                }
+                case "update" ->
+                {
+                    callJson(roleKey, endpoint, "/workflow/sql-datasource/" + fixtureId,
+                            sqlDataSourceJson(key, "RBAC SQL 修订",
+                                    List.of("wf_copy", "wf_form"), 1200, 12));
+                    assertThat(jdbcTemplate.queryForMap(
+                            "select datasource_name, allowed_tables, revision_no "
+                                    + "from wf_sql_datasource where datasource_id = ?", fixtureId))
+                            .containsEntry("datasource_name", "RBAC SQL 修订")
+                            .containsEntry("allowed_tables", "wf_copy,wf_form")
+                            .containsEntry("revision_no", 2);
+                    yield Execution.passedJson();
+                }
+                case "status" ->
+                {
+                    callJson(roleKey, endpoint,
+                            "/workflow/sql-datasource/" + fixtureId + "/status",
+                            json(Map.of("enabled", false)));
+                    assertThat(jdbcTemplate.queryForObject(
+                            "select status from wf_sql_datasource where datasource_id = ?",
+                            String.class, fixtureId)).isEqualTo("DISABLED");
+                    yield Execution.passedJson();
+                }
+                default -> throw new AssertionError("未知 SQL 数据源入口");
+            };
+        }
+        finally
+        {
+            cleanupSqlDataSourceFixture(dataSourceId, key);
+        }
+    }
+
+    /**
+     * 插入满足正式约束的主库 SQL 数据源夹具。
+     * @param key String，测试唯一数据源键
+     * @return Long，数据库生成的数据源主键
+     */
+    private Long insertSqlDataSourceFixture(String key)
+    {
+        jdbcTemplate.update("insert into wf_sql_datasource "
+                + "(datasource_key, datasource_name, connection_type, jdbc_url_ref, username_ref, "
+                + "password_ref, allowed_tables, connect_timeout_ms, query_timeout_seconds, "
+                + "revision_no, status, checksum, create_by, create_time, update_by, update_time) "
+                + "values (?, 'RBAC SQL 夹具', 'PRIMARY', null, null, null, 'wf_copy', "
+                + "1000, 10, 1, 'ENABLED', ?, 'rbac-fixture', current_timestamp(3), '', null)",
+                key, "0".repeat(64));
+        return jdbcTemplate.queryForObject(
+                "select datasource_id from wf_sql_datasource where datasource_key = ?",
+                Long.class, key);
+    }
+
+    /**
+     * 生成 SQL 数据源正式 API 使用的 JSON 请求。
+     * @param key String，稳定数据源键
+     * @param name String，显示名称
+     * @param tables List&lt;String&gt;，表白名单
+     * @param connectTimeout int，连接超时毫秒
+     * @param queryTimeout int，查询超时秒
+     * @return String，不含凭据正文的字段完整 JSON
+     */
+    private String sqlDataSourceJson(String key, String name, List<String> tables,
+            int connectTimeout, int queryTimeout)
+    {
+        return json(Map.of(
+                "dataSourceKey", key,
+                "dataSourceName", name,
+                "connectionType", "PRIMARY",
+                "allowedTables", tables,
+                "connectTimeoutMs", connectTimeout,
+                "queryTimeoutSeconds", queryTimeout));
+    }
+
+    /**
+     * 精确删除当前测试创建且尚未被部署引用的 SQL 数据源。
+     * @param dataSourceId Long，数据源主键；创建失败时可为空
+     * @param key String，测试唯一数据源键
+     * @return void，清理后同键记录必须为零
+     */
+    private void cleanupSqlDataSourceFixture(Long dataSourceId, String key)
+    {
+        if (dataSourceId != null && dataSourceId > 0)
+        {
+            jdbcTemplate.update("delete from wf_sql_datasource "
+                    + "where datasource_id = ? and datasource_key = ?", dataSourceId, key);
+        }
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_sql_datasource where datasource_key = ?",
+                Integer.class, key)).isZero();
+    }
+
+    /**
+     * 通过正式接口创建无版本目录并在断言后按生成主键清理。
+     *
+     * @param roleKey String，当前角色
+     * @param endpoint Endpoint，目录创建入口
+     * @return Execution，真实 JSON 成功结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeExtensionCreate(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        String key = PREFIX + "extension-create-" + UUID.randomUUID().toString().substring(0, 8);
+        Long extensionId = null;
+        try
+        {
+            JsonNode body = callJson(roleKey, endpoint, "/workflow/extension",
+                    json(Map.of("extensionKey", key, "extensionName", "RBAC 扩展创建验收",
+                            "extensionType", "JAVA", "description", "矩阵临时数据")));
+            extensionId = body.path("data").path("extensionId").longValue();
+            assertThat(extensionId).isPositive();
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_bpmn_extension where extension_id = ? "
+                            + "and extension_key = ? and status = 'ENABLED'",
+                    Integer.class, extensionId, key)).isEqualTo(1);
+            return Execution.passedJson();
+        }
+        finally
+        {
+            cleanupExtensionFixture(extensionId, key);
+        }
+    }
+
+    /**
+     * 创建临时目录后通过正式接口发布不可变版本，并按外键顺序清理。
+     *
+     * @param roleKey String，当前角色
+     * @param endpoint Endpoint，版本发布入口
+     * @return Execution，真实 JSON 成功结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeExtensionVersionCreate(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        String key = PREFIX + "extension-version-" + UUID.randomUUID().toString().substring(0, 8);
+        Long extensionId = insertExtensionFixture(key);
+        try
+        {
+            JsonNode body = callJson(roleKey, endpoint,
+                    "/workflow/extension/" + extensionId + "/versions",
+                    json(Map.of("implementationKey", "SET_VARIABLE")));
+            long versionId = body.path("data").path("versionId").longValue();
+            assertThat(versionId).isPositive();
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_bpmn_extension_version where version_id = ? "
+                            + "and extension_id = ? and implementation_key = 'SET_VARIABLE'",
+                    Integer.class, versionId, extensionId)).isEqualTo(1);
+            return Execution.passedJson();
+        }
+        finally
+        {
+            cleanupExtensionFixture(extensionId, key);
+        }
+    }
+
+    /**
+     * 创建临时目录后通过正式接口停用，并验证历史外对象不受影响后清理。
+     *
+     * @param roleKey String，当前角色
+     * @param endpoint Endpoint，状态修改入口
+     * @return Execution，真实 JSON 成功结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeExtensionStatusChange(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        String key = PREFIX + "extension-status-" + UUID.randomUUID().toString().substring(0, 8);
+        Long extensionId = insertExtensionFixture(key);
+        try
+        {
+            callJson(roleKey, endpoint, "/workflow/extension/" + extensionId + "/status",
+                    json(Map.of("enabled", false)));
+            assertThat(jdbcTemplate.queryForObject(
+                    "select status from wf_bpmn_extension where extension_id = ?",
+                    String.class, extensionId)).isEqualTo("DISABLED");
+            return Execution.passedJson();
+        }
+        finally
+        {
+            cleanupExtensionFixture(extensionId, key);
+        }
+    }
+
+    /**
+     * 创建已停用临时目录后通过正式删除接口清理，并验证目录真实消失。
+     *
+     * @param roleKey String，当前角色
+     * @param endpoint Endpoint，目录删除入口
+     * @return Execution，真实 JSON 成功结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeExtensionRemove(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        String key = PREFIX + "extension-remove-" + UUID.randomUUID().toString().substring(0, 8);
+        Long extensionId = insertExtensionFixture(key);
+        try
+        {
+            jdbcTemplate.update("update wf_bpmn_extension set status = 'DISABLED' "
+                    + "where extension_id = ?", extensionId);
+            callJson(roleKey, endpoint, "/workflow/extension/" + extensionId, null);
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_bpmn_extension where extension_id = ?",
+                    Integer.class, extensionId)).isZero();
+            extensionId = null;
+            return Execution.passedJson();
+        }
+        finally
+        {
+            cleanupExtensionFixture(extensionId, key);
+        }
+    }
+
+    /**
+     * 直接插入受控测试目录，为版本和状态 HTTP 入口提供精确前置对象。
+     *
+     * @param key String，带测试前缀的唯一扩展键
+     * @return Long，数据库生成目录主键
+     */
+    private Long insertExtensionFixture(String key)
+    {
+        jdbcTemplate.update("insert into wf_bpmn_extension "
+                        + "(extension_key, extension_name, extension_type, status, description, "
+                        + "create_by, create_time, update_by, update_time) "
+                        + "values (?, 'RBAC 扩展验收', 'JAVA', 'ENABLED', '矩阵临时数据', "
+                        + "'rbac-fixture', current_timestamp(3), '', null)", key);
+        return jdbcTemplate.queryForObject(
+                "select extension_id from wf_bpmn_extension where extension_key = ?",
+                Long.class, key);
+    }
+
+    /**
+     * 按外键顺序精确删除当前测试创建的扩展版本和目录，并断言零残留。
+     *
+     * @param extensionId Long，测试目录主键；接口未成功生成时可为空
+     * @param key String，带测试前缀的唯一扩展键
+     * @return void，无返回值；清理不完整时测试失败
+     */
+    private void cleanupExtensionFixture(Long extensionId, String key)
+    {
+        if (extensionId != null && extensionId > 0)
+        {
+            jdbcTemplate.update(
+                    "delete from wf_bpmn_extension_version where extension_id = ?", extensionId);
+            jdbcTemplate.update(
+                    "delete from wf_bpmn_extension where extension_id = ? and extension_key = ?",
+                    extensionId, key);
+        }
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_bpmn_extension where extension_key = ?",
+                Integer.class, key)).isZero();
+    }
+
+    /**
+     * 执行设计器偏好查询和真实数据库写入，并在断言后恢复测试账号原始偏好。
+     *
+     * @param roleKey String，当前角色
+     * @param endpoint Endpoint，设计器偏好入口
+     * @return Execution，成功执行结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeDesigner(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        long userId = roleUserIds.get(roleKey);
+        return switch (endpoint.handler())
+        {
+            case "getPreference" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/designer/preference", null);
+                assertThat(body.path("data").path("theme").asText())
+                        .isIn("LIGHT", "DARK", "SYSTEM");
+                yield Execution.passedJson();
+            }
+            case "savePreference" ->
+            {
+                // 偏好属于正式用户数据，矩阵验收必须在 finally 中逐字段恢复原始状态。
+                List<Map<String, Object>> original = jdbcTemplate.queryForList(
+                        "select theme, grid_enabled, minimap_enabled, lint_enabled, "
+                                + "token_simulation_enabled, properties_collapsed, "
+                                + "create_time, update_time from wf_designer_preference "
+                                + "where user_id = ?",
+                        userId);
+                try
+                {
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/designer/preference",
+                            json(Map.of("theme", "DARK", "gridEnabled", false,
+                                    "minimapEnabled", true, "lintEnabled", true,
+                                    "tokenSimulationEnabled", false,
+                                    "propertiesCollapsed", true)));
+                    assertThat(body.path("data").path("theme").asText()).isEqualTo("DARK");
+                    assertThat(jdbcTemplate.queryForObject(
+                            "select theme from wf_designer_preference where user_id = ?",
+                            String.class, userId)).isEqualTo("DARK");
+                    yield Execution.passedJson();
+                }
+                finally
+                {
+                    restoreDesignerPreference(userId, original);
+                }
+            }
+            default -> throw new AssertionError("未知设计器偏好入口");
+        };
+    }
+
+    /**
+     * 恢复设计器偏好验收前的精确数据库状态，避免 RBAC 测试污染正式用户设置。
+     *
+     * @param userId long，当前测试角色的正式用户主键
+     * @param original List&lt;Map&lt;String, Object&gt;&gt;，写入前零行或唯一一行快照
+     * @return void，无返回值；恢复失败时由测试直接失败
+     */
+    private void restoreDesignerPreference(long userId,
+            List<Map<String, Object>> original)
+    {
+        if (original.isEmpty())
+        {
+            jdbcTemplate.update("delete from wf_designer_preference where user_id = ?", userId);
+            return;
+        }
+        Map<String, Object> row = original.get(0);
+        jdbcTemplate.update(
+                "update wf_designer_preference set theme = ?, grid_enabled = ?, "
+                        + "minimap_enabled = ?, lint_enabled = ?, token_simulation_enabled = ?, "
+                        + "properties_collapsed = ?, create_time = ?, update_time = ? "
+                        + "where user_id = ?",
+                row.get("theme"), row.get("grid_enabled"), row.get("minimap_enabled"),
+                row.get("lint_enabled"), row.get("token_simulation_enabled"),
+                row.get("properties_collapsed"), row.get("create_time"),
+                row.get("update_time"), userId);
     }
 
     /**
@@ -749,7 +1636,7 @@ final class WorkflowRbacAllowFixture
             case "save" ->
             {
                 ModelFixture fixture = createModel(roleKey, "保存模型");
-                String xml = modelXml(fixture.id());
+                String xml = deployableModelXml(roleKey, fixture);
                 JsonNode body = callJson(roleKey, endpoint, "/workflow/model/save",
                         json(Map.of("requestId", newModelSaveRequestId(),
                                 "modelId", fixture.id(), "bpmnXml", xml,
@@ -757,6 +1644,18 @@ final class WorkflowRbacAllowFixture
                 assertThat(body.path("data").path("modelId").asText())
                         .isEqualTo(fixture.id());
                 assertThat(modelXml(fixture.id())).contains(fixture.key());
+                yield Execution.passedJson();
+            }
+            case "validate" ->
+            {
+                ModelFixture fixture = createModel(roleKey, "校验模型");
+                JsonNode body = callJson(roleKey, endpoint, "/workflow/model/validate",
+                        json(Map.of("bpmnXml", deployableModelXml(roleKey, fixture))));
+                assertThat(body.path("data").path("valid").asBoolean()).isTrue();
+                // 校验通过时仍要求返回稳定空数组，避免前端对缺失字段做额外兼容。
+                JsonNode issues = body.path("data").path("issues");
+                assertThat(issues.isArray()).isTrue();
+                assertThat(issues.size()).isZero();
                 yield Execution.passedJson();
             }
             case "latest" ->
@@ -1643,7 +2542,8 @@ final class WorkflowRbacAllowFixture
     {
         JsonNode body = callJsonRaw(roleKey, "/workflow/model/save", "POST",
                 json(Map.of("requestId", newModelSaveRequestId(),
-                        "modelId", original.id(), "bpmnXml", modelXml(original.id()),
+                        "modelId", original.id(),
+                        "bpmnXml", deployableModelXml(roleKey, original),
                         "newVersion", true)), true);
         String id = body.path("data").path("modelId").asText();
         modelIds.add(id);
@@ -1662,30 +2562,47 @@ final class WorkflowRbacAllowFixture
     private void saveDeployableModel(String roleKey, ModelFixture fixture)
             throws IOException, InterruptedException
     {
-        byte[] source = repositoryService.getModelEditorSource(fixture.id());
-        assertThat(source).isNotNull().isNotEmpty();
-
-        // 通过 Flowable 公共模型 API 修改节点，避免字符串替换破坏命名空间或 BPMN DI。
-        BpmnXMLConverter converter = new BpmnXMLConverter();
-        BpmnModel bpmnModel = converter.convertToBpmnModel(
-                () -> new ByteArrayInputStream(source), true, true);
-        assertThat(bpmnModel.getMainProcess().getId()).isEqualTo(fixture.key());
-        assertThat(bpmnModel.getMainProcess().getFlowElement("review"))
-                .isInstanceOf(UserTask.class);
-        UserTask reviewTask = (UserTask) bpmnModel.getMainProcess().getFlowElement("review");
-        // 设计员可以部署模型但不具备任务办理资格，模型中的办理人必须使用正式审批角色。
-        String assigneeRole = approvalAssigneeRole(roleKey);
-        reviewTask.setAssignee(String.valueOf(roleUserIds.get(assigneeRole)));
-        reviewTask.setFormKey("key_" + commonFormId);
-
-        String deployableXml = new String(
-                converter.convertToXML(bpmnModel, StandardCharsets.UTF_8.name()),
-                StandardCharsets.UTF_8);
+        String deployableXml = deployableModelXml(roleKey, fixture);
         JsonNode body = callJsonRaw(roleKey, "/workflow/model/save", "POST",
                 json(Map.of("requestId", newModelSaveRequestId(),
                         "modelId", fixture.id(), "bpmnXml", deployableXml,
                         "newVersion", false)), true);
         assertThat(body.path("data").path("modelId").asText()).isEqualTo(fixture.id());
+    }
+
+    /**
+     * 将模型编辑器中的作者 XML 结构化补齐为通过正式身份和表单门禁的 BPMN。
+     *
+     * @param roleKey String，当前保存角色；用于选择具备办理资格的真实审批角色
+     * @param fixture ModelFixture，待转换模型的 ID、key 和名称
+     * @return String，保留原扩展元素并补齐所有 UserTask 办理人与正式表单键的 UTF-8 XML
+     */
+    private String deployableModelXml(String roleKey, ModelFixture fixture)
+    {
+        byte[] source = repositoryService.getModelEditorSource(fixture.id());
+        assertThat(source).isNotNull().isNotEmpty();
+
+        // 通过 Flowable 公共模型 API 修改节点，避免字符串替换破坏命名空间、监听器或 BPMN DI。
+        BpmnXMLConverter converter = new BpmnXMLConverter();
+        BpmnModel bpmnModel = converter.convertToBpmnModel(
+                () -> new ByteArrayInputStream(source), true, true);
+        assertThat(bpmnModel.getMainProcess().getId()).isEqualTo(fixture.key());
+        List<UserTask> userTasks = bpmnModel.getMainProcess()
+                .findFlowElementsOfType(UserTask.class, true);
+        assertThat(userTasks).as("模型必须包含可验证的 UserTask").isNotEmpty();
+
+        // 设计员可以保存和部署模型但不一定具备办理资格，因此统一绑定真实审批角色。
+        String assigneeRole = approvalAssigneeRole(roleKey);
+        String assigneeUserId = String.valueOf(roleUserIds.get(assigneeRole));
+        String formKey = "key_" + commonFormId;
+        for (UserTask userTask : userTasks)
+        {
+            userTask.setAssignee(assigneeUserId);
+            userTask.setFormKey(formKey);
+        }
+
+        return new String(converter.convertToXML(bpmnModel,
+                StandardCharsets.UTF_8.name()), StandardCharsets.UTF_8);
     }
 
     /**
@@ -2214,9 +3131,17 @@ final class WorkflowRbacAllowFixture
             String body, boolean audited) throws IOException, InterruptedException
     {
         byte[] bytes = body == null ? null : body.getBytes(StandardCharsets.UTF_8);
-        HttpResponse<byte[]> response = sendWithAudit(roleKey, path, method, bytes,
-                body == null ? null : "application/json; charset=UTF-8", audited);
-        return parseSuccessfulJson(response);
+        long beforeLogId = maxOperationLogId();
+        HttpResponse<byte[]> response = sendRequest(roleKey, path, method, bytes,
+                body == null ? null : "application/json; charset=UTF-8");
+        // 必须先解析业务响应；失败请求只能要求失败审计，不能被“缺少成功审计”遮蔽真实状态码。
+        JsonNode parsedBody = parseSuccessfulJson(response);
+        if (audited)
+        {
+            assertSuccessfulAudit(roleKey, URI.create(baseUrl() + path).getRawPath(),
+                    beforeLogId);
+        }
+        return parsedBody;
     }
 
     /**
@@ -2233,11 +3158,16 @@ final class WorkflowRbacAllowFixture
     private HttpResponse<byte[]> callBinary(String roleKey, Endpoint endpoint,
             String path, byte[] body) throws IOException, InterruptedException
     {
-        HttpResponse<byte[]> response = sendWithAudit(roleKey, path,
-                endpoint.httpMethod(), body, null,
-                AUDITED_ENDPOINTS.contains(endpoint.key()));
+        long beforeLogId = maxOperationLogId();
+        HttpResponse<byte[]> response = sendRequest(roleKey, path,
+                endpoint.httpMethod(), body, null);
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.body()).isNotEmpty();
+        if (AUDITED_ENDPOINTS.contains(endpoint.key()))
+        {
+            assertSuccessfulAudit(roleKey, URI.create(baseUrl() + path).getRawPath(),
+                    beforeLogId);
+        }
         return response;
     }
 

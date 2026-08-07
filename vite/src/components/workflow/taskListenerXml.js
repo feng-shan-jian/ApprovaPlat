@@ -1,5 +1,6 @@
-// 任务监听器是后端运行时身份审计的内部技术字段，持久化时只允许固定 Bean 和三个事件。
+// 系统审计监听器是后端运行时内部字段；业务监听器只能使用固定注册表入口并与其并存。
 const CONTROLLED_TASK_LISTENER_EXPRESSION = '${userTaskListener}'
+const BUSINESS_TASK_LISTENER_EXPRESSION = '${workflowBusinessListener}'
 const APPROVED_TASK_LISTENER_EVENTS = Object.freeze(['create', 'assignment', 'complete'])
 const BPMN_NAMESPACE = 'http://www.omg.org/spec/BPMN/20100524/MODEL'
 const FLOWABLE_NAMESPACE = 'http://flowable.org/bpmn'
@@ -43,13 +44,15 @@ function insertExtensionElements(document, userTask) {
 }
 
 /**
- * 移除已有的全部直接 taskListener，防止非法命名空间、实现、属性或字段进入保存结果。
+ * 移除已有的系统审计 taskListener，保留受控业务监听器供服务端继续校验和冻结。
  * @param {Element} extensionElements 用户任务的 BPMN 扩展节点。
  * @returns {void} 仅删除 taskListener，保留其他业务扩展元素。
  */
 function removeExistingTaskListeners(extensionElements) {
-  for (const listener of directElementChildren(extensionElements)
-    .filter(child => child.localName === 'taskListener')) {
+  for (const listener of directElementChildren(extensionElements).filter(child => {
+    if (child.localName !== 'taskListener') return false
+    return child.getAttribute('delegateExpression') !== BUSINESS_TASK_LISTENER_EXPRESSION
+  })) {
     extensionElements.removeChild(listener)
   }
 }
@@ -70,9 +73,9 @@ function appendApprovedTaskListeners(document, extensionElements) {
 }
 
 /**
- * 将全部用户任务无条件收敛为后端固定审计监听器结构。
+ * 将全部用户任务收敛为固定审计监听器，并保留固定业务监听器入口。
  * @param {string} xml bpmn-js 导出的 BPMN XML。
- * @returns {string} 已重建 create、assignment、complete 固定监听器的可持久化 XML。
+ * @returns {string} 已重建系统监听器且保留业务监听器的可持久化 XML。
  */
 export function normalizeTaskListenerXml(xml) {
   if (!xml) return xml

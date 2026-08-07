@@ -28,6 +28,7 @@ import java.util.function.Supplier;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.EndEvent;
 import org.flowable.bpmn.model.ExtensionAttribute;
+import org.flowable.bpmn.model.FormProperty;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.StartEvent;
@@ -465,6 +466,53 @@ class WorkflowProcessDetailServiceTest
                 .get("approved").booleanValue()).isFalse();
         verify(currentDecision, never()).getValue();
         verify(unsafeCurrent, never()).getValue();
+    }
+
+    /**
+     * 验证内嵌任务表单在模型字段变化后仍按部署快照内容和字段白名单构建活动详情。
+     *
+     * @return 无返回值，模型变化不得造成已部署实例的表单内容或变量 schema 漂移
+     */
+    @Test
+    void keepsEmbeddedActiveTaskFormFrozenAfterModelPropertiesChange()
+    {
+        HistoricVariableInstance originalValue = variable(
+                "originalField", "string", "部署时字段值", "task-active");
+        prepareActiveDetail(originalValue, "originalField");
+        stubCurrentJsonVariable(originalValue, "task-active", true,
+                "\"部署时字段值\"");
+
+        BpmnModel model = repositoryService.getBpmnModel("definition-1");
+        UserTask approve = (UserTask) model.getProcessById("leave")
+                .getFlowElement("approve", false);
+        approve.setFormKey(null);
+        FormProperty changedProperty = new FormProperty();
+        changedProperty.setId("changedAfterDeployment");
+        changedProperty.setVariable("changedAfterDeployment");
+        changedProperty.setType("string");
+        approve.setFormProperties(List.of(changedProperty));
+
+        String frozenContent = "{\"fields\":[{\"__vModel__\":\"originalField\","
+                + "\"__config__\":{\"layout\":\"colFormItem\",\"tag\":\"el-input\","
+                + "\"workflowReadable\":true,\"workflowWritable\":true}}]}";
+        WfDeployForm snapshot = snapshot(null, "embedded", "approve",
+                "部署时内嵌表单", "审批", frozenContent);
+        snapshot.setSourceType("EMBEDDED");
+        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+                .thenReturn(List.of(snapshot));
+
+        WorkflowProcessDetailView detail = service.getDetail(
+                new WorkflowProcessDetailQueryDto("instance-1", "task-active"));
+
+        assertThat(detail.currentTaskForm()).isNotNull();
+        assertThat(detail.currentTaskForm().sourceType()).isEqualTo("EMBEDDED");
+        assertThat(detail.currentTaskForm().formId()).isNull();
+        assertThat(detail.currentTaskForm().content()).isEqualTo(frozenContent)
+                .contains("originalField")
+                .doesNotContain("changedAfterDeployment");
+        assertThat(detail.currentTaskForm().values()).containsOnlyKeys("originalField");
+        assertThat(detail.currentTaskForm().values().get("originalField").textValue())
+                .isEqualTo("部署时字段值");
     }
 
     /**
@@ -1514,6 +1562,7 @@ class WorkflowProcessDetailServiceTest
     {
         WfDeployForm snapshot = new WfDeployForm();
         snapshot.setDeployId("deployment-1");
+        snapshot.setSourceType("TEMPLATE");
         snapshot.setFormId(formId);
         snapshot.setFormKey(formKey);
         snapshot.setNodeKey(nodeKey);

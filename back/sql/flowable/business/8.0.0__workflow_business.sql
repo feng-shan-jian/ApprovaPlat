@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS `wf_form`
 CREATE TABLE IF NOT EXISTS `wf_deploy_form`
 (
     `deploy_id`  VARCHAR(64)  NOT NULL COMMENT 'Flowable 部署主键',
-    `form_id`    BIGINT       NOT NULL COMMENT '快照来源表单主键',
+    `source_type` VARCHAR(16) NOT NULL DEFAULT 'TEMPLATE' COMMENT '快照来源：TEMPLATE 正式模板、EMBEDDED BPMN 内嵌表单',
+    `form_id`    BIGINT                DEFAULT NULL COMMENT '快照来源表单主键；内嵌表单为空',
     `form_key`   VARCHAR(128) NOT NULL COMMENT 'BPMN 表单键，兼容 key_<form_id>',
     `node_key`   VARCHAR(255) NOT NULL COMMENT 'BPMN 节点键',
     `form_name`  VARCHAR(64)  NOT NULL COMMENT '部署时表单名称快照',
@@ -58,11 +59,429 @@ CREATE TABLE IF NOT EXISTS `wf_deploy_form`
     PRIMARY KEY (`deploy_id`, `form_key`, `node_key`),
     KEY `idx_wf_deploy_form_form_id` (`form_id`),
     CONSTRAINT `chk_wf_deploy_form_content_json` CHECK (JSON_VALID(`content`)),
+    CONSTRAINT `chk_wf_deploy_form_source` CHECK
+    (
+        (`source_type` = 'TEMPLATE' AND `form_id` IS NOT NULL AND `form_id` > 0)
+        OR (`source_type` = 'EMBEDDED' AND `form_id` IS NULL)
+    ),
     CONSTRAINT `chk_wf_deploy_form_del_flag` CHECK (`del_flag` IN ('0', '2'))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '流程部署节点表单不可变快照';
+
+CREATE TABLE IF NOT EXISTS `wf_bpmn_extension`
+(
+    `extension_id`   BIGINT       NOT NULL AUTO_INCREMENT COMMENT 'BPMN 扩展目录主键',
+    `extension_key`  VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '设计器和作者 BPMN 使用的稳定扩展键',
+    `extension_name` VARCHAR(128) NOT NULL COMMENT '扩展用户可见名称',
+    `extension_type` VARCHAR(16)  NOT NULL COMMENT '扩展类型：JAVA、CEL、HTTP、SQL、DMN、FORM_FIELD',
+    `status`         VARCHAR(16)  NOT NULL DEFAULT 'ENABLED' COMMENT '目录状态：ENABLED、DISABLED',
+    `description`    VARCHAR(500)          DEFAULT NULL COMMENT '扩展业务说明',
+    `create_by`      VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '创建者正式用户主键',
+    `create_time`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `update_by`      VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '更新者正式用户主键',
+    `update_time`    DATETIME(3)           DEFAULT NULL COMMENT '更新时间',
+    PRIMARY KEY (`extension_id`),
+    UNIQUE KEY `uk_wf_bpmn_extension_key` (`extension_key`),
+    KEY `idx_wf_bpmn_extension_type_status` (`extension_type`, `status`),
+    CONSTRAINT `chk_wf_bpmn_extension_key` CHECK
+        (`extension_key` REGEXP '^[A-Za-z][A-Za-z0-9_.-]{0,127}$'),
+    CONSTRAINT `chk_wf_bpmn_extension_type` CHECK
+        (`extension_type` IN ('JAVA', 'CEL', 'HTTP', 'SQL', 'DMN', 'FORM_FIELD')),
+    CONSTRAINT `chk_wf_bpmn_extension_status` CHECK
+        (`status` IN ('ENABLED', 'DISABLED'))
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = 'BPMN 受控扩展目录';
+
+CREATE TABLE IF NOT EXISTS `wf_bpmn_extension_version`
+(
+    `version_id`         BIGINT      NOT NULL AUTO_INCREMENT COMMENT '不可变扩展版本主键',
+    `extension_id`       BIGINT      NOT NULL COMMENT '扩展目录主键',
+    `version_no`         INT         NOT NULL COMMENT '单扩展内连续递增版本号',
+    `implementation_key` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '服务端已安装处理器稳定键',
+    `config_schema`      JSON        NOT NULL COMMENT '服务端处理器提供的配置 JSON Schema',
+    `checksum`           CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '版本定义 SHA-256',
+    `create_by`          VARCHAR(64) NOT NULL DEFAULT '' COMMENT '发布者正式用户主键',
+    `create_time`        DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '发布时间',
+    PRIMARY KEY (`version_id`),
+    UNIQUE KEY `uk_wf_bpmn_extension_version` (`extension_id`, `version_no`),
+    KEY `idx_wf_bpmn_extension_impl` (`implementation_key`),
+    CONSTRAINT `fk_wf_bpmn_extension_version_extension` FOREIGN KEY (`extension_id`)
+        REFERENCES `wf_bpmn_extension` (`extension_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `chk_wf_bpmn_extension_version_no` CHECK (`version_no` > 0),
+    CONSTRAINT `chk_wf_bpmn_extension_impl` CHECK
+        (`implementation_key` REGEXP '^[A-Z][A-Z0-9_]{1,63}$'),
+    CONSTRAINT `chk_wf_bpmn_extension_checksum` CHECK
+        (`checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = 'BPMN 扩展不可变版本';
+
+CREATE TABLE IF NOT EXISTS `wf_deploy_extension_snapshot`
+(
+    `snapshot_id`         BIGINT       NOT NULL AUTO_INCREMENT COMMENT '部署扩展快照主键',
+    `deploy_id`           VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_key`         VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN 可执行流程标识',
+    `element_id`          VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN 活动元素标识',
+    `extension_key`       VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结扩展稳定键',
+    `extension_version_id` BIGINT      NOT NULL COMMENT '冻结扩展版本主键',
+    `version_no`          INT          NOT NULL COMMENT '冻结版本号冗余审计值',
+    `extension_type`      VARCHAR(16)  NOT NULL COMMENT '冻结扩展类型',
+    `implementation_key`  VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结处理器稳定键',
+    `config_json`         JSON         NOT NULL COMMENT '规范化节点配置',
+    `version_checksum`    CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '扩展版本定义校验和',
+    `snapshot_checksum`   CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '完整执行快照校验和',
+    `create_by`           VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '部署操作人正式用户主键',
+    `create_time`         DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '快照创建时间',
+    PRIMARY KEY (`snapshot_id`),
+    UNIQUE KEY `uk_wf_deploy_extension_element` (`deploy_id`, `process_key`, `element_id`),
+    KEY `idx_wf_deploy_extension_version` (`extension_version_id`),
+    KEY `idx_wf_deploy_extension_key` (`extension_key`, `version_no`),
+    CONSTRAINT `fk_wf_deploy_extension_version` FOREIGN KEY (`extension_version_id`)
+        REFERENCES `wf_bpmn_extension_version` (`version_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `chk_wf_deploy_extension_version_no` CHECK (`version_no` > 0),
+    CONSTRAINT `chk_wf_deploy_extension_type` CHECK
+        (`extension_type` IN ('JAVA', 'CEL', 'HTTP', 'SQL', 'DMN', 'FORM_FIELD')),
+    CONSTRAINT `chk_wf_deploy_extension_impl` CHECK
+        (`implementation_key` REGEXP '^[A-Z][A-Z0-9_]{1,63}$'),
+    CONSTRAINT `chk_wf_deploy_extension_version_checksum` CHECK
+        (`version_checksum` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_deploy_extension_snapshot_checksum` CHECK
+        (`snapshot_checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = 'Flowable 部署扩展不可变执行快照';
+
+INSERT INTO `wf_bpmn_extension`
+    (`extension_key`, `extension_name`, `extension_type`, `status`, `description`,
+     `create_by`, `create_time`, `update_by`, `update_time`)
+SELECT 'approva.set-variable', '设置流程变量', 'JAVA', 'ENABLED',
+       '将受控字符串、数字或布尔常量写入流程变量', 'system', current_timestamp(3), '', NULL
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM `wf_bpmn_extension` WHERE `extension_key` = 'approva.set-variable'
+);
+
+INSERT INTO `wf_bpmn_extension_version`
+    (`extension_id`, `version_no`, `implementation_key`, `config_schema`,
+     `checksum`, `create_by`, `create_time`)
+SELECT e.extension_id, 1, 'SET_VARIABLE',
+       CAST('{"type":"object","additionalProperties":false,"required":["targetVariable","value"],"properties":{"targetVariable":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$"},"value":{"type":["string","number","boolean"]}}}' AS JSON),
+       '42bca2710135b3faac369facee8c103683edf52b63f95c2ec2fb18f14fd3b3f0',
+       'system', current_timestamp(3)
+FROM `wf_bpmn_extension` e
+WHERE e.extension_key = 'approva.set-variable'
+  AND NOT EXISTS
+  (
+      SELECT 1 FROM `wf_bpmn_extension_version` v
+      WHERE v.extension_id = e.extension_id AND v.version_no = 1
+  );
+
+INSERT INTO `wf_bpmn_extension`
+    (`extension_key`, `extension_name`, `extension_type`, `status`, `description`,
+     `create_by`, `create_time`, `update_by`, `update_time`)
+SELECT 'approva.form.textarea', '多行文本', 'FORM_FIELD', 'ENABLED',
+       '固定为服务端安装的多行文本渲染器，用于 BPMN 内嵌 FormData',
+       'system', current_timestamp(3), '', NULL
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM `wf_bpmn_extension`
+    WHERE `extension_key` = 'approva.form.textarea'
+);
+
+INSERT INTO `wf_bpmn_extension_version`
+    (`extension_id`, `version_no`, `implementation_key`, `config_schema`,
+     `checksum`, `create_by`, `create_time`)
+SELECT e.extension_id, 1, 'FORM_FIELD_TEXTAREA_V1',
+       CAST('{"additionalProperties":false,"properties":{},"type":"object"}' AS JSON),
+       '1b6a6597e25bcf0ffeb06415b043465ec85a7cceddde850d1551e3a39b2ad78b',
+       'system', current_timestamp(3)
+FROM `wf_bpmn_extension` e
+WHERE e.extension_key = 'approva.form.textarea'
+  AND NOT EXISTS
+  (
+      SELECT 1 FROM `wf_bpmn_extension_version` v
+      WHERE v.extension_id = e.extension_id AND v.version_no = 1
+  );
+
+INSERT INTO `wf_bpmn_extension`
+    (`extension_key`, `extension_name`, `extension_type`, `status`, `description`,
+     `create_by`, `create_time`, `update_by`, `update_time`)
+SELECT 'approva.cel-expression', 'CEL 安全表达式', 'CEL', 'ENABLED',
+       '仅使用节点显式声明的标量变量计算确定性结果，不提供文件、网络、进程或 Bean 函数',
+       'system', current_timestamp(3), '', NULL
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM `wf_bpmn_extension` WHERE `extension_key` = 'approva.cel-expression'
+);
+
+INSERT INTO `wf_bpmn_extension_version`
+    (`extension_id`, `version_no`, `implementation_key`, `config_schema`,
+     `checksum`, `create_by`, `create_time`)
+SELECT e.extension_id, 1, 'CEL_EXPRESSION_V1',
+       CAST('{"additionalProperties":false,"properties":{"expression":{"maxLength":4096,"minLength":1,"type":"string"},"resultType":{"enum":["BOOL","INT","DOUBLE","STRING"],"type":"string"},"resultVariable":{"pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$","type":"string"},"variables":{"items":{"additionalProperties":false,"properties":{"name":{"pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$","type":"string"},"type":{"enum":["BOOL","INT","DOUBLE","STRING"],"type":"string"}},"required":["name","type"],"type":"object"},"maxItems":32,"type":"array"}},"required":["expression","resultVariable","resultType","variables"],"type":"object"}' AS JSON),
+       '6b5c7dcf648f27ff1fd13c654ff149a7f84b90dc2719abd33e2ef078a5970db6',
+       'system', current_timestamp(3)
+FROM `wf_bpmn_extension` e
+WHERE e.extension_key = 'approva.cel-expression'
+  AND NOT EXISTS
+  (
+      SELECT 1 FROM `wf_bpmn_extension_version` v
+      WHERE v.extension_id = e.extension_id AND v.version_no = 1
+  );
+
+CREATE TABLE IF NOT EXISTS `wf_connector_endpoint`
+(
+    `endpoint_id`         BIGINT       NOT NULL AUTO_INCREMENT COMMENT '连接器端点主键',
+    `endpoint_key`        VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '设计器使用的稳定端点键',
+    `endpoint_name`       VARCHAR(128) NOT NULL COMMENT '端点用户可见名称',
+    `base_url`            VARCHAR(1024) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '只含协议、主机和端口的基础 URL',
+    `allowed_methods`     VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '排序后的允许 HTTP 方法',
+    `path_prefix`         VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '允许请求的绝对路径前缀',
+    `auth_type`           VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'NONE、BEARER 或 API_KEY',
+    `secret_ref`          VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '外部环境密钥引用，不保存密钥正文',
+    `api_key_header`      VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT 'API_KEY 请求头名称',
+    `connect_timeout_ms`  INT          NOT NULL COMMENT '连接超时毫秒数',
+    `request_timeout_ms`  INT          NOT NULL COMMENT '请求整体超时毫秒数',
+    `network_scope`       VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'PUBLIC 或 PRIVATE',
+    `revision_no`         INT          NOT NULL COMMENT '端点配置不可回退修订号',
+    `status`              VARCHAR(16)  NOT NULL DEFAULT 'ENABLED' COMMENT 'ENABLED 或 DISABLED',
+    `checksum`            CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '当前修订配置 SHA-256',
+    `create_by`           VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '创建人正式用户主键',
+    `create_time`         DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `update_by`           VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '最后修改人正式用户主键',
+    `update_time`         DATETIME(3)           DEFAULT NULL COMMENT '最后修改时间',
+    PRIMARY KEY (`endpoint_id`),
+    UNIQUE KEY `uk_wf_connector_endpoint_key` (`endpoint_key`),
+    KEY `idx_wf_connector_endpoint_status` (`status`, `endpoint_name`),
+    CONSTRAINT `chk_wf_connector_endpoint_key` CHECK
+        (`endpoint_key` REGEXP '^[A-Za-z][A-Za-z0-9_.-]{0,127}$'),
+    CONSTRAINT `chk_wf_connector_endpoint_auth` CHECK
+        (`auth_type` IN ('NONE', 'BEARER', 'API_KEY')),
+    CONSTRAINT `chk_wf_connector_endpoint_network` CHECK
+        (`network_scope` IN ('PUBLIC', 'PRIVATE')),
+    CONSTRAINT `chk_wf_connector_endpoint_revision` CHECK (`revision_no` > 0),
+    CONSTRAINT `chk_wf_connector_endpoint_status` CHECK
+        (`status` IN ('ENABLED', 'DISABLED')),
+    CONSTRAINT `chk_wf_connector_endpoint_connect_timeout` CHECK
+        (`connect_timeout_ms` BETWEEN 100 AND 10000),
+    CONSTRAINT `chk_wf_connector_endpoint_request_timeout` CHECK
+        (`request_timeout_ms` BETWEEN 500 AND 120000),
+    CONSTRAINT `chk_wf_connector_endpoint_checksum` CHECK
+        (`checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = 'HTTP 连接器端点白名单';
+
+CREATE TABLE IF NOT EXISTS `wf_connector_invocation`
+(
+    `invocation_id`       BIGINT       NOT NULL AUTO_INCREMENT COMMENT '调用台账主键',
+    `deployment_id`       VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结逻辑所属 Flowable 部署主键',
+    `process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程实例主键',
+    `execution_id`        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '活动执行主键',
+    `element_id`          VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN 元素标识',
+    `connector_type`      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'HTTP 或 SQL',
+    `target_key`          VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结目标逻辑键',
+    `target_revision`     INT          NOT NULL COMMENT '冻结目标修订号',
+    `idempotency_key`     CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '透传外部系统的稳定 SHA-256 幂等键',
+    `operation`           VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'HTTP 方法或 SQL 操作类型',
+    `target_summary`      VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '不含业务值和凭据的目标摘要',
+    `status`              VARCHAR(16)  NOT NULL COMMENT 'PENDING、RUNNING、SUCCESS 或 FAILED',
+    `attempt_count`       INT          NOT NULL DEFAULT 0 COMMENT '累计尝试次数',
+    `duration_ms`         BIGINT                DEFAULT NULL COMMENT '最近一次尝试耗时',
+    `result_code`         INT                   DEFAULT NULL COMMENT '最近一次通用结果码',
+    `result_summary`      VARCHAR(500)          DEFAULT NULL COMMENT '长度和摘要等脱敏结果',
+    `error_code`          VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '稳定错误码',
+    `claim_token`         CHAR(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '当前尝试领取令牌',
+    `lease_expires_at`    DATETIME(3)           DEFAULT NULL COMMENT '当前尝试租约到期时间',
+    `create_time`         DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '首次创建时间',
+    `update_time`         DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '最后尝试时间',
+    PRIMARY KEY (`invocation_id`),
+    UNIQUE KEY `uk_wf_connector_invocation_idempotency` (`idempotency_key`),
+    KEY `idx_wf_connector_invocation_instance` (`process_instance_id`, `element_id`),
+    KEY `idx_wf_connector_invocation_status` (`status`, `update_time`),
+    CONSTRAINT `chk_wf_connector_invocation_type` CHECK (`connector_type` IN ('HTTP', 'SQL')),
+    CONSTRAINT `chk_wf_connector_invocation_revision` CHECK (`target_revision` > 0),
+    CONSTRAINT `chk_wf_connector_invocation_idempotency` CHECK
+        (`idempotency_key` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_connector_invocation_status` CHECK
+        (`status` IN ('PENDING', 'RUNNING', 'SUCCESS', 'FAILED')),
+    CONSTRAINT `chk_wf_connector_invocation_attempt` CHECK (`attempt_count` >= 0),
+    CONSTRAINT `chk_wf_connector_invocation_result_code` CHECK
+        (`result_code` IS NULL OR `result_code` BETWEEN 0 AND 99999)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '外部连接器幂等调用台账';
+
+INSERT INTO `wf_bpmn_extension`
+    (`extension_key`, `extension_name`, `extension_type`, `status`, `description`,
+     `create_by`, `create_time`, `update_by`, `update_time`)
+SELECT 'approva.http-connector', 'HTTP 受控连接器', 'HTTP', 'ENABLED',
+       '只调用端点白名单中已启用且在部署时冻结的 HTTP 端点',
+       'system', current_timestamp(3), '', NULL
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM `wf_bpmn_extension` WHERE `extension_key` = 'approva.http-connector'
+);
+
+INSERT INTO `wf_bpmn_extension_version`
+    (`extension_id`, `version_no`, `implementation_key`, `config_schema`,
+     `checksum`, `create_by`, `create_time`)
+SELECT e.extension_id, 1, 'HTTP_CONNECTOR_V1',
+       CAST('{"additionalProperties":false,"properties":{"bodyVariable":{"pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$","type":"string"},"endpointKey":{"pattern":"^[A-Za-z][A-Za-z0-9_.-]{0,127}$","type":"string"},"method":{"enum":["GET","POST","PUT","PATCH","DELETE"],"type":"string"},"path":{"pattern":"^/[A-Za-z0-9._~!$&''()*+,;=:@%/-]{0,511}$","type":"string"},"statusVariable":{"pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$","type":"string"}},"required":["endpointKey","method","path"],"type":"object"}' AS JSON),
+       '1e01f5bb398c3ef1755cfc53d0dffb8899464969289b7ecf10b5e6e5a9fdc2a9',
+       'system', current_timestamp(3)
+FROM `wf_bpmn_extension` e
+WHERE e.extension_key = 'approva.http-connector'
+  AND NOT EXISTS
+  (
+      SELECT 1 FROM `wf_bpmn_extension_version` v
+      WHERE v.extension_id = e.extension_id AND v.version_no = 1
+  );
+
+CREATE TABLE IF NOT EXISTS `wf_sql_datasource`
+(
+    `datasource_id`          BIGINT       NOT NULL AUTO_INCREMENT COMMENT 'SQL 数据源目录主键',
+    `datasource_key`         VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '设计器引用的稳定逻辑键',
+    `datasource_name`        VARCHAR(128) NOT NULL COMMENT '数据源显示名称',
+    `connection_type`        VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'PRIMARY 或 EXTERNAL',
+    `jdbc_url_ref`           VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '外库 JDBC URL 环境引用',
+    `username_ref`           VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '外库用户名环境引用',
+    `password_ref`           VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '外库密码环境引用',
+    `allowed_tables`         VARCHAR(8192) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '排序后的 AST 表白名单',
+    `connect_timeout_ms`     INT          NOT NULL COMMENT '外库建连超时毫秒',
+    `query_timeout_seconds`  INT          NOT NULL COMMENT '单条 SQL 超时秒数',
+    `revision_no`            INT          NOT NULL COMMENT '不可回退修订号',
+    `status`                 VARCHAR(16)  NOT NULL DEFAULT 'ENABLED' COMMENT 'ENABLED 或 DISABLED',
+    `checksum`               CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '当前修订 SHA-256',
+    `create_by`              VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '创建人正式用户主键',
+    `create_time`            DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `update_by`              VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '最后修改人正式用户主键',
+    `update_time`            DATETIME(3)           DEFAULT NULL COMMENT '最后修改时间',
+    PRIMARY KEY (`datasource_id`),
+    UNIQUE KEY `uk_wf_sql_datasource_key` (`datasource_key`),
+    KEY `idx_wf_sql_datasource_status` (`status`, `datasource_name`),
+    CONSTRAINT `chk_wf_sql_datasource_key` CHECK
+        (`datasource_key` REGEXP '^[A-Za-z][A-Za-z0-9_.-]{0,127}$'),
+    CONSTRAINT `chk_wf_sql_datasource_type` CHECK (`connection_type` IN ('PRIMARY', 'EXTERNAL')),
+    CONSTRAINT `chk_wf_sql_datasource_status` CHECK (`status` IN ('ENABLED', 'DISABLED')),
+    CONSTRAINT `chk_wf_sql_datasource_revision` CHECK (`revision_no` > 0),
+    CONSTRAINT `chk_wf_sql_datasource_connect_timeout` CHECK (`connect_timeout_ms` BETWEEN 100 AND 10000),
+    CONSTRAINT `chk_wf_sql_datasource_query_timeout` CHECK (`query_timeout_seconds` BETWEEN 1 AND 300),
+    CONSTRAINT `chk_wf_sql_datasource_checksum` CHECK (`checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = 'SQL 连接器受控数据源目录';
+
+INSERT INTO `wf_bpmn_extension`
+    (`extension_key`, `extension_name`, `extension_type`, `status`, `description`,
+     `create_by`, `create_time`, `update_by`, `update_time`)
+SELECT 'approva.sql-connector', 'SQL 受控连接器', 'SQL', 'ENABLED',
+       '只执行解析通过的单条命名参数 SQL 模板，并在部署时冻结数据源修订',
+       'system', current_timestamp(3), '', NULL
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM `wf_bpmn_extension` WHERE `extension_key` = 'approva.sql-connector'
+);
+
+INSERT INTO `wf_bpmn_extension_version`
+    (`extension_id`, `version_no`, `implementation_key`, `config_schema`,
+     `checksum`, `create_by`, `create_time`)
+SELECT e.extension_id, 1, 'SQL_CONNECTOR_V1',
+       CAST('{"additionalProperties":false,"properties":{"dataSourceKey":{"pattern":"^[A-Za-z][A-Za-z0-9_.-]{0,127}$","type":"string"},"maxRows":{"maximum":1000,"minimum":1,"type":"integer"},"parameters":{"additionalProperties":{"pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$","type":"string"},"type":"object"},"resultVariable":{"pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$","type":"string"},"sql":{"maxLength":8192,"minLength":1,"type":"string"}},"required":["dataSourceKey","sql","parameters"],"type":"object"}' AS JSON),
+       '7d996f19c7bbcf60852177c02db36fbd86cd4e088cecc420dc6a08c72a3f3cdc',
+       'system', current_timestamp(3)
+FROM `wf_bpmn_extension` e
+WHERE e.extension_key = 'approva.sql-connector'
+  AND NOT EXISTS
+  (
+      SELECT 1 FROM `wf_bpmn_extension_version` v
+      WHERE v.extension_id = e.extension_id AND v.version_no = 1
+  );
+
+CREATE TABLE IF NOT EXISTS `wf_integration_credential`
+(
+    `credential_id`         BIGINT       NOT NULL AUTO_INCREMENT COMMENT '集成凭据主键',
+    `credential_name`       VARCHAR(128) NOT NULL COMMENT '集成账号显示名称',
+    `token_prefix`          CHAR(12) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Token 可识别前缀，不是凭据正文',
+    `token_hash`            CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '完整 Token SHA-256',
+    `scopes`                VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '排序后的 MESSAGE,SIGNAL,RECEIVE 范围',
+    `allowed_variables`     VARCHAR(4096) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '排序后的变量白名单',
+    `rate_limit_per_minute` INT          NOT NULL COMMENT '每分钟最大运行事件请求数',
+    `rate_window_start`     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '当前限流窗口开始时间',
+    `rate_window_count`     INT          NOT NULL DEFAULT 0 COMMENT '当前窗口已消费请求数',
+    `expires_at`            DATETIME(3)           DEFAULT NULL COMMENT '到期时间，空表示不过期',
+    `revoked_at`            DATETIME(3)           DEFAULT NULL COMMENT '吊销时间，空表示未吊销',
+    `revision_no`           INT          NOT NULL DEFAULT 1 COMMENT 'Token 轮换修订号',
+    `last_used_at`          DATETIME(3)           DEFAULT NULL COMMENT '最近一次通过认证并消费限流的时间',
+    `create_by`             VARCHAR(64)  NOT NULL COMMENT '创建凭据的正式用户主键，也是 Flowable 事件操作人',
+    `create_time`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `update_by`             VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '最后修改人正式用户主键',
+    `update_time`           DATETIME(3)           DEFAULT NULL COMMENT '最后修改时间',
+    PRIMARY KEY (`credential_id`),
+    UNIQUE KEY `uk_wf_integration_token_prefix` (`token_prefix`),
+    KEY `idx_wf_integration_active` (`revoked_at`, `expires_at`, `credential_name`),
+    CONSTRAINT `chk_wf_integration_token_prefix` CHECK (`token_prefix` REGEXP '^[A-Za-z0-9_-]{12}$'),
+    CONSTRAINT `chk_wf_integration_token_hash` CHECK (`token_hash` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_integration_scopes` CHECK (`scopes` REGEXP '^(MESSAGE|RECEIVE|SIGNAL)(,(MESSAGE|RECEIVE|SIGNAL))*$'),
+    CONSTRAINT `chk_wf_integration_variables` CHECK
+        (`allowed_variables` = '' OR `allowed_variables` REGEXP '^[A-Za-z_][A-Za-z0-9_]*(,[A-Za-z_][A-Za-z0-9_]*)*$'),
+    CONSTRAINT `chk_wf_integration_rate_limit` CHECK (`rate_limit_per_minute` BETWEEN 1 AND 10000),
+    CONSTRAINT `chk_wf_integration_rate_window` CHECK (`rate_window_count` BETWEEN 0 AND `rate_limit_per_minute`),
+    CONSTRAINT `chk_wf_integration_revision` CHECK (`revision_no` > 0),
+    CONSTRAINT `chk_wf_integration_expiry` CHECK (`expires_at` IS NULL OR `expires_at` > `create_time`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '工作流集成账号与哈希 Token';
+
+CREATE TABLE IF NOT EXISTS `wf_runtime_event_request`
+(
+    `request_id`                  CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '调用方规范小写 UUID 幂等键',
+    `credential_id`               BIGINT       NOT NULL COMMENT '认证通过的集成凭据主键',
+    `event_type`                  VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'MESSAGE、SIGNAL 或 RECEIVE',
+    `event_name`                  VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '事件名或 ReceiveTask activityId',
+    `correlation_type`            VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'PROCESS_INSTANCE 或 BUSINESS_KEY',
+    `correlation_value`           VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '实例主键或业务键',
+    `variables_sha256`            CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范请求载荷摘要',
+    `matched_process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '唯一匹配的流程实例',
+    `matched_execution_id`        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '唯一匹配的订阅或接收执行',
+    `status`                      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'RECEIVED、PROCESSED 或 FAILED',
+    `result_code`                 VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '稳定结果码',
+    `result_summary`              VARCHAR(512) DEFAULT NULL COMMENT '不含变量正文的结果摘要',
+    `create_time`                 DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '请求首次登记时间',
+    `complete_time`               DATETIME(3)           DEFAULT NULL COMMENT '处理完成或失败时间',
+    PRIMARY KEY (`request_id`),
+    KEY `idx_wf_runtime_event_credential` (`credential_id`, `create_time`),
+    KEY `idx_wf_runtime_event_instance` (`matched_process_instance_id`, `create_time`),
+    KEY `idx_wf_runtime_event_status` (`status`, `create_time`),
+    CONSTRAINT `fk_wf_runtime_event_credential` FOREIGN KEY (`credential_id`)
+        REFERENCES `wf_integration_credential` (`credential_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `chk_wf_runtime_event_request_id` CHECK
+        (`request_id` REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
+    CONSTRAINT `chk_wf_runtime_event_type` CHECK (`event_type` IN ('MESSAGE', 'SIGNAL', 'RECEIVE')),
+    CONSTRAINT `chk_wf_runtime_event_correlation` CHECK (`correlation_type` IN ('PROCESS_INSTANCE', 'BUSINESS_KEY')),
+    CONSTRAINT `chk_wf_runtime_event_variables_hash` CHECK (`variables_sha256` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_runtime_event_status` CHECK (`status` IN ('RECEIVED', 'PROCESSED', 'FAILED')),
+    CONSTRAINT `chk_wf_runtime_event_completion` CHECK
+    (
+        (`status` = 'RECEIVED' AND `complete_time` IS NULL AND `result_code` IS NULL)
+        OR
+        (`status` IN ('PROCESSED', 'FAILED') AND `complete_time` IS NOT NULL
+            AND `result_code` IS NOT NULL AND `result_summary` IS NOT NULL)
+    )
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '消息、信号与 ReceiveTask 运行事件幂等审计';
 
 CREATE TABLE IF NOT EXISTS `wf_copy`
 (
@@ -127,6 +546,34 @@ CREATE TABLE IF NOT EXISTS `wf_model_save_idempotency`
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '流程模型设计保存持久化幂等记录；模型主键为审计软引用，不依赖 ACT 表级联';
+
+CREATE TABLE IF NOT EXISTS `wf_designer_preference`
+(
+    `user_id`                  BIGINT      NOT NULL COMMENT '若依正式用户主键',
+    `theme`                    VARCHAR(16) NOT NULL DEFAULT 'SYSTEM' COMMENT '设计器主题：LIGHT、DARK、SYSTEM',
+    `grid_enabled`             TINYINT(1)  NOT NULL DEFAULT 1 COMMENT '是否显示并启用网格吸附',
+    `minimap_enabled`          TINYINT(1)  NOT NULL DEFAULT 1 COMMENT '是否显示小地图',
+    `lint_enabled`             TINYINT(1)  NOT NULL DEFAULT 1 COMMENT '是否启用客户端 Lint',
+    `token_simulation_enabled` TINYINT(1)  NOT NULL DEFAULT 0 COMMENT '是否启用 Token 流程模拟',
+    `properties_collapsed`     TINYINT(1)  NOT NULL DEFAULT 0 COMMENT '是否折叠右侧属性面板',
+    `create_time`              DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '首次创建时间',
+    `update_time`              DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '最近更新时间',
+    PRIMARY KEY (`user_id`),
+    CONSTRAINT `fk_wf_designer_preference_user` FOREIGN KEY (`user_id`)
+        REFERENCES `sys_user` (`user_id`) ON UPDATE RESTRICT ON DELETE CASCADE,
+    CONSTRAINT `chk_wf_designer_preference_theme` CHECK (`theme` IN ('LIGHT', 'DARK', 'SYSTEM')),
+    CONSTRAINT `chk_wf_designer_preference_flags` CHECK
+    (
+        `grid_enabled` IN (0, 1)
+        AND `minimap_enabled` IN (0, 1)
+        AND `lint_enabled` IN (0, 1)
+        AND `token_simulation_enabled` IN (0, 1)
+        AND `properties_collapsed` IN (0, 1)
+    )
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = 'BPMN 设计器用户偏好';
 
 CREATE TABLE IF NOT EXISTS `wf_attachment_quota_guard`
 (

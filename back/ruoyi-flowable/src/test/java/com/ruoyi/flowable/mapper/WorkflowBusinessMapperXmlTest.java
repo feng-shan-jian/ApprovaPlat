@@ -96,7 +96,7 @@ class WorkflowBusinessMapperXmlTest
     }
 
     /**
-     * 验证部署表单保存 form_id 且查询严格读取不可变快照，不回连当前 wf_form。
+     * 验证部署表单保存双来源字段且查询严格读取不可变快照，不回连当前 wf_form。
      * @return void，快照映射或查询契约错误时测试失败
      * @throws Exception 解析 XML 失败
      */
@@ -108,6 +108,7 @@ class WorkflowBusinessMapperXmlTest
         Element select = elementById(document, "select", "selectByDeploymentId");
         String selectSql = normalizeSql(select.getTextContent()).toLowerCase();
 
+        assertThat(attributeForProperty(resultMap, "sourceType")).isEqualTo("source_type");
         assertThat(attributeForProperty(resultMap, "formId")).isEqualTo("form_id");
         assertThat(selectSql).contains("from wf_deploy_form");
         assertThat(selectSql).doesNotContain(" join ").doesNotContain("wf_form ");

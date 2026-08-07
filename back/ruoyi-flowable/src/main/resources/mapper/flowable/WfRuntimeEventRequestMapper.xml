@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfRuntimeEventRequestMapper">
+    <resultMap id="RuntimeEventResult" type="com.ruoyi.flowable.domain.WfRuntimeEventRequest">
+        <id property="requestId" column="request_id"/>
+        <result property="credentialId" column="credential_id"/>
+        <result property="eventType" column="event_type"/>
+        <result property="eventName" column="event_name"/>
+        <result property="correlationType" column="correlation_type"/>
+        <result property="correlationValue" column="correlation_value"/>
+        <result property="variablesSha256" column="variables_sha256"/>
+        <result property="matchedProcessInstanceId" column="matched_process_instance_id"/>
+        <result property="matchedExecutionId" column="matched_execution_id"/>
+        <result property="status" column="status"/>
+        <result property="resultCode" column="result_code"/>
+        <result property="resultSummary" column="result_summary"/>
+        <result property="createTime" column="create_time"/>
+        <result property="completeTime" column="complete_time"/>
+    </resultMap>
+
+    <sql id="Columns">
+        request_id, credential_id, event_type, event_name, correlation_type,
+        correlation_value, variables_sha256, matched_process_instance_id,
+        matched_execution_id, status, result_code, result_summary, create_time,
+        complete_time
+    </sql>
+
+    <select id="selectList" resultMap="RuntimeEventResult">
+        select <include refid="Columns"/>
+        from wf_runtime_event_request
+        order by create_time desc, request_id desc
+        limit 1000
+    </select>
+
+    <select id="selectByIdForUpdate" resultMap="RuntimeEventResult">
+        select <include refid="Columns"/>
+        from wf_runtime_event_request
+        where request_id = #{requestId}
+        for update
+    </select>
+
+    <select id="selectById" resultMap="RuntimeEventResult">
+        select <include refid="Columns"/>
+        from wf_runtime_event_request
+        where request_id = #{requestId}
+    </select>
+
+    <insert id="insertReceived">
+        insert into wf_runtime_event_request
+            (request_id, credential_id, event_type, event_name, correlation_type,
+             correlation_value, variables_sha256, status, create_time)
+        values
+            (#{requestId}, #{credentialId}, #{eventType}, #{eventName},
+             #{correlationType}, #{correlationValue}, #{variablesSha256},
+             'RECEIVED', current_timestamp(3))
+    </insert>
+
+    <insert id="insertFailed">
+        insert into wf_runtime_event_request
+            (request_id, credential_id, event_type, event_name, correlation_type,
+             correlation_value, variables_sha256, status, result_code,
+             result_summary, create_time, complete_time)
+        values
+            (#{requestId}, #{credentialId}, #{eventType}, #{eventName},
+             #{correlationType}, #{correlationValue}, #{variablesSha256},
+             'FAILED', #{resultCode}, #{resultSummary}, current_timestamp(3),
+             current_timestamp(3))
+    </insert>
+
+    <update id="markProcessed">
+        update wf_runtime_event_request
+        set matched_process_instance_id = #{matchedProcessInstanceId},
+            matched_execution_id = #{matchedExecutionId}, status = 'PROCESSED',
+            result_code = #{resultCode}, result_summary = #{resultSummary},
+            complete_time = current_timestamp(3)
+        where request_id = #{requestId} and status = 'RECEIVED'
+    </update>
+</mapper>

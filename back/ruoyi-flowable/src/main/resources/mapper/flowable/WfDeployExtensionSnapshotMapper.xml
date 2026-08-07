@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper">
+
+    <resultMap id="SnapshotResult" type="com.ruoyi.flowable.domain.WfDeployExtensionSnapshot">
+        <id property="snapshotId" column="snapshot_id"/>
+        <result property="deployId" column="deploy_id"/>
+        <result property="processKey" column="process_key"/>
+        <result property="elementId" column="element_id"/>
+        <result property="extensionKey" column="extension_key"/>
+        <result property="extensionVersionId" column="extension_version_id"/>
+        <result property="versionNo" column="version_no"/>
+        <result property="extensionType" column="extension_type"/>
+        <result property="implementationKey" column="implementation_key"/>
+        <result property="configJson" column="config_json"/>
+        <result property="versionChecksum" column="version_checksum"/>
+        <result property="snapshotChecksum" column="snapshot_checksum"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <insert id="insertBatch">
+        <choose>
+            <when test="snapshots != null and snapshots.size() > 0">
+                insert into wf_deploy_extension_snapshot
+                    (deploy_id, process_key, element_id, extension_key, extension_version_id,
+                     version_no, extension_type, implementation_key, config_json,
+                     version_checksum, snapshot_checksum, create_by, create_time)
+                values
+                <foreach collection="snapshots" item="snapshot" separator=",">
+                    (#{snapshot.deployId}, #{snapshot.processKey}, #{snapshot.elementId},
+                     #{snapshot.extensionKey}, #{snapshot.extensionVersionId}, #{snapshot.versionNo},
+                     #{snapshot.extensionType}, #{snapshot.implementationKey}, #{snapshot.configJson},
+                     #{snapshot.versionChecksum}, #{snapshot.snapshotChecksum}, #{snapshot.createBy},
+                     current_timestamp(3))
+                </foreach>
+            </when>
+            <otherwise>
+                insert into wf_deploy_extension_snapshot
+                    (deploy_id, process_key, element_id, extension_key, extension_version_id,
+                     version_no, extension_type, implementation_key, config_json,
+                     version_checksum, snapshot_checksum, create_by, create_time)
+                select '', '', '', '', 0, 0, 'JAVA', '', '{}', repeat('0', 64), repeat('0', 64), '', current_timestamp(3)
+                where 1 = 0
+            </otherwise>
+        </choose>
+    </insert>
+
+    <select id="selectRuntimeSnapshot" resultMap="SnapshotResult">
+        select snapshot_id, deploy_id, process_key, element_id, extension_key,
+               extension_version_id, version_no, extension_type, implementation_key,
+               config_json, version_checksum, snapshot_checksum, create_by, create_time
+        from wf_deploy_extension_snapshot
+        where deploy_id = #{deployId}
+          and process_key = #{processKey}
+          and element_id = #{elementId}
+    </select>
+
+    <select id="selectByDeploymentId" resultMap="SnapshotResult">
+        select snapshot_id, deploy_id, process_key, element_id, extension_key,
+               extension_version_id, version_no, extension_type, implementation_key,
+               config_json, version_checksum, snapshot_checksum, create_by, create_time
+        from wf_deploy_extension_snapshot
+        where deploy_id = #{deployId}
+        order by process_key, element_id
+    </select>
+
+    <delete id="deleteByDeploymentId">
+        delete from wf_deploy_extension_snapshot where deploy_id = #{deployId}
+    </delete>
+</mapper>

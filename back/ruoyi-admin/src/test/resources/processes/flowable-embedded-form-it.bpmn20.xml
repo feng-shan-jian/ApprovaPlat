@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="https://approvaplat.example/flowable/embedded-form-integration-test">
+  <process id="flowableEmbeddedFormIntegration" name="内嵌表单集成测试" isExecutable="true">
+    <startEvent id="start" name="提交申请" flowable:initiator="initiator">
+      <extensionElements>
+        <flowable:formProperty id="requestReason" name="申请原因" type="string"
+                               readable="true" writable="true" required="true"/>
+        <flowable:formProperty id="amount" name="金额" type="long"
+                               readable="true" writable="true" required="true"/>
+      </extensionElements>
+    </startEvent>
+    <sequenceFlow id="toReview" sourceRef="start" targetRef="review"/>
+    <userTask id="review" name="审批" flowable:assignee="1">
+      <extensionElements>
+        <flowable:formProperty id="decision" name="审批结论" type="enum"
+                               readable="true" writable="true" required="true">
+          <flowable:value id="APPROVE" name="同意"/>
+          <flowable:value id="REJECT" name="拒绝"/>
+        </flowable:formProperty>
+        <flowable:formProperty id="confirmed" name="确认" type="boolean"
+                               readable="true" writable="true" required="true"/>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="toEnd" sourceRef="review" targetRef="end"/>
+    <endEvent id="end" name="结束"/>
+  </process>
+</definitions>

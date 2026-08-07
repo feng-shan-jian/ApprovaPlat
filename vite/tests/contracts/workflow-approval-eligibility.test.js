@@ -19,6 +19,8 @@ const detailSource = readFileSync(new URL('../../src/views/workflow/work/detail.
 const requestSource = readFileSync(new URL('../../src/utils/request.js', import.meta.url), 'utf8')
 const designPageSource = readFileSync(new URL('../../src/views/workflow/model/design.vue', import.meta.url), 'utf8')
 const designerSource = readFileSync(new URL('../../src/components/workflow/ProcessDesigner.vue', import.meta.url), 'utf8')
+const designerPropertiesPanelSource = readFileSync(
+  new URL('../../src/components/workflow/designer/DesignerPropertiesPanel.vue', import.meta.url), 'utf8')
 const taskListenerXmlSource = readFileSync(new URL('../../src/components/workflow/taskListenerXml.js', import.meta.url), 'utf8')
 
 /**
@@ -211,11 +213,13 @@ test('流程设计器按办理方式隔离身份资格目录', () => {
     /listClaimableIdentityOptions\(\{ type: 'role'[\s\S]*?listClaimableIdentityOptions\(\{ type: 'dept'/)
   assert.match(designerSource,
     /assignees: Object\.freeze\(\{ type: 'user', capability: 'approval' \}\)[\s\S]*?candidateUsers: Object\.freeze\(\{ type: 'user', capability: 'claim' \}\)[\s\S]*?candidateGroups: Object\.freeze\(\{ type: 'group', capability: 'claim' \}\)/)
-  assert.match(designerSource,
+  assert.match(designerPropertiesPanelSource,
     /:remote-method="searchAssignees"[\s\S]*?identityOptions\.assignees[\s\S]*?:remote-method="searchCandidateUsers"[\s\S]*?identityOptions\.candidateUsers[\s\S]*?:remote-method="searchCandidateGroups"[\s\S]*?identityOptions\.candidateGroups/)
+  assert.match(designerSource,
+    /function handlePanelIdentitySearch\(request\)[\s\S]*?!IDENTITY_SEARCH_CONTRACTS\[target\][\s\S]*?scheduleIdentitySearch\(target, request\?\.keyword\)/)
   assert.doesNotMatch(designPageSource, /listIdentityOptions/)
-  assert.doesNotMatch(designerSource, /identityOptions\.(?:users|groups)/)
-  assert.doesNotMatch(`${detailSource}\n${designPageSource}\n${designerSource}`,
+  assert.doesNotMatch(`${designerSource}\n${designerPropertiesPanelSource}`, /identityOptions\.(?:users|groups)/)
+  assert.doesNotMatch(`${detailSource}\n${designPageSource}\n${designerSource}\n${designerPropertiesPanelSource}`,
     /workflow_approver|workflow:process:approval.*(?:option|filter)/i)
 })
 
@@ -262,6 +266,9 @@ test('任务审计监听器按固定运行时契约重建', () => {
         <flowable:formProperty id="keep" />
         <flowable:taskListener event="create" delegateExpression="\${userTaskListener}" onTransaction="committed" />
         <flowable:taskListener event="assignment" class="unsafe.Listener" />
+        <flowable:taskListener event="delete" delegateExpression="\${workflowBusinessListener}">
+          <flowable:field name="approvaExtensionKey" stringValue="approva.set-variable" />
+        </flowable:taskListener>
         <unsafe:taskListener event="complete" delegateExpression="\${userTaskListener}">
           <unsafe:field />
         </unsafe:taskListener>
@@ -286,9 +293,19 @@ test('任务审计监听器按固定运行时契约重建', () => {
     assert.ok(extensionElements)
     const listeners = Array.from(extensionElements.childNodes).filter(child =>
       child.nodeType === 1 && child.localName === 'taskListener')
-    assert.deepEqual(listeners.map(listener => listener.getAttribute('event')),
+    const businessListeners = listeners.filter(listener =>
+      listener.getAttribute('delegateExpression') === '${workflowBusinessListener}')
+    const systemListeners = listeners.filter(listener =>
+      listener.getAttribute('delegateExpression') === '${userTaskListener}')
+    assert.equal(businessListeners.length, userTask.getAttribute('id') === 'Task_1' ? 1 : 0)
+    if (businessListeners.length) {
+      assert.equal(businessListeners[0].getAttribute('event'), 'delete')
+      assert.equal(businessListeners[0].getElementsByTagNameNS(
+        'http://flowable.org/bpmn', 'field').length, 1)
+    }
+    assert.deepEqual(systemListeners.map(listener => listener.getAttribute('event')),
       ['create', 'assignment', 'complete'])
-    for (const listener of listeners) {
+    for (const listener of systemListeners) {
       assert.equal(listener.namespaceURI, 'http://flowable.org/bpmn')
       assert.equal(listener.getAttribute('delegateExpression'), '${userTaskListener}')
       assert.deepEqual(Array.from(listener.attributes).map(attribute => attribute.name).sort(),

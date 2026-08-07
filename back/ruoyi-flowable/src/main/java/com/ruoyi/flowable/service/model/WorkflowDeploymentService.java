@@ -16,15 +16,20 @@ import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.Model;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
+import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.dto.WorkflowDeploymentQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowDeploymentView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
+import com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 
 /**
  * 流程定义状态、部署版本和非级联删除的业务服务。
@@ -48,7 +53,16 @@ public class WorkflowDeploymentService
 
     private final WfDeployFormMapper deployFormMapper;
 
+    private final WfDeployExtensionSnapshotMapper deployExtensionSnapshotMapper;
+
+    private final WfDeployDmnSnapshotMapper deployDmnSnapshotMapper;
+
+    private final WorkflowDmnDecisionService dmnDecisionService;
+
     private final WorkflowBpmnService bpmnService;
+
+    /** 删除部署前保护被调用活动精确引用的流程定义；旧构造测试可为空。 */
+    private final WorkflowCallActivityReferenceService callActivityReferenceService;
 
     /**
      * 创建流程部署服务。
@@ -58,20 +72,60 @@ public class WorkflowDeploymentService
      * @param runtimeService RuntimeService，运行实例公共 API
      * @param historyService HistoryService，历史实例公共 API
      * @param deployFormMapper WfDeployFormMapper，部署表单快照数据访问层
+     * @param deployExtensionSnapshotMapper WfDeployExtensionSnapshotMapper，部署扩展快照数据访问层
+     * @param deployDmnSnapshotMapper WfDeployDmnSnapshotMapper，部署 DMN 快照数据访问层
+     * @param dmnDecisionService WorkflowDmnDecisionService，冻结 DMN 子部署清理服务
      * @param bpmnService WorkflowBpmnService，BPMN 安全解析和校验组件
+     * @param callActivityReferenceService WorkflowCallActivityReferenceService，调用活动目标删除保护服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
+    @Autowired
     public WorkflowDeploymentService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, RuntimeService runtimeService,
             HistoryService historyService, WfDeployFormMapper deployFormMapper,
-            WorkflowBpmnService bpmnService)
+            WfDeployExtensionSnapshotMapper deployExtensionSnapshotMapper,
+            WfDeployDmnSnapshotMapper deployDmnSnapshotMapper,
+            WorkflowDmnDecisionService dmnDecisionService,
+            WorkflowBpmnService bpmnService,
+            WorkflowCallActivityReferenceService callActivityReferenceService)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.historyService = historyService;
         this.deployFormMapper = deployFormMapper;
+        this.deployExtensionSnapshotMapper = deployExtensionSnapshotMapper;
+        this.deployDmnSnapshotMapper = deployDmnSnapshotMapper;
+        this.dmnDecisionService = dmnDecisionService;
         this.bpmnService = bpmnService;
+        this.callActivityReferenceService = callActivityReferenceService;
+    }
+
+    /**
+     * 兼容既有不涉及 CallActivity 删除保护的纯单元测试构造方式。
+     *
+     * @param engineOperations WorkflowEngineOperations，统一事务、身份和异常边界
+     * @param repositoryService RepositoryService，Flowable 仓储 API
+     * @param runtimeService RuntimeService，运行实例 API
+     * @param historyService HistoryService，历史实例 API
+     * @param deployFormMapper WfDeployFormMapper，部署表单快照 Mapper
+     * @param deployExtensionSnapshotMapper WfDeployExtensionSnapshotMapper，部署扩展快照 Mapper
+     * @param deployDmnSnapshotMapper WfDeployDmnSnapshotMapper，部署 DMN 快照 Mapper
+     * @param dmnDecisionService WorkflowDmnDecisionService，冻结 DMN 清理服务
+     * @param bpmnService WorkflowBpmnService，BPMN 安全读取服务
+     * @return 无返回值，仅为既有测试保留
+     */
+    public WorkflowDeploymentService(WorkflowEngineOperations engineOperations,
+            RepositoryService repositoryService, RuntimeService runtimeService,
+            HistoryService historyService, WfDeployFormMapper deployFormMapper,
+            WfDeployExtensionSnapshotMapper deployExtensionSnapshotMapper,
+            WfDeployDmnSnapshotMapper deployDmnSnapshotMapper,
+            WorkflowDmnDecisionService dmnDecisionService,
+            WorkflowBpmnService bpmnService)
+    {
+        this(engineOperations, repositoryService, runtimeService, historyService,
+                deployFormMapper, deployExtensionSnapshotMapper, deployDmnSnapshotMapper,
+                dmnDecisionService, bpmnService, null);
     }
 
     /**
@@ -203,7 +257,7 @@ public class WorkflowDeploymentService
                     throw new ServiceException("流程定义 BPMN 不存在", HttpStatus.NOT_FOUND);
                 }
                 byte[] bytes = readBounded(stream);
-                return bpmnService.validate(bytes).bpmnXml();
+                return bpmnService.validateCompiledDeployment(bytes).bpmnXml();
             }
             catch (IOException exception)
             {
@@ -225,16 +279,25 @@ public class WorkflowDeploymentService
         List<String> normalizedIds = requireIds(deploymentIds, "部署主键不能为空");
         engineOperations.writeAsCurrentUser(identity ->
         {
+            if (callActivityReferenceService != null)
+            {
+                // 全部部署先统一预检，避免逐个删除后才发现剩余父流程仍引用目标定义。
+                callActivityReferenceService.assertDeploymentsNotReferenced(normalizedIds);
+            }
             List<DeploymentDeletionPlan> plans = new ArrayList<>(normalizedIds.size());
             for (String deploymentId : normalizedIds)
             {
                 Deployment deployment = requireDeployment(deploymentId);
                 assertNoInstanceReferences(deploymentId);
                 List<WfDeployForm> snapshots = safeSnapshots(deploymentId);
+                List<WfDeployExtensionSnapshot> extensionSnapshots =
+                        safeExtensionSnapshots(deploymentId);
+                List<WfDeployDmnSnapshot> dmnSnapshots = safeDmnSnapshots(deploymentId);
                 List<Model> linkedModels = repositoryService.createModelQuery()
                         .deploymentId(deploymentId)
                         .list();
-                plans.add(new DeploymentDeletionPlan(deployment, snapshots, linkedModels));
+                plans.add(new DeploymentDeletionPlan(
+                        deployment, snapshots, extensionSnapshots, dmnSnapshots, linkedModels));
             }
 
             for (DeploymentDeletionPlan plan : plans)
@@ -247,6 +310,17 @@ public class WorkflowDeploymentService
                 {
                     throw new ServiceException("部署表单快照状态已变化", HttpStatus.CONFLICT);
                 }
+                int deletedExtensionSnapshots = deployExtensionSnapshotMapper
+                        .deleteByDeploymentId(deploymentId);
+                if (deletedExtensionSnapshots != plan.extensionSnapshots().size())
+                {
+                    throw new ServiceException("部署扩展快照状态已变化", HttpStatus.CONFLICT);
+                }
+                int deletedDmnSnapshots = deployDmnSnapshotMapper.deleteByDeploymentId(deploymentId);
+                if (deletedDmnSnapshots != plan.dmnSnapshots().size())
+                {
+                    throw new ServiceException("部署 DMN 快照状态已变化", HttpStatus.CONFLICT);
+                }
                 for (Model model : plan.linkedModels())
                 {
                     model.setDeploymentId(null);
@@ -256,6 +330,8 @@ public class WorkflowDeploymentService
                 {
                     // 禁止 cascade=true；运行和历史数据必须由显式状态门禁保护。
                     repositoryService.deleteDeployment(deploymentId);
+                    // 主部署删除成功后再删除其冻结 DMN 子部署；任一失败由统一事务整体回滚。
+                    dmnDecisionService.deleteFrozenDeployments(plan.dmnSnapshots());
                 }
                 catch (FlowableException exception)
                 {
@@ -406,6 +482,32 @@ public class WorkflowDeploymentService
     }
 
     /**
+     * 查询部署自有扩展执行快照并规范化 Mapper 空返回。
+     *
+     * @param deploymentId String，Flowable 部署主键
+     * @return List&lt;WfDeployExtensionSnapshot&gt;，不可变扩展快照列表
+     */
+    private List<WfDeployExtensionSnapshot> safeExtensionSnapshots(String deploymentId)
+    {
+        List<WfDeployExtensionSnapshot> snapshots = deployExtensionSnapshotMapper
+                .selectByDeploymentId(deploymentId);
+        return snapshots == null ? List.of() : List.copyOf(snapshots);
+    }
+
+    /**
+     * 查询部署自有 DMN 冻结快照并规范化 Mapper 空返回。
+     *
+     * @param deploymentId String，Flowable 流程部署主键
+     * @return List&lt;WfDeployDmnSnapshot&gt;，不可变 DMN 快照列表
+     */
+    private List<WfDeployDmnSnapshot> safeDmnSnapshots(String deploymentId)
+    {
+        List<WfDeployDmnSnapshot> snapshots = deployDmnSnapshotMapper
+                .selectByDeploymentId(deploymentId);
+        return snapshots == null ? List.of() : List.copyOf(snapshots);
+    }
+
+    /**
      * 有界读取部署 BPMN，防止异常资源导致内存耗尽。
      *
      * @param stream InputStream，Flowable 返回的 BPMN 资源流
@@ -514,22 +616,29 @@ public class WorkflowDeploymentService
      *
      * @param deployment Deployment，待删除 Flowable 部署
      * @param snapshots List&lt;WfDeployForm&gt;，部署当前拥有的表单快照
+     * @param extensionSnapshots List&lt;WfDeployExtensionSnapshot&gt;，部署当前拥有的扩展执行快照
+     * @param dmnSnapshots List&lt;WfDeployDmnSnapshot&gt;，部署当前拥有的 DMN 冻结快照
      * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
      */
     private record DeploymentDeletionPlan(Deployment deployment, List<WfDeployForm> snapshots,
-            List<Model> linkedModels)
+            List<WfDeployExtensionSnapshot> extensionSnapshots,
+            List<WfDeployDmnSnapshot> dmnSnapshots, List<Model> linkedModels)
     {
         /**
          * 创建不可变删除计划，防止预检结果在服务代码中被修改。
          *
          * @param deployment Deployment，待删除 Flowable 部署
          * @param snapshots List&lt;WfDeployForm&gt;，部署当前拥有的表单快照
+         * @param extensionSnapshots List&lt;WfDeployExtensionSnapshot&gt;，部署当前拥有的扩展执行快照
+         * @param dmnSnapshots List&lt;WfDeployDmnSnapshot&gt;，部署当前拥有的 DMN 冻结快照
          * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
          * @return 无返回值，构造后得到不可变删除计划
          */
         private DeploymentDeletionPlan
         {
             snapshots = List.copyOf(snapshots);
+            extensionSnapshots = List.copyOf(extensionSnapshots);
+            dmnSnapshots = List.copyOf(dmnSnapshots);
             linkedModels = List.copyOf(linkedModels);
         }
     }

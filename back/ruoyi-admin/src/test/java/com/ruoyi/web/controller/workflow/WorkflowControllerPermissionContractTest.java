@@ -20,6 +20,11 @@ class WorkflowControllerPermissionContractTest
             WfAttachmentController.class,
             WfCategoryController.class,
             WfDeployController.class,
+            WfDesignerController.class,
+            WfConnectorController.class,
+            WfDmnController.class,
+            WfExtensionController.class,
+            WfSqlDataSourceController.class,
             WfFormController.class,
             WfIdentityController.class,
             WfInstanceController.class,
@@ -28,7 +33,7 @@ class WorkflowControllerPermissionContractTest
             WfTaskController.class);
 
     /** 当前生产工作流显式方法级 mapping 数量。 */
-    private static final int EXPECTED_MAPPING_COUNT = 70;
+    private static final int EXPECTED_MAPPING_COUNT = 98;
 
     /**
      * 冻结全部工作流 HTTP 入口数量，并保证每个入口均经过方法级 URL 权限门禁。
@@ -83,6 +88,47 @@ class WorkflowControllerPermissionContractTest
         assertPreAuthorize(WfModelController.class, "save",
                 "@ss.hasPermi('workflow:model:save')",
                 com.ruoyi.flowable.domain.dto.WorkflowModelSaveRequest.class);
+        assertPreAuthorize(WfModelController.class, "validate",
+                "@ss.hasPermi('workflow:model:designer')",
+                com.ruoyi.flowable.domain.dto.WorkflowBpmnValidationRequest.class);
+        assertPreAuthorize(WfDesignerController.class, "getPreference",
+                "@ss.hasPermi('workflow:model:designer')");
+        assertPreAuthorize(WfDesignerController.class, "savePreference",
+                "@ss.hasPermi('workflow:model:designer')",
+                com.ruoyi.flowable.domain.dto.WorkflowDesignerPreferenceRequest.class);
+        assertPreAuthorize(WfExtensionController.class, "javaOptions",
+                "@ss.hasAnyPermi('workflow:extension:list,workflow:model:designer')");
+        assertPreAuthorize(WfExtensionController.class, "celOptions",
+                "@ss.hasAnyPermi('workflow:extension:list,workflow:model:designer')");
+        assertPreAuthorize(WfExtensionController.class, "httpOptions",
+                "@ss.hasAnyPermi('workflow:extension:list,workflow:model:designer')");
+        assertPreAuthorize(WfExtensionController.class, "sqlOptions",
+                "@ss.hasAnyPermi('workflow:extension:list,workflow:model:designer')");
+        assertPreAuthorize(WfExtensionController.class, "formFieldOptions",
+                "@ss.hasAnyPermi('workflow:extension:list,workflow:model:designer')");
+        assertPreAuthorize(WfExtensionController.class, "installedJavaHandlers",
+                "@ss.hasPermi('workflow:extension:list')");
+        assertPreAuthorize(WfExtensionController.class, "list",
+                "@ss.hasPermi('workflow:extension:list')");
+        assertPreAuthorize(WfExtensionController.class, "remove",
+                "@ss.hasPermi('workflow:extension:remove')", Long.class);
+        assertPreAuthorize(WfConnectorController.class, "options",
+                "@ss.hasAnyPermi('workflow:connector:list,workflow:model:designer')");
+        assertPreAuthorize(WfConnectorController.class, "list",
+                "@ss.hasPermi('workflow:connector:list')");
+        assertPreAuthorize(WfDmnController.class, "options",
+                "@ss.hasAnyPermi('workflow:dmn:list,workflow:model:designer')");
+        assertPreAuthorize(WfDmnController.class, "list",
+                "@ss.hasPermi('workflow:dmn:list')");
+        assertPreAuthorize(WfDmnController.class, "deploy",
+                "@ss.hasPermi('workflow:dmn:add')",
+                com.ruoyi.flowable.domain.dto.WorkflowDmnDeploymentRequest.class);
+        assertPreAuthorize(WfDmnController.class, "delete",
+                "@ss.hasPermi('workflow:dmn:remove')", String.class);
+        assertPreAuthorize(WfSqlDataSourceController.class, "options",
+                "@ss.hasAnyPermi('workflow:sqlDatasource:list,workflow:model:designer')");
+        assertPreAuthorize(WfSqlDataSourceController.class, "list",
+                "@ss.hasPermi('workflow:sqlDatasource:list')");
         assertPreAuthorize(WfFormController.class, "list",
                 "@ss.hasAnyPermi('workflow:form:list,workflow:model:list,workflow:model:designer')",
                 WfForm.class, int.class, int.class);

@@ -29,6 +29,34 @@
             <artifactId>flowable-spring-boot-starter-process</artifactId>
         </dependency>
 
+        <!-- BusinessRuleTask 部署后由官方 Flowable DMN 引擎执行冻结决策。 -->
+        <dependency>
+            <groupId>org.flowable</groupId>
+            <artifactId>flowable-spring-boot-starter-dmn</artifactId>
+        </dependency>
+        <!-- Process Engine 通过该官方 Configurator 执行同部署冻结的 DMN 决策。 -->
+        <dependency>
+            <groupId>org.flowable</groupId>
+            <artifactId>flowable-dmn-engine-configurator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flowable</groupId>
+            <artifactId>flowable-dmn-spring-configurator</artifactId>
+        </dependency>
+
+        <!-- 受控 SQL 连接器通过 SQL AST 校验单语句和命名参数模板。 -->
+        <dependency>
+            <groupId>com.github.jsqlparser</groupId>
+            <artifactId>jsqlparser</artifactId>
+        </dependency>
+
+        <!-- CEL 仅作为受控表达式编译器和运行时使用，不加载网络、文件或 Spring 扩展。 -->
+        <dependency>
+            <groupId>dev.cel</groupId>
+            <artifactId>cel</artifactId>
+            <version>${cel.version}</version>
+        </dependency>
+
         <!-- 工作流运行健康和业务指标由应用的受控 Actuator 端点统一发布。 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -49,6 +77,11 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

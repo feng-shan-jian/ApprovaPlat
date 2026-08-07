@@ -37,6 +37,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowModelCreateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
 import com.ruoyi.flowable.domain.dto.WorkflowModelSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowModelUpdateRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowBpmnValidationRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowModelExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowModelView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
@@ -179,12 +180,26 @@ public class WfModelController extends BaseController
      * @return AjaxResult，包含实际保存模型主键的响应
      */
     @PreAuthorize("@ss.hasPermi('workflow:model:save')")
-    @Log(title = "保存流程模型", businessType = BusinessType.UPDATE)
+    @Log(title = "保存流程模型", businessType = BusinessType.UPDATE,
+            excludeParamNames = {"bpmnXml"})
     @PostMapping("/save")
     public AjaxResult save(@Valid @RequestBody WorkflowModelSaveRequest request)
     {
         String savedModelId = modelService.saveModel(toModelDto(request));
         return success(Map.of("modelId", savedModelId));
+    }
+
+    /**
+     * 使用保存和部署共同服务端门禁编译校验 BPMN，不产生模型或部署写副作用。
+     *
+     * @param request WorkflowBpmnValidationRequest，待校验的完整 BPMN XML
+     * @return AjaxResult，包含 code、severity、elementId 和 message 的结构化诊断报告
+     */
+    @PreAuthorize("@ss.hasPermi('workflow:model:designer')")
+    @PostMapping("/validate")
+    public AjaxResult validate(@Valid @RequestBody WorkflowBpmnValidationRequest request)
+    {
+        return success(modelService.validateBpmn(request.bpmnXml()));
     }
 
     /**

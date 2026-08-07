@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfDesignerPreferenceMapper">
+
+    <resultMap id="WfDesignerPreferenceResult" type="com.ruoyi.flowable.domain.WfDesignerPreference">
+        <id property="userId" column="user_id"/>
+        <result property="theme" column="theme"/>
+        <result property="gridEnabled" column="grid_enabled"/>
+        <result property="minimapEnabled" column="minimap_enabled"/>
+        <result property="lintEnabled" column="lint_enabled"/>
+        <result property="tokenSimulationEnabled" column="token_simulation_enabled"/>
+        <result property="propertiesCollapsed" column="properties_collapsed"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <select id="selectByUserId" resultMap="WfDesignerPreferenceResult">
+        select user_id, theme, grid_enabled, minimap_enabled, lint_enabled,
+               token_simulation_enabled, properties_collapsed, create_time, update_time
+        from wf_designer_preference
+        where user_id = #{userId}
+    </select>
+
+    <insert id="upsert">
+        insert into wf_designer_preference
+            (user_id, theme, grid_enabled, minimap_enabled, lint_enabled,
+             token_simulation_enabled, properties_collapsed, create_time, update_time)
+        values
+            (#{preference.userId}, #{preference.theme}, #{preference.gridEnabled},
+             #{preference.minimapEnabled}, #{preference.lintEnabled},
+             #{preference.tokenSimulationEnabled}, #{preference.propertiesCollapsed},
+             current_timestamp(3), current_timestamp(3))
+        on duplicate key update
+            theme = values(theme),
+            grid_enabled = values(grid_enabled),
+            minimap_enabled = values(minimap_enabled),
+            lint_enabled = values(lint_enabled),
+            token_simulation_enabled = values(token_simulation_enabled),
+            properties_collapsed = values(properties_collapsed),
+            update_time = current_timestamp(3)
+    </insert>
+
+</mapper>

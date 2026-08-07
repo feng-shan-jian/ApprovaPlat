@@ -32,6 +32,8 @@
         <jwt.version>0.13.0</jwt.version>
         <jaxb-api.version>2.3.1</jaxb-api.version>
         <springdoc.version>4.0.0</springdoc.version>
+        <cel.version>0.10.1</cel.version>
+        <jsqlparser.version>5.3</jsqlparser.version>
     </properties>
 
     <!-- 依赖声明 -->
@@ -78,6 +80,30 @@
                 <groupId>org.flowable</groupId>
                 <artifactId>flowable-spring-boot-starter-process</artifactId>
                 <version>${flowable.version}</version>
+            </dependency>
+
+            <!-- Flowable 官方 DMN 引擎与 Process Engine 共用事务和受控数据源。 -->
+            <dependency>
+                <groupId>org.flowable</groupId>
+                <artifactId>flowable-spring-boot-starter-dmn</artifactId>
+                <version>${flowable.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flowable</groupId>
+                <artifactId>flowable-dmn-engine-configurator</artifactId>
+                <version>${flowable.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flowable</groupId>
+                <artifactId>flowable-dmn-spring-configurator</artifactId>
+                <version>${flowable.version}</version>
+            </dependency>
+
+            <!-- SQL 连接器使用 AST 解析和命名参数校验，禁止字符串规则伪造安全边界。 -->
+            <dependency>
+                <groupId>com.github.jsqlparser</groupId>
+                <artifactId>jsqlparser</artifactId>
+                <version>${jsqlparser.version}</version>
             </dependency>
 
             <dependency>

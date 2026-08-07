@@ -50,7 +50,12 @@ FROM
 ) AS duplicate_model_versions;
 
 WITH expected_tables AS (
-    SELECT 'ACT_EVT_LOG' AS table_name
+    -- Flowable 8 运行时启用 BPMN Process 与 DMN，清单必须同时冻结两套正式引擎表。
+    SELECT 'ACT_DMN_DECISION' AS table_name
+    UNION ALL SELECT 'ACT_DMN_DEPLOYMENT'
+    UNION ALL SELECT 'ACT_DMN_DEPLOYMENT_RESOURCE'
+    UNION ALL SELECT 'ACT_DMN_HI_DECISION_EXECUTION'
+    UNION ALL SELECT 'ACT_EVT_LOG'
     UNION ALL SELECT 'ACT_GE_BYTEARRAY'
     UNION ALL SELECT 'ACT_GE_PROPERTY'
     UNION ALL SELECT 'ACT_HI_ACTINST'
@@ -131,7 +136,6 @@ checks AS (
     FROM flowable_objects o
     WHERE o.table_name LIKE 'ACT!_ID!_%' ESCAPE '!'
        OR o.table_name LIKE 'ACT!_CMMN!_%' ESCAPE '!'
-       OR o.table_name LIKE 'ACT!_DMN!_%' ESCAPE '!'
        OR o.table_name LIKE 'ACT!_APP!_%' ESCAPE '!'
        OR o.table_name LIKE 'ACT!_FO!_%' ESCAPE '!'
        OR o.table_name LIKE 'ACT!_CO!_%' ESCAPE '!'

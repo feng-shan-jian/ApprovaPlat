@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -28,6 +30,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
 
@@ -37,6 +41,8 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.flowable.common.engine.impl.json.jackson3.Jackson3VariableJsonMapper;
+import org.flowable.bpmn.model.StartEvent;
+import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.ManagementService;
 import org.flowable.engine.ProcessEngine;
@@ -88,6 +94,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowInstanceState;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
+import com.ruoyi.flowable.domain.dto.WorkflowConnectorEndpointRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowInstanceStateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowInstanceTerminateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessCancelRequest;
@@ -106,9 +113,14 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowProcessEngineAdapter;
 import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.engine.WorkflowTaskSnapshot;
+import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
+import com.ruoyi.flowable.extension.WorkflowFormFieldExtension;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.service.model.WorkflowModelService;
+import com.ruoyi.flowable.service.model.WorkflowConnectorEndpointService;
+import com.ruoyi.flowable.service.model.WorkflowEmbeddedFormConverter;
+import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.process.WorkflowProcessDetailService;
 import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
@@ -117,6 +129,8 @@ import com.ruoyi.flowable.service.task.WorkflowTaskActionService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.flowable.service.task.WorkflowTaskReadService;
 import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 
 @SpringBootTest(
     classes = RuoYiApplication.class,
@@ -240,7 +254,7 @@ class FlowableEngineIT
     private static final String JSON_VARIABLE_NAME = "approvalPayload";
     /** Redis 自动清理验证使用的唯一测试键。 */
     private static final String REDIS_MARKER_KEY = "flowable:it:cleanup-marker";
-    /** 模型保存并发集成场景使用的完整可执行 BPMN，不依赖测试 schema 中的表单正文。 */
+    /** 模型保存并发集成场景使用的完整可执行 BPMN 模板，运行时替换为本场景正式表单主键。 */
     private static final String MODEL_SAVE_BPMN_XML = """
         <?xml version="1.0" encoding="UTF-8"?>
         <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -281,6 +295,8 @@ class FlowableEngineIT
     private final WorkflowProcessStartService workflowProcessStartService;
     /** 真实模型保存服务，用于验证 MySQL 行锁、Flowable 模型和幂等记录的同事务闭环。 */
     private final WorkflowModelService workflowModelService;
+    /** 真实 HTTP 端点白名单服务，用于验证管理配置到部署冻结的完整链路。 */
+    private final WorkflowConnectorEndpointService workflowConnectorEndpointService;
     /** 真实历史提交快照详情服务。 */
     private final WorkflowProcessDetailService workflowProcessDetailService;
     private final WorkflowProcessInstanceService workflowProcessInstanceService;
@@ -308,6 +324,7 @@ class FlowableEngineIT
      * @param workflowProcessEngineAdapter WorkflowProcessEngineAdapter，P2 流程引擎公共适配器
      * @param workflowProcessStartService WorkflowProcessStartService，P14 真实流程发起服务
      * @param workflowModelService WorkflowModelService，真实流程模型保存服务
+     * @param workflowConnectorEndpointService WorkflowConnectorEndpointService，真实 HTTP 端点白名单服务
      * @param workflowProcessDetailService WorkflowProcessDetailService，历史表单快照详情服务
      * @param workflowProcessInstanceService WorkflowProcessInstanceService，I01/I02/P15 实例写服务
      * @param workflowTaskActionService WorkflowTaskActionService，T09-T12 任务动作应用服务
@@ -332,6 +349,7 @@ class FlowableEngineIT
         WorkflowProcessEngineAdapter workflowProcessEngineAdapter,
         WorkflowProcessStartService workflowProcessStartService,
         WorkflowModelService workflowModelService,
+        WorkflowConnectorEndpointService workflowConnectorEndpointService,
         WorkflowProcessDetailService workflowProcessDetailService,
         WorkflowProcessInstanceService workflowProcessInstanceService,
         WorkflowTaskActionService workflowTaskActionService,
@@ -354,6 +372,7 @@ class FlowableEngineIT
         this.workflowProcessEngineAdapter = workflowProcessEngineAdapter;
         this.workflowProcessStartService = workflowProcessStartService;
         this.workflowModelService = workflowModelService;
+        this.workflowConnectorEndpointService = workflowConnectorEndpointService;
         this.workflowProcessDetailService = workflowProcessDetailService;
         this.workflowProcessInstanceService = workflowProcessInstanceService;
         this.workflowTaskActionService = workflowTaskActionService;
@@ -553,7 +572,72 @@ class FlowableEngineIT
     }
 
     /**
-     * 在第一个 Spring 上下文中持久化 Jackson 3 JsonNode 变量，并保留流程记录供重启后读取。
+     * 验证流程实例挂起时 Timer 会进入 suspended job 且不会执行，恢复后由真实 executor 继续完成。
+     *
+     * @return 无返回值；挂起期间发生执行、作业未迁移或恢复后未完成时测试失败
+     * @throws InterruptedException 等待超过 Timer 到期时间时线程被中断则抛出
+     */
+    @Test
+    @Order(21)
+    void suspendsAndResumesTimerJobThroughActiveAsyncExecutor() throws InterruptedException
+    {
+        RepositoryService repositoryService = processEngine.getRepositoryService();
+        RuntimeService runtimeService = processEngine.getRuntimeService();
+        HistoryService historyService = processEngine.getHistoryService();
+        ManagementService managementService = processEngine.getManagementService();
+        Deployment deployment = repositoryService.createDeployment()
+            .name(DEPLOYMENT_NAME_PREFIX + "-timer-suspend")
+            .addClasspathResource("processes/flowable-timer-it.bpmn20.xml")
+            .deploy();
+
+        try
+        {
+            ProcessInstance instance = runtimeService.startProcessInstanceByKey(
+                "flowableTimerIntegration",
+                BUSINESS_KEY_PREFIX + "timer-suspend-" + UUID.randomUUID()
+            );
+            runtimeService.suspendProcessInstanceById(instance.getId());
+
+            assertThat(managementService.createTimerJobQuery()
+                .processInstanceId(instance.getId()).count()).isZero();
+            assertThat(managementService.createSuspendedJobQuery()
+                .processInstanceId(instance.getId()).count())
+                .as("挂起实例的 Timer 必须迁移到 suspended job")
+                .isEqualTo(1L);
+
+            // 等待超过 BPMN 的 PT5S，证明挂起状态不是短暂竞态且 executor 不会越过状态门禁。
+            Thread.sleep(6_000L);
+            assertThat(runtimeService.createProcessInstanceQuery()
+                .processInstanceId(instance.getId()).suspended().count()).isEqualTo(1L);
+            assertThat(historyService.createHistoricProcessInstanceQuery()
+                .processInstanceId(instance.getId()).finished().count()).isZero();
+            assertThat(managementService.createSuspendedJobQuery()
+                .processInstanceId(instance.getId()).count()).isEqualTo(1L);
+
+            runtimeService.activateProcessInstanceById(instance.getId());
+            awaitCondition(
+                "恢复实例后 executor 应继续执行已到期 Timer",
+                ASYNC_EXECUTION_TIMEOUT,
+                () -> historyService.createHistoricProcessInstanceQuery()
+                    .processInstanceId(instance.getId()).finished().count() == 1L
+            );
+            assertThat(managementService.createTimerJobQuery()
+                .processInstanceId(instance.getId()).count()).isZero();
+            assertThat(managementService.createSuspendedJobQuery()
+                .processInstanceId(instance.getId()).count()).isZero();
+            assertThat(managementService.createJobQuery()
+                .processInstanceId(instance.getId()).count()).isZero();
+            assertThat(managementService.createDeadLetterJobQuery()
+                .processInstanceId(instance.getId()).count()).isZero();
+        }
+        finally
+        {
+            deleteDeploymentIfPresent(repositoryService, deployment.getId());
+        }
+    }
+
+    /**
+     * 在第一个 Spring 上下文中持久化 Jackson 3 JsonNode 变量和 Timer job，供重启后的新执行器接管。
      *
      * @return 无返回值；方法结束后由 @DirtiesContext 关闭当前 Spring 上下文
      */
@@ -568,6 +652,7 @@ class FlowableEngineIT
             .name(DEPLOYMENT_NAME_PREFIX + "-restart")
             .addClasspathResource("processes/flowable-engine-it.bpmn20.xml")
             .deploy();
+        Deployment timerDeployment = null;
 
         try
         {
@@ -582,24 +667,46 @@ class FlowableEngineIT
             );
 
             assertThat(runtimeService.getVariable(instance.getId(), JSON_VARIABLE_NAME)).isInstanceOf(JsonNode.class);
+
+            // Timer 必须先在旧上下文真实落库，再由 @DirtiesContext 关闭旧执行器，验证新上下文接管。
+            timerDeployment = repositoryService.createDeployment()
+                .name(DEPLOYMENT_NAME_PREFIX + "-restart-timer")
+                .addClasspathResource("processes/flowable-timer-it.bpmn20.xml")
+                .deploy();
+            ProcessInstance timerInstance = runtimeService.startProcessInstanceByKey(
+                "flowableTimerIntegration",
+                BUSINESS_KEY_PREFIX + "restart-timer-" + UUID.randomUUID()
+            );
+            ManagementService managementService = processEngine.getManagementService();
+            assertThat(managementService.createTimerJobQuery()
+                .processInstanceId(timerInstance.getId()).count())
+                .as("旧上下文关闭前必须保留一条待执行 Timer job")
+                .isEqualTo(1L);
+
             restartState = new RestartState(
                 deployment.getId(),
                 instance.getId(),
                 businessKey,
+                timerDeployment.getId(),
+                timerInstance.getId(),
                 applicationContext
             );
         }
         catch (RuntimeException | Error exception)
         {
+            if (timerDeployment != null)
+            {
+                deleteDeploymentIfPresent(repositoryService, timerDeployment.getId());
+            }
             repositoryService.deleteDeployment(deployment.getId(), true);
             throw exception;
         }
     }
 
     /**
-     * 在全新的 Spring 上下文中读取前一上下文持久化的 JSON 变量，完成流程后级联清理记录。
+     * 在全新的 Spring 上下文中读取持久化变量，并由新执行器接管旧上下文留下的 Timer job。
      *
-     * @return 无返回值；旧上下文未关闭、变量类型漂移或历史变量不可读时测试失败
+     * @return 无返回值；旧上下文未关闭、变量漂移或 Timer 未被新执行器完成时测试失败
      */
     @Test
     @Order(31)
@@ -616,11 +723,32 @@ class FlowableEngineIT
         RuntimeService runtimeService = processEngine.getRuntimeService();
         TaskService taskService = processEngine.getTaskService();
         HistoryService historyService = processEngine.getHistoryService();
+        ManagementService managementService = processEngine.getManagementService();
 
         try
         {
             assertThat(applicationContext).isNotSameAs(state.previousContext());
             assertThat(state.previousContext().isActive()).as("@DirtiesContext 必须真实关闭旧 Spring 上下文").isFalse();
+
+            AsyncExecutor asyncExecutor = engineConfiguration.getJobServiceConfiguration().getAsyncExecutor();
+            assertThat(asyncExecutor).isNotNull();
+            assertThat(asyncExecutor.isActive()).as("新 Spring 上下文的 executor 必须已启动").isTrue();
+
+            // 禁止手工 executeJob；等待新上下文中的真实 executor 获取旧上下文持久化的 Timer。
+            awaitCondition(
+                "新上下文 executor 应接管并完成重启前持久化的 Timer job",
+                ASYNC_EXECUTION_TIMEOUT,
+                () -> historyService.createHistoricProcessInstanceQuery()
+                    .processInstanceId(state.timerProcessInstanceId()).finished().count() == 1L
+            );
+            assertThat(runtimeService.createProcessInstanceQuery()
+                .processInstanceId(state.timerProcessInstanceId()).count()).isZero();
+            assertThat(managementService.createTimerJobQuery()
+                .processInstanceId(state.timerProcessInstanceId()).count()).isZero();
+            assertThat(managementService.createJobQuery()
+                .processInstanceId(state.timerProcessInstanceId()).count()).isZero();
+            assertThat(managementService.createDeadLetterJobQuery()
+                .processInstanceId(state.timerProcessInstanceId()).count()).isZero();
 
             Object persistedValue = runtimeService.getVariable(state.processInstanceId(), JSON_VARIABLE_NAME);
             assertApprovalPayload(persistedValue);
@@ -641,6 +769,7 @@ class FlowableEngineIT
         }
         finally
         {
+            deleteDeploymentIfPresent(repositoryService, state.timerDeploymentId());
             deleteDeploymentIfPresent(repositoryService, state.deploymentId());
             restartState = null;
         }
@@ -3322,10 +3451,15 @@ class FlowableEngineIT
         String categoryCode = "model_save_category_it_"
             + UUID.randomUUID().toString().replace("-", "");
         String sourceModelId = null;
+        Long formId = null;
         boolean categoryInserted = false;
 
         try
         {
+            // 保存门禁会核验 BPMN 表单引用，因此先写入本场景独享的正式表单，再把真实主键绑定到 XML。
+            formId = insertModelSaveFormFixture(jdbcTemplate, modelKey);
+            String modelSaveBpmnXml = MODEL_SAVE_BPMN_XML.replace(
+                "key_1", "key_" + formId);
             jdbcTemplate.update(
                 "insert into wf_category (category_name, code, create_by, del_flag) values (?, ?, ?, '0')",
                 "模型保存并发集成测试分类", categoryCode, "1");
@@ -3342,7 +3476,8 @@ class FlowableEngineIT
 
             // 同一保存意图的两个真实事务必须复用同一结果，只允许创建一个新版本。
             String replayRequestId = UUID.randomUUID().toString();
-            WorkflowModelDto replayRequest = modelSaveRequest(sourceModelId, replayRequestId);
+            WorkflowModelDto replayRequest = modelSaveRequest(
+                sourceModelId, replayRequestId, modelSaveBpmnXml);
             List<String> replayResults = runConcurrentModelSaves(replayRequest, replayRequest);
             assertThat(replayResults).hasSize(2).containsOnly(replayResults.get(0));
             assertThat(repositoryService.createModelQuery().modelKey(modelKey).list())
@@ -3355,8 +3490,8 @@ class FlowableEngineIT
             String firstRequestId = UUID.randomUUID().toString();
             String secondRequestId = UUID.randomUUID().toString();
             List<String> versionResults = runConcurrentModelSaves(
-                modelSaveRequest(sourceModelId, firstRequestId),
-                modelSaveRequest(sourceModelId, secondRequestId));
+                modelSaveRequest(sourceModelId, firstRequestId, modelSaveBpmnXml),
+                modelSaveRequest(sourceModelId, secondRequestId, modelSaveBpmnXml));
             assertThat(versionResults).doesNotHaveDuplicates();
             List<Model> savedModels = repositoryService.createModelQuery().modelKey(modelKey).list();
             assertThat(savedModels).extracting(Model::getVersion)
@@ -3375,7 +3510,7 @@ class FlowableEngineIT
             {
                 assertThat(repositoryService.getModelEditorSource(savedModelId))
                     .as("每条完成的幂等记录必须指向已持久化的相同 BPMN 正文")
-                    .isEqualTo(MODEL_SAVE_BPMN_XML.strip().getBytes(
+                    .isEqualTo(modelSaveBpmnXml.strip().getBytes(
                         java.nio.charset.StandardCharsets.UTF_8));
             }
         }
@@ -3393,12 +3528,45 @@ class FlowableEngineIT
             {
                 jdbcTemplate.update("delete from wf_category where code = ?", categoryCode);
             }
+            if (formId != null)
+            {
+                jdbcTemplate.update("delete from wf_form where form_id = ?", formId);
+            }
         }
 
         assertThat(jdbcTemplate.queryForObject(
             "select count(*) from wf_model_save_idempotency where source_model_id = ?",
             Long.class, sourceModelId)).isZero();
         assertThat(repositoryService.createModelQuery().modelKey(modelKey).count()).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "select count(*) from wf_form where form_id = ?",
+            Long.class, formId)).isZero();
+    }
+
+    /**
+     * 为并发模型保存场景写入一张真实、启用的表单模板并返回数据库主键。
+     *
+     * @param jdbcTemplate JdbcTemplate，绑定专用集成测试 schema 的数据库客户端
+     * @param modelKey String，本场景唯一模型键，用于生成可追踪且互不冲突的表单名称
+     * @return long，新建 wf_form 记录的自增主键
+     */
+    private long insertModelSaveFormFixture(JdbcTemplate jdbcTemplate, String modelKey)
+    {
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        int inserted = jdbcTemplate.update(connection ->
+        {
+            PreparedStatement statement = connection.prepareStatement(
+                "insert into wf_form (form_name, content, create_by, del_flag) values (?, ?, ?, '0')",
+                Statement.RETURN_GENERATED_KEYS);
+            statement.setString(1, "模型保存并发表单-" + modelKey);
+            statement.setString(2, PROCESS_START_FORM_CONTENT);
+            statement.setString(3, "flowable-it-model-save");
+            return statement;
+        }, keyHolder);
+        assertThat(inserted).as("模型保存并发场景必须写入一张正式表单").isEqualTo(1);
+        Number generatedKey = keyHolder.getKey();
+        assertThat(generatedKey).as("模型保存并发表单必须返回真实自增主键").isNotNull();
+        return generatedKey.longValue();
     }
 
     /**
@@ -3473,16 +3641,643 @@ class FlowableEngineIT
      *
      * @param sourceModelId String，所有并发事务共同指向的来源模型主键
      * @param requestId String，当前保存意图使用的唯一 UUID 幂等键
+     * @param bpmnXml String，已经绑定本场景正式表单主键的 BPMN XML
      * @return WorkflowModelDto，可直接提交真实模型保存服务的完整请求
      */
-    private WorkflowModelDto modelSaveRequest(String sourceModelId, String requestId)
+    private WorkflowModelDto modelSaveRequest(String sourceModelId, String requestId,
+            String bpmnXml)
     {
         WorkflowModelDto request = new WorkflowModelDto();
         request.setModelId(sourceModelId);
         request.setSaveRequestId(requestId);
-        request.setBpmnXml(MODEL_SAVE_BPMN_XML);
+        request.setBpmnXml(bpmnXml);
         request.setNewVersion(true);
         return request;
+    }
+
+    /**
+     * 通过真实 MySQL、Flowable 8 和正式业务服务验证 BPMN 内嵌表单的部署快照、发起、办理与回显。
+     *
+     * @return 无返回值；任一持久化、类型、状态或历史关联不一致时测试失败
+     */
+    @Test
+    @Order(57)
+    void executesEmbeddedFormsThroughStartTaskAndHistoryServices()
+    {
+        RepositoryService repositoryService = processEngine.getRepositoryService();
+        TaskService taskService = processEngine.getTaskService();
+        RuntimeService runtimeService = processEngine.getRuntimeService();
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dynamicDataSource);
+        String deploymentId = null;
+        try
+        {
+            Deployment deployment = repositoryService.createDeployment()
+                .name(DEPLOYMENT_NAME_PREFIX + "-embedded-form")
+                .addClasspathResource("processes/flowable-embedded-form-it.bpmn20.xml")
+                .deploy();
+            deploymentId = deployment.getId();
+            var definition = repositoryService.createProcessDefinitionQuery()
+                .deploymentId(deploymentId).singleResult();
+            assertThat(definition).as("内嵌表单测试必须只部署一个流程定义").isNotNull();
+            repositoryService.addCandidateStarterUser(definition.getId(), "1");
+
+            var process = repositoryService.getBpmnModel(definition.getId())
+                .getProcessById(definition.getKey());
+            StartEvent startEvent = (StartEvent) process.getFlowElement("start", false);
+            UserTask reviewTask = (UserTask) process.getFlowElement("review", false);
+            String startContent = WorkflowEmbeddedFormConverter.convert(
+                startEvent.getFormProperties());
+            String reviewContent = WorkflowEmbeddedFormConverter.convert(
+                reviewTask.getFormProperties());
+            assertThat(jdbcTemplate.update(
+                "insert into wf_deploy_form "
+                    + "(deploy_id, source_type, form_id, form_key, node_key, form_name, "
+                    + "node_name, content, create_by, create_time, del_flag) values "
+                    + "(?, 'EMBEDDED', null, 'embedded', 'start', '提交申请内嵌表单', "
+                    + "'提交申请', ?, '1', current_timestamp, '0'), "
+                    + "(?, 'EMBEDDED', null, 'embedded', 'review', '审批内嵌表单', "
+                    + "'审批', ?, '1', current_timestamp, '0')",
+                deploymentId, startContent, deploymentId, reviewContent)).isEqualTo(2);
+
+            setSecurityContextUser(1L);
+            String businessKey = BUSINESS_KEY_PREFIX + "embedded-form-" + UUID.randomUUID();
+            WorkflowProcessInstanceSnapshot started = workflowProcessStartService.start(
+                new StartProcessRequest(definition.getId(), businessKey,
+                    Map.of("requestReason", "采购设备", "amount", 2600L)));
+            Task activeTask = requireSingleTask(taskService, started.id(), "review");
+            var activeDetail = workflowProcessDetailService.getDetail(
+                new WorkflowProcessDetailQueryDto(started.id(), activeTask.getId()));
+            assertThat(activeDetail.currentTaskForm()).isNotNull();
+            assertThat(activeDetail.currentTaskForm().sourceType()).isEqualTo("EMBEDDED");
+            assertThat(activeDetail.currentTaskForm().formId()).isNull();
+
+            assertWorkflowBusinessError(() -> workflowTaskLifecycleService.completeTask(
+                new WorkflowTaskCompleteRequest(activeTask.getId(), "非法枚举不得提交",
+                    Map.of("decision", "UNKNOWN", "confirmed", true),
+                    List.of(), List.of())), HttpStatus.BAD_REQUEST,
+                    "流程变量枚举值不合法: decision");
+            assertThat(taskService.createTaskQuery().taskId(activeTask.getId()).count()).isOne();
+
+            workflowTaskLifecycleService.completeTask(new WorkflowTaskCompleteRequest(
+                activeTask.getId(), "审批通过",
+                Map.of("decision", "APPROVE", "confirmed", true),
+                List.of(), List.of()));
+            assertThat(runtimeService.createProcessInstanceQuery()
+                .processInstanceId(started.id()).count()).isZero();
+
+            var completedDetail = workflowProcessDetailService.getDetail(
+                new WorkflowProcessDetailQueryDto(started.id(), null));
+            assertThat(completedDetail.processFormList()).hasSize(2)
+                .allSatisfy(form ->
+                {
+                    assertThat(form.sourceType()).isEqualTo("EMBEDDED");
+                    assertThat(form.formId()).isNull();
+                    assertThat(form.formKey()).isEqualTo(WorkflowFormSourceType.EMBEDDED_FORM_KEY);
+                });
+            WorkflowProcessFormSnapshotView startForm = completedDetail.processFormList().stream()
+                .filter(form -> form.taskId() == null).findFirst().orElseThrow();
+            WorkflowProcessFormSnapshotView reviewForm = completedDetail.processFormList().stream()
+                .filter(form -> activeTask.getId().equals(form.taskId())).findFirst().orElseThrow();
+            assertThat(startForm.values().get("requestReason").textValue()).isEqualTo("采购设备");
+            assertThat(startForm.values().get("amount").longValue()).isEqualTo(2600L);
+            assertThat(reviewForm.values().get("decision").textValue()).isEqualTo("APPROVE");
+            assertThat(reviewForm.values().get("confirmed").booleanValue()).isTrue();
+            assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_deploy_form where deploy_id = ? "
+                    + "and source_type = 'EMBEDDED' and form_id is null",
+                Long.class, deploymentId)).isEqualTo(2L);
+        }
+        finally
+        {
+            SecurityContextHolder.clearContext();
+            if (deploymentId != null)
+            {
+                jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
+                if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() > 0)
+                {
+                    repositoryService.deleteDeployment(deploymentId, true);
+                }
+            }
+        }
+    }
+
+    /**
+     * 通过真实模型部署、MySQL 快照、Flowable 发起和历史详情验证自定义表单字段完整闭环。
+     *
+     * @return 无返回值；版本冻结、类型校验、篡改门禁或事务零副作用任一不成立时测试失败
+     */
+    @Test
+    @Order(59)
+    void executesCustomFormFieldWithFrozenRegistryVersionAndZeroSideEffects()
+    {
+        RepositoryService repositoryService = processEngine.getRepositoryService();
+        RuntimeService runtimeService = processEngine.getRuntimeService();
+        HistoryService historyService = processEngine.getHistoryService();
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dynamicDataSource);
+        String suffix = UUID.randomUUID().toString().replace("-", "");
+        String extensionKey = "approva.form.it." + suffix;
+        String categoryCode = "flowable_form_field_it_" + suffix;
+        String successfulProcessKey = "formFieldSuccess" + suffix;
+        String disabledProcessKey = "formFieldDisabled" + suffix;
+        String tamperedProcessKey = "formFieldTampered" + suffix;
+        String successfulModelId = null;
+        String disabledModelId = null;
+        String tamperedModelId = null;
+        String deploymentId = null;
+        String processInstanceId = null;
+        Long extensionId = null;
+        Long extensionVersionId = null;
+        String schema = WorkflowFormFieldExtension.configSchema();
+        String checksum = WorkflowExtensionChecksum.sha256(extensionKey, "FORM_FIELD", "1",
+                WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY, schema);
+        try
+        {
+            setSecurityContextUser(1L);
+            assertThat(jdbcTemplate.update(
+                "insert into wf_bpmn_extension "
+                    + "(extension_key, extension_name, extension_type, status, description, "
+                    + "create_by, create_time, update_by) values (?, ?, 'FORM_FIELD', "
+                    + "'ENABLED', ?, '1', current_timestamp(3), '')",
+                extensionKey, "集成测试多行文本", "自定义表单字段真实集成测试")).isOne();
+            extensionId = jdbcTemplate.queryForObject(
+                "select extension_id from wf_bpmn_extension where extension_key = ?",
+                Long.class, extensionKey);
+            assertThat(extensionId).isPositive();
+            assertThat(jdbcTemplate.update(
+                "insert into wf_bpmn_extension_version "
+                    + "(extension_id, version_no, implementation_key, config_schema, checksum, "
+                    + "create_by, create_time) values (?, 1, ?, cast(? as json), ?, '1', "
+                    + "current_timestamp(3))",
+                extensionId, WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY,
+                schema, checksum)).isOne();
+            extensionVersionId = jdbcTemplate.queryForObject(
+                "select version_id from wf_bpmn_extension_version where extension_id = ? "
+                    + "and version_no = 1", Long.class, extensionId);
+
+            assertThat(jdbcTemplate.update(
+                "insert into wf_category (category_name, code, create_by, del_flag) "
+                    + "values (?, ?, '1', '0')",
+                "自定义表单字段集成测试分类", categoryCode)).isOne();
+            successfulModelId = createIntegrationModel(repositoryService,
+                "自定义表单字段成功场景", successfulProcessKey, categoryCode,
+                customFormFieldBpmnXml(successfulProcessKey, extensionKey));
+            deploymentId = workflowModelService.deployModel(successfulModelId);
+            var definition = repositoryService.createProcessDefinitionQuery()
+                .deploymentId(deploymentId).singleResult();
+            assertThat(definition).as("自定义表单字段模型必须部署唯一流程定义").isNotNull();
+            repositoryService.addCandidateStarterUser(definition.getId(), "1");
+
+            Map<String, Object> frozenForm = jdbcTemplate.queryForMap(
+                "select source_type, form_id, content from wf_deploy_form "
+                    + "where deploy_id = ? and node_key = 'start'", deploymentId);
+            assertThat(frozenForm).containsEntry("source_type", "EMBEDDED")
+                .containsEntry("form_id", null);
+            JsonNode frozenContent = JsonMapper.shared().readTree(
+                String.valueOf(frozenForm.get("content")));
+            JsonNode frozenConfig = frozenContent.path("fields").get(0).path("__config__");
+            assertThat(frozenConfig.path(WorkflowFormFieldExtension.EXTENSION_KEY_FIELD)
+                .textValue()).isEqualTo(extensionKey);
+            assertThat(frozenConfig.path(WorkflowFormFieldExtension.VERSION_FIELD)
+                .intValue()).isOne();
+            assertThat(frozenConfig.path(WorkflowFormFieldExtension.IMPLEMENTATION_FIELD)
+                .textValue()).isEqualTo(WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY);
+            assertThat(frozenConfig.path(WorkflowFormFieldExtension.CHECKSUM_FIELD)
+                .textValue()).isEqualTo(checksum);
+            assertThat(jdbcTemplate.queryForMap(
+                "select extension_version_id, version_no, extension_type, implementation_key, "
+                    + "version_checksum, snapshot_checksum from wf_deploy_extension_snapshot "
+                    + "where deploy_id = ? and process_key = ? "
+                    + "and element_id = 'start#form#detail'",
+                deploymentId, successfulProcessKey))
+                .containsEntry("extension_version_id", extensionVersionId)
+                .containsEntry("version_no", 1)
+                .containsEntry("extension_type", "FORM_FIELD")
+                .containsEntry("implementation_key",
+                    WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY)
+                .containsEntry("version_checksum", checksum)
+                .hasEntrySatisfying("snapshot_checksum", value ->
+                    assertThat(String.valueOf(value)).matches("[0-9a-f]{64}"));
+
+            // 非字符串输入必须在创建 Flowable 实例前拒绝，历史与运行表均不得出现业务副作用。
+            String rejectedBusinessKey = BUSINESS_KEY_PREFIX + "form-field-rejected-" + suffix;
+            assertWorkflowBusinessError(() -> workflowProcessStartService.start(
+                new StartProcessRequest(definition.getId(), rejectedBusinessKey,
+                    Map.of("detail", 123L))), HttpStatus.BAD_REQUEST,
+                    "流程变量类型不合法: detail");
+            assertThat(runtimeService.createProcessInstanceQuery()
+                .processInstanceBusinessKey(rejectedBusinessKey).count()).isZero();
+            assertThat(historyService.createHistoricProcessInstanceQuery()
+                .processInstanceBusinessKey(rejectedBusinessKey).count()).isZero();
+
+            String businessKey = BUSINESS_KEY_PREFIX + "form-field-" + suffix;
+            WorkflowProcessInstanceSnapshot started = workflowProcessStartService.start(
+                new StartProcessRequest(definition.getId(), businessKey,
+                    Map.of("detail", "真实多行审批说明")));
+            processInstanceId = started.id();
+            assertThat(runtimeService.createProcessInstanceQuery()
+                .processInstanceId(processInstanceId).count()).isZero();
+            var detail = workflowProcessDetailService.getDetail(
+                new WorkflowProcessDetailQueryDto(processInstanceId, null));
+            assertThat(detail.processFormList()).singleElement().satisfies(form ->
+            {
+                assertThat(form.sourceType()).isEqualTo("EMBEDDED");
+                assertThat(form.values().get("detail").textValue())
+                    .isEqualTo("真实多行审批说明");
+            });
+
+            // 停用目录后，部署校验必须在 Flowable 仓储和业务快照写入之前失败。
+            disabledModelId = createIntegrationModel(repositoryService,
+                "自定义表单字段停用场景", disabledProcessKey, categoryCode,
+                customFormFieldBpmnXml(disabledProcessKey, extensionKey));
+            assertThat(jdbcTemplate.update(
+                "update wf_bpmn_extension set status = 'DISABLED' where extension_id = ?",
+                extensionId)).isOne();
+            String disabledModel = disabledModelId;
+            assertWorkflowBusinessError(() -> workflowModelService.deployModel(disabledModel),
+                HttpStatus.CONFLICT, "扩展不存在、已停用或尚未发布版本");
+            assertModelDeploymentHasNoSideEffects(repositoryService, jdbcTemplate,
+                disabledModelId, disabledProcessKey);
+
+            // 恢复目录后篡改版本摘要，服务端安装实现复核必须拒绝且保持同样的零副作用。
+            assertThat(jdbcTemplate.update(
+                "update wf_bpmn_extension set status = 'ENABLED' where extension_id = ?",
+                extensionId)).isOne();
+            assertThat(jdbcTemplate.update(
+                "update wf_bpmn_extension_version set checksum = ? where version_id = ?",
+                "0".repeat(64), extensionVersionId)).isOne();
+            tamperedModelId = createIntegrationModel(repositoryService,
+                "自定义表单字段篡改场景", tamperedProcessKey, categoryCode,
+                customFormFieldBpmnXml(tamperedProcessKey, extensionKey));
+            String tamperedModel = tamperedModelId;
+            assertWorkflowBusinessError(() -> workflowModelService.deployModel(tamperedModel),
+                HttpStatus.CONFLICT, "扩展版本校验和不一致");
+            assertModelDeploymentHasNoSideEffects(repositoryService, jdbcTemplate,
+                tamperedModelId, tamperedProcessKey);
+        }
+        catch (tools.jackson.core.JacksonException exception)
+        {
+            throw new AssertionError("自定义表单字段部署快照必须是合法 JSON", exception);
+        }
+        finally
+        {
+            SecurityContextHolder.clearContext();
+            if (extensionVersionId != null)
+            {
+                jdbcTemplate.update(
+                    "update wf_bpmn_extension_version set checksum = ? where version_id = ?",
+                    checksum, extensionVersionId);
+            }
+            if (extensionId != null)
+            {
+                jdbcTemplate.update(
+                    "update wf_bpmn_extension set status = 'ENABLED' where extension_id = ?",
+                    extensionId);
+            }
+            if (deploymentId != null)
+            {
+                jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
+                jdbcTemplate.update(
+                    "delete from wf_deploy_extension_snapshot where deploy_id = ?", deploymentId);
+                if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() > 0)
+                {
+                    repositoryService.deleteDeployment(deploymentId, true);
+                }
+            }
+            String[] modelIds = {successfulModelId, disabledModelId, tamperedModelId};
+            for (String modelId : modelIds)
+            {
+                if (modelId != null && repositoryService.getModel(modelId) != null)
+                {
+                    repositoryService.deleteModel(modelId);
+                }
+            }
+            jdbcTemplate.update("delete from wf_category where code = ?", categoryCode);
+            if (extensionId != null)
+            {
+                jdbcTemplate.update(
+                    "delete from wf_bpmn_extension_version where extension_id = ?", extensionId);
+                jdbcTemplate.update(
+                    "delete from wf_bpmn_extension where extension_id = ?", extensionId);
+            }
+        }
+    }
+
+    /**
+     * 创建一个由正式模型服务部署的 Flowable 模型及作者 XML。
+     * @param repositoryService RepositoryService，Flowable 仓储服务
+     * @param modelName String，测试模型名称
+     * @param modelKey String，模型与 BPMN 流程稳定键
+     * @param categoryCode String，真实工作流分类编码
+     * @param bpmnXml String，待保存的完整作者 BPMN XML
+     * @return String，Flowable 模型主键
+     */
+    private String createIntegrationModel(RepositoryService repositoryService,
+            String modelName, String modelKey, String categoryCode, String bpmnXml)
+    {
+        Model model = repositoryService.newModel();
+        model.setName(modelName);
+        model.setKey(modelKey);
+        model.setCategory(categoryCode);
+        model.setMetaInfo("{}");
+        model.setTenantId("");
+        model.setVersion(1);
+        repositoryService.saveModel(model);
+        repositoryService.addModelEditorSource(model.getId(),
+            bpmnXml.getBytes(StandardCharsets.UTF_8));
+        return model.getId();
+    }
+
+    /**
+     * 断言失败部署没有创建 Flowable 部署、流程定义或任一业务快照。
+     * @param repositoryService RepositoryService，Flowable 仓储服务
+     * @param jdbcTemplate JdbcTemplate，真实 MySQL 查询入口
+     * @param modelId String，预期仍未部署的模型主键
+     * @param processKey String，失败场景 BPMN 流程标识
+     * @return 无返回值；发现任何部署副作用时测试失败
+     */
+    private void assertModelDeploymentHasNoSideEffects(RepositoryService repositoryService,
+            JdbcTemplate jdbcTemplate, String modelId, String processKey)
+    {
+        assertThat(repositoryService.getModel(modelId).getDeploymentId()).isNull();
+        assertThat(repositoryService.createProcessDefinitionQuery()
+            .processDefinitionKey(processKey).count()).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "select count(*) from wf_deploy_form where deploy_id in "
+                + "(select ID_ from ACT_RE_DEPLOYMENT where KEY_ = ?)",
+            Long.class, processKey)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "select count(*) from wf_deploy_extension_snapshot where process_key = ?",
+            Long.class, processKey)).isZero();
+    }
+
+    /**
+     * 构造只含一个受控自定义多行文本字段的可执行 BPMN 作者资源。
+     * @param processKey String，流程与模型稳定键
+     * @param extensionKey String，当前场景 FORM_FIELD 目录稳定键
+     * @return String，可由模型部署服务校验、冻结并执行的 BPMN 2.0 XML
+     */
+    private String customFormFieldBpmnXml(String processKey, String extensionKey)
+    {
+        return """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                         xmlns:flowable="http://flowable.org/bpmn"
+                         targetNamespace="https://approvaplat.example/form-field-it">
+              <process id="%s" name="自定义表单字段集成测试" isExecutable="true">
+                <startEvent id="start" name="提交申请" flowable:initiator="initiator">
+                  <extensionElements>
+                    <flowable:formProperty id="detail" name="审批说明" type="custom:%s"
+                                           readable="true" writable="true" required="true"/>
+                  </extensionElements>
+                </startEvent>
+                <sequenceFlow id="toEnd" sourceRef="start" targetRef="end"/>
+                <endEvent id="end" name="结束"/>
+              </process>
+            </definitions>
+            """.formatted(processKey, extensionKey);
+    }
+
+    /**
+     * 通过真实端点白名单、模型编译、Flowable 异步重试、dead-letter 和 MySQL 台账验证 HTTP 连接器完整执行链路。
+     *
+     * @return 无返回值；远端请求、冻结快照、幂等台账或流程终态任一不一致时测试失败
+     * @throws Exception 本机 HTTP Server、模型资源或异步等待失败时抛出
+     */
+    @Test
+    @Order(58)
+    void handlesHttpConnectorRetryAndDeadLetterWithStableIdempotencyKey() throws Exception
+    {
+        RepositoryService repositoryService = processEngine.getRepositoryService();
+        RuntimeService runtimeService = processEngine.getRuntimeService();
+        HistoryService historyService = processEngine.getHistoryService();
+        ManagementService managementService = processEngine.getManagementService();
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dynamicDataSource);
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        AtomicReference<String> firstIdempotencyKey = new AtomicReference<>();
+        AtomicReference<String> idempotencyKey = new AtomicReference<>();
+        AtomicInteger requestCount = new AtomicInteger();
+        // 第二个实例开启后持续返回 503，用于验证重试耗尽后的 dead-letter 终态。
+        AtomicBoolean permanentFailure = new AtomicBoolean();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/audit/events", exchange ->
+        {
+            try
+            {
+                int currentAttempt = requestCount.incrementAndGet();
+                requestBody.set(new String(exchange.getRequestBody().readAllBytes(),
+                    StandardCharsets.UTF_8));
+                String currentIdempotencyKey = exchange.getRequestHeaders()
+                    .getFirst("Idempotency-Key");
+                firstIdempotencyKey.compareAndSet(null, currentIdempotencyKey);
+                idempotencyKey.set(currentIdempotencyKey);
+                boolean shouldFail = permanentFailure.get() || currentAttempt == 1;
+                int responseStatus = shouldFail ? 503 : 202;
+                byte[] response = (shouldFail
+                    ? "{\"accepted\":false}" : "{\"accepted\":true}")
+                    .getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(responseStatus, response.length);
+                exchange.getResponseBody().write(response);
+            }
+            finally
+            {
+                exchange.close();
+            }
+        });
+        server.start();
+
+        String suffix = UUID.randomUUID().toString().replace("-", "");
+        String endpointKey = "flowable-http-it-" + suffix;
+        String modelKey = "flowableHttpConnectorIt" + suffix;
+        String categoryCode = "flowable_http_it_" + suffix;
+        String businessKey = BUSINESS_KEY_PREFIX + "http-" + suffix;
+        String modelId = null;
+        String deploymentId = null;
+        String processInstanceId = null;
+        String failedProcessInstanceId = null;
+        Long endpointId = null;
+        try
+        {
+            setSecurityContextUser(1L);
+            endpointId = workflowConnectorEndpointService.create(
+                new WorkflowConnectorEndpointRequest(endpointKey, "Flowable HTTP 集成端点",
+                    "http://127.0.0.1:" + server.getAddress().getPort(), List.of("POST"),
+                    "/audit", "NONE", null, null, 1000, 5000, "PRIVATE"));
+            assertThat(endpointId).isPositive();
+
+            assertThat(jdbcTemplate.update(
+                "insert into wf_category (category_name, code, create_by, del_flag) "
+                    + "values (?, ?, '1', '0')",
+                "HTTP 连接器集成测试分类", categoryCode)).isEqualTo(1);
+            Model model = repositoryService.newModel();
+            model.setName("HTTP 连接器真实执行集成测试");
+            model.setKey(modelKey);
+            model.setCategory(categoryCode);
+            model.setMetaInfo("{}");
+            model.setTenantId("");
+            model.setVersion(1);
+            repositoryService.saveModel(model);
+            modelId = model.getId();
+            repositoryService.addModelEditorSource(modelId,
+                httpConnectorBpmnXml(modelKey, endpointKey).getBytes(StandardCharsets.UTF_8));
+
+            deploymentId = workflowModelService.deployModel(modelId);
+            var definition = repositoryService.createProcessDefinitionQuery()
+                .deploymentId(deploymentId).singleResult();
+            assertThat(definition).as("HTTP 集成模型必须部署唯一流程定义").isNotNull();
+            repositoryService.addCandidateStarterUser(definition.getId(), "1");
+            assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_deploy_extension_snapshot where deploy_id = ? "
+                    + "and process_key = ? and element_id = 'httpTask' "
+                    + "and extension_key = 'approva.http-connector' "
+                    + "and implementation_key = 'HTTP_CONNECTOR_V1'",
+                Long.class, deploymentId, modelKey)).isOne();
+
+            WorkflowProcessInstanceSnapshot started = workflowProcessStartService.start(
+                new StartProcessRequest(definition.getId(), businessKey,
+                    Map.of("auditPayload", "audit-" + businessKey)));
+            processInstanceId = started.id();
+            String expectedProcessInstanceId = processInstanceId;
+            awaitCondition("HTTP 异步作业必须在首次 503 后重试并完成流程实例",
+                ASYNC_EXECUTION_TIMEOUT, () -> requestCount.get() >= 2
+                    && runtimeService.createProcessInstanceQuery()
+                        .processInstanceId(expectedProcessInstanceId).count() == 0);
+
+            assertThat(requestBody).hasValue("\"audit-" + businessKey + "\"");
+            assertThat(requestCount).hasValue(2);
+            assertThat(firstIdempotencyKey.get()).isEqualTo(idempotencyKey.get());
+            assertThat(idempotencyKey.get()).matches("[0-9a-f]{64}");
+            assertThat(jdbcTemplate.queryForMap(
+                "select status, attempt_count, result_code, error_code, claim_token, "
+                    + "lease_expires_at from wf_connector_invocation where process_instance_id = ?",
+                processInstanceId)).containsEntry("status", "SUCCESS")
+                    .containsEntry("attempt_count", 2)
+                    .containsEntry("result_code", 202)
+                    .containsEntry("error_code", null)
+                    .containsEntry("claim_token", null)
+                    .containsEntry("lease_expires_at", null);
+            assertThat(historyService.createHistoricVariableInstanceQuery()
+                .processInstanceId(processInstanceId).variableName("callbackStatus")
+                .singleResult().getValue()).isEqualTo(202L);
+
+            // 清空第一次实例的请求捕获结果，再用同一冻结部署验证永久 503 的独立实例。
+            permanentFailure.set(true);
+            requestBody.set(null);
+            firstIdempotencyKey.set(null);
+            idempotencyKey.set(null);
+            requestCount.set(0);
+            String failedBusinessKey = businessKey + "-failed";
+            WorkflowProcessInstanceSnapshot failed = workflowProcessStartService.start(
+                new StartProcessRequest(definition.getId(), failedBusinessKey,
+                    Map.of("auditPayload", "audit-" + failedBusinessKey)));
+            failedProcessInstanceId = failed.id();
+            String expectedFailedProcessInstanceId = failedProcessInstanceId;
+            awaitCondition("HTTP 永久 503 必须在重试耗尽后进入 dead-letter",
+                ASYNC_EXECUTION_TIMEOUT, () -> requestCount.get() >= 2
+                    && managementService.createDeadLetterJobQuery()
+                        .processInstanceId(expectedFailedProcessInstanceId).count() == 1);
+
+            assertThat(requestCount).hasValue(2);
+            assertThat(firstIdempotencyKey.get()).isEqualTo(idempotencyKey.get());
+            assertThat(idempotencyKey.get()).matches("[0-9a-f]{64}");
+            assertThat(runtimeService.createProcessInstanceQuery()
+                .processInstanceId(failedProcessInstanceId).count()).isOne();
+            assertThat(historyService.createHistoricProcessInstanceQuery()
+                .processInstanceId(failedProcessInstanceId).finished().count()).isZero();
+            assertThat(managementService.createJobQuery()
+                .processInstanceId(failedProcessInstanceId).count()).isZero();
+            assertThat(jdbcTemplate.queryForMap(
+                "select status, attempt_count, result_code, error_code, claim_token, "
+                    + "lease_expires_at from wf_connector_invocation where process_instance_id = ?",
+                failedProcessInstanceId)).containsEntry("status", "FAILED")
+                    .containsEntry("attempt_count", 2)
+                    .containsEntry("result_code", 503)
+                    .containsEntry("error_code", "HTTP_STATUS")
+                    .containsEntry("claim_token", null)
+                    .containsEntry("lease_expires_at", null);
+        }
+        finally
+        {
+            server.stop(0);
+            SecurityContextHolder.clearContext();
+            if (failedProcessInstanceId != null)
+            {
+                if (runtimeService.createProcessInstanceQuery()
+                        .processInstanceId(failedProcessInstanceId).count() > 0)
+                {
+                    runtimeService.deleteProcessInstance(failedProcessInstanceId,
+                        "HTTP 连接器集成测试清理");
+                }
+                jdbcTemplate.update(
+                    "delete from wf_connector_invocation where process_instance_id = ?",
+                    failedProcessInstanceId);
+            }
+            if (processInstanceId != null)
+            {
+                jdbcTemplate.update(
+                    "delete from wf_connector_invocation where process_instance_id = ?",
+                    processInstanceId);
+            }
+            if (deploymentId != null)
+            {
+                jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
+                jdbcTemplate.update(
+                    "delete from wf_deploy_extension_snapshot where deploy_id = ?", deploymentId);
+                deleteDeploymentIfPresent(repositoryService, deploymentId);
+            }
+            if (modelId != null
+                    && repositoryService.createModelQuery().modelId(modelId).count() > 0)
+            {
+                repositoryService.deleteModel(modelId);
+            }
+            if (endpointId != null)
+            {
+                jdbcTemplate.update("delete from wf_connector_endpoint where endpoint_id = ?",
+                    endpointId);
+            }
+            jdbcTemplate.update("delete from wf_category where code = ?", categoryCode);
+        }
+    }
+
+    /**
+     * 生成仅包含一个异步受控 HTTP ServiceTask 的作者 BPMN，并配置短周期失败重试。
+     *
+     * @param processKey String，本场景唯一可执行流程标识
+     * @param endpointKey String，正式端点白名单中的稳定键
+     * @return String，可提交模型部署服务的 BPMN 2.0 XML
+     */
+    private String httpConnectorBpmnXml(String processKey, String endpointKey)
+    {
+        return """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                         xmlns:flowable="http://flowable.org/bpmn"
+                         targetNamespace="https://approvaplat.example/http-connector-it">
+              <process id="%s" name="HTTP 连接器集成测试" isExecutable="true">
+                <startEvent id="start" name="提交审计事件" flowable:initiator="initiator">
+                  <extensionElements>
+                    <flowable:formProperty id="auditPayload" name="审计正文" type="string"
+                                           readable="true" writable="true" required="true"/>
+                  </extensionElements>
+                </startEvent>
+                <sequenceFlow id="toHttp" sourceRef="start" targetRef="httpTask"/>
+                <serviceTask id="httpTask" name="发送审计事件" flowable:async="true"
+                             flowable:delegateExpression="${workflowExtensionDelegate}">
+                  <extensionElements>
+                    <flowable:failedJobRetryTimeCycle>R2/PT1S</flowable:failedJobRetryTimeCycle>
+                    <flowable:field name="approvaExtensionKey">
+                      <flowable:string>approva.http-connector</flowable:string>
+                    </flowable:field>
+                    <flowable:field name="approvaExtensionConfig">
+                      <flowable:string><![CDATA[{"endpointKey":"%s","method":"POST","path":"/audit/events","bodyVariable":"auditPayload","statusVariable":"callbackStatus"}]]></flowable:string>
+                    </flowable:field>
+                  </extensionElements>
+                </serviceTask>
+                <sequenceFlow id="toEnd" sourceRef="httpTask" targetRef="end"/>
+                <endEvent id="end"/>
+              </process>
+            </definitions>
+            """.formatted(processKey, endpointKey);
     }
 
     /**
@@ -5107,12 +5902,16 @@ class FlowableEngineIT
      * @param deploymentId String，重启前创建的 Flowable 部署 ID
      * @param processInstanceId String，保留待读取变量的流程实例 ID
      * @param businessKey String，流程实例业务主键
+     * @param timerDeploymentId String，重启前创建且包含 Timer 的 Flowable 部署 ID
+     * @param timerProcessInstanceId String，等待新执行器接管的 Timer 流程实例 ID
      * @param previousContext ConfigurableApplicationContext，必须在下一测试前关闭的旧上下文
      */
     private record RestartState(
         String deploymentId,
         String processInstanceId,
         String businessKey,
+        String timerDeploymentId,
+        String timerProcessInstanceId,
         ConfigurableApplicationContext previousContext
     )
     {

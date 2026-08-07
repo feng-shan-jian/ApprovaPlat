@@ -38,15 +38,19 @@ import org.flowable.engine.repository.Model;
 import org.flowable.engine.repository.ModelQuery;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCategory;
+import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfForm;
 import com.ruoyi.flowable.domain.WorkflowModelLockRow;
 import com.ruoyi.flowable.domain.WorkflowModelSaveRecord;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
+import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue;
+import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationReport;
 import com.ruoyi.flowable.domain.vo.WorkflowModelView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
@@ -123,6 +127,16 @@ public class WorkflowModelService
 
     private final WorkflowFormTemplateValidator formTemplateValidator;
 
+    private final WorkflowExtensionDeploymentService extensionDeploymentService;
+
+    private final WorkflowDmnDecisionService dmnDecisionService;
+
+    /** 部署时锁定自定义表单字段精确版本；旧构造测试可为空。 */
+    private final WorkflowFormFieldExtensionService formFieldExtensionService;
+
+    /** 部署时把调用活动编译为精确定义引用；旧构造测试可为空。 */
+    private final WorkflowCallActivityReferenceService callActivityReferenceService;
+
     /** Flowable 模型 metaInfo 的 Jackson 3 结构化读写器。 */
     private final ObjectMapper metadataMapper = JsonMapper.shared();
 
@@ -138,15 +152,24 @@ public class WorkflowModelService
      * @param formMapper WfFormMapper，可编辑表单模板数据访问层
      * @param deployFormMapper WfDeployFormMapper，部署表单快照数据访问层
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单 JSON 安全结构验证器
+     * @param extensionDeploymentService WorkflowExtensionDeploymentService，扩展编译和版本快照服务
+     * @param dmnDecisionService WorkflowDmnDecisionService，DMN 精确引用编译和冻结服务
+     * @param formFieldExtensionService WorkflowFormFieldExtensionService，自定义字段部署冻结服务
+     * @param callActivityReferenceService WorkflowCallActivityReferenceService，调用活动精确版本编译与保护服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
+    @Autowired
     public WorkflowModelService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, WorkflowBpmnService bpmnService,
             WorkflowBpmnIdentityValidator bpmnIdentityValidator,
             WorkflowModelSaveMapper modelSaveMapper,
             WfCategoryMapper categoryMapper, WfFormMapper formMapper,
             WfDeployFormMapper deployFormMapper,
-            WorkflowFormTemplateValidator formTemplateValidator)
+            WorkflowFormTemplateValidator formTemplateValidator,
+            WorkflowExtensionDeploymentService extensionDeploymentService,
+            WorkflowDmnDecisionService dmnDecisionService,
+            WorkflowFormFieldExtensionService formFieldExtensionService,
+            WorkflowCallActivityReferenceService callActivityReferenceService)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
@@ -157,6 +180,40 @@ public class WorkflowModelService
         this.formMapper = formMapper;
         this.deployFormMapper = deployFormMapper;
         this.formTemplateValidator = formTemplateValidator;
+        this.extensionDeploymentService = extensionDeploymentService;
+        this.dmnDecisionService = dmnDecisionService;
+        this.formFieldExtensionService = formFieldExtensionService;
+        this.callActivityReferenceService = callActivityReferenceService;
+    }
+
+    /**
+     * 兼容不涉及自定义表单字段的既有纯单元测试构造方式。
+     * @param engineOperations WorkflowEngineOperations，统一事务、身份和异常边界
+     * @param repositoryService RepositoryService，Flowable 仓储 API
+     * @param bpmnService WorkflowBpmnService，BPMN 校验服务
+     * @param bpmnIdentityValidator WorkflowBpmnIdentityValidator，身份校验器
+     * @param modelSaveMapper WorkflowModelSaveMapper，模型保存数据访问层
+     * @param categoryMapper WfCategoryMapper，分类数据访问层
+     * @param formMapper WfFormMapper，表单数据访问层
+     * @param deployFormMapper WfDeployFormMapper，部署表单快照数据访问层
+     * @param formTemplateValidator WorkflowFormTemplateValidator，表单安全验证器
+     * @param extensionDeploymentService WorkflowExtensionDeploymentService，扩展部署服务
+     * @param dmnDecisionService WorkflowDmnDecisionService，DMN 冻结服务
+     * @return 无返回值，仅为既有测试保留
+     */
+    public WorkflowModelService(WorkflowEngineOperations engineOperations,
+            RepositoryService repositoryService, WorkflowBpmnService bpmnService,
+            WorkflowBpmnIdentityValidator bpmnIdentityValidator,
+            WorkflowModelSaveMapper modelSaveMapper,
+            WfCategoryMapper categoryMapper, WfFormMapper formMapper,
+            WfDeployFormMapper deployFormMapper,
+            WorkflowFormTemplateValidator formTemplateValidator,
+            WorkflowExtensionDeploymentService extensionDeploymentService,
+            WorkflowDmnDecisionService dmnDecisionService)
+    {
+        this(engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
+                modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
+                formTemplateValidator, extensionDeploymentService, dmnDecisionService, null, null);
     }
 
     /**
@@ -379,7 +436,9 @@ public class WorkflowModelService
 
             // 普通 Flowable 查询只用于取得版本组 key；加锁后的业务判断只相信数据库当前读投影。
             Model sourceSnapshot = requireModel(modelId);
-            WorkflowBpmnDocument document = bpmnService.validate(bpmnBytes);
+            WorkflowBpmnDocument document = bpmnService.validateForSave(bpmnBytes);
+            // 保存继续执行身份与表单门禁；执行兼容性由部署门禁负责，round-trip-only 元素可保留在作者 XML。
+            validateDeploymentReferences(document);
             LockedModelVersions lockedModels = lockModelVersions(sourceSnapshot);
             WorkflowModelLockRow source = lockedModels.source();
             WorkflowModelLockRow latest = lockedModels.latest();
@@ -406,6 +465,40 @@ public class WorkflowModelService
             }
             return savedModelId;
         });
+    }
+
+    /**
+     * 按保存安全门禁校验 BPMN，并返回 Flowable 8 部署兼容性诊断。
+     *
+     * @param bpmnXml String，待校验的完整 BPMN 2.0 XML
+     * @return WorkflowBpmnValidationReport，安全可保存时 valid=true，不可部署元素以 WARNING 返回
+     */
+    public WorkflowBpmnValidationReport validateBpmn(String bpmnXml)
+    {
+        String source = requireText(bpmnXml, "BPMN XML 不能为空");
+        try
+        {
+            return engineOperations.read(() ->
+            {
+                WorkflowBpmnDocument document = bpmnService.validateForSave(
+                        source.getBytes(StandardCharsets.UTF_8));
+                validateDeploymentReferences(document);
+                List<WorkflowBpmnValidationIssue> compatibilityIssues =
+                        bpmnService.deploymentCompatibilityIssues(document);
+                if (compatibilityIssues.isEmpty())
+                {
+                    bpmnService.validateDeployable(document);
+                }
+                return new WorkflowBpmnValidationReport(true, compatibilityIssues);
+            });
+        }
+        catch (ServiceException exception)
+        {
+            WorkflowBpmnValidationIssue issue = new WorkflowBpmnValidationIssue(
+                    validationCode(exception), "ERROR", null,
+                    requireText(exception.getMessage(), "BPMN 校验失败"));
+            return new WorkflowBpmnValidationReport(false, List.of(issue));
+        }
     }
 
     /**
@@ -646,9 +739,14 @@ public class WorkflowModelService
             requireActiveCategory(model.getCategory());
             byte[] bpmnBytes = requireModelSource(normalizedId);
             WorkflowBpmnDocument document = bpmnService.validate(bpmnBytes);
-            // 部署前重新核验所有静态身份，避免设计后主数据停用造成无人可办任务。
-            bpmnIdentityValidator.validate(document);
-            List<FormSnapshotSource> snapshotSources = loadSnapshotSources(document.formReferences());
+            List<FormSnapshotSource> snapshotSources = validateDeploymentReferences(document);
+            WorkflowPreparedExtensionDeployment extensionDeployment =
+                    extensionDeploymentService.prepare(document, identity.userId());
+            WorkflowPreparedDmnDeployment dmnDeployment =
+                    dmnDecisionService.prepare(extensionDeployment.compiledBpmn());
+            byte[] executableBpmn = callActivityReferenceService == null
+                    ? dmnDeployment.compiledBpmn()
+                    : callActivityReferenceService.freezeReferences(dmnDeployment.compiledBpmn());
             Map<String, List<ProcessDefinition>> activeHistoryByKey =
                     loadActiveDefinitionsByProcessKey(document);
 
@@ -656,7 +754,7 @@ public class WorkflowModelService
                     .name(model.getName())
                     .key(model.getKey())
                     .category(model.getCategory())
-                    .addBytes(model.getKey() + ".bpmn20.xml", bpmnBytes);
+                    .addBytes(model.getKey() + ".bpmn20.xml", executableBpmn);
             Deployment deployment = builder.deploy();
             if (deployment == null || !hasText(deployment.getId()))
             {
@@ -684,6 +782,14 @@ public class WorkflowModelService
             {
                 throw new ServiceException("部署表单快照保存不完整", HttpStatus.CONFLICT);
             }
+            // 表单字段与服务任务共享部署扩展台账，版本引用保护和删除门禁必须覆盖两类来源。
+            List<WfDeployExtensionSnapshot> formFieldSnapshots = snapshotSources.stream()
+                    .flatMap(source -> source.extensionSnapshots().stream())
+                    .peek(snapshot -> snapshot.setCreateBy(identity.userId()))
+                    .toList();
+            extensionDeploymentService.persist(deployment.getId(), extensionDeployment,
+                    formFieldSnapshots);
+            dmnDecisionService.persist(deployment.getId(), dmnDeployment, identity.userId());
 
             // 记录最近一次部署关系，后续模型编辑和安全删除据此执行状态门禁。
             model.setDeploymentId(deployment.getId());
@@ -692,8 +798,12 @@ public class WorkflowModelService
             // 新定义默认保持活动；旧定义只禁止承接新实例，不冻结仍在办理的历史版本实例。
             Set<String> newDefinitionIds = definitions.stream()
                     .map(ProcessDefinition::getId).collect(java.util.stream.Collectors.toSet());
+            Set<String> frozenCallTargets = callActivityReferenceService == null
+                    ? Set.of() : callActivityReferenceService.frozenTargetDefinitionIds();
             activeHistoryByKey.values().stream().flatMap(Collection::stream)
                     .filter(definition -> !newDefinitionIds.contains(definition.getId()))
+                    // 被已发布父流程精确引用的定义必须保持可调用；业务发起链仍只允许最新版。
+                    .filter(definition -> !frozenCallTargets.contains(definition.getId()))
                     .forEach(definition -> repositoryService.suspendProcessDefinitionById(
                             definition.getId(), false, null));
             return deployment.getId();
@@ -877,10 +987,75 @@ public class WorkflowModelService
         List<FormSnapshotSource> sources = new ArrayList<>(references.size());
         for (WorkflowBpmnFormReference reference : references)
         {
-            WfForm form = formsById.computeIfAbsent(reference.formId(), this::requireActiveForm);
-            sources.add(new FormSnapshotSource(reference, form));
+            if (reference.sourceType() == WorkflowFormSourceType.TEMPLATE)
+            {
+                WfForm form = formsById.computeIfAbsent(reference.formId(), this::requireActiveForm);
+                sources.add(new FormSnapshotSource(reference, form.getFormName(),
+                        form.getContent(), List.of()));
+            }
+            else
+            {
+                // 内嵌表单直接来自本次安全解析的作者 XML，不创建虚假的 wf_form 主数据。
+                String formName = hasText(reference.nodeName())
+                        ? reference.nodeName() + "内嵌表单"
+                        : reference.nodeKey() + "内嵌表单";
+                WorkflowFrozenFormContent frozen = formFieldExtensionService == null
+                        ? new WorkflowFrozenFormContent(reference.embeddedContent(), List.of())
+                        : formFieldExtensionService.freezeEmbeddedContentWithSnapshots(
+                                reference.embeddedContent(), reference.processKey(),
+                                reference.nodeKey());
+                // 冻结后再执行正式表单验证，防止版本元数据更新破坏渲染协议。
+                formTemplateValidator.validate(frozen.content());
+                sources.add(new FormSnapshotSource(reference, formName, frozen.content(),
+                        frozen.extensionSnapshots()));
+            }
         }
         return List.copyOf(sources);
+    }
+
+    /**
+     * 重新核验 BPMN 静态身份和全部正式表单，并返回可用于部署快照的固定来源。
+     *
+     * @param document WorkflowBpmnDocument，已通过 XML、安全和 Flowable 结构校验的文档
+     * @return List&lt;FormSnapshotSource&gt;，本次一致性视图中的表单快照来源
+     */
+    private List<FormSnapshotSource> validateDeploymentReferences(WorkflowBpmnDocument document)
+    {
+        // 身份主数据可能在设计期间停用，每次保存、校验和部署都必须从正式表重新核验。
+        bpmnIdentityValidator.validate(document);
+        dmnDecisionService.validateReferences(document);
+        return loadSnapshotSources(document.formReferences());
+    }
+
+    /**
+     * 把服务端业务校验异常归类为客户端稳定诊断编码，不暴露内部异常类型。
+     *
+     * @param exception ServiceException，BPMN、身份或表单共同门禁产生的预期业务异常
+     * @return String，稳定的大类诊断编码
+     */
+    private String validationCode(ServiceException exception)
+    {
+        if (hasText(exception.getSubCode()))
+        {
+            return exception.getSubCode();
+        }
+        String message = exception.getMessage() == null ? "" : exception.getMessage();
+        if (message.contains("表单"))
+        {
+            return "BPMN_FORM_INVALID";
+        }
+        if (message.contains("用户") || message.contains("候选")
+                || message.contains("办理") || message.contains("角色")
+                || message.contains("部门"))
+        {
+            return "BPMN_IDENTITY_INVALID";
+        }
+        if (message.contains("XML") || message.contains("DTD")
+                || message.contains("实体"))
+        {
+            return "BPMN_XML_INVALID";
+        }
+        return "BPMN_CONTRACT_INVALID";
     }
 
     /**
@@ -900,12 +1075,13 @@ public class WorkflowModelService
         {
             WfDeployForm snapshot = new WfDeployForm();
             snapshot.setDeployId(deploymentId);
+            snapshot.setSourceType(source.reference().sourceType().name());
             snapshot.setFormId(source.reference().formId());
             snapshot.setFormKey(source.reference().formKey());
             snapshot.setNodeKey(source.reference().nodeKey());
             snapshot.setNodeName(source.reference().nodeName());
-            snapshot.setFormName(source.form().getFormName());
-            snapshot.setContent(source.form().getContent());
+            snapshot.setFormName(source.formName());
+            snapshot.setContent(source.content());
             snapshot.setDelFlag(ACTIVE_DEL_FLAG);
             snapshot.setCreateBy(identity.userId());
             snapshot.setCreateTime(now);
@@ -983,7 +1159,8 @@ public class WorkflowModelService
         {
             return;
         }
-        WorkflowBpmnDocument document = bpmnService.validate(source);
+        // 删除草稿只需安全解析并提取 process key；不能要求待删除内容先满足部署表单门禁。
+        WorkflowBpmnDocument document = bpmnService.validateDraft(source);
         Set<String> processKeys = new LinkedHashSet<>();
         for (Process process : document.bpmnModel().getProcesses())
         {
@@ -1494,9 +1671,13 @@ public class WorkflowModelService
      * 部署快照的节点引用和表单模板固定读取结果。
      *
      * @param reference WorkflowBpmnFormReference，BPMN 节点表单引用
-     * @param form WfForm，部署事务内读取的有效表单模板
+     * @param formName String，部署时固化的表单名称
+     * @param content String，部署时固化的正式表单 JSON
+     * @param extensionSnapshots List&lt;WfDeployExtensionSnapshot&gt;，内嵌自定义字段的精确版本快照
      */
-    private record FormSnapshotSource(WorkflowBpmnFormReference reference, WfForm form)
+    private record FormSnapshotSource(WorkflowBpmnFormReference reference,
+            String formName, String content,
+            List<WfDeployExtensionSnapshot> extensionSnapshots)
     {
     }
 }

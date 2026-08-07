@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper">
+    <resultMap id="SnapshotResult" type="com.ruoyi.flowable.domain.WfDeployDmnSnapshot">
+        <id property="snapshotId" column="snapshot_id"/>
+        <result property="deployId" column="deploy_id"/>
+        <result property="processKey" column="process_key"/>
+        <result property="elementId" column="element_id"/>
+        <result property="sourceDecisionId" column="source_decision_id"/>
+        <result property="decisionKey" column="decision_key"/>
+        <result property="decisionVersion" column="decision_version"/>
+        <result property="sourceDeploymentId" column="source_deployment_id"/>
+        <result property="resourceName" column="resource_name"/>
+        <result property="resourceChecksum" column="resource_checksum"/>
+        <result property="frozenDeploymentId" column="frozen_deployment_id"/>
+        <result property="frozenDecisionId" column="frozen_decision_id"/>
+        <result property="snapshotChecksum" column="snapshot_checksum"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <insert id="insertBatch">
+        <choose><when test="snapshots != null and snapshots.size() > 0">
+            insert into wf_deploy_dmn_snapshot
+            (deploy_id, process_key, element_id, source_decision_id, decision_key, decision_version,
+             source_deployment_id, resource_name, resource_checksum, frozen_deployment_id,
+             frozen_decision_id, snapshot_checksum, create_by, create_time)
+            values <foreach collection="snapshots" item="item" separator=",">
+                (#{item.deployId}, #{item.processKey}, #{item.elementId}, #{item.sourceDecisionId},
+                 #{item.decisionKey}, #{item.decisionVersion}, #{item.sourceDeploymentId},
+                 #{item.resourceName}, #{item.resourceChecksum}, #{item.frozenDeploymentId},
+                 #{item.frozenDecisionId}, #{item.snapshotChecksum}, #{item.createBy}, current_timestamp(3))
+            </foreach>
+        </when><otherwise>
+            insert into wf_deploy_dmn_snapshot
+            (deploy_id, process_key, element_id, source_decision_id, decision_key, decision_version,
+             source_deployment_id, resource_name, resource_checksum, frozen_deployment_id,
+             frozen_decision_id, snapshot_checksum, create_by, create_time)
+            select '', '', '', '', '', 1, '', '', repeat('0', 64), '', '', repeat('0', 64), '', current_timestamp(3) where 1 = 0
+        </otherwise></choose>
+    </insert>
+
+    <select id="selectByDeploymentId" resultMap="SnapshotResult">
+        select snapshot_id, deploy_id, process_key, element_id, source_decision_id, decision_key,
+               decision_version, source_deployment_id, resource_name, resource_checksum,
+               frozen_deployment_id, frozen_decision_id, snapshot_checksum, create_by, create_time
+        from wf_deploy_dmn_snapshot where deploy_id = #{deployId} order by process_key, element_id
+    </select>
+
+    <select id="countBySourceDeploymentId" resultType="long">
+        select count(*) from wf_deploy_dmn_snapshot where source_deployment_id = #{sourceDeploymentId}
+    </select>
+
+    <delete id="deleteByDeploymentId">delete from wf_deploy_dmn_snapshot where deploy_id = #{deployId}</delete>
+</mapper>

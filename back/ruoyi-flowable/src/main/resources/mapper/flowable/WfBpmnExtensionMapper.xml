@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfBpmnExtensionMapper">
+
+    <resultMap id="ExtensionResult" type="com.ruoyi.flowable.domain.WfBpmnExtension">
+        <id property="extensionId" column="extension_id"/>
+        <result property="extensionKey" column="extension_key"/>
+        <result property="extensionName" column="extension_name"/>
+        <result property="extensionType" column="extension_type"/>
+        <result property="status" column="status"/>
+        <result property="remark" column="description"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <resultMap id="OptionResult" type="com.ruoyi.flowable.domain.vo.WorkflowExtensionOptionView">
+        <constructor>
+            <arg column="extension_id" javaType="java.lang.Long"/>
+            <arg column="extension_key" javaType="java.lang.String"/>
+            <arg column="extension_name" javaType="java.lang.String"/>
+            <arg column="extension_type" javaType="java.lang.String"/>
+            <arg column="version_id" javaType="java.lang.Long"/>
+            <arg column="version_no" javaType="java.lang.Integer"/>
+            <arg column="implementation_key" javaType="java.lang.String"/>
+            <arg column="config_schema" javaType="java.lang.String"/>
+            <arg column="checksum" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="ManagementResult" type="com.ruoyi.flowable.domain.vo.WorkflowExtensionManagementView">
+        <constructor>
+            <arg column="extension_id" javaType="java.lang.Long"/>
+            <arg column="extension_key" javaType="java.lang.String"/>
+            <arg column="extension_name" javaType="java.lang.String"/>
+            <arg column="extension_type" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="description" javaType="java.lang.String"/>
+            <arg column="version_id" javaType="java.lang.Long"/>
+            <arg column="version_no" javaType="java.lang.Integer"/>
+            <arg column="implementation_key" javaType="java.lang.String"/>
+            <arg column="checksum" javaType="java.lang.String"/>
+            <arg column="effective_update_time" javaType="java.util.Date"/>
+        </constructor>
+    </resultMap>
+
+    <select id="selectManagementList" resultMap="ManagementResult">
+        select e.extension_id, e.extension_key, e.extension_name, e.extension_type,
+               e.status, e.description, v.version_id, v.version_no,
+               v.implementation_key, v.checksum,
+               coalesce(e.update_time, e.create_time) as effective_update_time
+        from wf_bpmn_extension e
+        left join wf_bpmn_extension_version v
+          on v.extension_id = e.extension_id
+         and v.version_no = (
+             select max(latest.version_no)
+             from wf_bpmn_extension_version latest
+             where latest.extension_id = e.extension_id
+         )
+        order by e.extension_name, e.extension_key
+    </select>
+
+    <sql id="latestEnabledOptionSql">
+        select e.extension_id, e.extension_key, e.extension_name, e.extension_type,
+               v.version_id, v.version_no, v.implementation_key, v.config_schema, v.checksum
+        from wf_bpmn_extension e
+        inner join wf_bpmn_extension_version v on v.extension_id = e.extension_id
+        inner join (
+            select extension_id, max(version_no) as version_no
+            from wf_bpmn_extension_version
+            group by extension_id
+        ) latest on latest.extension_id = v.extension_id and latest.version_no = v.version_no
+        where e.status = 'ENABLED'
+    </sql>
+
+    <select id="selectLatestEnabledOptions" resultMap="OptionResult">
+        <include refid="latestEnabledOptionSql"/>
+          and e.extension_type = #{extensionType}
+        order by e.extension_name, e.extension_key
+    </select>
+
+    <select id="selectByKey" resultMap="ExtensionResult">
+        select extension_id, extension_key, extension_name, extension_type, status,
+               description, create_by, create_time, update_by, update_time
+        from wf_bpmn_extension
+        where extension_key = #{extensionKey}
+    </select>
+
+    <select id="selectByKeyForUpdate" resultMap="ExtensionResult">
+        select extension_id, extension_key, extension_name, extension_type, status,
+               description, create_by, create_time, update_by, update_time
+        from wf_bpmn_extension
+        where extension_key = #{extensionKey}
+        for update
+    </select>
+
+    <select id="selectByIdForUpdate" resultMap="ExtensionResult">
+        select extension_id, extension_key, extension_name, extension_type, status,
+               description, create_by, create_time, update_by, update_time
+        from wf_bpmn_extension
+        where extension_id = #{extensionId}
+        for update
+    </select>
+
+    <select id="selectLatestEnabledByKey" resultMap="OptionResult">
+        <include refid="latestEnabledOptionSql"/>
+          and e.extension_key = #{extensionKey}
+    </select>
+
+    <select id="selectMaxVersionNo" resultType="java.lang.Integer">
+        select coalesce(max(version_no), 0)
+        from wf_bpmn_extension_version
+        where extension_id = #{extensionId}
+    </select>
+
+    <insert id="insertExtension" useGeneratedKeys="true" keyProperty="extension.extensionId">
+        insert into wf_bpmn_extension
+            (extension_key, extension_name, extension_type, status, description,
+             create_by, create_time, update_by, update_time)
+        values
+            (#{extension.extensionKey}, #{extension.extensionName}, #{extension.extensionType},
+             #{extension.status}, #{extension.remark}, #{extension.createBy},
+             current_timestamp(3), '', null)
+    </insert>
+
+    <insert id="insertVersion" useGeneratedKeys="true" keyProperty="version.versionId">
+        insert into wf_bpmn_extension_version
+            (extension_id, version_no, implementation_key, config_schema, checksum,
+             create_by, create_time)
+        values
+            (#{version.extensionId}, #{version.versionNo}, #{version.implementationKey},
+             #{version.configSchema}, #{version.checksum}, #{version.createBy},
+             current_timestamp(3))
+    </insert>
+
+    <update id="updateStatus">
+        update wf_bpmn_extension
+        set status = #{status}, update_by = #{updateBy}, update_time = current_timestamp(3)
+        where extension_id = #{extensionId}
+    </update>
+
+    <select id="countDeploymentSnapshots" resultType="int">
+        select count(*)
+        from wf_deploy_extension_snapshot s
+        inner join wf_bpmn_extension_version v
+          on v.version_id = s.extension_version_id
+        where v.extension_id = #{extensionId}
+    </select>
+
+    <delete id="deleteVersions">
+        delete from wf_bpmn_extension_version
+        where extension_id = #{extensionId}
+    </delete>
+
+    <delete id="deleteExtension">
+        delete from wf_bpmn_extension
+        where extension_id = #{extensionId}
+          and status = 'DISABLED'
+    </delete>
+</mapper>

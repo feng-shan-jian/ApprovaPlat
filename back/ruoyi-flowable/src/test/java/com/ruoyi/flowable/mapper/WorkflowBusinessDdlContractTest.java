@@ -28,6 +28,14 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_deploy_form`",
                 "create table if not exists `wf_copy`",
                 "create table if not exists `wf_model_save_idempotency`",
+                "create table if not exists `wf_designer_preference`",
+                "create table if not exists `wf_bpmn_extension`",
+                "create table if not exists `wf_bpmn_extension_version`",
+                "create table if not exists `wf_deploy_extension_snapshot`",
+                "create table if not exists `wf_connector_endpoint`",
+                "create table if not exists `wf_connector_invocation`",
+                "create table if not exists `wf_integration_credential`",
+                "create table if not exists `wf_runtime_event_request`",
                 "create table if not exists `wf_attachment_quota_guard`",
                 "create table if not exists `wf_attachment`")
                 .doesNotContain("drop table");
@@ -37,6 +45,9 @@ class WorkflowBusinessDdlContractTest
                 "unique key `uk_wf_category_active_code` (`active_code`)",
                 "constraint `chk_wf_form_content_json` check (json_valid(`content`))",
                 "constraint `chk_wf_deploy_form_content_json` check (json_valid(`content`))",
+                "constraint `chk_wf_deploy_form_source` check",
+                "`source_type` varchar(16) not null default 'template'",
+                "(`source_type` = 'embedded' and `form_id` is null)",
                 "unique key `uk_wf_copy_event_user` (`copy_event_id`, `user_id`)",
                 "constraint `chk_wf_attachment_quota_guard_owner` check (`owner_user_id` >= 0)",
                 "insert ignore into `wf_attachment_quota_guard` (`owner_user_id`)",
@@ -46,7 +57,7 @@ class WorkflowBusinessDdlContractTest
     }
 
     /**
-     * 验证业务表验收脚本只读，并覆盖表、列、生成列、索引、约束和数据关联。
+     * 验证业务表验收脚本只读，并覆盖核心与扩展表、列、索引、约束和数据关联。
      * @return void，验收脚本包含写操作或缺少关键门禁时测试失败
      * @throws Exception 读取正式验收 SQL 文件失败
      */
@@ -68,6 +79,8 @@ class WorkflowBusinessDdlContractTest
                 "workflow_business_indexes",
                 "workflow_business_checks",
                 "workflow_business_data_integrity",
+                "chk_wf_deploy_form_source",
+                "source_type",
                 "wf_deploy_form_missing_source_form",
                 "wf_deploy_form_missing_deployment",
                 "wf_copy_missing_process_instance",
@@ -75,8 +88,85 @@ class WorkflowBusinessDdlContractTest
                 "wf_model_save_invalid_row",
                 "wf_model_save_incomplete_record",
                 "wf_model_save_missing_user",
+                "workflow_business_foreign_keys",
+                "wf_designer_preference_invalid_row",
+                "wf_designer_preference_missing_user",
                 "wf_attachment_quota_guard_invalid_owner",
-                "wf_attachment_quota_guard_global_missing");
+                "wf_attachment_quota_guard_global_missing",
+                "workflow_extension_tables",
+                "workflow_extension_columns",
+                "workflow_extension_indexes",
+                "workflow_extension_checks",
+                "workflow_extension_foreign_keys",
+                "workflow_extension_data_integrity",
+                "fk_wf_bpmn_extension_version_extension",
+                "fk_wf_deploy_extension_version",
+                "deploy_extension_snapshot_mismatch",
+                "connector_endpoint_invalid_row",
+                "connector_invocation_invalid_state");
+        assertThat(normalized).contains(
+                "workflow_runtime_integration_tables",
+                "workflow_runtime_integration_columns",
+                "workflow_runtime_integration_indexes",
+                "workflow_runtime_integration_checks",
+                "workflow_runtime_integration_foreign_keys",
+                "workflow_runtime_integration_data_integrity",
+                "integration_credential_invalid_row",
+                "runtime_event_invalid_row",
+                "runtime_event_missing_credential");
+    }
+
+    /**
+     * 验证运行事件增量 DDL 只幂等建表，不保存 Token 正文且不含破坏性语句。
+     * @return void，Token、幂等或外键契约缺失时测试失败
+     * @throws Exception 读取正式增量 SQL 失败
+     */
+    @Test
+    void keepsRuntimeIntegrationMigrationHashedIdempotentAndNonDestructive() throws Exception
+    {
+        String migration = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0.13__workflow_runtime_integration.sql"),
+                StandardCharsets.UTF_8);
+        String normalized = migration.toLowerCase();
+        Pattern destructiveMutation = Pattern.compile(
+                "(?im)^\\s*(drop|delete|update|alter|truncate|replace|call|set)\\b");
+
+        assertThat(destructiveMutation.matcher(migration).find()).isFalse();
+        assertThat(normalized).contains(
+                "create table if not exists `wf_integration_credential`",
+                "create table if not exists `wf_runtime_event_request`",
+                "`token_prefix`",
+                "`token_hash`",
+                "unique key `uk_wf_integration_token_prefix`",
+                "constraint `fk_wf_runtime_event_credential`",
+                "constraint `chk_wf_runtime_event_completion`")
+                .doesNotContain("token_plaintext", "access_token", "secret_token");
+    }
+
+    /**
+     * 验证双表单增量脚本可重复执行、保留历史快照且建立来源一致性约束。
+     * @return void，迁移缺少幂等门禁或包含数据删除时测试失败
+     * @throws Exception 读取正式增量 SQL 文件失败
+     */
+    @Test
+    void keepsEmbeddedFormSnapshotMigrationIdempotentAndNonDestructive() throws Exception
+    {
+        String migration = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0.6__workflow_embedded_form_snapshot.sql"),
+                StandardCharsets.UTF_8);
+        String normalized = migration.toLowerCase();
+
+        Pattern destructiveMutation = Pattern.compile(
+                "(?im)^\\s*(drop|delete|update|truncate|replace)\\b");
+        assertThat(destructiveMutation.matcher(migration).find()).isFalse();
+        assertThat(normalized).contains(
+                "information_schema.columns",
+                "information_schema.table_constraints",
+                "column_name = 'source_type'",
+                "modify column `form_id` bigint null",
+                "constraint `chk_wf_deploy_form_source` check",
+                "`source_type` = ''template''",
+                "`source_type` = ''embedded''");
     }
 
     /**

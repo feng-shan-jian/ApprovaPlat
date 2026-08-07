@@ -42,10 +42,23 @@ class WorkflowMenuSqlContractTest
                 "-- 目录按 path、页面和按钮按 perms 写入");
         Set<String> seedKeys = extractSeedKeys(menuSeed);
 
-        assertThat(seedKeys).hasSize(53).contains(
+        assertThat(seedKeys).hasSize(72).contains(
                 "workflow", "office",
                 "workflow:category:list", "workflow:category:export",
                 "workflow:model:designer", "workflow:model:save",
+                "workflow:extension:list", "workflow:extension:add",
+                "workflow:extension:edit", "workflow:extension:version:add",
+                "workflow:extension:remove",
+                "workflow:connector:list", "workflow:connector:add",
+                "workflow:connector:edit",
+                "workflow:sqlDatasource:list", "workflow:sqlDatasource:add",
+                "workflow:sqlDatasource:edit",
+                "workflow:dmn:list", "workflow:dmn:add", "workflow:dmn:remove",
+                "workflow:integrationCredential:list",
+                "workflow:integrationCredential:add",
+                "workflow:integrationCredential:rotate",
+                "workflow:integrationCredential:revoke",
+                "workflow:runtimeEvent:list",
                 "workflow:deploy:state",
                 "workflow:process:manageList", "workflow:process:manageExport",
                 "workflow:process:start", "workflow:process:query",
@@ -104,13 +117,39 @@ class WorkflowMenuSqlContractTest
                 "workflow_roles",
                 "workflow_admin_menu_scope",
                 "workflow_admin_only_instance_management",
-                "when count(*) = 53",
-                "workflow_page) = 11",
-                "workflow_button) = 40",
+                "when count(*) = 72",
+                "workflow_page) = 17",
+                "workflow_button) = 53",
                 "'workflow:process:managelist'",
                 "'workflow:process:manageexport'",
                 "admin_management_permissions",
                 "workflow_auditor_read_only");
+    }
+
+    /**
+     * 验证已安装环境可通过独立增量脚本获得运行集成菜单和职责分离授权。
+     * @return void，增量脚本缺少幂等保护、页面或角色授权时失败
+     * @throws Exception 增量菜单 SQL 无法按 UTF-8 读取时测试失败
+     */
+    @Test
+    void definesIdempotentRuntimeIntegrationMenuMigration() throws Exception
+    {
+        String migration = Files.readString(findProjectSql(
+                "sql/flowable/menu/8.0.0.3__workflow_runtime_integration_menu.sql"),
+                StandardCharsets.UTF_8);
+        String normalized = migration.toLowerCase();
+
+        assertThat(normalized).contains(
+                "not exists",
+                "insert ignore into sys_role_menu",
+                "workflow/integrationcredential/index",
+                "workflow/runtimeevent/index",
+                "'workflow:integrationcredential:add'",
+                "'workflow:integrationcredential:rotate'",
+                "'workflow:integrationcredential:revoke'",
+                "role_info.role_key = 'workflow_admin'",
+                "role_info.role_key = 'workflow_auditor'");
+        assertThat(normalized).doesNotContain("insert into sys_menu values");
     }
 
     /**

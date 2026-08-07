@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfConnectorEndpointMapper">
+    <resultMap id="EndpointResult" type="com.ruoyi.flowable.domain.WfConnectorEndpoint">
+        <id property="endpointId" column="endpoint_id"/>
+        <result property="endpointKey" column="endpoint_key"/>
+        <result property="endpointName" column="endpoint_name"/>
+        <result property="baseUrl" column="base_url"/>
+        <result property="allowedMethods" column="allowed_methods"/>
+        <result property="pathPrefix" column="path_prefix"/>
+        <result property="authType" column="auth_type"/>
+        <result property="secretRef" column="secret_ref"/>
+        <result property="apiKeyHeader" column="api_key_header"/>
+        <result property="connectTimeoutMs" column="connect_timeout_ms"/>
+        <result property="requestTimeoutMs" column="request_timeout_ms"/>
+        <result property="networkScope" column="network_scope"/>
+        <result property="revisionNo" column="revision_no"/>
+        <result property="status" column="status"/>
+        <result property="checksum" column="checksum"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <resultMap id="EndpointView" type="com.ruoyi.flowable.domain.vo.WorkflowConnectorEndpointView">
+        <constructor>
+            <arg column="endpoint_id" javaType="java.lang.Long"/>
+            <arg column="endpoint_key" javaType="java.lang.String"/>
+            <arg column="endpoint_name" javaType="java.lang.String"/>
+            <arg column="base_url" javaType="java.lang.String"/>
+            <arg column="allowed_methods" javaType="java.lang.String"/>
+            <arg column="path_prefix" javaType="java.lang.String"/>
+            <arg column="auth_type" javaType="java.lang.String"/>
+            <arg column="secret_ref" javaType="java.lang.String"/>
+            <arg column="api_key_header" javaType="java.lang.String"/>
+            <arg column="connect_timeout_ms" javaType="java.lang.Integer"/>
+            <arg column="request_timeout_ms" javaType="java.lang.Integer"/>
+            <arg column="network_scope" javaType="java.lang.String"/>
+            <arg column="revision_no" javaType="java.lang.Integer"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="checksum" javaType="java.lang.String"/>
+            <arg column="effective_update_time" javaType="java.util.Date"/>
+        </constructor>
+    </resultMap>
+
+    <sql id="endpointColumns">
+        endpoint_id, endpoint_key, endpoint_name, base_url, allowed_methods, path_prefix,
+        auth_type, secret_ref, api_key_header, connect_timeout_ms, request_timeout_ms,
+        network_scope, revision_no, status, checksum, create_by, create_time, update_by, update_time
+    </sql>
+
+    <select id="selectList" resultMap="EndpointView">
+        select endpoint_id, endpoint_key, endpoint_name, base_url, allowed_methods, path_prefix,
+               auth_type, secret_ref, api_key_header, connect_timeout_ms, request_timeout_ms,
+               network_scope, revision_no, status, checksum,
+               coalesce(update_time, create_time) as effective_update_time
+        from wf_connector_endpoint
+        order by endpoint_name, endpoint_key
+    </select>
+
+    <select id="selectEnabledOptions" resultMap="EndpointView">
+        select endpoint_id, endpoint_key, endpoint_name, base_url, allowed_methods, path_prefix,
+               auth_type, secret_ref, api_key_header, connect_timeout_ms, request_timeout_ms,
+               network_scope, revision_no, status, checksum,
+               coalesce(update_time, create_time) as effective_update_time
+        from wf_connector_endpoint
+        where status = 'ENABLED'
+        order by endpoint_name, endpoint_key
+    </select>
+
+    <select id="selectEnabledByKeyForUpdate" resultMap="EndpointResult">
+        select <include refid="endpointColumns"/>
+        from wf_connector_endpoint
+        where endpoint_key = #{endpointKey} and status = 'ENABLED'
+        for update
+    </select>
+
+    <select id="selectByIdForUpdate" resultMap="EndpointResult">
+        select <include refid="endpointColumns"/>
+        from wf_connector_endpoint
+        where endpoint_id = #{endpointId}
+        for update
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="endpoint.endpointId">
+        insert into wf_connector_endpoint
+            (endpoint_key, endpoint_name, base_url, allowed_methods, path_prefix, auth_type,
+             secret_ref, api_key_header, connect_timeout_ms, request_timeout_ms, network_scope,
+             revision_no, status, checksum, create_by, create_time, update_by, update_time)
+        values
+            (#{endpoint.endpointKey}, #{endpoint.endpointName}, #{endpoint.baseUrl},
+             #{endpoint.allowedMethods}, #{endpoint.pathPrefix}, #{endpoint.authType},
+             #{endpoint.secretRef}, #{endpoint.apiKeyHeader}, #{endpoint.connectTimeoutMs},
+             #{endpoint.requestTimeoutMs}, #{endpoint.networkScope}, #{endpoint.revisionNo},
+             #{endpoint.status}, #{endpoint.checksum}, #{endpoint.createBy}, current_timestamp(3), '', null)
+    </insert>
+
+    <update id="updateRevision">
+        update wf_connector_endpoint
+        set endpoint_name = #{endpoint.endpointName}, base_url = #{endpoint.baseUrl},
+            allowed_methods = #{endpoint.allowedMethods}, path_prefix = #{endpoint.pathPrefix},
+            auth_type = #{endpoint.authType}, secret_ref = #{endpoint.secretRef},
+            api_key_header = #{endpoint.apiKeyHeader}, connect_timeout_ms = #{endpoint.connectTimeoutMs},
+            request_timeout_ms = #{endpoint.requestTimeoutMs}, network_scope = #{endpoint.networkScope},
+            revision_no = #{endpoint.revisionNo}, checksum = #{endpoint.checksum},
+            update_by = #{endpoint.updateBy}, update_time = current_timestamp(3)
+        where endpoint_id = #{endpoint.endpointId} and revision_no = #{expectedRevision}
+    </update>
+
+    <update id="updateStatus">
+        update wf_connector_endpoint
+        set status = #{status}, update_by = #{updateBy}, update_time = current_timestamp(3)
+        where endpoint_id = #{endpointId}
+    </update>
+</mapper>

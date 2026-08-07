@@ -10,11 +10,11 @@ WITH workflow_menu AS (
 SELECT
     'workflow_menu_count' AS check_name,
     CASE
-        WHEN COUNT(*) = 53
+        WHEN COUNT(*) = 72
          AND COUNT(DISTINCT CASE
                  WHEN menu_type = 'M' THEN CONCAT('path:', path)
                  ELSE CONCAT('perms:', perms)
-             END) = 53
+             END) = 72
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -47,8 +47,8 @@ SELECT
     'workflow_menu_tree' AS check_name,
     CASE
         WHEN (SELECT COUNT(*) FROM workflow_directory) = 2
-         AND (SELECT COUNT(*) FROM workflow_page) = 11
-         AND (SELECT COUNT(*) FROM workflow_button) = 40
+         AND (SELECT COUNT(*) FROM workflow_page) = 17
+         AND (SELECT COUNT(*) FROM workflow_button) = 53
          AND (SELECT COUNT(*) FROM workflow_page
               WHERE component IS NULL OR component = '' OR route_name = '') = 0
         THEN 'PASS'
@@ -113,12 +113,12 @@ workflow_admin AS (
 SELECT
     'workflow_admin_menu_scope' AS check_name,
     CASE
-        WHEN (SELECT COUNT(*) FROM workflow_menu) = 53
-         AND COUNT(*) = 53
+        WHEN (SELECT COUNT(*) FROM workflow_menu) = 72
+         AND COUNT(*) = 72
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
-    CONCAT('assigned=', COUNT(*), ', expected=53') AS detail
+    CONCAT('assigned=', COUNT(*), ', expected=72') AS detail
 FROM sys_role_menu role_menu
 JOIN workflow_admin role_info ON role_info.role_id = role_menu.role_id
 JOIN workflow_menu menu_info ON menu_info.menu_id = role_menu.menu_id;
@@ -183,6 +183,13 @@ WITH audit_write_permissions AS (
           'workflow:form:add', 'workflow:form:edit', 'workflow:form:remove',
           'workflow:model:add', 'workflow:model:edit', 'workflow:model:remove',
           'workflow:model:save', 'workflow:model:deploy',
+           'workflow:extension:add', 'workflow:extension:edit',
+           'workflow:extension:version:add', 'workflow:extension:remove',
+           'workflow:connector:add', 'workflow:connector:edit',
+          'workflow:dmn:add', 'workflow:dmn:remove',
+          'workflow:integrationCredential:add',
+          'workflow:integrationCredential:rotate',
+          'workflow:integrationCredential:revoke',
           'workflow:deploy:remove', 'workflow:deploy:state',
           'workflow:process:start', 'workflow:process:remove',
           'workflow:process:cancel', 'workflow:process:approval',

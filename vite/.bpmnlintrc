@@ -1,0 +1,13 @@
+{
+  "extends": "bpmnlint:recommended",
+  "rules": {
+    "label-required": "warn",
+    "no-complex-gateway": "error",
+    "no-disconnected": "error",
+    "no-duplicate-sequence-flows": "error",
+    "no-gateway-join-fork": "error",
+    "no-implicit-split": "error",
+    "start-event-required": "error",
+    "end-event-required": "error"
+  }
+}

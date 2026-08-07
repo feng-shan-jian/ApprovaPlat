@@ -16,6 +16,10 @@ export const WORKFLOW_ROUTE_CONTRACTS = Object.freeze([
     roles: Object.freeze(['workflow_admin', 'workflow_designer'])
   }),
   Object.freeze({
+    key: 'extension', path: '/workflow/extension', endpoint: '/workflow/extension/list',
+    roles: Object.freeze(['workflow_admin', 'workflow_designer'])
+  }),
+  Object.freeze({
     key: 'manage', path: '/workflow/instance', endpoint: '/workflow/process/manageList',
     roles: Object.freeze(['workflow_admin'])
   }),

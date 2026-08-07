@@ -55,6 +55,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
+import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
 import com.ruoyi.flowable.service.process.WorkflowValidatedStartVariables;
@@ -394,6 +395,7 @@ public class WorkflowTaskLifecycleService
                 String submissionSnapshot = completionVariables.formSnapshot() == null ? null
                         : WorkflowFormSubmissionSnapshotCodec.encodeTask(
                                 completionVariables.deploymentId(),
+                                completionVariables.formSnapshot().getSourceType(),
                                 completionVariables.formSnapshot().getFormId(),
                                 completionVariables.formSnapshot().getFormKey(),
                                  completionVariables.formSnapshot().getNodeKey(), taskId,
@@ -762,7 +764,7 @@ public class WorkflowTaskLifecycleService
                 runtimeService.setVariable(instance.getId(),
                         WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
                         WorkflowFormSubmissionSnapshotCodec.encodeStart(
-                                instance.getDeploymentId(), startForm.getFormId(),
+                                instance.getDeploymentId(), startForm.getSourceType(), startForm.getFormId(),
                                 startForm.getFormKey(), startForm.getNodeKey(), projected));
                 addAuditComment(task, COMPLETE_COMMENT_TYPE, "RESUBMIT",
                         actor.userId(), RESUBMIT_AUDIT_OPINION,
@@ -890,8 +892,8 @@ public class WorkflowTaskLifecycleService
         }
 
         Map<String, Object> variables = requestedVariables == null ? Map.of() : requestedVariables;
-        String formKey = userTask.getFormKey();
-        if (!StringUtils.hasText(formKey))
+        String formKey = resolveFormKey(userTask);
+        if (formKey == null)
         {
             if (!variables.isEmpty())
             {
@@ -912,7 +914,10 @@ public class WorkflowTaskLifecycleService
                         && task.getTaskDefinitionKey().equals(snapshot.getNodeKey())
                         && formKey.equals(snapshot.getFormKey()))
                 .toList();
-        if (matched.size() != 1 || !StringUtils.hasText(matched.get(0).getContent()))
+        if (matched.size() != 1
+                || !WorkflowFormSourceType.isConsistent(matched.get(0).getSourceType(),
+                        matched.get(0).getFormId())
+                || !StringUtils.hasText(matched.get(0).getContent()))
         {
             throw dataError();
         }
@@ -921,6 +926,28 @@ public class WorkflowTaskLifecycleService
         return new CompletionVariables(validated.variables(), isTaskLocal(userTask),
                 validated.attachmentIdsByField(), context.definition().getDeploymentId(),
                 matched.get(0));
+    }
+
+    /**
+     * 解析用户任务的正式模板或 BPMN 内嵌表单键。
+     *
+     * @param userTask UserTask，当前 BPMN 用户任务
+     * @return String，模板 formKey、内嵌稳定键或无表单时的 null
+     */
+    private String resolveFormKey(UserTask userTask)
+    {
+        boolean hasTemplate = StringUtils.hasText(userTask.getFormKey());
+        boolean hasEmbedded = userTask.getFormProperties() != null
+                && !userTask.getFormProperties().isEmpty();
+        if (hasTemplate && hasEmbedded)
+        {
+            throw dataError();
+        }
+        if (hasTemplate)
+        {
+            return userTask.getFormKey();
+        }
+        return hasEmbedded ? WorkflowFormSourceType.EMBEDDED_FORM_KEY : null;
     }
 
     /**
@@ -2020,7 +2047,10 @@ public class WorkflowTaskLifecycleService
         }
         List<WfDeployForm> matches = snapshots.stream().filter(snapshot -> snapshot != null
                 && starts.get(0).getActivityId().equals(snapshot.getNodeKey())).toList();
-        if (matches.size() != 1 || !StringUtils.hasText(matches.get(0).getContent()))
+        if (matches.size() != 1
+                || !WorkflowFormSourceType.isConsistent(matches.get(0).getSourceType(),
+                        matches.get(0).getFormId())
+                || !StringUtils.hasText(matches.get(0).getContent()))
         {
             throw conflict();
         }
@@ -2049,6 +2079,7 @@ public class WorkflowTaskLifecycleService
                 WorkflowFormSubmissionSnapshotCodec.decode(encodedSnapshot);
         if (previous.kind() != WorkflowFormSubmissionSnapshotCodec.SnapshotKind.START
                 || !Objects.equals(instance.getDeploymentId(), previous.deploymentId())
+                || !Objects.equals(startForm.getSourceType(), previous.sourceType())
                 || !Objects.equals(startForm.getFormId(), previous.formId())
                 || !Objects.equals(startForm.getFormKey(), previous.formKey())
                 || !Objects.equals(startForm.getNodeKey(), previous.nodeKey()))

@@ -9,10 +9,12 @@ import static org.mockito.Mockito.when;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.StartEvent;
 import org.flowable.engine.RepositoryService;
 import org.flowable.validation.ValidationError;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 
 class WorkflowBpmnServiceTest
@@ -46,8 +48,10 @@ class WorkflowBpmnServiceTest
 
         assertThat(document.bpmnModel().getProcessById("expense")).isNotNull();
         assertThat(document.formReferences()).containsExactly(
-                new WorkflowBpmnFormReference(1L, "key_1", "start", "提交申请"),
-                new WorkflowBpmnFormReference(2L, "key_2", "approve", "主管审批"));
+                new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE, 1L,
+                        "key_1", "start", "提交申请", null, "expense"),
+                new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE, 2L,
+                        "key_2", "approve", "主管审批", null, "expense"));
         assertThatThrownBy(() -> document.formReferences().add(
                 new WorkflowBpmnFormReference(3L, "key_3", "extra", "")))
                 .isInstanceOf(UnsupportedOperationException.class);
@@ -120,7 +124,222 @@ class WorkflowBpmnServiceTest
                 xml.getBytes(StandardCharsets.UTF_8));
 
         assertThat(document.formReferences()).containsExactly(
-                new WorkflowBpmnFormReference(2L, "key_2", "approve", "主管审批"));
+                new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE, 2L,
+                        "key_2", "approve", "主管审批", null, "expense"));
+    }
+
+    /**
+     * 验证开始节点 Flowable FormData 可作为正式表单来源，并转换为当前渲染协议。
+     * @return void，内嵌表单未被解析、冻结或类型转换时测试失败
+     */
+    @Test
+    void extractsEmbeddedStartFormData()
+    {
+        String embeddedStart = """
+                <startEvent id="start" name="提交申请">
+                  <extensionElements>
+                    <flowable:formProperty id="reason" name="原因" type="string"
+                      readable="true" writable="true" required="true"/>
+                    <flowable:formProperty id="approved" name="确认" type="boolean"
+                      readable="true" writable="true" required="false"/>
+                  </extensionElements>
+                </startEvent>
+                """.strip();
+        String xml = validBpmn().replace(
+                "<startEvent id=\"start\" name=\"提交申请\" flowable:formKey=\"key_1\"/>",
+                embeddedStart);
+
+        WorkflowBpmnDocument document = service.validate(xml.getBytes(StandardCharsets.UTF_8));
+
+        WorkflowBpmnFormReference start = document.formReferences().get(0);
+        assertThat(start.sourceType()).isEqualTo(WorkflowFormSourceType.EMBEDDED);
+        assertThat(start.formId()).isNull();
+        assertThat(start.formKey()).isEqualTo(WorkflowFormSourceType.EMBEDDED_FORM_KEY);
+        assertThat(start.embeddedContent()).contains("\"__vModel__\":\"reason\"",
+                "\"tag\":\"el-switch\"");
+    }
+
+    /**
+     * 验证同一节点不能同时引用 wf_form 和内嵌 FormData，避免部署快照来源歧义。
+     * @return void，双来源节点被错误放行时测试失败
+     */
+    @Test
+    void rejectsTemplateAndEmbeddedFormOnSameNode()
+    {
+        String xml = validBpmn().replace(
+                "<startEvent id=\"start\" name=\"提交申请\" flowable:formKey=\"key_1\"/>",
+                """
+                <startEvent id="start" name="提交申请" flowable:formKey="key_1">
+                  <extensionElements>
+                    <flowable:formProperty id="reason" name="原因" type="string"
+                      readable="true" writable="true"/>
+                  </extensionElements>
+                </startEvent>
+                """.strip());
+
+        assertBadRequest(xml.getBytes(StandardCharsets.UTF_8), "同时配置");
+    }
+
+    /**
+     * 验证 ComplexGateway 可作为作者 XML 保存并返回精确诊断，但部署门禁明确拒绝。
+     *
+     * @return 无返回值；保存被误拒绝、元素定位缺失或部署被放行时测试失败
+     */
+    @Test
+    void allowsComplexGatewayRoundTripButRejectsDeployment()
+    {
+        String xml = validBpmn().replace(ordinaryApprovalTaskXml(),
+                "<complexGateway id=\"approve\" name=\"复杂汇聚\"/>");
+        byte[] bytes = xml.getBytes(StandardCharsets.UTF_8);
+
+        WorkflowBpmnDocument document = service.validateForSave(bytes);
+
+        assertThat(document.bpmnXml()).isEqualTo(xml);
+        assertThat(service.deploymentCompatibilityIssues(document)).singleElement()
+                .satisfies(issue ->
+                {
+                    assertThat(issue.code()).isEqualTo("BPMN_ELEMENT_NOT_EXECUTABLE");
+                    assertThat(issue.severity()).isEqualTo("WARNING");
+                    assertThat(issue.elementId()).isEqualTo("approve");
+                    assertThat(issue.message()).contains("ComplexGateway", "Flowable 8");
+                });
+        assertThatThrownBy(() -> service.validate(bytes))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(400);
+                    assertThat(exception.getSubCode())
+                            .isEqualTo("BPMN_ELEMENT_NOT_EXECUTABLE");
+                });
+    }
+
+    /**
+     * 验证标准循环可保留作者 XML，但部署报告必须定位所属活动并拒绝执行。
+     * @return void，标准循环被保存丢弃或部署放行时测试失败
+     */
+    @Test
+    void allowsStandardLoopRoundTripButRejectsDeployment()
+    {
+        String xml = validBpmn().replace(ordinaryApprovalTaskXml(), """
+                <manualTask id="approve" name="循环复核">
+                  <standardLoopCharacteristics testBefore="false" loopMaximum="3">
+                    <loopCondition xsi:type="tFormalExpression"><![CDATA[${continueLoop}]]></loopCondition>
+                  </standardLoopCharacteristics>
+                </manualTask>
+                """.strip());
+
+        WorkflowBpmnDocument document = service.validateForSave(
+                xml.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(document.bpmnXml()).isEqualTo(xml);
+        assertThat(service.deploymentCompatibilityIssues(document)).singleElement()
+                .satisfies(issue ->
+                {
+                    assertThat(issue.code()).isEqualTo("BPMN_ELEMENT_NOT_EXECUTABLE");
+                    assertThat(issue.elementId()).isEqualTo("approve");
+                    assertThat(issue.message()).contains("标准循环", "Flowable 8");
+                });
+        assertThatThrownBy(() -> service.validate(xml.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getSubCode())
+                                .isEqualTo("BPMN_ELEMENT_NOT_EXECUTABLE"));
+    }
+
+    /**
+     * 验证通用 Flowable 扩展属性可往返，重复名称和平台保留名称被服务端拒绝。
+     * @return void，普通元数据丢失或有界校验失效时测试失败
+     */
+    @Test
+    void validatesGenericFlowableExtensionProperties()
+    {
+        String validProperties = validBpmn().replace(ordinaryApprovalTaskXml(), """
+                <manualTask id="approve" name="带扩展属性的复核">
+                  <extensionElements>
+                    <flowable:properties>
+                      <flowable:property name="business.owner" value="finance" />
+                      <flowable:property name="retentionDays" value="30" />
+                    </flowable:properties>
+                  </extensionElements>
+                </manualTask>
+                """.strip());
+        assertThat(service.validateForSave(validProperties.getBytes(StandardCharsets.UTF_8))
+                .bpmnXml()).isEqualTo(validProperties);
+
+        String duplicate = validProperties.replace("retentionDays", "business.owner");
+        assertThatThrownBy(() -> service.validateForSave(
+                duplicate.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getMessage()).contains("不能重复"));
+
+        String reserved = validProperties.replace("business.owner", "approva.internal");
+        assertThatThrownBy(() -> service.validateForSave(
+                reserved.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getMessage()).contains("保留前缀"));
+    }
+
+    /**
+     * 验证其他引擎私有扩展可作为作者 XML 回显，但部署报告明确为不兼容。
+     * @return void，私有扩展被误执行或没有结构化诊断时测试失败
+     */
+    @Test
+    void reportsForeignPrivateExtensionAsDeploymentIncompatible()
+    {
+        String task = ordinaryApprovalTaskXml().replace("<extensionElements>",
+                "<extensionElements><camunda:inputOutput />");
+        String xml = validBpmn()
+                .replace("xmlns:flowable=\"http://flowable.org/bpmn\"",
+                        "xmlns:flowable=\"http://flowable.org/bpmn\" "
+                                + "xmlns:camunda=\"http://camunda.org/schema/1.0/bpmn\"")
+                .replace(ordinaryApprovalTaskXml(), task);
+
+        WorkflowBpmnDocument document = service.validateForSave(
+                xml.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(service.deploymentCompatibilityIssues(document)).singleElement()
+                .satisfies(issue ->
+                {
+                    assertThat(issue.code())
+                            .isEqualTo("BPMN_PRIVATE_EXTENSION_NOT_COMPATIBLE");
+                    assertThat(issue.message()).contains("camunda", "禁止部署");
+                });
+        assertThatThrownBy(() -> service.validate(xml.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getSubCode())
+                                .isEqualTo("BPMN_PRIVATE_EXTENSION_NOT_COMPATIBLE"));
+    }
+
+    /**
+     * 验证事件子流程和嵌入子流程的局部开始事件不会破坏主流程唯一开始节点约束。
+     * @return 无返回值；递归开始事件被误计数或合法子流程无法保存时测试失败
+     */
+    @Test
+    void allowsScopedStartEventsInsideEmbeddedAndEventSubProcesses()
+    {
+        String scopedStarts = validBpmn().replace(ordinaryApprovalTaskXml(), """
+                <subProcess id="embedded" name="嵌入子流程">
+                  <startEvent id="embeddedStart" />
+                  <manualTask id="embeddedWork" />
+                  <endEvent id="embeddedEnd" />
+                  <sequenceFlow id="embeddedFlow1" sourceRef="embeddedStart" targetRef="embeddedWork" />
+                  <sequenceFlow id="embeddedFlow2" sourceRef="embeddedWork" targetRef="embeddedEnd" />
+                </subProcess>
+                <subProcess id="signalHandler" triggeredByEvent="true">
+                  <startEvent id="signalStart" isInterrupting="false">
+                    <signalEventDefinition signalRef="signalEscalation" />
+                  </startEvent>
+                  <endEvent id="signalEnd" />
+                  <sequenceFlow id="signalFlow" sourceRef="signalStart" targetRef="signalEnd" />
+                </subProcess>
+                """.strip()).replace(
+                        "  <process id=\"expense\"",
+                        "  <signal id=\"signalEscalation\" name=\"signalEscalation\"/>\n"
+                                + "  <process id=\"expense\"");
+
+        WorkflowBpmnDocument document = service.validateForSave(
+                scopedStarts.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(document.bpmnModel().getMainProcess()
+                .findFlowElementsOfType(StartEvent.class, true)).hasSize(3);
     }
 
     /**
@@ -162,7 +381,7 @@ class WorkflowBpmnServiceTest
     }
 
     /**
-     * 验证服务任务不能引用 JDK 或其他非白名单实现类。
+     * 验证服务任务不能引用任意 JDK 类、业务类或 Spring Bean。
      *
      * @return 无返回值；实现类白名单未生效时测试失败
      */
@@ -172,7 +391,121 @@ class WorkflowBpmnServiceTest
         String xml = validBpmn()
                 .replace(ordinaryApprovalTaskXml(),
                         "<serviceTask id=\"approve\" name=\"执行\" flowable:class=\"java.lang.Runtime\"/>");
-        assertBadRequest(xml.getBytes(StandardCharsets.UTF_8), "白名单");
+        assertBadRequest(xml.getBytes(StandardCharsets.UTF_8), "受控扩展注册表");
+    }
+
+    /**
+     * 验证作者 SendTask 只允许受控扩展字段，并拒绝标准 WebService 和操作引用直连。
+     * @return 无返回值；发送任务绕过注册表或合法作者配置无法保存时测试失败
+     */
+    @Test
+    void validatesControlledSendTaskAndRejectsDirectImplementation()
+    {
+        String controlled = validBpmn().replace(ordinaryApprovalTaskXml(), """
+                <sendTask id="approve" name="发送通知">
+                  <extensionElements>
+                    <flowable:field name="approvaExtensionKey">
+                      <flowable:string>approva.set-variable</flowable:string>
+                    </flowable:field>
+                    <flowable:field name="approvaExtensionConfig">
+                      <flowable:string>{"targetVariable":"sent","value":true}</flowable:string>
+                    </flowable:field>
+                  </extensionElements>
+                </sendTask>
+                """.strip());
+
+        WorkflowBpmnDocument author = service.validateForSave(
+                controlled.getBytes(StandardCharsets.UTF_8));
+        assertThat(author.bpmnModel().getMainProcess().getFlowElement("approve"))
+                .isInstanceOf(org.flowable.bpmn.model.SendTask.class);
+
+        String webService = controlled.replace("<sendTask id=\"approve\" name=\"发送通知\">",
+                "<sendTask id=\"approve\" name=\"发送通知\" "
+                        + "implementation=\"##WebService\" operationRef=\"tns:notify\">");
+        assertBadRequest(webService.getBytes(StandardCharsets.UTF_8), "受控扩展注册表");
+    }
+
+    /**
+     * 验证部署编译资源必须把作者 SendTask 收敛为固定委托 ServiceTask。
+     * @return 无返回值；执行资源仍保留发送任务时测试失败
+     */
+    @Test
+    void rejectsSendTaskInCompiledDeployment()
+    {
+        String compiledSendTask = validBpmn().replace(ordinaryApprovalTaskXml(), """
+                <sendTask id="approve" name="发送通知">
+                  <extensionElements>
+                    <flowable:field name="approvaExtensionKey">
+                      <flowable:string>approva.set-variable</flowable:string>
+                    </flowable:field>
+                  </extensionElements>
+                </sendTask>
+                """.strip());
+
+        assertThatThrownBy(() -> service.validateCompiledDeployment(
+                compiledSendTask.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class,
+                        error -> assertThat(error.getCode()).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessageContaining("不允许保留发送任务");
+    }
+
+    /**
+     * 验证部署编译资源只保留固定调度器且没有作者字段时可以重新安全校验。
+     *
+     * @return 无返回值；合法编译资源被误拒绝时测试失败
+     */
+    @Test
+    void allowsCompiledDeploymentWithFixedDispatcherAndNoAuthorFields()
+    {
+        WorkflowBpmnDocument document = service.validateCompiledDeployment(
+                compiledExtensionBpmn().getBytes(StandardCharsets.UTF_8));
+
+        assertThat(document.bpmnModel().getProcessById("expense")).isNotNull();
+        assertThat(document.formReferences()).hasSize(1);
+    }
+
+    /**
+     * 验证编译资源重新出现作者扩展键或配置时立即拒绝，避免运行定义绕过冻结快照。
+     *
+     * @return 无返回值；作者字段进入执行 XML 时测试失败
+     */
+    @Test
+    void rejectsAuthorFieldsInCompiledDeployment()
+    {
+        String xml = compiledExtensionBpmn().replace("</serviceTask>",
+                "<extensionElements>"
+                        + "<flowable:field name=\"approvaExtensionKey\" "
+                        + "stringValue=\"approva.set-variable\"/>"
+                        + "</extensionElements></serviceTask>");
+
+        assertThatThrownBy(() -> service.validateCompiledDeployment(
+                xml.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(400);
+                    assertThat(exception.getMessage()).contains("不允许保留作者扩展字段");
+                });
+    }
+
+    /**
+     * 验证编译资源仍禁止任意 Bean、类名或其他非固定调度实现。
+     *
+     * @return 无返回值；任意实现进入执行 XML 时测试失败
+     */
+    @Test
+    void rejectsArbitraryImplementationInCompiledDeployment()
+    {
+        String xml = compiledExtensionBpmn().replace(
+                "flowable:delegateExpression=\"${workflowExtensionDelegate}\"",
+                "flowable:delegateExpression=\"${otherBean}\"");
+
+        assertThatThrownBy(() -> service.validateCompiledDeployment(
+                xml.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(400);
+                    assertThat(exception.getMessage()).contains("受控扩展注册表");
+                });
     }
 
     /**
@@ -195,6 +528,31 @@ class WorkflowBpmnServiceTest
     }
 
     /**
+     * 验证固定业务监听 Bean 可携带唯一注册表键和 JSON 配置，同时系统审计监听器仍完整保留。
+     * @return 无返回值；受控执行或任务监听器被误拒绝时测试失败
+     */
+    @Test
+    void allowsControlledBusinessExecutionAndTaskListeners()
+    {
+        String businessListeners = """
+                        <flowable:executionListener event="start" delegateExpression="${workflowBusinessListener}">
+                          <flowable:field name="approvaExtensionKey" stringValue="approva.set-variable"/>
+                          <flowable:field name="approvaExtensionConfig" stringValue="{&quot;targetVariable&quot;:&quot;entered&quot;,&quot;value&quot;:true}"/>
+                        </flowable:executionListener>
+                        <flowable:taskListener event="delete" delegateExpression="${workflowBusinessListener}">
+                          <flowable:field name="approvaExtensionKey" stringValue="approva.set-variable"/>
+                          <flowable:field name="approvaExtensionConfig" stringValue="{&quot;targetVariable&quot;:&quot;deleted&quot;,&quot;value&quot;:true}"/>
+                        </flowable:taskListener>
+                """;
+        String source = validBpmn().replace(
+                "<flowable:taskListener event=\"create\" delegateExpression=\"${userTaskListener}\"/>",
+                businessListeners
+                        + "<flowable:taskListener event=\"create\" delegateExpression=\"${userTaskListener}\"/>");
+
+        assertThat(service.validateForSave(source.getBytes(StandardCharsets.UTF_8))).isNotNull();
+    }
+
+    /**
      * 验证开始节点、网关和服务任务都不能直接初始化受控动态多实例。
      *
      * @return 无返回值；任一非普通用户任务前驱通过保存门禁时测试失败
@@ -213,7 +571,12 @@ class WorkflowBpmnServiceTest
                 "<exclusiveGateway id=\"prepare\" name=\"选择会签人员\"/>");
         String serviceInitializer = xml.replace(initializerTask,
                 "<serviceTask id=\"prepare\" name=\"准备会签\" "
-                        + "flowable:delegateExpression=\"${workflowInitializer}\"/>");
+                        + "flowable:delegateExpression=\"${workflowExtensionDelegate}\">"
+                        + "<extensionElements>"
+                        + "<flowable:field name=\"approvaExtensionKey\" "
+                        + "stringValue=\"approva.set-variable\"/>"
+                        + "<flowable:field name=\"approvaExtensionConfig\" stringValue=\"{}\"/>"
+                        + "</extensionElements></serviceTask>");
 
         for (String invalidVariant : List.of(
                 directStart, gatewayInitializer, serviceInitializer))
@@ -475,6 +838,19 @@ class WorkflowBpmnServiceTest
                   </process>
                 </definitions>
                 """;
+    }
+
+    /**
+     * 构造已剥离作者扩展键和配置、仅保留固定运行调度器的部署 BPMN。
+     *
+     * @return String，满足部署编译资源契约的 UTF-8 BPMN XML
+     */
+    private String compiledExtensionBpmn()
+    {
+        return validBpmn().replace(ordinaryApprovalTaskXml(),
+                "<serviceTask id=\"approve\" name=\"执行扩展\" "
+                        + "flowable:delegateExpression=\"${workflowExtensionDelegate}\">"
+                        + "</serviceTask>");
     }
 
     /**
