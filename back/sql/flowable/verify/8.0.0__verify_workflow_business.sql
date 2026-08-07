@@ -1008,7 +1008,10 @@ WITH sla_issues AS
     SELECT 'sla_notification_invalid_row', COUNT(*)
     FROM wf_task_sla_notification n
     LEFT JOIN wf_task_sla_audit a ON a.audit_id = n.audit_id
-    LEFT JOIN sys_user u ON CAST(u.user_id AS CHAR) = n.recipient_user_id
+    -- 固定字符集与排序规则，避免 CAST 继承客户端连接配置后导致正式验收不可执行。
+    LEFT JOIN sys_user u
+      ON CAST(u.user_id AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
+         = n.recipient_user_id
     WHERE a.audit_id IS NULL OR u.user_id IS NULL
        OR n.action_type NOT IN ('REMINDER', 'ESCALATE')
        OR n.read_status NOT IN ('UNREAD', 'READ')
