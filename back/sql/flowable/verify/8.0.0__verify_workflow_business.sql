@@ -1077,7 +1077,10 @@ WITH event_issues AS
     SELECT 'event_notification_invalid_row', COUNT(*)
     FROM wf_bpmn_event_notification n
     LEFT JOIN wf_bpmn_event_audit a ON a.audit_id = n.audit_id
-    LEFT JOIN sys_user u ON CAST(u.user_id AS CHAR) = n.recipient_user_id
+    -- 与 SLA 通知检查保持一致，拒绝客户端连接排序规则影响事件通知验收。
+    LEFT JOIN sys_user u
+      ON CAST(u.user_id AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
+         = n.recipient_user_id
     WHERE a.audit_id IS NULL OR u.user_id IS NULL
        OR n.read_status NOT IN ('UNREAD', 'READ')
        OR (n.read_status = 'UNREAD' AND n.read_time IS NOT NULL)
