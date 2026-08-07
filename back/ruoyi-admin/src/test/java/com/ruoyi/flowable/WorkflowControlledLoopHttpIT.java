@@ -76,9 +76,6 @@ import com.ruoyi.RuoYiApplication;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class WorkflowControlledLoopHttpIT
 {
-    /** 预登记验收账号的固定本地密码；测试不创建、修改或输出账号凭据。 */
-    private static final String TEST_ACCOUNT_PASSWORD = "wang";
-
     /** 真实 HTTP 请求和并发结果允许等待的最长时间。 */
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(30);
 
@@ -765,9 +762,12 @@ class WorkflowControlledLoopHttpIT
      */
     private String login(String username) throws Exception
     {
+        // 登录口令只从本机忽略配置读取，禁止真实 HTTP 验收把共享 fixture 凭据写入仓库。
+        String accountPassword = requireEnvironment(
+                "FLOWABLE_RBAC_WORKFLOW_ADMIN_PASSWORD");
         String body = objectMapper.createObjectNode()
                 .put("username", username)
-                .put("password", TEST_ACCOUNT_PASSWORD)
+                .put("password", accountPassword)
                 .put("code", "")
                 .put("uuid", "")
                 .toString();
