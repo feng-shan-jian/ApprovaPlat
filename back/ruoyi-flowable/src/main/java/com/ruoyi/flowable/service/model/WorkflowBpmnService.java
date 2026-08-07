@@ -369,8 +369,10 @@ public class WorkflowBpmnService
         }
         String name = trimToEmpty(reader.getAttributeValue(null, "name"));
         String value = reader.getAttributeValue(null, "value");
+        boolean allowedPlatformProperty =
+                WorkflowControlledLoopBpmnContract.isReservedProperty(name);
         if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
-                || name.startsWith("approva."))
+                || (name.startsWith("approva.") && !allowedPlatformProperty))
         {
             throw invalidBpmn("通用扩展属性名不合法或使用了平台保留前缀", null);
         }
@@ -632,6 +634,11 @@ public class WorkflowBpmnService
     private void validateFlowElement(Process process, FlowElement element,
             ValidationContext validationContext)
     {
+        if (WorkflowControlledLoopBpmnContract.hasReservedProperties(element)
+                && !(element instanceof UserTask))
+        {
+            throw invalidBpmn("受控循环只能配置在用户任务上", null);
+        }
         if (element instanceof ServiceTask serviceTask)
         {
             validateServiceTask(serviceTask, validationContext);
@@ -655,6 +662,7 @@ public class WorkflowBpmnService
             validateExpression(userTask.getSkipExpression());
             validateExpressions(userTask.getCandidateUsers());
             validateExpressions(userTask.getCandidateGroups());
+            validateControlledLoop(process, userTask, validationContext);
         }
         if (element instanceof CallActivity callActivity)
         {
@@ -669,6 +677,35 @@ public class WorkflowBpmnService
             {
                 validateMultiInstance(process, activity, loop);
             }
+        }
+    }
+
+    /**
+     * 校验用户任务受控循环作者属性的完整性，并禁止编译执行资源继续携带可编辑配置。
+     *
+     * @param process Process，用户任务所属可执行流程
+     * @param task UserTask，待校验用户任务
+     * @param validationContext ValidationContext，作者资源或编译执行资源阶段
+     * @return void，无返回值；配置残缺、位置越权或编译资源残留作者字段时抛出 400
+     */
+    private void validateControlledLoop(Process process, UserTask task,
+            ValidationContext validationContext)
+    {
+        if (!WorkflowControlledLoopBpmnContract.hasReservedProperties(task))
+        {
+            return;
+        }
+        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+        {
+            throw invalidBpmn("已编译执行资源不允许保留受控循环作者配置", null);
+        }
+        try
+        {
+            WorkflowControlledLoopBpmnContract.readAuthorConfig(process.getId(), task);
+        }
+        catch (IllegalArgumentException exception)
+        {
+            throw invalidBpmn(exception.getMessage(), exception);
         }
     }
 

@@ -156,6 +156,9 @@ public class WorkflowTaskLifecycleService
 
     private final WorkflowMultiInstanceService multiInstanceService;
 
+    /** 受控重复审批循环的路由、轮次和审计服务。 */
+    private final WorkflowControlledLoopService controlledLoopService;
+
     /**
      * 创建完整任务生命周期服务。
      *
@@ -172,6 +175,7 @@ public class WorkflowTaskLifecycleService
      * @param taskCopyService WorkflowTaskCopyService，任务动作抄送计划和事务内持久化服务
      * @param nextTaskAssignmentService WorkflowNextTaskAssignmentService，完成后的动态下一办理人服务
      * @param multiInstanceService WorkflowMultiInstanceService，动态多实例完成 revision CAS 服务
+     * @param controlledLoopService WorkflowControlledLoopService，受控循环完成判断和审计服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowTaskLifecycleService(WorkflowEngineOperations engineOperations,
@@ -182,7 +186,8 @@ public class WorkflowTaskLifecycleService
             WorkflowTaskMovementPolicy movementPolicy,
             WorkflowTaskCopyService taskCopyService,
             WorkflowNextTaskAssignmentService nextTaskAssignmentService,
-            WorkflowMultiInstanceService multiInstanceService)
+            WorkflowMultiInstanceService multiInstanceService,
+            WorkflowControlledLoopService controlledLoopService)
     {
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
@@ -197,6 +202,7 @@ public class WorkflowTaskLifecycleService
         this.taskCopyService = taskCopyService;
         this.nextTaskAssignmentService = nextTaskAssignmentService;
         this.multiInstanceService = multiInstanceService;
+        this.controlledLoopService = controlledLoopService;
     }
 
     /**
@@ -411,6 +417,9 @@ public class WorkflowTaskLifecycleService
                     WorkflowMultiInstanceService.CompletionRevision completionRevision =
                             multiInstanceService.reserveCompletionRevision(task,
                                     request.expectedRevision(), actor);
+                    // 循环判断只读取已通过正式节点表单 schema 的投影值，并在任务完成前写入同事务路由与审计。
+                    controlledLoopService.prepareCompletion(task,
+                            completionVariables.deploymentId(), projectedVariables, actor.userId());
                     addCompletionAuditComment(task, actor.userId(), opinion,
                             completionRevision);
                     // 附件条件更新与意见、变量和任务完成共享事务，任何失败都会整体回滚。

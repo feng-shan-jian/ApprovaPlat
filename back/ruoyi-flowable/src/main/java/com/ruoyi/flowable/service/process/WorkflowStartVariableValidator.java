@@ -21,6 +21,8 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceVariables;
+import com.ruoyi.flowable.service.model.WorkflowControlledLoopBpmnContract;
+import com.ruoyi.flowable.service.model.WorkflowControlledLoopFormField;
 
 /**
  * 根据不可变开始表单快照校验并规范化客户端流程变量。
@@ -196,6 +198,48 @@ public class WorkflowStartVariableValidator
     }
 
     /**
+     * 从正式部署表单解析受控循环可使用的标量字段契约。
+     *
+     * @param snapshotContent String，部署事务内冻结且已通过模板门禁的表单 JSON
+     * @return Map&lt;String,WorkflowControlledLoopFormField&gt;，按表单顺序返回的字段契约；集合字段不会进入结果
+     */
+    public Map<String, WorkflowControlledLoopFormField> describeControlledLoopFields(
+            String snapshotContent)
+    {
+        JsonNode snapshotRoot = parseTrustedSnapshot(snapshotContent);
+        LinkedHashMap<String, FieldSpec> fieldSpecs = new LinkedHashMap<>();
+        collectFieldSpecs(snapshotRoot.path("fields"), fieldSpecs);
+        LinkedHashMap<String, WorkflowControlledLoopFormField> result = new LinkedHashMap<>();
+        for (FieldSpec fieldSpec : fieldSpecs.values())
+        {
+            WorkflowControlledLoopFormField.Kind kind = switch (fieldSpec.type())
+            {
+                case TEXT -> WorkflowControlledLoopFormField.Kind.TEXT;
+                case NUMBER -> WorkflowControlledLoopFormField.Kind.NUMBER;
+                case BOOLEAN -> WorkflowControlledLoopFormField.Kind.BOOLEAN;
+                case SCALAR -> WorkflowControlledLoopFormField.Kind.SCALAR;
+                default -> null;
+            };
+            if (kind == null || !fieldSpec.writable())
+            {
+                continue;
+            }
+            WorkflowControlledLoopFormField.NumericKind numericKind = switch (
+                    fieldSpec.numericType())
+            {
+                case DECIMAL -> WorkflowControlledLoopFormField.NumericKind.DECIMAL;
+                case INTEGER -> WorkflowControlledLoopFormField.NumericKind.INTEGER;
+                case LONG -> WorkflowControlledLoopFormField.NumericKind.LONG;
+            };
+            result.put(fieldSpec.name(), new WorkflowControlledLoopFormField(
+                    fieldSpec.name(), kind, fieldSpec.minLength(), fieldSpec.maxLength(),
+                    fieldSpec.minimum(), fieldSpec.maximum(), numericKind,
+                    fieldSpec.enumValues()));
+        }
+        return Collections.unmodifiableMap(result);
+    }
+
+    /**
      * 重新校验并解析数据库中的部署表单快照，将持久化损坏归为服务端数据异常。
      *
      * @param snapshotContent String，数据库读取的部署表单 JSON
@@ -268,6 +312,7 @@ public class WorkflowStartVariableValidator
     private boolean isReservedVariable(String fieldName)
     {
         return RESERVED_VARIABLES.contains(fieldName)
+                || WorkflowControlledLoopBpmnContract.isReservedRuntimeVariable(fieldName)
                 || WorkflowMultiInstanceVariables.isReservedVariableName(fieldName)
                 || WorkflowFormSubmissionSnapshotCodec.isReservedVariableName(fieldName);
     }

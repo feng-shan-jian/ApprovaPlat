@@ -13,6 +13,7 @@
   :state="propertyState"
   :flags="propertyFlags"
   :forms="forms"
+  :controlled-loop-field-options="controlledLoopFieldOptions"
   :extension-options="extensionOptions"
   :form-field-options="formFieldOptions"
   :connector-endpoints="connectorEndpoints"
@@ -34,6 +35,7 @@
 | `state` | `object` | 父组件从 moddle 对象回读的响应式属性状态；表单域包含 `formSource`、`formKey` 和 `embeddedFields`。 |
 | `flags` | `object` | `process`、`activity`、`event` 等类型能力开关。 |
 | `forms` | `array` | 可选择的正式 `wf_form` 列表。 |
+| `controlledLoopFieldOptions` | `array` | 当前 UserTask 正式表单中的可写标量字段、静态值目录及是否禁止自由输入。 |
 | `identityOptions` | `object` | 办理人、候选用户和候选组目录。 |
 | `identityLoading` | `boolean` | 身份目录加载状态。 |
 | `extensionOptions` | `array` | 后端扩展注册表返回的已启用 Java、CEL 和 HTTP 扩展最新版，不接受本地伪造选项。 |
@@ -61,7 +63,8 @@
 - 异步开关只负责建模。生产能否启用仍由后端 executor、拓扑和启动门禁共同决定。
 - ServiceTask 只能选择正式扩展目录项并填写 JSON 对象配置。父组件写入固定调度器和作者字段；部署时由后端冻结精确版本、处理器、配置及校验和。
 - BusinessRuleTask 与通用 ServiceTask 完全分离，只能选择后端 DMN 来源目录并写入单一 `flowable:rules=decisionId`；部署编译器再绑定同部署冻结副本。
-- 串行和并行多实例对全部 BPMN Activity 开放；动态会签或或签只对 UserTask 开放。标准循环可稳定导入、编辑和导出，但 Flowable 8 模型不提供对应执行类型，因此服务端明确禁止部署。
+- 串行和并行多实例对全部 BPMN Activity 开放；动态会签、或签和受控整改循环只对 UserTask 开放。标准循环可稳定导入、编辑和导出，但 Flowable 8 模型不提供对应执行类型，因此服务端明确禁止部署。
+- 受控整改循环必须填写判断字段、再次进入值、退出值和 2 至 50 的最大轮次，并显式点击“应用整改循环配置”。半成品只保留在当前面板草稿中，不写入 moddle；静态枚举和布尔字段禁止自由创建条件值。
 - 通用扩展属性写入受限 `flowable:properties`，后端校验数量、名称、重复项和值长度；它们只是元数据，不作为表达式或实现入口执行。
 
 ## 最小接入示例
@@ -73,4 +76,20 @@ function updateActivityProperties() {
     'flowable:asyncLeave': propertyState.asyncAfter
   })
 }
+```
+
+受控整改循环字段选项示例：
+
+```js
+const controlledLoopFieldOptions = [
+  {
+    value: 'reviewResult',
+    label: '审核结论（reviewResult）',
+    values: [
+      { value: 'RECTIFY', label: '退回整改' },
+      { value: 'PASS', label: '通过' }
+    ],
+    valueRestricted: true
+  }
+]
 ```

@@ -94,6 +94,8 @@ WITH expected_tables AS (
     UNION ALL SELECT 'wf_designer_preference'
     UNION ALL SELECT 'wf_attachment_quota_guard'
     UNION ALL SELECT 'wf_attachment'
+    UNION ALL SELECT 'wf_deploy_controlled_loop'
+    UNION ALL SELECT 'wf_controlled_loop_execution'
 ),
 actual_tables AS (
     SELECT TABLE_NAME AS table_name, ENGINE, TABLE_COLLATION
@@ -102,14 +104,15 @@ actual_tables AS (
       AND TABLE_NAME IN ('wf_category', 'wf_form', 'wf_deploy_form', 'wf_copy',
                          'wf_model_save_idempotency', 'wf_designer_preference',
                          'wf_attachment_quota_guard',
-                         'wf_attachment')
+                         'wf_attachment', 'wf_deploy_controlled_loop',
+                         'wf_controlled_loop_execution')
 )
 SELECT
     'workflow_business_tables' AS check_name,
     CASE
-        WHEN COUNT(a.table_name) = 8
-         AND SUM(a.ENGINE = 'InnoDB') = 8
-         AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 8
+        WHEN COUNT(a.table_name) = 10
+         AND SUM(a.ENGINE = 'InnoDB') = 10
+         AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 10
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -183,6 +186,30 @@ WITH expected_columns AS (
     UNION ALL SELECT 'wf_attachment', 'cleanup_retry_count'
     UNION ALL SELECT 'wf_attachment', 'cleanup_next_retry_time'
     UNION ALL SELECT 'wf_attachment', 'cleanup_last_error_code'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'loop_id'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'deploy_id'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'process_key'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'activity_id'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'activity_name'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'decision_variable'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'repeat_value'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'exit_value'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'max_iterations'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'route_variable'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'iteration_variable'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'create_by'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'create_time'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'execution_id'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'deploy_id'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'process_definition_id'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'process_instance_id'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'activity_id'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'task_id'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'iteration_no'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'actor_user_id'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'decision_value'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'outcome'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'create_time'
 ),
 missing_columns AS (
     SELECT e.table_name, e.column_name
@@ -364,7 +391,8 @@ WITH actual_indexes AS (
       AND TABLE_NAME IN ('wf_category', 'wf_form', 'wf_deploy_form', 'wf_copy',
                          'wf_model_save_idempotency', 'wf_designer_preference',
                          'wf_attachment_quota_guard',
-                         'wf_attachment')
+                         'wf_attachment', 'wf_deploy_controlled_loop',
+                         'wf_controlled_loop_execution')
     GROUP BY TABLE_NAME, INDEX_NAME
 ),
 expected_indexes AS (
@@ -400,6 +428,20 @@ expected_indexes AS (
                      'attachment_status,cleanup_next_retry_time,expire_time'
     UNION ALL SELECT 'wf_attachment', 'idx_wf_attachment_instance_field', 1,
                      'process_instance_id,field_name,attachment_status'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'PRIMARY', 0, 'loop_id'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'uk_wf_deploy_controlled_loop_node', 0,
+                     'deploy_id,process_key,activity_id'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'uk_wf_deploy_controlled_loop_route', 0,
+                     'deploy_id,route_variable'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'PRIMARY', 0, 'execution_id'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'uk_wf_controlled_loop_task', 0,
+                     'task_id'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'uk_wf_controlled_loop_iteration', 0,
+                     'process_instance_id,activity_id,iteration_no'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'idx_wf_controlled_loop_instance_time', 1,
+                     'process_instance_id,create_time'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'idx_wf_controlled_loop_deploy', 1,
+                     'deploy_id,activity_id'
 ),
 index_issues AS (
     SELECT e.table_name, e.index_name
@@ -455,6 +497,15 @@ WITH expected_checks AS (
     UNION ALL SELECT 'wf_attachment', 'chk_wf_attachment_state_relation'
     UNION ALL SELECT 'wf_attachment', 'chk_wf_attachment_storage_deleted'
     UNION ALL SELECT 'wf_attachment', 'chk_wf_attachment_cleanup_retry'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'chk_wf_deploy_controlled_loop_variable'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'chk_wf_deploy_controlled_loop_values'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'chk_wf_deploy_controlled_loop_iterations'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'chk_wf_deploy_controlled_loop_route'
+    UNION ALL SELECT 'wf_deploy_controlled_loop', 'chk_wf_deploy_controlled_loop_iteration_var'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'chk_wf_controlled_loop_iteration_no'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'chk_wf_controlled_loop_actor'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'chk_wf_controlled_loop_outcome'
+    UNION ALL SELECT 'wf_controlled_loop_execution', 'chk_wf_controlled_loop_decision_value'
 ),
 missing_checks AS (
     SELECT e.table_name, e.constraint_name
@@ -759,6 +810,78 @@ WITH integrity_issues AS (
       ON h.PROC_INST_ID_ = a.process_instance_id
      AND h.ACT_ID_ = a.node_key
     WHERE a.attachment_status = 'BOUND' AND h.ID_ IS NULL
+
+    UNION ALL
+
+    SELECT 'wf_controlled_loop_missing_deployment', COUNT(*)
+    FROM wf_deploy_controlled_loop s
+    LEFT JOIN ACT_RE_DEPLOYMENT d ON d.ID_ = s.deploy_id
+    WHERE d.ID_ IS NULL
+
+    UNION ALL
+
+    SELECT 'wf_controlled_loop_execution_missing_snapshot', COUNT(*)
+    FROM wf_controlled_loop_execution e
+    LEFT JOIN ACT_RE_PROCDEF p ON p.ID_ = e.process_definition_id
+    LEFT JOIN wf_deploy_controlled_loop s
+      ON s.deploy_id = e.deploy_id
+     AND s.process_key = p.KEY_
+     AND s.activity_id = e.activity_id
+    WHERE p.ID_ IS NULL
+       OR p.DEPLOYMENT_ID_ <> e.deploy_id
+       OR s.loop_id IS NULL
+
+    UNION ALL
+
+    SELECT 'wf_controlled_loop_execution_missing_history', COUNT(*)
+    FROM wf_controlled_loop_execution e
+    LEFT JOIN ACT_HI_PROCINST p ON p.PROC_INST_ID_ = e.process_instance_id
+    LEFT JOIN ACT_HI_TASKINST t ON t.ID_ = e.task_id
+    WHERE p.PROC_INST_ID_ IS NULL
+       OR p.PROC_DEF_ID_ <> e.process_definition_id
+       OR t.ID_ IS NULL
+       OR t.PROC_INST_ID_ <> e.process_instance_id
+       OR t.TASK_DEF_KEY_ <> e.activity_id
+       OR t.END_TIME_ IS NULL
+       OR t.ASSIGNEE_ <> e.actor_user_id
+
+    UNION ALL
+
+    SELECT 'wf_controlled_loop_execution_invalid_result', COUNT(*)
+    FROM wf_controlled_loop_execution e
+    JOIN ACT_RE_PROCDEF p ON p.ID_ = e.process_definition_id
+    JOIN wf_deploy_controlled_loop s
+      ON s.deploy_id = e.deploy_id
+     AND s.process_key = p.KEY_
+     AND s.activity_id = e.activity_id
+    WHERE e.iteration_no > s.max_iterations
+       OR (e.outcome = 'REPEAT'
+           AND (e.decision_value <> s.repeat_value
+                OR e.iteration_no >= s.max_iterations))
+       OR (e.outcome = 'EXIT' AND e.decision_value <> s.exit_value)
+
+    UNION ALL
+
+    SELECT 'wf_controlled_loop_execution_iteration_gap', COUNT(*)
+    FROM (
+        SELECT process_instance_id, activity_id,
+               COUNT(*) AS row_count,
+               MIN(iteration_no) AS first_iteration,
+               MAX(iteration_no) AS last_iteration
+        FROM wf_controlled_loop_execution
+        GROUP BY process_instance_id, activity_id
+        HAVING first_iteration <> 1 OR row_count <> last_iteration
+    ) invalid_iteration
+
+    UNION ALL
+
+    SELECT 'wf_controlled_loop_execution_after_exit', COUNT(*)
+    FROM wf_controlled_loop_execution exit_round
+    JOIN wf_controlled_loop_execution later_round
+      ON later_round.process_instance_id = exit_round.process_instance_id
+     AND later_round.activity_id = exit_round.activity_id
+     AND later_round.iteration_no > exit_round.iteration_no
+    WHERE exit_round.outcome = 'EXIT'
 )
 SELECT
     'workflow_business_data_integrity' AS check_name,

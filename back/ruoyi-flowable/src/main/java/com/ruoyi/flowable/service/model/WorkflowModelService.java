@@ -60,6 +60,7 @@ import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WfFormMapper;
 import com.ruoyi.flowable.mapper.WorkflowModelSaveMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
+import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
 
 /**
  * 流程模型版本、BPMN 设计和部署快照的业务服务。
@@ -127,7 +128,12 @@ public class WorkflowModelService
 
     private final WorkflowFormTemplateValidator formTemplateValidator;
 
+    private final WorkflowStartVariableValidator startVariableValidator;
+
     private final WorkflowExtensionDeploymentService extensionDeploymentService;
+
+    /** 受控重复审批循环的执行模型编译和部署快照服务。 */
+    private final WorkflowControlledLoopDeploymentService controlledLoopDeploymentService;
 
     private final WorkflowDmnDecisionService dmnDecisionService;
 
@@ -153,6 +159,7 @@ public class WorkflowModelService
      * @param deployFormMapper WfDeployFormMapper，部署表单快照数据访问层
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单 JSON 安全结构验证器
      * @param extensionDeploymentService WorkflowExtensionDeploymentService，扩展编译和版本快照服务
+     * @param controlledLoopDeploymentService WorkflowControlledLoopDeploymentService，受控循环编译和快照服务
      * @param dmnDecisionService WorkflowDmnDecisionService，DMN 精确引用编译和冻结服务
      * @param formFieldExtensionService WorkflowFormFieldExtensionService，自定义字段部署冻结服务
      * @param callActivityReferenceService WorkflowCallActivityReferenceService，调用活动精确版本编译与保护服务
@@ -167,6 +174,7 @@ public class WorkflowModelService
             WfDeployFormMapper deployFormMapper,
             WorkflowFormTemplateValidator formTemplateValidator,
             WorkflowExtensionDeploymentService extensionDeploymentService,
+            WorkflowControlledLoopDeploymentService controlledLoopDeploymentService,
             WorkflowDmnDecisionService dmnDecisionService,
             WorkflowFormFieldExtensionService formFieldExtensionService,
             WorkflowCallActivityReferenceService callActivityReferenceService)
@@ -180,7 +188,9 @@ public class WorkflowModelService
         this.formMapper = formMapper;
         this.deployFormMapper = deployFormMapper;
         this.formTemplateValidator = formTemplateValidator;
+        this.startVariableValidator = new WorkflowStartVariableValidator(formTemplateValidator);
         this.extensionDeploymentService = extensionDeploymentService;
+        this.controlledLoopDeploymentService = controlledLoopDeploymentService;
         this.dmnDecisionService = dmnDecisionService;
         this.formFieldExtensionService = formFieldExtensionService;
         this.callActivityReferenceService = callActivityReferenceService;
@@ -213,7 +223,8 @@ public class WorkflowModelService
     {
         this(engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
                 modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
-                formTemplateValidator, extensionDeploymentService, dmnDecisionService, null, null);
+                formTemplateValidator, extensionDeploymentService, null,
+                dmnDecisionService, null, null);
     }
 
     /**
@@ -742,11 +753,20 @@ public class WorkflowModelService
             List<FormSnapshotSource> snapshotSources = validateDeploymentReferences(document);
             WorkflowPreparedExtensionDeployment extensionDeployment =
                     extensionDeploymentService.prepare(document, identity.userId());
+            WorkflowPreparedControlledLoopDeployment controlledLoopDeployment =
+                    controlledLoopDeploymentService == null
+                            ? new WorkflowPreparedControlledLoopDeployment(
+                                    extensionDeployment.compiledBpmn(), List.of())
+                            : controlledLoopDeploymentService.prepare(document,
+                                    extensionDeployment.compiledBpmn(),
+                                    buildControlledLoopFormSchemas(snapshotSources), identity.userId());
             WorkflowPreparedDmnDeployment dmnDeployment =
-                    dmnDecisionService.prepare(extensionDeployment.compiledBpmn());
+                    dmnDecisionService.prepare(controlledLoopDeployment.compiledBpmn());
             byte[] executableBpmn = callActivityReferenceService == null
                     ? dmnDeployment.compiledBpmn()
                     : callActivityReferenceService.freezeReferences(dmnDeployment.compiledBpmn());
+            // 最终执行资源必须再次通过编译阶段门禁，确保作者属性已剥离且生成回路满足 Flowable 官方校验。
+            bpmnService.validateCompiledDeployment(executableBpmn);
             Map<String, List<ProcessDefinition>> activeHistoryByKey =
                     loadActiveDefinitionsByProcessKey(document);
 
@@ -789,6 +809,10 @@ public class WorkflowModelService
                     .toList();
             extensionDeploymentService.persist(deployment.getId(), extensionDeployment,
                     formFieldSnapshots);
+            if (controlledLoopDeploymentService != null)
+            {
+                controlledLoopDeploymentService.persist(deployment.getId(), controlledLoopDeployment);
+            }
             dmnDecisionService.persist(deployment.getId(), dmnDeployment, identity.userId());
 
             // 记录最近一次部署关系，后续模型编辑和安全删除据此执行状态门禁。
@@ -1088,6 +1112,26 @@ public class WorkflowModelService
             snapshots.add(snapshot);
         }
         return snapshots;
+    }
+
+    /**
+     * 从本次部署已经冻结的节点表单来源提取受控循环判断字段白名单。
+     *
+     * @param sources List&lt;FormSnapshotSource&gt;，部署事务内固定读取的节点表单来源
+     * @return List&lt;WorkflowControlledLoopFormSchema&gt;，按节点顺序返回的不可变字段白名单
+     */
+    private List<WorkflowControlledLoopFormSchema> buildControlledLoopFormSchemas(
+            List<FormSnapshotSource> sources)
+    {
+        List<WorkflowControlledLoopFormSchema> schemas = new ArrayList<>(sources.size());
+        for (FormSnapshotSource source : sources)
+        {
+            WorkflowBpmnFormReference reference = source.reference();
+            schemas.add(new WorkflowControlledLoopFormSchema(reference.processKey(),
+                    reference.nodeKey(), startVariableValidator
+                            .describeControlledLoopFields(source.content())));
+        }
+        return List.copyOf(schemas);
     }
 
     /**

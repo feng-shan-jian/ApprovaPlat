@@ -54,6 +54,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfAttachmentMapper;
+import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.framework.web.service.PermissionService;
 
@@ -73,6 +74,8 @@ class WorkflowProcessInstanceServiceTest
     private WfAttachmentMapper attachmentMapper;
 
     private WfCopyMapper copyMapper;
+
+    private WfControlledLoopExecutionMapper controlledLoopExecutionMapper;
 
     private IdentityService identityService;
 
@@ -100,6 +103,7 @@ class WorkflowProcessInstanceServiceTest
         taskService = mock(TaskService.class);
         attachmentMapper = mock(WfAttachmentMapper.class);
         copyMapper = mock(WfCopyMapper.class);
+        controlledLoopExecutionMapper = mock(WfControlledLoopExecutionMapper.class);
         identityService = mock(IdentityService.class);
         identityResolver = mock(WorkflowIdentityResolver.class);
         permissionService = mock(PermissionService.class);
@@ -108,7 +112,8 @@ class WorkflowProcessInstanceServiceTest
         WorkflowEngineOperations engineOperations = new WorkflowEngineOperations(
                 authenticationContext, new WorkflowExceptionTranslator(), identityResolver);
         service = new WorkflowProcessInstanceService(engineOperations, historyService,
-                runtimeService, taskService, attachmentMapper, copyMapper, permissionService);
+                runtimeService, taskService, attachmentMapper, copyMapper,
+                controlledLoopExecutionMapper, permissionService);
     }
 
     /**
@@ -423,6 +428,9 @@ class WorkflowProcessInstanceServiceTest
                 findRoot, rootChildren, childChildren, remaining);
         when(copyMapper.countActiveByInstanceIds(any())).thenReturn(2L, 0L);
         when(copyMapper.logicalDeleteByInstanceIds(any(), eq("9"))).thenReturn(2);
+        when(controlledLoopExecutionMapper.countByProcessInstanceIds(any()))
+                .thenReturn(3L, 0L);
+        when(controlledLoopExecutionMapper.deleteByProcessInstanceIds(any())).thenReturn(3);
 
         WorkflowHistoryDeletionView result = service.deleteCompletedHistory(List.of("root-1"));
 
@@ -433,6 +441,8 @@ class WorkflowProcessInstanceServiceTest
         verify(historyService, never()).deleteHistoricProcessInstance("child-1");
         verify(copyMapper).logicalDeleteByInstanceIds(
                 eq(Set.of("root-1", "child-1")), eq("9"));
+        verify(controlledLoopExecutionMapper).deleteByProcessInstanceIds(
+                eq(Set.of("root-1", "child-1")));
     }
 
     /**
@@ -453,7 +463,7 @@ class WorkflowProcessInstanceServiceTest
         assertBusinessError(() -> service.deleteCompletedHistory(
                 List.of("finished-1", "running-1")), HttpStatus.CONFLICT);
 
-        verifyNoInteractions(attachmentMapper, copyMapper);
+        verifyNoInteractions(attachmentMapper, copyMapper, controlledLoopExecutionMapper);
         verify(historyService, never()).deleteHistoricProcessInstance(anyString());
     }
 
@@ -481,6 +491,31 @@ class WorkflowProcessInstanceServiceTest
         verify(attachmentMapper).countBoundByProcessInstanceIds(
                 eq(Set.of("root-1", "child-1")));
         verifyNoInteractions(copyMapper);
+        verifyNoInteractions(controlledLoopExecutionMapper);
+        verify(historyService, never()).deleteHistoricProcessInstance(anyString());
+    }
+
+    /**
+     * 验证循环审计预检数量与实际删除数量漂移时不会删除 Flowable 历史。
+     * @return 无返回值，循环审计孤儿或部分历史删除发生时测试失败
+     */
+    @Test
+    void rejectsHistoryDeleteWhenControlledLoopRowsDrift()
+    {
+        setCurrentUser("9", Set.of("workflow:process:remove"));
+        HistoricProcessInstance root = historic("root-1", "7", true, null);
+        HistoricProcessInstanceQuery findRoot = queryReturning(root);
+        HistoricProcessInstanceQuery noChildren = queryListing(List.of());
+        when(historyService.createHistoricProcessInstanceQuery()).thenReturn(
+                findRoot, noChildren);
+        when(copyMapper.countActiveByInstanceIds(any())).thenReturn(0L);
+        when(copyMapper.logicalDeleteByInstanceIds(any(), eq("9"))).thenReturn(0);
+        when(controlledLoopExecutionMapper.countByProcessInstanceIds(any())).thenReturn(2L);
+        when(controlledLoopExecutionMapper.deleteByProcessInstanceIds(any())).thenReturn(1);
+
+        assertBusinessError(() -> service.deleteCompletedHistory(List.of("root-1")),
+                HttpStatus.CONFLICT);
+
         verify(historyService, never()).deleteHistoricProcessInstance(anyString());
     }
 

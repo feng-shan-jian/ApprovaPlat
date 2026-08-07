@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper">
+    <resultMap id="ExecutionResult" type="com.ruoyi.flowable.domain.WfControlledLoopExecution">
+        <id property="executionId" column="execution_id"/>
+        <result property="deployId" column="deploy_id"/>
+        <result property="processDefinitionId" column="process_definition_id"/>
+        <result property="processInstanceId" column="process_instance_id"/>
+        <result property="activityId" column="activity_id"/>
+        <result property="taskId" column="task_id"/>
+        <result property="iterationNo" column="iteration_no"/>
+        <result property="actorUserId" column="actor_user_id"/>
+        <result property="decisionValue" column="decision_value"/>
+        <result property="outcome" column="outcome"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+
+    <sql id="Columns">
+        execution_id, deploy_id, process_definition_id, process_instance_id, activity_id,
+        task_id, iteration_no, actor_user_id, decision_value, outcome, create_time
+    </sql>
+
+    <select id="selectMaxIteration" resultType="int">
+        select coalesce(max(iteration_no), 0)
+        from wf_controlled_loop_execution
+        where process_instance_id = #{processInstanceId} and activity_id = #{activityId}
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="executionId">
+        insert into wf_controlled_loop_execution
+        (deploy_id, process_definition_id, process_instance_id, activity_id, task_id,
+         iteration_no, actor_user_id, decision_value, outcome, create_time)
+        values
+        (#{deployId}, #{processDefinitionId}, #{processInstanceId}, #{activityId}, #{taskId},
+         #{iterationNo}, #{actorUserId}, #{decisionValue}, #{outcome}, current_timestamp(3))
+    </insert>
+
+    <select id="selectByProcessInstanceId" resultMap="ExecutionResult">
+        select <include refid="Columns"/>
+        from wf_controlled_loop_execution
+        where process_instance_id = #{processInstanceId}
+        order by activity_id, iteration_no
+    </select>
+
+    <select id="countByProcessInstanceIds" resultType="long">
+        select count(*)
+        from wf_controlled_loop_execution
+        where process_instance_id in
+        <foreach collection="processInstanceIds" item="instanceId" open="(" separator="," close=")">
+            #{instanceId}
+        </foreach>
+    </select>
+
+    <delete id="deleteByProcessInstanceIds">
+        delete from wf_controlled_loop_execution
+        where process_instance_id in
+        <foreach collection="processInstanceIds" item="instanceId" open="(" separator="," close=")">
+            #{instanceId}
+        </foreach>
+    </delete>
+</mapper>

@@ -6,6 +6,8 @@ import flowableModdle from '../../src/components/workflow/bpmn/flowableModdle.js
 
 const designerSource = readFileSync(
   new URL('../../src/components/workflow/ProcessDesigner.vue', import.meta.url), 'utf8')
+const designerDoc = readFileSync(
+  new URL('../../src/components/workflow/ProcessDesigner.md', import.meta.url), 'utf8')
 const toolbarSource = readFileSync(
   new URL('../../src/components/workflow/designer/DesignerToolbar.vue', import.meta.url), 'utf8')
 const advancedPaletteSource = readFileSync(
@@ -16,6 +18,10 @@ const settingsSource = readFileSync(
   new URL('../../src/components/workflow/designer/DesignerSettingsDrawer.vue', import.meta.url), 'utf8')
 const propertiesPanelSource = readFileSync(
   new URL('../../src/components/workflow/designer/DesignerPropertiesPanel.vue', import.meta.url), 'utf8')
+const propertiesPanelDoc = readFileSync(
+  new URL('../../src/components/workflow/designer/DesignerPropertiesPanel.md', import.meta.url), 'utf8')
+const processDetailSource = readFileSync(
+  new URL('../../src/views/workflow/work/detail.vue', import.meta.url), 'utf8')
 const businessListenerEditorSource = readFileSync(
   new URL('../../src/components/workflow/designer/BusinessListenerEditor.vue', import.meta.url), 'utf8')
 const extensionPropertyEditorSource = readFileSync(
@@ -70,6 +76,57 @@ test('设计器工具命令连接真实 BPMN 服务', () => {
   assert.match(designerSource, /toggleMode\.toggleMode/)
   assert.match(designerSource, /validateModelBpmn\(xml\)/)
   assert.match(modelApiSource, /url: '\/workflow\/model\/validate'/)
+})
+
+/**
+ * 验证整改循环只写入平台固定属性，字段目录、显式应用和详情审计均连接正式业务投影。
+ * @returns {Promise<void>} 出现任意表达式、半成品即时写入或循环审计姓名丢失时断言失败。
+ */
+test('受控整改循环以固定属性完成作者 XML 往返并连接正式详情审计', async () => {
+  assert.match(designerSource, /CONTROLLED_LOOP_PROPERTY_PREFIX = 'approva\.controlledLoop\.'/)
+  assert.match(designerSource, /resolveTemplateControlledLoopKind[\s\S]*?workflowWritable !== false/)
+  assert.match(designerSource, /function resolveTemplateControlledLoopKind[\s\S]*?if \(tag === 'el-select'\)[\s\S]*?return null/)
+  assert.match(propertiesPanelSource, /应用整改循环配置/)
+  assert.match(propertiesPanelSource, /value !== 'approvalLoop'[\s\S]*?emit\('multi-instance-change'\)/)
+  assert.match(propertiesPanelSource, /:allow-create="!controlledLoopValueRestricted"/)
+  assert.match(processDetailSource, /controlledLoopActorNames[\s\S]*?completedByName \|\| node\.assigneeName/)
+  assert.match(processDetailSource, /controlledLoopActorName\(row\)/)
+  assert.match(designerDoc, /任意 `standardLoopCharacteristics` 仍仅支持 XML 往返并明确禁止部署/)
+  assert.match(propertiesPanelDoc, /半成品只保留在当前面板草稿中/)
+  assert.doesNotMatch(`${designerSource}\n${propertiesPanelSource}`, /controlledLoop.*expression/i)
+
+  const moddle = new BpmnModdle({ flowable: flowableModdle })
+  const source = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="https://approvaplat.example/controlled-loop-contract">
+  <process id="controlledLoopContract" isExecutable="true">
+    <userTask id="rectify" flowable:assignee="1">
+      <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.controlledLoop.enabled" value="true" />
+          <flowable:property name="approva.controlledLoop.decisionVariable" value="reviewResult" />
+          <flowable:property name="approva.controlledLoop.repeatValue" value="RECTIFY" />
+          <flowable:property name="approva.controlledLoop.exitValue" value="PASS" />
+          <flowable:property name="approva.controlledLoop.maxIterations" value="3" />
+        </flowable:properties>
+      </extensionElements>
+    </userTask>
+  </process>
+</definitions>`
+  const { rootElement } = await moddle.fromXML(source)
+  const process = rootElement.rootElements.find(element => element.$type === 'bpmn:Process')
+  const task = process.flowElements.find(element => element.$type === 'bpmn:UserTask')
+  const properties = task.extensionElements.values
+    .find(value => value.$type === 'flowable:Properties').values
+  assert.deepEqual(properties.map(property => [property.name, property.value]), [
+    ['approva.controlledLoop.enabled', 'true'],
+    ['approva.controlledLoop.decisionVariable', 'reviewResult'],
+    ['approva.controlledLoop.repeatValue', 'RECTIFY'],
+    ['approva.controlledLoop.exitValue', 'PASS'],
+    ['approva.controlledLoop.maxIterations', '3']
+  ])
+  const { xml } = await moddle.toXML(rootElement, { format: true })
+  assert.match(xml, /approva\.controlledLoop\.maxIterations" value="3"/)
+  assert.doesNotMatch(xml, /standardLoopCharacteristics|conditionExpression/)
 })
 
 /**
