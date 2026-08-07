@@ -147,7 +147,7 @@ test('高级 Palette 通过 Modeler 创建完整标准 BPMN 元素', () => {
   assert.match(designerSource, /globalConnect'\)\.start\(event\)/)
   assert.match(designerSource, /elementFactory\.createParticipantShape\(\)/)
   assert.match(designerSource, /modeler\.get\('modeling'\)\.addLane\(selected, 'bottom'\)/)
-  assert.match(advancedPaletteDoc, /标准 BPMN moddle 类型[\s\S]*?ComplexGateway/)
+  assert.match(advancedPaletteDoc, /复杂网关不进入正式工具入口/)
 })
 
 /**
@@ -185,10 +185,17 @@ test('高级 BPMN 元素执行真实 XML 往返', async () => {
     <association id="association" sourceRef="manual" targetRef="annotation" />
     <group id="groupOps" categoryValueRef="categoryValueOps" />
   </process>
+  <process id="externalContract" isExecutable="true">
+    <startEvent id="externalStart" />
+    <receiveTask id="externalReceive" />
+    <endEvent id="externalEnd" />
+    <sequenceFlow id="externalFlow1" sourceRef="externalStart" targetRef="externalReceive" />
+    <sequenceFlow id="externalFlow2" sourceRef="externalReceive" targetRef="externalEnd" />
+  </process>
   <collaboration id="collaboration">
     <participant id="participantMain" processRef="advancedContract" />
-    <participant id="participantExternal" name="外部系统" />
-    <messageFlow id="messageFlow" sourceRef="participantMain" targetRef="participantExternal" messageRef="messageNotice" />
+    <participant id="participantExternal" name="外部系统" processRef="externalContract" />
+    <messageFlow id="messageFlow" name="notice" sourceRef="send" targetRef="externalReceive" messageRef="messageNotice" />
   </collaboration>
 </definitions>`
   const { rootElement, warnings } = await moddle.fromXML(source)

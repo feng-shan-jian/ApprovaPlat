@@ -62,6 +62,7 @@
         @common-change="updateCommonProperties"
         @id-change="updateElementId"
         @process-change="updateProcessProperties"
+        @participant-change="updateParticipantProperties"
         @form-source-change="updateFormSource"
         @form-change="updateFormKey"
         @embedded-form-change="updateEmbeddedForm"
@@ -260,10 +261,12 @@ const isUserTask = computed(() => isType('bpmn:UserTask'))
 const isServiceTask = computed(() => isType('bpmn:ServiceTask'))
 const isBusinessRuleTask = computed(() => isType('bpmn:BusinessRuleTask'))
 const isSequenceFlow = computed(() => isType('bpmn:SequenceFlow'))
+const isParticipant = computed(() => isType('bpmn:Participant'))
 const propertyFlags = computed(() => {
   const eventDefinitionType = propertyState.eventDefinitionType
   return Object.freeze({
     process: isProcess.value,
+    participant: isParticipant.value,
     startEvent: isStartEvent.value,
     userTask: isUserTask.value,
     serviceTaskLike: isType('bpmn:ServiceTask') || isType('bpmn:SendTask'),
@@ -357,6 +360,7 @@ function createEmptyPropertyState() {
   return {
     id: '',
     name: '',
+    processRef: '',
     executable: true,
     versionTag: '',
     formSource: 'TEMPLATE',
@@ -646,6 +650,7 @@ function loadPropertyState(element) {
   propertyState.skipExpression = businessObject.get('flowable:skipExpression') || ''
   propertyState.localScope = businessObject.get('flowable:localScope') === true
   propertyState.documentation = businessObject.documentation?.[0]?.text || ''
+  propertyState.processRef = businessObject.processRef || ''
   propertyState.conditionExpression = businessObject.conditionExpression?.body || ''
   const serviceExtension = readServiceTaskExtension(businessObject)
   propertyState.extensionKey = serviceExtension.extensionKey
@@ -927,6 +932,7 @@ function isType(type) {
 function typeLabel(type) {
   const labels = {
     'bpmn:Process': '流程属性',
+    'bpmn:Participant': '池 / 参与者',
     'bpmn:StartEvent': '开始节点',
     'bpmn:EndEvent': '结束节点',
     'bpmn:UserTask': '用户任务',
@@ -992,6 +998,14 @@ function updateProcessProperties() {
     isExecutable: Boolean(propertyState.executable),
     'flowable:versionTag': propertyState.versionTag.trim() || undefined
   })
+}
+
+/**
+ * 更新 Participant 绑定的可执行流程定义 key；空值由后端协作部署门禁拒绝。
+ * @returns {void} 通过 bpmn-js 命令栈保存池与流程定义的真实关系。
+ */
+function updateParticipantProperties() {
+  updateProperties({ processRef: propertyState.processRef.trim() || undefined })
 }
 
 /**
@@ -1235,6 +1249,16 @@ function updateExtensionSelection() {
       endpointKey: endpoint?.endpointKey || '',
       method: String(endpoint?.allowedMethods || '').split(',').filter(Boolean)[0] || '',
       path: endpoint?.pathPrefix || '/'
+    })
+  } else if (selectedOption?.implementationKey === 'COLLABORATION_OUTBOX_V1') {
+    const endpoint = connectorEndpoints.value[0]
+    propertyState.extensionConfig = JSON.stringify({
+      endpointKey: endpoint?.endpointKey || '',
+      path: '/workflow/runtime-event/collaboration/message',
+      messageName: '',
+      targetProcessDefinitionKey: '',
+      variableNames: [],
+      maxAttempts: 5
     })
   } else if (selectedOption?.extensionType === 'SQL') {
     const source = sqlDataSources.value[0]

@@ -620,6 +620,11 @@ public class WorkflowBpmnService
                 validateFlowElement(process, element, validationContext);
             }
         }
+        if (validationContext == ValidationContext.AUTHOR)
+        {
+            // 作者资源必须把 MessageFlow 绑定到可靠 outbox；编译资源的 SendTask 已转换为固定调度器。
+            WorkflowCollaborationValidator.validate(bpmnModel);
+        }
         return List.copyOf(references);
     }
 

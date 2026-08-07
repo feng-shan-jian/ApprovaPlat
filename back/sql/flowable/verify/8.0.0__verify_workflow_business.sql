@@ -4,14 +4,14 @@
 SELECT
     'workflow_schema_table_counts' AS check_name,
     CASE
-        WHEN COUNT(*) = 86
+        WHEN COUNT(*) = 90
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) <> 'ACT_'
                  AND LEFT(UPPER(TABLE_NAME), 4) <> 'FLW_'
                  AND LEFT(UPPER(TABLE_NAME), 3) <> 'WF_'
                  AND LEFT(UPPER(TABLE_NAME), 5) <> 'QRTZ_') = 20
          AND SUM(LEFT(UPPER(TABLE_NAME), 5) = 'QRTZ_') = 11
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) IN ('ACT_', 'FLW_')) = 36
-         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 19
+         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 23
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -929,6 +929,10 @@ FROM integrity_issues;
 WITH expected_tables AS (
     SELECT 'wf_integration_credential' AS table_name
     UNION ALL SELECT 'wf_runtime_event_request'
+    UNION ALL SELECT 'wf_collaboration_channel'
+    UNION ALL SELECT 'wf_collaboration_message'
+    UNION ALL SELECT 'wf_collaboration_outbox'
+    UNION ALL SELECT 'wf_collaboration_message_audit'
 ), actual_tables AS (
     SELECT TABLE_NAME AS table_name, ENGINE, TABLE_COLLATION
     FROM information_schema.TABLES
@@ -937,9 +941,9 @@ WITH expected_tables AS (
 )
 SELECT
     'workflow_runtime_integration_tables' AS check_name,
-    CASE WHEN COUNT(actual.table_name) = 2
-              AND SUM(actual.ENGINE = 'InnoDB') = 2
-              AND SUM(actual.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 2
+    CASE WHEN COUNT(actual.table_name) = 6
+              AND SUM(actual.ENGINE = 'InnoDB') = 6
+              AND SUM(actual.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 6
          THEN 'PASS' ELSE 'FAIL' END AS result,
     CONCAT('present=', COUNT(actual.table_name), ', missing=', COALESCE(
         GROUP_CONCAT(CASE WHEN actual.table_name IS NULL THEN expected.table_name END
@@ -974,6 +978,67 @@ WITH expected_columns AS (
     UNION ALL SELECT 'wf_runtime_event_request', 'result_code'
     UNION ALL SELECT 'wf_runtime_event_request', 'result_summary'
     UNION ALL SELECT 'wf_runtime_event_request', 'complete_time'
+    UNION ALL SELECT 'wf_collaboration_channel', 'channel_id'
+    UNION ALL SELECT 'wf_collaboration_channel', 'target_process_definition_key'
+    UNION ALL SELECT 'wf_collaboration_channel', 'correlation_type'
+    UNION ALL SELECT 'wf_collaboration_channel', 'correlation_value'
+    UNION ALL SELECT 'wf_collaboration_channel', 'outbound_sequence'
+    UNION ALL SELECT 'wf_collaboration_channel', 'inbound_sequence'
+    UNION ALL SELECT 'wf_collaboration_channel', 'revision_no'
+    UNION ALL SELECT 'wf_collaboration_message', 'message_id'
+    UNION ALL SELECT 'wf_collaboration_message', 'credential_id'
+    UNION ALL SELECT 'wf_collaboration_message', 'actor_user_id'
+    UNION ALL SELECT 'wf_collaboration_message', 'channel_id'
+    UNION ALL SELECT 'wf_collaboration_message', 'sequence_no'
+    UNION ALL SELECT 'wf_collaboration_message', 'message_name'
+    UNION ALL SELECT 'wf_collaboration_message', 'source_process_definition_key'
+    UNION ALL SELECT 'wf_collaboration_message', 'target_process_definition_key'
+    UNION ALL SELECT 'wf_collaboration_message', 'correlation_key'
+    UNION ALL SELECT 'wf_collaboration_message', 'target_process_instance_id'
+    UNION ALL SELECT 'wf_collaboration_message', 'matched_process_instance_id'
+    UNION ALL SELECT 'wf_collaboration_message', 'target_execution_id'
+    UNION ALL SELECT 'wf_collaboration_message', 'variables_json'
+    UNION ALL SELECT 'wf_collaboration_message', 'payload_sha256'
+    UNION ALL SELECT 'wf_collaboration_message', 'status'
+    UNION ALL SELECT 'wf_collaboration_message', 'attempt_count'
+    UNION ALL SELECT 'wf_collaboration_message', 'max_attempts'
+    UNION ALL SELECT 'wf_collaboration_message', 'compensation_count'
+    UNION ALL SELECT 'wf_collaboration_message', 'revision_no'
+    UNION ALL SELECT 'wf_collaboration_message', 'last_error_code'
+    UNION ALL SELECT 'wf_collaboration_message', 'last_error_summary'
+    UNION ALL SELECT 'wf_collaboration_message', 'create_time'
+    UNION ALL SELECT 'wf_collaboration_message', 'next_attempt_time'
+    UNION ALL SELECT 'wf_collaboration_message', 'complete_time'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'message_id'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'channel_id'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'sequence_no'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'source_process_instance_id'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'source_execution_id'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'message_name'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'target_process_definition_key'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'correlation_key'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'endpoint_id'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'endpoint_revision'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'delivery_config_json'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'variables_json'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'payload_sha256'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'status'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'attempt_count'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'max_attempts'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'lease_owner'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'lease_until'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'next_attempt_time'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'complete_time'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'audit_id'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'message_id'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'direction'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'action'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'actor_type'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'actor_id'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'from_status'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'to_status'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'attempt_no'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'create_time'
 ), missing_columns AS (
     SELECT expected.table_name, expected.column_name
     FROM expected_columns expected
@@ -997,6 +1062,15 @@ WITH expected_indexes AS (
     UNION ALL SELECT 'wf_runtime_event_request', 'idx_wf_runtime_event_credential'
     UNION ALL SELECT 'wf_runtime_event_request', 'idx_wf_runtime_event_instance'
     UNION ALL SELECT 'wf_runtime_event_request', 'idx_wf_runtime_event_status'
+    UNION ALL SELECT 'wf_collaboration_message', 'idx_wf_collab_target'
+    UNION ALL SELECT 'wf_collaboration_message', 'idx_wf_collab_status'
+    UNION ALL SELECT 'wf_collaboration_message', 'uk_wf_collab_message_sequence'
+    UNION ALL SELECT 'wf_collaboration_channel', 'uk_wf_collab_channel_target'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'uk_wf_collab_outbox_sequence'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'uk_wf_collab_outbox_source'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'idx_wf_collab_outbox_due'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'idx_wf_collab_audit_message'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'idx_wf_collab_audit_status'
 ), missing_indexes AS (
     SELECT expected.table_name, expected.index_name
     FROM expected_indexes expected
@@ -1027,6 +1101,24 @@ WITH expected_checks AS (
     UNION ALL SELECT 'wf_runtime_event_request', 'chk_wf_runtime_event_variables_hash'
     UNION ALL SELECT 'wf_runtime_event_request', 'chk_wf_runtime_event_status'
     UNION ALL SELECT 'wf_runtime_event_request', 'chk_wf_runtime_event_completion'
+    UNION ALL SELECT 'wf_collaboration_message', 'chk_wf_collab_id'
+    UNION ALL SELECT 'wf_collaboration_message', 'chk_wf_collab_correlation'
+    UNION ALL SELECT 'wf_collaboration_message', 'chk_wf_collab_status'
+    UNION ALL SELECT 'wf_collaboration_message', 'chk_wf_collab_attempts'
+    UNION ALL SELECT 'wf_collaboration_message', 'chk_wf_collab_compensation'
+    UNION ALL SELECT 'wf_collaboration_message', 'chk_wf_collab_completion'
+    UNION ALL SELECT 'wf_collaboration_channel', 'chk_wf_collab_channel_id'
+    UNION ALL SELECT 'wf_collaboration_channel', 'chk_wf_collab_channel_type'
+    UNION ALL SELECT 'wf_collaboration_channel', 'chk_wf_collab_channel_sequence'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'chk_wf_collab_outbox_id'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'chk_wf_collab_outbox_hash'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'chk_wf_collab_outbox_status'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'chk_wf_collab_outbox_attempts'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'chk_wf_collab_outbox_lease'
+    UNION ALL SELECT 'wf_collaboration_outbox', 'chk_wf_collab_outbox_completion'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'chk_wf_collab_audit_direction'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'chk_wf_collab_audit_actor'
+    UNION ALL SELECT 'wf_collaboration_message_audit', 'chk_wf_collab_audit_attempt'
 ), missing_checks AS (
     SELECT expected.table_name, expected.constraint_name
     FROM expected_checks expected
@@ -1048,13 +1140,20 @@ FROM missing_checks;
 
 SELECT
     'workflow_runtime_integration_foreign_keys' AS check_name,
-    CASE WHEN COUNT(*) = 1 THEN 'PASS' ELSE 'FAIL' END AS result,
-    CONCAT('matching=', COUNT(*), ', expected=1') AS detail
+    CASE WHEN COUNT(*) = 5 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('matching=', COUNT(*), ', expected=5') AS detail
 FROM information_schema.REFERENTIAL_CONSTRAINTS
 WHERE CONSTRAINT_SCHEMA = DATABASE()
-  AND TABLE_NAME = 'wf_runtime_event_request'
-  AND CONSTRAINT_NAME = 'fk_wf_runtime_event_credential'
-  AND REFERENCED_TABLE_NAME = 'wf_integration_credential'
+  AND ((TABLE_NAME = 'wf_runtime_event_request'
+        AND CONSTRAINT_NAME = 'fk_wf_runtime_event_credential')
+       OR (TABLE_NAME = 'wf_collaboration_message'
+        AND CONSTRAINT_NAME = 'fk_wf_collab_credential')
+       OR (TABLE_NAME = 'wf_collaboration_message'
+        AND CONSTRAINT_NAME = 'fk_wf_collab_channel')
+       OR (TABLE_NAME = 'wf_collaboration_outbox'
+        AND CONSTRAINT_NAME = 'fk_wf_collab_outbox_channel')
+       OR (TABLE_NAME = 'wf_collaboration_outbox'
+        AND CONSTRAINT_NAME = 'fk_wf_collab_outbox_endpoint'))
   AND UPDATE_RULE = 'RESTRICT' AND DELETE_RULE = 'RESTRICT';
 
 WITH integrity_issues AS (
@@ -1087,6 +1186,62 @@ WITH integrity_issues AS (
     LEFT JOIN wf_integration_credential credential
       ON credential.credential_id = request.credential_id
     WHERE credential.credential_id IS NULL
+
+    UNION ALL
+
+    SELECT 'collaboration_message_invalid_row', COUNT(*)
+    FROM wf_collaboration_message
+    WHERE payload_sha256 NOT REGEXP '^[0-9a-f]{64}$'
+       OR status NOT IN ('RECEIVED', 'RETRYING', 'PROCESSED', 'DEAD_LETTER')
+       OR attempt_count NOT BETWEEN 0 AND max_attempts
+       OR max_attempts NOT BETWEEN 1 AND 20
+       OR sequence_no <= 0
+       OR compensation_count < 0 OR revision_no < 0
+       OR ((correlation_key IS NULL) = (target_process_instance_id IS NULL))
+       OR (status IN ('PROCESSED', 'DEAD_LETTER') AND complete_time IS NULL)
+
+    UNION ALL
+
+    SELECT 'collaboration_message_missing_credential', COUNT(*)
+    FROM wf_collaboration_message message
+    LEFT JOIN wf_integration_credential credential
+      ON credential.credential_id = message.credential_id
+    WHERE credential.credential_id IS NULL
+
+    UNION ALL
+
+    SELECT 'collaboration_channel_invalid_row', COUNT(*)
+    FROM wf_collaboration_channel
+    WHERE channel_id NOT REGEXP '^[0-9a-f]{64}$'
+       OR correlation_type NOT IN ('BUSINESS_KEY', 'PROCESS_INSTANCE')
+       OR outbound_sequence < 0 OR inbound_sequence < 0 OR revision_no < 0
+
+    UNION ALL
+
+    SELECT 'collaboration_outbox_invalid_row', COUNT(*)
+    FROM wf_collaboration_outbox
+    WHERE payload_sha256 NOT REGEXP '^[0-9a-f]{64}$'
+       OR status NOT IN ('PENDING', 'DELIVERING', 'RETRYING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED')
+       OR attempt_count NOT BETWEEN 0 AND max_attempts
+       OR max_attempts NOT BETWEEN 1 AND 20 OR sequence_no <= 0
+       OR ((lease_owner IS NULL) <> (lease_until IS NULL))
+       OR (status IN ('PROCESSED', 'DEAD_LETTER', 'CANCELLED') AND complete_time IS NULL)
+
+    UNION ALL
+
+    SELECT 'collaboration_outbox_missing_reference', COUNT(*)
+    FROM wf_collaboration_outbox outbox
+    LEFT JOIN wf_collaboration_channel channel ON channel.channel_id = outbox.channel_id
+    LEFT JOIN wf_connector_endpoint endpoint ON endpoint.endpoint_id = outbox.endpoint_id
+    WHERE channel.channel_id IS NULL OR endpoint.endpoint_id IS NULL
+
+    UNION ALL
+
+    SELECT 'collaboration_audit_invalid_row', COUNT(*)
+    FROM wf_collaboration_message_audit
+    WHERE direction NOT IN ('INBOUND', 'OUTBOUND')
+       OR actor_type NOT IN ('INTEGRATION', 'SYSTEM', 'USER')
+       OR attempt_no < 0
 )
 SELECT
     'workflow_runtime_integration_data_integrity' AS check_name,

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfCollaborationMessageAuditMapper">
+  <resultMap id="AuditResult" type="com.ruoyi.flowable.domain.WfCollaborationMessageAudit">
+    <id property="auditId" column="audit_id"/><result property="messageId" column="message_id"/>
+    <result property="direction" column="direction"/><result property="action" column="action"/>
+    <result property="actorType" column="actor_type"/><result property="actorId" column="actor_id"/>
+    <result property="fromStatus" column="from_status"/><result property="toStatus" column="to_status"/>
+    <result property="attemptNo" column="attempt_no"/><result property="errorCode" column="error_code"/>
+    <result property="summary" column="summary"/><result property="createTime" column="create_time"/>
+  </resultMap>
+  <insert id="insert" useGeneratedKeys="true" keyProperty="auditId">
+    insert into wf_collaboration_message_audit
+      (message_id,direction,action,actor_type,actor_id,from_status,to_status,attempt_no,error_code,summary)
+    values
+      (#{messageId},#{direction},#{action},#{actorType},#{actorId},#{fromStatus},#{toStatus},#{attemptNo},#{errorCode},#{summary})
+  </insert>
+  <select id="selectByMessageId" resultMap="AuditResult">
+    select audit_id,message_id,direction,action,actor_type,actor_id,from_status,to_status,
+           attempt_no,error_code,summary,create_time
+    from wf_collaboration_message_audit where message_id=#{messageId}
+    order by audit_id
+  </select>
+</mapper>

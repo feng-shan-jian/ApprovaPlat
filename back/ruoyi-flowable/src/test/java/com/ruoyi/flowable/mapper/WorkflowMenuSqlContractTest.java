@@ -42,7 +42,7 @@ class WorkflowMenuSqlContractTest
                 "-- 目录按 path、页面和按钮按 perms 写入");
         Set<String> seedKeys = extractSeedKeys(menuSeed);
 
-        assertThat(seedKeys).hasSize(72).contains(
+        assertThat(seedKeys).hasSize(76).contains(
                 "workflow", "office",
                 "workflow:category:list", "workflow:category:export",
                 "workflow:model:designer", "workflow:model:save",
@@ -59,6 +59,8 @@ class WorkflowMenuSqlContractTest
                 "workflow:integrationCredential:rotate",
                 "workflow:integrationCredential:revoke",
                 "workflow:runtimeEvent:list",
+                "workflow:collaboration:list", "workflow:collaboration:audit",
+                "workflow:collaboration:retry", "workflow:collaboration:cancel",
                 "workflow:deploy:state",
                 "workflow:process:manageList", "workflow:process:manageExport",
                 "workflow:process:start", "workflow:process:query",
@@ -117,9 +119,9 @@ class WorkflowMenuSqlContractTest
                 "workflow_roles",
                 "workflow_admin_menu_scope",
                 "workflow_admin_only_instance_management",
-                "when count(*) = 72",
-                "workflow_page) = 17",
-                "workflow_button) = 53",
+                "when count(*) = 76",
+                "workflow_page) = 18",
+                "workflow_button) = 56",
                 "'workflow:process:managelist'",
                 "'workflow:process:manageexport'",
                 "admin_management_permissions",
@@ -145,9 +147,12 @@ class WorkflowMenuSqlContractTest
                 "insert into sys_role_menu",
                 "workflow/integrationcredential/index",
                 "workflow/runtimeevent/index",
+                "workflow/collaboration/index",
                 "'workflow:integrationcredential:add'",
                 "'workflow:integrationcredential:rotate'",
                 "'workflow:integrationcredential:revoke'",
+                "'workflow:collaboration:retry'",
+                "'workflow:collaboration:cancel'",
                 "tmp_workflow_role_actual");
         assertThat(normalized).doesNotContain("insert into sys_menu values");
     }

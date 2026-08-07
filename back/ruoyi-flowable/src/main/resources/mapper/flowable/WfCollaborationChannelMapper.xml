@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfCollaborationChannelMapper">
+  <resultMap id="ChannelResult" type="com.ruoyi.flowable.domain.WfCollaborationChannel">
+    <id property="channelId" column="channel_id"/>
+    <result property="targetProcessDefinitionKey" column="target_process_definition_key"/>
+    <result property="correlationType" column="correlation_type"/>
+    <result property="correlationValue" column="correlation_value"/>
+    <result property="outboundSequence" column="outbound_sequence"/>
+    <result property="inboundSequence" column="inbound_sequence"/>
+    <result property="revisionNo" column="revision_no"/>
+  </resultMap>
+  <insert id="insertIfAbsent">
+    insert ignore into wf_collaboration_channel
+      (channel_id,target_process_definition_key,correlation_type,correlation_value)
+    values
+      (#{channelId},#{targetProcessDefinitionKey},#{correlationType},#{correlationValue})
+  </insert>
+  <select id="selectForUpdate" resultMap="ChannelResult">
+    select channel_id,target_process_definition_key,correlation_type,correlation_value,
+           outbound_sequence,inbound_sequence,revision_no
+    from wf_collaboration_channel where channel_id=#{channelId} for update
+  </select>
+  <update id="advanceOutbound">
+    update wf_collaboration_channel
+    set outbound_sequence=#{sequenceNo},revision_no=revision_no+1,update_time=current_timestamp(3)
+    where channel_id=#{channelId} and revision_no=#{expectedRevision}
+      and outbound_sequence=#{sequenceNo}-1
+  </update>
+  <update id="advanceInbound">
+    update wf_collaboration_channel
+    set inbound_sequence=#{sequenceNo},revision_no=revision_no+1,update_time=current_timestamp(3)
+    where channel_id=#{channelId} and revision_no=#{expectedRevision}
+      and inbound_sequence=#{sequenceNo}-1
+  </update>
+</mapper>

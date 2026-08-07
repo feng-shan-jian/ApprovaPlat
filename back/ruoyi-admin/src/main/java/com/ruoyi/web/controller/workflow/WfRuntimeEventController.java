@@ -11,6 +11,8 @@ import com.ruoyi.common.annotation.Anonymous;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.flowable.domain.dto.WorkflowRuntimeEventRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowCollaborationMessageRequest;
+import com.ruoyi.flowable.service.process.WorkflowCollaborationMessageService;
 import com.ruoyi.flowable.service.process.WorkflowRuntimeEventService;
 
 /**
@@ -22,6 +24,7 @@ import com.ruoyi.flowable.service.process.WorkflowRuntimeEventService;
 public class WfRuntimeEventController extends BaseController
 {
     private final WorkflowRuntimeEventService runtimeEventService;
+    private final WorkflowCollaborationMessageService collaborationMessageService;
 
     /**
      * 创建运行事件发布 Controller。
@@ -30,7 +33,20 @@ public class WfRuntimeEventController extends BaseController
      */
     public WfRuntimeEventController(WorkflowRuntimeEventService runtimeEventService)
     {
+        this(runtimeEventService, null);
+    }
+
+    /**
+     * 创建同时支持单实例运行事件和跨 Participant 协作消息的入口。
+     * @param runtimeEventService WorkflowRuntimeEventService，既有消息/信号/ReceiveTask 入口
+     * @param collaborationMessageService WorkflowCollaborationMessageService，协作消息可靠投递服务
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public WfRuntimeEventController(WorkflowRuntimeEventService runtimeEventService,
+            WorkflowCollaborationMessageService collaborationMessageService)
+    {
         this.runtimeEventService = runtimeEventService;
+        this.collaborationMessageService = collaborationMessageService;
     }
 
     /**
@@ -74,4 +90,24 @@ public class WfRuntimeEventController extends BaseController
     {
         return success(runtimeEventService.publish(token, "RECEIVE", request));
     }
+
+    /**
+     * 认证并可靠投递一条跨流程协作消息；消息名必须对应目标流程的 Message Catch/ReceiveTask。
+     * @param token String，X-Integration-Token 正文
+     * @param request WorkflowCollaborationMessageRequest，目标流程、关联键和变量
+     * @return AjaxResult，协作消息幂等台账视图
+     */
+    @Anonymous
+    @PostMapping("/collaboration/message")
+    public AjaxResult collaborationMessage(
+            @RequestHeader(value = "X-Integration-Token", required = false) String token,
+            @Valid @RequestBody WorkflowCollaborationMessageRequest request)
+    {
+        if (collaborationMessageService == null)
+        {
+            throw new IllegalStateException("协作消息服务未初始化");
+        }
+        return success(collaborationMessageService.publish(token, request));
+    }
+
 }

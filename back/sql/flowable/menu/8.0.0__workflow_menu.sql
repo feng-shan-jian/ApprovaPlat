@@ -46,7 +46,7 @@ CREATE TEMPORARY TABLE tmp_workflow_menu_seed
     PRIMARY KEY (seed_key)
 ) ENGINE = InnoDB;
 
--- 两个目录、十七个菜单页和五十三个真实按钮权限，共七十二条目标记录。
+-- 两个目录、十八个菜单页和五十六个真实按钮权限，共七十六条目标记录。
 INSERT INTO tmp_workflow_menu_seed
     (seed_key, parent_key, menu_name, order_num, path, component, route_name,
      menu_type, perms, icon, remark)
@@ -86,7 +86,10 @@ VALUES
     ('workflow:runtimeEvent:list', 'workflow', '运行事件', 10, 'runtimeEvent',
      'workflow/runtimeEvent/index', 'WorkflowRuntimeEvent', 'C', 'workflow:runtimeEvent:list',
      'list', '消息、信号和 ReceiveTask 运行事件脱敏审计菜单'),
-    ('workflow:process:manageList', 'workflow', '实例运维', 11, 'instance',
+    ('workflow:collaboration:list', 'workflow', '多池协作', 11, 'collaboration',
+     'workflow/collaboration/index', 'WorkflowCollaboration', 'C',
+     'workflow:collaboration:list', 'connection', 'Participant/MessageFlow 入站、outbox、死信和补偿管理菜单'),
+    ('workflow:process:manageList', 'workflow', '实例运维', 12, 'instance',
      'workflow/work/manage', 'WorkflowManage', 'C', 'workflow:process:manageList',
      'list', '流程管理员跨用户实例运维菜单'),
     ('workflow:process:startList', 'office', '新建流程', 1, 'create',
@@ -180,6 +183,16 @@ VALUES
     ('workflow:integrationCredential:revoke', 'workflow:integrationCredential:list',
      '集成账号吊销', 3, '', NULL, '', 'F', 'workflow:integrationCredential:revoke', '#',
      '永久吊销 Token 并保留历史运行事件审计'),
+
+    ('workflow:collaboration:audit', 'workflow:collaboration:list',
+     '协作消息审计', 1, '', NULL, '', 'F', 'workflow:collaboration:audit', '#',
+     '查询单条入站或出站消息的逐次状态审计'),
+    ('workflow:collaboration:retry', 'workflow:collaboration:list',
+     '协作消息补偿', 2, '', NULL, '', 'F', 'workflow:collaboration:retry', '#',
+     '为入站或出站死信重新开启有界重试周期'),
+    ('workflow:collaboration:cancel', 'workflow:collaboration:list',
+     '协作消息取消', 3, '', NULL, '', 'F', 'workflow:collaboration:cancel', '#',
+     '取消尚未送达且没有外部成功副作用的 outbox'),
 
     ('workflow:deploy:query', 'workflow:deploy:list', '部署查询', 1, '', NULL, '',
      'F', 'workflow:deploy:query', '#', '查询部署版本和 BPMN'),
@@ -455,7 +468,8 @@ INSERT INTO tmp_workflow_role_menu_seed (role_key, seed_key)
 SELECT 'workflow_auditor', seed_key
 FROM tmp_workflow_menu_seed
 WHERE seed_key IN (
-    'workflow', 'workflow:runtimeEvent:list',
+    'workflow', 'workflow:runtimeEvent:list', 'workflow:collaboration:list',
+    'workflow:collaboration:audit',
     'office', 'workflow:process:ownList', 'workflow:process:todoList',
     'workflow:process:claimList', 'workflow:process:finishedList',
     'workflow:process:copyList', 'workflow:process:query',

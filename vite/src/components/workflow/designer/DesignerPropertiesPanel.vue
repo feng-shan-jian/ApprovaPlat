@@ -21,6 +21,9 @@
             <el-form-item v-if="flags.process" label="可执行流程">
               <el-switch v-model="state.executable" @change="emit('process-change')" />
             </el-form-item>
+            <el-form-item v-if="flags.participant" label="绑定流程定义 key" required>
+              <el-input v-model="state.processRef" maxlength="255" placeholder="必须是已存在且可执行的流程定义" @change="emit('participant-change')" />
+            </el-form-item>
             <el-form-item label="说明">
               <el-input v-model="state.documentation" type="textarea" :rows="3" maxlength="1000" @change="emit('documentation-change')" />
             </el-form-item>
@@ -112,8 +115,14 @@
                   />
                 </el-select>
               </el-form-item>
+              <CollaborationMessageEditor
+                v-if="selectedExtensionImplementation === 'COLLABORATION_OUTBOX_V1'"
+                v-model="state.extensionConfig"
+                :endpoints="connectorEndpoints"
+                @change="emit('service-task-change')"
+              />
               <CelExpressionEditor
-                v-if="selectedExtensionType === 'CEL'"
+                v-else-if="selectedExtensionType === 'CEL'"
                 v-model="state.extensionConfig"
                 @change="emit('service-task-change')"
               />
@@ -358,6 +367,7 @@ import HttpConnectorEditor from './HttpConnectorEditor.vue'
 import SqlConnectorEditor from './SqlConnectorEditor.vue'
 import BusinessListenerEditor from './BusinessListenerEditor.vue'
 import ExtensionPropertyEditor from './ExtensionPropertyEditor.vue'
+import CollaborationMessageEditor from './CollaborationMessageEditor.vue'
 
 const props = defineProps({
   selected: { type: Boolean, default: false },
@@ -401,6 +411,9 @@ const hasBusinessSection = computed(() => Object.values(props.flags).some(Boolea
 const selectedExtensionType = computed(() => props.extensionOptions.find(option => (
   option.extensionKey === props.state.extensionKey
 ))?.extensionType || '')
+const selectedExtensionImplementation = computed(() => props.extensionOptions.find(option => (
+  option.extensionKey === props.state.extensionKey
+))?.implementationKey || '')
 // 动态多实例只能用于 UserTask；其他活动仍可配置标准串行或并行多实例。
 const activityLoopOptions = computed(() => props.multiInstanceOptions.filter(option => (
   !['controlled', 'approvalLoop'].includes(option.value) || props.flags.userTask

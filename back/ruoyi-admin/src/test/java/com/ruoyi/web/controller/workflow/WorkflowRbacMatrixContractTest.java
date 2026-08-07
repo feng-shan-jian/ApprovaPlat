@@ -15,7 +15,7 @@ import com.ruoyi.web.controller.workflow.WorkflowRbacMatrix.InventoryEndpoint;
 import com.ruoyi.web.controller.workflow.WorkflowRbacMatrix.PermissionMode;
 
 /**
- * 工作流 16 个 Controller、103 个 mapping 和 5x103 URL 权限矩阵的静态契约测试。
+ * 工作流 17 个 Controller、109 个 mapping 和 5x109 URL 权限矩阵的静态契约测试。
  */
 class WorkflowRbacMatrixContractTest
 {
@@ -31,6 +31,7 @@ class WorkflowRbacMatrixContractTest
             Map.entry("WfSqlDataSourceController", 5L),
             Map.entry("WfIntegrationCredentialController", 4L),
             Map.entry("WfRuntimeEventAuditController", 1L),
+            Map.entry("WfCollaborationController", 6L),
             Map.entry("WfFormController", 6L),
             Map.entry("WfIdentityController", 1L),
             Map.entry("WfInstanceController", 2L),
@@ -40,11 +41,11 @@ class WorkflowRbacMatrixContractTest
 
     /** 每个角色按正式职责分离 SQL 应得到的 URL 层允许入口数量。 */
     private static final Map<String, Long> EXPECTED_ALLOW_COUNTS = Map.of(
-            "workflow_admin", 103L,
+            "workflow_admin", 109L,
             "workflow_designer", 51L,
             "workflow_starter", 20L,
             "workflow_approver", 29L,
-            "workflow_auditor", 18L);
+            "workflow_auditor", 21L);
 
     /**
      * 逐项冻结 Controller、handler、HTTP 动词、完整路径及 PreAuthorize 规则。
@@ -57,9 +58,9 @@ class WorkflowRbacMatrixContractTest
         List<Endpoint> matrix = WorkflowRbacMatrix.load();
         Map<String, InventoryEndpoint> inventory = WorkflowRbacMatrix.reflectInventory();
 
-        assertThat(WorkflowRbacMatrix.CONTROLLERS).hasSize(16);
-        assertThat(matrix).hasSize(103);
-        assertThat(inventory).hasSize(103);
+        assertThat(WorkflowRbacMatrix.CONTROLLERS).hasSize(17);
+        assertThat(matrix).hasSize(109);
+        assertThat(inventory).hasSize(109);
         assertThat(matrix.stream().collect(Collectors.groupingBy(
                 Endpoint::controller, Collectors.counting())))
                 .containsExactlyInAnyOrderEntriesOf(EXPECTED_CONTROLLER_COUNTS);
@@ -89,7 +90,7 @@ class WorkflowRbacMatrixContractTest
     }
 
     /**
-     * 用正式菜单角色 SQL 反向核对 515 个矩阵单元并冻结允许、拒绝总量。
+     * 用正式菜单角色 SQL 反向核对 545 个矩阵单元并冻结允许、拒绝总量。
      *
      * @return void，无返回值；矩阵与正式职责分离角色授权不一致时测试失败
      */
@@ -129,9 +130,9 @@ class WorkflowRbacMatrixContractTest
             allowCounts.put(roleKey, roleAllows);
         }
 
-        assertThat(cellCount).isEqualTo(515L);
+        assertThat(cellCount).isEqualTo(545L);
         assertThat(allowCounts).containsExactlyInAnyOrderEntriesOf(EXPECTED_ALLOW_COUNTS);
-        assertThat(denyCount).isEqualTo(294L);
+        assertThat(denyCount).isEqualTo(315L);
     }
 
     /**

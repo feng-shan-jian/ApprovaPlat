@@ -313,7 +313,7 @@ database_check_detail() {
       printf 'missing_or_invalid=none'
       ;;
     workflow_schema_table_counts)
-      printf 'total=86, ruoyi=20, quartz=11, flowable=36, workflow=19'
+      printf 'total=90, ruoyi=20, quartz=11, flowable=36, workflow=23'
       ;;
     workflow_connector_columns) printf 'missing=none' ;;
     workflow_business_tables) printf 'present=10, missing=none' ;;
@@ -329,25 +329,25 @@ database_check_detail() {
       printf 'constraints=1, enforced=YES, canonical_sha256=%064d' 1
       ;;
     workflow_business_data_integrity) printf 'issues=0, detail=none' ;;
-    workflow_runtime_integration_tables) printf 'present=2, missing=none' ;;
+    workflow_runtime_integration_tables) printf 'present=6, missing=none' ;;
     workflow_runtime_integration_columns|workflow_runtime_integration_indexes|workflow_extension_columns)
       printf 'missing=none'
       ;;
     workflow_runtime_integration_checks|workflow_extension_checks)
       printf 'missing_or_unenforced=none'
       ;;
-    workflow_runtime_integration_foreign_keys) printf 'matching=1, expected=1' ;;
+    workflow_runtime_integration_foreign_keys) printf 'matching=5, expected=5' ;;
     workflow_runtime_integration_data_integrity|workflow_extension_data_integrity)
       printf 'issues=0, detail=none'
       ;;
     workflow_extension_tables) printf 'present=7, missing=none' ;;
     workflow_extension_indexes) printf 'issues=0, indexes=none' ;;
     workflow_extension_foreign_keys) printf 'missing_or_invalid=none' ;;
-    workflow_menu_count) printf 'rows=72, natural_keys=72' ;;
-    workflow_menu_tree) printf 'directories=2, pages=17, buttons=53, invalid_routes=0' ;;
+    workflow_menu_count) printf 'rows=76, natural_keys=76' ;;
+    workflow_menu_tree) printf 'directories=2, pages=18, buttons=56, invalid_routes=0' ;;
     workflow_retired_permissions) printf 'legacy_rows=0' ;;
     workflow_roles) printf 'active_roles=5, duplicate_roles=0' ;;
-    workflow_admin_menu_scope) printf 'assigned=72, expected=72' ;;
+    workflow_admin_menu_scope) printf 'assigned=76, expected=76' ;;
     workflow_admin_only_instance_management)
       printf 'unauthorized_assignments=0, roles=none, admin_management_permissions=2'
       ;;
@@ -459,12 +459,12 @@ create_fresh_install_evidence() {
   printf '%064d  backup-smoke/schema.sql\n' 1 \
     > "$evidence_dir/backup-smoke/schema-sha256.txt"
   : > "$evidence_dir/backup-smoke/mysqlcheck.txt"
-  for ((table_number = 1; table_number <= 86; table_number++)); do
+  for ((table_number = 1; table_number <= 90; table_number++)); do
     printf 'ry_vue_backup_verify.table_%02d OK\n' "$table_number" \
       >> "$evidence_dir/backup-smoke/mysqlcheck.txt"
   done
   printf 'empty_schema_table_count=0\n' > "$evidence_dir/empty-schema-check.txt"
-  printf '86\t20\t11\t36\t19\n' > "$evidence_dir/table-counts.tsv"
+  printf '90\t20\t11\t36\t23\n' > "$evidence_dir/table-counts.tsv"
   printf 'PONG\n' > "$evidence_dir/redis-ping.txt"
   if [[ "$previous_release_id" != 'NONE' || -n "$previous_release_dir" ]]; then
     preflight_arguments+=(
@@ -1550,7 +1550,7 @@ main() {
   printf 'ry_vue_backup_verify.table_01 OK\n' \
     > "$evidence_dir/fresh-install/backup-smoke/mysqlcheck.txt"
   refresh_rehearsal_manifests "$evidence_dir"
-  expect_failure 'rehearsal without 86-table restore verification fails' \
+  expect_failure 'rehearsal without 90-table restore verification fails' \
     run_release_evidence_gate "$evidence_dir" rehearsal
 
   evidence_dir="$TEST_ROOT/rehearsal-fresh-attachment-diff"
@@ -1840,7 +1840,7 @@ main() {
   create_production_evidence \
     "$evidence_dir" "$TEST_ROOT/current-1" 'current-1' \
     "$TEST_ROOT/previous-1" 'previous-1'
-  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_schema_table_counts" { $3="total=86, ruoyi=22, quartz=11, flowable=36, workflow=17" } { print }' \
+  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_schema_table_counts" { $3="total=90, ruoyi=22, quartz=11, flowable=36, workflow=21" } { print }' \
     "$evidence_dir/database-verify.tsv" > "$evidence_dir/database-verify.filtered"
   mv -- "$evidence_dir/database-verify.filtered" "$evidence_dir/database-verify.tsv"
   refresh_evidence_manifest "$evidence_dir"
