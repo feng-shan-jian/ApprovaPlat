@@ -219,10 +219,25 @@ class WorkflowCollaborationHttpIT
             runtimeService.createProcessInstanceQuery().deploymentId(deploymentId).list()
                     .forEach(instance -> runtimeService.deleteProcessInstance(
                             instance.getId(), "协作验收清理"));
+            // 本测试直接使用 Flowable 仓储清理，因此必须先删除平台侧部署快照，避免隔离库残留孤儿数据。
+            jdbcTemplate.update("delete from wf_deploy_form where deploy_id=?", deploymentId);
+            jdbcTemplate.update("delete from wf_deploy_extension_snapshot where deploy_id=?",
+                    deploymentId);
             if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() == 1)
             {
                 repositoryService.deleteDeployment(deploymentId, true);
             }
+        }
+        if (!deploymentIds.isEmpty())
+        {
+            String placeholders = String.join(",",
+                    deploymentIds.stream().map(value -> "?").toList());
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_deploy_form where deploy_id in (" + placeholders + ")",
+                    Integer.class, deploymentIds.toArray())).isZero();
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_deploy_extension_snapshot where deploy_id in ("
+                            + placeholders + ")", Integer.class, deploymentIds.toArray())).isZero();
         }
         jdbcTemplate.update("delete from wf_collaboration_message_audit where message_id in "
                 + "(select message_id from wf_collaboration_message where credential_id=?) "
