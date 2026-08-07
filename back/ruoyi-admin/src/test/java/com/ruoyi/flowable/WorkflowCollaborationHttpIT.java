@@ -75,7 +75,6 @@ import com.ruoyi.system.service.ISysConfigService;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class WorkflowCollaborationHttpIT
 {
-    private static final String TEST_ACCOUNT_PASSWORD = "wang";
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration EVENTUALLY_TIMEOUT = Duration.ofSeconds(30);
     private static final String COLLABORATION_PATH =
@@ -560,9 +559,12 @@ class WorkflowCollaborationHttpIT
      */
     private String login(String username) throws Exception
     {
+        // 登录口令只从本机忽略配置读取，避免真实 HTTP 验收把共享 fixture 凭据写入仓库。
+        String accountPassword = requireEnvironment(
+                "FLOWABLE_RBAC_WORKFLOW_ADMIN_PASSWORD");
         JsonNode response = requireCode(jsonRequest("POST", "/login", null,
                 objectMapper.createObjectNode().put("username", username)
-                        .put("password", TEST_ACCOUNT_PASSWORD).put("code", "")
+                        .put("password", accountPassword).put("code", "")
                         .put("uuid", "").toString()), 200);
         String token = response.path("token").asText();
         assertThat(token).isNotBlank();
