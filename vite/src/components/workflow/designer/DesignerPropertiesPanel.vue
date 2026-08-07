@@ -129,6 +129,13 @@
                 :data-sources="sqlDataSources"
                 @change="emit('service-task-change')"
               />
+              <BpmnEventRaiseEditor
+                v-else-if="selectedExtensionImplementation === 'RAISE_BPMN_EVENT'"
+                v-model="state.extensionConfig"
+                :error-options="errorEventOptions"
+                :escalation-options="escalationEventOptions"
+                @change="emit('service-task-change')"
+              />
               <el-form-item v-else label="处理器配置" required>
                 <el-input v-model="state.extensionConfig" type="textarea" :rows="5" maxlength="16384" @change="emit('service-task-change')" />
               </el-form-item>
@@ -169,8 +176,18 @@
               <el-form-item label="事件定义">
                 <el-input :model-value="eventDefinitionLabel" readonly />
               </el-form-item>
-              <el-form-item v-if="flags.referenceEvent" label="事件引用">
-                <el-input v-model="state.eventReference" maxlength="128" placeholder="消息、信号、错误或升级的稳定 key" @change="emit('event-change')" />
+              <el-form-item v-if="flags.businessReferenceEvent" label="业务编码" required>
+                <el-select v-model="state.eventReference" filterable :loading="eventCodeLoading" @change="emit('event-change')">
+                  <el-option
+                    v-for="option in businessEventOptions"
+                    :key="option.eventCodeId"
+                    :label="`${option.eventName} · ${option.eventCode}`"
+                    :value="option.eventCode"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item v-else-if="flags.referenceEvent" label="事件引用">
+                <el-input v-model="state.eventReference" maxlength="128" placeholder="消息或信号的稳定 key" @change="emit('event-change')" />
               </el-form-item>
               <template v-if="flags.timerEvent">
                 <el-form-item label="时间类型">
@@ -185,7 +202,14 @@
                 </el-form-item>
               </template>
               <el-form-item v-if="flags.boundaryEvent" label="中断附着活动">
-                <el-switch v-model="state.cancelActivity" @change="emit('event-change')" />
+                <el-switch
+                  v-model="state.cancelActivity"
+                  :disabled="state.eventDefinitionType === 'bpmn:ErrorEventDefinition'"
+                  @change="emit('event-change')"
+                />
+                <div v-if="state.eventDefinitionType === 'bpmn:ErrorEventDefinition'" class="form-tip">
+                  BPMN Error 固定中断当前活动；需要保留主路径时请使用非中断升级边界。
+                </div>
               </el-form-item>
             </template>
           </el-collapse-item>
@@ -276,6 +300,7 @@ import EmbeddedFormFieldEditor from './EmbeddedFormFieldEditor.vue'
 import CelExpressionEditor from './CelExpressionEditor.vue'
 import HttpConnectorEditor from './HttpConnectorEditor.vue'
 import SqlConnectorEditor from './SqlConnectorEditor.vue'
+import BpmnEventRaiseEditor from './BpmnEventRaiseEditor.vue'
 import BusinessListenerEditor from './BusinessListenerEditor.vue'
 import ExtensionPropertyEditor from './ExtensionPropertyEditor.vue'
 
@@ -298,7 +323,10 @@ const props = defineProps({
   dmnOptions: { type: Array, default: () => [] },
   dmnLoading: { type: Boolean, default: false },
   listenerOptions: { type: Array, default: () => [] },
-  listenerLoading: { type: Boolean, default: false }
+  listenerLoading: { type: Boolean, default: false },
+  errorEventOptions: { type: Array, default: () => [] },
+  escalationEventOptions: { type: Array, default: () => [] },
+  eventCodeLoading: { type: Boolean, default: false }
 })
 
 const emit = defineEmits([
@@ -320,6 +348,14 @@ const hasBusinessSection = computed(() => Object.values(props.flags).some(Boolea
 const selectedExtensionType = computed(() => props.extensionOptions.find(option => (
   option.extensionKey === props.state.extensionKey
 ))?.extensionType || '')
+const selectedExtensionImplementation = computed(() => props.extensionOptions.find(option => (
+  option.extensionKey === props.state.extensionKey
+))?.implementationKey || '')
+const businessEventOptions = computed(() => (
+  props.state.eventDefinitionType === 'bpmn:ErrorEventDefinition'
+    ? props.errorEventOptions
+    : props.escalationEventOptions
+))
 // 动态多实例只能用于 UserTask；其他活动仍可配置标准串行或并行多实例。
 const activityLoopOptions = computed(() => props.multiInstanceOptions.filter(option => (
   option.value !== 'controlled' || props.flags.userTask

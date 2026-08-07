@@ -37,6 +37,9 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_connector_invocation`",
                 "create table if not exists `wf_integration_credential`",
                 "create table if not exists `wf_runtime_event_request`",
+                "create table if not exists `wf_bpmn_event_code`",
+                "create table if not exists `wf_bpmn_event_audit`",
+                "create table if not exists `wf_bpmn_event_notification`",
                 "create table if not exists `wf_attachment_quota_guard`",
                 "create table if not exists `wf_attachment`")
                 .doesNotContain("drop table");
@@ -115,6 +118,13 @@ class WorkflowBusinessDdlContractTest
                 "integration_credential_invalid_row",
                 "runtime_event_invalid_row",
                 "runtime_event_missing_credential");
+        assertThat(normalized).contains(
+                "workflow_bpmn_event_tables",
+                "workflow_bpmn_event_constraints",
+                "workflow_bpmn_event_data_integrity",
+                "event_code_invalid_row",
+                "event_audit_invalid_row",
+                "event_notification_invalid_row");
     }
 
     /**

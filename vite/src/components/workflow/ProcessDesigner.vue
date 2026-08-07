@@ -58,6 +58,9 @@
         :dmn-loading="dmnLoading"
         :listener-options="businessListenerOptions"
         :listener-loading="extensionLoading"
+        :error-event-options="errorEventOptions"
+        :escalation-event-options="escalationEventOptions"
+        :event-code-loading="eventCodeLoading"
         @common-change="updateCommonProperties"
         @id-change="updateElementId"
         @process-change="updateProcessProperties"
@@ -131,6 +134,7 @@ import { listCelExtensionOptions, listFormFieldExtensionOptions, listHttpExtensi
 import { listConnectorEndpointOptions } from '@/api/workflow/connector'
 import { listSqlDataSourceOptions } from '@/api/workflow/sqlDatasource'
 import { listDmnDecisionOptions } from '@/api/workflow/dmn'
+import { listBpmnEventCodeOptions } from '@/api/workflow/bpmnEvent'
 import flowableModdle from './bpmn/flowableModdle'
 import { normalizeTaskListenerXml } from './taskListenerXml'
 import DesignerToolbar from './designer/DesignerToolbar.vue'
@@ -268,6 +272,10 @@ const propertyFlags = computed(() => {
       'bpmn:ErrorEventDefinition',
       'bpmn:EscalationEventDefinition'
     ].includes(eventDefinitionType),
+    businessReferenceEvent: [
+      'bpmn:ErrorEventDefinition',
+      'bpmn:EscalationEventDefinition'
+    ].includes(eventDefinitionType),
     timerEvent: eventDefinitionType === 'bpmn:TimerEventDefinition',
     boundaryEvent: isType('bpmn:BoundaryEvent'),
     listenerSupported: isProcess.value || isType('bpmn:FlowNode'),
@@ -306,6 +314,10 @@ const extensionLoading = ref(false)
 // dmnOptions 只包含服务端过滤后的来源决策最新版本，每项仍以精确 decisionId 作为作者引用。
 const dmnOptions = ref([])
 const dmnLoading = ref(false)
+// 错误与升级目录来自正式数据库，作者 XML 只保存稳定编码。
+const errorEventOptions = ref([])
+const escalationEventOptions = ref([])
+const eventCodeLoading = ref(false)
 let modeler
 let changeTimer
 let systemThemeQuery
@@ -1094,6 +1106,13 @@ function updateExtensionSelection() {
       parameters: {},
       maxRows: 100
     })
+  } else if (selectedOption?.implementationKey === 'RAISE_BPMN_EVENT') {
+    propertyState.extensionConfig = JSON.stringify({
+      eventType: 'ERROR',
+      eventCode: errorEventOptions.value[0]?.eventCode || '',
+      sourceType: 'SERVICE_TASK',
+      operator: 'ALWAYS'
+    })
   } else {
     propertyState.extensionConfig = '{}'
   }
@@ -1144,15 +1163,18 @@ async function loadDmnOptions() {
  */
 async function loadExtensionOptions() {
   extensionLoading.value = true
+  eventCodeLoading.value = true
   try {
-    const [javaResponse, celResponse, httpResponse, sqlResponse, formFieldResponse, endpointResponse, sqlSourceResponse] = await Promise.all([
+    const [javaResponse, celResponse, httpResponse, sqlResponse, formFieldResponse, endpointResponse, sqlSourceResponse, errorCodeResponse, escalationCodeResponse] = await Promise.all([
       listJavaExtensionOptions(),
       listCelExtensionOptions(),
       listHttpExtensionOptions(),
       listSqlExtensionOptions(),
       listFormFieldExtensionOptions(),
       listConnectorEndpointOptions(),
-      listSqlDataSourceOptions()
+      listSqlDataSourceOptions(),
+      listBpmnEventCodeOptions('ERROR'),
+      listBpmnEventCodeOptions('ESCALATION')
     ])
     extensionOptions.value = [
       ...(Array.isArray(javaResponse?.data) ? javaResponse.data : []),
@@ -1163,14 +1185,19 @@ async function loadExtensionOptions() {
     formFieldOptions.value = Array.isArray(formFieldResponse?.data) ? formFieldResponse.data : []
     connectorEndpoints.value = Array.isArray(endpointResponse?.data) ? endpointResponse.data : []
     sqlDataSources.value = Array.isArray(sqlSourceResponse?.data) ? sqlSourceResponse.data : []
+    errorEventOptions.value = Array.isArray(errorCodeResponse?.data) ? errorCodeResponse.data : []
+    escalationEventOptions.value = Array.isArray(escalationCodeResponse?.data) ? escalationCodeResponse.data : []
   } catch (error) {
     extensionOptions.value = []
     formFieldOptions.value = []
     connectorEndpoints.value = []
     sqlDataSources.value = []
+    errorEventOptions.value = []
+    escalationEventOptions.value = []
     emit('error', error)
   } finally {
     extensionLoading.value = false
+    eventCodeLoading.value = false
   }
 }
 
@@ -2084,7 +2111,31 @@ function validateDiagram() {
     const loopError = validateUserTaskMultiInstance(task)
     if (loopError) return loopError
   }
+  const businessBoundaries = registry.filter(element => element.type === 'bpmn:BoundaryEvent')
+  for (const element of businessBoundaries) {
+    const definition = element.businessObject.eventDefinitions?.[0]
+    const businessType = definition?.$type
+    if (!['bpmn:ErrorEventDefinition', 'bpmn:EscalationEventDefinition'].includes(businessType)) continue
+    const allowed = businessType === 'bpmn:ErrorEventDefinition' ? errorEventOptions.value : escalationEventOptions.value
+    if (!allowed.some(option => option.eventCode === readEventReference(definition))) {
+      return '错误或升级边界必须选择已启用的正式业务编码'
+    }
+    if (businessType === 'bpmn:ErrorEventDefinition' && element.businessObject.cancelActivity === false) {
+      return '错误边界必须使用中断语义'
+    }
+  }
   return ''
+}
+
+/**
+ * 从错误或升级事件定义读取最终作者编码。
+ * @param {object} eventDefinition bpmn-js 事件定义对象。
+ * @returns {string} 根引用中的稳定业务编码。
+ */
+function readEventReference(eventDefinition) {
+  const config = eventReferenceConfig(eventDefinition?.$type)
+  const reference = config ? eventDefinition?.[config.referenceProperty] : undefined
+  return String(reference?.[config?.keyProperty] || reference?.name || '').trim()
 }
 
 /**

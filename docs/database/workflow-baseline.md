@@ -30,10 +30,10 @@
 | 若依 | 20 |
 | Quartz | 11 |
 | Flowable Common/Process/History/DMN | 36 |
-| ApprovaPlat `wf_*` | 17 |
-| 合计 | 84 |
+| ApprovaPlat `wf_*` | 20 |
+| 合计 | 87 |
 
-17 张业务表：
+20 张业务表：
 
 - `wf_category`
 - `wf_form`
@@ -52,8 +52,11 @@
 - `wf_sql_datasource`
 - `wf_integration_credential`
 - `wf_runtime_event_request`
+- `wf_bpmn_event_code`
+- `wf_bpmn_event_audit`
+- `wf_bpmn_event_notification`
 
-菜单基线为 2 个目录、17 个页面、53 个按钮，共 72 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
+菜单基线为 2 个目录、18 个页面、57 个按钮，共 77 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
 
 ## 结构约束
 
@@ -70,7 +73,7 @@
 2. `back/sql/flowable/verify/8.0.0__verify_workflow_business.sql`
 3. `back/sql/flowable/verify/8.0.0__verify_workflow_menu.sql`
 
-三组脚本共定义 38 项只读检查，所有结果都必须为 `PASS`。还必须核对总表数 84、分项表数 `20/11/36/17`、菜单 72 条以及应用账号只拥有目标 schema 的最小 DML 权限。
+三组脚本共定义 38 项只读检查，所有结果都必须为 `PASS`。还必须核对总表数 87、分项表数 `20/11/36/20`、菜单 77 条以及应用账号只拥有目标 schema 的最小 DML 权限。
 
 静态契约测试和发布门禁自测不能代替真实 MySQL 空库安装。正式发布前必须保存真实执行日志、表清单、约束结果、`mysqlcheck`、备份恢复和三组验收输出。
 

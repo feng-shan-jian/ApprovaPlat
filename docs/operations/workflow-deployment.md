@@ -52,6 +52,6 @@
 - 后端 liveness、readiness、数据库、Redis 和 `workflowRuntime` 健康均正常。
 - Prometheus 工作流运行快照未过期，清理锁和附件存储没有降级。
 - `flowable.database-schema-update=false`，executor 状态与批准拓扑一致。
-- 84 表、72 条菜单和三组数据库验收通过。
+- 87 表、77 条菜单和三组数据库验收通过。
 - 管理员真实登录成功，五角色权限和核心发起/审批/附件主链通过。
 - 附件目录可写、无符号链接逃逸，并完成真实备份恢复对账。
