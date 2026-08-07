@@ -312,6 +312,9 @@ database_check_detail() {
     flowable_dmn_table_presence|workflow_connector_table_presence)
       printf 'missing_or_invalid=none'
       ;;
+    workflow_schema_table_counts)
+      printf 'total=86, ruoyi=20, quartz=11, flowable=36, workflow=19'
+      ;;
     workflow_connector_columns) printf 'missing=none' ;;
     workflow_business_tables) printf 'present=10, missing=none' ;;
     workflow_business_columns) printf 'missing=none' ;;
@@ -354,7 +357,7 @@ database_check_detail() {
 }
 
 #
-# 写入三套正式只读 SQL 的固定结构和 38 个完整检查项，模拟 mysql --batch --raw 原始输出。
+# 写入三套正式只读 SQL 的固定结构和 39 个完整检查项，模拟 mysql --batch --raw 原始输出。
 # 参数：$1（字符串）目标 TSV 文件。
 # 返回：0 表示数据库验收夹具已按正式脚本顺序写入。
 #
@@ -369,7 +372,8 @@ write_database_verify() {
     deadletter_jobs
   )
   local -a business_checks=(
-    flowable_dmn_table_presence workflow_connector_table_presence workflow_connector_columns
+    workflow_schema_table_counts flowable_dmn_table_presence
+    workflow_connector_table_presence workflow_connector_columns
     workflow_business_tables workflow_business_columns
     wf_attachment_cleanup_retry_columns wf_category_active_code
     workflow_business_indexes workflow_business_checks workflow_business_foreign_keys
@@ -460,7 +464,7 @@ create_fresh_install_evidence() {
       >> "$evidence_dir/backup-smoke/mysqlcheck.txt"
   done
   printf 'empty_schema_table_count=0\n' > "$evidence_dir/empty-schema-check.txt"
-  printf '86\t22\t11\t36\t17\n' > "$evidence_dir/table-counts.tsv"
+  printf '86\t20\t11\t36\t19\n' > "$evidence_dir/table-counts.tsv"
   printf 'PONG\n' > "$evidence_dir/redis-ping.txt"
   if [[ "$previous_release_id" != 'NONE' || -n "$previous_release_dir" ]]; then
     preflight_arguments+=(
@@ -1528,7 +1532,7 @@ main() {
 
   evidence_dir="$TEST_ROOT/rehearsal-invalid-fresh-counts"
   cp -a -- "$TEST_REHEARSAL_ONE_DIR" "$evidence_dir"
-  printf '85\t22\t11\t36\t16\n' \
+  printf '85\t20\t11\t36\t18\n' \
     > "$evidence_dir/fresh-install/table-counts.tsv"
   refresh_rehearsal_manifests "$evidence_dir"
   expect_failure 'rehearsal with invalid namespaced table counts fails' \
@@ -1830,6 +1834,17 @@ main() {
   mv -- "$evidence_dir/database-verify.filtered" "$evidence_dir/database-verify.tsv"
   refresh_evidence_manifest "$evidence_dir"
   expect_failure 'database PASS with threshold-violating detail fails' \
+    run_release_evidence_gate "$evidence_dir" production
+
+  evidence_dir="$TEST_ROOT/evidence-database-schema-count-mismatch"
+  create_production_evidence \
+    "$evidence_dir" "$TEST_ROOT/current-1" 'current-1' \
+    "$TEST_ROOT/previous-1" 'previous-1'
+  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_schema_table_counts" { $3="total=86, ruoyi=22, quartz=11, flowable=36, workflow=17" } { print }' \
+    "$evidence_dir/database-verify.tsv" > "$evidence_dir/database-verify.filtered"
+  mv -- "$evidence_dir/database-verify.filtered" "$evidence_dir/database-verify.tsv"
+  refresh_evidence_manifest "$evidence_dir"
+  expect_failure 'database PASS with misclassified workflow tables fails' \
     run_release_evidence_gate "$evidence_dir" production
 
   evidence_dir="$TEST_ROOT/evidence-fake-business-pass"

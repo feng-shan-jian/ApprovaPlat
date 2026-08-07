@@ -86,6 +86,12 @@ class WorkflowBusinessDdlContractTest
                 "(?im)^\\s*(insert|update|delete|create|drop|alter|truncate|replace|call|set)\\b");
         assertThat(mutation.matcher(verification).find()).isFalse();
         assertThat(normalized).contains(
+                "workflow_schema_table_counts",
+                "total=",
+                "ruoyi=",
+                "quartz=",
+                "flowable=",
+                "workflow=",
                 "workflow_business_tables",
                 "workflow_business_columns",
                 "wf_category_active_code",

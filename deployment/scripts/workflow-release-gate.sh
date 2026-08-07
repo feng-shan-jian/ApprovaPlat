@@ -1185,6 +1185,8 @@ gate_validate_database_result() {
       if (check_name == "flowable_dmn_table_presence" ||
           check_name == "workflow_connector_table_presence")
         return detail == "missing_or_invalid=none"
+      if (check_name == "workflow_schema_table_counts")
+        return detail == "total=86, ruoyi=20, quartz=11, flowable=36, workflow=19"
       if (check_name == "workflow_connector_columns")
         return detail == "missing=none"
       if (check_name == "workflow_business_tables")
@@ -1255,6 +1257,7 @@ gate_validate_database_result() {
       required["1|deadletter_jobs"] = 1
 
       required["2|flowable_dmn_table_presence"] = 1
+      required["2|workflow_schema_table_counts"] = 1
       required["2|workflow_connector_table_presence"] = 1
       required["2|workflow_connector_columns"] = 1
       required["2|workflow_business_tables"] = 1
@@ -1311,7 +1314,7 @@ gate_validate_database_result() {
       passed++
     }
     END {
-      if (section != 3 || passed != 38) exit 1
+      if (section != 3 || passed != 39) exit 1
       for (key in required) {
         if (seen[key] != 1) exit 1
       }
@@ -1850,7 +1853,7 @@ gate_validate_evidence_profile() {
     gate_require_exact_line "$evidence_dir/empty-schema-check.txt" \
       'empty_schema_table_count=0' 'empty schema evidence'
     gate_require_exact_line "$evidence_dir/table-counts.tsv" \
-      $'86\t22\t11\t36\t17' 'table-counts.tsv'
+      $'86\t20\t11\t36\t19' 'table-counts.tsv'
     gate_validate_backup_restore "$evidence_dir" 'fresh-install evidence'
     gate_require_exact_line "$evidence_dir/redis-ping.txt" 'PONG' 'Redis PING evidence'
     gate_require_exact_line "$evidence_dir/mysql-connectivity.txt" '1' 'MySQL connectivity evidence'

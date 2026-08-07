@@ -1,6 +1,34 @@
 -- Flowable 8 工作流业务表只读验收脚本。
 -- 所有检查都应返回 PASS；本脚本不会创建、修改或删除数据。
 
+SELECT
+    'workflow_schema_table_counts' AS check_name,
+    CASE
+        WHEN COUNT(*) = 86
+         AND SUM(LEFT(UPPER(TABLE_NAME), 4) <> 'ACT_'
+                 AND LEFT(UPPER(TABLE_NAME), 4) <> 'FLW_'
+                 AND LEFT(UPPER(TABLE_NAME), 3) <> 'WF_'
+                 AND LEFT(UPPER(TABLE_NAME), 5) <> 'QRTZ_') = 20
+         AND SUM(LEFT(UPPER(TABLE_NAME), 5) = 'QRTZ_') = 11
+         AND SUM(LEFT(UPPER(TABLE_NAME), 4) IN ('ACT_', 'FLW_')) = 36
+         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 19
+        THEN 'PASS'
+        ELSE 'FAIL'
+    END AS result,
+    CONCAT(
+        'total=', COUNT(*),
+        ', ruoyi=', SUM(LEFT(UPPER(TABLE_NAME), 4) <> 'ACT_'
+            AND LEFT(UPPER(TABLE_NAME), 4) <> 'FLW_'
+            AND LEFT(UPPER(TABLE_NAME), 3) <> 'WF_'
+            AND LEFT(UPPER(TABLE_NAME), 5) <> 'QRTZ_'),
+        ', quartz=', SUM(LEFT(UPPER(TABLE_NAME), 5) = 'QRTZ_'),
+        ', flowable=', SUM(LEFT(UPPER(TABLE_NAME), 4) IN ('ACT_', 'FLW_')),
+        ', workflow=', SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_')
+    ) AS detail
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_TYPE = 'BASE TABLE';
+
 WITH expected_dmn_tables AS (
     SELECT 'ACT_DMN_DEPLOYMENT' AS table_name
     UNION ALL SELECT 'ACT_DMN_DEPLOYMENT_RESOURCE'
