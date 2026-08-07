@@ -848,7 +848,7 @@ class WorkflowModelServiceTest
                 new WorkflowBpmnFormReference(WorkflowFormSourceType.EMBEDDED, null,
                         WorkflowFormSourceType.EMBEDDED_FORM_KEY, "approve", "审批",
                         "{\"fields\":[]}"));
-        when(bpmnService.validate(source)).thenReturn(document(references));
+        when(bpmnService.validateForSave(source)).thenReturn(document(references));
         when(formMapper.selectById(1L)).thenReturn(activeForm(1L, "申请表", "{\"v\":1}"));
 
         DeploymentBuilder builder = mock(DeploymentBuilder.class);
