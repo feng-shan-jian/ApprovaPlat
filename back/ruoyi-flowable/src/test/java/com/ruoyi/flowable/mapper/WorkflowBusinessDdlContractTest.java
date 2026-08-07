@@ -39,6 +39,10 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_connector_invocation`",
                 "create table if not exists `wf_integration_credential`",
                 "create table if not exists `wf_runtime_event_request`",
+                "create table if not exists `wf_collaboration_channel`",
+                "create table if not exists `wf_collaboration_message`",
+                "create table if not exists `wf_collaboration_outbox`",
+                "create table if not exists `wf_collaboration_message_audit`",
                 "create table if not exists `wf_bpmn_event_code`",
                 "create table if not exists `wf_bpmn_event_audit`",
                 "create table if not exists `wf_bpmn_event_notification`",
@@ -197,6 +201,13 @@ class WorkflowBusinessDdlContractTest
                 "unique key `uk_wf_integration_token_prefix`",
                 "constraint `fk_wf_runtime_event_credential`",
                 "constraint `chk_wf_runtime_event_completion`")
+                .contains(
+                        "unique key `uk_wf_collab_message_sequence`",
+                        "unique key `uk_wf_collab_outbox_sequence`",
+                        "key `idx_wf_collab_outbox_due`",
+                        "constraint `fk_wf_collab_outbox_endpoint`",
+                        "constraint `chk_wf_collab_outbox_lease`",
+                        "'collaboration_outbox_v1'")
                 .doesNotContain("token_plaintext", "access_token", "secret_token");
     }
 

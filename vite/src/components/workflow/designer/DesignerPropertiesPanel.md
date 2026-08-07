@@ -33,7 +33,7 @@
 | `selected` | `boolean` | 当前是否存在选中元素。 |
 | `title` | `string` | 选中 BPMN 类型的业务标题。 |
 | `state` | `object` | 父组件从 moddle 对象回读的响应式属性状态；表单域包含 `formSource`、`formKey` 和 `embeddedFields`。 |
-| `flags` | `object` | `process`、`activity`、`event` 等类型能力开关。 |
+| `flags` | `object` | `process`、`participant`、`activity`、`event` 等类型能力开关；Participant 需要填写 `state.processRef`。 |
 | `forms` | `array` | 可选择的正式 `wf_form` 列表。 |
 | `controlledLoopFieldOptions` | `array` | 当前 UserTask 正式表单中的可写标量字段、静态值目录及是否禁止自由输入。 |
 | `identityOptions` | `object` | 办理人、候选用户和候选组目录。 |
@@ -48,7 +48,7 @@
 
 ## Emits
 
-组件按属性域发出 `common-change`、`id-change`、`process-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、两类业务监听器事件和 `extension-properties-change`。
+组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、两类业务监听器事件和 `extension-properties-change`。
 
 ## 公开方法
 
@@ -60,6 +60,8 @@
 - 组件不直接修改 BPMN moddle 对象，父组件必须使用 `modeling.updateProperties` 或 `updateModdleProperties`，确保撤销、重做和保存快照一致。
 - 正式模板和内嵌 FormData 使用明确的分段来源选择。内嵌字段由 `EmbeddedFormFieldEditor` 编辑；父组件负责让 `flowable:formKey` 与 `flowable:formProperty` 始终互斥。
 - 消息、信号、错误和升级引用由父组件解析为 Definitions 根元素；定时器表达式写入对应 `FormalExpression`。
+- Participant 的 `processRef` 由面板显式编辑并写入标准 BPMN 属性；服务端保存/部署时再次核验流程定义存在性和可执行性，避免只绘制池而形成假运行能力。
+- MessageFlow 源 SendTask 选择 `COLLABORATION_OUTBOX_V1` 后使用专用编辑器，只保存端点键、消息名、目标流程、关联变量和变量白名单；部署冻结认证端点，运行时事务登记 outbox。
 - 异步开关只负责建模。生产能否启用仍由后端 executor、拓扑和启动门禁共同决定。
 - ServiceTask 只能选择正式扩展目录项并填写 JSON 对象配置。父组件写入固定调度器和作者字段；部署时由后端冻结精确版本、处理器、配置及校验和。
 - BusinessRuleTask 与通用 ServiceTask 完全分离，只能选择后端 DMN 来源目录并写入单一 `flowable:rules=decisionId`；部署编译器再绑定同部署冻结副本。

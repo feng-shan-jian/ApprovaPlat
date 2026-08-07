@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfCollaborationOutboxMapper">
+  <resultMap id="OutboxResult" type="com.ruoyi.flowable.domain.WfCollaborationOutbox">
+    <id property="messageId" column="message_id"/><result property="channelId" column="channel_id"/>
+    <result property="sequenceNo" column="sequence_no"/><result property="sourceProcessDefinitionKey" column="source_process_definition_key"/>
+    <result property="sourceProcessInstanceId" column="source_process_instance_id"/><result property="sourceExecutionId" column="source_execution_id"/>
+    <result property="sourceElementId" column="source_element_id"/><result property="messageName" column="message_name"/>
+    <result property="targetProcessDefinitionKey" column="target_process_definition_key"/><result property="correlationKey" column="correlation_key"/>
+    <result property="endpointId" column="endpoint_id"/><result property="endpointRevision" column="endpoint_revision"/>
+    <result property="requestPath" column="request_path"/><result property="deliveryConfigJson" column="delivery_config_json"/>
+    <result property="variablesJson" column="variables_json"/><result property="payloadSha256" column="payload_sha256"/>
+    <result property="status" column="status"/><result property="attemptCount" column="attempt_count"/><result property="maxAttempts" column="max_attempts"/>
+    <result property="compensationCount" column="compensation_count"/><result property="revisionNo" column="revision_no"/>
+    <result property="leaseOwner" column="lease_owner"/><result property="leaseUntil" column="lease_until"/>
+    <result property="nextAttemptTime" column="next_attempt_time"/><result property="lastHttpStatus" column="last_http_status"/>
+    <result property="lastErrorCode" column="last_error_code"/><result property="lastErrorSummary" column="last_error_summary"/>
+    <result property="createTime" column="create_time"/><result property="lastAttemptTime" column="last_attempt_time"/><result property="completeTime" column="complete_time"/>
+  </resultMap>
+  <sql id="Columns">message_id,channel_id,sequence_no,source_process_definition_key,source_process_instance_id,source_execution_id,source_element_id,message_name,target_process_definition_key,correlation_key,endpoint_id,endpoint_revision,request_path,delivery_config_json,variables_json,payload_sha256,status,attempt_count,max_attempts,compensation_count,revision_no,lease_owner,lease_until,next_attempt_time,last_http_status,last_error_code,last_error_summary,create_time,last_attempt_time,complete_time</sql>
+  <insert id="insert">
+    insert into wf_collaboration_outbox
+      (message_id,channel_id,sequence_no,source_process_definition_key,source_process_instance_id,
+       source_execution_id,source_element_id,message_name,target_process_definition_key,correlation_key,
+       endpoint_id,endpoint_revision,request_path,delivery_config_json,variables_json,payload_sha256,
+       status,attempt_count,max_attempts,next_attempt_time)
+    values
+      (#{messageId},#{channelId},#{sequenceNo},#{sourceProcessDefinitionKey},#{sourceProcessInstanceId},
+       #{sourceExecutionId},#{sourceElementId},#{messageName},#{targetProcessDefinitionKey},#{correlationKey},
+       #{endpointId},#{endpointRevision},#{requestPath},#{deliveryConfigJson},#{variablesJson},#{payloadSha256},
+       'PENDING',0,#{maxAttempts},current_timestamp(3))
+  </insert>
+  <select id="selectList" resultMap="OutboxResult">
+    select <include refid="Columns"/> from wf_collaboration_outbox
+    order by create_time desc,message_id desc limit 1000
+  </select>
+  <select id="selectById" resultMap="OutboxResult">
+    select <include refid="Columns"/> from wf_collaboration_outbox where message_id=#{messageId}
+  </select>
+  <select id="selectByIdForUpdate" resultMap="OutboxResult">
+    select <include refid="Columns"/> from wf_collaboration_outbox where message_id=#{messageId} for update
+  </select>
+  <select id="selectNextDueForUpdate" resultMap="OutboxResult">
+    select <include refid="Columns"/> from wf_collaboration_outbox current_message
+    where current_message.status in ('PENDING','RETRYING','DELIVERING')
+      and current_message.next_attempt_time &lt;= current_timestamp(3)
+      and (current_message.status &lt;&gt; 'DELIVERING' or current_message.lease_until &lt;= current_timestamp(3))
+      and not exists
+      (
+        select 1 from wf_collaboration_outbox previous_message
+        where previous_message.channel_id=current_message.channel_id
+          and previous_message.sequence_no &lt; current_message.sequence_no
+          and previous_message.status not in ('PROCESSED','CANCELLED')
+      )
+    order by current_message.next_attempt_time,current_message.create_time,current_message.message_id
+    limit 1 for update skip locked
+  </select>
+  <update id="claim">
+    update wf_collaboration_outbox
+    set attempt_count=attempt_count+1,
+        status='DELIVERING',lease_owner=#{leaseOwner},
+        lease_until=date_add(current_timestamp(3),interval #{leaseSeconds} second),
+        last_attempt_time=current_timestamp(3),revision_no=revision_no+1
+    where message_id=#{messageId} and revision_no=#{expectedRevision}
+      and ((status in ('PENDING','RETRYING') and attempt_count &lt; max_attempts)
+        or (status='DELIVERING' and lease_until &lt;= current_timestamp(3)))
+  </update>
+  <update id="markProcessed">
+    update wf_collaboration_outbox
+    set status='PROCESSED',last_http_status=#{httpStatus},last_error_code=null,last_error_summary=null,
+        lease_owner=null,lease_until=null,complete_time=current_timestamp(3),revision_no=revision_no+1
+    where message_id=#{messageId} and status='DELIVERING' and lease_owner=#{leaseOwner}
+      and revision_no=#{expectedRevision}
+  </update>
+  <update id="markFailed">
+    update wf_collaboration_outbox
+    set status=#{targetStatus},last_http_status=#{httpStatus},last_error_code=#{errorCode},
+        last_error_summary=#{errorSummary},lease_owner=null,lease_until=null,
+        next_attempt_time=date_add(current_timestamp(3),interval #{delaySeconds} second),
+        complete_time=case when #{targetStatus}='DEAD_LETTER' then current_timestamp(3) else null end,
+        revision_no=revision_no+1
+    where message_id=#{messageId} and status='DELIVERING' and lease_owner=#{leaseOwner}
+      and revision_no=#{expectedRevision}
+  </update>
+  <update id="compensate">
+    update wf_collaboration_outbox
+    set status='RETRYING',attempt_count=0,compensation_count=compensation_count+1,
+        lease_owner=null,lease_until=null,next_attempt_time=current_timestamp(3),complete_time=null,
+        last_error_code=null,last_error_summary=null,revision_no=revision_no+1
+    where message_id=#{messageId} and status='DEAD_LETTER' and revision_no=#{expectedRevision}
+  </update>
+  <update id="cancel">
+    update wf_collaboration_outbox
+    set status='CANCELLED',lease_owner=null,lease_until=null,complete_time=current_timestamp(3),
+        revision_no=revision_no+1
+    where message_id=#{messageId} and status in ('PENDING','RETRYING','DEAD_LETTER')
+      and revision_no=#{expectedRevision}
+  </update>
+</mapper>

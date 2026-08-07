@@ -75,8 +75,7 @@ const groups = Object.freeze([
     items: [
       paletteItem('parallel-gateway', '并行网关', 'bpmn:ParallelGateway', 'bpmn-icon-gateway-parallel'),
       paletteItem('inclusive-gateway', '包容网关', 'bpmn:InclusiveGateway', 'bpmn-icon-gateway-or'),
-      paletteItem('event-gateway', '事件网关', 'bpmn:EventBasedGateway', 'bpmn-icon-gateway-eventbased'),
-      paletteItem('complex-gateway', '复杂网关', 'bpmn:ComplexGateway', 'bpmn-icon-gateway-complex')
+      paletteItem('event-gateway', '事件网关', 'bpmn:EventBasedGateway', 'bpmn-icon-gateway-eventbased')
     ]
   },
   {
@@ -103,7 +102,7 @@ const groups = Object.freeze([
       paletteItem('data-store', '数据存储', 'bpmn:DataStoreReference', 'bpmn-icon-data-store'),
       paletteItem('group', '分组', 'bpmn:Group', 'bpmn-icon-group'),
       paletteItem('annotation', '文本注释', 'bpmn:TextAnnotation', 'bpmn-icon-text-annotation'),
-      paletteItem('connect', '消息流 / 关联', '', 'bpmn-icon-connection-multi', { action: 'global-connect' })
+      paletteItem('connect', '协作消息流 / 关联', '', 'bpmn-icon-connection-multi', { action: 'global-connect' })
     ]
   }
 ])

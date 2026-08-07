@@ -52,6 +52,7 @@ final class WorkflowRbacMatrix
             WfSqlDataSourceController.class,
             WfIntegrationCredentialController.class,
             WfRuntimeEventAuditController.class,
+            WfCollaborationController.class,
             WfFormController.class,
             WfIdentityController.class,
             WfInstanceController.class,

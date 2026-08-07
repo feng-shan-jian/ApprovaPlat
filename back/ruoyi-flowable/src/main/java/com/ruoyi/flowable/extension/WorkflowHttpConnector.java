@@ -43,6 +43,8 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class WorkflowHttpConnector
 {
+    /** ApprovaPlat 协作协议固定使用的集成认证请求头。 */
+    private static final String COLLABORATION_TOKEN_HEADER = "X-Integration-Token";
     /** 固定实现键。 */
     public static final String IMPLEMENTATION_KEY = "HTTP_CONNECTOR_V1";
     /** 单次请求或响应正文上限。 */
@@ -150,6 +152,109 @@ public class WorkflowHttpConnector
         catch (JacksonException exception)
         {
             throw new ServiceException("HTTP 连接器冻结配置无法序列化", HttpStatus.ERROR);
+        }
+    }
+
+    /**
+     * 为协作 outbox 冻结一个只允许 POST 的正式端点快照。
+     * @param endpointKey String，端点目录稳定键
+     * @param path String，协作消息接收路径
+     * @return String，不含密钥正文的规范冻结配置
+     */
+    public String freezePostEndpoint(String endpointKey, String path)
+    {
+        ObjectNode author = objectMapper.createObjectNode();
+        author.put("endpointKey", endpointKey);
+        author.put("method", "POST");
+        author.put("path", path);
+        // 协作 outbox 自己持久化重试，因此这里只复用端点冻结和认证能力。
+        String frozenConfig = freezeConfig(author, true);
+        requireCollaborationAuthentication(readFrozenConfig(frozenConfig).endpoint());
+        return frozenConfig;
+    }
+
+    /**
+     * 使用 HTTP 连接器已经冻结的端点、网络范围和认证配置投递协作 JSON。
+     * @param frozenConfigJson String，部署时冻结的 HTTP 端点配置
+     * @param idempotencyKey String，出站消息稳定幂等键
+     * @param body byte[]，有界协作请求 JSON
+     * @return WorkflowHttpDeliveryResult，HTTP 状态和有界响应正文
+     */
+    public WorkflowHttpDeliveryResult postFrozenJson(String frozenConfigJson,
+            String idempotencyKey, byte[] body)
+    {
+        if (body == null || body.length == 0 || body.length > MAX_BODY_BYTES)
+        {
+            throw new ServiceException("协作消息请求正文大小不合法", HttpStatus.ERROR);
+        }
+        try
+        {
+            JsonNode config = objectMapper.readTree(frozenConfigJson);
+            FrozenConfig frozen = parseFrozen(config);
+            if (!"POST".equals(frozen.author().method()))
+            {
+                throw new ServiceException("协作消息端点只允许 POST", HttpStatus.ERROR);
+            }
+            requireCollaborationAuthentication(frozen.endpoint());
+            HttpResponse<InputStream> response = sendBytes(frozen, idempotencyKey, body);
+            return new WorkflowHttpDeliveryResult(response.statusCode(),
+                    readBounded(response.body(), MAX_BODY_BYTES));
+        }
+        catch (HttpTimeoutException exception)
+        {
+            throw new ServiceException("协作消息 HTTP 投递超时", HttpStatus.ERROR)
+                    .setSubCode("COLLAB_OUTBOX_TIMEOUT");
+        }
+        catch (IOException exception)
+        {
+            throw new ServiceException("协作消息 HTTP 网络投递失败", HttpStatus.ERROR)
+                    .setSubCode("COLLAB_OUTBOX_IO_ERROR");
+        }
+        catch (InterruptedException exception)
+        {
+            Thread.currentThread().interrupt();
+            throw new ServiceException("协作消息 HTTP 投递被中断", HttpStatus.ERROR)
+                    .setSubCode("COLLAB_OUTBOX_INTERRUPTED");
+        }
+        catch (JacksonException exception)
+        {
+            throw new ServiceException("协作消息冻结端点配置损坏", HttpStatus.ERROR)
+                    .setSubCode("COLLAB_OUTBOX_CONFIG_INVALID");
+        }
+    }
+
+    /**
+     * 解析刚冻结的协作端点配置，部署期也复用运行期的完整快照校验。
+     * @param frozenConfigJson String，不含密钥正文的冻结配置 JSON
+     * @return FrozenConfig，已经通过端点摘要、方法和路径校验的配置
+     */
+    private FrozenConfig readFrozenConfig(String frozenConfigJson)
+    {
+        try
+        {
+            return parseFrozen(objectMapper.readTree(frozenConfigJson));
+        }
+        catch (JacksonException exception)
+        {
+            throw new ServiceException("协作消息冻结端点配置损坏", HttpStatus.ERROR)
+                    .setSubCode("COLLAB_OUTBOX_CONFIG_INVALID");
+        }
+    }
+
+    /**
+     * 强制协作协议使用接收端实际支持的跨系统认证方式，禁止部署无认证或不兼容 Bearer 端点。
+     * @param endpoint EndpointSnapshot，已经冻结且通过摘要校验的端点快照
+     * @return void，认证类型或请求头不兼容时拒绝部署和运行
+     */
+    private void requireCollaborationAuthentication(EndpointSnapshot endpoint)
+    {
+        if (!"API_KEY".equals(endpoint.authType())
+                || !COLLABORATION_TOKEN_HEADER.equalsIgnoreCase(endpoint.apiKeyHeader()))
+        {
+            throw new ServiceException(
+                    "协作消息端点必须使用 X-Integration-Token API Key 认证",
+                    HttpStatus.BAD_REQUEST)
+                    .setSubCode("COLLAB_OUTBOX_AUTH_REQUIRED");
         }
     }
 
@@ -272,6 +377,21 @@ public class WorkflowHttpConnector
     private HttpResponse<InputStream> send(DelegateExecution execution, FrozenConfig frozen,
             String idempotencyKey) throws IOException, InterruptedException
     {
+        return sendBytes(frozen, idempotencyKey, requestBody(execution, frozen.author()));
+    }
+
+    /**
+     * 使用冻结端点发送可选的有界字节正文，连接器和协作 outbox 共用同一安全出口。
+     * @param frozen FrozenConfig，已通过摘要复核的冻结端点
+     * @param idempotencyKey String，稳定幂等键
+     * @param body byte[]，可空请求正文
+     * @return HttpResponse&lt;InputStream&gt;，未读取正文的原始响应
+     * @throws IOException 网络失败
+     * @throws InterruptedException 调用线程被中断
+     */
+    private HttpResponse<InputStream> sendBytes(FrozenConfig frozen, String idempotencyKey,
+            byte[] body) throws IOException, InterruptedException
+    {
         EndpointSnapshot endpoint = frozen.endpoint();
         URI base = URI.create(endpoint.baseUrl());
         requireNetworkScope(base.getHost(), endpoint.networkScope());
@@ -287,7 +407,6 @@ public class WorkflowHttpConnector
                 .header("Accept", "application/json")
                 .header("Idempotency-Key", idempotencyKey);
         applyAuthentication(request, endpoint);
-        byte[] body = requestBody(execution, frozen.author());
         HttpRequest.BodyPublisher publisher = body == null
                 ? HttpRequest.BodyPublishers.noBody()
                 : HttpRequest.BodyPublishers.ofByteArray(body);
@@ -757,6 +876,24 @@ public class WorkflowHttpConnector
     /** 完整运行配置和原始端点节点。 */
     private record FrozenConfig(ParsedConfig author, EndpointSnapshot endpoint,
             ObjectNode endpointNode) { }
+
+    /**
+     * 协作 outbox 使用的有界 HTTP 投递结果。
+     * @param statusCode int，HTTP 状态码
+     * @param body byte[]，最多 64 KiB 的响应正文
+     */
+    public record WorkflowHttpDeliveryResult(int statusCode, byte[] body)
+    {
+        /**
+         * 防止调用方修改内部响应数组。
+         * @return byte[]，响应正文副本
+         */
+        @Override
+        public byte[] body()
+        {
+            return body == null ? new byte[0] : body.clone();
+        }
+    }
 
     /** 表示失败台账已经提交，外层不得重复记录。 */
     private static final class RecordedConnectorFailure extends RuntimeException

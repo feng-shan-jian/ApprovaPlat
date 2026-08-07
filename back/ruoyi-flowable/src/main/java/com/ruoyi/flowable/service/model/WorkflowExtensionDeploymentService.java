@@ -31,6 +31,7 @@ import com.ruoyi.flowable.extension.WorkflowJavaExtensionHandler;
 import com.ruoyi.flowable.extension.WorkflowJavaExtensionHandlerRegistry;
 import com.ruoyi.flowable.extension.WorkflowRaiseBpmnEventHandler;
 import com.ruoyi.flowable.extension.WorkflowHttpConnector;
+import com.ruoyi.flowable.extension.WorkflowCollaborationOutboxHandler;
 import com.ruoyi.flowable.extension.WorkflowSqlConnector;
 import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import tools.jackson.core.JacksonException;
@@ -439,8 +440,16 @@ public class WorkflowExtensionDeploymentService
         if (WorkflowExtensionRegistryService.JAVA_TYPE.equals(version.extensionType()))
         {
             WorkflowJavaExtensionHandler handler = handlerRegistry.require(version.implementationKey());
-            normalizedConfig = WorkflowExtensionJsonCanonicalizer.canonicalize(
-                    handler.validateAndNormalizeConfig(parsedConfig));
+            if (handler instanceof WorkflowCollaborationOutboxHandler collaborationOutbox)
+            {
+                // 协作 SendTask 在部署事务中冻结端点修订；运行时只登记 outbox，不回读可变目录。
+                normalizedConfig = collaborationOutbox.freezeConfig(parsedConfig);
+            }
+            else
+            {
+                normalizedConfig = WorkflowExtensionJsonCanonicalizer.canonicalize(
+                        handler.validateAndNormalizeConfig(parsedConfig));
+            }
         }
         else if (WorkflowExtensionRegistryService.CEL_TYPE.equals(version.extensionType())
                 && WorkflowExtensionRegistryService.CEL_IMPLEMENTATION_KEY

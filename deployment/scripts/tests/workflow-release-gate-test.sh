@@ -313,7 +313,7 @@ database_check_detail() {
       printf 'missing_or_invalid=none'
       ;;
     workflow_schema_table_counts)
-printf 'total=95, ruoyi=20, quartz=11, flowable=36, workflow=28'
+      printf 'total=99, ruoyi=20, quartz=11, flowable=36, workflow=32'
       ;;
     workflow_connector_columns) printf 'missing=none' ;;
     workflow_business_tables) printf 'present=10, missing=none' ;;
@@ -329,14 +329,14 @@ printf 'total=95, ruoyi=20, quartz=11, flowable=36, workflow=28'
       printf 'constraints=1, enforced=YES, canonical_sha256=%064d' 1
       ;;
     workflow_business_data_integrity) printf 'issues=0, detail=none' ;;
-    workflow_runtime_integration_tables) printf 'present=2, missing=none' ;;
+    workflow_runtime_integration_tables) printf 'present=6, missing=none' ;;
     workflow_runtime_integration_columns|workflow_runtime_integration_indexes|workflow_extension_columns)
       printf 'missing=none'
       ;;
     workflow_runtime_integration_checks|workflow_extension_checks)
       printf 'missing_or_unenforced=none'
       ;;
-    workflow_runtime_integration_foreign_keys) printf 'matching=1, expected=1' ;;
+    workflow_runtime_integration_foreign_keys) printf 'matching=5, expected=5' ;;
     workflow_runtime_integration_data_integrity|workflow_extension_data_integrity)
       printf 'issues=0, detail=none'
       ;;
@@ -350,11 +350,11 @@ printf 'total=95, ruoyi=20, quartz=11, flowable=36, workflow=28'
     workflow_bpmn_event_tables) printf 'found=3, expected=3' ;;
     workflow_bpmn_event_constraints) printf 'found=12, expected_at_least=12' ;;
     workflow_bpmn_event_data_integrity) printf 'issues=0' ;;
-    workflow_menu_count) printf 'rows=82, natural_keys=82' ;;
-    workflow_menu_tree) printf 'directories=2, pages=18, buttons=62, invalid_routes=0' ;;
+    workflow_menu_count) printf 'rows=86, natural_keys=86' ;;
+    workflow_menu_tree) printf 'directories=2, pages=19, buttons=65, invalid_routes=0' ;;
     workflow_retired_permissions) printf 'legacy_rows=0' ;;
     workflow_roles) printf 'active_roles=5, duplicate_roles=0' ;;
-    workflow_admin_menu_scope) printf 'assigned=82, expected=82' ;;
+    workflow_admin_menu_scope) printf 'assigned=86, expected=86' ;;
     workflow_admin_only_instance_management)
       printf 'unauthorized_assignments=0, roles=none, admin_management_permissions=2'
       ;;
@@ -470,12 +470,12 @@ create_fresh_install_evidence() {
   printf '%064d  backup-smoke/schema.sql\n' 1 \
     > "$evidence_dir/backup-smoke/schema-sha256.txt"
   : > "$evidence_dir/backup-smoke/mysqlcheck.txt"
-  for ((table_number = 1; table_number <= 89; table_number++)); do
+  for ((table_number = 1; table_number <= 99; table_number++)); do
     printf 'ry_vue_backup_verify.table_%02d OK\n' "$table_number" \
       >> "$evidence_dir/backup-smoke/mysqlcheck.txt"
   done
   printf 'empty_schema_table_count=0\n' > "$evidence_dir/empty-schema-check.txt"
-printf '95\t20\t11\t36\t28\n' > "$evidence_dir/table-counts.tsv"
+  printf '99\t20\t11\t36\t32\n' > "$evidence_dir/table-counts.tsv"
   printf 'PONG\n' > "$evidence_dir/redis-ping.txt"
   if [[ "$previous_release_id" != 'NONE' || -n "$previous_release_dir" ]]; then
     preflight_arguments+=(
@@ -1561,7 +1561,7 @@ main() {
   printf 'ry_vue_backup_verify.table_01 OK\n' \
     > "$evidence_dir/fresh-install/backup-smoke/mysqlcheck.txt"
   refresh_rehearsal_manifests "$evidence_dir"
-  expect_failure 'rehearsal without 89-table restore verification fails' \
+  expect_failure 'rehearsal without 99-table restore verification fails' \
     run_release_evidence_gate "$evidence_dir" rehearsal
 
   evidence_dir="$TEST_ROOT/rehearsal-fresh-attachment-diff"
@@ -1851,7 +1851,7 @@ main() {
   create_production_evidence \
     "$evidence_dir" "$TEST_ROOT/current-1" 'current-1' \
     "$TEST_ROOT/previous-1" 'previous-1'
-  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_schema_table_counts" { $3="total=94, ruoyi=20, quartz=11, flowable=36, workflow=27" } { print }' \
+  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_schema_table_counts" { $3="total=98, ruoyi=20, quartz=11, flowable=36, workflow=31" } { print }' \
     "$evidence_dir/database-verify.tsv" > "$evidence_dir/database-verify.filtered"
   mv -- "$evidence_dir/database-verify.filtered" "$evidence_dir/database-verify.tsv"
   refresh_evidence_manifest "$evidence_dir"

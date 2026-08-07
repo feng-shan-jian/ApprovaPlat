@@ -764,7 +764,9 @@ public class WorkflowModelService
             }
             requireActiveCategory(model.getCategory());
             byte[] bpmnBytes = requireModelSource(normalizedId);
-            WorkflowBpmnDocument document = bpmnService.validate(bpmnBytes);
+            // 作者资源允许受控 SendTask 等待部署编译；先走作者门禁，再由扩展编译器生成可执行 BPMN，
+            // 最终资源仍必须经过 validateCompiledDeployment 的 Flowable 官方规则校验。
+            WorkflowBpmnDocument document = bpmnService.validateForSave(bpmnBytes);
             List<FormSnapshotSource> snapshotSources = validateDeploymentReferences(document);
             WorkflowPreparedExtensionDeployment extensionDeployment =
                     extensionDeploymentService.prepare(document, identity.userId());

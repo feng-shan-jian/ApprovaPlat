@@ -47,6 +47,12 @@ WfIntegrationCredentialController,create,POST,/workflow/integration-credential,S
 WfIntegrationCredentialController,rotate,PUT,/workflow/integration-credential/{credentialId}/rotate,SINGLE,workflow:integrationCredential:rotate,ALLOW,DENY,DENY,DENY,DENY
 WfIntegrationCredentialController,revoke,DELETE,/workflow/integration-credential/{credentialId},SINGLE,workflow:integrationCredential:revoke,ALLOW,DENY,DENY,DENY,DENY
 WfRuntimeEventAuditController,list,GET,/workflow/runtime-event-audit/list,SINGLE,workflow:runtimeEvent:list,ALLOW,DENY,DENY,DENY,ALLOW
+WfCollaborationController,inbound,GET,/workflow/collaboration/inbound,SINGLE,workflow:collaboration:list,ALLOW,DENY,DENY,DENY,ALLOW
+WfCollaborationController,outbox,GET,/workflow/collaboration/outbox,SINGLE,workflow:collaboration:list,ALLOW,DENY,DENY,DENY,ALLOW
+WfCollaborationController,audit,GET,/workflow/collaboration/{messageId}/audit,SINGLE,workflow:collaboration:audit,ALLOW,DENY,DENY,DENY,ALLOW
+WfCollaborationController,retryInbound,POST,/workflow/collaboration/inbound/{messageId}/retry,SINGLE,workflow:collaboration:retry,ALLOW,DENY,DENY,DENY,DENY
+WfCollaborationController,retryOutbox,POST,/workflow/collaboration/outbox/{messageId}/retry,SINGLE,workflow:collaboration:retry,ALLOW,DENY,DENY,DENY,DENY
+WfCollaborationController,cancelOutbox,POST,/workflow/collaboration/outbox/{messageId}/cancel,SINGLE,workflow:collaboration:cancel,ALLOW,DENY,DENY,DENY,DENY
 WfFormController,list,GET,/workflow/form/list,ANY,workflow:form:list|workflow:model:list|workflow:model:designer,ALLOW,ALLOW,DENY,DENY,DENY
 WfFormController,export,POST,/workflow/form/export,SINGLE,workflow:form:export,ALLOW,ALLOW,DENY,DENY,DENY
 WfFormController,getInfo,GET,/workflow/form/{formId},ANY,workflow:form:query|workflow:form:edit,ALLOW,ALLOW,DENY,DENY,DENY

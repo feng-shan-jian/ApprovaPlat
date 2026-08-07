@@ -21,6 +21,9 @@
             <el-form-item v-if="flags.process" label="可执行流程">
               <el-switch v-model="state.executable" @change="emit('process-change')" />
             </el-form-item>
+            <el-form-item v-if="flags.participant" label="绑定流程定义 key" required>
+              <el-input v-model="state.processRef" maxlength="255" placeholder="必须是已存在且可执行的流程定义" @change="emit('participant-change')" />
+            </el-form-item>
             <el-form-item label="说明">
               <el-input v-model="state.documentation" type="textarea" :rows="3" maxlength="1000" @change="emit('documentation-change')" />
             </el-form-item>
@@ -122,8 +125,14 @@
                   />
                 </el-select>
               </el-form-item>
+              <CollaborationMessageEditor
+                v-if="selectedExtensionImplementation === 'COLLABORATION_OUTBOX_V1'"
+                v-model="state.extensionConfig"
+                :endpoints="connectorEndpoints"
+                @change="emit('service-task-change')"
+              />
               <CelExpressionEditor
-                v-if="selectedExtensionType === 'CEL'"
+                v-else-if="selectedExtensionType === 'CEL'"
                 v-model="state.extensionConfig"
                 @change="emit('service-task-change')"
               />
@@ -393,6 +402,7 @@ import SqlConnectorEditor from './SqlConnectorEditor.vue'
 import BpmnEventRaiseEditor from './BpmnEventRaiseEditor.vue'
 import BusinessListenerEditor from './BusinessListenerEditor.vue'
 import ExtensionPropertyEditor from './ExtensionPropertyEditor.vue'
+import CollaborationMessageEditor from './CollaborationMessageEditor.vue'
 import UserTaskSlaEditor from './UserTaskSlaEditor.vue'
 
 const props = defineProps({

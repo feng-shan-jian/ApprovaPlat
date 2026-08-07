@@ -243,7 +243,7 @@ public class WorkflowBpmnService
             List<WorkflowBpmnFormReference> references = validateModel(
                     bpmnModel, requireStartForm, validationContext);
             validateRawExpressions(bpmnXml,
-                    countControlledMultiInstanceCollections(bpmnModel));
+                    countControlledMultiInstanceCollections(bpmnModel), validationContext);
             return new WorkflowBpmnDocument(bpmnModel, bpmnXml, references);
         }
         catch (ServiceException exception)
@@ -656,6 +656,11 @@ public class WorkflowBpmnService
                 validateListeners(element.getExecutionListeners(), validationContext);
                 validateFlowElement(process, element, validationContext);
             }
+        }
+        if (validationContext == ValidationContext.AUTHOR)
+        {
+            // 作者资源必须把 MessageFlow 绑定到可靠 outbox；编译资源的 SendTask 已转换为固定调度器。
+            WorkflowCollaborationValidator.validate(bpmnModel);
         }
         return List.copyOf(references);
     }
@@ -1115,16 +1120,22 @@ public class WorkflowBpmnService
         }
         if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
         {
-            // 编译资源只允许 SLA 定时器固定入口；作者任意服务任务在前置校验阶段已被拒绝。
-            if (!ImplementationType.IMPLEMENTATION_TYPE_EXPRESSION.equals(task.getImplementationType())
-                    || !SLA_TIMER_DELEGATE_EXPRESSION.matcher(trimToEmpty(task.getImplementation())).matches())
-            {
-                throw invalidBpmn("编译服务任务必须使用受控 SLA 定时器入口", null);
-            }
             // 部署快照已经固化精确参数，执行 XML 不得再次携带可篡改的作者字段。
             if (task.getFieldExtensions() != null && !task.getFieldExtensions().isEmpty())
             {
                 throw invalidBpmn("已编译服务任务不允许保留作者扩展字段", null);
+            }
+            String implementation = trimToEmpty(task.getImplementation());
+            boolean fixedExtensionDelegate = ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION
+                    .equals(task.getImplementationType())
+                    && WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION.equals(implementation);
+            boolean fixedSlaDelegate = ImplementationType.IMPLEMENTATION_TYPE_EXPRESSION
+                    .equals(task.getImplementationType())
+                    && SLA_TIMER_DELEGATE_EXPRESSION.matcher(implementation).matches();
+            // 编译资源只允许平台扩展固定入口或 SLA 编译器生成的固定定时入口；作者任意服务任务已在前置阶段拒绝。
+            if (!fixedExtensionDelegate && !fixedSlaDelegate)
+            {
+                throw invalidBpmn("服务任务必须从受控扩展注册表选择", null);
             }
             validateExpression(task.getSkipExpression());
             return;
@@ -1410,9 +1421,11 @@ public class WorkflowBpmnService
      *
      * @param bpmnXml String，严格 UTF-8 解码后的原始 BPMN XML
      * @param controlledCollectionCount int，模型级完整校验通过的受控集合表达式数量
+     * @param validationContext ValidationContext，作者资源或编译执行资源阶段
      * @return 无返回值
      */
-    private void validateRawExpressions(String bpmnXml, int controlledCollectionCount)
+    private void validateRawExpressions(String bpmnXml, int controlledCollectionCount,
+            ValidationContext validationContext)
     {
         int remainingControlledCollections = controlledCollectionCount;
         int cursor = 0;
@@ -1455,8 +1468,11 @@ public class WorkflowBpmnService
                 }
                 remainingControlledCollections--;
             }
-            else
+            else if (!(validationContext == ValidationContext.COMPILED_DEPLOYMENT
+                    && (SLA_TIMER_DELEGATE_EXPRESSION.matcher(expression).matches()
+                    || WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION.equals(expression))))
             {
+                // 编译资源仅放行平台固定扩展入口与 SLA 固定定时入口；作者 XML 和其他表达式继续走通用安全语法。
                 validateExpression(expression);
             }
             cursor = end + 1;

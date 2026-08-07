@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfCollaborationMessageMapper">
+  <resultMap id="MessageResult" type="com.ruoyi.flowable.domain.WfCollaborationMessage">
+    <id property="messageId" column="message_id"/><result property="credentialId" column="credential_id"/>
+    <result property="actorUserId" column="actor_user_id"/><result property="channelId" column="channel_id"/>
+    <result property="sequenceNo" column="sequence_no"/>
+    <result property="messageName" column="message_name"/><result property="sourceProcessDefinitionKey" column="source_process_definition_key"/>
+    <result property="targetProcessDefinitionKey" column="target_process_definition_key"/><result property="correlationKey" column="correlation_key"/>
+    <result property="targetProcessInstanceId" column="target_process_instance_id"/><result property="matchedProcessInstanceId" column="matched_process_instance_id"/><result property="targetExecutionId" column="target_execution_id"/>
+    <result property="variablesJson" column="variables_json"/><result property="payloadSha256" column="payload_sha256"/>
+    <result property="status" column="status"/><result property="attemptCount" column="attempt_count"/><result property="maxAttempts" column="max_attempts"/>
+    <result property="compensationCount" column="compensation_count"/><result property="revisionNo" column="revision_no"/>
+    <result property="lastErrorCode" column="last_error_code"/><result property="lastErrorSummary" column="last_error_summary"/>
+    <result property="createTime" column="create_time"/><result property="nextAttemptTime" column="next_attempt_time"/><result property="completeTime" column="complete_time"/>
+  </resultMap>
+  <sql id="Columns">message_id,credential_id,actor_user_id,channel_id,sequence_no,message_name,source_process_definition_key,target_process_definition_key,correlation_key,target_process_instance_id,matched_process_instance_id,target_execution_id,variables_json,payload_sha256,status,attempt_count,max_attempts,compensation_count,revision_no,last_error_code,last_error_summary,create_time,next_attempt_time,complete_time</sql>
+  <select id="selectList" resultMap="MessageResult">select <include refid="Columns"/> from wf_collaboration_message order by create_time desc, message_id desc limit 1000</select>
+  <select id="selectByIdForUpdate" resultMap="MessageResult">select <include refid="Columns"/> from wf_collaboration_message where message_id=#{messageId} for update</select>
+  <select id="selectById" resultMap="MessageResult">select <include refid="Columns"/> from wf_collaboration_message where message_id=#{messageId}</select>
+  <select id="selectNextDueForUpdate" resultMap="MessageResult">
+    select <include refid="Columns"/> from wf_collaboration_message current_message
+    where current_message.status='RETRYING' and current_message.next_attempt_time &lt;= current_timestamp(3)
+      and current_message.sequence_no=(select channel.inbound_sequence+1
+          from wf_collaboration_channel channel where channel.channel_id=current_message.channel_id)
+    order by current_message.next_attempt_time,current_message.create_time,current_message.message_id limit 1 for update skip locked
+  </select>
+  <insert id="insertReceived">insert into wf_collaboration_message(message_id,credential_id,actor_user_id,channel_id,sequence_no,message_name,source_process_definition_key,target_process_definition_key,correlation_key,target_process_instance_id,variables_json,payload_sha256,status,attempt_count,max_attempts,create_time) values(#{messageId},#{credentialId},#{actorUserId},#{channelId},#{sequenceNo},#{messageName},#{sourceProcessDefinitionKey},#{targetProcessDefinitionKey},#{correlationKey},#{targetProcessInstanceId},#{variablesJson},#{payloadSha256},'RECEIVED',0,#{maxAttempts},current_timestamp(3))</insert>
+  <update id="markProcessed">update wf_collaboration_message set matched_process_instance_id=#{matchedProcessInstanceId},target_execution_id=#{targetExecutionId},status='PROCESSED',attempt_count=#{attemptCount},complete_time=current_timestamp(3),next_attempt_time=null,last_error_code=null,last_error_summary=null,revision_no=revision_no+1 where message_id=#{messageId} and status in ('RECEIVED','RETRYING')</update>
+  <update id="markFailed">update wf_collaboration_message set status='RETRYING',attempt_count=#{attemptCount},last_error_code=#{lastErrorCode},last_error_summary=#{lastErrorSummary},next_attempt_time=date_add(current_timestamp(3), interval least(300,power(2,least(#{attemptCount},8))) second),revision_no=revision_no+1 where message_id=#{messageId} and status in ('RECEIVED','RETRYING')</update>
+  <update id="markDeadLetter">update wf_collaboration_message set status='DEAD_LETTER',attempt_count=#{attemptCount},last_error_code=#{lastErrorCode},last_error_summary=#{lastErrorSummary},complete_time=current_timestamp(3),next_attempt_time=null,revision_no=revision_no+1 where message_id=#{messageId} and status in ('RECEIVED','RETRYING')</update>
+  <update id="markRetrying">update wf_collaboration_message set status='RETRYING',attempt_count=0,compensation_count=compensation_count+1,complete_time=null,next_attempt_time=current_timestamp(3),last_error_code=null,last_error_summary=null,revision_no=revision_no+1 where message_id=#{messageId} and status='DEAD_LETTER' and revision_no=#{revisionNo}</update>
+  <update id="advanceWaitingOrder">update wf_collaboration_message set status='RETRYING',last_error_code='COLLAB_MESSAGE_OUT_OF_ORDER',last_error_summary='等待前序协作消息',next_attempt_time=date_add(current_timestamp(3), interval 1 second),revision_no=revision_no+1 where message_id=#{messageId} and status='RECEIVED'</update>
+</mapper>

@@ -396,6 +396,33 @@ WHERE NOT EXISTS
 INSERT INTO `wf_bpmn_extension`
     (`extension_key`, `extension_name`, `extension_type`, `status`, `description`,
      `create_by`, `create_time`, `update_by`, `update_time`)
+SELECT 'approva.collaboration-outbox', '跨参与方可靠消息', 'JAVA', 'ENABLED',
+       '在 Flowable 事务内登记 outbox，由后台 worker 按关联键顺序认证投递',
+       'system', current_timestamp(3), '', NULL
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM `wf_bpmn_extension`
+    WHERE `extension_key` = 'approva.collaboration-outbox'
+);
+
+INSERT INTO `wf_bpmn_extension_version`
+    (`extension_id`, `version_no`, `implementation_key`, `config_schema`,
+     `checksum`, `create_by`, `create_time`)
+SELECT e.extension_id, 1, 'COLLABORATION_OUTBOX_V1',
+       CAST('{"additionalProperties":false,"properties":{"correlationVariable":{"type":"string"},"endpointKey":{"type":"string"},"maxAttempts":{"maximum":20,"minimum":1,"type":"integer"},"messageName":{"type":"string"},"path":{"type":"string"},"targetProcessDefinitionKey":{"type":"string"},"variableNames":{"items":{"type":"string"},"maxItems":128,"type":"array"}},"required":["endpointKey","path","messageName","targetProcessDefinitionKey","variableNames","maxAttempts"],"type":"object"}' AS JSON),
+       '6741a2065519d613389cc52c0e9ae8a1c3609a2d7a0660d0af0c88833acdb592',
+       'system', current_timestamp(3)
+FROM `wf_bpmn_extension` e
+WHERE e.extension_key = 'approva.collaboration-outbox'
+  AND NOT EXISTS
+  (
+      SELECT 1 FROM `wf_bpmn_extension_version` v
+      WHERE v.extension_id = e.extension_id AND v.version_no = 1
+  );
+
+INSERT INTO `wf_bpmn_extension`
+    (`extension_key`, `extension_name`, `extension_type`, `status`, `description`,
+     `create_by`, `create_time`, `update_by`, `update_time`)
 SELECT 'approva.form.textarea', '多行文本', 'FORM_FIELD', 'ENABLED',
        '固定为服务端安装的多行文本渲染器，用于 BPMN 内嵌 FormData',
        'system', current_timestamp(3), '', NULL
@@ -723,6 +750,146 @@ CREATE TABLE IF NOT EXISTS `wf_runtime_event_request`
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '消息、信号与 ReceiveTask 运行事件幂等审计';
+
+CREATE TABLE IF NOT EXISTS `wf_collaboration_channel`
+(
+    `channel_id`                    CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '目标流程与关联值组成的稳定 SHA-256 通道键',
+    `target_process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '接收方流程定义 key',
+    `correlation_type`              VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BUSINESS_KEY 或 PROCESS_INSTANCE',
+    `correlation_value`             VARCHAR(255) NOT NULL COMMENT '业务关联键或目标实例主键',
+    `outbound_sequence`             BIGINT       NOT NULL DEFAULT 0 COMMENT '已分配的最后一个出站序号',
+    `inbound_sequence`              BIGINT       NOT NULL DEFAULT 0 COMMENT '已成功消费的最后一个入站序号',
+    `revision_no`                   INT          NOT NULL DEFAULT 0 COMMENT '通道并发修订号',
+    `create_time`                   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '通道创建时间',
+    `update_time`                   DATETIME(3)           DEFAULT NULL COMMENT '最后序号推进时间',
+    PRIMARY KEY (`channel_id`),
+    UNIQUE KEY `uk_wf_collab_channel_target` (`target_process_definition_key`, `correlation_type`, `correlation_value`),
+    CONSTRAINT `chk_wf_collab_channel_id` CHECK (`channel_id` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_collab_channel_type` CHECK (`correlation_type` IN ('BUSINESS_KEY', 'PROCESS_INSTANCE')),
+    CONSTRAINT `chk_wf_collab_channel_sequence` CHECK (`outbound_sequence` >= 0 AND `inbound_sequence` >= 0),
+    CONSTRAINT `chk_wf_collab_channel_revision` CHECK (`revision_no` >= 0)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = 'Participant/MessageFlow 关联通道与严格顺序游标';
+
+CREATE TABLE IF NOT EXISTS `wf_collaboration_message`
+(
+    `message_id`                    CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '调用方生成的协作消息幂等键',
+    `credential_id`                 BIGINT       NOT NULL COMMENT '认证集成凭据主键',
+    `actor_user_id`                 VARCHAR(64)  NOT NULL COMMENT '凭据绑定的可信系统操作人',
+    `channel_id`                    CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '严格顺序通道主键',
+    `sequence_no`                   BIGINT       NOT NULL COMMENT '调用方在同一关联通道内分配的连续序号',
+    `message_name`                  VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN MessageFlow 消息名称',
+    `source_process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '发送方流程定义 key 快照',
+    `target_process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '接收方流程定义 key',
+    `correlation_key`               VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '接收实例业务键',
+    `target_process_instance_id`    VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '唯一接收流程实例',
+    `matched_process_instance_id`   VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '成功关联的接收流程实例',
+    `target_execution_id`           VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '唯一消息等待执行',
+    `variables_json`                JSON         NOT NULL COMMENT '白名单标量变量，用于一致性重放与补偿',
+    `payload_sha256`                CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '消息载荷稳定摘要',
+    `status`                        VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'RECEIVED、RETRYING、PROCESSED 或 DEAD_LETTER',
+    `attempt_count`                 INT          NOT NULL DEFAULT 0 COMMENT '已尝试投递次数',
+    `max_attempts`                  INT          NOT NULL DEFAULT 5 COMMENT '最大投递次数',
+    `compensation_count`            INT          NOT NULL DEFAULT 0 COMMENT '管理员人工补偿次数',
+    `revision_no`                   INT          NOT NULL DEFAULT 0 COMMENT '状态并发修订号',
+    `last_error_code`               VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '最后一次稳定错误编码',
+    `last_error_summary`            VARCHAR(512) DEFAULT NULL COMMENT '脱敏错误摘要',
+    `create_time`                   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '首次登记时间',
+    `next_attempt_time`             DATETIME(3)           DEFAULT NULL COMMENT '下一次重试时间',
+    `complete_time`                 DATETIME(3)           DEFAULT NULL COMMENT '完成或进入死信时间',
+    PRIMARY KEY (`message_id`),
+    UNIQUE KEY `uk_wf_collab_message_sequence` (`channel_id`, `sequence_no`),
+    KEY `idx_wf_collab_target` (`target_process_definition_key`, `correlation_key`, `status`),
+    KEY `idx_wf_collab_status` (`status`, `next_attempt_time`, `create_time`),
+    CONSTRAINT `fk_wf_collab_credential` FOREIGN KEY (`credential_id`)
+        REFERENCES `wf_integration_credential` (`credential_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `fk_wf_collab_channel` FOREIGN KEY (`channel_id`)
+        REFERENCES `wf_collaboration_channel` (`channel_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `chk_wf_collab_id` CHECK (`message_id` REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
+    CONSTRAINT `chk_wf_collab_correlation` CHECK ((`correlation_key` IS NULL) <> (`target_process_instance_id` IS NULL)),
+    CONSTRAINT `chk_wf_collab_status` CHECK (`status` IN ('RECEIVED', 'RETRYING', 'PROCESSED', 'DEAD_LETTER')),
+    CONSTRAINT `chk_wf_collab_attempts` CHECK (`attempt_count` BETWEEN 0 AND `max_attempts` AND `max_attempts` BETWEEN 1 AND 20),
+    CONSTRAINT `chk_wf_collab_compensation` CHECK (`compensation_count` >= 0 AND `revision_no` >= 0),
+    CONSTRAINT `chk_wf_collab_completion` CHECK
+        ((`status` IN ('RECEIVED', 'RETRYING') AND `complete_time` IS NULL)
+         OR (`status` IN ('PROCESSED', 'DEAD_LETTER') AND `complete_time` IS NOT NULL))
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = 'Participant/MessageFlow 协作消息可靠投递与死信台账';
+
+CREATE TABLE IF NOT EXISTS `wf_collaboration_outbox`
+(
+    `message_id`                    CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '由部署、实例、execution 和活动确定的幂等消息主键',
+    `channel_id`                    CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '严格顺序通道主键',
+    `sequence_no`                   BIGINT       NOT NULL COMMENT '同一关联通道内连续出站序号',
+    `source_process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '发送方流程定义 key',
+    `source_process_instance_id`    VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '发送方流程实例主键',
+    `source_execution_id`           VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '产生消息的 execution 主键',
+    `source_element_id`             VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '产生消息的 SendTask 主键',
+    `message_name`                  VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN MessageFlow 消息名称',
+    `target_process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '接收方流程定义 key',
+    `correlation_key`               VARCHAR(255) NOT NULL COMMENT '接收实例业务关联键',
+    `endpoint_id`                   BIGINT       NOT NULL COMMENT '冻结的 HTTP 端点主键',
+    `endpoint_revision`             INT          NOT NULL COMMENT '冻结的 HTTP 端点修订号',
+    `request_path`                  VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '受控接收路径',
+    `delivery_config_json`          JSON         NOT NULL COMMENT '不含密钥正文的端点快照与投递策略',
+    `variables_json`                JSON         NOT NULL COMMENT '部署白名单选取的标量变量快照',
+    `payload_sha256`                CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '完整请求稳定摘要',
+    `status`                        VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'PENDING、DELIVERING、RETRYING、PROCESSED、DEAD_LETTER 或 CANCELLED',
+    `attempt_count`                 INT          NOT NULL DEFAULT 0 COMMENT '已开始的投递次数',
+    `max_attempts`                  INT          NOT NULL DEFAULT 5 COMMENT '最大投递次数',
+    `compensation_count`            INT          NOT NULL DEFAULT 0 COMMENT '管理员人工补偿次数',
+    `revision_no`                   INT          NOT NULL DEFAULT 0 COMMENT '状态并发修订号',
+    `lease_owner`                   VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '当前后台 worker 租约',
+    `lease_until`                   DATETIME(3)           DEFAULT NULL COMMENT '后台 worker 租约截止时间',
+    `next_attempt_time`             DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '下次允许领取时间',
+    `last_http_status`              INT                   DEFAULT NULL COMMENT '最后一次 HTTP 状态',
+    `last_error_code`               VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '最后一次稳定错误编码',
+    `last_error_summary`            VARCHAR(512) DEFAULT NULL COMMENT '不含响应正文的脱敏错误摘要',
+    `create_time`                   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '事务 outbox 登记时间',
+    `last_attempt_time`             DATETIME(3)           DEFAULT NULL COMMENT '最后一次领取时间',
+    `complete_time`                 DATETIME(3)           DEFAULT NULL COMMENT '送达、死信或取消时间',
+    PRIMARY KEY (`message_id`),
+    UNIQUE KEY `uk_wf_collab_outbox_sequence` (`channel_id`, `sequence_no`),
+    UNIQUE KEY `uk_wf_collab_outbox_source` (`source_process_instance_id`, `source_execution_id`, `source_element_id`),
+    KEY `idx_wf_collab_outbox_due` (`status`, `next_attempt_time`, `lease_until`, `create_time`),
+    CONSTRAINT `fk_wf_collab_outbox_channel` FOREIGN KEY (`channel_id`)
+        REFERENCES `wf_collaboration_channel` (`channel_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `fk_wf_collab_outbox_endpoint` FOREIGN KEY (`endpoint_id`)
+        REFERENCES `wf_connector_endpoint` (`endpoint_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `chk_wf_collab_outbox_id` CHECK (`message_id` REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
+    CONSTRAINT `chk_wf_collab_outbox_hash` CHECK (`channel_id` REGEXP '^[0-9a-f]{64}$' AND `payload_sha256` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_collab_outbox_status` CHECK (`status` IN ('PENDING', 'DELIVERING', 'RETRYING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED')),
+    CONSTRAINT `chk_wf_collab_outbox_attempts` CHECK (`attempt_count` BETWEEN 0 AND `max_attempts` AND `max_attempts` BETWEEN 1 AND 20),
+    CONSTRAINT `chk_wf_collab_outbox_revision` CHECK (`compensation_count` >= 0 AND `revision_no` >= 0),
+    CONSTRAINT `chk_wf_collab_outbox_lease` CHECK ((`lease_owner` IS NULL) = (`lease_until` IS NULL)),
+    CONSTRAINT `chk_wf_collab_outbox_completion` CHECK
+        ((`status` IN ('PENDING', 'DELIVERING', 'RETRYING') AND `complete_time` IS NULL)
+         OR (`status` IN ('PROCESSED', 'DEAD_LETTER', 'CANCELLED') AND `complete_time` IS NOT NULL))
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = 'SendTask 事务 outbox、顺序投递与补偿台账';
+
+CREATE TABLE IF NOT EXISTS `wf_collaboration_message_audit`
+(
+    `audit_id`          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '协作消息审计主键',
+    `message_id`        CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '入站或出站消息主键',
+    `direction`         VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'INBOUND 或 OUTBOUND',
+    `action`            VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'RECEIVE、CLAIM、DELIVER、RETRY、DEAD_LETTER、COMPENSATE 或 CANCEL',
+    `actor_type`        VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'INTEGRATION、SYSTEM 或 USER',
+    `actor_id`          VARCHAR(64)  NOT NULL COMMENT '脱敏操作人、凭据主键或 worker 标识',
+    `from_status`       VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '动作前状态',
+    `to_status`         VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '动作后状态',
+    `attempt_no`        INT          NOT NULL DEFAULT 0 COMMENT '动作对应投递次数',
+    `error_code`        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '稳定失败编码',
+    `summary`           VARCHAR(512) NOT NULL DEFAULT '' COMMENT '不含 Token 和业务正文的审计摘要',
+    `create_time`       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '审计时间',
+    PRIMARY KEY (`audit_id`),
+    KEY `idx_wf_collab_audit_message` (`message_id`, `create_time`),
+    KEY `idx_wf_collab_audit_status` (`direction`, `to_status`, `create_time`),
+    CONSTRAINT `chk_wf_collab_audit_direction` CHECK (`direction` IN ('INBOUND', 'OUTBOUND')),
+    CONSTRAINT `chk_wf_collab_audit_actor` CHECK (`actor_type` IN ('INTEGRATION', 'SYSTEM', 'USER')),
+    CONSTRAINT `chk_wf_collab_audit_attempt` CHECK (`attempt_no` >= 0)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '协作消息逐次状态、重试和人工补偿审计';
 
 CREATE TABLE IF NOT EXISTS `wf_copy`
 (

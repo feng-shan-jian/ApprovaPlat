@@ -20,6 +20,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import com.ruoyi.common.annotation.Anonymous;
 import com.ruoyi.flowable.domain.dto.WorkflowRuntimeEventRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowCollaborationMessageRequest;
+import com.ruoyi.flowable.domain.vo.WorkflowCollaborationMessageView;
+import com.ruoyi.flowable.service.process.WorkflowCollaborationMessageService;
 import com.ruoyi.flowable.domain.vo.WorkflowRuntimeEventView;
 import com.ruoyi.flowable.service.process.WorkflowRuntimeEventService;
 
@@ -29,6 +32,7 @@ import com.ruoyi.flowable.service.process.WorkflowRuntimeEventService;
 class WfRuntimeEventControllerTest
 {
     private WorkflowRuntimeEventService runtimeEventService;
+    private WorkflowCollaborationMessageService collaborationMessageService;
     private MockMvc mockMvc;
 
     /**
@@ -39,12 +43,13 @@ class WfRuntimeEventControllerTest
     void setUp()
     {
         runtimeEventService = mock(WorkflowRuntimeEventService.class);
+        collaborationMessageService = mock(WorkflowCollaborationMessageService.class);
         mockMvc = MockMvcBuilders.standaloneSetup(
-                new WfRuntimeEventController(runtimeEventService)).build();
+                new WfRuntimeEventController(runtimeEventService, collaborationMessageService)).build();
     }
 
     /**
-     * 验证三个外部入口都显式允许无 JWT 请求，但不扩大其他 Controller 范围。
+     * 验证四个外部入口都显式允许无 JWT 请求，但不扩大其他 Controller 范围。
      * @return void，任一入口丢失 Anonymous 注解时失败
      */
     @Test
@@ -56,7 +61,7 @@ class WfRuntimeEventControllerTest
                 .map(Method::getName)
                 .toList();
 
-        assertThat(anonymousHandlers).containsExactlyInAnyOrder("message", "signal", "receive");
+        assertThat(anonymousHandlers).containsExactlyInAnyOrder("message", "signal", "receive", "collaborationMessage");
     }
 
     /**
@@ -120,5 +125,28 @@ class WfRuntimeEventControllerTest
                     org.mockito.ArgumentMatchers.eq(endpoint.getValue()),
                     any(WorkflowRuntimeEventRequest.class));
         }
+    }
+
+    /** 验证跨流程消息入口把 Token 和完整协作请求交给可靠投递服务。 */
+    @Test
+    void delegatesCollaborationMessageToReliableService() throws Exception
+    {
+        WorkflowCollaborationMessageView view = new WorkflowCollaborationMessageView(
+                "5d58c4da-57dd-4f4c-ae67-cea0f9f9b5c1", "notice", "source", "target",
+                "business-1", null, "instance-1", "execution-1", 1L, "PROCESSED", 1, 5, 0, null, null,
+                new Date(0), null, new Date(1));
+        when(collaborationMessageService.publish(any(), any(WorkflowCollaborationMessageRequest.class)))
+                .thenReturn(view);
+        mockMvc.perform(post("/workflow/runtime-event/collaboration/message")
+                        .header("X-Integration-Token", "integration-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"messageId\":\"5d58c4da-57dd-4f4c-ae67-cea0f9f9b5c1\","
+                                + "\"messageName\":\"notice\",\"sourceProcessDefinitionKey\":\"source\","
+                                + "\"targetProcessDefinitionKey\":\"target\",\"correlationKey\":\"business-1\","
+                                + "\"sequenceNo\":1,\"variables\":{}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PROCESSED"));
+        verify(collaborationMessageService).publish(org.mockito.ArgumentMatchers.eq("integration-token"),
+                any(WorkflowCollaborationMessageRequest.class));
     }
 }
