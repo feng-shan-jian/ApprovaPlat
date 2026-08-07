@@ -32,6 +32,7 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_bpmn_extension`",
                 "create table if not exists `wf_bpmn_extension_version`",
                 "create table if not exists `wf_deploy_extension_snapshot`",
+                "create table if not exists `wf_deploy_dmn_snapshot`",
                 "create table if not exists `wf_connector_endpoint`",
                 "create table if not exists `wf_connector_invocation`",
                 "create table if not exists `wf_integration_credential`",
@@ -117,21 +118,21 @@ class WorkflowBusinessDdlContractTest
     }
 
     /**
-     * 验证运行事件增量 DDL 只幂等建表，不保存 Token 正文且不含破坏性语句。
+     * 验证首个正式业务基线包含运行事件表，不保存 Token 正文且不含破坏性语句。
      * @return void，Token、幂等或外键契约缺失时测试失败
-     * @throws Exception 读取正式增量 SQL 失败
+     * @throws Exception 读取正式基线 SQL 失败
      */
     @Test
-    void keepsRuntimeIntegrationMigrationHashedIdempotentAndNonDestructive() throws Exception
+    void keepsRuntimeIntegrationInFormalBaseline() throws Exception
     {
-        String migration = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.13__workflow_runtime_integration.sql"),
+        String baseline = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0__workflow_business.sql"),
                 StandardCharsets.UTF_8);
-        String normalized = migration.toLowerCase();
+        String normalized = baseline.toLowerCase();
         Pattern destructiveMutation = Pattern.compile(
                 "(?im)^\\s*(drop|delete|update|alter|truncate|replace|call|set)\\b");
 
-        assertThat(destructiveMutation.matcher(migration).find()).isFalse();
+        assertThat(destructiveMutation.matcher(baseline).find()).isFalse();
         assertThat(normalized).contains(
                 "create table if not exists `wf_integration_credential`",
                 "create table if not exists `wf_runtime_event_request`",
@@ -144,43 +145,42 @@ class WorkflowBusinessDdlContractTest
     }
 
     /**
-     * 验证双表单增量脚本可重复执行、保留历史快照且建立来源一致性约束。
-     * @return void，迁移缺少幂等门禁或包含数据删除时测试失败
-     * @throws Exception 读取正式增量 SQL 文件失败
+     * 验证首个正式业务基线支持模板和内嵌双表单快照，并建立来源一致性约束。
+     * @return void，基线缺少幂等门禁或包含数据删除时测试失败
+     * @throws Exception 读取正式基线 SQL 文件失败
      */
     @Test
-    void keepsEmbeddedFormSnapshotMigrationIdempotentAndNonDestructive() throws Exception
+    void keepsEmbeddedFormSnapshotInFormalBaseline() throws Exception
     {
-        String migration = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.6__workflow_embedded_form_snapshot.sql"),
+        String baseline = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0__workflow_business.sql"),
                 StandardCharsets.UTF_8);
-        String normalized = migration.toLowerCase();
+        String normalized = baseline.toLowerCase();
 
         Pattern destructiveMutation = Pattern.compile(
                 "(?im)^\\s*(drop|delete|update|truncate|replace)\\b");
-        assertThat(destructiveMutation.matcher(migration).find()).isFalse();
+        assertThat(destructiveMutation.matcher(baseline).find()).isFalse();
         assertThat(normalized).contains(
-                "information_schema.columns",
-                "information_schema.table_constraints",
-                "column_name = 'source_type'",
-                "modify column `form_id` bigint null",
+                "create table if not exists `wf_deploy_form`",
+                "`form_id`",
+                "`source_type` varchar(16) not null default 'template'",
                 "constraint `chk_wf_deploy_form_source` check",
-                "`source_type` = ''template''",
-                "`source_type` = ''embedded''");
+                "`source_type` = 'template'",
+                "`source_type` = 'embedded'");
     }
 
     /**
-     * 验证附件配额 guard 增量脚本只执行一次幂等建表并预置固定全局锁行。
-     * @return void，增量脚本不幂等、缺少固定全局行或包含危险语句时测试失败
-     * @throws Exception 读取正式增量 SQL 文件失败
+     * 验证首个正式业务基线直接创建附件配额 guard 并预置固定全局锁行。
+     * @return void，基线缺少固定全局行或包含危险语句时测试失败
+     * @throws Exception 读取正式基线 SQL 文件失败
      */
     @Test
-    void keepsAttachmentQuotaGuardMigrationIdempotentAndNonDestructive() throws Exception
+    void keepsAttachmentQuotaGuardInFormalBaseline() throws Exception
     {
-        String migration = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.1__workflow_attachment_quota_guard.sql"),
+        String baseline = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0__workflow_business.sql"),
                 StandardCharsets.UTF_8);
-        String normalized = migration.toLowerCase();
+        String normalized = baseline.toLowerCase();
 
         Pattern createStatement = Pattern.compile("(?im)^\\s*create\\s+");
         Pattern forbiddenMutation = Pattern.compile(
@@ -188,18 +188,41 @@ class WorkflowBusinessDdlContractTest
         Pattern globalGuardSeed = Pattern.compile(
                 "(?is)insert\\s+ignore\\s+into\\s+`wf_attachment_quota_guard`\\s*"
                         + "\\(\\s*`owner_user_id`\\s*\\)\\s*values\\s*\\(\\s*0\\s*\\)");
-        long createCount = createStatement.matcher(migration).results().count();
-        long globalGuardSeedCount = globalGuardSeed.matcher(migration).results().count();
+        long createCount = createStatement.matcher(baseline).results().count();
+        long globalGuardSeedCount = globalGuardSeed.matcher(baseline).results().count();
 
-        assertThat(createCount).isEqualTo(1L);
+        assertThat(createCount).isGreaterThanOrEqualTo(1L);
         assertThat(globalGuardSeedCount).isEqualTo(1L);
-        assertThat(forbiddenMutation.matcher(migration).find()).isFalse();
+        assertThat(forbiddenMutation.matcher(baseline).find()).isFalse();
         assertThat(normalized).contains(
                 "create table if not exists `wf_attachment_quota_guard`",
                 "primary key (`owner_user_id`)",
                 "constraint `chk_wf_attachment_quota_guard_owner` check (`owner_user_id` >= 0)",
                 "insert ignore into `wf_attachment_quota_guard` (`owner_user_id`)",
                 "values (0)");
+    }
+
+    /**
+     * 验证首个正式基线在 Flowable 官方表之后建立模型版本唯一约束。
+     * @return void，初始化门禁缺少幂等探测、唯一约束或包含数据删除时测试失败
+     * @throws Exception 读取模型完整性基线 SQL 失败
+     */
+    @Test
+    void definesModelVersionGuardInFormalBaseline() throws Exception
+    {
+        String guard = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0__workflow_model_version_guard.sql"),
+                StandardCharsets.UTF_8).toLowerCase();
+
+        assertThat(guard).contains(
+                "from information_schema.statistics",
+                "table_name = 'act_re_model'",
+                "non_unique = 0",
+                "'key_,version_,tenant_id_'",
+                "alter table `act_re_model` add constraint `act_uniq_model` unique (`key_`, `version_`, `tenant_id_`)",
+                "prepare wf_model_guard_statement",
+                "execute wf_model_guard_statement")
+                .doesNotContain("drop table", "delete from", "update `act_re_model`");
     }
 
     /**

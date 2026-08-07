@@ -11,23 +11,17 @@ import org.junit.jupiter.api.Test;
 class WorkflowModelSaveDdlContractTest
 {
     /**
-     * 验证正式基线和增量使用完全一致的模型保存幂等表、字符集、索引与状态约束。
+     * 验证首个正式基线包含完整的模型保存幂等表、字符集、索引与状态约束。
      *
-     * @return void，基线或增量缺少生产级幂等契约时测试失败
+     * @return void，正式基线缺少生产级幂等契约时测试失败
      * @throws Exception 正式 SQL 文件无法读取时测试失败
      */
     @Test
-    void definesSameProductionIdempotencyTableInBaselineAndMigration() throws Exception
+    void definesProductionIdempotencyTableInFormalBaseline() throws Exception
     {
         String baseline = readSql("sql/flowable/business/8.0.0__workflow_business.sql")
                 .toLowerCase();
-        String migration = readSql(
-                "sql/flowable/business/8.0.0.4__workflow_model_save_idempotency.sql")
-                .toLowerCase();
-
-        for (String sql : new String[] {baseline, migration})
-        {
-            assertThat(sql).contains(
+        assertThat(baseline).contains(
                     "create table if not exists `wf_model_save_idempotency`",
                     "`request_id`     char(36) character set ascii collate ascii_bin not null",
                     "`user_id`        varchar(64) character set ascii collate ascii_bin not null",
@@ -46,26 +40,23 @@ class WorkflowModelSaveDdlContractTest
                     "engine = innodb",
                     "default charset = utf8mb4",
                     "collate = utf8mb4_unicode_ci");
-        }
     }
 
     /**
-     * 验证 8.0.0.4 增量只有一次幂等建表，不包含删除、覆盖或历史数据改写。
+     * 验证首个正式业务基线不包含删除、覆盖或历史数据改写。
      *
-     * @return void，增量包含破坏性语句或重复建表时测试失败
-     * @throws Exception 正式增量 SQL 文件无法读取时测试失败
+     * @return void，基线包含破坏性语句时测试失败
+     * @throws Exception 正式基线 SQL 文件无法读取时测试失败
      */
     @Test
-    void keepsModelSaveMigrationIdempotentAndNonDestructive() throws Exception
+    void keepsFormalBaselineNonDestructive() throws Exception
     {
-        String migration = readSql(
-                "sql/flowable/business/8.0.0.4__workflow_model_save_idempotency.sql");
-        Pattern createStatement = Pattern.compile("(?im)^\\s*create\\s+");
+        String baseline = readSql("sql/flowable/business/8.0.0__workflow_business.sql");
         Pattern forbiddenMutation = Pattern.compile(
-                "(?im)^\\s*(drop|delete|update|alter|truncate|replace|call|set|insert)\\b");
+                "(?im)^\\s*(drop|delete|update|alter|truncate|replace|call|set)\\b");
 
-        assertThat(createStatement.matcher(migration).results().count()).isEqualTo(1L);
-        assertThat(forbiddenMutation.matcher(migration).find()).isFalse();
+        assertThat(baseline.toLowerCase()).contains("create table if not exists `wf_model_save_idempotency`");
+        assertThat(forbiddenMutation.matcher(baseline).find()).isFalse();
     }
 
     /**

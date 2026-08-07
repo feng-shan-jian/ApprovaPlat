@@ -127,28 +127,28 @@ class WorkflowMenuSqlContractTest
     }
 
     /**
-     * 验证已安装环境可通过独立增量脚本获得运行集成菜单和职责分离授权。
-     * @return void，增量脚本缺少幂等保护、页面或角色授权时失败
-     * @throws Exception 增量菜单 SQL 无法按 UTF-8 读取时测试失败
+     * 验证首个正式菜单基线包含运行集成菜单和职责分离授权。
+     * @return void，基线缺少幂等保护、页面或角色授权时失败
+     * @throws Exception 菜单 SQL 无法按 UTF-8 读取时测试失败
      */
     @Test
-    void definesIdempotentRuntimeIntegrationMenuMigration() throws Exception
+    void definesRuntimeIntegrationMenusInFormalBaseline() throws Exception
     {
-        String migration = Files.readString(findProjectSql(
-                "sql/flowable/menu/8.0.0.3__workflow_runtime_integration_menu.sql"),
+        String baseline = Files.readString(findProjectSql(
+                "sql/flowable/menu/8.0.0__workflow_menu.sql"),
                 StandardCharsets.UTF_8);
-        String normalized = migration.toLowerCase();
+        String normalized = baseline.toLowerCase();
 
         assertThat(normalized).contains(
                 "not exists",
-                "insert ignore into sys_role_menu",
+                "delete role_menu",
+                "insert into sys_role_menu",
                 "workflow/integrationcredential/index",
                 "workflow/runtimeevent/index",
                 "'workflow:integrationcredential:add'",
                 "'workflow:integrationcredential:rotate'",
                 "'workflow:integrationcredential:revoke'",
-                "role_info.role_key = 'workflow_admin'",
-                "role_info.role_key = 'workflow_auditor'");
+                "tmp_workflow_role_actual");
         assertThat(normalized).doesNotContain("insert into sys_menu values");
     }
 

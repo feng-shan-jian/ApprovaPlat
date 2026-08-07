@@ -88,6 +88,8 @@ npm run build:prod
 
 标准生产配置和 systemd 单元见 [deployment/README.md](deployment/README.md)，默认同样自动创建并持久化密钥。
 
+架构、审批契约、数据库基线、运维和验收文档统一从 [docs/README.md](docs/README.md) 进入。
+
 ## 许可证
 
 [MIT License](LICENSE)

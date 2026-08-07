@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 class WorkflowDesignerPreferenceDdlContractTest
 {
     /**
-     * 验证偏好迁移幂等、非破坏且具备用户外键、主题和全部布尔约束。
+     * 验证首个正式基线中的偏好表具备用户外键、主题和全部布尔约束。
      * @return void，正式偏好表可能产生孤儿记录或非法状态时测试失败
      * @throws Exception 正式 SQL 无法读取时测试失败
      */
@@ -19,7 +19,7 @@ class WorkflowDesignerPreferenceDdlContractTest
     void definesConstrainedNonDestructivePreferenceTable() throws Exception
     {
         String ddl = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.5__workflow_designer_preference.sql"),
+                "sql/flowable/business/8.0.0__workflow_business.sql"),
                 StandardCharsets.UTF_8).toLowerCase();
         Pattern destructive = Pattern.compile(
                 "(?im)^\\s*(drop|delete|update|alter|truncate|replace|call|set)\\b");

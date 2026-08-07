@@ -90,6 +90,9 @@ file, because tokens issued before the next backend restart will become invalid.
 See [deployment/README.md](deployment/README.md) for the standard production configuration and
 systemd unit, which also create and persist the secret automatically.
 
+Architecture, workflow contracts, database baseline, operations, and acceptance documentation are
+indexed in [docs/README.md](docs/README.md).
+
 ## License
 
 [MIT License](LICENSE)

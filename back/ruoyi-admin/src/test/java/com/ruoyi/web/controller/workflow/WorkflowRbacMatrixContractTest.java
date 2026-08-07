@@ -52,7 +52,7 @@ class WorkflowRbacMatrixContractTest
      * @return void，无返回值；源码与 103 行正式矩阵任一漂移时测试失败
      */
     @Test
-    void freezesSixteenControllersAndOneHundredTwoMappings()
+    void freezesSixteenControllersAndOneHundredThreeMappings()
     {
         List<Endpoint> matrix = WorkflowRbacMatrix.load();
         Map<String, InventoryEndpoint> inventory = WorkflowRbacMatrix.reflectInventory();
@@ -94,7 +94,7 @@ class WorkflowRbacMatrixContractTest
      * @return void，无返回值；矩阵与正式职责分离角色授权不一致时测试失败
      */
     @Test
-    void derivesAllFiveHundredTenCellsFromProductionRoleSql()
+    void derivesAllFiveHundredFifteenCellsFromProductionRoleSql()
     {
         List<Endpoint> matrix = WorkflowRbacMatrix.load();
         Map<String, Set<String>> rolePermissions = WorkflowRbacMatrix.loadRolePermissions();

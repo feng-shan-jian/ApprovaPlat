@@ -18,15 +18,15 @@ import com.ruoyi.flowable.extension.WorkflowSqlConnector;
 class WorkflowExtensionDdlContractTest
 {
     /**
-     * 验证增量迁移幂等、非破坏且具备 JSON、摘要、外键和唯一性约束。
-     * @return 无返回值；迁移可能破坏数据或允许非法快照时测试失败
+     * 验证首个正式业务基线幂等、非破坏且具备 JSON、摘要、外键和唯一性约束。
+     * @return 无返回值；基线可能破坏数据或允许非法快照时测试失败
      * @throws Exception 正式 SQL 无法读取时测试失败
      */
     @Test
     void definesConstrainedNonDestructiveExtensionRegistry() throws Exception
     {
         String ddl = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.7__workflow_extension_registry.sql"),
+                "sql/flowable/business/8.0.0__workflow_business.sql"),
                 StandardCharsets.UTF_8).toLowerCase();
         Pattern destructive = Pattern.compile(
                 "(?im)^\\s*(drop|delete|update|alter|truncate|replace|call|set)\\b");
@@ -52,12 +52,12 @@ class WorkflowExtensionDdlContractTest
     }
 
     /**
-     * 验证基础建库脚本与增量迁移保持同一三元快照唯一键和版本外键。
-     * @return 无返回值；清洁环境与升级环境结构漂移时测试失败
+     * 验证首个正式业务基线包含三元快照唯一键和版本外键。
+     * @return 无返回值；基线结构漂移时测试失败
      * @throws Exception 正式 SQL 无法读取时测试失败
      */
     @Test
-    void keepsBaseSchemaAlignedWithMigration() throws Exception
+    void definesExtensionSnapshotKeysInFormalBaseline() throws Exception
     {
         String ddl = Files.readString(findProjectSql(
                 "sql/flowable/business/8.0.0__workflow_business.sql"),
@@ -70,15 +70,15 @@ class WorkflowExtensionDdlContractTest
     }
 
     /**
-     * 验证 CEL 内置目录升级迁移与当前沙箱 Schema 和版本摘要完全一致。
-     * @return 无返回值；升级脚本允许实现漂移或摘要不匹配时测试失败
+     * 验证 CEL 内置目录基线与当前沙箱 Schema 和版本摘要完全一致。
+     * @return 无返回值；基线允许实现漂移或摘要不匹配时测试失败
      * @throws Exception 正式 SQL 无法读取时测试失败
      */
     @Test
     void seedsCelRegistryWithCurrentSandboxChecksum() throws Exception
     {
-        String migration = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.8__workflow_cel_registry.sql"),
+        String baseline = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0__workflow_business.sql"),
                 StandardCharsets.UTF_8);
         String schema = new WorkflowCelSandbox().configSchema();
         String checksum = WorkflowExtensionChecksum.sha256(
@@ -86,27 +86,27 @@ class WorkflowExtensionDdlContractTest
         Pattern destructive = Pattern.compile(
                 "(?im)^\\s*(drop|delete|update|alter|truncate|replace|call|set)\\b");
 
-        assertThat(migration).contains(
+        assertThat(baseline).contains(
                 "'approva.cel-expression'",
                 "'CEL_EXPRESSION_V1'",
                 schema.replace("'", "''"),
                 checksum,
                 "WHERE NOT EXISTS");
-        assertThat(destructive.matcher(migration).find()).isFalse();
+        assertThat(destructive.matcher(baseline).find()).isFalse();
     }
 
     /**
-     * 验证 HTTP 连接器升级迁移包含受约束端点、幂等调用台账和当前固定实现版本。
+     * 验证 HTTP 连接器基线包含受约束端点、幂等调用台账和当前固定实现版本。
      * @return void，结构、Schema 或摘要与运行时代码漂移时测试失败
      * @throws Exception 正式 SQL 无法读取时测试失败
      */
     @Test
     void definesHttpConnectorTablesAndCurrentFixedVersion() throws Exception
     {
-        String migration = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.9__workflow_http_connector.sql"),
+        String baseline = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0__workflow_business.sql"),
                 StandardCharsets.UTF_8);
-        String normalized = migration.toLowerCase();
+        String normalized = baseline.toLowerCase();
         String schema = new WorkflowHttpConnector(null, null, null).configSchema();
         String checksum = WorkflowExtensionChecksum.sha256(
                 "approva.http-connector", "HTTP", "1", "HTTP_CONNECTOR_V1", schema);
@@ -123,17 +123,17 @@ class WorkflowExtensionDdlContractTest
                 "`lease_expires_at`",
                 "'approva.http-connector'",
                 "'http_connector_v1'");
-        assertThat(migration).contains(schema.replace("'", "''"), checksum, "WHERE NOT EXISTS");
-        assertThat(destructive.matcher(migration).find()).isFalse();
+        assertThat(baseline).contains(schema.replace("'", "''"), checksum, "WHERE NOT EXISTS");
+        assertThat(destructive.matcher(baseline).find()).isFalse();
     }
 
     /**
-     * 验证清洁建库脚本同步包含 HTTP 连接器表和固定版本，避免升级与新装结构分叉。
+     * 验证首个正式业务基线包含 HTTP 连接器表和固定版本。
      * @return void，清洁建库脚本缺少 HTTP 正式结构时测试失败
      * @throws Exception 正式 SQL 无法读取时测试失败
      */
     @Test
-    void keepsBaseSchemaAlignedWithHttpConnectorMigration() throws Exception
+    void definesHttpConnectorSeedInFormalBaseline() throws Exception
     {
         String ddl = Files.readString(findProjectSql(
                 "sql/flowable/business/8.0.0__workflow_business.sql"),
@@ -150,27 +150,22 @@ class WorkflowExtensionDdlContractTest
     }
 
     /**
-     * 验证 SQL 数据源目录、固定实现版本和通用调用台账迁移与运行时代码保持一致。
+     * 验证 SQL 数据源目录、固定实现版本和通用调用台账基线与运行时代码保持一致。
      * @return void，SQL Schema、摘要或通用台账字段漂移时测试失败
      * @throws Exception 正式 SQL 无法读取时测试失败
      */
     @Test
     void definesSqlConnectorAndGenericInvocationLedger() throws Exception
     {
-        String migration = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.10__workflow_sql_connector.sql"),
-                StandardCharsets.UTF_8);
-        String genericMigration = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.11__workflow_generic_connector_invocation.sql"),
-                StandardCharsets.UTF_8).toLowerCase();
-        String base = Files.readString(findProjectSql(
+        String baseline = Files.readString(findProjectSql(
                 "sql/flowable/business/8.0.0__workflow_business.sql"),
-                StandardCharsets.UTF_8).toLowerCase();
+                StandardCharsets.UTF_8);
+        String base = baseline.toLowerCase();
         String schema = new WorkflowSqlConnector(null, null, null, null, null).configSchema();
         String checksum = WorkflowExtensionChecksum.sha256(
                 "approva.sql-connector", "SQL", "1", "SQL_CONNECTOR_V1", schema);
 
-        assertThat(migration).contains(schema.replace("'", "''"), checksum,
+        assertThat(baseline).contains(schema.replace("'", "''"), checksum,
                 "'approva.sql-connector'", "'SQL_CONNECTOR_V1'", "WHERE NOT EXISTS");
         assertThat(base).contains(
                 "create table if not exists `wf_sql_datasource`",
@@ -178,13 +173,6 @@ class WorkflowExtensionDdlContractTest
                 "`connector_type`", "`target_key`", "`target_revision`",
                 "`operation`", "`target_summary`", "`result_code`",
                 "'approva.sql-connector'", "'sql_connector_v1'", checksum);
-        assertThat(genericMigration).contains(
-                "rename column `endpoint_key` to `target_key`",
-                "rename column `endpoint_revision` to `target_revision`",
-                "rename column `request_method` to `operation`",
-                "rename column `request_path` to `target_summary`",
-                "rename column `http_status` to `result_code`",
-                "add column `connector_type`");
     }
 
     /**

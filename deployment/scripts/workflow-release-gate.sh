@@ -5,10 +5,15 @@ IFS=$'\n\t'
 export LC_ALL=C
 
 readonly GATE_USAGE_EXIT=64
-# 当前发布批准的增量 SQL 必须按数组顺序执行，禁止遗漏历史 .3 或提前执行 .4。
+# 首个正式版本只允许按固定顺序执行完整数据库基线，禁止夹带未发布的开发期迁移。
 readonly -a GATE_REQUIRED_RELEASE_SQLS=(
-  'flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql'
-  'flowable/business/8.0.0.4__workflow_model_save_idempotency.sql'
+  'flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql'
+  'flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql'
+  'flowable/mysql/8.0.0/create/flowable.mysql.create.history.sql'
+  'flowable/mysql/8.0.0/create/flowable.mysql.create.dmn.sql'
+  'flowable/business/8.0.0__workflow_model_version_guard.sql'
+  'flowable/business/8.0.0__workflow_business.sql'
+  'flowable/menu/8.0.0__workflow_menu.sql'
 )
 
 # 清单校验后的路径到 SHA-256 映射；后续 SQL 顺序校验只允许引用此映射中的文件。
@@ -509,9 +514,9 @@ gate_read_release_metadata_value() {
 }
 
 #
-# 校验增量 SQL 执行顺序，固定按 .3、.4 依次执行两份批准迁移。
+# 校验首个正式版本的完整 SQL 基线执行顺序。
 # 参数：$1（字符串）发布目录；$2（字符串）目录业务名称。
-# 返回：0 表示顺序文件非空、仅含两份固定迁移，且二者均已进入哈希清单。
+# 返回：0 表示顺序文件非空、仅含固定基线脚本，且全部进入哈希清单。
 #
 gate_validate_release_order() {
   local release_dir="$1"
@@ -532,9 +537,9 @@ gate_validate_release_order() {
     sql_path="$line"
     gate_validate_relative_path "$sql_path" "$label release-order entry"
     [[ "$line_number" -le "${#GATE_REQUIRED_RELEASE_SQLS[@]}" ]] \
-      || gate_die "$label release-order.txt contains an unapproved SQL migration"
+      || gate_die "$label release-order.txt contains an unapproved SQL asset"
     [[ "$sql_path" == "${GATE_REQUIRED_RELEASE_SQLS[$((line_number - 1))]}" ]] \
-      || gate_die "$label release-order.txt must contain approved migrations in .3 then .4 order"
+      || gate_die "$label release-order.txt does not match the approved baseline order"
     [[ "$sql_path" == *.sql ]] \
       || gate_die "$label release-order entry must end in .sql"
     [[ -z "${ordered_sql[$sql_path]+present}" ]] \
@@ -548,7 +553,7 @@ gate_validate_release_order() {
     ordered_sql["$sql_path"]=1
   done < "$order_file"
   [[ "$line_number" -eq "${#GATE_REQUIRED_RELEASE_SQLS[@]}" ]] \
-    || gate_die "$label release-order.txt must contain exactly the approved 8.0.0.3 and 8.0.0.4 migrations"
+    || gate_die "$label release-order.txt must contain exactly the seven approved baseline SQL files"
 }
 
 #
@@ -846,8 +851,13 @@ gate_validate_release_bundle() {
         deployment/systemd/ruoyi-backend.service
         deployment/scripts/workflow-release-gate.sh
         deployment/scripts/tests/workflow-release-gate-test.sh
-        sql/flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql
-        sql/flowable/business/8.0.0.4__workflow_model_save_idempotency.sql
+        sql/flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql
+        sql/flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql
+        sql/flowable/mysql/8.0.0/create/flowable.mysql.create.history.sql
+        sql/flowable/mysql/8.0.0/create/flowable.mysql.create.dmn.sql
+        sql/flowable/business/8.0.0__workflow_model_version_guard.sql
+        sql/flowable/business/8.0.0__workflow_business.sql
+        sql/flowable/menu/8.0.0__workflow_menu.sql
         sql/flowable/verify/8.0.0__verify.sql
         sql/flowable/verify/8.0.0__verify_workflow_business.sql
         sql/flowable/verify/8.0.0__verify_workflow_menu.sql
@@ -1062,9 +1072,9 @@ gate_validate_environment_identity() {
 }
 
 #
-# 校验全新安装备份已真实生成并在 70 张恢复表上完成 mysqlcheck。
+# 校验全新安装备份已真实生成并在 84 张恢复表上完成 mysqlcheck。
 # 参数：$1（字符串）全新安装证据目录；$2（字符串）证据名称。
-# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 70 个 OK 结果。
+# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 84 个 OK 结果。
 #
 gate_validate_backup_restore() {
   local evidence_dir="$1"
@@ -1079,9 +1089,9 @@ gate_validate_backup_restore() {
   awk '
     NF != 2 || $NF != "OK" || seen[$1]++ { invalid = 1 }
     NF > 0 { rows++ }
-    END { exit(!invalid && rows == 70 ? 0 : 1) }
+    END { exit(!invalid && rows == 84 ? 0 : 1) }
   ' "$mysqlcheck_file" \
-    || gate_die "$label mysqlcheck must contain exactly 70 OK table results"
+    || gate_die "$label mysqlcheck must contain exactly 84 OK table results"
 }
 
 #
@@ -1152,7 +1162,7 @@ gate_validate_active_services() {
 #
 # 校验数据库验收 TSV 的三段正式脚本、固定检查项、表头和逐项 PASS 结果。
 # 参数：$1（字符串）验收结果文件；$2（字符串）证据名称。
-# 返回：0 表示 22 个正式检查恰好各出现一次且全部通过；异常时终止门禁。
+# 返回：0 表示 38 个正式检查恰好各出现一次且全部通过；异常时终止门禁。
 #
 gate_validate_database_result() {
   local file="$1"
@@ -1172,8 +1182,13 @@ gate_validate_database_result() {
         return detail == "issues=0, objects=none"
       if (check_name == "deadletter_jobs")
         return detail == "actual=0"
+      if (check_name == "flowable_dmn_table_presence" ||
+          check_name == "workflow_connector_table_presence")
+        return detail == "missing_or_invalid=none"
+      if (check_name == "workflow_connector_columns")
+        return detail == "missing=none"
       if (check_name == "workflow_business_tables")
-        return detail == "present=6, missing=none"
+        return detail == "present=8, missing=none"
       if (check_name == "workflow_business_columns")
         return detail == "missing=none"
       if (check_name == "wf_attachment_cleanup_retry_columns")
@@ -1184,20 +1199,42 @@ gate_validate_database_result() {
         return detail == "issues=0, indexes=none"
       if (check_name == "workflow_business_checks")
         return detail == "missing_or_unenforced=none"
+      if (check_name == "workflow_business_foreign_keys")
+        return detail == "missing_or_invalid=none"
       if (check_name == "wf_attachment_cleanup_retry_check_clause")
-        return detail == "matching=1"
+        return detail ~ /^constraints=1, enforced=YES, canonical_sha256=[0-9a-f]{64}$/
       if (check_name == "workflow_business_data_integrity")
-        return detail == "issues=0, values=none"
+        return detail == "issues=0, detail=none"
+      if (check_name == "workflow_runtime_integration_tables")
+        return detail == "present=2, missing=none"
+      if (check_name == "workflow_runtime_integration_columns" ||
+          check_name == "workflow_runtime_integration_indexes" ||
+          check_name == "workflow_extension_columns")
+        return detail == "missing=none"
+      if (check_name == "workflow_runtime_integration_checks" ||
+          check_name == "workflow_extension_checks")
+        return detail == "missing_or_unenforced=none"
+      if (check_name == "workflow_runtime_integration_foreign_keys")
+        return detail == "matching=1, expected=1"
+      if (check_name == "workflow_runtime_integration_data_integrity" ||
+          check_name == "workflow_extension_data_integrity")
+        return detail == "issues=0, detail=none"
+      if (check_name == "workflow_extension_tables")
+        return detail == "present=7, missing=none"
+      if (check_name == "workflow_extension_indexes")
+        return detail == "issues=0, indexes=none"
+      if (check_name == "workflow_extension_foreign_keys")
+        return detail == "missing_or_invalid=none"
       if (check_name == "workflow_menu_count")
-        return detail == "rows=53, natural_keys=53"
+        return detail == "rows=72, natural_keys=72"
       if (check_name == "workflow_menu_tree")
-        return detail == "directories=2, pages=11, buttons=40, invalid_routes=0"
+        return detail == "directories=2, pages=17, buttons=53, invalid_routes=0"
       if (check_name == "workflow_retired_permissions")
         return detail == "legacy_rows=0"
       if (check_name == "workflow_roles")
         return detail == "active_roles=5, duplicate_roles=0"
       if (check_name == "workflow_admin_menu_scope")
-        return detail == "assigned=53, expected=53"
+        return detail == "assigned=72, expected=72"
       if (check_name == "workflow_admin_only_instance_management")
         return detail == "unauthorized_assignments=0, roles=none, admin_management_permissions=2"
       if (check_name == "workflow_auditor_read_only")
@@ -1217,14 +1254,30 @@ gate_validate_database_result() {
       required["1|disabled_module_objects"] = 1
       required["1|deadletter_jobs"] = 1
 
+      required["2|flowable_dmn_table_presence"] = 1
+      required["2|workflow_connector_table_presence"] = 1
+      required["2|workflow_connector_columns"] = 1
       required["2|workflow_business_tables"] = 1
       required["2|workflow_business_columns"] = 1
       required["2|wf_attachment_cleanup_retry_columns"] = 1
       required["2|wf_category_active_code"] = 1
       required["2|workflow_business_indexes"] = 1
       required["2|workflow_business_checks"] = 1
+      required["2|workflow_business_foreign_keys"] = 1
       required["2|wf_attachment_cleanup_retry_check_clause"] = 1
       required["2|workflow_business_data_integrity"] = 1
+      required["2|workflow_runtime_integration_tables"] = 1
+      required["2|workflow_runtime_integration_columns"] = 1
+      required["2|workflow_runtime_integration_indexes"] = 1
+      required["2|workflow_runtime_integration_checks"] = 1
+      required["2|workflow_runtime_integration_foreign_keys"] = 1
+      required["2|workflow_runtime_integration_data_integrity"] = 1
+      required["2|workflow_extension_tables"] = 1
+      required["2|workflow_extension_columns"] = 1
+      required["2|workflow_extension_indexes"] = 1
+      required["2|workflow_extension_checks"] = 1
+      required["2|workflow_extension_foreign_keys"] = 1
+      required["2|workflow_extension_data_integrity"] = 1
 
       required["3|workflow_menu_count"] = 1
       required["3|workflow_menu_tree"] = 1
@@ -1258,7 +1311,7 @@ gate_validate_database_result() {
       passed++
     }
     END {
-      if (section != 3 || passed != 22) exit 1
+      if (section != 3 || passed != 38) exit 1
       for (key in required) {
         if (seen[key] != 1) exit 1
       }
@@ -1797,7 +1850,7 @@ gate_validate_evidence_profile() {
     gate_require_exact_line "$evidence_dir/empty-schema-check.txt" \
       'empty_schema_table_count=0' 'empty schema evidence'
     gate_require_exact_line "$evidence_dir/table-counts.tsv" \
-      $'70\t20\t11\t32\t7' 'table-counts.tsv'
+      $'84\t20\t11\t36\t17' 'table-counts.tsv'
     gate_validate_backup_restore "$evidence_dir" 'fresh-install evidence'
     gate_require_exact_line "$evidence_dir/redis-ping.txt" 'PONG' 'Redis PING evidence'
     gate_require_exact_line "$evidence_dir/mysql-connectivity.txt" '1' 'MySQL connectivity evidence'

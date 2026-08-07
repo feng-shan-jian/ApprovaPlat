@@ -75,6 +75,8 @@ create_bundle() {
     "$bundle_dir/frontend" \
     "$bundle_dir/sql" \
     "$bundle_dir/sql/flowable/business" \
+    "$bundle_dir/sql/flowable/menu" \
+    "$bundle_dir/sql/flowable/mysql/8.0.0/create" \
     "$bundle_dir/sql/flowable/verify" \
     "$bundle_dir/deployment/config" \
     "$bundle_dir/deployment/nginx" \
@@ -85,13 +87,28 @@ create_bundle() {
   printf '# Deployment\n\nToken secret files are generated and persisted by the service.\n' \
     > "$bundle_dir/deployment/README.md"
   {
-    printf 'flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql\n'
-    printf 'flowable/business/8.0.0.4__workflow_model_save_idempotency.sql\n'
+    printf 'flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql\n'
+    printf 'flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql\n'
+    printf 'flowable/mysql/8.0.0/create/flowable.mysql.create.history.sql\n'
+    printf 'flowable/mysql/8.0.0/create/flowable.mysql.create.dmn.sql\n'
+    printf 'flowable/business/8.0.0__workflow_model_version_guard.sql\n'
+    printf 'flowable/business/8.0.0__workflow_business.sql\n'
+    printf 'flowable/menu/8.0.0__workflow_menu.sql\n'
   } > "$bundle_dir/sql/release-order.txt"
-  printf 'ALTER TABLE wf_attachment ADD COLUMN cleanup_retry_count INT;\n' \
-    > "$bundle_dir/sql/flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql"
-  printf 'CREATE TABLE wf_model_save_idempotency (request_id VARCHAR(64) PRIMARY KEY);\n' \
-    > "$bundle_dir/sql/flowable/business/8.0.0.4__workflow_model_save_idempotency.sql"
+  printf 'CREATE TABLE ACT_GE_PROPERTY (NAME_ VARCHAR(64));\n' \
+    > "$bundle_dir/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql"
+  printf 'CREATE TABLE ACT_RE_MODEL (ID_ VARCHAR(64));\n' \
+    > "$bundle_dir/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql"
+  printf 'CREATE TABLE ACT_HI_PROCINST (ID_ VARCHAR(64));\n' \
+    > "$bundle_dir/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.history.sql"
+  printf 'CREATE TABLE ACT_DMN_DECISION (ID_ VARCHAR(64));\n' \
+    > "$bundle_dir/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.dmn.sql"
+  printf 'ALTER TABLE ACT_RE_MODEL ADD UNIQUE (KEY_, VERSION_, TENANT_ID_);\n' \
+    > "$bundle_dir/sql/flowable/business/8.0.0__workflow_model_version_guard.sql"
+  printf 'CREATE TABLE wf_category (category_id BIGINT PRIMARY KEY);\n' \
+    > "$bundle_dir/sql/flowable/business/8.0.0__workflow_business.sql"
+  printf 'INSERT INTO sys_menu (menu_name) VALUES (''workflow'');\n' \
+    > "$bundle_dir/sql/flowable/menu/8.0.0__workflow_menu.sql"
   {
     printf 'server:\n'
     printf '  address: 127.0.0.1\n'
@@ -292,7 +309,11 @@ database_check_detail() {
       printf 'issues=0, objects=none'
       ;;
     deadletter_jobs) printf 'actual=0' ;;
-    workflow_business_tables) printf 'present=6, missing=none' ;;
+    flowable_dmn_table_presence|workflow_connector_table_presence)
+      printf 'missing_or_invalid=none'
+      ;;
+    workflow_connector_columns) printf 'missing=none' ;;
+    workflow_business_tables) printf 'present=8, missing=none' ;;
     workflow_business_columns) printf 'missing=none' ;;
     wf_attachment_cleanup_retry_columns) printf 'invalid=none' ;;
     wf_category_active_code)
@@ -300,13 +321,30 @@ database_check_detail() {
       ;;
     workflow_business_indexes) printf 'issues=0, indexes=none' ;;
     workflow_business_checks) printf 'missing_or_unenforced=none' ;;
-    wf_attachment_cleanup_retry_check_clause) printf 'matching=1' ;;
-    workflow_business_data_integrity) printf 'issues=0, values=none' ;;
-    workflow_menu_count) printf 'rows=53, natural_keys=53' ;;
-    workflow_menu_tree) printf 'directories=2, pages=11, buttons=40, invalid_routes=0' ;;
+    workflow_business_foreign_keys) printf 'missing_or_invalid=none' ;;
+    wf_attachment_cleanup_retry_check_clause)
+      printf 'constraints=1, enforced=YES, canonical_sha256=%064d' 1
+      ;;
+    workflow_business_data_integrity) printf 'issues=0, detail=none' ;;
+    workflow_runtime_integration_tables) printf 'present=2, missing=none' ;;
+    workflow_runtime_integration_columns|workflow_runtime_integration_indexes|workflow_extension_columns)
+      printf 'missing=none'
+      ;;
+    workflow_runtime_integration_checks|workflow_extension_checks)
+      printf 'missing_or_unenforced=none'
+      ;;
+    workflow_runtime_integration_foreign_keys) printf 'matching=1, expected=1' ;;
+    workflow_runtime_integration_data_integrity|workflow_extension_data_integrity)
+      printf 'issues=0, detail=none'
+      ;;
+    workflow_extension_tables) printf 'present=7, missing=none' ;;
+    workflow_extension_indexes) printf 'issues=0, indexes=none' ;;
+    workflow_extension_foreign_keys) printf 'missing_or_invalid=none' ;;
+    workflow_menu_count) printf 'rows=72, natural_keys=72' ;;
+    workflow_menu_tree) printf 'directories=2, pages=17, buttons=53, invalid_routes=0' ;;
     workflow_retired_permissions) printf 'legacy_rows=0' ;;
     workflow_roles) printf 'active_roles=5, duplicate_roles=0' ;;
-    workflow_admin_menu_scope) printf 'assigned=53, expected=53' ;;
+    workflow_admin_menu_scope) printf 'assigned=72, expected=72' ;;
     workflow_admin_only_instance_management)
       printf 'unauthorized_assignments=0, roles=none, admin_management_permissions=2'
       ;;
@@ -316,7 +354,7 @@ database_check_detail() {
 }
 
 #
-# 写入三套正式只读 SQL 的固定结构和 22 个完整检查项，模拟 mysql --batch --raw 原始输出。
+# 写入三套正式只读 SQL 的固定结构和 38 个完整检查项，模拟 mysql --batch --raw 原始输出。
 # 参数：$1（字符串）目标 TSV 文件。
 # 返回：0 表示数据库验收夹具已按正式脚本顺序写入。
 #
@@ -331,10 +369,16 @@ write_database_verify() {
     deadletter_jobs
   )
   local -a business_checks=(
+    flowable_dmn_table_presence workflow_connector_table_presence workflow_connector_columns
     workflow_business_tables workflow_business_columns
     wf_attachment_cleanup_retry_columns wf_category_active_code
-    workflow_business_indexes workflow_business_checks
+    workflow_business_indexes workflow_business_checks workflow_business_foreign_keys
     wf_attachment_cleanup_retry_check_clause workflow_business_data_integrity
+    workflow_runtime_integration_tables workflow_runtime_integration_columns
+    workflow_runtime_integration_indexes workflow_runtime_integration_checks
+    workflow_runtime_integration_foreign_keys workflow_runtime_integration_data_integrity
+    workflow_extension_tables workflow_extension_columns workflow_extension_indexes
+    workflow_extension_checks workflow_extension_foreign_keys workflow_extension_data_integrity
   )
   local -a menu_checks=(
     workflow_menu_count workflow_menu_tree workflow_retired_permissions
@@ -411,12 +455,12 @@ create_fresh_install_evidence() {
   printf '%064d  backup-smoke/schema.sql\n' 1 \
     > "$evidence_dir/backup-smoke/schema-sha256.txt"
   : > "$evidence_dir/backup-smoke/mysqlcheck.txt"
-  for ((table_number = 1; table_number <= 70; table_number++)); do
+  for ((table_number = 1; table_number <= 84; table_number++)); do
     printf 'ry_vue_backup_verify.table_%02d OK\n' "$table_number" \
       >> "$evidence_dir/backup-smoke/mysqlcheck.txt"
   done
   printf 'empty_schema_table_count=0\n' > "$evidence_dir/empty-schema-check.txt"
-  printf '70\t20\t11\t32\t7\n' > "$evidence_dir/table-counts.tsv"
+  printf '84\t20\t11\t36\t17\n' > "$evidence_dir/table-counts.tsv"
   printf 'PONG\n' > "$evidence_dir/redis-ping.txt"
   if [[ "$previous_release_id" != 'NONE' || -n "$previous_release_dir" ]]; then
     preflight_arguments+=(
@@ -1155,34 +1199,40 @@ main() {
   bundle_dir="$TEST_ROOT/reversed-approved-sql-order"
   create_bundle "$bundle_dir" 'reversed-approved-sql-order' 'NONE'
   {
-    printf 'flowable/business/8.0.0.4__workflow_model_save_idempotency.sql\n'
-    printf 'flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql\n'
+    printf 'flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql\n'
+    printf 'flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql\n'
+    printf 'flowable/mysql/8.0.0/create/flowable.mysql.create.history.sql\n'
+    printf 'flowable/mysql/8.0.0/create/flowable.mysql.create.dmn.sql\n'
+    printf 'flowable/business/8.0.0__workflow_model_version_guard.sql\n'
+    printf 'flowable/business/8.0.0__workflow_business.sql\n'
+    printf 'flowable/menu/8.0.0__workflow_menu.sql\n'
   } > "$bundle_dir/sql/release-order.txt"
   refresh_bundle_manifest "$bundle_dir"
-  expect_failure 'approved SQL migrations in reversed order fail' \
+  expect_failure 'approved baseline SQL in reversed order fails' \
     run_preflight_gate "$bundle_dir" 'reversed-approved-sql-order'
 
-  bundle_dir="$TEST_ROOT/missing-approved-dot4-order"
-  create_bundle "$bundle_dir" 'missing-approved-dot4-order' 'NONE'
-  printf 'flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql\n' \
-    > "$bundle_dir/sql/release-order.txt"
+  bundle_dir="$TEST_ROOT/missing-approved-baseline-order"
+  create_bundle "$bundle_dir" 'missing-approved-baseline-order' 'NONE'
+  grep -v 'flowable/menu/8.0.0__workflow_menu.sql' "$bundle_dir/sql/release-order.txt" \
+    > "$bundle_dir/sql/release-order.txt.filtered"
+  mv -- "$bundle_dir/sql/release-order.txt.filtered" "$bundle_dir/sql/release-order.txt"
   refresh_bundle_manifest "$bundle_dir"
-  expect_failure 'release order missing approved 8.0.0.4 migration fails' \
-    run_preflight_gate "$bundle_dir" 'missing-approved-dot4-order'
+  expect_failure 'release order missing approved menu baseline fails' \
+    run_preflight_gate "$bundle_dir" 'missing-approved-baseline-order'
 
-  bundle_dir="$TEST_ROOT/missing-required-migration"
-  create_bundle "$bundle_dir" 'missing-required-migration' 'NONE'
-  rm -f -- "$bundle_dir/sql/flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql"
+  bundle_dir="$TEST_ROOT/missing-required-common-baseline"
+  create_bundle "$bundle_dir" 'missing-required-common-baseline' 'NONE'
+  rm -f -- "$bundle_dir/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql"
   refresh_bundle_manifest "$bundle_dir"
-  expect_failure 'missing approved 8.0.0.3 migration fails' \
-    run_preflight_gate "$bundle_dir" 'missing-required-migration'
+  expect_failure 'missing approved Flowable common baseline fails' \
+    run_preflight_gate "$bundle_dir" 'missing-required-common-baseline'
 
-  bundle_dir="$TEST_ROOT/missing-required-dot4-migration"
-  create_bundle "$bundle_dir" 'missing-required-dot4-migration' 'NONE'
-  rm -f -- "$bundle_dir/sql/flowable/business/8.0.0.4__workflow_model_save_idempotency.sql"
+  bundle_dir="$TEST_ROOT/missing-required-business-baseline"
+  create_bundle "$bundle_dir" 'missing-required-business-baseline' 'NONE'
+  rm -f -- "$bundle_dir/sql/flowable/business/8.0.0__workflow_business.sql"
   refresh_bundle_manifest "$bundle_dir"
-  expect_failure 'missing approved 8.0.0.4 migration fails' \
-    run_preflight_gate "$bundle_dir" 'missing-required-dot4-migration'
+  expect_failure 'missing approved workflow business baseline fails' \
+    run_preflight_gate "$bundle_dir" 'missing-required-business-baseline'
 
   bundle_dir="$TEST_ROOT/missing-sql"
   create_bundle "$bundle_dir" 'missing-sql' 'NONE'
@@ -1478,7 +1528,7 @@ main() {
 
   evidence_dir="$TEST_ROOT/rehearsal-invalid-fresh-counts"
   cp -a -- "$TEST_REHEARSAL_ONE_DIR" "$evidence_dir"
-  printf '69\t20\t11\t32\t6\n' \
+  printf '83\t20\t11\t36\t16\n' \
     > "$evidence_dir/fresh-install/table-counts.tsv"
   refresh_rehearsal_manifests "$evidence_dir"
   expect_failure 'rehearsal with invalid namespaced table counts fails' \
@@ -1496,7 +1546,7 @@ main() {
   printf 'ry_vue_backup_verify.table_01 OK\n' \
     > "$evidence_dir/fresh-install/backup-smoke/mysqlcheck.txt"
   refresh_rehearsal_manifests "$evidence_dir"
-  expect_failure 'rehearsal without 70-table restore verification fails' \
+  expect_failure 'rehearsal without 84-table restore verification fails' \
     run_release_evidence_gate "$evidence_dir" rehearsal
 
   evidence_dir="$TEST_ROOT/rehearsal-fresh-attachment-diff"

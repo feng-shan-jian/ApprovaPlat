@@ -55,35 +55,25 @@ class WorkflowAttachmentContractTest
     }
 
     /**
-     * 验证已部署数据库的附件清理重试增量可重复执行且不会删除或重写历史数据。
-     * @return void，增量缺少对象探测、正式约束或包含破坏性语句时测试失败
-     * @throws Exception 读取正式增量 SQL 失败
+     * 验证首个正式数据库基线直接包含附件清理重试结构，且不包含破坏性语句。
+     * @return void，基线缺少重试结构或包含破坏性语句时测试失败
+     * @throws Exception 读取正式基线 SQL 失败
      */
     @Test
-    void definesIdempotentAttachmentCleanupRetryMigration() throws Exception
+    void definesAttachmentCleanupRetryInFormalBaseline() throws Exception
     {
-        String migration = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0.3__workflow_attachment_cleanup_retry.sql"),
+        String baseline = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0__workflow_business.sql"),
                 StandardCharsets.UTF_8).toLowerCase();
 
-        assertThat(migration).contains(
-                "from information_schema.columns",
-                "column_name = 'cleanup_retry_count'",
-                "column_name = 'cleanup_next_retry_time'",
-                "column_name = 'cleanup_last_error_code'",
-                "column_type = 'int'",
-                "datetime_precision = 3",
-                "character_set_name = 'ascii'",
-                "collation_name = 'ascii_bin'",
-                "from information_schema.table_constraints tc",
-                "join information_schema.check_constraints cc",
+        assertThat(baseline).contains(
+                "create table if not exists `wf_attachment`",
+                "`cleanup_retry_count` int",
+                "`cleanup_next_retry_time` datetime(3)",
+                "`cleanup_last_error_code` varchar(64)",
                 "idx_wf_attachment_cleanup_due",
-                "chk_wf_attachment_cleanup_retry",
-                "prepare wf_attachment_retry_statement",
-                "execute wf_attachment_retry_statement",
-                "'do 0'")
-                .doesNotContain("drop table", "drop column", "delete from",
-                        "update `wf_attachment`");
+                "chk_wf_attachment_cleanup_retry")
+                .doesNotContain("drop table", "drop column", "delete from", "update `wf_attachment`");
     }
 
     /**

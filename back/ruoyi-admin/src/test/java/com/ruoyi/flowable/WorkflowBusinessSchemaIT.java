@@ -19,7 +19,7 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 
 /**
- * 工作流六张正式业务表的真实 MySQL 结构与约束集成测试。
+ * 工作流十七张正式业务表的真实 MySQL 结构与约束集成测试。
  */
 @Execution(ExecutionMode.SAME_THREAD)
 class WorkflowBusinessSchemaIT

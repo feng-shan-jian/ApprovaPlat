@@ -3,6 +3,10 @@
 This directory contains the production configuration, systemd unit, Nginx configuration, release
 gates, and deployment samples that must ship with an ApprovaPlat release.
 
+The maintained installation and release procedures are documented in
+[`docs/operations/workflow-deployment.md`](../docs/operations/workflow-deployment.md) and
+[`docs/operations/workflow-release.md`](../docs/operations/workflow-release.md).
+
 ## Token Secret Lifecycle
 
 The standard single-node deployment requires no manual token-secret generation:

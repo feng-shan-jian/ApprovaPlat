@@ -1,7 +1,8 @@
--- Flowable 模型 key 与版本号的数据库级并发完整性门禁。
--- 本脚本可重复执行；唯一约束创建时若发现既有重复版本组，MySQL 会立即失败且不会删除正式模型数据。
+-- 首个正式基线的 Flowable 模型 key 与版本号数据库完整性门禁。
+-- 本脚本只在全新安装的 Flowable 官方表之后执行；唯一约束创建时若发现重复版本组，
+-- MySQL 会明确失败，不删除或覆盖任何正式模型数据。
 
--- 识别任意名称但列顺序一致的既有唯一索引，使脚本能够安全重复执行。
+-- 识别任意名称但列顺序一致的唯一索引，使脚本具备重复执行安全性。
 SET @wf_model_unique_index_count :=
 (
     SELECT COUNT(*)
@@ -18,7 +19,7 @@ SET @wf_model_unique_index_count :=
       ) AS matching_unique_indexes
 );
 
--- ACT_RE_MODEL 缺失时 ALTER 会明确失败；重复数据存在时唯一约束创建也会原子失败。
+-- 首个基线只允许在模型结构和数据无歧义时建立唯一约束。
 SET @wf_model_guard_ddl := IF(
     @wf_model_unique_index_count = 0,
     'ALTER TABLE `ACT_RE_MODEL` ADD CONSTRAINT `ACT_UNIQ_MODEL` UNIQUE (`KEY_`, `VERSION_`, `TENANT_ID_`)',
