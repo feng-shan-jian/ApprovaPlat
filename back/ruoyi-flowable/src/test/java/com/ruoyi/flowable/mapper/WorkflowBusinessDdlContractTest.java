@@ -43,6 +43,15 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_collaboration_message`",
                 "create table if not exists `wf_collaboration_outbox`",
                 "create table if not exists `wf_collaboration_message_audit`",
+                "create table if not exists `wf_bpmn_event_code`",
+                "create table if not exists `wf_bpmn_event_audit`",
+                "create table if not exists `wf_bpmn_event_notification`",
+                "create table if not exists `wf_business_calendar`",
+                "create table if not exists `wf_business_calendar_day`",
+                "create table if not exists `wf_deploy_task_sla`",
+                "create table if not exists `wf_task_sla_execution`",
+                "create table if not exists `wf_task_sla_audit`",
+                "create table if not exists `wf_task_sla_notification`",
                 "create table if not exists `wf_attachment_quota_guard`",
                 "create table if not exists `wf_attachment`")
                 .doesNotContain("drop table");
@@ -71,6 +80,13 @@ class WorkflowBusinessDdlContractTest
                 "constraint `chk_wf_controlled_loop_actor` check",
                 "constraint `chk_wf_controlled_loop_outcome` check (`outcome` in ('repeat', 'exit'))",
                 "key `idx_wf_copy_user_status_time` (`user_id`, `del_flag`, `create_time`)");
+        assertThat(ddl).contains(
+                "unique key `uk_wf_business_calendar_key` (`calendar_key`)",
+                "constraint `chk_wf_deploy_task_sla_escalation` check",
+                "unique key `uk_wf_task_sla_execution_task` (`task_id`)",
+                "unique key `uk_wf_task_sla_audit_action`",
+                "unique key `uk_wf_task_sla_notification`",
+                "constraint `fk_wf_task_sla_notification_audit`");
     }
 
     /**
@@ -143,6 +159,22 @@ class WorkflowBusinessDdlContractTest
                 "integration_credential_invalid_row",
                 "runtime_event_invalid_row",
                 "runtime_event_missing_credential");
+        assertThat(normalized).contains(
+                "workflow_bpmn_event_tables",
+                "workflow_bpmn_event_constraints",
+                "workflow_bpmn_event_data_integrity",
+                "event_code_invalid_row",
+                "event_audit_invalid_row",
+                "event_notification_invalid_row",
+                "workflow_sla_tables",
+                "workflow_sla_constraints",
+                "workflow_sla_foreign_keys",
+                "workflow_sla_data_integrity",
+                "sla_calendar_invalid_row",
+                "sla_snapshot_invalid_row",
+                "sla_execution_invalid_row",
+                "sla_audit_invalid_row",
+                "sla_notification_invalid_row");
     }
 
     /**

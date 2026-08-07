@@ -143,6 +143,9 @@ public class WorkflowModelService
     /** 部署时把调用活动编译为精确定义引用；旧构造测试可为空。 */
     private final WorkflowCallActivityReferenceService callActivityReferenceService;
 
+    /** 审批 SLA 真实边界定时器编译和部署快照服务；兼容旧单元构造时可为空。 */
+    private WorkflowTaskSlaDeploymentService taskSlaDeploymentService;
+
     /** Flowable 模型 metaInfo 的 Jackson 3 结构化读写器。 */
     private final ObjectMapper metadataMapper = JsonMapper.shared();
 
@@ -194,6 +197,18 @@ public class WorkflowModelService
         this.dmnDecisionService = dmnDecisionService;
         this.formFieldExtensionService = formFieldExtensionService;
         this.callActivityReferenceService = callActivityReferenceService;
+    }
+
+    /**
+     * 延迟注入 SLA 部署编译器，保留既有大量直接构造单元测试的兼容性。
+     * @param taskSlaDeploymentService WorkflowTaskSlaDeploymentService，真实边界定时器编译和快照服务
+     * @return void，生产 Spring 容器启动后必须完成注入
+     */
+    @Autowired
+    public void setTaskSlaDeploymentService(
+            WorkflowTaskSlaDeploymentService taskSlaDeploymentService)
+    {
+        this.taskSlaDeploymentService = taskSlaDeploymentService;
     }
 
     /**
@@ -767,7 +782,11 @@ public class WorkflowModelService
             byte[] executableBpmn = callActivityReferenceService == null
                     ? dmnDeployment.compiledBpmn()
                     : callActivityReferenceService.freezeReferences(dmnDeployment.compiledBpmn());
-            // 最终执行资源必须再次通过编译阶段门禁，确保作者属性已剥离且生成回路满足 Flowable 官方校验。
+            WorkflowPreparedSlaDeployment slaDeployment = taskSlaDeploymentService == null
+                    ? new WorkflowPreparedSlaDeployment(executableBpmn, List.of())
+                    : taskSlaDeploymentService.prepare(executableBpmn, identity.userId());
+            executableBpmn = slaDeployment.compiledBpmn();
+            // 最终执行资源必须再次通过编译阶段门禁，确保循环与 SLA 作者属性均已剥离，且生成结构满足 Flowable 校验。
             bpmnService.validateCompiledDeployment(executableBpmn);
             Map<String, List<ProcessDefinition>> activeHistoryByKey =
                     loadActiveDefinitionsByProcessKey(document);
@@ -816,6 +835,11 @@ public class WorkflowModelService
                 controlledLoopDeploymentService.persist(deployment.getId(), controlledLoopDeployment);
             }
             dmnDecisionService.persist(deployment.getId(), dmnDeployment, identity.userId());
+            if (taskSlaDeploymentService != null)
+            {
+                // Flowable 部署与 SLA 快照共享外层事务，任一快照失败都会回滚部署和所有关联数据。
+                taskSlaDeploymentService.persist(deployment.getId(), slaDeployment);
+            }
 
             // 记录最近一次部署关系，后续模型编辑和安全删除据此执行状态门禁。
             model.setDeploymentId(deployment.getId());

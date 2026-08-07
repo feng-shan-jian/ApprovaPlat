@@ -10,11 +10,11 @@ WITH workflow_menu AS (
 SELECT
     'workflow_menu_count' AS check_name,
     CASE
-        WHEN COUNT(*) = 76
+        WHEN COUNT(*) = 86
          AND COUNT(DISTINCT CASE
                  WHEN menu_type = 'M' THEN CONCAT('path:', path)
                  ELSE CONCAT('perms:', perms)
-             END) = 76
+             END) = 86
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -47,8 +47,8 @@ SELECT
     'workflow_menu_tree' AS check_name,
     CASE
         WHEN (SELECT COUNT(*) FROM workflow_directory) = 2
-         AND (SELECT COUNT(*) FROM workflow_page) = 18
-         AND (SELECT COUNT(*) FROM workflow_button) = 56
+         AND (SELECT COUNT(*) FROM workflow_page) = 19
+         AND (SELECT COUNT(*) FROM workflow_button) = 65
          AND (SELECT COUNT(*) FROM workflow_page
               WHERE component IS NULL OR component = '' OR route_name = '') = 0
         THEN 'PASS'
@@ -113,12 +113,12 @@ workflow_admin AS (
 SELECT
     'workflow_admin_menu_scope' AS check_name,
     CASE
-        WHEN (SELECT COUNT(*) FROM workflow_menu) = 76
-         AND COUNT(*) = 76
+        WHEN (SELECT COUNT(*) FROM workflow_menu) = 86
+         AND COUNT(*) = 86
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
-    CONCAT('assigned=', COUNT(*), ', expected=76') AS detail
+    CONCAT('assigned=', COUNT(*), ', expected=86') AS detail
 FROM sys_role_menu role_menu
 JOIN workflow_admin role_info ON role_info.role_id = role_menu.role_id
 JOIN workflow_menu menu_info ON menu_info.menu_id = role_menu.menu_id;

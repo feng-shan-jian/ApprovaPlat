@@ -9,6 +9,8 @@ import java.util.Set;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.FieldExtension;
 import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.BoundaryEvent;
+import org.flowable.bpmn.model.EventDefinition;
 import org.flowable.bpmn.model.FlowElementsContainer;
 import org.flowable.bpmn.model.FlowableListener;
 import org.flowable.bpmn.model.ImplementationType;
@@ -27,6 +29,7 @@ import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
 import com.ruoyi.flowable.extension.WorkflowCelSandbox;
 import com.ruoyi.flowable.extension.WorkflowJavaExtensionHandler;
 import com.ruoyi.flowable.extension.WorkflowJavaExtensionHandlerRegistry;
+import com.ruoyi.flowable.extension.WorkflowRaiseBpmnEventHandler;
 import com.ruoyi.flowable.extension.WorkflowHttpConnector;
 import com.ruoyi.flowable.extension.WorkflowCollaborationOutboxHandler;
 import com.ruoyi.flowable.extension.WorkflowSqlConnector;
@@ -104,13 +107,15 @@ public class WorkflowExtensionDeploymentService
             for (ServiceTask task : process.findFlowElementsOfType(ServiceTask.class, true))
             {
                 requireUniqueActivity(process, task.getId(), uniqueActivities);
-                snapshots.add(compileServiceTask(process, task, actorUserId));
+                snapshots.add(compileServiceTask(compiledModel, document.bpmnModel(), process,
+                        task, actorUserId));
             }
             // Flowable 的 SendTask 不支持受控委托实现，因此仅在执行副本中转换为 ServiceTask。
             for (SendTask task : process.findFlowElementsOfType(SendTask.class, true))
             {
                 requireUniqueActivity(process, task.getId(), uniqueActivities);
-                snapshots.add(compileSendTask(process, task, actorUserId));
+                snapshots.add(compileSendTask(compiledModel, document.bpmnModel(), process,
+                        task, actorUserId));
             }
             // 业务监听器与 ServiceTask 共用注册表和不可变快照，但使用独立稳定标识避免唯一键冲突。
             for (org.flowable.bpmn.model.FlowElement element
@@ -119,12 +124,75 @@ public class WorkflowExtensionDeploymentService
                 compileBusinessListeners(process, element, actorUserId, snapshots);
             }
         }
-        byte[] compiled = converter.convertToXML(compiledModel);
+        byte[] compiled = preserveBusinessEventDefinitions(converter.convertToXML(compiledModel),
+                document.bpmnModel());
         if (compiled == null || compiled.length == 0)
         {
             throw new ServiceException("BPMN 执行资源编译失败", HttpStatus.ERROR);
         }
         return new WorkflowPreparedExtensionDeployment(compiled, snapshots);
+    }
+
+    /**
+     * 保留 Flowable 8 XML 转换器未写回的 definitions 级 Error/Escalation 根元素。
+     * @param converted byte[]，受控任务已编译的 BPMN XML
+     * @param sourceModel BpmnModel，作者模型中已通过目录校验的根事件定义
+     * @return byte[]，包含根事件定义的可部署 BPMN XML
+     */
+    private byte[] preserveBusinessEventDefinitions(byte[] converted, BpmnModel sourceModel)
+    {
+        if (converted == null || converted.length == 0 || sourceModel == null)
+        {
+            return converted;
+        }
+        String xml = new String(converted, StandardCharsets.UTF_8);
+        StringBuilder definitions = new StringBuilder();
+        sourceModel.getErrors().forEach((id, code) -> {
+            if (!xml.contains("id=\"" + escapeXml(id) + "\""))
+            {
+                appendErrorDefinition(definitions, id, code);
+            }
+        });
+        sourceModel.getEscalations().forEach(escalation -> {
+            if (!xml.contains("id=\"" + escapeXml(escalation.getId()) + "\""))
+            {
+                appendEscalationDefinition(definitions, escalation.getId(), escalation.getName(),
+                        escalation.getEscalationCode());
+            }
+        });
+        if (definitions.isEmpty())
+        {
+            return converted;
+        }
+        int processIndex = xml.indexOf("<process ");
+        if (processIndex < 0)
+        {
+            throw new ServiceException("BPMN 根事件定义插入位置不存在", HttpStatus.ERROR);
+        }
+        String compiledXml = xml.substring(0, processIndex) + definitions + xml.substring(processIndex);
+        return compiledXml.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** @param target StringBuilder，根定义输出缓冲；@param id String，定义 ID；@param code String，业务编码；@return void。 */
+    private void appendErrorDefinition(StringBuilder target, String id, String code)
+    {
+        target.append("<error id=\"").append(escapeXml(id)).append("\" errorCode=\"")
+                .append(escapeXml(code)).append("\"></error>");
+    }
+
+    /** @param target StringBuilder，根定义输出缓冲；@param id String，定义 ID；@param name String，显示名称；@param code String，业务编码；@return void。 */
+    private void appendEscalationDefinition(StringBuilder target, String id, String name, String code)
+    {
+        target.append("<escalation id=\"").append(escapeXml(id)).append("\" name=\"")
+                .append(escapeXml(name)).append("\" escalationCode=\"")
+                .append(escapeXml(code)).append("\"></escalation>");
+    }
+
+    /** @param value String，可空 XML 文本；@return String，已转义的 XML 属性值。 */
+    private String escapeXml(String value)
+    {
+        return value == null ? "" : value.replace("&", "&amp;").replace("\"", "&quot;")
+                .replace("<", "&lt;").replace(">", "&gt;");
     }
 
     /**
@@ -320,13 +388,15 @@ public class WorkflowExtensionDeploymentService
 
     /**
      * 读取一个作者 ServiceTask 的固定字段，校验配置并把实现收敛为唯一调度器。
+     * @param compiledModel BpmnModel，编译副本；用于保留执行模型上下文
+     * @param sourceModel BpmnModel，作者模型；用于精确解析边界业务事件引用
      * @param process Process，服务任务所属可执行流程
      * @param task ServiceTask，待编译服务任务
      * @param actorUserId String，部署操作人正式用户主键
      * @return WfDeployExtensionSnapshot，尚未绑定 deploymentId 的冻结快照
      */
-    private WfDeployExtensionSnapshot compileServiceTask(Process process, ServiceTask task,
-            String actorUserId)
+    private WfDeployExtensionSnapshot compileServiceTask(BpmnModel compiledModel,
+            BpmnModel sourceModel, Process process, ServiceTask task, String actorUserId)
     {
         String extensionKey = null;
         String configJson = null;
@@ -401,6 +471,10 @@ public class WorkflowExtensionDeploymentService
         {
             throw new ServiceException("服务任务引用的扩展类型或实现不受支持", HttpStatus.CONFLICT);
         }
+        if (WorkflowRaiseBpmnEventHandler.IMPLEMENTATION_KEY.equals(version.implementationKey()))
+        {
+            validateRaiseEventBoundary(sourceModel, task, normalizedConfig);
+        }
 
         WfDeployExtensionSnapshot snapshot = new WfDeployExtensionSnapshot();
         snapshot.setProcessKey(process.getId());
@@ -423,13 +497,15 @@ public class WorkflowExtensionDeploymentService
 
     /**
      * 将作者 SendTask 转换为等价的受控 ServiceTask，并冻结精确扩展版本。
+     * @param compiledModel BpmnModel，编译副本；用于生成执行资源
+     * @param sourceModel BpmnModel，作者模型；用于精确解析边界业务事件引用
      * @param process Process，发送任务所属可执行流程
      * @param task SendTask，待转换的作者发送任务
      * @param actorUserId String，部署操作人正式用户主键
      * @return WfDeployExtensionSnapshot，尚未绑定 deploymentId 的冻结快照
      */
-    private WfDeployExtensionSnapshot compileSendTask(Process process, SendTask task,
-            String actorUserId)
+    private WfDeployExtensionSnapshot compileSendTask(BpmnModel compiledModel,
+            BpmnModel sourceModel, Process process, SendTask task, String actorUserId)
     {
         FlowElementsContainer container = process.findParent(task);
         if (container == null)
@@ -442,12 +518,50 @@ public class WorkflowExtensionDeploymentService
         compiledTask.setValues(task);
         compiledTask.setFieldExtensions(new ArrayList<>(task.getFieldExtensions()));
         WfDeployExtensionSnapshot snapshot = compileServiceTask(
-                process, compiledTask, actorUserId);
+                compiledModel, sourceModel, process, compiledTask, actorUserId);
 
         // 只替换深拷贝后的执行模型；作者模型中的 sendTask 类型和原始字段保持不变并可回显。
         container.removeFlowElement(task.getId());
         container.addFlowElement(compiledTask);
         return snapshot;
+    }
+
+    /**
+     * 核验受控产生器必须在同一活动上存在唯一精确匹配边界，部署前即阻止未捕获事件。
+     * @param model BpmnModel，作者模型；保留 definitions 根事件编码映射
+     * @param task ServiceTask，受控事件产生节点
+     * @param normalizedConfig String，已经冻结目录字段的规范配置
+     * @return void，缺失或重复匹配时拒绝部署且不产生 Flowable 部署副作用
+     */
+    private void validateRaiseEventBoundary(BpmnModel model, ServiceTask task,
+            String normalizedConfig)
+    {
+        JsonNode config = readConfig(normalizedConfig);
+        String eventType = config.path("eventType").asText("");
+        String eventCode = config.path("eventCode").asText("");
+        int matches = 0;
+        List<BoundaryEvent> boundaries = task.getBoundaryEvents();
+        if (boundaries != null)
+        {
+            for (BoundaryEvent boundary : boundaries)
+            {
+                for (EventDefinition definition : boundary.getEventDefinitions())
+                {
+                    WorkflowBpmnEventModelSupport.ResolvedEvent resolved =
+                            WorkflowBpmnEventModelSupport.resolve(model, definition);
+                    if (resolved != null && eventType.equals(resolved.eventType())
+                            && eventCode.equals(resolved.eventCode()))
+                    {
+                        matches++;
+                    }
+                }
+            }
+        }
+        if (matches != 1)
+        {
+            throw new ServiceException("受控 BPMN 事件产生节点必须附着唯一精确匹配边界",
+                    HttpStatus.BAD_REQUEST);
+        }
     }
 
     /**

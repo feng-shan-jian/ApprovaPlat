@@ -5,7 +5,7 @@
 工作流验收按以下层级执行，后一级不能被前一级替代：
 
 1. 编译和静态契约：确认源码、SQL、菜单、权限矩阵和配置没有结构漂移。
-2. 真实数据库：在隔离 MySQL 中从空 schema 安装 90 表（若依 20、Quartz 11、Flowable 36、ApprovaPlat `wf_*` 23），执行约束、备份恢复和三组共 37 项只读验收。
+2. 真实数据库：在隔离 MySQL 中从空 schema 安装 99 表（若依 20、Quartz 11、Flowable 36、ApprovaPlat `wf_*` 32），执行约束、备份恢复和三组共 46 项只读验收。
 3. 真实服务 API：启动 Spring Boot、MySQL、Redis 和附件目录，通过真实登录与 HTTP 调用验证状态和副作用。
 4. 浏览器 E2E：通过真实页面执行发起、审批动作、工作台、导出、附件和权限可见性。
 5. 并发与故障：验证重复提交、竞态、事务回滚、连接器失败、executor、清理锁和存储异常。
@@ -32,7 +32,7 @@ mvn -pl ruoyi-flowable -am `
 
 ## RBAC 矩阵
 
-`WorkflowRbacMatrixContractTest` 冻结 17 个登录用户 Controller、109 个入口和五角色 545 个权限单元。机器调用的 4 个运行事件入口使用独立集成 Token 测试，不计入登录用户矩阵。
+`WorkflowRbacMatrixContractTest` 冻结 19 个登录用户 Controller、126 个入口和五角色 630 个权限单元。机器调用的 3 个运行事件入口使用独立集成 Token 测试，不计入登录用户矩阵。
 
 ## P1 多池协作验收
 

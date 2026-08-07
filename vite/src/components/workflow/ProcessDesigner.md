@@ -186,3 +186,10 @@ onMounted(async () => {
 - 页面必须为一次用户保存意图生成 UUID `requestId`；响应丢失后的同内容重试复用该值，只有取得后端真实 `modelId` 后才清除，服务端据此返回首次落库结果而不重复建版。
 - XML 序列化开始至后端保存结束期间锁定画布、属性面板和命令栈，阻止重复保存以及“已保存响应覆盖保存期间新修改”的竞态。
 - 保存按钮要求 `workflow:model:save` 权限；`workflow:model:designer` 只负责进入设计页并读取设计上下文，后端继续独立校验保存权限。
+
+### BPMN 错误与升级边界
+
+- 设计器从 `/workflow/bpmn-event/codes/options/ERROR` 和 `/workflow/bpmn-event/codes/options/ESCALATION` 读取启用目录；错误/升级边界只能引用正式编码，不能手填自由文本。
+- Error 边界固定为中断语义；Escalation 边界可选择中断或非中断，画布属性与保存后的 `cancelActivity` 保持一致。
+- `RAISE_BPMN_EVENT` 服务任务使用受控来源 `SERVICE_TASK`、`HTTP`、`SQL`、`DMN` 或 `MANUAL`，可绑定条件变量和消息变量。事件名称、通知策略及实现版本由部署后端冻结，页面只提交作者配置。
+- 保存和部署前端校验只负责及时提示；后端还会核验目录启用状态、唯一边界附着、捕获匹配和非法 Error 非中断语义，部署失败不会产生 Flowable 或快照副作用。

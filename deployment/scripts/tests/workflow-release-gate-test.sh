@@ -313,7 +313,7 @@ database_check_detail() {
       printf 'missing_or_invalid=none'
       ;;
     workflow_schema_table_counts)
-      printf 'total=90, ruoyi=20, quartz=11, flowable=36, workflow=23'
+      printf 'total=99, ruoyi=20, quartz=11, flowable=36, workflow=32'
       ;;
     workflow_connector_columns) printf 'missing=none' ;;
     workflow_business_tables) printf 'present=10, missing=none' ;;
@@ -343,11 +343,18 @@ database_check_detail() {
     workflow_extension_tables) printf 'present=7, missing=none' ;;
     workflow_extension_indexes) printf 'issues=0, indexes=none' ;;
     workflow_extension_foreign_keys) printf 'missing_or_invalid=none' ;;
-    workflow_menu_count) printf 'rows=76, natural_keys=76' ;;
-    workflow_menu_tree) printf 'directories=2, pages=18, buttons=56, invalid_routes=0' ;;
+    workflow_sla_tables) printf 'found=6, innodb=6, expected=6' ;;
+    workflow_sla_constraints) printf 'found=28, expected=28' ;;
+    workflow_sla_foreign_keys) printf 'found=3, expected=3' ;;
+    workflow_sla_data_integrity) printf 'issues=0, detail=none' ;;
+    workflow_bpmn_event_tables) printf 'found=3, expected=3' ;;
+    workflow_bpmn_event_constraints) printf 'found=12, expected_at_least=12' ;;
+    workflow_bpmn_event_data_integrity) printf 'issues=0' ;;
+    workflow_menu_count) printf 'rows=86, natural_keys=86' ;;
+    workflow_menu_tree) printf 'directories=2, pages=19, buttons=65, invalid_routes=0' ;;
     workflow_retired_permissions) printf 'legacy_rows=0' ;;
     workflow_roles) printf 'active_roles=5, duplicate_roles=0' ;;
-    workflow_admin_menu_scope) printf 'assigned=76, expected=76' ;;
+    workflow_admin_menu_scope) printf 'assigned=86, expected=86' ;;
     workflow_admin_only_instance_management)
       printf 'unauthorized_assignments=0, roles=none, admin_management_permissions=2'
       ;;
@@ -357,7 +364,7 @@ database_check_detail() {
 }
 
 #
-# 写入三套正式只读 SQL 的固定结构和 39 个完整检查项，模拟 mysql --batch --raw 原始输出。
+# 写入三套正式只读 SQL 的固定结构和 46 个完整检查项，模拟 mysql --batch --raw 原始输出。
 # 参数：$1（字符串）目标 TSV 文件。
 # 返回：0 表示数据库验收夹具已按正式脚本顺序写入。
 #
@@ -383,6 +390,10 @@ write_database_verify() {
     workflow_runtime_integration_foreign_keys workflow_runtime_integration_data_integrity
     workflow_extension_tables workflow_extension_columns workflow_extension_indexes
     workflow_extension_checks workflow_extension_foreign_keys workflow_extension_data_integrity
+    workflow_sla_tables workflow_sla_constraints workflow_sla_foreign_keys
+    workflow_sla_data_integrity
+    workflow_bpmn_event_tables workflow_bpmn_event_constraints
+    workflow_bpmn_event_data_integrity
   )
   local -a menu_checks=(
     workflow_menu_count workflow_menu_tree workflow_retired_permissions
@@ -459,12 +470,12 @@ create_fresh_install_evidence() {
   printf '%064d  backup-smoke/schema.sql\n' 1 \
     > "$evidence_dir/backup-smoke/schema-sha256.txt"
   : > "$evidence_dir/backup-smoke/mysqlcheck.txt"
-  for ((table_number = 1; table_number <= 90; table_number++)); do
+  for ((table_number = 1; table_number <= 99; table_number++)); do
     printf 'ry_vue_backup_verify.table_%02d OK\n' "$table_number" \
       >> "$evidence_dir/backup-smoke/mysqlcheck.txt"
   done
   printf 'empty_schema_table_count=0\n' > "$evidence_dir/empty-schema-check.txt"
-  printf '90\t20\t11\t36\t23\n' > "$evidence_dir/table-counts.tsv"
+  printf '99\t20\t11\t36\t32\n' > "$evidence_dir/table-counts.tsv"
   printf 'PONG\n' > "$evidence_dir/redis-ping.txt"
   if [[ "$previous_release_id" != 'NONE' || -n "$previous_release_dir" ]]; then
     preflight_arguments+=(
@@ -1550,7 +1561,7 @@ main() {
   printf 'ry_vue_backup_verify.table_01 OK\n' \
     > "$evidence_dir/fresh-install/backup-smoke/mysqlcheck.txt"
   refresh_rehearsal_manifests "$evidence_dir"
-  expect_failure 'rehearsal without 90-table restore verification fails' \
+  expect_failure 'rehearsal without 99-table restore verification fails' \
     run_release_evidence_gate "$evidence_dir" rehearsal
 
   evidence_dir="$TEST_ROOT/rehearsal-fresh-attachment-diff"
@@ -1840,7 +1851,7 @@ main() {
   create_production_evidence \
     "$evidence_dir" "$TEST_ROOT/current-1" 'current-1' \
     "$TEST_ROOT/previous-1" 'previous-1'
-  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_schema_table_counts" { $3="total=90, ruoyi=22, quartz=11, flowable=36, workflow=21" } { print }' \
+  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_schema_table_counts" { $3="total=98, ruoyi=20, quartz=11, flowable=36, workflow=31" } { print }' \
     "$evidence_dir/database-verify.tsv" > "$evidence_dir/database-verify.filtered"
   mv -- "$evidence_dir/database-verify.filtered" "$evidence_dir/database-verify.tsv"
   refresh_evidence_manifest "$evidence_dir"
