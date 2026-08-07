@@ -135,10 +135,10 @@ class WorkflowCollaborationHttpIT
         assertThat(accountsRegistered).isTrue();
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from information_schema.tables where table_schema=database()",
-                Integer.class)).isEqualTo(90);
+                Integer.class)).isEqualTo(99);
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from information_schema.tables where table_schema=database() "
-                        + "and table_name like 'wf\\_%'", Integer.class)).isEqualTo(23);
+                        + "and table_name like 'wf\\_%'", Integer.class)).isEqualTo(32);
 
         runId = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         categoryCode = "collaboration_" + runId;
