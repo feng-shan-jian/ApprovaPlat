@@ -137,6 +137,8 @@ class WorkflowTaskLifecycleServiceTest
 
     private WorkflowMultiInstanceService multiInstanceService;
 
+    private WorkflowControlledLoopService controlledLoopService;
+
     private WorkflowTaskLifecycleService lifecycleService;
 
     private WorkflowCurrentIdentity actor;
@@ -168,6 +170,7 @@ class WorkflowTaskLifecycleServiceTest
         taskCopyService = mock(WorkflowTaskCopyService.class);
         nextTaskAssignmentService = mock(WorkflowNextTaskAssignmentService.class);
         multiInstanceService = mock(WorkflowMultiInstanceService.class);
+        controlledLoopService = mock(WorkflowControlledLoopService.class);
         actor = new WorkflowCurrentIdentity(ACTOR_ID, Set.of());
         persistedComments = new ArrayList<>();
 
@@ -253,8 +256,8 @@ class WorkflowTaskLifecycleServiceTest
         lifecycleService = new WorkflowTaskLifecycleService(engineOperations, identityResolver,
                 repositoryService, runtimeService, taskService, historyService,
                 deployFormMapper, variableValidator, attachmentService,
-                new WorkflowTaskMovementPolicy(), taskCopyService,
-                nextTaskAssignmentService, multiInstanceService);
+                 new WorkflowTaskMovementPolicy(), taskCopyService,
+                 nextTaskAssignmentService, multiInstanceService, controlledLoopService);
     }
 
     /**

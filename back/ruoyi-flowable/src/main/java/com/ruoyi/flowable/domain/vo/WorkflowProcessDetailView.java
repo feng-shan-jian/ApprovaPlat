@@ -29,6 +29,7 @@ import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
  * @param nextUserSelectionMode String，必选动态多实例的 ALL/ANY 模式，否则为空
  * @param multiInstanceState WorkflowMultiInstanceStateView，当前办理人可调整的动态多实例状态，非 MI 为 null
  * @param returnAllowed boolean，当前用户能否对请求任务执行真实退回
+ * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，部署循环配置、当前轮次和历史轨迹
  * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单及局部值，允许为空
  * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行节点的表单快照和值
  * @param historyProcNodeList List&lt;WorkflowProcessActivityView&gt;，开始、用户任务和结束时间线
@@ -56,6 +57,7 @@ public record WorkflowProcessDetailView(
         String nextUserSelectionMode,
         WorkflowMultiInstanceStateView multiInstanceState,
         boolean returnAllowed,
+        List<WorkflowControlledLoopStateView> controlledLoopStates,
         WorkflowProcessFormSnapshotView currentTaskForm,
         List<WorkflowProcessFormSnapshotView> processFormList,
         List<WorkflowProcessActivityView> historyProcNodeList,
@@ -85,6 +87,7 @@ public record WorkflowProcessDetailView(
      * @param nextUserSelectionMode String，必选动态多实例的 ALL/ANY 模式，否则为空
      * @param multiInstanceState WorkflowMultiInstanceStateView，动态多实例能力和状态，允许为空
      * @param returnAllowed boolean，当前用户和执行树是否满足正式退回前置条件
+     * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，受控循环状态列表
      * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单，允许为空
      * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行表单快照
      * @param historyProcNodeList List&lt;WorkflowProcessActivityView&gt;，流程历史时间线
@@ -96,6 +99,8 @@ public record WorkflowProcessDetailView(
     {
         processFormList = List.copyOf(Objects.requireNonNull(
                 processFormList, "流程表单列表不能为空"));
+        controlledLoopStates = List.copyOf(Objects.requireNonNull(
+                controlledLoopStates, "受控循环状态不能为空"));
         historyProcNodeList = List.copyOf(Objects.requireNonNull(
                 historyProcNodeList, "流程时间线不能为空"));
         Objects.requireNonNull(flowViewer, "Viewer 状态不能为空");
@@ -160,7 +165,7 @@ public record WorkflowProcessDetailView(
         this(processInstanceId, definitionId, processKey, processName, version,
                 category, deploymentId, businessKey, startUserId, startUserName,
                 startTime, endTime, durationMillis, processStatus, currentTask,
-                "DISABLED", false, null, null, false, currentTaskForm,
+                "DISABLED", false, null, null, false, List.of(), currentTaskForm,
                 processFormList, historyProcNodeList,
                 bpmnXml, flowViewer);
     }

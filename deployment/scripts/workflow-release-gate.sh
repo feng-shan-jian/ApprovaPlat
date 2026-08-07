@@ -1072,9 +1072,9 @@ gate_validate_environment_identity() {
 }
 
 #
-# 校验全新安装备份已真实生成并在 84 张恢复表上完成 mysqlcheck。
+# 校验全新安装备份已真实生成并在 86 张恢复表上完成 mysqlcheck。
 # 参数：$1（字符串）全新安装证据目录；$2（字符串）证据名称。
-# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 84 个 OK 结果。
+# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 86 个 OK 结果。
 #
 gate_validate_backup_restore() {
   local evidence_dir="$1"
@@ -1089,9 +1089,9 @@ gate_validate_backup_restore() {
   awk '
     NF != 2 || $NF != "OK" || seen[$1]++ { invalid = 1 }
     NF > 0 { rows++ }
-    END { exit(!invalid && rows == 84 ? 0 : 1) }
+    END { exit(!invalid && rows == 86 ? 0 : 1) }
   ' "$mysqlcheck_file" \
-    || gate_die "$label mysqlcheck must contain exactly 84 OK table results"
+    || gate_die "$label mysqlcheck must contain exactly 86 OK table results"
 }
 
 #
@@ -1185,10 +1185,12 @@ gate_validate_database_result() {
       if (check_name == "flowable_dmn_table_presence" ||
           check_name == "workflow_connector_table_presence")
         return detail == "missing_or_invalid=none"
+      if (check_name == "workflow_schema_table_counts")
+        return detail == "total=86, ruoyi=20, quartz=11, flowable=36, workflow=19"
       if (check_name == "workflow_connector_columns")
         return detail == "missing=none"
       if (check_name == "workflow_business_tables")
-        return detail == "present=8, missing=none"
+        return detail == "present=10, missing=none"
       if (check_name == "workflow_business_columns")
         return detail == "missing=none"
       if (check_name == "wf_attachment_cleanup_retry_columns")
@@ -1255,6 +1257,7 @@ gate_validate_database_result() {
       required["1|deadletter_jobs"] = 1
 
       required["2|flowable_dmn_table_presence"] = 1
+      required["2|workflow_schema_table_counts"] = 1
       required["2|workflow_connector_table_presence"] = 1
       required["2|workflow_connector_columns"] = 1
       required["2|workflow_business_tables"] = 1
@@ -1311,7 +1314,7 @@ gate_validate_database_result() {
       passed++
     }
     END {
-      if (section != 3 || passed != 38) exit 1
+      if (section != 3 || passed != 39) exit 1
       for (key in required) {
         if (seen[key] != 1) exit 1
       }
@@ -1850,7 +1853,7 @@ gate_validate_evidence_profile() {
     gate_require_exact_line "$evidence_dir/empty-schema-check.txt" \
       'empty_schema_table_count=0' 'empty schema evidence'
     gate_require_exact_line "$evidence_dir/table-counts.tsv" \
-      $'84\t20\t11\t36\t17' 'table-counts.tsv'
+      $'86\t20\t11\t36\t19' 'table-counts.tsv'
     gate_validate_backup_restore "$evidence_dir" 'fresh-install evidence'
     gate_require_exact_line "$evidence_dir/redis-ping.txt" 'PONG' 'Redis PING evidence'
     gate_require_exact_line "$evidence_dir/mysql-connectivity.txt" '1' 'MySQL connectivity evidence'

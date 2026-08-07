@@ -49,6 +49,7 @@
         :assignment-options="assignmentOptions"
         :multi-instance-options="multiInstanceOptions"
         :multi-instance-approval-options="multiInstanceApprovalOptions"
+        :controlled-loop-field-options="controlledLoopFieldOptions"
         :extension-options="extensionOptions"
         :form-field-options="formFieldOptions"
         :connector-endpoints="connectorEndpoints"
@@ -147,6 +148,16 @@ const CONTROLLED_MULTI_INSTANCE_ALL_CONDITION = '${nrOfCompletedInstances == nrO
 const CONTROLLED_MULTI_INSTANCE_ANY_CONDITION = '${nrOfCompletedInstances > 0}'
 // 业务监听器的作者 XML 只允许固定调度 Bean；后端部署时会冻结版本并剥离字段。
 const BUSINESS_LISTENER_DELEGATE_EXPRESSION = '${workflowBusinessListener}'
+// 受控整改循环只保存固定属性；运行路由、轮次和审计均由后端部署编译与任务完成服务维护。
+const CONTROLLED_LOOP_PROPERTY_PREFIX = 'approva.controlledLoop.'
+const CONTROLLED_LOOP_PROPERTIES = Object.freeze({
+  enabled: `${CONTROLLED_LOOP_PROPERTY_PREFIX}enabled`,
+  decisionVariable: `${CONTROLLED_LOOP_PROPERTY_PREFIX}decisionVariable`,
+  repeatValue: `${CONTROLLED_LOOP_PROPERTY_PREFIX}repeatValue`,
+  exitValue: `${CONTROLLED_LOOP_PROPERTY_PREFIX}exitValue`,
+  maxIterations: `${CONTROLLED_LOOP_PROPERTY_PREFIX}maxIterations`
+})
+const CONTROLLED_LOOP_PROPERTY_NAMES = new Set(Object.values(CONTROLLED_LOOP_PROPERTIES))
 
 // 内嵌字段类型、变量和日期格式与后端 WorkflowEmbeddedFormConverter 使用同一安全边界。
 const EMBEDDED_FORM_TYPES = Object.freeze(['string', 'long', 'integer', 'boolean', 'date', 'enum'])
@@ -284,6 +295,7 @@ const assignmentOptions = [
 const multiInstanceOptions = [
   { label: '无', value: 'none' },
   { label: '标准循环（仅往返）', value: 'standard' },
+  { label: '整改循环（受控）', value: 'approvalLoop' },
   { label: '串行', value: 'sequential' },
   { label: '并行', value: 'parallel' },
   { label: '动态', value: 'controlled' }
@@ -306,6 +318,8 @@ const extensionLoading = ref(false)
 // dmnOptions 只包含服务端过滤后的来源决策最新版本，每项仍以精确 decisionId 作为作者引用。
 const dmnOptions = ref([])
 const dmnLoading = ref(false)
+// 字段目录来自当前节点正式模板或内嵌表单，设计者不能输入任意流程变量作为循环条件。
+const controlledLoopFieldOptions = computed(() => resolveControlledLoopFieldOptions())
 let modeler
 let changeTimer
 let systemThemeQuery
@@ -382,6 +396,10 @@ function createEmptyPropertyState() {
     loopMaximum: '',
     loopCondition: '',
     testBefore: false,
+    controlledLoopMaxIterations: 3,
+    controlledLoopDecisionVariable: '',
+    controlledLoopRepeatValue: '',
+    controlledLoopExitValue: '',
     businessExecutionListeners: [],
     businessTaskListeners: [],
     extensionProperties: []
@@ -521,6 +539,7 @@ async function importXml(xml) {
     const source = xml?.trim() ? xml : createInitialXml()
     await modeler.importXML(source)
     applyDesignerPreference()
+    refreshControlledLoopOverlays()
     fitViewport()
     const processElement = modeler.get('elementRegistry').getAll().find(element => element.type === 'bpmn:Process')
     selectElement(processElement)
@@ -541,6 +560,7 @@ async function importXml(xml) {
  */
 function handleCommandStackChanged() {
   updateCommandState()
+  window.requestAnimationFrame(refreshControlledLoopOverlays)
   if (importing) return
   // 任何建模变更都会使上一次服务端诊断失效，禁止显示过期的“已通过”结果。
   validationIssues.value = []
@@ -633,6 +653,15 @@ function loadPropertyState(element) {
   propertyState.businessExecutionListeners = readBusinessListeners(businessObject, 'flowable:ExecutionListener')
   propertyState.businessTaskListeners = readBusinessListeners(businessObject, 'flowable:TaskListener')
   propertyState.extensionProperties = readExtensionProperties(businessObject)
+  const controlledLoop = readControlledLoop(businessObject)
+  if (controlledLoop) {
+    propertyState.multiInstanceType = 'approvalLoop'
+    propertyState.controlledLoopMaxIterations = controlledLoop.maxIterations
+    propertyState.controlledLoopDecisionVariable = controlledLoop.decisionVariable
+    propertyState.controlledLoopRepeatValue = controlledLoop.repeatValue
+    propertyState.controlledLoopExitValue = controlledLoop.exitValue
+    return
+  }
   propertyState.dmnDecisionId = businessObject.get('flowable:rules') || ''
   propertyState.calledElement = businessObject.calledElement || ''
   propertyState.businessKey = businessObject.get('flowable:businessKey') || ''
@@ -674,10 +703,131 @@ function loadPropertyState(element) {
 function readExtensionProperties(businessObject) {
   const containers = (businessObject?.extensionElements?.values || [])
     .filter(value => value?.$type === 'flowable:Properties')
-  return containers.flatMap(container => (container.values || []).map(property => ({
-    name: property.name || '',
-    value: property.value || ''
-  })))
+  return containers.flatMap(container => (container.values || [])
+    .filter(property => !CONTROLLED_LOOP_PROPERTY_NAMES.has(property.name))
+    .map(property => ({ name: property.name || '', value: property.value || '' })))
+}
+
+/**
+ * 在画布用户任务右上角绘制受控整改循环标识和最大轮次，避免配置只藏在属性面板中。
+ * @returns {void} Modeler 未初始化时不执行，普通任务不产生覆盖层。
+ */
+function refreshControlledLoopOverlays() {
+  if (!modeler) return
+  const overlays = modeler.get('overlays')
+  overlays.remove({ type: 'controlled-loop' })
+  for (const element of modeler.get('elementRegistry').getAll()) {
+    if (element?.type !== 'bpmn:UserTask') continue
+    const config = readControlledLoop(element.businessObject)
+    if (!config) continue
+    const badge = document.createElement('span')
+    badge.className = 'process-designer__controlled-loop-badge'
+    badge.textContent = `整改循环 · 最多 ${config.maxIterations} 轮`
+    overlays.add(element, 'controlled-loop', {
+      position: { top: -12, right: -12 },
+      html: badge,
+      show: { minZoom: 0.5 }
+    })
+  }
+}
+
+/**
+ * 从用户任务固定 Flowable 属性回读受控整改循环配置。
+ * @param {object} businessObject 当前 BPMN 用户任务业务对象。
+ * @returns {{decisionVariable:string,repeatValue:string,exitValue:string,maxIterations:number}|null} 完整配置；未启用时为空。
+ */
+function readControlledLoop(businessObject) {
+  const properties = (businessObject?.extensionElements?.values || [])
+    .filter(value => value?.$type === 'flowable:Properties')
+    .flatMap(container => container.values || [])
+  const values = Object.fromEntries(properties
+    .filter(property => CONTROLLED_LOOP_PROPERTY_NAMES.has(property.name))
+    .map(property => [property.name, String(property.value ?? '')]))
+  if (!Object.keys(values).length) return null
+  if (values[CONTROLLED_LOOP_PROPERTIES.enabled] !== 'true') return null
+  const maxIterations = Number(values[CONTROLLED_LOOP_PROPERTIES.maxIterations])
+  return {
+    decisionVariable: values[CONTROLLED_LOOP_PROPERTIES.decisionVariable] || '',
+    repeatValue: values[CONTROLLED_LOOP_PROPERTIES.repeatValue] || '',
+    exitValue: values[CONTROLLED_LOOP_PROPERTIES.exitValue] || '',
+    maxIterations: Number.isInteger(maxIterations) ? maxIterations : 3
+  }
+}
+
+/**
+ * 从当前节点正式模板或内嵌 FormData 提取可作为循环判断条件的字段和值目录。
+ * @returns {Array<{value:string,label:string,values:Array<{value:string,label:string}>,valueRestricted:boolean}>} 去重后的字段选项。
+ */
+function resolveControlledLoopFieldOptions() {
+  if (!isUserTask.value) return []
+  if (propertyState.formSource === 'EMBEDDED') {
+    return propertyState.embeddedFields
+      .filter(field => field.writable !== false && field.variable)
+      .map(field => ({
+        value: field.variable,
+        label: field.name ? `${field.name}（${field.variable}）` : field.variable,
+        values: field.type === 'boolean'
+          ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
+          : (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id })),
+        valueRestricted: field.type === 'boolean' || field.type === 'enum'
+      }))
+  }
+  const formId = Number(String(propertyState.formKey || '').replace(/^key_/, ''))
+  const form = props.forms.find(item => Number(item.formId) === formId)
+  if (!form?.content) return []
+  try {
+    const root = JSON.parse(form.content)
+    const result = []
+    const seen = new Set()
+    const visit = fields => {
+      for (const field of Array.isArray(fields) ? fields : []) {
+        const variable = String(field?.__vModel__ || '').trim()
+        const kind = resolveTemplateControlledLoopKind(field)
+        if (variable && kind && field?.__config__?.workflowWritable !== false && !seen.has(variable)) {
+          seen.add(variable)
+          const options = Array.isArray(field?.__slot__?.options)
+            ? field.__slot__.options.map(item => ({
+                value: String(item?.value ?? item?.label ?? ''),
+                label: String(item?.label ?? item?.value ?? '')
+              })).filter(item => item.value)
+            : []
+          result.push({
+            value: variable,
+            label: field?.__config__?.label ? `${field.__config__.label}（${variable}）` : variable,
+            values: kind === 'BOOLEAN'
+              ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
+              : options,
+            valueRestricted: kind === 'BOOLEAN' || field?.__config__?.workflowEnum === true
+          })
+        }
+        visit(field?.__config__?.children)
+      }
+    }
+    visit(root.fields)
+    return result
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 将正式模板组件收窄为后端循环条件允许的可写标量种类。
+ * @param {object} field 使用 __config__ 的正式模板字段。
+ * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 标量种类；集合、附件、表格和范围字段返回空。
+ */
+function resolveTemplateControlledLoopKind(field) {
+  const tag = String(field?.__config__?.tag || '')
+  if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
+  if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
+  if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'
+  if (tag === 'el-switch') return 'BOOLEAN'
+  if (tag === 'el-radio-group') return 'SCALAR'
+  if (tag === 'el-select') return field?.multiple === true ? null : 'SCALAR'
+  if (['el-time-picker', 'el-date-picker'].includes(tag)) {
+    const temporalType = String(field?.type || '').toLowerCase()
+    return field?.['is-range'] === true || temporalType.includes('range') ? null : 'TEXT'
+  }
+  return null
 }
 
 /**
@@ -1231,20 +1381,10 @@ function updateExtensionProperties(properties) {
     }
 
     const businessObject = selectedBusinessObject.value
-    const moddle = modeler.get('moddle')
-    const preservedValues = (businessObject.extensionElements?.values || [])
-      .filter(value => value?.$type !== 'flowable:Properties')
-    const propertyContainer = normalized.length
-      ? moddle.create('flowable:Properties', {
-          values: normalized.map(item => moddle.create('flowable:Property', item))
-        })
-      : undefined
-    const extensionValues = propertyContainer
-      ? [...preservedValues, propertyContainer]
-      : preservedValues
-    const extensionElements = extensionValues.length
-      ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
-      : undefined
+    const controlledProperties = readAllFlowableProperties(businessObject)
+      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name))
+    const extensionElements = buildPropertiesExtensionElements(
+      businessObject, normalized, controlledProperties)
     modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
       extensionElements
     })
@@ -1252,6 +1392,57 @@ function updateExtensionProperties(properties) {
     loadPropertyState(selectedElement.value)
     emit('error', error)
   }
+}
+
+/**
+ * 读取当前元素全部 Flowable 通用属性，包含平台受控属性。
+ * @param {object} businessObject 当前 BPMN 流程或元素业务对象。
+ * @returns {Array<{name:string,value:string}>} 保持 XML 顺序的属性列表。
+ */
+function readAllFlowableProperties(businessObject) {
+  return (businessObject?.extensionElements?.values || [])
+    .filter(value => value?.$type === 'flowable:Properties')
+    .flatMap(container => (container.values || []).map(property => ({
+      name: String(property.name || ''),
+      value: String(property.value ?? '')
+    })))
+}
+
+/**
+ * 合并普通扩展属性与受控循环固定属性，同时保留表单、监听器和其他扩展元素。
+ * @param {object} businessObject 当前 BPMN 元素业务对象。
+ * @param {Array<{name:string,value:string}>} editableProperties 用户可编辑的非保留属性。
+ * @param {Array<{name:string,value:string}>} controlledProperties 平台生成的受控循环属性。
+ * @returns {object|undefined} 可写入业务对象的 bpmn:ExtensionElements。
+ */
+function buildPropertiesExtensionElements(businessObject, editableProperties, controlledProperties) {
+  const moddle = modeler.get('moddle')
+  const preservedValues = (businessObject.extensionElements?.values || [])
+    .filter(value => value?.$type !== 'flowable:Properties')
+  const combined = [...editableProperties, ...controlledProperties]
+  const propertyContainer = combined.length
+    ? moddle.create('flowable:Properties', {
+        values: combined.map(item => moddle.create('flowable:Property', item))
+      })
+    : undefined
+  const extensionValues = propertyContainer ? [...preservedValues, propertyContainer] : preservedValues
+  return extensionValues.length
+    ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
+    : undefined
+}
+
+/**
+ * 将属性面板状态转换为后端白名单要求的完整受控循环固定属性。
+ * @returns {Array<{name:string,value:string}>} 按稳定顺序生成的五项平台属性。
+ */
+function controlledLoopPropertyItems() {
+  return [
+    { name: CONTROLLED_LOOP_PROPERTIES.enabled, value: 'true' },
+    { name: CONTROLLED_LOOP_PROPERTIES.decisionVariable, value: propertyState.controlledLoopDecisionVariable.trim() },
+    { name: CONTROLLED_LOOP_PROPERTIES.repeatValue, value: propertyState.controlledLoopRepeatValue.trim() },
+    { name: CONTROLLED_LOOP_PROPERTIES.exitValue, value: propertyState.controlledLoopExitValue.trim() },
+    { name: CONTROLLED_LOOP_PROPERTIES.maxIterations, value: String(propertyState.controlledLoopMaxIterations) }
+  ]
 }
 
 /**
@@ -1457,8 +1648,44 @@ function updateDocumentation() {
 function updateMultiInstance() {
   const existingLoop = selectedBusinessObject.value?.loopCharacteristics
   const wasControlled = isControlledMultiInstanceLoop(existingLoop)
+  const wasApprovalLoop = Boolean(readControlledLoop(selectedBusinessObject.value))
+  const editableProperties = propertyState.extensionProperties.map(item => ({
+    name: String(item.name || '').trim(), value: String(item.value ?? '')
+  }))
+  const clearedControlledExtensions = wasApprovalLoop
+    ? buildPropertiesExtensionElements(selectedBusinessObject.value, editableProperties, [])
+    : selectedBusinessObject.value?.extensionElements
+  if (propertyState.multiInstanceType === 'approvalLoop') {
+    try {
+      if (!isUserTask.value) throw new Error('整改循环只能配置在用户任务上')
+      const maxIterations = Number(propertyState.controlledLoopMaxIterations)
+      const field = controlledLoopFieldOptions.value.find(option => (
+        option.value === propertyState.controlledLoopDecisionVariable
+      ))
+      const repeatValue = propertyState.controlledLoopRepeatValue.trim()
+      const exitValue = propertyState.controlledLoopExitValue.trim()
+      if (!Number.isInteger(maxIterations) || maxIterations < 2 || maxIterations > 50) {
+        throw new Error('最大办理轮次必须是 2 至 50 的整数')
+      }
+      if (!field) throw new Error('循环判断字段必须来自当前节点正式表单')
+      if (!repeatValue || !exitValue || repeatValue.length > 128 || exitValue.length > 128) {
+        throw new Error('再次进入和退出条件值必须填写且不能超过 128 个字符')
+      }
+      if (repeatValue === exitValue) throw new Error('再次进入和退出条件不能相同')
+      const extensionElements = buildPropertiesExtensionElements(
+        selectedBusinessObject.value, editableProperties, controlledLoopPropertyItems())
+      const changes = { loopCharacteristics: undefined, extensionElements }
+      if (wasControlled) resetControlledAssignment(changes)
+      updateProperties(changes)
+      return
+    } catch (error) {
+      loadPropertyState(selectedElement.value)
+      emit('error', error)
+      return
+    }
+  }
   if (propertyState.multiInstanceType === 'none') {
-    const changes = { loopCharacteristics: undefined }
+    const changes = { loopCharacteristics: undefined, extensionElements: clearedControlledExtensions }
     if (wasControlled) resetControlledAssignment(changes)
     updateProperties(changes)
     return
@@ -1480,7 +1707,7 @@ function updateMultiInstance() {
         ? moddle.create('bpmn:FormalExpression', { body: loopCondition })
         : undefined
     })
-    const changes = { loopCharacteristics: standardLoop }
+    const changes = { loopCharacteristics: standardLoop, extensionElements: clearedControlledExtensions }
     if (wasControlled) resetControlledAssignment(changes)
     updateProperties(changes)
     return
@@ -1524,7 +1751,7 @@ function updateMultiInstance() {
   })
   loop.set('flowable:collection', collection || undefined)
   loop.set('flowable:elementVariable', elementVariable || undefined)
-  const changes = { loopCharacteristics: loop }
+  const changes = { loopCharacteristics: loop, extensionElements: clearedControlledExtensions }
   if (controlled) {
     propertyState.assignmentType = 'assignee'
     propertyState.assignee = CONTROLLED_MULTI_INSTANCE_ASSIGNEE
@@ -2234,6 +2461,26 @@ defineExpose({
 
 :deep(.bts-toggle-mode) {
   display: none;
+}
+
+:deep(.process-designer__controlled-loop-badge) {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  color: #7c2d12;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: #ffedd5;
+  border: 1px solid #fdba74;
+  border-radius: 999px;
+  box-shadow: 0 2px 6px rgb(124 45 18 / 14%);
+}
+
+.process-designer--dark :deep(.process-designer__controlled-loop-badge) {
+  color: #fed7aa;
+  background: #7c2d12;
+  border-color: #c2410c;
 }
 
 .process-designer--dark :deep(.djs-palette),

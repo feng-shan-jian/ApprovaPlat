@@ -69,6 +69,7 @@ import com.ruoyi.flowable.domain.WorkflowHistoricVariableBodyRow;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDetailQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessActivityView;
+import com.ruoyi.flowable.domain.vo.WorkflowControlledLoopStateView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
@@ -76,6 +77,7 @@ import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
+import com.ruoyi.flowable.service.task.WorkflowControlledLoopService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
@@ -119,6 +121,9 @@ class WorkflowProcessDetailServiceTest
     private WorkflowTaskLifecycleService taskLifecycleService;
 
     @Mock
+    private WorkflowControlledLoopService controlledLoopService;
+
+    @Mock
     private ISysUserService userService;
 
     @Mock
@@ -153,8 +158,10 @@ class WorkflowProcessDetailServiceTest
         service = new WorkflowProcessDetailService(engineOperations, processAccessService,
                 repositoryService, historyService, taskService, deploymentService,
                 deployFormMapper, historicVariableMapper,
-                new WorkflowFormTemplateValidator(), userService, multiInstanceService,
-                taskLifecycleService);
+                 new WorkflowFormTemplateValidator(), userService, multiInstanceService,
+                 taskLifecycleService, controlledLoopService);
+        when(controlledLoopService.buildStates(anyString(), anyString(), anyString(), any()))
+                .thenReturn(List.of());
     }
 
     /**
@@ -286,6 +293,47 @@ class WorkflowProcessDetailServiceTest
         verify(processVariableQuery).excludeVariableInitialization();
         verify(taskVariableQuery).excludeVariableInitialization();
         verify(historyService, never()).createHistoricDetailQuery();
+    }
+
+    /**
+     * 验证受控循环第二轮 task-local 表单从上一轮正式快照继承初始值。
+     * @return 无返回值，普通当前变量为空时循环表单未回显或读取最终全局变量时测试失败
+     */
+    @Test
+    void inheritsPreviousControlledLoopTaskLocalSubmissionForNextRound()
+    {
+        HistoricVariableInstance placeholder = variable(
+                "decision", "string", "不得读取", "task-active");
+        prepareActiveDetail(placeholder, "decision");
+        HistoricActivityInstance previousActivity = activity("approve-old-activity",
+                "approve", "审批", "userTask", "task-old",
+                "2026-07-25T08:01:00Z", "2026-07-25T08:30:00Z");
+        HistoricActivityInstance activeActivity = activity("approve-active", "approve", "审批",
+                "userTask", "task-active", "2026-07-25T08:31:00Z", null);
+        stubActivityQuery(List.of(previousActivity, activeActivity));
+        stubHistoricTaskQuery(List.of(
+                historicTask("task-old", "approve", "2026-07-25T08:30:00Z"),
+                historicTask("task-active", "approve", null)));
+        stubVariableQueries(List.of(), List.of());
+        WorkflowHistoricSubmissionRow previousSubmission = submissionUpdate(
+                "detail-loop-old", "2026-07-25T08:30:00Z", "task-old",
+                "approve-old-activity", WorkflowFormSubmissionSnapshotCodec.encodeTask(
+                        "deployment-1", 2L, "key_2", "approve", "task-old", true,
+                        Map.of("decision", "redo")));
+        stubSubmissionUpdates(List.of(previousSubmission));
+        when(controlledLoopService.buildStates("deployment-1", "leave", "instance-1", "approve"))
+                .thenReturn(List.of(new WorkflowControlledLoopStateView(
+                        "approve", "审批", "decision", "redo", "approved",
+                        3, 1, 2, true, List.of())));
+
+        WorkflowProcessDetailView detail = service.getDetail(
+                new WorkflowProcessDetailQueryDto("instance-1", "task-active"));
+
+        assertThat(detail.currentTaskForm().taskId()).isEqualTo("task-active");
+        assertThat(detail.currentTaskForm().snapshotTime()).isNull();
+        assertThat(detail.currentTaskForm().values().get("decision").textValue())
+                .isEqualTo("redo");
+        verify(placeholder, never()).getValue();
     }
 
     /**

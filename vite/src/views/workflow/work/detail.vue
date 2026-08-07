@@ -39,6 +39,45 @@
       <el-descriptions-item label="流程耗时">{{ formatDuration(detail.durationMillis) }}</el-descriptions-item>
     </el-descriptions>
 
+    <section v-if="controlledLoopStates.length" class="workflow-detail__controlled-loops" aria-labelledby="controlled-loop-title">
+      <div class="workflow-detail__controlled-loop-heading">
+        <div>
+          <h3 id="controlled-loop-title">整改循环</h3>
+          <span>循环条件、最大轮次和每次办理结果均来自服务端部署快照与正式审计记录。</span>
+        </div>
+      </div>
+      <article v-for="loop in controlledLoopStates" :key="loop.activityId" class="workflow-detail__controlled-loop-card">
+        <div class="workflow-detail__controlled-loop-summary">
+          <div>
+            <strong>{{ loop.activityName || loop.activityId }}</strong>
+            <span>字段 {{ loop.decisionVariable }}：等于“{{ loop.repeatValue }}”再次整改，等于“{{ loop.exitValue }}”退出</span>
+          </div>
+          <div class="workflow-detail__controlled-loop-tags">
+            <el-tag v-if="loop.active" type="warning">第 {{ loop.currentIteration }} / {{ loop.maxIterations }} 轮办理中</el-tag>
+            <el-tag v-else type="info">已完成 {{ loop.completedIterations }} / {{ loop.maxIterations }} 轮</el-tag>
+          </div>
+        </div>
+        <el-table v-if="loop.rounds?.length" :data="loop.rounds" size="small" max-height="280">
+          <el-table-column prop="iteration" label="轮次" width="72" />
+          <el-table-column label="结果" width="110">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.outcome === 'REPEAT' ? 'warning' : 'success'">
+                {{ row.outcome === 'REPEAT' ? '再次整改' : '退出循环' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="decisionValue" label="判断值" min-width="140" show-overflow-tooltip />
+          <el-table-column label="办理人" min-width="120">
+            <template #default="{ row }">{{ controlledLoopActorName(row) }}</template>
+          </el-table-column>
+          <el-table-column label="完成时间" min-width="180">
+            <template #default="{ row }">{{ formatDate(row.completedAt) }}</template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-else description="尚未完成首轮办理" :image-size="56" />
+      </article>
+    </section>
+
     <section v-if="multiInstanceState" class="workflow-detail__multi-instance" aria-labelledby="multi-instance-title">
       <div class="workflow-detail__multi-instance-heading">
         <div>
@@ -487,6 +526,14 @@ const statusMeta = computed(() => ({
 }[detail.processStatus] || { label: detail.processStatus || '未知', type: 'info' }))
 const summaryColumns = computed(() => viewportWidth.value < 768 ? 1 : 3)
 const timeline = computed(() => Array.isArray(detail.historyProcNodeList) ? detail.historyProcNodeList : [])
+// 受控循环状态完全采用详情 API 的部署快照和逐轮审计，页面不根据历史任务数量自行推演。
+const controlledLoopStates = computed(() => Array.isArray(detail.controlledLoopStates)
+  ? detail.controlledLoopStates
+  : [])
+// 循环审计以 taskId 对齐正式历史任务显示名称；历史投影缺失时才回退到稳定用户主键。
+const controlledLoopActorNames = computed(() => new Map(timeline.value
+  .filter(node => node?.taskId)
+  .map(node => [String(node.taskId), node.completedByName || node.assigneeName || ''])))
 const diagramFileName = computed(() => `workflow_${safeFileName(detail.processKey || processInstanceId() || 'process')}`)
 const currentUserId = computed(() => String(userStore.id || ''))
 // 动态多实例状态完全来自详情 API 的正式快照；revision、成员状态和计数不在浏览器自行推演。
@@ -1779,6 +1826,16 @@ function formatDuration(value) {
 }
 
 /**
+ * 解析循环轮次真实办理人名称，并在历史任务投影缺失时显示稳定用户主键。
+ * @param {{taskId?:string,actorUserId?:string}} round 服务端循环轮次审计视图。
+ * @returns {string} 历史任务中的完成人名称，或带“用户”前缀的主键回退文本。
+ */
+function controlledLoopActorName(round) {
+  const displayName = controlledLoopActorNames.value.get(String(round?.taskId || ''))
+  return displayName || `用户 ${round?.actorUserId || '-'}`
+}
+
+/**
  * 组合时间线节点的起止时间，运行中节点只展示开始时间。
  * @param {object} node 后端时间线活动视图。
  * @returns {string} 节点时间范围文本。
@@ -1955,6 +2012,50 @@ onActivated(async () => {
 
 .workflow-detail__tabs {
   margin-top: 12px;
+}
+
+.workflow-detail__controlled-loops {
+  margin-top: 16px;
+  padding: 16px;
+  background: linear-gradient(135deg, var(--el-fill-color-lighter), var(--el-bg-color));
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+}
+
+.workflow-detail__controlled-loop-heading h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.workflow-detail__controlled-loop-heading span,
+.workflow-detail__controlled-loop-summary span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.workflow-detail__controlled-loop-card {
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+}
+
+.workflow-detail__controlled-loop-summary,
+.workflow-detail__controlled-loop-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-detail__controlled-loop-summary {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.workflow-detail__controlled-loop-summary > div:first-child {
+  display: grid;
+  gap: 4px;
 }
 
 .workflow-detail__multi-instance {

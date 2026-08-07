@@ -87,6 +87,7 @@ import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
+import com.ruoyi.flowable.service.task.WorkflowControlledLoopService;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract.NextUserAssignmentPolicy;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
@@ -240,6 +241,9 @@ public class WorkflowProcessDetailService
 
     private final WorkflowTaskLifecycleService taskLifecycleService;
 
+    /** 已授权流程详情的受控循环状态和逐轮审计投影服务。 */
+    private final WorkflowControlledLoopService controlledLoopService;
+
     /** 严格拒绝重复字段和根节点后尾随内容的变量 JSON 解析器。 */
     private final ObjectMapper safeJsonMapper = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
@@ -261,6 +265,7 @@ public class WorkflowProcessDetailService
      * @param userService ISysUserService，历史用户显示名称查询服务
      * @param multiInstanceService WorkflowMultiInstanceService，当前办理任务的动态多实例 capability 服务
      * @param taskLifecycleService WorkflowTaskLifecycleService，正式退回能力与执行树校验服务
+     * @param controlledLoopService WorkflowControlledLoopService，受控循环状态与审计投影服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessDetailService(WorkflowEngineOperations engineOperations,
@@ -270,7 +275,8 @@ public class WorkflowProcessDetailService
             WfDeployFormMapper deployFormMapper, WorkflowHistoricVariableMapper historicVariableMapper,
             WorkflowFormTemplateValidator formTemplateValidator, ISysUserService userService,
             WorkflowMultiInstanceService multiInstanceService,
-            WorkflowTaskLifecycleService taskLifecycleService)
+            WorkflowTaskLifecycleService taskLifecycleService,
+            WorkflowControlledLoopService controlledLoopService)
     {
         this.engineOperations = engineOperations;
         this.processAccessService = processAccessService;
@@ -284,6 +290,7 @@ public class WorkflowProcessDetailService
         this.userService = userService;
         this.multiInstanceService = multiInstanceService;
         this.taskLifecycleService = taskLifecycleService;
+        this.controlledLoopService = controlledLoopService;
     }
 
     /**
@@ -355,13 +362,25 @@ public class WorkflowProcessDetailService
             variableTaskIds.add(requestedTask.taskId());
         }
         VariableStore variables = loadVariables(instanceId, variableTaskIds);
+        // 只有活动任务才代表当前循环轮次；历史任务虽然保留节点 key，但不能把详情投影成“下一轮”。
+        String activeControlledLoopActivityId = requestedTask != null && requestedTask.active()
+                ? requestedTask.taskDefinitionKey() : null;
+        List<com.ruoyi.flowable.domain.vo.WorkflowControlledLoopStateView> controlledLoopStates =
+                controlledLoopService.buildStates(definition.getDeploymentId(), definition.getKey(),
+                        instance.processInstanceId(), activeControlledLoopActivityId);
+        String currentTaskActivityId = requestedTask == null
+                ? null : requestedTask.taskDefinitionKey();
+        boolean currentTaskControlledLoop = requestedTask != null
+                && controlledLoopStates.stream().anyMatch(state -> state.active()
+                        && currentTaskActivityId.equals(state.activityId()));
         DetailResponseBudget responseBudget = new DetailResponseBudget();
         List<WorkflowProcessFormSnapshotView> processForms = buildExecutedForms(
                 activities, tasksById, bpmn.process(), snapshots, variables,
                 instance.deploymentId(), responseBudget);
         WorkflowProcessFormSnapshotView currentTaskForm = requestedTask == null ? null
                 : buildCurrentTaskForm(requestedTask, tasksById, bpmn.process(), snapshots,
-                        variables, instance.deploymentId(), responseBudget);
+                        variables, instance.deploymentId(), currentTaskControlledLoop,
+                        responseBudget);
         if (requestedTask != null && "returned".equals(instance.businessStatus()))
         {
             currentTaskForm = buildReturnedStartForm(processForms, requestedTask.taskId());
@@ -407,7 +426,7 @@ public class WorkflowProcessDetailService
                 durationMillis, normalizeProcessStatus(instance), requestedTask,
                 nextUserAssignmentPolicy.name(), nextUserSelectionRequired,
                 nextUserSelectionMode,
-                multiInstanceState, returnAllowed, currentTaskForm,
+                multiInstanceState, returnAllowed, controlledLoopStates, currentTaskForm,
                 processForms, timeline, bpmnXml, viewer);
     }
 
@@ -1183,6 +1202,7 @@ public class WorkflowProcessDetailService
      * @param snapshots Map&lt;NodeFormKey, SnapshotSchema&gt;，部署表单快照索引
      * @param variables VariableStore，当前变量与正式提交快照索引
      * @param deploymentId String，流程实例所属部署主键
+     * @param controlledLoop boolean，活动任务是否为部署快照确认的受控循环节点
      * @param budget DetailResponseBudget，详情累计正文大小预算
      * @return WorkflowProcessFormSnapshotView，合法任务表单；无表单或旧实例无提交快照时返回 null
      */
@@ -1191,7 +1211,7 @@ public class WorkflowProcessDetailService
             Map<String, HistoricTaskInstance> tasksById,
             org.flowable.bpmn.model.Process process,
             Map<NodeFormKey, SnapshotSchema> snapshots, VariableStore variables,
-            String deploymentId, DetailResponseBudget budget)
+            String deploymentId, boolean controlledLoop, DetailResponseBudget budget)
     {
         if (!StringUtils.hasText(task.taskDefinitionKey()))
         {
@@ -1222,7 +1242,8 @@ public class WorkflowProcessDetailService
         if (task.active())
         {
             return buildActiveFormView(task.processInstanceId(), task.taskDefinitionKey(),
-                    task.taskId(), element, formKey, snapshots, variables, budget);
+                    task.taskId(), element, formKey, snapshots, variables,
+                    deploymentId, controlledLoop, budget);
         }
         StoredSubmission submission = variables.taskSubmissions().get(task.taskId());
         return submission == null ? null
@@ -1240,23 +1261,109 @@ public class WorkflowProcessDetailService
      * @param formKey String，BPMN 表单键
      * @param snapshots Map&lt;NodeFormKey, SnapshotSchema&gt;，部署表单快照索引
      * @param variables VariableStore，当前变量元数据索引
+     * @param deploymentId String，流程实例所属部署主键
+     * @param controlledLoop boolean，是否允许从同节点上一轮正式快照继承初始值
      * @param budget DetailResponseBudget，详情累计正文大小预算
      * @return WorkflowProcessFormSnapshotView，当前值回显且 snapshotTime 为 null 的任务表单
      */
     private WorkflowProcessFormSnapshotView buildActiveFormView(String instanceId,
             String activityId, String taskId, FlowElement element, String formKey,
             Map<NodeFormKey, SnapshotSchema> snapshots, VariableStore variables,
-            DetailResponseBudget budget)
+            String deploymentId, boolean controlledLoop, DetailResponseBudget budget)
     {
         SnapshotSchema schema = requireSnapshotSchema(element, formKey, snapshots);
         boolean taskLocal = isTaskLocal(element);
         Map<String, HistoricVariableInstance> source = taskLocal
                 ? variables.taskVariables().getOrDefault(taskId, Map.of())
                 : variables.processVariables();
-        Map<String, JsonNode> values = buildSafeValues(instanceId, taskId, taskLocal,
+        Map<String, JsonNode> currentValues = buildSafeValues(instanceId, taskId, taskLocal,
                 schema.readableVariableNames(), source, budget);
+        Map<String, JsonNode> values = currentValues;
+        if (taskLocal && controlledLoop)
+        {
+            Map<String, JsonNode> inherited = inheritControlledLoopValues(schema, variables,
+                    deploymentId, activityId, taskId);
+            if (!inherited.isEmpty())
+            {
+                LinkedHashMap<String, JsonNode> merged = new LinkedHashMap<>();
+                for (String fieldName : schema.readableVariableNames())
+                {
+                    JsonNode current = currentValues.get(fieldName);
+                    JsonNode value = current == null ? inherited.get(fieldName) : current;
+                    if (value != null)
+                    {
+                        JsonNode copied = value.deepCopy();
+                        if (current == null)
+                        {
+                            budget.addVariableBytes(serializedSize(copied));
+                        }
+                        merged.put(fieldName, copied);
+                    }
+                }
+                values = Collections.unmodifiableMap(merged);
+            }
+        }
         return toFormView(activityId, taskId, schema.snapshot(), taskLocal, values,
                 null, budget);
+    }
+
+    /**
+     * 读取同一受控循环节点最近一轮正式任务提交，作为新 task-local 任务的初始值。
+     * @param schema SnapshotSchema，当前节点不可变部署表单 schema
+     * @param variables VariableStore，已完成历史变量关联门禁的提交快照索引
+     * @param deploymentId String，当前流程定义部署主键
+     * @param activityId String，当前循环用户任务节点主键
+     * @param activeTaskId String，本轮尚未提交的真实任务主键
+     * @return Map&lt;String,JsonNode&gt;，仅包含当前 schema 可读字段的上一轮安全值
+     */
+    private Map<String, JsonNode> inheritControlledLoopValues(SnapshotSchema schema,
+            VariableStore variables, String deploymentId, String activityId,
+            String activeTaskId)
+    {
+        StoredSubmission previous = variables.taskSubmissions().values().stream()
+                .filter(submission -> !activeTaskId.equals(submission.taskId()))
+                .filter(submission -> submission.snapshot().kind() == SnapshotKind.TASK)
+                .filter(submission -> activityId.equals(submission.snapshot().nodeKey()))
+                .max((left, right) ->
+                {
+                    int timeComparison = left.submittedAt().compareTo(right.submittedAt());
+                    return timeComparison != 0 ? timeComparison
+                            : left.detailId().compareTo(right.detailId());
+                })
+                .orElse(null);
+        if (previous == null)
+        {
+            return Map.of();
+        }
+        SubmissionSnapshot submitted = previous.snapshot();
+        if (!deploymentId.equals(submitted.deploymentId())
+                || !Objects.equals(schema.snapshot().getSourceType(), submitted.sourceType())
+                || !Objects.equals(schema.snapshot().getFormId(), submitted.formId())
+                || !schema.snapshot().getFormKey().equals(submitted.formKey())
+                || !activityId.equals(submitted.nodeKey())
+                || !submitted.taskLocal()
+                || !Objects.equals(previous.taskId(), submitted.taskId()))
+        {
+            throw dataError("受控循环上一轮表单快照关联异常");
+        }
+        for (String submittedName : submitted.values().keySet())
+        {
+            if (!schema.variableNames().contains(submittedName)
+                    || isInternalVariableName(submittedName))
+            {
+                throw dataError("受控循环上一轮表单快照包含未声明字段");
+            }
+        }
+        LinkedHashMap<String, JsonNode> inherited = new LinkedHashMap<>();
+        for (String readableName : schema.readableVariableNames())
+        {
+            JsonNode value = submitted.values().get(readableName);
+            if (value != null && !isInternalVariableName(readableName))
+            {
+                inherited.put(readableName, value.deepCopy());
+            }
+        }
+        return Collections.unmodifiableMap(inherited);
     }
 
     /**
