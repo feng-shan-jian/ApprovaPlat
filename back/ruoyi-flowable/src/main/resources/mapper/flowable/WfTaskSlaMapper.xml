@@ -1,0 +1,316 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfTaskSlaMapper">
+    <resultMap id="CalendarDayResult" type="com.ruoyi.flowable.domain.WfBusinessCalendar$CalendarDay">
+        <constructor>
+            <arg column="calendar_date" javaType="java.time.LocalDate"/>
+            <arg column="working_day" javaType="boolean"/>
+            <arg column="day_name" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="CalendarResult" type="com.ruoyi.flowable.domain.WfBusinessCalendar">
+        <id property="calendarId" column="calendar_id"/>
+        <result property="calendarKey" column="calendar_key"/>
+        <result property="calendarName" column="calendar_name"/>
+        <result property="timezone" column="timezone"/>
+        <result property="workingDays" column="working_days"/>
+        <result property="workStart" column="work_start"/>
+        <result property="workEnd" column="work_end"/>
+        <result property="status" column="status"/>
+        <result property="remark" column="description"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+        <collection property="days" column="calendar_id" select="selectCalendarDays"/>
+    </resultMap>
+
+    <resultMap id="DeployTaskSlaResult" type="com.ruoyi.flowable.domain.WfDeployTaskSla">
+        <id property="deploymentId" column="deployment_id"/>
+        <id property="processKey" column="process_key"/>
+        <id property="taskDefinitionKey" column="task_definition_key"/>
+        <result property="calendarKey" column="calendar_key"/>
+        <result property="calendarTimezone" column="calendar_timezone"/>
+        <result property="workingDays" column="working_days"/>
+        <result property="workStart" column="work_start"/>
+        <result property="workEnd" column="work_end"/>
+        <result property="calendarDaysJson" column="calendar_days_json"/>
+        <result property="reminderMinutes" column="reminder_minutes"/>
+        <result property="reminderRepeatMinutes" column="reminder_repeat_minutes"/>
+        <result property="maxReminders" column="max_reminders"/>
+        <result property="escalationMinutes" column="escalation_minutes"/>
+        <result property="escalationAssignee" column="escalation_assignee"/>
+        <result property="escalationEventCode" column="escalation_event_code"/>
+        <result property="createBy" column="create_by"/>
+    </resultMap>
+
+    <resultMap id="SlaExecutionResult" type="com.ruoyi.flowable.domain.WfTaskSlaExecution">
+        <id property="slaExecutionId" column="sla_execution_id"/>
+        <result property="deploymentId" column="deployment_id"/>
+        <result property="processInstanceId" column="process_instance_id"/>
+        <result property="processDefinitionId" column="process_definition_id"/>
+        <result property="taskId" column="task_id"/>
+        <result property="taskDefinitionKey" column="task_definition_key"/>
+        <result property="assigneeUserId" column="assignee_user_id"/>
+        <result property="status" column="status"/>
+        <result property="startedAt" column="started_at"/>
+        <result property="reminderDueAt" column="reminder_due_at"/>
+        <result property="escalationDueAt" column="escalation_due_at"/>
+        <result property="remindersSent" column="reminders_sent"/>
+        <result property="pausedAt" column="paused_at"/>
+        <result property="pausedMillis" column="paused_millis"/>
+        <result property="revision" column="revision"/>
+    </resultMap>
+
+    <sql id="CalendarColumns">
+        calendar_id, calendar_key, calendar_name, timezone, working_days,
+        date_format(work_start, '%H:%i') as work_start,
+        date_format(work_end, '%H:%i') as work_end,
+        status, description, create_by, create_time, update_by, update_time
+    </sql>
+
+    <sql id="ExecutionColumns">
+        sla_execution_id, deployment_id, process_instance_id, process_definition_id,
+        task_id, task_definition_key, assignee_user_id, status, started_at,
+        reminder_due_at, escalation_due_at, reminders_sent, paused_at,
+        paused_millis, revision
+    </sql>
+
+    <select id="selectCalendars" resultMap="CalendarResult">
+        select <include refid="CalendarColumns"/> from wf_business_calendar
+        order by calendar_key
+    </select>
+
+    <select id="selectEnabledCalendars" resultMap="CalendarResult">
+        select <include refid="CalendarColumns"/> from wf_business_calendar
+        where status = 'ENABLED' order by calendar_key
+    </select>
+
+    <select id="selectCalendarForUpdate" resultMap="CalendarResult">
+        select <include refid="CalendarColumns"/> from wf_business_calendar
+        where calendar_id = #{calendarId} for update
+    </select>
+
+    <select id="selectCalendarByKey" resultMap="CalendarResult">
+        select <include refid="CalendarColumns"/> from wf_business_calendar
+        where calendar_key = #{calendarKey}
+    </select>
+
+    <select id="selectCalendarDays" resultMap="CalendarDayResult">
+        select calendar_date, working_day, day_name
+        from wf_business_calendar_day where calendar_id = #{calendarId}
+        order by calendar_date
+    </select>
+
+    <insert id="insertCalendar" useGeneratedKeys="true" keyProperty="calendarId">
+        insert into wf_business_calendar
+            (calendar_key, calendar_name, timezone, working_days, work_start, work_end,
+             status, description, create_by, create_time, update_by, update_time)
+        values
+            (#{calendarKey}, #{calendarName}, #{timezone}, #{workingDays}, #{workStart}, #{workEnd},
+             #{status}, #{remark}, #{createBy}, current_timestamp(3), '', null)
+    </insert>
+
+    <update id="updateCalendar">
+        update wf_business_calendar
+        set calendar_name = #{calendarName}, timezone = #{timezone},
+            working_days = #{workingDays}, work_start = #{workStart}, work_end = #{workEnd},
+            description = #{remark}, update_by = #{updateBy}, update_time = current_timestamp(3)
+        where calendar_id = #{calendarId}
+    </update>
+
+    <update id="updateCalendarStatus">
+        update wf_business_calendar set status = #{status}, update_by = #{updateBy},
+            update_time = current_timestamp(3) where calendar_id = #{calendarId}
+    </update>
+
+    <delete id="deleteCalendarDays">
+        delete from wf_business_calendar_day where calendar_id = #{calendarId}
+    </delete>
+
+    <insert id="insertCalendarDays">
+        insert into wf_business_calendar_day
+            (calendar_id, calendar_date, working_day, day_name)
+        values
+        <foreach collection="days" item="day" separator=",">
+            (#{calendarId}, #{day.calendarDate}, #{day.workingDay}, #{day.dayName})
+        </foreach>
+    </insert>
+
+    <insert id="insertDeploymentSnapshots">
+        insert into wf_deploy_task_sla
+            (deployment_id, process_key, task_definition_key, calendar_key,
+             calendar_timezone, working_days, work_start, work_end, calendar_days_json,
+             reminder_minutes, reminder_repeat_minutes, max_reminders, escalation_minutes,
+             escalation_assignee, escalation_event_code,
+             create_by, create_time)
+        values
+        <foreach collection="snapshots" item="s" separator=",">
+            (#{s.deploymentId}, #{s.processKey}, #{s.taskDefinitionKey}, #{s.calendarKey},
+             #{s.calendarTimezone}, #{s.workingDays}, #{s.workStart}, #{s.workEnd},
+             cast(#{s.calendarDaysJson} as json), #{s.reminderMinutes},
+             #{s.reminderRepeatMinutes}, #{s.maxReminders}, #{s.escalationMinutes},
+             #{s.escalationAssignee}, #{s.escalationEventCode},
+             #{s.createBy}, current_timestamp(3))
+        </foreach>
+    </insert>
+
+    <select id="selectDeploymentSnapshot" resultMap="DeployTaskSlaResult">
+        select deployment_id, process_key, task_definition_key, calendar_key,
+               calendar_timezone, working_days, date_format(work_start, '%H:%i') as work_start,
+               date_format(work_end, '%H:%i') as work_end,
+               cast(calendar_days_json as char) as calendar_days_json,
+               reminder_minutes, reminder_repeat_minutes, max_reminders, escalation_minutes,
+               escalation_assignee, escalation_event_code, create_by
+        from wf_deploy_task_sla
+        where deployment_id = #{deploymentId} and process_key = #{processKey}
+          and task_definition_key = #{taskDefinitionKey}
+    </select>
+
+    <insert id="insertExecution" useGeneratedKeys="true" keyProperty="slaExecutionId">
+        insert ignore into wf_task_sla_execution
+            (deployment_id, process_instance_id, process_definition_id, task_id,
+             task_definition_key, assignee_user_id, status, started_at,
+             reminder_due_at, escalation_due_at, reminders_sent, paused_at,
+             paused_millis, revision, update_time)
+        values
+            (#{deploymentId}, #{processInstanceId}, #{processDefinitionId}, #{taskId},
+             #{taskDefinitionKey}, #{assigneeUserId}, 'ACTIVE', #{startedAt},
+             #{reminderDueAt}, #{escalationDueAt}, 0, null, 0, 0, current_timestamp(3))
+    </insert>
+
+    <select id="selectExecutionByTaskForUpdate" resultMap="SlaExecutionResult">
+        select <include refid="ExecutionColumns"/> from wf_task_sla_execution
+        where task_id = #{taskId} for update
+    </select>
+
+    <select id="selectActiveExecutionForUpdate" resultMap="SlaExecutionResult">
+        select <include refid="ExecutionColumns"/> from wf_task_sla_execution
+        where process_instance_id = #{processInstanceId}
+          and task_definition_key = #{taskDefinitionKey}
+          and status in ('ACTIVE', 'ESCALATED')
+        order by sla_execution_id desc limit 1 for update
+    </select>
+
+    <select id="selectActiveExecutionsForInstanceForUpdate" resultMap="SlaExecutionResult">
+        select <include refid="ExecutionColumns"/> from wf_task_sla_execution
+        where process_instance_id = #{processInstanceId} and status = 'ACTIVE'
+        order by sla_execution_id for update
+    </select>
+
+    <update id="updateAssignee">
+        update wf_task_sla_execution set assignee_user_id = #{assigneeUserId},
+            revision = revision + 1, update_time = current_timestamp(3)
+        where sla_execution_id = #{executionId} and revision = #{revision}
+          and status = 'ACTIVE'
+    </update>
+
+    <update id="completeExecution">
+        update wf_task_sla_execution set status = 'COMPLETED', paused_at = null,
+            revision = revision + 1, update_time = current_timestamp(3)
+        where sla_execution_id = #{executionId} and revision = #{revision}
+          and status in ('ACTIVE', 'ESCALATED')
+    </update>
+
+    <update id="markReminder">
+        update wf_task_sla_execution set reminders_sent = #{expectedOrdinal},
+            revision = revision + 1, update_time = current_timestamp(3)
+        where sla_execution_id = #{executionId} and revision = #{revision}
+          and status = 'ACTIVE' and paused_at is null
+          and reminders_sent = #{expectedOrdinal} - 1
+    </update>
+
+    <update id="markEscalated">
+        update wf_task_sla_execution set status = 'ESCALATED', paused_at = null,
+            revision = revision + 1, update_time = current_timestamp(3)
+        where sla_execution_id = #{executionId} and revision = #{revision}
+          and status = 'ACTIVE' and paused_at is null
+    </update>
+
+    <update id="pauseInstance">
+        update wf_task_sla_execution set paused_at = #{pausedAt}, revision = revision + 1,
+            update_time = current_timestamp(3)
+        where process_instance_id = #{processInstanceId} and status = 'ACTIVE'
+          and paused_at is null
+    </update>
+
+    <update id="resumeInstance">
+        update wf_task_sla_execution
+        set reminder_due_at = date_add(reminder_due_at,
+                interval timestampdiff(microsecond, paused_at, #{resumedAt}) microsecond),
+            escalation_due_at = date_add(escalation_due_at,
+                interval timestampdiff(microsecond, paused_at, #{resumedAt}) microsecond),
+            paused_millis = paused_millis
+                + floor(timestampdiff(microsecond, paused_at, #{resumedAt}) / 1000),
+            paused_at = null, revision = revision + 1, update_time = current_timestamp(3)
+        where process_instance_id = #{processInstanceId} and status = 'ACTIVE'
+          and paused_at is not null
+    </update>
+
+    <insert id="insertAudit">
+        insert ignore into wf_task_sla_audit
+            (sla_execution_id, action_type, action_ordinal, actor_user_id, detail, create_time)
+        values
+            (#{executionId}, #{actionType}, #{actionOrdinal}, #{actorUserId}, #{detail},
+             current_timestamp(3))
+    </insert>
+
+    <select id="selectAuditId" resultType="java.lang.Long">
+        select audit_id from wf_task_sla_audit
+        where sla_execution_id = #{executionId} and action_type = #{actionType}
+          and action_ordinal = #{actionOrdinal}
+    </select>
+
+    <insert id="insertNotification">
+        insert ignore into wf_task_sla_notification
+            (audit_id, recipient_user_id, action_type, title, content,
+             read_status, create_time)
+        select #{auditId}, cast(u.user_id as char), #{actionType}, #{title}, #{content},
+               'UNREAD', current_timestamp(3)
+        from sys_user u
+        where cast(u.user_id as char) = #{recipientUserId}
+          and u.status = '0' and u.del_flag = '0'
+    </insert>
+
+    <select id="selectAudits" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView">
+        select a.audit_id as auditId, a.sla_execution_id as slaExecutionId,
+               e.process_instance_id as processInstanceId, e.task_id as taskId,
+               e.task_definition_key as taskDefinitionKey, a.action_type as actionType,
+               a.action_ordinal as actionOrdinal, a.actor_user_id as actorUserId,
+               a.detail, a.create_time as createTime
+        from wf_task_sla_audit a
+        join wf_task_sla_execution e on e.sla_execution_id = a.sla_execution_id
+        order by a.audit_id desc limit 500
+    </select>
+
+    <select id="selectNotifications" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView">
+        select n.notification_id as notificationId, n.audit_id as auditId,
+               e.process_instance_id as processInstanceId, e.task_id as taskId,
+               n.action_type as actionType, n.title, n.content,
+               n.read_status as readStatus, n.create_time as createTime,
+               n.read_time as readTime
+        from wf_task_sla_notification n
+        join wf_task_sla_audit a on a.audit_id = n.audit_id
+        join wf_task_sla_execution e on e.sla_execution_id = a.sla_execution_id
+        where n.recipient_user_id = #{userId}
+        order by n.notification_id desc limit 200
+    </select>
+
+    <update id="markNotificationRead">
+        update wf_task_sla_notification set read_status = 'READ',
+            read_time = current_timestamp(3)
+        where notification_id = #{notificationId} and recipient_user_id = #{userId}
+          and read_status = 'UNREAD'
+    </update>
+
+    <select id="selectExecutions" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView">
+        select sla_execution_id as slaExecutionId,
+               process_instance_id as processInstanceId, task_id as taskId,
+               task_definition_key as taskDefinitionKey, assignee_user_id as assigneeUserId,
+               status, started_at as startedAt, reminder_due_at as reminderDueAt,
+               escalation_due_at as escalationDueAt, reminders_sent as remindersSent,
+               paused_at as pausedAt, paused_millis as pausedMillis
+        from wf_task_sla_execution order by sla_execution_id desc limit 500
+    </select>
+</mapper>

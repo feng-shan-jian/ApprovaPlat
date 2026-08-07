@@ -59,6 +59,11 @@
         :dmn-loading="dmnLoading"
         :listener-options="businessListenerOptions"
         :listener-loading="extensionLoading"
+        :error-event-options="errorEventOptions"
+        :escalation-event-options="escalationEventOptions"
+        :event-code-loading="eventCodeLoading"
+        :sla-calendar-options="slaCalendarOptions"
+        :sla-loading="slaLoading"
         @common-change="updateCommonProperties"
         @id-change="updateElementId"
         @process-change="updateProcessProperties"
@@ -79,6 +84,7 @@
         @business-execution-listener-change="updateBusinessExecutionListeners"
         @business-task-listener-change="updateBusinessTaskListeners"
         @extension-properties-change="updateExtensionProperties"
+        @sla-change="updateSlaProperties"
         @identity-search="handlePanelIdentitySearch"
       />
     </div>
@@ -132,6 +138,8 @@ import { listCelExtensionOptions, listFormFieldExtensionOptions, listHttpExtensi
 import { listConnectorEndpointOptions } from '@/api/workflow/connector'
 import { listSqlDataSourceOptions } from '@/api/workflow/sqlDatasource'
 import { listDmnDecisionOptions } from '@/api/workflow/dmn'
+import { listBpmnEventCodeOptions } from '@/api/workflow/bpmnEvent'
+import { listEnabledSlaCalendars } from '@/api/workflow/sla'
 import flowableModdle from './bpmn/flowableModdle'
 import { normalizeTaskListenerXml } from './taskListenerXml'
 import DesignerToolbar from './designer/DesignerToolbar.vue'
@@ -173,6 +181,18 @@ const EMBEDDED_FORM_RESERVED_PREFIXES = Object.freeze([
   'wfMiUsers_', '_wfMiMembers_', '_wfMiRevision_', '_wfMiMode_', '__ruoyi_workflow_'
 ])
 const EXTENSION_PROPERTY_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/
+// SLA 作者属性由结构化面板独占维护，通用扩展属性编辑器不能覆盖这些保留字段。
+const SLA_PROPERTY_NAMES = Object.freeze({
+  enabled: 'approva.sla.enabled',
+  calendarKey: 'approva.sla.calendarKey',
+  reminderMinutes: 'approva.sla.reminderMinutes',
+  reminderRepeatMinutes: 'approva.sla.reminderRepeatMinutes',
+  maxReminders: 'approva.sla.maxReminders',
+  escalationMinutes: 'approva.sla.escalationMinutes',
+  escalationUserId: 'approva.sla.escalationUserId',
+  escalationEventCode: 'approva.sla.escalationEventCode'
+})
+const SLA_PROPERTY_NAME_SET = new Set(Object.values(SLA_PROPERTY_NAMES))
 
 // 作者 BPMN 只保存稳定键和配置；部署版本、实现和校验和均由后端注册表冻结。
 const EXTENSION_DELEGATE_EXPRESSION = '${workflowExtensionDelegate}'
@@ -279,6 +299,10 @@ const propertyFlags = computed(() => {
       'bpmn:ErrorEventDefinition',
       'bpmn:EscalationEventDefinition'
     ].includes(eventDefinitionType),
+    businessReferenceEvent: [
+      'bpmn:ErrorEventDefinition',
+      'bpmn:EscalationEventDefinition'
+    ].includes(eventDefinitionType),
     timerEvent: eventDefinitionType === 'bpmn:TimerEventDefinition',
     boundaryEvent: isType('bpmn:BoundaryEvent'),
     listenerSupported: isProcess.value || isType('bpmn:FlowNode'),
@@ -318,8 +342,15 @@ const extensionLoading = ref(false)
 // dmnOptions 只包含服务端过滤后的来源决策最新版本，每项仍以精确 decisionId 作为作者引用。
 const dmnOptions = ref([])
 const dmnLoading = ref(false)
+// 错误与升级目录来自正式数据库，作者 XML 只保存稳定编码。
+const errorEventOptions = ref([])
+const escalationEventOptions = ref([])
+const eventCodeLoading = ref(false)
 // 字段目录来自当前节点正式模板或内嵌表单，设计者不能输入任意流程变量作为循环条件。
 const controlledLoopFieldOptions = computed(() => resolveControlledLoopFieldOptions())
+// slaCalendarOptions 只包含后端返回的启用日历，作者 XML 不接受自由输入日历键。
+const slaCalendarOptions = ref([])
+const slaLoading = ref(false)
 let modeler
 let changeTimer
 let systemThemeQuery
@@ -371,6 +402,7 @@ function createEmptyPropertyState() {
     taskCategory: '',
     skipExpression: '',
     localScope: false,
+    sla: createDefaultSlaConfig(),
     extensionKey: '',
     extensionConfig: '{}',
     dmnDecisionId: '',
@@ -652,7 +684,10 @@ function loadPropertyState(element) {
   propertyState.extensionConfig = serviceExtension.extensionConfig
   propertyState.businessExecutionListeners = readBusinessListeners(businessObject, 'flowable:ExecutionListener')
   propertyState.businessTaskListeners = readBusinessListeners(businessObject, 'flowable:TaskListener')
-  propertyState.extensionProperties = readExtensionProperties(businessObject)
+  const extensionProperties = readExtensionProperties(businessObject)
+  propertyState.sla = readSlaConfig(extensionProperties)
+  // 通用属性面板排除循环和 SLA 两组平台保留字段，避免绕过结构化校验。
+  propertyState.extensionProperties = extensionProperties.filter(item => !SLA_PROPERTY_NAME_SET.has(item.name))
   const controlledLoop = readControlledLoop(businessObject)
   if (controlledLoop) {
     propertyState.multiInstanceType = 'approvalLoop'
@@ -1244,6 +1279,13 @@ function updateExtensionSelection() {
       parameters: {},
       maxRows: 100
     })
+  } else if (selectedOption?.implementationKey === 'RAISE_BPMN_EVENT') {
+    propertyState.extensionConfig = JSON.stringify({
+      eventType: 'ERROR',
+      eventCode: errorEventOptions.value[0]?.eventCode || '',
+      sourceType: 'SERVICE_TASK',
+      operator: 'ALWAYS'
+    })
   } else {
     propertyState.extensionConfig = '{}'
   }
@@ -1294,15 +1336,20 @@ async function loadDmnOptions() {
  */
 async function loadExtensionOptions() {
   extensionLoading.value = true
+  eventCodeLoading.value = true
+  slaLoading.value = true
   try {
-    const [javaResponse, celResponse, httpResponse, sqlResponse, formFieldResponse, endpointResponse, sqlSourceResponse] = await Promise.all([
+    const [javaResponse, celResponse, httpResponse, sqlResponse, formFieldResponse, endpointResponse, sqlSourceResponse, errorCodeResponse, escalationCodeResponse, calendarResponse] = await Promise.all([
       listJavaExtensionOptions(),
       listCelExtensionOptions(),
       listHttpExtensionOptions(),
       listSqlExtensionOptions(),
       listFormFieldExtensionOptions(),
       listConnectorEndpointOptions(),
-      listSqlDataSourceOptions()
+      listSqlDataSourceOptions(),
+      listBpmnEventCodeOptions('ERROR'),
+      listBpmnEventCodeOptions('ESCALATION'),
+      listEnabledSlaCalendars()
     ])
     extensionOptions.value = [
       ...(Array.isArray(javaResponse?.data) ? javaResponse.data : []),
@@ -1313,14 +1360,22 @@ async function loadExtensionOptions() {
     formFieldOptions.value = Array.isArray(formFieldResponse?.data) ? formFieldResponse.data : []
     connectorEndpoints.value = Array.isArray(endpointResponse?.data) ? endpointResponse.data : []
     sqlDataSources.value = Array.isArray(sqlSourceResponse?.data) ? sqlSourceResponse.data : []
+    errorEventOptions.value = Array.isArray(errorCodeResponse?.data) ? errorCodeResponse.data : []
+    escalationEventOptions.value = Array.isArray(escalationCodeResponse?.data) ? escalationCodeResponse.data : []
+    slaCalendarOptions.value = Array.isArray(calendarResponse?.data) ? calendarResponse.data : []
   } catch (error) {
     extensionOptions.value = []
     formFieldOptions.value = []
     connectorEndpoints.value = []
     sqlDataSources.value = []
+    errorEventOptions.value = []
+    escalationEventOptions.value = []
+    slaCalendarOptions.value = []
     emit('error', error)
   } finally {
     extensionLoading.value = false
+    eventCodeLoading.value = false
+    slaLoading.value = false
   }
 }
 
@@ -1379,15 +1434,16 @@ function updateExtensionProperties(properties) {
       if (names.has(item.name)) throw new Error('同一元素的扩展属性名不能重复')
       names.add(item.name)
     }
-
     const businessObject = selectedBusinessObject.value
-    const controlledProperties = readAllFlowableProperties(businessObject)
-      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name))
+    const platformProperties = readAllFlowableProperties(businessObject)
+      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
+        || SLA_PROPERTY_NAME_SET.has(item.name))
     const extensionElements = buildPropertiesExtensionElements(
-      businessObject, normalized, controlledProperties)
+      businessObject, normalized, platformProperties)
     modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
       extensionElements
     })
+    propertyState.extensionProperties = normalized
   } catch (error) {
     loadPropertyState(selectedElement.value)
     emit('error', error)
@@ -1652,8 +1708,12 @@ function updateMultiInstance() {
   const editableProperties = propertyState.extensionProperties.map(item => ({
     name: String(item.name || '').trim(), value: String(item.value ?? '')
   }))
+  // 循环命令栈必须同时携带现有 SLA 平台属性，避免修改循环时删除 UserTask 的超时闭环。
+  const slaProperties = readAllFlowableProperties(selectedBusinessObject.value)
+    .filter(item => SLA_PROPERTY_NAME_SET.has(item.name))
+  const editableWithSla = [...editableProperties, ...slaProperties]
   const clearedControlledExtensions = wasApprovalLoop
-    ? buildPropertiesExtensionElements(selectedBusinessObject.value, editableProperties, [])
+    ? buildPropertiesExtensionElements(selectedBusinessObject.value, editableWithSla, [])
     : selectedBusinessObject.value?.extensionElements
   if (propertyState.multiInstanceType === 'approvalLoop') {
     try {
@@ -1673,7 +1733,7 @@ function updateMultiInstance() {
       }
       if (repeatValue === exitValue) throw new Error('再次进入和退出条件不能相同')
       const extensionElements = buildPropertiesExtensionElements(
-        selectedBusinessObject.value, editableProperties, controlledLoopPropertyItems())
+        selectedBusinessObject.value, editableWithSla, controlledLoopPropertyItems())
       const changes = { loopCharacteristics: undefined, extensionElements }
       if (wasControlled) resetControlledAssignment(changes)
       updateProperties(changes)
@@ -2310,8 +2370,193 @@ function validateDiagram() {
     const task = element.businessObject
     const loopError = validateUserTaskMultiInstance(task)
     if (loopError) return loopError
+    const slaConfig = readSlaConfig(readExtensionProperties(task))
+    if (slaConfig.enabled) {
+      try {
+        normalizeAndValidateSlaConfig(slaConfig)
+      } catch (error) {
+        return error.message
+      }
+    }
+  }
+  const businessBoundaries = registry.filter(element => element.type === 'bpmn:BoundaryEvent')
+  for (const element of businessBoundaries) {
+    const definition = element.businessObject.eventDefinitions?.[0]
+    const businessType = definition?.$type
+    if (!['bpmn:ErrorEventDefinition', 'bpmn:EscalationEventDefinition'].includes(businessType)) continue
+    const allowed = businessType === 'bpmn:ErrorEventDefinition' ? errorEventOptions.value : escalationEventOptions.value
+    if (!allowed.some(option => option.eventCode === readEventReference(definition))) {
+      return '错误或升级边界必须选择已启用的正式业务编码'
+    }
+    if (businessType === 'bpmn:ErrorEventDefinition' && element.businessObject.cancelActivity === false) {
+      return '错误边界必须使用中断语义'
+    }
   }
   return ''
+}
+
+/**
+ * 从 Flowable 通用属性集合解析 UserTask SLA 作者配置。
+ * @param {Array<{name:string,value:string}>} properties 当前元素全部扩展属性。
+ * @returns {object} 字段完整的结构化 SLA 配置；旧模型没有属性时返回停用默认值。
+ */
+function readSlaConfig(properties) {
+  const values = new Map((Array.isArray(properties) ? properties : [])
+    .filter(item => SLA_PROPERTY_NAME_SET.has(item.name))
+    .map(item => [item.name, String(item.value ?? '')]))
+  const defaults = createDefaultSlaConfig()
+  return {
+    enabled: values.get(SLA_PROPERTY_NAMES.enabled) === 'true',
+    calendarKey: values.get(SLA_PROPERTY_NAMES.calendarKey) || defaults.calendarKey,
+    reminderMinutes: Number(values.get(SLA_PROPERTY_NAMES.reminderMinutes) || defaults.reminderMinutes),
+    reminderRepeatMinutes: Number(values.get(SLA_PROPERTY_NAMES.reminderRepeatMinutes) || defaults.reminderRepeatMinutes),
+    maxReminders: Number(values.get(SLA_PROPERTY_NAMES.maxReminders) || defaults.maxReminders),
+    escalationMinutes: Number(values.get(SLA_PROPERTY_NAMES.escalationMinutes) || defaults.escalationMinutes),
+    escalationUserId: values.get(SLA_PROPERTY_NAMES.escalationUserId) || defaults.escalationUserId,
+    escalationEventCode: values.get(SLA_PROPERTY_NAMES.escalationEventCode) || defaults.escalationEventCode
+  }
+}
+
+/**
+ * 校验并写入当前 UserTask 的受控 SLA 属性。
+ * @param {object} config SLA 编辑器提交的八个结构化作者字段。
+ * @returns {void} 目录或跨字段约束不合法时恢复 BPMN 原值并向页面上报。
+ */
+function updateSlaProperties(config) {
+  if (designerLocked.value || !modeler || !selectedElement.value || !propertyFlags.value.userTask) return
+  try {
+    const normalized = normalizeAndValidateSlaConfig(config)
+    propertyState.sla = normalized
+    // SLA 命令栈必须携带现有受控循环属性，避免切换超时策略破坏整改循环。
+    const controlledProperties = readAllFlowableProperties(selectedBusinessObject.value)
+      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name))
+    persistExtensionProperties([
+      ...propertyState.extensionProperties,
+      ...controlledProperties,
+      ...slaConfigToProperties(normalized)
+    ])
+  } catch (error) {
+    loadPropertyState(selectedElement.value)
+    emit('error', error)
+  }
+}
+
+/**
+ * 规范化并校验 SLA 数值、目录引用、提醒顺序和升级目标。
+ * @param {object} config UserTask SLA 编辑值或从 XML 回读的配置。
+ * @returns {object} 字段类型确定且可写入 XML 的 SLA 配置。
+ */
+function normalizeAndValidateSlaConfig(config) {
+  const normalized = {
+    enabled: config?.enabled === true,
+    calendarKey: String(config?.calendarKey || '').trim(),
+    reminderMinutes: Number(config?.reminderMinutes),
+    reminderRepeatMinutes: Number(config?.reminderRepeatMinutes),
+    maxReminders: Number(config?.maxReminders),
+    escalationMinutes: Number(config?.escalationMinutes),
+    escalationUserId: String(config?.escalationUserId || '').trim(),
+    escalationEventCode: String(config?.escalationEventCode || '').trim()
+  }
+  if (!normalized.enabled) return { ...createDefaultSlaConfig(), ...normalized }
+  if (!slaCalendarOptions.value.some(item => item.calendarKey === normalized.calendarKey)) {
+    throw new Error('审批 SLA 必须选择已启用的正式业务日历')
+  }
+  if (!isBoundedSlaMinute(normalized.reminderMinutes)
+    || !isBoundedSlaMinute(normalized.reminderRepeatMinutes)
+    || !isBoundedSlaMinute(normalized.escalationMinutes)) {
+    throw new Error('SLA 提醒与升级时间必须是 1 至 525600 的整数分钟')
+  }
+  if (!Number.isInteger(normalized.maxReminders) || normalized.maxReminders < 1 || normalized.maxReminders > 100) {
+    throw new Error('SLA 最大提醒次数必须是 1 至 100 的整数')
+  }
+  const lastReminderMinutes = normalized.reminderMinutes
+    + normalized.reminderRepeatMinutes * (normalized.maxReminders - 1)
+  if (normalized.escalationMinutes <= lastReminderMinutes) {
+    throw new Error('SLA 超时升级时间必须晚于最后一次提醒')
+  }
+  if (!normalized.escalationUserId && !normalized.escalationEventCode) {
+    throw new Error('SLA 必须配置升级办理人或受控升级事件')
+  }
+  if (normalized.escalationEventCode && !escalationEventOptions.value
+    .some(item => item.eventCode === normalized.escalationEventCode)) {
+    throw new Error('SLA 超时升级只能引用已启用的正式升级编码')
+  }
+  return normalized
+}
+
+/**
+ * 判断 SLA 工作分钟是否处于后端允许的一年上限内。
+ * @param {number} value 待校验的提醒或升级工作分钟。
+ * @returns {boolean} 值为 1 至 525600 的整数时返回 true。
+ */
+function isBoundedSlaMinute(value) {
+  return Number.isInteger(value) && value >= 1 && value <= 525600
+}
+
+/**
+ * 将结构化 SLA 配置转换为后端部署编译器约定的八个 Flowable 属性。
+ * @param {object} config 已规范化的 SLA 配置。
+ * @returns {Array<{name:string,value:string}>} 按固定顺序输出的属性名值列表。
+ */
+function slaConfigToProperties(config) {
+  return Object.entries(SLA_PROPERTY_NAMES).map(([field, name]) => ({
+    name,
+    value: field === 'enabled' ? String(config.enabled === true) : String(config[field] ?? '')
+  }))
+}
+
+/**
+ * 将已经过调用方校验的完整扩展属性集合原子写入当前 BPMN 元素。
+ * @param {Array<{name:string,value:string}>} properties 包含通用属性和受控 SLA 属性的完整集合。
+ * @returns {void} 保留监听器、表单和服务任务字段等其他 extensionElements。
+ */
+function persistExtensionProperties(properties) {
+  const businessObject = selectedBusinessObject.value
+  const moddle = modeler.get('moddle')
+  const preservedValues = (businessObject.extensionElements?.values || [])
+    .filter(value => value?.$type !== 'flowable:Properties')
+  const propertyContainer = properties.length
+    ? moddle.create('flowable:Properties', {
+        values: properties.map(item => moddle.create('flowable:Property', item))
+      })
+    : undefined
+  const extensionValues = propertyContainer
+    ? [...preservedValues, propertyContainer]
+    : preservedValues
+  const extensionElements = extensionValues.length
+    ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
+    : undefined
+  modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
+    extensionElements
+  })
+}
+
+/**
+ * 创建字段完整的 UserTask SLA 默认配置。
+ * @returns {object} 未启用且数值处于合法范围的作者配置。
+ */
+function createDefaultSlaConfig() {
+  return {
+    enabled: false,
+    calendarKey: '',
+    reminderMinutes: 60,
+    reminderRepeatMinutes: 60,
+    maxReminders: 1,
+    escalationMinutes: 240,
+    escalationUserId: '',
+    escalationEventCode: ''
+  }
+}
+
+/**
+ * 从错误或升级事件定义读取最终作者编码。
+ * @param {object} eventDefinition bpmn-js 事件定义对象。
+ * @returns {string} 根引用中的稳定业务编码。
+ */
+function readEventReference(eventDefinition) {
+  const config = eventReferenceConfig(eventDefinition?.$type)
+  const reference = config ? eventDefinition?.[config.referenceProperty] : undefined
+  return String(reference?.[config?.keyProperty] || reference?.name || '').trim()
 }
 
 /**

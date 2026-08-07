@@ -1072,9 +1072,9 @@ gate_validate_environment_identity() {
 }
 
 #
-# 校验全新安装备份已真实生成并在 86 张恢复表上完成 mysqlcheck。
+# 校验全新安装备份已真实生成并在 89 张恢复表上完成 mysqlcheck。
 # 参数：$1（字符串）全新安装证据目录；$2（字符串）证据名称。
-# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 86 个 OK 结果。
+# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 89 个 OK 结果。
 #
 gate_validate_backup_restore() {
   local evidence_dir="$1"
@@ -1089,9 +1089,9 @@ gate_validate_backup_restore() {
   awk '
     NF != 2 || $NF != "OK" || seen[$1]++ { invalid = 1 }
     NF > 0 { rows++ }
-    END { exit(!invalid && rows == 86 ? 0 : 1) }
+    END { exit(!invalid && rows == 89 ? 0 : 1) }
   ' "$mysqlcheck_file" \
-    || gate_die "$label mysqlcheck must contain exactly 86 OK table results"
+    || gate_die "$label mysqlcheck must contain exactly 89 OK table results"
 }
 
 #
@@ -1162,7 +1162,7 @@ gate_validate_active_services() {
 #
 # 校验数据库验收 TSV 的三段正式脚本、固定检查项、表头和逐项 PASS 结果。
 # 参数：$1（字符串）验收结果文件；$2（字符串）证据名称。
-# 返回：0 表示 38 个正式检查恰好各出现一次且全部通过；异常时终止门禁。
+# 返回：0 表示 46 个正式检查恰好各出现一次且全部通过；异常时终止门禁。
 #
 gate_validate_database_result() {
   local file="$1"
@@ -1186,7 +1186,7 @@ gate_validate_database_result() {
           check_name == "workflow_connector_table_presence")
         return detail == "missing_or_invalid=none"
       if (check_name == "workflow_schema_table_counts")
-        return detail == "total=86, ruoyi=20, quartz=11, flowable=36, workflow=19"
+return detail == "total=95, ruoyi=20, quartz=11, flowable=36, workflow=28"
       if (check_name == "workflow_connector_columns")
         return detail == "missing=none"
       if (check_name == "workflow_business_tables")
@@ -1227,16 +1227,33 @@ gate_validate_database_result() {
         return detail == "issues=0, indexes=none"
       if (check_name == "workflow_extension_foreign_keys")
         return detail == "missing_or_invalid=none"
+      if (check_name == "workflow_sla_tables")
+        return detail == "found=6, innodb=6, expected=6"
+      if (check_name == "workflow_sla_constraints")
+        return detail == "found=28, expected=28"
+      if (check_name == "workflow_sla_foreign_keys")
+        return detail == "found=3, expected=3"
+      if (check_name == "workflow_sla_data_integrity")
+        return detail == "issues=0, detail=none"
+      if (check_name == "workflow_bpmn_event_tables")
+        return detail == "found=3, expected=3"
+      if (check_name == "workflow_bpmn_event_constraints") {
+        split(detail, values, /[=, ]+/)
+        return detail ~ /^found=[0-9]+, expected_at_least=12$/ &&
+               values[2] + 0 >= 12 && values[4] + 0 == 12
+      }
+      if (check_name == "workflow_bpmn_event_data_integrity")
+        return detail == "issues=0"
       if (check_name == "workflow_menu_count")
-        return detail == "rows=72, natural_keys=72"
+        return detail == "rows=82, natural_keys=82"
       if (check_name == "workflow_menu_tree")
-        return detail == "directories=2, pages=17, buttons=53, invalid_routes=0"
+        return detail == "directories=2, pages=18, buttons=62, invalid_routes=0"
       if (check_name == "workflow_retired_permissions")
         return detail == "legacy_rows=0"
       if (check_name == "workflow_roles")
         return detail == "active_roles=5, duplicate_roles=0"
       if (check_name == "workflow_admin_menu_scope")
-        return detail == "assigned=72, expected=72"
+        return detail == "assigned=82, expected=82"
       if (check_name == "workflow_admin_only_instance_management")
         return detail == "unauthorized_assignments=0, roles=none, admin_management_permissions=2"
       if (check_name == "workflow_auditor_read_only")
@@ -1281,6 +1298,13 @@ gate_validate_database_result() {
       required["2|workflow_extension_checks"] = 1
       required["2|workflow_extension_foreign_keys"] = 1
       required["2|workflow_extension_data_integrity"] = 1
+      required["2|workflow_sla_tables"] = 1
+      required["2|workflow_sla_constraints"] = 1
+      required["2|workflow_sla_foreign_keys"] = 1
+      required["2|workflow_sla_data_integrity"] = 1
+      required["2|workflow_bpmn_event_tables"] = 1
+      required["2|workflow_bpmn_event_constraints"] = 1
+      required["2|workflow_bpmn_event_data_integrity"] = 1
 
       required["3|workflow_menu_count"] = 1
       required["3|workflow_menu_tree"] = 1
@@ -1314,7 +1338,7 @@ gate_validate_database_result() {
       passed++
     }
     END {
-      if (section != 3 || passed != 39) exit 1
+      if (section != 3 || passed != 46) exit 1
       for (key in required) {
         if (seen[key] != 1) exit 1
       }
@@ -1853,7 +1877,7 @@ gate_validate_evidence_profile() {
     gate_require_exact_line "$evidence_dir/empty-schema-check.txt" \
       'empty_schema_table_count=0' 'empty schema evidence'
     gate_require_exact_line "$evidence_dir/table-counts.tsv" \
-      $'86\t20\t11\t36\t19' 'table-counts.tsv'
+      $'95\t20\t11\t36\t28' 'table-counts.tsv'
     gate_validate_backup_restore "$evidence_dir" 'fresh-install evidence'
     gate_require_exact_line "$evidence_dir/redis-ping.txt" 'PONG' 'Redis PING evidence'
     gate_require_exact_line "$evidence_dir/mysql-connectivity.txt" '1' 'MySQL connectivity evidence'

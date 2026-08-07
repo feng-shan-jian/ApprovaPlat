@@ -21,6 +21,8 @@ import javax.xml.stream.XMLStreamReader;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.Activity;
 import org.flowable.bpmn.model.BoundaryEvent;
+import org.flowable.bpmn.model.Event;
+import org.flowable.bpmn.model.EventDefinition;
 import org.flowable.bpmn.model.CallActivity;
 import org.flowable.bpmn.model.FieldExtension;
 import org.flowable.bpmn.model.FlowElement;
@@ -82,6 +84,19 @@ public class WorkflowBpmnService
     private static final Pattern SAFE_EXPRESSION_PATTERN = Pattern.compile(
             "[$#]\\{[A-Za-z0-9_.$#{}\\[\\]'\"\\s=!<>+\\-*/%?:,&|;]+}");
 
+    /**
+     * SLA 编译阶段唯一允许生成的服务任务表达式；参数均来自已校验并冻结的部署快照。
+     * 该白名单拒绝任意 Bean、方法链和用户输入拼接，避免作者借编译阶段绕过受控扩展边界。
+     */
+    private static final Pattern SLA_TIMER_DELEGATE_EXPRESSION = Pattern.compile(
+            "\\$\\{workflowSlaTimerDelegate\\.executeTimer\\(execution,'[A-Za-z0-9_.:-]+',"
+                    + "'(REMINDER|ESCALATE)',[0-9]{1,3},(null|'[1-9][0-9]{0,18}')\\)\\}");
+
+    /** 原始 XML 中显式声明的非中断 Error 边界；模型转换会丢失该作者意图，必须先行拦截。 */
+    private static final Pattern NON_INTERRUPTING_ERROR_BOUNDARY_PATTERN = Pattern.compile(
+            "(?is)<boundaryEvent\\b[^>]*cancelActivity\\s*=\\s*['\"]false['\"][^>]*>"
+                    + ".*?<errorEventDefinition\\b");
+
     /** 即使表达式语法受限也不允许出现的敏感对象和反射入口。 */
     private static final List<String> DANGEROUS_EXPRESSION_TOKENS = List.of(
             "java.", "javax.", "jakarta.", "runtime", "processbuilder", "system.",
@@ -100,6 +115,9 @@ public class WorkflowBpmnService
     /** 正式自定义表单字段目录解析器；纯解析单测可不启用。 */
     private final WorkflowFormFieldExtensionService formFieldExtensionService;
 
+    /** 错误与升级正式编码目录；纯解析单测可不启用。 */
+    private final WorkflowBpmnEventCodeService bpmnEventCodeService;
+
     /**
      * 创建 BPMN 安全校验组件。
      *
@@ -108,7 +126,7 @@ public class WorkflowBpmnService
      */
     public WorkflowBpmnService(RepositoryService repositoryService)
     {
-        this(repositoryService, null);
+        this(repositoryService, null, null);
     }
 
     /**
@@ -121,8 +139,23 @@ public class WorkflowBpmnService
     public WorkflowBpmnService(RepositoryService repositoryService,
             WorkflowFormFieldExtensionService formFieldExtensionService)
     {
+        this(repositoryService, formFieldExtensionService, null);
+    }
+
+    /**
+     * 创建接入正式表单字段和 BPMN 事件编码目录的安全校验组件。
+     * @param repositoryService RepositoryService，Flowable 官方模型校验公共 API
+     * @param formFieldExtensionService WorkflowFormFieldExtensionService，自定义字段目录解析器
+     * @param bpmnEventCodeService WorkflowBpmnEventCodeService，错误与升级正式编码目录
+     * @return 无返回值，构造后由 Spring 管理
+     */
+    public WorkflowBpmnService(RepositoryService repositoryService,
+            WorkflowFormFieldExtensionService formFieldExtensionService,
+            WorkflowBpmnEventCodeService bpmnEventCodeService)
+    {
         this.repositoryService = repositoryService;
         this.formFieldExtensionService = formFieldExtensionService;
+        this.bpmnEventCodeService = bpmnEventCodeService;
     }
 
     /**
@@ -205,6 +238,7 @@ public class WorkflowBpmnService
         try
         {
             validateRawExtensionProperties(bpmnXml);
+            validateRawBusinessBoundarySemantics(bpmnXml);
             org.flowable.bpmn.model.BpmnModel bpmnModel = parseSecurely(bpmnXml);
             List<WorkflowBpmnFormReference> references = validateModel(
                     bpmnModel, requireStartForm, validationContext);
@@ -370,7 +404,8 @@ public class WorkflowBpmnService
         String name = trimToEmpty(reader.getAttributeValue(null, "name"));
         String value = reader.getAttributeValue(null, "value");
         boolean allowedPlatformProperty =
-                WorkflowControlledLoopBpmnContract.isReservedProperty(name);
+                WorkflowControlledLoopBpmnContract.isReservedProperty(name)
+                || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name);
         if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
                 || (name.startsWith("approva.") && !allowedPlatformProperty))
         {
@@ -613,6 +648,8 @@ public class WorkflowBpmnService
                 throw invalidBpmn("流程不允许使用脚本任务", null);
             }
 
+            validateBpmnBusinessEvents(bpmnModel, process);
+
             validateListeners(process.getExecutionListeners(), validationContext);
             for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
             {
@@ -621,6 +658,116 @@ public class WorkflowBpmnService
             }
         }
         return List.copyOf(references);
+    }
+
+    /**
+     * 校验错误与升级引用必须来自正式目录，并收紧边界附着、匹配和中断语义。
+     * @param bpmnModel BpmnModel，包含根 Error/Escalation 定义的完整模型
+     * @param process Process，当前可执行流程
+     * @return void，目录、附着或匹配不合法时拒绝保存和部署
+     */
+    private void validateBpmnBusinessEvents(org.flowable.bpmn.model.BpmnModel bpmnModel,
+            Process process)
+    {
+        Set<String> attachedMatches = new HashSet<>();
+        for (Event event : process.findFlowElementsOfType(Event.class, true))
+        {
+            List<EventDefinition> definitions = event.getEventDefinitions();
+            if (definitions == null || definitions.isEmpty())
+            {
+                continue;
+            }
+            int businessEventDefinitions = 0;
+            for (EventDefinition definition : definitions)
+            {
+                WorkflowBpmnEventModelSupport.ResolvedEvent resolved =
+                        WorkflowBpmnEventModelSupport.resolve(bpmnModel, definition);
+                if (resolved == null)
+                {
+                    continue;
+                }
+                businessEventDefinitions++;
+                if (!hasText(resolved.eventCode()))
+                {
+                    throw invalidBpmn("BPMN 错误或升级必须引用正式业务编码", null);
+                }
+                if (bpmnEventCodeService != null)
+                {
+                    // 保存和部署均核验当前启用目录，停用编码只能由历史部署继续运行。
+                    bpmnEventCodeService.requireEnabled(resolved.eventType(), resolved.eventCode());
+                }
+                if (event instanceof BoundaryEvent boundaryEvent)
+                {
+                    validateBusinessBoundaryEvent(boundaryEvent, resolved, attachedMatches);
+                }
+            }
+            if (businessEventDefinitions > 1)
+            {
+                throw invalidBpmn("同一 BPMN 事件只能配置一个错误或升级定义", null);
+            }
+        }
+    }
+
+    /**
+     * 在 Flowable 转换前拒绝作者 XML 明确写出的非中断 Error 边界。
+     * @param bpmnXml String，已完成 UTF-8 解码的作者 BPMN XML
+     * @return void，发现 Error 边界 cancelActivity=false 时抛出稳定 400
+     */
+    private void validateRawBusinessBoundarySemantics(String bpmnXml)
+    {
+        if (NON_INTERRUPTING_ERROR_BOUNDARY_PATTERN.matcher(bpmnXml).find())
+        {
+            throw invalidBpmn("错误边界必须使用中断语义", null);
+        }
+    }
+
+    /**
+     * 校验单个错误或升级边界只能精确附着一个活动并通过唯一出边进入处理路径。
+     * @param boundaryEvent BoundaryEvent，待校验边界事件
+     * @param resolved ResolvedEvent，已解析事件类型和编码
+     * @param attachedMatches Set&lt;String&gt;，同一活动已登记的类型与编码
+     * @return void，重复匹配、非法附着或 Error 非中断时拒绝模型
+     */
+    private void validateBusinessBoundaryEvent(BoundaryEvent boundaryEvent,
+            WorkflowBpmnEventModelSupport.ResolvedEvent resolved,
+            Set<String> attachedMatches)
+    {
+        String attachedTo = hasText(boundaryEvent.getAttachedToRefId())
+                ? boundaryEvent.getAttachedToRefId().trim()
+                : boundaryEvent.getAttachedToRef() == null
+                    ? "" : trimToEmpty(boundaryEvent.getAttachedToRef().getId());
+        if (!hasText(boundaryEvent.getId()) || !hasText(attachedTo)
+                || boundaryEvent.getAttachedToRef() == null)
+        {
+            throw invalidBpmn("错误或升级边界必须附着到一个真实活动", null);
+        }
+        if (boundaryEvent.getIncomingFlows() != null && !boundaryEvent.getIncomingFlows().isEmpty())
+        {
+            throw invalidBpmn("错误或升级边界不允许存在入边", null);
+        }
+        if (boundaryEvent.getOutgoingFlows() == null || boundaryEvent.getOutgoingFlows().size() != 1)
+        {
+            throw invalidBpmn("错误或升级边界必须通过唯一出边进入处理路径", null);
+        }
+        String cancelActivityAttribute = boundaryEvent.getAttributeValue("", "cancelActivity");
+        if ("ERROR".equals(resolved.eventType())
+                && "false".equalsIgnoreCase(cancelActivityAttribute))
+        {
+            // BPMN Error 只能中断当前活动；非中断业务提醒必须使用 Escalation。
+            throw invalidBpmn("错误边界必须使用中断语义", null);
+        }
+        if ("ERROR".equals(resolved.eventType()))
+        {
+            // Flowable 8 解析 Error 边界时会把 cancelActivity 归一为 false，但引擎语义仍然是中断；
+            // 这里显式恢复领域语义，供部署校验和运行审计使用，避免把内部默认值误判为非中断。
+            boundaryEvent.setCancelActivity(true);
+        }
+        String matchKey = attachedTo + '\u0000' + resolved.eventType()
+                + '\u0000' + resolved.eventCode();
+        if (!attachedMatches.add(matchKey))
+        {
+            throw invalidBpmn("同一活动不允许配置重复的错误或升级捕获编码", null);
+        }
     }
 
     /**
@@ -966,6 +1113,22 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("服务任务类型未列入安全白名单", null);
         }
+        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+        {
+            // 编译资源只允许 SLA 定时器固定入口；作者任意服务任务在前置校验阶段已被拒绝。
+            if (!ImplementationType.IMPLEMENTATION_TYPE_EXPRESSION.equals(task.getImplementationType())
+                    || !SLA_TIMER_DELEGATE_EXPRESSION.matcher(trimToEmpty(task.getImplementation())).matches())
+            {
+                throw invalidBpmn("编译服务任务必须使用受控 SLA 定时器入口", null);
+            }
+            // 部署快照已经固化精确参数，执行 XML 不得再次携带可篡改的作者字段。
+            if (task.getFieldExtensions() != null && !task.getFieldExtensions().isEmpty())
+            {
+                throw invalidBpmn("已编译服务任务不允许保留作者扩展字段", null);
+            }
+            validateExpression(task.getSkipExpression());
+            return;
+        }
         if (!ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(
                 task.getImplementationType())
                 || !WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION.equals(
@@ -976,15 +1139,6 @@ public class WorkflowBpmnService
         }
         validateExpression(task.getSkipExpression());
         List<FieldExtension> fields = task.getFieldExtensions();
-        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
-        {
-            // 部署快照已经固化精确扩展版本和配置，执行 XML 不得再次携带可篡改的作者字段。
-            if (fields != null && !fields.isEmpty())
-            {
-                throw invalidBpmn("已编译服务任务不允许保留作者扩展字段", null);
-            }
-            return;
-        }
         validateExtensionFields(fields);
     }
 

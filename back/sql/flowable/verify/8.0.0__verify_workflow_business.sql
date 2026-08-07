@@ -4,14 +4,14 @@
 SELECT
     'workflow_schema_table_counts' AS check_name,
     CASE
-        WHEN COUNT(*) = 86
+        WHEN COUNT(*) = 95
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) <> 'ACT_'
                  AND LEFT(UPPER(TABLE_NAME), 4) <> 'FLW_'
                  AND LEFT(UPPER(TABLE_NAME), 3) <> 'WF_'
                  AND LEFT(UPPER(TABLE_NAME), 5) <> 'QRTZ_') = 20
          AND SUM(LEFT(UPPER(TABLE_NAME), 5) = 'QRTZ_') = 11
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) IN ('ACT_', 'FLW_')) = 36
-         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 19
+         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 28
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -925,6 +925,166 @@ SELECT
         )
     ) AS detail
 FROM integrity_issues;
+
+SELECT
+    'workflow_sla_tables' AS check_name,
+    CASE WHEN COUNT(*) = 6 AND SUM(ENGINE = 'InnoDB') = 6 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('found=', COUNT(*), ', innodb=', SUM(ENGINE = 'InnoDB'), ', expected=6') AS detail
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+  AND table_name IN ('wf_business_calendar', 'wf_business_calendar_day',
+                     'wf_deploy_task_sla', 'wf_task_sla_execution',
+                     'wf_task_sla_audit', 'wf_task_sla_notification');
+
+SELECT
+    'workflow_sla_constraints' AS check_name,
+    CASE WHEN COUNT(*) = 28 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('found=', COUNT(*), ', expected=28') AS detail
+FROM information_schema.table_constraints
+WHERE constraint_schema = DATABASE()
+  AND table_name IN ('wf_business_calendar', 'wf_business_calendar_day',
+                     'wf_deploy_task_sla', 'wf_task_sla_execution',
+                     'wf_task_sla_audit', 'wf_task_sla_notification')
+  AND constraint_type IN ('PRIMARY KEY', 'UNIQUE', 'CHECK', 'FOREIGN KEY');
+
+SELECT
+    'workflow_sla_foreign_keys' AS check_name,
+    CASE WHEN COUNT(*) = 3 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('found=', COUNT(*), ', expected=3') AS detail
+FROM information_schema.referential_constraints
+WHERE constraint_schema = DATABASE()
+  AND constraint_name IN ('fk_wf_business_calendar_day_calendar',
+                          'fk_wf_task_sla_audit_execution',
+                          'fk_wf_task_sla_notification_audit');
+
+WITH sla_issues AS
+(
+    SELECT 'sla_calendar_invalid_row' AS issue_name, COUNT(*) AS issue_count
+    FROM wf_business_calendar c
+    WHERE c.calendar_key NOT REGEXP '^[A-Z][A-Z0-9_.-]{1,63}$'
+       OR c.status NOT IN ('ENABLED', 'DISABLED')
+       OR c.work_start >= c.work_end
+       OR c.working_days NOT REGEXP '^[1-7](,[1-7]){0,6}$'
+
+    UNION ALL
+
+    SELECT 'sla_snapshot_invalid_row', COUNT(*)
+    FROM wf_deploy_task_sla s
+    LEFT JOIN ACT_RE_DEPLOYMENT d ON d.ID_ = s.deployment_id
+    WHERE d.ID_ IS NULL
+       OR s.reminder_minutes < 1 OR s.reminder_repeat_minutes < 1
+       OR s.max_reminders NOT BETWEEN 1 AND 100
+       OR s.escalation_minutes <= s.reminder_minutes
+            + s.reminder_repeat_minutes * (s.max_reminders - 1)
+       OR (s.escalation_assignee IS NULL AND s.escalation_event_code IS NULL)
+
+    UNION ALL
+
+    SELECT 'sla_execution_invalid_row', COUNT(*)
+    FROM wf_task_sla_execution e
+    WHERE e.status NOT IN ('ACTIVE', 'COMPLETED', 'ESCALATED')
+       OR e.started_at > e.reminder_due_at
+       OR e.reminder_due_at >= e.escalation_due_at
+       OR e.reminders_sent < 0 OR e.paused_millis < 0 OR e.revision < 0
+       OR NOT EXISTS
+          (
+              SELECT 1 FROM wf_deploy_task_sla s
+              WHERE s.deployment_id = e.deployment_id
+                AND s.task_definition_key = e.task_definition_key
+          )
+
+    UNION ALL
+
+    SELECT 'sla_audit_invalid_row', COUNT(*)
+    FROM wf_task_sla_audit a
+    LEFT JOIN wf_task_sla_execution e ON e.sla_execution_id = a.sla_execution_id
+    WHERE e.sla_execution_id IS NULL
+       OR a.action_type NOT IN ('CREATE', 'ASSIGN', 'REMINDER', 'ESCALATE',
+                                'COMPLETE', 'PAUSE', 'RESUME')
+       OR a.action_ordinal < 0
+
+    UNION ALL
+
+    SELECT 'sla_notification_invalid_row', COUNT(*)
+    FROM wf_task_sla_notification n
+    LEFT JOIN wf_task_sla_audit a ON a.audit_id = n.audit_id
+    LEFT JOIN sys_user u ON CAST(u.user_id AS CHAR) = n.recipient_user_id
+    WHERE a.audit_id IS NULL OR u.user_id IS NULL
+       OR n.action_type NOT IN ('REMINDER', 'ESCALATE')
+       OR n.read_status NOT IN ('UNREAD', 'READ')
+       OR (n.read_status = 'UNREAD' AND n.read_time IS NOT NULL)
+       OR (n.read_status = 'READ' AND n.read_time IS NULL)
+)
+SELECT
+    'workflow_sla_data_integrity' AS check_name,
+    CASE WHEN SUM(issue_count) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT(
+        'issues=', SUM(issue_count),
+        ', detail=', COALESCE(
+            GROUP_CONCAT(
+                CASE WHEN issue_count > 0 THEN CONCAT(issue_name, ':', issue_count) END
+                ORDER BY issue_name SEPARATOR ','
+            ),
+            'none'
+        )
+    ) AS detail
+FROM sla_issues;
+
+SELECT
+    'workflow_bpmn_event_tables' AS check_name,
+    CASE WHEN COUNT(*) = 3 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('found=', COUNT(*), ', expected=3') AS detail
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+  AND table_name IN ('wf_bpmn_event_code', 'wf_bpmn_event_audit',
+                     'wf_bpmn_event_notification');
+
+SELECT
+    'workflow_bpmn_event_constraints' AS check_name,
+    CASE WHEN COUNT(*) >= 12 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('found=', COUNT(*), ', expected_at_least=12') AS detail
+FROM information_schema.table_constraints
+WHERE constraint_schema = DATABASE()
+  AND table_name IN ('wf_bpmn_event_code', 'wf_bpmn_event_audit',
+                     'wf_bpmn_event_notification')
+  AND constraint_type IN ('PRIMARY KEY', 'UNIQUE', 'CHECK', 'FOREIGN KEY');
+
+WITH event_issues AS
+(
+    SELECT 'event_code_invalid_row' AS issue_name, COUNT(*) AS issue_count
+    FROM wf_bpmn_event_code
+    WHERE event_type NOT IN ('ERROR', 'ESCALATION')
+       OR event_code NOT REGEXP '^[A-Z][A-Z0-9_.-]{1,63}$'
+       OR notification_policy NOT IN ('NONE', 'INITIATOR')
+       OR status NOT IN ('ENABLED', 'DISABLED')
+
+    UNION ALL
+
+    SELECT 'event_audit_invalid_row', COUNT(*)
+    FROM wf_bpmn_event_audit
+    WHERE idempotency_key NOT REGEXP '^[0-9a-f]{64}$'
+       OR source_type NOT IN ('SERVICE_TASK', 'HTTP', 'SQL', 'DMN', 'MANUAL')
+       OR event_type NOT IN ('ERROR', 'ESCALATION')
+       OR match_status NOT IN ('CAPTURED', 'UNMATCHED')
+       OR (match_status = 'CAPTURED' AND (boundary_event_id IS NULL OR interrupting IS NULL))
+       OR (match_status = 'UNMATCHED' AND (boundary_event_id IS NOT NULL OR interrupting IS NOT NULL))
+
+    UNION ALL
+
+    SELECT 'event_notification_invalid_row', COUNT(*)
+    FROM wf_bpmn_event_notification n
+    LEFT JOIN wf_bpmn_event_audit a ON a.audit_id = n.audit_id
+    LEFT JOIN sys_user u ON CAST(u.user_id AS CHAR) = n.recipient_user_id
+    WHERE a.audit_id IS NULL OR u.user_id IS NULL
+       OR n.read_status NOT IN ('UNREAD', 'READ')
+       OR (n.read_status = 'UNREAD' AND n.read_time IS NOT NULL)
+       OR (n.read_status = 'READ' AND n.read_time IS NULL)
+)
+SELECT
+    'workflow_bpmn_event_data_integrity' AS check_name,
+    CASE WHEN SUM(issue_count) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('issues=', SUM(issue_count)) AS detail
+FROM event_issues;
 
 WITH expected_tables AS (
     SELECT 'wf_integration_credential' AS table_name

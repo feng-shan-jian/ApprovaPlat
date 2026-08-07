@@ -4,7 +4,9 @@ import org.flowable.common.engine.api.FlowableIllegalArgumentException;
 import org.flowable.engine.delegate.TaskListener;
 import org.flowable.task.service.delegate.DelegateTask;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
+import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 
 /**
  * BPMN 用户任务固定监听入口，只转发批准事件，不执行脚本、字段注入或业务状态改写。
@@ -16,6 +18,9 @@ public class WorkflowUserTaskListener implements TaskListener
 
     private final WorkflowUserTaskAuditService auditService;
 
+    /** SLA 生命周期服务；旧纯单元测试直接构造监听器时可为空。 */
+    private WorkflowTaskSlaRuntimeService slaRuntimeService;
+
     /**
      * 创建受控用户任务监听器。
      *
@@ -25,6 +30,17 @@ public class WorkflowUserTaskListener implements TaskListener
     public WorkflowUserTaskListener(WorkflowUserTaskAuditService auditService)
     {
         this.auditService = auditService;
+    }
+
+    /**
+     * 延迟注入 SLA 生命周期服务，保留既有直接构造测试兼容性。
+     * @param slaRuntimeService WorkflowTaskSlaRuntimeService，任务 SLA 正式状态服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setSlaRuntimeService(WorkflowTaskSlaRuntimeService slaRuntimeService)
+    {
+        this.slaRuntimeService = slaRuntimeService;
     }
 
     /**
@@ -52,6 +68,14 @@ public class WorkflowUserTaskListener implements TaskListener
                         delegateTask.getProcessDefinitionId(),
                         delegateTask.getTaskDefinitionKey(),
                         delegateTask.getAssignee(), delegateTask.getOwner());
+                if (slaRuntimeService != null)
+                {
+                    // SLA 与固定任务审计共享当前 Flowable 命令事务，任一失败都会回滚任务状态。
+                    slaRuntimeService.onTaskEvent(eventName, delegateTask.getId(),
+                            delegateTask.getProcessInstanceId(),
+                            delegateTask.getProcessDefinitionId(),
+                            delegateTask.getTaskDefinitionKey(), delegateTask.getAssignee());
+                }
             }
             default -> throw new FlowableIllegalArgumentException(
                     "用户任务监听事件不受支持");

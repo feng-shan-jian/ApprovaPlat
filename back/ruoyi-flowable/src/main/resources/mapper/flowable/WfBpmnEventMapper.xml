@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfBpmnEventMapper">
+    <resultMap id="EventCodeResult" type="com.ruoyi.flowable.domain.WfBpmnEventCode">
+        <id property="eventCodeId" column="event_code_id"/>
+        <result property="eventType" column="event_type"/>
+        <result property="eventCode" column="event_code"/>
+        <result property="eventName" column="event_name"/>
+        <result property="notificationPolicy" column="notification_policy"/>
+        <result property="status" column="status"/>
+        <result property="remark" column="description"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateBy" column="update_by"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <select id="selectCodeList" resultMap="EventCodeResult">
+        select event_code_id, event_type, event_code, event_name, notification_policy,
+               status, description, create_by, create_time, update_by, update_time
+        from wf_bpmn_event_code
+        order by event_type, event_code
+    </select>
+
+    <select id="selectEnabledCodes" resultMap="EventCodeResult">
+        select event_code_id, event_type, event_code, event_name, notification_policy,
+               status, description, create_by, create_time, update_by, update_time
+        from wf_bpmn_event_code
+        where event_type = #{eventType} and status = 'ENABLED'
+        order by event_code
+    </select>
+
+    <select id="selectCode" resultMap="EventCodeResult">
+        select event_code_id, event_type, event_code, event_name, notification_policy,
+               status, description, create_by, create_time, update_by, update_time
+        from wf_bpmn_event_code
+        where event_type = #{eventType} and event_code = #{eventCode}
+    </select>
+
+    <select id="selectCodeForUpdate" resultMap="EventCodeResult">
+        select event_code_id, event_type, event_code, event_name, notification_policy,
+               status, description, create_by, create_time, update_by, update_time
+        from wf_bpmn_event_code where event_code_id = #{eventCodeId} for update
+    </select>
+
+    <insert id="insertCode" useGeneratedKeys="true" keyProperty="eventCodeId">
+        insert into wf_bpmn_event_code
+            (event_type, event_code, event_name, notification_policy, status, description,
+             create_by, create_time, update_by, update_time)
+        values
+            (#{eventType}, #{eventCode}, #{eventName}, #{notificationPolicy}, #{status}, #{remark},
+             #{createBy}, current_timestamp(3), '', null)
+    </insert>
+
+    <update id="updateCode">
+        update wf_bpmn_event_code
+        set event_name = #{eventName}, notification_policy = #{notificationPolicy},
+            description = #{remark}, update_by = #{updateBy}, update_time = current_timestamp(3)
+        where event_code_id = #{eventCodeId}
+    </update>
+
+    <update id="updateCodeStatus">
+        update wf_bpmn_event_code
+        set status = #{status}, update_by = #{updateBy}, update_time = current_timestamp(3)
+        where event_code_id = #{eventCodeId}
+    </update>
+
+    <insert id="insertAudit">
+        insert ignore into wf_bpmn_event_audit
+            (idempotency_key, deployment_id, process_instance_id, process_definition_id,
+             execution_id, source_element_id, source_type, event_type, event_code, event_name,
+             match_status, boundary_event_id, interrupting, message_summary, initiator_user_id,
+             create_time)
+        values
+            (#{idempotencyKey}, #{deploymentId}, #{processInstanceId}, #{processDefinitionId},
+             #{executionId}, #{sourceElementId}, #{sourceType}, #{eventType}, #{eventCode}, #{eventName},
+             #{matchStatus}, #{boundaryEventId}, #{interrupting}, #{messageSummary}, #{initiatorUserId},
+             current_timestamp(3))
+    </insert>
+
+    <select id="selectAuditId" resultType="java.lang.Long">
+        select audit_id from wf_bpmn_event_audit where idempotency_key = #{idempotencyKey}
+    </select>
+
+    <insert id="insertNotification">
+        insert ignore into wf_bpmn_event_notification
+            (audit_id, recipient_user_id, title, content, read_status, create_time)
+        select #{auditId}, cast(u.user_id as char), #{title}, #{content}, 'UNREAD', current_timestamp(3)
+        from sys_user u
+        where cast(u.user_id as char) = #{recipientUserId} and u.status = '0' and u.del_flag = '0'
+    </insert>
+
+    <select id="selectAuditList" resultType="com.ruoyi.flowable.domain.vo.WorkflowBpmnEventAuditView">
+        select audit_id as auditId, process_instance_id as processInstanceId,
+               process_definition_id as processDefinitionId, source_element_id as sourceElementId,
+               source_type as sourceType, event_type as eventType, event_code as eventCode,
+               event_name as eventName, match_status as matchStatus,
+               boundary_event_id as boundaryEventId, interrupting,
+               message_summary as messageSummary, create_time as createTime
+        from wf_bpmn_event_audit
+        order by audit_id desc limit 500
+    </select>
+
+    <select id="selectNotifications" resultType="com.ruoyi.flowable.domain.vo.WorkflowBpmnEventNotificationView">
+        select notification_id as notificationId, audit_id as auditId, title, content,
+               read_status as readStatus, create_time as createTime, read_time as readTime
+        from wf_bpmn_event_notification
+        where recipient_user_id = #{userId}
+        order by notification_id desc limit 200
+    </select>
+
+    <update id="markNotificationRead">
+        update wf_bpmn_event_notification
+        set read_status = 'READ', read_time = current_timestamp(3)
+        where notification_id = #{notificationId} and recipient_user_id = #{userId}
+          and read_status = 'UNREAD'
+    </update>
+</mapper>

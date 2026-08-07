@@ -42,7 +42,7 @@ class WorkflowMenuSqlContractTest
                 "-- 目录按 path、页面和按钮按 perms 写入");
         Set<String> seedKeys = extractSeedKeys(menuSeed);
 
-        assertThat(seedKeys).hasSize(72).contains(
+        assertThat(seedKeys).hasSize(82).contains(
                 "workflow", "office",
                 "workflow:category:list", "workflow:category:export",
                 "workflow:model:designer", "workflow:model:save",
@@ -59,6 +59,11 @@ class WorkflowMenuSqlContractTest
                 "workflow:integrationCredential:rotate",
                 "workflow:integrationCredential:revoke",
                 "workflow:runtimeEvent:list",
+                "workflow:bpmnEvent:list", "workflow:bpmnEvent:add",
+                "workflow:bpmnEvent:edit", "workflow:bpmnEvent:audit",
+                "workflow:bpmnEvent:notification",
+                "workflow:sla:list", "workflow:sla:add", "workflow:sla:edit",
+                "workflow:sla:audit", "workflow:sla:notification",
                 "workflow:deploy:state",
                 "workflow:process:manageList", "workflow:process:manageExport",
                 "workflow:process:start", "workflow:process:query",
@@ -117,9 +122,9 @@ class WorkflowMenuSqlContractTest
                 "workflow_roles",
                 "workflow_admin_menu_scope",
                 "workflow_admin_only_instance_management",
-                "when count(*) = 72",
-                "workflow_page) = 17",
-                "workflow_button) = 53",
+                "when count(*) = 82",
+                "workflow_page) = 18",
+                "workflow_button) = 62",
                 "'workflow:process:managelist'",
                 "'workflow:process:manageexport'",
                 "admin_management_permissions",

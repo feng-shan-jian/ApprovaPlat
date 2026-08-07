@@ -23,6 +23,7 @@ class WorkflowControllerPermissionContractTest
             WfDesignerController.class,
             WfConnectorController.class,
             WfDmnController.class,
+            WfBpmnEventController.class,
             WfExtensionController.class,
             WfSqlDataSourceController.class,
             WfFormController.class,
@@ -33,7 +34,7 @@ class WorkflowControllerPermissionContractTest
             WfTaskController.class);
 
     /** 当前生产工作流显式方法级 mapping 数量。 */
-    private static final int EXPECTED_MAPPING_COUNT = 98;
+    private static final int EXPECTED_MAPPING_COUNT = 106;
 
     /**
      * 冻结全部工作流 HTTP 入口数量，并保证每个入口均经过方法级 URL 权限门禁。
@@ -125,6 +126,27 @@ class WorkflowControllerPermissionContractTest
                 com.ruoyi.flowable.domain.dto.WorkflowDmnDeploymentRequest.class);
         assertPreAuthorize(WfDmnController.class, "delete",
                 "@ss.hasPermi('workflow:dmn:remove')", String.class);
+        assertPreAuthorize(WfBpmnEventController.class, "listCodes",
+                "@ss.hasPermi('workflow:bpmnEvent:list')");
+        assertPreAuthorize(WfBpmnEventController.class, "codeOptions",
+                "@ss.hasAnyPermi('workflow:bpmnEvent:list,workflow:model:designer')",
+                String.class);
+        assertPreAuthorize(WfBpmnEventController.class, "createCode",
+                "@ss.hasPermi('workflow:bpmnEvent:add')",
+                com.ruoyi.flowable.domain.dto.WorkflowBpmnEventCodeRequest.class);
+        assertPreAuthorize(WfBpmnEventController.class, "updateCode",
+                "@ss.hasPermi('workflow:bpmnEvent:edit')", Long.class,
+                com.ruoyi.flowable.domain.dto.WorkflowBpmnEventCodeRequest.class);
+        assertPreAuthorize(WfBpmnEventController.class, "changeCodeStatus",
+                "@ss.hasPermi('workflow:bpmnEvent:edit')", Long.class,
+                com.ruoyi.flowable.domain.dto.WorkflowBpmnEventCodeStatusRequest.class);
+        assertPreAuthorize(WfBpmnEventController.class, "audit",
+                "@ss.hasPermi('workflow:bpmnEvent:audit')");
+        assertPreAuthorize(WfBpmnEventController.class, "myNotifications",
+                "@ss.hasAnyPermi('workflow:process:approval,workflow:process:start,workflow:bpmnEvent:list')");
+        assertPreAuthorize(WfBpmnEventController.class, "markRead",
+                "@ss.hasAnyPermi('workflow:process:approval,workflow:process:start,workflow:bpmnEvent:list')",
+                Long.class);
         assertPreAuthorize(WfSqlDataSourceController.class, "options",
                 "@ss.hasAnyPermi('workflow:sqlDatasource:list,workflow:model:designer')");
         assertPreAuthorize(WfSqlDataSourceController.class, "list",

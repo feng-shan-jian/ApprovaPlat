@@ -26,6 +26,12 @@ const businessListenerEditorSource = readFileSync(
   new URL('../../src/components/workflow/designer/BusinessListenerEditor.vue', import.meta.url), 'utf8')
 const extensionPropertyEditorSource = readFileSync(
   new URL('../../src/components/workflow/designer/ExtensionPropertyEditor.vue', import.meta.url), 'utf8')
+const userTaskSlaEditorSource = readFileSync(
+  new URL('../../src/components/workflow/designer/UserTaskSlaEditor.vue', import.meta.url), 'utf8')
+const userTaskSlaEditorDoc = readFileSync(
+  new URL('../../src/components/workflow/designer/UserTaskSlaEditor.md', import.meta.url), 'utf8')
+const slaApiSource = readFileSync(
+  new URL('../../src/api/workflow/sla.js', import.meta.url), 'utf8')
 const embeddedFormEditorSource = readFileSync(
   new URL('../../src/components/workflow/designer/EmbeddedFormFieldEditor.vue', import.meta.url), 'utf8')
 const celExpressionEditorSource = readFileSync(
@@ -60,6 +66,10 @@ const dmnPageSource = readFileSync(
   new URL('../../src/views/workflow/dmn/index.vue', import.meta.url), 'utf8')
 const dmnPageDoc = readFileSync(
   new URL('../../src/views/workflow/dmn/index.md', import.meta.url), 'utf8')
+const bpmnEventPageSource = readFileSync(
+  new URL('../../src/views/workflow/bpmnEvent/index.vue', import.meta.url), 'utf8')
+const bpmnEventPageDoc = readFileSync(
+  new URL('../../src/views/workflow/bpmnEvent/index.md', import.meta.url), 'utf8')
 
 /**
  * 验证设计器能力接入真实 Modeler 模块和服务端 API，而不是只渲染工具栏按钮。
@@ -265,6 +275,87 @@ test('活动循环和通用扩展属性执行真实 XML 往返', async () => {
   const { xml } = await moddle.toXML(rootElement, { format: true })
   assert.match(xml, /<standardLoopCharacteristics loopMaximum="3">/)
   assert.match(xml, /<flowable:property name="business.owner" value="finance" \/>/)
+})
+
+/**
+ * 验证 UserTask SLA 使用正式目录和八个受控属性完成真实 XML 往返。
+ * @returns {Promise<void>} 自由输入目录、保留属性旁路或任一 SLA 字段丢失时测试失败。
+ */
+test('UserTask 审批 SLA 通过正式目录写入受控属性', async () => {
+  assert.match(slaApiSource, /listEnabledSlaCalendars[\s\S]*?\/workflow\/sla\/calendars\/enabled/)
+  assert.match(designerSource, /listEnabledSlaCalendars\(\)/)
+  assert.match(designerSource, /SLA_PROPERTY_NAMES[\s\S]*?'approva\.sla\.enabled'[\s\S]*?'approva\.sla\.escalationEventCode'/)
+  assert.match(designerSource, /function normalizeAndValidateSlaConfig\([\s\S]*?最后一次提醒[\s\S]*?受控升级事件/)
+  assert.match(propertiesPanelSource, /UserTaskSlaEditor[\s\S]*?:calendars="slaCalendarOptions"/)
+  assert.match(userTaskSlaEditorSource, /el-input-number[\s\S]*?escalationUserId[\s\S]*?escalationEventCode/)
+  assert.match(userTaskSlaEditorSource, /emit\('identity-search', keyword\)/)
+  assert.doesNotMatch(userTaskSlaEditorSource, /localStorage|sessionStorage|timerDefinition|timeDuration/)
+  assert.match(userTaskSlaEditorDoc, /业务日历负责将工作分钟解析为实际到期时间/)
+
+  const moddle = new BpmnModdle({ flowable: flowableModdle })
+  const source = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="urn:approvaplat:sla-contract">
+  <process id="slaContract" isExecutable="true">
+    <startEvent id="start" />
+    <sequenceFlow id="toApprove" sourceRef="start" targetRef="approve" />
+    <userTask id="approve" flowable:assignee="1">
+      <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.sla.enabled" value="true" />
+          <flowable:property name="approva.sla.calendarKey" value="DEFAULT" />
+          <flowable:property name="approva.sla.reminderMinutes" value="60" />
+          <flowable:property name="approva.sla.reminderRepeatMinutes" value="30" />
+          <flowable:property name="approva.sla.maxReminders" value="3" />
+          <flowable:property name="approva.sla.escalationMinutes" value="180" />
+          <flowable:property name="approva.sla.escalationUserId" value="2" />
+          <flowable:property name="approva.sla.escalationEventCode" value="APPROVAL_TIMEOUT" />
+        </flowable:properties>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="toEnd" sourceRef="approve" targetRef="end" />
+    <endEvent id="end" />
+  </process>
+</definitions>`
+  const { rootElement, warnings } = await moddle.fromXML(source)
+  assert.deepEqual(warnings, [])
+  const process = rootElement.rootElements.find(element => element.$type === 'bpmn:Process')
+  const task = process.flowElements.find(element => element.id === 'approve')
+  const properties = task.extensionElements.values.find(value => value.$type === 'flowable:Properties')
+  assert.equal(properties.values.length, 8)
+  assert.deepEqual(Object.fromEntries(properties.values.map(item => [item.name, item.value])), {
+    'approva.sla.enabled': 'true',
+    'approva.sla.calendarKey': 'DEFAULT',
+    'approva.sla.reminderMinutes': '60',
+    'approva.sla.reminderRepeatMinutes': '30',
+    'approva.sla.maxReminders': '3',
+    'approva.sla.escalationMinutes': '180',
+    'approva.sla.escalationUserId': '2',
+    'approva.sla.escalationEventCode': 'APPROVAL_TIMEOUT'
+  })
+  const { xml } = await moddle.toXML(rootElement, { format: true })
+  assert.match(xml, /name="approva\.sla\.calendarKey" value="DEFAULT"/)
+  assert.match(xml, /name="approva\.sla\.escalationEventCode" value="APPROVAL_TIMEOUT"/)
+})
+
+/**
+ * 验证 SLA 管理页连接正式日历、执行、审计和通知接口并落实权限按钮。
+ * @returns {void} 本地状态冒充、缺少状态回读或管理入口越权时测试失败。
+ */
+test('审批 SLA 管理页连接正式 API 和权限边界', () => {
+  assert.match(slaApiSource, /listSlaCalendars[\s\S]*?\/workflow\/sla\/calendars/)
+  assert.match(slaApiSource, /createSlaCalendar[\s\S]*?method: 'post'/)
+  assert.match(slaApiSource, /updateSlaCalendar[\s\S]*?method: 'put'/)
+  assert.match(slaApiSource, /changeSlaCalendarStatus[\s\S]*?data: \{ enabled \}/)
+  assert.match(slaApiSource, /listSlaExecutions[\s\S]*?\/workflow\/sla\/executions/)
+  assert.match(slaApiSource, /listSlaAudits[\s\S]*?\/workflow\/sla\/audits/)
+  assert.match(slaApiSource, /markSlaNotificationRead[\s\S]*?notifications\/\$\{notificationId\}\/read/)
+  assert.match(bpmnEventPageSource, /workflow:sla:add/)
+  assert.match(bpmnEventPageSource, /workflow:sla:edit/)
+  assert.match(bpmnEventPageSource, /await updateSlaCalendar\(calendarForm\.calendarId, payload\)[\s\S]*?await loadCalendars\(\)/)
+  assert.match(bpmnEventPageSource, /onActivated\(loadActiveTab\)/)
+  assert.match(bpmnEventPageSource, /REMINDER|SLA 通知/)
+  assert.doesNotMatch(bpmnEventPageSource, /localStorage|sessionStorage|setTimeout/)
+  assert.match(bpmnEventPageDoc, /IANA 时区[\s\S]*?正式数据库/)
 })
 
 /**
