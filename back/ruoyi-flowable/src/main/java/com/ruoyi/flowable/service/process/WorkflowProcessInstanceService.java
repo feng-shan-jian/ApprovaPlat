@@ -22,6 +22,7 @@ import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.engine.task.Comment;
 import org.flowable.variable.api.history.HistoricVariableInstance;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -36,6 +37,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
+import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
 
 /**
@@ -102,6 +104,9 @@ public class WorkflowProcessInstanceService
 
     private final PermissionService permissionService;
 
+    /** SLA 时钟冻结和 Flowable timer job 重排服务；旧直接构造测试时可为空。 */
+    private WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
+
     /**
      * 创建流程实例写操作服务。
      *
@@ -130,6 +135,17 @@ public class WorkflowProcessInstanceService
         this.copyMapper = copyMapper;
         this.controlledLoopExecutionMapper = controlledLoopExecutionMapper;
         this.permissionService = permissionService;
+    }
+
+    /**
+     * 延迟注入审批 SLA 状态服务，保留既有直接构造单元测试兼容性。
+     * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，SLA 暂停恢复服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setTaskSlaRuntimeService(WorkflowTaskSlaRuntimeService taskSlaRuntimeService)
+    {
+        this.taskSlaRuntimeService = taskSlaRuntimeService;
     }
 
     /**
@@ -243,10 +259,19 @@ public class WorkflowProcessInstanceService
                 if (targetState.suspended())
                 {
                     runtimeService.suspendProcessInstanceById(instanceId);
+                    if (taskSlaRuntimeService != null)
+                    {
+                        taskSlaRuntimeService.pauseInstance(instanceId, actor.userId());
+                    }
                 }
                 else
                 {
                     runtimeService.activateProcessInstanceById(instanceId);
+                    if (taskSlaRuntimeService != null)
+                    {
+                        // 激活与 timer job 平移处于同一事务，异步执行器不能抢占未平移的过期作业。
+                        taskSlaRuntimeService.resumeInstance(instanceId, actor.userId());
+                    }
                 }
             }
             catch (FlowableObjectNotFoundException exception)

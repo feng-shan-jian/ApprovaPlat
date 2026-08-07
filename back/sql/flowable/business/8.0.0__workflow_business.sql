@@ -244,6 +244,155 @@ WHERE e.extension_key = 'approva.set-variable'
       WHERE v.extension_id = e.extension_id AND v.version_no = 1
   );
 
+CREATE TABLE IF NOT EXISTS `wf_business_calendar`
+(
+    `calendar_id`   BIGINT       NOT NULL AUTO_INCREMENT COMMENT '业务日历主键',
+    `calendar_key`  VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '部署引用稳定编码',
+    `calendar_name` VARCHAR(128) NOT NULL COMMENT '用户可见名称',
+    `timezone`      VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'IANA 时区',
+    `working_days`  VARCHAR(13) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '逗号分隔 ISO 工作周序号',
+    `work_start`    TIME         NOT NULL COMMENT '工作日开始时间',
+    `work_end`      TIME         NOT NULL COMMENT '工作日结束时间',
+    `status`        VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'ENABLED 或 DISABLED',
+    `description`   VARCHAR(500) DEFAULT NULL COMMENT '日历说明',
+    `create_by`     VARCHAR(64)  NOT NULL COMMENT '创建人用户主键',
+    `create_time`   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `update_by`     VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '修改人用户主键',
+    `update_time`   DATETIME(3)           DEFAULT NULL COMMENT '修改时间',
+    PRIMARY KEY (`calendar_id`),
+    UNIQUE KEY `uk_wf_business_calendar_key` (`calendar_key`),
+    CONSTRAINT `chk_wf_business_calendar_key` CHECK (`calendar_key` REGEXP '^[A-Z][A-Z0-9_.-]{1,63}$'),
+    CONSTRAINT `chk_wf_business_calendar_status` CHECK (`status` IN ('ENABLED', 'DISABLED')),
+    CONSTRAINT `chk_wf_business_calendar_window` CHECK (`work_start` < `work_end`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '审批 SLA 正式业务日历';
+
+CREATE TABLE IF NOT EXISTS `wf_business_calendar_day`
+(
+    `calendar_id`   BIGINT      NOT NULL COMMENT '业务日历主键',
+    `calendar_date` DATE        NOT NULL COMMENT '日历时区自然日',
+    `working_day`   TINYINT(1)  NOT NULL COMMENT '1 补班，0 节假日',
+    `day_name`      VARCHAR(128) DEFAULT NULL COMMENT '日期说明',
+    PRIMARY KEY (`calendar_id`, `calendar_date`),
+    CONSTRAINT `fk_wf_business_calendar_day_calendar` FOREIGN KEY (`calendar_id`)
+        REFERENCES `wf_business_calendar` (`calendar_id`) ON DELETE CASCADE ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_business_calendar_day_working` CHECK (`working_day` IN (0, 1))
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '业务日历节假日与补班覆盖';
+
+CREATE TABLE IF NOT EXISTS `wf_deploy_task_sla`
+(
+    `deployment_id`              VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_key`                VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程定义 key',
+    `task_definition_key`        VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '原审批节点标识',
+    `calendar_key`               VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '业务日历稳定编码',
+    `calendar_timezone`          VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '部署冻结时区',
+    `working_days`               VARCHAR(13) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '部署冻结工作周',
+    `work_start`                 TIME         NOT NULL COMMENT '部署冻结工作开始时间',
+    `work_end`                   TIME         NOT NULL COMMENT '部署冻结工作结束时间',
+    `calendar_days_json`         JSON         NOT NULL COMMENT '部署冻结日期覆盖',
+    `reminder_minutes`           INT          NOT NULL COMMENT '首次提醒工作分钟',
+    `reminder_repeat_minutes`    INT          NOT NULL COMMENT '重复提醒间隔工作分钟',
+    `max_reminders`              INT          NOT NULL COMMENT '最大提醒次数',
+    `escalation_minutes`         INT          NOT NULL COMMENT '超时升级工作分钟',
+    `escalation_assignee`        VARCHAR(64)  DEFAULT NULL COMMENT '可空升级办理人用户主键',
+    `escalation_event_code`      VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '可空受控 BPMN 升级编码',
+    `create_by`                  VARCHAR(64)  NOT NULL COMMENT '部署操作人用户主键',
+    `create_time`                DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '冻结时间',
+    PRIMARY KEY (`deployment_id`, `process_key`, `task_definition_key`),
+    KEY `idx_wf_deploy_task_sla_calendar` (`calendar_key`),
+    CONSTRAINT `chk_wf_deploy_task_sla_reminder` CHECK
+        (`reminder_minutes` BETWEEN 1 AND 525600 AND `reminder_repeat_minutes` BETWEEN 1 AND 525600
+         AND `max_reminders` BETWEEN 1 AND 100),
+    CONSTRAINT `chk_wf_deploy_task_sla_escalation` CHECK
+        (`escalation_minutes` > `reminder_minutes` + `reminder_repeat_minutes` * (`max_reminders` - 1)),
+    CONSTRAINT `chk_wf_deploy_task_sla_target` CHECK
+        (`escalation_assignee` IS NOT NULL OR `escalation_event_code` IS NOT NULL)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '审批 SLA 不可变部署快照';
+
+CREATE TABLE IF NOT EXISTS `wf_task_sla_execution`
+(
+    `sla_execution_id`      BIGINT       NOT NULL AUTO_INCREMENT COMMENT 'SLA 执行主键',
+    `deployment_id`         VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '部署主键',
+    `process_instance_id`   VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程实例主键',
+    `process_definition_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程定义主键',
+    `task_id`               VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '原审批任务主键',
+    `task_definition_key`   VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '原审批节点标识',
+    `assignee_user_id`      VARCHAR(64)  DEFAULT NULL COMMENT '当前办理人用户主键',
+    `status`                VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'ACTIVE、COMPLETED 或 ESCALATED',
+    `started_at`            DATETIME(3)  NOT NULL COMMENT 'SLA 开始 UTC 时间',
+    `reminder_due_at`       DATETIME(3)  NOT NULL COMMENT '首次提醒 UTC 时间',
+    `escalation_due_at`     DATETIME(3)  NOT NULL COMMENT '升级 UTC 时间',
+    `reminders_sent`        INT          NOT NULL DEFAULT 0 COMMENT '已发送提醒次数',
+    `paused_at`             DATETIME(3)           DEFAULT NULL COMMENT '当前暂停 UTC 时间',
+    `paused_millis`         BIGINT       NOT NULL DEFAULT 0 COMMENT '累计暂停毫秒数',
+    `revision`              INT          NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+    `update_time`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '最后状态时间',
+    PRIMARY KEY (`sla_execution_id`),
+    UNIQUE KEY `uk_wf_task_sla_execution_task` (`task_id`),
+    KEY `idx_wf_task_sla_execution_instance` (`process_instance_id`, `status`, `sla_execution_id`),
+    CONSTRAINT `chk_wf_task_sla_execution_status` CHECK (`status` IN ('ACTIVE', 'COMPLETED', 'ESCALATED')),
+    CONSTRAINT `chk_wf_task_sla_execution_counter` CHECK (`reminders_sent` >= 0 AND `paused_millis` >= 0 AND `revision` >= 0),
+    CONSTRAINT `chk_wf_task_sla_execution_due` CHECK (`started_at` <= `reminder_due_at` AND `reminder_due_at` < `escalation_due_at`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '真实审批任务 SLA 状态';
+
+CREATE TABLE IF NOT EXISTS `wf_task_sla_audit`
+(
+    `audit_id`         BIGINT       NOT NULL AUTO_INCREMENT COMMENT '审计主键',
+    `sla_execution_id` BIGINT       NOT NULL COMMENT 'SLA 执行主键',
+    `action_type`      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '生命周期动作',
+    `action_ordinal`   INT          NOT NULL COMMENT '重复动作序号',
+    `actor_user_id`    VARCHAR(64)  DEFAULT NULL COMMENT '可空操作人用户主键',
+    `detail`           VARCHAR(500) NOT NULL COMMENT '脱敏动作摘要',
+    `create_time`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '动作时间',
+    PRIMARY KEY (`audit_id`),
+    UNIQUE KEY `uk_wf_task_sla_audit_action` (`sla_execution_id`, `action_type`, `action_ordinal`),
+    KEY `idx_wf_task_sla_audit_time` (`create_time`, `audit_id`),
+    CONSTRAINT `fk_wf_task_sla_audit_execution` FOREIGN KEY (`sla_execution_id`)
+        REFERENCES `wf_task_sla_execution` (`sla_execution_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_task_sla_audit_action` CHECK
+        (`action_type` IN ('CREATE', 'ASSIGN', 'REMINDER', 'ESCALATE', 'COMPLETE', 'PAUSE', 'RESUME')),
+    CONSTRAINT `chk_wf_task_sla_audit_ordinal` CHECK (`action_ordinal` >= 0)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '审批 SLA 不可变运行审计';
+
+CREATE TABLE IF NOT EXISTS `wf_task_sla_notification`
+(
+    `notification_id`  BIGINT       NOT NULL AUTO_INCREMENT COMMENT '通知主键',
+    `audit_id`         BIGINT       NOT NULL COMMENT '关联提醒或升级审计主键',
+    `recipient_user_id` VARCHAR(64)  NOT NULL COMMENT '接收人正式用户主键',
+    `action_type`      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'REMINDER 或 ESCALATE',
+    `title`            VARCHAR(160) NOT NULL COMMENT '通知标题',
+    `content`          VARCHAR(700) NOT NULL COMMENT '脱敏正文',
+    `read_status`      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'UNREAD' COMMENT 'UNREAD 或 READ',
+    `create_time`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `read_time`        DATETIME(3)           DEFAULT NULL COMMENT '首次阅读时间',
+    PRIMARY KEY (`notification_id`),
+    UNIQUE KEY `uk_wf_task_sla_notification` (`audit_id`, `recipient_user_id`),
+    KEY `idx_wf_task_sla_notification_user` (`recipient_user_id`, `read_status`, `notification_id`),
+    CONSTRAINT `fk_wf_task_sla_notification_audit` FOREIGN KEY (`audit_id`)
+        REFERENCES `wf_task_sla_audit` (`audit_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_task_sla_notification_action` CHECK (`action_type` IN ('REMINDER', 'ESCALATE')),
+    CONSTRAINT `chk_wf_task_sla_notification_status` CHECK (`read_status` IN ('UNREAD', 'READ')),
+    CONSTRAINT `chk_wf_task_sla_notification_read` CHECK
+        ((`read_status` = 'UNREAD' AND `read_time` IS NULL)
+         OR (`read_status` = 'READ' AND `read_time` IS NOT NULL))
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '审批 SLA 用户站内通知';
+
+INSERT INTO `wf_business_calendar`
+    (`calendar_key`, `calendar_name`, `timezone`, `working_days`, `work_start`, `work_end`,
+     `status`, `description`, `create_by`, `create_time`, `update_by`, `update_time`)
+SELECT 'DEFAULT_CN', '默认工作日历', 'Asia/Shanghai', '1,2,3,4,5', '09:00', '18:00',
+       'ENABLED', '周一至周五工作，节假日和补班可按正式日期覆盖维护',
+       'system', current_timestamp(3), '', NULL
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM `wf_business_calendar` WHERE `calendar_key` = 'DEFAULT_CN'
+);
+
 INSERT INTO `wf_bpmn_extension`
     (`extension_key`, `extension_name`, `extension_type`, `status`, `description`,
      `create_by`, `create_time`, `update_by`, `update_time`)

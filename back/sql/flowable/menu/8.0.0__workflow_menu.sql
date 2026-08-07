@@ -192,6 +192,16 @@ VALUES
      'F', 'workflow:bpmnEvent:audit', '#', '查询 BPMN 错误与升级专用运行审计'),
     ('workflow:bpmnEvent:notification', 'workflow:bpmnEvent:list', '事件通知查询', 4, '', NULL, '',
      'F', 'workflow:bpmnEvent:notification', '#', '查询并处理当前用户 BPMN 事件通知'),
+    ('workflow:sla:list', 'workflow:bpmnEvent:list', 'SLA 日历查询', 5, '', NULL, '',
+     'F', 'workflow:sla:list', '#', '查询审批 SLA 正式业务日历'),
+    ('workflow:sla:add', 'workflow:bpmnEvent:list', 'SLA 日历新增', 6, '', NULL, '',
+     'F', 'workflow:sla:add', '#', '新增审批 SLA 正式业务日历'),
+    ('workflow:sla:edit', 'workflow:bpmnEvent:list', 'SLA 日历维护', 7, '', NULL, '',
+     'F', 'workflow:sla:edit', '#', '修改和启停审批 SLA 业务日历'),
+    ('workflow:sla:audit', 'workflow:bpmnEvent:list', 'SLA 运行审计', 8, '', NULL, '',
+     'F', 'workflow:sla:audit', '#', '查询审批 SLA 执行状态和不可变审计'),
+    ('workflow:sla:notification', 'workflow:bpmnEvent:list', 'SLA 通知查询', 9, '', NULL, '',
+     'F', 'workflow:sla:notification', '#', '查询并处理当前用户审批 SLA 通知'),
 
     ('workflow:deploy:query', 'workflow:deploy:list', '部署查询', 1, '', NULL, '',
      'F', 'workflow:deploy:query', '#', '查询部署版本和 BPMN'),
@@ -432,7 +442,9 @@ WHERE seed_key IN (
     'workflow:sqlDatasource:list', 'workflow:sqlDatasource:add', 'workflow:sqlDatasource:edit',
     'workflow:dmn:list', 'workflow:dmn:add', 'workflow:dmn:remove',
     'workflow:bpmnEvent:list', 'workflow:bpmnEvent:add', 'workflow:bpmnEvent:edit',
-    'workflow:bpmnEvent:audit', 'workflow:bpmnEvent:notification'
+    'workflow:bpmnEvent:audit', 'workflow:bpmnEvent:notification',
+    'workflow:sla:list', 'workflow:sla:add', 'workflow:sla:edit',
+    'workflow:sla:audit', 'workflow:sla:notification'
 );
 
 -- 发起人只发起、查看、取消和导出自己的实例，不获得历史物理删除权限。
@@ -446,7 +458,7 @@ WHERE seed_key IN (
     'workflow:process:cancel',
     'workflow:process:ownExport', 'workflow:process:copyExport',
     'workflow:attachment:upload', 'workflow:attachment:query',
-    'workflow:attachment:remove'
+    'workflow:attachment:remove', 'workflow:sla:notification'
 );
 
 -- 审批人可认领、办理和撤回本人真实任务，不获得管理员终止/状态权限。
@@ -461,7 +473,7 @@ WHERE seed_key IN (
     'workflow:process:claimExport', 'workflow:process:revoke',
     'workflow:process:finishedExport', 'workflow:process:copyExport',
     'workflow:attachment:upload', 'workflow:attachment:query',
-    'workflow:attachment:remove'
+    'workflow:attachment:remove', 'workflow:sla:notification'
 );
 
 -- 审计角色只有列表、详情和导出权限；对象授权继续限制可见实例范围。
@@ -471,6 +483,7 @@ FROM tmp_workflow_menu_seed
 WHERE seed_key IN (
     'workflow', 'workflow:runtimeEvent:list', 'workflow:bpmnEvent:list',
     'workflow:bpmnEvent:audit', 'workflow:bpmnEvent:notification',
+    'workflow:sla:list', 'workflow:sla:audit', 'workflow:sla:notification',
     'office', 'workflow:process:ownList', 'workflow:process:todoList',
     'workflow:process:claimList', 'workflow:process:finishedList',
     'workflow:process:copyList', 'workflow:process:query',

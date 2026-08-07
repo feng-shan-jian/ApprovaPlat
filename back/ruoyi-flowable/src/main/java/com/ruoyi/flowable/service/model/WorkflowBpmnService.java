@@ -84,6 +84,14 @@ public class WorkflowBpmnService
     private static final Pattern SAFE_EXPRESSION_PATTERN = Pattern.compile(
             "[$#]\\{[A-Za-z0-9_.$#{}\\[\\]'\"\\s=!<>+\\-*/%?:,&|;]+}");
 
+    /**
+     * SLA 编译阶段唯一允许生成的服务任务表达式；参数均来自已校验并冻结的部署快照。
+     * 该白名单拒绝任意 Bean、方法链和用户输入拼接，避免作者借编译阶段绕过受控扩展边界。
+     */
+    private static final Pattern SLA_TIMER_DELEGATE_EXPRESSION = Pattern.compile(
+            "\\$\\{workflowSlaTimerDelegate\\.executeTimer\\(execution,'[A-Za-z0-9_.:-]+',"
+                    + "'(REMINDER|ESCALATE)',[0-9]{1,3},(null|'[1-9][0-9]{0,18}')\\)\\}");
+
     /** 原始 XML 中显式声明的非中断 Error 边界；模型转换会丢失该作者意图，必须先行拦截。 */
     private static final Pattern NON_INTERRUPTING_ERROR_BOUNDARY_PATTERN = Pattern.compile(
             "(?is)<boundaryEvent\\b[^>]*cancelActivity\\s*=\\s*['\"]false['\"][^>]*>"
@@ -396,7 +404,8 @@ public class WorkflowBpmnService
         String name = trimToEmpty(reader.getAttributeValue(null, "name"));
         String value = reader.getAttributeValue(null, "value");
         boolean allowedPlatformProperty =
-                WorkflowControlledLoopBpmnContract.isReservedProperty(name);
+                WorkflowControlledLoopBpmnContract.isReservedProperty(name)
+                || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name);
         if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
                 || (name.startsWith("approva.") && !allowedPlatformProperty))
         {
@@ -1104,6 +1113,22 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("服务任务类型未列入安全白名单", null);
         }
+        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+        {
+            // 编译资源只允许 SLA 定时器固定入口；作者任意服务任务在前置校验阶段已被拒绝。
+            if (!ImplementationType.IMPLEMENTATION_TYPE_EXPRESSION.equals(task.getImplementationType())
+                    || !SLA_TIMER_DELEGATE_EXPRESSION.matcher(trimToEmpty(task.getImplementation())).matches())
+            {
+                throw invalidBpmn("编译服务任务必须使用受控 SLA 定时器入口", null);
+            }
+            // 部署快照已经固化精确参数，执行 XML 不得再次携带可篡改的作者字段。
+            if (task.getFieldExtensions() != null && !task.getFieldExtensions().isEmpty())
+            {
+                throw invalidBpmn("已编译服务任务不允许保留作者扩展字段", null);
+            }
+            validateExpression(task.getSkipExpression());
+            return;
+        }
         if (!ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(
                 task.getImplementationType())
                 || !WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION.equals(
@@ -1114,15 +1139,6 @@ public class WorkflowBpmnService
         }
         validateExpression(task.getSkipExpression());
         List<FieldExtension> fields = task.getFieldExtensions();
-        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
-        {
-            // 部署快照已经固化精确扩展版本和配置，执行 XML 不得再次携带可篡改的作者字段。
-            if (fields != null && !fields.isEmpty())
-            {
-                throw invalidBpmn("已编译服务任务不允许保留作者扩展字段", null);
-            }
-            return;
-        }
         validateExtensionFields(fields);
     }
 

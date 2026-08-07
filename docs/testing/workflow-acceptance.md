@@ -32,7 +32,7 @@ mvn -pl ruoyi-flowable -am `
 
 ## RBAC 矩阵
 
-`WorkflowRbacMatrixContractTest` 冻结 16 个登录用户 Controller、103 个入口和五角色 515 个权限单元。机器调用的 3 个运行事件入口使用独立集成 Token 测试，不计入登录用户矩阵。
+`WorkflowRbacMatrixContractTest` 冻结 18 个登录用户 Controller、120 个入口和五角色 600 个权限单元。机器调用的 3 个运行事件入口使用独立集成 Token 测试，不计入登录用户矩阵。
 
 静态矩阵执行：
 

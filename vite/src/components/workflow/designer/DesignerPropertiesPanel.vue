@@ -99,6 +99,16 @@
               <el-form-item label="任务局部变量">
                 <el-switch v-model="state.localScope" @change="emit('user-task-change')" />
               </el-form-item>
+              <UserTaskSlaEditor
+                v-model="state.sla"
+                :calendars="slaCalendarOptions"
+                :escalation-options="escalationEventOptions"
+                :assignee-options="identityOptions.assignees"
+                :loading="slaLoading || eventCodeLoading"
+                :identity-loading="identityLoading"
+                @identity-search="searchSlaAssignees"
+                @change="emit('sla-change', $event)"
+              />
             </template>
 
             <template v-if="flags.serviceTaskLike">
@@ -383,6 +393,7 @@ import SqlConnectorEditor from './SqlConnectorEditor.vue'
 import BpmnEventRaiseEditor from './BpmnEventRaiseEditor.vue'
 import BusinessListenerEditor from './BusinessListenerEditor.vue'
 import ExtensionPropertyEditor from './ExtensionPropertyEditor.vue'
+import UserTaskSlaEditor from './UserTaskSlaEditor.vue'
 
 const props = defineProps({
   selected: { type: Boolean, default: false },
@@ -407,7 +418,9 @@ const props = defineProps({
   listenerLoading: { type: Boolean, default: false },
   errorEventOptions: { type: Array, default: () => [] },
   escalationEventOptions: { type: Array, default: () => [] },
-  eventCodeLoading: { type: Boolean, default: false }
+  eventCodeLoading: { type: Boolean, default: false },
+  slaCalendarOptions: { type: Array, default: () => [] },
+  slaLoading: { type: Boolean, default: false }
 })
 
 const emit = defineEmits([
@@ -416,7 +429,7 @@ const emit = defineEmits([
   'user-task-change', 'extension-selection-change', 'service-task-change', 'condition-change', 'documentation-change',
   'multi-instance-change', 'activity-change', 'call-activity-change', 'event-change', 'dmn-change',
   'identity-search', 'business-execution-listener-change', 'business-task-listener-change',
-  'extension-properties-change'
+  'extension-properties-change', 'sla-change'
 ])
 
 // 表单来源值与后端部署快照的 source_type 契约一致。
@@ -515,6 +528,15 @@ function handleControlledLoopFieldChange() {
  */
 function handleLoopTypeChange(value) {
   if (value !== 'approvalLoop') emit('multi-instance-change')
+}
+
+/**
+ * 请求父组件查询 SLA 超时升级办理人目录。
+ * @param {string} keyword 用户输入的检索词。
+ * @returns {void} 复用直接办理人的审批能力与权限边界。
+ */
+function searchSlaAssignees(keyword) {
+  emit('identity-search', { target: 'assignees', keyword })
 }
 </script>
 
