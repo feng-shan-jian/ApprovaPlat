@@ -13,8 +13,8 @@ const sharedTestPassword = 'wang'
 const compactJwtPattern = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}/
 
 /**
- * 收集本轮五角色 E2E 用户名与统一测试密码，仅用于扫描报告，不写入日志或新文件。
- * @returns {Buffer[]} 五个唯一用户名和统一密码对应的 UTF-8 字节序列。
+ * 收集本轮五角色 E2E 用户名、统一测试密码与可选数据库密码，仅用于扫描报告。
+ * @returns {Buffer[]} 登录和数据库验收凭据对应的 UTF-8 字节序列。
  */
 function collectCredentialValues() {
   const usernames = Object.entries(process.env)
@@ -23,7 +23,11 @@ function collectCredentialValues() {
   if (usernames.length !== 5) {
     throw new Error(`报告脱敏门禁需要五个账号，当前只读取到 ${usernames.length} 项`)
   }
-  return [...usernames, Buffer.from(sharedTestPassword, 'utf8')]
+  const mysqlPassword = process.env.FLOWABLE_E2E_MYSQL_PASSWORD
+  const databaseCredentials = typeof mysqlPassword === 'string' && mysqlPassword.length > 0
+    ? [Buffer.from(mysqlPassword, 'utf8')]
+    : []
+  return [...usernames, Buffer.from(sharedTestPassword, 'utf8'), ...databaseCredentials]
 }
 
 /**

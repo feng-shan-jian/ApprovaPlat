@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto'
 import { test, expect } from './fixtures/workflow.js'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { loadWorkflowAccounts } from './support/environment.js'
 import {
   closeWorkflowRoleSessions,
@@ -8,6 +9,107 @@ import {
 
 const accounts = loadWorkflowAccounts()
 const baseURL = process.env.FLOWABLE_E2E_BASE_URL?.trim() || 'http://127.0.0.1:1024'
+const execFileAsync = promisify(execFile)
+const isolatedDatabaseName = 'ry_vue_codex_flowable_it'
+
+/**
+ * 把服务端生成的 Flowable 主键限制为可安全嵌入只读验收 SQL 的字符集。
+ * @param {unknown} value 流程实例或 BPMN 活动主键。
+ * @param {string} fieldName 失败信息使用的业务字段名。
+ * @returns {string} 仅含字母、数字、冒号、下划线或连字符的主键。
+ */
+function requireDatabaseSafeId(value, fieldName) {
+  const normalized = String(value || '').trim()
+  if (!/^[A-Za-z0-9:_-]{1,64}$/.test(normalized)) {
+    throw new Error(`${fieldName} 不满足数据库验收主键边界`)
+  }
+  return normalized
+}
+
+/**
+ * 使用隔离库只读账号执行固定结构 SQL，并解析 MySQL 返回的单行 JSON 证据。
+ * @param {string} sql 仅由测试固定模板和已校验主键组成的 SELECT 语句。
+ * @returns {Promise<Record<string, unknown>>} Flowable 正式表中的计数和状态投影。
+ */
+async function queryWorkflowDatabaseEvidence(sql) {
+  const database = String(process.env.FLOWABLE_E2E_MYSQL_DATABASE || '').trim()
+  const username = String(process.env.FLOWABLE_E2E_MYSQL_USERNAME || '').trim()
+  const password = String(process.env.FLOWABLE_E2E_MYSQL_PASSWORD || '')
+  if (database !== isolatedDatabaseName) throw new Error('E2E 数据库必须是指定隔离 schema')
+  if (!/^[A-Za-z0-9_]{1,32}$/.test(username) || !password) {
+    throw new Error('缺少隔离 MySQL 只读验收凭据')
+  }
+  const command = String(process.env.FLOWABLE_E2E_MYSQL_COMMAND || 'mysql').trim()
+  if (!command) throw new Error('MySQL 客户端命令不能为空')
+  const result = await execFileAsync(command, [
+    '--host=127.0.0.1',
+    `--user=${username}`,
+    `--database=${database}`,
+    '--default-character-set=utf8mb4',
+    '--batch',
+    '--skip-column-names',
+    `--execute=${sql}`
+  ], {
+    env: { ...process.env, MYSQL_PWD: password },
+    windowsHide: true,
+    maxBuffer: 1024 * 1024
+  })
+  const output = String(result.stdout || '').trim()
+  if (!output || output.includes('\n')) throw new Error('MySQL 验收结果必须是单行 JSON')
+  try {
+    return JSON.parse(output)
+  } catch {
+    throw new Error('MySQL 验收结果不是合法 JSON')
+  }
+}
+
+/**
+ * 从 Flowable 运行表读取当前多实例成员快照、revision、模式、任务和 execution 数量。
+ * @param {string} processInstanceId 正在运行的真实流程实例主键。
+ * @param {string} activityId 受控多实例 BPMN 活动主键。
+ * @returns {Promise<Record<string, unknown>>} 当前事务提交后的正式运行态证据。
+ */
+async function loadRuntimeMultiInstanceDatabaseEvidence(processInstanceId, activityId) {
+  const instance = requireDatabaseSafeId(processInstanceId, '流程实例主键')
+  const activity = requireDatabaseSafeId(activityId, '多实例活动主键')
+  const memberVariable = `_wfMiMembers_${activity}`
+  const revisionVariable = `_wfMiRevision_${activity}`
+  const modeVariable = `_wfMiMode_${activity}`
+  return queryWorkflowDatabaseEvidence(`SELECT JSON_OBJECT(
+    'mode', COALESCE((SELECT TEXT_ FROM ACT_RU_VARIABLE WHERE PROC_INST_ID_ = '${instance}' AND NAME_ = '${modeVariable}'), ''),
+    'revision', COALESCE((SELECT LONG_ FROM ACT_RU_VARIABLE WHERE PROC_INST_ID_ = '${instance}' AND NAME_ = '${revisionVariable}'), -1),
+    'stateVariableCount', (SELECT COUNT(*) FROM ACT_RU_VARIABLE WHERE PROC_INST_ID_ = '${instance}' AND NAME_ IN ('${memberVariable}', '${revisionVariable}', '${modeVariable}')),
+    'memberVariableCount', (SELECT COUNT(*) FROM ACT_RU_VARIABLE WHERE PROC_INST_ID_ = '${instance}' AND NAME_ = '${memberVariable}' AND BYTEARRAY_ID_ IS NOT NULL),
+    'taskCount', (SELECT COUNT(*) FROM ACT_RU_TASK WHERE PROC_INST_ID_ = '${instance}' AND TASK_DEF_KEY_ = '${activity}'),
+    'activeExecutionCount', (SELECT COUNT(*) FROM ACT_RU_EXECUTION WHERE PROC_INST_ID_ = '${instance}' AND ACT_ID_ = '${activity}' AND IS_ACTIVE_ = 1)
+  )`)
+}
+
+/**
+ * 从 Flowable 历史表读取流程结束后的成员状态、任务删除原因和结构化审批审计数量。
+ * @param {string} processInstanceId 已完成的真实流程实例主键。
+ * @param {string} activityId 受控多实例 BPMN 活动主键。
+ * @returns {Promise<Record<string, unknown>>} 历史变量、任务和 comment 的正式持久化证据。
+ */
+async function loadHistoricMultiInstanceDatabaseEvidence(processInstanceId, activityId) {
+  const instance = requireDatabaseSafeId(processInstanceId, '流程实例主键')
+  const activity = requireDatabaseSafeId(activityId, '多实例活动主键')
+  const memberVariable = `_wfMiMembers_${activity}`
+  const revisionVariable = `_wfMiRevision_${activity}`
+  const modeVariable = `_wfMiMode_${activity}`
+  return queryWorkflowDatabaseEvidence(`SELECT JSON_OBJECT(
+    'mode', COALESCE((SELECT TEXT_ FROM ACT_HI_VARINST WHERE PROC_INST_ID_ = '${instance}' AND NAME_ = '${modeVariable}'), ''),
+    'revision', COALESCE((SELECT LONG_ FROM ACT_HI_VARINST WHERE PROC_INST_ID_ = '${instance}' AND NAME_ = '${revisionVariable}'), -1),
+    'stateVariableCount', (SELECT COUNT(*) FROM ACT_HI_VARINST WHERE PROC_INST_ID_ = '${instance}' AND NAME_ IN ('${memberVariable}', '${revisionVariable}', '${modeVariable}')),
+    'memberVariableCount', (SELECT COUNT(*) FROM ACT_HI_VARINST WHERE PROC_INST_ID_ = '${instance}' AND NAME_ = '${memberVariable}' AND BYTEARRAY_ID_ IS NOT NULL),
+    'runtimeTaskCount', (SELECT COUNT(*) FROM ACT_RU_TASK WHERE PROC_INST_ID_ = '${instance}'),
+    'runtimeExecutionCount', (SELECT COUNT(*) FROM ACT_RU_EXECUTION WHERE PROC_INST_ID_ = '${instance}'),
+    'historicTaskCount', (SELECT COUNT(*) FROM ACT_HI_TASKINST WHERE PROC_INST_ID_ = '${instance}' AND TASK_DEF_KEY_ = '${activity}'),
+    'naturalTaskCount', (SELECT COUNT(*) FROM ACT_HI_TASKINST WHERE PROC_INST_ID_ = '${instance}' AND TASK_DEF_KEY_ = '${activity}' AND DELETE_REASON_ IS NULL),
+    'canceledTaskCount', (SELECT COUNT(*) FROM ACT_HI_TASKINST WHERE PROC_INST_ID_ = '${instance}' AND TASK_DEF_KEY_ = '${activity}' AND DELETE_REASON_ IS NOT NULL),
+    'auditCommentCount', (SELECT COUNT(*) FROM ACT_HI_COMMENT WHERE PROC_INST_ID_ = '${instance}' AND TYPE_ = '1')
+  )`)
+}
 
 /**
  * 从失败信息中移除五角色凭据和临时 JWT，禁止测试清理异常把认证材料写入报告。
@@ -164,95 +266,160 @@ async function createForm(page, name, resourceRegistry) {
 }
 
 /**
- * 生成包含监听器、普通来源任务和受控 ALL/ANY 动态多实例任务的可部署 BPMN。
- * @param {{processKey: string, processName: string, formId: string, sourceAssigneeId: string, mode: 'ALL'|'ANY'}} input 流程标识、名称、表单、来源办理人和完成模式。
- * @returns {string} 带 BPMN DI 坐标的 UTF-8 XML 正文。
+ * 在 Element Plus 下拉框中按正式可见标签选择唯一选项。
+ * @param {import('@playwright/test').Page} page 当前真实浏览器页面。
+ * @param {import('@playwright/test').Locator} formItem 包含目标下拉框的表单项。
+ * @param {string} optionLabel 服务端目录或正式元数据返回的完整显示标签。
+ * @returns {Promise<void>} 选项已写入 Vue 状态并回显后结束。
  */
-function buildDynamicMultiInstanceBpmn({ processKey, processName, formId, sourceAssigneeId, mode }) {
-  if (!['ALL', 'ANY'].includes(mode)) throw new Error('动态多实例模式必须是 ALL 或 ANY')
-  // activityId、节点名称和完成条件共同表达服务端冻结的 ALL/ANY 业务契约。
-  const activityId = mode === 'ALL' ? 'allReview' : 'anyReview'
-  const sourceName = mode === 'ALL' ? '会签发起审批' : '或签发起审批'
-  const activityName = mode === 'ALL' ? '动态会签' : '动态或签'
-  const completionCondition = mode === 'ALL'
-    ? '${nrOfCompletedInstances == nrOfInstances}'
-    : '${nrOfCompletedInstances &gt; 0}'
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:flowable="http://flowable.org/bpmn" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" targetNamespace="http://ruoyi.example/workflow">
-  <process id="${processKey}" name="${processName}" isExecutable="true">
-    <startEvent id="start" name="提交申请" flowable:formKey="key_${formId}" />
-    <sequenceFlow id="flow_start_source" sourceRef="start" targetRef="sourceReview" />
-    <userTask id="sourceReview" name="${sourceName}" flowable:assignee="${sourceAssigneeId}">
-      <extensionElements>
-        <flowable:taskListener event="create" delegateExpression="\${userTaskListener}" />
-        <flowable:taskListener event="assignment" delegateExpression="\${userTaskListener}" />
-        <flowable:taskListener event="complete" delegateExpression="\${userTaskListener}" />
-      </extensionElements>
-    </userTask>
-    <sequenceFlow id="flow_source_dynamic" sourceRef="sourceReview" targetRef="${activityId}" />
-    <userTask id="${activityId}" name="${activityName}" flowable:assignee="\${assignee}">
-      <extensionElements>
-        <flowable:taskListener event="create" delegateExpression="\${userTaskListener}" />
-        <flowable:taskListener event="assignment" delegateExpression="\${userTaskListener}" />
-        <flowable:taskListener event="complete" delegateExpression="\${userTaskListener}" />
-      </extensionElements>
-      <multiInstanceLoopCharacteristics flowable:collection="\${multiInstanceHandler.getUserIds(execution)}" flowable:elementVariable="assignee">
-        <completionCondition xsi:type="tFormalExpression">${completionCondition}</completionCondition>
-      </multiInstanceLoopCharacteristics>
-    </userTask>
-    <sequenceFlow id="flow_dynamic_end" sourceRef="${activityId}" targetRef="end" />
-    <endEvent id="end" name="结束" />
-  </process>
-  <bpmndi:BPMNDiagram id="diagram_${processKey}">
-    <bpmndi:BPMNPlane id="plane_${processKey}" bpmnElement="${processKey}">
-      <bpmndi:BPMNShape id="shape_start" bpmnElement="start"><omgdc:Bounds x="120" y="172" width="36" height="36" /></bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_source" bpmnElement="sourceReview"><omgdc:Bounds x="240" y="150" width="100" height="80" /></bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_dynamic" bpmnElement="${activityId}"><omgdc:Bounds x="420" y="150" width="100" height="80" /></bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_end" bpmnElement="end"><omgdc:Bounds x="610" y="172" width="36" height="36" /></bpmndi:BPMNShape>
-      <bpmndi:BPMNEdge id="edge_start_source" bpmnElement="flow_start_source"><omgdi:waypoint x="156" y="190" /><omgdi:waypoint x="240" y="190" /></bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_source_dynamic" bpmnElement="flow_source_dynamic"><omgdi:waypoint x="340" y="190" /><omgdi:waypoint x="420" y="190" /></bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_dynamic_end" bpmnElement="flow_dynamic_end"><omgdi:waypoint x="520" y="190" /><omgdi:waypoint x="610" y="190" /></bpmndi:BPMNEdge>
-    </bpmndi:BPMNPlane>
-  </bpmndi:BPMNDiagram>
-</definitions>`
+async function selectElementPlusOption(page, formItem, optionLabel) {
+  await formItem.locator('.el-select__wrapper').click()
+  const option = page.locator('.el-select-dropdown:visible')
+    .getByText(optionLabel, { exact: true })
+  await expect(option, `下拉选项 ${optionLabel} 必须可见`).toBeVisible()
+  await option.click()
+  await expect(formItem).toContainText(optionLabel)
 }
 
 /**
- * 创建、保存并部署真实 ALL/ANY 动态多实例流程模型。
- * @param {import('@playwright/test').Page} page 设计者页面。
- * @param {{processKey: string, processName: string, categoryCode: string, formId: string, sourceAssigneeId: string, mode: 'ALL'|'ANY', resourceRegistry: object}} input 模型、BPMN 参数与清理登记簿。
- * @returns {Promise<{modelId: string, deploymentId: string}>} 正式模型和部署主键。
+ * 通过可访问字段名称定位 Element Plus 下拉框，并选择唯一正式选项。
+ * @param {import('@playwright/test').Page} page 当前真实浏览器页面。
+ * @param {import('@playwright/test').Locator} container 包含目标字段的对话框或属性面板。
+ * @param {string} fieldLabel 下拉框的完整可访问名称。
+ * @param {string} optionLabel 需要选择的正式选项标签。
+ * @returns {Promise<void>} 选项已选中并在所属表单项回显后结束。
  */
-async function createAndDeployMultiInstanceModel(page, input) {
-  const created = await callWorkflowApi(page, 'POST', '/workflow/model', {
-    data: {
-      modelName: input.processName,
-      modelKey: input.processKey,
-      category: input.categoryCode,
-      description: 'P3 动态多实例真实浏览器验收',
-      formType: 0,
-      formId: Number(input.formId)
-    }
-  })
+async function selectNamedElementPlusOption(page, container, fieldLabel, optionLabel) {
+  const combobox = container.getByRole('combobox', { name: fieldLabel })
+  if (await combobox.getAttribute('aria-expanded') !== 'true') await combobox.press('Enter')
+  const option = page.locator('.el-select-dropdown:visible')
+    .getByText(optionLabel, { exact: true })
+  await expect(option, `下拉选项 ${optionLabel} 必须可见`).toBeVisible()
+  await option.click()
+  await expect(container).toContainText(optionLabel)
+}
+
+/**
+ * 在设计器属性面板中选择受控循环方式。
+ * @param {import('@playwright/test').Page} page 已打开模型设计页的真实页面。
+ * @param {string} fieldLabel 属性字段标签。
+ * @param {string} optionLabel 需要选择的业务选项标签。
+ * @returns {Promise<void>} bpmn-js 命令栈和页面回显均已更新后结束。
+ */
+async function selectDesignerOption(page, fieldLabel, optionLabel) {
+  const properties = page.locator('.designer-properties-panel')
+  await selectNamedElementPlusOption(page, properties, fieldLabel, optionLabel)
+}
+
+/**
+ * 通过模型页、设计器属性面板和部署确认框创建并发布受控 ALL/ANY 模型。
+ * @param {import('@playwright/test').Page} page 工作流设计者页面。
+ * @param {{processKey: string, processName: string, categoryName: string, formName: string, mode: 'ALL'|'ANY', memberSource: 'start'|'fixed', fixedUsers?: Array<{value: string, label: string}>, resourceRegistry: object}} input 页面建模参数与清理登记簿。
+ * @returns {Promise<{modelId: string, deploymentId: string, activityId: string, activityName: string}>} 正式模型、部署和活动标识。
+ */
+async function createAndDeployMultiInstanceModelThroughUi(page, input) {
+  const activityId = input.mode === 'ALL' ? 'allReview' : 'anyReview'
+  const activityName = input.mode === 'ALL' ? '固定会签' : '发起时或签'
+  await page.goto('/workflow/model')
+  await page.getByRole('button', { name: '新增', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '新增流程模型' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('textbox', { name: '模型名称' }).fill(input.processName)
+  await dialog.getByRole('textbox', { name: '模型标识' }).fill(input.processKey)
+  await selectNamedElementPlusOption(page, dialog, '流程分类', input.categoryName)
+  await selectNamedElementPlusOption(page, dialog, '流程表单', input.formName)
+  await dialog.getByRole('textbox', { name: '模型描述' })
+    .fill('会签或或签真实设计器与运行闭环验收')
+  const createPromise = page.waitForResponse(response => matchesWorkflowResponse(
+    response, '/workflow/model'))
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  const created = await expectWorkflowResponseSuccess(await createPromise, '/workflow/model')
   const modelId = String(created.data?.modelId || '')
-  expect(modelId, '模型创建必须返回正式主键').not.toBe('')
-  // 保存或部署失败前先登记模型，避免正式 ACT_DE_MODEL 半成品泄漏。
+  expect(modelId, '页面创建模型必须返回正式主键').not.toBe('')
   input.resourceRegistry.modelId = modelId
-  await callWorkflowApi(page, 'POST', '/workflow/model/save', {
-    data: {
-      requestId: randomUUID(),
-      modelId,
-      bpmnXml: buildDynamicMultiInstanceBpmn(input),
-      newVersion: false
+
+  await page.goto(`/workflow/model-design/${encodeURIComponent(modelId)}`)
+  await expect(page.getByRole('button', { name: '保存', exact: true })).toBeVisible()
+  await page.locator('[data-element-id="review"]').click()
+  const properties = page.locator('.designer-properties-panel')
+  const nameInput = properties.getByRole('textbox', { name: '元素名称' })
+  await nameInput.fill(activityName)
+  await nameInput.press('Tab')
+  const idInput = properties.getByRole('textbox', { name: '元素标识' })
+  await idInput.fill(activityId)
+  await idInput.press('Tab')
+  await properties.getByText('执行配置', { exact: true }).click()
+  await selectDesignerOption(page, '循环方式', '会签 / 或签')
+
+  const approvalModeLabel = input.mode === 'ALL' ? '会签' : '或签'
+  await properties.locator('.el-segmented__item')
+    .filter({ hasText: new RegExp(`^${approvalModeLabel}$`) }).click()
+  const memberSourceLabel = input.memberSource === 'fixed' ? '固定人员' : '发起时选择'
+  await properties.locator('.el-segmented__item')
+    .filter({ hasText: new RegExp(`^${memberSourceLabel}$`) }).click()
+
+  if (input.memberSource === 'fixed') {
+    // 固定名单为空时必须停留在可编辑状态，但保存边界必须在任何 API 写入前拒绝。
+    const saveRequests = []
+    const captureSaveRequest = request => {
+      if (new URL(request.url()).pathname.endsWith('/workflow/model/save')) saveRequests.push(request)
     }
-  })
-  const deployed = await callWorkflowApi(page, 'POST', '/workflow/model/deploy', {
-    query: { modelId }
-  })
+    page.on('request', captureSaveRequest)
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.getByText('固定会签或或签办理人必须选择 1 至 100 名有效用户', { exact: true }))
+      .toBeVisible()
+    await page.waitForTimeout(250)
+    page.off('request', captureSaveRequest)
+    expect(saveRequests, '空固定名单不得产生模型保存写请求').toHaveLength(0)
+
+    for (const user of input.fixedUsers || []) {
+      await selectNamedElementPlusOption(page, properties, '固定办理人', user.label)
+    }
+    await page.keyboard.press('Escape')
+  }
+
+  const validationPromise = page.waitForResponse(response => matchesWorkflowResponse(
+    response, '/workflow/model/validate'))
+  const savePromise = page.waitForResponse(response => matchesWorkflowResponse(
+    response, '/workflow/model/save'))
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  const validation = await expectWorkflowResponseSuccess(
+    await validationPromise, '/workflow/model/validate')
+  expect(validation.data?.valid, JSON.stringify(validation.data?.issues || [])).toBe(true)
+  const saved = await expectWorkflowResponseSuccess(await savePromise, '/workflow/model/save')
+  expect(String(saved.data?.modelId || '')).toBe(modelId)
+
+  // 重开设计页必须从服务端作者 BPMN 回读相同的业务配置，不能依赖当前组件内存状态。
+  await page.goto(`/workflow/model-design/${encodeURIComponent(modelId)}`)
+  await page.locator(`[data-element-id="${activityId}"]`).click()
+  await expect(properties.getByRole('textbox', { name: '元素名称' })).toHaveValue(activityName)
+  await expect(properties.getByRole('textbox', { name: '元素标识' })).toHaveValue(activityId)
+  await properties.getByText('执行配置', { exact: true }).click()
+  await expect(properties.getByText('会签 / 或签', { exact: true })).toBeVisible()
+  await expect(properties.getByRole('radio', { name: approvalModeLabel, exact: true }))
+    .toBeChecked()
+  await expect(properties.getByRole('radio', { name: memberSourceLabel, exact: true }))
+    .toBeChecked()
+  if (input.memberSource === 'fixed') {
+    await expect(properties.getByRole('combobox', { name: '固定办理人' })).toHaveCount(1)
+    for (const user of input.fixedUsers || []) await expect(properties).toContainText(user.label)
+  }
+
+  await page.goto('/workflow/model')
+  await page.getByPlaceholder('请输入模型标识').fill(input.processKey)
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  const modelRow = page.locator('.el-table__body tbody tr').filter({ hasText: input.processKey })
+  await expect(modelRow, '页面模型列表必须唯一回显新建模型').toHaveCount(1)
+  const deployPromise = page.waitForResponse(response => matchesWorkflowResponse(
+    response, '/workflow/model/deploy'))
+  await modelRow.locator('button.el-button--success').click()
+  await page.getByRole('button', { name: '确定', exact: true }).click()
+  const deployed = await expectWorkflowResponseSuccess(await deployPromise, '/workflow/model/deploy')
   const deploymentId = String(deployed.data?.deploymentId || '')
-  expect(deploymentId, '模型部署必须返回正式主键').not.toBe('')
+  expect(deploymentId, '页面部署模型必须返回正式部署主键').not.toBe('')
   input.resourceRegistry.deploymentId = deploymentId
-  return { modelId, deploymentId }
+  await expect(modelRow).toContainText('已部署')
+  return { modelId, deploymentId, activityId, activityName }
 }
 
 /**
@@ -280,6 +447,7 @@ async function findStartableDefinition(page, processKey) {
  * @param {string} formName 页面必须展示的部署表单名称。
  * @param {string} businessKey 本场景唯一业务主键。
  * @param {string} subject 申请主题。
+ * @param {{fieldLabel: string, users: Array<{value: string, label: string}>}|undefined} startAssignment 发起时多实例成员字段及正式用户选项。
  * @param {object} resourceRegistry 清理登记簿，start 成功后立即写入 processInstanceId。
  * @returns {Promise<string>} 正式流程实例主键。
  */
@@ -289,12 +457,23 @@ async function startDynamicProcessThroughUi(
   formName,
   businessKey,
   subject,
+  startAssignment,
   resourceRegistry
 ) {
   await page.goto(`/workflow/process-start/${encodeURIComponent(definition.definitionId)}?deploymentId=${encodeURIComponent(definition.deploymentId)}`)
   await expect(page.getByRole('heading', { name: formName })).toBeVisible()
   await page.getByPlaceholder('可选').fill(businessKey)
   await page.getByPlaceholder('请输入申请主题').fill(subject)
+  if (startAssignment) {
+    const assignments = page.locator('.process-start-page__assignments')
+    await expect(assignments.getByRole('combobox', { name: startAssignment.fieldLabel }),
+      '发起页必须投影受控多实例成员字段').toHaveCount(1)
+    for (const user of startAssignment.users) {
+      await selectNamedElementPlusOption(
+        page, assignments, startAssignment.fieldLabel, user.label)
+    }
+    await page.keyboard.press('Escape')
+  }
   const responsePromise = page.waitForResponse(response => {
     const url = new URL(response.url())
     return url.pathname.includes('/workflow/process/start/')
@@ -310,48 +489,6 @@ async function startDynamicProcessThroughUi(
   resourceRegistry.processInstanceId = processInstanceId
   await expect(page).toHaveURL(new RegExp(`/workflow/process-detail/${processInstanceId}(?:[/?]|$)`))
   return processInstanceId
-}
-
-/**
- * 在 Element Plus 多选器中选择两个真实审批用户。
- * @param {import('@playwright/test').Page} page 审批详情页面。
- * @param {import('@playwright/test').Locator} dialog 当前通过任务对话框。
- * @param {'会签办理人'|'或签办理人'} fieldLabel 部署模型投影的下一办理人字段标签。
- * @param {string[]} optionLabels 服务端身份目录返回的完整显示标签。
- * @returns {Promise<void>} 两个办理人均显示为已选后结束。
- */
-async function selectApprovalUsers(page, dialog, fieldLabel, optionLabels) {
-  const formItem = dialog.locator('.el-form-item').filter({ hasText: fieldLabel })
-  const select = formItem.locator('.el-select')
-  await select.click()
-  for (const label of optionLabels) {
-    const option = page.locator('.el-select-dropdown:visible').getByText(label, { exact: true })
-    await expect(option, `审批资格目录必须包含 ${label}`).toBeVisible()
-    await option.click()
-  }
-  await page.keyboard.press('Escape')
-  for (const label of optionLabels) await expect(formItem).toContainText(label)
-}
-
-/**
- * 通过来源任务页面选择动态多实例成员并完成初始化动作。
- * @param {import('@playwright/test').Page} page 来源任务办理人页面。
- * @param {'ALL'|'ANY'} mode 动态多实例完成模式，决定页面字段必须显示会签或或签。
- * @param {string[]} optionLabels 服务端审批资格目录返回的成员标签。
- * @param {string} comment 来源审批意见。
- * @returns {Promise<void>} 完成接口成功且动态成员初始化事务提交后结束。
- */
-async function completeSourceTaskThroughUi(page, mode, optionLabels, comment) {
-  await page.getByRole('button', { name: '通过', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '通过任务' })
-  await expect(dialog).toBeVisible()
-  await selectApprovalUsers(page, dialog, mode === 'ALL' ? '会签办理人' : '或签办理人', optionLabels)
-  await dialog.getByPlaceholder('请输入审批意见').fill(comment)
-  const responsePromise = page.waitForResponse(response => matchesWorkflowResponse(
-    response, '/workflow/task/complete'))
-  await dialog.getByRole('button', { name: '确认', exact: true }).click()
-  await expectWorkflowResponseSuccess(await responsePromise, '/workflow/task/complete')
-  await expect(dialog).toBeHidden()
 }
 
 /**
@@ -543,6 +680,8 @@ async function expectMultiInstanceCompletionAudit(page, processInstanceId, expec
  */
 async function cleanupFixture(pages, resources) {
   const errors = []
+  // cleanupPage 使用管理员执行引用顺序清理，避免设计职责账号被误授予表单和分类删除权限。
+  const cleanupPage = pages.admin || pages.designer
   /**
    * 执行单个清理动作并收集脱敏错误，后续资源仍继续按引用顺序清理。
    * @param {string} label 清理动作名称。
@@ -574,27 +713,27 @@ async function cleanupFixture(pages, resources) {
     await attempt('删除流程历史', () => callWorkflowApi(
       pages.admin, 'DELETE', `/workflow/process/instance/${encodeURIComponent(resources.processInstanceId)}`))
   }
-  if (pages.designer && resources.deploymentId) {
+  if (cleanupPage && resources.deploymentId) {
     await attempt('删除流程部署', () => callWorkflowApi(
-      pages.designer, 'DELETE', `/workflow/deploy/${encodeURIComponent(resources.deploymentId)}`))
+      cleanupPage, 'DELETE', `/workflow/deploy/${encodeURIComponent(resources.deploymentId)}`))
   }
-  if (pages.designer && resources.modelId) {
+  if (cleanupPage && resources.modelId) {
     await attempt('删除流程模型', () => callWorkflowApi(
-      pages.designer, 'DELETE', `/workflow/model/${encodeURIComponent(resources.modelId)}`))
+      cleanupPage, 'DELETE', `/workflow/model/${encodeURIComponent(resources.modelId)}`))
   }
-  if (pages.designer && resources.formId) {
+  if (cleanupPage && resources.formId) {
     await attempt('删除流程表单', () => callWorkflowApi(
-      pages.designer, 'DELETE', `/workflow/form/${encodeURIComponent(resources.formId)}`))
+      cleanupPage, 'DELETE', `/workflow/form/${encodeURIComponent(resources.formId)}`))
   }
-  if (pages.designer && resources.categoryId) {
+  if (cleanupPage && resources.categoryId) {
     await attempt('删除流程分类', () => callWorkflowApi(
-      pages.designer, 'DELETE', `/workflow/category/${encodeURIComponent(resources.categoryId)}`))
+      cleanupPage, 'DELETE', `/workflow/category/${encodeURIComponent(resources.categoryId)}`))
   }
   return errors
 }
 
-test('ANY 动态或签首人完成即原子结束，并拒绝无办理权限用户且零副作用', async ({ browser }, testInfo) => {
-  test.setTimeout(180_000)
+test('ANY 发起时或签由设计器发布，首人完成即原子结束且拒绝越权和失效成员', async ({ browser }, testInfo) => {
+  test.setTimeout(300_000)
   const runId = `p3any_${Date.now()}`
   const resources = {}
   const sessions = []
@@ -610,10 +749,13 @@ test('ANY 动态或签首人完成即原子结束，并拒绝无办理权限用�
     sessions.push(approverSession)
     const adminSession = await openWorkflowRoleSession(browser, 'workflow_admin')
     sessions.push(adminSession)
+    const auditorSession = await openWorkflowRoleSession(browser, 'workflow_auditor')
+    sessions.push(auditorSession)
     pages.designer = designerSession.page
     pages.starter = starterSession.page
     pages.approver = approverSession.page
     pages.admin = adminSession.page
+    pages.auditor = auditorSession.page
 
     // 审批资格用户必须来自实时 RBAC 目录；审计角色仅可作为抄送人，不能成为任务办理人。
     const approver = await findUserOption(pages.designer, accounts.workflow_approver.username, true)
@@ -632,13 +774,13 @@ test('ANY 动态或签首人完成即原子结束，并拒绝无办理权限用�
     const processName = `P3动态或签-${runId}`
     resources.categoryId = await createCategory(pages.designer, categoryName, categoryCode, resources)
     resources.formId = await createForm(pages.designer, formName, resources)
-    Object.assign(resources, await createAndDeployMultiInstanceModel(pages.designer, {
+    Object.assign(resources, await createAndDeployMultiInstanceModelThroughUi(pages.designer, {
       processKey,
       processName,
-      categoryCode,
-      formId: resources.formId,
-      sourceAssigneeId: approver.value,
+      categoryName,
+      formName,
       mode: 'ANY',
+      memberSource: 'start',
       resourceRegistry: resources
     }))
     const definition = await findStartableDefinition(pages.starter, processKey)
@@ -651,16 +793,14 @@ test('ANY 动态或签首人完成即原子结束，并拒绝无办理权限用�
       formName,
       `BUS-${runId}`,
       `动态或签申请-${runId}`,
+      {
+        fieldLabel: `${resources.activityName}（或签）`,
+        users: [approver]
+      },
       resources
     )
 
-    // 来源审批先选择一名真实办理人，进入节点后再通过页面加签和减签验证正式动态调整链路。
-    const sourceTask = await findAssignedTask(pages.approver, processKey, 'sourceReview')
-    expect(sourceTask.processInstanceId).toBe(resources.processInstanceId)
-    await pages.approver.goto(`/workflow/process-detail/${encodeURIComponent(resources.processInstanceId)}?taskId=${encodeURIComponent(sourceTask.taskId)}`)
-    await expect(pages.approver.getByRole('button', { name: '通过', exact: true })).toBeVisible()
-    await completeSourceTaskThroughUi(
-      pages.approver, 'ANY', [approver.label], '进入动态或签节点')
+    // 发起页正式成员直接创建真实或签任务，进入节点后继续验证动态加减签链路。
     const anyTask = await findAssignedTask(pages.approver, processKey, 'anyReview')
     expect(anyTask.processInstanceId).toBe(resources.processInstanceId)
     await pages.approver.goto(`/workflow/process-detail/${encodeURIComponent(resources.processInstanceId)}?taskId=${encodeURIComponent(anyTask.taskId)}`)
@@ -676,6 +816,27 @@ test('ANY 动态或签首人完成即原子结束，并拒绝无办理权限用�
     expect(stateBefore.data?.mode).toBe('ANY')
     expect(stateBefore.data?.revision).toBe(0)
     expect(stateBefore.data?.members).toHaveLength(1)
+
+    // 只读审计角色不能绕过页面直接调整成员，拒绝后 execution、成员变量和历史必须保持不变。
+    await callWorkflowApi(pages.auditor, 'POST', '/workflow/task/multiInstance/adjust', {
+      data: {
+        taskId: currentTaskId,
+        action: 'ADD',
+        expectedRevision: stateBefore.data.revision,
+        comment: '审计角色越权加签必须拒绝',
+        userIds: [admin.value]
+      },
+      expectedCode: 403
+    })
+    const stateAfterPermissionDenied = await callWorkflowApi(
+      pages.approver, 'GET', `/workflow/task/multiInstance/${encodeURIComponent(currentTaskId)}`)
+    expect(stateAfterPermissionDenied.data).toEqual(stateBefore.data)
+    const detailAfterPermissionDenied = await callWorkflowApi(
+      pages.approver, 'GET', '/workflow/process/detail', {
+        query: { procInsId: resources.processInstanceId, taskId: anyTask.taskId }
+      })
+    expect(detailAfterPermissionDenied.data?.historyProcNodeList)
+      .toEqual(detailBefore.data?.historyProcNodeList)
 
     // 直接 API 绕过页面提交无办理权限审计用户必须整批失败，revision、成员和意见均不得改变。
     await callWorkflowApi(pages.approver, 'POST', '/workflow/task/multiInstance/adjust', {
@@ -823,6 +984,14 @@ test('ANY 动态或签首人完成即原子结束，并拒绝无办理权限用�
     })
     await expect(pages.approver.getByText('活动 2 人，已完成 0 人', { exact: true })).toBeVisible()
 
+    const anyRuntimeDatabase = await loadRuntimeMultiInstanceDatabaseEvidence(
+      resources.processInstanceId, 'anyReview')
+    expect(anyRuntimeDatabase).toMatchObject({
+      mode: 'ANY', revision: 3, stateVariableCount: 3,
+      memberVariableCount: 1, taskCount: 2
+    })
+    expect(Number(anyRuntimeDatabase.activeExecutionCount)).toBeGreaterThanOrEqual(2)
+
     await testInfo.attach('any-active-state.png', {
       body: await pages.approver.screenshot({ fullPage: true }),
       contentType: 'image/png'
@@ -857,6 +1026,15 @@ test('ANY 动态或签首人完成即原子结束，并拒绝无办理权限用�
     expect(removedHistory?.deleteReason, '减签任务必须持久化删除原因').toBeTruthy()
     expect(canceledSiblingHistory?.deleteReason, 'ANY 剩余 sibling 必须持久化取消原因').toBeTruthy()
 
+    const anyHistoricDatabase = await loadHistoricMultiInstanceDatabaseEvidence(
+      resources.processInstanceId, 'anyReview')
+    expect(anyHistoricDatabase).toMatchObject({
+      mode: 'ANY', revision: 4, stateVariableCount: 3,
+      memberVariableCount: 1, runtimeTaskCount: 0, runtimeExecutionCount: 0,
+      historicTaskCount: 3, naturalTaskCount: 1, canceledTaskCount: 2,
+      auditCommentCount: 4
+    })
+
     await pages.admin.goto(`/workflow/process-detail/${encodeURIComponent(resources.processInstanceId)}`)
     await expect(pages.admin.getByText('已完成', { exact: true }).first()).toBeVisible()
     await expect(pages.admin.getByRole('button', { name: '通过', exact: true })).toHaveCount(0)
@@ -879,7 +1057,8 @@ test('ANY 动态或签首人完成即原子结束，并拒绝无办理权限用�
         finalStatus: completedDetail.data.processStatus,
         naturalCompletionCount: anyHistory.filter(node => !node.deleteReason).length,
         removedMemberHistoryCount: removedHistory ? 1 : 0,
-        canceledSiblingCount: canceledSiblingHistory ? 1 : 0
+        canceledSiblingCount: canceledSiblingHistory ? 1 : 0,
+        database: anyHistoricDatabase
       }, null, 2)),
       contentType: 'application/json'
     })
@@ -897,8 +1076,8 @@ test('ANY 动态或签首人完成即原子结束，并拒绝无办理权限用�
   }
 })
 
-test('ALL 动态会签必须由全部真实成员完成并保持连续 revision 与审计', async ({ browser }, testInfo) => {
-  test.setTimeout(240_000)
+test('ALL 固定会签由设计器发布并必须由全部真实成员完成', async ({ browser }, testInfo) => {
+  test.setTimeout(300_000)
   const runId = `p3all_${Date.now()}`
   const resources = {}
   const sessions = []
@@ -932,13 +1111,14 @@ test('ALL 动态会签必须由全部真实成员完成并保持连续 revision 
     resources.categoryId = await createCategory(
       pages.designer, categoryName, categoryCode, resources)
     resources.formId = await createForm(pages.designer, formName, resources)
-    Object.assign(resources, await createAndDeployMultiInstanceModel(pages.designer, {
+    Object.assign(resources, await createAndDeployMultiInstanceModelThroughUi(pages.designer, {
       processKey,
       processName,
-      categoryCode,
-      formId: resources.formId,
-      sourceAssigneeId: approver.value,
+      categoryName,
+      formName,
       mode: 'ALL',
+      memberSource: 'fixed',
+      fixedUsers: [approver, admin],
       resourceRegistry: resources
     }))
     const definition = await findStartableDefinition(pages.starter, processKey)
@@ -949,15 +1129,11 @@ test('ALL 动态会签必须由全部真实成员完成并保持连续 revision 
       formName,
       `BUS-${runId}`,
       `动态会签申请-${runId}`,
+      undefined,
       resources
     )
 
-    // 来源任务一次选择两名真实成员，服务端建立两个并行 execution/task。
-    const sourceTask = await findAssignedTask(pages.approver, processKey, 'sourceReview')
-    expect(sourceTask.processInstanceId).toBe(resources.processInstanceId)
-    await pages.approver.goto(`/workflow/process-detail/${encodeURIComponent(resources.processInstanceId)}?taskId=${encodeURIComponent(sourceTask.taskId)}`)
-    await completeSourceTaskThroughUi(
-      pages.approver, 'ALL', [approver.label, admin.label], '进入动态会签节点')
+    // 固定名单进入节点时重新核验审批资格，并在同一引擎命令中创建两个 execution/task。
     const approverTask = await findAssignedTask(pages.approver, processKey, 'allReview')
     const adminTask = await findAssignedTask(pages.admin, processKey, 'allReview')
     expect(approverTask.processInstanceId).toBe(resources.processInstanceId)
@@ -986,6 +1162,13 @@ test('ALL 动态会签必须由全部真实成员完成并保持连续 revision 
     })
     expect(runningDetail.data?.processStatus).toBe('running')
     expect(String(runningDetail.data?.currentTask?.taskId)).toBe(String(adminTask.taskId))
+    const allRunningDatabase = await loadRuntimeMultiInstanceDatabaseEvidence(
+      resources.processInstanceId, 'allReview')
+    expect(allRunningDatabase).toMatchObject({
+      mode: 'ALL', revision: 1, stateVariableCount: 3,
+      memberVariableCount: 1, taskCount: 1
+    })
+    expect(Number(allRunningDatabase.activeExecutionCount)).toBeGreaterThanOrEqual(1)
     await expectMultiInstanceCompletionAudit(pages.admin, resources.processInstanceId, {
       opinion: '会签成员一通过',
       taskId: String(approverTask.taskId),
@@ -1016,6 +1199,15 @@ test('ALL 动态会签必须由全部真实成员完成并保持连续 revision 
       afterRevision: 2
     })
 
+    const allHistoricDatabase = await loadHistoricMultiInstanceDatabaseEvidence(
+      resources.processInstanceId, 'allReview')
+    expect(allHistoricDatabase).toMatchObject({
+      mode: 'ALL', revision: 2, stateVariableCount: 3,
+      memberVariableCount: 1, runtimeTaskCount: 0, runtimeExecutionCount: 0,
+      historicTaskCount: 2, naturalTaskCount: 2, canceledTaskCount: 0,
+      auditCommentCount: 2
+    })
+
     await testInfo.attach('all-evidence.json', {
       body: Buffer.from(JSON.stringify({
         runId,
@@ -1026,7 +1218,8 @@ test('ALL 动态会签必须由全部真实成员完成并保持连续 revision 
         runningAfterFirstCompletion: runningDetail.data.processStatus,
         finalStatus: completedDetail.data.processStatus,
         finalRevision: 2,
-        naturalCompletionCount: allHistory.filter(node => !node.deleteReason).length
+        naturalCompletionCount: allHistory.filter(node => !node.deleteReason).length,
+        database: allHistoricDatabase
       }, null, 2)),
       contentType: 'application/json'
     })

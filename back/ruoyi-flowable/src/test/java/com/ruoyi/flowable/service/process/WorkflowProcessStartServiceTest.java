@@ -15,6 +15,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,6 +23,9 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.flowable.common.engine.api.FlowableException;
+import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
+import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.IdentityService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -56,9 +60,11 @@ import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 class WorkflowProcessStartServiceTest
 {
@@ -111,6 +117,12 @@ class WorkflowProcessStartServiceTest
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3")));
         when(attachmentService.prepareStartVariables(anyString(), anyMap(), anyMap()))
                 .thenAnswer(invocation -> invocation.getArgument(1));
+        BpmnModel bpmnModel = new BpmnModel();
+        org.flowable.bpmn.model.Process process = new org.flowable.bpmn.model.Process();
+        process.setId(PROCESS_KEY);
+        process.setExecutable(true);
+        bpmnModel.addProcess(process);
+        when(repositoryService.getBpmnModel(anyString())).thenReturn(bpmnModel);
         service = service(engineOperations(identityService, identityResolver));
     }
 
@@ -184,6 +196,60 @@ class WorkflowProcessStartServiceTest
         InOrder authentication = inOrder(identityService);
         authentication.verify(identityService).setAuthenticatedUserId("7");
         authentication.verify(identityService).setAuthenticatedUserId(null);
+    }
+
+    /**
+     * 验证发起页选择的正式成员只经服务端校验后写入活动专属 Flowable 变量。
+     *
+     * @return 无返回值；客户端成员绕过审批资格校验或变量名发生漂移时测试失败。
+     */
+    @Test
+    void startsWithValidatedStartMultiInstanceMembers()
+    {
+        stubSelectedAndActiveDefinition();
+        stubStartForm();
+        when(repositoryService.getBpmnModel(DEFINITION_ID))
+                .thenReturn(startMultiInstanceModel("approve"));
+        when(identityResolver.resolveApprovalEligibleUserIds(List.of("8", "9")))
+                .thenReturn(new LinkedHashSet<>(List.of("8", "9")));
+        ProcessInstance startedInstance = processInstance("instance-members-42");
+        when(runtimeService.startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-members-42"), anyMap()))
+                .thenReturn(startedInstance);
+
+        service.start(new StartProcessRequest(DEFINITION_ID, "expense-members-42",
+                Map.of("reason", "采购设备", "amount", 1280),
+                Map.of("approve", List.of(8L, 9L))));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> variables = ArgumentCaptor.forClass(Map.class);
+        verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-members-42"), variables.capture());
+        assertThat(variables.getValue())
+                .containsEntry("wfMiUsers_approve", List.of(8L, 9L));
+    }
+
+    /**
+     * 验证发起来源节点缺少成员时在 RuntimeService 写入前整体拒绝。
+     *
+     * @return 无返回值；非法发起产生 Flowable 实例或附件绑定时测试失败。
+     */
+    @Test
+    void rejectsMissingStartMultiInstanceMembersBeforeEngineWrite()
+    {
+        stubSelectedAndActiveDefinition();
+        stubStartForm();
+        when(repositoryService.getBpmnModel(DEFINITION_ID))
+                .thenReturn(startMultiInstanceModel("approve"));
+
+        assertBusinessError(() -> service.start(new StartProcessRequest(
+                DEFINITION_ID, "expense-members-42",
+                Map.of("reason", "采购设备", "amount", 1280), Map.of())),
+                HttpStatus.BAD_REQUEST, "发起时会签或或签成员配置不完整");
+
+        verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+        verify(attachmentService, never()).bindStartAttachments(
+                anyString(), anyString(), anyString(), anyMap());
     }
 
     /**
@@ -557,7 +623,34 @@ class WorkflowProcessStartServiceTest
                 new WorkflowFormTemplateValidator());
         return new WorkflowProcessStartService(operations, repositoryService, runtimeService,
                 processQueryService, variableValidator, attachmentService,
-                definitionLockMapper);
+                definitionLockMapper, new WorkflowUserSelectionValidator(identityResolver));
+    }
+
+    /**
+     * 创建仅含一个发起时成员来源会签节点的可执行模型。
+     *
+     * @param activityId String，受控多实例用户任务节点标识。
+     * @return BpmnModel，满足启动成员投影和变量生成契约的流程模型。
+     */
+    private BpmnModel startMultiInstanceModel(String activityId)
+    {
+        BpmnModel model = new BpmnModel();
+        org.flowable.bpmn.model.Process process = new org.flowable.bpmn.model.Process();
+        process.setId(PROCESS_KEY);
+        process.setExecutable(true);
+        UserTask task = new UserTask();
+        task.setId(activityId);
+        task.setName("审批会签");
+        task.setAssignee(WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION);
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setInputDataItem(WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION);
+        loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        loop.setCompletionCondition(
+                WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION);
+        task.setLoopCharacteristics(loop);
+        process.addFlowElement(task);
+        model.addProcess(process);
+        return model;
     }
 
     /**

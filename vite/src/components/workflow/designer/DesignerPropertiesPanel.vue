@@ -56,7 +56,27 @@
               <el-form-item v-if="state.multiInstanceType === 'controlled'" label="签署规则">
                 <el-segmented v-model="state.multiInstanceApprovalMode" :options="multiInstanceApprovalOptions" @change="emit('multi-instance-change')" />
               </el-form-item>
-              <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType)">
+              <template v-if="state.multiInstanceType === 'controlled'">
+                <el-form-item label="人员来源">
+                  <el-segmented v-model="state.multiInstanceMemberSource" :options="multiInstanceMemberSourceOptions" @change="handleMemberSourceChange" />
+                </el-form-item>
+                <el-form-item v-if="state.multiInstanceMemberSource === 'fixed'" label="固定办理人" required>
+                  <el-select
+                    v-model="state.fixedMultiInstanceUserIds"
+                    multiple
+                    filterable
+                    remote
+                    reserve-keyword
+                    :remote-method="searchAssignees"
+                    :loading="identityLoading"
+                    placeholder="请选择会签或或签办理人"
+                    @change="emit('multi-instance-change')"
+                  >
+                    <el-option v-for="user in identityOptions.assignees" :key="user.value" :label="user.label" :value="String(user.value)" />
+                  </el-select>
+                </el-form-item>
+              </template>
+              <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType) && !flags.userTask">
                 <el-form-item label="集合表达式">
                   <el-input v-model="state.collection" maxlength="256" @change="emit('multi-instance-change')" />
                 </el-form-item>
@@ -447,6 +467,12 @@ const formSourceOptions = Object.freeze([
   { label: '正式模板', value: 'TEMPLATE' },
   { label: '内嵌表单', value: 'EMBEDDED' }
 ])
+// 会签和或签共用多实例语义，人员来源决定是否在前驱任务完成时要求动态选人。
+const multiInstanceMemberSourceOptions = Object.freeze([
+  { label: '办理时选择', value: 'dynamic' },
+  { label: '发起时选择', value: 'start' },
+  { label: '固定人员', value: 'fixed' }
+])
 
 const hasBusinessSection = computed(() => Object.values(props.flags).some(Boolean))
 const selectedExtensionType = computed(() => props.extensionOptions.find(option => (
@@ -460,10 +486,11 @@ const businessEventOptions = computed(() => (
     ? props.errorEventOptions
     : props.escalationEventOptions
 ))
-// 动态多实例只能用于 UserTask；其他活动仍可配置标准串行或并行多实例。
-const activityLoopOptions = computed(() => props.multiInstanceOptions.filter(option => (
-  !['controlled', 'approvalLoop'].includes(option.value) || props.flags.userTask
-)))
+// UserTask 只开放受控会签/或签和整改循环；其他活动仍可使用标准串行或并行多实例。
+const activityLoopOptions = computed(() => props.multiInstanceOptions.filter(option => {
+  if (props.flags.userTask) return !['sequential', 'parallel'].includes(option.value)
+  return !['controlled', 'approvalLoop'].includes(option.value)
+}))
 // 条件值选项跟随当前正式表单字段；自由文本字段仍允许输入受限标量值。
 const controlledLoopValueOptions = computed(() => props.controlledLoopFieldOptions.find(option => (
   option.value === props.state.controlledLoopDecisionVariable
@@ -538,6 +565,17 @@ function handleControlledLoopFieldChange() {
  */
 function handleLoopTypeChange(value) {
   if (value !== 'approvalLoop') emit('multi-instance-change')
+}
+
+/**
+ * 切换会签或或签人员来源，并为固定名单保留一次可选择成员的页面编辑阶段。
+ * @param {'dynamic'|'start'|'fixed'} value 当前人员来源。
+ * @returns {void} 动态或发起来源立即写入模型；固定来源在已选择成员后才写入模型。
+ */
+function handleMemberSourceChange(value) {
+  // 固定来源必须先显示成员选择器；空名单由父组件保存门禁拒绝，不能在切换瞬间回滚页面。
+  if (value === 'fixed' && !props.state.fixedMultiInstanceUserIds.length) return
+  emit('multi-instance-change')
 }
 
 /**

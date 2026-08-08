@@ -18,7 +18,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.identity.WorkflowIdentityDirectoryService;
 
 /**
- * 工作流设计器、委派和转办使用的最小身份目录接口。
+ * 工作流设计、发起时选人、委派和转办使用的最小身份目录接口。
  */
 @Validated
 @RestController
@@ -39,7 +39,7 @@ public class WfIdentityController extends BaseController
     }
 
     /**
-     * 分页查询流程设计或任务转办允许使用的有效身份选项。
+     * 分页查询流程设计、发起时选人或任务转办允许使用的有效身份选项。
      *
      * @param type String，user、role 或 dept
      * @param capability String，可为空；approval 返回直接办理用户，claim 返回完整认领资格身份
@@ -48,7 +48,7 @@ public class WfIdentityController extends BaseController
      * @param pageSize int，单页记录数
      * @return TableDataInfo，仅包含 value、label 和 type 的分页响应
      */
-    @PreAuthorize("@ss.hasAnyPermi('workflow:model:designer,workflow:process:approval,workflow:process:manageList')")
+    @PreAuthorize("@ss.hasAnyPermi('workflow:model:designer,workflow:process:start,workflow:process:approval,workflow:process:manageList')")
     @GetMapping("/options")
     public TableDataInfo options(
             @RequestParam

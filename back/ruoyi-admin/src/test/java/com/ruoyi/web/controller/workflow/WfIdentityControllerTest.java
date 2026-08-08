@@ -127,7 +127,7 @@ class WfIdentityControllerTest
     }
 
     /**
-     * 验证身份目录不依赖系统用户管理权限，仅允许模型设计者或任务办理人访问。
+     * 验证身份目录不依赖系统用户管理权限，仅允许模型设计者、流程发起人、任务办理人或流程管理员访问。
      *
      * @return 无返回值，路径或权限表达式漂移时测试失败
      * @throws NoSuchMethodException Controller 方法签名不存在时抛出
@@ -145,6 +145,6 @@ class WfIdentityControllerTest
         assertThat(options.getAnnotation(GetMapping.class).value())
                 .containsExactly("/options");
         assertThat(options.getAnnotation(PreAuthorize.class).value()).isEqualTo(
-                "@ss.hasAnyPermi('workflow:model:designer,workflow:process:approval,workflow:process:manageList')");
+                "@ss.hasAnyPermi('workflow:model:designer,workflow:process:start,workflow:process:approval,workflow:process:manageList')");
     }
 }

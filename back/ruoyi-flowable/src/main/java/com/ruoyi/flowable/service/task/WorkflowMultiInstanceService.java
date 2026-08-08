@@ -162,7 +162,7 @@ public class WorkflowMultiInstanceService
                     .active().singleResult();
             if (task == null || task.isSuspended()
                     || !Objects.equals(actor.userId(), task.getAssignee())
-                    || !isSupportedDynamicTask(task))
+                    || !isSupportedControlledTask(task))
             {
                 return null;
             }
@@ -219,8 +219,8 @@ public class WorkflowMultiInstanceService
         {
             throw dataError();
         }
-        boolean dynamicMultiInstance = isSupportedDynamicTask(task);
-        if (!dynamicMultiInstance)
+        boolean controlledMultiInstance = isSupportedControlledTask(task);
+        if (!controlledMultiInstance)
         {
             if (expectedRevision != null)
             {
@@ -470,7 +470,7 @@ public class WorkflowMultiInstanceService
     private MultiInstanceContext loadContext(String taskId, WorkflowCurrentIdentity actor)
     {
         Task currentTask = requireActiveTask(taskId, actor);
-        UserTask userTask = requireDynamicUserTask(currentTask);
+        UserTask userTask = requireControlledUserTask(currentTask);
         String activityId = userTask.getId();
         Execution rootExecution = requireMultiInstanceRoot(currentTask, activityId);
         EngineCounts counts = loadEngineCounts(rootExecution.getId());
@@ -552,12 +552,12 @@ public class WorkflowMultiInstanceService
     }
 
     /**
-     * 从任务所属流程定义对应的 BPMN Process 递归读取当前节点，并确保它是固定动态并行 UserTask。
+     * 从任务所属流程定义对应的 BPMN Process 递归读取当前节点，并确保它是受控并行 UserTask。
      *
      * @param task Task，已经完成活动态和对象授权校验的任务
-     * @return UserTask，满足动态多实例白名单的部署节点
+     * @return UserTask，满足固定、发起时或办理时成员来源白名单的部署节点
      */
-    private UserTask requireDynamicUserTask(Task task)
+    private UserTask requireControlledUserTask(Task task)
     {
         FlowElement element = requireTaskFlowElement(task);
         if (!(element instanceof UserTask userTask))
@@ -576,20 +576,20 @@ public class WorkflowMultiInstanceService
     }
 
     /**
-     * 判断活动任务是否使用受控动态集合；静态/普通节点兼容返回 false，畸形受控模型拒绝降级。
+     * 判断活动任务是否使用受控成员集合；非受控静态/普通节点兼容返回 false，畸形受控模型拒绝降级。
      *
      * @param task Task，详情任务主键重新读取到的真实活动任务
-     * @return boolean，任务所属流程定义节点满足固定动态并行多实例模型时返回 true
+     * @return boolean，任务所属流程定义节点满足任一受控成员来源的并行多实例模型时返回 true
      */
-    private boolean isSupportedDynamicTask(Task task)
+    private boolean isSupportedControlledTask(Task task)
     {
         FlowElement element = requireTaskFlowElement(task);
         if (!(element instanceof UserTask userTask)
                 || userTask.getLoopCharacteristics() == null
                 || !WorkflowMultiInstanceModelContract.usesControlledHandler(
-                    userTask.getLoopCharacteristics()))
+                        userTask.getLoopCharacteristics()))
         {
-            // 普通任务和不使用受控 handler 的既有静态多实例不参加动态 revision 契约。
+            // 普通任务和既有非受控静态多实例不参加成员 revision、加减签或完成 CAS 契约。
             return false;
         }
         try

@@ -29,6 +29,36 @@
             :content="formSnapshot.content"
             @error="showComponentError"
           />
+          <template v-if="startAssignments.length">
+            <el-divider />
+            <el-form label-width="132px" class="process-start-page__assignments">
+              <el-form-item
+                v-for="assignment in startAssignments"
+                :key="assignment.activityId"
+                :label="assignmentLabel(assignment)"
+                required
+              >
+                <el-select
+                  v-model="multiInstanceUserIds[assignment.activityId]"
+                  multiple
+                  filterable
+                  remote
+                  reserve-keyword
+                  :remote-method="searchApprovalUsers"
+                  :loading="identityLoading"
+                  :multiple-limit="assignment.maxUsers"
+                  :placeholder="`请选择${assignment.mode === 'ALL' ? '会签' : '或签'}办理人`"
+                >
+                  <el-option
+                    v-for="user in approvalUserOptions"
+                    :key="user.value"
+                    :label="user.label"
+                    :value="String(user.value)"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-form>
+          </template>
         </div>
       </el-tab-pane>
       <el-tab-pane label="流程图" name="diagram">
@@ -40,6 +70,7 @@
 
 <script setup name="WorkflowProcessStart">
 import { getProcessBpmnXml, getProcessForm, startProcess } from '@/api/workflow/process'
+import { listApprovalUserOptions } from '@/api/workflow/identity'
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
 
@@ -54,6 +85,14 @@ const formValues = ref({})
 const formSnapshot = reactive({})
 const bpmnXml = ref('')
 const formRendererRef = ref(null)
+// multiInstanceUserIds 只承载后端投影的发起成员字段，不能写入普通表单变量或平台保留变量。
+const multiInstanceUserIds = reactive({})
+const approvalUserOptions = ref([])
+const identityLoading = ref(false)
+let identityRequestVersion = 0
+const startAssignments = computed(() => Array.isArray(formSnapshot.startMultiInstanceAssignments)
+  ? formSnapshot.startMultiInstanceAssignments
+  : [])
 const definitionFileName = computed(() => `workflow_${String(route.params.definitionId || 'process').replace(/[^A-Za-z0-9_.-]/g, '_')}`)
 
 /**
@@ -93,6 +132,11 @@ async function loadStartContext() {
     Object.assign(formSnapshot, formResponse.data || {})
     bpmnXml.value = xmlResponse.data || ''
     formValues.value = {}
+    Object.keys(multiInstanceUserIds).forEach(key => delete multiInstanceUserIds[key])
+    startAssignments.value.forEach(assignment => {
+      multiInstanceUserIds[assignment.activityId] = []
+    })
+    if (startAssignments.value.length) await searchApprovalUsers('')
     ready.value = true
   } finally {
     loading.value = false
@@ -113,9 +157,19 @@ async function submitProcess() {
   submitting.value = true
   try {
     const variables = formRendererRef.value.getValues()
+    const startMembers = {}
+    for (const assignment of startAssignments.value) {
+      const selected = multiInstanceUserIds[assignment.activityId] || []
+      if (selected.length < assignment.minUsers || selected.length > assignment.maxUsers) {
+        proxy.$modal.msgError(`${assignmentLabel(assignment)}必须选择 ${assignment.minUsers} 至 ${assignment.maxUsers} 人`)
+        return
+      }
+      startMembers[assignment.activityId] = selected.map(userId => Number(userId))
+    }
     const response = await startProcess(definitionId(), {
       businessKey: businessKey.value.trim() || undefined,
-      variables
+      variables,
+      multiInstanceUserIds: startMembers
     })
     // 正式服务返回 WorkflowProcessInstanceSnapshot.id；旧字段仅用于兼容平滑切换期响应。
     const processInstanceId = response.data?.id || response.data?.processInstanceId || response.data?.procInsId
@@ -125,6 +179,53 @@ async function submitProcess() {
   } finally {
     submitting.value = false
   }
+}
+
+/**
+ * 生成发起成员字段的简洁业务标签。
+ * @param {{activityName: string, mode: 'ALL'|'ANY'}} assignment 后端部署模型投影。
+ * @returns {string} 节点名称与会签/或签语义组合标签。
+ */
+function assignmentLabel(assignment) {
+  return `${assignment.activityName}（${assignment.mode === 'ALL' ? '会签' : '或签'}）`
+}
+
+/**
+ * 从正式审批用户目录检索发起时可选成员，过期响应不会覆盖最新关键字结果。
+ * @param {string} keyword 用户输入的姓名或账号关键字。
+ * @returns {Promise<void>} 成功后更新最多 50 个正式可办理用户选项。
+ */
+async function searchApprovalUsers(keyword) {
+  const requestVersion = ++identityRequestVersion
+  identityLoading.value = true
+  try {
+    const response = await listApprovalUserOptions({
+      keyword: String(keyword || '').trim(), pageNum: 1, pageSize: 50
+    })
+    if (requestVersion === identityRequestVersion) mergeApprovalUserOptions(response.rows || [])
+  } finally {
+    if (requestVersion === identityRequestVersion) identityLoading.value = false
+  }
+}
+
+/**
+ * 合并最新审批目录结果并保留当前已选成员，避免远程检索后已选项退化为裸用户主键。
+ * @param {Array<{value: string|number, label: string}>} rows 本次正式审批用户目录查询结果。
+ * @returns {void} 更新后的选项以本次查询顺序为主，并补回仍被选中的历史选项。
+ */
+function mergeApprovalUserOptions(rows) {
+  // selectedUserIds 表示全部发起多实例字段当前选择的正式用户主键。
+  const selectedUserIds = new Set(Object.values(multiInstanceUserIds)
+    .flatMap(userIds => Array.isArray(userIds) ? userIds : [])
+    .map(userId => String(userId)))
+  const mergedOptions = new Map(rows.map(option => [String(option.value), option]))
+  approvalUserOptions.value.forEach(option => {
+    const userId = String(option.value)
+    if (selectedUserIds.has(userId) && !mergedOptions.has(userId)) {
+      mergedOptions.set(userId, option)
+    }
+  })
+  approvalUserOptions.value = [...mergedOptions.values()]
 }
 
 /**
@@ -191,6 +292,14 @@ loadStartContext()
 .process-start-page__form {
   max-width: 980px;
   padding: 10px 4px 28px;
+}
+
+.process-start-page__assignments {
+  max-width: 760px;
+}
+
+.process-start-page__assignments :deep(.el-select) {
+  width: 100%;
 }
 
 @media (max-width: 768px) {

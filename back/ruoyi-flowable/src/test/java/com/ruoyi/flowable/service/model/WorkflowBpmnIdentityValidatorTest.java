@@ -9,12 +9,14 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.UserTask;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 class WorkflowBpmnIdentityValidatorTest
 {
@@ -181,6 +183,33 @@ class WorkflowBpmnIdentityValidatorTest
         verify(identityMapper, never()).selectActiveUserIdsByUserIds(org.mockito.ArgumentMatchers.anyList());
         verify(identityMapper, never()).selectActiveRoleIdsByRoleIds(org.mockito.ArgumentMatchers.anyList());
         verify(identityMapper, never()).selectActiveDeptIdsByDeptIds(org.mockito.ArgumentMatchers.anyList());
+    }
+
+    /**
+     * 验证固定会签成员作为直接办理人执行部署时存在性和审批资格校验。
+     *
+     * @return 无返回值；固定成员未进入正式身份门禁时测试失败。
+     */
+    @Test
+    void validatesFixedMultiInstanceMembersAsApprovalUsers()
+    {
+        UserTask task = task(WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION,
+                null, List.of(), List.of());
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setInputDataItem(
+                "${multiInstanceHandler.getFixedUserIds(execution, '8,9')}");
+        loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        loop.setCompletionCondition(WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION);
+        task.setLoopCharacteristics(loop);
+        when(identityMapper.selectActiveUserIdsByUserIds(List.of(8L, 9L)))
+                .thenReturn(List.of(8L, 9L));
+        when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(8L, 9L)))
+                .thenReturn(List.of(8L, 9L));
+
+        validator.validate(document(task));
+
+        verify(identityMapper).selectActiveUserIdsByUserIds(List.of(8L, 9L));
+        verify(identityMapper).selectApprovalEligibleUserIdsByUserIds(List.of(8L, 9L));
     }
 
     /**

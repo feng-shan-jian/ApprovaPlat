@@ -51,6 +51,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessView;
 import com.ruoyi.flowable.domain.vo.WorkflowOwnedProcessView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
+import com.ruoyi.flowable.domain.vo.WorkflowStartMultiInstanceAssignmentView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
@@ -60,6 +61,7 @@ import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowStartMultiInstanceContract;
 import com.ruoyi.system.service.ISysUserService;
 
 /**
@@ -411,10 +413,14 @@ public class WorkflowProcessQueryService
                 requireSame(deploymentId, instance.deploymentId(), "流程实例与部署关系不一致");
             }
             WfDeployForm snapshot = requireStartFormSnapshot(definition, deploymentId);
+            List<WorkflowStartMultiInstanceAssignmentView> startAssignments = instanceId == null
+                    ? WorkflowStartMultiInstanceContract.describe(
+                            repositoryService.getBpmnModel(definitionId), definition.getKey())
+                    : List.of();
             return new WorkflowProcessFormView(definitionId, deploymentId, instanceId,
                     snapshot.getSourceType(), snapshot.getFormId(), snapshot.getFormKey(), snapshot.getNodeKey(),
                     snapshot.getFormName(), snapshot.getNodeName(), snapshot.getContent(),
-                    toInstant(snapshot.getCreateTime()));
+                    toInstant(snapshot.getCreateTime()), startAssignments);
         });
     }
 

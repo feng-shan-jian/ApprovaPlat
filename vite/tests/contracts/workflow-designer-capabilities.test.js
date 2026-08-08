@@ -22,6 +22,8 @@ const propertiesPanelDoc = readFileSync(
   new URL('../../src/components/workflow/designer/DesignerPropertiesPanel.md', import.meta.url), 'utf8')
 const processDetailSource = readFileSync(
   new URL('../../src/views/workflow/work/detail.vue', import.meta.url), 'utf8')
+const processStartSource = readFileSync(
+  new URL('../../src/views/workflow/work/start.vue', import.meta.url), 'utf8')
 const businessListenerEditorSource = readFileSync(
   new URL('../../src/components/workflow/designer/BusinessListenerEditor.vue', import.meta.url), 'utf8')
 const extensionPropertyEditorSource = readFileSync(
@@ -282,6 +284,66 @@ test('活动循环和通用扩展属性执行真实 XML 往返', async () => {
   const { xml } = await moddle.toXML(rootElement, { format: true })
   assert.match(xml, /<standardLoopCharacteristics loopMaximum="3">/)
   assert.match(xml, /<flowable:property name="business.owner" value="finance" \/>/)
+})
+
+/**
+ * 验证三种会签和或签人员来源使用受控字段，并完成固定与发起来源 BPMN 往返。
+ * @returns {Promise<void>} 人员来源、启动请求或受控多实例核心字段缺失时断言失败。
+ */
+test('会签和或签三种人员来源执行受控页面与 XML 契约', async () => {
+  assert.match(propertiesPanelSource, /人员来源[\s\S]*?办理时选择[\s\S]*?发起时选择[\s\S]*?固定人员/)
+  assert.match(propertiesPanelSource, /fixedMultiInstanceUserIds[\s\S]*?请选择会签或或签办理人/)
+  assert.match(propertiesPanelSource, /handleMemberSourceChange[\s\S]*?value === 'fixed'[\s\S]*?fixedMultiInstanceUserIds\.length/)
+  assert.match(propertiesPanelSource, /props\.flags\.userTask[\s\S]*?!\['sequential', 'parallel'\]\.includes/)
+  assert.match(propertiesPanelSource, /\['sequential', 'parallel'\]\.includes\(state\.multiInstanceType\) && !flags\.userTask/)
+  assert.match(designerSource, /getFixedUserIds\(execution, '\$\{userIds\.join\(','\)\}'\)/)
+  assert.match(designerSource, /START_MULTI_INSTANCE_COLLECTION = '\$\{multiInstanceHandler\.getStartUserIds\(execution\)\}'/)
+  assert.match(designerSource, /multiInstanceMemberSource === 'fixed'[\s\S]*?fixedMultiInstanceUserIds\.length === 0[\s\S]*?固定会签或或签办理人必须选择/)
+  assert.match(designerSource, /FIXED_MULTI_INSTANCE_COLLECTION_PATTERN[\s\S]*?getFixedUserIds/)
+  assert.match(designerSource, /固定会签或或签办理人必须选择 1 至 100 名有效用户/)
+  assert.match(processStartSource, /startMultiInstanceAssignments[\s\S]*?multiInstanceUserIds\[assignment\.activityId\]/)
+  assert.match(processStartSource, /listApprovalUserOptions[\s\S]*?mergeApprovalUserOptions/)
+  assert.match(processStartSource, /multiInstanceUserIds: startMembers/)
+
+  const moddle = new BpmnModdle({ flowable: flowableModdle })
+  const source = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="urn:approvaplat:fixed-multi-instance">
+  <process id="fixedMultiInstance" isExecutable="true">
+    <startEvent id="start" />
+    <userTask id="countersign" flowable:assignee="\${assignee}">
+      <multiInstanceLoopCharacteristics flowable:collection="\${multiInstanceHandler.getFixedUserIds(execution, '8,9')}" flowable:elementVariable="assignee">
+        <completionCondition>\${nrOfCompletedInstances == nrOfInstances}</completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="end" />
+    <sequenceFlow id="toCountersign" sourceRef="start" targetRef="countersign" />
+    <sequenceFlow id="toEnd" sourceRef="countersign" targetRef="end" />
+  </process>
+</definitions>`
+  const { rootElement, warnings } = await moddle.fromXML(source)
+  assert.deepEqual(warnings, [])
+  const process = rootElement.rootElements.find(element => element.$type === 'bpmn:Process')
+  const task = process.flowElements.find(element => element.id === 'countersign')
+  assert.equal(task.assignee, '${assignee}')
+  assert.equal(task.loopCharacteristics.get('flowable:collection'), "${multiInstanceHandler.getFixedUserIds(execution, '8,9')}")
+  assert.equal(task.loopCharacteristics.get('flowable:elementVariable'), 'assignee')
+  assert.equal(task.loopCharacteristics.completionCondition.body, '${nrOfCompletedInstances == nrOfInstances}')
+  const { xml } = await moddle.toXML(rootElement, { format: true })
+  assert.match(xml, /flowable:collection="\$\{multiInstanceHandler\.getFixedUserIds\(execution, &#39;8,9&#39;\)\}"/)
+
+  const startSource = source.replace(
+    "${multiInstanceHandler.getFixedUserIds(execution, '8,9')}",
+    '${multiInstanceHandler.getStartUserIds(execution)}'
+  )
+  const startDocument = await moddle.fromXML(startSource)
+  assert.deepEqual(startDocument.warnings, [])
+  const startProcess = startDocument.rootElement.rootElements.find(element => element.$type === 'bpmn:Process')
+  const startTask = startProcess.flowElements.find(element => element.id === 'countersign')
+  assert.equal(startTask.loopCharacteristics.get('flowable:collection'),
+    '${multiInstanceHandler.getStartUserIds(execution)}')
+  const serializedStart = await moddle.toXML(startDocument.rootElement, { format: true })
+  assert.match(serializedStart.xml,
+    /flowable:collection="\$\{multiInstanceHandler\.getStartUserIds\(execution\)\}"/)
 })
 
 /**

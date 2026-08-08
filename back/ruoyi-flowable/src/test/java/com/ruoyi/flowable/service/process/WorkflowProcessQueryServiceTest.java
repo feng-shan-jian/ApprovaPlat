@@ -18,7 +18,9 @@ import java.util.Set;
 import java.util.function.Supplier;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FormProperty;
+import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.StartEvent;
+import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -74,6 +76,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.system.service.ISysUserService;
 
@@ -603,7 +606,9 @@ class WorkflowProcessQueryServiceTest
         when(definitionQuery.singleResult()).thenReturn(definition);
         when(repositoryService.getIdentityLinksForProcessDefinition("definition-1"))
                 .thenReturn(List.of());
-        when(repositoryService.getBpmnModel("definition-1")).thenReturn(startFormModel("leave"));
+        BpmnModel model = startFormModel("leave");
+        addStartMultiInstanceTask(model, "jointReview", "联合会签");
+        when(repositoryService.getBpmnModel("definition-1")).thenReturn(model);
         WfDeployForm snapshot = new WfDeployForm();
         snapshot.setDeployId("deploy-1");
         snapshot.setSourceType("TEMPLATE");
@@ -619,6 +624,16 @@ class WorkflowProcessQueryServiceTest
 
         assertThat(result.formId()).isEqualTo(12L);
         assertThat(result.content()).isEqualTo("{\"fields\":[]}");
+        assertThat(result.startMultiInstanceAssignments())
+                .singleElement()
+                .satisfies(assignment ->
+                {
+                    assertThat(assignment.activityId()).isEqualTo("jointReview");
+                    assertThat(assignment.activityName()).isEqualTo("联合会签");
+                    assertThat(assignment.mode()).isEqualTo("ALL");
+                    assertThat(assignment.minUsers()).isEqualTo(1);
+                    assertThat(assignment.maxUsers()).isEqualTo(100);
+                });
         verify(deployFormMapper).selectByDeploymentId("deploy-1");
     }
 
@@ -804,6 +819,30 @@ class WorkflowProcessQueryServiceTest
         process.addFlowElement(startEvent);
         model.addProcess(process);
         return model;
+    }
+
+    /**
+     * 向开始表单测试模型加入由发起页选择成员的受控会签节点。
+     *
+     * @param model BpmnModel，已经包含可执行主流程的模型。
+     * @param activityId String，会签用户任务节点标识。
+     * @param activityName String，会签用户任务显示名称。
+     * @return 无返回值；节点直接加入模型中的主流程。
+     */
+    private void addStartMultiInstanceTask(BpmnModel model, String activityId,
+            String activityName)
+    {
+        UserTask task = new UserTask();
+        task.setId(activityId);
+        task.setName(activityName);
+        task.setAssignee(WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION);
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setInputDataItem(WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION);
+        loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        loop.setCompletionCondition(
+                WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION);
+        task.setLoopCharacteristics(loop);
+        model.getProcesses().get(0).addFlowElement(task);
     }
 
     /**

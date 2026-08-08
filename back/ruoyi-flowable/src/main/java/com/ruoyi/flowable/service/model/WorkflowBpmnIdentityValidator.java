@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 /**
  * 部署前批量核验 BPMN 中的静态办理人、候选角色和候选部门主数据。
@@ -71,6 +72,7 @@ public class WorkflowBpmnIdentityValidator
                 collectStaticUser(task.getOwner(), task, "任务所有人", approvalUserIds);
                 collectStaticUsers(task.getCandidateUsers(), task, claimUserIds);
                 collectStaticGroups(task.getCandidateGroups(), task, roleIds, deptIds);
+                collectFixedMultiInstanceUsers(task, approvalUserIds);
             }
         }
 
@@ -152,6 +154,23 @@ public class WorkflowBpmnIdentityValidator
         {
             collectStaticUser(value, task, "候选用户", userIds);
         }
+    }
+
+    /**
+     * 收集固定会签或或签节点中由受控集合表达式声明的直接办理用户。
+     *
+     * @param task UserTask，可能携带固定多实例集合的用户任务。
+     * @param approvalUserIds Set<Long>，待按直接办理权限批量核验的用户主键集合。
+     * @return 无返回值；结构已由 BPMN 校验门禁确认，此处只合并正式身份引用。
+     */
+    private void collectFixedMultiInstanceUsers(UserTask task, Set<Long> approvalUserIds)
+    {
+        if (!WorkflowMultiInstanceModelContract.usesFixedHandler(task.getLoopCharacteristics()))
+        {
+            return;
+        }
+        approvalUserIds.addAll(WorkflowMultiInstanceModelContract.requireFixedUserIds(
+                task.getLoopCharacteristics()));
     }
 
     /**

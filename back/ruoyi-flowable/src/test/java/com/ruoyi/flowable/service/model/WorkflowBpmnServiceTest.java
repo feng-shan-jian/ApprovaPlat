@@ -528,6 +528,46 @@ class WorkflowBpmnServiceTest
     }
 
     /**
+     * 验证固定成员会签允许从开始节点直接进入，且能够识别设计器序列化后的 XML 单引号实体。
+     *
+     * @return 无返回值；固定成员被误要求动态前驱或原始 XML 白名单失配时测试失败
+     */
+    @Test
+    void allowsFixedMultiInstanceWithoutDynamicInitializer()
+    {
+        String fixedBpmn = controlledMultiInstanceBpmn()
+                .replace("${multiInstanceHandler.getUserIds(execution)}",
+                        "${multiInstanceHandler.getFixedUserIds(execution, &#39;8,9&#39;)}")
+                .replace("<sequenceFlow id=\"flow1\" sourceRef=\"start\" targetRef=\"prepare\"/>",
+                        "<sequenceFlow id=\"flow1\" sourceRef=\"start\" targetRef=\"approve\"/>")
+                .replace(ordinaryInitializerTaskXml(), "")
+                .replace("<sequenceFlow id=\"flow2\" sourceRef=\"prepare\" targetRef=\"approve\"/>", "");
+
+        assertThat(service.validate(fixedBpmn.getBytes(StandardCharsets.UTF_8)).formReferences())
+                .hasSize(2);
+    }
+
+    /**
+     * 验证发起时成员来源使用固定白名单表达式且不要求办理时选择前驱。
+     *
+     * @return 无返回值；设计器生成的发起来源模型被原始表达式门禁误拒绝时测试失败。
+     */
+    @Test
+    void allowsStartMultiInstanceWithoutDynamicInitializer()
+    {
+        String startBpmn = controlledMultiInstanceBpmn()
+                .replace("${multiInstanceHandler.getUserIds(execution)}",
+                        "${multiInstanceHandler.getStartUserIds(execution)}")
+                .replace("<sequenceFlow id=\"flow1\" sourceRef=\"start\" targetRef=\"prepare\"/>",
+                        "<sequenceFlow id=\"flow1\" sourceRef=\"start\" targetRef=\"approve\"/>")
+                .replace(ordinaryInitializerTaskXml(), "")
+                .replace("<sequenceFlow id=\"flow2\" sourceRef=\"prepare\" targetRef=\"approve\"/>", "");
+
+        assertThat(service.validate(startBpmn.getBytes(StandardCharsets.UTF_8)).formReferences())
+                .hasSize(2);
+    }
+
+/**
      * 验证固定业务监听 Bean 可携带唯一注册表键和 JSON 配置，同时系统审计监听器仍完整保留。
      * @return 无返回值；受控执行或任务监听器被误拒绝时测试失败
      */

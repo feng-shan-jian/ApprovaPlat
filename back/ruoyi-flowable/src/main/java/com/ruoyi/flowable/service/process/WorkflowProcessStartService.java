@@ -21,8 +21,10 @@ import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
+import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
+import com.ruoyi.flowable.service.task.WorkflowStartMultiInstanceContract;
 
 /**
  * 流程发起的定义授权、部署快照校验、变量门禁和真实引擎写入服务。
@@ -49,6 +51,7 @@ public class WorkflowProcessStartService
     private final WorkflowStartVariableValidator variableValidator;
     private final WorkflowAttachmentService attachmentService;
     private final WorkflowProcessDefinitionLockMapper definitionLockMapper;
+    private final WorkflowUserSelectionValidator userSelectionValidator;
 
     /**
      * 创建真实流程发起服务。
@@ -60,6 +63,7 @@ public class WorkflowProcessStartService
      * @param variableValidator WorkflowStartVariableValidator，开始表单变量 schema 验证器
      * @param attachmentService WorkflowAttachmentService，临时附件校验、投影和事务绑定服务
      * @param definitionLockMapper WorkflowProcessDefinitionLockMapper，key 发起最终版本当前读与行锁
+     * @param userSelectionValidator WorkflowUserSelectionValidator，发起时会签或或签成员审批资格校验器
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessStartService(WorkflowEngineOperations engineOperations,
@@ -67,7 +71,8 @@ public class WorkflowProcessStartService
             WorkflowProcessQueryService processQueryService,
             WorkflowStartVariableValidator variableValidator,
             WorkflowAttachmentService attachmentService,
-            WorkflowProcessDefinitionLockMapper definitionLockMapper)
+            WorkflowProcessDefinitionLockMapper definitionLockMapper,
+            WorkflowUserSelectionValidator userSelectionValidator)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
@@ -76,6 +81,7 @@ public class WorkflowProcessStartService
         this.variableValidator = variableValidator;
         this.attachmentService = attachmentService;
         this.definitionLockMapper = definitionLockMapper;
+        this.userSelectionValidator = userSelectionValidator;
     }
 
     /**
@@ -96,7 +102,8 @@ public class WorkflowProcessStartService
                 "流程业务主键长度不能超过" + MAX_ENGINE_ID_LENGTH, MAX_ENGINE_ID_LENGTH);
 
         return engineOperations.writeAsCurrentUser(actor -> startInCurrentTransaction(
-                actor, definitionId, businessKey, request.variables(), null));
+                actor, definitionId, businessKey, request.variables(),
+                request.multiInstanceUserIds(), null));
     }
 
     /**
@@ -135,7 +142,7 @@ public class WorkflowProcessStartService
             ProcessDefinition selectedDefinition = requireLatestActiveDefaultTenantDefinition(
                     normalizedProcessKey);
             return startInCurrentTransaction(actor, selectedDefinition.getId(),
-                    normalizedBusinessKey, variables, normalizedProcessKey);
+                    normalizedBusinessKey, variables, Map.of(), normalizedProcessKey);
         });
     }
 
@@ -146,12 +153,14 @@ public class WorkflowProcessStartService
      * @param definitionId String，服务端已选定的流程定义主键
      * @param businessKey String，规范化后的可选业务主键
      * @param variables Map&lt;String, Object&gt;，待按部署表单 schema 校验的客户端变量
+     * @param multiInstanceUserIds Map&lt;String,List&lt;Long&gt;&gt;，发起时按活动选择的多实例成员
      * @param expectedDefaultTenantKey String，key 兼容入口使用的默认租户定义 key；按 ID 发起时为 null
      * @return WorkflowProcessInstanceSnapshot，新实例的稳定不可变快照
      */
     private WorkflowProcessInstanceSnapshot startInCurrentTransaction(
             WorkflowCurrentIdentity actor, String definitionId, String businessKey,
-            Map<String, Object> variables, String expectedDefaultTenantKey)
+            Map<String, Object> variables, Map<String, java.util.List<Long>> multiInstanceUserIds,
+            String expectedDefaultTenantKey)
     {
         // 首次查询只用于取得服务端真实 deploymentId，客户端不能声明或替换部署关系。
         ProcessDefinition selectedDefinition = requireExistingDefinition(definitionId);
@@ -182,6 +191,10 @@ public class WorkflowProcessStartService
         }
 
         LinkedHashMap<String, Object> engineVariables = new LinkedHashMap<>(clientVariables);
+        // 发起多实例字段不属于通用表单变量；必须按部署 BPMN 精确校验后由服务端生成保留变量。
+        engineVariables.putAll(WorkflowStartMultiInstanceContract.prepareVariables(
+                repositoryService.getBpmnModel(definitionId), activeDefinition.getKey(),
+                multiInstanceUserIds, userSelectionValidator));
         engineVariables.put(INITIATOR_VARIABLE, actor.userId());
         engineVariables.put(PROCESS_STATUS_VARIABLE, RUNNING_STATUS);
         // 快照与业务变量随同一次 start 命令写入，启动或附件绑定失败时由外层事务整体回滚。

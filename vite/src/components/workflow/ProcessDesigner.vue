@@ -149,8 +149,10 @@ import AdvancedElementPalette from './designer/AdvancedElementPalette.vue'
 import DesignerPropertiesPanel from './designer/DesignerPropertiesPanel.vue'
 import bpmnlintConfig from './designer/bpmnlintConfig'
 
-// 动态多实例的技术属性由设计器固定写入，页面不向设计者开放任意方法或变量名。
+// 受控多实例的技术属性由设计器固定写入，页面不向设计者开放任意方法或变量名。
 const CONTROLLED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getUserIds(execution)}'
+const START_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getStartUserIds(execution)}'
+const FIXED_MULTI_INSTANCE_COLLECTION_PATTERN = /^\$\{multiInstanceHandler\.getFixedUserIds\(execution, '([1-9]\d*(?:,[1-9]\d*)*)'\)\}$/
 const CONTROLLED_MULTI_INSTANCE_ASSIGNEE = '${assignee}'
 const CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE = 'assignee'
 const CONTROLLED_MULTI_INSTANCE_ALL_CONDITION = '${nrOfCompletedInstances == nrOfInstances}'
@@ -318,14 +320,14 @@ const assignmentOptions = [
   { label: '用户', value: 'users' },
   { label: '角色/部门', value: 'groups' }
 ]
-// none/sequential/parallel 对应标准 BPMN 多实例；controlled 冻结为 multiInstanceHandler 动态成员契约。
+// none/sequential/parallel 对应标准 BPMN 多实例；controlled 提供受控动态和固定成员两种来源。
 const multiInstanceOptions = [
   { label: '无', value: 'none' },
   { label: '标准循环（仅往返）', value: 'standard' },
   { label: '整改循环（受控）', value: 'approvalLoop' },
   { label: '串行', value: 'sequential' },
   { label: '并行', value: 'parallel' },
-  { label: '动态', value: 'controlled' }
+  { label: '会签 / 或签', value: 'controlled' }
 ]
 // all/any 分别映射全员完成与任一完成条件，决定动态多实例的会签或或签终止语义。
 const multiInstanceApprovalOptions = [
@@ -426,6 +428,8 @@ function createEmptyPropertyState() {
     cancelActivity: true,
     multiInstanceType: 'none',
     multiInstanceApprovalMode: 'all',
+    multiInstanceMemberSource: 'dynamic',
+    fixedMultiInstanceUserIds: [],
     collection: '',
     elementVariable: '',
     completionCondition: '',
@@ -726,6 +730,10 @@ function loadPropertyState(element) {
     propertyState.completionCondition = loop.completionCondition?.body || ''
     if (isControlledMultiInstanceLoop(loop)) {
       propertyState.multiInstanceType = 'controlled'
+      propertyState.multiInstanceMemberSource = isFixedMultiInstanceLoop(loop)
+        ? 'fixed'
+        : isStartMultiInstanceLoop(loop) ? 'start' : 'dynamic'
+      propertyState.fixedMultiInstanceUserIds = readFixedMultiInstanceUserIds(loop)
       propertyState.multiInstanceApprovalMode = propertyState.completionCondition === CONTROLLED_MULTI_INSTANCE_ANY_CONDITION
         ? 'any'
         : 'all'
@@ -933,12 +941,55 @@ function readEmbeddedFormFields(businessObject) {
 }
 
 /**
- * 判断循环配置是否引用生产动态多实例 handler；完整结构仍由保存门禁单独核验。
+ * 判断循环配置是否引用平台受控多实例 handler；完整结构仍由保存门禁单独核验。
  * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
- * @returns {boolean} 集合表达式精确引用固定 handler 时返回 true。
+ * @returns {boolean} 集合表达式精确引用动态或固定人员 handler 时返回 true。
  */
 function isControlledMultiInstanceLoop(loop) {
-  return Boolean(loop && String(loop.get?.('flowable:collection') || '').trim() === CONTROLLED_MULTI_INSTANCE_COLLECTION)
+  const collection = String(loop?.get?.('flowable:collection') || '').trim()
+  return collection === CONTROLLED_MULTI_INSTANCE_COLLECTION
+    || collection === START_MULTI_INSTANCE_COLLECTION
+    || FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)
+}
+
+/**
+ * 判断受控多实例是否由流程发起页面提供正式成员。
+ * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
+ * @returns {boolean} 集合表达式精确命中发起时 handler 时返回 true。
+ */
+function isStartMultiInstanceLoop(loop) {
+  return String(loop?.get?.('flowable:collection') || '').trim() === START_MULTI_INSTANCE_COLLECTION
+}
+
+/**
+ * 判断受控多实例是否使用设计时固定人员来源。
+ * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
+ * @returns {boolean} 集合表达式命中固定人员 handler 时返回 true。
+ */
+function isFixedMultiInstanceLoop(loop) {
+  return Boolean(loop && FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(
+    String(loop.get?.('flowable:collection') || '').trim()
+  ))
+}
+
+/**
+ * 从固定人员 handler 表达式读取会签或或签成员，并保留设计时选择顺序。
+ * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
+ * @returns {string[]} 已去重的用户主键数组；表达式不符合受控契约时返回空数组。
+ */
+function readFixedMultiInstanceUserIds(loop) {
+  const collection = String(loop?.get?.('flowable:collection') || '').trim()
+  const match = collection.match(FIXED_MULTI_INSTANCE_COLLECTION_PATTERN)
+  return match ? splitValues(match[1]) : []
+}
+
+/**
+ * 将设计时选定的固定成员转换为后端白名单接受的 Flowable EL 表达式。
+ * @param {string[]} userIds 已去重且为正整数的固定办理人主键。
+ * @returns {string} 仅含数字用户主键的受控固定成员集合表达式。
+ */
+function fixedMultiInstanceCollectionExpression(userIds) {
+  return `\${multiInstanceHandler.getFixedUserIds(execution, '${userIds.join(',')}')}`
 }
 
 /**
@@ -1722,7 +1773,7 @@ function updateDocumentation() {
 }
 
 /**
- * 创建、更新或删除活动循环配置；动态模式一次写入完整固定技术契约。
+ * 创建、更新或删除活动循环配置；受控模式一次写入完整的动态或固定人员技术契约。
  * @returns {void} 无返回值。
  */
 function updateMultiInstance() {
@@ -1797,9 +1848,12 @@ function updateMultiInstance() {
     return
   }
   const controlled = propertyState.multiInstanceType === 'controlled'
+  const fixedMemberSource = controlled && propertyState.multiInstanceMemberSource === 'fixed'
   const leavingControlled = !controlled && wasControlled
   let collection = controlled
-    ? CONTROLLED_MULTI_INSTANCE_COLLECTION
+    ? propertyState.multiInstanceMemberSource === 'start'
+      ? START_MULTI_INSTANCE_COLLECTION
+      : CONTROLLED_MULTI_INSTANCE_COLLECTION
     : propertyState.collection.trim()
   let elementVariable = controlled
     ? CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE
@@ -1818,6 +1872,20 @@ function updateMultiInstance() {
     propertyState.collection = ''
     propertyState.elementVariable = ''
     propertyState.completionCondition = ''
+  }
+
+  if (fixedMemberSource) {
+    const userIds = [...new Set(propertyState.fixedMultiInstanceUserIds
+      .map(userId => String(userId || '').trim())
+      .filter(userId => /^\d+$/.test(userId) && Number(userId) > 0))]
+    if (userIds.length < 1 || userIds.length > 100) {
+      loadPropertyState(selectedElement.value)
+      emit('error', new Error('固定会签或或签办理人必须选择 1 至 100 名有效用户'))
+      return
+    }
+    // 固定名单按属性面板顺序写入白名单表达式，运行时仍由后端核验用户存在、启用状态和多实例结构。
+    propertyState.fixedMultiInstanceUserIds = userIds
+    collection = fixedMultiInstanceCollectionExpression(userIds)
   }
 
   // 已导入的静态多实例可能带有后端允许但面板未编辑的标准属性，原位更新可保持其往返完整性。
@@ -2344,6 +2412,12 @@ async function requestSave() {
   // 清除最后一次建模命令留下的延迟导出，保证本次保存窗口内只有一个 XML 序列化任务。
   window.clearTimeout(changeTimer)
   try {
+    if (propertyFlags.value.userTask
+      && propertyState.multiInstanceType === 'controlled'
+      && propertyState.multiInstanceMemberSource === 'fixed'
+      && propertyState.fixedMultiInstanceUserIds.length === 0) {
+      throw new Error('固定会签或或签办理人必须选择 1 至 100 名有效用户')
+    }
     const error = validateDiagram()
     if (error) throw new Error(error)
     const serverValid = await runServerValidation(false)
@@ -2594,7 +2668,7 @@ function hasEmbeddedFormFields(businessObject) {
 }
 
 /**
- * 校验用户任务的动态 handler 只以固定并行会签/或签组合出现，并阻断近似方法名。
+ * 校验用户任务的受控 handler 只以固定并行会签/或签组合出现，并阻断近似方法名。
  * @param {object} task bpmn-js 用户任务业务对象。
  * @returns {string} 空串表示通过，否则返回稳定业务错误。
  */
@@ -2602,7 +2676,9 @@ function validateUserTaskMultiInstance(task) {
   const loop = task.loopCharacteristics
   if (!loop) return ''
   const collection = String(loop.get?.('flowable:collection') || '').trim()
-  if (!collection.includes('multiInstanceHandler')) return ''
+  if (collection !== CONTROLLED_MULTI_INSTANCE_COLLECTION
+    && collection !== START_MULTI_INSTANCE_COLLECTION
+    && !FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)) return ''
   const condition = String(loop.completionCondition?.body || '').trim()
   const approvedCondition = [
     CONTROLLED_MULTI_INSTANCE_ALL_CONDITION,
@@ -2610,8 +2686,7 @@ function validateUserTaskMultiInstance(task) {
   ].includes(condition)
   const parentIsMainProcess = task.$parent?.$type === 'bpmn:Process'
   const hasBoundaryEvents = Array.isArray(task.boundaryEventRefs) && task.boundaryEventRefs.length > 0
-  if (collection !== CONTROLLED_MULTI_INSTANCE_COLLECTION
-    || loop.isSequential
+  if (loop.isSequential
     || loop.get('flowable:elementVariable') !== CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE
     || task.get('flowable:assignee') !== CONTROLLED_MULTI_INSTANCE_ASSIGNEE
     || task.get('flowable:candidateUsers')
@@ -2621,7 +2696,13 @@ function validateUserTaskMultiInstance(task) {
     || task.isForCompensation
     || hasBoundaryEvents
     || !parentIsMainProcess) {
-    return '动态多实例配置不符合受控会签或或签契约'
+    return '受控多实例配置不符合会签或或签契约'
+  }
+  if (FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)) {
+    const fixedUserIds = readFixedMultiInstanceUserIds(loop)
+    if (!fixedUserIds.length || fixedUserIds.length > 100) {
+      return '固定会签或或签必须预设 1 至 100 名有效办理人'
+    }
   }
   return ''
 }

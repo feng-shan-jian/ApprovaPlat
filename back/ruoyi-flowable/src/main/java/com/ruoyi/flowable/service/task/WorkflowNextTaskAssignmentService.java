@@ -132,6 +132,12 @@ public class WorkflowNextTaskAssignmentService
         }
         if (targetNode.getLoopCharacteristics() != null)
         {
+            if (!WorkflowMultiInstanceModelContract.usesDynamicHandler(
+                    targetNode.getLoopCharacteristics()))
+            {
+                // 固定成员在部署 BPMN 中已冻结，当前任务提交人不得通过 nextUserIds 覆盖成员。
+                throw conflict();
+            }
             WorkflowMultiInstanceMode multiInstanceMode;
             try
             {
