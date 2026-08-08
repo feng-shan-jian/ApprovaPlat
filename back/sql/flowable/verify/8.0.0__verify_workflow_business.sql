@@ -4,14 +4,14 @@
 SELECT
     'workflow_schema_table_counts' AS check_name,
     CASE
-        WHEN COUNT(*) = 102
+        WHEN COUNT(*) = 103
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) <> 'ACT_'
                  AND LEFT(UPPER(TABLE_NAME), 4) <> 'FLW_'
                  AND LEFT(UPPER(TABLE_NAME), 3) <> 'WF_'
                  AND LEFT(UPPER(TABLE_NAME), 5) <> 'QRTZ_') = 20
          AND SUM(LEFT(UPPER(TABLE_NAME), 5) = 'QRTZ_') = 11
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) IN ('ACT_', 'FLW_')) = 36
-         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 35
+         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 36
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -112,6 +112,115 @@ SELECT 'workflow_connector_columns' AS check_name,
        CONCAT('missing=', COALESCE(GROUP_CONCAT(CONCAT(table_name, '.', column_name)
            ORDER BY table_name, column_name), 'none')) AS detail
 FROM missing_connector_columns;
+
+WITH expected_call_activity_columns AS (
+    SELECT 'snapshot_id' AS column_name
+    UNION ALL SELECT 'deploy_id'
+    UNION ALL SELECT 'process_key'
+    UNION ALL SELECT 'element_id'
+    UNION ALL SELECT 'version_policy'
+    UNION ALL SELECT 'target_definition_id'
+    UNION ALL SELECT 'target_process_key'
+    UNION ALL SELECT 'target_process_name'
+    UNION ALL SELECT 'target_version'
+    UNION ALL SELECT 'target_deployment_id'
+    UNION ALL SELECT 'inherit_variables'
+    UNION ALL SELECT 'inherit_business_key'
+    UNION ALL SELECT 'local_scope_for_output'
+    UNION ALL SELECT 'propagation_policy'
+    UNION ALL SELECT 'input_mappings_json'
+    UNION ALL SELECT 'output_mappings_json'
+    UNION ALL SELECT 'snapshot_checksum'
+    UNION ALL SELECT 'create_by'
+    UNION ALL SELECT 'create_time'
+),
+missing_call_activity_columns AS (
+    SELECT expected.column_name
+    FROM expected_call_activity_columns expected
+    LEFT JOIN information_schema.COLUMNS actual
+      ON actual.TABLE_SCHEMA = DATABASE()
+     AND actual.TABLE_NAME = 'wf_deploy_call_activity'
+     AND actual.COLUMN_NAME = expected.column_name
+    WHERE actual.COLUMN_NAME IS NULL
+)
+SELECT 'workflow_call_activity_snapshot_columns' AS check_name,
+       CASE
+           WHEN (SELECT COUNT(*) FROM information_schema.TABLES
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = 'wf_deploy_call_activity'
+                   AND ENGINE = 'InnoDB'
+                   AND TABLE_COLLATION = 'utf8mb4_unicode_ci') = 1
+            AND COUNT(*) = 0
+           THEN 'PASS' ELSE 'FAIL'
+       END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(column_name ORDER BY column_name), 'none')) AS detail
+FROM missing_call_activity_columns;
+
+WITH expected_call_activity_indexes AS (
+    SELECT 'PRIMARY' AS index_name
+    UNION ALL SELECT 'uk_wf_deploy_call_element'
+    UNION ALL SELECT 'idx_wf_deploy_call_target'
+    UNION ALL SELECT 'idx_wf_deploy_call_target_deploy'
+),
+missing_call_activity_indexes AS (
+    SELECT expected.index_name
+    FROM expected_call_activity_indexes expected
+    LEFT JOIN information_schema.STATISTICS actual
+      ON actual.TABLE_SCHEMA = DATABASE()
+     AND actual.TABLE_NAME = 'wf_deploy_call_activity'
+     AND actual.INDEX_NAME = expected.index_name
+    WHERE actual.INDEX_NAME IS NULL
+)
+SELECT 'workflow_call_activity_snapshot_indexes' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(index_name ORDER BY index_name), 'none')) AS detail
+FROM missing_call_activity_indexes;
+
+WITH expected_call_activity_checks AS (
+    SELECT 'chk_wf_deploy_call_version_policy' AS constraint_name
+    UNION ALL SELECT 'chk_wf_deploy_call_target_version'
+    UNION ALL SELECT 'chk_wf_deploy_call_propagation'
+    UNION ALL SELECT 'chk_wf_deploy_call_input_json'
+    UNION ALL SELECT 'chk_wf_deploy_call_output_json'
+    UNION ALL SELECT 'chk_wf_deploy_call_checksum'
+),
+missing_call_activity_checks AS (
+    SELECT expected.constraint_name
+    FROM expected_call_activity_checks expected
+    LEFT JOIN information_schema.TABLE_CONSTRAINTS actual
+      ON actual.CONSTRAINT_SCHEMA = DATABASE()
+     AND actual.TABLE_NAME = 'wf_deploy_call_activity'
+     AND actual.CONSTRAINT_TYPE = 'CHECK'
+     AND actual.CONSTRAINT_NAME = expected.constraint_name
+    WHERE actual.CONSTRAINT_NAME IS NULL
+)
+SELECT 'workflow_call_activity_snapshot_checks' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(constraint_name ORDER BY constraint_name), 'none')) AS detail
+FROM missing_call_activity_checks;
+
+SELECT 'workflow_call_activity_snapshot_integrity' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('invalid_rows=', COUNT(*)) AS detail
+FROM wf_deploy_call_activity snapshot
+LEFT JOIN ACT_RE_DEPLOYMENT parent_deployment
+  ON parent_deployment.ID_ = snapshot.deploy_id
+LEFT JOIN ACT_RE_DEPLOYMENT target_deployment
+  ON target_deployment.ID_ = snapshot.target_deployment_id
+LEFT JOIN ACT_RE_PROCDEF target_definition
+  ON target_definition.ID_ = snapshot.target_definition_id
+WHERE parent_deployment.ID_ IS NULL
+   OR target_deployment.ID_ IS NULL
+   OR target_definition.ID_ IS NULL
+   OR target_definition.DEPLOYMENT_ID_ <> snapshot.target_deployment_id
+   OR target_definition.KEY_ <> snapshot.target_process_key
+   OR target_definition.VERSION_ <> snapshot.target_version
+   OR JSON_LENGTH(snapshot.input_mappings_json) > 64
+   OR JSON_LENGTH(snapshot.output_mappings_json) > 64
+   OR snapshot.inherit_variables NOT IN (0, 1)
+   OR snapshot.inherit_business_key NOT IN (0, 1)
+   OR snapshot.local_scope_for_output NOT IN (0, 1)
+   OR snapshot.snapshot_checksum NOT REGEXP '^[0-9a-f]{64}$';
 
 WITH expected_tables AS (
     SELECT 'wf_category' AS table_name

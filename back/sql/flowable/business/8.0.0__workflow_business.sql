@@ -647,6 +647,43 @@ CREATE TABLE IF NOT EXISTS `wf_deploy_dmn_snapshot`
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '流程部署冻结 DMN 决策快照';
 
+-- CallActivity 依赖快照：记录作者版本策略、精确定义、变量映射和整树传播契约。
+CREATE TABLE IF NOT EXISTS `wf_deploy_call_activity`
+(
+    `snapshot_id`             BIGINT       NOT NULL AUTO_INCREMENT COMMENT '调用活动部署快照主键',
+    `deploy_id`               VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '父 Flowable 流程部署主键',
+    `process_key`             VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '父流程定义 key',
+    `element_id`              VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'CallActivity 元素标识',
+    `version_policy`          VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'LATEST_ACTIVE 或 FIXED',
+    `target_definition_id`    VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结子流程定义主键',
+    `target_process_key`      VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结子流程 key',
+    `target_process_name`     VARCHAR(255) NOT NULL COMMENT '冻结子流程名称',
+    `target_version`          INT          NOT NULL COMMENT '冻结子流程版本',
+    `target_deployment_id`    VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结子流程部署主键',
+    `inherit_variables`       BOOLEAN      NOT NULL COMMENT '是否继承父流程全部变量',
+    `inherit_business_key`    BOOLEAN      NOT NULL COMMENT '是否继承父流程业务键',
+    `local_scope_for_output`  BOOLEAN      NOT NULL COMMENT '输出是否写入调用 execution 局部作用域',
+    `propagation_policy`      VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '固定 CASCADE_ROOT',
+    `input_mappings_json`     JSON         NOT NULL COMMENT '规范输入变量映射',
+    `output_mappings_json`    JSON         NOT NULL COMMENT '规范输出变量映射',
+    `snapshot_checksum`       CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '完整快照 SHA-256',
+    `create_by`               VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '部署操作人正式用户主键',
+    `create_time`             DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    PRIMARY KEY (`snapshot_id`),
+    UNIQUE KEY `uk_wf_deploy_call_element` (`deploy_id`, `process_key`, `element_id`),
+    KEY `idx_wf_deploy_call_target` (`target_definition_id`),
+    KEY `idx_wf_deploy_call_target_deploy` (`target_deployment_id`),
+    CONSTRAINT `chk_wf_deploy_call_version_policy` CHECK (`version_policy` IN ('LATEST_ACTIVE', 'FIXED')),
+    CONSTRAINT `chk_wf_deploy_call_target_version` CHECK (`target_version` > 0),
+    CONSTRAINT `chk_wf_deploy_call_propagation` CHECK (`propagation_policy` = 'CASCADE_ROOT'),
+    CONSTRAINT `chk_wf_deploy_call_input_json` CHECK (JSON_TYPE(`input_mappings_json`) = 'ARRAY'),
+    CONSTRAINT `chk_wf_deploy_call_output_json` CHECK (JSON_TYPE(`output_mappings_json`) = 'ARRAY'),
+    CONSTRAINT `chk_wf_deploy_call_checksum` CHECK (`snapshot_checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '流程部署调用活动依赖快照';
+
 CREATE TABLE IF NOT EXISTS `wf_connector_endpoint`
 (
     `endpoint_id`         BIGINT       NOT NULL AUTO_INCREMENT COMMENT '连接器端点主键',

@@ -1,6 +1,7 @@
 package com.ruoyi.flowable.service.process;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
@@ -229,9 +230,9 @@ public class WorkflowProcessInstanceService
     }
 
     /**
-     * 由流程管理员将运行实例切换到激活或挂起状态，相同状态按幂等成功返回。
+     * 由流程管理员将运行实例所在的完整 CallActivity 执行树切换到激活或挂起状态。
      *
-     * @param request WorkflowInstanceStateRequest，实例主键和枚举目标状态
+     * @param request WorkflowInstanceStateRequest，根或子实例主键和枚举目标状态
      * @return WorkflowInstanceStateView，事务内复核后的状态及是否真实变更
      */
     public WorkflowInstanceStateView updateState(WorkflowInstanceStateRequest request)
@@ -248,29 +249,42 @@ public class WorkflowProcessInstanceService
             requirePermission(STATE_PERMISSION);
             HistoricProcessInstance historic = requireHistoricInstance(instanceId);
             requireRunningHistory(historic);
-            ProcessInstance current = requireRuntimeInstance(instanceId);
-            if (current.isSuspended() == targetState.suspended())
+            ProcessInstance requestedInstance = requireRuntimeInstance(instanceId);
+            ProcessInstance rootInstance = requireRootProcessInstance(requestedInstance);
+            List<String> processTreeInstanceIds = requireProcessTreeInstanceIds(rootInstance);
+            if (rootInstance.isSuspended() == targetState.suspended())
             {
                 return new WorkflowInstanceStateView(instanceId, targetState, false);
             }
 
             try
             {
+                // 激活时先恢复根实例，挂起时最后挂起根实例，避免父 execution 拒绝对子实例执行状态命令。
+                List<String> stateChangeOrder = new ArrayList<>(processTreeInstanceIds);
+                stateChangeOrder.remove(rootInstance.getId());
                 if (targetState.suspended())
                 {
-                    runtimeService.suspendProcessInstanceById(instanceId);
-                    if (taskSlaRuntimeService != null)
+                    stateChangeOrder.add(rootInstance.getId());
+                    for (String processTreeInstanceId : stateChangeOrder)
                     {
-                        taskSlaRuntimeService.pauseInstance(instanceId, actor.userId());
+                        runtimeService.suspendProcessInstanceById(processTreeInstanceId);
+                        if (taskSlaRuntimeService != null)
+                        {
+                            taskSlaRuntimeService.pauseInstance(processTreeInstanceId, actor.userId());
+                        }
                     }
                 }
                 else
                 {
-                    runtimeService.activateProcessInstanceById(instanceId);
-                    if (taskSlaRuntimeService != null)
+                    stateChangeOrder.add(0, rootInstance.getId());
+                    for (String processTreeInstanceId : stateChangeOrder)
                     {
-                        // 激活与 timer job 平移处于同一事务，异步执行器不能抢占未平移的过期作业。
-                        taskSlaRuntimeService.resumeInstance(instanceId, actor.userId());
+                        runtimeService.activateProcessInstanceById(processTreeInstanceId);
+                        if (taskSlaRuntimeService != null)
+                        {
+                            // 激活与 timer job 平移处于同一事务，异步执行器不能抢占未平移的过期作业。
+                            taskSlaRuntimeService.resumeInstance(processTreeInstanceId, actor.userId());
+                        }
                     }
                 }
             }
@@ -279,8 +293,14 @@ public class WorkflowProcessInstanceService
                 throw conflict("流程实例状态已发生变化，请刷新后重试");
             }
 
-            ProcessInstance updated = findRuntimeInstance(instanceId);
-            if (updated == null || updated.isSuspended() != targetState.suspended())
+            List<ProcessInstance> updatedInstances = runtimeService.createProcessInstanceQuery()
+                    .processInstanceIds(Set.copyOf(processTreeInstanceIds)).list();
+            if (updatedInstances == null
+                    || updatedInstances.size() != processTreeInstanceIds.size()
+                    || updatedInstances.stream().anyMatch(updated -> updated == null
+                            || !StringUtils.hasText(updated.getId())
+                            || !processTreeInstanceIds.contains(updated.getId().trim())
+                            || updated.isSuspended() != targetState.suspended()))
             {
                 throw conflict("流程实例状态已发生变化，请刷新后重试");
             }

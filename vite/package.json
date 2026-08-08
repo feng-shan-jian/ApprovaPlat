@@ -10,7 +10,7 @@
     "build:prod": "vite build",
     "build:stage": "vite build --mode staging",
     "preview": "vite preview",
-    "test:contracts": "node --test tests/contracts/workflow-approval-eligibility.test.js tests/contracts/workflow-designer-capabilities.test.js tests/contracts/workflow-participant-rules.test.js tests/contracts/workflow-condition-rules.test.js tests/contracts/workflow-form-field-permissions.test.js tests/contracts/playwright-config-secrets.test.js tests/contracts/workflow-test-account-password.test.js",
+    "test:contracts": "node --test tests/contracts/workflow-approval-eligibility.test.js tests/contracts/workflow-call-activity-moddle.test.js tests/contracts/workflow-designer-capabilities.test.js tests/contracts/workflow-participant-rules.test.js tests/contracts/workflow-condition-rules.test.js tests/contracts/workflow-form-field-permissions.test.js tests/contracts/playwright-config-secrets.test.js tests/contracts/workflow-test-account-password.test.js",
     "test:e2e": "node tests/e2e/support/run-e2e.js",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report output/playwright/html"
@@ -48,6 +48,7 @@
     "@playwright/test": "1.62.0",
     "@vitejs/plugin-vue": "5.2.4",
     "@xmldom/xmldom": "0.9.10",
+    "bpmn-moddle": "10.0.0",
     "bpmnlint-pack-config": "0.9.0",
     "fast-glob": "3.3.3",
     "fflate": "0.8.3",

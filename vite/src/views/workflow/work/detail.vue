@@ -39,6 +39,47 @@
       <el-descriptions-item label="流程耗时">{{ formatDuration(detail.durationMillis) }}</el-descriptions-item>
     </el-descriptions>
 
+    <section v-if="processRelations.length > 1" class="workflow-detail__relations" aria-labelledby="process-relations-title">
+      <div class="workflow-detail__relations-heading">
+        <div>
+          <h3 id="process-relations-title">父子流程关系</h3>
+          <span>关系与实际运行版本来自 Flowable 历史实例执行树。</span>
+        </div>
+        <el-tag size="small" type="info">{{ processRelations.length }} 个实例</el-tag>
+      </div>
+      <el-table :data="processRelations" row-key="processInstanceId" size="small" max-height="320">
+        <el-table-column label="关系" width="100">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.current ? 'primary' : 'info'">
+              {{ processRelationLabel(row) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="流程" min-width="210">
+          <template #default="{ row }">
+            <div class="workflow-detail__relation-name">
+              <strong>{{ row.processName || row.processKey }}</strong>
+              <span>{{ row.processKey }} · v{{ row.version }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="processInstanceId" label="实例" min-width="190" show-overflow-tooltip />
+        <el-table-column prop="parentProcessInstanceId" label="父实例" min-width="190" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.parentProcessInstanceId || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag size="small" :type="processRelationStatus(row.processStatus).type">
+              {{ processRelationStatus(row.processStatus).label }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="开始时间" min-width="176">
+          <template #default="{ row }">{{ formatDate(row.startTime) }}</template>
+        </el-table-column>
+      </el-table>
+    </section>
+
     <section v-if="controlledLoopStates.length" class="workflow-detail__controlled-loops" aria-labelledby="controlled-loop-title">
       <div class="workflow-detail__controlled-loop-heading">
         <div>
@@ -526,6 +567,8 @@ const statusMeta = computed(() => ({
 }[detail.processStatus] || { label: detail.processStatus || '未知', type: 'info' }))
 const summaryColumns = computed(() => viewportWidth.value < 768 ? 1 : 3)
 const timeline = computed(() => Array.isArray(detail.historyProcNodeList) ? detail.historyProcNodeList : [])
+// 父子关系仅信任详情 API 从 Flowable 历史执行树投影的结果，页面不从任务或 BPMN 猜测关系。
+const processRelations = computed(() => Array.isArray(detail.processRelations) ? detail.processRelations : [])
 // 受控循环状态完全采用详情 API 的部署快照和逐轮审计，页面不根据历史任务数量自行推演。
 const controlledLoopStates = computed(() => Array.isArray(detail.controlledLoopStates)
   ? detail.controlledLoopStates
@@ -534,6 +577,36 @@ const controlledLoopStates = computed(() => Array.isArray(detail.controlledLoopS
 const controlledLoopActorNames = computed(() => new Map(timeline.value
   .filter(node => node?.taskId)
   .map(node => [String(node.taskId), node.completedByName || node.assigneeName || ''])))
+
+/**
+ * 生成父子流程关系节点的用户可见角色。
+ * @param {object} relation Flowable 历史实例关系节点。
+ * @returns {string} 当前流程、根流程、直接父流程或子流程。
+ */
+function processRelationLabel(relation) {
+  if (relation?.current) return '当前流程'
+  if (!relation?.parentProcessInstanceId) return '根流程'
+  const current = processRelations.value.find(item => item.current)
+  if (current?.parentProcessInstanceId === relation.processInstanceId) return '直接父流程'
+  return '子流程'
+}
+
+/**
+ * 将关系节点的稳定流程状态映射为页面标签。
+ * @param {string} status 后端返回的稳定流程状态。
+ * @returns {{label:string,type:string}} Element Plus 标签文案和语义色。
+ */
+function processRelationStatus(status) {
+  return {
+    running: { label: '进行中', type: 'primary' },
+    returned: { label: '待修改', type: 'warning' },
+    suspended: { label: '已挂起', type: 'warning' },
+    completed: { label: '已完成', type: 'success' },
+    rejected: { label: '已驳回', type: 'danger' },
+    terminated: { label: '已终止', type: 'danger' },
+    canceled: { label: '已取消', type: 'info' }
+  }[status] || { label: status || '未知', type: 'info' }
+}
 const diagramFileName = computed(() => `workflow_${safeFileName(detail.processKey || processInstanceId() || 'process')}`)
 const currentUserId = computed(() => String(userStore.id || ''))
 // 动态多实例状态完全来自详情 API 的正式快照；revision、成员状态和计数不在浏览器自行推演。
@@ -2012,6 +2085,37 @@ onActivated(async () => {
 
 .workflow-detail__tabs {
   margin-top: 12px;
+}
+
+.workflow-detail__relations {
+  margin-top: 18px;
+  padding: 16px 0 18px;
+  border-top: 1px solid var(--el-border-color-light);
+  border-bottom: 1px solid var(--el-border-color-light);
+}
+
+.workflow-detail__relations-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.workflow-detail__relations-heading h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.workflow-detail__relations-heading span,
+.workflow-detail__relation-name span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.workflow-detail__relation-name {
+  display: grid;
+  gap: 3px;
 }
 
 .workflow-detail__controlled-loops {

@@ -3,6 +3,7 @@ package com.ruoyi.flowable.service.model;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -12,16 +13,26 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
 import javax.xml.stream.XMLInputFactory;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.CallActivity;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
+import org.flowable.identitylink.api.IdentityLink;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.domain.WfDeployForm;
+import com.ruoyi.flowable.engine.WorkflowEngineOperations;
+import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
+import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.mapper.WfDeployCallActivityMapper;
+import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.mapper.WfFormMapper;
+import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 
 class WorkflowCallActivityReferenceServiceTest
 {
@@ -50,7 +61,7 @@ class WorkflowCallActivityReferenceServiceTest
     }
 
     /**
-     * 验证部署编译把固定流程 key 替换为当前最新激活定义 ID。
+     * 验证部署编译把作者流程 key 替换为当前最新激活定义 ID，并写入 Flowable 精确绑定属性。
      *
      * @return void，目标仍按 key 解析或未写入 id 类型时测试失败
      */
@@ -61,9 +72,12 @@ class WorkflowCallActivityReferenceServiceTest
         when(definitionQuery.singleResult()).thenReturn(target);
 
         byte[] compiled = service.freezeReferences(authorBpmn("child"));
+        String compiledXml = new String(compiled, StandardCharsets.UTF_8);
         CallActivity call = parse(compiled).getMainProcess()
                 .findFlowElementsOfType(CallActivity.class, true).get(0);
 
+        assertThat(compiledXml).contains("calledElement=\"child:3:stable\"")
+                .contains("flowable:calledElementType=\"id\"");
         assertThat(call.getCalledElement()).isEqualTo("child:3:stable");
         assertThat(call.getCalledElementType()).isEqualTo("id");
         assertThat(call.isSameDeployment()).isFalse();
@@ -129,6 +143,106 @@ class WorkflowCallActivityReferenceServiceTest
     }
 
     /**
+     * 验证发布目录按当前用户及候选组过滤，保留有权版本的真实激活状态供设计器回显。
+     * @return void，越权定义泄露、角色授权遗漏或停用状态丢失时测试失败
+     */
+    @Test
+    @SuppressWarnings({ "rawtypes", "unchecked" })
+    void filtersPublishedCatalogByReferencePermissionAndStatus()
+    {
+        WorkflowEngineOperations operations = mock(WorkflowEngineOperations.class);
+        WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
+        WfDeployFormMapper deployFormMapper = mock(WfDeployFormMapper.class);
+        WfFormMapper formMapper = mock(WfFormMapper.class);
+        WfDeployCallActivityMapper snapshotMapper = mock(WfDeployCallActivityMapper.class);
+        when(operations.read(any(Supplier.class))).thenAnswer(invocation ->
+                ((Supplier<?>) invocation.getArgument(0)).get());
+        when(identityResolver.resolveCurrentIdentity())
+                .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2")));
+        when(definitionQuery.orderByProcessDefinitionKey()).thenReturn(definitionQuery);
+        when(definitionQuery.orderByProcessDefinitionVersion()).thenReturn(definitionQuery);
+        when(definitionQuery.asc()).thenReturn(definitionQuery);
+        when(definitionQuery.desc()).thenReturn(definitionQuery);
+
+        ProcessDefinition userAllowed = catalogDefinition(
+                "expense:2:user", "expense", "费用审批", 2, false);
+        ProcessDefinition groupAllowedSuspended = catalogDefinition(
+                "audit:1:group", "audit", "审计复核", 1, true);
+        ProcessDefinition forbidden = catalogDefinition(
+                "secret:1:forbidden", "secret", "保密流程", 1, false);
+        when(definitionQuery.list()).thenReturn(List.of(
+                userAllowed, groupAllowedSuspended, forbidden));
+        when(deployFormMapper.selectByDeploymentId(anyString())).thenReturn(List.of());
+        IdentityLink userLink = identityLink("7", null);
+        IdentityLink groupLink = identityLink(null, "ROLE2");
+        IdentityLink forbiddenLink = identityLink("99", "ROLE9");
+        when(repositoryService.getIdentityLinksForProcessDefinition(userAllowed.getId()))
+                .thenReturn(List.of(userLink));
+        when(repositoryService.getIdentityLinksForProcessDefinition(groupAllowedSuspended.getId()))
+                .thenReturn(List.of(groupLink));
+        when(repositoryService.getIdentityLinksForProcessDefinition(forbidden.getId()))
+                .thenReturn(List.of(forbiddenLink));
+        when(repositoryService.getBpmnModel(userAllowed.getId()))
+                .thenReturn(parse(publishedBpmn("expense")));
+        when(repositoryService.getBpmnModel(groupAllowedSuspended.getId()))
+                .thenReturn(parse(publishedBpmn("audit")));
+
+        WorkflowCallActivityReferenceService productionService =
+                new WorkflowCallActivityReferenceService(repositoryService, operations,
+                        identityResolver, deployFormMapper, formMapper,
+                        new WorkflowFormTemplateValidator(), snapshotMapper);
+
+        assertThat(productionService.listReferenceOptions(null))
+                .extracting(option -> option.definitionId() + ":" + option.status())
+                .containsExactly("expense:2:user:ACTIVE", "audit:1:group:SUSPENDED");
+    }
+
+    /**
+     * 验证父子表单字段类型不兼容时在部署和快照写入之前失败。
+     *
+     * @return void，非法映射进入部署结果或写入依赖快照时测试失败
+     */
+    @Test
+    void rejectsIncompatibleMappingBeforeSnapshotWrite()
+    {
+        WorkflowEngineOperations operations = mock(WorkflowEngineOperations.class);
+        WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
+        WfDeployFormMapper deployFormMapper = mock(WfDeployFormMapper.class);
+        WfFormMapper formMapper = mock(WfFormMapper.class);
+        WfDeployCallActivityMapper snapshotMapper = mock(WfDeployCallActivityMapper.class);
+        ProcessDefinition target = catalogDefinition(
+                "child:1:stable", "child", "子流程", 1, false);
+        when(definitionQuery.singleResult()).thenReturn(target);
+        when(repositoryService.getIdentityLinksForProcessDefinition(target.getId()))
+                .thenReturn(List.of());
+        when(repositoryService.getBpmnModel(target.getId()))
+                .thenReturn(parse(publishedBpmn("child")));
+        when(deployFormMapper.selectByDeploymentId(target.getDeploymentId()))
+                .thenReturn(List.of(deployForm("start", formField("childAmount", "el-input-number"))));
+
+        WorkflowCallActivityReferenceService productionService =
+                new WorkflowCallActivityReferenceService(repositoryService, operations,
+                        identityResolver, deployFormMapper, formMapper,
+                        new WorkflowFormTemplateValidator(), snapshotMapper);
+        byte[] authorBytes = mappedAuthorBpmn(
+                "child", "parentText", "childAmount");
+        WorkflowBpmnDocument authorDocument = new WorkflowBpmnDocument(
+                parse(authorBytes), new String(authorBytes, StandardCharsets.UTF_8),
+                List.of(new WorkflowBpmnFormReference(WorkflowFormSourceType.EMBEDDED,
+                        null, WorkflowFormSourceType.EMBEDDED_FORM_KEY, "start", "提交",
+                        formField("parentText", "el-input"), "parent")));
+
+        assertThatThrownBy(() -> productionService.prepare(
+                authorBytes, authorDocument, new WorkflowCurrentIdentity("7", Set.of())))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(exception.getMessage()).isEqualTo("调用活动输入变量字段类型不兼容");
+                });
+        verify(snapshotMapper, never()).insertBatch(any());
+    }
+
+    /**
      * 创建流程定义替身并固定删除保护需要的主键、部署和挂起状态。
      *
      * @param id String，流程定义主键
@@ -140,9 +254,44 @@ class WorkflowCallActivityReferenceServiceTest
     {
         ProcessDefinition definition = mock(ProcessDefinition.class);
         when(definition.getId()).thenReturn(id);
+        when(definition.getKey()).thenReturn("child");
         when(definition.getDeploymentId()).thenReturn(deploymentId);
         when(definition.isSuspended()).thenReturn(suspended);
         return definition;
+    }
+
+    /**
+     * 创建目录测试所需的完整流程定义替身。
+     * @param id String，定义主键
+     * @param key String，流程 key
+     * @param name String，流程名称
+     * @param version int，流程版本
+     * @param suspended boolean，是否停用
+     * @return ProcessDefinition，具备目录字段的定义替身
+     */
+    private ProcessDefinition catalogDefinition(String id, String key, String name,
+            int version, boolean suspended)
+    {
+        ProcessDefinition definition = definition(id, "deployment-" + id, suspended);
+        when(definition.getKey()).thenReturn(key);
+        when(definition.getName()).thenReturn(name);
+        when(definition.getVersion()).thenReturn(version);
+        when(definition.getCategory()).thenReturn("test");
+        return definition;
+    }
+
+    /**
+     * 创建候选发起身份链接替身，目录服务将其复用为设计期引用权限。
+     * @param userId String，可空用户主键
+     * @param groupId String，可空角色或部门组主键
+     * @return IdentityLink，受控身份链接
+     */
+    private IdentityLink identityLink(String userId, String groupId)
+    {
+        IdentityLink link = mock(IdentityLink.class);
+        when(link.getUserId()).thenReturn(userId);
+        when(link.getGroupId()).thenReturn(groupId);
+        return link;
     }
 
     /**
@@ -175,6 +324,70 @@ class WorkflowCallActivityReferenceServiceTest
         String xml = new String(authorBpmn(targetDefinitionId), StandardCharsets.UTF_8)
                 .replace("<callActivity id=\"call\"",
                         "<callActivity id=\"call\" flowable:calledElementType=\"id\"");
+        return xml.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 构造包含一条 Flowable 原生输入映射的作者 BPMN。
+     *
+     * @param calledElement String，作者选择的子流程 key
+     * @param source String，父流程来源变量
+     * @param target String，子流程目标变量
+     * @return byte[]，UTF-8 BPMN 资源
+     */
+    private byte[] mappedAuthorBpmn(String calledElement, String source, String target)
+    {
+        String xml = new String(authorBpmn(calledElement), StandardCharsets.UTF_8)
+                .replace("<callActivity id=\"call\" calledElement=\"" + calledElement + "\"/>",
+                        "<callActivity id=\"call\" calledElement=\"" + calledElement
+                                + "\"><extensionElements><flowable:in source=\"" + source
+                                + "\" target=\"" + target
+                                + "\"/></extensionElements></callActivity>");
+        return xml.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 构造部署表单快照。
+     *
+     * @param nodeKey String，快照所属节点 key
+     * @param content String，已校验表单 JSON
+     * @return WfDeployForm，子流程不可变表单快照
+     */
+    private WfDeployForm deployForm(String nodeKey, String content)
+    {
+        WfDeployForm snapshot = new WfDeployForm();
+        snapshot.setNodeKey(nodeKey);
+        snapshot.setContent(content);
+        return snapshot;
+    }
+
+    /**
+     * 构造只包含一个可映射标量字段的正式表单 JSON。
+     *
+     * @param variable String，字段变量名
+     * @param tag String，Element Plus 组件 tag
+     * @return String，可通过正式模板校验器的表单 JSON
+     */
+    private String formField(String variable, String tag)
+    {
+        return "{\"fields\":[{\"__vModel__\":\"" + variable
+                + "\",\"__config__\":{\"layout\":\"colFormItem\",\"tag\":\""
+                + tag + "\",\"label\":\"字段\"}}]}";
+    }
+
+    /**
+     * 构造目录测试所需的单开始节点已发布流程资源。
+     * @param processKey String，流程 key
+     * @return byte[]，UTF-8 BPMN 资源
+     */
+    private byte[] publishedBpmn(String processKey)
+    {
+        String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                + "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" "
+                + "targetNamespace=\"urn:test\"><process id=\"" + processKey
+                + "\" isExecutable=\"true\"><startEvent id=\"start\"/>"
+                + "<sequenceFlow id=\"f1\" sourceRef=\"start\" targetRef=\"end\"/>"
+                + "<endEvent id=\"end\"/></process></definitions>";
         return xml.getBytes(StandardCharsets.UTF_8);
     }
 

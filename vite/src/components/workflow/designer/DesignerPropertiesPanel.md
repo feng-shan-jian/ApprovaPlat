@@ -47,6 +47,9 @@
 | `connectorEndpoints` | `array` | 后端返回的已启用 HTTP 端点修订，不包含任何密钥正文。 |
 | `dmnOptions` | `array` | 后端过滤冻结子部署后返回的每个决策 key 最新来源版本，值为精确 `decisionId`。 |
 | `dmnLoading` | `boolean` | DMN 正式目录加载状态。 |
+| `callActivityOptions` | `array` | 后端按当前设计者对象权限过滤的已发布流程版本目录，包含状态及输入/输出字段。 |
+| `callActivityLoading` | `boolean` | 子流程正式目录加载状态。 |
+| `callActivityParentFields` | `array` | 当前父流程正式模板和内嵌表单合并后的可映射标量字段。 |
 | `extensionLoading` | `boolean` | 扩展注册表加载状态。 |
 | `assignmentOptions` 等 | `array` | 父组件固定的分段选项。 |
 | `participantFormFieldOptions` | `array` | 当前单实例任务正式表单中的可用用户字段。 |
@@ -73,6 +76,8 @@
 - Participant 的 `processRef` 由面板显式编辑并写入标准 BPMN 属性；服务端保存/部署时再次核验流程定义存在性和可执行性，避免只绘制池而形成假运行能力。
 - MessageFlow 源 SendTask 选择 `COLLABORATION_OUTBOX_V1` 后使用专用编辑器，只保存端点键、消息名、目标流程、关联变量和变量白名单；部署冻结认证端点，运行时事务登记 outbox。
 - 异步开关只负责建模。生产能否启用仍由后端 executor、拓扑和启动门禁共同决定。
+- CallActivity 不提供自由文本 key 或表达式输入。用户从授权发布目录选择名称、key、版本和状态，并配置版本绑定、业务键继承、变量继承、子实例名称、输入/输出映射与输出作用域；取消和终止固定按平台整棵执行树原子传播。
+- 输入映射使用“父流程可读字段 -> 子流程可写开始字段”，输出映射使用“子流程可读字段 -> 父流程可写字段”。字段下拉同时展示变量名和类型，最多各 64 项；最终权限、状态、循环依赖和类型兼容仍由保存/部署后端重新校验。
 - ServiceTask 只能选择正式扩展目录项并填写 JSON 对象配置。父组件写入固定调度器和作者字段；部署时由后端冻结精确版本、处理器、配置及校验和。
 - BusinessRuleTask 与通用 ServiceTask 完全分离，只能选择后端 DMN 来源目录并写入单一 `flowable:rules=decisionId`；部署编译器再绑定同部署冻结副本。
 - UserTask 的循环方式只提供受控会签/或签和受控整改循环，不展示要求手写集合表达式、元素变量或完成条件的串行/并行多实例入口。其他 BPMN Activity 仍可编辑标准串行或并行多实例；标准循环可稳定导入、编辑和导出，但 Flowable 8 模型不提供对应执行类型，因此服务端明确禁止部署。

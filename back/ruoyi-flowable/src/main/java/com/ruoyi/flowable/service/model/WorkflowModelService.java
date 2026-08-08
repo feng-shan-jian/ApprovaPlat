@@ -495,6 +495,11 @@ public class WorkflowModelService
             WorkflowBpmnDocument document = bpmnService.validateForSave(bpmnBytes);
             // 保存继续执行身份与表单门禁；执行兼容性由部署门禁负责，round-trip-only 元素可保留在作者 XML。
             validateDeploymentReferences(document);
+            if (callActivityReferenceService != null)
+            {
+                // 保存阶段使用服务端当前身份和正式目录重新核验，客户端 XML 不能夹带越权定义 ID。
+                callActivityReferenceService.validateAuthorReferences(document, identity);
+            }
             LockedModelVersions lockedModels = lockModelVersions(sourceSnapshot);
             WorkflowModelLockRow source = lockedModels.source();
             WorkflowModelLockRow latest = lockedModels.latest();
@@ -539,6 +544,10 @@ public class WorkflowModelService
                 WorkflowBpmnDocument document = bpmnService.validateForSave(
                         source.getBytes(StandardCharsets.UTF_8));
                 validateDeploymentReferences(document);
+                if (callActivityReferenceService != null)
+                {
+                    callActivityReferenceService.validateAuthorReferences(document);
+                }
                 List<WorkflowBpmnValidationIssue> compatibilityIssues =
                         bpmnService.deploymentCompatibilityIssues(document);
                 if (compatibilityIssues.isEmpty())
@@ -826,9 +835,13 @@ public class WorkflowModelService
                                     identity.userId());
             WorkflowPreparedDmnDeployment dmnDeployment =
                     dmnDecisionService.prepare(participantDeployment.compiledBpmn());
-            byte[] executableBpmn = callActivityReferenceService == null
-                    ? dmnDeployment.compiledBpmn()
-                    : callActivityReferenceService.freezeReferences(dmnDeployment.compiledBpmn());
+            WorkflowPreparedCallActivityDeployment callActivityDeployment =
+                    callActivityReferenceService == null
+                            ? new WorkflowPreparedCallActivityDeployment(
+                                    dmnDeployment.compiledBpmn(), List.of())
+                            : callActivityReferenceService.prepare(
+                                    dmnDeployment.compiledBpmn(), document, identity);
+            byte[] executableBpmn = callActivityDeployment.compiledBpmn();
             WorkflowPreparedSlaDeployment slaDeployment = taskSlaDeploymentService == null
                     ? new WorkflowPreparedSlaDeployment(executableBpmn, List.of())
                     : taskSlaDeploymentService.prepare(executableBpmn, identity.userId());
@@ -890,6 +903,12 @@ public class WorkflowModelService
                 participantRuleDeploymentService.persist(deployment.getId(), participantDeployment);
             }
             dmnDecisionService.persist(deployment.getId(), dmnDeployment, identity.userId());
+            if (callActivityReferenceService != null)
+            {
+                // 定义部署与依赖快照共享事务，任何快照缺失都会回滚 Flowable 部署。
+                callActivityReferenceService.persist(
+                        deployment.getId(), callActivityDeployment, identity.userId());
+            }
             if (taskSlaDeploymentService != null)
             {
                 // Flowable 部署与 SLA 快照共享外层事务，任一快照失败都会回滚部署和所有关联数据。

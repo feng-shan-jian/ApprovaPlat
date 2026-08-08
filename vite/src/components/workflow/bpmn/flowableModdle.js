@@ -89,9 +89,29 @@ export default {
       extends: ['bpmn:CallActivity'],
       properties: [
         { name: 'calledElementType', isAttr: true, type: 'String' },
-        { name: 'calledElement', isAttr: true, type: 'String' },
         { name: 'businessKey', isAttr: true, type: 'String' },
-        { name: 'processInstanceName', isAttr: true, type: 'String' }
+        { name: 'processInstanceName', isAttr: true, type: 'String' },
+        { name: 'inheritBusinessKey', isAttr: true, type: 'Boolean', default: false },
+        { name: 'inheritVariables', isAttr: true, type: 'Boolean', default: false },
+        { name: 'sameDeployment', isAttr: true, type: 'Boolean', default: false },
+        { name: 'useLocalScopeForOutParameters', isAttr: true, type: 'Boolean', default: false },
+        { name: 'completeAsync', isAttr: true, type: 'Boolean', default: false }
+      ]
+    },
+    {
+      name: 'In',
+      superClass: ['Element'],
+      properties: [
+        { name: 'source', isAttr: true, type: 'String' },
+        { name: 'target', isAttr: true, type: 'String' }
+      ]
+    },
+    {
+      name: 'Out',
+      superClass: ['Element'],
+      properties: [
+        { name: 'source', isAttr: true, type: 'String' },
+        { name: 'target', isAttr: true, type: 'String' }
       ]
     },
     {

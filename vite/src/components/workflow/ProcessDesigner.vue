@@ -60,6 +60,9 @@
         :extension-loading="extensionLoading"
         :dmn-options="dmnOptions"
         :dmn-loading="dmnLoading"
+        :call-activity-options="callActivityOptions"
+        :call-activity-loading="callActivityLoading"
+        :call-activity-parent-fields="callActivityParentFields"
         :listener-options="businessListenerOptions"
         :listener-loading="extensionLoading"
         :error-event-options="errorEventOptions"
@@ -141,7 +144,7 @@ import 'diagram-js-minimap/assets/diagram-js-minimap.css'
 import 'bpmn-js-bpmnlint/dist/assets/css/bpmn-js-bpmnlint.css'
 import 'bpmn-js-token-simulation/assets/css/bpmn-js-token-simulation.css'
 import Download from '@/plugins/download'
-import { validateModelBpmn } from '@/api/workflow/model'
+import { listCallActivityOptions, validateModelBpmn } from '@/api/workflow/model'
 import { listCelExtensionOptions, listFormFieldExtensionOptions, listHttpExtensionOptions, listJavaExtensionOptions, listSqlExtensionOptions } from '@/api/workflow/extension'
 import { listConnectorEndpointOptions } from '@/api/workflow/connector'
 import { listSqlDataSourceOptions } from '@/api/workflow/sqlDatasource'
@@ -378,6 +381,9 @@ const extensionLoading = ref(false)
 // dmnOptions 只包含服务端过滤后的来源决策最新版本，每项仍以精确 decisionId 作为作者引用。
 const dmnOptions = ref([])
 const dmnLoading = ref(false)
+// 子流程目录只使用服务端权限过滤结果，设计器不从当前画布或客户端缓存伪造已发布定义。
+const callActivityOptions = ref([])
+const callActivityLoading = ref(false)
 // 错误与升级目录来自正式数据库，作者 XML 只保存稳定编码。
 const errorEventOptions = ref([])
 const escalationEventOptions = ref([])
@@ -395,6 +401,8 @@ const conditionContext = computed(() => resolveConditionContext(conditionFieldCa
   conditionRule: propertyState.conditionRule,
   conditionDefault: propertyState.conditionDefault
 }))
+// 父流程字段从当前画布真实表单引用解析，供结构化 in/out 映射选择。
+const callActivityParentFields = computed(() => resolveCallActivityParentFields())
 // slaCalendarOptions 只包含后端返回的启用日历，作者 XML 不接受自由输入日历键。
 const slaCalendarOptions = ref([])
 const slaLoading = ref(false)
@@ -462,7 +470,13 @@ function createEmptyPropertyState() {
     extensionConfig: '{}',
     dmnDecisionId: '',
     calledElement: '',
-    businessKey: '',
+    callDefinitionId: '',
+    callVersionPolicy: 'LATEST_ACTIVE',
+    callBusinessKeyPolicy: 'INHERIT',
+    callInheritVariables: false,
+    callInMappings: [],
+    callOutMappings: [],
+    callOutputScope: 'PARENT',
     processInstanceName: '',
     conditionExpression: '',
     conditionRule: null,
@@ -781,7 +795,14 @@ function loadPropertyState(element) {
   }
   propertyState.dmnDecisionId = businessObject.get('flowable:rules') || ''
   propertyState.calledElement = businessObject.calledElement || ''
-  propertyState.businessKey = businessObject.get('flowable:businessKey') || ''
+  const calledElementType = businessObject.get('flowable:calledElementType') || 'key'
+  propertyState.callVersionPolicy = calledElementType === 'id' ? 'FIXED' : 'LATEST_ACTIVE'
+  propertyState.callDefinitionId = resolveCallDefinitionId(propertyState.calledElement, calledElementType)
+  propertyState.callBusinessKeyPolicy = businessObject.get('flowable:inheritBusinessKey') === true ? 'INHERIT' : 'NONE'
+  propertyState.callInheritVariables = businessObject.get('flowable:inheritVariables') === true
+  propertyState.callOutputScope = businessObject.get('flowable:useLocalScopeForOutParameters') === true ? 'LOCAL' : 'PARENT'
+  propertyState.callInMappings = readCallMappings(businessObject, 'flowable:In')
+  propertyState.callOutMappings = readCallMappings(businessObject, 'flowable:Out')
   propertyState.processInstanceName = businessObject.get('flowable:processInstanceName') || ''
   propertyState.asyncBefore = businessObject.get('flowable:async') === true
   propertyState.asyncAfter = businessObject.get('flowable:asyncLeave') === true
@@ -2088,6 +2109,146 @@ async function loadDmnOptions() {
 }
 
 /**
+ * 从当前 CallActivity 所属父流程的正式模板和内嵌表单提取可映射标量字段。
+ * @returns {Array<{name:string,label:string,type:string,required:boolean,readable:boolean,writable:boolean}>} 按变量名排序的父流程字段目录。
+ */
+function resolveCallActivityParentFields(callActivity = selectedBusinessObject.value) {
+  if (!callActivity || callActivity.$type !== 'bpmn:CallActivity') return []
+  let process = callActivity
+  while (process && process.$type !== 'bpmn:Process') process = process.$parent
+  if (!process) return []
+  const fields = new Map()
+  const visit = flowElements => {
+    for (const element of Array.isArray(flowElements) ? flowElements : []) {
+      if (['bpmn:StartEvent', 'bpmn:UserTask'].includes(element?.$type)) {
+        const embedded = readEmbeddedFormFields(element).map(field => ({
+          name: String(field.variable || '').trim(),
+          label: field.name || field.variable,
+          type: embeddedCallFieldType(field.type),
+          required: field.required === true,
+          readable: field.readable !== false,
+          writable: field.writable !== false
+        }))
+        mergeCallVariableFields(fields, embedded)
+        const formId = Number(String(element.get?.('flowable:formKey') || '').replace(/^key_/, ''))
+        const form = props.forms.find(item => Number(item.formId) === formId)
+        if (form?.content) mergeCallVariableFields(fields, extractTemplateCallFields(form.content))
+      }
+      visit(element?.flowElements)
+    }
+  }
+  visit(process.flowElements)
+  return [...fields.values()].sort((left, right) => left.name.localeCompare(right.name))
+}
+
+/**
+ * 从正式表单 JSON 提取 CallActivity 允许映射的单值字段。
+ * @param {string} content 已由页面从正式表单接口回读的 JSON。
+ * @returns {Array<object>} 不包含集合、附件、表格和范围字段的字段目录。
+ */
+function extractTemplateCallFields(content) {
+  try {
+    const root = JSON.parse(content)
+    const result = []
+    const visit = nodes => {
+      for (const field of Array.isArray(nodes) ? nodes : []) {
+        const config = field?.__config__ || {}
+        const name = String(field?.__vModel__ || '').trim()
+        const type = templateCallFieldType(config.tag, field)
+        if (name && type) {
+          result.push({
+            name,
+            label: config.label || name,
+            type,
+            required: config.required === true,
+            readable: config.workflowReadable !== false,
+            writable: config.workflowWritable !== false && field.disabled !== true
+          })
+        }
+        visit(config.children)
+      }
+    }
+    visit(root?.fields)
+    return result
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 将正式表单组件类型归一为服务端调用映射的四类标量。
+ * @param {string} tag Element Plus 组件 tag。
+ * @param {object} field 完整字段配置。
+ * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 可映射类型或空。
+ */
+function templateCallFieldType(tag, field) {
+  if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
+  if (['el-date-picker', 'el-time-picker'].includes(tag)) {
+    return String(field?.type || '').toLowerCase().includes('range') ? null : 'TEXT'
+  }
+  if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
+  if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'
+  if (tag === 'el-switch') return 'BOOLEAN'
+  if (tag === 'el-radio-group') return 'SCALAR'
+  if (tag === 'el-select') return field?.multiple === true ? null : 'SCALAR'
+  return null
+}
+
+/**
+ * 将 Flowable 内嵌 FormData 类型归一为服务端调用映射类型。
+ * @param {string} type 内嵌表单字段类型。
+ * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 可映射类型或空。
+ */
+function embeddedCallFieldType(type) {
+  if (['long', 'integer'].includes(type)) return 'NUMBER'
+  if (type === 'boolean') return 'BOOLEAN'
+  if (type === 'enum') return 'SCALAR'
+  if (['string', 'date'].includes(type)) return 'TEXT'
+  return null
+}
+
+/**
+ * 合并父流程字段并移除同名异构字段，避免页面提供必然被服务端拒绝的映射。
+ * @param {Map<string, object>} target 当前字段目录。
+ * @param {Array<object>} source 待合并字段。
+ * @returns {void} 同名同型保留首次名称，同名异型从目录移除。
+ */
+function mergeCallVariableFields(target, source) {
+  for (const field of source) {
+    if (!field?.name || !field.type) continue
+    const previous = target.get(field.name)
+    if (previous && previous.type !== field.type) {
+      target.delete(field.name)
+      continue
+    }
+    if (!previous) target.set(field.name, field)
+  }
+}
+
+/**
+ * 加载当前设计者有权引用的全部已发布子流程版本和正式变量字段。
+ * @returns {Promise<void>} 失败时清空目录并把真实接口错误交给页面。
+ */
+async function loadCallActivityOptions() {
+  callActivityLoading.value = true
+  try {
+    const response = await listCallActivityOptions()
+    callActivityOptions.value = Array.isArray(response?.data) ? response.data : []
+    if (propertyFlags.value.callActivity) {
+      propertyState.callDefinitionId = resolveCallDefinitionId(
+        propertyState.calledElement,
+        propertyState.callVersionPolicy === 'FIXED' ? 'id' : 'key'
+      )
+    }
+  } catch (error) {
+    callActivityOptions.value = []
+    emit('error', error)
+  } finally {
+    callActivityLoading.value = false
+  }
+}
+
+/**
  * 从正式后端加载可选择的 Java、CEL、HTTP 扩展和 HTTP 端点白名单。
  * @returns {Promise<void>} 请求完成后更新扩展选项；失败时不提供本地伪造回退。
  */
@@ -2315,14 +2476,81 @@ function updateBusinessListeners(kind, listeners) {
 }
 
 /**
- * 更新调用活动的标准流程引用和 Flowable 实例关联属性。
- * @returns {void} 空值会删除对应属性，部署门禁负责校验必填引用是否存在。
+ * 从服务端流程目录解析作者引用对应的精确定义选项。
+ * @param {string} calledElement 作者 XML 中的流程 key 或定义 ID。
+ * @param {'id'|'key'|string} calledElementType Flowable 调用绑定类型。
+ * @returns {string} 设计器选中的定义 ID；目录尚未加载或目标已不可见时为空。
+ */
+function resolveCallDefinitionId(calledElement, calledElementType) {
+  const reference = String(calledElement || '').trim()
+  if (!reference) return ''
+  if (calledElementType === 'id') {
+    return callActivityOptions.value.some(option => option.definitionId === reference) ? reference : ''
+  }
+  return callActivityOptions.value
+    .filter(option => option.processKey === reference && option.status === 'ACTIVE')
+    .sort((left, right) => Number(right.version) - Number(left.version))[0]?.definitionId || ''
+}
+
+/**
+ * 从 CallActivity 的 extensionElements 回读 Flowable 原生 in/out 变量映射。
+ * @param {object} businessObject 当前 CallActivity 业务对象。
+ * @param {'flowable:In'|'flowable:Out'} mappingType 映射元素类型。
+ * @returns {Array<{source:string,target:string}>} 保持 XML 顺序的结构化映射。
+ */
+function readCallMappings(businessObject, mappingType) {
+  return (businessObject?.extensionElements?.values || [])
+    .filter(value => value?.$type === mappingType)
+    .map(value => ({ source: String(value.source || ''), target: String(value.target || '') }))
+}
+
+/**
+ * 更新调用活动的目录引用、版本策略、变量作用域和原生 in/out 映射。
+ * @returns {void} 所有变更通过单个 bpmn-js 命令进入撤销、重做和 XML 保存链路。
  */
 function updateCallActivityProperties() {
+  if (!modeler || !selectedElement.value || !propertyFlags.value.callActivity) return
+  const selectedDefinition = callActivityOptions.value.find(option => (
+    option.definitionId === propertyState.callDefinitionId
+  ))
+  const fixedVersion = propertyState.callVersionPolicy === 'FIXED'
+  propertyState.calledElement = selectedDefinition
+    ? (fixedVersion ? selectedDefinition.definitionId : selectedDefinition.processKey)
+    : ''
+
+  const businessObject = selectedBusinessObject.value
+  const moddle = modeler.get('moddle')
+  // 只替换调用映射，监听器、通用属性和其他扩展必须原样保留。
+  const preservedValues = (businessObject.extensionElements?.values || [])
+    .filter(value => !['flowable:In', 'flowable:Out'].includes(value?.$type))
+  const inputMappings = propertyState.callInMappings
+    .filter(mapping => mapping.source && mapping.target)
+    .map(mapping => moddle.create('flowable:In', {
+      source: String(mapping.source).trim(),
+      target: String(mapping.target).trim()
+    }))
+  const outputMappings = propertyState.callOutMappings
+    .filter(mapping => mapping.source && mapping.target)
+    .map(mapping => moddle.create('flowable:Out', {
+      source: String(mapping.source).trim(),
+      target: String(mapping.target).trim()
+    }))
+  const extensionValues = [...preservedValues, ...inputMappings, ...outputMappings]
+  const extensionElements = extensionValues.length
+    ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
+    : undefined
+
   updateProperties({
-    calledElement: propertyState.calledElement.trim() || undefined,
-    'flowable:businessKey': propertyState.businessKey.trim() || undefined,
-    'flowable:processInstanceName': propertyState.processInstanceName.trim() || undefined
+    calledElement: propertyState.calledElement || undefined,
+    'flowable:calledElementType': fixedVersion ? 'id' : 'key',
+    'flowable:businessKey': undefined,
+    'flowable:inheritBusinessKey': propertyState.callBusinessKeyPolicy === 'INHERIT',
+    'flowable:inheritVariables': propertyState.callInheritVariables === true,
+    'flowable:sameDeployment': false,
+    'flowable:completeAsync': false,
+    'flowable:useLocalScopeForOutParameters': propertyState.callOutputScope === 'LOCAL',
+    'flowable:processInstanceName': propertyState.processInstanceName.trim() || undefined,
+    extensionElements
   })
 }
 
@@ -3225,6 +3453,11 @@ function validateDiagram() {
       }
     }
   }
+  const callActivities = registry.filter(element => element.type === 'bpmn:CallActivity')
+  for (const element of callActivities) {
+    const callError = validateCallActivityConfiguration(element.businessObject)
+    if (callError) return callError
+  }
   const businessBoundaries = registry.filter(element => element.type === 'bpmn:BoundaryEvent')
   for (const element of businessBoundaries) {
     const definition = element.businessObject.eventDefinitions?.[0]
@@ -3271,6 +3504,89 @@ function validateParticipantProperties(businessObject, processRule) {
     ? PARTICIPANT_RULE_PROPERTIES.startNoMatch : PARTICIPANT_RULE_PROPERTIES.taskNoMatch)
   if (version !== '1' || policy !== 'FAIL') return '参与者规则版本或无匹配策略不受支持'
   return ''
+}
+
+/**
+ * 校验一个 CallActivity 的正式目录引用、版本策略和原生变量映射。
+ * @param {object} callActivity 当前画布中的 bpmn:CallActivity 业务对象。
+ * @returns {string} 空串表示通过，否则返回带节点名称的首个业务错误。
+ */
+function validateCallActivityConfiguration(callActivity) {
+  const nodeName = String(callActivity?.name || callActivity?.id || '调用活动')
+  const reference = String(callActivity?.calledElement || '').trim()
+  const referenceType = String(callActivity?.get?.('flowable:calledElementType') || 'key').trim()
+  if (!reference || !['key', 'id'].includes(referenceType) || reference.includes('${') || reference.includes('#{')) {
+    return `${nodeName}必须从已发布子流程目录选择目标和版本策略`
+  }
+  const target = referenceType === 'id'
+    ? callActivityOptions.value.find(option => option.definitionId === reference)
+    : callActivityOptions.value
+      .filter(option => option.processKey === reference && option.status === 'ACTIVE')
+      .sort((left, right) => Number(right.version) - Number(left.version))[0]
+  if (!target) return `${nodeName}引用的子流程不存在或当前用户无权引用`
+  if (target.status !== 'ACTIVE') return `${nodeName}引用的子流程已停用`
+
+  // 当前选中节点可能保留尚未写入 XML 的半行草稿，保存前必须显式阻止丢失。
+  if (selectedBusinessObject.value === callActivity) {
+    const drafts = [...propertyState.callInMappings, ...propertyState.callOutMappings]
+    if (drafts.some(mapping => !String(mapping?.source || '').trim() || !String(mapping?.target || '').trim())) {
+      return `${nodeName}存在未完成的变量映射`
+    }
+  }
+  const parentFields = resolveCallActivityParentFields(callActivity)
+  const inputError = validateCallMappings(
+    readCallMappings(callActivity, 'flowable:In'),
+    parentFields,
+    target.inputFields || [],
+    `${nodeName}输入`
+  )
+  if (inputError) return inputError
+  return validateCallMappings(
+    readCallMappings(callActivity, 'flowable:Out'),
+    target.outputFields || [],
+    parentFields,
+    `${nodeName}输出`
+  )
+}
+
+/**
+ * 校验一组调用变量映射的数量、目录权限、重复目标和标量类型兼容性。
+ * @param {Array<{source:string,target:string}>} mappings Flowable 原生 in 或 out 映射。
+ * @param {Array<object>} sourceFields 来源变量字段目录。
+ * @param {Array<object>} targetFields 目标变量字段目录。
+ * @param {string} direction 包含节点名称的输入或输出方向。
+ * @returns {string} 空串表示通过，否则返回稳定业务错误。
+ */
+function validateCallMappings(mappings, sourceFields, targetFields, direction) {
+  if (mappings.length > 64) return `${direction}变量映射不能超过64项`
+  const sources = new Map(sourceFields.map(field => [field.name, field]))
+  const targets = new Map(targetFields.map(field => [field.name, field]))
+  const usedTargets = new Set()
+  for (const mapping of mappings) {
+    const sourceName = String(mapping?.source || '').trim()
+    const targetName = String(mapping?.target || '').trim()
+    if (!sourceName || !targetName) return `${direction}存在未完成的变量映射`
+    if (usedTargets.has(targetName)) return `${direction}变量目标不能重复`
+    usedTargets.add(targetName)
+    const source = sources.get(sourceName)
+    const target = targets.get(targetName)
+    if (!source?.readable || !target?.writable) return `${direction}变量不在可映射字段目录中`
+    if (!callVariableTypesCompatible(source.type, target.type)) return `${direction}变量字段类型不兼容`
+  }
+  return ''
+}
+
+/**
+ * 判断两个受控标量字段类型是否可安全映射。
+ * @param {string} sourceType 来源字段的 TEXT、NUMBER、BOOLEAN 或 SCALAR 类型。
+ * @param {string} targetType 目标字段的 TEXT、NUMBER、BOOLEAN 或 SCALAR 类型。
+ * @returns {boolean} 同型或一端为受控 SCALAR 时返回 true。
+ */
+function callVariableTypesCompatible(sourceType, targetType) {
+  if (sourceType === targetType) return true
+  const scalarTypes = new Set(['TEXT', 'NUMBER', 'BOOLEAN'])
+  return (sourceType === 'SCALAR' && scalarTypes.has(targetType))
+    || (targetType === 'SCALAR' && scalarTypes.has(sourceType))
 }
 
 /**
@@ -3504,6 +3820,7 @@ onMounted(() => {
   window.addEventListener('keydown', handleDesignerShortcut)
   loadExtensionOptions()
   loadDmnOptions()
+  loadCallActivityOptions()
   importXml(props.modelValue)
 })
 onBeforeUnmount(() => {

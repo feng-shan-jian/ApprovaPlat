@@ -38,6 +38,7 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_bpmn_extension_version`",
                 "create table if not exists `wf_deploy_extension_snapshot`",
                 "create table if not exists `wf_deploy_dmn_snapshot`",
+                "create table if not exists `wf_deploy_call_activity`",
                 "create table if not exists `wf_connector_endpoint`",
                 "create table if not exists `wf_connector_invocation`",
                 "create table if not exists `wf_integration_credential`",
@@ -101,6 +102,15 @@ class WorkflowBusinessDdlContractTest
                 "unique key `uk_wf_task_sla_audit_action`",
                 "unique key `uk_wf_task_sla_notification`",
                 "constraint `fk_wf_task_sla_notification_audit`");
+        assertThat(ddl).contains(
+                "unique key `uk_wf_deploy_call_element`",
+                "key `idx_wf_deploy_call_target`",
+                "key `idx_wf_deploy_call_target_deploy`",
+                "constraint `chk_wf_deploy_call_version_policy`",
+                "constraint `chk_wf_deploy_call_propagation`",
+                "constraint `chk_wf_deploy_call_input_json`",
+                "constraint `chk_wf_deploy_call_output_json`",
+                "constraint `chk_wf_deploy_call_checksum`");
     }
 
     /**
@@ -162,7 +172,13 @@ class WorkflowBusinessDdlContractTest
                 "fk_wf_deploy_extension_version",
                 "deploy_extension_snapshot_mismatch",
                 "connector_endpoint_invalid_row",
-                "connector_invocation_invalid_state");
+                "connector_invocation_invalid_state",
+                "workflow_call_activity_snapshot_columns",
+                "workflow_call_activity_snapshot_indexes",
+                "workflow_call_activity_snapshot_checks",
+                "workflow_call_activity_snapshot_integrity",
+                "wf_deploy_call_activity",
+                "act_re_procdef");
         assertThat(normalized).contains(
                 "workflow_participant_rule_tables",
                 "workflow_participant_rule_columns",

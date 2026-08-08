@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
+import com.ruoyi.flowable.domain.WfDeployCallActivitySnapshot;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
 import com.ruoyi.flowable.domain.WfDeployConditionRule;
 import com.ruoyi.flowable.domain.WfDeployForm;
@@ -332,13 +333,16 @@ public class WorkflowDeploymentService
                         safeParticipantRuleSnapshots(deploymentId);
                 List<WfDeployConditionRule> conditionRuleSnapshots =
                         safeConditionRuleSnapshots(deploymentId);
+                List<WfDeployCallActivitySnapshot> callActivitySnapshots =
+                        callActivityReferenceService == null ? List.of()
+                                : callActivityReferenceService.snapshotsByDeploymentId(deploymentId);
                 List<Model> linkedModels = repositoryService.createModelQuery()
                         .deploymentId(deploymentId)
                         .list();
                 plans.add(new DeploymentDeletionPlan(
                         deployment, snapshots, extensionSnapshots, dmnSnapshots,
                         controlledLoopSnapshots, participantRuleSnapshots,
-                        conditionRuleSnapshots, linkedModels));
+                        conditionRuleSnapshots, callActivitySnapshots, linkedModels));
             }
 
             for (DeploymentDeletionPlan plan : plans)
@@ -379,6 +383,12 @@ public class WorkflowDeploymentService
                 if (deletedConditionRules != plan.conditionRuleSnapshots().size())
                 {
                     throw new ServiceException("部署条件分支快照状态已变化", HttpStatus.CONFLICT);
+                }
+                int deletedCallActivities = callActivityReferenceService == null ? 0
+                        : callActivityReferenceService.deleteSnapshots(deploymentId);
+                if (deletedCallActivities != plan.callActivitySnapshots().size())
+                {
+                    throw new ServiceException("部署调用活动快照状态已变化", HttpStatus.CONFLICT);
                 }
                 for (Model model : plan.linkedModels())
                 {
@@ -728,6 +738,7 @@ public class WorkflowDeploymentService
      * @param controlledLoopSnapshots List&lt;WfDeployControlledLoop&gt;，部署当前拥有的受控循环快照
      * @param participantRuleSnapshots List&lt;WfDeployParticipantRule&gt;，部署当前拥有的参与者规则快照
      * @param conditionRuleSnapshots List&lt;WfDeployConditionRule&gt;，部署当前拥有的条件分支快照
+     * @param callActivitySnapshots List&lt;WfDeployCallActivitySnapshot&gt;，部署当前拥有的子流程调用快照
      * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
      */
     private record DeploymentDeletionPlan(Deployment deployment, List<WfDeployForm> snapshots,
@@ -736,6 +747,7 @@ public class WorkflowDeploymentService
             List<WfDeployControlledLoop> controlledLoopSnapshots,
             List<WfDeployParticipantRule> participantRuleSnapshots,
             List<WfDeployConditionRule> conditionRuleSnapshots,
+            List<WfDeployCallActivitySnapshot> callActivitySnapshots,
             List<Model> linkedModels)
     {
         /**
@@ -748,6 +760,7 @@ public class WorkflowDeploymentService
          * @param controlledLoopSnapshots List&lt;WfDeployControlledLoop&gt;，部署当前拥有的受控循环快照
          * @param participantRuleSnapshots List&lt;WfDeployParticipantRule&gt;，部署当前拥有的参与者规则快照
          * @param conditionRuleSnapshots List&lt;WfDeployConditionRule&gt;，部署当前拥有的条件分支快照
+         * @param callActivitySnapshots List&lt;WfDeployCallActivitySnapshot&gt;，部署当前拥有的子流程调用快照
          * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
          * @return 无返回值，构造后得到不可变删除计划
          */
@@ -759,6 +772,7 @@ public class WorkflowDeploymentService
             controlledLoopSnapshots = List.copyOf(controlledLoopSnapshots);
             participantRuleSnapshots = List.copyOf(participantRuleSnapshots);
             conditionRuleSnapshots = List.copyOf(conditionRuleSnapshots);
+            callActivitySnapshots = List.copyOf(callActivitySnapshots);
             linkedModels = List.copyOf(linkedModels);
         }
     }

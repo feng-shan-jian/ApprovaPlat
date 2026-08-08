@@ -60,7 +60,7 @@ class WorkflowModelSaveDdlContractTest
     }
 
     /**
-     * 验证只读验收扩展到 BPMN 错误、升级和审批 SLA 域后，继续覆盖模型保存表的精确列、索引、约束和数据状态。
+     * 验证只读验收扩展到 BPMN 事件、审批 SLA 和 CallActivity 快照后，继续覆盖模型保存表契约。
      *
      * @return void，验收脚本遗漏模型保存正式表契约或包含写操作时测试失败
      * @throws Exception 正式验收 SQL 文件无法读取时测试失败
@@ -80,7 +80,7 @@ class WorkflowModelSaveDdlContractTest
         assertThat(checkName.matcher(verification).results().count()).isGreaterThanOrEqualTo(32L);
         assertThat(normalized).contains(
                 "union all select 'wf_model_save_idempotency'",
-                "when count(a.table_name) = 10",
+                "when count(a.table_name) = 11",
                 "idx_wf_model_save_user_time",
                 "idx_wf_model_save_source_time",
                 "idx_wf_model_save_saved_model",

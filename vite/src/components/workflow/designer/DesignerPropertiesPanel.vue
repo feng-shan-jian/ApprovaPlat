@@ -223,14 +223,82 @@
             </template>
 
             <template v-if="flags.callActivity">
-              <el-form-item label="被调用流程 key" required>
-                <el-input v-model="state.calledElement" maxlength="255" @change="emit('call-activity-change')" />
+              <el-form-item label="已发布子流程" required>
+                <el-select
+                  v-model="state.callDefinitionId"
+                  filterable
+                  :loading="callActivityLoading"
+                  placeholder="请选择有权引用的已发布流程"
+                  @change="emit('call-activity-change')"
+                >
+                  <el-option
+                    v-for="option in callActivityOptions"
+                    :key="option.definitionId"
+                    :value="option.definitionId"
+                    :label="callActivityOptionLabel(option)"
+                    :disabled="option.status !== 'ACTIVE'"
+                  >
+                    <div class="call-activity-option">
+                      <span>{{ option.processName || option.processKey }}</span>
+                      <code>{{ option.processKey }}</code>
+                      <el-tag size="small" :type="option.status === 'ACTIVE' ? 'success' : 'info'">
+                        v{{ option.version }} · {{ option.status === 'ACTIVE' ? '启用' : '停用' }}
+                      </el-tag>
+                    </div>
+                  </el-option>
+                </el-select>
               </el-form-item>
-              <el-form-item label="业务键">
-                <el-input v-model="state.businessKey" maxlength="255" @change="emit('call-activity-change')" />
+              <el-form-item label="版本绑定策略" required>
+                <el-segmented v-model="state.callVersionPolicy" :options="callVersionPolicyOptions" @change="emit('call-activity-change')" />
               </el-form-item>
-              <el-form-item label="实例名称">
+              <el-form-item label="业务键策略">
+                <el-segmented v-model="state.callBusinessKeyPolicy" :options="callBusinessKeyPolicyOptions" @change="emit('call-activity-change')" />
+              </el-form-item>
+              <el-form-item label="继承父流程变量">
+                <el-switch v-model="state.callInheritVariables" @change="emit('call-activity-change')" />
+              </el-form-item>
+              <el-form-item label="子流程实例名称">
                 <el-input v-model="state.processInstanceName" maxlength="255" @change="emit('call-activity-change')" />
+              </el-form-item>
+              <el-form-item label="输入变量映射">
+                <div class="call-activity-mappings">
+                  <div v-for="(mapping, index) in state.callInMappings" :key="`in-${index}`" class="call-activity-mapping-row">
+                    <el-select v-model="mapping.source" filterable placeholder="父流程字段" @change="handleCallMappingChange(mapping)">
+                      <el-option v-for="field in callActivityParentReadableFields" :key="field.name" :label="variableFieldLabel(field)" :value="field.name" />
+                    </el-select>
+                    <span class="call-activity-mapping-row__arrow">→</span>
+                    <el-select v-model="mapping.target" filterable placeholder="子流程字段" @change="handleCallMappingChange(mapping)">
+                      <el-option v-for="field in selectedCallActivityInputFields" :key="field.name" :label="variableFieldLabel(field)" :value="field.name" />
+                    </el-select>
+                    <el-tooltip content="删除输入映射" placement="top">
+                      <el-button text circle icon="Delete" aria-label="删除输入映射" @click="removeCallMapping('input', index)" />
+                    </el-tooltip>
+                  </div>
+                  <el-button icon="Plus" :disabled="state.callInMappings.length >= 64" @click="addCallMapping('input')">添加输入映射</el-button>
+                </div>
+              </el-form-item>
+              <el-form-item label="输出变量映射">
+                <div class="call-activity-mappings">
+                  <div v-for="(mapping, index) in state.callOutMappings" :key="`out-${index}`" class="call-activity-mapping-row">
+                    <el-select v-model="mapping.source" filterable placeholder="子流程字段" @change="handleCallMappingChange(mapping)">
+                      <el-option v-for="field in selectedCallActivityOutputFields" :key="field.name" :label="variableFieldLabel(field)" :value="field.name" />
+                    </el-select>
+                    <span class="call-activity-mapping-row__arrow">→</span>
+                    <el-select v-model="mapping.target" filterable placeholder="父流程字段" @change="handleCallMappingChange(mapping)">
+                      <el-option v-for="field in callActivityParentWritableFields" :key="field.name" :label="variableFieldLabel(field)" :value="field.name" />
+                    </el-select>
+                    <el-tooltip content="删除输出映射" placement="top">
+                      <el-button text circle icon="Delete" aria-label="删除输出映射" @click="removeCallMapping('output', index)" />
+                    </el-tooltip>
+                  </div>
+                  <el-button icon="Plus" :disabled="state.callOutMappings.length >= 64" @click="addCallMapping('output')">添加输出映射</el-button>
+                </div>
+              </el-form-item>
+              <el-form-item label="输出变量作用域">
+                <el-segmented v-model="state.callOutputScope" :options="callOutputScopeOptions" @change="emit('call-activity-change')" />
+              </el-form-item>
+              <el-form-item label="取消与终止传播">
+                <el-input model-value="整棵父子流程原子传播" readonly />
               </el-form-item>
             </template>
 
@@ -527,10 +595,35 @@ const multiInstanceMemberSourceOptions = Object.freeze([
   { label: '固定人员', value: 'fixed' }
 ])
 
+// 作者只选择业务策略，父组件负责写入 Flowable key/id 和布尔属性，不开放表达式。
+const callVersionPolicyOptions = Object.freeze([
+  { label: '发布时最新版', value: 'LATEST_ACTIVE' },
+  { label: '固定所选版本', value: 'FIXED' }
+])
+const callBusinessKeyPolicyOptions = Object.freeze([
+  { label: '继承父流程', value: 'INHERIT' },
+  { label: '不设置', value: 'NONE' }
+])
+const callOutputScopeOptions = Object.freeze([
+  { label: '父流程变量', value: 'PARENT' },
+  { label: '调用节点局部变量', value: 'LOCAL' }
+])
+
 const hasBusinessSection = computed(() => Object.values(props.flags).some(Boolean))
 const selectedExtensionType = computed(() => props.extensionOptions.find(option => (
   option.extensionKey === props.state.extensionKey
 ))?.extensionType || '')
+const selectedCallActivityOption = computed(() => props.callActivityOptions.find(option => (
+  option.definitionId === props.state.callDefinitionId
+)))
+const selectedCallActivityInputFields = computed(() => (
+  selectedCallActivityOption.value?.inputFields || []
+).filter(field => field.writable))
+const selectedCallActivityOutputFields = computed(() => (
+  selectedCallActivityOption.value?.outputFields || []
+).filter(field => field.readable))
+const callActivityParentReadableFields = computed(() => props.callActivityParentFields.filter(field => field.readable))
+const callActivityParentWritableFields = computed(() => props.callActivityParentFields.filter(field => field.writable))
 const selectedExtensionImplementation = computed(() => props.extensionOptions.find(option => (
   option.extensionKey === props.state.extensionKey
 ))?.implementationKey || '')
@@ -639,6 +732,56 @@ function handleMemberSourceChange(value) {
 function searchSlaAssignees(keyword) {
   emit('identity-search', { target: 'assignees', keyword })
 }
+/**
+ * 生成流程目录下拉的稳定业务标签。
+ * @param {object} option 服务端权限过滤后的流程定义目录项。
+ * @returns {string} 名称、key、版本和状态组成的可检索标签。
+ */
+function callActivityOptionLabel(option) {
+  return `${option.processName || option.processKey} · ${option.processKey} · v${option.version} · ${option.status === 'ACTIVE' ? '启用' : '停用'}`
+}
+
+/**
+ * 生成变量映射下拉标签，字段类型来自服务端或当前父模型正式表单。
+ * @param {object} field 变量字段目录项。
+ * @returns {string} 字段名称、变量名和类型。
+ */
+function variableFieldLabel(field) {
+  return `${field.label || field.name}（${field.name}）· ${field.type}`
+}
+
+/**
+ * 为输入或输出映射追加一行空草稿。
+ * @param {'input'|'output'} direction 映射方向。
+ * @returns {void} 映射达到后端 64 项上限时不再追加。
+ */
+function addCallMapping(direction) {
+  const mappings = direction === 'input' ? props.state.callInMappings : props.state.callOutMappings
+  if (mappings.length >= 64) return
+  mappings.push({ source: '', target: '' })
+}
+
+/**
+ * 仅在一行映射的来源和目标都完成选择后写入 BPMN 命令栈。
+ * @param {{source:string,target:string}} mapping 当前编辑映射。
+ * @returns {void} 半成品保留在面板状态中，不生成不可保存 XML。
+ */
+function handleCallMappingChange(mapping) {
+  if (mapping?.source && mapping?.target) emit('call-activity-change')
+}
+
+/**
+ * 删除指定输入或输出映射并立即交给父组件写入命令栈。
+ * @param {'input'|'output'} direction 映射方向。
+ * @param {number} index 待删除映射下标。
+ * @returns {void} 下标非法时不修改状态。
+ */
+function removeCallMapping(direction, index) {
+  const mappings = direction === 'input' ? props.state.callInMappings : props.state.callOutMappings
+  if (!Number.isInteger(index) || index < 0 || index >= mappings.length) return
+  mappings.splice(index, 1)
+  emit('call-activity-change')
+}
 </script>
 
 <style scoped>
@@ -700,5 +843,42 @@ function searchSlaAssignees(keyword) {
 .designer-properties-panel__form :deep(.el-segmented),
 .designer-properties-panel__form :deep(.el-input-number) {
   width: 100%;
+}
+.call-activity-option {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(96px, auto) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.call-activity-option code {
+  overflow: hidden;
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.call-activity-mappings {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+}
+
+.call-activity-mapping-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 4px;
+}
+
+.call-activity-mapping-row__arrow {
+  color: var(--el-text-color-placeholder);
+  text-align: center;
+}
+
+.call-activity-mapping-row :deep(.el-button) {
+  width: 28px;
+  height: 28px;
+  margin: 0;
 }
 </style>
