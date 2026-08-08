@@ -24,6 +24,7 @@ import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
+import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.domain.dto.WorkflowDeploymentQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowDeploymentView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
@@ -32,6 +33,7 @@ import com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper;
 import com.ruoyi.flowable.mapper.WfDeployControlledLoopMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
+import com.ruoyi.flowable.mapper.WfDeployParticipantRuleMapper;
 
 /**
  * 流程定义状态、部署版本和非级联删除的业务服务。
@@ -62,6 +64,9 @@ public class WorkflowDeploymentService
     /** 受控重复审批循环部署快照数据访问层；旧构造测试可为空。 */
     private final WfDeployControlledLoopMapper deployControlledLoopMapper;
 
+    /** 参与者规则不可变部署快照数据访问层；旧构造测试可为空。 */
+    private final WfDeployParticipantRuleMapper deployParticipantRuleMapper;
+
     private final WorkflowDmnDecisionService dmnDecisionService;
 
     private final WorkflowBpmnService bpmnService;
@@ -80,6 +85,7 @@ public class WorkflowDeploymentService
      * @param deployExtensionSnapshotMapper WfDeployExtensionSnapshotMapper，部署扩展快照数据访问层
      * @param deployDmnSnapshotMapper WfDeployDmnSnapshotMapper，部署 DMN 快照数据访问层
      * @param deployControlledLoopMapper WfDeployControlledLoopMapper，受控循环部署快照数据访问层
+     * @param deployParticipantRuleMapper WfDeployParticipantRuleMapper，参与者规则部署快照数据访问层
      * @param dmnDecisionService WorkflowDmnDecisionService，冻结 DMN 子部署清理服务
      * @param bpmnService WorkflowBpmnService，BPMN 安全解析和校验组件
      * @param callActivityReferenceService WorkflowCallActivityReferenceService，调用活动目标删除保护服务
@@ -92,6 +98,7 @@ public class WorkflowDeploymentService
             WfDeployExtensionSnapshotMapper deployExtensionSnapshotMapper,
             WfDeployDmnSnapshotMapper deployDmnSnapshotMapper,
             WfDeployControlledLoopMapper deployControlledLoopMapper,
+            WfDeployParticipantRuleMapper deployParticipantRuleMapper,
             WorkflowDmnDecisionService dmnDecisionService,
             WorkflowBpmnService bpmnService,
             WorkflowCallActivityReferenceService callActivityReferenceService)
@@ -104,6 +111,7 @@ public class WorkflowDeploymentService
         this.deployExtensionSnapshotMapper = deployExtensionSnapshotMapper;
         this.deployDmnSnapshotMapper = deployDmnSnapshotMapper;
         this.deployControlledLoopMapper = deployControlledLoopMapper;
+        this.deployParticipantRuleMapper = deployParticipantRuleMapper;
         this.dmnDecisionService = dmnDecisionService;
         this.bpmnService = bpmnService;
         this.callActivityReferenceService = callActivityReferenceService;
@@ -133,7 +141,7 @@ public class WorkflowDeploymentService
     {
         this(engineOperations, repositoryService, runtimeService, historyService,
                 deployFormMapper, deployExtensionSnapshotMapper, deployDmnSnapshotMapper,
-                null, dmnDecisionService, bpmnService, null);
+                null, null, dmnDecisionService, bpmnService, null);
     }
 
     /**
@@ -303,12 +311,14 @@ public class WorkflowDeploymentService
                 List<WfDeployDmnSnapshot> dmnSnapshots = safeDmnSnapshots(deploymentId);
                 List<WfDeployControlledLoop> controlledLoopSnapshots =
                         safeControlledLoopSnapshots(deploymentId);
+                List<WfDeployParticipantRule> participantRuleSnapshots =
+                        safeParticipantRuleSnapshots(deploymentId);
                 List<Model> linkedModels = repositoryService.createModelQuery()
                         .deploymentId(deploymentId)
                         .list();
                 plans.add(new DeploymentDeletionPlan(
                         deployment, snapshots, extensionSnapshots, dmnSnapshots,
-                        controlledLoopSnapshots, linkedModels));
+                        controlledLoopSnapshots, participantRuleSnapshots, linkedModels));
             }
 
             for (DeploymentDeletionPlan plan : plans)
@@ -337,6 +347,12 @@ public class WorkflowDeploymentService
                 if (deletedControlledLoops != plan.controlledLoopSnapshots().size())
                 {
                     throw new ServiceException("部署受控循环快照状态已变化", HttpStatus.CONFLICT);
+                }
+                int deletedParticipantRules = deployParticipantRuleMapper == null ? 0
+                        : deployParticipantRuleMapper.deleteByDeploymentId(deploymentId);
+                if (deletedParticipantRules != plan.participantRuleSnapshots().size())
+                {
+                    throw new ServiceException("部署参与者规则快照状态已变化", HttpStatus.CONFLICT);
                 }
                 for (Model model : plan.linkedModels())
                 {
@@ -541,6 +557,22 @@ public class WorkflowDeploymentService
     }
 
     /**
+     * 查询部署自有参与者规则快照并兼容旧测试构造方式。
+     * @param deploymentId String，Flowable 流程部署主键
+     * @return List&lt;WfDeployParticipantRule&gt;，不可变参与者规则快照列表
+     */
+    private List<WfDeployParticipantRule> safeParticipantRuleSnapshots(String deploymentId)
+    {
+        if (deployParticipantRuleMapper == null)
+        {
+            return List.of();
+        }
+        List<WfDeployParticipantRule> snapshots = deployParticipantRuleMapper
+                .selectByDeploymentId(deploymentId);
+        return snapshots == null ? List.of() : List.copyOf(snapshots);
+    }
+
+    /**
      * 有界读取部署 BPMN，防止异常资源导致内存耗尽。
      *
      * @param stream InputStream，Flowable 返回的 BPMN 资源流
@@ -652,12 +684,15 @@ public class WorkflowDeploymentService
      * @param extensionSnapshots List&lt;WfDeployExtensionSnapshot&gt;，部署当前拥有的扩展执行快照
      * @param dmnSnapshots List&lt;WfDeployDmnSnapshot&gt;，部署当前拥有的 DMN 冻结快照
      * @param controlledLoopSnapshots List&lt;WfDeployControlledLoop&gt;，部署当前拥有的受控循环快照
+     * @param participantRuleSnapshots List&lt;WfDeployParticipantRule&gt;，部署当前拥有的参与者规则快照
      * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
      */
     private record DeploymentDeletionPlan(Deployment deployment, List<WfDeployForm> snapshots,
             List<WfDeployExtensionSnapshot> extensionSnapshots,
             List<WfDeployDmnSnapshot> dmnSnapshots,
-            List<WfDeployControlledLoop> controlledLoopSnapshots, List<Model> linkedModels)
+            List<WfDeployControlledLoop> controlledLoopSnapshots,
+            List<WfDeployParticipantRule> participantRuleSnapshots,
+            List<Model> linkedModels)
     {
         /**
          * 创建不可变删除计划，防止预检结果在服务代码中被修改。
@@ -667,6 +702,7 @@ public class WorkflowDeploymentService
          * @param extensionSnapshots List&lt;WfDeployExtensionSnapshot&gt;，部署当前拥有的扩展执行快照
          * @param dmnSnapshots List&lt;WfDeployDmnSnapshot&gt;，部署当前拥有的 DMN 冻结快照
          * @param controlledLoopSnapshots List&lt;WfDeployControlledLoop&gt;，部署当前拥有的受控循环快照
+         * @param participantRuleSnapshots List&lt;WfDeployParticipantRule&gt;，部署当前拥有的参与者规则快照
          * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
          * @return 无返回值，构造后得到不可变删除计划
          */
@@ -676,6 +712,7 @@ public class WorkflowDeploymentService
             extensionSnapshots = List.copyOf(extensionSnapshots);
             dmnSnapshots = List.copyOf(dmnSnapshots);
             controlledLoopSnapshots = List.copyOf(controlledLoopSnapshots);
+            participantRuleSnapshots = List.copyOf(participantRuleSnapshots);
             linkedModels = List.copyOf(linkedModels);
         }
     }

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -13,12 +14,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
 import org.springframework.stereotype.Component;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
+import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 
 class WorkflowUserTaskListenerTest
 {
     private WorkflowUserTaskAuditService auditService;
+    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
+    private WorkflowTaskSlaRuntimeService slaRuntimeService;
     private WorkflowUserTaskListener listener;
 
     /**
@@ -30,7 +36,11 @@ class WorkflowUserTaskListenerTest
     void setUp()
     {
         auditService = mock(WorkflowUserTaskAuditService.class);
+        participantRuleRuntimeService = mock(WorkflowParticipantRuleRuntimeService.class);
+        slaRuntimeService = mock(WorkflowTaskSlaRuntimeService.class);
         listener = new WorkflowUserTaskListener(auditService);
+        listener.setParticipantRuleRuntimeService(participantRuleRuntimeService);
+        listener.setSlaRuntimeService(slaRuntimeService);
     }
 
     /**
@@ -63,6 +73,41 @@ class WorkflowUserTaskListenerTest
 
         verify(auditService).recordAudit(eventName, "task-7", "instance-8",
                 "expense:3:12001", "approveTask", "7", "8");
+    }
+
+    /**
+     * 验证 create 事件先解析最终参与者，再写普通任务审计，最后建立 SLA 状态。
+     * @return void，顺序变化导致审计看见旧办理人或 SLA 提前创建时测试失败
+     */
+    @Test
+    void resolvesParticipantBeforeAuditAndSlaOnCreate()
+    {
+        DelegateTask task = task("create");
+
+        listener.notify(task);
+
+        InOrder lifecycle = inOrder(participantRuleRuntimeService, auditService,
+                slaRuntimeService);
+        lifecycle.verify(participantRuleRuntimeService).resolveCreatedTask(task);
+        lifecycle.verify(auditService).recordAudit("create", "task-7", "instance-8",
+                "expense:3:12001", "approveTask", "7", "8");
+        lifecycle.verify(slaRuntimeService).onTaskEvent("create", "task-7", "instance-8",
+                "expense:3:12001", "approveTask", "7");
+    }
+
+    /**
+     * 验证 assignment 和 complete 只消费既有解析结果，不重复按组织关系改写参与者。
+     * @param eventName String，create 之后的任务生命周期事件
+     * @return void，后续事件重复解析参与者时测试失败
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "assignment", "complete" })
+    void doesNotResolveParticipantAgainAfterCreate(String eventName)
+    {
+        listener.notify(task(eventName));
+
+        verify(participantRuleRuntimeService, never()).resolveCreatedTask(
+                org.mockito.ArgumentMatchers.any());
     }
 
     /**

@@ -405,6 +405,7 @@ public class WorkflowBpmnService
         String value = reader.getAttributeValue(null, "value");
         boolean allowedPlatformProperty =
                 WorkflowControlledLoopBpmnContract.isReservedProperty(name)
+                || WorkflowParticipantRuleBpmnContract.isReservedProperty(name)
                 || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name);
         if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
                 || (name.startsWith("approva.") && !allowedPlatformProperty))
@@ -608,6 +609,25 @@ public class WorkflowBpmnService
         Set<String> uniqueReferences = new HashSet<>();
         for (Process process : processes)
         {
+            if (WorkflowParticipantRuleBpmnContract.hasTaskProperties(process))
+            {
+                throw invalidBpmn("用户任务办理规则不能配置在流程级", null);
+            }
+            if (WorkflowParticipantRuleBpmnContract.hasStartProperties(process))
+            {
+                if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+                {
+                    throw invalidBpmn("已编译执行资源不允许保留流程发起范围作者配置", null);
+                }
+                try
+                {
+                    WorkflowParticipantRuleBpmnContract.readStartRule(process);
+                }
+                catch (IllegalArgumentException exception)
+                {
+                    throw invalidBpmn(exception.getMessage(), exception);
+                }
+            }
             // 主流程唯一开始节点只统计顶层元素；事件子流程和嵌入子流程拥有各自合法的开始事件。
             List<StartEvent> startEvents = process.getFlowElements().stream()
                     .filter(StartEvent.class::isInstance)
@@ -786,6 +806,15 @@ public class WorkflowBpmnService
     private void validateFlowElement(Process process, FlowElement element,
             ValidationContext validationContext)
     {
+        if (WorkflowParticipantRuleBpmnContract.hasStartProperties(element))
+        {
+            throw invalidBpmn("流程发起范围只能配置在可执行流程上", null);
+        }
+        if (WorkflowParticipantRuleBpmnContract.hasTaskProperties(element)
+                && !(element instanceof UserTask))
+        {
+            throw invalidBpmn("办理人规则只能配置在用户任务上", null);
+        }
         if (WorkflowControlledLoopBpmnContract.hasReservedProperties(element)
                 && !(element instanceof UserTask))
         {
@@ -806,6 +835,21 @@ public class WorkflowBpmnService
         }
         if (element instanceof UserTask userTask)
         {
+            if (WorkflowParticipantRuleBpmnContract.hasTaskProperties(userTask))
+            {
+                if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+                {
+                    throw invalidBpmn("已编译执行资源不允许保留办理人作者配置", null);
+                }
+                try
+                {
+                    WorkflowParticipantRuleBpmnContract.readTaskRule(process.getId(), userTask);
+                }
+                catch (IllegalArgumentException exception)
+                {
+                    throw invalidBpmn(exception.getMessage(), exception);
+                }
+            }
             validateExpression(userTask.getAssignee());
             validateExpression(userTask.getOwner());
             validateExpression(userTask.getPriority());

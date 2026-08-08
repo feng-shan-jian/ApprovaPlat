@@ -8,6 +8,7 @@ import org.flowable.engine.RuntimeService;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.flowable.engine.runtime.ProcessInstance;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +16,7 @@ import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow;
+import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
@@ -24,6 +26,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.task.WorkflowStartMultiInstanceContract;
 
 /**
@@ -52,6 +55,9 @@ public class WorkflowProcessStartService
     private final WorkflowAttachmentService attachmentService;
     private final WorkflowProcessDefinitionLockMapper definitionLockMapper;
     private final WorkflowUserSelectionValidator userSelectionValidator;
+
+    /** 流程级发起范围运行授权服务；旧直接构造单元测试时可为空。 */
+    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
 
     /**
      * 创建真实流程发起服务。
@@ -82,6 +88,19 @@ public class WorkflowProcessStartService
         this.attachmentService = attachmentService;
         this.definitionLockMapper = definitionLockMapper;
         this.userSelectionValidator = userSelectionValidator;
+    }
+
+    /**
+     * 延迟注入流程发起范围服务，保留既有直接构造测试兼容性。
+     *
+     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，部署快照与实时组织授权服务
+     * @return void，生产 Spring 容器启动后必须完成注入
+     */
+    @Autowired
+    public void setParticipantRuleRuntimeService(
+            WorkflowParticipantRuleRuntimeService participantRuleRuntimeService)
+    {
+        this.participantRuleRuntimeService = participantRuleRuntimeService;
     }
 
     /**
@@ -190,6 +209,10 @@ public class WorkflowProcessStartService
                     definitionId, deploymentId);
         }
 
+        // 发起范围在引擎写入前按不可变部署快照和当前有效组织授权，拒绝请求不得创建实例。
+        WfDeployParticipantRule startScopeRule = participantRuleRuntimeService == null
+                ? null : participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
+
         LinkedHashMap<String, Object> engineVariables = new LinkedHashMap<>(clientVariables);
         // 发起多实例字段不属于通用表单变量；必须按部署 BPMN 精确校验后由服务端生成保留变量。
         engineVariables.putAll(WorkflowStartMultiInstanceContract.prepareVariables(
@@ -211,6 +234,12 @@ public class WorkflowProcessStartService
         // 实例主键取自 RuntimeService，节点 key 取自部署快照；任一附件失败都会回滚本次引擎发起。
         attachmentService.bindStartAttachments(actor.userId(), snapshot.id(),
                 startForm.nodeKey(), validatedVariables.attachmentIdsByField());
+        if (participantRuleRuntimeService != null && startScopeRule != null)
+        {
+            // 成功审计与实例、首任务和附件绑定同事务提交，后续异常会整体回滚。
+            participantRuleRuntimeService.recordStartAllowed(startScopeRule,
+                    activeDefinition, snapshot.id(), actor.userId());
+        }
         return snapshot;
     }
 

@@ -146,6 +146,9 @@ public class WorkflowModelService
     /** 审批 SLA 真实边界定时器编译和部署快照服务；兼容旧单元构造时可为空。 */
     private WorkflowTaskSlaDeploymentService taskSlaDeploymentService;
 
+    /** 发起范围和单实例任务参与者规则编译及部署快照服务；兼容旧单元构造时可为空。 */
+    private WorkflowParticipantRuleDeploymentService participantRuleDeploymentService;
+
     /** Flowable 模型 metaInfo 的 Jackson 3 结构化读写器。 */
     private final ObjectMapper metadataMapper = JsonMapper.shared();
 
@@ -209,6 +212,18 @@ public class WorkflowModelService
             WorkflowTaskSlaDeploymentService taskSlaDeploymentService)
     {
         this.taskSlaDeploymentService = taskSlaDeploymentService;
+    }
+
+    /**
+     * 延迟注入参与者规则部署服务，保留既有直接构造单元测试兼容性。
+     * @param participantRuleDeploymentService WorkflowParticipantRuleDeploymentService，规则编译与快照服务
+     * @return void，生产 Spring 容器启动后必须完成注入
+     */
+    @Autowired
+    public void setParticipantRuleDeploymentService(
+            WorkflowParticipantRuleDeploymentService participantRuleDeploymentService)
+    {
+        this.participantRuleDeploymentService = participantRuleDeploymentService;
     }
 
     /**
@@ -777,8 +792,16 @@ public class WorkflowModelService
                             : controlledLoopDeploymentService.prepare(document,
                                     extensionDeployment.compiledBpmn(),
                                     buildControlledLoopFormSchemas(snapshotSources), identity.userId());
+            WorkflowPreparedParticipantRuleDeployment participantDeployment =
+                    participantRuleDeploymentService == null
+                            ? new WorkflowPreparedParticipantRuleDeployment(
+                                    controlledLoopDeployment.compiledBpmn(), List.of())
+                            : participantRuleDeploymentService.prepare(document,
+                                    controlledLoopDeployment.compiledBpmn(),
+                                    buildParticipantFormVariables(snapshotSources),
+                                    identity.userId());
             WorkflowPreparedDmnDeployment dmnDeployment =
-                    dmnDecisionService.prepare(controlledLoopDeployment.compiledBpmn());
+                    dmnDecisionService.prepare(participantDeployment.compiledBpmn());
             byte[] executableBpmn = callActivityReferenceService == null
                     ? dmnDeployment.compiledBpmn()
                     : callActivityReferenceService.freezeReferences(dmnDeployment.compiledBpmn());
@@ -833,6 +856,10 @@ public class WorkflowModelService
             if (controlledLoopDeploymentService != null)
             {
                 controlledLoopDeploymentService.persist(deployment.getId(), controlledLoopDeployment);
+            }
+            if (participantRuleDeploymentService != null)
+            {
+                participantRuleDeploymentService.persist(deployment.getId(), participantDeployment);
             }
             dmnDecisionService.persist(deployment.getId(), dmnDeployment, identity.userId());
             if (taskSlaDeploymentService != null)
@@ -1161,6 +1188,25 @@ public class WorkflowModelService
     }
 
     /**
+     * 汇总同一可执行流程全部正式部署表单变量，供 FORM_USER 规则只能引用真实字段的门禁使用。
+     * @param sources List&lt;FormSnapshotSource&gt;，部署事务内固定读取的表单来源
+     * @return Map&lt;String,Set&lt;String&gt;&gt;，流程 key 到不可变表单变量集合
+     */
+    private Map<String, Set<String>> buildParticipantFormVariables(
+            List<FormSnapshotSource> sources)
+    {
+        Map<String, LinkedHashSet<String>> mutable = new LinkedHashMap<>();
+        for (FormSnapshotSource source : sources)
+        {
+            mutable.computeIfAbsent(source.reference().processKey(), ignored -> new LinkedHashSet<>())
+                    .addAll(formTemplateValidator.extractVariableNames(source.content()));
+        }
+        Map<String, Set<String>> result = new LinkedHashMap<>();
+        mutable.forEach((processKey, variables) -> result.put(processKey, Set.copyOf(variables)));
+        return Map.copyOf(result);
+    }
+
+    /**
      * 复制模型元数据并创建大于当前最新版本号的新模型。
      *
      * @param source Model，作为内容来源的任意模型版本
@@ -1333,6 +1379,8 @@ public class WorkflowModelService
         UserTask reviewTask = new UserTask();
         reviewTask.setId("review");
         reviewTask.setName("审批");
+        // 新建模型立即冻结完整作者规则，未经页面编辑直接保存、重开或部署也不会产生无人任务。
+        WorkflowParticipantRuleBpmnContract.addInitialAuthorRules(process, reviewTask);
         List<FlowableListener> taskListeners = new ArrayList<>();
         for (String event : USER_TASK_LISTENER_EVENTS)
         {

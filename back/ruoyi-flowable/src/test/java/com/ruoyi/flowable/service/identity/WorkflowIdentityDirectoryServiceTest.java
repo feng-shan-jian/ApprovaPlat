@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentityOptionView;
+import com.ruoyi.flowable.domain.vo.WorkflowIdentitySelectionView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 
@@ -192,6 +193,54 @@ class WorkflowIdentityDirectoryServiceTest
         assertThatThrownBy(() -> service.listOptions("dept", null, 1, 1))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
                         assertThat(exception.getCode()).isEqualTo(HttpStatus.ERROR));
+    }
+
+    /**
+     * 验证已选对象按作者顺序回显，失去审批资格和物理删除对象不会显示裸主键。
+     *
+     * @return 无返回值，名称、资格状态或删除占位契约漂移时测试失败
+     */
+    @Test
+    void resolvesSavedSelectionsWithoutExposingMissingIdentifiers()
+    {
+        WorkflowIdentitySelectionView existing = new WorkflowIdentitySelectionView(
+                "77", "历史审批人 (reviewer)", "user", true);
+        when(identityMapper.selectIdentitySelectionsByIds("user", List.of(88L, 77L)))
+                .thenReturn(List.of(existing));
+        when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(88L, 77L)))
+                .thenReturn(List.of());
+
+        List<WorkflowIdentitySelectionView> rows = service.resolveSelections(
+                "user", WorkflowIdentityDirectoryService.APPROVAL_CAPABILITY,
+                List.of("88", "77"));
+
+        assertThat(rows).extracting(WorkflowIdentitySelectionView::value)
+                .containsExactly("88", "77");
+        assertThat(rows).allMatch(row -> !row.available());
+        assertThat(rows.get(0).label()).isEqualTo("已删除用户（不可用）")
+                .doesNotContain("88");
+        assertThat(rows.get(1).label()).contains("历史审批人", "已停用或无当前资格");
+    }
+
+    /**
+     * 验证角色回显必须使用 ROLE 受控值并按 claim 资格查询，非法裸数字在数据库前失败。
+     *
+     * @return 无返回值，目录编码或能力隔离被绕过时测试失败
+     */
+    @Test
+    void validatesRoleSelectionEncodingAndClaimCapability()
+    {
+        WorkflowIdentitySelectionView role = new WorkflowIdentitySelectionView(
+                "ROLE7", "角色: 财务审批", "role", true);
+        when(identityMapper.selectIdentitySelectionsByIds("role", List.of(7L)))
+                .thenReturn(List.of(role));
+        when(identityMapper.selectClaimEligibleRoleIdsByRoleIds(List.of(7L)))
+                .thenReturn(List.of(7L));
+
+        assertThat(service.resolveSelections("role", "claim", List.of("ROLE7")))
+                .containsExactly(role);
+        assertBadRequest(() -> service.resolveSelections(
+                "role", "claim", List.of("7")));
     }
 
     /**

@@ -34,7 +34,7 @@ class WorkflowControllerPermissionContractTest
             WfTaskController.class);
 
     /** 当前生产工作流显式方法级 mapping 数量。 */
-    private static final int EXPECTED_MAPPING_COUNT = 106;
+    private static final int EXPECTED_MAPPING_COUNT = 107;
 
     /**
      * 冻结全部工作流 HTTP 入口数量，并保证每个入口均经过方法级 URL 权限门禁。
@@ -157,6 +157,9 @@ class WorkflowControllerPermissionContractTest
         assertPreAuthorize(WfFormController.class, "getInfo",
                 "@ss.hasAnyPermi('workflow:form:query,workflow:form:edit')",
                 Long.class);
+        assertPreAuthorize(WfIdentityController.class, "resolveOptions",
+                "@ss.hasPermi('workflow:model:designer')",
+                com.ruoyi.flowable.domain.dto.WorkflowIdentitySelectionRequest.class);
     }
 
     /**

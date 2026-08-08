@@ -50,6 +50,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow;
+import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
@@ -64,6 +65,7 @@ import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 class WorkflowProcessStartServiceTest
@@ -91,6 +93,7 @@ class WorkflowProcessStartServiceTest
     private IdentityService identityService;
     private WorkflowAttachmentService attachmentService;
     private WorkflowProcessDefinitionLockMapper definitionLockMapper;
+    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
     private WorkflowProcessStartService service;
 
     /**
@@ -113,6 +116,7 @@ class WorkflowProcessStartServiceTest
         identityService = mock(IdentityService.class);
         attachmentService = mock(WorkflowAttachmentService.class);
         definitionLockMapper = mock(WorkflowProcessDefinitionLockMapper.class);
+        participantRuleRuntimeService = mock(WorkflowParticipantRuleRuntimeService.class);
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3")));
         when(attachmentService.prepareStartVariables(anyString(), anyMap(), anyMap()))
@@ -250,6 +254,63 @@ class WorkflowProcessStartServiceTest
         verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
         verify(attachmentService, never()).bindStartAttachments(
                 anyString(), anyString(), anyString(), anyMap());
+    }
+
+    /**
+     * 验证部署快照授权发生在引擎写入前，成功审计发生在实例与附件绑定后。
+     *
+     * @return void，人工发起授权或审计顺序变化时测试失败
+     */
+    @Test
+    void authorizesHumanStartBeforeEngineAndAuditsAfterSuccessfulSideEffects()
+    {
+        ProcessDefinition definition = stubSelectedAndActiveDefinition();
+        stubStartForm();
+        WfDeployParticipantRule rule = new WfDeployParticipantRule();
+        when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
+                .thenReturn(rule);
+        ProcessInstance startedInstance = processInstance("instance-scope-42");
+        when(runtimeService.startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-42"), anyMap()))
+                .thenReturn(startedInstance);
+
+        service.start(validRequest());
+
+        InOrder lifecycle = inOrder(participantRuleRuntimeService, runtimeService,
+                attachmentService);
+        lifecycle.verify(participantRuleRuntimeService).assertCanStart(any(), eq(definition));
+        lifecycle.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-42"), anyMap());
+        lifecycle.verify(attachmentService).bindStartAttachments(
+                "7", "instance-scope-42", "start", Map.of());
+        lifecycle.verify(participantRuleRuntimeService).recordStartAllowed(
+                rule, definition, "instance-scope-42", "7");
+    }
+
+    /**
+     * 验证未命中部署发起范围时不创建实例、不绑定附件且不写成功审计。
+     *
+     * @return void，拒绝请求产生任何业务副作用时测试失败
+     */
+    @Test
+    void rejectsHumanStartScopeBeforeAnyEngineSideEffect()
+    {
+        ProcessDefinition definition = stubSelectedAndActiveDefinition();
+        stubStartForm();
+        when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
+                .thenThrow(new ServiceException("当前用户不在流程发起范围内",
+                        HttpStatus.FORBIDDEN).setSubCode("PROCESS_START_SCOPE_DENIED"));
+
+        assertThatThrownBy(() -> service.start(validRequest()))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getSubCode())
+                                .isEqualTo("PROCESS_START_SCOPE_DENIED"));
+
+        verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+        verify(attachmentService, never()).bindStartAttachments(
+                anyString(), anyString(), anyString(), anyMap());
+        verify(participantRuleRuntimeService, never()).recordStartAllowed(
+                any(), any(), anyString(), anyString());
     }
 
     /**
@@ -621,9 +682,12 @@ class WorkflowProcessStartServiceTest
     {
         WorkflowStartVariableValidator variableValidator = new WorkflowStartVariableValidator(
                 new WorkflowFormTemplateValidator());
-        return new WorkflowProcessStartService(operations, repositoryService, runtimeService,
+        WorkflowProcessStartService created = new WorkflowProcessStartService(
+                operations, repositoryService, runtimeService,
                 processQueryService, variableValidator, attachmentService,
                 definitionLockMapper, new WorkflowUserSelectionValidator(identityResolver));
+        created.setParticipantRuleRuntimeService(participantRuleRuntimeService);
+        return created;
     }
 
     /**

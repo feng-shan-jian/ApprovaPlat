@@ -1068,6 +1068,8 @@ class WorkflowRbacHttpIT
     {
         return switch (endpointKey)
         {
+            case "WfIdentityController#resolveOptions" ->
+                "{\"type\":\"user\",\"capability\":\"\",\"values\":[\"1\"]}";
             case "WfCategoryController#add" ->
                 "{\"categoryName\":\"RBAC拒绝探针\",\"code\":\"rbac_denied_probe\"}";
             case "WfCategoryController#edit" ->

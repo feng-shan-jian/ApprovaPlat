@@ -76,7 +76,8 @@ class WorkflowModelSaveDdlContractTest
         Pattern checkName = Pattern.compile("(?i)'[^']+'\\s+as\\s+check_name");
 
         assertThat(mutation.matcher(verification).find()).isFalse();
-        assertThat(checkName.matcher(verification).results().count()).isEqualTo(32L);
+        // 各独立业务域可追加只读门禁；本测试只约束模型保存基线不能被删减。
+        assertThat(checkName.matcher(verification).results().count()).isGreaterThanOrEqualTo(32L);
         assertThat(normalized).contains(
                 "union all select 'wf_model_save_idempotency'",
                 "when count(a.table_name) = 10",

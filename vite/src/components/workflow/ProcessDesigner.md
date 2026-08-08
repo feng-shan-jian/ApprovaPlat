@@ -19,6 +19,7 @@
     :preference="designerPreference"
     :preference-saving="preferenceSaving"
     @identity-search="searchIdentityDirectory"
+    @identity-resolve="resolveSelectedIdentities"
     @preference-save="savePreference"
     @save="saveToServer"
     @error="showError"
@@ -28,7 +29,7 @@
 <script setup>
 import { ElMessage } from 'element-plus'
 import { listForms } from '@/api/workflow/form'
-import { listApprovalUserOptions, listClaimableIdentityOptions } from '@/api/workflow/identity'
+import { listApprovalUserOptions, listClaimableIdentityOptions, resolveIdentityOptions } from '@/api/workflow/identity'
 import { getModel, getModelBpmnXml, saveModel } from '@/api/workflow/model'
 import ProcessDesigner from '@/components/workflow/ProcessDesigner.vue'
 
@@ -73,6 +74,11 @@ async function searchIdentityDirectory({ type, capability, keyword = '' }) {
   } finally {
     identityPending.value -= 1
   }
+}
+
+async function resolveSelectedIdentities({ target, type, capability, values }) {
+  const response = await resolveIdentityOptions({ type, capability, values })
+  identityOptions[target] = mergeByValue(identityOptions[target], response.data || [])
 }
 
 /**
@@ -144,6 +150,7 @@ onMounted(async () => {
 | `save` | `xml: string` | 本地关键门禁通过后请求页面保存。 |
 | `error` | `Error` | 导入、导出或本地校验失败。 |
 | `identity-search` | `{ type: 'user' \| 'group', keyword: string, capability: 'approval' \| 'claim' }` | 请求页面检索正式资格目录；直接办理人使用 `approval`，候选用户和候选组使用 `claim`。 |
+| `identity-resolve` | `{ target, type, capability, values }` | 请求页面通过 `/workflow/identity/options/resolve` 批量核验并回显当前分页外的已选正式对象。 |
 | `preference-save` | `object` | 请求页面把字段完整的当前用户偏好写入正式数据库。 |
 
 ## 公开方法
@@ -165,11 +172,15 @@ onMounted(async () => {
 - 表单来源切换和字段修改均进入 bpmn-js 命令栈；审计监听器等非表单 `extensionElements` 在重建 FormData 时保持不变。
 - ServiceTask 不接受任意 Java 类名或 Spring Bean。设计器从正式扩展目录读取最新版，只在作者 XML 保存稳定键和 JSON 配置；部署编译器冻结精确版本并生成不可变执行快照。
 - 用户任务的办理人、候选用户、候选组互斥写入并使用独立选项池。直接办理人只来自 `capability=approval` 目录；候选用户、角色和部门只来自 `capability=claim` 目录，角色/部门还必须至少包含一名完整可认领办理成员。候选组值继续使用后端规定的 `ROLE<id>` 或 `DEPT<id>`。
+- 流程级发起范围固定为公开、指定用户、指定角色、指定部门四类；单实例 UserTask 固定为固定用户、候选用户、候选角色/部门、发起人本人、发起人直属上级、指定部门负责人、发起人所在部门内指定角色、表单用户字段八类。作者 BPMN 保存 `approva.startScope.*` / `approva.participant.*` 的规则版本、类型、目标、表单字段和 `FAIL` 策略，部署时后端剥离作者属性并冻结到正式快照。
+- 需要目录目标或表单字段的规则支持分步编辑；切换规则后产生的暂时空值只存在于当前画布，正式保存门禁仍要求目标和字段完整。
+- 重开模型时，当前远程分页外的已选身份通过 `/workflow/identity/options/resolve` 回显正式名称和实时可用状态；删除对象使用稳定不可用文案，不向页面暴露裸主键。
 - 会签/或签提供“办理时选择”“发起时选择”和“固定人员”三种受控来源。办理时来源固定写入 `${multiInstanceHandler.getUserIds(execution)}`，由唯一前驱任务提交下一办理人；发起时来源固定写入 `${multiInstanceHandler.getStartUserIds(execution)}`，发起页按后端部署模型投影每个节点的必填审批用户字段；固定来源从审批资格目录选择 1 至 100 名用户，写入严格的 `${multiInstanceHandler.getFixedUserIds(execution, '1,2')}`。三种来源均固定使用并行循环、`assignee` 元素变量、`${assignee}` 办理人和 ALL/ANY 完成条件，后端在保存、部署、发起和节点进入时再次校验正式审批资格。
+- 动态多实例通过“动态 + 会签/或签”受控模式配置。组件固定写入并行循环、`${multiInstanceHandler.getUserIds(execution)}`、`assignee` 元素变量、`${assignee}` 办理人以及对应 ALL/ANY 完成条件，不提供任意方法输入。
 - 受控整改循环只对 UserTask 开放。判断字段只能来自该节点正式模板或内嵌 FormData 的可写标量字段；附件、多选、表格、对象、范围和只读字段不会进入选项。设计器固定写入 `approva.controlledLoop.*` 五项属性，达到最大轮次时由后端拒绝继续整改，不会自动放行。
 - 受控整改循环在画布节点上显示最大轮次徽标。面板采用“填写草稿后显式应用”，避免不完整属性进入 BPMN 命令栈；布尔和静态枚举值只能从正式目录选择。任意 `standardLoopCharacteristics` 仍仅支持 XML 往返并明确禁止部署。
-- UserTask 不展示串行或普通并行多实例的技术编辑入口，也不要求设计者手写 collection、elementVariable 或 completionCondition；生产审批人员并行办理统一使用“会签 / 或签”。其他 BPMN Activity 仍保留标准多实例编辑能力并接受后端表达式白名单校验。
-- 从受控会签/或签切换到其他循环类型时会同时清理固定 handler、元素变量、完成条件和办理人，避免属性回读把非受控模式错误恢复为会签/或签。
+- 从动态模式切换为串行或普通并行时会同时清理固定 handler、元素变量、完成条件和办理人，避免属性回读把静态模式错误恢复为动态模式。
+- 串行和普通并行多实例保留静态集合、元素变量和完成条件编辑能力，但不能引用 `multiInstanceHandler`；最终表达式白名单由后端再次强制校验。
 - 更新已导入的静态多实例时只修改面板负责的核心字段，不替换整个循环对象，因此未编辑的标准数据引用、索引变量和 `loopCardinality` 可以稳定往返。
 - 用户任务的“创建、分配、完成”审计监听器是后端运行时身份审计的内部技术字段，不在属性面板展示。保存、下载和 `getXml()` 会无条件重建每个用户任务的固定 `delegateExpression="${userTaskListener}"` 三项监听器，因而错误命名空间、未知属性、字段注入、重复事件和非法实现都不会进入持久化结果；其他业务扩展保持不变。
 - 切换办理方式时会立即清理旧身份属性；在新身份尚未选择前，属性面板仍保留用户刚选择的模式，避免同步回读把界面错误重置为“办理人”。

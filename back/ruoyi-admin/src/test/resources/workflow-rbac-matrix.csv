@@ -60,6 +60,7 @@ WfFormController,add,POST,/workflow/form,SINGLE,workflow:form:add,ALLOW,ALLOW,DE
 WfFormController,edit,PUT,/workflow/form,SINGLE,workflow:form:edit,ALLOW,ALLOW,DENY,DENY,DENY
 WfFormController,remove,DELETE,/workflow/form/{formIds},SINGLE,workflow:form:remove,ALLOW,ALLOW,DENY,DENY,DENY
 WfIdentityController,options,GET,/workflow/identity/options,ANY,workflow:model:designer|workflow:process:approval|workflow:process:manageList,ALLOW,ALLOW,DENY,ALLOW,DENY
+WfIdentityController,resolveOptions,POST,/workflow/identity/options/resolve,SINGLE,workflow:model:designer,ALLOW,ALLOW,DENY,DENY,DENY
 WfInstanceController,updateState,POST,/workflow/instance/updateState,SINGLE,workflow:process:state,ALLOW,DENY,DENY,DENY,DENY
 WfInstanceController,terminate,POST,/workflow/instance/terminate,ANY,workflow:process:cancel|workflow:process:terminate,ALLOW,DENY,ALLOW,DENY,DENY
 WfModelController,list,GET,/workflow/model/list,SINGLE,workflow:model:list,ALLOW,ALLOW,DENY,DENY,DENY

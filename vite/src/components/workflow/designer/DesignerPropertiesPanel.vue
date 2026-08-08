@@ -52,7 +52,29 @@
               />
             </template>
 
+            <ParticipantRuleEditor
+              v-if="flags.process"
+              v-model="state.participantRule"
+              mode="start"
+              :identity-options="identityOptions"
+              :loading="identityLoading"
+              @identity-search="emit('identity-search', $event)"
+              @identity-resolve="emit('identity-resolve', $event)"
+              @change="emit('participant-rule-change', $event)"
+            />
+
             <template v-if="flags.userTask">
+              <ParticipantRuleEditor
+                v-if="state.multiInstanceType === 'none'"
+                v-model="state.participantRule"
+                mode="task"
+                :identity-options="identityOptions"
+                :form-fields="participantFormFieldOptions"
+                :loading="identityLoading"
+                @identity-search="emit('identity-search', $event)"
+                @identity-resolve="emit('identity-resolve', $event)"
+                @change="emit('participant-rule-change', $event)"
+              />
               <el-form-item v-if="state.multiInstanceType === 'controlled'" label="签署规则">
                 <el-segmented v-model="state.multiInstanceApprovalMode" :options="multiInstanceApprovalOptions" @change="emit('multi-instance-change')" />
               </el-form-item>
@@ -87,7 +109,7 @@
                   <el-input v-model="state.completionCondition" type="textarea" :rows="2" maxlength="512" @change="emit('multi-instance-change')" />
                 </el-form-item>
               </template>
-              <template v-if="state.multiInstanceType !== 'controlled'">
+              <template v-if="!['none', 'controlled'].includes(state.multiInstanceType)">
                 <el-form-item label="办理方式">
                   <el-segmented v-model="state.assignmentType" :options="assignmentOptions" @change="emit('assignment-change')" />
                 </el-form-item>
@@ -424,6 +446,7 @@ import BusinessListenerEditor from './BusinessListenerEditor.vue'
 import ExtensionPropertyEditor from './ExtensionPropertyEditor.vue'
 import CollaborationMessageEditor from './CollaborationMessageEditor.vue'
 import UserTaskSlaEditor from './UserTaskSlaEditor.vue'
+import ParticipantRuleEditor from './ParticipantRuleEditor.vue'
 
 const props = defineProps({
   selected: { type: Boolean, default: false },
@@ -431,12 +454,13 @@ const props = defineProps({
   state: { type: Object, required: true },
   flags: { type: Object, required: true },
   forms: { type: Array, default: () => [] },
-  identityOptions: { type: Object, default: () => ({ assignees: [], candidateUsers: [], candidateGroups: [] }) },
+  identityOptions: { type: Object, default: () => ({ assignees: [], candidateUsers: [], candidateGroups: [], candidateRoles: [], activeUsers: [], activeRoles: [], activeDepts: [] }) },
   identityLoading: { type: Boolean, default: false },
   assignmentOptions: { type: Array, default: () => [] },
   multiInstanceOptions: { type: Array, default: () => [] },
   multiInstanceApprovalOptions: { type: Array, default: () => [] },
   controlledLoopFieldOptions: { type: Array, default: () => [] },
+  participantFormFieldOptions: { type: Array, default: () => [] },
   extensionOptions: { type: Array, default: () => [] },
   formFieldOptions: { type: Array, default: () => [] },
   connectorEndpoints: { type: Array, default: () => [] },
@@ -455,10 +479,10 @@ const props = defineProps({
 
 const emit = defineEmits([
   'common-change', 'id-change', 'process-change', 'form-source-change', 'form-change',
-  'embedded-form-change', 'assignment-change',
+  'embedded-form-change', 'assignment-change', 'participant-rule-change',
   'user-task-change', 'extension-selection-change', 'service-task-change', 'condition-change', 'documentation-change',
   'multi-instance-change', 'activity-change', 'call-activity-change', 'event-change', 'dmn-change',
-  'identity-search', 'business-execution-listener-change', 'business-task-listener-change',
+  'identity-search', 'identity-resolve', 'business-execution-listener-change', 'business-task-listener-change',
   'extension-properties-change', 'sla-change'
 ])
 

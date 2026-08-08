@@ -103,7 +103,8 @@ public class WorkflowBpmnIdentityValidator
     {
         return hasText(task.getAssignee())
                 || hasAnyText(task.getCandidateUsers())
-                || hasAnyText(task.getCandidateGroups());
+                || hasAnyText(task.getCandidateGroups())
+                || WorkflowParticipantRuleBpmnContract.hasTaskProperties(task);
     }
 
     /**

@@ -4,14 +4,14 @@
 SELECT
     'workflow_schema_table_counts' AS check_name,
     CASE
-        WHEN COUNT(*) = 99
+        WHEN COUNT(*) = 101
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) <> 'ACT_'
                  AND LEFT(UPPER(TABLE_NAME), 4) <> 'FLW_'
                  AND LEFT(UPPER(TABLE_NAME), 3) <> 'WF_'
                  AND LEFT(UPPER(TABLE_NAME), 5) <> 'QRTZ_') = 20
          AND SUM(LEFT(UPPER(TABLE_NAME), 5) = 'QRTZ_') = 11
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) IN ('ACT_', 'FLW_')) = 36
-         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 32
+         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 34
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -924,6 +924,166 @@ SELECT
             'none'
         )
     ) AS detail
+FROM integrity_issues;
+
+WITH expected_tables AS (
+    SELECT 'wf_deploy_participant_rule' AS table_name
+    UNION ALL SELECT 'wf_participant_resolution_audit'
+),
+actual_tables AS (
+    SELECT TABLE_NAME AS table_name, ENGINE, TABLE_COLLATION
+    FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME IN ('wf_deploy_participant_rule', 'wf_participant_resolution_audit')
+)
+SELECT 'workflow_participant_rule_tables' AS check_name,
+       CASE WHEN COUNT(a.table_name) = 2
+              AND SUM(a.ENGINE = 'InnoDB') = 2
+              AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 2
+            THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('present=', COUNT(a.table_name), ', missing=', COALESCE(
+           GROUP_CONCAT(CASE WHEN a.table_name IS NULL THEN e.table_name END
+               ORDER BY e.table_name), 'none')) AS detail
+FROM expected_tables e
+LEFT JOIN actual_tables a ON a.table_name = e.table_name;
+
+WITH expected_columns AS (
+    SELECT 'wf_deploy_participant_rule' AS table_name, 'rule_id' AS column_name
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'deploy_id'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'process_key'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'activity_id'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'rule_scope'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'assignment_mode'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'rule_type'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'target_ids'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'form_field'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'no_match_policy'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'rule_version'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'checksum'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'audit_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'event_type'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'deploy_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'process_definition_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'process_instance_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'task_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'activity_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'rule_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'initiator_user_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'actor_user_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'resolved_user_ids'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'resolved_group_ids'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'result_code'
+),
+missing_columns AS (
+    SELECT e.table_name, e.column_name
+    FROM expected_columns e
+    LEFT JOIN information_schema.COLUMNS c
+      ON c.TABLE_SCHEMA = DATABASE()
+     AND c.TABLE_NAME = e.table_name
+     AND c.COLUMN_NAME = e.column_name
+    WHERE c.COLUMN_NAME IS NULL
+)
+SELECT 'workflow_participant_rule_columns' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(CONCAT(table_name, '.', column_name)
+           ORDER BY table_name, column_name), 'none')) AS detail
+FROM missing_columns;
+
+WITH expected_indexes AS (
+    SELECT 'wf_deploy_participant_rule' AS table_name,
+           'uk_wf_deploy_participant_rule_node' AS index_name
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'idx_wf_deploy_participant_rule_checksum'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'idx_wf_participant_audit_instance'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'idx_wf_participant_audit_task'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'idx_wf_participant_audit_rule_time'
+),
+missing_indexes AS (
+    SELECT e.table_name, e.index_name
+    FROM expected_indexes e
+    LEFT JOIN information_schema.STATISTICS s
+      ON s.TABLE_SCHEMA = DATABASE()
+     AND s.TABLE_NAME = e.table_name
+     AND s.INDEX_NAME = e.index_name
+    WHERE s.INDEX_NAME IS NULL
+)
+SELECT 'workflow_participant_rule_indexes' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(CONCAT(table_name, '.', index_name)
+           ORDER BY table_name, index_name), 'none')) AS detail
+FROM missing_indexes;
+
+WITH expected_checks AS (
+    SELECT 'chk_wf_deploy_participant_rule_relation' AS constraint_name
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_targets'
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_form'
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_policy'
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_version'
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_checksum'
+    UNION ALL SELECT 'chk_wf_participant_audit_event'
+    UNION ALL SELECT 'chk_wf_participant_audit_result'
+    UNION ALL SELECT 'chk_wf_participant_audit_relation'
+    UNION ALL SELECT 'chk_wf_participant_audit_rule'
+    UNION ALL SELECT 'chk_wf_participant_audit_initiator'
+    UNION ALL SELECT 'chk_wf_participant_audit_actor'
+),
+missing_checks AS (
+    SELECT e.constraint_name
+    FROM expected_checks e
+    LEFT JOIN information_schema.TABLE_CONSTRAINTS c
+      ON c.CONSTRAINT_SCHEMA = DATABASE()
+     AND c.CONSTRAINT_NAME = e.constraint_name
+     AND c.CONSTRAINT_TYPE = 'CHECK'
+    WHERE c.CONSTRAINT_NAME IS NULL
+)
+SELECT 'workflow_participant_rule_checks' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(constraint_name ORDER BY constraint_name), 'none')) AS detail
+FROM missing_checks;
+
+SELECT 'workflow_participant_audit_retention_foreign_keys' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('unexpected=', COALESCE(GROUP_CONCAT(CONSTRAINT_NAME ORDER BY CONSTRAINT_NAME), 'none')) AS detail
+FROM information_schema.KEY_COLUMN_USAGE
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'wf_participant_resolution_audit'
+  AND REFERENCED_TABLE_NAME IS NOT NULL;
+
+WITH integrity_issues AS (
+    SELECT 'participant_rule_missing_deployment' AS issue_name, COUNT(*) AS issue_count
+    FROM wf_deploy_participant_rule r
+    LEFT JOIN ACT_RE_DEPLOYMENT d ON d.ID_ = r.deploy_id
+    WHERE d.ID_ IS NULL
+
+    UNION ALL
+
+    SELECT 'participant_rule_missing_start_scope', COUNT(*)
+    FROM (
+        SELECT deploy_id, process_key
+        FROM wf_deploy_participant_rule
+        GROUP BY deploy_id, process_key
+        HAVING SUM(rule_scope = 'START') <> 1
+    ) invalid_scope
+
+    UNION ALL
+
+    SELECT 'participant_audit_invalid_row', COUNT(*)
+    FROM wf_participant_resolution_audit a
+    WHERE a.rule_id <= 0
+       OR a.initiator_user_id NOT REGEXP '^[1-9][0-9]{0,18}$'
+       OR (a.actor_user_id IS NOT NULL
+           AND a.actor_user_id NOT REGEXP '^[1-9][0-9]{0,18}$')
+       OR (a.event_type = 'START' AND
+           (a.task_id IS NOT NULL OR a.activity_id <> ''
+            OR (a.result_code = 'ALLOWED' AND a.process_instance_id IS NULL)
+            OR (a.result_code = 'DENIED' AND a.process_instance_id IS NOT NULL)))
+       OR (a.event_type = 'TASK' AND
+           (a.task_id IS NULL OR a.process_instance_id IS NULL OR a.activity_id = ''))
+)
+SELECT 'workflow_participant_rule_data_integrity' AS check_name,
+       CASE WHEN SUM(issue_count) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('issues=', SUM(issue_count), ', detail=', COALESCE(
+           GROUP_CONCAT(CASE WHEN issue_count > 0 THEN CONCAT(issue_name, ':', issue_count) END
+               ORDER BY issue_name), 'none')) AS detail
 FROM integrity_issues;
 
 SELECT

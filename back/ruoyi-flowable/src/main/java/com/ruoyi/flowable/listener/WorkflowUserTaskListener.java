@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 
 /**
  * BPMN 用户任务固定监听入口，只转发批准事件，不执行脚本、字段注入或业务状态改写。
@@ -20,6 +21,9 @@ public class WorkflowUserTaskListener implements TaskListener
 
     /** SLA 生命周期服务；旧纯单元测试直接构造监听器时可为空。 */
     private WorkflowTaskSlaRuntimeService slaRuntimeService;
+
+    /** 单实例参与者规则运行服务；旧纯单元测试直接构造监听器时可为空。 */
+    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
 
     /**
      * 创建受控用户任务监听器。
@@ -44,6 +48,18 @@ public class WorkflowUserTaskListener implements TaskListener
     }
 
     /**
+     * 延迟注入单实例参与者规则运行服务，保留既有直接构造测试兼容性。
+     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，实时组织解析服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setParticipantRuleRuntimeService(
+            WorkflowParticipantRuleRuntimeService participantRuleRuntimeService)
+    {
+        this.participantRuleRuntimeService = participantRuleRuntimeService;
+    }
+
+    /**
      * 仅接受 create、assignment 和 complete 三种固定 Flowable 事件并转发不可变任务上下文。
      *
      * @param delegateTask DelegateTask，Flowable 当前命令提供的用户任务上下文
@@ -62,7 +78,12 @@ public class WorkflowUserTaskListener implements TaskListener
         {
             case EVENTNAME_CREATE, EVENTNAME_ASSIGNMENT, EVENTNAME_COMPLETE ->
             {
-                // 监听器不读取 BPMN 字段或流程变量，只把 Flowable 固有任务元数据交给领域服务。
+                if (EVENTNAME_CREATE.equals(eventName) && participantRuleRuntimeService != null)
+                {
+                    // create 事务内先按部署快照和实时组织解析，使后续身份审计看到最终 assignee/candidate。
+                    participantRuleRuntimeService.resolveCreatedTask(delegateTask);
+                }
+                // 固定监听入口只负责编排，规则解析和任务审计分别由独立领域服务维护。
                 auditService.recordAudit(eventName, delegateTask.getId(),
                         delegateTask.getProcessInstanceId(),
                         delegateTask.getProcessDefinitionId(),

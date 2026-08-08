@@ -27,6 +27,8 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_form`",
                 "create table if not exists `wf_deploy_form`",
                 "create table if not exists `wf_deploy_controlled_loop`",
+                "create table if not exists `wf_deploy_participant_rule`",
+                "create table if not exists `wf_participant_resolution_audit`",
                 "create table if not exists `wf_controlled_loop_execution`",
                 "create table if not exists `wf_copy`",
                 "create table if not exists `wf_model_save_idempotency`",
@@ -80,6 +82,14 @@ class WorkflowBusinessDdlContractTest
                 "constraint `chk_wf_controlled_loop_actor` check",
                 "constraint `chk_wf_controlled_loop_outcome` check (`outcome` in ('repeat', 'exit'))",
                 "key `idx_wf_copy_user_status_time` (`user_id`, `del_flag`, `create_time`)");
+        assertThat(ddl).contains(
+                "unique key `uk_wf_deploy_participant_rule_node`",
+                "constraint `chk_wf_deploy_participant_rule_relation` check",
+                "constraint `chk_wf_deploy_participant_rule_targets` check",
+                "constraint `chk_wf_deploy_participant_rule_policy` check (`no_match_policy` = 'fail')",
+                "constraint `chk_wf_participant_audit_relation` check",
+                "constraint `chk_wf_participant_audit_actor` check")
+                .doesNotContain("fk_wf_participant", "foreign key (`rule_id`)");
         assertThat(ddl).contains(
                 "unique key `uk_wf_business_calendar_key` (`calendar_key`)",
                 "constraint `chk_wf_deploy_task_sla_escalation` check",
@@ -149,6 +159,16 @@ class WorkflowBusinessDdlContractTest
                 "deploy_extension_snapshot_mismatch",
                 "connector_endpoint_invalid_row",
                 "connector_invocation_invalid_state");
+        assertThat(normalized).contains(
+                "workflow_participant_rule_tables",
+                "workflow_participant_rule_columns",
+                "workflow_participant_rule_indexes",
+                "workflow_participant_rule_checks",
+                "workflow_participant_audit_retention_foreign_keys",
+                "workflow_participant_rule_data_integrity",
+                "participant_rule_missing_deployment",
+                "participant_rule_missing_start_scope",
+                "participant_audit_invalid_row");
         assertThat(normalized).contains(
                 "workflow_runtime_integration_tables",
                 "workflow_runtime_integration_columns",

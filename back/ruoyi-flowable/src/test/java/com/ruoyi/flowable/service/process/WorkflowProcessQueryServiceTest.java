@@ -75,6 +75,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
@@ -123,6 +124,9 @@ class WorkflowProcessQueryServiceTest
     @Mock
     private WorkflowTaskLifecycleService taskLifecycleService;
 
+    @Mock
+    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
+
     private ProcessDefinitionQuery definitionQuery;
 
     private DeploymentQuery deploymentQuery;
@@ -159,6 +163,9 @@ class WorkflowProcessQueryServiceTest
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3")));
         when(identityResolver.resolveClaimEligibleUserIds(List.of("7")))
                 .thenReturn(Set.of("7"));
+        // 历史部署未托管时返回 null，继续覆盖既有 starter identity link 兼容链。
+        when(participantRuleRuntimeService.canStartIfManaged(any(), any()))
+                .thenReturn(null);
         when(repositoryService.createProcessDefinitionQuery()).thenReturn(definitionQuery);
         when(repositoryService.createDeploymentQuery()).thenReturn(deploymentQuery);
         when(historyService.createHistoricProcessInstanceQuery()).thenReturn(processQuery);
@@ -172,6 +179,7 @@ class WorkflowProcessQueryServiceTest
                 processAccessService,
                 deploymentService, deployFormMapper, copyMapper, userService,
                 taskLifecycleService);
+        service.setParticipantRuleRuntimeService(participantRuleRuntimeService);
     }
 
     /**
@@ -210,6 +218,42 @@ class WorkflowProcessQueryServiceTest
         verify(definitionQuery).count();
         verify(definitionQuery).listPage(0, 3);
         verify(definitionQuery, never()).list();
+        verify(participantRuleRuntimeService).canStartIfManaged(any(), eq(publicDefinition));
+        verify(participantRuleRuntimeService).canStartIfManaged(any(), eq(groupDefinition));
+        verify(participantRuleRuntimeService).canStartIfManaged(any(), eq(deniedDefinition));
+    }
+
+    /**
+     * 验证新部署定义优先按不可变范围快照过滤，拒绝结果不会回退旧 starter link。
+     *
+     * @return 无返回值，快照被旧 identity link 绕过时测试失败
+     */
+    @Test
+    void filtersStartableDefinitionsBySnapshotWithoutLegacyFallback()
+    {
+        ProcessDefinition allowed = definition(
+                "definition-snapshot-allowed", "allowed", "deploy-allowed", false);
+        ProcessDefinition denied = definition(
+                "definition-snapshot-denied", "denied", "deploy-denied", false);
+        when(definitionQuery.count()).thenReturn(2L);
+        when(definitionQuery.listPage(0, 2)).thenReturn(List.of(allowed, denied));
+        when(participantRuleRuntimeService.canStartIfManaged(any(), eq(allowed)))
+                .thenReturn(true);
+        when(participantRuleRuntimeService.canStartIfManaged(any(), eq(denied)))
+                .thenReturn(false);
+        Deployment deployment = mock(Deployment.class);
+        when(deployment.getDeploymentTime())
+                .thenReturn(Date.from(Instant.parse("2026-08-08T08:00:00Z")));
+        when(deploymentQuery.singleResult()).thenReturn(deployment);
+
+        WorkflowPageResult<WorkflowStartableDefinitionView> result =
+                service.listStartable(null, 1, 10);
+
+        assertThat(result.total()).isEqualTo(1);
+        assertThat(result.rows()).singleElement()
+                .extracting(WorkflowStartableDefinitionView::definitionId)
+                .isEqualTo("definition-snapshot-allowed");
+        verify(repositoryService, never()).getIdentityLinksForProcessDefinition(anyString());
     }
 
     /**

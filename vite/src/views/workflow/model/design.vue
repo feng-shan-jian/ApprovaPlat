@@ -26,6 +26,7 @@
       :preference-saving="preferenceSaving"
       height="calc(100vh - 178px)"
       @identity-search="searchIdentityDirectory"
+      @identity-resolve="resolveSelectedIdentities"
       @preference-save="savePreference"
       @save="saveDesign"
       @error="showDesignerError"
@@ -35,7 +36,7 @@
 
 <script setup name="WorkflowModelDesign">
 import { listForms } from '@/api/workflow/form'
-import { listApprovalUserOptions, listClaimableIdentityOptions } from '@/api/workflow/identity'
+import { listApprovalUserOptions, listClaimableIdentityOptions, listIdentityOptions, resolveIdentityOptions } from '@/api/workflow/identity'
 import { getModel, getModelBpmnXml, saveModel } from '@/api/workflow/model'
 import { getDesignerPreference, saveDesignerPreference } from '@/api/workflow/designer'
 import ProcessDesigner from '@/components/workflow/ProcessDesigner.vue'
@@ -50,7 +51,10 @@ const ready = ref(false)
 const bpmnXml = ref('')
 const model = reactive({})
 const formOptions = ref([])
-const identityOptions = reactive({ assignees: [], candidateUsers: [], candidateGroups: [] })
+const identityOptions = reactive({
+  assignees: [], candidateUsers: [], candidateGroups: [], candidateRoles: [],
+  activeUsers: [], activeRoles: [], activeDepts: []
+})
 const identityPending = ref(0)
 const identityLoading = computed(() => identityPending.value > 0)
 // designerPreference 只接收服务端默认值或数据库回读值，不使用浏览器本地状态兜底。
@@ -62,7 +66,10 @@ const designerPreference = reactive({
   tokenSimulationEnabled: false,
   propertiesCollapsed: false
 })
-const identityRequestVersion = { assignees: 0, candidateUsers: 0, candidateGroups: 0 }
+const identityRequestVersion = {
+  assignees: 0, candidateUsers: 0, candidateGroups: 0, candidateRoles: 0,
+  activeUsers: 0, activeRoles: 0, activeDepts: 0
+}
 // pendingSaveRequest 保存尚未取得完整成功响应的用户保存意图，网络重试必须复用同一幂等键。
 let pendingSaveRequest
 
@@ -116,10 +123,16 @@ async function loadAllForms() {
  * @returns {'assignees'|'candidateUsers'|'candidateGroups'|''} 对应选项池键；空串表示非法组合。
  */
 function identityRequestTarget(request) {
-  if (request?.type === 'user' && request?.capability === 'approval') return 'assignees'
-  if (request?.type === 'user' && request?.capability === 'claim') return 'candidateUsers'
-  if (request?.type === 'group' && request?.capability === 'claim') return 'candidateGroups'
-  return ''
+  const contracts = {
+    assignees: ['user', 'approval'], candidateUsers: ['user', 'claim'],
+    candidateGroups: ['group', 'claim'], candidateRoles: ['role', 'claim'],
+    activeUsers: ['user', ''], activeRoles: ['role', ''], activeDepts: ['dept', '']
+  }
+  const target = String(request?.target || '')
+  const contract = contracts[target]
+  return contract && contract[0] === request?.type && contract[1] === (request?.capability || '')
+    ? target
+    : ''
 }
 
 /**
@@ -152,15 +165,86 @@ async function searchIdentityDirectory(request) {
       }
       return
     }
-    const [roleResponse, deptResponse] = await Promise.all([
-      listClaimableIdentityOptions({ type: 'role', keyword, pageNum: 1, pageSize: 50 }),
-      listClaimableIdentityOptions({ type: 'dept', keyword, pageNum: 1, pageSize: 50 })
-    ])
-    if (requestVersion === identityRequestVersion.candidateGroups) {
-      identityOptions.candidateGroups = [
-        ...(roleResponse.rows || []), ...(deptResponse.rows || [])
-      ]
+    if (target === 'candidateGroups') {
+      const [roleResponse, deptResponse] = await Promise.all([
+        listClaimableIdentityOptions({ type: 'role', keyword, pageNum: 1, pageSize: 50 }),
+        listClaimableIdentityOptions({ type: 'dept', keyword, pageNum: 1, pageSize: 50 })
+      ])
+      if (requestVersion === identityRequestVersion.candidateGroups) {
+        identityOptions.candidateGroups = [
+          ...(roleResponse.rows || []), ...(deptResponse.rows || [])
+        ]
+      }
+      return
     }
+    if (target === 'candidateRoles') {
+      const response = await listClaimableIdentityOptions({
+        type: 'role', keyword, pageNum: 1, pageSize: 50
+      })
+      if (requestVersion === identityRequestVersion.candidateRoles) {
+        identityOptions.candidateRoles = response.rows || []
+      }
+      return
+    }
+    const type = { activeUsers: 'user', activeRoles: 'role', activeDepts: 'dept' }[target]
+    const response = await listIdentityOptions({ type, keyword, pageNum: 1, pageSize: 50 })
+    if (requestVersion === identityRequestVersion[target]) {
+      identityOptions[target] = response.rows || []
+    }
+  } finally {
+    identityPending.value -= 1
+  }
+}
+
+/**
+ * 将批量回显结果合并到对应正式目录池，防止重开模型时远程分页外对象显示裸值。
+ * @param {string} target 设计器身份选项池。
+ * @param {object[]} rows 正式目录返回的名称和实时可用状态。
+ * @returns {void} 同值新结果覆盖旧结果，其余已加载检索选项保持不变。
+ */
+function mergeResolvedIdentityOptions(target, rows) {
+  const merged = new Map((identityOptions[target] || [])
+    .map(option => [String(option.value), option]))
+  for (const row of rows || []) merged.set(String(row.value), row)
+  identityOptions[target] = [...merged.values()]
+}
+
+/**
+ * 通过正式批量接口回显已保存身份；混合候选组按角色和部门分开核验后合并。
+ * @param {{target:string,type:string,capability:string,values:string[]}} request 受控目录回显请求。
+ * @returns {Promise<void>} 最新正式名称和 available 状态合并完成后结束。
+ */
+async function resolveSelectedIdentities(request) {
+  const target = identityRequestTarget(request)
+  const values = [...new Set((Array.isArray(request?.values) ? request.values : [])
+    .map(value => String(value || '').trim()).filter(Boolean))]
+  if (!target || !values.length || values.length > 200) {
+    throw new TypeError('工作流已选身份回显请求不合法')
+  }
+  identityPending.value += 1
+  try {
+    if (target === 'candidateGroups') {
+      const roleValues = values.filter(value => /^ROLE[1-9]\d{0,18}$/.test(value))
+      const deptValues = values.filter(value => /^DEPT[1-9]\d{0,18}$/.test(value))
+      if (roleValues.length + deptValues.length !== values.length) {
+        throw new TypeError('候选组已选身份值不合法')
+      }
+      const responses = await Promise.all([
+        roleValues.length ? resolveIdentityOptions({ type: 'role', capability: 'claim', values: roleValues }) : null,
+        deptValues.length ? resolveIdentityOptions({ type: 'dept', capability: 'claim', values: deptValues }) : null
+      ])
+      mergeResolvedIdentityOptions(target, responses.flatMap(response => response?.data || []))
+      return
+    }
+    const contract = {
+      assignees: ['user', 'approval'], candidateUsers: ['user', 'claim'],
+      candidateRoles: ['role', 'claim'], activeUsers: ['user', ''],
+      activeRoles: ['role', ''], activeDepts: ['dept', '']
+    }[target]
+    const response = await resolveIdentityOptions({
+      type: contract[0], capability: contract[1], values
+    })
+    mergeResolvedIdentityOptions(target, response.data || [])
   } finally {
     identityPending.value -= 1
   }
@@ -185,9 +269,13 @@ async function loadDesigner() {
       getModelBpmnXml(modelId),
       getDesignerPreference(),
       loadAllForms(),
-      searchIdentityDirectory({ type: 'user', capability: 'approval', keyword: '' }),
-      searchIdentityDirectory({ type: 'user', capability: 'claim', keyword: '' }),
-      searchIdentityDirectory({ type: 'group', capability: 'claim', keyword: '' })
+      searchIdentityDirectory({ target: 'assignees', type: 'user', capability: 'approval', keyword: '' }),
+      searchIdentityDirectory({ target: 'candidateUsers', type: 'user', capability: 'claim', keyword: '' }),
+      searchIdentityDirectory({ target: 'candidateGroups', type: 'group', capability: 'claim', keyword: '' }),
+      searchIdentityDirectory({ target: 'candidateRoles', type: 'role', capability: 'claim', keyword: '' }),
+      searchIdentityDirectory({ target: 'activeUsers', type: 'user', capability: '', keyword: '' }),
+      searchIdentityDirectory({ target: 'activeRoles', type: 'role', capability: '', keyword: '' }),
+      searchIdentityDirectory({ target: 'activeDepts', type: 'dept', capability: '', keyword: '' })
     ])
     Object.keys(model).forEach(key => delete model[key])
     Object.assign(model, modelResponse.data || {})

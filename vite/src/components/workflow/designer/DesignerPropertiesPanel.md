@@ -45,10 +45,13 @@
 | `dmnLoading` | `boolean` | DMN 正式目录加载状态。 |
 | `extensionLoading` | `boolean` | 扩展注册表加载状态。 |
 | `assignmentOptions` 等 | `array` | 父组件固定的分段选项。 |
+| `participantFormFieldOptions` | `array` | 当前单实例任务正式表单中的可用用户字段。 |
+| `identityOptions` | `object` | 按 active、approval、claim 能力隔离的正式用户、角色、部门选项池。 |
+| `identityLoading` | `boolean` | 参与者目录远程检索和已选对象核验状态。 |
 
 ## Emits
 
-组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、两类业务监听器事件和 `extension-properties-change`。
+组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`participant-rule-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、`identity-resolve`、两类业务监听器事件和 `extension-properties-change`。`identity-search` 用于正式目录分页检索，`identity-resolve` 用于重开模型时核验当前分页外的已选对象。
 
 ## 公开方法
 
@@ -57,6 +60,8 @@
 ## 关键设计
 
 - 用户可见字段只描述业务语义；系统任务审计监听器、内部多实例 handler 等技术约束不在面板中出现。
+- 流程属性提供公开、指定用户、角色、部门四种发起范围；普通单实例 UserTask 提供八种受控办理规则。规则说明始终展示最终命中对象和固定 `FAIL` 无匹配策略。
+- 单实例参与者编辑器在多实例开启时隐藏。会签/或签成员来源仍由“签署规则”独立维护，两个契约不会互相读写。
 - 组件不直接修改 BPMN moddle 对象，父组件必须使用 `modeling.updateProperties` 或 `updateModdleProperties`，确保撤销、重做和保存快照一致。
 - 正式模板和内嵌 FormData 使用明确的分段来源选择。内嵌字段由 `EmbeddedFormFieldEditor` 编辑；父组件负责让 `flowable:formKey` 与 `flowable:formProperty` 始终互斥。
 - 消息、信号、错误和升级引用由父组件解析为 Definitions 根元素；定时器表达式写入对应 `FormalExpression`。

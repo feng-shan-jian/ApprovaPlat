@@ -13,6 +13,16 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         </constructor>
     </resultMap>
 
+    <resultMap id="WorkflowIdentitySelectionViewResult"
+               type="com.ruoyi.flowable.domain.vo.WorkflowIdentitySelectionView">
+        <constructor>
+            <arg column="option_value" javaType="java.lang.String" />
+            <arg column="option_label" javaType="java.lang.String" />
+            <arg column="option_type" javaType="java.lang.String" />
+            <arg column="available" javaType="boolean" />
+        </constructor>
+    </resultMap>
+
     <!--
       直接办理资格必须与真实待办主路径一致：用户 1 是超级管理员；
       其他用户可跨全部有效角色聚合 todoList、query、approval 三项权限。
@@ -296,6 +306,49 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         limit #{offset}, #{pageSize}
     </select>
 
+    <!-- 已选对象回显必须按精确主键读取正式目录；停用对象保留名称，物理删除对象由服务层补稳定占位。 -->
+    <select id="selectIdentitySelectionsByIds"
+            resultMap="WorkflowIdentitySelectionViewResult">
+        <choose>
+            <when test="type == 'user'">
+                select cast(u.user_id as char) as option_value,
+                       concat(u.nick_name, ' (', u.user_name, ')') as option_label,
+                       'user' as option_type,
+                       (u.status = '0' and u.del_flag = '0') as available
+                from sys_user u
+                where u.user_id in
+                <foreach collection="ids" item="id" open="(" separator="," close=")">
+                    #{id}
+                </foreach>
+                order by u.user_id
+            </when>
+            <when test="type == 'role'">
+                select concat('ROLE', r.role_id) as option_value,
+                       concat('角色: ', r.role_name) as option_label,
+                       'role' as option_type,
+                       (r.status = '0' and r.del_flag = '0') as available
+                from sys_role r
+                where r.role_id in
+                <foreach collection="ids" item="id" open="(" separator="," close=")">
+                    #{id}
+                </foreach>
+                order by r.role_id
+            </when>
+            <otherwise>
+                select concat('DEPT', d.dept_id) as option_value,
+                       concat('部门: ', d.dept_name) as option_label,
+                       'dept' as option_type,
+                       (d.status = '0' and d.del_flag = '0') as available
+                from sys_dept d
+                where d.dept_id in
+                <foreach collection="ids" item="id" open="(" separator="," close=")">
+                    #{id}
+                </foreach>
+                order by d.dept_id
+            </otherwise>
+        </choose>
+    </select>
+
     <select id="selectActiveUserIdsByUserIds" resultType="java.lang.Long">
         select distinct u.user_id
         from sys_user u
@@ -454,4 +507,90 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
           and d.del_flag = '0'
     </select>
 
+    <select id="selectApprovalEligibleDeptLeaderUserIds" resultType="long">
+        select distinct u.user_id
+        from sys_dept d
+        inner join sys_user u
+          on u.user_name = d.leader
+         and u.dept_id = d.dept_id
+         and u.status = '0'
+         and u.del_flag = '0'
+        where d.dept_id in
+        <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+            #{deptId}
+        </foreach>
+          and d.status = '0'
+          and d.del_flag = '0'
+        <include refid="approvalEligibilityPredicate" />
+        order by u.user_id
+    </select>
+
+    <select id="selectActiveScopeDeptIdsByUserId" resultType="java.lang.Long">
+        select distinct scope_dept.dept_id
+        from sys_user u
+        inner join sys_dept member_dept on member_dept.dept_id = u.dept_id
+          and member_dept.status = '0'
+          and member_dept.del_flag = '0'
+        inner join sys_dept scope_dept
+          on (scope_dept.dept_id = member_dept.dept_id
+              or find_in_set(scope_dept.dept_id, member_dept.ancestors))
+         and scope_dept.status = '0'
+         and scope_dept.del_flag = '0'
+        where u.user_id = #{userId}
+          and u.status = '0'
+          and u.del_flag = '0'
+        order by scope_dept.dept_id
+    </select>
+
+    <select id="selectApprovalEligibleManagerUserIdsByUserId" resultType="long">
+        select distinct u.user_id
+        from sys_user starter
+        inner join sys_dept starter_dept
+          on starter_dept.dept_id = starter.dept_id
+         and starter_dept.status = '0'
+         and starter_dept.del_flag = '0'
+        inner join sys_dept manager_dept
+          on manager_dept.dept_id = case
+               when starter_dept.leader = starter.user_name then starter_dept.parent_id
+               else starter_dept.dept_id
+             end
+         and manager_dept.status = '0'
+         and manager_dept.del_flag = '0'
+        inner join sys_user u
+          on u.user_name = manager_dept.leader
+         and u.dept_id = manager_dept.dept_id
+         and u.status = '0'
+         and u.del_flag = '0'
+        where starter.user_id = #{userId}
+          and starter.status = '0'
+          and starter.del_flag = '0'
+          and u.user_id &lt;&gt; starter.user_id
+        <include refid="approvalEligibilityPredicate" />
+        order by u.user_id
+    </select>
+
+    <select id="selectClaimEligibleUserIdsByStarterDeptAndRole" resultType="long">
+        select distinct u.user_id
+        from sys_user starter
+        inner join sys_dept d
+          on d.dept_id = starter.dept_id
+         and d.status = '0'
+         and d.del_flag = '0'
+        inner join sys_user u
+          on u.dept_id = d.dept_id
+         and u.status = '0'
+         and u.del_flag = '0'
+        inner join sys_user_role ur
+          on ur.user_id = u.user_id
+         and ur.role_id = #{roleId}
+        inner join sys_role r
+          on r.role_id = ur.role_id
+         and r.status = '0'
+         and r.del_flag = '0'
+        where starter.user_id = #{userId}
+          and starter.status = '0'
+          and starter.del_flag = '0'
+        <include refid="claimEligibilityPredicate" />
+        order by u.user_id
+    </select>
 </mapper>

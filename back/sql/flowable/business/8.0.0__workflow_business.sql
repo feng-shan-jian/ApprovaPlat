@@ -103,6 +103,116 @@ CREATE TABLE IF NOT EXISTS `wf_deploy_controlled_loop`
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '受控重复审批循环不可变部署快照';
 
+CREATE TABLE IF NOT EXISTS `wf_deploy_participant_rule`
+(
+    `rule_id`          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '参与者规则部署快照主键',
+    `deploy_id`        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_key`      VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN 可执行流程标识',
+    `activity_id`      VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT 'UserTask 节点标识；发起范围为空串',
+    `activity_name`    VARCHAR(255) NOT NULL DEFAULT '' COMMENT '部署时节点名称快照',
+    `rule_scope`       VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'START 或 TASK',
+    `assignment_mode`  VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'START、ASSIGNEE 或 CANDIDATE',
+    `rule_type`        VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '受控发起范围或办理人规则类型',
+    `target_ids`       VARCHAR(2048) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '规范用户、角色或部门目标列表',
+    `form_field`       VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT 'FORM_USER 使用的正式表单变量',
+    `no_match_policy`  VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '无匹配策略，当前仅允许 FAIL',
+    `rule_version`     INT          NOT NULL COMMENT '冻结的参与者规则协议版本',
+    `checksum`         CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范规则内容 SHA-256',
+    `create_by`        VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '部署操作人正式用户主键',
+    `create_time`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '快照创建时间',
+    PRIMARY KEY (`rule_id`),
+    UNIQUE KEY `uk_wf_deploy_participant_rule_node`
+        (`deploy_id`, `process_key`, `rule_scope`, `activity_id`),
+    KEY `idx_wf_deploy_participant_rule_checksum` (`checksum`),
+    CONSTRAINT `chk_wf_deploy_participant_rule_scope` CHECK (`rule_scope` IN ('START', 'TASK')),
+    CONSTRAINT `chk_wf_deploy_participant_rule_mode` CHECK
+        (`assignment_mode` IN ('START', 'ASSIGNEE', 'CANDIDATE')),
+    CONSTRAINT `chk_wf_deploy_participant_rule_type` CHECK
+    (
+        `rule_type` IN ('PUBLIC', 'USERS', 'ROLES', 'DEPTS', 'FIXED_USER',
+            'CANDIDATE_USERS', 'CANDIDATE_GROUPS', 'STARTER', 'STARTER_MANAGER',
+            'DEPT_MANAGER', 'STARTER_DEPT_ROLE', 'FORM_USER')
+    ),
+    CONSTRAINT `chk_wf_deploy_participant_rule_relation` CHECK
+    (
+        (`rule_scope` = 'START' AND `assignment_mode` = 'START' AND `activity_id` = ''
+            AND `rule_type` IN ('PUBLIC', 'USERS', 'ROLES', 'DEPTS'))
+        OR (`rule_scope` = 'TASK' AND `assignment_mode` = 'ASSIGNEE'
+            AND CHAR_LENGTH(`activity_id`) BETWEEN 1 AND 255
+            AND `rule_type` IN ('FIXED_USER', 'STARTER', 'STARTER_MANAGER',
+                'DEPT_MANAGER', 'FORM_USER'))
+        OR (`rule_scope` = 'TASK' AND `assignment_mode` = 'CANDIDATE'
+            AND CHAR_LENGTH(`activity_id`) BETWEEN 1 AND 255
+            AND `rule_type` IN ('CANDIDATE_USERS', 'CANDIDATE_GROUPS', 'STARTER_DEPT_ROLE'))
+    ),
+    CONSTRAINT `chk_wf_deploy_participant_rule_targets` CHECK
+    (
+        (`rule_type` IN ('PUBLIC', 'STARTER', 'STARTER_MANAGER', 'FORM_USER')
+            AND `target_ids` = '')
+        OR (`rule_type` IN ('FIXED_USER', 'DEPT_MANAGER', 'STARTER_DEPT_ROLE')
+            AND `target_ids` REGEXP '^[1-9][0-9]{0,18}$')
+        OR (`rule_type` IN ('USERS', 'ROLES', 'DEPTS', 'CANDIDATE_USERS')
+            AND `target_ids` REGEXP '^[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,199}$')
+        OR (`rule_type` = 'CANDIDATE_GROUPS'
+            AND `target_ids` REGEXP '^(ROLE|DEPT)[1-9][0-9]{0,18}(,(ROLE|DEPT)[1-9][0-9]{0,18}){0,199}$')
+    ),
+    CONSTRAINT `chk_wf_deploy_participant_rule_form` CHECK
+    (
+        (`rule_type` = 'FORM_USER' AND `form_field` REGEXP '^[A-Za-z_][A-Za-z0-9_]{0,127}$')
+        OR (`rule_type` <> 'FORM_USER' AND `form_field` IS NULL)
+    ),
+    CONSTRAINT `chk_wf_deploy_participant_rule_policy` CHECK (`no_match_policy` = 'FAIL'),
+    CONSTRAINT `chk_wf_deploy_participant_rule_version` CHECK (`rule_version` = 1),
+    CONSTRAINT `chk_wf_deploy_participant_rule_checksum` CHECK
+        (`checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '流程发起范围和单实例用户任务办理人规则不可变部署快照';
+
+CREATE TABLE IF NOT EXISTS `wf_participant_resolution_audit`
+(
+    `audit_id`              BIGINT       NOT NULL AUTO_INCREMENT COMMENT '参与者规则解析审计主键',
+    `event_type`            VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'START 或 TASK',
+    `deploy_id`             VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_definition_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 流程定义主键',
+    `process_instance_id`   VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '流程实例主键，发起拒绝时为空',
+    `task_id`               VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '任务主键，发起事件为空',
+    `activity_id`           VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '任务节点标识',
+    `rule_id`               BIGINT       NOT NULL COMMENT '命中的不可变部署规则主键',
+    `initiator_user_id`     VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程发起人主键',
+    `actor_user_id`         VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '执行发起命令的用户主键',
+    `resolved_user_ids`     VARCHAR(2048) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '去重后的解析用户主键',
+    `resolved_group_ids`    VARCHAR(2048) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '去重后的候选组编码',
+    `result_code`           VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'ALLOWED、RESOLVED、DENIED 或 NO_MATCH',
+    `detail_summary`        VARCHAR(500) NOT NULL DEFAULT '' COMMENT '不含敏感变量值的稳定解析摘要',
+    `create_time`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '解析时间',
+    PRIMARY KEY (`audit_id`),
+    KEY `idx_wf_participant_audit_instance` (`process_instance_id`, `audit_id`),
+    KEY `idx_wf_participant_audit_task` (`task_id`, `audit_id`),
+    KEY `idx_wf_participant_audit_rule_time` (`rule_id`, `create_time`),
+    CONSTRAINT `chk_wf_participant_audit_event` CHECK (`event_type` IN ('START', 'TASK')),
+    CONSTRAINT `chk_wf_participant_audit_result` CHECK
+        (`result_code` IN ('ALLOWED', 'RESOLVED', 'DENIED', 'NO_MATCH')),
+    CONSTRAINT `chk_wf_participant_audit_relation` CHECK
+    (
+        (`event_type` = 'START' AND `task_id` IS NULL AND `activity_id` = ''
+            AND ((`result_code` = 'ALLOWED' AND `process_instance_id` IS NOT NULL)
+                OR (`result_code` = 'DENIED' AND `process_instance_id` IS NULL)))
+        OR (`event_type` = 'TASK' AND `task_id` IS NOT NULL
+            AND `process_instance_id` IS NOT NULL AND CHAR_LENGTH(`activity_id`) BETWEEN 1 AND 255
+            AND `result_code` IN ('RESOLVED', 'NO_MATCH'))
+    ),
+    CONSTRAINT `chk_wf_participant_audit_rule` CHECK (`rule_id` > 0),
+    CONSTRAINT `chk_wf_participant_audit_initiator` CHECK
+        (`initiator_user_id` REGEXP '^[1-9][0-9]{0,18}$'),
+    CONSTRAINT `chk_wf_participant_audit_actor` CHECK
+        (`actor_user_id` IS NULL OR `actor_user_id` REGEXP '^[1-9][0-9]{0,18}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '参与者规则实时解析与拒绝审计';
+
 CREATE TABLE IF NOT EXISTS `wf_controlled_loop_execution`
 (
     `execution_id`          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '循环轮次审计主键',

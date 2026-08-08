@@ -1503,6 +1503,18 @@ final class WorkflowRbacAllowFixture
     private Execution executeIdentity(String roleKey, Endpoint endpoint)
             throws IOException, InterruptedException
     {
+        if ("resolveOptions".equals(endpoint.handler()))
+        {
+            String userId = String.valueOf(roleUserIds.get(roleKey));
+            JsonNode body = callJson(roleKey, endpoint,
+                    "/workflow/identity/options/resolve",
+                    "{\"type\":\"user\",\"capability\":\"\",\"values\":[\""
+                            + userId + "\"]}");
+            assertThat(body.path("data").path(0).path("value").asText())
+                    .isEqualTo(userId);
+            assertThat(body.path("data").path(0).path("available").asBoolean()).isTrue();
+            return Execution.passedJson();
+        }
         JsonNode body = callJson(roleKey, endpoint,
                 "/workflow/identity/options?type=user&keyword="
                         + encode(roleUsernames.get(roleKey)) + "&pageNum=1&pageSize=20", null);

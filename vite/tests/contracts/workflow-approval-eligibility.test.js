@@ -202,9 +202,9 @@ test('流程时间线不渲染原始审计 JSON', () => {
  */
 test('流程设计器按办理方式隔离身份资格目录', () => {
   assert.match(designPageSource,
-    /identityOptions = reactive\(\{ assignees: \[\], candidateUsers: \[\], candidateGroups: \[\] \}\)/)
+    /identityOptions = reactive\(\{[\s\S]*?assignees: \[\], candidateUsers: \[\], candidateGroups: \[\], candidateRoles: \[\],[\s\S]*?activeUsers: \[\], activeRoles: \[\], activeDepts: \[\][\s\S]*?\}\)/)
   assert.match(designPageSource,
-    /identityRequestVersion = \{ assignees: 0, candidateUsers: 0, candidateGroups: 0 \}/)
+    /identityRequestVersion = \{[\s\S]*?assignees: 0, candidateUsers: 0, candidateGroups: 0, candidateRoles: 0,[\s\S]*?activeUsers: 0, activeRoles: 0, activeDepts: 0[\s\S]*?\}/)
   assert.match(designPageSource,
     /target === 'assignees'[\s\S]*?listApprovalUserOptions\(\{ keyword, pageNum: 1, pageSize: 50 \}\)/)
   assert.match(designPageSource,
@@ -217,7 +217,8 @@ test('流程设计器按办理方式隔离身份资格目录', () => {
     /:remote-method="searchAssignees"[\s\S]*?identityOptions\.assignees[\s\S]*?:remote-method="searchCandidateUsers"[\s\S]*?identityOptions\.candidateUsers[\s\S]*?:remote-method="searchCandidateGroups"[\s\S]*?identityOptions\.candidateGroups/)
   assert.match(designerSource,
     /function handlePanelIdentitySearch\(request\)[\s\S]*?!IDENTITY_SEARCH_CONTRACTS\[target\][\s\S]*?scheduleIdentitySearch\(target, request\?\.keyword\)/)
-  assert.doesNotMatch(designPageSource, /listIdentityOptions/)
+  assert.match(designPageSource,
+    /const type = \{ activeUsers: 'user', activeRoles: 'role', activeDepts: 'dept' \}\[target\][\s\S]*?listIdentityOptions\(\{ type, keyword, pageNum: 1, pageSize: 50 \}\)/)
   assert.doesNotMatch(`${designerSource}\n${designerPropertiesPanelSource}`, /identityOptions\.(?:users|groups)/)
   assert.doesNotMatch(`${detailSource}\n${designPageSource}\n${designerSource}\n${designerPropertiesPanelSource}`,
     /workflow_approver|workflow:process:approval.*(?:option|filter)/i)
