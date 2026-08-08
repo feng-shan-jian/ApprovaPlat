@@ -1,184 +1,334 @@
 <template>
   <div>
-    <el-popover ref="noticePopover" placement="bottom-end" :width="320" trigger="manual" v-model:visible="noticeVisible" popper-class="notice-popover">
-      <!-- 弹出内容 -->
+    <el-popover
+      ref="noticePopover"
+      v-model:visible="noticeVisible"
+      placement="bottom-end"
+      :width="390"
+      trigger="manual"
+      popper-class="notice-popover"
+    >
       <div class="notice-header">
-        <span class="notice-title">通知公告</span>
-        <span class="notice-mark-all" @click="markAllRead">全部已读</span>
-      </div>
-      <div v-if="noticeLoading" class="notice-loading">
-        <el-icon class="is-loading"><Loading /></el-icon> 加载中...
-      </div>
-      <div v-else-if="noticeList.length === 0" class="notice-empty">
-        <el-icon style="font-size:24px;display:block;margin-bottom:6px;"><Postcard /></el-icon>
-        暂无公告
-      </div>
-      <div v-else>
-        <div v-for="item in noticeList" :key="item.noticeId" class="notice-item" :class="{ 'is-read': item.isRead }" @click="previewNotice(item)">
-          <el-tag size="small" :type="item.noticeType === '1' ? 'warning' : 'success'" class="notice-tag">
-            {{ item.noticeType === '1' ? '通知' : '公告' }}
-          </el-tag>
-          <span class="notice-item-title">{{ item.noticeTitle }}</span>
-          <span class="notice-item-date">{{ item.createTime }}</span>
+        <div>
+          <strong>消息中心</strong>
+          <span>{{ totalUnread }} 条未读</span>
+        </div>
+        <div class="notice-tools">
+          <el-tooltip content="通知偏好" placement="top">
+            <el-button circle text icon="Setting" aria-label="通知偏好" @click="openPreference" />
+          </el-tooltip>
+          <el-tooltip content="刷新消息" placement="top">
+            <el-button circle text icon="Refresh" aria-label="刷新消息" :loading="noticeLoading" @click="refreshAll" />
+          </el-tooltip>
         </div>
       </div>
 
-      <!-- 触发器 -->
+      <el-tabs v-model="activeTab" class="notice-tabs">
+        <el-tab-pane name="workflow">
+          <template #label>
+            <span>审批通知 <el-badge v-if="workflowUnread" :value="workflowUnread" :max="99" /></span>
+          </template>
+          <div class="notice-filter">
+            <el-segmented v-model="workflowReadStatus" :options="readOptions" size="small" @change="loadWorkflowNotices" />
+            <el-button text type="primary" :disabled="workflowUnread === 0" @click="markWorkflowAllRead">全部已读</el-button>
+          </div>
+          <div v-if="noticeLoading" class="notice-state"><el-icon class="is-loading"><Loading /></el-icon>加载中</div>
+          <div v-else-if="workflowNotices.length === 0" class="notice-state"><el-icon><Bell /></el-icon>暂无审批通知</div>
+          <div v-else class="notice-list">
+            <button
+              v-for="item in workflowNotices"
+              :key="item.notificationId"
+              type="button"
+              class="notice-item notice-item--workflow"
+              :class="{ 'is-read': item.readStatus === 'READ' }"
+              @click="openWorkflowNotice(item)"
+            >
+              <span class="notice-dot" />
+              <span class="notice-copy">
+                <strong>{{ item.title }}</strong>
+                <span>{{ item.content }}</span>
+                <time>{{ formatTime(item.createTime) }}</time>
+              </span>
+              <el-icon><ArrowRight /></el-icon>
+            </button>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane name="announcement">
+          <template #label>
+            <span>公告 <el-badge v-if="announcementUnread" :value="announcementUnread" :max="99" /></span>
+          </template>
+          <div class="notice-filter notice-filter--end">
+            <el-button text type="primary" :disabled="announcementUnread === 0" @click="markAnnouncementAllRead">全部已读</el-button>
+          </div>
+          <div v-if="noticeLoading" class="notice-state"><el-icon class="is-loading"><Loading /></el-icon>加载中</div>
+          <div v-else-if="announcements.length === 0" class="notice-state"><el-icon><Postcard /></el-icon>暂无公告</div>
+          <div v-else class="notice-list">
+            <button
+              v-for="item in announcements"
+              :key="item.noticeId"
+              type="button"
+              class="notice-item"
+              :class="{ 'is-read': item.isRead }"
+              @click="previewAnnouncement(item)"
+            >
+              <el-tag size="small" :type="item.noticeType === '1' ? 'warning' : 'success'">
+                {{ item.noticeType === '1' ? '通知' : '公告' }}
+              </el-tag>
+              <span class="notice-copy">
+                <strong>{{ item.noticeTitle }}</strong>
+                <time>{{ formatTime(item.createTime) }}</time>
+              </span>
+            </button>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+
       <template #reference>
         <div class="right-menu-item hover-effect notice-trigger" @mouseenter="onNoticeEnter" @mouseleave="onNoticeLeave">
           <svg-icon icon-class="bell" />
-          <span v-if="unreadCount > 0" class="notice-badge">{{ unreadCount }}</span>
+          <span v-if="totalUnread > 0" class="notice-badge">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
         </div>
       </template>
     </el-popover>
 
-    <!-- 预览弹窗 -->
     <notice-detail-view ref="noticeViewRef" />
+
+    <el-dialog v-model="preferenceVisible" title="审批通知偏好" width="420px" append-to-body>
+      <el-form label-position="left" label-width="120px" v-loading="preferenceLoading">
+        <el-form-item label="站内通知">
+          <el-switch v-model="preference.inboxEnabled" />
+        </el-form-item>
+        <el-form-item label="邮件通知">
+          <el-switch v-model="preference.emailEnabled" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="preferenceVisible = false">取消</el-button>
+        <el-button type="primary" :loading="preferenceSaving" @click="savePreference">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import NoticeDetailView from './DetailView'
 import { listNoticeTop, markNoticeRead, markNoticeReadAll } from '@/api/system/notice'
+import {
+  getWorkflowNotificationPreference,
+  listWorkflowNotifications,
+  markAllWorkflowNotificationsRead,
+  markWorkflowNotificationRead,
+  saveWorkflowNotificationPreference
+} from '@/api/workflow/notification'
 
-const noticePopover = ref(null)
-const noticeList = ref([])
-const unreadCount = ref(0)
-const noticeLoading = ref(false)
-const noticeVisible = ref(false)
-const noticeLeaveTimer = ref(null)
+const router = useRouter()
 const { proxy } = getCurrentInstance()
+const noticePopover = ref(null)
+const noticeVisible = ref(false)
+const noticeLoading = ref(false)
+const activeTab = ref('workflow')
+const workflowReadStatus = ref('ALL')
+const workflowNotices = ref([])
+const workflowUnread = ref(0)
+const announcements = ref([])
+const announcementUnread = ref(0)
+const preferenceVisible = ref(false)
+const preferenceLoading = ref(false)
+const preferenceSaving = ref(false)
+const preference = reactive({ inboxEnabled: true, emailEnabled: true, revision: 0 })
+const readOptions = [
+  { label: '全部', value: 'ALL' },
+  { label: '未读', value: 'UNREAD' },
+  { label: '已读', value: 'READ' }
+]
+let noticeLeaveTimer = null
+let refreshSequence = 0
 
-// 加载顶部公告列表
-function loadNoticeTop() {
-  noticeLoading.value = true
-  listNoticeTop().then(res => {
-    noticeList.value = res.data || []
-    unreadCount.value = res.unreadCount !== undefined ? res.unreadCount : noticeList.value.filter(n => !n.isRead).length
-  }).finally(() => {
-    noticeLoading.value = false
-  })
+const totalUnread = computed(() => workflowUnread.value + announcementUnread.value)
+
+/**
+ * 查询审批通知并用序号淘汰旧响应。
+ * @returns {Promise<void>} 完成后更新当前过滤列表和真实未读数。
+ */
+async function loadWorkflowNotices() {
+  const sequence = ++refreshSequence
+  const response = await listWorkflowNotifications(workflowReadStatus.value, 30)
+  if (sequence !== refreshSequence) return
+  workflowNotices.value = response.data?.items || []
+  workflowUnread.value = Number(response.data?.unreadCount || 0)
 }
 
-onMounted(() => loadNoticeTop())
+/**
+ * 查询顶部系统公告及当前用户阅读状态。
+ * @returns {Promise<void>} 完成后更新公告列表和未读数。
+ */
+async function loadAnnouncements() {
+  const response = await listNoticeTop()
+  announcements.value = response.data || []
+  announcementUnread.value = Number(response.unreadCount || 0)
+}
 
-// 鼠标移入铃铛区域
+/**
+ * 并行刷新审批通知和系统公告，任何通道失败都会保留统一错误反馈。
+ * @returns {Promise<void>} 两个正式 API 均完成后解除加载状态。
+ */
+async function refreshAll() {
+  noticeLoading.value = true
+  try {
+    await Promise.all([loadWorkflowNotices(), loadAnnouncements()])
+  } finally {
+    noticeLoading.value = false
+  }
+}
+
+/**
+ * 打开审批通知关联的受控流程路由并标记已读。
+ * @param {object} item 服务端审批通知投影。
+ * @returns {Promise<void>} 已读写入后进入对象授权流程详情。
+ */
+async function openWorkflowNotice(item) {
+  if (item.readStatus !== 'READ') {
+    await markWorkflowNotificationRead(item.notificationId)
+    item.readStatus = 'READ'
+    workflowUnread.value = Math.max(0, workflowUnread.value - 1)
+  }
+  noticeVisible.value = false
+  await router.push(item.routePath)
+}
+
+/**
+ * 预览系统公告并持久化当前用户阅读状态。
+ * @param {object} item 公告列表项。
+ * @returns {Promise<void>} 打开公告详情。
+ */
+async function previewAnnouncement(item) {
+  if (!item.isRead) {
+    await markNoticeRead(item.noticeId)
+    item.isRead = true
+    announcementUnread.value = Math.max(0, announcementUnread.value - 1)
+  }
+  proxy.$refs.noticeViewRef.open(item.noticeId)
+}
+
+/** @returns {Promise<void>} 将当前用户全部审批通知标记已读并刷新过滤结果。 */
+async function markWorkflowAllRead() {
+  await markAllWorkflowNotificationsRead()
+  workflowUnread.value = 0
+  await loadWorkflowNotices()
+}
+
+/** @returns {Promise<void>} 将当前顶部公告全部标记已读并刷新列表。 */
+async function markAnnouncementAllRead() {
+  const ids = announcements.value.map(item => item.noticeId).join(',')
+  if (!ids) return
+  await markNoticeReadAll(ids)
+  announcements.value = announcements.value.map(item => ({ ...item, isRead: true }))
+  announcementUnread.value = 0
+}
+
+/** @returns {Promise<void>} 从真实偏好 API 加载当前开关并打开设置弹窗。 */
+async function openPreference() {
+  preferenceLoading.value = true
+  preferenceVisible.value = true
+  try {
+    const response = await getWorkflowNotificationPreference()
+    Object.assign(preference, response.data || {})
+  } finally {
+    preferenceLoading.value = false
+  }
+}
+
+/** @returns {Promise<void>} 以服务端 revision 保存偏好并刷新消息列表。 */
+async function savePreference() {
+  preferenceSaving.value = true
+  try {
+    const response = await saveWorkflowNotificationPreference({
+      inboxEnabled: preference.inboxEnabled,
+      emailEnabled: preference.emailEnabled,
+      expectedRevision: Number(preference.revision || 0)
+    })
+    Object.assign(preference, response.data || {})
+    preferenceVisible.value = false
+    await refreshAll()
+    proxy.$modal.msgSuccess('通知偏好已保存')
+  } finally {
+    preferenceSaving.value = false
+  }
+}
+
+/** @returns {void} 打开消息面板并在每次进入时刷新真实状态。 */
 function onNoticeEnter() {
-  clearTimeout(noticeLeaveTimer.value)
+  clearTimeout(noticeLeaveTimer)
   noticeVisible.value = true
+  refreshAll()
   nextTick(() => {
     const popper = noticePopover.value?.popperRef?.contentRef
-    if (popper && !popper._noticeBound) {
-      popper._noticeBound = true
-      popper.addEventListener('mouseenter', () => clearTimeout(noticeLeaveTimer.value))
-      popper.addEventListener('mouseleave', () => {
-        noticeLeaveTimer.value = setTimeout(() => { noticeVisible.value = false }, 100)
-      })
-    }
+    if (!popper || popper._noticeBound) return
+    popper._noticeBound = true
+    popper.addEventListener('mouseenter', () => clearTimeout(noticeLeaveTimer))
+    popper.addEventListener('mouseleave', () => {
+      noticeLeaveTimer = setTimeout(() => { noticeVisible.value = false }, 120)
+    })
   })
 }
 
-// 鼠标离开铃铛区域
+/** @returns {void} 延迟关闭面板，允许鼠标从铃铛移动到浮层。 */
 function onNoticeLeave() {
-  noticeLeaveTimer.value = setTimeout(() => { noticeVisible.value = false }, 150)
+  noticeLeaveTimer = setTimeout(() => { noticeVisible.value = false }, 180)
 }
 
-// 预览公告详情
-function previewNotice(item) {
-  if (!item.isRead) {
-    markNoticeRead(item.noticeId).catch(() => {})
-    const idx = noticeList.value.indexOf(item)
-    if (idx !== -1) noticeList.value[idx] = { ...item, isRead: true }
-    unreadCount.value = Math.max(0, unreadCount.value - 1)
-  }
-  proxy.$refs["noticeViewRef"].open(item.noticeId)
+/**
+ * 将服务端时间格式化为紧凑本地时间。
+ * @param {string|Date|null} value 服务端时间值。
+ * @returns {string} 可读时间或短横线。
+ */
+function formatTime(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN', { hour12: false })
 }
 
-// 全部已读
-function markAllRead() {
-  const ids = noticeList.value.map(n => n.noticeId).join(',')
-  if (!ids) return
-  markNoticeReadAll(ids).catch(() => {})
-  noticeList.value = noticeList.value.map(n => ({ ...n, isRead: true }))
-  unreadCount.value = 0
-}
+onMounted(refreshAll)
 </script>
 
 <style lang="scss" scoped>
-.notice-trigger {
-  position: relative;
-  transform: translateX(-6px);
-  .svg-icon { width: 1.2em; height: 1.2em; vertical-align: -0.2em; }
-  .notice-badge {
-    position: absolute;
-    top: 7px;
-    right: -3px;
-    background: #f56c6c;
-    color: #fff;
-    border-radius: 10px;
-    font-size: 10px;
-    height: 16px;
-    line-height: 16px;
-    padding: 0 4px;
-    min-width: 16px;
-    text-align: center;
-    white-space: nowrap;
-    pointer-events: none;
-  }
+.notice-trigger { position: relative; transform: translateX(-6px); }
+.notice-trigger .svg-icon { width: 1.2em; height: 1.2em; vertical-align: -0.2em; }
+.notice-badge {
+  position: absolute; top: 6px; right: -6px; min-width: 17px; height: 17px; padding: 0 4px;
+  border: 2px solid var(--el-bg-color); border-radius: 9px; background: var(--el-color-danger);
+  color: #fff; font-size: 10px; line-height: 13px; text-align: center; white-space: nowrap; pointer-events: none;
 }
+.notice-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; }
+.notice-header > div:first-child { display: grid; gap: 2px; }
+.notice-header strong { color: var(--el-text-color-primary); font-size: 14px; }
+.notice-header span { color: var(--el-text-color-secondary); font-size: 11px; }
+.notice-tools { display: flex; gap: 2px; }
+.notice-filter { display: flex; min-height: 34px; align-items: center; justify-content: space-between; padding: 0 10px 8px; }
+.notice-filter--end { justify-content: flex-end; }
+.notice-list { max-height: 360px; overflow-y: auto; border-top: 1px solid var(--el-border-color-lighter); }
+.notice-item {
+  display: flex; width: 100%; min-height: 62px; align-items: flex-start; gap: 10px; padding: 10px 14px;
+  border: 0; border-bottom: 1px solid var(--el-border-color-lighter); background: transparent;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.notice-item:hover { background: var(--el-fill-color-light); }
+.notice-item.is-read { opacity: .58; }
+.notice-item--workflow { min-height: 82px; align-items: center; }
+.notice-copy { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.notice-copy strong, .notice-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-copy strong { color: var(--el-text-color-primary); font-size: 12px; font-weight: 600; }
+.notice-copy > span { color: var(--el-text-color-regular); font-size: 11px; }
+.notice-copy time { color: var(--el-text-color-placeholder); font-size: 10px; }
+.notice-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--el-color-primary); }
+.notice-item.is-read .notice-dot { background: var(--el-border-color); }
+.notice-state { display: grid; min-height: 150px; place-items: center; align-content: center; gap: 8px; color: var(--el-text-color-placeholder); font-size: 12px; }
+.notice-state .el-icon { font-size: 24px; }
+</style>
+
+<style lang="scss">
 .notice-popover { padding: 0 !important; }
-.notice-popover .notice-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  background: #f7f9fb;
-  border-bottom: 1px solid #eee;
-  font-size: 13px;
-  font-weight: 600;
-  color: #333;
-}
-.notice-popover .notice-mark-all {
-  font-size: 12px;
-  color: var(--el-color-primary);
-  font-weight: normal;
-  cursor: pointer;
-}
-.notice-popover .notice-mark-all:hover { color: #2b7cc1; }
-.notice-popover .notice-loading,
-.notice-popover .notice-empty {
-  padding: 24px;
-  text-align: center;
-  color: #bbb;
-  font-size: 12px;
-  line-height: 1.8;
-}
-.notice-popover .notice-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid #f5f5f5;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.notice-popover .notice-item:last-child { border-bottom: none; }
-.notice-popover .notice-item:hover { background: #f7f9fb; }
-.notice-popover .notice-item.is-read .notice-tag,
-.notice-popover .notice-item.is-read .notice-item-title,
-.notice-popover .notice-item.is-read .notice-item-date { opacity: 0.45; filter: grayscale(1); color: #999; }
-.notice-popover .notice-tag { flex-shrink: 0; }
-.notice-popover .notice-item-title {
-  flex: 1;
-  font-size: 12px;
-  color: #333;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.notice-popover .notice-item-date {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: #bbb;
-}
+.notice-popover .notice-tabs > .el-tabs__header { margin: 0; padding: 0 14px; }
+.notice-popover .el-badge__content { transform: scale(.78) translate(45%, -40%); }
 </style>

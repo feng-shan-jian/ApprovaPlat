@@ -63,6 +63,12 @@
             <artifactId>spring-boot-health</artifactId>
         </dependency>
 
+        <!-- 邮件通知仅使用 Spring 正式 SMTP 配置；用户名和密码由环境或密钥注入。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>

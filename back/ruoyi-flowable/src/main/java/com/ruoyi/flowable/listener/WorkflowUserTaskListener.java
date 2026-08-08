@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
 /**
@@ -28,6 +29,9 @@ public class WorkflowUserTaskListener implements TaskListener
 
     /** 自动抄送生命周期服务；旧直接构造单测未注入时保持兼容。 */
     private WorkflowAutomaticCopyService automaticCopyService;
+
+    /** 普通审批生命周期通知服务；旧直接构造单元测试时可为空。 */
+    private WorkflowNotificationService notificationService;
 
     /**
      * 创建受控用户任务监听器。
@@ -72,6 +76,17 @@ public class WorkflowUserTaskListener implements TaskListener
     public void setAutomaticCopyService(WorkflowAutomaticCopyService automaticCopyService)
     {
         this.automaticCopyService = automaticCopyService;
+    }
+
+    /**
+     * 延迟注入普通审批通知服务，保留既有直接构造测试兼容性。
+     * @param notificationService WorkflowNotificationService，事务 outbox 服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setNotificationService(WorkflowNotificationService notificationService)
+    {
+        this.notificationService = notificationService;
     }
 
     /**
@@ -120,6 +135,14 @@ public class WorkflowUserTaskListener implements TaskListener
                             delegateTask.getProcessInstanceId(),
                             delegateTask.getProcessDefinitionId(),
                             delegateTask.getTaskDefinitionKey(), delegateTask.getAssignee());
+                }
+                if (notificationService != null)
+                {
+                    // 普通通知 outbox 与任务状态、监听审计共用事务，回滚时不会产生孤立通知。
+                    notificationService.onTaskEvent(eventName, delegateTask.getId(),
+                            delegateTask.getProcessInstanceId(), delegateTask.getProcessDefinitionId(),
+                            delegateTask.getTaskDefinitionKey(), delegateTask.getName(),
+                            delegateTask.getAssignee(), delegateTask.getOwner());
                 }
             }
             default -> throw new FlowableIllegalArgumentException(

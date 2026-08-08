@@ -46,7 +46,7 @@ CREATE TEMPORARY TABLE tmp_workflow_menu_seed
     PRIMARY KEY (seed_key)
 ) ENGINE = InnoDB;
 
--- 两个目录、二十个菜单页和六十九个真实按钮权限，共九十一条目标记录。
+-- 两个目录、二十个菜单页和七十六个真实按钮权限，共九十八条目标记录。
 INSERT INTO tmp_workflow_menu_seed
     (seed_key, parent_key, menu_name, order_num, path, component, route_name,
      menu_type, perms, icon, remark)
@@ -95,6 +95,9 @@ VALUES
     ('workflow:process:manageList', 'workflow', '实例运维', 13, 'instance',
      'workflow/work/manage', 'WorkflowManage', 'C', 'workflow:process:manageList',
      'list', '流程管理员跨用户实例运维菜单'),
+    ('workflow:notification:policyList', 'workflow', '审批通知', 14, 'notification',
+     'workflow/notification/index', 'WorkflowNotification', 'C', 'workflow:notification:policyList',
+     'message', '普通审批通知策略、可靠 outbox、死信和补偿管理菜单'),
     ('workflow:process:startList', 'office', '新建流程', 1, 'create',
      'workflow/work/index', 'WorkflowCreate', 'C', 'workflow:process:startList',
      'guide', '当前用户可发起流程菜单'),
@@ -217,6 +220,19 @@ VALUES
      'F', 'workflow:sla:audit', '#', '查询审批 SLA 执行状态和不可变审计'),
     ('workflow:sla:notification', 'workflow:bpmnEvent:list', 'SLA 通知查询', 9, '', NULL, '',
      'F', 'workflow:sla:notification', '#', '查询并处理当前用户审批 SLA 通知'),
+
+    ('workflow:notification:manage', 'workflow:notification:policyList', '通知策略维护', 1, '', NULL, '',
+     'F', 'workflow:notification:manage', '#', '维护流程和节点普通审批通知策略'),
+    ('workflow:notification:audit', 'workflow:notification:policyList', '通知投递审计', 2, '', NULL, '',
+     'F', 'workflow:notification:audit', '#', '查询脱敏普通审批通知 outbox 状态'),
+    ('workflow:notification:retry', 'workflow:notification:policyList', '通知死信补偿', 3, '', NULL, '',
+     'F', 'workflow:notification:retry', '#', '重新开启普通审批通知死信的有界投递'),
+    ('workflow:notification:urge:any', 'workflow:notification:policyList', '跨实例催办', 4, '', NULL, '',
+     'F', 'workflow:notification:urge:any', '#', '允许管理员催办任意有权管理的运行流程'),
+    ('workflow:notification:list', 'workflow:process:ownList', '审批通知查询', 20, '', NULL, '',
+     'F', 'workflow:notification:list', '#', '查询当前用户普通审批通知和偏好'),
+    ('workflow:notification:urge', 'workflow:process:ownList', '人工催办', 21, '', NULL, '',
+     'F', 'workflow:notification:urge', '#', '由发起人或管理员催办真实活动待办'),
 
     ('workflow:deploy:query', 'workflow:deploy:list', '部署查询', 1, '', NULL, '',
      'F', 'workflow:deploy:query', '#', '查询部署版本和 BPMN'),
@@ -467,7 +483,9 @@ WHERE seed_key IN (
     'workflow:bpmnEvent:list', 'workflow:bpmnEvent:add', 'workflow:bpmnEvent:edit',
     'workflow:bpmnEvent:audit', 'workflow:bpmnEvent:notification',
     'workflow:sla:list', 'workflow:sla:add', 'workflow:sla:edit',
-    'workflow:sla:audit', 'workflow:sla:notification'
+    'workflow:sla:audit', 'workflow:sla:notification',
+    'workflow:notification:policyList', 'workflow:notification:manage',
+    'workflow:notification:audit'
 );
 
 -- 发起人只发起、查看、取消和导出自己的实例，不获得历史物理删除权限。
@@ -484,7 +502,8 @@ WHERE seed_key IN (
     'workflow:process:cancel',
     'workflow:process:ownExport', 'workflow:process:copyExport',
     'workflow:attachment:upload', 'workflow:attachment:query',
-    'workflow:attachment:remove', 'workflow:sla:notification'
+    'workflow:attachment:remove', 'workflow:sla:notification',
+    'workflow:notification:list', 'workflow:notification:urge'
 );
 
 -- 审批人可认领、办理和撤回本人真实任务，不获得管理员终止/状态权限。
@@ -499,7 +518,8 @@ WHERE seed_key IN (
     'workflow:process:claimExport', 'workflow:process:revoke',
     'workflow:process:finishedExport', 'workflow:process:copyExport',
     'workflow:attachment:upload', 'workflow:attachment:query',
-    'workflow:attachment:remove', 'workflow:sla:notification'
+    'workflow:attachment:remove', 'workflow:sla:notification',
+    'workflow:notification:list'
 );
 
 -- 审计角色只有列表、详情和导出权限；对象授权继续限制可见实例范围。
@@ -517,7 +537,8 @@ WHERE seed_key IN (
     'workflow:process:copyList', 'workflow:process:query',
     'workflow:process:ownExport', 'workflow:process:todoExport',
     'workflow:process:claimExport', 'workflow:process:finishedExport',
-    'workflow:process:copyExport', 'workflow:attachment:query'
+    'workflow:process:copyExport', 'workflow:attachment:query',
+    'workflow:notification:list'
 );
 
 -- 仅重建五个受管角色的工作流菜单关联，保留它们已有的非工作流菜单。

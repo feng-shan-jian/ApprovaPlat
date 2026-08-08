@@ -5,8 +5,10 @@ import java.util.List;
 import org.flowable.common.engine.api.delegate.event.FlowableEventListener;
 import org.flowable.spring.boot.ProcessEngineConfigurationConfigurer;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.process.WorkflowProcessCompletionStatusListener;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
@@ -16,6 +18,20 @@ import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 @Configuration(proxyBeanMethods = false)
 public class WorkflowProcessCompletionStatusConfiguration
 {
+    /** 仅保存延迟提供器，Flowable 引擎创建阶段不得提前实例化反向依赖其公共服务的通知服务。 */
+    private ObjectProvider<WorkflowNotificationService> notificationServiceProvider;
+
+    /**
+     * 注入普通审批通知服务。
+     * @param notificationServiceProvider ObjectProvider，自然完成事务 outbox 服务延迟提供器
+     * @return void，生产容器初始化配置
+     */
+    @Autowired
+    public void setNotificationServiceProvider(
+            ObjectProvider<WorkflowNotificationService> notificationServiceProvider)
+    {
+        this.notificationServiceProvider = notificationServiceProvider;
+    }
     /**
      * 创建流程自然完成状态监听器。
      *
@@ -27,7 +43,8 @@ public class WorkflowProcessCompletionStatusConfiguration
     public WorkflowProcessCompletionStatusListener workflowProcessCompletionStatusListener(
             ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider)
     {
-        return new WorkflowProcessCompletionStatusListener(automaticCopyServiceProvider);
+        return new WorkflowProcessCompletionStatusListener(
+                automaticCopyServiceProvider, notificationServiceProvider);
     }
 
     /**

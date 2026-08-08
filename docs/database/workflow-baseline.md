@@ -31,10 +31,10 @@
 | 若依 | 20 |
 | Quartz | 11 |
 | Flowable Common/Process/History/DMN | 36 |
-| ApprovaPlat `wf_*` | 33 |
-| 合计 | 100 |
+| ApprovaPlat `wf_*` | 44 |
+| 合计 | 111 |
 
-33 张业务表：
+44 张业务表：
 
 - `wf_category`
 - `wf_form`
@@ -63,8 +63,14 @@
 - `wf_bpmn_event_code`
 - `wf_bpmn_event_audit`
 - `wf_bpmn_event_notification`
+- `wf_notification_policy`
+- `wf_notification_preference`
+- `wf_notification_outbox`
+- `wf_notification_inbox`
+- `wf_notification_delivery_audit`
+- `wf_notification_urge_audit`
 
-菜单基线为 2 个目录、19 个页面、65 个按钮，共 86 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
+菜单基线为 2 个目录、20 个页面、71 个按钮，共 93 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
 
 ## 结构约束
 
@@ -81,7 +87,7 @@
 2. `back/sql/flowable/verify/8.0.0__verify_workflow_business.sql`
 3. `back/sql/flowable/verify/8.0.0__verify_workflow_menu.sql`
 
-三组脚本共定义 46 项只读检查，所有结果都必须为 `PASS`。表数检查固定核对总表数 100、分项表数 `20/11/36/33`，条件分支、受控循环、多池协作、BPMN 错误/升级和审批 SLA 正式表均归入 ApprovaPlat `wf_*`；还必须核对菜单 86 条以及应用账号只拥有目标 schema 的最小 DML 权限。
+三组脚本共定义 58 项只读检查，所有结果都必须为 `PASS`。表数检查固定核对总表数 111、分项表数 `20/11/36/44`，条件分支、动态参与者、子流程、申请草稿、自动抄送、普通审批通知、受控循环、多池协作、BPMN 错误/升级和审批 SLA 正式表均归入 ApprovaPlat `wf_*`；还必须核对菜单 98 条以及应用账号只拥有目标 schema 的最小 DML 权限。
 
 静态契约测试和发布门禁自测不能代替真实 MySQL 空库安装。正式发布前必须保存真实执行日志、表清单、约束结果、`mysqlcheck`、备份恢复和三组验收输出。
 

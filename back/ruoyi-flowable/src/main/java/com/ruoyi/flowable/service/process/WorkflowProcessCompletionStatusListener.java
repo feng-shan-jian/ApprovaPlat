@@ -3,6 +3,8 @@ package com.ruoyi.flowable.service.process;
 import java.util.Date;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
+import org.springframework.beans.factory.ObjectProvider;
 import org.flowable.common.engine.api.FlowableException;
 import org.flowable.common.engine.api.delegate.event.FlowableEngineEntityEvent;
 import org.flowable.common.engine.api.delegate.event.FlowableEngineEventType;
@@ -13,7 +15,7 @@ import org.flowable.engine.impl.util.CommandContextUtil;
 import org.flowable.variable.service.VariableServiceConfiguration;
 import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntity;
 import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntityManager;
-import org.springframework.beans.factory.ObjectProvider;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
 /**
@@ -30,6 +32,9 @@ public final class WorkflowProcessCompletionStatusListener
 {
     /** 自动抄送服务提供器；引擎完成初始化前不得提前解析其 Flowable 服务依赖。 */
     private final ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider;
+
+    /** 引擎初始化结束后再解析通知服务，避免通知服务反向依赖 Flowable 公共服务形成启动环。 */
+    private final Supplier<WorkflowNotificationService> notificationServiceSupplier;
     /** 自然完成实例的正式业务状态。 */
     static final String COMPLETED_STATUS = "completed";
 
@@ -50,7 +55,7 @@ public final class WorkflowProcessCompletionStatusListener
      */
     public WorkflowProcessCompletionStatusListener()
     {
-        this(null);
+        this(null, () -> null);
     }
 
     /**
@@ -62,8 +67,48 @@ public final class WorkflowProcessCompletionStatusListener
     public WorkflowProcessCompletionStatusListener(
             ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider)
     {
+        this(automaticCopyServiceProvider, () -> null);
+    }
+
+    /**
+     * 创建同时登记自然完成通知的监听器。
+     * @param notificationService WorkflowNotificationService，可为空的事务 outbox 服务
+     * @return void，配置后仅处理 PROCESS_COMPLETED
+     */
+    public WorkflowProcessCompletionStatusListener(
+            WorkflowNotificationService notificationService)
+    {
+        this(null, () -> notificationService);
+    }
+
+    /**
+     * 创建延迟解析自动抄送与普通审批通知服务的监听器，供 Flowable 引擎初始化配置使用。
+     * @param automaticCopyServiceProvider ObjectProvider，流程完成后获取自动抄送服务
+     * @param notificationServiceProvider ObjectProvider，流程完成后获取通知服务
+     * @return void，配置后仅处理 PROCESS_COMPLETED
+     */
+    public WorkflowProcessCompletionStatusListener(
+            ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider,
+            ObjectProvider<WorkflowNotificationService> notificationServiceProvider)
+    {
+        this(automaticCopyServiceProvider,
+                notificationServiceProvider == null
+                        ? () -> null : notificationServiceProvider::getIfAvailable);
+    }
+
+    /**
+     * 初始化流程完成监听器持有的延迟依赖。
+     * @param automaticCopyServiceProvider ObjectProvider，自动抄送服务延迟提供器，可为空
+     * @param notificationServiceSupplier Supplier，通知服务延迟提供器
+     * @return void，构造后仅处理 PROCESS_COMPLETED
+     */
+    private WorkflowProcessCompletionStatusListener(
+            ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider,
+            Supplier<WorkflowNotificationService> notificationServiceSupplier)
+    {
         super(Set.of(FlowableEngineEventType.PROCESS_COMPLETED));
         this.automaticCopyServiceProvider = automaticCopyServiceProvider;
+        this.notificationServiceSupplier = notificationServiceSupplier;
     }
 
     /**
@@ -84,7 +129,11 @@ public final class WorkflowProcessCompletionStatusListener
         }
 
         boolean naturallyCompleted = updateHistoricProcessStatus(processInstance.getId());
-        if (naturallyCompleted && automaticCopyServiceProvider != null)
+        if (!naturallyCompleted)
+        {
+            return;
+        }
+        if (automaticCopyServiceProvider != null)
         {
             // 引擎配置阶段仅持有提供器；这里已进入运行命令，才可解析依赖 Flowable 服务的业务 Bean。
             WorkflowAutomaticCopyService automaticCopyService =
@@ -92,6 +141,14 @@ public final class WorkflowProcessCompletionStatusListener
             // 只有 running 收敛为 completed 才触发，驳回、取消和终止不得误发流程完成抄送。
             automaticCopyService.onProcessCompleted(processInstance.getId(),
                     processInstance.getProcessDefinitionId());
+        }
+        WorkflowNotificationService notificationService =
+                notificationServiceSupplier.get();
+        if (notificationService != null)
+        {
+            // 只有 running 真正收敛为 completed 才登记结果，显式业务终态不会重复通知。
+            notificationService.onProcessResult("PROCESS_COMPLETED",
+                    processInstance.getProcessDefinitionId(), processInstance.getId());
         }
     }
 

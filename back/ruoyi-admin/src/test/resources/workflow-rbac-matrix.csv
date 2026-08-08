@@ -133,3 +133,13 @@ WfTaskSlaController,listExecutions,GET,/workflow/sla/executions,SINGLE,workflow:
 WfTaskSlaController,listAudits,GET,/workflow/sla/audits,SINGLE,workflow:sla:audit,ALLOW,ALLOW,DENY,DENY,ALLOW
 WfTaskSlaController,myNotifications,GET,/workflow/sla/notifications,SINGLE,workflow:sla:notification,ALLOW,ALLOW,ALLOW,ALLOW,ALLOW
 WfTaskSlaController,markNotificationRead,PUT,/workflow/sla/notifications/{notificationId}/read,SINGLE,workflow:sla:notification,ALLOW,ALLOW,ALLOW,ALLOW,ALLOW
+WfNotificationController,inbox,GET,/workflow/notification/inbox,SINGLE,workflow:notification:list,ALLOW,DENY,ALLOW,ALLOW,ALLOW
+WfNotificationController,markRead,POST,/workflow/notification/inbox/{notificationId}/read,SINGLE,workflow:notification:list,ALLOW,DENY,ALLOW,ALLOW,ALLOW
+WfNotificationController,markAllRead,POST,/workflow/notification/inbox/read-all,SINGLE,workflow:notification:list,ALLOW,DENY,ALLOW,ALLOW,ALLOW
+WfNotificationController,preference,GET,/workflow/notification/preference,SINGLE,workflow:notification:list,ALLOW,DENY,ALLOW,ALLOW,ALLOW
+WfNotificationController,savePreference,PUT,/workflow/notification/preference,SINGLE,workflow:notification:list,ALLOW,DENY,ALLOW,ALLOW,ALLOW
+WfNotificationController,urge,POST,/workflow/notification/urge,SINGLE,workflow:notification:urge,ALLOW,DENY,ALLOW,DENY,DENY
+WfNotificationController,policies,GET,/workflow/notification/policies,SINGLE,workflow:notification:manage,ALLOW,ALLOW,DENY,DENY,DENY
+WfNotificationController,savePolicy,PUT,/workflow/notification/policies,SINGLE,workflow:notification:manage,ALLOW,ALLOW,DENY,DENY,DENY
+WfNotificationController,outbox,GET,/workflow/notification/outbox,SINGLE,workflow:notification:audit,ALLOW,ALLOW,DENY,DENY,DENY
+WfNotificationController,compensate,POST,/workflow/notification/outbox/{outboxId}/compensate,SINGLE,workflow:notification:retry,ALLOW,DENY,DENY,DENY,DENY

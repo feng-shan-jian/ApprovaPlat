@@ -1486,6 +1486,194 @@ CREATE TABLE IF NOT EXISTS `wf_bpmn_event_notification`
   COLLATE = utf8mb4_unicode_ci
   COMMENT = 'BPMN 业务错误与升级用户站内通知';
 
+CREATE TABLE IF NOT EXISTS `wf_notification_policy`
+(
+    `policy_id`             BIGINT       NOT NULL AUTO_INCREMENT COMMENT '通知策略主键',
+    `scope_type`            VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'DEFAULT、PROCESS 或 NODE',
+    `process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '流程定义 key，默认策略为空',
+    `task_definition_key`   VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '节点 key，仅 NODE 策略必填',
+    `event_type`            VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '普通审批生命周期事件',
+    `scope_key`             VARCHAR(540) CHARACTER SET ascii COLLATE ascii_bin AS
+        (CONCAT(`scope_type`, ':', COALESCE(`process_definition_key`, ''), ':', COALESCE(`task_definition_key`, ''))) STORED COMMENT '空值安全的策略作用域自然键',
+    `recipient_rules`       VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '逗号分隔的固定接收人规则',
+    `channels`              VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'INBOX 或 INBOX,EMAIL',
+    `title_template`        VARCHAR(160) NOT NULL COMMENT '仅允许白名单变量的标题模板',
+    `content_template`      VARCHAR(700) NOT NULL COMMENT '仅允许白名单变量的正文模板',
+    `max_attempts`          TINYINT UNSIGNED NOT NULL DEFAULT 6 COMMENT '每个通道最大投递次数',
+    `status`                VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'ENABLED' COMMENT 'ENABLED 或 DISABLED',
+    `revision`              INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+    `create_by`             VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '创建人',
+    `create_time`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `update_by`             VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '更新人',
+    `update_time`           DATETIME(3)           DEFAULT NULL,
+    PRIMARY KEY (`policy_id`),
+    UNIQUE KEY `uk_wf_notification_policy_scope` (`scope_key`, `event_type`),
+    KEY `idx_wf_notification_policy_match` (`event_type`, `status`, `process_definition_key`, `task_definition_key`),
+    CONSTRAINT `chk_wf_notification_policy_scope` CHECK
+    (
+        (`scope_type` = 'DEFAULT' AND `process_definition_key` IS NULL AND `task_definition_key` IS NULL)
+        OR (`scope_type` = 'PROCESS' AND `process_definition_key` IS NOT NULL AND `task_definition_key` IS NULL)
+        OR (`scope_type` = 'NODE' AND `process_definition_key` IS NOT NULL AND `task_definition_key` IS NOT NULL)
+    ),
+    CONSTRAINT `chk_wf_notification_policy_channels` CHECK (`channels` IN ('INBOX', 'EMAIL', 'INBOX,EMAIL')),
+    CONSTRAINT `chk_wf_notification_policy_status` CHECK (`status` IN ('ENABLED', 'DISABLED')),
+    CONSTRAINT `chk_wf_notification_policy_attempts` CHECK (`max_attempts` BETWEEN 1 AND 20)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '普通审批流程与节点通知策略';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_preference`
+(
+    `user_id`       BIGINT      NOT NULL COMMENT '正式用户主键',
+    `inbox_enabled` TINYINT(1)  NOT NULL DEFAULT 1 COMMENT '是否接收站内通知',
+    `email_enabled` TINYINT(1)  NOT NULL DEFAULT 1 COMMENT '是否接收邮件通知',
+    `revision`      INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+    `update_time`   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`user_id`),
+    CONSTRAINT `fk_wf_notification_preference_user` FOREIGN KEY (`user_id`)
+        REFERENCES `sys_user` (`user_id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '用户审批通知通道偏好';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_outbox`
+(
+    `outbox_id`              BIGINT       NOT NULL AUTO_INCREMENT COMMENT '出站主键',
+    `idempotency_key`        CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '业务事件、接收人和通道摘要',
+    `event_type`             VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `channel`                VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'INBOX 或 EMAIL',
+    `recipient_user_id`      BIGINT       NOT NULL COMMENT '正式接收人主键',
+    `process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `process_instance_id`    VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `task_id`                VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `task_definition_key`    VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `actor_user_id`          VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `title`                  VARCHAR(160) NOT NULL,
+    `content`                VARCHAR(700) NOT NULL,
+    `route_path`             VARCHAR(500) NOT NULL COMMENT '站内安全相对路由',
+    `status`                 VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING',
+    `attempt_count`          TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `max_attempts`           TINYINT UNSIGNED NOT NULL,
+    `next_attempt_at`        DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `lease_owner`            VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `lease_expires_at`       DATETIME(3) DEFAULT NULL,
+    `last_error_code`        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `last_error_summary`     VARCHAR(500) DEFAULT NULL COMMENT '脱敏失败摘要',
+    `revision`               INT UNSIGNED NOT NULL DEFAULT 0,
+    `create_time`            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `processed_time`         DATETIME(3) DEFAULT NULL,
+    PRIMARY KEY (`outbox_id`),
+    UNIQUE KEY `uk_wf_notification_outbox_idempotency` (`idempotency_key`),
+    KEY `idx_wf_notification_outbox_due` (`status`, `next_attempt_at`, `lease_expires_at`, `outbox_id`),
+    KEY `idx_wf_notification_outbox_instance` (`process_instance_id`, `outbox_id`),
+    CONSTRAINT `fk_wf_notification_outbox_user` FOREIGN KEY (`recipient_user_id`)
+        REFERENCES `sys_user` (`user_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_notification_outbox_hash` CHECK (`idempotency_key` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_notification_outbox_channel` CHECK (`channel` IN ('INBOX', 'EMAIL')),
+    CONSTRAINT `chk_wf_notification_outbox_status` CHECK (`status` IN ('PENDING', 'RETRYING', 'DELIVERING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED')),
+    CONSTRAINT `chk_wf_notification_outbox_attempts` CHECK (`max_attempts` BETWEEN 1 AND 20 AND `attempt_count` <= `max_attempts`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '普通审批通知可靠 outbox';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_inbox`
+(
+    `notification_id`    BIGINT       NOT NULL AUTO_INCREMENT,
+    `outbox_id`          BIGINT       NOT NULL COMMENT '唯一来源 outbox',
+    `recipient_user_id`  BIGINT       NOT NULL,
+    `event_type`         VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `title`              VARCHAR(160) NOT NULL,
+    `content`            VARCHAR(700) NOT NULL,
+    `process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `task_id`            VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `route_path`         VARCHAR(500) NOT NULL,
+    `read_status`        VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'UNREAD',
+    `create_time`        DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `read_time`          DATETIME(3) DEFAULT NULL,
+    PRIMARY KEY (`notification_id`),
+    UNIQUE KEY `uk_wf_notification_inbox_outbox` (`outbox_id`),
+    KEY `idx_wf_notification_inbox_user` (`recipient_user_id`, `read_status`, `notification_id`),
+    CONSTRAINT `fk_wf_notification_inbox_outbox` FOREIGN KEY (`outbox_id`)
+        REFERENCES `wf_notification_outbox` (`outbox_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `fk_wf_notification_inbox_user` FOREIGN KEY (`recipient_user_id`)
+        REFERENCES `sys_user` (`user_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_notification_inbox_status` CHECK (`read_status` IN ('UNREAD', 'READ')),
+    CONSTRAINT `chk_wf_notification_inbox_read` CHECK
+    ((`read_status` = 'UNREAD' AND `read_time` IS NULL) OR (`read_status` = 'READ' AND `read_time` IS NOT NULL))
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '普通审批用户站内通知';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_delivery_audit`
+(
+    `audit_id`       BIGINT       NOT NULL AUTO_INCREMENT,
+    `outbox_id`      BIGINT       NOT NULL,
+    `action_type`    VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `attempt_no`     TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `from_status`    VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `to_status`      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `actor_type`     VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `actor_id`       VARCHAR(128) NOT NULL,
+    `error_code`     VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `detail`         VARCHAR(500) NOT NULL COMMENT '不含邮箱和邮件正文的脱敏审计',
+    `create_time`    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`audit_id`),
+    UNIQUE KEY `uk_wf_notification_delivery_audit` (`outbox_id`, `action_type`, `attempt_no`),
+    KEY `idx_wf_notification_delivery_outbox` (`outbox_id`, `audit_id`),
+    CONSTRAINT `fk_wf_notification_delivery_outbox` FOREIGN KEY (`outbox_id`)
+        REFERENCES `wf_notification_outbox` (`outbox_id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '普通审批通知逐次投递审计';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_urge_audit`
+(
+    `urge_id`             BIGINT       NOT NULL AUTO_INCREMENT,
+    `process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `actor_user_id`       BIGINT       NOT NULL,
+    `recipient_count`     INT UNSIGNED NOT NULL,
+    `reason`              VARCHAR(500) NOT NULL,
+    `create_time`         DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`urge_id`),
+    KEY `idx_wf_notification_urge_frequency` (`process_instance_id`, `actor_user_id`, `create_time`),
+    CONSTRAINT `fk_wf_notification_urge_actor` FOREIGN KEY (`actor_user_id`)
+        REFERENCES `sys_user` (`user_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_notification_urge_recipient` CHECK (`recipient_count` BETWEEN 1 AND 2000)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '人工催办业务审计，不改变审批状态';
+
+INSERT INTO `wf_notification_policy`
+    (`scope_type`, `process_definition_key`, `task_definition_key`, `event_type`,
+     `recipient_rules`, `channels`, `title_template`, `content_template`, `max_attempts`,
+     `status`, `create_by`)
+VALUES
+    ('DEFAULT', NULL, NULL, 'TASK_ARRIVED', 'TASK_RECIPIENT', 'INBOX',
+     '新待办：{{taskName}}', '流程“{{processName}}”有新的待办任务“{{taskName}}”。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_CLAIMED', 'TASK_RECIPIENT', 'INBOX',
+     '任务已认领：{{taskName}}', '您已成为流程“{{processName}}”任务“{{taskName}}”的办理人。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_UNCLAIMED', 'TASK_RECIPIENT', 'INBOX',
+     '任务已释放：{{taskName}}', '流程“{{processName}}”任务“{{taskName}}”已重新进入待认领状态。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_DELEGATED', 'TASK_RECIPIENT', 'INBOX',
+     '任务已委派：{{taskName}}', '流程“{{processName}}”任务“{{taskName}}”已委派给您。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_DELEGATION_RESOLVED', 'TASK_RECIPIENT', 'INBOX',
+     '委派任务已归还：{{taskName}}', '流程“{{processName}}”任务“{{taskName}}”已归还原办理人。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_TRANSFERRED', 'TASK_RECIPIENT', 'INBOX',
+     '任务已转办：{{taskName}}', '流程“{{processName}}”任务“{{taskName}}”已转办给您。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_RETURNED', 'TASK_RECIPIENT', 'INBOX',
+     '申请已退回修改', '流程“{{processName}}”已退回，请修改后重新提交。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_RESUBMITTED', 'TASK_RECIPIENT', 'INBOX',
+     '申请已重新提交：{{taskName}}', '流程“{{processName}}”已修改并重新提交，请继续处理“{{taskName}}”。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_COMPLETED', 'INITIATOR', 'INBOX',
+     '审批节点已完成：{{taskName}}', '流程“{{processName}}”的节点“{{taskName}}”已完成。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'PROCESS_COMPLETED', 'INITIATOR', 'INBOX',
+     '流程已完成：{{processName}}', '您的流程“{{processName}}”已完成。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'PROCESS_CANCELED', 'INITIATOR', 'INBOX',
+     '流程已取消：{{processName}}', '流程“{{processName}}”已取消。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'PROCESS_REJECTED', 'INITIATOR', 'INBOX',
+     '流程已驳回：{{processName}}', '流程“{{processName}}”已驳回并结束。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'PROCESS_TERMINATED', 'INITIATOR', 'INBOX',
+     '流程已终止：{{processName}}', '流程“{{processName}}”已由管理员终止。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'MANUAL_URGE', 'TASK_RECIPIENT', 'INBOX',
+     '审批催办：{{taskName}}', '发起人提醒您处理流程“{{processName}}”的待办“{{taskName}}”。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'COPY_CREATED', 'TASK_RECIPIENT', 'INBOX',
+     '流程抄送：{{processName}}', '您收到流程“{{processName}}”的审批抄送。', 6, 'ENABLED', 'system')
+ON DUPLICATE KEY UPDATE `policy_id` = `policy_id`;
+
 INSERT INTO `wf_bpmn_event_code`
     (`event_type`, `event_code`, `event_name`, `notification_policy`, `status`, `description`,
      `create_by`, `create_time`, `update_by`, `update_time`)

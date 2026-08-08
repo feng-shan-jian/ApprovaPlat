@@ -40,6 +40,7 @@ import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 流程实例状态管理、受控终止和已结束历史删除服务。
@@ -108,6 +109,9 @@ public class WorkflowProcessInstanceService
     /** SLA 时钟冻结和 Flowable timer job 重排服务；旧直接构造测试时可为空。 */
     private WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
 
+    /** 普通审批结果通知服务；旧直接构造单元测试时可为空。 */
+    private WorkflowNotificationService notificationService;
+
     /**
      * 创建流程实例写操作服务。
      *
@@ -147,6 +151,17 @@ public class WorkflowProcessInstanceService
     public void setTaskSlaRuntimeService(WorkflowTaskSlaRuntimeService taskSlaRuntimeService)
     {
         this.taskSlaRuntimeService = taskSlaRuntimeService;
+    }
+
+    /**
+     * 延迟注入普通审批结果通知服务。
+     * @param notificationService WorkflowNotificationService，显式取消/终止 outbox 服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setNotificationService(WorkflowNotificationService notificationService)
+    {
+        this.notificationService = notificationService;
     }
 
     /**
@@ -351,6 +366,13 @@ public class WorkflowProcessInstanceService
                 runtimeService.updateBusinessStatus(rootInstanceId, decision.processStatus());
                 runtimeService.setVariable(rootInstanceId, PROCESS_STATUS_VARIABLE,
                         decision.processStatus());
+                if (notificationService != null)
+                {
+                    String eventType = CANCELED_STATUS.equals(decision.processStatus())
+                            ? "PROCESS_CANCELED" : "PROCESS_TERMINATED";
+                    notificationService.onProcessResult(eventType,
+                            rootInstance.getProcessDefinitionId(), rootInstanceId);
+                }
                 String auditMessage = buildTerminationAudit(decision, actor.userId(), reason,
                         wasSuspended, requestedInstanceId, rootInstanceId,
                         processTreeInstanceIds.size());

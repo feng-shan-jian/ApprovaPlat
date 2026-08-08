@@ -12,7 +12,8 @@
           </div>
         </div>
       </div>
-      <div v-if="ready && !loading && hasAnyTaskAction" class="workflow-detail__actions">
+      <div v-if="ready && !loading && (hasAnyTaskAction || canUrge)" class="workflow-detail__actions">
+        <el-button v-if="canUrge" icon="Bell" :loading="urgeBusy" @click="openUrgeDialog">催办</el-button>
         <el-button
           v-if="canAdjustMultiInstance"
           icon="Plus"
@@ -447,6 +448,32 @@
         <el-button type="primary" :loading="multiInstanceBusy" @click="submitMultiInstanceAdjustment">确认</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="urgeDialog.visible"
+      title="催办当前审批"
+      width="min(480px, calc(100vw - 32px))"
+      append-to-body
+      :close-on-click-modal="!urgeBusy"
+      :close-on-press-escape="!urgeBusy"
+    >
+      <el-form label-position="top">
+        <el-form-item label="催办原因" required>
+          <el-input
+            v-model="urgeDialog.reason"
+            type="textarea"
+            :rows="4"
+            maxlength="500"
+            show-word-limit
+            placeholder="请输入需要当前办理人关注的业务原因"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="urgeBusy" @click="urgeDialog.visible = false">取消</el-button>
+        <el-button type="primary" :loading="urgeBusy" @click="submitUrge">发送催办</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -465,6 +492,7 @@ import {
   unclaimTask
 } from '@/api/workflow/task'
 import { getWorkflowAttachment } from '@/api/workflow/attachment'
+import { urgeWorkflow } from '@/api/workflow/notification'
 import { listApprovalUserOptions, listIdentityOptions } from '@/api/workflow/identity'
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
@@ -480,6 +508,8 @@ const { width: viewportWidth } = useWindowSize()
 const loading = ref(false)
 const ready = ref(false)
 const actionBusy = ref(false)
+// 催办只记录通知与独立审计，不复用任务办理锁或伪装成审批状态动作。
+const urgeBusy = ref(false)
 const activeTab = ref('taskForm')
 const detail = reactive({})
 const taskFormValues = ref({})
@@ -554,6 +584,9 @@ const multiInstanceDialog = reactive({
   targetName: '',
   error: ''
 })
+
+// 催办弹窗只持有原因；流程主键始终在提交时从当前授权详情重新读取。
+const urgeDialog = reactive({ visible: false, reason: '' })
 
 // 将服务端稳定流程状态映射为用户可见标签和 Element Plus 语义色。
 const statusMeta = computed(() => ({
@@ -676,6 +709,11 @@ const canResolve = computed(() => currentTaskOwned.value
   && detail.processStatus === 'running'
   && pendingDelegation.value
   && hasPermission('workflow:process:approval'))
+// 发起人或持有跨实例催办权限的管理员才能看到入口，后端仍会复核运行状态和对象关系。
+const canUrge = computed(() => detail.processStatus === 'running'
+  && hasPermission('workflow:notification:urge')
+  && (String(detail.startUserId || '') === currentUserId.value
+    || hasPermission('workflow:notification:urge:any')))
 const hasAnyTaskAction = computed(() => canComplete.value || canResubmit.value || canMoveTask.value || canManageTask.value || canUnclaim.value || canResolve.value)
 // 用户选择与抄送字段按动作白名单显示，未列入的动作不会向后端发送额外身份参数。
 const isUserAction = computed(() => ['delegate', 'transfer'].includes(actionDialog.type))
@@ -1849,6 +1887,38 @@ function resetMultiInstanceDialog() {
   multiInstanceUserOptionCache.clear()
   multiInstanceUserSearchSequence++
   multiInstanceUserLoading.value = false
+}
+
+/**
+ * 打开人工催办弹窗并清除上一流程遗留原因。
+ * @returns {void} 无返回值。
+ */
+function openUrgeDialog() {
+  if (!canUrge.value) return denyAction('当前流程不允许催办')
+  urgeDialog.reason = ''
+  urgeDialog.visible = true
+}
+
+/**
+ * 向真实催办 API 提交当前流程与原因，成功后刷新详情确认流程状态未被改变。
+ * @returns {Promise<void>} 完成后关闭弹窗并回显服务端接收人数。
+ */
+async function submitUrge() {
+  const reason = urgeDialog.reason.trim()
+  if (!reason || reason.length > 500) return denyAction('催办原因不能为空且不能超过500个字符')
+  const instanceId = String(detail.processInstanceId || '').trim()
+  if (!canUrge.value || !instanceId || instanceId !== processInstanceId()) {
+    return denyAction('流程状态已变化，请刷新后重试')
+  }
+  urgeBusy.value = true
+  try {
+    const response = await urgeWorkflow({ processInstanceId: instanceId, reason })
+    urgeDialog.visible = false
+    proxy.$modal.msgSuccess(`催办已发送给 ${Number(response.data?.recipientCount || 0)} 名当前办理人`)
+    await loadDetail()
+  } finally {
+    urgeBusy.value = false
+  }
 }
 
 /**

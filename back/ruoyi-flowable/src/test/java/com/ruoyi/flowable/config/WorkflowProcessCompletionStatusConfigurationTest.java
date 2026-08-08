@@ -13,6 +13,7 @@ import org.flowable.spring.boot.ProcessEngineConfigurationConfigurer;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.process.WorkflowProcessCompletionStatusListener;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
@@ -34,6 +35,10 @@ class WorkflowProcessCompletionStatusConfigurationTest
         @SuppressWarnings("unchecked")
         ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider =
                 mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<WorkflowNotificationService> notificationServiceProvider =
+                mock(ObjectProvider.class);
+        configuration.setNotificationServiceProvider(notificationServiceProvider);
         WorkflowProcessCompletionStatusListener completionListener =
                 configuration.workflowProcessCompletionStatusListener(
                         automaticCopyServiceProvider);

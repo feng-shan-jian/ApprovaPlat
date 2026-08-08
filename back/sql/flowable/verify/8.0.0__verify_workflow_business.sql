@@ -4,14 +4,14 @@
 SELECT
     'workflow_schema_table_counts' AS check_name,
     CASE
-        WHEN COUNT(*) = 105
+        WHEN COUNT(*) = 111
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) <> 'ACT_'
                  AND LEFT(UPPER(TABLE_NAME), 4) <> 'FLW_'
                  AND LEFT(UPPER(TABLE_NAME), 3) <> 'WF_'
                  AND LEFT(UPPER(TABLE_NAME), 5) <> 'QRTZ_') = 20
          AND SUM(LEFT(UPPER(TABLE_NAME), 5) = 'QRTZ_') = 11
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) IN ('ACT_', 'FLW_')) = 36
-         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 38
+         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 44
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -1498,6 +1498,69 @@ SELECT 'workflow_participant_rule_data_integrity' AS check_name,
            GROUP_CONCAT(CASE WHEN issue_count > 0 THEN CONCAT(issue_name, ':', issue_count) END
                ORDER BY issue_name), 'none')) AS detail
 FROM integrity_issues;
+
+WITH expected_notification_tables AS (
+    SELECT 'wf_notification_policy' AS table_name
+    UNION ALL SELECT 'wf_notification_preference'
+    UNION ALL SELECT 'wf_notification_outbox'
+    UNION ALL SELECT 'wf_notification_inbox'
+    UNION ALL SELECT 'wf_notification_delivery_audit'
+    UNION ALL SELECT 'wf_notification_urge_audit'
+), actual_notification_tables AS (
+    SELECT table_name, engine, table_collation
+    FROM information_schema.tables
+    WHERE table_schema = DATABASE()
+      AND table_name IN (SELECT table_name FROM expected_notification_tables)
+)
+SELECT
+    'workflow_notification_tables' AS check_name,
+    CASE WHEN COUNT(actual.table_name) = 6
+              AND SUM(actual.engine = 'InnoDB') = 6
+              AND SUM(actual.table_collation = 'utf8mb4_unicode_ci') = 6
+         THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('present=', COUNT(actual.table_name), ', missing=', COALESCE(
+        GROUP_CONCAT(CASE WHEN actual.table_name IS NULL THEN expected.table_name END
+            ORDER BY expected.table_name SEPARATOR ','), 'none')) AS detail
+FROM expected_notification_tables expected
+LEFT JOIN actual_notification_tables actual ON actual.table_name = expected.table_name;
+
+WITH notification_issues AS (
+    SELECT 'policy_invalid' AS issue_name, COUNT(*) AS issue_count
+    FROM wf_notification_policy
+    WHERE scope_type NOT IN ('DEFAULT', 'PROCESS', 'NODE')
+       OR status NOT IN ('ENABLED', 'DISABLED')
+       OR channels NOT IN ('INBOX', 'EMAIL', 'INBOX,EMAIL')
+       OR max_attempts NOT BETWEEN 1 AND 20
+       OR (scope_type = 'DEFAULT' AND (process_definition_key IS NOT NULL OR task_definition_key IS NOT NULL))
+       OR (scope_type = 'PROCESS' AND (process_definition_key IS NULL OR task_definition_key IS NOT NULL))
+       OR (scope_type = 'NODE' AND (process_definition_key IS NULL OR task_definition_key IS NULL))
+
+    UNION ALL
+    SELECT 'outbox_invalid', COUNT(*)
+    FROM wf_notification_outbox o
+    LEFT JOIN sys_user u ON u.user_id = o.recipient_user_id
+    WHERE u.user_id IS NULL OR o.idempotency_key NOT REGEXP '^[0-9a-f]{64}$'
+       OR o.channel NOT IN ('INBOX', 'EMAIL')
+       OR o.status NOT IN ('PENDING', 'RETRYING', 'DELIVERING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED')
+       OR o.attempt_count > o.max_attempts
+       OR (o.status = 'DELIVERING' AND (o.lease_owner IS NULL OR o.lease_expires_at IS NULL))
+       OR (o.status <> 'DELIVERING' AND (o.lease_owner IS NOT NULL OR o.lease_expires_at IS NOT NULL))
+
+    UNION ALL
+    SELECT 'inbox_invalid', COUNT(*)
+    FROM wf_notification_inbox i
+    LEFT JOIN wf_notification_outbox o ON o.outbox_id = i.outbox_id
+    WHERE o.outbox_id IS NULL OR o.channel <> 'INBOX' OR o.recipient_user_id <> i.recipient_user_id
+       OR i.read_status NOT IN ('UNREAD', 'READ')
+       OR (i.read_status = 'UNREAD' AND i.read_time IS NOT NULL)
+       OR (i.read_status = 'READ' AND i.read_time IS NULL)
+)
+SELECT 'workflow_notification_integrity' AS check_name,
+       CASE WHEN SUM(issue_count) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('issues=', SUM(issue_count), ', detail=', COALESCE(GROUP_CONCAT(
+           CASE WHEN issue_count > 0 THEN CONCAT(issue_name, ':', issue_count) END
+           ORDER BY issue_name SEPARATOR ','), 'none')) AS detail
+FROM notification_issues;
 
 SELECT
     'workflow_sla_tables' AS check_name,
