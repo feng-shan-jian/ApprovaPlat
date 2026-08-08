@@ -398,14 +398,6 @@ public class WorkflowTaskLifecycleService
                 Map<String, Object> projectedVariables = attachmentService.prepareTaskVariables(
                         actor.userId(), task.getProcessInstanceId(), completionVariables.values(),
                         completionVariables.attachmentIdsByField());
-                String submissionSnapshot = completionVariables.formSnapshot() == null ? null
-                        : WorkflowFormSubmissionSnapshotCodec.encodeTask(
-                                completionVariables.deploymentId(),
-                                completionVariables.formSnapshot().getSourceType(),
-                                completionVariables.formSnapshot().getFormId(),
-                                completionVariables.formSnapshot().getFormKey(),
-                                 completionVariables.formSnapshot().getNodeKey(), taskId,
-                                 completionVariables.localScope(), projectedVariables);
                 // 在完成前冻结抄送事件和唯一直接后继拓扑，避免任务删除后再信任客户端或推断来源元数据。
                 WorkflowTaskCopyService.CopyPlan copyPlan = taskCopyService.prepare(
                         WorkflowTaskCopyAction.COMPLETE, task, actor, request.copyUserIds());
@@ -426,8 +418,17 @@ public class WorkflowTaskLifecycleService
                     attachmentService.bindTaskAttachments(actor.userId(),
                             task.getProcessInstanceId(), taskId, task.getTaskDefinitionKey(),
                             completionVariables.attachmentIdsByField());
-                    if (submissionSnapshot != null)
+                    if (completionVariables.formSnapshot() != null)
                     {
+                        Map<String, Object> submissionValues = buildTaskSubmissionValues(
+                                task, completionVariables, projectedVariables);
+                        String submissionSnapshot = WorkflowFormSubmissionSnapshotCodec.encodeTask(
+                                completionVariables.deploymentId(),
+                                completionVariables.formSnapshot().getSourceType(),
+                                completionVariables.formSnapshot().getFormId(),
+                                completionVariables.formSnapshot().getFormKey(),
+                                completionVariables.formSnapshot().getNodeKey(), taskId,
+                                completionVariables.localScope(), submissionValues);
                         // 内部快照始终使用 task-local，确保历史更新由真实 taskId 强关联且不污染业务变量。
                         taskService.setVariableLocal(taskId,
                                 WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
@@ -454,6 +455,40 @@ public class WorkflowTaskLifecycleService
             throw engineOperations.withConcurrencyConflictSubCode(exception,
                     WorkflowMultiInstanceService.REVISION_CONFLICT_SUB_CODE);
         }
+    }
+
+    /**
+     * 合成任务完成时的完整可读值，用 task-local 快照冻结只读字段且拒绝带入隐藏字段。
+     *
+     * @param task Task，当前仍活动且已通过办理人校验的真实任务
+     * @param completionVariables CompletionVariables，部署快照、作用域和合法写字段计划
+     * @param projectedVariables Map&lt;String,Object&gt;，附件投影后的本次合法写补丁
+     * @return Map&lt;String,Object&gt;，按部署表单顺序合并当时现值和本次补丁的不可修改映射
+     */
+    private Map<String, Object> buildTaskSubmissionValues(Task task,
+            CompletionVariables completionVariables, Map<String, Object> projectedVariables)
+    {
+        Set<String> readableNames = variableValidator.readableFieldNames(
+                completionVariables.formSnapshot().getContent());
+        Map<String, Object> currentValues = completionVariables.localScope()
+                ? taskService.getVariablesLocal(task.getId(), readableNames)
+                : runtimeService.getVariables(task.getProcessInstanceId(), readableNames);
+        if (currentValues == null)
+        {
+            throw dataError();
+        }
+
+        LinkedHashMap<String, Object> merged = new LinkedHashMap<>();
+        for (String fieldName : readableNames)
+        {
+            if (currentValues.containsKey(fieldName))
+            {
+                merged.put(fieldName, currentValues.get(fieldName));
+            }
+        }
+        // 写补丁已通过同一部署 schema 的 writable 校验，必然可读；显式 null 也必须覆盖旧值。
+        merged.putAll(projectedVariables);
+        return Collections.unmodifiableMap(merged);
     }
 
     /**
@@ -758,23 +793,28 @@ public class WorkflowTaskLifecycleService
             }
             ReturnedAssignmentSnapshot assignment = decodeReturnedAssignment(assignmentJson);
             WfDeployForm startForm = requireStartFormSnapshot(task);
-            WorkflowValidatedStartVariables validated = variableValidator.validateForStart(
-                    startForm.getContent(), request.variables());
+            WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot previousSubmission =
+                    requireStartSubmissionSnapshot(instance, startForm);
+            WorkflowValidatedStartVariables validated = variableValidator.validatePatch(
+                    startForm.getContent(), request.variables(), previousSubmission.values());
             Map<String, Object> projected = attachmentService.prepareTaskVariables(
                     actor.userId(), instance.getId(), validated.variables(),
                     validated.attachmentIdsByField());
+            Map<String, Object> mergedSubmissionValues = mergeStartSubmissionValues(
+                    previousSubmission.values(), projected);
 
             executeConcurrentSensitive(() ->
             {
                 // 开始表单附件允许复用同实例已绑定文件，新文件仍与本次真实重新提交任务绑定并参与回滚。
                 attachmentService.bindTaskAttachments(actor.userId(), instance.getId(), taskId,
                         startForm.getNodeKey(), validated.attachmentIdsByField());
-                replaceStartFormVariables(instance, startForm, projected);
+                applyStartFormVariablePatch(instance, projected);
                 runtimeService.setVariable(instance.getId(),
                         WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
                         WorkflowFormSubmissionSnapshotCodec.encodeStart(
                                 instance.getDeploymentId(), startForm.getSourceType(), startForm.getFormId(),
-                                startForm.getFormKey(), startForm.getNodeKey(), projected));
+                                startForm.getFormKey(), startForm.getNodeKey(),
+                                mergedSubmissionValues));
                 addAuditComment(task, COMPLETE_COMMENT_TYPE, "RESUBMIT",
                         actor.userId(), RESUBMIT_AUDIT_OPINION,
                         task.getTaskDefinitionKey(), null);
@@ -948,12 +988,9 @@ public class WorkflowTaskLifecycleService
         boolean hasTemplate = StringUtils.hasText(userTask.getFormKey());
         boolean hasEmbedded = userTask.getFormProperties() != null
                 && !userTask.getFormProperties().isEmpty();
-        if (hasTemplate && hasEmbedded)
-        {
-            throw dataError();
-        }
         if (hasTemplate)
         {
+            // 正式模板允许携带部署时已验证的受控字段权限 FormProperty；表单数据仍只来自 formKey 快照。
             return userTask.getFormKey();
         }
         return hasEmbedded ? WorkflowFormSourceType.EMBEDDED_FORM_KEY : null;
@@ -2067,15 +2104,14 @@ public class WorkflowTaskLifecycleService
     }
 
     /**
-     * 使用最新提交完整覆盖原开始表单变量，同时保留流程状态等服务端内部变量。
+     * 读取并核验当前实例上一份正式开始提交快照。
      *
      * @param instance ProcessInstance，当前退回修改流程实例
      * @param startForm WfDeployForm，原部署开始表单不可变快照
-     * @param projected Map&lt;String, Object&gt;，校验及附件投影后的完整新表单值
-     * @return 无返回值，旧表单中已删除的字段被移除，新字段和值随后同事务写入
+     * @return WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot，与部署和节点强关联的旧快照
      */
-    private void replaceStartFormVariables(ProcessInstance instance, WfDeployForm startForm,
-            Map<String, Object> projected)
+    private WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot requireStartSubmissionSnapshot(
+            ProcessInstance instance, WfDeployForm startForm)
     {
         Object rawSnapshot = runtimeService.getVariable(instance.getId(),
                 WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME);
@@ -2095,17 +2131,39 @@ public class WorkflowTaskLifecycleService
         {
             throw dataError();
         }
+        return previous;
+    }
 
-        // 只删除上一次开始表单快照确认拥有的字段，不能触碰流程状态、办理配置等内部变量。
-        LinkedHashSet<String> removedFields = new LinkedHashSet<>(previous.values().keySet());
-        removedFields.removeAll(projected.keySet());
-        if (!removedFields.isEmpty())
+    /**
+     * 合并上一份正式开始快照与本次字段补丁，未提交字段保持原值且显式空值仍覆盖原值。
+     *
+     * @param previousValues Map&lt;String,JsonNode&gt;，服务端旧提交快照字段
+     * @param projectedPatch Map&lt;String,Object&gt;，本次权限、类型和附件校验后的字段补丁
+     * @return Map&lt;String,Object&gt;，用于覆盖内部开始提交快照的完整合并值
+     */
+    private Map<String, Object> mergeStartSubmissionValues(
+            Map<String, JsonNode> previousValues, Map<String, Object> projectedPatch)
+    {
+        LinkedHashMap<String, Object> merged = new LinkedHashMap<>();
+        previousValues.forEach((fieldName, value) -> merged.put(fieldName,
+                value == null ? null : value.deepCopy()));
+        merged.putAll(projectedPatch);
+        return Collections.unmodifiableMap(merged);
+    }
+
+    /**
+     * 只把客户端本次明确提交的开始表单字段写回流程变量，避免省略字段被当作空值删除。
+     *
+     * @param instance ProcessInstance，当前退回修改流程实例
+     * @param projectedPatch Map&lt;String,Object&gt;，已完成节点权限、类型和附件校验的字段补丁
+     * @return 无返回值，空补丁不产生流程变量写操作
+     */
+    private void applyStartFormVariablePatch(ProcessInstance instance,
+            Map<String, Object> projectedPatch)
+    {
+        if (!projectedPatch.isEmpty())
         {
-            runtimeService.removeVariables(instance.getId(), removedFields);
-        }
-        if (!projected.isEmpty())
-        {
-            runtimeService.setVariables(instance.getId(), projected);
+            runtimeService.setVariables(instance.getId(), projectedPatch);
         }
     }
 

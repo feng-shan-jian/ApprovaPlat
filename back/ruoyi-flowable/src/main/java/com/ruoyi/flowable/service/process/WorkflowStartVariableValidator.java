@@ -130,6 +130,62 @@ public class WorkflowStartVariableValidator
     public WorkflowValidatedStartVariables validateForStart(String snapshotContent,
             Map<String, Object> variables)
     {
+        return validateSubmission(snapshotContent, variables, Map.of(), true);
+    }
+
+    /**
+     * 按部署表单快照校验草稿字段，但允许正式必填字段暂时缺失或为空。
+     *
+     * @param snapshotContent String，来自 wf_deploy_form.content 的不可变节点表单 JSON
+     * @param variables Map&lt;String,Object&gt;，客户端本次保存的草稿字段补丁
+     * @return WorkflowValidatedStartVariables，已执行字段白名单、类型、写权限和附件格式校验的草稿补丁
+     */
+    public WorkflowValidatedStartVariables validateForDraft(String snapshotContent,
+            Map<String, Object> variables)
+    {
+        // 草稿只放宽必填完整性，隐藏/只读防篡改、类型和资源边界必须与正式提交保持同源。
+        return validateSubmission(snapshotContent, variables, Map.of(), false);
+    }
+
+    /**
+     * 按部署表单校验局部更新，并允许未提交的必填字段沿用上一份正式提交快照。
+     *
+     * @param snapshotContent String，来自 wf_deploy_form.content 的不可变节点表单 JSON
+     * @param variables Map&lt;String,Object&gt;，客户端本次明确提交的字段补丁
+     * @param existingValues Map&lt;String,JsonNode&gt;，上一份服务端正式提交快照字段值
+     * @return WorkflowValidatedStartVariables，仅包含本次合法补丁及其附件 UUID
+     */
+    public WorkflowValidatedStartVariables validatePatch(String snapshotContent,
+            Map<String, Object> variables, Map<String, JsonNode> existingValues)
+    {
+        return validateSubmission(snapshotContent, variables,
+                existingValues == null ? Map.of() : existingValues, true);
+    }
+
+    /**
+     * 从不可变节点表单快照提取允许写入历史提交快照的可读字段目录。
+     *
+     * @param snapshotContent String，来自 wf_deploy_form.content 的不可变节点表单 JSON
+     * @return Set&lt;String&gt;，保持表单字段顺序且不包含隐藏字段的不可修改字段名集合
+     */
+    public Set<String> readableFieldNames(String snapshotContent)
+    {
+        return templateValidator.extractReadableVariableNames(snapshotContent);
+    }
+
+    /**
+     * 统一执行全量发起或局部重提的字段白名单、类型、权限和必填校验。
+     *
+     * @param snapshotContent String，部署时固化的节点表单 JSON
+     * @param variables Map&lt;String,Object&gt;，客户端本次提交的字段集合
+     * @param existingValues Map&lt;String,JsonNode&gt;，局部更新可继承的正式旧值；首次发起或草稿为空
+     * @param enforceRequired boolean，true 表示正式动作必须满足当前节点必填完整性
+     * @return WorkflowValidatedStartVariables，规范化字段补丁和附件引用
+     */
+    private WorkflowValidatedStartVariables validateSubmission(String snapshotContent,
+            Map<String, Object> variables, Map<String, JsonNode> existingValues,
+            boolean enforceRequired)
+    {
         JsonNode snapshotRoot = parseTrustedSnapshot(snapshotContent);
         LinkedHashMap<String, FieldSpec> fieldSpecs = new LinkedHashMap<>();
         collectFieldSpecs(snapshotRoot.path("fields"), fieldSpecs);
@@ -182,19 +238,45 @@ public class WorkflowStartVariableValidator
             normalized.put(fieldName, normalizedValue);
         }
 
-        // 必填校验必须基于 containsKey，避免把未提交字段和显式 null 混为同一数据流。
-        for (FieldSpec fieldSpec : fieldSpecs.values())
+        for (String existingName : existingValues.keySet())
         {
-            if (fieldSpec.required()
-                    && (!normalized.containsKey(fieldSpec.name())
-                    || isEmptyValue(normalized.get(fieldSpec.name()))))
+            if (!fieldSpecs.containsKey(existingName) || isReservedVariable(existingName))
             {
-                throw invalidVariable("开始表单必填字段不能为空: " + fieldSpec.name());
+                throw invalidSnapshot(null);
+            }
+        }
+
+        if (enforceRequired)
+        {
+            // 正式动作中显式空值不能借旧值绕过必填；真正未提交的字段才允许沿用正式快照。
+            for (FieldSpec fieldSpec : fieldSpecs.values())
+            {
+                boolean submitted = normalized.containsKey(fieldSpec.name());
+                boolean missingRequired = submitted
+                        ? isEmptyValue(normalized.get(fieldSpec.name()))
+                        : isEmptyJsonValue(existingValues.get(fieldSpec.name()));
+                if (fieldSpec.required() && missingRequired)
+                {
+                    throw invalidVariable("开始表单必填字段不能为空: " + fieldSpec.name());
+                }
             }
         }
 
         assertSerializedSize(normalized);
         return new WorkflowValidatedStartVariables(normalized, attachmentIdsByField);
+    }
+
+    /**
+     * 判断正式旧快照中的 JSON 值是否不能满足节点必填约束。
+     *
+     * @param value JsonNode，上一份提交快照中的字段值，允许为空
+     * @return boolean，缺失、null、空白文本、空集合或空对象时返回 true
+     */
+    private boolean isEmptyJsonValue(JsonNode value)
+    {
+        return value == null || value.isNull() || value.isMissingNode()
+                || (value.isTextual() && value.textValue().isBlank())
+                || ((value.isArray() || value.isObject()) && value.isEmpty());
     }
 
     /**

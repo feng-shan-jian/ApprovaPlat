@@ -203,6 +203,8 @@ class WorkflowProcessDetailServiceTest
         stubHistoricTaskQuery(List.of(historicTask));
 
         HistoricVariableInstance applicant = variable("applicant", "string", "张三", null);
+        HistoricVariableInstance hiddenStart = variable(
+                "hiddenStart", "string", "开始节点隐藏值", null);
         HistoricVariableInstance internalStatus = variable(
                 "processStatus", "string", "running", null);
         HistoricVariableInstance secret = variable("secret", "string", "不可回显", null);
@@ -213,24 +215,29 @@ class WorkflowProcessDetailServiceTest
                 "infinity", "json", DoubleNode.valueOf(Double.POSITIVE_INFINITY), null);
         HistoricVariableInstance decision = variable(
                 "decision", "json", Map.of("approved", true), "task-1");
+        HistoricVariableInstance hiddenTask = variable(
+                "hiddenTask", "string", "任务节点隐藏值", "task-1");
         HistoricVariableInstance unsafeLocal = variable(
                 "unsafe", "serializable", null, "task-1");
-        stubVariableQueries(List.of(applicant, internalStatus, secret, binary,
+        stubVariableQueries(List.of(applicant, hiddenStart, internalStatus, secret, binary,
                         notANumber, infinity),
-                List.of(decision, unsafeLocal));
+                List.of(decision, hiddenTask, unsafeLocal));
         WorkflowHistoricSubmissionRow originalStartSubmission = submissionUpdate(
                 "detail-start-original", "2026-07-25T08:00:00Z", null, "start-activity",
                 WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-1", 1L,
-                        "key_1", "start", Map.of("applicant", "李四")));
+                        "key_1", "start", Map.of(
+                                "applicant", "李四", "hiddenStart", "旧隐藏值")));
         WorkflowHistoricSubmissionRow startSubmission = submissionUpdate("detail-start",
                 "2026-07-25T08:00:01Z", null, "start-activity",
                 WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-1", 1L,
-                        "key_1", "start", Map.of("applicant", "张三")));
+                        "key_1", "start", Map.of(
+                                "applicant", "张三", "hiddenStart", "开始节点隐藏值")));
         WorkflowHistoricSubmissionRow taskSubmission = stringBlobSubmissionUpdate("detail-task-1",
                 "2026-07-25T09:00:00Z", "task-1", "approve-activity",
                 WorkflowFormSubmissionSnapshotCodec.encodeTask("deployment-1", 2L,
                         "key_2", "approve", "task-1", true,
-                        Map.of("decision", Map.of("approved", true))));
+                        Map.of("decision", Map.of("approved", true),
+                                "hiddenTask", "任务节点隐藏值")));
         stubSubmissionUpdates(List.of(originalStartSubmission, startSubmission, taskSubmission));
 
         Comment comment = mock(Comment.class);
@@ -287,6 +294,8 @@ class WorkflowProcessDetailServiceTest
         assertThat(detail.flowViewer().finishedSequenceFlowIds()).contains("flow-1");
         assertThat(detail.flowViewer().returnedActivityIds()).contains("approve");
         verify(internalStatus, never()).getValue();
+        verify(hiddenStart, never()).getValue();
+        verify(hiddenTask, never()).getValue();
         verify(secret, never()).getValue();
         verify(binary, never()).getValue();
         verify(unsafeLocal, never()).getValue();
@@ -1553,7 +1562,8 @@ class WorkflowProcessDetailServiceTest
     {
         return snapshot(1L, "key_1", "start", "申请表", "开始", """
                 {"fields":[
-                  {"__vModel__":"applicant","__config__":{"layout":"colFormItem","tag":"el-input"}},
+             {"__vModel__":"applicant","__config__":{"layout":"colFormItem","tag":"el-input"}},
+             {"__vModel__":"hiddenStart","__config__":{"layout":"colFormItem","tag":"el-input","workflowHidden":true,"workflowReadable":false,"workflowWritable":false},"disabled":true},
                   {"__vModel__":"processStatus","__config__":{"layout":"colFormItem","tag":"el-input"}},
                   {"__vModel__":"attachment","__config__":{"layout":"colFormItem","tag":"el-upload"}},
                   {"__vModel__":"notANumber","__config__":{"layout":"colFormItem","tag":"el-input-number"}},
@@ -1570,7 +1580,8 @@ class WorkflowProcessDetailServiceTest
     {
         return snapshot(2L, "key_2", "approve", "审批表", "审批", """
                 {"fields":[
-                  {"__vModel__":"decision","__config__":{"layout":"colFormItem","tag":"el-switch"}},
+             {"__vModel__":"decision","__config__":{"layout":"colFormItem","tag":"el-switch"}},
+             {"__vModel__":"hiddenTask","__config__":{"layout":"colFormItem","tag":"el-input","workflowHidden":true,"workflowReadable":false,"workflowWritable":false},"disabled":true},
                   {"__vModel__":"unsafe","__config__":{"layout":"colFormItem","tag":"el-input"}}
                 ]}
                 """);

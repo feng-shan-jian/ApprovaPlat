@@ -1095,8 +1095,10 @@ public class WorkflowModelService
             if (reference.sourceType() == WorkflowFormSourceType.TEMPLATE)
             {
                 WfForm form = formsById.computeIfAbsent(reference.formId(), this::requireActiveForm);
+                String permissionContent = WorkflowNodeFormPermissionSnapshot.apply(
+                        form.getContent(), reference, formTemplateValidator);
                 sources.add(new FormSnapshotSource(reference, form.getFormName(),
-                        form.getContent(), List.of()));
+                        permissionContent, List.of()));
             }
             else
             {

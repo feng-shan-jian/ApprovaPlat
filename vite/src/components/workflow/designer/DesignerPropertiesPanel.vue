@@ -50,6 +50,13 @@
                 :custom-field-loading="extensionLoading"
                 @change="emit('embedded-form-change', $event)"
               />
+              <el-form-item v-if="state.formSource === 'TEMPLATE' && state.formKey" label="节点字段权限">
+                <FormFieldPermissionEditor
+                  :fields="state.formPermissionFields"
+                  :default-mode="state.formPermissionDefault"
+                  @change="emit('form-permission-change', $event)"
+                />
+              </el-form-item>
             </template>
 
             <ParticipantRuleEditor
@@ -455,6 +462,7 @@
 
 <script setup name="DesignerPropertiesPanel">
 import EmbeddedFormFieldEditor from './EmbeddedFormFieldEditor.vue'
+import FormFieldPermissionEditor from './FormFieldPermissionEditor.vue'
 import CelExpressionEditor from './CelExpressionEditor.vue'
 import HttpConnectorEditor from './HttpConnectorEditor.vue'
 import SqlConnectorEditor from './SqlConnectorEditor.vue'
@@ -499,7 +507,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   'common-change', 'id-change', 'process-change', 'form-source-change', 'form-change',
-  'embedded-form-change', 'assignment-change', 'participant-rule-change',
+  'embedded-form-change', 'form-permission-change', 'assignment-change', 'participant-rule-change',
   'user-task-change', 'extension-selection-change', 'service-task-change', 'condition-change',
   'condition-rule-change', 'condition-default-change', 'documentation-change',
   'multi-instance-change', 'activity-change', 'call-activity-change', 'event-change', 'dmn-change',

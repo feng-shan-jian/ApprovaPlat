@@ -1,5 +1,5 @@
 <template>
-  <el-row v-if="field.layout === 'rowFormItem'" :gutter="gutter" class="workflow-form-row">
+  <el-row v-if="!field.hidden && field.readable && field.layout === 'rowFormItem'" :gutter="gutter" class="workflow-form-row">
     <WorkflowFormField
       v-for="(child, index) in field.children"
       :key="child.variable || `${child.tag}-${index}`"
@@ -14,7 +14,7 @@
     />
   </el-row>
 
-  <el-col v-else v-bind="columnProps">
+  <el-col v-else-if="!field.hidden && field.readable" v-bind="columnProps">
     <el-form-item :label="field.label" :prop="field.variable" :label-width="field.labelWidth ? `${field.labelWidth}px` : undefined">
       <template v-if="field.tag === 'el-select'">
         <el-select v-bind="controlProps" :model-value="value" @update:model-value="updateValue">
@@ -38,7 +38,7 @@
         <Editor
           :model-value="value || ''"
           :min-height="field.props.height || 180"
-          :read-only="readonly"
+          :read-only="effectiveReadonly"
           type="base64"
           @update:model-value="updateValue"
         />
@@ -47,7 +47,7 @@
         <WorkflowAttachmentUpload
           :field-name="field.variable"
           :model-value="Array.isArray(value) ? value : []"
-          :disabled="readonly || Boolean(field.props.disabled)"
+          :disabled="effectiveReadonly || Boolean(field.props.disabled)"
           :limit="field.props.limit || 10"
           :accept="field.props.accept || ''"
           :max-size-mb="field.props.fileSize || 50"
@@ -95,6 +95,8 @@ const props = defineProps({
 
 const emit = defineEmits(['update:value', 'busy-change', 'error'])
 const tableColumns = computed(() => props.field.children.filter(child => child.tag === 'el-table-column'))
+// effectiveReadonly 合并页面历史模式和部署快照节点权限；disabled 只负责控件表现。
+const effectiveReadonly = computed(() => props.readonly || props.field.writable === false)
 const columnProps = computed(() => ({
   span: props.field.span,
   xs: 24,
@@ -105,8 +107,8 @@ const columnProps = computed(() => ({
 }))
 const controlProps = computed(() => ({
   ...props.field.props,
-  disabled: props.readonly || Boolean(props.field.props.disabled),
-  readonly: props.readonly || Boolean(props.field.props.readonly),
+  disabled: effectiveReadonly.value || Boolean(props.field.props.disabled),
+  readonly: effectiveReadonly.value || Boolean(props.field.props.readonly),
   style: { width: '100%' }
 }))
 
@@ -116,7 +118,7 @@ const controlProps = computed(() => ({
  * @returns {void} 无返回值。
  */
 function updateValue(value) {
-  if (!props.readonly) emit('update:value', value)
+  if (!effectiveReadonly.value) emit('update:value', value)
 }
 
 /**
@@ -126,7 +128,7 @@ function updateValue(value) {
  * @returns {void} 无返回值。
  */
 function updateChild(variable, value) {
-  if (variable && !props.readonly) props.formModel[variable] = value
+  if (variable && !effectiveReadonly.value) props.formModel[variable] = value
 }
 
 /**

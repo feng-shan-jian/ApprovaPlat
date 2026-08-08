@@ -181,6 +181,38 @@ class WorkflowBpmnServiceTest
     }
 
     /**
+     * 验证正式模板可以携带受控默认及逐字段权限，并在模型重开所需的 BPMN 引用中稳定回读。
+     *
+     * @return void，权限 FormProperty 被当作内嵌表单或四态丢失时测试失败
+     */
+    @Test
+    void extractsControlledTemplateFieldPermissions()
+    {
+        String permissionStart = """
+                <startEvent id="start" name="提交申请" flowable:formKey="key_1">
+                  <extensionElements>
+                    <flowable:formProperty id="approva_permission_default" name="批量默认字段权限"
+                      type="string" readable="true" writable="true" required="false"/>
+                    <flowable:formProperty id="approva_permission_field_1" name="金额"
+                      type="string" variable="amount" readable="true" writable="true" required="true"/>
+                  </extensionElements>
+                </startEvent>
+                """.strip();
+        String xml = validBpmn().replace(
+                "<startEvent id=\"start\" name=\"提交申请\" flowable:formKey=\"key_1\"/>",
+                permissionStart);
+
+        WorkflowBpmnFormReference reference = service.validate(
+                xml.getBytes(StandardCharsets.UTF_8)).formReferences().get(0);
+
+        assertThat(reference.sourceType()).isEqualTo(WorkflowFormSourceType.TEMPLATE);
+        assertThat(reference.defaultPermission()).isEqualTo(
+                WorkflowFormFieldPermissionMode.EDITABLE);
+        assertThat(reference.fieldPermissions()).containsExactlyEntriesOf(
+                java.util.Map.of("amount", WorkflowFormFieldPermissionMode.REQUIRED));
+    }
+
+    /**
      * 验证 ComplexGateway 可作为作者 XML 保存并返回精确诊断，但部署门禁明确拒绝。
      *
      * @return 无返回值；保存被误拒绝、元素定位缺失或部署被放行时测试失败

@@ -2,7 +2,7 @@
 
 ## 组件简介
 
-`DesignerPropertiesPanel` 是 BPMN 设计器的受控属性编辑界面，覆盖基础信息、流程版本、正式模板与内嵌 FormData、办理配置、活动循环与多实例、受控服务任务扩展、DMN 精确版本、条件、调用活动、事件参数、异步执行标志、业务监听器和通用扩展属性。CEL、HTTP 和 SQL 使用结构化子编辑器，端点与数据源只能来自服务端白名单。组件不直接持有 Modeler，也不写 XML；所有变更通过事件交给父组件的 bpmn-js 命令栈。
+`DesignerPropertiesPanel` 是 BPMN 设计器的受控属性编辑界面，覆盖基础信息、流程版本、正式模板与内嵌 FormData、节点字段权限、办理配置、活动循环与多实例、受控服务任务扩展、DMN 精确版本、条件、调用活动、事件参数、异步执行标志、业务监听器和通用扩展属性。CEL、HTTP 和 SQL 使用结构化子编辑器，端点与数据源只能来自服务端白名单。组件不直接持有 Modeler，也不写 XML；所有变更通过事件交给父组件的 bpmn-js 命令栈。
 
 ## 使用方式
 
@@ -67,7 +67,8 @@
 - 流程属性提供公开、指定用户、角色、部门四种发起范围；普通单实例 UserTask 提供八种受控办理规则。规则说明始终展示最终命中对象和固定 `FAIL` 无匹配策略。
 - 单实例参与者编辑器在多实例开启时隐藏。会签/或签成员来源仍由“签署规则”独立维护，两个契约不会互相读写。
 - 组件不直接修改 BPMN moddle 对象，父组件必须使用 `modeling.updateProperties` 或 `updateModdleProperties`，确保撤销、重做和保存快照一致。
-- 正式模板和内嵌 FormData 使用明确的分段来源选择。内嵌字段由 `EmbeddedFormFieldEditor` 编辑；父组件负责让 `flowable:formKey` 与 `flowable:formProperty` 始终互斥。
+- 正式模板和内嵌 FormData 使用明确的分段来源选择。内嵌字段由 `EmbeddedFormFieldEditor` 编辑；正式模板绑定 `flowable:formKey` 时，`flowable:formProperty` 只允许保存平台受控字段权限描述。
+- 节点字段权限目录只来自当前绑定的正式模板，支持隐藏、只读、可编辑、必填和批量默认策略；内嵌 FormData 继续使用自身原生字段开关，不进入本权限面板。完整策略通过 `form-permission-change` 交给父组件写入 BPMN。
 - 消息、信号、错误和升级引用由父组件解析为 Definitions 根元素；定时器表达式写入对应 `FormalExpression`。
 - Participant 的 `processRef` 由面板显式编辑并写入标准 BPMN 属性；服务端保存/部署时再次核验流程定义存在性和可执行性，避免只绘制池而形成假运行能力。
 - MessageFlow 源 SendTask 选择 `COLLABORATION_OUTBOX_V1` 后使用专用编辑器，只保存端点键、消息名、目标流程、关联变量和变量白名单；部署冻结认证端点，运行时事务登记 outbox。

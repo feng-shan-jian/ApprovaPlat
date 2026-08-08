@@ -2362,7 +2362,7 @@ public class WorkflowProcessDetailService
     }
 
     /**
-     * 将 BPMN 节点表单来源规范为部署快照键，并拒绝双来源歧义。
+     * 将 BPMN 节点表单来源规范为部署快照键，并兼容正式模板的受控字段权限描述。
      *
      * @param configuredFormKey String，正式模板 formKey
      * @param formProperties List&lt;org.flowable.bpmn.model.FormProperty&gt;，内嵌 FormData 字段
@@ -2373,12 +2373,9 @@ public class WorkflowProcessDetailService
     {
         boolean hasTemplate = StringUtils.hasText(configuredFormKey);
         boolean hasEmbedded = formProperties != null && !formProperties.isEmpty();
-        if (hasTemplate && hasEmbedded)
-        {
-            throw dataError("流程节点表单来源异常");
-        }
         if (hasTemplate)
         {
+            // 权限 FormProperty 已在模型保存和部署阶段通过白名单校验，详情只按不可变 formKey 快照取值。
             return configuredFormKey;
         }
         return hasEmbedded ? WorkflowFormSourceType.EMBEDDED_FORM_KEY : null;

@@ -84,6 +84,12 @@ public class WorkflowProcessQueryService
     /** 普通查询文本允许的最大字符数。 */
     private static final int MAX_FILTER_LENGTH = 255;
 
+    /** 正式表单节点的批量默认字段权限属性主键。 */
+    private static final String FORM_PERMISSION_DEFAULT_ID = "approva_permission_default";
+
+    /** 正式表单节点的逐字段权限属性主键前缀。 */
+    private static final String FORM_PERMISSION_FIELD_ID_PREFIX = "approva_permission_field_";
+
     private final WorkflowEngineOperations engineOperations;
 
     private final RepositoryService repositoryService;
@@ -1197,7 +1203,7 @@ public class WorkflowProcessQueryService
     }
 
     /**
-     * 解析开始节点实际使用的部署表单键，并拒绝模板与内嵌 FormData 同时存在。
+     * 解析开始节点实际使用的部署表单键，并区分正式模板权限元数据与内嵌 FormData。
      *
      * @param startEvent StartEvent，定义中唯一开始节点
      * @return String，正式模板原始 formKey 或内嵌表单稳定键
@@ -1205,14 +1211,41 @@ public class WorkflowProcessQueryService
     private String resolveFormKey(StartEvent startEvent)
     {
         boolean hasTemplate = StringUtils.hasText(startEvent.getFormKey());
-        boolean hasEmbedded = startEvent.getFormProperties() != null
+        boolean hasProperties = startEvent.getFormProperties() != null
                 && !startEvent.getFormProperties().isEmpty();
+        if (hasTemplate && hasProperties
+                && !hasOnlyTemplatePermissionProperties(startEvent))
+        {
+            // 正式表单仅允许携带部署时已校验的字段权限描述，普通 FormData 仍属于双重来源。
+            throw dataError("流程开始节点表单来源异常");
+        }
+        boolean hasEmbedded = !hasTemplate && hasProperties;
         if (hasTemplate == hasEmbedded)
         {
             throw dataError("流程开始节点表单来源异常");
         }
         return hasTemplate ? startEvent.getFormKey()
                 : WorkflowFormSourceType.EMBEDDED_FORM_KEY;
+    }
+
+    /**
+     * 判断正式表单开始节点的全部 FormProperty 是否均为受控字段权限描述。
+     *
+     * @param startEvent StartEvent，已绑定正式 formKey 且携带 FormProperty 的开始节点
+     * @return boolean，属性主键全部属于批量默认或逐字段权限命名空间时返回 true
+     */
+    private boolean hasOnlyTemplatePermissionProperties(StartEvent startEvent)
+    {
+        return startEvent.getFormProperties().stream().allMatch(property ->
+        {
+            if (property == null || !StringUtils.hasText(property.getId()))
+            {
+                return false;
+            }
+            String propertyId = property.getId().trim();
+            return FORM_PERMISSION_DEFAULT_ID.equals(propertyId)
+                    || propertyId.startsWith(FORM_PERMISSION_FIELD_ID_PREFIX);
+        });
     }
 
     /**

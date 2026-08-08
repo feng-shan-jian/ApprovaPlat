@@ -682,6 +682,76 @@ class WorkflowProcessQueryServiceTest
     }
 
     /**
+     * 验证正式表单节点携带字段权限 FormProperty 时仍按模板来源读取部署快照。
+     *
+     * @return 无返回值，权限描述不得被误判为第二份 BPMN 内嵌表单
+     */
+    @Test
+    void returnsTemplateStartFormWhenNodeContainsPermissionProperties()
+    {
+        ProcessDefinition definition = definition("definition-1", "leave", "deploy-1", false);
+        when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
+        when(definitionQuery.singleResult()).thenReturn(definition);
+        when(repositoryService.getIdentityLinksForProcessDefinition("definition-1"))
+                .thenReturn(List.of());
+        BpmnModel model = startFormModel("leave");
+        StartEvent start = (StartEvent) model.getProcessById("leave")
+                .getFlowElement("start", false);
+        FormProperty defaultPermission = new FormProperty();
+        defaultPermission.setId("approva_permission_default");
+        FormProperty fieldPermission = new FormProperty();
+        fieldPermission.setId("approva_permission_field_1");
+        fieldPermission.setVariable("requestTitle");
+        start.setFormProperties(List.of(defaultPermission, fieldPermission));
+        when(repositoryService.getBpmnModel("definition-1")).thenReturn(model);
+
+        WfDeployForm snapshot = new WfDeployForm();
+        snapshot.setDeployId("deploy-1");
+        snapshot.setSourceType("TEMPLATE");
+        snapshot.setFormId(12L);
+        snapshot.setFormKey("key_12");
+        snapshot.setNodeKey("start");
+        snapshot.setFormName("请假表单");
+        snapshot.setContent("{\"fields\":[]}");
+        when(deployFormMapper.selectByDeploymentId("deploy-1")).thenReturn(List.of(snapshot));
+
+        WorkflowProcessFormView result = service.getProcessForm(
+                new WorkflowProcessFormQueryDto("definition-1", "deploy-1", null));
+
+        assertThat(result.formId()).isEqualTo(12L);
+        assertThat(result.content()).isEqualTo("{\"fields\":[]}");
+    }
+
+    /**
+     * 验证正式表单节点混入普通 FormData 时继续拒绝双重表单来源。
+     *
+     * @return 无返回值，非法模型必须在读取部署快照前失败
+     */
+    @Test
+    void rejectsTemplateStartFormMixedWithEmbeddedFormProperty()
+    {
+        ProcessDefinition definition = definition("definition-1", "leave", "deploy-1", false);
+        when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
+        when(definitionQuery.singleResult()).thenReturn(definition);
+        when(repositoryService.getIdentityLinksForProcessDefinition("definition-1"))
+                .thenReturn(List.of());
+        BpmnModel model = startFormModel("leave");
+        StartEvent start = (StartEvent) model.getProcessById("leave")
+                .getFlowElement("start", false);
+        FormProperty embeddedField = new FormProperty();
+        embeddedField.setId("requestTitle");
+        embeddedField.setVariable("requestTitle");
+        start.setFormProperties(List.of(embeddedField));
+        when(repositoryService.getBpmnModel("definition-1")).thenReturn(model);
+
+        assertCode(() -> service.getProcessForm(
+                new WorkflowProcessFormQueryDto("definition-1", "deploy-1", null)),
+                HttpStatus.ERROR);
+
+        verify(deployFormMapper, never()).selectByDeploymentId(any());
+    }
+
+    /**
      * 验证内嵌 FormData 后续发生模型修改时，发起页仍只返回部署时冻结的渲染快照。
      *
      * @return 无返回值，模型当前字段不得覆盖 wf_deploy_form 中的不可变内容

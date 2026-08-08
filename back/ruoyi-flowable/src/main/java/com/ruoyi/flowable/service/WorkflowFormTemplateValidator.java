@@ -331,6 +331,7 @@ public class WorkflowFormTemplateValidator
             }
 
             JsonNode children = config.get(CHILDREN_FIELD);
+            validatePermissionMetadata(config);
             if (children != null && !children.isNull())
             {
                 if (!children.isArray())
@@ -342,6 +343,43 @@ public class WorkflowFormTemplateValidator
                     validateComponents(children, depth + 1, counter);
                 }
             }
+        }
+    }
+
+    /**
+     * 校验部署快照中的节点字段权限元数据，防止数据库脏数据形成前后端语义分裂。
+     *
+     * @param config JsonNode，当前字段的 __config__ 配置
+     * @return void，标志类型或四态组合非法时抛出稳定 400
+     */
+    private void validatePermissionMetadata(JsonNode config)
+    {
+        JsonNode hiddenNode = config.get("workflowHidden");
+        JsonNode readableNode = config.get("workflowReadable");
+        JsonNode writableNode = config.get("workflowWritable");
+        for (JsonNode flag : new JsonNode[] { hiddenNode, readableNode, writableNode })
+        {
+            if (flag != null && !flag.isNull() && !flag.isBoolean())
+            {
+                throw invalid("表单组件节点权限标志不合法");
+            }
+        }
+        boolean hidden = hiddenNode != null && hiddenNode.isBoolean() && hiddenNode.booleanValue();
+        boolean readable = readableNode == null || readableNode.isNull()
+                || (readableNode.isBoolean() && readableNode.booleanValue());
+        boolean writable = writableNode == null || writableNode.isNull()
+                || (writableNode.isBoolean() && writableNode.booleanValue());
+        JsonNode requiredNode = config.get("required");
+        if (requiredNode != null && !requiredNode.isNull() && !requiredNode.isBoolean())
+        {
+            throw invalid("表单组件必填标志不合法");
+        }
+        boolean required = requiredNode != null && requiredNode.isBoolean()
+                && requiredNode.booleanValue();
+        if ((hidden && (readable || writable || required))
+                || (required && (!readable || !writable)))
+        {
+            throw invalid("表单组件节点权限组合不合法");
         }
     }
 

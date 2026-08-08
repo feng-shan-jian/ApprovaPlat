@@ -45,7 +45,9 @@ const formModel = reactive({})
 const busyFields = reactive(new Set())
 const template = computed(() => normalizeFormTemplate(props.content))
 const flatFields = computed(() => flattenFormFields(template.value.fields))
-const rules = computed(() => Object.fromEntries(flatFields.value
+const visibleFields = computed(() => flatFields.value.filter(field => !field.hidden && field.readable))
+const writableFields = computed(() => visibleFields.value.filter(field => field.writable))
+const rules = computed(() => Object.fromEntries(writableFields.value
   .filter(field => field.required)
   .map(field => [field.variable, [{ required: true, message: `${field.label || field.variable}不能为空`, trigger: 'change' }]])))
 let syncing = false
@@ -57,7 +59,7 @@ let syncing = false
 function rebuildModel() {
   syncing = true
   const next = {}
-  flatFields.value.forEach(field => {
+  visibleFields.value.forEach(field => {
     next[field.variable] = Object.prototype.hasOwnProperty.call(props.modelValue, field.variable)
       ? cloneValue(props.modelValue[field.variable])
       : cloneValue(field.defaultValue)
@@ -125,8 +127,11 @@ async function validate() {
  * @returns {object} 与部署快照字段白名单一致的流程变量。
  */
 function getValues() {
-  const values = cloneValue(formModel)
-  flatFields.value.filter(field => field.tag === 'el-upload').forEach(field => {
+  const values = {}
+  writableFields.value.forEach(field => {
+    values[field.variable] = cloneValue(formModel[field.variable])
+  })
+  writableFields.value.filter(field => field.tag === 'el-upload').forEach(field => {
     values[field.variable] = (Array.isArray(formModel[field.variable]) ? formModel[field.variable] : [])
       .map(item => typeof item === 'string' ? item : item?.attachmentId)
       .filter(Boolean)

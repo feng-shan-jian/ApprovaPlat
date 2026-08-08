@@ -107,6 +107,52 @@ class WorkflowFormTemplateValidatorTest
     }
 
     /**
+     * 验证节点部署快照中的隐藏字段仍属于 schema，但不会进入详情可读字段集合。
+     * @return void，隐藏字段被详情层回显或旧模板兼容语义丢失时测试失败
+     */
+    @Test
+    void extractsOnlyReadableVariablesWhileKeepingLegacyFieldsReadable()
+    {
+        String content = """
+                {
+                  "fields": [
+                    {
+                      "__vModel__": "legacyReadable",
+                      "__config__": {"layout": "colFormItem", "tag": "el-input"}
+                    },
+                    {
+                      "__vModel__": "hiddenField",
+                      "__config__": {
+                        "layout": "colFormItem",
+                        "tag": "el-input",
+                        "workflowHidden": true,
+                        "workflowReadable": false,
+                        "workflowWritable": false
+                      },
+                      "disabled": true
+                    },
+                    {
+                      "__vModel__": "readonlyField",
+                      "__config__": {
+                        "layout": "colFormItem",
+                        "tag": "el-input",
+                        "workflowHidden": false,
+                        "workflowReadable": true,
+                        "workflowWritable": false
+                      },
+                      "disabled": true
+                    }
+                  ]
+                }
+                """;
+
+        assertThat(validator.extractVariableNames(content))
+                .containsExactly("legacyReadable", "hiddenField", "readonlyField");
+        assertThat(validator.extractReadableVariableNames(content))
+                .containsExactly("legacyReadable", "readonlyField");
+    }
+
+    /**
      * 验证未知组件标签和布局均被稳定拒绝。
      * @param config String，待放入 __config__ 的非法 JSON 片段
      * @return void，非法组件被放行时测试失败

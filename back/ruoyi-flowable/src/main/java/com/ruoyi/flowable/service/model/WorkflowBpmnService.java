@@ -10,8 +10,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -59,6 +61,16 @@ public class WorkflowBpmnService
 
     /** 表单键必须严格使用 key_正Long。 */
     private static final Pattern FORM_KEY_PATTERN = Pattern.compile("key_([1-9][0-9]*)");
+
+    /** 正式模板节点权限描述使用的字段变量安全格式。 */
+    private static final Pattern FORM_PERMISSION_VARIABLE_PATTERN = Pattern.compile(
+            "[A-Za-z_][A-Za-z0-9_]{0,127}");
+
+    /** 正式模板批量默认权限的 Flowable FormProperty 主键。 */
+    private static final String FORM_PERMISSION_DEFAULT_ID = "approva_permission_default";
+
+    /** 正式模板字段权限 FormProperty 的受控主键前缀。 */
+    private static final String FORM_PERMISSION_FIELD_ID_PREFIX = "approva_permission_field_";
 
     /** Flowable BPMN 扩展命名空间，其他引擎私有扩展只允许作者往返。 */
     private static final String FLOWABLE_NAMESPACE = "http://flowable.org/bpmn";
@@ -650,7 +662,8 @@ public class WorkflowBpmnService
             }
             StartEvent startEvent = startEvents.get(0);
             boolean startHasTemplate = hasText(startEvent.getFormKey());
-            boolean startHasEmbedded = hasFormProperties(startEvent.getFormProperties());
+            boolean startHasEmbedded = hasEmbeddedFormProperties(
+                    startEvent.getFormKey(), startEvent.getFormProperties());
             if (!startHasTemplate && !startHasEmbedded)
             {
                 if (requireStartForm)
@@ -667,7 +680,8 @@ public class WorkflowBpmnService
             for (UserTask userTask : process.findFlowElementsOfType(UserTask.class, true))
             {
                 if (hasText(userTask.getFormKey())
-                        || hasFormProperties(userTask.getFormProperties()))
+                        || hasEmbeddedFormProperties(userTask.getFormKey(),
+                                userTask.getFormProperties()))
                 {
                     addNodeFormReference(process.getId(), userTask.getFormKey(), userTask.getFormProperties(),
                             userTask.getId(), userTask.getName(), references, uniqueReferences);
@@ -1633,6 +1647,7 @@ public class WorkflowBpmnService
      * @return 无返回值
      */
     private void addFormReference(String processKey, String formKey, String nodeKey, String nodeName,
+            NodeFormPermissionPolicy permissionPolicy,
             List<WorkflowBpmnFormReference> references, Set<String> uniqueReferences)
     {
         Matcher matcher = FORM_KEY_PATTERN.matcher(formKey.trim());
@@ -1662,7 +1677,8 @@ public class WorkflowBpmnService
         }
         references.add(new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE,
                 formId, formKey.trim(), nodeKey.trim(), nodeName == null ? "" : nodeName,
-                null, normalizedProcessKey));
+                null, normalizedProcessKey, permissionPolicy.defaultPermission(),
+                permissionPolicy.fieldPermissions()));
     }
 
     /**
@@ -1682,14 +1698,11 @@ public class WorkflowBpmnService
             Set<String> uniqueReferences)
     {
         boolean hasTemplate = hasText(formKey);
-        boolean hasEmbedded = hasFormProperties(properties);
-        if (hasTemplate && hasEmbedded)
-        {
-            throw invalidBpmn("同一节点不能同时配置正式表单和 BPMN 内嵌表单", null);
-        }
         if (hasTemplate)
         {
-            addFormReference(processKey, formKey, nodeKey, nodeName, references, uniqueReferences);
+            NodeFormPermissionPolicy permissionPolicy = parseTemplateFormPermissions(properties);
+            addFormReference(processKey, formKey, nodeKey, nodeName, permissionPolicy,
+                    references, uniqueReferences);
             return;
         }
         if (!hasText(nodeKey))
@@ -1723,6 +1736,113 @@ public class WorkflowBpmnService
     private boolean hasFormProperties(List<FormProperty> properties)
     {
         return properties != null && !properties.isEmpty();
+    }
+
+    /**
+     * 判断节点 FormProperty 是否代表内嵌表单，而不是正式模板的节点权限描述。
+     *
+     * @param formKey String，节点正式模板键，允许为空
+     * @param properties List&lt;FormProperty&gt;，Flowable 表单字段或权限描述
+     * @return boolean，未绑定正式模板且至少包含一个字段时返回 true
+     */
+    private boolean hasEmbeddedFormProperties(String formKey, List<FormProperty> properties)
+    {
+        return !hasText(formKey) && hasFormProperties(properties);
+    }
+
+    /**
+     * 解析正式模板节点上的批量默认策略和逐字段权限，并拒绝普通 FormData 混入双重来源。
+     *
+     * @param properties List&lt;FormProperty&gt;，设计器生成的权限描述字段
+     * @return NodeFormPermissionPolicy，旧模型无描述时返回空策略
+     */
+    private NodeFormPermissionPolicy parseTemplateFormPermissions(List<FormProperty> properties)
+    {
+        if (properties == null || properties.isEmpty())
+        {
+            return new NodeFormPermissionPolicy(null, Map.of());
+        }
+        WorkflowFormFieldPermissionMode defaultPermission = null;
+        Map<String, WorkflowFormFieldPermissionMode> fieldPermissions = new LinkedHashMap<>();
+        Set<String> propertyIds = new HashSet<>();
+        for (FormProperty property : properties)
+        {
+            if (property == null || !hasText(property.getId())
+                    || !propertyIds.add(property.getId().trim())
+                    || !"string".equalsIgnoreCase(trimToEmpty(property.getType()))
+                    || hasText(property.getExpression())
+                    || hasText(property.getDefaultExpression())
+                    || hasText(property.getDatePattern())
+                    || (property.getFormValues() != null && !property.getFormValues().isEmpty()))
+            {
+                throw invalidBpmn("正式模板节点字段权限描述不合法", null);
+            }
+            String propertyId = property.getId().trim();
+            WorkflowFormFieldPermissionMode mode = permissionMode(property);
+            if (FORM_PERMISSION_DEFAULT_ID.equals(propertyId))
+            {
+                if (defaultPermission != null || hasText(property.getVariable()))
+                {
+                    throw invalidBpmn("节点表单批量默认权限不能重复", null);
+                }
+                defaultPermission = mode;
+                continue;
+            }
+            if (!propertyId.startsWith(FORM_PERMISSION_FIELD_ID_PREFIX))
+            {
+                throw invalidBpmn("同一节点不能同时配置正式表单和 BPMN 内嵌表单", null);
+            }
+            String variable = trimToEmpty(property.getVariable());
+            if (!FORM_PERMISSION_VARIABLE_PATTERN.matcher(variable).matches()
+                    || fieldPermissions.putIfAbsent(variable, mode) != null)
+            {
+                throw invalidBpmn("节点表单字段权限变量非法或重复", null);
+            }
+        }
+        if (defaultPermission == null)
+        {
+            throw invalidBpmn("节点表单必须配置批量默认字段权限", null);
+        }
+        return new NodeFormPermissionPolicy(defaultPermission, Map.copyOf(fieldPermissions));
+    }
+
+    /**
+     * 将 FormProperty 的 readable/writeable/required 三个标志收敛为四种业务权限。
+     *
+     * @param property FormProperty，单个节点权限描述
+     * @return WorkflowFormFieldPermissionMode，隐藏、只读、可编辑或必填
+     */
+    private WorkflowFormFieldPermissionMode permissionMode(FormProperty property)
+    {
+        boolean readable = property.isReadable();
+        boolean writable = property.isWriteable();
+        boolean required = property.isRequired();
+        if (!readable && !writable && !required)
+        {
+            return WorkflowFormFieldPermissionMode.HIDDEN;
+        }
+        if (readable && !writable && !required)
+        {
+            return WorkflowFormFieldPermissionMode.READONLY;
+        }
+        if (readable && writable)
+        {
+            return required ? WorkflowFormFieldPermissionMode.REQUIRED
+                    : WorkflowFormFieldPermissionMode.EDITABLE;
+        }
+        throw invalidBpmn("节点表单字段权限组合不合法", null);
+    }
+
+    /**
+     * 正式模板节点的不可变作者权限策略。
+     *
+     * @param defaultPermission WorkflowFormFieldPermissionMode，模板新增字段采用的默认策略
+     * @param fieldPermissions Map&lt;String,WorkflowFormFieldPermissionMode&gt;，当前模板逐字段策略
+     */
+    private record NodeFormPermissionPolicy(
+            WorkflowFormFieldPermissionMode defaultPermission,
+            Map<String, WorkflowFormFieldPermissionMode> fieldPermissions)
+    {
     }
 
     /**

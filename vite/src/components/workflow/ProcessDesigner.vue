@@ -74,6 +74,7 @@
         @form-source-change="updateFormSource"
         @form-change="updateFormKey"
         @embedded-form-change="updateEmbeddedForm"
+        @form-permission-change="updateFormPermissions"
         @assignment-change="updateAssignment"
         @participant-rule-change="updateParticipantRule"
         @user-task-change="updateUserTaskProperties"
@@ -217,6 +218,11 @@ const PARTICIPANT_RULE_PROPERTIES = Object.freeze({
   taskNoMatch: 'approva.assignment.noMatchPolicy'
 })
 const PARTICIPANT_RULE_PROPERTY_NAMES = new Set(Object.values(PARTICIPANT_RULE_PROPERTIES))
+
+// 正式模板字段权限使用 Flowable FormProperty 保存，避免通用属性长度限制和旁路草稿数据。
+const FORM_PERMISSION_DEFAULT_ID = 'approva_permission_default'
+const FORM_PERMISSION_FIELD_ID_PREFIX = 'approva_permission_field_'
+const FORM_PERMISSION_MODES = new Set(['HIDDEN', 'READONLY', 'EDITABLE', 'REQUIRED'])
 
 // 作者 BPMN 只保存稳定键和配置；部署版本、实现和校验和均由后端注册表冻结。
 const EXTENSION_DELEGATE_EXPRESSION = '${workflowExtensionDelegate}'
@@ -439,6 +445,8 @@ function createEmptyPropertyState() {
     formSource: 'TEMPLATE',
     formKey: '',
     embeddedFields: [],
+    formPermissionDefault: 'EDITABLE',
+    formPermissionFields: [],
     assignmentType: 'assignee',
     assignee: '',
     candidateUsers: [],
@@ -733,6 +741,7 @@ function loadPropertyState(element) {
   propertyState.formKey = businessObject.get('flowable:formKey') || ''
   propertyState.embeddedFields = readEmbeddedFormFields(businessObject)
   propertyState.formSource = propertyState.embeddedFields.length ? 'EMBEDDED' : 'TEMPLATE'
+  loadFormPermissionState(businessObject)
   propertyState.assignee = businessObject.get('flowable:assignee') || ''
   propertyState.candidateUsers = splitValues(businessObject.get('flowable:candidateUsers'))
   propertyState.candidateGroups = splitValues(businessObject.get('flowable:candidateGroups'))
@@ -1245,9 +1254,14 @@ function readBusinessListeners(businessObject, listenerType) {
 /**
  * 从当前 BPMN 元素的 extensionElements 回读 Flowable FormData。
  * @param {object} businessObject StartEvent 或 UserTask 的 moddle 业务对象。
- * @returns {Array<object>} 可供字段编辑器使用的确定性字段列表。
+ * @returns {Array<object>} 可供字段编辑器使用的确定性字段列表；正式模板权限描述不作为内嵌字段。
  */
 function readEmbeddedFormFields(businessObject) {
+  const formKey = String(businessObject?.get?.('flowable:formKey') || businessObject?.formKey || '').trim()
+  if (formKey) {
+    // 正式模板的 FormProperty 只承载节点字段权限，模型重开时不能据此切换为 EMBEDDED 来源。
+    return []
+  }
   const extensionValues = businessObject?.extensionElements?.values || []
   return extensionValues
     .filter(value => value?.$type === 'flowable:FormProperty')
@@ -1422,6 +1436,146 @@ function updateParticipantProperties() {
 }
 
 /**
+ * 规范化节点字段权限，未知值不会进入 BPMN 作者模型。
+ * @param {unknown} mode 待校验权限值。
+ * @returns {'HIDDEN'|'READONLY'|'EDITABLE'|'REQUIRED'} 四态权限之一。
+ */
+function normalizeFormPermissionMode(mode) {
+  const normalized = String(mode || '').trim().toUpperCase()
+  return FORM_PERMISSION_MODES.has(normalized) ? normalized : 'EDITABLE'
+}
+
+/**
+ * 从正式模板字段配置或 BPMN 权限描述恢复隐藏、只读、可编辑或必填权限。
+ * @param {object} field 字段配置或内嵌字段。
+ * @param {boolean} embedded 是否为 Flowable FormProperty 内嵌字段。
+ * @returns {'HIDDEN'|'READONLY'|'EDITABLE'|'REQUIRED'} 当前字段权限。
+ */
+function permissionModeFromField(field, embedded = false) {
+  const config = embedded ? field : (field?.__config__ || {})
+  const readable = embedded ? field?.readable !== false : config.workflowReadable !== false
+  const writable = embedded
+    ? field?.writable !== false
+    : config.workflowWritable !== false && field?.disabled !== true
+  const hidden = embedded
+    ? !readable && !writable
+    : config.workflowHidden === true || (!readable && !writable)
+  if (hidden) return 'HIDDEN'
+  if (!writable) return 'READONLY'
+  return config.required === true || field?.required === true ? 'REQUIRED' : 'EDITABLE'
+}
+
+/**
+ * 从当前绑定的正式模板提取唯一字段目录，内嵌 FormData 不进入节点权限策略。
+ * @returns {Array<{variable:string,label:string,mode:string}>} 按正式表单顺序排列的字段目录。
+ */
+function resolveFormPermissionSourceFields() {
+  if (propertyState.formSource !== 'TEMPLATE') return []
+  const formId = Number(String(propertyState.formKey || '').replace(/^key_/, ''))
+  const form = props.forms.find(item => Number(item.formId) === formId)
+  if (!form?.content) return []
+  try {
+    const root = typeof form.content === 'string' ? JSON.parse(form.content) : form.content
+    const fields = []
+    const seen = new Set()
+
+    /**
+     * 递归收集正式模板业务字段，布局节点不产生权限项且重复变量只保留首次定义。
+     * @param {Array<object>} nodes 当前层正式模板字段节点。
+     * @returns {void} 字段目录直接写入外层 fields，并由 seen 保证变量唯一。
+     */
+    const visit = nodes => {
+      for (const field of Array.isArray(nodes) ? nodes : []) {
+        const variable = String(field?.__vModel__ || '').trim()
+        if (variable && !seen.has(variable)) {
+          seen.add(variable)
+          fields.push({
+            variable,
+            label: String(field?.__config__?.label || variable).trim(),
+            mode: permissionModeFromField(field)
+          })
+        }
+        visit(field?.__config__?.children)
+      }
+    }
+    visit(root?.fields)
+    return fields
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 从正式模板节点的受控 FormProperty 描述恢复批量默认策略和逐字段权限。
+ * @param {object} businessObject StartEvent 或 UserTask 的 BPMN 业务对象。
+ * @returns {{configured:boolean,defaultMode:string,permissions:Map<string,string>}} 权限作者状态。
+ */
+function readTemplatePermissionPolicy(businessObject) {
+  let configured = false
+  let defaultMode = 'EDITABLE'
+  const permissions = new Map()
+  for (const property of businessObject?.extensionElements?.values || []) {
+    if (property?.$type !== 'flowable:FormProperty') continue
+    const id = String(property.id || '')
+    if (id === FORM_PERMISSION_DEFAULT_ID) {
+      configured = true
+      defaultMode = permissionModeFromField({
+        readable: property.readable,
+        writable: property.writable,
+        required: property.required
+      }, true)
+      continue
+    }
+    if (!id.startsWith(FORM_PERMISSION_FIELD_ID_PREFIX)) continue
+    configured = true
+    const variable = String(property.variable || '').trim()
+    if (variable) {
+      permissions.set(variable, permissionModeFromField({
+        readable: property.readable,
+        writable: property.writable,
+        required: property.required
+      }, true))
+    }
+  }
+  return { configured, defaultMode, permissions }
+}
+
+/**
+ * 依据当前正式表单重建属性面板字段目录，并按变量名保留仍然有效的设计权限。
+ * @param {{configured:boolean,defaultMode:string,permissions:Map<string,string>}|undefined} policy 从 BPMN 回读的正式策略。
+ * @returns {void} 无返回值。
+ */
+function rebuildFormPermissionFields(policy) {
+  const previous = new Map(propertyState.formPermissionFields.map(field => [field.variable, field.mode]))
+  const defaultMode = normalizeFormPermissionMode(policy?.configured
+    ? policy.defaultMode
+    : propertyState.formPermissionDefault)
+  propertyState.formPermissionDefault = defaultMode
+  propertyState.formPermissionFields = resolveFormPermissionSourceFields().map(field => ({
+    ...field,
+    mode: normalizeFormPermissionMode(
+      policy?.permissions?.get(field.variable)
+      || (policy?.configured ? defaultMode : undefined)
+      || previous.get(field.variable)
+      || field.mode
+      || defaultMode
+    )
+  }))
+}
+
+/**
+ * 选择元素时从 BPMN 和正式表单共同恢复节点字段权限。
+ * @param {object} businessObject 当前节点业务对象。
+ * @returns {void} 无返回值。
+ */
+function loadFormPermissionState(businessObject) {
+  const policy = propertyState.formSource === 'TEMPLATE'
+    ? readTemplatePermissionPolicy(businessObject)
+    : undefined
+  rebuildFormPermissionFields(policy)
+}
+
+/**
  * 切换正式模板或内嵌 FormData，并在一条命令中清理另一来源。
  * @returns {void} 来源非法或当前元素不支持表单时恢复 BPMN 原值。
  */
@@ -1437,6 +1591,7 @@ function updateFormSource() {
       readable: true, writable: true, datePattern: '', values: []
     }]
   }
+  rebuildFormPermissionFields()
   syncFormDefinition()
 }
 
@@ -1446,6 +1601,7 @@ function updateFormSource() {
  */
 function updateFormKey() {
   if (propertyState.formSource !== 'TEMPLATE') return
+  rebuildFormPermissionFields()
   syncFormDefinition()
 }
 
@@ -1462,10 +1618,54 @@ function updateEmbeddedForm(fields) {
       values: (field.values || []).map(value => ({ ...value }))
     }))
     propertyState.formSource = 'EMBEDDED'
+    rebuildFormPermissionFields()
     syncFormDefinition()
   } catch (error) {
     loadPropertyState(selectedElement.value)
     emit('error', error)
+  }
+}
+
+/**
+ * 校验并保存正式模板的完整节点字段权限。
+ * @param {{defaultMode:string,fields:Array<object>}} policy 字段编辑器提交的完整策略。
+ * @returns {void} 配置不完整时恢复 BPMN 真实状态并上报错误。
+ */
+function updateFormPermissions(policy) {
+  try {
+    if (propertyState.formSource !== 'TEMPLATE' || !propertyState.formKey) {
+      throw new Error('节点字段权限只能配置绑定的正式表单')
+    }
+    const sourceFields = resolveFormPermissionSourceFields()
+    const requested = Array.isArray(policy?.fields) ? policy.fields : []
+    const requestedByVariable = new Map(requested.map(field => [String(field?.variable || '').trim(), field]))
+    if (requestedByVariable.size !== sourceFields.length
+      || sourceFields.some(field => !requestedByVariable.has(field.variable))) {
+      throw new Error('节点字段权限与当前正式表单不一致')
+    }
+    propertyState.formPermissionDefault = normalizeFormPermissionMode(policy.defaultMode)
+    propertyState.formPermissionFields = sourceFields.map(field => ({
+      ...field,
+      mode: normalizeFormPermissionMode(requestedByVariable.get(field.variable)?.mode)
+    }))
+    syncFormDefinition()
+  } catch (error) {
+    loadPropertyState(selectedElement.value)
+    emit('error', error)
+  }
+}
+
+/**
+ * 将四态字段权限转换为 Flowable FormProperty readable/writeable/required 标志。
+ * @param {string} mode 字段权限模式。
+ * @returns {{readable:boolean,writable:boolean,required:boolean}} Flowable 原生权限标志。
+ */
+function permissionFlags(mode) {
+  const normalized = normalizeFormPermissionMode(mode)
+  return {
+    readable: normalized !== 'HIDDEN',
+    writable: ['EDITABLE', 'REQUIRED'].includes(normalized),
+    required: normalized === 'REQUIRED'
   }
 }
 
@@ -1548,6 +1748,48 @@ function createEmbeddedFormProperty(field) {
 }
 
 /**
+ * 创建正式模板节点的批量默认和逐字段权限 FormProperty 描述。
+ * @returns {object[]} 可随模型 XML 稳定往返并由后端部署编译器解析的权限描述。
+ */
+function createTemplatePermissionProperties() {
+  if (!propertyState.formKey || !propertyState.formPermissionFields.length) return []
+  const moddle = modeler.get('moddle')
+
+  /**
+   * 创建一条只承载权限、不会作为运行表单字段使用的 Flowable FormProperty。
+   * @param {string} id 稳定权限描述主键。
+   * @param {string|undefined} variable 正式模板字段变量；批量默认策略为空。
+   * @param {string} label 字段显示名称。
+   * @param {string} mode 四态权限模式。
+   * @returns {object} Flowable FormProperty moddle 对象。
+   */
+  function createPermissionProperty(id, variable, label, mode) {
+    return moddle.create('flowable:FormProperty', {
+      id,
+      variable,
+      name: label,
+      type: 'string',
+      ...permissionFlags(mode)
+    })
+  }
+
+  return [
+    createPermissionProperty(
+      FORM_PERMISSION_DEFAULT_ID,
+      undefined,
+      '批量默认字段权限',
+      propertyState.formPermissionDefault
+    ),
+    ...propertyState.formPermissionFields.map((field, index) => createPermissionProperty(
+      `${FORM_PERMISSION_FIELD_ID_PREFIX}${index + 1}`,
+      field.variable,
+      field.label || field.variable,
+      field.mode
+    ))
+  ]
+}
+
+/**
  * 同步当前表单定义，保留审计监听器等非表单扩展并原子互斥两种来源。
  * @returns {void} 未选中可配置元素或设计器锁定时不执行。
  */
@@ -1558,7 +1800,7 @@ function syncFormDefinition() {
     .filter(value => value?.$type !== 'flowable:FormProperty')
   const formValues = propertyState.formSource === 'EMBEDDED'
     ? propertyState.embeddedFields.map(createEmbeddedFormProperty)
-    : []
+    : createTemplatePermissionProperties()
   const extensionValues = [...formValues, ...preservedValues]
   const extensionElements = extensionValues.length
     ? modeler.get('moddle').create('bpmn:ExtensionElements', { values: extensionValues })

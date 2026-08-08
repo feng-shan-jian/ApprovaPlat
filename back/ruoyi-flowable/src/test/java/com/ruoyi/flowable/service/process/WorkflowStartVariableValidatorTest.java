@@ -10,6 +10,8 @@ import java.util.Map;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
@@ -39,6 +41,25 @@ class WorkflowStartVariableValidatorTest
                   "__config__": {"layout":"colFormItem","tag":"el-table","required":false},
                   "__vModel__":"items"
                 }
+              ]
+            }
+            """;
+
+    private static final String PERMISSION_FORM = """
+            {
+              "fields": [
+                {"__vModel__":"hiddenField","__config__":{"layout":"colFormItem",
+                 "tag":"el-input","workflowHidden":true,"workflowReadable":false,
+                 "workflowWritable":false,"required":false}},
+                {"__vModel__":"readonlyField","__config__":{"layout":"colFormItem",
+                 "tag":"el-input","workflowHidden":false,"workflowReadable":true,
+                 "workflowWritable":false,"required":false}},
+                {"__vModel__":"editableField","__config__":{"layout":"colFormItem",
+                 "tag":"el-input-number","workflowHidden":false,"workflowReadable":true,
+                 "workflowWritable":true,"required":false}},
+                {"__vModel__":"requiredField","__config__":{"layout":"colFormItem",
+                 "tag":"el-input","workflowHidden":false,"workflowReadable":true,
+                 "workflowWritable":true,"required":true}}
               ]
             }
             """;
@@ -227,6 +248,86 @@ class WorkflowStartVariableValidatorTest
         assertBadRequest(() -> validator.validateAndNormalize(START_FORM,
                 Map.of("reason", "采购", "amount", 10001)),
                 "流程变量数值范围不合法: amount");
+    }
+
+    /**
+     * 验证客户端抓包写入隐藏或只读字段会被服务端拒绝，可写字段仍执行类型和必填规则。
+     *
+     * @return void，节点写权限或当前 schema 规则可被绕过时测试失败
+     */
+    @Test
+    void enforcesHiddenReadonlyWritableAndRequiredPermissions()
+    {
+        assertBadRequest(() -> validator.validateForStart(PERMISSION_FORM,
+                Map.of("hiddenField", "伪造", "requiredField", "已填")),
+                "流程变量字段为只读字段: hiddenField");
+        assertBadRequest(() -> validator.validateForStart(PERMISSION_FORM,
+                Map.of("readonlyField", "篡改", "requiredField", "已填")),
+                "流程变量字段为只读字段: readonlyField");
+        assertBadRequest(() -> validator.validateForStart(PERMISSION_FORM,
+                Map.of("editableField", "不是数字", "requiredField", "已填")),
+                "流程变量类型不合法: editableField");
+        assertBadRequest(() -> validator.validateForStart(PERMISSION_FORM,
+                Map.of("editableField", 12)),
+                "开始表单必填字段不能为空: requiredField");
+
+        assertThat(validator.validateForStart(PERMISSION_FORM,
+                Map.of("editableField", 12, "requiredField", "已填")).variables())
+                .containsExactlyEntriesOf(Map.of("editableField", 12, "requiredField", "已填"));
+    }
+
+    /**
+     * 验证草稿与正式动作复用同一字段策略，仅草稿允许必填字段暂时缺失或为空。
+     *
+     * @return void，草稿绕过字段权限/类型或正式提交未执行必填规则时测试失败
+     */
+    @Test
+    void validatesDraftWithSharedPolicyButWithoutRequiredCompleteness()
+    {
+        assertThat(validator.validateForDraft(PERMISSION_FORM,
+                Map.of("editableField", 12)).variables())
+                .containsExactlyEntriesOf(Map.of("editableField", 12));
+        Map<String, Object> emptyRequiredDraft = new LinkedHashMap<>();
+        emptyRequiredDraft.put("requiredField", null);
+        assertThat(validator.validateForDraft(PERMISSION_FORM,
+                emptyRequiredDraft).variables()).containsEntry("requiredField", null);
+
+        assertBadRequest(() -> validator.validateForDraft(PERMISSION_FORM,
+                Map.of("hiddenField", "伪造")),
+                "流程变量字段为只读字段: hiddenField");
+        assertBadRequest(() -> validator.validateForDraft(PERMISSION_FORM,
+                Map.of("readonlyField", "篡改")),
+                "流程变量字段为只读字段: readonlyField");
+        assertBadRequest(() -> validator.validateForDraft(PERMISSION_FORM,
+                Map.of("editableField", "不是数字")),
+                "流程变量类型不合法: editableField");
+        assertBadRequest(() -> validator.validateForDraft(PERMISSION_FORM,
+                Map.of("unknownField", "越权")),
+                "流程变量字段不在开始表单中: unknownField");
+        assertBadRequest(() -> validator.validateForStart(PERMISSION_FORM,
+                Map.of("editableField", 12)),
+                "开始表单必填字段不能为空: requiredField");
+    }
+
+    /**
+     * 验证退回重提补丁只校验明确提交字段，省略必填字段沿用正式旧值但显式空值仍被拒绝。
+     *
+     * @return void，省略字段被清空或显式空值绕过必填时测试失败
+     */
+    @Test
+    void validatesPatchWithoutOverwritingOmittedValues()
+    {
+        Map<String, JsonNode> previous = Map.of(
+                "requiredField", JsonMapper.shared().getNodeFactory().textNode("原值"),
+                "readonlyField", JsonMapper.shared().getNodeFactory().textNode("只读值"));
+
+        WorkflowValidatedStartVariables patch = validator.validatePatch(
+                PERMISSION_FORM, Map.of("editableField", 18), previous);
+
+        assertThat(patch.variables()).containsExactlyEntriesOf(Map.of("editableField", 18));
+        assertBadRequest(() -> validator.validatePatch(PERMISSION_FORM,
+                java.util.Collections.singletonMap("requiredField", null), previous),
+                "开始表单必填字段不能为空: requiredField");
     }
 
     /**
