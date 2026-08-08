@@ -16,6 +16,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.extension.WorkflowConditionRoutingException;
 
 class WorkflowExceptionTranslatorTest
 {
@@ -59,6 +60,25 @@ class WorkflowExceptionTranslatorTest
         assertThat(translated.getCode()).isEqualTo(409);
         assertThat(translated.getMessage()).isEqualTo(WorkflowExceptionTranslator.CONFLICT_MESSAGE)
                 .doesNotContain("ACT_UNIQ_MODEL", "expense");
+        assertThat(translated.getCause()).isSameAs(source);
+    }
+
+    /**
+     * 验证 Flowable 表达式包装的专用条件路由冲突保留受控 409 和稳定提示。
+     * @return void，路由冲突被误报为 500 或丢失引擎诊断链时测试失败
+     */
+    @org.junit.jupiter.api.Test
+    void preservesTrustedConditionRoutingFailureAcrossFlowableWrapper()
+    {
+        WorkflowConditionRoutingException routingFailure =
+                new WorkflowConditionRoutingException("排他网关有多个条件同时命中，请联系流程设计者修正规则", 409);
+        FlowableException source = new FlowableException("internal expression details", routingFailure);
+
+        ServiceException translated = translator.translate(source);
+
+        assertThat(translated.getCode()).isEqualTo(409);
+        assertThat(translated.getMessage()).isEqualTo(routingFailure.getMessage())
+                .doesNotContain("internal expression");
         assertThat(translated.getCause()).isSameAs(source);
     }
 

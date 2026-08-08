@@ -4,14 +4,14 @@
 SELECT
     'workflow_schema_table_counts' AS check_name,
     CASE
-        WHEN COUNT(*) = 101
+        WHEN COUNT(*) = 102
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) <> 'ACT_'
                  AND LEFT(UPPER(TABLE_NAME), 4) <> 'FLW_'
                  AND LEFT(UPPER(TABLE_NAME), 3) <> 'WF_'
                  AND LEFT(UPPER(TABLE_NAME), 5) <> 'QRTZ_') = 20
          AND SUM(LEFT(UPPER(TABLE_NAME), 5) = 'QRTZ_') = 11
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) IN ('ACT_', 'FLW_')) = 36
-         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 34
+         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 35
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -117,6 +117,7 @@ WITH expected_tables AS (
     SELECT 'wf_category' AS table_name
     UNION ALL SELECT 'wf_form'
     UNION ALL SELECT 'wf_deploy_form'
+    UNION ALL SELECT 'wf_deploy_condition_rule'
     UNION ALL SELECT 'wf_copy'
     UNION ALL SELECT 'wf_model_save_idempotency'
     UNION ALL SELECT 'wf_designer_preference'
@@ -132,15 +133,15 @@ actual_tables AS (
       AND TABLE_NAME IN ('wf_category', 'wf_form', 'wf_deploy_form', 'wf_copy',
                          'wf_model_save_idempotency', 'wf_designer_preference',
                          'wf_attachment_quota_guard',
-                         'wf_attachment', 'wf_deploy_controlled_loop',
+                         'wf_attachment', 'wf_deploy_condition_rule', 'wf_deploy_controlled_loop',
                          'wf_controlled_loop_execution')
 )
 SELECT
     'workflow_business_tables' AS check_name,
     CASE
-        WHEN COUNT(a.table_name) = 10
-         AND SUM(a.ENGINE = 'InnoDB') = 10
-         AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 10
+        WHEN COUNT(a.table_name) = 11
+         AND SUM(a.ENGINE = 'InnoDB') = 11
+         AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 11
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -170,6 +171,19 @@ WITH expected_columns AS (
     UNION ALL SELECT 'wf_deploy_form', 'node_key'
     UNION ALL SELECT 'wf_deploy_form', 'content'
     UNION ALL SELECT 'wf_deploy_form', 'del_flag'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'rule_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'deploy_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'process_key'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'gateway_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'gateway_type'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'gateway_token'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'flow_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'flow_name'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'flow_token'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'default_flow'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'rule_json'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'cel_config_json'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'snapshot_checksum'
     UNION ALL SELECT 'wf_copy', 'copy_id'
     UNION ALL SELECT 'wf_copy', 'copy_event_id'
     UNION ALL SELECT 'wf_copy', 'deployment_id'
@@ -419,7 +433,7 @@ WITH actual_indexes AS (
       AND TABLE_NAME IN ('wf_category', 'wf_form', 'wf_deploy_form', 'wf_copy',
                          'wf_model_save_idempotency', 'wf_designer_preference',
                          'wf_attachment_quota_guard',
-                         'wf_attachment', 'wf_deploy_controlled_loop',
+                         'wf_attachment', 'wf_deploy_condition_rule', 'wf_deploy_controlled_loop',
                          'wf_controlled_loop_execution')
     GROUP BY TABLE_NAME, INDEX_NAME
 ),
@@ -431,6 +445,13 @@ expected_indexes AS (
     UNION ALL SELECT 'wf_form', 'idx_wf_form_name', 1, 'form_name'
     UNION ALL SELECT 'wf_deploy_form', 'PRIMARY', 0, 'deploy_id,form_key,node_key'
     UNION ALL SELECT 'wf_deploy_form', 'idx_wf_deploy_form_form_id', 1, 'form_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'PRIMARY', 0, 'rule_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'uk_wf_deploy_condition_flow', 0,
+                     'deploy_id,process_key,gateway_id,flow_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'uk_wf_deploy_condition_token', 0,
+                     'deploy_id,gateway_token,flow_token'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'idx_wf_deploy_condition_runtime', 1,
+                     'deploy_id,process_key,gateway_token'
     UNION ALL SELECT 'wf_copy', 'PRIMARY', 0, 'copy_id'
     UNION ALL SELECT 'wf_copy', 'uk_wf_copy_event_user', 0, 'copy_event_id,user_id'
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_user_status_time', 1, 'user_id,del_flag,create_time'
@@ -509,6 +530,10 @@ WITH expected_checks AS (
     UNION ALL SELECT 'wf_deploy_form', 'chk_wf_deploy_form_content_json'
     UNION ALL SELECT 'wf_deploy_form', 'chk_wf_deploy_form_source'
     UNION ALL SELECT 'wf_deploy_form', 'chk_wf_deploy_form_del_flag'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_type'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_tokens'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_default'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_checksum'
     UNION ALL SELECT 'wf_copy', 'chk_wf_copy_del_flag'
     UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_request_id'
     UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_user_id'
@@ -676,6 +701,28 @@ WITH integrity_issues AS (
     WHERE d.del_flag = '0'
       AND d.source_type = 'TEMPLATE'
       AND (f.form_id IS NULL OR f.del_flag <> '0')
+
+    UNION ALL
+
+    SELECT 'wf_deploy_condition_invalid_row', COUNT(*)
+    FROM wf_deploy_condition_rule
+    WHERE gateway_type NOT IN ('EXCLUSIVE', 'INCLUSIVE')
+       OR gateway_token NOT REGEXP '^[0-9a-f]{24}$'
+       OR flow_token NOT REGEXP '^[0-9a-f]{24}$'
+       OR snapshot_checksum NOT REGEXP '^[0-9a-f]{64}$'
+       OR JSON_VALID(rule_json) = 0
+       OR (default_flow = 1 AND cel_config_json IS NOT NULL)
+       OR (default_flow = 0 AND (cel_config_json IS NULL OR JSON_VALID(cel_config_json) = 0))
+
+    UNION ALL
+
+    SELECT 'wf_deploy_condition_invalid_gateway', COUNT(*)
+    FROM (
+        SELECT deploy_id, process_key, gateway_id
+        FROM wf_deploy_condition_rule
+        GROUP BY deploy_id, process_key, gateway_id
+        HAVING COUNT(*) < 2 OR SUM(default_flow = 1) <> 1
+    ) invalid_condition_gateway
 
     UNION ALL
 

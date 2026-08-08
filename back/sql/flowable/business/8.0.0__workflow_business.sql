@@ -70,6 +70,40 @@ CREATE TABLE IF NOT EXISTS `wf_deploy_form`
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '流程部署节点表单不可变快照';
 
+CREATE TABLE IF NOT EXISTS `wf_deploy_condition_rule`
+(
+    `rule_id`           BIGINT       NOT NULL AUTO_INCREMENT COMMENT '条件分支部署快照主键',
+    `deploy_id`         VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_key`       VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN 可执行流程标识',
+    `gateway_id`        VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '排他或包容网关标识',
+    `gateway_type`      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'EXCLUSIVE 排他、INCLUSIVE 包容',
+    `gateway_token`     CHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '固定路由表达式使用的网关摘要令牌',
+    `flow_id`           VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '网关出线标识',
+    `flow_name`         VARCHAR(100) NOT NULL COMMENT '部署时分支名称快照',
+    `flow_token`        CHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '固定路由表达式使用的分支摘要令牌',
+    `default_flow`      TINYINT(1)   NOT NULL COMMENT '是否为唯一默认分支：0 否、1 是',
+    `rule_json`         JSON         NOT NULL COMMENT '规范化受控规则快照',
+    `cel_config_json`   JSON                  DEFAULT NULL COMMENT '非默认分支的规范化 CEL 布尔组合配置',
+    `snapshot_checksum` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '完整快照 SHA-256',
+    `create_by`         VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '部署操作人正式用户主键',
+    `create_time`       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '快照创建时间',
+    PRIMARY KEY (`rule_id`),
+    UNIQUE KEY `uk_wf_deploy_condition_flow` (`deploy_id`, `process_key`, `gateway_id`, `flow_id`),
+    UNIQUE KEY `uk_wf_deploy_condition_token` (`deploy_id`, `gateway_token`, `flow_token`),
+    KEY `idx_wf_deploy_condition_runtime` (`deploy_id`, `process_key`, `gateway_token`),
+    CONSTRAINT `chk_wf_deploy_condition_type` CHECK (`gateway_type` IN ('EXCLUSIVE', 'INCLUSIVE')),
+    CONSTRAINT `chk_wf_deploy_condition_tokens` CHECK
+        (`gateway_token` REGEXP '^[0-9a-f]{24}$' AND `flow_token` REGEXP '^[0-9a-f]{24}$'),
+    CONSTRAINT `chk_wf_deploy_condition_default` CHECK
+        (`default_flow` IN (0, 1) AND ((`default_flow` = 1 AND `cel_config_json` IS NULL)
+            OR (`default_flow` = 0 AND `cel_config_json` IS NOT NULL))),
+    CONSTRAINT `chk_wf_deploy_condition_checksum` CHECK
+        (`snapshot_checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '排他和包容网关条件分支不可变部署快照';
+
 CREATE TABLE IF NOT EXISTS `wf_deploy_controlled_loop`
 (
     `loop_id`            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '受控循环部署快照主键',

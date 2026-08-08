@@ -313,7 +313,7 @@ database_check_detail() {
       printf 'missing_or_invalid=none'
       ;;
     workflow_schema_table_counts)
-      printf 'total=99, ruoyi=20, quartz=11, flowable=36, workflow=32'
+      printf 'total=100, ruoyi=20, quartz=11, flowable=36, workflow=33'
       ;;
     workflow_connector_columns) printf 'missing=none' ;;
     workflow_business_tables) printf 'present=10, missing=none' ;;
@@ -470,12 +470,12 @@ create_fresh_install_evidence() {
   printf '%064d  backup-smoke/schema.sql\n' 1 \
     > "$evidence_dir/backup-smoke/schema-sha256.txt"
   : > "$evidence_dir/backup-smoke/mysqlcheck.txt"
-  for ((table_number = 1; table_number <= 99; table_number++)); do
+  for ((table_number = 1; table_number <= 100; table_number++)); do
     printf 'ry_vue_backup_verify.table_%02d OK\n' "$table_number" \
       >> "$evidence_dir/backup-smoke/mysqlcheck.txt"
   done
   printf 'empty_schema_table_count=0\n' > "$evidence_dir/empty-schema-check.txt"
-  printf '99\t20\t11\t36\t32\n' > "$evidence_dir/table-counts.tsv"
+  printf '100\t20\t11\t36\t33\n' > "$evidence_dir/table-counts.tsv"
   printf 'PONG\n' > "$evidence_dir/redis-ping.txt"
   if [[ "$previous_release_id" != 'NONE' || -n "$previous_release_dir" ]]; then
     preflight_arguments+=(
@@ -1561,7 +1561,7 @@ main() {
   printf 'ry_vue_backup_verify.table_01 OK\n' \
     > "$evidence_dir/fresh-install/backup-smoke/mysqlcheck.txt"
   refresh_rehearsal_manifests "$evidence_dir"
-  expect_failure 'rehearsal without 99-table restore verification fails' \
+  expect_failure 'rehearsal without 100-table restore verification fails' \
     run_release_evidence_gate "$evidence_dir" rehearsal
 
   evidence_dir="$TEST_ROOT/rehearsal-fresh-attachment-diff"

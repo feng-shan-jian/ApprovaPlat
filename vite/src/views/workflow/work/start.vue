@@ -148,14 +148,15 @@ async function loadStartContext() {
  * @returns {Promise<void>} 发起成功后关闭当前页并进入对象授权详情。
  */
 async function submitProcess() {
-  if (!formRendererRef.value) return
-  const valid = await formRendererRef.value.validate().catch(error => {
-    showComponentError(error)
-    return false
-  })
-  if (!valid) return
+  // 校验本身是异步的，互斥标志必须在第一个 await 前设置，防止快速双击创建两个正式实例。
+  if (!formRendererRef.value || submitting.value) return
   submitting.value = true
   try {
+    const valid = await formRendererRef.value.validate().catch(error => {
+      showComponentError(error)
+      return false
+    })
+    if (!valid) return
     const variables = formRendererRef.value.getValues()
     const startMembers = {}
     for (const assignment of startAssignments.value) {

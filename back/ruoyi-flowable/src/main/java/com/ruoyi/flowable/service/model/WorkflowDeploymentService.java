@@ -22,6 +22,7 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
+import com.ruoyi.flowable.domain.WfDeployConditionRule;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
@@ -31,6 +32,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper;
 import com.ruoyi.flowable.mapper.WfDeployControlledLoopMapper;
+import com.ruoyi.flowable.mapper.WfDeployConditionRuleMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import com.ruoyi.flowable.mapper.WfDeployParticipantRuleMapper;
@@ -66,6 +68,9 @@ public class WorkflowDeploymentService
 
     /** 参与者规则不可变部署快照数据访问层；旧构造测试可为空。 */
     private final WfDeployParticipantRuleMapper deployParticipantRuleMapper;
+
+    /** 条件分支部署快照删除门禁；使用 setter 保持既有构造测试兼容。 */
+    private WfDeployConditionRuleMapper deployConditionRuleMapper;
 
     private final WorkflowDmnDecisionService dmnDecisionService;
 
@@ -115,6 +120,18 @@ public class WorkflowDeploymentService
         this.dmnDecisionService = dmnDecisionService;
         this.bpmnService = bpmnService;
         this.callActivityReferenceService = callActivityReferenceService;
+    }
+
+    /**
+     * 注入条件分支部署快照 Mapper，确保受控删除不遗留正式快照。
+     * @param deployConditionRuleMapper WfDeployConditionRuleMapper，条件快照数据访问层
+     * @return void，生产 Spring 容器启动后必须完成注入
+     */
+    @Autowired
+    public void setDeployConditionRuleMapper(
+            WfDeployConditionRuleMapper deployConditionRuleMapper)
+    {
+        this.deployConditionRuleMapper = deployConditionRuleMapper;
     }
 
     /**
@@ -313,12 +330,15 @@ public class WorkflowDeploymentService
                         safeControlledLoopSnapshots(deploymentId);
                 List<WfDeployParticipantRule> participantRuleSnapshots =
                         safeParticipantRuleSnapshots(deploymentId);
+                List<WfDeployConditionRule> conditionRuleSnapshots =
+                        safeConditionRuleSnapshots(deploymentId);
                 List<Model> linkedModels = repositoryService.createModelQuery()
                         .deploymentId(deploymentId)
                         .list();
                 plans.add(new DeploymentDeletionPlan(
                         deployment, snapshots, extensionSnapshots, dmnSnapshots,
-                        controlledLoopSnapshots, participantRuleSnapshots, linkedModels));
+                        controlledLoopSnapshots, participantRuleSnapshots,
+                        conditionRuleSnapshots, linkedModels));
             }
 
             for (DeploymentDeletionPlan plan : plans)
@@ -353,6 +373,12 @@ public class WorkflowDeploymentService
                 if (deletedParticipantRules != plan.participantRuleSnapshots().size())
                 {
                     throw new ServiceException("部署参与者规则快照状态已变化", HttpStatus.CONFLICT);
+                }
+                int deletedConditionRules = deployConditionRuleMapper == null ? 0
+                        : deployConditionRuleMapper.deleteByDeploymentId(deploymentId);
+                if (deletedConditionRules != plan.conditionRuleSnapshots().size())
+                {
+                    throw new ServiceException("部署条件分支快照状态已变化", HttpStatus.CONFLICT);
                 }
                 for (Model model : plan.linkedModels())
                 {
@@ -573,6 +599,22 @@ public class WorkflowDeploymentService
     }
 
     /**
+     * 查询部署条件分支快照并规范空 Mapper 返回。
+     * @param deploymentId String，Flowable 部署主键
+     * @return List&lt;WfDeployConditionRule&gt;，不可变条件快照列表
+     */
+    private List<WfDeployConditionRule> safeConditionRuleSnapshots(String deploymentId)
+    {
+        if (deployConditionRuleMapper == null)
+        {
+            return List.of();
+        }
+        List<WfDeployConditionRule> snapshots = deployConditionRuleMapper
+                .selectByDeploymentId(deploymentId);
+        return snapshots == null ? List.of() : List.copyOf(snapshots);
+    }
+
+    /**
      * 有界读取部署 BPMN，防止异常资源导致内存耗尽。
      *
      * @param stream InputStream，Flowable 返回的 BPMN 资源流
@@ -685,6 +727,7 @@ public class WorkflowDeploymentService
      * @param dmnSnapshots List&lt;WfDeployDmnSnapshot&gt;，部署当前拥有的 DMN 冻结快照
      * @param controlledLoopSnapshots List&lt;WfDeployControlledLoop&gt;，部署当前拥有的受控循环快照
      * @param participantRuleSnapshots List&lt;WfDeployParticipantRule&gt;，部署当前拥有的参与者规则快照
+     * @param conditionRuleSnapshots List&lt;WfDeployConditionRule&gt;，部署当前拥有的条件分支快照
      * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
      */
     private record DeploymentDeletionPlan(Deployment deployment, List<WfDeployForm> snapshots,
@@ -692,6 +735,7 @@ public class WorkflowDeploymentService
             List<WfDeployDmnSnapshot> dmnSnapshots,
             List<WfDeployControlledLoop> controlledLoopSnapshots,
             List<WfDeployParticipantRule> participantRuleSnapshots,
+            List<WfDeployConditionRule> conditionRuleSnapshots,
             List<Model> linkedModels)
     {
         /**
@@ -703,6 +747,7 @@ public class WorkflowDeploymentService
          * @param dmnSnapshots List&lt;WfDeployDmnSnapshot&gt;，部署当前拥有的 DMN 冻结快照
          * @param controlledLoopSnapshots List&lt;WfDeployControlledLoop&gt;，部署当前拥有的受控循环快照
          * @param participantRuleSnapshots List&lt;WfDeployParticipantRule&gt;，部署当前拥有的参与者规则快照
+         * @param conditionRuleSnapshots List&lt;WfDeployConditionRule&gt;，部署当前拥有的条件分支快照
          * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
          * @return 无返回值，构造后得到不可变删除计划
          */
@@ -713,6 +758,7 @@ public class WorkflowDeploymentService
             dmnSnapshots = List.copyOf(dmnSnapshots);
             controlledLoopSnapshots = List.copyOf(controlledLoopSnapshots);
             participantRuleSnapshots = List.copyOf(participantRuleSnapshots);
+            conditionRuleSnapshots = List.copyOf(conditionRuleSnapshots);
             linkedModels = List.copyOf(linkedModels);
         }
     }

@@ -132,6 +132,53 @@ public class WorkflowCelSandbox
     }
 
     /**
+     * 使用部署时冻结的 CEL 配置计算布尔结果，不向流程实例写入中间变量。
+     * @param activation Map&lt;String,Object&gt;，条件路由已完成原子比较的布尔变量
+     * @param configJson String，部署快照中的规范 CEL 配置 JSON
+     * @return boolean，受控表达式的布尔计算结果
+     */
+    public boolean evaluateBoolean(Map<String, Object> activation, String configJson)
+    {
+        CelCompiledConfig compiled;
+        try
+        {
+            compiled = compile(objectMapper.readTree(configJson));
+        }
+        catch (JacksonException | ServiceException exception)
+        {
+            throw new ServiceException("CEL 布尔执行配置无法通过部署时门禁", HttpStatus.ERROR);
+        }
+        if (!"BOOL".equals(compiled.resultType()))
+        {
+            throw new ServiceException("CEL 条件路由结果必须声明为 BOOL", HttpStatus.ERROR);
+        }
+
+        // 条件路由只能传入快照声明的原子比较结果，拒绝额外运行变量进入 CEL。
+        Set<String> declaredNames = compiled.variables().stream()
+                .map(CelVariable::name).collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (activation == null || !declaredNames.equals(activation.keySet()))
+        {
+            throw new ServiceException("CEL 条件路由变量与部署白名单不一致", HttpStatus.ERROR);
+        }
+        Map<String, Object> normalizedActivation = new LinkedHashMap<>();
+        for (CelVariable variable : compiled.variables())
+        {
+            normalizedActivation.put(variable.name(), normalizeRuntimeValue(
+                    activation.get(variable.name()), variable.type(), "条件路由变量"));
+        }
+
+        try
+        {
+            Object result = runtime.createProgram(compiled.ast()).eval(normalizedActivation);
+            return (Boolean) normalizeRuntimeValue(result, "BOOL", "条件路由结果");
+        }
+        catch (CelEvaluationException exception)
+        {
+            throw new ServiceException("CEL 条件路由表达式执行失败", HttpStatus.ERROR);
+        }
+    }
+
+    /**
      * 使用冻结配置读取显式变量白名单、执行 CEL 并写入类型化结果。
      * @param execution DelegateExecution，当前 Flowable 活动执行上下文
      * @param config JsonNode，已从部署快照读取的 CEL 配置

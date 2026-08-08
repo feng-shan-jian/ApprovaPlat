@@ -228,9 +228,26 @@
             </template>
 
             <template v-if="flags.sequenceFlow">
-              <el-form-item label="流转条件">
-                <el-input v-model="state.conditionExpression" type="textarea" :rows="3" maxlength="1024" @change="emit('condition-change')" />
-              </el-form-item>
+              <SequenceFlowRuleEditor
+                v-if="flags.conditionGatewayFlow"
+                :flow-id="state.id"
+                :name="state.name"
+                :config="state.conditionRule"
+                :is-default="state.conditionDefault"
+                :gateway-type="conditionContext.gatewayType"
+                :gateway-branches="conditionContext.branches"
+                :field-conflicts="conditionContext.fieldConflicts"
+                :field-options="conditionFieldOptions"
+                @apply="emit('condition-rule-change', $event)"
+                @make-default="emit('condition-default-change')"
+              />
+              <el-alert
+                v-else
+                type="info"
+                :closable="false"
+                show-icon
+                title="条件规则仅适用于排他或包容网关的多条出线"
+              />
             </template>
 
             <template v-if="flags.event">
@@ -447,6 +464,7 @@ import ExtensionPropertyEditor from './ExtensionPropertyEditor.vue'
 import CollaborationMessageEditor from './CollaborationMessageEditor.vue'
 import UserTaskSlaEditor from './UserTaskSlaEditor.vue'
 import ParticipantRuleEditor from './ParticipantRuleEditor.vue'
+import SequenceFlowRuleEditor from './SequenceFlowRuleEditor.vue'
 
 const props = defineProps({
   selected: { type: Boolean, default: false },
@@ -461,6 +479,8 @@ const props = defineProps({
   multiInstanceApprovalOptions: { type: Array, default: () => [] },
   controlledLoopFieldOptions: { type: Array, default: () => [] },
   participantFormFieldOptions: { type: Array, default: () => [] },
+  conditionFieldOptions: { type: Array, default: () => [] },
+  conditionContext: { type: Object, default: () => ({ gatewayType: '', branches: [] }) },
   extensionOptions: { type: Array, default: () => [] },
   formFieldOptions: { type: Array, default: () => [] },
   connectorEndpoints: { type: Array, default: () => [] },
@@ -480,7 +500,8 @@ const props = defineProps({
 const emit = defineEmits([
   'common-change', 'id-change', 'process-change', 'form-source-change', 'form-change',
   'embedded-form-change', 'assignment-change', 'participant-rule-change',
-  'user-task-change', 'extension-selection-change', 'service-task-change', 'condition-change', 'documentation-change',
+  'user-task-change', 'extension-selection-change', 'service-task-change', 'condition-change',
+  'condition-rule-change', 'condition-default-change', 'documentation-change',
   'multi-instance-change', 'activity-change', 'call-activity-change', 'event-change', 'dmn-change',
   'identity-search', 'identity-resolve', 'business-execution-listener-change', 'business-task-listener-change',
   'extension-properties-change', 'sla-change'

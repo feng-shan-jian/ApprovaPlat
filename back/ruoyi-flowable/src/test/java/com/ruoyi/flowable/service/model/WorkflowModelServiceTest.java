@@ -884,8 +884,9 @@ class WorkflowModelServiceTest
 
         verify(repositoryService).setProcessDefinitionCategory("expense:2:10", "finance");
         verify(repositoryService).suspendProcessDefinitionById("expense:1:9", false, null);
-        verify(formTemplateValidator).validate("{\"v\":1}");
-        verify(formTemplateValidator).validate("{\"fields\":[]}");
+        // 表单冻结和动态审批字段投影各自重新校验快照，任一链路都不能信任另一方的内存结果。
+        verify(formTemplateValidator, times(2)).validate("{\"v\":1}");
+        verify(formTemplateValidator, times(2)).validate("{\"fields\":[]}");
         verify(deployFormMapper).insertBatch(snapshots.capture());
         verify(extensionDeploymentService).persist(eq("deployment-1"), any(), anyList());
         verify(dmnDecisionService).persist(eq("deployment-1"), any(), eq("7"));

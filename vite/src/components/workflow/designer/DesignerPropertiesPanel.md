@@ -14,6 +14,8 @@
   :flags="propertyFlags"
   :forms="forms"
   :controlled-loop-field-options="controlledLoopFieldOptions"
+  :condition-field-options="conditionFieldOptions"
+  :condition-context="conditionContext"
   :extension-options="extensionOptions"
   :form-field-options="formFieldOptions"
   :connector-endpoints="connectorEndpoints"
@@ -36,6 +38,8 @@
 | `flags` | `object` | `process`、`participant`、`activity`、`event` 等类型能力开关；Participant 需要填写 `state.processRef`。 |
 | `forms` | `array` | 可选择的正式 `wf_form` 列表。 |
 | `controlledLoopFieldOptions` | `array` | 当前 UserTask 正式表单中的可写标量字段、静态值目录及是否禁止自由输入。 |
+| `conditionFieldOptions` | `array` | 当前可执行流程全部正式表单中的可写标量字段、类型和静态值目录。 |
+| `conditionContext` | `object` | 当前排他/包容网关类型及全部出线的名称、默认和配置状态。 |
 | `identityOptions` | `object` | 办理人、候选用户和候选组目录。 |
 | `identityLoading` | `boolean` | 身份目录加载状态。 |
 | `extensionOptions` | `array` | 后端扩展注册表返回的已启用 Java、CEL 和 HTTP 扩展最新版，不接受本地伪造选项。 |
@@ -51,7 +55,7 @@
 
 ## Emits
 
-组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`participant-rule-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、`identity-resolve`、两类业务监听器事件和 `extension-properties-change`。`identity-search` 用于正式目录分页检索，`identity-resolve` 用于重开模型时核验当前分页外的已选对象。
+组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`participant-rule-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`condition-rule-change`、`condition-default-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、`identity-resolve`、两类业务监听器事件和 `extension-properties-change`。`identity-search` 用于正式目录分页检索，`identity-resolve` 用于重开模型时核验当前分页外的已选对象。
 
 ## 公开方法
 
@@ -74,6 +78,7 @@
 - 会签/或签在“签署规则”下明确选择人员来源。“办理时选择”由唯一前驱任务在真实完成链路中提交成员；“发起时选择”由发起页根据部署 BPMN 投影必填用户字段；“固定人员”仅能从审批资格目录多选。父组件只写入三种固定白名单表达式，不向用户显示 collection、elementVariable 或 completionCondition。三种来源进入节点后共用正式成员快照、revision/CAS、加减签和完成审计。
 - 切换到“固定人员”时先保留页面编辑状态并显示正式审批用户目录；选择首名成员后才写入 BPMN 命令栈。若未选择成员直接保存，父组件在发起服务端校验和保存请求前明确拒绝，确保不会把旧人员来源误保存为固定配置。
 - 受控整改循环必须填写判断字段、再次进入值、退出值和 2 至 50 的最大轮次，并显式点击“应用整改循环配置”。半成品只保留在当前面板草稿中，不写入 moddle；静态枚举和布尔字段禁止自由创建条件值。
+- 排他和包容网关的多条出线使用 `SequenceFlowRuleEditor`，普通设计者不能输入任意 EL。字段来自当前流程正式表单，分支名称、唯一默认、AND/OR 规则组和字段类型值在保存及部署 API 再次校验。
 - 通用扩展属性写入受限 `flowable:properties`，后端校验数量、名称、重复项和值长度；它们只是元数据，不作为表达式或实现入口执行。
 
 ### 错误与升级配置

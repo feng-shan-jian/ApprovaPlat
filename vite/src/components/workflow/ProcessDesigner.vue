@@ -51,6 +51,8 @@
         :multi-instance-approval-options="multiInstanceApprovalOptions"
         :controlled-loop-field-options="controlledLoopFieldOptions"
         :participant-form-field-options="participantFormFieldOptions"
+        :condition-field-options="conditionFieldOptions"
+        :condition-context="conditionContext"
         :extension-options="extensionOptions"
         :form-field-options="formFieldOptions"
         :connector-endpoints="connectorEndpoints"
@@ -77,7 +79,8 @@
         @user-task-change="updateUserTaskProperties"
         @extension-selection-change="updateExtensionSelection"
         @service-task-change="updateServiceTask"
-        @condition-change="updateCondition"
+        @condition-rule-change="updateConditionRule"
+        @condition-default-change="makeConditionDefault"
         @documentation-change="updateDocumentation"
         @multi-instance-change="updateMultiInstance"
         @activity-change="updateActivityProperties"
@@ -172,6 +175,8 @@ const CONTROLLED_LOOP_PROPERTIES = Object.freeze({
   maxIterations: `${CONTROLLED_LOOP_PROPERTY_PREFIX}maxIterations`
 })
 const CONTROLLED_LOOP_PROPERTY_NAMES = new Set(Object.values(CONTROLLED_LOOP_PROPERTIES))
+// 条件分支作者 XML 只保存版本化受控 JSON，部署后端会剥离该属性并生成固定路由表达式。
+const CONDITION_RULE_PROPERTY = 'approva.conditionRule.config'
 
 // 内嵌字段类型、变量和日期格式与后端 WorkflowEmbeddedFormConverter 使用同一安全边界。
 const EMBEDDED_FORM_TYPES = Object.freeze(['string', 'long', 'integer', 'boolean', 'date', 'enum'])
@@ -314,6 +319,7 @@ const propertyFlags = computed(() => {
     businessRuleTask: isBusinessRuleTask.value,
     formSupported: isStartEvent.value || isUserTask.value,
     sequenceFlow: isSequenceFlow.value,
+    conditionGatewayFlow: isConditionGatewayFlow(),
     callActivity: isType('bpmn:CallActivity'),
     activity: isType('bpmn:Activity'),
     event: isType('bpmn:Event'),
@@ -374,6 +380,15 @@ const eventCodeLoading = ref(false)
 const controlledLoopFieldOptions = computed(() => resolveControlledLoopFieldOptions())
 // 表单用户规则只允许选择当前任务正式模板或内嵌 FormData 中的可写变量。
 const participantFormFieldOptions = computed(() => resolveParticipantFormFieldOptions())
+// 条件字段覆盖当前可执行流程全部正式表单，重复异构字段会从可选项剔除并在上下文中提示。
+const conditionFieldCatalog = computed(() => resolveConditionFieldCatalog())
+const conditionFieldOptions = computed(() => conditionFieldCatalog.value.fields)
+const conditionContext = computed(() => resolveConditionContext(conditionFieldCatalog.value.conflicts, {
+  id: propertyState.id,
+  name: propertyState.name,
+  conditionRule: propertyState.conditionRule,
+  conditionDefault: propertyState.conditionDefault
+}))
 // slaCalendarOptions 只包含后端返回的启用日历，作者 XML 不接受自由输入日历键。
 const slaCalendarOptions = ref([])
 const slaLoading = ref(false)
@@ -442,6 +457,8 @@ function createEmptyPropertyState() {
     businessKey: '',
     processInstanceName: '',
     conditionExpression: '',
+    conditionRule: null,
+    conditionDefault: false,
     documentation: '',
     asyncBefore: false,
     asyncAfter: false,
@@ -730,6 +747,8 @@ function loadPropertyState(element) {
   propertyState.documentation = businessObject.documentation?.[0]?.text || ''
   propertyState.processRef = businessObject.processRef || ''
   propertyState.conditionExpression = businessObject.conditionExpression?.body || ''
+  propertyState.conditionRule = readConditionRule(businessObject)
+  propertyState.conditionDefault = isDefaultConditionFlow(element)
   const serviceExtension = readServiceTaskExtension(businessObject)
   propertyState.extensionKey = serviceExtension.extensionKey
   propertyState.extensionConfig = serviceExtension.extensionConfig
@@ -797,7 +816,7 @@ function readExtensionProperties(businessObject) {
   const containers = (businessObject?.extensionElements?.values || [])
     .filter(value => value?.$type === 'flowable:Properties')
   return containers.flatMap(container => (container.values || [])
-    .filter(property => !CONTROLLED_LOOP_PROPERTY_NAMES.has(property.name))
+    .filter(property => !CONTROLLED_LOOP_PROPERTY_NAMES.has(property.name) && property.name !== CONDITION_RULE_PROPERTY)
     .map(property => ({ name: property.name || '', value: property.value || '' })))
 }
 
@@ -927,23 +946,78 @@ function readControlledLoop(businessObject) {
  */
 function resolveControlledLoopFieldOptions() {
   if (!isUserTask.value) return []
-  if (propertyState.formSource === 'EMBEDDED') {
-    return propertyState.embeddedFields
-      .filter(field => field.writable !== false && field.variable)
-      .map(field => ({
-        value: field.variable,
-        label: field.name ? `${field.name}（${field.variable}）` : field.variable,
-        values: field.type === 'boolean'
-          ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
-          : (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id })),
-        valueRestricted: field.type === 'boolean' || field.type === 'enum'
-      }))
+  return describeFormalFormFields(selectedBusinessObject.value)
+}
+
+/**
+ * 从 SequenceFlow 的平台保留属性回读版本化条件规则。
+ * @param {object|undefined} businessObject 当前顺序流业务对象。
+ * @returns {object|null} 结构完整的规则对象；缺失或历史异常值返回空并交由后端校验提示。
+ */
+function readConditionRule(businessObject) {
+  const values = (businessObject?.extensionElements?.values || [])
+    .filter(value => value?.$type === 'flowable:Properties')
+    .flatMap(container => container.values || [])
+    .filter(property => property.name === CONDITION_RULE_PROPERTY)
+  if (values.length !== 1) return null
+  try {
+    const config = JSON.parse(String(values[0].value || ''))
+    return config?.version === 1 && typeof config.default === 'boolean' ? config : null
+  } catch {
+    return null
   }
-  const formId = Number(String(propertyState.formKey || '').replace(/^key_/, ''))
+}
+
+/**
+ * 以网关标准 default 引用判断当前顺序流是否为真实默认分支。
+ * @param {object|undefined} element 当前 bpmn-js 连接元素。
+ * @returns {boolean} 网关 default 精确指向当前连线时返回 true。
+ */
+function isDefaultConditionFlow(element) {
+  const source = element?.source?.businessObject
+  const flow = element?.businessObject
+  const defaultId = source?.default?.id || source?.default || ''
+  return Boolean(flow?.id && defaultId === flow.id)
+}
+
+/**
+ * 从正式模板或 BPMN 内嵌 FormData 提取后端允许参与条件判断的可写标量字段。
+ * @param {object|undefined} businessObject 开始节点或用户任务业务对象。
+ * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
+ */
+function describeFormalFormFields(businessObject) {
+  const embeddedFields = readEmbeddedFormFields(businessObject)
+  if (embeddedFields.length) {
+    return embeddedFields
+      .filter(field => field.writable !== false && field.variable)
+      .map(field => {
+        const type = ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
+        if (!type) return null
+        return {
+          value: field.variable,
+          label: field.name ? `${field.name}（${field.variable}）` : field.variable,
+          type,
+          values: field.type === 'boolean'
+            ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
+            : (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id })),
+          valueRestricted: field.type === 'boolean' || field.type === 'enum'
+        }
+      }).filter(Boolean)
+  }
+  const formId = Number(String(businessObject?.get?.('flowable:formKey') || '').replace(/^key_/, ''))
   const form = props.forms.find(item => Number(item.formId) === formId)
   if (!form?.content) return []
+  return describeTemplateFormFields(form.content)
+}
+
+/**
+ * 解析已由后端模板校验器返回的正式表单 JSON，并收窄为条件字段目录。
+ * @param {string} content 正式 wf_form 模板 JSON。
+ * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
+ */
+function describeTemplateFormFields(content) {
   try {
-    const root = JSON.parse(form.content)
+    const root = JSON.parse(content)
     const result = []
     const seen = new Set()
     const visit = fields => {
@@ -961,6 +1035,7 @@ function resolveControlledLoopFieldOptions() {
           result.push({
             value: variable,
             label: field?.__config__?.label ? `${field.__config__.label}（${variable}）` : variable,
+            type: kind,
             values: kind === 'BOOLEAN'
               ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
               : options,
@@ -1017,6 +1092,97 @@ function resolveParticipantFormFieldOptions() {
   } catch {
     return []
   }
+}
+
+/**
+ * 合并当前可执行流程全部正式表单字段，并识别同名异构冲突。
+ * @returns {{fields:Array<object>,conflicts:string[]}} 可选字段和被剔除的冲突变量名。
+ */
+function resolveConditionFieldCatalog() {
+  // 在 modeler 门禁前读取响应式选中项，避免首次空画布求值后永久缓存空目录。
+  const selected = selectedElement.value
+  if (!modeler || !selected || !isConditionGatewayFlow()) return { fields: [], conflicts: [] }
+  // 顺序流自身的 moddle 父链是导入、撤销和重建后的稳定归属，不依赖图形 source 短暂引用。
+  const sourceProcess = owningProcess(selected.businessObject)
+  if (!sourceProcess) return { fields: [], conflicts: [] }
+  const fieldsByName = new Map()
+  const conflicts = new Set()
+  const visited = new Set()
+  for (const element of modeler.get('elementRegistry').getAll()) {
+    const businessObject = element?.businessObject
+    if (!businessObject?.id || visited.has(businessObject.id) || owningProcess(businessObject) !== sourceProcess) continue
+    if (!businessObject.$instanceOf?.('bpmn:StartEvent') && !businessObject.$instanceOf?.('bpmn:UserTask')) continue
+    visited.add(businessObject.id)
+    for (const field of describeFormalFormFields(businessObject)) {
+      const signature = JSON.stringify({ type: field.type, values: field.values, valueRestricted: field.valueRestricted })
+      const existing = fieldsByName.get(field.value)
+      if (existing && existing.signature !== signature) {
+        conflicts.add(field.value)
+        fieldsByName.delete(field.value)
+      } else if (!existing && !conflicts.has(field.value)) {
+        fieldsByName.set(field.value, { ...field, signature })
+      }
+    }
+  }
+  return {
+    fields: [...fieldsByName.values()].map(({ signature, ...field }) => field),
+    conflicts: [...conflicts].sort()
+  }
+}
+
+/**
+ * 构造当前网关全部出线的配置状态，供属性面板提示默认遗漏和半成品分支。
+ * @param {string[]} fieldConflicts 当前流程同名异构字段名。
+ * @param {{id:string,name:string,conditionRule:object|null,conditionDefault:boolean}} currentState 当前出线刚写入的响应式状态。
+ * @returns {{gatewayType:string,branches:Array<object>,fieldConflicts:string[]}} 网关上下文。
+ */
+function resolveConditionContext(fieldConflicts = [], currentState = {}) {
+  if (!isConditionGatewayFlow()) return { gatewayType: '', branches: [], fieldConflicts }
+  const source = selectedElement.value.source.businessObject
+  const defaultId = source.default?.id || source.default || ''
+  const branches = (source.outgoing || []).map(flow => {
+    const isCurrent = flow.id === currentState.id
+    // bpmn-js 原位修改 moddle 对象，当前出线使用 propertyState 触发即时视图刷新。
+    const config = isCurrent ? currentState.conditionRule : readConditionRule(flow)
+    const isDefault = isCurrent ? Boolean(currentState.conditionDefault) : defaultId === flow.id
+    return {
+      id: flow.id,
+      name: isCurrent ? currentState.name || '' : flow.name || '',
+      default: isDefault,
+      configured: Boolean(config && config.default === isDefault)
+    }
+  })
+  return {
+    gatewayType: source.$type === 'bpmn:InclusiveGateway' ? 'INCLUSIVE' : 'EXCLUSIVE',
+    branches,
+    fieldConflicts
+  }
+}
+
+/**
+ * 判断当前连线是否来自具有多条出线的排他或包容网关。
+ * @returns {boolean} 满足无代码条件编辑适用范围时返回 true。
+ */
+function isConditionGatewayFlow() {
+  const source = selectedElement.value?.source?.businessObject
+  return Boolean(source
+    && ['bpmn:ExclusiveGateway', 'bpmn:InclusiveGateway'].includes(source.$type)
+    && Array.isArray(source.outgoing)
+    && source.outgoing.length > 1)
+}
+
+/**
+ * 沿 BPMN moddle 父链解析所属可执行流程。
+ * @param {object|undefined} businessObject 任意流程元素业务对象。
+ * @returns {object|null} 所属 bpmn:Process；未找到时为空。
+ */
+function owningProcess(businessObject) {
+  let current = businessObject
+  while (current) {
+    if (current.$type === 'bpmn:Process') return current
+    current = current.$parent
+  }
+  return null
 }
 
 /**
@@ -1787,7 +1953,8 @@ function updateExtensionProperties(properties) {
     const platformProperties = readAllFlowableProperties(businessObject)
       .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
         || SLA_PROPERTY_NAME_SET.has(item.name)
-        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
+        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
+        || item.name === CONDITION_RULE_PROPERTY)
     const extensionElements = buildPropertiesExtensionElements(
       businessObject, normalized, platformProperties)
     modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
@@ -2024,16 +2191,71 @@ function updateEventProperties() {
 }
 
 /**
- * 创建、更新或删除顺序流条件表达式。
- * @returns {void} 无返回值。
+ * 校验并把结构化条件规则写入当前网关出线，作者 XML 不生成任意 EL。
+ * @param {{name:string,config:object}} payload 编辑器提交的分支名称与完整规则。
+ * @returns {void} 配置与真实默认状态不一致时恢复当前 BPMN 状态并上报。
  */
-function updateCondition() {
-  const expression = propertyState.conditionExpression.trim()
-  const moddle = modeler.get('moddle')
-  updateProperties({
-    conditionExpression: expression
-      ? moddle.create('bpmn:FormalExpression', { body: expression })
-      : undefined
+function updateConditionRule(payload) {
+  if (designerLocked.value || !modeler || !isConditionGatewayFlow()) return
+  try {
+    const name = String(payload?.name || '').trim()
+    const config = payload?.config
+    if (!name || name.length > 100 || config?.version !== 1
+      || config?.default !== propertyState.conditionDefault) {
+      throw new Error('条件分支名称或默认状态不完整')
+    }
+    persistConditionConfig(selectedElement.value, name, config)
+    loadPropertyState(selectedElement.value)
+  } catch (error) {
+    loadPropertyState(selectedElement.value)
+    emit('error', error)
+  }
+}
+
+/**
+ * 将当前出线设为网关唯一默认分支，并清除旧默认分支的过期默认配置。
+ * @returns {void} 旧默认分支会进入“待配置”状态，保存 API 会阻止半成品发布。
+ */
+function makeConditionDefault() {
+  if (designerLocked.value || !modeler || !isConditionGatewayFlow()) return
+  try {
+    const sourceElement = selectedElement.value.source
+    const source = sourceElement.businessObject
+    const oldDefaultId = source.default?.id || source.default || ''
+    const oldDefaultElement = oldDefaultId ? modeler.get('elementRegistry').get(oldDefaultId) : null
+    modeler.get('modeling').updateProperties(sourceElement, { default: selectedBusinessObject.value })
+    if (oldDefaultElement && oldDefaultElement !== selectedElement.value) {
+      persistConditionConfig(oldDefaultElement, oldDefaultElement.businessObject.name || '', null)
+    }
+    persistConditionConfig(selectedElement.value, propertyState.name || '', { version: 1, default: true })
+    loadPropertyState(selectedElement.value)
+  } catch (error) {
+    loadPropertyState(selectedElement.value)
+    emit('error', error)
+  }
+}
+
+/**
+ * 使用 bpmn-js 命令栈更新任意网关出线的名称、受控规则属性并移除历史表达式。
+ * @param {object} flowElement bpmn-js SequenceFlow 图形元素。
+ * @param {string} name 分支名称，允许旧默认切换时暂为空并由保存门禁阻止。
+ * @param {object|null} config 版本化受控规则；null 表示清除过期配置。
+ * @returns {void} 当前命令不会直接序列化 XML。
+ */
+function persistConditionConfig(flowElement, name, config) {
+  const businessObject = flowElement?.businessObject
+  if (!businessObject) throw new Error('条件分支元素不存在')
+  const ordinaryProperties = readAllFlowableProperties(businessObject)
+    .filter(item => item.name !== CONDITION_RULE_PROPERTY)
+  const controlledProperties = config
+    ? [{ name: CONDITION_RULE_PROPERTY, value: JSON.stringify(config) }]
+    : []
+  const extensionElements = buildPropertiesExtensionElements(
+    businessObject, ordinaryProperties, controlledProperties)
+  modeler.get('modeling').updateProperties(flowElement, {
+    name: String(name || '').trim() || undefined,
+    conditionExpression: undefined,
+    extensionElements
   })
 }
 

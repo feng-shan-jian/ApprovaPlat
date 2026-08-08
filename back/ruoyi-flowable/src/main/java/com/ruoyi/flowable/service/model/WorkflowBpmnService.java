@@ -92,6 +92,11 @@ public class WorkflowBpmnService
             "\\$\\{workflowSlaTimerDelegate\\.executeTimer\\(execution,'[A-Za-z0-9_.:-]+',"
                     + "'(REMINDER|ESCALATE)',[0-9]{1,3},(null|'[1-9][0-9]{0,18}')\\)\\}");
 
+    /** 条件分支编译后唯一允许的固定路由表达式，参数只能是服务端 SHA-256 摘要令牌。 */
+    private static final Pattern CONDITION_ROUTER_EXPRESSION = Pattern.compile(
+            "\\$\\{workflowConditionRouter\\.matches\\(execution,'[0-9a-f]{24}',"
+                    + "'[0-9a-f]{24}'\\)\\}");
+
     /** 原始 XML 中显式声明的非中断 Error 边界；模型转换会丢失该作者意图，必须先行拦截。 */
     private static final Pattern NON_INTERRUPTING_ERROR_BOUNDARY_PATTERN = Pattern.compile(
             "(?is)<boundaryEvent\\b[^>]*cancelActivity\\s*=\\s*['\"]false['\"][^>]*>"
@@ -403,10 +408,13 @@ public class WorkflowBpmnService
         }
         String name = trimToEmpty(reader.getAttributeValue(null, "name"));
         String value = reader.getAttributeValue(null, "value");
+        // 条件规则是设计器生成的结构化 JSON，仅该保留属性允许使用专用的大字段上限。
+        boolean conditionRuleProperty = WorkflowConditionRuleBpmnContract.CONFIG_PROPERTY.equals(name);
         boolean allowedPlatformProperty =
                 WorkflowControlledLoopBpmnContract.isReservedProperty(name)
                 || WorkflowParticipantRuleBpmnContract.isReservedProperty(name)
-                || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name);
+                || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name)
+                || conditionRuleProperty;
         if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
                 || (name.startsWith("approva.") && !allowedPlatformProperty))
         {
@@ -416,7 +424,10 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("同一元素的通用扩展属性名不能重复", null);
         }
-        if (value == null || value.length() > MAX_EXTENSION_PROPERTY_VALUE_LENGTH)
+        int maximumValueLength = conditionRuleProperty
+                ? WorkflowConditionRuleBpmnContract.MAX_CONFIG_LENGTH
+                : MAX_EXTENSION_PROPERTY_VALUE_LENGTH;
+        if (value == null || value.length() > maximumValueLength)
         {
             throw invalidBpmn("通用扩展属性值缺失或超过长度限制", null);
         }
@@ -670,6 +681,9 @@ public class WorkflowBpmnService
 
             validateBpmnBusinessEvents(bpmnModel, process);
 
+            // 多实例结构和动态成员初始化拓扑必须先于顺序流表达式校验，确保不可执行拓扑返回准确诊断。
+            validateMultiInstanceActivities(process);
+
             validateListeners(process.getExecutionListeners(), validationContext);
             for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
             {
@@ -820,6 +834,11 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("受控循环只能配置在用户任务上", null);
         }
+        if (WorkflowConditionRuleBpmnContract.hasReservedProperty(element)
+                && !(element instanceof SequenceFlow))
+        {
+            throw invalidBpmn("条件分支规则只能配置在网关顺序流上", null);
+        }
         if (element instanceof ServiceTask serviceTask)
         {
             validateServiceTask(serviceTask, validationContext);
@@ -830,7 +849,17 @@ public class WorkflowBpmnService
         }
         if (element instanceof SequenceFlow sequenceFlow)
         {
-            validateExpression(sequenceFlow.getConditionExpression());
+            if (validationContext == ValidationContext.AUTHOR
+                    && hasText(sequenceFlow.getConditionExpression()))
+            {
+                throw invalidBpmn("普通流程模型不允许手写顺序流表达式，请使用受控条件规则", null);
+            }
+            if (!(validationContext == ValidationContext.COMPILED_DEPLOYMENT
+                    && CONDITION_ROUTER_EXPRESSION.matcher(
+                            trimToEmpty(sequenceFlow.getConditionExpression())).matches()))
+            {
+                validateExpression(sequenceFlow.getConditionExpression());
+            }
             validateExpression(sequenceFlow.getSkipExpression());
         }
         if (element instanceof UserTask userTask)
@@ -866,7 +895,16 @@ public class WorkflowBpmnService
             validateExpression(callActivity.getBusinessKey());
             validateExpression(callActivity.getProcessInstanceName());
         }
-        if (element instanceof Activity activity)
+    }
+
+    /**
+     * 在逐元素表达式校验前统一核验流程中的全部多实例活动。
+     * @param process Process，待校验的可执行流程
+     * @return void，任一多实例结构、来源或初始化拓扑不合法时抛出 HTTP 400
+     */
+    private void validateMultiInstanceActivities(Process process)
+    {
+        for (Activity activity : process.findFlowElementsOfType(Activity.class, true))
         {
             MultiInstanceLoopCharacteristics loop = activity.getLoopCharacteristics();
             if (loop != null)
@@ -1519,6 +1557,7 @@ public class WorkflowBpmnService
             }
             else if (!(validationContext == ValidationContext.COMPILED_DEPLOYMENT
                     && (SLA_TIMER_DELEGATE_EXPRESSION.matcher(expression).matches()
+                    || CONDITION_ROUTER_EXPRESSION.matcher(expression).matches()
                     || WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION.equals(expression))))
             {
                 // 编译资源仅放行平台固定扩展入口与 SLA 固定定时入口；作者 XML 和其他表达式继续走通用安全语法。

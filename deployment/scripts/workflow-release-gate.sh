@@ -1072,9 +1072,9 @@ gate_validate_environment_identity() {
 }
 
 #
-# 校验全新安装备份已真实生成并在 99 张恢复表上完成 mysqlcheck。
+# 校验全新安装备份已真实生成并在 100 张恢复表上完成 mysqlcheck。
 # 参数：$1（字符串）全新安装证据目录；$2（字符串）证据名称。
-# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 99 个 OK 结果。
+# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 100 个 OK 结果。
 #
 gate_validate_backup_restore() {
   local evidence_dir="$1"
@@ -1089,9 +1089,9 @@ gate_validate_backup_restore() {
   awk '
     NF != 2 || $NF != "OK" || seen[$1]++ { invalid = 1 }
     NF > 0 { rows++ }
-    END { exit(!invalid && rows == 99 ? 0 : 1) }
+    END { exit(!invalid && rows == 100 ? 0 : 1) }
   ' "$mysqlcheck_file" \
-    || gate_die "$label mysqlcheck must contain exactly 99 OK table results"
+    || gate_die "$label mysqlcheck must contain exactly 100 OK table results"
 }
 
 #
@@ -1186,7 +1186,7 @@ gate_validate_database_result() {
           check_name == "workflow_connector_table_presence")
         return detail == "missing_or_invalid=none"
       if (check_name == "workflow_schema_table_counts")
-        return detail == "total=99, ruoyi=20, quartz=11, flowable=36, workflow=32"
+        return detail == "total=100, ruoyi=20, quartz=11, flowable=36, workflow=33"
       if (check_name == "workflow_connector_columns")
         return detail == "missing=none"
       if (check_name == "workflow_business_tables")
@@ -1877,7 +1877,7 @@ gate_validate_evidence_profile() {
     gate_require_exact_line "$evidence_dir/empty-schema-check.txt" \
       'empty_schema_table_count=0' 'empty schema evidence'
     gate_require_exact_line "$evidence_dir/table-counts.tsv" \
-      $'99\t20\t11\t36\t32' 'table-counts.tsv'
+      $'100\t20\t11\t36\t33' 'table-counts.tsv'
     gate_validate_backup_restore "$evidence_dir" 'fresh-install evidence'
     gate_require_exact_line "$evidence_dir/redis-ping.txt" 'PONG' 'Redis PING evidence'
     gate_require_exact_line "$evidence_dir/mysql-connectivity.txt" '1' 'MySQL connectivity evidence'

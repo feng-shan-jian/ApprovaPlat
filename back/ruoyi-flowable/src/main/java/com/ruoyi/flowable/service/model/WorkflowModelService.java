@@ -135,6 +135,9 @@ public class WorkflowModelService
     /** 受控重复审批循环的执行模型编译和部署快照服务。 */
     private final WorkflowControlledLoopDeploymentService controlledLoopDeploymentService;
 
+    /** 排他和包容网关的受控条件编译及部署快照服务。 */
+    private WorkflowConditionDeploymentService conditionDeploymentService;
+
     private final WorkflowDmnDecisionService dmnDecisionService;
 
     /** 部署时锁定自定义表单字段精确版本；旧构造测试可为空。 */
@@ -224,6 +227,18 @@ public class WorkflowModelService
             WorkflowParticipantRuleDeploymentService participantRuleDeploymentService)
     {
         this.participantRuleDeploymentService = participantRuleDeploymentService;
+    }
+
+    /**
+     * 延迟注入条件分支编译器，避免扩大既有直接构造单元测试的构造参数。
+     * @param conditionDeploymentService WorkflowConditionDeploymentService，受控条件编译服务
+     * @return void，生产 Spring 容器启动后必须完成注入
+     */
+    @Autowired
+    public void setConditionDeploymentService(
+            WorkflowConditionDeploymentService conditionDeploymentService)
+    {
+        this.conditionDeploymentService = conditionDeploymentService;
     }
 
     /**
@@ -785,13 +800,22 @@ public class WorkflowModelService
             List<FormSnapshotSource> snapshotSources = validateDeploymentReferences(document);
             WorkflowPreparedExtensionDeployment extensionDeployment =
                     extensionDeploymentService.prepare(document, identity.userId());
+            List<WorkflowControlledLoopFormSchema> formSchemas =
+                    buildControlledLoopFormSchemas(snapshotSources);
+            WorkflowPreparedConditionDeployment conditionDeployment =
+                    conditionDeploymentService == null
+                            ? new WorkflowPreparedConditionDeployment(
+                                    extensionDeployment.compiledBpmn(), List.of())
+                            : conditionDeploymentService.prepare(document,
+                                    extensionDeployment.compiledBpmn(), formSchemas,
+                                    identity.userId());
             WorkflowPreparedControlledLoopDeployment controlledLoopDeployment =
                     controlledLoopDeploymentService == null
                             ? new WorkflowPreparedControlledLoopDeployment(
-                                    extensionDeployment.compiledBpmn(), List.of())
+                                    conditionDeployment.compiledBpmn(), List.of())
                             : controlledLoopDeploymentService.prepare(document,
-                                    extensionDeployment.compiledBpmn(),
-                                    buildControlledLoopFormSchemas(snapshotSources), identity.userId());
+                                    conditionDeployment.compiledBpmn(),
+                                    formSchemas, identity.userId());
             WorkflowPreparedParticipantRuleDeployment participantDeployment =
                     participantRuleDeploymentService == null
                             ? new WorkflowPreparedParticipantRuleDeployment(
@@ -853,6 +877,10 @@ public class WorkflowModelService
                     .toList();
             extensionDeploymentService.persist(deployment.getId(), extensionDeployment,
                     formFieldSnapshots);
+            if (conditionDeploymentService != null)
+            {
+                conditionDeploymentService.persist(deployment.getId(), conditionDeployment);
+            }
             if (controlledLoopDeploymentService != null)
             {
                 controlledLoopDeploymentService.persist(deployment.getId(), controlledLoopDeployment);
@@ -1101,7 +1129,14 @@ public class WorkflowModelService
         // 身份主数据可能在设计期间停用，每次保存、校验和部署都必须从正式表重新核验。
         bpmnIdentityValidator.validate(document);
         dmnDecisionService.validateReferences(document);
-        return loadSnapshotSources(document.formReferences());
+        List<FormSnapshotSource> sources = loadSnapshotSources(document.formReferences());
+        if (conditionDeploymentService != null)
+        {
+            // 保存、校验和部署共用冻结表单字段门禁，不能只在最终 deploy 才发现非法规则。
+            conditionDeploymentService.validate(document,
+                    buildControlledLoopFormSchemas(sources));
+        }
+        return sources;
     }
 
     /**
