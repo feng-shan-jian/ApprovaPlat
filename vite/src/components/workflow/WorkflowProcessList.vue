@@ -37,6 +37,13 @@
       <el-form-item v-if="isCopy" label="流程发起人" prop="originatorName">
         <el-input v-model="queryParams.originatorName" clearable placeholder="请输入流程发起人" @keyup.enter="handleQuery" />
       </el-form-item>
+      <el-form-item v-if="isCopy" label="阅读状态" prop="readStatus">
+        <el-select v-model="queryParams.readStatus" placeholder="全部状态" style="width: 140px">
+          <el-option label="全部" value="" />
+          <el-option label="未读" value="0" />
+          <el-option label="已读" value="1" />
+        </el-select>
+      </el-form-item>
       <el-form-item label="流程分类" :prop="isCopy ? 'categoryId' : 'category'">
         <el-select v-model="queryParams[isCopy ? 'categoryId' : 'category']" clearable filterable placeholder="全部分类" style="width: 180px">
           <el-option v-for="item in categoryOptions" :key="item.code" :label="item.categoryName" :value="item.code" />
@@ -88,6 +95,22 @@
       </el-table-column>
       <el-table-column v-if="mode === 'manage' || mode === 'todo' || mode === 'claim' || mode === 'finished'" label="发起人" prop="startUserName" min-width="120" show-overflow-tooltip />
       <el-table-column v-if="isCopy" label="流程发起人" prop="originatorName" min-width="120" show-overflow-tooltip />
+      <el-table-column v-if="isCopy" label="来源" width="104" align="center">
+        <template #default="scope">{{ copySourceLabel(scope.row.sourceType) }}</template>
+      </el-table-column>
+      <el-table-column v-if="isCopy" label="触发时机" min-width="180" show-overflow-tooltip>
+        <template #default="scope">{{ copyTriggerText(scope.row) }}</template>
+      </el-table-column>
+      <el-table-column v-if="isCopy" label="阅读状态" width="100" align="center">
+        <template #default="scope">
+          <el-tag :type="scope.row.readStatus === '1' ? 'info' : 'warning'">
+            {{ copyReadStatusLabel(scope.row.readStatus) }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="isCopy" label="首次阅读时间" width="170">
+        <template #default="scope">{{ scope.row.readTime ? parseTime(scope.row.readTime) : '-' }}</template>
+      </el-table-column>
       <el-table-column :label="timeColumnLabel" :prop="timeColumnProp" width="170">
         <template #default="scope">{{ parseTime(scope.row[timeColumnProp]) }}</template>
       </el-table-column>
@@ -100,7 +123,15 @@
             <el-button link type="primary" icon="Promotion" v-hasPermi="['workflow:process:start']" @click="openStart(scope.row)" />
           </el-tooltip>
           <el-tooltip v-if="mode !== 'start'" content="流程详情" placement="top">
-            <el-button link type="primary" icon="View" v-hasPermi="['workflow:process:query']" @click="openDetail(scope.row)" />
+            <el-button
+              link
+              type="primary"
+              icon="View"
+              v-hasPermi="['workflow:process:query']"
+              :loading="isCopyOpening(scope.row)"
+              :disabled="isCopyOpening(scope.row)"
+              @click="openDetail(scope.row)"
+            />
           </el-tooltip>
           <el-tooltip v-if="mode === 'claim'" content="认领任务" placement="top">
             <el-button link type="success" icon="Select" v-hasPermi="['workflow:process:claim']" @click="claim(scope.row)" />
@@ -176,6 +207,7 @@ import {
   listClaimableTasks,
   listCompletedTasks,
   listCopiedProcesses,
+  markCopyRead,
   listManagedProcesses,
   listOwnedProcesses,
   listStartableProcesses
@@ -208,6 +240,8 @@ const config = computed(() => CONFIG[props.mode])
 const loading = ref(false)
 const showSearch = ref(true)
 const rows = ref([])
+// openingCopyIds 表示正在由服务端执行对象授权和首次已读原子更新的记录，禁止同一行并发跳转。
+const openingCopyIds = ref([])
 const total = ref(0)
 const categoryOptions = ref([])
 const managedUserOptions = ref([])
@@ -237,7 +271,7 @@ const actionCommentLabel = computed(() => actionDialog.type === 'terminate' ? '�
  */
 function createQuery() {
   const common = { pageNum: 1, pageSize: 10, processName: '' }
-  if (props.mode === 'copy') return { ...common, title: '', originatorName: '', categoryId: '' }
+  if (props.mode === 'copy') return { ...common, title: '', originatorName: '', categoryId: '', readStatus: '' }
   const query = { ...common, processKey: '', category: '' }
   if (props.mode === 'own') return { ...query, businessKey: '', dateRange: [] }
   if (props.mode === 'manage') return { ...query, processInstanceId: '', businessKey: '', startUserId: '', dateRange: [] }
@@ -340,16 +374,85 @@ function openStart(row) {
 /**
  * 进入对象授权的流程详情或任务办理页。
  * @param {object} row 流程实例、任务或抄送记录行。
- * @returns {void} 仅传递实例和可选任务主键，授权由后端复核。
+ * @returns {Promise<void>} 抄送模式先等待后端原子已读和对象授权成功，再传递实例及可选任务主键。
  */
-function openDetail(row) {
+async function openDetail(row) {
   const instanceId = row.processInstanceId || row.instanceId
-  const taskId = row.taskId || undefined
-  router.push({
+  // 抄送接收人只有流程实例级只读权限，不能把活动 taskId 带入详情页扩大到任务表单权限。
+  const taskId = isCopy.value ? undefined : (row.taskId || undefined)
+  if (!instanceId) {
+    proxy.$modal.msgError('流程实例主键不能为空')
+    return
+  }
+  const copyId = String(row.copyId || '').trim()
+  if (isCopy.value) {
+    if (!/^[1-9]\d*$/.test(copyId)) {
+      proxy.$modal.msgError('抄送记录主键不合法')
+      return
+    }
+    if (openingCopyIds.value.includes(copyId)) return
+    openingCopyIds.value = [...openingCopyIds.value, copyId]
+    try {
+      // 无论列表快照是否已读，都由后端幂等接口复核接收人权限并保留首次阅读时间。
+      await markCopyRead(copyId)
+    } finally {
+      openingCopyIds.value = openingCopyIds.value.filter(id => id !== copyId)
+    }
+  }
+  await router.push({
     name: 'WorkflowProcessDetail',
     params: { instanceId },
     query: { source: props.mode, ...(taskId ? { taskId } : {}) }
   })
+}
+
+/**
+ * 判断指定抄送行是否正在等待服务端首次阅读确认。
+ * @param {object} row 当前抄送记录行。
+ * @returns {boolean} 当前 copyId 已占用读取锁时返回 true。
+ */
+function isCopyOpening(row) {
+  return isCopy.value && openingCopyIds.value.includes(String(row?.copyId || '').trim())
+}
+
+/**
+ * 将抄送生成来源转换为稳定中文展示。
+ * @param {string} sourceType 后端 MANUAL、AUTO 或合并去重后的 MANUAL_AUTO 来源枚举。
+ * @returns {string} 用户可理解的来源名称；未知值返回短横线。
+ */
+function copySourceLabel(sourceType) {
+  return ({ MANUAL: '手工抄送', AUTO: '自动抄送', MANUAL_AUTO: '手工 + 自动' })[sourceType] || '-'
+}
+
+/**
+ * 拼接自动抄送触发时机和触发节点快照，手工抄送沿用动作触发名称。
+ * @param {object} row 当前抄送记录行。
+ * @returns {string} 触发类型中文名称及可选节点名称。
+ */
+function copyTriggerText(row) {
+  const manualAction = String(row?.triggerType || '').replace(/^MANUAL_/, '')
+  const trigger = ({
+    COMPLETE: '办理完成',
+    REJECT: '驳回',
+    RETURN: '退回',
+    DELEGATE: '委派',
+    RESOLVE: '委派办结',
+    TRANSFER: '转办',
+    NODE_ARRIVED: '节点到达',
+    NODE_COMPLETED: '节点完成',
+    PROCESS_COMPLETED: '流程完成'
+  })[manualAction] || row?.triggerType || '-'
+  const node = row?.triggerNodeName || row?.triggerNodeId
+  return node ? `${trigger} · ${node}` : trigger
+}
+
+/**
+ * 将后端抄送阅读枚举转换为稳定中文文案。
+ * @param {string} readStatus 0 未读、1 已读。
+ * @returns {string} 对应阅读状态；未知值返回短横线。
+ */
+function copyReadStatusLabel(readStatus) {
+  return ({ 0: '未读', 1: '已读' })[readStatus] || '-'
 }
 
 /**

@@ -32,7 +32,8 @@ class WorkflowBusinessMapperXmlTest
                     "update", "logicalDelete", "countActiveByIds"),
             "WfDeployFormMapper", List.of("insertBatch", "selectByDeploymentId",
                     "countByFormIds", "deleteByDeploymentId"),
-            "WfCopyMapper", List.of("selectById", "insertBatch", "selectListByUserId",
+            "WfCopyMapper", List.of("selectById", "selectByIdAndUserId", "insertBatch",
+                    "insertBatchIdempotent", "markRead", "selectListByUserId",
                     "countListByUserId", "selectPageByUserId", "logicalDelete",
                     "countActiveByInstanceAndUser", "countActiveByInstanceIds",
                     "logicalDeleteByInstanceIds"));

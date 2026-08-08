@@ -25,6 +25,8 @@ import org.flowable.variable.service.impl.persistence.entity.HistoricVariableIns
 import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntityManager;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import org.springframework.beans.factory.ObjectProvider;
+import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
 /**
  * WorkflowProcessCompletionStatusListener 的自然完成状态一致性测试。
@@ -74,6 +76,28 @@ class WorkflowProcessCompletionStatusListenerTest
     }
 
     /**
+     * 验证只有自然完成实例会在状态收敛后调用同事务自动抄送服务。
+     * @return void，服务未调用、提前调用或实例定义关联丢失时测试失败
+     */
+    @Test
+    void publishesAutomaticCopyOnlyForNaturalCompletion()
+    {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<WorkflowAutomaticCopyService> provider = mock(ObjectProvider.class);
+        WorkflowAutomaticCopyService automaticCopyService = mock(WorkflowAutomaticCopyService.class);
+        when(provider.getObject()).thenReturn(automaticCopyService);
+        HistoricVariableInstanceEntity statusVariable = statusVariable("running", "string");
+
+        try (ListenerFixture fixture = fixture(List.of(statusVariable), provider))
+        {
+            fixture.listener().onEvent(fixture.event());
+
+            verify(fixture.variableManager()).update(statusVariable, false);
+            verify(automaticCopyService).onProcessCompleted(INSTANCE_ID, "definition-1");
+        }
+    }
+
+    /**
      * 验证流程完成事件不会覆盖取消、终止或已完成的正式业务终态。
      *
      * @return void，无返回值；任一显式终态被更新时测试失败
@@ -84,14 +108,18 @@ class WorkflowProcessCompletionStatusListenerTest
         for (String terminalStatus : List.of("canceled", "rejected", "terminated",
                 WorkflowProcessCompletionStatusListener.COMPLETED_STATUS))
         {
+            @SuppressWarnings("unchecked")
+            ObjectProvider<WorkflowAutomaticCopyService> provider = mock(ObjectProvider.class);
             HistoricVariableInstanceEntity statusVariable =
                     statusVariable(terminalStatus, "string");
-            try (ListenerFixture fixture = fixture(List.of(statusVariable)))
+            try (ListenerFixture fixture = fixture(List.of(statusVariable), provider))
             {
                 fixture.listener().onEvent(fixture.event());
 
                 verify(fixture.variableManager(), never()).update(any(), anyBoolean());
                 verify(statusVariable, never()).setTextValue(any());
+                // 撤回/取消、驳回和管理员终止均不得借引擎结束事件产生流程完成抄送。
+                verify(provider, never()).getObject();
             }
         }
     }
@@ -155,8 +183,20 @@ class WorkflowProcessCompletionStatusListenerTest
      */
     private ListenerFixture fixture(List<HistoricVariableInstanceEntity> statusVariables)
     {
+        return fixture(statusVariables, null);
+    }
+
+    /**
+     * 创建可核验自动抄送调用的 Flowable 当前命令静态上下文测试夹具。
+     * @param statusVariables List&lt;HistoricVariableInstanceEntity&gt;，按实例查询到的历史状态变量
+     * @param automaticCopyServiceProvider ObjectProvider&lt;WorkflowAutomaticCopyService&gt;，自然完成后延迟解析的服务提供器，可为空
+     * @return ListenerFixture，关闭时同步释放当前测试独占的静态 Mock
+     */
+    private ListenerFixture fixture(List<HistoricVariableInstanceEntity> statusVariables,
+            ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider)
+    {
         WorkflowProcessCompletionStatusListener listener =
-                new WorkflowProcessCompletionStatusListener();
+                new WorkflowProcessCompletionStatusListener(automaticCopyServiceProvider);
         FlowableEngineEntityEvent event = mock(FlowableEngineEntityEvent.class);
         ExecutionEntity processInstance = mock(ExecutionEntity.class);
         ProcessEngineConfigurationImpl engineConfiguration =
@@ -172,6 +212,7 @@ class WorkflowProcessCompletionStatusListenerTest
         when(event.getEntity()).thenReturn(processInstance);
         when(processInstance.isProcessInstanceType()).thenReturn(true);
         when(processInstance.getId()).thenReturn(INSTANCE_ID);
+        when(processInstance.getProcessDefinitionId()).thenReturn("definition-1");
         when(engineConfiguration.getVariableServiceConfiguration())
                 .thenReturn(variableConfiguration);
         when(engineConfiguration.getClock()).thenReturn(clock);

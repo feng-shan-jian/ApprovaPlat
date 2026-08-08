@@ -53,6 +53,8 @@
         :participant-form-field-options="participantFormFieldOptions"
         :condition-field-options="conditionFieldOptions"
         :condition-context="conditionContext"
+        :auto-copy-trigger-options="autoCopyTriggerOptions"
+        :auto-copy-form-field-options="autoCopyFormFieldOptions"
         :extension-options="extensionOptions"
         :form-field-options="formFieldOptions"
         :connector-endpoints="connectorEndpoints"
@@ -95,6 +97,7 @@
         @business-task-listener-change="updateBusinessTaskListeners"
         @extension-properties-change="updateExtensionProperties"
         @sla-change="updateSlaProperties"
+        @auto-copy-change="updateAutoCopyRules"
         @identity-search="handlePanelIdentitySearch"
         @identity-resolve="handlePanelIdentityResolve"
       />
@@ -227,6 +230,17 @@ const FORM_PERMISSION_DEFAULT_ID = 'approva_permission_default'
 const FORM_PERMISSION_FIELD_ID_PREFIX = 'approva_permission_field_'
 const FORM_PERMISSION_MODES = new Set(['HIDDEN', 'READONLY', 'EDITABLE', 'REQUIRED'])
 
+// 自动抄送作者配置由结构化编辑器独占维护，并与后端 WorkflowAutoCopyRuleContract 边界保持一致。
+const AUTO_COPY_PROPERTY_NAME = 'approva.autoCopyRules'
+const AUTO_COPY_MAX_PROPERTY_LENGTH = 8192
+const AUTO_COPY_MAX_RULES = 10
+const AUTO_COPY_MAX_SOURCES = 20
+const AUTO_COPY_MAX_VALUES = 100
+const AUTO_COPY_RULE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/
+const AUTO_COPY_USER_ID_PATTERN = /^[1-9]\d{0,18}$/
+const AUTO_COPY_GROUP_ID_PATTERN = /^(?:ROLE|DEPT)[1-9]\d{0,18}$/
+const AUTO_COPY_VARIABLE_PATTERN = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/
+
 // 作者 BPMN 只保存稳定键和配置；部署版本、实现和校验和均由后端注册表冻结。
 const EXTENSION_DELEGATE_EXPRESSION = '${workflowExtensionDelegate}'
 const EXTENSION_KEY_FIELD = 'approvaExtensionKey'
@@ -250,7 +264,7 @@ const props = defineProps({
     type: Object,
     default: () => ({
       assignees: [], candidateUsers: [], candidateGroups: [], candidateRoles: [],
-      activeUsers: [], activeRoles: [], activeDepts: []
+      activeUsers: [], activeRoles: [], activeDepts: [], autoCopyUsers: [], autoCopyGroups: []
     })
   },
   /** 设计器稳定高度。 */
@@ -403,6 +417,20 @@ const conditionContext = computed(() => resolveConditionContext(conditionFieldCa
 }))
 // 父流程字段从当前画布真实表单引用解析，供结构化 in/out 映射选择。
 const callActivityParentFields = computed(() => resolveCallActivityParentFields())
+
+// 自动抄送触发时机严格由所选 BPMN 元素类型决定，避免作者写入运行时无法触发的组合。
+const autoCopyTriggerOptions = computed(() => {
+  if (isProcess.value) return [{ label: '流程完成', value: 'PROCESS_COMPLETED' }]
+  if (isUserTask.value) {
+    return [
+      { label: '节点到达', value: 'NODE_ARRIVED' },
+      { label: '节点完成', value: 'NODE_COMPLETED' }
+    ]
+  }
+  return []
+})
+// 表单用户来源只允许引用当前节点或当前流程已有的正式标量字段，不开放自由变量输入。
+const autoCopyFormFieldOptions = computed(() => resolveAutoCopyFormFieldOptions())
 // slaCalendarOptions 只包含后端返回的启用日历，作者 XML 不接受自由输入日历键。
 const slaCalendarOptions = ref([])
 const slaLoading = ref(false)
@@ -420,7 +448,9 @@ const IDENTITY_SEARCH_CONTRACTS = Object.freeze({
   candidateRoles: Object.freeze({ type: 'role', capability: 'claim' }),
   activeUsers: Object.freeze({ type: 'user', capability: '' }),
   activeRoles: Object.freeze({ type: 'role', capability: '' }),
-  activeDepts: Object.freeze({ type: 'dept', capability: '' })
+  activeDepts: Object.freeze({ type: 'dept', capability: '' }),
+  autoCopyUsers: Object.freeze({ type: 'user', capability: 'copy' }),
+  autoCopyGroups: Object.freeze({ type: 'group', capability: 'copy' })
 })
 
 /**
@@ -507,6 +537,7 @@ function createEmptyPropertyState() {
     controlledLoopExitValue: '',
     businessExecutionListeners: [],
     businessTaskListeners: [],
+    autoCopyRules: [],
     extensionProperties: []
   }
 }
@@ -780,9 +811,12 @@ function loadPropertyState(element) {
   const extensionProperties = readExtensionProperties(businessObject)
   propertyState.participantRule = readParticipantRule(businessObject)
   propertyState.sla = readSlaConfig(extensionProperties)
-  // 通用属性面板排除循环和 SLA 两组平台保留字段，避免绕过结构化校验。
+  propertyState.autoCopyRules = readAutoCopyRules(extensionProperties)
+  // 通用属性面板排除 SLA、参与者规则和自动抄送平台保留字段，避免绕过结构化校验。
   propertyState.extensionProperties = extensionProperties.filter(item => (
-    !SLA_PROPERTY_NAME_SET.has(item.name) && !PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
+    !SLA_PROPERTY_NAME_SET.has(item.name)
+      && !PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
+      && item.name !== AUTO_COPY_PROPERTY_NAME
   ))
   const controlledLoop = readControlledLoop(businessObject)
   if (controlledLoop) {
@@ -850,7 +884,7 @@ function readExtensionProperties(businessObject) {
     .map(property => ({ name: property.name || '', value: property.value || '' })))
 }
 
-/**
+  /**
  * 转发受控目录中未加载已选值的批量回显请求。
  * @param {{target:string,values:string[]}} request 目录池与作者 BPMN 已保存值。
  * @returns {void} 未知目录池或空值请求直接丢弃。
@@ -922,6 +956,36 @@ function decorateParticipantTargets(type, values) {
   if (type === 'ROLES' || type === 'STARTER_DEPT_ROLE') return values.map(value => `ROLE${value}`)
   if (type === 'DEPTS' || type === 'DEPT_MANAGER') return values.map(value => `DEPT${value}`)
   return values
+}
+
+/**
+ * 从 Flowable 属性中读取并校验自动抄送 JSON，供选中元素回显结构化规则。
+ * @param {Array<{name:string,value:string}>} properties 当前 BPMN 元素的全部非循环扩展属性。
+ * @param {boolean} strict 是否将非法历史配置作为异常抛出；普通回显采用失败关闭的空草稿。
+ * @returns {Array<object>} 契约合法的自动抄送规则；未配置或非严格模式解析失败时返回空数组。
+ */
+function readAutoCopyRules(properties, strict = false) {
+  try {
+    const matches = (Array.isArray(properties) ? properties : [])
+      .filter(item => item.name === AUTO_COPY_PROPERTY_NAME)
+    if (!matches.length) return []
+    if (matches.length !== 1) throw new Error('同一元素不能重复配置自动抄送规则')
+    const json = String(matches[0].value ?? '')
+    if (!json || json.length > AUTO_COPY_MAX_PROPERTY_LENGTH) {
+      throw new Error('自动抄送规则内容为空或超过长度限制')
+    }
+    const document = JSON.parse(json)
+    if (!document || Array.isArray(document) || document.version !== 1 || !Array.isArray(document.rules)) {
+      throw new Error('自动抄送规则版本不受支持')
+    }
+    return normalizeAndValidateAutoCopyRules(document.rules, {
+      validatePlacement: false,
+      validateFormFields: false
+    })
+  } catch (error) {
+    if (strict) throw error
+    return []
+  }
 }
 
 /**
@@ -1041,6 +1105,15 @@ function describeFormalFormFields(businessObject) {
 }
 
 /**
+ * 复用正式条件字段解析，向自动抄送提供同一套可写标量字段目录。
+ * @param {object|undefined} businessObject BPMN StartEvent 或 UserTask 业务对象。
+ * @returns {Array<object>} 后端允许读取的正式标量字段。
+ */
+function resolveScalarFormFieldOptions(businessObject) {
+  return businessObject ? describeFormalFormFields(businessObject) : []
+}
+
+/**
  * 解析已由后端模板校验器返回的正式表单 JSON，并收窄为条件字段目录。
  * @param {string} content 正式 wf_form 模板 JSON。
  * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
@@ -1082,7 +1155,7 @@ function describeTemplateFormFields(content) {
   }
 }
 
-/**
+  /**
  * 从当前 UserTask 正式表单提取可供 FORM_USER 规则读取的可写变量。
  * @returns {Array<{value:string,label:string}>} 去重且保持表单顺序的正式字段目录。
  */
@@ -1213,6 +1286,44 @@ function owningProcess(businessObject) {
     current = current.$parent
   }
   return null
+}
+
+/**
+ * 汇总当前自动抄送元素允许引用的正式标量表单字段。
+ * @returns {Array<{value:string,label:string}>} UserTask 返回自身字段，Process 返回其开始节点和全部用户任务字段并按变量去重。
+ */
+function resolveAutoCopyFormFieldOptions() {
+  return resolveAutoCopyFormFieldOptionsForBusinessObject(selectedBusinessObject.value)
+}
+
+/**
+ * 解析指定流程或用户任务可供自动抄送引用的正式标量表单字段。
+ * @param {object|undefined} businessObject BPMN Process 或 UserTask 业务对象。
+ * @returns {Array<{value:string,label:string}>} 按变量名去重后的受控字段目录。
+ */
+function resolveAutoCopyFormFieldOptionsForBusinessObject(businessObject) {
+  if (businessObject?.$type === 'bpmn:UserTask') {
+    return resolveScalarFormFieldOptions(businessObject)
+      .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
+      .map(({ value, label }) => ({ value, label }))
+  }
+  if (businessObject?.$type !== 'bpmn:Process') return []
+  const candidates = []
+  const visit = flowElements => {
+    for (const element of Array.isArray(flowElements) ? flowElements : []) {
+      if (['bpmn:StartEvent', 'bpmn:UserTask'].includes(element?.$type)) {
+        candidates.push(...resolveScalarFormFieldOptions(element))
+      }
+      if (Array.isArray(element?.flowElements)) visit(element.flowElements)
+    }
+  }
+  visit(businessObject.flowElements)
+  const seen = new Set()
+  return candidates
+    .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value)
+      && !seen.has(item.value)
+      && seen.add(item.value))
+    .map(({ value, label }) => ({ value, label }))
 }
 
 /**
@@ -2357,13 +2468,127 @@ function updateExtensionProperties(properties) {
       .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
         || SLA_PROPERTY_NAME_SET.has(item.name)
         || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
-        || item.name === CONDITION_RULE_PROPERTY)
+        || item.name === CONDITION_RULE_PROPERTY
+        || item.name === AUTO_COPY_PROPERTY_NAME)
     const extensionElements = buildPropertiesExtensionElements(
       businessObject, normalized, platformProperties)
     modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
       extensionElements
     })
     propertyState.extensionProperties = normalized
+  } catch (error) {
+    loadPropertyState(selectedElement.value)
+    emit('error', error)
+  }
+}
+
+/**
+ * 规范化并校验自动抄送规则的结构、元素触发范围和表单字段引用。
+ * @param {Array<object>} rules 结构化编辑器或 BPMN JSON 提供的规则集合。
+ * @param {object} options 校验开关及可选触发、字段白名单覆盖值。
+ * @returns {Array<object>} 字段类型稳定、可直接序列化为后端契约的规则副本。
+ */
+function normalizeAndValidateAutoCopyRules(rules, options = {}) {
+  if (!Array.isArray(rules) || !rules.length || rules.length > AUTO_COPY_MAX_RULES) {
+    throw new Error(`自动抄送规则数量必须为 1 至 ${AUTO_COPY_MAX_RULES}`)
+  }
+  const validatePlacement = options.validatePlacement !== false
+  const validateFormFields = options.validateFormFields !== false
+  const allowedTriggers = new Set(options.allowedTriggers || autoCopyTriggerOptions.value.map(item => item.value))
+  const allowedFormFields = new Set(options.allowedFormFields || autoCopyFormFieldOptions.value.map(item => item.value))
+  const ruleIds = new Set()
+  return rules.map(rule => {
+    const id = String(rule?.id || '')
+    const trigger = String(rule?.trigger || '')
+    if (!AUTO_COPY_RULE_ID_PATTERN.test(id) || ruleIds.has(id)) {
+      throw new Error('自动抄送规则主键不合法或重复')
+    }
+    ruleIds.add(id)
+    if (!['NODE_ARRIVED', 'NODE_COMPLETED', 'PROCESS_COMPLETED'].includes(trigger)
+      || (validatePlacement && !allowedTriggers.has(trigger))) {
+      throw new Error('自动抄送触发时机与当前元素不匹配')
+    }
+    if (!Array.isArray(rule?.recipients)
+      || !rule.recipients.length
+      || rule.recipients.length > AUTO_COPY_MAX_SOURCES) {
+      throw new Error(`自动抄送接收人来源数量必须为 1 至 ${AUTO_COPY_MAX_SOURCES}`)
+    }
+    const sourceKeys = new Set()
+    const recipients = rule.recipients.map(source => {
+      const type = String(source?.type || '')
+      if (!['USER', 'GROUP', 'INITIATOR', 'FORM_USER_FIELD'].includes(type)) {
+        throw new Error('自动抄送接收人来源不受支持')
+      }
+      if (!Array.isArray(source?.values) || source.values.length > AUTO_COPY_MAX_VALUES) {
+        throw new Error('自动抄送来源值必须为有界数组')
+      }
+      const values = source.values.map(value => String(value))
+      const valuePattern = {
+        USER: AUTO_COPY_USER_ID_PATTERN,
+        GROUP: AUTO_COPY_GROUP_ID_PATTERN,
+        FORM_USER_FIELD: AUTO_COPY_VARIABLE_PATTERN
+      }[type]
+      if (type === 'INITIATOR') {
+        if (values.length) throw new Error('流程发起人来源不能携带额外值')
+      } else if (!values.length
+        || new Set(values).size !== values.length
+        || values.some(value => !valuePattern.test(value))) {
+        throw new Error('自动抄送来源值格式不合法、为空或重复')
+      }
+      if (type === 'FORM_USER_FIELD' && validateFormFields
+        && values.some(value => !allowedFormFields.has(value))) {
+        throw new Error('自动抄送表单用户字段必须来自当前元素可见的正式标量字段')
+      }
+      const sourceKey = `${type}:${values.join(',')}`
+      if (sourceKeys.has(sourceKey)) throw new Error('同一自动抄送规则不能重复配置接收人来源')
+      sourceKeys.add(sourceKey)
+      return { type, values }
+    })
+    return { id, trigger, recipients }
+  })
+}
+
+/**
+ * 对指定 Process/UserTask 的已保存自动抄送属性执行完整本地部署前门禁。
+ * @param {object} businessObject 当前待校验的 BPMN 业务对象。
+ * @param {Array<string>} allowedTriggers 该元素生命周期允许的触发时机。
+ * @returns {void} 未配置时直接返回，非法 JSON、位置或表单字段引用会抛出稳定错误。
+ */
+function validateAutoCopyRulesForElement(businessObject, allowedTriggers) {
+  const properties = readExtensionProperties(businessObject)
+  if (!properties.some(item => item.name === AUTO_COPY_PROPERTY_NAME)) return
+  const rules = readAutoCopyRules(properties, true)
+  normalizeAndValidateAutoCopyRules(rules, {
+    allowedTriggers,
+    allowedFormFields: resolveAutoCopyFormFieldOptionsForBusinessObject(businessObject).map(item => item.value)
+  })
+}
+
+/**
+ * 原子创建、更新或删除当前 Process/UserTask 的自动抄送受控属性。
+ * @param {Array<object>} rules 自动抄送编辑器显式应用的完整规则数组；空数组表示删除该属性。
+ * @returns {void} 校验失败时回读 BPMN 原值并向页面上报，绝不写入部分规则。
+ */
+function updateAutoCopyRules(rules) {
+  if (designerLocked.value || !modeler || !selectedElement.value
+    || (!propertyFlags.value.process && !propertyFlags.value.userTask)) return
+  try {
+    const normalized = Array.isArray(rules) && rules.length
+      ? normalizeAndValidateAutoCopyRules(rules)
+      : []
+    const document = normalized.length ? JSON.stringify({ version: 1, rules: normalized }) : ''
+    if (document.length > AUTO_COPY_MAX_PROPERTY_LENGTH) {
+      throw new Error(`自动抄送规则不能超过 ${AUTO_COPY_MAX_PROPERTY_LENGTH} 个字符`)
+    }
+    propertyState.autoCopyRules = normalized
+    // 写自动抄送时携带其他受控属性，保证一个属性编辑命令不会删除整改循环或 SLA。
+    const platformProperties = readAllFlowableProperties(selectedBusinessObject.value)
+      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name) || SLA_PROPERTY_NAME_SET.has(item.name))
+    persistExtensionProperties([
+      ...propertyState.extensionProperties,
+      ...platformProperties,
+      ...(document ? [{ name: AUTO_COPY_PROPERTY_NAME, value: document }] : [])
+    ])
   } catch (error) {
     loadPropertyState(selectedElement.value)
     emit('error', error)
@@ -2750,18 +2975,18 @@ function updateMultiInstance() {
   const editableProperties = propertyState.extensionProperties.map(item => ({
     name: String(item.name || '').trim(), value: String(item.value ?? '')
   }))
-  // 循环命令栈必须同时携带现有 SLA；只有切回单实例时才保留参与者规则。
-  const slaProperties = readAllFlowableProperties(selectedBusinessObject.value)
-    .filter(item => SLA_PROPERTY_NAME_SET.has(item.name))
-  const editableWithSla = [...editableProperties, ...slaProperties]
+  // 循环命令栈必须携带 SLA 和自动抄送属性；只有切回单实例时才保留参与者规则。
+  const preservedPlatformProperties = readAllFlowableProperties(selectedBusinessObject.value)
+    .filter(item => SLA_PROPERTY_NAME_SET.has(item.name) || item.name === AUTO_COPY_PROPERTY_NAME)
+  const editableWithPlatformProperties = [...editableProperties, ...preservedPlatformProperties]
   const participantProperties = readAllFlowableProperties(selectedBusinessObject.value)
     .filter(item => PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
-  const editableSingleInstanceProperties = [...editableWithSla, ...participantProperties]
+  const editableSingleInstanceProperties = [...editableWithPlatformProperties, ...participantProperties]
   const clearedControlledExtensions = wasApprovalLoop
     ? buildPropertiesExtensionElements(selectedBusinessObject.value, editableSingleInstanceProperties, [])
     : selectedBusinessObject.value?.extensionElements
   const multiInstanceExtensions = buildPropertiesExtensionElements(
-    selectedBusinessObject.value, editableWithSla, [])
+    selectedBusinessObject.value, editableWithPlatformProperties, [])
   if (propertyState.multiInstanceType === 'approvalLoop') {
     try {
       if (!isUserTask.value) throw new Error('整改循环只能配置在用户任务上')
@@ -2780,7 +3005,7 @@ function updateMultiInstance() {
       }
       if (repeatValue === exitValue) throw new Error('再次进入和退出条件不能相同')
       const extensionElements = buildPropertiesExtensionElements(
-        selectedBusinessObject.value, editableWithSla, controlledLoopPropertyItems())
+        selectedBusinessObject.value, editableWithPlatformProperties, controlledLoopPropertyItems())
       const changes = { loopCharacteristics: undefined, extensionElements }
       if (wasControlled) resetControlledAssignment(changes)
       updateProperties(changes)
@@ -3436,6 +3661,11 @@ function validateDiagram() {
     }
     const startScopeError = validateParticipantProperties(process.businessObject, true)
     if (startScopeError) return startScopeError
+    try {
+      validateAutoCopyRulesForElement(process.businessObject, ['PROCESS_COMPLETED'])
+    } catch (error) {
+      return error.message
+    }
   }
   const userTasks = registry.filter(element => element.type === 'bpmn:UserTask')
   for (const element of userTasks) {
@@ -3451,6 +3681,11 @@ function validateDiagram() {
       } catch (error) {
         return error.message
       }
+    }
+    try {
+      validateAutoCopyRulesForElement(task, ['NODE_ARRIVED', 'NODE_COMPLETED'])
+    } catch (error) {
+      return error.message
     }
   }
   const callActivities = registry.filter(element => element.type === 'bpmn:CallActivity')
@@ -3621,10 +3856,11 @@ function updateSlaProperties(config) {
   try {
     const normalized = normalizeAndValidateSlaConfig(config)
     propertyState.sla = normalized
-    // SLA 命令栈必须携带现有受控循环和单实例参与者属性，避免修改超时策略破坏其他闭环。
+    // SLA 命令栈必须携带受控循环、单实例参与者和自动抄送属性，避免修改超时策略破坏其他闭环。
     const controlledProperties = readAllFlowableProperties(selectedBusinessObject.value)
       .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
-        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
+        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
+        || item.name === AUTO_COPY_PROPERTY_NAME)
     persistExtensionProperties([
       ...propertyState.extensionProperties,
       ...controlledProperties,

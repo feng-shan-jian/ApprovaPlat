@@ -38,6 +38,9 @@ public class WorkflowIdentityDirectoryService
     /** 仅返回可走通候选认领及后续办理路径身份的目录能力值。 */
     public static final String CLAIM_CAPABILITY = "claim";
 
+    /** 仅返回可读取抄送工作台和流程详情的身份目录能力值。 */
+    public static final String COPY_CAPABILITY = "copy";
+
     private final WorkflowIdentityMapper identityMapper;
 
     /**
@@ -73,7 +76,8 @@ public class WorkflowIdentityDirectoryService
      * @param keyword String，可为空的名称、账号或编码检索词
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数，上限 200
-     * @param capability String，可为空；approval 查询直接办理用户，claim 查询候选用户或候选组
+     * @param capability String，可为空；approval 查询直接办理用户，claim 查询候选用户或候选组，
+     *        copy 查询具备抄送列表和流程详情权限的用户、角色或部门
      * @return WorkflowPageResult&lt;WorkflowIdentityOptionView&gt;，最小身份分页结果
      */
     public WorkflowPageResult<WorkflowIdentityOptionView> listOptions(String typeValue,
@@ -91,6 +95,11 @@ public class WorkflowIdentityDirectoryService
         else if (CLAIM_CAPABILITY.equals(normalizedCapability))
         {
             total = identityMapper.countClaimEligibleIdentityOptions(
+                    type.value(), normalizedKeyword);
+        }
+        else if (COPY_CAPABILITY.equals(normalizedCapability))
+        {
+            total = identityMapper.countCopyEligibleIdentityOptions(
                     type.value(), normalizedKeyword);
         }
         else
@@ -113,6 +122,11 @@ public class WorkflowIdentityDirectoryService
         else if (CLAIM_CAPABILITY.equals(normalizedCapability))
         {
             rows = identityMapper.selectClaimEligibleIdentityOptions(
+                    type.value(), normalizedKeyword, offset, pageSize);
+        }
+        else if (COPY_CAPABILITY.equals(normalizedCapability))
+        {
+            rows = identityMapper.selectCopyEligibleIdentityOptions(
                     type.value(), normalizedKeyword, offset, pageSize);
         }
         else
@@ -315,7 +329,7 @@ public class WorkflowIdentityDirectoryService
      *
      * @param type WorkflowIdentityOptionType，已规范化的身份类型
      * @param capability String，客户端提交的可选业务能力
-     * @return String，null、approval 或 claim 规范能力值
+     * @return String，null、approval、claim 或 copy 规范能力值
      */
     private String normalizeCapability(WorkflowIdentityOptionType type,
             String capability)
@@ -336,8 +350,13 @@ public class WorkflowIdentityDirectoryService
         {
             return normalizedCapability;
         }
+        else if (COPY_CAPABILITY.equals(normalizedCapability))
+        {
+            return normalizedCapability;
+        }
         if (!APPROVAL_CAPABILITY.equals(normalizedCapability)
-                && !CLAIM_CAPABILITY.equals(normalizedCapability))
+                && !CLAIM_CAPABILITY.equals(normalizedCapability)
+                && !COPY_CAPABILITY.equals(normalizedCapability))
         {
             throw invalidCapability();
         }

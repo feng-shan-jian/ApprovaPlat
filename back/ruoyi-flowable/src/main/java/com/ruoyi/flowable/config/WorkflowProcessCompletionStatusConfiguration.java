@@ -4,9 +4,11 @@ import java.util.ArrayList;
 import java.util.List;
 import org.flowable.common.engine.api.delegate.event.FlowableEventListener;
 import org.flowable.spring.boot.ProcessEngineConfigurationConfigurer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import com.ruoyi.flowable.service.process.WorkflowProcessCompletionStatusListener;
+import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
 /**
  * 注册工作流自然完成状态监听器，保证引擎历史与对外业务状态使用同一最终值。
@@ -17,12 +19,15 @@ public class WorkflowProcessCompletionStatusConfiguration
     /**
      * 创建流程自然完成状态监听器。
      *
+     * @param automaticCopyServiceProvider ObjectProvider&lt;WorkflowAutomaticCopyService&gt;，
+     *        延迟到引擎事件发生后解析自动抄送服务，避免流程引擎初始化循环依赖
      * @return WorkflowProcessCompletionStatusListener，受 Spring 管理的无状态引擎监听器
      */
     @Bean
-    public WorkflowProcessCompletionStatusListener workflowProcessCompletionStatusListener()
+    public WorkflowProcessCompletionStatusListener workflowProcessCompletionStatusListener(
+            ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider)
     {
-        return new WorkflowProcessCompletionStatusListener();
+        return new WorkflowProcessCompletionStatusListener(automaticCopyServiceProvider);
     }
 
     /**

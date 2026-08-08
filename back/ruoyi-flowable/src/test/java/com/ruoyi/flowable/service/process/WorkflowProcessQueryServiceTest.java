@@ -16,6 +16,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.function.Function;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FormProperty;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
@@ -159,6 +160,9 @@ class WorkflowProcessQueryServiceTest
 
         when(engineOperations.read(any(Supplier.class))).thenAnswer(invocation ->
                 ((Supplier<?>) invocation.getArgument(0)).get());
+        when(engineOperations.writeAsCurrentUser(any(Function.class))).thenAnswer(invocation ->
+                ((Function<WorkflowCurrentIdentity, ?>) invocation.getArgument(0)).apply(
+                        new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3"))));
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3")));
         when(identityResolver.resolveClaimEligibleUserIds(List.of("7")))
@@ -635,6 +639,44 @@ class WorkflowProcessQueryServiceTest
                 .thenReturn(List.of(copy));
 
         assertCode(() -> service.listCopies(null, 1, 10), HttpStatus.ERROR);
+    }
+
+    /**
+     * 验证首次阅读更新和回读始终携带当前认证用户，且返回数据库首次时间。
+     * @return void，用户范围、状态或时间未形成闭环时测试失败
+     */
+    @Test
+    void atomicallyMarksCurrentRecipientsFirstReadTime()
+    {
+        WfCopy copy = new WfCopy();
+        copy.setCopyId(11L);
+        copy.setUserId(7L);
+        copy.setReadStatus("1");
+        copy.setReadTime(Date.from(Instant.parse("2026-08-08T08:00:00Z")));
+        when(copyMapper.markRead(11L, 7L, "7")).thenReturn(1);
+        when(copyMapper.selectByIdAndUserId(11L, 7L)).thenReturn(copy);
+
+        WorkflowCopyView result = service.markCopyRead(11L);
+
+        assertThat(result.readStatus()).isEqualTo("1");
+        assertThat(result.readTime()).isEqualTo(Instant.parse("2026-08-08T08:00:00Z"));
+        verify(copyMapper).markRead(11L, 7L, "7");
+        verify(copyMapper).selectByIdAndUserId(11L, 7L);
+    }
+
+    /**
+     * 验证越权和不存在记录在所有者限定更新后返回同一 404，不泄露记录存在性。
+     * @return void，越权查询扩大到无 userId 条件时测试失败
+     */
+    @Test
+    void hidesForeignCopyWhenMarkingRead()
+    {
+        when(copyMapper.markRead(19L, 7L, "7")).thenReturn(0);
+        when(copyMapper.selectByIdAndUserId(19L, 7L)).thenReturn(null);
+
+        assertCode(() -> service.markCopyRead(19L), HttpStatus.NOT_FOUND);
+
+        verify(copyMapper, never()).selectById(19L);
     }
 
     /**

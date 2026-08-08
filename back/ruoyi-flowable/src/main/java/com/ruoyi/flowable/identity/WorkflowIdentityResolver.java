@@ -125,6 +125,54 @@ public class WorkflowIdentityResolver
     }
 
     /**
+     * 展开自动抄送身份，并只返回具备抄送工作台与流程详情权限的有效用户。
+     *
+     * @param candidateUserIds Collection&lt;String&gt;，固定、发起人或表单解析用户主键
+     * @param candidateGroups Collection&lt;String&gt;，ROLE&lt;id&gt; 或 DEPT&lt;id&gt; 集合
+     * @return Set&lt;String&gt;，去重且具备对象可见性的用户主键
+     */
+    public Set<String> resolveCopyEligibleUserIds(Collection<String> candidateUserIds,
+            Collection<String> candidateGroups)
+    {
+        if (candidateUserIds == null || candidateGroups == null)
+        {
+            throw new ServiceException(INVALID_CANDIDATES_MESSAGE, HttpStatus.BAD_REQUEST);
+        }
+        LinkedHashSet<Long> userIds = new LinkedHashSet<>();
+        for (String userId : candidateUserIds)
+        {
+            userIds.add(Long.valueOf(identityCodec.normalizeUserId(userId)));
+        }
+        LinkedHashSet<Long> roleIds = new LinkedHashSet<>();
+        LinkedHashSet<Long> deptIds = new LinkedHashSet<>();
+        for (String group : candidateGroups)
+        {
+            WorkflowCandidateGroup parsed = identityCodec.parseCandidateGroup(group);
+            (parsed.type() == WorkflowCandidateGroupType.ROLE ? roleIds : deptIds)
+                    .add(parsed.id());
+        }
+        LinkedHashSet<String> resolved = new LinkedHashSet<>();
+        if (!userIds.isEmpty())
+        {
+            Set<Long> eligible = checkedIdSet(identityMapper
+                    .selectCopyEligibleUserIdsByUserIds(new ArrayList<>(userIds)));
+            userIds.stream().filter(eligible::contains).map(String::valueOf)
+                    .forEach(resolved::add);
+        }
+        if (!roleIds.isEmpty())
+        {
+            checkedIds(identityMapper.selectCopyEligibleUserIdsByRoleIds(
+                    new ArrayList<>(roleIds))).forEach(id -> resolved.add(String.valueOf(id)));
+        }
+        if (!deptIds.isEmpty())
+        {
+            checkedIds(identityMapper.selectCopyEligibleUserIdsByDeptIds(
+                    new ArrayList<>(deptIds))).forEach(id -> resolved.add(String.valueOf(id)));
+        }
+        return Collections.unmodifiableSet(resolved);
+    }
+
+    /**
      * 从正式用户、角色和菜单授权数据中解析具备流程办理资格的有效用户。
      *
      * @param candidateUserIds Collection&lt;String&gt;，数字格式的待校验用户主键

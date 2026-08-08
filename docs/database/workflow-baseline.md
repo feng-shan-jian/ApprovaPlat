@@ -11,7 +11,7 @@
 1. `back/sql/ry_20260417.sql`
 2. `back/sql/quartz.sql`
 
-然后严格执行以下七个工作流基线文件：
+然后严格执行以下八个工作流基线与版本化迁移文件：
 
 1. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql`
 2. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql`
@@ -19,7 +19,8 @@
 4. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.dmn.sql`
 5. `back/sql/flowable/business/8.0.0__workflow_model_version_guard.sql`
 6. `back/sql/flowable/business/8.0.0__workflow_business.sql`
-7. `back/sql/flowable/menu/8.0.0__workflow_menu.sql`
+7. `back/sql/flowable/business/8.0.1__workflow_copy_read_tracking.sql`
+8. `back/sql/flowable/menu/8.0.0__workflow_menu.sql`
 
 所有 MySQL 客户端执行必须显式使用 `--default-character-set=utf8mb4`。Flowable 官方基础脚本包含破坏性初始化语句，只能在已经验证为空的目标 schema 中执行。
 
@@ -93,3 +94,5 @@
 - 迁移必须只处理两个正式版本之间的差异，不兼容本地开发历史。
 - 同步更新只读验收、契约测试、发布顺序和升级/回滚/重新升级证据。
 - 应用回滚原则上不执行反向 DDL，新结构必须在批准的兼容窗口内支持上一应用版本。
+
+当前版本链中，`8.0.1__workflow_copy_read_tracking.sql` 只扩展既有 `wf_copy`：旧抄送事实回填为手工来源和未读状态，保留 `uk_wf_copy_event_user` 幂等键，并增加来源、触发节点、首次阅读字段及对应 CHECK/查询索引。

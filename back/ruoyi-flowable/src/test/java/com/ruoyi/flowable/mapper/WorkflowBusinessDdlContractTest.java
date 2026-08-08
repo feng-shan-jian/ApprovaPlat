@@ -129,6 +129,37 @@ class WorkflowBusinessDdlContractTest
     }
 
     /**
+     * 验证 8.0.1 迁移只扩展既有 wf_copy，并完整定义来源、触发、首次阅读约束和查询索引。
+     * @return void，迁移缺列、破坏幂等键或包含数据删除语句时测试失败
+     * @throws Exception 读取正式版本化迁移 SQL 失败
+     */
+    @Test
+    void migratesCopyFactsToAutomaticSourceAndFirstReadTracking() throws Exception
+    {
+        String migration = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.1__workflow_copy_read_tracking.sql"),
+                StandardCharsets.UTF_8).toLowerCase();
+
+        assertThat(migration).contains(
+                "alter table `wf_copy`",
+                "add column `source_type` varchar(16) not null default 'manual'",
+                "add column `trigger_type` varchar(32) not null default 'manual_complete'",
+                "add column `trigger_node_id` varchar(64)",
+                "add column `trigger_node_name` varchar(255)",
+                "add column `read_status` char(1) not null default '0'",
+                "add column `read_time` datetime(3)",
+                "modify column `create_time` datetime(3)",
+                "drop index `idx_wf_copy_user_status_time`",
+                "add key `idx_wf_copy_user_status_time`",
+                "(`user_id`, `del_flag`, `read_status`, `create_time`)",
+                "add constraint `chk_wf_copy_source_type`",
+                "add constraint `chk_wf_copy_trigger_type`",
+                "add constraint `chk_wf_copy_read_state`");
+        assertThat(migration).doesNotContain(
+                "drop table", "truncate table", "delete from", "drop constraint `uk_wf_copy_event_user`");
+    }
+
+    /**
      * 验证业务表验收脚本只读，并覆盖核心与扩展表、列、索引、约束和数据关联。
      * @return void，验收脚本包含写操作或缺少关键门禁时测试失败
      * @throws Exception 读取正式验收 SQL 文件失败

@@ -163,6 +163,19 @@
               />
             </template>
 
+            <el-form-item v-if="flags.process || flags.userTask" label="自动抄送">
+              <AutoCopyRuleEditor
+                v-model="state.autoCopyRules"
+                :trigger-options="autoCopyTriggerOptions"
+                :user-options="identityOptions.autoCopyUsers"
+                :group-options="identityOptions.autoCopyGroups"
+                :form-field-options="autoCopyFormFieldOptions"
+                :identity-loading="identityLoading"
+                @identity-search="emit('identity-search', $event)"
+                @change="emit('auto-copy-change', $event)"
+              />
+            </el-form-item>
+
             <template v-if="flags.serviceTaskLike">
               <el-form-item label="受控处理器" required>
                 <el-select v-model="state.extensionKey" filterable :loading="extensionLoading" @change="emit('extension-selection-change')">
@@ -541,6 +554,7 @@ import CollaborationMessageEditor from './CollaborationMessageEditor.vue'
 import UserTaskSlaEditor from './UserTaskSlaEditor.vue'
 import ParticipantRuleEditor from './ParticipantRuleEditor.vue'
 import SequenceFlowRuleEditor from './SequenceFlowRuleEditor.vue'
+import AutoCopyRuleEditor from './AutoCopyRuleEditor.vue'
 
 const props = defineProps({
   selected: { type: Boolean, default: false },
@@ -548,7 +562,13 @@ const props = defineProps({
   state: { type: Object, required: true },
   flags: { type: Object, required: true },
   forms: { type: Array, default: () => [] },
-  identityOptions: { type: Object, default: () => ({ assignees: [], candidateUsers: [], candidateGroups: [], candidateRoles: [], activeUsers: [], activeRoles: [], activeDepts: [] }) },
+  identityOptions: {
+    type: Object,
+    default: () => ({
+      assignees: [], candidateUsers: [], candidateGroups: [], candidateRoles: [],
+      activeUsers: [], activeRoles: [], activeDepts: [], autoCopyUsers: [], autoCopyGroups: []
+    })
+  },
   identityLoading: { type: Boolean, default: false },
   assignmentOptions: { type: Array, default: () => [] },
   multiInstanceOptions: { type: Array, default: () => [] },
@@ -557,6 +577,8 @@ const props = defineProps({
   participantFormFieldOptions: { type: Array, default: () => [] },
   conditionFieldOptions: { type: Array, default: () => [] },
   conditionContext: { type: Object, default: () => ({ gatewayType: '', branches: [] }) },
+  autoCopyTriggerOptions: { type: Array, default: () => [] },
+  autoCopyFormFieldOptions: { type: Array, default: () => [] },
   extensionOptions: { type: Array, default: () => [] },
   formFieldOptions: { type: Array, default: () => [] },
   connectorEndpoints: { type: Array, default: () => [] },
@@ -580,7 +602,7 @@ const emit = defineEmits([
   'condition-rule-change', 'condition-default-change', 'documentation-change',
   'multi-instance-change', 'activity-change', 'call-activity-change', 'event-change', 'dmn-change',
   'identity-search', 'identity-resolve', 'business-execution-listener-change', 'business-task-listener-change',
-  'extension-properties-change', 'sla-change'
+  'extension-properties-change', 'sla-change', 'auto-copy-change'
 ])
 
 // 表单来源值与后端部署快照的 source_type 契约一致。

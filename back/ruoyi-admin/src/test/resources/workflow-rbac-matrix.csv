@@ -82,6 +82,7 @@ WfProcessController,todoProcessList,GET,/workflow/process/todoList,SINGLE,workfl
 WfProcessController,claimProcessList,GET,/workflow/process/claimList,SINGLE,workflow:process:claimList,ALLOW,DENY,DENY,ALLOW,ALLOW
 WfProcessController,finishedProcessList,GET,/workflow/process/finishedList,SINGLE,workflow:process:finishedList,ALLOW,DENY,DENY,ALLOW,ALLOW
 WfProcessController,copyProcessList,GET,/workflow/process/copyList,SINGLE,workflow:process:copyList,ALLOW,DENY,ALLOW,ALLOW,ALLOW
+WfProcessController,markCopyRead,PUT,/workflow/process/copy/{copyId}/read,SINGLE,workflow:process:copyList,ALLOW,DENY,ALLOW,ALLOW,ALLOW
 WfProcessController,startExport,POST,/workflow/process/startExport,SINGLE,workflow:process:startExport,ALLOW,DENY,ALLOW,DENY,DENY
 WfProcessController,ownExport,POST,/workflow/process/ownExport,SINGLE,workflow:process:ownExport,ALLOW,DENY,ALLOW,DENY,ALLOW
 WfProcessController,managedExport,POST,/workflow/process/manageExport,SINGLE,workflow:process:manageExport,ALLOW,DENY,DENY,DENY,DENY

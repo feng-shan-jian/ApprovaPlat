@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
+import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
 /**
  * BPMN 用户任务固定监听入口，只转发批准事件，不执行脚本、字段注入或业务状态改写。
@@ -24,6 +25,9 @@ public class WorkflowUserTaskListener implements TaskListener
 
     /** 单实例参与者规则运行服务；旧纯单元测试直接构造监听器时可为空。 */
     private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
+
+    /** 自动抄送生命周期服务；旧直接构造单测未注入时保持兼容。 */
+    private WorkflowAutomaticCopyService automaticCopyService;
 
     /**
      * 创建受控用户任务监听器。
@@ -60,6 +64,17 @@ public class WorkflowUserTaskListener implements TaskListener
     }
 
     /**
+     * 注入自动抄送服务，使身份解析和 wf_copy 写入与当前任务事件共享事务。
+     * @param automaticCopyService WorkflowAutomaticCopyService，自动抄送运行时服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setAutomaticCopyService(WorkflowAutomaticCopyService automaticCopyService)
+    {
+        this.automaticCopyService = automaticCopyService;
+    }
+
+    /**
      * 仅接受 create、assignment 和 complete 三种固定 Flowable 事件并转发不可变任务上下文。
      *
      * @param delegateTask DelegateTask，Flowable 当前命令提供的用户任务上下文
@@ -89,6 +104,15 @@ public class WorkflowUserTaskListener implements TaskListener
                         delegateTask.getProcessDefinitionId(),
                         delegateTask.getTaskDefinitionKey(),
                         delegateTask.getAssignee(), delegateTask.getOwner());
+                if (automaticCopyService != null)
+                {
+                    // 自动抄送失败必须抛回 Flowable 命令，不能提交仅完成任务的半状态。
+                    automaticCopyService.onTaskEvent(eventName, delegateTask.getId(),
+                            delegateTask.getProcessInstanceId(),
+                            delegateTask.getProcessDefinitionId(),
+                            delegateTask.getTaskDefinitionKey(), delegateTask.getName(),
+                            delegateTask.getVariables());
+                }
                 if (slaRuntimeService != null)
                 {
                     // SLA 与固定任务审计共享当前 Flowable 命令事务，任一失败都会回滚任务状态。

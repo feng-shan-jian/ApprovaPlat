@@ -426,7 +426,8 @@ public class WorkflowBpmnService
                 WorkflowControlledLoopBpmnContract.isReservedProperty(name)
                 || WorkflowParticipantRuleBpmnContract.isReservedProperty(name)
                 || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name)
-                || conditionRuleProperty;
+                || conditionRuleProperty
+                || WorkflowAutoCopyRuleContract.isReservedProperty(name);
         if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
                 || (name.startsWith("approva.") && !allowedPlatformProperty))
         {
@@ -438,7 +439,9 @@ public class WorkflowBpmnService
         }
         int maximumValueLength = conditionRuleProperty
                 ? WorkflowConditionRuleBpmnContract.MAX_CONFIG_LENGTH
-                : MAX_EXTENSION_PROPERTY_VALUE_LENGTH;
+                : WorkflowAutoCopyRuleContract.isReservedProperty(name)
+                        ? WorkflowAutoCopyRuleContract.MAX_PROPERTY_LENGTH
+                        : MAX_EXTENSION_PROPERTY_VALUE_LENGTH;
         if (value == null || value.length() > maximumValueLength)
         {
             throw invalidBpmn("通用扩展属性值缺失或超过长度限制", null);
@@ -651,6 +654,9 @@ public class WorkflowBpmnService
                     throw invalidBpmn(exception.getMessage(), exception);
                 }
             }
+            // 流程级自动抄送只允许自然完成触发；部署 XML 本身就是运行时不可变规则快照。
+            WorkflowAutoCopyRuleContract.validatePlacement(process,
+                    Set.of(WorkflowAutoCopyRuleContract.Trigger.PROCESS_COMPLETED));
             // 主流程唯一开始节点只统计顶层元素；事件子流程和嵌入子流程拥有各自合法的开始事件。
             List<StartEvent> startEvents = process.getFlowElements().stream()
                     .filter(StartEvent.class::isInstance)
@@ -703,6 +709,16 @@ public class WorkflowBpmnService
             {
                 validateListeners(element.getExecutionListeners(), validationContext);
                 validateFlowElement(process, element, validationContext);
+                if (element instanceof UserTask userTask)
+                {
+                    WorkflowAutoCopyRuleContract.validatePlacement(userTask, Set.of(
+                            WorkflowAutoCopyRuleContract.Trigger.NODE_ARRIVED,
+                            WorkflowAutoCopyRuleContract.Trigger.NODE_COMPLETED));
+                }
+                else if (!WorkflowAutoCopyRuleContract.readRules(element).isEmpty())
+                {
+                    throw invalidBpmn("自动抄送规则只能配置在流程或用户任务上", null);
+                }
             }
         }
         if (validationContext == ValidationContext.AUTHOR)

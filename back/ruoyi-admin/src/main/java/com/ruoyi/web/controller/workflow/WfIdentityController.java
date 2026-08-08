@@ -47,7 +47,8 @@ public class WfIdentityController extends BaseController
      * 分页查询流程设计、发起时选人或任务转办允许使用的有效身份选项。
      *
      * @param type String，user、role 或 dept
-     * @param capability String，可为空；approval 返回直接办理用户，claim 返回完整认领资格身份
+     * @param capability String，可为空；approval 返回直接办理用户，claim 返回完整认领资格身份，
+     *        copy 返回同时具备抄送列表和流程详情权限的身份
      * @param keyword String，可为空的名称、账号或编码检索词
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数
@@ -61,7 +62,8 @@ public class WfIdentityController extends BaseController
             @Pattern(regexp = "user|role|dept", message = "工作流身份类型必须为 user、role 或 dept")
             String type,
             @RequestParam(required = false)
-            @Pattern(regexp = "approval|claim|", message = "工作流身份目录能力必须为 approval 或 claim")
+            @Pattern(regexp = "approval|claim|copy|",
+                    message = "工作流身份目录能力必须为 approval、claim 或 copy")
             String capability,
             @RequestParam(required = false)
             @Size(max = WorkflowIdentityDirectoryService.MAX_KEYWORD_LENGTH,

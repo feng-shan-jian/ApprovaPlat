@@ -32,6 +32,8 @@ const userTaskSlaEditorSource = readFileSync(
   new URL('../../src/components/workflow/designer/UserTaskSlaEditor.vue', import.meta.url), 'utf8')
 const userTaskSlaEditorDoc = readFileSync(
   new URL('../../src/components/workflow/designer/UserTaskSlaEditor.md', import.meta.url), 'utf8')
+const autoCopyRuleEditorSource = readFileSync(
+  new URL('../../src/components/workflow/designer/AutoCopyRuleEditor.vue', import.meta.url), 'utf8')
 const slaApiSource = readFileSync(
   new URL('../../src/api/workflow/sla.js', import.meta.url), 'utf8')
 const embeddedFormEditorSource = readFileSync(
@@ -52,6 +54,10 @@ const designerApiSource = readFileSync(
   new URL('../../src/api/workflow/designer.js', import.meta.url), 'utf8')
 const modelApiSource = readFileSync(
   new URL('../../src/api/workflow/model.js', import.meta.url), 'utf8')
+const processApiSource = readFileSync(
+  new URL('../../src/api/workflow/process.js', import.meta.url), 'utf8')
+const workflowProcessListSource = readFileSync(
+  new URL('../../src/components/workflow/WorkflowProcessList.vue', import.meta.url), 'utf8')
 const extensionApiSource = readFileSync(
   new URL('../../src/api/workflow/extension.js', import.meta.url), 'utf8')
 const extensionPageSource = readFileSync(
@@ -72,6 +78,76 @@ const bpmnEventPageSource = readFileSync(
   new URL('../../src/views/workflow/bpmnEvent/index.vue', import.meta.url), 'utf8')
 const bpmnEventPageDoc = readFileSync(
   new URL('../../src/views/workflow/bpmnEvent/index.md', import.meta.url), 'utf8')
+
+/**
+ * 验证模型级自动抄送结构化作者契约、正式身份目录和抄送首次阅读链路。
+ * @returns {Promise<void>} BPMN 往返、服务端已读或受控目录任一退化时断言失败。
+ */
+test('自动抄送规则与抄送首次阅读连接正式 BPMN 和服务端状态', async () => {
+  assert.match(propertiesPanelSource, /<AutoCopyRuleEditor[\s\S]*?@change="emit\('auto-copy-change', \$event\)"/)
+  assert.match(autoCopyRuleEditorSource, /NODE_ARRIVED|triggerOptions/)
+  assert.match(autoCopyRuleEditorSource, /FORM_USER_FIELD/)
+  assert.match(autoCopyRuleEditorSource, /应用自动抄送规则/)
+  assert.match(designerSource, /AUTO_COPY_PROPERTY_NAME = 'approva\.autoCopyRules'/)
+  assert.match(designerSource, /PROCESS_COMPLETED[\s\S]*?NODE_ARRIVED[\s\S]*?NODE_COMPLETED/)
+  assert.match(designerSource, /item\.name === AUTO_COPY_PROPERTY_NAME/)
+  assert.match(designPageSource, /capability: 'copy'/)
+  assert.match(designPageSource, /type: 'role', capability: 'copy'/)
+  assert.match(designPageSource, /type: 'dept', capability: 'copy'/)
+  assert.match(designerSource, /item\.name\.startsWith\('approva\.'\)/)
+
+  assert.match(processApiSource, /url: `\/workflow\/process\/copy\/\$\{encodeURIComponent\(copyId\)\}\/read`[\s\S]*?method: 'put'/)
+  assert.match(workflowProcessListSource, /prop="readStatus"[\s\S]*?value="0"[\s\S]*?value="1"/)
+  assert.match(workflowProcessListSource, /await markCopyRead\(copyId\)[\s\S]*?await router\.push/)
+  assert.match(workflowProcessListSource, /const taskId = isCopy\.value \? undefined : \(row\.taskId \|\| undefined\)/)
+  assert.match(workflowProcessListSource, /query: \{ source: props\.mode, \.\.\.\(taskId \? \{ taskId \} : \{\}\) \}/)
+  assert.match(workflowProcessListSource, /sourceType/)
+  assert.match(workflowProcessListSource, /triggerType/)
+  assert.match(workflowProcessListSource, /readTime/)
+  assert.doesNotMatch(`${designerSource}\n${autoCopyRuleEditorSource}\n${workflowProcessListSource}`, /localStorage|sessionStorage/)
+
+  const processRules = JSON.stringify({
+    version: 1,
+    rules: [{ id: 'auto_copy_process', trigger: 'PROCESS_COMPLETED', recipients: [{ type: 'INITIATOR', values: [] }] }]
+  }).replaceAll('"', '&quot;')
+  const taskRules = JSON.stringify({
+    version: 1,
+    rules: [{
+      id: 'auto_copy_task',
+      trigger: 'NODE_ARRIVED',
+      recipients: [
+        { type: 'USER', values: ['1', '2'] },
+        { type: 'GROUP', values: ['ROLE3', 'DEPT4'] },
+        { type: 'FORM_USER_FIELD', values: ['managerId'] }
+      ]
+    }]
+  }).replaceAll('"', '&quot;')
+  const moddle = new BpmnModdle({ flowable: flowableModdle })
+  const source = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="urn:approvaplat:auto-copy">
+  <process id="autoCopyContract" isExecutable="true">
+    <extensionElements><flowable:properties><flowable:property name="approva.autoCopyRules" value="${processRules}" /></flowable:properties></extensionElements>
+    <userTask id="review"><extensionElements><flowable:properties><flowable:property name="approva.autoCopyRules" value="${taskRules}" /></flowable:properties></extensionElements></userTask>
+  </process>
+</definitions>`
+  const { rootElement, warnings } = await moddle.fromXML(source)
+  assert.deepEqual(warnings, [])
+  const process = rootElement.rootElements.find(element => element.$type === 'bpmn:Process')
+  const task = process.flowElements.find(element => element.$type === 'bpmn:UserTask')
+  /**
+   * 读取测试 BPMN 元素中的自动抄送属性正文。
+   * @param {object} element Process 或 UserTask moddle 对象。
+   * @returns {string} `approva.autoCopyRules` JSON 文本。
+   */
+  const propertyValue = element => element.extensionElements.values
+    .find(value => value.$type === 'flowable:Properties').values
+    .find(value => value.name === 'approva.autoCopyRules').value
+  assert.equal(JSON.parse(propertyValue(process)).rules[0].trigger, 'PROCESS_COMPLETED')
+  assert.deepEqual(JSON.parse(propertyValue(task)).rules[0].recipients[1].values, ['ROLE3', 'DEPT4'])
+  const { xml } = await moddle.toXML(rootElement, { format: true })
+  assert.match(xml, /approva\.autoCopyRules/)
+  assert.match(xml, /NODE_ARRIVED/)
+})
 
 /**
  * 验证设计器能力接入真实 Modeler 模块和服务端 API，而不是只渲染工具栏按钮。

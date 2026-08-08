@@ -303,6 +303,12 @@ WITH expected_columns AS (
     UNION ALL SELECT 'wf_copy', 'task_id'
     UNION ALL SELECT 'wf_copy', 'user_id'
     UNION ALL SELECT 'wf_copy', 'originator_id'
+    UNION ALL SELECT 'wf_copy', 'source_type'
+    UNION ALL SELECT 'wf_copy', 'trigger_type'
+    UNION ALL SELECT 'wf_copy', 'trigger_node_id'
+    UNION ALL SELECT 'wf_copy', 'trigger_node_name'
+    UNION ALL SELECT 'wf_copy', 'read_status'
+    UNION ALL SELECT 'wf_copy', 'read_time'
     UNION ALL SELECT 'wf_copy', 'del_flag'
     UNION ALL SELECT 'wf_model_save_idempotency', 'request_id'
     UNION ALL SELECT 'wf_model_save_idempotency', 'user_id'
@@ -666,7 +672,7 @@ expected_indexes AS (
                      'deploy_id,process_key,gateway_token'
     UNION ALL SELECT 'wf_copy', 'PRIMARY', 0, 'copy_id'
     UNION ALL SELECT 'wf_copy', 'uk_wf_copy_event_user', 0, 'copy_event_id,user_id'
-    UNION ALL SELECT 'wf_copy', 'idx_wf_copy_user_status_time', 1, 'user_id,del_flag,create_time'
+    UNION ALL SELECT 'wf_copy', 'idx_wf_copy_user_status_time', 1, 'user_id,del_flag,read_status,create_time'
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_instance', 1, 'instance_id,del_flag'
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_task', 1, 'task_id,del_flag'
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_deployment', 1, 'deployment_id,del_flag'
@@ -763,6 +769,9 @@ WITH expected_checks AS (
     UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_default'
     UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_checksum'
     UNION ALL SELECT 'wf_copy', 'chk_wf_copy_del_flag'
+    UNION ALL SELECT 'wf_copy', 'chk_wf_copy_source_type'
+    UNION ALL SELECT 'wf_copy', 'chk_wf_copy_trigger_type'
+    UNION ALL SELECT 'wf_copy', 'chk_wf_copy_read_state'
     UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_request_id'
     UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_user_id'
     UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_source_id'
@@ -988,6 +997,17 @@ WITH integrity_issues AS (
     SELECT 'wf_copy_invalid_del_flag', COUNT(*)
     FROM wf_copy
     WHERE del_flag NOT IN ('0', '2')
+
+    UNION ALL
+
+    SELECT 'wf_copy_invalid_source_or_read_state', COUNT(*)
+    FROM wf_copy
+    WHERE source_type NOT IN ('MANUAL', 'AUTO', 'MANUAL_AUTO')
+       OR trigger_type NOT IN ('MANUAL_COMPLETE', 'MANUAL_REJECT', 'MANUAL_RETURN',
+           'MANUAL_DELEGATE', 'MANUAL_RESOLVE', 'MANUAL_TRANSFER', 'NODE_ARRIVED',
+           'NODE_COMPLETED', 'PROCESS_COMPLETED')
+       OR read_status NOT IN ('0', '1')
+       OR ((read_status = '0') <> (read_time IS NULL))
 
     UNION ALL
 

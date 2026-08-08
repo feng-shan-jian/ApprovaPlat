@@ -406,6 +406,36 @@ public class WorkflowProcessQueryService
     }
 
     /**
+     * 由当前认证接收人原子标记首次阅读并返回数据库最终状态。
+     *
+     * @param copyId Long，抄送记录主键
+     * @return WorkflowCopyView，首次时间已持久化的当前用户抄送视图
+     */
+    public WorkflowCopyView markCopyRead(Long copyId)
+    {
+        if (copyId == null || copyId <= 0)
+        {
+            throw invalidArgument("抄送记录主键不合法");
+        }
+        return engineOperations.writeAsCurrentUser(actor ->
+        {
+            long currentUserId = Long.parseLong(actor.userId());
+            // UPDATE 同时携带 user_id 和未读条件，越权请求不会先探测记录是否存在。
+            copyMapper.markRead(copyId, currentUserId, actor.userId());
+            WfCopy copy = copyMapper.selectByIdAndUserId(copyId, currentUserId);
+            if (copy == null)
+            {
+                throw new ServiceException("抄送记录不存在", HttpStatus.NOT_FOUND);
+            }
+            if (!"1".equals(copy.getReadStatus()) || copy.getReadTime() == null)
+            {
+                throw dataError("抄送首次阅读状态异常");
+            }
+            return toCopyView(copy);
+        });
+    }
+
+    /**
      * 按定义、部署和可选实例关系返回开始节点的不可变部署表单快照。
      *
      * @param request WorkflowProcessFormQueryDto，定义、部署及可选实例关系参数
@@ -865,6 +895,12 @@ public class WorkflowProcessQueryService
         trusted.setTaskId(optionalText(filter.taskId(), "任务主键过长"));
         trusted.setCategoryId(optionalText(filter.categoryId(), "流程分类过长"));
         trusted.setDeploymentId(optionalText(filter.deploymentId(), "部署主键过长"));
+        String readStatus = optionalText(filter.readStatus(), "阅读状态不合法");
+        if (readStatus != null && !Set.of("0", "1").contains(readStatus))
+        {
+            throw invalidArgument("阅读状态必须为 0 或 1");
+        }
+        trusted.setReadStatus(readStatus);
         return trusted;
     }
 
@@ -1111,7 +1147,9 @@ public class WorkflowProcessQueryService
         return new WorkflowCopyView(copy.getCopyId(), copy.getTitle(), copy.getProcessId(),
                 copy.getProcessName(), copy.getCategoryId(), copy.getDeploymentId(),
                 copy.getInstanceId(), copy.getTaskId(), copy.getUserId(), copy.getOriginatorId(),
-                copy.getOriginatorName(), toInstant(copy.getCreateTime()));
+                copy.getOriginatorName(), copy.getSourceType(), copy.getTriggerType(),
+                copy.getTriggerNodeId(), copy.getTriggerNodeName(), copy.getReadStatus(),
+                toInstant(copy.getReadTime()), toInstant(copy.getCreateTime()));
     }
 
     /**

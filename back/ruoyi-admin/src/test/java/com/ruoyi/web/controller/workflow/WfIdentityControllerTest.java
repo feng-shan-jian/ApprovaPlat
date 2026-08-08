@@ -162,6 +162,33 @@ class WfIdentityControllerTest
     }
 
     /**
+     * 验证 copy 能力通过 Controller 白名单并进入抄送对象可见性目录。
+     *
+     * @return 无返回值；copy 被请求参数门禁拒绝或未传入领域服务时测试失败
+     * @throws Exception MockMvc 执行请求失败时抛出
+     */
+    @Test
+    void returnsCopyEligibleUserOptions() throws Exception
+    {
+        WorkflowIdentityOptionView option = new WorkflowIdentityOptionView(
+                "103", "抄送接收人", "user");
+        when(identityDirectoryService.listOptions(
+                "user", null, 1, 20, "copy"))
+                .thenReturn(new WorkflowPageResult<>(List.of(option), 1L));
+
+        mockMvc.perform(get("/workflow/identity/options")
+                        .param("type", "user")
+                        .param("capability", "copy"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.rows[0].value").value("103"))
+                .andExpect(jsonPath("$.rows[0].type").value("user"));
+
+        verify(identityDirectoryService).listOptions(
+                "user", null, 1, 20, "copy");
+    }
+
+    /**
      * 验证身份目录不依赖系统用户管理权限；发起人可读正式目录，批量回显仅允许模型设计者。
      *
      * @return 无返回值，路径或权限表达式漂移时测试失败

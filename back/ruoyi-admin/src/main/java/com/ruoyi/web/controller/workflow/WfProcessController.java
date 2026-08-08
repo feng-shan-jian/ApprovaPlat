@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -301,6 +302,19 @@ public class WfProcessController extends BaseController
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
         return toTableData(processQueryService.listCopies(filter, pageNum, pageSize));
+    }
+
+    /**
+     * 原子标记当前用户抄送记录的首次阅读时间。
+     *
+     * @param copyId Long，抄送记录主键
+     * @return AjaxResult，数据库最终阅读状态；不存在和越权使用同一结果
+     */
+    @PreAuthorize("@ss.hasPermi('workflow:process:copyList')")
+    @PutMapping("/copy/{copyId}/read")
+    public AjaxResult markCopyRead(@PathVariable Long copyId)
+    {
+        return success(processQueryService.markCopyRead(copyId));
     }
 
     /**

@@ -81,6 +81,22 @@ public interface WorkflowIdentityMapper
             @Param("offset") long offset,
             @Param("pageSize") int pageSize);
 
+    /** @param type String，user、role 或 dept；@param keyword String，检索词；@return long，可读取抄送及详情的身份数。 */
+    long countCopyEligibleIdentityOptions(@Param("type") String type,
+            @Param("keyword") String keyword);
+
+    /**
+     * 查询至少包含一名抄送可见用户的正式用户、角色或部门目录。
+     * @param type String，user、role 或 dept
+     * @param keyword String，可空检索词
+     * @param offset long，分页偏移
+     * @param pageSize int，单页数量
+     * @return List&lt;WorkflowIdentityOptionView&gt;，可用于自动抄送的身份选项
+     */
+    List<WorkflowIdentityOptionView> selectCopyEligibleIdentityOptions(
+            @Param("type") String type, @Param("keyword") String keyword,
+            @Param("offset") long offset, @Param("pageSize") int pageSize);
+
     /**
      * 按主键批量读取正式身份目录名称和基础启用状态，包含已停用但尚未物理删除的对象。
      *
@@ -98,6 +114,15 @@ public interface WorkflowIdentityMapper
      * @return List&lt;Long&gt;，有效用户主键，按主键升序返回
      */
     List<Long> selectActiveUserIdsByUserIds(@Param("userIds") List<Long> userIds);
+
+    /** @param userIds List&lt;Long&gt;，用户主键；@return List&lt;Long&gt;，具备抄送列表和详情权限的有效用户。 */
+    List<Long> selectCopyEligibleUserIdsByUserIds(@Param("userIds") List<Long> userIds);
+
+    /** @param roleIds List&lt;Long&gt;，角色主键；@return List&lt;Long&gt;，角色内具备抄送可见性的有效用户。 */
+    List<Long> selectCopyEligibleUserIdsByRoleIds(@Param("roleIds") List<Long> roleIds);
+
+    /** @param deptIds List&lt;Long&gt;，部门主键；@return List&lt;Long&gt;，部门内具备抄送可见性的有效用户。 */
+    List<Long> selectCopyEligibleUserIdsByDeptIds(@Param("deptIds") List<Long> deptIds);
 
     /**
      * 从指定用户中查询当前具备流程办理资格的有效用户 ID。

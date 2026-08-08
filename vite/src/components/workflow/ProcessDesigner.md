@@ -134,7 +134,7 @@ onMounted(async () => {
 | `modelValue` | `string` | `''` | 当前 BPMN XML；为空时按模型元数据创建初始流程。 |
 | `model` | `object` | `{}` | `modelKey`、`modelName`、`formId` 等模型元数据。 |
 | `forms` | `array` | `[]` | 正式表单选项，每项至少包含 `formId`、`formName`。 |
-| `identityOptions` | `object` | `{ assignees: [], candidateUsers: [], candidateGroups: [] }` | 服务端按直接办理资格和完整候选认领资格隔离的身份选项。 |
+| `identityOptions` | `object` | 五个隔离选项池 | 服务端按直接办理、完整候选认领和自动抄送资格隔离的身份选项，包含 `autoCopyUsers`、`autoCopyGroups`。 |
 | `height` | `string` | `calc(100vh - 128px)` | 设计器稳定高度。 |
 | `saving` | `boolean` | `false` | 页面真实保存请求的加载状态。 |
 | `identityLoading` | `boolean` | `false` | 用户、角色或部门远程检索的加载状态。 |
@@ -149,7 +149,7 @@ onMounted(async () => {
 | `change` | `xml: string` | 用户设计发生变化。 |
 | `save` | `xml: string` | 本地关键门禁通过后请求页面保存。 |
 | `error` | `Error` | 导入、导出或本地校验失败。 |
-| `identity-search` | `{ type: 'user' \| 'group', keyword: string, capability: 'approval' \| 'claim' }` | 请求页面检索正式资格目录；直接办理人使用 `approval`，候选用户和候选组使用 `claim`。 |
+| `identity-search` | `{ type: 'user' \| 'group', keyword: string, capability: 'approval' \| 'claim' \| 'copy' }` | 请求页面检索正式资格目录；直接办理人使用 `approval`，候选用户和候选组使用 `claim`，自动抄送对象使用 `copy`。 |
 | `identity-resolve` | `{ target, type, capability, values }` | 请求页面通过 `/workflow/identity/options/resolve` 批量核验并回显当前分页外的已选正式对象。 |
 | `preference-save` | `object` | 请求页面把字段完整的当前用户偏好写入正式数据库。 |
 
@@ -177,6 +177,8 @@ onMounted(async () => {
 - 需要目录目标或表单字段的规则支持分步编辑；切换规则后产生的暂时空值只存在于当前画布，正式保存门禁仍要求目标和字段完整。
 - 重开模型时，当前远程分页外的已选身份通过 `/workflow/identity/options/resolve` 回显正式名称和实时可用状态；删除对象使用稳定不可用文案，不向页面暴露裸主键。
 - 会签/或签提供“办理时选择”“发起时选择”和“固定人员”三种受控来源。办理时来源固定写入 `${multiInstanceHandler.getUserIds(execution)}`，由唯一前驱任务提交下一办理人；发起时来源固定写入 `${multiInstanceHandler.getStartUserIds(execution)}`，发起页按后端部署模型投影每个节点的必填审批用户字段；固定来源从审批资格目录选择 1 至 100 名用户，写入严格的 `${multiInstanceHandler.getFixedUserIds(execution, '1,2')}`。三种来源均固定使用并行循环、`assignee` 元素变量、`${assignee}` 办理人和 ALL/ANY 完成条件，后端在保存、部署、发起和节点进入时再次校验正式审批资格。
+- Process 和 UserTask 可分别配置流程完成、节点到达和节点完成自动抄送。固定用户、角色和部门仅来自 `capability=copy` 正式目录，发起人与正式表单标量字段为受控动态来源；规则显式应用后以 `approva.autoCopyRules` JSON 写入 BPMN，并在修改循环、SLA 或通用属性时保持不丢失。
+- 自动抄送属性最多 8192 个字符、10 条规则，每条最多 20 个来源、每个来源最多 100 个值。设计器保存前复核触发位置与表单字段，后端保存、部署冻结和运行时继续复核身份有效性、对象可见性及幂等触发。
 - 动态多实例通过“动态 + 会签/或签”受控模式配置。组件固定写入并行循环、`${multiInstanceHandler.getUserIds(execution)}`、`assignee` 元素变量、`${assignee}` 办理人以及对应 ALL/ANY 完成条件，不提供任意方法输入。
 - 受控整改循环只对 UserTask 开放。判断字段只能来自该节点正式模板或内嵌 FormData 的可写标量字段；附件、多选、表格、对象、范围和只读字段不会进入选项。设计器固定写入 `approva.controlledLoop.*` 五项属性，达到最大轮次时由后端拒绝继续整改，不会自动放行。
 - 受控整改循环在画布节点上显示最大轮次徽标。面板采用“填写草稿后显式应用”，避免不完整属性进入 BPMN 命令栈；布尔和静态枚举值只能从正式目录选择。任意 `standardLoopCharacteristics` 仍仅支持 XML 往返并明确禁止部署。

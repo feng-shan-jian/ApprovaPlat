@@ -53,7 +53,7 @@ const model = reactive({})
 const formOptions = ref([])
 const identityOptions = reactive({
   assignees: [], candidateUsers: [], candidateGroups: [], candidateRoles: [],
-  activeUsers: [], activeRoles: [], activeDepts: []
+  activeUsers: [], activeRoles: [], activeDepts: [], autoCopyUsers: [], autoCopyGroups: []
 })
 const identityPending = ref(0)
 const identityLoading = computed(() => identityPending.value > 0)
@@ -68,7 +68,7 @@ const designerPreference = reactive({
 })
 const identityRequestVersion = {
   assignees: 0, candidateUsers: 0, candidateGroups: 0, candidateRoles: 0,
-  activeUsers: 0, activeRoles: 0, activeDepts: 0
+  activeUsers: 0, activeRoles: 0, activeDepts: 0, autoCopyUsers: 0, autoCopyGroups: 0
 }
 // pendingSaveRequest 保存尚未取得完整成功响应的用户保存意图，网络重试必须复用同一幂等键。
 let pendingSaveRequest
@@ -120,13 +120,14 @@ async function loadAllForms() {
 /**
  * 将设计器身份请求映射到隔离的选项池，非法能力组合必须失败关闭。
  * @param {{type?: string, capability?: string}|undefined} request 设计器提交的身份类型和能力范围。
- * @returns {'assignees'|'candidateUsers'|'candidateGroups'|''} 对应选项池键；空串表示非法组合。
+ * @returns {string} 对应隔离选项池键；空串表示非法组合。
  */
 function identityRequestTarget(request) {
   const contracts = {
     assignees: ['user', 'approval'], candidateUsers: ['user', 'claim'],
     candidateGroups: ['group', 'claim'], candidateRoles: ['role', 'claim'],
-    activeUsers: ['user', ''], activeRoles: ['role', ''], activeDepts: ['dept', '']
+    activeUsers: ['user', ''], activeRoles: ['role', ''], activeDepts: ['dept', ''],
+    autoCopyUsers: ['user', 'copy'], autoCopyGroups: ['group', 'copy']
   }
   const target = String(request?.target || '')
   const contract = contracts[target]
@@ -137,7 +138,7 @@ function identityRequestTarget(request) {
 
 /**
  * 根据设计器检索请求读取直接办理人或完整可认领候选身份目录。
- * @param {{type: 'user'|'group', keyword: string, capability: 'approval'|'claim'}} request 检索类型、关键字和资格范围。
+ * @param {{type: 'user'|'group', keyword: string, capability: 'approval'|'claim'|'copy'}} request 检索类型、关键字和资格范围。
  * @returns {Promise<void>} 最新请求完成后替换对应身份选项，过期响应会被丢弃。
  */
 async function searchIdentityDirectory(request) {
@@ -174,6 +175,27 @@ async function searchIdentityDirectory(request) {
         identityOptions.candidateGroups = [
           ...(roleResponse.rows || []), ...(deptResponse.rows || [])
         ]
+      }
+      return
+    }
+    if (target === 'autoCopyUsers') {
+      // 自动抄送固定用户使用后端 copy 能力目录，目录层先过滤有效用户和抄送对象可见性资格。
+      const response = await listIdentityOptions({
+        type: 'user', capability: 'copy', keyword, pageNum: 1, pageSize: 50
+      })
+      if (requestVersion === identityRequestVersion.autoCopyUsers) {
+        identityOptions.autoCopyUsers = response.rows || []
+      }
+      return
+    }
+    if (target === 'autoCopyGroups') {
+      // 角色和部门并行查询后保持各自 ROLE/DEPT 稳定编码，禁止前端自造组标识。
+      const [roleResponse, deptResponse] = await Promise.all([
+        listIdentityOptions({ type: 'role', capability: 'copy', keyword, pageNum: 1, pageSize: 50 }),
+        listIdentityOptions({ type: 'dept', capability: 'copy', keyword, pageNum: 1, pageSize: 50 })
+      ])
+      if (requestVersion === identityRequestVersion.autoCopyGroups) {
+        identityOptions.autoCopyGroups = [...(roleResponse.rows || []), ...(deptResponse.rows || [])]
       }
       return
     }
@@ -275,7 +297,9 @@ async function loadDesigner() {
       searchIdentityDirectory({ target: 'candidateRoles', type: 'role', capability: 'claim', keyword: '' }),
       searchIdentityDirectory({ target: 'activeUsers', type: 'user', capability: '', keyword: '' }),
       searchIdentityDirectory({ target: 'activeRoles', type: 'role', capability: '', keyword: '' }),
-      searchIdentityDirectory({ target: 'activeDepts', type: 'dept', capability: '', keyword: '' })
+      searchIdentityDirectory({ target: 'activeDepts', type: 'dept', capability: '', keyword: '' }),
+      searchIdentityDirectory({ target: 'autoCopyUsers', type: 'user', capability: 'copy', keyword: '' }),
+      searchIdentityDirectory({ target: 'autoCopyGroups', type: 'group', capability: 'copy', keyword: '' })
     ])
     Object.keys(model).forEach(key => delete model[key])
     Object.assign(model, modelResponse.data || {})

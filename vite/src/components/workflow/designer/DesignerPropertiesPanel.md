@@ -2,7 +2,7 @@
 
 ## 组件简介
 
-`DesignerPropertiesPanel` 是 BPMN 设计器的受控属性编辑界面，覆盖基础信息、流程版本、正式模板与内嵌 FormData、节点字段权限、办理配置、活动循环与多实例、受控服务任务扩展、DMN 精确版本、条件、调用活动、事件参数、异步执行标志、业务监听器和通用扩展属性。CEL、HTTP 和 SQL 使用结构化子编辑器，端点与数据源只能来自服务端白名单。组件不直接持有 Modeler，也不写 XML；所有变更通过事件交给父组件的 bpmn-js 命令栈。
+`DesignerPropertiesPanel` 是 BPMN 设计器的受控属性编辑界面，覆盖基础信息、流程版本、正式模板与内嵌 FormData、节点字段权限、办理配置、自动抄送、活动循环与多实例、受控服务任务扩展、DMN 精确版本、条件、调用活动、事件参数、异步执行标志、业务监听器和通用扩展属性。CEL、HTTP 和 SQL 使用结构化子编辑器，端点与数据源只能来自服务端白名单。组件不直接持有 Modeler，也不写 XML；所有变更通过事件交给父组件的 bpmn-js 命令栈。
 
 ## 使用方式
 
@@ -40,7 +40,9 @@
 | `controlledLoopFieldOptions` | `array` | 当前 UserTask 正式表单中的可写标量字段、静态值目录及是否禁止自由输入。 |
 | `conditionFieldOptions` | `array` | 当前可执行流程全部正式表单中的可写标量字段、类型和静态值目录。 |
 | `conditionContext` | `object` | 当前排他/包容网关类型及全部出线的名称、默认和配置状态。 |
-| `identityOptions` | `object` | 办理人、候选用户和候选组目录。 |
+| `autoCopyTriggerOptions` | `array` | 当前 Process 或 UserTask 允许的自动抄送生命周期触发时机。 |
+| `autoCopyFormFieldOptions` | `array` | 当前节点或流程已有正式表单中的标量字段，不接受自由变量。 |
+| `identityOptions` | `object` | 办理人、候选身份以及 `capability=copy` 返回的自动抄送用户、角色和部门目录。 |
 | `identityLoading` | `boolean` | 身份目录加载状态。 |
 | `extensionOptions` | `array` | 后端扩展注册表返回的已启用 Java、CEL 和 HTTP 扩展最新版，不接受本地伪造选项。 |
 | `formFieldOptions` | `array` | 后端 FORM_FIELD 注册表返回的已启用最新版，用于内嵌表单自定义字段。 |
@@ -58,7 +60,7 @@
 
 ## Emits
 
-组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`participant-rule-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`condition-rule-change`、`condition-default-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、`identity-resolve`、两类业务监听器事件和 `extension-properties-change`。`identity-search` 用于正式目录分页检索，`identity-resolve` 用于重开模型时核验当前分页外的已选对象。
+组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`participant-rule-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`condition-rule-change`、`condition-default-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、`identity-resolve`、`auto-copy-change`、两类业务监听器事件和 `extension-properties-change`。`identity-search` 用于正式目录分页检索，`identity-resolve` 用于重开模型时核验当前分页外的已选对象。
 
 ## 公开方法
 
@@ -85,6 +87,7 @@
 - 切换到“固定人员”时先保留页面编辑状态并显示正式审批用户目录；选择首名成员后才写入 BPMN 命令栈。若未选择成员直接保存，父组件在发起服务端校验和保存请求前明确拒绝，确保不会把旧人员来源误保存为固定配置。
 - 受控整改循环必须填写判断字段、再次进入值、退出值和 2 至 50 的最大轮次，并显式点击“应用整改循环配置”。半成品只保留在当前面板草稿中，不写入 moddle；静态枚举和布尔字段禁止自由创建条件值。
 - 排他和包容网关的多条出线使用 `SequenceFlowRuleEditor`，普通设计者不能输入任意 EL。字段来自当前流程正式表单，分支名称、唯一默认、AND/OR 规则组和字段类型值在保存及部署 API 再次校验。
+- Process 只允许配置“流程完成”，UserTask 只允许“节点到达/节点完成”自动抄送；固定身份使用 `capability=copy` 正式目录，表单用户来源只能选择已有标量字段，半成品规则不会进入 moddle。
 - 通用扩展属性写入受限 `flowable:properties`，后端校验数量、名称、重复项和值长度；它们只是元数据，不作为表达式或实现入口执行。
 
 ### 错误与升级配置
