@@ -58,6 +58,7 @@ final class WorkflowRbacMatrix
             WfInstanceController.class,
             WfModelController.class,
             WfProcessController.class,
+            WfProcessDraftController.class,
             WfTaskController.class);
 
     /** CSV 固定列定义，禁止静默接受少列、多列或角色顺序漂移。 */

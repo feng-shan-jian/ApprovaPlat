@@ -59,7 +59,7 @@ WfFormController,getInfo,GET,/workflow/form/{formId},ANY,workflow:form:query|wor
 WfFormController,add,POST,/workflow/form,SINGLE,workflow:form:add,ALLOW,ALLOW,DENY,DENY,DENY
 WfFormController,edit,PUT,/workflow/form,SINGLE,workflow:form:edit,ALLOW,ALLOW,DENY,DENY,DENY
 WfFormController,remove,DELETE,/workflow/form/{formIds},SINGLE,workflow:form:remove,ALLOW,ALLOW,DENY,DENY,DENY
-WfIdentityController,options,GET,/workflow/identity/options,ANY,workflow:model:designer|workflow:process:approval|workflow:process:manageList,ALLOW,ALLOW,DENY,ALLOW,DENY
+WfIdentityController,options,GET,/workflow/identity/options,ANY,workflow:model:designer|workflow:process:start|workflow:process:approval|workflow:process:manageList,ALLOW,ALLOW,ALLOW,ALLOW,DENY
 WfIdentityController,resolveOptions,POST,/workflow/identity/options/resolve,SINGLE,workflow:model:designer,ALLOW,ALLOW,DENY,DENY,DENY
 WfInstanceController,updateState,POST,/workflow/instance/updateState,SINGLE,workflow:process:state,ALLOW,DENY,DENY,DENY,DENY
 WfInstanceController,terminate,POST,/workflow/instance/terminate,ANY,workflow:process:cancel|workflow:process:terminate,ALLOW,DENY,ALLOW,DENY,DENY
@@ -91,6 +91,12 @@ WfProcessController,finishedExport,POST,/workflow/process/finishedExport,SINGLE,
 WfProcessController,copyExport,POST,/workflow/process/copyExport,SINGLE,workflow:process:copyExport,ALLOW,DENY,ALLOW,ALLOW,ALLOW
 WfProcessController,getForm,GET,/workflow/process/getProcessForm,SINGLE,workflow:process:start,ALLOW,DENY,ALLOW,DENY,DENY
 WfProcessController,start,POST,/workflow/process/start/{processDefId},SINGLE,workflow:process:start,ALLOW,DENY,ALLOW,DENY,DENY
+WfProcessDraftController,list,GET,/workflow/process/draft/list,SINGLE,workflow:process:draftList,ALLOW,DENY,ALLOW,DENY,DENY
+WfProcessDraftController,get,GET,/workflow/process/draft/{draftId},SINGLE,workflow:process:draftQuery,ALLOW,DENY,ALLOW,DENY,DENY
+WfProcessDraftController,create,POST,/workflow/process/draft,SINGLE,workflow:process:draftSave,ALLOW,DENY,ALLOW,DENY,DENY
+WfProcessDraftController,save,PUT,/workflow/process/draft/{draftId},SINGLE,workflow:process:draftSave,ALLOW,DENY,ALLOW,DENY,DENY
+WfProcessDraftController,delete,DELETE,/workflow/process/draft/{draftId},SINGLE,workflow:process:draftRemove,ALLOW,DENY,ALLOW,DENY,DENY
+WfProcessDraftController,submit,POST,/workflow/process/draft/{draftId}/submit,SINGLE,workflow:process:draftSubmit,ALLOW,DENY,ALLOW,DENY,DENY
 WfProcessController,deleteHistory,DELETE,/workflow/process/instance/{instanceIds},SINGLE,workflow:process:remove,ALLOW,DENY,DENY,DENY,DENY
 WfProcessController,getBpmnXml,GET,/workflow/process/bpmnXml/{processDefId},ANY,workflow:process:startList|workflow:process:query,ALLOW,DENY,ALLOW,ALLOW,ALLOW
 WfProcessController,detail,GET,/workflow/process/detail,SINGLE,workflow:process:query,ALLOW,DENY,ALLOW,ALLOW,ALLOW

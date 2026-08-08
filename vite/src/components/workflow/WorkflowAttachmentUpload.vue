@@ -110,16 +110,16 @@ async function uploadFile(options) {
 }
 
 /**
- * 移除列表项前按附件状态执行不同语义：BOUND 仅移除当前表单引用，TEMP 先删除临时文件。
+ * 移除列表项前按附件状态执行不同语义：DRAFT/BOUND 仅移除当前表单引用，TEMP 先删除临时文件。
  * @param {object} file Element Plus 文件项。
  * @returns {Promise<boolean>} 当前表单引用已安全移除时返回 true，否则返回 false。
  */
 async function beforeRemove(file) {
   const attachment = file.attachment || props.modelValue.find(item => item.attachmentId === file.uid)
   if (!attachment || props.disabled) return false
-  if (attachment.status === 'BOUND') {
+  if (['DRAFT', 'BOUND'].includes(attachment.status)) {
     return enqueueMutation(async () => {
-      // BOUND 文件属于流程审计数据，只解除当前表单字段引用，禁止调用物理删除接口。
+      // DRAFT 解绑由下一次草稿 CAS 保存提交，BOUND 属于流程审计；两者都禁止组件直接物理删除。
       emit('update:modelValue', props.modelValue.filter(item => item.attachmentId !== attachment.attachmentId))
       await nextTick()
       return true

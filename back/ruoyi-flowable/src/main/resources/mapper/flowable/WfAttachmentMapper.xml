@@ -16,6 +16,7 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             <arg column="sha256" javaType="java.lang.String"/>
             <arg column="attachment_status" javaType="com.ruoyi.flowable.domain.WorkflowAttachmentStatus"/>
             <arg column="expire_time" javaType="java.time.LocalDateTime"/>
+            <arg column="draft_id" javaType="java.lang.String"/>
             <arg column="process_instance_id" javaType="java.lang.String"/>
             <arg column="task_id" javaType="java.lang.String"/>
             <arg column="node_key" javaType="java.lang.String"/>
@@ -39,7 +40,7 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
 
     <sql id="attachmentColumns">
         attachment_id, owner_user_id, field_name, original_name, storage_key,
-        content_type, file_size, sha256, attachment_status, expire_time,
+        content_type, file_size, sha256, attachment_status, expire_time, draft_id,
         process_instance_id, task_id, node_key, bound_time, storage_deleted_time,
         cleanup_retry_count, cleanup_next_retry_time, cleanup_last_error_code,
         create_time, update_time
@@ -73,7 +74,7 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         from wf_attachment
         where owner_user_id = #{ownerUserId}
           and (
-                attachment_status = 'TEMP'
+                attachment_status in ('TEMP', 'DRAFT')
                 or (attachment_status in ('EXPIRED', 'DELETED')
                     and storage_deleted_time is null)
               )
@@ -83,19 +84,19 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         select coalesce(sum(file_size), 0)
         from wf_attachment
         where storage_deleted_time is null
-          and attachment_status in ('TEMP', 'BOUND', 'EXPIRED', 'DELETED')
+          and attachment_status in ('TEMP', 'DRAFT', 'BOUND', 'EXPIRED', 'DELETED')
     </select>
 
     <insert id="insert">
         insert into wf_attachment
             (attachment_id, owner_user_id, field_name, original_name, storage_key,
-             content_type, file_size, sha256, attachment_status, expire_time,
+             content_type, file_size, sha256, attachment_status, expire_time, draft_id,
              process_instance_id, task_id, node_key, bound_time, storage_deleted_time,
              cleanup_retry_count, cleanup_next_retry_time, cleanup_last_error_code,
              create_time, update_time)
         values
             (#{attachmentId}, #{ownerUserId}, #{fieldName}, #{originalName}, #{storageKey},
-             #{contentType}, #{fileSize}, #{sha256}, #{status}, #{expireTime},
+             #{contentType}, #{fileSize}, #{sha256}, #{status}, #{expireTime}, #{draftId},
              #{processInstanceId}, #{taskId}, #{nodeKey}, #{boundTime}, #{storageDeletedTime},
              #{cleanupRetryCount}, #{cleanupNextRetryTime}, #{cleanupLastErrorCode},
              #{createTime}, #{updateTime})
@@ -125,6 +126,48 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         order by attachment_id
         for update
     </select>
+
+    <select id="selectByDraftIdForUpdate" resultMap="WfAttachmentResult" timeout="10">
+        select <include refid="attachmentColumns"/>
+        from wf_attachment
+        where draft_id = #{draftId} and owner_user_id = #{ownerUserId}
+          and attachment_status = 'DRAFT'
+        order by attachment_id
+        for update
+    </select>
+
+    <update id="bindDraftAttachment">
+        update wf_attachment
+        set attachment_status = 'DRAFT', draft_id = #{draftId},
+            update_time = current_timestamp(3)
+        where attachment_id = #{attachmentId} and owner_user_id = #{ownerUserId}
+          and field_name = #{fieldName} and attachment_status = 'TEMP'
+          and expire_time &gt; current_timestamp(3) and draft_id is null
+          and process_instance_id is null and task_id is null and node_key is null
+          and bound_time is null and storage_deleted_time is null
+    </update>
+
+    <update id="markDraftAttachmentDeleted">
+        update wf_attachment
+        set attachment_status = 'DELETED', draft_id = null, update_time = current_timestamp(3)
+        where attachment_id = #{attachmentId} and owner_user_id = #{ownerUserId}
+          and draft_id = #{draftId} and attachment_status = 'DRAFT'
+          and process_instance_id is null and task_id is null and node_key is null
+          and bound_time is null and storage_deleted_time is null
+    </update>
+
+    <update id="bindDraftStartAttachment">
+        update wf_attachment
+        set attachment_status = 'BOUND', draft_id = null,
+            process_instance_id = #{processInstanceId}, task_id = null,
+            node_key = #{nodeKey}, bound_time = current_timestamp(3),
+            update_time = current_timestamp(3)
+        where attachment_id = #{attachmentId} and owner_user_id = #{ownerUserId}
+          and field_name = #{fieldName} and draft_id = #{draftId}
+          and attachment_status = 'DRAFT' and process_instance_id is null
+          and task_id is null and node_key is null and bound_time is null
+          and storage_deleted_time is null
+    </update>
 
     <select id="countBoundByProcessInstanceIds" resultType="long">
         select count(*)

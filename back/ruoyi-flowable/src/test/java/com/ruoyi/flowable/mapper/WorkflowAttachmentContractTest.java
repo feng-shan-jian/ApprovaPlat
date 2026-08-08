@@ -38,7 +38,10 @@ class WorkflowAttachmentContractTest
                 "unique key `uk_wf_attachment_storage_key` (`storage_key`)",
                 "key `idx_wf_attachment_owner_status_expire` (`owner_user_id`, `attachment_status`, `expire_time`)",
                 "key `idx_wf_attachment_cleanup_due` (`attachment_status`, `cleanup_next_retry_time`, `expire_time`)",
+                "key `idx_wf_attachment_draft_field` (`draft_id`, `field_name`, `attachment_status`)",
                 "key `idx_wf_attachment_instance_field` (`process_instance_id`, `field_name`, `attachment_status`)",
+                "constraint `fk_wf_attachment_draft` foreign key (`draft_id`)",
+                "references `wf_process_draft` (`draft_id`)",
                 "constraint `chk_wf_attachment_status`",
                 "constraint `chk_wf_attachment_sha256`",
                 "constraint `chk_wf_attachment_state_relation`",
@@ -47,7 +50,11 @@ class WorkflowAttachmentContractTest
                 "not null default 0 comment '物理清理连续失败并已调度重试的次数'",
                 "`cleanup_next_retry_time` datetime(3)",
                 "`cleanup_last_error_code` varchar(64)",
+                "`attachment_status` in ('temp', 'draft', 'bound', 'expired', 'deleted')",
+                "`attachment_status` = 'draft'",
+                "`draft_id` is not null",
                 "`attachment_status` = 'bound'",
+                "`draft_id` is null",
                 "`process_instance_id` is not null",
                 "`node_key` is not null",
                 "`storage_deleted_time` is null")
@@ -97,11 +104,14 @@ class WorkflowAttachmentContractTest
                 "wf_attachment_bound_missing_process_instance",
                 "wf_attachment_bound_task_mismatch",
                 "wf_attachment_bound_node_mismatch",
+                "wf_attachment_draft_relation_mismatch",
                 "wf_attachment_quota_guard_invalid_owner",
                 "wf_attachment_quota_guard_global_missing",
                 "wf_attachment_invalid_cleanup_retry",
                 "wf_attachment_cleanup_retry_columns",
                 "wf_attachment_cleanup_retry_check_clause",
+                "previous_audit.to_revision = current_audit.to_revision - 1",
+                "current_audit.from_status <> previous_audit.to_status",
                 "where owner_user_id < 0",
                 "uk_wf_attachment_storage_key",
                 "chk_wf_attachment_state_relation",
@@ -139,6 +149,13 @@ class WorkflowAttachmentContractTest
                 + "selectUndeletedTotalBytes")).isTrue();
         assertThat(configuration.hasStatement(namespace + "selectById")).isTrue();
         assertThat(configuration.hasStatement(namespace + "selectByIdsForUpdate")).isTrue();
+        assertThat(configuration.hasStatement(namespace
+                + "selectByDraftIdForUpdate")).isTrue();
+        assertThat(configuration.hasStatement(namespace + "bindDraftAttachment")).isTrue();
+        assertThat(configuration.hasStatement(namespace
+                + "markDraftAttachmentDeleted")).isTrue();
+        assertThat(configuration.hasStatement(namespace
+                + "bindDraftStartAttachment")).isTrue();
         assertThat(configuration.hasStatement(namespace
                 + "countBoundByProcessInstanceIds")).isTrue();
         assertThat(configuration.hasStatement(namespace + "bindStartAttachment")).isTrue();
@@ -200,7 +217,7 @@ class WorkflowAttachmentContractTest
                 namespace + "selectTemporaryQuotaUsage").getBoundSql(
                         Map.of("ownerUserId", 7L));
         assertThat(normalizeSql(quotaUsage.getSql())).contains(
-                "attachment_status = 'temp'",
+                "attachment_status in ('temp', 'draft')",
                 "attachment_status in ('expired', 'deleted')",
                 "storage_deleted_time is null");
 
@@ -209,7 +226,7 @@ class WorkflowAttachmentContractTest
         assertThat(normalizeSql(globalUsage.getSql())).contains(
                 "from wf_attachment",
                 "storage_deleted_time is null",
-                "attachment_status in ('temp', 'bound', 'expired', 'deleted')");
+                "attachment_status in ('temp', 'draft', 'bound', 'expired', 'deleted')");
 
         BoundSql statusCount = configuration.getMappedStatement(
                 namespace + "countByStatus").getBoundSql(Map.of("status", "TEMP"));
@@ -260,6 +277,55 @@ class WorkflowAttachmentContractTest
                 namespace + "selectByIdsForUpdate").getBoundSql(
                         Map.of("attachmentIds", List.of()));
         assertThat(normalizeSql(empty.getSql())).contains("where 1 = 0", "for update");
+
+        BoundSql draftRows = configuration.getMappedStatement(
+                namespace + "selectByDraftIdForUpdate").getBoundSql(Map.of(
+                        "draftId", "53f4cb2f-7d69-4c77-bf93-2b38f266c618",
+                        "ownerUserId", 7L));
+        assertThat(normalizeSql(draftRows.getSql())).contains(
+                "where draft_id = ? and owner_user_id = ?",
+                "attachment_status = 'draft'",
+                "order by attachment_id",
+                "for update");
+
+        BoundSql bindDraft = configuration.getMappedStatement(
+                namespace + "bindDraftAttachment").getBoundSql(Map.of(
+                        "attachmentId", "d9428888-122b-4c6f-8f0c-9c3e1dbd3210",
+                        "ownerUserId", 7L,
+                        "fieldName", "files",
+                        "draftId", "53f4cb2f-7d69-4c77-bf93-2b38f266c618"));
+        assertThat(normalizeSql(bindDraft.getSql())).contains(
+                "attachment_status = 'draft'",
+                "draft_id = ?",
+                "attachment_status = 'temp'",
+                "expire_time > current_timestamp(3)",
+                "draft_id is null");
+
+        BoundSql deleteDraft = configuration.getMappedStatement(
+                namespace + "markDraftAttachmentDeleted").getBoundSql(Map.of(
+                        "attachmentId", "d9428888-122b-4c6f-8f0c-9c3e1dbd3210",
+                        "ownerUserId", 7L,
+                        "draftId", "53f4cb2f-7d69-4c77-bf93-2b38f266c618"));
+        assertThat(normalizeSql(deleteDraft.getSql())).contains(
+                "attachment_status = 'deleted'",
+                "draft_id = null",
+                "draft_id = ?",
+                "attachment_status = 'draft'");
+
+        BoundSql submitDraft = configuration.getMappedStatement(
+                namespace + "bindDraftStartAttachment").getBoundSql(Map.of(
+                        "attachmentId", "d9428888-122b-4c6f-8f0c-9c3e1dbd3210",
+                        "ownerUserId", 7L,
+                        "fieldName", "files",
+                        "draftId", "53f4cb2f-7d69-4c77-bf93-2b38f266c618",
+                        "processInstanceId", "instance-1",
+                        "nodeKey", "start"));
+        assertThat(normalizeSql(submitDraft.getSql())).contains(
+                "attachment_status = 'bound'",
+                "draft_id = null",
+                "process_instance_id = ?",
+                "draft_id = ?",
+                "attachment_status = 'draft'");
 
         BoundSql boundCount = configuration.getMappedStatement(
                 namespace + "countBoundByProcessInstanceIds").getBoundSql(

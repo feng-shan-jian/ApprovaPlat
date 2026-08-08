@@ -15,6 +15,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +52,8 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
+import com.ruoyi.flowable.domain.WfProcessDraft;
+import com.ruoyi.flowable.domain.WorkflowProcessDraftStatus;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
@@ -117,16 +120,17 @@ class WorkflowProcessStartServiceTest
         attachmentService = mock(WorkflowAttachmentService.class);
         definitionLockMapper = mock(WorkflowProcessDefinitionLockMapper.class);
         participantRuleRuntimeService = mock(WorkflowParticipantRuleRuntimeService.class);
-        when(identityResolver.resolveCurrentIdentity())
-                .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3")));
-        when(attachmentService.prepareStartVariables(anyString(), anyMap(), anyMap()))
-                .thenAnswer(invocation -> invocation.getArgument(1));
+        // 普通发起夹具必须提供真实可执行 BPMN；空流程用于证明无发起时会签字段时不产生保留变量。
         BpmnModel bpmnModel = new BpmnModel();
         org.flowable.bpmn.model.Process process = new org.flowable.bpmn.model.Process();
         process.setId(PROCESS_KEY);
         process.setExecutable(true);
         bpmnModel.addProcess(process);
         when(repositoryService.getBpmnModel(anyString())).thenReturn(bpmnModel);
+        when(identityResolver.resolveCurrentIdentity())
+                .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3")));
+        when(attachmentService.prepareStartVariables(anyString(), anyMap(), anyMap()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
         service = service(engineOperations(identityService, identityResolver));
     }
 
@@ -311,6 +315,63 @@ class WorkflowProcessStartServiceTest
                 anyString(), anyString(), anyString(), anyMap());
         verify(participantRuleRuntimeService, never()).recordStartAllowed(
                 any(), any(), anyString(), anyString());
+    }
+
+    /**
+     * 验证草稿提交按当前身份重新校验发起范围，拒绝时不产生引擎、附件或成功审计副作用。
+     *
+     * @return void，失权草稿仍创建实例或记录成功审计时测试失败
+     */
+    @Test
+    void rejectsDraftStartScopeBeforeEngineWrite()
+    {
+        ProcessDefinition definition = stubDraftDefinition();
+        when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
+                .thenThrow(new ServiceException("当前用户不在流程发起范围内",
+                        HttpStatus.FORBIDDEN).setSubCode("PROCESS_START_SCOPE_DENIED"));
+
+        assertThatThrownBy(() -> service.startDraft(activeDraft(), "expense-draft-42",
+                Map.of("reason", "采购设备", "amount", 1280), Map.of()))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getSubCode())
+                                .isEqualTo("PROCESS_START_SCOPE_DENIED"));
+
+        verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+        verify(attachmentService, never()).bindDraftStartAttachments(
+                anyString(), anyString(), anyString(), anyString(), anyMap());
+        verify(participantRuleRuntimeService, never()).recordStartAllowed(
+                any(), any(), anyString(), anyString());
+    }
+
+    /**
+     * 验证草稿提交成功审计严格发生在发起范围校验、实例创建和附件绑定之后。
+     *
+     * @return void，草稿成功审计提前或缺失时测试失败
+     */
+    @Test
+    void auditsDraftStartOnlyAfterInstanceAndAttachmentBindingSucceed()
+    {
+        ProcessDefinition definition = stubDraftDefinition();
+        WfDeployParticipantRule rule = new WfDeployParticipantRule();
+        when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
+                .thenReturn(rule);
+        ProcessInstance startedInstance = processInstance("instance-draft-42");
+        when(runtimeService.startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-draft-42"), anyMap()))
+                .thenReturn(startedInstance);
+
+        service.startDraft(activeDraft(), "expense-draft-42",
+                Map.of("reason", "采购设备", "amount", 1280), Map.of());
+
+        InOrder lifecycle = inOrder(participantRuleRuntimeService, runtimeService,
+                attachmentService);
+        lifecycle.verify(participantRuleRuntimeService).assertCanStart(any(), eq(definition));
+        lifecycle.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-draft-42"), anyMap());
+        lifecycle.verify(attachmentService).bindDraftStartAttachments(
+                "7", "draft-42", "instance-draft-42", "start", Map.of());
+        lifecycle.verify(participantRuleRuntimeService).recordStartAllowed(
+                rule, definition, "instance-draft-42", "7");
     }
 
     /**
@@ -761,6 +822,40 @@ class WorkflowProcessStartServiceTest
         ProcessDefinition definition = stubSelectedDefinition();
         stubActiveQuery(definition);
         return definition;
+    }
+
+    /**
+     * 配置草稿提交所需的固定定义、最新版锁、部署快照和附件安全投影。
+     *
+     * @return ProcessDefinition，定义查询和 active 复核共用的有效定义替身
+     */
+    private ProcessDefinition stubDraftDefinition()
+    {
+        ProcessDefinition definition = stubSelectedAndActiveDefinition();
+        when(definition.getVersion()).thenReturn(3);
+        when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(PROCESS_KEY))
+                .thenReturn(definitionLockRow(DEFINITION_ID, DEPLOYMENT_ID, 1));
+        stubStartForm();
+        when(attachmentService.prepareDraftStartVariables(
+                eq("7"), eq("draft-42"), anyMap(), anyMap()))
+                .thenAnswer(invocation -> invocation.getArgument(2));
+        return definition;
+    }
+
+    /**
+     * 创建与当前部署表单快照完全一致的本人活动草稿。
+     *
+     * @return WfProcessDraft，可进入正式提交链的持久化草稿快照
+     */
+    private WfProcessDraft activeDraft()
+    {
+        LocalDateTime now = LocalDateTime.of(2026, 8, 9, 10, 0);
+        return new WfProcessDraft("draft-42", 7L, DEFINITION_ID, PROCESS_KEY, 3,
+                DEPLOYMENT_ID, "报销流程", "TEMPLATE", 8L, "key_8", "start",
+                "报销申请", "发起申请", now, START_FORM,
+                WorkflowProcessDraftChecksum.sha256(START_FORM), "[]", "{}", "{}",
+                "expense-draft-42", WorkflowProcessDraftStatus.ACTIVE, 1L,
+                null, null, null, now, now);
     }
 
     /**

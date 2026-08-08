@@ -46,7 +46,7 @@ CREATE TEMPORARY TABLE tmp_workflow_menu_seed
     PRIMARY KEY (seed_key)
 ) ENGINE = InnoDB;
 
--- 两个目录、十九个菜单页和六十五个真实按钮权限，共八十六条目标记录。
+-- 两个目录、二十个菜单页和六十九个真实按钮权限，共九十一条目标记录。
 INSERT INTO tmp_workflow_menu_seed
     (seed_key, parent_key, menu_name, order_num, path, component, route_name,
      menu_type, perms, icon, remark)
@@ -98,19 +98,22 @@ VALUES
     ('workflow:process:startList', 'office', '新建流程', 1, 'create',
      'workflow/work/index', 'WorkflowCreate', 'C', 'workflow:process:startList',
      'guide', '当前用户可发起流程菜单'),
-    ('workflow:process:ownList', 'office', '我的流程', 2, 'own',
+    ('workflow:process:draftList', 'office', '申请草稿', 2, 'draft',
+     'workflow/work/draft', 'WorkflowDraft', 'C', 'workflow:process:draftList',
+     'edit', '当前用户申请草稿菜单'),
+    ('workflow:process:ownList', 'office', '我的流程', 3, 'own',
      'workflow/work/own', 'WorkflowOwn', 'C', 'workflow:process:ownList',
      'cascader', '当前用户发起流程菜单'),
-    ('workflow:process:todoList', 'office', '待办任务', 3, 'todo',
+    ('workflow:process:todoList', 'office', '待办任务', 4, 'todo',
      'workflow/work/todo', 'WorkflowTodo', 'C', 'workflow:process:todoList',
      'time-range', '当前用户待办任务菜单'),
-    ('workflow:process:claimList', 'office', '待签任务', 4, 'claim',
+    ('workflow:process:claimList', 'office', '待签任务', 5, 'claim',
      'workflow/work/claim', 'WorkflowClaim', 'C', 'workflow:process:claimList',
      'checkbox', '当前用户待签任务菜单'),
-    ('workflow:process:finishedList', 'office', '已办任务', 5, 'finished',
+    ('workflow:process:finishedList', 'office', '已办任务', 6, 'finished',
      'workflow/work/finished', 'WorkflowFinished', 'C', 'workflow:process:finishedList',
      'checkbox', '当前用户已办任务菜单'),
-    ('workflow:process:copyList', 'office', '抄送我的', 6, 'copy',
+    ('workflow:process:copyList', 'office', '抄送我的', 7, 'copy',
      'workflow/work/copy', 'WorkflowCopy', 'C', 'workflow:process:copyList',
      'message', '当前用户抄送记录菜单'),
 
@@ -235,6 +238,14 @@ VALUES
      'F', 'workflow:attachment:query', '#', '按附件或流程对象授权查询和下载附件'),
     ('workflow:attachment:remove', 'workflow:process:startList', '附件删除', 5, '', NULL, '',
      'F', 'workflow:attachment:remove', '#', '仅所有者删除未绑定临时附件'),
+    ('workflow:process:draftQuery', 'workflow:process:draftList', '草稿详情', 1, '', NULL, '',
+     'F', 'workflow:process:draftQuery', '#', '仅草稿所有者读取申请草稿和冻结表单快照'),
+    ('workflow:process:draftSave', 'workflow:process:draftList', '保存草稿', 2, '', NULL, '',
+     'F', 'workflow:process:draftSave', '#', '按乐观锁创建或更新当前用户申请草稿'),
+    ('workflow:process:draftRemove', 'workflow:process:draftList', '删除草稿', 3, '', NULL, '',
+     'F', 'workflow:process:draftRemove', '#', '仅草稿所有者删除未提交申请草稿'),
+    ('workflow:process:draftSubmit', 'workflow:process:draftList', '提交草稿', 4, '', NULL, '',
+     'F', 'workflow:process:draftSubmit', '#', '重新校验定义、身份、表单和附件后正式发起流程'),
     ('workflow:process:query', 'workflow:process:ownList', '流程详情', 1, '', NULL, '',
      'F', 'workflow:process:query', '#', '叠加对象授权的流程详情、变量和流程图'),
     ('workflow:process:remove', 'workflow:process:ownList', '流程删除', 2, '', NULL, '',
@@ -464,7 +475,10 @@ INSERT INTO tmp_workflow_role_menu_seed (role_key, seed_key)
 SELECT 'workflow_starter', seed_key
 FROM tmp_workflow_menu_seed
 WHERE seed_key IN (
-    'office', 'workflow:process:startList', 'workflow:process:ownList',
+    'office', 'workflow:process:startList', 'workflow:process:draftList',
+    'workflow:process:draftQuery', 'workflow:process:draftSave',
+    'workflow:process:draftRemove', 'workflow:process:draftSubmit',
+    'workflow:process:ownList',
     'workflow:process:copyList', 'workflow:process:start',
     'workflow:process:startExport', 'workflow:process:query',
     'workflow:process:cancel',

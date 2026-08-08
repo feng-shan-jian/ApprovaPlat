@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfProcessDraftMapper">
+    <resultMap id="DraftResult" type="com.ruoyi.flowable.domain.WfProcessDraft">
+        <constructor>
+            <arg column="draft_id" javaType="java.lang.String"/>
+            <arg column="owner_user_id" javaType="java.lang.Long"/>
+            <arg column="process_definition_id" javaType="java.lang.String"/>
+            <arg column="process_definition_key" javaType="java.lang.String"/>
+            <arg column="process_definition_version" javaType="_int"/>
+            <arg column="deployment_id" javaType="java.lang.String"/>
+            <arg column="process_name" javaType="java.lang.String"/>
+            <arg column="source_type" javaType="java.lang.String"/>
+            <arg column="form_id" javaType="java.lang.Long"/>
+            <arg column="form_key" javaType="java.lang.String"/>
+            <arg column="start_node_key" javaType="java.lang.String"/>
+            <arg column="form_name" javaType="java.lang.String"/>
+            <arg column="node_name" javaType="java.lang.String"/>
+            <arg column="snapshot_create_time" javaType="java.time.LocalDateTime"/>
+            <arg column="form_snapshot" javaType="java.lang.String"/>
+            <arg column="form_snapshot_sha256" javaType="java.lang.String"/>
+            <arg column="start_multi_instance_assignments" javaType="java.lang.String"/>
+            <arg column="form_values" javaType="java.lang.String"/>
+            <arg column="multi_instance_user_ids" javaType="java.lang.String"/>
+            <arg column="business_key" javaType="java.lang.String"/>
+            <arg column="draft_status" javaType="com.ruoyi.flowable.domain.WorkflowProcessDraftStatus"/>
+            <arg column="revision_no" javaType="_long"/>
+            <arg column="submitted_process_instance_id" javaType="java.lang.String"/>
+            <arg column="submitted_time" javaType="java.time.LocalDateTime"/>
+            <arg column="deleted_time" javaType="java.time.LocalDateTime"/>
+            <arg column="create_time" javaType="java.time.LocalDateTime"/>
+            <arg column="update_time" javaType="java.time.LocalDateTime"/>
+        </constructor>
+    </resultMap>
+    <sql id="columns">draft_id, owner_user_id, process_definition_id,
+        process_definition_key, process_definition_version, deployment_id, process_name,
+        source_type, form_id, form_key, start_node_key, form_name, node_name,
+        snapshot_create_time, form_snapshot, form_snapshot_sha256,
+        start_multi_instance_assignments, form_values, multi_instance_user_ids,
+        business_key, draft_status, revision_no, submitted_process_instance_id,
+        submitted_time, deleted_time, create_time, update_time</sql>
+    <insert id="insert">
+        insert into wf_process_draft (<include refid="columns"/>) values
+        (#{draftId}, #{ownerUserId}, #{processDefinitionId}, #{processDefinitionKey},
+         #{processDefinitionVersion}, #{deploymentId}, #{processName}, #{sourceType},
+         #{formId}, #{formKey}, #{startNodeKey}, #{formName}, #{nodeName},
+         #{snapshotCreateTime}, #{formSnapshot}, #{formSnapshotSha256},
+         #{startMultiInstanceAssignments}, #{formValues}, #{multiInstanceUserIds},
+         #{businessKey}, #{draftStatus}, #{revisionNo}, #{submittedProcessInstanceId},
+         #{submittedTime}, #{deletedTime}, current_timestamp(3), current_timestamp(3))
+    </insert>
+    <select id="selectOwnedById" resultMap="DraftResult">
+        select <include refid="columns"/> from wf_process_draft
+        where draft_id=#{draftId} and owner_user_id=#{ownerUserId}
+    </select>
+    <select id="selectOwnedByIdForUpdate" resultMap="DraftResult" timeout="10">
+        select <include refid="columns"/> from wf_process_draft
+        where draft_id=#{draftId} and owner_user_id=#{ownerUserId} for update
+    </select>
+    <sql id="activeFilter">
+        owner_user_id=#{ownerUserId} and draft_status='ACTIVE'
+        <if test="processName != null">and process_name like concat('%', #{processName}, '%') escape '\\'</if>
+        <if test="updatedAfter != null">and update_time &gt;= #{updatedAfter}</if>
+        <if test="updatedBefore != null">and update_time &lt;= #{updatedBefore}</if>
+    </sql>
+    <select id="countOwnedActive" resultType="long">
+        select count(*) from wf_process_draft where <include refid="activeFilter"/>
+    </select>
+    <select id="selectOwnedActivePage" resultMap="DraftResult">
+        select <include refid="columns"/> from wf_process_draft
+        where <include refid="activeFilter"/>
+        order by update_time desc, draft_id desc limit #{offset}, #{limit}
+    </select>
+    <update id="updateActive">
+        update wf_process_draft set form_values=#{formValues},
+            multi_instance_user_ids=#{multiInstanceUserIds}, business_key=#{businessKey},
+            revision_no=revision_no+1, update_time=current_timestamp(3)
+        where draft_id=#{draftId} and owner_user_id=#{ownerUserId}
+          and draft_status='ACTIVE' and revision_no=#{expectedRevision}
+    </update>
+    <update id="markDeleted">
+        update wf_process_draft set draft_status='DELETED', revision_no=revision_no+1,
+            deleted_time=current_timestamp(3), update_time=current_timestamp(3)
+        where draft_id=#{draftId} and owner_user_id=#{ownerUserId}
+          and draft_status='ACTIVE' and revision_no=#{expectedRevision}
+    </update>
+    <update id="markSubmitted">
+        update wf_process_draft set draft_status='SUBMITTED', revision_no=revision_no+1,
+            submitted_process_instance_id=#{processInstanceId}, submitted_time=current_timestamp(3),
+            form_values=#{formValues}, multi_instance_user_ids=#{multiInstanceUserIds},
+            business_key=#{businessKey}, update_time=current_timestamp(3)
+        where draft_id=#{draftId} and owner_user_id=#{ownerUserId}
+          and draft_status='ACTIVE' and revision_no=#{expectedRevision}
+    </update>
+</mapper>

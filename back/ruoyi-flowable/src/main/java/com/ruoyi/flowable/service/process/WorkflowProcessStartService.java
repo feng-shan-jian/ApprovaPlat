@@ -17,6 +17,7 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
+import com.ruoyi.flowable.domain.WfProcessDraft;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
@@ -163,6 +164,132 @@ public class WorkflowProcessStartService
             return startInCurrentTransaction(actor, selectedDefinition.getId(),
                     normalizedBusinessKey, variables, Map.of(), normalizedProcessKey);
         });
+    }
+
+    /**
+     * 在草稿服务已经锁定草稿行的同一写事务中重新校验全部正式规则并创建唯一实例。
+     *
+     * @param draft WfProcessDraft，包含定义版本和不可变部署表单快照的本人活动草稿
+     * @param businessKey String，本次正式提交采用的业务主键
+     * @param variables Map&lt;String,Object&gt;，本次正式提交采用的完整字段值
+     * @return WorkflowProcessInstanceSnapshot，真实 Flowable 实例快照
+     */
+    public WorkflowProcessInstanceSnapshot startDraft(WfProcessDraft draft,
+            String businessKey, Map<String, Object> variables,
+            Map<String, java.util.List<Long>> multiInstanceUserIds)
+    {
+        if (draft == null)
+        {
+            throw new ServiceException("流程申请草稿不能为空", HttpStatus.BAD_REQUEST);
+        }
+        String normalizedBusinessKey = optionalText(businessKey,
+                "流程业务主键长度不能超过" + MAX_ENGINE_ID_LENGTH, MAX_ENGINE_ID_LENGTH);
+        return engineOperations.writeAsCurrentUser(actor -> startDraftInCurrentTransaction(
+                actor, draft, normalizedBusinessKey, variables, multiInstanceUserIds));
+    }
+
+    /**
+     * 执行草稿提交专用的最新版锁、部署快照复核、正式校验、引擎写入和附件迁移。
+     *
+     * @param actor WorkflowCurrentIdentity，同一事务内重新核验的当前身份
+     * @param draft WfProcessDraft，已经由草稿服务锁定的持久化草稿
+     * @param businessKey String，规范化业务主键
+     * @param variables Map&lt;String,Object&gt;，完整提交字段值
+     * @return WorkflowProcessInstanceSnapshot，新实例稳定快照
+     */
+    private WorkflowProcessInstanceSnapshot startDraftInCurrentTransaction(
+            WorkflowCurrentIdentity actor, WfProcessDraft draft, String businessKey,
+            Map<String, Object> variables,
+            Map<String, java.util.List<Long>> multiInstanceUserIds)
+    {
+        if (!String.valueOf(draft.ownerUserId()).equals(actor.userId()))
+        {
+            throw new ServiceException("当前用户无权提交该流程申请草稿", HttpStatus.FORBIDDEN);
+        }
+        ProcessDefinition definition = requireExistingDefinition(draft.processDefinitionId());
+        if (!draft.processDefinitionKey().equals(definition.getKey())
+                || draft.processDefinitionVersion() != definition.getVersion()
+                || !draft.deploymentId().equals(definition.getDeploymentId()))
+        {
+            throw new ServiceException("草稿绑定的流程定义版本已失效", HttpStatus.CONFLICT)
+                    .setSubCode("DRAFT_DEFINITION_VERSION_EXPIRED");
+        }
+        if (StringUtils.hasText(definition.getTenantId()))
+        {
+            throw new ServiceException("草稿绑定的流程租户关系异常", HttpStatus.ERROR);
+        }
+        // 持有默认租户 key 的最新定义范围锁，防止复核后并发部署新版本。
+        try
+        {
+            assertLatestDefaultTenantDefinition(draft.processDefinitionKey(),
+                    draft.processDefinitionId(), draft.deploymentId());
+        }
+        catch (ServiceException exception)
+        {
+            if (Integer.valueOf(HttpStatus.CONFLICT).equals(exception.getCode()))
+            {
+                exception.setSubCode(exception.getMessage().contains("挂起")
+                        ? "DRAFT_DEFINITION_UNAVAILABLE"
+                        : "DRAFT_DEFINITION_VERSION_EXPIRED");
+            }
+            throw exception;
+        }
+        WorkflowProcessFormView startForm = processQueryService.getProcessForm(
+                new WorkflowProcessFormQueryDto(draft.processDefinitionId(),
+                        draft.deploymentId(), null));
+        assertSnapshotRelation(startForm, draft.processDefinitionId(), draft.deploymentId());
+        String currentChecksum = WorkflowProcessDraftChecksum.sha256(startForm);
+        if (!draft.sourceType().equals(startForm.sourceType())
+                || !java.util.Objects.equals(draft.formId(), startForm.formId())
+                || !draft.formKey().equals(startForm.formKey())
+                || !draft.startNodeKey().equals(startForm.nodeKey())
+                || !draft.formSnapshotSha256().equals(currentChecksum)
+                || !draft.formSnapshot().equals(startForm.content()))
+        {
+            throw new ServiceException("草稿绑定的部署表单快照已失效", HttpStatus.CONFLICT)
+                    .setSubCode("DRAFT_SNAPSHOT_MISMATCH");
+        }
+        WorkflowValidatedStartVariables validated = variableValidator.validateForStart(
+                startForm.content(), variables);
+        // 提交正文可以包含刚上传的 TEMP 附件；先对账为 DRAFT，再生成引擎安全投影。
+        attachmentService.reconcileDraftAttachments(actor.userId(), draft.draftId(),
+                validated.attachmentIdsByField());
+        Map<String, Object> clientVariables = attachmentService.prepareDraftStartVariables(
+                actor.userId(), draft.draftId(), validated.variables(),
+                validated.attachmentIdsByField());
+        ProcessDefinition activeDefinition = requireActiveDefinition(draft.processDefinitionId());
+        if (!draft.deploymentId().equals(activeDefinition.getDeploymentId()))
+        {
+            throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT);
+        }
+        // 草稿提交必须重新按当前组织身份校验发起范围，不能沿用创建或保存草稿时的历史权限。
+        WfDeployParticipantRule startScopeRule = participantRuleRuntimeService == null
+                ? null : participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
+        LinkedHashMap<String, Object> engineVariables = new LinkedHashMap<>(clientVariables);
+        // 草稿成员字段不进入普通变量白名单；提交时按部署模型和最新审批资格生成保留变量。
+        engineVariables.putAll(WorkflowStartMultiInstanceContract.prepareVariables(
+                repositoryService.getBpmnModel(draft.processDefinitionId()),
+                definition.getKey(), multiInstanceUserIds, userSelectionValidator));
+        engineVariables.put(INITIATOR_VARIABLE, actor.userId());
+        engineVariables.put(PROCESS_STATUS_VARIABLE, RUNNING_STATUS);
+        engineVariables.put(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
+                WorkflowFormSubmissionSnapshotCodec.encodeStart(draft.deploymentId(),
+                        startForm.sourceType(), startForm.formId(), startForm.formKey(),
+                        startForm.nodeKey(), clientVariables));
+        ProcessInstance instance = runtimeService.startProcessInstanceById(
+                draft.processDefinitionId(), businessKey,
+                Collections.unmodifiableMap(engineVariables));
+        WorkflowProcessInstanceSnapshot snapshot = toSnapshot(instance,
+                draft.processDefinitionId(), businessKey);
+        attachmentService.bindDraftStartAttachments(actor.userId(), draft.draftId(),
+                snapshot.id(), startForm.nodeKey(), validated.attachmentIdsByField());
+        if (participantRuleRuntimeService != null && startScopeRule != null)
+        {
+            // 仅在实例和附件均成功后记录允许审计；后续异常由同一事务整体回滚。
+            participantRuleRuntimeService.recordStartAllowed(startScopeRule,
+                    activeDefinition, snapshot.id(), actor.userId());
+        }
+        return snapshot;
     }
 
     /**

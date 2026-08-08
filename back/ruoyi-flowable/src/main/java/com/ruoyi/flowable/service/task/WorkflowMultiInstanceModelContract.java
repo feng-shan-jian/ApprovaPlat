@@ -33,7 +33,6 @@ public final class WorkflowMultiInstanceModelContract
     /** 固定成员多实例集合表达式的严格语法，成员只能是以逗号连接的规范正整数用户主键。 */
     private static final Pattern FIXED_COLLECTION_EXPRESSION_PATTERN = Pattern.compile(
             "\\$\\{multiInstanceHandler\\.getFixedUserIds\\(execution, '([1-9][0-9]*(?:,[1-9][0-9]*)*)'\\)\\}");
-
     /** 会签固定完成条件。 */
     public static final String ALL_COMPLETION_CONDITION =
             "${nrOfCompletedInstances == nrOfInstances}";

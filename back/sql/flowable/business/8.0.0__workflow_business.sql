@@ -1164,6 +1164,136 @@ CREATE TABLE IF NOT EXISTS `wf_designer_preference`
   COLLATE = utf8mb4_unicode_ci
   COMMENT = 'BPMN 设计器用户偏好';
 
+CREATE TABLE IF NOT EXISTS `wf_process_draft`
+(
+    `draft_id`                     CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '服务端生成的申请草稿 UUID',
+    `owner_user_id`                BIGINT       NOT NULL COMMENT '草稿所属正式用户主键',
+    `process_definition_id`        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '草稿绑定的 Flowable 精确流程定义主键',
+    `process_definition_key`       VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程定义稳定 key 快照',
+    `process_definition_version`   INT          NOT NULL COMMENT '草稿绑定的流程定义版本号',
+    `deployment_id`                VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程定义所属部署主键',
+    `process_name`                 VARCHAR(255) NOT NULL COMMENT '流程名称快照',
+    `source_type`                  VARCHAR(16)  NOT NULL COMMENT '表单快照来源：TEMPLATE 或 EMBEDDED',
+    `form_id`                      BIGINT                DEFAULT NULL COMMENT '模板表单主键；内嵌表单为空',
+    `form_key`                     VARCHAR(128) NOT NULL COMMENT '开始节点部署表单键快照',
+    `start_node_key`               VARCHAR(255) NOT NULL COMMENT '开始节点 key 快照',
+    `form_name`                    VARCHAR(64)  NOT NULL COMMENT '开始表单名称快照',
+    `node_name`                    VARCHAR(255) NOT NULL DEFAULT '' COMMENT '开始节点名称快照',
+    `snapshot_create_time`         DATETIME(3)  NOT NULL COMMENT '原部署表单快照创建时间',
+    `form_snapshot`                LONGTEXT     NOT NULL COMMENT '创建草稿时从部署表单复制的不可变 JSON 快照',
+    `form_snapshot_sha256`         CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '原始表单快照 SHA-256',
+    `start_multi_instance_assignments` LONGTEXT NOT NULL COMMENT '部署 BPMN 发起会签或或签成员字段不可变 JSON 快照',
+    `form_values`                  LONGTEXT     NOT NULL COMMENT '已通过草稿类型校验的字段值 JSON',
+    `multi_instance_user_ids`      LONGTEXT     NOT NULL COMMENT '按活动保存的发起会签或或签成员 JSON',
+    `business_key`                 VARCHAR(255)          DEFAULT NULL COMMENT '用户填写的可选业务主键',
+    `draft_status`                 VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE' COMMENT '草稿状态：ACTIVE、SUBMITTED、DELETED',
+    `revision_no`                  BIGINT       NOT NULL DEFAULT 1 COMMENT '从 1 开始的乐观锁版本',
+    `submitted_process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '成功提交后唯一 Flowable 流程实例主键',
+    `submitted_time`               DATETIME(3)           DEFAULT NULL COMMENT '成功提交时间',
+    `deleted_time`                 DATETIME(3)           DEFAULT NULL COMMENT '用户删除时间',
+    `create_time`                  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '草稿创建时间',
+    `update_time`                  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '草稿最后更新时间',
+    PRIMARY KEY (`draft_id`),
+    UNIQUE KEY `uk_wf_process_draft_instance` (`submitted_process_instance_id`),
+    KEY `idx_wf_process_draft_owner_status_time`
+        (`owner_user_id`, `draft_status`, `update_time`, `draft_id`),
+    KEY `idx_wf_process_draft_owner_process_time`
+        (`owner_user_id`, `process_definition_key`, `update_time`, `draft_id`),
+    KEY `idx_wf_process_draft_definition_version`
+        (`process_definition_key`, `process_definition_version`, `draft_status`),
+    CONSTRAINT `chk_wf_process_draft_id` CHECK
+        (`draft_id` REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
+    CONSTRAINT `chk_wf_process_draft_owner` CHECK (`owner_user_id` > 0),
+    CONSTRAINT `chk_wf_process_draft_definition` CHECK
+        (`process_definition_version` > 0
+         AND CHAR_LENGTH(`process_definition_id`) BETWEEN 1 AND 64
+         AND CHAR_LENGTH(`process_definition_key`) BETWEEN 1 AND 255
+         AND CHAR_LENGTH(`deployment_id`) BETWEEN 1 AND 64),
+    CONSTRAINT `chk_wf_process_draft_source` CHECK
+    (
+        (`source_type` = 'TEMPLATE' AND `form_id` IS NOT NULL AND `form_id` > 0)
+        OR (`source_type` = 'EMBEDDED' AND `form_id` IS NULL)
+    ),
+    CONSTRAINT `chk_wf_process_draft_snapshot_json` CHECK (JSON_VALID(`form_snapshot`)),
+    CONSTRAINT `chk_wf_process_draft_assignment_json` CHECK
+        (JSON_VALID(`start_multi_instance_assignments`)
+         AND JSON_TYPE(`start_multi_instance_assignments`) = 'ARRAY'),
+    CONSTRAINT `chk_wf_process_draft_values_json` CHECK (JSON_VALID(`form_values`)),
+    CONSTRAINT `chk_wf_process_draft_members_json` CHECK
+        (JSON_VALID(`multi_instance_user_ids`)
+         AND JSON_TYPE(`multi_instance_user_ids`) = 'OBJECT'),
+    CONSTRAINT `chk_wf_process_draft_snapshot_hash` CHECK
+        (`form_snapshot_sha256` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_process_draft_revision` CHECK (`revision_no` > 0),
+    CONSTRAINT `chk_wf_process_draft_status` CHECK
+        (`draft_status` IN ('ACTIVE', 'SUBMITTED', 'DELETED')),
+    CONSTRAINT `chk_wf_process_draft_lifecycle` CHECK
+    (
+        (`draft_status` = 'ACTIVE'
+            AND `submitted_process_instance_id` IS NULL AND `submitted_time` IS NULL
+            AND `deleted_time` IS NULL)
+        OR (`draft_status` = 'SUBMITTED'
+            AND `submitted_process_instance_id` IS NOT NULL AND `submitted_time` IS NOT NULL
+            AND `deleted_time` IS NULL)
+        OR (`draft_status` = 'DELETED'
+            AND `submitted_process_instance_id` IS NULL AND `submitted_time` IS NULL
+            AND `deleted_time` IS NOT NULL)
+    ),
+    CONSTRAINT `chk_wf_process_draft_times` CHECK
+        (`snapshot_create_time` <= `create_time`
+         AND `update_time` >= `create_time`
+         AND (`submitted_time` IS NULL OR `submitted_time` >= `create_time`)
+         AND (`deleted_time` IS NULL OR `deleted_time` >= `create_time`))
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '当前用户申请草稿及不可变部署表单快照';
+
+CREATE TABLE IF NOT EXISTS `wf_process_draft_audit`
+(
+    `audit_id`           BIGINT       NOT NULL AUTO_INCREMENT COMMENT '申请草稿审计主键',
+    `draft_id`           CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '申请草稿 UUID',
+    `owner_user_id`      BIGINT       NOT NULL COMMENT '草稿所属正式用户主键快照',
+    `action_type`        VARCHAR(16)  NOT NULL COMMENT '审计动作：CREATED、SAVED、DELETED、SUBMITTED',
+    `from_status`        VARCHAR(16)           DEFAULT NULL COMMENT '动作前草稿状态；CREATED 为空',
+    `to_status`          VARCHAR(16)  NOT NULL COMMENT '动作后草稿状态',
+    `from_revision`      BIGINT                DEFAULT NULL COMMENT '动作前乐观锁版本；CREATED 为空',
+    `to_revision`        BIGINT       NOT NULL COMMENT '动作后乐观锁版本',
+    `process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT 'SUBMITTED 动作创建的唯一流程实例主键',
+    `detail_json`        LONGTEXT              DEFAULT NULL COMMENT '不含表单字段正文的稳定审计详情 JSON',
+    `create_time`        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '审计写入时间',
+    PRIMARY KEY (`audit_id`),
+    UNIQUE KEY `uk_wf_process_draft_audit_revision` (`draft_id`, `to_revision`),
+    KEY `idx_wf_process_draft_audit_time` (`draft_id`, `create_time`, `audit_id`),
+    CONSTRAINT `fk_wf_process_draft_audit_draft` FOREIGN KEY (`draft_id`)
+        REFERENCES `wf_process_draft` (`draft_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `chk_wf_process_draft_audit_owner` CHECK (`owner_user_id` > 0),
+    CONSTRAINT `chk_wf_process_draft_audit_action` CHECK
+        (`action_type` IN ('CREATED', 'SAVED', 'DELETED', 'SUBMITTED')),
+    CONSTRAINT `chk_wf_process_draft_audit_status` CHECK
+        ((`from_status` IS NULL OR `from_status` IN ('ACTIVE', 'SUBMITTED', 'DELETED'))
+         AND `to_status` IN ('ACTIVE', 'SUBMITTED', 'DELETED')),
+    CONSTRAINT `chk_wf_process_draft_audit_detail` CHECK
+        (`detail_json` IS NULL OR JSON_VALID(`detail_json`)),
+    CONSTRAINT `chk_wf_process_draft_audit_transition` CHECK
+    (
+        (`action_type` = 'CREATED' AND `from_status` IS NULL AND `from_revision` IS NULL
+            AND `to_status` = 'ACTIVE' AND `to_revision` = 1 AND `process_instance_id` IS NULL)
+        OR (`action_type` = 'SAVED' AND `from_status` = 'ACTIVE' AND `to_status` = 'ACTIVE'
+            AND `from_revision` IS NOT NULL AND `to_revision` = `from_revision` + 1
+            AND `process_instance_id` IS NULL)
+        OR (`action_type` = 'SUBMITTED' AND `from_status` = 'ACTIVE' AND `to_status` = 'SUBMITTED'
+            AND `from_revision` IS NOT NULL AND `to_revision` = `from_revision` + 1
+            AND `process_instance_id` IS NOT NULL)
+        OR (`action_type` = 'DELETED' AND `from_status` = 'ACTIVE' AND `to_status` = 'DELETED'
+            AND `from_revision` IS NOT NULL AND `to_revision` = `from_revision` + 1
+            AND `process_instance_id` IS NULL)
+    )
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '申请草稿不可变状态迁移审计';
+
 CREATE TABLE IF NOT EXISTS `wf_attachment_quota_guard`
 (
     `owner_user_id` BIGINT      NOT NULL COMMENT '配额互斥主键：0 为全局容量，其余为正式用户主键',
@@ -1189,8 +1319,9 @@ CREATE TABLE IF NOT EXISTS `wf_attachment`
     `content_type`        VARCHAR(128) NOT NULL COMMENT '服务端探测的 MIME 类型',
     `file_size`           BIGINT       NOT NULL COMMENT '服务端实际写入的文件字节数',
     `sha256`              CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '文件内容 SHA-256 小写十六进制摘要',
-    `attachment_status`   VARCHAR(16)  NOT NULL DEFAULT 'TEMP' COMMENT '附件状态：TEMP、BOUND、EXPIRED、DELETED',
+    `attachment_status`   VARCHAR(16)  NOT NULL DEFAULT 'TEMP' COMMENT '附件状态：TEMP、DRAFT、BOUND、EXPIRED、DELETED',
     `expire_time`         DATETIME(3)  NOT NULL COMMENT '临时附件失效时间；绑定后仅作上传审计',
+    `draft_id`            CHAR(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT 'DRAFT 状态绑定的申请草稿 UUID',
     `process_instance_id` VARCHAR(64)           DEFAULT NULL COMMENT '绑定的 Flowable 流程实例主键',
     `task_id`             VARCHAR(64)           DEFAULT NULL COMMENT '可选的 Flowable 任务主键',
     `node_key`            VARCHAR(255)          DEFAULT NULL COMMENT '提交附件的 BPMN 节点 key',
@@ -1206,19 +1337,33 @@ CREATE TABLE IF NOT EXISTS `wf_attachment`
     KEY `idx_wf_attachment_owner_status_expire` (`owner_user_id`, `attachment_status`, `expire_time`),
     KEY `idx_wf_attachment_status_expire` (`attachment_status`, `expire_time`),
     KEY `idx_wf_attachment_cleanup_due` (`attachment_status`, `cleanup_next_retry_time`, `expire_time`),
+    KEY `idx_wf_attachment_draft_field` (`draft_id`, `field_name`, `attachment_status`),
     KEY `idx_wf_attachment_instance_field` (`process_instance_id`, `field_name`, `attachment_status`),
-    CONSTRAINT `chk_wf_attachment_status` CHECK (`attachment_status` IN ('TEMP', 'BOUND', 'EXPIRED', 'DELETED')),
+    CONSTRAINT `fk_wf_attachment_draft` FOREIGN KEY (`draft_id`)
+        REFERENCES `wf_process_draft` (`draft_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `chk_wf_attachment_status` CHECK
+        (`attachment_status` IN ('TEMP', 'DRAFT', 'BOUND', 'EXPIRED', 'DELETED')),
     CONSTRAINT `chk_wf_attachment_file_size` CHECK (`file_size` > 0),
     CONSTRAINT `chk_wf_attachment_sha256` CHECK (`sha256` REGEXP '^[0-9a-f]{64}$'),
     CONSTRAINT `chk_wf_attachment_state_relation` CHECK
     (
         (`attachment_status` = 'BOUND'
+            AND `draft_id` IS NULL
             AND `process_instance_id` IS NOT NULL
             AND `node_key` IS NOT NULL
             AND `bound_time` IS NOT NULL
             AND `storage_deleted_time` IS NULL)
         OR
+        (`attachment_status` = 'DRAFT'
+            AND `draft_id` IS NOT NULL
+            AND `process_instance_id` IS NULL
+            AND `task_id` IS NULL
+            AND `node_key` IS NULL
+            AND `bound_time` IS NULL
+            AND `storage_deleted_time` IS NULL)
+        OR
         (`attachment_status` IN ('TEMP', 'EXPIRED', 'DELETED')
+            AND `draft_id` IS NULL
             AND `process_instance_id` IS NULL
             AND `task_id` IS NULL
             AND `node_key` IS NULL

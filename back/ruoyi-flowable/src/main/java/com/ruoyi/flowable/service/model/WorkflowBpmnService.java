@@ -1019,7 +1019,7 @@ public class WorkflowBpmnService
         if (WorkflowMultiInstanceModelContract.usesDynamicHandler(loop))
         {
             // 仅动态来源需要前驱任务在完成事务中写入 nextUserIds；固定成员已固化在 BPMN，
-            // 允许开始节点、网关或任意合法同步路径直接进入，不能错误复用动态初始化拓扑门禁。
+            // 发起成员由启动事务注入；固定成员已固化在 BPMN，二者都不能复用动态初始化拓扑门禁。
             validateControlledMultiInstanceTopology(process, (UserTask) activity);
         }
     }

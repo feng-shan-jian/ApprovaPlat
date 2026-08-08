@@ -113,11 +113,20 @@ function updateBusyState(fieldName, busy) {
 }
 
 /**
- * 执行 Element Plus 表单校验并阻止附件上传中提交。
+ * 确认所有附件上传或删除请求均已完成。
+ * @returns {Promise<boolean>} 附件状态稳定时返回 true，否则抛出稳定错误。
+ */
+async function ensureAttachmentsIdle() {
+  if (busyFields.size) throw new Error('附件仍在上传中')
+  return true
+}
+
+/**
+ * 执行正式提交所需的必填校验和附件状态门禁。
  * @returns {Promise<boolean>} 所有即时门禁通过时为 true。
  */
 async function validate() {
-  if (busyFields.size) throw new Error('附件仍在上传中')
+  await ensureAttachmentsIdle()
   if (!formRef.value) return true
   return formRef.value.validate()
 }
@@ -154,7 +163,7 @@ watch(() => props.modelValue, rebuildModel, { deep: true })
 watch(formModel, emitModelChange, { deep: true })
 onMounted(rebuildModel)
 
-defineExpose({ validate, getValues, reset })
+defineExpose({ ensureAttachmentsIdle, validate, getValues, reset })
 </script>
 
 <style scoped>

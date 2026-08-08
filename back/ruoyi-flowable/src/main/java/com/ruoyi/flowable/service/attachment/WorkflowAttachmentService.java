@@ -435,6 +435,156 @@ public class WorkflowAttachmentService
     }
 
     /**
+     * 在草稿写事务中对账当前引用，将新增 TEMP 附件绑定草稿并把移除项转入清理终态。
+     *
+     * @param actorUserId String，事务内重新核验的草稿所有者 ID
+     * @param draftId String，服务端生成的草稿 UUID
+     * @param attachmentIdsByField Map&lt;String,List&lt;String&gt;&gt;，表单字段到附件 UUID 的引用
+     * @return void，任一归属、字段、状态或文件完整性异常时整体回滚
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void reconcileDraftAttachments(String actorUserId, String draftId,
+            Map<String, List<String>> attachmentIdsByField)
+    {
+        Long ownerUserId = requireNumericUserId(actorUserId);
+        String normalizedDraftId = requireAttachmentId(draftId);
+        Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
+        Set<String> requestedIds = new LinkedHashSet<>(flattenUniqueIds(references));
+
+        // 草稿行已经由上层锁定；先锁当前关联，再锁请求引用，保证附件状态对账具有确定顺序。
+        List<WfAttachment> currentRows = attachmentMapper.selectByDraftIdForUpdate(
+                normalizedDraftId, ownerUserId);
+        List<WfAttachment> requestedRows = requestedIds.isEmpty() ? List.of()
+                : attachmentMapper.selectByIdsForUpdate(requestedIds);
+        Map<String, WfAttachment> requestedById = indexLockedRows(requestedRows);
+        LocalDateTime now = LocalDateTime.now();
+        for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
+        {
+            for (String attachmentId : fieldEntry.getValue())
+            {
+                WfAttachment attachment = requestedById.get(attachmentId);
+                assertDraftAttachmentReference(attachment, ownerUserId, normalizedDraftId,
+                        fieldEntry.getKey(), now);
+                verifyStoredAttachment(attachment);
+                if (attachment.status() == WorkflowAttachmentStatus.TEMP
+                        && attachmentMapper.bindDraftAttachment(attachmentId, ownerUserId,
+                                fieldEntry.getKey(), normalizedDraftId) != 1)
+                {
+                    throw stateConflict();
+                }
+            }
+        }
+        for (WfAttachment current : currentRows)
+        {
+            if (!requestedIds.contains(current.attachmentId())
+                    && attachmentMapper.markDraftAttachmentDeleted(current.attachmentId(),
+                            ownerUserId, normalizedDraftId) != 1)
+            {
+                throw stateConflict();
+            }
+        }
+    }
+
+    /**
+     * 锁定同一草稿附件并生成可安全写入 Flowable 的附件元数据投影。
+     *
+     * @param actorUserId String，事务内重新核验的草稿所有者 ID
+     * @param draftId String，草稿 UUID
+     * @param normalizedVariables Map&lt;String,Object&gt;，正式 schema 校验后的字段值
+     * @param attachmentIdsByField Map&lt;String,List&lt;String&gt;&gt;，上传字段引用
+     * @return Map&lt;String,Object&gt;，附件 UUID 已替换为安全元数据数组的引擎变量
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> prepareDraftStartVariables(String actorUserId, String draftId,
+            Map<String, Object> normalizedVariables,
+            Map<String, List<String>> attachmentIdsByField)
+    {
+        Long ownerUserId = requireNumericUserId(actorUserId);
+        String normalizedDraftId = requireAttachmentId(draftId);
+        Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
+        if (references.isEmpty())
+        {
+            return normalizedVariables;
+        }
+        List<WfAttachment> rows = attachmentMapper.selectByIdsForUpdate(
+                flattenUniqueIds(references));
+        Map<String, WfAttachment> byId = indexLockedRows(rows);
+        LinkedHashMap<String, Object> projected = new LinkedHashMap<>(normalizedVariables);
+        for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
+        {
+            ArrayNode safeAttachments = objectMapper.createArrayNode();
+            for (String attachmentId : fieldEntry.getValue())
+            {
+                WfAttachment attachment = byId.get(attachmentId);
+                assertPersistedDraftAttachment(attachment, ownerUserId, normalizedDraftId,
+                        fieldEntry.getKey());
+                verifyStoredAttachment(attachment);
+                safeAttachments.add(toSafeVariableProjection(attachment));
+            }
+            projected.put(fieldEntry.getKey(), safeAttachments);
+        }
+        return Collections.unmodifiableMap(projected);
+    }
+
+    /**
+     * 在同一发起事务中把草稿附件迁移到刚创建的真实流程实例。
+     *
+     * @param actorUserId String，事务内重新核验的草稿所有者 ID
+     * @param draftId String，草稿 UUID
+     * @param processInstanceId String，RuntimeService 创建的实例主键
+     * @param nodeKey String，开始节点 key
+     * @param attachmentIdsByField Map&lt;String,List&lt;String&gt;&gt;，上传字段引用
+     * @return void，任一条件更新失败时抛错并回滚实例、草稿和全部附件
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void bindDraftStartAttachments(String actorUserId, String draftId,
+            String processInstanceId, String nodeKey,
+            Map<String, List<String>> attachmentIdsByField)
+    {
+        Long ownerUserId = requireNumericUserId(actorUserId);
+        String normalizedDraftId = requireAttachmentId(draftId);
+        String normalizedInstanceId = requireEngineId(processInstanceId);
+        String normalizedNodeKey = requireNodeKey(nodeKey);
+        Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
+        for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
+        {
+            for (String attachmentId : fieldEntry.getValue())
+            {
+                if (attachmentMapper.bindDraftStartAttachment(attachmentId, ownerUserId,
+                        fieldEntry.getKey(), normalizedDraftId, normalizedInstanceId,
+                        normalizedNodeKey) != 1)
+                {
+                    throw stateConflict();
+                }
+            }
+        }
+    }
+
+    /**
+     * 将草稿当前全部附件转为 DELETED，物理文件继续由现有可重试清理器处理。
+     *
+     * @param actorUserId String，事务内重新核验的草稿所有者 ID
+     * @param draftId String，草稿 UUID
+     * @return void，附件状态竞争时回滚草稿删除
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteDraftAttachments(String actorUserId, String draftId)
+    {
+        Long ownerUserId = requireNumericUserId(actorUserId);
+        String normalizedDraftId = requireAttachmentId(draftId);
+        List<WfAttachment> rows = attachmentMapper.selectByDraftIdForUpdate(
+                normalizedDraftId, ownerUserId);
+        for (WfAttachment attachment : rows)
+        {
+            if (attachmentMapper.markDraftAttachmentDeleted(attachment.attachmentId(),
+                    ownerUserId, normalizedDraftId) != 1)
+            {
+                throw stateConflict();
+            }
+        }
+    }
+
+    /**
      * 在同一任务完成事务中绑定新 TEMP 附件，并跳过已验证的同实例同字段 BOUND 引用。
      *
      * @param actorUserId String，WorkflowEngineOperations 事务内核验的当前办理人 ID
@@ -674,6 +824,18 @@ public class WorkflowAttachmentService
             }
             return attachment;
         }
+        if (attachment.status() == WorkflowAttachmentStatus.DRAFT)
+        {
+            if (!requireNumericUserId(actor.userId()).equals(attachment.ownerUserId())
+                    || !StringUtils.hasText(attachment.draftId())
+                    || attachment.processInstanceId() != null || attachment.taskId() != null
+                    || attachment.nodeKey() != null || attachment.boundTime() != null
+                    || attachment.storageDeletedTime() != null)
+            {
+                throw forbidden();
+            }
+            return attachment;
+        }
         if (attachment.status() == WorkflowAttachmentStatus.BOUND
                 && StringUtils.hasText(attachment.processInstanceId()))
         {
@@ -762,6 +924,73 @@ public class WorkflowAttachmentService
         if (!fieldName.equals(attachment.fieldName()))
         {
             throw new ServiceException("工作流附件所属表单字段不匹配", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    /**
+     * 校验草稿保存引用可以是仍有效 TEMP，或已经属于同一草稿的 DRAFT 附件。
+     *
+     * @param attachment WfAttachment，锁定附件或 null
+     * @param ownerUserId Long，草稿所有者
+     * @param draftId String，当前草稿 UUID
+     * @param fieldName String，开始表单字段名
+     * @param now LocalDateTime，本次对账统一时间
+     * @return void，越权、字段或状态不一致时抛出稳定业务异常
+     */
+    private void assertDraftAttachmentReference(WfAttachment attachment, Long ownerUserId,
+            String draftId, String fieldName, LocalDateTime now)
+    {
+        if (attachment == null)
+        {
+            throw notFound();
+        }
+        if (!ownerUserId.equals(attachment.ownerUserId()))
+        {
+            throw forbidden();
+        }
+        if (!fieldName.equals(attachment.fieldName()))
+        {
+            throw new ServiceException("工作流附件所属表单字段不匹配", HttpStatus.BAD_REQUEST);
+        }
+        if (attachment.status() == WorkflowAttachmentStatus.TEMP)
+        {
+            assertBindableAttachment(attachment, ownerUserId, fieldName, now);
+            return;
+        }
+        assertPersistedDraftAttachment(attachment, ownerUserId, draftId, fieldName);
+    }
+
+    /**
+     * 校验附件已经完整绑定当前草稿且尚未产生流程对象副作用。
+     *
+     * @param attachment WfAttachment，锁定附件或 null
+     * @param ownerUserId Long，草稿所有者
+     * @param draftId String，当前草稿 UUID
+     * @param fieldName String，开始表单字段名
+     * @return void，关联或状态异常时抛出稳定业务异常
+     */
+    private void assertPersistedDraftAttachment(WfAttachment attachment, Long ownerUserId,
+            String draftId, String fieldName)
+    {
+        if (attachment == null)
+        {
+            throw notFound();
+        }
+        if (!ownerUserId.equals(attachment.ownerUserId()))
+        {
+            throw forbidden();
+        }
+        if (!fieldName.equals(attachment.fieldName()))
+        {
+            throw new ServiceException("工作流附件所属表单字段不匹配", HttpStatus.BAD_REQUEST);
+        }
+        if (attachment.status() != WorkflowAttachmentStatus.DRAFT
+                || !draftId.equals(attachment.draftId())
+                || attachment.expireTime() == null || attachment.processInstanceId() != null
+                || attachment.taskId() != null || attachment.nodeKey() != null
+                || attachment.boundTime() != null || attachment.storageDeletedTime() != null)
+        {
+            throw stateConflict();
         }
     }
 

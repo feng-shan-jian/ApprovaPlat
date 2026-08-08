@@ -99,6 +99,6 @@ test('条件字段目录来自正式模板或内嵌表单稳定字段键', () =>
  * @returns {void} 互斥标志设置晚于首个 await 或缺少 finally 复位时断言失败。
  */
 test('条件流程发起入口在异步校验前阻止重复提交', () => {
-  assert.match(processStartSource, /async function submitProcess\(\) \{[\s\S]*?submitting\.value\) return[\s\S]*?submitting\.value = true[\s\S]*?await formRendererRef\.value\.validate/)
-  assert.match(processStartSource, /try \{[\s\S]*?await startProcess\([\s\S]*?finally \{[\s\S]*?submitting\.value = false/)
+  assert.match(processStartSource, /async function submitDraft\(\) \{[\s\S]*?writing\.value[\s\S]*?actionType\.value = 'submit'[\s\S]*?await formRendererRef\.value\.validate/)
+  assert.match(processStartSource, /async function submitDraft\(\) \{[\s\S]*?await submitProcessDraft\([\s\S]*?finally \{[\s\S]*?actionType\.value = ''/)
 })

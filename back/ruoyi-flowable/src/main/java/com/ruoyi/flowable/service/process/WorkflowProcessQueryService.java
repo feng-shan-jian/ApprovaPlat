@@ -436,6 +436,7 @@ public class WorkflowProcessQueryService
                 requireSame(deploymentId, instance.deploymentId(), "流程实例与部署关系不一致");
             }
             WfDeployForm snapshot = requireStartFormSnapshot(definition, deploymentId);
+            // 只有发起场景投影部署 BPMN 中的专用成员字段，实例详情不接受再次选人。
             List<WorkflowStartMultiInstanceAssignmentView> startAssignments = instanceId == null
                     ? WorkflowStartMultiInstanceContract.describe(
                             repositoryService.getBpmnModel(definitionId), definition.getKey())

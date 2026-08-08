@@ -207,6 +207,20 @@ export const dynamicRoutes = [
     ]
   },
   {
+    path: '/workflow/process-draft',
+    component: Layout,
+    hidden: true,
+    permissions: ['workflow:process:draftQuery'],
+    children: [
+      {
+        path: ':draftId',
+        component: () => import('@/views/workflow/work/start'),
+        name: 'WorkflowProcessDraftEdit',
+        meta: { title: '继续编辑申请', activeMenu: '/office/draft', noCache: true }
+      }
+    ]
+  },
+  {
     path: '/workflow/process-detail',
     component: Layout,
     hidden: true,

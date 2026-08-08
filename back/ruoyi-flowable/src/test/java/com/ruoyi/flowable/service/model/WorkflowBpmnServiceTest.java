@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 class WorkflowBpmnServiceTest
 {
@@ -585,7 +586,7 @@ class WorkflowBpmnServiceTest
      * @return 无返回值；设计器生成的发起来源模型被原始表达式门禁误拒绝时测试失败。
      */
     @Test
-    void allowsStartMultiInstanceWithoutDynamicInitializer()
+    void allowsStartMultiInstanceForSaveAndDeployment()
     {
         String startBpmn = controlledMultiInstanceBpmn()
                 .replace("${multiInstanceHandler.getUserIds(execution)}",
@@ -595,11 +596,27 @@ class WorkflowBpmnServiceTest
                 .replace(ordinaryInitializerTaskXml(), "")
                 .replace("<sequenceFlow id=\"flow2\" sourceRef=\"prepare\" targetRef=\"approve\"/>", "");
 
-        assertThat(service.validate(startBpmn.getBytes(StandardCharsets.UTF_8)).formReferences())
-                .hasSize(2);
+        assertThat(service.validateForSave(startBpmn.getBytes(StandardCharsets.UTF_8))).isNotNull();
+        assertThat(service.validateCompiledDeployment(startBpmn.getBytes(StandardCharsets.UTF_8)))
+                .isNotNull();
     }
 
-/**
+    /**
+     * 验证发起成员 handler 仅允许契约完整等值，近似方法名不能借受控集合白名单执行。
+     *
+     * @return 无返回值；篡改后的发起成员方法表达式被错误放行时测试失败
+     */
+    @Test
+    void rejectsTamperedStartMultiInstanceHandler()
+    {
+        String tamperedBpmn = controlledMultiInstanceBpmn().replace(
+                "${multiInstanceHandler.getUserIds(execution)}",
+                "${multiInstanceHandler.getStartUserIdsUnsafe(execution)}");
+
+        assertBadRequest(tamperedBpmn.getBytes(StandardCharsets.UTF_8), "表达式");
+    }
+
+    /**
      * 验证固定业务监听 Bean 可携带唯一注册表键和 JSON 配置，同时系统审计监听器仍完整保留。
      * @return 无返回值；受控执行或任务监听器被误拒绝时测试失败
      */

@@ -42,7 +42,7 @@ class WorkflowMenuSqlContractTest
                 "-- 目录按 path、页面和按钮按 perms 写入");
         Set<String> seedKeys = extractSeedKeys(menuSeed);
 
-        assertThat(seedKeys).hasSize(86).contains(
+        assertThat(seedKeys).hasSize(91).contains(
                 "workflow", "office",
                 "workflow:category:list", "workflow:category:export",
                 "workflow:model:designer", "workflow:model:save",
@@ -68,7 +68,10 @@ class WorkflowMenuSqlContractTest
                 "workflow:sla:audit", "workflow:sla:notification",
                 "workflow:deploy:state",
                 "workflow:process:manageList", "workflow:process:manageExport",
-                "workflow:process:start", "workflow:process:query",
+                "workflow:process:start", "workflow:process:draftList",
+                "workflow:process:draftQuery", "workflow:process:draftSave",
+                "workflow:process:draftRemove", "workflow:process:draftSubmit",
+                "workflow:process:query",
                 "workflow:process:approval", "workflow:process:claim",
                 "workflow:process:state", "workflow:process:terminate",
                 "workflow:attachment:upload", "workflow:attachment:query",
@@ -78,6 +81,11 @@ class WorkflowMenuSqlContractTest
                         "where not exists",
                         "workflow:model:import",
                         "workflow:deploy:status",
+                        "'workflow:process:draftlist', 'office', '申请草稿'",
+                        "'workflow:process:draftquery', 'workflow:process:draftlist'",
+                        "'workflow:process:draftsave', 'workflow:process:draftlist'",
+                        "'workflow:process:draftremove', 'workflow:process:draftlist'",
+                        "'workflow:process:draftsubmit', 'workflow:process:draftlist'",
                         "'workflow_admin', '流程管理员'",
                         "'workflow_designer', '流程设计者'",
                         "'workflow_starter', '流程发起人'",
@@ -100,6 +108,15 @@ class WorkflowMenuSqlContractTest
                 "-- 流程设计者仅管理分类");
         assertThat(adminRoleMapping).contains(
                 "SELECT 'workflow_admin', seed_key FROM tmp_workflow_menu_seed");
+        String starterRoleMapping = extractSection(sql,
+                "-- 发起人只发起",
+                "-- 审批人可认领");
+        assertThat(starterRoleMapping).contains(
+                "'workflow:process:draftList'",
+                "'workflow:process:draftQuery'",
+                "'workflow:process:draftSave'",
+                "'workflow:process:draftRemove'",
+                "'workflow:process:draftSubmit'");
     }
 
     /**
@@ -124,9 +141,10 @@ class WorkflowMenuSqlContractTest
                 "workflow_roles",
                 "workflow_admin_menu_scope",
                 "workflow_admin_only_instance_management",
-                "when count(*) = 86",
-                "workflow_page) = 19",
-                "workflow_button) = 65",
+                "workflow_draft_role_scope",
+                "when count(*) = 91",
+                "workflow_page) = 20",
+                "workflow_button) = 69",
                 "'workflow:process:managelist'",
                 "'workflow:process:manageexport'",
                 "admin_management_permissions",

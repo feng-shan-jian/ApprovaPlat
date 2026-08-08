@@ -78,6 +78,54 @@ class WorkflowStartVariableValidatorTest
     }
 
     /**
+     * 验证草稿可以缺少正式必填字段，但已提供字段仍执行与正式提交一致的类型门禁。
+     *
+     * @return void，草稿必填放宽或类型安全边界漂移时测试失败
+     */
+    @Test
+    void draftSkipsRequiredFieldsButKeepsTypeValidation()
+    {
+        WorkflowValidatedStartVariables partial = validator.validateForDraft(
+                START_FORM, Map.of("reason", "采购"));
+
+        assertThat(partial.variables()).containsExactlyEntriesOf(Map.of("reason", "采购"));
+        assertBadRequest(() -> validator.validateForDraft(START_FORM,
+                Map.of("amount", "不是数字")), "流程变量类型不合法: amount");
+        assertBadRequest(() -> validator.validateForStart(START_FORM,
+                Map.of("reason", "采购")), "开始表单必填字段不能为空: amount");
+    }
+
+    /**
+     * 验证草稿和正式提交复用节点字段权限，隐藏及只读字段均不能被客户端写入。
+     *
+     * @return void，草稿若绕过 workflowWritable 白名单则测试失败
+     */
+    @Test
+    void draftKeepsHiddenAndReadonlyFieldPermissions()
+    {
+        String permissionSnapshot = """
+                {"fields":[
+                  {"__config__":{"layout":"colFormItem","tag":"el-input",
+                    "workflowHidden":true,"workflowReadable":false,"workflowWritable":false},
+                   "__vModel__":"hiddenValue"},
+                  {"__config__":{"layout":"colFormItem","tag":"el-input",
+                    "workflowHidden":false,"workflowReadable":true,"workflowWritable":false},
+                   "__vModel__":"readonlyValue"},
+                  {"__config__":{"layout":"colFormItem","tag":"el-input",
+                    "workflowWritable":true},"__vModel__":"editableValue"}
+                ]}
+                """;
+
+        assertThat(validator.validateForDraft(permissionSnapshot,
+                Map.of("editableValue", "draft")).variables())
+                .containsExactlyEntriesOf(Map.of("editableValue", "draft"));
+        assertBadRequest(() -> validator.validateForDraft(permissionSnapshot,
+                Map.of("hiddenValue", "forged")), "流程变量字段为只读字段: hiddenValue");
+        assertBadRequest(() -> validator.validateForDraft(permissionSnapshot,
+                Map.of("readonlyValue", "forged")), "流程变量字段为只读字段: readonlyValue");
+    }
+
+    /**
      * 验证合法字段、类型和集合可通过，并返回不受原请求后续修改影响的深度副本。
      *
      * @return void，校验或不可变性不符合契约时测试失败
