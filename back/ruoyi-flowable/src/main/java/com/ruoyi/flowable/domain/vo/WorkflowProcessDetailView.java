@@ -33,6 +33,7 @@ import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
  * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单及局部值，允许为空
  * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行节点的表单快照和值
  * @param historyProcNodeList List&lt;WorkflowProcessActivityView&gt;，开始、用户任务和结束时间线
+ * @param processRelations List&lt;WorkflowProcessRelationView&gt;，同一 CallActivity 根执行树的父子实例关系
  * @param bpmnXml String，经过安全校验的 BPMN XML
  * @param flowViewer WorkflowProcessViewerView，Viewer 活动状态集合
  */
@@ -61,6 +62,7 @@ public record WorkflowProcessDetailView(
         WorkflowProcessFormSnapshotView currentTaskForm,
         List<WorkflowProcessFormSnapshotView> processFormList,
         List<WorkflowProcessActivityView> historyProcNodeList,
+        List<WorkflowProcessRelationView> processRelations,
         String bpmnXml,
         WorkflowProcessViewerView flowViewer)
 {
@@ -91,6 +93,7 @@ public record WorkflowProcessDetailView(
      * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单，允许为空
      * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行表单快照
      * @param historyProcNodeList List&lt;WorkflowProcessActivityView&gt;，流程历史时间线
+     * @param processRelations List&lt;WorkflowProcessRelationView&gt;，父子流程实例关系
      * @param bpmnXml String，经过安全校验的 BPMN XML
      * @param flowViewer WorkflowProcessViewerView，Viewer 活动状态
      * @return 无返回值，构造后领域结果不可变
@@ -103,6 +106,8 @@ public record WorkflowProcessDetailView(
                 controlledLoopStates, "受控循环状态不能为空"));
         historyProcNodeList = List.copyOf(Objects.requireNonNull(
                 historyProcNodeList, "流程时间线不能为空"));
+        processRelations = List.copyOf(Objects.requireNonNull(
+                processRelations, "流程实例关系不能为空"));
         Objects.requireNonNull(flowViewer, "Viewer 状态不能为空");
         if (!Set.of("DISABLED", "OPTIONAL", "REQUIRED_ALL", "REQUIRED_ANY")
                 .contains(nextUserAssignmentPolicy))
@@ -166,7 +171,7 @@ public record WorkflowProcessDetailView(
                 category, deploymentId, businessKey, startUserId, startUserName,
                 startTime, endTime, durationMillis, processStatus, currentTask,
                 "DISABLED", false, null, null, false, List.of(), currentTaskForm,
-                processFormList, historyProcNodeList,
+                processFormList, historyProcNodeList, List.of(),
                 bpmnXml, flowViewer);
     }
 

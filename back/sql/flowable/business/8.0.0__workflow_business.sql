@@ -70,6 +70,40 @@ CREATE TABLE IF NOT EXISTS `wf_deploy_form`
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '流程部署节点表单不可变快照';
 
+CREATE TABLE IF NOT EXISTS `wf_deploy_condition_rule`
+(
+    `rule_id`           BIGINT       NOT NULL AUTO_INCREMENT COMMENT '条件分支部署快照主键',
+    `deploy_id`         VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_key`       VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN 可执行流程标识',
+    `gateway_id`        VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '排他或包容网关标识',
+    `gateway_type`      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'EXCLUSIVE 排他、INCLUSIVE 包容',
+    `gateway_token`     CHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '固定路由表达式使用的网关摘要令牌',
+    `flow_id`           VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '网关出线标识',
+    `flow_name`         VARCHAR(100) NOT NULL COMMENT '部署时分支名称快照',
+    `flow_token`        CHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '固定路由表达式使用的分支摘要令牌',
+    `default_flow`      TINYINT(1)   NOT NULL COMMENT '是否为唯一默认分支：0 否、1 是',
+    `rule_json`         JSON         NOT NULL COMMENT '规范化受控规则快照',
+    `cel_config_json`   JSON                  DEFAULT NULL COMMENT '非默认分支的规范化 CEL 布尔组合配置',
+    `snapshot_checksum` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '完整快照 SHA-256',
+    `create_by`         VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '部署操作人正式用户主键',
+    `create_time`       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '快照创建时间',
+    PRIMARY KEY (`rule_id`),
+    UNIQUE KEY `uk_wf_deploy_condition_flow` (`deploy_id`, `process_key`, `gateway_id`, `flow_id`),
+    UNIQUE KEY `uk_wf_deploy_condition_token` (`deploy_id`, `gateway_token`, `flow_token`),
+    KEY `idx_wf_deploy_condition_runtime` (`deploy_id`, `process_key`, `gateway_token`),
+    CONSTRAINT `chk_wf_deploy_condition_type` CHECK (`gateway_type` IN ('EXCLUSIVE', 'INCLUSIVE')),
+    CONSTRAINT `chk_wf_deploy_condition_tokens` CHECK
+        (`gateway_token` REGEXP '^[0-9a-f]{24}$' AND `flow_token` REGEXP '^[0-9a-f]{24}$'),
+    CONSTRAINT `chk_wf_deploy_condition_default` CHECK
+        (`default_flow` IN (0, 1) AND ((`default_flow` = 1 AND `cel_config_json` IS NULL)
+            OR (`default_flow` = 0 AND `cel_config_json` IS NOT NULL))),
+    CONSTRAINT `chk_wf_deploy_condition_checksum` CHECK
+        (`snapshot_checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '排他和包容网关条件分支不可变部署快照';
+
 CREATE TABLE IF NOT EXISTS `wf_deploy_controlled_loop`
 (
     `loop_id`            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '受控循环部署快照主键',
@@ -102,6 +136,116 @@ CREATE TABLE IF NOT EXISTS `wf_deploy_controlled_loop`
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '受控重复审批循环不可变部署快照';
+
+CREATE TABLE IF NOT EXISTS `wf_deploy_participant_rule`
+(
+    `rule_id`          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '参与者规则部署快照主键',
+    `deploy_id`        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_key`      VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BPMN 可执行流程标识',
+    `activity_id`      VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT 'UserTask 节点标识；发起范围为空串',
+    `activity_name`    VARCHAR(255) NOT NULL DEFAULT '' COMMENT '部署时节点名称快照',
+    `rule_scope`       VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'START 或 TASK',
+    `assignment_mode`  VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'START、ASSIGNEE 或 CANDIDATE',
+    `rule_type`        VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '受控发起范围或办理人规则类型',
+    `target_ids`       VARCHAR(2048) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '规范用户、角色或部门目标列表',
+    `form_field`       VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT 'FORM_USER 使用的正式表单变量',
+    `no_match_policy`  VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '无匹配策略，当前仅允许 FAIL',
+    `rule_version`     INT          NOT NULL COMMENT '冻结的参与者规则协议版本',
+    `checksum`         CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范规则内容 SHA-256',
+    `create_by`        VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '部署操作人正式用户主键',
+    `create_time`      DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '快照创建时间',
+    PRIMARY KEY (`rule_id`),
+    UNIQUE KEY `uk_wf_deploy_participant_rule_node`
+        (`deploy_id`, `process_key`, `rule_scope`, `activity_id`),
+    KEY `idx_wf_deploy_participant_rule_checksum` (`checksum`),
+    CONSTRAINT `chk_wf_deploy_participant_rule_scope` CHECK (`rule_scope` IN ('START', 'TASK')),
+    CONSTRAINT `chk_wf_deploy_participant_rule_mode` CHECK
+        (`assignment_mode` IN ('START', 'ASSIGNEE', 'CANDIDATE')),
+    CONSTRAINT `chk_wf_deploy_participant_rule_type` CHECK
+    (
+        `rule_type` IN ('PUBLIC', 'USERS', 'ROLES', 'DEPTS', 'FIXED_USER',
+            'CANDIDATE_USERS', 'CANDIDATE_GROUPS', 'STARTER', 'STARTER_MANAGER',
+            'DEPT_MANAGER', 'STARTER_DEPT_ROLE', 'FORM_USER')
+    ),
+    CONSTRAINT `chk_wf_deploy_participant_rule_relation` CHECK
+    (
+        (`rule_scope` = 'START' AND `assignment_mode` = 'START' AND `activity_id` = ''
+            AND `rule_type` IN ('PUBLIC', 'USERS', 'ROLES', 'DEPTS'))
+        OR (`rule_scope` = 'TASK' AND `assignment_mode` = 'ASSIGNEE'
+            AND CHAR_LENGTH(`activity_id`) BETWEEN 1 AND 255
+            AND `rule_type` IN ('FIXED_USER', 'STARTER', 'STARTER_MANAGER',
+                'DEPT_MANAGER', 'FORM_USER'))
+        OR (`rule_scope` = 'TASK' AND `assignment_mode` = 'CANDIDATE'
+            AND CHAR_LENGTH(`activity_id`) BETWEEN 1 AND 255
+            AND `rule_type` IN ('CANDIDATE_USERS', 'CANDIDATE_GROUPS', 'STARTER_DEPT_ROLE'))
+    ),
+    CONSTRAINT `chk_wf_deploy_participant_rule_targets` CHECK
+    (
+        (`rule_type` IN ('PUBLIC', 'STARTER', 'STARTER_MANAGER', 'FORM_USER')
+            AND `target_ids` = '')
+        OR (`rule_type` IN ('FIXED_USER', 'DEPT_MANAGER', 'STARTER_DEPT_ROLE')
+            AND `target_ids` REGEXP '^[1-9][0-9]{0,18}$')
+        OR (`rule_type` IN ('USERS', 'ROLES', 'DEPTS', 'CANDIDATE_USERS')
+            AND `target_ids` REGEXP '^[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,199}$')
+        OR (`rule_type` = 'CANDIDATE_GROUPS'
+            AND `target_ids` REGEXP '^(ROLE|DEPT)[1-9][0-9]{0,18}(,(ROLE|DEPT)[1-9][0-9]{0,18}){0,199}$')
+    ),
+    CONSTRAINT `chk_wf_deploy_participant_rule_form` CHECK
+    (
+        (`rule_type` = 'FORM_USER' AND `form_field` REGEXP '^[A-Za-z_][A-Za-z0-9_]{0,127}$')
+        OR (`rule_type` <> 'FORM_USER' AND `form_field` IS NULL)
+    ),
+    CONSTRAINT `chk_wf_deploy_participant_rule_policy` CHECK (`no_match_policy` = 'FAIL'),
+    CONSTRAINT `chk_wf_deploy_participant_rule_version` CHECK (`rule_version` = 1),
+    CONSTRAINT `chk_wf_deploy_participant_rule_checksum` CHECK
+        (`checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '流程发起范围和单实例用户任务办理人规则不可变部署快照';
+
+CREATE TABLE IF NOT EXISTS `wf_participant_resolution_audit`
+(
+    `audit_id`              BIGINT       NOT NULL AUTO_INCREMENT COMMENT '参与者规则解析审计主键',
+    `event_type`            VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'START 或 TASK',
+    `deploy_id`             VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键',
+    `process_definition_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 流程定义主键',
+    `process_instance_id`   VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '流程实例主键，发起拒绝时为空',
+    `task_id`               VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '任务主键，发起事件为空',
+    `activity_id`           VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '任务节点标识',
+    `rule_id`               BIGINT       NOT NULL COMMENT '命中的不可变部署规则主键',
+    `initiator_user_id`     VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程发起人主键',
+    `actor_user_id`         VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '执行发起命令的用户主键',
+    `resolved_user_ids`     VARCHAR(2048) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '去重后的解析用户主键',
+    `resolved_group_ids`    VARCHAR(2048) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '' COMMENT '去重后的候选组编码',
+    `result_code`           VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'ALLOWED、RESOLVED、DENIED 或 NO_MATCH',
+    `detail_summary`        VARCHAR(500) NOT NULL DEFAULT '' COMMENT '不含敏感变量值的稳定解析摘要',
+    `create_time`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '解析时间',
+    PRIMARY KEY (`audit_id`),
+    KEY `idx_wf_participant_audit_instance` (`process_instance_id`, `audit_id`),
+    KEY `idx_wf_participant_audit_task` (`task_id`, `audit_id`),
+    KEY `idx_wf_participant_audit_rule_time` (`rule_id`, `create_time`),
+    CONSTRAINT `chk_wf_participant_audit_event` CHECK (`event_type` IN ('START', 'TASK')),
+    CONSTRAINT `chk_wf_participant_audit_result` CHECK
+        (`result_code` IN ('ALLOWED', 'RESOLVED', 'DENIED', 'NO_MATCH')),
+    CONSTRAINT `chk_wf_participant_audit_relation` CHECK
+    (
+        (`event_type` = 'START' AND `task_id` IS NULL AND `activity_id` = ''
+            AND ((`result_code` = 'ALLOWED' AND `process_instance_id` IS NOT NULL)
+                OR (`result_code` = 'DENIED' AND `process_instance_id` IS NULL)))
+        OR (`event_type` = 'TASK' AND `task_id` IS NOT NULL
+            AND `process_instance_id` IS NOT NULL AND CHAR_LENGTH(`activity_id`) BETWEEN 1 AND 255
+            AND `result_code` IN ('RESOLVED', 'NO_MATCH'))
+    ),
+    CONSTRAINT `chk_wf_participant_audit_rule` CHECK (`rule_id` > 0),
+    CONSTRAINT `chk_wf_participant_audit_initiator` CHECK
+        (`initiator_user_id` REGEXP '^[1-9][0-9]{0,18}$'),
+    CONSTRAINT `chk_wf_participant_audit_actor` CHECK
+        (`actor_user_id` IS NULL OR `actor_user_id` REGEXP '^[1-9][0-9]{0,18}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '参与者规则实时解析与拒绝审计';
 
 CREATE TABLE IF NOT EXISTS `wf_controlled_loop_execution`
 (
@@ -502,6 +646,43 @@ CREATE TABLE IF NOT EXISTS `wf_deploy_dmn_snapshot`
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '流程部署冻结 DMN 决策快照';
+
+-- CallActivity 依赖快照：记录作者版本策略、精确定义、变量映射和整树传播契约。
+CREATE TABLE IF NOT EXISTS `wf_deploy_call_activity`
+(
+    `snapshot_id`             BIGINT       NOT NULL AUTO_INCREMENT COMMENT '调用活动部署快照主键',
+    `deploy_id`               VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '父 Flowable 流程部署主键',
+    `process_key`             VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '父流程定义 key',
+    `element_id`              VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'CallActivity 元素标识',
+    `version_policy`          VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'LATEST_ACTIVE 或 FIXED',
+    `target_definition_id`    VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结子流程定义主键',
+    `target_process_key`      VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结子流程 key',
+    `target_process_name`     VARCHAR(255) NOT NULL COMMENT '冻结子流程名称',
+    `target_version`          INT          NOT NULL COMMENT '冻结子流程版本',
+    `target_deployment_id`    VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '冻结子流程部署主键',
+    `inherit_variables`       BOOLEAN      NOT NULL COMMENT '是否继承父流程全部变量',
+    `inherit_business_key`    BOOLEAN      NOT NULL COMMENT '是否继承父流程业务键',
+    `local_scope_for_output`  BOOLEAN      NOT NULL COMMENT '输出是否写入调用 execution 局部作用域',
+    `propagation_policy`      VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '固定 CASCADE_ROOT',
+    `input_mappings_json`     JSON         NOT NULL COMMENT '规范输入变量映射',
+    `output_mappings_json`    JSON         NOT NULL COMMENT '规范输出变量映射',
+    `snapshot_checksum`       CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '完整快照 SHA-256',
+    `create_by`               VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '部署操作人正式用户主键',
+    `create_time`             DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    PRIMARY KEY (`snapshot_id`),
+    UNIQUE KEY `uk_wf_deploy_call_element` (`deploy_id`, `process_key`, `element_id`),
+    KEY `idx_wf_deploy_call_target` (`target_definition_id`),
+    KEY `idx_wf_deploy_call_target_deploy` (`target_deployment_id`),
+    CONSTRAINT `chk_wf_deploy_call_version_policy` CHECK (`version_policy` IN ('LATEST_ACTIVE', 'FIXED')),
+    CONSTRAINT `chk_wf_deploy_call_target_version` CHECK (`target_version` > 0),
+    CONSTRAINT `chk_wf_deploy_call_propagation` CHECK (`propagation_policy` = 'CASCADE_ROOT'),
+    CONSTRAINT `chk_wf_deploy_call_input_json` CHECK (JSON_TYPE(`input_mappings_json`) = 'ARRAY'),
+    CONSTRAINT `chk_wf_deploy_call_output_json` CHECK (JSON_TYPE(`output_mappings_json`) = 'ARRAY'),
+    CONSTRAINT `chk_wf_deploy_call_checksum` CHECK (`snapshot_checksum` REGEXP '^[0-9a-f]{64}$')
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '流程部署调用活动依赖快照';
 
 CREATE TABLE IF NOT EXISTS `wf_connector_endpoint`
 (
@@ -905,19 +1086,32 @@ CREATE TABLE IF NOT EXISTS `wf_copy`
     `user_id`         BIGINT       NOT NULL COMMENT '抄送接收用户主键',
     `originator_id`   BIGINT       NOT NULL COMMENT '流程发起用户主键',
     `originator_name` VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '流程发起用户名称快照',
+    `source_type`     VARCHAR(16)  NOT NULL DEFAULT 'MANUAL' COMMENT '抄送来源：MANUAL、AUTO 或 MANUAL_AUTO',
+    `trigger_type`    VARCHAR(32)  NOT NULL DEFAULT 'MANUAL_COMPLETE' COMMENT '服务端固定的抄送触发类型',
+    `trigger_node_id` VARCHAR(64)           DEFAULT NULL COMMENT '触发抄送的 BPMN 节点主键',
+    `trigger_node_name` VARCHAR(255)        DEFAULT NULL COMMENT '触发抄送的 BPMN 节点名称快照',
+    `read_status`     CHAR(1)      NOT NULL DEFAULT '0' COMMENT '阅读状态：0 未读，1 已读',
+    `read_time`       DATETIME(3)           DEFAULT NULL COMMENT '首次阅读时间',
     `create_by`       VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '创建者账号',
-    `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `create_time`     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `update_by`       VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '更新者账号',
     `update_time`     DATETIME              DEFAULT NULL COMMENT '更新时间',
     `remark`          VARCHAR(255)          DEFAULT NULL COMMENT '备注',
     `del_flag`        CHAR(1)      NOT NULL DEFAULT '0' COMMENT '逻辑删除标志：0 有效，2 已删除',
     PRIMARY KEY (`copy_id`),
     UNIQUE KEY `uk_wf_copy_event_user` (`copy_event_id`, `user_id`),
-    KEY `idx_wf_copy_user_status_time` (`user_id`, `del_flag`, `create_time`),
+    KEY `idx_wf_copy_user_status_time` (`user_id`, `del_flag`, `read_status`, `create_time`),
     KEY `idx_wf_copy_instance` (`instance_id`, `del_flag`),
     KEY `idx_wf_copy_task` (`task_id`, `del_flag`),
     KEY `idx_wf_copy_deployment` (`deployment_id`, `del_flag`),
-    CONSTRAINT `chk_wf_copy_del_flag` CHECK (`del_flag` IN ('0', '2'))
+    CONSTRAINT `chk_wf_copy_del_flag` CHECK (`del_flag` IN ('0', '2')),
+    CONSTRAINT `chk_wf_copy_source_type` CHECK (`source_type` IN ('MANUAL', 'AUTO', 'MANUAL_AUTO')),
+    CONSTRAINT `chk_wf_copy_trigger_type` CHECK (`trigger_type` IN (
+        'MANUAL_COMPLETE', 'MANUAL_REJECT', 'MANUAL_RETURN', 'MANUAL_DELEGATE',
+        'MANUAL_RESOLVE', 'MANUAL_TRANSFER', 'NODE_ARRIVED', 'NODE_COMPLETED',
+        'PROCESS_COMPLETED')),
+    CONSTRAINT `chk_wf_copy_read_state` CHECK ((`read_status` = '0' AND `read_time` IS NULL)
+        OR (`read_status` = '1' AND `read_time` IS NOT NULL))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
@@ -983,6 +1177,138 @@ CREATE TABLE IF NOT EXISTS `wf_designer_preference`
   COLLATE = utf8mb4_unicode_ci
   COMMENT = 'BPMN 设计器用户偏好';
 
+CREATE TABLE IF NOT EXISTS `wf_process_draft`
+(
+    `draft_id`                     CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '服务端生成的申请草稿 UUID',
+    `owner_user_id`                BIGINT       NOT NULL COMMENT '草稿所属正式用户主键',
+    `process_definition_id`        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '草稿绑定的 Flowable 精确流程定义主键',
+    `process_definition_key`       VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程定义稳定 key 快照',
+    `process_definition_version`   INT          NOT NULL COMMENT '草稿绑定的流程定义版本号',
+    `deployment_id`                VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '流程定义所属部署主键',
+    `process_name`                 VARCHAR(255) NOT NULL COMMENT '流程名称快照',
+    `source_type`                  VARCHAR(16)  NOT NULL COMMENT '表单快照来源：TEMPLATE 或 EMBEDDED',
+    `form_id`                      BIGINT                DEFAULT NULL COMMENT '模板表单主键；内嵌表单为空',
+    `form_key`                     VARCHAR(128) NOT NULL COMMENT '开始节点部署表单键快照',
+    `start_node_key`               VARCHAR(255) NOT NULL COMMENT '开始节点 key 快照',
+    `form_name`                    VARCHAR(64)  NOT NULL COMMENT '开始表单名称快照',
+    `node_name`                    VARCHAR(255) NOT NULL DEFAULT '' COMMENT '开始节点名称快照',
+    `snapshot_create_time`         DATETIME(3)  NOT NULL COMMENT '原部署表单快照创建时间',
+    `form_snapshot`                LONGTEXT     NOT NULL COMMENT '创建草稿时从部署表单复制的不可变 JSON 快照',
+    `form_snapshot_sha256`         CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '原始表单快照 SHA-256',
+    `start_multi_instance_assignments` LONGTEXT NOT NULL COMMENT '部署 BPMN 发起会签或或签成员字段不可变 JSON 快照',
+    `form_values`                  LONGTEXT     NOT NULL COMMENT '已通过草稿类型校验的字段值 JSON',
+    `multi_instance_user_ids`      LONGTEXT     NOT NULL COMMENT '按活动保存的发起会签或或签成员 JSON',
+    `business_key`                 VARCHAR(255)          DEFAULT NULL COMMENT '用户填写的可选业务主键',
+    `draft_status`                 VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE' COMMENT '草稿状态：ACTIVE、SUBMITTED、DELETED',
+    `revision_no`                  BIGINT       NOT NULL DEFAULT 1 COMMENT '从 1 开始的乐观锁版本',
+    `submitted_process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '成功提交后唯一 Flowable 流程实例主键',
+    `submitted_time`               DATETIME(3)           DEFAULT NULL COMMENT '成功提交时间',
+    `deleted_time`                 DATETIME(3)           DEFAULT NULL COMMENT '用户删除时间',
+    `create_time`                  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '草稿创建时间',
+    `update_time`                  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '草稿最后更新时间',
+    PRIMARY KEY (`draft_id`),
+    UNIQUE KEY `uk_wf_process_draft_instance` (`submitted_process_instance_id`),
+    KEY `idx_wf_process_draft_owner_status_time`
+        (`owner_user_id`, `draft_status`, `update_time`, `draft_id`),
+    KEY `idx_wf_process_draft_owner_process_time`
+        (`owner_user_id`, `process_definition_key`, `update_time`, `draft_id`),
+    KEY `idx_wf_process_draft_definition_version`
+        (`process_definition_key`, `process_definition_version`, `draft_status`),
+    KEY `idx_wf_process_draft_deployment_status`
+        (`deployment_id`, `draft_status`),
+    CONSTRAINT `chk_wf_process_draft_id` CHECK
+        (`draft_id` REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
+    CONSTRAINT `chk_wf_process_draft_owner` CHECK (`owner_user_id` > 0),
+    CONSTRAINT `chk_wf_process_draft_definition` CHECK
+        (`process_definition_version` > 0
+         AND CHAR_LENGTH(`process_definition_id`) BETWEEN 1 AND 64
+         AND CHAR_LENGTH(`process_definition_key`) BETWEEN 1 AND 255
+         AND CHAR_LENGTH(`deployment_id`) BETWEEN 1 AND 64),
+    CONSTRAINT `chk_wf_process_draft_source` CHECK
+    (
+        (`source_type` = 'TEMPLATE' AND `form_id` IS NOT NULL AND `form_id` > 0)
+        OR (`source_type` = 'EMBEDDED' AND `form_id` IS NULL)
+    ),
+    CONSTRAINT `chk_wf_process_draft_snapshot_json` CHECK (JSON_VALID(`form_snapshot`)),
+    CONSTRAINT `chk_wf_process_draft_assignment_json` CHECK
+        (JSON_VALID(`start_multi_instance_assignments`)
+         AND JSON_TYPE(`start_multi_instance_assignments`) = 'ARRAY'),
+    CONSTRAINT `chk_wf_process_draft_values_json` CHECK (JSON_VALID(`form_values`)),
+    CONSTRAINT `chk_wf_process_draft_members_json` CHECK
+        (JSON_VALID(`multi_instance_user_ids`)
+         AND JSON_TYPE(`multi_instance_user_ids`) = 'OBJECT'),
+    CONSTRAINT `chk_wf_process_draft_snapshot_hash` CHECK
+        (`form_snapshot_sha256` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_process_draft_revision` CHECK (`revision_no` > 0),
+    CONSTRAINT `chk_wf_process_draft_status` CHECK
+        (`draft_status` IN ('ACTIVE', 'SUBMITTED', 'DELETED')),
+    CONSTRAINT `chk_wf_process_draft_lifecycle` CHECK
+    (
+        (`draft_status` = 'ACTIVE'
+            AND `submitted_process_instance_id` IS NULL AND `submitted_time` IS NULL
+            AND `deleted_time` IS NULL)
+        OR (`draft_status` = 'SUBMITTED'
+            AND `submitted_process_instance_id` IS NOT NULL AND `submitted_time` IS NOT NULL
+            AND `deleted_time` IS NULL)
+        OR (`draft_status` = 'DELETED'
+            AND `submitted_process_instance_id` IS NULL AND `submitted_time` IS NULL
+            AND `deleted_time` IS NOT NULL)
+    ),
+    CONSTRAINT `chk_wf_process_draft_times` CHECK
+        (`snapshot_create_time` <= `create_time`
+         AND `update_time` >= `create_time`
+         AND (`submitted_time` IS NULL OR `submitted_time` >= `create_time`)
+         AND (`deleted_time` IS NULL OR `deleted_time` >= `create_time`))
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '当前用户申请草稿及不可变部署表单快照';
+
+CREATE TABLE IF NOT EXISTS `wf_process_draft_audit`
+(
+    `audit_id`           BIGINT       NOT NULL AUTO_INCREMENT COMMENT '申请草稿审计主键',
+    `draft_id`           CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '申请草稿 UUID',
+    `owner_user_id`      BIGINT       NOT NULL COMMENT '草稿所属正式用户主键快照',
+    `action_type`        VARCHAR(16)  NOT NULL COMMENT '审计动作：CREATED、SAVED、DELETED、SUBMITTED',
+    `from_status`        VARCHAR(16)           DEFAULT NULL COMMENT '动作前草稿状态；CREATED 为空',
+    `to_status`          VARCHAR(16)  NOT NULL COMMENT '动作后草稿状态',
+    `from_revision`      BIGINT                DEFAULT NULL COMMENT '动作前乐观锁版本；CREATED 为空',
+    `to_revision`        BIGINT       NOT NULL COMMENT '动作后乐观锁版本',
+    `process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT 'SUBMITTED 动作创建的唯一流程实例主键',
+    `detail_json`        LONGTEXT              DEFAULT NULL COMMENT '不含表单字段正文的稳定审计详情 JSON',
+    `create_time`        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '审计写入时间',
+    PRIMARY KEY (`audit_id`),
+    UNIQUE KEY `uk_wf_process_draft_audit_revision` (`draft_id`, `to_revision`),
+    KEY `idx_wf_process_draft_audit_time` (`draft_id`, `create_time`, `audit_id`),
+    CONSTRAINT `fk_wf_process_draft_audit_draft` FOREIGN KEY (`draft_id`)
+        REFERENCES `wf_process_draft` (`draft_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `chk_wf_process_draft_audit_owner` CHECK (`owner_user_id` > 0),
+    CONSTRAINT `chk_wf_process_draft_audit_action` CHECK
+        (`action_type` IN ('CREATED', 'SAVED', 'DELETED', 'SUBMITTED')),
+    CONSTRAINT `chk_wf_process_draft_audit_status` CHECK
+        ((`from_status` IS NULL OR `from_status` IN ('ACTIVE', 'SUBMITTED', 'DELETED'))
+         AND `to_status` IN ('ACTIVE', 'SUBMITTED', 'DELETED')),
+    CONSTRAINT `chk_wf_process_draft_audit_detail` CHECK
+        (`detail_json` IS NULL OR JSON_VALID(`detail_json`)),
+    CONSTRAINT `chk_wf_process_draft_audit_transition` CHECK
+    (
+        (`action_type` = 'CREATED' AND `from_status` IS NULL AND `from_revision` IS NULL
+            AND `to_status` = 'ACTIVE' AND `to_revision` = 1 AND `process_instance_id` IS NULL)
+        OR (`action_type` = 'SAVED' AND `from_status` = 'ACTIVE' AND `to_status` = 'ACTIVE'
+            AND `from_revision` IS NOT NULL AND `to_revision` = `from_revision` + 1
+            AND `process_instance_id` IS NULL)
+        OR (`action_type` = 'SUBMITTED' AND `from_status` = 'ACTIVE' AND `to_status` = 'SUBMITTED'
+            AND `from_revision` IS NOT NULL AND `to_revision` = `from_revision` + 1
+            AND `process_instance_id` IS NOT NULL)
+        OR (`action_type` = 'DELETED' AND `from_status` = 'ACTIVE' AND `to_status` = 'DELETED'
+            AND `from_revision` IS NOT NULL AND `to_revision` = `from_revision` + 1
+            AND `process_instance_id` IS NULL)
+    )
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '申请草稿不可变状态迁移审计';
+
 CREATE TABLE IF NOT EXISTS `wf_attachment_quota_guard`
 (
     `owner_user_id` BIGINT      NOT NULL COMMENT '配额互斥主键：0 为全局容量，其余为正式用户主键',
@@ -1008,8 +1334,9 @@ CREATE TABLE IF NOT EXISTS `wf_attachment`
     `content_type`        VARCHAR(128) NOT NULL COMMENT '服务端探测的 MIME 类型',
     `file_size`           BIGINT       NOT NULL COMMENT '服务端实际写入的文件字节数',
     `sha256`              CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '文件内容 SHA-256 小写十六进制摘要',
-    `attachment_status`   VARCHAR(16)  NOT NULL DEFAULT 'TEMP' COMMENT '附件状态：TEMP、BOUND、EXPIRED、DELETED',
+    `attachment_status`   VARCHAR(16)  NOT NULL DEFAULT 'TEMP' COMMENT '附件状态：TEMP、DRAFT、BOUND、EXPIRED、DELETED',
     `expire_time`         DATETIME(3)  NOT NULL COMMENT '临时附件失效时间；绑定后仅作上传审计',
+    `draft_id`            CHAR(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT 'DRAFT 状态绑定的申请草稿 UUID',
     `process_instance_id` VARCHAR(64)           DEFAULT NULL COMMENT '绑定的 Flowable 流程实例主键',
     `task_id`             VARCHAR(64)           DEFAULT NULL COMMENT '可选的 Flowable 任务主键',
     `node_key`            VARCHAR(255)          DEFAULT NULL COMMENT '提交附件的 BPMN 节点 key',
@@ -1025,19 +1352,33 @@ CREATE TABLE IF NOT EXISTS `wf_attachment`
     KEY `idx_wf_attachment_owner_status_expire` (`owner_user_id`, `attachment_status`, `expire_time`),
     KEY `idx_wf_attachment_status_expire` (`attachment_status`, `expire_time`),
     KEY `idx_wf_attachment_cleanup_due` (`attachment_status`, `cleanup_next_retry_time`, `expire_time`),
+    KEY `idx_wf_attachment_draft_field` (`draft_id`, `field_name`, `attachment_status`),
     KEY `idx_wf_attachment_instance_field` (`process_instance_id`, `field_name`, `attachment_status`),
-    CONSTRAINT `chk_wf_attachment_status` CHECK (`attachment_status` IN ('TEMP', 'BOUND', 'EXPIRED', 'DELETED')),
+    CONSTRAINT `fk_wf_attachment_draft` FOREIGN KEY (`draft_id`)
+        REFERENCES `wf_process_draft` (`draft_id`) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT `chk_wf_attachment_status` CHECK
+        (`attachment_status` IN ('TEMP', 'DRAFT', 'BOUND', 'EXPIRED', 'DELETED')),
     CONSTRAINT `chk_wf_attachment_file_size` CHECK (`file_size` > 0),
     CONSTRAINT `chk_wf_attachment_sha256` CHECK (`sha256` REGEXP '^[0-9a-f]{64}$'),
     CONSTRAINT `chk_wf_attachment_state_relation` CHECK
     (
         (`attachment_status` = 'BOUND'
+            AND `draft_id` IS NULL
             AND `process_instance_id` IS NOT NULL
             AND `node_key` IS NOT NULL
             AND `bound_time` IS NOT NULL
             AND `storage_deleted_time` IS NULL)
         OR
+        (`attachment_status` = 'DRAFT'
+            AND `draft_id` IS NOT NULL
+            AND `process_instance_id` IS NULL
+            AND `task_id` IS NULL
+            AND `node_key` IS NULL
+            AND `bound_time` IS NULL
+            AND `storage_deleted_time` IS NULL)
+        OR
         (`attachment_status` IN ('TEMP', 'EXPIRED', 'DELETED')
+            AND `draft_id` IS NULL
             AND `process_instance_id` IS NULL
             AND `task_id` IS NULL
             AND `node_key` IS NULL
@@ -1159,6 +1500,200 @@ CREATE TABLE IF NOT EXISTS `wf_bpmn_event_notification`
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
   COMMENT = 'BPMN 业务错误与升级用户站内通知';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_policy`
+(
+    `policy_id`             BIGINT       NOT NULL AUTO_INCREMENT COMMENT '通知策略主键',
+    `scope_type`            VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'DEFAULT、PROCESS 或 NODE',
+    `process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '流程定义 key，默认策略为空',
+    `task_definition_key`   VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '节点 key，仅 NODE 策略必填',
+    `event_type`            VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '普通审批生命周期事件',
+    `scope_key`             VARCHAR(540) CHARACTER SET ascii COLLATE ascii_bin AS
+        (CONCAT(`scope_type`, ':', COALESCE(`process_definition_key`, ''), ':', COALESCE(`task_definition_key`, ''))) STORED COMMENT '空值安全的策略作用域自然键',
+    `recipient_rules`       VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '逗号分隔的固定接收人规则',
+    `channels`              VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'INBOX 或 INBOX,EMAIL',
+    `title_template`        VARCHAR(160) NOT NULL COMMENT '仅允许白名单变量的标题模板',
+    `content_template`      VARCHAR(700) NOT NULL COMMENT '仅允许白名单变量的正文模板',
+    `max_attempts`          TINYINT UNSIGNED NOT NULL DEFAULT 6 COMMENT '每个通道最大投递次数',
+    `status`                VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'ENABLED' COMMENT 'ENABLED 或 DISABLED',
+    `revision`              INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+    `create_by`             VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '创建人',
+    `create_time`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `update_by`             VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '更新人',
+    `update_time`           DATETIME(3)           DEFAULT NULL,
+    PRIMARY KEY (`policy_id`),
+    UNIQUE KEY `uk_wf_notification_policy_scope` (`scope_key`, `event_type`),
+    KEY `idx_wf_notification_policy_match` (`event_type`, `status`, `process_definition_key`, `task_definition_key`),
+    CONSTRAINT `chk_wf_notification_policy_scope` CHECK
+    (
+        (`scope_type` = 'DEFAULT' AND `process_definition_key` IS NULL AND `task_definition_key` IS NULL)
+        OR (`scope_type` = 'PROCESS' AND `process_definition_key` IS NOT NULL AND `task_definition_key` IS NULL)
+        OR (`scope_type` = 'NODE' AND `process_definition_key` IS NOT NULL AND `task_definition_key` IS NOT NULL)
+    ),
+    CONSTRAINT `chk_wf_notification_policy_channels` CHECK (`channels` IN ('INBOX', 'EMAIL', 'INBOX,EMAIL')),
+    CONSTRAINT `chk_wf_notification_policy_status` CHECK (`status` IN ('ENABLED', 'DISABLED')),
+    CONSTRAINT `chk_wf_notification_policy_attempts` CHECK (`max_attempts` BETWEEN 1 AND 20)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '普通审批流程与节点通知策略';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_preference`
+(
+    `user_id`       BIGINT      NOT NULL COMMENT '正式用户主键',
+    `inbox_enabled` TINYINT(1)  NOT NULL DEFAULT 1 COMMENT '是否接收站内通知',
+    `email_enabled` TINYINT(1)  NOT NULL DEFAULT 1 COMMENT '是否接收邮件通知',
+    `revision`      INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+    `update_time`   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`user_id`),
+    CONSTRAINT `fk_wf_notification_preference_user` FOREIGN KEY (`user_id`)
+        REFERENCES `sys_user` (`user_id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '用户审批通知通道偏好';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_outbox`
+(
+    `outbox_id`              BIGINT       NOT NULL AUTO_INCREMENT COMMENT '出站主键',
+    `idempotency_key`        CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '业务事件、接收人和通道摘要',
+    `event_type`             VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `channel`                VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'INBOX 或 EMAIL',
+    `recipient_user_id`      BIGINT       NOT NULL COMMENT '正式接收人主键',
+    `process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `process_instance_id`    VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `task_id`                VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `task_definition_key`    VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `actor_user_id`          VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `title`                  VARCHAR(160) NOT NULL,
+    `content`                VARCHAR(700) NOT NULL,
+    `route_path`             VARCHAR(500) NOT NULL COMMENT '站内安全相对路由',
+    `status`                 VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING',
+    `delivery_cycle`         SMALLINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '补偿后递增且不可回退的投递周期',
+    `attempt_count`          TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `total_attempt_count`    INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '跨补偿周期累计且不可回退的投递次数',
+    `max_attempts`           TINYINT UNSIGNED NOT NULL,
+    `next_attempt_at`        DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `lease_owner`            VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `lease_expires_at`       DATETIME(3) DEFAULT NULL,
+    `last_error_code`        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `last_error_summary`     VARCHAR(500) DEFAULT NULL COMMENT '脱敏失败摘要',
+    `revision`               INT UNSIGNED NOT NULL DEFAULT 0,
+    `create_time`            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `processed_time`         DATETIME(3) DEFAULT NULL,
+    PRIMARY KEY (`outbox_id`),
+    UNIQUE KEY `uk_wf_notification_outbox_idempotency` (`idempotency_key`),
+    KEY `idx_wf_notification_outbox_due` (`status`, `next_attempt_at`, `lease_expires_at`, `outbox_id`),
+    KEY `idx_wf_notification_outbox_instance` (`process_instance_id`, `outbox_id`),
+    CONSTRAINT `fk_wf_notification_outbox_user` FOREIGN KEY (`recipient_user_id`)
+        REFERENCES `sys_user` (`user_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_notification_outbox_hash` CHECK (`idempotency_key` REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT `chk_wf_notification_outbox_channel` CHECK (`channel` IN ('INBOX', 'EMAIL')),
+    CONSTRAINT `chk_wf_notification_outbox_status` CHECK (`status` IN ('PENDING', 'RETRYING', 'DELIVERING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED')),
+    CONSTRAINT `chk_wf_notification_outbox_attempts` CHECK (`max_attempts` BETWEEN 1 AND 20 AND `attempt_count` <= `max_attempts`),
+    CONSTRAINT `chk_wf_notification_outbox_sequence` CHECK (`delivery_cycle` >= 1 AND `total_attempt_count` >= `attempt_count`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '普通审批通知可靠 outbox';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_inbox`
+(
+    `notification_id`    BIGINT       NOT NULL AUTO_INCREMENT,
+    `outbox_id`          BIGINT       NOT NULL COMMENT '唯一来源 outbox',
+    `recipient_user_id`  BIGINT       NOT NULL,
+    `event_type`         VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `title`              VARCHAR(160) NOT NULL,
+    `content`            VARCHAR(700) NOT NULL,
+    `process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `task_id`            VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `route_path`         VARCHAR(500) NOT NULL,
+    `read_status`        VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'UNREAD',
+    `create_time`        DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `read_time`          DATETIME(3) DEFAULT NULL,
+    PRIMARY KEY (`notification_id`),
+    UNIQUE KEY `uk_wf_notification_inbox_outbox` (`outbox_id`),
+    KEY `idx_wf_notification_inbox_user` (`recipient_user_id`, `read_status`, `notification_id`),
+    CONSTRAINT `fk_wf_notification_inbox_outbox` FOREIGN KEY (`outbox_id`)
+        REFERENCES `wf_notification_outbox` (`outbox_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `fk_wf_notification_inbox_user` FOREIGN KEY (`recipient_user_id`)
+        REFERENCES `sys_user` (`user_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_notification_inbox_status` CHECK (`read_status` IN ('UNREAD', 'READ')),
+    CONSTRAINT `chk_wf_notification_inbox_read` CHECK
+    ((`read_status` = 'UNREAD' AND `read_time` IS NULL) OR (`read_status` = 'READ' AND `read_time` IS NOT NULL))
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '普通审批用户站内通知';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_delivery_audit`
+(
+    `audit_id`       BIGINT       NOT NULL AUTO_INCREMENT,
+    `outbox_id`      BIGINT       NOT NULL,
+    `action_type`    VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `delivery_cycle` SMALLINT UNSIGNED NOT NULL COMMENT '动作所属投递周期',
+    `attempt_no`     TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `total_attempt_no` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '动作发生时的跨周期累计尝试次数',
+    `from_status`    VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `to_status`      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `actor_type`     VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `actor_id`       VARCHAR(128) NOT NULL,
+    `error_code`     VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+    `detail`         VARCHAR(500) NOT NULL COMMENT '不含邮箱和邮件正文的脱敏审计',
+    `create_time`    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`audit_id`),
+    UNIQUE KEY `uk_wf_notification_delivery_audit` (`outbox_id`, `action_type`, `delivery_cycle`, `attempt_no`),
+    KEY `idx_wf_notification_delivery_outbox` (`outbox_id`, `audit_id`),
+    CONSTRAINT `fk_wf_notification_delivery_outbox` FOREIGN KEY (`outbox_id`)
+        REFERENCES `wf_notification_outbox` (`outbox_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_notification_delivery_sequence` CHECK (`delivery_cycle` >= 1 AND `total_attempt_no` >= `attempt_no`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '普通审批通知逐次投递审计';
+
+CREATE TABLE IF NOT EXISTS `wf_notification_urge_audit`
+(
+    `urge_id`             BIGINT       NOT NULL AUTO_INCREMENT,
+    `process_instance_id` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `actor_user_id`       BIGINT       NOT NULL,
+    `recipient_count`     INT UNSIGNED NOT NULL,
+    `reason`              VARCHAR(500) NOT NULL,
+    `create_time`         DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`urge_id`),
+    KEY `idx_wf_notification_urge_frequency` (`process_instance_id`, `actor_user_id`, `create_time`),
+    CONSTRAINT `fk_wf_notification_urge_actor` FOREIGN KEY (`actor_user_id`)
+        REFERENCES `sys_user` (`user_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_notification_urge_recipient` CHECK (`recipient_count` BETWEEN 1 AND 2000)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+  COMMENT = '人工催办业务审计，不改变审批状态';
+
+INSERT INTO `wf_notification_policy`
+    (`scope_type`, `process_definition_key`, `task_definition_key`, `event_type`,
+     `recipient_rules`, `channels`, `title_template`, `content_template`, `max_attempts`,
+     `status`, `create_by`)
+VALUES
+    ('DEFAULT', NULL, NULL, 'TASK_ARRIVED', 'TASK_RECIPIENT', 'INBOX',
+     '新待办：{{taskName}}', '流程“{{processName}}”有新的待办任务“{{taskName}}”。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_CLAIMED', 'TASK_RECIPIENT', 'INBOX',
+     '任务已认领：{{taskName}}', '您已成为流程“{{processName}}”任务“{{taskName}}”的办理人。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_UNCLAIMED', 'TASK_RECIPIENT', 'INBOX',
+     '任务已释放：{{taskName}}', '流程“{{processName}}”任务“{{taskName}}”已重新进入待认领状态。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_DELEGATED', 'TASK_RECIPIENT', 'INBOX',
+     '任务已委派：{{taskName}}', '流程“{{processName}}”任务“{{taskName}}”已委派给您。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_DELEGATION_RESOLVED', 'TASK_RECIPIENT', 'INBOX',
+     '委派任务已归还：{{taskName}}', '流程“{{processName}}”任务“{{taskName}}”已归还原办理人。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_TRANSFERRED', 'TASK_RECIPIENT', 'INBOX',
+     '任务已转办：{{taskName}}', '流程“{{processName}}”任务“{{taskName}}”已转办给您。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_RETURNED', 'TASK_RECIPIENT', 'INBOX',
+     '申请已退回修改', '流程“{{processName}}”已退回，请修改后重新提交。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_RESUBMITTED', 'TASK_RECIPIENT', 'INBOX',
+     '申请已重新提交：{{taskName}}', '流程“{{processName}}”已修改并重新提交，请继续处理“{{taskName}}”。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'TASK_COMPLETED', 'INITIATOR', 'INBOX',
+     '审批节点已完成：{{taskName}}', '流程“{{processName}}”的节点“{{taskName}}”已完成。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'PROCESS_COMPLETED', 'INITIATOR', 'INBOX',
+     '流程已完成：{{processName}}', '您的流程“{{processName}}”已完成。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'PROCESS_CANCELED', 'INITIATOR', 'INBOX',
+     '流程已取消：{{processName}}', '流程“{{processName}}”已取消。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'PROCESS_REJECTED', 'INITIATOR', 'INBOX',
+     '流程已驳回：{{processName}}', '流程“{{processName}}”已驳回并结束。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'PROCESS_TERMINATED', 'INITIATOR', 'INBOX',
+     '流程已终止：{{processName}}', '流程“{{processName}}”已由管理员终止。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'MANUAL_URGE', 'TASK_RECIPIENT', 'INBOX',
+     '审批催办：{{taskName}}', '发起人提醒您处理流程“{{processName}}”的待办“{{taskName}}”。', 6, 'ENABLED', 'system'),
+    ('DEFAULT', NULL, NULL, 'COPY_CREATED', 'TASK_RECIPIENT', 'INBOX',
+     '流程抄送：{{processName}}', '您收到流程“{{processName}}”的审批抄送。', 6, 'ENABLED', 'system')
+ON DUPLICATE KEY UPDATE `policy_id` = `policy_id`;
 
 INSERT INTO `wf_bpmn_event_code`
     (`event_type`, `event_code`, `event_name`, `notification_policy`, `status`, `description`,

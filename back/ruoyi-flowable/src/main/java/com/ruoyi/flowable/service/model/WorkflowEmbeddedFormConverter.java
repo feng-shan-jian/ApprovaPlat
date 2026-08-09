@@ -152,6 +152,8 @@ public final class WorkflowEmbeddedFormConverter
         config.put("required", property.isRequired() && property.isWriteable());
         config.put("workflowReadable", property.isReadable());
         config.put("workflowWritable", property.isWriteable());
+        // 不可读且不可写是节点隐藏语义；写入权限仍由 workflowWritable 在服务端强制执行。
+        config.put("workflowHidden", !property.isReadable() && !property.isWriteable());
         component.put("__vModel__", variable);
         component.put("disabled", !property.isWriteable());
 

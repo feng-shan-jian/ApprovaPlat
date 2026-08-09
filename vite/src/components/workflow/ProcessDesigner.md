@@ -19,6 +19,7 @@
     :preference="designerPreference"
     :preference-saving="preferenceSaving"
     @identity-search="searchIdentityDirectory"
+    @identity-resolve="resolveSelectedIdentities"
     @preference-save="savePreference"
     @save="saveToServer"
     @error="showError"
@@ -28,7 +29,7 @@
 <script setup>
 import { ElMessage } from 'element-plus'
 import { listForms } from '@/api/workflow/form'
-import { listApprovalUserOptions, listClaimableIdentityOptions } from '@/api/workflow/identity'
+import { listApprovalUserOptions, listClaimableIdentityOptions, resolveIdentityOptions } from '@/api/workflow/identity'
 import { getModel, getModelBpmnXml, saveModel } from '@/api/workflow/model'
 import ProcessDesigner from '@/components/workflow/ProcessDesigner.vue'
 
@@ -73,6 +74,11 @@ async function searchIdentityDirectory({ type, capability, keyword = '' }) {
   } finally {
     identityPending.value -= 1
   }
+}
+
+async function resolveSelectedIdentities({ target, type, capability, values }) {
+  const response = await resolveIdentityOptions({ type, capability, values })
+  identityOptions[target] = mergeByValue(identityOptions[target], response.data || [])
 }
 
 /**
@@ -128,7 +134,7 @@ onMounted(async () => {
 | `modelValue` | `string` | `''` | 当前 BPMN XML；为空时按模型元数据创建初始流程。 |
 | `model` | `object` | `{}` | `modelKey`、`modelName`、`formId` 等模型元数据。 |
 | `forms` | `array` | `[]` | 正式表单选项，每项至少包含 `formId`、`formName`。 |
-| `identityOptions` | `object` | `{ assignees: [], candidateUsers: [], candidateGroups: [] }` | 服务端按直接办理资格和完整候选认领资格隔离的身份选项。 |
+| `identityOptions` | `object` | 五个隔离选项池 | 服务端按直接办理、完整候选认领和自动抄送资格隔离的身份选项，包含 `autoCopyUsers`、`autoCopyGroups`。 |
 | `height` | `string` | `calc(100vh - 128px)` | 设计器稳定高度；页面级接入推荐传入 `100%`，由可用工作区决定实际高度。 |
 | `saving` | `boolean` | `false` | 页面真实保存请求的加载状态。 |
 | `identityLoading` | `boolean` | `false` | 用户、角色或部门远程检索的加载状态。 |
@@ -143,7 +149,8 @@ onMounted(async () => {
 | `change` | `xml: string` | 用户设计发生变化。 |
 | `save` | `xml: string` | 本地关键门禁通过后请求页面保存。 |
 | `error` | `Error` | 导入、导出或本地校验失败。 |
-| `identity-search` | `{ type: 'user' \| 'group', keyword: string, capability: 'approval' \| 'claim' }` | 请求页面检索正式资格目录；直接办理人使用 `approval`，候选用户和候选组使用 `claim`。 |
+| `identity-search` | `{ type: 'user' \| 'group', keyword: string, capability: 'approval' \| 'claim' \| 'copy' }` | 请求页面检索正式资格目录；直接办理人使用 `approval`，候选用户和候选组使用 `claim`，自动抄送对象使用 `copy`。 |
+| `identity-resolve` | `{ target, type, capability, values }` | 请求页面通过 `/workflow/identity/options/resolve` 批量核验并回显当前分页外的已选正式对象。 |
 | `preference-save` | `object` | 请求页面把字段完整的当前用户偏好写入正式数据库。 |
 
 ## 公开方法
@@ -161,11 +168,17 @@ onMounted(async () => {
 ## 关键设计
 
 - 表单来源支持正式模板与 Flowable 内嵌 FormData。正式模板保存为 `flowable:formKey="key_正整数"`；内嵌表单保存为 `flowable:formProperty`，覆盖六种内置类型及正式 FORM_FIELD 注册表返回的 `custom:<extensionKey>`，两种来源在同一 moddle 命令中互斥。
+- 节点字段权限目录只来自当前绑定的正式模板；隐藏、只读、可编辑和必填策略使用受控 `flowable:formProperty` 随模型保存。部署时后端将其编译进当前节点不可变表单快照，模板后续新增字段按节点批量默认策略处理。
 - 内嵌字段独立保存稳定 `id` 和可选 `variable`；`variable` 为空时使用 `id`。变量、保留前缀、日期格式、字段/枚举上限和重复值在前端即时校验，保存与部署时后端再次校验；自定义字段的精确版本、实现键和校验和冻结到 `wf_deploy_form` 快照。
 - 表单来源切换和字段修改均进入 bpmn-js 命令栈；审计监听器等非表单 `extensionElements` 在重建 FormData 时保持不变。
 - ServiceTask 不接受任意 Java 类名或 Spring Bean。设计器从正式扩展目录读取最新版，只在作者 XML 保存稳定键和 JSON 配置；部署编译器冻结精确版本并生成不可变执行快照。
 - 用户任务的办理人、候选用户、候选组互斥写入并使用独立选项池。直接办理人只来自 `capability=approval` 目录；候选用户、角色和部门只来自 `capability=claim` 目录，角色/部门还必须至少包含一名完整可认领办理成员。候选组值继续使用后端规定的 `ROLE<id>` 或 `DEPT<id>`。
-- 会签/或签提供“动态选择”和“固定人员”两种受控来源。动态来源固定写入 `${multiInstanceHandler.getUserIds(execution)}`，要求前驱任务提交下一办理人并支持成员调整；固定来源从审批资格目录选择 1 至 100 名用户，写入严格的 `${multiInstanceHandler.getFixedUserIds(execution, '1,2')}`。两种来源均固定使用并行循环、`assignee` 元素变量、`${assignee}` 办理人和 ALL/ANY 完成条件，后端在保存、部署和运行时再次校验用户资格。
+- 流程级发起范围固定为公开、指定用户、指定角色、指定部门四类；单实例 UserTask 固定为固定用户、候选用户、候选角色/部门、发起人本人、发起人直属上级、指定部门负责人、发起人所在部门内指定角色、表单用户字段八类。作者 BPMN 保存 `approva.startScope.*` / `approva.participant.*` 的规则版本、类型、目标、表单字段和 `FAIL` 策略，部署时后端剥离作者属性并冻结到正式快照。
+- 需要目录目标或表单字段的规则支持分步编辑；切换规则后产生的暂时空值只存在于当前画布，正式保存门禁仍要求目标和字段完整。`FORM_USER` 与自动抄送 `FORM_USER_FIELD` 共用可见、可读单值字段目录：只读字段可作为用户来源，隐藏、不可读、日期、布尔、附件和多值字段不会出现在选项中；`FORM_USER` 额外遵守后端参与者变量名语法，流程级自动抄送遇到任一节点同名不合格或值形态不同的声明时失败关闭。
+- 重开模型时，当前远程分页外的已选身份通过 `/workflow/identity/options/resolve` 回显正式名称和实时可用状态；删除对象使用稳定不可用文案，不向页面暴露裸主键。
+- 会签/或签提供“办理时选择”“发起时选择”和“固定人员”三种受控来源。办理时来源固定写入 `${multiInstanceHandler.getUserIds(execution)}`，由唯一前驱任务提交下一办理人；发起时来源固定写入 `${multiInstanceHandler.getStartUserIds(execution)}`，发起页按后端部署模型投影每个节点的必填审批用户字段；固定来源从审批资格目录选择 1 至 100 名用户，写入严格的 `${multiInstanceHandler.getFixedUserIds(execution, '1,2')}`。三种来源均固定使用并行循环、`assignee` 元素变量、`${assignee}` 办理人和 ALL/ANY 完成条件，后端在保存、部署、发起和节点进入时再次校验正式审批资格。
+- Process 和 UserTask 可分别配置流程完成、节点到达和节点完成自动抄送。固定用户、角色和部门仅来自 `capability=copy` 正式目录，发起人与正式表单标量字段为受控动态来源；流程级表单目录只汇总顶层申请开始节点及任意层级用户任务，不把子流程开始事件误当成独立申请入口。规则显式应用后以 `approva.autoCopyRules` JSON 写入 BPMN，并在修改循环、SLA 或通用属性时保持不丢失。
+- 自动抄送属性最多 8192 个字符、10 条规则，每条最多 20 个来源、每个来源最多 100 个值。设计器保存前复核触发位置与表单字段，后端保存、部署冻结和运行时继续复核身份有效性、对象可见性及幂等触发。
 - 受控整改循环只对 UserTask 开放。判断字段只能来自该节点正式模板或内嵌 FormData 的可写标量字段；附件、多选、表格、对象、范围和只读字段不会进入选项。设计器固定写入 `approva.controlledLoop.*` 五项属性，达到最大轮次时由后端拒绝继续整改，不会自动放行。
 - 受控整改循环在画布节点上显示最大轮次徽标。面板采用“填写草稿后显式应用”，避免不完整属性进入 BPMN 命令栈；布尔和静态枚举值只能从正式目录选择。任意 `standardLoopCharacteristics` 仍仅支持 XML 往返并明确禁止部署。
 - 从动态模式切换为串行或普通并行时会同时清理固定 handler、元素变量、完成条件和办理人，避免属性回读把静态模式错误恢复为动态模式。
@@ -177,6 +190,9 @@ onMounted(async () => {
 - 新建流程只有在 `model.formId` 明确指定时才预绑定发起表单，不会隐式选择表单列表第一项。
 - 服务任务只提供受控扩展注册表入口，作者 XML 保存稳定扩展键和 JSON 配置，最终版本、实现和校验和由后端部署时冻结。
 - 业务规则任务独立于通用服务任务，只能选择后端 DMN 来源目录中的精确 `decisionId`；作者 XML 写入 `flowable:rules`，流程部署时创建同部署冻结 DMN 副本。
+- CallActivity 只从 `/workflow/call-activity/catalog` 返回的授权已发布目录选择，不开放流程 key、定义 ID 或表达式输入。作者可选择“发布时最新版”或“固定所选版本”，部署时两种策略都会冻结为不可变定义 ID，并写入 `wf_deploy_call_activity` 依赖快照。
+- CallActivity 输入和输出只允许在父子流程正式表单字段间映射，分别保存为 Flowable 原生 `flowable:in` 与 `flowable:out`。保存前即时检查半成品、重复目标、64 项上限、可读写权限和标量类型，后端保存及部署再次按正式表单快照校验。
+- 模型重开和复制直接回读 BPMN 的版本策略、业务键继承、变量继承、输出作用域、实例名称和原生映射；页面目录只用于解析与展示，不把浏览器状态当成正式配置。
 - 保存事件只交付 XML，不在组件内绕过页面权限或直接调用接口。
 - 显式校验直接调用无副作用 `/workflow/model/validate`；保存前必须再次通过同一服务端 BPMN、身份和表单门禁。
 - BPMN/XML 导入设置 2 MiB 上限，失败不覆盖当前画布；BPMN/XML 导出继续自动重建内部审计监听器，SVG 使用 Modeler 图形输出。

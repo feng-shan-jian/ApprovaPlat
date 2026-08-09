@@ -8,21 +8,28 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.util.HashMap;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.BaseElement;
 import org.flowable.bpmn.model.EndEvent;
+import org.flowable.bpmn.model.ExtensionAttribute;
+import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.FlowableListener;
 import org.flowable.bpmn.model.ImplementationType;
 import org.flowable.bpmn.model.Process;
@@ -44,7 +51,13 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCategory;
+import com.ruoyi.flowable.domain.WfDeployCallActivitySnapshot;
+import com.ruoyi.flowable.domain.WfDeployConditionRule;
+import com.ruoyi.flowable.domain.WfDeployControlledLoop;
+import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
+import com.ruoyi.flowable.domain.WfDeployParticipantRule;
+import com.ruoyi.flowable.domain.WfDeployTaskSla;
 import com.ruoyi.flowable.domain.WfForm;
 import com.ruoyi.flowable.domain.WorkflowModelLockRow;
 import com.ruoyi.flowable.domain.WorkflowModelSaveRecord;
@@ -86,6 +99,8 @@ class WorkflowModelServiceTest
 
     private WorkflowDmnDecisionService dmnDecisionService;
 
+    private WorkflowEngineOperations engineOperations;
+
     private WorkflowModelService service;
 
     /**
@@ -111,6 +126,8 @@ class WorkflowModelServiceTest
         modelSaveMapper = mock(WorkflowModelSaveMapper.class);
         extensionDeploymentService = mock(WorkflowExtensionDeploymentService.class);
         dmnDecisionService = mock(WorkflowDmnDecisionService.class);
+        when(bpmnService.deploymentCompatibilityIssues(any(WorkflowBpmnDocument.class)))
+                .thenReturn(List.of());
         when(extensionDeploymentService.prepare(any(), eq("7"))).thenAnswer(invocation ->
         {
             WorkflowBpmnDocument document = invocation.getArgument(0);
@@ -125,9 +142,9 @@ class WorkflowModelServiceTest
         IdentityService identityService = mock(IdentityService.class);
         WorkflowAuthenticationContext authenticationContext = new WorkflowAuthenticationContext(
                 identityService, new WorkflowIdentityCodec());
-        WorkflowEngineOperations operations = new WorkflowEngineOperations(authenticationContext,
+        engineOperations = new WorkflowEngineOperations(authenticationContext,
                 new WorkflowExceptionTranslator(), identityResolver);
-        service = new WorkflowModelService(operations, repositoryService, bpmnService,
+        service = new WorkflowModelService(engineOperations, repositoryService, bpmnService,
                 bpmnIdentityValidator, modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
                 formTemplateValidator, extensionDeploymentService, dmnDecisionService);
     }
@@ -620,6 +637,7 @@ class WorkflowModelServiceTest
         verify(modelSaveMapper, never()).selectLatestDefaultTenantModelForUpdate(any());
         verify(modelSaveMapper, never()).selectDefaultTenantModelForUpdate(any());
         verify(modelSaveMapper, never()).completeSaveRequest(any(), any());
+        verify(bpmnService, never()).validateForSave(any(byte[].class));
     }
 
     /**
@@ -647,6 +665,7 @@ class WorkflowModelServiceTest
         verify(modelSaveMapper, never()).selectOldestDefaultTenantModelForUpdate(any());
         verify(modelSaveMapper, never()).selectLatestDefaultTenantModelForUpdate(any());
         verify(modelSaveMapper, never()).completeSaveRequest(any(), any());
+        verify(bpmnService, never()).validateForSave(any(byte[].class));
     }
 
     /**
@@ -842,6 +861,298 @@ class WorkflowModelServiceTest
     }
 
     /**
+     * 验证自动抄送表单用户来源在模型和源码写入前拒绝无效字段。
+     * @return void，不存在、隐藏、无读权限或复合字段进入模型保存链时测试失败
+     */
+    @Test
+    void rejectsInvalidAutoCopyFormUserFieldsWithoutModelWrite()
+    {
+        WorkflowFormTemplateValidator realValidator = new WorkflowFormTemplateValidator();
+        WorkflowModelService guardedService = new WorkflowModelService(
+                engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
+                modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
+                realValidator, extensionDeploymentService, dmnDecisionService);
+        WorkflowBpmnFormReference reference = new WorkflowBpmnFormReference(
+                WorkflowFormSourceType.TEMPLATE, 1L, "key_1", "review", "审批",
+                null, "expense", null, Map.of());
+        WorkflowBpmnDocument authorDocument = autoCopyDocument(List.of(reference));
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(authorDocument);
+        AtomicReference<String> formContent = new AtomicReference<>();
+        when(formMapper.selectById(1L)).thenAnswer(invocation ->
+                activeForm(1L, "审批表", formContent.get()));
+        List<String> invalidContents = List.of(
+                "{\"fields\":[{\"__vModel__\":\"otherId\",\"__config__\":{\"layout\":\"colFormItem\",\"tag\":\"el-input\"}}]}",
+                "{\"fields\":[{\"__vModel__\":\"reviewerId\",\"__config__\":{\"layout\":\"colFormItem\",\"tag\":\"el-input\",\"workflowHidden\":true,\"workflowReadable\":false,\"workflowWritable\":false}}]}",
+                "{\"fields\":[{\"__vModel__\":\"reviewerId\",\"__config__\":{\"layout\":\"colFormItem\",\"tag\":\"el-input\",\"workflowReadable\":false,\"workflowWritable\":true}}]}",
+                "{\"fields\":[{\"__vModel__\":\"reviewerId\",\"multiple\":true,\"__config__\":{\"layout\":\"colFormItem\",\"tag\":\"el-select\"}}]}");
+
+        for (String invalidContent : invalidContents)
+        {
+            formContent.set(invalidContent);
+            WorkflowModelDto request = saveRequest("model-1", false);
+            stubSaveRecord(request, null);
+            assertThatThrownBy(() -> guardedService.saveModel(request))
+                    .isInstanceOfSatisfying(ServiceException.class, exception ->
+                    {
+                        assertThat(exception.getCode()).isEqualTo(400);
+                        assertThat(exception.getSubCode())
+                                .isEqualTo("BPMN_AUTO_COPY_FORM_FIELD_INVALID");
+                    });
+        }
+
+        // 幂等登记与作者校验处于同一事务；失败时不会完成请求，也不会留下模型业务写入。
+        verify(modelSaveMapper, never()).completeSaveRequest(any(), any());
+        verify(repositoryService, never()).getModel(any());
+        verify(repositoryService, never()).saveModel(any());
+        verify(repositoryService, never()).addModelEditorSource(any(), any());
+        verifyNoInteractions(deployFormMapper);
+    }
+
+    /**
+     * 验证参与者正式身份作者门禁由显式校验和保存共用，且保存失败没有模型副作用。
+     * @return void，失效目标只在部署阶段才失败或产生保存写入时测试失败
+     */
+    @Test
+    void sharesSideEffectFreeParticipantValidationAcrossExplicitValidationAndSave()
+    {
+        WorkflowParticipantRuleDeploymentService participantService =
+                mock(WorkflowParticipantRuleDeploymentService.class);
+        service.setParticipantRuleDeploymentService(participantService);
+        WorkflowBpmnDocument authorDocument = document(List.of());
+        when(bpmnService.validateForSave(any(byte[].class))).thenReturn(authorDocument);
+        ServiceException failure = new ServiceException(
+                "流程发起范围引用的身份不存在、已停用或已删除", 409)
+                .setSubCode("PARTICIPANT_IDENTITY_INELIGIBLE");
+        doThrow(failure).when(participantService)
+                .validateAuthorRules(eq(authorDocument), any());
+
+        WorkflowBpmnValidationReport report = service.validateBpmn("<definitions/>");
+        assertThat(report.valid()).isFalse();
+        assertThat(report.issues()).singleElement().satisfies(issue ->
+                assertThat(issue.code()).isEqualTo("PARTICIPANT_IDENTITY_INELIGIBLE"));
+
+        WorkflowModelDto request = saveRequest("model-1", false);
+        stubSaveRecord(request, null);
+        assertThatThrownBy(() -> service.saveModel(request))
+                .isSameAs(failure);
+
+        verify(participantService, times(2))
+                .validateAuthorRules(eq(authorDocument), any());
+        verify(modelSaveMapper, never()).completeSaveRequest(any(), any());
+        verify(repositoryService, never()).getModel(any());
+        verify(repositoryService, never()).saveModel(any());
+        verify(repositoryService, never()).addModelEditorSource(any(), any());
+    }
+
+    /**
+     * 验证混合作者 BPMN 严格按扩展、条件、循环、参与者、DMN、调用活动和 SLA 顺序编译，
+     * 最终部署字节、节点权限表单快照及每类不可变快照都来自同一次作者校验视图。
+     * @return void，任一编译阶段丢失前序字节、目录或快照持久化参数时测试失败
+     */
+    @Test
+    void deploysMixedBpmnThroughCompleteCompilerChainWithConsistentSnapshots() throws Exception
+    {
+        WorkflowControlledLoopDeploymentService loopService =
+                mock(WorkflowControlledLoopDeploymentService.class);
+        WorkflowConditionDeploymentService conditionService =
+                mock(WorkflowConditionDeploymentService.class);
+        WorkflowParticipantRuleDeploymentService participantService =
+                mock(WorkflowParticipantRuleDeploymentService.class);
+        WorkflowCallActivityReferenceService callActivityService =
+                mock(WorkflowCallActivityReferenceService.class);
+        WorkflowTaskSlaDeploymentService slaService =
+                mock(WorkflowTaskSlaDeploymentService.class);
+        WorkflowFormFieldExtensionService formFieldService =
+                mock(WorkflowFormFieldExtensionService.class);
+        WorkflowFormTemplateValidator realValidator = new WorkflowFormTemplateValidator();
+        WorkflowModelService mixedService = new WorkflowModelService(
+                engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
+                modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
+                realValidator, extensionDeploymentService, loopService,
+                dmnDecisionService, formFieldService, callActivityService);
+        mixedService.setConditionDeploymentService(conditionService);
+        mixedService.setParticipantRuleDeploymentService(participantService);
+        mixedService.setTaskSlaDeploymentService(slaService);
+
+        Model model = model("model-mixed", "expense", "混合审批", "finance", 7, null);
+        when(repositoryService.getModel("model-mixed")).thenReturn(model);
+        WorkflowModelLockRow lockedModel = lockedModel(
+                "model-mixed", "expense", "混合审批", "finance", 7, null);
+        when(modelSaveMapper.selectOldestDefaultTenantModelForUpdate("expense"))
+                .thenReturn(lockedModel);
+        when(modelSaveMapper.selectDefaultTenantModelForUpdate("model-mixed"))
+                .thenReturn(lockedModel);
+        ModelQuery deployedQuery = modelQuery();
+        when(repositoryService.createModelQuery()).thenReturn(deployedQuery);
+        when(deployedQuery.count()).thenReturn(0L);
+        when(categoryMapper.selectByCode("finance")).thenReturn(activeCategory("finance"));
+
+        byte[] authorBytes = "author-bpmn".getBytes(StandardCharsets.UTF_8);
+        when(repositoryService.getModelEditorSource("model-mixed")).thenReturn(authorBytes);
+        WorkflowBpmnFormReference reference = new WorkflowBpmnFormReference(
+                WorkflowFormSourceType.TEMPLATE, 1L, "key_1", "review", "审批",
+                null, "expense", WorkflowFormFieldPermissionMode.HIDDEN,
+                Map.of("reviewerId", WorkflowFormFieldPermissionMode.READONLY));
+        WorkflowBpmnDocument authorDocument = mixedAuthorDocument(List.of(reference));
+        when(bpmnService.validateForSave(authorBytes)).thenReturn(authorDocument);
+        String formContent = """
+                {"fields":[
+                  {"__vModel__":"reviewerId","__config__":{"layout":"colFormItem","tag":"el-select"}},
+                  {"__vModel__":"notes","__config__":{"layout":"colFormItem","tag":"el-input"}}
+                ]}
+                """;
+        when(formMapper.selectById(1L)).thenReturn(activeForm(1L, "审批表", formContent));
+
+        byte[] extensionBytes = "compiled-extension".getBytes(StandardCharsets.UTF_8);
+        byte[] conditionBytes = "compiled-condition".getBytes(StandardCharsets.UTF_8);
+        byte[] loopBytes = "compiled-loop".getBytes(StandardCharsets.UTF_8);
+        byte[] participantBytes = "compiled-participant".getBytes(StandardCharsets.UTF_8);
+        byte[] dmnBytes = "compiled-dmn".getBytes(StandardCharsets.UTF_8);
+        byte[] callBytes = "compiled-call".getBytes(StandardCharsets.UTF_8);
+        byte[] slaBytes = "compiled-sla".getBytes(StandardCharsets.UTF_8);
+        WorkflowPreparedExtensionDeployment extensionPrepared =
+                new WorkflowPreparedExtensionDeployment(extensionBytes,
+                        List.of(new WfDeployExtensionSnapshot()));
+        WorkflowPreparedConditionDeployment conditionPrepared =
+                new WorkflowPreparedConditionDeployment(conditionBytes,
+                        List.of(new WfDeployConditionRule()));
+        WorkflowPreparedControlledLoopDeployment loopPrepared =
+                new WorkflowPreparedControlledLoopDeployment(loopBytes,
+                        List.of(new WfDeployControlledLoop()));
+        WorkflowPreparedParticipantRuleDeployment participantPrepared =
+                new WorkflowPreparedParticipantRuleDeployment(participantBytes,
+                        List.of(new WfDeployParticipantRule()));
+        WorkflowPreparedDmnDeployment dmnPrepared = new WorkflowPreparedDmnDeployment(
+                dmnBytes, List.of(new WorkflowPreparedDmnDeployment.DecisionSource(
+                        "expense", "decision", "decision:1:1", "expenseDecision", 1,
+                        "dmn-deployment", "expense.dmn", "a".repeat(64),
+                        "<definitions/>".getBytes(StandardCharsets.UTF_8))));
+        WorkflowPreparedCallActivityDeployment callPrepared =
+                new WorkflowPreparedCallActivityDeployment(callBytes,
+                        List.of(new WfDeployCallActivitySnapshot()));
+        WorkflowPreparedSlaDeployment slaPrepared = new WorkflowPreparedSlaDeployment(
+                slaBytes, List.of(new WfDeployTaskSla()));
+        AtomicReference<byte[]> conditionInput = new AtomicReference<>();
+        AtomicReference<byte[]> loopInput = new AtomicReference<>();
+        AtomicReference<byte[]> participantInput = new AtomicReference<>();
+        AtomicReference<byte[]> dmnInput = new AtomicReference<>();
+        AtomicReference<byte[]> callInput = new AtomicReference<>();
+        AtomicReference<byte[]> slaInput = new AtomicReference<>();
+        when(extensionDeploymentService.prepare(authorDocument, "7"))
+                .thenReturn(extensionPrepared);
+        when(conditionService.prepare(eq(authorDocument), any(byte[].class), anyList(), eq("7")))
+                .thenAnswer(invocation ->
+                {
+                    conditionInput.set(invocation.getArgument(1, byte[].class));
+                    return conditionPrepared;
+                });
+        when(loopService.prepare(eq(authorDocument), any(byte[].class), anyList(), eq("7")))
+                .thenAnswer(invocation ->
+                {
+                    loopInput.set(invocation.getArgument(1, byte[].class));
+                    return loopPrepared;
+                });
+        when(participantService.prepare(eq(authorDocument), any(byte[].class),
+                any(WorkflowAuthorFormFieldCatalog.class), eq("7")))
+                .thenAnswer(invocation ->
+                {
+                    participantInput.set(invocation.getArgument(1, byte[].class));
+                    return participantPrepared;
+                });
+        when(dmnDecisionService.prepare(any(byte[].class))).thenAnswer(invocation ->
+        {
+            dmnInput.set(invocation.getArgument(0, byte[].class));
+            return dmnPrepared;
+        });
+        when(callActivityService.prepare(any(byte[].class), eq(authorDocument), any()))
+                .thenAnswer(invocation ->
+                {
+                    callInput.set(invocation.getArgument(0, byte[].class));
+                    return callPrepared;
+                });
+        when(slaService.prepare(any(byte[].class), eq("7"))).thenAnswer(invocation ->
+        {
+            slaInput.set(invocation.getArgument(0, byte[].class));
+            return slaPrepared;
+        });
+        when(callActivityService.frozenTargetDefinitionIds()).thenReturn(Set.of());
+
+        DeploymentBuilder builder = mock(DeploymentBuilder.class);
+        when(repositoryService.createDeployment()).thenReturn(builder);
+        when(builder.name("混合审批")).thenReturn(builder);
+        when(builder.key("expense")).thenReturn(builder);
+        when(builder.category("finance")).thenReturn(builder);
+        when(builder.addBytes(eq("expense.bpmn20.xml"), any(byte[].class))).thenReturn(builder);
+        Deployment deployment = mock(Deployment.class);
+        when(deployment.getId()).thenReturn("deployment-mixed");
+        when(builder.deploy()).thenReturn(deployment);
+        ProcessDefinitionQuery activeQuery = mock(ProcessDefinitionQuery.class);
+        when(activeQuery.processDefinitionKey("expense")).thenReturn(activeQuery);
+        when(activeQuery.active()).thenReturn(activeQuery);
+        when(activeQuery.list()).thenReturn(List.of());
+        ProcessDefinition definition = mock(ProcessDefinition.class);
+        when(definition.getId()).thenReturn("expense:7:70");
+        when(definition.getKey()).thenReturn("expense");
+        ProcessDefinitionQuery deployedDefinitionQuery = mock(ProcessDefinitionQuery.class);
+        when(deployedDefinitionQuery.deploymentId("deployment-mixed"))
+                .thenReturn(deployedDefinitionQuery);
+        when(deployedDefinitionQuery.list()).thenReturn(List.of(definition));
+        when(repositoryService.createProcessDefinitionQuery())
+                .thenReturn(activeQuery, deployedDefinitionQuery);
+        when(deployFormMapper.insertBatch(anyList())).thenAnswer(invocation ->
+                ((List<?>) invocation.getArgument(0)).size());
+
+        assertThat(mixedService.deployModel("model-mixed")).isEqualTo("deployment-mixed");
+
+        assertThat(conditionInput.get()).containsExactly(extensionBytes);
+        assertThat(loopInput.get()).containsExactly(conditionBytes);
+        assertThat(participantInput.get()).containsExactly(loopBytes);
+        assertThat(dmnInput.get()).containsExactly(participantBytes);
+        assertThat(callInput.get()).containsExactly(dmnBytes);
+        assertThat(slaInput.get()).containsExactly(callBytes);
+        ArgumentCaptor<byte[]> deployedBytes = ArgumentCaptor.forClass(byte[].class);
+        verify(builder).addBytes(eq("expense.bpmn20.xml"), deployedBytes.capture());
+        assertThat(deployedBytes.getValue()).containsExactly(slaBytes);
+        verify(bpmnService).validateCompiledDeployment(slaBytes);
+
+        ArgumentCaptor<WorkflowAuthorFormFieldCatalog> validationCatalog =
+                ArgumentCaptor.forClass(WorkflowAuthorFormFieldCatalog.class);
+        verify(participantService).validateAuthorRules(
+                eq(authorDocument), validationCatalog.capture());
+        assertThat(validationCatalog.getValue()
+                .containsTaskField("expense", "review", "reviewerId")).isTrue();
+        ArgumentCaptor<WorkflowAuthorFormFieldCatalog> deploymentCatalog =
+                ArgumentCaptor.forClass(WorkflowAuthorFormFieldCatalog.class);
+        verify(participantService).prepare(eq(authorDocument), any(byte[].class),
+                deploymentCatalog.capture(), eq("7"));
+        assertThat(deploymentCatalog.getValue()
+                .containsTaskField("expense", "review", "reviewerId")).isTrue();
+
+        verify(extensionDeploymentService).persist(
+                eq("deployment-mixed"), eq(extensionPrepared), anyList());
+        verify(conditionService).persist("deployment-mixed", conditionPrepared);
+        verify(loopService).persist("deployment-mixed", loopPrepared);
+        verify(participantService).persist("deployment-mixed", participantPrepared);
+        verify(dmnDecisionService).persist("deployment-mixed", dmnPrepared, "7");
+        verify(callActivityService).persist("deployment-mixed", callPrepared, "7");
+        verify(slaService).persist("deployment-mixed", slaPrepared);
+        ArgumentCaptor<List<WfDeployForm>> formSnapshots = snapshotCaptor();
+        verify(deployFormMapper).insertBatch(formSnapshots.capture());
+        assertThat(formSnapshots.getValue()).singleElement().satisfies(snapshot ->
+        {
+            JsonNode root = JsonMapper.shared().readTree(snapshot.getContent());
+            JsonNode reviewer = root.path("fields").get(0).path("__config__");
+            JsonNode notes = root.path("fields").get(1).path("__config__");
+            assertThat(reviewer.path("workflowReadable").asBoolean()).isTrue();
+            assertThat(reviewer.path("workflowWritable").asBoolean()).isFalse();
+            assertThat(notes.path("workflowHidden").asBoolean()).isTrue();
+            assertThat(snapshot.getDeployId()).isEqualTo("deployment-mixed");
+        });
+        verify(model).setDeploymentId("deployment-mixed");
+        verify(repositoryService).saveModel(model);
+    }
+
+    /**
      * 验证部署会保存不可变快照并自动停用旧定义，同时不冻结旧版本在途实例。
      *
      * @return 无返回值；部署或快照闭环不完整时测试失败
@@ -904,8 +1215,9 @@ class WorkflowModelServiceTest
 
         verify(repositoryService).setProcessDefinitionCategory("expense:2:10", "finance");
         verify(repositoryService).suspendProcessDefinitionById("expense:1:9", false, null);
-        verify(formTemplateValidator).validate("{\"v\":1}");
-        verify(formTemplateValidator).validate("{\"fields\":[]}");
+        // 表单冻结和动态审批字段投影各自重新校验快照，任一链路都不能信任另一方的内存结果。
+        verify(formTemplateValidator, times(2)).validate("{\"v\":1}");
+        verify(formTemplateValidator, times(2)).validate("{\"fields\":[]}");
         verify(deployFormMapper).insertBatch(snapshots.capture());
         verify(extensionDeploymentService).persist(eq("deployment-1"), any(), anyList());
         verify(dmnDecisionService).persist(eq("deployment-1"), any(), eq("7"));
@@ -922,6 +1234,77 @@ class WorkflowModelServiceTest
         });
         verify(model).setDeploymentId("deployment-1");
         verify(repositoryService).saveModel(model);
+    }
+
+    /**
+     * 验证标准循环在作者 XML 阶段直接拒绝，不获取版本锁且不产生部署副作用。
+     *
+     * @return 无返回值；错误契约、编译、部署或快照写入任一发生时测试失败
+     */
+    @Test
+    void rejectsStandardLoopBeforeLockCompilationAndDeploymentSideEffects()
+    {
+        WorkflowExtensionDeploymentService guardedExtensionService =
+                mock(WorkflowExtensionDeploymentService.class);
+        WorkflowControlledLoopDeploymentService guardedLoopService =
+                mock(WorkflowControlledLoopDeploymentService.class);
+        WorkflowDmnDecisionService guardedDmnService =
+                mock(WorkflowDmnDecisionService.class);
+        WorkflowFormFieldExtensionService guardedFormFieldService =
+                mock(WorkflowFormFieldExtensionService.class);
+        WorkflowCallActivityReferenceService guardedCallActivityService =
+                mock(WorkflowCallActivityReferenceService.class);
+        WorkflowConditionDeploymentService guardedConditionService =
+                mock(WorkflowConditionDeploymentService.class);
+        WorkflowParticipantRuleDeploymentService guardedParticipantService =
+                mock(WorkflowParticipantRuleDeploymentService.class);
+        WorkflowTaskSlaDeploymentService guardedSlaService =
+                mock(WorkflowTaskSlaDeploymentService.class);
+        WorkflowModelService guardedService = new WorkflowModelService(
+                engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
+                modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
+                formTemplateValidator, guardedExtensionService, guardedLoopService,
+                guardedDmnService, guardedFormFieldService, guardedCallActivityService);
+        guardedService.setConditionDeploymentService(guardedConditionService);
+        guardedService.setParticipantRuleDeploymentService(guardedParticipantService);
+        guardedService.setTaskSlaDeploymentService(guardedSlaService);
+
+        Model model = model("model-loop", "loop", "标准循环", "finance", 1, null);
+        byte[] source = "<definitions><standardLoopCharacteristics/></definitions>"
+                .getBytes(StandardCharsets.UTF_8);
+        WorkflowBpmnDocument document = new WorkflowBpmnDocument(
+                new BpmnModel(), new String(source, StandardCharsets.UTF_8), List.of());
+        WorkflowBpmnValidationIssue issue = new WorkflowBpmnValidationIssue(
+                "BPMN_ELEMENT_NOT_EXECUTABLE", "WARNING", "task_loop",
+                "标准循环可编辑和导出，但 Flowable 8 不提供可执行模型，禁止部署");
+        when(repositoryService.getModel("model-loop")).thenReturn(model);
+        ModelQuery deployedQuery = modelQuery();
+        when(repositoryService.createModelQuery()).thenReturn(deployedQuery);
+        when(deployedQuery.count()).thenReturn(0L);
+        when(repositoryService.getModelEditorSource("model-loop")).thenReturn(source);
+        when(bpmnService.validateForSave(source)).thenReturn(document);
+        when(bpmnService.deploymentCompatibilityIssues(document)).thenReturn(List.of(issue));
+        DeploymentBuilder builder = mock(DeploymentBuilder.class);
+        when(repositoryService.createDeployment()).thenReturn(builder);
+
+        assertThatThrownBy(() -> guardedService.deployModel("model-loop"))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(400);
+                    assertThat(exception.getSubCode())
+                            .isEqualTo("BPMN_ELEMENT_NOT_EXECUTABLE");
+                });
+
+        // 拒绝发生在版本组数据库锁之前，同时禁止所有编译器和快照写入器启动。
+        verifyNoInteractions(modelSaveMapper, bpmnIdentityValidator, categoryMapper,
+                formMapper, deployFormMapper, guardedExtensionService, guardedLoopService,
+                guardedDmnService, guardedFormFieldService, guardedCallActivityService,
+                guardedConditionService, guardedParticipantService, guardedSlaService);
+        verify(repositoryService, never()).createDeployment();
+        verify(builder, never()).deploy();
+        verify(repositoryService, never()).createProcessDefinitionQuery();
+        verify(repositoryService, never()).saveModel(any());
+        verify(model, never()).setDeploymentId(any());
     }
 
     /**
@@ -1138,6 +1521,70 @@ class WorkflowModelServiceTest
         process.setExecutable(true);
         bpmnModel.addProcess(process);
         return new WorkflowBpmnDocument(bpmnModel, "<definitions/>", references);
+    }
+
+    /**
+     * 构造同时包含流程级和任务级表单用户自动抄送规则的作者文档。
+     * @param references List&lt;WorkflowBpmnFormReference&gt;，当前流程正式节点表单引用
+     * @return WorkflowBpmnDocument，含参与者默认规则和自动抄送规则的混合作者模型
+     */
+    private WorkflowBpmnDocument autoCopyDocument(
+            List<WorkflowBpmnFormReference> references)
+    {
+        return mixedAuthorDocument(references);
+    }
+
+    /**
+     * 构造供完整编译链使用的混合作者 BPMN，规则属性只存在于作者模型中。
+     * @param references List&lt;WorkflowBpmnFormReference&gt;，权限化快照使用的表单引用
+     * @return WorkflowBpmnDocument，包含流程、用户任务、参与者和两级自动抄送规则
+     */
+    private WorkflowBpmnDocument mixedAuthorDocument(
+            List<WorkflowBpmnFormReference> references)
+    {
+        BpmnModel bpmnModel = new BpmnModel();
+        Process process = new Process();
+        process.setId("expense");
+        process.setName("混合审批");
+        process.setExecutable(true);
+        UserTask review = new UserTask();
+        review.setId("review");
+        review.setName("审批");
+        WorkflowParticipantRuleBpmnContract.addInitialAuthorRules(process, review);
+        addAutoCopyRules(process, """
+                {"version":1,"rules":[{"id":"process-copy","trigger":"PROCESS_COMPLETED",
+                "recipients":[{"type":"FORM_USER_FIELD","values":["reviewerId"]}]}]}
+                """);
+        addAutoCopyRules(review, """
+                {"version":1,"rules":[{"id":"task-copy","trigger":"NODE_COMPLETED",
+                "recipients":[{"type":"FORM_USER_FIELD","values":["reviewerId"]}]}]}
+                """);
+        process.addFlowElement(review);
+        bpmnModel.addProcess(process);
+        return new WorkflowBpmnDocument(bpmnModel, "<definitions/>", references);
+    }
+
+    /**
+     * 向作者 BPMN 元素追加标准 Flowable properties 自动抄送属性。
+     * @param element BaseElement，流程或用户任务作者元素
+     * @param rulesJson String，符合 WorkflowAutoCopyRuleContract 的完整 JSON
+     * @return void，属性以独立容器加入元素扩展集合
+     */
+    private void addAutoCopyRules(BaseElement element, String rulesJson)
+    {
+        ExtensionElement property = new ExtensionElement();
+        property.setName("property");
+        property.setNamespace("http://flowable.org/bpmn");
+        property.addAttribute(new ExtensionAttribute("name",
+                WorkflowAutoCopyRuleContract.PROPERTY_NAME));
+        property.addAttribute(new ExtensionAttribute("value", rulesJson.strip()));
+        ExtensionElement container = new ExtensionElement();
+        container.setName("properties");
+        container.setNamespace("http://flowable.org/bpmn");
+        Map<String, List<ExtensionElement>> children = new HashMap<>();
+        children.put("property", List.of(property));
+        container.setChildElements(children);
+        element.addExtensionElement(container);
     }
 
     /**

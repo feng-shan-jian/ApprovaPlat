@@ -30,25 +30,30 @@
 | 若依 | 20 |
 | Quartz | 11 |
 | Flowable Common/Process/History/DMN | 36 |
-| ApprovaPlat `wf_*` | 32 |
-| 合计 | 99 |
+| ApprovaPlat `wf_*` | 44 |
+| 合计 | 111 |
 
-32 张业务表：
+44 张业务表：
 
 - `wf_category`
 - `wf_form`
 - `wf_deploy_form`
+- `wf_deploy_condition_rule`
 - `wf_deploy_controlled_loop`
+- `wf_deploy_participant_rule`
+- `wf_participant_resolution_audit`
 - `wf_controlled_loop_execution`
-- `wf_copy`
-- `wf_model_save_idempotency`
-- `wf_attachment_quota_guard`
-- `wf_attachment`
-- `wf_designer_preference`
 - `wf_bpmn_extension`
 - `wf_bpmn_extension_version`
 - `wf_deploy_extension_snapshot`
+- `wf_business_calendar`
+- `wf_business_calendar_day`
+- `wf_deploy_task_sla`
+- `wf_task_sla_execution`
+- `wf_task_sla_audit`
+- `wf_task_sla_notification`
 - `wf_deploy_dmn_snapshot`
+- `wf_deploy_call_activity`
 - `wf_connector_endpoint`
 - `wf_connector_invocation`
 - `wf_sql_datasource`
@@ -58,11 +63,24 @@
 - `wf_collaboration_message`
 - `wf_collaboration_outbox`
 - `wf_collaboration_message_audit`
+- `wf_copy`
+- `wf_model_save_idempotency`
+- `wf_designer_preference`
+- `wf_process_draft`
+- `wf_process_draft_audit`
+- `wf_attachment_quota_guard`
+- `wf_attachment`
 - `wf_bpmn_event_code`
 - `wf_bpmn_event_audit`
 - `wf_bpmn_event_notification`
+- `wf_notification_policy`
+- `wf_notification_preference`
+- `wf_notification_outbox`
+- `wf_notification_inbox`
+- `wf_notification_delivery_audit`
+- `wf_notification_urge_audit`
 
-菜单基线为 2 个目录、19 个页面、65 个按钮，共 86 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
+菜单基线为 2 个目录、21 个页面、75 个按钮，共 98 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
 
 ## 结构约束
 
@@ -79,7 +97,7 @@
 2. `back/sql/flowable/verify/8.0.0__verify_workflow_business.sql`
 3. `back/sql/flowable/verify/8.0.0__verify_workflow_menu.sql`
 
-三组脚本共定义 46 项只读检查，所有结果都必须为 `PASS`。表数检查固定核对总表数 99、分项表数 `20/11/36/32`，受控循环、多池协作、BPMN 错误/升级和审批 SLA 正式表均归入 ApprovaPlat `wf_*`；还必须核对菜单 86 条以及应用账号只拥有目标 schema 的最小 DML 权限。
+三组脚本共定义 58 项只读检查，所有结果都必须为 `PASS`。表数检查固定核对总表数 111、分项表数 `20/11/36/44`，条件分支、动态参与者、子流程、申请草稿、自动抄送、普通审批通知、受控循环、多池协作、BPMN 错误/升级和审批 SLA 正式表均归入 ApprovaPlat `wf_*`；还必须核对菜单 98 条以及应用账号只拥有目标 schema 的最小 DML 权限。
 
 静态契约测试和发布门禁自测不能代替真实 MySQL 空库安装。正式发布前必须保存真实执行日志、表清单、约束结果、`mysqlcheck`、备份恢复和三组验收输出。
 

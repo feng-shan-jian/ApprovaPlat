@@ -1,6 +1,7 @@
 package com.ruoyi.flowable.service.process;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
@@ -39,6 +40,7 @@ import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 流程实例状态管理、受控终止和已结束历史删除服务。
@@ -107,6 +109,9 @@ public class WorkflowProcessInstanceService
     /** SLA 时钟冻结和 Flowable timer job 重排服务；旧直接构造测试时可为空。 */
     private WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
 
+    /** 普通审批结果通知服务；旧直接构造单元测试时可为空。 */
+    private WorkflowNotificationService notificationService;
+
     /**
      * 创建流程实例写操作服务。
      *
@@ -146,6 +151,17 @@ public class WorkflowProcessInstanceService
     public void setTaskSlaRuntimeService(WorkflowTaskSlaRuntimeService taskSlaRuntimeService)
     {
         this.taskSlaRuntimeService = taskSlaRuntimeService;
+    }
+
+    /**
+     * 延迟注入普通审批结果通知服务。
+     * @param notificationService WorkflowNotificationService，显式取消/终止 outbox 服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setNotificationService(WorkflowNotificationService notificationService)
+    {
+        this.notificationService = notificationService;
     }
 
     /**
@@ -229,9 +245,9 @@ public class WorkflowProcessInstanceService
     }
 
     /**
-     * 由流程管理员将运行实例切换到激活或挂起状态，相同状态按幂等成功返回。
+     * 由流程管理员将运行实例所在的完整 CallActivity 执行树切换到激活或挂起状态。
      *
-     * @param request WorkflowInstanceStateRequest，实例主键和枚举目标状态
+     * @param request WorkflowInstanceStateRequest，根或子实例主键和枚举目标状态
      * @return WorkflowInstanceStateView，事务内复核后的状态及是否真实变更
      */
     public WorkflowInstanceStateView updateState(WorkflowInstanceStateRequest request)
@@ -248,29 +264,42 @@ public class WorkflowProcessInstanceService
             requirePermission(STATE_PERMISSION);
             HistoricProcessInstance historic = requireHistoricInstance(instanceId);
             requireRunningHistory(historic);
-            ProcessInstance current = requireRuntimeInstance(instanceId);
-            if (current.isSuspended() == targetState.suspended())
+            ProcessInstance requestedInstance = requireRuntimeInstance(instanceId);
+            ProcessInstance rootInstance = requireRootProcessInstance(requestedInstance);
+            List<String> processTreeInstanceIds = requireProcessTreeInstanceIds(rootInstance);
+            if (rootInstance.isSuspended() == targetState.suspended())
             {
                 return new WorkflowInstanceStateView(instanceId, targetState, false);
             }
 
             try
             {
+                // 激活时先恢复根实例，挂起时最后挂起根实例，避免父 execution 拒绝对子实例执行状态命令。
+                List<String> stateChangeOrder = new ArrayList<>(processTreeInstanceIds);
+                stateChangeOrder.remove(rootInstance.getId());
                 if (targetState.suspended())
                 {
-                    runtimeService.suspendProcessInstanceById(instanceId);
-                    if (taskSlaRuntimeService != null)
+                    stateChangeOrder.add(rootInstance.getId());
+                    for (String processTreeInstanceId : stateChangeOrder)
                     {
-                        taskSlaRuntimeService.pauseInstance(instanceId, actor.userId());
+                        runtimeService.suspendProcessInstanceById(processTreeInstanceId);
+                        if (taskSlaRuntimeService != null)
+                        {
+                            taskSlaRuntimeService.pauseInstance(processTreeInstanceId, actor.userId());
+                        }
                     }
                 }
                 else
                 {
-                    runtimeService.activateProcessInstanceById(instanceId);
-                    if (taskSlaRuntimeService != null)
+                    stateChangeOrder.add(0, rootInstance.getId());
+                    for (String processTreeInstanceId : stateChangeOrder)
                     {
-                        // 激活与 timer job 平移处于同一事务，异步执行器不能抢占未平移的过期作业。
-                        taskSlaRuntimeService.resumeInstance(instanceId, actor.userId());
+                        runtimeService.activateProcessInstanceById(processTreeInstanceId);
+                        if (taskSlaRuntimeService != null)
+                        {
+                            // 激活与 timer job 平移处于同一事务，异步执行器不能抢占未平移的过期作业。
+                            taskSlaRuntimeService.resumeInstance(processTreeInstanceId, actor.userId());
+                        }
                     }
                 }
             }
@@ -279,8 +308,14 @@ public class WorkflowProcessInstanceService
                 throw conflict("流程实例状态已发生变化，请刷新后重试");
             }
 
-            ProcessInstance updated = findRuntimeInstance(instanceId);
-            if (updated == null || updated.isSuspended() != targetState.suspended())
+            List<ProcessInstance> updatedInstances = runtimeService.createProcessInstanceQuery()
+                    .processInstanceIds(Set.copyOf(processTreeInstanceIds)).list();
+            if (updatedInstances == null
+                    || updatedInstances.size() != processTreeInstanceIds.size()
+                    || updatedInstances.stream().anyMatch(updated -> updated == null
+                            || !StringUtils.hasText(updated.getId())
+                            || !processTreeInstanceIds.contains(updated.getId().trim())
+                            || updated.isSuspended() != targetState.suspended()))
             {
                 throw conflict("流程实例状态已发生变化，请刷新后重试");
             }
@@ -331,6 +366,13 @@ public class WorkflowProcessInstanceService
                 runtimeService.updateBusinessStatus(rootInstanceId, decision.processStatus());
                 runtimeService.setVariable(rootInstanceId, PROCESS_STATUS_VARIABLE,
                         decision.processStatus());
+                if (notificationService != null)
+                {
+                    String eventType = CANCELED_STATUS.equals(decision.processStatus())
+                            ? "PROCESS_CANCELED" : "PROCESS_TERMINATED";
+                    notificationService.onProcessResult(eventType,
+                            rootInstance.getProcessDefinitionId(), rootInstanceId);
+                }
                 String auditMessage = buildTerminationAudit(decision, actor.userId(), reason,
                         wasSuspended, requestedInstanceId, rootInstanceId,
                         processTreeInstanceIds.size());

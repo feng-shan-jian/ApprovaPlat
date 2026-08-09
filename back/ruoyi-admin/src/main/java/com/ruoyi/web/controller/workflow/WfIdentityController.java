@@ -5,20 +5,25 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.controller.BaseController;
+import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
+import com.ruoyi.flowable.domain.dto.WorkflowIdentitySelectionRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.identity.WorkflowIdentityDirectoryService;
 
 /**
- * 工作流设计器、委派和转办使用的最小身份目录接口。
+ * 工作流设计、发起时选人、委派和转办使用的最小身份目录接口。
  */
 @Validated
 @RestController
@@ -39,16 +44,17 @@ public class WfIdentityController extends BaseController
     }
 
     /**
-     * 分页查询流程设计或任务转办允许使用的有效身份选项。
+     * 分页查询流程设计、发起时选人或任务转办允许使用的有效身份选项。
      *
      * @param type String，user、role 或 dept
-     * @param capability String，可为空；approval 返回直接办理用户，claim 返回完整认领资格身份
+     * @param capability String，可为空；approval 返回直接办理用户，claim 返回完整认领资格身份，
+     *        copy 返回同时具备抄送列表和流程详情权限的身份
      * @param keyword String，可为空的名称、账号或编码检索词
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数
      * @return TableDataInfo，仅包含 value、label 和 type 的分页响应
      */
-    @PreAuthorize("@ss.hasAnyPermi('workflow:model:designer,workflow:process:approval,workflow:process:manageList')")
+    @PreAuthorize("@ss.hasAnyPermi('workflow:model:designer,workflow:process:start,workflow:process:approval,workflow:process:manageList')")
     @GetMapping("/options")
     public TableDataInfo options(
             @RequestParam
@@ -56,7 +62,8 @@ public class WfIdentityController extends BaseController
             @Pattern(regexp = "user|role|dept", message = "工作流身份类型必须为 user、role 或 dept")
             String type,
             @RequestParam(required = false)
-            @Pattern(regexp = "approval|claim|", message = "工作流身份目录能力必须为 approval 或 claim")
+            @Pattern(regexp = "approval|claim|copy|",
+                    message = "工作流身份目录能力必须为 approval、claim 或 copy")
             String capability,
             @RequestParam(required = false)
             @Size(max = WorkflowIdentityDirectoryService.MAX_KEYWORD_LENGTH,
@@ -79,5 +86,20 @@ public class WfIdentityController extends BaseController
         result.setCode(HttpStatus.SUCCESS);
         result.setMsg("查询成功");
         return result;
+    }
+
+    /**
+     * 批量回显作者 BPMN 中已保存的目录对象，停用或删除对象只用于提示和替换。
+     *
+     * @param request WorkflowIdentitySelectionRequest，身份类型、能力与已保存目录值
+     * @return AjaxResult，按请求顺序返回正式名称和实时可用状态
+     */
+    @PreAuthorize("@ss.hasPermi('workflow:model:designer')")
+    @PostMapping("/options/resolve")
+    public AjaxResult resolveOptions(
+            @Valid @RequestBody WorkflowIdentitySelectionRequest request)
+    {
+        return success(identityDirectoryService.resolveSelections(
+                request.type(), request.capability(), request.values()));
     }
 }

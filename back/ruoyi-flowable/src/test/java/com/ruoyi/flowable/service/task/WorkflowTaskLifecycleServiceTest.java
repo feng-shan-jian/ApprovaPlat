@@ -166,6 +166,7 @@ class WorkflowTaskLifecycleServiceTest
         historicActivityQuery = mock(HistoricActivityInstanceQuery.class, RETURNS_SELF);
         deployFormMapper = mock(WfDeployFormMapper.class);
         variableValidator = mock(WorkflowStartVariableValidator.class);
+        when(variableValidator.readableFieldNames(anyString())).thenReturn(Set.of());
         attachmentService = mock(WorkflowAttachmentService.class);
         taskCopyService = mock(WorkflowTaskCopyService.class);
         nextTaskAssignmentService = mock(WorkflowNextTaskAssignmentService.class);
@@ -273,12 +274,24 @@ class WorkflowTaskLifecycleServiceTest
         stubActiveTask(task);
         stubActiveInstance(INSTANCE_ID, ACTOR_ID);
         BpmnFixture fixture = bpmnFixture("review", "审核", "key_20");
+        FormProperty permissionDefault = new FormProperty();
+        permissionDefault.setId("approva_permission_default");
+        permissionDefault.setType("string");
+        permissionDefault.setReadable(true);
+        permissionDefault.setWriteable(true);
+        permissionDefault.setRequired(false);
+        // 正式模板节点携带权限描述时，运行表单来源仍必须解析为部署 formKey 快照。
+        fixture.currentTask().setFormProperties(List.of(permissionDefault));
         stubDefinition(fixture.model());
         WfDeployForm snapshot = snapshot("review", "key_20", "{\"fields\":[]}");
         when(deployFormMapper.selectByDeploymentId("deployment-1")).thenReturn(List.of(snapshot));
         when(variableValidator.validateForStart(snapshot.getContent(), Map.of("approved", true)))
                 .thenReturn(new WorkflowValidatedStartVariables(
                         Map.of("approved", true), Map.of()));
+        when(variableValidator.readableFieldNames(snapshot.getContent()))
+                .thenReturn(Set.of("readonlyCode", "approved"));
+        when(runtimeService.getVariables(INSTANCE_ID, Set.of("readonlyCode", "approved")))
+                .thenReturn(Map.of("readonlyCode", "R-001", "approved", false));
         WorkflowTaskCopyService.CopyPlan copyPlan = new WorkflowTaskCopyService.CopyPlan(
                 List.of(new WfCopy()));
         WorkflowNextTaskAssignmentService.AssignmentPlan assignmentPlan =
@@ -307,6 +320,7 @@ class WorkflowTaskLifecycleServiceTest
         assertThat(submission.taskId()).isEqualTo(TASK_ID);
         assertThat(submission.nodeKey()).isEqualTo("review");
         assertThat(submission.values().get("approved").booleanValue()).isTrue();
+        assertThat(submission.values().get("readonlyCode").textValue()).isEqualTo("R-001");
         JsonNode audit = capturedAudit("1");
         assertThat(audit.path("action").asText()).isEqualTo("COMPLETE");
         assertThat(audit.path("actorUserId").asText()).isEqualTo(ACTOR_ID);
@@ -816,8 +830,8 @@ class WorkflowTaskLifecycleServiceTest
 
         Map<String, Object> submitted = Map.of("amount", 1200,
                 "files", List.of(attachmentId));
-        // 开始表单快照包含本次已删除字段；覆盖保存必须只删除该字段，不能删除流程内部状态。
-        Map<String, Object> previous = Map.of("amount", 900, "obsoleteField", "旧值");
+        // description 未在本次补丁出现，重新提交后必须继续保留其正式旧值。
+        Map<String, Object> previous = Map.of("amount", 900, "description", "旧值");
         when(runtimeService.getVariable(INSTANCE_ID,
                 WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME)).thenReturn(
                         WorkflowFormSubmissionSnapshotCodec.encodeStart(
@@ -826,7 +840,7 @@ class WorkflowTaskLifecycleServiceTest
         Map<String, List<String>> references = Map.of("files", List.of(attachmentId));
         Map<String, Object> projected = Map.of("amount", 1200,
                 "files", List.of(Map.of("attachmentId", attachmentId)));
-        when(variableValidator.validateForStart(snapshot.getContent(), submitted))
+        when(variableValidator.validatePatch(eq(snapshot.getContent()), eq(submitted), anyMap()))
                 .thenReturn(new WorkflowValidatedStartVariables(submitted, references));
         when(attachmentService.prepareTaskVariables(ACTOR_ID, INSTANCE_ID,
                 submitted, references)).thenReturn(projected);
@@ -838,7 +852,7 @@ class WorkflowTaskLifecycleServiceTest
         verify(attachmentService).bindTaskAttachments(ACTOR_ID, INSTANCE_ID, TASK_ID,
                 "start", references);
         verify(runtimeService).setVariables(INSTANCE_ID, projected);
-        verify(runtimeService).removeVariables(INSTANCE_ID, java.util.Set.of("obsoleteField"));
+        verify(runtimeService, never()).removeVariables(any(), any());
         verify(taskService).setOwner(TASK_ID, "6");
         verify(taskService).setAssignee(TASK_ID, "8");
         verify(taskService).addCandidateUser(TASK_ID, "9");

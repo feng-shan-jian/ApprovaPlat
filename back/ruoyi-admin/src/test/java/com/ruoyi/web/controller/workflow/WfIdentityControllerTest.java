@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -13,11 +14,14 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentityOptionView;
+import com.ruoyi.flowable.domain.dto.WorkflowIdentitySelectionRequest;
+import com.ruoyi.flowable.domain.vo.WorkflowIdentitySelectionView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.identity.WorkflowIdentityDirectoryService;
 
@@ -127,7 +131,65 @@ class WfIdentityControllerTest
     }
 
     /**
-     * 验证身份目录不依赖系统用户管理权限，仅允许模型设计者或任务办理人访问。
+     * 验证已保存身份通过正式批量接口按顺序回显名称和实时可用状态。
+     * @return 无返回值；请求绑定、服务调用或响应字段漂移时测试失败
+     * @throws Exception MockMvc 执行请求失败时抛出
+     */
+    @Test
+    void resolvesSavedIdentitySelectionsFromFormalDirectory() throws Exception
+    {
+        when(identityDirectoryService.resolveSelections(
+                "user", "approval", List.of("21", "22")))
+                .thenReturn(List.of(
+                        new WorkflowIdentitySelectionView(
+                                "21", "张三 (zhangsan)", "user", true),
+                        new WorkflowIdentitySelectionView(
+                                "22", "已删除用户", "user", false)));
+
+        mockMvc.perform(post("/workflow/identity/options/resolve")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"type":"user","capability":"approval","values":["21","22"]}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].label").value("张三 (zhangsan)"))
+                .andExpect(jsonPath("$.data[0].available").value(true))
+                .andExpect(jsonPath("$.data[1].label").value("已删除用户"))
+                .andExpect(jsonPath("$.data[1].available").value(false));
+
+        verify(identityDirectoryService).resolveSelections(
+                "user", "approval", List.of("21", "22"));
+    }
+
+    /**
+     * 验证 copy 能力通过 Controller 白名单并进入抄送对象可见性目录。
+     *
+     * @return 无返回值；copy 被请求参数门禁拒绝或未传入领域服务时测试失败
+     * @throws Exception MockMvc 执行请求失败时抛出
+     */
+    @Test
+    void returnsCopyEligibleUserOptions() throws Exception
+    {
+        WorkflowIdentityOptionView option = new WorkflowIdentityOptionView(
+                "103", "抄送接收人", "user");
+        when(identityDirectoryService.listOptions(
+                "user", null, 1, 20, "copy"))
+                .thenReturn(new WorkflowPageResult<>(List.of(option), 1L));
+
+        mockMvc.perform(get("/workflow/identity/options")
+                        .param("type", "user")
+                        .param("capability", "copy"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.rows[0].value").value("103"))
+                .andExpect(jsonPath("$.rows[0].type").value("user"));
+
+        verify(identityDirectoryService).listOptions(
+                "user", null, 1, 20, "copy");
+    }
+
+    /**
+     * 验证身份目录不依赖系统用户管理权限；发起人可读正式目录，批量回显仅允许模型设计者。
      *
      * @return 无返回值，路径或权限表达式漂移时测试失败
      * @throws NoSuchMethodException Controller 方法签名不存在时抛出
@@ -145,6 +207,10 @@ class WfIdentityControllerTest
         assertThat(options.getAnnotation(GetMapping.class).value())
                 .containsExactly("/options");
         assertThat(options.getAnnotation(PreAuthorize.class).value()).isEqualTo(
-                "@ss.hasAnyPermi('workflow:model:designer,workflow:process:approval,workflow:process:manageList')");
+                "@ss.hasAnyPermi('workflow:model:designer,workflow:process:start,workflow:process:approval,workflow:process:manageList')");
+        Method resolveOptions = WfIdentityController.class.getDeclaredMethod(
+                "resolveOptions", WorkflowIdentitySelectionRequest.class);
+        assertThat(resolveOptions.getAnnotation(PreAuthorize.class).value())
+                .isEqualTo("@ss.hasPermi('workflow:model:designer')");
     }
 }

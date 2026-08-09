@@ -48,6 +48,28 @@ class WorkflowMultiInstanceModelContractTest
     }
 
     /**
+     * 验证发起时成员来源使用独立白名单表达式并保留 ALL/ANY 执行语义。
+     *
+     * @return 无返回值；发起来源被误分类或模式解析错误时测试失败。
+     */
+    @Test
+    void acceptsControlledStartMemberSource()
+    {
+        UserTask startTask = dynamicTask(WorkflowMultiInstanceMode.ANY);
+        startTask.getLoopCharacteristics().setInputDataItem(
+                WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION);
+
+        assertThat(WorkflowMultiInstanceModelContract.requireMode(startTask))
+                .isEqualTo(WorkflowMultiInstanceMode.ANY);
+        assertThat(WorkflowMultiInstanceModelContract.usesStartHandler(
+                startTask.getLoopCharacteristics())).isTrue();
+        assertThat(WorkflowMultiInstanceModelContract.usesDynamicHandler(
+                startTask.getLoopCharacteristics())).isFalse();
+        assertThat(WorkflowMultiInstanceModelContract.usesFixedHandler(
+                startTask.getLoopCharacteristics())).isFalse();
+    }
+
+    /**
      * 验证固定集合成员必须唯一且使用受控数字主键，防止部署模型隐含重复任务。
      *
      * @return 无返回值；重复成员模型被接受时测试失败。

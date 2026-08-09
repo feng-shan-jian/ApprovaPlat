@@ -133,6 +133,7 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
   const rejectedProcessKey = `${processKey}_rejected`
   const residueProcessKeys = [rejectedProcessKey, processKey]
   const resources = {
+    draftFixtures: [],
     processInstanceIds: [],
     deploymentIds: [],
     modelIds: [],
@@ -299,7 +300,7 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
       formName,
       `BUS-${runId}`,
       `候选资格正向对照-${runId}`,
-      resources.processInstanceIds
+      resources
     )
     const candidateTask = await findClaimableWorkflowTask(
       pages.approver,

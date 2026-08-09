@@ -10,8 +10,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -60,6 +62,16 @@ public class WorkflowBpmnService
     /** 表单键必须严格使用 key_正Long。 */
     private static final Pattern FORM_KEY_PATTERN = Pattern.compile("key_([1-9][0-9]*)");
 
+    /** 正式模板节点权限描述使用的字段变量安全格式。 */
+    private static final Pattern FORM_PERMISSION_VARIABLE_PATTERN = Pattern.compile(
+            "[A-Za-z_][A-Za-z0-9_]{0,127}");
+
+    /** 正式模板批量默认权限的 Flowable FormProperty 主键。 */
+    private static final String FORM_PERMISSION_DEFAULT_ID = "approva_permission_default";
+
+    /** 正式模板字段权限 FormProperty 的受控主键前缀。 */
+    private static final String FORM_PERMISSION_FIELD_ID_PREFIX = "approva_permission_field_";
+
     /** Flowable BPMN 扩展命名空间，其他引擎私有扩展只允许作者往返。 */
     private static final String FLOWABLE_NAMESPACE = "http://flowable.org/bpmn";
 
@@ -91,6 +103,11 @@ public class WorkflowBpmnService
     private static final Pattern SLA_TIMER_DELEGATE_EXPRESSION = Pattern.compile(
             "\\$\\{workflowSlaTimerDelegate\\.executeTimer\\(execution,'[A-Za-z0-9_.:-]+',"
                     + "'(REMINDER|ESCALATE)',[0-9]{1,3},(null|'[1-9][0-9]{0,18}')\\)\\}");
+
+    /** 条件分支编译后唯一允许的固定路由表达式，参数只能是服务端 SHA-256 摘要令牌。 */
+    private static final Pattern CONDITION_ROUTER_EXPRESSION = Pattern.compile(
+            "\\$\\{workflowConditionRouter\\.matches\\(execution,'[0-9a-f]{24}',"
+                    + "'[0-9a-f]{24}'\\)\\}");
 
     /** 原始 XML 中显式声明的非中断 Error 边界；模型转换会丢失该作者意图，必须先行拦截。 */
     private static final Pattern NON_INTERRUPTING_ERROR_BOUNDARY_PATTERN = Pattern.compile(
@@ -403,9 +420,14 @@ public class WorkflowBpmnService
         }
         String name = trimToEmpty(reader.getAttributeValue(null, "name"));
         String value = reader.getAttributeValue(null, "value");
+        // 条件规则是设计器生成的结构化 JSON，仅该保留属性允许使用专用的大字段上限。
+        boolean conditionRuleProperty = WorkflowConditionRuleBpmnContract.CONFIG_PROPERTY.equals(name);
         boolean allowedPlatformProperty =
                 WorkflowControlledLoopBpmnContract.isReservedProperty(name)
-                || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name);
+                || WorkflowParticipantRuleBpmnContract.isReservedProperty(name)
+                || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name)
+                || conditionRuleProperty
+                || WorkflowAutoCopyRuleContract.isReservedProperty(name);
         if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
                 || (name.startsWith("approva.") && !allowedPlatformProperty))
         {
@@ -415,7 +437,12 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("同一元素的通用扩展属性名不能重复", null);
         }
-        if (value == null || value.length() > MAX_EXTENSION_PROPERTY_VALUE_LENGTH)
+        int maximumValueLength = conditionRuleProperty
+                ? WorkflowConditionRuleBpmnContract.MAX_CONFIG_LENGTH
+                : WorkflowAutoCopyRuleContract.isReservedProperty(name)
+                        ? WorkflowAutoCopyRuleContract.MAX_PROPERTY_LENGTH
+                        : MAX_EXTENSION_PROPERTY_VALUE_LENGTH;
+        if (value == null || value.length() > maximumValueLength)
         {
             throw invalidBpmn("通用扩展属性值缺失或超过长度限制", null);
         }
@@ -608,6 +635,28 @@ public class WorkflowBpmnService
         Set<String> uniqueReferences = new HashSet<>();
         for (Process process : processes)
         {
+            if (WorkflowParticipantRuleBpmnContract.hasTaskProperties(process))
+            {
+                throw invalidBpmn("用户任务办理规则不能配置在流程级", null);
+            }
+            if (WorkflowParticipantRuleBpmnContract.hasStartProperties(process))
+            {
+                if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+                {
+                    throw invalidBpmn("已编译执行资源不允许保留流程发起范围作者配置", null);
+                }
+                try
+                {
+                    WorkflowParticipantRuleBpmnContract.readStartRule(process);
+                }
+                catch (IllegalArgumentException exception)
+                {
+                    throw invalidBpmn(exception.getMessage(), exception);
+                }
+            }
+            // 流程级自动抄送只允许自然完成触发；部署 XML 本身就是运行时不可变规则快照。
+            WorkflowAutoCopyRuleContract.validatePlacement(process,
+                    Set.of(WorkflowAutoCopyRuleContract.Trigger.PROCESS_COMPLETED));
             // 主流程唯一开始节点只统计顶层元素；事件子流程和嵌入子流程拥有各自合法的开始事件。
             List<StartEvent> startEvents = process.getFlowElements().stream()
                     .filter(StartEvent.class::isInstance)
@@ -619,7 +668,8 @@ public class WorkflowBpmnService
             }
             StartEvent startEvent = startEvents.get(0);
             boolean startHasTemplate = hasText(startEvent.getFormKey());
-            boolean startHasEmbedded = hasFormProperties(startEvent.getFormProperties());
+            boolean startHasEmbedded = hasEmbeddedFormProperties(
+                    startEvent.getFormKey(), startEvent.getFormProperties());
             if (!startHasTemplate && !startHasEmbedded)
             {
                 if (requireStartForm)
@@ -636,7 +686,8 @@ public class WorkflowBpmnService
             for (UserTask userTask : process.findFlowElementsOfType(UserTask.class, true))
             {
                 if (hasText(userTask.getFormKey())
-                        || hasFormProperties(userTask.getFormProperties()))
+                        || hasEmbeddedFormProperties(userTask.getFormKey(),
+                                userTask.getFormProperties()))
                 {
                     addNodeFormReference(process.getId(), userTask.getFormKey(), userTask.getFormProperties(),
                             userTask.getId(), userTask.getName(), references, uniqueReferences);
@@ -650,11 +701,24 @@ public class WorkflowBpmnService
 
             validateBpmnBusinessEvents(bpmnModel, process);
 
+            // 多实例结构和动态成员初始化拓扑必须先于顺序流表达式校验，确保不可执行拓扑返回准确诊断。
+            validateMultiInstanceActivities(process);
+
             validateListeners(process.getExecutionListeners(), validationContext);
             for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
             {
                 validateListeners(element.getExecutionListeners(), validationContext);
                 validateFlowElement(process, element, validationContext);
+                if (element instanceof UserTask userTask)
+                {
+                    WorkflowAutoCopyRuleContract.validatePlacement(userTask, Set.of(
+                            WorkflowAutoCopyRuleContract.Trigger.NODE_ARRIVED,
+                            WorkflowAutoCopyRuleContract.Trigger.NODE_COMPLETED));
+                }
+                else if (!WorkflowAutoCopyRuleContract.readRules(element).isEmpty())
+                {
+                    throw invalidBpmn("自动抄送规则只能配置在流程或用户任务上", null);
+                }
             }
         }
         if (validationContext == ValidationContext.AUTHOR)
@@ -786,10 +850,24 @@ public class WorkflowBpmnService
     private void validateFlowElement(Process process, FlowElement element,
             ValidationContext validationContext)
     {
+        if (WorkflowParticipantRuleBpmnContract.hasStartProperties(element))
+        {
+            throw invalidBpmn("流程发起范围只能配置在可执行流程上", null);
+        }
+        if (WorkflowParticipantRuleBpmnContract.hasTaskProperties(element)
+                && !(element instanceof UserTask))
+        {
+            throw invalidBpmn("办理人规则只能配置在用户任务上", null);
+        }
         if (WorkflowControlledLoopBpmnContract.hasReservedProperties(element)
                 && !(element instanceof UserTask))
         {
             throw invalidBpmn("受控循环只能配置在用户任务上", null);
+        }
+        if (WorkflowConditionRuleBpmnContract.hasReservedProperty(element)
+                && !(element instanceof SequenceFlow))
+        {
+            throw invalidBpmn("条件分支规则只能配置在网关顺序流上", null);
         }
         if (element instanceof ServiceTask serviceTask)
         {
@@ -801,11 +879,36 @@ public class WorkflowBpmnService
         }
         if (element instanceof SequenceFlow sequenceFlow)
         {
-            validateExpression(sequenceFlow.getConditionExpression());
+            if (validationContext == ValidationContext.AUTHOR
+                    && hasText(sequenceFlow.getConditionExpression()))
+            {
+                throw invalidBpmn("普通流程模型不允许手写顺序流表达式，请使用受控条件规则", null);
+            }
+            if (!(validationContext == ValidationContext.COMPILED_DEPLOYMENT
+                    && CONDITION_ROUTER_EXPRESSION.matcher(
+                            trimToEmpty(sequenceFlow.getConditionExpression())).matches()))
+            {
+                validateExpression(sequenceFlow.getConditionExpression());
+            }
             validateExpression(sequenceFlow.getSkipExpression());
         }
         if (element instanceof UserTask userTask)
         {
+            if (WorkflowParticipantRuleBpmnContract.hasTaskProperties(userTask))
+            {
+                if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+                {
+                    throw invalidBpmn("已编译执行资源不允许保留办理人作者配置", null);
+                }
+                try
+                {
+                    WorkflowParticipantRuleBpmnContract.readTaskRule(process.getId(), userTask);
+                }
+                catch (IllegalArgumentException exception)
+                {
+                    throw invalidBpmn(exception.getMessage(), exception);
+                }
+            }
             validateExpression(userTask.getAssignee());
             validateExpression(userTask.getOwner());
             validateExpression(userTask.getPriority());
@@ -822,7 +925,16 @@ public class WorkflowBpmnService
             validateExpression(callActivity.getBusinessKey());
             validateExpression(callActivity.getProcessInstanceName());
         }
-        if (element instanceof Activity activity)
+    }
+
+    /**
+     * 在逐元素表达式校验前统一核验流程中的全部多实例活动。
+     * @param process Process，待校验的可执行流程
+     * @return void，任一多实例结构、来源或初始化拓扑不合法时抛出 HTTP 400
+     */
+    private void validateMultiInstanceActivities(Process process)
+    {
+        for (Activity activity : process.findFlowElementsOfType(Activity.class, true))
         {
             MultiInstanceLoopCharacteristics loop = activity.getLoopCharacteristics();
             if (loop != null)
@@ -923,7 +1035,7 @@ public class WorkflowBpmnService
         if (WorkflowMultiInstanceModelContract.usesDynamicHandler(loop))
         {
             // 仅动态来源需要前驱任务在完成事务中写入 nextUserIds；固定成员已固化在 BPMN，
-            // 允许开始节点、网关或任意合法同步路径直接进入，不能错误复用动态初始化拓扑门禁。
+            // 发起成员由启动事务注入；固定成员已固化在 BPMN，二者都不能复用动态初始化拓扑门禁。
             validateControlledMultiInstanceTopology(process, (UserTask) activity);
         }
     }
@@ -1475,6 +1587,7 @@ public class WorkflowBpmnService
             }
             else if (!(validationContext == ValidationContext.COMPILED_DEPLOYMENT
                     && (SLA_TIMER_DELEGATE_EXPRESSION.matcher(expression).matches()
+                    || CONDITION_ROUTER_EXPRESSION.matcher(expression).matches()
                     || WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION.equals(expression))))
             {
                 // 编译资源仅放行平台固定扩展入口与 SLA 固定定时入口；作者 XML 和其他表达式继续走通用安全语法。
@@ -1519,7 +1632,7 @@ public class WorkflowBpmnService
      * 判断原始 XML 表达式是否为模型层已经受控识别的多实例集合表达式。
      *
      * @param expression String，原始 XML 扫描得到的完整 EL 表达式。
-     * @return boolean，动态集合或严格格式固定集合表达式时返回 true。
+     * @return boolean，办理时、发起时或严格格式固定集合表达式时返回 true。
      */
     private boolean isControlledMultiInstanceCollectionExpression(String expression)
     {
@@ -1527,7 +1640,9 @@ public class WorkflowBpmnService
         // 原始 XML 扫描必须使用同一文本才能完成一一对应，不能把合法设计器输出误判为任意 EL。
         String normalizedExpression = expression.replace("&#39;", "'")
                 .replace("&apos;", "'");
-        if (WorkflowMultiInstanceModelContract.COLLECTION_EXPRESSION.equals(normalizedExpression))
+        if (WorkflowMultiInstanceModelContract.COLLECTION_EXPRESSION.equals(normalizedExpression)
+                || WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION.equals(
+                        normalizedExpression))
         {
             return true;
         }
@@ -1548,6 +1663,7 @@ public class WorkflowBpmnService
      * @return 无返回值
      */
     private void addFormReference(String processKey, String formKey, String nodeKey, String nodeName,
+            NodeFormPermissionPolicy permissionPolicy,
             List<WorkflowBpmnFormReference> references, Set<String> uniqueReferences)
     {
         Matcher matcher = FORM_KEY_PATTERN.matcher(formKey.trim());
@@ -1577,7 +1693,8 @@ public class WorkflowBpmnService
         }
         references.add(new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE,
                 formId, formKey.trim(), nodeKey.trim(), nodeName == null ? "" : nodeName,
-                null, normalizedProcessKey));
+                null, normalizedProcessKey, permissionPolicy.defaultPermission(),
+                permissionPolicy.fieldPermissions()));
     }
 
     /**
@@ -1597,14 +1714,11 @@ public class WorkflowBpmnService
             Set<String> uniqueReferences)
     {
         boolean hasTemplate = hasText(formKey);
-        boolean hasEmbedded = hasFormProperties(properties);
-        if (hasTemplate && hasEmbedded)
-        {
-            throw invalidBpmn("同一节点不能同时配置正式表单和 BPMN 内嵌表单", null);
-        }
         if (hasTemplate)
         {
-            addFormReference(processKey, formKey, nodeKey, nodeName, references, uniqueReferences);
+            NodeFormPermissionPolicy permissionPolicy = parseTemplateFormPermissions(properties);
+            addFormReference(processKey, formKey, nodeKey, nodeName, permissionPolicy,
+                    references, uniqueReferences);
             return;
         }
         if (!hasText(nodeKey))
@@ -1638,6 +1752,113 @@ public class WorkflowBpmnService
     private boolean hasFormProperties(List<FormProperty> properties)
     {
         return properties != null && !properties.isEmpty();
+    }
+
+    /**
+     * 判断节点 FormProperty 是否代表内嵌表单，而不是正式模板的节点权限描述。
+     *
+     * @param formKey String，节点正式模板键，允许为空
+     * @param properties List&lt;FormProperty&gt;，Flowable 表单字段或权限描述
+     * @return boolean，未绑定正式模板且至少包含一个字段时返回 true
+     */
+    private boolean hasEmbeddedFormProperties(String formKey, List<FormProperty> properties)
+    {
+        return !hasText(formKey) && hasFormProperties(properties);
+    }
+
+    /**
+     * 解析正式模板节点上的批量默认策略和逐字段权限，并拒绝普通 FormData 混入双重来源。
+     *
+     * @param properties List&lt;FormProperty&gt;，设计器生成的权限描述字段
+     * @return NodeFormPermissionPolicy，旧模型无描述时返回空策略
+     */
+    private NodeFormPermissionPolicy parseTemplateFormPermissions(List<FormProperty> properties)
+    {
+        if (properties == null || properties.isEmpty())
+        {
+            return new NodeFormPermissionPolicy(null, Map.of());
+        }
+        WorkflowFormFieldPermissionMode defaultPermission = null;
+        Map<String, WorkflowFormFieldPermissionMode> fieldPermissions = new LinkedHashMap<>();
+        Set<String> propertyIds = new HashSet<>();
+        for (FormProperty property : properties)
+        {
+            if (property == null || !hasText(property.getId())
+                    || !propertyIds.add(property.getId().trim())
+                    || !"string".equalsIgnoreCase(trimToEmpty(property.getType()))
+                    || hasText(property.getExpression())
+                    || hasText(property.getDefaultExpression())
+                    || hasText(property.getDatePattern())
+                    || (property.getFormValues() != null && !property.getFormValues().isEmpty()))
+            {
+                throw invalidBpmn("正式模板节点字段权限描述不合法", null);
+            }
+            String propertyId = property.getId().trim();
+            WorkflowFormFieldPermissionMode mode = permissionMode(property);
+            if (FORM_PERMISSION_DEFAULT_ID.equals(propertyId))
+            {
+                if (defaultPermission != null || hasText(property.getVariable()))
+                {
+                    throw invalidBpmn("节点表单批量默认权限不能重复", null);
+                }
+                defaultPermission = mode;
+                continue;
+            }
+            if (!propertyId.startsWith(FORM_PERMISSION_FIELD_ID_PREFIX))
+            {
+                throw invalidBpmn("同一节点不能同时配置正式表单和 BPMN 内嵌表单", null);
+            }
+            String variable = trimToEmpty(property.getVariable());
+            if (!FORM_PERMISSION_VARIABLE_PATTERN.matcher(variable).matches()
+                    || fieldPermissions.putIfAbsent(variable, mode) != null)
+            {
+                throw invalidBpmn("节点表单字段权限变量非法或重复", null);
+            }
+        }
+        if (defaultPermission == null)
+        {
+            throw invalidBpmn("节点表单必须配置批量默认字段权限", null);
+        }
+        return new NodeFormPermissionPolicy(defaultPermission, Map.copyOf(fieldPermissions));
+    }
+
+    /**
+     * 将 FormProperty 的 readable/writeable/required 三个标志收敛为四种业务权限。
+     *
+     * @param property FormProperty，单个节点权限描述
+     * @return WorkflowFormFieldPermissionMode，隐藏、只读、可编辑或必填
+     */
+    private WorkflowFormFieldPermissionMode permissionMode(FormProperty property)
+    {
+        boolean readable = property.isReadable();
+        boolean writable = property.isWriteable();
+        boolean required = property.isRequired();
+        if (!readable && !writable && !required)
+        {
+            return WorkflowFormFieldPermissionMode.HIDDEN;
+        }
+        if (readable && !writable && !required)
+        {
+            return WorkflowFormFieldPermissionMode.READONLY;
+        }
+        if (readable && writable)
+        {
+            return required ? WorkflowFormFieldPermissionMode.REQUIRED
+                    : WorkflowFormFieldPermissionMode.EDITABLE;
+        }
+        throw invalidBpmn("节点表单字段权限组合不合法", null);
+    }
+
+    /**
+     * 正式模板节点的不可变作者权限策略。
+     *
+     * @param defaultPermission WorkflowFormFieldPermissionMode，模板新增字段采用的默认策略
+     * @param fieldPermissions Map&lt;String,WorkflowFormFieldPermissionMode&gt;，当前模板逐字段策略
+     */
+    private record NodeFormPermissionPolicy(
+            WorkflowFormFieldPermissionMode defaultPermission,
+            Map<String, WorkflowFormFieldPermissionMode> fieldPermissions)
+    {
     }
 
     /**

@@ -16,6 +16,7 @@ import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.extension.WorkflowConditionRoutingException;
 
 /**
  * 将 Flowable 公共 API 异常翻译为若依稳定业务异常。
@@ -63,6 +64,16 @@ public class WorkflowExceptionTranslator
     {
         Objects.requireNonNull(exception, "Flowable 异常不能为空");
 
+        WorkflowConditionRoutingException routingFailure = findConditionRoutingFailure(exception);
+        if (routingFailure != null)
+        {
+            ServiceException translated = new ServiceException(routingFailure.getMessage(),
+                    routingFailure.getCode());
+            // 只透传专用路由异常的受控提示；完整引擎包装链仍仅供服务端诊断。
+            translated.initCause(exception);
+            return translated;
+        }
+
         int code;
         String message;
         if (isModelVersionConflict(exception) || isDatabaseConcurrencyConflict(exception))
@@ -102,6 +113,25 @@ public class WorkflowExceptionTranslator
         // 原始异常仅保存在 cause 链供日志记录，对外响应仍只包含上面的稳定提示。
         translated.initCause(exception);
         return translated;
+    }
+
+    /**
+     * 从 Flowable 表达式包装链中查找平台专用条件路由失败。
+     * @param exception Throwable，引擎执行产生的完整异常链
+     * @return WorkflowConditionRoutingException，命中受信任路由异常时返回；否则返回 null
+     */
+    private WorkflowConditionRoutingException findConditionRoutingFailure(Throwable exception)
+    {
+        Throwable current = exception;
+        while (current != null)
+        {
+            if (current instanceof WorkflowConditionRoutingException routingFailure)
+            {
+                return routingFailure;
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     /**

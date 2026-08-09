@@ -25,6 +25,32 @@ public interface WfCopyMapper
     int insertBatch(@Param("copies") List<WfCopy> copies);
 
     /**
+     * 幂等写入同一生命周期事件的抄送记录，并合并手工与自动重复来源。
+     * @param copies List&lt;WfCopy&gt;，已校验的生命周期抄送记录
+     * @return int，MySQL 实际影响行数；重复事件允许为零或更新行数
+     */
+    int insertBatchIdempotent(@Param("copies") List<WfCopy> copies);
+
+    /**
+     * 按当前认证用户查询有效抄送，避免越权请求探测他人记录。
+     * @param copyId Long，抄送记录主键
+     * @param userId Long，当前认证用户主键
+     * @return WfCopy，当前用户记录；不存在或越权时均返回 null
+     */
+    WfCopy selectByIdAndUserId(@Param("copyId") Long copyId,
+            @Param("userId") Long userId);
+
+    /**
+     * 原子写入当前用户的首次阅读状态，重复调用不会覆盖首次时间。
+     * @param copyId Long，抄送记录主键
+     * @param userId Long，当前认证用户主键
+     * @param updateBy String，可信操作用户主键
+     * @return int，仅第一次标记返回 1，已读返回 0
+     */
+    int markRead(@Param("copyId") Long copyId, @Param("userId") Long userId,
+            @Param("updateBy") String updateBy);
+
+    /**
      * 查询当前用户的有效抄送列表；用户主键必须由服务端认证上下文提供。
      * @param userId Long，当前登录用户主键
      * @param filter WfCopy，标题、实例和流程名称等可选过滤条件，不读取其中的 userId

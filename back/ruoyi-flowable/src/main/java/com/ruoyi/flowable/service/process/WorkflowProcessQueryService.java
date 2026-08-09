@@ -26,6 +26,7 @@ import org.flowable.task.api.TaskQuery;
 import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.task.api.history.HistoricTaskInstanceQuery;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.entity.SysUser;
@@ -51,6 +52,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessView;
 import com.ruoyi.flowable.domain.vo.WorkflowOwnedProcessView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
+import com.ruoyi.flowable.domain.vo.WorkflowStartMultiInstanceAssignmentView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
@@ -59,7 +61,9 @@ import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowStartMultiInstanceContract;
 import com.ruoyi.system.service.ISysUserService;
 
 /**
@@ -79,6 +83,12 @@ public class WorkflowProcessQueryService
 
     /** 普通查询文本允许的最大字符数。 */
     private static final int MAX_FILTER_LENGTH = 255;
+
+    /** 正式表单节点的批量默认字段权限属性主键。 */
+    private static final String FORM_PERMISSION_DEFAULT_ID = "approva_permission_default";
+
+    /** 正式表单节点的逐字段权限属性主键前缀。 */
+    private static final String FORM_PERMISSION_FIELD_ID_PREFIX = "approva_permission_field_";
 
     private final WorkflowEngineOperations engineOperations;
 
@@ -103,6 +113,9 @@ public class WorkflowProcessQueryService
     private final ISysUserService userService;
 
     private final WorkflowTaskLifecycleService taskLifecycleService;
+
+    /** 部署快照发起范围只读过滤服务；旧直接构造单元测试时可为空。 */
+    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
 
     /**
      * 创建流程工作台查询服务。
@@ -142,6 +155,18 @@ public class WorkflowProcessQueryService
         this.copyMapper = copyMapper;
         this.userService = userService;
         this.taskLifecycleService = taskLifecycleService;
+    }
+
+    /**
+     * 延迟注入发起范围过滤服务，保留既有直接构造测试兼容性。
+     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，发起范围运行服务
+     * @return void，生产 Spring 容器启动后必须完成注入
+     */
+    @Autowired
+    public void setParticipantRuleRuntimeService(
+            WorkflowParticipantRuleRuntimeService participantRuleRuntimeService)
+    {
+        this.participantRuleRuntimeService = participantRuleRuntimeService;
     }
 
     /**
@@ -381,6 +406,36 @@ public class WorkflowProcessQueryService
     }
 
     /**
+     * 由当前认证接收人原子标记首次阅读并返回数据库最终状态。
+     *
+     * @param copyId Long，抄送记录主键
+     * @return WorkflowCopyView，首次时间已持久化的当前用户抄送视图
+     */
+    public WorkflowCopyView markCopyRead(Long copyId)
+    {
+        if (copyId == null || copyId <= 0)
+        {
+            throw invalidArgument("抄送记录主键不合法");
+        }
+        return engineOperations.writeAsCurrentUser(actor ->
+        {
+            long currentUserId = Long.parseLong(actor.userId());
+            // UPDATE 同时携带 user_id 和未读条件，越权请求不会先探测记录是否存在。
+            copyMapper.markRead(copyId, currentUserId, actor.userId());
+            WfCopy copy = copyMapper.selectByIdAndUserId(copyId, currentUserId);
+            if (copy == null)
+            {
+                throw new ServiceException("抄送记录不存在", HttpStatus.NOT_FOUND);
+            }
+            if (!"1".equals(copy.getReadStatus()) || copy.getReadTime() == null)
+            {
+                throw dataError("抄送首次阅读状态异常");
+            }
+            return toCopyView(copy);
+        });
+    }
+
+    /**
      * 按定义、部署和可选实例关系返回开始节点的不可变部署表单快照。
      *
      * @param request WorkflowProcessFormQueryDto，定义、部署及可选实例关系参数
@@ -411,10 +466,15 @@ public class WorkflowProcessQueryService
                 requireSame(deploymentId, instance.deploymentId(), "流程实例与部署关系不一致");
             }
             WfDeployForm snapshot = requireStartFormSnapshot(definition, deploymentId);
+            // 只有发起场景投影部署 BPMN 中的专用成员字段，实例详情不接受再次选人。
+            List<WorkflowStartMultiInstanceAssignmentView> startAssignments = instanceId == null
+                    ? WorkflowStartMultiInstanceContract.describe(
+                            repositoryService.getBpmnModel(definitionId), definition.getKey())
+                    : List.of();
             return new WorkflowProcessFormView(definitionId, deploymentId, instanceId,
                     snapshot.getSourceType(), snapshot.getFormId(), snapshot.getFormKey(), snapshot.getNodeKey(),
                     snapshot.getFormName(), snapshot.getNodeName(), snapshot.getContent(),
-                    toInstant(snapshot.getCreateTime()));
+                    toInstant(snapshot.getCreateTime()), startAssignments);
         });
     }
 
@@ -535,6 +595,16 @@ public class WorkflowProcessQueryService
         if (definition == null || !StringUtils.hasText(definition.getId()))
         {
             throw dataError("流程定义数据异常");
+        }
+        if (participantRuleRuntimeService != null)
+        {
+            // 新部署定义统一读取不可变规则快照，列表、表单预览与真实发起使用同一授权来源。
+            Boolean snapshotDecision = participantRuleRuntimeService
+                    .canStartIfManaged(actor, definition);
+            if (snapshotDecision != null)
+            {
+                return snapshotDecision;
+            }
         }
         List<IdentityLink> links = repositoryService.getIdentityLinksForProcessDefinition(definition.getId());
         if (links == null)
@@ -825,6 +895,12 @@ public class WorkflowProcessQueryService
         trusted.setTaskId(optionalText(filter.taskId(), "任务主键过长"));
         trusted.setCategoryId(optionalText(filter.categoryId(), "流程分类过长"));
         trusted.setDeploymentId(optionalText(filter.deploymentId(), "部署主键过长"));
+        String readStatus = optionalText(filter.readStatus(), "阅读状态不合法");
+        if (readStatus != null && !Set.of("0", "1").contains(readStatus))
+        {
+            throw invalidArgument("阅读状态必须为 0 或 1");
+        }
+        trusted.setReadStatus(readStatus);
         return trusted;
     }
 
@@ -1071,7 +1147,9 @@ public class WorkflowProcessQueryService
         return new WorkflowCopyView(copy.getCopyId(), copy.getTitle(), copy.getProcessId(),
                 copy.getProcessName(), copy.getCategoryId(), copy.getDeploymentId(),
                 copy.getInstanceId(), copy.getTaskId(), copy.getUserId(), copy.getOriginatorId(),
-                copy.getOriginatorName(), toInstant(copy.getCreateTime()));
+                copy.getOriginatorName(), copy.getSourceType(), copy.getTriggerType(),
+                copy.getTriggerNodeId(), copy.getTriggerNodeName(), copy.getReadStatus(),
+                toInstant(copy.getReadTime()), toInstant(copy.getCreateTime()));
     }
 
     /**
@@ -1164,7 +1242,7 @@ public class WorkflowProcessQueryService
     }
 
     /**
-     * 解析开始节点实际使用的部署表单键，并拒绝模板与内嵌 FormData 同时存在。
+     * 解析开始节点实际使用的部署表单键，并区分正式模板权限元数据与内嵌 FormData。
      *
      * @param startEvent StartEvent，定义中唯一开始节点
      * @return String，正式模板原始 formKey 或内嵌表单稳定键
@@ -1172,14 +1250,41 @@ public class WorkflowProcessQueryService
     private String resolveFormKey(StartEvent startEvent)
     {
         boolean hasTemplate = StringUtils.hasText(startEvent.getFormKey());
-        boolean hasEmbedded = startEvent.getFormProperties() != null
+        boolean hasProperties = startEvent.getFormProperties() != null
                 && !startEvent.getFormProperties().isEmpty();
+        if (hasTemplate && hasProperties
+                && !hasOnlyTemplatePermissionProperties(startEvent))
+        {
+            // 正式表单仅允许携带部署时已校验的字段权限描述，普通 FormData 仍属于双重来源。
+            throw dataError("流程开始节点表单来源异常");
+        }
+        boolean hasEmbedded = !hasTemplate && hasProperties;
         if (hasTemplate == hasEmbedded)
         {
             throw dataError("流程开始节点表单来源异常");
         }
         return hasTemplate ? startEvent.getFormKey()
                 : WorkflowFormSourceType.EMBEDDED_FORM_KEY;
+    }
+
+    /**
+     * 判断正式表单开始节点的全部 FormProperty 是否均为受控字段权限描述。
+     *
+     * @param startEvent StartEvent，已绑定正式 formKey 且携带 FormProperty 的开始节点
+     * @return boolean，属性主键全部属于批量默认或逐字段权限命名空间时返回 true
+     */
+    private boolean hasOnlyTemplatePermissionProperties(StartEvent startEvent)
+    {
+        return startEvent.getFormProperties().stream().allMatch(property ->
+        {
+            if (property == null || !StringUtils.hasText(property.getId()))
+            {
+                return false;
+            }
+            String propertyId = property.getId().trim();
+            return FORM_PERMISSION_DEFAULT_ID.equals(propertyId)
+                    || propertyId.startsWith(FORM_PERMISSION_FIELD_ID_PREFIX);
+        });
     }
 
     /**

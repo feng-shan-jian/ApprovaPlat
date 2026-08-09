@@ -47,7 +47,7 @@ class WorkflowMultiInstanceHandlerTest
     {
         DelegateExecution execution = execution(WorkflowMultiInstanceMode.ALL,
                 List.of(8L, 8L, 9));
-        when(userSelectionValidator.requireActiveUserIds(List.of(8L, 9L)))
+        when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(8L, 9L)))
                 .thenReturn(List.of("8", "9"));
 
         List<String> result = handler.getUserIds(execution);
@@ -76,7 +76,7 @@ class WorkflowMultiInstanceHandlerTest
                 .thenReturn(List.of("8", "9", "10"));
         when(execution.getVariable("_wfMiRevision_approveTask")).thenReturn(7);
         when(execution.getVariable("_wfMiMode_approveTask")).thenReturn("ALL");
-        when(userSelectionValidator.requireActiveUserIds(List.of(8L, 9L, 10L)))
+        when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(8L, 9L, 10L)))
                 .thenReturn(List.of("8", "9", "10"));
 
         assertThat(handler.getUserIds(execution)).containsExactly("8", "9", "10");
@@ -96,7 +96,7 @@ class WorkflowMultiInstanceHandlerTest
                 List.of(8L));
         when(execution.getVariable("_wfMiMembers_approveTask"))
                 .thenReturn(List.of("8"));
-        when(userSelectionValidator.requireActiveUserIds(List.of(8L)))
+        when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(8L)))
                 .thenReturn(List.of("8"));
 
         assertServiceError(() -> handler.getUserIds(execution), HttpStatus.ERROR,
@@ -118,7 +118,7 @@ class WorkflowMultiInstanceHandlerTest
                 .thenReturn(List.of("8", "10"));
         when(execution.getVariable("_wfMiRevision_approveTask")).thenReturn(4);
         when(execution.getVariable("_wfMiMode_approveTask")).thenReturn("ANY");
-        when(userSelectionValidator.requireActiveUserIds(List.of(8L, 9L)))
+        when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(8L, 9L)))
                 .thenReturn(List.of("8", "9"));
 
         assertServiceError(() -> handler.getUserIds(execution), HttpStatus.ERROR,
@@ -148,17 +148,17 @@ class WorkflowMultiInstanceHandlerTest
         assertServiceError(() -> handler.getUserIds(execution(
                 WorkflowMultiInstanceMode.ALL, overLimit)), HttpStatus.BAD_REQUEST,
                 "工作流多实例用户集合不合法");
-        verify(userSelectionValidator, never()).requireActiveUserIds(
+        verify(userSelectionValidator, never()).requireApprovalEligibleUserIds(
                 org.mockito.ArgumentMatchers.anyList());
     }
 
     /**
-     * 验证固定成员由 BPMN 参数提供、进入节点时复核审批资格且不初始化动态成员快照。
+     * 验证固定成员由 BPMN 参数提供、进入节点时复核审批资格并初始化统一正式成员快照。
      *
-     * @return 无返回值；固定成员顺序、资格校验或动态状态隔离不符合契约时测试失败。
+     * @return 无返回值；固定成员顺序、资格校验或正式状态初始化不符合契约时测试失败。
      */
     @Test
-    void resolvesFixedUsersWithoutInitializingDynamicState()
+    void resolvesFixedUsersAndInitializesMemberState()
     {
         DelegateExecution execution = fixedExecution(WorkflowMultiInstanceMode.ANY, "8,9");
         when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(8L, 9L)))
@@ -167,9 +167,37 @@ class WorkflowMultiInstanceHandlerTest
         assertThat(handler.getFixedUserIds(execution, "8,9")).containsExactly("8", "9");
 
         verify(userSelectionValidator).requireApprovalEligibleUserIds(List.of(8L, 9L));
-        verify(execution, never()).setVariables(org.mockito.ArgumentMatchers.anyMap());
+        ArgumentCaptor<Map<String, Object>> variables = ArgumentCaptor.forClass(Map.class);
+        verify(execution).setVariables(variables.capture());
+        assertThat(variables.getValue())
+                .containsEntry("_wfMiRevision_approveTask", 0)
+                .containsEntry("_wfMiMode_approveTask", "ANY");
+        assertThat(variables.getValue().get("_wfMiMembers_approveTask"))
+                .isEqualTo(List.of("8", "9"));
         verify(userSelectionValidator, never()).requireActiveUserIds(
                 org.mockito.ArgumentMatchers.anyList());
+    }
+
+    /**
+     * 验证发起时成员表达式复用正式审批资格和成员快照初始化，不接受仅启用但无办理权限用户。
+     *
+     * @return 无返回值；发起来源绕过资格校验或未初始化状态时测试失败。
+     */
+    @Test
+    void resolvesStartUsersThroughApprovalEligibilityContract()
+    {
+        DelegateExecution execution = execution(WorkflowMultiInstanceMode.ALL,
+                List.of(8L, 9L));
+        ((UserTask) execution.getCurrentFlowElement()).getLoopCharacteristics()
+                .setInputDataItem(WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION);
+        when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(8L, 9L)))
+                .thenReturn(List.of("8", "9"));
+
+        assertThat(handler.getStartUserIds(execution)).containsExactly("8", "9");
+
+        verify(userSelectionValidator).requireApprovalEligibleUserIds(List.of(8L, 9L));
+        verify(execution).setVariables(org.mockito.ArgumentMatchers.argThat(variables ->
+                List.of("8", "9").equals(variables.get("_wfMiMembers_approveTask"))));
     }
 
     /**
@@ -206,7 +234,11 @@ class WorkflowMultiInstanceHandlerTest
         userTask.getLoopCharacteristics().setInputDataItem(
                 "${multiInstanceHandler.getFixedUserIds(execution, '" + fixedUserIdsText + "')}");
         DelegateExecution execution = mock(DelegateExecution.class);
+        when(execution.getCurrentActivityId()).thenReturn("approveTask");
         when(execution.getCurrentFlowElement()).thenReturn(userTask);
+        when(execution.getProcessInstanceId()).thenReturn("instance-1");
+        when(execution.getId()).thenReturn("instance-1");
+        when(execution.isProcessInstanceType()).thenReturn(true);
         return execution;
     }
 

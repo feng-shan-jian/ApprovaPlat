@@ -76,6 +76,57 @@ public interface WfAttachmentMapper
             @Param("attachmentIds") Collection<String> attachmentIds);
 
     /**
+     * 锁定指定草稿当前绑定的全部附件，用于保存对账、删除和提交迁移。
+     *
+     * @param draftId String，草稿 UUID
+     * @param ownerUserId Long，草稿所有者正式用户主键
+     * @return List&lt;WfAttachment&gt;，按附件 UUID 排序的 DRAFT 附件
+     */
+    List<WfAttachment> selectByDraftIdForUpdate(@Param("draftId") String draftId,
+            @Param("ownerUserId") Long ownerUserId);
+
+    /**
+     * 将仍有效的本人临时附件绑定到指定草稿。
+     *
+     * @param attachmentId String，附件 UUID
+     * @param ownerUserId Long，当前用户主键
+     * @param fieldName String，开始表单上传字段名
+     * @param draftId String，草稿 UUID
+     * @return int，成功迁移返回 1，状态竞争返回 0
+     */
+    int bindDraftAttachment(@Param("attachmentId") String attachmentId,
+            @Param("ownerUserId") Long ownerUserId,
+            @Param("fieldName") String fieldName, @Param("draftId") String draftId);
+
+    /**
+     * 将草稿移除或随草稿删除的附件转入可清理终态。
+     *
+     * @param attachmentId String，附件 UUID
+     * @param ownerUserId Long，草稿所有者
+     * @param draftId String，草稿 UUID
+     * @return int，成功迁移返回 1，状态竞争返回 0
+     */
+    int markDraftAttachmentDeleted(@Param("attachmentId") String attachmentId,
+            @Param("ownerUserId") Long ownerUserId, @Param("draftId") String draftId);
+
+    /**
+     * 将同一草稿附件原子迁移到新建流程实例。
+     *
+     * @param attachmentId String，附件 UUID
+     * @param ownerUserId Long，草稿所有者
+     * @param fieldName String，开始表单字段名
+     * @param draftId String，草稿 UUID
+     * @param processInstanceId String，真实流程实例主键
+     * @param nodeKey String，开始节点 key
+     * @return int，成功迁移返回 1，状态竞争返回 0
+     */
+    int bindDraftStartAttachment(@Param("attachmentId") String attachmentId,
+            @Param("ownerUserId") Long ownerUserId,
+            @Param("fieldName") String fieldName, @Param("draftId") String draftId,
+            @Param("processInstanceId") String processInstanceId,
+            @Param("nodeKey") String nodeKey);
+
+    /**
      * 将仍属于指定用户、字段且未过期的临时附件原子绑定到真实流程实例。
      *
      * @param attachmentId String，待绑定附件 UUID

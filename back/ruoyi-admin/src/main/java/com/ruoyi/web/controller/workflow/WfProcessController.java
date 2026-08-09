@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -98,7 +100,8 @@ public class WfProcessController extends BaseController
 
     /** 包装发起协议允许的全部顶层字段，其他字段视为协议混用。 */
     private static final Set<String> START_WRAPPER_FIELDS = Set.of(
-            "variables", "businessKey", "processDefId", "processDefinitionId", "definitionId");
+            "variables", "businessKey", "multiInstanceUserIds", "processDefId",
+            "processDefinitionId", "definitionId");
 
     private final WorkflowProcessQueryService processQueryService;
 
@@ -299,6 +302,19 @@ public class WfProcessController extends BaseController
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
         return toTableData(processQueryService.listCopies(filter, pageNum, pageSize));
+    }
+
+    /**
+     * 原子标记当前用户抄送记录的首次阅读时间。
+     *
+     * @param copyId Long，抄送记录主键
+     * @return AjaxResult，数据库最终阅读状态；不存在和越权使用同一结果
+     */
+    @PreAuthorize("@ss.hasPermi('workflow:process:copyList')")
+    @PutMapping("/copy/{copyId}/read")
+    public AjaxResult markCopyRead(@PathVariable Long copyId)
+    {
+        return success(processQueryService.markCopyRead(copyId));
     }
 
     /**
@@ -633,7 +649,8 @@ public class WfProcessController extends BaseController
             Map<String, Object> body)
     {
         Map<String, Object> source = body == null ? Map.of() : body;
-        boolean wrapped = source.containsKey("variables") || source.containsKey("businessKey");
+        boolean wrapped = source.containsKey("variables") || source.containsKey("businessKey")
+                || source.containsKey("multiInstanceUserIds");
         if (!wrapped)
         {
             // 直接变量协议也忽略客户端夹带的定义 ID，实际定义只能来自受权限保护的路径。
@@ -654,7 +671,59 @@ public class WfProcessController extends BaseController
         {
             throw new ServiceException("流程业务主键必须为字符串", HttpStatus.BAD_REQUEST);
         }
-        return new StartProcessRequest(processDefId, (String) rawBusinessKey, variables);
+        Map<String, List<Long>> multiInstanceUserIds = normalizeStartMultiInstanceUsers(
+                source.get("multiInstanceUserIds"));
+        return new StartProcessRequest(processDefId, (String) rawBusinessKey, variables,
+                multiInstanceUserIds);
+    }
+
+    /**
+     * 将发起页面会签或或签成员字段转换为严格的活动到用户主键列表。
+     *
+     * @param rawSelections Object，JSON 反序列化后的 multiInstanceUserIds 字段。
+     * @return Map<String,List<Long>> 保持客户端节点和成员顺序的不可变请求数据。
+     */
+    private Map<String, List<Long>> normalizeStartMultiInstanceUsers(Object rawSelections)
+    {
+        if (rawSelections == null)
+        {
+            return Map.of();
+        }
+        if (!(rawSelections instanceof Map<?, ?> rawMap) || rawMap.size() > 100)
+        {
+            throw new ServiceException("发起时会签或或签成员格式不合法", HttpStatus.BAD_REQUEST);
+        }
+        LinkedHashMap<String, List<Long>> result = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : rawMap.entrySet())
+        {
+            if (!(entry.getKey() instanceof String activityId) || activityId.isBlank()
+                    || activityId.length() > 128
+                    || !(entry.getValue() instanceof Collection<?> rawUserIds)
+                    || rawUserIds.size() > 100)
+            {
+                throw new ServiceException("发起时会签或或签成员格式不合法",
+                        HttpStatus.BAD_REQUEST);
+            }
+            List<Long> userIds = new ArrayList<>(rawUserIds.size());
+            for (Object rawUserId : rawUserIds)
+            {
+                if (!(rawUserId instanceof Byte || rawUserId instanceof Short
+                        || rawUserId instanceof Integer || rawUserId instanceof Long))
+                {
+                    throw new ServiceException("发起时会签或或签成员格式不合法",
+                            HttpStatus.BAD_REQUEST);
+                }
+                long userId = ((Number) rawUserId).longValue();
+                if (userId <= 0)
+                {
+                    throw new ServiceException("发起时会签或或签成员格式不合法",
+                            HttpStatus.BAD_REQUEST);
+                }
+                userIds.add(userId);
+            }
+            result.put(activityId, List.copyOf(userIds));
+        }
+        return Map.copyOf(result);
     }
 
     /**

@@ -26,7 +26,10 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_category`",
                 "create table if not exists `wf_form`",
                 "create table if not exists `wf_deploy_form`",
+                "create table if not exists `wf_deploy_condition_rule`",
                 "create table if not exists `wf_deploy_controlled_loop`",
+                "create table if not exists `wf_deploy_participant_rule`",
+                "create table if not exists `wf_participant_resolution_audit`",
                 "create table if not exists `wf_controlled_loop_execution`",
                 "create table if not exists `wf_copy`",
                 "create table if not exists `wf_model_save_idempotency`",
@@ -35,6 +38,7 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_bpmn_extension_version`",
                 "create table if not exists `wf_deploy_extension_snapshot`",
                 "create table if not exists `wf_deploy_dmn_snapshot`",
+                "create table if not exists `wf_deploy_call_activity`",
                 "create table if not exists `wf_connector_endpoint`",
                 "create table if not exists `wf_connector_invocation`",
                 "create table if not exists `wf_integration_credential`",
@@ -52,8 +56,16 @@ class WorkflowBusinessDdlContractTest
                 "create table if not exists `wf_task_sla_execution`",
                 "create table if not exists `wf_task_sla_audit`",
                 "create table if not exists `wf_task_sla_notification`",
+                "create table if not exists `wf_process_draft`",
+                "create table if not exists `wf_process_draft_audit`",
                 "create table if not exists `wf_attachment_quota_guard`",
-                "create table if not exists `wf_attachment`")
+                "create table if not exists `wf_attachment`",
+                "create table if not exists `wf_notification_policy`",
+                "create table if not exists `wf_notification_preference`",
+                "create table if not exists `wf_notification_outbox`",
+                "create table if not exists `wf_notification_inbox`",
+                "create table if not exists `wf_notification_delivery_audit`",
+                "create table if not exists `wf_notification_urge_audit`")
                 .doesNotContain("drop table");
         assertThat(ddl).contains(
                 "generated always as",
@@ -66,9 +78,26 @@ class WorkflowBusinessDdlContractTest
                 "(`source_type` = 'embedded' and `form_id` is null)",
                 "unique key `uk_wf_copy_event_user` (`copy_event_id`, `user_id`)",
                 "constraint `chk_wf_attachment_quota_guard_owner` check (`owner_user_id` >= 0)",
+                "unique key `uk_wf_process_draft_instance` (`submitted_process_instance_id`)",
+                "key `idx_wf_process_draft_owner_status_time`",
+                "key `idx_wf_process_draft_deployment_status`",
+                "constraint `chk_wf_process_draft_snapshot_json` check (json_valid(`form_snapshot`))",
+                "constraint `chk_wf_process_draft_assignment_json` check",
+                "constraint `chk_wf_process_draft_values_json` check (json_valid(`form_values`))",
+                "constraint `chk_wf_process_draft_members_json` check",
+                "constraint `chk_wf_process_draft_lifecycle` check",
+                "unique key `uk_wf_process_draft_audit_revision` (`draft_id`, `to_revision`)",
+                "constraint `fk_wf_process_draft_audit_draft` foreign key (`draft_id`)",
+                "constraint `chk_wf_process_draft_audit_transition` check",
+                "key `idx_wf_attachment_draft_field` (`draft_id`, `field_name`, `attachment_status`)",
+                "constraint `fk_wf_attachment_draft` foreign key (`draft_id`)",
+                "`attachment_status` in ('temp', 'draft', 'bound', 'expired', 'deleted')",
                 "insert ignore into `wf_attachment_quota_guard` (`owner_user_id`)",
                 "values (0)",
                 "key `idx_wf_deploy_form_form_id` (`form_id`)",
+                "unique key `uk_wf_deploy_condition_flow` (`deploy_id`, `process_key`, `gateway_id`, `flow_id`)",
+                "key `idx_wf_deploy_condition_runtime` (`deploy_id`, `process_key`, `gateway_token`)",
+                "constraint `chk_wf_deploy_condition_default` check",
                 "unique key `uk_wf_deploy_controlled_loop_node` (`deploy_id`, `process_key`, `activity_id`)",
                 "unique key `uk_wf_controlled_loop_task` (`task_id`)",
                 "unique key `uk_wf_controlled_loop_iteration`",
@@ -79,7 +108,15 @@ class WorkflowBusinessDdlContractTest
                 "constraint `chk_wf_controlled_loop_iteration_no` check (`iteration_no` between 1 and 50)",
                 "constraint `chk_wf_controlled_loop_actor` check",
                 "constraint `chk_wf_controlled_loop_outcome` check (`outcome` in ('repeat', 'exit'))",
-                "key `idx_wf_copy_user_status_time` (`user_id`, `del_flag`, `create_time`)");
+                "key `idx_wf_copy_user_status_time` (`user_id`, `del_flag`, `read_status`, `create_time`)");
+        assertThat(ddl).contains(
+                "unique key `uk_wf_deploy_participant_rule_node`",
+                "constraint `chk_wf_deploy_participant_rule_relation` check",
+                "constraint `chk_wf_deploy_participant_rule_targets` check",
+                "constraint `chk_wf_deploy_participant_rule_policy` check (`no_match_policy` = 'fail')",
+                "constraint `chk_wf_participant_audit_relation` check",
+                "constraint `chk_wf_participant_audit_actor` check")
+                .doesNotContain("fk_wf_participant", "foreign key (`rule_id`)");
         assertThat(ddl).contains(
                 "unique key `uk_wf_business_calendar_key` (`calendar_key`)",
                 "constraint `chk_wf_deploy_task_sla_escalation` check",
@@ -87,6 +124,49 @@ class WorkflowBusinessDdlContractTest
                 "unique key `uk_wf_task_sla_audit_action`",
                 "unique key `uk_wf_task_sla_notification`",
                 "constraint `fk_wf_task_sla_notification_audit`");
+        assertThat(ddl).contains(
+                "`delivery_cycle`         smallint unsigned not null default 1",
+                "`total_attempt_count`    int unsigned not null default 0",
+                "constraint `chk_wf_notification_outbox_sequence`",
+                "`total_attempt_no` int unsigned not null default 0",
+                "unique key `uk_wf_notification_delivery_audit` (`outbox_id`, `action_type`, `delivery_cycle`, `attempt_no`)",
+                "constraint `chk_wf_notification_delivery_sequence`");
+        assertThat(ddl).contains(
+                "unique key `uk_wf_deploy_call_element`",
+                "key `idx_wf_deploy_call_target`",
+                "key `idx_wf_deploy_call_target_deploy`",
+                "constraint `chk_wf_deploy_call_version_policy`",
+                "constraint `chk_wf_deploy_call_propagation`",
+                "constraint `chk_wf_deploy_call_input_json`",
+                "constraint `chk_wf_deploy_call_output_json`",
+                "constraint `chk_wf_deploy_call_checksum`");
+    }
+
+    /**
+     * 验证首个正式基线直接包含自动抄送来源、触发节点和首次阅读审计字段。
+     * @return void，首发基线缺少自动抄送字段、约束或查询索引时测试失败
+     * @throws Exception 读取正式业务基线 SQL 失败
+     */
+    @Test
+    void definesAutomaticCopyAndFirstReadTrackingInFormalBaseline() throws Exception
+    {
+        String baseline = Files.readString(findProjectSql(
+                "sql/flowable/business/8.0.0__workflow_business.sql"),
+                StandardCharsets.UTF_8).toLowerCase();
+
+        assertThat(baseline).contains(
+                "create table if not exists `wf_copy`",
+                "`source_type`     varchar(16)  not null default 'manual'",
+                "`trigger_type`    varchar(32)  not null default 'manual_complete'",
+                "`trigger_node_id` varchar(64)",
+                "`trigger_node_name` varchar(255)",
+                "`read_status`     char(1)      not null default '0'",
+                "`read_time`       datetime(3)",
+                "`create_time`     datetime(3)  not null default current_timestamp(3)",
+                "(`user_id`, `del_flag`, `read_status`, `create_time`)",
+                "constraint `chk_wf_copy_source_type`",
+                "constraint `chk_wf_copy_trigger_type`",
+                "constraint `chk_wf_copy_read_state`");
     }
 
     /**
@@ -118,6 +198,7 @@ class WorkflowBusinessDdlContractTest
                 "workflow_business_indexes",
                 "workflow_business_checks",
                 "workflow_business_data_integrity",
+                "workflow_draft_column_types",
                 "chk_wf_deploy_form_source",
                 "source_type",
                 "wf_deploy_form_missing_source_form",
@@ -132,6 +213,11 @@ class WorkflowBusinessDdlContractTest
                 "wf_designer_preference_missing_user",
                 "wf_attachment_quota_guard_invalid_owner",
                 "wf_attachment_quota_guard_global_missing",
+                "wf_process_draft_invalid_row",
+                "wf_process_draft_missing_owner",
+                "wf_process_draft_submitted_history_mismatch",
+                "wf_process_draft_audit_invalid_chain",
+                "wf_attachment_draft_relation_mismatch",
                 "wf_controlled_loop_missing_deployment",
                 "wf_controlled_loop_execution_missing_snapshot",
                 "wf_controlled_loop_execution_missing_history",
@@ -148,7 +234,23 @@ class WorkflowBusinessDdlContractTest
                 "fk_wf_deploy_extension_version",
                 "deploy_extension_snapshot_mismatch",
                 "connector_endpoint_invalid_row",
-                "connector_invocation_invalid_state");
+                "connector_invocation_invalid_state",
+                "workflow_call_activity_snapshot_columns",
+                "workflow_call_activity_snapshot_indexes",
+                "workflow_call_activity_snapshot_checks",
+                "workflow_call_activity_snapshot_integrity",
+                "wf_deploy_call_activity",
+                "act_re_procdef");
+        assertThat(normalized).contains(
+                "workflow_participant_rule_tables",
+                "workflow_participant_rule_columns",
+                "workflow_participant_rule_indexes",
+                "workflow_participant_rule_checks",
+                "workflow_participant_audit_retention_foreign_keys",
+                "workflow_participant_rule_data_integrity",
+                "participant_rule_missing_deployment",
+                "participant_rule_missing_start_scope",
+                "participant_audit_invalid_row");
         assertThat(normalized).contains(
                 "workflow_runtime_integration_tables",
                 "workflow_runtime_integration_columns",
@@ -159,6 +261,10 @@ class WorkflowBusinessDdlContractTest
                 "integration_credential_invalid_row",
                 "runtime_event_invalid_row",
                 "runtime_event_missing_credential");
+        assertThat(normalized).contains(
+                "workflow_notification_tables",
+                "workflow_notification_integrity",
+                "delivery_sequence_invalid");
         assertThat(normalized).contains(
                 "workflow_bpmn_event_tables",
                 "workflow_bpmn_event_constraints",

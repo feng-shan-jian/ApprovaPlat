@@ -16,9 +16,12 @@ import java.util.Date;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.function.Function;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FormProperty;
+import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.StartEvent;
+import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -73,7 +76,9 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.system.service.ISysUserService;
 
@@ -120,6 +125,9 @@ class WorkflowProcessQueryServiceTest
     @Mock
     private WorkflowTaskLifecycleService taskLifecycleService;
 
+    @Mock
+    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
+
     private ProcessDefinitionQuery definitionQuery;
 
     private DeploymentQuery deploymentQuery;
@@ -152,10 +160,16 @@ class WorkflowProcessQueryServiceTest
 
         when(engineOperations.read(any(Supplier.class))).thenAnswer(invocation ->
                 ((Supplier<?>) invocation.getArgument(0)).get());
+        when(engineOperations.writeAsCurrentUser(any(Function.class))).thenAnswer(invocation ->
+                ((Function<WorkflowCurrentIdentity, ?>) invocation.getArgument(0)).apply(
+                        new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3"))));
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3")));
         when(identityResolver.resolveClaimEligibleUserIds(List.of("7")))
                 .thenReturn(Set.of("7"));
+        // 历史部署未托管时返回 null，继续覆盖既有 starter identity link 兼容链。
+        when(participantRuleRuntimeService.canStartIfManaged(any(), any()))
+                .thenReturn(null);
         when(repositoryService.createProcessDefinitionQuery()).thenReturn(definitionQuery);
         when(repositoryService.createDeploymentQuery()).thenReturn(deploymentQuery);
         when(historyService.createHistoricProcessInstanceQuery()).thenReturn(processQuery);
@@ -169,6 +183,7 @@ class WorkflowProcessQueryServiceTest
                 processAccessService,
                 deploymentService, deployFormMapper, copyMapper, userService,
                 taskLifecycleService);
+        service.setParticipantRuleRuntimeService(participantRuleRuntimeService);
     }
 
     /**
@@ -207,6 +222,42 @@ class WorkflowProcessQueryServiceTest
         verify(definitionQuery).count();
         verify(definitionQuery).listPage(0, 3);
         verify(definitionQuery, never()).list();
+        verify(participantRuleRuntimeService).canStartIfManaged(any(), eq(publicDefinition));
+        verify(participantRuleRuntimeService).canStartIfManaged(any(), eq(groupDefinition));
+        verify(participantRuleRuntimeService).canStartIfManaged(any(), eq(deniedDefinition));
+    }
+
+    /**
+     * 验证新部署定义优先按不可变范围快照过滤，拒绝结果不会回退旧 starter link。
+     *
+     * @return 无返回值，快照被旧 identity link 绕过时测试失败
+     */
+    @Test
+    void filtersStartableDefinitionsBySnapshotWithoutLegacyFallback()
+    {
+        ProcessDefinition allowed = definition(
+                "definition-snapshot-allowed", "allowed", "deploy-allowed", false);
+        ProcessDefinition denied = definition(
+                "definition-snapshot-denied", "denied", "deploy-denied", false);
+        when(definitionQuery.count()).thenReturn(2L);
+        when(definitionQuery.listPage(0, 2)).thenReturn(List.of(allowed, denied));
+        when(participantRuleRuntimeService.canStartIfManaged(any(), eq(allowed)))
+                .thenReturn(true);
+        when(participantRuleRuntimeService.canStartIfManaged(any(), eq(denied)))
+                .thenReturn(false);
+        Deployment deployment = mock(Deployment.class);
+        when(deployment.getDeploymentTime())
+                .thenReturn(Date.from(Instant.parse("2026-08-08T08:00:00Z")));
+        when(deploymentQuery.singleResult()).thenReturn(deployment);
+
+        WorkflowPageResult<WorkflowStartableDefinitionView> result =
+                service.listStartable(null, 1, 10);
+
+        assertThat(result.total()).isEqualTo(1);
+        assertThat(result.rows()).singleElement()
+                .extracting(WorkflowStartableDefinitionView::definitionId)
+                .isEqualTo("definition-snapshot-allowed");
+        verify(repositoryService, never()).getIdentityLinksForProcessDefinition(anyString());
     }
 
     /**
@@ -591,6 +642,44 @@ class WorkflowProcessQueryServiceTest
     }
 
     /**
+     * 验证首次阅读更新和回读始终携带当前认证用户，且返回数据库首次时间。
+     * @return void，用户范围、状态或时间未形成闭环时测试失败
+     */
+    @Test
+    void atomicallyMarksCurrentRecipientsFirstReadTime()
+    {
+        WfCopy copy = new WfCopy();
+        copy.setCopyId(11L);
+        copy.setUserId(7L);
+        copy.setReadStatus("1");
+        copy.setReadTime(Date.from(Instant.parse("2026-08-08T08:00:00Z")));
+        when(copyMapper.markRead(11L, 7L, "7")).thenReturn(1);
+        when(copyMapper.selectByIdAndUserId(11L, 7L)).thenReturn(copy);
+
+        WorkflowCopyView result = service.markCopyRead(11L);
+
+        assertThat(result.readStatus()).isEqualTo("1");
+        assertThat(result.readTime()).isEqualTo(Instant.parse("2026-08-08T08:00:00Z"));
+        verify(copyMapper).markRead(11L, 7L, "7");
+        verify(copyMapper).selectByIdAndUserId(11L, 7L);
+    }
+
+    /**
+     * 验证越权和不存在记录在所有者限定更新后返回同一 404，不泄露记录存在性。
+     * @return void，越权查询扩大到无 userId 条件时测试失败
+     */
+    @Test
+    void hidesForeignCopyWhenMarkingRead()
+    {
+        when(copyMapper.markRead(19L, 7L, "7")).thenReturn(0);
+        when(copyMapper.selectByIdAndUserId(19L, 7L)).thenReturn(null);
+
+        assertCode(() -> service.markCopyRead(19L), HttpStatus.NOT_FOUND);
+
+        verify(copyMapper, never()).selectById(19L);
+    }
+
+    /**
      * 验证首次发起只返回 BPMN 开始节点对应的 wf_deploy_form 不可变快照。
      *
      * @return 无返回值，断言定义/部署/发起权限和快照内容关系
@@ -603,7 +692,9 @@ class WorkflowProcessQueryServiceTest
         when(definitionQuery.singleResult()).thenReturn(definition);
         when(repositoryService.getIdentityLinksForProcessDefinition("definition-1"))
                 .thenReturn(List.of());
-        when(repositoryService.getBpmnModel("definition-1")).thenReturn(startFormModel("leave"));
+        BpmnModel model = startFormModel("leave");
+        addStartMultiInstanceTask(model, "jointReview", "联合会签");
+        when(repositoryService.getBpmnModel("definition-1")).thenReturn(model);
         WfDeployForm snapshot = new WfDeployForm();
         snapshot.setDeployId("deploy-1");
         snapshot.setSourceType("TEMPLATE");
@@ -619,7 +710,87 @@ class WorkflowProcessQueryServiceTest
 
         assertThat(result.formId()).isEqualTo(12L);
         assertThat(result.content()).isEqualTo("{\"fields\":[]}");
+        assertThat(result.startMultiInstanceAssignments())
+                .singleElement()
+                .satisfies(assignment ->
+                {
+                    assertThat(assignment.activityId()).isEqualTo("jointReview");
+                    assertThat(assignment.activityName()).isEqualTo("联合会签");
+                    assertThat(assignment.mode()).isEqualTo("ALL");
+                    assertThat(assignment.minUsers()).isEqualTo(1);
+                    assertThat(assignment.maxUsers()).isEqualTo(100);
+                });
         verify(deployFormMapper).selectByDeploymentId("deploy-1");
+    }
+
+    /**
+     * 验证正式表单节点携带字段权限 FormProperty 时仍按模板来源读取部署快照。
+     *
+     * @return 无返回值，权限描述不得被误判为第二份 BPMN 内嵌表单
+     */
+    @Test
+    void returnsTemplateStartFormWhenNodeContainsPermissionProperties()
+    {
+        ProcessDefinition definition = definition("definition-1", "leave", "deploy-1", false);
+        when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
+        when(definitionQuery.singleResult()).thenReturn(definition);
+        when(repositoryService.getIdentityLinksForProcessDefinition("definition-1"))
+                .thenReturn(List.of());
+        BpmnModel model = startFormModel("leave");
+        StartEvent start = (StartEvent) model.getProcessById("leave")
+                .getFlowElement("start", false);
+        FormProperty defaultPermission = new FormProperty();
+        defaultPermission.setId("approva_permission_default");
+        FormProperty fieldPermission = new FormProperty();
+        fieldPermission.setId("approva_permission_field_1");
+        fieldPermission.setVariable("requestTitle");
+        start.setFormProperties(List.of(defaultPermission, fieldPermission));
+        when(repositoryService.getBpmnModel("definition-1")).thenReturn(model);
+
+        WfDeployForm snapshot = new WfDeployForm();
+        snapshot.setDeployId("deploy-1");
+        snapshot.setSourceType("TEMPLATE");
+        snapshot.setFormId(12L);
+        snapshot.setFormKey("key_12");
+        snapshot.setNodeKey("start");
+        snapshot.setFormName("请假表单");
+        snapshot.setContent("{\"fields\":[]}");
+        when(deployFormMapper.selectByDeploymentId("deploy-1")).thenReturn(List.of(snapshot));
+
+        WorkflowProcessFormView result = service.getProcessForm(
+                new WorkflowProcessFormQueryDto("definition-1", "deploy-1", null));
+
+        assertThat(result.formId()).isEqualTo(12L);
+        assertThat(result.content()).isEqualTo("{\"fields\":[]}");
+    }
+
+    /**
+     * 验证正式表单节点混入普通 FormData 时继续拒绝双重表单来源。
+     *
+     * @return 无返回值，非法模型必须在读取部署快照前失败
+     */
+    @Test
+    void rejectsTemplateStartFormMixedWithEmbeddedFormProperty()
+    {
+        ProcessDefinition definition = definition("definition-1", "leave", "deploy-1", false);
+        when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
+        when(definitionQuery.singleResult()).thenReturn(definition);
+        when(repositoryService.getIdentityLinksForProcessDefinition("definition-1"))
+                .thenReturn(List.of());
+        BpmnModel model = startFormModel("leave");
+        StartEvent start = (StartEvent) model.getProcessById("leave")
+                .getFlowElement("start", false);
+        FormProperty embeddedField = new FormProperty();
+        embeddedField.setId("requestTitle");
+        embeddedField.setVariable("requestTitle");
+        start.setFormProperties(List.of(embeddedField));
+        when(repositoryService.getBpmnModel("definition-1")).thenReturn(model);
+
+        assertCode(() -> service.getProcessForm(
+                new WorkflowProcessFormQueryDto("definition-1", "deploy-1", null)),
+                HttpStatus.ERROR);
+
+        verify(deployFormMapper, never()).selectByDeploymentId(any());
     }
 
     /**
@@ -804,6 +975,30 @@ class WorkflowProcessQueryServiceTest
         process.addFlowElement(startEvent);
         model.addProcess(process);
         return model;
+    }
+
+    /**
+     * 向开始表单测试模型加入由发起页选择成员的受控会签节点。
+     *
+     * @param model BpmnModel，已经包含可执行主流程的模型。
+     * @param activityId String，会签用户任务节点标识。
+     * @param activityName String，会签用户任务显示名称。
+     * @return 无返回值；节点直接加入模型中的主流程。
+     */
+    private void addStartMultiInstanceTask(BpmnModel model, String activityId,
+            String activityName)
+    {
+        UserTask task = new UserTask();
+        task.setId(activityId);
+        task.setName(activityName);
+        task.setAssignee(WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION);
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setInputDataItem(WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION);
+        loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        loop.setCompletionCondition(
+                WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION);
+        task.setLoopCharacteristics(loop);
+        model.getProcesses().get(0).addFlowElement(task);
     }
 
     /**

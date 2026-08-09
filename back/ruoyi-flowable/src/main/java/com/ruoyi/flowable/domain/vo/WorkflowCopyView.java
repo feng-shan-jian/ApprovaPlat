@@ -16,6 +16,12 @@ import java.time.Instant;
  * @param userId Long，当前抄送接收用户主键
  * @param originatorId Long，抄送发起用户主键
  * @param originatorName String，抄送发起用户名称快照
+ * @param sourceType String，MANUAL、AUTO 或 MANUAL_AUTO
+ * @param triggerType String，服务端固定触发类型
+ * @param triggerNodeId String，触发节点主键
+ * @param triggerNodeName String，触发节点名称快照
+ * @param readStatus String，0 未读、1 已读
+ * @param readTime Instant，首次阅读时间；未读时为空
  * @param createTime Instant，抄送时间
  */
 public record WorkflowCopyView(
@@ -30,6 +36,12 @@ public record WorkflowCopyView(
         Long userId,
         Long originatorId,
         String originatorName,
+        String sourceType,
+        String triggerType,
+        String triggerNodeId,
+        String triggerNodeName,
+        String readStatus,
+        Instant readTime,
         Instant createTime)
 {
 }

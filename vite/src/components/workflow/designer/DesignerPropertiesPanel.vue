@@ -69,15 +69,44 @@
                 :custom-field-loading="extensionLoading"
                 @change="emit('embedded-form-change', $event)"
               />
+              <el-form-item v-if="state.formSource === 'TEMPLATE' && state.formKey" label="节点字段权限">
+                <FormFieldPermissionEditor
+                  :fields="state.formPermissionFields"
+                  :default-mode="state.formPermissionDefault"
+                  @change="emit('form-permission-change', $event)"
+                />
+              </el-form-item>
             </template>
 
+            <ParticipantRuleEditor
+              v-if="flags.process"
+              v-model="state.participantRule"
+              mode="start"
+              :identity-options="identityOptions"
+              :loading="identityLoading"
+              @identity-search="emit('identity-search', $event)"
+              @identity-resolve="emit('identity-resolve', $event)"
+              @change="emit('participant-rule-change', $event)"
+            />
+
             <template v-if="flags.userTask">
+              <ParticipantRuleEditor
+                v-if="state.multiInstanceType === 'none'"
+                v-model="state.participantRule"
+                mode="task"
+                :identity-options="identityOptions"
+                :form-fields="participantFormFieldOptions"
+                :loading="identityLoading"
+                @identity-search="emit('identity-search', $event)"
+                @identity-resolve="emit('identity-resolve', $event)"
+                @change="emit('participant-rule-change', $event)"
+              />
               <el-form-item v-if="state.multiInstanceType === 'controlled'" label="签署规则">
                 <el-segmented v-model="state.multiInstanceApprovalMode" :options="multiInstanceApprovalOptions" @change="emit('multi-instance-change')" />
               </el-form-item>
               <template v-if="state.multiInstanceType === 'controlled'">
                 <el-form-item label="人员来源">
-                  <el-segmented v-model="state.multiInstanceMemberSource" :options="multiInstanceMemberSourceOptions" @change="emit('multi-instance-change')" />
+                  <el-segmented v-model="state.multiInstanceMemberSource" :options="multiInstanceMemberSourceOptions" @change="handleMemberSourceChange" />
                 </el-form-item>
                 <el-form-item v-if="state.multiInstanceMemberSource === 'fixed'" label="固定办理人" required>
                   <el-select
@@ -95,7 +124,7 @@
                   </el-select>
                 </el-form-item>
               </template>
-              <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType)">
+              <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType) && !flags.userTask">
                 <el-form-item label="集合表达式">
                   <el-input v-model="state.collection" maxlength="256" @change="emit('multi-instance-change')" />
                 </el-form-item>
@@ -106,7 +135,7 @@
                   <el-input v-model="state.completionCondition" type="textarea" :rows="2" maxlength="512" @change="emit('multi-instance-change')" />
                 </el-form-item>
               </template>
-              <template v-if="state.multiInstanceType !== 'controlled'">
+              <template v-if="!['none', 'controlled'].includes(state.multiInstanceType)">
                 <el-form-item label="办理方式">
                   <el-segmented v-model="state.assignmentType" :options="assignmentOptions" @change="emit('assignment-change')" />
                 </el-form-item>
@@ -152,6 +181,19 @@
                 @change="emit('sla-change', $event)"
               />
             </template>
+
+            <el-form-item v-if="flags.process || flags.userTask" label="自动抄送">
+              <AutoCopyRuleEditor
+                v-model="state.autoCopyRules"
+                :trigger-options="autoCopyTriggerOptions"
+                :user-options="identityOptions.autoCopyUsers"
+                :group-options="identityOptions.autoCopyGroups"
+                :form-field-options="autoCopyFormFieldOptions"
+                :identity-loading="identityLoading"
+                @identity-search="emit('identity-search', $event)"
+                @change="emit('auto-copy-change', $event)"
+              />
+            </el-form-item>
 
             <template v-if="flags.serviceTaskLike">
               <el-form-item label="受控处理器" required>
@@ -213,21 +255,106 @@
             </template>
 
             <template v-if="flags.callActivity">
-              <el-form-item label="被调用流程 key" required>
-                <el-input v-model="state.calledElement" maxlength="255" @change="emit('call-activity-change')" />
+              <el-form-item label="已发布子流程" required>
+                <el-select
+                  v-model="state.callDefinitionId"
+                  filterable
+                  :loading="callActivityLoading"
+                  placeholder="请选择有权引用的已发布流程"
+                  @change="emit('call-activity-change')"
+                >
+                  <el-option
+                    v-for="option in callActivityOptions"
+                    :key="option.definitionId"
+                    :value="option.definitionId"
+                    :label="callActivityOptionLabel(option)"
+                    :disabled="option.status !== 'ACTIVE'"
+                  >
+                    <div class="call-activity-option">
+                      <span>{{ option.processName || option.processKey }}</span>
+                      <code>{{ option.processKey }}</code>
+                      <el-tag size="small" :type="option.status === 'ACTIVE' ? 'success' : 'info'">
+                        v{{ option.version }} · {{ option.status === 'ACTIVE' ? '启用' : '停用' }}
+                      </el-tag>
+                    </div>
+                  </el-option>
+                </el-select>
               </el-form-item>
-              <el-form-item label="业务键">
-                <el-input v-model="state.businessKey" maxlength="255" @change="emit('call-activity-change')" />
+              <el-form-item label="版本绑定策略" required>
+                <el-segmented v-model="state.callVersionPolicy" :options="callVersionPolicyOptions" @change="emit('call-activity-change')" />
               </el-form-item>
-              <el-form-item label="实例名称">
+              <el-form-item label="业务键策略">
+                <el-segmented v-model="state.callBusinessKeyPolicy" :options="callBusinessKeyPolicyOptions" @change="emit('call-activity-change')" />
+              </el-form-item>
+              <el-form-item label="继承父流程变量">
+                <el-switch v-model="state.callInheritVariables" @change="emit('call-activity-change')" />
+              </el-form-item>
+              <el-form-item label="子流程实例名称">
                 <el-input v-model="state.processInstanceName" maxlength="255" @change="emit('call-activity-change')" />
+              </el-form-item>
+              <el-form-item label="输入变量映射">
+                <div class="call-activity-mappings">
+                  <div v-for="(mapping, index) in state.callInMappings" :key="`in-${index}`" class="call-activity-mapping-row">
+                    <el-select v-model="mapping.source" filterable placeholder="父流程字段" @change="handleCallMappingChange(mapping)">
+                      <el-option v-for="field in callActivityParentReadableFields" :key="field.name" :label="variableFieldLabel(field)" :value="field.name" />
+                    </el-select>
+                    <span class="call-activity-mapping-row__arrow">→</span>
+                    <el-select v-model="mapping.target" filterable placeholder="子流程字段" @change="handleCallMappingChange(mapping)">
+                      <el-option v-for="field in selectedCallActivityInputFields" :key="field.name" :label="variableFieldLabel(field)" :value="field.name" />
+                    </el-select>
+                    <el-tooltip content="删除输入映射" placement="top">
+                      <el-button text circle icon="Delete" aria-label="删除输入映射" @click="removeCallMapping('input', index)" />
+                    </el-tooltip>
+                  </div>
+                  <el-button icon="Plus" :disabled="state.callInMappings.length >= 64" @click="addCallMapping('input')">添加输入映射</el-button>
+                </div>
+              </el-form-item>
+              <el-form-item label="输出变量映射">
+                <div class="call-activity-mappings">
+                  <div v-for="(mapping, index) in state.callOutMappings" :key="`out-${index}`" class="call-activity-mapping-row">
+                    <el-select v-model="mapping.source" filterable placeholder="子流程字段" @change="handleCallMappingChange(mapping)">
+                      <el-option v-for="field in selectedCallActivityOutputFields" :key="field.name" :label="variableFieldLabel(field)" :value="field.name" />
+                    </el-select>
+                    <span class="call-activity-mapping-row__arrow">→</span>
+                    <el-select v-model="mapping.target" filterable placeholder="父流程字段" @change="handleCallMappingChange(mapping)">
+                      <el-option v-for="field in callActivityParentWritableFields" :key="field.name" :label="variableFieldLabel(field)" :value="field.name" />
+                    </el-select>
+                    <el-tooltip content="删除输出映射" placement="top">
+                      <el-button text circle icon="Delete" aria-label="删除输出映射" @click="removeCallMapping('output', index)" />
+                    </el-tooltip>
+                  </div>
+                  <el-button icon="Plus" :disabled="state.callOutMappings.length >= 64" @click="addCallMapping('output')">添加输出映射</el-button>
+                </div>
+              </el-form-item>
+              <el-form-item label="输出变量作用域">
+                <el-segmented v-model="state.callOutputScope" :options="callOutputScopeOptions" @change="emit('call-activity-change')" />
+              </el-form-item>
+              <el-form-item label="取消与终止传播">
+                <el-input model-value="整棵父子流程原子传播" readonly />
               </el-form-item>
             </template>
 
             <template v-if="flags.sequenceFlow">
-              <el-form-item label="流转条件">
-                <el-input v-model="state.conditionExpression" type="textarea" :rows="3" maxlength="1024" @change="emit('condition-change')" />
-              </el-form-item>
+              <SequenceFlowRuleEditor
+                v-if="flags.conditionGatewayFlow"
+                :flow-id="state.id"
+                :name="state.name"
+                :config="state.conditionRule"
+                :is-default="state.conditionDefault"
+                :gateway-type="conditionContext.gatewayType"
+                :gateway-branches="conditionContext.branches"
+                :field-conflicts="conditionContext.fieldConflicts"
+                :field-options="conditionFieldOptions"
+                @apply="emit('condition-rule-change', $event)"
+                @make-default="emit('condition-default-change')"
+              />
+              <el-alert
+                v-else
+                type="info"
+                :closable="false"
+                show-icon
+                title="条件规则仅适用于排他或包容网关的多条出线"
+              />
             </template>
 
             <template v-if="flags.event">
@@ -435,6 +562,7 @@
 
 <script setup name="DesignerPropertiesPanel">
 import EmbeddedFormFieldEditor from './EmbeddedFormFieldEditor.vue'
+import FormFieldPermissionEditor from './FormFieldPermissionEditor.vue'
 import CelExpressionEditor from './CelExpressionEditor.vue'
 import HttpConnectorEditor from './HttpConnectorEditor.vue'
 import SqlConnectorEditor from './SqlConnectorEditor.vue'
@@ -443,6 +571,9 @@ import BusinessListenerEditor from './BusinessListenerEditor.vue'
 import ExtensionPropertyEditor from './ExtensionPropertyEditor.vue'
 import CollaborationMessageEditor from './CollaborationMessageEditor.vue'
 import UserTaskSlaEditor from './UserTaskSlaEditor.vue'
+import ParticipantRuleEditor from './ParticipantRuleEditor.vue'
+import SequenceFlowRuleEditor from './SequenceFlowRuleEditor.vue'
+import AutoCopyRuleEditor from './AutoCopyRuleEditor.vue'
 
 const props = defineProps({
   selected: { type: Boolean, default: false },
@@ -450,12 +581,23 @@ const props = defineProps({
   state: { type: Object, required: true },
   flags: { type: Object, required: true },
   forms: { type: Array, default: () => [] },
-  identityOptions: { type: Object, default: () => ({ assignees: [], candidateUsers: [], candidateGroups: [] }) },
+  identityOptions: {
+    type: Object,
+    default: () => ({
+      assignees: [], candidateUsers: [], candidateGroups: [], candidateRoles: [],
+      activeUsers: [], activeRoles: [], activeDepts: [], autoCopyUsers: [], autoCopyGroups: []
+    })
+  },
   identityLoading: { type: Boolean, default: false },
   assignmentOptions: { type: Array, default: () => [] },
   multiInstanceOptions: { type: Array, default: () => [] },
   multiInstanceApprovalOptions: { type: Array, default: () => [] },
   controlledLoopFieldOptions: { type: Array, default: () => [] },
+  participantFormFieldOptions: { type: Array, default: () => [] },
+  conditionFieldOptions: { type: Array, default: () => [] },
+  conditionContext: { type: Object, default: () => ({ gatewayType: '', branches: [] }) },
+  autoCopyTriggerOptions: { type: Array, default: () => [] },
+  autoCopyFormFieldOptions: { type: Array, default: () => [] },
   extensionOptions: { type: Array, default: () => [] },
   formFieldOptions: { type: Array, default: () => [] },
   connectorEndpoints: { type: Array, default: () => [] },
@@ -463,6 +605,9 @@ const props = defineProps({
   extensionLoading: { type: Boolean, default: false },
   dmnOptions: { type: Array, default: () => [] },
   dmnLoading: { type: Boolean, default: false },
+  callActivityOptions: { type: Array, default: () => [] },
+  callActivityLoading: { type: Boolean, default: false },
+  callActivityParentFields: { type: Array, default: () => [] },
   listenerOptions: { type: Array, default: () => [] },
   listenerLoading: { type: Boolean, default: false },
   errorEventOptions: { type: Array, default: () => [] },
@@ -474,11 +619,12 @@ const props = defineProps({
 
 const emit = defineEmits([
   'common-change', 'id-change', 'process-change', 'form-source-change', 'form-change',
-  'embedded-form-change', 'assignment-change',
-  'user-task-change', 'extension-selection-change', 'service-task-change', 'condition-change', 'documentation-change',
+  'embedded-form-change', 'form-permission-change', 'assignment-change', 'participant-rule-change',
+  'user-task-change', 'extension-selection-change', 'service-task-change', 'condition-change',
+  'condition-rule-change', 'condition-default-change', 'documentation-change',
   'multi-instance-change', 'activity-change', 'call-activity-change', 'event-change', 'dmn-change',
-  'identity-search', 'business-execution-listener-change', 'business-task-listener-change',
-  'extension-properties-change', 'sla-change', 'close'
+  'identity-search', 'identity-resolve', 'business-execution-listener-change', 'business-task-listener-change',
+  'extension-properties-change', 'sla-change', 'auto-copy-change', 'close'
 ])
 
 // 表单来源值与后端部署快照的 source_type 契约一致。
@@ -488,12 +634,28 @@ const formSourceOptions = Object.freeze([
 ])
 // 会签和或签共用多实例语义，人员来源决定是否在前驱任务完成时要求动态选人。
 const multiInstanceMemberSourceOptions = Object.freeze([
-  { label: '动态选择', value: 'dynamic' },
+  { label: '办理时选择', value: 'dynamic' },
+  { label: '发起时选择', value: 'start' },
   { label: '固定人员', value: 'fixed' }
+])
+// activeSections 只记录当前元素真实存在的分区，避免固定展开状态与用户点击动作相互反转。
+const activeSections = ref(['base', 'business'])
+
+// 作者只选择业务策略，父组件负责写入 Flowable key/id 和布尔属性，不开放表达式。
+const callVersionPolicyOptions = Object.freeze([
+  { label: '发布时最新版', value: 'LATEST_ACTIVE' },
+  { label: '固定所选版本', value: 'FIXED' }
+])
+const callBusinessKeyPolicyOptions = Object.freeze([
+  { label: '继承父流程', value: 'INHERIT' },
+  { label: '不设置', value: 'NONE' }
+])
+const callOutputScopeOptions = Object.freeze([
+  { label: '父流程变量', value: 'PARENT' },
+  { label: '调用节点局部变量', value: 'LOCAL' }
 ])
 
 const hasBusinessSection = computed(() => Object.values(props.flags).some(Boolean))
-const activeSections = ref(['base', 'business'])
 const availableSections = computed(() => [
   'base',
   ...(hasBusinessSection.value ? ['business'] : []),
@@ -504,6 +666,17 @@ const availableSections = computed(() => [
 const selectedExtensionType = computed(() => props.extensionOptions.find(option => (
   option.extensionKey === props.state.extensionKey
 ))?.extensionType || '')
+const selectedCallActivityOption = computed(() => props.callActivityOptions.find(option => (
+  option.definitionId === props.state.callDefinitionId
+)))
+const selectedCallActivityInputFields = computed(() => (
+  selectedCallActivityOption.value?.inputFields || []
+).filter(field => field.writable))
+const selectedCallActivityOutputFields = computed(() => (
+  selectedCallActivityOption.value?.outputFields || []
+).filter(field => field.readable))
+const callActivityParentReadableFields = computed(() => props.callActivityParentFields.filter(field => field.readable))
+const callActivityParentWritableFields = computed(() => props.callActivityParentFields.filter(field => field.writable))
 const selectedExtensionImplementation = computed(() => props.extensionOptions.find(option => (
   option.extensionKey === props.state.extensionKey
 ))?.implementationKey || '')
@@ -512,10 +685,11 @@ const businessEventOptions = computed(() => (
     ? props.errorEventOptions
     : props.escalationEventOptions
 ))
-// 动态多实例只能用于 UserTask；其他活动仍可配置标准串行或并行多实例。
-const activityLoopOptions = computed(() => props.multiInstanceOptions.filter(option => (
-  !['controlled', 'approvalLoop'].includes(option.value) || props.flags.userTask
-)))
+// UserTask 只开放受控会签/或签和整改循环；其他活动仍可使用标准串行或并行多实例。
+const activityLoopOptions = computed(() => props.multiInstanceOptions.filter(option => {
+  if (props.flags.userTask) return !['sequential', 'parallel'].includes(option.value)
+  return !['controlled', 'approvalLoop'].includes(option.value)
+}))
 // 条件值选项跟随当前正式表单字段；自由文本字段仍允许输入受限标量值。
 const controlledLoopValueOptions = computed(() => props.controlledLoopFieldOptions.find(option => (
   option.value === props.state.controlledLoopDecisionVariable
@@ -551,13 +725,14 @@ const eventDefinitionLabel = computed(() => ({
  * 在切换 BPMN 元素时恢复高频属性分区，并移除当前元素不支持的旧分区。
  * @param {[string, string[]]} current 当前元素标识和可用分区名称。
  * @param {[string, string[]]|undefined} previous 上一个元素标识和可用分区名称。
- * @returns {void} 新元素默认展开基础与业务配置，同一元素只清理失效分区。
+ * @returns {void} 新活动默认同时展开执行配置，其他元素展开基础与业务配置；同一元素只清理失效分区。
  */
 function syncActiveSections(current, previous) {
   const [elementId, sections] = current
   const [previousElementId] = previous || []
   if (elementId !== previousElementId) {
-    activeSections.value = sections.filter(name => ['base', 'business'].includes(name))
+    // 活动的循环、会签和整改能力属于核心业务入口，切换元素后必须直接可见，避免配置看似存在但无法发现。
+    activeSections.value = sections.filter(name => ['base', 'business', 'execution'].includes(name))
     return
   }
   activeSections.value = activeSections.value.filter(name => sections.includes(name))
@@ -625,12 +800,73 @@ function handleLoopTypeChange(value) {
 }
 
 /**
+ * 切换会签或或签人员来源，并为固定名单保留一次可选择成员的页面编辑阶段。
+ * @param {'dynamic'|'start'|'fixed'} value 当前人员来源。
+ * @returns {void} 动态或发起来源立即写入模型；固定来源在已选择成员后才写入模型。
+ */
+function handleMemberSourceChange(value) {
+  // 固定来源必须先显示成员选择器；空名单由父组件保存门禁拒绝，不能在切换瞬间回滚页面。
+  if (value === 'fixed' && !props.state.fixedMultiInstanceUserIds.length) return
+  emit('multi-instance-change')
+}
+
+/**
  * 请求父组件查询 SLA 超时升级办理人目录。
  * @param {string} keyword 用户输入的检索词。
  * @returns {void} 复用直接办理人的审批能力与权限边界。
  */
 function searchSlaAssignees(keyword) {
   emit('identity-search', { target: 'assignees', keyword })
+}
+/**
+ * 生成流程目录下拉的稳定业务标签。
+ * @param {object} option 服务端权限过滤后的流程定义目录项。
+ * @returns {string} 名称、key、版本和状态组成的可检索标签。
+ */
+function callActivityOptionLabel(option) {
+  return `${option.processName || option.processKey} · ${option.processKey} · v${option.version} · ${option.status === 'ACTIVE' ? '启用' : '停用'}`
+}
+
+/**
+ * 生成变量映射下拉标签，字段类型来自服务端或当前父模型正式表单。
+ * @param {object} field 变量字段目录项。
+ * @returns {string} 字段名称、变量名和类型。
+ */
+function variableFieldLabel(field) {
+  return `${field.label || field.name}（${field.name}）· ${field.type}`
+}
+
+/**
+ * 为输入或输出映射追加一行空草稿。
+ * @param {'input'|'output'} direction 映射方向。
+ * @returns {void} 映射达到后端 64 项上限时不再追加。
+ */
+function addCallMapping(direction) {
+  const mappings = direction === 'input' ? props.state.callInMappings : props.state.callOutMappings
+  if (mappings.length >= 64) return
+  mappings.push({ source: '', target: '' })
+}
+
+/**
+ * 仅在一行映射的来源和目标都完成选择后写入 BPMN 命令栈。
+ * @param {{source:string,target:string}} mapping 当前编辑映射。
+ * @returns {void} 半成品保留在面板状态中，不生成不可保存 XML。
+ */
+function handleCallMappingChange(mapping) {
+  if (mapping?.source && mapping?.target) emit('call-activity-change')
+}
+
+/**
+ * 删除指定输入或输出映射并立即交给父组件写入命令栈。
+ * @param {'input'|'output'} direction 映射方向。
+ * @param {number} index 待删除映射下标。
+ * @returns {void} 下标非法时不修改状态。
+ */
+function removeCallMapping(direction, index) {
+  const mappings = direction === 'input' ? props.state.callInMappings : props.state.callOutMappings
+  if (!Number.isInteger(index) || index < 0 || index >= mappings.length) return
+  mappings.splice(index, 1)
+  emit('call-activity-change')
 }
 
 watch(
@@ -659,6 +895,8 @@ watch(
   min-height: 68px;
   gap: 10px;
   padding: 11px 10px 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
@@ -672,9 +910,8 @@ watch(
   color: var(--el-color-primary);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: 0;
   line-height: 1.4;
-  text-transform: uppercase;
 }
 
 .designer-properties-panel__heading strong {
@@ -815,8 +1052,45 @@ watch(
 .designer-properties-panel :deep(.el-empty) {
   flex: 1;
 }
-
 .designer-properties-panel :deep(.el-scrollbar__bar.is-vertical) {
   right: 3px;
+}
+
+.call-activity-option {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(96px, auto) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.call-activity-option code {
+  overflow: hidden;
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.call-activity-mappings {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+}
+
+.call-activity-mapping-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 4px;
+}
+
+.call-activity-mapping-row__arrow {
+  color: var(--el-text-color-placeholder);
+  text-align: center;
+}
+
+.call-activity-mapping-row :deep(.el-button) {
+  width: 28px;
+  height: 28px;
+  margin: 0;
 }
 </style>

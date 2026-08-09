@@ -55,13 +55,18 @@ public class WorkflowBpmnIdentityValidator
         // approvalUserIds 保存直接办理人/owner，claimUserIds 保存候选用户；两类用户先合并核验存在性，再分别核验 RBAC。
         LinkedHashSet<Long> approvalUserIds = new LinkedHashSet<>();
         LinkedHashSet<Long> claimUserIds = new LinkedHashSet<>();
-        LinkedHashSet<Long> userIds = new LinkedHashSet<>();
-        // roleIds/deptIds 保存候选组主键，每个组都必须独立证明至少存在一名完整认领资格成员。
+        // roleIds/deptIds 只保存任务候选组，避免自动抄送组被错误套用认领资格语义。
         LinkedHashSet<Long> roleIds = new LinkedHashSet<>();
         LinkedHashSet<Long> deptIds = new LinkedHashSet<>();
+        // autoCopy*Ids 保存部署后冻结的抄送身份，必须独立核验抄送列表和详情可见性。
+        LinkedHashSet<Long> autoCopyUserIds = new LinkedHashSet<>();
+        LinkedHashSet<Long> autoCopyRoleIds = new LinkedHashSet<>();
+        LinkedHashSet<Long> autoCopyDeptIds = new LinkedHashSet<>();
 
         for (Process process : document.bpmnModel().getProcesses())
         {
+            collectAutoCopyIdentities(process, autoCopyUserIds,
+                    autoCopyRoleIds, autoCopyDeptIds);
             for (UserTask task : process.findFlowElementsOfType(UserTask.class, true))
             {
                 if (!hasAssignment(task))
@@ -73,14 +78,21 @@ public class WorkflowBpmnIdentityValidator
                 collectStaticUsers(task.getCandidateUsers(), task, claimUserIds);
                 collectStaticGroups(task.getCandidateGroups(), task, roleIds, deptIds);
                 collectFixedMultiInstanceUsers(task, approvalUserIds);
+                collectAutoCopyIdentities(task, autoCopyUserIds,
+                        autoCopyRoleIds, autoCopyDeptIds);
             }
         }
 
-        userIds.addAll(approvalUserIds);
+        LinkedHashSet<Long> userIds = new LinkedHashSet<>(approvalUserIds);
         userIds.addAll(claimUserIds);
+        userIds.addAll(autoCopyUserIds);
+        LinkedHashSet<Long> allRoleIds = new LinkedHashSet<>(roleIds);
+        allRoleIds.addAll(autoCopyRoleIds);
+        LinkedHashSet<Long> allDeptIds = new LinkedHashSet<>(deptIds);
+        allDeptIds.addAll(autoCopyDeptIds);
         requireAllActive(userIds, activeUsers(userIds), "用户");
-        requireAllActive(roleIds, activeRoles(roleIds), "角色");
-        requireAllActive(deptIds, activeDepts(deptIds), "部门");
+        requireAllActive(allRoleIds, activeRoles(allRoleIds), "角色");
+        requireAllActive(allDeptIds, activeDepts(allDeptIds), "部门");
 
         // 身份存在不代表用户能走通真实办理入口；部署前必须按 assignment 类型复核实时 RBAC。
         requireAllEligible(approvalUserIds, approvalEligibleUsers(approvalUserIds),
@@ -91,6 +103,50 @@ public class WorkflowBpmnIdentityValidator
                 "候选角色没有具备完整认领资格的有效成员");
         requireAllEligible(deptIds, claimEligibleDepts(deptIds),
                 "候选部门没有具备完整认领资格的有效成员");
+        // 自动抄送对象会直接获得实例可读授权，因此部署时必须证明接收人能进入抄送列表和流程详情。
+        requireAllEligible(autoCopyUserIds, copyEligibleUsers(autoCopyUserIds),
+                "自动抄送用户不具备抄送列表和流程详情权限");
+        requireEachAutoCopyGroupEligible(autoCopyRoleIds, true);
+        requireEachAutoCopyGroupEligible(autoCopyDeptIds, false);
+    }
+
+    /**
+     * 收集自动抄送规则中的固定用户、角色和部门，发起人及表单字段留到运行时解析。
+     *
+     * @param element org.flowable.bpmn.model.BaseElement，流程或用户任务元素
+     * @param userIds Set&lt;Long&gt;，待核验固定用户主键
+     * @param roleIds Set&lt;Long&gt;，待核验固定角色主键
+     * @param deptIds Set&lt;Long&gt;，待核验固定部门主键
+     * @return void，规则结构已由 BPMN 门禁校验，此处只冻结正式主数据引用
+     */
+    private void collectAutoCopyIdentities(org.flowable.bpmn.model.BaseElement element,
+            Set<Long> userIds, Set<Long> roleIds, Set<Long> deptIds)
+    {
+        for (WorkflowAutoCopyRuleContract.Rule rule
+                : WorkflowAutoCopyRuleContract.readRules(element))
+        {
+            for (WorkflowAutoCopyRuleContract.RecipientSource source : rule.recipients())
+            {
+                if (source.type() == WorkflowAutoCopyRuleContract.RecipientType.USER)
+                {
+                    source.values().forEach(value -> userIds.add(Long.valueOf(value)));
+                }
+                else if (source.type() == WorkflowAutoCopyRuleContract.RecipientType.GROUP)
+                {
+                    for (String value : source.values())
+                    {
+                        if (value.startsWith("ROLE"))
+                        {
+                            roleIds.add(Long.valueOf(value.substring(4)));
+                        }
+                        else
+                        {
+                            deptIds.add(Long.valueOf(value.substring(4)));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -103,7 +159,8 @@ public class WorkflowBpmnIdentityValidator
     {
         return hasText(task.getAssignee())
                 || hasAnyText(task.getCandidateUsers())
-                || hasAnyText(task.getCandidateGroups());
+                || hasAnyText(task.getCandidateGroups())
+                || WorkflowParticipantRuleBpmnContract.hasTaskProperties(task);
     }
 
     /**
@@ -327,6 +384,43 @@ public class WorkflowBpmnIdentityValidator
         return ids.isEmpty() ? List.of()
                 : safeList(identityMapper.selectClaimEligibleDeptIdsByDeptIds(
                         new ArrayList<>(ids)));
+    }
+
+    /**
+     * 查询自动抄送固定用户中的实时可见用户。
+     *
+     * @param ids Set&lt;Long&gt;，自动抄送规则冻结的固定用户主键
+     * @return List&lt;Long&gt;，同时具备抄送列表和流程详情权限的有效用户主键
+     */
+    private List<Long> copyEligibleUsers(Set<Long> ids)
+    {
+        return ids.isEmpty() ? List.of()
+                : safeList(identityMapper.selectCopyEligibleUserIdsByUserIds(
+                        new ArrayList<>(ids)));
+    }
+
+    /**
+     * 逐个核验自动抄送角色或部门至少包含一名具备对象可见性的有效用户。
+     *
+     * @param ids Set&lt;Long&gt;，自动抄送规则冻结的角色或部门主键
+     * @param roleGroup boolean，true 表示角色，false 表示部门
+     * @return 无返回值；任一组无法解析出可读用户时拒绝部署
+     */
+    private void requireEachAutoCopyGroupEligible(Set<Long> ids, boolean roleGroup)
+    {
+        for (Long id : ids)
+        {
+            // Mapper 现有接口返回成员用户而非组主键，必须按组逐个查询，避免一个有效组掩盖同批无效组。
+            List<Long> eligibleUsers = roleGroup
+                    ? safeList(identityMapper.selectCopyEligibleUserIdsByRoleIds(List.of(id)))
+                    : safeList(identityMapper.selectCopyEligibleUserIdsByDeptIds(List.of(id)));
+            if (eligibleUsers.isEmpty())
+            {
+                String groupName = roleGroup ? "角色" : "部门";
+                throw conflict("流程引用的自动抄送" + groupName
+                        + "没有具备抄送列表和流程详情权限的有效成员: [" + id + "]");
+            }
+        }
     }
 
     /**

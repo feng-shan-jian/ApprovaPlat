@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.domain;
 
+import java.util.Date;
 import com.ruoyi.common.core.domain.BaseEntity;
 
 /**
@@ -44,6 +45,24 @@ public class WfCopy extends BaseEntity
 
     /** 流程发起用户名称快照。 */
     private String originatorName;
+
+    /** 抄送来源：MANUAL 或 AUTO。 */
+    private String sourceType;
+
+    /** 触发类型，如 NODE_ARRIVED、NODE_COMPLETED 或 PROCESS_COMPLETED。 */
+    private String triggerType;
+
+    /** 触发抄送的 BPMN 节点主键；流程完成时为空。 */
+    private String triggerNodeId;
+
+    /** 触发抄送的 BPMN 节点名称快照；流程完成时为空。 */
+    private String triggerNodeName;
+
+    /** 阅读状态：0 表示未读，1 表示已读。 */
+    private String readStatus;
+
+    /** 首次阅读时间，由数据库条件更新原子写入。 */
+    private Date readTime;
 
     /** 逻辑删除标志：0 表示有效，2 表示已删除。 */
     private String delFlag;
@@ -274,6 +293,78 @@ public class WfCopy extends BaseEntity
     public void setOriginatorName(String originatorName)
     {
         this.originatorName = originatorName;
+    }
+
+    /** @return String，MANUAL 或 AUTO 抄送来源。 */
+    public String getSourceType()
+    {
+        return sourceType;
+    }
+
+    /** @param sourceType String，MANUAL 或 AUTO 抄送来源；@return void，无返回值。 */
+    public void setSourceType(String sourceType)
+    {
+        this.sourceType = sourceType;
+    }
+
+    /** @return String，服务端固定触发类型。 */
+    public String getTriggerType()
+    {
+        return triggerType;
+    }
+
+    /** @param triggerType String，服务端固定触发类型；@return void，无返回值。 */
+    public void setTriggerType(String triggerType)
+    {
+        this.triggerType = triggerType;
+    }
+
+    /** @return String，触发节点主键；流程级规则返回 null。 */
+    public String getTriggerNodeId()
+    {
+        return triggerNodeId;
+    }
+
+    /** @param triggerNodeId String，触发节点主键；@return void，无返回值。 */
+    public void setTriggerNodeId(String triggerNodeId)
+    {
+        this.triggerNodeId = triggerNodeId;
+    }
+
+    /** @return String，触发节点名称快照；流程级规则返回 null。 */
+    public String getTriggerNodeName()
+    {
+        return triggerNodeName;
+    }
+
+    /** @param triggerNodeName String，触发节点名称快照；@return void，无返回值。 */
+    public void setTriggerNodeName(String triggerNodeName)
+    {
+        this.triggerNodeName = triggerNodeName;
+    }
+
+    /** @return String，0 表示未读，1 表示已读。 */
+    public String getReadStatus()
+    {
+        return readStatus;
+    }
+
+    /** @param readStatus String，0 或 1 阅读状态；@return void，无返回值。 */
+    public void setReadStatus(String readStatus)
+    {
+        this.readStatus = readStatus;
+    }
+
+    /** @return Date，首次阅读时间；未读时为 null。 */
+    public Date getReadTime()
+    {
+        return readTime;
+    }
+
+    /** @param readTime Date，首次阅读时间；@return void，无返回值。 */
+    public void setReadTime(Date readTime)
+    {
+        this.readTime = readTime;
     }
 
     /**

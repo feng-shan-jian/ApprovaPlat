@@ -1072,9 +1072,9 @@ gate_validate_environment_identity() {
 }
 
 #
-# 校验全新安装备份已真实生成并在 99 张恢复表上完成 mysqlcheck。
+# 校验全新安装备份已真实生成并在 111 张恢复表上完成 mysqlcheck。
 # 参数：$1（字符串）全新安装证据目录；$2（字符串）证据名称。
-# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 99 个 OK 结果。
+# 返回：0 表示备份摘要格式正确，且 mysqlcheck 恰好记录 111 个 OK 结果。
 #
 gate_validate_backup_restore() {
   local evidence_dir="$1"
@@ -1089,9 +1089,9 @@ gate_validate_backup_restore() {
   awk '
     NF != 2 || $NF != "OK" || seen[$1]++ { invalid = 1 }
     NF > 0 { rows++ }
-    END { exit(!invalid && rows == 99 ? 0 : 1) }
+    END { exit(!invalid && rows == 111 ? 0 : 1) }
   ' "$mysqlcheck_file" \
-    || gate_die "$label mysqlcheck must contain exactly 99 OK table results"
+    || gate_die "$label mysqlcheck must contain exactly 111 OK table results"
 }
 
 #
@@ -1162,7 +1162,7 @@ gate_validate_active_services() {
 #
 # 校验数据库验收 TSV 的三段正式脚本、固定检查项、表头和逐项 PASS 结果。
 # 参数：$1（字符串）验收结果文件；$2（字符串）证据名称。
-# 返回：0 表示 46 个正式检查恰好各出现一次且全部通过；异常时终止门禁。
+# 返回：0 表示 58 个正式检查恰好各出现一次且全部通过；异常时终止门禁。
 #
 gate_validate_database_result() {
   local file="$1"
@@ -1176,24 +1176,32 @@ gate_validate_database_result() {
         return detail ~ /^matching_indexes=1, indexes=[A-Za-z0-9_]+$/
       if (check_name == "model_version_duplicate_groups")
         return detail == "duplicate_groups=0"
-      if (check_name == "missing_required_tables" ||
-          check_name == "unexpected_flowable_objects" ||
-          check_name == "disabled_module_objects")
-        return detail == "issues=0, objects=none"
+      if (check_name == "flowable_table_inventory")
+        return detail == "missing=0, missing_objects=none, unexpected=0, unexpected_objects=none, disabled=0, disabled_objects=none"
       if (check_name == "deadletter_jobs")
         return detail == "actual=0"
       if (check_name == "flowable_dmn_table_presence" ||
           check_name == "workflow_connector_table_presence")
         return detail == "missing_or_invalid=none"
       if (check_name == "workflow_schema_table_counts")
-        return detail == "total=99, ruoyi=20, quartz=11, flowable=36, workflow=32"
-      if (check_name == "workflow_connector_columns")
+        return detail == "total=111, ruoyi=20, quartz=11, flowable=36, workflow=44"
+      if (check_name == "workflow_connector_columns" ||
+          check_name == "workflow_call_activity_snapshot_columns" ||
+          check_name == "workflow_call_activity_snapshot_indexes" ||
+          check_name == "workflow_call_activity_snapshot_checks" ||
+          check_name == "workflow_participant_rule_columns" ||
+          check_name == "workflow_participant_rule_indexes" ||
+          check_name == "workflow_participant_rule_checks")
         return detail == "missing=none"
+      if (check_name == "workflow_call_activity_snapshot_integrity")
+        return detail == "invalid_rows=0"
       if (check_name == "workflow_business_tables")
-        return detail == "present=10, missing=none"
+        return detail == "present=13, missing=none"
       if (check_name == "workflow_business_columns")
         return detail == "missing=none"
       if (check_name == "wf_attachment_cleanup_retry_columns")
+        return detail == "invalid=none"
+      if (check_name == "workflow_draft_column_types")
         return detail == "invalid=none"
       if (check_name == "wf_category_active_code")
         return detail ~ /^columns=1, extra=STORED GENERATED, expression=.+$/
@@ -1206,6 +1214,16 @@ gate_validate_database_result() {
       if (check_name == "wf_attachment_cleanup_retry_check_clause")
         return detail ~ /^constraints=1, enforced=YES, canonical_sha256=[0-9a-f]{64}$/
       if (check_name == "workflow_business_data_integrity")
+        return detail == "issues=0, detail=none"
+      if (check_name == "workflow_participant_rule_tables")
+        return detail == "present=2, missing=none"
+      if (check_name == "workflow_participant_audit_retention_foreign_keys")
+        return detail == "unexpected=none"
+      if (check_name == "workflow_participant_rule_data_integrity")
+        return detail == "issues=0, detail=none"
+      if (check_name == "workflow_notification_tables")
+        return detail == "present=6, missing=none"
+      if (check_name == "workflow_notification_integrity")
         return detail == "issues=0, detail=none"
       if (check_name == "workflow_runtime_integration_tables")
          return detail == "present=6, missing=none"
@@ -1245,15 +1263,17 @@ gate_validate_database_result() {
       if (check_name == "workflow_bpmn_event_data_integrity")
         return detail == "issues=0"
       if (check_name == "workflow_menu_count")
-        return detail == "rows=86, natural_keys=86"
+        return detail == "rows=98, natural_keys=98"
       if (check_name == "workflow_menu_tree")
-        return detail == "directories=2, pages=19, buttons=65, invalid_routes=0"
+        return detail == "directories=2, pages=21, buttons=75, invalid_routes=0"
       if (check_name == "workflow_retired_permissions")
         return detail == "legacy_rows=0"
       if (check_name == "workflow_roles")
-        return detail == "active_roles=5, duplicate_roles=0"
+        return detail == "active_roles=5, duplicate_roles=0, assignments=workflow_admin:98,workflow_approver:18,workflow_auditor:24,workflow_designer:47,workflow_starter:21"
       if (check_name == "workflow_admin_menu_scope")
-        return detail == "assigned=86, expected=86"
+        return detail == "assigned=98, expected=98"
+      if (check_name == "workflow_draft_role_scope")
+        return detail == "permissions=5, starter=5, unauthorized=0"
       if (check_name == "workflow_admin_only_instance_management")
         return detail == "unauthorized_assignments=0, roles=none, admin_management_permissions=2"
       if (check_name == "workflow_auditor_read_only")
@@ -1268,24 +1288,35 @@ gate_validate_database_result() {
       required["1|schema_versions"] = 1
       required["1|model_version_unique_constraint"] = 1
       required["1|model_version_duplicate_groups"] = 1
-      required["1|missing_required_tables"] = 1
-      required["1|unexpected_flowable_objects"] = 1
-      required["1|disabled_module_objects"] = 1
+      required["1|flowable_table_inventory"] = 1
       required["1|deadletter_jobs"] = 1
 
       required["2|flowable_dmn_table_presence"] = 1
       required["2|workflow_schema_table_counts"] = 1
       required["2|workflow_connector_table_presence"] = 1
       required["2|workflow_connector_columns"] = 1
+      required["2|workflow_call_activity_snapshot_columns"] = 1
+      required["2|workflow_call_activity_snapshot_indexes"] = 1
+      required["2|workflow_call_activity_snapshot_checks"] = 1
+      required["2|workflow_call_activity_snapshot_integrity"] = 1
       required["2|workflow_business_tables"] = 1
       required["2|workflow_business_columns"] = 1
       required["2|wf_attachment_cleanup_retry_columns"] = 1
+      required["2|workflow_draft_column_types"] = 1
       required["2|wf_category_active_code"] = 1
       required["2|workflow_business_indexes"] = 1
       required["2|workflow_business_checks"] = 1
       required["2|workflow_business_foreign_keys"] = 1
       required["2|wf_attachment_cleanup_retry_check_clause"] = 1
       required["2|workflow_business_data_integrity"] = 1
+      required["2|workflow_participant_rule_tables"] = 1
+      required["2|workflow_participant_rule_columns"] = 1
+      required["2|workflow_participant_rule_indexes"] = 1
+      required["2|workflow_participant_rule_checks"] = 1
+      required["2|workflow_participant_audit_retention_foreign_keys"] = 1
+      required["2|workflow_participant_rule_data_integrity"] = 1
+      required["2|workflow_notification_tables"] = 1
+      required["2|workflow_notification_integrity"] = 1
       required["2|workflow_runtime_integration_tables"] = 1
       required["2|workflow_runtime_integration_columns"] = 1
       required["2|workflow_runtime_integration_indexes"] = 1
@@ -1311,6 +1342,7 @@ gate_validate_database_result() {
       required["3|workflow_retired_permissions"] = 1
       required["3|workflow_roles"] = 1
       required["3|workflow_admin_menu_scope"] = 1
+      required["3|workflow_draft_role_scope"] = 1
       required["3|workflow_admin_only_instance_management"] = 1
       required["3|workflow_auditor_read_only"] = 1
     }
@@ -1338,7 +1370,7 @@ gate_validate_database_result() {
       passed++
     }
     END {
-      if (section != 3 || passed != 46) exit 1
+      if (section != 3 || passed != 58) exit 1
       for (key in required) {
         if (seen[key] != 1) exit 1
       }
@@ -1877,7 +1909,7 @@ gate_validate_evidence_profile() {
     gate_require_exact_line "$evidence_dir/empty-schema-check.txt" \
       'empty_schema_table_count=0' 'empty schema evidence'
     gate_require_exact_line "$evidence_dir/table-counts.tsv" \
-      $'99\t20\t11\t36\t32' 'table-counts.tsv'
+      $'111\t20\t11\t36\t44' 'table-counts.tsv'
     gate_validate_backup_restore "$evidence_dir" 'fresh-install evidence'
     gate_require_exact_line "$evidence_dir/redis-ping.txt" 'PONG' 'Redis PING evidence'
     gate_require_exact_line "$evidence_dir/mysql-connectivity.txt" '1' 'MySQL connectivity evidence'

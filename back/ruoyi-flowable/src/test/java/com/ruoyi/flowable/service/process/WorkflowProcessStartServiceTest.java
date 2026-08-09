@@ -15,6 +15,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,6 +24,9 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.flowable.common.engine.api.FlowableException;
+import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
+import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.IdentityService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -46,6 +51,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow;
+import com.ruoyi.flowable.domain.WfDeployParticipantRule;
+import com.ruoyi.flowable.domain.WfProcessDraft;
+import com.ruoyi.flowable.domain.WorkflowProcessDraftStatus;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
@@ -56,9 +64,12 @@ import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 class WorkflowProcessStartServiceTest
 {
@@ -85,6 +96,7 @@ class WorkflowProcessStartServiceTest
     private IdentityService identityService;
     private WorkflowAttachmentService attachmentService;
     private WorkflowProcessDefinitionLockMapper definitionLockMapper;
+    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
     private WorkflowProcessStartService service;
 
     /**
@@ -107,6 +119,17 @@ class WorkflowProcessStartServiceTest
         identityService = mock(IdentityService.class);
         attachmentService = mock(WorkflowAttachmentService.class);
         definitionLockMapper = mock(WorkflowProcessDefinitionLockMapper.class);
+        participantRuleRuntimeService = mock(WorkflowParticipantRuleRuntimeService.class);
+        // 正常发起夹具默认取得真实部署主键；单独的竞争测试再覆盖为空返回。
+        when(definitionLockMapper.selectDeploymentIdForUpdate(anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        // 普通发起夹具必须提供真实可执行 BPMN；空流程用于证明无发起时会签字段时不产生保留变量。
+        BpmnModel bpmnModel = new BpmnModel();
+        org.flowable.bpmn.model.Process process = new org.flowable.bpmn.model.Process();
+        process.setId(PROCESS_KEY);
+        process.setExecutable(true);
+        bpmnModel.addProcess(process);
+        when(repositoryService.getBpmnModel(anyString())).thenReturn(bpmnModel);
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3")));
         when(attachmentService.prepareStartVariables(anyString(), anyMap(), anyMap()))
@@ -181,9 +204,190 @@ class WorkflowProcessStartServiceTest
                 .isInstanceOf(UnsupportedOperationException.class);
         verify(definitionLockMapper, never())
                 .selectLatestDefaultTenantDefinitionForUpdate(anyString());
+        InOrder deploymentWriteOrder = inOrder(definitionLockMapper,
+                processQueryService, runtimeService);
+        deploymentWriteOrder.verify(definitionLockMapper)
+                .selectDeploymentIdForUpdate(DEPLOYMENT_ID);
+        deploymentWriteOrder.verify(processQueryService).getProcessForm(any());
+        deploymentWriteOrder.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-42"), anyMap());
         InOrder authentication = inOrder(identityService);
         authentication.verify(identityService).setAuthenticatedUserId("7");
         authentication.verify(identityService).setAuthenticatedUserId(null);
+    }
+
+    /**
+     * 验证发起页选择的正式成员只经服务端校验后写入活动专属 Flowable 变量。
+     *
+     * @return 无返回值；客户端成员绕过审批资格校验或变量名发生漂移时测试失败。
+     */
+    @Test
+    void startsWithValidatedStartMultiInstanceMembers()
+    {
+        stubSelectedAndActiveDefinition();
+        stubStartForm();
+        when(repositoryService.getBpmnModel(DEFINITION_ID))
+                .thenReturn(startMultiInstanceModel("approve"));
+        when(identityResolver.resolveApprovalEligibleUserIds(List.of("8", "9")))
+                .thenReturn(new LinkedHashSet<>(List.of("8", "9")));
+        ProcessInstance startedInstance = processInstance("instance-members-42");
+        when(runtimeService.startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-members-42"), anyMap()))
+                .thenReturn(startedInstance);
+
+        service.start(new StartProcessRequest(DEFINITION_ID, "expense-members-42",
+                Map.of("reason", "采购设备", "amount", 1280),
+                Map.of("approve", List.of(8L, 9L))));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> variables = ArgumentCaptor.forClass(Map.class);
+        verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-members-42"), variables.capture());
+        assertThat(variables.getValue())
+                .containsEntry("wfMiUsers_approve", List.of(8L, 9L));
+    }
+
+    /**
+     * 验证发起来源节点缺少成员时在 RuntimeService 写入前整体拒绝。
+     *
+     * @return 无返回值；非法发起产生 Flowable 实例或附件绑定时测试失败。
+     */
+    @Test
+    void rejectsMissingStartMultiInstanceMembersBeforeEngineWrite()
+    {
+        stubSelectedAndActiveDefinition();
+        stubStartForm();
+        when(repositoryService.getBpmnModel(DEFINITION_ID))
+                .thenReturn(startMultiInstanceModel("approve"));
+
+        assertBusinessError(() -> service.start(new StartProcessRequest(
+                DEFINITION_ID, "expense-members-42",
+                Map.of("reason", "采购设备", "amount", 1280), Map.of())),
+                HttpStatus.BAD_REQUEST, "发起时会签或或签成员配置不完整");
+
+        verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+        verify(attachmentService, never()).bindStartAttachments(
+                anyString(), anyString(), anyString(), anyMap());
+    }
+
+    /**
+     * 验证部署快照授权发生在引擎写入前，成功审计发生在实例与附件绑定后。
+     *
+     * @return void，人工发起授权或审计顺序变化时测试失败
+     */
+    @Test
+    void authorizesHumanStartBeforeEngineAndAuditsAfterSuccessfulSideEffects()
+    {
+        ProcessDefinition definition = stubSelectedAndActiveDefinition();
+        stubStartForm();
+        WfDeployParticipantRule rule = new WfDeployParticipantRule();
+        when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
+                .thenReturn(rule);
+        ProcessInstance startedInstance = processInstance("instance-scope-42");
+        when(runtimeService.startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-42"), anyMap()))
+                .thenReturn(startedInstance);
+
+        service.start(validRequest());
+
+        InOrder lifecycle = inOrder(participantRuleRuntimeService, runtimeService,
+                attachmentService);
+        lifecycle.verify(participantRuleRuntimeService).assertCanStart(any(), eq(definition));
+        lifecycle.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-42"), anyMap());
+        lifecycle.verify(attachmentService).bindStartAttachments(
+                "7", "instance-scope-42", "start", Map.of());
+        lifecycle.verify(participantRuleRuntimeService).recordStartAllowed(
+                rule, definition, "instance-scope-42", "7");
+    }
+
+    /**
+     * 验证未命中部署发起范围时不创建实例、不绑定附件且不写成功审计。
+     *
+     * @return void，拒绝请求产生任何业务副作用时测试失败
+     */
+    @Test
+    void rejectsHumanStartScopeBeforeAnyEngineSideEffect()
+    {
+        ProcessDefinition definition = stubSelectedAndActiveDefinition();
+        stubStartForm();
+        when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
+                .thenThrow(new ServiceException("当前用户不在流程发起范围内",
+                        HttpStatus.FORBIDDEN).setSubCode("PROCESS_START_SCOPE_DENIED"));
+
+        assertThatThrownBy(() -> service.start(validRequest()))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getSubCode())
+                                .isEqualTo("PROCESS_START_SCOPE_DENIED"));
+
+        verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+        verify(attachmentService, never()).bindStartAttachments(
+                anyString(), anyString(), anyString(), anyMap());
+        verify(participantRuleRuntimeService, never()).recordStartAllowed(
+                any(), any(), anyString(), anyString());
+    }
+
+    /**
+     * 验证草稿提交按当前身份重新校验发起范围，拒绝时不产生引擎、附件或成功审计副作用。
+     *
+     * @return void，失权草稿仍创建实例或记录成功审计时测试失败
+     */
+    @Test
+    void rejectsDraftStartScopeBeforeEngineWrite()
+    {
+        ProcessDefinition definition = stubDraftDefinition();
+        when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
+                .thenThrow(new ServiceException("当前用户不在流程发起范围内",
+                        HttpStatus.FORBIDDEN).setSubCode("PROCESS_START_SCOPE_DENIED"));
+
+        assertThatThrownBy(() -> service.startDraft(activeDraft(), "expense-draft-42",
+                Map.of("reason", "采购设备", "amount", 1280), Map.of()))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getSubCode())
+                                .isEqualTo("PROCESS_START_SCOPE_DENIED"));
+
+        verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+        verify(attachmentService, never()).bindDraftStartAttachments(
+                anyString(), anyString(), anyString(), anyString(), anyMap());
+        verify(participantRuleRuntimeService, never()).recordStartAllowed(
+                any(), any(), anyString(), anyString());
+    }
+
+    /**
+     * 验证草稿提交成功审计严格发生在发起范围校验、实例创建和附件绑定之后。
+     *
+     * @return void，草稿成功审计提前或缺失时测试失败
+     */
+    @Test
+    void auditsDraftStartOnlyAfterInstanceAndAttachmentBindingSucceed()
+    {
+        ProcessDefinition definition = stubDraftDefinition();
+        WfDeployParticipantRule rule = new WfDeployParticipantRule();
+        when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
+                .thenReturn(rule);
+        ProcessInstance startedInstance = processInstance("instance-draft-42");
+        when(runtimeService.startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-draft-42"), anyMap()))
+                .thenReturn(startedInstance);
+
+        service.startDraft(activeDraft(), "expense-draft-42",
+                Map.of("reason", "采购设备", "amount", 1280), Map.of());
+
+        InOrder lifecycle = inOrder(participantRuleRuntimeService, runtimeService,
+                attachmentService);
+        lifecycle.verify(participantRuleRuntimeService).assertCanStart(any(), eq(definition));
+        lifecycle.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-draft-42"), anyMap());
+        lifecycle.verify(attachmentService).bindDraftStartAttachments(
+                "7", "draft-42", "instance-draft-42", "start", Map.of());
+        lifecycle.verify(participantRuleRuntimeService).recordStartAllowed(
+                rule, definition, "instance-draft-42", "7");
+        InOrder lockOrder = inOrder(definitionLockMapper, runtimeService);
+        lockOrder.verify(definitionLockMapper).selectDeploymentIdForUpdate(DEPLOYMENT_ID);
+        lockOrder.verify(definitionLockMapper)
+                .selectLatestDefaultTenantDefinitionForUpdate(PROCESS_KEY);
+        lockOrder.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-draft-42"), anyMap());
     }
 
     /**
@@ -298,6 +502,30 @@ class WorkflowProcessStartServiceTest
 
         verify(processQueryService, never()).getProcessForm(any());
         verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+    }
+
+    /**
+     * 验证定义普通读后无法取得部署生命周期锁时稳定返回 409，且不读取表单或产生实例、附件副作用。
+     *
+     * @return void，部署删除竞争仍进入表单、引擎或附件写链时测试失败
+     */
+    @Test
+    void rejectsDefinitionWhoseDeploymentDisappearedBeforeLifecycleLock()
+    {
+        stubSelectedDefinition();
+        when(definitionLockMapper.selectDeploymentIdForUpdate(DEPLOYMENT_ID))
+                .thenReturn(null);
+
+        assertBusinessError(() -> service.start(validRequest()),
+                HttpStatus.CONFLICT, "流程定义部署状态已变化，请刷新后重试");
+
+        verify(definitionLockMapper).selectDeploymentIdForUpdate(DEPLOYMENT_ID);
+        verify(processQueryService, never()).getProcessForm(any());
+        verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+        verify(attachmentService, never()).prepareStartVariables(
+                anyString(), anyMap(), anyMap());
+        verify(attachmentService, never()).bindStartAttachments(
+                anyString(), anyString(), anyString(), anyMap());
     }
 
     /**
@@ -453,6 +681,12 @@ class WorkflowProcessStartServiceTest
         verify(initialKeyQuery).processDefinitionWithoutTenantId();
         InOrder keyWriteOrder = inOrder(definitionLockMapper, runtimeService);
         keyWriteOrder.verify(definitionLockMapper)
+                .selectDeploymentIdForUpdate(DEPLOYMENT_ID);
+        keyWriteOrder.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-compat-42"), anyMap());
+        keyWriteOrder.verify(definitionLockMapper)
+                .selectDeploymentIdForUpdate(DEPLOYMENT_ID);
+        keyWriteOrder.verify(definitionLockMapper)
                 .selectLatestDefaultTenantDefinitionForUpdate(PROCESS_KEY);
         keyWriteOrder.verify(runtimeService).startProcessInstanceById(
                 eq(DEFINITION_ID), eq("expense-compat-42"), anyMap());
@@ -555,9 +789,39 @@ class WorkflowProcessStartServiceTest
     {
         WorkflowStartVariableValidator variableValidator = new WorkflowStartVariableValidator(
                 new WorkflowFormTemplateValidator());
-        return new WorkflowProcessStartService(operations, repositoryService, runtimeService,
+        WorkflowProcessStartService created = new WorkflowProcessStartService(
+                operations, repositoryService, runtimeService,
                 processQueryService, variableValidator, attachmentService,
-                definitionLockMapper);
+                definitionLockMapper, new WorkflowUserSelectionValidator(identityResolver));
+        created.setParticipantRuleRuntimeService(participantRuleRuntimeService);
+        return created;
+    }
+
+    /**
+     * 创建仅含一个发起时成员来源会签节点的可执行模型。
+     *
+     * @param activityId String，受控多实例用户任务节点标识。
+     * @return BpmnModel，满足启动成员投影和变量生成契约的流程模型。
+     */
+    private BpmnModel startMultiInstanceModel(String activityId)
+    {
+        BpmnModel model = new BpmnModel();
+        org.flowable.bpmn.model.Process process = new org.flowable.bpmn.model.Process();
+        process.setId(PROCESS_KEY);
+        process.setExecutable(true);
+        UserTask task = new UserTask();
+        task.setId(activityId);
+        task.setName("审批会签");
+        task.setAssignee(WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION);
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setInputDataItem(WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION);
+        loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        loop.setCompletionCondition(
+                WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION);
+        task.setLoopCharacteristics(loop);
+        process.addFlowElement(task);
+        model.addProcess(process);
+        return model;
     }
 
     /**
@@ -604,6 +868,40 @@ class WorkflowProcessStartServiceTest
         ProcessDefinition definition = stubSelectedDefinition();
         stubActiveQuery(definition);
         return definition;
+    }
+
+    /**
+     * 配置草稿提交所需的固定定义、最新版锁、部署快照和附件安全投影。
+     *
+     * @return ProcessDefinition，定义查询和 active 复核共用的有效定义替身
+     */
+    private ProcessDefinition stubDraftDefinition()
+    {
+        ProcessDefinition definition = stubSelectedAndActiveDefinition();
+        when(definition.getVersion()).thenReturn(3);
+        when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(PROCESS_KEY))
+                .thenReturn(definitionLockRow(DEFINITION_ID, DEPLOYMENT_ID, 1));
+        stubStartForm();
+        when(attachmentService.prepareDraftStartVariables(
+                eq("7"), eq("draft-42"), anyMap(), anyMap()))
+                .thenAnswer(invocation -> invocation.getArgument(2));
+        return definition;
+    }
+
+    /**
+     * 创建与当前部署表单快照完全一致的本人活动草稿。
+     *
+     * @return WfProcessDraft，可进入正式提交链的持久化草稿快照
+     */
+    private WfProcessDraft activeDraft()
+    {
+        LocalDateTime now = LocalDateTime.of(2026, 8, 9, 10, 0);
+        return new WfProcessDraft("draft-42", 7L, DEFINITION_ID, PROCESS_KEY, 3,
+                DEPLOYMENT_ID, "报销流程", "TEMPLATE", 8L, "key_8", "start",
+                "报销申请", "发起申请", now, START_FORM,
+                WorkflowProcessDraftChecksum.sha256(START_FORM), "[]", "{}", "{}",
+                "expense-draft-42", WorkflowProcessDraftStatus.ACTIVE, 1L,
+                null, null, null, now, now);
     }
 
     /**

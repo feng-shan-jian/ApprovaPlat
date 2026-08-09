@@ -253,7 +253,8 @@ test('设计器配置的受控整改循环可真实重复办理、退出并回�
   const sessions = []
   const pages = {}
   const resources = {
-    categoryId: '', formId: '', modelIds: [], deploymentIds: [], processInstanceIds: []
+    categoryId: '', formId: '', modelIds: [], deploymentIds: [],
+    draftFixtures: [], processInstanceIds: []
   }
   try {
     for (const roleKey of ['workflow_designer', 'workflow_starter', 'workflow_approver', 'workflow_admin']) {
@@ -362,7 +363,7 @@ test('设计器配置的受控整改循环可真实重复办理、退出并回�
       formName,
       `CONTROLLED-LOOP-${suffix}`,
       `整改申请-${suffix}`,
-      resources.processInstanceIds
+      resources
     )
 
     const firstTask = await findAssignedWorkflowTask(

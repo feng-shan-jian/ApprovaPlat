@@ -39,6 +39,7 @@ import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.history.HistoricActivityInstance;
+import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.task.Comment;
 import org.flowable.identitylink.api.IdentityLinkInfo;
@@ -79,6 +80,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowProcessActivityView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessCommentView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
+import com.ruoyi.flowable.domain.vo.WorkflowProcessRelationView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessViewerView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
@@ -109,6 +111,9 @@ public class WorkflowProcessDetailService
 
     /** 单个详情允许读取的最大部署表单快照数。 */
     static final int MAX_FORM_SNAPSHOTS = 500;
+
+    /** 单个详情允许投影的父子流程实例总数，防止异常调用树无界返回。 */
+    static final int MAX_PROCESS_RELATION_ROWS = 200;
 
     /** 单个详情允许读取的最大历史变量行数。 */
     static final int MAX_VARIABLE_ROWS = 2000;
@@ -361,7 +366,9 @@ public class WorkflowProcessDetailService
         {
             variableTaskIds.add(requestedTask.taskId());
         }
-        VariableStore variables = loadVariables(instanceId, variableTaskIds);
+        Set<String> ancestorDeploymentIds = loadAncestorDeploymentIds(instanceId);
+        VariableStore variables = loadVariables(instanceId, variableTaskIds,
+                instance.deploymentId(), ancestorDeploymentIds);
         // 只有活动任务才代表当前循环轮次；历史任务虽然保留节点 key，但不能把详情投影成“下一轮”。
         String activeControlledLoopActivityId = requestedTask != null && requestedTask.active()
                 ? requestedTask.taskDefinitionKey() : null;
@@ -393,6 +400,8 @@ public class WorkflowProcessDetailService
         WorkflowProcessViewerView viewer = buildViewer(activities, tasksById, commentsByTask,
                 "returned".equals(normalizeProcessStatus(instance)));
         String bpmnXml = deploymentService.getBpmnXml(definition.getId());
+        List<WorkflowProcessRelationView> processRelations = buildProcessRelations(
+                instance.processInstanceId());
 
         Instant startTime = instance.startTime();
         if (startTime == null)
@@ -427,7 +436,104 @@ public class WorkflowProcessDetailService
                 nextUserAssignmentPolicy.name(), nextUserSelectionRequired,
                 nextUserSelectionMode,
                 multiInstanceState, returnAllowed, controlledLoopStates, currentTaskForm,
-                processForms, timeline, bpmnXml, viewer);
+                processForms, timeline, processRelations, bpmnXml, viewer);
+    }
+
+    /**
+     * 从 Flowable 历史实例表构建并核对同一根执行树的父子流程关系。
+     *
+     * @param requestedInstanceId String，已通过对象授权的详情实例主键
+     * @return List&lt;WorkflowProcessRelationView&gt;，按开始时间和实例主键稳定排序的关系节点
+     */
+    private List<WorkflowProcessRelationView> buildProcessRelations(String requestedInstanceId)
+    {
+        HistoricProcessInstance requested = historyService.createHistoricProcessInstanceQuery()
+                .processInstanceId(requestedInstanceId).singleResult();
+        if (requested == null || !StringUtils.hasText(requested.getId()))
+        {
+            throw dataError("流程实例关系记录不存在");
+        }
+        // 历史 API 不暴露 rootProcessInstanceId，先沿 superProcessInstanceId 向上追溯唯一根节点。
+        HistoricProcessInstance root = requested;
+        LinkedHashSet<String> ancestors = new LinkedHashSet<>();
+        ancestors.add(requested.getId().trim());
+        while (StringUtils.hasText(root.getSuperProcessInstanceId()))
+        {
+            String parentId = root.getSuperProcessInstanceId().trim();
+            if (!ancestors.add(parentId) || ancestors.size() > MAX_PROCESS_RELATION_ROWS)
+            {
+                throw dataError("流程父子关系存在循环或规模超过详情上限");
+            }
+            root = historyService.createHistoricProcessInstanceQuery()
+                    .processInstanceId(parentId).singleResult();
+            if (root == null || !parentId.equals(root.getId()))
+            {
+                throw dataError("流程父实例关系记录不存在");
+            }
+        }
+        String rootInstanceId = root.getId().trim();
+
+        // 再从根按直接父实例广度遍历，覆盖运行中和已结束子流程并拒绝静默截断。
+        LinkedHashMap<String, HistoricProcessInstance> instancesById = new LinkedHashMap<>();
+        instancesById.put(rootInstanceId, root);
+        List<String> pendingParents = new ArrayList<>();
+        pendingParents.add(rootInstanceId);
+        for (int index = 0; index < pendingParents.size(); index++)
+        {
+            String parentId = pendingParents.get(index);
+            int remainingCapacity = MAX_PROCESS_RELATION_ROWS - instancesById.size();
+            List<HistoricProcessInstance> children = historyService.createHistoricProcessInstanceQuery()
+                    .superProcessInstanceId(parentId).listPage(0, remainingCapacity + 1);
+            if (children == null || children.size() > remainingCapacity)
+            {
+                throw dataError("流程父子关系规模超过详情上限");
+            }
+            for (HistoricProcessInstance child : children)
+            {
+                if (child == null || !StringUtils.hasText(child.getId())
+                        || !parentId.equals(child.getSuperProcessInstanceId())
+                        || instancesById.putIfAbsent(child.getId().trim(), child) != null)
+                {
+                    throw dataError("流程父子关系存在空值、重复或父实例不一致");
+                }
+                pendingParents.add(child.getId().trim());
+            }
+        }
+        if (!instancesById.containsKey(requestedInstanceId))
+        {
+            throw dataError("流程详情实例不属于返回的父子执行树");
+        }
+
+        List<WorkflowProcessRelationView> result = new ArrayList<>();
+        for (HistoricProcessInstance instance : instancesById.values())
+        {
+            String instanceId = instance.getId().trim();
+            String parentId = StringUtils.hasText(instance.getSuperProcessInstanceId())
+                    ? instance.getSuperProcessInstanceId().trim() : null;
+            boolean rootNode = rootInstanceId.equals(instanceId);
+            if ((rootNode && parentId != null) || (!rootNode
+                    && (parentId == null || !instancesById.containsKey(parentId))))
+            {
+                throw dataError("流程父子实例关系不完整");
+            }
+            ProcessDefinition relationDefinition = repositoryService.createProcessDefinitionQuery()
+                    .processDefinitionId(instance.getProcessDefinitionId()).singleResult();
+            if (relationDefinition == null)
+            {
+                throw dataError("流程父子关系引用的定义不存在");
+            }
+            result.add(new WorkflowProcessRelationView(instanceId, parentId, rootInstanceId,
+                    relationDefinition.getId(), relationDefinition.getKey(), relationDefinition.getName(),
+                    relationDefinition.getVersion(), instance.getBusinessKey(),
+                    WorkflowProcessStatusNormalizer.normalize(instance.getBusinessStatus(),
+                            instance.getState(), toInstant(instance.getEndTime()), instance.getDeleteReason()),
+                    toInstant(instance.getStartTime()), toInstant(instance.getEndTime()),
+                    requestedInstanceId.equals(instanceId)));
+        }
+        result.sort(Comparator.comparing(WorkflowProcessRelationView::startTime,
+                Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(WorkflowProcessRelationView::processInstanceId));
+        return List.copyOf(result);
     }
 
     /**
@@ -743,9 +849,12 @@ public class WorkflowProcessDetailService
      *
      * @param instanceId String，已授权流程实例主键
      * @param taskIds Set&lt;String&gt;，需要支持当前表单回显的历史及活动任务主键
+     * @param deploymentId String，当前实例流程定义所属部署主键
+     * @param ancestorDeploymentIds Set&lt;String&gt;，当前实例所属 CallActivity 执行树的祖先部署主键
      * @return VariableStore，当前变量元数据及不可变提交快照索引
      */
-    private VariableStore loadVariables(String instanceId, Set<String> taskIds)
+    private VariableStore loadVariables(String instanceId, Set<String> taskIds,
+            String deploymentId, Set<String> ancestorDeploymentIds)
     {
         List<HistoricVariableInstance> processRows = historyService
                 .createHistoricVariableInstanceQuery()
@@ -794,7 +903,8 @@ public class WorkflowProcessDetailService
         Map<String, Map<String, HistoricVariableInstance>> immutableTasks = new HashMap<>();
         taskVariables.forEach((key, value) ->
                 immutableTasks.put(key, Collections.unmodifiableMap(value)));
-        SubmissionSnapshotIndex submissions = loadSubmissionSnapshots(instanceId);
+        SubmissionSnapshotIndex submissions = loadSubmissionSnapshots(instanceId,
+                deploymentId, ancestorDeploymentIds);
         return new VariableStore(Collections.unmodifiableMap(processVariables),
                 Collections.unmodifiableMap(immutableTasks), submissions.startSubmission(),
                 submissions.taskSubmissions());
@@ -807,9 +917,12 @@ public class WorkflowProcessDetailService
      * 只有结果总行数为零时才按升级前旧实例处理。全部元数据合法后才允许第二阶段读取正文。
      *
      * @param instanceId String，快照必须所属的已授权流程实例主键
+     * @param deploymentId String，当前实例流程定义所属部署主键
+     * @param ancestorDeploymentIds Set&lt;String&gt;，CallActivity 执行树中祖先实例的部署主键
      * @return SubmissionSnapshotIndex，唯一开始快照及按真实 taskId 建立的任务快照索引
      */
-    private SubmissionSnapshotIndex loadSubmissionSnapshots(String instanceId)
+    private SubmissionSnapshotIndex loadSubmissionSnapshots(String instanceId,
+            String deploymentId, Set<String> ancestorDeploymentIds)
     {
         List<WorkflowHistoricSubmissionRow> rows = historicVariableMapper
                 .selectSubmissionMetadata(instanceId,
@@ -848,6 +961,15 @@ public class WorkflowProcessDetailService
         {
             String encoded = readSubmissionValue(row, bodies.get(row.detailId()));
             SubmissionSnapshot snapshot = WorkflowFormSubmissionSnapshotCodec.decode(encoded);
+            if (!deploymentId.equals(snapshot.deploymentId()))
+            {
+                // inheritVariables 会把父实例内部提交变量一并复制到子实例；仅跳过可由执行树证明的祖先快照。
+                if (!ancestorDeploymentIds.contains(snapshot.deploymentId()))
+                {
+                    throw dataError("流程表单提交快照所属部署异常");
+                }
+                continue;
+            }
             StoredSubmission stored = new StoredSubmission(snapshot,
                     row.submittedAt().toInstant(), row.detailId(), row.activityInstanceId(),
                     row.taskId());
@@ -884,6 +1006,47 @@ public class WorkflowProcessDetailService
         }
         return new SubmissionSnapshotIndex(startSubmission,
                 Collections.unmodifiableMap(taskSubmissions));
+    }
+
+    /**
+     * 沿 Flowable 历史父子关系收集当前子流程的祖先部署，用于识别 inheritVariables 复制的内部快照。
+     *
+     * @param instanceId String，已经完成对象授权的当前流程实例主键
+     * @return Set&lt;String&gt;，从直接父实例到根实例的唯一部署主键；根实例返回空集合
+     */
+    private Set<String> loadAncestorDeploymentIds(String instanceId)
+    {
+        HistoricProcessInstance current = historyService.createHistoricProcessInstanceQuery()
+                .processInstanceId(instanceId).singleResult();
+        if (current == null || !instanceId.equals(current.getId()))
+        {
+            throw dataError("流程实例关系记录不存在");
+        }
+        LinkedHashSet<String> visitedInstanceIds = new LinkedHashSet<>();
+        LinkedHashSet<String> deploymentIds = new LinkedHashSet<>();
+        visitedInstanceIds.add(instanceId);
+        while (StringUtils.hasText(current.getSuperProcessInstanceId()))
+        {
+            String parentId = current.getSuperProcessInstanceId().trim();
+            if (!visitedInstanceIds.add(parentId)
+                    || visitedInstanceIds.size() > MAX_PROCESS_RELATION_ROWS)
+            {
+                throw dataError("流程父子关系存在循环或规模超过详情上限");
+            }
+            current = historyService.createHistoricProcessInstanceQuery()
+                    .processInstanceId(parentId).singleResult();
+            if (current == null || !parentId.equals(current.getId()))
+            {
+                throw dataError("流程父实例关系记录不存在");
+            }
+            ProcessDefinition definition = requireDefinition(current.getProcessDefinitionId());
+            if (!StringUtils.hasText(definition.getDeploymentId()))
+            {
+                throw dataError("流程父实例定义缺少部署关联");
+            }
+            deploymentIds.add(definition.getDeploymentId().trim());
+        }
+        return Set.copyOf(deploymentIds);
     }
 
     /**
@@ -2362,7 +2525,7 @@ public class WorkflowProcessDetailService
     }
 
     /**
-     * 将 BPMN 节点表单来源规范为部署快照键，并拒绝双来源歧义。
+     * 将 BPMN 节点表单来源规范为部署快照键，并兼容正式模板的受控字段权限描述。
      *
      * @param configuredFormKey String，正式模板 formKey
      * @param formProperties List&lt;org.flowable.bpmn.model.FormProperty&gt;，内嵌 FormData 字段
@@ -2373,12 +2536,9 @@ public class WorkflowProcessDetailService
     {
         boolean hasTemplate = StringUtils.hasText(configuredFormKey);
         boolean hasEmbedded = formProperties != null && !formProperties.isEmpty();
-        if (hasTemplate && hasEmbedded)
-        {
-            throw dataError("流程节点表单来源异常");
-        }
         if (hasTemplate)
         {
+            // 权限 FormProperty 已在模型保存和部署阶段通过白名单校验，详情只按不可变 formKey 快照取值。
             return configuredFormKey;
         }
         return hasEmbedded ? WorkflowFormSourceType.EMBEDDED_FORM_KEY : null;

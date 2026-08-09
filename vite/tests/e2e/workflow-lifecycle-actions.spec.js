@@ -259,10 +259,10 @@ async function revokeTaskThroughUi(page, processKey, businessKey, comment) {
  * @param {string} formName 部署表单名称。
  * @param {string} runId 本轮测试唯一标识。
  * @param {string} scenario 场景短标识。
- * @param {string[]} processInstanceIds finally 清理使用的实例登记簿。
+ * @param {{draftFixtures: Array<object>, processInstanceIds: string[]}} resources finally 清理使用的资源登记簿。
  * @returns {Promise<{processInstanceId: string, businessKey: string}>} 正式实例和唯一业务主键。
  */
-async function startTrackedScenario(page, definition, formName, runId, scenario, processInstanceIds) {
+async function startTrackedScenario(page, definition, formName, runId, scenario, resources) {
   const businessKey = `BUS-${runId}-${scenario}`
   const processInstanceId = await startWorkflowThroughUi(
     page,
@@ -270,7 +270,7 @@ async function startTrackedScenario(page, definition, formName, runId, scenario,
     formName,
     businessKey,
     `生命周期验收-${scenario}-${runId}`,
-    processInstanceIds
+    resources
   )
   return { processInstanceId, businessKey }
 }
@@ -305,6 +305,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
   test.setTimeout(600_000)
   const runId = `p3life_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   const resources = {
+    draftFixtures: [],
     processInstanceIds: [],
     deploymentIds: [],
     modelIds: [],
@@ -388,7 +389,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
 
     // 场景一：三级串行审批全部通过，越权完成和历史任务重复完成均为零副作用。
     const normal = await startTrackedScenario(
-      pages.starter, sequentialDefinition, formName, runId, 'normal', resources.processInstanceIds)
+      pages.starter, sequentialDefinition, formName, runId, 'normal', resources)
     const normalA = await findAssignedWorkflowTask(
       pages.approver, sequentialProcessKey, 'reviewA', normal.processInstanceId)
     const normalADetail = await getWorkflowDetail(
@@ -462,7 +463,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
 
     // 场景二：二级审批直接退回发起人，发起人修改后重新提交并从一级审批重新开始。
     const returned = await startTrackedScenario(
-      pages.starter, sequentialDefinition, formName, runId, 'return', resources.processInstanceIds)
+      pages.starter, sequentialDefinition, formName, runId, 'return', resources)
     const returnA = await findAssignedWorkflowTask(
       pages.approver, sequentialProcessKey, 'reviewA', returned.processInstanceId)
     await openTaskDetail(pages.approver, returned.processInstanceId, returnA.taskId)
@@ -529,7 +530,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
 
     // 场景三：一级办理人从页面驳回整实例，持久化 rejected 终态并拒绝越权及终态重复驳回。
     const rejected = await startTrackedScenario(
-      pages.starter, sequentialDefinition, formName, runId, 'reject', resources.processInstanceIds)
+      pages.starter, sequentialDefinition, formName, runId, 'reject', resources)
     const rejectA = await findAssignedWorkflowTask(
       pages.approver, sequentialProcessKey, 'reviewA', rejected.processInstanceId)
     await expectRejectedWorkflowActionWithoutSideEffects(
@@ -562,7 +563,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
 
     // 场景四：一级已办从工作台撤回未处理后继，恢复为全新一级任务并记录撤回审计。
     const revoked = await startTrackedScenario(
-      pages.starter, sequentialDefinition, formName, runId, 'revoke', resources.processInstanceIds)
+      pages.starter, sequentialDefinition, formName, runId, 'revoke', resources)
     const revokeA = await findAssignedWorkflowTask(
       pages.approver, sequentialProcessKey, 'reviewA', revoked.processInstanceId)
     await openTaskDetail(pages.approver, revoked.processInstanceId, revokeA.taskId)
@@ -607,7 +608,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
 
     // 场景五：一级任务委派给管理员，受托人只能完成委派，resolve 后任务回到原 owner。
     const delegated = await startTrackedScenario(
-      pages.starter, sequentialDefinition, formName, runId, 'delegate', resources.processInstanceIds)
+      pages.starter, sequentialDefinition, formName, runId, 'delegate', resources)
     const delegateA = await findAssignedWorkflowTask(
       pages.approver, sequentialProcessKey, 'reviewA', delegated.processInstanceId)
     await expectRejectedWorkflowActionWithoutSideEffects(
@@ -676,7 +677,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
 
     // 场景六：一级任务永久转办给管理员，原办理人失去对象权限，管理员完成后旧任务不可重复提交。
     const transferred = await startTrackedScenario(
-      pages.starter, sequentialDefinition, formName, runId, 'transfer', resources.processInstanceIds)
+      pages.starter, sequentialDefinition, formName, runId, 'transfer', resources)
     const transferA = await findAssignedWorkflowTask(
       pages.approver, sequentialProcessKey, 'reviewA', transferred.processInstanceId)
     await expectRejectedWorkflowActionWithoutSideEffects(
@@ -726,7 +727,7 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
 
     // 场景七：候选审批人从待签页认领并从待办页取消认领，错误候选与重复动作均无副作用。
     const claimed = await startTrackedScenario(
-      pages.starter, candidateDefinition, formName, runId, 'claim', resources.processInstanceIds)
+      pages.starter, candidateDefinition, formName, runId, 'claim', resources)
     const candidateTask = await findClaimableWorkflowTask(
       pages.approver, candidateProcessKey, 'candidateReview', claimed.processInstanceId)
     await expectActiveTaskState(pages.admin, claimed.processInstanceId, candidateTask.taskId, {

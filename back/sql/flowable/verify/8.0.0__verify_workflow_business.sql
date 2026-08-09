@@ -4,14 +4,14 @@
 SELECT
     'workflow_schema_table_counts' AS check_name,
     CASE
-        WHEN COUNT(*) = 99
+        WHEN COUNT(*) = 111
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) <> 'ACT_'
                  AND LEFT(UPPER(TABLE_NAME), 4) <> 'FLW_'
                  AND LEFT(UPPER(TABLE_NAME), 3) <> 'WF_'
                  AND LEFT(UPPER(TABLE_NAME), 5) <> 'QRTZ_') = 20
          AND SUM(LEFT(UPPER(TABLE_NAME), 5) = 'QRTZ_') = 11
          AND SUM(LEFT(UPPER(TABLE_NAME), 4) IN ('ACT_', 'FLW_')) = 36
-         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 32
+         AND SUM(LEFT(UPPER(TABLE_NAME), 3) = 'WF_') = 44
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -113,13 +113,125 @@ SELECT 'workflow_connector_columns' AS check_name,
            ORDER BY table_name, column_name), 'none')) AS detail
 FROM missing_connector_columns;
 
+WITH expected_call_activity_columns AS (
+    SELECT 'snapshot_id' AS column_name
+    UNION ALL SELECT 'deploy_id'
+    UNION ALL SELECT 'process_key'
+    UNION ALL SELECT 'element_id'
+    UNION ALL SELECT 'version_policy'
+    UNION ALL SELECT 'target_definition_id'
+    UNION ALL SELECT 'target_process_key'
+    UNION ALL SELECT 'target_process_name'
+    UNION ALL SELECT 'target_version'
+    UNION ALL SELECT 'target_deployment_id'
+    UNION ALL SELECT 'inherit_variables'
+    UNION ALL SELECT 'inherit_business_key'
+    UNION ALL SELECT 'local_scope_for_output'
+    UNION ALL SELECT 'propagation_policy'
+    UNION ALL SELECT 'input_mappings_json'
+    UNION ALL SELECT 'output_mappings_json'
+    UNION ALL SELECT 'snapshot_checksum'
+    UNION ALL SELECT 'create_by'
+    UNION ALL SELECT 'create_time'
+),
+missing_call_activity_columns AS (
+    SELECT expected.column_name
+    FROM expected_call_activity_columns expected
+    LEFT JOIN information_schema.COLUMNS actual
+      ON actual.TABLE_SCHEMA = DATABASE()
+     AND actual.TABLE_NAME = 'wf_deploy_call_activity'
+     AND actual.COLUMN_NAME = expected.column_name
+    WHERE actual.COLUMN_NAME IS NULL
+)
+SELECT 'workflow_call_activity_snapshot_columns' AS check_name,
+       CASE
+           WHEN (SELECT COUNT(*) FROM information_schema.TABLES
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = 'wf_deploy_call_activity'
+                   AND ENGINE = 'InnoDB'
+                   AND TABLE_COLLATION = 'utf8mb4_unicode_ci') = 1
+            AND COUNT(*) = 0
+           THEN 'PASS' ELSE 'FAIL'
+       END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(column_name ORDER BY column_name), 'none')) AS detail
+FROM missing_call_activity_columns;
+
+WITH expected_call_activity_indexes AS (
+    SELECT 'PRIMARY' AS index_name
+    UNION ALL SELECT 'uk_wf_deploy_call_element'
+    UNION ALL SELECT 'idx_wf_deploy_call_target'
+    UNION ALL SELECT 'idx_wf_deploy_call_target_deploy'
+),
+missing_call_activity_indexes AS (
+    SELECT expected.index_name
+    FROM expected_call_activity_indexes expected
+    LEFT JOIN information_schema.STATISTICS actual
+      ON actual.TABLE_SCHEMA = DATABASE()
+     AND actual.TABLE_NAME = 'wf_deploy_call_activity'
+     AND actual.INDEX_NAME = expected.index_name
+    WHERE actual.INDEX_NAME IS NULL
+)
+SELECT 'workflow_call_activity_snapshot_indexes' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(index_name ORDER BY index_name), 'none')) AS detail
+FROM missing_call_activity_indexes;
+
+WITH expected_call_activity_checks AS (
+    SELECT 'chk_wf_deploy_call_version_policy' AS constraint_name
+    UNION ALL SELECT 'chk_wf_deploy_call_target_version'
+    UNION ALL SELECT 'chk_wf_deploy_call_propagation'
+    UNION ALL SELECT 'chk_wf_deploy_call_input_json'
+    UNION ALL SELECT 'chk_wf_deploy_call_output_json'
+    UNION ALL SELECT 'chk_wf_deploy_call_checksum'
+),
+missing_call_activity_checks AS (
+    SELECT expected.constraint_name
+    FROM expected_call_activity_checks expected
+    LEFT JOIN information_schema.TABLE_CONSTRAINTS actual
+      ON actual.CONSTRAINT_SCHEMA = DATABASE()
+     AND actual.TABLE_NAME = 'wf_deploy_call_activity'
+     AND actual.CONSTRAINT_TYPE = 'CHECK'
+     AND actual.CONSTRAINT_NAME = expected.constraint_name
+    WHERE actual.CONSTRAINT_NAME IS NULL
+)
+SELECT 'workflow_call_activity_snapshot_checks' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(constraint_name ORDER BY constraint_name), 'none')) AS detail
+FROM missing_call_activity_checks;
+
+SELECT 'workflow_call_activity_snapshot_integrity' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('invalid_rows=', COUNT(*)) AS detail
+FROM wf_deploy_call_activity snapshot
+LEFT JOIN ACT_RE_DEPLOYMENT parent_deployment
+  ON parent_deployment.ID_ = snapshot.deploy_id
+LEFT JOIN ACT_RE_DEPLOYMENT target_deployment
+  ON target_deployment.ID_ = snapshot.target_deployment_id
+LEFT JOIN ACT_RE_PROCDEF target_definition
+  ON target_definition.ID_ = snapshot.target_definition_id
+WHERE parent_deployment.ID_ IS NULL
+   OR target_deployment.ID_ IS NULL
+   OR target_definition.ID_ IS NULL
+   OR target_definition.DEPLOYMENT_ID_ <> snapshot.target_deployment_id
+   OR target_definition.KEY_ <> snapshot.target_process_key
+   OR target_definition.VERSION_ <> snapshot.target_version
+   OR JSON_LENGTH(snapshot.input_mappings_json) > 64
+   OR JSON_LENGTH(snapshot.output_mappings_json) > 64
+   OR snapshot.inherit_variables NOT IN (0, 1)
+   OR snapshot.inherit_business_key NOT IN (0, 1)
+   OR snapshot.local_scope_for_output NOT IN (0, 1)
+   OR snapshot.snapshot_checksum NOT REGEXP '^[0-9a-f]{64}$';
+
 WITH expected_tables AS (
     SELECT 'wf_category' AS table_name
     UNION ALL SELECT 'wf_form'
     UNION ALL SELECT 'wf_deploy_form'
+    UNION ALL SELECT 'wf_deploy_condition_rule'
     UNION ALL SELECT 'wf_copy'
     UNION ALL SELECT 'wf_model_save_idempotency'
     UNION ALL SELECT 'wf_designer_preference'
+    UNION ALL SELECT 'wf_process_draft'
+    UNION ALL SELECT 'wf_process_draft_audit'
     UNION ALL SELECT 'wf_attachment_quota_guard'
     UNION ALL SELECT 'wf_attachment'
     UNION ALL SELECT 'wf_deploy_controlled_loop'
@@ -131,16 +243,17 @@ actual_tables AS (
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME IN ('wf_category', 'wf_form', 'wf_deploy_form', 'wf_copy',
                          'wf_model_save_idempotency', 'wf_designer_preference',
+                         'wf_process_draft', 'wf_process_draft_audit',
                          'wf_attachment_quota_guard',
-                         'wf_attachment', 'wf_deploy_controlled_loop',
+                         'wf_attachment', 'wf_deploy_condition_rule', 'wf_deploy_controlled_loop',
                          'wf_controlled_loop_execution')
 )
 SELECT
     'workflow_business_tables' AS check_name,
     CASE
-        WHEN COUNT(a.table_name) = 10
-         AND SUM(a.ENGINE = 'InnoDB') = 10
-         AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 10
+        WHEN COUNT(a.table_name) = 13
+         AND SUM(a.ENGINE = 'InnoDB') = 13
+         AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 13
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -170,6 +283,19 @@ WITH expected_columns AS (
     UNION ALL SELECT 'wf_deploy_form', 'node_key'
     UNION ALL SELECT 'wf_deploy_form', 'content'
     UNION ALL SELECT 'wf_deploy_form', 'del_flag'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'rule_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'deploy_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'process_key'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'gateway_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'gateway_type'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'gateway_token'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'flow_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'flow_name'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'flow_token'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'default_flow'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'rule_json'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'cel_config_json'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'snapshot_checksum'
     UNION ALL SELECT 'wf_copy', 'copy_id'
     UNION ALL SELECT 'wf_copy', 'copy_event_id'
     UNION ALL SELECT 'wf_copy', 'deployment_id'
@@ -177,6 +303,12 @@ WITH expected_columns AS (
     UNION ALL SELECT 'wf_copy', 'task_id'
     UNION ALL SELECT 'wf_copy', 'user_id'
     UNION ALL SELECT 'wf_copy', 'originator_id'
+    UNION ALL SELECT 'wf_copy', 'source_type'
+    UNION ALL SELECT 'wf_copy', 'trigger_type'
+    UNION ALL SELECT 'wf_copy', 'trigger_node_id'
+    UNION ALL SELECT 'wf_copy', 'trigger_node_name'
+    UNION ALL SELECT 'wf_copy', 'read_status'
+    UNION ALL SELECT 'wf_copy', 'read_time'
     UNION ALL SELECT 'wf_copy', 'del_flag'
     UNION ALL SELECT 'wf_model_save_idempotency', 'request_id'
     UNION ALL SELECT 'wf_model_save_idempotency', 'user_id'
@@ -194,6 +326,42 @@ WITH expected_columns AS (
     UNION ALL SELECT 'wf_designer_preference', 'properties_collapsed'
     UNION ALL SELECT 'wf_designer_preference', 'create_time'
     UNION ALL SELECT 'wf_designer_preference', 'update_time'
+    UNION ALL SELECT 'wf_process_draft', 'draft_id'
+    UNION ALL SELECT 'wf_process_draft', 'owner_user_id'
+    UNION ALL SELECT 'wf_process_draft', 'process_definition_id'
+    UNION ALL SELECT 'wf_process_draft', 'process_definition_key'
+    UNION ALL SELECT 'wf_process_draft', 'process_definition_version'
+    UNION ALL SELECT 'wf_process_draft', 'deployment_id'
+    UNION ALL SELECT 'wf_process_draft', 'process_name'
+    UNION ALL SELECT 'wf_process_draft', 'source_type'
+    UNION ALL SELECT 'wf_process_draft', 'form_id'
+    UNION ALL SELECT 'wf_process_draft', 'form_key'
+    UNION ALL SELECT 'wf_process_draft', 'start_node_key'
+    UNION ALL SELECT 'wf_process_draft', 'form_name'
+    UNION ALL SELECT 'wf_process_draft', 'node_name'
+    UNION ALL SELECT 'wf_process_draft', 'snapshot_create_time'
+    UNION ALL SELECT 'wf_process_draft', 'form_snapshot'
+    UNION ALL SELECT 'wf_process_draft', 'form_snapshot_sha256'
+    UNION ALL SELECT 'wf_process_draft', 'form_values'
+    UNION ALL SELECT 'wf_process_draft', 'business_key'
+    UNION ALL SELECT 'wf_process_draft', 'draft_status'
+    UNION ALL SELECT 'wf_process_draft', 'revision_no'
+    UNION ALL SELECT 'wf_process_draft', 'submitted_process_instance_id'
+    UNION ALL SELECT 'wf_process_draft', 'submitted_time'
+    UNION ALL SELECT 'wf_process_draft', 'deleted_time'
+    UNION ALL SELECT 'wf_process_draft', 'create_time'
+    UNION ALL SELECT 'wf_process_draft', 'update_time'
+    UNION ALL SELECT 'wf_process_draft_audit', 'audit_id'
+    UNION ALL SELECT 'wf_process_draft_audit', 'draft_id'
+    UNION ALL SELECT 'wf_process_draft_audit', 'owner_user_id'
+    UNION ALL SELECT 'wf_process_draft_audit', 'action_type'
+    UNION ALL SELECT 'wf_process_draft_audit', 'from_status'
+    UNION ALL SELECT 'wf_process_draft_audit', 'to_status'
+    UNION ALL SELECT 'wf_process_draft_audit', 'from_revision'
+    UNION ALL SELECT 'wf_process_draft_audit', 'to_revision'
+    UNION ALL SELECT 'wf_process_draft_audit', 'process_instance_id'
+    UNION ALL SELECT 'wf_process_draft_audit', 'detail_json'
+    UNION ALL SELECT 'wf_process_draft_audit', 'create_time'
     UNION ALL SELECT 'wf_attachment_quota_guard', 'owner_user_id'
     UNION ALL SELECT 'wf_attachment_quota_guard', 'create_time'
     UNION ALL SELECT 'wf_attachment', 'attachment_id'
@@ -206,6 +374,7 @@ WITH expected_columns AS (
     UNION ALL SELECT 'wf_attachment', 'sha256'
     UNION ALL SELECT 'wf_attachment', 'attachment_status'
     UNION ALL SELECT 'wf_attachment', 'expire_time'
+    UNION ALL SELECT 'wf_attachment', 'draft_id'
     UNION ALL SELECT 'wf_attachment', 'process_instance_id'
     UNION ALL SELECT 'wf_attachment', 'task_id'
     UNION ALL SELECT 'wf_attachment', 'node_key'
@@ -379,6 +548,68 @@ SELECT
     ) AS detail
 FROM invalid_retry_columns;
 
+WITH expected_draft_columns AS (
+    SELECT 'wf_process_draft' AS table_name, 'draft_id' AS column_name
+    UNION ALL SELECT 'wf_process_draft', 'form_snapshot'
+    UNION ALL SELECT 'wf_process_draft', 'start_multi_instance_assignments'
+    UNION ALL SELECT 'wf_process_draft', 'form_values'
+    UNION ALL SELECT 'wf_process_draft', 'multi_instance_user_ids'
+    UNION ALL SELECT 'wf_process_draft', 'snapshot_create_time'
+    UNION ALL SELECT 'wf_process_draft', 'draft_status'
+    UNION ALL SELECT 'wf_process_draft', 'revision_no'
+    UNION ALL SELECT 'wf_process_draft_audit', 'draft_id'
+    UNION ALL SELECT 'wf_process_draft_audit', 'detail_json'
+    UNION ALL SELECT 'wf_attachment', 'draft_id'
+),
+valid_draft_columns AS (
+    SELECT TABLE_NAME AS table_name, COLUMN_NAME AS column_name
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND (
+          (TABLE_NAME = 'wf_process_draft' AND COLUMN_NAME = 'draft_id'
+           AND DATA_TYPE = 'char' AND CHARACTER_MAXIMUM_LENGTH = 36
+           AND CHARACTER_SET_NAME = 'ascii' AND COLLATION_NAME = 'ascii_bin'
+           AND IS_NULLABLE = 'NO')
+          OR (TABLE_NAME = 'wf_process_draft' AND COLUMN_NAME IN
+              ('form_snapshot', 'start_multi_instance_assignments',
+               'form_values', 'multi_instance_user_ids')
+              AND DATA_TYPE = 'longtext' AND CHARACTER_SET_NAME = 'utf8mb4'
+              AND COLLATION_NAME = 'utf8mb4_unicode_ci' AND IS_NULLABLE = 'NO')
+          OR (TABLE_NAME = 'wf_process_draft' AND COLUMN_NAME = 'snapshot_create_time'
+              AND DATA_TYPE = 'datetime' AND DATETIME_PRECISION = 3 AND IS_NULLABLE = 'NO')
+          OR (TABLE_NAME = 'wf_process_draft' AND COLUMN_NAME = 'draft_status'
+              AND DATA_TYPE = 'varchar' AND CHARACTER_MAXIMUM_LENGTH = 16
+              AND IS_NULLABLE = 'NO' AND COLUMN_DEFAULT = 'ACTIVE')
+          OR (TABLE_NAME = 'wf_process_draft' AND COLUMN_NAME = 'revision_no'
+              AND COLUMN_TYPE = 'bigint' AND IS_NULLABLE = 'NO' AND COLUMN_DEFAULT = '1')
+          OR (TABLE_NAME = 'wf_process_draft_audit' AND COLUMN_NAME = 'draft_id'
+              AND DATA_TYPE = 'char' AND CHARACTER_MAXIMUM_LENGTH = 36
+              AND CHARACTER_SET_NAME = 'ascii' AND COLLATION_NAME = 'ascii_bin'
+              AND IS_NULLABLE = 'NO')
+          OR (TABLE_NAME = 'wf_process_draft_audit' AND COLUMN_NAME = 'detail_json'
+              AND DATA_TYPE = 'longtext' AND CHARACTER_SET_NAME = 'utf8mb4'
+              AND COLLATION_NAME = 'utf8mb4_unicode_ci' AND IS_NULLABLE = 'YES')
+          OR (TABLE_NAME = 'wf_attachment' AND COLUMN_NAME = 'draft_id'
+              AND DATA_TYPE = 'char' AND CHARACTER_MAXIMUM_LENGTH = 36
+              AND CHARACTER_SET_NAME = 'ascii' AND COLLATION_NAME = 'ascii_bin'
+              AND IS_NULLABLE = 'YES')
+      )
+),
+invalid_draft_columns AS (
+    SELECT expected.table_name, expected.column_name
+    FROM expected_draft_columns expected
+    LEFT JOIN valid_draft_columns actual
+      ON actual.table_name = expected.table_name
+     AND actual.column_name = expected.column_name
+    WHERE actual.column_name IS NULL
+)
+SELECT
+    'workflow_draft_column_types' AS check_name,
+    CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('invalid=', COALESCE(GROUP_CONCAT(
+        CONCAT(table_name, '.', column_name) ORDER BY table_name, column_name), 'none')) AS detail
+FROM invalid_draft_columns;
+
 SELECT
     'wf_category_active_code' AS check_name,
     CASE
@@ -418,8 +649,9 @@ WITH actual_indexes AS (
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME IN ('wf_category', 'wf_form', 'wf_deploy_form', 'wf_copy',
                          'wf_model_save_idempotency', 'wf_designer_preference',
+                         'wf_process_draft', 'wf_process_draft_audit',
                          'wf_attachment_quota_guard',
-                         'wf_attachment', 'wf_deploy_controlled_loop',
+                         'wf_attachment', 'wf_deploy_condition_rule', 'wf_deploy_controlled_loop',
                          'wf_controlled_loop_execution')
     GROUP BY TABLE_NAME, INDEX_NAME
 ),
@@ -431,9 +663,16 @@ expected_indexes AS (
     UNION ALL SELECT 'wf_form', 'idx_wf_form_name', 1, 'form_name'
     UNION ALL SELECT 'wf_deploy_form', 'PRIMARY', 0, 'deploy_id,form_key,node_key'
     UNION ALL SELECT 'wf_deploy_form', 'idx_wf_deploy_form_form_id', 1, 'form_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'PRIMARY', 0, 'rule_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'uk_wf_deploy_condition_flow', 0,
+                     'deploy_id,process_key,gateway_id,flow_id'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'uk_wf_deploy_condition_token', 0,
+                     'deploy_id,gateway_token,flow_token'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'idx_wf_deploy_condition_runtime', 1,
+                     'deploy_id,process_key,gateway_token'
     UNION ALL SELECT 'wf_copy', 'PRIMARY', 0, 'copy_id'
     UNION ALL SELECT 'wf_copy', 'uk_wf_copy_event_user', 0, 'copy_event_id,user_id'
-    UNION ALL SELECT 'wf_copy', 'idx_wf_copy_user_status_time', 1, 'user_id,del_flag,create_time'
+    UNION ALL SELECT 'wf_copy', 'idx_wf_copy_user_status_time', 1, 'user_id,del_flag,read_status,create_time'
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_instance', 1, 'instance_id,del_flag'
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_task', 1, 'task_id,del_flag'
     UNION ALL SELECT 'wf_copy', 'idx_wf_copy_deployment', 1, 'deployment_id,del_flag'
@@ -445,6 +684,20 @@ expected_indexes AS (
     UNION ALL SELECT 'wf_model_save_idempotency', 'idx_wf_model_save_saved_model', 1,
                      'saved_model_id'
     UNION ALL SELECT 'wf_designer_preference', 'PRIMARY', 0, 'user_id'
+    UNION ALL SELECT 'wf_process_draft', 'PRIMARY', 0, 'draft_id'
+    UNION ALL SELECT 'wf_process_draft', 'uk_wf_process_draft_instance', 0,
+                     'submitted_process_instance_id'
+    UNION ALL SELECT 'wf_process_draft', 'idx_wf_process_draft_owner_status_time', 1,
+                     'owner_user_id,draft_status,update_time,draft_id'
+    UNION ALL SELECT 'wf_process_draft', 'idx_wf_process_draft_owner_process_time', 1,
+                     'owner_user_id,process_definition_key,update_time,draft_id'
+    UNION ALL SELECT 'wf_process_draft', 'idx_wf_process_draft_definition_version', 1,
+                     'process_definition_key,process_definition_version,draft_status'
+    UNION ALL SELECT 'wf_process_draft_audit', 'PRIMARY', 0, 'audit_id'
+    UNION ALL SELECT 'wf_process_draft_audit', 'uk_wf_process_draft_audit_revision', 0,
+                     'draft_id,to_revision'
+    UNION ALL SELECT 'wf_process_draft_audit', 'idx_wf_process_draft_audit_time', 1,
+                     'draft_id,create_time,audit_id'
     UNION ALL SELECT 'wf_attachment_quota_guard', 'PRIMARY', 0, 'owner_user_id'
     UNION ALL SELECT 'wf_attachment', 'PRIMARY', 0, 'attachment_id'
     UNION ALL SELECT 'wf_attachment', 'uk_wf_attachment_storage_key', 0, 'storage_key'
@@ -454,6 +707,8 @@ expected_indexes AS (
                      'attachment_status,expire_time'
     UNION ALL SELECT 'wf_attachment', 'idx_wf_attachment_cleanup_due', 1,
                      'attachment_status,cleanup_next_retry_time,expire_time'
+    UNION ALL SELECT 'wf_attachment', 'idx_wf_attachment_draft_field', 1,
+                     'draft_id,field_name,attachment_status'
     UNION ALL SELECT 'wf_attachment', 'idx_wf_attachment_instance_field', 1,
                      'process_instance_id,field_name,attachment_status'
     UNION ALL SELECT 'wf_deploy_controlled_loop', 'PRIMARY', 0, 'loop_id'
@@ -509,7 +764,14 @@ WITH expected_checks AS (
     UNION ALL SELECT 'wf_deploy_form', 'chk_wf_deploy_form_content_json'
     UNION ALL SELECT 'wf_deploy_form', 'chk_wf_deploy_form_source'
     UNION ALL SELECT 'wf_deploy_form', 'chk_wf_deploy_form_del_flag'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_type'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_tokens'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_default'
+    UNION ALL SELECT 'wf_deploy_condition_rule', 'chk_wf_deploy_condition_checksum'
     UNION ALL SELECT 'wf_copy', 'chk_wf_copy_del_flag'
+    UNION ALL SELECT 'wf_copy', 'chk_wf_copy_source_type'
+    UNION ALL SELECT 'wf_copy', 'chk_wf_copy_trigger_type'
+    UNION ALL SELECT 'wf_copy', 'chk_wf_copy_read_state'
     UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_request_id'
     UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_user_id'
     UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_source_id'
@@ -517,6 +779,24 @@ WITH expected_checks AS (
     UNION ALL SELECT 'wf_model_save_idempotency', 'chk_wf_model_save_completion'
     UNION ALL SELECT 'wf_designer_preference', 'chk_wf_designer_preference_theme'
     UNION ALL SELECT 'wf_designer_preference', 'chk_wf_designer_preference_flags'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_id'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_owner'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_definition'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_source'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_snapshot_json'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_assignment_json'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_values_json'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_members_json'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_snapshot_hash'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_revision'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_status'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_lifecycle'
+    UNION ALL SELECT 'wf_process_draft', 'chk_wf_process_draft_times'
+    UNION ALL SELECT 'wf_process_draft_audit', 'chk_wf_process_draft_audit_owner'
+    UNION ALL SELECT 'wf_process_draft_audit', 'chk_wf_process_draft_audit_action'
+    UNION ALL SELECT 'wf_process_draft_audit', 'chk_wf_process_draft_audit_status'
+    UNION ALL SELECT 'wf_process_draft_audit', 'chk_wf_process_draft_audit_detail'
+    UNION ALL SELECT 'wf_process_draft_audit', 'chk_wf_process_draft_audit_transition'
     UNION ALL SELECT 'wf_attachment_quota_guard',
                      'chk_wf_attachment_quota_guard_owner'
     UNION ALL SELECT 'wf_attachment', 'chk_wf_attachment_status'
@@ -566,6 +846,12 @@ WITH expected_foreign_keys AS (
            'user_id' AS referenced_column_name,
            'RESTRICT' AS update_rule,
            'CASCADE' AS delete_rule
+    UNION ALL
+    SELECT 'wf_process_draft_audit', 'fk_wf_process_draft_audit_draft',
+           'draft_id', 'wf_process_draft', 'draft_id', 'RESTRICT', 'RESTRICT'
+    UNION ALL
+    SELECT 'wf_attachment', 'fk_wf_attachment_draft',
+           'draft_id', 'wf_process_draft', 'draft_id', 'RESTRICT', 'RESTRICT'
 ),
 missing_foreign_keys AS (
     SELECT e.table_name, e.constraint_name
@@ -679,6 +965,28 @@ WITH integrity_issues AS (
 
     UNION ALL
 
+    SELECT 'wf_deploy_condition_invalid_row', COUNT(*)
+    FROM wf_deploy_condition_rule
+    WHERE gateway_type NOT IN ('EXCLUSIVE', 'INCLUSIVE')
+       OR gateway_token NOT REGEXP '^[0-9a-f]{24}$'
+       OR flow_token NOT REGEXP '^[0-9a-f]{24}$'
+       OR snapshot_checksum NOT REGEXP '^[0-9a-f]{64}$'
+       OR JSON_VALID(rule_json) = 0
+       OR (default_flow = 1 AND cel_config_json IS NOT NULL)
+       OR (default_flow = 0 AND (cel_config_json IS NULL OR JSON_VALID(cel_config_json) = 0))
+
+    UNION ALL
+
+    SELECT 'wf_deploy_condition_invalid_gateway', COUNT(*)
+    FROM (
+        SELECT deploy_id, process_key, gateway_id
+        FROM wf_deploy_condition_rule
+        GROUP BY deploy_id, process_key, gateway_id
+        HAVING COUNT(*) < 2 OR SUM(default_flow = 1) <> 1
+    ) invalid_condition_gateway
+
+    UNION ALL
+
     SELECT 'wf_deploy_form_missing_deployment', COUNT(*)
     FROM wf_deploy_form d
     LEFT JOIN ACT_RE_DEPLOYMENT p ON p.ID_ = d.deploy_id
@@ -689,6 +997,17 @@ WITH integrity_issues AS (
     SELECT 'wf_copy_invalid_del_flag', COUNT(*)
     FROM wf_copy
     WHERE del_flag NOT IN ('0', '2')
+
+    UNION ALL
+
+    SELECT 'wf_copy_invalid_source_or_read_state', COUNT(*)
+    FROM wf_copy
+    WHERE source_type NOT IN ('MANUAL', 'AUTO', 'MANUAL_AUTO')
+       OR trigger_type NOT IN ('MANUAL_COMPLETE', 'MANUAL_REJECT', 'MANUAL_RETURN',
+           'MANUAL_DELEGATE', 'MANUAL_RESOLVE', 'MANUAL_TRANSFER', 'NODE_ARRIVED',
+           'NODE_COMPLETED', 'PROCESS_COMPLETED')
+       OR read_status NOT IN ('0', '1')
+       OR ((read_status = '0') <> (read_time IS NULL))
 
     UNION ALL
 
@@ -777,16 +1096,101 @@ WITH integrity_issues AS (
 
     UNION ALL
 
+    SELECT 'wf_process_draft_invalid_row', COUNT(*)
+    FROM wf_process_draft d
+    WHERE d.draft_id NOT REGEXP
+              '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+       OR d.owner_user_id <= 0
+       OR d.process_definition_version <= 0
+       OR d.draft_status NOT IN ('ACTIVE', 'SUBMITTED', 'DELETED')
+       OR d.revision_no <= 0
+       OR JSON_VALID(d.form_snapshot) = 0
+       OR JSON_VALID(d.start_multi_instance_assignments) = 0
+       OR JSON_TYPE(d.start_multi_instance_assignments) <> 'ARRAY'
+       OR JSON_VALID(d.form_values) = 0
+       OR JSON_VALID(d.multi_instance_user_ids) = 0
+       OR JSON_TYPE(d.multi_instance_user_ids) <> 'OBJECT'
+       OR d.form_snapshot_sha256 NOT REGEXP '^[0-9a-f]{64}$'
+       OR d.form_snapshot_sha256 <> LOWER(SHA2(d.form_snapshot, 256))
+       OR (d.source_type = 'TEMPLATE' AND (d.form_id IS NULL OR d.form_id <= 0))
+       OR (d.source_type = 'EMBEDDED' AND d.form_id IS NOT NULL)
+       OR d.source_type NOT IN ('TEMPLATE', 'EMBEDDED')
+       OR d.snapshot_create_time > d.create_time
+       OR d.update_time < d.create_time
+
+    UNION ALL
+
+    SELECT 'wf_process_draft_missing_owner', COUNT(*)
+    FROM wf_process_draft d
+    LEFT JOIN sys_user u ON u.user_id = d.owner_user_id
+    WHERE u.user_id IS NULL
+
+    UNION ALL
+
+    SELECT 'wf_process_draft_submitted_history_mismatch', COUNT(*)
+    FROM wf_process_draft d
+    LEFT JOIN ACT_HI_PROCINST p ON p.PROC_INST_ID_ = d.submitted_process_instance_id
+    LEFT JOIN ACT_RE_PROCDEF definition ON definition.ID_ = p.PROC_DEF_ID_
+    WHERE d.draft_status = 'SUBMITTED'
+      AND (p.PROC_INST_ID_ IS NULL
+           OR p.PROC_DEF_ID_ <> d.process_definition_id
+           OR definition.ID_ IS NULL
+           OR definition.DEPLOYMENT_ID_ <> d.deployment_id
+           OR p.START_USER_ID_ <> CAST(d.owner_user_id AS CHAR))
+
+    UNION ALL
+
+    SELECT 'wf_process_draft_audit_invalid_chain', COUNT(*)
+    FROM (
+        SELECT d.draft_id
+        FROM wf_process_draft d
+        LEFT JOIN wf_process_draft_audit a ON a.draft_id = d.draft_id
+        GROUP BY d.draft_id, d.owner_user_id, d.revision_no,
+                 d.draft_status, d.submitted_process_instance_id
+        HAVING COUNT(a.audit_id) = 0
+            OR MIN(a.to_revision) <> 1
+            OR MAX(a.to_revision) <> d.revision_no
+            OR COUNT(a.audit_id) <> MAX(a.to_revision)
+            OR SUM(a.owner_user_id <> d.owner_user_id) > 0
+            OR SUM(a.to_revision = 1 AND a.action_type <> 'CREATED') > 0
+            OR SUM(a.to_revision = d.revision_no
+                   AND a.to_status <> d.draft_status) > 0
+            OR SUM(a.action_type = 'SUBMITTED')
+               <> CASE WHEN d.draft_status = 'SUBMITTED' THEN 1 ELSE 0 END
+            OR SUM(a.action_type = 'SUBMITTED'
+                   AND NOT (a.process_instance_id
+                            <=> d.submitted_process_instance_id)) > 0
+
+        UNION
+
+        SELECT current_audit.draft_id
+        FROM wf_process_draft_audit current_audit
+        LEFT JOIN wf_process_draft_audit previous_audit
+          ON previous_audit.draft_id = current_audit.draft_id
+         AND previous_audit.to_revision = current_audit.to_revision - 1
+        WHERE current_audit.to_revision > 1
+          AND (previous_audit.audit_id IS NULL
+               OR current_audit.from_revision <> previous_audit.to_revision
+               OR current_audit.from_status <> previous_audit.to_status)
+    ) invalid_draft_audit
+
+    UNION ALL
+
     SELECT 'wf_attachment_invalid_row', COUNT(*)
     FROM wf_attachment a
-    WHERE a.attachment_status NOT IN ('TEMP', 'BOUND', 'EXPIRED', 'DELETED')
+    WHERE a.attachment_status NOT IN ('TEMP', 'DRAFT', 'BOUND', 'EXPIRED', 'DELETED')
        OR a.file_size <= 0
        OR a.sha256 NOT REGEXP '^[0-9a-f]{64}$'
        OR (a.attachment_status = 'BOUND'
-           AND (a.process_instance_id IS NULL OR a.node_key IS NULL OR a.bound_time IS NULL
+           AND (a.draft_id IS NOT NULL OR a.process_instance_id IS NULL
+                OR a.node_key IS NULL OR a.bound_time IS NULL
                 OR a.storage_deleted_time IS NOT NULL))
+       OR (a.attachment_status = 'DRAFT'
+           AND (a.draft_id IS NULL OR a.process_instance_id IS NOT NULL
+                OR a.task_id IS NOT NULL OR a.node_key IS NOT NULL
+                OR a.bound_time IS NOT NULL OR a.storage_deleted_time IS NOT NULL))
        OR (a.attachment_status IN ('TEMP', 'EXPIRED', 'DELETED')
-           AND (a.process_instance_id IS NOT NULL OR a.task_id IS NOT NULL
+           AND (a.draft_id IS NOT NULL OR a.process_instance_id IS NOT NULL OR a.task_id IS NOT NULL
                 OR a.node_key IS NOT NULL OR a.bound_time IS NOT NULL))
        OR (a.storage_deleted_time IS NOT NULL
            AND a.attachment_status NOT IN ('EXPIRED', 'DELETED'))
@@ -800,12 +1204,21 @@ WITH integrity_issues AS (
 
     UNION ALL
 
+    SELECT 'wf_attachment_draft_relation_mismatch', COUNT(*)
+    FROM wf_attachment a
+    LEFT JOIN wf_process_draft d ON d.draft_id = a.draft_id
+    WHERE a.attachment_status = 'DRAFT'
+      AND (d.draft_id IS NULL OR d.owner_user_id <> a.owner_user_id
+           OR d.draft_status <> 'ACTIVE')
+
+    UNION ALL
+
     SELECT 'wf_attachment_invalid_cleanup_retry', COUNT(*)
     FROM wf_attachment a
     WHERE a.cleanup_retry_count < 0
        OR ((a.cleanup_next_retry_time IS NULL)
            <> (a.cleanup_last_error_code IS NULL))
-       OR (a.attachment_status IN ('TEMP', 'BOUND')
+       OR (a.attachment_status IN ('TEMP', 'DRAFT', 'BOUND')
            AND a.cleanup_retry_count <> 0)
        OR (a.cleanup_next_retry_time IS NOT NULL
            AND (a.storage_deleted_time IS NOT NULL
@@ -925,6 +1338,242 @@ SELECT
         )
     ) AS detail
 FROM integrity_issues;
+
+WITH expected_tables AS (
+    SELECT 'wf_deploy_participant_rule' AS table_name
+    UNION ALL SELECT 'wf_participant_resolution_audit'
+),
+actual_tables AS (
+    SELECT TABLE_NAME AS table_name, ENGINE, TABLE_COLLATION
+    FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME IN ('wf_deploy_participant_rule', 'wf_participant_resolution_audit')
+)
+SELECT 'workflow_participant_rule_tables' AS check_name,
+       CASE WHEN COUNT(a.table_name) = 2
+              AND SUM(a.ENGINE = 'InnoDB') = 2
+              AND SUM(a.TABLE_COLLATION = 'utf8mb4_unicode_ci') = 2
+            THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('present=', COUNT(a.table_name), ', missing=', COALESCE(
+           GROUP_CONCAT(CASE WHEN a.table_name IS NULL THEN e.table_name END
+               ORDER BY e.table_name), 'none')) AS detail
+FROM expected_tables e
+LEFT JOIN actual_tables a ON a.table_name = e.table_name;
+
+WITH expected_columns AS (
+    SELECT 'wf_deploy_participant_rule' AS table_name, 'rule_id' AS column_name
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'deploy_id'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'process_key'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'activity_id'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'rule_scope'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'assignment_mode'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'rule_type'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'target_ids'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'form_field'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'no_match_policy'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'rule_version'
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'checksum'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'audit_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'event_type'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'deploy_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'process_definition_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'process_instance_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'task_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'activity_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'rule_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'initiator_user_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'actor_user_id'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'resolved_user_ids'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'resolved_group_ids'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'result_code'
+),
+missing_columns AS (
+    SELECT e.table_name, e.column_name
+    FROM expected_columns e
+    LEFT JOIN information_schema.COLUMNS c
+      ON c.TABLE_SCHEMA = DATABASE()
+     AND c.TABLE_NAME = e.table_name
+     AND c.COLUMN_NAME = e.column_name
+    WHERE c.COLUMN_NAME IS NULL
+)
+SELECT 'workflow_participant_rule_columns' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(CONCAT(table_name, '.', column_name)
+           ORDER BY table_name, column_name), 'none')) AS detail
+FROM missing_columns;
+
+WITH expected_indexes AS (
+    SELECT 'wf_deploy_participant_rule' AS table_name,
+           'uk_wf_deploy_participant_rule_node' AS index_name
+    UNION ALL SELECT 'wf_deploy_participant_rule', 'idx_wf_deploy_participant_rule_checksum'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'idx_wf_participant_audit_instance'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'idx_wf_participant_audit_task'
+    UNION ALL SELECT 'wf_participant_resolution_audit', 'idx_wf_participant_audit_rule_time'
+),
+missing_indexes AS (
+    SELECT e.table_name, e.index_name
+    FROM expected_indexes e
+    LEFT JOIN information_schema.STATISTICS s
+      ON s.TABLE_SCHEMA = DATABASE()
+     AND s.TABLE_NAME = e.table_name
+     AND s.INDEX_NAME = e.index_name
+    WHERE s.INDEX_NAME IS NULL
+)
+SELECT 'workflow_participant_rule_indexes' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(CONCAT(table_name, '.', index_name)
+           ORDER BY table_name, index_name), 'none')) AS detail
+FROM missing_indexes;
+
+WITH expected_checks AS (
+    SELECT 'chk_wf_deploy_participant_rule_relation' AS constraint_name
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_targets'
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_form'
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_policy'
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_version'
+    UNION ALL SELECT 'chk_wf_deploy_participant_rule_checksum'
+    UNION ALL SELECT 'chk_wf_participant_audit_event'
+    UNION ALL SELECT 'chk_wf_participant_audit_result'
+    UNION ALL SELECT 'chk_wf_participant_audit_relation'
+    UNION ALL SELECT 'chk_wf_participant_audit_rule'
+    UNION ALL SELECT 'chk_wf_participant_audit_initiator'
+    UNION ALL SELECT 'chk_wf_participant_audit_actor'
+),
+missing_checks AS (
+    SELECT e.constraint_name
+    FROM expected_checks e
+    LEFT JOIN information_schema.TABLE_CONSTRAINTS c
+      ON c.CONSTRAINT_SCHEMA = DATABASE()
+     AND c.CONSTRAINT_NAME = e.constraint_name
+     AND c.CONSTRAINT_TYPE = 'CHECK'
+    WHERE c.CONSTRAINT_NAME IS NULL
+)
+SELECT 'workflow_participant_rule_checks' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('missing=', COALESCE(GROUP_CONCAT(constraint_name ORDER BY constraint_name), 'none')) AS detail
+FROM missing_checks;
+
+SELECT 'workflow_participant_audit_retention_foreign_keys' AS check_name,
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('unexpected=', COALESCE(GROUP_CONCAT(CONSTRAINT_NAME ORDER BY CONSTRAINT_NAME), 'none')) AS detail
+FROM information_schema.KEY_COLUMN_USAGE
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'wf_participant_resolution_audit'
+  AND REFERENCED_TABLE_NAME IS NOT NULL;
+
+WITH integrity_issues AS (
+    SELECT 'participant_rule_missing_deployment' AS issue_name, COUNT(*) AS issue_count
+    FROM wf_deploy_participant_rule r
+    LEFT JOIN ACT_RE_DEPLOYMENT d ON d.ID_ = r.deploy_id
+    WHERE d.ID_ IS NULL
+
+    UNION ALL
+
+    SELECT 'participant_rule_missing_start_scope', COUNT(*)
+    FROM (
+        SELECT deploy_id, process_key
+        FROM wf_deploy_participant_rule
+        GROUP BY deploy_id, process_key
+        HAVING SUM(rule_scope = 'START') <> 1
+    ) invalid_scope
+
+    UNION ALL
+
+    SELECT 'participant_audit_invalid_row', COUNT(*)
+    FROM wf_participant_resolution_audit a
+    WHERE a.rule_id <= 0
+       OR a.initiator_user_id NOT REGEXP '^[1-9][0-9]{0,18}$'
+       OR (a.actor_user_id IS NOT NULL
+           AND a.actor_user_id NOT REGEXP '^[1-9][0-9]{0,18}$')
+       OR (a.event_type = 'START' AND
+           (a.task_id IS NOT NULL OR a.activity_id <> ''
+            OR (a.result_code = 'ALLOWED' AND a.process_instance_id IS NULL)
+            OR (a.result_code = 'DENIED' AND a.process_instance_id IS NOT NULL)))
+       OR (a.event_type = 'TASK' AND
+           (a.task_id IS NULL OR a.process_instance_id IS NULL OR a.activity_id = ''))
+)
+SELECT 'workflow_participant_rule_data_integrity' AS check_name,
+       CASE WHEN SUM(issue_count) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('issues=', SUM(issue_count), ', detail=', COALESCE(
+           GROUP_CONCAT(CASE WHEN issue_count > 0 THEN CONCAT(issue_name, ':', issue_count) END
+               ORDER BY issue_name), 'none')) AS detail
+FROM integrity_issues;
+
+WITH expected_notification_tables AS (
+    SELECT 'wf_notification_policy' AS table_name
+    UNION ALL SELECT 'wf_notification_preference'
+    UNION ALL SELECT 'wf_notification_outbox'
+    UNION ALL SELECT 'wf_notification_inbox'
+    UNION ALL SELECT 'wf_notification_delivery_audit'
+    UNION ALL SELECT 'wf_notification_urge_audit'
+), actual_notification_tables AS (
+    SELECT table_name, engine, table_collation
+    FROM information_schema.tables
+    WHERE table_schema = DATABASE()
+      AND table_name IN (SELECT table_name FROM expected_notification_tables)
+)
+SELECT
+    'workflow_notification_tables' AS check_name,
+    CASE WHEN COUNT(actual.table_name) = 6
+              AND SUM(actual.engine = 'InnoDB') = 6
+              AND SUM(actual.table_collation = 'utf8mb4_unicode_ci') = 6
+         THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('present=', COUNT(actual.table_name), ', missing=', COALESCE(
+        GROUP_CONCAT(CASE WHEN actual.table_name IS NULL THEN expected.table_name END
+            ORDER BY expected.table_name SEPARATOR ','), 'none')) AS detail
+FROM expected_notification_tables expected
+LEFT JOIN actual_notification_tables actual ON actual.table_name = expected.table_name;
+
+WITH notification_issues AS (
+    SELECT 'policy_invalid' AS issue_name, COUNT(*) AS issue_count
+    FROM wf_notification_policy
+    WHERE scope_type NOT IN ('DEFAULT', 'PROCESS', 'NODE')
+       OR status NOT IN ('ENABLED', 'DISABLED')
+       OR channels NOT IN ('INBOX', 'EMAIL', 'INBOX,EMAIL')
+       OR max_attempts NOT BETWEEN 1 AND 20
+       OR (scope_type = 'DEFAULT' AND (process_definition_key IS NOT NULL OR task_definition_key IS NOT NULL))
+       OR (scope_type = 'PROCESS' AND (process_definition_key IS NULL OR task_definition_key IS NOT NULL))
+       OR (scope_type = 'NODE' AND (process_definition_key IS NULL OR task_definition_key IS NULL))
+
+    UNION ALL
+    SELECT 'outbox_invalid', COUNT(*)
+    FROM wf_notification_outbox o
+    LEFT JOIN sys_user u ON u.user_id = o.recipient_user_id
+    WHERE u.user_id IS NULL OR o.idempotency_key NOT REGEXP '^[0-9a-f]{64}$'
+       OR o.channel NOT IN ('INBOX', 'EMAIL')
+       OR o.status NOT IN ('PENDING', 'RETRYING', 'DELIVERING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED')
+       OR o.attempt_count > o.max_attempts
+       OR o.delivery_cycle < 1
+       OR o.total_attempt_count < o.attempt_count
+       OR (o.status = 'DELIVERING' AND (o.lease_owner IS NULL OR o.lease_expires_at IS NULL))
+       OR (o.status <> 'DELIVERING' AND (o.lease_owner IS NOT NULL OR o.lease_expires_at IS NOT NULL))
+
+    UNION ALL
+    SELECT 'inbox_invalid', COUNT(*)
+    FROM wf_notification_inbox i
+    LEFT JOIN wf_notification_outbox o ON o.outbox_id = i.outbox_id
+    WHERE o.outbox_id IS NULL OR o.channel <> 'INBOX' OR o.recipient_user_id <> i.recipient_user_id
+       OR i.read_status NOT IN ('UNREAD', 'READ')
+       OR (i.read_status = 'UNREAD' AND i.read_time IS NOT NULL)
+       OR (i.read_status = 'READ' AND i.read_time IS NULL)
+
+    UNION ALL
+    SELECT 'delivery_sequence_invalid', COUNT(*)
+    FROM wf_notification_delivery_audit a
+    LEFT JOIN wf_notification_outbox o ON o.outbox_id = a.outbox_id
+    WHERE o.outbox_id IS NULL
+       OR a.delivery_cycle < 1
+       OR a.total_attempt_no < a.attempt_no
+       OR a.delivery_cycle > o.delivery_cycle
+       OR a.total_attempt_no > o.total_attempt_count
+       OR (a.delivery_cycle = o.delivery_cycle AND a.attempt_no > o.attempt_count)
+)
+SELECT 'workflow_notification_integrity' AS check_name,
+       CASE WHEN SUM(issue_count) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+       CONCAT('issues=', SUM(issue_count), ', detail=', COALESCE(GROUP_CONCAT(
+           CASE WHEN issue_count > 0 THEN CONCAT(issue_name, ':', issue_count) END
+           ORDER BY issue_name SEPARATOR ','), 'none')) AS detail
+FROM notification_issues;
 
 SELECT
     'workflow_sla_tables' AS check_name,

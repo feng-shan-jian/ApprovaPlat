@@ -84,6 +84,19 @@ export function validateModelBpmn(bpmnXml) {
 }
 
 /**
+ * 查询当前设计者有权引用的已发布子流程版本及正式变量字段目录。
+ * @param {string} keyword 可选流程名称或 key 检索词。
+ * @returns {Promise<object>} data 为服务端权限过滤后的目录项。
+ */
+export function listCallActivityOptions(keyword = '') {
+  return request({
+    url: '/workflow/call-activity/catalog',
+    method: 'get',
+    params: keyword ? { keyword } : undefined
+  })
+}
+
+/**
  * 将指定历史模型复制为新的最高版本。
  * @param {string} modelId 待提升的历史模型主键。
  * @returns {Promise<object>} data.modelId 为新版本主键的响应。

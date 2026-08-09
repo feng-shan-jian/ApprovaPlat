@@ -4,7 +4,7 @@
     <resultMap id="CalendarDayResult" type="com.ruoyi.flowable.domain.WfBusinessCalendar$CalendarDay">
         <constructor>
             <arg column="calendar_date" javaType="java.time.LocalDate"/>
-            <arg column="working_day" javaType="boolean"/>
+            <arg column="working_day" javaType="_boolean"/>
             <arg column="day_name" javaType="java.lang.String"/>
         </constructor>
     </resultMap>
@@ -167,6 +167,14 @@
         where deployment_id = #{deploymentId} and process_key = #{processKey}
           and task_definition_key = #{taskDefinitionKey}
     </select>
+
+    <select id="countDeploymentSnapshotsByDeploymentId" resultType="int">
+        select count(*) from wf_deploy_task_sla where deployment_id = #{deploymentId}
+    </select>
+
+    <delete id="deleteDeploymentSnapshotsByDeploymentId">
+        delete from wf_deploy_task_sla where deployment_id = #{deploymentId}
+    </delete>
 
     <insert id="insertExecution" useGeneratedKeys="true" keyProperty="slaExecutionId">
         insert ignore into wf_task_sla_execution

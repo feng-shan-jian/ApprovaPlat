@@ -15,26 +15,12 @@ import com.ruoyi.flowable.domain.WfForm;
  */
 class WorkflowControllerPermissionContractTest
 {
-    /** 工作流公开 HTTP Controller 固定白名单。 */
-    private static final List<Class<?>> WORKFLOW_CONTROLLERS = List.of(
-            WfAttachmentController.class,
-            WfCategoryController.class,
-            WfDeployController.class,
-            WfDesignerController.class,
-            WfConnectorController.class,
-            WfDmnController.class,
-            WfBpmnEventController.class,
-            WfExtensionController.class,
-            WfSqlDataSourceController.class,
-            WfFormController.class,
-            WfIdentityController.class,
-            WfInstanceController.class,
-            WfModelController.class,
-            WfProcessController.class,
-            WfTaskController.class);
+    /** 复用五角色矩阵的正式 Controller 清单，避免权限入口在两套白名单间漂移。 */
+    private static final List<Class<?>> WORKFLOW_CONTROLLERS =
+            WorkflowRbacMatrix.CONTROLLERS;
 
     /** 当前生产工作流显式方法级 mapping 数量。 */
-    private static final int EXPECTED_MAPPING_COUNT = 106;
+    private static final int EXPECTED_MAPPING_COUNT = 145;
 
     /**
      * 冻结全部工作流 HTTP 入口数量，并保证每个入口均经过方法级 URL 权限门禁。
@@ -157,6 +143,9 @@ class WorkflowControllerPermissionContractTest
         assertPreAuthorize(WfFormController.class, "getInfo",
                 "@ss.hasAnyPermi('workflow:form:query,workflow:form:edit')",
                 Long.class);
+        assertPreAuthorize(WfIdentityController.class, "resolveOptions",
+                "@ss.hasPermi('workflow:model:designer')",
+                com.ruoyi.flowable.domain.dto.WorkflowIdentitySelectionRequest.class);
     }
 
     /**

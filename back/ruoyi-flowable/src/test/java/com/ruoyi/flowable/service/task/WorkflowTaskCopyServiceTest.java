@@ -29,6 +29,7 @@ import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WorkflowRuntimeTaskMapper;
 import com.ruoyi.system.mapper.SysUserMapper;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 class WorkflowTaskCopyServiceTest
 {
@@ -43,6 +44,8 @@ class WorkflowTaskCopyServiceTest
     private RuntimeService runtimeService;
 
     private SysUserMapper sysUserMapper;
+
+    private WorkflowNotificationService notificationService;
 
     private WorkflowTaskCopyService copyService;
 
@@ -60,8 +63,10 @@ class WorkflowTaskCopyServiceTest
         repositoryService = mock(RepositoryService.class);
         runtimeService = mock(RuntimeService.class);
         sysUserMapper = mock(SysUserMapper.class);
+        notificationService = mock(WorkflowNotificationService.class);
         copyService = new WorkflowTaskCopyService(userSelectionValidator, copyMapper,
                 runtimeTaskMapper, repositoryService, runtimeService, sysUserMapper);
+        copyService.setNotificationService(notificationService);
     }
 
     /**
@@ -152,6 +157,23 @@ class WorkflowTaskCopyServiceTest
         copyService.persist(plan);
 
         verify(copyMapper).insertBatch(plan.copies());
+        verify(notificationService).onCopiesCreated(plan.copies());
+    }
+
+    /**
+     * 验证 COPY_CREATED 登记失败会原样抛回外层事务，禁止只保留 wf_copy 半状态。
+     * @return void，通知失败被吞掉时测试失败
+     */
+    @Test
+    void propagatesCopyNotificationFailureForTransactionRollback()
+    {
+        WorkflowTaskCopyService.CopyPlan plan = new WorkflowTaskCopyService.CopyPlan(
+                List.of(new WfCopy()));
+        when(copyMapper.insertBatch(plan.copies())).thenReturn(1);
+        ServiceException failure = new ServiceException("通知登记失败", HttpStatus.ERROR);
+        when(notificationService.onCopiesCreated(plan.copies())).thenThrow(failure);
+
+        assertThatThrownBy(() -> copyService.persist(plan)).isSameAs(failure);
     }
 
     /**

@@ -9,6 +9,7 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.entity.SysUser;
@@ -19,6 +20,7 @@ import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WorkflowRuntimeTaskMapper;
 import com.ruoyi.system.mapper.SysUserMapper;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 为任务写动作准备并持久化抄送记录，确保身份校验、引擎动作和业务表写入共享事务。
@@ -44,6 +46,9 @@ public class WorkflowTaskCopyService
 
     private final SysUserMapper sysUserMapper;
 
+    /** 抄送创建通知服务；生产容器注入，旧直接构造单元测试可为空。 */
+    private WorkflowNotificationService notificationService;
+
     /**
      * 创建任务抄送服务。
      *
@@ -66,6 +71,17 @@ public class WorkflowTaskCopyService
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.sysUserMapper = sysUserMapper;
+    }
+
+    /**
+     * 注入抄送事实通知服务，使 wf_copy 和 COPY_CREATED outbox 在同一事务内提交。
+     * @param notificationService WorkflowNotificationService，正式通知 outbox 服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setNotificationService(WorkflowNotificationService notificationService)
+    {
+        this.notificationService = notificationService;
     }
 
     /**
@@ -128,7 +144,11 @@ public class WorkflowTaskCopyService
         String categoryId = truncate(defaultText(processDefinition.getCategory()),
                 MAX_ID_TEXT_LENGTH);
         String deploymentId = requireRelationId(processDefinition.getDeploymentId());
-        String copyEventId = action.name() + ":" + taskId + ":r" + taskRevision;
+        // 完成动作与节点完成自动规则共享业务事件键，同一接收人只保留一条正式记录。
+        boolean lifecycleIdempotent = action == WorkflowTaskCopyAction.COMPLETE;
+        String copyEventId = lifecycleIdempotent
+                ? "TASK_COMPLETED:" + taskId
+                : action.name() + ":" + taskId + ":r" + taskRevision;
 
         List<WfCopy> copies = new ArrayList<>(recipientIds.size());
         for (String recipientId : recipientIds)
@@ -145,12 +165,17 @@ public class WorkflowTaskCopyService
             copy.setUserId(Long.valueOf(recipientId));
             copy.setOriginatorId(originatorId);
             copy.setOriginatorName(originatorName);
+            copy.setSourceType("MANUAL");
+            copy.setTriggerType("MANUAL_" + action.name());
+            copy.setTriggerNodeId(truncate(defaultText(task.getTaskDefinitionKey()),
+                    MAX_ID_TEXT_LENGTH));
+            copy.setTriggerNodeName(taskName);
             // create_by 使用事务内可信用户主键，禁止客户端伪造账号审计字段。
             copy.setCreateBy(actorUserId);
             copy.setRemark("任务动作:" + action.name());
             copies.add(copy);
         }
-        return new CopyPlan(copies);
+        return new CopyPlan(copies, lifecycleIdempotent);
     }
 
     /**
@@ -169,10 +194,18 @@ public class WorkflowTaskCopyService
         {
             return;
         }
-        int insertedRows = copyMapper.insertBatch(plan.copies());
-        if (insertedRows != plan.copies().size())
+        int insertedRows = plan.idempotent()
+                ? copyMapper.insertBatchIdempotent(plan.copies())
+                : copyMapper.insertBatch(plan.copies());
+        if ((!plan.idempotent() && insertedRows != plan.copies().size())
+                || (plan.idempotent() && insertedRows < 0))
         {
             throw dataError();
+        }
+        if (notificationService != null)
+        {
+            // 仅在正式 wf_copy 写入成功后消费真实主键；通知失败会抛出并回滚任务动作和抄送事实。
+            notificationService.onCopiesCreated(plan.copies());
         }
     }
 
@@ -303,7 +336,7 @@ public class WorkflowTaskCopyService
      *
      * @param copies List&lt;WfCopy&gt;，同一动作事件下按接收用户生成的抄送记录
      */
-    public record CopyPlan(List<WfCopy> copies)
+    public record CopyPlan(List<WfCopy> copies, boolean idempotent)
     {
         /**
          * 创建抄送计划并复制记录集合，防止动作执行期间增删接收记录。
@@ -321,13 +354,22 @@ public class WorkflowTaskCopyService
         }
 
         /**
+         * 保留既有测试和内部调用的一参数构造语义，默认使用严格插入。
+         * @param copies List&lt;WfCopy&gt;，待写入抄送记录
+         */
+        public CopyPlan(List<WfCopy> copies)
+        {
+            this(copies, false);
+        }
+
+        /**
          * 创建无需写库的空抄送计划。
          *
          * @return CopyPlan，不包含抄送记录的不可变计划
          */
         public static CopyPlan empty()
         {
-            return new CopyPlan(List.of());
+            return new CopyPlan(List.of(), false);
         }
     }
 }

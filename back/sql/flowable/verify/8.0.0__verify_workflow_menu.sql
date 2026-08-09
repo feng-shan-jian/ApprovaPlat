@@ -10,11 +10,11 @@ WITH workflow_menu AS (
 SELECT
     'workflow_menu_count' AS check_name,
     CASE
-        WHEN COUNT(*) = 87
+        WHEN COUNT(*) = 99
          AND COUNT(DISTINCT CASE
                  WHEN menu_type = 'M' THEN CONCAT('path:', path)
                  ELSE CONCAT('perms:', perms)
-             END) = 87
+             END) = 99
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -54,12 +54,13 @@ SELECT
                 ON workflow_directory_root.menu_id = extension_directory.parent_id
               WHERE extension_directory.path = 'extensions'
                 AND workflow_directory_root.path = 'workflow') = 1
-         AND (SELECT COUNT(*) FROM workflow_page) = 19
-         AND (SELECT COUNT(*) FROM workflow_button) = 65
+         AND (SELECT COUNT(*) FROM workflow_page) = 21
+         AND (SELECT COUNT(*) FROM workflow_button) = 75
          AND (SELECT COUNT(*) FROM workflow_page
               WHERE parent_path = 'workflow'
                 AND perms IN ('workflow:category:list', 'workflow:form:list',
-                              'workflow:model:list', 'workflow:deploy:list')) = 4
+                              'workflow:model:list', 'workflow:deploy:list',
+                              'workflow:notification:policyList')) = 5
          AND (SELECT COUNT(*) FROM workflow_page
               WHERE parent_path = 'extensions'
                 AND perms IN (
@@ -68,8 +69,8 @@ SELECT
                     'workflow:dmn:list', 'workflow:runtimeEvent:list',
                     'workflow:collaboration:list', 'workflow:bpmnEvent:list',
                     'workflow:process:manageList'
-                )) = 9
-         AND (SELECT COUNT(*) FROM workflow_page WHERE parent_path = 'office') = 6
+                 )) = 9
+         AND (SELECT COUNT(*) FROM workflow_page WHERE parent_path = 'office') = 7
          AND (SELECT COUNT(*) FROM workflow_page
               WHERE component IS NULL OR component = '' OR route_name = '') = 0
         THEN 'PASS'
@@ -143,21 +144,49 @@ actual_role AS (
       AND status = '0'
       AND del_flag = '0'
     GROUP BY role_key
+),
+workflow_menu AS (
+    SELECT menu_id
+    FROM sys_menu
+    WHERE (menu_type = 'M' AND path IN ('workflow', 'office', 'extensions'))
+       OR perms LIKE 'workflow:%'
+),
+role_assignment AS (
+    SELECT role_info.role_key, COUNT(DISTINCT menu.menu_id) AS assignment_count
+    FROM sys_role role_info
+    JOIN sys_role_menu role_menu ON role_menu.role_id = role_info.role_id
+    JOIN workflow_menu menu ON menu.menu_id = role_menu.menu_id
+    WHERE role_info.role_key IN (SELECT role_key FROM expected_role)
+      AND role_info.status = '0'
+      AND role_info.del_flag = '0'
+    GROUP BY role_info.role_key
 )
 SELECT
     'workflow_roles' AS check_name,
     CASE
         WHEN COUNT(actual.role_key) = 5
          AND SUM(actual.role_count = 1) = 5
+         AND SUM(CASE expected.role_key
+                 WHEN 'workflow_admin' THEN COALESCE(assignment.assignment_count, 0) = 99
+                 WHEN 'workflow_designer' THEN COALESCE(assignment.assignment_count, 0) = 48
+                 WHEN 'workflow_starter' THEN COALESCE(assignment.assignment_count, 0) = 21
+                 WHEN 'workflow_approver' THEN COALESCE(assignment.assignment_count, 0) = 18
+                 WHEN 'workflow_auditor' THEN COALESCE(assignment.assignment_count, 0) = 25
+                 ELSE 0
+             END) = 5
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
     CONCAT(
         'active_roles=', COUNT(actual.role_key),
-        ', duplicate_roles=', COALESCE(SUM(actual.role_count > 1), 0)
+        ', duplicate_roles=', COALESCE(SUM(actual.role_count > 1), 0),
+        ', assignments=', GROUP_CONCAT(
+            CONCAT(expected.role_key, ':', COALESCE(assignment.assignment_count, 0))
+            ORDER BY expected.role_key SEPARATOR ',')
     ) AS detail
 FROM expected_role expected
-LEFT JOIN actual_role actual ON actual.role_key = expected.role_key;
+LEFT JOIN actual_role actual ON actual.role_key = expected.role_key
+LEFT JOIN role_assignment assignment ON assignment.role_key = expected.role_key;
 
 WITH workflow_menu AS (
     SELECT menu_id
@@ -173,15 +202,59 @@ workflow_admin AS (
 SELECT
     'workflow_admin_menu_scope' AS check_name,
     CASE
-        WHEN (SELECT COUNT(*) FROM workflow_menu) = 87
-         AND COUNT(*) = 87
+        WHEN (SELECT COUNT(*) FROM workflow_menu) = 99
+         AND COUNT(*) = 99
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
-    CONCAT('assigned=', COUNT(*), ', expected=87') AS detail
+    CONCAT('assigned=', COUNT(*), ', expected=99') AS detail
 FROM sys_role_menu role_menu
 JOIN workflow_admin role_info ON role_info.role_id = role_menu.role_id
 JOIN workflow_menu menu_info ON menu_info.menu_id = role_menu.menu_id;
+
+WITH draft_permissions AS (
+    SELECT perms
+    FROM sys_menu
+    WHERE perms IN (
+        'workflow:process:draftList', 'workflow:process:draftQuery',
+        'workflow:process:draftSave', 'workflow:process:draftRemove',
+        'workflow:process:draftSubmit'
+    )
+),
+starter_assignment AS (
+    SELECT DISTINCT menu.perms
+    FROM sys_role role_info
+    JOIN sys_role_menu role_menu ON role_menu.role_id = role_info.role_id
+    JOIN sys_menu menu ON menu.menu_id = role_menu.menu_id
+    WHERE role_info.role_key = 'workflow_starter'
+      AND role_info.status = '0'
+      AND role_info.del_flag = '0'
+      AND menu.perms IN (SELECT perms FROM draft_permissions)
+),
+unauthorized_assignment AS (
+    SELECT role_info.role_key, menu.perms
+    FROM sys_role role_info
+    JOIN sys_role_menu role_menu ON role_menu.role_id = role_info.role_id
+    JOIN sys_menu menu ON menu.menu_id = role_menu.menu_id
+    WHERE role_info.role_key IN ('workflow_designer', 'workflow_approver', 'workflow_auditor')
+      AND role_info.status = '0'
+      AND role_info.del_flag = '0'
+      AND menu.perms IN (SELECT perms FROM draft_permissions)
+)
+SELECT
+    'workflow_draft_role_scope' AS check_name,
+    CASE
+        WHEN (SELECT COUNT(*) FROM draft_permissions) = 5
+         AND (SELECT COUNT(*) FROM starter_assignment) = 5
+         AND (SELECT COUNT(*) FROM unauthorized_assignment) = 0
+        THEN 'PASS'
+        ELSE 'FAIL'
+    END AS result,
+    CONCAT(
+        'permissions=', (SELECT COUNT(*) FROM draft_permissions),
+        ', starter=', (SELECT COUNT(*) FROM starter_assignment),
+        ', unauthorized=', (SELECT COUNT(*) FROM unauthorized_assignment)
+    ) AS detail;
 
 WITH restricted_role AS (
     SELECT role_id, role_key
@@ -253,6 +326,8 @@ WITH audit_write_permissions AS (
           'workflow:collaboration:retry', 'workflow:collaboration:cancel',
           'workflow:deploy:remove', 'workflow:deploy:state',
           'workflow:process:start', 'workflow:process:remove',
+          'workflow:process:draftSave', 'workflow:process:draftRemove',
+          'workflow:process:draftSubmit',
           'workflow:process:cancel', 'workflow:process:approval',
           'workflow:process:claim', 'workflow:process:revoke',
           'workflow:process:state', 'workflow:process:terminate',

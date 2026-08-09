@@ -28,6 +28,9 @@
 
 - 七种模式分别调用 `/workflow/process/list`、`ownList`、`manageList`、`todoList`、`claimList`、`finishedList` 和 `copyList`。
 - 抄送模式的 `originatorName` 表示流程发起人名称快照，与 `wf_copy.originator_name`、列表 DTO 和导出列保持一致；抄送接收人由当前登录用户确定，不在列表中误标为抄送操作人。
+- 抄送列表支持按服务端 `readStatus` 筛选未读/已读，并展示手工、自动或合并来源、触发类型、触发节点快照、首次阅读时间。
+- 打开抄送详情前必须先调用 `PUT /workflow/process/copy/{copyId}/read`；接口完成当前接收人对象授权和首次阅读原子更新后才跳转，不使用本地访问状态，也不乐观修改列表行。
+- 抄送详情只传流程实例主键，不传活动 `taskId`，避免把抄送接收人的实例级只读权限扩大为任务表单权限；待办、待签和已办等任务模式仍按服务端行数据传递 `taskId`。
 - 日期范围转换为各 DTO 的 `started*`、`created*` 或 `completed*` 字段，不向后端提交页面临时字段。
 - `manage` 仅由 `workflow:process:manageList` 权限进入，可按实例、发起人和业务条件查询跨用户实例；活动实例开放挂起、激活和终止，已结束实例开放受引用检查保护的历史删除。
 - 发起和详情只传定义、部署、实例及可选任务主键，后端继续做对象关系和权限复核。

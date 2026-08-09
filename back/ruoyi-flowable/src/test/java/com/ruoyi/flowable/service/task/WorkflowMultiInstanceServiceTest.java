@@ -280,7 +280,7 @@ class WorkflowMultiInstanceServiceTest
     }
 
     /**
-     * 验证普通任务和既有静态多实例保持旧完成契约：revision 为空可通过，非空返回 400。
+     * 验证普通任务和既有非受控静态多实例保持旧完成契约：revision 为空可通过，非空返回 400。
      *
      * @return 无返回值；兼容任务被错误纳入动态 CAS 或接受客户端 revision 时测试失败
      */
@@ -301,14 +301,35 @@ class WorkflowMultiInstanceServiceTest
         assertCompletionRevisionError(() -> service.reserveCompletionRevision(
                 staticTask, 0L, actor), HttpStatus.BAD_REQUEST);
 
-        Task fixedTask = taskForModel(fixedMultiInstanceModel());
-        WorkflowMultiInstanceService.CompletionRevision fixedRevision =
-                service.reserveCompletionRevision(fixedTask, null, actor);
-        assertThat(fixedRevision.applied()).isFalse();
-        assertCompletionRevisionError(() -> service.reserveCompletionRevision(
-                fixedTask, 0L, actor), HttpStatus.BAD_REQUEST);
-
         verifyNoWriteSideEffects();
+    }
+
+    /**
+     * 验证固定和发起时来源进入节点后统一参加成员 revision 与完成 CAS，不能被降级为普通静态任务。
+     *
+     * @return 无返回值；任一受控来源未加载正式成员状态或未原子推进 revision 时测试失败
+     */
+    @Test
+    void appliesCompletionRevisionToFixedAndStartSources()
+    {
+        EngineFixture fixedFixture = new EngineFixture(List.of("8", "9"),
+                List.of("8", "9"), "8", 4, 0);
+        fixedFixture.useModel(fixedMultiInstanceModel());
+        WorkflowMultiInstanceService.CompletionRevision fixedRevision =
+                service.reserveCompletionRevision(fixedFixture.task("8"), 4L, actor);
+        assertThat(fixedRevision.applied()).isTrue();
+        assertThat(fixedRevision.beforeRevision()).isEqualTo(4);
+        assertThat(fixedRevision.afterRevision()).isEqualTo(5);
+
+        setUp();
+        EngineFixture startFixture = new EngineFixture(List.of("8", "9"),
+                List.of("8", "9"), "8", 2, 0);
+        startFixture.useModel(startMultiInstanceModel());
+        WorkflowMultiInstanceService.CompletionRevision startRevision =
+                service.reserveCompletionRevision(startFixture.task("8"), 2L, actor);
+        assertThat(startRevision.applied()).isTrue();
+        assertThat(startRevision.beforeRevision()).isEqualTo(2);
+        assertThat(startRevision.afterRevision()).isEqualTo(3);
     }
 
     /**
@@ -693,6 +714,22 @@ class WorkflowMultiInstanceServiceTest
     private BpmnModel fixedMultiInstanceModel()
     {
         return modelWithLoop(fixedMultiInstanceLoop());
+    }
+
+    /**
+     * 创建发起时成员受控多实例模型，验证发起页名单进入节点后沿用统一运行状态机。
+     *
+     * @return BpmnModel，成员来自发起请求专用字段的并行会签模型
+     */
+    private BpmnModel startMultiInstanceModel()
+    {
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setSequential(false);
+        loop.setInputDataItem(WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION);
+        loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        loop.setCompletionCondition(
+                WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION);
+        return modelWithLoop(loop);
     }
 
     /**
@@ -1123,6 +1160,17 @@ class WorkflowMultiInstanceServiceTest
         Task task(String assignee)
         {
             return tasksByAssignee.computeIfAbsent(assignee, this::newTask);
+        }
+
+        /**
+         * 把当前夹具切换到指定受控成员来源模型，其他执行树和正式变量快照保持不变。
+         *
+         * @param model BpmnModel，固定、发起时或办理时来源的完整受控多实例模型
+         * @return 无返回值；后续服务查询读取该部署模型
+         */
+        void useModel(BpmnModel model)
+        {
+            when(repositoryService.getBpmnModel(DEFINITION_ID)).thenReturn(model);
         }
 
         /**

@@ -226,10 +226,10 @@ async function deleteHistoryThroughUi(page, processKey, businessKey, processInst
  * @param {string} formName 页面必须展示的部署表单名称。
  * @param {string} runId 本轮测试唯一标识。
  * @param {string} scenario 场景短标识。
- * @param {string[]} processInstanceIds finally 清理使用的实例登记簿。
+ * @param {{draftFixtures: Array<object>, processInstanceIds: string[]}} resources finally 清理使用的资源登记簿。
  * @returns {Promise<{processInstanceId: string, businessKey: string}>} 正式实例主键与唯一业务主键。
  */
-async function startTrackedScenario(page, definition, formName, runId, scenario, processInstanceIds) {
+async function startTrackedScenario(page, definition, formName, runId, scenario, resources) {
   const businessKey = `BUS-${runId}-${scenario}`
   const processInstanceId = await startWorkflowThroughUi(
     page,
@@ -237,7 +237,7 @@ async function startTrackedScenario(page, definition, formName, runId, scenario,
     formName,
     businessKey,
     `实例附件验收-${scenario}-${runId}`,
-    processInstanceIds
+    resources
   )
   return { processInstanceId, businessKey }
 }
@@ -269,6 +269,7 @@ test('TEMP 附件与实例运维动作具备真实 UI、对象授权、状态门
   // 资源登记簿只记录真实持久化主键；TEMP 删除后仍保留 ID 供 finally 幂等重试。
   const resources = {
     attachmentIds: [],
+    draftFixtures: [],
     processInstanceIds: [],
     deploymentIds: [],
     modelIds: [],
@@ -414,7 +415,7 @@ test('TEMP 附件与实例运维动作具备真实 UI、对象授权、状态门
 
     // 场景一：无附件实例通过管理员页面挂起，挂起期间真实完成请求必须 409 且全状态零副作用。
     const stateScenario = await startTrackedScenario(
-      pages.starter, definition, formName, runId, 'state', resources.processInstanceIds)
+      pages.starter, definition, formName, runId, 'state', resources)
     const stateTask = await findAssignedWorkflowTask(
       pages.approver, processKey, 'reviewA', stateScenario.processInstanceId)
     await toggleInstanceStateThroughUi(
@@ -460,7 +461,7 @@ test('TEMP 附件与实例运维动作具备真实 UI、对象授权、状态门
 
     // 场景二：发起人从我的流程页面填写原因并取消自己的无附件实例。
     const canceledScenario = await startTrackedScenario(
-      pages.starter, definition, formName, runId, 'cancel', resources.processInstanceIds)
+      pages.starter, definition, formName, runId, 'cancel', resources)
     await submitInstanceActionThroughUi(pages.starter, {
       route: '/office/own',
       listEndpoint: '/workflow/process/ownList',
@@ -483,7 +484,7 @@ test('TEMP 附件与实例运维动作具备真实 UI、对象授权、状态门
 
     // 场景三：管理员从实例运维页面填写原因并终止另一个无附件实例。
     const terminatedScenario = await startTrackedScenario(
-      pages.starter, definition, formName, runId, 'terminate', resources.processInstanceIds)
+      pages.starter, definition, formName, runId, 'terminate', resources)
     await submitInstanceActionThroughUi(pages.admin, {
       route: MANAGE_ROUTE,
       listEndpoint: MANAGE_LIST_ENDPOINT,

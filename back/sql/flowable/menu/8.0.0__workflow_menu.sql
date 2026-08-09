@@ -46,7 +46,7 @@ CREATE TEMPORARY TABLE tmp_workflow_menu_seed
     PRIMARY KEY (seed_key)
 ) ENGINE = InnoDB;
 
--- 三个目录、十九个菜单页和六十五个真实按钮权限，共八十七条目标记录。
+-- 三个目录、二十一个菜单页和七十五个真实按钮权限，共九十九条目标记录。
 INSERT INTO tmp_workflow_menu_seed
     (seed_key, parent_key, menu_name, order_num, path, component, route_name,
      menu_type, perms, icon, remark)
@@ -97,22 +97,28 @@ VALUES
     ('workflow:process:manageList', 'extensions', '实例运维', 9, 'instance',
      'workflow/work/manage', 'WorkflowManage', 'C', 'workflow:process:manageList',
      'list', '流程管理员跨用户实例运维菜单'),
+    ('workflow:notification:policyList', 'workflow', '审批通知', 14, 'notification',
+     'workflow/notification/index', 'WorkflowNotification', 'C', 'workflow:notification:policyList',
+     'message', '普通审批通知策略、可靠 outbox、死信和补偿管理菜单'),
     ('workflow:process:startList', 'office', '新建流程', 1, 'create',
      'workflow/work/index', 'WorkflowCreate', 'C', 'workflow:process:startList',
      'guide', '当前用户可发起流程菜单'),
-    ('workflow:process:ownList', 'office', '我的流程', 2, 'own',
+    ('workflow:process:draftList', 'office', '申请草稿', 2, 'draft',
+     'workflow/work/draft', 'WorkflowDraft', 'C', 'workflow:process:draftList',
+     'edit', '当前用户申请草稿菜单'),
+    ('workflow:process:ownList', 'office', '我的流程', 3, 'own',
      'workflow/work/own', 'WorkflowOwn', 'C', 'workflow:process:ownList',
      'cascader', '当前用户发起流程菜单'),
-    ('workflow:process:todoList', 'office', '待办任务', 3, 'todo',
+    ('workflow:process:todoList', 'office', '待办任务', 4, 'todo',
      'workflow/work/todo', 'WorkflowTodo', 'C', 'workflow:process:todoList',
      'time-range', '当前用户待办任务菜单'),
-    ('workflow:process:claimList', 'office', '待签任务', 4, 'claim',
+    ('workflow:process:claimList', 'office', '待签任务', 5, 'claim',
      'workflow/work/claim', 'WorkflowClaim', 'C', 'workflow:process:claimList',
      'checkbox', '当前用户待签任务菜单'),
-    ('workflow:process:finishedList', 'office', '已办任务', 5, 'finished',
+    ('workflow:process:finishedList', 'office', '已办任务', 6, 'finished',
      'workflow/work/finished', 'WorkflowFinished', 'C', 'workflow:process:finishedList',
      'checkbox', '当前用户已办任务菜单'),
-    ('workflow:process:copyList', 'office', '抄送我的', 6, 'copy',
+    ('workflow:process:copyList', 'office', '抄送我的', 7, 'copy',
      'workflow/work/copy', 'WorkflowCopy', 'C', 'workflow:process:copyList',
      'message', '当前用户抄送记录菜单'),
 
@@ -217,6 +223,19 @@ VALUES
     ('workflow:sla:notification', 'workflow:bpmnEvent:list', 'SLA 通知查询', 9, '', NULL, '',
      'F', 'workflow:sla:notification', '#', '查询并处理当前用户审批 SLA 通知'),
 
+    ('workflow:notification:manage', 'workflow:notification:policyList', '通知策略维护', 1, '', NULL, '',
+     'F', 'workflow:notification:manage', '#', '维护流程和节点普通审批通知策略'),
+    ('workflow:notification:audit', 'workflow:notification:policyList', '通知投递审计', 2, '', NULL, '',
+     'F', 'workflow:notification:audit', '#', '查询脱敏普通审批通知 outbox 状态'),
+    ('workflow:notification:retry', 'workflow:notification:policyList', '通知死信补偿', 3, '', NULL, '',
+     'F', 'workflow:notification:retry', '#', '重新开启普通审批通知死信的有界投递'),
+    ('workflow:notification:urge:any', 'workflow:notification:policyList', '跨实例催办', 4, '', NULL, '',
+     'F', 'workflow:notification:urge:any', '#', '允许管理员催办任意有权管理的运行流程'),
+    ('workflow:notification:list', 'workflow:process:ownList', '审批通知查询', 20, '', NULL, '',
+     'F', 'workflow:notification:list', '#', '查询当前用户普通审批通知和偏好'),
+    ('workflow:notification:urge', 'workflow:process:ownList', '人工催办', 21, '', NULL, '',
+     'F', 'workflow:notification:urge', '#', '由发起人或管理员催办真实活动待办'),
+
     ('workflow:deploy:query', 'workflow:deploy:list', '部署查询', 1, '', NULL, '',
      'F', 'workflow:deploy:query', '#', '查询部署版本和 BPMN'),
     ('workflow:deploy:remove', 'workflow:deploy:list', '部署删除', 2, '', NULL, '',
@@ -237,6 +256,14 @@ VALUES
      'F', 'workflow:attachment:query', '#', '按附件或流程对象授权查询和下载附件'),
     ('workflow:attachment:remove', 'workflow:process:startList', '附件删除', 5, '', NULL, '',
      'F', 'workflow:attachment:remove', '#', '仅所有者删除未绑定临时附件'),
+    ('workflow:process:draftQuery', 'workflow:process:draftList', '草稿详情', 1, '', NULL, '',
+     'F', 'workflow:process:draftQuery', '#', '仅草稿所有者读取申请草稿和冻结表单快照'),
+    ('workflow:process:draftSave', 'workflow:process:draftList', '保存草稿', 2, '', NULL, '',
+     'F', 'workflow:process:draftSave', '#', '按乐观锁创建或更新当前用户申请草稿'),
+    ('workflow:process:draftRemove', 'workflow:process:draftList', '删除草稿', 3, '', NULL, '',
+     'F', 'workflow:process:draftRemove', '#', '仅草稿所有者删除未提交申请草稿'),
+    ('workflow:process:draftSubmit', 'workflow:process:draftList', '提交草稿', 4, '', NULL, '',
+     'F', 'workflow:process:draftSubmit', '#', '重新校验定义、身份、表单和附件后正式发起流程'),
     ('workflow:process:query', 'workflow:process:ownList', '流程详情', 1, '', NULL, '',
      'F', 'workflow:process:query', '#', '叠加对象授权的流程详情、变量和流程图'),
     ('workflow:process:remove', 'workflow:process:ownList', '流程删除', 2, '', NULL, '',
@@ -495,7 +522,9 @@ WHERE seed_key IN (
     'workflow:bpmnEvent:list', 'workflow:bpmnEvent:add', 'workflow:bpmnEvent:edit',
     'workflow:bpmnEvent:audit', 'workflow:bpmnEvent:notification',
     'workflow:sla:list', 'workflow:sla:add', 'workflow:sla:edit',
-    'workflow:sla:audit', 'workflow:sla:notification'
+    'workflow:sla:audit', 'workflow:sla:notification',
+    'workflow:notification:policyList', 'workflow:notification:manage',
+    'workflow:notification:audit'
 );
 
 -- 发起人只发起、查看、取消和导出自己的实例，不获得历史物理删除权限。
@@ -503,13 +532,17 @@ INSERT INTO tmp_workflow_role_menu_seed (role_key, seed_key)
 SELECT 'workflow_starter', seed_key
 FROM tmp_workflow_menu_seed
 WHERE seed_key IN (
-    'office', 'workflow:process:startList', 'workflow:process:ownList',
+    'office', 'workflow:process:startList', 'workflow:process:draftList',
+    'workflow:process:draftQuery', 'workflow:process:draftSave',
+    'workflow:process:draftRemove', 'workflow:process:draftSubmit',
+    'workflow:process:ownList',
     'workflow:process:copyList', 'workflow:process:start',
     'workflow:process:startExport', 'workflow:process:query',
     'workflow:process:cancel',
     'workflow:process:ownExport', 'workflow:process:copyExport',
     'workflow:attachment:upload', 'workflow:attachment:query',
-    'workflow:attachment:remove', 'workflow:sla:notification'
+    'workflow:attachment:remove', 'workflow:sla:notification',
+    'workflow:notification:list', 'workflow:notification:urge'
 );
 
 -- 审批人可认领、办理和撤回本人真实任务，不获得管理员终止/状态权限。
@@ -524,7 +557,8 @@ WHERE seed_key IN (
     'workflow:process:claimExport', 'workflow:process:revoke',
     'workflow:process:finishedExport', 'workflow:process:copyExport',
     'workflow:attachment:upload', 'workflow:attachment:query',
-    'workflow:attachment:remove', 'workflow:sla:notification'
+    'workflow:attachment:remove', 'workflow:sla:notification',
+    'workflow:notification:list'
 );
 
 -- 审计角色只有列表、详情和导出权限；对象授权继续限制可见实例范围。
@@ -542,7 +576,8 @@ WHERE seed_key IN (
     'workflow:process:copyList', 'workflow:process:query',
     'workflow:process:ownExport', 'workflow:process:todoExport',
     'workflow:process:claimExport', 'workflow:process:finishedExport',
-    'workflow:process:copyExport', 'workflow:attachment:query'
+    'workflow:process:copyExport', 'workflow:attachment:query',
+    'workflow:notification:list'
 );
 
 -- 仅重建五个受管角色的工作流菜单关联，保留它们已有的非工作流菜单。

@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,7 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import org.apache.ibatis.builder.xml.XMLMapperBuilder;
 import org.apache.ibatis.io.Resources;
 import org.apache.ibatis.mapping.MappedStatement;
+import org.apache.ibatis.mapping.ResultMap;
 import org.apache.ibatis.session.Configuration;
 import org.junit.jupiter.api.Test;
 import org.w3c.dom.Document;
@@ -21,6 +23,7 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
+import com.ruoyi.flowable.domain.WfBusinessCalendar;
 import com.ruoyi.flowable.domain.WfCopy;
 
 class WorkflowBusinessMapperXmlTest
@@ -32,7 +35,8 @@ class WorkflowBusinessMapperXmlTest
                     "update", "logicalDelete", "countActiveByIds"),
             "WfDeployFormMapper", List.of("insertBatch", "selectByDeploymentId",
                     "countByFormIds", "deleteByDeploymentId"),
-            "WfCopyMapper", List.of("selectById", "insertBatch", "selectListByUserId",
+            "WfCopyMapper", List.of("selectById", "selectByIdAndUserId", "insertBatch",
+                    "insertBatchIdempotent", "markRead", "selectListByUserId",
                     "countListByUserId", "selectPageByUserId", "logicalDelete",
                     "countActiveByInstanceAndUser", "countActiveByInstanceIds",
                     "logicalDeleteByInstanceIds"));
@@ -56,6 +60,88 @@ class WorkflowBusinessMapperXmlTest
                         .isTrue();
             }
         }
+    }
+
+    /**
+     * 验证 SLA Mapper 注册部署快照计数和物理删除语句，并仅按部署主键限定范围。
+     * @return void，删除入口缺失或可能越界删除其他部署快照时测试失败
+     * @throws Exception 读取或解析 Mapper XML 失败
+     */
+    @Test
+    void registersBoundedTaskSlaDeploymentCleanupStatements() throws Exception
+    {
+        Configuration configuration = parseMapper("WfTaskSlaMapper");
+        String namespace = "com.ruoyi.flowable.mapper.WfTaskSlaMapper.";
+        Map<String, Object> parameters = Map.of("deploymentId", "deployment-1");
+
+        for (String statementId : List.of(
+                "countDeploymentSnapshotsByDeploymentId",
+                "deleteDeploymentSnapshotsByDeploymentId"))
+        {
+            assertThat(configuration.hasStatement(namespace + statementId)).isTrue();
+            String sql = normalizeSql(configuration.getMappedStatement(namespace + statementId)
+                    .getBoundSql(parameters).getSql()).toLowerCase();
+            assertThat(sql).contains("wf_deploy_task_sla", "where deployment_id = ?")
+                    .doesNotContain("${");
+        }
+    }
+
+    /**
+     * 使用 MyBatis 实际解析结果核对日历日期覆盖的原始 boolean 构造参数。
+     *
+     * @return void，无返回值；包装类型再次导致 CalendarDay 构造失败时测试失败
+     * @throws Exception Mapper XML 无法解析或真实构造器不存在时测试失败
+     */
+    @Test
+    void mapsCalendarWorkingDayToTheRealPrimitiveBooleanConstructor() throws Exception
+    {
+        Configuration configuration = parseMapper("WfTaskSlaMapper");
+        String namespace = "com.ruoyi.flowable.mapper.WfTaskSlaMapper.";
+        ResultMap resultMap = configuration.getResultMap(namespace + "CalendarDayResult");
+        Class<?>[] constructorTypes = new Class<?>[
+                resultMap.getConstructorResultMappings().size()];
+        for (int index = 0; index < constructorTypes.length; index++)
+        {
+            constructorTypes[index] = resultMap.getConstructorResultMappings()
+                    .get(index).getJavaType();
+        }
+
+        assertThat(constructorTypes).containsExactly(
+                LocalDate.class, boolean.class, String.class);
+        assertThat(WfBusinessCalendar.CalendarDay.class.getDeclaredConstructor(
+                constructorTypes)).isNotNull();
+        assertThat(configuration.getMappedStatement(
+                namespace + "selectCalendarDays").getResultMaps())
+                .singleElement()
+                .extracting(ResultMap::getId)
+                .isEqualTo(resultMap.getId());
+    }
+
+    /**
+     * 验证申请草稿部署删除门禁以当前锁定读识别指定部署的 ACTIVE 正式草稿。
+     *
+     * @return void，查询遗漏状态或可能读取其他部署草稿时测试失败
+     * @throws Exception 读取或解析 Mapper XML 失败
+     */
+    @Test
+    void registersActiveDraftDeploymentGuardStatement() throws Exception
+    {
+        Configuration configuration = parseMapper("WfProcessDraftMapper");
+        String namespace = "com.ruoyi.flowable.mapper.WfProcessDraftMapper.";
+        Map<String, Object> parameters = Map.of("deploymentId", "deployment-1");
+
+        String lockingStatementName = namespace + "selectActiveReferenceForUpdate";
+        assertThat(configuration.hasStatement(lockingStatementName)).isTrue();
+        MappedStatement lockingStatement = configuration
+                .getMappedStatement(lockingStatementName);
+        String lockingSql = normalizeSql(lockingStatement.getBoundSql(parameters)
+                .getSql()).toLowerCase();
+        assertThat(lockingStatement.getTimeout()).isEqualTo(10);
+        assertThat(lockingSql).contains(
+                "from wf_process_draft force index (idx_wf_process_draft_deployment_status)",
+                "where deployment_id=? and draft_status='active'",
+                "limit 1 for update")
+                .doesNotContain("${", "delete ", "update ");
     }
 
     /**

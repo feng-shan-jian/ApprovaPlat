@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -40,6 +41,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.http.MediaType;
@@ -431,6 +433,55 @@ class WfProcessControllerTest
     }
 
     /**
+     * 验证当前接收人首次阅读接口返回领域服务持久化后的正式状态。
+     *
+     * @return void，无返回值；路径绑定、服务委托或阅读状态响应漂移时测试失败
+     * @throws Exception MockMvc 执行请求失败时抛出
+     */
+    @Test
+    void marksCopyReadAndReturnsPersistedState() throws Exception
+    {
+        WorkflowCopyView copy = new WorkflowCopyView(
+                19L, "请假流程-部门审批", "definition-1", "请假流程", "HR",
+                "deployment-1", "instance-1", "task-1", 7L, 3L, "发起人",
+                "AUTO", "NODE_COMPLETED", "review", "部门审批", "1",
+                Instant.parse("2026-08-08T08:00:00Z"),
+                Instant.parse("2026-08-08T07:59:00Z"));
+        when(processQueryService.markCopyRead(19L)).thenReturn(copy);
+
+        workflowJsonMockMvc().perform(put("/workflow/process/copy/19/read"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(HttpStatus.SUCCESS))
+                .andExpect(jsonPath("$.data.copyId").value(19))
+                .andExpect(jsonPath("$.data.readStatus").value("1"))
+                .andExpect(jsonPath("$.data.readTime").value("2026-08-08T08:00:00Z"))
+                .andExpect(jsonPath("$.data.sourceType").value("AUTO"))
+                .andExpect(jsonPath("$.data.triggerNodeId").value("review"));
+
+        verify(processQueryService).markCopyRead(19L);
+    }
+
+    /**
+     * 验证不存在和越权抄送主键均原样返回领域层统一 404，不在 Controller 探测对象。
+     *
+     * @return void，无返回值；任一分支泄露不同错误码或错误消息时测试失败
+     */
+    @Test
+    void preservesUnifiedNotFoundWhenMarkingCopyRead()
+    {
+        when(processQueryService.markCopyRead(19L)).thenThrow(new ServiceException(
+                "抄送记录不存在", HttpStatus.NOT_FOUND));
+        when(processQueryService.markCopyRead(20L)).thenThrow(new ServiceException(
+                "抄送记录不存在", HttpStatus.NOT_FOUND));
+
+        assertUnifiedCopyNotFound(19L);
+        assertUnifiedCopyNotFound(20L);
+
+        verify(processQueryService).markCopyRead(19L);
+        verify(processQueryService).markCopyRead(20L);
+    }
+
+    /**
      * 验证导出在同一筛选范围内逐页读取，并生成包含全部 201 条业务数据的真实 Excel。
      *
      * @return 无返回值；分页缺失、分页大小漂移或 Excel 未真实写出时测试失败
@@ -591,6 +642,13 @@ class WfProcessControllerTest
                 new Class<?>[] { WorkflowCopyQueryDto.class, int.class, int.class },
                 "/copyList", "@ss.hasPermi('workflow:process:copyList')", true);
 
+        Method markCopyRead = WfProcessController.class.getDeclaredMethod("markCopyRead",
+                Long.class);
+        assertThat(markCopyRead.getAnnotation(PutMapping.class).value())
+                .containsExactly("/copy/{copyId}/read");
+        assertThat(markCopyRead.getAnnotation(PreAuthorize.class).value())
+                .isEqualTo("@ss.hasPermi('workflow:process:copyList')");
+
         assertExportContract("startExport",
                 new Class<?>[] { WorkflowStartableProcessQueryDto.class,
                         HttpServletResponse.class },
@@ -653,7 +711,7 @@ class WfProcessControllerTest
                 "/manageExport", "/todoExport",
                 "/claimExport", "/finishedExport", "/copyExport", "/getProcessForm",
                 "/start/{processDefId}", "/instance/{instanceIds}",
-                "/bpmnXml/{processDefId}", "/detail");
+                "/bpmnXml/{processDefId}", "/detail", "/copy/{copyId}/read");
     }
 
     /**
@@ -700,6 +758,22 @@ class WfProcessControllerTest
     }
 
     /**
+     * 断言标记阅读接口对隐藏记录使用统一 404 契约。
+     *
+     * @param copyId Long，不存在或属于其他接收人的抄送记录主键
+     * @return void，无返回值；异常类型、业务码或消息不一致时测试失败
+     */
+    private void assertUnifiedCopyNotFound(Long copyId)
+    {
+        assertThatThrownBy(() -> controller.markCopyRead(copyId))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(exception.getMessage()).isEqualTo("抄送记录不存在");
+                });
+    }
+
+    /**
      * 核对单个导出方法的路径、权限、只读事务、审计日志和筛选参数绑定契约。
      *
      * @param methodName String，Controller 方法名
@@ -730,9 +804,9 @@ class WfProcessControllerTest
     }
 
     /**
-     * 收集 Controller 显式声明的 GET、POST 和 DELETE 相对路径，用于防止遗漏路由。
+     * 收集 Controller 显式声明的 GET、POST、PUT 和 DELETE 相对路径，用于防止遗漏路由。
      *
-     * @return List&lt;String&gt;，全部显式 GET/POST 相对路径
+     * @return List&lt;String&gt;，全部显式 GET/POST/PUT/DELETE 相对路径
      */
     private List<String> mappedPaths()
     {
@@ -748,6 +822,11 @@ class WfProcessControllerTest
             if (postMapping != null)
             {
                 paths.addAll(List.of(postMapping.value()));
+            }
+            PutMapping putMapping = method.getAnnotation(PutMapping.class);
+            if (putMapping != null)
+            {
+                paths.addAll(List.of(putMapping.value()));
             }
             DeleteMapping deleteMapping = method.getAnnotation(DeleteMapping.class);
             if (deleteMapping != null)

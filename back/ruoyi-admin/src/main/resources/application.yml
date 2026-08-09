@@ -40,6 +40,10 @@ management:
   endpoint:
     health:
       enabled: true
+  health:
+    # SMTP 是可选通知通道；只有部署环境已提供真实 SMTP 时才显式启用连通性健康检查。
+    mail:
+      enabled: ${APPROVAPLAT_SMTP_HEALTH_ENABLED:false}
 
 # 日志配置
 logging:
@@ -57,6 +61,18 @@ user:
 
 # Spring配置
 spring:
+  # SMTP 凭据只允许由部署环境或正式密钥注入；未配置时邮件 outbox 会进入可补偿死信。
+  mail:
+    host: ${APPROVAPLAT_SMTP_HOST:}
+    port: ${APPROVAPLAT_SMTP_PORT:587}
+    username: ${APPROVAPLAT_SMTP_USERNAME:}
+    password: ${APPROVAPLAT_SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${APPROVAPLAT_SMTP_AUTH:true}
+      mail.smtp.starttls.enable: ${APPROVAPLAT_SMTP_STARTTLS:true}
+      mail.smtp.connectiontimeout: ${APPROVAPLAT_SMTP_CONNECT_TIMEOUT:5000}
+      mail.smtp.timeout: ${APPROVAPLAT_SMTP_READ_TIMEOUT:10000}
+      mail.smtp.writetimeout: ${APPROVAPLAT_SMTP_WRITE_TIMEOUT:10000}
   # 资源信息
   messages:
     # 国际化资源文件路径
@@ -157,6 +173,15 @@ flowable:
     max-temporary-bytes: 536870912
     max-total-bytes: 53687091200
     min-free-bytes: 1073741824
+  notification:
+    worker-enabled: ${APPROVAPLAT_NOTIFICATION_WORKER_ENABLED:true}
+    batch-size: ${APPROVAPLAT_NOTIFICATION_BATCH_SIZE:50}
+    lease-duration: ${APPROVAPLAT_NOTIFICATION_LEASE_DURATION:2m}
+    max-retry-delay: ${APPROVAPLAT_NOTIFICATION_MAX_RETRY_DELAY:30m}
+    urge-interval: ${APPROVAPLAT_NOTIFICATION_URGE_INTERVAL:5m}
+    worker-delay: ${APPROVAPLAT_NOTIFICATION_WORKER_DELAY:1000}
+    # 只保存公开 From 地址；SMTP 用户名和密码位于上方 spring.mail 环境配置。
+    mail-from: ${APPROVAPLAT_NOTIFICATION_MAIL_FROM:}
 
 # OpenAPI 文档配置
 springdoc:

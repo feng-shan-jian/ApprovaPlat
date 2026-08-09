@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfDeployParticipantRuleMapper">
+    <resultMap id="RuleResult" type="com.ruoyi.flowable.domain.WfDeployParticipantRule">
+        <id property="ruleId" column="rule_id"/>
+        <result property="deployId" column="deploy_id"/>
+        <result property="processKey" column="process_key"/>
+        <result property="activityId" column="activity_id"/>
+        <result property="activityName" column="activity_name"/>
+        <result property="ruleScope" column="rule_scope"/>
+        <result property="assignmentMode" column="assignment_mode"/>
+        <result property="ruleType" column="rule_type"/>
+        <result property="targetIds" column="target_ids"/>
+        <result property="formField" column="form_field"/>
+        <result property="noMatchPolicy" column="no_match_policy"/>
+        <result property="ruleVersion" column="rule_version"/>
+        <result property="checksum" column="checksum"/>
+        <result property="createBy" column="create_by"/>
+        <result property="createTime" column="create_time"/>
+    </resultMap>
+    <sql id="Columns">rule_id, deploy_id, process_key, activity_id, activity_name,
+        rule_scope, assignment_mode, rule_type, target_ids, form_field,
+        no_match_policy, rule_version, checksum, create_by, create_time</sql>
+    <insert id="insertBatch">
+        insert into wf_deploy_participant_rule
+        (deploy_id, process_key, activity_id, activity_name, rule_scope, assignment_mode,
+         rule_type, target_ids, form_field, no_match_policy, rule_version, checksum,
+         create_by, create_time)
+        values
+        <foreach collection="snapshots" item="item" separator=",">
+            (#{item.deployId}, #{item.processKey}, #{item.activityId}, #{item.activityName},
+             #{item.ruleScope}, #{item.assignmentMode}, #{item.ruleType}, #{item.targetIds},
+             #{item.formField}, #{item.noMatchPolicy}, #{item.ruleVersion}, #{item.checksum},
+             #{item.createBy}, current_timestamp(3))
+        </foreach>
+    </insert>
+    <select id="selectStartRule" resultMap="RuleResult">
+        select <include refid="Columns"/> from wf_deploy_participant_rule
+        where deploy_id = #{deployId} and process_key = #{processKey} and rule_scope = 'START'
+    </select>
+    <select id="selectTaskRule" resultMap="RuleResult">
+        select <include refid="Columns"/> from wf_deploy_participant_rule
+        where deploy_id = #{deployId} and process_key = #{processKey}
+          and activity_id = #{activityId} and rule_scope = 'TASK'
+    </select>
+    <select id="selectByDeploymentId" resultMap="RuleResult">
+        select <include refid="Columns"/> from wf_deploy_participant_rule
+        where deploy_id = #{deployId} order by process_key, rule_scope, activity_id
+    </select>
+    <delete id="deleteByDeploymentId">
+        delete from wf_deploy_participant_rule where deploy_id = #{deployId}
+    </delete>
+</mapper>

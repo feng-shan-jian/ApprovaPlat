@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.StreamSupport;
 import tools.jackson.core.JacksonException;
@@ -74,6 +75,7 @@ import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
         "flowable.database-schema-update=false",
         "flowable.async-executor-activate=false",
         "flowable.async-history-executor-activate=false",
+        "flowable.notification.worker-enabled=false",
         "spring.quartz.auto-startup=false",
         "spring.task.scheduling.enabled=false",
         "ruoyi.profile=target/workflow-rbac/profile",
@@ -108,9 +110,47 @@ class WorkflowRbacHttpIT
     /** 拒绝探针使用的无效字符串主键，不与正式 fixture 产生对象关系。 */
     private static final String STRING_ID = "rbac-denied-probe";
 
+    /** 拒绝探针使用的 Long 最大正数主键，可通过 Web 类型校验且不属于正式自增数据。 */
+    private static final String NUMERIC_ID = String.valueOf(Long.MAX_VALUE);
+
     /** 拒绝探针使用的规范附件 UUID，仅用于通过 Web 参数绑定。 */
     private static final String ATTACHMENT_ID =
             "00000000-0000-4000-8000-000000000000";
+
+    /** Spring mapping 路径变量识别规则；未知变量必须 fail-closed，禁止交给 URI.create。 */
+    private static final Pattern PATH_VARIABLE_PATTERN = Pattern.compile("\\{([^{}]+)\\}");
+
+    /**
+     * 145 个冻结入口允许出现的全部路径变量及其类型合法、固定不存在探针值。
+     * 数字主键统一使用 Long 最大正数，UUID 与枚举保留各自 Web 参数契约。
+     */
+    private static final Map<String, String> DENIED_PROBE_PATH_VALUES = Map.ofEntries(
+            Map.entry("attachmentId", ATTACHMENT_ID),
+            Map.entry("calendarId", NUMERIC_ID),
+            Map.entry("categoryId", NUMERIC_ID),
+            Map.entry("categoryIds", NUMERIC_ID),
+            Map.entry("copyId", NUMERIC_ID),
+            Map.entry("credentialId", NUMERIC_ID),
+            Map.entry("dataSourceId", NUMERIC_ID),
+            Map.entry("definitionId", STRING_ID),
+            Map.entry("deployIds", STRING_ID),
+            Map.entry("deploymentId", STRING_ID),
+            Map.entry("draftId", ATTACHMENT_ID),
+            Map.entry("endpointId", NUMERIC_ID),
+            Map.entry("eventCodeId", NUMERIC_ID),
+            Map.entry("eventType", "ERROR"),
+            Map.entry("extensionId", NUMERIC_ID),
+            Map.entry("formId", NUMERIC_ID),
+            Map.entry("formIds", NUMERIC_ID),
+            Map.entry("instanceIds", STRING_ID),
+            Map.entry("messageId", STRING_ID),
+            Map.entry("modelId", STRING_ID),
+            Map.entry("modelIds", STRING_ID),
+            Map.entry("notificationId", NUMERIC_ID),
+            Map.entry("outboxId", NUMERIC_ID),
+            Map.entry("processDefId", STRING_ID),
+            Map.entry("processId", STRING_ID),
+            Map.entry("taskId", STRING_ID));
 
     /** 拒绝矩阵测试报告的模块 target 相对路径。 */
     private static final Path REPORT_PATH = Path.of(
@@ -150,7 +190,7 @@ class WorkflowRbacHttpIT
     /** 真实 HttpClient，不配置 Cookie 或重试，所有身份仅通过 Authorization 头传递。 */
     private HttpClient httpClient;
 
-    /** 103 个正式入口的机器可读矩阵。 */
+    /** 145 个正式入口的机器可读矩阵。 */
     private List<Endpoint> matrix;
 
     /** 正式菜单 SQL 解析出的五角色 workflow 权限集合。 */
@@ -187,7 +227,7 @@ class WorkflowRbacHttpIT
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
 
-        assertThat(matrix).hasSize(103);
+        assertThat(matrix).hasSize(145);
         assertThat(jdbcTemplate.queryForObject("select database()", String.class))
                 .as("RBAC IT 只能连接显式批准的隔离 schema")
                 .isEqualTo(expectedSchema);
@@ -975,7 +1015,7 @@ class WorkflowRbacHttpIT
      */
     private HttpRequest buildDeniedProbe(Endpoint endpoint, String token)
     {
-        String path = probePath(endpoint);
+        String path = deniedProbePath(endpoint);
         ProbePayload payload = probePayload(endpoint);
         HttpRequest.Builder builder = authorizedRequest(path, token);
         if (payload.contentType() != null)
@@ -991,27 +1031,9 @@ class WorkflowRbacHttpIT
      * @param endpoint Endpoint，待探测入口
      * @return String，可直接请求且不引用正式业务 fixture 的相对 URL
      */
-    private String probePath(Endpoint endpoint)
+    static String deniedProbePath(Endpoint endpoint)
     {
-        String path = endpoint.path()
-                .replace("{attachmentId}", ATTACHMENT_ID)
-                .replace("{categoryIds}", "1")
-                .replace("{categoryId}", "1")
-                .replace("{formIds}", "1")
-                .replace("{formId}", "1")
-                .replace("{extensionId}", "1")
-                .replace("{endpointId}", "1")
-                .replace("{credentialId}", "1")
-                .replace("{deploymentId}", STRING_ID)
-                .replace("{dataSourceId}", "1")
-                .replace("{deployIds}", STRING_ID)
-                .replace("{definitionId}", STRING_ID)
-                .replace("{modelIds}", STRING_ID)
-                .replace("{modelId}", STRING_ID)
-                .replace("{processDefId}", STRING_ID)
-                .replace("{instanceIds}", STRING_ID)
-                .replace("{processId}", STRING_ID)
-                .replace("{taskId}", STRING_ID);
+        String path = resolveDeniedProbePath(endpoint.path());
         return switch (endpoint.key())
         {
             case "WfDeployController#publishList" -> path + "?processKey=rbac_denied_probe";
@@ -1023,8 +1045,42 @@ class WorkflowRbacHttpIT
             case "WfProcessController#getForm" -> path
                     + "?definitionId=" + STRING_ID + "&deployId=" + STRING_ID;
             case "WfProcessController#detail" -> path + "?procInsId=" + STRING_ID;
+            case "WfProcessDraftController#delete" -> path + "?expectedVersion=1";
             default -> path;
         };
+    }
+
+    /**
+     * 严格解析冻结 mapping 中的全部路径变量，未知变量或残留花括号立即拒绝。
+     *
+     * @param pathTemplate String，矩阵记录的完整 Spring mapping 路径模板
+     * @return String，全部路径变量已替换为类型合法且固定不存在值的相对 URL
+     */
+    static String resolveDeniedProbePath(String pathTemplate)
+    {
+        if (pathTemplate == null || !pathTemplate.startsWith("/"))
+        {
+            throw new IllegalArgumentException("RBAC 拒绝探针路径模板必须以斜线开头");
+        }
+        Matcher matcher = PATH_VARIABLE_PATTERN.matcher(pathTemplate);
+        StringBuilder resolved = new StringBuilder(pathTemplate.length());
+        while (matcher.find())
+        {
+            String variableName = matcher.group(1);
+            String probeValue = DENIED_PROBE_PATH_VALUES.get(variableName);
+            if (probeValue == null)
+            {
+                throw new IllegalStateException("RBAC 拒绝探针缺少路径变量类型契约: "
+                        + variableName);
+            }
+            matcher.appendReplacement(resolved, Matcher.quoteReplacement(probeValue));
+        }
+        matcher.appendTail(resolved);
+        if (resolved.indexOf("{") >= 0 || resolved.indexOf("}") >= 0)
+        {
+            throw new IllegalStateException("RBAC 拒绝探针仍包含未解析路径变量");
+        }
+        return resolved.toString();
     }
 
     /**
@@ -1049,7 +1105,7 @@ class WorkflowRbacHttpIT
             return new ProbePayload("multipart/form-data; boundary=" + boundary,
                     HttpRequest.BodyPublishers.ofString(multipart, StandardCharsets.UTF_8));
         }
-        String json = jsonProbeBody(endpoint.key());
+        String json = deniedProbeJsonBody(endpoint.key());
         if (json == null)
         {
             return new ProbePayload(null, HttpRequest.BodyPublishers.noBody());
@@ -1064,10 +1120,13 @@ class WorkflowRbacHttpIT
      * @param endpointKey String，Controller#handler 稳定入口键
      * @return String，固定无效业务主键的 JSON 或 null
      */
-    private String jsonProbeBody(String endpointKey)
+    static String deniedProbeJsonBody(String endpointKey)
     {
         return switch (endpointKey)
         {
+            case "WfIdentityController#resolveOptions" ->
+                "{\"type\":\"user\",\"capability\":\"\",\"values\":[\""
+                        + NUMERIC_ID + "\"]}";
             case "WfCategoryController#add" ->
                 "{\"categoryName\":\"RBAC拒绝探针\",\"code\":\"rbac_denied_probe\"}";
             case "WfCategoryController#edit" ->
@@ -1100,6 +1159,47 @@ class WorkflowRbacHttpIT
                         + "\"minimapEnabled\":true,\"lintEnabled\":true,"
                         + "\"tokenSimulationEnabled\":false,"
                         + "\"propertiesCollapsed\":false}";
+            case "WfProcessDraftController#create" ->
+                "{\"processDefinitionId\":\"" + STRING_ID + "\","
+                        + "\"variables\":{},\"multiInstanceUserIds\":{}}";
+            case "WfProcessDraftController#save",
+                    "WfProcessDraftController#submit" ->
+                "{\"expectedVersion\":1,\"variables\":{},"
+                        + "\"multiInstanceUserIds\":{}}";
+            case "WfBpmnEventController#createCode",
+                    "WfBpmnEventController#updateCode" ->
+                "{\"eventType\":\"ERROR\","
+                        + "\"eventCode\":\"RBAC.DENIED.PROBE\","
+                        + "\"eventName\":\"RBAC拒绝探针\","
+                        + "\"notificationPolicy\":\"NONE\","
+                        + "\"description\":\"仅用于方法权限拒绝验证\"}";
+            case "WfBpmnEventController#changeCodeStatus",
+                    "WfTaskSlaController#changeCalendarStatus" ->
+                "{\"enabled\":false}";
+            case "WfTaskSlaController#createCalendar",
+                    "WfTaskSlaController#updateCalendar" ->
+                "{\"calendarKey\":\"RBAC.DENIED.PROBE\","
+                        + "\"calendarName\":\"RBAC拒绝探针\","
+                        + "\"timezone\":\"Asia/Shanghai\","
+                        + "\"workingDays\":[1,2,3,4,5],"
+                        + "\"workStart\":\"09:00\",\"workEnd\":\"18:00\","
+                        + "\"description\":\"仅用于方法权限拒绝验证\","
+                        + "\"days\":[]}";
+            case "WfNotificationController#savePreference" ->
+                "{\"inboxEnabled\":true,\"emailEnabled\":false,"
+                        + "\"expectedRevision\":0}";
+            case "WfNotificationController#urge" ->
+                "{\"processInstanceId\":\"" + STRING_ID + "\","
+                        + "\"reason\":\"RBAC拒绝探针\"}";
+            case "WfNotificationController#savePolicy" ->
+                "{\"scopeType\":\"PROCESS\","
+                        + "\"processDefinitionKey\":\"" + STRING_ID + "\","
+                        + "\"eventType\":\"TASK_CREATED\","
+                        + "\"recipientRules\":\"INITIATOR\","
+                        + "\"channels\":\"INBOX\","
+                        + "\"titleTemplate\":\"RBAC拒绝探针\","
+                        + "\"contentTemplate\":\"仅用于方法权限拒绝验证\","
+                        + "\"maxAttempts\":1,\"status\":\"ENABLED\"}";
             case "WfConnectorController#create", "WfConnectorController#update" ->
                 "{\"endpointKey\":\"rbac.denied.probe\","
                         + "\"endpointName\":\"RBAC拒绝探针\","
@@ -1375,6 +1475,9 @@ class WorkflowRbacHttpIT
      */
     private HttpRequest.Builder authorizedRequest(String path, String token)
     {
+        // 在进入 URI.create 前再次断言，防止新增入口绕过集中解析后退化为本地构造异常。
+        assertThat(path).as("RBAC HTTP 请求不得包含未解析路径变量")
+                .doesNotContain("{", "}");
         return HttpRequest.newBuilder(baseUri(path))
                 .timeout(HTTP_TIMEOUT)
                 .header("Authorization", "Bearer " + token)

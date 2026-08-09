@@ -24,12 +24,14 @@ import org.flowable.identitylink.api.IdentityLinkType;
 import org.flowable.task.api.DelegationState;
 import org.flowable.task.api.Task;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 面向 P3 任务业务服务的核心流程引擎适配器，只调用 Flowable 8 公共 API。
@@ -62,6 +64,9 @@ public class WorkflowProcessEngineAdapter
 
     private final WorkflowIdentityResolver identityResolver;
 
+    /** 任务动作通知服务；生产容器必须注入，旧直接构造单元测试可为空。 */
+    private WorkflowNotificationService notificationService;
+
     /**
      * 创建核心流程引擎适配器。
      *
@@ -81,6 +86,17 @@ public class WorkflowProcessEngineAdapter
         this.taskService = taskService;
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
+    }
+
+    /**
+     * 注入稳定任务动作通知服务，使归属变更和 outbox 共享同一 Flowable 写事务。
+     * @param notificationService WorkflowNotificationService，任务动作事务 outbox 服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setNotificationService(WorkflowNotificationService notificationService)
+    {
+        this.notificationService = notificationService;
     }
 
     /**
@@ -172,6 +188,7 @@ public class WorkflowProcessEngineAdapter
             taskService.claim(taskId, actor.userId());
             addAuditComment(task, NORMAL_COMMENT_TYPE, "CLAIM", actor.userId(), null,
                     "用户认领任务");
+            publishStableTaskAction("TASK_CLAIMED", taskId);
             return null;
         });
     }
@@ -206,6 +223,7 @@ public class WorkflowProcessEngineAdapter
             taskService.unclaim(taskId);
             addAuditComment(task, NORMAL_COMMENT_TYPE, "UNCLAIM", actor.userId(), null,
                     "用户取消认领任务");
+            publishStableTaskAction("TASK_UNCLAIMED", taskId);
             return null;
         });
     }
@@ -281,6 +299,7 @@ public class WorkflowProcessEngineAdapter
                     normalizedTargetUserId, normalizedOpinion);
             // 业务表写入必须晚于引擎动作，并依赖外层 Spring 事务实现任一失败整体回滚。
             afterSuccess.run();
+            publishStableTaskAction("TASK_DELEGATED", taskId);
             return null;
         });
     }
@@ -340,6 +359,7 @@ public class WorkflowProcessEngineAdapter
                     normalizedOpinion);
             // 抄送等业务写入晚于引擎动作，失败时依赖外层事务回滚 resolve 和审计 comment。
             afterSuccess.run();
+            publishStableTaskAction("TASK_DELEGATION_RESOLVED", taskId);
             return null;
         });
     }
@@ -421,6 +441,7 @@ public class WorkflowProcessEngineAdapter
                     normalizedTargetUserId, normalizedOpinion);
             // 业务表写入必须晚于引擎动作，并依赖外层 Spring 事务实现任一失败整体回滚。
             afterSuccess.run();
+            publishStableTaskAction("TASK_TRANSFERRED", taskId);
             return null;
         });
     }
@@ -453,6 +474,20 @@ public class WorkflowProcessEngineAdapter
             taskService.complete(taskId, actor.userId(), effectiveVariables);
             return null;
         });
+    }
+
+    /**
+     * 在任务公共 API 已提交最终归属、审计和业务钩子后显式登记一次通知。
+     * @param eventType String，稳定任务动作事件类型
+     * @param taskId String，仍处于活动态的真实任务主键
+     * @return void，通知登记失败时由外层引擎事务整体回滚
+     */
+    private void publishStableTaskAction(String eventType, String taskId)
+    {
+        if (notificationService != null)
+        {
+            notificationService.onStableTaskAction(eventType, taskId);
+        }
     }
 
     /**

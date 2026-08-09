@@ -35,13 +35,14 @@ processStartService.startProcessByDefKey(
 1. 校验并规范化 `processDefinitionId` 和可选 `businessKey`。
 2. 通过 `WorkflowEngineOperations.writeAsCurrentUser(...)` 开启事务，重新核验当前正式用户并设置 Flowable 认证身份。
 3. 从 `RepositoryService` 查询定义并取得服务端真实 `deploymentId`。
-4. 复用 `WorkflowProcessQueryService.getProcessForm(...)` 校验同租户最新版本、激活状态、starter 用户/ROLE/DEPT 身份，并精确读取 BPMN 开始节点的 `wf_deploy_form.content`。
-5. 使用 `WorkflowStartVariableValidator` 按部署时固化的表单 schema 校验并深度复制客户端变量。
-6. 对上传字段锁定当前用户的 `TEMP` 附件，将 UUID 列表替换为六项安全元数据投影。
-7. 在真正写入前再次按定义 ID 查询激活状态，阻止校验期间被挂起或删除的定义继续发起。
-8. 服务端写入 `initiator=<当前用户ID>`、`processStatus=running`，并把附件安全投影后的开始表单值编码为内部不可变提交快照。
-9. 业务变量与内部快照随同一次 `RuntimeService.startProcessInstanceById(...)` 原子写入，避免实例已经创建但开始提交值缺失。
-10. 将附件绑定到真实实例和部署快照开始节点；任一绑定失败均回滚附件、内部快照和流程发起。
+4. 对真实 `deploymentId` 的 `ACT_RE_DEPLOYMENT` 行执行 `SELECT ... FOR UPDATE`，与受控部署删除形成同一线性化顺序。
+5. 复用 `WorkflowProcessQueryService.getProcessForm(...)` 校验同租户最新版本、激活状态、starter 用户/ROLE/DEPT 身份，并精确读取 BPMN 开始节点的 `wf_deploy_form.content`。
+6. 使用 `WorkflowStartVariableValidator` 按部署时固化的表单 schema 校验并深度复制客户端变量。
+7. 对上传字段锁定当前用户的 `TEMP` 附件，将 UUID 列表替换为六项安全元数据投影。
+8. 在真正写入前再次按定义 ID 查询激活状态，阻止校验期间被挂起或删除的定义继续发起。
+9. 服务端写入 `initiator=<当前用户ID>`、`processStatus=running`，并把附件安全投影后的开始表单值编码为内部不可变提交快照。
+10. 业务变量与内部快照随同一次 `RuntimeService.startProcessInstanceById(...)` 原子写入，避免实例已经创建但开始提交值缺失。
+11. 将附件绑定到真实实例和部署快照开始节点；任一绑定失败均回滚附件、内部快照和流程发起。
 
 ## 按定义 key 兼容链
 
@@ -49,7 +50,7 @@ processStartService.startProcessByDefKey(
 2. 查询条件固定为精确 `processDefinitionKey`、`processDefinitionWithoutTenantId` 和 `latestVersion`，不会跨租户选择定义，也不会回退到旧激活版本。
 3. 最新版不存在返回 `404`，最新版挂起返回 `409`。
 4. 解析出 definitionId 后调用与 `start(StartProcessRequest)` 相同的 starter、部署快照、变量、附件、身份和审计链。
-5. 在真正调用 `RuntimeService` 前，通过 `ACT_UNIQ_PROCDEF` 对默认租户该 key 的当前最新版执行有界 `FOR UPDATE` 当前读；它能看见变量校验期间已提交的新版本，并把锁后的并发部署串行化到本次发起事务结束。definitionId、deploymentId 或激活状态变化时返回 `409`，旧版本不会产生新实例。
+5. 先取得目标 deployment 行锁，再在真正调用 `RuntimeService` 前通过 `ACT_UNIQ_PROCDEF` 对默认租户该 key 的当前最新版执行有界 `FOR UPDATE` 当前读；它能看见变量校验期间已提交的新版本，并把锁后的并发部署串行化到本次发起事务结束。definitionId、deploymentId 或激活状态变化时返回 `409`，旧版本不会产生新实例。
 
 ## 权限与数据来源
 

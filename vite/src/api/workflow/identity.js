@@ -35,3 +35,12 @@ export function listClaimableIdentityOptions(query = {}) {
     params: buildClaimIdentityQuery(query)
   })
 }
+
+/**
+ * 批量回显作者 BPMN 已保存的正式身份对象及其实时可用状态。
+ * @param {{type:string, capability:string, values:string[]}} data 身份类型、能力和受控目录值。
+ * @returns {Promise<object>} data 为保持请求顺序的正式名称和 available 状态。
+ */
+export function resolveIdentityOptions(data) {
+  return request({ url: '/workflow/identity/options/resolve', method: 'post', data })
+}

@@ -3,6 +3,8 @@ package com.ruoyi.flowable.service.process;
 import java.util.Date;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
+import org.springframework.beans.factory.ObjectProvider;
 import org.flowable.common.engine.api.FlowableException;
 import org.flowable.common.engine.api.delegate.event.FlowableEngineEntityEvent;
 import org.flowable.common.engine.api.delegate.event.FlowableEngineEventType;
@@ -13,6 +15,9 @@ import org.flowable.engine.impl.util.CommandContextUtil;
 import org.flowable.variable.service.VariableServiceConfiguration;
 import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntity;
 import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntityManager;
+import org.springframework.util.StringUtils;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
 /**
  * 在 Flowable 确认流程结束时，将自然运行状态收敛为 completed，并保留显式业务终态。
@@ -26,6 +31,11 @@ import org.flowable.variable.service.impl.persistence.entity.HistoricVariableIns
 public final class WorkflowProcessCompletionStatusListener
         extends AbstractFlowableEngineEventListener
 {
+    /** 自动抄送服务提供器；引擎完成初始化前不得提前解析其 Flowable 服务依赖。 */
+    private final ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider;
+
+    /** 引擎初始化结束后再解析通知服务，避免通知服务反向依赖 Flowable 公共服务形成启动环。 */
+    private final Supplier<WorkflowNotificationService> notificationServiceSupplier;
     /** 自然完成实例的正式业务状态。 */
     static final String COMPLETED_STATUS = "completed";
 
@@ -46,7 +56,60 @@ public final class WorkflowProcessCompletionStatusListener
      */
     public WorkflowProcessCompletionStatusListener()
     {
+        this(null, () -> null);
+    }
+
+    /**
+     * 创建流程完成状态与自动抄送的同事务监听器。
+     * @param automaticCopyServiceProvider ObjectProvider&lt;WorkflowAutomaticCopyService&gt;，
+     *        引擎事件发生时才解析的自动抄送服务提供器；旧纯单元测试可为空
+     * @return void，监听器初始化完成
+     */
+    public WorkflowProcessCompletionStatusListener(
+            ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider)
+    {
+        this(automaticCopyServiceProvider, () -> null);
+    }
+
+    /**
+     * 创建同时登记自然完成通知的监听器。
+     * @param notificationService WorkflowNotificationService，可为空的事务 outbox 服务
+     * @return void，配置后仅处理 PROCESS_COMPLETED
+     */
+    public WorkflowProcessCompletionStatusListener(
+            WorkflowNotificationService notificationService)
+    {
+        this(null, () -> notificationService);
+    }
+
+    /**
+     * 创建延迟解析自动抄送与普通审批通知服务的监听器，供 Flowable 引擎初始化配置使用。
+     * @param automaticCopyServiceProvider ObjectProvider，流程完成后获取自动抄送服务
+     * @param notificationServiceProvider ObjectProvider，流程完成后获取通知服务
+     * @return void，配置后仅处理 PROCESS_COMPLETED
+     */
+    public WorkflowProcessCompletionStatusListener(
+            ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider,
+            ObjectProvider<WorkflowNotificationService> notificationServiceProvider)
+    {
+        this(automaticCopyServiceProvider,
+                notificationServiceProvider == null
+                        ? () -> null : notificationServiceProvider::getIfAvailable);
+    }
+
+    /**
+     * 初始化流程完成监听器持有的延迟依赖。
+     * @param automaticCopyServiceProvider ObjectProvider，自动抄送服务延迟提供器，可为空
+     * @param notificationServiceSupplier Supplier，通知服务延迟提供器
+     * @return void，构造后仅处理 PROCESS_COMPLETED
+     */
+    private WorkflowProcessCompletionStatusListener(
+            ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider,
+            Supplier<WorkflowNotificationService> notificationServiceSupplier)
+    {
         super(Set.of(FlowableEngineEventType.PROCESS_COMPLETED));
+        this.automaticCopyServiceProvider = automaticCopyServiceProvider;
+        this.notificationServiceSupplier = notificationServiceSupplier;
     }
 
     /**
@@ -65,8 +128,67 @@ public final class WorkflowProcessCompletionStatusListener
         {
             throw new FlowableException("流程自然完成事件缺少有效的流程实例实体");
         }
+        WorkflowNotificationService notificationService =
+                notificationServiceSupplier.get();
+        if (!isRootBusinessProcessInstance(processInstance))
+        {
+            // CallActivity 子流程有独立 PROCESS_COMPLETED，但它不是用户发起的根业务实例。
+            // 只清理已失去业务对象的催办；不得收敛根业务状态、触发流程级抄送或结果通知。
+            if (notificationService != null)
+            {
+                notificationService.scheduleUrgeCancellationForCompletedProcessInstance(
+                        processInstance.getId());
+            }
+            return;
+        }
 
-        updateHistoricProcessStatus(processInstance.getId());
+        boolean naturallyCompleted = updateHistoricProcessStatus(processInstance.getId());
+        if (!naturallyCompleted)
+        {
+            return;
+        }
+        if (automaticCopyServiceProvider != null)
+        {
+            // 引擎配置阶段仅持有提供器；这里已进入运行命令，才可解析依赖 Flowable 服务的业务 Bean。
+            WorkflowAutomaticCopyService automaticCopyService =
+                    automaticCopyServiceProvider.getObject();
+            // 只有 running 收敛为 completed 才触发，驳回、取消和终止不得误发流程完成抄送。
+            automaticCopyService.onProcessCompleted(processInstance.getId(),
+                    processInstance.getProcessDefinitionId());
+        }
+        if (notificationService != null)
+        {
+            // 只有 running 真正收敛为 completed 才登记结果，显式业务终态不会重复通知。
+            notificationService.onProcessResult("PROCESS_COMPLETED",
+                    processInstance.getProcessDefinitionId(), processInstance.getId());
+        }
+    }
+
+    /**
+     * 使用 Flowable 执行树的 root 与 super execution 判断当前完成事件是否属于根业务实例。
+     * @param processInstance ExecutionEntity，完成事件携带的流程实例执行实体
+     * @return boolean，仅没有 super execution 且 root 为空或等于自身时为 true
+     */
+    private boolean isRootBusinessProcessInstance(ExecutionEntity processInstance)
+    {
+        String instanceId = processInstance.getId();
+        String rootProcessInstanceId = processInstance.getRootProcessInstanceId();
+        String superExecutionId = processInstance.getSuperExecutionId();
+        if (StringUtils.hasText(superExecutionId))
+        {
+            if (!StringUtils.hasText(rootProcessInstanceId)
+                    || instanceId.equals(rootProcessInstanceId))
+            {
+                throw new FlowableException("CallActivity 子流程执行树根关系异常: " + instanceId);
+            }
+            return false;
+        }
+        if (StringUtils.hasText(rootProcessInstanceId)
+                && !instanceId.equals(rootProcessInstanceId))
+        {
+            throw new FlowableException("根流程实例执行树关系异常: " + instanceId);
+        }
+        return true;
     }
 
     /**
@@ -75,7 +197,7 @@ public final class WorkflowProcessCompletionStatusListener
      * @param processInstanceId String，已自然完成的 Flowable 流程实例主键
      * @return void，无返回值；旧实例没有该变量时兼容跳过，重复、类型或状态值异常时阻止错误数据提交
      */
-    private void updateHistoricProcessStatus(String processInstanceId)
+    private boolean updateHistoricProcessStatus(String processInstanceId)
     {
         ProcessEngineConfigurationImpl engineConfiguration =
                 CommandContextUtil.getProcessEngineConfiguration();
@@ -95,7 +217,7 @@ public final class WorkflowProcessCompletionStatusListener
         // 兼容没有 processStatus 的存量或引擎外部实例；新服务发起的实例必须命中下面的正式更新链路。
         if (statusVariables == null || statusVariables.isEmpty())
         {
-            return;
+            return false;
         }
         if (statusVariables.size() != 1)
         {
@@ -113,7 +235,7 @@ public final class WorkflowProcessCompletionStatusListener
         if (COMPLETED_STATUS.equals(currentStatus)
                 || BUSINESS_TERMINAL_STATUSES.contains(currentStatus))
         {
-            return;
+            return false;
         }
         if (!RUNNING_STATUS.equals(currentStatus))
         {
@@ -129,5 +251,6 @@ public final class WorkflowProcessCompletionStatusListener
         Date completedTime = engineConfiguration.getClock().getCurrentTime();
         statusVariable.setLastUpdatedTime(completedTime);
         historicVariableManager.update(statusVariable, false);
+        return true;
     }
 }

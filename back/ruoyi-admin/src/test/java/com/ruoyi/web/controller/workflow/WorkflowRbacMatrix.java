@@ -48,16 +48,19 @@ final class WorkflowRbacMatrix
             WfDmnController.class,
             WfExtensionController.class,
             WfBpmnEventController.class,
+            WfCallActivityController.class,
             WfTaskSlaController.class,
             WfSqlDataSourceController.class,
             WfIntegrationCredentialController.class,
             WfRuntimeEventAuditController.class,
             WfCollaborationController.class,
+            WfNotificationController.class,
             WfFormController.class,
             WfIdentityController.class,
             WfInstanceController.class,
             WfModelController.class,
             WfProcessController.class,
+            WfProcessDraftController.class,
             WfTaskController.class);
 
     /** CSV 固定列定义，禁止静默接受少列、多列或角色顺序漂移。 */
@@ -80,7 +83,7 @@ final class WorkflowRbacMatrix
     }
 
     /**
-     * 从 UTF-8 classpath 资源读取并严格解析 5x102 权限矩阵。
+     * 从 UTF-8 classpath 资源读取并严格解析五角色权限矩阵。
      *
      * @return List&lt;Endpoint&gt;，保持 CSV 顺序且每行包含五角色显式预期
      */

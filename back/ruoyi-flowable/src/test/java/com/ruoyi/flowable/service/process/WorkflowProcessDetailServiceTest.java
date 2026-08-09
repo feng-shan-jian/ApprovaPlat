@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.EndEvent;
@@ -38,7 +39,10 @@ import org.flowable.engine.RepositoryService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.history.HistoricActivityInstance;
 import org.flowable.engine.history.HistoricActivityInstanceQuery;
+import org.flowable.engine.history.HistoricProcessInstance;
+import org.flowable.engine.history.HistoricProcessInstanceQuery;
 import org.flowable.engine.repository.ProcessDefinition;
+import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.flowable.engine.task.Comment;
 import org.flowable.identitylink.api.IdentityLinkInfo;
 import org.flowable.task.api.Task;
@@ -138,6 +142,12 @@ class WorkflowProcessDetailServiceTest
     @Mock
     private HistoricVariableInstanceQuery taskVariableQuery;
 
+    @Mock
+    private HistoricProcessInstanceQuery relationQuery;
+
+    @Mock
+    private ProcessDefinitionQuery relationDefinitionQuery;
+
     private WorkflowProcessDetailService service;
 
     /** 测试快照元数据主键到第二阶段正文的映射。 */
@@ -162,6 +172,39 @@ class WorkflowProcessDetailServiceTest
                  taskLifecycleService, controlledLoopService);
         when(controlledLoopService.buildStates(anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of());
+        stubSingleProcessRelation();
+    }
+
+    /**
+     * 为既有详情场景提供只含当前根实例的正式历史关系查询夹具。
+     * @return void，实例主键按每次 processInstanceId 查询动态生成，子实例查询返回空集合
+     */
+    private void stubSingleProcessRelation()
+    {
+        AtomicReference<String> requestedId = new AtomicReference<>("instance-1");
+        when(historyService.createHistoricProcessInstanceQuery()).thenReturn(relationQuery);
+        when(relationQuery.processInstanceId(anyString())).thenAnswer(invocation ->
+        {
+            requestedId.set(invocation.getArgument(0));
+            return relationQuery;
+        });
+        when(relationQuery.superProcessInstanceId(anyString())).thenReturn(relationQuery);
+        when(relationQuery.listPage(anyInt(), anyInt())).thenReturn(List.of());
+        when(relationQuery.singleResult()).thenAnswer(invocation ->
+        {
+            HistoricProcessInstance instance = mock(HistoricProcessInstance.class);
+            when(instance.getId()).thenReturn(requestedId.get());
+            when(instance.getProcessDefinitionId()).thenReturn("definition-1");
+            when(instance.getBusinessKey()).thenReturn("business-1");
+            when(instance.getBusinessStatus()).thenReturn("running");
+            when(instance.getState()).thenReturn("running");
+            when(instance.getStartTime()).thenReturn(Date.from(Instant.parse("2026-07-25T08:00:00Z")));
+            return instance;
+        });
+        when(repositoryService.createProcessDefinitionQuery()).thenReturn(relationDefinitionQuery);
+        when(relationDefinitionQuery.processDefinitionId(anyString())).thenReturn(relationDefinitionQuery);
+        when(relationDefinitionQuery.singleResult()).thenAnswer(invocation ->
+                repositoryService.getProcessDefinition("definition-1"));
     }
 
     /**
@@ -203,6 +246,8 @@ class WorkflowProcessDetailServiceTest
         stubHistoricTaskQuery(List.of(historicTask));
 
         HistoricVariableInstance applicant = variable("applicant", "string", "张三", null);
+        HistoricVariableInstance hiddenStart = variable(
+                "hiddenStart", "string", "开始节点隐藏值", null);
         HistoricVariableInstance internalStatus = variable(
                 "processStatus", "string", "running", null);
         HistoricVariableInstance secret = variable("secret", "string", "不可回显", null);
@@ -213,24 +258,29 @@ class WorkflowProcessDetailServiceTest
                 "infinity", "json", DoubleNode.valueOf(Double.POSITIVE_INFINITY), null);
         HistoricVariableInstance decision = variable(
                 "decision", "json", Map.of("approved", true), "task-1");
+        HistoricVariableInstance hiddenTask = variable(
+                "hiddenTask", "string", "任务节点隐藏值", "task-1");
         HistoricVariableInstance unsafeLocal = variable(
                 "unsafe", "serializable", null, "task-1");
-        stubVariableQueries(List.of(applicant, internalStatus, secret, binary,
+        stubVariableQueries(List.of(applicant, hiddenStart, internalStatus, secret, binary,
                         notANumber, infinity),
-                List.of(decision, unsafeLocal));
+                List.of(decision, hiddenTask, unsafeLocal));
         WorkflowHistoricSubmissionRow originalStartSubmission = submissionUpdate(
                 "detail-start-original", "2026-07-25T08:00:00Z", null, "start-activity",
                 WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-1", 1L,
-                        "key_1", "start", Map.of("applicant", "李四")));
+                        "key_1", "start", Map.of(
+                                "applicant", "李四", "hiddenStart", "旧隐藏值")));
         WorkflowHistoricSubmissionRow startSubmission = submissionUpdate("detail-start",
                 "2026-07-25T08:00:01Z", null, "start-activity",
                 WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-1", 1L,
-                        "key_1", "start", Map.of("applicant", "张三")));
+                        "key_1", "start", Map.of(
+                                "applicant", "张三", "hiddenStart", "开始节点隐藏值")));
         WorkflowHistoricSubmissionRow taskSubmission = stringBlobSubmissionUpdate("detail-task-1",
                 "2026-07-25T09:00:00Z", "task-1", "approve-activity",
                 WorkflowFormSubmissionSnapshotCodec.encodeTask("deployment-1", 2L,
                         "key_2", "approve", "task-1", true,
-                        Map.of("decision", Map.of("approved", true))));
+                        Map.of("decision", Map.of("approved", true),
+                                "hiddenTask", "任务节点隐藏值")));
         stubSubmissionUpdates(List.of(originalStartSubmission, startSubmission, taskSubmission));
 
         Comment comment = mock(Comment.class);
@@ -259,6 +309,13 @@ class WorkflowProcessDetailServiceTest
         assertThat(detail.startUserName()).isEqualTo("用户9");
         assertThat(detail.processStatus()).isEqualTo("completed");
         assertThat(detail.bpmnXml()).isEqualTo("<definitions/>");
+        assertThat(detail.processRelations()).singleElement().satisfies(relation ->
+        {
+            assertThat(relation.processInstanceId()).isEqualTo("instance-1");
+            assertThat(relation.parentProcessInstanceId()).isNull();
+            assertThat(relation.rootProcessInstanceId()).isEqualTo("instance-1");
+            assertThat(relation.current()).isTrue();
+        });
         assertThat(detail.isExistTaskForm()).isTrue();
         assertThat(detail.processFormList()).hasSize(2);
         WorkflowProcessFormSnapshotView startForm = detail.processFormList().get(0);
@@ -287,6 +344,8 @@ class WorkflowProcessDetailServiceTest
         assertThat(detail.flowViewer().finishedSequenceFlowIds()).contains("flow-1");
         assertThat(detail.flowViewer().returnedActivityIds()).contains("approve");
         verify(internalStatus, never()).getValue();
+        verify(hiddenStart, never()).getValue();
+        verify(hiddenTask, never()).getValue();
         verify(secret, never()).getValue();
         verify(binary, never()).getValue();
         verify(unsafeLocal, never()).getValue();
@@ -662,6 +721,97 @@ class WorkflowProcessDetailServiceTest
     }
 
     /**
+     * 验证 CallActivity 继承父变量时，父实例内部表单快照不会被误认成子实例自己的提交。
+     *
+     * @return 无返回值，断言祖先部署快照被安全忽略且父子关系仍完整返回
+     */
+    @Test
+    void ignoresInheritedSubmissionSnapshotFromVerifiedParentDeployment()
+    {
+        prepareEmptyAuthorizedDetail();
+        stubVariableQueries(List.of(), List.of());
+        WorkflowHistoricSubmissionRow inherited = submissionUpdate("detail-parent-start",
+                "2026-07-25T08:00:00Z", null, "parent-start-activity",
+                WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-parent", 9L,
+                        "parent-form", "parent-start", Map.of("sharedValue", "parent")));
+        stubSubmissionUpdates(List.of(inherited));
+        when(deploymentService.getBpmnXml("definition-1")).thenReturn("<definitions/>");
+
+        HistoricProcessInstance child = historicProcessInstance("instance-1", "definition-1",
+                "parent-instance", "2026-07-25T08:01:00Z");
+        HistoricProcessInstance parent = historicProcessInstance("parent-instance",
+                "definition-parent", null, "2026-07-25T08:00:00Z");
+        AtomicReference<String> selectedInstanceId = new AtomicReference<>("instance-1");
+        AtomicReference<String> selectedParentId = new AtomicReference<>();
+        when(relationQuery.processInstanceId(anyString())).thenAnswer(invocation ->
+        {
+            selectedInstanceId.set(invocation.getArgument(0));
+            return relationQuery;
+        });
+        when(relationQuery.superProcessInstanceId(anyString())).thenAnswer(invocation ->
+        {
+            selectedParentId.set(invocation.getArgument(0));
+            return relationQuery;
+        });
+        when(relationQuery.singleResult()).thenAnswer(invocation ->
+                "parent-instance".equals(selectedInstanceId.get()) ? parent : child);
+        when(relationQuery.listPage(anyInt(), anyInt())).thenAnswer(invocation ->
+                "parent-instance".equals(selectedParentId.get()) ? List.of(child) : List.of());
+
+        ProcessDefinition parentDefinition = mock(ProcessDefinition.class);
+        when(parentDefinition.getId()).thenReturn("definition-parent");
+        when(parentDefinition.getKey()).thenReturn("parent-process");
+        when(parentDefinition.getName()).thenReturn("父流程");
+        when(parentDefinition.getVersion()).thenReturn(1);
+        when(parentDefinition.getDeploymentId()).thenReturn("deployment-parent");
+        when(repositoryService.getProcessDefinition("definition-parent"))
+                .thenReturn(parentDefinition);
+        AtomicReference<String> selectedDefinitionId = new AtomicReference<>("definition-1");
+        when(relationDefinitionQuery.processDefinitionId(anyString())).thenAnswer(invocation ->
+        {
+            selectedDefinitionId.set(invocation.getArgument(0));
+            return relationDefinitionQuery;
+        });
+        when(relationDefinitionQuery.singleResult()).thenAnswer(invocation ->
+                repositoryService.getProcessDefinition(selectedDefinitionId.get()));
+
+        WorkflowProcessDetailView detail = service.getDetail(
+                new WorkflowProcessDetailQueryDto("instance-1", null));
+
+        assertThat(detail.processFormList()).isEmpty();
+        assertThat(detail.processRelations()).hasSize(2);
+        assertThat(detail.processRelations()).anySatisfy(relation ->
+        {
+            assertThat(relation.processInstanceId()).isEqualTo("instance-1");
+            assertThat(relation.parentProcessInstanceId()).isEqualTo("parent-instance");
+        });
+    }
+
+    /**
+     * 验证根实例或子实例不能借 inheritVariables 接受任意陌生部署伪造的内部快照。
+     *
+     * @return 无返回值，断言未知部署快照继续按数据异常失败关闭
+     */
+    @Test
+    void rejectsSubmissionSnapshotFromUnrelatedDeployment()
+    {
+        prepareEmptyAuthorizedDetail();
+        stubVariableQueries(List.of(), List.of());
+        stubSubmissionUpdates(List.of(submissionUpdate("detail-foreign-start",
+                "2026-07-25T08:00:00Z", null, "foreign-start-activity",
+                WorkflowFormSubmissionSnapshotCodec.encodeStart("deployment-foreign", 3L,
+                        "foreign-form", "foreign-start", Map.of()))));
+
+        assertThatThrownBy(() -> service.getDetail(
+                new WorkflowProcessDetailQueryDto("instance-1", null)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.ERROR);
+                    assertThat(exception.getMessage()).contains("所属部署异常");
+                });
+    }
+
+    /**
      * 验证 longString 即使伪装成固定内部变量，也不能反序列化非 String 对象。
      *
      * @return 无返回值，非 String Java 序列化正文必须返回稳定数据异常
@@ -1021,6 +1171,29 @@ class WorkflowProcessDetailServiceTest
         return new WorkflowProcessAccessSnapshot(instanceId, "definition-1", "deployment-1",
                 "business-1", "9", Instant.parse("2026-07-25T08:00:00Z"),
                 Instant.parse("2026-07-25T09:00:01Z"), null, null, "COMPLETED");
+    }
+
+    /**
+     * 创建父子执行树测试使用的 Flowable 历史流程实例。
+     *
+     * @param instanceId String，流程实例主键
+     * @param definitionId String，流程定义主键
+     * @param parentInstanceId String，可为空的直接父流程实例主键
+     * @param startTime String，ISO-8601 开始时间
+     * @return HistoricProcessInstance，关系、状态和业务主键完整的历史实例 mock
+     */
+    private HistoricProcessInstance historicProcessInstance(String instanceId,
+            String definitionId, String parentInstanceId, String startTime)
+    {
+        HistoricProcessInstance instance = mock(HistoricProcessInstance.class);
+        when(instance.getId()).thenReturn(instanceId);
+        when(instance.getProcessDefinitionId()).thenReturn(definitionId);
+        when(instance.getSuperProcessInstanceId()).thenReturn(parentInstanceId);
+        when(instance.getBusinessKey()).thenReturn("business-1");
+        when(instance.getBusinessStatus()).thenReturn("running");
+        when(instance.getState()).thenReturn("running");
+        when(instance.getStartTime()).thenReturn(Date.from(Instant.parse(startTime)));
+        return instance;
     }
 
     /**
@@ -1553,7 +1726,8 @@ class WorkflowProcessDetailServiceTest
     {
         return snapshot(1L, "key_1", "start", "申请表", "开始", """
                 {"fields":[
-                  {"__vModel__":"applicant","__config__":{"layout":"colFormItem","tag":"el-input"}},
+             {"__vModel__":"applicant","__config__":{"layout":"colFormItem","tag":"el-input"}},
+             {"__vModel__":"hiddenStart","__config__":{"layout":"colFormItem","tag":"el-input","workflowHidden":true,"workflowReadable":false,"workflowWritable":false},"disabled":true},
                   {"__vModel__":"processStatus","__config__":{"layout":"colFormItem","tag":"el-input"}},
                   {"__vModel__":"attachment","__config__":{"layout":"colFormItem","tag":"el-upload"}},
                   {"__vModel__":"notANumber","__config__":{"layout":"colFormItem","tag":"el-input-number"}},
@@ -1570,7 +1744,8 @@ class WorkflowProcessDetailServiceTest
     {
         return snapshot(2L, "key_2", "approve", "审批表", "审批", """
                 {"fields":[
-                  {"__vModel__":"decision","__config__":{"layout":"colFormItem","tag":"el-switch"}},
+             {"__vModel__":"decision","__config__":{"layout":"colFormItem","tag":"el-switch"}},
+             {"__vModel__":"hiddenTask","__config__":{"layout":"colFormItem","tag":"el-input","workflowHidden":true,"workflowReadable":false,"workflowWritable":false},"disabled":true},
                   {"__vModel__":"unsafe","__config__":{"layout":"colFormItem","tag":"el-input"}}
                 ]}
                 """);

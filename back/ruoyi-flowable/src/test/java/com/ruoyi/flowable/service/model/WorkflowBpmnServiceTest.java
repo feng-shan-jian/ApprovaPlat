@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 class WorkflowBpmnServiceTest
 {
@@ -178,6 +179,38 @@ class WorkflowBpmnServiceTest
                 """.strip());
 
         assertBadRequest(xml.getBytes(StandardCharsets.UTF_8), "同时配置");
+    }
+
+    /**
+     * 验证正式模板可以携带受控默认及逐字段权限，并在模型重开所需的 BPMN 引用中稳定回读。
+     *
+     * @return void，权限 FormProperty 被当作内嵌表单或四态丢失时测试失败
+     */
+    @Test
+    void extractsControlledTemplateFieldPermissions()
+    {
+        String permissionStart = """
+                <startEvent id="start" name="提交申请" flowable:formKey="key_1">
+                  <extensionElements>
+                    <flowable:formProperty id="approva_permission_default" name="批量默认字段权限"
+                      type="string" readable="true" writable="true" required="false"/>
+                    <flowable:formProperty id="approva_permission_field_1" name="金额"
+                      type="string" variable="amount" readable="true" writable="true" required="true"/>
+                  </extensionElements>
+                </startEvent>
+                """.strip();
+        String xml = validBpmn().replace(
+                "<startEvent id=\"start\" name=\"提交申请\" flowable:formKey=\"key_1\"/>",
+                permissionStart);
+
+        WorkflowBpmnFormReference reference = service.validate(
+                xml.getBytes(StandardCharsets.UTF_8)).formReferences().get(0);
+
+        assertThat(reference.sourceType()).isEqualTo(WorkflowFormSourceType.TEMPLATE);
+        assertThat(reference.defaultPermission()).isEqualTo(
+                WorkflowFormFieldPermissionMode.EDITABLE);
+        assertThat(reference.fieldPermissions()).containsExactlyEntriesOf(
+                java.util.Map.of("amount", WorkflowFormFieldPermissionMode.REQUIRED));
     }
 
     /**
@@ -547,7 +580,43 @@ class WorkflowBpmnServiceTest
                 .hasSize(2);
     }
 
-/**
+    /**
+     * 验证发起时成员来源使用固定白名单表达式且不要求办理时选择前驱。
+     *
+     * @return 无返回值；设计器生成的发起来源模型被原始表达式门禁误拒绝时测试失败。
+     */
+    @Test
+    void allowsStartMultiInstanceForSaveAndDeployment()
+    {
+        String startBpmn = controlledMultiInstanceBpmn()
+                .replace("${multiInstanceHandler.getUserIds(execution)}",
+                        "${multiInstanceHandler.getStartUserIds(execution)}")
+                .replace("<sequenceFlow id=\"flow1\" sourceRef=\"start\" targetRef=\"prepare\"/>",
+                        "<sequenceFlow id=\"flow1\" sourceRef=\"start\" targetRef=\"approve\"/>")
+                .replace(ordinaryInitializerTaskXml(), "")
+                .replace("<sequenceFlow id=\"flow2\" sourceRef=\"prepare\" targetRef=\"approve\"/>", "");
+
+        assertThat(service.validateForSave(startBpmn.getBytes(StandardCharsets.UTF_8))).isNotNull();
+        assertThat(service.validateCompiledDeployment(startBpmn.getBytes(StandardCharsets.UTF_8)))
+                .isNotNull();
+    }
+
+    /**
+     * 验证发起成员 handler 仅允许契约完整等值，近似方法名不能借受控集合白名单执行。
+     *
+     * @return 无返回值；篡改后的发起成员方法表达式被错误放行时测试失败
+     */
+    @Test
+    void rejectsTamperedStartMultiInstanceHandler()
+    {
+        String tamperedBpmn = controlledMultiInstanceBpmn().replace(
+                "${multiInstanceHandler.getUserIds(execution)}",
+                "${multiInstanceHandler.getStartUserIdsUnsafe(execution)}");
+
+        assertBadRequest(tamperedBpmn.getBytes(StandardCharsets.UTF_8), "表达式");
+    }
+
+    /**
      * 验证固定业务监听 Bean 可携带唯一注册表键和 JSON 配置，同时系统审计监听器仍完整保留。
      * @return 无返回值；受控执行或任务监听器被误拒绝时测试失败
      */

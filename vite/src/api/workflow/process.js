@@ -64,6 +64,18 @@ export function listCopiedProcesses(query) {
 }
 
 /**
+ * 将当前登录用户有权读取的抄送记录原子标记为首次已读。
+ * @param {string|number} copyId 正式 wf_copy 记录主键。
+ * @returns {Promise<object>} 后端对象授权、并发幂等更新后的真实抄送视图。
+ */
+export function markCopyRead(copyId) {
+  return request({
+    url: `/workflow/process/copy/${encodeURIComponent(copyId)}/read`,
+    method: 'put'
+  })
+}
+
+/**
  * 查询定义、部署和可选实例关系校验后的开始表单快照。
  * @param {object} query definitionId、deployId 和可选 procInsId。
  * @returns {Promise<object>} data 为不可变部署表单快照的响应。

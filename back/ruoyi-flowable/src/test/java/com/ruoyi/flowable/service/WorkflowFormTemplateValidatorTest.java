@@ -107,6 +107,81 @@ class WorkflowFormTemplateValidatorTest
     }
 
     /**
+     * 验证节点部署快照中的隐藏字段仍属于 schema，但不会进入详情可读字段集合。
+     * @return void，隐藏字段被详情层回显或旧模板兼容语义丢失时测试失败
+     */
+    @Test
+    void extractsOnlyReadableVariablesWhileKeepingLegacyFieldsReadable()
+    {
+        String content = """
+                {
+                  "fields": [
+                    {
+                      "__vModel__": "legacyReadable",
+                      "__config__": {"layout": "colFormItem", "tag": "el-input"}
+                    },
+                    {
+                      "__vModel__": "hiddenField",
+                      "__config__": {
+                        "layout": "colFormItem",
+                        "tag": "el-input",
+                        "workflowHidden": true,
+                        "workflowReadable": false,
+                        "workflowWritable": false
+                      },
+                      "disabled": true
+                    },
+                    {
+                      "__vModel__": "readonlyField",
+                      "__config__": {
+                        "layout": "colFormItem",
+                        "tag": "el-input",
+                        "workflowHidden": false,
+                        "workflowReadable": true,
+                        "workflowWritable": false
+                      },
+                      "disabled": true
+                    }
+                  ]
+                }
+                """;
+
+        assertThat(validator.extractVariableNames(content))
+                .containsExactly("legacyReadable", "hiddenField", "readonlyField");
+        assertThat(validator.extractReadableVariableNames(content))
+                .containsExactly("legacyReadable", "readonlyField");
+    }
+
+    /**
+     * 验证用户主键来源目录只保留可见可读的单值字段，并对同名异构声明失败关闭。
+     * @return void，隐藏、无读权限、集合、对象或同名复合字段进入目录时测试失败
+     */
+    @Test
+    void extractsOnlyVisibleReadableSingleUserIdSources()
+    {
+        String content = """
+                {
+                  "fields": [
+                    {"__vModel__":"textUser","__config__":{"layout":"colFormItem","tag":"el-input"}},
+                    {"__vModel__":"numberUser","__config__":{"layout":"colFormItem","tag":"el-input-number"}},
+                    {"__vModel__":"readonlyUser","__config__":{"layout":"colFormItem","tag":"el-select","workflowReadable":true,"workflowWritable":false}},
+                    {"__vModel__":"hiddenUser","__config__":{"layout":"colFormItem","tag":"el-input","workflowHidden":true,"workflowReadable":false,"workflowWritable":false}},
+                    {"__vModel__":"writeOnlyUser","__config__":{"layout":"colFormItem","tag":"el-input","workflowReadable":false,"workflowWritable":true}},
+                    {"__vModel__":"multipleUsers","multiple":true,"__config__":{"layout":"colFormItem","tag":"el-select"}},
+                    {"__vModel__":"objectUsers","__config__":{"layout":"colFormItem","tag":"el-table"}},
+                    {"__vModel__":"conflictingUser","__config__":{"layout":"colFormItem","tag":"el-input"}},
+                    {"__vModel__":"conflictingUser","multiple":true,"__config__":{"layout":"colFormItem","tag":"el-select"}},
+                    {"__vModel__":"typeConflictingUser","__config__":{"layout":"colFormItem","tag":"el-input"}},
+                    {"__vModel__":"typeConflictingUser","__config__":{"layout":"colFormItem","tag":"el-input-number"}}
+                  ]
+                }
+                """;
+
+        assertThat(validator.extractUserIdSourceVariableNames(content))
+                .containsExactly("textUser", "numberUser", "readonlyUser");
+    }
+
+    /**
      * 验证未知组件标签和布局均被稳定拒绝。
      * @param config String，待放入 __config__ 的非法 JSON 片段
      * @return void，非法组件被放行时测试失败

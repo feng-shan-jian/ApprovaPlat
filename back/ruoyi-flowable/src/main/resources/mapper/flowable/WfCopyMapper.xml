@@ -17,6 +17,12 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <result property="userId" column="user_id"/>
         <result property="originatorId" column="originator_id"/>
         <result property="originatorName" column="originator_name"/>
+        <result property="sourceType" column="source_type"/>
+        <result property="triggerType" column="trigger_type"/>
+        <result property="triggerNodeId" column="trigger_node_id"/>
+        <result property="triggerNodeName" column="trigger_node_name"/>
+        <result property="readStatus" column="read_status"/>
+        <result property="readTime" column="read_time"/>
         <result property="createBy" column="create_by"/>
         <result property="createTime" column="create_time"/>
         <result property="updateBy" column="update_by"/>
@@ -28,7 +34,9 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
     <sql id="copyColumns">
         copy_id, copy_event_id, title, process_id, process_name, category_id,
         deployment_id, instance_id, task_id, user_id, originator_id,
-        originator_name, create_by, create_time, update_by, update_time,
+        originator_name, source_type, trigger_type, trigger_node_id,
+        trigger_node_name, read_status, read_time,
+        create_by, create_time, update_by, update_time,
         remark, del_flag
     </sql>
 
@@ -39,31 +47,71 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
           and del_flag = '0'
     </select>
 
+    <select id="selectByIdAndUserId" resultMap="WfCopyResult">
+        select <include refid="copyColumns"/>
+        from wf_copy
+        where copy_id = #{copyId}
+          and user_id = #{userId}
+          and del_flag = '0'
+    </select>
+
     <insert id="insertBatch">
         <choose>
             <when test="copies != null and copies.size() > 0">
                 insert into wf_copy
                     (copy_event_id, title, process_id, process_name, category_id,
                      deployment_id, instance_id, task_id, user_id, originator_id,
-                     originator_name, create_by, create_time, remark, del_flag)
+                     originator_name, source_type, trigger_type, trigger_node_id,
+                     trigger_node_name, read_status, read_time,
+                     create_by, create_time, remark, del_flag)
                 values
                 <foreach collection="copies" item="copy" separator=",">
                     (#{copy.copyEventId}, #{copy.title}, #{copy.processId}, #{copy.processName},
                      #{copy.categoryId}, #{copy.deploymentId}, #{copy.instanceId}, #{copy.taskId},
-                     #{copy.userId}, #{copy.originatorId}, #{copy.originatorName}, #{copy.createBy},
-                     current_timestamp, #{copy.remark}, '0')
+                     #{copy.userId}, #{copy.originatorId}, #{copy.originatorName},
+                     #{copy.sourceType}, #{copy.triggerType}, #{copy.triggerNodeId},
+                     #{copy.triggerNodeName}, '0', null,
+                     #{copy.createBy}, current_timestamp(3), #{copy.remark}, '0')
                 </foreach>
             </when>
             <otherwise>
                 insert into wf_copy
                     (copy_event_id, title, process_id, process_name, category_id,
                      deployment_id, instance_id, task_id, user_id, originator_id,
-                     originator_name, create_by, create_time, remark, del_flag)
-                select '', '', '', '', '', '', '', null, 0, 0, '', '',
-                       current_timestamp, null, '0'
+                     originator_name, source_type, trigger_type, trigger_node_id,
+                     trigger_node_name, read_status, read_time,
+                     create_by, create_time, remark, del_flag)
+                select '', '', '', '', '', '', '', null, 0, 0, '', 'MANUAL',
+                       'MANUAL_COMPLETE', null, null, '0', null, '',
+                       current_timestamp(3), null, '0'
                 where 1 = 0
             </otherwise>
         </choose>
+    </insert>
+
+    <insert id="insertBatchIdempotent">
+        insert into wf_copy
+            (copy_event_id, title, process_id, process_name, category_id,
+             deployment_id, instance_id, task_id, user_id, originator_id,
+             originator_name, source_type, trigger_type, trigger_node_id,
+             trigger_node_name, read_status, read_time,
+             create_by, create_time, remark, del_flag)
+        values
+        <foreach collection="copies" item="copy" separator=",">
+            (#{copy.copyEventId}, #{copy.title}, #{copy.processId}, #{copy.processName},
+             #{copy.categoryId}, #{copy.deploymentId}, #{copy.instanceId}, #{copy.taskId},
+             #{copy.userId}, #{copy.originatorId}, #{copy.originatorName},
+             #{copy.sourceType}, #{copy.triggerType}, #{copy.triggerNodeId},
+             #{copy.triggerNodeName}, '0', null, #{copy.createBy}, current_timestamp(3),
+             #{copy.remark}, '0')
+        </foreach>
+        as incoming
+        on duplicate key update
+            source_type = case
+                when wf_copy.source_type = incoming.source_type then wf_copy.source_type
+                else 'MANUAL_AUTO'
+            end,
+            update_time = current_timestamp(3)
     </insert>
 
     <sql id="copyListConditions">
@@ -93,6 +141,9 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <if test="filter != null and filter.deploymentId != null and filter.deploymentId != ''">
             and deployment_id = #{filter.deploymentId}
         </if>
+        <if test="filter != null and filter.readStatus != null and filter.readStatus != ''">
+            and read_status = #{filter.readStatus}
+        </if>
     </sql>
 
     <select id="selectListByUserId" resultMap="WfCopyResult">
@@ -101,6 +152,19 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <include refid="copyListConditions"/>
         order by create_time desc, copy_id desc
     </select>
+
+    <update id="markRead">
+        update wf_copy
+        set read_status = '1',
+            read_time = current_timestamp(3),
+            update_by = #{updateBy},
+            update_time = current_timestamp(3)
+        where copy_id = #{copyId}
+          and user_id = #{userId}
+          and del_flag = '0'
+          and read_status = '0'
+          and read_time is null
+    </update>
 
     <select id="countListByUserId" resultType="java.lang.Long">
         select count(*)

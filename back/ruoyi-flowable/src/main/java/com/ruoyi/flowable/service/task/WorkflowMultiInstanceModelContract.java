@@ -26,10 +26,13 @@ public final class WorkflowMultiInstanceModelContract
     public static final String COLLECTION_EXPRESSION =
             "${multiInstanceHandler.getUserIds(execution)}";
 
+    /** 发起页面受控成员集合固定表达式。 */
+    public static final String START_COLLECTION_EXPRESSION =
+            "${multiInstanceHandler.getStartUserIds(execution)}";
+
     /** 固定成员多实例集合表达式的严格语法，成员只能是以逗号连接的规范正整数用户主键。 */
     private static final Pattern FIXED_COLLECTION_EXPRESSION_PATTERN = Pattern.compile(
             "\\$\\{multiInstanceHandler\\.getFixedUserIds\\(execution, '([1-9][0-9]*(?:,[1-9][0-9]*)*)'\\)\\}");
-
     /** 会签固定完成条件。 */
     public static final String ALL_COMPLETION_CONDITION =
             "${nrOfCompletedInstances == nrOfInstances}";
@@ -65,8 +68,10 @@ public final class WorkflowMultiInstanceModelContract
         String collectionString = loop.getCollectionString() == null
                 ? "" : loop.getCollectionString().trim();
         return COLLECTION_EXPRESSION.equals(inputDataItem)
+                || START_COLLECTION_EXPRESSION.equals(inputDataItem)
                 || FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(inputDataItem).matches()
                 || COLLECTION_EXPRESSION.equals(collectionString)
+                || START_COLLECTION_EXPRESSION.equals(collectionString)
                 || FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(collectionString).matches();
     }
 
@@ -84,6 +89,22 @@ public final class WorkflowMultiInstanceModelContract
         }
         return COLLECTION_EXPRESSION.equals(trimToEmpty(loop.getInputDataItem()))
                 || COLLECTION_EXPRESSION.equals(trimToEmpty(loop.getCollectionString()));
+    }
+
+    /**
+     * 判断循环是否使用发起页面专用人员字段提供的受控集合。
+     *
+     * @param loop MultiInstanceLoopCharacteristics，可为空的多实例循环配置。
+     * @return boolean，仅精确匹配发起时受控集合表达式时返回 true。
+     */
+    public static boolean usesStartHandler(MultiInstanceLoopCharacteristics loop)
+    {
+        if (loop == null)
+        {
+            return false;
+        }
+        return START_COLLECTION_EXPRESSION.equals(trimToEmpty(loop.getInputDataItem()))
+                || START_COLLECTION_EXPRESSION.equals(trimToEmpty(loop.getCollectionString()));
     }
 
     /**
@@ -174,11 +195,15 @@ public final class WorkflowMultiInstanceModelContract
         WorkflowMultiInstanceVariables.requireActivityId(userTask.getId());
         MultiInstanceLoopCharacteristics loop = userTask.getLoopCharacteristics();
         boolean dynamicSource = usesDynamicHandler(loop);
+        boolean startSource = usesStartHandler(loop);
         boolean fixedSource = usesFixedHandler(loop);
         if (loop == null || loop.isSequential() || loop.isNoWaitStatesAsyncLeave()
                 || !Objects.equals(ASSIGNEE_EXPRESSION, userTask.getAssignee())
-                || dynamicSource == fixedSource
+                || (dynamicSource ? 1 : 0) + (startSource ? 1 : 0)
+                    + (fixedSource ? 1 : 0) != 1
                 || (dynamicSource && !Objects.equals(COLLECTION_EXPRESSION,
+                    loop.getInputDataItem()))
+                || (startSource && !Objects.equals(START_COLLECTION_EXPRESSION,
                     loop.getInputDataItem()))
                 || (fixedSource && !FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(
                     trimToEmpty(loop.getInputDataItem())).matches())

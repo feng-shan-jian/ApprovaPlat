@@ -360,7 +360,7 @@ class WorkflowProcessInstanceServiceTest
         ProcessInstance active = process(false);
         ProcessInstance suspended = process(true);
         stubHistoricSequence(historic);
-        stubRuntimeSequence(active, suspended);
+        stubStateTree(active, suspended);
 
         WorkflowInstanceStateView result = service.updateState(
                 new WorkflowInstanceStateRequest(INSTANCE_ID,
@@ -381,7 +381,8 @@ class WorkflowProcessInstanceServiceTest
     {
         setCurrentUser("9", Set.of("workflow:process:state"));
         stubHistoricSequence(historic(INSTANCE_ID, "7", false, null));
-        stubRuntimeSequence(process(true));
+        ProcessInstance suspended = process(true);
+        stubStateTree(suspended);
 
         WorkflowInstanceStateView result = service.updateState(
                 new WorkflowInstanceStateRequest(INSTANCE_ID,
@@ -390,6 +391,52 @@ class WorkflowProcessInstanceServiceTest
         assertThat(result.changed()).isFalse();
         verify(runtimeService, never()).suspendProcessInstanceById(anyString());
         verify(runtimeService, never()).activateProcessInstanceById(anyString());
+    }
+
+    /**
+     * 验证从 CallActivity 子实例发起挂起时按根对象定位并原子挂起完整执行树。
+     *
+     * @return 无返回值，子实例单独挂起、根授权边界丢失或写后状态未完整复核时测试失败
+     */
+    @Test
+    void suspendsCompleteCallActivityTreeFromChildInstance()
+    {
+        String rootInstanceId = "root-state";
+        String childInstanceId = "child-state";
+        setCurrentUser("9", Set.of("workflow:process:state"));
+        stubHistoricSequence(historic(childInstanceId, "7", false, rootInstanceId));
+
+        ProcessInstance childActive = process(childInstanceId, rootInstanceId,
+                "super-state", false);
+        ProcessInstance rootActive = process(rootInstanceId, rootInstanceId, null, false);
+        ProcessInstance childSuspended = process(childInstanceId, rootInstanceId,
+                "super-state", true);
+        ProcessInstance rootSuspended = process(rootInstanceId, rootInstanceId, null, true);
+        ProcessInstanceQuery requestedQuery = processQueryReturning(childInstanceId, childActive);
+        ProcessInstanceQuery rootQuery = processQueryReturning(rootInstanceId, rootActive);
+        ProcessInstanceQuery treeBefore = processInstancesQuery(
+                List.of(rootActive, childActive));
+        ProcessInstanceQuery treeAfter = processInstancesQuery(
+                List.of(rootSuspended, childSuspended));
+        when(runtimeService.createProcessInstanceQuery()).thenReturn(
+                requestedQuery, rootQuery, treeBefore, treeAfter);
+
+        Execution childExecution = mock(Execution.class);
+        when(childExecution.getProcessInstanceId()).thenReturn(childInstanceId);
+        when(childExecution.getRootProcessInstanceId()).thenReturn(rootInstanceId);
+        ExecutionQuery executionQuery = mock(ExecutionQuery.class);
+        when(executionQuery.rootProcessInstanceId(rootInstanceId)).thenReturn(executionQuery);
+        when(executionQuery.list()).thenReturn(List.of(childExecution));
+        when(runtimeService.createExecutionQuery()).thenReturn(executionQuery);
+
+        WorkflowInstanceStateView result = service.updateState(
+                new WorkflowInstanceStateRequest(childInstanceId,
+                        WorkflowInstanceState.SUSPENDED));
+
+        assertThat(result).isEqualTo(new WorkflowInstanceStateView(childInstanceId,
+                WorkflowInstanceState.SUSPENDED, true));
+        verify(runtimeService).suspendProcessInstanceById(childInstanceId);
+        verify(runtimeService).suspendProcessInstanceById(rootInstanceId);
     }
 
     /**
@@ -639,6 +686,49 @@ class WorkflowProcessInstanceServiceTest
     {
         stubHistoricSequence(historic(INSTANCE_ID, startUserId, false, null));
         stubRuntimeSequence(process(suspended));
+    }
+
+    /**
+     * 配置单根实例状态切换所需的执行树预检和可选写后复核查询。
+     *
+     * @param instances ProcessInstance[]，第一项为切换前实例，第二项可选为切换后实例
+     * @return 无返回值，后续 updateState 可使用与生产批量查询一致的 mock
+     */
+    private void stubStateTree(ProcessInstance... instances)
+    {
+        ProcessInstance before = instances[0];
+        ProcessInstanceQuery requestedQuery = processQueryReturning(INSTANCE_ID, before);
+        ProcessInstanceQuery treeBefore = processInstancesQuery(List.of(before));
+        if (instances.length > 1)
+        {
+            ProcessInstanceQuery treeAfter = processInstancesQuery(List.of(instances[1]));
+            when(runtimeService.createProcessInstanceQuery()).thenReturn(
+                    requestedQuery, treeBefore, treeAfter);
+        }
+        else
+        {
+            when(runtimeService.createProcessInstanceQuery()).thenReturn(
+                    requestedQuery, treeBefore);
+        }
+
+        ExecutionQuery executionQuery = mock(ExecutionQuery.class);
+        when(executionQuery.rootProcessInstanceId(INSTANCE_ID)).thenReturn(executionQuery);
+        when(executionQuery.list()).thenReturn(List.of());
+        when(runtimeService.createExecutionQuery()).thenReturn(executionQuery);
+    }
+
+    /**
+     * 创建按实例主键集合返回完整运行树的 Flowable 查询替身。
+     *
+     * @param instances List&lt;ProcessInstance&gt;，查询应返回的根及子实例
+     * @return ProcessInstanceQuery，支持 processInstanceIds(...).list() 链路
+     */
+    private ProcessInstanceQuery processInstancesQuery(List<ProcessInstance> instances)
+    {
+        ProcessInstanceQuery query = mock(ProcessInstanceQuery.class);
+        when(query.processInstanceIds(any())).thenReturn(query);
+        when(query.list()).thenReturn(instances);
+        return query;
     }
 
     /**

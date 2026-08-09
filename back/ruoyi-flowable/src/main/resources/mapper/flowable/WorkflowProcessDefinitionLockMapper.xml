@@ -30,4 +30,44 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         for update
     </select>
 
+    <!--
+      部署删除与草稿创建必须先锁同一 ACT_RE_DEPLOYMENT 主键行，再读取或写入
+      wf_process_draft。当前读会等待先持锁事务提交，并避免二次检查后的插入窗口。
+    -->
+    <select id="selectDeploymentIdForUpdate" resultType="string" timeout="10">
+        select ID_
+        from ACT_RE_DEPLOYMENT
+        where ID_ = #{deploymentId}
+        for update
+    </select>
+
+    <!--
+      Flowable RuntimeService 普通 count 会复用 REPEATABLE_READ 旧快照；锁定读必须直接
+      复核已提交运行实例，避免等待部署锁期间新启动的实例被旧快照遗漏。
+    -->
+    <select id="selectRuntimeInstanceReferenceForUpdate" resultType="int" timeout="10">
+        select 1
+        from ACT_RU_EXECUTION runtime_instance
+        inner join ACT_RE_PROCDEF definition
+            on definition.ID_ = runtime_instance.PROC_DEF_ID_
+        where definition.DEPLOYMENT_ID_ = #{deploymentId}
+          and runtime_instance.PARENT_ID_ is null
+        limit 1
+        for update
+    </select>
+
+    <!--
+      历史表没有指向 ACT_RE_PROCDEF 的外键；必须以当前锁定读识别同步快速结束的实例，
+      否则非级联删除可以留下无法按部署追踪的孤立历史记录。
+    -->
+    <select id="selectHistoricInstanceReferenceForUpdate" resultType="int" timeout="10">
+        select 1
+        from ACT_HI_PROCINST historic_instance
+        inner join ACT_RE_PROCDEF definition
+            on definition.ID_ = historic_instance.PROC_DEF_ID_
+        where definition.DEPLOYMENT_ID_ = #{deploymentId}
+        limit 1
+        for update
+    </select>
+
 </mapper>

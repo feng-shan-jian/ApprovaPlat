@@ -22,6 +22,8 @@ const propertiesPanelDoc = readFileSync(
   new URL('../../src/components/workflow/designer/DesignerPropertiesPanel.md', import.meta.url), 'utf8')
 const processDetailSource = readFileSync(
   new URL('../../src/views/workflow/work/detail.vue', import.meta.url), 'utf8')
+const processStartSource = readFileSync(
+  new URL('../../src/views/workflow/work/start.vue', import.meta.url), 'utf8')
 const businessListenerEditorSource = readFileSync(
   new URL('../../src/components/workflow/designer/BusinessListenerEditor.vue', import.meta.url), 'utf8')
 const extensionPropertyEditorSource = readFileSync(
@@ -30,6 +32,8 @@ const userTaskSlaEditorSource = readFileSync(
   new URL('../../src/components/workflow/designer/UserTaskSlaEditor.vue', import.meta.url), 'utf8')
 const userTaskSlaEditorDoc = readFileSync(
   new URL('../../src/components/workflow/designer/UserTaskSlaEditor.md', import.meta.url), 'utf8')
+const autoCopyRuleEditorSource = readFileSync(
+  new URL('../../src/components/workflow/designer/AutoCopyRuleEditor.vue', import.meta.url), 'utf8')
 const slaApiSource = readFileSync(
   new URL('../../src/api/workflow/sla.js', import.meta.url), 'utf8')
 const embeddedFormEditorSource = readFileSync(
@@ -50,6 +54,10 @@ const designerApiSource = readFileSync(
   new URL('../../src/api/workflow/designer.js', import.meta.url), 'utf8')
 const modelApiSource = readFileSync(
   new URL('../../src/api/workflow/model.js', import.meta.url), 'utf8')
+const processApiSource = readFileSync(
+  new URL('../../src/api/workflow/process.js', import.meta.url), 'utf8')
+const workflowProcessListSource = readFileSync(
+  new URL('../../src/components/workflow/WorkflowProcessList.vue', import.meta.url), 'utf8')
 const extensionApiSource = readFileSync(
   new URL('../../src/api/workflow/extension.js', import.meta.url), 'utf8')
 const extensionPageSource = readFileSync(
@@ -72,6 +80,78 @@ const bpmnEventPageDoc = readFileSync(
   new URL('../../src/views/workflow/bpmnEvent/index.md', import.meta.url), 'utf8')
 
 /**
+ * 验证模型级自动抄送结构化作者契约、正式身份目录和抄送首次阅读链路。
+ * @returns {Promise<void>} BPMN 往返、服务端已读或受控目录任一退化时断言失败。
+ */
+test('自动抄送规则与抄送首次阅读连接正式 BPMN 和服务端状态', async () => {
+  assert.match(propertiesPanelSource, /<AutoCopyRuleEditor[\s\S]*?@change="emit\('auto-copy-change', \$event\)"/)
+  assert.match(autoCopyRuleEditorSource, /NODE_ARRIVED|triggerOptions/)
+  assert.match(autoCopyRuleEditorSource, /FORM_USER_FIELD/)
+  assert.match(autoCopyRuleEditorSource, /应用自动抄送规则/)
+  assert.match(designerSource, /AUTO_COPY_PROPERTY_NAME = 'approva\.autoCopyRules'/)
+  assert.match(designerSource, /PROCESS_COMPLETED[\s\S]*?NODE_ARRIVED[\s\S]*?NODE_COMPLETED/)
+  assert.match(designerSource, /item\.name === AUTO_COPY_PROPERTY_NAME/)
+  assert.match(designerSource,
+    /function updateAutoCopyRules[\s\S]*?CONTROLLED_LOOP_PROPERTY_NAMES\.has\(item\.name\)[\s\S]*?SLA_PROPERTY_NAME_SET\.has\(item\.name\)[\s\S]*?PARTICIPANT_RULE_PROPERTY_NAMES\.has\(item\.name\)[\s\S]*?persistExtensionProperties/)
+  assert.match(designPageSource, /capability: 'copy'/)
+  assert.match(designPageSource, /type: 'role', capability: 'copy'/)
+  assert.match(designPageSource, /type: 'dept', capability: 'copy'/)
+  assert.match(designerSource, /item\.name\.startsWith\('approva\.'\)/)
+
+  assert.match(processApiSource, /url: `\/workflow\/process\/copy\/\$\{encodeURIComponent\(copyId\)\}\/read`[\s\S]*?method: 'put'/)
+  assert.match(workflowProcessListSource, /prop="readStatus"[\s\S]*?value="0"[\s\S]*?value="1"/)
+  assert.match(workflowProcessListSource, /await markCopyRead\(copyId\)[\s\S]*?await router\.push/)
+  assert.match(workflowProcessListSource, /const taskId = isCopy\.value \? undefined : \(row\.taskId \|\| undefined\)/)
+  assert.match(workflowProcessListSource, /query: \{ source: props\.mode, \.\.\.\(taskId \? \{ taskId \} : \{\}\) \}/)
+  assert.match(workflowProcessListSource, /sourceType/)
+  assert.match(workflowProcessListSource, /triggerType/)
+  assert.match(workflowProcessListSource, /readTime/)
+  assert.doesNotMatch(`${designerSource}\n${autoCopyRuleEditorSource}\n${workflowProcessListSource}`, /localStorage|sessionStorage/)
+
+  const processRules = JSON.stringify({
+    version: 1,
+    rules: [{ id: 'auto_copy_process', trigger: 'PROCESS_COMPLETED', recipients: [{ type: 'INITIATOR', values: [] }] }]
+  }).replaceAll('"', '&quot;')
+  const taskRules = JSON.stringify({
+    version: 1,
+    rules: [{
+      id: 'auto_copy_task',
+      trigger: 'NODE_ARRIVED',
+      recipients: [
+        { type: 'USER', values: ['1', '2'] },
+        { type: 'GROUP', values: ['ROLE3', 'DEPT4'] },
+        { type: 'FORM_USER_FIELD', values: ['managerId'] }
+      ]
+    }]
+  }).replaceAll('"', '&quot;')
+  const moddle = new BpmnModdle({ flowable: flowableModdle })
+  const source = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="urn:approvaplat:auto-copy">
+  <process id="autoCopyContract" isExecutable="true">
+    <extensionElements><flowable:properties><flowable:property name="approva.autoCopyRules" value="${processRules}" /></flowable:properties></extensionElements>
+    <userTask id="review"><extensionElements><flowable:properties><flowable:property name="approva.autoCopyRules" value="${taskRules}" /></flowable:properties></extensionElements></userTask>
+  </process>
+</definitions>`
+  const { rootElement, warnings } = await moddle.fromXML(source)
+  assert.deepEqual(warnings, [])
+  const process = rootElement.rootElements.find(element => element.$type === 'bpmn:Process')
+  const task = process.flowElements.find(element => element.$type === 'bpmn:UserTask')
+  /**
+   * 读取测试 BPMN 元素中的自动抄送属性正文。
+   * @param {object} element Process 或 UserTask moddle 对象。
+   * @returns {string} `approva.autoCopyRules` JSON 文本。
+   */
+  const propertyValue = element => element.extensionElements.values
+    .find(value => value.$type === 'flowable:Properties').values
+    .find(value => value.name === 'approva.autoCopyRules').value
+  assert.equal(JSON.parse(propertyValue(process)).rules[0].trigger, 'PROCESS_COMPLETED')
+  assert.deepEqual(JSON.parse(propertyValue(task)).rules[0].recipients[1].values, ['ROLE3', 'DEPT4'])
+  const { xml } = await moddle.toXML(rootElement, { format: true })
+  assert.match(xml, /approva\.autoCopyRules/)
+  assert.match(xml, /NODE_ARRIVED/)
+})
+
+/**
  * 验证设计器能力接入真实 Modeler 模块和服务端 API，而不是只渲染工具栏按钮。
  * @returns {void} 任一核心能力未连接真实实现时断言失败。
  */
@@ -85,8 +165,15 @@ test('设计器工具命令连接真实 BPMN 服务', () => {
   assert.match(designerSource, /modeler\.get\('linting'\)\.toggle/)
   assert.match(designerSource, /toggleMode\.toggleMode/)
   assert.match(designerSource, /validateModelBpmn\(xml\)/)
-  assert.match(designerSource, /onActivated\(repairCachedSequenceFlowReferences\)/)
+  assert.match(designerSource, /normalizeSequenceFlowReferences\(rawSource\)/)
+  assert.match(designerSource,
+    /onActivated\(\(\) => \{[\s\S]*?bindDesignerLifecycleListeners\(\)[\s\S]*?repairCachedSequenceFlowReferences\(\)/)
   assert.match(designerSource, /modeler\.saveXML\(\{ format: true \}\)[\s\S]*?normalizeSequenceFlowReferences\(cachedXml\)[\s\S]*?await importXml\(normalizedXml\)/)
+  assert.match(propertiesPanelSource, /<el-collapse v-model="activeSections">/)
+  assert.match(propertiesPanelSource, /展开全部属性分区[\s\S]*?收起全部属性分区/)
+  assert.match(propertiesPanelSource, /emit\('close'\)/)
+  assert.match(propertiesPanelSource, /callActivityOptions: \{ type: Array, default: \(\) => \[\] \}/)
+  assert.match(propertiesPanelSource, /callActivityParentFields: \{ type: Array, default: \(\) => \[\] \}/)
   assert.match(modelApiSource, /url: '\/workflow\/model\/validate'/)
 })
 
@@ -96,6 +183,9 @@ test('设计器工具命令连接真实 BPMN 服务', () => {
  */
 test('设计器属性面板支持完整显示、折叠和响应式调整', () => {
   assert.match(designerSource, /new ResizeObserver\(handleDesignerBodyResize\)/)
+  assert.match(designerSource, /onDeactivated\(unbindDesignerLifecycleListeners\)/)
+  assert.match(designerSource,
+    /function unbindDesignerLifecycleListeners\(\)[\s\S]*?removeEventListener\('keydown'[\s\S]*?removeEventListener\('pointermove'[\s\S]*?stopPropertiesResize\(\)[\s\S]*?bodyResizeObserver\?\.disconnect\(\)/)
   assert.match(designerSource, /modeler\?\.get\('canvas'\)\?\.resized\(\)/)
   assert.match(designerSource, /role="separator"[\s\S]*?aria-label="调整属性面板宽度"/)
   assert.match(designerSource, /process-designer__body--compact-properties/)
@@ -307,15 +397,23 @@ test('活动循环和通用扩展属性执行真实 XML 往返', async () => {
 })
 
 /**
- * 验证固定会签和或签使用严格受控人员表达式完成真实 BPMN 往返。
- * @returns {Promise<void>} 人员来源面板、受控表达式或多实例核心字段缺失时断言失败。
+ * 验证三种会签和或签人员来源使用受控字段，并完成固定与发起来源 BPMN 往返。
+ * @returns {Promise<void>} 人员来源、启动请求或受控多实例核心字段缺失时断言失败。
  */
-test('固定会签和或签人员来源执行真实 XML 往返', async () => {
-  assert.match(propertiesPanelSource, /人员来源[\s\S]*?动态选择[\s\S]*?固定人员/)
+test('会签和或签三种人员来源执行受控页面与 XML 契约', async () => {
+  assert.match(propertiesPanelSource, /人员来源[\s\S]*?办理时选择[\s\S]*?发起时选择[\s\S]*?固定人员/)
   assert.match(propertiesPanelSource, /fixedMultiInstanceUserIds[\s\S]*?请选择会签或或签办理人/)
+  assert.match(propertiesPanelSource, /handleMemberSourceChange[\s\S]*?value === 'fixed'[\s\S]*?fixedMultiInstanceUserIds\.length/)
+  assert.match(propertiesPanelSource, /props\.flags\.userTask[\s\S]*?!\['sequential', 'parallel'\]\.includes/)
+  assert.match(propertiesPanelSource, /\['sequential', 'parallel'\]\.includes\(state\.multiInstanceType\) && !flags\.userTask/)
   assert.match(designerSource, /getFixedUserIds\(execution, '\$\{userIds\.join\(','\)\}'\)/)
+  assert.match(designerSource, /START_MULTI_INSTANCE_COLLECTION = '\$\{multiInstanceHandler\.getStartUserIds\(execution\)\}'/)
+  assert.match(designerSource, /multiInstanceMemberSource === 'fixed'[\s\S]*?fixedMultiInstanceUserIds\.length === 0[\s\S]*?固定会签或或签办理人必须选择/)
   assert.match(designerSource, /FIXED_MULTI_INSTANCE_COLLECTION_PATTERN[\s\S]*?getFixedUserIds/)
   assert.match(designerSource, /固定会签或或签办理人必须选择 1 至 100 名有效用户/)
+  assert.match(processStartSource, /startMultiInstanceAssignments[\s\S]*?multiInstanceUserIds\[assignment\.activityId\]/)
+  assert.match(processStartSource, /listApprovalUserOptions[\s\S]*?mergeApprovalUserOptions/)
+  assert.match(processStartSource, /multiInstanceUserIds: startMembers/)
 
   const moddle = new BpmnModdle({ flowable: flowableModdle })
   const source = `<?xml version="1.0" encoding="UTF-8"?>
@@ -342,6 +440,20 @@ test('固定会签和或签人员来源执行真实 XML 往返', async () => {
   assert.equal(task.loopCharacteristics.completionCondition.body, '${nrOfCompletedInstances == nrOfInstances}')
   const { xml } = await moddle.toXML(rootElement, { format: true })
   assert.match(xml, /flowable:collection="\$\{multiInstanceHandler\.getFixedUserIds\(execution, &#39;8,9&#39;\)\}"/)
+
+  const startSource = source.replace(
+    "${multiInstanceHandler.getFixedUserIds(execution, '8,9')}",
+    '${multiInstanceHandler.getStartUserIds(execution)}'
+  )
+  const startDocument = await moddle.fromXML(startSource)
+  assert.deepEqual(startDocument.warnings, [])
+  const startProcess = startDocument.rootElement.rootElements.find(element => element.$type === 'bpmn:Process')
+  const startTask = startProcess.flowElements.find(element => element.id === 'countersign')
+  assert.equal(startTask.loopCharacteristics.get('flowable:collection'),
+    '${multiInstanceHandler.getStartUserIds(execution)}')
+  const serializedStart = await moddle.toXML(startDocument.rootElement, { format: true })
+  assert.match(serializedStart.xml,
+    /flowable:collection="\$\{multiInstanceHandler\.getStartUserIds\(execution\)\}"/)
 })
 
 /**

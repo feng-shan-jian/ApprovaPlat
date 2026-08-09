@@ -7,9 +7,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
+import org.flowable.bpmn.model.ExtensionAttribute;
+import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.UserTask;
 import org.junit.jupiter.api.BeforeEach;
@@ -213,6 +217,123 @@ class WorkflowBpmnIdentityValidatorTest
     }
 
     /**
+     * 验证自动抄送固定用户、角色和部门使用独立 copy 可见性门禁，不会混入候选认领资格。
+     *
+     * @return 无返回值；任一自动抄送身份未通过正式可见性查询时测试失败
+     */
+    @Test
+    void validatesAutoCopyIdentitiesWithCopyVisibility()
+    {
+        UserTask task = withAutoCopyRules(task("7", null, List.of(), List.of()), """
+                {"version":1,"rules":[{"id":"copy-1","trigger":"NODE_COMPLETED","recipients":[
+                  {"type":"USER","values":["8","9"]},
+                  {"type":"GROUP","values":["ROLE2","DEPT3"]}
+                ]}]}
+                """);
+        when(identityMapper.selectActiveUserIdsByUserIds(List.of(7L, 8L, 9L)))
+                .thenReturn(List.of(7L, 8L, 9L));
+        when(identityMapper.selectActiveRoleIdsByRoleIds(List.of(2L))).thenReturn(List.of(2L));
+        when(identityMapper.selectActiveDeptIdsByDeptIds(List.of(3L))).thenReturn(List.of(3L));
+        when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(7L)))
+                .thenReturn(List.of(7L));
+        when(identityMapper.selectCopyEligibleUserIdsByUserIds(List.of(8L, 9L)))
+                .thenReturn(List.of(8L, 9L));
+        when(identityMapper.selectCopyEligibleUserIdsByRoleIds(List.of(2L)))
+                .thenReturn(List.of(20L));
+        when(identityMapper.selectCopyEligibleUserIdsByDeptIds(List.of(3L)))
+                .thenReturn(List.of(30L));
+
+        validator.validate(document(task));
+
+        verify(identityMapper).selectCopyEligibleUserIdsByUserIds(List.of(8L, 9L));
+        verify(identityMapper).selectCopyEligibleUserIdsByRoleIds(List.of(2L));
+        verify(identityMapper).selectCopyEligibleUserIdsByDeptIds(List.of(3L));
+        verify(identityMapper, never()).selectClaimEligibleRoleIdsByRoleIds(List.of(2L));
+        verify(identityMapper, never()).selectClaimEligibleDeptIdsByDeptIds(List.of(3L));
+    }
+
+    /**
+     * 验证有效但缺少抄送列表或详情权限的固定用户会阻止部署。
+     *
+     * @return 无返回值；不可读取抄送对象的固定用户通过校验时测试失败
+     */
+    @Test
+    void rejectsAutoCopyUserWithoutCopyVisibility()
+    {
+        UserTask task = withAutoCopyRules(task("7", null, List.of(), List.of()), """
+                {"version":1,"rules":[{"id":"copy-user","trigger":"NODE_ARRIVED","recipients":[
+                  {"type":"USER","values":["8"]}
+                ]}]}
+                """);
+        when(identityMapper.selectActiveUserIdsByUserIds(List.of(7L, 8L)))
+                .thenReturn(List.of(7L, 8L));
+        when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(7L)))
+                .thenReturn(List.of(7L));
+        when(identityMapper.selectCopyEligibleUserIdsByUserIds(List.of(8L)))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> validator.validate(document(task)))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("自动抄送用户不具备抄送列表和流程详情权限")
+                .hasMessageContaining("8");
+    }
+
+    /**
+     * 验证每个自动抄送角色都必须独立解析出可见用户，不能由同批其他角色掩盖。
+     *
+     * @return 无返回值；空角色被另一有效角色掩盖并通过部署时测试失败
+     */
+    @Test
+    void rejectsEachAutoCopyRoleWithoutVisibleMember()
+    {
+        UserTask task = withAutoCopyRules(task("7", null, List.of(), List.of()), """
+                {"version":1,"rules":[{"id":"copy-roles","trigger":"NODE_COMPLETED","recipients":[
+                  {"type":"GROUP","values":["ROLE2","ROLE3"]}
+                ]}]}
+                """);
+        when(identityMapper.selectActiveUserIdsByUserIds(List.of(7L))).thenReturn(List.of(7L));
+        when(identityMapper.selectActiveRoleIdsByRoleIds(List.of(2L, 3L)))
+                .thenReturn(List.of(2L, 3L));
+        when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(7L)))
+                .thenReturn(List.of(7L));
+        when(identityMapper.selectCopyEligibleUserIdsByRoleIds(List.of(2L)))
+                .thenReturn(List.of(20L));
+        when(identityMapper.selectCopyEligibleUserIdsByRoleIds(List.of(3L)))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> validator.validate(document(task)))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("自动抄送角色没有具备抄送列表和流程详情权限的有效成员")
+                .hasMessageContaining("3");
+    }
+
+    /**
+     * 验证自动抄送部门没有可读取抄送对象的有效成员时会阻止部署。
+     *
+     * @return 无返回值；不可见部门通过部署校验时测试失败
+     */
+    @Test
+    void rejectsAutoCopyDeptWithoutVisibleMember()
+    {
+        UserTask task = withAutoCopyRules(task("7", null, List.of(), List.of()), """
+                {"version":1,"rules":[{"id":"copy-dept","trigger":"NODE_ARRIVED","recipients":[
+                  {"type":"GROUP","values":["DEPT3"]}
+                ]}]}
+                """);
+        when(identityMapper.selectActiveUserIdsByUserIds(List.of(7L))).thenReturn(List.of(7L));
+        when(identityMapper.selectActiveDeptIdsByDeptIds(List.of(3L))).thenReturn(List.of(3L));
+        when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(7L)))
+                .thenReturn(List.of(7L));
+        when(identityMapper.selectCopyEligibleUserIdsByDeptIds(List.of(3L)))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> validator.validate(document(task)))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("自动抄送部门没有具备抄送列表和流程详情权限的有效成员")
+                .hasMessageContaining("3");
+    }
+
+    /**
      * 创建包含单个用户任务的 BPMN 文档。
      *
      * @param task UserTask，待加入流程的任务
@@ -247,6 +368,32 @@ class WorkflowBpmnIdentityValidatorTest
         task.setOwner(owner);
         task.setCandidateUsers(candidateUsers);
         task.setCandidateGroups(candidateGroups);
+        return task;
+    }
+
+    /**
+     * 给用户任务添加与设计器保存格式一致的自动抄送扩展属性。
+     *
+     * @param task UserTask，自动抄送规则所属用户任务
+     * @param json String，符合 WorkflowAutoCopyRuleContract 的规则 JSON
+     * @return UserTask，已经附加 flowable:property 的原任务
+     */
+    private UserTask withAutoCopyRules(UserTask task, String json)
+    {
+        ExtensionElement property = new ExtensionElement();
+        property.setName("property");
+        property.setNamespace("http://flowable.org/bpmn");
+        property.addAttribute(new ExtensionAttribute("name",
+                WorkflowAutoCopyRuleContract.PROPERTY_NAME));
+        property.addAttribute(new ExtensionAttribute("value", json.strip()));
+
+        ExtensionElement container = new ExtensionElement();
+        container.setName("properties");
+        container.setNamespace("http://flowable.org/bpmn");
+        Map<String, List<ExtensionElement>> children = new HashMap<>();
+        children.put("property", List.of(property));
+        container.setChildElements(children);
+        task.addExtensionElement(container);
         return task;
     }
 }

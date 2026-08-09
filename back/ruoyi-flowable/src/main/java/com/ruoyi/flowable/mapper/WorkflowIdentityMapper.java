@@ -3,6 +3,7 @@ package com.ruoyi.flowable.mapper;
 import java.util.List;
 import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentityOptionView;
+import com.ruoyi.flowable.domain.vo.WorkflowIdentitySelectionView;
 
 /**
  * 工作流身份解析专用数据访问层。
@@ -80,6 +81,32 @@ public interface WorkflowIdentityMapper
             @Param("offset") long offset,
             @Param("pageSize") int pageSize);
 
+    /** @param type String，user、role 或 dept；@param keyword String，检索词；@return long，可读取抄送及详情的身份数。 */
+    long countCopyEligibleIdentityOptions(@Param("type") String type,
+            @Param("keyword") String keyword);
+
+    /**
+     * 查询至少包含一名抄送可见用户的正式用户、角色或部门目录。
+     * @param type String，user、role 或 dept
+     * @param keyword String，可空检索词
+     * @param offset long，分页偏移
+     * @param pageSize int，单页数量
+     * @return List&lt;WorkflowIdentityOptionView&gt;，可用于自动抄送的身份选项
+     */
+    List<WorkflowIdentityOptionView> selectCopyEligibleIdentityOptions(
+            @Param("type") String type, @Param("keyword") String keyword,
+            @Param("offset") long offset, @Param("pageSize") int pageSize);
+
+    /**
+     * 按主键批量读取正式身份目录名称和基础启用状态，包含已停用但尚未物理删除的对象。
+     *
+     * @param type String，user、role 或 dept
+     * @param ids List&lt;Long&gt;，已规范化且去重的正式主键
+     * @return List&lt;WorkflowIdentitySelectionView&gt;，存在于正式目录中的已选对象
+     */
+    List<WorkflowIdentitySelectionView> selectIdentitySelectionsByIds(
+            @Param("type") String type, @Param("ids") List<Long> ids);
+
     /**
      * 从指定用户中查询未删除且未停用的用户 ID。
      *
@@ -87,6 +114,15 @@ public interface WorkflowIdentityMapper
      * @return List&lt;Long&gt;，有效用户主键，按主键升序返回
      */
     List<Long> selectActiveUserIdsByUserIds(@Param("userIds") List<Long> userIds);
+
+    /** @param userIds List&lt;Long&gt;，用户主键；@return List&lt;Long&gt;，具备抄送列表和详情权限的有效用户。 */
+    List<Long> selectCopyEligibleUserIdsByUserIds(@Param("userIds") List<Long> userIds);
+
+    /** @param roleIds List&lt;Long&gt;，角色主键；@return List&lt;Long&gt;，角色内具备抄送可见性的有效用户。 */
+    List<Long> selectCopyEligibleUserIdsByRoleIds(@Param("roleIds") List<Long> roleIds);
+
+    /** @param deptIds List&lt;Long&gt;，部门主键；@return List&lt;Long&gt;，部门内具备抄送可见性的有效用户。 */
+    List<Long> selectCopyEligibleUserIdsByDeptIds(@Param("deptIds") List<Long> deptIds);
 
     /**
      * 从指定用户中查询当前具备流程办理资格的有效用户 ID。
@@ -171,4 +207,36 @@ public interface WorkflowIdentityMapper
      * @return List&lt;Long&gt;，有效部门主键；用户无有效部门时为空
      */
     List<Long> selectActiveDeptIdsByUserId(@Param("userId") Long userId);
+
+    /**
+     * 查询有效用户直属部门及其当前有效祖先部门，供流程发起范围按组织层级命中。
+     * @param userId Long，当前发起用户主键
+     * @return List&lt;Long&gt;，直属部门到祖先部门的有效主键集合
+     */
+    List<Long> selectActiveScopeDeptIdsByUserId(@Param("userId") Long userId);
+
+    /**
+     * 查询指定部门当前唯一且具备直接办理资格的负责人用户。
+     * @param deptIds List&lt;Long&gt;，正式部门主键
+     * @return List&lt;Long&gt;，负责人账号与有效用户精确匹配后的合格用户主键
+     */
+    List<Long> selectApprovalEligibleDeptLeaderUserIds(
+            @Param("deptIds") List<Long> deptIds);
+
+    /**
+     * 查询用户直属上级；本人是本部门负责人时向上取父部门负责人。
+     * @param userId Long，流程发起人用户主键
+     * @return List&lt;Long&gt;，零或一个具备直接办理资格的上级用户主键
+     */
+    List<Long> selectApprovalEligibleManagerUserIdsByUserId(
+            @Param("userId") Long userId);
+
+    /**
+     * 查询发起人所在有效部门内同时拥有指定角色和完整认领资格的用户。
+     * @param userId Long，流程发起人用户主键
+     * @param roleId Long，设计时选择的正式角色主键
+     * @return List&lt;Long&gt;，去重且按用户主键稳定排序的候选用户
+     */
+    List<Long> selectClaimEligibleUserIdsByStarterDeptAndRole(
+            @Param("userId") Long userId, @Param("roleId") Long roleId);
 }
