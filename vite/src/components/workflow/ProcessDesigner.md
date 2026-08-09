@@ -129,7 +129,7 @@ onMounted(async () => {
 | `model` | `object` | `{}` | `modelKey`、`modelName`、`formId` 等模型元数据。 |
 | `forms` | `array` | `[]` | 正式表单选项，每项至少包含 `formId`、`formName`。 |
 | `identityOptions` | `object` | `{ assignees: [], candidateUsers: [], candidateGroups: [] }` | 服务端按直接办理资格和完整候选认领资格隔离的身份选项。 |
-| `height` | `string` | `calc(100vh - 128px)` | 设计器稳定高度。 |
+| `height` | `string` | `calc(100vh - 128px)` | 设计器稳定高度；页面级接入推荐传入 `100%`，由可用工作区决定实际高度。 |
 | `saving` | `boolean` | `false` | 页面真实保存请求的加载状态。 |
 | `identityLoading` | `boolean` | `false` | 用户、角色或部门远程检索的加载状态。 |
 | `preference` | `object` | 服务端默认值 | 从 `wf_designer_preference` 回读的主题、网格、小地图、Lint、Token 模拟和属性面板状态。 |
@@ -165,7 +165,7 @@ onMounted(async () => {
 - 表单来源切换和字段修改均进入 bpmn-js 命令栈；审计监听器等非表单 `extensionElements` 在重建 FormData 时保持不变。
 - ServiceTask 不接受任意 Java 类名或 Spring Bean。设计器从正式扩展目录读取最新版，只在作者 XML 保存稳定键和 JSON 配置；部署编译器冻结精确版本并生成不可变执行快照。
 - 用户任务的办理人、候选用户、候选组互斥写入并使用独立选项池。直接办理人只来自 `capability=approval` 目录；候选用户、角色和部门只来自 `capability=claim` 目录，角色/部门还必须至少包含一名完整可认领办理成员。候选组值继续使用后端规定的 `ROLE<id>` 或 `DEPT<id>`。
-- 动态多实例通过“动态 + 会签/或签”受控模式配置。组件固定写入并行循环、`${multiInstanceHandler.getUserIds(execution)}`、`assignee` 元素变量、`${assignee}` 办理人以及对应 ALL/ANY 完成条件，不提供任意方法输入。
+- 会签/或签提供“动态选择”和“固定人员”两种受控来源。动态来源固定写入 `${multiInstanceHandler.getUserIds(execution)}`，要求前驱任务提交下一办理人并支持成员调整；固定来源从审批资格目录选择 1 至 100 名用户，写入严格的 `${multiInstanceHandler.getFixedUserIds(execution, '1,2')}`。两种来源均固定使用并行循环、`assignee` 元素变量、`${assignee}` 办理人和 ALL/ANY 完成条件，后端在保存、部署和运行时再次校验用户资格。
 - 受控整改循环只对 UserTask 开放。判断字段只能来自该节点正式模板或内嵌 FormData 的可写标量字段；附件、多选、表格、对象、范围和只读字段不会进入选项。设计器固定写入 `approva.controlledLoop.*` 五项属性，达到最大轮次时由后端拒绝继续整改，不会自动放行。
 - 受控整改循环在画布节点上显示最大轮次徽标。面板采用“填写草稿后显式应用”，避免不完整属性进入 BPMN 命令栈；布尔和静态枚举值只能从正式目录选择。任意 `standardLoopCharacteristics` 仍仅支持 XML 往返并明确禁止部署。
 - 从动态模式切换为串行或普通并行时会同时清理固定 handler、元素变量、完成条件和办理人，避免属性回读把静态模式错误恢复为动态模式。
@@ -180,8 +180,11 @@ onMounted(async () => {
 - 保存事件只交付 XML，不在组件内绕过页面权限或直接调用接口。
 - 显式校验直接调用无副作用 `/workflow/model/validate`；保存前必须再次通过同一服务端 BPMN、身份和表单门禁。
 - BPMN/XML 导入设置 2 MiB 上限，失败不覆盖当前画布；BPMN/XML 导出继续自动重建内部审计监听器，SVG 使用 Modeler 图形输出。
+- 导入时根据全部 `sequenceFlow.sourceRef/targetRef` 重建流程节点的 `incoming/outgoing` 反向引用，兼容历史模型和外部工具省略冗余引用的 XML；Lint、画布命令栈和下一次正式保存统一使用修复后的图关系。被 `keep-alive` 缓存的旧设计页重新激活时会检查当前画布快照，仅在引用仍不完整时保留未保存编辑并重建内存图，避免旧红色 Lint 标记残留。
 - JSON 预览通过 DOM 结构递归转换，不使用字符串替换；XML、属性和文本均保持明确层级。
 - 网格显示与 `gridSnapping` 同步，避免只显示网格却不吸附；小地图、Lint 和 Token 模拟使用真实扩展服务。小地图切换按钮使用 `+ / ×` 紧凑符号，原生 `title` 继续提供打开或关闭提示，避免动作文本遮挡画布。
+- 设计器不再设置固定最小宽高。属性检查器默认宽度为 368px，可通过分隔条拖拽、左右方向键调整，双击或按 `Home` 恢复默认宽度；每次尺寸变化通过 `canvas.resized()` 同步 bpmn-js 命中区域、小地图与连线视口。
+- 当设计器主体不足 960px 时，属性检查器切换为工作区内浮层，不再通过页面横向滚动挤出右侧内容；面板仍可调整宽度、滚动、折叠和关闭。宽度只属于当前会话视觉状态，不使用浏览器本地状态冒充正式用户偏好。
 - 偏好由页面调用正式 API 保存，服务端成功回读前不把抽屉草稿或内存状态视为已应用配置。
 - 页面必须为一次用户保存意图生成 UUID `requestId`；响应丢失后的同内容重试复用该值，只有取得后端真实 `modelId` 后才清除，服务端据此返回首次落库结果而不重复建版。
 - XML 序列化开始至后端保存结束期间锁定画布、属性面板和命令栈，阻止重复保存以及“已保存响应覆盖保存期间新修改”的竞态。

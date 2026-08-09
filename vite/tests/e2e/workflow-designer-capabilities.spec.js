@@ -34,8 +34,9 @@ function buildDesignerBpmn({
           <flowable:formProperty id="requestReason" name="申请原因" type="string" readable="true" writable="true" required="true" />
           <flowable:formProperty id="requestDate" name="申请日期" type="date" variable="requestDateValue" datePattern="yyyy-MM-dd" readable="true" writable="true" required="true" />
         </extensionElements>
+        <outgoing>flow_start_review</outgoing>
       </startEvent>`
-    : `<startEvent id="start" name="提交申请" flowable:formKey="key_${formId}" />`
+    : `<startEvent id="start" name="提交申请" flowable:formKey="key_${formId}"><outgoing>flow_start_review</outgoing></startEvent>`
   const disconnectedTask = disconnected
     ? '<userTask id="orphanTask" name="孤立节点" />'
     : ''
@@ -53,9 +54,9 @@ function buildDesignerBpmn({
   <process id="${processKey}" name="${processName}" isExecutable="true">
     ${startEvent}
     <sequenceFlow id="flow_start_review" sourceRef="start" targetRef="review" />
-    <userTask id="review" name="审批处理" flowable:assignee="${approverUserId}" />
+    <userTask id="review" name="审批处理" flowable:assignee="${approverUserId}"><incoming>flow_start_review</incoming><outgoing>flow_review_end</outgoing></userTask>
     <sequenceFlow id="flow_review_end" sourceRef="review" targetRef="end" />
-    <endEvent id="end" name="结束" />
+    <endEvent id="end" name="结束"><incoming>flow_review_end</incoming></endEvent>
     ${advancedElements}
     ${disconnectedTask}
   </process>
@@ -122,11 +123,13 @@ async function assertDesignerViewport(page, viewport) {
   const body = page.locator('.process-designer__body')
   const canvas = page.locator('.process-designer__canvas')
   const palette = canvas.locator('.djs-palette')
+  const propertiesResizer = page.locator('.process-designer__properties-resizer')
   const properties = page.locator('.designer-properties-panel')
   const minimap = canvas.locator('.djs-minimap')
   await expect(designer).toBeVisible()
   await expect(toolbar).toBeVisible()
   await expect(palette).toBeVisible()
+  await expect(propertiesResizer).toBeVisible()
   await expect(properties).toBeVisible()
   await expect(minimap).toBeVisible()
 
@@ -136,11 +139,11 @@ async function assertDesignerViewport(page, viewport) {
   expect(pageHeaderTitleBox, '模型标题必须具有稳定尺寸').toBeTruthy()
   expect(pageHeaderTitleBox.height, '模型标题必须保持单行').toBeLessThanOrEqual(24)
 
-  const [designerBox, toolbarBox, bodyBox, canvasBox, paletteBox, propertiesBox, minimapBox] =
-    await Promise.all([designer, toolbar, body, canvas, palette, properties, minimap]
+  const [designerBox, toolbarBox, bodyBox, canvasBox, paletteBox, propertiesResizerBox, propertiesBox, minimapBox] =
+    await Promise.all([designer, toolbar, body, canvas, palette, propertiesResizer, properties, minimap]
       .map(locator => locator.boundingBox()))
   for (const [label, box] of Object.entries({
-    designerBox, toolbarBox, bodyBox, canvasBox, paletteBox, propertiesBox, minimapBox
+    designerBox, toolbarBox, bodyBox, canvasBox, paletteBox, propertiesResizerBox, propertiesBox, minimapBox
   })) {
     expect(box, `${viewport.width}x${viewport.height} ${label} 必须具有稳定尺寸`).toBeTruthy()
     expect(box.width, `${viewport.width}x${viewport.height} ${label} 宽度必须为正`).toBeGreaterThan(0)
@@ -155,8 +158,20 @@ async function assertDesignerViewport(page, viewport) {
   expect(toolbarBox.x).toBeGreaterThanOrEqual(designerBox.x)
   expect(right(toolbarBox)).toBeLessThanOrEqual(right(designerBox) + 1)
   expect(bodyBox.y).toBeGreaterThanOrEqual(bottom(toolbarBox) - 1)
-  expect(right(canvasBox)).toBeLessThanOrEqual(propertiesBox.x + 1)
+  const compactProperties = await body.evaluate(element => (
+    element.classList.contains('process-designer__body--compact-properties')
+  ))
+  if (compactProperties) {
+    // 紧凑视口使用工作区内浮层，画布保持完整宽度，属性面板不得越出设计器主体。
+    expect(right(canvasBox)).toBeLessThanOrEqual(right(bodyBox) + 1)
+    expect(propertiesBox.x).toBeGreaterThanOrEqual(bodyBox.x + 11)
+  } else {
+    expect(right(canvasBox)).toBeLessThanOrEqual(propertiesResizerBox.x + 1)
+    expect(right(propertiesResizerBox)).toBeLessThanOrEqual(propertiesBox.x + 1)
+  }
+  expect(propertiesBox.y).toBeGreaterThanOrEqual(bodyBox.y - 1)
   expect(right(propertiesBox)).toBeLessThanOrEqual(right(bodyBox) + 1)
+  expect(bottom(propertiesBox)).toBeLessThanOrEqual(bottom(bodyBox) + 1)
   for (const [label, box] of Object.entries({ paletteBox, minimapBox })) {
     expect(box.x, `${label} 左边界必须位于画布内`).toBeGreaterThanOrEqual(canvasBox.x - 1)
     expect(box.y, `${label} 上边界必须位于画布内`).toBeGreaterThanOrEqual(canvasBox.y - 1)
@@ -255,10 +270,23 @@ test('设计器通过真实页面完成导入导出、校验、偏好、模拟�
     })
     await expect(page.locator('.djs-label').filter({ hasText: '孤立节点' })).toHaveCount(0)
     await expect(page.locator('.djs-label').filter({ hasText: '提交申请' }).first()).toBeVisible()
+    await expect(page.locator('.bjsl-button-error')).toHaveCount(0)
 
     // 两个正式目标视口都执行 DOM 几何断言，截图只是复核材料而不是唯一通过依据。
+    await assertDesignerViewport(page, { width: 1024, height: 768 })
+    await assertDesignerViewport(page, { width: 1366, height: 768 })
     await assertDesignerViewport(page, { width: 1440, height: 900 })
     await assertDesignerViewport(page, { width: 1920, height: 1080 })
+
+    // 分隔条同时验证键盘可访问性和 bpmn-js 画布随宽度变化的真实重算。
+    const propertiesResizer = page.locator('.process-designer__properties-resizer')
+    const resizablePropertiesPanel = page.locator('.designer-properties-panel')
+    const initialPropertiesWidth = (await resizablePropertiesPanel.boundingBox()).width
+    await propertiesResizer.focus()
+    await propertiesResizer.press('ArrowLeft')
+    await expect.poll(async () => (await resizablePropertiesPanel.boundingBox()).width)
+      .toBeGreaterThan(initialPropertiesWidth)
+    await propertiesResizer.press('Home')
 
     const bpmnDownload = await downloadDesignerFile(page, '导出 BPMN')
     expect(bpmnDownload.filename).toBe(`${processKey}.bpmn20.xml`)

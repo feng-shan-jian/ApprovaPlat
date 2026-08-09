@@ -1,13 +1,32 @@
 <template>
   <aside class="designer-properties-panel">
     <div class="designer-properties-panel__title">
-      <span>{{ title }}</span>
-      <el-tag v-if="state.id" size="small" type="info">{{ state.id }}</el-tag>
+      <div class="designer-properties-panel__heading">
+        <span class="designer-properties-panel__eyebrow">属性检查器</span>
+        <strong>{{ title }}</strong>
+      </div>
+      <div class="designer-properties-panel__actions">
+        <el-tooltip content="展开全部分区" placement="bottom">
+          <el-button text circle icon="ArrowDownBold" aria-label="展开全部属性分区" @click="expandAllSections" />
+        </el-tooltip>
+        <el-tooltip content="收起全部分区" placement="bottom">
+          <el-button text circle icon="ArrowUpBold" aria-label="收起全部属性分区" @click="collapseAllSections" />
+        </el-tooltip>
+        <el-tooltip content="收起属性面板" placement="bottom">
+          <el-button text circle icon="Close" aria-label="收起属性面板" @click="emit('close')" />
+        </el-tooltip>
+      </div>
+    </div>
+
+    <div v-if="selected" class="designer-properties-panel__context" :title="state.id">
+      <span class="designer-properties-panel__context-dot" />
+      <span>当前元素</span>
+      <code>{{ state.id || '未命名元素' }}</code>
     </div>
 
     <el-scrollbar v-if="selected" class="designer-properties-panel__scroll">
       <el-form label-position="top" size="small" class="designer-properties-panel__form">
-        <el-collapse :model-value="['base', 'business', 'execution']">
+        <el-collapse v-model="activeSections">
           <el-collapse-item title="基础信息" name="base">
             <el-form-item label="元素名称">
               <el-input v-model="state.name" maxlength="255" @change="emit('common-change')" />
@@ -56,6 +75,26 @@
               <el-form-item v-if="state.multiInstanceType === 'controlled'" label="签署规则">
                 <el-segmented v-model="state.multiInstanceApprovalMode" :options="multiInstanceApprovalOptions" @change="emit('multi-instance-change')" />
               </el-form-item>
+              <template v-if="state.multiInstanceType === 'controlled'">
+                <el-form-item label="人员来源">
+                  <el-segmented v-model="state.multiInstanceMemberSource" :options="multiInstanceMemberSourceOptions" @change="emit('multi-instance-change')" />
+                </el-form-item>
+                <el-form-item v-if="state.multiInstanceMemberSource === 'fixed'" label="固定办理人" required>
+                  <el-select
+                    v-model="state.fixedMultiInstanceUserIds"
+                    multiple
+                    filterable
+                    remote
+                    reserve-keyword
+                    :remote-method="searchAssignees"
+                    :loading="identityLoading"
+                    placeholder="请选择会签或或签办理人"
+                    @change="emit('multi-instance-change')"
+                  >
+                    <el-option v-for="user in identityOptions.assignees" :key="user.value" :label="user.label" :value="String(user.value)" />
+                  </el-select>
+                </el-form-item>
+              </template>
               <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType)">
                 <el-form-item label="集合表达式">
                   <el-input v-model="state.collection" maxlength="256" @change="emit('multi-instance-change')" />
@@ -439,7 +478,7 @@ const emit = defineEmits([
   'user-task-change', 'extension-selection-change', 'service-task-change', 'condition-change', 'documentation-change',
   'multi-instance-change', 'activity-change', 'call-activity-change', 'event-change', 'dmn-change',
   'identity-search', 'business-execution-listener-change', 'business-task-listener-change',
-  'extension-properties-change', 'sla-change'
+  'extension-properties-change', 'sla-change', 'close'
 ])
 
 // 表单来源值与后端部署快照的 source_type 契约一致。
@@ -447,8 +486,21 @@ const formSourceOptions = Object.freeze([
   { label: '正式模板', value: 'TEMPLATE' },
   { label: '内嵌表单', value: 'EMBEDDED' }
 ])
+// 会签和或签共用多实例语义，人员来源决定是否在前驱任务完成时要求动态选人。
+const multiInstanceMemberSourceOptions = Object.freeze([
+  { label: '动态选择', value: 'dynamic' },
+  { label: '固定人员', value: 'fixed' }
+])
 
 const hasBusinessSection = computed(() => Object.values(props.flags).some(Boolean))
+const activeSections = ref(['base', 'business'])
+const availableSections = computed(() => [
+  'base',
+  ...(hasBusinessSection.value ? ['business'] : []),
+  ...(props.flags.activity ? ['execution'] : []),
+  ...(props.flags.extensionPropertiesSupported ? ['properties'] : []),
+  ...(props.flags.listenerSupported ? ['listeners'] : [])
+])
 const selectedExtensionType = computed(() => props.extensionOptions.find(option => (
   option.extensionKey === props.state.extensionKey
 ))?.extensionType || '')
@@ -494,6 +546,38 @@ const eventDefinitionLabel = computed(() => ({
   'bpmn:EscalationEventDefinition': '升级',
   'bpmn:CompensateEventDefinition': '补偿'
 })[props.state.eventDefinitionType] || '无')
+
+/**
+ * 在切换 BPMN 元素时恢复高频属性分区，并移除当前元素不支持的旧分区。
+ * @param {[string, string[]]} current 当前元素标识和可用分区名称。
+ * @param {[string, string[]]|undefined} previous 上一个元素标识和可用分区名称。
+ * @returns {void} 新元素默认展开基础与业务配置，同一元素只清理失效分区。
+ */
+function syncActiveSections(current, previous) {
+  const [elementId, sections] = current
+  const [previousElementId] = previous || []
+  if (elementId !== previousElementId) {
+    activeSections.value = sections.filter(name => ['base', 'business'].includes(name))
+    return
+  }
+  activeSections.value = activeSections.value.filter(name => sections.includes(name))
+}
+
+/**
+ * 展开当前元素支持的全部属性分区。
+ * @returns {void} 仅展开模板中实际存在的分区。
+ */
+function expandAllSections() {
+  activeSections.value = [...availableSections.value]
+}
+
+/**
+ * 收起全部属性分区，为画布和长表单提供更快的浏览切换。
+ * @returns {void} 保留元素上下文标题，不隐藏属性面板。
+ */
+function collapseAllSections() {
+  activeSections.value = []
+}
 
 /**
  * 请求父组件查询直接办理人目录。
@@ -548,66 +632,191 @@ function handleLoopTypeChange(value) {
 function searchSlaAssignees(keyword) {
   emit('identity-search', { target: 'assignees', keyword })
 }
+
+watch(
+  [() => props.state.id, availableSections],
+  syncActiveSections,
+  { immediate: true }
+)
 </script>
 
 <style scoped>
 .designer-properties-panel {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
-  border-left: 1px solid var(--el-border-color-light);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--el-bg-color) 92%, var(--el-color-primary) 8%), var(--el-bg-color) 118px);
 }
 
 .designer-properties-panel__title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 46px;
-  padding: 0 14px;
-  font-size: 14px;
-  font-weight: 600;
+  flex: none;
+  min-height: 68px;
+  gap: 10px;
+  padding: 11px 10px 10px 16px;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
-.designer-properties-panel__title > span {
-  flex: none;
+.designer-properties-panel__heading {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.designer-properties-panel__eyebrow {
+  color: var(--el-color-primary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.designer-properties-panel__heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--el-text-color-primary);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.45;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.designer-properties-panel__title .el-tag {
-  flex: 0 1 150px;
-  min-width: 0;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.designer-properties-panel__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
 }
 
-.designer-properties-panel__title .el-tag :deep(.el-tag__content) {
+.designer-properties-panel__actions :deep(.el-button) {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  color: var(--el-text-color-secondary);
+}
+
+.designer-properties-panel__actions :deep(.el-button:hover),
+.designer-properties-panel__actions :deep(.el-button:focus-visible) {
+  color: var(--el-color-primary);
+  background: var(--el-fill-color-light);
+}
+
+.designer-properties-panel__context {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  flex: none;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 16px;
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  background: color-mix(in srgb, var(--el-fill-color-light) 72%, transparent);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.designer-properties-panel__context-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--el-color-success);
+  border: 2px solid color-mix(in srgb, var(--el-color-success) 22%, transparent);
+  border-radius: 50%;
+  box-sizing: content-box;
+}
+
+.designer-properties-panel__context code {
   min-width: 0;
   overflow: hidden;
+  color: var(--el-text-color-regular);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .designer-properties-panel__scroll {
-  height: calc(100% - 46px);
+  flex: 1;
+  min-height: 0;
 }
 
 .designer-properties-panel__form {
-  padding: 0 14px 14px;
+  padding: 10px 12px 18px;
 }
 
 .designer-properties-panel__form :deep(.el-collapse) {
+  display: grid;
+  gap: 8px;
   border-top: 0;
+  border-bottom: 0;
+}
+
+.designer-properties-panel__form :deep(.el-collapse-item) {
+  overflow: hidden;
+  background: color-mix(in srgb, var(--el-bg-color) 94%, var(--el-fill-color-light));
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 7px;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
 }
 
 .designer-properties-panel__form :deep(.el-collapse-item__header) {
-  height: 42px;
+  height: 40px;
+  padding: 0 12px;
+  color: var(--el-text-color-primary);
   font-size: 13px;
   font-weight: 600;
+  background: transparent;
+  border-bottom: 0;
+}
+
+.designer-properties-panel__form :deep(.el-collapse-item__header.is-active) {
+  color: var(--el-color-primary);
+  background: color-mix(in srgb, var(--el-color-primary) 6%, transparent);
+}
+
+.designer-properties-panel__form :deep(.el-collapse-item__wrap) {
+  background: transparent;
+  border-bottom: 0;
+}
+
+.designer-properties-panel__form :deep(.el-collapse-item__content) {
+  padding: 12px 12px 14px;
+}
+
+.designer-properties-panel__form :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+
+.designer-properties-panel__form :deep(.el-form-item:last-child) {
+  margin-bottom: 0;
+}
+
+.designer-properties-panel__form :deep(.el-form-item__label) {
+  height: auto;
+  margin-bottom: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .designer-properties-panel__form :deep(.el-select),
 .designer-properties-panel__form :deep(.el-segmented),
 .designer-properties-panel__form :deep(.el-input-number) {
   width: 100%;
+}
+
+.designer-properties-panel :deep(.el-empty) {
+  flex: 1;
+}
+
+.designer-properties-panel :deep(.el-scrollbar__bar.is-vertical) {
+  right: 3px;
 }
 </style>

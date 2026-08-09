@@ -6,7 +6,7 @@
 
 ## 使用方式
 
-菜单组件路径为 `workflow/extension/index`，路由名为 `WorkflowExtension`。正式菜单权限为 `workflow:extension:list`。
+页面收折在“扩展流程管理”二级目录下。菜单组件路径为 `workflow/extension/index`，路由名为 `WorkflowExtension`。正式菜单权限为 `workflow:extension:list`。
 
 写操作由按钮权限独立控制：
 
@@ -38,7 +38,9 @@
 ## 最小接入示例
 
 ```sql
-('workflow:extension:list', 'workflow', '扩展注册表', 5, 'extension',
+('extensions', 'workflow', '扩展流程管理', 5, 'extensions',
+ NULL, 'WorkflowExtensions', 'M', NULL, 'connection', '低频扩展配置、运行治理与实例运维目录'),
+('workflow:extension:list', 'extensions', '扩展注册表', 1, 'extension',
  'workflow/extension/index', 'WorkflowExtension', 'C',
  'workflow:extension:list', 'connection', 'BPMN 受控扩展管理')
 ```

@@ -31,12 +31,33 @@
       ref="bodyRef"
       v-loading="designerLocked"
       class="process-designer__body"
-      :class="{ 'process-designer__body--properties-collapsed': appliedPreference.propertiesCollapsed }"
+      :class="{
+        'process-designer__body--properties-collapsed': appliedPreference.propertiesCollapsed,
+        'process-designer__body--compact-properties': compactPropertiesLayout,
+        'process-designer__body--resizing': propertiesResizing
+      }"
+      :style="designerBodyStyle"
       :inert="designerLocked"
       :aria-busy="designerLocked"
     >
       <div ref="canvasRef" class="process-designer__canvas" tabindex="0" v-loading="loading" />
       <AdvancedElementPalette :disabled="designerLocked" @create="createAdvancedElement" />
+      <div
+        v-show="!appliedPreference.propertiesCollapsed"
+        class="process-designer__properties-resizer"
+        role="separator"
+        aria-label="调整属性面板宽度"
+        aria-orientation="vertical"
+        :aria-valuemin="PROPERTIES_PANEL_MIN_WIDTH"
+        :aria-valuemax="propertiesPanelMaxWidth"
+        :aria-valuenow="Math.round(propertiesPanelWidth)"
+        tabindex="0"
+        @pointerdown="startPropertiesResize"
+        @dblclick="resetPropertiesPanelWidth"
+        @keydown="handlePropertiesResizeKeydown"
+      >
+        <span class="process-designer__properties-resizer-grip" />
+      </div>
       <DesignerPropertiesPanel
         v-show="!appliedPreference.propertiesCollapsed"
         :selected="Boolean(selectedElement)"
@@ -87,6 +108,7 @@
         @extension-properties-change="updateExtensionProperties"
         @sla-change="updateSlaProperties"
         @identity-search="handlePanelIdentitySearch"
+        @close="toggleProperties"
       />
     </div>
 
@@ -142,6 +164,7 @@ import { listDmnDecisionOptions } from '@/api/workflow/dmn'
 import { listBpmnEventCodeOptions } from '@/api/workflow/bpmnEvent'
 import { listEnabledSlaCalendars } from '@/api/workflow/sla'
 import flowableModdle from './bpmn/flowableModdle'
+import { normalizeSequenceFlowReferences } from './bpmnGraphXml'
 import { normalizeTaskListenerXml } from './taskListenerXml'
 import DesignerToolbar from './designer/DesignerToolbar.vue'
 import DesignerSettingsDrawer from './designer/DesignerSettingsDrawer.vue'
@@ -149,8 +172,9 @@ import AdvancedElementPalette from './designer/AdvancedElementPalette.vue'
 import DesignerPropertiesPanel from './designer/DesignerPropertiesPanel.vue'
 import bpmnlintConfig from './designer/bpmnlintConfig'
 
-// 动态多实例的技术属性由设计器固定写入，页面不向设计者开放任意方法或变量名。
+// 受控多实例的技术属性由设计器固定写入，页面不向设计者开放任意方法或变量名。
 const CONTROLLED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getUserIds(execution)}'
+const FIXED_MULTI_INSTANCE_COLLECTION_PATTERN = /^\$\{multiInstanceHandler\.getFixedUserIds\(execution, '([1-9]\d*(?:,[1-9]\d*)*)'\)\}$/
 const CONTROLLED_MULTI_INSTANCE_ASSIGNEE = '${assignee}'
 const CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE = 'assignee'
 const CONTROLLED_MULTI_INSTANCE_ALL_CONDITION = '${nrOfCompletedInstances == nrOfInstances}'
@@ -266,6 +290,33 @@ const selectedElement = shallowRef(null)
 const lastExportedXml = ref('')
 const propertyState = reactive(createEmptyPropertyState())
 const designerStyle = computed(() => ({ height: props.height }))
+// propertiesPanelWidth 表示当前会话中属性检查器的可视宽度，不使用浏览器本地状态冒充正式偏好。
+const propertiesPanelWidth = ref(368)
+const propertiesResizing = ref(false)
+const designerBodyWidth = ref(0)
+const PROPERTIES_PANEL_MIN_WIDTH = 320
+const PROPERTIES_PANEL_DEFAULT_WIDTH = 368
+const PROPERTIES_PANEL_MAX_WIDTH = 520
+const PROPERTIES_COMPACT_BREAKPOINT = 960
+const MINIMUM_INLINE_CANVAS_WIDTH = 520
+const compactPropertiesLayout = computed(() => (
+  designerBodyWidth.value > 0 && designerBodyWidth.value < PROPERTIES_COMPACT_BREAKPOINT
+))
+const propertiesPanelMaxWidth = computed(() => {
+  if (compactPropertiesLayout.value) {
+    return Math.max(PROPERTIES_PANEL_MIN_WIDTH, Math.min(
+      PROPERTIES_PANEL_MAX_WIDTH,
+      designerBodyWidth.value - 24
+    ))
+  }
+  return Math.max(PROPERTIES_PANEL_MIN_WIDTH, Math.min(
+    PROPERTIES_PANEL_MAX_WIDTH,
+    designerBodyWidth.value - MINIMUM_INLINE_CANVAS_WIDTH
+  ))
+})
+const designerBodyStyle = computed(() => ({
+  '--designer-properties-width': `${Math.round(propertiesPanelWidth.value)}px`
+}))
 const designerLocked = computed(() => props.saving || savePreparing.value)
 const appliedPreference = computed(() => normalizePreference(props.preference))
 const totalIssueCount = computed(() => validationIssues.value.length + clientLintIssues.value.length)
@@ -318,7 +369,7 @@ const assignmentOptions = [
   { label: '用户', value: 'users' },
   { label: '角色/部门', value: 'groups' }
 ]
-// none/sequential/parallel 对应标准 BPMN 多实例；controlled 冻结为 multiInstanceHandler 动态成员契约。
+  // none/sequential/parallel 对应标准 BPMN 多实例；controlled 提供受控动态和固定成员两种来源。
 const multiInstanceOptions = [
   { label: '无', value: 'none' },
   { label: '标准循环（仅往返）', value: 'standard' },
@@ -357,6 +408,12 @@ const slaLoading = ref(false)
 let modeler
 let changeTimer
 let systemThemeQuery
+let bodyResizeObserver
+let canvasResizeFrame
+let resizeStartClientX = 0
+let resizeStartWidth = PROPERTIES_PANEL_DEFAULT_WIDTH
+let previousDocumentCursor = ''
+let previousDocumentUserSelect = ''
 const identitySearchTimers = new Map()
 let importing = false
 
@@ -426,6 +483,8 @@ function createEmptyPropertyState() {
     cancelActivity: true,
     multiInstanceType: 'none',
     multiInstanceApprovalMode: 'all',
+    multiInstanceMemberSource: 'dynamic',
+    fixedMultiInstanceUserIds: [],
     collection: '',
     elementVariable: '',
     completionCondition: '',
@@ -572,7 +631,9 @@ async function importXml(xml) {
   importing = true
   loading.value = true
   try {
-    const source = xml?.trim() ? xml : createInitialXml()
+    const rawSource = xml?.trim() ? xml : createInitialXml()
+    // 旧模型可能只有 sequenceFlow.sourceRef/targetRef，必须补齐 FlowNode 反向引用后再交给 Lint 和命令栈。
+    const source = normalizeSequenceFlowReferences(rawSource)
     await modeler.importXML(source)
     applyDesignerPreference()
     refreshControlledLoopOverlays()
@@ -587,6 +648,23 @@ async function importXml(xml) {
     importing = false
     loading.value = false
     updateCommandState()
+  }
+}
+
+/**
+ * 修复 keep-alive 页签中仍保留的旧版顺序流内存引用。
+ * @returns {Promise<void>} 当前画布缺少 incoming/outgoing 时以完整 XML 重建；正常画布不产生变更。
+ */
+async function repairCachedSequenceFlowReferences() {
+  if (!modeler || importing || designerLocked.value) return
+  try {
+    // cachedXml 是当前画布的完整快照，包含尚未保存的用户编辑，不能回退为服务端旧 XML。
+    const { xml: cachedXml } = await modeler.saveXML({ format: true })
+    const normalizedXml = normalizeSequenceFlowReferences(cachedXml)
+    if (normalizedXml === cachedXml) return
+    await importXml(normalizedXml)
+  } catch (error) {
+    emit('error', error)
   }
 }
 
@@ -726,6 +804,8 @@ function loadPropertyState(element) {
     propertyState.completionCondition = loop.completionCondition?.body || ''
     if (isControlledMultiInstanceLoop(loop)) {
       propertyState.multiInstanceType = 'controlled'
+      propertyState.multiInstanceMemberSource = isFixedMultiInstanceLoop(loop) ? 'fixed' : 'dynamic'
+      propertyState.fixedMultiInstanceUserIds = readFixedMultiInstanceUserIds(loop)
       propertyState.multiInstanceApprovalMode = propertyState.completionCondition === CONTROLLED_MULTI_INSTANCE_ANY_CONDITION
         ? 'any'
         : 'all'
@@ -933,12 +1013,45 @@ function readEmbeddedFormFields(businessObject) {
 }
 
 /**
- * 判断循环配置是否引用生产动态多实例 handler；完整结构仍由保存门禁单独核验。
+ * 判断循环配置是否引用平台受控多实例 handler；完整结构仍由保存门禁单独核验。
  * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
- * @returns {boolean} 集合表达式精确引用固定 handler 时返回 true。
+ * @returns {boolean} 集合表达式精确引用动态或固定人员 handler 时返回 true。
  */
 function isControlledMultiInstanceLoop(loop) {
-  return Boolean(loop && String(loop.get?.('flowable:collection') || '').trim() === CONTROLLED_MULTI_INSTANCE_COLLECTION)
+  const collection = String(loop?.get?.('flowable:collection') || '').trim()
+  return collection === CONTROLLED_MULTI_INSTANCE_COLLECTION
+    || FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)
+}
+
+/**
+ * 判断受控多实例是否使用设计时固定人员来源。
+ * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
+ * @returns {boolean} 集合表达式命中固定人员 handler 时返回 true。
+ */
+function isFixedMultiInstanceLoop(loop) {
+  return Boolean(loop && FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(
+    String(loop.get?.('flowable:collection') || '').trim()
+  ))
+}
+
+/**
+ * 从固定人员 handler 表达式读取会签或或签成员，并保留设计时选择顺序。
+ * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
+ * @returns {string[]} 已去重的用户主键数组；表达式不符合受控契约时返回空数组。
+ */
+function readFixedMultiInstanceUserIds(loop) {
+  const collection = String(loop?.get?.('flowable:collection') || '').trim()
+  const match = collection.match(FIXED_MULTI_INSTANCE_COLLECTION_PATTERN)
+  return match ? splitValues(match[1]) : []
+}
+
+/**
+ * 将设计时选定的固定成员转换为后端白名单接受的 Flowable EL 表达式。
+ * @param {string[]} userIds 已去重且为正整数的固定办理人主键。
+ * @returns {string} 仅含数字用户主键的受控固定成员集合表达式。
+ */
+function fixedMultiInstanceCollectionExpression(userIds) {
+  return `\${multiInstanceHandler.getFixedUserIds(execution, '${userIds.join(',')}')}`
 }
 
 /**
@@ -1722,7 +1835,7 @@ function updateDocumentation() {
 }
 
 /**
- * 创建、更新或删除活动循环配置；动态模式一次写入完整固定技术契约。
+ * 创建、更新或删除活动循环配置；受控模式一次写入完整的动态或固定人员技术契约。
  * @returns {void} 无返回值。
  */
 function updateMultiInstance() {
@@ -1797,10 +1910,9 @@ function updateMultiInstance() {
     return
   }
   const controlled = propertyState.multiInstanceType === 'controlled'
+  const fixedMemberSource = controlled && propertyState.multiInstanceMemberSource === 'fixed'
   const leavingControlled = !controlled && wasControlled
-  let collection = controlled
-    ? CONTROLLED_MULTI_INSTANCE_COLLECTION
-    : propertyState.collection.trim()
+  let collection = controlled ? CONTROLLED_MULTI_INSTANCE_COLLECTION : propertyState.collection.trim()
   let elementVariable = controlled
     ? CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE
     : propertyState.elementVariable.trim()
@@ -1818,6 +1930,20 @@ function updateMultiInstance() {
     propertyState.collection = ''
     propertyState.elementVariable = ''
     propertyState.completionCondition = ''
+  }
+
+  if (fixedMemberSource) {
+    const userIds = [...new Set(propertyState.fixedMultiInstanceUserIds
+      .map(userId => String(userId || '').trim())
+      .filter(userId => /^\d+$/.test(userId) && Number(userId) > 0))]
+    if (userIds.length < 1 || userIds.length > 100) {
+      loadPropertyState(selectedElement.value)
+      emit('error', new Error('固定会签或或签办理人必须选择 1 至 100 名有效用户'))
+      return
+    }
+    // 固定名单按属性面板顺序写入白名单表达式，运行时仍由后端核验用户存在、启用状态和多实例结构。
+    propertyState.fixedMultiInstanceUserIds = userIds
+    collection = fixedMultiInstanceCollectionExpression(userIds)
   }
 
   // 已导入的静态多实例可能带有后端允许但面板未编辑的标准属性，原位更新可保持其往返完整性。
@@ -2292,6 +2418,113 @@ function toggleProperties() {
 }
 
 /**
+ * 把属性面板宽度约束在当前工作区可用范围内，避免压缩画布或越出视口。
+ * @param {number} width 用户拖拽或键盘操作得到的候选宽度。
+ * @returns {number} 可安全应用到当前布局的属性面板宽度。
+ */
+function clampPropertiesPanelWidth(width) {
+  return Math.min(
+    propertiesPanelMaxWidth.value,
+    Math.max(PROPERTIES_PANEL_MIN_WIDTH, Number(width) || PROPERTIES_PANEL_DEFAULT_WIDTH)
+  )
+}
+
+/**
+ * 在布局尺寸变化后通知 bpmn-js 重算画布视口，保证连线、命中区域和小地图同步。
+ * @returns {void} 使用单帧节流合并连续拖拽产生的尺寸变化。
+ */
+function scheduleCanvasResize() {
+  if (!modeler || canvasResizeFrame) return
+  canvasResizeFrame = window.requestAnimationFrame(() => {
+    canvasResizeFrame = undefined
+    modeler?.get('canvas')?.resized()
+  })
+}
+
+/**
+ * 处理设计器主体 ResizeObserver 回调，并重新约束属性面板宽度。
+ * @param {ResizeObserverEntry[]} entries 当前设计器主体的尺寸观察结果。
+ * @returns {void} 更新布局宽度并安排画布重算。
+ */
+function handleDesignerBodyResize(entries) {
+  const width = entries[0]?.contentRect?.width || bodyRef.value?.clientWidth || 0
+  designerBodyWidth.value = width
+  propertiesPanelWidth.value = clampPropertiesPanelWidth(propertiesPanelWidth.value)
+  scheduleCanvasResize()
+}
+
+/**
+ * 开始拖拽调整属性面板宽度，并临时锁定页面选区和光标。
+ * @param {PointerEvent} event 分隔条的指针按下事件。
+ * @returns {void} 保存拖拽起点，后续移动由窗口级事件持续接收。
+ */
+function startPropertiesResize(event) {
+  if (designerLocked.value || appliedPreference.value.propertiesCollapsed || event.button !== 0) return
+  event.preventDefault()
+  resizeStartClientX = event.clientX
+  resizeStartWidth = propertiesPanelWidth.value
+  propertiesResizing.value = true
+  previousDocumentCursor = document.documentElement.style.cursor
+  previousDocumentUserSelect = document.documentElement.style.userSelect
+  document.documentElement.style.cursor = 'col-resize'
+  document.documentElement.style.userSelect = 'none'
+}
+
+/**
+ * 根据指针水平位移实时调整右侧属性面板宽度。
+ * @param {PointerEvent} event 窗口级指针移动事件。
+ * @returns {void} 未处于拖拽状态时不产生任何布局变化。
+ */
+function handlePropertiesResizeMove(event) {
+  if (!propertiesResizing.value) return
+  propertiesPanelWidth.value = clampPropertiesPanelWidth(
+    resizeStartWidth + resizeStartClientX - event.clientX
+  )
+  scheduleCanvasResize()
+}
+
+/**
+ * 结束属性面板拖拽并恢复页面原有光标与文本选择行为。
+ * @returns {void} 无论指针在何处释放都清理拖拽状态。
+ */
+function stopPropertiesResize() {
+  if (!propertiesResizing.value) return
+  propertiesResizing.value = false
+  document.documentElement.style.cursor = previousDocumentCursor
+  document.documentElement.style.userSelect = previousDocumentUserSelect
+  scheduleCanvasResize()
+}
+
+/**
+ * 使用键盘精确调整属性面板宽度，兼顾无鼠标操作与细粒度控制。
+ * @param {KeyboardEvent} event 分隔条获得焦点后的键盘事件。
+ * @returns {void} 左右方向键每次调整 16px，Home 恢复默认宽度。
+ */
+function handlePropertiesResizeKeydown(event) {
+  const directions = { ArrowLeft: 16, ArrowRight: -16 }
+  if (event.key === 'Home') {
+    event.preventDefault()
+    resetPropertiesPanelWidth()
+    return
+  }
+  if (!Object.hasOwn(directions, event.key)) return
+  event.preventDefault()
+  propertiesPanelWidth.value = clampPropertiesPanelWidth(
+    propertiesPanelWidth.value + directions[event.key]
+  )
+  scheduleCanvasResize()
+}
+
+/**
+ * 将属性面板恢复为适合常规表单编辑的默认宽度。
+ * @returns {void} 默认宽度仍受当前工作区上限约束。
+ */
+function resetPropertiesPanelWidth() {
+  propertiesPanelWidth.value = clampPropertiesPanelWidth(PROPERTIES_PANEL_DEFAULT_WIDTH)
+  scheduleCanvasResize()
+}
+
+/**
  * 切换 Token 流程模拟，并要求页面持久化完整偏好。
  * @returns {void} 服务端成功后由偏好监听器进入或退出模拟。
  */
@@ -2594,7 +2827,7 @@ function hasEmbeddedFormFields(businessObject) {
 }
 
 /**
- * 校验用户任务的动态 handler 只以固定并行会签/或签组合出现，并阻断近似方法名。
+ * 校验用户任务的受控 handler 只以固定并行会签/或签组合出现，并阻断近似方法名。
  * @param {object} task bpmn-js 用户任务业务对象。
  * @returns {string} 空串表示通过，否则返回稳定业务错误。
  */
@@ -2602,7 +2835,8 @@ function validateUserTaskMultiInstance(task) {
   const loop = task.loopCharacteristics
   if (!loop) return ''
   const collection = String(loop.get?.('flowable:collection') || '').trim()
-  if (!collection.includes('multiInstanceHandler')) return ''
+  if (collection !== CONTROLLED_MULTI_INSTANCE_COLLECTION
+    && !FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)) return ''
   const condition = String(loop.completionCondition?.body || '').trim()
   const approvedCondition = [
     CONTROLLED_MULTI_INSTANCE_ALL_CONDITION,
@@ -2610,8 +2844,7 @@ function validateUserTaskMultiInstance(task) {
   ].includes(condition)
   const parentIsMainProcess = task.$parent?.$type === 'bpmn:Process'
   const hasBoundaryEvents = Array.isArray(task.boundaryEventRefs) && task.boundaryEventRefs.length > 0
-  if (collection !== CONTROLLED_MULTI_INSTANCE_COLLECTION
-    || loop.isSequential
+  if (loop.isSequential
     || loop.get('flowable:elementVariable') !== CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE
     || task.get('flowable:assignee') !== CONTROLLED_MULTI_INSTANCE_ASSIGNEE
     || task.get('flowable:candidateUsers')
@@ -2621,7 +2854,13 @@ function validateUserTaskMultiInstance(task) {
     || task.isForCompensation
     || hasBoundaryEvents
     || !parentIsMainProcess) {
-    return '动态多实例配置不符合受控会签或或签契约'
+    return '受控多实例配置不符合会签或或签契约'
+  }
+  if (FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)) {
+    const fixedUserIds = readFixedMultiInstanceUserIds(loop)
+    if (!fixedUserIds.length || fixedUserIds.length > 100) {
+      return '固定会签或或签必须预设 1 至 100 名有效办理人'
+    }
   }
   return ''
 }
@@ -2632,21 +2871,35 @@ watch(() => props.modelValue, value => {
 watch(() => props.preference, () => {
   applyDesignerPreference()
   settingsVisible.value = false
+  scheduleCanvasResize()
 }, { deep: true })
 watch(designerLocked, handleDesignerLock)
 
+onActivated(repairCachedSequenceFlowReferences)
 onMounted(() => {
   systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
   handleSystemTheme(systemThemeQuery)
   systemThemeQuery.addEventListener('change', handleSystemTheme)
   window.addEventListener('keydown', handleDesignerShortcut)
+  window.addEventListener('pointermove', handlePropertiesResizeMove)
+  window.addEventListener('pointerup', stopPropertiesResize)
+  window.addEventListener('pointercancel', stopPropertiesResize)
+  bodyResizeObserver = new ResizeObserver(handleDesignerBodyResize)
+  if (bodyRef.value) bodyResizeObserver.observe(bodyRef.value)
   loadExtensionOptions()
   loadDmnOptions()
   importXml(props.modelValue)
 })
 onBeforeUnmount(() => {
   window.clearTimeout(changeTimer)
+  if (canvasResizeFrame) window.cancelAnimationFrame(canvasResizeFrame)
   window.removeEventListener('keydown', handleDesignerShortcut)
+  window.removeEventListener('pointermove', handlePropertiesResizeMove)
+  window.removeEventListener('pointerup', stopPropertiesResize)
+  window.removeEventListener('pointercancel', stopPropertiesResize)
+  stopPropertiesResize()
+  bodyResizeObserver?.disconnect()
+  bodyResizeObserver = undefined
   systemThemeQuery?.removeEventListener('change', handleSystemTheme)
   identitySearchTimers.forEach(timer => window.clearTimeout(timer))
   identitySearchTimers.clear()
@@ -2668,12 +2921,14 @@ defineExpose({
 <style scoped lang="scss">
 .process-designer {
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr);
-  min-height: 640px;
+  grid-template-rows: 54px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 6px;
+  border: 1px solid var(--app-border-strong, var(--el-border-color-light));
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgb(23 33 30 / 9%);
 }
 
 .process-designer--dark {
@@ -2694,24 +2949,104 @@ defineExpose({
 .process-designer__body {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 8px var(--designer-properties-width);
   min-height: 0;
+  overflow: hidden;
 }
 
 .process-designer__body--properties-collapsed {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.process-designer__body--resizing {
+  cursor: col-resize;
+}
+
 .process-designer__canvas {
   min-width: 0;
   min-height: 0;
-  background-color: #fbfcfd;
+  background-color: #f8faf9;
   outline: none;
 }
 
 .process-designer--grid .process-designer__canvas {
-  background-image: linear-gradient(#eef1f4 1px, transparent 1px), linear-gradient(90deg, #eef1f4 1px, transparent 1px);
+  background-image:
+    linear-gradient(rgb(204 216 210 / 45%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(204 216 210 / 45%) 1px, transparent 1px);
   background-size: 20px 20px;
+}
+
+.process-designer__properties-resizer {
+  position: relative;
+  z-index: 24;
+  display: grid;
+  min-width: 8px;
+  height: 100%;
+  place-items: center;
+  cursor: col-resize;
+  background: var(--el-bg-color);
+  border-left: 1px solid var(--el-border-color-lighter);
+  outline: none;
+  transition: background-color 160ms ease;
+}
+
+.process-designer__properties-resizer::before {
+  position: absolute;
+  inset: 0 -3px;
+  content: '';
+}
+
+.process-designer__properties-resizer:hover,
+.process-designer__properties-resizer:focus-visible,
+.process-designer__body--resizing .process-designer__properties-resizer {
+  background: color-mix(in srgb, var(--el-color-primary) 10%, var(--el-bg-color));
+}
+
+.process-designer__properties-resizer:focus-visible {
+  box-shadow: inset 2px 0 0 var(--el-color-primary);
+}
+
+.process-designer__properties-resizer-grip {
+  width: 3px;
+  height: 42px;
+  background: var(--el-border-color);
+  border-radius: 999px;
+  transition: height 160ms ease, background-color 160ms ease;
+}
+
+.process-designer__properties-resizer:hover .process-designer__properties-resizer-grip,
+.process-designer__properties-resizer:focus-visible .process-designer__properties-resizer-grip,
+.process-designer__body--resizing .process-designer__properties-resizer-grip {
+  height: 64px;
+  background: var(--el-color-primary);
+}
+
+.process-designer__body--compact-properties {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.process-designer__body--compact-properties .designer-properties-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 23;
+  width: min(var(--designer-properties-width), calc(100% - 24px));
+  border: 1px solid var(--el-border-color);
+  border-radius: 9px;
+  box-shadow: 0 18px 42px rgb(15 23 42 / 22%);
+}
+
+.process-designer__body--compact-properties .process-designer__properties-resizer {
+  position: absolute;
+  top: 12px;
+  right: calc(12px + min(var(--designer-properties-width), calc(100% - 24px)) - 4px);
+  bottom: 12px;
+  z-index: 25;
+  width: 8px;
+  height: auto;
+  border-left: 0;
+  border-radius: 9px 0 0 9px;
 }
 
 .process-designer--dark .process-designer__canvas {
@@ -2797,9 +3132,10 @@ defineExpose({
   content: "+";
 }
 
-@media (max-width: 1365px) {
-  .process-designer {
-    min-width: 1040px;
+@media (prefers-reduced-motion: reduce) {
+  .process-designer__properties-resizer,
+  .process-designer__properties-resizer-grip {
+    transition: none;
   }
 }
 </style>

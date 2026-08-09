@@ -20,6 +20,16 @@
 
 ## 强制环境变量
 
+### 数据库基线
+
+正式开发库 `ry-vue` 是唯一业务基准。E2E 不直接写入正式库；启动隔离后端或运行 RBAC HTTP 集成测试前，脚本会执行：
+
+```powershell
+& .\deployment\scripts\sync-e2e-baseline.ps1
+```
+
+该脚本只允许从 `ry-vue` 重建 `ry_vue_codex_flowable_it`，随后重新注入五个隔离测试身份并校验菜单、角色、工作流业务表和“扩展流程管理”二级菜单。禁止手工长期维护隔离库结构；正式库迁移或菜单更新后，应重新同步再执行 E2E。
+
 用户名变量与 `WorkflowRbacHttpIT` 共用，全部由执行进程注入；五个本地验收账号的密码固定为 `wang`：
 
 ```text

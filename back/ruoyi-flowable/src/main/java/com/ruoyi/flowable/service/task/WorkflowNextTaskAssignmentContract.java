@@ -39,6 +39,11 @@ public final class WorkflowNextTaskAssignmentContract
             return Optional.empty();
         }
         UserTask targetTask = target.get();
+        if (!WorkflowMultiInstanceModelContract.usesDynamicHandler(
+                targetTask.getLoopCharacteristics()))
+        {
+            return Optional.empty();
+        }
         WorkflowMultiInstanceMode mode = WorkflowMultiInstanceModelContract.requireMode(targetTask);
         return Optional.of(new RequiredMultiInstanceTarget(targetTask.getId(), mode));
     }
@@ -63,6 +68,12 @@ public final class WorkflowNextTaskAssignmentContract
         if (targetTask.getLoopCharacteristics() == null)
         {
             return NextUserAssignmentPolicy.OPTIONAL;
+        }
+        if (!WorkflowMultiInstanceModelContract.usesDynamicHandler(
+                targetTask.getLoopCharacteristics()))
+        {
+            // 固定会签或或签成员已固化在部署 BPMN，不向当前办理人开放覆盖入口。
+            return NextUserAssignmentPolicy.DISABLED;
         }
         WorkflowMultiInstanceMode mode = WorkflowMultiInstanceModelContract
                 .requireMode(targetTask);

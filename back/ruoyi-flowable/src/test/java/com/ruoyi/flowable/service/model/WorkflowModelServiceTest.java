@@ -22,9 +22,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.EndEvent;
 import org.flowable.bpmn.model.FlowableListener;
 import org.flowable.bpmn.model.ImplementationType;
 import org.flowable.bpmn.model.Process;
+import org.flowable.bpmn.model.SequenceFlow;
+import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.IdentityService;
 import org.flowable.engine.RepositoryService;
@@ -271,8 +274,25 @@ class WorkflowModelServiceTest
                 .validate(initialSource.getValue());
         assertThat(initialDocument.bpmnModel().getProcessById("expense")).isNotNull();
         assertThat(initialDocument.bpmnModel().getGraphicInfo("review")).isNotNull();
+        StartEvent initialStartEvent = (StartEvent) initialDocument.bpmnModel()
+                .getFlowElement("start");
         UserTask initialReviewTask = (UserTask) initialDocument.bpmnModel()
                 .getFlowElement("review");
+        EndEvent initialEndEvent = (EndEvent) initialDocument.bpmnModel()
+                .getFlowElement("end");
+        // 初始 XML 必须同时包含顺序流正向引用和节点反向引用，避免设计器首次打开即产生虚假断连错误。
+        assertThat(initialStartEvent.getOutgoingFlows())
+                .extracting(SequenceFlow::getId)
+                .containsExactly("flow_start_review");
+        assertThat(initialReviewTask.getIncomingFlows())
+                .extracting(SequenceFlow::getId)
+                .containsExactly("flow_start_review");
+        assertThat(initialReviewTask.getOutgoingFlows())
+                .extracting(SequenceFlow::getId)
+                .containsExactly("flow_review_end");
+        assertThat(initialEndEvent.getIncomingFlows())
+                .extracting(SequenceFlow::getId)
+                .containsExactly("flow_review_end");
         assertThat(initialReviewTask.getTaskListeners())
                 .extracting(FlowableListener::getEvent)
                 .containsExactly("create", "assignment", "complete");

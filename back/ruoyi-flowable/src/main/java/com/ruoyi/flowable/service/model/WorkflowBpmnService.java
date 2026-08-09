@@ -920,7 +920,12 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("动态多实例配置不符合受控会签或或签契约", null);
         }
-        validateControlledMultiInstanceTopology(process, (UserTask) activity);
+        if (WorkflowMultiInstanceModelContract.usesDynamicHandler(loop))
+        {
+            // 仅动态来源需要前驱任务在完成事务中写入 nextUserIds；固定成员已固化在 BPMN，
+            // 允许开始节点、网关或任意合法同步路径直接进入，不能错误复用动态初始化拓扑门禁。
+            validateControlledMultiInstanceTopology(process, (UserTask) activity);
+        }
     }
 
     /**
@@ -1460,11 +1465,11 @@ public class WorkflowBpmnService
             {
                 throw invalidBpmn("流程表达式不允许嵌套", null);
             }
-            if (WorkflowMultiInstanceModelContract.COLLECTION_EXPRESSION.equals(expression))
+            if (isControlledMultiInstanceCollectionExpression(expression))
             {
                 if (remainingControlledCollections == 0)
                 {
-                    throw invalidBpmn("动态多实例处理器只能用于受控集合字段", null);
+                    throw invalidBpmn("受控多实例处理器只能用于受控集合字段", null);
                 }
                 remainingControlledCollections--;
             }
@@ -1479,7 +1484,7 @@ public class WorkflowBpmnService
         }
         if (remainingControlledCollections != 0)
         {
-            throw invalidBpmn("动态多实例集合表达式与模型不一致", null);
+            throw invalidBpmn("受控多实例集合表达式与模型不一致", null);
         }
     }
 
@@ -1500,8 +1505,7 @@ public class WorkflowBpmnService
                             org.flowable.bpmn.model.Activity.class, true))
             {
                 MultiInstanceLoopCharacteristics loop = activity.getLoopCharacteristics();
-                if (loop != null && WorkflowMultiInstanceModelContract.COLLECTION_EXPRESSION
-                        .equals(trimToEmpty(loop.getInputDataItem())))
+                if (loop != null && WorkflowMultiInstanceModelContract.usesControlledHandler(loop))
                 {
                     // validateModel 已对相同 activity 调用 requireMode；此处只统计，不重复放宽契约。
                     count++;
@@ -1509,6 +1513,27 @@ public class WorkflowBpmnService
             }
         }
         return count;
+    }
+
+    /**
+     * 判断原始 XML 表达式是否为模型层已经受控识别的多实例集合表达式。
+     *
+     * @param expression String，原始 XML 扫描得到的完整 EL 表达式。
+     * @return boolean，动态集合或严格格式固定集合表达式时返回 true。
+     */
+    private boolean isControlledMultiInstanceCollectionExpression(String expression)
+    {
+        // BPMN 序列化会把固定成员表达式参数中的单引号转义为 &#39; 或 &apos;；模型层读取时已还原，
+        // 原始 XML 扫描必须使用同一文本才能完成一一对应，不能把合法设计器输出误判为任意 EL。
+        String normalizedExpression = expression.replace("&#39;", "'")
+                .replace("&apos;", "'");
+        if (WorkflowMultiInstanceModelContract.COLLECTION_EXPRESSION.equals(normalizedExpression))
+        {
+            return true;
+        }
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setInputDataItem(normalizedExpression);
+        return WorkflowMultiInstanceModelContract.usesFixedHandler(loop);
     }
 
     /**

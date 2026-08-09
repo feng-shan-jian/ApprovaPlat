@@ -42,8 +42,8 @@ class WorkflowMenuSqlContractTest
                 "-- 目录按 path、页面和按钮按 perms 写入");
         Set<String> seedKeys = extractSeedKeys(menuSeed);
 
-        assertThat(seedKeys).hasSize(86).contains(
-                "workflow", "office",
+        assertThat(seedKeys).hasSize(87).contains(
+                "workflow", "office", "extensions",
                 "workflow:category:list", "workflow:category:export",
                 "workflow:model:designer", "workflow:model:save",
                 "workflow:extension:list", "workflow:extension:add",
@@ -76,8 +76,23 @@ class WorkflowMenuSqlContractTest
         assertThat(normalized)
                 .contains("insert into sys_menu\n    (menu_name, parent_id, order_num, path, component, `query`, route_name",
                         "where not exists",
+                        "seed.parent_key is null",
+                        "seed.parent_key is not null",
+                        "coalesce(parent.menu_id, 0)",
                         "workflow:model:import",
                         "workflow:deploy:status",
+                        "'extensions', 'workflow', '扩展流程管理'",
+                        "'workflow:extension:list', 'extensions', '扩展注册表'",
+                        "'workflow:connector:list', 'extensions', '连接端点'",
+                        "'workflow:sqldatasource:list', 'extensions', 'sql 数据源'",
+                        "'workflow:integrationcredential:list', 'extensions', '集成账号'",
+                        "'workflow:dmn:list', 'extensions', 'dmn 决策'",
+                        "'workflow:runtimeevent:list', 'extensions', '运行事件'",
+                        "'workflow:collaboration:list', 'extensions', '多池协作'",
+                        "'workflow:bpmnevent:list', 'extensions', '错误与升级'",
+                        "'workflow:process:managelist', 'extensions', '实例运维'",
+                        "extension_directory.seed_key = 'extensions'",
+                        "child_menu.perms in (",
                         "'workflow_admin', '流程管理员'",
                         "'workflow_designer', '流程设计者'",
                         "'workflow_starter', '流程发起人'",
@@ -100,6 +115,14 @@ class WorkflowMenuSqlContractTest
                 "-- 流程设计者仅管理分类");
         assertThat(adminRoleMapping).contains(
                 "SELECT 'workflow_admin', seed_key FROM tmp_workflow_menu_seed");
+        String designerRoleMapping = extractSection(sql,
+                "-- 流程设计者仅管理分类",
+                "-- 发起人只发起");
+        assertThat(designerRoleMapping).contains("'workflow', 'extensions'");
+        String auditorRoleMapping = extractSection(sql,
+                "-- 审计角色只有列表",
+                "-- 仅重建五个受管角色的工作流菜单关联");
+        assertThat(auditorRoleMapping).contains("'workflow', 'extensions'");
     }
 
     /**
@@ -124,9 +147,17 @@ class WorkflowMenuSqlContractTest
                 "workflow_roles",
                 "workflow_admin_menu_scope",
                 "workflow_admin_only_instance_management",
-                "when count(*) = 86",
+                "when count(*) = 87",
                 "workflow_page) = 19",
                 "workflow_button) = 65",
+                "workflow_directory_root.path = 'workflow'",
+                "parent_path = 'workflow'",
+                "'workflow:extension:list', 'workflow:connector:list'",
+                "'workflow:sqldatasource:list', 'workflow:integrationcredential:list'",
+                "'workflow:dmn:list', 'workflow:runtimeevent:list'",
+                "'workflow:collaboration:list', 'workflow:bpmnevent:list'",
+                "'workflow:process:managelist'",
+                "workflow_extended_management_role_visibility",
                 "'workflow:process:managelist'",
                 "'workflow:process:manageexport'",
                 "admin_management_permissions",

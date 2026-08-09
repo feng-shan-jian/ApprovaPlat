@@ -193,6 +193,28 @@ class WorkflowNextTaskAssignmentServiceTest
     }
 
     /**
+     * 验证固定成员多实例不接受当前办理人通过 nextUserIds 覆盖，空选择可直接进入 BPMN 固定集合。
+     *
+     * @return 无返回值；固定成员被动态覆盖或空选择被错误拦截时测试失败。
+     */
+    @Test
+    void isolatesFixedMultiInstanceFromDynamicNextUserSelection()
+    {
+        Task sourceTask = sourceTask();
+        BpmnModel model = serialModel(1, false);
+        configureFixedMultiInstance(model, WorkflowMultiInstanceMode.ALL, "8,9");
+        stubDefinition(model);
+        when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(10L)))
+                .thenReturn(List.of("10"));
+        stubCurrentTasks(List.of(sourceTask));
+
+        assertConflict(() -> assignmentService.prepare(sourceTask, List.of(10L)));
+        assertThat(assignmentService.prepare(sourceTask, List.of()).requested()).isFalse();
+        verify(runtimeService, never()).setVariable(anyString(), anyString(),
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    /**
      * 验证受控动态多实例后继在成员为空时于完成命令前返回 400，且不写集合变量。
      *
      * @return 无返回值；空成员被放行、错误码漂移或发生变量写入时测试失败
@@ -506,6 +528,23 @@ class WorkflowNextTaskAssignmentServiceTest
                 ? WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION
                 : WorkflowMultiInstanceModelContract.ANY_COMPLETION_CONDITION);
         target.setLoopCharacteristics(loop);
+    }
+
+    /**
+     * 将测试模型的唯一后继配置为固定成员受控并行多实例节点。
+     *
+     * @param model BpmnModel，包含 review-1 后继用户任务的模型。
+     * @param mode WorkflowMultiInstanceMode，目标 ALL 会签或 ANY 或签模式。
+     * @param userIds String，逗号分隔的固定用户主键。
+     * @return 无返回值，目标节点被原位更新为固定成员模型契约。
+     */
+    private void configureFixedMultiInstance(BpmnModel model,
+            WorkflowMultiInstanceMode mode, String userIds)
+    {
+        configureControlledMultiInstance(model, mode);
+        UserTask target = (UserTask) model.getMainProcess().getFlowElement("review-1");
+        target.getLoopCharacteristics().setInputDataItem(
+                "${multiInstanceHandler.getFixedUserIds(execution, '" + userIds + "')}");
     }
 
     /**

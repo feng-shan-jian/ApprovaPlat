@@ -153,6 +153,26 @@ class WorkflowMultiInstanceHandlerTest
     }
 
     /**
+     * 验证固定成员由 BPMN 参数提供、进入节点时复核审批资格且不初始化动态成员快照。
+     *
+     * @return 无返回值；固定成员顺序、资格校验或动态状态隔离不符合契约时测试失败。
+     */
+    @Test
+    void resolvesFixedUsersWithoutInitializingDynamicState()
+    {
+        DelegateExecution execution = fixedExecution(WorkflowMultiInstanceMode.ANY, "8,9");
+        when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(8L, 9L)))
+                .thenReturn(List.of("8", "9"));
+
+        assertThat(handler.getFixedUserIds(execution, "8,9")).containsExactly("8", "9");
+
+        verify(userSelectionValidator).requireApprovalEligibleUserIds(List.of(8L, 9L));
+        verify(execution, never()).setVariables(org.mockito.ArgumentMatchers.anyMap());
+        verify(userSelectionValidator, never()).requireActiveUserIds(
+                org.mockito.ArgumentMatchers.anyList());
+    }
+
+    /**
      * 创建具有固定动态多实例模型和流程实例根语义的 DelegateExecution 替身。
      *
      * @param mode WorkflowMultiInstanceMode，ALL 或 ANY 完成模式
@@ -169,6 +189,24 @@ class WorkflowMultiInstanceHandlerTest
         when(execution.getProcessInstanceId()).thenReturn("instance-1");
         when(execution.getId()).thenReturn("instance-1");
         when(execution.isProcessInstanceType()).thenReturn(true);
+        return execution;
+    }
+
+    /**
+     * 创建具有固定成员表达式的 DelegateExecution 替身。
+     *
+     * @param mode WorkflowMultiInstanceMode，ALL 或 ANY 完成模式。
+     * @param fixedUserIdsText String，BPMN 集合表达式中的固定成员主键文本。
+     * @return DelegateExecution，可直接传给固定成员 handler 的流程实例执行替身。
+     */
+    private DelegateExecution fixedExecution(WorkflowMultiInstanceMode mode,
+            String fixedUserIdsText)
+    {
+        UserTask userTask = dynamicUserTask(mode);
+        userTask.getLoopCharacteristics().setInputDataItem(
+                "${multiInstanceHandler.getFixedUserIds(execution, '" + fixedUserIdsText + "')}");
+        DelegateExecution execution = mock(DelegateExecution.class);
+        when(execution.getCurrentFlowElement()).thenReturn(userTask);
         return execution;
     }
 

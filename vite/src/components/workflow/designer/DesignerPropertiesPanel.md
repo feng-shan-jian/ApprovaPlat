@@ -48,7 +48,7 @@
 
 ## Emits
 
-组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、两类业务监听器事件和 `extension-properties-change`。
+组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、两类业务监听器事件和 `extension-properties-change`；点击面板关闭按钮时发出 `close`。
 
 ## 公开方法
 
@@ -57,6 +57,7 @@
 ## 关键设计
 
 - 用户可见字段只描述业务语义；系统任务审计监听器、内部多实例 handler 等技术约束不在面板中出现。
+- 面板头部和当前元素上下文固定在可视区域，长表单只在面板内部滚动。基础、业务、执行、扩展属性和监听器分区使用真正受控的 `v-model` 折叠状态，可逐项切换，也可一键全部展开或收起；切换 BPMN 元素时默认只展开高频的基础与业务配置。
 - 组件不直接修改 BPMN moddle 对象，父组件必须使用 `modeling.updateProperties` 或 `updateModdleProperties`，确保撤销、重做和保存快照一致。
 - 正式模板和内嵌 FormData 使用明确的分段来源选择。内嵌字段由 `EmbeddedFormFieldEditor` 编辑；父组件负责让 `flowable:formKey` 与 `flowable:formProperty` 始终互斥。
 - 消息、信号、错误和升级引用由父组件解析为 Definitions 根元素；定时器表达式写入对应 `FormalExpression`。
@@ -66,6 +67,7 @@
 - ServiceTask 只能选择正式扩展目录项并填写 JSON 对象配置。父组件写入固定调度器和作者字段；部署时由后端冻结精确版本、处理器、配置及校验和。
 - BusinessRuleTask 与通用 ServiceTask 完全分离，只能选择后端 DMN 来源目录并写入单一 `flowable:rules=decisionId`；部署编译器再绑定同部署冻结副本。
 - 串行和并行多实例对全部 BPMN Activity 开放；动态会签、或签和受控整改循环只对 UserTask 开放。标准循环可稳定导入、编辑和导出，但 Flowable 8 模型不提供对应执行类型，因此服务端明确禁止部署。
+- 会签/或签在“签署规则”下明确选择人员来源。动态选择由前驱任务在真实完成链路中提交成员；固定人员仅能从审批资格目录多选，父组件将其保存为受控固定成员表达式。固定来源不显示下一办理人、成员快照或加签减签入口。
 - 受控整改循环必须填写判断字段、再次进入值、退出值和 2 至 50 的最大轮次，并显式点击“应用整改循环配置”。半成品只保留在当前面板草稿中，不写入 moddle；静态枚举和布尔字段禁止自由创建条件值。
 - 通用扩展属性写入受限 `flowable:properties`，后端校验数量、名称、重复项和值长度；它们只是元数据，不作为表达式或实现入口执行。
 

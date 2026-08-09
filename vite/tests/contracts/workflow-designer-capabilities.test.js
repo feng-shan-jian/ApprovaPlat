@@ -85,7 +85,28 @@ test('设计器工具命令连接真实 BPMN 服务', () => {
   assert.match(designerSource, /modeler\.get\('linting'\)\.toggle/)
   assert.match(designerSource, /toggleMode\.toggleMode/)
   assert.match(designerSource, /validateModelBpmn\(xml\)/)
+  assert.match(designerSource, /onActivated\(repairCachedSequenceFlowReferences\)/)
+  assert.match(designerSource, /modeler\.saveXML\(\{ format: true \}\)[\s\S]*?normalizeSequenceFlowReferences\(cachedXml\)[\s\S]*?await importXml\(normalizedXml\)/)
   assert.match(modelApiSource, /url: '\/workflow\/model\/validate'/)
+})
+
+/**
+ * 验证设计器布局通过容器尺寸驱动，并在属性面板变化时同步真实 bpmn-js 画布。
+ * @returns {void} 固定最小宽高、不可折叠面板或缺失画布 resize 通知时断言失败。
+ */
+test('设计器属性面板支持完整显示、折叠和响应式调整', () => {
+  assert.match(designerSource, /new ResizeObserver\(handleDesignerBodyResize\)/)
+  assert.match(designerSource, /modeler\?\.get\('canvas'\)\?\.resized\(\)/)
+  assert.match(designerSource, /role="separator"[\s\S]*?aria-label="调整属性面板宽度"/)
+  assert.match(designerSource, /process-designer__body--compact-properties/)
+  assert.doesNotMatch(designerSource, /min-width:\s*1040px/)
+  assert.doesNotMatch(designerSource, /min-height:\s*640px/)
+  assert.match(propertiesPanelSource, /<el-collapse v-model="activeSections">/)
+  assert.match(propertiesPanelSource, /展开全部属性分区[\s\S]*?收起全部属性分区/)
+  assert.match(propertiesPanelSource, /emit\('close'\)/)
+  assert.match(designPageSource, /height="100%"/)
+  assert.match(designerDoc, /不足 960px 时，属性检查器切换为工作区内浮层/)
+  assert.match(propertiesPanelDoc, /长表单只在面板内部滚动/)
 })
 
 /**
@@ -157,6 +178,7 @@ test('高级 Palette 通过 Modeler 创建完整标准 BPMN 元素', () => {
   assert.match(designerSource, /globalConnect'\)\.start\(event\)/)
   assert.match(designerSource, /elementFactory\.createParticipantShape\(\)/)
   assert.match(designerSource, /modeler\.get\('modeling'\)\.addLane\(selected, 'bottom'\)/)
+  assert.match(advancedPaletteSource, /advanced-element-palette__reference[\s\S]*?<el-tooltip/)
   assert.match(advancedPaletteDoc, /复杂网关不进入正式工具入口/)
 })
 
@@ -282,6 +304,44 @@ test('活动循环和通用扩展属性执行真实 XML 往返', async () => {
   const { xml } = await moddle.toXML(rootElement, { format: true })
   assert.match(xml, /<standardLoopCharacteristics loopMaximum="3">/)
   assert.match(xml, /<flowable:property name="business.owner" value="finance" \/>/)
+})
+
+/**
+ * 验证固定会签和或签使用严格受控人员表达式完成真实 BPMN 往返。
+ * @returns {Promise<void>} 人员来源面板、受控表达式或多实例核心字段缺失时断言失败。
+ */
+test('固定会签和或签人员来源执行真实 XML 往返', async () => {
+  assert.match(propertiesPanelSource, /人员来源[\s\S]*?动态选择[\s\S]*?固定人员/)
+  assert.match(propertiesPanelSource, /fixedMultiInstanceUserIds[\s\S]*?请选择会签或或签办理人/)
+  assert.match(designerSource, /getFixedUserIds\(execution, '\$\{userIds\.join\(','\)\}'\)/)
+  assert.match(designerSource, /FIXED_MULTI_INSTANCE_COLLECTION_PATTERN[\s\S]*?getFixedUserIds/)
+  assert.match(designerSource, /固定会签或或签办理人必须选择 1 至 100 名有效用户/)
+
+  const moddle = new BpmnModdle({ flowable: flowableModdle })
+  const source = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="urn:approvaplat:fixed-multi-instance">
+  <process id="fixedMultiInstance" isExecutable="true">
+    <startEvent id="start" />
+    <userTask id="countersign" flowable:assignee="\${assignee}">
+      <multiInstanceLoopCharacteristics flowable:collection="\${multiInstanceHandler.getFixedUserIds(execution, '8,9')}" flowable:elementVariable="assignee">
+        <completionCondition>\${nrOfCompletedInstances == nrOfInstances}</completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="end" />
+    <sequenceFlow id="toCountersign" sourceRef="start" targetRef="countersign" />
+    <sequenceFlow id="toEnd" sourceRef="countersign" targetRef="end" />
+  </process>
+</definitions>`
+  const { rootElement, warnings } = await moddle.fromXML(source)
+  assert.deepEqual(warnings, [])
+  const process = rootElement.rootElements.find(element => element.$type === 'bpmn:Process')
+  const task = process.flowElements.find(element => element.id === 'countersign')
+  assert.equal(task.assignee, '${assignee}')
+  assert.equal(task.loopCharacteristics.get('flowable:collection'), "${multiInstanceHandler.getFixedUserIds(execution, '8,9')}")
+  assert.equal(task.loopCharacteristics.get('flowable:elementVariable'), 'assignee')
+  assert.equal(task.loopCharacteristics.completionCondition.body, '${nrOfCompletedInstances == nrOfInstances}')
+  const { xml } = await moddle.toXML(rootElement, { format: true })
+  assert.match(xml, /flowable:collection="\$\{multiInstanceHandler\.getFixedUserIds\(execution, &#39;8,9&#39;\)\}"/)
 })
 
 /**

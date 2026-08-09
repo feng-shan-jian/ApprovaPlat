@@ -28,6 +28,37 @@ class WorkflowMultiInstanceModelContractTest
     }
 
     /**
+     * 验证固定成员集合保留会签或或签完成语义，但不会被误分类为动态选人节点。
+     *
+     * @return 无返回值；固定成员解析、来源分类或模式映射错误时测试失败。
+     */
+    @Test
+    void acceptsFixedMembersWithoutClassifyingThemAsDynamic()
+    {
+        UserTask fixedTask = fixedTask(WorkflowMultiInstanceMode.ALL, "8,9");
+
+        assertThat(WorkflowMultiInstanceModelContract.requireMode(fixedTask))
+                .isEqualTo(WorkflowMultiInstanceMode.ALL);
+        assertThat(WorkflowMultiInstanceModelContract.usesFixedHandler(
+                fixedTask.getLoopCharacteristics())).isTrue();
+        assertThat(WorkflowMultiInstanceModelContract.usesDynamicHandler(
+                fixedTask.getLoopCharacteristics())).isFalse();
+        assertThat(WorkflowMultiInstanceModelContract.requireFixedUserIds(
+                fixedTask.getLoopCharacteristics())).containsExactly(8L, 9L);
+    }
+
+    /**
+     * 验证固定集合成员必须唯一且使用受控数字主键，防止部署模型隐含重复任务。
+     *
+     * @return 无返回值；重复成员模型被接受时测试失败。
+     */
+    @Test
+    void rejectsFixedMembersWithDuplicates()
+    {
+        assertUnsupported(fixedTask(WorkflowMultiInstanceMode.ANY, "8,8"));
+    }
+
+    /**
      * 验证串行、自由集合、子流程、补偿和边界事件节点均不进入动态调整支持面。
      *
      * @return 无返回值；任一不安全模型被接受时测试失败
@@ -130,6 +161,21 @@ class WorkflowMultiInstanceModelContractTest
                 : WorkflowMultiInstanceModelContract.ANY_COMPLETION_CONDITION);
         task.setLoopCharacteristics(loop);
         process.addFlowElement(task);
+        return task;
+    }
+
+    /**
+     * 创建完整满足固定成员受控多实例契约的主流程用户任务。
+     *
+     * @param mode WorkflowMultiInstanceMode，ALL 或 ANY。
+     * @param userIds String，逗号分隔且已规范化的固定用户主键。
+     * @return UserTask，主流程中的固定成员并行多实例节点。
+     */
+    private UserTask fixedTask(WorkflowMultiInstanceMode mode, String userIds)
+    {
+        UserTask task = dynamicTask(mode);
+        task.getLoopCharacteristics().setInputDataItem(
+                "${multiInstanceHandler.getFixedUserIds(execution, '" + userIds + "')}");
         return task;
     }
 

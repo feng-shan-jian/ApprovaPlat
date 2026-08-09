@@ -46,7 +46,7 @@ CREATE TEMPORARY TABLE tmp_workflow_menu_seed
     PRIMARY KEY (seed_key)
 ) ENGINE = InnoDB;
 
--- 两个目录、十九个菜单页和六十五个真实按钮权限，共八十六条目标记录。
+-- 三个目录、十九个菜单页和六十五个真实按钮权限，共八十七条目标记录。
 INSERT INTO tmp_workflow_menu_seed
     (seed_key, parent_key, menu_name, order_num, path, component, route_name,
      menu_type, perms, icon, remark)
@@ -55,6 +55,8 @@ VALUES
      'M', NULL, 'guide', '流程设计与部署管理目录'),
     ('office', NULL, '办公管理', 5, 'office', NULL, 'WorkflowOffice',
      'M', NULL, 'people', '流程发起与办理目录'),
+    ('extensions', 'workflow', '扩展流程管理', 5, 'extensions', NULL, 'WorkflowExtensions',
+     'M', NULL, 'connection', '低频扩展配置、运行治理与实例运维目录'),
 
     ('workflow:category:list', 'workflow', '流程分类', 1, 'category',
      'workflow/category/index', 'WorkflowCategory', 'C', 'workflow:category:list',
@@ -68,31 +70,31 @@ VALUES
     ('workflow:deploy:list', 'workflow', '部署管理', 4, 'deploy',
      'workflow/deploy/index', 'WorkflowDeploy', 'C', 'workflow:deploy:list',
      'server', '流程部署管理菜单'),
-    ('workflow:extension:list', 'workflow', '扩展注册表', 5, 'extension',
+    ('workflow:extension:list', 'extensions', '扩展注册表', 1, 'extension',
      'workflow/extension/index', 'WorkflowExtension', 'C', 'workflow:extension:list',
      'connection', 'BPMN 受控扩展目录与不可变版本管理菜单'),
-    ('workflow:connector:list', 'workflow', '连接端点', 6, 'connector',
+    ('workflow:connector:list', 'extensions', '连接端点', 2, 'connector',
      'workflow/connector/index', 'WorkflowConnector', 'C', 'workflow:connector:list',
      'link', 'HTTP 连接器端点白名单与不可回退修订管理菜单'),
-    ('workflow:sqlDatasource:list', 'workflow', 'SQL 数据源', 7, 'sqlDatasource',
+    ('workflow:sqlDatasource:list', 'extensions', 'SQL 数据源', 3, 'sqlDatasource',
      'workflow/sqlDatasource/index', 'WorkflowSqlDatasource', 'C', 'workflow:sqlDatasource:list',
      'database', 'SQL 连接器数据源白名单与不可回退修订管理菜单'),
-    ('workflow:dmn:list', 'workflow', 'DMN 决策', 8, 'dmn',
-     'workflow/dmn/index', 'WorkflowDmn', 'C', 'workflow:dmn:list',
-     'fork', 'Flowable 官方 DMN 决策版本管理菜单'),
-    ('workflow:integrationCredential:list', 'workflow', '集成账号', 9, 'integrationCredential',
+    ('workflow:integrationCredential:list', 'extensions', '集成账号', 4, 'integrationCredential',
      'workflow/integrationCredential/index', 'WorkflowIntegrationCredential', 'C',
      'workflow:integrationCredential:list', 'key', '集成 Token 范围、轮换、吊销和限流管理菜单'),
-    ('workflow:runtimeEvent:list', 'workflow', '运行事件', 10, 'runtimeEvent',
+    ('workflow:dmn:list', 'extensions', 'DMN 决策', 5, 'dmn',
+     'workflow/dmn/index', 'WorkflowDmn', 'C', 'workflow:dmn:list',
+     'fork', 'Flowable 官方 DMN 决策版本管理菜单'),
+    ('workflow:runtimeEvent:list', 'extensions', '运行事件', 6, 'runtimeEvent',
      'workflow/runtimeEvent/index', 'WorkflowRuntimeEvent', 'C', 'workflow:runtimeEvent:list',
      'list', '消息、信号和 ReceiveTask 运行事件脱敏审计菜单'),
-    ('workflow:collaboration:list', 'workflow', '多池协作', 11, 'collaboration',
+    ('workflow:collaboration:list', 'extensions', '多池协作', 7, 'collaboration',
      'workflow/collaboration/index', 'WorkflowCollaboration', 'C',
      'workflow:collaboration:list', 'connection', 'Participant/MessageFlow 入站、outbox、死信和补偿管理菜单'),
-    ('workflow:bpmnEvent:list', 'workflow', '错误与升级', 12, 'bpmnEvent',
+    ('workflow:bpmnEvent:list', 'extensions', '错误与升级', 8, 'bpmnEvent',
      'workflow/bpmnEvent/index', 'WorkflowBpmnEvent', 'C', 'workflow:bpmnEvent:list',
      'warning', 'BPMN 业务错误与升级编码、运行审计和通知管理菜单'),
-    ('workflow:process:manageList', 'workflow', '实例运维', 13, 'instance',
+    ('workflow:process:manageList', 'extensions', '实例运维', 9, 'instance',
      'workflow/work/manage', 'WorkflowManage', 'C', 'workflow:process:manageList',
      'list', '流程管理员跨用户实例运维菜单'),
     ('workflow:process:startList', 'office', '新建流程', 1, 'create',
@@ -262,7 +264,7 @@ VALUES
     ('workflow:process:copyExport', 'workflow:process:copyList', '抄送流程导出', 1, '', NULL, '',
      'F', 'workflow:process:copyExport', '#', '导出抄送给当前用户的流程');
 
--- 目录按 path、页面和按钮按 perms 写入，保证重复执行不会新增重复记录。
+-- 目录按 path、页面和按钮按 perms 写入；先写根目录，再写嵌套目录，保证重复执行不新增记录。
 INSERT INTO sys_menu
     (menu_name, parent_id, order_num, path, component, `query`, route_name,
      is_frame, is_cache, menu_type, visible, status, perms, icon,
@@ -272,6 +274,27 @@ SELECT seed.menu_name, 0, seed.order_num, seed.path, seed.component, NULL, seed.
        'admin', NOW(), '', NULL, seed.remark
 FROM tmp_workflow_menu_seed seed
 WHERE seed.menu_type = 'M'
+  AND seed.parent_key IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM sys_menu menu
+      WHERE menu.menu_type = 'M'
+        AND menu.path = seed.seed_key
+  );
+
+INSERT INTO sys_menu
+    (menu_name, parent_id, order_num, path, component, `query`, route_name,
+     is_frame, is_cache, menu_type, visible, status, perms, icon,
+     create_by, create_time, update_by, update_time, remark)
+SELECT seed.menu_name, parent.menu_id, seed.order_num, seed.path, seed.component, NULL,
+       seed.route_name, 1, 0, seed.menu_type, '0', '0', seed.perms, seed.icon,
+       'admin', NOW(), '', NULL, seed.remark
+FROM tmp_workflow_menu_seed seed
+JOIN sys_menu parent
+  ON parent.menu_type = 'M'
+ AND parent.path = seed.parent_key
+WHERE seed.menu_type = 'M'
+  AND seed.parent_key IS NOT NULL
   AND NOT EXISTS (
       SELECT 1
       FROM sys_menu menu
@@ -326,14 +349,30 @@ JOIN sys_menu menu
   OR (seed.menu_type <> 'M' AND menu.perms = seed.seed_key)
 GROUP BY seed.seed_key;
 
+-- 已有自定义角色若能访问任一低频管理页面，必须同时补齐父目录，避免迁移后菜单在侧栏消失。
+INSERT IGNORE INTO sys_role_menu (role_id, menu_id)
+SELECT DISTINCT role_menu.role_id, extension_directory.menu_id
+FROM sys_role_menu role_menu
+JOIN sys_menu child_menu ON child_menu.menu_id = role_menu.menu_id
+JOIN tmp_workflow_menu_actual extension_directory
+  ON extension_directory.seed_key = 'extensions'
+WHERE child_menu.perms IN (
+    'workflow:extension:list', 'workflow:connector:list',
+    'workflow:sqlDatasource:list', 'workflow:integrationCredential:list',
+    'workflow:dmn:list', 'workflow:runtimeEvent:list',
+    'workflow:collaboration:list', 'workflow:bpmnEvent:list',
+    'workflow:process:manageList'
+);
+
 -- 将已存在的同自然键记录归一到目标父子关系和目标路由字段。
 UPDATE sys_menu menu
 JOIN tmp_workflow_menu_seed seed
   ON seed.menu_type = 'M'
  AND menu.menu_type = 'M'
  AND menu.path = seed.seed_key
+LEFT JOIN tmp_workflow_menu_actual parent ON parent.seed_key = seed.parent_key
 SET menu.menu_name = seed.menu_name,
-    menu.parent_id = 0,
+    menu.parent_id = COALESCE(parent.menu_id, 0),
     menu.order_num = seed.order_num,
     menu.component = seed.component,
     menu.`query` = NULL,
@@ -441,7 +480,7 @@ INSERT INTO tmp_workflow_role_menu_seed (role_key, seed_key)
 SELECT 'workflow_designer', seed_key
 FROM tmp_workflow_menu_seed
 WHERE seed_key IN (
-    'workflow',
+    'workflow', 'extensions',
     'workflow:category:list', 'workflow:category:query', 'workflow:category:add',
     'workflow:category:edit', 'workflow:category:remove', 'workflow:category:export',
     'workflow:form:list', 'workflow:form:query', 'workflow:form:add',
@@ -493,7 +532,7 @@ INSERT INTO tmp_workflow_role_menu_seed (role_key, seed_key)
 SELECT 'workflow_auditor', seed_key
 FROM tmp_workflow_menu_seed
 WHERE seed_key IN (
-    'workflow', 'workflow:runtimeEvent:list', 'workflow:collaboration:list',
+    'workflow', 'extensions', 'workflow:runtimeEvent:list', 'workflow:collaboration:list',
     'workflow:collaboration:audit',
     'workflow:bpmnEvent:list',
     'workflow:bpmnEvent:audit', 'workflow:bpmnEvent:notification',

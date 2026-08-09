@@ -301,6 +301,13 @@ class WorkflowMultiInstanceServiceTest
         assertCompletionRevisionError(() -> service.reserveCompletionRevision(
                 staticTask, 0L, actor), HttpStatus.BAD_REQUEST);
 
+        Task fixedTask = taskForModel(fixedMultiInstanceModel());
+        WorkflowMultiInstanceService.CompletionRevision fixedRevision =
+                service.reserveCompletionRevision(fixedTask, null, actor);
+        assertThat(fixedRevision.applied()).isFalse();
+        assertCompletionRevisionError(() -> service.reserveCompletionRevision(
+                fixedTask, 0L, actor), HttpStatus.BAD_REQUEST);
+
         verifyNoWriteSideEffects();
     }
 
@@ -679,6 +686,16 @@ class WorkflowMultiInstanceServiceTest
     }
 
     /**
+     * 创建固定成员受控多实例模型，验证其不会进入动态 revision 和成员调整状态机。
+     *
+     * @return BpmnModel，成员固化在受控 BPMN 集合表达式中的并行会签模型。
+     */
+    private BpmnModel fixedMultiInstanceModel()
+    {
+        return modelWithLoop(fixedMultiInstanceLoop());
+    }
+
+    /**
      * 创建不命中受控 handler 的静态并行多实例循环配置。
      *
      * @return MultiInstanceLoopCharacteristics，集合来自既有普通流程变量
@@ -689,6 +706,23 @@ class WorkflowMultiInstanceServiceTest
         loop.setSequential(false);
         loop.setInputDataItem("${staticApproverIds}");
         loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        return loop;
+    }
+
+    /**
+     * 创建完整满足固定成员会签契约的并行多实例循环配置。
+     *
+     * @return MultiInstanceLoopCharacteristics，成员为 8 和 9 的固定会签循环。
+     */
+    private MultiInstanceLoopCharacteristics fixedMultiInstanceLoop()
+    {
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setSequential(false);
+        loop.setInputDataItem(
+                "${multiInstanceHandler.getFixedUserIds(execution, '8,9')}");
+        loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        loop.setCompletionCondition(
+                WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION);
         return loop;
     }
 

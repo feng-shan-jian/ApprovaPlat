@@ -38,7 +38,7 @@ import { useRouter } from 'vue-router'
 import useUserStore from '@/store/modules/user'
 import useLockStore from '@/store/modules/lock'
 import { unlockScreen } from '@/api/login'
-import defAva from '@/assets/images/profile.jpg'
+import defAva from '@/assets/images/default-avatar.png'
 
 const router = useRouter()
 const userStore = useUserStore()

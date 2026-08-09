@@ -586,10 +586,10 @@ public class WorkflowMultiInstanceService
         FlowElement element = requireTaskFlowElement(task);
         if (!(element instanceof UserTask userTask)
                 || userTask.getLoopCharacteristics() == null
-                || !WorkflowMultiInstanceModelContract.usesControlledHandler(
+                || !WorkflowMultiInstanceModelContract.usesDynamicHandler(
                     userTask.getLoopCharacteristics()))
         {
-            // 普通任务和不使用受控 handler 的既有静态多实例不参加动态 revision 契约。
+            // 固定成员、普通任务和既有静态多实例均不参加动态 revision 或加减签契约。
             return false;
         }
         try

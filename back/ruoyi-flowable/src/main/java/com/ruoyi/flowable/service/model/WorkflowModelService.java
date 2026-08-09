@@ -1352,8 +1352,18 @@ public class WorkflowModelService
 
         SequenceFlow startToReview = new SequenceFlow(startEvent.getId(), reviewTask.getId());
         startToReview.setId("flow_start_review");
+        startToReview.setSourceFlowElement(startEvent);
+        startToReview.setTargetFlowElement(reviewTask);
         SequenceFlow reviewToEnd = new SequenceFlow(reviewTask.getId(), endEvent.getId());
         reviewToEnd.setId("flow_review_end");
+        reviewToEnd.setSourceFlowElement(reviewTask);
+        reviewToEnd.setTargetFlowElement(endEvent);
+
+        // Flowable 运行时可仅依赖 sourceRef/targetRef，但 bpmn-js Lint 和后续建模命令依赖节点反向引用。
+        startEvent.setOutgoingFlows(new ArrayList<>(List.of(startToReview)));
+        reviewTask.setIncomingFlows(new ArrayList<>(List.of(startToReview)));
+        reviewTask.setOutgoingFlows(new ArrayList<>(List.of(reviewToEnd)));
+        endEvent.setIncomingFlows(new ArrayList<>(List.of(reviewToEnd)));
 
         process.addFlowElement(startEvent);
         process.addFlowElement(startToReview);

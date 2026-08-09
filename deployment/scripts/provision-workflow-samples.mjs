@@ -12,6 +12,18 @@ const defaultCatalogPath = path.resolve(
 const sampleAssetRemark = 'ApprovaPlat 可验收审批样例'
 const formPageSize = 50
 const maxFormSearchRows = 1000
+const directoryPageSize = 500
+
+/** 动态多实例办理人固定表达式，与后端白名单契约保持一致。 */
+const controlledMultiInstanceAssignee = '${assignee}'
+/** 动态多实例集合固定表达式，只允许服务端 handler 读取正式人员集合。 */
+const controlledMultiInstanceCollection = '${multiInstanceHandler.getUserIds(execution)}'
+/** 动态多实例元素变量固定名称。 */
+const controlledMultiInstanceElementVariable = 'assignee'
+/** 会签完成条件，要求全部实例完成。 */
+const controlledMultiInstanceAllCondition = '${nrOfCompletedInstances == nrOfInstances}'
+/** 或签完成条件，任一实例完成后结束多实例活动。 */
+const controlledMultiInstanceAnyCondition = '${nrOfCompletedInstances > 0}'
 
 /**
  * 读取命令行参数并限制只接受脚本公开的配置项。
@@ -95,6 +107,284 @@ function createApiClient(baseUrl) {
   }
 
   return { login, request }
+}
+
+/**
+ * 读取正式用户、角色和部门目录，并阻断超出脚本安全分页上限的未完整结果。
+ * @param {{request: Function}} api 已登录 API 客户端。
+ * @returns {Promise<{users: object[], roles: object[], depts: object[]}>} 完整正式身份主数据。
+ */
+async function loadIdentityDirectory(api) {
+  const [userResponse, roleResponse, deptResponse] = await Promise.all([
+    api.request('GET', `/system/user/list?pageNum=1&pageSize=${directoryPageSize}`),
+    api.request('GET', `/system/role/list?pageNum=1&pageSize=${directoryPageSize}`),
+    api.request('GET', '/system/dept/list')
+  ])
+  const users = Array.isArray(userResponse.rows) ? userResponse.rows : []
+  const roles = Array.isArray(roleResponse.rows) ? roleResponse.rows : []
+  if (Number(userResponse.total) !== users.length || Number(roleResponse.total) !== roles.length) {
+    throw new Error(`身份目录记录超过单次安全上限 ${directoryPageSize}，拒绝使用不完整目录`)
+  }
+  return {
+    users,
+    roles,
+    depts: Array.isArray(deptResponse.data) ? deptResponse.data : []
+  }
+}
+
+/**
+ * 校验测试身份目录的基本结构和自然键唯一性。
+ * @param {object} catalog 完整审批样例目录。
+ * @returns {object} 已通过结构校验的 identities 配置。
+ */
+function requireIdentityCatalog(catalog) {
+  const identities = catalog?.identities
+  if (!identities || typeof identities.rootDepartmentName !== 'string' ||
+      !Array.isArray(identities.departments) || !Array.isArray(identities.roles) ||
+      !Array.isArray(identities.users) || identities.departments.length === 0 ||
+      identities.roles.length === 0 || identities.users.length === 0) {
+    throw new Error('审批样例目录缺少完整测试身份定义')
+  }
+  const uniqueDefinitions = [
+    ['部门名称', identities.departments.map(item => item.deptName)],
+    ['角色标识', identities.roles.map(item => item.roleKey)],
+    ['测试账号', identities.users.map(item => item.userName)]
+  ]
+  for (const [label, values] of uniqueDefinitions) {
+    if (values.some(value => typeof value !== 'string' || !value.trim()) ||
+        new Set(values).size !== values.length) {
+      throw new Error(`${label}为空或重复`)
+    }
+  }
+  return identities
+}
+
+/**
+ * 创建或严格复用测试部门，所有部门都挂载到目录声明的正式根部门下。
+ * @param {{request: Function}} api 已登录 API 客户端。
+ * @param {object} identities 测试身份目录定义。
+ * @returns {Promise<{created: number, reused: number}>} 部门创建和复用数量。
+ */
+async function provisionDepartments(api, identities) {
+  let directory = await loadIdentityDirectory(api)
+  const roots = directory.depts.filter(item =>
+    item.deptName === identities.rootDepartmentName && Number(item.parentId) === 0
+  )
+  if (roots.length !== 1 || String(roots[0].status) !== '0') {
+    throw new Error(`测试身份根部门缺失、重复或停用: ${identities.rootDepartmentName}`)
+  }
+  const root = roots[0]
+  let created = 0
+  let reused = 0
+  for (const definition of identities.departments) {
+    const matches = directory.depts.filter(item => item.deptName === definition.deptName)
+    if (matches.length > 1) throw new Error(`测试部门名称重复: ${definition.deptName}`)
+    const existing = matches[0]
+    if (existing) {
+      const matchesDefinition = Number(existing.parentId) === Number(root.deptId) &&
+        Number(existing.orderNum) === Number(definition.orderNum) &&
+        String(existing.status) === '0'
+      if (!matchesDefinition) throw new Error(`测试部门内容漂移: ${definition.deptName}`)
+      reused += 1
+      continue
+    }
+    await api.request('POST', '/system/dept', {
+      parentId: Number(root.deptId),
+      deptName: definition.deptName,
+      orderNum: Number(definition.orderNum),
+      leader: definition.leader || '',
+      phone: '',
+      email: '',
+      status: '0',
+      remark: sampleAssetRemark
+    })
+    created += 1
+    directory = await loadIdentityDirectory(api)
+    const verified = directory.depts.filter(item => item.deptName === definition.deptName)
+    if (verified.length !== 1 || Number(verified[0].parentId) !== Number(root.deptId)) {
+      throw new Error(`测试部门创建后校验失败: ${definition.deptName}`)
+    }
+  }
+  return { created, reused }
+}
+
+/**
+ * 创建或严格复用测试业务角色，角色菜单稍后通过增量授权接口单独处理。
+ * @param {{request: Function}} api 已登录 API 客户端。
+ * @param {object} identities 测试身份目录定义。
+ * @returns {Promise<{created: number, reused: number}>} 角色创建和复用数量。
+ */
+async function provisionRoles(api, identities) {
+  let directory = await loadIdentityDirectory(api)
+  let created = 0
+  let reused = 0
+  for (const definition of identities.roles) {
+    const matches = directory.roles.filter(item => item.roleKey === definition.roleKey)
+    if (matches.length > 1) throw new Error(`测试角色标识重复: ${definition.roleKey}`)
+    const existing = matches[0]
+    if (existing) {
+      const matchesDefinition = existing.roleName === definition.roleName &&
+        Number(existing.roleSort) === Number(definition.roleSort) &&
+        String(existing.dataScope) === String(definition.dataScope) &&
+        String(existing.status) === '0'
+      if (!matchesDefinition) throw new Error(`测试角色内容漂移: ${definition.roleKey}`)
+      reused += 1
+      continue
+    }
+    await api.request('POST', '/system/role', {
+      roleName: definition.roleName,
+      roleKey: definition.roleKey,
+      roleSort: Number(definition.roleSort),
+      dataScope: String(definition.dataScope),
+      menuCheckStrictly: true,
+      deptCheckStrictly: true,
+      status: '0',
+      menuIds: [],
+      remark: sampleAssetRemark
+    })
+    created += 1
+    directory = await loadIdentityDirectory(api)
+    const verified = directory.roles.filter(item => item.roleKey === definition.roleKey)
+    if (verified.length !== 1 || String(verified[0].status) !== '0') {
+      throw new Error(`测试角色创建后校验失败: ${definition.roleKey}`)
+    }
+  }
+  return { created, reused }
+}
+
+/**
+ * 比较两个角色主键集合是否完全一致，避免测试账号残留额外高权限角色。
+ * @param {unknown[]} actual 当前正式用户角色主键集合。
+ * @param {number[]} expected 样例目录要求的角色主键集合。
+ * @returns {boolean} 去重并排序后完全一致时返回 true。
+ */
+function sameRoleIds(actual, expected) {
+  const normalize = values => [...new Set((Array.isArray(values) ? values : [])
+    .map(value => Number(value))
+    .filter(value => Number.isSafeInteger(value) && value > 0))]
+    .sort((left, right) => left - right)
+  return JSON.stringify(normalize(actual)) === JSON.stringify(normalize(expected))
+}
+
+/**
+ * 创建或校准一个受管测试用户的正式资料和角色绑定。
+ * @param {{request: Function}} api 已登录管理员 API 客户端。
+ * @param {object} definition 测试用户定义。
+ * @param {{users: object[], roles: object[], depts: object[]}} directory 当前身份目录。
+ * @param {string} identityPassword 仅存在于当前进程的测试用户密码。
+ * @returns {Promise<{userId: number, status: string}>} 用户主键和创建或校准状态。
+ */
+async function provisionUser(api, definition, directory, identityPassword) {
+  const deptMatches = directory.depts.filter(item =>
+    item.deptName === definition.deptName && String(item.status) === '0'
+  )
+  if (deptMatches.length !== 1) throw new Error(`测试用户部门缺失或重复: ${definition.deptName}`)
+  const roleIds = definition.roleKeys.map(roleKey => {
+    const matches = directory.roles.filter(item =>
+      item.roleKey === roleKey && String(item.status) === '0'
+    )
+    if (matches.length !== 1) throw new Error(`测试用户角色缺失或重复: ${roleKey}`)
+    return Number(matches[0].roleId)
+  })
+  const matches = directory.users.filter(item => item.userName === definition.userName)
+  if (matches.length > 1) throw new Error(`测试账号重复: ${definition.userName}`)
+  let userId = matches[0] ? Number(matches[0].userId) : null
+  const basePayload = {
+    deptId: Number(deptMatches[0].deptId),
+    userName: definition.userName,
+    nickName: definition.nickName,
+    email: definition.email || '',
+    phonenumber: definition.phonenumber || '',
+    sex: definition.sex || '2',
+    status: '0',
+    roleIds,
+    postIds: [],
+    remark: sampleAssetRemark
+  }
+  if (!userId) {
+    await api.request('POST', '/system/user', { ...basePayload, password: identityPassword })
+    const refreshed = await loadIdentityDirectory(api)
+    const created = refreshed.users.filter(item => item.userName === definition.userName)
+    if (created.length !== 1) throw new Error(`测试账号创建后校验失败: ${definition.userName}`)
+    userId = Number(created[0].userId)
+  } else if (!definition.adoptExisting && matches[0].remark !== sampleAssetRemark) {
+    throw new Error(`测试账号标识已被非样例用户占用: ${definition.userName}`)
+  }
+
+  const detailResponse = await api.request('GET', `/system/user/${encodeURIComponent(userId)}`)
+  const current = detailResponse.data
+  const needsUpdate = Number(current?.deptId) !== basePayload.deptId ||
+    current?.userName !== basePayload.userName || current?.nickName !== basePayload.nickName ||
+    String(current?.status) !== '0' || String(current?.sex || '2') !== basePayload.sex ||
+    String(current?.email || '') !== basePayload.email ||
+    String(current?.phonenumber || '') !== basePayload.phonenumber ||
+    current?.remark !== sampleAssetRemark || !sameRoleIds(detailResponse.roleIds, roleIds)
+  if (needsUpdate) {
+    await api.request('PUT', '/system/user', { ...basePayload, userId })
+  }
+  const verified = await api.request('GET', `/system/user/${encodeURIComponent(userId)}`)
+  if (Number(verified.data?.deptId) !== basePayload.deptId ||
+      verified.data?.nickName !== basePayload.nickName || String(verified.data?.status) !== '0' ||
+      !sameRoleIds(verified.roleIds, roleIds)) {
+    throw new Error(`测试账号资料或角色绑定校验失败: ${definition.userName}`)
+  }
+  return { userId, status: matches[0] ? (needsUpdate ? 'aligned' : 'reused') : 'created' }
+}
+
+/**
+ * 验证受管测试账号密码；若密码漂移则通过正式重置接口恢复后再次登录校验。
+ * @param {{request: Function}} adminApi 已登录管理员 API 客户端。
+ * @param {string} baseUrl 服务根地址。
+ * @param {string} username 测试账号。
+ * @param {number} userId 正式用户主键。
+ * @param {string} identityPassword 仅存在于当前进程的测试用户密码。
+ * @returns {Promise<void>} 账号可登录时完成，否则抛出异常。
+ */
+async function ensureUserPassword(adminApi, baseUrl, username, userId, identityPassword) {
+  const client = createApiClient(baseUrl)
+  try {
+    await client.login(username, identityPassword)
+    return
+  } catch {
+    await adminApi.request('PUT', '/system/user/resetPwd', {
+      userId,
+      password: identityPassword
+    })
+  }
+  const verifiedClient = createApiClient(baseUrl)
+  await verifiedClient.login(username, identityPassword)
+}
+
+/**
+ * 通过正式系统 API 完成测试部门、角色、用户和登录凭据置备。
+ * @param {{request: Function}} api 已登录管理员 API 客户端。
+ * @param {string} baseUrl 服务根地址。
+ * @param {object} catalog 完整审批样例目录。
+ * @param {string} identityPassword 仅存在于当前进程的测试用户密码。
+ * @returns {Promise<{directory: object, departments: object, roles: object, users: object}>} 置备结果和最新身份目录。
+ */
+async function provisionIdentities(api, baseUrl, catalog, identityPassword) {
+  const identities = requireIdentityCatalog(catalog)
+  const departments = await provisionDepartments(api, identities)
+  const roles = await provisionRoles(api, identities)
+  let directory = await loadIdentityDirectory(api)
+  const userResults = []
+  for (const definition of identities.users) {
+    const result = await provisionUser(api, definition, directory, identityPassword)
+    await ensureUserPassword(api, baseUrl, definition.userName, result.userId, identityPassword)
+    userResults.push({ userName: definition.userName, status: result.status })
+    directory = await loadIdentityDirectory(api)
+  }
+  return {
+    directory,
+    departments,
+    roles,
+    users: {
+      created: userResults.filter(item => item.status === 'created').length,
+      aligned: userResults.filter(item => item.status === 'aligned').length,
+      reused: userResults.filter(item => item.status === 'reused').length
+    }
+  }
 }
 
 /**
@@ -275,6 +565,132 @@ function escapeXml(value) {
 }
 
 /**
+ * 转义正则表达式元字符，用于只读核验后端规范化后的部署 XML。
+ * @param {unknown} value 待进入正则表达式的原始值。
+ * @returns {string} 可安全拼入 RegExp 的文本。
+ */
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+/**
+ * 从 BPMN XML 中读取指定类型和 ID 元素的开始标签。
+ * @param {string} xml 已部署 BPMN XML。
+ * @param {string} tag BPMN 元素本地名称。
+ * @param {string} elementId BPMN 元素标识。
+ * @returns {string} 匹配的开始标签。
+ */
+function requireOpeningTag(xml, tag, elementId) {
+  const pattern = new RegExp(
+    `<(?:[A-Za-z0-9_-]+:)?${escapeRegex(tag)}\\b[^>]*\\bid="${escapeRegex(escapeXml(elementId))}"[^>]*>`,
+    'u'
+  )
+  const match = xml.match(pattern)
+  if (!match) throw new Error(`已部署 BPMN 缺少元素: ${tag}#${elementId}`)
+  return match[0]
+}
+
+/**
+ * 核验 XML 开始标签包含预期属性和值。
+ * @param {string} openingTag XML 开始标签。
+ * @param {string} attribute 属性名，可包含命名空间前缀。
+ * @param {unknown} expectedValue 预期属性值。
+ * @param {string} context 错误信息使用的业务上下文。
+ * @returns {void} 属性一致时完成，否则抛出异常。
+ */
+function assertTagAttribute(openingTag, attribute, expectedValue, context) {
+  const pattern = new RegExp(
+    `(?:^|\\s)${escapeRegex(attribute)}="${escapeRegex(escapeXml(expectedValue))}"(?:\\s|/?>)`,
+    'u'
+  )
+  if (!pattern.test(openingTag)) {
+    throw new Error(`已部署 BPMN 属性漂移: ${context}.${attribute}`)
+  }
+}
+
+/**
+ * 判断规范 XML 文本或 CDATA 是否包含同一个表达式语义。
+ * @param {string} xml XML 片段。
+ * @param {string} expectedText 预期表达式原文。
+ * @returns {boolean} 原文或 XML 转义形式任一存在时返回 true。
+ */
+function includesXmlText(xml, expectedText) {
+  return xml.includes(expectedText) || xml.includes(escapeXml(expectedText))
+}
+
+/**
+ * 核验后端规范化或编译后的部署 BPMN 仍满足目录声明的业务拓扑和执行契约。
+ * @param {string} actualBpmn 后端返回的真实部署 BPMN XML。
+ * @param {object} sample 当前审批样例定义。
+ * @param {number} formId 开始节点绑定的正式表单主键。
+ * @param {object[]} resolvedTasks 已解析身份或多实例模式的任务数组。
+ * @returns {void} 关键元素、身份、流向和受控协议一致时完成。
+ */
+function assertDeployedBpmnMatches(actualBpmn, sample, formId, resolvedTasks) {
+  if (typeof actualBpmn !== 'string' || !actualBpmn.trim()) {
+    throw new Error(`已部署 BPMN 正文为空: ${sample.modelKey}`)
+  }
+  const graph = createSampleGraph(sample, formId, resolvedTasks)
+  const processTag = requireOpeningTag(actualBpmn, 'process', sample.modelKey)
+  assertTagAttribute(processTag, 'name', sample.modelName, `${sample.modelKey}.process`)
+  assertTagAttribute(processTag, 'isExecutable', 'true', `${sample.modelKey}.process`)
+  for (const node of graph.nodes) {
+    if (node.kind === 'start') {
+      const tag = requireOpeningTag(actualBpmn, 'startEvent', node.id)
+      assertTagAttribute(tag, 'flowable:formKey', `key_${formId}`, `${sample.modelKey}.${node.id}`)
+      continue
+    }
+    if (node.kind === 'end') {
+      requireOpeningTag(actualBpmn, 'endEvent', node.id)
+      continue
+    }
+    if (node.kind === 'user') {
+      const tag = requireOpeningTag(actualBpmn, 'userTask', node.id)
+      assertTagAttribute(tag, 'name', node.name, `${sample.modelKey}.${node.id}`)
+      if (node.multiInstanceMode) {
+        assertTagAttribute(tag, 'flowable:assignee', controlledMultiInstanceAssignee, `${sample.modelKey}.${node.id}`)
+        const taskPattern = new RegExp(
+          `<userTask\\b[^>]*\\bid="${escapeRegex(node.id)}"[^>]*>[\\s\\S]*?</userTask>`,
+          'u'
+        )
+        const taskXml = actualBpmn.match(taskPattern)?.[0] || ''
+        if (!taskXml.includes(`flowable:collection="${escapeXml(controlledMultiInstanceCollection)}"`) ||
+            !taskXml.includes(`flowable:elementVariable="${controlledMultiInstanceElementVariable}"`)) {
+          throw new Error(`已部署动态多实例集合协议漂移: ${sample.modelKey}.${node.id}`)
+        }
+        const expectedCondition = node.multiInstanceMode === 'ALL'
+          ? controlledMultiInstanceAllCondition
+          : controlledMultiInstanceAnyCondition
+        if (!includesXmlText(taskXml, expectedCondition)) {
+          throw new Error(`已部署动态多实例完成条件漂移: ${sample.modelKey}.${node.id}`)
+        }
+      } else {
+        assertTagAttribute(tag, node.identity.attribute, node.identity.value, `${sample.modelKey}.${node.id}`)
+      }
+      continue
+    }
+    if (node.kind === 'service') {
+      const tag = requireOpeningTag(actualBpmn, 'serviceTask', node.id)
+      assertTagAttribute(tag, 'flowable:delegateExpression', '${workflowExtensionDelegate}', `${sample.modelKey}.${node.id}`)
+      continue
+    }
+    const gatewayTag = node.kind === 'exclusiveGateway' ? 'exclusiveGateway' : 'parallelGateway'
+    const tag = requireOpeningTag(actualBpmn, gatewayTag, node.id)
+    if (node.defaultFlow) {
+      assertTagAttribute(tag, 'default', node.defaultFlow, `${sample.modelKey}.${node.id}`)
+    }
+  }
+  for (const flow of graph.flows) {
+    const tag = requireOpeningTag(actualBpmn, 'sequenceFlow', flow.id)
+    assertTagAttribute(tag, 'sourceRef', flow.source, `${sample.modelKey}.${flow.id}`)
+    assertTagAttribute(tag, 'targetRef', flow.target, `${sample.modelKey}.${flow.id}`)
+    if (flow.condition && !includesXmlText(actualBpmn, flow.condition)) {
+      throw new Error(`已部署条件表达式漂移: ${sample.modelKey}.${flow.id}`)
+    }
+  }
+}
+
+/**
  * 递归收集目标菜单及全部父菜单，确保页面路由和按钮权限同时可达。
  * @param {object} menu 需要授权的正式菜单记录。
  * @param {Map<string, object>} menusById 菜单主键到记录的映射。
@@ -344,57 +760,382 @@ async function alignParticipantRolePermissions(api, catalog, roles) {
 }
 
 /**
- * 生成带固定审计监听器、表单键和真实静态身份的串行 BPMN 2.0 XML。
+ * 核验样例引用的受控扩展已在正式注册表启用，并锁定稳定键和实现类型。
+ * @param {{request: Function}} api 已登录 API 客户端。
+ * @param {object} catalog 完整审批样例目录。
+ * @returns {Promise<Map<string, object>>} 扩展稳定键到正式启用版本的映射。
+ */
+async function loadRequiredExtensions(api, catalog) {
+  const requirements = Array.isArray(catalog.requiredExtensions)
+    ? catalog.requiredExtensions
+    : []
+  const endpointByType = {
+    JAVA: '/workflow/extension/options/java',
+    CEL: '/workflow/extension/options/cel',
+    HTTP: '/workflow/extension/options/http',
+    SQL: '/workflow/extension/options/sql'
+  }
+  const rows = []
+  for (const extensionType of new Set(requirements.map(item => item.extensionType))) {
+    const endpoint = endpointByType[extensionType]
+    if (!endpoint) throw new Error(`样例扩展类型不受支持: ${extensionType}`)
+    const response = await api.request('GET', endpoint)
+    rows.push(...(Array.isArray(response.data) ? response.data : []))
+  }
+  const resolved = new Map()
+  for (const requirement of requirements) {
+    const matches = rows.filter(item => item.extensionKey === requirement.key)
+    if (matches.length !== 1) throw new Error(`样例所需受控扩展缺失或重复: ${requirement.key}`)
+    const extension = matches[0]
+    if (extension.extensionType !== requirement.extensionType ||
+        extension.implementationKey !== requirement.implementationKey ||
+        !Number.isSafeInteger(Number(extension.versionId)) || Number(extension.versionId) <= 0) {
+      throw new Error(`样例所需受控扩展内容漂移: ${requirement.key}`)
+    }
+    resolved.set(requirement.key, extension)
+  }
+  return resolved
+}
+
+/**
+ * 用每个测试账号重新登录并访问其正式工作流入口，验证凭据和 RBAC 真实生效。
+ * @param {string} baseUrl 服务根地址。
+ * @param {object} identities 测试身份目录定义。
+ * @param {string} identityPassword 仅存在于当前进程的测试用户密码。
+ * @returns {Promise<number>} 通过登录和权限入口校验的测试账号数量。
+ */
+async function verifyTestIdentityAccess(baseUrl, identities, identityPassword) {
+  let verified = 0
+  for (const definition of identities.users) {
+    const client = createApiClient(baseUrl)
+    await client.login(definition.userName, identityPassword)
+    await client.request('GET', '/workflow/process/list?pageNum=1&pageSize=1')
+    if (definition.roleKeys.includes('workflow_approver')) {
+      await client.request('GET', '/workflow/process/todoList?pageNum=1&pageSize=1')
+      await client.request('GET', '/workflow/process/claimList?pageNum=1&pageSize=1')
+    }
+    verified += 1
+  }
+  return verified
+}
+
+/**
+ * 解析一个样例的静态审批身份，并保留动态多实例节点的固定完成模式。
+ * @param {object} sample 样例模型和任务定义。
+ * @param {{users: object[], roles: object[], depts: object[]}} directory 正式身份主数据。
+ * @returns {object[]} 已解析身份或多实例模式的任务数组。
+ */
+function resolveSampleTasks(sample, directory) {
+  if (!Array.isArray(sample.tasks) || sample.tasks.length === 0) {
+    throw new Error(`审批样例缺少用户任务: ${sample.modelKey}`)
+  }
+  const taskIds = sample.tasks.map(task => task.id)
+  if (taskIds.some(id => !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(id)) ||
+      new Set(taskIds).size !== taskIds.length) {
+    throw new Error(`审批样例任务标识为空、重复或不符合受控语法: ${sample.modelKey}`)
+  }
+  return sample.tasks.map(task => {
+    if (task.multiInstanceMode) {
+      if (!['ALL', 'ANY'].includes(task.multiInstanceMode)) {
+        throw new Error(`动态多实例完成模式不受支持: ${task.multiInstanceMode}`)
+      }
+      return { id: task.id, name: task.name, multiInstanceMode: task.multiInstanceMode }
+    }
+    return {
+      id: task.id,
+      name: task.name,
+      identity: resolveTaskIdentity(task, directory)
+    }
+  })
+}
+
+/**
+ * 生成所有正式用户任务统一要求的创建、分配和完成审计监听器。
+ * @returns {string[]} 可直接放入 UserTask extensionElements 的 XML 行。
+ */
+function createUserTaskListeners() {
+  return [
+    '        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>',
+    '        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>',
+    '        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>'
+  ]
+}
+
+/**
+ * 生成静态身份或受控动态多实例 UserTask XML。
+ * @param {object} task 已解析的任务定义。
+ * @returns {string} 完整 UserTask XML。
+ */
+function createUserTaskElement(task) {
+  const taskId = escapeXml(task.id)
+  const taskName = escapeXml(task.name)
+  const lines = []
+  if (task.multiInstanceMode) {
+    const condition = task.multiInstanceMode === 'ALL'
+      ? controlledMultiInstanceAllCondition
+      : controlledMultiInstanceAnyCondition
+    lines.push(`    <userTask id="${taskId}" name="${taskName}" flowable:assignee="${escapeXml(controlledMultiInstanceAssignee)}">`)
+    lines.push('      <extensionElements>')
+    lines.push(...createUserTaskListeners())
+    lines.push('      </extensionElements>')
+    lines.push(`      <multiInstanceLoopCharacteristics isSequential="false" flowable:collection="${escapeXml(controlledMultiInstanceCollection)}" flowable:elementVariable="${controlledMultiInstanceElementVariable}">`)
+    lines.push(`        <completionCondition xsi:type="tFormalExpression">${escapeXml(condition)}</completionCondition>`)
+    lines.push('      </multiInstanceLoopCharacteristics>')
+    lines.push('    </userTask>')
+    return lines.join('\n')
+  }
+  lines.push(`    <userTask id="${taskId}" name="${taskName}" ${task.identity.attribute}="${escapeXml(task.identity.value)}">`)
+  lines.push('      <extensionElements>')
+  lines.push(...createUserTaskListeners())
+  lines.push('      </extensionElements>')
+  lines.push('    </userTask>')
+  return lines.join('\n')
+}
+
+/**
+ * 生成引用正式受控扩展注册表的 ServiceTask XML，禁止任意 Bean 或类名注入。
+ * @param {object} extension 扩展稳定键和结构化配置。
+ * @returns {string} 完整受控 ServiceTask XML。
+ */
+function createServiceTaskElement(extension) {
+  if (!extension || typeof extension.key !== 'string' || !extension.key.trim() ||
+      !extension.config || typeof extension.config !== 'object' || Array.isArray(extension.config)) {
+    throw new Error('受控服务任务缺少扩展标识或结构化配置')
+  }
+  const config = escapeXml(JSON.stringify(extension.config))
+  return [
+    '    <serviceTask id="automation" name="写入自动化标记" flowable:delegateExpression="${workflowExtensionDelegate}">',
+    '      <extensionElements>',
+    `        <flowable:field name="approvaExtensionKey" stringValue="${escapeXml(extension.key)}"/>`,
+    `        <flowable:field name="approvaExtensionConfig" stringValue="${config}"/>`,
+    '      </extensionElements>',
+    '    </serviceTask>'
+  ].join('\n')
+}
+
+/**
+ * 按样例模板生成可执行节点、顺序流和设计器坐标。
+ * @param {object} sample 样例模型定义。
+ * @param {number} formId 开始节点引用的正式表单主键。
+ * @param {object[]} tasks 已解析的用户任务。
+ * @returns {{nodes: object[], flows: object[]}} BPMN 图结构。
+ */
+function createSampleGraph(sample, formId, tasks) {
+  const template = sample.template || 'serial'
+  const start = { id: 'start', kind: 'start', name: '提交申请', formId, x: 80, y: 272 }
+  const end = { id: 'end', kind: 'end', name: '结束', x: 0, y: 272 }
+  if (template === 'serial') {
+    const nodes = [start]
+    const flows = []
+    let previousId = start.id
+    tasks.forEach((task, index) => {
+      nodes.push({ ...task, kind: 'user', x: 190 + (190 * index), y: 250 })
+      flows.push({ id: `flow_${previousId}_${task.id}`, source: previousId, target: task.id })
+      previousId = task.id
+    })
+    end.x = 220 + (190 * tasks.length)
+    nodes.push(end)
+    flows.push({ id: `flow_${previousId}_end`, source: previousId, target: end.id })
+    return { nodes, flows }
+  }
+  if (template === 'conditional') {
+    if (tasks.length !== 3 || !sample.routing ||
+        !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(sample.routing.variable) ||
+        !Number.isFinite(Number(sample.routing.threshold))) {
+      throw new Error(`条件审批模板定义不完整: ${sample.modelKey}`)
+    }
+    const [initial, highFirst, highSecond] = tasks
+    const threshold = Number(sample.routing.threshold)
+    const gateway = {
+      id: 'amount_gateway', kind: 'exclusiveGateway', name: '金额判断',
+      defaultFlow: 'flow_amount_high', x: 390, y: 265
+    }
+    end.x = 890
+    return {
+      nodes: [
+        start,
+        { ...initial, kind: 'user', x: 190, y: 250 },
+        gateway,
+        { ...highFirst, kind: 'user', x: 540, y: 350 },
+        { ...highSecond, kind: 'user', x: 720, y: 350 },
+        end
+      ],
+      flows: [
+        { id: 'flow_start_initial', source: 'start', target: initial.id },
+        { id: 'flow_initial_gateway', source: initial.id, target: gateway.id },
+        {
+          id: 'flow_amount_small', source: gateway.id, target: 'end',
+          condition: `\${${sample.routing.variable} <= ${threshold}}`
+        },
+        { id: 'flow_amount_high', source: gateway.id, target: highFirst.id },
+        { id: 'flow_high_first_second', source: highFirst.id, target: highSecond.id },
+        { id: 'flow_high_second_end', source: highSecond.id, target: 'end' }
+      ]
+    }
+  }
+  if (template === 'parallel') {
+    if (tasks.length !== 4) throw new Error(`并行审批模板必须包含四个用户任务: ${sample.modelKey}`)
+    const [initial, upper, lower, final] = tasks
+    const split = { id: 'parallel_split', kind: 'parallelGateway', name: '并行准备', x: 390, y: 265 }
+    const join = { id: 'parallel_join', kind: 'parallelGateway', name: '汇总结果', x: 690, y: 265 }
+    end.x = 1010
+    return {
+      nodes: [
+        start,
+        { ...initial, kind: 'user', x: 190, y: 250 },
+        split,
+        { ...upper, kind: 'user', x: 510, y: 130 },
+        { ...lower, kind: 'user', x: 510, y: 370 },
+        join,
+        { ...final, kind: 'user', x: 810, y: 250 },
+        end
+      ],
+      flows: [
+        { id: 'flow_start_initial', source: 'start', target: initial.id },
+        { id: 'flow_initial_split', source: initial.id, target: split.id },
+        { id: 'flow_split_upper', source: split.id, target: upper.id },
+        { id: 'flow_split_lower', source: split.id, target: lower.id },
+        { id: 'flow_upper_join', source: upper.id, target: join.id },
+        { id: 'flow_lower_join', source: lower.id, target: join.id },
+        { id: 'flow_join_final', source: join.id, target: final.id },
+        { id: 'flow_final_end', source: final.id, target: 'end' }
+      ]
+    }
+  }
+  if (template === 'multiInstance') {
+    if (tasks.length !== 3 || !tasks[1].multiInstanceMode) {
+      throw new Error(`动态多实例模板定义不完整: ${sample.modelKey}`)
+    }
+    const [initializer, multiInstance, final] = tasks
+    end.x = 830
+    return {
+      nodes: [
+        start,
+        { ...initializer, kind: 'user', x: 190, y: 250 },
+        { ...multiInstance, kind: 'user', x: 400, y: 250 },
+        { ...final, kind: 'user', x: 610, y: 250 },
+        end
+      ],
+      flows: [
+        { id: 'flow_start_initializer', source: 'start', target: initializer.id },
+        { id: 'flow_initializer_multi', source: initializer.id, target: multiInstance.id },
+        { id: 'flow_multi_final', source: multiInstance.id, target: final.id },
+        { id: 'flow_final_end', source: final.id, target: 'end' }
+      ]
+    }
+  }
+  if (template === 'service') {
+    if (tasks.length !== 1) throw new Error(`受控自动化模板必须包含一个用户任务: ${sample.modelKey}`)
+    const approval = tasks[0]
+    end.x = 650
+    return {
+      nodes: [
+        start,
+        { id: 'automation', kind: 'service', extension: sample.extension, x: 190, y: 250 },
+        { ...approval, kind: 'user', x: 420, y: 250 },
+        end
+      ],
+      flows: [
+        { id: 'flow_start_automation', source: 'start', target: 'automation' },
+        { id: 'flow_automation_approval', source: 'automation', target: approval.id },
+        { id: 'flow_approval_end', source: approval.id, target: 'end' }
+      ]
+    }
+  }
+  throw new Error(`不支持的审批样例模板: ${template}`)
+}
+
+/**
+ * 把图节点转换为可执行 BPMN 元素 XML。
+ * @param {object} node 样例图节点。
+ * @returns {string} 节点 XML。
+ */
+function createNodeElement(node) {
+  if (node.kind === 'start') {
+    return `    <startEvent id="${node.id}" name="${escapeXml(node.name)}" flowable:formKey="key_${node.formId}"/>`
+  }
+  if (node.kind === 'end') return `    <endEvent id="${node.id}" name="${escapeXml(node.name)}"/>`
+  if (node.kind === 'user') return createUserTaskElement(node)
+  if (node.kind === 'service') return createServiceTaskElement(node.extension)
+  if (node.kind === 'exclusiveGateway') {
+    return `    <exclusiveGateway id="${node.id}" name="${escapeXml(node.name)}" default="${escapeXml(node.defaultFlow)}"/>`
+  }
+  if (node.kind === 'parallelGateway') {
+    return `    <parallelGateway id="${node.id}" name="${escapeXml(node.name)}"/>`
+  }
+  throw new Error(`不支持的 BPMN 图节点类型: ${node.kind}`)
+}
+
+/**
+ * 把顺序流转换为 BPMN XML，并仅允许目录生成的固定条件表达式。
+ * @param {object} flow 顺序流定义。
+ * @returns {string} 顺序流 XML。
+ */
+function createFlowElement(flow) {
+  const opening = `    <sequenceFlow id="${escapeXml(flow.id)}" sourceRef="${escapeXml(flow.source)}" targetRef="${escapeXml(flow.target)}"`
+  if (!flow.condition) return `${opening}/>`
+  return `${opening}>\n      <conditionExpression xsi:type="tFormalExpression">${escapeXml(flow.condition)}</conditionExpression>\n    </sequenceFlow>`
+}
+
+/**
+ * 生成 BPMN DI 节点坐标，使所有内置样例在设计器中打开即可清晰浏览。
+ * @param {object} node 样例图节点。
+ * @returns {string} BPMNShape XML。
+ */
+function createNodeShape(node) {
+  const dimensions = node.kind === 'start' || node.kind === 'end'
+    ? { width: 36, height: 36 }
+    : node.kind.endsWith('Gateway')
+      ? { width: 50, height: 50 }
+      : { width: 120, height: 80 }
+  return `      <bpmndi:BPMNShape id="${node.id}_di" bpmnElement="${node.id}"><dc:Bounds x="${node.x}" y="${node.y}" width="${dimensions.width}" height="${dimensions.height}"/></bpmndi:BPMNShape>`
+}
+
+/**
+ * 计算 BPMN DI 连线端点，复杂分支允许直接使用斜线并保持节点关系可读。
+ * @param {object} flow 顺序流定义。
+ * @param {Map<string, object>} nodesById 节点标识到坐标定义的映射。
+ * @returns {string} BPMNEdge XML。
+ */
+function createFlowEdge(flow, nodesById) {
+  const source = nodesById.get(flow.source)
+  const target = nodesById.get(flow.target)
+  if (!source || !target) throw new Error(`顺序流引用了不存在的节点: ${flow.id}`)
+  const size = node => node.kind === 'start' || node.kind === 'end'
+    ? { width: 36, height: 36 }
+    : node.kind.endsWith('Gateway')
+      ? { width: 50, height: 50 }
+      : { width: 120, height: 80 }
+  const sourceSize = size(source)
+  const targetSize = size(target)
+  const sourceX = source.x + sourceSize.width
+  const sourceY = source.y + (sourceSize.height / 2)
+  const targetX = target.x
+  const targetY = target.y + (targetSize.height / 2)
+  return `      <bpmndi:BPMNEdge id="${flow.id}_di" bpmnElement="${flow.id}"><di:waypoint x="${sourceX}" y="${sourceY}"/><di:waypoint x="${targetX}" y="${targetY}"/></bpmndi:BPMNEdge>`
+}
+
+/**
+ * 根据正式样例模板生成带表单、身份、监听器和可读坐标的 BPMN 2.0 XML。
  * @param {object} sample 样例模型和节点定义。
  * @param {number} formId 开始节点引用的正式表单主键。
- * @param {object[]} resolvedTasks 已解析身份编码的节点数组。
+ * @param {object[]} resolvedTasks 已解析身份或多实例模式的任务数组。
  * @returns {string} 可由模型保存接口直接校验的 BPMN XML。
  */
 function createBpmnXml(sample, formId, resolvedTasks) {
-  if (resolvedTasks.length < 2) {
-    throw new Error('审批样例至少需要两个用户任务，才能形成真实退回路径')
-  }
   const processId = escapeXml(sample.modelKey)
   const processName = escapeXml(sample.modelName)
+  const graph = createSampleGraph(sample, formId, resolvedTasks)
+  const nodesById = new Map(graph.nodes.map(node => [node.id, node]))
   const elements = [
-    `    <startEvent id="start" name="提交申请" flowable:formKey="key_${formId}"/>`
+    ...graph.nodes.map(createNodeElement),
+    ...graph.flows.map(createFlowElement)
   ]
-  const shapes = [
-    '      <bpmndi:BPMNShape id="start_di" bpmnElement="start"><dc:Bounds x="80" y="172" width="36" height="36"/></bpmndi:BPMNShape>'
-  ]
-  const edges = []
-  let previousId = 'start'
-  let previousX = 116
-
-  resolvedTasks.forEach((task, index) => {
-    const taskId = escapeXml(task.id)
-    const taskName = escapeXml(task.name)
-    const identityValue = escapeXml(task.identity.value)
-    const x = 190 + (180 * index)
-    const flowId = `flow_${previousId}_${task.id}`
-    elements.push(`    <sequenceFlow id="${flowId}" sourceRef="${previousId}" targetRef="${taskId}"/>`)
-    elements.push(`    <userTask id="${taskId}" name="${taskName}" ${task.identity.attribute}="${identityValue}">`)
-    elements.push('      <extensionElements>')
-    elements.push('        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>')
-    elements.push('        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>')
-    elements.push('        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>')
-    elements.push('      </extensionElements>')
-    elements.push('    </userTask>')
-    shapes.push(`      <bpmndi:BPMNShape id="${task.id}_di" bpmnElement="${taskId}"><dc:Bounds x="${x}" y="150" width="110" height="80"/></bpmndi:BPMNShape>`)
-    edges.push(`      <bpmndi:BPMNEdge id="${flowId}_di" bpmnElement="${flowId}"><di:waypoint x="${previousX}" y="190"/><di:waypoint x="${x}" y="190"/></bpmndi:BPMNEdge>`)
-    previousId = task.id
-    previousX = x + 110
-  })
-
-  const endX = 210 + (180 * resolvedTasks.length)
-  const endFlowId = `flow_${previousId}_end`
-  elements.push(`    <sequenceFlow id="${endFlowId}" sourceRef="${previousId}" targetRef="end"/>`)
-  elements.push('    <endEvent id="end" name="结束"/>')
-  shapes.push(`      <bpmndi:BPMNShape id="end_di" bpmnElement="end"><dc:Bounds x="${endX}" y="172" width="36" height="36"/></bpmndi:BPMNShape>`)
-  edges.push(`      <bpmndi:BPMNEdge id="${endFlowId}_di" bpmnElement="${endFlowId}"><di:waypoint x="${previousX}" y="190"/><di:waypoint x="${endX}" y="190"/></bpmndi:BPMNEdge>`)
-
+  const shapes = graph.nodes.map(createNodeShape)
+  const edges = graph.flows.map(flow => createFlowEdge(flow, nodesById))
   return `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
   xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
   xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
@@ -440,10 +1181,10 @@ function assertModelMetadataMatches(model, sample, category, formId) {
  * @param {object} sample 当前审批样例定义。
  * @param {string} category 已核验的正式分类编码。
  * @param {number} formId 已核验的正式表单主键。
- * @param {string} expectedBpmn 目录和当前身份主数据生成的 BPMN XML。
+ * @param {object[]} resolvedTasks 已解析身份或多实例模式的任务数组。
  * @returns {Promise<string>} 已发布且内容一致的真实部署主键。
  */
-async function getVerifiedDeployment(api, sample, category, formId, expectedBpmn) {
+async function getVerifiedDeployment(api, sample, category, formId, resolvedTasks) {
   const response = await api.request(
     'GET',
     `/workflow/deploy/publishList?pageNum=1&pageSize=200&processKey=${encodeURIComponent(sample.modelKey)}`
@@ -468,9 +1209,8 @@ async function getVerifiedDeployment(api, sample, category, formId, expectedBpmn
     'GET',
     `/workflow/deploy/bpmnXml/${encodeURIComponent(deployment.definitionId)}`
   )
-  if (bpmnResponse.data !== expectedBpmn) {
-    throw new Error(`已部署 BPMN 内容漂移: ${sample.modelKey}`)
-  }
+  // Flowable 部署时会规范化 XML，受控扩展还会编译为固定执行 Bean，因此按业务拓扑核验而非比较格式文本。
+  assertDeployedBpmnMatches(bpmnResponse.data, sample, formId, resolvedTasks)
 
   // 发起表单接口只读取 wf_deploy_form，不回连当前模板；据此核验不可变部署快照正文。
   const formResponse = await api.request(
@@ -499,16 +1239,16 @@ async function getVerifiedDeployment(api, sample, category, formId, expectedBpmn
  * @param {{request: Function}} api 已登录 API 客户端。
  * @param {object} sample 完整样例定义。
  * @param {{users: object[], roles: object[], depts: object[]}} directory 正式身份主数据。
+ * @param {Map<string, object>} requiredExtensions 已核验的受控扩展映射。
  * @returns {Promise<{modelKey: string, status: string, deploymentId: string}>} 样例部署结果。
  */
-async function installSample(api, sample, directory) {
+async function installSample(api, sample, directory, requiredExtensions) {
   const category = await getOrCreateCategory(api, sample.category)
   const formId = await getOrCreateForm(api, sample)
-  const resolvedTasks = sample.tasks.map(task => ({
-    id: task.id,
-    name: task.name,
-    identity: resolveTaskIdentity(task, directory)
-  }))
+  if (sample.extension && !requiredExtensions.has(sample.extension.key)) {
+    throw new Error(`样例引用了未核验的受控扩展: ${sample.extension.key}`)
+  }
+  const resolvedTasks = resolveSampleTasks(sample, directory)
   const expectedBpmn = createBpmnXml(sample, formId, resolvedTasks)
   const response = await api.request(
     'GET',
@@ -535,7 +1275,7 @@ async function installSample(api, sample, directory) {
         sample,
         category,
         formId,
-        expectedBpmn
+        resolvedTasks
       )
       return {
         modelKey: sample.modelKey,
@@ -595,7 +1335,7 @@ async function installSample(api, sample, directory) {
     sample,
     category,
     formId,
-    expectedBpmn
+    resolvedTasks
   )
   if (String(deployed.data?.deploymentId || '') !== deploymentId) {
     throw new Error(`模型部署主键与查询结果不一致: ${sample.modelKey}`)
@@ -614,8 +1354,12 @@ async function installSample(api, sample, directory) {
 async function main() {
   const options = parseArguments(process.argv.slice(2))
   const password = process.env.APPROVA_SAMPLE_ADMIN_PASSWORD
+  const identityPassword = process.env.APPROVA_SAMPLE_IDENTITY_PASSWORD
   if (!password) {
     throw new Error('必须通过 APPROVA_SAMPLE_ADMIN_PASSWORD 环境变量提供管理员密码')
+  }
+  if (!identityPassword) {
+    throw new Error('必须通过 APPROVA_SAMPLE_IDENTITY_PASSWORD 环境变量提供测试身份密码')
   }
   const catalog = JSON.parse(await fs.readFile(options.catalogPath, 'utf8'))
   if (!Array.isArray(catalog.samples) || catalog.samples.length === 0) {
@@ -624,32 +1368,57 @@ async function main() {
 
   const api = createApiClient(options.baseUrl)
   await api.login(options.username, password)
-  const [userResponse, roleResponse, deptResponse] = await Promise.all([
-    api.request('GET', '/system/user/list?pageNum=1&pageSize=200'),
-    api.request('GET', '/system/role/list?pageNum=1&pageSize=200'),
-    api.request('GET', '/system/dept/list')
-  ])
-  const directory = {
-    users: userResponse.rows || [],
-    roles: roleResponse.rows || [],
-    depts: deptResponse.data || []
-  }
+  const identityResult = await provisionIdentities(
+    api,
+    options.baseUrl,
+    catalog,
+    identityPassword
+  )
   const permissionResult = await alignParticipantRolePermissions(
     api,
     catalog,
-    directory.roles
+    identityResult.directory.roles
   )
+  const requiredExtensions = await loadRequiredExtensions(api, catalog)
   const results = []
   for (const sample of catalog.samples) {
-    results.push(await installSample(api, sample, directory))
+    results.push(await installSample(
+      api,
+      sample,
+      identityResult.directory,
+      requiredExtensions
+    ))
   }
+  const verifiedUsers = await verifyTestIdentityAccess(
+    options.baseUrl,
+    requireIdentityCatalog(catalog),
+    identityPassword
+  )
+  console.log(
+    `测试部门已核验: 创建 ${identityResult.departments.created}，复用 ${identityResult.departments.reused}`
+  )
+  console.log(
+    `测试角色已核验: 创建 ${identityResult.roles.created}，复用 ${identityResult.roles.reused}`
+  )
+  console.log(
+    `测试账号已核验: 创建 ${identityResult.users.created}，校准 ${identityResult.users.aligned}，复用 ${identityResult.users.reused}，登录与权限入口通过 ${verifiedUsers}`
+  )
   console.log(
     `参与者角色已核验: ${permissionResult.aligned}，新增菜单关联: ${permissionResult.added}`
   )
   console.table(results)
 }
 
-main().catch(error => {
-  console.error(error.message)
-  process.exitCode = 1
-})
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(error => {
+    console.error(error.message)
+    process.exitCode = 1
+  })
+}
+
+export {
+  createBpmnXml,
+  createSampleGraph,
+  requireIdentityCatalog,
+  resolveSampleTasks
+}

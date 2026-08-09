@@ -4,17 +4,17 @@
 WITH workflow_menu AS (
     SELECT menu_id, menu_name, parent_id, path, component, route_name, menu_type, perms
     FROM sys_menu
-    WHERE (menu_type = 'M' AND path IN ('workflow', 'office'))
+    WHERE (menu_type = 'M' AND path IN ('workflow', 'office', 'extensions'))
        OR perms LIKE 'workflow:%'
 )
 SELECT
     'workflow_menu_count' AS check_name,
     CASE
-        WHEN COUNT(*) = 86
+        WHEN COUNT(*) = 87
          AND COUNT(DISTINCT CASE
                  WHEN menu_type = 'M' THEN CONCAT('path:', path)
                  ELSE CONCAT('perms:', perms)
-             END) = 86
+             END) = 87
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
@@ -25,12 +25,13 @@ SELECT
 FROM workflow_menu;
 
 WITH workflow_directory AS (
-    SELECT menu_id, path
+    SELECT menu_id, parent_id, path
     FROM sys_menu
-    WHERE menu_type = 'M' AND path IN ('workflow', 'office')
+    WHERE menu_type = 'M' AND path IN ('workflow', 'office', 'extensions')
 ),
 workflow_page AS (
-    SELECT page.menu_id, page.parent_id, page.component, page.route_name
+    SELECT page.menu_id, page.parent_id, page.component, page.route_name, page.perms,
+           directory.path AS parent_path
     FROM sys_menu page
     JOIN workflow_directory directory ON directory.menu_id = page.parent_id
     WHERE page.menu_type = 'C'
@@ -46,9 +47,29 @@ workflow_button AS (
 SELECT
     'workflow_menu_tree' AS check_name,
     CASE
-        WHEN (SELECT COUNT(*) FROM workflow_directory) = 2
+        WHEN (SELECT COUNT(*) FROM workflow_directory) = 3
+         AND (SELECT COUNT(*)
+              FROM workflow_directory extension_directory
+              JOIN workflow_directory workflow_directory_root
+                ON workflow_directory_root.menu_id = extension_directory.parent_id
+              WHERE extension_directory.path = 'extensions'
+                AND workflow_directory_root.path = 'workflow') = 1
          AND (SELECT COUNT(*) FROM workflow_page) = 19
          AND (SELECT COUNT(*) FROM workflow_button) = 65
+         AND (SELECT COUNT(*) FROM workflow_page
+              WHERE parent_path = 'workflow'
+                AND perms IN ('workflow:category:list', 'workflow:form:list',
+                              'workflow:model:list', 'workflow:deploy:list')) = 4
+         AND (SELECT COUNT(*) FROM workflow_page
+              WHERE parent_path = 'extensions'
+                AND perms IN (
+                    'workflow:extension:list', 'workflow:connector:list',
+                    'workflow:sqlDatasource:list', 'workflow:integrationCredential:list',
+                    'workflow:dmn:list', 'workflow:runtimeEvent:list',
+                    'workflow:collaboration:list', 'workflow:bpmnEvent:list',
+                    'workflow:process:manageList'
+                )) = 9
+         AND (SELECT COUNT(*) FROM workflow_page WHERE parent_path = 'office') = 6
          AND (SELECT COUNT(*) FROM workflow_page
               WHERE component IS NULL OR component = '' OR route_name = '') = 0
         THEN 'PASS'
@@ -56,11 +77,50 @@ SELECT
     END AS result,
     CONCAT(
         'directories=', (SELECT COUNT(*) FROM workflow_directory),
+        ', extension_parent=', (SELECT COUNT(*)
+                                 FROM workflow_directory extension_directory
+                                 JOIN workflow_directory workflow_directory_root
+                                   ON workflow_directory_root.menu_id = extension_directory.parent_id
+                                 WHERE extension_directory.path = 'extensions'
+                                   AND workflow_directory_root.path = 'workflow'),
         ', pages=', (SELECT COUNT(*) FROM workflow_page),
         ', buttons=', (SELECT COUNT(*) FROM workflow_button),
+        ', common_management_pages=', (SELECT COUNT(*) FROM workflow_page
+                                        WHERE parent_path = 'workflow'),
+        ', extended_management_pages=', (SELECT COUNT(*) FROM workflow_page
+                                          WHERE parent_path = 'extensions'),
+        ', office_pages=', (SELECT COUNT(*) FROM workflow_page WHERE parent_path = 'office'),
         ', invalid_routes=', (SELECT COUNT(*) FROM workflow_page
                                WHERE component IS NULL OR component = '' OR route_name = '')
     ) AS detail;
+
+-- 任一角色只要获得扩展流程页面，就必须同时拥有父目录，否则动态侧栏无法展示真实入口。
+WITH extended_directory AS (
+    SELECT menu_id
+    FROM sys_menu
+    WHERE menu_type = 'M' AND path = 'extensions'
+),
+assigned_extended_role AS (
+    SELECT DISTINCT role_menu.role_id
+    FROM sys_role_menu role_menu
+    JOIN sys_menu page ON page.menu_id = role_menu.menu_id
+    JOIN extended_directory directory ON directory.menu_id = page.parent_id
+    WHERE page.menu_type = 'C'
+),
+missing_parent AS (
+    SELECT assigned.role_id
+    FROM assigned_extended_role assigned
+    CROSS JOIN extended_directory directory
+    LEFT JOIN sys_role_menu parent_assignment
+      ON parent_assignment.role_id = assigned.role_id
+     AND parent_assignment.menu_id = directory.menu_id
+    WHERE parent_assignment.role_id IS NULL
+)
+SELECT
+    'workflow_extended_management_role_visibility' AS check_name,
+    CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT('missing_parent_assignments=', COUNT(*)) AS detail
+FROM missing_parent;
 
 SELECT
     'workflow_retired_permissions' AS check_name,
@@ -102,7 +162,7 @@ LEFT JOIN actual_role actual ON actual.role_key = expected.role_key;
 WITH workflow_menu AS (
     SELECT menu_id
     FROM sys_menu
-    WHERE (menu_type = 'M' AND path IN ('workflow', 'office'))
+    WHERE (menu_type = 'M' AND path IN ('workflow', 'office', 'extensions'))
        OR perms LIKE 'workflow:%'
 ),
 workflow_admin AS (
@@ -113,12 +173,12 @@ workflow_admin AS (
 SELECT
     'workflow_admin_menu_scope' AS check_name,
     CASE
-        WHEN (SELECT COUNT(*) FROM workflow_menu) = 86
-         AND COUNT(*) = 86
+        WHEN (SELECT COUNT(*) FROM workflow_menu) = 87
+         AND COUNT(*) = 87
         THEN 'PASS'
         ELSE 'FAIL'
     END AS result,
-    CONCAT('assigned=', COUNT(*), ', expected=86') AS detail
+    CONCAT('assigned=', COUNT(*), ', expected=87') AS detail
 FROM sys_role_menu role_menu
 JOIN workflow_admin role_info ON role_info.role_id = role_menu.role_id
 JOIN workflow_menu menu_info ON menu_info.menu_id = role_menu.menu_id;

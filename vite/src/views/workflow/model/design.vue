@@ -2,15 +2,26 @@
   <div class="app-container model-design-page" v-loading="loading">
     <div class="model-design-page__header">
       <div class="model-design-page__identity">
-        <el-button circle text icon="ArrowLeft" aria-label="返回模型列表" @click="closePage" />
-        <div>
+        <el-tooltip content="返回流程模型" placement="bottom">
+          <el-button class="model-design-page__back" circle text icon="ArrowLeft" aria-label="返回模型列表" @click="closePage" />
+        </el-tooltip>
+        <div class="model-design-page__heading">
+          <div class="model-design-page__eyebrow"><i />流程编排工作台</div>
           <h2>{{ model.modelName || '流程模型设计' }}</h2>
           <div class="model-design-page__meta">
-            <span>{{ model.modelKey }}</span>
-            <el-tag size="small" type="info">V{{ model.version || 1 }}</el-tag>
-            <el-tag size="small" :type="model.deployed ? 'success' : 'info'">{{ model.deployed ? '已部署' : '未部署' }}</el-tag>
+            <code>{{ model.modelKey }}</code>
+            <span class="model-design-page__meta-divider" />
+            <span>版本 V{{ model.version || 1 }}</span>
+            <span class="model-design-page__status" :class="{ 'is-deployed': model.deployed }">
+              <i />{{ model.deployed ? '已部署' : '设计中' }}
+            </span>
           </div>
         </div>
+      </div>
+      <div class="model-design-page__format" aria-label="建模格式 BPMN 2.0，执行引擎 Flowable">
+        <span>BPMN 2.0</span>
+        <i />
+        <span>Flowable</span>
       </div>
     </div>
 
@@ -24,7 +35,7 @@
       :saving="saving"
       :preference="designerPreference"
       :preference-saving="preferenceSaving"
-      height="calc(100vh - 178px)"
+      height="100%"
       @identity-search="searchIdentityDirectory"
       @preference-save="savePreference"
       @save="saveDesign"
@@ -272,30 +283,78 @@ loadDesigner()
 
 <style scoped lang="scss">
 .model-design-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
   padding-top: 12px;
+  overflow: hidden;
 }
 
 .model-design-page__header {
   display: flex;
-  min-height: 54px;
+  flex: none;
+  min-height: 70px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding: 0 4px 10px;
 }
 
 .model-design-page__identity {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+}
+
+.model-design-page__back {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  color: var(--el-text-color-regular);
+  background: var(--app-surface, var(--el-bg-color));
+  border: 1px solid var(--app-border, var(--el-border-color-light));
+  border-radius: 9px;
+  box-shadow: var(--app-shadow-sm, 0 1px 2px rgb(15 23 42 / 6%));
+}
+
+.model-design-page__back:hover,
+.model-design-page__back:focus-visible {
+  color: var(--el-color-primary);
+  border-color: color-mix(in srgb, var(--el-color-primary) 42%, var(--el-border-color));
+}
+
+.model-design-page__heading {
+  min-width: 0;
+}
+
+.model-design-page__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 2px;
+  color: var(--el-text-color-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+
+.model-design-page__eyebrow i {
+  width: 16px;
+  height: 2px;
+  background: var(--app-accent, var(--el-color-primary));
+  border-radius: 999px;
 }
 
 .model-design-page__identity h2 {
-  margin: 0 0 3px;
+  margin: 0 0 4px;
   overflow: hidden;
   color: var(--el-text-color-primary);
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 19px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -303,9 +362,82 @@ loadDesigner()
 .model-design-page__meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   color: var(--el-text-color-secondary);
-  font-size: 12px;
+  font-size: 11px;
+}
+
+.model-design-page__meta code {
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--el-text-color-regular);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-design-page__meta-divider {
+  width: 1px;
+  height: 10px;
+  background: var(--el-border-color);
+}
+
+.model-design-page__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 2px;
+  padding: 2px 7px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 999px;
+}
+
+.model-design-page__status i {
+  width: 5px;
+  height: 5px;
+  background: var(--el-color-warning);
+  border-radius: 50%;
+}
+
+.model-design-page__status.is-deployed {
+  color: var(--el-color-success);
+  background: color-mix(in srgb, var(--el-color-success) 8%, transparent);
+  border-color: color-mix(in srgb, var(--el-color-success) 24%, var(--el-border-color-lighter));
+}
+
+.model-design-page__status.is-deployed i {
+  background: var(--el-color-success);
+}
+
+.model-design-page__format {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 9px;
+  padding: 7px 10px;
+  color: var(--el-text-color-secondary);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  background: color-mix(in srgb, var(--app-surface, var(--el-bg-color)) 86%, transparent);
+  border: 1px solid var(--app-border, var(--el-border-color-light));
+  border-radius: 7px;
+}
+
+.model-design-page__format i {
+  width: 3px;
+  height: 3px;
+  background: var(--app-accent, var(--el-color-primary));
+  border-radius: 50%;
+}
+
+.model-design-page :deep(.process-designer) {
+  flex: 1;
+  min-height: 0;
 }
 
 @media (max-width: 768px) {
@@ -315,6 +447,10 @@ loadDesigner()
 
   .model-design-page__meta {
     flex-wrap: wrap;
+  }
+
+  .model-design-page__format {
+    display: none;
   }
 }
 </style>

@@ -1,6 +1,10 @@
 <template>
   <header class="designer-toolbar" aria-label="流程设计工具栏">
     <div class="designer-toolbar__group">
+      <div class="designer-toolbar__brand" aria-hidden="true">
+        <span class="designer-toolbar__brand-mark" />
+        <span>BPMN</span>
+      </div>
       <el-tooltip content="导入 BPMN" placement="bottom">
         <el-button text circle icon="Upload" aria-label="导入 BPMN" :disabled="locked" @click="$emit('import')" />
       </el-tooltip>
@@ -47,7 +51,7 @@
 
     <div class="designer-toolbar__group designer-toolbar__group--center">
       <el-dropdown trigger="click" :disabled="locked || selectionCount < 2" @command="$emit('align', $event)">
-        <el-button text icon="Operation">对齐</el-button>
+        <el-button class="designer-toolbar__text-command" text icon="Operation" aria-label="对齐元素"><span>对齐</span></el-button>
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item command="left">左对齐</el-dropdown-item>
@@ -60,7 +64,7 @@
         </template>
       </el-dropdown>
       <el-dropdown trigger="click" :disabled="locked || selectionCount < 3" @command="$emit('distribute', $event)">
-        <el-button text icon="DCaret">分布</el-button>
+        <el-button class="designer-toolbar__text-command" text icon="DCaret" aria-label="等距分布元素"><span>分布</span></el-button>
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item command="horizontal">水平等距</el-dropdown-item>
@@ -85,7 +89,7 @@
     </div>
 
     <div class="designer-toolbar__group">
-      <span v-if="issueCount" class="designer-toolbar__issues">{{ issueCount }} 项问题</span>
+      <span v-if="issueCount" class="designer-toolbar__issues"><i />{{ issueCount }} 项问题</span>
       <el-tooltip content="设计器设置" placement="bottom">
         <el-button text circle icon="Setting" aria-label="设计器设置" :disabled="locked" @click="$emit('settings')" />
       </el-tooltip>
@@ -132,12 +136,15 @@ defineEmits([
 
 <style scoped lang="scss">
 .designer-toolbar {
+  container-type: inline-size;
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) auto minmax(280px, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   min-width: 0;
-  padding: 0 10px 0 8px;
-  background: var(--el-bg-color);
+  gap: 8px;
+  padding: 7px 10px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--el-color-primary) 5%, var(--el-bg-color)), var(--el-bg-color) 30%, var(--el-bg-color));
   border-bottom: 1px solid var(--el-border-color-light);
 }
 
@@ -145,7 +152,7 @@ defineEmits([
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
 }
 
 .designer-toolbar__group--center {
@@ -156,9 +163,46 @@ defineEmits([
   justify-content: flex-end;
 }
 
+.designer-toolbar__brand {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 7px;
+  height: 30px;
+  margin-right: 5px;
+  padding: 0 10px 0 8px;
+  color: var(--el-text-color-primary);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  background: color-mix(in srgb, var(--el-color-primary) 7%, var(--el-bg-color));
+  border: 1px solid color-mix(in srgb, var(--el-color-primary) 18%, var(--el-border-color-light));
+  border-radius: 6px;
+}
+
+.designer-toolbar__brand-mark {
+  width: 7px;
+  height: 7px;
+  background: var(--app-accent, var(--el-color-primary));
+  border-radius: 2px;
+  box-shadow: 8px 0 0 color-mix(in srgb, var(--el-color-primary) 68%, transparent);
+  transform: rotate(45deg);
+}
+
 .designer-toolbar :deep(.el-button.is-circle) {
   width: 32px;
   height: 32px;
+}
+
+.designer-toolbar :deep(.el-button) {
+  margin: 0;
+  border-radius: 6px;
+}
+
+.designer-toolbar :deep(.el-button:hover),
+.designer-toolbar :deep(.el-button:focus-visible) {
+  background: var(--el-fill-color-light);
 }
 
 .designer-toolbar :deep(.el-button.is-active) {
@@ -167,9 +211,54 @@ defineEmits([
 }
 
 .designer-toolbar__issues {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-right: 4px;
   color: var(--el-color-danger);
   font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
+}
+
+.designer-toolbar__issues i {
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
+}
+
+@container (max-width: 1040px) {
+  .designer-toolbar__brand {
+    width: 30px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .designer-toolbar__brand > span:last-child,
+  .designer-toolbar__issues {
+    display: none;
+  }
+}
+
+@container (max-width: 900px) {
+  .designer-toolbar__group {
+    gap: 0;
+  }
+
+  .designer-toolbar__text-command {
+    width: 32px;
+    padding: 0;
+  }
+
+  :deep(.designer-toolbar__text-command > span) {
+    margin-left: 0;
+    font-size: 0;
+  }
+
+  .designer-toolbar :deep(.el-divider--vertical) {
+    margin-inline: 3px;
+  }
 }
 </style>
