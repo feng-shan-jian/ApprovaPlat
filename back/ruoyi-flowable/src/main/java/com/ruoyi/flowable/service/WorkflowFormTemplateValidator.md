@@ -14,6 +14,15 @@ templateValidator.validate(formContent);
 
 `validate(String content)` 无返回值。模板不合法时抛出 `ServiceException`，错误码为 `400`，异常消息不会包含原始模板内容。
 
+除完整结构校验外，验证器提供四个正式字段投影：
+
+- `extractVariableNames(content)` 返回模板声明的全部业务变量。
+- `extractReadableVariableNames(content)` 排除节点权限快照中的隐藏和不可读字段。
+- `extractUserIdSourceVariableNames(content)` 只保留可见、可读且由单值文本、数值或选择组件承载的字段。`FORM_USER` 和 `FORM_USER_FIELD` 规则从该目录选择字段，并把字段语义明确收窄为若依用户主键；集合、对象、附件、日期、布尔及同名异构声明不会进入目录。
+- `extractUserIdSourceFieldSignatures(content)` 在上述目录基础上返回受控组件类型签名，供流程级规则拒绝跨节点同名但值形态不同的字段；签名不用于动态渲染或执行组件。
+
+模型显式校验、保存和部署必须使用同一次权限化表单快照生成上述目录，不能直接从作者 XML 字段名或未应用节点权限的原始模板拼白名单。
+
 ## 模板结构
 
 根节点必须是对象并包含 `fields` 数组。`fields` 及 `__config__.children` 中的每个元素必须是组件对象，并包含 `__config__` 对象。

@@ -40,6 +40,10 @@ management:
   endpoint:
     health:
       enabled: true
+  health:
+    # SMTP 是可选通知通道；只有部署环境已提供真实 SMTP 时才显式启用连通性健康检查。
+    mail:
+      enabled: ${APPROVAPLAT_SMTP_HEALTH_ENABLED:false}
 
 # 日志配置
 logging:

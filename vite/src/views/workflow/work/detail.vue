@@ -2062,7 +2062,7 @@ async function closePage() {
     claim: '/office/claim',
     finished: '/office/finished',
     copy: '/office/copy',
-    manage: '/workflow/instance'
+    manage: '/workflow/extensions/instance'
   }[String(route.query.source || '')]
   if (sourcePath && proxy.$tab?.closeOpenPage) {
     await proxy.$tab.closeOpenPage({ path: sourcePath })

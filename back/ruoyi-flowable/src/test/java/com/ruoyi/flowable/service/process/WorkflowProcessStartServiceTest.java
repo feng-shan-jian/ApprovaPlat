@@ -120,6 +120,9 @@ class WorkflowProcessStartServiceTest
         attachmentService = mock(WorkflowAttachmentService.class);
         definitionLockMapper = mock(WorkflowProcessDefinitionLockMapper.class);
         participantRuleRuntimeService = mock(WorkflowParticipantRuleRuntimeService.class);
+        // 正常发起夹具默认取得真实部署主键；单独的竞争测试再覆盖为空返回。
+        when(definitionLockMapper.selectDeploymentIdForUpdate(anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
         // 普通发起夹具必须提供真实可执行 BPMN；空流程用于证明无发起时会签字段时不产生保留变量。
         BpmnModel bpmnModel = new BpmnModel();
         org.flowable.bpmn.model.Process process = new org.flowable.bpmn.model.Process();
@@ -201,6 +204,13 @@ class WorkflowProcessStartServiceTest
                 .isInstanceOf(UnsupportedOperationException.class);
         verify(definitionLockMapper, never())
                 .selectLatestDefaultTenantDefinitionForUpdate(anyString());
+        InOrder deploymentWriteOrder = inOrder(definitionLockMapper,
+                processQueryService, runtimeService);
+        deploymentWriteOrder.verify(definitionLockMapper)
+                .selectDeploymentIdForUpdate(DEPLOYMENT_ID);
+        deploymentWriteOrder.verify(processQueryService).getProcessForm(any());
+        deploymentWriteOrder.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-42"), anyMap());
         InOrder authentication = inOrder(identityService);
         authentication.verify(identityService).setAuthenticatedUserId("7");
         authentication.verify(identityService).setAuthenticatedUserId(null);
@@ -372,6 +382,12 @@ class WorkflowProcessStartServiceTest
                 "7", "draft-42", "instance-draft-42", "start", Map.of());
         lifecycle.verify(participantRuleRuntimeService).recordStartAllowed(
                 rule, definition, "instance-draft-42", "7");
+        InOrder lockOrder = inOrder(definitionLockMapper, runtimeService);
+        lockOrder.verify(definitionLockMapper).selectDeploymentIdForUpdate(DEPLOYMENT_ID);
+        lockOrder.verify(definitionLockMapper)
+                .selectLatestDefaultTenantDefinitionForUpdate(PROCESS_KEY);
+        lockOrder.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-draft-42"), anyMap());
     }
 
     /**
@@ -486,6 +502,30 @@ class WorkflowProcessStartServiceTest
 
         verify(processQueryService, never()).getProcessForm(any());
         verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+    }
+
+    /**
+     * 验证定义普通读后无法取得部署生命周期锁时稳定返回 409，且不读取表单或产生实例、附件副作用。
+     *
+     * @return void，部署删除竞争仍进入表单、引擎或附件写链时测试失败
+     */
+    @Test
+    void rejectsDefinitionWhoseDeploymentDisappearedBeforeLifecycleLock()
+    {
+        stubSelectedDefinition();
+        when(definitionLockMapper.selectDeploymentIdForUpdate(DEPLOYMENT_ID))
+                .thenReturn(null);
+
+        assertBusinessError(() -> service.start(validRequest()),
+                HttpStatus.CONFLICT, "流程定义部署状态已变化，请刷新后重试");
+
+        verify(definitionLockMapper).selectDeploymentIdForUpdate(DEPLOYMENT_ID);
+        verify(processQueryService, never()).getProcessForm(any());
+        verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
+        verify(attachmentService, never()).prepareStartVariables(
+                anyString(), anyMap(), anyMap());
+        verify(attachmentService, never()).bindStartAttachments(
+                anyString(), anyString(), anyString(), anyMap());
     }
 
     /**
@@ -640,6 +680,12 @@ class WorkflowProcessStartServiceTest
                 "7", "instance-by-key", "start", Map.of());
         verify(initialKeyQuery).processDefinitionWithoutTenantId();
         InOrder keyWriteOrder = inOrder(definitionLockMapper, runtimeService);
+        keyWriteOrder.verify(definitionLockMapper)
+                .selectDeploymentIdForUpdate(DEPLOYMENT_ID);
+        keyWriteOrder.verify(runtimeService).startProcessInstanceById(
+                eq(DEFINITION_ID), eq("expense-compat-42"), anyMap());
+        keyWriteOrder.verify(definitionLockMapper)
+                .selectDeploymentIdForUpdate(DEPLOYMENT_ID);
         keyWriteOrder.verify(definitionLockMapper)
                 .selectLatestDefaultTenantDefinitionForUpdate(PROCESS_KEY);
         keyWriteOrder.verify(runtimeService).startProcessInstanceById(

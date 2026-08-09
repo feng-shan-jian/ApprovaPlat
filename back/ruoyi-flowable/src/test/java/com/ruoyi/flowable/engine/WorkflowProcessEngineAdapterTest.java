@@ -57,6 +57,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 class WorkflowProcessEngineAdapterTest
 {
@@ -69,6 +70,8 @@ class WorkflowProcessEngineAdapterTest
     private TaskService taskService;
 
     private WorkflowIdentityResolver identityResolver;
+
+    private WorkflowNotificationService notificationService;
 
     private WorkflowProcessEngineAdapter adapter;
 
@@ -89,6 +92,7 @@ class WorkflowProcessEngineAdapterTest
         runtimeService = mock(RuntimeService.class);
         taskService = mock(TaskService.class);
         identityResolver = mock(WorkflowIdentityResolver.class);
+        notificationService = mock(WorkflowNotificationService.class);
         IdentityService identityService = mock(IdentityService.class);
         WorkflowAuthenticationContext authenticationContext = new WorkflowAuthenticationContext(
                 identityService, new WorkflowIdentityCodec());
@@ -96,6 +100,7 @@ class WorkflowProcessEngineAdapterTest
                 authenticationContext, new WorkflowExceptionTranslator(), identityResolver);
         adapter = new WorkflowProcessEngineAdapter(
                 repositoryService, runtimeService, taskService, engineOperations, identityResolver);
+        adapter.setNotificationService(notificationService);
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2", "DEPT3")));
         when(identityResolver.resolveApprovalEligibleUserIds(List.of("7")))
@@ -178,6 +183,7 @@ class WorkflowProcessEngineAdapterTest
 
         verify(taskService).claim(TASK_ID, "7");
         assertAuditComment("1", "CLAIM", null, "用户认领任务");
+        verify(notificationService).onStableTaskAction("TASK_CLAIMED", TASK_ID);
     }
 
     /**
@@ -291,6 +297,7 @@ class WorkflowProcessEngineAdapterTest
 
         verify(taskService).unclaim(TASK_ID);
         assertAuditComment("1", "UNCLAIM", null, "用户取消认领任务");
+        verify(notificationService).onStableTaskAction("TASK_UNCLAIMED", TASK_ID);
     }
 
     /**
@@ -403,6 +410,7 @@ class WorkflowProcessEngineAdapterTest
 
         verify(taskService).delegateTask(TASK_ID, "8");
         assertAuditComment("4", "DELEGATE", "8", "请协助处理");
+        verify(notificationService).onStableTaskAction("TASK_DELEGATED", TASK_ID);
     }
 
     /**
@@ -482,6 +490,7 @@ class WorkflowProcessEngineAdapterTest
 
         verify(taskService).resolveTask(TASK_ID);
         assertAuditComment("4", "RESOLVE", "8", "已完成合同核验");
+        verify(notificationService).onStableTaskAction("TASK_DELEGATION_RESOLVED", TASK_ID);
     }
 
     /**
@@ -575,6 +584,7 @@ class WorkflowProcessEngineAdapterTest
 
         verify(taskService).setAssignee(TASK_ID, "8");
         assertAuditComment("5", "TRANSFER", "8", "调整办理人");
+        verify(notificationService).onStableTaskAction("TASK_TRANSFERRED", TASK_ID);
     }
 
     /**

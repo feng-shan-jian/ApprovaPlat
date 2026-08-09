@@ -20,6 +20,7 @@ import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.domain.WfParticipantResolutionAudit;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.identity.WorkflowUserIdValueParser;
 import com.ruoyi.flowable.mapper.WfDeployParticipantRuleMapper;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 
@@ -339,17 +340,14 @@ public class WorkflowParticipantRuleRuntimeService
     }
 
     /**
-     * 校验身份值为 Long 范围内的十进制正整数并规范前导零。
+     * 校验身份值为 Long 范围内的十进制正整数并拒绝前导零、小数和溢出。
      * @param value Object，目录目标、流程变量或表单字段中的身份值
      * @param message String，校验失败时的稳定业务提示
      * @return String，规范化后的正整数文本
      */
     private String requirePositiveIdText(Object value, String message)
     {
-        String text = value == null ? "" : String.valueOf(value).trim();
-        if (!text.matches("[1-9][0-9]{0,18}")) throw new ServiceException(message, HttpStatus.CONFLICT);
-        try { return Long.toString(Long.parseLong(text)); }
-        catch (NumberFormatException exception) { throw new ServiceException(message, HttpStatus.CONFLICT); }
+        return WorkflowUserIdValueParser.requirePositiveUserId(value, message);
     }
 
     /**

@@ -7,7 +7,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.flowable.bpmn.model.BaseElement;
+import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.ExtensionElement;
+import org.flowable.bpmn.model.Process;
+import org.flowable.bpmn.model.UserTask;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import tools.jackson.databind.JsonNode;
@@ -119,6 +122,64 @@ public final class WorkflowAutoCopyRuleContract
             if (allowedTriggers == null || !allowedTriggers.contains(rule.trigger()))
             {
                 throw invalid("自动抄送触发时机与 BPMN 元素类型不匹配", null);
+            }
+        }
+    }
+
+    /**
+     * 使用保存、显式校验和部署共用的正式表单目录校验全部表单用户来源。
+     *
+     * 任务级规则只能读取该任务权限化快照中的字段；流程完成规则可以读取同一流程任一
+     * 正式节点字段。目录仅包含可见、可读、单值且由规则明确赋予用户主键语义的字段。
+     *
+     * @param model BpmnModel，已通过作者 BPMN 安全校验的公共模型
+     * @param catalog WorkflowAuthorFormFieldCatalog，本次事务冻结的正式表单字段目录
+     * @return void，字段不存在、隐藏、无读权限或为复合值时抛出稳定 400
+     */
+    public static void validateFormUserFields(BpmnModel model,
+            WorkflowAuthorFormFieldCatalog catalog)
+    {
+        if (model == null || catalog == null)
+        {
+            throw new ServiceException("自动抄送表单字段校验输入不完整", HttpStatus.ERROR);
+        }
+        for (Process process : model.getProcesses())
+        {
+            if (!process.isExecutable()) continue;
+            validateFormUserSources(process, fieldName ->
+                    catalog.containsProcessField(process.getId(), fieldName));
+            for (UserTask task : process.findFlowElementsOfType(UserTask.class, true))
+            {
+                validateFormUserSources(task, fieldName -> catalog.containsTaskField(
+                        process.getId(), task.getId(), fieldName));
+            }
+        }
+    }
+
+    /**
+     * 校验单个流程或任务元素上的 FORM_USER_FIELD 来源全部命中正式字段目录。
+     * @param element BaseElement，当前流程或用户任务元素
+     * @param fieldExists java.util.function.Predicate&lt;String&gt;，元素作用域的正式字段查询器
+     * @return void，任一字段不合格时立即失败
+     */
+    private static void validateFormUserSources(BaseElement element,
+            java.util.function.Predicate<String> fieldExists)
+    {
+        for (Rule rule : readRules(element))
+        {
+            for (RecipientSource source : rule.recipients())
+            {
+                if (source.type() != RecipientType.FORM_USER_FIELD) continue;
+                for (String fieldName : source.values())
+                {
+                    if (!fieldExists.test(fieldName))
+                    {
+                        throw new ServiceException(
+                                "自动抄送表单用户字段必须来自当前作用域可见、可读的正式单值字段",
+                                HttpStatus.BAD_REQUEST)
+                                .setSubCode("BPMN_AUTO_COPY_FORM_FIELD_INVALID");
+                    }
+                }
             }
         }
     }

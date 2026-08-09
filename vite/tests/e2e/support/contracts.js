@@ -16,11 +16,11 @@ export const WORKFLOW_ROUTE_CONTRACTS = Object.freeze([
     roles: Object.freeze(['workflow_admin', 'workflow_designer'])
   }),
   Object.freeze({
-    key: 'extension', path: '/workflow/extension', endpoint: '/workflow/extension/list',
+    key: 'extension', path: '/workflow/extensions/extension', endpoint: '/workflow/extension/list',
     roles: Object.freeze(['workflow_admin', 'workflow_designer'])
   }),
   Object.freeze({
-    key: 'manage', path: '/workflow/instance', endpoint: '/workflow/process/manageList',
+    key: 'manage', path: '/workflow/extensions/instance', endpoint: '/workflow/process/manageList',
     roles: Object.freeze(['workflow_admin'])
   }),
   Object.freeze({
@@ -81,7 +81,7 @@ export const WORKFLOW_EXPORT_CONTRACTS = Object.freeze([
     filterHeader: '流程名称', headers: Object.freeze(['流程实例ID', '流程名称', '分类编码', '流程版本', '提交时间', '完成时间', '流程状态', '耗时毫秒', '当前节点'])
   }),
   Object.freeze({
-    key: 'manage', roleKey: 'workflow_admin', path: '/workflow/instance',
+    key: 'manage', roleKey: 'workflow_admin', path: '/workflow/extensions/instance',
     listEndpoint: '/workflow/process/manageList', exportEndpoint: '/workflow/process/manageExport',
     filenamePrefix: 'managed_processes_', filterPlaceholder: '请输入流程名称', filterField: 'processName',
     filterHeader: '流程名称', headers: Object.freeze(['流程实例ID', '流程名称', '分类编码', '流程版本', '业务主键', '发起人ID', '发起人', '提交时间', '完成时间', '流程状态', '耗时毫秒', '当前节点'])

@@ -10,7 +10,8 @@ import {
   findAssignedWorkflowTask,
   findStartableWorkflowDefinition,
   findWorkflowUserOption,
-  openWorkflowRoleSession
+  openWorkflowRoleSession,
+  submitWorkflowStartPage
 } from './support/workflow-fixture.js'
 
 test.describe.configure({ mode: 'serial' })
@@ -312,10 +313,10 @@ async function saveDesigner(page) {
  * @param {{definitionId:string,deploymentId:string}} definition 可发起定义和部署关系。
  * @param {string} formName 部署快照表单名称。
  * @param {{businessKey:string,title:string,amount?:number,level?:string,urgent?:boolean,description?:string,doubleClick?:boolean}} values 表单值与提交模式。
- * @param {string[]} registry finally 清理使用的实例主键集合。
+ * @param {{processInstanceIds:string[],draftFixtures:Array<{draftId:string,processInstanceId:string}>}} resources finally 清理使用的正式资源登记簿。
  * @returns {Promise<string>} 正式流程实例主键。
  */
-async function startConditionThroughUi(page, definition, formName, values, registry) {
+async function startConditionThroughUi(page, definition, formName, values, resources) {
   await page.goto(`/workflow/process-start/${encodeURIComponent(definition.definitionId)}?deploymentId=${encodeURIComponent(definition.deploymentId)}`)
   await expect(page.getByRole('heading', { name: formName })).toBeVisible()
   await page.getByPlaceholder('可选').fill(values.businessKey)
@@ -336,31 +337,10 @@ async function startConditionThroughUi(page, definition, formName, values, regis
   }
   if (values.description !== undefined) await page.getByPlaceholder('请输入申请说明').fill(values.description)
 
-  const endpoint = `/workflow/process/start/${encodeURIComponent(definition.definitionId)}`
-  let requestCount = 0
-  const countRequest = request => {
-    const pathname = new URL(request.url()).pathname
-    if (pathname.endsWith(endpoint) && request.method() === 'POST') requestCount += 1
-  }
-  page.on('request', countRequest)
-  try {
-    const responsePromise = page.waitForResponse(response => matchesEndpoint(response, endpoint, 'POST'))
-    const submit = page.getByRole('button', { name: '提交申请', exact: true })
-    if (values.doubleClick) await submit.evaluate(button => { button.click(); button.click() })
-    else await submit.click()
-    const payload = await expectAjaxSuccess(await responsePromise, endpoint)
-    const processInstanceId = String(payload.data?.id || payload.data?.processInstanceId || payload.data?.procInsId || '')
-    if (processInstanceId) registry.push(processInstanceId)
-    expect(processInstanceId, '发起响应必须返回正式实例主键').not.toBe('')
-    await expect(page).toHaveURL(/\/workflow\/process-detail\/[^/?]+/)
-    if (values.doubleClick) {
-      await page.waitForTimeout(500)
-      expect(requestCount, '同步双击只能产生一个正式发起请求').toBe(1)
-    }
-    return processInstanceId
-  } finally {
-    page.off('request', countRequest)
-  }
+  const processInstanceId = await submitWorkflowStartPage(
+    page, resources, { doubleClick: values.doubleClick })
+  await expect(page).toHaveURL(new RegExp(`/workflow/process-detail/${processInstanceId}(?:[/?]|$)`))
+  return processInstanceId
 }
 
 /**
@@ -381,7 +361,10 @@ test('条件规则由设计器配置并在真实 MySQL 流程中安全路由', a
   test.setTimeout(240_000)
   const sessions = []
   const pages = {}
-  const resources = { categoryId: '', formId: '', modelIds: [], deploymentIds: [], processInstanceIds: [] }
+  const resources = {
+    categoryId: '', formId: '', modelIds: [], deploymentIds: [],
+    processInstanceIds: [], draftFixtures: []
+  }
   const evidence = []
   try {
     for (const roleKey of ['workflow_designer', 'workflow_starter', 'workflow_approver', 'workflow_admin']) {
@@ -459,7 +442,7 @@ test('条件规则由设计器配置并在真实 MySQL 流程中安全路由', a
       const businessKey = `COND-${suffix}-${scenario.name}`
       const processInstanceId = await startConditionThroughUi(pages.starter, exclusiveV1Definition, formName, {
         businessKey, title: `条件场景-${scenario.name}`, ...scenario.values
-      }, resources.processInstanceIds)
+      }, resources)
       const intake = await findAssignedWorkflowTask(pages.approver, exclusiveKey, 'intake', processInstanceId)
       scenario.processInstanceId = processInstanceId
       scenario.intakeTaskId = String(intake.taskId)
@@ -507,7 +490,7 @@ test('条件规则由设计器配置并在真实 MySQL 流程中安全路由', a
     await findAssignedWorkflowTask(pages.approver, exclusiveKey, 'highReview', frozen.processInstanceId)
     const v2DefaultInstance = await startConditionThroughUi(pages.starter, exclusiveV2Definition, formName, {
       businessKey: `COND-${suffix}-v2`, title: 'V2 阈值', amount: 6000, level: 'HIGH', urgent: true, description: '采购冻结版本'
-    }, resources.processInstanceIds)
+    }, resources)
     const v2Intake = await findAssignedWorkflowTask(pages.approver, exclusiveKey, 'intake', v2DefaultInstance)
     await completeIntake(pages.approver, v2Intake.taskId)
     await findAssignedWorkflowTask(pages.approver, exclusiveKey, 'defaultReview', v2DefaultInstance)
@@ -542,7 +525,7 @@ test('条件规则由设计器配置并在真实 MySQL 流程中安全路由', a
     const inclusiveDefinition = await findStartableWorkflowDefinition(pages.starter, inclusiveKey)
     const inclusiveInstance = await startConditionThroughUi(pages.starter, inclusiveDefinition, formName, {
       businessKey: `COND-${suffix}-inclusive`, title: '包容多命中', amount: 8000, level: 'NORMAL', urgent: true, description: '包容路由'
-    }, resources.processInstanceIds)
+    }, resources)
     await findAssignedWorkflowTask(pages.approver, inclusiveKey, 'amountReview', inclusiveInstance)
     await findAssignedWorkflowTask(pages.approver, inclusiveKey, 'urgentReview', inclusiveInstance)
     const inclusiveDefaultList = await callWorkflowApi(pages.approver, 'GET', '/workflow/process/todoList', { query: { processKey: inclusiveKey, pageNum: 1, pageSize: 100 } })

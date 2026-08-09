@@ -11,6 +11,7 @@ const credentialKeyPattern = /^FLOWABLE_RBAC_WORKFLOW_.*_USERNAME$/
 const sensitiveKeyPattern = /(?:PASSWORD|SECRET|TOKEN|USERNAME)/i
 const sharedTestPassword = 'wang'
 const compactJwtPattern = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}/
+const textReportExtensions = new Set(['.html', '.json', '.log', '.md', '.txt', '.xml'])
 
 /**
  * 收集本轮五角色 E2E 用户名、统一测试密码与可选数据库密码，仅用于扫描报告。
@@ -59,7 +60,7 @@ function sanitizeHtmlReportCredentials(htmlPath, credentials) {
   const entries = unzipSync(Buffer.from(archive[1], 'base64'))
   let changed = false
   for (const [name, content] of Object.entries(entries)) {
-    if (!name.endsWith('.json')) {
+    if (!textReportExtensions.has(path.extname(name).toLowerCase())) {
       continue
     }
     let sanitized = Buffer.from(content).toString('utf8')
@@ -102,6 +103,36 @@ function collectReportFiles(rootPath) {
 }
 
 /**
+ * 从根报告和嵌套批次中定位真正的 Playwright HTML 报告入口。
+ * @param {string[]} reportFiles 报告根目录下的全部普通文件。
+ * @returns {string[]} 每个批次 `html/index.html` 的绝对路径。
+ */
+function collectHtmlReportPaths(reportFiles) {
+  return reportFiles.filter(filePath => (
+    path.basename(filePath) === 'index.html' && path.basename(path.dirname(filePath)) === 'html'
+  ))
+}
+
+/**
+ * 脱敏 JSON、JUnit 和错误上下文等文本报告，避免失败页面快照固化真实账号。
+ * @param {string[]} reportFiles 报告根目录下的全部普通文件。
+ * @param {Buffer[]} credentials 本轮真实账号与密码字节序列。
+ * @returns {void} 仅在文本文件命中凭据时原位写回脱敏内容。
+ */
+function sanitizeTextReportCredentials(reportFiles, credentials) {
+  for (const filePath of reportFiles) {
+    if (!textReportExtensions.has(path.extname(filePath).toLowerCase())) continue
+    const source = fs.readFileSync(filePath, 'utf8')
+    let sanitized = source
+    for (const credential of credentials) {
+      const value = credential.toString('utf8')
+      if (sanitized.includes(value)) sanitized = sanitized.split(value).join('[REDACTED]')
+    }
+    if (sanitized !== source) fs.writeFileSync(filePath, sanitized, 'utf8')
+  }
+}
+
+/**
  * 判断报告字节中是否出现结构完整的紧凑 JWT，避免运行时 Token 被写入文本或二进制附件。
  * @param {Uint8Array} content 任意报告文件或 HTML 压缩分片内容。
  * @returns {boolean} 发现紧凑 JWT 明文时返回 true。
@@ -119,18 +150,28 @@ function verifyReports() {
   if (!fs.existsSync(reportRoot) || !fs.existsSync(jsonReportPath) || !fs.existsSync(htmlReportPath)) {
     throw new Error('Playwright 报告不完整，无法执行凭据门禁')
   }
+  const reportFiles = collectReportFiles(reportRoot)
+  const htmlReportPaths = collectHtmlReportPaths(reportFiles)
+  if (htmlReportPaths.length === 0) throw new Error('Playwright HTML 报告入口缺失')
+  // 每个批次先脱敏内嵌 ZIP 和文本附件，再执行递归不可绕过扫描。
+  for (const reportPath of htmlReportPaths) sanitizeHtmlReportCredentials(reportPath, credentials)
+  sanitizeTextReportCredentials(reportFiles, credentials)
   const jsonBytes = fs.readFileSync(jsonReportPath)
   const jsonReport = JSON.parse(jsonBytes.toString('utf8'))
   const reportEnvKeys = Object.keys(jsonReport.config?.webServer?.env ?? {})
   const sensitiveConfigKeys = reportEnvKeys.filter(key => sensitiveKeyPattern.test(key))
-  // Playwright 会把输入值和请求 URL 写入 HTML 操作步骤，先脱敏再执行不可绕过的全量扫描。
-  sanitizeHtmlReportCredentials(htmlReportPath, credentials)
-  const htmlEntries = readHtmlReportEntries(htmlReportPath)
   const jsonContainsCredential = containsCredential(jsonBytes, credentials)
-  const leakingHtmlEntries = Object.entries(htmlEntries)
-    .filter(([, content]) => containsCredential(content, credentials) || containsCompactJwt(content))
-    .map(([name]) => name)
-  const reportFiles = collectReportFiles(reportRoot)
+  let htmlEntryCount = 0
+  const leakingHtmlEntries = []
+  for (const reportPath of htmlReportPaths) {
+    const entries = readHtmlReportEntries(reportPath)
+    htmlEntryCount += Object.keys(entries).length
+    for (const [name, content] of Object.entries(entries)) {
+      if (containsCredential(content, credentials) || containsCompactJwt(content)) {
+        leakingHtmlEntries.push(`${path.relative(reportRoot, reportPath)}:${name}`)
+      }
+    }
+  }
   const leakingReportFiles = reportFiles.filter(filePath => {
     const content = fs.readFileSync(filePath)
     return containsCredential(content, credentials) || containsCompactJwt(content)
@@ -145,7 +186,7 @@ function verifyReports() {
     )
   }
   console.log(`Playwright 报告凭据门禁通过：文件 ${reportFiles.length}/${reportFiles.length}，` +
-    `HTML ${Object.keys(htmlEntries).length}/${Object.keys(htmlEntries).length}`)
+    `HTML ${htmlEntryCount}/${htmlEntryCount}`)
 }
 
 verifyReports()

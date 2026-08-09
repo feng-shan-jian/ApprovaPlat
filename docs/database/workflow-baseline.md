@@ -11,7 +11,7 @@
 1. `back/sql/ry_20260417.sql`
 2. `back/sql/quartz.sql`
 
-然后严格执行以下八个工作流基线与版本化迁移文件：
+然后严格执行以下七个工作流基线文件：
 
 1. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql`
 2. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql`
@@ -19,8 +19,7 @@
 4. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.dmn.sql`
 5. `back/sql/flowable/business/8.0.0__workflow_model_version_guard.sql`
 6. `back/sql/flowable/business/8.0.0__workflow_business.sql`
-7. `back/sql/flowable/business/8.0.1__workflow_copy_read_tracking.sql`
-8. `back/sql/flowable/menu/8.0.0__workflow_menu.sql`
+7. `back/sql/flowable/menu/8.0.0__workflow_menu.sql`
 
 所有 MySQL 客户端执行必须显式使用 `--default-character-set=utf8mb4`。Flowable 官方基础脚本包含破坏性初始化语句，只能在已经验证为空的目标 schema 中执行。
 
@@ -41,16 +40,20 @@
 - `wf_deploy_form`
 - `wf_deploy_condition_rule`
 - `wf_deploy_controlled_loop`
+- `wf_deploy_participant_rule`
+- `wf_participant_resolution_audit`
 - `wf_controlled_loop_execution`
-- `wf_copy`
-- `wf_model_save_idempotency`
-- `wf_attachment_quota_guard`
-- `wf_attachment`
-- `wf_designer_preference`
 - `wf_bpmn_extension`
 - `wf_bpmn_extension_version`
 - `wf_deploy_extension_snapshot`
+- `wf_business_calendar`
+- `wf_business_calendar_day`
+- `wf_deploy_task_sla`
+- `wf_task_sla_execution`
+- `wf_task_sla_audit`
+- `wf_task_sla_notification`
 - `wf_deploy_dmn_snapshot`
+- `wf_deploy_call_activity`
 - `wf_connector_endpoint`
 - `wf_connector_invocation`
 - `wf_sql_datasource`
@@ -60,6 +63,13 @@
 - `wf_collaboration_message`
 - `wf_collaboration_outbox`
 - `wf_collaboration_message_audit`
+- `wf_copy`
+- `wf_model_save_idempotency`
+- `wf_designer_preference`
+- `wf_process_draft`
+- `wf_process_draft_audit`
+- `wf_attachment_quota_guard`
+- `wf_attachment`
 - `wf_bpmn_event_code`
 - `wf_bpmn_event_audit`
 - `wf_bpmn_event_notification`
@@ -70,7 +80,7 @@
 - `wf_notification_delivery_audit`
 - `wf_notification_urge_audit`
 
-菜单基线为 2 个目录、20 个页面、71 个按钮，共 93 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
+菜单基线为 2 个目录、21 个页面、75 个按钮，共 98 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
 
 ## 结构约束
 
@@ -100,5 +110,3 @@
 - 迁移必须只处理两个正式版本之间的差异，不兼容本地开发历史。
 - 同步更新只读验收、契约测试、发布顺序和升级/回滚/重新升级证据。
 - 应用回滚原则上不执行反向 DDL，新结构必须在批准的兼容窗口内支持上一应用版本。
-
-当前版本链中，`8.0.1__workflow_copy_read_tracking.sql` 只扩展既有 `wf_copy`：旧抄送事实回填为手工来源和未读状态，保留 `uk_wf_copy_event_user` 幂等键，并增加来源、触发节点、首次阅读字段及对应 CHECK/查询索引。

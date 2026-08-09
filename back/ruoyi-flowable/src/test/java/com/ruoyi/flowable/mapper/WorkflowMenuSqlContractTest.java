@@ -42,8 +42,8 @@ class WorkflowMenuSqlContractTest
                 "-- 目录按 path、页面和按钮按 perms 写入");
         Set<String> seedKeys = extractSeedKeys(menuSeed);
 
-        assertThat(seedKeys).hasSize(98).contains(
-                "workflow", "office",
+        assertThat(seedKeys).hasSize(99).contains(
+                "workflow", "office", "extensions",
                 "workflow:notification:policyList", "workflow:notification:manage",
                 "workflow:notification:audit", "workflow:notification:retry",
                 "workflow:notification:urge:any", "workflow:notification:list", "workflow:notification:urge",
@@ -82,8 +82,23 @@ class WorkflowMenuSqlContractTest
         assertThat(normalized)
                 .contains("insert into sys_menu\n    (menu_name, parent_id, order_num, path, component, `query`, route_name",
                         "where not exists",
+                        "seed.parent_key is null",
+                        "seed.parent_key is not null",
+                        "coalesce(parent.menu_id, 0)",
                         "workflow:model:import",
                         "workflow:deploy:status",
+                        "'extensions', 'workflow', '扩展流程管理'",
+                        "'workflow:extension:list', 'extensions', '扩展注册表'",
+                        "'workflow:connector:list', 'extensions', '连接端点'",
+                        "'workflow:sqldatasource:list', 'extensions', 'sql 数据源'",
+                        "'workflow:integrationcredential:list', 'extensions', '集成账号'",
+                        "'workflow:dmn:list', 'extensions', 'dmn 决策'",
+                        "'workflow:runtimeevent:list', 'extensions', '运行事件'",
+                        "'workflow:collaboration:list', 'extensions', '多池协作'",
+                        "'workflow:bpmnevent:list', 'extensions', '错误与升级'",
+                        "'workflow:process:managelist', 'extensions', '实例运维'",
+                        "extension_directory.seed_key = 'extensions'",
+                        "child_menu.perms in (",
                         "'workflow:process:draftlist', 'office', '申请草稿'",
                         "'workflow:process:draftquery', 'workflow:process:draftlist'",
                         "'workflow:process:draftsave', 'workflow:process:draftlist'",
@@ -111,6 +126,10 @@ class WorkflowMenuSqlContractTest
                 "-- 流程设计者仅管理分类");
         assertThat(adminRoleMapping).contains(
                 "SELECT 'workflow_admin', seed_key FROM tmp_workflow_menu_seed");
+        String designerRoleMapping = extractSection(sql,
+                "-- 流程设计者仅管理分类",
+                "-- 发起人只发起");
+        assertThat(designerRoleMapping).contains("'workflow', 'extensions'");
         String starterRoleMapping = extractSection(sql,
                 "-- 发起人只发起",
                 "-- 审批人可认领");
@@ -120,6 +139,10 @@ class WorkflowMenuSqlContractTest
                 "'workflow:process:draftSave'",
                 "'workflow:process:draftRemove'",
                 "'workflow:process:draftSubmit'");
+        String auditorRoleMapping = extractSection(sql,
+                "-- 审计角色只有列表",
+                "-- 仅重建五个受管角色的工作流菜单关联");
+        assertThat(auditorRoleMapping).contains("'workflow', 'extensions'");
     }
 
     /**
@@ -145,9 +168,17 @@ class WorkflowMenuSqlContractTest
                 "workflow_admin_menu_scope",
                 "workflow_admin_only_instance_management",
                 "workflow_draft_role_scope",
-                "when count(*) = 98",
-                "workflow_page) = 20",
-                "workflow_button) = 76",
+                "when count(*) = 99",
+                "workflow_directory) = 3",
+                "workflow_page) = 21",
+                "workflow_button) = 75",
+                "workflow_directory_root.path = 'workflow'",
+                "parent_path = 'workflow'",
+                "'workflow:extension:list', 'workflow:connector:list'",
+                "'workflow:sqldatasource:list', 'workflow:integrationcredential:list'",
+                "'workflow:dmn:list', 'workflow:runtimeevent:list'",
+                "'workflow:collaboration:list', 'workflow:bpmnevent:list'",
+                "workflow_extended_management_role_visibility",
                 "'workflow:process:managelist'",
                 "'workflow:process:manageexport'",
                 "admin_management_permissions",

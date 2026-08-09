@@ -69,6 +69,20 @@ public interface WfTaskSlaMapper
             @Param("processKey") String processKey,
             @Param("taskDefinitionKey") String taskDefinitionKey);
 
+    /**
+     * 统计部署拥有的 SLA 不可变快照，供删除事务冻结预期行数。
+     * @param deploymentId String，Flowable 部署主键
+     * @return int，当前快照行数
+     */
+    int countDeploymentSnapshotsByDeploymentId(@Param("deploymentId") String deploymentId);
+
+    /**
+     * 删除指定部署的 SLA 不可变快照。
+     * @param deploymentId String，Flowable 部署主键
+     * @return int，实际删除行数
+     */
+    int deleteDeploymentSnapshotsByDeploymentId(@Param("deploymentId") String deploymentId);
+
     /** @param execution WfTaskSlaExecution，任务 SLA 初始状态；@return int，首次写入 1，重复创建 0。 */
     int insertExecution(WfTaskSlaExecution execution);
 

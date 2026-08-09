@@ -32,6 +32,9 @@ management:
       enabled: true
     readinessstate:
       enabled: true
+    # SMTP 未配置时不能拖低平台健康状态；需要纳入监控时由部署环境显式开启。
+    mail:
+      enabled: ${APPROVAPLAT_SMTP_HEALTH_ENABLED:false}
 
 ruoyi:
   # 上传文件落到 WSL 持久化目录，避免写入源码目录。

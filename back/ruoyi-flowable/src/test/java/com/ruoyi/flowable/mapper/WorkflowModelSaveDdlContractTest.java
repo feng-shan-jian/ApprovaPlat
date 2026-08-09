@@ -80,7 +80,7 @@ class WorkflowModelSaveDdlContractTest
         assertThat(checkName.matcher(verification).results().count()).isGreaterThanOrEqualTo(32L);
         assertThat(normalized).contains(
                 "union all select 'wf_model_save_idempotency'",
-                "when count(a.table_name) = 11",
+                "when count(a.table_name) = 13",
                 "idx_wf_model_save_user_time",
                 "idx_wf_model_save_source_time",
                 "idx_wf_model_save_saved_model",

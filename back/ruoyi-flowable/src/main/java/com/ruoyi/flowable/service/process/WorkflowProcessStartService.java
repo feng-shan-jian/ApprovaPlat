@@ -206,10 +206,14 @@ public class WorkflowProcessStartService
         {
             throw new ServiceException("当前用户无权提交该流程申请草稿", HttpStatus.FORBIDDEN);
         }
+        String deploymentId = requireText(draft.deploymentId(),
+                "草稿绑定的流程部署关系异常", MAX_ENGINE_ID_LENGTH, HttpStatus.ERROR);
+        // 草稿服务已经按 deployment->draft 取得同一锁；这里重入锁保证直接 Java 调用也不能绕过协议。
+        lockDeploymentForStart(deploymentId, "DRAFT_DEFINITION_UNAVAILABLE");
         ProcessDefinition definition = requireExistingDefinition(draft.processDefinitionId());
         if (!draft.processDefinitionKey().equals(definition.getKey())
                 || draft.processDefinitionVersion() != definition.getVersion()
-                || !draft.deploymentId().equals(definition.getDeploymentId()))
+                || !deploymentId.equals(definition.getDeploymentId()))
         {
             throw new ServiceException("草稿绑定的流程定义版本已失效", HttpStatus.CONFLICT)
                     .setSubCode("DRAFT_DEFINITION_VERSION_EXPIRED");
@@ -312,6 +316,8 @@ public class WorkflowProcessStartService
         ProcessDefinition selectedDefinition = requireExistingDefinition(definitionId);
         String deploymentId = requireText(selectedDefinition.getDeploymentId(),
                 "流程定义部署关系异常", MAX_ENGINE_ID_LENGTH, HttpStatus.ERROR);
+        // 所有正式发起入口先持有部署生命周期锁，使删除与实例创建形成单一线性化顺序。
+        lockDeploymentForStart(deploymentId, null);
 
         // 复用查询服务已经审计的 latest、active、starter identity link 和开始节点快照门禁。
         WorkflowProcessFormView startForm = processQueryService.getProcessForm(
@@ -432,6 +438,30 @@ public class WorkflowProcessStartService
             }
             throw new ServiceException("流程定义状态数据异常", HttpStatus.ERROR);
         }
+    }
+
+    /**
+     * 锁定实例目标部署并确认定义查询后部署仍存在。
+     *
+     * @param deploymentId String，由真实流程定义或持久化草稿解析的部署主键
+     * @param conflictSubCode String，调用域需要返回的稳定冲突子码；普通发起可为空
+     * @return void，成功时部署锁保持到外层发起事务提交或回滚
+     */
+    private void lockDeploymentForStart(String deploymentId, String conflictSubCode)
+    {
+        String lockedDeploymentId = definitionLockMapper
+                .selectDeploymentIdForUpdate(deploymentId);
+        if (deploymentId.equals(lockedDeploymentId))
+        {
+            return;
+        }
+        ServiceException conflict = new ServiceException(
+                "流程定义部署状态已变化，请刷新后重试", HttpStatus.CONFLICT);
+        if (StringUtils.hasText(conflictSubCode))
+        {
+            conflict.setSubCode(conflictSubCode);
+        }
+        throw conflict;
     }
 
     /**

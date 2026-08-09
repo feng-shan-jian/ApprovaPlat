@@ -8,16 +8,18 @@
       popper-class="advanced-element-palette__popover"
     >
       <template #reference>
-        <el-tooltip content="高级流程元素" placement="right">
-          <el-button
-            class="advanced-element-palette__trigger"
-            :disabled="disabled"
-            circle
-            aria-label="高级流程元素"
-          >
-            <el-icon><Plus /></el-icon>
-          </el-button>
-        </el-tooltip>
+        <span class="advanced-element-palette__reference">
+          <el-tooltip content="高级流程元素" placement="right">
+            <el-button
+              class="advanced-element-palette__trigger"
+              :disabled="disabled"
+              circle
+              aria-label="高级流程元素"
+            >
+              <el-icon><Plus /></el-icon>
+            </el-button>
+          </el-tooltip>
+        </span>
       </template>
 
       <div class="advanced-element-palette__content" role="menu" aria-label="高级流程元素">
@@ -138,6 +140,10 @@ function startCreate(event, item) {
   top: 60px;
   left: 74px;
   z-index: 12;
+}
+
+.advanced-element-palette__reference {
+  display: inline-flex;
 }
 
 .advanced-element-palette__trigger {

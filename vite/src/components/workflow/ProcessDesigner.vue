@@ -31,12 +31,33 @@
       ref="bodyRef"
       v-loading="designerLocked"
       class="process-designer__body"
-      :class="{ 'process-designer__body--properties-collapsed': appliedPreference.propertiesCollapsed }"
+      :class="{
+        'process-designer__body--properties-collapsed': appliedPreference.propertiesCollapsed,
+        'process-designer__body--compact-properties': compactPropertiesLayout,
+        'process-designer__body--resizing': propertiesResizing
+      }"
+      :style="designerBodyStyle"
       :inert="designerLocked"
       :aria-busy="designerLocked"
     >
       <div ref="canvasRef" class="process-designer__canvas" tabindex="0" v-loading="loading" />
       <AdvancedElementPalette :disabled="designerLocked" @create="createAdvancedElement" />
+      <div
+        v-show="!appliedPreference.propertiesCollapsed"
+        class="process-designer__properties-resizer"
+        role="separator"
+        aria-label="调整属性面板宽度"
+        aria-orientation="vertical"
+        :aria-valuemin="PROPERTIES_PANEL_MIN_WIDTH"
+        :aria-valuemax="propertiesPanelMaxWidth"
+        :aria-valuenow="Math.round(propertiesPanelWidth)"
+        tabindex="0"
+        @pointerdown="startPropertiesResize"
+        @dblclick="resetPropertiesPanelWidth"
+        @keydown="handlePropertiesResizeKeydown"
+      >
+        <span class="process-designer__properties-resizer-grip" />
+      </div>
       <DesignerPropertiesPanel
         v-show="!appliedPreference.propertiesCollapsed"
         :selected="Boolean(selectedElement)"
@@ -100,6 +121,7 @@
         @auto-copy-change="updateAutoCopyRules"
         @identity-search="handlePanelIdentitySearch"
         @identity-resolve="handlePanelIdentityResolve"
+        @close="toggleProperties"
       />
     </div>
 
@@ -155,12 +177,22 @@ import { listDmnDecisionOptions } from '@/api/workflow/dmn'
 import { listBpmnEventCodeOptions } from '@/api/workflow/bpmnEvent'
 import { listEnabledSlaCalendars } from '@/api/workflow/sla'
 import flowableModdle from './bpmn/flowableModdle'
+import { normalizeSequenceFlowReferences } from './bpmnGraphXml'
 import { normalizeTaskListenerXml } from './taskListenerXml'
 import DesignerToolbar from './designer/DesignerToolbar.vue'
 import DesignerSettingsDrawer from './designer/DesignerSettingsDrawer.vue'
 import AdvancedElementPalette from './designer/AdvancedElementPalette.vue'
 import DesignerPropertiesPanel from './designer/DesignerPropertiesPanel.vue'
 import bpmnlintConfig from './designer/bpmnlintConfig'
+import {
+  createEmbeddedUserIdFieldCatalog,
+  createProcessUserIdFieldCatalog,
+  createTemplateUserIdFieldCatalog,
+  eligibleUserIdFieldOptions,
+  normalizeEmbeddedFormType,
+  participantUserIdFieldOptions
+} from './designer/formUserFieldCatalog'
+import { multiInstanceAuthorProperties } from './designer/multiInstancePropertyContract'
 
 // 受控多实例的技术属性由设计器固定写入，页面不向设计者开放任意方法或变量名。
 const CONTROLLED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getUserIds(execution)}'
@@ -315,6 +347,45 @@ const selectedElement = shallowRef(null)
 const lastExportedXml = ref('')
 const propertyState = reactive(createEmptyPropertyState())
 const designerStyle = computed(() => ({ height: props.height }))
+// propertiesPanelWidth 表示当前会话中属性检查器的可视宽度，不使用浏览器本地状态冒充正式偏好。
+const propertiesPanelWidth = ref(368)
+const propertiesResizing = ref(false)
+const designerBodyWidth = ref(0)
+const PROPERTIES_PANEL_MIN_WIDTH = 320
+const PROPERTIES_PANEL_DEFAULT_WIDTH = 368
+const PROPERTIES_PANEL_MAX_WIDTH = 520
+const PROPERTIES_COMPACT_BREAKPOINT = 960
+const MINIMUM_INLINE_CANVAS_WIDTH = 520
+/**
+ * 判断当前设计器主体是否需要把属性面板切换为工作区内浮层。
+ * @returns {boolean} 主体已有有效宽度且小于 960px 时返回 true。
+ */
+const compactPropertiesLayout = computed(() => (
+  designerBodyWidth.value > 0 && designerBodyWidth.value < PROPERTIES_COMPACT_BREAKPOINT
+))
+/**
+ * 计算当前布局下属性面板允许使用的最大宽度。
+ * @returns {number} 兼顾画布可用空间和窄屏边距后的像素上限。
+ */
+const propertiesPanelMaxWidth = computed(() => {
+  if (compactPropertiesLayout.value) {
+    return Math.max(PROPERTIES_PANEL_MIN_WIDTH, Math.min(
+      PROPERTIES_PANEL_MAX_WIDTH,
+      designerBodyWidth.value - 24
+    ))
+  }
+  return Math.max(PROPERTIES_PANEL_MIN_WIDTH, Math.min(
+    PROPERTIES_PANEL_MAX_WIDTH,
+    designerBodyWidth.value - MINIMUM_INLINE_CANVAS_WIDTH
+  ))
+})
+/**
+ * 把当前属性面板宽度转换为设计器主体使用的 CSS 自定义属性。
+ * @returns {Record<string, string>} 包含属性面板像素宽度的内联样式对象。
+ */
+const designerBodyStyle = computed(() => ({
+  '--designer-properties-width': `${Math.round(propertiesPanelWidth.value)}px`
+}))
 const designerLocked = computed(() => props.saving || savePreparing.value)
 const appliedPreference = computed(() => normalizePreference(props.preference))
 const totalIssueCount = computed(() => validationIssues.value.length + clientLintIssues.value.length)
@@ -404,7 +475,7 @@ const escalationEventOptions = ref([])
 const eventCodeLoading = ref(false)
 // 字段目录来自当前节点正式模板或内嵌表单，设计者不能输入任意流程变量作为循环条件。
 const controlledLoopFieldOptions = computed(() => resolveControlledLoopFieldOptions())
-// 表单用户规则只允许选择当前任务正式模板或内嵌 FormData 中的可写变量。
+// 表单用户规则只允许选择当前任务正式模板或内嵌 FormData 中可见、可读的单值变量。
 const participantFormFieldOptions = computed(() => resolveParticipantFormFieldOptions())
 // 条件字段覆盖当前可执行流程全部正式表单，重复异构字段会从可选项剔除并在上下文中提示。
 const conditionFieldCatalog = computed(() => resolveConditionFieldCatalog())
@@ -429,7 +500,7 @@ const autoCopyTriggerOptions = computed(() => {
   }
   return []
 })
-// 表单用户来源只允许引用当前节点或当前流程已有的正式标量字段，不开放自由变量输入。
+// 表单用户来源只允许引用当前节点或当前流程已有的可见、可读单值字段，不开放自由变量输入。
 const autoCopyFormFieldOptions = computed(() => resolveAutoCopyFormFieldOptions())
 // slaCalendarOptions 只包含后端返回的启用日历，作者 XML 不接受自由输入日历键。
 const slaCalendarOptions = ref([])
@@ -437,6 +508,14 @@ const slaLoading = ref(false)
 let modeler
 let changeTimer
 let systemThemeQuery
+let bodyResizeObserver
+let canvasResizeFrame
+// lifecycleListenersBound 表示当前缓存设计页是否仍持有全局交互与尺寸监听。
+let lifecycleListenersBound = false
+let resizeStartClientX = 0
+let resizeStartWidth = PROPERTIES_PANEL_DEFAULT_WIDTH
+let previousDocumentCursor = ''
+let previousDocumentUserSelect = ''
 const identitySearchTimers = new Map()
 let importing = false
 
@@ -688,7 +767,9 @@ async function importXml(xml) {
   importing = true
   loading.value = true
   try {
-    const source = xml?.trim() ? xml : createInitialXml()
+    const rawSource = xml?.trim() ? xml : createInitialXml()
+    // 旧模型可能只有 sequenceFlow.sourceRef/targetRef，必须补齐 FlowNode 反向引用后再交给 Lint 和命令栈。
+    const source = normalizeSequenceFlowReferences(rawSource)
     await modeler.importXML(source)
     applyDesignerPreference()
     refreshControlledLoopOverlays()
@@ -959,6 +1040,23 @@ function decorateParticipantTargets(type, values) {
 }
 
 /**
+ * 修复 keep-alive 页签中仍保留的旧版顺序流内存引用。
+ * @returns {Promise<void>} 当前画布缺少 incoming/outgoing 时以完整 XML 重建；正常画布不产生变更。
+ */
+async function repairCachedSequenceFlowReferences() {
+  if (!modeler || importing || designerLocked.value) return
+  try {
+    // cachedXml 是当前画布的完整快照，包含尚未保存的用户编辑，不能回退为服务端旧 XML。
+    const { xml: cachedXml } = await modeler.saveXML({ format: true })
+    const normalizedXml = normalizeSequenceFlowReferences(cachedXml)
+    if (normalizedXml === cachedXml) return
+    await importXml(normalizedXml)
+  } catch (error) {
+    emit('error', error)
+  }
+}
+
+/**
  * 从 Flowable 属性中读取并校验自动抄送 JSON，供选中元素回显结构化规则。
  * @param {Array<{name:string,value:string}>} properties 当前 BPMN 元素的全部非循环扩展属性。
  * @param {boolean} strict 是否将非法历史配置作为异常抛出；普通回显采用失败关闭的空草稿。
@@ -1105,15 +1203,6 @@ function describeFormalFormFields(businessObject) {
 }
 
 /**
- * 复用正式条件字段解析，向自动抄送提供同一套可写标量字段目录。
- * @param {object|undefined} businessObject BPMN StartEvent 或 UserTask 业务对象。
- * @returns {Array<object>} 后端允许读取的正式标量字段。
- */
-function resolveScalarFormFieldOptions(businessObject) {
-  return businessObject ? describeFormalFormFields(businessObject) : []
-}
-
-/**
  * 解析已由后端模板校验器返回的正式表单 JSON，并收窄为条件字段目录。
  * @param {string} content 正式 wf_form 模板 JSON。
  * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
@@ -1155,46 +1244,55 @@ function describeTemplateFormFields(content) {
   }
 }
 
-  /**
- * 从当前 UserTask 正式表单提取可供 FORM_USER 规则读取的可写变量。
+/**
+ * 解析服务端确认会转换为单值 el-input 的内嵌自定义字段类型。
+ * @returns {Set<string>} 可参与用户主键字段目录的 custom: 类型集合。
+ */
+function supportedEmbeddedUserIdCustomTypes() {
+  return new Set(formFieldOptions.value
+    .filter(option => option?.implementationKey === 'FORM_FIELD_TEXTAREA_V1')
+    .map(option => `custom:${option.extensionKey}`))
+}
+
+/**
+ * 从指定 BPMN 节点构建后端同口径的用户主键字段完整声明目录。
+ * @param {object|undefined} businessObject 开始节点或用户任务业务对象。
+ * @returns {Array<{value:string,label:string,eligible:boolean}>} 包含不合格声明的字段目录。
+ */
+function resolveUserIdFieldCatalog(businessObject) {
+  const embeddedFields = readEmbeddedFormFields(businessObject)
+  if (embeddedFields.length) {
+    return createEmbeddedUserIdFieldCatalog(
+      embeddedFields, supportedEmbeddedUserIdCustomTypes())
+  }
+  const formId = Number(String(businessObject?.get?.('flowable:formKey') || '').replace(/^key_/, ''))
+  const form = props.forms.find(item => Number(item.formId) === formId)
+  return form?.content
+    ? createTemplateUserIdFieldCatalog(form.content, readTemplatePermissionPolicy(businessObject))
+    : []
+}
+
+/**
+ * 从当前 UserTask 正式表单提取可供 FORM_USER 规则读取的可见、可读单值变量。
  * @returns {Array<{value:string,label:string}>} 去重且保持表单顺序的正式字段目录。
  */
 function resolveParticipantFormFieldOptions() {
   if (!isUserTask.value) return []
   if (propertyState.formSource === 'EMBEDDED') {
-    return propertyState.embeddedFields
-      .filter(field => field.writable !== false && (field.variable || field.id))
-      .map(field => {
-        const variable = String(field.variable || field.id)
-        return {
-          value: variable,
-          label: field.name ? `${field.name}（${variable}）` : variable
-        }
-      })
+    return participantUserIdFieldOptions(createEmbeddedUserIdFieldCatalog(
+      propertyState.embeddedFields, supportedEmbeddedUserIdCustomTypes()))
   }
   const formId = Number(String(propertyState.formKey || '').replace(/^key_/, ''))
   const form = props.forms.find(item => Number(item.formId) === formId)
-  if (!form?.content) return []
-  try {
-    const root = JSON.parse(form.content)
-    const result = []
-    const seen = new Set()
-    const visit = fields => {
-      for (const field of Array.isArray(fields) ? fields : []) {
-        const variable = String(field?.__vModel__ || '').trim()
-        if (variable && field?.__config__?.workflowWritable !== false && !seen.has(variable)) {
-          seen.add(variable)
-          const label = String(field?.__config__?.label || '').trim()
-          result.push({ value: variable, label: label ? `${label}（${variable}）` : variable })
-        }
-        visit(field?.__config__?.children)
-      }
-    }
-    visit(root.fields)
-    return result
-  } catch {
-    return []
+  const permissionPolicy = {
+    configured: propertyState.formPermissionFields.length > 0,
+    defaultMode: propertyState.formPermissionDefault,
+    permissions: new Map(propertyState.formPermissionFields
+      .map(field => [field.variable, field.mode]))
   }
+  return form?.content
+    ? participantUserIdFieldOptions(createTemplateUserIdFieldCatalog(form.content, permissionPolicy))
+    : []
 }
 
 /**
@@ -1303,27 +1401,13 @@ function resolveAutoCopyFormFieldOptions() {
  */
 function resolveAutoCopyFormFieldOptionsForBusinessObject(businessObject) {
   if (businessObject?.$type === 'bpmn:UserTask') {
-    return resolveScalarFormFieldOptions(businessObject)
+    return eligibleUserIdFieldOptions(resolveUserIdFieldCatalog(businessObject))
       .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
-      .map(({ value, label }) => ({ value, label }))
   }
   if (businessObject?.$type !== 'bpmn:Process') return []
-  const candidates = []
-  const visit = flowElements => {
-    for (const element of Array.isArray(flowElements) ? flowElements : []) {
-      if (['bpmn:StartEvent', 'bpmn:UserTask'].includes(element?.$type)) {
-        candidates.push(...resolveScalarFormFieldOptions(element))
-      }
-      if (Array.isArray(element?.flowElements)) visit(element.flowElements)
-    }
-  }
-  visit(businessObject.flowElements)
-  const seen = new Set()
-  return candidates
-    .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value)
-      && !seen.has(item.value)
-      && seen.add(item.value))
-    .map(({ value, label }) => ({ value, label }))
+  return eligibleUserIdFieldOptions(createProcessUserIdFieldCatalog(
+    businessObject, resolveUserIdFieldCatalog))
+    .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
 }
 
 /**
@@ -1401,7 +1485,7 @@ function readEmbeddedFormFields(businessObject) {
       id: property.id || '',
       variable: property.variable || '',
       name: property.name || property.id || property.variable || '',
-      type: String(property.type || 'string').toLowerCase(),
+      type: normalizeEmbeddedFormType(property.type),
       required: property.required === true,
       readable: property.readable !== false,
       writable: property.writable !== false,
@@ -2581,9 +2665,11 @@ function updateAutoCopyRules(rules) {
       throw new Error(`自动抄送规则不能超过 ${AUTO_COPY_MAX_PROPERTY_LENGTH} 个字符`)
     }
     propertyState.autoCopyRules = normalized
-    // 写自动抄送时携带其他受控属性，保证一个属性编辑命令不会删除整改循环或 SLA。
+    // 写自动抄送时携带其他受控属性，避免删除整改循环、SLA、发起范围或单实例审批人规则。
     const platformProperties = readAllFlowableProperties(selectedBusinessObject.value)
-      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name) || SLA_PROPERTY_NAME_SET.has(item.name))
+      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
+        || SLA_PROPERTY_NAME_SET.has(item.name)
+        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
     persistExtensionProperties([
       ...propertyState.extensionProperties,
       ...platformProperties,
@@ -2975,10 +3061,13 @@ function updateMultiInstance() {
   const editableProperties = propertyState.extensionProperties.map(item => ({
     name: String(item.name || '').trim(), value: String(item.value ?? '')
   }))
-  // 循环命令栈必须携带 SLA 和自动抄送属性；只有切回单实例时才保留参与者规则。
+  // 循环命令栈必须携带 SLA 和自动抄送属性，并统一剔除只适用于单实例的参与者规则。
   const preservedPlatformProperties = readAllFlowableProperties(selectedBusinessObject.value)
-    .filter(item => SLA_PROPERTY_NAME_SET.has(item.name) || item.name === AUTO_COPY_PROPERTY_NAME)
-  const editableWithPlatformProperties = [...editableProperties, ...preservedPlatformProperties]
+    .filter(item => SLA_PROPERTY_NAME_SET.has(item.name)
+      || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
+      || item.name === AUTO_COPY_PROPERTY_NAME)
+  const editableWithPlatformProperties = multiInstanceAuthorProperties(
+    [...editableProperties, ...preservedPlatformProperties], PARTICIPANT_RULE_PROPERTY_NAMES)
   const participantProperties = readAllFlowableProperties(selectedBusinessObject.value)
     .filter(item => PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
   const editableSingleInstanceProperties = [...editableWithPlatformProperties, ...participantProperties]
@@ -3088,7 +3177,8 @@ function updateMultiInstance() {
   // 已导入的静态多实例可能带有后端允许但面板未编辑的标准属性，原位更新可保持其往返完整性。
   if (!controlled && !wasControlled
     && existingLoop?.$type === 'bpmn:MultiInstanceLoopCharacteristics') {
-    updateExistingStaticMultiInstance(existingLoop, collection, elementVariable, condition)
+    updateExistingStaticMultiInstance(
+      existingLoop, collection, elementVariable, condition, multiInstanceExtensions)
     return
   }
 
@@ -3100,7 +3190,8 @@ function updateMultiInstance() {
   })
   loop.set('flowable:collection', collection || undefined)
   loop.set('flowable:elementVariable', elementVariable || undefined)
-  const changes = { loopCharacteristics: loop, extensionElements: clearedControlledExtensions }
+  // 任一多实例模式都必须移除单实例参与者属性，避免切回单实例时恢复未经确认的旧办理人。
+  const changes = { loopCharacteristics: loop, extensionElements: multiInstanceExtensions }
   if (controlled) {
     propertyState.assignmentType = 'assignee'
     propertyState.assignee = CONTROLLED_MULTI_INSTANCE_ASSIGNEE
@@ -3126,11 +3217,16 @@ function updateMultiInstance() {
  * @param {string} collection 静态集合表达式或变量名。
  * @param {string} elementVariable 单个实例使用的元素变量名。
  * @param {string} condition 可选完成条件表达式。
- * @returns {void} 通过 bpmn-js 命令栈更新，可由撤销操作恢复。
+ * @param {object|undefined} extensionElements 已清除单实例参与者规则的扩展元素。
+ * @returns {void} 通过 bpmn-js 命令栈更新循环和扩展属性，可由撤销操作恢复。
  */
-function updateExistingStaticMultiInstance(loop, collection, elementVariable, condition) {
+function updateExistingStaticMultiInstance(
+  loop, collection, elementVariable, condition, extensionElements
+) {
   if (designerLocked.value || !modeler || !selectedElement.value) return
   const moddle = modeler.get('moddle')
+  // 已导入的静态多实例走原位更新分支，也必须同步清理隐藏的单实例规则。
+  modeler.get('modeling').updateProperties(selectedElement.value, { extensionElements })
   modeler.get('modeling').updateModdleProperties(selectedElement.value, loop, {
     isSequential: propertyState.multiInstanceType === 'sequential',
     completionCondition: condition
@@ -3554,6 +3650,152 @@ function toggleProperties() {
     ...appliedPreference.value,
     propertiesCollapsed: !appliedPreference.value.propertiesCollapsed
   })
+}
+
+/**
+ * 把属性面板宽度约束在当前工作区可用范围内，避免压缩画布或越出视口。
+ * @param {number} width 用户拖拽或键盘操作得到的候选宽度。
+ * @returns {number} 可安全应用到当前布局的属性面板宽度。
+ */
+function clampPropertiesPanelWidth(width) {
+  return Math.min(
+    propertiesPanelMaxWidth.value,
+    Math.max(PROPERTIES_PANEL_MIN_WIDTH, Number(width) || PROPERTIES_PANEL_DEFAULT_WIDTH)
+  )
+}
+
+/**
+ * 在布局尺寸变化后通知 bpmn-js 重算画布视口，保证连线、命中区域和小地图同步。
+ * @returns {void} 使用单帧节流合并连续拖拽产生的尺寸变化。
+ */
+function scheduleCanvasResize() {
+  if (!modeler || canvasResizeFrame) return
+  canvasResizeFrame = window.requestAnimationFrame(() => {
+    canvasResizeFrame = undefined
+    modeler?.get('canvas')?.resized()
+  })
+}
+
+/**
+ * 处理设计器主体 ResizeObserver 回调，并重新约束属性面板宽度。
+ * @param {ResizeObserverEntry[]} entries 当前设计器主体的尺寸观察结果。
+ * @returns {void} 更新布局宽度并安排画布重算。
+ */
+function handleDesignerBodyResize(entries) {
+  const width = entries[0]?.contentRect?.width || bodyRef.value?.clientWidth || 0
+  designerBodyWidth.value = width
+  propertiesPanelWidth.value = clampPropertiesPanelWidth(propertiesPanelWidth.value)
+  scheduleCanvasResize()
+}
+
+/**
+ * 为当前激活的设计页绑定全局交互和主体尺寸监听。
+ * @returns {void} 已绑定时直接返回，避免 keep-alive 初次挂载重复注册。
+ */
+function bindDesignerLifecycleListeners() {
+  if (lifecycleListenersBound) return
+  if (systemThemeQuery) {
+    handleSystemTheme(systemThemeQuery)
+    systemThemeQuery.addEventListener('change', handleSystemTheme)
+  }
+  window.addEventListener('keydown', handleDesignerShortcut)
+  window.addEventListener('pointermove', handlePropertiesResizeMove)
+  window.addEventListener('pointerup', stopPropertiesResize)
+  window.addEventListener('pointercancel', stopPropertiesResize)
+  if (typeof ResizeObserver !== 'undefined') {
+    bodyResizeObserver = new ResizeObserver(handleDesignerBodyResize)
+    if (bodyRef.value) bodyResizeObserver.observe(bodyRef.value)
+  }
+  lifecycleListenersBound = true
+}
+
+/**
+ * 释放缓存设计页持有的全局交互和主体尺寸监听。
+ * @returns {void} 同时终止拖拽并取消待执行画布帧，避免离页后污染其他页面。
+ */
+function unbindDesignerLifecycleListeners() {
+  window.removeEventListener('keydown', handleDesignerShortcut)
+  window.removeEventListener('pointermove', handlePropertiesResizeMove)
+  window.removeEventListener('pointerup', stopPropertiesResize)
+  window.removeEventListener('pointercancel', stopPropertiesResize)
+  systemThemeQuery?.removeEventListener('change', handleSystemTheme)
+  stopPropertiesResize()
+  if (canvasResizeFrame) window.cancelAnimationFrame(canvasResizeFrame)
+  canvasResizeFrame = undefined
+  bodyResizeObserver?.disconnect()
+  bodyResizeObserver = undefined
+  lifecycleListenersBound = false
+}
+
+/**
+ * 开始拖拽调整属性面板宽度，并临时锁定页面选区和光标。
+ * @param {PointerEvent} event 分隔条的指针按下事件。
+ * @returns {void} 保存拖拽起点，后续移动由窗口级事件持续接收。
+ */
+function startPropertiesResize(event) {
+  if (designerLocked.value || appliedPreference.value.propertiesCollapsed || event.button !== 0) return
+  event.preventDefault()
+  resizeStartClientX = event.clientX
+  resizeStartWidth = propertiesPanelWidth.value
+  propertiesResizing.value = true
+  previousDocumentCursor = document.documentElement.style.cursor
+  previousDocumentUserSelect = document.documentElement.style.userSelect
+  document.documentElement.style.cursor = 'col-resize'
+  document.documentElement.style.userSelect = 'none'
+}
+
+/**
+ * 根据指针水平位移实时调整右侧属性面板宽度。
+ * @param {PointerEvent} event 窗口级指针移动事件。
+ * @returns {void} 未处于拖拽状态时不产生任何布局变化。
+ */
+function handlePropertiesResizeMove(event) {
+  if (!propertiesResizing.value) return
+  propertiesPanelWidth.value = clampPropertiesPanelWidth(
+    resizeStartWidth + resizeStartClientX - event.clientX
+  )
+  scheduleCanvasResize()
+}
+
+/**
+ * 结束属性面板拖拽并恢复页面原有光标与文本选择行为。
+ * @returns {void} 无论指针在何处释放都清理拖拽状态。
+ */
+function stopPropertiesResize() {
+  if (!propertiesResizing.value) return
+  propertiesResizing.value = false
+  document.documentElement.style.cursor = previousDocumentCursor
+  document.documentElement.style.userSelect = previousDocumentUserSelect
+  scheduleCanvasResize()
+}
+
+/**
+ * 使用键盘精确调整属性面板宽度，兼顾无鼠标操作与细粒度控制。
+ * @param {KeyboardEvent} event 分隔条获得焦点后的键盘事件。
+ * @returns {void} 左右方向键每次调整 16px，Home 恢复默认宽度。
+ */
+function handlePropertiesResizeKeydown(event) {
+  const directions = { ArrowLeft: 16, ArrowRight: -16 }
+  if (event.key === 'Home') {
+    event.preventDefault()
+    resetPropertiesPanelWidth()
+    return
+  }
+  if (!Object.hasOwn(directions, event.key)) return
+  event.preventDefault()
+  propertiesPanelWidth.value = clampPropertiesPanelWidth(
+    propertiesPanelWidth.value + directions[event.key]
+  )
+  scheduleCanvasResize()
+}
+
+/**
+ * 将属性面板恢复为适合常规表单编辑的默认宽度。
+ * @returns {void} 默认宽度仍受当前工作区上限约束。
+ */
+function resetPropertiesPanelWidth() {
+  propertiesPanelWidth.value = clampPropertiesPanelWidth(PROPERTIES_PANEL_DEFAULT_WIDTH)
+  scheduleCanvasResize()
 }
 
 /**
@@ -4043,26 +4285,41 @@ function validateUserTaskMultiInstance(task) {
 watch(() => props.modelValue, value => {
   if (value && value !== lastExportedXml.value && modeler) importXml(value)
 })
+/**
+ * 在服务端偏好回写后同步设计器插件与布局尺寸。
+ * @returns {void} 关闭设置抽屉并安排一次画布视口重算。
+ */
 watch(() => props.preference, () => {
   applyDesignerPreference()
   settingsVisible.value = false
+  scheduleCanvasResize()
 }, { deep: true })
 watch(designerLocked, handleDesignerLock)
+onActivated(() => {
+  bindDesignerLifecycleListeners()
+  repairCachedSequenceFlowReferences()
+})
+onDeactivated(unbindDesignerLifecycleListeners)
 
+/**
+ * 初始化系统主题、快捷键、属性面板尺寸监听和设计器正式目录。
+ * @returns {void} 组件挂载完成后启动监听并导入当前 BPMN XML。
+ */
 onMounted(() => {
   systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
-  handleSystemTheme(systemThemeQuery)
-  systemThemeQuery.addEventListener('change', handleSystemTheme)
-  window.addEventListener('keydown', handleDesignerShortcut)
+  bindDesignerLifecycleListeners()
   loadExtensionOptions()
   loadDmnOptions()
   loadCallActivityOptions()
   importXml(props.modelValue)
 })
+/**
+ * 释放属性面板拖拽、尺寸观察器、身份检索计时器和 bpmn-js 实例。
+ * @returns {void} 组件卸载前恢复全局页面状态并移除全部本组件监听。
+ */
 onBeforeUnmount(() => {
   window.clearTimeout(changeTimer)
-  window.removeEventListener('keydown', handleDesignerShortcut)
-  systemThemeQuery?.removeEventListener('change', handleSystemTheme)
+  unbindDesignerLifecycleListeners()
   identitySearchTimers.forEach(timer => window.clearTimeout(timer))
   identitySearchTimers.clear()
   if (modeler) modeler.destroy()
@@ -4084,7 +4341,8 @@ defineExpose({
 .process-designer {
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
-  min-height: 640px;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color-light);
@@ -4109,12 +4367,17 @@ defineExpose({
 .process-designer__body {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 8px var(--designer-properties-width);
   min-height: 0;
+  overflow: hidden;
 }
 
 .process-designer__body--properties-collapsed {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.process-designer__body--resizing {
+  cursor: col-resize;
 }
 
 .process-designer__canvas {
@@ -4127,6 +4390,79 @@ defineExpose({
 .process-designer--grid .process-designer__canvas {
   background-image: linear-gradient(#eef1f4 1px, transparent 1px), linear-gradient(90deg, #eef1f4 1px, transparent 1px);
   background-size: 20px 20px;
+}
+
+.process-designer__properties-resizer {
+  position: relative;
+  z-index: 24;
+  display: grid;
+  min-width: 8px;
+  height: 100%;
+  place-items: center;
+  cursor: col-resize;
+  background: var(--el-bg-color);
+  border-left: 1px solid var(--el-border-color-lighter);
+  outline: none;
+  transition: background-color 160ms ease;
+}
+
+.process-designer__properties-resizer::before {
+  position: absolute;
+  inset: 0 -3px;
+  content: '';
+}
+
+.process-designer__properties-resizer:hover,
+.process-designer__properties-resizer:focus-visible,
+.process-designer__body--resizing .process-designer__properties-resizer {
+  background: color-mix(in srgb, var(--el-color-primary) 10%, var(--el-bg-color));
+}
+
+.process-designer__properties-resizer:focus-visible {
+  box-shadow: inset 2px 0 0 var(--el-color-primary);
+}
+
+.process-designer__properties-resizer-grip {
+  width: 3px;
+  height: 42px;
+  background: var(--el-border-color);
+  border-radius: 999px;
+  transition: height 160ms ease, background-color 160ms ease;
+}
+
+.process-designer__properties-resizer:hover .process-designer__properties-resizer-grip,
+.process-designer__properties-resizer:focus-visible .process-designer__properties-resizer-grip,
+.process-designer__body--resizing .process-designer__properties-resizer-grip {
+  height: 64px;
+  background: var(--el-color-primary);
+}
+
+.process-designer__body--compact-properties {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.process-designer__body--compact-properties .designer-properties-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 23;
+  width: min(var(--designer-properties-width), calc(100% - 24px));
+  border: 1px solid var(--el-border-color);
+  border-radius: 9px;
+  box-shadow: 0 18px 42px rgb(15 23 42 / 22%);
+}
+
+.process-designer__body--compact-properties .process-designer__properties-resizer {
+  position: absolute;
+  top: 12px;
+  right: calc(12px + min(var(--designer-properties-width), calc(100% - 24px)) - 4px);
+  bottom: 12px;
+  z-index: 25;
+  width: 8px;
+  height: auto;
+  border-left: 0;
+  border-radius: 9px 0 0 9px;
 }
 
 .process-designer--dark .process-designer__canvas {
@@ -4212,9 +4548,10 @@ defineExpose({
   content: "+";
 }
 
-@media (max-width: 1365px) {
-  .process-designer {
-    min-width: 1040px;
+@media (prefers-reduced-motion: reduce) {
+  .process-designer__properties-resizer,
+  .process-designer__properties-resizer-grip {
+    transition: none;
   }
 }
 </style>

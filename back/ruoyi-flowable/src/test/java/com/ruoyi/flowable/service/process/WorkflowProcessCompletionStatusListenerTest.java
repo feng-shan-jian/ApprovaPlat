@@ -8,6 +8,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.Date;
@@ -27,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.springframework.beans.factory.ObjectProvider;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * WorkflowProcessCompletionStatusListener 的自然完成状态一致性测试。
@@ -95,6 +98,38 @@ class WorkflowProcessCompletionStatusListenerTest
             verify(fixture.variableManager()).update(statusVariable, false);
             verify(automaticCopyService).onProcessCompleted(INSTANCE_ID, "definition-1");
         }
+    }
+
+    /**
+     * 验证 CallActivity 子流程完成只清理该实例催办，不发布根业务完成抄送或结果通知。
+     * @return void，子流程未清理催办或触发任一根业务副作用时测试失败
+     */
+    @Test
+    void cleansChildUrgesWithoutPublishingRootCompletionSideEffects()
+    {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<WorkflowAutomaticCopyService> copyProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<WorkflowNotificationService> notificationProvider = mock(ObjectProvider.class);
+        WorkflowNotificationService notificationService = mock(WorkflowNotificationService.class);
+        when(notificationProvider.getIfAvailable()).thenReturn(notificationService);
+        WorkflowProcessCompletionStatusListener listener =
+                new WorkflowProcessCompletionStatusListener(copyProvider, notificationProvider);
+        FlowableEngineEntityEvent event = mock(FlowableEngineEntityEvent.class);
+        ExecutionEntity child = mock(ExecutionEntity.class);
+        when(event.getType()).thenReturn(FlowableEngineEventType.PROCESS_COMPLETED);
+        when(event.getEntity()).thenReturn(child);
+        when(child.isProcessInstanceType()).thenReturn(true);
+        when(child.getId()).thenReturn("child-instance");
+        when(child.getRootProcessInstanceId()).thenReturn("root-instance");
+        when(child.getSuperExecutionId()).thenReturn("call-activity-execution");
+
+        listener.onEvent(event);
+
+        verify(notificationService).scheduleUrgeCancellationForCompletedProcessInstance(
+                "child-instance");
+        verifyNoInteractions(copyProvider);
+        verifyNoMoreInteractions(notificationService);
     }
 
     /**
@@ -212,6 +247,8 @@ class WorkflowProcessCompletionStatusListenerTest
         when(event.getEntity()).thenReturn(processInstance);
         when(processInstance.isProcessInstanceType()).thenReturn(true);
         when(processInstance.getId()).thenReturn(INSTANCE_ID);
+        when(processInstance.getRootProcessInstanceId()).thenReturn(INSTANCE_ID);
+        when(processInstance.getSuperExecutionId()).thenReturn(null);
         when(processInstance.getProcessDefinitionId()).thenReturn("definition-1");
         when(engineConfiguration.getVariableServiceConfiguration())
                 .thenReturn(variableConfiguration);

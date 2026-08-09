@@ -14,7 +14,7 @@
           <span>{{ totalUnread }} 条未读</span>
         </div>
         <div class="notice-tools">
-          <el-tooltip content="通知偏好" placement="top">
+          <el-tooltip v-if="canManageWorkflowPreference" content="通知偏好" placement="top">
             <el-button circle text icon="Setting" aria-label="通知偏好" @click="openPreference" />
           </el-tooltip>
           <el-tooltip content="刷新消息" placement="top">
@@ -24,7 +24,7 @@
       </div>
 
       <el-tabs v-model="activeTab" class="notice-tabs">
-        <el-tab-pane name="workflow">
+        <el-tab-pane v-if="canReadWorkflowNotifications" name="workflow">
           <template #label>
             <span>审批通知 <el-badge v-if="workflowUnread" :value="workflowUnread" :max="99" /></span>
           </template>
@@ -124,10 +124,16 @@ import {
 
 const router = useRouter()
 const { proxy } = getCurrentInstance()
+// 收件箱权限决定审批通知页签以及所有审批通知读写请求是否可用。
+const canReadWorkflowNotifications = computed(() => proxy.$auth.hasPermi('workflow:notification:list'))
+// 偏好设置必须在收件箱权限基础上再具备独立偏好权限，避免越权读写个人配置。
+const canManageWorkflowPreference = computed(() =>
+  canReadWorkflowNotifications.value && proxy.$auth.hasPermi('workflow:notification:preference')
+)
 const noticePopover = ref(null)
 const noticeVisible = ref(false)
 const noticeLoading = ref(false)
-const activeTab = ref('workflow')
+const activeTab = ref(canReadWorkflowNotifications.value ? 'workflow' : 'announcement')
 const workflowReadStatus = ref('ALL')
 const workflowNotices = ref([])
 const workflowUnread = ref(0)
@@ -148,13 +154,27 @@ let refreshSequence = 0
 const totalUnread = computed(() => workflowUnread.value + announcementUnread.value)
 
 /**
- * 查询审批通知并用序号淘汰旧响应。
+ * 清空无权访问的审批通知状态，并使已经发出的旧请求结果失效。
+ * @returns {void} 审批通知列表和未读数归零。
+ */
+function clearWorkflowNoticeState() {
+  refreshSequence += 1
+  workflowNotices.value = []
+  workflowUnread.value = 0
+}
+
+/**
+ * 在当前用户具备审批通知查询权限时查询收件箱，并用序号淘汰旧响应。
  * @returns {Promise<void>} 完成后更新当前过滤列表和真实未读数。
  */
 async function loadWorkflowNotices() {
+  if (!canReadWorkflowNotifications.value) {
+    clearWorkflowNoticeState()
+    return
+  }
   const sequence = ++refreshSequence
   const response = await listWorkflowNotifications(workflowReadStatus.value, 30)
-  if (sequence !== refreshSequence) return
+  if (sequence !== refreshSequence || !canReadWorkflowNotifications.value) return
   workflowNotices.value = response.data?.items || []
   workflowUnread.value = Number(response.data?.unreadCount || 0)
 }
@@ -170,13 +190,20 @@ async function loadAnnouncements() {
 }
 
 /**
- * 并行刷新审批通知和系统公告，任何通道失败都会保留统一错误反馈。
- * @returns {Promise<void>} 两个正式 API 均完成后解除加载状态。
+ * 刷新系统公告，并仅在有权时并行刷新审批通知。
+ * @returns {Promise<void>} 当前用户有权访问的正式 API 完成后解除加载状态。
  */
 async function refreshAll() {
   noticeLoading.value = true
   try {
-    await Promise.all([loadWorkflowNotices(), loadAnnouncements()])
+    // 公告对所有已登录用户保持原行为，审批通知请求则按权限动态加入刷新任务。
+    const refreshTasks = [loadAnnouncements()]
+    if (canReadWorkflowNotifications.value) {
+      refreshTasks.push(loadWorkflowNotices())
+    } else {
+      clearWorkflowNoticeState()
+    }
+    await Promise.all(refreshTasks)
   } finally {
     noticeLoading.value = false
   }
@@ -185,9 +212,10 @@ async function refreshAll() {
 /**
  * 打开审批通知关联的受控流程路由并标记已读。
  * @param {object} item 服务端审批通知投影。
- * @returns {Promise<void>} 已读写入后进入对象授权流程详情。
+ * @returns {Promise<void>} 无权限时不产生副作用，有权限时写入已读并进入对象授权流程详情。
  */
 async function openWorkflowNotice(item) {
+  if (!canReadWorkflowNotifications.value) return
   if (item.readStatus !== 'READ') {
     await markWorkflowNotificationRead(item.notificationId)
     item.readStatus = 'READ'
@@ -211,8 +239,12 @@ async function previewAnnouncement(item) {
   proxy.$refs.noticeViewRef.open(item.noticeId)
 }
 
-/** @returns {Promise<void>} 将当前用户全部审批通知标记已读并刷新过滤结果。 */
+/**
+ * 在当前用户具备审批通知权限时，将全部审批通知标记已读并刷新过滤结果。
+ * @returns {Promise<void>} 无权限时不调用审批通知 API，有权限时完成服务端写入和列表刷新。
+ */
 async function markWorkflowAllRead() {
+  if (!canReadWorkflowNotifications.value) return
   await markAllWorkflowNotificationsRead()
   workflowUnread.value = 0
   await loadWorkflowNotices()
@@ -227,8 +259,15 @@ async function markAnnouncementAllRead() {
   announcementUnread.value = 0
 }
 
-/** @returns {Promise<void>} 从真实偏好 API 加载当前开关并打开设置弹窗。 */
+/**
+ * 在当前用户同时具备收件箱和偏好权限时，从正式 API 加载通知偏好。
+ * @returns {Promise<void>} 无权限时不打开弹窗且不调用偏好 API。
+ */
 async function openPreference() {
+  if (!canManageWorkflowPreference.value) {
+    preferenceVisible.value = false
+    return
+  }
   preferenceLoading.value = true
   preferenceVisible.value = true
   try {
@@ -239,8 +278,15 @@ async function openPreference() {
   }
 }
 
-/** @returns {Promise<void>} 以服务端 revision 保存偏好并刷新消息列表。 */
+/**
+ * 在当前用户同时具备收件箱和偏好权限时，以服务端 revision 保存偏好。
+ * @returns {Promise<void>} 无权限时不调用偏好 API，有权限时保存并刷新消息列表。
+ */
 async function savePreference() {
+  if (!canManageWorkflowPreference.value) {
+    preferenceVisible.value = false
+    return
+  }
   preferenceSaving.value = true
   try {
     const response = await saveWorkflowNotificationPreference({

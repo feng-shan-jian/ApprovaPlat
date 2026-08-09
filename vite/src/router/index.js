@@ -2,6 +2,18 @@ import { createWebHistory, createRouter } from 'vue-router'
 /* Layout */
 import Layout from '@/layout'
 
+// 扩展流程管理将低频页面收拢到二级目录；旧地址保留重定向，避免收藏夹、页签和外部入口失效。
+const workflowExtendedManagementRedirects = [
+  { path: '/workflow/extension', redirect: '/workflow/extensions/extension', hidden: true },
+  { path: '/workflow/sqlDatasource', redirect: '/workflow/extensions/sqlDatasource', hidden: true },
+  { path: '/workflow/integrationCredential', redirect: '/workflow/extensions/integrationCredential', hidden: true },
+  { path: '/workflow/dmn', redirect: '/workflow/extensions/dmn', hidden: true },
+  { path: '/workflow/runtimeEvent', redirect: '/workflow/extensions/runtimeEvent', hidden: true },
+  { path: '/workflow/collaboration', redirect: '/workflow/extensions/collaboration', hidden: true },
+  { path: '/workflow/bpmnEvent', redirect: '/workflow/extensions/bpmnEvent', hidden: true },
+  { path: '/workflow/instance', redirect: '/workflow/extensions/instance', hidden: true }
+]
+
 /**
  * Note: 路由配置项
  *
@@ -26,6 +38,7 @@ import Layout from '@/layout'
 
 // 公共路由
 export const constantRoutes = [
+  ...workflowExtendedManagementRedirects,
   {
     path: '/redirect',
     component: Layout,

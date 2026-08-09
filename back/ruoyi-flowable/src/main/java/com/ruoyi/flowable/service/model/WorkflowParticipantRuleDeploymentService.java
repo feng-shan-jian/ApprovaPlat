@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.BpmnModel;
@@ -47,12 +46,12 @@ public class WorkflowParticipantRuleDeploymentService
      * 解析作者规则、核验正式目录与表单字段，并从执行 BPMN 剥离作者属性。
      * @param authorDocument WorkflowBpmnDocument，已通过作者安全校验的 BPMN
      * @param inputBpmn byte[]，前序编译器生成的 BPMN
-     * @param formVariablesByProcess Map&lt;String,Set&lt;String&gt;&gt;，流程部署表单字段并集
+     * @param formFieldCatalog WorkflowAuthorFormFieldCatalog，本次事务冻结的正式用户主键字段目录
      * @param actorUserId String，部署设计者正式用户主键
      * @return WorkflowPreparedParticipantRuleDeployment，执行资源和待落库快照
      */
     public WorkflowPreparedParticipantRuleDeployment prepare(WorkflowBpmnDocument authorDocument,
-            byte[] inputBpmn, Map<String, Set<String>> formVariablesByProcess,
+            byte[] inputBpmn, WorkflowAuthorFormFieldCatalog formFieldCatalog,
             String actorUserId)
     {
         if (authorDocument == null || inputBpmn == null || inputBpmn.length == 0)
@@ -60,7 +59,7 @@ public class WorkflowParticipantRuleDeploymentService
             throw new ServiceException("参与者规则部署输入不完整", HttpStatus.ERROR);
         }
         List<WfDeployParticipantRule> snapshots = collectAndValidate(
-                authorDocument.bpmnModel(), formVariablesByProcess, actorUserId);
+                authorDocument.bpmnModel(), formFieldCatalog, actorUserId);
 
         BpmnXMLConverter converter = new BpmnXMLConverter();
         BpmnModel compiled = converter.convertToBpmnModel(
@@ -79,6 +78,26 @@ public class WorkflowParticipantRuleDeploymentService
             throw new ServiceException("参与者规则执行资源编译失败", HttpStatus.ERROR);
         }
         return new WorkflowPreparedParticipantRuleDeployment(compiledBytes, snapshots);
+    }
+
+    /**
+     * 无副作用核验作者参与者规则的正式身份目标和 FORM_USER 字段。
+     *
+     * 显式校验、模型保存和部署预检均调用该方法；它只查询正式身份目录并解析本次冻结的
+     * 表单字段目录，不写规则快照、Flowable 模型或保存幂等记录。
+     *
+     * @param authorDocument WorkflowBpmnDocument，已通过作者安全校验的 BPMN
+     * @param formFieldCatalog WorkflowAuthorFormFieldCatalog，本次事务冻结的正式用户主键字段目录
+     * @return void，任一目标失效或字段不合格时抛出稳定业务异常
+     */
+    public void validateAuthorRules(WorkflowBpmnDocument authorDocument,
+            WorkflowAuthorFormFieldCatalog formFieldCatalog)
+    {
+        if (authorDocument == null || formFieldCatalog == null)
+        {
+            throw new ServiceException("参与者规则作者校验输入不完整", HttpStatus.ERROR);
+        }
+        collectAndValidate(authorDocument.bpmnModel(), formFieldCatalog, "");
     }
 
     /**
@@ -101,12 +120,12 @@ public class WorkflowParticipantRuleDeploymentService
     /**
      * 收集每个可执行流程的一条发起范围及每个受控单实例任务的一条办理规则。
      * @param model BpmnModel，作者 BPMN 公共模型
-     * @param formVariablesByProcess Map&lt;String,Set&lt;String&gt;&gt;，正式部署表单字段
+     * @param formFieldCatalog WorkflowAuthorFormFieldCatalog，按流程和节点隔离的正式字段目录
      * @param actorUserId String，部署操作人主键
      * @return List&lt;WfDeployParticipantRule&gt;，字段完整且稳定排序的快照
      */
     private List<WfDeployParticipantRule> collectAndValidate(BpmnModel model,
-            Map<String, Set<String>> formVariablesByProcess, String actorUserId)
+            WorkflowAuthorFormFieldCatalog formFieldCatalog, String actorUserId)
     {
         List<WfDeployParticipantRule> snapshots = new ArrayList<>();
         for (Process process : model.getProcesses())
@@ -120,10 +139,10 @@ public class WorkflowParticipantRuleDeploymentService
                 TaskRule rule = readTaskRule(process, task);
                 if (rule == null) continue;
                 if ("FORM_USER".equals(rule.type())
-                        && !formVariablesByProcess.getOrDefault(process.getId(), Set.of())
-                                .contains(rule.formField()))
+                        && !formFieldCatalog.containsTaskField(
+                                process.getId(), task.getId(), rule.formField()))
                 {
-                    throw invalid(task, "表单用户字段必须来自本流程已部署的正式表单");
+                    throw invalid(task, "表单用户字段必须来自当前任务正式表单中可见、可读的单值字段");
                 }
                 validateTaskTargets(rule, task);
                 snapshots.add(toTaskSnapshot(rule, actorUserId));

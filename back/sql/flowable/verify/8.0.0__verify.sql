@@ -102,10 +102,9 @@ actual_base_tables AS (
     FROM flowable_objects
     WHERE TABLE_TYPE = 'BASE TABLE'
 ),
-checks AS (
+inventory_checks AS (
     SELECT
-        1 AS sort_no,
-        'missing_required_tables' AS check_name,
+        'missing' AS issue_type,
         COUNT(*) AS issue_count,
         GROUP_CONCAT(e.table_name ORDER BY e.table_name SEPARATOR ', ') AS objects
     FROM expected_tables e
@@ -115,8 +114,7 @@ checks AS (
     UNION ALL
 
     SELECT
-        2,
-        'unexpected_flowable_objects',
+        'unexpected',
         COUNT(*),
         GROUP_CONCAT(
             CONCAT(o.actual_name, '[', o.TABLE_TYPE, ']')
@@ -129,8 +127,7 @@ checks AS (
     UNION ALL
 
     SELECT
-        3,
-        'disabled_module_objects',
+        'disabled',
         COUNT(*),
         GROUP_CONCAT(o.actual_name ORDER BY o.actual_name SEPARATOR ', ')
     FROM flowable_objects o
@@ -143,11 +140,20 @@ checks AS (
        OR o.table_name LIKE 'FLW!_CHANNEL!_%' ESCAPE '!'
 )
 SELECT
-    check_name,
-    CASE WHEN issue_count = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
-    CONCAT('issues=', issue_count, ', objects=', COALESCE(objects, 'none')) AS detail
-FROM checks
-ORDER BY sort_no;
+    'flowable_table_inventory' AS check_name,
+    CASE WHEN SUM(issue_count) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,
+    CONCAT(
+        'missing=', SUM(CASE WHEN issue_type = 'missing' THEN issue_count ELSE 0 END),
+        ', missing_objects=', COALESCE(
+            MAX(CASE WHEN issue_type = 'missing' THEN objects END), 'none'),
+        ', unexpected=', SUM(CASE WHEN issue_type = 'unexpected' THEN issue_count ELSE 0 END),
+        ', unexpected_objects=', COALESCE(
+            MAX(CASE WHEN issue_type = 'unexpected' THEN objects END), 'none'),
+        ', disabled=', SUM(CASE WHEN issue_type = 'disabled' THEN issue_count ELSE 0 END),
+        ', disabled_objects=', COALESCE(
+            MAX(CASE WHEN issue_type = 'disabled' THEN objects END), 'none')
+    ) AS detail
+FROM inventory_checks;
 
 SELECT
     'deadletter_jobs' AS check_name,

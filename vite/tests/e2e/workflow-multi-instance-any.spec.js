@@ -3,8 +3,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { loadWorkflowAccounts } from './support/environment.js'
 import {
+  cleanupWorkflowResources,
   closeWorkflowRoleSessions,
-  openWorkflowRoleSession
+  openWorkflowRoleSession,
+  submitWorkflowStartPage
 } from './support/workflow-fixture.js'
 
 const accounts = loadWorkflowAccounts()
@@ -348,7 +350,9 @@ async function createAndDeployMultiInstanceModelThroughUi(page, input) {
   const idInput = properties.getByRole('textbox', { name: '元素标识' })
   await idInput.fill(activityId)
   await idInput.press('Tab')
-  await properties.getByText('执行配置', { exact: true }).click()
+  if (!await properties.getByText('循环方式', { exact: true }).isVisible()) {
+    await properties.getByText('执行配置', { exact: true }).click()
+  }
   await selectDesignerOption(page, '循环方式', '会签 / 或签')
 
   const approvalModeLabel = input.mode === 'ALL' ? '会签' : '或签'
@@ -394,7 +398,9 @@ async function createAndDeployMultiInstanceModelThroughUi(page, input) {
   await page.locator(`[data-element-id="${activityId}"]`).click()
   await expect(properties.getByRole('textbox', { name: '元素名称' })).toHaveValue(activityName)
   await expect(properties.getByRole('textbox', { name: '元素标识' })).toHaveValue(activityId)
-  await properties.getByText('执行配置', { exact: true }).click()
+  if (!await properties.getByText('循环方式', { exact: true }).isVisible()) {
+    await properties.getByText('执行配置', { exact: true }).click()
+  }
   await expect(properties.getByText('会签 / 或签', { exact: true })).toBeVisible()
   await expect(properties.getByRole('radio', { name: approvalModeLabel, exact: true }))
     .toBeChecked()
@@ -448,7 +454,7 @@ async function findStartableDefinition(page, processKey) {
  * @param {string} businessKey 本场景唯一业务主键。
  * @param {string} subject 申请主题。
  * @param {{fieldLabel: string, users: Array<{value: string, label: string}>}|undefined} startAssignment 发起时多实例成员字段及正式用户选项。
- * @param {object} resourceRegistry 清理登记簿，start 成功后立即写入 processInstanceId。
+ * @param {{processInstanceId?:string,processInstanceIds:string[],draftFixtures:Array<{draftId:string,processInstanceId:string}>}} resourceRegistry 清理登记簿，正式提交成功后立即写入实例与草稿主键。
  * @returns {Promise<string>} 正式流程实例主键。
  */
 async function startDynamicProcessThroughUi(
@@ -474,18 +480,8 @@ async function startDynamicProcessThroughUi(
     }
     await page.keyboard.press('Escape')
   }
-  const responsePromise = page.waitForResponse(response => {
-    const url = new URL(response.url())
-    return url.pathname.includes('/workflow/process/start/')
-      && response.request().method() === 'POST'
-  })
-  await page.getByRole('button', { name: '提交申请', exact: true }).click()
-  const payload = await expectWorkflowResponseSuccess(
-    await responsePromise, '/workflow/process/start/{processDefinitionId}')
-  const processInstanceId = String(
-    payload.data?.id || payload.data?.processInstanceId || payload.data?.procInsId || '')
-  expect(processInstanceId, '流程发起结果必须返回正式实例主键').not.toBe('')
-  // start 已经提交成功，先登记实例再等待前端导航，导航失败时仍由 finally 终止并删除历史。
+  const processInstanceId = await submitWorkflowStartPage(page, resourceRegistry)
+  // 草稿提交已经成功，保留单值别名供本文件后续业务断言读取。
   resourceRegistry.processInstanceId = processInstanceId
   await expect(page).toHaveURL(new RegExp(`/workflow/process-detail/${processInstanceId}(?:[/?]|$)`))
   return processInstanceId
@@ -675,67 +671,24 @@ async function expectMultiInstanceCompletionAudit(page, processInstanceId, expec
 /**
  * 通过正式删除入口清理本用例创建的流程历史、部署、模型、表单和分类。
  * @param {{admin?: import('@playwright/test').Page, designer?: import('@playwright/test').Page}} pages 管理员和设计者页面。
- * @param {{processInstanceId?: string, deploymentId?: string, modelId?: string, formId?: string, categoryId?: string}} resources 已成功创建的资源主键。
+ * @param {{draftFixtures?:Array<{draftId:string,processInstanceId?:string}>,processInstanceId?:string,processInstanceIds?:string[],deploymentId?:string,modelId?:string,formId?:string,categoryId?:string}} resources 已成功创建的资源主键。
  * @returns {Promise<string[]>} 脱敏后的清理错误集合。
  */
 async function cleanupFixture(pages, resources) {
-  const errors = []
-  // cleanupPage 使用管理员执行引用顺序清理，避免设计职责账号被误授予表单和分类删除权限。
-  const cleanupPage = pages.admin || pages.designer
-  /**
-   * 执行单个清理动作并收集脱敏错误，后续资源仍继续按引用顺序清理。
-   * @param {string} label 清理动作名称。
-   * @param {() => Promise<unknown>} action 正式 API 清理动作。
-   * @returns {Promise<void>} 动作完成或错误已收集后结束。
-   */
-  const attempt = async (label, action) => {
-    try { await action() } catch (error) { errors.push(`${label}: ${redactE2ESecrets(error)}`) }
-  }
-  if (pages.admin && resources.processInstanceId) {
-    let detail = null
-    await attempt('查询待清理流程', async () => {
-      detail = await callWorkflowApi(pages.admin, 'GET', '/workflow/process/detail', {
-        query: { procInsId: resources.processInstanceId }
-      })
-    })
-    if (detail?.data?.processStatus === 'suspended') {
-      await attempt('激活待清理流程', () => callWorkflowApi(
-        pages.admin, 'POST', '/workflow/instance/updateState', {
-          data: { instanceId: resources.processInstanceId, state: 'ACTIVE' }
-        }))
-    }
-    if (['running', 'suspended'].includes(detail?.data?.processStatus)) {
-      await attempt('终止待清理流程', () => callWorkflowApi(
-        pages.admin, 'POST', '/workflow/instance/terminate', {
-          data: { instanceId: resources.processInstanceId, reason: 'P3 E2E 失败清理' }
-        }))
-    }
-    await attempt('删除流程历史', () => callWorkflowApi(
-      pages.admin, 'DELETE', `/workflow/process/instance/${encodeURIComponent(resources.processInstanceId)}`))
-  }
-  if (cleanupPage && resources.deploymentId) {
-    await attempt('删除流程部署', () => callWorkflowApi(
-      cleanupPage, 'DELETE', `/workflow/deploy/${encodeURIComponent(resources.deploymentId)}`))
-  }
-  if (cleanupPage && resources.modelId) {
-    await attempt('删除流程模型', () => callWorkflowApi(
-      cleanupPage, 'DELETE', `/workflow/model/${encodeURIComponent(resources.modelId)}`))
-  }
-  if (cleanupPage && resources.formId) {
-    await attempt('删除流程表单', () => callWorkflowApi(
-      cleanupPage, 'DELETE', `/workflow/form/${encodeURIComponent(resources.formId)}`))
-  }
-  if (cleanupPage && resources.categoryId) {
-    await attempt('删除流程分类', () => callWorkflowApi(
-      cleanupPage, 'DELETE', `/workflow/category/${encodeURIComponent(resources.categoryId)}`))
-  }
-  return errors
+  return cleanupWorkflowResources(pages, {
+    ...resources,
+    processInstanceIds: resources.processInstanceIds
+      || (resources.processInstanceId ? [resources.processInstanceId] : []),
+    deploymentIds: resources.deploymentIds
+      || (resources.deploymentId ? [resources.deploymentId] : []),
+    modelIds: resources.modelIds || (resources.modelId ? [resources.modelId] : [])
+  })
 }
 
 test('ANY 发起时或签由设计器发布，首人完成即原子结束且拒绝越权和失效成员', async ({ browser }, testInfo) => {
   test.setTimeout(300_000)
   const runId = `p3any_${Date.now()}`
-  const resources = {}
+  const resources = { processInstanceIds: [], draftFixtures: [] }
   const sessions = []
   const pages = {}
   let primaryError = null
@@ -1079,7 +1032,7 @@ test('ANY 发起时或签由设计器发布，首人完成即原子结束且拒�
 test('ALL 固定会签由设计器发布并必须由全部真实成员完成', async ({ browser }, testInfo) => {
   test.setTimeout(300_000)
   const runId = `p3all_${Date.now()}`
-  const resources = {}
+  const resources = { processInstanceIds: [], draftFixtures: [] }
   const sessions = []
   const pages = {}
   let primaryError = null

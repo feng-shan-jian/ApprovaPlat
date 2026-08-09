@@ -8,6 +8,7 @@ import {
   buildApprovalUserQuery,
   buildClaimIdentityQuery
 } from '../../src/api/workflow/identityQuery.js'
+import { normalizeSequenceFlowReferences } from '../../src/components/workflow/bpmnGraphXml.js'
 import { normalizeTaskListenerXml } from '../../src/components/workflow/taskListenerXml.js'
 
 // Node 合同测试复用浏览器同构 DOM API，直接执行设计器的正式 XML 标准化函数。
@@ -324,6 +325,40 @@ test('任务审计监听器按固定运行时契约重建', () => {
     .filter(child => child.nodeType === 1)
     .map(child => [child.namespaceURI, child.localName]), [['urn:vendor', 'payload']])
   assert.equal(normalizeTaskListenerXml(normalized), normalized)
+})
+
+/**
+ * 验证历史或外部 BPMN 只有 sourceRef/targetRef 时会补齐节点反向引用。
+ * @returns {void} 任一引用缺失、重复或二次标准化不稳定时断言失败。
+ */
+test('流程图顺序流反向引用按真实 sequenceFlow 重建', () => {
+  const source = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" targetNamespace="urn:test">
+  <process id="approval" isExecutable="true">
+    <startEvent id="start" />
+    <sequenceFlow id="flow_start_review" sourceRef="start" targetRef="review" />
+    <userTask id="review"><incoming>stale_flow</incoming></userTask>
+    <sequenceFlow id="flow_review_end" sourceRef="review" targetRef="end" />
+    <endEvent id="end" />
+  </process>
+</definitions>`
+
+  const normalized = normalizeSequenceFlowReferences(source)
+  const document = new DOMParser().parseFromString(normalized, 'application/xml')
+  const byId = id => Array.from(document.getElementsByTagNameNS(
+    'http://www.omg.org/spec/BPMN/20100524/MODEL', '*'))
+    .find(element => element.getAttribute('id') === id)
+  const references = (id, direction) => Array.from(byId(id).childNodes)
+    .filter(child => child.nodeType === 1 && child.localName === direction)
+    .map(child => child.textContent)
+
+  assert.deepEqual(references('start', 'incoming'), [])
+  assert.deepEqual(references('start', 'outgoing'), ['flow_start_review'])
+  assert.deepEqual(references('review', 'incoming'), ['flow_start_review'])
+  assert.deepEqual(references('review', 'outgoing'), ['flow_review_end'])
+  assert.deepEqual(references('end', 'incoming'), ['flow_review_end'])
+  assert.deepEqual(references('end', 'outgoing'), [])
+  assert.equal(normalizeSequenceFlowReferences(normalized), normalized)
 })
 
 /**

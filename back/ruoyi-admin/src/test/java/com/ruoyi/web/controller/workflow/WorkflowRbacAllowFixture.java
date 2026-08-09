@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -50,6 +51,7 @@ import org.flowable.task.api.history.HistoricTaskInstance;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
+import com.ruoyi.flowable.service.process.WorkflowCollaborationChannelService;
 import com.ruoyi.web.controller.workflow.WorkflowRbacMatrix.Endpoint;
 
 /**
@@ -120,6 +122,18 @@ final class WorkflowRbacAllowFixture
             "WfProcessController#todoExport", "WfProcessController#claimExport",
             "WfProcessController#finishedExport", "WfProcessController#copyExport",
             "WfProcessController#start", "WfProcessController#deleteHistory",
+            "WfProcessDraftController#create", "WfProcessDraftController#save",
+            "WfProcessDraftController#delete", "WfProcessDraftController#submit",
+            "WfBpmnEventController#createCode", "WfBpmnEventController#updateCode",
+            "WfBpmnEventController#changeCodeStatus",
+            "WfTaskSlaController#createCalendar", "WfTaskSlaController#updateCalendar",
+            "WfTaskSlaController#changeCalendarStatus",
+            "WfTaskSlaController#markNotificationRead",
+            "WfNotificationController#urge", "WfNotificationController#savePolicy",
+            "WfNotificationController#compensate",
+            "WfCollaborationController#retryInbound",
+            "WfCollaborationController#retryOutbox",
+            "WfCollaborationController#cancelOutbox",
             "WfTaskController#stopProcess", "WfTaskController#revokeProcess",
             "WfTaskController#processVariables",
             "WfTaskController#getMultiInstanceState",
@@ -151,6 +165,20 @@ final class WorkflowRbacAllowFixture
 
     /** 精确清理集合；只登记本类已确认创建成功的对象主键。 */
     private final Set<String> deploymentIds = new LinkedHashSet<>();
+    /** 本 fixture 创建的全部流程实例，历史被业务入口删除后仍保留精确通知清理边界。 */
+    private final Set<String> processInstanceIds = new LinkedHashSet<>();
+    /** 按本 fixture 流程实例反查得到的通知 outbox 主键，只用于严格 FK 顺序清理。 */
+    private final Set<Long> notificationOutboxIds = new LinkedHashSet<>();
+    /** 申请草稿及其不可变审计按真实 UUID 精确回收。 */
+    private final Set<String> processDraftIds = new LinkedHashSet<>();
+    /** BPMN 事件目录与运行审计只登记本 fixture 生成的主键。 */
+    private final Set<Long> bpmnEventCodeIds = new LinkedHashSet<>();
+    private final Set<Long> bpmnEventAuditIds = new LinkedHashSet<>();
+    /** SLA 日历与运行执行按外键父记录主键精确清理。 */
+    private final Set<Long> businessCalendarIds = new LinkedHashSet<>();
+    private final Set<Long> taskSlaExecutionIds = new LinkedHashSet<>();
+    /** 新增通知策略使用唯一 PROCESS 作用域，避免触碰正式默认策略。 */
+    private final Set<Long> notificationPolicyIds = new LinkedHashSet<>();
     private final Set<String> modelIds = new LinkedHashSet<>();
     /** 本轮真实保存 API 使用的幂等请求主键，仅用于精确回收测试创建的正式记录。 */
     private final Set<String> modelSaveRequestIds = new LinkedHashSet<>();
@@ -286,11 +314,17 @@ final class WorkflowRbacAllowFixture
                 case "WfSqlDataSourceController" -> executeSqlDataSource(roleKey, endpoint);
                 case "WfIntegrationCredentialController" -> executeIntegrationCredential(roleKey, endpoint);
                 case "WfRuntimeEventAuditController" -> executeRuntimeEventAudit(roleKey, endpoint);
+                case "WfBpmnEventController" -> executeBpmnEvent(roleKey, endpoint);
+                case "WfCallActivityController" -> executeCallActivity(roleKey, endpoint);
+                case "WfTaskSlaController" -> executeTaskSla(roleKey, endpoint);
+                case "WfCollaborationController" -> executeCollaboration(roleKey, endpoint);
+                case "WfNotificationController" -> executeNotification(roleKey, endpoint);
                 case "WfFormController" -> executeForm(roleKey, endpoint);
                 case "WfIdentityController" -> executeIdentity(roleKey, endpoint);
                 case "WfInstanceController" -> executeInstance(roleKey, endpoint);
                 case "WfModelController" -> executeModel(roleKey, endpoint);
                 case "WfProcessController" -> executeProcess(roleKey, endpoint);
+                case "WfProcessDraftController" -> executeProcessDraft(roleKey, endpoint);
                 case "WfTaskController" -> executeTask(roleKey, endpoint);
                 default -> throw new AssertionError("未知 ALLOW Controller");
             };
@@ -490,6 +524,1406 @@ final class WorkflowRbacAllowFixture
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from wf_integration_credential where credential_name = ?",
                 Integer.class, name)).isZero();
+    }
+
+    /**
+     * 执行申请草稿创建、本人列表、详情、乐观锁保存、软删除和正式提交链路。
+     *
+     * @param roleKey String，当前管理员或发起人角色
+     * @param endpoint Endpoint，草稿正式入口
+     * @return Execution，真实 HTTP、草稿审计和 Flowable 实例对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeProcessDraft(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        if ("create".equals(endpoint.handler()))
+        {
+            DraftFixture draft = createDraft(roleKey);
+            assertDraftState(draft.id(), roleKey, "ACTIVE", 1L, null);
+            return Execution.passedJson();
+        }
+
+        DraftFixture draft = createDraft(roleKey);
+        return switch (endpoint.handler())
+        {
+            case "list" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/process/draft/list?processName="
+                                + encode(definition(START_KEY).getName())
+                                + "&pageNum=1&pageSize=20", null);
+                assertRowsContain(body, "draftId", draft.id());
+                yield Execution.passedJson();
+            }
+            case "get" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/process/draft/" + encode(draft.id()), null);
+                requireFixture(draft.id().equals(body.path("data").path("draftId").asText())
+                                && draft.businessKey().equals(
+                                        body.path("data").path("businessKey").asText())
+                                && "ACTIVE".equals(
+                                        body.path("data").path("status").asText()),
+                        "DRAFT_DETAIL_STATE_MISMATCH");
+                yield Execution.passedJson();
+            }
+            case "save" ->
+            {
+                String updatedBusinessKey = uniqueBusinessKey("draft-saved");
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/process/draft/" + encode(draft.id()),
+                        draftMutationJson(roleKey, 1L, updatedBusinessKey, "草稿保存后字段"));
+                requireFixture(body.path("data").path("revisionNo").asLong() == 2L,
+                        "DRAFT_SAVE_RESPONSE_REVISION_MISMATCH");
+                assertDraftState(draft.id(), roleKey, "ACTIVE", 2L, null);
+                requireFixture(updatedBusinessKey.equals(jdbcTemplate.queryForObject(
+                                "select business_key from wf_process_draft where draft_id = ?",
+                                String.class, draft.id())),
+                        "DRAFT_SAVE_BUSINESS_KEY_MISMATCH");
+                assertDraftAudit(draft.id(), "SAVED", 2L);
+                yield Execution.passedJson();
+            }
+            case "delete" ->
+            {
+                callJson(roleKey, endpoint,
+                        "/workflow/process/draft/" + encode(draft.id())
+                                + "?expectedVersion=1", null);
+                assertDraftState(draft.id(), roleKey, "DELETED", 2L, null);
+                assertDraftAudit(draft.id(), "DELETED", 2L);
+                yield Execution.passedJson();
+            }
+            case "submit" ->
+            {
+                String businessKey = uniqueBusinessKey("draft-submitted");
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/process/draft/" + encode(draft.id()) + "/submit",
+                        draftMutationJson(roleKey, 1L, businessKey, "草稿正式提交"));
+                String instanceId = body.path("data").path("processInstanceId").asText();
+                trackProcessInstance(instanceId);
+                assertDraftState(draft.id(), roleKey, "SUBMITTED", 2L, instanceId);
+                assertDraftAudit(draft.id(), "SUBMITTED", 2L);
+                requireFixture(runtimeService.createProcessInstanceQuery()
+                                .processInstanceId(instanceId).count() == 1L
+                                && taskService.createTaskQuery()
+                                        .processInstanceId(instanceId).active().count() == 1L,
+                        "DRAFT_SUBMIT_FLOWABLE_STATE_MISMATCH");
+                yield Execution.passedJson();
+            }
+            default -> throw new AssertionError("未知申请草稿 ALLOW 入口");
+        };
+    }
+
+    /**
+     * 通过正式草稿 API 创建当前角色自己的活动草稿并登记精确 UUID。
+     *
+     * @param roleKey String，草稿所有者角色
+     * @return DraftFixture，草稿 UUID、业务主键和初始 revision
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private DraftFixture createDraft(String roleKey)
+            throws IOException, InterruptedException
+    {
+        String businessKey = uniqueBusinessKey("draft");
+        String body = json(Map.of(
+                "processDefinitionId", definition(START_KEY).getId(),
+                "businessKey", businessKey,
+                "variables", draftVariables(roleKey, "草稿初始字段"),
+                "multiInstanceUserIds", Map.of()));
+        JsonNode response = callJsonRaw(roleKey, "/workflow/process/draft", "POST", body, true);
+        String draftId = response.path("data").path("draftId").asText();
+        requireFixture(!draftId.isBlank()
+                        && response.path("data").path("revisionNo").asLong() == 1L,
+                "DRAFT_CREATE_RESPONSE_MISMATCH");
+        processDraftIds.add(draftId);
+        assertDraftAudit(draftId, "CREATED", 1L);
+        return new DraftFixture(draftId, businessKey);
+    }
+
+    /**
+     * 生成草稿保存或提交的完整字段 JSON，保持开始表单与正式发起校验一致。
+     *
+     * @param ownerRole String，草稿所有者角色，用于保持审批人字段与当前草稿一致
+     * @param expectedVersion long，客户端最后读取的草稿版本
+     * @param businessKey String，本次保存或提交采用的业务主键
+     * @param note String，开始表单 note 字段
+     * @return String，可直接发送的 UTF-8 JSON 正文
+     */
+    private String draftMutationJson(String ownerRole, long expectedVersion,
+            String businessKey, String note)
+    {
+        return json(Map.of(
+                "expectedVersion", expectedVersion,
+                "businessKey", businessKey,
+                "variables", draftVariables(ownerRole, note),
+                "multiInstanceUserIds", Map.of()));
+    }
+
+    /**
+     * 生成开始表单允许的草稿字段，审批人始终来自正式五角色账号。
+     *
+     * @param ownerRole String，草稿所有者角色；只用于选择可办理审批人
+     * @param note String，业务备注字段
+     * @return Map&lt;String,Object&gt;，通过部署表单白名单的字段映射
+     */
+    private Map<String, Object> draftVariables(String ownerRole, String note)
+    {
+        String assigneeRole = approvalAssigneeRole(ownerRole);
+        return Map.of("note", note, "reviewAssignee",
+                String.valueOf(roleUserIds.get(assigneeRole)));
+    }
+
+    /**
+     * 对账草稿所有者、状态、乐观锁和已提交实例，禁止仅凭 HTTP 200 判定成功。
+     *
+     * @param draftId String，草稿 UUID
+     * @param ownerRole String，期望所有者角色
+     * @param status String，期望 ACTIVE、DELETED 或 SUBMITTED
+     * @param revision long，期望 revision
+     * @param processInstanceId String，提交状态的真实实例主键；其他状态为空
+     * @return void，任一正式字段不一致即失败
+     */
+    private void assertDraftState(String draftId, String ownerRole, String status,
+            long revision, String processInstanceId)
+    {
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+                "select owner_user_id, draft_status, revision_no, "
+                        + "submitted_process_instance_id from wf_process_draft where draft_id = ?",
+                draftId);
+        requireFixture(((Number) row.get("owner_user_id")).longValue()
+                                == roleUserIds.get(ownerRole)
+                        && status.equals(row.get("draft_status"))
+                        && ((Number) row.get("revision_no")).longValue() == revision
+                        && java.util.Objects.equals(processInstanceId,
+                                row.get("submitted_process_instance_id")),
+                "DRAFT_PERSISTED_STATE_MISMATCH");
+    }
+
+    /**
+     * 核对草稿不可变审计中的动作与目标 revision。
+     *
+     * @param draftId String，草稿 UUID
+     * @param action String，CREATED、SAVED、DELETED 或 SUBMITTED
+     * @param revision long，动作后的目标 revision
+     * @return void，审计缺失或重复即失败
+     */
+    private void assertDraftAudit(String draftId, String action, long revision)
+    {
+        requireFixture(jdbcTemplate.queryForObject(
+                        "select count(*) from wf_process_draft_audit where draft_id = ? "
+                                + "and action_type = ? and to_revision = ?",
+                        Long.class, draftId, action, revision) == 1L,
+                "DRAFT_AUDIT_MISSING");
+    }
+
+    /**
+     * 查询调用活动可引用的真实已发布定义、状态和部署表单字段目录。
+     *
+     * @param roleKey String，当前流程管理员或设计者
+     * @param endpoint Endpoint，调用活动目录入口
+     * @return Execution，真实授权目录对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeCallActivity(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        ProcessDefinition target = definition(START_KEY);
+        JsonNode body = callJson(roleKey, endpoint,
+                "/workflow/call-activity/catalog?keyword=" + encode(START_KEY), null);
+        requireFixture(arrayContains(body.path("data"), "definitionId", target.getId())
+                        && arrayContains(body.path("data"), "processKey", START_KEY),
+                "CALL_ACTIVITY_CATALOG_TARGET_MISSING");
+        JsonNode option = findArrayObject(body.path("data"), "definitionId", target.getId());
+        requireFixture(option != null
+                        && "ACTIVE".equals(option.path("status").asText())
+                        && option.path("inputFields").isArray()
+                        && option.path("outputFields").isArray(),
+                "CALL_ACTIVITY_CATALOG_CONTRACT_MISMATCH");
+        return Execution.passedJson();
+    }
+
+    /**
+     * 执行 BPMN 错误/升级目录、运行审计和本人通知已读真实链路。
+     *
+     * @param roleKey String，当前允许角色
+     * @param endpoint Endpoint，BPMN 事件正式入口
+     * @return Execution，真实 HTTP 与正式表对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeBpmnEvent(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        return switch (endpoint.handler())
+        {
+            case "createCode" ->
+            {
+                BpmnEventCodeFixture code = createBpmnEventCode(roleKey, "BPMN事件新增");
+                assertBpmnEventCode(code, "ENABLED", "BPMN事件新增");
+                yield Execution.passedJson();
+            }
+            case "listCodes" ->
+            {
+                BpmnEventCodeFixture code = createBpmnEventCode("workflow_admin", "BPMN目录列表");
+                JsonNode body = callJson(roleKey, endpoint, "/workflow/bpmn-event/codes", null);
+                requireFixture(arrayContains(body.path("data"), "eventCodeId",
+                                String.valueOf(code.id())),
+                        "BPMN_EVENT_CODE_LIST_ROW_MISSING");
+                yield Execution.passedJson();
+            }
+            case "codeOptions" ->
+            {
+                BpmnEventCodeFixture code = createBpmnEventCode("workflow_admin", "BPMN设计选项");
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/bpmn-event/codes/options/ERROR", null);
+                requireFixture(arrayContains(body.path("data"), "eventCode", code.code()),
+                        "BPMN_EVENT_CODE_OPTION_MISSING");
+                yield Execution.passedJson();
+            }
+            case "updateCode" ->
+            {
+                BpmnEventCodeFixture code = createBpmnEventCode(roleKey, "BPMN事件修改前");
+                callJson(roleKey, endpoint,
+                        "/workflow/bpmn-event/codes/" + code.id(),
+                        bpmnEventCodeJson(code.code(), "BPMN事件修改后"));
+                assertBpmnEventCode(code, "ENABLED", "BPMN事件修改后");
+                yield Execution.passedJson();
+            }
+            case "changeCodeStatus" ->
+            {
+                BpmnEventCodeFixture code = createBpmnEventCode(roleKey, "BPMN事件停用");
+                callJson(roleKey, endpoint,
+                        "/workflow/bpmn-event/codes/" + code.id() + "/status",
+                        json(Map.of("enabled", false)));
+                assertBpmnEventCode(code, "DISABLED", "BPMN事件停用");
+                yield Execution.passedJson();
+            }
+            case "audit" ->
+            {
+                BpmnEventRuntimeFixture fixture = insertBpmnEventRuntimeFixture(roleKey, false);
+                JsonNode body = callJson(roleKey, endpoint, "/workflow/bpmn-event/audit", null);
+                requireFixture(arrayContains(body.path("data"), "auditId",
+                                String.valueOf(fixture.auditId())),
+                        "BPMN_EVENT_AUDIT_ROW_MISSING");
+                yield Execution.passedJson();
+            }
+            case "myNotifications" ->
+            {
+                BpmnEventRuntimeFixture fixture = insertBpmnEventRuntimeFixture(roleKey, true);
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/bpmn-event/notifications/my", null);
+                requireFixture(arrayContains(body.path("data"), "notificationId",
+                                String.valueOf(fixture.notificationId())),
+                        "BPMN_EVENT_NOTIFICATION_ROW_MISSING");
+                yield Execution.passedJson();
+            }
+            case "markRead" ->
+            {
+                BpmnEventRuntimeFixture fixture = insertBpmnEventRuntimeFixture(roleKey, true);
+                callJson(roleKey, endpoint,
+                        "/workflow/bpmn-event/notifications/" + fixture.notificationId()
+                                + "/read", null);
+                requireFixture(jdbcTemplate.queryForObject(
+                                "select count(*) from wf_bpmn_event_notification "
+                                        + "where notification_id = ? and recipient_user_id = ? "
+                                        + "and read_status = 'READ' and read_time is not null",
+                                Long.class, fixture.notificationId(),
+                                String.valueOf(roleUserIds.get(roleKey))) == 1L,
+                        "BPMN_EVENT_NOTIFICATION_READ_STATE_MISMATCH");
+                yield Execution.passedJson();
+            }
+            default -> throw new AssertionError("未知 BPMN 事件 ALLOW 入口");
+        };
+    }
+
+    /**
+     * 通过正式管理 API 创建唯一 ERROR 编码并登记生成主键。
+     *
+     * @param roleKey String，具新增权限的管理员或设计者角色
+     * @param eventName String，用户可见事件名称
+     * @return BpmnEventCodeFixture，目录主键、稳定编码和名称
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private BpmnEventCodeFixture createBpmnEventCode(String roleKey, String eventName)
+            throws IOException, InterruptedException
+    {
+        String eventCode = "RBAC_" + runId.substring(0, 12).toUpperCase()
+                + "_" + sequence.incrementAndGet();
+        JsonNode body = callJsonRaw(roleKey, "/workflow/bpmn-event/codes", "POST",
+                bpmnEventCodeJson(eventCode, eventName), true);
+        long eventCodeId = body.path("data").path("eventCodeId").asLong();
+        requireFixture(eventCodeId > 0L, "BPMN_EVENT_CODE_ID_MISSING");
+        bpmnEventCodeIds.add(eventCodeId);
+        return new BpmnEventCodeFixture(eventCodeId, eventCode, eventName);
+    }
+
+    /**
+     * 生成 BPMN 事件目录新增或修改请求。
+     *
+     * @param eventCode String，发布后不可变稳定编码
+     * @param eventName String，用户可见名称
+     * @return String，完整 JSON 请求正文
+     */
+    private String bpmnEventCodeJson(String eventCode, String eventName)
+    {
+        return json(Map.of("eventType", "ERROR", "eventCode", eventCode,
+                "eventName", eventName, "notificationPolicy", "INITIATOR",
+                "description", "RBAC真实目录管理"));
+    }
+
+    /**
+     * 核对 BPMN 事件目录的稳定编码、名称和启停状态。
+     *
+     * @param fixture BpmnEventCodeFixture，目录主键和稳定字段
+     * @param status String，期望 ENABLED 或 DISABLED
+     * @param eventName String，期望用户可见名称
+     * @return void，正式目录字段不一致即失败
+     */
+    private void assertBpmnEventCode(BpmnEventCodeFixture fixture, String status,
+            String eventName)
+    {
+        requireFixture(jdbcTemplate.queryForObject(
+                        "select count(*) from wf_bpmn_event_code where event_code_id = ? "
+                                + "and event_type = 'ERROR' and event_code = ? "
+                                + "and event_name = ? and status = ?",
+                        Long.class, fixture.id(), fixture.code(), eventName, status) == 1L,
+                "BPMN_EVENT_CODE_PERSISTED_STATE_MISMATCH");
+    }
+
+    /**
+     * 基于真实 Flowable 实例写入一条专用运行审计，并按需创建当前用户通知。
+     *
+     * @param recipientRole String，通知接收角色；仅审计时仍用于实例办理人选择
+     * @param withNotification boolean，是否创建当前用户未读通知
+     * @return BpmnEventRuntimeFixture，审计和可选通知主键
+     */
+    private BpmnEventRuntimeFixture insertBpmnEventRuntimeFixture(String recipientRole,
+            boolean withNotification)
+    {
+        ProcessFixture process = startStart("workflow_starter");
+        Task task = taskService.createTaskQuery().taskId(process.taskId()).singleResult();
+        requireFixture(task != null, "BPMN_EVENT_RUNTIME_TASK_MISSING");
+        GeneratedKeyHolder auditKey = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection ->
+        {
+            PreparedStatement statement = connection.prepareStatement(
+                    "insert into wf_bpmn_event_audit "
+                            + "(idempotency_key, deployment_id, process_instance_id, "
+                            + "process_definition_id, execution_id, source_element_id, "
+                            + "source_type, event_type, event_code, event_name, match_status, "
+                            + "boundary_event_id, interrupting, message_summary, "
+                            + "initiator_user_id, create_time) "
+                            + "values (?, ?, ?, ?, ?, ?, 'MANUAL', 'ERROR', "
+                            + "'APPROVAL_BUSINESS_ERROR', '审批业务校验失败', 'UNMATCHED', "
+                            + "null, null, 'RBAC真实运行审计', ?, current_timestamp(3))",
+                    Statement.RETURN_GENERATED_KEYS);
+            statement.setString(1, randomHash());
+            statement.setString(2, process.deploymentId());
+            statement.setString(3, process.instanceId());
+            statement.setString(4, process.definitionId());
+            statement.setString(5, task.getExecutionId());
+            statement.setString(6, task.getTaskDefinitionKey());
+            statement.setString(7, String.valueOf(roleUserIds.get("workflow_starter")));
+            return statement;
+        }, auditKey);
+        long auditId = auditKey.getKey().longValue();
+        bpmnEventAuditIds.add(auditId);
+        Long notificationId = null;
+        if (withNotification)
+        {
+            GeneratedKeyHolder notificationKey = new GeneratedKeyHolder();
+            jdbcTemplate.update(connection ->
+            {
+                PreparedStatement statement = connection.prepareStatement(
+                        "insert into wf_bpmn_event_notification "
+                                + "(audit_id, recipient_user_id, title, content, read_status, "
+                                + "create_time) values (?, ?, 'RBAC事件通知', "
+                                + "'RBAC真实事件通知正文', 'UNREAD', current_timestamp(3))",
+                        Statement.RETURN_GENERATED_KEYS);
+                statement.setLong(1, auditId);
+                statement.setString(2, String.valueOf(roleUserIds.get(recipientRole)));
+                return statement;
+            }, notificationKey);
+            notificationId = notificationKey.getKey().longValue();
+        }
+        return new BpmnEventRuntimeFixture(auditId, notificationId);
+    }
+
+    /**
+     * 执行审批 SLA 业务日历、运行台账、审计和本人通知真实入口。
+     *
+     * @param roleKey String，当前允许角色
+     * @param endpoint Endpoint，SLA 正式入口
+     * @return Execution，真实 HTTP 与正式表状态对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeTaskSla(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        return switch (endpoint.handler())
+        {
+            case "createCalendar" ->
+            {
+                BusinessCalendarFixture calendar = createBusinessCalendar(roleKey,
+                        "RBAC日历新增");
+                assertBusinessCalendar(calendar, "RBAC日历新增", "ENABLED");
+                yield Execution.passedJson();
+            }
+            case "listCalendars" ->
+            {
+                BusinessCalendarFixture calendar = createBusinessCalendar(
+                        "workflow_admin", "RBAC日历列表");
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/sla/calendars", null);
+                requireFixture(arrayContains(body.path("data"), "calendarId",
+                                String.valueOf(calendar.id())),
+                        "SLA_CALENDAR_LIST_ROW_MISSING");
+                yield Execution.passedJson();
+            }
+            case "listEnabledCalendars" ->
+            {
+                BusinessCalendarFixture calendar = createBusinessCalendar(
+                        "workflow_admin", "RBAC日历选项");
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/sla/calendars/enabled", null);
+                requireFixture(arrayContains(body.path("data"), "calendarKey", calendar.key()),
+                        "SLA_CALENDAR_OPTION_MISSING");
+                yield Execution.passedJson();
+            }
+            case "updateCalendar" ->
+            {
+                BusinessCalendarFixture calendar = createBusinessCalendar(roleKey,
+                        "RBAC日历修改前");
+                callJson(roleKey, endpoint,
+                        "/workflow/sla/calendars/" + calendar.id(),
+                        businessCalendarJson(calendar.key(), "RBAC日历修改后"));
+                assertBusinessCalendar(calendar, "RBAC日历修改后", "ENABLED");
+                requireFixture(jdbcTemplate.queryForObject(
+                                "select count(*) from wf_business_calendar_day "
+                                        + "where calendar_id = ? and calendar_date = '2027-01-01' "
+                                        + "and working_day = 0",
+                                Long.class, calendar.id()) == 1L,
+                        "SLA_CALENDAR_DAY_REPLACEMENT_MISSING");
+                yield Execution.passedJson();
+            }
+            case "changeCalendarStatus" ->
+            {
+                BusinessCalendarFixture calendar = createBusinessCalendar(roleKey,
+                        "RBAC日历停用");
+                callJson(roleKey, endpoint,
+                        "/workflow/sla/calendars/" + calendar.id() + "/status",
+                        json(Map.of("enabled", false)));
+                assertBusinessCalendar(calendar, "RBAC日历停用", "DISABLED");
+                yield Execution.passedJson();
+            }
+            case "listExecutions" ->
+            {
+                TaskSlaRuntimeFixture fixture = insertTaskSlaRuntimeFixture(roleKey, false);
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/sla/executions", null);
+                requireFixture(arrayContains(body.path("data"), "slaExecutionId",
+                                String.valueOf(fixture.executionId())),
+                        "SLA_EXECUTION_ROW_MISSING");
+                yield Execution.passedJson();
+            }
+            case "listAudits" ->
+            {
+                TaskSlaRuntimeFixture fixture = insertTaskSlaRuntimeFixture(roleKey, false);
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/sla/audits", null);
+                requireFixture(arrayContains(body.path("data"), "auditId",
+                                String.valueOf(fixture.auditId())),
+                        "SLA_AUDIT_ROW_MISSING");
+                yield Execution.passedJson();
+            }
+            case "myNotifications" ->
+            {
+                TaskSlaRuntimeFixture fixture = insertTaskSlaRuntimeFixture(roleKey, true);
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/sla/notifications", null);
+                requireFixture(arrayContains(body.path("data"), "notificationId",
+                                String.valueOf(fixture.notificationId())),
+                        "SLA_NOTIFICATION_ROW_MISSING");
+                yield Execution.passedJson();
+            }
+            case "markNotificationRead" ->
+            {
+                TaskSlaRuntimeFixture fixture = insertTaskSlaRuntimeFixture(roleKey, true);
+                callJson(roleKey, endpoint,
+                        "/workflow/sla/notifications/" + fixture.notificationId() + "/read",
+                        null);
+                requireFixture(jdbcTemplate.queryForObject(
+                                "select count(*) from wf_task_sla_notification "
+                                        + "where notification_id = ? and recipient_user_id = ? "
+                                        + "and read_status = 'READ' and read_time is not null",
+                                Long.class, fixture.notificationId(),
+                                String.valueOf(roleUserIds.get(roleKey))) == 1L,
+                        "SLA_NOTIFICATION_READ_STATE_MISMATCH");
+                yield Execution.passedJson();
+            }
+            default -> throw new AssertionError("未知审批 SLA ALLOW 入口");
+        };
+    }
+
+    /**
+     * 通过正式 SLA 管理 API 创建唯一业务日历并登记主键。
+     *
+     * @param roleKey String，具新增权限的管理员或设计者角色
+     * @param calendarName String，用户可见日历名称
+     * @return BusinessCalendarFixture，正式主键与稳定编码
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private BusinessCalendarFixture createBusinessCalendar(String roleKey,
+            String calendarName) throws IOException, InterruptedException
+    {
+        String calendarKey = "RBAC_" + runId.substring(0, 10).toUpperCase()
+                + "_" + sequence.incrementAndGet();
+        JsonNode body = callJsonRaw(roleKey, "/workflow/sla/calendars", "POST",
+                businessCalendarJson(calendarKey, calendarName), true);
+        long calendarId = body.path("data").asLong();
+        requireFixture(calendarId > 0L, "SLA_CALENDAR_ID_MISSING");
+        businessCalendarIds.add(calendarId);
+        return new BusinessCalendarFixture(calendarId, calendarKey);
+    }
+
+    /**
+     * 生成含工作周、时区和节假日覆盖的完整日历请求。
+     *
+     * @param calendarKey String，发布后不可修改的稳定编码
+     * @param calendarName String，用户可见名称
+     * @return String，完整 JSON 请求正文
+     */
+    private String businessCalendarJson(String calendarKey, String calendarName)
+    {
+        Map<String, Object> day = Map.of("calendarDate", "2027-01-01",
+                "workingDay", false, "dayName", "元旦");
+        return json(Map.of("calendarKey", calendarKey, "calendarName", calendarName,
+                "timezone", "Asia/Shanghai", "workingDays", List.of(1, 2, 3, 4, 5),
+                "workStart", "09:00", "workEnd", "18:00",
+                "description", "RBAC真实业务日历", "days", List.of(day)));
+    }
+
+    /**
+     * 核对日历稳定编码、名称、状态和规则，不以 Controller 返回值替代持久化证据。
+     *
+     * @param fixture BusinessCalendarFixture，日历主键和编码
+     * @param calendarName String，期望名称
+     * @param status String，期望 ENABLED 或 DISABLED
+     * @return void，正式主表字段不一致即失败
+     */
+    private void assertBusinessCalendar(BusinessCalendarFixture fixture,
+            String calendarName, String status)
+    {
+        requireFixture(jdbcTemplate.queryForObject(
+                        "select count(*) from wf_business_calendar where calendar_id = ? "
+                                + "and calendar_key = ? and calendar_name = ? and status = ? "
+                                + "and timezone = 'Asia/Shanghai' and working_days = '1,2,3,4,5'",
+                        Long.class, fixture.id(), fixture.key(), calendarName, status) == 1L,
+                "SLA_CALENDAR_PERSISTED_STATE_MISMATCH");
+    }
+
+    /**
+     * 基于真实活动任务建立一条 SLA 执行、REMINDER 审计和可选本人通知。
+     *
+     * @param recipientRole String，通知接收角色
+     * @param withNotification boolean，是否创建未读通知
+     * @return TaskSlaRuntimeFixture，执行、审计和可选通知主键
+     */
+    private TaskSlaRuntimeFixture insertTaskSlaRuntimeFixture(String recipientRole,
+            boolean withNotification)
+    {
+        ProcessFixture process = startStart("workflow_starter");
+        Task task = taskService.createTaskQuery().taskId(process.taskId()).singleResult();
+        requireFixture(task != null, "SLA_RUNTIME_TASK_MISSING");
+        GeneratedKeyHolder executionKey = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection ->
+        {
+            PreparedStatement statement = connection.prepareStatement(
+                    "insert into wf_task_sla_execution "
+                            + "(deployment_id, process_instance_id, process_definition_id, "
+                            + "task_id, task_definition_key, assignee_user_id, status, "
+                            + "started_at, reminder_due_at, escalation_due_at, reminders_sent, "
+                            + "paused_millis, revision, update_time) "
+                            + "values (?, ?, ?, ?, ?, ?, 'ACTIVE', current_timestamp(3), "
+                            + "date_add(current_timestamp(3), interval 30 minute), "
+                            + "date_add(current_timestamp(3), interval 60 minute), 1, 0, 1, "
+                            + "current_timestamp(3))",
+                    Statement.RETURN_GENERATED_KEYS);
+            statement.setString(1, process.deploymentId());
+            statement.setString(2, process.instanceId());
+            statement.setString(3, process.definitionId());
+            statement.setString(4, task.getId());
+            statement.setString(5, task.getTaskDefinitionKey());
+            statement.setString(6, task.getAssignee());
+            return statement;
+        }, executionKey);
+        long executionId = executionKey.getKey().longValue();
+        taskSlaExecutionIds.add(executionId);
+
+        GeneratedKeyHolder auditKey = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection ->
+        {
+            PreparedStatement statement = connection.prepareStatement(
+                    "insert into wf_task_sla_audit "
+                            + "(sla_execution_id, action_type, action_ordinal, actor_user_id, "
+                            + "detail, create_time) values (?, 'REMINDER', 1, null, "
+                            + "'RBAC真实SLA提醒', current_timestamp(3))",
+                    Statement.RETURN_GENERATED_KEYS);
+            statement.setLong(1, executionId);
+            return statement;
+        }, auditKey);
+        long auditId = auditKey.getKey().longValue();
+
+        Long notificationId = null;
+        if (withNotification)
+        {
+            GeneratedKeyHolder notificationKey = new GeneratedKeyHolder();
+            jdbcTemplate.update(connection ->
+            {
+                PreparedStatement statement = connection.prepareStatement(
+                        "insert into wf_task_sla_notification "
+                                + "(audit_id, recipient_user_id, action_type, title, content, "
+                                + "read_status, create_time) values (?, ?, 'REMINDER', "
+                                + "'RBAC SLA提醒', 'RBAC真实SLA提醒正文', 'UNREAD', "
+                                + "current_timestamp(3))",
+                        Statement.RETURN_GENERATED_KEYS);
+                statement.setLong(1, auditId);
+                statement.setString(2, String.valueOf(roleUserIds.get(recipientRole)));
+                return statement;
+            }, notificationKey);
+            notificationId = notificationKey.getKey().longValue();
+        }
+        return new TaskSlaRuntimeFixture(executionId, auditId, notificationId);
+    }
+
+    /**
+     * 执行审批通知站内信、偏好、策略、人工催办和死信补偿真实链路。
+     *
+     * @param roleKey String，当前允许角色
+     * @param endpoint Endpoint，审批通知正式入口
+     * @return Execution，真实 HTTP 与正式通知表对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeNotification(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        return switch (endpoint.handler())
+        {
+            case "inbox" ->
+            {
+                NotificationOutboxFixture fixture = insertNotificationFixture(roleKey, true);
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/notification/inbox?readStatus=UNREAD&limit=100", null);
+                requireFixture(arrayContains(body.path("data").path("items"),
+                                "notificationId", String.valueOf(fixture.notificationId())),
+                        "NOTIFICATION_INBOX_ROW_MISSING");
+                requireFixture(body.path("data").path("unreadCount").asInt() >= 1,
+                        "NOTIFICATION_INBOX_UNREAD_COUNT_MISMATCH");
+                yield Execution.passedJson();
+            }
+            case "markRead" ->
+            {
+                NotificationOutboxFixture fixture = insertNotificationFixture(roleKey, true);
+                callJson(roleKey, endpoint,
+                        "/workflow/notification/inbox/" + fixture.notificationId() + "/read",
+                        null);
+                requireFixture(jdbcTemplate.queryForObject(
+                                "select count(*) from wf_notification_inbox "
+                                        + "where notification_id = ? and recipient_user_id = ? "
+                                        + "and read_status = 'READ' and read_time is not null",
+                                Long.class, fixture.notificationId(),
+                                roleUserIds.get(roleKey)) == 1L,
+                        "NOTIFICATION_INBOX_READ_STATE_MISMATCH");
+                yield Execution.passedJson();
+            }
+            case "markAllRead" ->
+            {
+                List<NotificationReadSnapshot> originalRows =
+                        snapshotNotificationReads(roleUserIds.get(roleKey));
+                NotificationOutboxFixture fixture = insertNotificationFixture(roleKey, true);
+                try
+                {
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/notification/inbox/read-all", null);
+                    requireFixture(body.path("data").asInt() >= 1,
+                            "NOTIFICATION_READ_ALL_COUNT_MISMATCH");
+                    requireFixture(jdbcTemplate.queryForObject(
+                                    "select count(*) from wf_notification_inbox "
+                                            + "where notification_id = ? and read_status = 'READ' "
+                                            + "and read_time is not null",
+                                    Long.class, fixture.notificationId()) == 1L,
+                            "NOTIFICATION_READ_ALL_STATE_MISMATCH");
+                }
+                finally
+                {
+                    // read-all 会触及当前用户全部历史通知，必须逐行恢复运行前正式状态。
+                    restoreNotificationReads(roleUserIds.get(roleKey), originalRows);
+                }
+                yield Execution.passedJson();
+            }
+            case "preference" ->
+            {
+                NotificationPreferenceSnapshot snapshot =
+                        notificationPreference(roleUserIds.get(roleKey));
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/notification/preference", null);
+                requireFixture(body.path("data").path("inboxEnabled").asBoolean()
+                                == snapshot.inboxEnabled()
+                                && body.path("data").path("emailEnabled").asBoolean()
+                                        == snapshot.emailEnabled()
+                                && body.path("data").path("revision").asInt()
+                                        == snapshot.revision(),
+                        "NOTIFICATION_PREFERENCE_RESPONSE_MISMATCH");
+                yield Execution.passedJson();
+            }
+            case "savePreference" ->
+            {
+                long userId = roleUserIds.get(roleKey);
+                NotificationPreferenceSnapshot snapshot = notificationPreference(userId);
+                boolean targetInbox = !snapshot.inboxEnabled();
+                boolean targetEmail = !snapshot.emailEnabled();
+                try
+                {
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/notification/preference",
+                            json(Map.of("inboxEnabled", targetInbox,
+                                    "emailEnabled", targetEmail,
+                                    "expectedRevision", snapshot.revision())));
+                    requireFixture(body.path("data").path("inboxEnabled").asBoolean()
+                                    == targetInbox
+                                    && body.path("data").path("emailEnabled").asBoolean()
+                                            == targetEmail
+                                    && body.path("data").path("revision").asInt()
+                                            == snapshot.revision() + 1,
+                            "NOTIFICATION_PREFERENCE_SAVE_RESPONSE_MISMATCH");
+                    requireFixture(jdbcTemplate.queryForObject(
+                                    "select count(*) from wf_notification_preference "
+                                            + "where user_id = ? and inbox_enabled = ? "
+                                            + "and email_enabled = ? and revision = ?",
+                                    Long.class, userId, targetInbox, targetEmail,
+                                    snapshot.revision() + 1) == 1L,
+                            "NOTIFICATION_PREFERENCE_SAVE_STATE_MISMATCH");
+                }
+                finally
+                {
+                    restoreNotificationPreference(userId, snapshot);
+                }
+                yield Execution.passedJson();
+            }
+            case "urge" ->
+            {
+                ProcessFixture process = startStart(roleKey);
+                Task task = taskService.createTaskQuery().taskId(process.taskId()).singleResult();
+                requireFixture(task != null && task.getAssignee() != null,
+                        "NOTIFICATION_URGE_ACTIVE_TASK_MISSING");
+                long recipientUserId = Long.parseLong(task.getAssignee());
+                NotificationPreferenceSnapshot snapshot =
+                        notificationPreference(recipientUserId);
+                try
+                {
+                    forceNotificationInboxEnabled(recipientUserId);
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/notification/urge",
+                            json(Map.of("processInstanceId", process.instanceId(),
+                                    "reason", "RBAC真实人工催办")));
+                    long urgeId = body.path("data").path("urgeId").asLong();
+                    int outboxCount = body.path("data").path("outboxCount").asInt();
+                    requireFixture(urgeId > 0L && outboxCount > 0
+                                    && body.path("data").path("recipientCount").asInt() >= 1,
+                            "NOTIFICATION_URGE_RESPONSE_MISMATCH");
+                    requireFixture(jdbcTemplate.queryForObject(
+                                    "select count(*) from wf_notification_urge_audit "
+                                            + "where urge_id = ? and process_instance_id = ? "
+                                            + "and actor_user_id = ? and reason = ?",
+                                    Long.class, urgeId, process.instanceId(),
+                                    roleUserIds.get(roleKey), "RBAC真实人工催办") == 1L,
+                            "NOTIFICATION_URGE_AUDIT_MISSING");
+                    List<Long> outboxIds = jdbcTemplate.queryForList(
+                            "select outbox_id from wf_notification_outbox "
+                                    + "where process_instance_id = ? and event_type = 'MANUAL_URGE'",
+                            Long.class, process.instanceId());
+                    notificationOutboxIds.addAll(outboxIds);
+                    requireFixture(outboxIds.size() == outboxCount,
+                            "NOTIFICATION_URGE_OUTBOX_COUNT_MISMATCH");
+                    requireFixture(taskService.createTaskQuery().taskId(task.getId())
+                                    .active().count() == 1L,
+                            "NOTIFICATION_URGE_CHANGED_TASK_STATE");
+                }
+                finally
+                {
+                    restoreNotificationPreference(recipientUserId, snapshot);
+                }
+                yield Execution.passedJson();
+            }
+            case "policies" ->
+            {
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/notification/policies", null);
+                JsonNode defaultPolicy = findArrayObject(body.path("data"),
+                        "eventType", "MANUAL_URGE");
+                requireFixture(defaultPolicy != null
+                                && "DEFAULT".equals(
+                                        defaultPolicy.path("scopeType").asText())
+                                && "ENABLED".equals(
+                                        defaultPolicy.path("status").asText()),
+                        "NOTIFICATION_DEFAULT_POLICY_MISSING");
+                yield Execution.passedJson();
+            }
+            case "savePolicy" ->
+            {
+                String eventType = "workflow_designer".equals(roleKey)
+                        ? "PROCESS_COMPLETED" : "COPY_CREATED";
+                Map<String, Object> request = new LinkedHashMap<>();
+                request.put("scopeType", "PROCESS");
+                request.put("processDefinitionKey", START_KEY);
+                request.put("eventType", eventType);
+                request.put("recipientRules", "INITIATOR");
+                request.put("channels", "INBOX");
+                request.put("titleTemplate", notificationPolicyTitleTemplate());
+                request.put("contentTemplate", notificationPolicyContentTemplate());
+                request.put("maxAttempts", 3);
+                request.put("status", "ENABLED");
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/notification/policies", json(request));
+                long policyId = body.path("data").path("policyId").asLong();
+                requireFixture(policyId > 0L, "NOTIFICATION_POLICY_ID_MISSING");
+                notificationPolicyIds.add(policyId);
+                requireFixture(jdbcTemplate.queryForObject(
+                                "select count(*) from wf_notification_policy "
+                                        + "where policy_id = ? and scope_type = 'PROCESS' "
+                                        + "and process_definition_key = ? "
+                                        + "and task_definition_key is null "
+                                        + "and event_type = ? "
+                                        + "and recipient_rules = 'INITIATOR' "
+                                        + "and channels = 'INBOX' and max_attempts = 3 "
+                                        + "and status = 'ENABLED' and revision = 0",
+                                Long.class, policyId, START_KEY, eventType) == 1L,
+                        "NOTIFICATION_POLICY_PERSISTED_STATE_MISMATCH");
+                yield Execution.passedJson();
+            }
+            case "outbox" ->
+            {
+                NotificationOutboxFixture fixture = insertNotificationFixture(roleKey, false);
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/notification/outbox", null);
+                JsonNode row = findArrayObject(body.path("data"), "outboxId",
+                        String.valueOf(fixture.outboxId()));
+                requireFixture(row != null
+                                && "DEAD_LETTER".equals(row.path("status").asText())
+                                && row.path("deliveryCycle").asInt() == 1,
+                        "NOTIFICATION_OUTBOX_ROW_MISSING");
+                yield Execution.passedJson();
+            }
+            case "compensate" ->
+            {
+                NotificationOutboxFixture fixture = insertNotificationFixture(roleKey, false);
+                callJson(roleKey, endpoint,
+                        "/workflow/notification/outbox/" + fixture.outboxId()
+                                + "/compensate", null);
+                requireFixture(jdbcTemplate.queryForObject(
+                                "select count(*) from wf_notification_outbox "
+                                        + "where outbox_id = ? and status = 'RETRYING' "
+                                        + "and delivery_cycle = 2 and attempt_count = 0 "
+                                        + "and total_attempt_count = 3 and revision = 1 "
+                                        + "and processed_time is null",
+                                Long.class, fixture.outboxId()) == 1L,
+                        "NOTIFICATION_COMPENSATE_STATE_MISMATCH");
+                requireFixture(jdbcTemplate.queryForObject(
+                                "select count(*) from wf_notification_delivery_audit "
+                                        + "where outbox_id = ? and action_type = 'COMPENSATE' "
+                                        + "and delivery_cycle = 2 and attempt_no = 0 "
+                                        + "and total_attempt_no = 3 "
+                                        + "and from_status = 'DEAD_LETTER' "
+                                        + "and to_status = 'RETRYING'",
+                                Long.class, fixture.outboxId()) == 1L,
+                        "NOTIFICATION_COMPENSATE_AUDIT_MISSING");
+                yield Execution.passedJson();
+            }
+            default -> throw new AssertionError("未知审批通知 ALLOW 入口");
+        };
+    }
+
+    /**
+     * 建立一条与真实 Flowable 实例关联的通知 outbox，并按需建立未读站内信。
+     *
+     * @param recipientRole String，正式通知接收角色
+     * @param withInbox boolean，true 创建 PROCESSED outbox 和未读 inbox；false 创建死信
+     * @return NotificationOutboxFixture，outbox、可选站内信和真实流程对象
+     */
+    private NotificationOutboxFixture insertNotificationFixture(String recipientRole,
+            boolean withInbox)
+    {
+        ProcessFixture process = startStart("workflow_starter");
+        String status = withInbox ? "PROCESSED" : "DEAD_LETTER";
+        int attempts = withInbox ? 1 : 3;
+        GeneratedKeyHolder outboxKey = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection ->
+        {
+            PreparedStatement statement = connection.prepareStatement(
+                    "insert into wf_notification_outbox "
+                            + "(idempotency_key,event_type,channel,recipient_user_id,"
+                            + "process_definition_key,process_instance_id,task_id,"
+                            + "task_definition_key,actor_user_id,title,content,route_path,"
+                            + "status,delivery_cycle,attempt_count,total_attempt_count,"
+                            + "max_attempts,next_attempt_at,last_error_code,last_error_summary,"
+                            + "revision,create_time,processed_time) "
+                            + "values (?,'COPY_CREATED','INBOX',?,?,?,?,?,?,"
+                            + "'RBAC审批通知','RBAC真实审批通知正文',?, ?,1,?,?,3,"
+                            + "date_add(current_timestamp(3), interval 1 day),?,?,0,"
+                            + "current_timestamp(3),current_timestamp(3))",
+                    Statement.RETURN_GENERATED_KEYS);
+            statement.setString(1, randomHash());
+            statement.setLong(2, roleUserIds.get(recipientRole));
+            statement.setString(3, START_KEY);
+            statement.setString(4, process.instanceId());
+            statement.setString(5, process.taskId());
+            statement.setString(6, process.taskDefinitionKey());
+            statement.setString(7,
+                    String.valueOf(roleUserIds.get("workflow_starter")));
+            statement.setString(8,
+                    "/workflow/process/detail?procInsId=" + process.instanceId());
+            statement.setString(9, status);
+            statement.setInt(10, attempts);
+            statement.setInt(11, attempts);
+            statement.setString(12, withInbox ? null : "RBAC_DELIVERY_EXHAUSTED");
+            statement.setString(13, withInbox ? null : "RBAC有界投递已耗尽");
+            return statement;
+        }, outboxKey);
+        long outboxId = outboxKey.getKey().longValue();
+        notificationOutboxIds.add(outboxId);
+
+        Long notificationId = null;
+        if (withInbox)
+        {
+            GeneratedKeyHolder inboxKey = new GeneratedKeyHolder();
+            jdbcTemplate.update(connection ->
+            {
+                PreparedStatement statement = connection.prepareStatement(
+                        "insert into wf_notification_inbox "
+                                + "(outbox_id,recipient_user_id,event_type,title,content,"
+                                + "process_instance_id,task_id,route_path,read_status,"
+                                + "create_time,read_time) values (?,?,'COPY_CREATED',"
+                                + "'RBAC审批通知','RBAC真实审批通知正文',?,?,?,"
+                                + "'UNREAD',current_timestamp(3),null)",
+                        Statement.RETURN_GENERATED_KEYS);
+                statement.setLong(1, outboxId);
+                statement.setLong(2, roleUserIds.get(recipientRole));
+                statement.setString(3, process.instanceId());
+                statement.setString(4, process.taskId());
+                statement.setString(5,
+                        "/workflow/process/detail?procInsId=" + process.instanceId());
+                return statement;
+            }, inboxKey);
+            notificationId = inboxKey.getKey().longValue();
+        }
+        return new NotificationOutboxFixture(outboxId, notificationId, process);
+    }
+
+    /**
+     * 读取用户通知偏好；没有正式行时返回服务公开的默认值与 revision 0。
+     *
+     * @param userId long，正式用户主键
+     * @return NotificationPreferenceSnapshot，是否存在及完整可恢复字段
+     */
+    private NotificationPreferenceSnapshot notificationPreference(long userId)
+    {
+        List<NotificationPreferenceSnapshot> rows = jdbcTemplate.query(
+                "select inbox_enabled,email_enabled,revision,update_time "
+                        + "from wf_notification_preference where user_id = ?",
+                (result, rowNum) -> new NotificationPreferenceSnapshot(true,
+                        result.getBoolean("inbox_enabled"),
+                        result.getBoolean("email_enabled"),
+                        result.getInt("revision"), result.getTimestamp("update_time")),
+                userId);
+        return rows.isEmpty()
+                ? new NotificationPreferenceSnapshot(false, true, true, 0, null)
+                : rows.get(0);
+    }
+
+    /**
+     * 为人工催办临时确保接收人的站内通道开启，调用完成后必须按快照恢复。
+     *
+     * @param userId long，真实活动任务接收用户主键
+     * @return void，无返回值；只修改该用户正式偏好行
+     */
+    private void forceNotificationInboxEnabled(long userId)
+    {
+        int updated = jdbcTemplate.update(
+                "update wf_notification_preference set inbox_enabled = 1 "
+                        + "where user_id = ?", userId);
+        if (updated == 0)
+        {
+            jdbcTemplate.update("insert into wf_notification_preference "
+                            + "(user_id,inbox_enabled,email_enabled,revision,update_time) "
+                            + "values (?,1,1,0,current_timestamp(3))",
+                    userId);
+        }
+    }
+
+    /**
+     * 精确恢复通知偏好写入前的存在性、通道开关、revision 和更新时间。
+     *
+     * @param userId long，正式用户主键
+     * @param snapshot NotificationPreferenceSnapshot，写入前完整快照
+     * @return void，无返回值；不会影响其他用户偏好
+     */
+    private void restoreNotificationPreference(long userId,
+            NotificationPreferenceSnapshot snapshot)
+    {
+        if (!snapshot.exists())
+        {
+            jdbcTemplate.update("delete from wf_notification_preference where user_id = ?",
+                    userId);
+            return;
+        }
+        jdbcTemplate.update("update wf_notification_preference set inbox_enabled = ?,"
+                        + "email_enabled = ?,revision = ?,update_time = ? where user_id = ?",
+                snapshot.inboxEnabled(), snapshot.emailEnabled(), snapshot.revision(),
+                snapshot.updateTime(), userId);
+    }
+
+    /**
+     * 快照当前用户运行前全部通知阅读状态，供 read-all 后无损恢复存量数据。
+     *
+     * @param userId long，正式用户主键
+     * @return List&lt;NotificationReadSnapshot&gt;，按通知主键稳定排序的状态快照
+     */
+    private List<NotificationReadSnapshot> snapshotNotificationReads(long userId)
+    {
+        return jdbcTemplate.query(
+                "select notification_id,read_status,read_time "
+                        + "from wf_notification_inbox where recipient_user_id = ? "
+                        + "order by notification_id",
+                (result, rowNum) -> new NotificationReadSnapshot(
+                        result.getLong("notification_id"),
+                        result.getString("read_status"),
+                        result.getTimestamp("read_time")), userId);
+    }
+
+    /**
+     * 将 read-all 触及的运行前站内信逐行恢复，不修改本 fixture 新建通知。
+     *
+     * @param userId long，正式用户主键
+     * @param snapshots List，运行前通知阅读状态
+     * @return void，无返回值；每次更新同时限定通知主键与所属用户
+     */
+    private void restoreNotificationReads(long userId,
+            List<NotificationReadSnapshot> snapshots)
+    {
+        for (NotificationReadSnapshot snapshot : snapshots)
+        {
+            jdbcTemplate.update("update wf_notification_inbox set read_status = ?,"
+                            + "read_time = ? where notification_id = ? "
+                            + "and recipient_user_id = ?",
+                    snapshot.readStatus(), snapshot.readTime(),
+                    snapshot.notificationId(), userId);
+        }
+    }
+
+    /**
+     * 执行协作入站、出站、审计、补偿与取消真实管理链路。
+     *
+     * @param roleKey String，当前允许角色
+     * @param endpoint Endpoint，协作管理正式入口
+     * @return Execution，真实 HTTP、状态机和审计对账结果
+     * @throws IOException HTTP 读取失败
+     * @throws InterruptedException 请求线程中断
+     */
+    private Execution executeCollaboration(String roleKey, Endpoint endpoint)
+            throws IOException, InterruptedException
+    {
+        CollaborationFixture fixture = createCollaborationFixture();
+        try
+        {
+            return switch (endpoint.handler())
+            {
+                case "inbound" ->
+                {
+                    insertCollaborationInbound(fixture, "RETRYING");
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/collaboration/inbound", null);
+                    JsonNode row = findArrayObject(body.path("data"), "messageId",
+                            fixture.messageId());
+                    requireFixture(row != null
+                                    && "RETRYING".equals(row.path("status").asText()),
+                            "COLLABORATION_INBOUND_ROW_MISSING");
+                    yield Execution.passedJson();
+                }
+                case "outbox" ->
+                {
+                    insertCollaborationOutbox(fixture, "PENDING");
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/collaboration/outbox", null);
+                    JsonNode row = findArrayObject(body.path("data"), "messageId",
+                            fixture.messageId());
+                    requireFixture(row != null
+                                    && "PENDING".equals(row.path("status").asText()),
+                            "COLLABORATION_OUTBOX_ROW_MISSING");
+                    yield Execution.passedJson();
+                }
+                case "audit" ->
+                {
+                    insertCollaborationInbound(fixture, "RETRYING");
+                    insertCollaborationAudit(fixture.messageId(), "INBOUND", "RETRY",
+                            "RECEIVED", "RETRYING", 1);
+                    JsonNode body = callJson(roleKey, endpoint,
+                            "/workflow/collaboration/" + fixture.messageId() + "/audit",
+                            null);
+                    requireFixture(arrayContains(body.path("data"), "messageId",
+                                    fixture.messageId())
+                                    && arrayContains(body.path("data"), "action", "RETRY"),
+                            "COLLABORATION_AUDIT_ROW_MISSING");
+                    yield Execution.passedJson();
+                }
+                case "retryInbound" ->
+                {
+                    insertCollaborationInbound(fixture, "DEAD_LETTER");
+                    insertCollaborationAudit(fixture.messageId(), "INBOUND", "DEAD_LETTER",
+                            "RETRYING", "DEAD_LETTER", 1);
+                    callJson(roleKey, endpoint,
+                            "/workflow/collaboration/inbound/" + fixture.messageId()
+                                    + "/retry", null);
+                    requireFixture(jdbcTemplate.queryForObject(
+                                    "select count(*) from wf_collaboration_message "
+                                            + "where message_id = ? and status = 'DEAD_LETTER' "
+                                            + "and attempt_count = 1 and max_attempts = 1 "
+                                            + "and compensation_count = 1 and revision_no = 2 "
+                                            + "and complete_time is not null",
+                                    Long.class, fixture.messageId()) == 1L,
+                            "COLLABORATION_INBOUND_RETRY_STATE_MISMATCH");
+                    requireFixture(jdbcTemplate.queryForObject(
+                                    "select count(*) from wf_collaboration_message_audit "
+                                            + "where message_id = ? and action = 'COMPENSATE' "
+                                            + "and from_status = 'DEAD_LETTER' "
+                                            + "and to_status = 'RETRYING'",
+                                    Long.class, fixture.messageId()) == 1L,
+                            "COLLABORATION_INBOUND_COMPENSATE_AUDIT_MISSING");
+                    yield Execution.passedJson();
+                }
+                case "retryOutbox" ->
+                {
+                    insertCollaborationOutbox(fixture, "DEAD_LETTER");
+                    insertCollaborationAudit(fixture.messageId(), "OUTBOUND", "DEAD_LETTER",
+                            "DELIVERING", "DEAD_LETTER", 1);
+                    callJson(roleKey, endpoint,
+                            "/workflow/collaboration/outbox/" + fixture.messageId()
+                                    + "/retry", null);
+                    requireFixture(jdbcTemplate.queryForObject(
+                                    "select count(*) from wf_collaboration_outbox "
+                                            + "where message_id = ? and status = 'RETRYING' "
+                                            + "and attempt_count = 0 and compensation_count = 1 "
+                                            + "and revision_no = 1 and complete_time is null",
+                                    Long.class, fixture.messageId()) == 1L,
+                            "COLLABORATION_OUTBOX_RETRY_STATE_MISMATCH");
+                    requireFixture(jdbcTemplate.queryForObject(
+                                    "select count(*) from wf_collaboration_message_audit "
+                                            + "where message_id = ? and direction = 'OUTBOUND' "
+                                            + "and action = 'COMPENSATE' "
+                                            + "and from_status = 'DEAD_LETTER' "
+                                            + "and to_status = 'RETRYING'",
+                                    Long.class, fixture.messageId()) == 1L,
+                            "COLLABORATION_OUTBOX_COMPENSATE_AUDIT_MISSING");
+                    yield Execution.passedJson();
+                }
+                case "cancelOutbox" ->
+                {
+                    insertCollaborationOutbox(fixture, "PENDING");
+                    insertCollaborationAudit(fixture.messageId(), "OUTBOUND", "ENQUEUE",
+                            null, "PENDING", 0);
+                    callJson(roleKey, endpoint,
+                            "/workflow/collaboration/outbox/" + fixture.messageId()
+                                    + "/cancel", null);
+                    requireFixture(jdbcTemplate.queryForObject(
+                                    "select count(*) from wf_collaboration_outbox "
+                                            + "where message_id = ? and status = 'CANCELLED' "
+                                            + "and revision_no = 1 and complete_time is not null",
+                                    Long.class, fixture.messageId()) == 1L,
+                            "COLLABORATION_OUTBOX_CANCEL_STATE_MISMATCH");
+                    requireFixture(jdbcTemplate.queryForObject(
+                                    "select count(*) from wf_collaboration_message_audit "
+                                            + "where message_id = ? and action = 'CANCEL' "
+                                            + "and from_status = 'PENDING' "
+                                            + "and to_status = 'CANCELLED'",
+                                    Long.class, fixture.messageId()) == 1L,
+                            "COLLABORATION_OUTBOX_CANCEL_AUDIT_MISSING");
+                    yield Execution.passedJson();
+                }
+                default -> throw new AssertionError("未知协作管理 ALLOW 入口");
+            };
+        }
+        finally
+        {
+            cleanupCollaborationFixture(fixture);
+        }
+    }
+
+    /**
+     * 为单个协作入口建立唯一凭据、HTTP 端点和严格顺序通道。
+     *
+     * @return CollaborationFixture，全部正式父对象及消息主键
+     */
+    private CollaborationFixture createCollaborationFixture()
+    {
+        String credentialName = uniqueName("协作凭据");
+        String endpointKey = uniqueCode("collab-endpoint");
+        Long credentialId = null;
+        Long endpointId = null;
+        String channelId = null;
+        String correlationKey = uniqueBusinessKey("collaboration");
+        try
+        {
+            credentialId = insertIntegrationCredentialFixture(credentialName);
+            endpointId = insertConnectorFixture(endpointKey);
+            channelId = WorkflowCollaborationChannelService.channelId(
+                    START_KEY, "BUSINESS_KEY", correlationKey);
+            jdbcTemplate.update("insert into wf_collaboration_channel "
+                            + "(channel_id,target_process_definition_key,correlation_type,"
+                            + "correlation_value,outbound_sequence,inbound_sequence,revision_no,"
+                            + "create_time) values (?,?,'BUSINESS_KEY',?,1,0,0,"
+                            + "current_timestamp(3))",
+                    channelId, START_KEY, correlationKey);
+            return new CollaborationFixture(UUID.randomUUID().toString(), channelId,
+                    credentialId, credentialName, endpointId, endpointKey, correlationKey);
+        }
+        catch (RuntimeException | AssertionError exception)
+        {
+            if (channelId != null)
+            {
+                jdbcTemplate.update(
+                        "delete from wf_collaboration_channel where channel_id = ?",
+                        channelId);
+            }
+            cleanupConnectorFixture(endpointId, endpointKey);
+            cleanupIntegrationCredentialFixture(credentialId, credentialName);
+            throw exception;
+        }
+    }
+
+    /**
+     * 插入一条满足正式约束的入站消息，用于列表、审计或死信补偿入口。
+     *
+     * @param fixture CollaborationFixture，消息及父对象
+     * @param status String，RETRYING 或 DEAD_LETTER
+     * @return void，无返回值；状态字段保持完整一致
+     */
+    private void insertCollaborationInbound(CollaborationFixture fixture, String status)
+    {
+        boolean deadLetter = "DEAD_LETTER".equals(status);
+        requireFixture(deadLetter || "RETRYING".equals(status),
+                "COLLABORATION_INBOUND_FIXTURE_STATUS_INVALID");
+        jdbcTemplate.update("insert into wf_collaboration_message "
+                        + "(message_id,credential_id,actor_user_id,channel_id,sequence_no,"
+                        + "message_name,source_process_definition_key,"
+                        + "target_process_definition_key,correlation_key,"
+                        + "target_process_instance_id,variables_json,payload_sha256,status,"
+                        + "attempt_count,max_attempts,compensation_count,revision_no,"
+                        + "last_error_code,last_error_summary,create_time,next_attempt_time,"
+                        + "complete_time) values (?,?,?,?,1,'RBAC_MESSAGE',?,?,?,null,"
+                        + "json_object(),?,?,?, ?,0,0,?,?,current_timestamp(3),"
+                        + "case when ? then null else date_add(current_timestamp(3), interval 1 day) end,"
+                        + "case when ? then current_timestamp(3) else null end)",
+                fixture.messageId(), fixture.credentialId(),
+                String.valueOf(roleUserIds.get("workflow_admin")), fixture.channelId(),
+                START_KEY, START_KEY, fixture.correlationKey(), randomHash(), status,
+                deadLetter ? 1 : 0, deadLetter ? 1 : 3,
+                deadLetter ? "RBAC_TARGET_NOT_FOUND" : null,
+                deadLetter ? "RBAC目标流程不存在" : null, deadLetter, deadLetter);
+    }
+
+    /**
+     * 插入与真实 Flowable 实例、execution 和冻结端点关联的协作 outbox。
+     *
+     * @param fixture CollaborationFixture，消息及父对象
+     * @param status String，PENDING 或 DEAD_LETTER
+     * @return void，无返回值；真实源实例由统一清理集合回收
+     */
+    private void insertCollaborationOutbox(CollaborationFixture fixture, String status)
+    {
+        boolean deadLetter = "DEAD_LETTER".equals(status);
+        requireFixture(deadLetter || "PENDING".equals(status),
+                "COLLABORATION_OUTBOX_FIXTURE_STATUS_INVALID");
+        ProcessFixture process = startStart("workflow_starter");
+        Task task = taskService.createTaskQuery().taskId(process.taskId()).singleResult();
+        requireFixture(task != null && task.getExecutionId() != null,
+                "COLLABORATION_OUTBOX_SOURCE_EXECUTION_MISSING");
+        jdbcTemplate.update("insert into wf_collaboration_outbox "
+                        + "(message_id,channel_id,sequence_no,source_process_definition_key,"
+                        + "source_process_instance_id,source_execution_id,source_element_id,"
+                        + "message_name,target_process_definition_key,correlation_key,"
+                        + "endpoint_id,endpoint_revision,request_path,delivery_config_json,"
+                        + "variables_json,payload_sha256,status,attempt_count,max_attempts,"
+                        + "compensation_count,revision_no,next_attempt_time,last_error_code,"
+                        + "last_error_summary,create_time,complete_time) values (?,?,1,?,?,?,?,"
+                        + "'RBAC_MESSAGE',?,?,?,1,'/api/collaboration',json_object(),"
+                        + "json_object(),?,?,?,1,0,0,"
+                        + "date_add(current_timestamp(3), interval 1 day),?,?,"
+                        + "current_timestamp(3),case when ? then current_timestamp(3) else null end)",
+                fixture.messageId(), fixture.channelId(), START_KEY,
+                process.instanceId(), task.getExecutionId(),
+                process.taskDefinitionKey() + "-send", START_KEY,
+                fixture.correlationKey(), fixture.endpointId(), randomHash(), status,
+                deadLetter ? 1 : 0,
+                deadLetter ? "RBAC_REMOTE_REJECTED" : null,
+                deadLetter ? "RBAC远端拒绝" : null, deadLetter);
+    }
+
+    /**
+     * 写入一条脱敏协作状态审计，供真实审计查询和状态迁移断言使用。
+     *
+     * @param messageId String，入站或出站消息 UUID
+     * @param direction String，INBOUND 或 OUTBOUND
+     * @param action String，稳定动作编码
+     * @param fromStatus String，可空迁移前状态
+     * @param toStatus String，迁移后状态
+     * @param attemptNo int，对应投递次数
+     * @return void，无返回值；正文不含凭据或业务变量
+     */
+    private void insertCollaborationAudit(String messageId, String direction,
+            String action, String fromStatus, String toStatus, int attemptNo)
+    {
+        jdbcTemplate.update("insert into wf_collaboration_message_audit "
+                        + "(message_id,direction,action,actor_type,actor_id,from_status,"
+                        + "to_status,attempt_no,error_code,summary,create_time) "
+                        + "values (?,?,?,'SYSTEM','rbac-fixture',?,?,?,null,"
+                        + "'RBAC真实协作审计',current_timestamp(3))",
+                messageId, direction, action, fromStatus, toStatus, attemptNo);
+    }
+
+    /**
+     * 按消息、通道、端点和凭据外键顺序精确回收单个协作入口数据。
+     *
+     * @param fixture CollaborationFixture，当前入口全部正式对象主键
+     * @return void，无返回值；清理后消息及父对象均必须为零
+     */
+    private void cleanupCollaborationFixture(CollaborationFixture fixture)
+    {
+        jdbcTemplate.update("delete from wf_collaboration_message_audit where message_id = ?",
+                fixture.messageId());
+        jdbcTemplate.update("delete from wf_collaboration_message where message_id = ?",
+                fixture.messageId());
+        jdbcTemplate.update("delete from wf_collaboration_outbox where message_id = ?",
+                fixture.messageId());
+        jdbcTemplate.update("delete from wf_collaboration_channel where channel_id = ?",
+                fixture.channelId());
+        cleanupConnectorFixture(fixture.endpointId(), fixture.endpointKey());
+        cleanupIntegrationCredentialFixture(fixture.credentialId(),
+                fixture.credentialName());
+        requireFixture(jdbcTemplate.queryForObject(
+                        "select count(*) from wf_collaboration_message_audit "
+                                + "where message_id = ?",
+                        Long.class, fixture.messageId()) == 0L,
+                "COLLABORATION_AUDIT_CLEANUP_FAILED");
+        requireFixture(jdbcTemplate.queryForObject(
+                        "select count(*) from wf_collaboration_channel where channel_id = ?",
+                        Long.class, fixture.channelId()) == 0L,
+                "COLLABORATION_CHANNEL_CLEANUP_FAILED");
     }
 
     /**
@@ -1821,6 +3255,24 @@ final class WorkflowRbacAllowFixture
                 assertRowsContain(body, "copyId", String.valueOf(copy.id()));
                 yield Execution.passedJson();
             }
+            case "markCopyRead" ->
+            {
+                ProcessFixture fixture = startStart("workflow_starter");
+                CopyRow copy = insertCopy(fixture, roleKey);
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/process/copy/" + copy.id() + "/read", null);
+                requireFixture(body.path("data").path("copyId").asLong() == copy.id()
+                                && "1".equals(body.path("data").path("readStatus").asText())
+                                && !body.path("data").path("readTime").isMissingNode()
+                                && !body.path("data").path("readTime").isNull(),
+                        "COPY_READ_RESPONSE_STATE_MISMATCH");
+                requireFixture(jdbcTemplate.queryForObject(
+                                "select count(*) from wf_copy where copy_id = ? and user_id = ? "
+                                        + "and read_status = '1' and read_time is not null",
+                                Long.class, copy.id(), roleUserIds.get(roleKey)) == 1L,
+                        "COPY_READ_PERSISTED_STATE_MISMATCH");
+                yield Execution.passedJson();
+            }
             case "startExport" ->
             {
                 HttpResponse<byte[]> response = callBinary(roleKey, endpoint,
@@ -1930,6 +3382,7 @@ final class WorkflowRbacAllowFixture
                                         "reviewAssignee", String.valueOf(roleUserIds.get(
                                                 approvalAssigneeRole(roleKey)))))));
                 String instanceId = body.path("data").path("processInstanceId").asText();
+                trackProcessInstance(instanceId);
                 requireFixture(!instanceId.isBlank(),
                         "ALLOW_FIXTURE_START_INSTANCE_ID_MISSING");
                 HistoricProcessInstance historic = historyService
@@ -2090,8 +3543,13 @@ final class WorkflowRbacAllowFixture
                 MultiFixture fixture = startMulti(roleKey);
                 JsonNode body = callJson(roleKey, endpoint,
                         "/workflow/task/multiInstance/" + fixture.actorTaskId(), null);
-                assertThat(body.path("data").path("members").isArray()).isTrue();
-                assertThat(body.path("data").path("members").size()).isEqualTo(2);
+                JsonNode members = body.path("data").path("members");
+                assertThat(members.isArray()).isTrue();
+                assertThat(members.size()).isOne();
+                assertThat(arrayContains(members, "userId",
+                        String.valueOf(fixture.actorUserId()))).isTrue();
+                assertThat(arrayContains(members, "activeTaskId",
+                        fixture.actorTaskId())).isTrue();
                 assertThat(body.path("data").path("revision").asLong()).isNotNegative();
                 yield Execution.passedJson();
             }
@@ -2107,10 +3565,19 @@ final class WorkflowRbacAllowFixture
                         json(Map.of("taskId", fixture.actorTaskId(), "action", "ADD",
                                 "expectedRevision", revision,
                                 "comment", "RBAC真实加签",
-                        "userIds", List.of(fixture.addUserId()))));
+                                "userIds", List.of(fixture.addUserId()))));
                 assertThat(body.path("data").path("revision").asLong())
                         .isGreaterThan(revision);
-                assertThat(body.path("data").path("members").size()).isEqualTo(3);
+                JsonNode members = body.path("data").path("members");
+                assertThat(members.size()).isEqualTo(2);
+                assertThat(arrayContains(members, "userId",
+                        String.valueOf(fixture.actorUserId()))).isTrue();
+                assertThat(arrayContains(members, "userId",
+                        String.valueOf(fixture.addUserId()))).isTrue();
+                assertThat(taskService.createTaskQuery()
+                        .processInstanceId(fixture.instanceId())
+                        .taskDefinitionKey("multiReview")
+                        .taskAssignee(String.valueOf(fixture.addUserId())).count()).isOne();
                 assertHasComments(fixture.instanceId());
                 yield Execution.passedJson();
             }
@@ -2167,6 +3634,7 @@ final class WorkflowRbacAllowFixture
                                         "reviewAssignee", String.valueOf(
                                                 roleUserIds.get(taskRole))))), true);
                 String instanceId = startBody.path("data").path("processInstanceId").asText();
+                trackProcessInstance(instanceId);
                 Task approvalTask = taskService.createTaskQuery()
                         .processInstanceId(instanceId).active().singleResult();
                 requireFixture(approvalTask != null,
@@ -2392,8 +3860,234 @@ final class WorkflowRbacAllowFixture
     }
 
     /**
-     * 精确清理本类创建的附件、抄送、部署、模型、模型保存幂等记录、表单、分类、
-     * 配额行和操作日志。
+     * 登记本 fixture 成功创建的流程实例，使运行、已结束及历史已删除实例共享同一清理边界。
+     *
+     * @param processInstanceId String，真实 Flowable 流程实例主键
+     * @return void，无返回值；空主键表示实例创建响应不完整并立即失败
+     */
+    private void trackProcessInstance(String processInstanceId)
+    {
+        requireFixture(processInstanceId != null && !processInstanceId.isBlank(),
+                "ALLOW_FIXTURE_PROCESS_INSTANCE_ID_MISSING");
+        processInstanceIds.add(processInstanceId);
+    }
+
+    /**
+     * 从仍存在的运行、历史实例恢复本轮前缀对象，覆盖成功落库但响应断言前中断的创建路径。
+     *
+     * @return void，无返回值；恢复结果逐一进入同一精确实例集合
+     */
+    private void recoverProcessInstanceIds()
+    {
+        List<String> historicIds = jdbcTemplate.queryForList(
+                "select PROC_INST_ID_ from ACT_HI_PROCINST where BUSINESS_KEY_ like ?",
+                String.class, PREFIX + "%");
+        List<String> runtimeIds = jdbcTemplate.queryForList(
+                "select PROC_INST_ID_ from ACT_RU_EXECUTION where ID_ = PROC_INST_ID_ "
+                        + "and BUSINESS_KEY_ like ?",
+                String.class, PREFIX + "%");
+        historicIds.forEach(this::trackProcessInstance);
+        runtimeIds.forEach(this::trackProcessInstance);
+    }
+
+    /**
+     * 按新增审批能力的精确主键和外键顺序回收草稿、事件、SLA、策略与催办数据。
+     *
+     * @return void，无返回值；只删除本 fixture 登记对象并逐类执行零残留断言
+     */
+    private void cleanupExtendedApprovalFixtures()
+    {
+        // 恢复“数据库已提交但 HTTP 响应断言前中断”的新增对象，查询均受本轮稳定前缀或实例集合约束。
+        processDraftIds.addAll(jdbcTemplate.queryForList(
+                "select draft_id from wf_process_draft where business_key like ? "
+                        + "and owner_user_id in (" + placeholders(roleUserIds.size()) + ")",
+                String.class, concatParameters(PREFIX + "%", roleUserIds.values())));
+        bpmnEventCodeIds.addAll(jdbcTemplate.queryForList(
+                "select event_code_id from wf_bpmn_event_code where event_code like ?",
+                Long.class, "RBAC_" + runId.substring(0, 12).toUpperCase() + "_%"));
+        businessCalendarIds.addAll(jdbcTemplate.queryForList(
+                "select calendar_id from wf_business_calendar where calendar_key like ?",
+                Long.class, "RBAC_" + runId.substring(0, 10).toUpperCase() + "_%"));
+        // 恢复范围必须带本轮 runId 标记，避免测试中断后误删共享库中的既有正式策略。
+        List<Object> policyRecoveryParameters = new ArrayList<>();
+        policyRecoveryParameters.add(START_KEY);
+        policyRecoveryParameters.add(notificationPolicyTitleTemplate());
+        policyRecoveryParameters.add(notificationPolicyContentTemplate());
+        roleUserIds.values().stream().map(String::valueOf)
+                .forEach(policyRecoveryParameters::add);
+        notificationPolicyIds.addAll(jdbcTemplate.queryForList(
+                "select policy_id from wf_notification_policy "
+                        + "where scope_type = 'PROCESS' and process_definition_key = ? "
+                        + "and task_definition_key is null "
+                        + "and event_type in ('COPY_CREATED','PROCESS_COMPLETED') "
+                        + "and recipient_rules = 'INITIATOR' and channels = 'INBOX' "
+                        + "and title_template = ? and content_template = ? "
+                        + "and create_by in (" + placeholders(roleUserIds.size()) + ")",
+                Long.class, policyRecoveryParameters.toArray()));
+        if (!processInstanceIds.isEmpty())
+        {
+            Object[] instanceIds = processInstanceIds.toArray();
+            String instancePlaceholders = placeholders(processInstanceIds.size());
+            bpmnEventAuditIds.addAll(jdbcTemplate.queryForList(
+                    "select audit_id from wf_bpmn_event_audit where process_instance_id in ("
+                            + instancePlaceholders + ")",
+                    Long.class, instanceIds));
+            taskSlaExecutionIds.addAll(jdbcTemplate.queryForList(
+                    "select sla_execution_id from wf_task_sla_execution "
+                            + "where process_instance_id in (" + instancePlaceholders + ")",
+                    Long.class, instanceIds));
+        }
+
+        if (!processInstanceIds.isEmpty())
+        {
+            jdbcTemplate.update("delete from wf_notification_urge_audit "
+                            + "where process_instance_id in ("
+                            + placeholders(processInstanceIds.size()) + ")",
+                    processInstanceIds.toArray());
+        }
+        if (!notificationPolicyIds.isEmpty())
+        {
+            jdbcTemplate.update("delete from wf_notification_policy where policy_id in ("
+                            + placeholders(notificationPolicyIds.size()) + ")",
+                    notificationPolicyIds.toArray());
+        }
+        if (!bpmnEventAuditIds.isEmpty())
+        {
+            String auditPlaceholders = placeholders(bpmnEventAuditIds.size());
+            Object[] auditIds = bpmnEventAuditIds.toArray();
+            jdbcTemplate.update("delete from wf_bpmn_event_notification "
+                    + "where audit_id in (" + auditPlaceholders + ")", auditIds);
+            jdbcTemplate.update("delete from wf_bpmn_event_audit where audit_id in ("
+                    + auditPlaceholders + ")", auditIds);
+        }
+        if (!bpmnEventCodeIds.isEmpty())
+        {
+            jdbcTemplate.update("delete from wf_bpmn_event_code where event_code_id in ("
+                            + placeholders(bpmnEventCodeIds.size()) + ")",
+                    bpmnEventCodeIds.toArray());
+        }
+        if (!taskSlaExecutionIds.isEmpty())
+        {
+            String executionPlaceholders = placeholders(taskSlaExecutionIds.size());
+            Object[] executionIds = taskSlaExecutionIds.toArray();
+            jdbcTemplate.update("delete from wf_task_sla_notification where audit_id in ("
+                    + "select audit_id from wf_task_sla_audit where sla_execution_id in ("
+                    + executionPlaceholders + "))", executionIds);
+            jdbcTemplate.update("delete from wf_task_sla_audit where sla_execution_id in ("
+                    + executionPlaceholders + ")", executionIds);
+            jdbcTemplate.update("delete from wf_task_sla_execution where sla_execution_id in ("
+                    + executionPlaceholders + ")", executionIds);
+        }
+        if (!businessCalendarIds.isEmpty())
+        {
+            String calendarPlaceholders = placeholders(businessCalendarIds.size());
+            Object[] calendarIds = businessCalendarIds.toArray();
+            jdbcTemplate.update("delete from wf_business_calendar_day where calendar_id in ("
+                    + calendarPlaceholders + ")", calendarIds);
+            jdbcTemplate.update("delete from wf_business_calendar where calendar_id in ("
+                    + calendarPlaceholders + ")", calendarIds);
+        }
+        if (!processDraftIds.isEmpty())
+        {
+            String draftPlaceholders = placeholders(processDraftIds.size());
+            Object[] draftIds = processDraftIds.toArray();
+            jdbcTemplate.update("delete from wf_process_draft_audit where draft_id in ("
+                    + draftPlaceholders + ")", draftIds);
+            jdbcTemplate.update("delete from wf_process_draft where draft_id in ("
+                    + draftPlaceholders + ")", draftIds);
+        }
+
+        assertTrackedRowsRemoved("wf_notification_policy", "policy_id",
+                notificationPolicyIds, "ALLOW fixture 不得残留审批通知策略");
+        assertTrackedRowsRemoved("wf_bpmn_event_audit", "audit_id",
+                bpmnEventAuditIds, "ALLOW fixture 不得残留 BPMN 事件审计");
+        assertTrackedRowsRemoved("wf_bpmn_event_code", "event_code_id",
+                bpmnEventCodeIds, "ALLOW fixture 不得残留 BPMN 事件目录");
+        assertTrackedRowsRemoved("wf_task_sla_execution", "sla_execution_id",
+                taskSlaExecutionIds, "ALLOW fixture 不得残留 SLA 执行");
+        assertTrackedRowsRemoved("wf_business_calendar", "calendar_id",
+                businessCalendarIds, "ALLOW fixture 不得残留 SLA 日历");
+        assertTrackedRowsRemoved("wf_process_draft", "draft_id",
+                processDraftIds, "ALLOW fixture 不得残留申请草稿");
+        if (!processInstanceIds.isEmpty())
+        {
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_notification_urge_audit "
+                            + "where process_instance_id in ("
+                            + placeholders(processInstanceIds.size()) + ")",
+                    Long.class, processInstanceIds.toArray()))
+                    .as("ALLOW fixture 不得残留人工催办审计").isZero();
+        }
+    }
+
+    /**
+     * 对一组已登记正式主键执行通用零残留断言。
+     *
+     * @param table String，固定测试代码内正式表名
+     * @param column String，固定测试代码内主键列名
+     * @param ids Set，当前 fixture 精确主键集合
+     * @param description String，断言失败时的中文业务描述
+     * @return void，无返回值；空集合不执行查询
+     */
+    private void assertTrackedRowsRemoved(String table, String column,
+            Set<?> ids, String description)
+    {
+        if (ids.isEmpty())
+        {
+            return;
+        }
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from " + table + " where " + column + " in ("
+                        + placeholders(ids.size()) + ")",
+                Long.class, ids.toArray())).as(description).isZero();
+    }
+
+    /**
+     * 按本 fixture 实例反查通知 outbox，并依照外键顺序精确删除审计、站内信和 outbox。
+     *
+     * @return void，无返回值；不会按时间或全表删除，任一已跟踪通知事实残留即失败
+     */
+    private void cleanupTrackedNotifications()
+    {
+        if (processInstanceIds.isEmpty())
+        {
+            return;
+        }
+        notificationOutboxIds.addAll(jdbcTemplate.queryForList(
+                "select outbox_id from wf_notification_outbox where process_instance_id in ("
+                        + placeholders(processInstanceIds.size()) + ") order by outbox_id",
+                Long.class, processInstanceIds.toArray()));
+        if (notificationOutboxIds.isEmpty())
+        {
+            return;
+        }
+
+        String outboxPlaceholders = placeholders(notificationOutboxIds.size());
+        Object[] outboxIds = notificationOutboxIds.toArray();
+        // 三步均限定已跟踪 outbox 主键；子表先于父表，保留验收库预存的取消通知及其审计。
+        jdbcTemplate.update("delete from wf_notification_delivery_audit where outbox_id in ("
+                + outboxPlaceholders + ")", outboxIds);
+        jdbcTemplate.update("delete from wf_notification_inbox where outbox_id in ("
+                + outboxPlaceholders + ")", outboxIds);
+        jdbcTemplate.update("delete from wf_notification_outbox where outbox_id in ("
+                + outboxPlaceholders + ")", outboxIds);
+
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_notification_delivery_audit where outbox_id in ("
+                        + outboxPlaceholders + ")",
+                Long.class, outboxIds)).as("ALLOW fixture 不得残留通知投递审计").isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_notification_inbox where outbox_id in ("
+                        + outboxPlaceholders + ")",
+                Long.class, outboxIds)).as("ALLOW fixture 不得残留通知站内信").isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_notification_outbox where outbox_id in ("
+                        + outboxPlaceholders + ")",
+                Long.class, outboxIds)).as("ALLOW fixture 不得残留通知 outbox").isZero();
+    }
+
+    /**
+     * 精确清理本类创建的审批扩展数据、附件、抄送、部署、模型、表单、配额和日志。
      *
      * @return void，无返回值；清理后仍有任一精确对象残留即失败
      */
@@ -2403,6 +4097,11 @@ final class WorkflowRbacAllowFixture
         {
             return;
         }
+
+        // 先恢复成功创建但响应断言前中断的实例，再按实例精确清理通知；部署删除后无法可靠恢复已删历史实例。
+        recoverProcessInstanceIds();
+        cleanupExtendedApprovalFixtures();
+        cleanupTrackedNotifications();
 
         // 即使请求已落库但后续响应或审计断言失败，也按测试专用文件名前缀和五角色边界恢复清理清单。
         List<Map<String, Object>> recoverableAttachments = jdbcTemplate.queryForList(
@@ -2436,6 +4135,11 @@ final class WorkflowRbacAllowFixture
         deployments.sort(Comparator.comparing(id -> id.equals(mainDeploymentId) ? 1 : 0));
         for (String deploymentId : deployments)
         {
+            // 参与者解析审计及规则快照不受 Flowable 部署表外键管理，必须按本 fixture 部署主键先行清理。
+            jdbcTemplate.update("delete from wf_participant_resolution_audit where deploy_id = ?",
+                    deploymentId);
+            jdbcTemplate.update("delete from wf_deploy_participant_rule where deploy_id = ?",
+                    deploymentId);
             jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?",
                     deploymentId);
             if (repositoryService.createDeploymentQuery()
@@ -2504,6 +4208,30 @@ final class WorkflowRbacAllowFixture
                     "select count(*) from wf_model_save_idempotency where request_id in ("
                             + placeholders(modelSaveRequestIds.size()) + ")",
                     Long.class, modelSaveRequestIds.toArray())).isZero();
+        }
+        if (!processInstanceIds.isEmpty())
+        {
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_notification_outbox where process_instance_id in ("
+                            + placeholders(processInstanceIds.size()) + ")",
+                    Long.class, processInstanceIds.toArray()))
+                    .as("ALLOW fixture 流程实例不得残留通知 outbox")
+                    .isZero();
+        }
+        if (!deploymentIds.isEmpty())
+        {
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_participant_resolution_audit where deploy_id in ("
+                            + placeholders(deploymentIds.size()) + ")",
+                    Long.class, deploymentIds.toArray()))
+                    .as("ALLOW fixture 部署不得残留参与者解析审计")
+                    .isZero();
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_deploy_participant_rule where deploy_id in ("
+                            + placeholders(deploymentIds.size()) + ")",
+                    Long.class, deploymentIds.toArray()))
+                    .as("ALLOW fixture 部署不得残留参与者规则快照")
+                    .isZero();
         }
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from sys_oper_log where oper_id > ? "
@@ -2724,6 +4452,7 @@ final class WorkflowRbacAllowFixture
         {
             ProcessInstance instance = runtimeService.startProcessInstanceById(
                     definition(processKey).getId(), businessKey, variables);
+            trackProcessInstance(instance.getId());
             Task task = taskService.createTaskQuery()
                     .processInstanceId(instance.getId()).active().singleResult();
             assertThat(task).isNotNull();
@@ -2791,10 +4520,10 @@ final class WorkflowRbacAllowFixture
     }
 
     /**
-     * 完成多实例前置任务，使用真实 HTTP 写入 nextUserIds 后返回当前角色的会签任务。
+     * 完成多实例前置任务，使用真实 HTTP 写入单个初始成员并返回当前角色的会签任务。
      *
      * @param actorRole String，前置任务及一个会签实例的办理角色
-     * @return MultiFixture，活动会签任务和第三个具备正式审批资格的用户
+     * @return MultiFixture，活动会签任务和另一名具备正式审批资格的已登记用户
      * @throws IOException HTTP 读取失败
      * @throws InterruptedException 请求线程中断
      */
@@ -2804,20 +4533,19 @@ final class WorkflowRbacAllowFixture
         ProcessFixture source = startProcess(MULTI_KEY, "workflow_starter",
                 Map.of("sourceAssignee", String.valueOf(roleUserIds.get(actorRole)),
                         "note", "RBAC变量", "processStatus", "running"));
-        // 动态多实例的初始成员必须同时具备真实审批权限，不能复用仅用于对象授权的普通辅助角色。
-        String peerRole = approvalPeerRole(actorRole);
         Long actorUserId = roleUserIds.get(actorRole);
-        Long peerUserId = roleUserIds.get(peerRole);
-        Long addUserId = findAdditionalApprovalUser(actorUserId, peerUserId);
+        // RBAC 环境只保证两名审批角色；先建立单成员多实例，再用另一名审批角色验证真实加签。
+        Long addUserId = roleUserIds.get(approvalPeerRole(actorRole));
         callJsonRaw(actorRole, "/workflow/task/complete", "POST",
                 completeBody(source.taskId(), "RBAC进入会签", List.of(),
-                        List.of(actorUserId, peerUserId)), true);
+                        List.of(actorUserId)), true);
         Task actorTask = taskService.createTaskQuery()
                 .processInstanceId(source.instanceId())
                 .taskDefinitionKey("multiReview")
                 .taskAssignee(String.valueOf(actorUserId)).singleResult();
         assertThat(actorTask).isNotNull();
-        return new MultiFixture(source.instanceId(), actorTask.getId(), addUserId);
+        return new MultiFixture(source.instanceId(), actorTask.getId(), actorUserId,
+                addUserId);
     }
 
     /**
@@ -2834,33 +4562,6 @@ final class WorkflowRbacAllowFixture
             case "workflow_approver" -> "workflow_admin";
             default -> throw new AssertionError("动态多实例 ALLOW fixture 仅支持正式审批角色");
         };
-    }
-
-    /**
-     * 从真实用户、角色和菜单关系中选择第三名已登记审批用户。
-     *
-     * @param actorUserId Long，当前会签办理人用户主键
-     * @param peerUserId Long，另一名初始会签办理人用户主键
-     * @return Long，排除两名初始成员后的启用且具审批权限用户主键
-     */
-    private Long findAdditionalApprovalUser(Long actorUserId, Long peerUserId)
-    {
-        // 直接查询正式主数据关系，保证加签 fixture 与生产资格校验使用同一权限事实来源。
-        List<Long> candidates = jdbcTemplate.queryForList(
-                "select distinct u.user_id from sys_user u "
-                        + "inner join sys_user_role ur on ur.user_id = u.user_id "
-                        + "inner join sys_role r on r.role_id = ur.role_id "
-                        + "inner join sys_role_menu rm on rm.role_id = r.role_id "
-                        + "inner join sys_menu m on m.menu_id = rm.menu_id "
-                        + "where u.status = '0' and u.del_flag = '0' "
-                        + "and r.status = '0' and r.del_flag = '0' and m.status = '0' "
-                        + "and m.perms = 'workflow:process:approval' "
-                        + "and u.user_id not in (?, ?) order by u.user_id limit 1",
-                Long.class, actorUserId, peerUserId);
-        assertThat(candidates)
-                .as("动态加签必须复用已登记且具真实审批资格的第三名用户")
-                .singleElement();
-        return candidates.get(0);
     }
 
     /**
@@ -3475,6 +5176,26 @@ final class WorkflowRbacAllowFixture
     }
 
     /**
+     * 生成带本轮唯一标记的通知策略标题模板，供创建、恢复和清理使用同一边界。
+     *
+     * @return String，包含完整 runId 和正式流程名称变量的标题模板
+     */
+    private String notificationPolicyTitleTemplate()
+    {
+        return "RBAC通知[" + runId + "]：{{processName}}";
+    }
+
+    /**
+     * 生成带本轮唯一标记的通知策略正文模板，防止恢复查询命中既有正式策略。
+     *
+     * @return String，包含完整 runId 和正式流程名称变量的正文模板
+     */
+    private String notificationPolicyContentTemplate()
+    {
+        return "RBAC流程[" + runId + "]{{processName}}产生真实通知。";
+    }
+
+    /**
      * 为单个角色和入口生成可逐字节辨识的真实附件正文。
      *
      * @param roleKey String，五角色 key
@@ -3644,6 +5365,41 @@ final class WorkflowRbacAllowFixture
             }
         }
         return false;
+    }
+
+    /**
+     * 在 JSON 数组中返回字段文本完全匹配的首个业务对象。
+     *
+     * @param array JsonNode，待检索的正式接口数组
+     * @param field String，对象字段名
+     * @param expected String，期望字段文本
+     * @return JsonNode，首个匹配对象；数组无效或不存在匹配项时返回 null
+     */
+    private JsonNode findArrayObject(JsonNode array, String field, String expected)
+    {
+        if (!array.isArray())
+        {
+            return null;
+        }
+        for (JsonNode element : array)
+        {
+            if (expected.equals(element.path(field).asText()))
+            {
+                return element;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 生成满足正式 SHA-256 字段格式约束的随机 64 位小写十六进制值。
+     *
+     * @return String，长度为 64 且不含分隔符的小写十六进制文本
+     */
+    private String randomHash()
+    {
+        return UUID.randomUUID().toString().replace("-", "")
+                + UUID.randomUUID().toString().replace("-", "");
     }
 
     /**
@@ -4012,6 +5768,115 @@ final class WorkflowRbacAllowFixture
     }
 
     /**
+     * 申请草稿正式数据 fixture。
+     *
+     * @param id String，wf_process_draft UUID 主键
+     * @param businessKey String，草稿当前业务主键
+     */
+    private record DraftFixture(String id, String businessKey)
+    {
+    }
+
+    /**
+     * BPMN 事件编码正式目录 fixture。
+     *
+     * @param id long，wf_bpmn_event_code 主键
+     * @param code String，唯一事件编码
+     * @param name String，用户可见事件名称
+     */
+    private record BpmnEventCodeFixture(long id, String code, String name)
+    {
+    }
+
+    /**
+     * BPMN 事件运行审计与本人通知 fixture。
+     *
+     * @param auditId long，wf_bpmn_event_audit 主键
+     * @param notificationId Long，可空 wf_bpmn_event_notification 主键
+     */
+    private record BpmnEventRuntimeFixture(long auditId, Long notificationId)
+    {
+    }
+
+    /**
+     * SLA 业务日历正式数据 fixture。
+     *
+     * @param id long，wf_business_calendar 主键
+     * @param key String，发布后不可变日历编码
+     */
+    private record BusinessCalendarFixture(long id, String key)
+    {
+    }
+
+    /**
+     * SLA 运行执行、审计和本人通知 fixture。
+     *
+     * @param executionId long，wf_task_sla_execution 主键
+     * @param auditId long，wf_task_sla_audit 主键
+     * @param notificationId Long，可空 wf_task_sla_notification 主键
+     */
+    private record TaskSlaRuntimeFixture(long executionId, long auditId,
+            Long notificationId)
+    {
+    }
+
+    /**
+     * 普通审批通知 outbox 与可选站内信 fixture。
+     *
+     * @param outboxId long，wf_notification_outbox 主键
+     * @param notificationId Long，可空 wf_notification_inbox 主键
+     * @param process ProcessFixture，通知关联的真实 Flowable 实例
+     */
+    private record NotificationOutboxFixture(long outboxId, Long notificationId,
+            ProcessFixture process)
+    {
+    }
+
+    /**
+     * 用户通知偏好运行前完整快照。
+     *
+     * @param exists boolean，运行前是否已有正式偏好行
+     * @param inboxEnabled boolean，站内通道开关
+     * @param emailEnabled boolean，邮件通道开关
+     * @param revision int，乐观锁版本
+     * @param updateTime Timestamp，运行前更新时间；不存在时为空
+     */
+    private record NotificationPreferenceSnapshot(boolean exists,
+            boolean inboxEnabled, boolean emailEnabled, int revision,
+            Timestamp updateTime)
+    {
+    }
+
+    /**
+     * 单条站内通知运行前阅读状态快照。
+     *
+     * @param notificationId long，wf_notification_inbox 主键
+     * @param readStatus String，UNREAD 或 READ
+     * @param readTime Timestamp，首次阅读时间；未读时为空
+     */
+    private record NotificationReadSnapshot(long notificationId,
+            String readStatus, Timestamp readTime)
+    {
+    }
+
+    /**
+     * 单个协作管理入口的正式父对象与消息主键。
+     *
+     * @param messageId String，入站或出站消息 UUID
+     * @param channelId String，严格顺序通道 SHA-256 主键
+     * @param credentialId Long，集成凭据主键
+     * @param credentialName String，唯一凭据名称
+     * @param endpointId Long，冻结 HTTP 端点主键
+     * @param endpointKey String，唯一端点编码
+     * @param correlationKey String，目标流程业务关联键
+     */
+    private record CollaborationFixture(String messageId, String channelId,
+            Long credentialId, String credentialName, Long endpointId,
+            String endpointKey, String correlationKey)
+    {
+    }
+
+    /**
      * Flowable 模型 fixture。
      *
      * @param id String，模型主键
@@ -4053,9 +5918,11 @@ final class WorkflowRbacAllowFixture
      *
      * @param instanceId String，流程实例主键
      * @param actorTaskId String，当前操作角色的活动会签任务主键
-     * @param addUserId Long，动态加签的第三名正式审批用户主键
+     * @param actorUserId Long，初始会签成员的正式用户主键
+     * @param addUserId Long，动态加签的另一名正式审批用户主键
      */
-    private record MultiFixture(String instanceId, String actorTaskId, Long addUserId)
+    private record MultiFixture(String instanceId, String actorTaskId, Long actorUserId,
+            Long addUserId)
     {
     }
 

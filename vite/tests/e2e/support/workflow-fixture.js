@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { expect } from '@playwright/test'
 import { loginThroughUi, logoutThroughUi } from '../fixtures/workflow.js'
 import { loadWorkflowAccounts } from './environment.js'
@@ -345,13 +346,85 @@ export async function findStartableWorkflowDefinition(page, processKey) {
 }
 
 /**
+ * 判断浏览器响应是否为申请草稿正式提交接口。
+ * @param {import('@playwright/test').Response} response 浏览器捕获的真实响应。
+ * @returns {boolean} POST 且路径匹配唯一草稿 UUID 的 submit 接口时返回 true。
+ */
+function matchesDraftSubmitResponse(response) {
+  const pathname = new URL(response.url()).pathname
+  return response.request().method() === 'POST'
+    && /\/workflow\/process\/draft\/[0-9a-f-]{36}\/submit$/i.test(pathname)
+}
+
+/**
+ * 通过当前真实发起页执行一次正式提交，并登记草稿与流程实例供 finally 精确清理。
+ * @param {import('@playwright/test').Page} page 已填写完成的真实发起页面。
+ * @param {{processInstanceIds: string[], draftFixtures: Array<{draftId: string, processInstanceId: string}>}} resources 本用例正式资源登记簿。
+ * @param {{doubleClick?: boolean}} options 是否模拟同步双击以验证写互斥。
+ * @returns {Promise<string>} 草稿提交事务创建的唯一 Flowable 流程实例主键。
+ */
+export async function submitWorkflowStartPage(page, resources, options = {}) {
+  if (!Array.isArray(resources?.processInstanceIds) || !Array.isArray(resources?.draftFixtures)) {
+    throw new Error('流程发起前必须提供实例与草稿清理登记簿')
+  }
+  const createEndpoint = '/workflow/process/draft'
+  let createRequestCount = 0
+  let submitRequestCount = 0
+  const countRequest = request => {
+    const pathname = new URL(request.url()).pathname
+    if (request.method() !== 'POST') return
+    if (pathname.endsWith(createEndpoint)) createRequestCount += 1
+    if (/\/workflow\/process\/draft\/[0-9a-f-]{36}\/submit$/i.test(pathname)) submitRequestCount += 1
+  }
+  page.on('request', countRequest)
+  try {
+    const createPromise = page.waitForResponse(response => matchesEndpoint(response, createEndpoint, 'POST'))
+    const submitPromise = page.waitForResponse(matchesDraftSubmitResponse)
+    const submit = page.getByRole('button', { name: '正式提交', exact: true })
+    if (options.doubleClick) await submit.evaluate(button => { button.click(); button.click() })
+    else await submit.click()
+
+    const created = await expectAjaxSuccess(await createPromise, createEndpoint)
+    const draftId = String(created.data?.draftId || created.data?.id || '')
+    expect(draftId, '首次正式提交必须先返回可追踪草稿 UUID').toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+    const draftFixture = { draftId, processInstanceId: '' }
+    resources.draftFixtures.push(draftFixture)
+
+    const submitResponse = await submitPromise
+    const submitPath = new URL(submitResponse.url()).pathname
+    const submittedDraftId = decodeURIComponent(submitPath.split('/').at(-2) || '')
+    expect(submittedDraftId, '草稿提交路径必须与刚创建的 UUID 一致').toBe(draftId)
+    const payload = await expectAjaxSuccess(submitResponse, `/workflow/process/draft/${draftId}/submit`)
+    const processInstanceId = String(payload.data?.id
+      || payload.data?.processInstanceId
+      || payload.data?.procInsId
+      || payload.data?.processInstance?.id
+      || payload.data?.processInstance?.processInstanceId
+      || '')
+    draftFixture.processInstanceId = processInstanceId
+    if (processInstanceId) resources.processInstanceIds.push(processInstanceId)
+    expect(processInstanceId, '草稿提交响应必须返回正式实例主键').not.toBe('')
+
+    if (options.doubleClick) {
+      await page.waitForTimeout(500)
+      expect(createRequestCount, '同步双击只能创建一个正式申请草稿').toBe(1)
+      expect(submitRequestCount, '同步双击只能提交一次正式申请草稿').toBe(1)
+    }
+    return processInstanceId
+  } finally {
+    page.off('request', countRequest)
+  }
+}
+
+/**
  * 通过真实发起页面提交部署表单并取得正式流程实例主键。
  * @param {import('@playwright/test').Page} page 流程发起人页面。
  * @param {{definitionId: string, deploymentId: string}} definition 已部署定义关系。
  * @param {string} formName 页面必须展示的部署表单名称。
  * @param {string} businessKey 本场景唯一业务主键。
  * @param {string} subject 本场景申请主题。
- * @param {string[]} processInstanceRegistry finally 清理使用的正式实例登记簿。
+ * @param {{processInstanceIds: string[], draftFixtures: Array<{draftId: string, processInstanceId: string}>}} resources finally 清理使用的正式资源登记簿。
  * @returns {Promise<string>} 正式流程实例主键。
  */
 export async function startWorkflowThroughUi(
@@ -360,28 +433,127 @@ export async function startWorkflowThroughUi(
   formName,
   businessKey,
   subject,
-  processInstanceRegistry
+  resources
 ) {
-  if (!Array.isArray(processInstanceRegistry)) throw new Error('流程发起前必须提供正式实例登记簿')
   await page.goto(`/workflow/process-start/${encodeURIComponent(definition.definitionId)}?deploymentId=${encodeURIComponent(definition.deploymentId)}`)
   await expect(page.getByRole('heading', { name: formName })).toBeVisible()
   await page.getByPlaceholder('可选').fill(businessKey)
   await page.getByPlaceholder('请输入申请主题').fill(subject)
-  const endpoint = `/workflow/process/start/${encodeURIComponent(definition.definitionId)}`
-  const responsePromise = page.waitForResponse(response => matchesEndpoint(response, endpoint, 'POST'))
-  await page.getByRole('button', { name: '提交申请', exact: true }).click()
-  const payload = await expectAjaxSuccess(await responsePromise, endpoint)
-  const processInstanceId = String(payload.data?.id
-    || payload.data?.processInstanceId
-    || payload.data?.procInsId
-    || '')
-  // 实例 POST 返回主键后立即登记；页面跳转或主键一致性断言失败也不得遗留运行实例。
-  if (processInstanceId) processInstanceRegistry.push(processInstanceId)
-  expect(processInstanceId, '流程发起响应必须返回正式实例主键').not.toBe('')
+  const processInstanceId = await submitWorkflowStartPage(page, resources)
   await expect(page).toHaveURL(/\/workflow\/process-detail\/[^/?]+/)
   const routedProcessInstanceId = decodeURIComponent(new URL(page.url()).pathname.split('/').pop())
   expect(routedProcessInstanceId, '详情路由实例主键必须与发起响应一致').toBe(processInstanceId)
   return processInstanceId
+}
+
+/**
+ * 在唯一白名单隔离库执行固定草稿清理 SQL，数据库凭据只通过子进程环境传递。
+ * @param {string} sql 仅包含固定表名与已校验主键的 SQL。
+ * @returns {string[]} mysql 返回的非敏感结果行。
+ */
+function runWorkflowFixtureMysql(sql) {
+  const jdbcUrl = String(process.env.FLOWABLE_RBAC_JDBC_URL || '')
+  const connection = /^jdbc:mysql:\/\/(127\.0\.0\.1|localhost):(\d+)\/([^?]+)(?:\?.*)?$/.exec(jdbcUrl)
+  if (!connection) throw new Error('流程 E2E 清理 JDBC 地址不合法')
+  const database = connection[3]
+  const disposableSchema = String(process.env.FLOWABLE_E2E_DISPOSABLE_SCHEMA || '').trim()
+  const sharedAllowed = database === 'ry_vue_codex_flowable_it'
+  const disposableAllowed = /^ry_vue_codex_fieldperm_[a-z0-9_]+$/.test(database)
+    && database === disposableSchema
+  if (!sharedAllowed && !disposableAllowed) {
+    throw new Error('流程 E2E 清理数据库不在唯一白名单 schema')
+  }
+  const username = String(process.env.FLOWABLE_RBAC_DB_USERNAME || '').trim()
+  const password = String(process.env.FLOWABLE_RBAC_DB_PASSWORD || '')
+  if (!/^[A-Za-z0-9_]{1,32}$/.test(username) || !password) {
+    throw new Error('流程 E2E 清理缺少数据库运行账号')
+  }
+  const command = String(process.env.FLOWABLE_E2E_MYSQL_COMMAND || 'mysql').trim()
+  const result = spawnSync(command, [
+    `--host=${connection[1]}`,
+    `--port=${connection[2]}`,
+    `--user=${username}`,
+    `--database=${database}`,
+    '--default-character-set=utf8mb4',
+    '--batch',
+    '--skip-column-names'
+  ], {
+    env: { ...process.env, MYSQL_PWD: password },
+    input: sql,
+    encoding: 'utf8',
+    shell: false,
+    windowsHide: true
+  })
+  if (result.status !== 0) throw new Error('流程 E2E 草稿清理 SQL 执行失败')
+  return String(result.stdout || '').split(/\r?\n/).filter(Boolean)
+}
+
+/**
+ * 从当前 E2E 隔离库读取唯一运行时布尔变量，证明受控扩展结果已由 Flowable 正式持久化。
+ * @param {string} processInstanceId Flowable 流程实例主键。
+ * @param {string} variableName 需要核验的流程变量名。
+ * @returns {{count:number,type:string,longValue:number}} 唯一变量行数、Flowable 类型和布尔数值投影。
+ */
+export function readWorkflowRuntimeBooleanVariable(processInstanceId, variableName) {
+  const instance = String(processInstanceId || '')
+  const name = String(variableName || '')
+  if (!/^[A-Za-z0-9:_-]{1,64}$/.test(instance)
+      || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name)) {
+    throw new Error('流程 E2E 变量证据主键或变量名不合法')
+  }
+  const rows = runWorkflowFixtureMysql(
+    `SELECT COUNT(*), COALESCE(MAX(TYPE_), ''), COALESCE(MAX(LONG_), -1) `
+      + `FROM ACT_RU_VARIABLE WHERE PROC_INST_ID_='${instance}' AND NAME_='${name}';\n`)
+  if (rows.length !== 1) throw new Error('流程 E2E 运行变量证据行数不唯一')
+  const [countText, type, longValueText] = rows[0].split('\t')
+  const count = Number(countText)
+  const longValue = Number(longValueText)
+  if (!Number.isInteger(count) || !Number.isInteger(longValue)) {
+    throw new Error('流程 E2E 运行变量证据格式不合法')
+  }
+  return { count, type, longValue }
+}
+
+/**
+ * 精确删除本轮发起页创建的草稿和不可变审计，解除流程历史与部署清理前的正式引用。
+ * @param {{draftId: string, processInstanceId?: string}} fixture 草稿 UUID 与可选已提交实例关系。
+ * @returns {Promise<void>} 草稿状态、实例关系和删除计数全部一致后结束。
+ */
+async function purgeWorkflowDraftFixture(fixture) {
+  const draftId = String(fixture?.draftId || '')
+  const processInstanceId = String(fixture?.processInstanceId || '')
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(draftId)
+      || (processInstanceId && !/^[A-Za-z0-9:_-]{1,64}$/.test(processInstanceId))) {
+    throw new Error('流程 E2E 草稿清理主键不合法')
+  }
+  const draftLiteral = draftId.replaceAll("'", "''")
+  const instanceLiteral = processInstanceId.replaceAll("'", "''")
+  const rows = runWorkflowFixtureMysql(
+    `SELECT draft_status, COALESCE(submitted_process_instance_id, '') FROM wf_process_draft `
+      + `WHERE draft_id='${draftLiteral}';\n`
+      + `SELECT COUNT(*) FROM wf_process_draft_audit WHERE draft_id='${draftLiteral}';\n`)
+  if (rows.length !== 2) throw new Error('流程 E2E 草稿记录或审计计数不唯一')
+  const [status, storedInstanceId] = rows[0].split('\t')
+  const auditCount = Number(rows[1])
+  const submitted = status === 'SUBMITTED'
+  if (!['ACTIVE', 'DELETED', 'SUBMITTED'].includes(status)
+      || (submitted ? (!processInstanceId || storedInstanceId !== processInstanceId) : storedInstanceId)
+      || !Number.isInteger(auditCount) || auditCount < 1) {
+    throw new Error('流程 E2E 草稿记录不满足精确清理门禁')
+  }
+  const statusPredicate = submitted
+    ? `draft_status='SUBMITTED' AND submitted_process_instance_id='${instanceLiteral}'`
+    : `draft_status IN ('ACTIVE','DELETED') AND submitted_process_instance_id IS NULL`
+  const deleted = runWorkflowFixtureMysql(
+    `START TRANSACTION;\n`
+      + `DELETE FROM wf_process_draft_audit WHERE draft_id='${draftLiteral}';\n`
+      + `SELECT ROW_COUNT();\n`
+      + `DELETE FROM wf_process_draft WHERE draft_id='${draftLiteral}' AND ${statusPredicate};\n`
+      + `SELECT ROW_COUNT();\n`
+      + `COMMIT;\n`)
+  if (Number(deleted.at(-2)) !== auditCount || deleted.at(-1) !== '1') {
+    throw new Error('流程 E2E 草稿事务删除计数不一致')
+  }
 }
 
 /**
@@ -744,7 +916,7 @@ export async function closeWorkflowRoleSessions(sessions) {
 /**
  * 按实例、部署、模型、表单和分类的引用顺序清理本用例正式数据。
  * @param {{admin?: import('@playwright/test').Page, designer?: import('@playwright/test').Page}} pages 管理员和设计者页面。
- * @param {{processInstanceIds?: string[], deploymentIds?: string[], modelIds?: string[], formId?: string, categoryId?: string}} resources 本用例成功创建的资源主键集合。
+ * @param {{draftFixtures?: Array<{draftId: string, processInstanceId?: string}>, processInstanceIds?: string[], deploymentIds?: string[], modelIds?: string[], formId?: string, categoryId?: string}} resources 本用例成功创建的资源主键集合。
  * @returns {Promise<string[]>} 脱敏后的清理错误集合；单项失败不会阻断后续清理。
  */
 export async function cleanupWorkflowResources(pages, resources) {
@@ -764,6 +936,9 @@ export async function cleanupWorkflowResources(pages, resources) {
     }
   }
 
+  for (const fixture of [...(resources.draftFixtures || [])].reverse()) {
+    await attempt(`删除申请草稿 ${fixture.draftId}`, () => purgeWorkflowDraftFixture(fixture))
+  }
   for (const processInstanceId of [...(resources.processInstanceIds || [])].reverse()) {
     let detail = null
     if (pages.admin) {

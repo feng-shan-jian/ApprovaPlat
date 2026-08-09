@@ -10,6 +10,7 @@ import {
   findStartableWorkflowDefinition,
   findWorkflowUserOption,
   openWorkflowRoleSession,
+  readWorkflowRuntimeBooleanVariable,
   startWorkflowThroughUi
 } from './support/workflow-fixture.js'
 import { expectAjaxSuccess, matchesEndpoint } from './support/http.js'
@@ -17,43 +18,31 @@ import { expectAjaxSuccess, matchesEndpoint } from './support/http.js'
 test.describe.configure({ mode: 'serial' })
 
 /**
- * 生成待通过属性面板配置的 CEL ServiceTask 和可观察双分支流程。
+ * 生成待通过属性面板配置的 CEL ServiceTask 和可观察审批任务流程。
  * @param {{processKey: string, processName: string, formId: string, approverUserId: string}} input 流程、正式表单和真实办理人标识。
  * @returns {string} 带完整 BPMN DI 的可执行作者 XML；ServiceTask 初始不含受控扩展字段。
  */
 function buildCelDesignerBpmn({ processKey, processName, formId, approverUserId }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
-<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:flowable="http://flowable.org/bpmn" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" targetNamespace="https://approvaplat.example/cel-e2e">
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" targetNamespace="https://approvaplat.example/cel-e2e">
   <process id="${processKey}" name="${processName}" isExecutable="true">
     <startEvent id="start" name="提交申请" flowable:formKey="key_${formId}" />
     <sequenceFlow id="flow_start_evaluate" sourceRef="start" targetRef="evaluateEligibility" />
     <serviceTask id="evaluateEligibility" name="计算审批分支" />
-    <sequenceFlow id="flow_evaluate_gateway" sourceRef="evaluateEligibility" targetRef="decisionGateway" />
-    <exclusiveGateway id="decisionGateway" name="CEL 结果" default="flow_rejected" />
-    <sequenceFlow id="flow_eligible" sourceRef="decisionGateway" targetRef="approvedReview">
-      <conditionExpression xsi:type="tFormalExpression"><![CDATA[\${eligible == true}]]></conditionExpression>
-    </sequenceFlow>
-    <sequenceFlow id="flow_rejected" sourceRef="decisionGateway" targetRef="rejectedReview" />
+    <sequenceFlow id="flow_evaluate_review" sourceRef="evaluateEligibility" targetRef="approvedReview" />
     <userTask id="approvedReview" name="CEL 命中审批" flowable:assignee="${approverUserId}" />
-    <userTask id="rejectedReview" name="CEL 未命中审批" flowable:assignee="${approverUserId}" />
     <sequenceFlow id="flow_approved_end" sourceRef="approvedReview" targetRef="end" />
-    <sequenceFlow id="flow_rejected_end" sourceRef="rejectedReview" targetRef="end" />
     <endEvent id="end" name="结束" />
   </process>
   <bpmndi:BPMNDiagram id="diagram_${processKey}">
     <bpmndi:BPMNPlane id="plane_${processKey}" bpmnElement="${processKey}">
       <bpmndi:BPMNShape id="shape_start" bpmnElement="start"><omgdc:Bounds x="80" y="182" width="36" height="36" /></bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_evaluate" bpmnElement="evaluateEligibility"><omgdc:Bounds x="170" y="160" width="110" height="80" /></bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_gateway" bpmnElement="decisionGateway" isMarkerVisible="true"><omgdc:Bounds x="340" y="175" width="50" height="50" /></bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_approved" bpmnElement="approvedReview"><omgdc:Bounds x="460" y="90" width="110" height="80" /></bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_rejected" bpmnElement="rejectedReview"><omgdc:Bounds x="460" y="230" width="110" height="80" /></bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_end" bpmnElement="end"><omgdc:Bounds x="680" y="182" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_approved" bpmnElement="approvedReview"><omgdc:Bounds x="350" y="160" width="110" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_end" bpmnElement="end"><omgdc:Bounds x="540" y="182" width="36" height="36" /></bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="edge_start_evaluate" bpmnElement="flow_start_evaluate"><omgdi:waypoint x="116" y="200" /><omgdi:waypoint x="170" y="200" /></bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_evaluate_gateway" bpmnElement="flow_evaluate_gateway"><omgdi:waypoint x="280" y="200" /><omgdi:waypoint x="340" y="200" /></bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_eligible" bpmnElement="flow_eligible"><omgdi:waypoint x="365" y="175" /><omgdi:waypoint x="365" y="130" /><omgdi:waypoint x="460" y="130" /></bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_rejected" bpmnElement="flow_rejected"><omgdi:waypoint x="365" y="225" /><omgdi:waypoint x="365" y="270" /><omgdi:waypoint x="460" y="270" /></bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_approved_end" bpmnElement="flow_approved_end"><omgdi:waypoint x="570" y="130" /><omgdi:waypoint x="698" y="130" /><omgdi:waypoint x="698" y="182" /></bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_rejected_end" bpmnElement="flow_rejected_end"><omgdi:waypoint x="570" y="270" /><omgdi:waypoint x="698" y="270" /><omgdi:waypoint x="698" y="218" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_evaluate_review" bpmnElement="flow_evaluate_review"><omgdi:waypoint x="280" y="200" /><omgdi:waypoint x="350" y="200" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_approved_end" bpmnElement="flow_approved_end"><omgdi:waypoint x="460" y="200" /><omgdi:waypoint x="540" y="200" /></bpmndi:BPMNEdge>
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
 </definitions>`
@@ -75,26 +64,25 @@ async function readXmlPreview(page) {
 }
 
 /**
- * 通过真实设计器配置 CEL，保存重开后部署并发起，最终用网关任务证明运行结果。
+ * 通过真实设计器配置 CEL，保存重开后部署并发起，最终用运行变量和任务证明执行结果。
  * @param {{browser: import('@playwright/test').Browser}} fixture Playwright 浏览器夹具。
  * @returns {Promise<void>} 全链路成功且正式数据清理完成后结束。
  */
-test('CEL 从属性面板配置到 Flowable 运行分支形成真实闭环', async ({ browser }) => {
+test('CEL 从属性面板配置到 Flowable 运行变量形成真实闭环', async ({ browser }) => {
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12)
   const processKey = `cel_e2e_${suffix}`
   const processName = `CEL闭环_${suffix}`
   const formName = `CEL发起表单_${suffix}`
   const subject = `CEL-E2E-${suffix}`
-  const resources = { processInstanceIds: [], deploymentIds: [], modelIds: [] }
+  const resources = { draftFixtures: [], processInstanceIds: [], deploymentIds: [], modelIds: [] }
   const sessions = []
   const pages = {}
 
   try {
-    for (const roleKey of ['workflow_admin', 'workflow_designer', 'workflow_starter', 'workflow_approver']) {
-      const session = await openWorkflowRoleSession(browser, roleKey)
-      sessions.push(session)
-      pages[roleKey.replace('workflow_', '')] = session.page
-    }
+    // CEL 编辑器和 bpmn-js 同时驻留时只开启设计者上下文，避免无关角色争用浏览器资源。
+    const designerSession = await openWorkflowRoleSession(browser, 'workflow_designer')
+    sessions.push(designerSession)
+    pages.designer = designerSession.page
 
     const celOptions = await callWorkflowApi(
       pages.designer, 'GET', '/workflow/extension/options/cel')
@@ -201,6 +189,12 @@ test('CEL 从属性面板配置到 Flowable 运行分支形成真实闭环', asy
     expect(deploymentId, 'CEL 部署必须返回正式 deploymentId').not.toBe('')
     resources.deploymentIds.push(deploymentId)
 
+    // 部署完成后再开启发起、办理和运维角色，保证真实职责隔离且控制设计阶段资源峰值。
+    for (const roleKey of ['workflow_starter', 'workflow_approver', 'workflow_admin']) {
+      const session = await openWorkflowRoleSession(browser, roleKey)
+      sessions.push(session)
+      pages[roleKey.replace('workflow_', '')] = session.page
+    }
     const definition = await findStartableWorkflowDefinition(pages.starter, processKey)
     expect(definition.deploymentId).toBe(deploymentId)
     const processInstanceId = await startWorkflowThroughUi(
@@ -209,11 +203,17 @@ test('CEL 从属性面板配置到 Flowable 运行分支形成真实闭环', asy
       formName,
       `CEL-BIZ-${suffix}`,
       subject,
-      resources.processInstanceIds
+      resources
     )
     const approvedTask = await findAssignedWorkflowTask(
       pages.approver, processKey, 'approvedReview', processInstanceId)
     expect(String(approvedTask.taskId || '')).not.toBe('')
+    expect(readWorkflowRuntimeBooleanVariable(processInstanceId, 'eligible'),
+      'CEL 结果必须作为唯一 Flowable boolean 运行变量真实落库').toEqual({
+      count: 1,
+      type: 'boolean',
+      longValue: 1
+    })
     const todoPayload = await callWorkflowApi(pages.approver, 'GET', '/workflow/process/todoList', {
       query: { processKey, pageNum: 1, pageSize: 100 }
     })

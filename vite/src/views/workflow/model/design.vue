@@ -24,7 +24,7 @@
       :saving="saving"
       :preference="designerPreference"
       :preference-saving="preferenceSaving"
-      height="calc(100vh - 178px)"
+      height="100%"
       @identity-search="searchIdentityDirectory"
       @identity-resolve="resolveSelectedIdentities"
       @preference-save="savePreference"
@@ -384,11 +384,17 @@ loadDesigner()
 
 <style scoped lang="scss">
 .model-design-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
   padding-top: 12px;
+  overflow: hidden;
 }
 
 .model-design-page__header {
   display: flex;
+  flex: none;
   min-height: 54px;
   align-items: center;
   justify-content: space-between;
@@ -418,6 +424,11 @@ loadDesigner()
   gap: 8px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+.model-design-page :deep(.process-designer) {
+  flex: 1;
+  min-height: 0;
 }
 
 @media (max-width: 768px) {

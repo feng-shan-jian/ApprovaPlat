@@ -39,6 +39,12 @@
         start_multi_instance_assignments, form_values, multi_instance_user_ids,
         business_key, draft_status, revision_no, submitted_process_instance_id,
         submitted_time, deleted_time, create_time, update_time</sql>
+    <select id="selectActiveReferenceForUpdate" resultType="int" timeout="10">
+        select 1 from wf_process_draft
+            force index (idx_wf_process_draft_deployment_status)
+        where deployment_id=#{deploymentId} and draft_status='ACTIVE'
+        limit 1 for update
+    </select>
     <insert id="insert">
         insert into wf_process_draft (<include refid="columns"/>) values
         (#{draftId}, #{ownerUserId}, #{processDefinitionId}, #{processDefinitionKey},

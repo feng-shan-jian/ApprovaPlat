@@ -8,6 +8,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.Answers.RETURNS_SELF;
 
@@ -41,6 +42,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract;
 import com.ruoyi.system.mapper.SysUserMapper;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 自动抄送运行时身份解析、事件幂等键和失败零写入测试。
@@ -54,6 +56,7 @@ class WorkflowAutomaticCopyServiceTest
     @Mock private WorkflowIdentityResolver identityResolver;
     @Mock private WfCopyMapper copyMapper;
     @Mock private SysUserMapper userMapper;
+    @Mock private WorkflowNotificationService notificationService;
 
     private ProcessDefinitionQuery definitionQuery;
     private ProcessInstanceQuery instanceQuery;
@@ -68,10 +71,67 @@ class WorkflowAutomaticCopyServiceTest
     {
         definitionQuery = mock(ProcessDefinitionQuery.class, RETURNS_SELF);
         instanceQuery = mock(ProcessInstanceQuery.class, RETURNS_SELF);
-        when(repositoryService.createProcessDefinitionQuery()).thenReturn(definitionQuery);
-        when(runtimeService.createProcessInstanceQuery()).thenReturn(instanceQuery);
         service = new WorkflowAutomaticCopyService(repositoryService, runtimeService,
                 historyService, identityResolver, copyMapper, userMapper);
+        service.setNotificationService(notificationService);
+    }
+
+    /**
+     * 验证当前定义没有任务级自动抄送规则时，即使运行时任务 key 无法解析也合法无副作用。
+     * @return void，若访问运行实例、身份、数据库或通知依赖则测试失败
+     */
+    @Test
+    void ignoresTaskEventWithoutTaskAutoCopyRulesBeforeRuntimeValidation()
+    {
+        stubDeployment(null);
+
+        service.onTaskEvent("create", "missing-task", "missing-instance", "definition-1",
+                "missing-node", "不存在的节点", Map.of());
+
+        verify(runtimeService, never()).createProcessInstanceQuery();
+        verifyNoInteractions(identityResolver, copyMapper, userMapper, notificationService);
+    }
+
+    /**
+     * 验证当前定义存在任务级规则时，无法映射的运行时任务节点仍按部署不一致失败。
+     * @return void，若错误被静默降级或产生业务副作用则测试失败
+     */
+    @Test
+    void rejectsMissingRuntimeTaskNodeWhenDeploymentContainsTaskRules()
+    {
+        stubDeployment("""
+                {"version":1,"rules":[{"id":"arrival","trigger":"NODE_ARRIVED",
+                "recipients":[{"type":"USER","values":["2"]}]}]}
+                """);
+
+        assertThatThrownBy(() -> service.onTaskEvent("create", "task-12", "instance-1",
+                "definition-1", "missing-node", "不存在的节点", Map.of()))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("自动抄送触发节点不存在");
+
+        verify(runtimeService, never()).createProcessInstanceQuery();
+        verifyNoInteractions(identityResolver, copyMapper, userMapper, notificationService);
+    }
+
+    /**
+     * 验证当前定义存在任务级规则时，运行时 key 指向非 UserTask 元素必须按模型不一致失败。
+     * @return void，若非用户任务被当作合法无规则节点或产生副作用则测试失败
+     */
+    @Test
+    void rejectsNonUserTaskRuntimeNodeWhenDeploymentContainsTaskRules()
+    {
+        stubDeployment("""
+                {"version":1,"rules":[{"id":"arrival","trigger":"NODE_ARRIVED",
+                "recipients":[{"type":"USER","values":["2"]}]}]}
+                """);
+
+        assertThatThrownBy(() -> service.onTaskEvent("create", "task-12", "instance-1",
+                "definition-1", "end", "结束", Map.of()))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("自动抄送触发节点不是用户任务");
+
+        verify(runtimeService, never()).createProcessInstanceQuery();
+        verifyNoInteractions(identityResolver, copyMapper, userMapper, notificationService);
     }
 
     /**
@@ -94,11 +154,12 @@ class WorkflowAutomaticCopyServiceTest
         when(copyMapper.insertBatchIdempotent(anyList())).thenReturn(5);
 
         service.onTaskEvent("complete", "task-11", "instance-1", "definition-1",
-                "review", "复核", Map.of("reviewers", List.of(3L, "4")));
+                "review", "复核", Map.of("reviewers", List.of(3.0D, "4")));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<WfCopy>> captor = ArgumentCaptor.forClass(List.class);
         verify(copyMapper).insertBatchIdempotent(captor.capture());
+        verify(notificationService).onCopiesCreated(captor.getValue());
         assertThat(captor.getValue()).hasSize(5).allSatisfy(copy ->
         {
             assertThat(copy.getCopyEventId()).isEqualTo("TASK_COMPLETED:task-11");
@@ -107,6 +168,27 @@ class WorkflowAutomaticCopyServiceTest
             assertThat(copy.getTriggerNodeId()).isEqualTo("review");
             assertThat(copy.getTaskId()).isEqualTo("task-11");
         });
+    }
+
+    /**
+     * 验证表单数值字段的小数用户主键不会被 longValue 静默截断并抄送给错误用户。
+     * @return void，无返回值；小数被规范成其他用户或产生抄送副作用时测试失败
+     */
+    @Test
+    void rejectsFractionalFormUserIdWithoutCopySideEffects()
+    {
+        stubProcess("""
+                {"version":1,"rules":[{"id":"complete","trigger":"NODE_COMPLETED",
+                "recipients":[{"type":"FORM_USER_FIELD","values":["reviewer"]}]}]}
+                """);
+
+        assertThatThrownBy(() -> service.onTaskEvent("complete", "task-fraction",
+                "instance-1", "definition-1", "review", "复核",
+                Map.of("reviewer", 1.5D)))
+                .isInstanceOf(ServiceException.class)
+                .hasMessage("表单用户字段值不合法");
+
+        verifyNoInteractions(identityResolver, copyMapper, notificationService);
     }
 
     /**
@@ -174,37 +256,60 @@ class WorkflowAutomaticCopyServiceTest
      */
     private void stubProcess(String ruleJson)
     {
+        ProcessDefinition definition = stubDeployment(ruleJson);
+
         ProcessInstance instance = mock(ProcessInstance.class);
         when(instance.getProcessDefinitionId()).thenReturn("definition-1");
         when(instance.getStartUserId()).thenReturn("7");
+        when(runtimeService.createProcessInstanceQuery()).thenReturn(instanceQuery);
         when(instanceQuery.singleResult()).thenReturn(instance);
 
-        ProcessDefinition definition = mock(ProcessDefinition.class);
-        when(definition.getKey()).thenReturn("copy_process");
         when(definition.getName()).thenReturn("抄送流程");
         when(definition.getCategory()).thenReturn("OA");
         when(definition.getDeploymentId()).thenReturn("deploy-1");
-        when(definitionQuery.singleResult()).thenReturn(definition);
 
         SysUser initiator = new SysUser();
         initiator.setUserId(7L);
         initiator.setNickName("发起人");
         initiator.setUserName("starter");
         when(userMapper.selectUserById(7L)).thenReturn(initiator);
+    }
 
+    /**
+     * 配置包含多个 process 的部署模型，并让目标流程由流程定义 key 精确定位。
+     * @param ruleJson String，可空的目标用户任务规则 JSON；为空表示普通用户任务
+     * @return ProcessDefinition，供需要运行时上下文的测试继续补充定义元数据
+     */
+    private ProcessDefinition stubDeployment(String ruleJson)
+    {
+        ProcessDefinition definition = mock(ProcessDefinition.class);
+        when(definition.getKey()).thenReturn("copy_process");
+        when(repositoryService.createProcessDefinitionQuery()).thenReturn(definitionQuery);
+        when(definitionQuery.singleResult()).thenReturn(definition);
+
+        Process unrelated = new Process();
+        unrelated.setId("unrelated_process");
+        UserTask unrelatedTask = new UserTask();
+        unrelatedTask.setId("unrelatedReview");
+        unrelated.addFlowElement(unrelatedTask);
         Process process = new Process();
         process.setId("copy_process");
         UserTask task = new UserTask();
         task.setId("review");
         task.setName("复核");
-        addRules(task, ruleJson.strip());
+        if (ruleJson != null)
+        {
+            addRules(task, ruleJson.strip());
+        }
         process.addFlowElement(task);
         EndEvent end = new EndEvent();
         end.setId("end");
         process.addFlowElement(end);
         BpmnModel model = new BpmnModel();
+        model.addProcess(unrelated);
         model.addProcess(process);
         when(repositoryService.getBpmnModel("definition-1")).thenReturn(model);
+        return definition;
     }
 
     /**

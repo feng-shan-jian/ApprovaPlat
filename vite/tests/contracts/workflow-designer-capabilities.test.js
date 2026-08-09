@@ -91,6 +91,8 @@ test('自动抄送规则与抄送首次阅读连接正式 BPMN 和服务端状�
   assert.match(designerSource, /AUTO_COPY_PROPERTY_NAME = 'approva\.autoCopyRules'/)
   assert.match(designerSource, /PROCESS_COMPLETED[\s\S]*?NODE_ARRIVED[\s\S]*?NODE_COMPLETED/)
   assert.match(designerSource, /item\.name === AUTO_COPY_PROPERTY_NAME/)
+  assert.match(designerSource,
+    /function updateAutoCopyRules[\s\S]*?CONTROLLED_LOOP_PROPERTY_NAMES\.has\(item\.name\)[\s\S]*?SLA_PROPERTY_NAME_SET\.has\(item\.name\)[\s\S]*?PARTICIPANT_RULE_PROPERTY_NAMES\.has\(item\.name\)[\s\S]*?persistExtensionProperties/)
   assert.match(designPageSource, /capability: 'copy'/)
   assert.match(designPageSource, /type: 'role', capability: 'copy'/)
   assert.match(designPageSource, /type: 'dept', capability: 'copy'/)
@@ -163,7 +165,38 @@ test('设计器工具命令连接真实 BPMN 服务', () => {
   assert.match(designerSource, /modeler\.get\('linting'\)\.toggle/)
   assert.match(designerSource, /toggleMode\.toggleMode/)
   assert.match(designerSource, /validateModelBpmn\(xml\)/)
+  assert.match(designerSource, /normalizeSequenceFlowReferences\(rawSource\)/)
+  assert.match(designerSource,
+    /onActivated\(\(\) => \{[\s\S]*?bindDesignerLifecycleListeners\(\)[\s\S]*?repairCachedSequenceFlowReferences\(\)/)
+  assert.match(designerSource, /modeler\.saveXML\(\{ format: true \}\)[\s\S]*?normalizeSequenceFlowReferences\(cachedXml\)[\s\S]*?await importXml\(normalizedXml\)/)
+  assert.match(propertiesPanelSource, /<el-collapse v-model="activeSections">/)
+  assert.match(propertiesPanelSource, /展开全部属性分区[\s\S]*?收起全部属性分区/)
+  assert.match(propertiesPanelSource, /emit\('close'\)/)
+  assert.match(propertiesPanelSource, /callActivityOptions: \{ type: Array, default: \(\) => \[\] \}/)
+  assert.match(propertiesPanelSource, /callActivityParentFields: \{ type: Array, default: \(\) => \[\] \}/)
   assert.match(modelApiSource, /url: '\/workflow\/model\/validate'/)
+})
+
+/**
+ * 验证设计器布局通过容器尺寸驱动，并在属性面板变化时同步真实 bpmn-js 画布。
+ * @returns {void} 固定最小宽高、不可折叠面板或缺失画布 resize 通知时断言失败。
+ */
+test('设计器属性面板支持完整显示、折叠和响应式调整', () => {
+  assert.match(designerSource, /new ResizeObserver\(handleDesignerBodyResize\)/)
+  assert.match(designerSource, /onDeactivated\(unbindDesignerLifecycleListeners\)/)
+  assert.match(designerSource,
+    /function unbindDesignerLifecycleListeners\(\)[\s\S]*?removeEventListener\('keydown'[\s\S]*?removeEventListener\('pointermove'[\s\S]*?stopPropertiesResize\(\)[\s\S]*?bodyResizeObserver\?\.disconnect\(\)/)
+  assert.match(designerSource, /modeler\?\.get\('canvas'\)\?\.resized\(\)/)
+  assert.match(designerSource, /role="separator"[\s\S]*?aria-label="调整属性面板宽度"/)
+  assert.match(designerSource, /process-designer__body--compact-properties/)
+  assert.doesNotMatch(designerSource, /min-width:\s*1040px/)
+  assert.doesNotMatch(designerSource, /min-height:\s*640px/)
+  assert.match(propertiesPanelSource, /<el-collapse v-model="activeSections">/)
+  assert.match(propertiesPanelSource, /展开全部属性分区[\s\S]*?收起全部属性分区/)
+  assert.match(propertiesPanelSource, /emit\('close'\)/)
+  assert.match(designPageSource, /height="100%"/)
+  assert.match(designerDoc, /不足 960px 时，属性检查器切换为工作区内浮层/)
+  assert.match(propertiesPanelDoc, /长表单只在面板内部滚动/)
 })
 
 /**
@@ -235,6 +268,7 @@ test('高级 Palette 通过 Modeler 创建完整标准 BPMN 元素', () => {
   assert.match(designerSource, /globalConnect'\)\.start\(event\)/)
   assert.match(designerSource, /elementFactory\.createParticipantShape\(\)/)
   assert.match(designerSource, /modeler\.get\('modeling'\)\.addLane\(selected, 'bottom'\)/)
+  assert.match(advancedPaletteSource, /advanced-element-palette__reference[\s\S]*?<el-tooltip/)
   assert.match(advancedPaletteDoc, /复杂网关不进入正式工具入口/)
 })
 

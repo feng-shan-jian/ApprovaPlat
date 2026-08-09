@@ -1543,6 +1543,8 @@ WITH notification_issues AS (
        OR o.channel NOT IN ('INBOX', 'EMAIL')
        OR o.status NOT IN ('PENDING', 'RETRYING', 'DELIVERING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED')
        OR o.attempt_count > o.max_attempts
+       OR o.delivery_cycle < 1
+       OR o.total_attempt_count < o.attempt_count
        OR (o.status = 'DELIVERING' AND (o.lease_owner IS NULL OR o.lease_expires_at IS NULL))
        OR (o.status <> 'DELIVERING' AND (o.lease_owner IS NOT NULL OR o.lease_expires_at IS NOT NULL))
 
@@ -1554,6 +1556,17 @@ WITH notification_issues AS (
        OR i.read_status NOT IN ('UNREAD', 'READ')
        OR (i.read_status = 'UNREAD' AND i.read_time IS NOT NULL)
        OR (i.read_status = 'READ' AND i.read_time IS NULL)
+
+    UNION ALL
+    SELECT 'delivery_sequence_invalid', COUNT(*)
+    FROM wf_notification_delivery_audit a
+    LEFT JOIN wf_notification_outbox o ON o.outbox_id = a.outbox_id
+    WHERE o.outbox_id IS NULL
+       OR a.delivery_cycle < 1
+       OR a.total_attempt_no < a.attempt_no
+       OR a.delivery_cycle > o.delivery_cycle
+       OR a.total_attempt_no > o.total_attempt_count
+       OR (a.delivery_cycle = o.delivery_cycle AND a.attempt_no > o.attempt_count)
 )
 SELECT 'workflow_notification_integrity' AS check_name,
        CASE WHEN SUM(issue_count) = 0 THEN 'PASS' ELSE 'FAIL' END AS result,

@@ -9,8 +9,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.engine.delegate.JavaDelegate;
@@ -26,10 +28,17 @@ import org.flowable.task.api.Task;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import com.ruoyi.RuoYiApplication;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.domain.entity.SysUser;
+import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.domain.dto.WorkflowManualUrgeRequest;
 import com.ruoyi.flowable.service.model.WorkflowCallActivityReferenceService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 使用真实 MySQL 和 Flowable 8 验证 CallActivity 精确版本冻结与删除保护。
@@ -45,6 +54,8 @@ import com.ruoyi.flowable.service.model.WorkflowCallActivityReferenceService;
             "flowable.database-schema-update=false",
             "flowable.async-executor-activate=false",
             "flowable.async-history-executor-activate=false",
+            "flowable.notification.worker-enabled=false",
+            "spring.task.scheduling.enabled=false",
             "spring.quartz.auto-startup=false"
         })
 class WorkflowCallActivityMySqlIT
@@ -54,6 +65,12 @@ class WorkflowCallActivityMySqlIT
 
     @Autowired
     private WorkflowCallActivityReferenceService callActivityReferenceService;
+
+    @Autowired
+    private WorkflowNotificationService notificationService;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     /**
      * 验证父流程发布后即使同 key 子流程出现新版本，运行仍进入冻结的旧定义。
@@ -115,6 +132,217 @@ class WorkflowCallActivityMySqlIT
             deleteDeployment(repositoryService, parentDeployment);
             deleteDeployment(repositoryService, childV2Deployment);
             deleteDeployment(repositoryService, childV1Deployment);
+        }
+    }
+
+    /**
+     * 验证根流程发起人可以催办 CallActivity 子流程真实待办，通知定位子实例且审计归根实例。
+     *
+     * @return void，权限、流程树锁、子任务 outbox、终态零新增或清理任一契约失败时测试失败
+     */
+    @Test
+    void urgesCallActivityChildTaskFromRootInstance()
+    {
+        RepositoryService repositoryService = processEngine.getRepositoryService();
+        RuntimeService runtimeService = processEngine.getRuntimeService();
+        TaskService taskService = processEngine.getTaskService();
+        String runId = UUID.randomUUID().toString().replace("-", "");
+        String childKey = "workflowUrgeChild" + runId;
+        String parentKey = "workflowUrgeParent" + runId;
+        String starterUserId = activeUserForPermission("workflow:process:start", null);
+        String approverUserId = activeUserForPermission(
+                "workflow:process:approval", starterUserId);
+        Deployment childDeployment = deploy(repositoryService, childKey,
+                notificationChildBpmn(childKey, approverUserId));
+        Deployment parentDeployment = deploy(repositoryService, parentKey,
+                parentBpmn(parentKey, childKey));
+        ProcessInstance parentInstance = null;
+        ProcessInstance childInstance = null;
+        try
+        {
+            processEngine.getIdentityService().setAuthenticatedUserId(starterUserId);
+            try
+            {
+                parentInstance = runtimeService.startProcessInstanceByKey(parentKey);
+            }
+            finally
+            {
+                processEngine.getIdentityService().setAuthenticatedUserId(null);
+            }
+            childInstance = runtimeService.createProcessInstanceQuery()
+                    .superProcessInstanceId(parentInstance.getId()).singleResult();
+            assertThat(childInstance).as("父流程必须创建真实 CallActivity 子实例").isNotNull();
+            String rootProcessInstanceId = parentInstance.getId();
+            String childProcessInstanceId = childInstance.getId();
+            Task childTask = taskService.createTaskQuery()
+                    .processInstanceId(childProcessInstanceId).singleResult();
+            assertThat(childTask).as("子实例必须停留在真实人工审批任务").isNotNull();
+
+            // 非发起人且没有 urge:any 的办理人必须在任何通知或审计副作用前被拒绝。
+            authenticate(approverUserId);
+            assertThatThrownBy(() -> notificationService.urge(new WorkflowManualUrgeRequest(
+                    rootProcessInstanceId, "无权催办子流程")))
+                    .isInstanceOfSatisfying(ServiceException.class,
+                            exception -> assertThat(exception.getCode())
+                                    .isEqualTo(HttpStatus.FORBIDDEN));
+            assertThat(countManualUrgeOutboxes(rootProcessInstanceId, childProcessInstanceId))
+                    .isZero();
+            assertThat(countUrgeAudits(rootProcessInstanceId)).isZero();
+
+            authenticate(starterUserId);
+            Map<String, Object> result = notificationService.urge(
+                    new WorkflowManualUrgeRequest(rootProcessInstanceId, "请处理子流程审批"));
+            assertThat(result).containsEntry("recipientCount", 1).containsEntry("outboxCount", 1);
+            Map<String, Object> outbox = jdbcTemplate.queryForMap(
+                    "select outbox_id,process_definition_key,process_instance_id,task_id," +
+                    "task_definition_key,recipient_user_id,route_path from wf_notification_outbox " +
+                    "where event_type='MANUAL_URGE' and task_id=?", childTask.getId());
+            long manualUrgeOutboxId = ((Number) outbox.get("outbox_id")).longValue();
+            assertThat(outbox.get("process_definition_key")).isEqualTo(childKey);
+            assertThat(outbox.get("process_instance_id")).isEqualTo(childProcessInstanceId);
+            assertThat(outbox.get("task_id")).isEqualTo(childTask.getId());
+            assertThat(outbox.get("task_definition_key")).isEqualTo(childTask.getTaskDefinitionKey());
+            assertThat(((Number) outbox.get("recipient_user_id")).longValue())
+                    .isEqualTo(Long.parseLong(approverUserId));
+            assertThat(String.valueOf(outbox.get("route_path")))
+                    .contains(childProcessInstanceId, childTask.getId());
+            assertThat(countUrgeAudits(rootProcessInstanceId)).isOne();
+
+            SecurityContextHolder.clearContext();
+            taskService.complete(childTask.getId());
+            assertThat(runtimeService.createProcessInstanceQuery()
+                    .processInstanceId(rootProcessInstanceId).count()).isZero();
+            assertThat(jdbcTemplate.queryForObject(
+                    "select status from wf_notification_outbox where outbox_id=?",
+                    String.class, manualUrgeOutboxId)).isEqualTo("CANCELLED");
+            int outboxCountAfterCompletion = countManualUrgeOutboxes(
+                    rootProcessInstanceId, childProcessInstanceId);
+            int auditCountAfterCompletion = countUrgeAudits(rootProcessInstanceId);
+            authenticate(starterUserId);
+            assertThatThrownBy(() -> notificationService.urge(new WorkflowManualUrgeRequest(
+                    rootProcessInstanceId, "终态后不得催办")))
+                    .isInstanceOfSatisfying(ServiceException.class,
+                            exception -> assertThat(exception.getCode())
+                                    .isEqualTo(HttpStatus.CONFLICT));
+            assertThat(countManualUrgeOutboxes(rootProcessInstanceId, childProcessInstanceId))
+                    .isEqualTo(outboxCountAfterCompletion);
+            assertThat(countUrgeAudits(rootProcessInstanceId))
+                    .isEqualTo(auditCountAfterCompletion);
+        }
+        finally
+        {
+            SecurityContextHolder.clearContext();
+            processEngine.getIdentityService().setAuthenticatedUserId(null);
+            if (parentInstance != null && childInstance != null)
+            {
+                deleteNotificationFacts(parentInstance.getId(), childInstance.getId());
+            }
+            deleteDeployment(repositoryService, parentDeployment);
+            deleteDeployment(repositoryService, childDeployment);
+        }
+    }
+
+    /**
+     * 验证根实例催办与 CallActivity 子任务完成竞争时串行化，终态不遗留可投递催办。
+     *
+     * @return void，竞争死锁、完成失败或遗留失效 outbox 时测试失败
+     * @throws Exception 并发执行等待失败或线程未按时结束时抛出
+     */
+    @Test
+    void serializesRootUrgeAgainstCallActivityChildCompletion() throws Exception
+    {
+        RepositoryService repositoryService = processEngine.getRepositoryService();
+        RuntimeService runtimeService = processEngine.getRuntimeService();
+        TaskService taskService = processEngine.getTaskService();
+        String runId = UUID.randomUUID().toString().replace("-", "");
+        String childKey = "workflowUrgeRaceChild" + runId;
+        String parentKey = "workflowUrgeRaceParent" + runId;
+        String starterUserId = activeUserForPermission("workflow:process:start", null);
+        String approverUserId = activeUserForPermission(
+                "workflow:process:approval", starterUserId);
+        Deployment childDeployment = deploy(repositoryService, childKey,
+                notificationChildBpmn(childKey, approverUserId));
+        Deployment parentDeployment = deploy(repositoryService, parentKey,
+                parentBpmn(parentKey, childKey));
+        ProcessInstance parentInstance = null;
+        ProcessInstance childInstance = null;
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try
+        {
+            processEngine.getIdentityService().setAuthenticatedUserId(starterUserId);
+            try
+            {
+                parentInstance = runtimeService.startProcessInstanceByKey(parentKey);
+            }
+            finally
+            {
+                processEngine.getIdentityService().setAuthenticatedUserId(null);
+            }
+            childInstance = runtimeService.createProcessInstanceQuery()
+                    .superProcessInstanceId(parentInstance.getId()).singleResult();
+            assertThat(childInstance).isNotNull();
+            String rootProcessInstanceId = parentInstance.getId();
+            String childProcessInstanceId = childInstance.getId();
+            Task childTask = taskService.createTaskQuery()
+                    .processInstanceId(childProcessInstanceId).singleResult();
+            assertThat(childTask).isNotNull();
+
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            Future<Integer> urge = executor.submit(() ->
+            {
+                authenticate(starterUserId);
+                ready.countDown();
+                if (!start.await(10, TimeUnit.SECONDS))
+                    throw new IllegalStateException("子流程催办并发起跑超时");
+                try
+                {
+                    notificationService.urge(new WorkflowManualUrgeRequest(
+                            rootProcessInstanceId, "与子任务完成竞争"));
+                    return 0;
+                }
+                catch (ServiceException exception)
+                {
+                    return exception.getCode();
+                }
+                finally
+                {
+                    SecurityContextHolder.clearContext();
+                }
+            });
+            Future<Void> completion = executor.submit(() ->
+            {
+                ready.countDown();
+                if (!start.await(10, TimeUnit.SECONDS))
+                    throw new IllegalStateException("子任务完成并发起跑超时");
+                taskService.complete(childTask.getId());
+                return null;
+            });
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            completion.get(20, TimeUnit.SECONDS);
+            assertThat(urge.get(20, TimeUnit.SECONDS)).isIn(0, HttpStatus.CONFLICT);
+
+            assertThat(runtimeService.createProcessInstanceQuery()
+                    .processInstanceId(rootProcessInstanceId).count()).isZero();
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_notification_outbox where event_type='MANUAL_URGE' " +
+                    "and process_instance_id in (?,?) and status in " +
+                    "('PENDING','RETRYING','DELIVERING')", Integer.class,
+                    rootProcessInstanceId, childProcessInstanceId)).isZero();
+            assertThat(countUrgeAudits(rootProcessInstanceId)).isLessThanOrEqualTo(1);
+        }
+        finally
+        {
+            executor.shutdownNow();
+            SecurityContextHolder.clearContext();
+            processEngine.getIdentityService().setAuthenticatedUserId(null);
+            if (parentInstance != null && childInstance != null)
+            {
+                deleteNotificationFacts(parentInstance.getId(), childInstance.getId());
+            }
+            deleteDeployment(repositoryService, parentDeployment);
+            deleteDeployment(repositoryService, childDeployment);
         }
     }
 
@@ -345,6 +573,24 @@ class WorkflowCallActivityMySqlIT
     }
 
     /**
+     * 构造指向真实有效审批人的 CallActivity 子流程，供人工催办运行链路验收。
+     *
+     * @param processKey String，子流程定义 key
+     * @param approverUserId String，正式 sys_user 审批人主键
+     * @return byte[]，包含一个真实办理任务的 UTF-8 BPMN
+     */
+    private byte[] notificationChildBpmn(String processKey, String approverUserId)
+    {
+        String xml = definitions("<process id=\"" + processKey + "\" name=\"催办子流程\" "
+                + "isExecutable=\"true\"><startEvent id=\"start\"/>"
+                + "<sequenceFlow id=\"f1\" sourceRef=\"start\" targetRef=\"childApprove\"/>"
+                + "<userTask id=\"childApprove\" name=\"子流程审批\" flowable:assignee=\""
+                + approverUserId + "\"/><sequenceFlow id=\"f2\" sourceRef=\"childApprove\" "
+                + "targetRef=\"end\"/><endEvent id=\"end\"/></process>");
+        return xml.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
      * 构造按设计阶段子流程 key 引用的父流程。
      *
      * @param processKey String，父流程 key
@@ -414,6 +660,108 @@ class WorkflowCallActivityMySqlIT
                 + "<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" "
                 + "xmlns:flowable=\"http://flowable.org/bpmn\" targetNamespace=\"urn:approvaplat:call-it\">"
                 + body + "</definitions>";
+    }
+
+    /**
+     * 查询具备指定正式菜单权限的有效用户；指定排除用户时同时排除超级管理员。
+     *
+     * @param permission String，必须由有效角色菜单授予的权限码
+     * @param excludedUserId String，可空；不得返回的用户主键
+     * @return String，满足权限和有效状态的最小数字用户主键
+     */
+    private String activeUserForPermission(String permission, String excludedUserId)
+    {
+        String exclusion = excludedUserId == null ? "" : " and u.user_id<>? and u.user_id<>1";
+        Object[] parameters = excludedUserId == null
+                ? new Object[] { permission }
+                : new Object[] { permission, Long.valueOf(excludedUserId) };
+        String userId = jdbcTemplate.queryForObject(
+                "select cast(min(u.user_id) as char) from sys_user u " +
+                "join sys_user_role ur on ur.user_id=u.user_id " +
+                "join sys_role r on r.role_id=ur.role_id " +
+                "join sys_role_menu rm on rm.role_id=r.role_id " +
+                "join sys_menu m on m.menu_id=rm.menu_id " +
+                "where u.status='0' and u.del_flag='0' and r.status='0' and r.del_flag='0' " +
+                "and m.status='0' and m.perms=?" + exclusion,
+                String.class, parameters);
+        assertThat(userId).as("真实权限用户必须存在: " + permission).isNotBlank();
+        return userId;
+    }
+
+    /**
+     * 建立当前线程的真实登录用户上下文，领域服务仍会回查正式用户和权限主数据。
+     *
+     * @param userId String，已确认存在的数字用户主键
+     * @return void，SecurityContext 建立完成后正常返回
+     */
+    private void authenticate(String userId)
+    {
+        long numericUserId = Long.parseLong(userId);
+        SysUser user = new SysUser();
+        user.setUserId(numericUserId);
+        user.setUserName("workflow_call_urge_it_" + userId);
+        user.setNickName("子流程催办集成测试用户");
+        LoginUser loginUser = new LoginUser(numericUserId, null, user, Set.of());
+        UsernamePasswordAuthenticationToken authentication =
+                new UsernamePasswordAuthenticationToken(
+                        loginUser, null, loginUser.getAuthorities());
+        var context = SecurityContextHolder.createEmptyContext();
+        context.setAuthentication(authentication);
+        SecurityContextHolder.setContext(context);
+    }
+
+    /**
+     * 统计根与子实例当前人工催办 outbox 数量。
+     *
+     * @param rootProcessInstanceId String，根业务实例主键
+     * @param childProcessInstanceId String，CallActivity 子实例主键
+     * @return int，两实例范围内 MANUAL_URGE 正式记录数
+     */
+    private int countManualUrgeOutboxes(String rootProcessInstanceId,
+            String childProcessInstanceId)
+    {
+        return jdbcTemplate.queryForObject(
+                "select count(*) from wf_notification_outbox where event_type='MANUAL_URGE' " +
+                "and process_instance_id in (?,?)", Integer.class,
+                rootProcessInstanceId, childProcessInstanceId);
+    }
+
+    /**
+     * 统计根业务实例的人工催办审计数量。
+     *
+     * @param rootProcessInstanceId String，根业务实例主键
+     * @return int，根实例正式催办审计数
+     */
+    private int countUrgeAudits(String rootProcessInstanceId)
+    {
+        return jdbcTemplate.queryForObject(
+                "select count(*) from wf_notification_urge_audit where process_instance_id=?",
+                Integer.class, rootProcessInstanceId);
+    }
+
+    /**
+     * 按外键顺序只删除当前根与子实例产生的通知事实，不影响共享验收库其他记录。
+     *
+     * @param rootProcessInstanceId String，本测试根业务实例主键
+     * @param childProcessInstanceId String，本测试 CallActivity 子实例主键
+     * @return void，目标通知、投递审计和催办审计清理完成后正常返回
+     */
+    private void deleteNotificationFacts(String rootProcessInstanceId,
+            String childProcessInstanceId)
+    {
+        List<Long> outboxIds = jdbcTemplate.queryForList(
+                "select outbox_id from wf_notification_outbox where process_instance_id in (?,?)",
+                Long.class, rootProcessInstanceId, childProcessInstanceId);
+        for (Long outboxId : outboxIds)
+        {
+            jdbcTemplate.update("delete from wf_notification_delivery_audit where outbox_id=?",
+                    outboxId);
+            jdbcTemplate.update("delete from wf_notification_inbox where outbox_id=?", outboxId);
+            jdbcTemplate.update("delete from wf_notification_outbox where outbox_id=?", outboxId);
+        }
+        jdbcTemplate.update(
+                "delete from wf_notification_urge_audit where process_instance_id=?",
+                rootProcessInstanceId);
     }
 
     /**

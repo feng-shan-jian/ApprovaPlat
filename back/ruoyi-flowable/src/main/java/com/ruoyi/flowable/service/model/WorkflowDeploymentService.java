@@ -37,6 +37,9 @@ import com.ruoyi.flowable.mapper.WfDeployConditionRuleMapper;
 import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import com.ruoyi.flowable.mapper.WfDeployParticipantRuleMapper;
+import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
+import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
+import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 
 /**
  * 流程定义状态、部署版本和非级联删除的业务服务。
@@ -72,6 +75,19 @@ public class WorkflowDeploymentService
 
     /** 条件分支部署快照删除门禁；使用 setter 保持既有构造测试兼容。 */
     private WfDeployConditionRuleMapper deployConditionRuleMapper;
+
+    /** 审批 SLA 部署快照删除门禁；使用 setter 保持既有构造测试兼容。 */
+    private WfTaskSlaMapper taskSlaMapper;
+
+    /** 申请草稿部署引用删除门禁；使用 setter 保持既有构造测试兼容。 */
+    private WfProcessDraftMapper processDraftMapper;
+
+    /** 部署生命周期数据库行锁；与草稿创建共用相同锁顺序。 */
+    private WorkflowProcessDefinitionLockMapper processDefinitionLockMapper;
+
+    /** 活动申请草稿仍引用部署时对外返回的稳定冲突消息。 */
+    static final String ACTIVE_DRAFT_REFERENCE_MESSAGE =
+            "部署仍有未提交申请草稿，不能删除";
 
     private final WorkflowDmnDecisionService dmnDecisionService;
 
@@ -133,6 +149,42 @@ public class WorkflowDeploymentService
             WfDeployConditionRuleMapper deployConditionRuleMapper)
     {
         this.deployConditionRuleMapper = deployConditionRuleMapper;
+    }
+
+    /**
+     * 注入审批 SLA Mapper，确保删除部署时不遗留无引擎外键的正式快照。
+     * @param taskSlaMapper WfTaskSlaMapper，审批 SLA 数据访问层
+     * @return void，生产 Spring 容器启动后必须完成注入
+     */
+    @Autowired
+    public void setTaskSlaMapper(WfTaskSlaMapper taskSlaMapper)
+    {
+        this.taskSlaMapper = taskSlaMapper;
+    }
+
+    /**
+     * 注入申请草稿 Mapper，确保部署删除不会使仍可提交的正式草稿失效。
+     *
+     * @param processDraftMapper WfProcessDraftMapper，申请草稿正式数据访问层
+     * @return void，生产 Spring 容器启动后必须完成注入
+     */
+    @Autowired
+    public void setProcessDraftMapper(WfProcessDraftMapper processDraftMapper)
+    {
+        this.processDraftMapper = processDraftMapper;
+    }
+
+    /**
+     * 注入流程部署生命周期锁 Mapper，串行化部署删除与活动草稿创建。
+     *
+     * @param processDefinitionLockMapper WorkflowProcessDefinitionLockMapper，Flowable 部署行锁 Mapper
+     * @return void，生产 Spring 容器启动后必须完成注入
+     */
+    @Autowired
+    public void setProcessDefinitionLockMapper(
+            WorkflowProcessDefinitionLockMapper processDefinitionLockMapper)
+    {
+        this.processDefinitionLockMapper = processDefinitionLockMapper;
     }
 
     /**
@@ -310,9 +362,12 @@ public class WorkflowDeploymentService
      */
     public void deleteDeployments(Collection<String> deploymentIds)
     {
-        List<String> normalizedIds = requireIds(deploymentIds, "部署主键不能为空");
+        List<String> normalizedIds = requireIds(deploymentIds, "部署主键不能为空")
+                .stream().sorted().toList();
         engineOperations.writeAsCurrentUser(identity ->
         {
+            // 全部部署先按主键稳定顺序持锁；后续草稿当前读与删除提交前，新草稿创建都会等待。
+            lockDeployments(normalizedIds);
             if (callActivityReferenceService != null)
             {
                 // 全部部署先统一预检，避免逐个删除后才发现剩余父流程仍引用目标定义。
@@ -322,6 +377,8 @@ public class WorkflowDeploymentService
             for (String deploymentId : normalizedIds)
             {
                 Deployment deployment = requireDeployment(deploymentId);
+                // ACTIVE 草稿仍可由用户正式提交，删除其部署会破坏草稿与引擎定义的一致性。
+                assertNoActiveDraftReferences(deploymentId);
                 assertNoInstanceReferences(deploymentId);
                 List<WfDeployForm> snapshots = safeSnapshots(deploymentId);
                 List<WfDeployExtensionSnapshot> extensionSnapshots =
@@ -336,13 +393,17 @@ public class WorkflowDeploymentService
                 List<WfDeployCallActivitySnapshot> callActivitySnapshots =
                         callActivityReferenceService == null ? List.of()
                                 : callActivityReferenceService.snapshotsByDeploymentId(deploymentId);
+                // SLA 快照没有 Flowable 外键，必须在预检阶段冻结行数并由同一事务显式删除。
+                int taskSlaSnapshotCount = taskSlaMapper == null ? 0
+                        : taskSlaMapper.countDeploymentSnapshotsByDeploymentId(deploymentId);
                 List<Model> linkedModels = repositoryService.createModelQuery()
                         .deploymentId(deploymentId)
                         .list();
                 plans.add(new DeploymentDeletionPlan(
                         deployment, snapshots, extensionSnapshots, dmnSnapshots,
                         controlledLoopSnapshots, participantRuleSnapshots,
-                        conditionRuleSnapshots, callActivitySnapshots, linkedModels));
+                        conditionRuleSnapshots, callActivitySnapshots,
+                        taskSlaSnapshotCount, linkedModels));
             }
 
             for (DeploymentDeletionPlan plan : plans)
@@ -350,6 +411,7 @@ public class WorkflowDeploymentService
                 String deploymentId = plan.deployment().getId();
                 // 在真正写入前二次检查，缩小预检与删除之间的并发窗口。
                 assertNoInstanceReferences(deploymentId);
+                assertNoActiveDraftReferences(deploymentId);
                 int deletedSnapshots = deployFormMapper.deleteByDeploymentId(deploymentId);
                 if (deletedSnapshots != plan.snapshots().size())
                 {
@@ -389,6 +451,12 @@ public class WorkflowDeploymentService
                 if (deletedCallActivities != plan.callActivitySnapshots().size())
                 {
                     throw new ServiceException("部署调用活动快照状态已变化", HttpStatus.CONFLICT);
+                }
+                int deletedTaskSlaSnapshots = taskSlaMapper == null ? 0
+                        : taskSlaMapper.deleteDeploymentSnapshotsByDeploymentId(deploymentId);
+                if (deletedTaskSlaSnapshots != plan.taskSlaSnapshotCount())
+                {
+                    throw new ServiceException("部署 SLA 快照状态已变化", HttpStatus.CONFLICT);
                 }
                 for (Model model : plan.linkedModels())
                 {
@@ -522,19 +590,60 @@ public class WorkflowDeploymentService
      */
     private void assertNoInstanceReferences(String deploymentId)
     {
-        long runtimeCount = runtimeService.createProcessInstanceQuery()
-                .deploymentId(deploymentId)
-                .count();
-        if (runtimeCount > 0)
+        Integer runtimeReference = processDefinitionLockMapper
+                .selectRuntimeInstanceReferenceForUpdate(deploymentId);
+        if (runtimeReference != null)
         {
             throw new ServiceException("部署仍有运行中的流程实例", HttpStatus.CONFLICT);
         }
-        long historyCount = historyService.createHistoricProcessInstanceQuery()
-                .deploymentId(deploymentId)
-                .count();
-        if (historyCount > 0)
+        Integer historicReference = processDefinitionLockMapper
+                .selectHistoricInstanceReferenceForUpdate(deploymentId);
+        if (historicReference != null)
         {
             throw new ServiceException("部署仍有流程历史记录", HttpStatus.CONFLICT);
+        }
+    }
+
+    /**
+     * 拒绝仍被活动申请草稿引用的部署，避免用户草稿在删除后无法正式提交。
+     *
+     * @param deploymentId String，Flowable 部署主键
+     * @return void，没有活动草稿引用时正常返回
+     */
+    private void assertNoActiveDraftReferences(String deploymentId)
+    {
+        if (processDraftMapper == null)
+        {
+            throw new ServiceException("流程申请草稿删除门禁未初始化", HttpStatus.ERROR);
+        }
+        Integer currentActiveReference = processDraftMapper
+                .selectActiveReferenceForUpdate(deploymentId);
+        if (currentActiveReference != null)
+        {
+            throw new ServiceException(ACTIVE_DRAFT_REFERENCE_MESSAGE, HttpStatus.CONFLICT);
+        }
+    }
+
+    /**
+     * 在任何部署、定义或草稿普通读取前锁定全部目标部署，避免并发创建形成孤儿草稿。
+     *
+     * @param deploymentIds List&lt;String&gt;，已经去重并按主键升序排列的部署主键
+     * @return void，全部部署存在时持锁到外层写事务结束
+     */
+    private void lockDeployments(List<String> deploymentIds)
+    {
+        if (processDefinitionLockMapper == null)
+        {
+            throw new ServiceException("流程部署锁服务未初始化", HttpStatus.ERROR);
+        }
+        for (String deploymentId : deploymentIds)
+        {
+            String lockedDeploymentId = processDefinitionLockMapper
+                    .selectDeploymentIdForUpdate(deploymentId);
+            if (!deploymentId.equals(lockedDeploymentId))
+            {
+                throw new ServiceException("流程部署不存在或已被删除", HttpStatus.NOT_FOUND);
+            }
         }
     }
 
@@ -739,16 +848,18 @@ public class WorkflowDeploymentService
      * @param participantRuleSnapshots List&lt;WfDeployParticipantRule&gt;，部署当前拥有的参与者规则快照
      * @param conditionRuleSnapshots List&lt;WfDeployConditionRule&gt;，部署当前拥有的条件分支快照
      * @param callActivitySnapshots List&lt;WfDeployCallActivitySnapshot&gt;，部署当前拥有的子流程调用快照
+     * @param taskSlaSnapshotCount int，部署当前拥有的审批 SLA 快照行数
      * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
      */
     private record DeploymentDeletionPlan(Deployment deployment, List<WfDeployForm> snapshots,
             List<WfDeployExtensionSnapshot> extensionSnapshots,
             List<WfDeployDmnSnapshot> dmnSnapshots,
             List<WfDeployControlledLoop> controlledLoopSnapshots,
-            List<WfDeployParticipantRule> participantRuleSnapshots,
-            List<WfDeployConditionRule> conditionRuleSnapshots,
-            List<WfDeployCallActivitySnapshot> callActivitySnapshots,
-            List<Model> linkedModels)
+             List<WfDeployParticipantRule> participantRuleSnapshots,
+             List<WfDeployConditionRule> conditionRuleSnapshots,
+             List<WfDeployCallActivitySnapshot> callActivitySnapshots,
+             int taskSlaSnapshotCount,
+             List<Model> linkedModels)
     {
         /**
          * 创建不可变删除计划，防止预检结果在服务代码中被修改。
@@ -761,6 +872,7 @@ public class WorkflowDeploymentService
          * @param participantRuleSnapshots List&lt;WfDeployParticipantRule&gt;，部署当前拥有的参与者规则快照
          * @param conditionRuleSnapshots List&lt;WfDeployConditionRule&gt;，部署当前拥有的条件分支快照
          * @param callActivitySnapshots List&lt;WfDeployCallActivitySnapshot&gt;，部署当前拥有的子流程调用快照
+         * @param taskSlaSnapshotCount int，部署当前拥有的审批 SLA 快照行数
          * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
          * @return 无返回值，构造后得到不可变删除计划
          */

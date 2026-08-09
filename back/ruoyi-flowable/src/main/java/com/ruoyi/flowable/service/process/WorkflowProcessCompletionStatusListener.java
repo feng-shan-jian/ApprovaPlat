@@ -15,6 +15,7 @@ import org.flowable.engine.impl.util.CommandContextUtil;
 import org.flowable.variable.service.VariableServiceConfiguration;
 import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntity;
 import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntityManager;
+import org.springframework.util.StringUtils;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
@@ -127,6 +128,19 @@ public final class WorkflowProcessCompletionStatusListener
         {
             throw new FlowableException("流程自然完成事件缺少有效的流程实例实体");
         }
+        WorkflowNotificationService notificationService =
+                notificationServiceSupplier.get();
+        if (!isRootBusinessProcessInstance(processInstance))
+        {
+            // CallActivity 子流程有独立 PROCESS_COMPLETED，但它不是用户发起的根业务实例。
+            // 只清理已失去业务对象的催办；不得收敛根业务状态、触发流程级抄送或结果通知。
+            if (notificationService != null)
+            {
+                notificationService.scheduleUrgeCancellationForCompletedProcessInstance(
+                        processInstance.getId());
+            }
+            return;
+        }
 
         boolean naturallyCompleted = updateHistoricProcessStatus(processInstance.getId());
         if (!naturallyCompleted)
@@ -142,14 +156,39 @@ public final class WorkflowProcessCompletionStatusListener
             automaticCopyService.onProcessCompleted(processInstance.getId(),
                     processInstance.getProcessDefinitionId());
         }
-        WorkflowNotificationService notificationService =
-                notificationServiceSupplier.get();
         if (notificationService != null)
         {
             // 只有 running 真正收敛为 completed 才登记结果，显式业务终态不会重复通知。
             notificationService.onProcessResult("PROCESS_COMPLETED",
                     processInstance.getProcessDefinitionId(), processInstance.getId());
         }
+    }
+
+    /**
+     * 使用 Flowable 执行树的 root 与 super execution 判断当前完成事件是否属于根业务实例。
+     * @param processInstance ExecutionEntity，完成事件携带的流程实例执行实体
+     * @return boolean，仅没有 super execution 且 root 为空或等于自身时为 true
+     */
+    private boolean isRootBusinessProcessInstance(ExecutionEntity processInstance)
+    {
+        String instanceId = processInstance.getId();
+        String rootProcessInstanceId = processInstance.getRootProcessInstanceId();
+        String superExecutionId = processInstance.getSuperExecutionId();
+        if (StringUtils.hasText(superExecutionId))
+        {
+            if (!StringUtils.hasText(rootProcessInstanceId)
+                    || instanceId.equals(rootProcessInstanceId))
+            {
+                throw new FlowableException("CallActivity 子流程执行树根关系异常: " + instanceId);
+            }
+            return false;
+        }
+        if (StringUtils.hasText(rootProcessInstanceId)
+                && !instanceId.equals(rootProcessInstanceId))
+        {
+            throw new FlowableException("根流程实例执行树关系异常: " + instanceId);
+        }
+        return true;
     }
 
     /**

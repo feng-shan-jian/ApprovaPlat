@@ -33,15 +33,25 @@ public class WorkflowNotificationWorker
     }
 
     /**
-     * 周期执行一个有界投递批次，单条失败不会阻塞后续消息。
-     * @return void，具体失败进入 outbox 重试或死信
+     * 周期执行一个有界投递批次；领取失败中止本批，已领取记录的投递失败仍隔离处理。
+     * @return void，领取异常交给下一调度周期重试，投递失败进入 outbox 重试或死信
      */
     @Scheduled(fixedDelayString = "${flowable.notification.worker-delay:1000}")
     public void deliverBatch()
     {
         for (int index = 0; index < service.batchSize(); index++)
         {
-            OutboxRow row = service.claimNext(workerId);
+            OutboxRow row;
+            try
+            {
+                row = service.claimNext(workerId);
+            }
+            catch (RuntimeException claimException)
+            {
+                // 领取查询总是从最低可处理行开始，继续循环只会重复命中同一毒行并占满批次槽位。
+                LOGGER.error("审批通知领取发生异常，workerId={}", workerId, claimException);
+                return;
+            }
             if (row == null) return;
             try
             {
@@ -51,8 +61,8 @@ public class WorkflowNotificationWorker
                 }
                 else
                 {
-                    DeliveryOutcome outcome = service.deliverEmail(row);
-                    service.completeDelivery(row, workerId, outcome);
+                    // 邮件发送与租约结果提交由同一事务边界完成，避免终态取消穿过 SMTP 副作用窗口。
+                    service.deliverEmail(row, workerId);
                 }
             }
             catch (RuntimeException exception)

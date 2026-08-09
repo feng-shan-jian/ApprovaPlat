@@ -186,8 +186,8 @@ class WorkflowParticipantRuleRuntimeServiceTest
     }
 
     /**
-     * 验证表单用户字段值非法时写入独立 NO_MATCH 审计并返回稳定解析失败子码。
-     * @return 无返回值；原始解析异常泄漏或拒绝审计缺失时测试失败
+     * 验证表单数值字段的小数用户主键不会被截断，并写入独立 NO_MATCH 审计。
+     * @return 无返回值；小数被分配给其他用户、原始异常泄漏或拒绝审计缺失时测试失败
      */
     @Test
     void auditsInvalidFormUserValueAsStableResolutionFailure()
@@ -196,7 +196,7 @@ class WorkflowParticipantRuleRuntimeServiceTest
         WfDeployParticipantRule rule = rule("TASK", "ASSIGNEE", "FORM_USER", "");
         rule.setFormField("approver");
         when(ruleMapper.selectTaskRule("deploy-1", "expense", "review")).thenReturn(rule);
-        when(task.getVariable("approver")).thenReturn("not-a-user-id");
+        when(task.getVariable("approver")).thenReturn(1.5D);
 
         assertThatThrownBy(() -> service.resolveCreatedTask(task))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->

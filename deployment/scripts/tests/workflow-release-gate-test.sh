@@ -305,20 +305,24 @@ database_check_detail() {
       printf 'matching_indexes=1, indexes=ACT_UNIQ_MODEL_VERSION'
       ;;
     model_version_duplicate_groups) printf 'duplicate_groups=0' ;;
-    missing_required_tables|unexpected_flowable_objects|disabled_module_objects)
-      printf 'issues=0, objects=none'
+    flowable_table_inventory)
+      printf 'missing=0, missing_objects=none, unexpected=0, unexpected_objects=none, disabled=0, disabled_objects=none'
       ;;
     deadletter_jobs) printf 'actual=0' ;;
     flowable_dmn_table_presence|workflow_connector_table_presence)
       printf 'missing_or_invalid=none'
       ;;
     workflow_schema_table_counts)
-      printf 'total=100, ruoyi=20, quartz=11, flowable=36, workflow=33'
+      printf 'total=111, ruoyi=20, quartz=11, flowable=36, workflow=44'
       ;;
-    workflow_connector_columns) printf 'missing=none' ;;
-    workflow_business_tables) printf 'present=10, missing=none' ;;
+    workflow_connector_columns|workflow_call_activity_snapshot_columns|workflow_call_activity_snapshot_indexes|workflow_call_activity_snapshot_checks|workflow_participant_rule_columns|workflow_participant_rule_indexes|workflow_participant_rule_checks)
+      printf 'missing=none'
+      ;;
+    workflow_call_activity_snapshot_integrity) printf 'invalid_rows=0' ;;
+    workflow_business_tables) printf 'present=13, missing=none' ;;
     workflow_business_columns) printf 'missing=none' ;;
     wf_attachment_cleanup_retry_columns) printf 'invalid=none' ;;
+    workflow_draft_column_types) printf 'invalid=none' ;;
     wf_category_active_code)
       printf 'columns=1, extra=STORED GENERATED, expression=if(del_flag=0,code,NULL)'
       ;;
@@ -329,6 +333,11 @@ database_check_detail() {
       printf 'constraints=1, enforced=YES, canonical_sha256=%064d' 1
       ;;
     workflow_business_data_integrity) printf 'issues=0, detail=none' ;;
+    workflow_participant_rule_tables) printf 'present=2, missing=none' ;;
+    workflow_participant_audit_retention_foreign_keys) printf 'unexpected=none' ;;
+    workflow_participant_rule_data_integrity) printf 'issues=0, detail=none' ;;
+    workflow_notification_tables) printf 'present=6, missing=none' ;;
+    workflow_notification_integrity) printf 'issues=0, detail=none' ;;
     workflow_runtime_integration_tables) printf 'present=6, missing=none' ;;
     workflow_runtime_integration_columns|workflow_runtime_integration_indexes|workflow_extension_columns)
       printf 'missing=none'
@@ -350,11 +359,14 @@ database_check_detail() {
     workflow_bpmn_event_tables) printf 'found=3, expected=3' ;;
     workflow_bpmn_event_constraints) printf 'found=12, expected_at_least=12' ;;
     workflow_bpmn_event_data_integrity) printf 'issues=0' ;;
-    workflow_menu_count) printf 'rows=86, natural_keys=86' ;;
-    workflow_menu_tree) printf 'directories=2, pages=19, buttons=65, invalid_routes=0' ;;
+    workflow_menu_count) printf 'rows=98, natural_keys=98' ;;
+    workflow_menu_tree) printf 'directories=2, pages=21, buttons=75, invalid_routes=0' ;;
     workflow_retired_permissions) printf 'legacy_rows=0' ;;
-    workflow_roles) printf 'active_roles=5, duplicate_roles=0' ;;
-    workflow_admin_menu_scope) printf 'assigned=86, expected=86' ;;
+    workflow_roles)
+      printf 'active_roles=5, duplicate_roles=0, assignments=workflow_admin:98,workflow_approver:18,workflow_auditor:24,workflow_designer:47,workflow_starter:21'
+      ;;
+    workflow_admin_menu_scope) printf 'assigned=98, expected=98' ;;
+    workflow_draft_role_scope) printf 'permissions=5, starter=5, unauthorized=0' ;;
     workflow_admin_only_instance_management)
       printf 'unauthorized_assignments=0, roles=none, admin_management_permissions=2'
       ;;
@@ -364,7 +376,7 @@ database_check_detail() {
 }
 
 #
-# 写入三套正式只读 SQL 的固定结构和 46 个完整检查项，模拟 mysql --batch --raw 原始输出。
+# 写入三套正式只读 SQL 的固定结构和 58 个完整检查项，模拟 mysql --batch --raw 原始输出。
 # 参数：$1（字符串）目标 TSV 文件。
 # 返回：0 表示数据库验收夹具已按正式脚本顺序写入。
 #
@@ -375,16 +387,21 @@ write_database_verify() {
   local detail
   local -a engine_checks=(
     schema_versions model_version_unique_constraint model_version_duplicate_groups
-    missing_required_tables unexpected_flowable_objects disabled_module_objects
-    deadletter_jobs
+    flowable_table_inventory deadletter_jobs
   )
   local -a business_checks=(
     workflow_schema_table_counts flowable_dmn_table_presence
     workflow_connector_table_presence workflow_connector_columns
+    workflow_call_activity_snapshot_columns workflow_call_activity_snapshot_indexes
+    workflow_call_activity_snapshot_checks workflow_call_activity_snapshot_integrity
     workflow_business_tables workflow_business_columns
-    wf_attachment_cleanup_retry_columns wf_category_active_code
+    wf_attachment_cleanup_retry_columns workflow_draft_column_types wf_category_active_code
     workflow_business_indexes workflow_business_checks workflow_business_foreign_keys
     wf_attachment_cleanup_retry_check_clause workflow_business_data_integrity
+    workflow_participant_rule_tables workflow_participant_rule_columns
+    workflow_participant_rule_indexes workflow_participant_rule_checks
+    workflow_participant_audit_retention_foreign_keys workflow_participant_rule_data_integrity
+    workflow_notification_tables workflow_notification_integrity
     workflow_runtime_integration_tables workflow_runtime_integration_columns
     workflow_runtime_integration_indexes workflow_runtime_integration_checks
     workflow_runtime_integration_foreign_keys workflow_runtime_integration_data_integrity
@@ -397,7 +414,7 @@ write_database_verify() {
   )
   local -a menu_checks=(
     workflow_menu_count workflow_menu_tree workflow_retired_permissions
-    workflow_roles workflow_admin_menu_scope
+    workflow_roles workflow_admin_menu_scope workflow_draft_role_scope
     workflow_admin_only_instance_management workflow_auditor_read_only
   )
 
@@ -470,12 +487,12 @@ create_fresh_install_evidence() {
   printf '%064d  backup-smoke/schema.sql\n' 1 \
     > "$evidence_dir/backup-smoke/schema-sha256.txt"
   : > "$evidence_dir/backup-smoke/mysqlcheck.txt"
-  for ((table_number = 1; table_number <= 100; table_number++)); do
+  for ((table_number = 1; table_number <= 111; table_number++)); do
     printf 'ry_vue_backup_verify.table_%02d OK\n' "$table_number" \
       >> "$evidence_dir/backup-smoke/mysqlcheck.txt"
   done
   printf 'empty_schema_table_count=0\n' > "$evidence_dir/empty-schema-check.txt"
-  printf '100\t20\t11\t36\t33\n' > "$evidence_dir/table-counts.tsv"
+  printf '111\t20\t11\t36\t44\n' > "$evidence_dir/table-counts.tsv"
   printf 'PONG\n' > "$evidence_dir/redis-ping.txt"
   if [[ "$previous_release_id" != 'NONE' || -n "$previous_release_dir" ]]; then
     preflight_arguments+=(
@@ -1561,7 +1578,7 @@ main() {
   printf 'ry_vue_backup_verify.table_01 OK\n' \
     > "$evidence_dir/fresh-install/backup-smoke/mysqlcheck.txt"
   refresh_rehearsal_manifests "$evidence_dir"
-  expect_failure 'rehearsal without 100-table restore verification fails' \
+  expect_failure 'rehearsal without 111-table restore verification fails' \
     run_release_evidence_gate "$evidence_dir" rehearsal
 
   evidence_dir="$TEST_ROOT/rehearsal-fresh-attachment-diff"
@@ -1851,11 +1868,49 @@ main() {
   create_production_evidence \
     "$evidence_dir" "$TEST_ROOT/current-1" 'current-1' \
     "$TEST_ROOT/previous-1" 'previous-1'
-  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_schema_table_counts" { $3="total=98, ruoyi=20, quartz=11, flowable=36, workflow=31" } { print }' \
+  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_schema_table_counts" { $3="total=109, ruoyi=20, quartz=11, flowable=36, workflow=42" } { print }' \
     "$evidence_dir/database-verify.tsv" > "$evidence_dir/database-verify.filtered"
   mv -- "$evidence_dir/database-verify.filtered" "$evidence_dir/database-verify.tsv"
   refresh_evidence_manifest "$evidence_dir"
   expect_failure 'database PASS with misclassified workflow tables fails' \
+    run_release_evidence_gate "$evidence_dir" production
+
+  local inventory_issue
+  local inventory_detail
+  for inventory_issue in missing unexpected disabled; do
+    evidence_dir="$TEST_ROOT/evidence-flowable-inventory-$inventory_issue"
+    create_production_evidence \
+      "$evidence_dir" "$TEST_ROOT/current-1" 'current-1' \
+      "$TEST_ROOT/previous-1" 'previous-1'
+    case "$inventory_issue" in
+      missing)
+        inventory_detail='missing=1, missing_objects=ACT_RE_PROCDEF, unexpected=0, unexpected_objects=none, disabled=0, disabled_objects=none'
+        ;;
+      unexpected)
+        inventory_detail='missing=0, missing_objects=none, unexpected=1, unexpected_objects=ACT_RE_UNKNOWN[BASE TABLE], disabled=0, disabled_objects=none'
+        ;;
+      disabled)
+        inventory_detail='missing=0, missing_objects=none, unexpected=0, unexpected_objects=none, disabled=1, disabled_objects=ACT_ID_USER'
+        ;;
+    esac
+    awk -F '\t' -v detail="$inventory_detail" \
+      'BEGIN { OFS="\t" } $1 == "flowable_table_inventory" { $3=detail } { print }' \
+      "$evidence_dir/database-verify.tsv" > "$evidence_dir/database-verify.filtered"
+    mv -- "$evidence_dir/database-verify.filtered" "$evidence_dir/database-verify.tsv"
+    refresh_evidence_manifest "$evidence_dir"
+    expect_failure "Flowable inventory $inventory_issue object fails" \
+      run_release_evidence_gate "$evidence_dir" production
+  done
+
+  evidence_dir="$TEST_ROOT/evidence-role-assignment-count-mismatch"
+  create_production_evidence \
+    "$evidence_dir" "$TEST_ROOT/current-1" 'current-1' \
+    "$TEST_ROOT/previous-1" 'previous-1'
+  awk -F '\t' 'BEGIN { OFS="\t" } $1 == "workflow_roles" { sub("workflow_approver:18", "workflow_approver:17", $3) } { print }' \
+    "$evidence_dir/database-verify.tsv" > "$evidence_dir/database-verify.filtered"
+  mv -- "$evidence_dir/database-verify.filtered" "$evidence_dir/database-verify.tsv"
+  refresh_evidence_manifest "$evidence_dir"
+  expect_failure 'workflow role assignment count drift fails' \
     run_release_evidence_gate "$evidence_dir" production
 
   evidence_dir="$TEST_ROOT/evidence-fake-business-pass"

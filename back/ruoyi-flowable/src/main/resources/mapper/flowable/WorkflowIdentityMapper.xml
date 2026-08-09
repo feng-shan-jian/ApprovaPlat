@@ -19,7 +19,7 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             <arg column="option_value" javaType="java.lang.String" />
             <arg column="option_label" javaType="java.lang.String" />
             <arg column="option_type" javaType="java.lang.String" />
-            <arg column="available" javaType="boolean" />
+            <arg column="available" javaType="_boolean" />
         </constructor>
     </resultMap>
 

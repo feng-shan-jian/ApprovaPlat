@@ -1086,19 +1086,32 @@ CREATE TABLE IF NOT EXISTS `wf_copy`
     `user_id`         BIGINT       NOT NULL COMMENT '抄送接收用户主键',
     `originator_id`   BIGINT       NOT NULL COMMENT '流程发起用户主键',
     `originator_name` VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '流程发起用户名称快照',
+    `source_type`     VARCHAR(16)  NOT NULL DEFAULT 'MANUAL' COMMENT '抄送来源：MANUAL、AUTO 或 MANUAL_AUTO',
+    `trigger_type`    VARCHAR(32)  NOT NULL DEFAULT 'MANUAL_COMPLETE' COMMENT '服务端固定的抄送触发类型',
+    `trigger_node_id` VARCHAR(64)           DEFAULT NULL COMMENT '触发抄送的 BPMN 节点主键',
+    `trigger_node_name` VARCHAR(255)        DEFAULT NULL COMMENT '触发抄送的 BPMN 节点名称快照',
+    `read_status`     CHAR(1)      NOT NULL DEFAULT '0' COMMENT '阅读状态：0 未读，1 已读',
+    `read_time`       DATETIME(3)           DEFAULT NULL COMMENT '首次阅读时间',
     `create_by`       VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '创建者账号',
-    `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `create_time`     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `update_by`       VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '更新者账号',
     `update_time`     DATETIME              DEFAULT NULL COMMENT '更新时间',
     `remark`          VARCHAR(255)          DEFAULT NULL COMMENT '备注',
     `del_flag`        CHAR(1)      NOT NULL DEFAULT '0' COMMENT '逻辑删除标志：0 有效，2 已删除',
     PRIMARY KEY (`copy_id`),
     UNIQUE KEY `uk_wf_copy_event_user` (`copy_event_id`, `user_id`),
-    KEY `idx_wf_copy_user_status_time` (`user_id`, `del_flag`, `create_time`),
+    KEY `idx_wf_copy_user_status_time` (`user_id`, `del_flag`, `read_status`, `create_time`),
     KEY `idx_wf_copy_instance` (`instance_id`, `del_flag`),
     KEY `idx_wf_copy_task` (`task_id`, `del_flag`),
     KEY `idx_wf_copy_deployment` (`deployment_id`, `del_flag`),
-    CONSTRAINT `chk_wf_copy_del_flag` CHECK (`del_flag` IN ('0', '2'))
+    CONSTRAINT `chk_wf_copy_del_flag` CHECK (`del_flag` IN ('0', '2')),
+    CONSTRAINT `chk_wf_copy_source_type` CHECK (`source_type` IN ('MANUAL', 'AUTO', 'MANUAL_AUTO')),
+    CONSTRAINT `chk_wf_copy_trigger_type` CHECK (`trigger_type` IN (
+        'MANUAL_COMPLETE', 'MANUAL_REJECT', 'MANUAL_RETURN', 'MANUAL_DELEGATE',
+        'MANUAL_RESOLVE', 'MANUAL_TRANSFER', 'NODE_ARRIVED', 'NODE_COMPLETED',
+        'PROCESS_COMPLETED')),
+    CONSTRAINT `chk_wf_copy_read_state` CHECK ((`read_status` = '0' AND `read_time` IS NULL)
+        OR (`read_status` = '1' AND `read_time` IS NOT NULL))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
@@ -1201,6 +1214,8 @@ CREATE TABLE IF NOT EXISTS `wf_process_draft`
         (`owner_user_id`, `process_definition_key`, `update_time`, `draft_id`),
     KEY `idx_wf_process_draft_definition_version`
         (`process_definition_key`, `process_definition_version`, `draft_status`),
+    KEY `idx_wf_process_draft_deployment_status`
+        (`deployment_id`, `draft_status`),
     CONSTRAINT `chk_wf_process_draft_id` CHECK
         (`draft_id` REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
     CONSTRAINT `chk_wf_process_draft_owner` CHECK (`owner_user_id` > 0),
@@ -1550,7 +1565,9 @@ CREATE TABLE IF NOT EXISTS `wf_notification_outbox`
     `content`                VARCHAR(700) NOT NULL,
     `route_path`             VARCHAR(500) NOT NULL COMMENT '站内安全相对路由',
     `status`                 VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING',
+    `delivery_cycle`         SMALLINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '补偿后递增且不可回退的投递周期',
     `attempt_count`          TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `total_attempt_count`    INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '跨补偿周期累计且不可回退的投递次数',
     `max_attempts`           TINYINT UNSIGNED NOT NULL,
     `next_attempt_at`        DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `lease_owner`            VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
@@ -1569,7 +1586,8 @@ CREATE TABLE IF NOT EXISTS `wf_notification_outbox`
     CONSTRAINT `chk_wf_notification_outbox_hash` CHECK (`idempotency_key` REGEXP '^[0-9a-f]{64}$'),
     CONSTRAINT `chk_wf_notification_outbox_channel` CHECK (`channel` IN ('INBOX', 'EMAIL')),
     CONSTRAINT `chk_wf_notification_outbox_status` CHECK (`status` IN ('PENDING', 'RETRYING', 'DELIVERING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED')),
-    CONSTRAINT `chk_wf_notification_outbox_attempts` CHECK (`max_attempts` BETWEEN 1 AND 20 AND `attempt_count` <= `max_attempts`)
+    CONSTRAINT `chk_wf_notification_outbox_attempts` CHECK (`max_attempts` BETWEEN 1 AND 20 AND `attempt_count` <= `max_attempts`),
+    CONSTRAINT `chk_wf_notification_outbox_sequence` CHECK (`delivery_cycle` >= 1 AND `total_attempt_count` >= `attempt_count`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
   COMMENT = '普通审批通知可靠 outbox';
 
@@ -1605,7 +1623,9 @@ CREATE TABLE IF NOT EXISTS `wf_notification_delivery_audit`
     `audit_id`       BIGINT       NOT NULL AUTO_INCREMENT,
     `outbox_id`      BIGINT       NOT NULL,
     `action_type`    VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `delivery_cycle` SMALLINT UNSIGNED NOT NULL COMMENT '动作所属投递周期',
     `attempt_no`     TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `total_attempt_no` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '动作发生时的跨周期累计尝试次数',
     `from_status`    VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
     `to_status`      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     `actor_type`     VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -1614,10 +1634,11 @@ CREATE TABLE IF NOT EXISTS `wf_notification_delivery_audit`
     `detail`         VARCHAR(500) NOT NULL COMMENT '不含邮箱和邮件正文的脱敏审计',
     `create_time`    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     PRIMARY KEY (`audit_id`),
-    UNIQUE KEY `uk_wf_notification_delivery_audit` (`outbox_id`, `action_type`, `attempt_no`),
+    UNIQUE KEY `uk_wf_notification_delivery_audit` (`outbox_id`, `action_type`, `delivery_cycle`, `attempt_no`),
     KEY `idx_wf_notification_delivery_outbox` (`outbox_id`, `audit_id`),
     CONSTRAINT `fk_wf_notification_delivery_outbox` FOREIGN KEY (`outbox_id`)
-        REFERENCES `wf_notification_outbox` (`outbox_id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+        REFERENCES `wf_notification_outbox` (`outbox_id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `chk_wf_notification_delivery_sequence` CHECK (`delivery_cycle` >= 1 AND `total_attempt_no` >= `attempt_no`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
   COMMENT = '普通审批通知逐次投递审计';
 

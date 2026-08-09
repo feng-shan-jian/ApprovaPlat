@@ -124,6 +124,7 @@ WfBpmnEventController,changeCodeStatus,PUT,/workflow/bpmn-event/codes/{eventCode
 WfBpmnEventController,audit,GET,/workflow/bpmn-event/audit,SINGLE,workflow:bpmnEvent:audit,ALLOW,ALLOW,DENY,DENY,ALLOW
 WfBpmnEventController,myNotifications,GET,/workflow/bpmn-event/notifications/my,ANY,workflow:process:approval|workflow:process:start|workflow:bpmnEvent:list,ALLOW,ALLOW,ALLOW,ALLOW,ALLOW
 WfBpmnEventController,markRead,PUT,/workflow/bpmn-event/notifications/{notificationId}/read,ANY,workflow:process:approval|workflow:process:start|workflow:bpmnEvent:list,ALLOW,ALLOW,ALLOW,ALLOW,ALLOW
+WfCallActivityController,catalog,GET,/workflow/call-activity/catalog,SINGLE,workflow:model:designer,ALLOW,ALLOW,DENY,DENY,DENY
 WfTaskSlaController,listCalendars,GET,/workflow/sla/calendars,SINGLE,workflow:sla:list,ALLOW,ALLOW,DENY,DENY,ALLOW
 WfTaskSlaController,listEnabledCalendars,GET,/workflow/sla/calendars/enabled,ANY,workflow:sla:list|workflow:model:designer,ALLOW,ALLOW,DENY,DENY,ALLOW
 WfTaskSlaController,createCalendar,POST,/workflow/sla/calendars,SINGLE,workflow:sla:add,ALLOW,ALLOW,DENY,DENY,DENY

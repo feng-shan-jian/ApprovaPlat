@@ -201,6 +201,46 @@ async function purgeBoundAttachmentFixture(fixture) {
   await rm(quarantinePath, { force: false })
 }
 
+/**
+ * 清除本轮已提交草稿及其审计，使随后删除流程历史时不会留下悬空正式引用。
+ * @param {{draftId: string, processInstanceId: string}} fixture 本轮草稿 UUID 与唯一提交实例关系。
+ * @returns {Promise<void>} 草稿关系经唯一性校验并在同一事务删除后结束。
+ */
+async function purgeSubmittedDraftFixture(fixture) {
+  const draftId = String(fixture?.draftId || '')
+  const processInstanceId = String(fixture?.processInstanceId || '')
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(draftId)
+      || !/^[A-Za-z0-9_-]{1,64}$/.test(processInstanceId)) {
+    throw new Error('草稿 E2E 已提交记录清理主键不合法')
+  }
+  const escapeLiteral = value => value.replaceAll("'", "''")
+  const draftLiteral = escapeLiteral(draftId)
+  const instanceLiteral = escapeLiteral(processInstanceId)
+  const rows = runDraftFixtureMysql(
+    `SELECT draft_status, submitted_process_instance_id FROM wf_process_draft `
+      + `WHERE draft_id='${draftLiteral}';\n`
+      + `SELECT COUNT(*) FROM wf_process_draft_audit WHERE draft_id='${draftLiteral}';\n`)
+  if (rows.length !== 2) throw new Error('草稿 E2E 已提交记录或审计计数不唯一')
+  const [status, storedInstanceId] = rows[0].split('\t')
+  const auditCount = Number(rows[1])
+  if (status !== 'SUBMITTED' || storedInstanceId !== processInstanceId
+      || !Number.isInteger(auditCount) || auditCount < 1) {
+    throw new Error('草稿 E2E 已提交记录不满足清理门禁')
+  }
+
+  const deleted = runDraftFixtureMysql(
+    `START TRANSACTION;\n`
+      + `DELETE FROM wf_process_draft_audit WHERE draft_id='${draftLiteral}';\n`
+      + `SELECT ROW_COUNT();\n`
+      + `DELETE FROM wf_process_draft WHERE draft_id='${draftLiteral}' `
+      + `AND draft_status='SUBMITTED' AND submitted_process_instance_id='${instanceLiteral}';\n`
+      + `SELECT ROW_COUNT();\n`
+      + `COMMIT;\n`)
+  if (Number(deleted.at(-2)) !== auditCount || deleted.at(-1) !== '1') {
+    throw new Error('草稿 E2E 已提交记录事务删除计数不一致')
+  }
+}
+
 test('草稿跨登录恢复、附件迁移、CAS、越权、过期和重复提交保持真实一致', async ({ browser }) => {
   test.setTimeout(180_000)
   const sessions = []
@@ -212,6 +252,7 @@ test('草稿跨登录恢复、附件迁移、CAS、越权、过期和重复提�
   let staleDraftId = ''
   let staleDraftRevision = 0
   let boundAttachmentFixture = null
+  let submittedDraftFixture = null
 
   try {
     const designerSession = await openWorkflowRoleSession(browser, 'workflow_designer')
@@ -378,6 +419,8 @@ test('草稿跨登录恢复、附件迁移、CAS、越权、过期和重复提�
     const processInstanceId = String(submitted.data?.processInstanceId || submitted.data?.id || '')
     expect(processInstanceId, '正式提交必须返回真实 Flowable 实例主键').not.toBe('')
     resources.processInstanceIds.push(processInstanceId)
+    // 草稿与实例关系一旦持久化就立即登记，后续任一断言失败仍能先解除正式引用再删除实例历史。
+    submittedDraftFixture = { draftId, processInstanceId }
     await expect(pages.starter).toHaveURL(new RegExp(`/workflow/process-detail/${processInstanceId}(?:[/?]|$)`))
 
     // 网络重试使用同一提交契约只能返回原实例，工作台也只能出现一条实例。
@@ -469,15 +512,20 @@ test('草稿跨登录恢复、附件迁移、CAS、越权、过期和重复提�
           query: { expectedVersion: staleDraftRevision }
         }).catch(() => {})
     }
-    const attachmentCleanupErrors = []
+    const fixtureCleanupErrors = []
     if (boundAttachmentFixture) {
       await purgeBoundAttachmentFixture(boundAttachmentFixture).catch(error => {
-        attachmentCleanupErrors.push(`清理绑定附件 fixture: ${String(error?.message || error)}`)
+        fixtureCleanupErrors.push(`清理绑定附件 fixture: ${String(error?.message || error)}`)
+      })
+    }
+    if (submittedDraftFixture) {
+      await purgeSubmittedDraftFixture(submittedDraftFixture).catch(error => {
+        fixtureCleanupErrors.push(`清理已提交草稿 fixture: ${String(error?.message || error)}`)
       })
     }
     const cleanupErrors = await cleanupWorkflowResources(pages, resources)
     const logoutErrors = await closeWorkflowRoleSessions(sessions)
-    const finalErrors = [...attachmentCleanupErrors, ...cleanupErrors, ...logoutErrors]
+    const finalErrors = [...fixtureCleanupErrors, ...cleanupErrors, ...logoutErrors]
     if (primaryError) {
       if (finalErrors.length) primaryError.message += `；清理失败：${finalErrors.join(' | ')}`
       throw primaryError

@@ -11,7 +11,8 @@ import {
   findStartableWorkflowDefinition,
   findWorkflowUserOption,
   getWorkflowDetail,
-  openWorkflowRoleSession
+  openWorkflowRoleSession,
+  submitWorkflowStartPage
 } from './support/workflow-fixture.js'
 
 /**
@@ -255,7 +256,7 @@ test('节点字段权限通过真实设计器、部署快照、审批、退回�
   const processName = `字段权限验收_${suffix}`
   const formName = `字段权限表单_${suffix}`
   const resources = {
-    attachmentIds: [], processInstanceIds: [], deploymentIds: [], modelIds: [],
+    attachmentIds: [], processInstanceIds: [], draftFixtures: [], deploymentIds: [], modelIds: [],
     formId: '', categoryId: ''
   }
   const sessions = []
@@ -371,13 +372,7 @@ test('节点字段权限通过真实设计器、部署快照、审批、退回�
       },
       expectedCode: 400
     })
-    const startPromise = starter.waitForResponse(response => matchesEndpoint(
-      response, `/workflow/process/start/${encodeURIComponent(definition.definitionId)}`, 'POST'))
-    await starter.getByRole('button', { name: '提交申请', exact: true }).click()
-    const started = await expectAjaxSuccess(await startPromise, `/workflow/process/start/${definition.definitionId}`)
-    const processInstanceId = String(started.data?.id || started.data?.processInstanceId || '')
-    expect(processInstanceId).not.toBe('')
-    resources.processInstanceIds.push(processInstanceId)
+    const processInstanceId = await submitWorkflowStartPage(starter, resources)
 
     // 一级任务只展示可读字段；必填、隐藏和只读规则同时由页面与服务端执行。
     const reviewA = await findAssignedWorkflowTask(approverPage, processKey, 'reviewA', processInstanceId)
@@ -515,7 +510,7 @@ test('并行任务按各自节点权限并发编辑时不丢失其他字段补�
   const processName = `字段权限并行验收_${suffix}`
   const formName = `字段权限并行表单_${suffix}`
   const resources = {
-    attachmentIds: [], processInstanceIds: [], deploymentIds: [], modelIds: [],
+    attachmentIds: [], processInstanceIds: [], draftFixtures: [], deploymentIds: [], modelIds: [],
     formId: '', categoryId: ''
   }
   const sessions = []

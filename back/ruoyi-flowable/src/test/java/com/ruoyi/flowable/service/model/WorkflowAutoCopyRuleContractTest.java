@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import org.flowable.bpmn.model.ExtensionAttribute;
 import org.flowable.bpmn.model.ExtensionElement;
+import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.UserTask;
 import org.junit.jupiter.api.Test;
@@ -84,6 +85,71 @@ class WorkflowAutoCopyRuleContractTest
                 .isInstanceOf(ServiceException.class);
         assertThatThrownBy(() -> WorkflowAutoCopyRuleContract.readRules(duplicate))
                 .isInstanceOf(ServiceException.class).hasMessageContaining("重复");
+    }
+
+    /**
+     * 验证任务和流程级 FORM_USER_FIELD 都只能引用同一正式字段目录。
+     * @return void，缺失、隐藏、无读权限或复合字段可通过作者门禁时测试失败
+     */
+    @Test
+    void validatesFormUserFieldAgainstFormalScopedCatalog()
+    {
+        BpmnModel model = new BpmnModel();
+        Process process = elementWithRules(new Process(), """
+                {"version":1,"rules":[{"id":"process-copy","trigger":"PROCESS_COMPLETED",
+                "recipients":[{"type":"FORM_USER_FIELD","values":["starterReviewerId"]}]}]}
+                """);
+        process.setId("expense");
+        process.setExecutable(true);
+        UserTask task = elementWithRules(new UserTask(), """
+                {"version":1,"rules":[{"id":"task-copy","trigger":"NODE_COMPLETED",
+                "recipients":[{"type":"FORM_USER_FIELD","values":["reviewerId"]}]}]}
+                """);
+        task.setId("review");
+        process.addFlowElement(task);
+        model.addProcess(process);
+        WorkflowAuthorFormFieldCatalog catalog = WorkflowAuthorFormFieldCatalog.builder()
+                .add("expense", "start", Set.of("starterReviewerId"))
+                .add("expense", "review", Set.of("reviewerId"))
+                .build();
+
+        WorkflowAutoCopyRuleContract.validateFormUserFields(model, catalog);
+
+        WorkflowAuthorFormFieldCatalog conflictingProcessField =
+                WorkflowAuthorFormFieldCatalog.builder()
+                        .add("expense", "start", Set.of("sharedReviewerId"),
+                                Set.of("sharedReviewerId"))
+                        .add("expense", "review", Set.of(),
+                                Set.of("sharedReviewerId"))
+                        .build();
+        assertThat(conflictingProcessField
+                .containsProcessField("expense", "sharedReviewerId")).isFalse();
+
+        WorkflowAuthorFormFieldCatalog heterogeneousProcessField =
+                WorkflowAuthorFormFieldCatalog.builder()
+                        .add("expense", "start", Map.of("typedReviewerId", "el-input"),
+                                Set.of("typedReviewerId"))
+                        .add("expense", "review",
+                                Map.of("typedReviewerId", "el-input-number"),
+                                Set.of("typedReviewerId"))
+                        .build();
+        assertThat(heterogeneousProcessField
+                .containsProcessField("expense", "typedReviewerId")).isFalse();
+        // 跨节点异构只禁止流程级并集；任务自身仍可使用其无歧义的正式字段。
+        assertThat(heterogeneousProcessField
+                .containsTaskField("expense", "review", "typedReviewerId")).isTrue();
+
+        WorkflowAuthorFormFieldCatalog missingTaskField = WorkflowAuthorFormFieldCatalog.builder()
+                .add("expense", "start", Set.of("starterReviewerId"))
+                .build();
+        assertThatThrownBy(() -> WorkflowAutoCopyRuleContract.validateFormUserFields(
+                model, missingTaskField))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(400);
+                    assertThat(exception.getSubCode())
+                            .isEqualTo("BPMN_AUTO_COPY_FORM_FIELD_INVALID");
+                });
     }
 
     /**

@@ -13,6 +13,7 @@ import org.flowable.bpmn.model.BaseElement;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.Process;
+import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -22,12 +23,14 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.variable.api.history.HistoricVariableInstance;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCopy;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.identity.WorkflowUserIdValueParser;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract;
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.RecipientSource;
@@ -35,6 +38,7 @@ import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.RecipientTy
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.Rule;
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.Trigger;
 import com.ruoyi.system.mapper.SysUserMapper;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 在 Flowable 生命周期事务内解析部署冻结规则并幂等写入正式自动抄送记录。
@@ -52,6 +56,9 @@ public class WorkflowAutomaticCopyService
     private final WorkflowIdentityResolver identityResolver;
     private final WfCopyMapper copyMapper;
     private final SysUserMapper userMapper;
+
+    /** 自动抄送创建通知服务；生产容器注入，旧直接构造单元测试可为空。 */
+    private WorkflowNotificationService notificationService;
 
     /**
      * 创建自动抄送运行时服务。
@@ -77,6 +84,17 @@ public class WorkflowAutomaticCopyService
     }
 
     /**
+     * 注入抄送事实通知服务，使自动 wf_copy 和 COPY_CREATED outbox 同事务提交。
+     * @param notificationService WorkflowNotificationService，正式通知 outbox 服务
+     * @return void，生产 Spring 容器完成注入
+     */
+    @Autowired
+    public void setNotificationService(WorkflowNotificationService notificationService)
+    {
+        this.notificationService = notificationService;
+    }
+
+    /**
      * 处理用户任务到达或完成事件；assignment 事件不产生抄送。
      *
      * @param eventName String，create 或 complete
@@ -98,16 +116,27 @@ public class WorkflowAutomaticCopyService
         {
             return;
         }
-        RuntimeContext context = requireActiveContext(processInstanceId,
-                processDefinitionId, variables);
         Process process = requireProcessModel(processDefinitionId);
-        FlowElement node = process.getFlowElement(requireId(taskDefinitionKey), true);
+        if (!hasTaskAutoCopyRules(process))
+        {
+            // 普通用户任务没有冻结自动抄送规则时，生命周期监听必须保持合法无副作用。
+            return;
+        }
+        String normalizedTaskKey = requireId(taskDefinitionKey);
+        FlowElement node = process.getFlowElement(normalizedTaskKey, true);
         if (node == null)
         {
             throw dataError("自动抄送触发节点不存在");
         }
-        persistMatchingRules(node, trigger, requireId(taskId), context,
-                requireId(taskDefinitionKey), snapshot(taskName, taskDefinitionKey));
+        if (!(node instanceof UserTask userTask))
+        {
+            throw dataError("自动抄送触发节点不是用户任务");
+        }
+        String normalizedTaskId = requireId(taskId);
+        RuntimeContext context = requireActiveContext(processInstanceId,
+                processDefinitionId, variables);
+        persistMatchingRules(userTask, trigger, normalizedTaskId, context,
+                normalizedTaskKey, snapshot(taskName, normalizedTaskKey));
     }
 
     /**
@@ -227,6 +256,11 @@ public class WorkflowAutomaticCopyService
         {
             throw dataError("自动抄送写入结果异常");
         }
+        if (notificationService != null)
+        {
+            // 幂等重放会读取同一 wf_copy 事实，COPY_CREATED 自身幂等键保证不会重复生成 outbox。
+            notificationService.onCopiesCreated(copies);
+        }
     }
 
     /**
@@ -308,24 +342,8 @@ public class WorkflowAutomaticCopyService
      */
     private String requireUserValue(Object value)
     {
-        String text = value instanceof Number number
-                ? String.valueOf(number.longValue()) : String.valueOf(value);
-        try
-        {
-            long id = Long.parseLong(text);
-            if (id <= 0 || !Long.toString(id).equals(text))
-            {
-                throw new NumberFormatException();
-            }
-            return text;
-        }
-        catch (NumberFormatException exception)
-        {
-            ServiceException failure = new ServiceException("表单用户字段值不合法",
-                    HttpStatus.CONFLICT);
-            failure.initCause(exception);
-            throw failure;
-        }
+        return WorkflowUserIdValueParser.requirePositiveUserId(
+                value, "表单用户字段值不合法");
     }
 
     /**
@@ -378,16 +396,57 @@ public class WorkflowAutomaticCopyService
                         : Collections.unmodifiableMap(new LinkedHashMap<>(variables)));
     }
 
-    /** @param definitionId String，流程定义主键；@return Process，部署冻结主流程模型。 */
+    /**
+     * 严格读取当前流程定义对应的部署模型流程，避免多 process 资源误取主流程。
+     *
+     * @param definitionId String，流程定义主键
+     * @return Process，定义 key 与 BPMN process id 精确匹配的部署冻结流程
+     */
     private Process requireProcessModel(String definitionId)
     {
-        BpmnModel model = repositoryService.getBpmnModel(requireId(definitionId));
-        Process process = model == null ? null : model.getMainProcess();
-        if (process == null)
+        String normalizedDefinitionId = requireId(definitionId);
+        ProcessDefinition definition = repositoryService.createProcessDefinitionQuery()
+                .processDefinitionId(normalizedDefinitionId).singleResult();
+        if (definition == null)
+        {
+            throw dataError("自动抄送流程定义不存在");
+        }
+        String definitionKey = definition.getKey();
+        if (!StringUtils.hasText(definitionKey))
+        {
+            throw dataError("自动抄送流程定义与部署模型关联异常");
+        }
+        BpmnModel model = repositoryService.getBpmnModel(normalizedDefinitionId);
+        if (model == null)
         {
             throw dataError("自动抄送部署模型不存在");
         }
+        Process process = model.getProcessById(definitionKey);
+        if (process == null || !definitionKey.equals(process.getId()))
+        {
+            throw dataError("自动抄送流程定义与部署模型关联异常");
+        }
         return process;
+    }
+
+    /**
+     * 全量解析当前流程的用户任务自动抄送规则，确认任务事件是否需要进入运行时校验。
+     *
+     * @param process Process，已与流程定义 key 精确关联的部署冻结流程
+     * @return boolean，任一用户任务存在规则时返回 true；所有任务无规则时返回 false
+     */
+    private boolean hasTaskAutoCopyRules(Process process)
+    {
+        // hasRules 表示当前流程至少配置过一条任务级规则；不能提前结束，以免漏过后续非法规则。
+        boolean hasRules = false;
+        for (UserTask task : process.findFlowElementsOfType(UserTask.class, true))
+        {
+            if (!WorkflowAutoCopyRuleContract.readRules(task).isEmpty())
+            {
+                hasRules = true;
+            }
+        }
+        return hasRules;
     }
 
     /** @param value String，Flowable 关系主键；@return String，非空且长度受控的主键。 */

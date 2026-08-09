@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,7 +66,7 @@ class WorkflowParticipantRuleDeploymentServiceTest
         Fixture fixture = fixture("STARTER", "", "");
 
         WorkflowPreparedParticipantRuleDeployment prepared = service.prepare(
-                fixture.document(), fixture.xml(), Map.of("process_1", Set.of()), "9");
+                fixture.document(), fixture.xml(), catalog(), "9");
 
         assertThat(prepared.snapshots()).hasSize(2);
         assertThat(prepared.snapshots()).anySatisfy(rule ->
@@ -99,7 +100,7 @@ class WorkflowParticipantRuleDeploymentServiceTest
         when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(7L)))
                 .thenReturn(List.of(7L));
         WorkflowPreparedParticipantRuleDeployment prepared = service.prepare(
-                fixture.document(), fixture.xml(), Map.of("process_1", Set.of()), "9");
+                fixture.document(), fixture.xml(), catalog(), "9");
         when(ruleMapper.insertBatch(anyList())).thenReturn(2);
 
         service.persist("deployment-1", prepared);
@@ -113,7 +114,7 @@ class WorkflowParticipantRuleDeploymentServiceTest
         when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(7L)))
                 .thenReturn(List.of());
         assertThatThrownBy(() -> service.prepare(
-                fixture.document(), fixture.xml(), Map.of("process_1", Set.of()), "9"))
+                fixture.document(), fixture.xml(), catalog(), "9"))
                 .isInstanceOf(ServiceException.class)
                 .hasMessageContaining("固定办理人");
     }
@@ -129,12 +130,12 @@ class WorkflowParticipantRuleDeploymentServiceTest
         Fixture fixture = fixture("FORM_USER", "", "approverId");
 
         assertThatThrownBy(() -> service.prepare(
-                fixture.document(), fixture.xml(), Map.of("process_1", Set.of()), "9"))
+                fixture.document(), fixture.xml(), catalog(), "9"))
                 .isInstanceOf(ServiceException.class)
                 .hasMessageContaining("正式表单");
 
         WorkflowPreparedParticipantRuleDeployment prepared = service.prepare(
-                fixture.document(), fixture.xml(), Map.of("process_1", Set.of("approverId")), "9");
+                fixture.document(), fixture.xml(), catalog("approverId"), "9");
         assertThat(prepared.snapshots()).anySatisfy(rule ->
         {
             if ("TASK".equals(rule.getRuleScope()))
@@ -143,6 +144,38 @@ class WorkflowParticipantRuleDeploymentServiceTest
                 assertThat(rule.getFormField()).isEqualTo("approverId");
             }
         });
+    }
+
+    /**
+     * 验证无副作用作者门禁复用部署目录资格规则，失效身份不会写参与者快照。
+     * @return void，显式校验跳过正式身份查询或调用持久化 Mapper 时测试失败
+     */
+    @Test
+    void validatesAuthorTargetsWithoutPersistingSnapshots()
+    {
+        Fixture fixture = fixture("FIXED_USER", "7", "");
+        when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(7L)))
+                .thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.validateAuthorRules(
+                fixture.document(), catalog()))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("固定办理人");
+
+        verify(identityMapper).selectApprovalEligibleUserIdsByUserIds(List.of(7L));
+        verifyNoInteractions(ruleMapper);
+    }
+
+    /**
+     * 构造当前测试流程审批任务的正式用户主键字段目录。
+     * @param fields String[]，审批任务可见可读的单值字段
+     * @return WorkflowAuthorFormFieldCatalog，流程和节点作用域均完整的不可变目录
+     */
+    private WorkflowAuthorFormFieldCatalog catalog(String... fields)
+    {
+        return WorkflowAuthorFormFieldCatalog.builder()
+                .add("process_1", "review", Set.of(fields))
+                .build();
     }
 
     /**

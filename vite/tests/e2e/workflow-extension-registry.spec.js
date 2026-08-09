@@ -66,7 +66,7 @@ test('管理员通过真实页面完成扩展目录、版本、处理器、启�
       response, '/workflow/extension/list', 'GET'))
     const handlersPromise = page.waitForResponse(response => matchesEndpoint(
       response, '/workflow/extension/installed-handlers/java', 'GET'))
-    await page.goto('/workflow/extension')
+    await page.goto('/workflow/extensions/extension')
     await expectAjaxSuccess(await listPromise, '/workflow/extension/list')
     const handlerPayload = await expectAjaxSuccess(
       await handlersPromise, '/workflow/extension/installed-handlers/java')

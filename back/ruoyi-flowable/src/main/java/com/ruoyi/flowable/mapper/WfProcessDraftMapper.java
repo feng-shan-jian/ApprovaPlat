@@ -11,6 +11,14 @@ import com.ruoyi.flowable.domain.WfProcessDraft;
 public interface WfProcessDraftMapper
 {
     /**
+     * 锁定指定部署的一条活动草稿引用，并通过当前读覆盖可重复读旧快照。
+     *
+     * @param deploymentId String，已经持有 ACT_RE_DEPLOYMENT 行锁的部署主键
+     * @return Integer，存在活动草稿时返回 1，不存在时返回 null
+     */
+    Integer selectActiveReferenceForUpdate(@Param("deploymentId") String deploymentId);
+
+    /**
      * 写入包含不可变部署表单快照的新草稿。
      *
      * @param draft WfProcessDraft，已完成定义、权限和字段校验的草稿
