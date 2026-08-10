@@ -427,7 +427,8 @@ public class WorkflowBpmnService
                 || WorkflowParticipantRuleBpmnContract.isReservedProperty(name)
                 || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name)
                 || conditionRuleProperty
-                || WorkflowAutoCopyRuleContract.isReservedProperty(name);
+                || WorkflowAutoCopyRuleContract.isReservedProperty(name)
+                || WorkflowMultiInstanceModelContract.isReservedProperty(name);
         if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
                 || (name.startsWith("approva.") && !allowedPlatformProperty))
         {
@@ -441,7 +442,9 @@ public class WorkflowBpmnService
                 ? WorkflowConditionRuleBpmnContract.MAX_CONFIG_LENGTH
                 : WorkflowAutoCopyRuleContract.isReservedProperty(name)
                         ? WorkflowAutoCopyRuleContract.MAX_PROPERTY_LENGTH
-                        : MAX_EXTENSION_PROPERTY_VALUE_LENGTH;
+                        : WorkflowMultiInstanceModelContract.isReservedProperty(name)
+                                ? WorkflowMultiInstanceModelContract.MAX_IDENTITY_PROPERTY_LENGTH
+                                : MAX_EXTENSION_PROPERTY_VALUE_LENGTH;
         if (value == null || value.length() > maximumValueLength)
         {
             throw invalidBpmn("通用扩展属性值缺失或超过长度限制", null);
@@ -864,6 +867,11 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("受控循环只能配置在用户任务上", null);
         }
+        if (WorkflowMultiInstanceModelContract.hasConfiguredIdentityProperties(element)
+                && !(element instanceof UserTask))
+        {
+            throw invalidBpmn("指定多实例身份只能配置在用户任务上", null);
+        }
         if (WorkflowConditionRuleBpmnContract.hasReservedProperty(element)
                 && !(element instanceof SequenceFlow))
         {
@@ -918,6 +926,7 @@ public class WorkflowBpmnService
             validateExpressions(userTask.getCandidateUsers());
             validateExpressions(userTask.getCandidateGroups());
             validateControlledLoop(process, userTask, validationContext);
+            validateConfiguredMultiInstanceIdentity(userTask);
         }
         if (element instanceof CallActivity callActivity)
         {
@@ -974,6 +983,36 @@ public class WorkflowBpmnService
     }
 
     /**
+     * 核验指定身份属性与受控集合表达式必须同时存在，并验证类型和主键的严格格式。
+     *
+     * @param task UserTask，待校验的用户任务
+     * @return 无返回值；孤立、残缺或错配的指定身份配置会抛出 HTTP 400
+     */
+    private void validateConfiguredMultiInstanceIdentity(UserTask task)
+    {
+        boolean hasProperties = WorkflowMultiInstanceModelContract
+                .hasConfiguredIdentityProperties(task);
+        boolean usesHandler = WorkflowMultiInstanceModelContract.usesConfiguredHandler(
+                task.getLoopCharacteristics());
+        if (hasProperties != usesHandler)
+        {
+            throw invalidBpmn("指定多实例身份属性与集合表达式不一致", null);
+        }
+        if (!usesHandler)
+        {
+            return;
+        }
+        try
+        {
+            WorkflowMultiInstanceModelContract.requireConfiguredIdentity(task);
+        }
+        catch (IllegalArgumentException exception)
+        {
+            throw invalidBpmn(exception.getMessage(), exception);
+        }
+    }
+
+    /**
      * 校验作者 SendTask 只能携带受控扩展字段，禁止 WebService、任意实现类型和操作引用。
      * @param task SendTask，待校验发送任务
      * @param validationContext ValidationContext，作者资源或部署编译资源字段契约
@@ -995,7 +1034,7 @@ public class WorkflowBpmnService
     }
 
     /**
-     * 校验多实例集合来源；固定 handler 形态必须同时满足并行 UserTask、固定办理人和
+     * 校验多实例集合来源；受控 handler 形态必须同时满足并行 UserTask、固定办理人和
      * ALL/ANY 完成条件，避免只替换一个表达式就绕过动态调整的快照与并发契约。
      *
      * @param process Process，多实例活动所属的可执行流程
@@ -1006,6 +1045,11 @@ public class WorkflowBpmnService
     private void validateMultiInstance(Process process, Activity activity,
             MultiInstanceLoopCharacteristics loop)
     {
+        if (activity instanceof UserTask userTask)
+        {
+            // 指定身份属性必须先做成对和来源匹配校验，避免通用结构门禁吞掉可定位的模型错误。
+            validateConfiguredMultiInstanceIdentity(userTask);
+        }
         boolean usesControlledHandler =
                 WorkflowMultiInstanceModelContract.usesControlledHandler(loop);
 
@@ -1034,8 +1078,8 @@ public class WorkflowBpmnService
         }
         if (WorkflowMultiInstanceModelContract.usesDynamicHandler(loop))
         {
-            // 仅动态来源需要前驱任务在完成事务中写入 nextUserIds；固定成员已固化在 BPMN，
-            // 发起成员由启动事务注入；固定成员已固化在 BPMN，二者都不能复用动态初始化拓扑门禁。
+            // 仅办理时来源需要前驱任务在完成事务中写入 nextUserIds；发起、旧固定和指定身份
+            // 均能在进入节点时自行取得正式成员，不能复用动态初始化拓扑门禁。
             validateControlledMultiInstanceTopology(process, (UserTask) activity);
         }
     }
@@ -1632,7 +1676,7 @@ public class WorkflowBpmnService
      * 判断原始 XML 表达式是否为模型层已经受控识别的多实例集合表达式。
      *
      * @param expression String，原始 XML 扫描得到的完整 EL 表达式。
-     * @return boolean，办理时、发起时或严格格式固定集合表达式时返回 true。
+     * @return boolean，办理时、发起时、指定身份或严格格式固定集合表达式时返回 true。
      */
     private boolean isControlledMultiInstanceCollectionExpression(String expression)
     {
@@ -1642,6 +1686,8 @@ public class WorkflowBpmnService
                 .replace("&apos;", "'");
         if (WorkflowMultiInstanceModelContract.COLLECTION_EXPRESSION.equals(normalizedExpression)
                 || WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION.equals(
+                        normalizedExpression)
+                || WorkflowMultiInstanceModelContract.CONFIGURED_COLLECTION_EXPRESSION.equals(
                         normalizedExpression))
         {
             return true;

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.LongStream;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.BeforeEach;
@@ -72,6 +73,63 @@ class WorkflowUserSelectionValidatorTest
         assertThatThrownBy(() -> result.add("9"))
                 .isInstanceOf(UnsupportedOperationException.class);
         verify(identityResolver).resolveApprovalEligibleUserIds(List.of("3", "2"));
+    }
+
+    /**
+     * 验证指定角色和部门展开结果保持正式查询顺序并返回不可修改集合。
+     *
+     * @return 无返回值；组织身份分支、顺序或不可变约束错误时测试失败
+     */
+    @Test
+    void returnsBoundedUsersExpandedFromConfiguredRolesAndDepartments()
+    {
+        when(identityResolver.resolveApprovalEligibleUserIdsByRoleIds(
+                new LinkedHashSet<>(List.of(101L))))
+                .thenReturn(new LinkedHashSet<>(List.of("81", "82")));
+        when(identityResolver.resolveApprovalEligibleUserIdsByDeptIds(
+                new LinkedHashSet<>(List.of(100L))))
+                .thenReturn(new LinkedHashSet<>(List.of("81", "83")));
+
+        List<String> roleUsers = validator.requireApprovalEligibleUserIdsByRoleIds(
+                List.of(101L));
+        List<String> deptUsers = validator.requireApprovalEligibleUserIdsByDeptIds(
+                List.of(100L));
+
+        assertThat(roleUsers).containsExactly("81", "82");
+        assertThat(deptUsers).containsExactly("81", "83");
+        assertThatThrownBy(() -> roleUsers.add("84"))
+                .isInstanceOf(UnsupportedOperationException.class);
+        verify(identityResolver).resolveApprovalEligibleUserIdsByRoleIds(
+                new LinkedHashSet<>(List.of(101L)));
+        verify(identityResolver).resolveApprovalEligibleUserIdsByDeptIds(
+                new LinkedHashSet<>(List.of(100L)));
+    }
+
+    /**
+     * 验证组织成员为空、查询失败或展开超过 100 人时整批拒绝。
+     *
+     * @return 无返回值；空组、异常组或超量多实例成员被接受时测试失败
+     */
+    @Test
+    void rejectsEmptyFailedAndOversizedConfiguredGroupExpansions()
+    {
+        when(identityResolver.resolveApprovalEligibleUserIdsByRoleIds(
+                new LinkedHashSet<>(List.of(101L)))).thenReturn(Set.of());
+        when(identityResolver.resolveApprovalEligibleUserIdsByDeptIds(
+                new LinkedHashSet<>(List.of(100L))))
+                .thenReturn(LongStream.rangeClosed(1, 101)
+                        .mapToObj(String::valueOf)
+                        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)));
+        when(identityResolver.resolveApprovalEligibleUserIdsByRoleIds(
+                new LinkedHashSet<>(List.of(102L)))).thenThrow(new ServiceException(
+                        "身份主数据异常", HttpStatus.ERROR));
+
+        assertGroupApprovalIneligible(() ->
+                validator.requireApprovalEligibleUserIdsByRoleIds(List.of(101L)));
+        assertGroupApprovalIneligible(() ->
+                validator.requireApprovalEligibleUserIdsByDeptIds(List.of(100L)));
+        assertGroupApprovalIneligible(() ->
+                validator.requireApprovalEligibleUserIdsByRoleIds(List.of(102L)));
     }
 
     /**
@@ -258,6 +316,22 @@ class WorkflowUserSelectionValidatorTest
             assertThat(exception.getCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(exception.getMessage())
                     .isEqualTo("所选候选用户不存在、已停用或无完整认领权限");
+        });
+    }
+
+    /**
+     * 断言指定角色或部门无法安全展开时返回稳定的 HTTP 400 业务异常。
+     *
+     * @param action ThrowingCallable，预期被组织成员校验拒绝的调用
+     * @return 无返回值；异常类型、状态码或提示不匹配时测试失败
+     */
+    private void assertGroupApprovalIneligible(ThrowingCallable action)
+    {
+        assertThatThrownBy(action).isInstanceOfSatisfying(ServiceException.class, exception ->
+        {
+            assertThat(exception.getCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(exception.getMessage()).isEqualTo(
+                    "指定角色或部门不存在、已停用、无合格办理成员或展开后超过100人");
         });
     }
 }

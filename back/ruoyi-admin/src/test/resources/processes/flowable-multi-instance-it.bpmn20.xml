@@ -40,4 +40,50 @@
     <sequenceFlow id="anyToEnd" sourceRef="anyApprove" targetRef="anyEnd"/>
     <endEvent id="anyEnd" name="结束"/>
   </process>
+
+  <process id="flowableMultiInstanceRoleAllIntegration"
+           name="指定角色会签集成测试"
+           isExecutable="true">
+    <startEvent id="roleAllStart" name="开始"/>
+    <sequenceFlow id="roleAllToApprove" sourceRef="roleAllStart" targetRef="roleAllApprove"/>
+    <userTask id="roleAllApprove" name="指定角色会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.multiInstance.identityType" value="ROLE"/>
+          <flowable:property name="approva.multiInstance.identityIds" value="101"/>
+        </flowable:properties>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics
+          isSequential="false"
+          flowable:collection="${multiInstanceHandler.getConfiguredUserIds(execution)}"
+          flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression">${nrOfCompletedInstances == nrOfInstances}</completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <sequenceFlow id="roleAllToEnd" sourceRef="roleAllApprove" targetRef="roleAllEnd"/>
+    <endEvent id="roleAllEnd" name="结束"/>
+  </process>
+
+  <process id="flowableMultiInstanceDeptAnyIntegration"
+           name="指定部门或签集成测试"
+           isExecutable="true">
+    <startEvent id="deptAnyStart" name="开始"/>
+    <sequenceFlow id="deptAnyToApprove" sourceRef="deptAnyStart" targetRef="deptAnyApprove"/>
+    <userTask id="deptAnyApprove" name="指定部门或签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.multiInstance.identityType" value="DEPT"/>
+          <flowable:property name="approva.multiInstance.identityIds" value="100"/>
+        </flowable:properties>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics
+          isSequential="false"
+          flowable:collection="${multiInstanceHandler.getConfiguredUserIds(execution)}"
+          flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression">${nrOfCompletedInstances &gt; 0}</completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <sequenceFlow id="deptAnyToEnd" sourceRef="deptAnyApprove" targetRef="deptAnyEnd"/>
+    <endEvent id="deptAnyEnd" name="结束"/>
+  </process>
 </definitions>

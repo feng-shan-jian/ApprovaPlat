@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.LongStream;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.ExtensionAttribute;
@@ -217,6 +218,77 @@ class WorkflowBpmnIdentityValidatorTest
     }
 
     /**
+     * 验证指定角色会在部署前校验角色有效性、逐组办理资格和最终展开人数。
+     *
+     * @return 无返回值；角色主数据或展开用户未进入部署门禁时测试失败
+     */
+    @Test
+    void validatesConfiguredMultiInstanceRolesAndExpandedUsers()
+    {
+        UserTask task = withConfiguredIdentity(task(
+                WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION,
+                null, List.of(), List.of()), "ROLE", "101");
+        when(identityMapper.selectApprovalEligibleUserIdsByRoleIds(List.of(101L)))
+                .thenReturn(List.of(81L, 82L, 83L, 84L));
+        when(identityMapper.selectActiveRoleIdsByRoleIds(List.of(101L)))
+                .thenReturn(List.of(101L));
+        when(identityMapper.selectApprovalEligibleRoleIdsByRoleIds(List.of(101L)))
+                .thenReturn(List.of(101L));
+
+        validator.validate(document(task));
+
+        verify(identityMapper).selectApprovalEligibleUserIdsByRoleIds(List.of(101L));
+        verify(identityMapper).selectActiveRoleIdsByRoleIds(List.of(101L));
+        verify(identityMapper).selectApprovalEligibleRoleIdsByRoleIds(List.of(101L));
+        verify(identityMapper, never()).selectClaimEligibleRoleIdsByRoleIds(
+                org.mockito.ArgumentMatchers.anyList());
+    }
+
+    /**
+     * 验证指定部门展开超过 100 名真实办理人时拒绝部署，防止运行时任务爆炸。
+     *
+     * @return 无返回值；超量部门成员进入可部署模型时测试失败
+     */
+    @Test
+    void rejectsConfiguredDepartmentExpandingBeyondInstanceLimit()
+    {
+        UserTask task = withConfiguredIdentity(task(
+                WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION,
+                null, List.of(), List.of()), "DEPT", "100");
+        when(identityMapper.selectApprovalEligibleUserIdsByDeptIds(List.of(100L)))
+                .thenReturn(LongStream.rangeClosed(1, 101).boxed().toList());
+
+        assertThatThrownBy(() -> validator.validate(document(task)))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("指定部门必须展开为 1 至 100 名具备流程办理资格的用户");
+        verify(identityMapper, never()).selectActiveDeptIdsByDeptIds(
+                org.mockito.ArgumentMatchers.anyList());
+    }
+
+    /**
+     * 验证指定用户仍按直接办理资格核验，不使用候选认领口径。
+     *
+     * @return 无返回值；指定用户绕过有效性或审批资格门禁时测试失败
+     */
+    @Test
+    void validatesConfiguredMultiInstanceUsersAsApprovalUsers()
+    {
+        UserTask task = withConfiguredIdentity(task(
+                WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION,
+                null, List.of(), List.of()), "USER", "81,82");
+        when(identityMapper.selectActiveUserIdsByUserIds(List.of(81L, 82L)))
+                .thenReturn(List.of(81L, 82L));
+        when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(81L, 82L)))
+                .thenReturn(List.of(81L, 82L));
+
+        validator.validate(document(task));
+
+        verify(identityMapper).selectApprovalEligibleUserIdsByUserIds(List.of(81L, 82L));
+        verify(identityMapper, never()).selectClaimEligibleUserIdsByUserIds(
+                org.mockito.ArgumentMatchers.anyList());
+    }
+
+    /**
      * 验证自动抄送固定用户、角色和部门使用独立 copy 可见性门禁，不会混入候选认领资格。
      *
      * @return 无返回值；任一自动抄送身份未通过正式可见性查询时测试失败
@@ -368,6 +440,47 @@ class WorkflowBpmnIdentityValidatorTest
         task.setOwner(owner);
         task.setCandidateUsers(candidateUsers);
         task.setCandidateGroups(candidateGroups);
+        return task;
+    }
+
+    /**
+     * 给用户任务添加指定身份表达式与两项平台保留属性。
+     *
+     * @param task UserTask，待配置的会签或或签任务
+     * @param type String，USER、ROLE 或 DEPT
+     * @param ids String，逗号分隔的正式身份主键
+     * @return UserTask，已经附加完整指定身份配置的原任务
+     */
+    private UserTask withConfiguredIdentity(UserTask task, String type, String ids)
+    {
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setInputDataItem(
+                WorkflowMultiInstanceModelContract.CONFIGURED_COLLECTION_EXPRESSION);
+        loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        loop.setCompletionCondition(
+                WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION);
+        task.setLoopCharacteristics(loop);
+
+        ExtensionElement typeProperty = new ExtensionElement();
+        typeProperty.setName("property");
+        typeProperty.setNamespace("http://flowable.org/bpmn");
+        typeProperty.addAttribute(new ExtensionAttribute("name",
+                WorkflowMultiInstanceModelContract.IDENTITY_TYPE_PROPERTY));
+        typeProperty.addAttribute(new ExtensionAttribute("value", type));
+        ExtensionElement idsProperty = new ExtensionElement();
+        idsProperty.setName("property");
+        idsProperty.setNamespace("http://flowable.org/bpmn");
+        idsProperty.addAttribute(new ExtensionAttribute("name",
+                WorkflowMultiInstanceModelContract.IDENTITY_IDS_PROPERTY));
+        idsProperty.addAttribute(new ExtensionAttribute("value", ids));
+
+        ExtensionElement container = new ExtensionElement();
+        container.setName("properties");
+        container.setNamespace("http://flowable.org/bpmn");
+        Map<String, List<ExtensionElement>> children = new HashMap<>();
+        children.put("property", List.of(typeProperty, idsProperty));
+        container.setChildElements(children);
+        task.addExtensionElement(container);
         return task;
     }
 

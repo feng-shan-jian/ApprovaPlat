@@ -7,8 +7,11 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.flowable.bpmn.model.ExtensionAttribute;
+import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.delegate.DelegateExecution;
@@ -201,6 +204,73 @@ class WorkflowMultiInstanceHandlerTest
     }
 
     /**
+     * 验证指定角色在进入节点时实时展开为独立办理用户，并初始化 ALL 成员快照。
+     *
+     * @return 无返回值；角色查询、成员顺序或正式状态初始化错误时测试失败
+     */
+    @Test
+    void expandsConfiguredRolesIntoAssignedUsers()
+    {
+        DelegateExecution execution = configuredExecution(
+                WorkflowMultiInstanceMode.ALL, "ROLE", "101,102");
+        when(userSelectionValidator.requireApprovalEligibleUserIdsByRoleIds(
+                List.of(101L, 102L))).thenReturn(List.of("81", "82", "83"));
+
+        assertThat(handler.getConfiguredUserIds(execution))
+                .containsExactly("81", "82", "83");
+
+        verify(userSelectionValidator).requireApprovalEligibleUserIdsByRoleIds(
+                List.of(101L, 102L));
+        verify(execution).setVariables(org.mockito.ArgumentMatchers.argThat(variables ->
+                List.of("81", "82", "83").equals(
+                        variables.get("_wfMiMembers_approveTask"))
+                && "ALL".equals(variables.get("_wfMiMode_approveTask"))));
+    }
+
+    /**
+     * 验证指定部门在进入节点时实时展开为独立办理用户，并保留 ANY 完成语义。
+     *
+     * @return 无返回值；部门查询或或签成员状态错误时测试失败
+     */
+    @Test
+    void expandsConfiguredDepartmentsForAnyMode()
+    {
+        DelegateExecution execution = configuredExecution(
+                WorkflowMultiInstanceMode.ANY, "DEPT", "100");
+        when(userSelectionValidator.requireApprovalEligibleUserIdsByDeptIds(
+                List.of(100L))).thenReturn(List.of("81", "82", "83", "84"));
+
+        assertThat(handler.getConfiguredUserIds(execution))
+                .containsExactly("81", "82", "83", "84");
+
+        verify(userSelectionValidator).requireApprovalEligibleUserIdsByDeptIds(
+                List.of(100L));
+        verify(execution).setVariables(org.mockito.ArgumentMatchers.argThat(variables ->
+                "ANY".equals(variables.get("_wfMiMode_approveTask"))));
+    }
+
+    /**
+     * 验证指定用户仍使用直接办理资格校验，不会降级为普通启用用户查询。
+     *
+     * @return 无返回值；指定用户绕过审批资格或调用错误身份分支时测试失败
+     */
+    @Test
+    void validatesConfiguredUsersThroughApprovalEligibility()
+    {
+        DelegateExecution execution = configuredExecution(
+                WorkflowMultiInstanceMode.ALL, "USER", "81,82");
+        when(userSelectionValidator.requireApprovalEligibleUserIds(
+                List.of(81L, 82L))).thenReturn(List.of("81", "82"));
+
+        assertThat(handler.getConfiguredUserIds(execution)).containsExactly("81", "82");
+
+        verify(userSelectionValidator).requireApprovalEligibleUserIds(
+                List.of(81L, 82L));
+        verify(userSelectionValidator, never()).requireActiveUserIds(
+                org.mockito.ArgumentMatchers.anyList());
+    }
+
+    /**
      * 创建具有固定动态多实例模型和流程实例根语义的 DelegateExecution 替身。
      *
      * @param mode WorkflowMultiInstanceMode，ALL 或 ANY 完成模式
@@ -240,6 +310,58 @@ class WorkflowMultiInstanceHandlerTest
         when(execution.getId()).thenReturn("instance-1");
         when(execution.isProcessInstanceType()).thenReturn(true);
         return execution;
+    }
+
+    /**
+     * 创建带指定身份属性和受控集合表达式的运行时执行上下文。
+     *
+     * @param mode WorkflowMultiInstanceMode，ALL 或 ANY
+     * @param type String，USER、ROLE 或 DEPT
+     * @param ids String，逗号分隔的用户、角色或部门主键
+     * @return DelegateExecution，可直接调用 getConfiguredUserIds 的测试上下文
+     */
+    private DelegateExecution configuredExecution(WorkflowMultiInstanceMode mode,
+            String type, String ids)
+    {
+        UserTask userTask = dynamicUserTask(mode);
+        userTask.getLoopCharacteristics().setInputDataItem(
+                WorkflowMultiInstanceModelContract.CONFIGURED_COLLECTION_EXPRESSION);
+        ExtensionElement typeProperty = property(
+                WorkflowMultiInstanceModelContract.IDENTITY_TYPE_PROPERTY, type);
+        ExtensionElement idsProperty = property(
+                WorkflowMultiInstanceModelContract.IDENTITY_IDS_PROPERTY, ids);
+        ExtensionElement container = new ExtensionElement();
+        container.setName("properties");
+        container.setNamespace("http://flowable.org/bpmn");
+        Map<String, List<ExtensionElement>> children = new HashMap<>();
+        children.put("property", List.of(typeProperty, idsProperty));
+        container.setChildElements(children);
+        userTask.addExtensionElement(container);
+
+        DelegateExecution execution = mock(DelegateExecution.class);
+        when(execution.getCurrentActivityId()).thenReturn("approveTask");
+        when(execution.getCurrentFlowElement()).thenReturn(userTask);
+        when(execution.getProcessInstanceId()).thenReturn("instance-1");
+        when(execution.getId()).thenReturn("instance-1");
+        when(execution.isProcessInstanceType()).thenReturn(true);
+        return execution;
+    }
+
+    /**
+     * 创建一条 Flowable 扩展属性。
+     *
+     * @param name String，平台保留属性名
+     * @param value String，属性正文
+     * @return ExtensionElement，properties 容器中的 property 子元素
+     */
+    private ExtensionElement property(String name, String value)
+    {
+        ExtensionElement property = new ExtensionElement();
+        property.setName("property");
+        property.setNamespace("http://flowable.org/bpmn");
+        property.addAttribute(new ExtensionAttribute("name", name));
+        property.addAttribute(new ExtensionAttribute("value", value));
+        return property;
     }
 
     /**

@@ -135,6 +135,74 @@ class WorkflowIdentityResolverTest
     }
 
     /**
+     * 验证指定角色逐个通过有效成员校验后，按正式查询顺序展开去重审批用户。
+     *
+     * @return 无返回值；角色完整性校验、成员展开或不可变约束错误时测试失败
+     */
+    @Test
+    void expandsEveryConfiguredRoleIntoApprovalEligibleUsers()
+    {
+        when(identityMapper.selectApprovalEligibleRoleIdsByRoleIds(
+                List.of(101L, 102L))).thenReturn(List.of(101L, 102L));
+        when(identityMapper.selectApprovalEligibleUserIdsByRoleIds(
+                List.of(101L, 102L))).thenReturn(List.of(81L, 82L, 83L));
+
+        Set<String> resolved = identityResolver
+                .resolveApprovalEligibleUserIdsByRoleIds(List.of(101L, 102L));
+
+        assertThat(resolved).containsExactly("81", "82", "83");
+        assertThatThrownBy(() -> resolved.add("84"))
+                .isInstanceOf(UnsupportedOperationException.class);
+        verify(identityMapper).selectApprovalEligibleRoleIdsByRoleIds(
+                List.of(101L, 102L));
+        verify(identityMapper).selectApprovalEligibleUserIdsByRoleIds(
+                List.of(101L, 102L));
+    }
+
+    /**
+     * 验证指定部门使用独立正式查询展开审批用户。
+     *
+     * @return 无返回值；部门资格或成员查询入口漂移时测试失败
+     */
+    @Test
+    void expandsConfiguredDepartmentsIntoApprovalEligibleUsers()
+    {
+        when(identityMapper.selectApprovalEligibleDeptIdsByDeptIds(
+                List.of(100L))).thenReturn(List.of(100L));
+        when(identityMapper.selectApprovalEligibleUserIdsByDeptIds(
+                List.of(100L))).thenReturn(List.of(81L, 82L, 83L, 84L));
+
+        assertThat(identityResolver.resolveApprovalEligibleUserIdsByDeptIds(
+                List.of(100L))).containsExactly("81", "82", "83", "84");
+
+        verify(identityMapper).selectApprovalEligibleDeptIdsByDeptIds(List.of(100L));
+        verify(identityMapper).selectApprovalEligibleUserIdsByDeptIds(List.of(100L));
+    }
+
+    /**
+     * 验证同批任一角色无有效办理成员时整批失败，不允许其他有效角色掩盖该配置。
+     *
+     * @return 无返回值；部分有效角色被展开或错误码不是 400 时测试失败
+     */
+    @Test
+    void rejectsConfiguredGroupsWhenAnyTargetCannotExpand()
+    {
+        when(identityMapper.selectApprovalEligibleRoleIdsByRoleIds(
+                List.of(101L, 999L))).thenReturn(List.of(101L));
+
+        assertThatThrownBy(() -> identityResolver
+                .resolveApprovalEligibleUserIdsByRoleIds(List.of(101L, 999L)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(exception.getMessage()).isEqualTo(
+                            "指定角色或部门不存在、已停用或没有合格办理成员");
+                });
+        verify(identityMapper, never()).selectApprovalEligibleUserIdsByRoleIds(
+                List.of(101L, 999L));
+    }
+
+    /**
      * 验证完整认领资格解析使用独立 RBAC 查询，并按请求顺序过滤缺少认领链权限的用户。
      *
      * @return 无返回值；认领资格误用审批查询或结果顺序漂移时测试失败

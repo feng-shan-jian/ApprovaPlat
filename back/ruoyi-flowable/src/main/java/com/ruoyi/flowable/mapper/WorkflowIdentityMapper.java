@@ -134,6 +134,42 @@ public interface WorkflowIdentityMapper
             @Param("userIds") List<Long> userIds);
 
     /**
+     * 从指定角色中查询至少包含一名直接办理资格成员的有效角色 ID。
+     *
+     * @param roleIds List&lt;Long&gt;，待校验的设计时指定角色主键
+     * @return List&lt;Long&gt;，可展开出真实直接办理任务的角色主键
+     */
+    List<Long> selectApprovalEligibleRoleIdsByRoleIds(
+            @Param("roleIds") List<Long> roleIds);
+
+    /**
+     * 从指定部门中查询至少包含一名直接办理资格成员的有效部门 ID。
+     *
+     * @param deptIds List&lt;Long&gt;，待校验的设计时指定部门主键
+     * @return List&lt;Long&gt;，可展开出真实直接办理任务的部门主键
+     */
+    List<Long> selectApprovalEligibleDeptIdsByDeptIds(
+            @Param("deptIds") List<Long> deptIds);
+
+    /**
+     * 展开指定有效角色下具备直接办理资格的用户。
+     *
+     * @param roleIds List&lt;Long&gt;，设计时指定角色主键
+     * @return List&lt;Long&gt;，去重并按用户主键排序的直接办理用户
+     */
+    List<Long> selectApprovalEligibleUserIdsByRoleIds(
+            @Param("roleIds") List<Long> roleIds);
+
+    /**
+     * 展开指定有效部门下具备直接办理资格的用户。
+     *
+     * @param deptIds List&lt;Long&gt;，设计时指定部门主键
+     * @return List&lt;Long&gt;，去重并按用户主键排序的直接办理用户
+     */
+    List<Long> selectApprovalEligibleUserIdsByDeptIds(
+            @Param("deptIds") List<Long> deptIds);
+
+    /**
      * 从指定用户中查询可走通待签、认领和后续办理主路径的有效用户 ID。
      *
      * @param userIds List&lt;Long&gt;，待校验候选用户主键

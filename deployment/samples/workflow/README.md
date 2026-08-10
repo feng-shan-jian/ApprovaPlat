@@ -13,6 +13,20 @@ node .\deployment\scripts\provision-workflow-samples.mjs --username admin
 Remove-Item Env:APPROVA_SAMPLE_ADMIN_PASSWORD, Env:APPROVA_SAMPLE_IDENTITY_PASSWORD
 ```
 
+默认初始化库启用登录验证码。先访问 `GET /captchaImage`，从响应取得 `uuid` 并人工识别图片答案，再为同一次置备命令补充一次性环境变量：
+
+```powershell
+$env:APPROVA_SAMPLE_CAPTCHA_UUID = '<captcha uuid>'
+$env:APPROVA_SAMPLE_CAPTCHA_CODE = '<图片答案>'
+$env:APPROVA_SAMPLE_TEMPORARILY_DISABLE_CAPTCHA = 'true'
+node .\deployment\scripts\provision-workflow-samples.mjs --username admin
+Remove-Item Env:APPROVA_SAMPLE_CAPTCHA_UUID, Env:APPROVA_SAMPLE_CAPTCHA_CODE, Env:APPROVA_SAMPLE_TEMPORARILY_DISABLE_CAPTCHA
+```
+
+验证码关闭时不设置这三个变量。开启时，验证码 UUID 与答案必须同时存在；临时关闭开关使脚本在管理员登录后通过正式参数管理 API 暂时关闭验证码，逐个完成测试账号登录与权限验证，并在成功或失败时恢复原值。脚本不会输出或持久化验证码。
+
+如果上一次命令在模型创建后、首次成功部署前中断，可显式设置 `$env:APPROVA_SAMPLE_REPAIR_UNDEPLOYED = 'true'`。脚本仅会通过正式保存 API 修复“模型元数据、分类、表单主键及表单内容与样例目录完全一致”的未部署草稿；已部署模型或任一业务内容漂移仍会拒绝覆盖。完成后执行 `Remove-Item Env:APPROVA_SAMPLE_REPAIR_UNDEPLOYED`，正常重复置备不需要该开关。
+
 脚本先通过 `/system/dept`、`/system/role` 和 `/system/user` 创建或核验正式测试身份，再通过角色菜单增量授权 API 为审批参与者角色追加待办、待签、详情、审批、认领权限及必要父菜单。增量授权只插入缺失关联，不替换或删除角色已有菜单。随后脚本创建或复用分类及表单，保存经过后端安全校验的 BPMN，最后部署未部署的样例模型。
 
 重复执行时，部门层级、角色自然键、测试账号资料与角色绑定、分类名称、同名表单 JSON、模型元数据、模型 BPMN、部署快照和已部署 BPMN 都必须与目录一致。任何重复名称、标识碰撞或内容漂移都会明确失败，不会静默接管正式资产；已经一致的已部署模型会返回真实 `deploymentId` 并跳过重复部署。

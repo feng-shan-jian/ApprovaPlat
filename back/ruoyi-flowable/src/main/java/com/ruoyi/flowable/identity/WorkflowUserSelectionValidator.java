@@ -28,6 +28,10 @@ public class WorkflowUserSelectionValidator
     private static final String CLAIM_INELIGIBLE_MESSAGE =
             "所选候选用户不存在、已停用或无完整认领权限";
 
+    /** 指定多实例角色或部门无法安全展开时返回的稳定业务提示。 */
+    private static final String GROUP_APPROVAL_INELIGIBLE_MESSAGE =
+            "指定角色或部门不存在、已停用、无合格办理成员或展开后超过100人";
+
     private final WorkflowIdentityResolver identityResolver;
 
     /**
@@ -107,6 +111,30 @@ public class WorkflowUserSelectionValidator
     }
 
     /**
+     * 严格校验指定角色并展开为 1 至 100 名实时审批用户。
+     *
+     * @param requestedRoleIds List&lt;Long&gt;，设计时保存的正式角色主键
+     * @return List&lt;String&gt;，去重、稳定排序且具备审批资格的用户主键
+     */
+    public List<String> requireApprovalEligibleUserIdsByRoleIds(
+            List<Long> requestedRoleIds)
+    {
+        return requireApprovalEligibleGroupUserIds(requestedRoleIds, true);
+    }
+
+    /**
+     * 严格校验指定部门并展开为 1 至 100 名实时审批用户。
+     *
+     * @param requestedDeptIds List&lt;Long&gt;，设计时保存的正式部门主键
+     * @return List&lt;String&gt;，去重、稳定排序且具备审批资格的用户主键
+     */
+    public List<String> requireApprovalEligibleUserIdsByDeptIds(
+            List<Long> requestedDeptIds)
+    {
+        return requireApprovalEligibleGroupUserIds(requestedDeptIds, false);
+    }
+
+    /**
      * 严格校验写入 candidateUser 的用户均具备待签、认领和后续办理完整资格。
      *
      * @param requestedUserIds List&lt;Long&gt;，客户端提交的候选用户主键；null 等同空集合
@@ -170,6 +198,43 @@ public class WorkflowUserSelectionValidator
     }
 
     /**
+     * 校验角色或部门目标并限制最终展开用户数，防止组织变更制造超量多实例。
+     *
+     * @param requestedGroupIds List&lt;Long&gt;，设计时指定的角色或部门主键
+     * @param roleGroup boolean，true 表示角色，false 表示部门
+     * @return List&lt;String&gt;，1 至 100 名可直接办理的不可修改用户集合
+     */
+    private List<String> requireApprovalEligibleGroupUserIds(
+            List<Long> requestedGroupIds, boolean roleGroup)
+    {
+        LinkedHashSet<Long> normalizedGroupIds = normalizeRequestedIds(requestedGroupIds);
+        if (normalizedGroupIds.isEmpty())
+        {
+            return List.of();
+        }
+        Set<String> eligibleUserIds;
+        try
+        {
+            eligibleUserIds = roleGroup
+                    ? identityResolver.resolveApprovalEligibleUserIdsByRoleIds(
+                            normalizedGroupIds)
+                    : identityResolver.resolveApprovalEligibleUserIdsByDeptIds(
+                            normalizedGroupIds);
+        }
+        catch (RuntimeException exception)
+        {
+            // 组织和 RBAC 任一查询失败都必须阻止 Flowable 创建部分成员任务。
+            throw groupApprovalIneligible();
+        }
+        if (eligibleUserIds == null || eligibleUserIds.isEmpty()
+                || eligibleUserIds.size() > MAX_SELECTED_USERS)
+        {
+            throw groupApprovalIneligible();
+        }
+        return List.copyOf(new ArrayList<>(eligibleUserIds));
+    }
+
+    /**
      * 创建稳定的用户选择参数异常。
      *
      * @return ServiceException，HTTP 400 参数异常
@@ -197,5 +262,16 @@ public class WorkflowUserSelectionValidator
     private ServiceException claimIneligible()
     {
         return new ServiceException(CLAIM_INELIGIBLE_MESSAGE, HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * 创建稳定的指定角色或部门展开异常，避免暴露具体成员权限或组织关系。
+     *
+     * @return ServiceException，HTTP 400 指定多实例身份不可用异常
+     */
+    private ServiceException groupApprovalIneligible()
+    {
+        return new ServiceException(GROUP_APPROVAL_INELIGIBLE_MESSAGE,
+                HttpStatus.BAD_REQUEST);
     }
 }

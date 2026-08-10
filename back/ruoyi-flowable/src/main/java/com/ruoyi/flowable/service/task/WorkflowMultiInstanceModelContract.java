@@ -1,18 +1,23 @@
 package com.ruoyi.flowable.service.task;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.flowable.bpmn.model.BaseElement;
+import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.UserTask;
 import org.springframework.util.StringUtils;
 
 /**
- * 动态多实例 BPMN 白名单契约，只接受固定并行 UserTask 结构和 ALL/ANY 完成条件。
+ * 受控多实例 BPMN 白名单契约，只接受固定并行 UserTask 结构、受控成员来源和 ALL/ANY 完成条件。
  */
 public final class WorkflowMultiInstanceModelContract
 {
@@ -29,6 +34,28 @@ public final class WorkflowMultiInstanceModelContract
     /** 发起页面受控成员集合固定表达式。 */
     public static final String START_COLLECTION_EXPRESSION =
             "${multiInstanceHandler.getStartUserIds(execution)}";
+
+    /** 设计时指定用户、角色或部门的受控集合固定表达式。 */
+    public static final String CONFIGURED_COLLECTION_EXPRESSION =
+            "${multiInstanceHandler.getConfiguredUserIds(execution)}";
+
+    /** 设计时指定身份类型的 Flowable 平台保留属性。 */
+    public static final String IDENTITY_TYPE_PROPERTY =
+            "approva.multiInstance.identityType";
+
+    /** 设计时指定身份主键集合的 Flowable 平台保留属性。 */
+    public static final String IDENTITY_IDS_PROPERTY =
+            "approva.multiInstance.identityIds";
+
+    /** 指定身份配置允许引用的最大目标数量；角色或部门展开后的用户仍需单独满足 100 人上限。 */
+    public static final int MAX_CONFIGURED_IDENTITIES = 100;
+
+    /** 100 个 Long 主键及分隔符所需的属性值安全上限。 */
+    public static final int MAX_IDENTITY_PROPERTY_LENGTH = 2048;
+
+    /** 指定身份配置的完整保留属性集合。 */
+    private static final Set<String> IDENTITY_PROPERTY_NAMES = Set.of(
+            IDENTITY_TYPE_PROPERTY, IDENTITY_IDS_PROPERTY);
 
     /** 固定成员多实例集合表达式的严格语法，成员只能是以逗号连接的规范正整数用户主键。 */
     private static final Pattern FIXED_COLLECTION_EXPRESSION_PATTERN = Pattern.compile(
@@ -51,6 +78,37 @@ public final class WorkflowMultiInstanceModelContract
         throw new AssertionError("动态多实例模型契约类不能实例化");
     }
 
+    /** 设计时指定身份的受控类型。 */
+    public enum ConfiguredIdentityType
+    {
+        USER,
+        ROLE,
+        DEPT
+    }
+
+    /**
+     * 保存已经通过严格属性解析的指定身份配置。
+     *
+     * @param type ConfiguredIdentityType，USER、ROLE 或 DEPT
+     * @param targetIds List&lt;Long&gt;，保持设计顺序且唯一的正式身份主键
+     */
+    public record ConfiguredIdentity(ConfiguredIdentityType type, List<Long> targetIds)
+    {
+        /**
+         * 创建并冻结已经通过严格解析的指定身份配置。
+         *
+         * @param type ConfiguredIdentityType，USER、ROLE 或 DEPT
+         * @param targetIds List&lt;Long&gt;，保持设计顺序且唯一的正式身份主键
+         * @return 无返回值；类型或主键集合为空时拒绝构造
+         */
+        public ConfiguredIdentity
+        {
+            Objects.requireNonNull(type, "指定多实例身份类型不能为空");
+            targetIds = List.copyOf(Objects.requireNonNull(
+                    targetIds, "指定多实例身份主键不能为空"));
+        }
+    }
+
     /**
      * 判断循环配置是否声明了受控动态多实例 handler，供保存门禁和运行时完成门禁统一分类。
      *
@@ -69,9 +127,11 @@ public final class WorkflowMultiInstanceModelContract
                 ? "" : loop.getCollectionString().trim();
         return COLLECTION_EXPRESSION.equals(inputDataItem)
                 || START_COLLECTION_EXPRESSION.equals(inputDataItem)
+                || CONFIGURED_COLLECTION_EXPRESSION.equals(inputDataItem)
                 || FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(inputDataItem).matches()
                 || COLLECTION_EXPRESSION.equals(collectionString)
                 || START_COLLECTION_EXPRESSION.equals(collectionString)
+                || CONFIGURED_COLLECTION_EXPRESSION.equals(collectionString)
                 || FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(collectionString).matches();
     }
 
@@ -105,6 +165,23 @@ public final class WorkflowMultiInstanceModelContract
         }
         return START_COLLECTION_EXPRESSION.equals(trimToEmpty(loop.getInputDataItem()))
                 || START_COLLECTION_EXPRESSION.equals(trimToEmpty(loop.getCollectionString()));
+    }
+
+    /**
+     * 判断循环是否使用设计时指定用户、角色或部门的受控集合。
+     *
+     * @param loop MultiInstanceLoopCharacteristics，可为空的多实例循环配置
+     * @return boolean，仅精确匹配指定身份集合表达式时返回 true
+     */
+    public static boolean usesConfiguredHandler(MultiInstanceLoopCharacteristics loop)
+    {
+        if (loop == null)
+        {
+            return false;
+        }
+        return CONFIGURED_COLLECTION_EXPRESSION.equals(trimToEmpty(loop.getInputDataItem()))
+                || CONFIGURED_COLLECTION_EXPRESSION.equals(
+                        trimToEmpty(loop.getCollectionString()));
     }
 
     /**
@@ -174,6 +251,58 @@ public final class WorkflowMultiInstanceModelContract
     }
 
     /**
+     * 判断属性名是否属于指定多实例身份的受控平台命名空间。
+     *
+     * @param propertyName String，Flowable property 名称
+     * @return boolean，命中身份类型或身份主键属性时返回 true
+     */
+    public static boolean isReservedProperty(String propertyName)
+    {
+        return IDENTITY_PROPERTY_NAMES.contains(propertyName);
+    }
+
+    /**
+     * 判断任意 BPMN 元素是否声明了指定多实例身份属性。
+     *
+     * @param element BaseElement，待检查的流程元素
+     * @return boolean，至少存在一个指定身份保留属性时返回 true
+     */
+    public static boolean hasConfiguredIdentityProperties(BaseElement element)
+    {
+        return !readConfiguredIdentityProperties(element).isEmpty();
+    }
+
+    /**
+     * 从用户任务的 Flowable properties 中严格解析设计时指定身份。
+     *
+     * @param task UserTask，使用 CONFIGURED_COLLECTION_EXPRESSION 的受控多实例任务
+     * @return ConfiguredIdentity，不可修改且保持作者顺序的身份类型和目标主键
+     */
+    public static ConfiguredIdentity requireConfiguredIdentity(UserTask task)
+    {
+        Map<String, String> values = readConfiguredIdentityProperties(task);
+        if (values.size() != IDENTITY_PROPERTY_NAMES.size()
+                || !values.keySet().equals(IDENTITY_PROPERTY_NAMES))
+        {
+            throw new IllegalArgumentException("指定多实例身份配置不完整");
+        }
+
+        ConfiguredIdentityType type;
+        try
+        {
+            type = ConfiguredIdentityType.valueOf(
+                    trimToEmpty(values.get(IDENTITY_TYPE_PROPERTY)));
+        }
+        catch (IllegalArgumentException exception)
+        {
+            throw new IllegalArgumentException("指定多实例身份类型不合法", exception);
+        }
+        List<Long> targetIds = requireCanonicalPositiveIds(
+                values.get(IDENTITY_IDS_PROPERTY), "指定多实例身份主键不合法");
+        return new ConfiguredIdentity(type, targetIds);
+    }
+
+    /**
      * 核验节点完整满足生产动态多实例白名单并解析完成模式。
      *
      * @param flowElement FlowElement，部署模型中的目标活动
@@ -197,16 +326,25 @@ public final class WorkflowMultiInstanceModelContract
         boolean dynamicSource = usesDynamicHandler(loop);
         boolean startSource = usesStartHandler(loop);
         boolean fixedSource = usesFixedHandler(loop);
+        boolean configuredSource = usesConfiguredHandler(loop);
+        boolean configuredProperties = hasConfiguredIdentityProperties(userTask);
         if (loop == null || loop.isSequential() || loop.isNoWaitStatesAsyncLeave()
                 || !Objects.equals(ASSIGNEE_EXPRESSION, userTask.getAssignee())
+                || (userTask.getCandidateUsers() != null
+                    && !userTask.getCandidateUsers().isEmpty())
+                || (userTask.getCandidateGroups() != null
+                    && !userTask.getCandidateGroups().isEmpty())
                 || (dynamicSource ? 1 : 0) + (startSource ? 1 : 0)
-                    + (fixedSource ? 1 : 0) != 1
+                    + (fixedSource ? 1 : 0) + (configuredSource ? 1 : 0) != 1
                 || (dynamicSource && !Objects.equals(COLLECTION_EXPRESSION,
                     loop.getInputDataItem()))
                 || (startSource && !Objects.equals(START_COLLECTION_EXPRESSION,
                     loop.getInputDataItem()))
+                || (configuredSource && !Objects.equals(CONFIGURED_COLLECTION_EXPRESSION,
+                    loop.getInputDataItem()))
                 || (fixedSource && !FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(
                     trimToEmpty(loop.getInputDataItem())).matches())
+                || configuredSource != configuredProperties
                 || !Objects.equals(ELEMENT_VARIABLE, loop.getElementVariable())
                 || StringUtils.hasText(loop.getCollectionString())
                 || StringUtils.hasText(loop.getLoopCardinality())
@@ -218,6 +356,10 @@ public final class WorkflowMultiInstanceModelContract
         if (fixedSource)
         {
             requireFixedUserIds(loop);
+        }
+        if (configuredSource)
+        {
+            requireConfiguredIdentity(userTask);
         }
         if (Objects.equals(ALL_COMPLETION_CONDITION, loop.getCompletionCondition()))
         {
@@ -243,6 +385,83 @@ public final class WorkflowMultiInstanceModelContract
                 || userTask.isAsynchronousLeave()
                 || userTask.isNotExclusive()
                 || userTask.isAsynchronousLeaveNotExclusive();
+    }
+
+    /**
+     * 读取元素 properties 容器中的指定身份属性，并拒绝模型对象中的重复配置。
+     *
+     * @param element BaseElement，可能携带 Flowable properties 的流程元素
+     * @return Map&lt;String,String&gt;，只包含指定多实例身份属性的不可修改映射
+     */
+    private static Map<String, String> readConfiguredIdentityProperties(BaseElement element)
+    {
+        if (element == null || element.getExtensionElements() == null)
+        {
+            return Map.of();
+        }
+        Map<String, String> values = new HashMap<>();
+        for (ExtensionElement container : element.getExtensionElements()
+                .getOrDefault("properties", List.of()))
+        {
+            if (container == null || container.getChildElements() == null)
+            {
+                continue;
+            }
+            for (ExtensionElement property : container.getChildElements()
+                    .getOrDefault("property", List.of()))
+            {
+                String name = property.getAttributeValue(null, "name");
+                if (!isReservedProperty(name))
+                {
+                    continue;
+                }
+                if (values.containsKey(name))
+                {
+                    throw new IllegalArgumentException("指定多实例身份属性不能重复");
+                }
+                String value = property.getAttributeValue(null, "value");
+                if (value == null)
+                {
+                    throw new IllegalArgumentException("指定多实例身份属性值不能为空");
+                }
+                values.put(name, value);
+            }
+        }
+        return Map.copyOf(values);
+    }
+
+    /**
+     * 将逗号分隔文本严格解析为 1 至 100 个规范正整数主键。
+     *
+     * @param rawIds String，Flowable property 中的原始主键文本
+     * @param message String，格式、重复、溢出或数量非法时的稳定错误
+     * @return List&lt;Long&gt;，保持作者顺序且不可修改的唯一主键
+     */
+    private static List<Long> requireCanonicalPositiveIds(String rawIds, String message)
+    {
+        String[] parts = rawIds == null ? new String[0] : rawIds.split(",", -1);
+        if (parts.length < 1 || parts.length > MAX_CONFIGURED_IDENTITIES)
+        {
+            throw new IllegalArgumentException(message);
+        }
+        LinkedHashSet<Long> ids = new LinkedHashSet<>();
+        for (String part : parts)
+        {
+            long id;
+            try
+            {
+                id = Long.parseLong(part);
+            }
+            catch (NumberFormatException exception)
+            {
+                throw new IllegalArgumentException(message, exception);
+            }
+            if (id <= 0 || !Long.toString(id).equals(part) || !ids.add(id))
+            {
+                throw new IllegalArgumentException(message);
+            }
+        }
+        return List.copyOf(ids);
     }
 
     /**

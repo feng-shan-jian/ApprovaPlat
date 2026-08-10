@@ -105,8 +105,8 @@ test('CallActivity businessKey 保真但平台部署策略拒绝', () => {
 })
 
 /**
- * 验证共享设计器命令在编辑多实例时保留兼容的 SLA 与自动抄送作者属性。
- * @returns {void} 兼容属性可能被其他编辑动作删除时测试失败。
+ * 验证共享设计器命令在编辑多实例时保留兼容的平台作者属性并原子写入指定身份属性。
+ * @returns {void} 兼容属性可能被删除或指定身份未随循环原子更新时测试失败。
  */
 test('共享设计器编辑保留兼容的平台属性集合', () => {
   assert.match(processDesignerSource,
@@ -114,5 +114,5 @@ test('共享设计器编辑保留兼容的平台属性集合', () => {
   assert.match(processDesignerSource,
     /editableWithPlatformProperties = multiInstanceAuthorProperties\([\s\S]*?\.\.\.editableProperties[\s\S]*?\.\.\.preservedPlatformProperties[\s\S]*?PARTICIPANT_RULE_PROPERTY_NAMES/)
   assert.match(processDesignerSource,
-    /multiInstanceExtensions = buildPropertiesExtensionElements\([\s\S]*?editableWithPlatformProperties, \[\]\)/)
+    /multiInstanceExtensions = buildPropertiesExtensionElements\([\s\S]*?editableWithPlatformProperties,[\s\S]*?configuredIdentity \? configuredMultiInstancePropertyItems\(configuredIdentity\) : \[\]\)/)
 })

@@ -519,6 +519,80 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         order by u.user_id
     </select>
 
+    <select id="selectApprovalEligibleRoleIdsByRoleIds" resultType="java.lang.Long">
+        select distinct r.role_id
+        from sys_role r
+        where r.role_id in
+        <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
+            #{roleId}
+        </foreach>
+          and r.status = '0'
+          and r.del_flag = '0'
+          and exists (
+              select 1
+              from sys_user_role member_ur
+              inner join sys_user u on u.user_id = member_ur.user_id
+              where member_ur.role_id = r.role_id
+                and u.status = '0'
+                and u.del_flag = '0'
+                <include refid="approvalEligibilityPredicate" />
+          )
+        order by r.role_id
+    </select>
+
+    <select id="selectApprovalEligibleDeptIdsByDeptIds" resultType="java.lang.Long">
+        select distinct d.dept_id
+        from sys_dept d
+        where d.dept_id in
+        <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+            #{deptId}
+        </foreach>
+          and d.status = '0'
+          and d.del_flag = '0'
+          and exists (
+              select 1
+              from sys_user u
+              where u.dept_id = d.dept_id
+                and u.status = '0'
+                and u.del_flag = '0'
+                <include refid="approvalEligibilityPredicate" />
+          )
+        order by d.dept_id
+    </select>
+
+    <select id="selectApprovalEligibleUserIdsByRoleIds" resultType="java.lang.Long">
+        select distinct u.user_id
+        from sys_user u
+        inner join sys_user_role ur on ur.user_id = u.user_id
+        inner join sys_role r on r.role_id = ur.role_id
+        where ur.role_id in
+        <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">
+            #{roleId}
+        </foreach>
+          and u.status = '0'
+          and u.del_flag = '0'
+          and r.status = '0'
+          and r.del_flag = '0'
+        <include refid="approvalEligibilityPredicate" />
+        order by u.user_id
+    </select>
+
+    <select id="selectApprovalEligibleUserIdsByDeptIds" resultType="java.lang.Long">
+        select distinct u.user_id
+        from sys_user u
+        inner join sys_dept d on d.dept_id = u.dept_id
+        where u.dept_id in
+        <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+            #{deptId}
+        </foreach>
+          and u.status = '0'
+          and u.del_flag = '0'
+          and d.status = '0'
+          and d.del_flag = '0'
+        <include refid="approvalEligibilityPredicate" />
+        order by u.user_id
+    </select>
+
     <select id="selectClaimEligibleUserIdsByUserIds" resultType="java.lang.Long">
         select distinct u.user_id
         from sys_user u

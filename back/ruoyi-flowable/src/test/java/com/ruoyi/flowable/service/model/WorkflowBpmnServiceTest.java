@@ -602,6 +602,52 @@ class WorkflowBpmnServiceTest
     }
 
     /**
+     * 验证指定用户、角色和部门表达式及两项保留属性可通过保存和部署共同门禁。
+     *
+     * @return 无返回值；任一受控身份类型被原始表达式或属性门禁误拒绝时测试失败
+     */
+    @Test
+    void allowsConfiguredMultiInstanceIdentitiesForSaveAndDeployment()
+    {
+        for (String type : List.of("USER", "ROLE", "DEPT"))
+        {
+            String xml = configuredMultiInstanceBpmn(type, "81,82");
+
+            assertThat(service.validateForSave(xml.getBytes(StandardCharsets.UTF_8)))
+                    .isNotNull();
+            assertThat(service.validateCompiledDeployment(
+                    xml.getBytes(StandardCharsets.UTF_8))).isNotNull();
+        }
+    }
+
+    /**
+     * 验证指定身份属性残缺、来源错配及候选身份链接都会在保存前失败。
+     *
+     * @return 无返回值；任一不完整或会生成候选链接的模型通过门禁时测试失败
+     */
+    @Test
+    void rejectsIncompleteMismatchedAndCandidateConfiguredMultiInstanceModels()
+    {
+        String valid = configuredMultiInstanceBpmn("ROLE", "101");
+        String incomplete = valid.replace(
+                "<flowable:property name=\"approva.multiInstance.identityIds\" value=\"101\"/>",
+                "");
+        String mismatched = valid.replace(
+                "${multiInstanceHandler.getConfiguredUserIds(execution)}",
+                "${multiInstanceHandler.getStartUserIds(execution)}");
+        String candidateGroup = valid.replace(
+                "flowable:assignee=\"${assignee}\"",
+                "flowable:assignee=\"${assignee}\" flowable:candidateGroups=\"ROLE101\"");
+
+        assertBadRequest(incomplete.getBytes(StandardCharsets.UTF_8),
+                "指定多实例身份配置不完整");
+        assertBadRequest(mismatched.getBytes(StandardCharsets.UTF_8),
+                "指定多实例身份属性与集合表达式不一致");
+        assertBadRequest(candidateGroup.getBytes(StandardCharsets.UTF_8),
+                "动态多实例");
+    }
+
+    /**
      * 验证发起成员 handler 仅允许契约完整等值，近似方法名不能借受控集合白名单执行。
      *
      * @return 无返回值；篡改后的发起成员方法表达式被错误放行时测试失败
@@ -983,6 +1029,41 @@ class WorkflowBpmnServiceTest
                   </process>
                 </definitions>
                 """;
+    }
+
+    /**
+     * 构造从开始节点直接进入、带完整指定身份属性的受控会签 BPMN。
+     *
+     * @param type String，USER、ROLE 或 DEPT
+     * @param ids String，逗号分隔的身份主键
+     * @return String，可同时通过保存和部署结构门禁的 BPMN XML
+     */
+    private String configuredMultiInstanceBpmn(String type, String ids)
+    {
+        String xml = controlledMultiInstanceBpmn()
+                .replace("${multiInstanceHandler.getUserIds(execution)}",
+                        "${multiInstanceHandler.getConfiguredUserIds(execution)}")
+                .replace("<sequenceFlow id=\"flow1\" sourceRef=\"start\" targetRef=\"prepare\"/>",
+                        "<sequenceFlow id=\"flow1\" sourceRef=\"start\" targetRef=\"approve\"/>")
+                .replace(ordinaryInitializerTaskXml(), "")
+                .replace("<sequenceFlow id=\"flow2\" sourceRef=\"prepare\" targetRef=\"approve\"/>", "");
+        String approvalExtension = """
+                  <extensionElements>
+                    <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+                """.stripTrailing();
+        String configuredExtension = """
+                  <extensionElements>
+                    <flowable:properties>
+                      <flowable:property name="approva.multiInstance.identityType" value="%s"/>
+                      <flowable:property name="approva.multiInstance.identityIds" value="%s"/>
+                    </flowable:properties>
+                    <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+                """.formatted(type, ids).stripTrailing();
+        if (!xml.contains(approvalExtension))
+        {
+            throw new AssertionError("合法多实例 fixture 缺少审批扩展元素");
+        }
+        return xml.replace(approvalExtension, configuredExtension);
     }
 
     /**

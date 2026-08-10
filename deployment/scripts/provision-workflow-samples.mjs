@@ -24,6 +24,8 @@ const controlledMultiInstanceElementVariable = 'assignee'
 const controlledMultiInstanceAllCondition = '${nrOfCompletedInstances == nrOfInstances}'
 /** 或签完成条件，任一实例完成后结束多实例活动。 */
 const controlledMultiInstanceAnyCondition = '${nrOfCompletedInstances > 0}'
+/** 条件分支作者 BPMN 的受控规则属性，与后端部署编译契约保持一致。 */
+const conditionRuleProperty = 'approva.conditionRule.config'
 
 /**
  * 读取命令行参数并限制只接受脚本公开的配置项。
@@ -91,14 +93,16 @@ function createApiClient(baseUrl) {
    * 使用环境变量提供的密码登录，并仅在进程内保存 Bearer token。
    * @param {string} username 管理员账号。
    * @param {string} password 管理员密码。
+   * @param {string} captchaUuid 验证码会话主键；关闭验证码时传空串。
+   * @param {string} captchaCode 人工识别的验证码答案；关闭验证码时传空串。
    * @returns {Promise<void>} 登录成功后更新客户端认证状态。
    */
-  async function login(username, password) {
+  async function login(username, password, captchaUuid = '', captchaCode = '') {
     const response = await request('POST', '/login', {
       username,
       password,
-      code: '',
-      uuid: ''
+      code: captchaCode,
+      uuid: captchaUuid
     })
     if (typeof response.token !== 'string' || !response.token) {
       throw new Error('登录响应缺少访问令牌')
@@ -684,9 +688,26 @@ function assertDeployedBpmnMatches(actualBpmn, sample, formId, resolvedTasks) {
     const tag = requireOpeningTag(actualBpmn, 'sequenceFlow', flow.id)
     assertTagAttribute(tag, 'sourceRef', flow.source, `${sample.modelKey}.${flow.id}`)
     assertTagAttribute(tag, 'targetRef', flow.target, `${sample.modelKey}.${flow.id}`)
-    if (flow.condition && !includesXmlText(actualBpmn, flow.condition)) {
-      throw new Error(`已部署条件表达式漂移: ${sample.modelKey}.${flow.id}`)
+    if (flow.name) {
+      assertTagAttribute(tag, 'name', flow.name, `${sample.modelKey}.${flow.id}`)
     }
+    if (flow.conditionRule) {
+      const flowPattern = new RegExp(
+        `<(?:[A-Za-z0-9_-]+:)?sequenceFlow\\b[^>]*\\bid="${escapeRegex(escapeXml(flow.id))}"[^>]*(?:/>|>[\\s\\S]*?</(?:[A-Za-z0-9_-]+:)?sequenceFlow>)`,
+        'u'
+      )
+      const flowXml = actualBpmn.match(flowPattern)?.[0] || ''
+      const hasRouterExpression = flowXml.includes(
+        'workflowConditionRouter.matches(execution,'
+      )
+      if (Boolean(flow.conditionRule.default) === hasRouterExpression) {
+        throw new Error(`已部署受控条件表达式漂移: ${sample.modelKey}.${flow.id}`)
+      }
+    }
+  }
+  if (graph.flows.some(flow => flow.conditionRule) &&
+      actualBpmn.includes(conditionRuleProperty)) {
+    throw new Error(`已部署 BPMN 仍残留条件作者属性: ${sample.modelKey}`)
   }
 }
 
@@ -964,10 +985,27 @@ function createSampleGraph(sample, formId, tasks) {
         { id: 'flow_start_initial', source: 'start', target: initial.id },
         { id: 'flow_initial_gateway', source: initial.id, target: gateway.id },
         {
-          id: 'flow_amount_small', source: gateway.id, target: 'end',
-          condition: `\${${sample.routing.variable} <= ${threshold}}`
+          id: 'flow_amount_small', name: '小额直接通过',
+          source: gateway.id, target: 'end',
+          conditionRule: {
+            version: 1,
+            default: false,
+            combinator: 'AND',
+            groups: [{
+              combinator: 'AND',
+              rules: [{
+                field: sample.routing.variable,
+                operator: 'LTE',
+                value: threshold
+              }]
+            }]
+          }
         },
-        { id: 'flow_amount_high', source: gateway.id, target: highFirst.id },
+        {
+          id: 'flow_amount_high', name: '大额继续审批',
+          source: gateway.id, target: highFirst.id,
+          conditionRule: { version: 1, default: true }
+        },
         { id: 'flow_high_first_second', source: highFirst.id, target: highSecond.id },
         { id: 'flow_high_second_end', source: highSecond.id, target: 'end' }
       ]
@@ -1067,14 +1105,16 @@ function createNodeElement(node) {
 }
 
 /**
- * 把顺序流转换为 BPMN XML，并仅允许目录生成的固定条件表达式。
+ * 把顺序流转换为 BPMN XML，条件分支只写入受控作者规则属性。
  * @param {object} flow 顺序流定义。
  * @returns {string} 顺序流 XML。
  */
 function createFlowElement(flow) {
-  const opening = `    <sequenceFlow id="${escapeXml(flow.id)}" sourceRef="${escapeXml(flow.source)}" targetRef="${escapeXml(flow.target)}"`
-  if (!flow.condition) return `${opening}/>`
-  return `${opening}>\n      <conditionExpression xsi:type="tFormalExpression">${escapeXml(flow.condition)}</conditionExpression>\n    </sequenceFlow>`
+  const flowName = flow.name ? ` name="${escapeXml(flow.name)}"` : ''
+  const opening = `    <sequenceFlow id="${escapeXml(flow.id)}"${flowName} sourceRef="${escapeXml(flow.source)}" targetRef="${escapeXml(flow.target)}"`
+  if (!flow.conditionRule) return `${opening}/>`
+  const ruleJson = escapeXml(JSON.stringify(flow.conditionRule))
+  return `${opening}>\n      <extensionElements>\n        <flowable:properties>\n          <flowable:property name="${conditionRuleProperty}" value="${ruleJson}"/>\n        </flowable:properties>\n      </extensionElements>\n    </sequenceFlow>`
 }
 
 /**
@@ -1240,9 +1280,16 @@ async function getVerifiedDeployment(api, sample, category, formId, resolvedTask
  * @param {object} sample 完整样例定义。
  * @param {{users: object[], roles: object[], depts: object[]}} directory 正式身份主数据。
  * @param {Map<string, object>} requiredExtensions 已核验的受控扩展映射。
+ * @param {boolean} repairUndeployed 是否允许修复元数据和表单完全一致的未部署样例草稿。
  * @returns {Promise<{modelKey: string, status: string, deploymentId: string}>} 样例部署结果。
  */
-async function installSample(api, sample, directory, requiredExtensions) {
+async function installSample(
+  api,
+  sample,
+  directory,
+  requiredExtensions,
+  repairUndeployed = false
+) {
   const category = await getOrCreateCategory(api, sample.category)
   const formId = await getOrCreateForm(api, sample)
   if (sample.extension && !requiredExtensions.has(sample.extension.key)) {
@@ -1283,7 +1330,7 @@ async function installSample(api, sample, directory, requiredExtensions) {
         deploymentId
       }
     }
-    if (model.bpmnXml !== expectedBpmn) {
+    if (model.bpmnXml !== expectedBpmn && !repairUndeployed) {
       throw new Error(`未部署模型 BPMN 内容漂移: ${sample.modelKey}`)
     }
   }
@@ -1348,6 +1395,57 @@ async function installSample(api, sample, directory, requiredExtensions) {
 }
 
 /**
+ * 读取并严格核验登录验证码的正式系统参数。
+ * @param {{request: Function}} api 已登录且具备参数查询权限的管理员 API 客户端。
+ * @returns {Promise<object>} 可原样恢复的 sys.account.captchaEnabled 参数详情。
+ */
+async function requireCaptchaConfig(api) {
+  const response = await api.request(
+    'GET',
+    '/system/config/list?pageNum=1&pageSize=10&configKey=sys.account.captchaEnabled'
+  )
+  const rows = (response.rows || []).filter(item => (
+    item.configKey === 'sys.account.captchaEnabled'
+  ))
+  if (rows.length !== 1 || Number(response.total) !== 1) {
+    throw new Error('登录验证码参数缺失或重复，不能安全执行样例置备')
+  }
+  const detail = await api.request(
+    'GET',
+    `/system/config/${encodeURIComponent(rows[0].configId)}`
+  )
+  const config = detail.data
+  if (!config || !['true', 'false'].includes(String(config.configValue))) {
+    throw new Error('登录验证码参数值不合法，不能安全执行样例置备')
+  }
+  return config
+}
+
+/**
+ * 通过正式参数管理接口切换验证码并立即核验缓存读取结果。
+ * @param {{request: Function}} api 已登录且具备参数修改权限的管理员 API 客户端。
+ * @param {object} config 已由 requireCaptchaConfig 核验的原始参数详情。
+ * @param {boolean} enabled 目标验证码启用状态。
+ * @returns {Promise<void>} 数据库和参数缓存均回显目标值后完成。
+ */
+async function updateCaptchaConfig(api, config, enabled) {
+  const targetValue = String(Boolean(enabled))
+  await api.request('PUT', '/system/config', {
+    configId: Number(config.configId),
+    configName: config.configName,
+    configKey: config.configKey,
+    configValue: targetValue,
+    configType: config.configType,
+    remark: config.remark || ''
+  })
+  // 直接核验匿名验证码入口的真实运行行为，避免只证明参数表或缓存中的中间值。
+  const verified = await api.request('GET', '/captchaImage')
+  if (Boolean(verified.captchaEnabled) !== Boolean(enabled)) {
+    throw new Error(`登录验证码参数切换为 ${targetValue} 后回显不一致`)
+  }
+}
+
+/**
  * 登录真实服务、加载目录主数据并依次幂等部署全部审批样例。
  * @returns {Promise<void>} 全部样例部署成功后输出不含凭据的结果表。
  */
@@ -1355,11 +1453,31 @@ async function main() {
   const options = parseArguments(process.argv.slice(2))
   const password = process.env.APPROVA_SAMPLE_ADMIN_PASSWORD
   const identityPassword = process.env.APPROVA_SAMPLE_IDENTITY_PASSWORD
+  // captchaUuid/captchaCode 是默认初始化库开启验证码时的一次性登录凭据，必须成对提供且不会持久化。
+  const captchaUuid = String(process.env.APPROVA_SAMPLE_CAPTCHA_UUID || '').trim()
+  const captchaCode = String(process.env.APPROVA_SAMPLE_CAPTCHA_CODE || '').trim()
+  // manageCaptcha 为 true 时仅在本次命令内暂时关闭验证码，以便逐个验证测试账号真实登录能力。
+  const manageCaptchaText = String(
+    process.env.APPROVA_SAMPLE_TEMPORARILY_DISABLE_CAPTCHA || 'false'
+  ).trim()
+  // repairUndeployed 为 true 时只允许修复经过完整元数据和表单对账的未部署样例草稿。
+  const repairUndeployedText = String(
+    process.env.APPROVA_SAMPLE_REPAIR_UNDEPLOYED || 'false'
+  ).trim()
   if (!password) {
     throw new Error('必须通过 APPROVA_SAMPLE_ADMIN_PASSWORD 环境变量提供管理员密码')
   }
   if (!identityPassword) {
     throw new Error('必须通过 APPROVA_SAMPLE_IDENTITY_PASSWORD 环境变量提供测试身份密码')
+  }
+  if (Boolean(captchaUuid) !== Boolean(captchaCode)) {
+    throw new Error('APPROVA_SAMPLE_CAPTCHA_UUID 与 APPROVA_SAMPLE_CAPTCHA_CODE 必须成对提供')
+  }
+  if (!['true', 'false'].includes(manageCaptchaText)) {
+    throw new Error('APPROVA_SAMPLE_TEMPORARILY_DISABLE_CAPTCHA 只能是 true 或 false')
+  }
+  if (!['true', 'false'].includes(repairUndeployedText)) {
+    throw new Error('APPROVA_SAMPLE_REPAIR_UNDEPLOYED 只能是 true 或 false')
   }
   const catalog = JSON.parse(await fs.readFile(options.catalogPath, 'utf8'))
   if (!Array.isArray(catalog.samples) || catalog.samples.length === 0) {
@@ -1367,46 +1485,65 @@ async function main() {
   }
 
   const api = createApiClient(options.baseUrl)
-  await api.login(options.username, password)
-  const identityResult = await provisionIdentities(
-    api,
-    options.baseUrl,
-    catalog,
-    identityPassword
-  )
-  const permissionResult = await alignParticipantRolePermissions(
-    api,
-    catalog,
-    identityResult.directory.roles
-  )
-  const requiredExtensions = await loadRequiredExtensions(api, catalog)
-  const results = []
-  for (const sample of catalog.samples) {
-    results.push(await installSample(
+  await api.login(options.username, password, captchaUuid, captchaCode)
+  let captchaConfig = null
+  let captchaChanged = false
+  try {
+    if (manageCaptchaText === 'true') {
+      captchaConfig = await requireCaptchaConfig(api)
+      if (String(captchaConfig.configValue) === 'true') {
+        // 修改前先登记恢复责任，保证 PUT 已生效但后续回显失败时 finally 仍会恢复安全配置。
+        captchaChanged = true
+        await updateCaptchaConfig(api, captchaConfig, false)
+      }
+    }
+
+    const identityResult = await provisionIdentities(
       api,
-      sample,
-      identityResult.directory,
-      requiredExtensions
-    ))
+      options.baseUrl,
+      catalog,
+      identityPassword
+    )
+    const permissionResult = await alignParticipantRolePermissions(
+      api,
+      catalog,
+      identityResult.directory.roles
+    )
+    const requiredExtensions = await loadRequiredExtensions(api, catalog)
+    const results = []
+    for (const sample of catalog.samples) {
+      results.push(await installSample(
+        api,
+        sample,
+        identityResult.directory,
+        requiredExtensions,
+        repairUndeployedText === 'true'
+      ))
+    }
+    const verifiedUsers = await verifyTestIdentityAccess(
+      options.baseUrl,
+      requireIdentityCatalog(catalog),
+      identityPassword
+    )
+    console.log(
+      `测试部门已核验: 创建 ${identityResult.departments.created}，复用 ${identityResult.departments.reused}`
+    )
+    console.log(
+      `测试角色已核验: 创建 ${identityResult.roles.created}，复用 ${identityResult.roles.reused}`
+    )
+    console.log(
+      `测试账号已核验: 创建 ${identityResult.users.created}，校准 ${identityResult.users.aligned}，复用 ${identityResult.users.reused}，登录与权限入口通过 ${verifiedUsers}`
+    )
+    console.log(
+      `参与者角色已核验: ${permissionResult.aligned}，新增菜单关联: ${permissionResult.added}`
+    )
+    console.table(results)
+  } finally {
+    // 即使样例创建、部署或账号验证失败，也必须通过正式接口恢复原验证码配置。
+    if (captchaChanged && captchaConfig) {
+      await updateCaptchaConfig(api, captchaConfig, true)
+    }
   }
-  const verifiedUsers = await verifyTestIdentityAccess(
-    options.baseUrl,
-    requireIdentityCatalog(catalog),
-    identityPassword
-  )
-  console.log(
-    `测试部门已核验: 创建 ${identityResult.departments.created}，复用 ${identityResult.departments.reused}`
-  )
-  console.log(
-    `测试角色已核验: 创建 ${identityResult.roles.created}，复用 ${identityResult.roles.reused}`
-  )
-  console.log(
-    `测试账号已核验: 创建 ${identityResult.users.created}，校准 ${identityResult.users.aligned}，复用 ${identityResult.users.reused}，登录与权限入口通过 ${verifiedUsers}`
-  )
-  console.log(
-    `参与者角色已核验: ${permissionResult.aligned}，新增菜单关联: ${permissionResult.added}`
-  )
-  console.table(results)
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

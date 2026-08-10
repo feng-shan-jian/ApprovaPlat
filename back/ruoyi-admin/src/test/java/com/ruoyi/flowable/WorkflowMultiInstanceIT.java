@@ -105,14 +105,36 @@ class WorkflowMultiInstanceIT
     private static final String ANY_PROCESS_KEY =
             "flowableMultiInstanceAnyIntegration";
 
+    /** 指定角色会签流程定义 key。 */
+    private static final String ROLE_ALL_PROCESS_KEY =
+            "flowableMultiInstanceRoleAllIntegration";
+
+    /** 指定部门或签流程定义 key。 */
+    private static final String DEPT_ANY_PROCESS_KEY =
+            "flowableMultiInstanceDeptAnyIntegration";
+
     /** 会签多实例活动 ID。 */
     private static final String ALL_ACTIVITY_ID = "allApprove";
 
     /** 或签多实例活动 ID。 */
     private static final String ANY_ACTIVITY_ID = "anyApprove";
 
+    /** 指定角色会签多实例活动 ID。 */
+    private static final String ROLE_ALL_ACTIVITY_ID = "roleAllApprove";
+
+    /** 指定部门或签多实例活动 ID。 */
+    private static final String DEPT_ANY_ACTIVITY_ID = "deptAnyApprove";
+
     /** 已由受控环境预置并登记的专用有效用户 ID。 */
     private static final List<Long> TEST_USER_IDS = List.of(81L, 82L, 83L, 84L);
+
+    /** 指定角色 101 当前按正式审批资格展开的完整用户 ID。 */
+    private static final List<Long> ROLE_ALL_USER_IDS =
+            List.of(81L, 82L, 83L, 84L, 103L);
+
+    /** 指定部门 100 当前按正式审批资格展开的完整用户 ID。 */
+    private static final List<Long> DEPT_ANY_USER_IDS =
+            List.of(1L, 81L, 82L, 83L, 84L, 100L, 103L);
 
     /** 单个并发动作允许占用数据库锁并返回的最长时间。 */
     private static final Duration CONCURRENT_TIMEOUT = Duration.ofSeconds(30);
@@ -308,6 +330,78 @@ class WorkflowMultiInstanceIT
         assertThat(historicVariable(processInstanceId,
                 WorkflowMultiInstanceVariables.modeName(ANY_ACTIVITY_ID))).isEqualTo("ANY");
         assertCompletionAuditRevisions(processInstanceId, ANY_ACTIVITY_ID, List.of(1));
+    }
+
+    /**
+     * 验证指定角色在节点进入时按实时 RBAC 展开完整 assignee 集合，会签等待全部成员完成。
+     *
+     * @return 无返回值；角色展开、候选链接、完成条件、历史或快照不一致时测试失败
+     */
+    @Test
+    void configuredRoleAllExpandsRealAssigneesAndWaitsForEveryMember()
+    {
+        String processInstanceId = startConfiguredProcess(
+                ROLE_ALL_PROCESS_KEY, ROLE_ALL_ACTIVITY_ID, "ALL", ROLE_ALL_USER_IDS);
+
+        completeMember(processInstanceId, ROLE_ALL_ACTIVITY_ID, 81L);
+
+        assertThat(processEngine.getRuntimeService().createProcessInstanceQuery()
+                .processInstanceId(processInstanceId).count()).isOne();
+        assertExecutionTree(processInstanceId, ROLE_ALL_ACTIVITY_ID, 4, 1);
+        assertAssigneeTasksWithoutCandidates(processInstanceId, ROLE_ALL_ACTIVITY_ID,
+                List.of("82", "83", "84", "103"));
+
+        completeMember(processInstanceId, ROLE_ALL_ACTIVITY_ID, 82L);
+        completeMember(processInstanceId, ROLE_ALL_ACTIVITY_ID, 83L);
+        completeMember(processInstanceId, ROLE_ALL_ACTIVITY_ID, 84L);
+        completeMember(processInstanceId, ROLE_ALL_ACTIVITY_ID, 103L);
+
+        assertNaturallyCompleted(processInstanceId);
+        assertThat(historicVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.memberSnapshotName(ROLE_ALL_ACTIVITY_ID)))
+                .isEqualTo(List.of("81", "82", "83", "84", "103"));
+        assertThat(historicVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.revisionName(ROLE_ALL_ACTIVITY_ID))).isEqualTo(5);
+        assertThat(historicVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.modeName(ROLE_ALL_ACTIVITY_ID))).isEqualTo("ALL");
+        assertCompletionAuditRevisions(processInstanceId, ROLE_ALL_ACTIVITY_ID,
+                List.of(1, 2, 3, 4, 5));
+        assertThat(historicTasks(processInstanceId, ROLE_ALL_ACTIVITY_ID))
+                .hasSize(5)
+                .extracting(HistoricTaskInstance::getDeleteReason)
+                .containsOnlyNulls();
+    }
+
+    /**
+     * 验证指定部门在节点进入时按实时 RBAC 展开完整 assignee 集合，或签首人完成后取消其余实例。
+     *
+     * @return 无返回值；部门展开、候选链接、取消历史、模式或快照不一致时测试失败
+     */
+    @Test
+    void configuredDeptAnyExpandsRealAssigneesAndCancelsRemainingMembers()
+    {
+        String processInstanceId = startConfiguredProcess(
+                DEPT_ANY_PROCESS_KEY, DEPT_ANY_ACTIVITY_ID, "ANY", DEPT_ANY_USER_IDS);
+
+        completeMember(processInstanceId, DEPT_ANY_ACTIVITY_ID, 81L);
+
+        assertNaturallyCompleted(processInstanceId);
+        List<HistoricTaskInstance> history = historicTasks(
+                processInstanceId, DEPT_ANY_ACTIVITY_ID);
+        assertThat(history).hasSize(7).allSatisfy(task ->
+                assertThat(task.getEndTime()).isNotNull());
+        assertThat(history).filteredOn(task -> task.getDeleteReason() == null)
+                .singleElement().extracting(HistoricTaskInstance::getAssignee)
+                .isEqualTo("81");
+        assertThat(history).filteredOn(task -> task.getDeleteReason() != null).hasSize(6);
+        assertThat(historicVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.memberSnapshotName(DEPT_ANY_ACTIVITY_ID)))
+                .isEqualTo(List.of("1", "81", "82", "83", "84", "100", "103"));
+        assertThat(historicVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.revisionName(DEPT_ANY_ACTIVITY_ID))).isEqualTo(1);
+        assertThat(historicVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.modeName(DEPT_ANY_ACTIVITY_ID))).isEqualTo("ANY");
+        assertCompletionAuditRevisions(processInstanceId, DEPT_ANY_ACTIVITY_ID, List.of(1));
     }
 
     /**
@@ -973,6 +1067,35 @@ class WorkflowMultiInstanceIT
     }
 
     /**
+     * 启动指定身份流程，确认后端实时展开结果已生成真实 assignee 且没有候选身份链接。
+     *
+     * @param processKey String，指定角色或部门流程定义 key
+     * @param activityId String，指定身份多实例活动 ID
+     * @param expectedMode String，期望持久化的 ALL 或 ANY 模式
+     * @param expectedMemberIds List&lt;Long&gt;，实时 RBAC 应展开的完整办理人主键
+     * @return String，已进入指定身份多实例节点的流程实例主键
+     */
+    private String startConfiguredProcess(String processKey, String activityId,
+            String expectedMode, List<Long> expectedMemberIds)
+    {
+        String processInstanceId = startProcess(processKey);
+        List<String> expectedAssignees = expectedMemberIds.stream()
+                .map(String::valueOf).toList();
+        assertExecutionTree(processInstanceId, activityId, expectedMemberIds.size(), 0);
+        assertAssigneeTasksWithoutCandidates(processInstanceId, activityId,
+                expectedAssignees);
+        RuntimeService runtimeService = processEngine.getRuntimeService();
+        assertThat(runtimeService.getVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.memberSnapshotName(activityId)))
+                .isEqualTo(expectedAssignees);
+        assertThat(runtimeService.getVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.revisionName(activityId))).isEqualTo(0);
+        assertThat(runtimeService.getVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.modeName(activityId))).isEqualTo(expectedMode);
+        return processInstanceId;
+    }
+
+    /**
      * 启动指定模式流程，并从来源任务通过 nextUserIds 进入真实动态多实例节点。
      *
      * @param processKey String，ALL 或 ANY 流程定义 key
@@ -1012,9 +1135,26 @@ class WorkflowMultiInstanceIT
      */
     private String startSourceProcess(String processKey, String sourceActivityId)
     {
+        String processInstanceId = startProcess(processKey);
+        Task sourceTask = processEngine.getTaskService().createTaskQuery()
+                .processInstanceId(processInstanceId).taskDefinitionKey(sourceActivityId)
+                .active().singleResult();
+        assertThat(sourceTask).isNotNull();
+        assertThat(sourceTask.getAssignee()).isEqualTo("81");
+        return processInstanceId;
+    }
+
+    /**
+     * 以预置发起人和正式运行状态变量启动一个独立业务实例。
+     *
+     * @param processKey String，已部署的流程定义 key
+     * @return String，真实 Flowable 流程实例主键
+     */
+    private String startProcess(String processKey)
+    {
         String businessKey = BUSINESS_KEY_PREFIX + UUID.randomUUID();
         ProcessInstance instance;
-        // 显式写入真实发起人，后续取消竞态必须复用与生产发起链一致的 startUserId 授权事实。
+        // 显式写入真实发起人，后续授权和历史必须复用与生产发起链一致的 startUserId 事实。
         processEngine.getIdentityService().setAuthenticatedUserId("81");
         try
         {
@@ -1027,11 +1167,6 @@ class WorkflowMultiInstanceIT
         {
             processEngine.getIdentityService().setAuthenticatedUserId(null);
         }
-        Task sourceTask = processEngine.getTaskService().createTaskQuery()
-                .processInstanceId(instance.getId()).taskDefinitionKey(sourceActivityId)
-                .active().singleResult();
-        assertThat(sourceTask).isNotNull();
-        assertThat(sourceTask.getAssignee()).isEqualTo("81");
         return instance.getId();
     }
 
@@ -1068,6 +1203,29 @@ class WorkflowMultiInstanceIT
                 .taskAssignee(String.valueOf(userId)).active().singleResult();
         assertThat(task).as("预期办理人的动态任务必须唯一存在").isNotNull();
         return task;
+    }
+
+    /**
+     * 对账指定节点的活动任务均为真实 assignee，且不存在 candidateUser/candidateGroup 身份链接。
+     *
+     * @param processInstanceId String，目标流程实例主键
+     * @param activityId String，指定身份多实例活动 ID
+     * @param expectedAssignees List&lt;String&gt;，期望的活动办理人主键
+     * @return 无返回值；任务数、办理人或候选身份链接不一致时测试失败
+     */
+    private void assertAssigneeTasksWithoutCandidates(String processInstanceId,
+            String activityId, List<String> expectedAssignees)
+    {
+        TaskService taskService = processEngine.getTaskService();
+        List<Task> tasks = taskService.createTaskQuery()
+                .processInstanceId(processInstanceId).taskDefinitionKey(activityId)
+                .active().list();
+        assertThat(tasks).hasSize(expectedAssignees.size());
+        assertThat(tasks).extracting(Task::getAssignee)
+                .containsExactlyInAnyOrderElementsOf(expectedAssignees);
+        assertThat(tasks).allSatisfy(task ->
+                assertThat(taskService.getIdentityLinksForTask(task.getId()))
+                        .noneMatch(link -> "candidate".equals(link.getType())));
     }
 
     /**
@@ -1450,6 +1608,47 @@ class WorkflowMultiInstanceIT
         assertThat(approvalEligibleUsers)
                 .as("专用账号 81..84 必须通过真实启用角色获得流程办理权限")
                 .isEqualTo((long) TEST_USER_IDS.size());
+        List<Long> configuredRoleMembers = jdbcTemplate.queryForList(
+                "select distinct u.user_id from sys_user u "
+                        + "inner join sys_user_role ur on ur.user_id = u.user_id "
+                        + "inner join sys_role r on r.role_id = ur.role_id "
+                        + "where ur.role_id = 101 "
+                        + "and u.status = '0' and u.del_flag = '0' "
+                        + "and r.status = '0' and r.del_flag = '0' "
+                        + "and (u.user_id = 1 or 3 = ("
+                        + "select count(distinct m.perms) from sys_user_role eur "
+                        + "inner join sys_role er on er.role_id = eur.role_id "
+                        + "inner join sys_role_menu erm on erm.role_id = er.role_id "
+                        + "inner join sys_menu m on m.menu_id = erm.menu_id "
+                        + "where eur.user_id = u.user_id and er.status = '0' "
+                        + "and er.del_flag = '0' and er.role_id <> 1 "
+                        + "and m.status = '0' and m.perms in ("
+                        + "'workflow:process:todoList','workflow:process:query',"
+                        + "'workflow:process:approval'))) order by u.user_id",
+                Long.class);
+        assertThat(configuredRoleMembers)
+                .as("指定角色 101 必须按实时 RBAC 展开完整审批用户")
+                .containsExactlyElementsOf(ROLE_ALL_USER_IDS);
+        List<Long> configuredDeptMembers = jdbcTemplate.queryForList(
+                "select distinct u.user_id from sys_user u "
+                        + "inner join sys_dept d on d.dept_id = u.dept_id "
+                        + "where u.dept_id = 100 "
+                        + "and u.status = '0' and u.del_flag = '0' "
+                        + "and d.status = '0' and d.del_flag = '0' "
+                        + "and (u.user_id = 1 or 3 = ("
+                        + "select count(distinct m.perms) from sys_user_role eur "
+                        + "inner join sys_role er on er.role_id = eur.role_id "
+                        + "inner join sys_role_menu erm on erm.role_id = er.role_id "
+                        + "inner join sys_menu m on m.menu_id = erm.menu_id "
+                        + "where eur.user_id = u.user_id and er.status = '0' "
+                        + "and er.del_flag = '0' and er.role_id <> 1 "
+                        + "and m.status = '0' and m.perms in ("
+                        + "'workflow:process:todoList','workflow:process:query',"
+                        + "'workflow:process:approval'))) order by u.user_id",
+                Long.class);
+        assertThat(configuredDeptMembers)
+                .as("指定部门 100 必须按实时 RBAC 展开完整审批用户")
+                .containsExactlyElementsOf(DEPT_ANY_USER_IDS);
     }
 
     /** 动态调整必须互斥的整实例终态动作。 */

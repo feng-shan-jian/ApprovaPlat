@@ -12,6 +12,7 @@ import org.flowable.bpmn.model.UserTask;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
@@ -58,6 +59,9 @@ public class WorkflowBpmnIdentityValidator
         // roleIds/deptIds 只保存任务候选组，避免自动抄送组被错误套用认领资格语义。
         LinkedHashSet<Long> roleIds = new LinkedHashSet<>();
         LinkedHashSet<Long> deptIds = new LinkedHashSet<>();
+        // configured*Ids 只保存会签/或签指定角色和部门，直接分配任务必须使用 approval 而非 claim 资格。
+        LinkedHashSet<Long> configuredRoleIds = new LinkedHashSet<>();
+        LinkedHashSet<Long> configuredDeptIds = new LinkedHashSet<>();
         // autoCopy*Ids 保存部署后冻结的抄送身份，必须独立核验抄送列表和详情可见性。
         LinkedHashSet<Long> autoCopyUserIds = new LinkedHashSet<>();
         LinkedHashSet<Long> autoCopyRoleIds = new LinkedHashSet<>();
@@ -78,6 +82,8 @@ public class WorkflowBpmnIdentityValidator
                 collectStaticUsers(task.getCandidateUsers(), task, claimUserIds);
                 collectStaticGroups(task.getCandidateGroups(), task, roleIds, deptIds);
                 collectFixedMultiInstanceUsers(task, approvalUserIds);
+                collectConfiguredMultiInstanceIdentities(task, approvalUserIds,
+                        configuredRoleIds, configuredDeptIds);
                 collectAutoCopyIdentities(task, autoCopyUserIds,
                         autoCopyRoleIds, autoCopyDeptIds);
             }
@@ -87,8 +93,10 @@ public class WorkflowBpmnIdentityValidator
         userIds.addAll(claimUserIds);
         userIds.addAll(autoCopyUserIds);
         LinkedHashSet<Long> allRoleIds = new LinkedHashSet<>(roleIds);
+        allRoleIds.addAll(configuredRoleIds);
         allRoleIds.addAll(autoCopyRoleIds);
         LinkedHashSet<Long> allDeptIds = new LinkedHashSet<>(deptIds);
+        allDeptIds.addAll(configuredDeptIds);
         allDeptIds.addAll(autoCopyDeptIds);
         requireAllActive(userIds, activeUsers(userIds), "用户");
         requireAllActive(allRoleIds, activeRoles(allRoleIds), "角色");
@@ -103,6 +111,12 @@ public class WorkflowBpmnIdentityValidator
                 "候选角色没有具备完整认领资格的有效成员");
         requireAllEligible(deptIds, claimEligibleDepts(deptIds),
                 "候选部门没有具备完整认领资格的有效成员");
+        requireAllEligible(configuredRoleIds,
+                approvalEligibleRoles(configuredRoleIds),
+                "指定会签或或签角色没有具备流程办理资格的有效成员");
+        requireAllEligible(configuredDeptIds,
+                approvalEligibleDepts(configuredDeptIds),
+                "指定会签或或签部门没有具备流程办理资格的有效成员");
         // 自动抄送对象会直接获得实例可读授权，因此部署时必须证明接收人能进入抄送列表和流程详情。
         requireAllEligible(autoCopyUserIds, copyEligibleUsers(autoCopyUserIds),
                 "自动抄送用户不具备抄送列表和流程详情权限");
@@ -228,6 +242,80 @@ public class WorkflowBpmnIdentityValidator
         }
         approvalUserIds.addAll(WorkflowMultiInstanceModelContract.requireFixedUserIds(
                 task.getLoopCharacteristics()));
+    }
+
+    /**
+     * 收集指定多实例用户、角色和部门，并按单节点核验角色或部门展开后的最终人数。
+     *
+     * @param task UserTask，可能使用指定身份集合的会签或或签任务
+     * @param approvalUserIds Set&lt;Long&gt;，待核验的指定用户主键
+     * @param configuredRoleIds Set&lt;Long&gt;，待核验的指定角色主键
+     * @param configuredDeptIds Set&lt;Long&gt;，待核验的指定部门主键
+     * @return 无返回值；配置身份无法展开为 1 至 100 名审批用户时拒绝部署
+     */
+    private void collectConfiguredMultiInstanceIdentities(UserTask task,
+            Set<Long> approvalUserIds, Set<Long> configuredRoleIds,
+            Set<Long> configuredDeptIds)
+    {
+        if (!WorkflowMultiInstanceModelContract.usesConfiguredHandler(
+                task.getLoopCharacteristics()))
+        {
+            return;
+        }
+        WorkflowMultiInstanceModelContract.ConfiguredIdentity identity;
+        try
+        {
+            identity = WorkflowMultiInstanceModelContract.requireConfiguredIdentity(task);
+        }
+        catch (IllegalArgumentException exception)
+        {
+            throw taskConflict(task, exception.getMessage());
+        }
+        switch (identity.type())
+        {
+            case USER -> approvalUserIds.addAll(identity.targetIds());
+            case ROLE ->
+            {
+                configuredRoleIds.addAll(identity.targetIds());
+                requireConfiguredExpansion(task, safeList(
+                        identityMapper.selectApprovalEligibleUserIdsByRoleIds(
+                                identity.targetIds())), "角色");
+            }
+            case DEPT ->
+            {
+                configuredDeptIds.addAll(identity.targetIds());
+                requireConfiguredExpansion(task, safeList(
+                        identityMapper.selectApprovalEligibleUserIdsByDeptIds(
+                                identity.targetIds())), "部门");
+            }
+        }
+    }
+
+    /**
+     * 核验单个多实例节点展开后的用户集合，防止空组、异常主键和超量实例进入部署。
+     *
+     * @param task UserTask，指定身份所属会签或或签任务
+     * @param userIds List&lt;Long&gt;，Mapper 按审批资格展开的用户主键
+     * @param groupName String，角色或部门业务名称
+     * @return 无返回值；最终成员不是 1 至 100 名规范唯一用户时抛出部署冲突
+     */
+    private void requireConfiguredExpansion(UserTask task, List<Long> userIds,
+            String groupName)
+    {
+        LinkedHashSet<Long> uniqueUserIds = new LinkedHashSet<>();
+        for (Long userId : userIds)
+        {
+            if (userId == null || userId <= 0 || !uniqueUserIds.add(userId))
+            {
+                throw taskConflict(task, "指定" + groupName + "成员主数据异常");
+            }
+        }
+        if (uniqueUserIds.isEmpty()
+                || uniqueUserIds.size() > WorkflowUserSelectionValidator.MAX_SELECTED_USERS)
+        {
+            throw taskConflict(task, "指定" + groupName
+                    + "必须展开为 1 至 100 名具备流程办理资格的用户");
+        }
     }
 
     /**
@@ -383,6 +471,32 @@ public class WorkflowBpmnIdentityValidator
     {
         return ids.isEmpty() ? List.of()
                 : safeList(identityMapper.selectClaimEligibleDeptIdsByDeptIds(
+                        new ArrayList<>(ids)));
+    }
+
+    /**
+     * 查询每个指定多实例角色是否至少包含一名实时合格办理用户。
+     *
+     * @param ids Set&lt;Long&gt;，设计时指定角色主键集合
+     * @return List&lt;Long&gt;，可展开真实直接办理任务的角色主键
+     */
+    private List<Long> approvalEligibleRoles(Set<Long> ids)
+    {
+        return ids.isEmpty() ? List.of()
+                : safeList(identityMapper.selectApprovalEligibleRoleIdsByRoleIds(
+                        new ArrayList<>(ids)));
+    }
+
+    /**
+     * 查询每个指定多实例部门是否至少包含一名实时合格办理用户。
+     *
+     * @param ids Set&lt;Long&gt;，设计时指定部门主键集合
+     * @return List&lt;Long&gt;，可展开真实直接办理任务的部门主键
+     */
+    private List<Long> approvalEligibleDepts(Set<Long> ids)
+    {
+        return ids.isEmpty() ? List.of()
+                : safeList(identityMapper.selectApprovalEligibleDeptIdsByDeptIds(
                         new ArrayList<>(ids)));
     }
 

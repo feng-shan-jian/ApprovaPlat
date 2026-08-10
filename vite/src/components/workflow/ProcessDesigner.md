@@ -29,7 +29,10 @@
 <script setup>
 import { ElMessage } from 'element-plus'
 import { listForms } from '@/api/workflow/form'
-import { listApprovalUserOptions, listClaimableIdentityOptions, resolveIdentityOptions } from '@/api/workflow/identity'
+import {
+  listApprovalUserOptions, listClaimableIdentityOptions,
+  listIdentityOptions, resolveIdentityOptions
+} from '@/api/workflow/identity'
 import { getModel, getModelBpmnXml, saveModel } from '@/api/workflow/model'
 import ProcessDesigner from '@/components/workflow/ProcessDesigner.vue'
 
@@ -43,34 +46,41 @@ const identityLoading = computed(() => identityPending.value > 0)
 const bpmnXml = ref('')
 const model = reactive({})
 const formOptions = ref([])
-const identityOptions = reactive({ assignees: [], candidateUsers: [], candidateGroups: [] })
+const identityOptions = reactive({
+  assignees: [], candidateUsers: [], candidateGroups: [], candidateRoles: [],
+  activeUsers: [], activeRoles: [], activeDepts: [],
+  autoCopyUsers: [], autoCopyGroups: []
+})
 
 /**
  * 从正式资格目录刷新直接办理人、候选用户或候选组选项。
- * @param {{type: 'user'|'group', capability: 'approval'|'claim', keyword?: string}} request 身份类型、资格和检索词。
+ * @param {{target: string, type: 'user'|'role'|'dept'|'group', capability: ''|'approval'|'claim'|'copy', keyword?: string}} request 选项池、身份类型、资格和检索词。
  * @returns {Promise<void>} 对应选项完成刷新后结束。
  */
-async function searchIdentityDirectory({ type, capability, keyword = '' }) {
+async function searchIdentityDirectory({ target, type, capability, keyword = '' }) {
   identityPending.value += 1
   try {
-    if (type === 'user' && capability === 'approval') {
+    if (target === 'assignees' && type === 'user' && capability === 'approval') {
       const response = await listApprovalUserOptions({ keyword, pageNum: 1, pageSize: 50 })
       identityOptions.assignees = response.rows || []
       return
     }
-    if (type === 'user' && capability === 'claim') {
-      const response = await listClaimableIdentityOptions({
-        type: 'user', keyword, pageNum: 1, pageSize: 50
-      })
-      identityOptions.candidateUsers = response.rows || []
+    if (target === 'candidateGroups' || target === 'autoCopyGroups') {
+      const loader = target === 'candidateGroups' ? listClaimableIdentityOptions : listIdentityOptions
+      const queryCapability = target === 'autoCopyGroups' ? { capability: 'copy' } : {}
+      const [roles, depts] = await Promise.all([
+        loader({ type: 'role', ...queryCapability, keyword, pageNum: 1, pageSize: 50 }),
+        loader({ type: 'dept', ...queryCapability, keyword, pageNum: 1, pageSize: 50 })
+      ])
+      identityOptions[target] = [...(roles.rows || []), ...(depts.rows || [])]
       return
     }
-    if (type !== 'group' || capability !== 'claim') throw new TypeError('身份目录请求不合法')
-    const [roles, departments] = await Promise.all([
-      listClaimableIdentityOptions({ type: 'role', keyword, pageNum: 1, pageSize: 50 }),
-      listClaimableIdentityOptions({ type: 'dept', keyword, pageNum: 1, pageSize: 50 })
-    ])
-    identityOptions.candidateGroups = [...(roles.rows || []), ...(departments.rows || [])]
+    if (!Object.prototype.hasOwnProperty.call(identityOptions, target)) {
+      throw new TypeError('身份目录目标不合法')
+    }
+    const loader = capability === 'claim' ? listClaimableIdentityOptions : listIdentityOptions
+    const response = await loader({ type, capability, keyword, pageNum: 1, pageSize: 50 })
+    identityOptions[target] = response.rows || []
   } finally {
     identityPending.value -= 1
   }
@@ -115,9 +125,15 @@ onMounted(async () => {
     getModel(props.modelId),
     getModelBpmnXml(props.modelId),
     listForms({ pageNum: 1, pageSize: 50 }),
-    searchIdentityDirectory({ type: 'user', capability: 'approval' }),
-    searchIdentityDirectory({ type: 'user', capability: 'claim' }),
-    searchIdentityDirectory({ type: 'group', capability: 'claim' })
+    searchIdentityDirectory({ target: 'assignees', type: 'user', capability: 'approval' }),
+    searchIdentityDirectory({ target: 'candidateUsers', type: 'user', capability: 'claim' }),
+    searchIdentityDirectory({ target: 'candidateGroups', type: 'group', capability: 'claim' }),
+    searchIdentityDirectory({ target: 'candidateRoles', type: 'role', capability: 'claim' }),
+    searchIdentityDirectory({ target: 'activeUsers', type: 'user', capability: '' }),
+    searchIdentityDirectory({ target: 'activeRoles', type: 'role', capability: '' }),
+    searchIdentityDirectory({ target: 'activeDepts', type: 'dept', capability: '' }),
+    searchIdentityDirectory({ target: 'autoCopyUsers', type: 'user', capability: 'copy' }),
+    searchIdentityDirectory({ target: 'autoCopyGroups', type: 'group', capability: 'copy' })
   ])
   Object.assign(model, modelResponse.data || {})
   bpmnXml.value = xmlResponse.data || ''
@@ -134,7 +150,7 @@ onMounted(async () => {
 | `modelValue` | `string` | `''` | 当前 BPMN XML；为空时按模型元数据创建初始流程。 |
 | `model` | `object` | `{}` | `modelKey`、`modelName`、`formId` 等模型元数据。 |
 | `forms` | `array` | `[]` | 正式表单选项，每项至少包含 `formId`、`formName`。 |
-| `identityOptions` | `object` | 五个隔离选项池 | 服务端按直接办理、完整候选认领和自动抄送资格隔离的身份选项，包含 `autoCopyUsers`、`autoCopyGroups`。 |
+| `identityOptions` | `object` | 九个隔离选项池 | 服务端按直接办理、指定身份、完整候选认领和自动抄送资格隔离的身份选项；指定角色、部门分别使用 `activeRoles`、`activeDepts`。 |
 | `height` | `string` | `calc(100vh - 128px)` | 设计器稳定高度；页面级接入推荐传入 `100%`，由可用工作区决定实际高度。 |
 | `saving` | `boolean` | `false` | 页面真实保存请求的加载状态。 |
 | `identityLoading` | `boolean` | `false` | 用户、角色或部门远程检索的加载状态。 |
@@ -149,7 +165,7 @@ onMounted(async () => {
 | `change` | `xml: string` | 用户设计发生变化。 |
 | `save` | `xml: string` | 本地关键门禁通过后请求页面保存。 |
 | `error` | `Error` | 导入、导出或本地校验失败。 |
-| `identity-search` | `{ type: 'user' \| 'group', keyword: string, capability: 'approval' \| 'claim' \| 'copy' }` | 请求页面检索正式资格目录；直接办理人使用 `approval`，候选用户和候选组使用 `claim`，自动抄送对象使用 `copy`。 |
+| `identity-search` | `{ target, type: 'user' \| 'role' \| 'dept' \| 'group', keyword: string, capability: '' \| 'approval' \| 'claim' \| 'copy' }` | 请求页面检索正式目录；指定角色、部门使用 `activeRoles`、`activeDepts` 目标池和启用对象目录，最终办理资格及展开人数由后端校验。 |
 | `identity-resolve` | `{ target, type, capability, values }` | 请求页面通过 `/workflow/identity/options/resolve` 批量核验并回显当前分页外的已选正式对象。 |
 | `preference-save` | `object` | 请求页面把字段完整的当前用户偏好写入正式数据库。 |
 
@@ -176,7 +192,9 @@ onMounted(async () => {
 - 流程级发起范围固定为公开、指定用户、指定角色、指定部门四类；单实例 UserTask 固定为固定用户、候选用户、候选角色/部门、发起人本人、发起人直属上级、指定部门负责人、发起人所在部门内指定角色、表单用户字段八类。作者 BPMN 保存 `approva.startScope.*` / `approva.participant.*` 的规则版本、类型、目标、表单字段和 `FAIL` 策略，部署时后端剥离作者属性并冻结到正式快照。
 - 需要目录目标或表单字段的规则支持分步编辑；切换规则后产生的暂时空值只存在于当前画布，正式保存门禁仍要求目标和字段完整。`FORM_USER` 与自动抄送 `FORM_USER_FIELD` 共用可见、可读单值字段目录：只读字段可作为用户来源，隐藏、不可读、日期、布尔、附件和多值字段不会出现在选项中；`FORM_USER` 额外遵守后端参与者变量名语法，流程级自动抄送遇到任一节点同名不合格或值形态不同的声明时失败关闭。
 - 重开模型时，当前远程分页外的已选身份通过 `/workflow/identity/options/resolve` 回显正式名称和实时可用状态；删除对象使用稳定不可用文案，不向页面暴露裸主键。
-- 会签/或签提供“办理时选择”“发起时选择”和“固定人员”三种受控来源。办理时来源固定写入 `${multiInstanceHandler.getUserIds(execution)}`，由唯一前驱任务提交下一办理人；发起时来源固定写入 `${multiInstanceHandler.getStartUserIds(execution)}`，发起页按后端部署模型投影每个节点的必填审批用户字段；固定来源从审批资格目录选择 1 至 100 名用户，写入严格的 `${multiInstanceHandler.getFixedUserIds(execution, '1,2')}`。三种来源均固定使用并行循环、`assignee` 元素变量、`${assignee}` 办理人和 ALL/ANY 完成条件，后端在保存、部署、发起和节点进入时再次校验正式审批资格。
+- 会签/或签提供“办理时选择”“发起时选择”“指定用户”“指定角色”“指定部门”五种受控来源。前两类分别固定写入 `${multiInstanceHandler.getUserIds(execution)}`、`${multiInstanceHandler.getStartUserIds(execution)}`；三类指定来源统一写入 `${multiInstanceHandler.getConfiguredUserIds(execution)}`，并在 UserTask 的 `flowable:properties` 中保存 `approva.multiInstance.identityType=USER|ROLE|DEPT` 与逗号分隔的 `approva.multiInstance.identityIds`。角色和部门只持久化正式主键，每次进入节点时由后端按实时 RBAC 展开为 1 至 100 名具备审批资格的真实用户。
+- 五种来源均固定使用并行循环、`assignee` 元素变量和 `${assignee}` 办理人。会签完成条件固定为 `${nrOfCompletedInstances == nrOfInstances}`；或签固定为 `${nrOfCompletedInstances > 0}`，首名办理人完成后由 Flowable 取消其余实例。保存、部署和节点进入都会复核属性完整性、身份状态、重复值、展开人数与审批资格，生成的运行时任务不能携带候选用户或候选组身份链接。
+- 历史 `${multiInstanceHandler.getFixedUserIds(execution, '1,2')}` 仅用于模型回读兼容；设计者下一次修改会迁移为 `identityType=USER` 和统一的指定身份属性，不再生成旧表达式。
 - Process 和 UserTask 可分别配置流程完成、节点到达和节点完成自动抄送。固定用户、角色和部门仅来自 `capability=copy` 正式目录，发起人与正式表单标量字段为受控动态来源；流程级表单目录只汇总顶层申请开始节点及任意层级用户任务，不把子流程开始事件误当成独立申请入口。规则显式应用后以 `approva.autoCopyRules` JSON 写入 BPMN，并在修改循环、SLA 或通用属性时保持不丢失。
 - 自动抄送属性最多 8192 个字符、10 条规则，每条最多 20 个来源、每个来源最多 100 个值。设计器保存前复核触发位置与表单字段，后端保存、部署冻结和运行时继续复核身份有效性、对象可见性及幂等触发。
 - 受控整改循环只对 UserTask 开放。判断字段只能来自该节点正式模板或内嵌 FormData 的可写标量字段；附件、多选、表格、对象、范围和只读字段不会进入选项。设计器固定写入 `approva.controlledLoop.*` 五项属性，达到最大轮次时由后端拒绝继续整改，不会自动放行。

@@ -28,6 +28,10 @@ public class WorkflowIdentityResolver
     /** 主数据返回非法身份主键时的稳定提示。 */
     private static final String INVALID_MASTER_DATA_MESSAGE = "工作流身份主数据异常";
 
+    /** 指定多实例角色或部门无法完整展开时的稳定提示。 */
+    private static final String INVALID_APPROVAL_GROUPS_MESSAGE =
+            "指定角色或部门不存在、已停用或没有合格办理成员";
+
     private final WorkflowIdentityMapper identityMapper;
 
     private final WorkflowIdentityCodec identityCodec;
@@ -208,6 +212,30 @@ public class WorkflowIdentityResolver
     }
 
     /**
+     * 将设计时指定角色展开为当前具备直接办理资格的正式用户。
+     *
+     * @param roleIds Collection&lt;Long&gt;，已经规范化的角色主键
+     * @return Set&lt;String&gt;，按用户主键稳定排序且不可修改的审批用户集合
+     */
+    public Set<String> resolveApprovalEligibleUserIdsByRoleIds(
+            Collection<Long> roleIds)
+    {
+        return resolveApprovalEligibleUserIdsByGroups(roleIds, true);
+    }
+
+    /**
+     * 将设计时指定部门展开为当前具备直接办理资格的正式用户。
+     *
+     * @param deptIds Collection&lt;Long&gt;，已经规范化的部门主键
+     * @return Set&lt;String&gt;，按用户主键稳定排序且不可修改的审批用户集合
+     */
+    public Set<String> resolveApprovalEligibleUserIdsByDeptIds(
+            Collection<Long> deptIds)
+    {
+        return resolveApprovalEligibleUserIdsByGroups(deptIds, false);
+    }
+
+    /**
      * 从正式用户、角色和菜单授权数据中解析可走通认领及后续办理主路径的有效用户。
      *
      * @param candidateUserIds Collection&lt;String&gt;，数字格式的待校验候选用户主键
@@ -331,6 +359,57 @@ public class WorkflowIdentityResolver
             checkedIds(identityMapper.selectActiveUserIdsByDeptIds(new ArrayList<>(deptIds)))
                     .forEach(userId -> resolvedUserIds.add(String.valueOf(userId)));
         }
+    }
+
+    /**
+     * 批量校验每个指定角色或部门并展开审批用户，禁止一个有效组掩盖同批无效组。
+     *
+     * @param groupIds Collection&lt;Long&gt;，设计时指定的角色或部门主键
+     * @param roleGroup boolean，true 表示角色，false 表示部门
+     * @return Set&lt;String&gt;，去重、稳定排序且不可修改的直接办理用户集合
+     */
+    private Set<String> resolveApprovalEligibleUserIdsByGroups(
+            Collection<Long> groupIds, boolean roleGroup)
+    {
+        if (groupIds == null)
+        {
+            throw new ServiceException(INVALID_CANDIDATES_MESSAGE, HttpStatus.BAD_REQUEST);
+        }
+        LinkedHashSet<Long> requestedGroupIds = new LinkedHashSet<>();
+        for (Long groupId : groupIds)
+        {
+            if (groupId == null || groupId <= 0)
+            {
+                throw new ServiceException(INVALID_CANDIDATES_MESSAGE,
+                        HttpStatus.BAD_REQUEST);
+            }
+            requestedGroupIds.add(groupId);
+        }
+        if (requestedGroupIds.isEmpty())
+        {
+            return Set.of();
+        }
+
+        List<Long> orderedGroupIds = new ArrayList<>(requestedGroupIds);
+        Set<Long> eligibleGroupIds = checkedIdSet(roleGroup
+                ? identityMapper.selectApprovalEligibleRoleIdsByRoleIds(orderedGroupIds)
+                : identityMapper.selectApprovalEligibleDeptIdsByDeptIds(orderedGroupIds));
+        if (!eligibleGroupIds.equals(requestedGroupIds))
+        {
+            throw new ServiceException(INVALID_APPROVAL_GROUPS_MESSAGE,
+                    HttpStatus.BAD_REQUEST);
+        }
+        List<Long> userIds = checkedIds(roleGroup
+                ? identityMapper.selectApprovalEligibleUserIdsByRoleIds(orderedGroupIds)
+                : identityMapper.selectApprovalEligibleUserIdsByDeptIds(orderedGroupIds));
+        LinkedHashSet<String> resolvedUserIds = new LinkedHashSet<>();
+        userIds.stream().map(String::valueOf).forEach(resolvedUserIds::add);
+        if (resolvedUserIds.isEmpty())
+        {
+            throw new ServiceException(INVALID_APPROVAL_GROUPS_MESSAGE,
+                    HttpStatus.BAD_REQUEST);
+        }
+        return Collections.unmodifiableSet(resolvedUserIds);
     }
 
     /**

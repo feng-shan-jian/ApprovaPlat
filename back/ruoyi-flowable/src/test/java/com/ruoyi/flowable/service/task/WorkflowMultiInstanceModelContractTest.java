@@ -3,7 +3,12 @@ package com.ruoyi.flowable.service.task;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import org.flowable.bpmn.model.BoundaryEvent;
+import org.flowable.bpmn.model.ExtensionAttribute;
+import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.SubProcess;
 import org.flowable.bpmn.model.UserTask;
@@ -67,6 +72,85 @@ class WorkflowMultiInstanceModelContractTest
                 startTask.getLoopCharacteristics())).isFalse();
         assertThat(WorkflowMultiInstanceModelContract.usesFixedHandler(
                 startTask.getLoopCharacteristics())).isFalse();
+    }
+
+    /**
+     * 验证指定用户、角色和部门都使用统一受控表达式，并严格解析作者身份属性。
+     *
+     * @return 无返回值；任一身份类型、主键顺序或 ALL/ANY 模式解析错误时测试失败
+     */
+    @Test
+    void acceptsConfiguredUsersRolesAndDepartments()
+    {
+        for (WorkflowMultiInstanceModelContract.ConfiguredIdentityType type
+                : WorkflowMultiInstanceModelContract.ConfiguredIdentityType.values())
+        {
+            UserTask task = configuredTask(WorkflowMultiInstanceMode.ANY,
+                    type.name(), "8,9");
+
+            assertThat(WorkflowMultiInstanceModelContract.requireMode(task))
+                    .isEqualTo(WorkflowMultiInstanceMode.ANY);
+            assertThat(WorkflowMultiInstanceModelContract.usesConfiguredHandler(
+                    task.getLoopCharacteristics())).isTrue();
+            assertThat(WorkflowMultiInstanceModelContract.requireConfiguredIdentity(task))
+                    .satisfies(identity ->
+                    {
+                        assertThat(identity.type()).isEqualTo(type);
+                        assertThat(identity.targetIds()).containsExactly(8L, 9L);
+                    });
+        }
+    }
+
+    /**
+     * 验证指定身份属性必须成对、唯一且只与指定身份集合表达式共同出现。
+     *
+     * @return 无返回值；残缺、重复、来源错配或非法主键配置被接受时测试失败
+     */
+    @Test
+    void rejectsIncompleteDuplicateAndMismatchedConfiguredIdentityProperties()
+    {
+        UserTask incomplete = dynamicTask(WorkflowMultiInstanceMode.ALL);
+        incomplete.getLoopCharacteristics().setInputDataItem(
+                WorkflowMultiInstanceModelContract.CONFIGURED_COLLECTION_EXPRESSION);
+        addProperties(incomplete, property(
+                WorkflowMultiInstanceModelContract.IDENTITY_TYPE_PROPERTY, "ROLE"));
+        assertUnsupported(incomplete);
+
+        UserTask duplicate = configuredTask(WorkflowMultiInstanceMode.ALL,
+                "DEPT", "8,9");
+        addProperties(duplicate, property(
+                WorkflowMultiInstanceModelContract.IDENTITY_TYPE_PROPERTY, "DEPT"));
+        assertUnsupported(duplicate);
+
+        UserTask mismatched = dynamicTask(WorkflowMultiInstanceMode.ALL);
+        addProperties(mismatched,
+                property(WorkflowMultiInstanceModelContract.IDENTITY_TYPE_PROPERTY, "USER"),
+                property(WorkflowMultiInstanceModelContract.IDENTITY_IDS_PROPERTY, "8,9"));
+        assertUnsupported(mismatched);
+
+        assertUnsupported(configuredTask(WorkflowMultiInstanceMode.ALL,
+                "ROLE", "8,8"));
+        assertUnsupported(configuredTask(WorkflowMultiInstanceMode.ALL,
+                "DEPT", "08"));
+    }
+
+    /**
+     * 验证真实 assignee 多实例任务不能同时携带候选身份链接。
+     *
+     * @return 无返回值；候选用户或候选组可附着到受控多实例时测试失败
+     */
+    @Test
+    void rejectsCandidateLinksOnAssignedMultiInstanceTasks()
+    {
+        UserTask candidateUser = configuredTask(WorkflowMultiInstanceMode.ALL,
+                "USER", "8,9");
+        candidateUser.setCandidateUsers(List.of("10"));
+        assertUnsupported(candidateUser);
+
+        UserTask candidateGroup = configuredTask(WorkflowMultiInstanceMode.ANY,
+                "ROLE", "8");
+        candidateGroup.setCandidateGroups(List.of("ROLE9"));
+        assertUnsupported(candidateGroup);
     }
 
     /**
@@ -199,6 +283,61 @@ class WorkflowMultiInstanceModelContractTest
         task.getLoopCharacteristics().setInputDataItem(
                 "${multiInstanceHandler.getFixedUserIds(execution, '" + userIds + "')}");
         return task;
+    }
+
+    /**
+     * 创建带指定身份属性的受控并行多实例任务。
+     *
+     * @param mode WorkflowMultiInstanceMode，ALL 或 ANY
+     * @param type String，USER、ROLE 或 DEPT
+     * @param ids String，逗号分隔的作者身份主键
+     * @return UserTask，已挂接主流程并携带完整属性的测试节点
+     */
+    private UserTask configuredTask(WorkflowMultiInstanceMode mode, String type,
+            String ids)
+    {
+        UserTask task = dynamicTask(mode);
+        task.getLoopCharacteristics().setInputDataItem(
+                WorkflowMultiInstanceModelContract.CONFIGURED_COLLECTION_EXPRESSION);
+        addProperties(task,
+                property(WorkflowMultiInstanceModelContract.IDENTITY_TYPE_PROPERTY, type),
+                property(WorkflowMultiInstanceModelContract.IDENTITY_IDS_PROPERTY, ids));
+        return task;
+    }
+
+    /**
+     * 给用户任务追加一组与 Flowable XML 转换器一致的 properties 容器。
+     *
+     * @param task UserTask，待追加属性的测试节点
+     * @param properties ExtensionElement[]，容器内 property 子元素
+     * @return 无返回值；属性直接写入 task 模型
+     */
+    private void addProperties(UserTask task, ExtensionElement... properties)
+    {
+        ExtensionElement container = new ExtensionElement();
+        container.setName("properties");
+        container.setNamespace("http://flowable.org/bpmn");
+        Map<String, List<ExtensionElement>> children = new HashMap<>();
+        children.put("property", List.of(properties));
+        container.setChildElements(children);
+        task.addExtensionElement(container);
+    }
+
+    /**
+     * 创建一条 Flowable 扩展属性。
+     *
+     * @param name String，平台保留属性名
+     * @param value String，属性正文
+     * @return ExtensionElement，可加入 properties 容器的 property 元素
+     */
+    private ExtensionElement property(String name, String value)
+    {
+        ExtensionElement property = new ExtensionElement();
+        property.setName("property");
+        property.setNamespace("http://flowable.org/bpmn");
+        property.addAttribute(new ExtensionAttribute("name", name));
+        property.addAttribute(new ExtensionAttribute("value", value));
+        return property;
     }
 
     /**

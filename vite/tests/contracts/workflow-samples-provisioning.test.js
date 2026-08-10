@@ -177,7 +177,35 @@ test('复杂工作流样例遵守条件路由多实例和扩展白名单', async
 
   const conditional = parseXml(renderSample(byKey.get('sample_amount_routing'), directory))
   assert.equal(bpmnElements(conditional, 'exclusiveGateway').length, 1)
-  assert.equal(bpmnElements(conditional, 'conditionExpression')[0].textContent, '${requestAmount <= 5000}')
+  assert.equal(bpmnElements(conditional, 'conditionExpression').length, 0)
+  const conditionalFlows = new Map(bpmnElements(conditional, 'sequenceFlow')
+    .map(flow => [flow.getAttribute('id'), flow]))
+  /**
+   * 从条件样例的指定顺序流读取受控作者规则。
+   * @param {string} flowId 顺序流 BPMN 标识。
+   * @returns {object} 已解析的版本化条件规则 JSON。
+   */
+  const readConditionRule = flowId => {
+    const properties = Array.from(conditionalFlows.get(flowId)
+      .getElementsByTagNameNS('http://flowable.org/bpmn', 'property'))
+    const property = properties.find(item => (
+      item.getAttribute('name') === 'approva.conditionRule.config'
+    ))
+    assert.ok(property, flowId)
+    return JSON.parse(property.getAttribute('value'))
+  }
+  assert.deepEqual(readConditionRule('flow_amount_small'), {
+    version: 1,
+    default: false,
+    combinator: 'AND',
+    groups: [{
+      combinator: 'AND',
+      rules: [{ field: 'requestAmount', operator: 'LTE', value: 5000 }]
+    }]
+  })
+  assert.deepEqual(readConditionRule('flow_amount_high'), { version: 1, default: true })
+  assert.equal(conditionalFlows.get('flow_amount_small').getAttribute('name'), '小额直接通过')
+  assert.equal(conditionalFlows.get('flow_amount_high').getAttribute('name'), '大额继续审批')
 
   const parallel = parseXml(renderSample(byKey.get('sample_onboarding_parallel'), directory))
   assert.equal(bpmnElements(parallel, 'parallelGateway').length, 2)
@@ -210,6 +238,15 @@ test('工作流样例置备不包含明文密码或数据库旁路', async () =>
   assert.doesNotMatch(scriptSource, /\b(?:INSERT|UPDATE|DELETE)\s+(?:INTO|FROM)?\s*(?:ACT_|wf_|sys_)/iu)
   assert.match(scriptSource, /APPROVA_SAMPLE_ADMIN_PASSWORD/u)
   assert.match(scriptSource, /APPROVA_SAMPLE_IDENTITY_PASSWORD/u)
+  assert.match(scriptSource, /APPROVA_SAMPLE_CAPTCHA_UUID/u)
+  assert.match(scriptSource, /APPROVA_SAMPLE_CAPTCHA_CODE/u)
+  assert.match(scriptSource, /APPROVA_SAMPLE_TEMPORARILY_DISABLE_CAPTCHA/u)
+  assert.match(scriptSource, /APPROVA_SAMPLE_REPAIR_UNDEPLOYED/u)
+  assert.match(scriptSource, /Boolean\(captchaUuid\) !== Boolean\(captchaCode\)/u)
+  assert.match(scriptSource, /api\.request\('GET', '\/captchaImage'\)/u)
+  assert.match(scriptSource, /captchaChanged = true\s+await updateCaptchaConfig/u)
+  assert.match(scriptSource, /model\.bpmnXml !== expectedBpmn && !repairUndeployed/u)
+  assert.match(scriptSource, /finally \{/u)
   assert.match(scriptSource, /\/system\/user/u)
   assert.match(scriptSource, /\/workflow\/model\/deploy/u)
 })

@@ -197,11 +197,32 @@ import { multiInstanceAuthorProperties } from './designer/multiInstancePropertyC
 // 受控多实例的技术属性由设计器固定写入，页面不向设计者开放任意方法或变量名。
 const CONTROLLED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getUserIds(execution)}'
 const START_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getStartUserIds(execution)}'
+const CONFIGURED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getConfiguredUserIds(execution)}'
 const FIXED_MULTI_INSTANCE_COLLECTION_PATTERN = /^\$\{multiInstanceHandler\.getFixedUserIds\(execution, '([1-9]\d*(?:,[1-9]\d*)*)'\)\}$/
 const CONTROLLED_MULTI_INSTANCE_ASSIGNEE = '${assignee}'
 const CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE = 'assignee'
 const CONTROLLED_MULTI_INSTANCE_ALL_CONDITION = '${nrOfCompletedInstances == nrOfInstances}'
 const CONTROLLED_MULTI_INSTANCE_ANY_CONDITION = '${nrOfCompletedInstances > 0}'
+// 指定身份只保存类型和正式主键，运行时由后端展开角色或部门并生成真实 assignee 任务。
+const MULTI_INSTANCE_IDENTITY_PROPERTIES = Object.freeze({
+  type: 'approva.multiInstance.identityType',
+  ids: 'approva.multiInstance.identityIds'
+})
+const MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES = new Set(Object.values(MULTI_INSTANCE_IDENTITY_PROPERTIES))
+const MULTI_INSTANCE_IDENTITY_TYPES = Object.freeze({
+  user: 'USER',
+  role: 'ROLE',
+  dept: 'DEPT'
+})
+const MULTI_INSTANCE_IDENTITY_SOURCES = Object.freeze(
+  Object.fromEntries(Object.entries(MULTI_INSTANCE_IDENTITY_TYPES).map(([source, type]) => [type, source]))
+)
+const MULTI_INSTANCE_IDENTITY_VALUE_PATTERNS = Object.freeze({
+  user: /^[1-9]\d{0,18}$/,
+  role: /^ROLE[1-9]\d{0,18}$/,
+  dept: /^DEPT[1-9]\d{0,18}$/
+})
+const JAVA_LONG_MAX_TEXT = '9223372036854775807'
 // 业务监听器的作者 XML 只允许固定调度 Bean；后端部署时会冻结版本并剥离字段。
 const BUSINESS_LISTENER_DELEGATE_EXPRESSION = '${workflowBusinessListener}'
 // 受控整改循环只保存固定属性；运行路由、轮次和审计均由后端部署编译与任务完成服务维护。
@@ -519,7 +540,7 @@ let previousDocumentUserSelect = ''
 const identitySearchTimers = new Map()
 let importing = false
 
-// 三类检索目标分别冻结后端身份类型和能力，防止切换办理方式时降级为通用目录。
+// 九类选项池分别冻结后端身份类型和能力，防止切换办理方式时降级为通用目录。
 const IDENTITY_SEARCH_CONTRACTS = Object.freeze({
   assignees: Object.freeze({ type: 'user', capability: 'approval' }),
   candidateUsers: Object.freeze({ type: 'user', capability: 'claim' }),
@@ -603,7 +624,7 @@ function createEmptyPropertyState() {
     multiInstanceType: 'none',
     multiInstanceApprovalMode: 'all',
     multiInstanceMemberSource: 'dynamic',
-    fixedMultiInstanceUserIds: [],
+    configuredMultiInstanceIdentityIds: [],
     collection: '',
     elementVariable: '',
     completionCondition: '',
@@ -694,7 +715,7 @@ function createInitialXml() {
 
 /**
  * 按办理身份目标对远程检索进行独立防抖，避免资格不同的请求互相覆盖。
- * @param {'assignees'|'candidateUsers'|'candidateGroups'} target 直接办理人或候选身份选项池。
+ * @param {'assignees'|'candidateUsers'|'candidateGroups'|'candidateRoles'|'activeUsers'|'activeRoles'|'activeDepts'|'autoCopyUsers'|'autoCopyGroups'} target 受控身份选项池。
  * @param {string} keyword 用户输入的名称关键字。
  * @returns {void} 到达防抖窗口后通过事件交由页面请求真实后端。
  */
@@ -910,10 +931,11 @@ function loadPropertyState(element) {
   propertyState.participantRule = readParticipantRule(businessObject)
   propertyState.sla = readSlaConfig(extensionProperties)
   propertyState.autoCopyRules = readAutoCopyRules(extensionProperties)
-  // 通用属性面板排除 SLA、参与者规则和自动抄送平台保留字段，避免绕过结构化校验。
+  // 通用属性面板排除 SLA、参与者规则、多实例身份和自动抄送平台保留字段，避免绕过结构化校验。
   propertyState.extensionProperties = extensionProperties.filter(item => (
     !SLA_PROPERTY_NAME_SET.has(item.name)
       && !PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
+      && !MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name)
       && item.name !== AUTO_COPY_PROPERTY_NAME
   ))
   const controlledLoop = readControlledLoop(businessObject)
@@ -956,10 +978,16 @@ function loadPropertyState(element) {
     propertyState.completionCondition = loop.completionCondition?.body || ''
     if (isControlledMultiInstanceLoop(loop)) {
       propertyState.multiInstanceType = 'controlled'
-      propertyState.multiInstanceMemberSource = isFixedMultiInstanceLoop(loop)
-        ? 'fixed'
-        : isStartMultiInstanceLoop(loop) ? 'start' : 'dynamic'
-      propertyState.fixedMultiInstanceUserIds = readFixedMultiInstanceUserIds(loop)
+      const configuredIdentity = readConfiguredMultiInstanceIdentity(businessObject)
+      propertyState.multiInstanceMemberSource = isConfiguredMultiInstanceLoop(loop)
+        ? (configuredIdentity?.source || '')
+        : isFixedMultiInstanceLoop(loop)
+          ? 'user'
+          : isStartMultiInstanceLoop(loop) ? 'start' : 'dynamic'
+      // 旧固定用户表达式只在回读时兼容；设计者下一次修改会迁移为统一受控属性。
+      propertyState.configuredMultiInstanceIdentityIds = isFixedMultiInstanceLoop(loop)
+        ? readFixedMultiInstanceUserIds(loop)
+        : (configuredIdentity?.selectionValues || [])
       propertyState.multiInstanceApprovalMode = propertyState.completionCondition === CONTROLLED_MULTI_INSTANCE_ANY_CONDITION
         ? 'any'
         : 'all'
@@ -1506,6 +1534,7 @@ function isControlledMultiInstanceLoop(loop) {
   const collection = String(loop?.get?.('flowable:collection') || '').trim()
   return collection === CONTROLLED_MULTI_INSTANCE_COLLECTION
     || collection === START_MULTI_INSTANCE_COLLECTION
+    || collection === CONFIGURED_MULTI_INSTANCE_COLLECTION
     || FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)
 }
 
@@ -1516,6 +1545,15 @@ function isControlledMultiInstanceLoop(loop) {
  */
 function isStartMultiInstanceLoop(loop) {
   return String(loop?.get?.('flowable:collection') || '').trim() === START_MULTI_INSTANCE_COLLECTION
+}
+
+/**
+ * 判断受控多实例是否使用设计时指定用户、角色或部门来源。
+ * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
+ * @returns {boolean} 集合表达式精确命中指定身份 handler 时返回 true。
+ */
+function isConfiguredMultiInstanceLoop(loop) {
+  return String(loop?.get?.('flowable:collection') || '').trim() === CONFIGURED_MULTI_INSTANCE_COLLECTION
 }
 
 /**
@@ -1541,12 +1579,75 @@ function readFixedMultiInstanceUserIds(loop) {
 }
 
 /**
- * 将设计时选定的固定成员转换为后端白名单接受的 Flowable EL 表达式。
- * @param {string[]} userIds 已去重且为正整数的固定办理人主键。
- * @returns {string} 仅含数字用户主键的受控固定成员集合表达式。
+ * 校验文本是否为 Java Long 范围内的规范正整数主键。
+ * @param {unknown} value 待校验的用户、角色或部门数字主键。
+ * @returns {boolean} 无前导零且不超过 Long.MAX_VALUE 时返回 true。
  */
-function fixedMultiInstanceCollectionExpression(userIds) {
-  return `\${multiInstanceHandler.getFixedUserIds(execution, '${userIds.join(',')}')}`
+function isCanonicalJavaLongId(value) {
+  const text = String(value ?? '')
+  if (!/^[1-9]\d{0,18}$/.test(text)) return false
+  return text.length < JAVA_LONG_MAX_TEXT.length || text <= JAVA_LONG_MAX_TEXT
+}
+
+/**
+ * 将指定身份选择值严格转换为后端属性使用的数字主键。
+ * @param {'user'|'role'|'dept'} source 指定用户、角色或部门来源。
+ * @param {unknown[]} values 正式目录返回的选择值；角色和部门必须携带 ROLE/DEPT 前缀。
+ * @returns {{source:string,type:string,ids:string[],selectionValues:string[]}|null} 合法且唯一的 1 至 100 项配置；非法时返回 null。
+ */
+function normalizeConfiguredMultiInstanceIdentity(source, values) {
+  const type = MULTI_INSTANCE_IDENTITY_TYPES[source]
+  const pattern = MULTI_INSTANCE_IDENTITY_VALUE_PATTERNS[source]
+  if (!type || !pattern || !Array.isArray(values) || values.length < 1 || values.length > 100) return null
+  const ids = []
+  const selectionValues = []
+  const seenIds = new Set()
+  const prefix = source === 'role' ? 'ROLE' : source === 'dept' ? 'DEPT' : ''
+  for (const value of values) {
+    const selectionValue = String(value ?? '')
+    if (!pattern.test(selectionValue)) return null
+    const id = prefix ? selectionValue.slice(prefix.length) : selectionValue
+    if (!isCanonicalJavaLongId(id) || seenIds.has(id)) return null
+    seenIds.add(id)
+    ids.push(id)
+    selectionValues.push(selectionValue)
+  }
+  return { source, type, ids, selectionValues }
+}
+
+/**
+ * 从 UserTask 的平台保留属性严格回读指定身份配置。
+ * @param {object|undefined} task bpmn-js 用户任务业务对象。
+ * @returns {{source:string,type:string,ids:string[],selectionValues:string[]}|null} 完整合法配置；缺失、重复或格式非法时返回 null。
+ */
+function readConfiguredMultiInstanceIdentity(task) {
+  const properties = readAllFlowableProperties(task)
+    .filter(item => MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name))
+  if (properties.length !== MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.size) return null
+  const values = new Map()
+  for (const property of properties) {
+    if (values.has(property.name)) return null
+    values.set(property.name, property.value)
+  }
+  const type = values.get(MULTI_INSTANCE_IDENTITY_PROPERTIES.type)
+  const source = MULTI_INSTANCE_IDENTITY_SOURCES[type]
+  const rawIds = String(values.get(MULTI_INSTANCE_IDENTITY_PROPERTIES.ids) ?? '').split(',')
+  const prefix = source === 'role' ? 'ROLE' : source === 'dept' ? 'DEPT' : ''
+  return source
+    ? normalizeConfiguredMultiInstanceIdentity(source, rawIds.map(id => `${prefix}${id}`))
+    : null
+}
+
+/**
+ * 将已校验的指定身份配置转换为两个 Flowable 平台保留属性。
+ * @param {{type:string,ids:string[]}} identity 用户、角色或部门的规范配置。
+ * @returns {Array<{name:string,value:string}>} 可原子写入 BPMN extensionElements 的属性项。
+ */
+function configuredMultiInstancePropertyItems(identity) {
+  return [
+    { name: MULTI_INSTANCE_IDENTITY_PROPERTIES.type, value: identity.type },
+    { name: MULTI_INSTANCE_IDENTITY_PROPERTIES.ids, value: identity.ids.join(',') }
+  ]
 }
 
 /**
@@ -2552,6 +2653,7 @@ function updateExtensionProperties(properties) {
       .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
         || SLA_PROPERTY_NAME_SET.has(item.name)
         || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
+        || MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name)
         || item.name === CONDITION_RULE_PROPERTY
         || item.name === AUTO_COPY_PROPERTY_NAME)
     const extensionElements = buildPropertiesExtensionElements(
@@ -2669,7 +2771,8 @@ function updateAutoCopyRules(rules) {
     const platformProperties = readAllFlowableProperties(selectedBusinessObject.value)
       .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
         || SLA_PROPERTY_NAME_SET.has(item.name)
-        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
+        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
+        || MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name))
     persistExtensionProperties([
       ...propertyState.extensionProperties,
       ...platformProperties,
@@ -3051,7 +3154,7 @@ function updateDocumentation() {
 }
 
 /**
- * 创建、更新或删除活动循环配置；受控模式一次写入完整的动态或固定人员技术契约。
+ * 创建、更新或删除活动循环配置；受控模式一次写入完整的人员来源和签署技术契约。
  * @returns {void} 无返回值。
  */
 function updateMultiInstance() {
@@ -3071,10 +3174,10 @@ function updateMultiInstance() {
   const participantProperties = readAllFlowableProperties(selectedBusinessObject.value)
     .filter(item => PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
   const editableSingleInstanceProperties = [...editableWithPlatformProperties, ...participantProperties]
-  const clearedControlledExtensions = wasApprovalLoop
+  const clearedControlledExtensions = wasApprovalLoop || wasControlled
     ? buildPropertiesExtensionElements(selectedBusinessObject.value, editableSingleInstanceProperties, [])
     : selectedBusinessObject.value?.extensionElements
-  const multiInstanceExtensions = buildPropertiesExtensionElements(
+  const plainMultiInstanceExtensions = buildPropertiesExtensionElements(
     selectedBusinessObject.value, editableWithPlatformProperties, [])
   if (propertyState.multiInstanceType === 'approvalLoop') {
     try {
@@ -3128,18 +3231,21 @@ function updateMultiInstance() {
         ? moddle.create('bpmn:FormalExpression', { body: loopCondition })
         : undefined
     })
-    const changes = { loopCharacteristics: standardLoop, extensionElements: multiInstanceExtensions }
+    const changes = { loopCharacteristics: standardLoop, extensionElements: plainMultiInstanceExtensions }
     if (wasControlled) resetControlledAssignment(changes)
     updateProperties(changes)
     return
   }
   const controlled = propertyState.multiInstanceType === 'controlled'
-  const fixedMemberSource = controlled && propertyState.multiInstanceMemberSource === 'fixed'
+  const configuredMemberSource = controlled
+    && Object.hasOwn(MULTI_INSTANCE_IDENTITY_TYPES, propertyState.multiInstanceMemberSource)
   const leavingControlled = !controlled && wasControlled
   let collection = controlled
     ? propertyState.multiInstanceMemberSource === 'start'
       ? START_MULTI_INSTANCE_COLLECTION
-      : CONTROLLED_MULTI_INSTANCE_COLLECTION
+      : configuredMemberSource
+        ? CONFIGURED_MULTI_INSTANCE_COLLECTION
+        : CONTROLLED_MULTI_INSTANCE_COLLECTION
     : propertyState.collection.trim()
   let elementVariable = controlled
     ? CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE
@@ -3160,19 +3266,31 @@ function updateMultiInstance() {
     propertyState.completionCondition = ''
   }
 
-  if (fixedMemberSource) {
-    const userIds = [...new Set(propertyState.fixedMultiInstanceUserIds
-      .map(userId => String(userId || '').trim())
-      .filter(userId => /^\d+$/.test(userId) && Number(userId) > 0))]
-    if (userIds.length < 1 || userIds.length > 100) {
+  let configuredIdentity = null
+  if (controlled && !['dynamic', 'start'].includes(propertyState.multiInstanceMemberSource)
+    && !configuredMemberSource) {
+    loadPropertyState(selectedElement.value)
+    emit('error', new Error('会签或或签人员来源不合法'))
+    return
+  }
+  if (configuredMemberSource) {
+    configuredIdentity = normalizeConfiguredMultiInstanceIdentity(
+      propertyState.multiInstanceMemberSource,
+      propertyState.configuredMultiInstanceIdentityIds
+    )
+    if (!configuredIdentity) {
       loadPropertyState(selectedElement.value)
-      emit('error', new Error('固定会签或或签办理人必须选择 1 至 100 名有效用户'))
+      emit('error', new Error('指定会签或或签身份必须选择 1 至 100 个有效用户、角色或部门'))
       return
     }
-    // 固定名单按属性面板顺序写入白名单表达式，运行时仍由后端核验用户存在、启用状态和多实例结构。
-    propertyState.fixedMultiInstanceUserIds = userIds
-    collection = fixedMultiInstanceCollectionExpression(userIds)
+    // 只把类型和正式主键写入作者 BPMN；角色或部门成员在每次进入节点时由后端按实时 RBAC 展开。
+    propertyState.configuredMultiInstanceIdentityIds = configuredIdentity.selectionValues
   }
+
+  const multiInstanceExtensions = buildPropertiesExtensionElements(
+    selectedBusinessObject.value,
+    editableWithPlatformProperties,
+    configuredIdentity ? configuredMultiInstancePropertyItems(configuredIdentity) : [])
 
   // 已导入的静态多实例可能带有后端允许但面板未编辑的标准属性，原位更新可保持其往返完整性。
   if (!controlled && !wasControlled
@@ -3851,11 +3969,15 @@ async function requestSave() {
   // 清除最后一次建模命令留下的延迟导出，保证本次保存窗口内只有一个 XML 序列化任务。
   window.clearTimeout(changeTimer)
   try {
+    const configuredSource = Object.hasOwn(
+      MULTI_INSTANCE_IDENTITY_TYPES, propertyState.multiInstanceMemberSource)
     if (propertyFlags.value.userTask
       && propertyState.multiInstanceType === 'controlled'
-      && propertyState.multiInstanceMemberSource === 'fixed'
-      && propertyState.fixedMultiInstanceUserIds.length === 0) {
-      throw new Error('固定会签或或签办理人必须选择 1 至 100 名有效用户')
+      && configuredSource
+      && !normalizeConfiguredMultiInstanceIdentity(
+        propertyState.multiInstanceMemberSource,
+        propertyState.configuredMultiInstanceIdentityIds)) {
+      throw new Error('指定会签或或签身份必须选择 1 至 100 个有效用户、角色或部门')
     }
     const error = validateDiagram()
     if (error) throw new Error(error)
@@ -4102,6 +4224,7 @@ function updateSlaProperties(config) {
     const controlledProperties = readAllFlowableProperties(selectedBusinessObject.value)
       .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
         || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
+        || MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name)
         || item.name === AUTO_COPY_PROPERTY_NAME)
     persistExtensionProperties([
       ...propertyState.extensionProperties,
@@ -4248,12 +4371,19 @@ function hasEmbeddedFormFields(businessObject) {
  * @returns {string} 空串表示通过，否则返回稳定业务错误。
  */
 function validateUserTaskMultiInstance(task) {
+  const configuredProperties = readAllFlowableProperties(task)
+    .filter(item => MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name))
   const loop = task.loopCharacteristics
-  if (!loop) return ''
+  if (!loop) return configuredProperties.length ? '指定多实例身份属性缺少会签或或签循环' : ''
   const collection = String(loop.get?.('flowable:collection') || '').trim()
-  if (collection !== CONTROLLED_MULTI_INSTANCE_COLLECTION
-    && collection !== START_MULTI_INSTANCE_COLLECTION
-    && !FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)) return ''
+  const configuredCollection = collection === CONFIGURED_MULTI_INSTANCE_COLLECTION
+  const controlledCollection = collection === CONTROLLED_MULTI_INSTANCE_COLLECTION
+    || collection === START_MULTI_INSTANCE_COLLECTION
+    || configuredCollection
+    || FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)
+  if (!controlledCollection) {
+    return configuredProperties.length ? '指定多实例身份属性与集合表达式不一致' : ''
+  }
   const condition = String(loop.completionCondition?.body || '').trim()
   const approvedCondition = [
     CONTROLLED_MULTI_INSTANCE_ALL_CONDITION,
@@ -4274,10 +4404,20 @@ function validateUserTaskMultiInstance(task) {
     return '受控多实例配置不符合会签或或签契约'
   }
   if (FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)) {
-    const fixedUserIds = readFixedMultiInstanceUserIds(loop)
-    if (!fixedUserIds.length || fixedUserIds.length > 100) {
+    const fixedUserIds = collection.match(FIXED_MULTI_INSTANCE_COLLECTION_PATTERN)?.[1]?.split(',') || []
+    if (!fixedUserIds.length || fixedUserIds.length > 100
+      || new Set(fixedUserIds).size !== fixedUserIds.length
+      || fixedUserIds.some(userId => !isCanonicalJavaLongId(userId))) {
       return '固定会签或或签必须预设 1 至 100 名有效办理人'
     }
+  }
+  if (configuredCollection) {
+    if (configuredProperties.length !== MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.size
+      || !readConfiguredMultiInstanceIdentity(task)) {
+      return '指定会签或或签身份配置不完整或不合法'
+    }
+  } else if (configuredProperties.length) {
+    return '指定多实例身份属性与集合表达式不一致'
   }
   return ''
 }

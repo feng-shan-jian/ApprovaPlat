@@ -8,6 +8,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
@@ -122,6 +123,55 @@ public class WorkflowMultiInstanceHandler
     {
         // 发起来源与办理时来源共用同一服务端变量协议，区别只用于部署拓扑和页面入口控制。
         return getUserIds(execution);
+    }
+
+    /**
+     * 从 BPMN 平台保留属性读取指定用户、角色或部门，并展开为真实多实例办理用户。
+     *
+     * @param execution DelegateExecution，Flowable 正在创建指定身份多实例根的执行上下文
+     * @return List&lt;String&gt;，1 至 100 名实时具备审批资格的去重用户主键
+     */
+    public List<String> getConfiguredUserIds(DelegateExecution execution)
+    {
+        if (execution == null)
+        {
+            throw invalidArgument();
+        }
+        String activityId;
+        WorkflowMultiInstanceMode mode;
+        WorkflowMultiInstanceModelContract.ConfiguredIdentity configuredIdentity;
+        try
+        {
+            activityId = WorkflowMultiInstanceVariables.requireActivityId(
+                    execution.getCurrentActivityId());
+            if (!(execution.getCurrentFlowElement() instanceof UserTask userTask))
+            {
+                throw new IllegalArgumentException("指定多实例节点类型不合法");
+            }
+            mode = WorkflowMultiInstanceModelContract.requireMode(userTask);
+            configuredIdentity = WorkflowMultiInstanceModelContract
+                    .requireConfiguredIdentity(userTask);
+        }
+        catch (IllegalArgumentException exception)
+        {
+            throw invalidArgument();
+        }
+
+        // targetIds 是作者冻结的用户、角色或部门主键；角色和部门必须在每次进入节点时按实时 RBAC 展开。
+        List<String> eligibleUserIds = switch (configuredIdentity.type())
+        {
+            case USER -> userSelectionValidator.requireApprovalEligibleUserIds(
+                    configuredIdentity.targetIds());
+            case ROLE -> userSelectionValidator.requireApprovalEligibleUserIdsByRoleIds(
+                    configuredIdentity.targetIds());
+            case DEPT -> userSelectionValidator.requireApprovalEligibleUserIdsByDeptIds(
+                    configuredIdentity.targetIds());
+        };
+        if (eligibleUserIds.isEmpty())
+        {
+            throw invalidArgument();
+        }
+        return initializeMemberState(execution, activityId, mode, eligibleUserIds);
     }
 
     /**

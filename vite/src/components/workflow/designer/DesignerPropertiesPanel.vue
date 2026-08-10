@@ -53,11 +53,7 @@
               <el-form-item label="表单来源" required>
                 <el-segmented v-model="state.formSource" :options="formSourceOptions" @change="emit('form-source-change')" />
               </el-form-item>
-              <el-form-item
-                v-if="state.formSource === 'TEMPLATE'"
-                :label="flags.startEvent ? '发起表单' : '节点表单'"
-                :required="flags.startEvent"
-              >
+              <el-form-item v-if="state.formSource === 'TEMPLATE'" :label="flags.startEvent ? '发起表单' : '节点表单'" :required="flags.startEvent">
                 <el-select v-model="state.formKey" filterable clearable @change="emit('form-change')">
                   <el-option v-for="form in forms" :key="form.formId" :label="form.formName" :value="`key_${form.formId}`" />
                 </el-select>
@@ -90,40 +86,81 @@
             />
 
             <template v-if="flags.userTask">
-              <ParticipantRuleEditor
-                v-if="state.multiInstanceType === 'none'"
-                v-model="state.participantRule"
-                mode="task"
-                :identity-options="identityOptions"
-                :form-fields="participantFormFieldOptions"
-                :loading="identityLoading"
-                @identity-search="emit('identity-search', $event)"
-                @identity-resolve="emit('identity-resolve', $event)"
-                @change="emit('participant-rule-change', $event)"
-              />
-              <el-form-item v-if="state.multiInstanceType === 'controlled'" label="签署规则">
-                <el-segmented v-model="state.multiInstanceApprovalMode" :options="multiInstanceApprovalOptions" @change="emit('multi-instance-change')" />
-              </el-form-item>
-              <template v-if="state.multiInstanceType === 'controlled'">
-                <el-form-item label="人员来源">
-                  <el-segmented v-model="state.multiInstanceMemberSource" :options="multiInstanceMemberSourceOptions" @change="handleMemberSourceChange" />
-                </el-form-item>
-                <el-form-item v-if="state.multiInstanceMemberSource === 'fixed'" label="固定办理人" required>
-                  <el-select
-                    v-model="state.fixedMultiInstanceUserIds"
-                    multiple
-                    filterable
-                    remote
-                    reserve-keyword
-                    :remote-method="searchAssignees"
-                    :loading="identityLoading"
-                    placeholder="请选择会签或或签办理人"
-                    @change="emit('multi-instance-change')"
-                  >
-                    <el-option v-for="user in identityOptions.assignees" :key="user.value" :label="user.label" :value="String(user.value)" />
-                  </el-select>
-                </el-form-item>
-              </template>
+              <section v-if="['none', 'controlled'].includes(state.multiInstanceType)" class="user-task-approval" aria-labelledby="user-task-approval-heading">
+                <div class="user-task-approval__heading">
+                  <div>
+                    <span class="user-task-approval__eyebrow">任务办理</span>
+                    <h4 id="user-task-approval-heading">审批人设置</h4>
+                  </div>
+                  <el-tag size="small" effect="plain" :type="userTaskApprovalTag.type">
+                    {{ userTaskApprovalTag.label }}
+                  </el-tag>
+                </div>
+
+                <ParticipantRuleEditor
+                  v-if="state.multiInstanceType === 'none'"
+                  v-model="state.participantRule"
+                  mode="task"
+                  :identity-options="identityOptions"
+                  :form-fields="participantFormFieldOptions"
+                  :loading="identityLoading"
+                  @identity-search="emit('identity-search', $event)"
+                  @identity-resolve="emit('identity-resolve', $event)"
+                  @change="emit('participant-rule-change', $event)"
+                />
+
+                <template v-else>
+                  <el-form-item label="审批人来源" required>
+                    <el-radio-group v-model="state.multiInstanceMemberSource" class="user-task-approval__source-grid" @change="handleMemberSourceChange">
+                      <el-radio v-for="option in multiInstanceMemberSourceOptions" :key="option.value" :value="option.value">
+                        {{ option.label }}
+                      </el-radio>
+                    </el-radio-group>
+                  </el-form-item>
+                  <el-form-item v-if="multiInstanceIdentityConfiguration" :label="multiInstanceIdentityConfiguration.label" required>
+                    <el-select
+                      v-model="state.configuredMultiInstanceIdentityIds"
+                      multiple
+                      filterable
+                      remote
+                      reserve-keyword
+                      collapse-tags
+                      collapse-tags-tooltip
+                      :max-collapse-tags="3"
+                      :remote-method="searchMultiInstanceIdentities"
+                      :loading="identityLoading"
+                      :placeholder="multiInstanceIdentityConfiguration.placeholder"
+                      @change="emit('multi-instance-change')"
+                    >
+                      <el-option
+                        v-for="option in multiInstanceIdentityConfiguration.options"
+                        :key="option.value"
+                        :label="option.label"
+                        :value="String(option.value)"
+                        :disabled="option.available === false"
+                      />
+                    </el-select>
+                  </el-form-item>
+                </template>
+
+                <div class="user-task-approval__method">
+                  <h4>审批方式</h4>
+                  <el-radio-group :model-value="userTaskApprovalMethod" class="user-task-approval__method-list" @change="handleUserTaskApprovalMethodChange">
+                    <el-radio value="single">
+                      <span class="user-task-approval__method-label">普通审批</span>
+                      <small>由一名审批人办理</small>
+                    </el-radio>
+                    <el-radio value="all">
+                      <span class="user-task-approval__method-label">会签</span>
+                      <small>需所有审批人完成</small>
+                    </el-radio>
+                    <el-radio value="any">
+                      <span class="user-task-approval__method-label">或签</span>
+                      <small>任一审批人完成即可</small>
+                    </el-radio>
+                  </el-radio-group>
+                </div>
+              </section>
               <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType) && !flags.userTask">
                 <el-form-item label="集合表达式">
                   <el-input v-model="state.collection" maxlength="256" @change="emit('multi-instance-change')" />
@@ -140,17 +177,44 @@
                   <el-segmented v-model="state.assignmentType" :options="assignmentOptions" @change="emit('assignment-change')" />
                 </el-form-item>
                 <el-form-item v-if="state.assignmentType === 'assignee'" label="办理人">
-                  <el-select v-model="state.assignee" filterable clearable remote reserve-keyword :remote-method="searchAssignees" :loading="identityLoading" @change="emit('assignment-change')">
+                  <el-select
+                    v-model="state.assignee"
+                    filterable
+                    clearable
+                    remote
+                    reserve-keyword
+                    :remote-method="searchAssignees"
+                    :loading="identityLoading"
+                    @change="emit('assignment-change')"
+                  >
                     <el-option v-for="user in identityOptions.assignees" :key="user.value" :label="user.label" :value="String(user.value)" />
                   </el-select>
                 </el-form-item>
                 <el-form-item v-if="state.assignmentType === 'users'" label="候选用户">
-                  <el-select v-model="state.candidateUsers" multiple filterable remote reserve-keyword :remote-method="searchCandidateUsers" :loading="identityLoading" @change="emit('assignment-change')">
+                  <el-select
+                    v-model="state.candidateUsers"
+                    multiple
+                    filterable
+                    remote
+                    reserve-keyword
+                    :remote-method="searchCandidateUsers"
+                    :loading="identityLoading"
+                    @change="emit('assignment-change')"
+                  >
                     <el-option v-for="user in identityOptions.candidateUsers" :key="user.value" :label="user.label" :value="String(user.value)" />
                   </el-select>
                 </el-form-item>
                 <el-form-item v-if="state.assignmentType === 'groups'" label="候选角色或部门">
-                  <el-select v-model="state.candidateGroups" multiple filterable remote reserve-keyword :remote-method="searchCandidateGroups" :loading="identityLoading" @change="emit('assignment-change')">
+                  <el-select
+                    v-model="state.candidateGroups"
+                    multiple
+                    filterable
+                    remote
+                    reserve-keyword
+                    :remote-method="searchCandidateGroups"
+                    :loading="identityLoading"
+                    @change="emit('assignment-change')"
+                  >
                     <el-option v-for="group in identityOptions.candidateGroups" :key="group.value" :label="group.label" :value="group.value" />
                   </el-select>
                 </el-form-item>
@@ -212,11 +276,7 @@
                 :endpoints="connectorEndpoints"
                 @change="emit('service-task-change')"
               />
-              <CelExpressionEditor
-                v-else-if="selectedExtensionType === 'CEL'"
-                v-model="state.extensionConfig"
-                @change="emit('service-task-change')"
-              />
+              <CelExpressionEditor v-else-if="selectedExtensionType === 'CEL'" v-model="state.extensionConfig" @change="emit('service-task-change')" />
               <HttpConnectorEditor
                 v-else-if="selectedExtensionType === 'HTTP'"
                 v-model="state.extensionConfig"
@@ -274,7 +334,8 @@
                       <span>{{ option.processName || option.processKey }}</span>
                       <code>{{ option.processKey }}</code>
                       <el-tag size="small" :type="option.status === 'ACTIVE' ? 'success' : 'info'">
-                        v{{ option.version }} · {{ option.status === 'ACTIVE' ? '启用' : '停用' }}
+                        v{{ option.version }} ·
+                        {{ option.status === 'ACTIVE' ? '启用' : '停用' }}
                       </el-tag>
                     </div>
                   </el-option>
@@ -348,13 +409,7 @@
                 @apply="emit('condition-rule-change', $event)"
                 @make-default="emit('condition-default-change')"
               />
-              <el-alert
-                v-else
-                type="info"
-                :closable="false"
-                show-icon
-                title="条件规则仅适用于排他或包容网关的多条出线"
-              />
+              <el-alert v-else type="info" :closable="false" show-icon title="条件规则仅适用于排他或包容网关的多条出线" />
             </template>
 
             <template v-if="flags.event">
@@ -400,14 +455,9 @@
           </el-collapse-item>
 
           <el-collapse-item v-if="flags.activity" title="执行配置" name="execution">
-            <el-form-item label="循环方式">
+            <el-form-item v-if="!flags.userTask || state.multiInstanceType !== 'controlled'" label="循环方式">
               <el-select v-model="state.multiInstanceType" @change="handleLoopTypeChange">
-                <el-option
-                  v-for="option in activityLoopOptions"
-                  :key="option.value"
-                  :label="option.label"
-                  :value="option.value"
-                />
+                <el-option v-for="option in activityLoopOptions" :key="option.value" :label="option.label" :value="option.value" />
               </el-select>
             </el-form-item>
             <template v-if="state.multiInstanceType === 'standard'">
@@ -429,12 +479,7 @@
                 title="任务首次正常进入；每次提交后按正式表单字段决定再次整改或退出。达到上限时拒绝继续整改，不会强制放行。配置完成后请点击应用。"
               />
               <el-form-item label="最大办理轮次" required>
-                <el-input-number
-                  v-model="state.controlledLoopMaxIterations"
-                  :min="2"
-                  :max="50"
-                  controls-position="right"
-                />
+                <el-input-number v-model="state.controlledLoopMaxIterations" :min="2" :max="50" controls-position="right" />
               </el-form-item>
               <el-form-item label="循环判断字段" required>
                 <el-select
@@ -443,12 +488,7 @@
                   placeholder="请选择当前节点表单字段"
                   @change="handleControlledLoopFieldChange"
                 >
-                  <el-option
-                    v-for="field in controlledLoopFieldOptions"
-                    :key="field.value"
-                    :label="field.label"
-                    :value="field.value"
-                  />
+                  <el-option v-for="field in controlledLoopFieldOptions" :key="field.value" :label="field.label" :value="field.value" />
                 </el-select>
               </el-form-item>
               <el-form-item label="再次进入条件" required>
@@ -461,12 +501,7 @@
                 >
                   <el-option v-for="item in controlledLoopValueOptions" :key="item.value" :label="item.label" :value="item.value" />
                 </el-select>
-                <el-input
-                  v-else
-                  v-model="state.controlledLoopRepeatValue"
-                  maxlength="128"
-                  placeholder="字段等于此值时再次整改"
-                />
+                <el-input v-else v-model="state.controlledLoopRepeatValue" maxlength="128" placeholder="字段等于此值时再次整改" />
               </el-form-item>
               <el-form-item label="退出条件" required>
                 <el-select
@@ -478,12 +513,7 @@
                 >
                   <el-option v-for="item in controlledLoopValueOptions" :key="item.value" :label="item.label" :value="item.value" />
                 </el-select>
-                <el-input
-                  v-else
-                  v-model="state.controlledLoopExitValue"
-                  maxlength="128"
-                  placeholder="字段等于此值时退出循环"
-                />
+                <el-input v-else v-model="state.controlledLoopExitValue" maxlength="128" placeholder="字段等于此值时退出循环" />
               </el-form-item>
               <el-alert
                 v-if="!controlledLoopFieldOptions.length"
@@ -492,12 +522,7 @@
                 :closable="false"
                 title="请先为当前用户任务配置包含判断字段的正式表单。"
               />
-              <el-button
-                type="primary"
-                plain
-                :disabled="!controlledLoopConfigurationReady"
-                @click="emit('multi-instance-change')"
-              >
+              <el-button type="primary" plain :disabled="!controlledLoopConfigurationReady" @click="emit('multi-instance-change')">
                 应用整改循环配置
               </el-button>
             </template>
@@ -527,10 +552,7 @@
           </el-collapse-item>
 
           <el-collapse-item v-if="flags.extensionPropertiesSupported" title="扩展属性" name="properties">
-            <ExtensionPropertyEditor
-              v-model="state.extensionProperties"
-              @change="emit('extension-properties-change', $event)"
-            />
+            <ExtensionPropertyEditor v-model="state.extensionProperties" @change="emit('extension-properties-change', $event)" />
           </el-collapse-item>
 
           <el-collapse-item v-if="flags.listenerSupported" title="业务监听器" name="listeners">
@@ -584,8 +606,15 @@ const props = defineProps({
   identityOptions: {
     type: Object,
     default: () => ({
-      assignees: [], candidateUsers: [], candidateGroups: [], candidateRoles: [],
-      activeUsers: [], activeRoles: [], activeDepts: [], autoCopyUsers: [], autoCopyGroups: []
+      assignees: [],
+      candidateUsers: [],
+      candidateGroups: [],
+      candidateRoles: [],
+      activeUsers: [],
+      activeRoles: [],
+      activeDepts: [],
+      autoCopyUsers: [],
+      autoCopyGroups: []
     })
   },
   identityLoading: { type: Boolean, default: false },
@@ -595,7 +624,10 @@ const props = defineProps({
   controlledLoopFieldOptions: { type: Array, default: () => [] },
   participantFormFieldOptions: { type: Array, default: () => [] },
   conditionFieldOptions: { type: Array, default: () => [] },
-  conditionContext: { type: Object, default: () => ({ gatewayType: '', branches: [] }) },
+  conditionContext: {
+    type: Object,
+    default: () => ({ gatewayType: '', branches: [] })
+  },
   autoCopyTriggerOptions: { type: Array, default: () => [] },
   autoCopyFormFieldOptions: { type: Array, default: () => [] },
   extensionOptions: { type: Array, default: () => [] },
@@ -618,13 +650,35 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'common-change', 'id-change', 'process-change', 'form-source-change', 'form-change',
-  'embedded-form-change', 'form-permission-change', 'assignment-change', 'participant-rule-change',
-  'user-task-change', 'extension-selection-change', 'service-task-change', 'condition-change',
-  'condition-rule-change', 'condition-default-change', 'documentation-change',
-  'multi-instance-change', 'activity-change', 'call-activity-change', 'event-change', 'dmn-change',
-  'identity-search', 'identity-resolve', 'business-execution-listener-change', 'business-task-listener-change',
-  'extension-properties-change', 'sla-change', 'auto-copy-change', 'close'
+  'common-change',
+  'id-change',
+  'process-change',
+  'form-source-change',
+  'form-change',
+  'embedded-form-change',
+  'form-permission-change',
+  'assignment-change',
+  'participant-rule-change',
+  'user-task-change',
+  'extension-selection-change',
+  'service-task-change',
+  'condition-change',
+  'condition-rule-change',
+  'condition-default-change',
+  'documentation-change',
+  'multi-instance-change',
+  'activity-change',
+  'call-activity-change',
+  'event-change',
+  'dmn-change',
+  'identity-search',
+  'identity-resolve',
+  'business-execution-listener-change',
+  'business-task-listener-change',
+  'extension-properties-change',
+  'sla-change',
+  'auto-copy-change',
+  'close'
 ])
 
 // 表单来源值与后端部署快照的 source_type 契约一致。
@@ -632,11 +686,13 @@ const formSourceOptions = Object.freeze([
   { label: '正式模板', value: 'TEMPLATE' },
   { label: '内嵌表单', value: 'EMBEDDED' }
 ])
-// 会签和或签共用多实例语义，人员来源决定是否在前驱任务完成时要求动态选人。
+// 会签和或签共用多实例语义，指定身份只引用正式目录，角色和部门由后端在节点进入时实时展开。
 const multiInstanceMemberSourceOptions = Object.freeze([
   { label: '办理时选择', value: 'dynamic' },
   { label: '发起时选择', value: 'start' },
-  { label: '固定人员', value: 'fixed' }
+  { label: '指定用户', value: 'user' },
+  { label: '指定角色', value: 'role' },
+  { label: '指定部门', value: 'dept' }
 ])
 // activeSections 只记录当前元素真实存在的分区，避免固定展开状态与用户点击动作相互反转。
 const activeSections = ref(['base', 'business'])
@@ -663,63 +719,96 @@ const availableSections = computed(() => [
   ...(props.flags.extensionPropertiesSupported ? ['properties'] : []),
   ...(props.flags.listenerSupported ? ['listeners'] : [])
 ])
-const selectedExtensionType = computed(() => props.extensionOptions.find(option => (
-  option.extensionKey === props.state.extensionKey
-))?.extensionType || '')
-const selectedCallActivityOption = computed(() => props.callActivityOptions.find(option => (
-  option.definitionId === props.state.callDefinitionId
-)))
-const selectedCallActivityInputFields = computed(() => (
-  selectedCallActivityOption.value?.inputFields || []
-).filter(field => field.writable))
-const selectedCallActivityOutputFields = computed(() => (
-  selectedCallActivityOption.value?.outputFields || []
-).filter(field => field.readable))
+const selectedExtensionType = computed(() => props.extensionOptions.find(option => option.extensionKey === props.state.extensionKey)?.extensionType || '')
+const selectedCallActivityOption = computed(() => props.callActivityOptions.find(option => option.definitionId === props.state.callDefinitionId))
+const selectedCallActivityInputFields = computed(() => (selectedCallActivityOption.value?.inputFields || []).filter(field => field.writable))
+const selectedCallActivityOutputFields = computed(() => (selectedCallActivityOption.value?.outputFields || []).filter(field => field.readable))
 const callActivityParentReadableFields = computed(() => props.callActivityParentFields.filter(field => field.readable))
 const callActivityParentWritableFields = computed(() => props.callActivityParentFields.filter(field => field.writable))
-const selectedExtensionImplementation = computed(() => props.extensionOptions.find(option => (
-  option.extensionKey === props.state.extensionKey
-))?.implementationKey || '')
-const businessEventOptions = computed(() => (
-  props.state.eventDefinitionType === 'bpmn:ErrorEventDefinition'
-    ? props.errorEventOptions
-    : props.escalationEventOptions
-))
-// UserTask 只开放受控会签/或签和整改循环；其他活动仍可使用标准串行或并行多实例。
-const activityLoopOptions = computed(() => props.multiInstanceOptions.filter(option => {
-  if (props.flags.userTask) return !['sequential', 'parallel'].includes(option.value)
-  return !['controlled', 'approvalLoop'].includes(option.value)
-}))
+const selectedExtensionImplementation = computed(
+  () => props.extensionOptions.find(option => option.extensionKey === props.state.extensionKey)?.implementationKey || ''
+)
+/**
+ * 生成当前指定身份来源对应的正式目录池和安全回显选项。
+ * @returns {{label:string,pool:string,placeholder:string,options:object[]}|null} 当前来源的选择器配置；动态来源返回 null。
+ */
+const multiInstanceIdentityConfiguration = computed(() => {
+  const definitions = {
+    user: { label: '指定办理用户', pool: 'assignees', placeholder: '请选择会签或或签办理用户' },
+    role: { label: '指定办理角色', pool: 'activeRoles', placeholder: '请选择会签或或签办理角色' },
+    dept: { label: '指定办理部门', pool: 'activeDepts', placeholder: '请选择会签或或签办理部门' }
+  }
+  const definition = definitions[props.state.multiInstanceMemberSource]
+  if (!definition) return null
+  const options = [...(props.identityOptions[definition.pool] || [])]
+  const loadedValues = new Set(options.map(option => String(option.value)))
+  for (const value of props.state.configuredMultiInstanceIdentityIds || []) {
+    if (!loadedValues.has(String(value))) {
+      options.push({
+        value: String(value),
+        label: '正在核验已选对象',
+        available: false
+      })
+    }
+  }
+  return { ...definition, options }
+})
+// 审批方式是设计者操作的业务状态；底层仍由受控多实例类型和完成条件共同表达。
+const userTaskApprovalMethod = computed(() => (props.state.multiInstanceType === 'controlled' ? props.state.multiInstanceApprovalMode : 'single'))
+// 标题标签帮助设计者在长属性面板中快速确认当前审批语义。
+const userTaskApprovalTag = computed(
+  () =>
+    ({
+      single: { label: '普通审批', type: 'info' },
+      all: { label: '会签', type: 'success' },
+      any: { label: '或签', type: 'warning' }
+    }[userTaskApprovalMethod.value])
+)
+const businessEventOptions = computed(() =>
+  props.state.eventDefinitionType === 'bpmn:ErrorEventDefinition' ? props.errorEventOptions : props.escalationEventOptions
+)
+// UserTask 的会签/或签入口已并入审批人设置；执行配置只保留普通循环和整改循环。
+const activityLoopOptions = computed(() =>
+  props.multiInstanceOptions.filter(option => {
+    if (props.flags.userTask) return !['sequential', 'parallel', 'controlled'].includes(option.value)
+    return !['controlled', 'approvalLoop'].includes(option.value)
+  })
+)
 // 条件值选项跟随当前正式表单字段；自由文本字段仍允许输入受限标量值。
-const controlledLoopValueOptions = computed(() => props.controlledLoopFieldOptions.find(option => (
-  option.value === props.state.controlledLoopDecisionVariable
-))?.values || [])
+const controlledLoopValueOptions = computed(
+  () => props.controlledLoopFieldOptions.find(option => option.value === props.state.controlledLoopDecisionVariable)?.values || []
+)
 // 静态枚举字段只能选择正式表单给出的值；自由文本和普通标量字段仍由后端执行类型与长度校验。
-const controlledLoopValueRestricted = computed(() => props.controlledLoopFieldOptions.find(option => (
-  option.value === props.state.controlledLoopDecisionVariable
-))?.valueRestricted === true)
+const controlledLoopValueRestricted = computed(
+  () => props.controlledLoopFieldOptions.find(option => option.value === props.state.controlledLoopDecisionVariable)?.valueRestricted === true
+)
 // 应用按钮只在五项受控属性均完整时开放，避免半成品配置进入 BPMN 命令栈或被保存。
 const controlledLoopConfigurationReady = computed(() => {
   const maxIterations = Number(props.state.controlledLoopMaxIterations)
   const decisionVariable = String(props.state.controlledLoopDecisionVariable || '').trim()
   const repeatValue = String(props.state.controlledLoopRepeatValue || '').trim()
   const exitValue = String(props.state.controlledLoopExitValue || '').trim()
-  return Number.isInteger(maxIterations)
-    && maxIterations >= 2
-    && maxIterations <= 50
-    && Boolean(decisionVariable)
-    && Boolean(repeatValue)
-    && Boolean(exitValue)
-    && repeatValue !== exitValue
+  return (
+    Number.isInteger(maxIterations) &&
+    maxIterations >= 2 &&
+    maxIterations <= 50 &&
+    Boolean(decisionVariable) &&
+    Boolean(repeatValue) &&
+    Boolean(exitValue) &&
+    repeatValue !== exitValue
+  )
 })
-const eventDefinitionLabel = computed(() => ({
-  'bpmn:MessageEventDefinition': '消息',
-  'bpmn:SignalEventDefinition': '信号',
-  'bpmn:TimerEventDefinition': '定时器',
-  'bpmn:ErrorEventDefinition': '错误',
-  'bpmn:EscalationEventDefinition': '升级',
-  'bpmn:CompensateEventDefinition': '补偿'
-})[props.state.eventDefinitionType] || '无')
+const eventDefinitionLabel = computed(
+  () =>
+    ({
+      'bpmn:MessageEventDefinition': '消息',
+      'bpmn:SignalEventDefinition': '信号',
+      'bpmn:TimerEventDefinition': '定时器',
+      'bpmn:ErrorEventDefinition': '错误',
+      'bpmn:EscalationEventDefinition': '升级',
+      'bpmn:CompensateEventDefinition': '补偿'
+    }[props.state.eventDefinitionType] || '无')
+)
 
 /**
  * 在切换 BPMN 元素时恢复高频属性分区，并移除当前元素不支持的旧分区。
@@ -800,15 +889,66 @@ function handleLoopTypeChange(value) {
 }
 
 /**
- * 切换会签或或签人员来源，并为固定名单保留一次可选择成员的页面编辑阶段。
- * @param {'dynamic'|'start'|'fixed'} value 当前人员来源。
- * @returns {void} 动态或发起来源立即写入模型；固定来源在已选择成员后才写入模型。
+ * 将普通审批、会签和或签的业务选择转换为现有受控 BPMN 多实例状态。
+ * @param {'single'|'all'|'any'} value 设计者选择的审批方式。
+ * @returns {void} 原子更新循环类型和完成策略后交由父组件写入命令栈。
  */
-function handleMemberSourceChange(value) {
-  // 固定来源必须先显示成员选择器；空名单由父组件保存门禁拒绝，不能在切换瞬间回滚页面。
-  if (value === 'fixed' && !props.state.fixedMultiInstanceUserIds.length) return
+function handleUserTaskApprovalMethodChange(value) {
+  if (!['single', 'all', 'any'].includes(value)) return
+  if (value === 'single') {
+    props.state.multiInstanceType = 'none'
+    emit('multi-instance-change')
+    return
+  }
+  // 会签与或签共享同一人员来源，只通过受控完成条件区分全员完成和任一完成。
+  props.state.multiInstanceType = 'controlled'
+  props.state.multiInstanceApprovalMode = value
+  if (!multiInstanceMemberSourceOptions.some(option => option.value === props.state.multiInstanceMemberSource)) {
+    props.state.multiInstanceMemberSource = 'dynamic'
+  }
   emit('multi-instance-change')
 }
+
+/**
+ * 切换会签或或签人员来源并清空上一来源的身份主键。
+ * @param {'dynamic'|'start'|'user'|'role'|'dept'} value 当前人员来源。
+ * @returns {void} 办理时或发起时来源立即写入模型；指定身份等待目录选择完成后写入。
+ */
+function handleMemberSourceChange(value) {
+  // 不同来源的目录编码不能复用；例如 ROLE101 不能在切换部门后被静默解释为部门主键。
+  props.state.configuredMultiInstanceIdentityIds = []
+  if (['dynamic', 'start'].includes(value)) emit('multi-instance-change')
+}
+
+/**
+ * 按当前指定身份来源请求真实用户、角色或部门目录。
+ * @param {string} keyword 设计者输入的名称关键字。
+ * @returns {void} 未选择指定身份来源时不发起请求。
+ */
+function searchMultiInstanceIdentities(keyword) {
+  const configuration = multiInstanceIdentityConfiguration.value
+  if (!configuration) return
+  emit('identity-search', {
+    target: configuration.pool,
+    keyword: String(keyword || '').trim()
+  })
+}
+
+/**
+ * 请求父级批量核验远程分页外的已保存多实例身份。
+ * @param {[string|undefined,string[]]} current 当前目录池及尚未加载的选择值。
+ * @returns {void} 没有缺失值或相同请求仍在等待时不重复调用。
+ */
+function resolveMissingMultiInstanceIdentities(current) {
+  const [pool, missingValues] = current
+  if (!pool || !missingValues.length) return
+  const requestKey = `${pool}:${missingValues.join(',')}`
+  if (requestKey === pendingMultiInstanceResolutionKey) return
+  pendingMultiInstanceResolutionKey = requestKey
+  emit('identity-resolve', { target: pool, values: missingValues })
+}
+
+let pendingMultiInstanceResolutionKey = ''
 
 /**
  * 请求父组件查询 SLA 超时升级办理人目录。
@@ -869,10 +1009,20 @@ function removeCallMapping(direction, index) {
   emit('call-activity-change')
 }
 
+watch([() => props.state.id, availableSections], syncActiveSections, {
+  immediate: true
+})
 watch(
-  [() => props.state.id, availableSections],
-  syncActiveSections,
-  { immediate: true }
+  () => {
+    const configuration = multiInstanceIdentityConfiguration.value
+    if (!configuration) return [undefined, []]
+    const loaded = new Set((props.identityOptions[configuration.pool] || []).map(option => String(option.value)))
+    const missing = [...new Set((props.state.configuredMultiInstanceIdentityIds || []).map(String))].filter(value => !loaded.has(value))
+    if (!missing.length) pendingMultiInstanceResolutionKey = ''
+    return [configuration.pool, missing]
+  },
+  resolveMissingMultiInstanceIdentities,
+  { immediate: true, deep: true }
 )
 </script>
 
@@ -883,8 +1033,7 @@ watch(
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--el-bg-color) 92%, var(--el-color-primary) 8%), var(--el-bg-color) 118px);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--el-bg-color) 92%, var(--el-color-primary) 8%), var(--el-bg-color) 118px);
 }
 
 .designer-properties-panel__title {
@@ -1047,6 +1196,118 @@ watch(
 .designer-properties-panel__form :deep(.el-segmented),
 .designer-properties-panel__form :deep(.el-input-number) {
   width: 100%;
+}
+
+.user-task-approval {
+  width: 100%;
+}
+
+.user-task-approval__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.user-task-approval__heading h4,
+.user-task-approval__method h4 {
+  margin: 2px 0 0;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.user-task-approval__eyebrow {
+  color: var(--el-text-color-placeholder);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.user-task-approval :deep(.participant-rule-editor) {
+  padding: 0;
+  margin-bottom: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.user-task-approval__source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+  gap: 8px 12px;
+}
+
+.user-task-approval__source-grid :deep(.el-radio) {
+  min-width: 0;
+  height: 30px;
+  margin-right: 0;
+}
+
+.user-task-approval__source-grid :deep(.el-radio__label) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-task-approval__method {
+  padding-top: 14px;
+  margin-top: 16px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.user-task-approval__method h4 {
+  margin-bottom: 8px;
+}
+
+.user-task-approval__method-list {
+  display: grid;
+  width: 100%;
+}
+
+.user-task-approval__method-list :deep(.el-radio) {
+  align-items: flex-start;
+  width: 100%;
+  min-height: 48px;
+  padding: 9px 0;
+  margin-right: 0;
+  white-space: normal;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+}
+
+.user-task-approval__method-list :deep(.el-radio:last-child) {
+  border-bottom: 0;
+}
+
+.user-task-approval__method-list :deep(.el-radio__input) {
+  margin-top: 3px;
+}
+
+.user-task-approval__method-list :deep(.el-radio__label) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding-left: 9px;
+  color: var(--el-text-color-regular);
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.user-task-approval__method-list :deep(.el-radio.is-checked .user-task-approval__method-label) {
+  color: var(--el-color-primary);
+}
+
+.user-task-approval__method-label {
+  color: var(--el-text-color-primary);
+  font-weight: 650;
+}
+
+.user-task-approval__method-list small {
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
 }
 
 .designer-properties-panel :deep(.el-empty) {
