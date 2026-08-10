@@ -116,7 +116,6 @@ $env:DRUID_MONITOR_USERNAME = 'local'
 $env:DRUID_MONITOR_PASSWORD = '<独立监控密码>'
 $env:RUOYI_PROFILE = Join-Path $env:LOCALAPPDATA 'ApprovaPlat\uploads'
 
-Set-Location back
 mvn -pl ruoyi-admin -am -DskipTests package
 java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
 ```
@@ -128,7 +127,7 @@ java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
 打开新的 PowerShell：
 
 ```powershell
-Set-Location vite
+Set-Location ruoyi-ui
 npm ci
 $env:VITE_OPEN_BROWSER = 'false'
 npm run dev -- --host 127.0.0.1 --port 1024
@@ -145,15 +144,14 @@ npm run dev -- --host 127.0.0.1 --port 1024
 常用开发验证：
 
 ```powershell
-Set-Location back
 mvn clean verify
 
-Set-Location ..\vite
+Set-Location ruoyi-ui
 npm run test:contracts
 npm run build:prod
 ```
 
-真实 MySQL、Redis、角色、API 和浏览器验收需要额外环境变量与隔离库，执行方式见[测试与验收](docs/testing/workflow-acceptance.md)和 [E2E 说明](vite/tests/e2e/README.md)。
+真实 MySQL、Redis、角色、API 和浏览器验收需要额外环境变量与隔离库，执行方式见[测试与验收](docs/testing/workflow-acceptance.md)和 [E2E 说明](ruoyi-ui/tests/e2e/README.md)。
 
 ## 技术栈
 
@@ -172,8 +170,10 @@ npm run build:prod
 
 ```text
 ApprovaPlat/
-|- back/         Spring Boot 后端、Flowable 领域模块与数据库脚本
-|- vite/         Vue 3 前端、契约测试与真实浏览器 E2E
+|- pom.xml       Maven 聚合入口
+|- ruoyi-*/      Spring Boot 后端模块与 Flowable 领域模块
+|- ruoyi-ui/     Vue 3 前端、契约测试与真实浏览器 E2E
+|- sql/          数据库基线、业务结构与只读验收脚本
 |- docs/         架构、业务契约、数据库、运维与验收文档
 `- deployment/   生产配置、systemd、Nginx、样例与发布门禁
 ```

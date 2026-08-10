@@ -23,9 +23,9 @@
 
 ## 构建与安装流程
 
-1. 在 `back` 执行 `mvn clean package`，不得把跳过测试的构建结果直接当成已验收发布包。
-2. 在 `vite` 执行 `npm ci` 和 `npm run build:prod`。
-3. 将 JAR、前端静态文件、`back/sql` 和 `deployment` 安装到新的不可变版本目录。
+1. 在仓库根目录执行 `mvn clean package`，不得把跳过测试的构建结果直接当成已验收发布包。
+2. 在 `ruoyi-ui` 执行 `npm ci` 和 `npm run build:prod`。
+3. 将 JAR、前端静态文件、`sql` 和 `deployment` 安装到新的不可变版本目录。
 4. 从 `deployment/config/ruoyi.env.example` 创建 `/etc/ruoyi/ruoyi.env`，由 root 填写真实值并设置为 `0600`。
 5. 将生产 YAML 安装到 `/etc/ruoyi/`，使用 `deployment/systemd/ruoyi-backend.service` 启动后端。
 6. 使用 `deployment/nginx/ruoyi.conf` 提供 TLS、静态前端和 `/prod-api/` 反向代理。

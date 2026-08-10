@@ -28,3 +28,26 @@ selenium-debug.log
 *.njsproj
 *.sln
 *.local
+
+# Java and Maven build outputs
+**/target/
+**/build/
+.gradle/
+*.xml.versionsBackup
+*.swp
+
+# Java IDE metadata
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+*.iws
+*.iml
+*.ipr
+rebel.xml
+nbproject/private/
+nbbuild/
+nbdist/
+.nb-gradle/

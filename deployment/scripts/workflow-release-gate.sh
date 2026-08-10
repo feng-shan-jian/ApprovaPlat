@@ -14,6 +14,7 @@ readonly -a GATE_REQUIRED_RELEASE_SQLS=(
   'flowable/business/8.0.0__workflow_model_version_guard.sql'
   'flowable/business/8.0.0__workflow_business.sql'
   'flowable/menu/8.0.0__workflow_menu.sql'
+  'integration/8.0.0__sms_oss.sql'
 )
 
 # 清单校验后的路径到 SHA-256 映射；后续 SQL 顺序校验只允许引用此映射中的文件。
@@ -553,7 +554,7 @@ gate_validate_release_order() {
     ordered_sql["$sql_path"]=1
   done < "$order_file"
   [[ "$line_number" -eq "${#GATE_REQUIRED_RELEASE_SQLS[@]}" ]] \
-    || gate_die "$label release-order.txt must contain exactly the seven approved baseline SQL files"
+    || gate_die "$label release-order.txt must contain exactly the eight approved baseline SQL files"
 }
 
 #
@@ -858,6 +859,7 @@ gate_validate_release_bundle() {
         sql/flowable/business/8.0.0__workflow_model_version_guard.sql
         sql/flowable/business/8.0.0__workflow_business.sql
         sql/flowable/menu/8.0.0__workflow_menu.sql
+        sql/integration/8.0.0__sms_oss.sql
         sql/flowable/verify/8.0.0__verify.sql
         sql/flowable/verify/8.0.0__verify_workflow_business.sql
         sql/flowable/verify/8.0.0__verify_workflow_menu.sql

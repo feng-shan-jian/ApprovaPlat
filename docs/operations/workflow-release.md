@@ -5,7 +5,7 @@
 每个发布包必须冻结：
 
 - `ruoyi-admin.jar` 和完整前端静态文件
-- `back/sql` 中本版本需要的正式 SQL 与验收脚本
+- `sql` 中本版本需要的正式 SQL 与验收脚本
 - `deployment` 配置、systemd、Nginx、门禁和门禁测试
 - `RELEASE-METADATA`、完整 `SHA256SUMS` 和 `sql/release-order.txt`
 

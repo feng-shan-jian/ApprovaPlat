@@ -1,4 +1,4 @@
 # Flowable 官方建表脚本保持 Maven 构件中的原始内容；发布时按文件哈希审计。
-back/sql/flowable/mysql/8.0.0/create/*.sql text eol=lf whitespace=-blank-at-eol,-space-before-tab
-back/sql/flowable/**/*.sql text eol=lf
+sql/flowable/mysql/8.0.0/create/*.sql text eol=lf whitespace=-blank-at-eol,-space-before-tab
+sql/flowable/**/*.sql text eol=lf
 deployment/scripts/**/*.sh text eol=lf

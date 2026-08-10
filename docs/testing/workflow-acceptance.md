@@ -15,7 +15,7 @@
 
 ## 数据库契约测试
 
-数据库基线相关测试位于 `back/ruoyi-flowable/src/test/java/com/ruoyi/flowable/mapper`，覆盖：
+数据库基线相关测试位于 `ruoyi-flowable/src/test/java/com/ruoyi/flowable/mapper`，覆盖：
 
 - 正式业务 DDL、附件、模型保存幂等和设计器偏好
 - 扩展、连接器、DMN 和运行事件结构
@@ -24,7 +24,6 @@
 定向执行：
 
 ```powershell
-cd back
 mvn -pl ruoyi-flowable -am `
   "-Dtest=WorkflowBusinessDdlContractTest,WorkflowAttachmentContractTest,WorkflowModelSaveDdlContractTest,WorkflowDesignerPreferenceDdlContractTest,WorkflowExtensionDdlContractTest,WorkflowMenuSqlContractTest" `
   "-Dsurefire.failIfNoSpecifiedTests=false" test
@@ -46,7 +45,6 @@ mvn -pl ruoyi-flowable -am `
 静态矩阵执行：
 
 ```powershell
-cd back
 mvn -pl ruoyi-admin -am `
   "-Dtest=WorkflowRbacMatrixContractTest" `
   "-Dsurefire.failIfNoSpecifiedTests=false" test

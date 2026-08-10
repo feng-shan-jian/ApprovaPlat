@@ -8,18 +8,18 @@
 
 先执行若依和 Quartz 基线：
 
-1. `back/sql/ry_20260417.sql`
-2. `back/sql/quartz.sql`
+1. `sql/ry_20260417.sql`
+2. `sql/quartz.sql`
 
 然后严格执行以下七个工作流基线文件：
 
-1. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql`
-2. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql`
-3. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.history.sql`
-4. `back/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.dmn.sql`
-5. `back/sql/flowable/business/8.0.0__workflow_model_version_guard.sql`
-6. `back/sql/flowable/business/8.0.0__workflow_business.sql`
-7. `back/sql/flowable/menu/8.0.0__workflow_menu.sql`
+1. `sql/flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql`
+2. `sql/flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql`
+3. `sql/flowable/mysql/8.0.0/create/flowable.mysql.create.history.sql`
+4. `sql/flowable/mysql/8.0.0/create/flowable.mysql.create.dmn.sql`
+5. `sql/flowable/business/8.0.0__workflow_model_version_guard.sql`
+6. `sql/flowable/business/8.0.0__workflow_business.sql`
+7. `sql/flowable/menu/8.0.0__workflow_menu.sql`
 
 所有 MySQL 客户端执行必须显式使用 `--default-character-set=utf8mb4`。Flowable 官方基础脚本包含破坏性初始化语句，只能在已经验证为空的目标 schema 中执行。
 
@@ -93,9 +93,9 @@
 
 初始化完成后依次执行：
 
-1. `back/sql/flowable/verify/8.0.0__verify.sql`
-2. `back/sql/flowable/verify/8.0.0__verify_workflow_business.sql`
-3. `back/sql/flowable/verify/8.0.0__verify_workflow_menu.sql`
+1. `sql/flowable/verify/8.0.0__verify.sql`
+2. `sql/flowable/verify/8.0.0__verify_workflow_business.sql`
+3. `sql/flowable/verify/8.0.0__verify_workflow_menu.sql`
 
 三组脚本共定义 58 项只读检查，所有结果都必须为 `PASS`。表数检查固定核对总表数 111、分项表数 `20/11/36/44`，条件分支、动态参与者、子流程、申请草稿、自动抄送、普通审批通知、受控循环、多池协作、BPMN 错误/升级和审批 SLA 正式表均归入 ApprovaPlat `wf_*`；还必须核对菜单 98 条以及应用账号只拥有目标 schema 的最小 DML 权限。
 

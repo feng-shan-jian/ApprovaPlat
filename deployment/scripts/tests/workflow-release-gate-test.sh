@@ -76,6 +76,7 @@ create_bundle() {
     "$bundle_dir/sql" \
     "$bundle_dir/sql/flowable/business" \
     "$bundle_dir/sql/flowable/menu" \
+    "$bundle_dir/sql/integration" \
     "$bundle_dir/sql/flowable/mysql/8.0.0/create" \
     "$bundle_dir/sql/flowable/verify" \
     "$bundle_dir/deployment/config" \
@@ -94,6 +95,7 @@ create_bundle() {
     printf 'flowable/business/8.0.0__workflow_model_version_guard.sql\n'
     printf 'flowable/business/8.0.0__workflow_business.sql\n'
     printf 'flowable/menu/8.0.0__workflow_menu.sql\n'
+    printf 'integration/8.0.0__sms_oss.sql\n'
   } > "$bundle_dir/sql/release-order.txt"
   printf 'CREATE TABLE ACT_GE_PROPERTY (NAME_ VARCHAR(64));\n' \
     > "$bundle_dir/sql/flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql"
@@ -109,6 +111,8 @@ create_bundle() {
     > "$bundle_dir/sql/flowable/business/8.0.0__workflow_business.sql"
   printf 'INSERT INTO sys_menu (menu_name) VALUES (''workflow'');\n' \
     > "$bundle_dir/sql/flowable/menu/8.0.0__workflow_menu.sql"
+  printf 'CREATE TABLE sys_sms_config (config_id BIGINT PRIMARY KEY);\n' \
+    > "$bundle_dir/sql/integration/8.0.0__sms_oss.sql"
   {
     printf 'server:\n'
     printf '  address: 127.0.0.1\n'
@@ -1238,6 +1242,7 @@ main() {
     printf 'flowable/business/8.0.0__workflow_model_version_guard.sql\n'
     printf 'flowable/business/8.0.0__workflow_business.sql\n'
     printf 'flowable/menu/8.0.0__workflow_menu.sql\n'
+    printf 'integration/8.0.0__sms_oss.sql\n'
   } > "$bundle_dir/sql/release-order.txt"
   refresh_bundle_manifest "$bundle_dir"
   expect_failure 'approved baseline SQL in reversed order fails' \
