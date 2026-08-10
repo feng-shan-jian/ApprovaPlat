@@ -1392,6 +1392,22 @@ main() {
   expect_failure 'token secret bytes embedded in binary release asset fail' \
     run_preflight_gate "$bundle_dir" 'release-binary-secret'
 
+  bundle_dir="$TEST_ROOT/dynamic-cookie-source"
+  create_bundle "$bundle_dir" 'dynamic-cookie-source' 'NONE'
+  printf 'document.cookie="Admin-Token="+token+"; path=/";\n' \
+    > "$bundle_dir/frontend/login.js"
+  refresh_bundle_manifest "$bundle_dir"
+  expect_success 'dynamic frontend Cookie source passes sensitive-value scan' \
+    run_preflight_gate "$bundle_dir" 'dynamic-cookie-source'
+
+  bundle_dir="$TEST_ROOT/hardcoded-cookie-source"
+  create_bundle "$bundle_dir" 'hardcoded-cookie-source' 'NONE'
+  printf '%s%s\n' 'Admin-' 'Token=FORBIDDEN_TEST_SENTINEL' \
+    > "$bundle_dir/frontend/login.js"
+  refresh_bundle_manifest "$bundle_dir"
+  expect_failure 'hardcoded frontend Cookie value fails sensitive-value scan' \
+    run_preflight_gate "$bundle_dir" 'hardcoded-cookie-source'
+
   bundle_dir="$TEST_ROOT/same-release"
   create_bundle "$bundle_dir" 'same-release' 'NONE'
   expect_failure 'current and rollback release IDs cannot be identical' \
