@@ -805,8 +805,8 @@ gate_validate_sensitive_content() {
   local sensitive_file
 
   sensitive_assignment_pattern='(RUOYI_TOKEN_SECRET|RUOYI_DB_PASSWORD|SPRING_DATA_REDIS_PASSWORD|DRUID_MONITOR_PASSWORD)[[:space:]]*=[[:space:]]*[^[:space:]#$]|(^|[^A-Za-z0-9_])(token[._-]?secret|druid[_a-z.-]*password)[[:space:]]*[:=][[:space:]]*[^[:space:]#$]'
-  # Cookie 值必须从合法凭据字符开始，避免把前端产物中的 `Admin-Token="+token` 动态拼接误判为真实泄漏。
-  authentication_pattern='(Authorization|Proxy-Authorization)[[:space:]]*:[[:space:]]*(Basic|Bearer)[[:space:]]+[A-Za-z0-9+/._=-]{8,}|(Cookie|Set-Cookie)[[:space:]]*:[[:space:]]*[A-Za-z0-9%._~+/=-]+|(JSESSIONID|rememberMe|Admin-Token)=[A-Za-z0-9%._~+/=-]+'
+  # Cookie 值必须符合真实凭据形态，避免把 `Admin-Token="+token` 或压缩后的 `rememberMe=L` 误判为泄漏。
+  authentication_pattern='(Authorization|Proxy-Authorization)[[:space:]]*:[[:space:]]*(Basic|Bearer)[[:space:]]+[A-Za-z0-9+/._=-]{8,}|(Cookie|Set-Cookie)[[:space:]]*:[[:space:]]*[A-Za-z0-9%._~+/=-]+|(JSESSIONID|rememberMe|Admin-Token)=[A-Za-z0-9%._~+/=-]{8,}'
 
   while IFS= read -r -d '' file; do
     basename_value="${file##*/}"

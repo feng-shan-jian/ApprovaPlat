@@ -1394,7 +1394,7 @@ main() {
 
   bundle_dir="$TEST_ROOT/dynamic-cookie-source"
   create_bundle "$bundle_dir" 'dynamic-cookie-source' 'NONE'
-  printf 'document.cookie="Admin-Token="+token+"; path=/";\n' \
+  printf 'document.cookie="Admin-Token="+token+"; path=/";rememberMe=L;\n' \
     > "$bundle_dir/frontend/login.js"
   refresh_bundle_manifest "$bundle_dir"
   expect_success 'dynamic frontend Cookie source passes sensitive-value scan' \
