@@ -3,7 +3,8 @@ package com.ruoyi.flowable.domain;
 import java.util.Date;
 
 /**
- * 排他或包容网关条件分支的不可变部署快照，对应 {@code wf_deploy_condition_rule}。
+ * 排他或包容网关条件分支的不可变部署快照，保存在 Flowable 业务制品资源
+ * {@code approvaplat/conditions-v1.json}。
  */
 public class WfDeployConditionRule
 {

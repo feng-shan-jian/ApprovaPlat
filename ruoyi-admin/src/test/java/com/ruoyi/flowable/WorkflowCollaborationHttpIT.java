@@ -36,6 +36,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.RuoYiApplication;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.system.service.ISysConfigService;
 
 /**
@@ -90,6 +91,9 @@ class WorkflowCollaborationHttpIT
     private ProcessEngine processEngine;
 
     @Autowired
+    private WorkflowDeploymentArtifactRepository artifactRepository;
+
+    @Autowired
     private ISysConfigService sysConfigService;
 
     @Value("${flowable.collaboration.expected-schema}")
@@ -134,10 +138,10 @@ class WorkflowCollaborationHttpIT
         assertThat(accountsRegistered).isTrue();
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from information_schema.tables where table_schema=database()",
-                Integer.class)).isEqualTo(99);
+                Integer.class)).isEqualTo(101);
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from information_schema.tables where table_schema=database() "
-                        + "and table_name like 'wf\\_%'", Integer.class)).isEqualTo(32);
+                        + "and table_name like 'wf\\_%'", Integer.class)).isEqualTo(34);
 
         runId = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         categoryCode = "collaboration_" + runId;
@@ -218,26 +222,15 @@ class WorkflowCollaborationHttpIT
             runtimeService.createProcessInstanceQuery().deploymentId(deploymentId).list()
                     .forEach(instance -> runtimeService.deleteProcessInstance(
                             instance.getId(), "协作验收清理"));
-            // 本测试直接使用 Flowable 仓储清理，因此必须先删除平台侧部署快照，避免隔离库残留孤儿数据。
-            jdbcTemplate.update("delete from wf_deploy_form where deploy_id=?", deploymentId);
-            jdbcTemplate.update("delete from wf_deploy_extension_snapshot where deploy_id=?",
-                    deploymentId);
+            // 本测试直接使用 Flowable 仓储清理，必须先删除父部署拥有的业务资源子部署。
+            artifactRepository.delete(deploymentId);
             if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() == 1)
             {
                 repositoryService.deleteDeployment(deploymentId, true);
             }
         }
-        if (!deploymentIds.isEmpty())
-        {
-            String placeholders = String.join(",",
-                    deploymentIds.stream().map(value -> "?").toList());
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_deploy_form where deploy_id in (" + placeholders + ")",
-                    Integer.class, deploymentIds.toArray())).isZero();
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_deploy_extension_snapshot where deploy_id in ("
-                            + placeholders + ")", Integer.class, deploymentIds.toArray())).isZero();
-        }
+        assertThat(deploymentIds).allSatisfy(deploymentId ->
+                assertThat(artifactRepository.selectForms(deploymentId)).isEmpty());
         jdbcTemplate.update("delete from wf_collaboration_message_audit where message_id in "
                 + "(select message_id from wf_collaboration_message where credential_id=?) "
                 + "or message_id in (select message_id from wf_collaboration_outbox "
@@ -409,10 +402,10 @@ class WorkflowCollaborationHttpIT
         String deploymentId = deployed.path("data").path("deploymentId").asText();
         assertThat(deploymentId).isNotBlank();
         deploymentIds.add(deploymentId);
-        assertThat(jdbcTemplate.queryForObject(
-                "select count(*) from wf_deploy_extension_snapshot where deploy_id=? "
-                        + "and implementation_key='COLLABORATION_OUTBOX_V1'",
-                Integer.class, deploymentId)).isOne();
+        assertThat(artifactRepository.selectExtensionSnapshots(deploymentId))
+                .filteredOn(snapshot -> "COLLABORATION_OUTBOX_V1"
+                        .equals(snapshot.getImplementationKey()))
+                .hasSize(1);
         return deploymentId;
     }
 

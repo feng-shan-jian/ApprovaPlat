@@ -8,6 +8,8 @@ import static org.mockito.Mockito.when;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService.SynchronousNotification;
 
 /**
  * BPMN 事件独立审计与通知副作用边界测试。
@@ -15,6 +17,7 @@ import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
 class WorkflowBpmnEventAuditServiceTest
 {
     private WfBpmnEventMapper mapper;
+    private WorkflowNotificationService notificationService;
     private WorkflowBpmnEventAuditService service;
 
     /** @return void，每个用例创建独立 Mapper 替身。 */
@@ -22,7 +25,8 @@ class WorkflowBpmnEventAuditServiceTest
     void setUp()
     {
         mapper = org.mockito.Mockito.mock(WfBpmnEventMapper.class);
-        service = new WorkflowBpmnEventAuditService(mapper);
+        notificationService = org.mockito.Mockito.mock(WorkflowNotificationService.class);
+        service = new WorkflowBpmnEventAuditService(mapper, notificationService);
         when(mapper.selectAuditId("event-key")).thenReturn(91L);
     }
 
@@ -36,9 +40,11 @@ class WorkflowBpmnEventAuditServiceTest
         Long auditId = service.record(event("CAPTURED", "boundary-error", true));
 
         assertThat(auditId).isEqualTo(91L);
-        verify(mapper).insertNotification(91L, "1",
-                "流程业务错误：审批业务校验失败",
-                "APPROVAL_BUSINESS_ERROR · CAPTURED · 库存不足");
+        verify(notificationService).publishSynchronousInbox(new SynchronousNotification(
+                "BPMN_EVENT", "91", "ERROR", "1", "expense", "process-1",
+                null, null, "流程业务错误：审批业务校验失败",
+                "APPROVAL_BUSINESS_ERROR · CAPTURED · 库存不足",
+                "/workflow/process-detail/process-1?source=own"));
     }
 
     /**
@@ -50,11 +56,8 @@ class WorkflowBpmnEventAuditServiceTest
     {
         service.record(event("UNMATCHED", null, null));
 
-        verify(mapper, never()).insertNotification(
-                org.mockito.ArgumentMatchers.anyLong(),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString());
+        verify(notificationService, never()).publishSynchronousInbox(
+                org.mockito.ArgumentMatchers.any());
     }
 
     /**
@@ -69,7 +72,7 @@ class WorkflowBpmnEventAuditServiceTest
     {
         return new WorkflowBpmnEventAuditService.RuntimeEvent(
                 "event-key", "deployment-1", "process-1", "definition-1",
-                "execution-1", "raise-error", "SERVICE_TASK", "ERROR",
+                "expense", "execution-1", "raise-error", "SERVICE_TASK", "ERROR",
                 "APPROVAL_BUSINESS_ERROR", "审批业务校验失败", "INITIATOR",
                 matchStatus, boundaryEventId, interrupting, "库存不足", "1");
     }

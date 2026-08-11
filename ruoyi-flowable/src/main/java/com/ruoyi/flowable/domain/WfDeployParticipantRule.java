@@ -3,7 +3,8 @@ package com.ruoyi.flowable.domain;
 import java.util.Date;
 
 /**
- * 流程发起范围或单实例用户任务办理人规则的不可变部署快照。
+ * 流程发起范围或单实例用户任务办理人规则的不可变部署快照，保存在 Flowable
+ * 业务制品资源 {@code approvaplat/participants-v1.json}。
  */
 public class WfDeployParticipantRule
 {

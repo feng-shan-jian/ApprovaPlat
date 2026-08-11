@@ -59,10 +59,13 @@ import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
 import com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftView;
 import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
+import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.process.WorkflowProcessDraftService;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
@@ -142,6 +145,9 @@ class WorkflowCompatibilityIT
 
     @Autowired
     private WorkflowDeploymentService deploymentService;
+
+    @Autowired
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     @Autowired
     private WorkflowAuthenticationContext authenticationContext;
@@ -283,7 +289,7 @@ class WorkflowCompatibilityIT
                     + "where draft.deployment_id = ?", deploymentId);
             jdbcTemplate.update("delete from wf_process_draft where deployment_id = ?",
                     deploymentId);
-            jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
+            artifactRepository.delete(deploymentId);
             if (repositoryService().createDeploymentQuery().deploymentId(deploymentId).count() > 0L)
             {
                 repositoryService().deleteDeployment(deploymentId, true);
@@ -880,7 +886,7 @@ class WorkflowCompatibilityIT
     }
 
     /**
-     * 为部署写入真实 wf_form 与 wf_deploy_form 开始节点快照。
+     * 为部署写入真实 wf_form 与 Flowable 资源开始节点快照。
      *
      * @param deploymentId String，Flowable 部署主键
      * @param suffix String，测试场景名称后缀
@@ -892,7 +898,7 @@ class WorkflowCompatibilityIT
     }
 
     /**
-     * 为部署写入指定表单 key 和 schema 的真实 wf_form 与 wf_deploy_form 开始节点快照。
+     * 为部署写入指定表单 key 和 schema 的真实 wf_form 与 Flowable 资源快照。
      *
      * @param deploymentId String，Flowable 部署主键
      * @param suffix String，测试场景名称后缀
@@ -921,14 +927,36 @@ class WorkflowCompatibilityIT
         long formId = generatedKey.longValue();
         formIds.add(formId);
 
-        int snapshotRows = jdbcTemplate.update(
-                "insert into wf_deploy_form "
-                        + "(deploy_id, form_id, form_key, node_key, form_name, node_name, "
-                        + "content, create_by, del_flag) values (?, ?, ?, ?, ?, ?, ?, ?, '0')",
-                deploymentId, formId, formKey, "start",
-                "兼容契约表单-" + suffix, "发起申请", formContent,
-                "workflow-compatibility-it");
-        assertThat(snapshotRows).isEqualTo(1);
+        WfDeployForm snapshot = deploymentForm(formId, formKey, "start",
+                "兼容契约表单-" + suffix, "发起申请", formContent);
+        artifactRepository.persist(deploymentId, new WorkflowDeploymentArtifacts(
+                List.of(snapshot), List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of()));
+    }
+
+    /**
+     * 构造一个来自正式模板的不可变部署表单资源。
+     * @param formId long，来源 wf_form 主键
+     * @param formKey String，BPMN 表单键
+     * @param nodeKey String，BPMN 节点键
+     * @param formName String，部署时表单名称
+     * @param nodeName String，部署时节点名称
+     * @param content String，部署时冻结的表单 JSON
+     * @return WfDeployForm，可写入统一部署资源仓库的表单快照
+     */
+    private WfDeployForm deploymentForm(long formId, String formKey, String nodeKey,
+            String formName, String nodeName, String content)
+    {
+        WfDeployForm snapshot = new WfDeployForm();
+        snapshot.setSourceType("TEMPLATE");
+        snapshot.setFormId(formId);
+        snapshot.setFormKey(formKey);
+        snapshot.setNodeKey(nodeKey);
+        snapshot.setFormName(formName);
+        snapshot.setNodeName(nodeName);
+        snapshot.setContent(content);
+        snapshot.setCreateBy("workflow-compatibility-it");
+        return snapshot;
     }
 
     /**
@@ -1287,7 +1315,7 @@ class WorkflowCompatibilityIT
         /**
          * 完整执行生产变量校验，再按测试屏障等待并发部署提交。
          *
-         * @param snapshotContent String，真实 wf_deploy_form 开始表单 JSON
+     * @param snapshotContent String，真实 Flowable 表单制品中的开始表单 JSON
          * @param variables Map&lt;String, Object&gt;，客户端开始表单变量
          * @return WorkflowValidatedStartVariables，生产校验器生成的正式规范结果
          */

@@ -20,7 +20,7 @@
 
 ## 变量
 
-完成任务时从任务所属流程定义解析部署 ID、BPMN `formKey` 和节点 key，再从 `wf_deploy_form` 读取唯一不可变部署快照。客户端变量复用 `WorkflowStartVariableValidator` 的字段白名单、类型、大小、嵌套深度和保留字段门禁；客户端字段和表单 schema 均不得使用 `__ruoyi_workflow_` 服务端保留前缀。上传字段还会经 `WorkflowAttachmentService` 锁行校验和安全投影：当前用户可绑定自己的 `TEMP` 附件，也可复用同实例同字段的 `BOUND` 附件。节点声明 `localScope=true` 或 `localScope=1` 时，业务变量通过 Flowable 的局部变量完成重载。
+完成任务时从任务所属流程定义解析部署 ID、BPMN `formKey` 和节点 key，再从 Flowable 业务制品 `approvaplat/forms-v1.json` 读取唯一不可变部署快照。客户端变量复用 `WorkflowStartVariableValidator` 的字段白名单、类型、大小、嵌套深度和保留字段门禁；客户端字段和表单 schema 均不得使用 `__ruoyi_workflow_` 服务端保留前缀。上传字段还会经 `WorkflowAttachmentService` 锁行校验和安全投影：当前用户可绑定自己的 `TEMP` 附件，也可复用同实例同字段的 `BOUND` 附件。节点声明 `localScope=true` 或 `localScope=1` 时，业务变量通过 Flowable 的局部变量完成重载。
 
 部署表单快照只固化 schema；任务提交值另行编码为内部字符串变量 `__ruoyi_workflow_form_submission_v1`。快照包含 deployment、form、node、真实 task ID、业务字段是否 localScope 和本次安全投影值。无论业务字段使用全局还是局部作用域，内部提交快照始终调用 `TaskService.setVariableLocal` 写到当前任务，确保 `HistoricVariableUpdate.taskId` 能与本次提交强关联，并避免内部字段污染流程业务变量。
 

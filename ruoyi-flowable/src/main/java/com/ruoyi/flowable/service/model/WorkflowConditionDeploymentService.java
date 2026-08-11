@@ -24,7 +24,6 @@ import com.ruoyi.flowable.domain.WfDeployConditionRule;
 import com.ruoyi.flowable.extension.WorkflowCelSandbox;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
 import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
-import com.ruoyi.flowable.mapper.WfDeployConditionRuleMapper;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -60,20 +59,9 @@ public class WorkflowConditionDeploymentService
     private static final Set<String> TEXT_OPERATORS =
             Set.of("EQ", "NE", "CONTAINS", "STARTS_WITH", "ENDS_WITH");
 
-    private final WfDeployConditionRuleMapper ruleMapper;
     private final ObjectMapper objectMapper = JsonMapper.shared();
     /** CEL 只组合后端已经精确计算出的布尔原子结果，不接触任意 Java 对象。 */
     private final WorkflowCelSandbox celSandbox = new WorkflowCelSandbox();
-
-    /**
-     * 创建条件分支部署服务。
-     * @param ruleMapper WfDeployConditionRuleMapper，条件部署快照数据访问层
-     * @return 无返回值，构造后由 Spring 管理
-     */
-    public WorkflowConditionDeploymentService(WfDeployConditionRuleMapper ruleMapper)
-    {
-        this.ruleMapper = ruleMapper;
-    }
 
     /**
      * 保存或预校验阶段使用正式表单字段校验全部网关出线，不产生写副作用。
@@ -124,24 +112,6 @@ public class WorkflowConditionDeploymentService
             throw new ServiceException("条件分支执行资源编译失败", HttpStatus.ERROR);
         }
         return new WorkflowPreparedConditionDeployment(compiled, snapshots);
-    }
-
-    /**
-     * 在 Flowable 部署成功后批量持久化条件快照。
-     * @param deploymentId String，新部署主键
-     * @param prepared WorkflowPreparedConditionDeployment，部署前准备结果
-     * @return void，写入不完整时抛出冲突并回滚外层部署事务
-     */
-    public void persist(String deploymentId, WorkflowPreparedConditionDeployment prepared)
-    {
-        List<WfDeployConditionRule> snapshots = prepared == null
-                ? List.of() : prepared.snapshots();
-        snapshots.forEach(snapshot -> snapshot.setDeployId(deploymentId));
-        int inserted = snapshots.isEmpty() ? 0 : ruleMapper.insertBatch(snapshots);
-        if (inserted != snapshots.size())
-        {
-            throw new ServiceException("条件分支部署快照保存不完整", HttpStatus.CONFLICT);
-        }
     }
 
     /**

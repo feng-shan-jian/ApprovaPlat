@@ -21,8 +21,8 @@ import com.ruoyi.flowable.domain.WfParticipantResolutionAudit;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.identity.WorkflowUserIdValueParser;
-import com.ruoyi.flowable.mapper.WfDeployParticipantRuleMapper;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 
 /**
  * 按部署快照和实时有效组织数据解析发起范围及单实例任务参与者。
@@ -32,7 +32,7 @@ public class WorkflowParticipantRuleRuntimeService
 {
     private final RepositoryService repositoryService;
     private final RuntimeService runtimeService;
-    private final WfDeployParticipantRuleMapper ruleMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WorkflowIdentityMapper identityMapper;
     private final WorkflowIdentityResolver identityResolver;
     private final WorkflowParticipantResolutionAuditService auditService;
@@ -41,7 +41,7 @@ public class WorkflowParticipantRuleRuntimeService
      * 创建参与者规则运行服务。
      * @param repositoryService RepositoryService，流程定义与部署关系查询 API
      * @param runtimeService RuntimeService，根流程执行树与服务端发起人变量查询 API
-     * @param ruleMapper WfDeployParticipantRuleMapper，不可变部署规则 Mapper
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署规则仓库
      * @param identityMapper WorkflowIdentityMapper，实时组织关系查询 Mapper
      * @param identityResolver WorkflowIdentityResolver，审批与认领资格解析器
      * @param auditService WorkflowParticipantResolutionAuditService，正式解析审计服务
@@ -49,13 +49,14 @@ public class WorkflowParticipantRuleRuntimeService
      */
     public WorkflowParticipantRuleRuntimeService(RepositoryService repositoryService,
             RuntimeService runtimeService,
-            WfDeployParticipantRuleMapper ruleMapper, WorkflowIdentityMapper identityMapper,
+            WorkflowDeploymentArtifactRepository artifactRepository,
+            WorkflowIdentityMapper identityMapper,
             WorkflowIdentityResolver identityResolver,
             WorkflowParticipantResolutionAuditService auditService)
     {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
-        this.ruleMapper = ruleMapper;
+        this.artifactRepository = artifactRepository;
         this.identityMapper = identityMapper;
         this.identityResolver = identityResolver;
         this.auditService = auditService;
@@ -143,7 +144,8 @@ public class WorkflowParticipantRuleRuntimeService
     public void resolveCreatedTask(DelegateTask task)
     {
         DefinitionContext context = definitionContext(task.getProcessDefinitionId());
-        WfDeployParticipantRule rule = ruleMapper.selectTaskRule(context.deploymentId(),
+        WfDeployParticipantRule rule = artifactRepository.selectTaskParticipantRule(
+                context.deploymentId(),
                 context.processKey(), task.getTaskDefinitionKey());
         if (rule == null) return;
         String initiator = resolveRootInitiator(task);
@@ -299,7 +301,7 @@ public class WorkflowParticipantRuleRuntimeService
     {
         if (definition == null || definition.getDeploymentId() == null)
             throw new ServiceException("流程定义部署关系异常", HttpStatus.ERROR);
-        WfDeployParticipantRule rule = ruleMapper.selectStartRule(
+        WfDeployParticipantRule rule = artifactRepository.selectStartParticipantRule(
                 definition.getDeploymentId(), definition.getKey());
         if (rule == null) return null;
         if (rule.getRuleVersion() == null || rule.getRuleVersion() != 1)

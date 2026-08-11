@@ -22,27 +22,14 @@ import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
-import com.ruoyi.flowable.mapper.WfDeployControlledLoopMapper;
 import com.ruoyi.flowable.service.model.WorkflowControlledLoopBpmnContract.AuthorConfig;
 
 /**
- * 把作者 BPMN 的受控整改循环编译为 Flowable 8 可执行网关回路并持久化不可变配置快照。
+ * 把作者 BPMN 的受控整改循环编译为 Flowable 8 可执行网关回路并生成不可变配置快照。
  */
 @Service
 public class WorkflowControlledLoopDeploymentService
 {
-    private final WfDeployControlledLoopMapper loopMapper;
-
-    /**
-     * 创建受控循环部署编译服务。
-     * @param loopMapper WfDeployControlledLoopMapper，循环部署快照数据访问层
-     * @return 无返回值，构造后由 Spring 管理
-     */
-    public WorkflowControlledLoopDeploymentService(WfDeployControlledLoopMapper loopMapper)
-    {
-        this.loopMapper = loopMapper;
-    }
-
     /**
      * 校验作者配置与节点表单字段，并把单出口用户任务转换为固定 ExclusiveGateway 回路。
      *
@@ -83,27 +70,6 @@ public class WorkflowControlledLoopDeploymentService
             throw new ServiceException("受控循环执行资源编译失败", HttpStatus.ERROR);
         }
         return new WorkflowPreparedControlledLoopDeployment(compiled, snapshots);
-    }
-
-    /**
-     * 在 Flowable 部署成功后批量写入受控循环不可变快照。
-     * @param deploymentId String，刚创建的 Flowable 部署主键
-     * @param prepared WorkflowPreparedControlledLoopDeployment，部署前编译结果
-     * @return void，写入行数不一致时抛出冲突并回滚整个部署事务
-     */
-    public void persist(String deploymentId, WorkflowPreparedControlledLoopDeployment prepared)
-    {
-        List<WfDeployControlledLoop> snapshots = prepared == null
-                ? List.of() : prepared.snapshots();
-        for (WfDeployControlledLoop snapshot : snapshots)
-        {
-            snapshot.setDeployId(deploymentId);
-        }
-        int inserted = snapshots.isEmpty() ? 0 : loopMapper.insertBatch(snapshots);
-        if (inserted != snapshots.size())
-        {
-            throw new ServiceException("受控循环部署快照保存不完整", HttpStatus.CONFLICT);
-        }
     }
 
     /**

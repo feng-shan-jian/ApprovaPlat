@@ -90,7 +90,7 @@ Flowable 8 的 `startableByUserOrGroups` 只返回存在匹配 starter identity 
 
 `getProcessForm` 必须同时提供 `definitionId` 和 `deploymentId`。首次发起时，定义还必须是当前用户可发起的最新激活版本；重新查看实例时，先调用 `WorkflowProcessAccessService` 完成对象授权，再核验实例、定义、部署三者关系。
 
-开始节点从该定义的 BPMN 公共模型中确定，返回内容只读取 `wf_deploy_form.content`。服务不会查询或回连当前 `wf_form`，所以模板后续编辑不会改变旧部署和在途实例的表单快照。
+开始节点从该定义的 BPMN 公共模型中确定，返回内容只读取 Flowable 业务制品 `approvaplat/forms-v1.json` 中的 `content`。服务不会查询或回连当前 `wf_form`，所以模板后续编辑不会改变旧部署和在途实例的表单快照。
 
 ## BPMN XML
 

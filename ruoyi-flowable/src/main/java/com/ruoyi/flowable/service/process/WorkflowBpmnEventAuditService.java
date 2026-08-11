@@ -6,6 +6,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService.SynchronousNotification;
 
 /**
  * BPMN 错误与升级运行审计及通知的独立事务服务。
@@ -14,15 +16,19 @@ import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
 public class WorkflowBpmnEventAuditService
 {
     private final WfBpmnEventMapper eventMapper;
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建运行审计服务。
      * @param eventMapper WfBpmnEventMapper，审计和通知数据访问层
+     * @param notificationService WorkflowNotificationService，统一 outbox、inbox 和投递审计服务
      * @return 无返回值，构造后由 Spring 管理
      */
-    public WorkflowBpmnEventAuditService(WfBpmnEventMapper eventMapper)
+    public WorkflowBpmnEventAuditService(WfBpmnEventMapper eventMapper,
+            WorkflowNotificationService notificationService)
     {
         this.eventMapper = eventMapper;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -52,7 +58,11 @@ public class WorkflowBpmnEventAuditService
                     + "：" + event.eventName();
             String content = event.eventCode() + " · " + event.matchStatus()
                     + (event.messageSummary() == null ? "" : " · " + event.messageSummary());
-            eventMapper.insertNotification(auditId, event.initiatorUserId(), title, content);
+            notificationService.publishSynchronousInbox(new SynchronousNotification(
+                    "BPMN_EVENT", String.valueOf(auditId), event.eventType(),
+                    event.initiatorUserId(), event.processDefinitionKey(),
+                    event.processInstanceId(), null, null, title, content,
+                    "/workflow/process-detail/" + event.processInstanceId() + "?source=own"));
         }
         return auditId;
     }
@@ -64,6 +74,7 @@ public class WorkflowBpmnEventAuditService
      * @param deploymentId String，部署主键
      * @param processInstanceId String，实例主键
      * @param processDefinitionId String，定义主键
+     * @param processDefinitionKey String，流程定义 key
      * @param executionId String，执行主键
      * @param sourceElementId String，产生节点
      * @param sourceType String，来源类型
@@ -78,7 +89,8 @@ public class WorkflowBpmnEventAuditService
      * @param initiatorUserId String，发起人用户主键
      */
     public record RuntimeEvent(String idempotencyKey, String deploymentId,
-            String processInstanceId, String processDefinitionId, String executionId,
+            String processInstanceId, String processDefinitionId,
+            String processDefinitionKey, String executionId,
             String sourceElementId, String sourceType, String eventType, String eventCode,
             String eventName, String notificationPolicy, String matchStatus,
             String boundaryEventId, Boolean interrupting, String messageSummary,

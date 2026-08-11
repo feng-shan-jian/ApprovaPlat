@@ -12,15 +12,14 @@ import org.apache.ibatis.io.Resources;
 import org.apache.ibatis.mapping.MappedStatement;
 import org.apache.ibatis.session.Configuration;
 import org.junit.jupiter.api.Test;
-import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 
 /**
- * 扩展目录与部署快照 Mapper 的安全参数、锁定和精确身份契约测试。
+ * 扩展目录 Mapper 的安全参数、锁定和精确身份契约测试。
  */
 class WorkflowExtensionMapperXmlTest
 {
     /**
-     * 验证两个正式 Mapper XML 可解析且不存在 MyBatis 字符串替换占位符。
+     * 验证正式扩展目录 Mapper XML 可解析且不存在 MyBatis 字符串替换占位符。
      * @return 无返回值；Mapper XML 或参数绑定不安全时测试失败
      * @throws Exception Mapper 资源读取或解析失败
      */
@@ -30,11 +29,8 @@ class WorkflowExtensionMapperXmlTest
         assertStatements("WfBpmnExtensionMapper", List.of(
                 "selectManagementList", "selectLatestEnabledOptions", "selectByKey", "selectByKeyForUpdate",
                 "selectByIdForUpdate", "selectLatestEnabledByKey", "selectMaxVersionNo",
-                "insertExtension", "insertVersion", "updateStatus", "countDeploymentSnapshots",
+                "insertExtension", "insertVersion", "updateStatus", "selectVersionIds",
                 "deleteVersions", "deleteExtension"));
-        assertStatements("WfDeployExtensionSnapshotMapper", List.of(
-                "insertBatch", "selectRuntimeSnapshot", "selectByDeploymentId",
-                "deleteByDeploymentId"));
     }
 
     /**
@@ -64,8 +60,8 @@ class WorkflowExtensionMapperXmlTest
     }
 
     /**
-     * 验证目录删除会先按版本关联统计部署快照，并且只删除目标主键下的版本与停用目录。
-     * @return 无返回值；删除边界扩大或遗漏部署引用时测试失败
+     * 验证目录删除会先读取目标版本主键，并且只删除目标主键下的版本与停用目录。
+     * @return 无返回值；删除边界扩大或版本引用检查缺少稳定主键时测试失败
      * @throws Exception Mapper 资源读取或解析失败
      */
     @Test
@@ -73,60 +69,19 @@ class WorkflowExtensionMapperXmlTest
     {
         Configuration configuration = parse("WfBpmnExtensionMapper");
         Map<String, Object> parameters = Map.of("extensionId", 11L);
-        String snapshotCount = render(configuration, "WfBpmnExtensionMapper",
-                "countDeploymentSnapshots", parameters);
+        String versionIds = render(configuration, "WfBpmnExtensionMapper",
+                "selectVersionIds", parameters);
         String deleteVersions = render(configuration, "WfBpmnExtensionMapper",
                 "deleteVersions", parameters);
         String deleteExtension = render(configuration, "WfBpmnExtensionMapper",
                 "deleteExtension", parameters);
 
-        assertThat(snapshotCount).contains(
-                "from wf_deploy_extension_snapshot s",
-                "v.version_id = s.extension_version_id",
-                "v.extension_id = ?");
+        assertThat(versionIds).contains(
+                "select version_id", "from wf_bpmn_extension_version",
+                "where extension_id = ?", "order by version_no");
         assertThat(deleteVersions).contains("where extension_id = ?");
         assertThat(deleteExtension).contains(
                 "where extension_id = ?", "and status = 'disabled'");
-    }
-
-    /**
-     * 验证运行快照必须使用部署、流程和活动三元组精确读取，批量写入支持安全空集合。
-     * @return 无返回值；跨流程快照可能误命中或空批量 SQL 非法时测试失败
-     * @throws Exception Mapper 资源读取或解析失败
-     */
-    @Test
-    void selectsProcessScopedRuntimeSnapshotAndRendersSafeEmptyBatch() throws Exception
-    {
-        Configuration configuration = parse("WfDeployExtensionSnapshotMapper");
-        String select = render(configuration, "WfDeployExtensionSnapshotMapper",
-                "selectRuntimeSnapshot", Map.of(
-                        "deployId", "deployment-1",
-                        "processKey", "expense",
-                        "elementId", "set-result"));
-        String emptyInsert = render(configuration, "WfDeployExtensionSnapshotMapper",
-                "insertBatch", Map.of("snapshots", List.of()));
-
-        assertThat(select).contains(
-                "deploy_id = ?", "process_key = ?", "element_id = ?");
-        assertThat(emptyInsert).contains("where 1 = 0");
-
-        WfDeployExtensionSnapshot snapshot = new WfDeployExtensionSnapshot();
-        snapshot.setDeployId("deployment-1");
-        snapshot.setProcessKey("expense");
-        snapshot.setElementId("set-result");
-        snapshot.setExtensionKey("approva.set-variable");
-        snapshot.setExtensionVersionId(1L);
-        snapshot.setVersionNo(1);
-        snapshot.setExtensionType("JAVA");
-        snapshot.setImplementationKey("SET_VARIABLE");
-        snapshot.setConfigJson("{}");
-        snapshot.setVersionChecksum("0".repeat(64));
-        snapshot.setSnapshotChecksum("1".repeat(64));
-        snapshot.setCreateBy("7");
-        String insert = render(configuration, "WfDeployExtensionSnapshotMapper",
-                "insertBatch", Map.of("snapshots", List.of(snapshot)));
-        assertThat(insert).contains("insert into wf_deploy_extension_snapshot")
-                .doesNotContain("${");
     }
 
     /**

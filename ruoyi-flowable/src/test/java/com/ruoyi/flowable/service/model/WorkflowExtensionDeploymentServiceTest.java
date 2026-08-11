@@ -4,8 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
@@ -20,7 +18,6 @@ import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.bpmn.model.UserTask;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
@@ -29,7 +26,6 @@ import com.ruoyi.flowable.extension.WorkflowExtensionBpmnContract;
 import com.ruoyi.flowable.extension.WorkflowJavaExtensionHandler;
 import com.ruoyi.flowable.extension.WorkflowJavaExtensionHandlerRegistry;
 import com.ruoyi.flowable.extension.WorkflowHttpConnector;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -39,7 +35,6 @@ class WorkflowExtensionDeploymentServiceTest
 {
     private WorkflowExtensionRegistryService registryService;
     private WorkflowJavaExtensionHandler handler;
-    private WfDeployExtensionSnapshotMapper snapshotMapper;
     private WorkflowExtensionDeploymentService service;
 
     /**
@@ -51,15 +46,13 @@ class WorkflowExtensionDeploymentServiceTest
     {
         registryService = mock(WorkflowExtensionRegistryService.class);
         handler = mock(WorkflowJavaExtensionHandler.class);
-        snapshotMapper = mock(WfDeployExtensionSnapshotMapper.class);
         when(handler.implementationKey()).thenReturn("SET_VARIABLE");
         when(handler.displayName()).thenReturn("设置流程变量");
         when(handler.configSchema()).thenReturn("{\"type\":\"object\"}");
         WorkflowJavaExtensionHandlerRegistry handlerRegistry =
                 new WorkflowJavaExtensionHandlerRegistry(List.of(handler));
         service = new WorkflowExtensionDeploymentService(
-                registryService, handlerRegistry, snapshotMapper,
-                mock(WorkflowHttpConnector.class),
+                registryService, handlerRegistry, mock(WorkflowHttpConnector.class),
                 mock(com.ruoyi.flowable.extension.WorkflowSqlConnector.class));
         when(handler.validateAndNormalizeConfig(any(JsonNode.class)))
                 .thenReturn("{\"targetVariable\":\"result\",\"value\":true}");
@@ -242,7 +235,6 @@ class WorkflowExtensionDeploymentServiceTest
                 field(WorkflowExtensionBpmnContract.EXTENSION_CONFIG_FIELD, "{"));
         assertBadRequest(document(process("expense", invalidJson)), "不是合法 JSON");
 
-        verify(snapshotMapper, never()).insertBatch(any());
     }
 
     /**
@@ -250,26 +242,15 @@ class WorkflowExtensionDeploymentServiceTest
      * @return 无返回值；快照绑定或行数门禁漂移时测试失败
      */
     @Test
-    void bindsAndPersistsExactSnapshotRows()
+    void bindsExactSnapshotRows()
     {
         WorkflowPreparedExtensionDeployment prepared = service.prepare(
                 document(process("expense", controlledTask("set-result"))), "7");
-        when(snapshotMapper.insertBatch(any())).thenReturn(1);
-
-        service.persist("deployment-1", prepared);
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<WfDeployExtensionSnapshot>> captor = ArgumentCaptor.forClass(List.class);
-        verify(snapshotMapper).insertBatch(captor.capture());
-        WfDeployExtensionSnapshot inserted = captor.getValue().get(0);
+        WfDeployExtensionSnapshot inserted = service
+                .snapshotsForDeployment("deployment-1", prepared).get(0);
         assertThat(inserted.getDeployId()).isEqualTo("deployment-1");
         assertThat(inserted.getSnapshotChecksum())
                 .isEqualTo(WorkflowExtensionDeploymentService.snapshotChecksum(inserted));
-
-        when(snapshotMapper.insertBatch(any())).thenReturn(0);
-        assertThatThrownBy(() -> service.persist("deployment-2", prepared))
-                .isInstanceOfSatisfying(ServiceException.class,
-                        error -> assertThat(error.getCode()).isEqualTo(HttpStatus.CONFLICT));
     }
 
     /**
@@ -292,14 +273,9 @@ class WorkflowExtensionDeploymentServiceTest
         formField.setConfigJson("{}");
         formField.setVersionChecksum("f".repeat(64));
         formField.setCreateBy("7");
-        when(snapshotMapper.insertBatch(any())).thenReturn(2);
-
-        service.persist("deployment-form", prepared, List.of(formField));
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<WfDeployExtensionSnapshot>> captor = ArgumentCaptor.forClass(List.class);
-        verify(snapshotMapper).insertBatch(captor.capture());
-        assertThat(captor.getValue()).hasSize(2)
+        List<WfDeployExtensionSnapshot> snapshots = service.snapshotsForDeployment(
+                "deployment-form", prepared, List.of(formField));
+        assertThat(snapshots).hasSize(2)
                 .allSatisfy(snapshot ->
                 {
                     assertThat(snapshot.getDeployId()).isEqualTo("deployment-form");
@@ -307,7 +283,7 @@ class WorkflowExtensionDeploymentServiceTest
                 });
 
         formField.setElementId("set-result");
-        assertThatThrownBy(() -> service.persist("deployment-conflict", prepared,
+        assertThatThrownBy(() -> service.snapshotsForDeployment("deployment-conflict", prepared,
                 List.of(formField)))
                 .isInstanceOfSatisfying(ServiceException.class,
                         error -> assertThat(error.getCode()).isEqualTo(HttpStatus.CONFLICT))

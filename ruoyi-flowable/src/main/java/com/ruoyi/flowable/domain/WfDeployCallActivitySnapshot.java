@@ -3,7 +3,8 @@ package com.ruoyi.flowable.domain;
 import java.util.Date;
 
 /**
- * 调用活动部署时冻结的依赖与变量映射快照，对应 {@code wf_deploy_call_activity}。
+ * 调用活动部署时冻结的依赖与变量映射快照，保存在 Flowable 业务制品资源
+ * {@code approvaplat/call-activities-v1.json}。
  */
 public class WfDeployCallActivitySnapshot
 {

@@ -58,7 +58,7 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
@@ -106,7 +106,7 @@ public class WorkflowProcessQueryService
 
     private final WorkflowDeploymentService deploymentService;
 
-    private final WfDeployFormMapper deployFormMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
 
     private final WfCopyMapper copyMapper;
 
@@ -128,7 +128,7 @@ public class WorkflowProcessQueryService
      * @param identityResolver WorkflowIdentityResolver，当前有效用户及候选组解析器
      * @param processAccessService WorkflowProcessAccessService，实例对象级读取授权服务
      * @param deploymentService WorkflowDeploymentService，安全 BPMN 读取服务
-     * @param deployFormMapper WfDeployFormMapper，不可变部署表单快照 Mapper
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署表单资源仓库
      * @param copyMapper WfCopyMapper，正式抄送记录 Mapper
      * @param userService ISysUserService，历史发起人显示名称查询服务
      * @param taskLifecycleService WorkflowTaskLifecycleService，复用正式撤回校验计算已办能力
@@ -139,7 +139,8 @@ public class WorkflowProcessQueryService
             RuntimeService runtimeService, TaskService taskService,
             WorkflowIdentityResolver identityResolver,
              WorkflowProcessAccessService processAccessService,
-             WorkflowDeploymentService deploymentService, WfDeployFormMapper deployFormMapper,
+             WorkflowDeploymentService deploymentService,
+             WorkflowDeploymentArtifactRepository artifactRepository,
              WfCopyMapper copyMapper, ISysUserService userService,
              WorkflowTaskLifecycleService taskLifecycleService)
     {
@@ -151,7 +152,7 @@ public class WorkflowProcessQueryService
         this.identityResolver = identityResolver;
         this.processAccessService = processAccessService;
         this.deploymentService = deploymentService;
-        this.deployFormMapper = deployFormMapper;
+        this.artifactRepository = artifactRepository;
         this.copyMapper = copyMapper;
         this.userService = userService;
         this.taskLifecycleService = taskLifecycleService;
@@ -439,7 +440,7 @@ public class WorkflowProcessQueryService
      * 按定义、部署和可选实例关系返回开始节点的不可变部署表单快照。
      *
      * @param request WorkflowProcessFormQueryDto，定义、部署及可选实例关系参数
-     * @return WorkflowProcessFormView，只来源于 wf_deploy_form.content 的部署快照
+     * @return WorkflowProcessFormView，只来源于 Flowable 业务制品 forms-v1.json 的部署快照
      */
     public WorkflowProcessFormView getProcessForm(WorkflowProcessFormQueryDto request)
     {
@@ -1192,7 +1193,7 @@ public class WorkflowProcessQueryService
      *
      * @param definition ProcessDefinition，已完成关系与权限校验的流程定义
      * @param deploymentId String，定义所属真实部署主键
-     * @return WfDeployForm，仅来自 wf_deploy_form 的开始节点快照
+     * @return WfDeployForm，仅来自 Flowable 业务制品 forms-v1.json 的开始节点快照
      */
     private WfDeployForm requireStartFormSnapshot(ProcessDefinition definition, String deploymentId)
     {
@@ -1217,7 +1218,7 @@ public class WorkflowProcessQueryService
             throw dataError("流程开始节点缺少表单配置");
         }
         String formKey = resolveFormKey(startEvent);
-        List<WfDeployForm> snapshots = deployFormMapper.selectByDeploymentId(deploymentId);
+        List<WfDeployForm> snapshots = artifactRepository.selectForms(deploymentId);
         if (snapshots == null)
         {
             throw dataError("部署表单快照查询异常");

@@ -6,7 +6,7 @@
 
 ## 安全变量投影
 
-变量入口先通过 `WorkflowProcessAccessService.requireReadableTask` 校验活动或历史任务参与关系，再调用 `WorkflowProcessDetailService`。详情服务只从部署时固化的 `wf_deploy_form.content` 提取字段白名单，并拒绝 Java 序列化对象、二进制值、自定义变量类型、过深或过大的 JSON。
+变量入口先通过 `WorkflowProcessAccessService.requireReadableTask` 校验活动或历史任务参与关系，再调用 `WorkflowProcessDetailService`。详情服务只从部署时固化的 `approvaplat/forms-v1.json` 资源提取字段白名单，并拒绝 Java 序列化对象、二进制值、自定义变量类型、过深或过大的 JSON。
 
 本服务按流程表单时间线合并这些安全 `JsonNode`，当前任务表单最后合并。同名当前字段覆盖历史字段。`initiator`、`processStatus`、多实例计数、跳过标志及未在部署 schema 中声明的变量不会进入响应。
 

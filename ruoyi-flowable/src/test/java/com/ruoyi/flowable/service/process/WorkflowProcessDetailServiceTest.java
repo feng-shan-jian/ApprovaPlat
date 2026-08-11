@@ -77,7 +77,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowControlledLoopStateView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
@@ -113,7 +113,7 @@ class WorkflowProcessDetailServiceTest
     private WorkflowDeploymentService deploymentService;
 
     @Mock
-    private WfDeployFormMapper deployFormMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     @Mock
     private WorkflowHistoricVariableMapper historicVariableMapper;
@@ -167,7 +167,7 @@ class WorkflowProcessDetailServiceTest
                 ((Supplier<?>) invocation.getArgument(0)).get());
         service = new WorkflowProcessDetailService(engineOperations, processAccessService,
                 repositoryService, historyService, taskService, deploymentService,
-                deployFormMapper, historicVariableMapper,
+                artifactRepository, historicVariableMapper,
                  new WorkflowFormTemplateValidator(), userService, multiInstanceService,
                  taskLifecycleService, controlledLoopService);
         when(controlledLoopService.buildStates(anyString(), anyString(), anyString(), any()))
@@ -217,7 +217,7 @@ class WorkflowProcessDetailServiceTest
         stubAuthorizedObjects("instance-1", "task-1");
         ProcessDefinition definition = stubDefinitionAndModel();
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
-        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+        when(artifactRepository.selectForms("deployment-1"))
                 .thenReturn(List.of(startSnapshot(), taskSnapshot()));
 
         HistoricActivityInstance start = activity("start-activity", "start", "开始",
@@ -409,7 +409,7 @@ class WorkflowProcessDetailServiceTest
                 new TestTaskSpec("firstReview", "初审", "key_first", false),
                 new TestTaskSpec("secondReview", "复审", "key_second", false)));
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
-        when(deployFormMapper.selectByDeploymentId("deployment-1")).thenReturn(List.of(
+        when(artifactRepository.selectForms("deployment-1")).thenReturn(List.of(
                 valueSnapshot(11L, "key_first", "firstReview", "初审表", "sharedValue"),
                 valueSnapshot(12L, "key_second", "secondReview", "复审表", "sharedValue")));
 
@@ -468,7 +468,7 @@ class WorkflowProcessDetailServiceTest
                 new TestTaskSpec("localOne", "局部一", "key_local_1", true),
                 new TestTaskSpec("localTwo", "局部二", "key_local_2", true)));
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
-        when(deployFormMapper.selectByDeploymentId("deployment-1")).thenReturn(List.of(
+        when(artifactRepository.selectForms("deployment-1")).thenReturn(List.of(
                 valueSnapshot(21L, "key_local_1", "localOne", "局部表一", "decision"),
                 valueSnapshot(22L, "key_local_2", "localTwo", "局部表二", "decision")));
         stubActivityQuery(List.of(
@@ -528,7 +528,7 @@ class WorkflowProcessDetailServiceTest
                         true, Instant.parse("2026-07-25T08:01:00Z"), null));
         ProcessDefinition definition = stubDefinitionAndModel();
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
-        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+        when(artifactRepository.selectForms("deployment-1"))
                 .thenReturn(List.of(taskSnapshot()));
         stubActivityQuery(List.of(
                 activity("approve-returned", "approve", "审批", "userTask", "task-returned",
@@ -605,7 +605,7 @@ class WorkflowProcessDetailServiceTest
         WfDeployForm snapshot = snapshot(null, "embedded", "approve",
                 "部署时内嵌表单", "审批", frozenContent);
         snapshot.setSourceType("EMBEDDED");
-        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+        when(artifactRepository.selectForms("deployment-1"))
                 .thenReturn(List.of(snapshot));
 
         WorkflowProcessDetailView detail = service.getDetail(
@@ -935,7 +935,7 @@ class WorkflowProcessDetailServiceTest
         HistoricVariableInstance third = variable(
                 "evidence", "json", Map.of("safe", true), "task-active");
         prepareActiveDetail(first, "decision");
-        when(deployFormMapper.selectByDeploymentId("deployment-1")).thenReturn(List.of(
+        when(artifactRepository.selectForms("deployment-1")).thenReturn(List.of(
                 snapshot(2L, "key_2", "approve", "审批表", "审批", """
                         {"fields":[
                           {"__vModel__":"decision","__config__":{"layout":"colFormItem","tag":"el-input"}},
@@ -1115,7 +1115,7 @@ class WorkflowProcessDetailServiceTest
                         exception -> assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
 
         verify(repositoryService, never()).getProcessDefinition(anyString());
-        verify(deployFormMapper, never()).selectByDeploymentId(anyString());
+        verify(artifactRepository, never()).selectForms(anyString());
         verify(taskService, never()).getProcessInstanceComments(anyString());
     }
 
@@ -1130,7 +1130,7 @@ class WorkflowProcessDetailServiceTest
                 .thenReturn(processSnapshot("instance-1"));
         ProcessDefinition definition = stubDefinitionAndModel();
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
-        when(deployFormMapper.selectByDeploymentId("deployment-1")).thenReturn(List.of());
+        when(artifactRepository.selectForms("deployment-1")).thenReturn(List.of());
         stubActivityQuery(java.util.Collections.nCopies(
                 WorkflowProcessDetailService.MAX_ACTIVITY_ROWS + 1,
                 mock(HistoricActivityInstance.class)));
@@ -1220,7 +1220,7 @@ class WorkflowProcessDetailServiceTest
                 .thenReturn(processSnapshot("instance-1"));
         ProcessDefinition definition = stubDefinitionAndModel();
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
-        when(deployFormMapper.selectByDeploymentId("deployment-1")).thenReturn(List.of());
+        when(artifactRepository.selectForms("deployment-1")).thenReturn(List.of());
         stubActivityQuery(List.of());
         stubHistoricTaskQuery(List.of());
         when(taskService.getProcessInstanceComments("instance-1")).thenReturn(List.of());
@@ -1243,7 +1243,7 @@ class WorkflowProcessDetailServiceTest
                         true, Instant.parse("2026-07-25T08:01:00Z"), null));
         ProcessDefinition definition = stubDefinitionAndModel();
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
-        when(deployFormMapper.selectByDeploymentId("deployment-1")).thenReturn(List.of(
+        when(artifactRepository.selectForms("deployment-1")).thenReturn(List.of(
                 valueSnapshot(2L, "key_2", "approve", "审批表", variableName)));
         stubActivityQuery(List.of(activity("approve-active", "approve", "审批",
                 "userTask", "task-active", "2026-07-25T08:01:00Z", null)));

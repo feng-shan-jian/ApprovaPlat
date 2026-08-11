@@ -3,7 +3,8 @@ package com.ruoyi.flowable.domain;
 import java.util.Date;
 
 /**
- * 部署时冻结的 BPMN 扩展执行快照，对应 {@code wf_deploy_extension_snapshot}。
+ * 部署时冻结的 BPMN 扩展执行快照，保存在 Flowable 业务制品资源
+ * {@code approvaplat/extensions-v1.json}。
  */
 public class WfDeployExtensionSnapshot
 {

@@ -34,7 +34,6 @@ import com.ruoyi.flowable.domain.dto.WorkflowDmnDeploymentRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowDmnDecisionView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
-import com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper;
 import com.ruoyi.flowable.service.model.WorkflowPreparedDmnDeployment.DecisionSource;
 
 /**
@@ -50,22 +49,22 @@ public class WorkflowDmnDecisionService
 
     private final WorkflowEngineOperations engineOperations;
     private final DmnRepositoryService dmnRepositoryService;
-    private final WfDeployDmnSnapshotMapper snapshotMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
 
     /**
      * 创建 DMN 决策领域服务。
      * @param engineOperations WorkflowEngineOperations，统一事务和可信身份边界
      * @param dmnRepositoryService DmnRepositoryService，Flowable 官方 DMN 仓储服务
-     * @param snapshotMapper WfDeployDmnSnapshotMapper，流程部署冻结快照数据访问层
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署业务资源仓库
      * @return void，构造后由 Spring 管理
      */
     public WorkflowDmnDecisionService(WorkflowEngineOperations engineOperations,
             DmnRepositoryService dmnRepositoryService,
-            WfDeployDmnSnapshotMapper snapshotMapper)
+            WorkflowDeploymentArtifactRepository artifactRepository)
     {
         this.engineOperations = engineOperations;
         this.dmnRepositoryService = dmnRepositoryService;
-        this.snapshotMapper = snapshotMapper;
+        this.artifactRepository = artifactRepository;
     }
 
     /**
@@ -147,7 +146,7 @@ public class WorkflowDmnDecisionService
             {
                 throw new ServiceException("流程冻结 DMN 部署不允许独立删除", HttpStatus.CONFLICT);
             }
-            if (snapshotMapper.countBySourceDeploymentId(id) > 0)
+            if (artifactRepository.countDmnSourceReferences(id) > 0)
             {
                 throw new ServiceException("DMN 部署已被流程版本冻结引用", HttpStatus.CONFLICT);
             }
@@ -208,13 +207,14 @@ public class WorkflowDmnDecisionService
     }
 
     /**
-     * 创建绑定流程 deploymentId 的 DMN 子部署并持久化不可变快照。
+     * 创建绑定流程 deploymentId 的 DMN 子部署并返回不可变快照。
      * @param processDeploymentId String，新流程部署主键
      * @param prepared WorkflowPreparedDmnDeployment，部署前固定的决策来源
      * @param actorUserId String，可信部署操作人正式用户主键
-     * @return void，任一子部署或快照不完整时外层事务整体回滚
+     * @return List&lt;WfDeployDmnSnapshot&gt;，已绑定父部署和冻结决策的快照
      */
-    public void persist(String processDeploymentId, WorkflowPreparedDmnDeployment prepared,
+    public List<WfDeployDmnSnapshot> freezeSnapshots(String processDeploymentId,
+            WorkflowPreparedDmnDeployment prepared,
             String actorUserId)
     {
         Map<String, DmnDeployment> frozenByResource = new LinkedHashMap<>();
@@ -240,11 +240,7 @@ public class WorkflowDmnDecisionService
             snapshots.add(buildSnapshot(processDeploymentId, source, frozen,
                     frozenDecision, actorUserId));
         }
-        int inserted = snapshots.isEmpty() ? 0 : snapshotMapper.insertBatch(snapshots);
-        if (inserted != snapshots.size())
-        {
-            throw new ServiceException("DMN 部署快照保存不完整", HttpStatus.CONFLICT);
-        }
+        return List.copyOf(snapshots);
     }
 
     /**

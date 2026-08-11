@@ -7,8 +7,9 @@ import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 /**
  * 自定义表单字段完成精确版本冻结后的部署结果。
  *
- * @param content String，写入 {@code wf_deploy_form} 的不可变表单 JSON
- * @param extensionSnapshots List&lt;WfDeployExtensionSnapshot&gt;，写入统一扩展部署台账的字段版本快照
+ * @param content String，写入 {@code approvaplat/forms-v1.json} 的不可变表单 JSON
+ * @param extensionSnapshots List&lt;WfDeployExtensionSnapshot&gt;，写入
+ *        {@code approvaplat/extensions-v1.json} 的字段版本快照
  */
 public record WorkflowFrozenFormContent(String content,
         List<WfDeployExtensionSnapshot> extensionSnapshots)

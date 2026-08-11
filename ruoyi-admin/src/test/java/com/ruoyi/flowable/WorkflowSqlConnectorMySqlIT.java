@@ -23,8 +23,9 @@ import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfSqlDataSource;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
 import com.ruoyi.flowable.extension.WorkflowSqlConnector;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import com.ruoyi.flowable.mapper.WfSqlDataSourceMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowSqlDataSourceService;
 import tools.jackson.databind.json.JsonMapper;
@@ -57,7 +58,7 @@ class WorkflowSqlConnectorMySqlIT
     @Autowired
     private WorkflowSqlConnector connector;
     @Autowired
-    private WfDeployExtensionSnapshotMapper snapshotMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     @Autowired
     private WfSqlDataSourceMapper dataSourceMapper;
 
@@ -103,7 +104,7 @@ class WorkflowSqlConnectorMySqlIT
     {
         for (String deploymentId : deploymentIds)
         {
-            snapshotMapper.deleteByDeploymentId(deploymentId);
+            artifactRepository.delete(deploymentId);
             processEngine.getRepositoryService().deleteDeployment(deploymentId, true);
         }
         jdbc.update("delete from wf_connector_invocation where target_key = ?", dataSourceKey);
@@ -227,7 +228,9 @@ class WorkflowSqlConnectorMySqlIT
         snapshot.setVersionChecksum(String.valueOf(version.get("checksum")));
         snapshot.setCreateBy("flowable-it");
         snapshot.setSnapshotChecksum(WorkflowExtensionDeploymentService.snapshotChecksum(snapshot));
-        assertThat(snapshotMapper.insertBatch(List.of(snapshot))).isEqualTo(1);
+        artifactRepository.persist(deploymentId, new WorkflowDeploymentArtifacts(
+                List.of(), List.of(), List.of(), List.of(), List.of(snapshot),
+                List.of(), List.of(), List.of()));
     }
 
     /**

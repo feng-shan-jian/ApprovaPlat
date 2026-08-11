@@ -33,14 +33,13 @@ import com.ruoyi.flowable.extension.WorkflowRaiseBpmnEventHandler;
 import com.ruoyi.flowable.extension.WorkflowHttpConnector;
 import com.ruoyi.flowable.extension.WorkflowCollaborationOutboxHandler;
 import com.ruoyi.flowable.extension.WorkflowSqlConnector;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 受控扩展的部署编译、版本冻结和快照持久化服务。
+ * 受控扩展的部署编译、版本冻结和不可变快照生成服务。
  */
 @Service
 public class WorkflowExtensionDeploymentService
@@ -52,7 +51,6 @@ public class WorkflowExtensionDeploymentService
 
     private final WorkflowExtensionRegistryService registryService;
     private final WorkflowJavaExtensionHandlerRegistry handlerRegistry;
-    private final WfDeployExtensionSnapshotMapper snapshotMapper;
     private final WorkflowHttpConnector httpConnector;
     private final WorkflowSqlConnector sqlConnector;
     private final ObjectMapper objectMapper = JsonMapper.shared();
@@ -63,20 +61,17 @@ public class WorkflowExtensionDeploymentService
      * 创建扩展部署服务。
      * @param registryService WorkflowExtensionRegistryService，扩展版本锁定服务
      * @param handlerRegistry WorkflowJavaExtensionHandlerRegistry，代码安装处理器注册表
-     * @param snapshotMapper WfDeployExtensionSnapshotMapper，部署快照数据访问层
      * @param httpConnector WorkflowHttpConnector，HTTP 端点冻结与配置校验器
      * @param sqlConnector WorkflowSqlConnector，SQL 数据源冻结与模板校验器
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowExtensionDeploymentService(WorkflowExtensionRegistryService registryService,
             WorkflowJavaExtensionHandlerRegistry handlerRegistry,
-            WfDeployExtensionSnapshotMapper snapshotMapper,
             WorkflowHttpConnector httpConnector,
             WorkflowSqlConnector sqlConnector)
     {
         this.registryService = registryService;
         this.handlerRegistry = handlerRegistry;
-        this.snapshotMapper = snapshotMapper;
         this.httpConnector = httpConnector;
         this.sqlConnector = sqlConnector;
     }
@@ -348,21 +343,27 @@ public class WorkflowExtensionDeploymentService
      * @param prepared WorkflowPreparedExtensionDeployment，部署前编译结果
      * @return void，无返回值；行数不一致时由外层事务整体回滚
      */
-    public void persist(String deploymentId, WorkflowPreparedExtensionDeployment prepared)
+    public List<WfDeployExtensionSnapshot> snapshotsForDeployment(String deploymentId,
+            WorkflowPreparedExtensionDeployment prepared)
     {
-        persist(deploymentId, prepared, List.of());
+        return snapshotsForDeployment(deploymentId, prepared, List.of());
     }
 
     /**
-     * 在同一部署事务中合并服务任务和表单字段扩展快照后持久化。
+     * 在同一部署事务中合并服务任务和表单字段扩展快照并完成最终复核。
      * @param deploymentId String，Flowable 新部署主键
      * @param prepared WorkflowPreparedExtensionDeployment，服务任务部署前编译结果
      * @param additionalSnapshots List&lt;WfDeployExtensionSnapshot&gt;，表单字段等非 ServiceTask 扩展快照
-     * @return void，跨来源元素标识冲突或写入不完整时由外层事务整体回滚
+     * @return List&lt;WfDeployExtensionSnapshot&gt;，已绑定部署主键和摘要的不可变快照
      */
-    public void persist(String deploymentId, WorkflowPreparedExtensionDeployment prepared,
+    public List<WfDeployExtensionSnapshot> snapshotsForDeployment(String deploymentId,
+            WorkflowPreparedExtensionDeployment prepared,
             List<WfDeployExtensionSnapshot> additionalSnapshots)
     {
+        if (!org.springframework.util.StringUtils.hasText(deploymentId) || prepared == null)
+        {
+            throw new ServiceException("部署扩展快照参数不完整", HttpStatus.ERROR);
+        }
         List<WfDeployExtensionSnapshot> snapshots = new ArrayList<>(prepared.snapshots());
         if (additionalSnapshots != null)
         {
@@ -379,11 +380,7 @@ public class WorkflowExtensionDeploymentService
             snapshot.setDeployId(deploymentId);
             snapshot.setSnapshotChecksum(snapshotChecksum(snapshot));
         }
-        int inserted = snapshots.isEmpty() ? 0 : snapshotMapper.insertBatch(snapshots);
-        if (inserted != snapshots.size())
-        {
-            throw new ServiceException("部署扩展快照保存不完整", HttpStatus.CONFLICT);
-        }
+        return List.copyOf(snapshots);
     }
 
     /**

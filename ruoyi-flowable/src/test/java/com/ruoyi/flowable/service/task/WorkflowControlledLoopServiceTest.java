@@ -27,7 +27,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfControlledLoopExecution;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
 import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
-import com.ruoyi.flowable.mapper.WfDeployControlledLoopMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 
 /**
  * 受控重复审批循环运行判断、并发冲突、上限和历史一致性测试。
@@ -37,7 +37,7 @@ class WorkflowControlledLoopServiceTest
     private RepositoryService repositoryService;
     private RuntimeService runtimeService;
     private TaskService taskService;
-    private WfDeployControlledLoopMapper loopMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     private WfControlledLoopExecutionMapper executionMapper;
     private WorkflowControlledLoopService service;
     private Task task;
@@ -52,10 +52,10 @@ class WorkflowControlledLoopServiceTest
         repositoryService = mock(RepositoryService.class);
         runtimeService = mock(RuntimeService.class);
         taskService = mock(TaskService.class);
-        loopMapper = mock(WfDeployControlledLoopMapper.class);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         executionMapper = mock(WfControlledLoopExecutionMapper.class);
         service = new WorkflowControlledLoopService(repositoryService, runtimeService,
-                taskService, loopMapper, executionMapper);
+                taskService, artifactRepository, executionMapper);
         ProcessDefinitionQuery query = mock(ProcessDefinitionQuery.class);
         ProcessDefinition definition = mock(ProcessDefinition.class);
         when(repositoryService.createProcessDefinitionQuery()).thenReturn(query);
@@ -76,7 +76,7 @@ class WorkflowControlledLoopServiceTest
     @Test
     void recordsRepeatOutcomeAndServerOwnedRouteVariables()
     {
-        when(loopMapper.selectByDeploymentAndActivity("deployment-1", "leave", "review"))
+        when(artifactRepository.selectControlledLoop("deployment-1", "leave", "review"))
                 .thenReturn(config(4));
         when(executionMapper.selectMaxIteration("instance-1", "review")).thenReturn(0);
         when(executionMapper.insert(any())).thenReturn(1);
@@ -98,7 +98,7 @@ class WorkflowControlledLoopServiceTest
     @Test
     void rejectsRepeatAtMaximumIterationWithZeroSideEffects()
     {
-        when(loopMapper.selectByDeploymentAndActivity("deployment-1", "leave", "review"))
+        when(artifactRepository.selectControlledLoop("deployment-1", "leave", "review"))
                 .thenReturn(config(3));
         when(executionMapper.selectMaxIteration("instance-1", "review")).thenReturn(2);
 
@@ -122,7 +122,7 @@ class WorkflowControlledLoopServiceTest
     @Test
     void convertsConcurrentUniqueConstraintToConflict()
     {
-        when(loopMapper.selectByDeploymentAndActivity("deployment-1", "leave", "review"))
+        when(artifactRepository.selectControlledLoop("deployment-1", "leave", "review"))
                 .thenReturn(config(4));
         when(executionMapper.selectMaxIteration("instance-1", "review")).thenReturn(0);
         when(executionMapper.insert(any())).thenThrow(new DuplicateKeyException("duplicate"));
@@ -148,7 +148,7 @@ class WorkflowControlledLoopServiceTest
     {
         WfDeployControlledLoop config = config(4);
         config.setActivityName("复核");
-        when(loopMapper.selectByDeploymentAndProcess("deployment-1", "leave"))
+        when(artifactRepository.selectControlledLoops("deployment-1", "leave"))
                 .thenReturn(List.of(config));
         WfControlledLoopExecution first = execution(1, "EXIT");
         WfControlledLoopExecution second = execution(2, "REPEAT");

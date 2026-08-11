@@ -2,9 +2,7 @@ package com.ruoyi.flowable.service.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,10 +25,7 @@ import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.domain.WfDeployParticipantRule;
-import com.ruoyi.flowable.mapper.WfDeployParticipantRuleMapper;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 
 /**
@@ -38,7 +33,6 @@ import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
  */
 class WorkflowParticipantRuleDeploymentServiceTest
 {
-    private WfDeployParticipantRuleMapper ruleMapper;
     private WorkflowIdentityMapper identityMapper;
     private WorkflowParticipantRuleDeploymentService service;
 
@@ -50,9 +44,8 @@ class WorkflowParticipantRuleDeploymentServiceTest
     @BeforeEach
     void setUp()
     {
-        ruleMapper = mock(WfDeployParticipantRuleMapper.class);
         identityMapper = mock(WorkflowIdentityMapper.class);
-        service = new WorkflowParticipantRuleDeploymentService(ruleMapper, identityMapper);
+        service = new WorkflowParticipantRuleDeploymentService(identityMapper);
     }
 
     /**
@@ -94,22 +87,19 @@ class WorkflowParticipantRuleDeploymentServiceTest
      * @return void，失效目标可部署或快照写入不完整时测试失败
      */
     @Test
-    void validatesApprovalTargetAndPersistsExactSnapshots()
+    void validatesApprovalTargetAndBuildsExactSnapshots()
     {
         Fixture fixture = fixture("FIXED_USER", "7", "");
         when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(7L)))
                 .thenReturn(List.of(7L));
         WorkflowPreparedParticipantRuleDeployment prepared = service.prepare(
                 fixture.document(), fixture.xml(), catalog(), "9");
-        when(ruleMapper.insertBatch(anyList())).thenReturn(2);
-
-        service.persist("deployment-1", prepared);
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<WfDeployParticipantRule>> captor = ArgumentCaptor.forClass(List.class);
-        verify(ruleMapper).insertBatch(captor.capture());
-        assertThat(captor.getValue()).hasSize(2)
-                .allMatch(rule -> "deployment-1".equals(rule.getDeployId()));
+        assertThat(prepared.snapshots()).hasSize(2)
+                .anySatisfy(rule ->
+                {
+                    assertThat(rule.getRuleType()).isEqualTo("FIXED_USER");
+                    assertThat(rule.getTargetIds()).isEqualTo("7");
+                });
 
         when(identityMapper.selectApprovalEligibleUserIdsByUserIds(List.of(7L)))
                 .thenReturn(List.of());
@@ -163,7 +153,6 @@ class WorkflowParticipantRuleDeploymentServiceTest
                 .hasMessageContaining("固定办理人");
 
         verify(identityMapper).selectApprovalEligibleUserIdsByUserIds(List.of(7L));
-        verifyNoInteractions(ruleMapper);
     }
 
     /**

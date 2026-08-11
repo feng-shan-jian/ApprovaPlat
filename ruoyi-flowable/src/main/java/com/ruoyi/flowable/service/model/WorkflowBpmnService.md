@@ -39,4 +39,4 @@ for (WorkflowBpmnFormReference reference : document.formReferences()) {
 }
 ```
 
-`formReferences` 在构造时复制，部署服务据此读取 `wf_form` 并生成 `wf_deploy_form` 不可变快照。
+`formReferences` 在构造时复制，部署服务据此读取 `wf_form` 并生成写入 Flowable 业务制品 `approvaplat/forms-v1.json` 的不可变快照。

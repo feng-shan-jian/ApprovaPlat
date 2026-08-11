@@ -85,18 +85,6 @@ public interface WfBpmnEventMapper
     /** @param idempotencyKey String，幂等摘要；@return Long，审计主键。 */
     Long selectAuditId(@Param("idempotencyKey") String idempotencyKey);
 
-    /**
-     * 为有效发起人创建一条真实站内工作流通知。
-     * @param auditId Long，审计主键
-     * @param recipientUserId String，接收人用户主键
-     * @param title String，标题
-     * @param content String，正文
-     * @return int，首次创建 1，无有效用户或重复时 0
-     */
-    int insertNotification(@Param("auditId") Long auditId,
-            @Param("recipientUserId") String recipientUserId,
-            @Param("title") String title, @Param("content") String content);
-
     /** @return List&lt;WorkflowBpmnEventAuditView&gt;，最近 500 条运行审计。 */
     List<WorkflowBpmnEventAuditView> selectAuditList();
 

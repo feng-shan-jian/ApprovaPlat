@@ -54,7 +54,8 @@ public class WorkflowBpmnEventRuntimeService
         }
         ProcessDefinition definition = repositoryService.getProcessDefinition(
                 execution.getProcessDefinitionId());
-        if (definition == null || definition.getDeploymentId() == null)
+        if (definition == null || definition.getDeploymentId() == null
+                || definition.getKey() == null)
         {
             throw new ServiceException("BPMN 事件对应的流程定义不存在", HttpStatus.ERROR);
         }
@@ -67,7 +68,8 @@ public class WorkflowBpmnEventRuntimeService
         String initiator = scalar(execution.getVariable("initiator"));
         auditService.record(new WorkflowBpmnEventAuditService.RuntimeEvent(
                 idempotencyKey, definition.getDeploymentId(), execution.getProcessInstanceId(),
-                execution.getProcessDefinitionId(), execution.getId(), execution.getCurrentActivityId(),
+                execution.getProcessDefinitionId(), definition.getKey(), execution.getId(),
+                execution.getCurrentActivityId(),
                 event.sourceType(), event.eventType(), event.eventCode(), event.eventName(),
                 event.notificationPolicy(), matchStatus, match == null ? null : match.eventId(),
                 match == null ? null : match.interrupting(), event.messageSummary(), initiator));

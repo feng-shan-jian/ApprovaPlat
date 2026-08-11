@@ -22,7 +22,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 
 @ExtendWith(MockitoExtension.class)
 class FlowableWorkflowReferenceCheckerTest
@@ -31,7 +31,7 @@ class FlowableWorkflowReferenceCheckerTest
     private RepositoryService repositoryService;
 
     @Mock
-    private WfDeployFormMapper deployFormMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     private FlowableWorkflowReferenceChecker checker;
 
@@ -42,7 +42,7 @@ class FlowableWorkflowReferenceCheckerTest
     @BeforeEach
     void setUp()
     {
-        checker = new FlowableWorkflowReferenceChecker(repositoryService, deployFormMapper);
+        checker = new FlowableWorkflowReferenceChecker(repositoryService, artifactRepository);
     }
 
     /**
@@ -82,7 +82,7 @@ class FlowableWorkflowReferenceCheckerTest
     @Test
     void detectsFormReferenceFromDeploymentSnapshot()
     {
-        when(deployFormMapper.countByFormIds(anyCollection())).thenReturn(1);
+        when(artifactRepository.hasFormReference(anyCollection())).thenReturn(true);
 
         assertThat(checker.hasFormReference(List.of(7L))).isTrue();
     }

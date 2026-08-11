@@ -34,7 +34,8 @@ import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
 import com.ruoyi.flowable.extension.WorkflowSqlConnector;
 import com.ruoyi.flowable.extension.WorkflowSqlSecretResolver;
 import com.ruoyi.flowable.mapper.WfConnectorInvocationMapper;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowSqlDataSourceService;
 import com.ruoyi.flowable.service.process.WorkflowConnectorInvocationService;
@@ -75,7 +76,7 @@ class WorkflowExternalSqlConnectorMySqlIT
     @Autowired
     private WorkflowSqlConnector connector;
     @Autowired
-    private WfDeployExtensionSnapshotMapper snapshotMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     @Autowired
     private FaultInjectingInvocationService invocationService;
     @Autowired
@@ -130,7 +131,7 @@ class WorkflowExternalSqlConnectorMySqlIT
                 dataSourceKey);
         if (deployment != null)
         {
-            snapshotMapper.deleteByDeploymentId(deployment.getId());
+            artifactRepository.delete(deployment.getId());
             if (processEngine.getRepositoryService().createDeploymentQuery()
                     .deploymentId(deployment.getId()).count() == 1)
             {
@@ -271,7 +272,9 @@ class WorkflowExternalSqlConnectorMySqlIT
         snapshot.setVersionChecksum(String.valueOf(version.get("checksum")));
         snapshot.setCreateBy("flowable-it");
         snapshot.setSnapshotChecksum(WorkflowExtensionDeploymentService.snapshotChecksum(snapshot));
-        assertThat(snapshotMapper.insertBatch(List.of(snapshot))).isEqualTo(1);
+        artifactRepository.persist(deploymentId, new WorkflowDeploymentArtifacts(
+                List.of(), List.of(), List.of(), List.of(), List.of(snapshot),
+                List.of(), List.of(), List.of()));
     }
 
     /**

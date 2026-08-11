@@ -42,6 +42,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.RuoYiApplication;
+import com.ruoyi.flowable.domain.WfDeployControlledLoop;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 
 /**
  * 受控重复审批循环通过真实 HTTP、Spring Security、Redis Token、Flowable 8 和 MySQL 的完整验收。
@@ -99,6 +101,9 @@ class WorkflowControlledLoopHttpIT
 
     @Value("${flowable.controlled-loop.accounts-registered}")
     private boolean accountsRegistered;
+
+    @Autowired
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     /** 不持有 Cookie 且不自动重试的真实 HTTP 客户端。 */
     private HttpClient httpClient;
@@ -174,9 +179,14 @@ class WorkflowControlledLoopHttpIT
                 .isTrue();
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from information_schema.tables "
-                        + "where table_schema = database() and table_name in "
-                        + "('wf_deploy_controlled_loop','wf_controlled_loop_execution')",
-                Integer.class)).as("受控循环两张正式业务表必须已应用到真实 MySQL").isEqualTo(2);
+                        + "where table_schema = database() "
+                        + "and table_name='wf_controlled_loop_execution'",
+                Integer.class)).as("受控循环运行表必须已应用到真实 MySQL").isOne();
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from information_schema.tables "
+                        + "where table_schema = database() "
+                        + "and table_name='wf_deploy_controlled_loop'",
+                Integer.class)).as("旧受控循环快照表必须已退出基线").isZero();
 
         runId = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         categoryCode = "controlled_loop_" + runId;
@@ -222,22 +232,19 @@ class WorkflowControlledLoopHttpIT
     void cleanupFixtureAndLogout() throws Exception
     {
         RepositoryService repositoryService = processEngine.getRepositoryService();
-        if (deploymentId != null && repositoryService.createDeploymentQuery()
-                .deploymentId(deploymentId).count() == 1)
+        if (deploymentId != null)
         {
-            // 仅在主测试未走完正式删除链时兜底级联删除本类唯一部署。
-            repositoryService.deleteDeployment(deploymentId, true);
+            artifactRepository.delete(deploymentId);
+            if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() == 1)
+            {
+                // 仅在主测试未走完正式删除链时兜底级联删除本类唯一部署。
+                repositoryService.deleteDeployment(deploymentId, true);
+            }
         }
         if (processInstanceId != null)
         {
             jdbcTemplate.update("delete from wf_controlled_loop_execution "
                     + "where process_instance_id = ?", processInstanceId);
-        }
-        if (deploymentId != null)
-        {
-            jdbcTemplate.update("delete from wf_deploy_controlled_loop where deploy_id = ?",
-                    deploymentId);
-            jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
         }
         if (modelId != null && repositoryService.createModelQuery().modelId(modelId).count() == 1)
         {
@@ -292,9 +299,7 @@ class WorkflowControlledLoopHttpIT
         }
         if (deploymentId != null)
         {
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_deploy_controlled_loop where deploy_id = ?",
-                    Integer.class, deploymentId)).isZero();
+            assertThat(artifactRepository.selectControlledLoops(deploymentId)).isEmpty();
         }
     }
 
@@ -371,9 +376,7 @@ class WorkflowControlledLoopHttpIT
         JsonNode protectedDeletion = delete("/workflow/deploy/" + encode(deploymentId),
                 designerToken);
         requireCode(protectedDeletion, 409);
-        assertThat(jdbcTemplate.queryForObject(
-                "select count(*) from wf_deploy_controlled_loop where deploy_id = ?",
-                Integer.class, deploymentId)).isOne();
+        assertThat(artifactRepository.selectControlledLoops(deploymentId)).hasSize(1);
 
         JsonNode historyDeletion = delete(
                 "/workflow/process/instance/" + encode(processInstanceId), adminToken);
@@ -385,9 +388,7 @@ class WorkflowControlledLoopHttpIT
                 Integer.class, processInstanceId)).isZero();
 
         requireCode(delete("/workflow/deploy/" + encode(deploymentId), designerToken), 200);
-        assertThat(jdbcTemplate.queryForObject(
-                "select count(*) from wf_deploy_controlled_loop where deploy_id = ?",
-                Integer.class, deploymentId)).isZero();
+        assertThat(artifactRepository.selectControlledLoops(deploymentId)).isEmpty();
         requireCode(delete("/workflow/model/" + encode(modelId), designerToken), 200);
         assertThat(processEngine.getRepositoryService().createModelQuery()
                 .modelId(modelId).count()).isZero();
@@ -444,20 +445,18 @@ class WorkflowControlledLoopHttpIT
      */
     private void assertCompiledDeploymentAndSnapshot() throws IOException
     {
-        Map<String, Object> snapshot = jdbcTemplate.queryForMap(
-                "select process_key, activity_id, decision_variable, repeat_value, "
-                        + "exit_value, max_iterations, route_variable, iteration_variable "
-                        + "from wf_deploy_controlled_loop where deploy_id = ?",
-                deploymentId);
-        assertThat(snapshot).containsEntry("process_key", processKey)
-                .containsEntry("activity_id", REVIEW_ACTIVITY_ID)
-                .containsEntry("decision_variable", "reviewResult")
-                .containsEntry("repeat_value", "RECTIFY")
-                .containsEntry("exit_value", "PASS")
-                .containsEntry("max_iterations", 2);
-        assertThat(String.valueOf(snapshot.get("route_variable")))
+        WfDeployControlledLoop snapshot = artifactRepository.selectControlledLoop(
+                deploymentId, processKey, REVIEW_ACTIVITY_ID);
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.getProcessKey()).isEqualTo(processKey);
+        assertThat(snapshot.getActivityId()).isEqualTo(REVIEW_ACTIVITY_ID);
+        assertThat(snapshot.getDecisionVariable()).isEqualTo("reviewResult");
+        assertThat(snapshot.getRepeatValue()).isEqualTo("RECTIFY");
+        assertThat(snapshot.getExitValue()).isEqualTo("PASS");
+        assertThat(snapshot.getMaxIterations()).isEqualTo(2);
+        assertThat(snapshot.getRouteVariable())
                 .matches("__approva_loop_route_[0-9a-f]{24}");
-        assertThat(String.valueOf(snapshot.get("iteration_variable")))
+        assertThat(snapshot.getIterationVariable())
                 .matches("__approva_loop_iteration_[0-9a-f]{24}");
 
         ProcessDefinition definition = processEngine.getRepositoryService()
@@ -616,12 +615,11 @@ class WorkflowControlledLoopHttpIT
      */
     private SideEffectSnapshot snapshotFailedCompletionSideEffects(String taskId)
     {
-        Map<String, Object> loopConfig = jdbcTemplate.queryForMap(
-                "select route_variable, iteration_variable from wf_deploy_controlled_loop "
-                        + "where deploy_id = ? and activity_id = ?",
-                deploymentId, REVIEW_ACTIVITY_ID);
-        String routeVariable = String.valueOf(loopConfig.get("route_variable"));
-        String iterationVariable = String.valueOf(loopConfig.get("iteration_variable"));
+        WfDeployControlledLoop loopConfig = artifactRepository.selectControlledLoop(
+                deploymentId, processKey, REVIEW_ACTIVITY_ID);
+        assertThat(loopConfig).isNotNull();
+        String routeVariable = loopConfig.getRouteVariable();
+        String iterationVariable = loopConfig.getIterationVariable();
         Map<String, Object> processVariables = processEngine.getRuntimeService()
                 .getVariables(processInstanceId, List.of(routeVariable, iterationVariable));
         return new SideEffectSnapshot(

@@ -44,8 +44,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowCallActivityVariableView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfDeployCallActivityMapper;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WfFormMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 
@@ -79,10 +77,9 @@ public class WorkflowCallActivityReferenceService
     private final RepositoryService repositoryService;
     private final WorkflowEngineOperations engineOperations;
     private final WorkflowIdentityResolver identityResolver;
-    private final WfDeployFormMapper deployFormMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WfFormMapper formMapper;
     private final WorkflowFormTemplateValidator formTemplateValidator;
-    private final WfDeployCallActivityMapper snapshotMapper;
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
@@ -91,26 +88,23 @@ public class WorkflowCallActivityReferenceService
      * @param repositoryService RepositoryService，Flowable 定义与 BPMN 公共 API
      * @param engineOperations WorkflowEngineOperations，统一事务和异常边界
      * @param identityResolver WorkflowIdentityResolver，当前用户及候选组解析器
-     * @param deployFormMapper WfDeployFormMapper，子流程不可变表单快照 Mapper
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署业务资源仓库
      * @param formMapper WfFormMapper，父模型作者表单 Mapper
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单结构安全校验器
-     * @param snapshotMapper WfDeployCallActivityMapper，调用依赖快照 Mapper
      * @return 无返回值，构造后由 Spring 管理
      */
     @Autowired
     public WorkflowCallActivityReferenceService(RepositoryService repositoryService,
             WorkflowEngineOperations engineOperations, WorkflowIdentityResolver identityResolver,
-            WfDeployFormMapper deployFormMapper, WfFormMapper formMapper,
-            WorkflowFormTemplateValidator formTemplateValidator,
-            WfDeployCallActivityMapper snapshotMapper)
+            WorkflowDeploymentArtifactRepository artifactRepository, WfFormMapper formMapper,
+            WorkflowFormTemplateValidator formTemplateValidator)
     {
         this.repositoryService = repositoryService;
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
-        this.deployFormMapper = deployFormMapper;
+        this.artifactRepository = artifactRepository;
         this.formMapper = formMapper;
         this.formTemplateValidator = formTemplateValidator;
-        this.snapshotMapper = snapshotMapper;
     }
 
     /**
@@ -121,7 +115,7 @@ public class WorkflowCallActivityReferenceService
      */
     public WorkflowCallActivityReferenceService(RepositoryService repositoryService)
     {
-        this(repositoryService, null, null, null, null, null, null);
+        this(repositoryService, null, null, null, null, null);
     }
 
     /**
@@ -276,9 +270,10 @@ public class WorkflowCallActivityReferenceService
      * @param deployId String，父流程部署主键
      * @param prepared WorkflowPreparedCallActivityDeployment，部署前准备结果
      * @param actorUserId String，部署操作人正式用户主键
-     * @return void，写入数不一致时整体回滚
+     * @return List&lt;WfDeployCallActivitySnapshot&gt;，已绑定部署和操作人的快照
      */
-    public void persist(String deployId, WorkflowPreparedCallActivityDeployment prepared,
+    public List<WfDeployCallActivitySnapshot> snapshotsForDeployment(String deployId,
+            WorkflowPreparedCallActivityDeployment prepared,
             String actorUserId)
     {
         requireProductionDependencies();
@@ -291,11 +286,7 @@ public class WorkflowCallActivityReferenceService
             snapshot.setDeployId(normalizedDeployId);
             snapshot.setCreateBy(normalizedActor);
         }
-        int inserted = snapshots.isEmpty() ? 0 : snapshotMapper.insertBatch(snapshots);
-        if (inserted != snapshots.size())
-        {
-            throw new ServiceException("调用活动部署快照保存不完整", HttpStatus.CONFLICT);
-        }
+        return List.copyOf(snapshots);
     }
 
     /**
@@ -306,20 +297,7 @@ public class WorkflowCallActivityReferenceService
     public List<WfDeployCallActivitySnapshot> snapshotsByDeploymentId(String deploymentId)
     {
         requireProductionDependencies();
-        List<WfDeployCallActivitySnapshot> snapshots = snapshotMapper.selectByDeploymentId(
-                requireText(deploymentId, "调用活动父部署主键不能为空"));
-        return snapshots == null ? List.of() : List.copyOf(snapshots);
-    }
-
-    /**
-     * 删除受控父部署对应的调用活动快照。
-     * @param deploymentId String，父流程部署主键
-     * @return int，实际删除行数
-     */
-    public int deleteSnapshots(String deploymentId)
-    {
-        requireProductionDependencies();
-        return snapshotMapper.deleteByDeploymentId(
+        return artifactRepository.selectCallActivitySnapshots(
                 requireText(deploymentId, "调用活动父部署主键不能为空"));
     }
 
@@ -632,11 +610,11 @@ public class WorkflowCallActivityReferenceService
      */
     private TargetFieldCatalog targetFieldCatalog(ProcessDefinition definition)
     {
-        if (deployFormMapper == null || formTemplateValidator == null)
+        if (artifactRepository == null || formTemplateValidator == null)
         {
             return TargetFieldCatalog.empty();
         }
-        List<WfDeployForm> snapshots = deployFormMapper.selectByDeploymentId(definition.getDeploymentId());
+        List<WfDeployForm> snapshots = artifactRepository.selectForms(definition.getDeploymentId());
         if (snapshots == null)
         {
             throw dataError("子流程部署表单快照查询异常");
@@ -977,8 +955,8 @@ public class WorkflowCallActivityReferenceService
     /** @return void，生产依赖缺失时阻止假目录或假快照。 */
     private void requireProductionDependencies()
     {
-        if (engineOperations == null || identityResolver == null || deployFormMapper == null
-                || formMapper == null || formTemplateValidator == null || snapshotMapper == null)
+        if (engineOperations == null || identityResolver == null || artifactRepository == null
+                || formMapper == null || formTemplateValidator == null)
         {
             throw new ServiceException("调用活动生产依赖未完整配置", HttpStatus.ERROR);
         }

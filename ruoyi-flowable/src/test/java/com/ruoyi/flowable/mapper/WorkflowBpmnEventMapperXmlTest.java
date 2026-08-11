@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 class WorkflowBpmnEventMapperXmlTest
 {
     /**
-     * 验证 XML 可解析并包含目录、独立审计、有效用户通知和对象级已读条件。
+     * 验证 XML 可解析并包含目录、独立审计、统一通知来源和对象级已读条件。
      * @return void，SQL 映射缺少关键边界时失败
      * @throws Exception Mapper 文件读取或解析失败时测试失败
      */
@@ -32,11 +32,13 @@ class WorkflowBpmnEventMapperXmlTest
         assertThat(xml).contains(
                 "insert ignore into wf_bpmn_event_audit",
                 "where idempotency_key = #{idempotencykey}",
-                "insert ignore into wf_bpmn_event_notification",
-                "from sys_user u",
-                "u.status = '0' and u.del_flag = '0'",
-                "where recipient_user_id = #{userid}",
-                "where notification_id = #{notificationid} and recipient_user_id = #{userid}")
+                "from wf_notification_inbox n",
+                "join wf_notification_outbox o",
+                "o.source_type = 'bpmn_event'",
+                "where n.recipient_user_id = cast(#{userid} as unsigned)",
+                "where n.notification_id = #{notificationid}",
+                "and n.recipient_user_id = cast(#{userid} as unsigned)")
+                .doesNotContain("wf_bpmn_event_notification")
                 .doesNotContain("exception_stack", "request_body", "response_body");
     }
 

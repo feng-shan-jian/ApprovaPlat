@@ -3,7 +3,8 @@ package com.ruoyi.flowable.domain;
 import java.util.Date;
 
 /**
- * 流程部署时冻结的 DMN 决策快照，对应 {@code wf_deploy_dmn_snapshot}。
+ * 流程部署时冻结的 DMN 决策快照，保存在 Flowable 业务制品资源
+ * {@code approvaplat/dmn-v1.json}。
  */
 public class WfDeployDmnSnapshot
 {

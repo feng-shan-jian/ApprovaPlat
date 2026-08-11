@@ -25,7 +25,7 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 
 /**
- * 工作流十七张正式业务表的真实 MySQL 结构与约束集成测试。
+ * 工作流正式业务表的真实 MySQL 结构与约束集成测试。
  */
 @Execution(ExecutionMode.SAME_THREAD)
 class WorkflowBusinessSchemaIT
@@ -128,24 +128,29 @@ class WorkflowBusinessSchemaIT
     }
 
     /**
-     * 验证可编辑表单和部署快照均由 MySQL JSON CHECK 约束兜底。
-     * @return void，任一非法 JSON 能写入时测试失败
+     * 验证可编辑表单 JSON 约束、旧快照表退场和统一通知来源列。
+     * @return void，非法 JSON、遗留表或统一通知来源结构任一不符合时测试失败
+     * @throws SQLException 查询真实 information_schema 失败
      */
     @Test
-    void rejectsInvalidJsonForEditableFormAndDeploymentSnapshot()
+    void enforcesEditableFormJsonAndUnifiedDeploymentStorage() throws SQLException
     {
         long formId = negativeId();
-        String deploymentId = "it-deploy-" + token();
 
         assertMysqlError(MYSQL_CHECK_CONSTRAINT_ERROR, () -> executeUpdate(
                 "insert into wf_form (form_id, form_name, content, del_flag) values (?, ?, ?, '0')",
                 formId, "非法 JSON 表单", "{broken"));
-        assertMysqlError(MYSQL_CHECK_CONSTRAINT_ERROR, () -> executeUpdate(
-                "insert into wf_deploy_form "
-                        + "(deploy_id, form_id, form_key, node_key, form_name, node_name, content, del_flag) "
-                        + "values (?, ?, ?, ?, ?, ?, ?, '0')",
-                deploymentId, formId, "key_" + Math.abs(formId), "start", "非法快照",
-                "开始节点", "{broken"));
+        assertThat(queryLong("select count(*) from information_schema.tables "
+                + "where table_schema=? and table_name in ("
+                + "'wf_deploy_form','wf_deploy_condition_rule','wf_deploy_controlled_loop',"
+                + "'wf_deploy_participant_rule','wf_deploy_extension_snapshot',"
+                + "'wf_deploy_dmn_snapshot','wf_deploy_call_activity','wf_deploy_task_sla',"
+                + "'wf_task_sla_notification','wf_bpmn_event_notification')", expectedSchema))
+                .isZero();
+        assertThat(queryLong("select count(*) from information_schema.columns "
+                + "where table_schema=? and table_name='wf_notification_outbox' "
+                + "and column_name in ('source_type','source_id') and is_nullable='NO'",
+                expectedSchema)).isEqualTo(2L);
     }
 
     /**
@@ -303,8 +308,8 @@ class WorkflowBusinessSchemaIT
 
         assertIndex("wf_category", "uk_wf_category_active_code", false, "active_code");
         assertIndex("wf_form", "idx_wf_form_name", true, "form_name");
-        assertIndex("wf_deploy_form", "PRIMARY", false, "deploy_id,form_key,node_key");
-        assertIndex("wf_deploy_form", "idx_wf_deploy_form_form_id", true, "form_id");
+        assertIndex("wf_notification_outbox", "idx_wf_notification_outbox_source", true,
+                "source_type,source_id,channel,outbox_id");
         assertIndex("wf_copy", "uk_wf_copy_event_user", false, "copy_event_id,user_id");
         assertIndex("wf_copy", "idx_wf_copy_user_status_time", true,
                 "user_id,del_flag,read_status,create_time");

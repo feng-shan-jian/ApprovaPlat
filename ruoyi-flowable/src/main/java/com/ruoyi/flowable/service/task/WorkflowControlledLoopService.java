@@ -23,7 +23,7 @@ import com.ruoyi.flowable.domain.WfDeployControlledLoop;
 import com.ruoyi.flowable.domain.vo.WorkflowControlledLoopRoundView;
 import com.ruoyi.flowable.domain.vo.WorkflowControlledLoopStateView;
 import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
-import com.ruoyi.flowable.mapper.WfDeployControlledLoopMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 
 /**
  * 受控重复审批循环的完成判断、最大轮次、运行变量、审计落库和详情投影服务。
@@ -41,7 +41,7 @@ public class WorkflowControlledLoopService
     private final RepositoryService repositoryService;
     private final RuntimeService runtimeService;
     private final TaskService taskService;
-    private final WfDeployControlledLoopMapper loopMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WfControlledLoopExecutionMapper executionMapper;
 
     /**
@@ -49,19 +49,19 @@ public class WorkflowControlledLoopService
      * @param repositoryService RepositoryService，流程定义和 processKey 查询 API
      * @param runtimeService RuntimeService，写入编译网关保留变量的公共 API
      * @param taskService TaskService，写入同事务结构化循环 comment 的公共 API
-     * @param loopMapper WfDeployControlledLoopMapper，循环部署快照 Mapper
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，循环部署资源仓库
      * @param executionMapper WfControlledLoopExecutionMapper，逐轮运行审计 Mapper
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowControlledLoopService(RepositoryService repositoryService,
             RuntimeService runtimeService, TaskService taskService,
-            WfDeployControlledLoopMapper loopMapper,
+            WorkflowDeploymentArtifactRepository artifactRepository,
             WfControlledLoopExecutionMapper executionMapper)
     {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
-        this.loopMapper = loopMapper;
+        this.artifactRepository = artifactRepository;
         this.executionMapper = executionMapper;
     }
 
@@ -83,7 +83,7 @@ public class WorkflowControlledLoopService
         {
             throw dataError("循环任务流程定义关系异常");
         }
-        WfDeployControlledLoop config = loopMapper.selectByDeploymentAndActivity(
+        WfDeployControlledLoop config = artifactRepository.selectControlledLoop(
                 deploymentId, definition.getKey(), task.getTaskDefinitionKey());
         if (config == null)
         {
@@ -160,7 +160,7 @@ public class WorkflowControlledLoopService
     public List<WorkflowControlledLoopStateView> buildStates(String deploymentId,
             String processKey, String processInstanceId, String activeActivityId)
     {
-        List<WfDeployControlledLoop> configs = loopMapper.selectByDeploymentAndProcess(
+        List<WfDeployControlledLoop> configs = artifactRepository.selectControlledLoops(
                 deploymentId, processKey);
         List<WfControlledLoopExecution> executions = executionMapper
                 .selectByProcessInstanceId(processInstanceId);

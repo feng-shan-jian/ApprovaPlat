@@ -15,30 +15,25 @@ import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
-import com.ruoyi.flowable.mapper.WfDeployParticipantRuleMapper;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.service.model.WorkflowParticipantRuleBpmnContract.StartRule;
 import com.ruoyi.flowable.service.model.WorkflowParticipantRuleBpmnContract.TaskRule;
 
 /**
- * 编译并持久化流程发起范围和单实例用户任务参与者规则。
+ * 编译流程发起范围和单实例用户任务参与者规则并生成不可变快照。
  */
 @Service
 public class WorkflowParticipantRuleDeploymentService
 {
-    private final WfDeployParticipantRuleMapper ruleMapper;
     private final WorkflowIdentityMapper identityMapper;
 
     /**
      * 创建参与者规则部署服务。
-     * @param ruleMapper WfDeployParticipantRuleMapper，不可变部署快照 Mapper
      * @param identityMapper WorkflowIdentityMapper，正式组织和审批资格 Mapper
      * @return 无返回值，构造后由 Spring 管理
      */
-    public WorkflowParticipantRuleDeploymentService(WfDeployParticipantRuleMapper ruleMapper,
-            WorkflowIdentityMapper identityMapper)
+    public WorkflowParticipantRuleDeploymentService(WorkflowIdentityMapper identityMapper)
     {
-        this.ruleMapper = ruleMapper;
         this.identityMapper = identityMapper;
     }
 
@@ -98,23 +93,6 @@ public class WorkflowParticipantRuleDeploymentService
             throw new ServiceException("参与者规则作者校验输入不完整", HttpStatus.ERROR);
         }
         collectAndValidate(authorDocument.bpmnModel(), formFieldCatalog, "");
-    }
-
-    /**
-     * 在 Flowable 部署成功后同事务写入全部不可变规则快照。
-     * @param deploymentId String，Flowable 部署主键
-     * @param prepared WorkflowPreparedParticipantRuleDeployment，部署前编译结果
-     * @return void，写入不完整时回滚整个部署
-     */
-    public void persist(String deploymentId, WorkflowPreparedParticipantRuleDeployment prepared)
-    {
-        List<WfDeployParticipantRule> snapshots = prepared == null ? List.of() : prepared.snapshots();
-        for (WfDeployParticipantRule snapshot : snapshots) snapshot.setDeployId(deploymentId);
-        int inserted = snapshots.isEmpty() ? 0 : ruleMapper.insertBatch(snapshots);
-        if (inserted != snapshots.size())
-        {
-            throw new ServiceException("参与者规则部署快照保存不完整", HttpStatus.CONFLICT);
-        }
     }
 
     /**

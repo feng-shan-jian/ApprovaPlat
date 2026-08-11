@@ -26,25 +26,6 @@
         <collection property="days" column="calendar_id" select="selectCalendarDays"/>
     </resultMap>
 
-    <resultMap id="DeployTaskSlaResult" type="com.ruoyi.flowable.domain.WfDeployTaskSla">
-        <id property="deploymentId" column="deployment_id"/>
-        <id property="processKey" column="process_key"/>
-        <id property="taskDefinitionKey" column="task_definition_key"/>
-        <result property="calendarKey" column="calendar_key"/>
-        <result property="calendarTimezone" column="calendar_timezone"/>
-        <result property="workingDays" column="working_days"/>
-        <result property="workStart" column="work_start"/>
-        <result property="workEnd" column="work_end"/>
-        <result property="calendarDaysJson" column="calendar_days_json"/>
-        <result property="reminderMinutes" column="reminder_minutes"/>
-        <result property="reminderRepeatMinutes" column="reminder_repeat_minutes"/>
-        <result property="maxReminders" column="max_reminders"/>
-        <result property="escalationMinutes" column="escalation_minutes"/>
-        <result property="escalationAssignee" column="escalation_assignee"/>
-        <result property="escalationEventCode" column="escalation_event_code"/>
-        <result property="createBy" column="create_by"/>
-    </resultMap>
-
     <resultMap id="SlaExecutionResult" type="com.ruoyi.flowable.domain.WfTaskSlaExecution">
         <id property="slaExecutionId" column="sla_execution_id"/>
         <result property="deploymentId" column="deployment_id"/>
@@ -137,44 +118,6 @@
             (#{calendarId}, #{day.calendarDate}, #{day.workingDay}, #{day.dayName})
         </foreach>
     </insert>
-
-    <insert id="insertDeploymentSnapshots">
-        insert into wf_deploy_task_sla
-            (deployment_id, process_key, task_definition_key, calendar_key,
-             calendar_timezone, working_days, work_start, work_end, calendar_days_json,
-             reminder_minutes, reminder_repeat_minutes, max_reminders, escalation_minutes,
-             escalation_assignee, escalation_event_code,
-             create_by, create_time)
-        values
-        <foreach collection="snapshots" item="s" separator=",">
-            (#{s.deploymentId}, #{s.processKey}, #{s.taskDefinitionKey}, #{s.calendarKey},
-             #{s.calendarTimezone}, #{s.workingDays}, #{s.workStart}, #{s.workEnd},
-             cast(#{s.calendarDaysJson} as json), #{s.reminderMinutes},
-             #{s.reminderRepeatMinutes}, #{s.maxReminders}, #{s.escalationMinutes},
-             #{s.escalationAssignee}, #{s.escalationEventCode},
-             #{s.createBy}, current_timestamp(3))
-        </foreach>
-    </insert>
-
-    <select id="selectDeploymentSnapshot" resultMap="DeployTaskSlaResult">
-        select deployment_id, process_key, task_definition_key, calendar_key,
-               calendar_timezone, working_days, date_format(work_start, '%H:%i') as work_start,
-               date_format(work_end, '%H:%i') as work_end,
-               cast(calendar_days_json as char) as calendar_days_json,
-               reminder_minutes, reminder_repeat_minutes, max_reminders, escalation_minutes,
-               escalation_assignee, escalation_event_code, create_by
-        from wf_deploy_task_sla
-        where deployment_id = #{deploymentId} and process_key = #{processKey}
-          and task_definition_key = #{taskDefinitionKey}
-    </select>
-
-    <select id="countDeploymentSnapshotsByDeploymentId" resultType="int">
-        select count(*) from wf_deploy_task_sla where deployment_id = #{deploymentId}
-    </select>
-
-    <delete id="deleteDeploymentSnapshotsByDeploymentId">
-        delete from wf_deploy_task_sla where deployment_id = #{deploymentId}
-    </delete>
 
     <insert id="insertExecution" useGeneratedKeys="true" keyProperty="slaExecutionId">
         insert ignore into wf_task_sla_execution
@@ -270,17 +213,6 @@
           and action_ordinal = #{actionOrdinal}
     </select>
 
-    <insert id="insertNotification">
-        insert ignore into wf_task_sla_notification
-            (audit_id, recipient_user_id, action_type, title, content,
-             read_status, create_time)
-        select #{auditId}, cast(u.user_id as char), #{actionType}, #{title}, #{content},
-               'UNREAD', current_timestamp(3)
-        from sys_user u
-        where cast(u.user_id as char) = #{recipientUserId}
-          and u.status = '0' and u.del_flag = '0'
-    </insert>
-
     <select id="selectAudits" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView">
         select a.audit_id as auditId, a.sla_execution_id as slaExecutionId,
                e.process_instance_id as processInstanceId, e.task_id as taskId,
@@ -293,23 +225,28 @@
     </select>
 
     <select id="selectNotifications" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView">
-        select n.notification_id as notificationId, n.audit_id as auditId,
+        select n.notification_id as notificationId, a.audit_id as auditId,
                e.process_instance_id as processInstanceId, e.task_id as taskId,
-               n.action_type as actionType, n.title, n.content,
+               o.event_type as actionType, n.title, n.content,
                n.read_status as readStatus, n.create_time as createTime,
                n.read_time as readTime
-        from wf_task_sla_notification n
-        join wf_task_sla_audit a on a.audit_id = n.audit_id
+        from wf_notification_inbox n
+        join wf_notification_outbox o
+          on o.outbox_id = n.outbox_id and o.source_type = 'SLA'
+        join wf_task_sla_audit a on o.source_id = cast(a.audit_id as char)
         join wf_task_sla_execution e on e.sla_execution_id = a.sla_execution_id
-        where n.recipient_user_id = #{userId}
+        where n.recipient_user_id = cast(#{userId} as unsigned)
         order by n.notification_id desc limit 200
     </select>
 
     <update id="markNotificationRead">
-        update wf_task_sla_notification set read_status = 'READ',
-            read_time = current_timestamp(3)
-        where notification_id = #{notificationId} and recipient_user_id = #{userId}
-          and read_status = 'UNREAD'
+        update wf_notification_inbox n
+        join wf_notification_outbox o
+          on o.outbox_id = n.outbox_id and o.source_type = 'SLA'
+        set n.read_status = 'READ', n.read_time = current_timestamp(3)
+        where n.notification_id = #{notificationId}
+          and n.recipient_user_id = cast(#{userId} as unsigned)
+          and n.read_status = 'UNREAD'
     </update>
 
     <select id="selectExecutions" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView">

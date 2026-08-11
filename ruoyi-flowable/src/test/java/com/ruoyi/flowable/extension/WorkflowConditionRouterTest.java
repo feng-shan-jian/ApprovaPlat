@@ -14,8 +14,8 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.flowable.domain.WfDeployConditionRule;
-import com.ruoyi.flowable.mapper.WfDeployConditionRuleMapper;
 import com.ruoyi.flowable.service.model.WorkflowConditionDeploymentService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 
 /**
  * 条件分支运行时只信任部署快照和真实流程变量的执行契约测试。
@@ -28,7 +28,7 @@ class WorkflowConditionRouterTest
     private static final String DEFAULT_TOKEN = "333333333333333333333333";
 
     private RepositoryService repositoryService;
-    private WfDeployConditionRuleMapper mapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     private DelegateExecution execution;
     private Map<String, Object> transientVariables;
 
@@ -40,7 +40,7 @@ class WorkflowConditionRouterTest
     void setUp()
     {
         repositoryService = mock(RepositoryService.class);
-        mapper = mock(WfDeployConditionRuleMapper.class);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         execution = mock(DelegateExecution.class);
         transientVariables = new HashMap<>();
         ProcessDefinition definition = mock(ProcessDefinition.class);
@@ -68,7 +68,8 @@ class WorkflowConditionRouterTest
         stubVariables(Map.of("amount", 8000));
         stubSnapshots("EXCLUSIVE", numberSnapshot(FIRST_TOKEN, "GT", "5000"),
                 numberSnapshot(SECOND_TOKEN, "LT", "0"));
-        WorkflowConditionRouter router = new WorkflowConditionRouter(repositoryService, mapper);
+        WorkflowConditionRouter router = new WorkflowConditionRouter(repositoryService,
+                artifactRepository);
 
         assertThat(router.matches(execution, GATEWAY_TOKEN, FIRST_TOKEN)).isTrue();
         assertThat(router.matches(execution, GATEWAY_TOKEN, SECOND_TOKEN)).isFalse();
@@ -85,7 +86,7 @@ class WorkflowConditionRouterTest
         stubSnapshots("EXCLUSIVE", numberSnapshot(FIRST_TOKEN, "GT", "5000"),
                 numberSnapshot(SECOND_TOKEN, "GTE", "8000"));
 
-        assertThatThrownBy(() -> new WorkflowConditionRouter(repositoryService, mapper)
+        assertThatThrownBy(() -> new WorkflowConditionRouter(repositoryService, artifactRepository)
                 .matches(execution, GATEWAY_TOKEN, FIRST_TOKEN))
                 .isInstanceOf(WorkflowConditionRoutingException.class)
                 .hasMessageContaining("多个条件同时命中");
@@ -101,7 +102,8 @@ class WorkflowConditionRouterTest
         stubVariables(Map.of("amount", 8000));
         stubSnapshots("INCLUSIVE", numberSnapshot(FIRST_TOKEN, "GT", "5000"),
                 numberSnapshot(SECOND_TOKEN, "GTE", "8000"));
-        WorkflowConditionRouter router = new WorkflowConditionRouter(repositoryService, mapper);
+        WorkflowConditionRouter router = new WorkflowConditionRouter(repositoryService,
+                artifactRepository);
         assertThat(router.matches(execution, GATEWAY_TOKEN, FIRST_TOKEN)).isTrue();
         assertThat(router.matches(execution, GATEWAY_TOKEN, SECOND_TOKEN)).isTrue();
 
@@ -129,7 +131,7 @@ class WorkflowConditionRouterTest
         stubVariables(Map.of("urgent", true, "level", "urgent", "description", "合同审批", "amount", 1));
         stubSnapshots("EXCLUSIVE", first, second);
 
-        assertThat(new WorkflowConditionRouter(repositoryService, mapper)
+        assertThat(new WorkflowConditionRouter(repositoryService, artifactRepository)
                 .matches(execution, GATEWAY_TOKEN, FIRST_TOKEN)).isTrue();
     }
 
@@ -142,7 +144,8 @@ class WorkflowConditionRouterTest
     {
         stubSnapshots("EXCLUSIVE", numberSnapshot(FIRST_TOKEN, "GT", "5000"),
                 numberSnapshot(SECOND_TOKEN, "LT", "0"));
-        WorkflowConditionRouter router = new WorkflowConditionRouter(repositoryService, mapper);
+        WorkflowConditionRouter router = new WorkflowConditionRouter(repositoryService,
+                artifactRepository);
         assertThatThrownBy(() -> router.matches(execution, GATEWAY_TOKEN, FIRST_TOKEN))
                 .isInstanceOf(WorkflowConditionRoutingException.class).hasMessageContaining("不存在");
 
@@ -175,7 +178,8 @@ class WorkflowConditionRouterTest
             snapshot.setSnapshotChecksum(WorkflowConditionDeploymentService.snapshotChecksum(snapshot));
         }
         WfDeployConditionRule defaultFlow = defaultSnapshot(gatewayType);
-        when(mapper.selectRuntimeGateway("deployment-1", "expense", GATEWAY_TOKEN))
+        when(artifactRepository.selectRuntimeConditionRules(
+                "deployment-1", "expense", GATEWAY_TOKEN))
                 .thenReturn(List.of(first, second, defaultFlow));
     }
 

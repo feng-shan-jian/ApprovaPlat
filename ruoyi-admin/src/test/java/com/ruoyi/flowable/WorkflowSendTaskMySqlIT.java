@@ -3,6 +3,7 @@ package com.ruoyi.flowable;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RepositoryService;
@@ -11,9 +12,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import com.ruoyi.RuoYiApplication;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import com.ruoyi.flowable.service.model.WorkflowBpmnDocument;
 import com.ruoyi.flowable.service.model.WorkflowBpmnService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowPreparedExtensionDeployment;
 
@@ -45,7 +47,7 @@ class WorkflowSendTaskMySqlIT
     private WorkflowExtensionDeploymentService extensionDeploymentService;
 
     @Autowired
-    private WfDeployExtensionSnapshotMapper snapshotMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     /**
      * 验证作者 SendTask 经正式编译链冻结后，由固定调度器真实执行内置 Java 扩展。
@@ -74,8 +76,12 @@ class WorkflowSendTaskMySqlIT
 
             deployment = repositoryService.createDeployment().name(processKey)
                     .addBytes(processKey + ".bpmn20.xml", prepared.compiledBpmn()).deploy();
-            extensionDeploymentService.persist(deployment.getId(), prepared);
-            assertThat(snapshotMapper.selectRuntimeSnapshot(
+            artifactRepository.persist(deployment.getId(), new WorkflowDeploymentArtifacts(
+                    List.of(), List.of(), List.of(), List.of(),
+                    extensionDeploymentService.snapshotsForDeployment(
+                            deployment.getId(), prepared),
+                    List.of(), List.of(), List.of()));
+            assertThat(artifactRepository.selectExtensionSnapshot(
                     deployment.getId(), processKey, "notify")).isNotNull();
 
             var instance = processEngine.getRuntimeService()
@@ -91,7 +97,7 @@ class WorkflowSendTaskMySqlIT
         {
             if (deployment != null)
             {
-                snapshotMapper.deleteByDeploymentId(deployment.getId());
+                artifactRepository.delete(deployment.getId());
                 if (repositoryService.createDeploymentQuery()
                         .deploymentId(deployment.getId()).count() == 1L)
                 {

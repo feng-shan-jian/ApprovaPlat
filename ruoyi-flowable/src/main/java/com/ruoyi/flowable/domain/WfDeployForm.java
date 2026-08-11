@@ -3,7 +3,8 @@ package com.ruoyi.flowable.domain;
 import com.ruoyi.common.core.domain.BaseEntity;
 
 /**
- * 部署时固化的节点表单快照，对应业务表 {@code wf_deploy_form}。
+ * 部署时固化的节点表单快照，保存在 Flowable 业务制品资源
+ * {@code approvaplat/forms-v1.json}。
  */
 public class WfDeployForm extends BaseEntity
 {

@@ -52,8 +52,8 @@ import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
@@ -144,7 +144,7 @@ public class WorkflowTaskLifecycleService
 
     private final HistoryService historyService;
 
-    private final WfDeployFormMapper deployFormMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
 
     private final WorkflowStartVariableValidator variableValidator;
 
@@ -173,7 +173,7 @@ public class WorkflowTaskLifecycleService
      * @param runtimeService RuntimeService，流程实例和状态迁移公共服务
      * @param taskService TaskService，活动任务、变量和意见公共服务
      * @param historyService HistoryService，流程及任务历史公共查询服务
-     * @param deployFormMapper WfDeployFormMapper，不可变部署表单快照 Mapper
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署表单资源仓库
      * @param variableValidator WorkflowStartVariableValidator，表单 schema 变量门禁
      * @param attachmentService WorkflowAttachmentService，任务附件校验、投影和事务绑定服务
      * @param movementPolicy WorkflowTaskMovementPolicy，保守 BPMN 状态迁移策略
@@ -186,7 +186,8 @@ public class WorkflowTaskLifecycleService
     public WorkflowTaskLifecycleService(WorkflowEngineOperations engineOperations,
             WorkflowIdentityResolver identityResolver, RepositoryService repositoryService,
             RuntimeService runtimeService, TaskService taskService, HistoryService historyService,
-            WfDeployFormMapper deployFormMapper, WorkflowStartVariableValidator variableValidator,
+            WorkflowDeploymentArtifactRepository artifactRepository,
+            WorkflowStartVariableValidator variableValidator,
             WorkflowAttachmentService attachmentService,
             WorkflowTaskMovementPolicy movementPolicy,
             WorkflowTaskCopyService taskCopyService,
@@ -200,7 +201,7 @@ public class WorkflowTaskLifecycleService
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.historyService = historyService;
-        this.deployFormMapper = deployFormMapper;
+        this.artifactRepository = artifactRepository;
         this.variableValidator = variableValidator;
         this.attachmentService = attachmentService;
         this.movementPolicy = movementPolicy;
@@ -1002,7 +1003,7 @@ public class WorkflowTaskLifecycleService
                     context.definition().getDeploymentId(), null);
         }
 
-        List<WfDeployForm> snapshots = deployFormMapper.selectByDeploymentId(
+        List<WfDeployForm> snapshots = artifactRepository.selectForms(
                 context.definition().getDeploymentId());
         if (snapshots == null)
         {
@@ -2135,7 +2136,7 @@ public class WorkflowTaskLifecycleService
         {
             throw dataError();
         }
-        List<WfDeployForm> snapshots = deployFormMapper.selectByDeploymentId(
+        List<WfDeployForm> snapshots = artifactRepository.selectForms(
                 context.definition().getDeploymentId());
         if (snapshots == null)
         {

@@ -33,7 +33,6 @@ import com.ruoyi.flowable.domain.WfBpmnEventCode;
 import com.ruoyi.flowable.domain.WfBusinessCalendar;
 import com.ruoyi.flowable.domain.WfDeployTaskSla;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -64,7 +63,6 @@ public class WorkflowTaskSlaDeploymentService
     private final WorkflowBusinessCalendarService calendarService;
     private final WorkflowBpmnEventCodeService eventCodeService;
     private final WorkflowIdentityResolver identityResolver;
-    private final WfTaskSlaMapper slaMapper;
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
@@ -72,17 +70,15 @@ public class WorkflowTaskSlaDeploymentService
      * @param calendarService WorkflowBusinessCalendarService，启用日历锁定服务
      * @param eventCodeService WorkflowBpmnEventCodeService，受控升级编码锁定服务
      * @param identityResolver WorkflowIdentityResolver，正式审批资格身份解析器
-     * @param slaMapper WfTaskSlaMapper，部署快照数据访问层
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowTaskSlaDeploymentService(WorkflowBusinessCalendarService calendarService,
             WorkflowBpmnEventCodeService eventCodeService,
-            WorkflowIdentityResolver identityResolver, WfTaskSlaMapper slaMapper)
+            WorkflowIdentityResolver identityResolver)
     {
         this.calendarService = calendarService;
         this.eventCodeService = eventCodeService;
         this.identityResolver = identityResolver;
-        this.slaMapper = slaMapper;
     }
 
     /**
@@ -133,30 +129,6 @@ public class WorkflowTaskSlaDeploymentService
             throw new ServiceException("审批 SLA 执行资源编译失败", HttpStatus.ERROR);
         }
         return new WorkflowPreparedSlaDeployment(compiled, snapshots);
-    }
-
-    /**
-     * 在 Flowable 部署成功后于同一外层事务绑定并保存全部 SLA 快照。
-     * @param deploymentId String，真实 Flowable 部署主键
-     * @param prepared WorkflowPreparedSlaDeployment，部署前准备结果
-     * @return void，写入数量不一致时使引擎部署一并回滚
-     */
-    public void persist(String deploymentId, WorkflowPreparedSlaDeployment prepared)
-    {
-        if (prepared == null || deploymentId == null || deploymentId.isBlank())
-        {
-            throw new ServiceException("审批 SLA 部署快照参数不完整", HttpStatus.ERROR);
-        }
-        List<WfDeployTaskSla> snapshots = prepared.snapshots();
-        for (WfDeployTaskSla snapshot : snapshots)
-        {
-            snapshot.setDeploymentId(deploymentId.trim());
-        }
-        int inserted = snapshots.isEmpty() ? 0 : slaMapper.insertDeploymentSnapshots(snapshots);
-        if (inserted != snapshots.size())
-        {
-            throw new ServiceException("审批 SLA 部署快照保存不完整", HttpStatus.CONFLICT);
-        }
     }
 
     /**

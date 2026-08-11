@@ -14,8 +14,8 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.flowable.domain.WfDeployConditionRule;
-import com.ruoyi.flowable.mapper.WfDeployConditionRuleMapper;
 import com.ruoyi.flowable.service.model.WorkflowConditionDeploymentService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -33,21 +33,21 @@ public class WorkflowConditionRouter
     private static final String CACHE_PREFIX = "__ruoyi_workflow_condition_";
 
     private final RepositoryService repositoryService;
-    private final WfDeployConditionRuleMapper ruleMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WorkflowCelSandbox celSandbox = new WorkflowCelSandbox();
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
      * 创建固定条件路由器。
      * @param repositoryService RepositoryService，定义到部署主键的可信查询 API
-     * @param ruleMapper WfDeployConditionRuleMapper，运行时不可变快照数据访问层
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，运行时不可变部署资源仓库
      * @return 无返回值，构造后以固定 Bean 名注册
      */
     public WorkflowConditionRouter(RepositoryService repositoryService,
-            WfDeployConditionRuleMapper ruleMapper)
+            WorkflowDeploymentArtifactRepository artifactRepository)
     {
         this.repositoryService = repositoryService;
-        this.ruleMapper = ruleMapper;
+        this.artifactRepository = artifactRepository;
     }
 
     /**
@@ -98,7 +98,7 @@ public class WorkflowConditionRouter
         {
             throw new WorkflowConditionRoutingException("条件路由对应的流程定义不存在", HttpStatus.ERROR);
         }
-        List<WfDeployConditionRule> snapshots = ruleMapper.selectRuntimeGateway(
+        List<WfDeployConditionRule> snapshots = artifactRepository.selectRuntimeConditionRules(
                 definition.getDeploymentId(), definition.getKey(), gatewayToken);
         if (snapshots == null || snapshots.size() < 2)
         {

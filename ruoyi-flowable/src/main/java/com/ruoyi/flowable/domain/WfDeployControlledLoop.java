@@ -3,7 +3,8 @@ package com.ruoyi.flowable.domain;
 import java.util.Date;
 
 /**
- * 受控重复审批循环的不可变部署快照，对应 {@code wf_deploy_controlled_loop}。
+ * 受控重复审批循环的不可变部署快照，保存在 Flowable 业务制品资源
+ * {@code approvaplat/controlled-loops-v1.json}。
  */
 public class WfDeployControlledLoop
 {

@@ -37,6 +37,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.ruoyi.RuoYiApplication;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowPreparedSlaDeployment;
 import com.ruoyi.flowable.service.model.WorkflowTaskSlaDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
@@ -67,6 +69,7 @@ class WorkflowTaskSlaMySqlIT
     @Autowired private RuntimeService runtimeService;
     @Autowired private TaskService taskService;
     @Autowired private ManagementService managementService;
+    @Autowired private WorkflowDeploymentArtifactRepository artifactRepository;
     @Autowired private WorkflowTaskSlaDeploymentService deploymentService;
     @Autowired private WorkflowTaskSlaRuntimeService runtimeSlaService;
     @Autowired private JdbcTemplate jdbc;
@@ -113,11 +116,26 @@ class WorkflowTaskSlaMySqlIT
         engineConfiguration().getClock().setCurrentTime(Date.from(originalClock));
         if (deploymentId != null)
         {
-            jdbc.update("delete n from wf_task_sla_notification n join wf_task_sla_audit a on a.audit_id=n.audit_id "
-                    + "join wf_task_sla_execution e on e.sla_execution_id=a.sla_execution_id where e.deployment_id=?", deploymentId);
+            jdbc.update("delete d from wf_notification_delivery_audit d "
+                    + "join wf_notification_outbox o on o.outbox_id=d.outbox_id "
+                    + "join wf_task_sla_audit a on o.source_type='SLA' "
+                    + "and o.source_id=cast(a.audit_id as char) "
+                    + "join wf_task_sla_execution e on e.sla_execution_id=a.sla_execution_id "
+                    + "where e.deployment_id=?", deploymentId);
+            jdbc.update("delete n from wf_notification_inbox n "
+                    + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
+                    + "join wf_task_sla_audit a on o.source_type='SLA' "
+                    + "and o.source_id=cast(a.audit_id as char) "
+                    + "join wf_task_sla_execution e on e.sla_execution_id=a.sla_execution_id "
+                    + "where e.deployment_id=?", deploymentId);
+            jdbc.update("delete o from wf_notification_outbox o "
+                    + "join wf_task_sla_audit a on o.source_type='SLA' "
+                    + "and o.source_id=cast(a.audit_id as char) "
+                    + "join wf_task_sla_execution e on e.sla_execution_id=a.sla_execution_id "
+                    + "where e.deployment_id=?", deploymentId);
             jdbc.update("delete a from wf_task_sla_audit a join wf_task_sla_execution e on e.sla_execution_id=a.sla_execution_id where e.deployment_id=?", deploymentId);
             jdbc.update("delete from wf_task_sla_execution where deployment_id=?", deploymentId);
-            jdbc.update("delete from wf_deploy_task_sla where deployment_id=?", deploymentId);
+            artifactRepository.delete(deploymentId);
             if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() > 0)
             {
                 repositoryService.deleteDeployment(deploymentId, true);
@@ -293,7 +311,9 @@ class WorkflowTaskSlaMySqlIT
             Deployment deployment = repositoryService.createDeployment()
                     .name(PREFIX + runId).key(PREFIX + runId)
                     .addBytes("sla.bpmn20.xml", prepared.compiledBpmn()).deploy();
-            deploymentService.persist(deployment.getId(), prepared);
+            artifactRepository.persist(deployment.getId(), new WorkflowDeploymentArtifacts(
+                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                    List.of(), prepared.snapshots()));
             return deployment.getId();
         });
         ProcessInstance instance = runtimeService.startProcessInstanceByKey(
@@ -371,10 +391,12 @@ class WorkflowTaskSlaMySqlIT
     /** @param instanceId String，实例主键；@param action String，动作；@return int，真实通知数量。 */
     private int countNotifications(String instanceId, String action)
     {
-        return jdbc.queryForObject("select count(*) from wf_task_sla_notification n "
-                + "join wf_task_sla_audit a on a.audit_id=n.audit_id "
+        return jdbc.queryForObject("select count(*) from wf_notification_inbox n "
+                + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
+                + "and o.source_type='SLA' "
+                + "join wf_task_sla_audit a on o.source_id=cast(a.audit_id as char) "
                 + "join wf_task_sla_execution e on e.sla_execution_id=a.sla_execution_id "
-                + "where e.process_instance_id=? and n.action_type=?",
+                + "where e.process_instance_id=? and a.action_type=?",
                 Integer.class, instanceId, action);
     }
 

@@ -58,6 +58,7 @@ import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
+import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowAttachmentView;
@@ -66,6 +67,8 @@ import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentDownload;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
@@ -148,6 +151,7 @@ class WorkflowAttachmentIT
     private final WorkflowTaskLifecycleService taskLifecycleService;
     private final WorkflowProcessInstanceService processInstanceService;
     private final WfAttachmentMapper attachmentMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final ObjectMapper objectMapper = JsonMapper.shared();
     private final String expectedSchema;
     /** 仅用于隔离 schema 故障约束的 JDBC URL，不得复用应用运行账号。 */
@@ -179,6 +183,7 @@ class WorkflowAttachmentIT
      * @param taskLifecycleService WorkflowTaskLifecycleService，真实任务完成与附件绑定服务
      * @param processInstanceService WorkflowProcessInstanceService，受控历史删除服务
      * @param attachmentMapper WfAttachmentMapper，真实附件引用统计 Mapper
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，正式部署资源仓库
      * @param expectedSchema String，显式声明的隔离 schema 名称
      * @param ddlJdbcUrl String，独立 DDL 故障注入连接 URL
      * @param ddlUsername String，仅具隔离 schema ALTER 权限的账号
@@ -195,6 +200,7 @@ class WorkflowAttachmentIT
             WorkflowTaskLifecycleService taskLifecycleService,
              WorkflowProcessInstanceService processInstanceService,
              WfAttachmentMapper attachmentMapper,
+             WorkflowDeploymentArtifactRepository artifactRepository,
              @Value("${flowable.it.expected-schema}") String expectedSchema,
              @Value("${flowable.it.ddl-jdbc-url}") String ddlJdbcUrl,
              @Value("${flowable.it.ddl-username}") String ddlUsername,
@@ -209,6 +215,7 @@ class WorkflowAttachmentIT
         this.taskLifecycleService = taskLifecycleService;
         this.processInstanceService = processInstanceService;
         this.attachmentMapper = attachmentMapper;
+        this.artifactRepository = artifactRepository;
         this.expectedSchema = expectedSchema;
         this.ddlJdbcUrl = ddlJdbcUrl;
         this.ddlUsername = ddlUsername;
@@ -648,7 +655,7 @@ class WorkflowAttachmentIT
             }
             if (deploymentId != null)
             {
-                jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
+                artifactRepository.delete(deploymentId);
             }
             jdbcTemplate.update("delete from wf_form where form_id = ?", FORM_ID);
             deleteDeploymentIfPresent(repositoryService, deploymentId);
@@ -1047,7 +1054,7 @@ class WorkflowAttachmentIT
     }
 
     /**
-     * 写入可编辑表单和当前部署开始、审核、确认三个不可变表单快照。
+     * 写入可编辑表单和当前部署开始、审核、确认三个不可变资源快照。
      * @param jdbcTemplate JdbcTemplate，隔离 schema 的真实 JDBC 客户端
      * @param deploymentId String，真实 Flowable 部署主键
      * @return void，无返回值
@@ -1059,27 +1066,40 @@ class WorkflowAttachmentIT
                         + "values (?, ?, ?, ?, '0')",
                 FORM_ID, "附件集成测试表单", START_FORM_CONTENT,
                 "workflow-attachment-it")).isEqualTo(1);
-        assertThat(jdbcTemplate.update(
-                "insert into wf_deploy_form "
-                        + "(deploy_id, form_id, form_key, node_key, form_name, node_name, "
-                        + "content, create_by, del_flag) "
-                        + "values (?, ?, ?, 'start', ?, ?, ?, ?, '0')",
-                deploymentId, FORM_ID, START_FORM_KEY, "附件集成测试表单", "发起申请",
-                START_FORM_CONTENT, "workflow-attachment-it")).isEqualTo(1);
-        assertThat(jdbcTemplate.update(
-                "insert into wf_deploy_form "
-                        + "(deploy_id, form_id, form_key, node_key, form_name, node_name, "
-                        + "content, create_by, del_flag) "
-                        + "values (?, ?, ?, 'review', ?, ?, ?, ?, '0')",
-                deploymentId, FORM_ID, REVIEW_FORM_KEY, "附件审核表单", "审核附件",
-                TASK_FORM_CONTENT, "workflow-attachment-it")).isEqualTo(1);
-        assertThat(jdbcTemplate.update(
-                "insert into wf_deploy_form "
-                        + "(deploy_id, form_id, form_key, node_key, form_name, node_name, "
-                        + "content, create_by, del_flag) "
-                        + "values (?, ?, ?, 'confirm', ?, ?, ?, ?, '0')",
-                deploymentId, FORM_ID, CONFIRM_FORM_KEY, "附件确认表单", "确认归档",
-                TASK_FORM_CONTENT, "workflow-attachment-it")).isEqualTo(1);
+        List<WfDeployForm> forms = List.of(
+                deploymentForm(START_FORM_KEY, "start", "附件集成测试表单", "发起申请",
+                        START_FORM_CONTENT),
+                deploymentForm(REVIEW_FORM_KEY, "review", "附件审核表单", "审核附件",
+                        TASK_FORM_CONTENT),
+                deploymentForm(CONFIRM_FORM_KEY, "confirm", "附件确认表单", "确认归档",
+                        TASK_FORM_CONTENT));
+        artifactRepository.persist(deploymentId, new WorkflowDeploymentArtifacts(
+                forms, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of()));
+    }
+
+    /**
+     * 构造附件流程使用的模板来源表单快照。
+     * @param formKey String，BPMN 表单键
+     * @param nodeKey String，BPMN 节点键
+     * @param formName String，部署时表单名称
+     * @param nodeName String，部署时节点名称
+     * @param content String，部署时冻结的表单 JSON
+     * @return WfDeployForm，可持久化到正式部署资源的不可变表单快照
+     */
+    private WfDeployForm deploymentForm(String formKey, String nodeKey, String formName,
+            String nodeName, String content)
+    {
+        WfDeployForm snapshot = new WfDeployForm();
+        snapshot.setSourceType("TEMPLATE");
+        snapshot.setFormId(FORM_ID);
+        snapshot.setFormKey(formKey);
+        snapshot.setNodeKey(nodeKey);
+        snapshot.setFormName(formName);
+        snapshot.setNodeName(nodeName);
+        snapshot.setContent(content);
+        snapshot.setCreateBy("workflow-attachment-it");
+        return snapshot;
     }
 
     /**

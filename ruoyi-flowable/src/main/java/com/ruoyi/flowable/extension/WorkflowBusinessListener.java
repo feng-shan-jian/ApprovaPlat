@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowExtensionRegistryService;
 import tools.jackson.core.JacksonException;
@@ -30,23 +30,23 @@ public class WorkflowBusinessListener implements ExecutionListener, TaskListener
     private static final String TASK_KIND = "TASK";
 
     private final RepositoryService repositoryService;
-    private final WfDeployExtensionSnapshotMapper snapshotMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WorkflowJavaExtensionHandlerRegistry handlerRegistry;
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
      * 创建固定业务监听器调度入口。
      * @param repositoryService RepositoryService，流程定义和部署定位服务
-     * @param snapshotMapper WfDeployExtensionSnapshotMapper，不可变扩展快照访问层
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变扩展资源仓库
      * @param handlerRegistry WorkflowJavaExtensionHandlerRegistry，已安装 Java 处理器注册表
      * @return 无返回值，构造后由 Spring 以固定 Bean 名管理
      */
     public WorkflowBusinessListener(RepositoryService repositoryService,
-            WfDeployExtensionSnapshotMapper snapshotMapper,
+            WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowJavaExtensionHandlerRegistry handlerRegistry)
     {
         this.repositoryService = repositoryService;
-        this.snapshotMapper = snapshotMapper;
+        this.artifactRepository = artifactRepository;
         this.handlerRegistry = handlerRegistry;
     }
 
@@ -98,14 +98,14 @@ public class WorkflowBusinessListener implements ExecutionListener, TaskListener
         }
         String snapshotElementId = WorkflowExtensionBpmnContract.listenerSnapshotElementId(
                 ownerElementId, listenerKind, event);
-        WfDeployExtensionSnapshot snapshot = snapshotMapper.selectRuntimeSnapshot(
+        WfDeployExtensionSnapshot snapshot = artifactRepository.selectExtensionSnapshot(
                 definition.getDeploymentId(), definition.getKey(), snapshotElementId);
         if (snapshot == null && allowProcessFallback)
         {
             // 流程级 start/end 监听回调的 currentActivityId 由引擎决定，使用流程 key 作稳定后备定位。
             String processSnapshotElementId = WorkflowExtensionBpmnContract.listenerSnapshotElementId(
                     definition.getKey(), listenerKind, event);
-            snapshot = snapshotMapper.selectRuntimeSnapshot(
+            snapshot = artifactRepository.selectExtensionSnapshot(
                     definition.getDeploymentId(), definition.getKey(), processSnapshotElementId);
         }
         if (snapshot == null)

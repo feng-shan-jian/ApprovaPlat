@@ -30,30 +30,21 @@
 | 若依 | 20 |
 | Quartz | 11 |
 | Flowable Common/Process/History/DMN | 36 |
-| ApprovaPlat `wf_*` | 44 |
-| 合计 | 111 |
+| ApprovaPlat `wf_*` | 34 |
+| 合计 | 101 |
 
-44 张业务表：
+34 张业务表：
 
 - `wf_category`
 - `wf_form`
-- `wf_deploy_form`
-- `wf_deploy_condition_rule`
-- `wf_deploy_controlled_loop`
-- `wf_deploy_participant_rule`
 - `wf_participant_resolution_audit`
 - `wf_controlled_loop_execution`
 - `wf_bpmn_extension`
 - `wf_bpmn_extension_version`
-- `wf_deploy_extension_snapshot`
 - `wf_business_calendar`
 - `wf_business_calendar_day`
-- `wf_deploy_task_sla`
 - `wf_task_sla_execution`
 - `wf_task_sla_audit`
-- `wf_task_sla_notification`
-- `wf_deploy_dmn_snapshot`
-- `wf_deploy_call_activity`
 - `wf_connector_endpoint`
 - `wf_connector_invocation`
 - `wf_sql_datasource`
@@ -72,7 +63,6 @@
 - `wf_attachment`
 - `wf_bpmn_event_code`
 - `wf_bpmn_event_audit`
-- `wf_bpmn_event_notification`
 - `wf_notification_policy`
 - `wf_notification_preference`
 - `wf_notification_outbox`
@@ -80,7 +70,11 @@
 - `wf_notification_delivery_audit`
 - `wf_notification_urge_audit`
 
-菜单基线为 2 个目录、21 个页面、75 个按钮，共 98 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
+表单、条件、受控循环、参与者、扩展、DMN、调用活动和 SLA 共 8 类不可变部署快照，不再创建自定义快照表。每个可执行流程部署拥有一个 Flowable 业务制品子部署，固定保存 `manifest-v1.json` 以及 8 个分类 JSON 资源；子部署通过 `parentDeploymentId` 关联父部署，并与父部署共享发布事务和生命周期。
+
+普通审批、SLA 和 BPMN 事件通知统一写入 `wf_notification_outbox`、`wf_notification_inbox` 与 `wf_notification_delivery_audit`。`source_type/source_id` 关联各自业务事实，不再维护 SLA 或 BPMN 事件专用通知表。
+
+菜单基线为 3 个目录、21 个页面、75 个按钮，共 99 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
 
 ## 结构约束
 
@@ -97,7 +91,7 @@
 2. `sql/flowable/verify/8.0.0__verify_workflow_business.sql`
 3. `sql/flowable/verify/8.0.0__verify_workflow_menu.sql`
 
-三组脚本共定义 58 项只读检查，所有结果都必须为 `PASS`。表数检查固定核对总表数 111、分项表数 `20/11/36/44`，条件分支、动态参与者、子流程、申请草稿、自动抄送、普通审批通知、受控循环、多池协作、BPMN 错误/升级和审批 SLA 正式表均归入 ApprovaPlat `wf_*`；还必须核对菜单 98 条以及应用账号只拥有目标 schema 的最小 DML 权限。
+三组脚本共定义 57 项只读检查，所有结果都必须为 `PASS`。表数检查固定核对总表数 101、分项表数 `20/11/36/34`；部署制品检查必须证明十张退役表不存在、每个制品子部署只关联一个父部署、九个固定资源完整且 JSON 有效，并且不产生可执行流程定义。通知检查必须证明审批、SLA 和 BPMN 事件共享统一通知模型且来源关联有效；还必须核对菜单 99 条以及应用账号只拥有目标 schema 的最小 DML 权限。
 
 静态契约测试和发布门禁自测不能代替真实 MySQL 空库安装。正式发布前必须保存真实执行日志、表清单、约束结果、`mysqlcheck`、备份恢复和三组验收输出。
 

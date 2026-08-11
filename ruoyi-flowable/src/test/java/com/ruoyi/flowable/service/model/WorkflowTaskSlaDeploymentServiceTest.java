@@ -16,7 +16,6 @@ import org.junit.jupiter.api.Test;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfBpmnEventCode;
 import com.ruoyi.flowable.domain.WfBusinessCalendar;
-import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 
 /**
@@ -37,8 +36,7 @@ class WorkflowTaskSlaDeploymentServiceTest
         eventCodeService = mock(WorkflowBpmnEventCodeService.class);
         identityResolver = mock(WorkflowIdentityResolver.class);
         service = new WorkflowTaskSlaDeploymentService(calendarService,
-                eventCodeService, identityResolver,
-                mock(WfTaskSlaMapper.class));
+                eventCodeService, identityResolver);
         when(calendarService.requireEnabled("DEFAULT_CN")).thenReturn(calendar());
         when(eventCodeService.requireEnabled("ESCALATION", "SLA_ESC"))
                 .thenReturn(escalationCode());

@@ -142,12 +142,11 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         where extension_id = #{extensionId}
     </update>
 
-    <select id="countDeploymentSnapshots" resultType="int">
-        select count(*)
-        from wf_deploy_extension_snapshot s
-        inner join wf_bpmn_extension_version v
-          on v.version_id = s.extension_version_id
-        where v.extension_id = #{extensionId}
+    <select id="selectVersionIds" resultType="long">
+        select version_id
+        from wf_bpmn_extension_version
+        where extension_id = #{extensionId}
+        order by version_no
     </select>
 
     <delete id="deleteVersions">

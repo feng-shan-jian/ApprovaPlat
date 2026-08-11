@@ -2,7 +2,6 @@ package com.ruoyi.flowable.service.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
 
 import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
@@ -25,7 +24,6 @@ import org.flowable.bpmn.model.UserTask;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.mapper.WfDeployControlledLoopMapper;
 import com.ruoyi.flowable.service.model.WorkflowControlledLoopFormField.Kind;
 import com.ruoyi.flowable.service.model.WorkflowControlledLoopFormField.NumericKind;
 
@@ -43,8 +41,7 @@ class WorkflowControlledLoopDeploymentServiceTest
     @BeforeEach
     void setUp()
     {
-        service = new WorkflowControlledLoopDeploymentService(
-                mock(WfDeployControlledLoopMapper.class));
+        service = new WorkflowControlledLoopDeploymentService();
     }
 
     /**

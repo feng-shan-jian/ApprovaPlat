@@ -54,6 +54,7 @@ public class WorkflowExtensionRegistryService
 
     private final WorkflowEngineOperations engineOperations;
     private final WfBpmnExtensionMapper extensionMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WorkflowJavaExtensionHandlerRegistry handlerRegistry;
     private final WorkflowHttpConnector httpConnector;
     private final WorkflowSqlConnector sqlConnector;
@@ -64,6 +65,7 @@ public class WorkflowExtensionRegistryService
      * 创建扩展注册表服务。
      * @param engineOperations WorkflowEngineOperations，正式事务和身份边界
      * @param extensionMapper WfBpmnExtensionMapper，扩展目录与版本数据访问层
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署扩展资源引用仓库
      * @param handlerRegistry WorkflowJavaExtensionHandlerRegistry，代码安装处理器注册表
      * @param httpConnector WorkflowHttpConnector，固定 HTTP 实现与配置 Schema
      * @param sqlConnector WorkflowSqlConnector，固定 SQL 实现与配置 Schema
@@ -71,12 +73,14 @@ public class WorkflowExtensionRegistryService
      */
     public WorkflowExtensionRegistryService(WorkflowEngineOperations engineOperations,
             WfBpmnExtensionMapper extensionMapper,
+            WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowJavaExtensionHandlerRegistry handlerRegistry,
             WorkflowHttpConnector httpConnector,
             WorkflowSqlConnector sqlConnector)
     {
         this.engineOperations = engineOperations;
         this.extensionMapper = extensionMapper;
+        this.artifactRepository = artifactRepository;
         this.handlerRegistry = handlerRegistry;
         this.httpConnector = httpConnector;
         this.sqlConnector = sqlConnector;
@@ -330,7 +334,9 @@ public class WorkflowExtensionRegistryService
             {
                 throw new ServiceException("请先停用扩展目录再删除", HttpStatus.CONFLICT);
             }
-            int deploymentSnapshotCount = extensionMapper.countDeploymentSnapshots(extensionId);
+            List<Long> versionIds = extensionMapper.selectVersionIds(extensionId);
+            int deploymentSnapshotCount = artifactRepository
+                    .countExtensionVersionReferences(versionIds);
             if (deploymentSnapshotCount > 0)
             {
                 throw new ServiceException("扩展目录已被部署快照引用，不能删除", HttpStatus.CONFLICT);

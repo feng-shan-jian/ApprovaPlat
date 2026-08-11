@@ -3,6 +3,7 @@ package com.ruoyi.flowable;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RepositoryService;
@@ -11,9 +12,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import com.ruoyi.RuoYiApplication;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import com.ruoyi.flowable.service.model.WorkflowBpmnDocument;
 import com.ruoyi.flowable.service.model.WorkflowBpmnService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowPreparedExtensionDeployment;
 
@@ -45,7 +47,7 @@ class WorkflowBusinessListenerMySqlIT
     private WorkflowExtensionDeploymentService extensionDeploymentService;
 
     @Autowired
-    private WfDeployExtensionSnapshotMapper snapshotMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     /**
      * 通过正式编译、快照持久化和引擎启动验证两类业务监听器真实执行。
@@ -71,8 +73,12 @@ class WorkflowBusinessListenerMySqlIT
 
             deployment = repositoryService.createDeployment().name(processKey)
                     .addBytes(processKey + ".bpmn20.xml", prepared.compiledBpmn()).deploy();
-            extensionDeploymentService.persist(deployment.getId(), prepared);
-            assertThat(snapshotMapper.selectByDeploymentId(deployment.getId())).hasSize(3);
+            artifactRepository.persist(deployment.getId(), new WorkflowDeploymentArtifacts(
+                    List.of(), List.of(), List.of(), List.of(),
+                    extensionDeploymentService.snapshotsForDeployment(
+                            deployment.getId(), prepared),
+                    List.of(), List.of(), List.of()));
+            assertThat(artifactRepository.selectExtensionSnapshots(deployment.getId())).hasSize(3);
 
             var instance = processEngine.getRuntimeService().startProcessInstanceByKey(processKey);
             processInstanceId = instance.getId();
@@ -103,7 +109,7 @@ class WorkflowBusinessListenerMySqlIT
         {
             if (deployment != null)
             {
-                snapshotMapper.deleteByDeploymentId(deployment.getId());
+                artifactRepository.delete(deployment.getId());
                 if (repositoryService.createDeploymentQuery()
                         .deploymentId(deployment.getId()).count() == 1L)
                 {

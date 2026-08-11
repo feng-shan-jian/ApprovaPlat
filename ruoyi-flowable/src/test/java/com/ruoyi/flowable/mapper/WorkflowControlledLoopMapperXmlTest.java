@@ -10,23 +10,6 @@ import org.junit.jupiter.api.Test;
 class WorkflowControlledLoopMapperXmlTest
 {
     /**
-     * 验证受控循环部署快照 Mapper 只通过部署主键查询和删除正式快照。
-     * @return void，部署快照读写或删除契约不完整时测试失败
-     * @throws Exception 读取 Mapper XML 失败
-     */
-    @Test
-    void definesControlledLoopDeploymentSnapshotContract() throws Exception
-    {
-        String xml = readMapper("WfDeployControlledLoopMapper.xml").toLowerCase();
-
-        assertThat(xml).contains(
-                "insert into wf_deploy_controlled_loop",
-                "where deploy_id = #{deployid} and process_key = #{processkey}",
-                "and activity_id = #{activityid}",
-                "delete from wf_deploy_controlled_loop where deploy_id = #{deployid}");
-    }
-
-    /**
      * 验证循环运行审计 Mapper 支持幂等插入、详情查询和历史实例集合清理。
      * @return void，运行审计查询或清理契约不完整时测试失败
      * @throws Exception 读取 Mapper XML 失败

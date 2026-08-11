@@ -61,7 +61,7 @@ import com.ruoyi.system.service.integration.SysSmsService;
 import com.ruoyi.system.service.integration.SysSmsService.SmsDeliveryResult;
 
 /**
- * 普通审批生命周期通知领域服务，负责策略解析、事务 outbox、站内信、SMTP、短信、偏好和人工催办。
+ * 工作流统一通知领域服务，负责普通审批策略投递以及 SLA、BPMN 事件同步站内通知。
  */
 @Service
 public class WorkflowNotificationService
@@ -84,6 +84,7 @@ public class WorkflowNotificationService
     private static final List<String> CHANNEL_ORDER = List.of("INBOX", "EMAIL", "SMS");
     private static final Set<String> SCOPES = Set.of("DEFAULT", "PROCESS", "NODE");
     private static final Set<String> STATUSES = Set.of("ENABLED", "DISABLED");
+    private static final Set<String> SYNCHRONOUS_SOURCE_TYPES = Set.of("SLA", "BPMN_EVENT");
     private static final Pattern TEMPLATE_VARIABLE = Pattern.compile("\\{\\{([A-Za-z][A-Za-z0-9]*)}}" );
     private static final int MAX_EXECUTIONS_PER_URGE = 10_000;
     private static final int MAX_TASKS_PER_URGE = 2_000;
@@ -702,6 +703,110 @@ public class WorkflowNotificationService
     }
 
     /**
+     * 在调用方当前业务事务中同步创建统一 outbox、投递审计和站内通知。
+     *
+     * @param notification SynchronousNotification，已经冻结来源、接收人和业务路由的通知事实
+     * @return Long，首次创建或幂等重放对应的统一通知主键；接收人不存在或已停用时返回 null
+     */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public Long publishSynchronousInbox(SynchronousNotification notification)
+    {
+        requireWriteTransaction();
+        SynchronousNotification fact = validateSynchronousNotification(notification);
+        long recipientUserId = Long.parseLong(fact.recipientUserId());
+        String idempotency = sha256(fact.sourceType(), fact.sourceId(), fact.eventType(),
+                fact.recipientUserId(), "INBOX");
+        boolean newlyInserted;
+        try
+        {
+            int inserted = jdbcTemplate.update("insert into wf_notification_outbox " +
+                    "(idempotency_key,source_type,source_id,event_type,channel,recipient_user_id," +
+                    "process_definition_key,process_instance_id,task_id,task_definition_key," +
+                    "actor_user_id,title,content,sms_template_id,route_path,status,attempt_count," +
+                    "max_attempts,next_attempt_at,revision,create_time) " +
+                    "select ?,?,?,?,'INBOX',?,?,?,?,?,null,?,?,null,?,'PENDING',0,1," +
+                    "current_timestamp(3),0,current_timestamp(3) from sys_user u " +
+                    "where u.user_id=? and u.status='0' and u.del_flag='0'",
+                    idempotency, fact.sourceType(), fact.sourceId(), fact.eventType(),
+                    recipientUserId, fact.processDefinitionKey(), fact.processInstanceId(),
+                    fact.taskId(), fact.taskDefinitionKey(), fact.title(), fact.content(),
+                    fact.routePath(), recipientUserId);
+            if (inserted < 0 || inserted > 1)
+            {
+                throw new ServiceException("同步通知 outbox 写入结果异常", HttpStatus.ERROR);
+            }
+            newlyInserted = inserted == 1;
+        }
+        catch (DuplicateKeyException exception)
+        {
+            // 并发或业务重放必须复用同一来源事实，后续会锁行并逐字段核对。
+            newlyInserted = false;
+        }
+
+        // INSERT IGNORE 已按唯一幂等键串行化首次写入；重复事务可能持有唯一索引共享锁，
+        // 此处若再升级为 FOR UPDATE 会形成锁升级死锁，一致性读即可核对已提交的不可变事实。
+        List<SynchronousOutboxFact> outboxes = jdbcTemplate.query(
+                "select outbox_id,idempotency_key,source_type,source_id,event_type,channel," +
+                "recipient_user_id,process_definition_key,process_instance_id,task_id," +
+                "task_definition_key,title,content,route_path,status " +
+                "from wf_notification_outbox where idempotency_key=?",
+                (result, rowNum) -> new SynchronousOutboxFact(result.getLong("outbox_id"),
+                        result.getString("idempotency_key"), result.getString("source_type"),
+                        result.getString("source_id"), result.getString("event_type"),
+                        result.getString("channel"), result.getLong("recipient_user_id"),
+                        result.getString("process_definition_key"),
+                        result.getString("process_instance_id"), result.getString("task_id"),
+                        result.getString("task_definition_key"), result.getString("title"),
+                        result.getString("content"), result.getString("route_path"),
+                        result.getString("status")), idempotency);
+        if (outboxes.isEmpty())
+        {
+            if (newlyInserted)
+            {
+                throw new ServiceException("同步通知 outbox 写入结果不一致", HttpStatus.ERROR);
+            }
+            // 统一通知模型只为有效且启用的用户创建通知事实，避免业务来源与收件箱状态分裂。
+            return null;
+        }
+        if (outboxes.size() != 1 || !outboxes.get(0).matches(idempotency, fact))
+        {
+            throw new ServiceException("同步通知 outbox 幂等事实不一致", HttpStatus.ERROR);
+        }
+        SynchronousOutboxFact outbox = outboxes.get(0);
+        if (!newlyInserted)
+        {
+            if (!"PROCESSED".equals(outbox.status()))
+            {
+                throw new ServiceException("同步通知 outbox 状态不完整", HttpStatus.ERROR);
+            }
+            return requireSynchronousInbox(outbox);
+        }
+
+        audit(outbox.outboxId(), "ENQUEUE", 0, null, "PENDING", "SYSTEM",
+                fact.sourceType(), null, "业务事务内登记统一站内通知");
+        int inboxInserted = jdbcTemplate.update("insert into wf_notification_inbox " +
+                "(outbox_id,recipient_user_id,event_type,title,content,process_instance_id," +
+                "task_id,route_path,read_status,create_time) " +
+                "select outbox_id,recipient_user_id,event_type,title,content,process_instance_id," +
+                "task_id,route_path,'UNREAD',current_timestamp(3) " +
+                "from wf_notification_outbox where outbox_id=?", outbox.outboxId());
+        if (inboxInserted != 1)
+        {
+            throw new ServiceException("同步站内通知保存失败", HttpStatus.ERROR);
+        }
+        int completed = jdbcTemplate.update("update wf_notification_outbox set status='PROCESSED'," +
+                "processed_time=current_timestamp(3),revision=revision+1 " +
+                "where outbox_id=? and status='PENDING' and revision=0", outbox.outboxId());
+        if (completed != 1)
+        {
+            throw new ServiceException("同步通知 outbox 状态提交失败", HttpStatus.ERROR);
+        }
+        audit(outbox.outboxId(), "DELIVER", 0, "PENDING", "PROCESSED", "SYSTEM",
+                fact.sourceType(), null, "业务事务内同步持久化站内通知");
+        return requireSynchronousInbox(outbox);
+    }
+
+    /**
      * 在独立短事务中领取一条到期或租约过期的 outbox。
      * @param workerId String，当前节点 worker 标识
      * @return OutboxRow，领取结果；没有到期记录时为 null
@@ -946,6 +1051,7 @@ public class WorkflowNotificationService
      */
     private EnqueueResult enqueueDetailed(EventContext context, String sourceEventKey)
     {
+        String sourceId = normalizedSourceId(sourceEventKey);
         Policy policy = resolvePolicy(context);
         if (policy == null) return EnqueueResult.empty();
         Set<String> recipients = resolveRecipients(policy, context);
@@ -968,20 +1074,20 @@ public class WorkflowNotificationService
                 String preferenceColumn = "INBOX".equals(channel) ? "inbox_enabled"
                         : ("EMAIL".equals(channel) ? "email_enabled" : "sms_enabled");
                 int preferenceDefault = "SMS".equals(channel) ? 0 : 1;
-                String idempotency = sha256(sourceEventKey, context.eventType(), recipient, channel);
+                String idempotency = sha256(sourceId, context.eventType(), recipient, channel);
                 boolean newlyInserted;
                 try
                 {
                     int mutationCount = jdbcTemplate.update("insert into wf_notification_outbox " +
-                            "(idempotency_key,event_type,channel,recipient_user_id,process_definition_key," +
+                            "(idempotency_key,source_type,source_id,event_type,channel,recipient_user_id,process_definition_key," +
                             "process_instance_id,task_id,task_definition_key,actor_user_id,title,content," +
                             "sms_template_id,route_path," +
                             "status,attempt_count,max_attempts,next_attempt_at,revision,create_time) " +
-                            "select ?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',0,?,current_timestamp(3),0,current_timestamp(3) " +
+                            "select ?,'APPROVAL',?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',0,?,current_timestamp(3),0,current_timestamp(3) " +
                             "from sys_user u left join wf_notification_preference p on p.user_id=u.user_id " +
                             "where u.user_id=? and u.status='0' and u.del_flag='0' " +
                             "and coalesce(p." + preferenceColumn + "," + preferenceDefault + ")=1",
-                            idempotency, context.eventType(), channel, Long.valueOf(recipient),
+                            idempotency, sourceId, context.eventType(), channel, Long.valueOf(recipient),
                             context.processDefinitionKey(), context.processInstanceId(), context.taskId(),
                             context.taskDefinitionKey(), context.actorUserId(), title, content,
                             policy.smsTemplateId(), context.routePath(), policy.maxAttempts(), Long.valueOf(recipient));
@@ -997,11 +1103,12 @@ public class WorkflowNotificationService
                     newlyInserted = false;
                 }
                 List<OutboxFact> facts = jdbcTemplate.query(
-                        "select outbox_id,idempotency_key,event_type,channel,recipient_user_id,process_definition_key," +
+                        "select outbox_id,idempotency_key,source_type,source_id,event_type,channel,recipient_user_id,process_definition_key," +
                         "process_instance_id,task_id,task_definition_key,route_path " +
                         "from wf_notification_outbox where idempotency_key=? for share",
                         (result, rowNum) -> new OutboxFact(result.getLong("outbox_id"),
                                 result.getString("idempotency_key"),
+                                result.getString("source_type"), result.getString("source_id"),
                                 result.getString("event_type"), result.getString("channel"),
                                 result.getLong("recipient_user_id"),
                                 result.getString("process_definition_key"),
@@ -1018,7 +1125,7 @@ public class WorkflowNotificationService
                     continue;
                 }
                 if (facts.size() != 1 || !facts.get(0).matches(
-                        idempotency, context, channel, recipient))
+                        idempotency, sourceId, context, channel, recipient))
                 {
                     // 幂等键只能重放完全相同的业务事实；碰撞或旧数据漂移必须回滚当前业务动作。
                     throw new ServiceException("通知 outbox 幂等事实不一致", HttpStatus.ERROR);
@@ -1826,6 +1933,89 @@ public class WorkflowNotificationService
     }
 
     /**
+     * 规范化统一通知的稳定来源标识，并限制为可写入 ascii_bin 字段的可见 ASCII。
+     *
+     * @param value String，普通审批事件键或 SLA、BPMN 事件审计主键
+     * @return String，长度不超过 191 且不包含空白或控制字符的来源标识
+     */
+    private String normalizedSourceId(String value)
+    {
+        String sourceId = normalized(value, 191, "通知来源标识不合法");
+        if (sourceId.chars().anyMatch(character -> character < 0x21 || character > 0x7e))
+        {
+            throw invalid("通知来源标识不合法");
+        }
+        return sourceId;
+    }
+
+    /**
+     * 校验并冻结 SLA 或 BPMN 事件同步通知的正式字段。
+     *
+     * @param notification SynchronousNotification，调用方提供的同步通知事实
+     * @return SynchronousNotification，可直接持久化且字段长度、枚举和用户主键均合法的通知事实
+     */
+    private SynchronousNotification validateSynchronousNotification(
+            SynchronousNotification notification)
+    {
+        if (notification == null)
+        {
+            throw invalid("同步通知事实不能为空");
+        }
+        String sourceType = upper(notification.sourceType());
+        if (!SYNCHRONOUS_SOURCE_TYPES.contains(sourceType))
+        {
+            throw invalid("同步通知来源类型不合法");
+        }
+        String eventType = upper(notification.eventType());
+        if (!eventType.matches("[A-Z][A-Z0-9_]{1,39}"))
+        {
+            throw invalid("同步通知事件类型不合法");
+        }
+        String recipientUserId = normalized(notification.recipientUserId(), 19,
+                "同步通知接收人不合法");
+        if (!recipientUserId.matches("[1-9][0-9]{0,18}"))
+        {
+            throw invalid("同步通知接收人不合法");
+        }
+        String taskId = StringUtils.hasText(notification.taskId())
+                ? normalized(notification.taskId(), 64, "同步通知任务主键不合法") : null;
+        String taskDefinitionKey = StringUtils.hasText(notification.taskDefinitionKey())
+                ? normalized(notification.taskDefinitionKey(), 255, "同步通知任务节点不合法") : null;
+        return new SynchronousNotification(sourceType,
+                normalizedSourceId(notification.sourceId()), eventType, recipientUserId,
+                normalized(notification.processDefinitionKey(), 255, "同步通知流程定义标识不合法"),
+                normalized(notification.processInstanceId(), 64, "同步通知流程实例主键不合法"),
+                taskId, taskDefinitionKey,
+                normalized(notification.title(), MAX_TITLE_LENGTH, "同步通知标题不合法"),
+                normalized(notification.content(), MAX_CONTENT_LENGTH, "同步通知正文不合法"),
+                normalized(notification.routePath(), 500, "同步通知业务路由不合法"));
+    }
+
+    /**
+     * 读取并核对同步 outbox 对应的唯一站内通知，防止幂等重放接受漂移数据。
+     *
+     * @param outbox SynchronousOutboxFact，已经锁定并核对的同步 outbox 事实
+     * @return Long，字段与 outbox 完全一致的统一通知主键
+     */
+    private Long requireSynchronousInbox(SynchronousOutboxFact outbox)
+    {
+        List<SynchronousInboxFact> inboxes = jdbcTemplate.query(
+                "select notification_id,recipient_user_id,event_type,title,content," +
+                "process_instance_id,task_id,route_path from wf_notification_inbox " +
+                "where outbox_id=? for share",
+                (result, rowNum) -> new SynchronousInboxFact(result.getLong("notification_id"),
+                        result.getLong("recipient_user_id"), result.getString("event_type"),
+                        result.getString("title"), result.getString("content"),
+                        result.getString("process_instance_id"), result.getString("task_id"),
+                        result.getString("route_path")), outbox.outboxId());
+        if (inboxes.size() != 1 || !inboxes.get(0).matches(outbox))
+        {
+            throw new ServiceException("同步站内通知事实与 outbox 不一致", HttpStatus.ERROR);
+        }
+        return inboxes.get(0).notificationId();
+    }
+
+    /**
      * 使用固定 Locale 将可空枚举文本规范为大写。
      *
      * @param value String，可空；客户端或 Flowable 提供的枚举文本
@@ -1906,6 +2096,26 @@ public class WorkflowNotificationService
             int deliveryCycle, int attemptCount, int totalAttemptCount,
             int maxAttempts, int revision) {}
 
+    /**
+     * SLA 或 BPMN 事件在当前业务事务内同步投递的统一通知事实。
+     *
+     * @param sourceType String，SLA 或 BPMN_EVENT
+     * @param sourceId String，关联 SLA 或 BPMN 事件审计主键
+     * @param eventType String，REMINDER、ESCALATE、ERROR 或 ESCALATION
+     * @param recipientUserId String，接收人正式用户主键
+     * @param processDefinitionKey String，流程定义 key
+     * @param processInstanceId String，流程实例主键
+     * @param taskId String，可空关联任务主键
+     * @param taskDefinitionKey String，可空任务节点 key
+     * @param title String，通知标题
+     * @param content String，脱敏通知正文
+     * @param routePath String，站内安全相对路由
+     */
+    public record SynchronousNotification(String sourceType, String sourceId,
+            String eventType, String recipientUserId, String processDefinitionKey,
+            String processInstanceId, String taskId, String taskDefinitionKey,
+            String title, String content, String routePath) {}
+
     /** SMTP 投递结果，不携带异常栈、主机、账号或邮箱地址。 */
     public record DeliveryOutcome(boolean success, String errorCode, String summary,
             boolean permanent)
@@ -1958,22 +2168,26 @@ public class WorkflowNotificationService
             String rootProcessInstanceId, String processDefinitionId, int suspensionState) {}
     private record LockedTask(String taskId, String processDefinitionId, String processInstanceId,
             String taskDefinitionKey, String taskName, String assignee, int suspensionState) {}
-    private record OutboxFact(long outboxId, String idempotencyKey, String eventType, String channel,
+    private record OutboxFact(long outboxId, String idempotencyKey, String sourceType,
+            String sourceId, String eventType, String channel,
             long recipientUserId, String processDefinitionKey, String processInstanceId,
             String taskId, String taskDefinitionKey, String routePath)
     {
         /**
          * 核对幂等键关联 outbox 的稳定业务身份。
          * @param idempotency String，本次计算的 SHA-256 幂等键
+         * @param expectedSourceId String，当前普通审批业务事件来源键
          * @param context EventContext，当前业务事件冻结上下文
          * @param expectedChannel String，当前投递通道
          * @param recipient String，当前接收用户主键
          * @return boolean，幂等来源对应的事件、接收人和业务路由全部一致时为 true
          */
-        private boolean matches(String idempotency, EventContext context, String expectedChannel,
-                String recipient)
+        private boolean matches(String idempotency, String expectedSourceId,
+                EventContext context, String expectedChannel, String recipient)
         {
             return Objects.equals(idempotencyKey, idempotency)
+                    && Objects.equals(sourceType, "APPROVAL")
+                    && Objects.equals(sourceId, expectedSourceId)
                     && Objects.equals(eventType, context.eventType())
                     && Objects.equals(channel, expectedChannel)
                     && recipientUserId == Long.parseLong(recipient)
@@ -1982,6 +2196,62 @@ public class WorkflowNotificationService
                     && Objects.equals(taskId, context.taskId())
                     && Objects.equals(taskDefinitionKey, context.taskDefinitionKey())
                     && Objects.equals(routePath, context.routePath());
+        }
+    }
+
+    /** SLA 与 BPMN 事件同步写入时锁定的统一 outbox 不可变事实。 */
+    private record SynchronousOutboxFact(long outboxId, String idempotencyKey,
+            String sourceType, String sourceId, String eventType, String channel,
+            long recipientUserId, String processDefinitionKey, String processInstanceId,
+            String taskId, String taskDefinitionKey, String title, String content,
+            String routePath, String status)
+    {
+        /**
+         * 核对同步通知重放关联的来源、接收人和业务投影。
+         *
+         * @param expectedIdempotency String，本次计算的 SHA-256 幂等键
+         * @param notification SynchronousNotification，本次调用冻结的通知事实
+         * @return boolean，所有不可变业务字段完全一致时为 true
+         */
+        private boolean matches(String expectedIdempotency,
+                SynchronousNotification notification)
+        {
+            return Objects.equals(idempotencyKey, expectedIdempotency)
+                    && Objects.equals(sourceType, notification.sourceType())
+                    && Objects.equals(sourceId, notification.sourceId())
+                    && Objects.equals(eventType, notification.eventType())
+                    && Objects.equals(channel, "INBOX")
+                    && recipientUserId == Long.parseLong(notification.recipientUserId())
+                    && Objects.equals(processDefinitionKey, notification.processDefinitionKey())
+                    && Objects.equals(processInstanceId, notification.processInstanceId())
+                    && Objects.equals(taskId, notification.taskId())
+                    && Objects.equals(taskDefinitionKey, notification.taskDefinitionKey())
+                    && Objects.equals(title, notification.title())
+                    && Objects.equals(content, notification.content())
+                    && Objects.equals(routePath, notification.routePath());
+        }
+    }
+
+    /** 同步 outbox 对应的统一 inbox 不可变投影。 */
+    private record SynchronousInboxFact(long notificationId, long recipientUserId,
+            String eventType, String title, String content, String processInstanceId,
+            String taskId, String routePath)
+    {
+        /**
+         * 核对同步站内通知与来源 outbox 的业务字段。
+         *
+         * @param outbox SynchronousOutboxFact，已经确认的来源 outbox
+         * @return boolean，站内投影与 outbox 完全一致时为 true
+         */
+        private boolean matches(SynchronousOutboxFact outbox)
+        {
+            return recipientUserId == outbox.recipientUserId()
+                    && Objects.equals(eventType, outbox.eventType())
+                    && Objects.equals(title, outbox.title())
+                    && Objects.equals(content, outbox.content())
+                    && Objects.equals(processInstanceId, outbox.processInstanceId())
+                    && Objects.equals(taskId, outbox.taskId())
+                    && Objects.equals(routePath, outbox.routePath());
         }
     }
     private record InboxFact(long recipientUserId, String eventType, String title, String content,

@@ -36,7 +36,7 @@ processStartService.startProcessByDefKey(
 2. 通过 `WorkflowEngineOperations.writeAsCurrentUser(...)` 开启事务，重新核验当前正式用户并设置 Flowable 认证身份。
 3. 从 `RepositoryService` 查询定义并取得服务端真实 `deploymentId`。
 4. 对真实 `deploymentId` 的 `ACT_RE_DEPLOYMENT` 行执行 `SELECT ... FOR UPDATE`，与受控部署删除形成同一线性化顺序。
-5. 复用 `WorkflowProcessQueryService.getProcessForm(...)` 校验同租户最新版本、激活状态、starter 用户/ROLE/DEPT 身份，并精确读取 BPMN 开始节点的 `wf_deploy_form.content`。
+5. 复用 `WorkflowProcessQueryService.getProcessForm(...)` 校验同租户最新版本、激活状态、starter 用户/ROLE/DEPT 身份，并精确读取 BPMN 开始节点在 `approvaplat/forms-v1.json` 中的 `content`。
 6. 使用 `WorkflowStartVariableValidator` 按部署时固化的表单 schema 校验并深度复制客户端变量。
 7. 对上传字段锁定当前用户的 `TEMP` 附件，将 UUID 列表替换为六项安全元数据投影。
 8. 在真正写入前再次按定义 ID 查询激活状态，阻止校验期间被挂起或删除的定义继续发起。
@@ -57,7 +57,7 @@ processStartService.startProcessByDefKey(
 - 无 starter identity link 的定义视为公开可发起。
 - 有 starter 限制时，必须匹配当前用户 ID 或当前有效的 `ROLE<id>` / `DEPT<id>` 候选组。
 - deployment 只能来自所选定义，客户端不能提交或替换。
-- 表单只能来自 `wf_deploy_form` 的开始节点不可变快照，禁止回连当前 `wf_form`，从而保证旧版本实例使用部署时 schema。
+- 表单只能来自 Flowable 业务制品 `approvaplat/forms-v1.json` 的开始节点不可变快照，禁止回连当前 `wf_form`，从而保证旧版本实例使用部署时 schema。
 
 ## 变量约束
 

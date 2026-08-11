@@ -50,7 +50,6 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
-import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.dto.WorkflowDeploymentQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowDeploymentView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
@@ -60,11 +59,7 @@ import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
-import com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
-import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 
 class WorkflowDeploymentServiceTest
@@ -77,13 +72,7 @@ class WorkflowDeploymentServiceTest
 
     private HistoryService historyService;
 
-    private WfDeployFormMapper deployFormMapper;
-
-    private WfDeployExtensionSnapshotMapper deployExtensionSnapshotMapper;
-
-    private WfDeployDmnSnapshotMapper deployDmnSnapshotMapper;
-
-    private WfTaskSlaMapper taskSlaMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     private WfProcessDraftMapper processDraftMapper;
 
@@ -115,10 +104,7 @@ class WorkflowDeploymentServiceTest
         repositoryService = mock(RepositoryService.class);
         runtimeService = mock(RuntimeService.class);
         historyService = mock(HistoryService.class);
-        deployFormMapper = mock(WfDeployFormMapper.class);
-        deployExtensionSnapshotMapper = mock(WfDeployExtensionSnapshotMapper.class);
-        deployDmnSnapshotMapper = mock(WfDeployDmnSnapshotMapper.class);
-        taskSlaMapper = mock(WfTaskSlaMapper.class);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         processDraftMapper = mock(WfProcessDraftMapper.class);
         processDefinitionLockMapper = mock(WorkflowProcessDefinitionLockMapper.class);
         dmnDecisionService = mock(WorkflowDmnDecisionService.class);
@@ -181,7 +167,7 @@ class WorkflowDeploymentServiceTest
         Deployment deployment = stubDeployment(DEPLOYMENT_ID, "finance-fallback", deploymentTime);
         WfDeployForm firstSnapshot = snapshot(101L, "报销申请单");
         WfDeployForm secondSnapshot = snapshot(102L, "部门审批单");
-        when(deployFormMapper.selectByDeploymentId(DEPLOYMENT_ID))
+        when(artifactRepository.selectForms(DEPLOYMENT_ID))
                 .thenReturn(List.of(firstSnapshot, secondSnapshot));
 
         WorkflowPageResult<WorkflowDeploymentView> result = service.listLatest(filter, 3, 10);
@@ -219,7 +205,7 @@ class WorkflowDeploymentServiceTest
         when(query.listPage(15, 5)).thenReturn(List.of(definition));
         Date deploymentTime = new Date(1_753_564_800_000L);
         stubDeployment(DEPLOYMENT_ID, "ignored-category", deploymentTime);
-        when(deployFormMapper.selectByDeploymentId(DEPLOYMENT_ID)).thenReturn(null);
+        when(artifactRepository.selectForms(DEPLOYMENT_ID)).thenReturn(List.of());
 
         WorkflowPageResult<WorkflowDeploymentView> result =
                 service.publishList(" expense ", 4, 5);
@@ -253,7 +239,7 @@ class WorkflowDeploymentServiceTest
         assertThat(result.total()).isZero();
         assertThat(result.rows()).isEmpty();
         verify(query, never()).listPage(0, 20);
-        verifyNoInteractions(deployFormMapper, deployExtensionSnapshotMapper);
+        verifyNoInteractions(artifactRepository);
     }
 
     /**
@@ -270,7 +256,7 @@ class WorkflowDeploymentServiceTest
                 "definition-1", (WorkflowDefinitionState) null),
                 HttpStatus.BAD_REQUEST, "流程定义状态不能为空");
 
-        verifyNoInteractions(repositoryService, runtimeService, historyService, deployFormMapper);
+        verifyNoInteractions(repositoryService, runtimeService, historyService, artifactRepository);
     }
 
     /**
@@ -377,7 +363,7 @@ class WorkflowDeploymentServiceTest
 
         verify(repositoryService, never()).deleteDeployment(anyString());
         verify(repositoryService, never()).deleteDeployment(anyString(), anyBoolean());
-        verifyNoInteractions(deployFormMapper);
+        verifyNoInteractions(artifactRepository);
     }
 
     /**
@@ -397,8 +383,7 @@ class WorkflowDeploymentServiceTest
 
         verify(processDefinitionLockMapper, never())
                 .selectHistoricInstanceReferenceForUpdate(anyString());
-        verifyNoInteractions(runtimeService, historyService, deployFormMapper,
-                deployExtensionSnapshotMapper);
+        verifyNoInteractions(runtimeService, historyService, artifactRepository);
         verify(repositoryService, never()).createModelQuery();
         verify(repositoryService, never()).deleteDeployment(anyString());
         verify(repositoryService, never()).deleteDeployment(anyString(), anyBoolean());
@@ -419,8 +404,7 @@ class WorkflowDeploymentServiceTest
         assertBusinessError(() -> service.deleteDeployments(List.of(DEPLOYMENT_ID)),
                 HttpStatus.CONFLICT, "部署仍有流程历史记录");
 
-        verifyNoInteractions(runtimeService, historyService, deployFormMapper,
-                deployExtensionSnapshotMapper);
+        verifyNoInteractions(runtimeService, historyService, artifactRepository);
         verify(repositoryService, never()).createModelQuery();
         verify(repositoryService, never()).deleteDeployment(anyString());
         verify(repositoryService, never()).deleteDeployment(anyString(), anyBoolean());
@@ -446,8 +430,7 @@ class WorkflowDeploymentServiceTest
                 .selectDeploymentIdForUpdate(DEPLOYMENT_ID);
         guardOrder.verify(processDraftMapper).selectActiveReferenceForUpdate(DEPLOYMENT_ID);
         verifyNoMoreInteractions(processDraftMapper);
-        verifyNoInteractions(runtimeService, historyService, deployFormMapper,
-                deployExtensionSnapshotMapper, deployDmnSnapshotMapper, taskSlaMapper);
+        verifyNoInteractions(runtimeService, historyService, artifactRepository);
         verify(repositoryService, never()).createModelQuery();
         verify(repositoryService, never()).saveModel(any(Model.class));
         verify(repositoryService, never()).deleteDeployment(anyString());
@@ -470,8 +453,7 @@ class WorkflowDeploymentServiceTest
 
         verify(processDefinitionLockMapper).selectDeploymentIdForUpdate(DEPLOYMENT_ID);
         verifyNoInteractions(repositoryService, runtimeService, historyService,
-                processDraftMapper, deployFormMapper, deployExtensionSnapshotMapper,
-                deployDmnSnapshotMapper, taskSlaMapper);
+                processDraftMapper, artifactRepository);
     }
 
     /**
@@ -497,8 +479,7 @@ class WorkflowDeploymentServiceTest
         lockOrder.verify(processDefinitionLockMapper)
                 .selectDeploymentIdForUpdate(secondDeploymentId);
         verifyNoInteractions(repositoryService, runtimeService, historyService,
-                processDraftMapper, deployFormMapper, deployExtensionSnapshotMapper,
-                deployDmnSnapshotMapper, taskSlaMapper);
+                processDraftMapper, artifactRepository);
     }
 
     /**
@@ -522,10 +503,7 @@ class WorkflowDeploymentServiceTest
 
         verify(processDraftMapper, times(2))
                 .selectActiveReferenceForUpdate(DEPLOYMENT_ID);
-        verify(deployFormMapper, never()).deleteByDeploymentId(anyString());
-        verify(deployExtensionSnapshotMapper, never()).deleteByDeploymentId(anyString());
-        verify(deployDmnSnapshotMapper, never()).deleteByDeploymentId(anyString());
-        verify(taskSlaMapper, never()).deleteDeploymentSnapshotsByDeploymentId(anyString());
+        verify(artifactRepository, never()).delete(anyString());
         verify(linkedModel, never()).setDeploymentId(null);
         verify(repositoryService, never()).saveModel(any(Model.class));
         verify(repositoryService, never()).deleteDeployment(anyString());
@@ -552,10 +530,7 @@ class WorkflowDeploymentServiceTest
 
         verify(processDefinitionLockMapper, times(2))
                 .selectHistoricInstanceReferenceForUpdate(DEPLOYMENT_ID);
-        verify(deployFormMapper, never()).deleteByDeploymentId(anyString());
-        verify(deployExtensionSnapshotMapper, never()).deleteByDeploymentId(anyString());
-        verify(deployDmnSnapshotMapper, never()).deleteByDeploymentId(anyString());
-        verify(taskSlaMapper, never()).deleteDeploymentSnapshotsByDeploymentId(anyString());
+        verify(artifactRepository, never()).delete(anyString());
         verify(linkedModel, never()).setDeploymentId(null);
         verify(repositoryService, never()).saveModel(any(Model.class));
         verify(repositoryService, never()).deleteDeployment(anyString());
@@ -563,7 +538,7 @@ class WorkflowDeploymentServiceTest
     }
 
     /**
-     * 验证安全删除会二次检查实例、先按精确行数删快照、清空模型关联且绝不级联。
+     * 验证安全删除会二次检查实例、先删除统一资源子部署、清空模型关联且绝不级联主部署。
      *
      * @return 无返回值；断言失败时测试失败
      */
@@ -572,24 +547,12 @@ class WorkflowDeploymentServiceTest
     {
         stubDeployment(DEPLOYMENT_ID, "finance", new Date());
         stubNoInstanceReferences(DEPLOYMENT_ID);
-        WfDeployForm firstSnapshot = snapshot(101L, "报销申请单");
-        WfDeployForm secondSnapshot = snapshot(102L, "部门审批单");
-        when(deployFormMapper.selectByDeploymentId(DEPLOYMENT_ID))
-                .thenReturn(List.of(firstSnapshot, secondSnapshot));
-        when(deployFormMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(2);
-        WfDeployExtensionSnapshot extensionSnapshot = new WfDeployExtensionSnapshot();
-        extensionSnapshot.setSnapshotId(201L);
-        when(deployExtensionSnapshotMapper.selectByDeploymentId(DEPLOYMENT_ID))
-                .thenReturn(List.of(extensionSnapshot));
-        when(deployExtensionSnapshotMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(1);
         WfDeployDmnSnapshot dmnSnapshot = new WfDeployDmnSnapshot();
         dmnSnapshot.setSnapshotId(301L);
         dmnSnapshot.setFrozenDeploymentId("dmn-frozen-1");
-        when(deployDmnSnapshotMapper.selectByDeploymentId(DEPLOYMENT_ID))
+        when(artifactRepository.selectDmnSnapshots(DEPLOYMENT_ID))
                 .thenReturn(List.of(dmnSnapshot));
-        when(deployDmnSnapshotMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(1);
-        when(taskSlaMapper.countDeploymentSnapshotsByDeploymentId(DEPLOYMENT_ID)).thenReturn(2);
-        when(taskSlaMapper.deleteDeploymentSnapshotsByDeploymentId(DEPLOYMENT_ID)).thenReturn(2);
+        when(artifactRepository.delete(DEPLOYMENT_ID)).thenReturn(1);
         Model linkedModel = mock(Model.class);
         stubLinkedModels(DEPLOYMENT_ID, List.of(linkedModel));
 
@@ -601,24 +564,16 @@ class WorkflowDeploymentServiceTest
                 .selectHistoricInstanceReferenceForUpdate(DEPLOYMENT_ID);
         verify(processDraftMapper, times(2))
                 .selectActiveReferenceForUpdate(DEPLOYMENT_ID);
-        verify(deployFormMapper).deleteByDeploymentId(DEPLOYMENT_ID);
-        verify(deployExtensionSnapshotMapper).deleteByDeploymentId(DEPLOYMENT_ID);
-        verify(deployDmnSnapshotMapper).deleteByDeploymentId(DEPLOYMENT_ID);
-        verify(taskSlaMapper).deleteDeploymentSnapshotsByDeploymentId(DEPLOYMENT_ID);
+        verify(artifactRepository).delete(DEPLOYMENT_ID);
         verify(linkedModel).setDeploymentId(null);
         verify(repositoryService).saveModel(linkedModel);
         verify(repositoryService).deleteDeployment(DEPLOYMENT_ID);
         verify(dmnDecisionService).deleteFrozenDeployments(List.of(dmnSnapshot));
         verify(repositoryService, never()).deleteDeployment(anyString(), anyBoolean());
 
-        InOrder deletionOrder = inOrder(deployFormMapper, deployExtensionSnapshotMapper,
-                deployDmnSnapshotMapper, taskSlaMapper, linkedModel,
+        InOrder deletionOrder = inOrder(artifactRepository, linkedModel,
                 repositoryService, dmnDecisionService);
-        deletionOrder.verify(deployFormMapper).deleteByDeploymentId(DEPLOYMENT_ID);
-        deletionOrder.verify(deployExtensionSnapshotMapper).deleteByDeploymentId(DEPLOYMENT_ID);
-        deletionOrder.verify(deployDmnSnapshotMapper).deleteByDeploymentId(DEPLOYMENT_ID);
-        deletionOrder.verify(taskSlaMapper)
-                .deleteDeploymentSnapshotsByDeploymentId(DEPLOYMENT_ID);
+        deletionOrder.verify(artifactRepository).delete(DEPLOYMENT_ID);
         deletionOrder.verify(linkedModel).setDeploymentId(null);
         deletionOrder.verify(repositoryService).saveModel(linkedModel);
         deletionOrder.verify(repositoryService).deleteDeployment(DEPLOYMENT_ID);
@@ -643,12 +598,8 @@ class WorkflowDeploymentServiceTest
 
         stubDeployment(DEPLOYMENT_ID, "finance", new Date());
         stubNoInstanceReferences(DEPLOYMENT_ID);
-        WfDeployForm formSnapshot = snapshot(101L, "报销申请单");
-        when(deployFormMapper.selectByDeploymentId(DEPLOYMENT_ID))
-                .thenReturn(List.of(formSnapshot));
-        when(deployFormMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(1);
-        when(taskSlaMapper.countDeploymentSnapshotsByDeploymentId(DEPLOYMENT_ID)).thenReturn(1);
-        when(taskSlaMapper.deleteDeploymentSnapshotsByDeploymentId(DEPLOYMENT_ID)).thenReturn(1);
+        when(artifactRepository.selectDmnSnapshots(DEPLOYMENT_ID)).thenReturn(List.of());
+        when(artifactRepository.delete(DEPLOYMENT_ID)).thenReturn(1);
         Model linkedModel = mock(Model.class);
         stubLinkedModels(DEPLOYMENT_ID, List.of(linkedModel));
         doThrow(new FlowableException("forced deployment deletion failure"))
@@ -657,11 +608,10 @@ class WorkflowDeploymentServiceTest
         assertBusinessError(() -> transactionalService.deleteDeployments(List.of(DEPLOYMENT_ID)),
                 HttpStatus.CONFLICT, "流程部署状态已变化，请刷新后重试");
 
-        InOrder calls = inOrder(transactionManager, deployFormMapper, taskSlaMapper,
+        InOrder calls = inOrder(transactionManager, artifactRepository,
                 linkedModel, repositoryService, identityService);
         calls.verify(transactionManager).getTransaction(any(TransactionDefinition.class));
-        calls.verify(deployFormMapper).deleteByDeploymentId(DEPLOYMENT_ID);
-        calls.verify(taskSlaMapper).deleteDeploymentSnapshotsByDeploymentId(DEPLOYMENT_ID);
+        calls.verify(artifactRepository).delete(DEPLOYMENT_ID);
         calls.verify(linkedModel).setDeploymentId(null);
         calls.verify(repositoryService).saveModel(linkedModel);
         calls.verify(repositoryService).deleteDeployment(DEPLOYMENT_ID);
@@ -672,112 +622,28 @@ class WorkflowDeploymentServiceTest
     }
 
     /**
-     * 验证 SLA 快照在预检后发生并发变化时返回 409，且不修改模型或删除引擎部署。
-     * @return 无返回值；并发变化未被拦截或继续产生引擎副作用时测试失败
+     * 验证统一资源子部署删除失败时立即终止主部署删除和模型解绑。
+     *
+     * @return 无返回值；资源删除异常被吞掉或继续产生主部署副作用时测试失败
      */
     @Test
-    void rejectsDeletionWhenTaskSlaSnapshotCountChangesConcurrently()
+    void rejectsDeletionWhenArtifactCleanupFails()
     {
         stubDeployment(DEPLOYMENT_ID, "finance", new Date());
         stubNoInstanceReferences(DEPLOYMENT_ID);
-        when(taskSlaMapper.countDeploymentSnapshotsByDeploymentId(DEPLOYMENT_ID)).thenReturn(2);
-        when(taskSlaMapper.deleteDeploymentSnapshotsByDeploymentId(DEPLOYMENT_ID)).thenReturn(1);
+        when(artifactRepository.selectDmnSnapshots(DEPLOYMENT_ID)).thenReturn(List.of());
+        ServiceException failure = new ServiceException("部署业务资源损坏", HttpStatus.CONFLICT);
+        doThrow(failure).when(artifactRepository).delete(DEPLOYMENT_ID);
         Model linkedModel = mock(Model.class);
         stubLinkedModels(DEPLOYMENT_ID, List.of(linkedModel));
 
-        assertBusinessError(() -> service.deleteDeployments(List.of(DEPLOYMENT_ID)),
-                HttpStatus.CONFLICT, "部署 SLA 快照状态已变化");
+        assertThatThrownBy(() -> service.deleteDeployments(List.of(DEPLOYMENT_ID)))
+                .isSameAs(failure);
 
         verify(linkedModel, never()).setDeploymentId(null);
         verify(repositoryService, never()).saveModel(linkedModel);
         verify(repositoryService, never()).deleteDeployment(anyString());
         verify(repositoryService, never()).deleteDeployment(anyString(), anyBoolean());
-    }
-
-    /**
-     * 验证预检后快照行数发生变化时返回 409，事务不再修改模型或删除部署。
-     *
-     * @return 无返回值；断言失败时测试失败
-     */
-    @Test
-    void rejectsDeletionWhenSnapshotCountChangesConcurrently()
-    {
-        stubDeployment(DEPLOYMENT_ID, "finance", new Date());
-        stubNoInstanceReferences(DEPLOYMENT_ID);
-        when(deployFormMapper.selectByDeploymentId(DEPLOYMENT_ID))
-                .thenReturn(List.of(snapshot(101L, "报销申请单"),
-                        snapshot(102L, "部门审批单")));
-        when(deployFormMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(1);
-        Model linkedModel = mock(Model.class);
-        stubLinkedModels(DEPLOYMENT_ID, List.of(linkedModel));
-
-        assertBusinessError(() -> service.deleteDeployments(List.of(DEPLOYMENT_ID)),
-                HttpStatus.CONFLICT, "部署表单快照状态已变化");
-
-        verify(linkedModel, never()).setDeploymentId(null);
-        verify(repositoryService, never()).saveModel(linkedModel);
-        verify(repositoryService, never()).deleteDeployment(anyString());
-        verify(repositoryService, never()).deleteDeployment(anyString(), anyBoolean());
-    }
-
-    /**
-     * 验证扩展快照删除行数与预检不一致时返回 409，且不修改模型或删除部署。
-     *
-     * @return 无返回值；断言失败时测试失败
-     */
-    @Test
-    void rejectsDeletionWhenExtensionSnapshotCountChangesConcurrently()
-    {
-        stubDeployment(DEPLOYMENT_ID, "finance", new Date());
-        stubNoInstanceReferences(DEPLOYMENT_ID);
-        when(deployFormMapper.selectByDeploymentId(DEPLOYMENT_ID)).thenReturn(List.of());
-        when(deployFormMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(0);
-        WfDeployExtensionSnapshot extensionSnapshot = new WfDeployExtensionSnapshot();
-        extensionSnapshot.setSnapshotId(201L);
-        when(deployExtensionSnapshotMapper.selectByDeploymentId(DEPLOYMENT_ID))
-                .thenReturn(List.of(extensionSnapshot));
-        when(deployExtensionSnapshotMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(0);
-        Model linkedModel = mock(Model.class);
-        stubLinkedModels(DEPLOYMENT_ID, List.of(linkedModel));
-
-        assertBusinessError(() -> service.deleteDeployments(List.of(DEPLOYMENT_ID)),
-                HttpStatus.CONFLICT, "部署扩展快照状态已变化");
-
-        verify(linkedModel, never()).setDeploymentId(null);
-        verify(repositoryService, never()).saveModel(linkedModel);
-        verify(repositoryService, never()).deleteDeployment(anyString());
-        verify(repositoryService, never()).deleteDeployment(anyString(), anyBoolean());
-    }
-
-    /**
-     * 验证 DMN 快照删除行数与预检不一致时返回 409，且不删除主部署或冻结子部署。
-     *
-     * @return 无返回值；并发变化未被拦截或产生删除副作用时测试失败
-     */
-    @Test
-    void rejectsDeletionWhenDmnSnapshotCountChangesConcurrently()
-    {
-        stubDeployment(DEPLOYMENT_ID, "finance", new Date());
-        stubNoInstanceReferences(DEPLOYMENT_ID);
-        when(deployFormMapper.selectByDeploymentId(DEPLOYMENT_ID)).thenReturn(List.of());
-        when(deployFormMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(0);
-        when(deployExtensionSnapshotMapper.selectByDeploymentId(DEPLOYMENT_ID))
-                .thenReturn(List.of());
-        when(deployExtensionSnapshotMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(0);
-        WfDeployDmnSnapshot dmnSnapshot = new WfDeployDmnSnapshot();
-        dmnSnapshot.setSnapshotId(301L);
-        dmnSnapshot.setFrozenDeploymentId("dmn-frozen-1");
-        when(deployDmnSnapshotMapper.selectByDeploymentId(DEPLOYMENT_ID))
-                .thenReturn(List.of(dmnSnapshot));
-        when(deployDmnSnapshotMapper.deleteByDeploymentId(DEPLOYMENT_ID)).thenReturn(0);
-        Model linkedModel = mock(Model.class);
-        stubLinkedModels(DEPLOYMENT_ID, List.of(linkedModel));
-
-        assertBusinessError(() -> service.deleteDeployments(List.of(DEPLOYMENT_ID)),
-                HttpStatus.CONFLICT, "部署 DMN 快照状态已变化");
-
-        verify(linkedModel, never()).setDeploymentId(null);
-        verify(repositoryService, never()).deleteDeployment(anyString());
         verifyNoInteractions(dmnDecisionService);
     }
 
@@ -795,7 +661,7 @@ class WorkflowDeploymentServiceTest
     }
 
     /**
-     * 创建并注入全部删除门禁 Mapper 的部署服务。
+     * 创建并注入统一资源仓库和全部删除门禁 Mapper 的部署服务。
      *
      * @param operations WorkflowEngineOperations，普通或事务代理执行边界
      * @return WorkflowDeploymentService，待测部署服务
@@ -804,9 +670,7 @@ class WorkflowDeploymentServiceTest
     {
         WorkflowDeploymentService created = new WorkflowDeploymentService(
                 operations, repositoryService, runtimeService, historyService,
-                deployFormMapper, deployExtensionSnapshotMapper, deployDmnSnapshotMapper,
-                dmnDecisionService, bpmnService);
-        created.setTaskSlaMapper(taskSlaMapper);
+                artifactRepository, dmnDecisionService, bpmnService);
         created.setProcessDraftMapper(processDraftMapper);
         created.setProcessDefinitionLockMapper(processDefinitionLockMapper);
         return created;

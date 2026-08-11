@@ -21,10 +21,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import com.ruoyi.RuoYiApplication;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
 import com.ruoyi.flowable.service.model.WorkflowBpmnDocument;
 import com.ruoyi.flowable.service.model.WorkflowBpmnService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowPreparedExtensionDeployment;
 import com.ruoyi.flowable.service.process.WorkflowBpmnEventAuditService;
@@ -56,7 +57,7 @@ class WorkflowBpmnEventMySqlIT
     @Autowired
     private WorkflowExtensionDeploymentService extensionDeploymentService;
     @Autowired
-    private WfDeployExtensionSnapshotMapper snapshotMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     @Autowired
     private WorkflowBpmnEventAuditService auditService;
     @Autowired
@@ -76,12 +77,23 @@ class WorkflowBpmnEventMySqlIT
     {
         for (Deployment deployment : deployments)
         {
-            jdbc.update("delete n from wf_bpmn_event_notification n "
-                    + "join wf_bpmn_event_audit a on a.audit_id=n.audit_id "
+            jdbc.update("delete d from wf_notification_delivery_audit d "
+                    + "join wf_notification_outbox o on o.outbox_id=d.outbox_id "
+                    + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
+                    + "and o.source_id=cast(a.audit_id as char) "
+                    + "where a.deployment_id=?", deployment.getId());
+            jdbc.update("delete n from wf_notification_inbox n "
+                    + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
+                    + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
+                    + "and o.source_id=cast(a.audit_id as char) "
+                    + "where a.deployment_id=?", deployment.getId());
+            jdbc.update("delete o from wf_notification_outbox o "
+                    + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
+                    + "and o.source_id=cast(a.audit_id as char) "
                     + "where a.deployment_id=?", deployment.getId());
             jdbc.update("delete from wf_bpmn_event_audit where deployment_id=?",
                     deployment.getId());
-            snapshotMapper.deleteByDeploymentId(deployment.getId());
+            artifactRepository.delete(deployment.getId());
             RepositoryService repositoryService = processEngine.getRepositoryService();
             if (repositoryService.createDeploymentQuery()
                     .deploymentId(deployment.getId()).count() == 1L)
@@ -89,8 +101,19 @@ class WorkflowBpmnEventMySqlIT
                 repositoryService.deleteDeployment(deployment.getId(), true);
             }
         }
-        jdbc.update("delete n from wf_bpmn_event_notification n "
-                + "join wf_bpmn_event_audit a on a.audit_id=n.audit_id "
+        jdbc.update("delete d from wf_notification_delivery_audit d "
+                + "join wf_notification_outbox o on o.outbox_id=d.outbox_id "
+                + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
+                + "and o.source_id=cast(a.audit_id as char) "
+                + "where a.deployment_id like ?", PREFIX + runId + "%");
+        jdbc.update("delete n from wf_notification_inbox n "
+                + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
+                + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
+                + "and o.source_id=cast(a.audit_id as char) "
+                + "where a.deployment_id like ?", PREFIX + runId + "%");
+        jdbc.update("delete o from wf_notification_outbox o "
+                + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
+                + "and o.source_id=cast(a.audit_id as char) "
                 + "where a.deployment_id like ?", PREFIX + runId + "%");
         jdbc.update("delete from wf_bpmn_event_audit where deployment_id like ?",
                 PREFIX + runId + "%");
@@ -120,8 +143,10 @@ class WorkflowBpmnEventMySqlIT
         assertThat(jdbc.queryForObject("select match_status from wf_bpmn_event_audit "
                 + "where deployment_id=?", String.class, deployment.getId()))
                 .isEqualTo("CAPTURED");
-        assertThat(jdbc.queryForObject("select count(*) from wf_bpmn_event_notification n "
-                + "join wf_bpmn_event_audit a on a.audit_id=n.audit_id "
+        assertThat(jdbc.queryForObject("select count(*) from wf_notification_inbox n "
+                + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
+                + "and o.source_type='BPMN_EVENT' "
+                + "join wf_bpmn_event_audit a on o.source_id=cast(a.audit_id as char) "
                 + "where a.deployment_id=? and n.recipient_user_id='1' "
                 + "and n.read_status='UNREAD'", Integer.class, deployment.getId()))
                 .isOne();
@@ -190,8 +215,6 @@ class WorkflowBpmnEventMySqlIT
 
         assertThat(processEngine.getRepositoryService().createDeploymentQuery().count())
                 .isEqualTo(before);
-        assertThat(jdbc.queryForObject("select count(*) from wf_deploy_extension_snapshot "
-                + "where process_key=?", Integer.class, processKey)).isZero();
     }
 
     /**
@@ -219,7 +242,7 @@ class WorkflowBpmnEventMySqlIT
                 .name(processKey).addBytes(processKey + ".bpmn20.xml",
                         tampered.getBytes(StandardCharsets.UTF_8)).deploy();
         deployments.add(deployment);
-        extensionDeploymentService.persist(deployment.getId(), prepared);
+        persistExtensionArtifacts(deployment.getId(), prepared);
 
         assertThatThrownBy(() -> processEngine.getRuntimeService().startProcessInstanceByKey(
                 processKey, Map.of("initiator", "1")))
@@ -231,8 +254,10 @@ class WorkflowBpmnEventMySqlIT
         assertThat(jdbc.queryForObject("select match_status from wf_bpmn_event_audit "
                 + "where deployment_id=?", String.class, deployment.getId()))
                 .isEqualTo("UNMATCHED");
-        assertThat(jdbc.queryForObject("select count(*) from wf_bpmn_event_notification n "
-                + "join wf_bpmn_event_audit a on a.audit_id=n.audit_id "
+        assertThat(jdbc.queryForObject("select count(*) from wf_notification_inbox n "
+                + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
+                + "and o.source_type='BPMN_EVENT' "
+                + "join wf_bpmn_event_audit a on o.source_id=cast(a.audit_id as char) "
                 + "where a.deployment_id=?", Integer.class, deployment.getId())).isZero();
     }
 
@@ -249,7 +274,8 @@ class WorkflowBpmnEventMySqlIT
         WorkflowBpmnEventAuditService.RuntimeEvent event =
                 new WorkflowBpmnEventAuditService.RuntimeEvent(
                         idempotencyKey, concurrentDeploymentId, "process-concurrent",
-                        "definition-concurrent", "execution-concurrent", "raiseEvent",
+                        "definition-concurrent", "process-key-concurrent",
+                        "execution-concurrent", "raiseEvent",
                         "HTTP", "ERROR", "APPROVAL_BUSINESS_ERROR", "审批业务校验失败",
                         "INITIATOR", "CAPTURED", "eventBoundary", true, "并发触发", "1");
         List<CompletableFuture<Long>> futures = java.util.stream.IntStream.range(0, 8)
@@ -260,8 +286,10 @@ class WorkflowBpmnEventMySqlIT
         assertThat(auditIds).allMatch(auditIds.get(0)::equals);
         assertThat(jdbc.queryForObject("select count(*) from wf_bpmn_event_audit "
                 + "where idempotency_key=?", Integer.class, idempotencyKey)).isOne();
-        assertThat(jdbc.queryForObject("select count(*) from wf_bpmn_event_notification n "
-                + "join wf_bpmn_event_audit a on a.audit_id=n.audit_id "
+        assertThat(jdbc.queryForObject("select count(*) from wf_notification_inbox n "
+                + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
+                + "and o.source_type='BPMN_EVENT' "
+                + "join wf_bpmn_event_audit a on o.source_id=cast(a.audit_id as char) "
                 + "where a.idempotency_key=?", Integer.class, idempotencyKey)).isOne();
     }
 
@@ -282,8 +310,23 @@ class WorkflowBpmnEventMySqlIT
                 .name(processKey).addBytes(processKey + ".bpmn20.xml",
                         prepared.compiledBpmn()).deploy();
         deployments.add(deployment);
-        extensionDeploymentService.persist(deployment.getId(), prepared);
+        persistExtensionArtifacts(deployment.getId(), prepared);
         return deployment;
+    }
+
+    /**
+     * 将测试编译得到的扩展快照写入 Flowable 官方部署资源。
+     * @param deploymentId String，父流程部署主键
+     * @param prepared WorkflowPreparedExtensionDeployment，部署前编译结果
+     * @return void，资源写入失败时测试立即失败
+     */
+    private void persistExtensionArtifacts(String deploymentId,
+            WorkflowPreparedExtensionDeployment prepared)
+    {
+        artifactRepository.persist(deploymentId, new WorkflowDeploymentArtifacts(
+                List.of(), List.of(), List.of(), List.of(),
+                extensionDeploymentService.snapshotsForDeployment(deploymentId, prepared),
+                List.of(), List.of(), List.of()));
     }
 
     /**

@@ -169,7 +169,7 @@ public final class WorkflowControlledLoopBpmnContract
     }
 
     /**
-     * 从编译后的用户任务移除作者可编辑循环属性，运行时只信任部署快照表。
+     * 从编译后的用户任务移除作者可编辑循环属性，运行时只信任部署制品资源。
      *
      * @param task UserTask，正在生成执行资源的用户任务
      * @return void，无返回值；非循环普通属性和其他扩展元素保持不变

@@ -13,7 +13,7 @@ import com.ruoyi.flowable.extension.WorkflowHttpConnector;
 import com.ruoyi.flowable.extension.WorkflowSqlConnector;
 
 /**
- * BPMN 扩展目录、不可变版本和部署快照的 MySQL DDL 契约测试。
+ * BPMN 扩展目录和不可变版本的 MySQL DDL 契约测试。
  */
 class WorkflowExtensionDdlContractTest
 {
@@ -34,17 +34,12 @@ class WorkflowExtensionDdlContractTest
         assertThat(ddl).contains(
                 "create table if not exists `wf_bpmn_extension`",
                 "create table if not exists `wf_bpmn_extension_version`",
-                "create table if not exists `wf_deploy_extension_snapshot`",
                 "unique key `uk_wf_bpmn_extension_key` (`extension_key`)",
                 "unique key `uk_wf_bpmn_extension_version` (`extension_id`, `version_no`)",
-                "unique key `uk_wf_deploy_extension_element` (`deploy_id`, `process_key`, `element_id`)",
                 "`config_schema`      json",
-                "`config_json`         json",
                 "references `wf_bpmn_extension` (`extension_id`)",
-                "references `wf_bpmn_extension_version` (`version_id`)",
                 "on update restrict on delete restrict",
                 "`checksum` regexp '^[0-9a-f]{64}$'",
-                "`snapshot_checksum` regexp '^[0-9a-f]{64}$'",
                 "42bca2710135b3faac369facee8c103683edf52b63f95c2ec2fb18f14fd3b3f0",
                 "where not exists");
         assertThat(ddl).doesNotContain("+create table");
@@ -52,21 +47,20 @@ class WorkflowExtensionDdlContractTest
     }
 
     /**
-     * 验证首个正式业务基线包含三元快照唯一键和版本外键。
-     * @return 无返回值；基线结构漂移时测试失败
+     * 验证部署扩展快照不再创建自定义业务表，目录版本仍由正式表独立维护。
+     * @return 无返回值；旧快照表或外键重新进入业务基线时测试失败
      * @throws Exception 正式 SQL 无法读取时测试失败
      */
     @Test
-    void definesExtensionSnapshotKeysInFormalBaseline() throws Exception
+    void keepsExtensionSnapshotsOutOfBusinessBaseline() throws Exception
     {
         String ddl = Files.readString(findProjectSql(
                 "sql/flowable/business/8.0.0__workflow_business.sql"),
                 StandardCharsets.UTF_8).toLowerCase();
 
-        assertThat(ddl).contains(
-                "unique key `uk_wf_deploy_extension_element` (`deploy_id`, `process_key`, `element_id`)",
-                "constraint `fk_wf_deploy_extension_version` foreign key (`extension_version_id`)",
-                "references `wf_bpmn_extension_version` (`version_id`)");
+        assertThat(ddl).doesNotContain(
+                "create table if not exists `wf_deploy_extension_snapshot`",
+                "constraint `fk_wf_deploy_extension_version`");
     }
 
     /**

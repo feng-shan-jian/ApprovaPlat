@@ -50,7 +50,10 @@ import org.flowable.task.api.Task;
 import org.flowable.task.api.history.HistoricTaskInstance;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
+import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.process.WorkflowCollaborationChannelService;
 import com.ruoyi.web.controller.workflow.WorkflowRbacMatrix.Endpoint;
 
@@ -151,6 +154,7 @@ final class WorkflowRbacAllowFixture
     private final JdbcTemplate jdbcTemplate;
     private final ProcessEngine processEngine;
     private final WorkflowAttachmentStorage attachmentStorage;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final Map<String, String> roleTokens;
     private final Map<String, Long> roleUserIds;
     private final Map<String, String> roleUsernames;
@@ -211,6 +215,7 @@ final class WorkflowRbacAllowFixture
      * @param jdbcTemplate JdbcTemplate，隔离 MySQL 连接
      * @param processEngine ProcessEngine，共享真实 Flowable 引擎
      * @param attachmentStorage WorkflowAttachmentStorage，测试专用私有附件目录
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，正式部署资源仓库
      * @param roleTokens Map，五角色真实 JWT
      * @param roleUserIds Map，五角色正式用户主键
      * @param roleUsernames Map，五角色正式账号名
@@ -220,6 +225,7 @@ final class WorkflowRbacAllowFixture
             HttpClient httpClient, ObjectMapper objectMapper,
             JdbcTemplate jdbcTemplate, ProcessEngine processEngine,
             WorkflowAttachmentStorage attachmentStorage,
+            WorkflowDeploymentArtifactRepository artifactRepository,
             Map<String, String> roleTokens, Map<String, Long> roleUserIds,
             Map<String, String> roleUsernames)
     {
@@ -230,6 +236,7 @@ final class WorkflowRbacAllowFixture
         this.jdbcTemplate = jdbcTemplate;
         this.processEngine = processEngine;
         this.attachmentStorage = attachmentStorage;
+        this.artifactRepository = artifactRepository;
         this.roleTokens = Map.copyOf(roleTokens);
         this.roleUserIds = Map.copyOf(roleUserIds);
         this.roleUsernames = Map.copyOf(roleUsernames);
@@ -276,16 +283,21 @@ final class WorkflowRbacAllowFixture
         }
         assertThat(definitions).containsOnlyKeys(START_KEY, SERIAL_KEY, CLAIM_KEY, MULTI_KEY);
 
-        insertSnapshot("key_92001", "start", "发起申请", START_FORM_CONTENT);
-        insertSnapshot("key_92002", "startReview", "申请复核", FORM_CONTENT);
-        insertSnapshot("key_92011", "serialStart", "发起申请", FORM_CONTENT);
-        insertSnapshot("key_92012", "firstReview", "初审", FORM_CONTENT);
-        insertSnapshot("key_92013", "secondReview", "复审", FORM_CONTENT);
-        insertSnapshot("key_92020", "claimStart", "开始", FORM_CONTENT);
-        insertSnapshot("key_92021", "claimReview", "候选审批", FORM_CONTENT);
-        insertSnapshot("key_92030", "multiStart", "开始", FORM_CONTENT);
-        insertSnapshot("key_92031", "multiSource", "选择会签人", FORM_CONTENT);
-        insertSnapshot("key_92032", "multiReview", "动态会签", FORM_CONTENT);
+        // 一个父部署只能拥有一套不可变业务资源，先完整构造节点快照，再一次性创建资源子部署。
+        List<WfDeployForm> formSnapshots = List.of(
+                deploymentForm("key_92001", "start", "发起申请", START_FORM_CONTENT),
+                deploymentForm("key_92002", "startReview", "申请复核", FORM_CONTENT),
+                deploymentForm("key_92011", "serialStart", "发起申请", FORM_CONTENT),
+                deploymentForm("key_92012", "firstReview", "初审", FORM_CONTENT),
+                deploymentForm("key_92013", "secondReview", "复审", FORM_CONTENT),
+                deploymentForm("key_92020", "claimStart", "开始", FORM_CONTENT),
+                deploymentForm("key_92021", "claimReview", "候选审批", FORM_CONTENT),
+                deploymentForm("key_92030", "multiStart", "开始", FORM_CONTENT),
+                deploymentForm("key_92031", "multiSource", "选择会签人", FORM_CONTENT),
+                deploymentForm("key_92032", "multiReview", "动态会签", FORM_CONTENT));
+        artifactRepository.persist(mainDeploymentId, new WorkflowDeploymentArtifacts(
+                formSnapshots, List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of()));
         prepared = true;
     }
 
@@ -827,7 +839,7 @@ final class WorkflowRbacAllowFixture
                         "/workflow/bpmn-event/notifications/" + fixture.notificationId()
                                 + "/read", null);
                 requireFixture(jdbcTemplate.queryForObject(
-                                "select count(*) from wf_bpmn_event_notification "
+                                "select count(*) from wf_notification_inbox "
                                         + "where notification_id = ? and recipient_user_id = ? "
                                         + "and read_status = 'READ' and read_time is not null",
                                 Long.class, fixture.notificationId(),
@@ -935,20 +947,9 @@ final class WorkflowRbacAllowFixture
         Long notificationId = null;
         if (withNotification)
         {
-            GeneratedKeyHolder notificationKey = new GeneratedKeyHolder();
-            jdbcTemplate.update(connection ->
-            {
-                PreparedStatement statement = connection.prepareStatement(
-                        "insert into wf_bpmn_event_notification "
-                                + "(audit_id, recipient_user_id, title, content, read_status, "
-                                + "create_time) values (?, ?, 'RBAC事件通知', "
-                                + "'RBAC真实事件通知正文', 'UNREAD', current_timestamp(3))",
-                        Statement.RETURN_GENERATED_KEYS);
-                statement.setLong(1, auditId);
-                statement.setString(2, String.valueOf(roleUserIds.get(recipientRole)));
-                return statement;
-            }, notificationKey);
-            notificationId = notificationKey.getKey().longValue();
+            notificationId = insertSynchronousInboxNotification(
+                    "BPMN_EVENT", String.valueOf(auditId), "ERROR", recipientRole,
+                    process, null, null, "RBAC事件通知", "RBAC真实事件通知正文");
         }
         return new BpmnEventRuntimeFixture(auditId, notificationId);
     }
@@ -1058,7 +1059,7 @@ final class WorkflowRbacAllowFixture
                         "/workflow/sla/notifications/" + fixture.notificationId() + "/read",
                         null);
                 requireFixture(jdbcTemplate.queryForObject(
-                                "select count(*) from wf_task_sla_notification "
+                                "select count(*) from wf_notification_inbox "
                                         + "where notification_id = ? and recipient_user_id = ? "
                                         + "and read_status = 'READ' and read_time is not null",
                                 Long.class, fixture.notificationId(),
@@ -1183,23 +1184,89 @@ final class WorkflowRbacAllowFixture
         Long notificationId = null;
         if (withNotification)
         {
-            GeneratedKeyHolder notificationKey = new GeneratedKeyHolder();
-            jdbcTemplate.update(connection ->
-            {
-                PreparedStatement statement = connection.prepareStatement(
-                        "insert into wf_task_sla_notification "
-                                + "(audit_id, recipient_user_id, action_type, title, content, "
-                                + "read_status, create_time) values (?, ?, 'REMINDER', "
-                                + "'RBAC SLA提醒', 'RBAC真实SLA提醒正文', 'UNREAD', "
-                                + "current_timestamp(3))",
-                        Statement.RETURN_GENERATED_KEYS);
-                statement.setLong(1, auditId);
-                statement.setString(2, String.valueOf(roleUserIds.get(recipientRole)));
-                return statement;
-            }, notificationKey);
-            notificationId = notificationKey.getKey().longValue();
+            notificationId = insertSynchronousInboxNotification(
+                    "SLA", String.valueOf(auditId), "REMINDER", recipientRole,
+                    process, task.getId(), task.getTaskDefinitionKey(),
+                    "RBAC SLA提醒", "RBAC真实SLA提醒正文");
         }
         return new TaskSlaRuntimeFixture(executionId, auditId, notificationId);
+    }
+
+    /**
+     * 按正式同步通知模型写入 outbox、两条投递审计和未读 inbox。
+     *
+     * @param sourceType String，SLA 或 BPMN_EVENT 来源域
+     * @param sourceId String，来源业务审计主键
+     * @param eventType String，来源域内稳定事件类型
+     * @param recipientRole String，正式通知接收角色
+     * @param process ProcessFixture，通知关联的真实 Flowable 实例
+     * @param taskId String，可空任务主键
+     * @param taskDefinitionKey String，可空任务节点 key
+     * @param title String，用户可见通知标题
+     * @param content String，用户可见通知正文
+     * @return long，统一 wf_notification_inbox 主键
+     */
+    private long insertSynchronousInboxNotification(String sourceType, String sourceId,
+            String eventType, String recipientRole, ProcessFixture process, String taskId,
+            String taskDefinitionKey, String title, String content)
+    {
+        String routePath = "/workflow/process-detail/" + process.instanceId() + "?source=own";
+        GeneratedKeyHolder outboxKey = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection ->
+        {
+            PreparedStatement statement = connection.prepareStatement(
+                    "insert into wf_notification_outbox "
+                            + "(idempotency_key,source_type,source_id,event_type,channel,"
+                            + "recipient_user_id,process_definition_key,process_instance_id,"
+                            + "task_id,task_definition_key,actor_user_id,title,content,"
+                            + "sms_template_id,route_path,status,delivery_cycle,attempt_count,"
+                            + "total_attempt_count,max_attempts,next_attempt_at,revision,"
+                            + "create_time,processed_time) values (?,?,?,?,'INBOX',?,?,?,?,?,null,"
+                            + "?,?,null,?,'PROCESSED',1,0,0,1,current_timestamp(3),1,"
+                            + "current_timestamp(3),current_timestamp(3))",
+                    Statement.RETURN_GENERATED_KEYS);
+            statement.setString(1, randomHash());
+            statement.setString(2, sourceType);
+            statement.setString(3, sourceId);
+            statement.setString(4, eventType);
+            statement.setLong(5, roleUserIds.get(recipientRole));
+            statement.setString(6, START_KEY);
+            statement.setString(7, process.instanceId());
+            statement.setString(8, taskId);
+            statement.setString(9, taskDefinitionKey);
+            statement.setString(10, title);
+            statement.setString(11, content);
+            statement.setString(12, routePath);
+            return statement;
+        }, outboxKey);
+        long outboxId = outboxKey.getKey().longValue();
+        notificationOutboxIds.add(outboxId);
+
+        // 同步站内信在业务事务内完成登记与交付，两条审计保持与正式服务一致的状态轨迹。
+        jdbcTemplate.update("insert into wf_notification_delivery_audit "
+                        + "(outbox_id,action_type,delivery_cycle,attempt_no,total_attempt_no,"
+                        + "from_status,to_status,actor_type,actor_id,detail,create_time) "
+                        + "values (?,'ENQUEUE',1,0,0,null,'PENDING','SYSTEM',?,"
+                        + "'业务事务内登记统一站内通知',current_timestamp(3))",
+                outboxId, sourceType);
+        jdbcTemplate.update("insert into wf_notification_delivery_audit "
+                        + "(outbox_id,action_type,delivery_cycle,attempt_no,total_attempt_no,"
+                        + "from_status,to_status,actor_type,actor_id,detail,create_time) "
+                        + "values (?,'DELIVER',1,0,0,'PENDING','PROCESSED','SYSTEM',?,"
+                        + "'业务事务内同步持久化站内通知',current_timestamp(3))",
+                outboxId, sourceType);
+
+        int inboxRows = jdbcTemplate.update("insert into wf_notification_inbox "
+                        + "(outbox_id,recipient_user_id,event_type,title,content,"
+                        + "process_instance_id,task_id,route_path,read_status,create_time) "
+                        + "select outbox_id,recipient_user_id,event_type,title,content,"
+                        + "process_instance_id,task_id,route_path,'UNREAD',current_timestamp(3) "
+                        + "from wf_notification_outbox where outbox_id=?",
+                outboxId);
+        requireFixture(inboxRows == 1, "SYNCHRONOUS_NOTIFICATION_INBOX_INSERT_FAILED");
+        return jdbcTemplate.queryForObject(
+                "select notification_id from wf_notification_inbox where outbox_id=?",
+                Long.class, outboxId);
     }
 
     /**
@@ -1474,32 +1541,33 @@ final class WorkflowRbacAllowFixture
         {
             PreparedStatement statement = connection.prepareStatement(
                     "insert into wf_notification_outbox "
-                            + "(idempotency_key,event_type,channel,recipient_user_id,"
+                            + "(idempotency_key,source_type,source_id,event_type,channel,recipient_user_id,"
                             + "process_definition_key,process_instance_id,task_id,"
                             + "task_definition_key,actor_user_id,title,content,route_path,"
                             + "status,delivery_cycle,attempt_count,total_attempt_count,"
                             + "max_attempts,next_attempt_at,last_error_code,last_error_summary,"
                             + "revision,create_time,processed_time) "
-                            + "values (?,'COPY_CREATED','INBOX',?,?,?,?,?,?,"
+                            + "values (?,'APPROVAL',?,'COPY_CREATED','INBOX',?,?,?,?,?,?,"
                             + "'RBAC审批通知','RBAC真实审批通知正文',?, ?,1,?,?,3,"
                             + "date_add(current_timestamp(3), interval 1 day),?,?,0,"
                             + "current_timestamp(3),current_timestamp(3))",
                     Statement.RETURN_GENERATED_KEYS);
             statement.setString(1, randomHash());
-            statement.setLong(2, roleUserIds.get(recipientRole));
-            statement.setString(3, START_KEY);
-            statement.setString(4, process.instanceId());
-            statement.setString(5, process.taskId());
-            statement.setString(6, process.taskDefinitionKey());
-            statement.setString(7,
-                    String.valueOf(roleUserIds.get("workflow_starter")));
+            statement.setString(2, process.instanceId() + ":COPY_CREATED");
+            statement.setLong(3, roleUserIds.get(recipientRole));
+            statement.setString(4, START_KEY);
+            statement.setString(5, process.instanceId());
+            statement.setString(6, process.taskId());
+            statement.setString(7, process.taskDefinitionKey());
             statement.setString(8,
+                    String.valueOf(roleUserIds.get("workflow_starter")));
+            statement.setString(9,
                     "/workflow/process/detail?procInsId=" + process.instanceId());
-            statement.setString(9, status);
-            statement.setInt(10, attempts);
+            statement.setString(10, status);
             statement.setInt(11, attempts);
-            statement.setString(12, withInbox ? null : "RBAC_DELIVERY_EXHAUSTED");
-            statement.setString(13, withInbox ? null : "RBAC有界投递已耗尽");
+            statement.setInt(12, attempts);
+            statement.setString(13, withInbox ? null : "RBAC_DELIVERY_EXHAUSTED");
+            statement.setString(14, withInbox ? null : "RBAC有界投递已耗尽");
             return statement;
         }, outboxKey);
         long outboxId = outboxKey.getKey().longValue();
@@ -3962,8 +4030,6 @@ final class WorkflowRbacAllowFixture
         {
             String auditPlaceholders = placeholders(bpmnEventAuditIds.size());
             Object[] auditIds = bpmnEventAuditIds.toArray();
-            jdbcTemplate.update("delete from wf_bpmn_event_notification "
-                    + "where audit_id in (" + auditPlaceholders + ")", auditIds);
             jdbcTemplate.update("delete from wf_bpmn_event_audit where audit_id in ("
                     + auditPlaceholders + ")", auditIds);
         }
@@ -3977,9 +4043,6 @@ final class WorkflowRbacAllowFixture
         {
             String executionPlaceholders = placeholders(taskSlaExecutionIds.size());
             Object[] executionIds = taskSlaExecutionIds.toArray();
-            jdbcTemplate.update("delete from wf_task_sla_notification where audit_id in ("
-                    + "select audit_id from wf_task_sla_audit where sla_execution_id in ("
-                    + executionPlaceholders + "))", executionIds);
             jdbcTemplate.update("delete from wf_task_sla_audit where sla_execution_id in ("
                     + executionPlaceholders + ")", executionIds);
             jdbcTemplate.update("delete from wf_task_sla_execution where sla_execution_id in ("
@@ -4056,14 +4119,13 @@ final class WorkflowRbacAllowFixture
      */
     private void cleanupTrackedNotifications()
     {
-        if (processInstanceIds.isEmpty())
+        if (!processInstanceIds.isEmpty())
         {
-            return;
+            notificationOutboxIds.addAll(jdbcTemplate.queryForList(
+                    "select outbox_id from wf_notification_outbox where process_instance_id in ("
+                            + placeholders(processInstanceIds.size()) + ") order by outbox_id",
+                    Long.class, processInstanceIds.toArray()));
         }
-        notificationOutboxIds.addAll(jdbcTemplate.queryForList(
-                "select outbox_id from wf_notification_outbox where process_instance_id in ("
-                        + placeholders(processInstanceIds.size()) + ") order by outbox_id",
-                Long.class, processInstanceIds.toArray()));
         if (notificationOutboxIds.isEmpty())
         {
             return;
@@ -4107,8 +4169,8 @@ final class WorkflowRbacAllowFixture
 
         // 先恢复成功创建但响应断言前中断的实例，再按实例精确清理通知；部署删除后无法可靠恢复已删历史实例。
         recoverProcessInstanceIds();
-        cleanupExtendedApprovalFixtures();
         cleanupTrackedNotifications();
+        cleanupExtendedApprovalFixtures();
 
         // 即使请求已落库但后续响应或审计断言失败，也按测试专用文件名前缀和五角色边界恢复清理清单。
         List<Map<String, Object>> recoverableAttachments = jdbcTemplate.queryForList(
@@ -4137,18 +4199,15 @@ final class WorkflowRbacAllowFixture
             jdbcTemplate.update("delete from wf_copy where copy_id = ?", copyId);
         }
 
-        // Flowable 部署级联清理运行、历史和定义；业务快照必须单独按部署主键删除。
+        // Flowable 父部署删除前先删除其业务资源子部署，避免留下没有父流程定义的孤立快照。
         List<String> deployments = new ArrayList<>(deploymentIds);
         deployments.sort(Comparator.comparing(id -> id.equals(mainDeploymentId) ? 1 : 0));
         for (String deploymentId : deployments)
         {
-            // 参与者解析审计及规则快照不受 Flowable 部署表外键管理，必须按本 fixture 部署主键先行清理。
+            // 参与者解析审计是业务运行事实，仍需按父部署主键先行清理。
             jdbcTemplate.update("delete from wf_participant_resolution_audit where deploy_id = ?",
                     deploymentId);
-            jdbcTemplate.update("delete from wf_deploy_participant_rule where deploy_id = ?",
-                    deploymentId);
-            jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?",
-                    deploymentId);
+            artifactRepository.delete(deploymentId);
             if (repositoryService.createDeploymentQuery()
                     .deploymentId(deploymentId).count() > 0L)
             {
@@ -4233,12 +4292,13 @@ final class WorkflowRbacAllowFixture
                     Long.class, deploymentIds.toArray()))
                     .as("ALLOW fixture 部署不得残留参与者解析审计")
                     .isZero();
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_deploy_participant_rule where deploy_id in ("
-                            + placeholders(deploymentIds.size()) + ")",
-                    Long.class, deploymentIds.toArray()))
-                    .as("ALLOW fixture 部署不得残留参与者规则快照")
-                    .isZero();
+            for (String deploymentId : deploymentIds)
+            {
+                assertThat(repositoryService.createDeploymentQuery()
+                        .parentDeploymentId(deploymentId).count())
+                        .as("ALLOW fixture 部署不得残留业务资源子部署")
+                        .isZero();
+            }
         }
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from sys_oper_log where oper_id > ? "
@@ -4749,24 +4809,27 @@ final class WorkflowRbacAllowFixture
     }
 
     /**
-     * 为主部署写入一个 BPMN 节点对应的不可变表单快照。
+     * 构造主部署一个 BPMN 节点对应的不可变表单快照。
      *
      * @param formKey String，BPMN formKey
      * @param nodeKey String，BPMN 节点 key
      * @param nodeName String，节点显示名称
      * @param content String，该节点部署时固化且已经过正式模板门禁的表单 schema
-     * @return void，无返回值
+     * @return WfDeployForm，可一次性持久化到正式部署资源仓库的表单快照
      */
-    private void insertSnapshot(String formKey, String nodeKey, String nodeName,
+    private WfDeployForm deploymentForm(String formKey, String nodeKey, String nodeName,
             String content)
     {
-        int rows = jdbcTemplate.update(
-                "insert into wf_deploy_form "
-                        + "(deploy_id, form_id, form_key, node_key, form_name, node_name, "
-                        + "content, create_by, del_flag) values (?, ?, ?, ?, ?, ?, ?, ?, '0')",
-                mainDeploymentId, commonFormId, formKey, nodeKey,
-                "RBAC部署表单", nodeName, content, "workflow-rbac-it");
-        assertThat(rows).isEqualTo(1);
+        WfDeployForm snapshot = new WfDeployForm();
+        snapshot.setSourceType("TEMPLATE");
+        snapshot.setFormId(commonFormId);
+        snapshot.setFormKey(formKey);
+        snapshot.setNodeKey(nodeKey);
+        snapshot.setFormName("RBAC部署表单");
+        snapshot.setNodeName(nodeName);
+        snapshot.setContent(content);
+        snapshot.setCreateBy("workflow-rbac-it");
+        return snapshot;
     }
 
     /**
@@ -5799,7 +5862,7 @@ final class WorkflowRbacAllowFixture
      * BPMN 事件运行审计与本人通知 fixture。
      *
      * @param auditId long，wf_bpmn_event_audit 主键
-     * @param notificationId Long，可空 wf_bpmn_event_notification 主键
+     * @param notificationId Long，可空 wf_notification_inbox 主键
      */
     private record BpmnEventRuntimeFixture(long auditId, Long notificationId)
     {
@@ -5820,7 +5883,7 @@ final class WorkflowRbacAllowFixture
      *
      * @param executionId long，wf_task_sla_execution 主键
      * @param auditId long，wf_task_sla_audit 主键
-     * @param notificationId Long，可空 wf_task_sla_notification 主键
+     * @param notificationId Long，可空 wf_notification_inbox 主键
      */
     private record TaskSlaRuntimeFixture(long executionId, long auditId,
             Long notificationId)

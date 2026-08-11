@@ -44,6 +44,8 @@ import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCategory;
+import com.ruoyi.flowable.domain.WfDeployCallActivitySnapshot;
+import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfForm;
@@ -57,7 +59,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfCategoryMapper;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WfFormMapper;
 import com.ruoyi.flowable.mapper.WorkflowModelSaveMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
@@ -125,7 +126,8 @@ public class WorkflowModelService
 
     private final WfFormMapper formMapper;
 
-    private final WfDeployFormMapper deployFormMapper;
+    /** 8 类不可变部署资源统一通过 Flowable 子部署持久化。 */
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
 
     private final WorkflowFormTemplateValidator formTemplateValidator;
 
@@ -166,7 +168,7 @@ public class WorkflowModelService
      * @param modelSaveMapper WorkflowModelSaveMapper，模型版本当前读锁与保存幂等数据访问层
      * @param categoryMapper WfCategoryMapper，工作流分类数据访问层
      * @param formMapper WfFormMapper，可编辑表单模板数据访问层
-     * @param deployFormMapper WfDeployFormMapper，部署表单快照数据访问层
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，Flowable 部署业务资源仓库
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单 JSON 安全结构验证器
      * @param extensionDeploymentService WorkflowExtensionDeploymentService，扩展编译和版本快照服务
      * @param controlledLoopDeploymentService WorkflowControlledLoopDeploymentService，受控循环编译和快照服务
@@ -181,7 +183,7 @@ public class WorkflowModelService
             WorkflowBpmnIdentityValidator bpmnIdentityValidator,
             WorkflowModelSaveMapper modelSaveMapper,
             WfCategoryMapper categoryMapper, WfFormMapper formMapper,
-            WfDeployFormMapper deployFormMapper,
+            WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowFormTemplateValidator formTemplateValidator,
             WorkflowExtensionDeploymentService extensionDeploymentService,
             WorkflowControlledLoopDeploymentService controlledLoopDeploymentService,
@@ -196,7 +198,7 @@ public class WorkflowModelService
         this.modelSaveMapper = modelSaveMapper;
         this.categoryMapper = categoryMapper;
         this.formMapper = formMapper;
-        this.deployFormMapper = deployFormMapper;
+        this.artifactRepository = artifactRepository;
         this.formTemplateValidator = formTemplateValidator;
         this.startVariableValidator = new WorkflowStartVariableValidator(formTemplateValidator);
         this.extensionDeploymentService = extensionDeploymentService;
@@ -251,7 +253,7 @@ public class WorkflowModelService
      * @param modelSaveMapper WorkflowModelSaveMapper，模型保存数据访问层
      * @param categoryMapper WfCategoryMapper，分类数据访问层
      * @param formMapper WfFormMapper，表单数据访问层
-     * @param deployFormMapper WfDeployFormMapper，部署表单快照数据访问层
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，Flowable 部署业务资源仓库
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单安全验证器
      * @param extensionDeploymentService WorkflowExtensionDeploymentService，扩展部署服务
      * @param dmnDecisionService WorkflowDmnDecisionService，DMN 冻结服务
@@ -262,13 +264,13 @@ public class WorkflowModelService
             WorkflowBpmnIdentityValidator bpmnIdentityValidator,
             WorkflowModelSaveMapper modelSaveMapper,
             WfCategoryMapper categoryMapper, WfFormMapper formMapper,
-            WfDeployFormMapper deployFormMapper,
+            WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowFormTemplateValidator formTemplateValidator,
             WorkflowExtensionDeploymentService extensionDeploymentService,
             WorkflowDmnDecisionService dmnDecisionService)
     {
         this(engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
-                modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
+                modelSaveMapper, categoryMapper, formMapper, artifactRepository,
                 formTemplateValidator, extensionDeploymentService, null,
                 dmnDecisionService, null, null);
     }
@@ -894,42 +896,26 @@ public class WorkflowModelService
             }
 
             List<WfDeployForm> snapshots = buildSnapshots(deployment.getId(), snapshotSources, identity);
-            int inserted = snapshots.isEmpty() ? 0 : deployFormMapper.insertBatch(snapshots);
-            if (inserted != snapshots.size())
-            {
-                throw new ServiceException("部署表单快照保存不完整", HttpStatus.CONFLICT);
-            }
             // 表单字段与服务任务共享部署扩展台账，版本引用保护和删除门禁必须覆盖两类来源。
             List<WfDeployExtensionSnapshot> formFieldSnapshots = snapshotSources.stream()
                     .flatMap(source -> source.extensionSnapshots().stream())
                     .peek(snapshot -> snapshot.setCreateBy(identity.userId()))
                     .toList();
-            extensionDeploymentService.persist(deployment.getId(), extensionDeployment,
-                    formFieldSnapshots);
-            if (conditionDeploymentService != null)
-            {
-                conditionDeploymentService.persist(deployment.getId(), conditionDeployment);
-            }
-            if (controlledLoopDeploymentService != null)
-            {
-                controlledLoopDeploymentService.persist(deployment.getId(), controlledLoopDeployment);
-            }
-            if (participantRuleDeploymentService != null)
-            {
-                participantRuleDeploymentService.persist(deployment.getId(), participantDeployment);
-            }
-            dmnDecisionService.persist(deployment.getId(), dmnDeployment, identity.userId());
-            if (callActivityReferenceService != null)
-            {
-                // 定义部署与依赖快照共享事务，任何快照缺失都会回滚 Flowable 部署。
-                callActivityReferenceService.persist(
-                        deployment.getId(), callActivityDeployment, identity.userId());
-            }
-            if (taskSlaDeploymentService != null)
-            {
-                // Flowable 部署与 SLA 快照共享外层事务，任一快照失败都会回滚部署和所有关联数据。
-                taskSlaDeploymentService.persist(deployment.getId(), slaDeployment);
-            }
+            List<WfDeployExtensionSnapshot> extensionSnapshots = extensionDeploymentService
+                    .snapshotsForDeployment(deployment.getId(), extensionDeployment,
+                            formFieldSnapshots);
+            List<WfDeployDmnSnapshot> dmnSnapshots = dmnDecisionService.freezeSnapshots(
+                    deployment.getId(), dmnDeployment, identity.userId());
+            List<WfDeployCallActivitySnapshot> callActivitySnapshots =
+                    callActivityReferenceService == null ? List.of()
+                            : callActivityReferenceService.snapshotsForDeployment(
+                                    deployment.getId(), callActivityDeployment, identity.userId());
+
+            // 8 类不可变快照作为一个 Flowable 资源子部署原子提交，禁止出现部分表已写、部分表缺失。
+            artifactRepository.persist(deployment.getId(), new WorkflowDeploymentArtifacts(
+                    snapshots, conditionDeployment.snapshots(), controlledLoopDeployment.snapshots(),
+                    participantDeployment.snapshots(), extensionSnapshots, dmnSnapshots,
+                    callActivitySnapshots, slaDeployment.snapshots()));
 
             // 记录最近一次部署关系，后续模型编辑和安全删除据此执行状态门禁。
             model.setDeploymentId(deployment.getId());

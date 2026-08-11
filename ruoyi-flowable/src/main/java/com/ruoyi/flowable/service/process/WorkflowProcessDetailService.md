@@ -16,7 +16,7 @@
 
 ## 表单值白名单
 
-详情只读取 `wf_deploy_form.content`，不会回连当前 `wf_form`。每个快照先通过 `WorkflowFormTemplateValidator` 的完整结构与组件白名单校验，再从组件 `__vModel__` 提取允许回显的字段名。
+详情只读取 Flowable 业务制品 `approvaplat/forms-v1.json` 中的 `content`，不会回连当前 `wf_form`。每个快照先通过 `WorkflowFormTemplateValidator` 的完整结构与组件白名单校验，再从组件 `__vModel__` 提取允许回显的字段名。
 
 已经提交的开始表单和历史任务表单不再从普通全局变量或最终历史变量反推值。发起服务和任务完成服务会把提交当时的安全字段投影编码为固定内部字符串变量 `__ruoyi_workflow_form_submission_v1`：开始快照随流程发起原子写入，退回后重新提交会保留同一开始表单的审计版本并以最后一次提交覆盖业务回显；任务快照始终以 task-local 变量写入并与真实 task ID 强关联。快照正文同时固化 deployment、form、node、task、业务字段作用域和值，读取时必须与 BPMN、部署表单及 Flowable 历史元数据逐项一致，不同开始表单身份的版本会被拒绝。
 

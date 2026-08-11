@@ -2,10 +2,6 @@ package com.ruoyi.flowable.service.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
@@ -29,7 +25,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployConditionRule;
-import com.ruoyi.flowable.mapper.WfDeployConditionRuleMapper;
 import com.ruoyi.flowable.service.model.WorkflowControlledLoopFormField.Kind;
 import com.ruoyi.flowable.service.model.WorkflowControlledLoopFormField.NumericKind;
 
@@ -38,7 +33,6 @@ import com.ruoyi.flowable.service.model.WorkflowControlledLoopFormField.NumericK
  */
 class WorkflowConditionDeploymentServiceTest
 {
-    private WfDeployConditionRuleMapper mapper;
     private WorkflowConditionDeploymentService service;
 
     /**
@@ -48,8 +42,7 @@ class WorkflowConditionDeploymentServiceTest
     @BeforeEach
     void setUp()
     {
-        mapper = mock(WfDeployConditionRuleMapper.class);
-        service = new WorkflowConditionDeploymentService(mapper);
+        service = new WorkflowConditionDeploymentService();
     }
 
     /**
@@ -84,11 +77,6 @@ class WorkflowConditionDeploymentServiceTest
         assertThat(gateway.getOutgoingFlows()).filteredOn(flow -> "flow_default".equals(flow.getId()))
                 .singleElement().satisfies(flow -> assertThat(flow.getConditionExpression()).isNull());
 
-        when(mapper.insertBatch(anyList())).thenReturn(3);
-        service.persist("deployment-1", prepared);
-        verify(mapper).insertBatch(prepared.snapshots());
-        assertThat(prepared.snapshots()).allSatisfy(snapshot ->
-                assertThat(snapshot.getDeployId()).isEqualTo("deployment-1"));
     }
 
     /**

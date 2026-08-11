@@ -9,28 +9,22 @@ import org.apache.ibatis.session.Configuration;
 import org.junit.jupiter.api.Test;
 
 /**
- * 参与者规则部署快照与保留审计 Mapper XML 契约测试。
+ * 参与者规则保留审计 Mapper XML 契约测试。
  */
 class WorkflowParticipantRuleMapperXmlTest
 {
     /**
-     * 验证两个正式 Mapper 均可解析，且快照删除不会级联或直接删除审计。
+     * 验证保留审计 Mapper 可解析，且不提供随部署删除审计的语句。
      *
      * @return void，statement 缺失或审计生命周期与部署删除错误耦合时测试失败
      * @throws Exception classpath Mapper 资源读取失败
      */
     @Test
-    void parsesSnapshotAndRetentionAuditStatements() throws Exception
+    void parsesRetentionAuditStatements() throws Exception
     {
         Configuration configuration = new Configuration();
-        parse(configuration, "mapper/flowable/WfDeployParticipantRuleMapper.xml");
         parse(configuration, "mapper/flowable/WfParticipantResolutionAuditMapper.xml");
 
-        String ruleNamespace = WfDeployParticipantRuleMapper.class.getName() + ".";
-        assertThat(configuration.hasStatement(ruleNamespace + "insertBatch")).isTrue();
-        assertThat(configuration.hasStatement(ruleNamespace + "selectStartRule")).isTrue();
-        assertThat(configuration.hasStatement(ruleNamespace + "selectTaskRule")).isTrue();
-        assertThat(configuration.hasStatement(ruleNamespace + "deleteByDeploymentId")).isTrue();
         assertThat(configuration.hasStatement(
                 WfParticipantResolutionAuditMapper.class.getName() + ".insert")).isTrue();
 

@@ -317,13 +317,14 @@ database_check_detail() {
       printf 'missing_or_invalid=none'
       ;;
     workflow_schema_table_counts)
-      printf 'total=111, ruoyi=20, quartz=11, flowable=36, workflow=44'
+      printf 'total=101, ruoyi=20, quartz=11, flowable=36, workflow=34'
       ;;
-    workflow_connector_columns|workflow_call_activity_snapshot_columns|workflow_call_activity_snapshot_indexes|workflow_call_activity_snapshot_checks|workflow_participant_rule_columns|workflow_participant_rule_indexes|workflow_participant_rule_checks)
+    workflow_retired_table_absence) printf 'unexpected=none' ;;
+    workflow_deployment_artifact_integrity) printf 'issues=0, detail=none' ;;
+    workflow_connector_columns|workflow_participant_rule_columns|workflow_participant_rule_indexes|workflow_participant_rule_checks)
       printf 'missing=none'
       ;;
-    workflow_call_activity_snapshot_integrity) printf 'invalid_rows=0' ;;
-    workflow_business_tables) printf 'present=13, missing=none' ;;
+    workflow_business_tables) printf 'present=10, missing=none' ;;
     workflow_business_columns) printf 'missing=none' ;;
     wf_attachment_cleanup_retry_columns) printf 'invalid=none' ;;
     workflow_draft_column_types) printf 'invalid=none' ;;
@@ -337,7 +338,7 @@ database_check_detail() {
       printf 'constraints=1, enforced=YES, canonical_sha256=%064d' 1
       ;;
     workflow_business_data_integrity) printf 'issues=0, detail=none' ;;
-    workflow_participant_rule_tables) printf 'present=2, missing=none' ;;
+    workflow_participant_rule_tables) printf 'present=1, missing=none' ;;
     workflow_participant_audit_retention_foreign_keys) printf 'unexpected=none' ;;
     workflow_participant_rule_data_integrity) printf 'issues=0, detail=none' ;;
     workflow_notification_tables) printf 'present=6, missing=none' ;;
@@ -353,23 +354,26 @@ database_check_detail() {
     workflow_runtime_integration_data_integrity|workflow_extension_data_integrity)
       printf 'issues=0, detail=none'
       ;;
-    workflow_extension_tables) printf 'present=7, missing=none' ;;
+    workflow_extension_tables) printf 'present=5, missing=none' ;;
     workflow_extension_indexes) printf 'issues=0, indexes=none' ;;
     workflow_extension_foreign_keys) printf 'missing_or_invalid=none' ;;
-    workflow_sla_tables) printf 'found=6, innodb=6, expected=6' ;;
-    workflow_sla_constraints) printf 'found=28, expected=28' ;;
-    workflow_sla_foreign_keys) printf 'found=3, expected=3' ;;
+    workflow_sla_tables) printf 'found=4, innodb=4, expected=4' ;;
+    workflow_sla_constraints) printf 'found=18, expected=18' ;;
+    workflow_sla_foreign_keys) printf 'found=2, expected=2' ;;
     workflow_sla_data_integrity) printf 'issues=0, detail=none' ;;
-    workflow_bpmn_event_tables) printf 'found=3, expected=3' ;;
-    workflow_bpmn_event_constraints) printf 'found=12, expected_at_least=12' ;;
+    workflow_bpmn_event_tables) printf 'found=2, expected=2' ;;
+    workflow_bpmn_event_constraints) printf 'found=13, expected=13' ;;
     workflow_bpmn_event_data_integrity) printf 'issues=0' ;;
-    workflow_menu_count) printf 'rows=98, natural_keys=98' ;;
-    workflow_menu_tree) printf 'directories=2, pages=21, buttons=75, invalid_routes=0' ;;
+    workflow_menu_count) printf 'rows=99, natural_keys=99' ;;
+    workflow_menu_tree)
+      printf 'directories=3, extension_parent=1, pages=21, buttons=75, common_management_pages=5, extended_management_pages=9, office_pages=7, invalid_routes=0'
+      ;;
+    workflow_extended_management_role_visibility) printf 'missing_parent_assignments=0' ;;
     workflow_retired_permissions) printf 'legacy_rows=0' ;;
     workflow_roles)
-      printf 'active_roles=5, duplicate_roles=0, assignments=workflow_admin:98,workflow_approver:18,workflow_auditor:24,workflow_designer:47,workflow_starter:21'
+      printf 'active_roles=5, duplicate_roles=0, assignments=workflow_admin:99,workflow_approver:18,workflow_auditor:25,workflow_designer:48,workflow_starter:21'
       ;;
-    workflow_admin_menu_scope) printf 'assigned=98, expected=98' ;;
+    workflow_admin_menu_scope) printf 'assigned=99, expected=99' ;;
     workflow_draft_role_scope) printf 'permissions=5, starter=5, unauthorized=0' ;;
     workflow_admin_only_instance_management)
       printf 'unauthorized_assignments=0, roles=none, admin_management_permissions=2'
@@ -380,7 +384,7 @@ database_check_detail() {
 }
 
 #
-# 写入三套正式只读 SQL 的固定结构和 58 个完整检查项，模拟 mysql --batch --raw 原始输出。
+# 写入三套正式只读 SQL 的固定结构和 57 个完整检查项，模拟 mysql --batch --raw 原始输出。
 # 参数：$1（字符串）目标 TSV 文件。
 # 返回：0 表示数据库验收夹具已按正式脚本顺序写入。
 #
@@ -395,9 +399,8 @@ write_database_verify() {
   )
   local -a business_checks=(
     workflow_schema_table_counts flowable_dmn_table_presence
+    workflow_retired_table_absence workflow_deployment_artifact_integrity
     workflow_connector_table_presence workflow_connector_columns
-    workflow_call_activity_snapshot_columns workflow_call_activity_snapshot_indexes
-    workflow_call_activity_snapshot_checks workflow_call_activity_snapshot_integrity
     workflow_business_tables workflow_business_columns
     wf_attachment_cleanup_retry_columns workflow_draft_column_types wf_category_active_code
     workflow_business_indexes workflow_business_checks workflow_business_foreign_keys
@@ -418,6 +421,7 @@ write_database_verify() {
   )
   local -a menu_checks=(
     workflow_menu_count workflow_menu_tree workflow_retired_permissions
+    workflow_extended_management_role_visibility
     workflow_roles workflow_admin_menu_scope workflow_draft_role_scope
     workflow_admin_only_instance_management workflow_auditor_read_only
   )
@@ -491,12 +495,12 @@ create_fresh_install_evidence() {
   printf '%064d  backup-smoke/schema.sql\n' 1 \
     > "$evidence_dir/backup-smoke/schema-sha256.txt"
   : > "$evidence_dir/backup-smoke/mysqlcheck.txt"
-  for ((table_number = 1; table_number <= 111; table_number++)); do
+  for ((table_number = 1; table_number <= 101; table_number++)); do
     printf 'ry_vue_backup_verify.table_%02d OK\n' "$table_number" \
       >> "$evidence_dir/backup-smoke/mysqlcheck.txt"
   done
   printf 'empty_schema_table_count=0\n' > "$evidence_dir/empty-schema-check.txt"
-  printf '111\t20\t11\t36\t44\n' > "$evidence_dir/table-counts.tsv"
+  printf '101\t20\t11\t36\t34\n' > "$evidence_dir/table-counts.tsv"
   printf 'PONG\n' > "$evidence_dir/redis-ping.txt"
   if [[ "$previous_release_id" != 'NONE' || -n "$previous_release_dir" ]]; then
     preflight_arguments+=(
@@ -1599,7 +1603,7 @@ main() {
   printf 'ry_vue_backup_verify.table_01 OK\n' \
     > "$evidence_dir/fresh-install/backup-smoke/mysqlcheck.txt"
   refresh_rehearsal_manifests "$evidence_dir"
-  expect_failure 'rehearsal without 111-table restore verification fails' \
+  expect_failure 'rehearsal without 101-table restore verification fails' \
     run_release_evidence_gate "$evidence_dir" rehearsal
 
   evidence_dir="$TEST_ROOT/rehearsal-fresh-attachment-diff"

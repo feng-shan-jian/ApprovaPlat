@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * 从 {@code wf_deploy_form} 原样读取的不可变部署表单快照视图。
+ * 从 Flowable 业务制品资源 {@code approvaplat/forms-v1.json} 原样读取的不可变部署表单快照视图。
  *
  * @param definitionId String，流程定义主键
  * @param deploymentId String，部署主键

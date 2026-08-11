@@ -33,8 +33,6 @@ class WorkflowBusinessMapperXmlTest
                     "selectByCode", "insert", "update", "logicalDelete", "countActiveByIds"),
             "WfFormMapper", List.of("selectById", "selectList", "selectSummaryList", "insert",
                     "update", "logicalDelete", "countActiveByIds"),
-            "WfDeployFormMapper", List.of("insertBatch", "selectByDeploymentId",
-                    "countByFormIds", "deleteByDeploymentId"),
             "WfCopyMapper", List.of("selectById", "selectByIdAndUserId", "insertBatch",
                     "insertBatchIdempotent", "markRead", "selectListByUserId",
                     "countListByUserId", "selectPageByUserId", "logicalDelete",
@@ -42,7 +40,7 @@ class WorkflowBusinessMapperXmlTest
                     "logicalDeleteByInstanceIds"));
 
     /**
-     * 验证四组 Mapper XML 可由 MyBatis 完整解析并注册全部冻结 statement。
+     * 验证三组业务 Mapper XML 可由 MyBatis 完整解析并注册全部冻结 statement。
      * @return void，XML 或 statement 契约错误时测试失败
      * @throws Exception 读取或解析 classpath XML 失败
      */
@@ -59,30 +57,6 @@ class WorkflowBusinessMapperXmlTest
                         .as("%s 必须注册 statement %s", mapper.getKey(), statementId)
                         .isTrue();
             }
-        }
-    }
-
-    /**
-     * 验证 SLA Mapper 注册部署快照计数和物理删除语句，并仅按部署主键限定范围。
-     * @return void，删除入口缺失或可能越界删除其他部署快照时测试失败
-     * @throws Exception 读取或解析 Mapper XML 失败
-     */
-    @Test
-    void registersBoundedTaskSlaDeploymentCleanupStatements() throws Exception
-    {
-        Configuration configuration = parseMapper("WfTaskSlaMapper");
-        String namespace = "com.ruoyi.flowable.mapper.WfTaskSlaMapper.";
-        Map<String, Object> parameters = Map.of("deploymentId", "deployment-1");
-
-        for (String statementId : List.of(
-                "countDeploymentSnapshotsByDeploymentId",
-                "deleteDeploymentSnapshotsByDeploymentId"))
-        {
-            assertThat(configuration.hasStatement(namespace + statementId)).isTrue();
-            String sql = normalizeSql(configuration.getMappedStatement(namespace + statementId)
-                    .getBoundSql(parameters).getSql()).toLowerCase();
-            assertThat(sql).contains("wf_deploy_task_sla", "where deployment_id = ?")
-                    .doesNotContain("${");
         }
     }
 
@@ -182,25 +156,6 @@ class WorkflowBusinessMapperXmlTest
     }
 
     /**
-     * 验证部署表单保存双来源字段且查询严格读取不可变快照，不回连当前 wf_form。
-     * @return void，快照映射或查询契约错误时测试失败
-     * @throws Exception 解析 XML 失败
-     */
-    @Test
-    void keepsDeploymentFormAsIndependentImmutableSnapshot() throws Exception
-    {
-        Document document = parseDocument(resource("WfDeployFormMapper"));
-        Element resultMap = elementById(document, "resultMap", "WfDeployFormResult");
-        Element select = elementById(document, "select", "selectByDeploymentId");
-        String selectSql = normalizeSql(select.getTextContent()).toLowerCase();
-
-        assertThat(attributeForProperty(resultMap, "sourceType")).isEqualTo("source_type");
-        assertThat(attributeForProperty(resultMap, "formId")).isEqualTo("form_id");
-        assertThat(selectSql).contains("from wf_deploy_form");
-        assertThat(selectSql).doesNotContain(" join ").doesNotContain("wf_form ");
-    }
-
-    /**
      * 验证表单导出摘要不读取 content 大字段且 LIMIT 使用参数绑定。
      * @return void，摘要查询加载大字段或无界时测试失败
      * @throws Exception 解析 XML 失败
@@ -265,8 +220,6 @@ class WorkflowBusinessMapperXmlTest
         assertEmptyBatchSql("WfFormMapper", "logicalDelete",
                 Map.of("formIds", List.of(), "updateBy", "admin"));
         assertEmptyBatchSql("WfFormMapper", "countActiveByIds", Map.of("formIds", List.of()));
-        assertEmptyBatchSql("WfDeployFormMapper", "countByFormIds", Map.of("formIds", List.of()));
-        assertEmptyBatchSql("WfDeployFormMapper", "insertBatch", Map.of("forms", List.of()));
         assertEmptyBatchSql("WfCopyMapper", "insertBatch", Map.of("copies", List.of()));
         assertEmptyBatchSql("WfCopyMapper", "logicalDelete",
                 Map.of("copyIds", List.of(), "updateBy", "admin"));

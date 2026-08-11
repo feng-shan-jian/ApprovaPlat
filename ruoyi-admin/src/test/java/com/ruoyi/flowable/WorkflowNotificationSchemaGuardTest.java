@@ -24,6 +24,22 @@ class WorkflowNotificationSchemaGuardTest
     }
 
     /**
+     * 验证仓库登记的本机 Flowable 隔离库名可执行通知事实清理。
+     *
+     * @return void，本机隔离库命名未被门禁接受时测试失败
+     */
+    @Test
+    void acceptsRegisteredLocalIntegrationSchemas()
+    {
+        assertThatCode(() -> WorkflowNotificationMySqlIT.requireIsolatedNotificationSchema(
+                "ry_vue_flowable_it", "ry_vue_flowable_it"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> WorkflowNotificationMySqlIT.requireIsolatedNotificationSchema(
+                "ry_vue_codex_flowable_it", "ry_vue_codex_flowable_it"))
+                .doesNotThrowAnyException();
+    }
+
+    /**
      * 验证常规生产名即使与当前库相同，也不能执行通知表全量清理。
      *
      * @return void，常规生产库名被错误放行时测试失败

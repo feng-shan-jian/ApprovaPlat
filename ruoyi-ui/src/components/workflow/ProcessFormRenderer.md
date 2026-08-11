@@ -27,7 +27,7 @@ await startProcess(definitionId, { businessKey, variables })
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `content` | `string \| object` | 必填 | `wf_deploy_form.content` 的不可变 JSON 快照。 |
+| `content` | `string \| object` | 必填 | Flowable 业务制品 `approvaplat/forms-v1.json` 中的不可变 JSON 快照。 |
 | `modelValue` | `object` | `{}` | 当前表单值；附件字段可包含后端返回的安全元数据。 |
 | `readonly` | `boolean` | `false` | 历史详情模式，禁止修改和删除。 |
 

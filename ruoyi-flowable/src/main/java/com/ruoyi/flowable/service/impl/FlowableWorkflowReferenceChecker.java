@@ -20,11 +20,11 @@ import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.WorkflowReferenceChecker;
 
 /**
- * 基于 Flowable 8 公共 RepositoryService 和部署快照表的真实引用检查器。
+ * 基于 Flowable 8 公共 RepositoryService 和业务制品子部署资源的真实引用检查器。
  */
 @Service
 public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecker
@@ -41,20 +41,20 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
     private static final String LEGACY_FORM_KEY_PREFIX = "key_";
 
     private final RepositoryService repositoryService;
-    private final WfDeployFormMapper deployFormMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final ObjectMapper objectMapper;
 
     /**
      * 创建引用检查器。
      * @param repositoryService RepositoryService，Flowable 公共仓库服务
-     * @param deployFormMapper WfDeployFormMapper，部署表单快照 Mapper
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署表单资源仓库
      * @return 构造函数，无返回值
      */
     public FlowableWorkflowReferenceChecker(RepositoryService repositoryService,
-            WfDeployFormMapper deployFormMapper)
+            WorkflowDeploymentArtifactRepository artifactRepository)
     {
         this.repositoryService = repositoryService;
-        this.deployFormMapper = deployFormMapper;
+        this.artifactRepository = artifactRepository;
         this.objectMapper = JsonMapper.shared();
     }
 
@@ -112,7 +112,7 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
         try
         {
             // 部署快照直接保留 form_id 溯源，优先用业务表索引完成低成本检查。
-            if (deployFormMapper.countByFormIds(targetFormIds) > 0)
+            if (artifactRepository.hasFormReference(targetFormIds))
             {
                 return true;
             }

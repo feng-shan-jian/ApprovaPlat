@@ -1252,7 +1252,7 @@ async function getVerifiedDeployment(api, sample, category, formId, resolvedTask
   // Flowable 部署时会规范化 XML，受控扩展还会编译为固定执行 Bean，因此按业务拓扑核验而非比较格式文本。
   assertDeployedBpmnMatches(bpmnResponse.data, sample, formId, resolvedTasks)
 
-  // 发起表单接口只读取 wf_deploy_form，不回连当前模板；据此核验不可变部署快照正文。
+// 发起表单接口只读取 Flowable 业务制品中的 forms-v1.json，不回连当前模板；据此核验不可变部署快照正文。
   const formResponse = await api.request(
     'GET',
     `/workflow/process/getProcessForm?definitionId=${encodeURIComponent(deployment.definitionId)}` +

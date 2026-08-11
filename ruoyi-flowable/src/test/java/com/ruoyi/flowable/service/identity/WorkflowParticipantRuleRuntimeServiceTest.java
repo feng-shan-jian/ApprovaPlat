@@ -25,14 +25,14 @@ import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.domain.WfParticipantResolutionAudit;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfDeployParticipantRuleMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 
 class WorkflowParticipantRuleRuntimeServiceTest
 {
     private RepositoryService repositoryService;
     private RuntimeService runtimeService;
-    private WfDeployParticipantRuleMapper ruleMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     private WorkflowIdentityMapper identityMapper;
     private WorkflowIdentityResolver identityResolver;
     private WorkflowParticipantResolutionAuditService auditService;
@@ -47,11 +47,12 @@ class WorkflowParticipantRuleRuntimeServiceTest
     {
         repositoryService = mock(RepositoryService.class);
         runtimeService = mock(RuntimeService.class);
-        ruleMapper = mock(WfDeployParticipantRuleMapper.class);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         identityMapper = mock(WorkflowIdentityMapper.class);
         identityResolver = mock(WorkflowIdentityResolver.class);
         auditService = mock(WorkflowParticipantResolutionAuditService.class);
-        service = new WorkflowParticipantRuleRuntimeService(repositoryService, runtimeService, ruleMapper,
+        service = new WorkflowParticipantRuleRuntimeService(repositoryService, runtimeService,
+                artifactRepository,
                 identityMapper, identityResolver, auditService);
     }
 
@@ -64,7 +65,8 @@ class WorkflowParticipantRuleRuntimeServiceTest
     {
         ProcessDefinition definition = definition();
         WfDeployParticipantRule rule = rule("START", "START", "DEPTS", "100");
-        when(ruleMapper.selectStartRule("deploy-1", "expense")).thenReturn(rule);
+        when(artifactRepository.selectStartParticipantRule("deploy-1", "expense"))
+                .thenReturn(rule);
         when(identityMapper.selectActiveScopeDeptIdsByUserId(7L))
                 .thenReturn(List.of(100L, 110L));
 
@@ -84,7 +86,8 @@ class WorkflowParticipantRuleRuntimeServiceTest
     void leavesLegacyDeploymentToExistingStarterAuthorization()
     {
         ProcessDefinition definition = definition();
-        when(ruleMapper.selectStartRule("deploy-1", "expense")).thenReturn(null);
+        when(artifactRepository.selectStartParticipantRule("deploy-1", "expense"))
+                .thenReturn(null);
 
         WorkflowCurrentIdentity actor = new WorkflowCurrentIdentity("7", Set.of("ROLE3"));
         assertThat(service.canStartIfManaged(actor, definition)).isNull();
@@ -102,7 +105,8 @@ class WorkflowParticipantRuleRuntimeServiceTest
     {
         ProcessDefinition definition = definition();
         WfDeployParticipantRule rule = rule("START", "START", "USERS", "9");
-        when(ruleMapper.selectStartRule("deploy-1", "expense")).thenReturn(rule);
+        when(artifactRepository.selectStartParticipantRule("deploy-1", "expense"))
+                .thenReturn(rule);
 
         assertThatThrownBy(() -> service.assertCanStart(
                 new WorkflowCurrentIdentity("7", Set.of()), definition))
@@ -124,7 +128,8 @@ class WorkflowParticipantRuleRuntimeServiceTest
     {
         DelegateTask task = taskContext();
         WfDeployParticipantRule rule = rule("TASK", "ASSIGNEE", "STARTER_MANAGER", "");
-        when(ruleMapper.selectTaskRule("deploy-1", "expense", "review")).thenReturn(rule);
+        when(artifactRepository.selectTaskParticipantRule("deploy-1", "expense", "review"))
+                .thenReturn(rule);
         when(identityMapper.selectApprovalEligibleManagerUserIdsByUserId(7L))
                 .thenReturn(List.of(11L));
         WfParticipantResolutionAudit audit = new WfParticipantResolutionAudit();
@@ -149,7 +154,8 @@ class WorkflowParticipantRuleRuntimeServiceTest
         DelegateTask task = taskContext("root-instance-1");
         when(task.getVariable("initiator")).thenReturn("999");
         WfDeployParticipantRule rule = rule("TASK", "ASSIGNEE", "STARTER_MANAGER", "");
-        when(ruleMapper.selectTaskRule("deploy-1", "expense", "review")).thenReturn(rule);
+        when(artifactRepository.selectTaskParticipantRule("deploy-1", "expense", "review"))
+                .thenReturn(rule);
         when(identityMapper.selectApprovalEligibleManagerUserIdsByUserId(7L))
                 .thenReturn(List.of(11L));
         WfParticipantResolutionAudit audit = new WfParticipantResolutionAudit();
@@ -173,7 +179,8 @@ class WorkflowParticipantRuleRuntimeServiceTest
     {
         DelegateTask task = taskContext();
         WfDeployParticipantRule rule = rule("TASK", "ASSIGNEE", "STARTER_MANAGER", "");
-        when(ruleMapper.selectTaskRule("deploy-1", "expense", "review")).thenReturn(rule);
+        when(artifactRepository.selectTaskParticipantRule("deploy-1", "expense", "review"))
+                .thenReturn(rule);
         when(identityMapper.selectApprovalEligibleManagerUserIdsByUserId(7L))
                 .thenReturn(List.of(11L, 12L));
 
@@ -195,7 +202,8 @@ class WorkflowParticipantRuleRuntimeServiceTest
         DelegateTask task = taskContext();
         WfDeployParticipantRule rule = rule("TASK", "ASSIGNEE", "FORM_USER", "");
         rule.setFormField("approver");
-        when(ruleMapper.selectTaskRule("deploy-1", "expense", "review")).thenReturn(rule);
+        when(artifactRepository.selectTaskParticipantRule("deploy-1", "expense", "review"))
+                .thenReturn(rule);
         when(task.getVariable("approver")).thenReturn(1.5D);
 
         assertThatThrownBy(() -> service.resolveCreatedTask(task))

@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowExtensionRegistryService;
 import tools.jackson.core.JacksonException;
@@ -23,7 +23,7 @@ import tools.jackson.databind.json.JsonMapper;
 public class WorkflowExtensionDelegate implements JavaDelegate
 {
     private final RepositoryService repositoryService;
-    private final WfDeployExtensionSnapshotMapper snapshotMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WorkflowJavaExtensionHandlerRegistry handlerRegistry;
     private final WorkflowHttpConnector httpConnector;
     private final WorkflowSqlConnector sqlConnector;
@@ -34,20 +34,20 @@ public class WorkflowExtensionDelegate implements JavaDelegate
     /**
      * 创建固定扩展调度器。
      * @param repositoryService RepositoryService，流程定义到部署主键的官方查询 API
-     * @param snapshotMapper WfDeployExtensionSnapshotMapper，运行快照数据访问层
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，运行快照资源仓库
      * @param handlerRegistry WorkflowJavaExtensionHandlerRegistry，服务端安装处理器注册表
      * @param httpConnector WorkflowHttpConnector，固定 HTTP 连接器执行器
      * @param sqlConnector WorkflowSqlConnector，固定 SQL 连接器执行器
      * @return 无返回值，构造后由 Spring 以固定 Bean 名注册
      */
     public WorkflowExtensionDelegate(RepositoryService repositoryService,
-            WfDeployExtensionSnapshotMapper snapshotMapper,
+            WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowJavaExtensionHandlerRegistry handlerRegistry,
             WorkflowHttpConnector httpConnector,
             WorkflowSqlConnector sqlConnector)
     {
         this.repositoryService = repositoryService;
-        this.snapshotMapper = snapshotMapper;
+        this.artifactRepository = artifactRepository;
         this.handlerRegistry = handlerRegistry;
         this.httpConnector = httpConnector;
         this.sqlConnector = sqlConnector;
@@ -67,7 +67,7 @@ public class WorkflowExtensionDelegate implements JavaDelegate
         {
             throw new ServiceException("扩展执行对应的流程定义不存在", HttpStatus.ERROR);
         }
-        WfDeployExtensionSnapshot snapshot = snapshotMapper.selectRuntimeSnapshot(
+        WfDeployExtensionSnapshot snapshot = artifactRepository.selectExtensionSnapshot(
                 definition.getDeploymentId(), definition.getKey(), execution.getCurrentActivityId());
         if (snapshot == null)
         {

@@ -1,7 +1,8 @@
 package com.ruoyi.flowable.domain;
 
 /**
- * 不可变审批 SLA 部署快照，对应 {@code wf_deploy_task_sla}。
+ * 不可变审批 SLA 部署快照，保存在 Flowable 业务制品资源
+ * {@code approvaplat/task-sla-v1.json}。
  */
 public class WfDeployTaskSla
 {

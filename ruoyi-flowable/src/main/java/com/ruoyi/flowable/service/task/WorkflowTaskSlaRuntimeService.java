@@ -26,7 +26,10 @@ import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
 import com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowTaskSlaDeploymentService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService.SynchronousNotification;
 
 /**
  * 审批 SLA 任务生命周期、定时触发、通知、暂停恢复和查询服务。
@@ -40,6 +43,8 @@ public class WorkflowTaskSlaRuntimeService
     private final WorkflowBusinessCalendarService calendarService;
     private final WorkflowEngineOperations engineOperations;
     private final WfTaskSlaMapper slaMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建 SLA 运行服务。
@@ -49,13 +54,17 @@ public class WorkflowTaskSlaRuntimeService
      * @param calendarService WorkflowBusinessCalendarService，业务日历到期计算
      * @param engineOperations WorkflowEngineOperations，查询和当前身份事务边界
      * @param slaMapper WfTaskSlaMapper，运行状态、审计和通知数据访问层
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，SLA 部署资源仓库
+     * @param notificationService WorkflowNotificationService，统一 outbox、inbox 和投递审计服务
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowTaskSlaRuntimeService(RepositoryService repositoryService,
             ManagementService managementService,
             ProcessEngineConfiguration processEngineConfiguration,
             WorkflowBusinessCalendarService calendarService,
-            WorkflowEngineOperations engineOperations, WfTaskSlaMapper slaMapper)
+            WorkflowEngineOperations engineOperations, WfTaskSlaMapper slaMapper,
+            WorkflowDeploymentArtifactRepository artifactRepository,
+            WorkflowNotificationService notificationService)
     {
         this.repositoryService = repositoryService;
         this.managementService = managementService;
@@ -63,6 +72,8 @@ public class WorkflowTaskSlaRuntimeService
         this.calendarService = calendarService;
         this.engineOperations = engineOperations;
         this.slaMapper = slaMapper;
+        this.artifactRepository = artifactRepository;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -145,7 +156,8 @@ public class WorkflowTaskSlaRuntimeService
             // 中断升级可能与已经获取的非中断提醒并发；升级提交后，晚到提醒必须幂等丢弃。
             return;
         }
-        WfDeployTaskSla snapshot = requireSnapshot(execution, processDefinitionId);
+        ProcessDefinition definition = requireDefinition(processDefinitionId);
+        WfDeployTaskSla snapshot = requireSnapshot(execution, definition);
         if ("REMINDER".equals(action))
         {
             if (ordinal < 1 || ordinal > snapshot.getMaxReminders())
@@ -165,7 +177,8 @@ public class WorkflowTaskSlaRuntimeService
                     ordinal, null, "审批 SLA 自动催办第 " + ordinal + " 次");
             String recipient = execution.getAssigneeUserId() == null
                     ? snapshot.getEscalationAssignee() : execution.getAssigneeUserId();
-            requireNotification(auditId, recipient, "REMINDER", "审批任务超时提醒",
+            requireNotification(auditId, execution, definition.getKey(), recipient,
+                    "REMINDER", "审批任务超时提醒",
                     "任务 " + execution.getTaskDefinitionKey() + " 已达到第 " + ordinal
                             + " 次 SLA 提醒时间");
             return;
@@ -189,7 +202,8 @@ public class WorkflowTaskSlaRuntimeService
                 null, "审批 SLA 已超时升级" + eventDetail);
         String recipient = escalationRecipient == null
                 ? execution.getAssigneeUserId() : escalationRecipient;
-        requireNotification(auditId, recipient, "ESCALATE", "审批任务超时升级",
+        requireNotification(auditId, execution, definition.getKey(), recipient,
+                "ESCALATE", "审批任务超时升级",
                 "任务 " + execution.getTaskDefinitionKey() + " 已进入超时升级处理");
     }
 
@@ -321,7 +335,7 @@ public class WorkflowTaskSlaRuntimeService
             String processDefinitionId, String taskDefinitionKey, String assignee)
     {
         ProcessDefinition definition = requireDefinition(processDefinitionId);
-        WfDeployTaskSla snapshot = slaMapper.selectDeploymentSnapshot(
+        WfDeployTaskSla snapshot = artifactRepository.selectTaskSlaSnapshot(
                 definition.getDeploymentId(), definition.getKey(), taskDefinitionKey);
         if (snapshot == null)
         {
@@ -353,16 +367,21 @@ public class WorkflowTaskSlaRuntimeService
         }
     }
 
-    /** @param execution WfTaskSlaExecution，运行执行；@param processDefinitionId String，定义主键；@return WfDeployTaskSla，精确部署快照。 */
+    /**
+     * 校验 SLA 执行与真实流程定义属于同一部署，并读取精确资源快照。
+     *
+     * @param execution WfTaskSlaExecution，当前锁定的 SLA 运行执行
+     * @param definition ProcessDefinition，已经校验字段完整的真实流程定义
+     * @return WfDeployTaskSla，与部署、流程和任务节点完全匹配的 SLA 快照
+     */
     private WfDeployTaskSla requireSnapshot(WfTaskSlaExecution execution,
-            String processDefinitionId)
+            ProcessDefinition definition)
     {
-        ProcessDefinition definition = requireDefinition(processDefinitionId);
         if (!execution.getDeploymentId().equals(definition.getDeploymentId()))
         {
             throw dataError("审批 SLA 执行与部署不一致");
         }
-        WfDeployTaskSla snapshot = slaMapper.selectDeploymentSnapshot(
+        WfDeployTaskSla snapshot = artifactRepository.selectTaskSlaSnapshot(
                 definition.getDeploymentId(), definition.getKey(),
                 execution.getTaskDefinitionKey());
         if (snapshot == null)
@@ -396,14 +415,37 @@ public class WorkflowTaskSlaRuntimeService
         return auditId;
     }
 
-    /** @param auditId Long，审计主键；@param recipient String，接收人；@param action String，动作；@param title String，标题；@param content String，正文；@return void，通知无效时回滚动作。 */
-    private void requireNotification(Long auditId, String recipient, String action,
+    /**
+     * 将 SLA 提醒或升级同步发布到统一通知模型，通知无效时回滚 SLA 状态和审计。
+     *
+     * @param auditId Long，已提交到当前事务的 SLA 审计主键
+     * @param execution WfTaskSlaExecution，通知关联的 SLA 任务运行事实
+     * @param processDefinitionKey String，部署时冻结的流程定义 key
+     * @param recipient String，接收人正式用户主键
+     * @param action String，REMINDER 或 ESCALATE
+     * @param title String，通知标题
+     * @param content String，脱敏通知正文
+     * @return void，统一 outbox、inbox 或审计任一未完整写入时抛出异常
+     */
+    private void requireNotification(Long auditId, WfTaskSlaExecution execution,
+            String processDefinitionKey, String recipient, String action,
             String title, String content)
     {
-        if (recipient == null || recipient.isBlank()
-                || slaMapper.insertNotification(auditId, recipient, action, title, content) != 1)
+        if (recipient == null || recipient.isBlank())
         {
             // 通知是提醒和升级成功状态的一部分，接收人失效时不能提交部分业务状态。
+            throw dataError("审批 SLA 通知接收人无效");
+        }
+        String routePath = "/workflow/process-detail/" + execution.getProcessInstanceId()
+                + "?source=todo&taskId=" + execution.getTaskId();
+        Long notificationId = notificationService.publishSynchronousInbox(
+                new SynchronousNotification("SLA", String.valueOf(auditId), action,
+                        recipient, processDefinitionKey, execution.getProcessInstanceId(),
+                        execution.getTaskId(), execution.getTaskDefinitionKey(), title, content,
+                        routePath));
+        if (notificationId == null)
+        {
+            // SLA 成功事实要求真实有效接收人，不能只提交超时状态而静默丢失通知。
             throw dataError("审批 SLA 通知接收人无效");
         }
     }

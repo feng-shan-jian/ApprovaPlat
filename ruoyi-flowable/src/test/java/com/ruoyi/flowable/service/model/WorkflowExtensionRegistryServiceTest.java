@@ -46,6 +46,7 @@ import com.ruoyi.flowable.mapper.WfBpmnExtensionMapper;
 class WorkflowExtensionRegistryServiceTest
 {
     private WfBpmnExtensionMapper mapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     private WorkflowSetVariableJavaHandler handler;
     private WorkflowHttpConnector httpConnector;
     private WorkflowExtensionRegistryService service;
@@ -62,6 +63,7 @@ class WorkflowExtensionRegistryServiceTest
         TransactionSynchronizationManager.setCurrentTransactionIsolationLevel(
                 Connection.TRANSACTION_REPEATABLE_READ);
         mapper = mock(WfBpmnExtensionMapper.class);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         handler = new WorkflowSetVariableJavaHandler();
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity())
@@ -73,7 +75,7 @@ class WorkflowExtensionRegistryServiceTest
         httpConnector = mock(WorkflowHttpConnector.class);
         when(httpConnector.configSchema()).thenReturn(
                 new WorkflowHttpConnector(null, null, null).configSchema());
-        service = new WorkflowExtensionRegistryService(operations, mapper,
+        service = new WorkflowExtensionRegistryService(operations, mapper, artifactRepository,
                 new WorkflowJavaExtensionHandlerRegistry(List.of(handler)),
                 httpConnector, mock(com.ruoyi.flowable.extension.WorkflowSqlConnector.class));
     }
@@ -294,15 +296,18 @@ class WorkflowExtensionRegistryServiceTest
     {
         when(mapper.selectByIdForUpdate(11L))
                 .thenReturn(extension(11L, "approva.removable", "DISABLED"));
-        when(mapper.countDeploymentSnapshots(11L)).thenReturn(0);
+        when(mapper.selectVersionIds(11L)).thenReturn(List.of(21L, 22L));
+        when(artifactRepository.countExtensionVersionReferences(List.of(21L, 22L)))
+                .thenReturn(0);
         when(mapper.deleteVersions(11L)).thenReturn(2);
         when(mapper.deleteExtension(11L)).thenReturn(1);
 
         service.removeExtension(11L);
 
-        var order = org.mockito.Mockito.inOrder(mapper);
+        var order = org.mockito.Mockito.inOrder(mapper, artifactRepository);
         order.verify(mapper).selectByIdForUpdate(11L);
-        order.verify(mapper).countDeploymentSnapshots(11L);
+        order.verify(mapper).selectVersionIds(11L);
+        order.verify(artifactRepository).countExtensionVersionReferences(List.of(21L, 22L));
         order.verify(mapper).deleteVersions(11L);
         order.verify(mapper).deleteExtension(11L);
     }
@@ -325,7 +330,8 @@ class WorkflowExtensionRegistryServiceTest
 
         when(mapper.selectByIdForUpdate(13L))
                 .thenReturn(extension(13L, "approva.deployed", "DISABLED"));
-        when(mapper.countDeploymentSnapshots(13L)).thenReturn(1);
+        when(mapper.selectVersionIds(13L)).thenReturn(List.of(31L));
+        when(artifactRepository.countExtensionVersionReferences(List.of(31L))).thenReturn(1);
         assertConflict(() -> service.removeExtension(13L), "部署快照引用");
 
         verify(mapper, never()).deleteVersions(any());

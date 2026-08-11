@@ -75,7 +75,7 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
@@ -114,7 +114,7 @@ class WorkflowProcessQueryServiceTest
     private WorkflowDeploymentService deploymentService;
 
     @Mock
-    private WfDeployFormMapper deployFormMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     @Mock
     private WfCopyMapper copyMapper;
@@ -181,7 +181,7 @@ class WorkflowProcessQueryServiceTest
         service = new WorkflowProcessQueryService(engineOperations, repositoryService,
                 historyService, runtimeService, taskService, identityResolver,
                 processAccessService,
-                deploymentService, deployFormMapper, copyMapper, userService,
+                deploymentService, artifactRepository, copyMapper, userService,
                 taskLifecycleService);
         service.setParticipantRuleRuntimeService(participantRuleRuntimeService);
     }
@@ -680,7 +680,7 @@ class WorkflowProcessQueryServiceTest
     }
 
     /**
-     * 验证首次发起只返回 BPMN 开始节点对应的 wf_deploy_form 不可变快照。
+     * 验证首次发起只返回 BPMN 开始节点对应的 Flowable 表单制品不可变快照。
      *
      * @return 无返回值，断言定义/部署/发起权限和快照内容关系
      */
@@ -703,7 +703,7 @@ class WorkflowProcessQueryServiceTest
         snapshot.setNodeKey("start");
         snapshot.setFormName("请假表单");
         snapshot.setContent("{\"fields\":[]}");
-        when(deployFormMapper.selectByDeploymentId("deploy-1")).thenReturn(List.of(snapshot));
+        when(artifactRepository.selectForms("deploy-1")).thenReturn(List.of(snapshot));
 
         WorkflowProcessFormView result = service.getProcessForm(
                 new WorkflowProcessFormQueryDto("definition-1", "deploy-1", null));
@@ -720,7 +720,7 @@ class WorkflowProcessQueryServiceTest
                     assertThat(assignment.minUsers()).isEqualTo(1);
                     assertThat(assignment.maxUsers()).isEqualTo(100);
                 });
-        verify(deployFormMapper).selectByDeploymentId("deploy-1");
+        verify(artifactRepository).selectForms("deploy-1");
     }
 
     /**
@@ -755,7 +755,7 @@ class WorkflowProcessQueryServiceTest
         snapshot.setNodeKey("start");
         snapshot.setFormName("请假表单");
         snapshot.setContent("{\"fields\":[]}");
-        when(deployFormMapper.selectByDeploymentId("deploy-1")).thenReturn(List.of(snapshot));
+        when(artifactRepository.selectForms("deploy-1")).thenReturn(List.of(snapshot));
 
         WorkflowProcessFormView result = service.getProcessForm(
                 new WorkflowProcessFormQueryDto("definition-1", "deploy-1", null));
@@ -790,13 +790,13 @@ class WorkflowProcessQueryServiceTest
                 new WorkflowProcessFormQueryDto("definition-1", "deploy-1", null)),
                 HttpStatus.ERROR);
 
-        verify(deployFormMapper, never()).selectByDeploymentId(any());
+        verify(artifactRepository, never()).selectForms(any());
     }
 
     /**
      * 验证内嵌 FormData 后续发生模型修改时，发起页仍只返回部署时冻结的渲染快照。
      *
-     * @return 无返回值，模型当前字段不得覆盖 wf_deploy_form 中的不可变内容
+     * @return 无返回值，模型当前字段不得覆盖 forms-v1.json 中的不可变内容
      */
     @Test
     void returnsFrozenEmbeddedStartFormAfterModelPropertiesChange()
@@ -827,7 +827,7 @@ class WorkflowProcessQueryServiceTest
         snapshot.setNodeKey("start");
         snapshot.setFormName("部署时内嵌表单");
         snapshot.setContent(frozenContent);
-        when(deployFormMapper.selectByDeploymentId("deploy-1")).thenReturn(List.of(snapshot));
+        when(artifactRepository.selectForms("deploy-1")).thenReturn(List.of(snapshot));
 
         WorkflowProcessFormView result = service.getProcessForm(
                 new WorkflowProcessFormQueryDto("definition-1", "deploy-1", null));
@@ -858,7 +858,7 @@ class WorkflowProcessQueryServiceTest
                 HttpStatus.CONFLICT);
 
         verify(processAccessService).requireReadableInstance("instance-1");
-        verify(deployFormMapper, never()).selectByDeploymentId(any());
+        verify(artifactRepository, never()).selectForms(any());
     }
 
     /**

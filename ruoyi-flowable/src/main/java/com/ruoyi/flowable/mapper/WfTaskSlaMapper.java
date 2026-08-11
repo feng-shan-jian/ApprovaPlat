@@ -4,14 +4,13 @@ import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WfBusinessCalendar;
-import com.ruoyi.flowable.domain.WfDeployTaskSla;
 import com.ruoyi.flowable.domain.WfTaskSlaExecution;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
 
 /**
- * 业务日历、部署 SLA 快照及运行状态数据访问层。
+ * 业务日历、SLA 运行状态、审计及统一通知查询数据访问层。
  */
 public interface WfTaskSlaMapper
 {
@@ -54,34 +53,6 @@ public interface WfTaskSlaMapper
      */
     int insertCalendarDays(@Param("calendarId") Long calendarId,
             @Param("days") List<WfBusinessCalendar.CalendarDay> days);
-
-    /** @param snapshots List&lt;WfDeployTaskSla&gt;，部署快照；@return int，写入行数。 */
-    int insertDeploymentSnapshots(@Param("snapshots") List<WfDeployTaskSla> snapshots);
-
-    /**
-     * 查询运行时不可变快照。
-     * @param deploymentId String，部署主键
-     * @param processKey String，流程定义 key
-     * @param taskDefinitionKey String，审批节点标识
-     * @return WfDeployTaskSla，精确快照或 null
-     */
-    WfDeployTaskSla selectDeploymentSnapshot(@Param("deploymentId") String deploymentId,
-            @Param("processKey") String processKey,
-            @Param("taskDefinitionKey") String taskDefinitionKey);
-
-    /**
-     * 统计部署拥有的 SLA 不可变快照，供删除事务冻结预期行数。
-     * @param deploymentId String，Flowable 部署主键
-     * @return int，当前快照行数
-     */
-    int countDeploymentSnapshotsByDeploymentId(@Param("deploymentId") String deploymentId);
-
-    /**
-     * 删除指定部署的 SLA 不可变快照。
-     * @param deploymentId String，Flowable 部署主键
-     * @return int，实际删除行数
-     */
-    int deleteDeploymentSnapshotsByDeploymentId(@Param("deploymentId") String deploymentId);
 
     /** @param execution WfTaskSlaExecution，任务 SLA 初始状态；@return int，首次写入 1，重复创建 0。 */
     int insertExecution(WfTaskSlaExecution execution);
@@ -180,20 +151,6 @@ public interface WfTaskSlaMapper
     Long selectAuditId(@Param("executionId") Long executionId,
             @Param("actionType") String actionType,
             @Param("actionOrdinal") Integer actionOrdinal);
-
-    /**
-     * 为有效正式用户创建通知。
-     * @param auditId Long，审计主键
-     * @param recipientUserId String，接收用户主键
-     * @param actionType String，REMINDER 或 ESCALATE
-     * @param title String，通知标题
-     * @param content String，通知正文
-     * @return int，首次有效写入 1，否则 0
-     */
-    int insertNotification(@Param("auditId") Long auditId,
-            @Param("recipientUserId") String recipientUserId,
-            @Param("actionType") String actionType,
-            @Param("title") String title, @Param("content") String content);
 
     /** @return List&lt;WorkflowTaskSlaAuditView&gt;，最近 500 条 SLA 审计。 */
     List<WorkflowTaskSlaAuditView> selectAudits();

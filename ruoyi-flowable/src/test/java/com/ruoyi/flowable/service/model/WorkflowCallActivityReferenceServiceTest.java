@@ -29,8 +29,6 @@ import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfDeployCallActivityMapper;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WfFormMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 
@@ -152,9 +150,9 @@ class WorkflowCallActivityReferenceServiceTest
     {
         WorkflowEngineOperations operations = mock(WorkflowEngineOperations.class);
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
-        WfDeployFormMapper deployFormMapper = mock(WfDeployFormMapper.class);
+        WorkflowDeploymentArtifactRepository artifactRepository =
+                mock(WorkflowDeploymentArtifactRepository.class);
         WfFormMapper formMapper = mock(WfFormMapper.class);
-        WfDeployCallActivityMapper snapshotMapper = mock(WfDeployCallActivityMapper.class);
         when(operations.read(any(Supplier.class))).thenAnswer(invocation ->
                 ((Supplier<?>) invocation.getArgument(0)).get());
         when(identityResolver.resolveCurrentIdentity())
@@ -172,7 +170,7 @@ class WorkflowCallActivityReferenceServiceTest
                 "secret:1:forbidden", "secret", "保密流程", 1, false);
         when(definitionQuery.list()).thenReturn(List.of(
                 userAllowed, groupAllowedSuspended, forbidden));
-        when(deployFormMapper.selectByDeploymentId(anyString())).thenReturn(List.of());
+        when(artifactRepository.selectForms(anyString())).thenReturn(List.of());
         IdentityLink userLink = identityLink("7", null);
         IdentityLink groupLink = identityLink(null, "ROLE2");
         IdentityLink forbiddenLink = identityLink("99", "ROLE9");
@@ -189,8 +187,8 @@ class WorkflowCallActivityReferenceServiceTest
 
         WorkflowCallActivityReferenceService productionService =
                 new WorkflowCallActivityReferenceService(repositoryService, operations,
-                        identityResolver, deployFormMapper, formMapper,
-                        new WorkflowFormTemplateValidator(), snapshotMapper);
+                        identityResolver, artifactRepository, formMapper,
+                        new WorkflowFormTemplateValidator());
 
         assertThat(productionService.listReferenceOptions(null))
                 .extracting(option -> option.definitionId() + ":" + option.status())
@@ -207,9 +205,9 @@ class WorkflowCallActivityReferenceServiceTest
     {
         WorkflowEngineOperations operations = mock(WorkflowEngineOperations.class);
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
-        WfDeployFormMapper deployFormMapper = mock(WfDeployFormMapper.class);
+        WorkflowDeploymentArtifactRepository artifactRepository =
+                mock(WorkflowDeploymentArtifactRepository.class);
         WfFormMapper formMapper = mock(WfFormMapper.class);
-        WfDeployCallActivityMapper snapshotMapper = mock(WfDeployCallActivityMapper.class);
         ProcessDefinition target = catalogDefinition(
                 "child:1:stable", "child", "子流程", 1, false);
         when(definitionQuery.singleResult()).thenReturn(target);
@@ -217,13 +215,13 @@ class WorkflowCallActivityReferenceServiceTest
                 .thenReturn(List.of());
         when(repositoryService.getBpmnModel(target.getId()))
                 .thenReturn(parse(publishedBpmn("child")));
-        when(deployFormMapper.selectByDeploymentId(target.getDeploymentId()))
+        when(artifactRepository.selectForms(target.getDeploymentId()))
                 .thenReturn(List.of(deployForm("start", formField("childAmount", "el-input-number"))));
 
         WorkflowCallActivityReferenceService productionService =
                 new WorkflowCallActivityReferenceService(repositoryService, operations,
-                        identityResolver, deployFormMapper, formMapper,
-                        new WorkflowFormTemplateValidator(), snapshotMapper);
+                        identityResolver, artifactRepository, formMapper,
+                        new WorkflowFormTemplateValidator());
         byte[] authorBytes = mappedAuthorBpmn(
                 "child", "parentText", "childAmount");
         WorkflowBpmnDocument authorDocument = new WorkflowBpmnDocument(
@@ -239,7 +237,7 @@ class WorkflowCallActivityReferenceServiceTest
                     assertThat(exception.getCode()).isEqualTo(HttpStatus.BAD_REQUEST);
                     assertThat(exception.getMessage()).isEqualTo("调用活动输入变量字段类型不兼容");
                 });
-        verify(snapshotMapper, never()).insertBatch(any());
+        verify(artifactRepository, never()).persist(anyString(), any());
     }
 
     /**

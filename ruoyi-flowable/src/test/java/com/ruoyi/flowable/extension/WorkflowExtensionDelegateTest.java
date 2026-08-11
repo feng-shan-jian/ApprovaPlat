@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import tools.jackson.databind.JsonNode;
 
@@ -27,7 +27,7 @@ import tools.jackson.databind.JsonNode;
 class WorkflowExtensionDelegateTest
 {
     private RepositoryService repositoryService;
-    private WfDeployExtensionSnapshotMapper snapshotMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     private WorkflowJavaExtensionHandler handler;
     private DelegateExecution execution;
     private WorkflowExtensionDelegate delegate;
@@ -41,14 +41,14 @@ class WorkflowExtensionDelegateTest
     void setUp()
     {
         repositoryService = mock(RepositoryService.class);
-        snapshotMapper = mock(WfDeployExtensionSnapshotMapper.class);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         handler = mock(WorkflowJavaExtensionHandler.class);
         when(handler.implementationKey()).thenReturn("SET_VARIABLE");
         when(handler.displayName()).thenReturn("设置流程变量");
         when(handler.configSchema()).thenReturn("{\"type\":\"object\"}");
         WorkflowJavaExtensionHandlerRegistry registry =
                 new WorkflowJavaExtensionHandlerRegistry(List.of(handler));
-        delegate = new WorkflowExtensionDelegate(repositoryService, snapshotMapper, registry,
+        delegate = new WorkflowExtensionDelegate(repositoryService, artifactRepository, registry,
                 mock(WorkflowHttpConnector.class), mock(WorkflowSqlConnector.class));
 
         execution = mock(DelegateExecution.class);
@@ -61,7 +61,7 @@ class WorkflowExtensionDelegateTest
 
         snapshot = snapshot();
         snapshot.setSnapshotChecksum(WorkflowExtensionDeploymentService.snapshotChecksum(snapshot));
-        when(snapshotMapper.selectRuntimeSnapshot(
+        when(artifactRepository.selectExtensionSnapshot(
                 "deployment-1", "expense", "set-result")).thenReturn(snapshot);
         when(handler.validateAndNormalizeConfig(any(JsonNode.class)))
                 .thenReturn(snapshot.getConfigJson());
@@ -76,7 +76,7 @@ class WorkflowExtensionDelegateTest
     {
         delegate.execute(execution);
 
-        verify(snapshotMapper).selectRuntimeSnapshot(
+        verify(artifactRepository).selectExtensionSnapshot(
                 "deployment-1", "expense", "set-result");
         verify(handler).execute(any(DelegateExecution.class), any(JsonNode.class));
     }
@@ -105,12 +105,12 @@ class WorkflowExtensionDelegateTest
     @Test
     void rejectsMissingOrTamperedSnapshotWithoutHandlerExecution()
     {
-        when(snapshotMapper.selectRuntimeSnapshot(
+        when(artifactRepository.selectExtensionSnapshot(
                 "deployment-1", "expense", "set-result")).thenReturn(null);
         assertServerError(() -> delegate.execute(execution), "扩展执行快照不存在");
 
         snapshot.setSnapshotChecksum("0".repeat(64));
-        when(snapshotMapper.selectRuntimeSnapshot(
+        when(artifactRepository.selectExtensionSnapshot(
                 "deployment-1", "expense", "set-result")).thenReturn(snapshot);
         assertServerError(() -> delegate.execute(execution), "校验和不一致");
 

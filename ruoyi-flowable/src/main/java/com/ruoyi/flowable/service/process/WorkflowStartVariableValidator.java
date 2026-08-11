@@ -110,7 +110,7 @@ public class WorkflowStartVariableValidator
     /**
      * 按部署时固化的开始表单 schema 校验字段、必填、类型和资源边界。
      *
-     * @param snapshotContent String，来自 wf_deploy_form.content 的不可变 JSON 快照
+     * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变 JSON 快照
      * @param variables Map&lt;String, Object&gt;，客户端提交的开始表单变量，允许为空
      * @return Map&lt;String, Object&gt;，深度复制且不可修改的受控变量映射
      */
@@ -123,7 +123,7 @@ public class WorkflowStartVariableValidator
     /**
      * 按部署表单 schema 校验变量，并单独提取 el-upload 中的临时附件 UUID 白名单。
      *
-     * @param snapshotContent String，来自 wf_deploy_form.content 的不可变 JSON 快照
+     * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变 JSON 快照
      * @param variables Map&lt;String, Object&gt;，客户端提交的开始表单变量，允许为空
      * @return WorkflowValidatedStartVariables，规范变量及按字段分组的附件 UUID
      */
@@ -136,7 +136,7 @@ public class WorkflowStartVariableValidator
     /**
      * 按部署表单快照校验草稿字段，但允许正式必填字段暂时缺失或为空。
      *
-     * @param snapshotContent String，来自 wf_deploy_form.content 的不可变节点表单 JSON
+     * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变节点表单 JSON
      * @param variables Map&lt;String,Object&gt;，客户端本次保存的草稿字段补丁
      * @return WorkflowValidatedStartVariables，已执行字段白名单、类型、写权限和附件格式校验的草稿补丁
      */
@@ -150,7 +150,7 @@ public class WorkflowStartVariableValidator
     /**
      * 按部署表单校验局部更新，并允许未提交的必填字段沿用上一份正式提交快照。
      *
-     * @param snapshotContent String，来自 wf_deploy_form.content 的不可变节点表单 JSON
+     * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变节点表单 JSON
      * @param variables Map&lt;String,Object&gt;，客户端本次明确提交的字段补丁
      * @param existingValues Map&lt;String,JsonNode&gt;，上一份服务端正式提交快照字段值
      * @return WorkflowValidatedStartVariables，仅包含本次合法补丁及其附件 UUID
@@ -165,7 +165,7 @@ public class WorkflowStartVariableValidator
     /**
      * 从不可变节点表单快照提取允许写入历史提交快照的可读字段目录。
      *
-     * @param snapshotContent String，来自 wf_deploy_form.content 的不可变节点表单 JSON
+     * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变节点表单 JSON
      * @return Set&lt;String&gt;，保持表单字段顺序且不包含隐藏字段的不可修改字段名集合
      */
     public Set<String> readableFieldNames(String snapshotContent)

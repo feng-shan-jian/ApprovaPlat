@@ -51,6 +51,7 @@ import com.ruoyi.RuoYiApplication;
 import com.ruoyi.web.controller.workflow.WorkflowRbacMatrix.Access;
 import com.ruoyi.web.controller.workflow.WorkflowRbacMatrix.Endpoint;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 
 /**
  * 五角色通过真实 HTTP、Spring Security、JWT/Redis Token 和隔离 MySQL 执行的 URL 拒绝矩阵。
@@ -174,6 +175,9 @@ class WorkflowRbacHttpIT
     @Autowired
     private WorkflowAttachmentStorage attachmentStorage;
 
+    @Autowired
+    private WorkflowDeploymentArtifactRepository artifactRepository;
+
     /** 测试专用 JSON 解析器，不依赖应用使用的 Jackson 3 Spring Bean。 */
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
@@ -266,7 +270,7 @@ class WorkflowRbacHttpIT
 
         allowFixture = new WorkflowRbacAllowFixture(serverPort, HTTP_TIMEOUT,
                 httpClient, objectMapper, jdbcTemplate, processEngine, attachmentStorage,
-                roleTokens, roleUserIds, roleUsernames);
+                artifactRepository, roleTokens, roleUserIds, roleUsernames);
         allowFixture.prepare();
     }
 

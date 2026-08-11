@@ -75,7 +75,8 @@ class WorkflowNotificationMySqlIT
 {
     /** 仅允许显式带有验收或集成测试语义的 ApprovaPlat 隔离库执行全量通知清理。 */
     private static final Pattern ISOLATED_SCHEMA_PATTERN = Pattern.compile(
-            "^approvaplat_(?:accept|acceptance|it|test)_[a-z0-9]+(?:_[a-z0-9]+)*$");
+            "^(?:approvaplat_(?:accept|acceptance|it|test)_[a-z0-9]+(?:_[a-z0-9]+)*"
+                    + "|ry_vue(?:_codex)?_flowable_it)$");
 
     @Autowired private RepositoryService repositoryService;
     @Autowired private RuntimeService runtimeService;
@@ -1262,12 +1263,15 @@ class WorkflowNotificationMySqlIT
     {
         String key = UUID.randomUUID().toString().replace("-", "")
                 + UUID.randomUUID().toString().replace("-", "");
-        jdbc.update("insert into wf_notification_outbox (idempotency_key,event_type,channel," +
+        jdbc.update("insert into wf_notification_outbox (idempotency_key,source_type,source_id," +
+                "event_type,channel," +
                 "recipient_user_id,process_definition_key,process_instance_id,title,content,route_path," +
                 "status,attempt_count,max_attempts,next_attempt_at,revision,create_time) " +
-                "values (?,'MANUAL_URGE',?,?,? ,?,'测试通知','脱敏测试正文','/workflow/process-detail/test'," +
+                "values (?,'APPROVAL',?,'MANUAL_URGE',?,?,? ,?,'测试通知','脱敏测试正文'," +
+                "'/workflow/process-detail/test'," +
                 "'PENDING',0,?,current_timestamp(3),0,current_timestamp(3))",
-                key, channel, Long.valueOf(recipientUserId), "notification-it", runId, maxAttempts);
+                key, runId + ":MANUAL_URGE", channel, Long.valueOf(recipientUserId),
+                "notification-it", runId, maxAttempts);
         return jdbc.queryForObject("select outbox_id from wf_notification_outbox where idempotency_key=?",
                 Long.class, key);
     }

@@ -35,12 +35,12 @@ import com.ruoyi.flowable.domain.WfConnectorEndpoint;
 import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
 import com.ruoyi.flowable.domain.WfSqlDataSource;
 import com.ruoyi.flowable.mapper.WfConnectorEndpointMapper;
-import com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper;
-import com.ruoyi.flowable.mapper.WfDeployExtensionSnapshotMapper;
 import com.ruoyi.flowable.mapper.WfSqlDataSourceMapper;
 import com.ruoyi.flowable.service.model.WorkflowBpmnDocument;
 import com.ruoyi.flowable.service.model.WorkflowBpmnService;
 import com.ruoyi.flowable.service.model.WorkflowConnectorEndpointService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowDmnDecisionService;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowPreparedDmnDeployment;
@@ -79,9 +79,7 @@ class WorkflowConnectorBpmnEventChainMySqlIT
     @Autowired
     private WorkflowDmnDecisionService dmnDecisionService;
     @Autowired
-    private WfDeployExtensionSnapshotMapper extensionSnapshotMapper;
-    @Autowired
-    private WfDeployDmnSnapshotMapper dmnSnapshotMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     @Autowired
     private WfConnectorEndpointMapper endpointMapper;
     @Autowired
@@ -143,15 +141,25 @@ class WorkflowConnectorBpmnEventChainMySqlIT
         RepositoryService repositoryService = processEngine.getRepositoryService();
         for (String deploymentId : processDeploymentIds)
         {
-            List<WfDeployDmnSnapshot> dmnSnapshots = dmnSnapshotMapper
-                    .selectByDeploymentId(deploymentId);
-            jdbc.update("delete n from wf_bpmn_event_notification n "
-                    + "join wf_bpmn_event_audit a on a.audit_id=n.audit_id "
+            List<WfDeployDmnSnapshot> dmnSnapshots = artifactRepository
+                    .selectDmnSnapshots(deploymentId);
+            jdbc.update("delete d from wf_notification_delivery_audit d "
+                    + "join wf_notification_outbox o on o.outbox_id=d.outbox_id "
+                    + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
+                    + "and o.source_id=cast(a.audit_id as char) "
+                    + "where a.deployment_id=?", deploymentId);
+            jdbc.update("delete n from wf_notification_inbox n "
+                    + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
+                    + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
+                    + "and o.source_id=cast(a.audit_id as char) "
+                    + "where a.deployment_id=?", deploymentId);
+            jdbc.update("delete o from wf_notification_outbox o "
+                    + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
+                    + "and o.source_id=cast(a.audit_id as char) "
                     + "where a.deployment_id=?", deploymentId);
             jdbc.update("delete from wf_bpmn_event_audit where deployment_id=?", deploymentId);
             jdbc.update("delete from wf_connector_invocation where deployment_id=?", deploymentId);
-            extensionSnapshotMapper.deleteByDeploymentId(deploymentId);
-            dmnSnapshotMapper.deleteByDeploymentId(deploymentId);
+            artifactRepository.delete(deploymentId);
             if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() == 1L)
             {
                 repositoryService.deleteDeployment(deploymentId, true);
@@ -193,9 +201,7 @@ class WorkflowConnectorBpmnEventChainMySqlIT
         String processKey = key("http");
         Deployment deployment = deploy(processKey,
                 connectorEventBpmn(processKey, httpTask(), "HTTP", "httpStatus", "202"));
-        assertThat(jdbc.queryForObject(
-                "select count(*) from wf_deploy_extension_snapshot where deploy_id=?",
-                Integer.class, deployment.getId())).isEqualTo(2);
+        assertThat(artifactRepository.selectExtensionSnapshots(deployment.getId())).hasSize(2);
 
         ProcessInstance instance = processEngine.getRuntimeService().startProcessInstanceByKey(
                 processKey, Map.of("initiator", "1", "httpPayload", "真实审批回调"));
@@ -256,7 +262,7 @@ class WorkflowConnectorBpmnEventChainMySqlIT
         Deployment deployment = deploy(processKey,
                 connectorEventBpmn(processKey, dmnTask(decision.getId()),
                         "DMN", "eventSignal", "RAISE"));
-        assertThat(dmnSnapshotMapper.selectByDeploymentId(deployment.getId())).singleElement()
+        assertThat(artifactRepository.selectDmnSnapshots(deployment.getId())).singleElement()
                 .satisfies(snapshot ->
                 {
                     assertThat(snapshot.getSourceDecisionId()).isEqualTo(decision.getId());
@@ -295,7 +301,11 @@ class WorkflowConnectorBpmnEventChainMySqlIT
                 .addBytes(processKey + ".bpmn20.xml",
                         tampered.getBytes(StandardCharsets.UTF_8)).deploy();
         processDeploymentIds.add(deployment.getId());
-        extensionDeploymentService.persist(deployment.getId(), extensionPrepared);
+        artifactRepository.persist(deployment.getId(), new WorkflowDeploymentArtifacts(
+                List.of(), List.of(), List.of(), List.of(),
+                extensionDeploymentService.snapshotsForDeployment(
+                        deployment.getId(), extensionPrepared),
+                List.of(), List.of(), List.of()));
 
         assertThatThrownBy(() -> processEngine.getRuntimeService().startProcessInstanceByKey(
                 processKey, Map.of("initiator", "1", "dataSourceKey", dataSourceKey,
@@ -317,8 +327,11 @@ class WorkflowConnectorBpmnEventChainMySqlIT
                 .containsEntry("match_status", "UNMATCHED")
                 .containsEntry("source_element_id", "raiseEvent");
         assertThat(jdbc.queryForObject(
-                "select count(*) from wf_bpmn_event_notification n "
-                        + "join wf_bpmn_event_audit a on a.audit_id=n.audit_id "
+                "select count(*) from wf_notification_inbox n "
+                        + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
+                        + "and o.source_type='BPMN_EVENT' "
+                        + "join wf_bpmn_event_audit a "
+                        + "on o.source_id=cast(a.audit_id as char) "
                         + "where a.deployment_id=?",
                 Integer.class, deployment.getId())).isZero();
     }
@@ -341,8 +354,14 @@ class WorkflowConnectorBpmnEventChainMySqlIT
                 .name(processKey).key(processKey)
                 .addBytes(processKey + ".bpmn20.xml", dmnPrepared.compiledBpmn()).deploy();
         processDeploymentIds.add(deployment.getId());
-        extensionDeploymentService.persist(deployment.getId(), extensionPrepared);
-        dmnDecisionService.persist(deployment.getId(), dmnPrepared, "1");
+        List<com.ruoyi.flowable.domain.WfDeployExtensionSnapshot> extensionSnapshots =
+                extensionDeploymentService.snapshotsForDeployment(
+                        deployment.getId(), extensionPrepared);
+        List<WfDeployDmnSnapshot> dmnSnapshots = dmnDecisionService.freezeSnapshots(
+                deployment.getId(), dmnPrepared, "1");
+        artifactRepository.persist(deployment.getId(), new WorkflowDeploymentArtifacts(
+                List.of(), List.of(), List.of(), List.of(), extensionSnapshots,
+                dmnSnapshots, List.of(), List.of()));
         return deployment;
     }
 

@@ -91,6 +91,8 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
+import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WorkflowInstanceState;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
@@ -119,6 +121,8 @@ import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.service.model.WorkflowModelService;
 import com.ruoyi.flowable.service.model.WorkflowConnectorEndpointService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowEmbeddedFormConverter;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
@@ -161,7 +165,7 @@ class FlowableEngineIT
     private static final String BUSINESS_KEY_PREFIX = "engine-it-";
     /** P14 真实发起流程开始节点使用的不可变表单键。 */
     private static final String PROCESS_START_FORM_KEY = "key_p14_start_form";
-    /** P14 写入 wf_form 与 wf_deploy_form 的同一份开始表单 JSON。 */
+    /** P14 写入 wf_form 与 Flowable 部署资源的同一份开始表单 JSON。 */
     private static final String PROCESS_START_FORM_CONTENT = """
         {"fields":[
           {"__config__":{"layout":"colFormItem","tag":"el-input","required":true},
@@ -293,6 +297,8 @@ class FlowableEngineIT
     private final WorkflowEngineOperations workflowEngineOperations;
     private final WorkflowProcessEngineAdapter workflowProcessEngineAdapter;
     private final WorkflowProcessStartService workflowProcessStartService;
+    /** Flowable 官方子部署资源仓库，用于手工部署夹具的不可变业务快照。 */
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
     /** 真实模型保存服务，用于验证 MySQL 行锁、Flowable 模型和幂等记录的同事务闭环。 */
     private final WorkflowModelService workflowModelService;
     /** 真实 HTTP 端点白名单服务，用于验证管理配置到部署冻结的完整链路。 */
@@ -323,6 +329,7 @@ class FlowableEngineIT
      * @param workflowEngineOperations WorkflowEngineOperations，统一只读事务与异常翻译边界
      * @param workflowProcessEngineAdapter WorkflowProcessEngineAdapter，P2 流程引擎公共适配器
      * @param workflowProcessStartService WorkflowProcessStartService，P14 真实流程发起服务
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，正式部署资源仓库
      * @param workflowModelService WorkflowModelService，真实流程模型保存服务
      * @param workflowConnectorEndpointService WorkflowConnectorEndpointService，真实 HTTP 端点白名单服务
      * @param workflowProcessDetailService WorkflowProcessDetailService，历史表单快照详情服务
@@ -348,6 +355,7 @@ class FlowableEngineIT
         WorkflowEngineOperations workflowEngineOperations,
         WorkflowProcessEngineAdapter workflowProcessEngineAdapter,
         WorkflowProcessStartService workflowProcessStartService,
+        WorkflowDeploymentArtifactRepository artifactRepository,
         WorkflowModelService workflowModelService,
         WorkflowConnectorEndpointService workflowConnectorEndpointService,
         WorkflowProcessDetailService workflowProcessDetailService,
@@ -371,6 +379,7 @@ class FlowableEngineIT
         this.workflowEngineOperations = workflowEngineOperations;
         this.workflowProcessEngineAdapter = workflowProcessEngineAdapter;
         this.workflowProcessStartService = workflowProcessStartService;
+        this.artifactRepository = artifactRepository;
         this.workflowModelService = workflowModelService;
         this.workflowConnectorEndpointService = workflowConnectorEndpointService;
         this.workflowProcessDetailService = workflowProcessDetailService;
@@ -1145,12 +1154,7 @@ class FlowableEngineIT
             {
                 if (temporaryApprovalRoleLinked || temporaryUserInserted)
                 {
-                    jdbcTemplate.update("delete from sys_user_role where user_id = ?",
-                        ADAPTER_NON_CANDIDATE_USER_ID);
-                }
-                if (temporaryUserInserted)
-                {
-                    jdbcTemplate.update("delete from sys_user where user_id = ?", ADAPTER_NON_CANDIDATE_USER_ID);
+                    deleteTemporaryWorkflowUser(jdbcTemplate, ADAPTER_NON_CANDIDATE_USER_ID);
                 }
             }
 
@@ -1275,7 +1279,7 @@ class FlowableEngineIT
             {
                 if (deploymentId != null)
                 {
-                    jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
+                    artifactRepository.delete(deploymentId);
                 }
             }
             finally
@@ -1300,7 +1304,7 @@ class FlowableEngineIT
                     {
                         if (temporaryUserInserted)
                         {
-                            jdbcTemplate.update("delete from sys_user where user_id = ?",
+                            deleteTemporaryWorkflowUser(jdbcTemplate,
                                 ADAPTER_NON_CANDIDATE_USER_ID);
                         }
                     }
@@ -1312,8 +1316,7 @@ class FlowableEngineIT
             .processInstanceBusinessKey(authorizedBusinessKey).count()).isZero();
         assertThat(historyService.createHistoricProcessInstanceQuery()
             .processInstanceBusinessKey(authorizedBusinessKey).count()).isZero();
-        assertThat(jdbcTemplate.queryForObject(
-            "select count(*) from wf_deploy_form where deploy_id = ?", Long.class, deploymentId)).isZero();
+        assertThat(artifactRepository.selectForms(deploymentId)).isEmpty();
         assertThat(jdbcTemplate.queryForObject(
             "select count(*) from wf_form where form_id = ?", Long.class, formId)).isZero();
         assertTemporaryWorkflowUserAbsent(jdbcTemplate);
@@ -1597,12 +1600,7 @@ class FlowableEngineIT
             {
                 if (temporaryApprovalRoleLinked || temporaryUserInserted)
                 {
-                    jdbcTemplate.update("delete from sys_user_role where user_id = ?",
-                        ADAPTER_NON_CANDIDATE_USER_ID);
-                }
-                if (temporaryUserInserted)
-                {
-                    jdbcTemplate.update("delete from sys_user where user_id = ?", ADAPTER_NON_CANDIDATE_USER_ID);
+                    deleteTemporaryWorkflowUser(jdbcTemplate, ADAPTER_NON_CANDIDATE_USER_ID);
                 }
             }
         }
@@ -1878,13 +1876,7 @@ class FlowableEngineIT
             {
                 if (temporaryApprovalRoleLinked || temporaryUserInserted)
                 {
-                    jdbcTemplate.update("delete from sys_user_role where user_id = ?",
-                        ADAPTER_NON_CANDIDATE_USER_ID);
-                }
-                if (temporaryUserInserted)
-                {
-                    jdbcTemplate.update("delete from sys_user where user_id = ?",
-                        ADAPTER_NON_CANDIDATE_USER_ID);
+                    deleteTemporaryWorkflowUser(jdbcTemplate, ADAPTER_NON_CANDIDATE_USER_ID);
                 }
             }
         }
@@ -3212,7 +3204,7 @@ class FlowableEngineIT
             {
                 if (temporaryUserInserted)
                 {
-                    jdbcTemplate.update("delete from sys_user where user_id = ?",
+                    deleteTemporaryWorkflowUser(jdbcTemplate,
                         ADAPTER_NON_CANDIDATE_USER_ID);
                 }
             }
@@ -3411,7 +3403,7 @@ class FlowableEngineIT
                 {
                     if (temporaryUserInserted)
                     {
-                        jdbcTemplate.update("delete from sys_user where user_id = ?",
+                        deleteTemporaryWorkflowUser(jdbcTemplate,
                             ADAPTER_NON_CANDIDATE_USER_ID);
                     }
                 }
@@ -3689,15 +3681,14 @@ class FlowableEngineIT
                 startEvent.getFormProperties());
             String reviewContent = WorkflowEmbeddedFormConverter.convert(
                 reviewTask.getFormProperties());
-            assertThat(jdbcTemplate.update(
-                "insert into wf_deploy_form "
-                    + "(deploy_id, source_type, form_id, form_key, node_key, form_name, "
-                    + "node_name, content, create_by, create_time, del_flag) values "
-                    + "(?, 'EMBEDDED', null, 'embedded', 'start', '提交申请内嵌表单', "
-                    + "'提交申请', ?, '1', current_timestamp, '0'), "
-                    + "(?, 'EMBEDDED', null, 'embedded', 'review', '审批内嵌表单', "
-                    + "'审批', ?, '1', current_timestamp, '0')",
-                deploymentId, startContent, deploymentId, reviewContent)).isEqualTo(2);
+            List<WfDeployForm> embeddedForms = List.of(
+                deploymentForm("EMBEDDED", null, "embedded", "start",
+                    "提交申请内嵌表单", "提交申请", startContent, "1"),
+                deploymentForm("EMBEDDED", null, "embedded", "review",
+                    "审批内嵌表单", "审批", reviewContent, "1"));
+            artifactRepository.persist(deploymentId, new WorkflowDeploymentArtifacts(
+                embeddedForms, List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of()));
 
             setSecurityContextUser(1L);
             String businessKey = BUSINESS_KEY_PREFIX + "embedded-form-" + UUID.randomUUID();
@@ -3742,17 +3733,17 @@ class FlowableEngineIT
             assertThat(startForm.values().get("amount").longValue()).isEqualTo(2600L);
             assertThat(reviewForm.values().get("decision").textValue()).isEqualTo("APPROVE");
             assertThat(reviewForm.values().get("confirmed").booleanValue()).isTrue();
-            assertThat(jdbcTemplate.queryForObject(
-                "select count(*) from wf_deploy_form where deploy_id = ? "
-                    + "and source_type = 'EMBEDDED' and form_id is null",
-                Long.class, deploymentId)).isEqualTo(2L);
+            assertThat(artifactRepository.selectForms(deploymentId))
+                .filteredOn(form -> "EMBEDDED".equals(form.getSourceType())
+                    && form.getFormId() == null)
+                .hasSize(2);
         }
         finally
         {
             SecurityContextHolder.clearContext();
             if (deploymentId != null)
             {
-                jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
+                artifactRepository.delete(deploymentId);
                 if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() > 0)
                 {
                     repositoryService.deleteDeployment(deploymentId, true);
@@ -3827,13 +3818,12 @@ class FlowableEngineIT
             assertThat(definition).as("自定义表单字段模型必须部署唯一流程定义").isNotNull();
             repositoryService.addCandidateStarterUser(definition.getId(), "1");
 
-            Map<String, Object> frozenForm = jdbcTemplate.queryForMap(
-                "select source_type, form_id, content from wf_deploy_form "
-                    + "where deploy_id = ? and node_key = 'start'", deploymentId);
-            assertThat(frozenForm).containsEntry("source_type", "EMBEDDED")
-                .containsEntry("form_id", null);
+            WfDeployForm frozenForm = artifactRepository.selectForms(deploymentId).stream()
+                .filter(form -> "start".equals(form.getNodeKey())).findFirst().orElseThrow();
+            assertThat(frozenForm.getSourceType()).isEqualTo("EMBEDDED");
+            assertThat(frozenForm.getFormId()).isNull();
             JsonNode frozenContent = JsonMapper.shared().readTree(
-                String.valueOf(frozenForm.get("content")));
+                frozenForm.getContent());
             JsonNode frozenConfig = frozenContent.path("fields").get(0).path("__config__");
             assertThat(frozenConfig.path(WorkflowFormFieldExtension.EXTENSION_KEY_FIELD)
                 .textValue()).isEqualTo(extensionKey);
@@ -3843,20 +3833,17 @@ class FlowableEngineIT
                 .textValue()).isEqualTo(WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY);
             assertThat(frozenConfig.path(WorkflowFormFieldExtension.CHECKSUM_FIELD)
                 .textValue()).isEqualTo(checksum);
-            assertThat(jdbcTemplate.queryForMap(
-                "select extension_version_id, version_no, extension_type, implementation_key, "
-                    + "version_checksum, snapshot_checksum from wf_deploy_extension_snapshot "
-                    + "where deploy_id = ? and process_key = ? "
-                    + "and element_id = 'start#form#detail'",
-                deploymentId, successfulProcessKey))
-                .containsEntry("extension_version_id", extensionVersionId)
-                .containsEntry("version_no", 1)
-                .containsEntry("extension_type", "FORM_FIELD")
-                .containsEntry("implementation_key",
-                    WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY)
-                .containsEntry("version_checksum", checksum)
-                .hasEntrySatisfying("snapshot_checksum", value ->
-                    assertThat(String.valueOf(value)).matches("[0-9a-f]{64}"));
+            WfDeployExtensionSnapshot frozenExtension = artifactRepository
+                .selectExtensionSnapshot(deploymentId, successfulProcessKey,
+                    "start#form#detail");
+            assertThat(frozenExtension).isNotNull();
+            assertThat(frozenExtension.getExtensionVersionId()).isEqualTo(extensionVersionId);
+            assertThat(frozenExtension.getVersionNo()).isOne();
+            assertThat(frozenExtension.getExtensionType()).isEqualTo("FORM_FIELD");
+            assertThat(frozenExtension.getImplementationKey())
+                .isEqualTo(WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY);
+            assertThat(frozenExtension.getVersionChecksum()).isEqualTo(checksum);
+            assertThat(frozenExtension.getSnapshotChecksum()).matches("[0-9a-f]{64}");
 
             // 非字符串输入必须在创建 Flowable 实例前拒绝，历史与运行表均不得出现业务副作用。
             String rejectedBusinessKey = BUSINESS_KEY_PREFIX + "form-field-rejected-" + suffix;
@@ -3895,7 +3882,7 @@ class FlowableEngineIT
             String disabledModel = disabledModelId;
             assertWorkflowBusinessError(() -> workflowModelService.deployModel(disabledModel),
                 HttpStatus.CONFLICT, "扩展不存在、已停用或尚未发布版本");
-            assertModelDeploymentHasNoSideEffects(repositoryService, jdbcTemplate,
+            assertModelDeploymentHasNoSideEffects(repositoryService,
                 disabledModelId, disabledProcessKey);
 
             // 恢复目录后篡改版本摘要，服务端安装实现复核必须拒绝且保持同样的零副作用。
@@ -3911,7 +3898,7 @@ class FlowableEngineIT
             String tamperedModel = tamperedModelId;
             assertWorkflowBusinessError(() -> workflowModelService.deployModel(tamperedModel),
                 HttpStatus.CONFLICT, "扩展版本校验和不一致");
-            assertModelDeploymentHasNoSideEffects(repositoryService, jdbcTemplate,
+            assertModelDeploymentHasNoSideEffects(repositoryService,
                 tamperedModelId, tamperedProcessKey);
         }
         catch (tools.jackson.core.JacksonException exception)
@@ -3935,9 +3922,7 @@ class FlowableEngineIT
             }
             if (deploymentId != null)
             {
-                jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
-                jdbcTemplate.update(
-                    "delete from wf_deploy_extension_snapshot where deploy_id = ?", deploymentId);
+                artifactRepository.delete(deploymentId);
                 if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() > 0)
                 {
                     repositoryService.deleteDeployment(deploymentId, true);
@@ -3990,24 +3975,18 @@ class FlowableEngineIT
     /**
      * 断言失败部署没有创建 Flowable 部署、流程定义或任一业务快照。
      * @param repositoryService RepositoryService，Flowable 仓储服务
-     * @param jdbcTemplate JdbcTemplate，真实 MySQL 查询入口
      * @param modelId String，预期仍未部署的模型主键
      * @param processKey String，失败场景 BPMN 流程标识
      * @return 无返回值；发现任何部署副作用时测试失败
      */
     private void assertModelDeploymentHasNoSideEffects(RepositoryService repositoryService,
-            JdbcTemplate jdbcTemplate, String modelId, String processKey)
+            String modelId, String processKey)
     {
         assertThat(repositoryService.getModel(modelId).getDeploymentId()).isNull();
         assertThat(repositoryService.createProcessDefinitionQuery()
             .processDefinitionKey(processKey).count()).isZero();
-        assertThat(jdbcTemplate.queryForObject(
-            "select count(*) from wf_deploy_form where deploy_id in "
-                + "(select ID_ from ACT_RE_DEPLOYMENT where KEY_ = ?)",
-            Long.class, processKey)).isZero();
-        assertThat(jdbcTemplate.queryForObject(
-            "select count(*) from wf_deploy_extension_snapshot where process_key = ?",
-            Long.class, processKey)).isZero();
+        assertThat(repositoryService.createDeploymentQuery().deploymentKey(processKey).count())
+            .isZero();
     }
 
     /**
@@ -4126,12 +4105,11 @@ class FlowableEngineIT
                 .deploymentId(deploymentId).singleResult();
             assertThat(definition).as("HTTP 集成模型必须部署唯一流程定义").isNotNull();
             repositoryService.addCandidateStarterUser(definition.getId(), "1");
-            assertThat(jdbcTemplate.queryForObject(
-                "select count(*) from wf_deploy_extension_snapshot where deploy_id = ? "
-                    + "and process_key = ? and element_id = 'httpTask' "
-                    + "and extension_key = 'approva.http-connector' "
-                    + "and implementation_key = 'HTTP_CONNECTOR_V1'",
-                Long.class, deploymentId, modelKey)).isOne();
+            WfDeployExtensionSnapshot httpSnapshot = artifactRepository
+                .selectExtensionSnapshot(deploymentId, modelKey, "httpTask");
+            assertThat(httpSnapshot).isNotNull();
+            assertThat(httpSnapshot.getExtensionKey()).isEqualTo("approva.http-connector");
+            assertThat(httpSnapshot.getImplementationKey()).isEqualTo("HTTP_CONNECTOR_V1");
 
             WorkflowProcessInstanceSnapshot started = workflowProcessStartService.start(
                 new StartProcessRequest(definition.getId(), businessKey,
@@ -4220,9 +4198,7 @@ class FlowableEngineIT
             }
             if (deploymentId != null)
             {
-                jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
-                jdbcTemplate.update(
-                    "delete from wf_deploy_extension_snapshot where deploy_id = ?", deploymentId);
+                artifactRepository.delete(deploymentId);
                 deleteDeploymentIfPresent(repositoryService, deploymentId);
             }
             if (modelId != null
@@ -4372,6 +4348,7 @@ class FlowableEngineIT
         List<Long> formIds = transactionTemplate.execute(status ->
         {
             List<Long> insertedFormIds = new ArrayList<>();
+            List<WfDeployForm> deploymentForms = new ArrayList<>();
             for (LifecycleFormSpec formSpec : formSpecs)
             {
                 GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
@@ -4393,22 +4370,13 @@ class FlowableEngineIT
                 long formId = generatedKey.longValue();
                 insertedFormIds.add(formId);
 
-                int snapshotRows = jdbcTemplate.update(
-                    "insert into wf_deploy_form "
-                        + "(deploy_id, form_id, form_key, node_key, form_name, node_name, "
-                        + "content, create_by, del_flag) values (?, ?, ?, ?, ?, ?, ?, ?, '0')",
-                    deploymentId,
-                    formId,
-                    formSpec.formKey(),
-                    formSpec.nodeKey(),
-                    formSpec.formName(),
-                    formSpec.nodeName(),
-                    formSpec.content(),
-                    createdBy
-                );
-                assertThat(snapshotRows).as(scenarioName + "部署表单快照必须真实写入一行")
-                    .isEqualTo(1);
+                deploymentForms.add(deploymentForm("TEMPLATE", formId,
+                    formSpec.formKey(), formSpec.nodeKey(), formSpec.formName(),
+                    formSpec.nodeName(), formSpec.content(), createdBy));
             }
+            artifactRepository.persist(deploymentId, new WorkflowDeploymentArtifacts(
+                deploymentForms, List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of()));
             return List.copyOf(insertedFormIds);
         });
         assertThat(formIds).as(scenarioName + "表单事务必须返回全部正式主键")
@@ -4506,9 +4474,9 @@ class FlowableEngineIT
         {
             if (deploymentId != null)
             {
-                // 抄送表是项目正式业务表，不会被 Flowable 级联删除，必须先按部署快照关系清理。
+                // 抄送表是项目正式业务表，不会被 Flowable 级联删除，必须先按部署关系清理。
                 jdbcTemplate.update("delete from wf_copy where deployment_id = ?", deploymentId);
-                jdbcTemplate.update("delete from wf_deploy_form where deploy_id = ?", deploymentId);
+                artifactRepository.delete(deploymentId);
             }
             if (formIds != null)
             {
@@ -4531,9 +4499,7 @@ class FlowableEngineIT
             assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from wf_copy where deployment_id = ?",
                 Long.class, deploymentId)).isZero();
-            assertThat(jdbcTemplate.queryForObject(
-                "select count(*) from wf_deploy_form where deploy_id = ?",
-                Long.class, deploymentId)).isZero();
+            assertThat(artifactRepository.selectForms(deploymentId)).isEmpty();
         }
         if (formIds != null && !formIds.isEmpty())
         {
@@ -4559,6 +4525,10 @@ class FlowableEngineIT
     private void assertWorkflowCopy(JdbcTemplate jdbcTemplate, String processInstanceId,
             String taskId, long recipientUserId, String action)
     {
+        // 完成动作与自动抄送共用统一通知事件键，其余人工动作仍保留带任务修订号的事件键。
+        String expectedEventPrefix = "COMPLETE".equals(action)
+            ? "TASK_COMPLETED:" + taskId
+            : action + ":" + taskId + ":r";
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
             "select copy_event_id, task_id, user_id, create_by, del_flag "
                 + "from wf_copy where instance_id = ? and task_id = ? and user_id = ?",
@@ -4566,7 +4536,7 @@ class FlowableEngineIT
         assertThat(rows).singleElement().satisfies(row ->
         {
             assertThat(String.valueOf(row.get("copy_event_id")))
-                .startsWith(action + ":" + taskId + ":r");
+                .startsWith(expectedEventPrefix);
             assertThat(String.valueOf(row.get("task_id"))).isEqualTo(taskId);
             assertThat(((Number) row.get("user_id")).longValue()).isEqualTo(recipientUserId);
             assertThat(String.valueOf(row.get("create_by"))).isEqualTo("1");
@@ -5220,7 +5190,7 @@ class FlowableEngineIT
     }
 
     /**
-     * 在正式业务表中写入同源可编辑表单与当前部署的不可变开始节点快照。
+     * 写入同源可编辑表单与当前部署的不可变开始节点资源快照。
      *
      * @param jdbcTemplate JdbcTemplate，绑定专用集成测试 schema 的真实 MySQL 客户端
      * @param deploymentId String，P14 测试流程的真实 Flowable 部署主键
@@ -5248,20 +5218,12 @@ class FlowableEngineIT
 
         try
         {
-            int snapshotRows = jdbcTemplate.update(
-                "insert into wf_deploy_form "
-                    + "(deploy_id, form_id, form_key, node_key, form_name, node_name, content, create_by, del_flag) "
-                    + "values (?, ?, ?, ?, ?, ?, ?, ?, '0')",
-                deploymentId,
-                formId,
-                PROCESS_START_FORM_KEY,
-                "start",
-                formName,
-                "发起申请",
-                PROCESS_START_FORM_CONTENT,
-                "flowable-it-p14"
-            );
-            assertThat(snapshotRows).as("P14 部署表单快照必须真实写入一行").isEqualTo(1);
+            WfDeployForm snapshot = deploymentForm("TEMPLATE", formId,
+                PROCESS_START_FORM_KEY, "start", formName, "发起申请",
+                PROCESS_START_FORM_CONTENT, "flowable-it-p14");
+            artifactRepository.persist(deploymentId, new WorkflowDeploymentArtifacts(
+                List.of(snapshot), List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of()));
             return formId;
         }
         catch (RuntimeException | Error exception)
@@ -5270,6 +5232,33 @@ class FlowableEngineIT
             jdbcTemplate.update("delete from wf_form where form_id = ?", formId);
             throw exception;
         }
+    }
+
+    /**
+     * 构造手工部署夹具使用的不可变表单资源。
+     * @param sourceType String，TEMPLATE 或 EMBEDDED
+     * @param formId Long，模板来源主键；内嵌表单为空
+     * @param formKey String，BPMN 表单键
+     * @param nodeKey String，BPMN 节点键
+     * @param formName String，部署时表单名称
+     * @param nodeName String，部署时节点名称
+     * @param content String，部署时冻结的表单 JSON
+     * @param createdBy String，测试数据创建者
+     * @return WfDeployForm，可写入正式部署资源仓库的表单快照
+     */
+    private WfDeployForm deploymentForm(String sourceType, Long formId, String formKey,
+            String nodeKey, String formName, String nodeName, String content, String createdBy)
+    {
+        WfDeployForm snapshot = new WfDeployForm();
+        snapshot.setSourceType(sourceType);
+        snapshot.setFormId(formId);
+        snapshot.setFormKey(formKey);
+        snapshot.setNodeKey(nodeKey);
+        snapshot.setFormName(formName);
+        snapshot.setNodeName(nodeName);
+        snapshot.setContent(content);
+        snapshot.setCreateBy(createdBy);
+        return snapshot;
     }
 
     /**
@@ -5385,6 +5374,45 @@ class FlowableEngineIT
         );
         assertThat(userCount).as("适配器门禁隔离用户不得占用或残留").isZero();
         assertThat(userRoleCount).as("适配器门禁隔离用户角色关系不得占用或残留").isZero();
+    }
+
+    /**
+     * 按统一通知外键依赖顺序删除隔离用户产生的测试事实和身份关系。
+     *
+     * @param jdbcTemplate JdbcTemplate，连接专用集成测试 schema 的真实 MySQL 客户端
+     * @param userId long，仅由当前测试创建的隔离用户主键
+     * @return 无返回值；任一依赖事实清理失败时测试立即失败并保留现场
+     */
+    private void deleteTemporaryWorkflowUser(JdbcTemplate jdbcTemplate, long userId)
+    {
+        repeatableReadTransactionTemplate().executeWithoutResult(status ->
+        {
+            // 先锁定用户主数据，阻止异步投递线程在清理期间新增任何通知外键引用。
+            List<Long> lockedUserIds = jdbcTemplate.queryForList(
+                "select user_id from sys_user where user_id=? for update", Long.class, userId);
+            if (lockedUserIds.isEmpty())
+            {
+                return;
+            }
+
+            // 锁定当前 outbox 后再按外键顺序删除，避免投递线程在审计删除后补写 delivery audit。
+            List<Long> lockedOutboxIds = jdbcTemplate.queryForList(
+                "select outbox_id from wf_notification_outbox "
+                    + "where recipient_user_id=? order by outbox_id for update",
+                Long.class, userId);
+            if (!lockedOutboxIds.isEmpty())
+            {
+                jdbcTemplate.update("delete audit from wf_notification_delivery_audit audit "
+                        + "join wf_notification_outbox outbox on outbox.outbox_id=audit.outbox_id "
+                        + "where outbox.recipient_user_id=?", userId);
+                jdbcTemplate.update("delete from wf_notification_inbox where recipient_user_id=?", userId);
+                jdbcTemplate.update("delete from wf_notification_outbox where recipient_user_id=?", userId);
+            }
+            jdbcTemplate.update("delete from wf_notification_preference where user_id=?", userId);
+            jdbcTemplate.update("delete from wf_notification_urge_audit where actor_user_id=?", userId);
+            jdbcTemplate.update("delete from sys_user_role where user_id=?", userId);
+            jdbcTemplate.update("delete from sys_user where user_id=?", userId);
+        });
     }
 
     /**

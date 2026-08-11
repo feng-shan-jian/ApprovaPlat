@@ -78,7 +78,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
@@ -125,7 +125,7 @@ class WorkflowTaskLifecycleServiceTest
 
     private HistoricActivityInstanceQuery historicActivityQuery;
 
-    private WfDeployFormMapper deployFormMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     private WorkflowStartVariableValidator variableValidator;
 
@@ -164,7 +164,7 @@ class WorkflowTaskLifecycleServiceTest
         historicTaskQuery = mock(HistoricTaskInstanceQuery.class, RETURNS_SELF);
         historicProcessQuery = mock(HistoricProcessInstanceQuery.class, RETURNS_SELF);
         historicActivityQuery = mock(HistoricActivityInstanceQuery.class, RETURNS_SELF);
-        deployFormMapper = mock(WfDeployFormMapper.class);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         variableValidator = mock(WorkflowStartVariableValidator.class);
         when(variableValidator.readableFieldNames(anyString())).thenReturn(Set.of());
         attachmentService = mock(WorkflowAttachmentService.class);
@@ -256,7 +256,7 @@ class WorkflowTaskLifecycleServiceTest
                 .thenReturn(WorkflowMultiInstanceService.CompletionRevision.none());
         lifecycleService = new WorkflowTaskLifecycleService(engineOperations, identityResolver,
                 repositoryService, runtimeService, taskService, historyService,
-                deployFormMapper, variableValidator, attachmentService,
+                artifactRepository, variableValidator, attachmentService,
                  new WorkflowTaskMovementPolicy(), taskCopyService,
                  nextTaskAssignmentService, multiInstanceService, controlledLoopService);
     }
@@ -284,7 +284,7 @@ class WorkflowTaskLifecycleServiceTest
         fixture.currentTask().setFormProperties(List.of(permissionDefault));
         stubDefinition(fixture.model());
         WfDeployForm snapshot = snapshot("review", "key_20", "{\"fields\":[]}");
-        when(deployFormMapper.selectByDeploymentId("deployment-1")).thenReturn(List.of(snapshot));
+        when(artifactRepository.selectForms("deployment-1")).thenReturn(List.of(snapshot));
         when(variableValidator.validateForStart(snapshot.getContent(), Map.of("approved", true)))
                 .thenReturn(new WorkflowValidatedStartVariables(
                         Map.of("approved", true), Map.of()));
@@ -361,7 +361,7 @@ class WorkflowTaskLifecycleServiceTest
         WfDeployForm snapshot = snapshot("review", "embedded", frozenContent);
         snapshot.setSourceType("EMBEDDED");
         snapshot.setFormId(null);
-        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+        when(artifactRepository.selectForms("deployment-1"))
                 .thenReturn(List.of(snapshot));
         when(variableValidator.validateForStart(frozenContent,
                 Map.of("originalField", "部署时字段值")))
@@ -402,7 +402,7 @@ class WorkflowTaskLifecycleServiceTest
         BpmnFixture fixture = bpmnFixture("review", "审核", "key_20");
         stubDefinition(fixture.model());
         WfDeployForm snapshot = snapshot("review", "key_20", "{\"fields\":[]}");
-        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+        when(artifactRepository.selectForms("deployment-1"))
                 .thenReturn(List.of(snapshot));
         when(variableValidator.validateForStart(snapshot.getContent(), Map.of()))
                 .thenReturn(new WorkflowValidatedStartVariables(Map.of(), Map.of()));
@@ -485,7 +485,7 @@ class WorkflowTaskLifecycleServiceTest
         BpmnFixture fixture = bpmnFixture("review", "审核", "key_20");
         stubDefinition(fixture.model());
         WfDeployForm snapshot = snapshot("review", "key_20", "{\"fields\":[]}");
-        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+        when(artifactRepository.selectForms("deployment-1"))
                 .thenReturn(List.of(snapshot));
         Map<String, List<String>> references = Map.of("files", List.of(attachmentId));
         Map<String, Object> normalized = Map.of("files", List.of(attachmentId));
@@ -523,7 +523,7 @@ class WorkflowTaskLifecycleServiceTest
         BpmnFixture fixture = bpmnFixture("review", "审核", "key_20");
         stubDefinition(fixture.model());
         WfDeployForm snapshot = snapshot("review", "key_20", "{\"fields\":[]}");
-        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+        when(artifactRepository.selectForms("deployment-1"))
                 .thenReturn(List.of(snapshot));
         when(variableValidator.validateForStart(snapshot.getContent(), Map.of()))
                 .thenReturn(new WorkflowValidatedStartVariables(Map.of(), Map.of()));
@@ -554,7 +554,7 @@ class WorkflowTaskLifecycleServiceTest
         BpmnFixture fixture = bpmnFixture("review", "审核", "key_20");
         stubDefinition(fixture.model());
         WfDeployForm snapshot = snapshot("review", "key_20", "{\"fields\":[]}");
-        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+        when(artifactRepository.selectForms("deployment-1"))
                 .thenReturn(List.of(snapshot));
         when(variableValidator.validateForStart(snapshot.getContent(), Map.of()))
                 .thenReturn(new WorkflowValidatedStartVariables(Map.of(), Map.of()));
@@ -825,7 +825,7 @@ class WorkflowTaskLifecycleServiceTest
         when(historicStart.getActivityId()).thenReturn("start");
         when(historicActivityQuery.listPage(0, 2)).thenReturn(List.of(historicStart));
         WfDeployForm snapshot = snapshot("start", "start_form", "{\"fields\":[]}");
-        when(deployFormMapper.selectByDeploymentId("deployment-1"))
+        when(artifactRepository.selectForms("deployment-1"))
                 .thenReturn(List.of(snapshot));
 
         Map<String, Object> submitted = Map.of("amount", 1200,

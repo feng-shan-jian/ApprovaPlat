@@ -21,7 +21,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import com.ruoyi.RuoYiApplication;
 import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
-import com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowDmnDecisionService;
 import com.ruoyi.flowable.service.model.WorkflowPreparedDmnDeployment;
 
@@ -55,7 +56,7 @@ class WorkflowDmnDecisionMySqlIT
     private WorkflowDmnDecisionService dmnDecisionService;
 
     @Autowired
-    private WfDeployDmnSnapshotMapper snapshotMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -78,9 +79,9 @@ class WorkflowDmnDecisionMySqlIT
     {
         for (String processDeploymentId : processDeploymentIds)
         {
-            List<WfDeployDmnSnapshot> snapshots = snapshotMapper
-                    .selectByDeploymentId(processDeploymentId);
-            snapshotMapper.deleteByDeploymentId(processDeploymentId);
+            List<WfDeployDmnSnapshot> snapshots = artifactRepository
+                    .selectDmnSnapshots(processDeploymentId);
+            artifactRepository.delete(processDeploymentId);
             processEngine.getRepositoryService().deleteDeployment(processDeploymentId, true);
             dmnDecisionService.deleteFrozenDeployments(snapshots == null ? List.of() : snapshots);
         }
@@ -92,9 +93,9 @@ class WorkflowDmnDecisionMySqlIT
                 dmnRepositoryService.deleteDeployment(sourceDeploymentId);
             }
         }
-        assertThat(jdbc.queryForObject(
-                "select count(*) from wf_deploy_dmn_snapshot where process_key like ?",
-                Integer.class, PREFIX + "%")).isZero();
+        assertThat(processDeploymentIds).allSatisfy(processDeploymentId ->
+                assertThat(processEngine.getRepositoryService().createDeploymentQuery()
+                        .deploymentId(processDeploymentId).count()).isZero());
     }
 
     /**
@@ -116,8 +117,8 @@ class WorkflowDmnDecisionMySqlIT
 
         // 明确按旧流程定义主键发起，验证来源目录升级不会改变既有部署和在途逻辑。
         assertTaskForAmount(frozenProcess.getId(), 150, "v1Task");
-        List<WfDeployDmnSnapshot> snapshots = snapshotMapper
-                .selectByDeploymentId(frozenProcess.getDeploymentId());
+        List<WfDeployDmnSnapshot> snapshots = artifactRepository
+                .selectDmnSnapshots(frozenProcess.getDeploymentId());
         assertThat(snapshots).singleElement().satisfies(snapshot ->
         {
             assertThat(snapshot.getSourceDecisionId()).isEqualTo(sourceV1.getId());
@@ -170,7 +171,11 @@ class WorkflowDmnDecisionMySqlIT
                 .addBytes(processKey + ".bpmn20.xml", prepared.compiledBpmn())
                 .deploy();
         processDeploymentIds.add(deployment.getId());
-        dmnDecisionService.persist(deployment.getId(), prepared, "flowable-it");
+        List<WfDeployDmnSnapshot> snapshots = dmnDecisionService.freezeSnapshots(
+                deployment.getId(), prepared, "flowable-it");
+        artifactRepository.persist(deployment.getId(), new WorkflowDeploymentArtifacts(
+                List.of(), List.of(), List.of(), List.of(), List.of(), snapshots,
+                List.of(), List.of()));
         ProcessDefinition definition = processEngine.getRepositoryService()
                 .createProcessDefinitionQuery()
                 .deploymentId(deployment.getId())

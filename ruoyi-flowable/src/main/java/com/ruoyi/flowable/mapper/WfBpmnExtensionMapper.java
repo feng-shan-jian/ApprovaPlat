@@ -87,11 +87,11 @@ public interface WfBpmnExtensionMapper
             @Param("status") String status, @Param("updateBy") String updateBy);
 
     /**
-     * 统计目录下全部版本被部署快照引用的数量。
+     * 查询目录拥有的全部不可变版本主键，供 Flowable 部署资源引用保护使用。
      * @param extensionId Long，扩展目录主键
-     * @return int，部署快照引用数量
+     * @return List&lt;Long&gt;，按版本号排序的版本主键
      */
-    int countDeploymentSnapshots(@Param("extensionId") Long extensionId);
+    List<Long> selectVersionIds(@Param("extensionId") Long extensionId);
 
     /**
      * 删除未被部署快照引用的目录版本；调用方必须先锁定并完成引用校验。

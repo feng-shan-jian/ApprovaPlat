@@ -54,6 +54,7 @@ import com.ruoyi.flowable.domain.WfCategory;
 import com.ruoyi.flowable.domain.WfDeployCallActivitySnapshot;
 import com.ruoyi.flowable.domain.WfDeployConditionRule;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
+import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
@@ -72,7 +73,6 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCategoryMapper;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WfFormMapper;
 import com.ruoyi.flowable.mapper.WorkflowModelSaveMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
@@ -87,7 +87,7 @@ class WorkflowModelServiceTest
 
     private WfFormMapper formMapper;
 
-    private WfDeployFormMapper deployFormMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
 
     private WorkflowFormTemplateValidator formTemplateValidator;
 
@@ -120,7 +120,7 @@ class WorkflowModelServiceTest
         bpmnService = mock(WorkflowBpmnService.class);
         categoryMapper = mock(WfCategoryMapper.class);
         formMapper = mock(WfFormMapper.class);
-        deployFormMapper = mock(WfDeployFormMapper.class);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         formTemplateValidator = mock(WorkflowFormTemplateValidator.class);
         bpmnIdentityValidator = mock(WorkflowBpmnIdentityValidator.class);
         modelSaveMapper = mock(WorkflowModelSaveMapper.class);
@@ -136,6 +136,12 @@ class WorkflowModelServiceTest
         });
         when(dmnDecisionService.prepare(any(byte[].class))).thenAnswer(invocation ->
                 new WorkflowPreparedDmnDeployment(invocation.getArgument(0), List.of()));
+        when(extensionDeploymentService.snapshotsForDeployment(
+                any(), any(WorkflowPreparedExtensionDeployment.class), anyList()))
+                .thenReturn(List.of());
+        when(dmnDecisionService.freezeSnapshots(
+                any(), any(WorkflowPreparedDmnDeployment.class), any()))
+                .thenReturn(List.of());
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of("ROLE2")));
@@ -145,7 +151,8 @@ class WorkflowModelServiceTest
         engineOperations = new WorkflowEngineOperations(authenticationContext,
                 new WorkflowExceptionTranslator(), identityResolver);
         service = new WorkflowModelService(engineOperations, repositoryService, bpmnService,
-                bpmnIdentityValidator, modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
+                bpmnIdentityValidator, modelSaveMapper, categoryMapper, formMapper,
+                artifactRepository,
                 formTemplateValidator, extensionDeploymentService, dmnDecisionService);
     }
 
@@ -870,7 +877,7 @@ class WorkflowModelServiceTest
         WorkflowFormTemplateValidator realValidator = new WorkflowFormTemplateValidator();
         WorkflowModelService guardedService = new WorkflowModelService(
                 engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
-                modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
+                modelSaveMapper, categoryMapper, formMapper, artifactRepository,
                 realValidator, extensionDeploymentService, dmnDecisionService);
         WorkflowBpmnFormReference reference = new WorkflowBpmnFormReference(
                 WorkflowFormSourceType.TEMPLATE, 1L, "key_1", "review", "审批",
@@ -905,7 +912,7 @@ class WorkflowModelServiceTest
         verify(repositoryService, never()).getModel(any());
         verify(repositoryService, never()).saveModel(any());
         verify(repositoryService, never()).addModelEditorSource(any(), any());
-        verifyNoInteractions(deployFormMapper);
+        verifyNoInteractions(artifactRepository);
     }
 
     /**
@@ -967,7 +974,7 @@ class WorkflowModelServiceTest
         WorkflowFormTemplateValidator realValidator = new WorkflowFormTemplateValidator();
         WorkflowModelService mixedService = new WorkflowModelService(
                 engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
-                modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
+                modelSaveMapper, categoryMapper, formMapper, artifactRepository,
                 realValidator, extensionDeploymentService, loopService,
                 dmnDecisionService, formFieldService, callActivityService);
         mixedService.setConditionDeploymentService(conditionService);
@@ -1032,6 +1039,9 @@ class WorkflowModelServiceTest
                         List.of(new WfDeployCallActivitySnapshot()));
         WorkflowPreparedSlaDeployment slaPrepared = new WorkflowPreparedSlaDeployment(
                 slaBytes, List.of(new WfDeployTaskSla()));
+        WfDeployExtensionSnapshot boundExtensionSnapshot = new WfDeployExtensionSnapshot();
+        WfDeployDmnSnapshot boundDmnSnapshot = new WfDeployDmnSnapshot();
+        WfDeployCallActivitySnapshot boundCallSnapshot = new WfDeployCallActivitySnapshot();
         AtomicReference<byte[]> conditionInput = new AtomicReference<>();
         AtomicReference<byte[]> loopInput = new AtomicReference<>();
         AtomicReference<byte[]> participantInput = new AtomicReference<>();
@@ -1076,6 +1086,15 @@ class WorkflowModelServiceTest
             return slaPrepared;
         });
         when(callActivityService.frozenTargetDefinitionIds()).thenReturn(Set.of());
+        when(extensionDeploymentService.snapshotsForDeployment(
+                eq("deployment-mixed"), eq(extensionPrepared), anyList()))
+                .thenReturn(List.of(boundExtensionSnapshot));
+        when(dmnDecisionService.freezeSnapshots(
+                "deployment-mixed", dmnPrepared, "7"))
+                .thenReturn(List.of(boundDmnSnapshot));
+        when(callActivityService.snapshotsForDeployment(
+                "deployment-mixed", callPrepared, "7"))
+                .thenReturn(List.of(boundCallSnapshot));
 
         DeploymentBuilder builder = mock(DeploymentBuilder.class);
         when(repositoryService.createDeployment()).thenReturn(builder);
@@ -1099,9 +1118,6 @@ class WorkflowModelServiceTest
         when(deployedDefinitionQuery.list()).thenReturn(List.of(definition));
         when(repositoryService.createProcessDefinitionQuery())
                 .thenReturn(activeQuery, deployedDefinitionQuery);
-        when(deployFormMapper.insertBatch(anyList())).thenAnswer(invocation ->
-                ((List<?>) invocation.getArgument(0)).size());
-
         assertThat(mixedService.deployModel("model-mixed")).isEqualTo("deployment-mixed");
 
         assertThat(conditionInput.get()).containsExactly(extensionBytes);
@@ -1128,17 +1144,16 @@ class WorkflowModelServiceTest
         assertThat(deploymentCatalog.getValue()
                 .containsTaskField("expense", "review", "reviewerId")).isTrue();
 
-        verify(extensionDeploymentService).persist(
+        verify(extensionDeploymentService).snapshotsForDeployment(
                 eq("deployment-mixed"), eq(extensionPrepared), anyList());
-        verify(conditionService).persist("deployment-mixed", conditionPrepared);
-        verify(loopService).persist("deployment-mixed", loopPrepared);
-        verify(participantService).persist("deployment-mixed", participantPrepared);
-        verify(dmnDecisionService).persist("deployment-mixed", dmnPrepared, "7");
-        verify(callActivityService).persist("deployment-mixed", callPrepared, "7");
-        verify(slaService).persist("deployment-mixed", slaPrepared);
-        ArgumentCaptor<List<WfDeployForm>> formSnapshots = snapshotCaptor();
-        verify(deployFormMapper).insertBatch(formSnapshots.capture());
-        assertThat(formSnapshots.getValue()).singleElement().satisfies(snapshot ->
+        verify(dmnDecisionService).freezeSnapshots("deployment-mixed", dmnPrepared, "7");
+        verify(callActivityService).snapshotsForDeployment(
+                "deployment-mixed", callPrepared, "7");
+        ArgumentCaptor<WorkflowDeploymentArtifacts> artifactsCaptor =
+                ArgumentCaptor.forClass(WorkflowDeploymentArtifacts.class);
+        verify(artifactRepository).persist(eq("deployment-mixed"), artifactsCaptor.capture());
+        WorkflowDeploymentArtifacts artifacts = artifactsCaptor.getValue();
+        assertThat(artifacts.forms()).singleElement().satisfies(snapshot ->
         {
             JsonNode root = JsonMapper.shared().readTree(snapshot.getContent());
             JsonNode reviewer = root.path("fields").get(0).path("__config__");
@@ -1148,6 +1163,13 @@ class WorkflowModelServiceTest
             assertThat(notes.path("workflowHidden").asBoolean()).isTrue();
             assertThat(snapshot.getDeployId()).isEqualTo("deployment-mixed");
         });
+        assertThat(artifacts.conditionRules()).containsExactlyElementsOf(conditionPrepared.snapshots());
+        assertThat(artifacts.controlledLoops()).containsExactlyElementsOf(loopPrepared.snapshots());
+        assertThat(artifacts.participantRules()).containsExactlyElementsOf(participantPrepared.snapshots());
+        assertThat(artifacts.extensionSnapshots()).containsExactly(boundExtensionSnapshot);
+        assertThat(artifacts.dmnSnapshots()).containsExactly(boundDmnSnapshot);
+        assertThat(artifacts.callActivitySnapshots()).containsExactly(boundCallSnapshot);
+        assertThat(artifacts.taskSlaSnapshots()).containsExactlyElementsOf(slaPrepared.snapshots());
         verify(model).setDeploymentId("deployment-mixed");
         verify(repositoryService).saveModel(model);
     }
@@ -1207,10 +1229,6 @@ class WorkflowModelServiceTest
         when(deployedDefinitionQuery.list()).thenReturn(List.of(definition));
         when(repositoryService.createProcessDefinitionQuery())
                 .thenReturn(activeDefinitionQuery, deployedDefinitionQuery);
-        when(deployFormMapper.insertBatch(anyList())).thenAnswer(invocation ->
-                ((List<?>) invocation.getArgument(0)).size());
-        ArgumentCaptor<List<WfDeployForm>> snapshots = snapshotCaptor();
-
         assertThat(service.deployModel("model-1")).isEqualTo("deployment-1");
 
         verify(repositoryService).setProcessDefinitionCategory("expense:2:10", "finance");
@@ -1218,16 +1236,21 @@ class WorkflowModelServiceTest
         // 表单冻结和动态审批字段投影各自重新校验快照，任一链路都不能信任另一方的内存结果。
         verify(formTemplateValidator, times(2)).validate("{\"v\":1}");
         verify(formTemplateValidator, times(2)).validate("{\"fields\":[]}");
-        verify(deployFormMapper).insertBatch(snapshots.capture());
-        verify(extensionDeploymentService).persist(eq("deployment-1"), any(), anyList());
-        verify(dmnDecisionService).persist(eq("deployment-1"), any(), eq("7"));
-        assertThat(snapshots.getValue()).extracting(WfDeployForm::getContent)
+        verify(extensionDeploymentService).snapshotsForDeployment(
+                eq("deployment-1"), any(WorkflowPreparedExtensionDeployment.class), anyList());
+        verify(dmnDecisionService).freezeSnapshots(
+                eq("deployment-1"), any(WorkflowPreparedDmnDeployment.class), eq("7"));
+        ArgumentCaptor<WorkflowDeploymentArtifacts> artifactsCaptor =
+                ArgumentCaptor.forClass(WorkflowDeploymentArtifacts.class);
+        verify(artifactRepository).persist(eq("deployment-1"), artifactsCaptor.capture());
+        List<WfDeployForm> snapshots = artifactsCaptor.getValue().forms();
+        assertThat(snapshots).extracting(WfDeployForm::getContent)
                 .containsExactly("{\"v\":1}", "{\"fields\":[]}");
-        assertThat(snapshots.getValue()).extracting(WfDeployForm::getSourceType)
+        assertThat(snapshots).extracting(WfDeployForm::getSourceType)
                 .containsExactly("TEMPLATE", "EMBEDDED");
-        assertThat(snapshots.getValue()).extracting(WfDeployForm::getFormId)
+        assertThat(snapshots).extracting(WfDeployForm::getFormId)
                 .containsExactly(1L, null);
-        assertThat(snapshots.getValue()).allSatisfy(snapshot ->
+        assertThat(snapshots).allSatisfy(snapshot ->
         {
             assertThat(snapshot.getDeployId()).isEqualTo("deployment-1");
             assertThat(snapshot.getCreateBy()).isEqualTo("7");
@@ -1262,7 +1285,7 @@ class WorkflowModelServiceTest
                 mock(WorkflowTaskSlaDeploymentService.class);
         WorkflowModelService guardedService = new WorkflowModelService(
                 engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
-                modelSaveMapper, categoryMapper, formMapper, deployFormMapper,
+                modelSaveMapper, categoryMapper, formMapper, artifactRepository,
                 formTemplateValidator, guardedExtensionService, guardedLoopService,
                 guardedDmnService, guardedFormFieldService, guardedCallActivityService);
         guardedService.setConditionDeploymentService(guardedConditionService);
@@ -1297,7 +1320,7 @@ class WorkflowModelServiceTest
 
         // 拒绝发生在版本组数据库锁之前，同时禁止所有编译器和快照写入器启动。
         verifyNoInteractions(modelSaveMapper, bpmnIdentityValidator, categoryMapper,
-                formMapper, deployFormMapper, guardedExtensionService, guardedLoopService,
+                formMapper, artifactRepository, guardedExtensionService, guardedLoopService,
                 guardedDmnService, guardedFormFieldService, guardedCallActivityService,
                 guardedConditionService, guardedParticipantService, guardedSlaService);
         verify(repositoryService, never()).createDeployment();

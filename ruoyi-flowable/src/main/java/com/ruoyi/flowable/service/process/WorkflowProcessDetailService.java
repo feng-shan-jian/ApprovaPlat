@@ -83,9 +83,9 @@ import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessRelationView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessViewerView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
-import com.ruoyi.flowable.mapper.WfDeployFormMapper;
 import com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
@@ -234,7 +234,7 @@ public class WorkflowProcessDetailService
 
     private final WorkflowDeploymentService deploymentService;
 
-    private final WfDeployFormMapper deployFormMapper;
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
 
     private final WorkflowHistoricVariableMapper historicVariableMapper;
 
@@ -264,7 +264,7 @@ public class WorkflowProcessDetailService
      * @param historyService HistoryService，历史活动、任务和变量公共 API
      * @param taskService TaskService，流程意见公共 API
      * @param deploymentService WorkflowDeploymentService，安全 BPMN XML 读取服务
-     * @param deployFormMapper WfDeployFormMapper，不可变部署表单快照 Mapper
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署表单资源仓库
      * @param historicVariableMapper WorkflowHistoricVariableMapper，内部提交快照安全查询 Mapper
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单 schema 安全解析器
      * @param userService ISysUserService，历史用户显示名称查询服务
@@ -277,7 +277,8 @@ public class WorkflowProcessDetailService
             WorkflowProcessAccessService processAccessService,
             RepositoryService repositoryService, HistoryService historyService,
             TaskService taskService, WorkflowDeploymentService deploymentService,
-            WfDeployFormMapper deployFormMapper, WorkflowHistoricVariableMapper historicVariableMapper,
+            WorkflowDeploymentArtifactRepository artifactRepository,
+            WorkflowHistoricVariableMapper historicVariableMapper,
             WorkflowFormTemplateValidator formTemplateValidator, ISysUserService userService,
             WorkflowMultiInstanceService multiInstanceService,
             WorkflowTaskLifecycleService taskLifecycleService,
@@ -289,7 +290,7 @@ public class WorkflowProcessDetailService
         this.historyService = historyService;
         this.taskService = taskService;
         this.deploymentService = deploymentService;
-        this.deployFormMapper = deployFormMapper;
+        this.artifactRepository = artifactRepository;
         this.historicVariableMapper = historicVariableMapper;
         this.formTemplateValidator = formTemplateValidator;
         this.userService = userService;
@@ -634,7 +635,7 @@ public class WorkflowProcessDetailService
      */
     private Map<NodeFormKey, SnapshotSchema> loadSnapshotSchemas(String deploymentId)
     {
-        List<WfDeployForm> rows = deployFormMapper.selectByDeploymentId(deploymentId);
+        List<WfDeployForm> rows = artifactRepository.selectForms(deploymentId);
         if (rows == null || rows.size() > MAX_FORM_SNAPSHOTS)
         {
             throw dataError("部署表单快照数量异常");

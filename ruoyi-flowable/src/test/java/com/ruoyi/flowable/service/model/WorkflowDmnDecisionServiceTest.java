@@ -32,7 +32,6 @@ import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper;
 
 /**
  * DMN XML 安全、来源目录过滤和删除保护领域测试。
@@ -40,7 +39,7 @@ import com.ruoyi.flowable.mapper.WfDeployDmnSnapshotMapper;
 class WorkflowDmnDecisionServiceTest
 {
     private DmnRepositoryService repositoryService;
-    private WfDeployDmnSnapshotMapper snapshotMapper;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     private WorkflowDmnDecisionService service;
 
     /**
@@ -61,8 +60,9 @@ class WorkflowDmnDecisionServiceTest
                 new WorkflowAuthenticationContext(mock(IdentityService.class),
                         new WorkflowIdentityCodec()), new WorkflowExceptionTranslator(), resolver);
         repositoryService = mock(DmnRepositoryService.class);
-        snapshotMapper = mock(WfDeployDmnSnapshotMapper.class);
-        service = new WorkflowDmnDecisionService(operations, repositoryService, snapshotMapper);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
+        service = new WorkflowDmnDecisionService(operations, repositoryService,
+                artifactRepository);
     }
 
     /**
@@ -132,12 +132,12 @@ class WorkflowDmnDecisionServiceTest
                 "source", deployment("source", "source")));
 
         assertConflict(() -> service.delete("frozen"), "不允许独立删除");
-        when(snapshotMapper.countBySourceDeploymentId("source")).thenReturn(1L);
+        when(artifactRepository.countDmnSourceReferences("source")).thenReturn(1L);
         assertConflict(() -> service.delete("source"), "冻结引用");
 
         verify(repositoryService, never()).deleteDeployment(anyString());
         verify(deploymentQuery, org.mockito.Mockito.atLeastOnce()).deploymentId("frozen");
-        verify(snapshotMapper).countBySourceDeploymentId("source");
+        verify(artifactRepository).countDmnSourceReferences("source");
     }
 
     /**
