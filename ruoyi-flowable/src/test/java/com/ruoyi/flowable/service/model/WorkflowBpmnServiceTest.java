@@ -542,6 +542,49 @@ class WorkflowBpmnServiceTest
     }
 
     /**
+     * 验证平台 DMN 编译器生成的固定原生任务可以通过部署门禁，但作者不能直接声明同一引擎类型。
+     *
+     * @return 无返回值；合法冻结任务被拒绝或作者原生类型绕过时测试失败
+     */
+    @Test
+    void allowsOnlyCompiledDmnServiceTask()
+    {
+        String compiled = compiledDmnBpmn();
+
+        assertThat(service.validateCompiledDeployment(compiled.getBytes(StandardCharsets.UTF_8)))
+                .isNotNull();
+        assertBadRequest(compiled.getBytes(StandardCharsets.UTF_8), "安全白名单");
+    }
+
+    /**
+     * 验证 DMN 编译结果必须只含固定决策键和 `sameDeployment=true`，拒绝表达式、额外字段及任意实现。
+     *
+     * @return 无返回值；任一可篡改 DMN 执行配置通过部署门禁时测试失败
+     */
+    @Test
+    void rejectsTamperedCompiledDmnServiceTask()
+    {
+        String compiled = compiledDmnBpmn();
+        List<String> invalidVariants = List.of(
+                compiled.replace("stringValue=\"expenseDecision\"",
+                        "expression=\"${decisionKey}\""),
+                compiled.replace("stringValue=\"true\"", "stringValue=\"false\""),
+                compiled.replace("</extensionElements>",
+                        "<flowable:field name=\"unexpected\" stringValue=\"value\"/>"
+                                + "</extensionElements>"),
+                compiled.replace(" flowable:type=\"dmn\"",
+                        " flowable:type=\"dmn\" flowable:class=\"java.lang.Runtime\""));
+
+        for (String invalid : invalidVariants)
+        {
+            assertThatThrownBy(() -> service.validateCompiledDeployment(
+                    invalid.getBytes(StandardCharsets.UTF_8)))
+                    .isInstanceOfSatisfying(ServiceException.class,
+                            error -> assertThat(error.getCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+        }
+    }
+
+    /**
      * 验证固定 handler、assignee、ALL/ANY 完成条件及三个批准监听事件可以共同通过保存门禁。
      *
      * @return 无返回值；受控动态多实例或兼容监听器被误拒绝时测试失败
@@ -986,6 +1029,22 @@ class WorkflowBpmnServiceTest
                 "<serviceTask id=\"approve\" name=\"执行扩展\" "
                         + "flowable:delegateExpression=\"${workflowExtensionDelegate}\">"
                         + "</serviceTask>");
+    }
+
+    /**
+     * 构造 DMN 编译器完成精确来源解析后生成的固定 Flowable 原生服务任务。
+     *
+     * @return String，只包含决策键与同部署约束的 UTF-8 BPMN XML 测试数据
+     */
+    private String compiledDmnBpmn()
+    {
+        return validBpmn().replace(ordinaryApprovalTaskXml(),
+                "<serviceTask id=\"approve\" name=\"执行决策\" flowable:type=\"dmn\">"
+                        + "<extensionElements>"
+                        + "<flowable:field name=\"decisionTableReferenceKey\" "
+                        + "stringValue=\"expenseDecision\"/>"
+                        + "<flowable:field name=\"sameDeployment\" stringValue=\"true\"/>"
+                        + "</extensionElements></serviceTask>");
     }
 
     /**

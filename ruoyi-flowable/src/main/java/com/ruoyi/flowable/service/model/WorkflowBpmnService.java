@@ -104,6 +104,15 @@ public class WorkflowBpmnService
             "\\$\\{workflowSlaTimerDelegate\\.executeTimer\\(execution,'[A-Za-z0-9_.:-]+',"
                     + "'(REMINDER|ESCALATE)',[0-9]{1,3},(null|'[1-9][0-9]{0,18}')\\)\\}");
 
+    /** DMN 编译器写入 Flowable 原生 ServiceTask 的固定决策键字段。 */
+    private static final String DMN_DECISION_KEY_FIELD = "decisionTableReferenceKey";
+
+    /** DMN 编译器要求决策与流程部署使用同一冻结部署的固定字段。 */
+    private static final String DMN_SAME_DEPLOYMENT_FIELD = "sameDeployment";
+
+    /** 冻结后的 DMN 决策键最大长度，避免异常编译资源携带无界运行参数。 */
+    private static final int MAX_DMN_DECISION_KEY_LENGTH = 255;
+
     /** 条件分支编译后唯一允许的固定路由表达式，参数只能是服务端 SHA-256 摘要令牌。 */
     private static final Pattern CONDITION_ROUTER_EXPRESSION = Pattern.compile(
             "\\$\\{workflowConditionRouter\\.matches\\(execution,'[0-9a-f]{24}',"
@@ -1275,8 +1284,16 @@ public class WorkflowBpmnService
      */
     private void validateServiceTask(ServiceTask task, ValidationContext validationContext)
     {
-        if (hasText(task.getType()))
+        String taskType = trimToEmpty(task.getType());
+        if (hasText(taskType))
         {
+            // 作者资源不能直接声明引擎原生类型；仅部署编译器生成的固定 DMN 任务可进入窄白名单。
+            if (validationContext == ValidationContext.COMPILED_DEPLOYMENT
+                    && ServiceTask.DMN_TASK.equals(taskType))
+            {
+                validateCompiledDmnTask(task);
+                return;
+            }
             throw invalidBpmn("服务任务类型未列入安全白名单", null);
         }
         if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
@@ -1312,6 +1329,70 @@ public class WorkflowBpmnService
         validateExpression(task.getSkipExpression());
         List<FieldExtension> fields = task.getFieldExtensions();
         validateExtensionFields(fields);
+    }
+
+    /**
+     * 校验 DMN 编译器生成的 Flowable 原生 ServiceTask 只能携带冻结执行所需的两个固定字符串字段。
+     *
+     * @param task ServiceTask，`type=dmn` 的部署编译结果
+     * @return 无返回值；任意实现、表达式、额外字段或非同部署执行配置会被拒绝
+     */
+    private void validateCompiledDmnTask(ServiceTask task)
+    {
+        if (hasText(task.getImplementation()) || hasText(task.getImplementationType())
+                || hasText(task.getResultVariableName()) || hasText(task.getOperationRef())
+                || hasText(task.getExtensionId()) || task.isTriggerable()
+                || task.isUseLocalScopeForResultVariable()
+                || task.isStoreResultVariableAsTransient()
+                || task.getCustomProperties() != null && !task.getCustomProperties().isEmpty())
+        {
+            throw invalidBpmn("已编译 DMN 任务不允许自定义执行实现", null);
+        }
+        validateExpression(task.getSkipExpression());
+
+        String decisionKey = null;
+        boolean sameDeployment = false;
+        List<FieldExtension> fields = task.getFieldExtensions();
+        if (fields != null)
+        {
+            for (FieldExtension field : fields)
+            {
+                if (hasText(field.getExpression()))
+                {
+                    throw invalidBpmn("已编译 DMN 任务字段不允许表达式", null);
+                }
+                if (DMN_DECISION_KEY_FIELD.equals(field.getFieldName()))
+                {
+                    if (decisionKey != null || !hasText(field.getStringValue()))
+                    {
+                        throw invalidBpmn("已编译 DMN 任务决策键缺失或重复", null);
+                    }
+                    decisionKey = field.getStringValue().trim();
+                    if (!decisionKey.equals(field.getStringValue())
+                            || decisionKey.length() > MAX_DMN_DECISION_KEY_LENGTH)
+                    {
+                        throw invalidBpmn("已编译 DMN 任务决策键不合法", null);
+                    }
+                }
+                else if (DMN_SAME_DEPLOYMENT_FIELD.equals(field.getFieldName()))
+                {
+                    if (sameDeployment || !"true".equals(field.getStringValue()))
+                    {
+                        throw invalidBpmn("已编译 DMN 任务必须固定同部署执行", null);
+                    }
+                    sameDeployment = true;
+                }
+                else
+                {
+                    throw invalidBpmn("已编译 DMN 任务包含未注册的字段注入", null);
+                }
+            }
+        }
+        int fieldCount = fields == null ? 0 : fields.size();
+        if (decisionKey == null || !sameDeployment || fieldCount != 2)
+        {
+            throw invalidBpmn("已编译 DMN 任务配置不完整", null);
+        }
     }
 
     /**

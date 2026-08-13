@@ -25,6 +25,19 @@ function requireEnvironmentValue(name) {
 }
 
 /**
+ * 加载只用于系统配置恢复和账号状态控制的本地系统管理员凭据。
+ * @returns {Readonly<{roleKey:string,username:string,password:string,requiredRoles:string[]}>} 不写入报告的系统管理员登录配置。
+ */
+export function loadSystemAdminAccount() {
+  return Object.freeze({
+    roleKey: 'system_admin',
+    username: requireEnvironmentValue('FLOWABLE_E2E_ADMIN_USERNAME'),
+    password: requireEnvironmentValue('FLOWABLE_E2E_ADMIN_PASSWORD'),
+    requiredRoles: Object.freeze(['admin'])
+  })
+}
+
+/**
  * 加载五个预登记职责分离账号；用户名由环境注入，密码统一使用本地验收口令 wang。
  * @returns {Readonly<Record<string, Readonly<{roleKey: string, username: string, password: string}>>>} 按角色索引的只读登录凭据。
  */

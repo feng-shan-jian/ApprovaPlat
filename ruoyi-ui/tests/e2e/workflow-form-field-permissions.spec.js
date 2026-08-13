@@ -11,7 +11,7 @@ import {
   findStartableWorkflowDefinition,
   findWorkflowUserOption,
   getWorkflowDetail,
-  openWorkflowRoleSession,
+  openWorkflowRoleSessions,
   submitWorkflowStartPage
 } from './support/workflow-fixture.js'
 
@@ -259,16 +259,17 @@ test('节点字段权限通过真实设计器、部署快照、审批、退回�
     attachmentIds: [], processInstanceIds: [], draftFixtures: [], deploymentIds: [], modelIds: [],
     formId: '', categoryId: ''
   }
-  const sessions = []
-  const pages = {}
+  let sessions = []
+  let pages = {}
   let primaryError = null
 
   try {
-    for (const roleKey of ['workflow_designer', 'workflow_starter', 'workflow_approver', 'workflow_admin']) {
-      const session = await openWorkflowRoleSession(browser, roleKey)
-      sessions.push(session)
-      pages[roleKey] = session.page
-    }
+    ({ sessions, pages } = await openWorkflowRoleSessions(browser, {
+      workflow_designer: 'workflow_designer',
+      workflow_starter: 'workflow_starter',
+      workflow_approver: 'workflow_approver',
+      workflow_admin: 'workflow_admin'
+    }))
     const designer = pages.workflow_designer
     const starter = pages.workflow_starter
     const approverPage = pages.workflow_approver
@@ -513,16 +514,17 @@ test('并行任务按各自节点权限并发编辑时不丢失其他字段补�
     attachmentIds: [], processInstanceIds: [], draftFixtures: [], deploymentIds: [], modelIds: [],
     formId: '', categoryId: ''
   }
-  const sessions = []
-  const pages = {}
+  let sessions = []
+  let pages = {}
   let primaryError = null
 
   try {
-    for (const roleKey of ['workflow_designer', 'workflow_starter', 'workflow_approver', 'workflow_admin']) {
-      const session = await openWorkflowRoleSession(browser, roleKey)
-      sessions.push(session)
-      pages[roleKey] = session.page
-    }
+    ({ sessions, pages } = await openWorkflowRoleSessions(browser, {
+      workflow_designer: 'workflow_designer',
+      workflow_starter: 'workflow_starter',
+      workflow_approver: 'workflow_approver',
+      workflow_admin: 'workflow_admin'
+    }))
     const designer = pages.workflow_designer
     const starter = pages.workflow_starter
     const approverPage = pages.workflow_approver

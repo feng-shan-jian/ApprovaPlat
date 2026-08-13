@@ -37,7 +37,7 @@ async function dismissPasswordNotice(page) {
  * @param {string} credential 当前预登记账号的用户名或密码。
  * @returns {Promise<void>} 输入事件与变更事件派发完成后结束。
  */
-async function fillCredentialInput(input, credential) {
+export async function fillCredentialInput(input, credential) {
   await input.evaluate((element, value) => {
     if (!(element instanceof HTMLInputElement)) {
       throw new Error('登录凭据只能写入 HTMLInputElement')
@@ -56,7 +56,7 @@ async function fillCredentialInput(input, credential) {
 /**
  * 通过登录页、真实 `/login`、JWT/Redis 和动态路由完成职责分离角色登录。
  * @param {import('@playwright/test').Page} page 新建且无预置 Token 的浏览器页面。
- * @param {{roleKey: string, username: string, password: string}} account 进程环境注入的预登记账号。
+ * @param {{roleKey: string, username: string, password: string, requiredRoles?: string[]}} account 进程环境注入的预登记账号；样例业务账号可声明必须包含的角色集合。
  * @returns {Promise<{roleKey: string, captchaDisabled: boolean}>} 不含账号、密码和 Token 的登录证据摘要。
  */
 export async function loginThroughUi(page, account) {
@@ -78,7 +78,15 @@ export async function loginThroughUi(page, account) {
   expect(loginPayload.token.length, '/login Token 不能为空').toBeGreaterThan(20)
   const infoPayload = await expectAjaxSuccess(await infoPromise, '/getInfo')
   await expectAjaxSuccess(await routerPromise, '/getRouters')
-  expect(infoPayload.roles, '账号必须仅绑定目标工作流角色').toEqual([account.roleKey])
+  const actualRoles = Array.isArray(infoPayload.roles) ? infoPayload.roles : []
+  if (Array.isArray(account.requiredRoles) && account.requiredRoles.length > 0) {
+    // 样例业务账号允许同时承担业务角色，但必须真实包含当前 UI 场景要求的工作流角色。
+    for (const requiredRole of account.requiredRoles) {
+      expect(actualRoles, `账号必须包含 ${requiredRole} 角色`).toContain(requiredRole)
+    }
+  } else {
+    expect(actualRoles, '职责分离账号必须仅绑定目标工作流角色').toEqual([account.roleKey])
+  }
   await expect(page).not.toHaveURL(/\/login(?:\?|$)/)
   await dismissPasswordNotice(page)
   return { roleKey: account.roleKey, captchaDisabled: true }

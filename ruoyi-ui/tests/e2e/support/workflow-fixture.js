@@ -81,6 +81,36 @@ export async function openWorkflowRoleSession(browser, roleKey) {
 }
 
 /**
+ * 按页面别名批量创建职责分离角色会话，并在任一登录失败时回收此前已创建的真实登录态。
+ * @param {import('@playwright/test').Browser} browser Playwright 浏览器实例。
+ * @param {Record<string, string>} roleByPageKey 页面别名到五角色键的映射，插入顺序即登录顺序。
+ * @returns {Promise<{sessions: Array<{context: import('@playwright/test').BrowserContext, page: import('@playwright/test').Page, roleKey: string, pageErrors: string[], consoleErrors: string[], traceStarted: boolean}>, pages: Record<string, import('@playwright/test').Page>}>} 可统一清理的会话集合和按别名访问的页面集合。
+ */
+export async function openWorkflowRoleSessions(browser, roleByPageKey) {
+  if (!roleByPageKey || typeof roleByPageKey !== 'object' || Array.isArray(roleByPageKey)
+    || Object.keys(roleByPageKey).length === 0) {
+    throw new Error('批量登录必须提供非空页面别名与角色映射')
+  }
+  // sessions 用于按登录逆序注销并关闭上下文；pages 仅暴露调用方约定的业务页面别名。
+  const sessions = []
+  const pages = {}
+  try {
+    for (const [pageKey, roleKey] of Object.entries(roleByPageKey)) {
+      const session = await openWorkflowRoleSession(browser, roleKey)
+      sessions.push(session)
+      pages[pageKey] = session.page
+    }
+    return { sessions, pages }
+  } catch (error) {
+    // 批量创建未完成时由共享清理链立即回收已登录角色，调用方无需处理半成品集合。
+    const cleanupErrors = await closeWorkflowRoleSessions(sessions)
+    const failure = new Error(redactWorkflowSecrets(error))
+    if (cleanupErrors.length) failure.message += `；批量登录回收异常：${cleanupErrors.join(' | ')}`
+    throw failure
+  }
+}
+
+/**
  * 使用页面真实登录产生的 JWT 调用正式后端 API，并同时校验 HTTP 与 AjaxResult 业务码。
  * @param {import('@playwright/test').Page} page 已登录角色页面。
  * @param {'GET'|'POST'|'PUT'|'DELETE'} method HTTP 方法。
@@ -114,6 +144,31 @@ export async function callWorkflowApi(page, method, path, options = {}) {
     : `${method} ${path} 业务码`
   expect(payload.code, assertionLabel).toBe(options.expectedCode ?? 200)
   return payload
+}
+
+/**
+ * 按流程标识查询指定工作台，并定位包含唯一业务主键的正式表格行。
+ * @param {import('@playwright/test').Page} page 当前职责角色页面。
+ * @param {string} route 工作台前端路由。
+ * @param {string} endpoint 工作台正式列表接口。
+ * @param {string} processKey 流程定义标识筛选值。
+ * @param {string} businessKey 场景唯一业务主键。
+ * @returns {Promise<import('@playwright/test').Locator>} 唯一匹配的 Element Plus 表格行。
+ */
+export async function findWorkflowTableRow(page, route, endpoint, processKey, businessKey) {
+  await page.goto(route)
+  const processKeyInput = page.getByPlaceholder('请输入流程标识')
+  await expect(processKeyInput).toBeVisible()
+  await processKeyInput.fill(processKey)
+  const responsePromise = page.waitForResponse(response => {
+    if (!matchesEndpoint(response, endpoint, 'GET')) return false
+    return new URL(response.url()).searchParams.get('processKey') === processKey
+  })
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await expectAjaxSuccess(await responsePromise, endpoint)
+  const rows = page.locator('.el-table__body tbody tr').filter({ hasText: businessKey })
+  await expect(rows, '工作台必须仅返回本场景业务对象').toHaveCount(1)
+  return rows.first()
 }
 
 /**

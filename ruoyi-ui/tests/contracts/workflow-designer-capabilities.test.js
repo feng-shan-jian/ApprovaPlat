@@ -124,6 +124,23 @@ test('自动抄送规则与抄送首次阅读连接正式 BPMN 和服务端状�
 })
 
 /**
+ * 验证退回待修改实例仍按活动执行树提供取消或终止，且不会误开放历史删除。
+ * @returns {void} 页面动作状态集合或状态切换边界退化时断言失败。
+ */
+test('退回待修改实例保持活动动作并限制实例状态切换', () => {
+  assert.match(
+    workflowProcessListSource,
+    /function isActiveProcess\(row\)[\s\S]*?\['running', 'returned', 'suspended'\]/
+  )
+  assert.match(
+    workflowProcessListSource,
+    /function supportsInstanceStateToggle\(row\)[\s\S]*?\['running', 'suspended'\]/
+  )
+  assert.match(workflowProcessListSource, /v-if="supportsInstanceStateToggle\(scope\.row\)"/)
+  assert.match(workflowProcessListSource, /v-if="!isActiveProcess\(scope\.row\)" content="删除历史"/)
+})
+
+/**
  * 验证设计器能力接入真实 Modeler 模块和服务端 API，而不是只渲染工具栏按钮。
  * @returns {void} 任一核心能力未连接真实实现时断言失败。
  */
@@ -820,6 +837,24 @@ test('BusinessRuleTask 通过正式 DMN 目录绑定精确版本', async () => {
   const { xml } = await moddle.toXML(rootElement, { format: true })
   assert.match(xml, /businessRuleTask[^>]+flowable:rules="riskDecision:7:source-decision-id"/)
   assert.doesNotMatch(xml, /approvaExtensionKey|workflowExtensionDelegate/)
+})
+
+/**
+ * 验证 UserTask 经真实替换命令转为其他任务时清理专属作者状态，并保持撤销分组。
+ * @returns {void} 未监听 shape.replace、绕开命令栈或遗漏任一专属属性时测试失败。
+ */
+test('UserTask 更改元素时原子清理专属作者状态', () => {
+  assert.match(designerSource,
+    /eventBus\.on\('commandStack\.shape\.replace\.postExecute', handleShapeReplace\)/)
+  assert.match(designerSource,
+    /function handleShapeReplace\(event\)[\s\S]*?\$instanceOf\?\.\('bpmn:UserTask'\)[\s\S]*?modeler\.get\('modeling'\)\.updateProperties\(newShape/)
+  assert.match(designerSource,
+    /readControlledLoop\(oldBusinessObject\)[\s\S]*?isControlledMultiInstanceLoop\(oldBusinessObject\.loopCharacteristics\)[\s\S]*?changes\.loopCharacteristics = undefined/)
+  assert.match(designerSource,
+    /function createNonUserTaskExtensionElements\(businessObject\)[\s\S]*?flowable:TaskListener[\s\S]*?flowable:FormProperty[\s\S]*?isUserTaskOnlyProperty/)
+  assert.match(designerSource,
+    /function isUserTaskOnlyProperty\(name\)[\s\S]*?PARTICIPANT_RULE_PROPERTY_NAMES[\s\S]*?SLA_PROPERTY_NAME_SET[\s\S]*?CONTROLLED_LOOP_PROPERTY_NAMES[\s\S]*?MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES[\s\S]*?AUTO_COPY_PROPERTY_NAME/)
+  assert.match(designerDoc, /更改元素[\s\S]*?UserTask[\s\S]*?业务规则任务[\s\S]*?同一撤销单元/)
 })
 
 /**

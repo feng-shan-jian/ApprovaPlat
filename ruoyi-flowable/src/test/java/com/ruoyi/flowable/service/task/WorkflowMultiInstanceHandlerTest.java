@@ -66,23 +66,24 @@ class WorkflowMultiInstanceHandlerTest
     }
 
     /**
-     * 验证引擎重求值完整状态时只读复用正式快照，已增长 revision 不会被重置。
+     * 验证指定身份多实例加签后，引擎重求值只读复用正式快照且不回退 revision。
      *
-     * @return 无返回值；handler 二次写变量或返回旧集合时测试失败
+     * @return 无返回值；handler 回退到 BPMN 原始成员、二次写变量或重置 revision 时测试失败
      */
     @Test
-    void reusesCompleteExistingStateWithoutResettingRevision()
+    void reusesAdjustedSnapshotInsteadOfConfiguredIdentityMembers()
     {
-        DelegateExecution execution = execution(WorkflowMultiInstanceMode.ALL,
-                List.of(8L, 9L, 10L));
+        DelegateExecution execution = configuredExecution(
+                WorkflowMultiInstanceMode.ALL, "USER", "8,9");
         when(execution.getVariable("_wfMiMembers_approveTask"))
                 .thenReturn(List.of("8", "9", "10"));
         when(execution.getVariable("_wfMiRevision_approveTask")).thenReturn(7);
         when(execution.getVariable("_wfMiMode_approveTask")).thenReturn("ALL");
-        when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(8L, 9L, 10L)))
-                .thenReturn(List.of("8", "9", "10"));
+        when(userSelectionValidator.requireApprovalEligibleUserIds(List.of(8L, 9L)))
+                .thenReturn(List.of("8", "9"));
 
-        assertThat(handler.getUserIds(execution)).containsExactly("8", "9", "10");
+        assertThat(handler.getConfiguredUserIds(execution))
+                .containsExactly("8", "9", "10");
 
         verify(execution, never()).setVariables(org.mockito.ArgumentMatchers.anyMap());
     }
@@ -108,12 +109,12 @@ class WorkflowMultiInstanceHandlerTest
     }
 
     /**
-     * 验证完整保留状态与当前集合或 BPMN 模式不一致时拒绝重求值且不回退 revision。
+     * 验证完整保留状态与 BPMN 冻结模式不一致时拒绝重求值且不回退 revision。
      *
      * @return 无返回值；不一致状态被接受或变量被覆盖时测试失败
      */
     @Test
-    void rejectsExistingStateThatDivergesFromCollectionOrMode()
+    void rejectsExistingStateThatDivergesFromMode()
     {
         DelegateExecution execution = execution(WorkflowMultiInstanceMode.ALL,
                 List.of(8L, 9L));

@@ -16,6 +16,13 @@ output/
 /deployment/k6/README.md
 /testcount/
 
+# Local test/runtime copies and generated evidence
+/back/
+/vite/
+/logs/
+/META-INF/
+/ruoyi-ui/tests/ui/output/
+
 tests/**/coverage/
 tests/e2e/reports
 selenium-debug.log

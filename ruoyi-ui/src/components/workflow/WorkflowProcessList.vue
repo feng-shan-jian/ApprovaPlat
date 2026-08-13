@@ -148,7 +148,7 @@
             </el-tooltip>
           </template>
           <template v-if="mode === 'own' || mode === 'manage'">
-            <el-tooltip v-if="isActiveProcess(scope.row)" :content="scope.row.processStatus === 'suspended' ? '激活实例' : '挂起实例'" placement="top">
+            <el-tooltip v-if="supportsInstanceStateToggle(scope.row)" :content="scope.row.processStatus === 'suspended' ? '激活实例' : '挂起实例'" placement="top">
               <el-button link :type="scope.row.processStatus === 'suspended' ? 'success' : 'warning'" :icon="scope.row.processStatus === 'suspended' ? 'VideoPlay' : 'VideoPause'" v-hasPermi="['workflow:process:state']" @click="toggleInstanceState(scope.row)" />
             </el-tooltip>
             <el-tooltip v-if="isActiveProcess(scope.row)" content="终止实例" placement="top">
@@ -487,11 +487,20 @@ function canUnclaim(row) {
 }
 
 /**
- * 判断流程实例是否仍允许运行时动作。
+ * 判断流程实例是否仍保留活动执行树，可执行取消或管理员终止。
  * @param {object} row 我的流程或管理员运维实例行。
- * @returns {boolean} running 或 suspended 状态返回 true。
+ * @returns {boolean} running、returned 或 suspended 状态返回 true。
  */
 function isActiveProcess(row) {
+  return ['running', 'returned', 'suspended'].includes(String(row.processStatus || '').toLowerCase())
+}
+
+/**
+ * 判断流程实例是否允许在激活和挂起状态间切换。
+ * @param {object} row 管理员运维实例行。
+ * @returns {boolean} 仅 running 或 suspended 状态返回 true。
+ */
+function supportsInstanceStateToggle(row) {
   return ['running', 'suspended'].includes(String(row.processStatus || '').toLowerCase())
 }
 

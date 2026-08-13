@@ -373,6 +373,50 @@ class WorkflowMultiInstanceIT
     }
 
     /**
+     * 验证指定身份会签运行期加签后，重求值复用正式成员快照并允许全部成员自然完成。
+     *
+     * @return 无返回值；新增成员丢失、原成员完成报错或最终快照与 revision 不一致时测试失败
+     */
+    @Test
+    void configuredRoleAllCompletesAfterRuntimeAddSign()
+    {
+        String processInstanceId = startConfiguredProcess(
+                ROLE_ALL_PROCESS_KEY, ROLE_ALL_ACTIVITY_ID, "ALL", ROLE_ALL_USER_IDS);
+        Task operatorTask = taskForAssignee(
+                processInstanceId, ROLE_ALL_ACTIVITY_ID, 81L);
+        setSecurityContextUser(81L);
+
+        // adjustedUserIds 是加签后的正式成员顺序，用户 100 不属于 BPMN 原始角色展开结果。
+        List<Long> adjustedUserIds = List.of(81L, 82L, 83L, 84L, 103L, 100L);
+        WorkflowMultiInstanceStateView added = multiInstanceService.adjust(
+                new WorkflowMultiInstanceAdjustmentRequest(operatorTask.getId(),
+                        WorkflowMultiInstanceAdjustmentAction.ADD, 0L, "指定身份真实加签",
+                        List.of(100L), null));
+
+        assertThat(added.revision()).isEqualTo(1L);
+        assertThat(added.members()).extracting(member -> member.userId())
+                .containsExactlyElementsOf(adjustedUserIds);
+        assertExecutionTree(processInstanceId, ROLE_ALL_ACTIVITY_ID, 6, 0);
+        for (Long userId : adjustedUserIds)
+        {
+            completeMember(processInstanceId, ROLE_ALL_ACTIVITY_ID, userId);
+        }
+
+        assertNaturallyCompleted(processInstanceId);
+        assertThat(historicVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.memberSnapshotName(ROLE_ALL_ACTIVITY_ID)))
+                .isEqualTo(adjustedUserIds.stream().map(String::valueOf).toList());
+        assertThat(historicVariable(processInstanceId,
+                WorkflowMultiInstanceVariables.revisionName(ROLE_ALL_ACTIVITY_ID))).isEqualTo(7);
+        assertCompletionAuditRevisions(processInstanceId, ROLE_ALL_ACTIVITY_ID,
+                List.of(2, 3, 4, 5, 6, 7));
+        assertThat(historicTasks(processInstanceId, ROLE_ALL_ACTIVITY_ID))
+                .hasSize(6)
+                .extracting(HistoricTaskInstance::getDeleteReason)
+                .containsOnlyNulls();
+    }
+
+    /**
      * 验证指定部门在节点进入时按实时 RBAC 展开完整 assignee 集合，或签首人完成后取消其余实例。
      *
      * @return 无返回值；部门展开、候选链接、取消历史、模式或快照不一致时测试失败

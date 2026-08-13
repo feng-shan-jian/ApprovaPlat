@@ -189,7 +189,7 @@ public class WorkflowMultiInstanceHandler
     {
         DelegateExecution processScope = requireProcessScope(execution);
         List<String> existingMembers = requireExistingState(processScope, activityId,
-                mode, eligibleUserIds);
+                mode);
         if (existingMembers != null)
         {
             // 引擎重求值只能复用现有正式快照，绝不把已调整 revision 回退到零。
@@ -210,11 +210,10 @@ public class WorkflowMultiInstanceHandler
      * @param processScope DelegateExecution，流程实例根变量作用域
      * @param activityId String，当前动态多实例活动 ID
      * @param mode WorkflowMultiInstanceMode，部署 BPMN 解析出的固定完成模式
-     * @param activeUserIds List&lt;String&gt;，当前受控集合重新通过正式主数据校验后的用户
      * @return List&lt;String&gt;，完整状态存在时返回不可修改正式快照；全空时返回 null
      */
     private List<String> requireExistingState(DelegateExecution processScope,
-            String activityId, WorkflowMultiInstanceMode mode, List<String> activeUserIds)
+            String activityId, WorkflowMultiInstanceMode mode)
     {
         Object rawMembers = processScope.getVariable(
                 WorkflowMultiInstanceVariables.memberSnapshotName(activityId));
@@ -234,18 +233,13 @@ public class WorkflowMultiInstanceHandler
         }
 
         List<String> existingMembers = requireCanonicalMemberSnapshot(rawMembers);
-        int revision = requireNonNegativeRevision(rawRevision);
+        requireNonNegativeRevision(rawRevision);
         if (!(rawMode instanceof String existingMode)
-                || !mode.name().equals(existingMode)
-                || !existingMembers.equals(activeUserIds))
+                || !mode.name().equals(existingMode))
         {
             throw dataError();
         }
-        // revision 只验证非负和类型，不执行任何写入；大于零代表成员已经经过正式调整。
-        if (revision < 0)
-        {
-            throw dataError();
-        }
+        // 加签或减签后，正式快照会合法偏离 BPMN 作者配置；重求值必须以该快照为唯一成员事实来源。
         return existingMembers;
     }
 

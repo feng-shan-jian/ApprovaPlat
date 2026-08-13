@@ -30,16 +30,21 @@ const conditionRuleProperty = 'approva.conditionRule.config'
 /**
  * 读取命令行参数并限制只接受脚本公开的配置项。
  * @param {string[]} argv Node.js 传入的命令行参数数组。
- * @returns {{baseUrl: string, username: string, catalogPath: string}} 规范化脚本配置。
+ * @returns {{baseUrl: string, username: string, catalogPath: string, identitiesOnly: boolean}} 规范化脚本配置。
  */
 function parseArguments(argv) {
   const options = {
     baseUrl: 'http://127.0.0.1:8080',
     username: 'admin',
-    catalogPath: defaultCatalogPath
+    catalogPath: defaultCatalogPath,
+    identitiesOnly: false
   }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
+    if (argument === '--identities-only') {
+      options.identitiesOnly = true
+      continue
+    }
     const value = argv[index + 1]
     if (!['--base-url', '--username', '--catalog'].includes(argument) || !value) {
       throw new Error(`不支持或缺少值的参数: ${argument}`)
@@ -167,7 +172,7 @@ function requireIdentityCatalog(catalog) {
  * 创建或严格复用测试部门，所有部门都挂载到目录声明的正式根部门下。
  * @param {{request: Function}} api 已登录 API 客户端。
  * @param {object} identities 测试身份目录定义。
- * @returns {Promise<{created: number, reused: number}>} 部门创建和复用数量。
+ * @returns {Promise<{created: number, updated: number, reused: number}>} 部门创建、负责人校准和复用数量。
  */
 async function provisionDepartments(api, identities) {
   let directory = await loadIdentityDirectory(api)
@@ -179,6 +184,7 @@ async function provisionDepartments(api, identities) {
   }
   const root = roots[0]
   let created = 0
+  let updated = 0
   let reused = 0
   for (const definition of identities.departments) {
     const matches = directory.depts.filter(item => item.deptName === definition.deptName)
@@ -189,6 +195,28 @@ async function provisionDepartments(api, identities) {
         Number(existing.orderNum) === Number(definition.orderNum) &&
         String(existing.status) === '0'
       if (!matchesDefinition) throw new Error(`测试部门内容漂移: ${definition.deptName}`)
+      const expectedLeader = String(definition.leader || '')
+      if (String(existing.leader || '') !== expectedLeader) {
+        // 负责人用户名决定直属上级和部门负责人规则，必须经正式部门 API 校准并回读验证。
+        await api.request('PUT', '/system/dept', {
+          deptId: Number(existing.deptId),
+          parentId: Number(existing.parentId),
+          deptName: existing.deptName,
+          orderNum: Number(existing.orderNum),
+          leader: expectedLeader,
+          phone: existing.phone || '',
+          email: existing.email || '',
+          status: String(existing.status),
+          remark: existing.remark || sampleAssetRemark
+        })
+        directory = await loadIdentityDirectory(api)
+        const verified = directory.depts.filter(item => item.deptName === definition.deptName)
+        if (verified.length !== 1 || String(verified[0].leader || '') !== expectedLeader) {
+          throw new Error(`测试部门负责人校准后验证失败: ${definition.deptName}`)
+        }
+        updated += 1
+        continue
+      }
       reused += 1
       continue
     }
@@ -209,7 +237,7 @@ async function provisionDepartments(api, identities) {
       throw new Error(`测试部门创建后校验失败: ${definition.deptName}`)
     }
   }
-  return { created, reused }
+  return { created, updated, reused }
 }
 
 /**
@@ -819,7 +847,7 @@ async function loadRequiredExtensions(api, catalog) {
 }
 
 /**
- * 用每个测试账号重新登录并访问其正式工作流入口，验证凭据和 RBAC 真实生效。
+ * 用每个测试账号重新登录并核对正式角色集合，验证凭据和 RBAC 真实生效。
  * @param {string} baseUrl 服务根地址。
  * @param {object} identities 测试身份目录定义。
  * @param {string} identityPassword 仅存在于当前进程的测试用户密码。
@@ -830,10 +858,11 @@ async function verifyTestIdentityAccess(baseUrl, identities, identityPassword) {
   for (const definition of identities.users) {
     const client = createApiClient(baseUrl)
     await client.login(definition.userName, identityPassword)
-    await client.request('GET', '/workflow/process/list?pageNum=1&pageSize=1')
-    if (definition.roleKeys.includes('workflow_approver')) {
-      await client.request('GET', '/workflow/process/todoList?pageNum=1&pageSize=1')
-      await client.request('GET', '/workflow/process/claimList?pageNum=1&pageSize=1')
+    const info = await client.request('GET', '/getInfo')
+    const actualRoles = [...new Set(Array.isArray(info.roles) ? info.roles : [])].sort()
+    const expectedRoles = [...new Set(definition.roleKeys)].sort()
+    if (JSON.stringify(actualRoles) !== JSON.stringify(expectedRoles)) {
+      throw new Error(`测试账号角色集合不一致: ${definition.userName}`)
     }
     verified += 1
   }
@@ -1480,7 +1509,7 @@ async function main() {
     throw new Error('APPROVA_SAMPLE_REPAIR_UNDEPLOYED 只能是 true 或 false')
   }
   const catalog = JSON.parse(await fs.readFile(options.catalogPath, 'utf8'))
-  if (!Array.isArray(catalog.samples) || catalog.samples.length === 0) {
+  if (!options.identitiesOnly && (!Array.isArray(catalog.samples) || catalog.samples.length === 0)) {
     throw new Error('审批样例目录为空')
   }
 
@@ -1504,6 +1533,23 @@ async function main() {
       catalog,
       identityPassword
     )
+    if (options.identitiesOnly) {
+      const verifiedUsers = await verifyTestIdentityAccess(
+        options.baseUrl,
+        requireIdentityCatalog(catalog),
+        identityPassword
+      )
+      console.log(
+        `测试部门已核验: 创建 ${identityResult.departments.created}，校准 ${identityResult.departments.updated}，复用 ${identityResult.departments.reused}`
+      )
+      console.log(
+        `测试角色已核验: 创建 ${identityResult.roles.created}，复用 ${identityResult.roles.reused}`
+      )
+      console.log(
+        `测试账号已核验: 创建 ${identityResult.users.created}，校准 ${identityResult.users.aligned}，复用 ${identityResult.users.reused}，登录与角色通过 ${verifiedUsers}`
+      )
+      return
+    }
     const permissionResult = await alignParticipantRolePermissions(
       api,
       catalog,
@@ -1526,7 +1572,7 @@ async function main() {
       identityPassword
     )
     console.log(
-      `测试部门已核验: 创建 ${identityResult.departments.created}，复用 ${identityResult.departments.reused}`
+      `测试部门已核验: 创建 ${identityResult.departments.created}，校准 ${identityResult.departments.updated}，复用 ${identityResult.departments.reused}`
     )
     console.log(
       `测试角色已核验: 创建 ${identityResult.roles.created}，复用 ${identityResult.roles.reused}`

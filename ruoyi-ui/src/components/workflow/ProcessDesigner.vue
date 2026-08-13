@@ -768,6 +768,7 @@ function createModeler() {
   eventBus.on('element.changed', event => {
     if (event.element === selectedElement.value) loadPropertyState(event.element)
   })
+  eventBus.on('commandStack.shape.replace.postExecute', handleShapeReplace)
   eventBus.on('commandStack.changed', handleCommandStackChanged)
   eventBus.on('linting.completed', event => {
     clientLintIssues.value = Object.values(event.issues || {}).flat()
@@ -775,6 +776,66 @@ function createModeler() {
   eventBus.on('tokenSimulation.toggleMode', event => {
     simulationActive.value = Boolean(event.active)
   })
+}
+
+/**
+ * 在 bpmn-js 更改元素命令内清理不属于目标任务类型的 UserTask 作者状态。
+ * @param {{context?:{oldShape?:object,newShape?:object}}|undefined} event shape.replace 命令事件，包含替换前后图形。
+ * @returns {void} 仅 UserTask 转为其他任务时追加同一撤销单元内的属性净化命令。
+ */
+function handleShapeReplace(event) {
+  const oldBusinessObject = event?.context?.oldShape?.businessObject
+  const newShape = event?.context?.newShape
+  const newBusinessObject = newShape?.businessObject
+  if (!oldBusinessObject?.$instanceOf?.('bpmn:UserTask')
+    || newBusinessObject?.$instanceOf?.('bpmn:UserTask')) return
+
+  const extensionElements = createNonUserTaskExtensionElements(newBusinessObject)
+  // 替换库会复制 Activity 公共属性和全部 extensionElements；这里必须把 UserTask 私有状态作为同组子命令清除。
+  const changes = { extensionElements }
+  if (readControlledLoop(oldBusinessObject)
+    || isControlledMultiInstanceLoop(oldBusinessObject.loopCharacteristics)) {
+    // 受控整改和受控会签依赖 UserTask 运行时；普通 BPMN 循环仍是其他 Activity 的合法公共属性。
+    changes.loopCharacteristics = undefined
+  }
+  modeler.get('modeling').updateProperties(newShape, changes)
+}
+
+/**
+ * 从替换后的任务扩展中移除只允许 UserTask 使用的监听器、表单和平台受控属性。
+ * @param {object} businessObject 替换后目标任务的 BPMN 业务对象。
+ * @returns {object|undefined} 保留通用执行监听器和普通扩展属性的全新 ExtensionElements；无内容时返回 undefined。
+ */
+function createNonUserTaskExtensionElements(businessObject) {
+  const extensionValues = []
+  const moddle = modeler.get('moddle')
+  for (const value of businessObject?.extensionElements?.values || []) {
+    if (value?.$type === 'flowable:TaskListener' || value?.$type === 'flowable:FormProperty') continue
+    if (value?.$type !== 'flowable:Properties') {
+      extensionValues.push(value)
+      continue
+    }
+    const properties = (value.values || []).filter(property => !isUserTaskOnlyProperty(property?.name))
+    if (properties.length) {
+      extensionValues.push(moddle.create('flowable:Properties', { values: properties }))
+    }
+  }
+  return extensionValues.length
+    ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
+    : undefined
+}
+
+/**
+ * 判断 Flowable Property 是否只能出现在 UserTask 作者模型上。
+ * @param {unknown} name Flowable Property 的 name 属性。
+ * @returns {boolean} 办理规则、SLA、自动抄送、受控循环或多实例身份属性返回 true。
+ */
+function isUserTaskOnlyProperty(name) {
+  return PARTICIPANT_RULE_PROPERTY_NAMES.has(name)
+    || SLA_PROPERTY_NAME_SET.has(name)
+    || CONTROLLED_LOOP_PROPERTY_NAMES.has(name)
+    || MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(name)
+    || name === AUTO_COPY_PROPERTY_NAME
 }
 
 /**

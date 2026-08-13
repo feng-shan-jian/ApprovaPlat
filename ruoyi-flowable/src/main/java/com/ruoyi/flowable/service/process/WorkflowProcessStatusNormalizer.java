@@ -28,13 +28,13 @@ final class WorkflowProcessStatusNormalizer
     }
 
     /**
-     * 按业务终态、活动引擎状态、其他稳定状态和历史兜底的顺序解析流程状态。
+     * 按业务终态、引擎完成、活动引擎状态、其他稳定状态和历史兜底的顺序解析流程状态。
      *
      * @param businessStatus String，服务端通过 Flowable businessStatus 写入的业务状态，允许为空
      * @param engineState String，Flowable HistoricProcessInstance.state，允许为空
      * @param endTime Instant，流程结束时间，运行实例为空
      * @param deleteReason String，历史删除或终止原因，允许为空
-     * @return String，running、suspended、completed、canceled、rejected、terminated 或兼容的小写引擎状态
+     * @return String，running、returned、suspended、completed、canceled、rejected、terminated 或兼容的小写引擎状态
      */
     static String normalize(String businessStatus, String engineState,
             Instant endTime, String deleteReason)
@@ -47,6 +47,11 @@ final class WorkflowProcessStatusNormalizer
                 && BUSINESS_TERMINAL_STATES.contains(normalizedBusinessStatus))
         {
             return normalizedBusinessStatus;
+        }
+        // 重提会把 businessStatus 恢复为 running；流程结束后引擎终态和结束时间必须覆盖该活动态快照。
+        if ("completed".equals(normalizedEngineState) && endTime != null)
+        {
+            return "completed";
         }
         // returned 是仍有活动任务的业务暂停态，必须优先于引擎仍报告的 running。
         if ("returned".equals(normalizedBusinessStatus))

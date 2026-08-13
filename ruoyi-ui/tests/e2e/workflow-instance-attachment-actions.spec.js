@@ -12,9 +12,10 @@ import {
   expectRejectedWorkflowActionWithoutSideEffects,
   findAssignedWorkflowTask,
   findStartableWorkflowDefinition,
+  findWorkflowTableRow,
   findWorkflowUserOption,
   getWorkflowDetail,
-  openWorkflowRoleSession,
+  openWorkflowRoleSessions,
   redactWorkflowSecrets,
   startWorkflowThroughUi
 } from './support/workflow-fixture.js'
@@ -83,31 +84,6 @@ async function createAttachmentWorkflowForm(page, formName, resources) {
   expect(rows, '附件表单必须从正式列表唯一回查').toHaveLength(1)
   expect(String(rows[0].formId), '表单创建与回查主键必须一致').toBe(formId)
   return formId
-}
-
-/**
- * 按流程标识和业务主键查询工作台，并定位唯一正式表格行。
- * @param {import('@playwright/test').Page} page 当前职责角色页面。
- * @param {string} route 工作台前端路由。
- * @param {string} endpoint 工作台正式列表接口。
- * @param {string} processKey 流程定义标识筛选值。
- * @param {string} businessKey 场景唯一业务主键。
- * @returns {Promise<import('@playwright/test').Locator>} 唯一匹配的 Element Plus 表格行。
- */
-async function findWorkflowTableRow(page, route, endpoint, processKey, businessKey) {
-  await page.goto(route)
-  const processKeyInput = page.getByPlaceholder('请输入流程标识')
-  await expect(processKeyInput).toBeVisible()
-  await processKeyInput.fill(processKey)
-  const responsePromise = page.waitForResponse(response => {
-    if (!matchesEndpoint(response, endpoint, 'GET')) return false
-    return new URL(response.url()).searchParams.get('processKey') === processKey
-  })
-  await page.getByRole('button', { name: '搜索', exact: true }).click()
-  await expectAjaxSuccess(await responsePromise, endpoint)
-  const rows = page.locator('.el-table__body tbody tr').filter({ hasText: businessKey })
-  await expect(rows, '工作台必须仅返回本场景业务对象').toHaveCount(1)
-  return rows.first()
 }
 
 /**
@@ -276,26 +252,18 @@ test('TEMP 附件与实例运维动作具备真实 UI、对象授权、状态门
     formId: '',
     categoryId: ''
   }
-  const sessions = []
-  const pages = {}
+  let sessions = []
+  let pages = {}
   let primaryError = null
 
   try {
-    const designerSession = await openWorkflowRoleSession(browser, 'workflow_designer')
-    sessions.push(designerSession)
-    pages.designer = designerSession.page
-    const starterSession = await openWorkflowRoleSession(browser, 'workflow_starter')
-    sessions.push(starterSession)
-    pages.starter = starterSession.page
-    const approverSession = await openWorkflowRoleSession(browser, 'workflow_approver')
-    sessions.push(approverSession)
-    pages.approver = approverSession.page
-    const adminSession = await openWorkflowRoleSession(browser, 'workflow_admin')
-    sessions.push(adminSession)
-    pages.admin = adminSession.page
-    const auditorSession = await openWorkflowRoleSession(browser, 'workflow_auditor')
-    sessions.push(auditorSession)
-    pages.auditor = auditorSession.page
+    ({ sessions, pages } = await openWorkflowRoleSessions(browser, {
+      designer: 'workflow_designer',
+      starter: 'workflow_starter',
+      approver: 'workflow_approver',
+      admin: 'workflow_admin',
+      auditor: 'workflow_auditor'
+    }))
 
     const approver = await findWorkflowUserOption(pages.designer, 'workflow_approver', true)
     const admin = await findWorkflowUserOption(pages.designer, 'workflow_admin', true)

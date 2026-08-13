@@ -16,9 +16,10 @@ import {
   findClaimableWorkflowTask,
   findCompletedWorkflowTask,
   findStartableWorkflowDefinition,
+  findWorkflowTableRow,
   findWorkflowUserOption,
   getWorkflowDetail,
-  openWorkflowRoleSession,
+  openWorkflowRoleSessions,
   startWorkflowThroughUi,
   workflowAccounts
 } from './support/workflow-fixture.js'
@@ -175,31 +176,6 @@ async function confirmMessageBoxAction(page, endpoint, trigger) {
 }
 
 /**
- * 按流程标识查询工作台，并返回包含唯一业务主键的真实表格行。
- * @param {import('@playwright/test').Page} page 当前职责角色页面。
- * @param {string} route 工作台前端路由。
- * @param {string} endpoint 工作台正式列表接口。
- * @param {string} processKey 流程定义标识筛选值。
- * @param {string} businessKey 场景唯一业务主键。
- * @returns {Promise<import('@playwright/test').Locator>} 唯一匹配的 Element Plus 表格行。
- */
-async function findWorkflowTableRow(page, route, endpoint, processKey, businessKey) {
-  await page.goto(route)
-  const processKeyInput = page.getByPlaceholder('请输入流程标识')
-  await expect(processKeyInput).toBeVisible()
-  await processKeyInput.fill(processKey)
-  const responsePromise = page.waitForResponse(response => {
-    if (!matchesEndpoint(response, endpoint, 'GET')) return false
-    return new URL(response.url()).searchParams.get('processKey') === processKey
-  })
-  await page.getByRole('button', { name: '搜索', exact: true }).click()
-  await expectAjaxSuccess(await responsePromise, endpoint)
-  const rows = page.locator('.el-table__body tbody tr').filter({ hasText: businessKey })
-  await expect(rows, '工作台必须仅返回本场景业务对象').toHaveCount(1)
-  return rows.first()
-}
-
-/**
  * 在待签工作台通过真实确认框认领候选任务。
  * @param {import('@playwright/test').Page} page 候选审批人页面。
  * @param {string} processKey 候选流程定义标识。
@@ -312,27 +288,19 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
     formId: '',
     categoryId: ''
   }
-  const sessions = []
-  const pages = {}
+  let sessions = []
+  let pages = {}
   const evidence = []
   let primaryError = null
 
   try {
-    const designerSession = await openWorkflowRoleSession(browser, 'workflow_designer')
-    sessions.push(designerSession)
-    pages.designer = designerSession.page
-    const starterSession = await openWorkflowRoleSession(browser, 'workflow_starter')
-    sessions.push(starterSession)
-    pages.starter = starterSession.page
-    const approverSession = await openWorkflowRoleSession(browser, 'workflow_approver')
-    sessions.push(approverSession)
-    pages.approver = approverSession.page
-    const adminSession = await openWorkflowRoleSession(browser, 'workflow_admin')
-    sessions.push(adminSession)
-    pages.admin = adminSession.page
-    const auditorSession = await openWorkflowRoleSession(browser, 'workflow_auditor')
-    sessions.push(auditorSession)
-    pages.auditor = auditorSession.page
+    ({ sessions, pages } = await openWorkflowRoleSessions(browser, {
+      designer: 'workflow_designer',
+      starter: 'workflow_starter',
+      approver: 'workflow_approver',
+      admin: 'workflow_admin',
+      auditor: 'workflow_auditor'
+    }))
 
     // 静态办理人、委派对象、转办对象和候选人全部来自实时审批资格目录。
     const approver = await findWorkflowUserOption(pages.designer, 'workflow_approver', true)

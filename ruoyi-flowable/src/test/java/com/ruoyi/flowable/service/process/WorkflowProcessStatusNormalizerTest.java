@@ -45,6 +45,24 @@ class WorkflowProcessStatusNormalizerTest
     }
 
     /**
+     * 验证退回重提遗留的活动业务状态不能覆盖已经结束的 Flowable 实例状态。
+     *
+     * @return 无返回值，断言 running 或 returned 快照最终均收敛为 completed
+     */
+    @Test
+    void completedEngineStateOverridesStaleActiveBusinessStatus()
+    {
+        Instant endTime = Instant.parse("2026-08-11T00:00:00Z");
+
+        assertThat(WorkflowProcessStatusNormalizer.normalize(
+                "running", "COMPLETED", endTime, null))
+                .isEqualTo("completed");
+        assertThat(WorkflowProcessStatusNormalizer.normalize(
+                "returned", "COMPLETED", endTime, null))
+                .isEqualTo("completed");
+    }
+
+    /**
      * 验证英式取消拼写和正常完成状态统一为稳定 API 编码。
      *
      * @return 无返回值，断言 cancelled 兼容及 completed 保持不变
