@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Answers.RETURNS_SELF;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -586,32 +587,45 @@ class WorkflowProcessQueryServiceTest
     }
 
     /**
-     * 验证分类没有正式部署时待办直接返回真实空页，不让空集合退化为全量任务查询。
+     * 验证分类没有正式部署时四类列表都返回真实空页，不让空集合退化为全量查询。
      *
-     * @return 无返回值，仍执行 count 或分页读取时测试失败
+     * @return 无返回值，任一列表仍执行 count 或分页读取时测试失败
      */
     @Test
-    void returnsEmptyAssignedPageWhenCategoryHasNoDeployment()
+    void returnsEmptyPagesWhenCategoryHasNoDeployment()
     {
         when(deploymentQuery.list()).thenReturn(List.of());
 
-        WorkflowPageResult<WorkflowAssignedTaskView> result = service.listAssigned(
+        WorkflowPageResult<WorkflowStartableDefinitionView> startable = service.listStartable(
+                new WorkflowStartableProcessQueryDto(null, null, "missing"), 1, 10);
+        WorkflowPageResult<WorkflowAssignedTaskView> assigned = service.listAssigned(
                 new WorkflowAssignedTaskQueryDto(
                         null, null, "missing", null, null, null), 1, 10);
+        WorkflowPageResult<WorkflowClaimableTaskView> claimable = service.listClaimable(
+                new WorkflowClaimableTaskQueryDto(
+                        null, null, "missing", null, null, null), 1, 10);
+        WorkflowPageResult<WorkflowCompletedTaskView> completed = service.listCompleted(
+                new WorkflowCompletedTaskQueryDto(
+                        null, null, "missing", null, null, null), 1, 10);
 
-        assertThat(result.total()).isZero();
-        assertThat(result.rows()).isEmpty();
-        verify(deploymentQuery).deploymentCategory("missing");
-        verify(taskService, never()).createTaskQuery();
+        assertThat(List.of(startable, assigned, claimable, completed)).allSatisfy(result ->
+        {
+            assertThat(result.total()).isZero();
+            assertThat(result.rows()).isEmpty();
+        });
+        verify(deploymentQuery, times(4)).deploymentCategory("missing");
+        verify(definitionQuery, never()).count();
+        verify(taskQuery, never()).count();
+        verify(historicTaskQuery, never()).count();
     }
 
     /**
-     * 验证旧部署缺少业务分类时不会把 BPMN targetNamespace URL 当作待办分类返回。
+     * 验证部署分类缺失时不回退定义或历史中的旧分类，保证展示与筛选口径一致。
      *
-     * @return 无返回值，URL 泄漏到工作台分类字段时测试失败
+     * @return 无返回值，旧分类作为不可筛选的页面分类返回时测试失败
      */
     @Test
-    void hidesNamespaceUrlWhenLegacyDeploymentHasNoBusinessCategory()
+    void doesNotFallbackToLegacyCategoryWhenDeploymentCategoryIsMissing()
     {
         Task task = task("task-legacy", "definition-legacy", "instance-legacy");
         when(task.getAssignee()).thenReturn("7");
@@ -619,10 +633,10 @@ class WorkflowProcessQueryServiceTest
         when(taskQuery.listPage(0, 10)).thenReturn(List.of(task));
         ProcessDefinition definition = stubTaskContext(
                 "definition-legacy", "instance-legacy", "deploy-legacy");
-        when(definition.getCategory()).thenReturn("http://ruoyi.example/workflow");
+        when(definition.getCategory()).thenReturn("legacy-business");
         HistoricProcessInstance instance = historicInstance(
                 "instance-legacy", "definition-legacy", "deploy-legacy");
-        when(instance.getProcessDefinitionCategory()).thenReturn("https://legacy.example/workflow");
+        when(instance.getProcessDefinitionCategory()).thenReturn("legacy-business");
         when(processQuery.singleResult()).thenReturn(instance);
         Deployment deployment = mock(Deployment.class);
         when(deployment.getId()).thenReturn("deploy-legacy");
@@ -635,6 +649,37 @@ class WorkflowProcessQueryServiceTest
         assertThat(result.rows()).singleElement()
                 .extracting(WorkflowAssignedTaskView::category)
                 .isNull();
+    }
+
+    /**
+     * 验证不存在的分类不能绕过其他查询参数校验，非法请求必须稳定返回 400。
+     *
+     * @return 无返回值，任一非法过滤条件被空分类短路为成功响应时测试失败
+     */
+    @Test
+    void validatesFiltersBeforeMissingCategoryShortCircuit()
+    {
+        String overlongName = "x".repeat(256);
+        Instant later = Instant.parse("2026-07-26T10:00:00Z");
+        Instant earlier = Instant.parse("2026-07-25T10:00:00Z");
+
+        assertCode(() -> service.listStartable(
+                new WorkflowStartableProcessQueryDto(null, overlongName, "missing"), 1, 10),
+                HttpStatus.BAD_REQUEST);
+        assertCode(() -> service.listAssigned(
+                new WorkflowAssignedTaskQueryDto(
+                        null, null, "missing", null, later, earlier), 1, 10),
+                HttpStatus.BAD_REQUEST);
+        assertCode(() -> service.listClaimable(
+                new WorkflowClaimableTaskQueryDto(
+                        null, null, "missing", null, later, earlier), 1, 10),
+                HttpStatus.BAD_REQUEST);
+        assertCode(() -> service.listCompleted(
+                new WorkflowCompletedTaskQueryDto(
+                        null, null, "missing", null, later, earlier), 1, 10),
+                HttpStatus.BAD_REQUEST);
+
+        verify(repositoryService, never()).createDeploymentQuery();
     }
 
     /**
