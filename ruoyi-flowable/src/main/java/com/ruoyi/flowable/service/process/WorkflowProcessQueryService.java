@@ -185,7 +185,14 @@ public class WorkflowProcessQueryService
         return engineOperations.read(() ->
         {
             WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-            ProcessDefinitionQuery query = buildStartableBaseQuery(filter);
+            // categoryDeploymentIds 为 null 表示未筛选，空集合表示正式部署中没有该业务分类。
+            Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
+                    filter == null ? null : filter.category());
+            if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
+            {
+                return new WorkflowPageResult<>(List.of(), 0);
+            }
+            ProcessDefinitionQuery query = buildStartableBaseQuery(filter, categoryDeploymentIds);
             long baseTotal = checkedCount(query.count());
             if (baseTotal == 0)
             {
@@ -283,7 +290,13 @@ public class WorkflowProcessQueryService
         return engineOperations.read(() ->
         {
             WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-            TaskQuery query = buildAssignedQuery(filter, actor.userId());
+            Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
+                    filter == null ? null : filter.category());
+            if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
+            {
+                return new WorkflowPageResult<>(List.of(), 0);
+            }
+            TaskQuery query = buildAssignedQuery(filter, actor.userId(), categoryDeploymentIds);
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
@@ -322,7 +335,13 @@ public class WorkflowProcessQueryService
                 // 菜单允许进入待签页不代表账号能完成认领和后续审批；页面只返回真实可执行任务。
                 return new WorkflowPageResult<>(List.of(), 0);
             }
-            TaskQuery query = buildClaimableQuery(filter, actor);
+            Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
+                    filter == null ? null : filter.category());
+            if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
+            {
+                return new WorkflowPageResult<>(List.of(), 0);
+            }
+            TaskQuery query = buildClaimableQuery(filter, actor, categoryDeploymentIds);
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
@@ -352,7 +371,14 @@ public class WorkflowProcessQueryService
         return engineOperations.read(() ->
         {
             WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-            HistoricTaskInstanceQuery query = buildCompletedQuery(filter, actor.userId());
+            Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
+                    filter == null ? null : filter.category());
+            if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
+            {
+                return new WorkflowPageResult<>(List.of(), 0);
+            }
+            HistoricTaskInstanceQuery query = buildCompletedQuery(
+                    filter, actor.userId(), categoryDeploymentIds);
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
@@ -515,9 +541,11 @@ public class WorkflowProcessQueryService
      * 构造可发起定义的基础查询，不使用会漏掉公开定义的 startableByUserOrGroups。
      *
      * @param filter WorkflowStartableProcessQueryDto，流程定义条件，允许为空
+     * @param categoryDeploymentIds Set&lt;String&gt;，正式分类部署主键；null 表示未筛选
      * @return ProcessDefinitionQuery，最新、激活且顺序确定的基础查询
      */
-    private ProcessDefinitionQuery buildStartableBaseQuery(WorkflowStartableProcessQueryDto filter)
+    private ProcessDefinitionQuery buildStartableBaseQuery(WorkflowStartableProcessQueryDto filter,
+            Set<String> categoryDeploymentIds)
     {
         ProcessDefinitionQuery query = repositoryService.createProcessDefinitionQuery()
                 .latestVersion()
@@ -526,7 +554,6 @@ public class WorkflowProcessQueryService
         {
             String processKey = optionalText(filter.processKey(), "流程标识过长");
             String processName = optionalText(filter.processName(), "流程名称过长");
-            String category = optionalText(filter.category(), "流程分类过长");
             if (processKey != null)
             {
                 query.processDefinitionKeyLike("%" + processKey + "%");
@@ -535,10 +562,11 @@ public class WorkflowProcessQueryService
             {
                 query.processDefinitionNameLike("%" + processName + "%");
             }
-            if (category != null)
-            {
-                query.processDefinitionCategory(category);
-            }
+        }
+        if (categoryDeploymentIds != null && !categoryDeploymentIds.isEmpty())
+        {
+            // 业务分类属于部署元数据，不能用可能保存 targetNamespace 的定义分类筛选。
+            query.deploymentIds(categoryDeploymentIds);
         }
         return query.orderByProcessDefinitionKey().asc()
                 .orderByProcessDefinitionId().asc();
@@ -736,19 +764,20 @@ public class WorkflowProcessQueryService
      *
      * @param filter WorkflowAssignedTaskQueryDto，任务条件，允许为空
      * @param currentUserId String，服务端解析的当前用户主键
+     * @param categoryDeploymentIds Set&lt;String&gt;，正式分类部署主键；null 表示未筛选
      * @return TaskQuery，固定 active 和 taskAssignee 的确定顺序查询
      */
-    private TaskQuery buildAssignedQuery(WorkflowAssignedTaskQueryDto filter, String currentUserId)
+    private TaskQuery buildAssignedQuery(WorkflowAssignedTaskQueryDto filter, String currentUserId,
+            Set<String> categoryDeploymentIds)
     {
         TaskQuery query = taskService.createTaskQuery()
                 .active()
                 .taskAssignee(currentUserId);
         applyTaskFilter(query, filter == null ? null : filter.processKey(),
                 filter == null ? null : filter.processName(),
-                filter == null ? null : filter.category(),
                 filter == null ? null : filter.taskName(),
                 filter == null ? null : filter.createdAfter(),
-                filter == null ? null : filter.createdBefore());
+                filter == null ? null : filter.createdBefore(), categoryDeploymentIds);
         return query.orderByTaskCreateTime().desc().orderByTaskId().desc();
     }
 
@@ -757,10 +786,11 @@ public class WorkflowProcessQueryService
      *
      * @param filter WorkflowClaimableTaskQueryDto，任务条件，允许为空
      * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
+     * @param categoryDeploymentIds Set&lt;String&gt;，正式分类部署主键；null 表示未筛选
      * @return TaskQuery，固定 active、unassigned 和候选身份并集的确定顺序查询
      */
     private TaskQuery buildClaimableQuery(WorkflowClaimableTaskQueryDto filter,
-            WorkflowCurrentIdentity actor)
+            WorkflowCurrentIdentity actor, Set<String> categoryDeploymentIds)
     {
         TaskQuery query = taskService.createTaskQuery()
                 .active()
@@ -773,10 +803,9 @@ public class WorkflowProcessQueryService
         }
         applyTaskFilter(query, filter == null ? null : filter.processKey(),
                 filter == null ? null : filter.processName(),
-                filter == null ? null : filter.category(),
                 filter == null ? null : filter.taskName(),
                 filter == null ? null : filter.createdAfter(),
-                filter == null ? null : filter.createdBefore());
+                filter == null ? null : filter.createdBefore(), categoryDeploymentIds);
         return query.orderByTaskCreateTime().desc().orderByTaskId().desc();
     }
 
@@ -786,19 +815,19 @@ public class WorkflowProcessQueryService
      * @param query TaskQuery，已固定身份范围的活动任务查询
      * @param processKey String，流程标识模糊条件，允许为空
      * @param processName String，流程名称模糊条件，允许为空
-     * @param category String，流程分类精确条件，允许为空
      * @param taskName String，任务名称模糊条件，允许为空
      * @param createdAfter Instant，任务创建时间下界，允许为空
      * @param createdBefore Instant，任务创建时间上界，允许为空
+     * @param categoryDeploymentIds Set&lt;String&gt;，正式分类部署主键；null 表示未筛选
      * @return 无返回值，条件直接写入 query
      */
     private void applyTaskFilter(TaskQuery query, String processKey, String processName,
-            String category, String taskName, Instant createdAfter, Instant createdBefore)
+            String taskName, Instant createdAfter, Instant createdBefore,
+            Set<String> categoryDeploymentIds)
     {
         validateRange(createdAfter, createdBefore, "任务创建时间范围不合法");
         String normalizedKey = optionalText(processKey, "流程标识过长");
         String normalizedProcessName = optionalText(processName, "流程名称过长");
-        String normalizedCategory = optionalText(category, "流程分类过长");
         String normalizedTaskName = optionalText(taskName, "任务名称过长");
         if (normalizedKey != null)
         {
@@ -808,9 +837,10 @@ public class WorkflowProcessQueryService
         {
             query.processDefinitionNameLike("%" + normalizedProcessName + "%");
         }
-        if (normalizedCategory != null)
+        if (categoryDeploymentIds != null && !categoryDeploymentIds.isEmpty())
         {
-            query.processCategoryIn(List.of(normalizedCategory));
+            // TaskInfoQuery 的 processCategoryIn 仍连接定义分类，必须按正式部署主键限定。
+            query.deploymentIdIn(categoryDeploymentIds);
         }
         if (normalizedTaskName != null)
         {
@@ -831,10 +861,12 @@ public class WorkflowProcessQueryService
      *
      * @param filter WorkflowCompletedTaskQueryDto，历史任务条件，允许为空
      * @param currentUserId String，服务端解析的当前用户主键
+     * @param categoryDeploymentIds Set&lt;String&gt;，正式分类部署主键；null 表示未筛选
      * @return HistoricTaskInstanceQuery，固定 finished 和 taskCompletedBy 的确定顺序查询
      */
     private HistoricTaskInstanceQuery buildCompletedQuery(
-            WorkflowCompletedTaskQueryDto filter, String currentUserId)
+            WorkflowCompletedTaskQueryDto filter, String currentUserId,
+            Set<String> categoryDeploymentIds)
     {
         HistoricTaskInstanceQuery query = historyService.createHistoricTaskInstanceQuery()
                 .finished()
@@ -844,7 +876,6 @@ public class WorkflowProcessQueryService
             validateRange(filter.completedAfter(), filter.completedBefore(), "任务完成时间范围不合法");
             String processKey = optionalText(filter.processKey(), "流程标识过长");
             String processName = optionalText(filter.processName(), "流程名称过长");
-            String category = optionalText(filter.category(), "流程分类过长");
             String taskName = optionalText(filter.taskName(), "任务名称过长");
             if (processKey != null)
             {
@@ -853,10 +884,6 @@ public class WorkflowProcessQueryService
             if (processName != null)
             {
                 query.processDefinitionNameLike("%" + processName + "%");
-            }
-            if (category != null)
-            {
-                query.processCategoryIn(List.of(category));
             }
             if (taskName != null)
             {
@@ -871,8 +898,47 @@ public class WorkflowProcessQueryService
                 query.taskCompletedBefore(Date.from(filter.completedBefore()));
             }
         }
+        if (categoryDeploymentIds != null && !categoryDeploymentIds.isEmpty())
+        {
+            // 历史任务与活动任务使用同一发布分类口径，避免筛选结果和表格显示不一致。
+            query.deploymentIdIn(categoryDeploymentIds);
+        }
         return query.orderByHistoricTaskInstanceEndTime().desc()
                 .orderByTaskId().desc();
+    }
+
+    /**
+     * 将业务分类编码解析为 Flowable 正式部署主键集合。
+     *
+     * @param category String，分类目录提交的业务分类编码，允许为空
+     * @return Set&lt;String&gt;，null 表示未启用分类筛选；空集合表示分类下没有部署
+     */
+    private Set<String> resolveCategoryDeploymentIds(String category)
+    {
+        String normalizedCategory = optionalText(category, "流程分类过长");
+        if (normalizedCategory == null)
+        {
+            return null;
+        }
+        List<Deployment> deployments = repositoryService.createDeploymentQuery()
+                .deploymentCategory(normalizedCategory)
+                .list();
+        if (deployments == null)
+        {
+            throw dataError("流程分类部署查询结果异常");
+        }
+        // deploymentIds 是分类筛选最终写入定义/任务原生查询的正式部署范围。
+        Set<String> deploymentIds = new LinkedHashSet<>();
+        for (Deployment deployment : deployments)
+        {
+            if (deployment == null || !StringUtils.hasText(deployment.getId())
+                    || !normalizedCategory.equals(deployment.getCategory())
+                    || !deploymentIds.add(deployment.getId()))
+            {
+                throw dataError("流程分类部署数据异常");
+            }
+        }
+        return Set.copyOf(deploymentIds);
     }
 
     /**
@@ -920,8 +986,9 @@ public class WorkflowProcessQueryService
         {
             throw dataError("流程定义缺少部署数据");
         }
-        String category = StringUtils.hasText(definition.getCategory())
-                ? definition.getCategory() : deployment.getCategory();
+        // 部署分类是发布事务写入的正式业务分类；定义分类可能由 BPMN targetNamespace 兼容填充，不能优先使用。
+        String category = resolveBusinessCategory(deployment.getCategory(),
+                definition.getCategory());
         return new WorkflowStartableDefinitionView(definition.getId(), definition.getKey(),
                 definition.getName(), category, definition.getVersion(),
                 definition.getDeploymentId(), toInstant(deployment.getDeploymentTime()));
@@ -1131,8 +1198,10 @@ public class WorkflowProcessQueryService
         HistoricProcessInstance instance = requireHistoricInstance(task.getProcessInstanceId(), cache);
         requireSame(definition.getId(), instance.getProcessDefinitionId(), "任务与流程实例定义关系不一致");
         requireSame(definition.getDeploymentId(), instance.getDeploymentId(), "任务与流程实例部署关系不一致");
-        String category = StringUtils.hasText(definition.getCategory())
-                ? definition.getCategory() : instance.getProcessDefinitionCategory();
+        Deployment deployment = requireDeployment(definition.getDeploymentId(), cache);
+        // 任务列表必须与发布时的业务分类一致；旧定义只能回退到非 URI 的历史业务编码。
+        String category = resolveBusinessCategory(deployment.getCategory(),
+                definition.getCategory(), instance.getProcessDefinitionCategory());
         String startUserName = resolveUserName(instance.getStartUserId(), cache);
         return new TaskContext(definition, instance, category, startUserName);
     }
@@ -1332,6 +1401,34 @@ public class WorkflowProcessQueryService
     }
 
     /**
+     * 查询任务所属部署，并在当前页内复用已核验结果。
+     *
+     * @param deploymentId String，流程定义关联的 Flowable 部署主键
+     * @param cache EnrichmentCache，当前页关联对象缓存
+     * @return Deployment，存在且主键有效的流程部署
+     */
+    private Deployment requireDeployment(String deploymentId, EnrichmentCache cache)
+    {
+        if (!StringUtils.hasText(deploymentId))
+        {
+            throw dataError("流程部署关联主键为空");
+        }
+        if (cache.deployments.containsKey(deploymentId))
+        {
+            return cache.deployments.get(deploymentId);
+        }
+        Deployment deployment = repositoryService.createDeploymentQuery()
+                .deploymentId(deploymentId)
+                .singleResult();
+        if (deployment == null || !deploymentId.equals(deployment.getId()))
+        {
+            throw dataError("任务缺少所属流程部署");
+        }
+        cache.deployments.put(deploymentId, deployment);
+        return deployment;
+    }
+
+    /**
      * 查询任务所属历史实例，并在当前页内复用已核验结果。
      *
      * @param instanceId String，流程实例主键
@@ -1387,6 +1484,34 @@ public class WorkflowProcessQueryService
         }
         cache.userNames.put(userId, displayName);
         return displayName;
+    }
+
+    /**
+     * 从部署、定义和历史快照候选值中解析真实业务分类，禁止 BPMN 命名空间 URI 进入页面。
+     *
+     * @param candidates String[]，按可信度从高到低排列的分类候选值
+     * @return String，第一个非空且不是绝对 URI 的分类编码；没有合法业务分类时返回 null
+     */
+    private String resolveBusinessCategory(String... candidates)
+    {
+        if (candidates == null)
+        {
+            return null;
+        }
+        for (String candidate : candidates)
+        {
+            if (!StringUtils.hasText(candidate))
+            {
+                continue;
+            }
+            String normalized = candidate.trim();
+            // Flowable 会把 BPMN targetNamespace 写入定义分类；任何带协议的绝对 URI 都不是业务分类编码。
+            if (!normalized.matches("^[A-Za-z][A-Za-z0-9+.-]*:.*$"))
+            {
+                return normalized;
+            }
+        }
+        return null;
     }
 
     /**
@@ -1619,7 +1744,7 @@ public class WorkflowProcessQueryService
      *
      * @param definition ProcessDefinition，任务所属流程定义
      * @param instance HistoricProcessInstance，任务所属历史实例
-     * @param category String，定义或历史实例中的流程分类
+     * @param category String，部署优先且已排除 BPMN 命名空间 URI 的业务分类编码
      * @param startUserName String，历史发起人显示名称
      */
     private record TaskContext(ProcessDefinition definition, HistoricProcessInstance instance,
@@ -1627,11 +1752,14 @@ public class WorkflowProcessQueryService
     {
     }
 
-    /** 当前页关联对象缓存，避免同一实例的并行任务重复查询定义、实例和用户。 */
+    /** 当前页关联对象缓存，避免同一实例的并行任务重复查询定义、部署、实例和用户。 */
     private static final class EnrichmentCache
     {
         /** 流程定义主键到定义对象的当前页映射。 */
         private final Map<String, ProcessDefinition> definitions = new HashMap<>();
+
+        /** 流程部署主键到部署对象的当前页映射，分类必须从正式部署元数据读取。 */
+        private final Map<String, Deployment> deployments = new HashMap<>();
 
         /** 流程实例主键到历史实例的当前页映射。 */
         private final Map<String, HistoricProcessInstance> instances = new HashMap<>();

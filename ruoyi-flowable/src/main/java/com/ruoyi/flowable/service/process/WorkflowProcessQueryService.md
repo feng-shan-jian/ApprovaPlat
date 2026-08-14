@@ -61,6 +61,8 @@ WorkflowPageResult<WorkflowAssignedTaskView> page = processQueryService.listAssi
 
 待签菜单权限本身不代表任务可执行。`listClaimable` 会先按正式用户、角色和菜单数据实时复核当前用户同时具备 `claimList`、`claim`、`todoList`、`query`、`approval`；缺少任一项时返回真实空页 `rows=[]、total=0`，不会展示点击后必然被 `claim` 拒绝的任务。身份主数据查询异常仍按 `500` 失败，不伪造空页。
 
+流程分类以 Flowable `Deployment.category` 中发布时冻结的业务分类编码为准，再由前端通过正式分类目录映射名称。可发起、待办、待签和已办的分类筛选也先按该字段解析部署主键，再约束定义或任务查询；分类下没有部署时直接返回空页，禁止空集合退化为全量结果。`ProcessDefinition.category` 和历史实例分类只用于旧部署兼容；若其中保存的是 BPMN `targetNamespace` 绝对 URI，则不会作为业务分类返回，避免工作台把命名空间链接显示成分类。
+
 完整实例详情不在本服务拼装。`/workflow/process/detail` 统一调用
 `WorkflowProcessDetailService`，由该服务先完成实例和任务对象授权，再读取表单值、
 历史活动、意见、BPMN 与 Viewer 状态，避免列表查询与敏感正文读取共享宽松边界。

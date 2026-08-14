@@ -62,6 +62,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowCopyQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowManagedProcessQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowOwnedProcessQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
+import com.ruoyi.flowable.domain.dto.WorkflowStartableProcessQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowAssignedTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowClaimableTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskView;
@@ -196,6 +197,7 @@ class WorkflowProcessQueryServiceTest
     {
         ProcessDefinition publicDefinition = definition("definition-public", "public", "deploy-public", false);
         ProcessDefinition groupDefinition = definition("definition-group", "group", "deploy-group", false);
+        when(groupDefinition.getCategory()).thenReturn("http://ruoyi.example/workflow");
         ProcessDefinition deniedDefinition = definition("definition-denied", "denied", "deploy-denied", false);
         when(definitionQuery.count()).thenReturn(3L);
         when(definitionQuery.listPage(0, 3))
@@ -209,6 +211,7 @@ class WorkflowProcessQueryServiceTest
         when(repositoryService.getIdentityLinksForProcessDefinition("definition-denied"))
                 .thenReturn(List.of(role9Link));
         Deployment deployment = mock(Deployment.class);
+        when(deployment.getCategory()).thenReturn("business");
         when(deployment.getDeploymentTime()).thenReturn(Date.from(Instant.parse("2026-07-25T08:00:00Z")));
         when(deploymentQuery.singleResult()).thenReturn(deployment);
 
@@ -216,15 +219,48 @@ class WorkflowProcessQueryServiceTest
                 service.listStartable(null, 2, 1);
 
         assertThat(result.total()).isEqualTo(2);
-        assertThat(result.rows()).singleElement()
-                .extracting(WorkflowStartableDefinitionView::definitionId)
-                .isEqualTo("definition-group");
+        assertThat(result.rows()).singleElement().satisfies(row ->
+        {
+            assertThat(row.definitionId()).isEqualTo("definition-group");
+            assertThat(row.category()).isEqualTo("business");
+        });
         verify(definitionQuery).count();
         verify(definitionQuery).listPage(0, 3);
         verify(definitionQuery, never()).list();
         verify(participantRuleRuntimeService).canStartIfManaged(any(), eq(publicDefinition));
         verify(participantRuleRuntimeService).canStartIfManaged(any(), eq(groupDefinition));
         verify(participantRuleRuntimeService).canStartIfManaged(any(), eq(deniedDefinition));
+    }
+
+    /**
+     * 验证可发起流程按正式部署分类筛选，即使定义分类是 BPMN targetNamespace 也能命中。
+     *
+     * @return 无返回值，定义分类参与业务筛选或部署分类未命中时测试失败
+     */
+    @Test
+    void filtersStartableDefinitionsByDeploymentCategory()
+    {
+        Deployment deployment = stubCategoryDeployment("business", "deploy-business");
+        ProcessDefinition definition = definition(
+                "definition-business", "business-process", "deploy-business", false);
+        when(definition.getCategory()).thenReturn("http://ruoyi.example/workflow");
+        when(definitionQuery.count()).thenReturn(1L);
+        when(definitionQuery.listPage(0, 1)).thenReturn(List.of(definition));
+        when(repositoryService.getIdentityLinksForProcessDefinition("definition-business"))
+                .thenReturn(List.of());
+        when(deploymentQuery.singleResult()).thenReturn(deployment);
+
+        WorkflowPageResult<WorkflowStartableDefinitionView> result = service.listStartable(
+                new WorkflowStartableProcessQueryDto(null, null, "business"), 1, 10);
+
+        assertThat(result.rows()).singleElement().satisfies(row ->
+        {
+            assertThat(row.definitionId()).isEqualTo("definition-business");
+            assertThat(row.category()).isEqualTo("business");
+        });
+        verify(deploymentQuery).deploymentCategory("business");
+        verify(definitionQuery).deploymentIds(Set.of("deploy-business"));
+        verify(definitionQuery, never()).processDefinitionCategory(anyString());
     }
 
     /**
@@ -498,7 +534,13 @@ class WorkflowProcessQueryServiceTest
                 Instant.parse("2026-07-25T10:20:00Z")));
         when(taskQuery.count()).thenReturn(1L);
         when(taskQuery.listPage(0, 10)).thenReturn(List.of(task));
-        stubTaskContext("definition-1", "instance-1", "deploy-1");
+        ProcessDefinition definition = stubTaskContext(
+                "definition-1", "instance-1", "deploy-1");
+        when(definition.getCategory()).thenReturn("http://ruoyi.example/workflow");
+        Deployment deployment = mock(Deployment.class);
+        when(deployment.getId()).thenReturn("deploy-1");
+        when(deployment.getCategory()).thenReturn("business");
+        when(deploymentQuery.singleResult()).thenReturn(deployment);
 
         WorkflowPageResult<WorkflowAssignedTaskView> result =
                 service.listAssigned(null, 1, 10);
@@ -509,9 +551,90 @@ class WorkflowProcessQueryServiceTest
             assertThat(row.claimedById()).isEqualTo("7");
             assertThat(row.claimTime()).isEqualTo(
                     Instant.parse("2026-07-25T10:20:00Z"));
+            assertThat(row.category()).isEqualTo("business");
         });
         verify(taskQuery).active();
         verify(taskQuery).taskAssignee("7");
+    }
+
+    /**
+     * 验证待办按正式部署分类筛选，不使用保存命名空间的流程定义分类。
+     *
+     * @return 无返回值，待办部署范围未写入原生查询时测试失败
+     */
+    @Test
+    void filtersAssignedTasksByDeploymentCategory()
+    {
+        stubCategoryDeployment("business", "deploy-1");
+        Task task = task("task-business", "definition-1", "instance-1");
+        when(task.getAssignee()).thenReturn("7");
+        when(taskQuery.count()).thenReturn(1L);
+        when(taskQuery.listPage(0, 10)).thenReturn(List.of(task));
+        ProcessDefinition definition = stubTaskContext(
+                "definition-1", "instance-1", "deploy-1");
+        when(definition.getCategory()).thenReturn("http://ruoyi.example/workflow");
+
+        WorkflowPageResult<WorkflowAssignedTaskView> result = service.listAssigned(
+                new WorkflowAssignedTaskQueryDto(
+                        null, null, "business", null, null, null), 1, 10);
+
+        assertThat(result.rows()).singleElement()
+                .extracting(WorkflowAssignedTaskView::category)
+                .isEqualTo("business");
+        verify(taskQuery).deploymentIdIn(Set.of("deploy-1"));
+        verify(taskQuery, never()).processCategoryIn(any());
+    }
+
+    /**
+     * 验证分类没有正式部署时待办直接返回真实空页，不让空集合退化为全量任务查询。
+     *
+     * @return 无返回值，仍执行 count 或分页读取时测试失败
+     */
+    @Test
+    void returnsEmptyAssignedPageWhenCategoryHasNoDeployment()
+    {
+        when(deploymentQuery.list()).thenReturn(List.of());
+
+        WorkflowPageResult<WorkflowAssignedTaskView> result = service.listAssigned(
+                new WorkflowAssignedTaskQueryDto(
+                        null, null, "missing", null, null, null), 1, 10);
+
+        assertThat(result.total()).isZero();
+        assertThat(result.rows()).isEmpty();
+        verify(deploymentQuery).deploymentCategory("missing");
+        verify(taskService, never()).createTaskQuery();
+    }
+
+    /**
+     * 验证旧部署缺少业务分类时不会把 BPMN targetNamespace URL 当作待办分类返回。
+     *
+     * @return 无返回值，URL 泄漏到工作台分类字段时测试失败
+     */
+    @Test
+    void hidesNamespaceUrlWhenLegacyDeploymentHasNoBusinessCategory()
+    {
+        Task task = task("task-legacy", "definition-legacy", "instance-legacy");
+        when(task.getAssignee()).thenReturn("7");
+        when(taskQuery.count()).thenReturn(1L);
+        when(taskQuery.listPage(0, 10)).thenReturn(List.of(task));
+        ProcessDefinition definition = stubTaskContext(
+                "definition-legacy", "instance-legacy", "deploy-legacy");
+        when(definition.getCategory()).thenReturn("http://ruoyi.example/workflow");
+        HistoricProcessInstance instance = historicInstance(
+                "instance-legacy", "definition-legacy", "deploy-legacy");
+        when(instance.getProcessDefinitionCategory()).thenReturn("https://legacy.example/workflow");
+        when(processQuery.singleResult()).thenReturn(instance);
+        Deployment deployment = mock(Deployment.class);
+        when(deployment.getId()).thenReturn("deploy-legacy");
+        when(deployment.getCategory()).thenReturn(" ");
+        when(deploymentQuery.singleResult()).thenReturn(deployment);
+
+        WorkflowPageResult<WorkflowAssignedTaskView> result =
+                service.listAssigned(null, 1, 10);
+
+        assertThat(result.rows()).singleElement()
+                .extracting(WorkflowAssignedTaskView::category)
+                .isNull();
     }
 
     /**
@@ -531,12 +654,42 @@ class WorkflowProcessQueryServiceTest
         WorkflowPageResult<WorkflowClaimableTaskView> result = service.listClaimable(
                 new WorkflowClaimableTaskQueryDto(null, null, null, null, null, null), 1, 10);
 
-        assertThat(result.rows()).singleElement()
-                .extracting(WorkflowClaimableTaskView::taskId)
-                .isEqualTo("task-claim");
+        assertThat(result.rows()).singleElement().satisfies(row ->
+        {
+            assertThat(row.taskId()).isEqualTo("task-claim");
+            assertThat(row.category()).isEqualTo("business");
+        });
         verify(taskQuery).taskUnassigned();
         verify(taskQuery).taskCandidateUser("7");
         verify(taskQuery).taskCandidateGroupIn(Set.of("ROLE2", "DEPT3"));
+    }
+
+    /**
+     * 验证待签任务使用正式部署分类范围，候选身份条件与业务分类条件同时生效。
+     *
+     * @return 无返回值，待签仍按流程定义分类筛选时测试失败
+     */
+    @Test
+    void filtersClaimableTasksByDeploymentCategory()
+    {
+        stubCategoryDeployment("business", "deploy-1");
+        Task task = task("task-claim-business", "definition-1", "instance-1");
+        when(task.getAssignee()).thenReturn(null);
+        when(taskQuery.count()).thenReturn(1L);
+        when(taskQuery.listPage(0, 10)).thenReturn(List.of(task));
+        ProcessDefinition definition = stubTaskContext(
+                "definition-1", "instance-1", "deploy-1");
+        when(definition.getCategory()).thenReturn("http://ruoyi.example/workflow");
+
+        WorkflowPageResult<WorkflowClaimableTaskView> result = service.listClaimable(
+                new WorkflowClaimableTaskQueryDto(
+                        null, null, "business", null, null, null), 1, 10);
+
+        assertThat(result.rows()).singleElement()
+                .extracting(WorkflowClaimableTaskView::category)
+                .isEqualTo("business");
+        verify(taskQuery).deploymentIdIn(Set.of("deploy-1"));
+        verify(taskQuery, never()).processCategoryIn(any());
     }
 
     /**
@@ -585,10 +738,44 @@ class WorkflowProcessQueryServiceTest
 
         assertThat(result.rows().get(0).completedBy()).isEqualTo("7");
         assertThat(result.rows().get(0).assigneeId()).isEqualTo("9");
+        assertThat(result.rows().get(0).category()).isEqualTo("business");
         assertThat(result.rows().get(0).revocable()).isTrue();
         verify(historicTaskQuery).taskCompletedBy("7");
         verify(historicTaskQuery, never()).taskAssignee("7");
         verify(taskLifecycleService).isProcessRevocable("instance-1", "task-finished");
+    }
+
+    /**
+     * 验证已办任务按正式部署分类筛选，并保留真实完成人约束。
+     *
+     * @return 无返回值，历史任务仍按定义分类筛选时测试失败
+     */
+    @Test
+    void filtersCompletedTasksByDeploymentCategory()
+    {
+        stubCategoryDeployment("business", "deploy-1");
+        HistoricTaskInstance task = mock(HistoricTaskInstance.class);
+        when(task.getId()).thenReturn("task-finished-business");
+        when(task.getName()).thenReturn("审批");
+        when(task.getProcessDefinitionId()).thenReturn("definition-1");
+        when(task.getProcessInstanceId()).thenReturn("instance-1");
+        when(task.getCompletedBy()).thenReturn("7");
+        when(historicTaskQuery.count()).thenReturn(1L);
+        when(historicTaskQuery.listPage(0, 10)).thenReturn(List.of(task));
+        ProcessDefinition definition = stubTaskContext(
+                "definition-1", "instance-1", "deploy-1");
+        when(definition.getCategory()).thenReturn("http://ruoyi.example/workflow");
+
+        WorkflowPageResult<WorkflowCompletedTaskView> result = service.listCompleted(
+                new WorkflowCompletedTaskQueryDto(
+                        null, null, "business", null, null, null), 1, 10);
+
+        assertThat(result.rows()).singleElement()
+                .extracting(WorkflowCompletedTaskView::category)
+                .isEqualTo("business");
+        verify(historicTaskQuery).taskCompletedBy("7");
+        verify(historicTaskQuery).deploymentIdIn(Set.of("deploy-1"));
+        verify(historicTaskQuery, never()).processCategoryIn(any());
     }
 
     /**
@@ -1045,18 +1232,40 @@ class WorkflowProcessQueryServiceTest
      * @param definitionId String，流程定义主键
      * @param instanceId String，流程实例主键
      * @param deploymentId String，部署主键
-     * @return 无返回值，后续任务列表可完成关联映射
+     * @return ProcessDefinition，后续任务列表可覆盖定义分类并完成关联映射
      */
-    private void stubTaskContext(String definitionId, String instanceId, String deploymentId)
+    private ProcessDefinition stubTaskContext(String definitionId, String instanceId,
+            String deploymentId)
     {
         ProcessDefinition definition = definition(definitionId, "leave", deploymentId, false);
         HistoricProcessInstance instance = historicInstance(instanceId, definitionId, deploymentId);
         when(repositoryService.getProcessDefinition(definitionId)).thenReturn(definition);
         when(processQuery.singleResult()).thenReturn(instance);
+        Deployment deployment = mock(Deployment.class);
+        when(deployment.getId()).thenReturn(deploymentId);
+        when(deployment.getCategory()).thenReturn("business");
+        when(deploymentQuery.singleResult()).thenReturn(deployment);
         SysUser user = new SysUser();
         user.setUserId(9L);
         user.setNickName("发起人");
         when(userService.selectUserById(9L)).thenReturn(user);
+        return definition;
+    }
+
+    /**
+     * 配置业务分类对应的正式 Flowable 部署查询结果。
+     *
+     * @param category String，分类目录使用的业务编码
+     * @param deploymentId String，该分类下的正式流程部署主键
+     * @return Deployment，可继续配置部署时间或作为单对象查询结果复用
+     */
+    private Deployment stubCategoryDeployment(String category, String deploymentId)
+    {
+        Deployment deployment = mock(Deployment.class);
+        when(deployment.getId()).thenReturn(deploymentId);
+        when(deployment.getCategory()).thenReturn(category);
+        when(deploymentQuery.list()).thenReturn(List.of(deployment));
+        return deployment;
     }
 
     /**
