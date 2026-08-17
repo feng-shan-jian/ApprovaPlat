@@ -6,7 +6,7 @@ import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WfIntegrationCredential;
 
 /**
- * 集成账号、哈希 Token 和原子限流 Mapper。
+ * 集成账号、哈希 Token 和低频最近使用时间 Mapper。
  */
 public interface WfIntegrationCredentialMapper
 {
@@ -16,8 +16,8 @@ public interface WfIntegrationCredentialMapper
     /** @param credentialId Long，凭据主键；@return WfIntegrationCredential，锁定行或 null。 */
     WfIntegrationCredential selectByIdForUpdate(@Param("credentialId") Long credentialId);
 
-    /** @param tokenPrefix String，Token 前 12 位；@return WfIntegrationCredential，锁定行或 null。 */
-    WfIntegrationCredential selectByPrefixForUpdate(@Param("tokenPrefix") String tokenPrefix);
+    /** @param tokenPrefix String，Token 前 12 位；@return WfIntegrationCredential，凭据或 null。 */
+    WfIntegrationCredential selectByPrefix(@Param("tokenPrefix") String tokenPrefix);
 
     /** @param credential WfIntegrationCredential，完整新增实体；@return int，影响行数。 */
     int insert(WfIntegrationCredential credential);
@@ -41,14 +41,14 @@ public interface WfIntegrationCredentialMapper
             @Param("updateBy") String updateBy);
 
     /**
-     * 在已锁定行上提交新的限流窗口状态。
+     * 在固定降频窗口外更新最近使用时间，revision 条件避免轮换并发覆盖新凭据状态。
      * @param credentialId Long，凭据主键
-     * @param windowStart Date，窗口起点
-     * @param windowCount int，消费后的次数
+     * @param revisionNo Integer，本次通过认证的 Token 修订号
      * @param lastUsedAt Date，本次认证时间
+     * @param updateBefore Date，只有旧值早于该时间才执行真实写入
      * @return int，影响行数
      */
-    int updateRateWindow(@Param("credentialId") Long credentialId,
-            @Param("windowStart") Date windowStart, @Param("windowCount") int windowCount,
-            @Param("lastUsedAt") Date lastUsedAt);
+    int updateLastUsedAt(@Param("credentialId") Long credentialId,
+            @Param("revisionNo") Integer revisionNo, @Param("lastUsedAt") Date lastUsedAt,
+            @Param("updateBefore") Date updateBefore);
 }

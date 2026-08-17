@@ -130,6 +130,7 @@
       :preference="appliedPreference"
       :saving="preferenceSaving"
       @save="requestPreferenceSave"
+      @reset="requestPreferenceReset"
     />
 
     <el-dialog v-model="previewVisible" :title="previewTitle" width="min(920px, 86vw)" append-to-body>
@@ -141,8 +142,8 @@
     </el-dialog>
 
     <el-dialog v-model="validationVisible" title="流程校验" width="min(720px, 82vw)" append-to-body>
-      <el-result v-if="!validationIssues.length" icon="success" title="校验通过" />
-      <el-table v-else :data="validationIssues" max-height="460">
+      <el-result v-if="validationPassed && !validationIssues.length" icon="success" title="校验通过" />
+      <el-table v-else-if="validationIssues.length" :data="validationIssues" max-height="460">
         <el-table-column label="级别" width="88">
           <template #default="scope">
             <el-tag size="small" :type="scope.row.severity === 'ERROR' ? 'danger' : 'warning'">{{ scope.row.severity }}</el-tag>
@@ -326,7 +327,7 @@ const props = defineProps({
   saving: { type: Boolean, default: false },
   /** 页面是否正在查询正式用户、角色或部门主数据。 */
   identityLoading: { type: Boolean, default: false },
-  /** 服务端回读的正式设计器偏好。 */
+  /** 页面按当前用户从浏览器存储回读的设计器偏好。 */
   preference: {
     type: Object,
     default: () => ({
@@ -338,12 +339,13 @@ const props = defineProps({
       propertiesCollapsed: false
     })
   },
-  /** 设计器偏好是否正在写入正式数据库。 */
+  /** 设计器偏好是否正在写入当前用户浏览器存储。 */
   preferenceSaving: { type: Boolean, default: false }
 })
 
 const emit = defineEmits([
-  'update:modelValue', 'change', 'save', 'error', 'identity-search', 'identity-resolve', 'preference-save'
+  'update:modelValue', 'change', 'save', 'error', 'identity-search', 'identity-resolve',
+  'preference-save', 'preference-reset'
 ])
 const canvasRef = ref(null)
 const bodyRef = ref(null)
@@ -360,6 +362,8 @@ const previewTitle = ref('')
 const previewContent = ref('')
 const validationVisible = ref(false)
 const validationIssues = ref([])
+// validationPassed 表示最近一次真实服务端报告是否明确允许保存，不能由空问题列表推断。
+const validationPassed = ref(false)
 const clientLintIssues = ref([])
 const validating = ref(false)
 const simulationActive = ref(false)
@@ -896,6 +900,7 @@ function handleCommandStackChanged() {
   if (importing) return
   // 任何建模变更都会使上一次服务端诊断失效，禁止显示过期的“已通过”结果。
   validationIssues.value = []
+  validationPassed.value = false
   window.clearTimeout(changeTimer)
   changeTimer = window.setTimeout(() => emitXmlChange(true), 180)
 }
@@ -979,7 +984,8 @@ function loadPropertyState(element) {
   propertyState.skipExpression = businessObject.get('flowable:skipExpression') || ''
   propertyState.localScope = businessObject.get('flowable:localScope') === true
   propertyState.documentation = businessObject.documentation?.[0]?.text || ''
-  propertyState.processRef = businessObject.processRef || ''
+  // Participant.processRef 是 bpmn:Process 引用，属性面板只展示其稳定 id，禁止把 moddle 对象写入输入框。
+  propertyState.processRef = businessObject.processRef?.id || ''
   propertyState.conditionExpression = businessObject.conditionExpression?.body || ''
   propertyState.conditionRule = readConditionRule(businessObject)
   propertyState.conditionDefault = isDefaultConditionFlow(element)
@@ -1806,11 +1812,53 @@ function updateProcessProperties() {
 }
 
 /**
- * 更新 Participant 绑定的可执行流程定义 key；空值由后端协作部署门禁拒绝。
- * @returns {void} 通过 bpmn-js 命令栈保存池与流程定义的真实关系。
+ * 更新 Participant 绑定的可执行 Process 标识。
+ * @returns {void} 通过 bpmn-js 命令栈更新真实 Process 引用；非法或重复标识会恢复原值并报错。
  */
 function updateParticipantProperties() {
-  updateProperties({ processRef: propertyState.processRef.trim() || undefined })
+  if (designerLocked.value || !modeler || !selectedElement.value) return
+  const participant = selectedBusinessObject.value
+  const processKey = propertyState.processRef.trim()
+  const currentProcess = participant?.processRef
+  if (!processKey) {
+    updateProperties({ processRef: undefined })
+    return
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/.test(processKey)) {
+    propertyState.processRef = currentProcess?.id || ''
+    emit('error', new Error('Participant 流程定义 key 格式不合法'))
+    return
+  }
+
+  const definitions = findDefinitions(participant)
+  const duplicateProcess = definitions?.rootElements?.find(root =>
+    root?.$type === 'bpmn:Process' && root !== currentProcess && root.id === processKey
+  )
+  if (duplicateProcess) {
+    propertyState.processRef = currentProcess?.id || ''
+    emit('error', new Error(`Participant 流程定义 key 已存在: ${processKey}`))
+    return
+  }
+
+  const modeling = modeler.get('modeling')
+  if (currentProcess) {
+    // processRef 是 IDREF，必须修改被引用 Process 的 id，直接写字符串会序列化为 processRef="undefined"。
+    modeling.updateModdleProperties(selectedElement.value, currentProcess, {
+      id: processKey
+    })
+    return
+  }
+  if (!definitions) {
+    emit('error', new Error('Participant 缺少 BPMN Definitions，无法建立流程引用'))
+    return
+  }
+
+  // 异常导入可能产生无 Process 的 Participant；补建的空池先保持不可执行，避免保存门禁要求它提前具备完整执行图。
+  const process = modeler.get('moddle').create('bpmn:Process', { id: processKey, isExecutable: false })
+  modeling.updateModdleProperties(selectedElement.value, definitions, {
+    rootElements: [...(definitions.rootElements || []), process]
+  })
+  updateProperties({ processRef: process })
 }
 
 /**
@@ -2408,6 +2456,9 @@ function updateExtensionSelection() {
     })
   } else if (selectedOption?.extensionType === 'SQL') {
     const source = sqlDataSources.value[0]
+    // SQL 查询和写入统一交给 Flowable Job，异常才能按引擎配置重试并进入原生死信。
+    propertyState.asyncBefore = true
+    updateProperties({ 'flowable:async': true })
     propertyState.extensionConfig = JSON.stringify({
       dataSourceKey: source?.dataSourceKey || '',
       sql: '',
@@ -3770,19 +3821,31 @@ async function copyPreview() {
 /**
  * 调用无副作用服务端编译校验，并保存结构化诊断供用户定位。
  * @param {boolean} showResult 是否打开校验结果弹窗。
+ * @param {string} sourceXml 可选的已冻结保存快照；为空时从当前画布序列化。
  * @returns {Promise<boolean>} true 表示通过保存和部署共同门禁。
  */
-async function runServerValidation(showResult) {
+async function runServerValidation(showResult, sourceXml = '') {
   if (props.saving) return false
   validating.value = true
   try {
-    const xml = await emitPersistedXml()
+    const xml = sourceXml || await emitPersistedXml()
     const response = await validateModelBpmn(xml)
     const report = response.data || {}
-    validationIssues.value = Array.isArray(report.issues) ? report.issues : []
+    const issues = Array.isArray(report.issues) ? [...report.issues] : []
+    const hasError = issues.some(issue => issue.severity === 'ERROR')
+    validationPassed.value = report.valid === true && !hasError
+    if (!validationPassed.value && !hasError) {
+      // 服务端未明确返回可保存结论时失败关闭，避免空 issues 被页面误显示为校验通过。
+      issues.push({
+        code: 'BPMN_VALIDATION_INCOMPLETE',
+        severity: 'ERROR',
+        elementId: null,
+        message: '服务端未返回可保存的流程校验结论'
+      })
+    }
+    validationIssues.value = issues
     if (showResult) validationVisible.value = true
-    return report.valid === true
-      && validationIssues.value.every(issue => issue.severity !== 'ERROR')
+    return validationPassed.value
   } finally {
     validating.value = false
   }
@@ -3812,7 +3875,7 @@ function handleDesignerShortcut(event) {
 }
 
 /**
- * 请求页面把字段完整的偏好写入正式数据库。
+ * 请求页面把字段完整的偏好写入当前用户浏览器存储。
  * @param {object} preference 设计器设置抽屉提交的完整偏好。
  * @returns {void} 真实结果由 preference Prop 回写后应用。
  */
@@ -3821,8 +3884,16 @@ function requestPreferenceSave(preference) {
 }
 
 /**
+ * 请求页面删除当前用户偏好键并恢复当前协议默认值。
+ * @returns {void} 默认值由页面回写 preference Prop 后统一应用。
+ */
+function requestPreferenceReset() {
+  emit('preference-reset')
+}
+
+/**
  * 切换属性面板折叠状态，并要求页面持久化完整偏好。
- * @returns {void} 服务端成功前不改变已应用状态。
+ * @returns {void} 页面完成本地持久化前不改变已应用状态。
  */
 function toggleProperties() {
   requestPreferenceSave({
@@ -3979,7 +4050,7 @@ function resetPropertiesPanelWidth() {
 
 /**
  * 切换 Token 流程模拟，并要求页面持久化完整偏好。
- * @returns {void} 服务端成功后由偏好监听器进入或退出模拟。
+ * @returns {void} 当前用户浏览器偏好写入后由监听器进入或退出模拟。
  */
 function toggleSimulation() {
   requestPreferenceSave({
@@ -3989,7 +4060,7 @@ function toggleSimulation() {
 }
 
 /**
- * 把服务端偏好同步到网格、小地图、Lint 和 Token 模拟服务。
+ * 把当前用户浏览器偏好同步到网格、小地图、Lint 和 Token 模拟服务。
  * @returns {void} Modeler 尚未初始化时只保留 Prop 状态。
  */
 function applyDesignerPreference() {
@@ -4021,7 +4092,7 @@ async function downloadXml() {
 }
 
 /**
- * 执行保存前本地结构门禁并把 XML 交给页面调用真实后端。
+ * 对同一份冻结 XML 依次执行本地结构门禁、服务端门禁并交给页面真实保存。
  * @returns {Promise<void>} 校验失败时仅触发 error，不触发 save。
  */
 async function requestSave() {
@@ -4042,12 +4113,14 @@ async function requestSave() {
     }
     const error = validateDiagram()
     if (error) throw new Error(error)
-    const serverValid = await runServerValidation(false)
+    // 保存窗口只序列化一次，服务端校验与正式保存必须使用同一内容快照。
+    const persistedXml = await emitPersistedXml()
+    const serverValid = await runServerValidation(false, persistedXml)
     if (!serverValid) {
       validationVisible.value = true
       return
     }
-    emit('save', await emitPersistedXml())
+    emit('save', persistedXml)
   } catch (error) {
     emit('error', error)
   } finally {
@@ -4073,28 +4146,32 @@ function handleDesignerLock(locked) {
  */
 function validateDiagram() {
   if (!modeler) return '流程设计器尚未初始化'
-  const registry = modeler.get('elementRegistry')
-  const processes = registry.filter(element => element.type === 'bpmn:Process')
-  if (!processes.some(element => element.businessObject.isExecutable)) return '至少需要一个可执行流程'
+  // Definitions 是 BPMN 语义模型的权威来源；Collaboration 画布不会把 Process 注册为可见根图形。
+  const definitions = modeler.getDefinitions()
+  const processes = (definitions?.rootElements || [])
+    .filter(element => element.$type === 'bpmn:Process')
+  if (!processes.some(process => process.isExecutable)) return '至少需要一个可执行流程'
   for (const process of processes) {
-    const flowElements = process.businessObject.flowElements || []
+    // 协作图允许存在仅表达参与者边界的非执行池；只有正式可执行流程需要申请入口和发起范围。
+    if (!process.isExecutable) continue
+    const flowElements = process.flowElements || []
     const startEvents = flowElements.filter(item => item.$type === 'bpmn:StartEvent')
     if (startEvents.length !== 1) return '每个流程必须且只能包含一个开始节点'
     const startEvent = startEvents[0]
     if (!startEvent.get('flowable:formKey') && !hasEmbeddedFormFields(startEvent)) {
       return '开始节点必须配置发起表单'
     }
-    const startScopeError = validateParticipantProperties(process.businessObject, true)
+    const startScopeError = validateParticipantProperties(process, true)
     if (startScopeError) return startScopeError
     try {
-      validateAutoCopyRulesForElement(process.businessObject, ['PROCESS_COMPLETED'])
+      validateAutoCopyRulesForElement(process, ['PROCESS_COMPLETED'])
     } catch (error) {
       return error.message
     }
   }
-  const userTasks = registry.filter(element => element.type === 'bpmn:UserTask')
-  for (const element of userTasks) {
-    const task = element.businessObject
+  const flowElements = processes.flatMap(collectProcessFlowElements)
+  const userTasks = flowElements.filter(element => element.$type === 'bpmn:UserTask')
+  for (const task of userTasks) {
     const loopError = validateUserTaskMultiInstance(task)
     if (loopError) return loopError
     const participantError = validateParticipantProperties(task, false)
@@ -4113,25 +4190,43 @@ function validateDiagram() {
       return error.message
     }
   }
-  const callActivities = registry.filter(element => element.type === 'bpmn:CallActivity')
-  for (const element of callActivities) {
-    const callError = validateCallActivityConfiguration(element.businessObject)
+  const callActivities = flowElements.filter(element => element.$type === 'bpmn:CallActivity')
+  for (const callActivity of callActivities) {
+    const callError = validateCallActivityConfiguration(callActivity)
     if (callError) return callError
   }
-  const businessBoundaries = registry.filter(element => element.type === 'bpmn:BoundaryEvent')
-  for (const element of businessBoundaries) {
-    const definition = element.businessObject.eventDefinitions?.[0]
+  const businessBoundaries = flowElements.filter(element => element.$type === 'bpmn:BoundaryEvent')
+  for (const boundary of businessBoundaries) {
+    const definition = boundary.eventDefinitions?.[0]
     const businessType = definition?.$type
     if (!['bpmn:ErrorEventDefinition', 'bpmn:EscalationEventDefinition'].includes(businessType)) continue
     const allowed = businessType === 'bpmn:ErrorEventDefinition' ? errorEventOptions.value : escalationEventOptions.value
     if (!allowed.some(option => option.eventCode === readEventReference(definition))) {
       return '错误或升级边界必须选择已启用的正式业务编码'
     }
-    if (businessType === 'bpmn:ErrorEventDefinition' && element.businessObject.cancelActivity === false) {
+    if (businessType === 'bpmn:ErrorEventDefinition' && boundary.cancelActivity === false) {
       return '错误边界必须使用中断语义'
     }
   }
   return ''
+}
+
+/**
+ * 递归读取一个 Process 的全部流程元素，确保子流程中的任务和边界事件也进入保存门禁。
+ *
+ * @param {object} process BPMN Process 业务对象。
+ * @returns {object[]} 按模型顺序展开的全部顶层及嵌套流程元素。
+ */
+function collectProcessFlowElements(process) {
+  const result = []
+  const visit = elements => {
+    for (const element of elements || []) {
+      result.push(element)
+      if (Array.isArray(element.flowElements)) visit(element.flowElements)
+    }
+  }
+  visit(process?.flowElements)
+  return result
 }
 
 /**

@@ -6,8 +6,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.SynchronousNotification;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowSynchronousNotification;
 
 /**
  * BPMN 错误与升级运行审计及通知的独立事务服务。
@@ -16,16 +16,16 @@ import com.ruoyi.flowable.service.notification.WorkflowNotificationService.Synch
 public class WorkflowBpmnEventAuditService
 {
     private final WfBpmnEventMapper eventMapper;
-    private final WorkflowNotificationService notificationService;
+    private final WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建运行审计服务。
      * @param eventMapper WfBpmnEventMapper，审计和通知数据访问层
-     * @param notificationService WorkflowNotificationService，统一 outbox、inbox 和投递审计服务
+     * @param notificationService WorkflowNotificationRegistrar，统一 outbox、inbox 和投递审计服务
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowBpmnEventAuditService(WfBpmnEventMapper eventMapper,
-            WorkflowNotificationService notificationService)
+            WorkflowNotificationRegistrar notificationService)
     {
         this.eventMapper = eventMapper;
         this.notificationService = notificationService;
@@ -58,7 +58,7 @@ public class WorkflowBpmnEventAuditService
                     + "：" + event.eventName();
             String content = event.eventCode() + " · " + event.matchStatus()
                     + (event.messageSummary() == null ? "" : " · " + event.messageSummary());
-            notificationService.publishSynchronousInbox(new SynchronousNotification(
+            notificationService.publishSynchronousInbox(new WorkflowSynchronousNotification(
                     "BPMN_EVENT", String.valueOf(auditId), event.eventType(),
                     event.initiatorUserId(), event.processDefinitionKey(),
                     event.processInstanceId(), null, null, title, content,

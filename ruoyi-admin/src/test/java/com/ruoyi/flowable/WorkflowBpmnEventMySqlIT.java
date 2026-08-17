@@ -77,11 +77,6 @@ class WorkflowBpmnEventMySqlIT
     {
         for (Deployment deployment : deployments)
         {
-            jdbc.update("delete d from wf_notification_delivery_audit d "
-                    + "join wf_notification_outbox o on o.outbox_id=d.outbox_id "
-                    + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
-                    + "and o.source_id=cast(a.audit_id as char) "
-                    + "where a.deployment_id=?", deployment.getId());
             jdbc.update("delete n from wf_notification_inbox n "
                     + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
                     + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
@@ -101,11 +96,6 @@ class WorkflowBpmnEventMySqlIT
                 repositoryService.deleteDeployment(deployment.getId(), true);
             }
         }
-        jdbc.update("delete d from wf_notification_delivery_audit d "
-                + "join wf_notification_outbox o on o.outbox_id=d.outbox_id "
-                + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
-                + "and o.source_id=cast(a.audit_id as char) "
-                + "where a.deployment_id like ?", PREFIX + runId + "%");
         jdbc.update("delete n from wf_notification_inbox n "
                 + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
                 + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "

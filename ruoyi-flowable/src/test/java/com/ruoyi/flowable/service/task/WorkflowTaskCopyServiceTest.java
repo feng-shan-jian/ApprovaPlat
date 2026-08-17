@@ -29,7 +29,7 @@ import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WorkflowRuntimeTaskMapper;
 import com.ruoyi.system.mapper.SysUserMapper;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 
 class WorkflowTaskCopyServiceTest
 {
@@ -45,7 +45,7 @@ class WorkflowTaskCopyServiceTest
 
     private SysUserMapper sysUserMapper;
 
-    private WorkflowNotificationService notificationService;
+    private WorkflowNotificationRegistrar notificationService;
 
     private WorkflowTaskCopyService copyService;
 
@@ -63,7 +63,7 @@ class WorkflowTaskCopyServiceTest
         repositoryService = mock(RepositoryService.class);
         runtimeService = mock(RuntimeService.class);
         sysUserMapper = mock(SysUserMapper.class);
-        notificationService = mock(WorkflowNotificationService.class);
+        notificationService = mock(WorkflowNotificationRegistrar.class);
         copyService = new WorkflowTaskCopyService(userSelectionValidator, copyMapper,
                 runtimeTaskMapper, repositoryService, runtimeService, sysUserMapper);
         copyService.setNotificationService(notificationService);

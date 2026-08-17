@@ -24,10 +24,6 @@ public class WfIntegrationCredential extends BaseEntity
     private String allowedVariables;
     /** 每分钟最大请求数。 */
     private Integer rateLimitPerMinute;
-    /** 当前限流窗口起点。 */
-    private Date rateWindowStart;
-    /** 当前窗口已消费次数。 */
-    private Integer rateWindowCount;
     /** 到期时间，空表示长期有效。 */
     private Date expiresAt;
     /** 吊销时间，空表示未吊销。 */
@@ -65,14 +61,6 @@ public class WfIntegrationCredential extends BaseEntity
     public Integer getRateLimitPerMinute() { return rateLimitPerMinute; }
     /** @param rateLimitPerMinute Integer，每分钟最大请求数；@return void，无返回值。 */
     public void setRateLimitPerMinute(Integer rateLimitPerMinute) { this.rateLimitPerMinute = rateLimitPerMinute; }
-    /** @return Date，当前限流窗口起点。 */
-    public Date getRateWindowStart() { return copy(rateWindowStart); }
-    /** @param rateWindowStart Date，当前限流窗口起点；@return void，无返回值。 */
-    public void setRateWindowStart(Date rateWindowStart) { this.rateWindowStart = copy(rateWindowStart); }
-    /** @return Integer，当前窗口已消费次数。 */
-    public Integer getRateWindowCount() { return rateWindowCount; }
-    /** @param rateWindowCount Integer，当前窗口已消费次数；@return void，无返回值。 */
-    public void setRateWindowCount(Integer rateWindowCount) { this.rateWindowCount = rateWindowCount; }
     /** @return Date，到期时间或 null。 */
     public Date getExpiresAt() { return copy(expiresAt); }
     /** @param expiresAt Date，到期时间；@return void，无返回值。 */

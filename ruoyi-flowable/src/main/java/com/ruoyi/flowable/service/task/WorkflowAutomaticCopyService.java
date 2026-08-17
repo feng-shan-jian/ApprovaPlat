@@ -38,7 +38,7 @@ import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.RecipientTy
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.Rule;
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.Trigger;
 import com.ruoyi.system.mapper.SysUserMapper;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 
 /**
  * 在 Flowable 生命周期事务内解析部署冻结规则并幂等写入正式自动抄送记录。
@@ -58,7 +58,7 @@ public class WorkflowAutomaticCopyService
     private final SysUserMapper userMapper;
 
     /** 自动抄送创建通知服务；生产容器注入，旧直接构造单元测试可为空。 */
-    private WorkflowNotificationService notificationService;
+    private WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建自动抄送运行时服务。
@@ -85,11 +85,11 @@ public class WorkflowAutomaticCopyService
 
     /**
      * 注入抄送事实通知服务，使自动 wf_copy 和 COPY_CREATED outbox 同事务提交。
-     * @param notificationService WorkflowNotificationService，正式通知 outbox 服务
+     * @param notificationService WorkflowNotificationRegistrar，正式通知 outbox 服务
      * @return void，生产 Spring 容器完成注入
      */
     @Autowired
-    public void setNotificationService(WorkflowNotificationService notificationService)
+    public void setNotificationService(WorkflowNotificationRegistrar notificationService)
     {
         this.notificationService = notificationService;
     }

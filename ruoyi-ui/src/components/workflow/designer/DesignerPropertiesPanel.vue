@@ -653,6 +653,7 @@ const emit = defineEmits([
   'common-change',
   'id-change',
   'process-change',
+  'participant-change',
   'form-source-change',
   'form-change',
   'embedded-form-change',

@@ -85,6 +85,10 @@ public class WorkflowBpmnService
     /** 单个普通扩展属性值最大字符数。 */
     private static final int MAX_EXTENSION_PROPERTY_VALUE_LENGTH = 1024;
 
+    /** Flowable 对未声明原生实现的 SendTask 返回的固定问题编码。 */
+    private static final String FLOWABLE_SEND_TASK_IMPLEMENTATION_PROBLEM =
+            "flowable-sendtask-invalid-implementation";
+
     /** 任务监听器只允许引用生产兼容入口，不接受任意 Spring Bean。 */
     private static final String USER_TASK_LISTENER_EXPRESSION = "${userTaskListener}";
 
@@ -263,7 +267,7 @@ public class WorkflowBpmnService
         }
         try
         {
-            validateRawExtensionProperties(bpmnXml);
+            validateRawExtensionProperties(bpmnXml, validationContext);
             validateRawBusinessBoundarySemantics(bpmnXml);
             org.flowable.bpmn.model.BpmnModel bpmnModel = parseSecurely(bpmnXml);
             List<WorkflowBpmnFormReference> references = validateModel(
@@ -350,10 +354,12 @@ public class WorkflowBpmnService
 
     /**
      * 校验 flowable:properties 仅包含有界、唯一、非保留的普通名值元数据。
-     * @param bpmnXml String，已经通过严格 UTF-8 解码的作者 XML
+     * @param bpmnXml String，已经通过严格 UTF-8 解码的 BPMN XML
+     * @param validationContext ValidationContext，作者资源或部署编译资源阶段
      * @return void，结构、数量、名称或值越界时抛出稳定 400
      */
-    private void validateRawExtensionProperties(String bpmnXml)
+    private void validateRawExtensionProperties(String bpmnXml,
+            ValidationContext validationContext)
     {
         XMLStreamReader reader = null;
         try
@@ -388,7 +394,8 @@ public class WorkflowBpmnService
                         {
                             throw invalidBpmn("通用扩展属性只允许 property 名值项", null);
                         }
-                        validateRawExtensionProperty(reader, ++propertyCount, propertyNames);
+                        validateRawExtensionProperty(reader, ++propertyCount, propertyNames,
+                                validationContext);
                     }
                 }
                 else if (reader.isEndElement())
@@ -418,10 +425,11 @@ public class WorkflowBpmnService
      * @param reader XMLStreamReader，当前定位在 property 开始标签
      * @param propertyCount int，当前容器内从 1 开始的属性数量
      * @param propertyNames Set&lt;String&gt;，当前容器已出现的属性名
+     * @param validationContext ValidationContext，作者资源或部署编译资源阶段
      * @return void，任一约束不满足时抛出稳定 400
      */
     private void validateRawExtensionProperty(XMLStreamReader reader, int propertyCount,
-            Set<String> propertyNames)
+            Set<String> propertyNames, ValidationContext validationContext)
     {
         if (propertyCount > MAX_EXTENSION_PROPERTIES)
         {
@@ -431,10 +439,14 @@ public class WorkflowBpmnService
         String value = reader.getAttributeValue(null, "value");
         // 条件规则是设计器生成的结构化 JSON，仅该保留属性允许使用专用的大字段上限。
         boolean conditionRuleProperty = WorkflowConditionRuleBpmnContract.CONFIG_PROPERTY.equals(name);
+        // SLA 来源任务键只由部署编译器写入升级任务，作者模型不得伪造运行时关联。
+        boolean generatedSlaProperty = validationContext == ValidationContext.COMPILED_DEPLOYMENT
+                && WorkflowTaskSlaDeploymentService.SOURCE_TASK_DEFINITION_KEY_PROPERTY.equals(name);
         boolean allowedPlatformProperty =
                 WorkflowControlledLoopBpmnContract.isReservedProperty(name)
                 || WorkflowParticipantRuleBpmnContract.isReservedProperty(name)
                 || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name)
+                || generatedSlaProperty
                 || conditionRuleProperty
                 || WorkflowAutoCopyRuleContract.isReservedProperty(name)
                 || WorkflowMultiInstanceModelContract.isReservedProperty(name);
@@ -1990,6 +2002,8 @@ public class WorkflowBpmnService
 
     /**
      * 调用 Flowable 官方验证器并拒绝全部非 warning 错误。
+     * 作者 SendTask 是平台受控编译输入，只有其缺少 Flowable 原生实现类型这一精确错误可忽略；
+     * 节点必须仍存在且再次通过平台字段约束，避免错误编码或 activityId 被伪造后放宽其他模型。
      *
      * @param bpmnModel org.flowable.bpmn.model.BpmnModel，已通过模块安全规则的模型
      * @return 无返回值
@@ -1997,9 +2011,44 @@ public class WorkflowBpmnService
     private void validateWithFlowable(org.flowable.bpmn.model.BpmnModel bpmnModel)
     {
         List<ValidationError> errors = repositoryService.validateProcess(bpmnModel);
-        if (errors != null && errors.stream().anyMatch(error -> !error.isWarning()))
+        if (errors != null && errors.stream()
+                .anyMatch(error -> !error.isWarning()
+                        && !isControlledAuthorSendTaskValidationError(bpmnModel, error)))
         {
             throw invalidBpmn("BPMN 流程规则校验失败", null);
+        }
+    }
+
+    /**
+     * 判断官方错误是否仅来自已通过平台约束的作者 SendTask 缺少原生实现类型。
+     *
+     * @param bpmnModel org.flowable.bpmn.model.BpmnModel，已通过平台逐元素校验的作者模型
+     * @param error ValidationError，Flowable 官方验证器返回的单条问题
+     * @return boolean，true 表示可由部署编译器收敛且允许忽略，false 表示必须阻断
+     */
+    private boolean isControlledAuthorSendTaskValidationError(
+            org.flowable.bpmn.model.BpmnModel bpmnModel, ValidationError error)
+    {
+        if (error == null
+                || !FLOWABLE_SEND_TASK_IMPLEMENTATION_PROBLEM.equals(error.getProblem())
+                || !hasText(error.getActivityId()))
+        {
+            return false;
+        }
+        FlowElement activity = bpmnModel.getFlowElement(error.getActivityId().trim());
+        if (!(activity instanceof SendTask sendTask))
+        {
+            return false;
+        }
+        try
+        {
+            // 再次核验字段与实现边界，确保只豁免平台确实能够编译的作者节点。
+            validateSendTask(sendTask, ValidationContext.AUTHOR);
+            return true;
+        }
+        catch (ServiceException exception)
+        {
+            return false;
         }
     }
 

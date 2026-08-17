@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -22,9 +23,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
-import com.ruoyi.flowable.domain.WfParticipantResolutionAudit;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 
@@ -35,7 +36,7 @@ class WorkflowParticipantRuleRuntimeServiceTest
     private WorkflowDeploymentArtifactRepository artifactRepository;
     private WorkflowIdentityMapper identityMapper;
     private WorkflowIdentityResolver identityResolver;
-    private WorkflowParticipantResolutionAuditService auditService;
+    private WorkflowParticipantResolutionMetrics metrics;
     private WorkflowParticipantRuleRuntimeService service;
 
     /**
@@ -50,10 +51,10 @@ class WorkflowParticipantRuleRuntimeServiceTest
         artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         identityMapper = mock(WorkflowIdentityMapper.class);
         identityResolver = mock(WorkflowIdentityResolver.class);
-        auditService = mock(WorkflowParticipantResolutionAuditService.class);
+        metrics = mock(WorkflowParticipantResolutionMetrics.class);
         service = new WorkflowParticipantRuleRuntimeService(repositoryService, runtimeService,
                 artifactRepository,
-                identityMapper, identityResolver, auditService);
+                identityMapper, identityResolver, metrics);
     }
 
     /**
@@ -74,8 +75,7 @@ class WorkflowParticipantRuleRuntimeServiceTest
                 new WorkflowCurrentIdentity("7", Set.of("DEPT110")), definition)).isTrue();
         assertThat(service.assertCanStart(
                 new WorkflowCurrentIdentity("7", Set.of("DEPT110")), definition)).isSameAs(rule);
-        verify(auditService, never()).recordRejected(any(), anyString(), anyString(),
-                any(), any(), anyString(), any(), anyString(), anyString());
+        verifyNoInteractions(metrics);
     }
 
     /**
@@ -92,16 +92,15 @@ class WorkflowParticipantRuleRuntimeServiceTest
         WorkflowCurrentIdentity actor = new WorkflowCurrentIdentity("7", Set.of("ROLE3"));
         assertThat(service.canStartIfManaged(actor, definition)).isNull();
         assertThat(service.assertCanStart(actor, definition)).isNull();
-        verify(auditService, never()).recordRejected(any(), anyString(), anyString(),
-                any(), any(), anyString(), any(), anyString(), anyString());
+        verifyNoInteractions(metrics);
     }
 
     /**
-     * 验证未命中用户范围时先记录独立拒绝审计，再返回稳定 403 子码。
-     * @return 无返回值；越权用户被允许或审计缺失时测试失败
+     * 验证未命中用户范围时记录稳定失败指标并返回 403 子码。
+     * @return 无返回值；越权用户被允许或失败指标缺失时测试失败
      */
     @Test
-    void rejectsUnauthorizedHumanStartWithAudit()
+    void rejectsUnauthorizedHumanStartWithStableFailureMetric()
     {
         ProcessDefinition definition = definition();
         WfDeployParticipantRule rule = rule("START", "START", "USERS", "9");
@@ -115,13 +114,12 @@ class WorkflowParticipantRuleRuntimeServiceTest
                     assertThat(exception.getCode()).isEqualTo(403);
                     assertThat(exception.getSubCode()).isEqualTo("PROCESS_START_SCOPE_DENIED");
                 });
-        verify(auditService).recordRejected(rule, "START", "expense:1:4", null,
-                null, "7", "7", "DENIED", "当前用户未命中流程发起范围");
+        verify(metrics).recordFailure("PROCESS_START_SCOPE_DENIED");
     }
 
     /**
-     * 验证直属上级规则在任务创建事务内解析唯一实时办理人并记录成功审计。
-     * @return 无返回值；未直接分配唯一上级或审计缺失时测试失败
+     * 验证直属上级规则在任务创建事务内解析唯一实时办理人，成功事实只进入 Flowable。
+     * @return 无返回值；未直接分配唯一上级或额外记录成功指标时测试失败
      */
     @Test
     void resolvesUniqueStarterManagerForCreatedTask()
@@ -132,16 +130,10 @@ class WorkflowParticipantRuleRuntimeServiceTest
                 .thenReturn(rule);
         when(identityMapper.selectApprovalEligibleManagerUserIdsByUserId(7L))
                 .thenReturn(List.of(11L));
-        WfParticipantResolutionAudit audit = new WfParticipantResolutionAudit();
-        when(auditService.base(rule, "TASK", "expense:1:4", "instance-1", "task-1",
-                "7", null, "RESOLVED", "任务参与者按实时组织数据解析成功"))
-                .thenReturn(audit);
-
         service.resolveCreatedTask(task);
 
         verify(task).setAssignee("11");
-        assertThat(audit.getResolvedUserIds()).isEqualTo("11");
-        verify(auditService).record(audit);
+        verifyNoInteractions(metrics);
     }
 
     /**
@@ -158,11 +150,6 @@ class WorkflowParticipantRuleRuntimeServiceTest
                 .thenReturn(rule);
         when(identityMapper.selectApprovalEligibleManagerUserIdsByUserId(7L))
                 .thenReturn(List.of(11L));
-        WfParticipantResolutionAudit audit = new WfParticipantResolutionAudit();
-        when(auditService.base(rule, "TASK", "expense:1:4", "instance-1", "task-1",
-                "7", null, "RESOLVED", "任务参与者按实时组织数据解析成功"))
-                .thenReturn(audit);
-
         service.resolveCreatedTask(task);
 
         verify(runtimeService).getVariable("root-instance-1", "initiator");
@@ -188,16 +175,15 @@ class WorkflowParticipantRuleRuntimeServiceTest
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
                         assertThat(exception.getSubCode()).isEqualTo("TASK_PARTICIPANT_NO_MATCH"));
         verify(task, never()).setAssignee(anyString());
-        verify(auditService).recordRejected(rule, "TASK", "expense:1:4", "instance-1",
-                "task-1", "7", null, "NO_MATCH", "直接办理规则没有解析出唯一有效审批人");
+        verify(metrics).recordFailure("TASK_PARTICIPANT_NO_MATCH");
     }
 
     /**
-     * 验证表单数值字段的小数用户主键不会被截断，并写入独立 NO_MATCH 审计。
-     * @return 无返回值；小数被分配给其他用户、原始异常泄漏或拒绝审计缺失时测试失败
+     * 验证表单数值字段的小数用户主键不会被截断，并记录稳定失败指标。
+     * @return 无返回值；小数被分配给其他用户、原始异常泄漏或失败指标缺失时测试失败
      */
     @Test
-    void auditsInvalidFormUserValueAsStableResolutionFailure()
+    void recordsInvalidFormUserValueAsStableResolutionFailure()
     {
         DelegateTask task = taskContext();
         WfDeployParticipantRule rule = rule("TASK", "ASSIGNEE", "FORM_USER", "");
@@ -214,8 +200,7 @@ class WorkflowParticipantRuleRuntimeServiceTest
                             .isEqualTo("TASK_PARTICIPANT_RESOLUTION_FAILED");
                     assertThat(exception.getCause()).isInstanceOf(ServiceException.class);
                 });
-        verify(auditService).recordRejected(rule, "TASK", "expense:1:4", "instance-1",
-                "task-1", "7", null, "NO_MATCH", "任务参与者规则实时解析失败");
+        verify(metrics).recordFailure("TASK_PARTICIPANT_RESOLUTION_FAILED");
         verify(task, never()).setAssignee(anyString());
     }
 

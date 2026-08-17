@@ -1,339 +1,146 @@
 package com.ruoyi.flowable.service.attachment;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.Optional;
-import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import javax.sql.DataSource;
+import java.util.List;
+import java.util.UUID;
+import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
-import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
-import com.ruoyi.flowable.config.WorkflowRuntimeProperties.AttachmentCleanupLockMode;
+import com.ruoyi.flowable.domain.WfAttachment;
 
 /**
- * 使用专用 JDBC 会话持有 MySQL advisory lock，并在其覆盖范围内提交或回滚独立
- * REQUIRES_NEW 附件清理事务；锁连接与业务事务连接职责分离。
+ * 使用数据库行领取租约协调附件清理，数据库事务不覆盖对象存储删除。
  */
 @Component
 public class WorkflowAttachmentCleanupCoordinator
 {
-    /** MySQL advisory lock 立即返回，不等待其他节点释放。 */
-    private static final String ACQUIRE_LOCK_SQL = "select get_lock(?, 0)";
+    private static final Logger log = LoggerFactory.getLogger(
+            WorkflowAttachmentCleanupCoordinator.class);
 
-    /** advisory lock 必须由获取锁的同一物理连接显式释放。 */
-    private static final String RELEASE_LOCK_SQL = "select release_lock(?)";
-
-    /** 锁函数查询超时只保护依赖异常，不改变 GET_LOCK 的零等待竞争语义。 */
-    private static final int LOCK_QUERY_TIMEOUT_SECONDS = 5;
-
-    /** JDBC abort 使用调用线程同步执行，确保异常连接在返回连接池前已经失效。 */
-    private static final Executor CONNECTION_ABORT_EXECUTOR = Runnable::run;
+    /** 物理文件清理失败时写入数据库的固定脱敏错误码。 */
+    private static final String CLEANUP_FAILURE_ERROR_CODE =
+            "attachment_storage_cleanup_failed";
 
     private final WorkflowAttachmentService attachmentService;
-    private final WorkflowRuntimeProperties runtimeProperties;
-    private final DataSource dataSource;
-    private final TransactionOperations cleanupTransaction;
-
-    /** 当前 JVM 是否正在持有附件清理锁，仅用于本节点实时指标，不参与互斥决策。 */
-    private final AtomicBoolean lockActive = new AtomicBoolean(false);
-
-    /** 获取或释放锁出现不确定结果后保持降级到进程重启，防止锁会话泄漏被掩盖。 */
-    private final AtomicBoolean lockDegraded = new AtomicBoolean(false);
-
-    /** GET_LOCK 无法得到完整确定结果的累计次数，供固定 Gauge 和告警规则使用。 */
-    private final AtomicLong lockAcquisitionFailures = new AtomicLong();
-
-    /** RELEASE_LOCK 无法确认成功的累计次数，供固定 Gauge 和告警规则使用。 */
-    private final AtomicLong lockReleaseFailures = new AtomicLong();
+    private final TransactionOperations shortTransaction;
 
     /**
-     * 创建附件清理事务协调器。
+     * 创建附件清理协调器。
      *
-     * @param attachmentService WorkflowAttachmentService，执行正式状态迁移和物理删除
-     * @param runtimeProperties WorkflowRuntimeProperties，清理锁模式与稳定锁名
-     * @param dataSource DataSource，创建持有 advisory lock 的专用物理连接
-     * @param transactionManager PlatformTransactionManager，提交或回滚正式清理事务
-     * @return 无返回值，构造后由 Spring 管理事务代理
+     * @param attachmentService WorkflowAttachmentService，领取、对象删除和状态回写边界
+     * @param transactionManager PlatformTransactionManager，执行短 REQUIRES_NEW 事务
+     * @return 无返回值，构造后由 Spring 调度器复用
      */
     @Autowired
     public WorkflowAttachmentCleanupCoordinator(
             WorkflowAttachmentService attachmentService,
-            WorkflowRuntimeProperties runtimeProperties, DataSource dataSource,
             PlatformTransactionManager transactionManager)
     {
-        this(attachmentService, runtimeProperties, dataSource,
-                createCleanupTransaction(transactionManager));
+        this(attachmentService, createShortTransaction(transactionManager));
     }
 
     /**
-     * 使用显式事务操作器创建协调器，供隔离时序和异常测试复用。
+     * 使用显式事务操作器创建协调器，供事务边界单元测试复用。
      *
      * @param attachmentService WorkflowAttachmentService，正式附件清理服务
-     * @param runtimeProperties WorkflowRuntimeProperties，清理锁配置
-     * @param dataSource DataSource，专用锁连接来源
-     * @param cleanupTransaction TransactionOperations，完成后才允许释放锁的清理事务
+     * @param shortTransaction TransactionOperations，每次调用返回前已提交或回滚的短事务
      * @return 无返回值，参数会固定为协调器依赖
      */
     WorkflowAttachmentCleanupCoordinator(WorkflowAttachmentService attachmentService,
-            WorkflowRuntimeProperties runtimeProperties, DataSource dataSource,
-            TransactionOperations cleanupTransaction)
+            TransactionOperations shortTransaction)
     {
         this.attachmentService = attachmentService;
-        this.runtimeProperties = runtimeProperties;
-        this.dataSource = dataSource;
-        this.cleanupTransaction = cleanupTransaction;
+        this.shortTransaction = shortTransaction;
     }
 
     /**
-     * 立即尝试获取集群锁；未获锁时不查询候选、不改状态、不触碰文件，获得后在 finally 释放。
-     * MySQL GET_LOCK 不随事务提交自动释放，因此专用连接必须从获取锁开始一直持有到内部
-     * 清理事务提交或回滚完成，再由同一物理连接执行 RELEASE_LOCK。
+     * 执行一轮有界清理：短事务领取批次、事务外删除对象、短事务按 token 完成或重试。
+     * 租约过期并被其他节点重领时，旧执行者只记录 leaseLost，不覆盖新 token 的状态。
      *
-     * @return Optional&lt;WorkflowAttachmentCleanupResult&gt;，未获锁为空，执行后返回真实批次结果
+     * @return WorkflowAttachmentCleanupResult，完成、重试和租约丢失的真实记录数
      */
-    public Optional<WorkflowAttachmentCleanupResult> cleanupIfLockAcquired()
+    public WorkflowAttachmentCleanupResult cleanupBatch()
     {
-        if (runtimeProperties.getAttachmentCleanupLockMode()
-                == AttachmentCleanupLockMode.NONE)
-        {
-            return Optional.of(executeCleanupTransaction());
-        }
-
-        String lockName = runtimeProperties.getAttachmentCleanupLockName();
-        try (Connection lockConnection = dataSource.getConnection())
-        {
-            Integer acquired;
-            try
-            {
-                acquired = executeLockFunction(lockConnection, ACQUIRE_LOCK_SQL, lockName);
-                if (!Integer.valueOf(0).equals(acquired)
-                        && !Integer.valueOf(1).equals(acquired))
-                {
-                    throw new IllegalStateException("工作流附件 MySQL 清理锁获取结果异常");
-                }
-            }
-            catch (RuntimeException | Error | SQLException acquisitionFailure)
-            {
-                // GET_LOCK 可能已在服务端成功；结果读取或 JDBC 资源关闭不完整时必须销毁会话。
-                lockAcquisitionFailures.incrementAndGet();
-                lockDegraded.set(true);
-                abortLockConnection(lockConnection, acquisitionFailure);
-                throw acquisitionFailure;
-            }
-            if (Integer.valueOf(0).equals(acquired))
-            {
-                return Optional.empty();
-            }
-
-            return cleanupAndRelease(lockConnection, lockName);
-        }
-        catch (SQLException exception)
-        {
-            throw new IllegalStateException("工作流附件 MySQL 清理锁连接异常", exception);
-        }
-    }
-
-    /**
-     * 在已获取锁的专用连接存活期间提交或回滚清理事务，并在 finally 由原连接释放锁。
-     *
-     * @param lockConnection Connection，成功执行 GET_LOCK 的同一 JDBC 连接
-     * @param lockName String，集群级稳定锁名
-     * @return Optional&lt;WorkflowAttachmentCleanupResult&gt;，已提交清理事务的真实结果
-     * @throws SQLException RELEASE_LOCK 执行失败
-     */
-    private Optional<WorkflowAttachmentCleanupResult> cleanupAndRelease(
-            Connection lockConnection, String lockName) throws SQLException
-    {
-        lockActive.set(true);
-        Throwable cleanupFailure = null;
-        try
-        {
-            // TransactionOperations.execute 返回前已经完成提交或回滚，锁不会暴露未提交旧候选。
-            return Optional.of(executeCleanupTransaction());
-        }
-        catch (RuntimeException | Error failure)
-        {
-            cleanupFailure = failure;
-            throw failure;
-        }
-        finally
+        String claimToken = UUID.randomUUID().toString();
+        List<WfAttachment> claimed = executeShortTransaction(
+                () -> attachmentService.claimCleanupBatch(claimToken));
+        int cleaned = 0;
+        int failures = 0;
+        int leaseLost = 0;
+        for (WfAttachment attachment : claimed)
         {
             try
             {
-                Integer released = executeLockFunction(
-                        lockConnection, RELEASE_LOCK_SQL, lockName);
-                if (!Integer.valueOf(1).equals(released))
+                // 对象存储调用明确位于数据库事务之外，慢删除不会占用行锁或事务连接。
+                attachmentService.deleteClaimedStorage(attachment);
+                boolean completed = executeShortTransaction(
+                        () -> attachmentService.completeClaimedCleanup(attachment));
+                if (completed)
                 {
-                    throw new IllegalStateException("工作流附件 MySQL 清理锁释放结果异常");
-                }
-            }
-            catch (RuntimeException | Error | SQLException releaseFailure)
-            {
-                // 无法证明 named lock 已释放时必须先淘汰物理会话，禁止带锁连接回到连接池。
-                lockReleaseFailures.incrementAndGet();
-                lockDegraded.set(true);
-                abortLockConnection(lockConnection, releaseFailure);
-                if (cleanupFailure != null)
-                {
-                    cleanupFailure.addSuppressed(releaseFailure);
+                    cleaned++;
                 }
                 else
                 {
-                    if (releaseFailure instanceof SQLException sqlFailure)
+                    leaseLost++;
+                }
+            }
+            catch (WorkflowAttachmentStorageOperationException storageFailure)
+            {
+                try
+                {
+                    boolean retryScheduled = executeShortTransaction(
+                            () -> attachmentService.persistCleanupRetry(attachment));
+                    if (retryScheduled)
                     {
-                        throw sqlFailure;
+                        failures++;
                     }
-                    throw releaseFailure;
+                    else
+                    {
+                        leaseLost++;
+                    }
                 }
-            }
-            finally
-            {
-                lockActive.set(false);
-            }
-        }
-    }
-
-    /**
-     * 废弃无法确认锁状态的物理连接，并把 abort 自身失败附加到原始释放异常。
-     *
-     * @param connection Connection，可能仍持有 MySQL named lock 的专用连接
-     * @param primaryFailure Throwable，必须保留为主异常的锁释放失败
-     * @return void，abort 失败作为 suppressed 异常保留并由外层继续关闭连接
-     */
-    private void abortLockConnection(Connection connection, Throwable primaryFailure)
-    {
-        try
-        {
-            connection.abort(CONNECTION_ABORT_EXECUTOR);
-        }
-        catch (SQLException | RuntimeException | Error abortFailure)
-        {
-            primaryFailure.addSuppressed(abortFailure);
-        }
-    }
-
-    /**
-     * 在独立 REQUIRES_NEW 事务中执行有界清理，方法返回即表示事务已提交。
-     *
-     * @return WorkflowAttachmentCleanupResult，已提交的完成数和单条失败数
-     */
-    private WorkflowAttachmentCleanupResult executeCleanupTransaction()
-    {
-        WorkflowAttachmentCleanupResult result = cleanupTransaction.execute(
-                status -> attachmentService.cleanupExpiredBatch());
-        if (result == null)
-        {
-            throw new IllegalStateException("工作流附件清理事务未返回结果");
-        }
-        return result;
-    }
-
-    /**
-     * 在指定物理连接执行单行 MySQL advisory lock 函数，拒绝空结果和额外结果行。
-     *
-     * @param connection Connection，获取和释放阶段复用的同一连接
-     * @param sql String，固定 GET_LOCK 或 RELEASE_LOCK SQL
-     * @param lockName String，已通过生产启动门禁校验的锁名
-     * @return Integer，MySQL 锁函数的 1、0 或 null 结果
-     * @throws SQLException 查询超时、连接失败或结果结构异常
-     */
-    private Integer executeLockFunction(Connection connection, String sql,
-            String lockName) throws SQLException
-    {
-        try (PreparedStatement statement = connection.prepareStatement(sql))
-        {
-            statement.setString(1, lockName);
-            statement.setQueryTimeout(LOCK_QUERY_TIMEOUT_SECONDS);
-            try (ResultSet resultSet = statement.executeQuery())
-            {
-                if (!resultSet.next())
+                catch (RuntimeException retryFailure)
                 {
-                    throw new SQLException("MySQL 清理锁函数未返回结果");
+                    storageFailure.addSuppressed(retryFailure);
+                    throw storageFailure;
                 }
-                Object rawResult = resultSet.getObject(1);
-                Integer result;
-                if (rawResult == null)
-                {
-                    result = null;
-                }
-                else if (rawResult instanceof Number number)
-                {
-                    result = number.intValue();
-                }
-                else
-                {
-                    throw new SQLException("MySQL 清理锁函数结果类型异常");
-                }
-                if (resultSet.next())
-                {
-                    throw new SQLException("MySQL 清理锁函数返回多行结果");
-                }
-                return result;
+                log.error("工作流附件物理清理失败，attachmentId={}，errorCode={}，failureType={}",
+                        attachment.attachmentId(), CLEANUP_FAILURE_ERROR_CODE,
+                        storageFailure.getClass().getSimpleName());
             }
         }
+        return new WorkflowAttachmentCleanupResult(cleaned, failures, leaseLost);
     }
 
     /**
-     * 创建专用于附件清理的 REQUIRES_NEW 事务模板，确保返回前完成提交或回滚。
+     * 在独立短事务中执行单个数据库步骤，返回前保证事务已经提交或回滚。
+     *
+     * @param action Supplier&lt;T&gt;，只包含领取或按 token 回写的数据库动作
+     * @param <T> 数据库动作返回值类型
+     * @return T，事务已提交的动作结果
+     */
+    private <T> T executeShortTransaction(Supplier<T> action)
+    {
+        return shortTransaction.execute(status -> action.get());
+    }
+
+    /**
+     * 创建附件清理短事务模板，避免对象存储 IO 进入事务边界。
      *
      * @param transactionManager PlatformTransactionManager，应用正式事务管理器
-     * @return TransactionOperations，固定事务传播和名称的执行器
+     * @return TransactionOperations，固定 REQUIRES_NEW 传播级别的事务执行器
      */
-    private static TransactionOperations createCleanupTransaction(
+    private static TransactionOperations createShortTransaction(
             PlatformTransactionManager transactionManager)
     {
         TransactionTemplate template = new TransactionTemplate(transactionManager);
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-        template.setName("workflowAttachmentCleanup");
+        template.setName("workflowAttachmentCleanupShortTransaction");
         return template;
-    }
-
-    /**
-     * 返回当前 JVM 的清理锁持有状态，仅供 Gauge 采集且不能作为锁判断依据。
-     *
-     * @return boolean，本节点正在持有 MySQL 清理锁时为 true
-     */
-    public boolean isLockActive()
-    {
-        return lockActive.get();
-    }
-
-    /**
-     * 返回本进程是否发生过无法确认成功的 GET_LOCK 或 RELEASE_LOCK，仅供健康检查和固定
-     * Gauge 使用。
-     *
-     * @return boolean，释放失败后保持 true 直至进程重启
-     */
-    public boolean isLockDegraded()
-    {
-        return lockDegraded.get();
-    }
-
-    /**
-     * 返回本进程无法确认 GET_LOCK 结果的累计次数。
-     *
-     * @return long，进程生命周期内单调递增的获取失败数
-     */
-    public long getLockAcquisitionFailures()
-    {
-        return lockAcquisitionFailures.get();
-    }
-
-    /**
-     * 返回本进程无法确认成功的 RELEASE_LOCK 累计次数。
-     *
-     * @return long，进程生命周期内单调递增的释放失败数
-     */
-    public long getLockReleaseFailures()
-    {
-        return lockReleaseFailures.get();
     }
 }

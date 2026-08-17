@@ -311,6 +311,29 @@ class WorkflowBpmnServiceTest
     }
 
     /**
+     * 验证 SLA 编译器生成的来源任务键只允许出现在部署资源，作者保存时仍拒绝伪造。
+     *
+     * @return void，编译结果被误拒绝或作者可写入运行关联属性时测试失败
+     */
+    @Test
+    void allowsGeneratedSlaSourcePropertyOnlyInCompiledDeployment()
+    {
+        String generatedProperty = validBpmn().replace("<extensionElements>", """
+                <extensionElements>
+                  <flowable:properties>
+                    <flowable:property name="approva.sla.sourceTaskDefinitionKey" value="approve"/>
+                  </flowable:properties>
+                """.strip());
+
+        assertThat(service.validateCompiledDeployment(
+                generatedProperty.getBytes(StandardCharsets.UTF_8))).isNotNull();
+        assertThatThrownBy(() -> service.validateForSave(
+                generatedProperty.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getMessage()).contains("保留前缀"));
+    }
+
+    /**
      * 验证其他引擎私有扩展可作为作者 XML 回显，但部署报告明确为不兼容。
      * @return void，私有扩展被误执行或没有结构化诊断时测试失败
      */
@@ -953,6 +976,39 @@ class WorkflowBpmnServiceTest
                     assertThat(exception.getCode()).isEqualTo(400);
                     assertThat(exception.getMessage()).doesNotContain("internal validation details");
                 });
+    }
+
+    /**
+     * 验证受控作者 SendTask 只忽略 Flowable 缺少原生实现类型的精确错误。
+     *
+     * @return void，受控节点被误阻断或错误 activityId 被放行时测试失败
+     */
+    @Test
+    void allowsOnlyControlledSendTaskImplementationValidationError()
+    {
+        String controlled = validBpmn().replace(ordinaryApprovalTaskXml(), """
+                <sendTask id="approve" name="发送通知">
+                  <extensionElements>
+                    <flowable:field name="approvaExtensionKey"
+                      stringValue="approva.collaboration-outbox"/>
+                    <flowable:field name="approvaExtensionConfig"
+                      stringValue="{&quot;endpointKey&quot;:&quot;partner&quot;}"/>
+                  </extensionElements>
+                </sendTask>
+                """.strip());
+        ValidationError controlledError = new ValidationError();
+        controlledError.setWarning(false);
+        controlledError.setProblem("flowable-sendtask-invalid-implementation");
+        controlledError.setActivityId("approve");
+        when(repositoryService.validateProcess(any(BpmnModel.class)))
+                .thenReturn(List.of(controlledError));
+
+        assertThat(service.validate(controlled.getBytes(StandardCharsets.UTF_8))).isNotNull();
+
+        controlledError.setActivityId("start");
+        assertThatThrownBy(() -> service.validate(controlled.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("流程规则校验失败");
     }
 
     /**

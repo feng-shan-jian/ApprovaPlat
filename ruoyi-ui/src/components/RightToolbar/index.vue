@@ -172,7 +172,9 @@ if (props.storageKey) {
         })
       }
     }
-  } catch (e) {}
+  } catch (_error) {
+    // 本地缓存损坏不阻断列表功能，继续使用页面传入的默认列配置。
+  }
 }
 if (props.showColumnsType == "transfer") {
   // transfer穿梭显隐列初始默认隐藏列
@@ -223,7 +225,9 @@ function saveStorage() {
       Object.keys(props.columns).forEach(key => { state[key] = props.columns[key].visible })
     }
     cache.local.setJSON(props.storageKey, state)
-  } catch (e) {}
+  } catch (_error) {
+    // 浏览器拒绝 localStorage 时仅跳过偏好保存，不影响本次列显隐操作。
+  }
 }
 </script>
 

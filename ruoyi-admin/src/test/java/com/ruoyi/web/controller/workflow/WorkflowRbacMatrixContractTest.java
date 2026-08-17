@@ -30,7 +30,7 @@ import com.ruoyi.web.controller.workflow.WorkflowRbacMatrix.PermissionMode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 工作流 22 个 Controller、145 个 mapping 和 5x145 URL 权限矩阵的静态契约测试。
+ * 工作流 21 个 Controller、143 个 mapping 和 5x143 URL 权限矩阵的静态契约测试。
  */
 class WorkflowRbacMatrixContractTest
 {
@@ -58,7 +58,6 @@ class WorkflowRbacMatrixContractTest
             Map.entry("WfAttachmentController", 4L),
             Map.entry("WfCategoryController", 7L),
             Map.entry("WfDeployController", 5L),
-            Map.entry("WfDesignerController", 2L),
             Map.entry("WfConnectorController", 5L),
             Map.entry("WfDmnController", 4L),
             Map.entry("WfBpmnEventController", 8L),
@@ -80,26 +79,26 @@ class WorkflowRbacMatrixContractTest
 
     /** 每个角色按正式职责分离 SQL 应得到的 URL 层允许入口数量。 */
     private static final Map<String, Long> EXPECTED_ALLOW_COUNTS = Map.of(
-            "workflow_admin", 145L,
-            "workflow_designer", 73L,
+            "workflow_admin", 143L,
+            "workflow_designer", 71L,
             "workflow_starter", 38L,
-            "workflow_approver", 39L,
+            "workflow_approver", 41L,
             "workflow_auditor", 38L);
 
     /**
      * 逐项冻结 Controller、handler、HTTP 动词、完整路径及 PreAuthorize 规则。
      *
-     * @return void，无返回值；源码与 145 行正式矩阵任一漂移时测试失败
+     * @return void，无返回值；源码与 143 行正式矩阵任一漂移时测试失败
      */
     @Test
-    void freezesTwentyTwoControllersAndOneHundredFortyFiveMappings()
+    void freezesTwentyOneControllersAndOneHundredFortyThreeMappings()
     {
         List<Endpoint> matrix = WorkflowRbacMatrix.load();
         Map<String, InventoryEndpoint> inventory = WorkflowRbacMatrix.reflectInventory();
 
-        assertThat(WorkflowRbacMatrix.CONTROLLERS).hasSize(22);
-        assertThat(matrix).hasSize(145);
-        assertThat(inventory).hasSize(145);
+        assertThat(WorkflowRbacMatrix.CONTROLLERS).hasSize(21);
+        assertThat(matrix).hasSize(143);
+        assertThat(inventory).hasSize(143);
         assertThat(matrix.stream().collect(Collectors.groupingBy(
                 Endpoint::controller, Collectors.counting())))
                 .containsExactlyInAnyOrderEntriesOf(EXPECTED_CONTROLLER_COUNTS);
@@ -129,12 +128,12 @@ class WorkflowRbacMatrixContractTest
     }
 
     /**
-     * 用正式菜单角色 SQL 反向核对 725 个矩阵单元并冻结允许、拒绝总量。
+     * 用正式菜单角色 SQL 反向核对 715 个矩阵单元并冻结允许、拒绝总量。
      *
      * @return void，无返回值；矩阵与正式职责分离角色授权不一致时测试失败
      */
     @Test
-    void derivesAllSevenHundredTwentyFiveCellsFromProductionRoleSql()
+    void derivesAllSevenHundredFifteenCellsFromProductionRoleSql()
     {
         List<Endpoint> matrix = WorkflowRbacMatrix.load();
         Map<String, Set<String>> rolePermissions = WorkflowRbacMatrix.loadRolePermissions();
@@ -169,9 +168,9 @@ class WorkflowRbacMatrixContractTest
             allowCounts.put(roleKey, roleAllows);
         }
 
-        assertThat(cellCount).isEqualTo(725L);
+        assertThat(cellCount).isEqualTo(715L);
         assertThat(allowCounts).containsExactlyInAnyOrderEntriesOf(EXPECTED_ALLOW_COUNTS);
-        assertThat(denyCount).isEqualTo(392L);
+        assertThat(denyCount).isEqualTo(384L);
     }
 
     /**
@@ -180,10 +179,10 @@ class WorkflowRbacMatrixContractTest
      * @return void，无返回值；任一路径变量缺少类型合法哨兵或仍含花括号时测试失败
      */
     @Test
-    void resolvesDeniedProbeVariablesForAllOneHundredFortyFiveMappings()
+    void resolvesDeniedProbeVariablesForAllOneHundredFortyThreeMappings()
     {
         List<Endpoint> matrix = WorkflowRbacMatrix.load();
-        assertThat(matrix).hasSize(145);
+        assertThat(matrix).hasSize(143);
         for (Endpoint endpoint : matrix)
         {
             assertThat(WorkflowRbacHttpIT.deniedProbePath(endpoint))

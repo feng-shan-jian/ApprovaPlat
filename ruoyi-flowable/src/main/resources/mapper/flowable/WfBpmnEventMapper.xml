@@ -82,6 +82,27 @@
         select audit_id from wf_bpmn_event_audit where idempotency_key = #{idempotencyKey}
     </select>
 
+    <sql id="AuditFilters">
+        <where>
+            <if test="query.status != null and query.status != ''">and match_status = #{query.status}</if>
+            <if test="query.eventType != null and query.eventType != ''">and event_type = #{query.eventType}</if>
+            <if test="query.sourceType != null and query.sourceType != ''">and source_type = #{query.sourceType}</if>
+            <if test="query.keyword != null and query.keyword != ''">
+                and (cast(audit_id as char) = #{query.keyword}
+                  or process_instance_id like concat('%', #{query.keyword}, '%')
+                  or event_code like concat('%', #{query.keyword}, '%')
+                  or source_element_id like concat('%', #{query.keyword}, '%'))
+            </if>
+            <if test="query.beginTime != null">and create_time &gt;= #{query.beginTime}</if>
+            <if test="query.endTime != null">and create_time &lt;= #{query.endTime}</if>
+        </where>
+    </sql>
+
+    <select id="countAuditList" resultType="long">
+        select count(*) from wf_bpmn_event_audit
+        <include refid="AuditFilters"/>
+    </select>
+
     <select id="selectAuditList" resultType="com.ruoyi.flowable.domain.vo.WorkflowBpmnEventAuditView">
         select audit_id as auditId, process_instance_id as processInstanceId,
                process_definition_id as processDefinitionId, source_element_id as sourceElementId,
@@ -90,7 +111,9 @@
                boundary_event_id as boundaryEventId, interrupting,
                message_summary as messageSummary, create_time as createTime
         from wf_bpmn_event_audit
-        order by audit_id desc limit 500
+        <include refid="AuditFilters"/>
+        order by create_time desc, audit_id desc
+        limit #{pageSize} offset #{offset}
     </select>
 
     <select id="selectNotifications" resultType="com.ruoyi.flowable.domain.vo.WorkflowBpmnEventNotificationView">

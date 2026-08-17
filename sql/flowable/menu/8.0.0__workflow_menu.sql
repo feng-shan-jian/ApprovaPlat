@@ -551,6 +551,7 @@ SELECT 'workflow_approver', seed_key
 FROM tmp_workflow_menu_seed
 WHERE seed_key IN (
     'office', 'workflow:process:todoList', 'workflow:process:claimList',
+    'workflow', 'extensions', 'workflow:bpmnEvent:list',
     'workflow:process:finishedList', 'workflow:process:copyList',
     'workflow:process:query', 'workflow:process:approval',
     'workflow:process:todoExport', 'workflow:process:claim',

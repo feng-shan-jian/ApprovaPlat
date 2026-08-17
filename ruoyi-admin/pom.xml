@@ -77,6 +77,12 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.4.1</version>
+            <scope>test</scope>
+        </dependency>
 
     </dependencies>
 
@@ -121,6 +127,10 @@
                         <configuration>
                             <classesDirectory>${project.build.outputDirectory}</classesDirectory>
                             <useManifestOnlyJar>false</useManifestOnlyJar>
+                            <systemPropertyVariables>
+                                <!-- 集成测试在同一 JVM 复用多个 Spring 上下文，统一关闭后台通知 worker，避免跨用例抢消费。 -->
+                                <flowable.notification.worker-enabled>false</flowable.notification.worker-enabled>
+                            </systemPropertyVariables>
                         </configuration>
                         <executions>
                             <execution>

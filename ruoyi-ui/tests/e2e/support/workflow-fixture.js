@@ -369,8 +369,11 @@ export async function createAndDeployWorkflowModel(page, input) {
   expect(modelId, '模型创建必须返回正式主键').not.toBe('')
   // 模型一经正式落库立即登记，后续保存或部署失败时 finally 仍可回收半成品。
   if (input.resourceRegistry) input.resourceRegistry.modelIds.push(modelId)
+  const modelDetail = await callWorkflowApi(page, 'GET', `/workflow/model/${encodeURIComponent(modelId)}`)
+  const expectedBpmnSha256 = String(modelDetail.data?.bpmnSha256 || '')
+  expect(expectedBpmnSha256, '模型详情必须返回初始 BPMN 内容摘要').toMatch(/^[0-9a-f]{64}$/)
   await callWorkflowApi(page, 'POST', '/workflow/model/save', {
-    data: { requestId: randomUUID(), modelId, bpmnXml: input.bpmnXml, newVersion: false }
+    data: { modelId, bpmnXml: input.bpmnXml, expectedBpmnSha256, newVersion: false }
   })
   const deployed = await callWorkflowApi(page, 'POST', '/workflow/model/deploy', {
     query: { modelId }
@@ -570,7 +573,7 @@ export function readWorkflowRuntimeBooleanVariable(processInstanceId, variableNa
 }
 
 /**
- * 精确删除本轮发起页创建的草稿和不可变审计，解除流程历史与部署清理前的正式引用。
+ * 精确删除本轮发起页创建的草稿当前状态，解除流程历史与部署清理前的正式引用。
  * @param {{draftId: string, processInstanceId?: string}} fixture 草稿 UUID 与可选已提交实例关系。
  * @returns {Promise<void>} 草稿状态、实例关系和删除计数全部一致后结束。
  */
@@ -584,31 +587,24 @@ async function purgeWorkflowDraftFixture(fixture) {
   const draftLiteral = draftId.replaceAll("'", "''")
   const instanceLiteral = processInstanceId.replaceAll("'", "''")
   const rows = runWorkflowFixtureMysql(
-    `SELECT draft_status, COALESCE(submitted_process_instance_id, '') FROM wf_process_draft `
-      + `WHERE draft_id='${draftLiteral}';\n`
-      + `SELECT COUNT(*) FROM wf_process_draft_audit WHERE draft_id='${draftLiteral}';\n`)
-  if (rows.length !== 2) throw new Error('流程 E2E 草稿记录或审计计数不唯一')
-  const [status, storedInstanceId] = rows[0].split('\t')
-  const auditCount = Number(rows[1])
+    `SELECT draft_status, revision_no, COALESCE(submitted_process_instance_id, '') `
+      + `FROM wf_process_draft WHERE draft_id='${draftLiteral}';\n`)
+  if (rows.length !== 1) throw new Error('流程 E2E 草稿当前状态不唯一')
+  const [status, revisionText, storedInstanceId] = rows[0].split('\t')
+  const revision = Number(revisionText)
   const submitted = status === 'SUBMITTED'
   if (!['ACTIVE', 'DELETED', 'SUBMITTED'].includes(status)
       || (submitted ? (!processInstanceId || storedInstanceId !== processInstanceId) : storedInstanceId)
-      || !Number.isInteger(auditCount) || auditCount < 1) {
+      || !Number.isInteger(revision) || revision < 1) {
     throw new Error('流程 E2E 草稿记录不满足精确清理门禁')
   }
   const statusPredicate = submitted
     ? `draft_status='SUBMITTED' AND submitted_process_instance_id='${instanceLiteral}'`
     : `draft_status IN ('ACTIVE','DELETED') AND submitted_process_instance_id IS NULL`
   const deleted = runWorkflowFixtureMysql(
-    `START TRANSACTION;\n`
-      + `DELETE FROM wf_process_draft_audit WHERE draft_id='${draftLiteral}';\n`
-      + `SELECT ROW_COUNT();\n`
-      + `DELETE FROM wf_process_draft WHERE draft_id='${draftLiteral}' AND ${statusPredicate};\n`
-      + `SELECT ROW_COUNT();\n`
-      + `COMMIT;\n`)
-  if (Number(deleted.at(-2)) !== auditCount || deleted.at(-1) !== '1') {
-    throw new Error('流程 E2E 草稿事务删除计数不一致')
-  }
+    `DELETE FROM wf_process_draft WHERE draft_id='${draftLiteral}' AND ${statusPredicate};\n`
+      + `SELECT ROW_COUNT();\n`)
+  if (deleted.at(-1) !== '1') throw new Error('流程 E2E 草稿条件删除计数不一致')
 }
 
 /**

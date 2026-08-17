@@ -31,10 +31,14 @@ const useSettingsStore = defineStore(
       isDark: isDark.value
     }),
     actions: {
-      // 修改布局设置
+      /**
+       * 修改已声明的布局设置，拒绝向 store 注入未知字段。
+       * @param {{key: string, value: unknown}} data 设置字段及新值。
+       * @returns {void} 合法字段更新完成后正常返回。
+       */
       changeSetting(data) {
         const { key, value } = data
-        if (this.hasOwnProperty(key)) {
+        if (Object.prototype.hasOwnProperty.call(this, key)) {
           this[key] = value
         }
       },

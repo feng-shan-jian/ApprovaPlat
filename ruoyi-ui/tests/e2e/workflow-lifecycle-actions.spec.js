@@ -774,11 +774,13 @@ test('普通审批全生命周期动作具备真实 UI、对象授权、状态�
     await pages.designer.getByRole('button', { name: '搜索', exact: true }).click()
     await expectAjaxSuccess(await filteredModelPromise, '/workflow/model/list')
 
+    const sequentialModelDetail = await callWorkflowApi(
+      pages.designer, 'GET', `/workflow/model/${encodeURIComponent(sequentialModel.modelId)}`)
     const savedVersion = await callWorkflowApi(pages.designer, 'POST', '/workflow/model/save', {
       data: {
-        requestId: randomUUID(),
         modelId: sequentialModel.modelId,
         bpmnXml: sequentialBpmnXml,
+        expectedBpmnSha256: sequentialModelDetail.data?.bpmnSha256,
         newVersion: false
       }
     })

@@ -20,7 +20,7 @@ class WorkflowControllerPermissionContractTest
             WorkflowRbacMatrix.CONTROLLERS;
 
     /** 当前生产工作流显式方法级 mapping 数量。 */
-    private static final int EXPECTED_MAPPING_COUNT = 145;
+    private static final int EXPECTED_MAPPING_COUNT = 143;
 
     /**
      * 冻结全部工作流 HTTP 入口数量，并保证每个入口均经过方法级 URL 权限门禁。
@@ -78,11 +78,6 @@ class WorkflowControllerPermissionContractTest
         assertPreAuthorize(WfModelController.class, "validate",
                 "@ss.hasPermi('workflow:model:designer')",
                 com.ruoyi.flowable.domain.dto.WorkflowBpmnValidationRequest.class);
-        assertPreAuthorize(WfDesignerController.class, "getPreference",
-                "@ss.hasPermi('workflow:model:designer')");
-        assertPreAuthorize(WfDesignerController.class, "savePreference",
-                "@ss.hasPermi('workflow:model:designer')",
-                com.ruoyi.flowable.domain.dto.WorkflowDesignerPreferenceRequest.class);
         assertPreAuthorize(WfExtensionController.class, "javaOptions",
                 "@ss.hasAnyPermi('workflow:extension:list,workflow:model:designer')");
         assertPreAuthorize(WfExtensionController.class, "celOptions",
@@ -127,7 +122,9 @@ class WorkflowControllerPermissionContractTest
                 "@ss.hasPermi('workflow:bpmnEvent:edit')", Long.class,
                 com.ruoyi.flowable.domain.dto.WorkflowBpmnEventCodeStatusRequest.class);
         assertPreAuthorize(WfBpmnEventController.class, "audit",
-                "@ss.hasPermi('workflow:bpmnEvent:audit')");
+                "@ss.hasPermi('workflow:bpmnEvent:audit')",
+                int.class, int.class, String.class, String.class, String.class, String.class,
+                java.time.LocalDateTime.class, java.time.LocalDateTime.class);
         assertPreAuthorize(WfBpmnEventController.class, "myNotifications",
                 "@ss.hasAnyPermi('workflow:process:approval,workflow:process:start,workflow:bpmnEvent:list')");
         assertPreAuthorize(WfBpmnEventController.class, "markRead",

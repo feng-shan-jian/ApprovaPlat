@@ -5,23 +5,27 @@
       <el-button icon="Refresh" :loading="loading" @click="loadRows">刷新</el-button>
     </header>
 
-    <el-tabs v-model="activeDirection">
+    <el-tabs v-model="activeDirection" @tab-change="changeDirection">
       <el-tab-pane label="事务 Outbox" name="OUTBOUND" />
       <el-tab-pane label="入站消息" name="INBOUND" />
     </el-tabs>
 
     <el-form inline class="page-filter">
       <el-form-item label="检索">
-        <el-input v-model="keyword" clearable prefix-icon="Search" placeholder="消息、流程或关联键" />
+        <el-input v-model="queryParams.keyword" clearable prefix-icon="Search" placeholder="消息、流程或关联键" @keyup.enter="handleQuery" />
       </el-form-item>
       <el-form-item label="状态">
-        <el-select v-model="statusFilter" clearable placeholder="全部状态">
+        <el-select v-model="queryParams.status" clearable placeholder="全部状态">
           <el-option v-for="status in statusOptions" :key="status" :label="statusLabel(status)" :value="status" />
         </el-select>
       </el-form-item>
+      <el-form-item label="创建时间">
+        <el-date-picker v-model="queryParams.timeRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" />
+      </el-form-item>
+      <el-form-item><el-button type="primary" icon="Search" @click="handleQuery">查询</el-button><el-button icon="Refresh" @click="resetQuery">重置</el-button></el-form-item>
     </el-form>
 
-    <el-table v-loading="loading" :data="filteredRows" row-key="messageId">
+    <el-table v-loading="loading" :data="rows" row-key="messageId">
       <el-table-column label="消息" min-width="220">
         <template #default="scope">
           <div class="message-cell"><strong>{{ scope.row.messageName }}</strong><code>{{ scope.row.messageId }}</code></div>
@@ -62,6 +66,7 @@
         </template>
       </el-table-column>
     </el-table>
+    <pagination v-show="total > 0" :total="total" v-model:page="queryParams.pageNum" v-model:limit="queryParams.pageSize" @pagination="loadRows" />
 
     <el-drawer v-model="auditOpen" title="消息审计" size="560px">
       <el-timeline v-loading="auditLoading">
@@ -91,35 +96,57 @@ import {
 const { proxy } = getCurrentInstance()
 const loading = ref(false)
 const activeDirection = ref('OUTBOUND')
-const keyword = ref('')
-const statusFilter = ref('')
-const inboundRows = ref([])
-const outboxRows = ref([])
+const rows = ref([])
+const total = ref(0)
+const queryParams = reactive({ pageNum: 1, pageSize: 20, keyword: '', status: '', timeRange: [] })
 const auditOpen = ref(false)
 const auditLoading = ref(false)
 const audits = ref([])
 let initialized = false
-const statusOptions = Object.freeze(['RECEIVED', 'PENDING', 'DELIVERING', 'RETRYING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED'])
-const currentRows = computed(() => activeDirection.value === 'OUTBOUND' ? outboxRows.value : inboundRows.value)
-const filteredRows = computed(() => {
-  const query = keyword.value.trim().toLowerCase()
-  return currentRows.value.filter(row => {
-    const searchable = [row.messageName, row.messageId, row.sourceProcessDefinitionKey, row.targetProcessDefinitionKey, row.correlationKey]
-      .filter(Boolean).join(' ').toLowerCase()
-    return (!query || searchable.includes(query)) && (!statusFilter.value || row.status === statusFilter.value)
-  })
-})
+const statusOptions = computed(() => activeDirection.value === 'OUTBOUND'
+  ? ['PENDING', 'DELIVERING', 'RETRYING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED']
+  : ['RECEIVED', 'RETRYING', 'PROCESSED', 'DEAD_LETTER'])
 
-/** @returns {Promise<void>} 并行刷新真实入站和 outbox 台账。 */
+/** @returns {Promise<void>} 按当前方向和筛选刷新真实分页台账。 */
 async function loadRows() {
   loading.value = true
   try {
-    const [inbound, outbox] = await Promise.all([listCollaborationInbound(), listCollaborationOutbox()])
-    inboundRows.value = Array.isArray(inbound.data) ? inbound.data : []
-    outboxRows.value = Array.isArray(outbox.data) ? outbox.data : []
+    const loader = activeDirection.value === 'OUTBOUND' ? listCollaborationOutbox : listCollaborationInbound
+    const response = await loader(buildQuery())
+    rows.value = Array.isArray(response.rows) ? response.rows : []
+    total.value = Number(response.total || 0)
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 构造当前方向的分页筛选参数。
+ * @returns {object} 后端可直接绑定的查询参数。
+ */
+function buildQuery() {
+  const [beginTime, endTime] = queryParams.timeRange || []
+  return {
+    pageNum: queryParams.pageNum, pageSize: queryParams.pageSize,
+    keyword: queryParams.keyword.trim() || undefined,
+    status: queryParams.status || undefined, beginTime, endTime
+  }
+}
+
+/** @returns {void} 切换方向后清空不兼容状态并从第一页读取。 */
+function changeDirection() {
+  queryParams.pageNum = 1
+  queryParams.status = ''
+  loadRows()
+}
+
+/** @returns {void} 回到第一页并按当前筛选查询。 */
+function handleQuery() { queryParams.pageNum = 1; loadRows() }
+
+/** @returns {void} 恢复默认筛选和分页后重新查询。 */
+function resetQuery() {
+  Object.assign(queryParams, { pageNum: 1, pageSize: 20, keyword: '', status: '', timeRange: [] })
+  loadRows()
 }
 
 /** @param {string} status 状态编码。 @returns {{label:string,type:string}} 标签元数据。 */
@@ -182,6 +209,7 @@ onActivated(() => { if (initialized) loadRows() })
 .page-filter { margin: 12px 0 4px; }
 .page-filter :deep(.el-input) { width: 280px; }
 .page-filter :deep(.el-select) { width: 160px; }
+.page-filter :deep(.el-date-editor) { width: 360px; }
 .message-cell, .audit-item { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .message-cell code { overflow: hidden; color: var(--el-text-color-secondary); text-overflow: ellipsis; }
 .flow-arrow { margin: 0 8px; color: var(--el-text-color-secondary); vertical-align: middle; }

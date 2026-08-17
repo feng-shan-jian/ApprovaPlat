@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,148 +17,170 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfSqlDataSource;
+import com.ruoyi.flowable.runtime.WorkflowConnectorMetrics;
 import com.ruoyi.flowable.service.model.WorkflowSqlDataSourceService;
-import com.ruoyi.flowable.service.process.WorkflowConnectorInvocationService;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * SQL 连接器部署冻结、安全门禁和主库事务执行测试。
+ * SQL 连接器的 Flowable Job、事务和外库幂等写契约测试。
  */
 class WorkflowSqlConnectorTest
 {
     private JdbcDataSource primaryDataSource;
-    private JdbcTemplate jdbc;
+    private JdbcDataSource externalDataSource;
+    private JdbcTemplate primaryJdbc;
+    private JdbcTemplate externalJdbc;
     private WorkflowSqlDataSourceService dataSourceService;
-    private WorkflowConnectorInvocationService invocationService;
+    private WorkflowSqlSecretResolver secretResolver;
+    private SimpleMeterRegistry meterRegistry;
     private WorkflowSqlConnector connector;
 
     /**
-     * 创建独立数据库、受控目录替身和真实 JDBC 执行链。
-     * @return void，初始化后每个测试拥有独立主库
+     * 创建相互隔离的主库、外库和真实 JDBC 执行链。
+     * @return void，每个测试使用清空后的目标表
      */
     @BeforeEach
     void setUp()
     {
-        primaryDataSource = new JdbcDataSource();
-        primaryDataSource.setURL("jdbc:h2:mem:workflow_sql_connector;MODE=MySQL;DB_CLOSE_DELAY=-1");
-        jdbc = new JdbcTemplate(primaryDataSource);
-        jdbc.execute("drop table if exists wf_sql_it_target");
-        jdbc.execute("create table wf_sql_it_target (request_id varchar(64) primary key, result_value varchar(64))");
-        jdbc.update("insert into wf_sql_it_target(request_id, result_value) values (?, ?)",
-                "req-1", "before");
+        primaryDataSource = dataSource("workflow_sql_primary");
+        externalDataSource = dataSource("workflow_sql_external");
+        primaryJdbc = initialize(primaryDataSource);
+        externalJdbc = initialize(externalDataSource);
         dataSourceService = mock(WorkflowSqlDataSourceService.class);
-        invocationService = mock(WorkflowConnectorInvocationService.class);
+        secretResolver = mock(WorkflowSqlSecretResolver.class);
+        when(secretResolver.requireJdbcUrl("WORKFLOW_SQL_JDBC_URL_TEST"))
+                .thenReturn(externalDataSource.getURL());
+        when(secretResolver.requireUsername("WORKFLOW_SQL_USERNAME_TEST")).thenReturn("sa");
+        when(secretResolver.requirePassword("WORKFLOW_SQL_PASSWORD_TEST")).thenReturn("");
+        meterRegistry = new SimpleMeterRegistry();
         connector = new WorkflowSqlConnector(primaryDataSource, dataSourceService,
-                new WorkflowSqlTemplateValidator(), new WorkflowSqlSecretResolver(),
-                invocationService);
+                new WorkflowSqlTemplateValidator(), secretResolver,
+                new WorkflowConnectorMetrics(meterRegistry));
     }
 
     /**
-     * 验证部署冻结数据源修订、AST 操作、表清单和摘要，不写入凭据正文。
-     * @return void，冻结配置缺字段或包含明文凭据时测试失败
+     * 验证主库 SQL 作为异步 ServiceTask 仍复用 Flowable 所在 Spring 事务并可整体回滚。
+     * @return void，连接器绕开主事务或未写受控结果变量时测试失败
      * @throws Exception JSON 解析失败
      */
     @Test
-    void freezesExactPrimaryDataSourceRevision() throws Exception
-    {
-        WfSqlDataSource source = source("PRIMARY");
-        when(dataSourceService.lockEnabledForDeployment("approva.primary"))
-                .thenReturn(source);
-
-        String frozen = connector.freezeConfig(config(
-                "update wf_sql_it_target set result_value = :resultValue "
-                        + "where request_id = :requestId"), false);
-        JsonNode node = JsonMapper.shared().readTree(frozen);
-
-        assertThat(node.path("operation").asText()).isEqualTo("UPDATE");
-        assertThat(node.path("tables").get(0).asText()).isEqualTo("wf_sql_it_target");
-        assertThat(node.path("dataSourceSnapshot").path("revisionNo").asInt()).isEqualTo(3);
-        assertThat(frozen).doesNotContain("password", "jdbc:h2:");
-    }
-
-    /**
-     * 验证主库 SQL 复用 Spring 事务连接，回滚时业务写入不泄漏。
-     * @return void，连接器绕开主事务或变量映射漂移时测试失败
-     * @throws Exception JSON 解析失败
-     */
-    @Test
-    void participatesInPrimarySpringTransactionAndRollsBack() throws Exception
+    void participatesInPrimaryFlowableTransactionAndRollsBack() throws Exception
     {
         when(dataSourceService.lockEnabledForDeployment("approva.primary"))
                 .thenReturn(source("PRIMARY"));
         JsonNode frozen = JsonMapper.shared().readTree(connector.freezeConfig(config(
                 "update wf_sql_it_target set result_value = :resultValue "
-                        + "where request_id = :requestId"), false));
-        DelegateExecution execution = mock(DelegateExecution.class);
+                        + "where request_id = :requestId", null, true), true));
+        DelegateExecution execution = execution();
         when(execution.getVariable("requestId")).thenReturn("req-1");
         when(execution.getVariable("resultValue")).thenReturn("after");
-        WfDeployExtensionSnapshot snapshot = new WfDeployExtensionSnapshot();
 
         TransactionTemplate transaction = new TransactionTemplate(
                 new DataSourceTransactionManager(primaryDataSource));
         transaction.executeWithoutResult(status ->
         {
-            connector.execute(execution, snapshot, frozen);
+            connector.execute(execution, new WfDeployExtensionSnapshot(), frozen);
             status.setRollbackOnly();
         });
 
-        assertThat(jdbc.queryForObject(
+        assertThat(primaryJdbc.queryForObject(
                 "select result_value from wf_sql_it_target where request_id = 'req-1'",
                 String.class)).isEqualTo("before");
         verify(execution).setVariable("affected", 1);
     }
 
     /**
-     * 验证外库写入必须异步且 SQL 显式消费系统幂等键。
-     * @return void，不可重放副作用若可部署则测试失败
+     * 验证同一 Flowable execution 重试外库幂等 INSERT 时只保留一条业务唯一记录。
+     * @return void，第二次尝试产生重复副作用或失败时测试失败
+     * @throws Exception JSON 解析失败
      */
     @Test
-    void rejectsExternalWriteWithoutAsyncIdempotencyContract()
+    void retriesExternalIdempotentInsertWithoutDuplicateSideEffect() throws Exception
     {
         when(dataSourceService.lockEnabledForDeployment("approva.primary"))
                 .thenReturn(source("EXTERNAL"));
+        String sql = "insert into wf_sql_it_target(request_id, result_value) "
+                + "values (:idempotencyKey, :resultValue) "
+                + "on duplicate key update request_id = request_id";
+        JsonNode frozen = JsonMapper.shared().readTree(connector.freezeConfig(
+                config(sql, "request_id", false), true));
+        DelegateExecution execution = execution();
+        when(execution.getVariable("resultValue")).thenReturn("created");
 
+        connector.execute(execution, new WfDeployExtensionSnapshot(), frozen);
+        connector.execute(execution, new WfDeployExtensionSnapshot(), frozen);
+
+        assertThat(externalJdbc.queryForObject(
+                "select count(*) from wf_sql_it_target where result_value = 'created'",
+                Integer.class)).isEqualTo(1);
+        assertThat(meterRegistry.get("workflow.connector.attempts")
+                .tags("type", "sql", "result", "success").counter().count())
+                .isEqualTo(2.0D);
+    }
+
+    /**
+     * 验证同步节点、普通 UPDATE 和缺少 no-op 重复键分支的外库写都在部署前拒绝。
+     * @return void，任何非幂等写能够部署时测试失败
+     */
+    @Test
+    void rejectsSynchronousAndNonIdempotentExternalWrites()
+    {
+        when(dataSourceService.lockEnabledForDeployment("approva.primary"))
+                .thenReturn(source("EXTERNAL"));
+        assertThatThrownBy(() -> connector.freezeConfig(config(
+                "select result_value from wf_sql_it_target where request_id = :requestId",
+                null, true), false))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("必须启用进入前异步");
         assertThatThrownBy(() -> connector.freezeConfig(config(
                 "update wf_sql_it_target set result_value = :resultValue "
-                        + "where request_id = :requestId"), false))
+                        + "where request_id = :requestId", "request_id", true), true))
                 .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("必须异步");
+                .hasMessageContaining("只允许使用 idempotencyKey 的幂等 INSERT");
         assertThatThrownBy(() -> connector.freezeConfig(config(
-                "update wf_sql_it_target set result_value = :resultValue "
-                        + "where request_id = :requestId"), true))
+                "insert into wf_sql_it_target(request_id, result_value) "
+                        + "values (:idempotencyKey, :resultValue)", "request_id", false), true))
                 .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("idempotencyKey");
+                .hasMessageContaining("no-op 重复键分支");
     }
 
     /**
      * 构造作者 SQL 配置。
      * @param sql String，单条命名参数 SQL
+     * @param idempotencyColumn String，可空业务唯一列
+     * @param includeRequestId boolean，是否映射 requestId 参数
      * @return JsonNode，字段完整的作者配置
      */
-    private JsonNode config(String sql)
+    private JsonNode config(String sql, String idempotencyColumn, boolean includeRequestId)
     {
-        return JsonMapper.shared().createObjectNode()
+        var parameters = JsonMapper.shared().createObjectNode();
+        if (includeRequestId) parameters.put("requestId", "requestId");
+        if (sql.contains(":resultValue")) parameters.put("resultValue", "resultValue");
+        var config = JsonMapper.shared().createObjectNode()
                 .put("dataSourceKey", "approva.primary")
                 .put("sql", sql)
-                .set("parameters", JsonMapper.shared().createObjectNode()
-                        .put("requestId", "requestId")
-                        .put("resultValue", "resultValue"))
-                .put("resultVariable", "affected")
+                .set("parameters", parameters)
                 .put("maxRows", 100);
+        if (idempotencyColumn != null) config.put("idempotencyColumn", idempotencyColumn);
+        if (!sql.toLowerCase(java.util.Locale.ROOT).startsWith("insert"))
+        {
+            config.put("resultVariable", "affected");
+        }
+        return config;
     }
 
     /**
-     * 构造摘要完整的数据源当前修订。
+     * 创建摘要完整的数据源修订。
      * @param connectionType String，PRIMARY 或 EXTERNAL
-     * @return WfSqlDataSource，字段完整的数据源目录
+     * @return WfSqlDataSource，启用的数据源目录项
      */
     private WfSqlDataSource source(String connectionType)
     {
         WfSqlDataSource source = new WfSqlDataSource();
         source.setDataSourceId(8L);
         source.setDataSourceKey("approva.primary");
-        source.setDataSourceName("主业务库");
+        source.setDataSourceName("业务库");
         source.setConnectionType(connectionType);
         if ("EXTERNAL".equals(connectionType))
         {
@@ -172,5 +195,51 @@ class WorkflowSqlConnectorTest
         source.setStatus("ENABLED");
         source.setChecksum(WorkflowSqlDataSourceService.dataSourceChecksum(source));
         return source;
+    }
+
+    /**
+     * 创建固定流程身份的执行上下文。
+     * @return DelegateExecution，连接器运行参数
+     */
+    private DelegateExecution execution()
+    {
+        DelegateExecution execution = mock(DelegateExecution.class);
+        when(execution.getProcessInstanceId()).thenReturn("instance");
+        when(execution.getId()).thenReturn("execution");
+        when(execution.getCurrentActivityId()).thenReturn("sqlTask");
+        return execution;
+    }
+
+    /**
+     * 创建 MySQL 兼容 H2 数据源。
+     * @param name String，独立内存库名
+     * @return JdbcDataSource，可供 Spring JDBC 和 DriverManager 使用的数据源
+     */
+    private JdbcDataSource dataSource(String name)
+    {
+        JdbcDataSource dataSource = new JdbcDataSource();
+        dataSource.setURL("jdbc:h2:mem:" + name + ";MODE=MySQL;DB_CLOSE_DELAY=-1");
+        dataSource.setUser("sa");
+        dataSource.setPassword("");
+        return dataSource;
+    }
+
+    /**
+     * 重建测试目标表并写入主库基线记录。
+     * @param dataSource JdbcDataSource，待初始化数据库
+     * @return JdbcTemplate，绑定该数据库的查询入口
+     */
+    private JdbcTemplate initialize(JdbcDataSource dataSource)
+    {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        jdbc.execute("drop table if exists wf_sql_it_target");
+        jdbc.execute("create table wf_sql_it_target (request_id varchar(64) primary key, "
+                + "result_value varchar(64))");
+        if (dataSource == primaryDataSource)
+        {
+            jdbc.update("insert into wf_sql_it_target(request_id, result_value) values (?, ?)",
+                    "req-1", "before");
+        }
+        return jdbc;
     }
 }

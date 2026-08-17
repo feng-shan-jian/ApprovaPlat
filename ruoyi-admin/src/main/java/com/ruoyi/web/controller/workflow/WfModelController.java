@@ -39,6 +39,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowModelSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowModelUpdateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnValidationRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowModelExportView;
+import com.ruoyi.flowable.domain.vo.WorkflowModelSaveResult;
 import com.ruoyi.flowable.domain.vo.WorkflowModelView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.IWfCategoryService;
@@ -177,7 +178,7 @@ public class WfModelController extends BaseController
      * 原子保存模型 BPMN；已部署或历史版本由服务端自动创建新的最高版本。
      *
      * @param request WorkflowModelSaveRequest，模型主键、BPMN XML 和版本策略
-     * @return AjaxResult，包含实际保存模型主键的响应
+     * @return AjaxResult，包含实际保存模型主键、版本和 BPMN 摘要的响应
      */
     @PreAuthorize("@ss.hasPermi('workflow:model:save')")
     @Log(title = "保存流程模型", businessType = BusinessType.UPDATE,
@@ -185,8 +186,8 @@ public class WfModelController extends BaseController
     @PostMapping("/save")
     public AjaxResult save(@Valid @RequestBody WorkflowModelSaveRequest request)
     {
-        String savedModelId = modelService.saveModel(toModelDto(request));
-        return success(Map.of("modelId", savedModelId));
+        WorkflowModelSaveResult result = modelService.saveModel(toModelDto(request));
+        return success(result);
     }
 
     /**
@@ -370,7 +371,7 @@ public class WfModelController extends BaseController
     }
 
     /**
-     * 将设计保存请求映射为只含幂等键、模型主键和 BPMN 的领域 DTO。
+     * 将设计保存请求映射为只含内容基线、模型主键和 BPMN 的领域 DTO。
      *
      * @param request WorkflowModelSaveRequest，已通过 Web 校验的设计保存请求
      * @return WorkflowModelDto，模型服务保存参数
@@ -378,9 +379,9 @@ public class WfModelController extends BaseController
     private WorkflowModelDto toModelDto(WorkflowModelSaveRequest request)
     {
         WorkflowModelDto dto = new WorkflowModelDto();
-        dto.setSaveRequestId(request.requestId());
         dto.setModelId(request.modelId());
         dto.setBpmnXml(request.bpmnXml());
+        dto.setExpectedBpmnSha256(request.expectedBpmnSha256());
         dto.setNewVersion(request.newVersion());
         return dto;
     }

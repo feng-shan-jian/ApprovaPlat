@@ -1,9 +1,13 @@
 package com.ruoyi.web.controller.workflow;
 
+import java.time.LocalDateTime;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,11 +21,19 @@ import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
+import com.ruoyi.common.core.page.TableDataInfo;
+import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.flowable.domain.dto.WorkflowManualUrgeRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowNotificationPolicyRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowNotificationPreferenceRequest;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
+import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
+import com.ruoyi.flowable.service.notification.WorkflowManualUrgeService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationAdminService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationInboxService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationPolicyService;
 
 /**
  * 普通审批通知、偏好、策略、outbox 和人工催办正式 API。
@@ -31,16 +43,32 @@ import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 @RequestMapping("/workflow/notification")
 public class WfNotificationController extends BaseController
 {
-    private final WorkflowNotificationService notificationService;
+    private final WorkflowNotificationInboxService notificationInboxService;
+    private final WorkflowNotificationPolicyService notificationPolicyService;
+    private final WorkflowManualUrgeService manualUrgeService;
+    private final WorkflowNotificationOutboxService notificationOutboxService;
+    private final WorkflowNotificationAdminService notificationAdminService;
 
     /**
      * 创建审批通知 Controller。
-     * @param notificationService WorkflowNotificationService，通知领域服务
+     * @param notificationInboxService WorkflowNotificationInboxService，当前用户收件箱服务
+     * @param notificationPolicyService WorkflowNotificationPolicyService，通知偏好与策略服务
+     * @param manualUrgeService WorkflowManualUrgeService，人工催办业务服务
+     * @param notificationOutboxService WorkflowNotificationOutboxService，死信补偿状态服务
+     * @param notificationAdminService WorkflowNotificationAdminService，通知运维分页查询服务
      * @return void，构造后由 Spring 管理
      */
-    public WfNotificationController(WorkflowNotificationService notificationService)
+    public WfNotificationController(WorkflowNotificationInboxService notificationInboxService,
+            WorkflowNotificationPolicyService notificationPolicyService,
+            WorkflowManualUrgeService manualUrgeService,
+            WorkflowNotificationOutboxService notificationOutboxService,
+            WorkflowNotificationAdminService notificationAdminService)
     {
-        this.notificationService = notificationService;
+        this.notificationInboxService = notificationInboxService;
+        this.notificationPolicyService = notificationPolicyService;
+        this.manualUrgeService = manualUrgeService;
+        this.notificationOutboxService = notificationOutboxService;
+        this.notificationAdminService = notificationAdminService;
     }
 
     /**
@@ -54,7 +82,7 @@ public class WfNotificationController extends BaseController
     public AjaxResult inbox(@RequestParam(defaultValue = "ALL") String readStatus,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit)
     {
-        return success(notificationService.inbox(readStatus, limit));
+        return success(notificationInboxService.inbox(readStatus, limit));
     }
 
     /**
@@ -66,7 +94,7 @@ public class WfNotificationController extends BaseController
     @PostMapping("/inbox/{notificationId}/read")
     public AjaxResult markRead(@PathVariable @Positive long notificationId)
     {
-        notificationService.markRead(notificationId);
+        notificationInboxService.markRead(notificationId);
         return success();
     }
 
@@ -78,7 +106,7 @@ public class WfNotificationController extends BaseController
     @PostMapping("/inbox/read-all")
     public AjaxResult markAllRead()
     {
-        return success(notificationService.markAllRead());
+        return success(notificationInboxService.markAllRead());
     }
 
     /**
@@ -89,7 +117,7 @@ public class WfNotificationController extends BaseController
     @GetMapping("/preference")
     public AjaxResult preference()
     {
-        return success(notificationService.preference());
+        return success(notificationPolicyService.preference());
     }
 
     /**
@@ -101,20 +129,20 @@ public class WfNotificationController extends BaseController
     @PutMapping("/preference")
     public AjaxResult savePreference(@Valid @RequestBody WorkflowNotificationPreferenceRequest request)
     {
-        return success(notificationService.savePreference(request));
+        return success(notificationPolicyService.savePreference(request));
     }
 
     /**
      * 由发起人或具备跨实例权限的管理员催办真实活动待办。
      * @param request WorkflowManualUrgeRequest，流程实例和原因
-     * @return AjaxResult，data 为审计和投递数量
+     * @return AjaxResult，data 为催办事件键、真实接收人数和 outbox 数量
      */
     @PreAuthorize("@ss.hasPermi('workflow:notification:urge')")
     @Log(title = "人工催办审批", businessType = BusinessType.INSERT)
     @PostMapping("/urge")
     public AjaxResult urge(@Valid @RequestBody WorkflowManualUrgeRequest request)
     {
-        return success(notificationService.urge(request));
+        return success(manualUrgeService.urge(request));
     }
 
     /**
@@ -125,7 +153,7 @@ public class WfNotificationController extends BaseController
     @GetMapping("/policies")
     public AjaxResult policies()
     {
-        return success(notificationService.policies());
+        return success(notificationPolicyService.policies());
     }
 
     /**
@@ -138,18 +166,46 @@ public class WfNotificationController extends BaseController
     @PutMapping("/policies")
     public AjaxResult savePolicy(@Valid @RequestBody WorkflowNotificationPolicyRequest request)
     {
-        return success(notificationService.savePolicy(request));
+        return success(notificationPolicyService.savePolicy(request));
     }
 
     /**
-     * 查询脱敏通知 outbox 运维状态。
-     * @return AjaxResult，data 为最近 500 条记录
+     * 分页查询脱敏通知 outbox 运维状态。
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @param status String，通知投递状态
+     * @param sourceType String，APPROVAL、SLA 或 BPMN_EVENT
+     * @param eventType String，通知业务事件类型
+     * @param channel String，INBOX、EMAIL 或 SMS
+     * @param keyword String，outbox、来源、流程、任务或错误码关键字
+     * @param beginTime LocalDateTime，创建时间下界
+     * @param endTime LocalDateTime，创建时间上界
+     * @return TableDataInfo，若依标准 rows、total 分页响应
      */
     @PreAuthorize("@ss.hasPermi('workflow:notification:audit')")
     @GetMapping("/outbox")
-    public AjaxResult outbox()
+    public TableDataInfo outbox(
+            @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int pageNum,
+            @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页记录数必须大于0")
+            @Max(value = 100, message = "每页记录数不能超过100") int pageSize,
+            @RequestParam(required = false)
+            @Pattern(regexp = "PENDING|RETRYING|DELIVERING|PROCESSED|DEAD_LETTER|CANCELLED",
+                    message = "通知状态不受支持") String status,
+            @RequestParam(required = false)
+            @Pattern(regexp = "APPROVAL|SLA|BPMN_EVENT", message = "通知来源类型不受支持") String sourceType,
+            @RequestParam(required = false)
+            @Pattern(regexp = "[A-Z][A-Z0-9_]{1,39}", message = "通知事件类型不受支持") String eventType,
+            @RequestParam(required = false)
+            @Pattern(regexp = "INBOX|EMAIL|SMS", message = "通知通道不受支持") String channel,
+            @RequestParam(required = false) @Size(max = 128, message = "检索关键字过长") String keyword,
+            @RequestParam(required = false)
+            @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,
+            @RequestParam(required = false)
+            @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return success(notificationService.outbox());
+        return toTableData(notificationAdminService.listOutbox(
+                new WorkflowOperationsQuery.NotificationOutbox(status, sourceType, eventType,
+                        channel, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
     /**
@@ -162,7 +218,20 @@ public class WfNotificationController extends BaseController
     @PostMapping("/outbox/{outboxId}/compensate")
     public AjaxResult compensate(@PathVariable @Positive long outboxId)
     {
-        notificationService.compensate(outboxId);
+        notificationOutboxService.compensate(outboxId);
         return success();
+    }
+
+    /**
+     * 将领域分页结果转换为若依标准列表响应。
+     * @param page WorkflowPageResult&lt;?&gt;，服务层当前页和总数
+     * @return TableDataInfo，包含 code、msg、rows 和 total
+     */
+    private TableDataInfo toTableData(WorkflowPageResult<?> page)
+    {
+        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
+        result.setCode(HttpStatus.SUCCESS);
+        result.setMsg("查询成功");
+        return result;
     }
 }

@@ -226,6 +226,19 @@ class WorkflowExtensionDeploymentServiceTest
     @Test
     void rejectsUnregisteredFieldsAndInvalidConfigurationBeforePersistence()
     {
+        ServiceTask arbitraryClass = controlledTask("arbitrary-class");
+        arbitraryClass.setImplementationType(ImplementationType.IMPLEMENTATION_TYPE_CLASS);
+        arbitraryClass.setImplementation("com.example.UnreviewedDelegate");
+        assertBadRequest(document(process("expense", arbitraryClass)),
+                "不允许未登记 Java Class 或表达式");
+
+        ServiceTask arbitraryExpression = controlledTask("arbitrary-expression");
+        arbitraryExpression.setImplementationType(
+                ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION);
+        arbitraryExpression.setImplementation("${unreviewedBean}");
+        assertBadRequest(document(process("expense", arbitraryExpression)),
+                "不允许未登记 Java Class 或表达式");
+
         ServiceTask injected = controlledTask("unsafe");
         injected.getFieldExtensions().add(field("arbitraryBean", "danger"));
         assertBadRequest(document(process("expense", injected)), "未注册的字段注入");

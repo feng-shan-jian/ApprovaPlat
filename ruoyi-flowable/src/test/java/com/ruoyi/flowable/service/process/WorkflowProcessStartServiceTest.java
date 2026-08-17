@@ -271,18 +271,17 @@ class WorkflowProcessStartServiceTest
     }
 
     /**
-     * 验证部署快照授权发生在引擎写入前，成功审计发生在实例与附件绑定后。
+     * 验证部署快照授权发生在引擎写入前，成功事实只由 Flowable 实例和附件表达。
      *
-     * @return void，人工发起授权或审计顺序变化时测试失败
+     * @return void，人工发起授权晚于任一引擎副作用时测试失败
      */
     @Test
-    void authorizesHumanStartBeforeEngineAndAuditsAfterSuccessfulSideEffects()
+    void authorizesHumanStartBeforeEngineSideEffects()
     {
         ProcessDefinition definition = stubSelectedAndActiveDefinition();
         stubStartForm();
-        WfDeployParticipantRule rule = new WfDeployParticipantRule();
         when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
-                .thenReturn(rule);
+                .thenReturn(new WfDeployParticipantRule());
         ProcessInstance startedInstance = processInstance("instance-scope-42");
         when(runtimeService.startProcessInstanceById(
                 eq(DEFINITION_ID), eq("expense-42"), anyMap()))
@@ -297,12 +296,10 @@ class WorkflowProcessStartServiceTest
                 eq(DEFINITION_ID), eq("expense-42"), anyMap());
         lifecycle.verify(attachmentService).bindStartAttachments(
                 "7", "instance-scope-42", "start", Map.of());
-        lifecycle.verify(participantRuleRuntimeService).recordStartAllowed(
-                rule, definition, "instance-scope-42", "7");
     }
 
     /**
-     * 验证未命中部署发起范围时不创建实例、不绑定附件且不写成功审计。
+     * 验证未命中部署发起范围时不创建实例或绑定附件。
      *
      * @return void，拒绝请求产生任何业务副作用时测试失败
      */
@@ -323,14 +320,12 @@ class WorkflowProcessStartServiceTest
         verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
         verify(attachmentService, never()).bindStartAttachments(
                 anyString(), anyString(), anyString(), anyMap());
-        verify(participantRuleRuntimeService, never()).recordStartAllowed(
-                any(), any(), anyString(), anyString());
     }
 
     /**
-     * 验证草稿提交按当前身份重新校验发起范围，拒绝时不产生引擎、附件或成功审计副作用。
+     * 验证草稿提交按当前身份重新校验发起范围，拒绝时不产生引擎或附件副作用。
      *
-     * @return void，失权草稿仍创建实例或记录成功审计时测试失败
+     * @return void，失权草稿仍创建实例或绑定附件时测试失败
      */
     @Test
     void rejectsDraftStartScopeBeforeEngineWrite()
@@ -349,22 +344,19 @@ class WorkflowProcessStartServiceTest
         verify(runtimeService, never()).startProcessInstanceById(any(), any(), anyMap());
         verify(attachmentService, never()).bindDraftStartAttachments(
                 anyString(), anyString(), anyString(), anyString(), anyMap());
-        verify(participantRuleRuntimeService, never()).recordStartAllowed(
-                any(), any(), anyString(), anyString());
     }
 
     /**
-     * 验证草稿提交成功审计严格发生在发起范围校验、实例创建和附件绑定之后。
+     * 验证草稿提交的发起范围校验严格发生在实例创建和附件绑定之前。
      *
-     * @return void，草稿成功审计提前或缺失时测试失败
+     * @return void，草稿授权晚于任一引擎副作用时测试失败
      */
     @Test
-    void auditsDraftStartOnlyAfterInstanceAndAttachmentBindingSucceed()
+    void authorizesDraftStartBeforeInstanceAndAttachmentSideEffects()
     {
         ProcessDefinition definition = stubDraftDefinition();
-        WfDeployParticipantRule rule = new WfDeployParticipantRule();
         when(participantRuleRuntimeService.assertCanStart(any(), eq(definition)))
-                .thenReturn(rule);
+                .thenReturn(new WfDeployParticipantRule());
         ProcessInstance startedInstance = processInstance("instance-draft-42");
         when(runtimeService.startProcessInstanceById(
                 eq(DEFINITION_ID), eq("expense-draft-42"), anyMap()))
@@ -380,8 +372,6 @@ class WorkflowProcessStartServiceTest
                 eq(DEFINITION_ID), eq("expense-draft-42"), anyMap());
         lifecycle.verify(attachmentService).bindDraftStartAttachments(
                 "7", "draft-42", "instance-draft-42", "start", Map.of());
-        lifecycle.verify(participantRuleRuntimeService).recordStartAllowed(
-                rule, definition, "instance-draft-42", "7");
         InOrder lockOrder = inOrder(definitionLockMapper, runtimeService);
         lockOrder.verify(definitionLockMapper).selectDeploymentIdForUpdate(DEPLOYMENT_ID);
         lockOrder.verify(definitionLockMapper)

@@ -44,9 +44,6 @@ import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 @Service
 public class WorkflowAttachmentService
 {
-    /** guard 主键 0 专用于跨用户全局容量与磁盘预留串行化，不能映射为正式用户。 */
-    static final long GLOBAL_QUOTA_GUARD_ID = 0L;
-
     /** 单次表单提交允许引用的附件总数，防止跨字段放大查询和变量正文。 */
     static final int MAX_FORM_ATTACHMENTS = 100;
 
@@ -110,11 +107,9 @@ public class WorkflowAttachmentService
         Long ownerUserId = currentUserId();
         long declaredFileSize = requireDeclaredFileSize(file);
 
-        // 身份解析会在锁前查询用户主数据；READ_COMMITTED 保证等待全局锁后重新读取上一事务已提交的附件。
-        // 固定先锁迁移期预置的全局 guard、再锁用户 guard，跨用户上传也必须在落盘前完成容量预留。
-        LockedQuotaUsage quotaUsage = lockAndLoadQuotaUsage(ownerUserId);
-        requireTemporaryQuota(quotaUsage.temporaryUsage(), declaredFileSize);
-        requireGlobalQuota(quotaUsage.undeletedTotalBytes(), declaredFileSize);
+        // 身份解析会在锁前查询用户主数据；READ_COMMITTED 保证等待同用户 guard 后读取已提交占用。
+        WorkflowAttachmentQuotaUsage quotaUsage = lockAndLoadQuotaUsage(ownerUserId);
+        requireTemporaryQuota(quotaUsage, declaredFileSize);
         requireDiskReservation(declaredFileSize);
         StoredAttachmentFile stored = storage.store(file);
         registerRollbackFileCompensation(stored.storageKey());
@@ -122,8 +117,7 @@ public class WorkflowAttachmentService
         {
             // 以服务端实际读取值复核数据库容量，并确认落盘后仍满足磁盘低水位。
             // 任一步失败都进入同一补偿分支，避免无事务代理的直接调用遗留孤儿文件。
-            requireTemporaryQuota(quotaUsage.temporaryUsage(), stored.fileSize());
-            requireGlobalQuota(quotaUsage.undeletedTotalBytes(), stored.fileSize());
+            requireTemporaryQuota(quotaUsage, stored.fileSize());
             requireDiskLowWatermark();
 
             LocalDateTime now = LocalDateTime.now();
@@ -172,23 +166,15 @@ public class WorkflowAttachmentService
     }
 
     /**
-     * 按固定顺序锁定预置全局 guard 和用户 guard，再读取全局及用户私有存储占用。
-     * 全局行只能由数据库迁移创建；运行时不先执行 INSERT IGNORE，避免并发事务在
-     * 同一全局行上先取得共享锁、再升级 FOR UPDATE 排他锁时形成死锁。
+     * 幂等创建并锁定当前用户 guard，再读取该用户仍占用私有存储的临时附件。
+     * 不同用户使用不同主键，因此可以并行上传；同一用户仍由行锁阻止配额超卖。
      *
      * @param ownerUserId Long，事务内核验的当前用户主键
-     * @return LockedQuotaUsage，全局上传串行锁内的当前数据库占用
+     * @return WorkflowAttachmentQuotaUsage，同用户行锁内的当前临时附件占用
      */
-    private LockedQuotaUsage lockAndLoadQuotaUsage(Long ownerUserId)
+    private WorkflowAttachmentQuotaUsage lockAndLoadQuotaUsage(Long ownerUserId)
     {
-        // 第一条配额 SQL 必须直接锁定同一固定全局行，任何用户 guard 写入都在该锁之后执行。
-        Long lockedGlobalGuard = attachmentMapper.selectGlobalQuotaGuardForUpdate();
-        if (!Long.valueOf(GLOBAL_QUOTA_GUARD_ID).equals(lockedGlobalGuard))
-        {
-            throw new ServiceException("工作流附件全局配额锁数据异常", HttpStatus.ERROR);
-        }
-
-        // 持有全局排他锁后才允许首次创建用户 guard，保证首次创建和后续锁定不会跨事务竞争。
+        // 重复键更新会直接持有同一 guard 行的排他锁，首次创建竞争也按用户串行，避免 INSERT IGNORE 锁升级死锁。
         attachmentMapper.ensureOwnerQuotaGuard(ownerUserId);
         Long lockedOwnerUserId = attachmentMapper.selectOwnerQuotaGuardForUpdate(ownerUserId);
         if (!ownerUserId.equals(lockedOwnerUserId))
@@ -201,12 +187,7 @@ public class WorkflowAttachmentService
         {
             throw new ServiceException("工作流附件配额统计异常", HttpStatus.ERROR);
         }
-        Long undeletedTotalBytes = attachmentMapper.selectUndeletedTotalBytes();
-        if (undeletedTotalBytes == null || undeletedTotalBytes < 0L)
-        {
-            throw new ServiceException("工作流附件全局容量统计异常", HttpStatus.ERROR);
-        }
-        return new LockedQuotaUsage(usage, undeletedTotalBytes);
+        return usage;
     }
 
     /**
@@ -231,25 +212,7 @@ public class WorkflowAttachmentService
     }
 
     /**
-     * 在全局 guard 行锁内校验全部未物理删除附件不会突破正式容量上限。
-     *
-     * @param undeletedTotalBytes long，TEMP、BOUND、EXPIRED、DELETED 未物理删除字节数
-     * @param incomingBytes long，本次待落盘或服务端实际写入字节数
-     * @return void，超过全局容量时抛出稳定 409 业务异常
-     */
-    private void requireGlobalQuota(long undeletedTotalBytes, long incomingBytes)
-    {
-        long maxTotalBytes = properties.getMaxTotalBytes();
-        if (undeletedTotalBytes > maxTotalBytes
-                || incomingBytes > maxTotalBytes - undeletedTotalBytes)
-        {
-            throw new ServiceException("工作流附件全局存储容量已达到上限",
-                    HttpStatus.CONFLICT);
-        }
-    }
-
-    /**
-     * 在全局 guard 行锁内为待写文件预留磁盘空间，禁止跨用户同时消耗同一低水位。
+     * 在落盘前核对文件系统可用空间；不同用户不再因全局数据库锁而串行。
      *
      * @param incomingBytes long，multipart 容器报告的已接收文件字节数
      * @return void，当前可用空间无法同时容纳文件和低水位时抛出 507
@@ -336,7 +299,7 @@ public class WorkflowAttachmentService
         }
         if (attachment.status() == WorkflowAttachmentStatus.DELETED)
         {
-            deleteStorageAndRecord(attachment);
+            cleanupOwnedDeletedAttachment(normalizedId);
             return;
         }
         if (attachment.status() != WorkflowAttachmentStatus.TEMP)
@@ -349,7 +312,47 @@ public class WorkflowAttachmentService
         {
             throw stateConflict();
         }
-        deleteStorageAndRecord(attachment);
+        cleanupOwnedDeletedAttachment(normalizedId);
+    }
+
+    /**
+     * 为已逻辑删除的本人附件领取单行租约，并在事务外完成对象删除和按令牌回写。
+     * 其他节点已经持有有效租约时直接返回，逻辑删除结果仍保持成功且由调度器继续处理。
+     *
+     * @param attachmentId String，已迁移为 DELETED 的附件 UUID
+     * @return void，物理删除失败时已持久化重试并继续抛出存储异常
+     */
+    private void cleanupOwnedDeletedAttachment(String attachmentId)
+    {
+        String claimToken = UUID.randomUUID().toString();
+        if (attachmentMapper.claimDeletedAttachment(attachmentId, claimToken,
+                cleanupLeaseSeconds()) != 1)
+        {
+            return;
+        }
+        WfAttachment claimed = attachmentMapper.selectById(attachmentId);
+        if (claimed == null || !claimToken.equals(claimed.cleanupClaimToken())
+                || claimed.status() != WorkflowAttachmentStatus.DELETED)
+        {
+            throw new ServiceException("工作流附件清理领取结果异常", HttpStatus.ERROR);
+        }
+        try
+        {
+            deleteClaimedStorage(claimed);
+            completeClaimedCleanup(claimed);
+        }
+        catch (WorkflowAttachmentStorageOperationException failure)
+        {
+            try
+            {
+                persistCleanupRetry(claimed);
+            }
+            catch (RuntimeException retryFailure)
+            {
+                failure.addSuppressed(retryFailure);
+            }
+            throw failure;
+        }
     }
 
     /**
@@ -649,64 +652,52 @@ public class WorkflowAttachmentService
     }
 
     /**
-     * 清理一批到期临时附件及历史物理删除失败记录，单条失败不会阻塞其他候选。
-     * 本方法只允许由持有 MySQL advisory lock 专用会话的协调器，在独立 REQUIRES_NEW
-     * 业务事务中调用；锁会话覆盖业务事务提交或回滚边界，但不参与 Mapper 数据读写。
+     * 在短事务中锁定并领取一批到期附件；到期 TEMP 会在同一更新中迁移为 EXPIRED。
+     * 候选查询使用 SKIP LOCKED，其他节点已锁定或仍持有有效租约的行不会阻塞本批次。
      *
-     * @return WorkflowAttachmentCleanupResult，本轮完成数和保留待重试的单条失败数
+     * @param claimToken String，协调器生成的规范 UUID 批次令牌
+     * @return List&lt;WfAttachment&gt;，已写入相同 token/lease 的正式候选快照
      */
-    WorkflowAttachmentCleanupResult cleanupExpiredBatch()
+    List<WfAttachment> claimCleanupBatch(String claimToken)
     {
-        List<WfAttachment> candidates = attachmentMapper.selectCleanupCandidates(
-                properties.getCleanupBatchSize());
+        String normalizedToken = requireCleanupClaimToken(claimToken);
+        List<WfAttachment> candidates = attachmentMapper
+                .selectCleanupCandidatesForUpdate(properties.getCleanupBatchSize());
         if (candidates == null || candidates.isEmpty())
         {
-            return new WorkflowAttachmentCleanupResult(0, 0);
+            return List.of();
         }
-        int cleaned = 0;
-        int failures = 0;
-        for (WfAttachment candidate : candidates)
+        List<String> attachmentIds = candidates.stream()
+                .map(WfAttachment::attachmentId)
+                .toList();
+        if (attachmentMapper.claimCleanupCandidates(attachmentIds, normalizedToken,
+                cleanupLeaseSeconds()) != attachmentIds.size())
         {
-            try
-            {
-                if (candidate.status() == WorkflowAttachmentStatus.TEMP
-                        && attachmentMapper.markExpired(candidate.attachmentId()) != 1)
-                {
-                    // 流程绑定可能已先取得状态，不能删除竞争失败记录对应的文件。
-                    continue;
-                }
-                if (candidate.status() != WorkflowAttachmentStatus.TEMP
-                        && candidate.status() != WorkflowAttachmentStatus.EXPIRED
-                        && candidate.status() != WorkflowAttachmentStatus.DELETED)
-                {
-                    continue;
-                }
-                if (deleteStorageAndRecord(candidate))
-                {
-                    cleaned++;
-                }
-            }
-            catch (WorkflowAttachmentStorageOperationException failure)
-            {
-                // 先持久化退避再继续其他候选；若重试状态也无法写入，则整批回滚并由调度器报警。
-                try
-                {
-                    if (persistCleanupRetry(candidate))
-                    {
-                        failures++;
-                    }
-                }
-                catch (RuntimeException retryPersistenceFailure)
-                {
-                    failure.addSuppressed(retryPersistenceFailure);
-                    throw failure;
-                }
-                log.error("工作流附件物理清理失败，attachmentId={}，errorCode={}，failureType={}",
-                        candidate.attachmentId(), CLEANUP_FAILURE_ERROR_CODE,
-                        failure.getClass().getSimpleName());
-            }
+            throw new ServiceException("工作流附件清理批次领取失败", HttpStatus.ERROR);
         }
-        return new WorkflowAttachmentCleanupResult(cleaned, failures);
+        List<WfAttachment> claimed = attachmentMapper.selectClaimedByToken(normalizedToken);
+        if (claimed == null || claimed.size() != attachmentIds.size()
+                || claimed.stream().anyMatch(item ->
+                        !normalizedToken.equals(item.cleanupClaimToken())
+                        || item.cleanupLeaseUntil() == null
+                        || (item.status() != WorkflowAttachmentStatus.EXPIRED
+                            && item.status() != WorkflowAttachmentStatus.DELETED)))
+        {
+            throw new ServiceException("工作流附件清理批次领取结果异常", HttpStatus.ERROR);
+        }
+        return List.copyOf(claimed);
+    }
+
+    /**
+     * 在数据库事务外幂等删除已领取附件的私有对象。
+     *
+     * @param attachment WfAttachment，带有当前批次 token/lease 的领取快照
+     * @return void，存储依赖失败时抛出 WorkflowAttachmentStorageOperationException
+     */
+    void deleteClaimedStorage(WfAttachment attachment)
+    {
+        requireClaimedCleanupAttachment(attachment);
+        storage.delete(attachment.storageKey());
     }
 
     /**
@@ -715,8 +706,9 @@ public class WorkflowAttachmentService
      * @param attachment WfAttachment，本轮清理失败的候选快照
      * @return boolean，仍存在待重试记录时为 true，并发方已完成物理清理时为 false
      */
-    private boolean persistCleanupRetry(WfAttachment attachment)
+    boolean persistCleanupRetry(WfAttachment attachment)
     {
+        requireClaimedCleanupAttachment(attachment);
         int expectedRetryCount = attachment.cleanupRetryCount();
         if (expectedRetryCount < 0)
         {
@@ -725,12 +717,13 @@ public class WorkflowAttachmentService
         LocalDateTime nextRetryTime = LocalDateTime.now().plus(
                 cleanupRetryDelay(expectedRetryCount));
         if (attachmentMapper.scheduleCleanupRetry(attachment.attachmentId(),
-                expectedRetryCount, nextRetryTime, CLEANUP_FAILURE_ERROR_CODE) == 1)
+                attachment.cleanupClaimToken(), expectedRetryCount, nextRetryTime,
+                CLEANUP_FAILURE_ERROR_CODE) == 1)
         {
             return true;
         }
 
-        // 0 行可能是手工删除已完成或并发方已调度更高版本，必须读取正式行后判定。
+        // 0 行可能是租约过期后被重领或其他节点已完成，旧令牌不得覆盖新所有者状态。
         WfAttachment latest = attachmentMapper.selectById(attachment.attachmentId());
         if (latest != null && latest.storageDeletedTime() != null
                 && (latest.status() == WorkflowAttachmentStatus.EXPIRED
@@ -738,14 +731,10 @@ public class WorkflowAttachmentService
         {
             return false;
         }
-        if (latest != null && latest.storageDeletedTime() == null
-                && (latest.status() == WorkflowAttachmentStatus.EXPIRED
-                    || latest.status() == WorkflowAttachmentStatus.DELETED)
-                && latest.cleanupRetryCount() > expectedRetryCount
-                && latest.cleanupNextRetryTime() != null
-                && StringUtils.hasText(latest.cleanupLastErrorCode()))
+        if (latest != null && !attachment.cleanupClaimToken()
+                .equals(latest.cleanupClaimToken()))
         {
-            return true;
+            return false;
         }
         throw new ServiceException("工作流附件清理重试状态写入失败", HttpStatus.ERROR);
     }
@@ -771,20 +760,21 @@ public class WorkflowAttachmentService
     }
 
     /**
-     * 幂等删除私有文件并记录完成时间，兼容手工删除与清理调度同时处理同一附件。
+     * 在短事务中仅按领取令牌记录对象删除完成并清空租约和重试状态。
      *
-     * @param attachment WfAttachment，已进入 EXPIRED 或 DELETED 生命周期的候选元数据
-     * @return boolean，本次首次写入 storage_deleted_time 返回 true，并发方已写入返回 false
+     * @param attachment WfAttachment，已在事务外完成对象删除的领取快照
+     * @return boolean，本令牌首次完成返回 true；租约被重领或其他节点已完成返回 false
      */
-    private boolean deleteStorageAndRecord(WfAttachment attachment)
+    boolean completeClaimedCleanup(WfAttachment attachment)
     {
-        storage.delete(attachment.storageKey());
-        if (attachmentMapper.markStorageDeleted(attachment.attachmentId()) == 1)
+        requireClaimedCleanupAttachment(attachment);
+        if (attachmentMapper.markStorageDeleted(attachment.attachmentId(),
+                attachment.cleanupClaimToken()) == 1)
         {
             return true;
         }
 
-        // 0 行既可能是异常状态，也可能是并发清理已提交；必须读取正式结果后再决定。
+        // token 不再匹配表示租约已过期并被其他节点重领，旧执行者只能放弃回写。
         WfAttachment latest = attachmentMapper.selectById(attachment.attachmentId());
         if (latest != null && latest.storageDeletedTime() != null
                 && (latest.status() == WorkflowAttachmentStatus.EXPIRED
@@ -792,7 +782,64 @@ public class WorkflowAttachmentService
         {
             return false;
         }
+        if (latest != null && !attachment.cleanupClaimToken()
+                .equals(latest.cleanupClaimToken()))
+        {
+            return false;
+        }
         throw new ServiceException("工作流附件清理状态写入失败", HttpStatus.ERROR);
+    }
+
+    /**
+     * 校验清理候选携带完整且合法的领取状态，禁止无令牌对象删除或状态回写。
+     *
+     * @param attachment WfAttachment，协调器处理的领取快照
+     * @return void，领取状态不完整时抛出稳定服务异常
+     */
+    private void requireClaimedCleanupAttachment(WfAttachment attachment)
+    {
+        if (attachment == null
+                || !ATTACHMENT_ID_PATTERN.matcher(attachment.attachmentId()).matches()
+                || !ATTACHMENT_ID_PATTERN.matcher(
+                        String.valueOf(attachment.cleanupClaimToken())).matches()
+                || attachment.cleanupLeaseUntil() == null
+                || (attachment.status() != WorkflowAttachmentStatus.EXPIRED
+                    && attachment.status() != WorkflowAttachmentStatus.DELETED)
+                || attachment.storageDeletedTime() != null)
+        {
+            throw new ServiceException("工作流附件清理领取状态异常", HttpStatus.ERROR);
+        }
+    }
+
+    /**
+     * 校验协调器生成的领取令牌为规范 UUID。
+     *
+     * @param claimToken String，待持久化的清理批次令牌
+     * @return String，原样返回的规范令牌
+     */
+    private String requireCleanupClaimToken(String claimToken)
+    {
+        if (!StringUtils.hasText(claimToken)
+                || !ATTACHMENT_ID_PATTERN.matcher(claimToken).matches())
+        {
+            throw new ServiceException("工作流附件清理令牌格式非法", HttpStatus.ERROR);
+        }
+        return claimToken;
+    }
+
+    /**
+     * 将已校验的清理租约转换为 MySQL TIMESTAMPADD 使用的正数秒数。
+     *
+     * @return long，至少一秒且不超过一天的租约秒数
+     */
+    private long cleanupLeaseSeconds()
+    {
+        long leaseSeconds = properties.getCleanupLeaseDuration().toSeconds();
+        if (leaseSeconds <= 0L)
+        {
+            throw new ServiceException("工作流附件清理租约配置异常", HttpStatus.ERROR);
+        }
+        return leaseSeconds;
     }
 
     /**
@@ -1365,14 +1412,4 @@ public class WorkflowAttachmentService
         return new ServiceException("工作流附件状态已变化或已过期", HttpStatus.CONFLICT);
     }
 
-    /**
-     * 已在同一数据库事务内锁定的用户临时占用与全局未删除字节快照。
-     *
-     * @param temporaryUsage WorkflowAttachmentQuotaUsage，当前用户仍占用 TEMP 配额的聚合值
-     * @param undeletedTotalBytes long，全部用户所有未物理删除附件的累计字节数
-     */
-    private record LockedQuotaUsage(WorkflowAttachmentQuotaUsage temporaryUsage,
-            long undeletedTotalBytes)
-    {
-    }
 }

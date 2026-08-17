@@ -12,6 +12,7 @@ import java.nio.file.StandardOpenOption;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -289,29 +290,21 @@ class WorkflowAttachmentIT
     }
 
     /**
-     * 验证两个不同用户的并发上传共享同一全局容量锁，容量只能被一个事务提交占用。
-     * @return void，跨用户并发可超卖全局容量或清理后残留测试数据时测试失败
+     * 验证两个不同用户的并发上传互不争用 guard，两个事务都能独立提交。
+     * @return void，跨用户仍被全局串行或清理后残留测试数据时测试失败
      * @throws Exception 并发线程等待、结果收集或磁盘残留核验失败
      */
     @Test
-    void serializesDifferentUsersByGlobalCapacityQuota() throws Exception
+    void allowsDifferentUsersToUploadConcurrently() throws Exception
     {
         JdbcTemplate jdbcTemplate = new JdbcTemplate(dynamicDataSource);
         int originalMaxTemporaryCount = attachmentProperties.getMaxTemporaryCount();
         long originalMaxTemporaryBytes = attachmentProperties.getMaxTemporaryBytes();
-        long originalMaxTotalBytes = attachmentProperties.getMaxTotalBytes();
         try
         {
             insertTestUsers(jdbcTemplate);
-            // 全局容量必须计入库内既有正式占用，本竞态只额外开放一个四字节文件的容量。
-            long existingLiveBytes = jdbcTemplate.queryForObject(
-                    "select coalesce(sum(file_size), 0) from wf_attachment "
-                            + "where storage_deleted_time is null",
-                    Long.class);
-            long expectedLiveBytes = Math.addExact(existingLiveBytes, 4L);
             attachmentProperties.setMaxTemporaryCount(100);
             attachmentProperties.setMaxTemporaryBytes(1024L);
-            attachmentProperties.setMaxTotalBytes(expectedLiveBytes);
 
             List<ConcurrentUploadOutcome> outcomes = uploadConcurrently(
                     List.of("own1".getBytes(StandardCharsets.UTF_8),
@@ -326,45 +319,24 @@ class WorkflowAttachmentIT
                     .filter(java.util.Objects::nonNull)
                     .toList();
 
-            assertThat(successfulAttachments).hasSize(1);
-            assertThat(failures).singleElement().isInstanceOfSatisfying(
-                    ServiceException.class, exception ->
-                    {
-                        assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT);
-                        assertThat(exception.getMessage())
-                                .isEqualTo("工作流附件全局存储容量已达到上限");
-                    });
+            assertThat(successfulAttachments).hasSize(2);
+            assertThat(failures).isEmpty();
             assertThat(jdbcTemplate.queryForObject(
                     "select coalesce(sum(file_size), 0) from wf_attachment "
-                            + "where storage_deleted_time is null",
-                    Long.class)).isEqualTo(expectedLiveBytes);
+                            + "where storage_deleted_time is null "
+                            + "and owner_user_id in (?, ?)",
+                    Long.class, OWNER_USER_ID, FOREIGN_USER_ID)).isEqualTo(8L);
             assertThat(jdbcTemplate.queryForObject(
                     "select count(distinct owner_user_id) from wf_attachment "
                             + "where owner_user_id in (?, ?)",
-                    Long.class, OWNER_USER_ID, FOREIGN_USER_ID)).isEqualTo(1L);
-
-            // 失败上传的事务会整体回滚其用户 guard，只允许全局 guard 与成功用户 guard 留存。
-            Long successfulOwnerUserId = jdbcTemplate.queryForObject(
-                    "select owner_user_id from wf_attachment "
-                            + "where storage_deleted_time is null "
-                            + "and owner_user_id in (?, ?)",
-                    Long.class, OWNER_USER_ID, FOREIGN_USER_ID);
-            assertThat(successfulOwnerUserId).isIn(OWNER_USER_ID, FOREIGN_USER_ID);
-            long failedOwnerUserId = successfulOwnerUserId == OWNER_USER_ID
-                    ? FOREIGN_USER_ID : OWNER_USER_ID;
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_attachment_quota_guard where owner_user_id = 0",
-                    Long.class)).isEqualTo(1L);
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_attachment_quota_guard where owner_user_id = ?",
-                    Long.class, successfulOwnerUserId)).isEqualTo(1L);
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_attachment_quota_guard where owner_user_id = ?",
-                    Long.class, failedOwnerUserId)).isZero();
+                    Long.class, OWNER_USER_ID, FOREIGN_USER_ID)).isEqualTo(2L);
             assertThat(jdbcTemplate.queryForObject(
                     "select count(*) from wf_attachment_quota_guard "
-                            + "where owner_user_id in (0, ?, ?)",
+                            + "where owner_user_id in (?, ?)",
                     Long.class, OWNER_USER_ID, FOREIGN_USER_ID)).isEqualTo(2L);
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_attachment_quota_guard where owner_user_id = 0",
+                    Long.class)).isZero();
         }
         finally
         {
@@ -377,7 +349,6 @@ class WorkflowAttachmentIT
             {
                 attachmentProperties.setMaxTemporaryCount(originalMaxTemporaryCount);
                 attachmentProperties.setMaxTemporaryBytes(originalMaxTemporaryBytes);
-                attachmentProperties.setMaxTotalBytes(originalMaxTotalBytes);
             }
 
             assertThat(jdbcTemplate.queryForObject(
@@ -389,7 +360,84 @@ class WorkflowAttachmentIT
                     Long.class, OWNER_USER_ID, FOREIGN_USER_ID)).isZero();
             assertThat(jdbcTemplate.queryForObject(
                     "select count(*) from wf_attachment_quota_guard where owner_user_id = 0",
-                    Long.class)).isEqualTo(1L);
+                    Long.class)).isZero();
+            assertThat(countStoredRegularFiles()).isZero();
+        }
+    }
+
+    /**
+     * 验证 MySQL 清理租约在有效期内不可抢占、过期后可重领，旧 token 不能覆盖新领取者。
+     * @return void，租约重领、完成条件或重试条件任一失效时测试失败
+     * @throws IOException 测试独占附件目录残留核验失败
+     */
+    @Test
+    void reclaimsExpiredCleanupLeaseAndRejectsStaleToken() throws IOException
+    {
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dynamicDataSource);
+        String attachmentId = null;
+        String storageKey = null;
+        try
+        {
+            insertTestUsers(jdbcTemplate);
+            setSecurityContextUser(OWNER_USER_ID);
+            WorkflowAttachmentView uploaded = attachmentService.uploadTemporary(
+                    "files", new MockMultipartFile("file", "lease.txt",
+                            "text/plain", "lease".getBytes(StandardCharsets.UTF_8)));
+            attachmentId = uploaded.attachmentId();
+            storageKey = queryStorageKey(jdbcTemplate, attachmentId);
+            assertThat(jdbcTemplate.update(
+                    "update wf_attachment set attachment_status = 'DELETED', "
+                            + "cleanup_claim_token = null, cleanup_lease_until = null "
+                            + "where attachment_id = ? and attachment_status = 'TEMP'",
+                    attachmentId)).isEqualTo(1);
+
+            String firstToken = UUID.randomUUID().toString();
+            String secondToken = UUID.randomUUID().toString();
+            assertThat(attachmentMapper.claimDeletedAttachment(
+                    attachmentId, firstToken, 300L)).isEqualTo(1);
+            assertThat(attachmentMapper.claimDeletedAttachment(
+                    attachmentId, secondToken, 300L)).isZero();
+            assertThat(attachmentMapper.selectById(attachmentId).cleanupClaimToken())
+                    .isEqualTo(firstToken);
+
+            // 模拟领取节点在对象删除前退出；租约过期后另一节点必须能够接管同一行。
+            assertThat(jdbcTemplate.update(
+                    "update wf_attachment set cleanup_lease_until = "
+                            + "timestampadd(second, -1, current_timestamp(3)) "
+                            + "where attachment_id = ? and cleanup_claim_token = ?",
+                    attachmentId, firstToken)).isEqualTo(1);
+            assertThat(attachmentMapper.claimDeletedAttachment(
+                    attachmentId, secondToken, 300L)).isEqualTo(1);
+            var reclaimed = attachmentMapper.selectById(attachmentId);
+            assertThat(reclaimed.cleanupClaimToken()).isEqualTo(secondToken);
+            assertThat(reclaimed.cleanupLeaseUntil()).isAfter(LocalDateTime.now());
+
+            assertThat(attachmentMapper.markStorageDeleted(
+                    attachmentId, firstToken)).isZero();
+            assertThat(attachmentMapper.scheduleCleanupRetry(
+                    attachmentId, firstToken, 0,
+                    LocalDateTime.now().plusMinutes(1),
+                    "attachment_storage_cleanup_failed")).isZero();
+
+            attachmentStorage.delete(storageKey);
+            assertThat(attachmentMapper.markStorageDeleted(
+                    attachmentId, secondToken)).isEqualTo(1);
+            var completed = attachmentMapper.selectById(attachmentId);
+            assertThat(completed.storageDeletedTime()).isNotNull();
+            assertThat(completed.cleanupClaimToken()).isNull();
+            assertThat(completed.cleanupLeaseUntil()).isNull();
+        }
+        finally
+        {
+            SecurityContextHolder.clearContext();
+            if (storageKey != null)
+            {
+                attachmentStorage.delete(storageKey);
+            }
+            cleanupConcurrentQuotaTestData(jdbcTemplate);
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from wf_attachment where owner_user_id in (?, ?)",
+                    Long.class, OWNER_USER_ID, FOREIGN_USER_ID)).isZero();
             assertThat(countStoredRegularFiles()).isZero();
         }
     }
@@ -662,6 +710,7 @@ class WorkflowAttachmentIT
             jdbcTemplate.update(
                     "delete from wf_attachment_quota_guard where owner_user_id in (?, ?)",
                     OWNER_USER_ID, FOREIGN_USER_ID);
+            deleteNotificationFactsForTestUsers(jdbcTemplate);
             jdbcTemplate.update("delete from sys_user where user_id in (?, ?)",
                     OWNER_USER_ID, FOREIGN_USER_ID);
 
@@ -798,7 +847,7 @@ class WorkflowAttachmentIT
                     .isEqualTo(1L);
             assertThat(jdbcTemplate.queryForObject(
                     "select count(*) from wf_attachment_quota_guard where owner_user_id = 0",
-                    Long.class)).isEqualTo(1L);
+                    Long.class)).isZero();
         }
         finally
         {
@@ -822,7 +871,7 @@ class WorkflowAttachmentIT
                             + "where owner_user_id = ?", Long.class, OWNER_USER_ID)).isZero();
             assertThat(jdbcTemplate.queryForObject(
                     "select count(*) from wf_attachment_quota_guard where owner_user_id = 0",
-                    Long.class)).isEqualTo(1L);
+                    Long.class)).isZero();
             assertThat(jdbcTemplate.queryForObject(
                     "select count(*) from sys_user where user_id in (?, ?)", Long.class,
                     OWNER_USER_ID, FOREIGN_USER_ID)).isZero();
@@ -937,7 +986,23 @@ class WorkflowAttachmentIT
                 OWNER_USER_ID, FOREIGN_USER_ID);
         jdbcTemplate.update("delete from wf_attachment_quota_guard where owner_user_id in (?, ?)",
                 OWNER_USER_ID, FOREIGN_USER_ID);
+        deleteNotificationFactsForTestUsers(jdbcTemplate);
         jdbcTemplate.update("delete from sys_user where user_id in (?, ?)",
+                OWNER_USER_ID, FOREIGN_USER_ID);
+    }
+
+    /**
+     * 删除附件流程为两个固定测试用户生成的通知投影，解除正式用户外键后再清理账号。
+     * @param jdbcTemplate JdbcTemplate，隔离 schema 的真实 JDBC 客户端
+     * @return void，删除范围严格限定 OWNER_USER_ID 与 FOREIGN_USER_ID
+     */
+    private void deleteNotificationFactsForTestUsers(JdbcTemplate jdbcTemplate)
+    {
+        jdbcTemplate.update("delete from wf_notification_inbox "
+                        + "where recipient_user_id in (?, ?)",
+                OWNER_USER_ID, FOREIGN_USER_ID);
+        jdbcTemplate.update("delete from wf_notification_outbox "
+                        + "where recipient_user_id in (?, ?)",
                 OWNER_USER_ID, FOREIGN_USER_ID);
     }
 

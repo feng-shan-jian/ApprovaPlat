@@ -16,7 +16,7 @@ public class WorkflowAttachmentCleanupScheduler
     /**
      * 创建附件清理调度器。
      *
-     * @param cleanupCoordinator WorkflowAttachmentCleanupCoordinator，事务连接级清理锁协调器
+     * @param cleanupCoordinator WorkflowAttachmentCleanupCoordinator，数据库领取租约清理协调器
      * @param cleanupMetrics WorkflowAttachmentCleanupMetrics，固定低基数清理指标
      * @return 无返回值，构造后由 Spring 调度基础设施管理
      */
@@ -40,9 +40,7 @@ public class WorkflowAttachmentCleanupScheduler
     {
         try
         {
-            cleanupCoordinator.cleanupIfLockAcquired().ifPresentOrElse(
-                    cleanupMetrics::recordCompleted,
-                    cleanupMetrics::recordLockNotAcquired);
+            cleanupMetrics.recordCompleted(cleanupCoordinator.cleanupBatch());
         }
         catch (RuntimeException failure)
         {

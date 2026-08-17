@@ -133,7 +133,7 @@ function handleRegister() {
         }).catch(() => {})
       }).catch(() => {
         loading.value = false
-        if (captchaEnabled) {
+        if (captchaEnabled.value) {
           getCode()
         }
       })

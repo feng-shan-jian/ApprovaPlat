@@ -20,7 +20,7 @@ import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WorkflowRuntimeTaskMapper;
 import com.ruoyi.system.mapper.SysUserMapper;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 
 /**
  * 为任务写动作准备并持久化抄送记录，确保身份校验、引擎动作和业务表写入共享事务。
@@ -47,7 +47,7 @@ public class WorkflowTaskCopyService
     private final SysUserMapper sysUserMapper;
 
     /** 抄送创建通知服务；生产容器注入，旧直接构造单元测试可为空。 */
-    private WorkflowNotificationService notificationService;
+    private WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建任务抄送服务。
@@ -75,11 +75,11 @@ public class WorkflowTaskCopyService
 
     /**
      * 注入抄送事实通知服务，使 wf_copy 和 COPY_CREATED outbox 在同一事务内提交。
-     * @param notificationService WorkflowNotificationService，正式通知 outbox 服务
+     * @param notificationService WorkflowNotificationRegistrar，正式通知 outbox 服务
      * @return void，生产 Spring 容器完成注入
      */
     @Autowired
-    public void setNotificationService(WorkflowNotificationService notificationService)
+    public void setNotificationService(WorkflowNotificationRegistrar notificationService)
     {
         this.notificationService = notificationService;
     }

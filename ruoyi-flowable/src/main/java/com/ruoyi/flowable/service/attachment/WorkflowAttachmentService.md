@@ -17,11 +17,17 @@
 
 ## 上传配额
 
-每个用户默认最多保留 100 个 TEMP 附件，仍占用私有磁盘的 TEMP 累计上限为 512 MiB，单文件上限为 50 MiB。全部尚未完成物理删除的附件共享 50 GiB 全局容量，附件卷必须保留至少 1 GiB 可用空间。对应配置为 `flowable.attachment.max-temporary-count`、`max-temporary-bytes`、`max-size`、`max-total-bytes` 和 `min-free-bytes`。Spring multipart 同步限制为 50 MiB 单文件和 55 MiB 单请求，额外 5 MiB 用于 multipart 边界与字段开销。
+每个用户默认最多保留 100 个 TEMP 附件，仍占用私有磁盘的 TEMP 累计上限为 512 MiB，单文件上限为 50 MiB。附件卷必须保留至少 1 GiB 可用空间。对应配置为 `flowable.attachment.max-temporary-count`、`max-temporary-bytes`、`max-size` 和 `min-free-bytes`。Spring multipart 同步限制为 50 MiB 单文件和 55 MiB 单请求，额外 5 MiB 用于 multipart 边界与字段开销。
 
-数据库迁移会幂等预置 `wf_attachment_quota_guard.owner_user_id = 0` 固定全局行。上传事务第一条配额语句直接以 `FOR UPDATE` 锁定该行，再在全局锁内幂等创建并锁定当前用户行，然后依次读取用户 TEMP 占用和全局占用；运行时不会通过 `INSERT IGNORE` 首次创建全局行，避免并发事务发生共享锁到排他锁的升级死锁。上传入口显式使用 `READ_COMMITTED`：身份解析虽然会在等待全局锁前查询用户、角色和部门，但获得锁后的每条配额聚合都会读取最新已提交版本，因此后续事务能够看到前一上传事务写入的 `wf_attachment`。全局统计包含 `TEMP`、`BOUND`、`EXPIRED`、`DELETED` 中 `storage_deleted_time IS NULL` 的全部字节；用户统计包含全部 `TEMP`，以及尚未完成物理删除的 `EXPIRED` / `DELETED`。固定锁顺序让同用户和跨用户并发都不会超卖容量，附件转为 `BOUND` 后只释放用户 TEMP 配额，不释放全局容量。
+上传事务幂等创建并以 `FOR UPDATE` 锁定当前 `owner_user_id` 的 `wf_attachment_quota_guard` 行，再读取该用户仍占用磁盘的临时附件数量与字节数。相同用户的并发上传严格串行核算，不同用户使用不同主键行，可以并行提交，不存在 `owner_user_id = 0` 全局 guard。上传入口使用 `READ_COMMITTED`，获得用户行锁后的聚合会读取前一同用户事务已经提交的最新版本。用户统计包含 `TEMP`、`DRAFT`，以及尚未完成物理删除的 `EXPIRED` / `DELETED`；附件转为 `BOUND` 后释放用户临时配额。
 
-multipart 声明大小只用于落盘前快速拒绝。持有全局锁期间还会确认“待写字节 + 磁盘低水位”可用，文件写入后再使用服务端实际字节复核用户配额、全局容量和低水位；任一复核、数据库写入或事务提交失败都会补偿删除刚写入的私有文件。全局 guard 和用户 guard 在正常生命周期内保留，不以删除行的方式释放配额，避免删除与等待上传事务产生锁竞态。
+multipart 声明大小只用于落盘前快速拒绝。持有用户行锁期间还会确认“待写字节 + 磁盘低水位”可用，文件写入后再使用服务端实际字节复核用户配额和低水位；任一复核、数据库写入或事务提交失败都会补偿删除刚写入的私有文件。用户 guard 在用户生命周期内保留，不以删除行的方式释放配额，避免删除与等待上传事务产生锁竞态。
+
+## 清理领取与租约
+
+清理调度不使用 MySQL `GET_LOCK`。每轮先在短 `REQUIRES_NEW` 事务中通过 `FOR UPDATE SKIP LOCKED` 领取有界候选，将同一批次 UUID 写入 `cleanup_claim_token`，并将 `cleanup_lease_until` 设置为 `flowable.attachment.cleanup-lease-duration`，默认 5 分钟。到期 `TEMP` 在领取更新中同步迁移为 `EXPIRED`。有效租约不会被其他节点选择；租约过期后其他节点可以写入新 token 重领，旧执行者后续完成或重试更新因 token 不匹配返回 0 行，不会覆盖新所有者。
+
+对象存储删除位于数据库事务之外。删除成功后使用新的短事务按 token 写入 `storage_deleted_time` 并清空租约；删除失败时使用新的短事务按 token 写入指数退避时间、稳定错误码并释放租约。清理 token 和租约只服务于执行中协调，完成或进入重试后立即清空；附件元数据及 `storage_deleted_time` 按流程审计保留策略继续保留。
 
 ## 表单绑定
 
@@ -53,7 +59,7 @@ API 元数据可以返回 `processInstanceId`、`taskId`、`nodeKey`，用于前
 
 ## 事务约束
 
-临时上传的身份校验、全局和用户 guard 行锁、两级配额查询、私有文件写入及附件元数据插入由同一个 Spring `READ_COMMITTED` 事务管理。文件系统不参与数据库事务，因此服务会同时注册事务回滚补偿，并在代理外直接调用或元数据写入异常时立即删除本次文件。
+临时上传的身份校验、用户 guard 行锁、用户配额查询、私有文件写入及附件元数据插入由同一个 Spring `READ_COMMITTED` 事务管理。文件系统不参与数据库事务，因此服务会同时注册事务回滚补偿，并在代理外直接调用或元数据写入异常时立即删除本次文件。定时清理则刻意把数据库领取、对象删除、完成或重试拆成短事务、事务外 IO、短事务三个阶段。
 
 prepare 阶段使用 `SELECT ... FOR UPDATE` 锁定稳定排序的附件行。发起或任务完成在附件状态迁移前重新读取完整物理正文并核对数据库记录的大小和 SHA-256；同长度正文替换也会拒绝绑定。上述操作必须在 `WorkflowEngineOperations.writeAsCurrentUser(...)` 的同一事务中依次完成投影、意见、附件条件更新和 Flowable 状态变更。任一附件缺失、摘要不一致或绑定失败都会回滚前序附件、comment、变量、任务完成或流程发起。
 

@@ -2,7 +2,7 @@
 
 ## 作用
 
-`WorkflowProcessDraftService` 负责本人申请草稿的创建、查询、CAS 保存、删除、附件对账、审计和正式提交。草稿正文、成员选择和附件均写入正式业务表，不使用浏览器本地状态。
+`WorkflowProcessDraftService` 负责本人申请草稿的创建、查询、CAS 保存、删除、附件对账和正式提交。`wf_process_draft` 只保存当前状态与 revision，用户操作审计复用 Controller 上的 `sys_oper_log`，不再持久化无读取入口的草稿流水。草稿正文、成员选择和附件均写入正式业务表，不使用浏览器本地状态。
 
 ## 创建与部署删除并发契约
 
@@ -11,12 +11,12 @@
 1. 重新查询客户端选择的真实流程定义并取得 `deploymentId`。
 2. 对 `ACT_RE_DEPLOYMENT.ID_` 执行 `SELECT ... FOR UPDATE`，确认部署仍存在并持锁到事务结束。
 3. 在部署锁保护下读取不可变部署表单快照，校验草稿字段和发起成员。
-4. 写入 `wf_process_draft`、草稿审计和附件关系。
+4. 写入 `wf_process_draft` 当前状态和附件关系。
 
 `WorkflowDeploymentService` 删除部署时使用同一个 Mapper 和同一部署主键先取得行锁，再检查 ACTIVE 草稿。锁顺序统一为 `ACT_RE_DEPLOYMENT` 后 `wf_process_draft`：
 
 - 创建先取得锁并提交时，删除等待后通过草稿当前读发现 ACTIVE 引用并返回 409。
-- 删除先取得锁并提交时，创建等待后无法再次取得部署行，返回 `DRAFT_DEFINITION_UNAVAILABLE`，不会写入草稿、审计或附件。
+- 删除先取得锁并提交时，创建等待后无法再次取得部署行，返回 `DRAFT_DEFINITION_UNAVAILABLE`，不会写入草稿或附件。
 
 ## 状态约束
 

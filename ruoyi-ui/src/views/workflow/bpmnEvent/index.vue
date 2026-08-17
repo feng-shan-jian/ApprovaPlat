@@ -40,6 +40,14 @@
       </el-tab-pane>
 
       <el-tab-pane label="运行审计" name="audit">
+        <el-form inline class="page-filter">
+          <el-form-item label="检索"><el-input v-model="auditQuery.keyword" clearable placeholder="审计、实例、编码或节点" @keyup.enter="queryAudit" /></el-form-item>
+          <el-form-item label="类型"><el-select v-model="auditQuery.eventType" clearable placeholder="全部类型"><el-option label="业务错误" value="ERROR" /><el-option label="业务升级" value="ESCALATION" /></el-select></el-form-item>
+          <el-form-item label="状态"><el-select v-model="auditQuery.status" clearable placeholder="全部状态"><el-option label="已捕获" value="CAPTURED" /><el-option label="未匹配" value="UNMATCHED" /></el-select></el-form-item>
+          <el-form-item label="来源"><el-input v-model="auditQuery.sourceType" clearable placeholder="来源类型" /></el-form-item>
+          <el-form-item label="触发时间"><el-date-picker v-model="auditQuery.timeRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" /></el-form-item>
+          <el-form-item><el-button type="primary" icon="Search" @click="queryAudit">查询</el-button><el-button icon="Refresh" @click="resetAuditQuery">重置</el-button></el-form-item>
+        </el-form>
         <el-table v-loading="loading.audit" :data="auditRows">
           <el-table-column label="时间" width="170"><template #default="scope">{{ parseTime(scope.row.createTime) }}</template></el-table-column>
           <el-table-column label="类型" width="100" prop="eventType" />
@@ -53,6 +61,7 @@
           <el-table-column label="边界" min-width="130" prop="boundaryEventId" />
           <el-table-column label="摘要" min-width="180" prop="messageSummary" show-overflow-tooltip />
         </el-table>
+        <pagination v-show="auditTotal > 0" :total="auditTotal" v-model:page="auditQuery.pageNum" v-model:limit="auditQuery.pageSize" @pagination="loadAudit" />
       </el-tab-pane>
 
       <el-tab-pane label="我的通知" name="notifications">
@@ -92,6 +101,12 @@
       </el-tab-pane>
 
       <el-tab-pane label="SLA 执行" name="slaExecutions">
+        <el-form inline class="page-filter">
+          <el-form-item label="检索"><el-input v-model="slaExecutionQuery.keyword" clearable placeholder="执行、实例、任务、节点或办理人" @keyup.enter="querySlaExecutions" /></el-form-item>
+          <el-form-item label="状态"><el-select v-model="slaExecutionQuery.status" clearable placeholder="全部状态"><el-option label="进行中" value="ACTIVE" /><el-option label="已完成" value="COMPLETED" /><el-option label="已升级" value="ESCALATED" /></el-select></el-form-item>
+          <el-form-item label="开始时间"><el-date-picker v-model="slaExecutionQuery.timeRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" /></el-form-item>
+          <el-form-item><el-button type="primary" icon="Search" @click="querySlaExecutions">查询</el-button><el-button icon="Refresh" @click="resetSlaExecutionQuery">重置</el-button></el-form-item>
+        </el-form>
         <el-table v-loading="loading.slaExecutions" :data="slaExecutions">
           <el-table-column label="实例" min-width="180" prop="processInstanceId" show-overflow-tooltip />
           <el-table-column label="任务" min-width="170" prop="taskId" show-overflow-tooltip />
@@ -101,9 +116,16 @@
           <el-table-column label="首次提醒" width="170"><template #default="scope">{{ parseTime(scope.row.reminderDueAt) }}</template></el-table-column>
           <el-table-column label="升级时间" width="170"><template #default="scope">{{ parseTime(scope.row.escalationDueAt) }}</template></el-table-column>
         </el-table>
+        <pagination v-show="slaExecutionTotal > 0" :total="slaExecutionTotal" v-model:page="slaExecutionQuery.pageNum" v-model:limit="slaExecutionQuery.pageSize" @pagination="loadSlaExecutions" />
       </el-tab-pane>
 
       <el-tab-pane label="SLA 审计" name="slaAudit">
+        <el-form inline class="page-filter">
+          <el-form-item label="检索"><el-input v-model="slaAuditQuery.keyword" clearable placeholder="审计、执行、实例、任务或操作人" @keyup.enter="querySlaAudit" /></el-form-item>
+          <el-form-item label="动作"><el-select v-model="slaAuditQuery.actionType" clearable placeholder="全部动作"><el-option v-for="action in slaActionOptions" :key="action" :label="action" :value="action" /></el-select></el-form-item>
+          <el-form-item label="动作时间"><el-date-picker v-model="slaAuditQuery.timeRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" /></el-form-item>
+          <el-form-item><el-button type="primary" icon="Search" @click="querySlaAudit">查询</el-button><el-button icon="Refresh" @click="resetSlaAuditQuery">重置</el-button></el-form-item>
+        </el-form>
         <el-table v-loading="loading.slaAudit" :data="slaAuditRows">
           <el-table-column label="时间" width="170"><template #default="scope">{{ parseTime(scope.row.createTime) }}</template></el-table-column>
           <el-table-column label="动作" width="110" prop="actionType" />
@@ -114,6 +136,7 @@
           <el-table-column label="操作人" width="110" prop="actorUserId" />
           <el-table-column label="摘要" min-width="220" prop="detail" show-overflow-tooltip />
         </el-table>
+        <pagination v-show="slaAuditTotal > 0" :total="slaAuditTotal" v-model:page="slaAuditQuery.pageNum" v-model:limit="slaAuditQuery.pageSize" @pagination="loadSlaAudit" />
       </el-tab-pane>
 
       <el-tab-pane label="SLA 通知" name="slaNotifications">
@@ -219,13 +242,19 @@ const loading = reactive({
 const saving = ref(false)
 const codes = ref([])
 const auditRows = ref([])
+const auditTotal = ref(0)
+const auditQuery = reactive({ pageNum: 1, pageSize: 20, keyword: '', status: '', eventType: '', sourceType: '', timeRange: [] })
 const notifications = ref([])
 const dialogOpen = ref(false)
 const formRef = ref(null)
 const form = reactive(emptyForm())
 const calendars = ref([])
 const slaExecutions = ref([])
+const slaExecutionTotal = ref(0)
+const slaExecutionQuery = reactive({ pageNum: 1, pageSize: 20, keyword: '', status: '', timeRange: [] })
 const slaAuditRows = ref([])
+const slaAuditTotal = ref(0)
+const slaAuditQuery = reactive({ pageNum: 1, pageSize: 20, keyword: '', actionType: '', timeRange: [] })
 const slaNotifications = ref([])
 const calendarDialogOpen = ref(false)
 const calendarSaving = ref(false)
@@ -247,6 +276,7 @@ const weekOptions = Object.freeze([
   { label: '周日', value: 7 }
 ])
 const dayTypeOptions = Object.freeze([{ label: '节假日', value: false }, { label: '补班', value: true }])
+const slaActionOptions = Object.freeze(['CREATE', 'ASSIGN', 'REMINDER', 'ESCALATE', 'COMPLETE', 'PAUSE', 'RESUME'])
 const calendarRules = {
   calendarKey: [
     { required: true, message: '稳定编码不能为空', trigger: 'blur' },
@@ -300,10 +330,14 @@ async function loadCodes() {
   try { codes.value = (await listBpmnEventCodes()).data || [] } finally { loading.codes = false }
 }
 
-/** @returns {Promise<void>} 加载专用运行审计。 */
+/** @returns {Promise<void>} 加载当前筛选页的专用运行审计。 */
 async function loadAudit() {
   loading.audit = true
-  try { auditRows.value = (await listBpmnEventAudit()).data || [] } finally { loading.audit = false }
+  try {
+    const response = await listBpmnEventAudit(buildPagedQuery(auditQuery))
+    auditRows.value = Array.isArray(response.rows) ? response.rows : []
+    auditTotal.value = Number(response.total || 0)
+  } finally { loading.audit = false }
 }
 
 /** @returns {Promise<void>} 加载当前用户站内通知。 */
@@ -324,6 +358,26 @@ function responseRows(response) {
 }
 
 /**
+ * 将页面分页筛选对象转换为后端查询参数。
+ * @param {object} query 包含 pageNum、pageSize、timeRange 和领域字段的页面状态。
+ * @returns {object} 拆分 beginTime/endTime 且去除空白字段的请求参数。
+ */
+function buildPagedQuery(query) {
+  const [beginTime, endTime] = query.timeRange || []
+  return Object.fromEntries(Object.entries({ ...query, timeRange: undefined, beginTime, endTime })
+    .filter(([, value]) => value !== '' && value !== undefined && value !== null))
+}
+
+/** @returns {void} BPMN 审计回到第一页并查询。 */
+function queryAudit() { auditQuery.pageNum = 1; loadAudit() }
+
+/** @returns {void} 恢复 BPMN 审计默认筛选。 */
+function resetAuditQuery() {
+  Object.assign(auditQuery, { pageNum: 1, pageSize: 20, keyword: '', status: '', eventType: '', sourceType: '', timeRange: [] })
+  loadAudit()
+}
+
+/**
  * 加载全部正式业务日历供管理和状态切换。
  * @returns {Promise<void>} 请求结束后解除页签加载状态。
  */
@@ -338,7 +392,11 @@ async function loadCalendars() {
  */
 async function loadSlaExecutions() {
   loading.slaExecutions = true
-  try { slaExecutions.value = responseRows(await listSlaExecutions()) } finally { loading.slaExecutions = false }
+  try {
+    const response = await listSlaExecutions(buildPagedQuery(slaExecutionQuery))
+    slaExecutions.value = Array.isArray(response.rows) ? response.rows : []
+    slaExecutionTotal.value = Number(response.total || 0)
+  } finally { loading.slaExecutions = false }
 }
 
 /**
@@ -347,7 +405,29 @@ async function loadSlaExecutions() {
  */
 async function loadSlaAudit() {
   loading.slaAudit = true
-  try { slaAuditRows.value = responseRows(await listSlaAudits()) } finally { loading.slaAudit = false }
+  try {
+    const response = await listSlaAudits(buildPagedQuery(slaAuditQuery))
+    slaAuditRows.value = Array.isArray(response.rows) ? response.rows : []
+    slaAuditTotal.value = Number(response.total || 0)
+  } finally { loading.slaAudit = false }
+}
+
+/** @returns {void} SLA 执行回到第一页并查询。 */
+function querySlaExecutions() { slaExecutionQuery.pageNum = 1; loadSlaExecutions() }
+
+/** @returns {void} 恢复 SLA 执行默认筛选。 */
+function resetSlaExecutionQuery() {
+  Object.assign(slaExecutionQuery, { pageNum: 1, pageSize: 20, keyword: '', status: '', timeRange: [] })
+  loadSlaExecutions()
+}
+
+/** @returns {void} SLA 审计回到第一页并查询。 */
+function querySlaAudit() { slaAuditQuery.pageNum = 1; loadSlaAudit() }
+
+/** @returns {void} 恢复 SLA 审计默认筛选。 */
+function resetSlaAuditQuery() {
+  Object.assign(slaAuditQuery, { pageNum: 1, pageSize: 20, keyword: '', actionType: '', timeRange: [] })
+  loadSlaAudit()
 }
 
 /**
@@ -582,6 +662,9 @@ onActivated(loadActiveTab)
 .page-heading h2 { margin: 0; font-size: 22px; }
 .page-heading p { margin: 5px 0 0; color: var(--el-text-color-secondary); font-size: 13px; }
 code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; }
+.page-filter { margin: 8px 0 4px; }
+.page-filter :deep(.el-input), .page-filter :deep(.el-select) { width: 220px; }
+.page-filter :deep(.el-date-editor) { width: 360px; }
 .bpmn-event-page :deep(.el-select), .bpmn-event-page :deep(.el-segmented) { width: 100%; }
 .calendar-form-grid {
   display: grid;

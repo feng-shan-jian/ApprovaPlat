@@ -1,7 +1,13 @@
 package com.ruoyi.web.controller.workflow;
 
+import java.time.LocalDateTime;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,14 +16,19 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.annotation.RepeatSubmit;
+import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
+import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.flowable.domain.dto.WorkflowBusinessCalendarRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowEnabledStatusRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
+import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 
@@ -108,20 +119,53 @@ public class WfTaskSlaController extends BaseController
         return success();
     }
 
-    /** @return AjaxResult，最近 500 条正式 SLA 执行状态。 */
+    /**
+     * 分页查询正式 SLA 当前执行状态。
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @param status String，ACTIVE、COMPLETED 或 ESCALATED
+     * @param keyword String，执行、实例、任务、节点或办理人关键字
+     * @param beginTime LocalDateTime，开始时间下界
+     * @param endTime LocalDateTime，开始时间上界
+     * @return TableDataInfo，若依标准 rows、total 分页响应
+     */
     @PreAuthorize("@ss.hasPermi('workflow:sla:audit')")
     @GetMapping("/executions")
-    public AjaxResult listExecutions()
+    public TableDataInfo listExecutions(
+            @RequestParam(defaultValue = "1") @Min(1) int pageNum,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize,
+            @RequestParam(required = false) @Pattern(regexp = "ACTIVE|COMPLETED|ESCALATED") String status,
+            @RequestParam(required = false) @Size(max = 128) String keyword,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return success(slaRuntimeService.listExecutions());
+        return toTableData(slaRuntimeService.listExecutions(new WorkflowOperationsQuery.SlaExecution(
+                status, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
-    /** @return AjaxResult，最近 500 条不可变 SLA 生命周期审计。 */
+    /**
+     * 分页查询不可变 SLA 生命周期审计。
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @param actionType String，生命周期动作类型
+     * @param keyword String，审计、执行、实例、任务、节点或操作人关键字
+     * @param beginTime LocalDateTime，动作时间下界
+     * @param endTime LocalDateTime，动作时间上界
+     * @return TableDataInfo，若依标准 rows、total 分页响应
+     */
     @PreAuthorize("@ss.hasPermi('workflow:sla:audit')")
     @GetMapping("/audits")
-    public AjaxResult listAudits()
+    public TableDataInfo listAudits(
+            @RequestParam(defaultValue = "1") @Min(1) int pageNum,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize,
+            @RequestParam(required = false)
+            @Pattern(regexp = "CREATE|ASSIGN|REMINDER|ESCALATE|COMPLETE|PAUSE|RESUME") String actionType,
+            @RequestParam(required = false) @Size(max = 128) String keyword,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return success(slaRuntimeService.listAudits());
+        return toTableData(slaRuntimeService.listAudits(new WorkflowOperationsQuery.SlaAudit(
+                actionType, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
     /** @return AjaxResult，当前用户最近 200 条提醒和升级通知。 */
@@ -144,5 +188,18 @@ public class WfTaskSlaController extends BaseController
     {
         slaRuntimeService.markNotificationRead(notificationId);
         return success();
+    }
+
+    /**
+     * 将领域分页结果转换为若依标准列表响应。
+     * @param page WorkflowPageResult&lt;?&gt;，服务层当前页和总数
+     * @return TableDataInfo，包含 code、msg、rows 和 total
+     */
+    private TableDataInfo toTableData(WorkflowPageResult<?> page)
+    {
+        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
+        result.setCode(HttpStatus.SUCCESS);
+        result.setMsg("查询成功");
+        return result;
     }
 }

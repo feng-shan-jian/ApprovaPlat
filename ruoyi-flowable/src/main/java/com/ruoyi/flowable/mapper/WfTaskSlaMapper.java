@@ -5,6 +5,7 @@ import java.util.List;
 import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WfBusinessCalendar;
 import com.ruoyi.flowable.domain.WfTaskSlaExecution;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
@@ -152,8 +153,13 @@ public interface WfTaskSlaMapper
             @Param("actionType") String actionType,
             @Param("actionOrdinal") Integer actionOrdinal);
 
-    /** @return List&lt;WorkflowTaskSlaAuditView&gt;，最近 500 条 SLA 审计。 */
-    List<WorkflowTaskSlaAuditView> selectAudits();
+    /** @param query SlaAudit，审计筛选条件；@return long，符合条件的审计总数。 */
+    long countAudits(@Param("query") WorkflowOperationsQuery.SlaAudit query);
+
+    /** @param query SlaAudit，审计筛选条件；@param offset int，起始偏移；@param pageSize int，本页大小；@return List，当前页审计。 */
+    List<WorkflowTaskSlaAuditView> selectAudits(
+            @Param("query") WorkflowOperationsQuery.SlaAudit query,
+            @Param("offset") int offset, @Param("pageSize") int pageSize);
 
     /** @param userId String，当前用户主键；@return List&lt;WorkflowTaskSlaNotificationView&gt;，最近 200 条通知。 */
     List<WorkflowTaskSlaNotificationView> selectNotifications(@Param("userId") String userId);
@@ -162,6 +168,11 @@ public interface WfTaskSlaMapper
     int markNotificationRead(@Param("notificationId") Long notificationId,
             @Param("userId") String userId);
 
-    /** @return List&lt;WorkflowTaskSlaExecutionView&gt;，最近 500 条正式执行状态。 */
-    List<WorkflowTaskSlaExecutionView> selectExecutions();
+    /** @param query SlaExecution，执行筛选条件；@return long，符合条件的执行总数。 */
+    long countExecutions(@Param("query") WorkflowOperationsQuery.SlaExecution query);
+
+    /** @param query SlaExecution，执行筛选条件；@param offset int，起始偏移；@param pageSize int，本页大小；@return List，当前页执行。 */
+    List<WorkflowTaskSlaExecutionView> selectExecutions(
+            @Param("query") WorkflowOperationsQuery.SlaExecution query,
+            @Param("offset") int offset, @Param("pageSize") int pageSize);
 }

@@ -138,10 +138,10 @@ class WorkflowCollaborationHttpIT
         assertThat(accountsRegistered).isTrue();
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from information_schema.tables where table_schema=database()",
-                Integer.class)).isEqualTo(101);
+                Integer.class)).isEqualTo(94);
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from information_schema.tables where table_schema=database() "
-                        + "and table_name like 'wf\\_%'", Integer.class)).isEqualTo(34);
+                        + "and table_name like 'wf\\_%'", Integer.class)).isEqualTo(27);
 
         runId = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         categoryCode = "collaboration_" + runId;
@@ -240,8 +240,6 @@ class WorkflowCollaborationHttpIT
         jdbcTemplate.update("delete from wf_collaboration_outbox where endpoint_id=?", endpointId);
         jdbcTemplate.update("delete from wf_collaboration_channel where target_process_definition_key=?",
                 targetProcessKey);
-        jdbcTemplate.update("delete from wf_connector_invocation where target_key=?",
-                "collaboration.endpoint." + runId);
         jdbcTemplate.update("delete from wf_connector_endpoint where endpoint_id=?", endpointId);
         jdbcTemplate.update("delete from wf_integration_credential where credential_id=?", credentialId);
         jdbcTemplate.update("delete from wf_form where form_id=?", formId);
@@ -251,12 +249,6 @@ class WorkflowCollaborationHttpIT
             {
                 repositoryService.deleteModel(modelId);
             }
-        }
-        if (!modelIds.isEmpty())
-        {
-            jdbcTemplate.update("delete from wf_model_save_idempotency where source_model_id in ("
-                    + String.join(",", modelIds.stream().map(value -> "?").toList()) + ")",
-                    modelIds.toArray());
         }
         jdbcTemplate.update("delete from wf_category where code=?", categoryCode);
         for (String token : loginTokens)
@@ -392,9 +384,14 @@ class WorkflowCollaborationHttpIT
         String modelId = created.path("data").path("modelId").asText();
         assertThat(modelId).isNotBlank();
         modelIds.add(modelId);
+        JsonNode modelDetail = requireCode(jsonRequest("GET", "/workflow/model/"
+                + encode(modelId), adminToken, null), 200);
+        String expectedBpmnSha256 = modelDetail.path("data").path("bpmnSha256").asText();
+        assertThat(expectedBpmnSha256).hasSize(64);
         JsonNode saved = requireCode(jsonRequest("POST", "/workflow/model/save", adminToken,
-                objectMapper.createObjectNode().put("requestId", UUID.randomUUID().toString())
-                        .put("modelId", modelId).put("bpmnXml", dualPoolBpmn())
+                objectMapper.createObjectNode().put("modelId", modelId)
+                        .put("bpmnXml", dualPoolBpmn())
+                        .put("expectedBpmnSha256", expectedBpmnSha256)
                         .put("newVersion", false).toString()), 200);
         assertThat(saved.path("data").path("modelId").asText()).isEqualTo(modelId);
         JsonNode deployed = requireCode(jsonRequest("POST", "/workflow/model/deploy?modelId="

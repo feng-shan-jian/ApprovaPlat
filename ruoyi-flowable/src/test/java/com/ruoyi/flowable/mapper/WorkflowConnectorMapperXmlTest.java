@@ -12,7 +12,7 @@ import org.apache.ibatis.session.Configuration;
 import org.junit.jupiter.api.Test;
 
 /**
- * HTTP/SQL 连接器目录与通用幂等调用台账 Mapper XML 契约测试。
+ * HTTP/SQL 连接器端点与数据源目录 Mapper XML 契约测试。
  */
 class WorkflowConnectorMapperXmlTest
 {
@@ -38,38 +38,6 @@ class WorkflowConnectorMapperXmlTest
                 "for update",
                 "and revision_no = #{expectedRevision}",
                 "current_timestamp(3)");
-    }
-
-    /**
-     * 验证调用台账使用稳定唯一键、租约领取和令牌保护终态，禁止字符串直拼。
-     * @return void，幂等或租约 SQL 条件漂移时测试失败
-     * @throws Exception Mapper XML 读取失败
-     */
-    @Test
-    void enforcesInvocationLeaseAndClaimTokenContracts() throws Exception
-    {
-        Configuration configuration = parse("WfConnectorInvocationMapper");
-        String namespace = "com.ruoyi.flowable.mapper.WfConnectorInvocationMapper.";
-
-        for (String statement : List.of("insertIfAbsent", "claim", "selectClaim",
-                "completeSuccess", "completeFailure"))
-        {
-            assertThat(configuration.hasStatement(namespace + statement)).isTrue();
-        }
-        String normalized = read("WfConnectorInvocationMapper")
-                .replaceAll("\\s+", " ").toLowerCase();
-        assertThat(normalized).doesNotContain("${").contains(
-                "insert ignore into wf_connector_invocation",
-                "connector_type",
-                "target_key",
-                "target_revision",
-                "operation",
-                "target_summary",
-                "result_code",
-                "status != 'success'",
-                "lease_expires_at is null or lease_expires_at &lt;= current_timestamp(3)",
-                "claim_token = #{claimtoken}",
-                "status = 'running'");
     }
 
     /**

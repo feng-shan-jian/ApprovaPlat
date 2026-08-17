@@ -67,6 +67,16 @@ class WorkflowTaskSlaDeploymentServiceTest
         assertThat(model.getMainProcess().findFlowElementsOfType(UserTask.class, true))
                 .extracting(UserTask::getId)
                 .contains("approve", "approva_sla_approve_escalation_user_task");
+        UserTask escalationTask = (UserTask) model.getMainProcess()
+                .getFlowElement("approva_sla_approve_escalation_user_task", true);
+        assertThat(escalationTask.getExtensionElements().get("properties"))
+                .singleElement().satisfies(properties -> assertThat(properties.getChildElements()
+                        .get("property")).singleElement().satisfies(property ->
+                        {
+                            assertThat(property.getAttributeValue(null, "name")).isEqualTo(
+                                    WorkflowTaskSlaDeploymentService.SOURCE_TASK_DEFINITION_KEY_PROPERTY);
+                            assertThat(property.getAttributeValue(null, "value")).isEqualTo("approve");
+                        }));
         String compiledXml = new String(prepared.compiledBpmn(), StandardCharsets.UTF_8);
         assertThat(compiledXml).doesNotContain("approva.sla.enabled", "approva.sla.calendarKey");
         assertThat(prepared.snapshots()).singleElement().satisfies(snapshot ->

@@ -53,14 +53,25 @@ test('@full [UI-SLA-003] 审批人可从真实页面查看并处理本人 SLA �
     })
 
     await page.goto('/office/todo')
-    const menuCount = await page.locator('.sidebar-container a[href="/workflow/extensions/bpmnEvent"]').count()
-    await page.goto('/workflow/extensions/bpmnEvent')
-    // 动态路由拒绝可能重定向到其他允许页面，等待路由守卫和页面挂载稳定后再采集最终事实。
-    await page.waitForTimeout(500)
+    await page.getByRole('menuitem', { name: '流程管理', exact: true }).click()
+    await page.getByRole('menuitem', { name: '扩展流程管理', exact: true }).click()
+    const workflowSidebarLink = page.locator('.sidebar-container a[href="/workflow/extensions/bpmnEvent"]')
+    await expect(workflowSidebarLink).toBeVisible()
+    const menuCount = await workflowSidebarLink.count()
+    await workflowSidebarLink.click()
+    await expect(page).toHaveURL(/\/workflow\/extensions\/bpmnEvent$/u)
+    const slaNotificationTab = page.getByRole('tab', { name: 'SLA 通知', exact: true })
+    await expect(slaNotificationTab).toBeVisible()
+    const notificationResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname.endsWith('/workflow/sla/notifications')
+        && response.request().method() === 'GET'
+        && response.status() === 200)
+    await slaNotificationTab.click()
+    await notificationResponse
     const finalPath = new URL(page.url()).pathname
     const pageHeading = await page.locator('.app-container h2').first().textContent().catch(() => '')
     const notFoundCount = await page.locator('.wscn-http404-container').count()
-    const slaNotificationTabCount = await page.getByRole('tab', { name: 'SLA 通知', exact: true }).count()
+    const slaNotificationTabCount = await slaNotificationTab.count()
     const permissionRows = queryReadOnly(
       "SELECT SUM(m.perms='workflow:sla:notification'),SUM(m.perms='workflow:bpmnEvent:list') FROM sys_role r JOIN sys_role_menu rm ON rm.role_id=r.role_id JOIN sys_menu m ON m.menu_id=rm.menu_id WHERE r.role_key='workflow_approver'"
     )

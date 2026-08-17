@@ -129,10 +129,8 @@ const router = useRouter()
 const { proxy } = getCurrentInstance()
 // 收件箱权限决定审批通知页签以及所有审批通知读写请求是否可用。
 const canReadWorkflowNotifications = computed(() => proxy.$auth.hasPermi('workflow:notification:list'))
-// 偏好设置必须在收件箱权限基础上再具备独立偏好权限，避免越权读写个人配置。
-const canManageWorkflowPreference = computed(() =>
-  canReadWorkflowNotifications.value && proxy.$auth.hasPermi('workflow:notification:preference')
-)
+// 偏好接口与个人收件箱共用查询权限；服务端始终按当前登录用户隔离配置，不存在额外偏好权限。
+const canManageWorkflowPreference = computed(() => canReadWorkflowNotifications.value)
 const noticePopover = ref(null)
 const noticeVisible = ref(false)
 const noticeLoading = ref(false)
@@ -263,7 +261,7 @@ async function markAnnouncementAllRead() {
 }
 
 /**
- * 在当前用户同时具备收件箱和偏好权限时，从正式 API 加载通知偏好。
+ * 在当前用户具备审批通知查询权限时，从正式 API 加载其个人通知偏好。
  * @returns {Promise<void>} 无权限时不打开弹窗且不调用偏好 API。
  */
 async function openPreference() {
@@ -282,7 +280,7 @@ async function openPreference() {
 }
 
 /**
- * 在当前用户同时具备收件箱和偏好权限时，以服务端 revision 保存偏好。
+ * 在当前用户具备审批通知查询权限时，以服务端 revision 保存其个人通知偏好。
  * @returns {Promise<void>} 无权限时不调用偏好 API，有权限时保存并刷新消息列表。
  */
 async function savePreference() {

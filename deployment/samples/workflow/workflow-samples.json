@@ -580,6 +580,146 @@
       ]
     },
     {
+      "modelKey": "sample_strategic_procurement",
+      "modelName": "集团战略采购与供应商准入",
+      "description": "采购立项后按预算分级进入常规或加强审查，再由财务与 IT 并行评估，动态选择评委会签，最后由总经理终审。",
+      "template": "composite",
+      "routing": { "variable": "budgetAmount", "threshold": 500000, "normalLabel": "预算内常规审查", "riskLabel": "重大采购加强审查" },
+      "extension": { "key": "approva.set-variable", "config": { "targetVariable": "procurementRiskInitialized", "value": true } },
+      "category": { "code": "sample_procurement_complex", "name": "复杂采购审批" },
+      "formName": "集团战略采购申请表",
+      "form": {
+        "labelPosition": "right", "labelWidth": 120, "size": "default", "gutter": 16,
+        "fields": [
+          { "__vModel__": "projectName", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "采购项目", "span": 12, "required": true }, "maxlength": 120, "placeholder": "请输入采购项目名称" },
+          { "__vModel__": "budgetAmount", "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "预算金额", "span": 12, "required": true }, "min": 0.01, "max": 1000000000, "precision": 2, "step": 10000 },
+          { "__vModel__": "businessReason", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "采购必要性", "span": 24, "required": true }, "type": "textarea", "rows": 5, "maxlength": 1500, "show-word-limit": true, "placeholder": "请输入需求背景、收益与交付风险" }
+        ]
+      },
+      "tasks": [
+        { "id": "procurement_accept", "name": "采购负责人立项", "identityType": "role", "identityKey": "company_purchase_manager" },
+        { "id": "normal_compliance", "name": "部门负责人常规审查", "identityType": "role", "identityKey": "company_department_manager" },
+        { "id": "enhanced_compliance", "name": "总经办加强审查", "identityType": "role", "identityKey": "company_executive_office" },
+        { "id": "finance_assessment", "name": "财务预算评估", "identityType": "role", "identityKey": "company_finance_manager" },
+        { "id": "it_assessment", "name": "IT 技术与安全评估", "identityType": "role", "identityKey": "company_it_manager" },
+        { "id": "select_committee", "name": "采购负责人选择评委", "identityType": "user", "identityKey": "purchase_manager" },
+        { "id": "committee_countersign", "name": "采购评委会签", "multiInstanceMode": "ALL" },
+        { "id": "general_manager_decision", "name": "总经理终审", "identityType": "user", "identityKey": "general_manager" }
+      ]
+    },
+    {
+      "modelKey": "sample_major_contract",
+      "modelName": "重大合同全生命周期评审",
+      "description": "文控登记后按合同金额分级，财务与履约技术并行评审，动态组织跨部门会签，并由总经理签批。",
+      "template": "composite",
+      "routing": { "variable": "contractAmount", "threshold": 1000000, "normalLabel": "标准合同审查", "riskLabel": "重大合同特别审查" },
+      "extension": { "key": "approva.set-variable", "config": { "targetVariable": "contractReviewInitialized", "value": true } },
+      "category": { "code": "sample_contract_complex", "name": "复杂合同审批" },
+      "formName": "重大合同评审表",
+      "form": {
+        "labelPosition": "right", "labelWidth": 120, "size": "default", "gutter": 16,
+        "fields": [
+          { "__vModel__": "contractName", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "合同名称", "span": 12, "required": true }, "maxlength": 160, "placeholder": "请输入合同名称" },
+          { "__vModel__": "contractAmount", "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "合同金额", "span": 12, "required": true }, "min": 0.01, "max": 1000000000, "precision": 2, "step": 10000 },
+          { "__vModel__": "counterpartyAndRisk", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "相对方与风险", "span": 24, "required": true }, "type": "textarea", "rows": 5, "maxlength": 1600, "show-word-limit": true, "placeholder": "请输入相对方、核心条款、履约及争议风险" }
+        ]
+      },
+      "tasks": [
+        { "id": "document_register", "name": "文控登记与完整性检查", "identityType": "role", "identityKey": "company_document_controller" },
+        { "id": "standard_legal_review", "name": "总经办标准条款审查", "identityType": "role", "identityKey": "company_executive_office" },
+        { "id": "major_legal_review", "name": "总经理重大条款预审", "identityType": "user", "identityKey": "general_manager" },
+        { "id": "contract_finance_review", "name": "财务税务评审", "identityType": "role", "identityKey": "company_finance_manager" },
+        { "id": "delivery_review", "name": "IT 履约技术评审", "identityType": "role", "identityKey": "company_it_manager" },
+        { "id": "select_contract_reviewers", "name": "文控选择会签人", "identityType": "user", "identityKey": "document_controller" },
+        { "id": "contract_countersign", "name": "跨部门合同会签", "multiInstanceMode": "ALL" },
+        { "id": "contract_final_approval", "name": "总经理合同签批", "identityType": "user", "identityKey": "general_manager" }
+      ]
+    },
+    {
+      "modelKey": "sample_production_change",
+      "modelName": "生产系统重大变更发布",
+      "description": "IT 受理变更后按影响用户数分级，业务与财务并行确认，动态选择专家或签，最后由总经办批准发布。",
+      "template": "composite",
+      "routing": { "variable": "affectedUsers", "threshold": 1000, "normalLabel": "一般变更", "riskLabel": "重大变更" },
+      "extension": { "key": "approva.set-variable", "config": { "targetVariable": "changeControlInitialized", "value": true } },
+      "category": { "code": "sample_it_complex", "name": "复杂 IT 审批" },
+      "formName": "生产系统重大变更申请表",
+      "form": {
+        "labelPosition": "right", "labelWidth": 120, "size": "default", "gutter": 16,
+        "fields": [
+          { "__vModel__": "changeTitle", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "变更主题", "span": 12, "required": true }, "maxlength": 120, "placeholder": "请输入变更主题" },
+          { "__vModel__": "affectedUsers", "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "影响用户数", "span": 12, "required": true }, "min": 1, "max": 10000000, "precision": 0, "step": 100 },
+          { "__vModel__": "changePlan", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "实施与回退方案", "span": 24, "required": true }, "type": "textarea", "rows": 5, "maxlength": 1800, "show-word-limit": true, "placeholder": "请输入实施窗口、验证、监控和回退方案" }
+        ]
+      },
+      "tasks": [
+        { "id": "change_accept", "name": "IT 负责人受理", "identityType": "role", "identityKey": "company_it_manager" },
+        { "id": "normal_change_review", "name": "部门负责人一般变更审查", "identityType": "role", "identityKey": "company_department_manager" },
+        { "id": "major_change_review", "name": "总经办重大变更审查", "identityType": "role", "identityKey": "company_executive_office" },
+        { "id": "business_impact_review", "name": "业务影响评估", "identityType": "role", "identityKey": "company_department_manager" },
+        { "id": "cost_impact_review", "name": "财务成本评估", "identityType": "role", "identityKey": "company_finance_manager" },
+        { "id": "select_change_experts", "name": "IT 负责人选择专家", "identityType": "user", "identityKey": "it_manager" },
+        { "id": "change_expert_anysign", "name": "变更专家或签", "multiInstanceMode": "ANY" },
+        { "id": "release_authorization", "name": "总经办发布批准", "identityType": "role", "identityKey": "company_executive_office" }
+      ]
+    },
+    {
+      "modelKey": "sample_executive_recruitment",
+      "modelName": "关键岗位招聘与录用决策",
+      "description": "人力受理关键岗位招聘，按年薪预算分级，业务与 IT 并行评估，面试委员会会签后由总经理批准录用。",
+      "template": "composite",
+      "routing": { "variable": "annualPackage", "threshold": 500000, "normalLabel": "常规岗位", "riskLabel": "高管或高薪岗位" },
+      "extension": { "key": "approva.set-variable", "config": { "targetVariable": "recruitmentReviewInitialized", "value": true } },
+      "category": { "code": "sample_hr_complex", "name": "复杂人事审批" },
+      "formName": "关键岗位招聘录用审批表",
+      "form": {
+        "labelPosition": "right", "labelWidth": 120, "size": "default", "gutter": 16,
+        "fields": [
+          { "__vModel__": "positionTitle", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "岗位名称", "span": 12, "required": true }, "maxlength": 100, "placeholder": "请输入岗位名称" },
+          { "__vModel__": "annualPackage", "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "年度薪酬包", "span": 12, "required": true }, "min": 0.01, "max": 10000000, "precision": 2, "step": 10000 },
+          { "__vModel__": "positionJustification", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "编制与候选人说明", "span": 24, "required": true }, "type": "textarea", "rows": 5, "maxlength": 1600, "show-word-limit": true, "placeholder": "请输入编制依据、候选人评价与录用风险" }
+        ]
+      },
+      "tasks": [
+        { "id": "hr_recruitment_accept", "name": "人力负责人受理", "identityType": "role", "identityKey": "company_hr_manager" },
+        { "id": "standard_headcount_review", "name": "部门负责人编制审查", "identityType": "role", "identityKey": "company_department_manager" },
+        { "id": "executive_position_review", "name": "总经办关键岗位审查", "identityType": "role", "identityKey": "company_executive_office" },
+        { "id": "business_interview", "name": "业务胜任力评估", "identityType": "role", "identityKey": "company_department_manager" },
+        { "id": "digital_capability_review", "name": "IT 数字能力评估", "identityType": "role", "identityKey": "company_it_manager" },
+        { "id": "select_interview_committee", "name": "人力选择面试委员", "identityType": "user", "identityKey": "hr_manager" },
+        { "id": "interview_committee_sign", "name": "面试委员会会签", "multiInstanceMode": "ALL" },
+        { "id": "employment_decision", "name": "总经理录用决策", "identityType": "user", "identityKey": "general_manager" }
+      ]
+    },
+    {
+      "modelKey": "sample_emergency_funding",
+      "modelName": "重大应急资金与资源调度",
+      "description": "部门提交应急事项后按资金规模分级，财务与采购并行核验，动态组织应急小组或签，并由总经理最终授权。",
+      "template": "composite",
+      "routing": { "variable": "emergencyAmount", "threshold": 200000, "normalLabel": "一般应急事项", "riskLabel": "重大应急事项" },
+      "extension": { "key": "approva.set-variable", "config": { "targetVariable": "emergencyControlInitialized", "value": true } },
+      "category": { "code": "sample_emergency_complex", "name": "复杂应急审批" },
+      "formName": "重大应急资金资源申请表",
+      "form": {
+        "labelPosition": "right", "labelWidth": 120, "size": "default", "gutter": 16,
+        "fields": [
+          { "__vModel__": "incidentTitle", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "应急事项", "span": 12, "required": true }, "maxlength": 120, "placeholder": "请输入应急事项" },
+          { "__vModel__": "emergencyAmount", "__config__": { "layout": "colFormItem", "tag": "el-input-number", "label": "应急金额", "span": 12, "required": true }, "min": 0.01, "max": 100000000, "precision": 2, "step": 10000 },
+          { "__vModel__": "responsePlan", "__config__": { "layout": "colFormItem", "tag": "el-input", "label": "处置方案", "span": 24, "required": true }, "type": "textarea", "rows": 5, "maxlength": 1600, "show-word-limit": true, "placeholder": "请输入影响范围、资源需求、处置时限和复盘要求" }
+        ]
+      },
+      "tasks": [
+        { "id": "emergency_accept", "name": "部门负责人应急受理", "identityType": "role", "identityKey": "company_department_manager" },
+        { "id": "normal_emergency_review", "name": "总经办一般应急审查", "identityType": "role", "identityKey": "company_executive_office" },
+        { "id": "major_emergency_review", "name": "总经理重大事项预审", "identityType": "user", "identityKey": "general_manager" },
+        { "id": "emergency_finance_check", "name": "财务资金核验", "identityType": "role", "identityKey": "company_finance_manager" },
+        { "id": "emergency_supply_check", "name": "采购资源核验", "identityType": "role", "identityKey": "company_purchase_manager" },
+        { "id": "select_response_team", "name": "总经办选择应急小组", "identityType": "user", "identityKey": "executive_office" },
+        { "id": "response_team_anysign", "name": "应急小组或签", "multiInstanceMode": "ANY" },
+        { "id": "emergency_final_authorize", "name": "总经理最终授权", "identityType": "user", "identityKey": "general_manager" }
+      ]
+    },
+    {
       "modelKey": "sample_controlled_automation",
       "modelName": "受控自动化审批",
       "description": "流程启动后由受控扩展写入自动化标记，再进入 IT 负责人审批，展示扩展注册表和执行快照能力。",

@@ -13,6 +13,14 @@ node .\deployment\scripts\provision-workflow-samples.mjs --username admin
 Remove-Item Env:APPROVA_SAMPLE_ADMIN_PASSWORD, Env:APPROVA_SAMPLE_IDENTITY_PASSWORD
 ```
 
+需要避开与目录不一致的历史样例、只置备指定新场景时，可重复传入精确模型标识；身份、权限、分类、表单、模型和部署仍全部走正式 API，并执行同样的严格回读校验：
+
+```powershell
+node .\deployment\scripts\provision-workflow-samples.mjs --username admin `
+  --model-key sample_strategic_procurement `
+  --model-key sample_major_contract
+```
+
 默认初始化库启用登录验证码。先访问 `GET /captchaImage`，从响应取得 `uuid` 并人工识别图片答案，再为同一次置备命令补充一次性环境变量：
 
 ```powershell
@@ -62,5 +70,12 @@ Remove-Item Env:APPROVA_SAMPLE_CAPTCHA_UUID, Env:APPROVA_SAMPLE_CAPTCHA_CODE, En
 | 动态多人会签 | 复杂 | 前置任务动态选人、并行多实例、全部通过 |
 | 动态多人或签 | 复杂 | 前置任务动态选人、并行多实例、任一通过 |
 | 受控自动化审批 | 复杂 | 扩展注册表、受控 ServiceTask、不可变执行快照 |
+| 集团战略采购与供应商准入 | 综合 | 预算条件路由、财务与 IT 并审、动态评委会签、总经理终审、受控初始化 |
+| 重大合同全生命周期评审 | 综合 | 合同金额分级、财税与履约并审、跨部门会签、文控与总经理协同 |
+| 生产系统重大变更发布 | 综合 | 影响范围分级、业务与财务并审、专家或签、发布授权、受控初始化 |
+| 关键岗位招聘与录用决策 | 综合 | 薪酬条件分级、业务与 IT 并评、面试委员会会签、录用决策 |
+| 重大应急资金与资源调度 | 综合 | 资金规模分级、财务与采购并审、应急小组或签、最终授权 |
 
 动态会签和或签不会从开始表单伪造人员变量。办理前置“选择人员”任务时，系统通过正式下一节点人员接口写入 `wfMiUsers_{activityId}`，随后固定的 `multiInstanceHandler` 创建真实多实例任务。受控自动化样例只引用系统已安装的 `approva.set-variable` 扩展，不允许任意 `delegateExpression` 或类名。
+
+五条综合场景每条包含 15 个 BPMN 节点：开始和结束事件各 1 个、受控 ServiceTask 1 个、用户任务 8 个、排他网关 2 个、并行网关 2 个。条件分支根据正式表单变量选择一条审查路径，实际业务路径仍包含 7 至 8 个办理任务，并要求并行分支全部汇聚后才能进入动态多人审批。

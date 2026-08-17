@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -24,6 +25,7 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfIntegrationCredential;
@@ -32,9 +34,11 @@ import com.ruoyi.flowable.domain.dto.WorkflowIntegrationCredentialRotateRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfIntegrationCredentialMapper;
+import com.ruoyi.flowable.runtime.WorkflowCredentialRateLimitMetrics;
+import com.ruoyi.flowable.runtime.WorkflowRedisAtomicOperations;
 
 /**
- * 集成账号 Token 保密、生命周期、范围和数据库限流边界测试。
+ * 集成账号 Token 保密、生命周期、范围和 Redis 限流边界测试。
  */
 class WorkflowIntegrationCredentialServiceTest
 {
@@ -42,6 +46,10 @@ class WorkflowIntegrationCredentialServiceTest
 
     private final WorkflowEngineOperations operations = mock(WorkflowEngineOperations.class);
     private final WfIntegrationCredentialMapper mapper = mock(WfIntegrationCredentialMapper.class);
+    private final WorkflowRedisAtomicOperations redisOperations =
+            mock(WorkflowRedisAtomicOperations.class);
+    private final WorkflowCredentialRateLimitMetrics rateLimitMetrics =
+            mock(WorkflowCredentialRateLimitMetrics.class);
     private final SecureRandom secureRandom = new SecureRandom(new byte[] {1, 2, 3, 4});
     private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
     private WorkflowIntegrationCredentialService service;
@@ -61,7 +69,7 @@ class WorkflowIntegrationCredentialServiceTest
         when(operations.read(any(Supplier.class))).thenAnswer(invocation ->
                 ((Supplier<Object>) invocation.getArgument(0)).get());
         service = new WorkflowIntegrationCredentialService(operations, mapper,
-                secureRandom, clock);
+                redisOperations, rateLimitMetrics, secureRandom, clock);
     }
 
     /**
@@ -102,9 +110,8 @@ class WorkflowIntegrationCredentialServiceTest
     void rejectsWrongTokenWithSamePrefixWithoutConsumingRateLimit()
     {
         String valid = "same_prefix_" + "a".repeat(32);
-        WfIntegrationCredential row = activeCredential(valid, 3, 0,
-                Date.from(NOW));
-        when(mapper.selectByPrefixForUpdate(valid.substring(0, 12))).thenReturn(row);
+        WfIntegrationCredential row = activeCredential(valid, 3);
+        when(mapper.selectByPrefix(valid.substring(0, 12))).thenReturn(row);
 
         String invalid = valid.substring(0, 12) + "b".repeat(32);
         assertThatThrownBy(() -> service.authenticateAndConsume(invalid, "MESSAGE"))
@@ -113,7 +120,8 @@ class WorkflowIntegrationCredentialServiceTest
                     assertThat(exception.getCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
                     assertThat(exception.getSubCode()).isEqualTo("INTEGRATION_TOKEN_INVALID");
                 });
-        verify(mapper, never()).updateRateWindow(any(), any(), any(Integer.class), any());
+        verify(redisOperations, never()).incrementWithExpiry(any(), any());
+        verify(mapper, never()).updateLastUsedAt(any(), any(), any(), any());
     }
 
     /**
@@ -124,14 +132,14 @@ class WorkflowIntegrationCredentialServiceTest
     void enforcesLastAllowedRequestAndRateLimitBoundary()
     {
         String token = "rate_window_" + "c".repeat(32);
-        WfIntegrationCredential lastAllowed = activeCredential(token, 2, 1,
-                Date.from(NOW.minusSeconds(30)));
-        WfIntegrationCredential limited = activeCredential(token, 2, 2,
-                Date.from(NOW.minusSeconds(30)));
-        when(mapper.selectByPrefixForUpdate(token.substring(0, 12)))
+        WfIntegrationCredential lastAllowed = activeCredential(token, 2);
+        lastAllowed.setLastUsedAt(Date.from(NOW.minus(Duration.ofMinutes(6))));
+        WfIntegrationCredential limited = activeCredential(token, 2);
+        when(mapper.selectByPrefix(token.substring(0, 12)))
                 .thenReturn(lastAllowed, limited);
-        when(mapper.updateRateWindow(eq(8L), any(), eq(2), eq(Date.from(NOW))))
-                .thenReturn(1);
+        when(redisOperations.incrementWithExpiry(
+                "workflow:credential:rate:8:1:202608050000", Duration.ofMinutes(1)))
+                .thenReturn(2L, 3L);
 
         var authenticated = service.authenticateAndConsume(token, "MESSAGE");
         assertThat(authenticated.credentialId()).isEqualTo(8L);
@@ -141,7 +149,12 @@ class WorkflowIntegrationCredentialServiceTest
                     assertThat(exception.getCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
                     assertThat(exception.getSubCode()).isEqualTo("INTEGRATION_RATE_LIMITED");
                 });
-        verify(mapper).updateRateWindow(eq(8L), any(), eq(2), eq(Date.from(NOW)));
+        verify(redisOperations, org.mockito.Mockito.times(2)).incrementWithExpiry(
+                "workflow:credential:rate:8:1:202608050000", Duration.ofMinutes(1));
+        verify(mapper).updateLastUsedAt(eq(8L), eq(1), eq(Date.from(NOW)),
+                eq(Date.from(NOW.minus(Duration.ofMinutes(5)))));
+        verify(rateLimitMetrics).record("allowed");
+        verify(rateLimitMetrics).record("limited");
     }
 
     /**
@@ -152,8 +165,7 @@ class WorkflowIntegrationCredentialServiceTest
     void rotatesTokenAndRevisionAtomically()
     {
         String oldToken = "old_token___" + "d".repeat(32);
-        WfIntegrationCredential current = activeCredential(oldToken, 10, 0,
-                Date.from(NOW));
+        WfIntegrationCredential current = activeCredential(oldToken, 10);
         current.setRevisionNo(4);
         when(mapper.selectByIdForUpdate(8L)).thenReturn(current);
         when(mapper.rotate(any(), eq(4))).thenReturn(1);
@@ -175,28 +187,76 @@ class WorkflowIntegrationCredentialServiceTest
     void rejectsExpiredAndRevokedCredentialsWithoutSideEffects()
     {
         String token = "inactive_tok" + "e".repeat(32);
-        WfIntegrationCredential expired = activeCredential(token, 10, 0, Date.from(NOW));
+        WfIntegrationCredential expired = activeCredential(token, 10);
         expired.setExpiresAt(Date.from(NOW));
-        WfIntegrationCredential revoked = activeCredential(token, 10, 0, Date.from(NOW));
+        WfIntegrationCredential revoked = activeCredential(token, 10);
         revoked.setRevokedAt(Date.from(NOW.minusSeconds(1)));
-        when(mapper.selectByPrefixForUpdate(token.substring(0, 12)))
+        when(mapper.selectByPrefix(token.substring(0, 12)))
                 .thenReturn(expired, revoked);
 
         assertUnauthorized(() -> service.authenticateAndConsume(token, "MESSAGE"));
         assertUnauthorized(() -> service.authenticateAndConsume(token, "MESSAGE"));
-        verify(mapper, never()).updateRateWindow(any(), any(), any(Integer.class), any());
+        verify(redisOperations, never()).incrementWithExpiry(any(), any());
+        verify(mapper, never()).updateLastUsedAt(any(), any(), any(), any());
+    }
+
+    /**
+     * 验证 Redis 故障保持安全失败并返回稳定 503，不继续更新最近使用时间。
+     * @return void，Redis 故障被放行或映射为其他状态时失败
+     */
+    @Test
+    void rejectsWhenRedisRateLimiterIsUnavailable()
+    {
+        String token = "redis_down__" + "f".repeat(32);
+        when(mapper.selectByPrefix(token.substring(0, 12)))
+                .thenReturn(activeCredential(token, 10));
+        when(redisOperations.incrementWithExpiry(any(), eq(Duration.ofMinutes(1))))
+                .thenThrow(new RedisConnectionFailureException("unavailable"));
+
+        assertThatThrownBy(() -> service.authenticateAndConsume(token, "MESSAGE"))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(exception.getSubCode())
+                            .isEqualTo("INTEGRATION_RATE_LIMIT_UNAVAILABLE");
+                });
+        verify(rateLimitMetrics).record("unavailable");
+        verify(mapper, never()).updateLastUsedAt(any(), any(), any(), any());
+    }
+
+    /**
+     * 验证最近使用时间在五分钟内不写库，超过窗口后才使用 revision 条件更新。
+     * @return void，热点认证仍逐次写 MySQL 或丢失 revision 条件时失败
+     */
+    @Test
+    void throttlesLastUsedAtWrites()
+    {
+        String token = "last_used___" + "g".repeat(32);
+        WfIntegrationCredential recent = activeCredential(token, 10);
+        recent.setRevisionNo(7);
+        recent.setLastUsedAt(Date.from(NOW.minus(Duration.ofMinutes(4))));
+        WfIntegrationCredential stale = activeCredential(token, 10);
+        stale.setRevisionNo(7);
+        stale.setLastUsedAt(Date.from(NOW.minus(Duration.ofMinutes(6))));
+        when(mapper.selectByPrefix(token.substring(0, 12))).thenReturn(recent, stale);
+        when(redisOperations.incrementWithExpiry(
+                "workflow:credential:rate:8:7:202608050000", Duration.ofMinutes(1)))
+                .thenReturn(1L, 2L);
+
+        service.authenticateAndConsume(token, "MESSAGE");
+        service.authenticateAndConsume(token, "MESSAGE");
+
+        verify(mapper).updateLastUsedAt(eq(8L), eq(7), eq(Date.from(NOW)),
+                eq(Date.from(NOW.minus(Duration.ofMinutes(5)))));
     }
 
     /**
      * 创建具备指定 Token、窗口和范围的有效凭据。
      * @param token String，测试原始 Token
      * @param limit int，每分钟上限
-     * @param count int，当前窗口次数
-     * @param windowStart Date，当前窗口起点
      * @return WfIntegrationCredential，可直接用于认证的实体
      */
-    private WfIntegrationCredential activeCredential(String token, int limit, int count,
-            Date windowStart)
+    private WfIntegrationCredential activeCredential(String token, int limit)
     {
         WfIntegrationCredential row = new WfIntegrationCredential();
         row.setCredentialId(8L);
@@ -205,8 +265,6 @@ class WorkflowIntegrationCredentialServiceTest
         row.setScopes("MESSAGE,RECEIVE,SIGNAL");
         row.setAllowedVariables("amount,approved");
         row.setRateLimitPerMinute(limit);
-        row.setRateWindowCount(count);
-        row.setRateWindowStart(windowStart);
         row.setRevisionNo(1);
         row.setCreateBy("7");
         return row;

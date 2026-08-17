@@ -6,8 +6,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.DeliveryOutcome;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.OutboxRow;
 
 /**
  * 普通审批通知后台 worker，按数据库租约处理站内信、SMTP 和短信通道。
@@ -20,16 +18,16 @@ public class WorkflowNotificationWorker
     private static final Logger LOGGER = LoggerFactory.getLogger(WorkflowNotificationWorker.class);
     /** 当前应用进程固定 worker 标识，重启后会生成新值并接管过期租约。 */
     private final String workerId = "notification-" + UUID.randomUUID();
-    private final WorkflowNotificationService service;
+    private final WorkflowNotificationDeliveryCoordinator coordinator;
 
     /**
      * 创建通知 worker。
-     * @param service WorkflowNotificationService，领取、投递和状态提交服务
+     * @param coordinator WorkflowNotificationDeliveryCoordinator，事务外投递协调入口
      * @return void，构造后由 Spring 调度
      */
-    public WorkflowNotificationWorker(WorkflowNotificationService service)
+    public WorkflowNotificationWorker(WorkflowNotificationDeliveryCoordinator coordinator)
     {
-        this.service = service;
+        this.coordinator = coordinator;
     }
 
     /**
@@ -39,12 +37,12 @@ public class WorkflowNotificationWorker
     @Scheduled(fixedDelayString = "${flowable.notification.worker-delay:1000}")
     public void deliverBatch()
     {
-        for (int index = 0; index < service.batchSize(); index++)
+        for (int index = 0; index < coordinator.batchSize(); index++)
         {
-            OutboxRow row;
+            WorkflowNotificationOutboxRecord row;
             try
             {
-                row = service.claimNext(workerId);
+                row = coordinator.claimNext(workerId);
             }
             catch (RuntimeException claimException)
             {
@@ -55,39 +53,13 @@ public class WorkflowNotificationWorker
             if (row == null) return;
             try
             {
-                if ("INBOX".equals(row.channel()))
-                {
-                    service.deliverInbox(row, workerId);
-                }
-                else if ("EMAIL".equals(row.channel()))
-                {
-                    // 邮件发送与租约结果提交由同一事务边界完成，避免终态取消穿过 SMTP 副作用窗口。
-                    service.deliverEmail(row, workerId);
-                }
-                else if ("SMS".equals(row.channel()))
-                {
-                    // 短信供应商副作用与租约结果由同一服务边界处理。
-                    service.deliverSms(row, workerId);
-                }
-                else
-                {
-                    throw new IllegalStateException("通知 outbox 包含不支持的通道");
-                }
+                // 领取事务已经提交；协调器在事务外调用 Strategy，再以独立短事务提交结果。
+                coordinator.deliverClaimed(row, workerId);
             }
             catch (RuntimeException exception)
             {
-                // 单条未知异常必须回写重试/死信，且日志只保留 outbox 主键，不输出正文或接收地址。
-                LOGGER.error("审批通知投递发生未知异常，outboxId={}", row.outboxId(), exception);
-                try
-                {
-                    service.completeDelivery(row, workerId, DeliveryOutcome.failure(
-                            "DELIVERY_INTERNAL_ERROR", "通知投递发生内部错误", false));
-                }
-                catch (RuntimeException leaseException)
-                {
-                    // 租约已被其他节点接管时只记录冲突，下一条仍继续处理。
-                    LOGGER.warn("审批通知失败状态回写未成功，outboxId={}", row.outboxId(), leaseException);
-                }
+                // 协调器已把通道异常转换为稳定结果；此处只可能是租约冲突或结果提交失败。
+                LOGGER.warn("审批通知结果提交未成功，outboxId={}", row.outboxId(), exception);
             }
         }
     }

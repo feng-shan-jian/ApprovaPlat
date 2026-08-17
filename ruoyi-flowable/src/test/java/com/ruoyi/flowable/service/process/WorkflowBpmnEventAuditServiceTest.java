@@ -8,8 +8,8 @@ import static org.mockito.Mockito.when;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.SynchronousNotification;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowSynchronousNotification;
 
 /**
  * BPMN 事件独立审计与通知副作用边界测试。
@@ -17,7 +17,7 @@ import com.ruoyi.flowable.service.notification.WorkflowNotificationService.Synch
 class WorkflowBpmnEventAuditServiceTest
 {
     private WfBpmnEventMapper mapper;
-    private WorkflowNotificationService notificationService;
+    private WorkflowNotificationRegistrar notificationService;
     private WorkflowBpmnEventAuditService service;
 
     /** @return void，每个用例创建独立 Mapper 替身。 */
@@ -25,7 +25,7 @@ class WorkflowBpmnEventAuditServiceTest
     void setUp()
     {
         mapper = org.mockito.Mockito.mock(WfBpmnEventMapper.class);
-        notificationService = org.mockito.Mockito.mock(WorkflowNotificationService.class);
+        notificationService = org.mockito.Mockito.mock(WorkflowNotificationRegistrar.class);
         service = new WorkflowBpmnEventAuditService(mapper, notificationService);
         when(mapper.selectAuditId("event-key")).thenReturn(91L);
     }
@@ -40,7 +40,7 @@ class WorkflowBpmnEventAuditServiceTest
         Long auditId = service.record(event("CAPTURED", "boundary-error", true));
 
         assertThat(auditId).isEqualTo(91L);
-        verify(notificationService).publishSynchronousInbox(new SynchronousNotification(
+        verify(notificationService).publishSynchronousInbox(new WorkflowSynchronousNotification(
                 "BPMN_EVENT", "91", "ERROR", "1", "expense", "process-1",
                 null, null, "流程业务错误：审批业务校验失败",
                 "APPROVAL_BUSINESS_ERROR · CAPTURED · 库存不足",

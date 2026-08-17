@@ -7,7 +7,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.runtime.ProcessInstance;
@@ -16,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import com.ruoyi.RuoYiApplication;
 import com.ruoyi.common.constant.HttpStatus;
@@ -23,6 +30,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowRuntimeEventRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowRuntimeEventView;
 import com.ruoyi.flowable.service.process.WorkflowRuntimeEventService;
+import com.ruoyi.flowable.service.process.WorkflowIntegrationCredentialService;
 
 /**
  * 使用真实 MySQL 和 Flowable 8 验证外部运行事件、Token 与幂等审计闭环。
@@ -50,6 +58,10 @@ class WorkflowRuntimeEventMySqlIT
     private ProcessEngine processEngine;
     @Autowired
     private WorkflowRuntimeEventService runtimeEventService;
+    @Autowired
+    private WorkflowIntegrationCredentialService credentialService;
+    @Autowired
+    private StringRedisTemplate redisTemplate;
 
     private final String runId = UUID.randomUUID().toString().replace("-", "");
     private String messageProcessKey;
@@ -82,9 +94,9 @@ class WorkflowRuntimeEventMySqlIT
                 String.class);
         jdbc.update("insert into wf_integration_credential "
                 + "(credential_name, token_prefix, token_hash, scopes, allowed_variables, "
-                + "rate_limit_per_minute, rate_window_start, rate_window_count, revision_no, "
+                + "rate_limit_per_minute, revision_no, "
                 + "create_by, create_time) values (?, ?, ?, 'MESSAGE,RECEIVE,SIGNAL', "
-                + "'approved,amount', 100, current_timestamp(3), 0, 1, ?, current_timestamp(3))",
+                + "'approved,amount', 100, 1, ?, current_timestamp(3))",
                 PREFIX + runId, token.substring(0, 12), sha256(token), actorUserId);
         credentialId = jdbc.queryForObject(
                 "select credential_id from wf_integration_credential where token_prefix = ?",
@@ -101,6 +113,12 @@ class WorkflowRuntimeEventMySqlIT
     {
         if (credentialId != null)
         {
+            Set<String> rateKeys = redisTemplate.keys(
+                    "workflow:credential:rate:" + credentialId + ":*");
+            if (rateKeys != null && !rateKeys.isEmpty())
+            {
+                redisTemplate.delete(rateKeys);
+            }
             jdbc.update("delete from wf_runtime_event_request where credential_id = ?", credentialId);
             jdbc.update("delete from wf_integration_credential where credential_id = ?", credentialId);
         }
@@ -267,8 +285,8 @@ class WorkflowRuntimeEventMySqlIT
                 + "where credential_id=?", credentialId);
         assertUnauthorized(rotated, instance);
 
-        jdbc.update("update wf_integration_credential set revoked_at=null, rate_limit_per_minute=1, "
-                + "rate_window_start=now(3), rate_window_count=0 where credential_id=?", credentialId);
+        jdbc.update("update wf_integration_credential set revoked_at=null, rate_limit_per_minute=1 "
+                + "where credential_id=?", credentialId);
         String missingRequestId = UUID.randomUUID().toString();
         assertThatThrownBy(() -> runtimeEventService.publish(rotated, "RECEIVE",
                 request(missingRequestId, "receiveWait", "missing-instance", null, Map.of())))
@@ -283,6 +301,77 @@ class WorkflowRuntimeEventMySqlIT
         assertThat(processEngine.getRuntimeService().createExecutionQuery()
                 .processInstanceId(instance.getId()).activityId("receiveWait").count())
                 .isEqualTo(1);
+        Set<String> rateKeys = redisTemplate.keys(
+                "workflow:credential:rate:" + credentialId + ":2:*");
+        assertThat(rateKeys).hasSize(1);
+        assertThat(redisTemplate.opsForValue().get(rateKeys.iterator().next())).isEqualTo("2");
+    }
+
+    /**
+     * 使用真实 Redis 并发认证，验证 Lua 计数不丢失且超过固定限额的请求全部返回 429。
+     * @return void，允许数、拒绝数、Redis 最终计数或最近使用时间不一致时失败
+     * @throws Exception 并发任务等待超时或执行异常时抛出
+     */
+    @Test
+    void countsConcurrentCredentialRequestsAtomicallyInRedis() throws Exception
+    {
+        final int requestCount = 64;
+        final int allowedLimit = 32;
+        jdbc.update("update wf_integration_credential set rate_limit_per_minute=?, "
+                + "last_used_at=null where credential_id=?", allowedLimit, credentialId);
+        AtomicInteger allowed = new AtomicInteger();
+        AtomicInteger limited = new AtomicInteger();
+        AtomicInteger unexpected = new AtomicInteger();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(16);
+        try
+        {
+            for (int index = 0; index < requestCount; index++)
+            {
+                executor.submit(() ->
+                {
+                    try
+                    {
+                        start.await();
+                        credentialService.authenticateAndConsume(token, "RECEIVE");
+                        allowed.incrementAndGet();
+                    }
+                    catch (ServiceException exception)
+                    {
+                        if (Integer.valueOf(HttpStatus.TOO_MANY_REQUESTS).equals(exception.getCode()))
+                        {
+                            limited.incrementAndGet();
+                        }
+                        else
+                        {
+                            unexpected.incrementAndGet();
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        unexpected.incrementAndGet();
+                    }
+                });
+            }
+            start.countDown();
+        }
+        finally
+        {
+            executor.shutdown();
+            assertThat(executor.awaitTermination(30, TimeUnit.SECONDS)).isTrue();
+        }
+
+        assertThat(allowed).hasValue(allowedLimit);
+        assertThat(limited).hasValue(requestCount - allowedLimit);
+        assertThat(unexpected).hasValue(0);
+        Set<String> rateKeys = redisTemplate.keys(
+                "workflow:credential:rate:" + credentialId + ":1:*");
+        assertThat(rateKeys).hasSize(1);
+        assertThat(redisTemplate.opsForValue().get(rateKeys.iterator().next()))
+                .isEqualTo(Integer.toString(requestCount));
+        assertThat(jdbc.queryForObject("select last_used_at is not null "
+                + "from wf_integration_credential where credential_id=?",
+                Boolean.class, credentialId)).isTrue();
     }
 
     /**

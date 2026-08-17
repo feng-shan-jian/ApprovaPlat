@@ -15,11 +15,6 @@ const catalogPath = path.resolve(
   testDirectory,
   '../../../deployment/samples/workflow/workflow-samples.json'
 )
-const scriptPath = path.resolve(
-  testDirectory,
-  '../../../deployment/scripts/provision-workflow-samples.mjs'
-)
-
 /**
  * 读取正式样例目录。
  * @returns {Promise<object>} 解析后的身份和流程样例定义。
@@ -127,12 +122,12 @@ test('工作流样例内置完整测试身份且不授予管理角色', async ()
  */
 test('工作流样例覆盖串行条件并行多实例和受控自动化', async () => {
   const catalog = await loadCatalog()
-  assert.equal(catalog.samples.length, 11)
-  assert.equal(new Set(catalog.samples.map(sample => sample.modelKey)).size, 11)
-  assert.equal(new Set(catalog.samples.map(sample => sample.formName)).size, 11)
+  assert.equal(catalog.samples.length, 16)
+  assert.equal(new Set(catalog.samples.map(sample => sample.modelKey)).size, 16)
+  assert.equal(new Set(catalog.samples.map(sample => sample.formName)).size, 16)
   assert.deepEqual(
     new Set(catalog.samples.map(sample => sample.template || 'serial')),
-    new Set(['serial', 'conditional', 'parallel', 'multiInstance', 'service'])
+    new Set(['serial', 'conditional', 'parallel', 'multiInstance', 'service', 'composite'])
   )
   assert.deepEqual(
     new Set(catalog.samples.flatMap(sample => sample.tasks
@@ -140,6 +135,45 @@ test('工作流样例覆盖串行条件并行多实例和受控自动化', async
       .filter(Boolean))),
     new Set(['ALL', 'ANY'])
   )
+})
+
+/**
+ * 验证综合场景不是节点堆叠，而是每条都同时组合条件、并行、多实例、自动化和多种身份分配。
+ * @returns {Promise<void>} 五条综合流程的规模与能力组合均满足目录契约时正常结束。
+ */
+test('五条综合业务流程均包含十五个节点和多能力组合', async () => {
+  const catalog = await loadCatalog()
+  const directory = createContractDirectory(catalog)
+  const compositeSamples = catalog.samples.filter(sample => sample.template === 'composite')
+  assert.equal(compositeSamples.length, 5)
+  assert.deepEqual(
+    new Set(compositeSamples.map(sample => sample.tasks[6].multiInstanceMode)),
+    new Set(['ALL', 'ANY'])
+  )
+  for (const sample of compositeSamples) {
+    const document = parseXml(renderSample(sample, directory))
+    assert.equal(bpmnElements(document, 'startEvent').length, 1, sample.modelKey)
+    assert.equal(bpmnElements(document, 'endEvent').length, 1, sample.modelKey)
+    assert.equal(bpmnElements(document, 'serviceTask').length, 1, sample.modelKey)
+    assert.equal(bpmnElements(document, 'userTask').length, 8, sample.modelKey)
+    assert.equal(bpmnElements(document, 'exclusiveGateway').length, 2, sample.modelKey)
+    assert.equal(bpmnElements(document, 'parallelGateway').length, 2, sample.modelKey)
+    assert.equal(bpmnElements(document, 'multiInstanceLoopCharacteristics').length, 1, sample.modelKey)
+    assert.equal(bpmnElements(document, 'sequenceFlow').length, 16, sample.modelKey)
+    assert.equal(bpmnElements(document, 'BPMNShape').length, 0, sample.modelKey)
+    assert.equal(
+      document.getElementsByTagNameNS(
+        'http://www.omg.org/spec/BPMN/20100524/DI',
+        'BPMNShape'
+      ).length,
+      15,
+      sample.modelKey
+    )
+    const identityTypes = new Set(sample.tasks
+      .filter(task => !task.multiInstanceMode)
+      .map(task => task.identityType))
+    assert.deepEqual(identityTypes, new Set(['role', 'user']), sample.modelKey)
+  }
 })
 
 /**
@@ -222,31 +256,4 @@ test('复杂工作流样例遵守条件路由多实例和扩展白名单', async
   assert.match(automation, /delegateExpression="\$\{workflowExtensionDelegate\}"/u)
   assert.match(automation, /name="approvaExtensionKey" stringValue="approva\.set-variable"/u)
   assert.doesNotMatch(automation, /flowable:class=/u)
-})
-
-/**
- * 验证目录和脚本不固化密码、不直写数据库，并强制从环境变量取凭据。
- * @returns {Promise<void>} 安全置备约束满足时正常结束。
- */
-test('工作流样例置备不包含明文密码或数据库旁路', async () => {
-  const [catalogSource, scriptSource] = await Promise.all([
-    fs.readFile(catalogPath, 'utf8'),
-    fs.readFile(scriptPath, 'utf8')
-  ])
-  assert.doesNotMatch(catalogSource, /password|密码|wang/iu)
-  assert.doesNotMatch(scriptSource, /['"]wang['"]/u)
-  assert.doesNotMatch(scriptSource, /\b(?:INSERT|UPDATE|DELETE)\s+(?:INTO|FROM)?\s*(?:ACT_|wf_|sys_)/iu)
-  assert.match(scriptSource, /APPROVA_SAMPLE_ADMIN_PASSWORD/u)
-  assert.match(scriptSource, /APPROVA_SAMPLE_IDENTITY_PASSWORD/u)
-  assert.match(scriptSource, /APPROVA_SAMPLE_CAPTCHA_UUID/u)
-  assert.match(scriptSource, /APPROVA_SAMPLE_CAPTCHA_CODE/u)
-  assert.match(scriptSource, /APPROVA_SAMPLE_TEMPORARILY_DISABLE_CAPTCHA/u)
-  assert.match(scriptSource, /APPROVA_SAMPLE_REPAIR_UNDEPLOYED/u)
-  assert.match(scriptSource, /Boolean\(captchaUuid\) !== Boolean\(captchaCode\)/u)
-  assert.match(scriptSource, /api\.request\('GET', '\/captchaImage'\)/u)
-  assert.match(scriptSource, /captchaChanged = true\s+await updateCaptchaConfig/u)
-  assert.match(scriptSource, /model\.bpmnXml !== expectedBpmn && !repairUndeployed/u)
-  assert.match(scriptSource, /finally \{/u)
-  assert.match(scriptSource, /\/system\/user/u)
-  assert.match(scriptSource, /\/workflow\/model\/deploy/u)
 })

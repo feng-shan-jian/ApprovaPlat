@@ -123,9 +123,6 @@ class WorkflowControlledLoopHttpIT
     /** BPMN 流程标识和模型版本分组标识。 */
     private String processKey;
 
-    /** 模型保存正式幂等键。 */
-    private String saveRequestId;
-
     /** 真实 Flowable 模型主键。 */
     private String modelId;
 
@@ -191,7 +188,6 @@ class WorkflowControlledLoopHttpIT
         runId = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         categoryCode = "controlled_loop_" + runId;
         processKey = "controlledLoopHttp" + runId;
-        saveRequestId = UUID.randomUUID().toString();
         httpClient = HttpClient.newBuilder().connectTimeout(HTTP_TIMEOUT)
                 .followRedirects(HttpClient.Redirect.NEVER).build();
         assertCaptchaDisabled();
@@ -223,7 +219,7 @@ class WorkflowControlledLoopHttpIT
     }
 
     /**
-     * 强制清理本类创建的流程、模型、快照、幂等记录和分类，并注销全部 Redis Token。
+     * 强制清理本类创建的流程、模型、快照和分类，并注销全部 Redis Token。
      *
      * @return void，无返回值；任何残留或注销失败都会使验收失败
      * @throws Exception HTTP 注销或 JSON 解析失败时抛出
@@ -249,12 +245,6 @@ class WorkflowControlledLoopHttpIT
         if (modelId != null && repositoryService.createModelQuery().modelId(modelId).count() == 1)
         {
             repositoryService.deleteModel(modelId);
-        }
-        if (saveRequestId != null)
-        {
-            // 模型保存幂等台账是正式审计；测试只删除自己记录的精确 UUID。
-            jdbcTemplate.update("delete from wf_model_save_idempotency where request_id = ?",
-                    saveRequestId);
         }
         if (categoryCode != null)
         {
@@ -287,9 +277,6 @@ class WorkflowControlledLoopHttpIT
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from wf_category where code = ?", Integer.class,
                 categoryCode)).isZero();
-        assertThat(jdbcTemplate.queryForObject(
-                "select count(*) from wf_model_save_idempotency where request_id = ?",
-                Integer.class, saveRequestId)).isZero();
         if (processInstanceId != null)
         {
             assertThat(jdbcTemplate.queryForObject(
@@ -412,12 +399,16 @@ class WorkflowControlledLoopHttpIT
                 designerToken, createBody.toString()), 200);
         modelId = created.path("data").path("modelId").asText();
         assertThat(modelId).isNotBlank();
+        JsonNode modelDetail = requireCode(jsonRequest("GET",
+                "/workflow/model/" + encode(modelId), designerToken, null), 200);
+        String expectedBpmnSha256 = modelDetail.path("data").path("bpmnSha256").asText();
+        assertThat(expectedBpmnSha256).hasSize(64);
 
         String authorBpmn = controlledLoopAuthorBpmn();
         JsonNode saveBody = objectMapper.createObjectNode()
-                .put("requestId", saveRequestId)
                 .put("modelId", modelId)
                 .put("bpmnXml", authorBpmn)
+                .put("expectedBpmnSha256", expectedBpmnSha256)
                 .put("newVersion", false);
         JsonNode saved = requireCode(jsonRequest("POST", "/workflow/model/save",
                 designerToken, saveBody.toString()), 200);

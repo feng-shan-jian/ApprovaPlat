@@ -29,7 +29,7 @@ function sqlLiteral(value) {
  * 创建一个 SLA 用例所需的正式资产名称集合。
  * @param {import('@playwright/test').TestInfo} testInfo 当前 Playwright 用例信息。
  * @param {string} domain 当前 SLA 场景缩写。
- * @returns {{prefix:string,calendarKey:string,calendarName:string,categoryName:string,categoryCode:string,formName:string,modelName:string,modelKey:string,taskName:string,processInstanceId:string}} 可追踪测试资产。
+ * @returns {{prefix:string,calendarKey:string,calendarName:string,categoryName:string,categoryCode:string,formName:string,modelName:string,modelKey:string,taskName:string,processInstanceId:string,escalationUserId:string}} 可追踪测试资产。
  */
 function slaAssets(testInfo, domain) {
   const prefix = slaPrefix(testInfo, domain)
@@ -43,7 +43,8 @@ function slaAssets(testInfo, domain) {
     modelName: `${prefix}_SLA审批`,
     modelKey: `${prefix}_model`,
     taskName: `${prefix}_审批`,
-    processInstanceId: ''
+    processInstanceId: '',
+    escalationUserId: ''
   }
 }
 
@@ -139,6 +140,13 @@ async function createSlaProcess(page, assets) {
   expect(snapshots, 'SLA 部署必须写入唯一正式业务资源').toHaveLength(1)
   const snapshotRows = JSON.parse(snapshots[0][0])
   expect(snapshotRows, 'SLA 正式业务资源必须只冻结目标审批节点').toHaveLength(1)
+  // 隔离库每次从最终基线重建，账号主键必须按用户名实时解析，禁止依赖旧开发库自增值。
+  const escalationUsers = queryReadOnly(
+    "SELECT user_id FROM sys_user WHERE user_name='e2e_ui_wf_approver' AND status='0' AND del_flag='0'"
+  )
+  expect(escalationUsers, 'SLA 升级办理账号必须唯一且有效').toHaveLength(1)
+  // 记录本次隔离库实际主键，后续 Flowable 运行任务对账必须使用同一正式身份。
+  assets.escalationUserId = escalationUsers[0][0]
   expect(snapshotRows[0]).toMatchObject({
     calendarKey: assets.calendarKey,
     processKey: assets.modelKey,
@@ -147,7 +155,7 @@ async function createSlaProcess(page, assets) {
     reminderRepeatMinutes: 1,
     maxReminders: 2,
     escalationMinutes: 3,
-    escalationAssignee: '112',
+    escalationAssignee: assets.escalationUserId,
     workStart: '00:00',
     workEnd: '23:30',
     workingDays: '1,2,3,4,5,6,7'
@@ -195,11 +203,11 @@ async function waitForSlaAuditActions(processInstanceId, expectedActions, timeou
 }
 
 /**
- * 等待统一通知模型为指定 SLA 动作形成已处理 outbox、收件箱和投递审计。
+ * 等待统一通知模型为指定 SLA 动作形成已处理 outbox 与收件箱。
  * @param {string} processInstanceId 流程实例主键。
  * @param {string} actionType REMINDER 或 ESCALATE。
  * @param {number} expectedCount 预期唯一通知数量。
- * @returns {Promise<string[][]>} 通知动作、处理状态、已读状态和投递审计数投影。
+ * @returns {Promise<string[][]>} 通知动作、处理状态、已读状态、累计尝试与终态投影。
  */
 async function waitForSlaNotifications(processInstanceId, actionType, expectedCount) {
   const instanceId = sqlLiteral(processInstanceId)
@@ -212,7 +220,7 @@ async function waitForSlaNotifications(processInstanceId, actionType, expectedCo
     intervals: [500, 1000, 2000]
   }).toBe(String(expectedCount))
   return queryReadOnly(
-    `SELECT o.event_type,o.status,i.read_status,COUNT(a.audit_id) FROM wf_notification_outbox o JOIN wf_notification_inbox i ON i.outbox_id=o.outbox_id LEFT JOIN wf_notification_delivery_audit a ON a.outbox_id=o.outbox_id WHERE o.source_type='SLA' AND o.process_instance_id='${instanceId}' AND o.event_type='${action}' GROUP BY o.outbox_id,o.event_type,o.status,i.read_status ORDER BY o.outbox_id`
+    `SELECT o.event_type,o.status,i.read_status,o.attempt_count,o.total_attempt_count,COALESCE(o.last_error_code,''),COALESCE(o.last_error_summary,''),o.processed_time IS NOT NULL FROM wf_notification_outbox o JOIN wf_notification_inbox i ON i.outbox_id=o.outbox_id WHERE o.source_type='SLA' AND o.process_instance_id='${instanceId}' AND o.event_type='${action}' ORDER BY o.outbox_id`
   )
 }
 
@@ -291,14 +299,18 @@ test('@full [UI-SLA-001] 两次提醒后升级为人工任务并保持运行数�
     await waitForSlaAuditActions(assets.processInstanceId, ['CREATE', 'REMINDER', 'REMINDER', 'ESCALATE'], 250_000)
     const reminderNotifications = await waitForSlaNotifications(assets.processInstanceId, 'REMINDER', 2)
     const escalationNotifications = await waitForSlaNotifications(assets.processInstanceId, 'ESCALATE', 1)
-    expect(reminderNotifications.every(row => Number(row[3]) >= 2), '每条提醒通知必须形成登记和成功投递审计').toBe(true)
-    expect(escalationNotifications[0][3], '升级通知必须形成登记和成功投递审计').not.toBe('0')
+    expect(reminderNotifications.every(row => row.slice(3).join('|') === '0|0|||1'),
+      '每条同步提醒通知必须无 worker 尝试、无错误并进入终态').toBe(true)
+    expect(escalationNotifications[0].slice(3), '同步升级通知必须无 worker 尝试、无错误并进入终态')
+      .toEqual(['0', '0', '', '', '1'])
     expect(queryReadOnly(
       `SELECT status,reminders_sent,COALESCE(paused_at,'') FROM wf_task_sla_execution WHERE process_instance_id='${instanceId}'`
     )).toEqual([['ESCALATED', '2', '']])
     expect(queryReadOnly(
       `SELECT TASK_DEF_KEY_,COALESCE(ASSIGNEE_,'') FROM ACT_RU_TASK WHERE PROC_INST_ID_='${instanceId}'`
-    )).toEqual(expect.arrayContaining([[expect.stringContaining('approva_sla_review_escalation_user_task'), '112']]))
+    )).toEqual(expect.arrayContaining([
+      [expect.stringContaining('approva_sla_review_escalation_user_task'), assets.escalationUserId]
+    ]))
     expect(queryReadOnly(
       `SELECT COUNT(*) FROM ACT_RU_TIMER_JOB WHERE PROCESS_INSTANCE_ID_='${instanceId}'`
     )).toEqual([['0']])

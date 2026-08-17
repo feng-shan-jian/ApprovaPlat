@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.util.Optional;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.flowable.runtime.WorkflowAttachmentCleanupMetrics;
@@ -13,7 +12,7 @@ import com.ruoyi.flowable.runtime.WorkflowAttachmentCleanupMetrics;
 class WorkflowAttachmentCleanupSchedulerTest
 {
     /**
-     * 验证获得锁后的完成数和单条失败数分别进入固定低基数 Counter。
+     * 验证完成、重试和租约丢失数分别进入固定低基数 Counter。
      *
      * @return void，调度结果未进入正式指标时测试失败
      */
@@ -23,8 +22,8 @@ class WorkflowAttachmentCleanupSchedulerTest
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         WorkflowAttachmentCleanupCoordinator coordinator =
                 mock(WorkflowAttachmentCleanupCoordinator.class);
-        when(coordinator.cleanupIfLockAcquired()).thenReturn(Optional.of(
-                new WorkflowAttachmentCleanupResult(2, 1)));
+        when(coordinator.cleanupBatch()).thenReturn(
+                new WorkflowAttachmentCleanupResult(2, 1, 3));
         WorkflowAttachmentCleanupScheduler scheduler = new WorkflowAttachmentCleanupScheduler(
                 coordinator, new WorkflowAttachmentCleanupMetrics(registry));
 
@@ -36,31 +35,8 @@ class WorkflowAttachmentCleanupSchedulerTest
                 "result", "cleaned", 2.0D);
         assertCounter(registry, "workflow.attachment.cleanup.items",
                 "result", "failed", 1.0D);
-    }
-
-    /**
-     * 验证其他节点持锁时只累计跳过次数，不产生已完成或条目处理指标。
-     *
-     * @return void，锁竞争失败被误报为清理成功时测试失败
-     */
-    @Test
-    void recordsLockContentionWithoutCleanupSideEffects()
-    {
-        SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        WorkflowAttachmentCleanupCoordinator coordinator =
-                mock(WorkflowAttachmentCleanupCoordinator.class);
-        when(coordinator.cleanupIfLockAcquired()).thenReturn(Optional.empty());
-        WorkflowAttachmentCleanupScheduler scheduler = new WorkflowAttachmentCleanupScheduler(
-                coordinator, new WorkflowAttachmentCleanupMetrics(registry));
-
-        scheduler.cleanupExpiredAttachments();
-
-        assertCounter(registry, "workflow.attachment.cleanup.executions",
-                "result", "lock_not_acquired", 1.0D);
-        assertCounter(registry, "workflow.attachment.cleanup.executions",
-                "result", "completed", 0.0D);
         assertCounter(registry, "workflow.attachment.cleanup.items",
-                "result", "cleaned", 0.0D);
+                "result", "lease_lost", 3.0D);
     }
 
     /**
@@ -75,7 +51,7 @@ class WorkflowAttachmentCleanupSchedulerTest
         WorkflowAttachmentCleanupCoordinator coordinator =
                 mock(WorkflowAttachmentCleanupCoordinator.class);
         IllegalStateException failure = new IllegalStateException("forced scheduler failure");
-        when(coordinator.cleanupIfLockAcquired()).thenThrow(failure);
+        when(coordinator.cleanupBatch()).thenThrow(failure);
         WorkflowAttachmentCleanupScheduler scheduler = new WorkflowAttachmentCleanupScheduler(
                 coordinator, new WorkflowAttachmentCleanupMetrics(registry));
 

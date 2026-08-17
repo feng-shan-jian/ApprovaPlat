@@ -57,12 +57,16 @@ import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
             "token.secret=Y29ubmVjdG9yLWJwbW4tZXZlbnQtY2hhaW4taXQtdG9rZW4tc2VjcmV0LWNvbm5lY3Rvci1icG1uLWV2ZW50LWNoYWluLWl0LXRva2VuLXNlY3JldA==",
             "flowable.database-schema-update=false",
             "flowable.async-executor-activate=true",
+            "flowable.process.async.executor.default-timer-job-acquire-wait-time=200ms",
+            "flowable.process.async.executor.default-async-job-acquire-wait-time=200ms",
             "flowable.async-history-executor-activate=false",
             "spring.quartz.auto-startup=false"
         })
 class WorkflowTaskSlaMySqlIT
 {
     private static final String PREFIX = "workflow-sla-it-";
+    /** 覆盖全量 IT 负载下 Flowable 线程调度和 MySQL 事务提交延迟。 */
+    private static final Duration ASYNC_EXECUTION_TIMEOUT = Duration.ofSeconds(40);
 
     @Autowired private ProcessEngine processEngine;
     @Autowired private RepositoryService repositoryService;
@@ -116,12 +120,6 @@ class WorkflowTaskSlaMySqlIT
         engineConfiguration().getClock().setCurrentTime(Date.from(originalClock));
         if (deploymentId != null)
         {
-            jdbc.update("delete d from wf_notification_delivery_audit d "
-                    + "join wf_notification_outbox o on o.outbox_id=d.outbox_id "
-                    + "join wf_task_sla_audit a on o.source_type='SLA' "
-                    + "and o.source_id=cast(a.audit_id as char) "
-                    + "join wf_task_sla_execution e on e.sla_execution_id=a.sla_execution_id "
-                    + "where e.deployment_id=?", deploymentId);
             jdbc.update("delete n from wf_notification_inbox n "
                     + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
                     + "join wf_task_sla_audit a on o.source_type='SLA' "
@@ -158,15 +156,15 @@ class WorkflowTaskSlaMySqlIT
         Instant start = engineConfiguration().getClock().getCurrentTime().toInstant();
 
         advanceClock(start.plusSeconds(90));
-        await(() -> countAudit(instance.getId(), "REMINDER") == 1, Duration.ofSeconds(15));
+        await(() -> countAudit(instance.getId(), "REMINDER") == 1, ASYNC_EXECUTION_TIMEOUT);
         assertThat(taskService.createTaskQuery().processInstanceId(instance.getId()).count()).isEqualTo(1);
 
         advanceClock(start.plusSeconds(150));
-        await(() -> countAudit(instance.getId(), "REMINDER") == 2, Duration.ofSeconds(15));
+        await(() -> countAudit(instance.getId(), "REMINDER") == 2, ASYNC_EXECUTION_TIMEOUT);
         assertThat(countNotifications(instance.getId(), "REMINDER")).isEqualTo(2);
 
         advanceClock(start.plusSeconds(240));
-        await(() -> countAudit(instance.getId(), "ESCALATE") == 1, Duration.ofSeconds(15));
+        await(() -> countAudit(instance.getId(), "ESCALATE") == 1, ASYNC_EXECUTION_TIMEOUT);
         List<Task> tasks = taskService.createTaskQuery().processInstanceId(instance.getId()).list();
         assertThat(tasks).singleElement().satisfies(task ->
         {
@@ -176,6 +174,15 @@ class WorkflowTaskSlaMySqlIT
         assertThat(countNotifications(instance.getId(), "ESCALATE")).isEqualTo(1);
         assertThat(jdbc.queryForObject("select status from wf_task_sla_execution where process_instance_id=?",
                 String.class, instance.getId())).isEqualTo("ESCALATED");
+
+        Task escalationTask = tasks.get(0);
+        Authentication.setAuthenticatedUserId(approverUserId);
+        taskService.complete(escalationTask.getId());
+        Authentication.setAuthenticatedUserId(null);
+        assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(instance.getId()).count()).isZero();
+        assertThat(jdbc.queryForObject("select status from wf_task_sla_execution where process_instance_id=?",
+                String.class, instance.getId())).isEqualTo("COMPLETED");
+        assertThat(countAudit(instance.getId(), "COMPLETE")).isEqualTo(1);
     }
 
     /**

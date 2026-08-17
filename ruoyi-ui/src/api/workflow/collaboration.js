@@ -1,13 +1,13 @@
 import request from '@/utils/request'
 
-/** @returns {Promise<object>} 最近 1000 条脱敏入站消息。 */
-export function listCollaborationInbound() {
-  return request({ url: '/workflow/collaboration/inbound', method: 'get' })
+/** @param {object} query 分页和领域筛选；@returns {Promise<object>} 脱敏入站消息 rows/total。 */
+export function listCollaborationInbound(query) {
+  return request({ url: '/workflow/collaboration/inbound', method: 'get', params: query })
 }
 
-/** @returns {Promise<object>} 最近 1000 条脱敏事务 outbox。 */
-export function listCollaborationOutbox() {
-  return request({ url: '/workflow/collaboration/outbox', method: 'get' })
+/** @param {object} query 分页和领域筛选；@returns {Promise<object>} 脱敏 outbox rows/total。 */
+export function listCollaborationOutbox(query) {
+  return request({ url: '/workflow/collaboration/outbox', method: 'get', params: query })
 }
 
 /** @param {string} messageId 消息主键。 @returns {Promise<object>} 逐次状态审计。 */

@@ -213,6 +213,28 @@
           and action_ordinal = #{actionOrdinal}
     </select>
 
+    <sql id="AuditListFilters">
+        <where>
+            <if test="query.actionType != null and query.actionType != ''">and a.action_type = #{query.actionType}</if>
+            <if test="query.keyword != null and query.keyword != ''">
+                and (cast(a.audit_id as char) = #{query.keyword}
+                  or cast(a.sla_execution_id as char) = #{query.keyword}
+                  or e.process_instance_id like concat('%', #{query.keyword}, '%')
+                  or e.task_id like concat('%', #{query.keyword}, '%')
+                  or e.task_definition_key like concat('%', #{query.keyword}, '%')
+                  or a.actor_user_id like concat('%', #{query.keyword}, '%'))
+            </if>
+            <if test="query.beginTime != null">and a.create_time &gt;= #{query.beginTime}</if>
+            <if test="query.endTime != null">and a.create_time &lt;= #{query.endTime}</if>
+        </where>
+    </sql>
+
+    <select id="countAudits" resultType="long">
+        select count(*) from wf_task_sla_audit a
+        join wf_task_sla_execution e on e.sla_execution_id = a.sla_execution_id
+        <include refid="AuditListFilters"/>
+    </select>
+
     <select id="selectAudits" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView">
         select a.audit_id as auditId, a.sla_execution_id as slaExecutionId,
                e.process_instance_id as processInstanceId, e.task_id as taskId,
@@ -221,7 +243,9 @@
                a.detail, a.create_time as createTime
         from wf_task_sla_audit a
         join wf_task_sla_execution e on e.sla_execution_id = a.sla_execution_id
-        order by a.audit_id desc limit 500
+        <include refid="AuditListFilters"/>
+        order by a.create_time desc, a.audit_id desc
+        limit #{pageSize} offset #{offset}
     </select>
 
     <select id="selectNotifications" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView">
@@ -249,6 +273,26 @@
           and n.read_status = 'UNREAD'
     </update>
 
+    <sql id="ExecutionListFilters">
+        <where>
+            <if test="query.status != null and query.status != ''">and status = #{query.status}</if>
+            <if test="query.keyword != null and query.keyword != ''">
+                and (cast(sla_execution_id as char) = #{query.keyword}
+                  or process_instance_id like concat('%', #{query.keyword}, '%')
+                  or task_id like concat('%', #{query.keyword}, '%')
+                  or task_definition_key like concat('%', #{query.keyword}, '%')
+                  or assignee_user_id like concat('%', #{query.keyword}, '%'))
+            </if>
+            <if test="query.beginTime != null">and started_at &gt;= #{query.beginTime}</if>
+            <if test="query.endTime != null">and started_at &lt;= #{query.endTime}</if>
+        </where>
+    </sql>
+
+    <select id="countExecutions" resultType="long">
+        select count(*) from wf_task_sla_execution
+        <include refid="ExecutionListFilters"/>
+    </select>
+
     <select id="selectExecutions" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView">
         select sla_execution_id as slaExecutionId,
                process_instance_id as processInstanceId, task_id as taskId,
@@ -256,6 +300,9 @@
                status, started_at as startedAt, reminder_due_at as reminderDueAt,
                escalation_due_at as escalationDueAt, reminders_sent as remindersSent,
                paused_at as pausedAt, paused_millis as pausedMillis
-        from wf_task_sla_execution order by sla_execution_id desc limit 500
+        from wf_task_sla_execution
+        <include refid="ExecutionListFilters"/>
+        order by started_at desc, sla_execution_id desc
+        limit #{pageSize} offset #{offset}
     </select>
 </mapper>

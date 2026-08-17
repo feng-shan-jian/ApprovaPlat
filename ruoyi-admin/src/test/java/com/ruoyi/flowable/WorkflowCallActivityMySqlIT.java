@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,7 +39,7 @@ import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowManualUrgeRequest;
 import com.ruoyi.flowable.service.model.WorkflowCallActivityReferenceService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowManualUrgeService;
 
 /**
  * 使用真实 MySQL 和 Flowable 8 验证 CallActivity 精确版本冻结与删除保护。
@@ -67,7 +68,7 @@ class WorkflowCallActivityMySqlIT
     private WorkflowCallActivityReferenceService callActivityReferenceService;
 
     @Autowired
-    private WorkflowNotificationService notificationService;
+    private WorkflowManualUrgeService manualUrgeService;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -149,17 +150,22 @@ class WorkflowCallActivityMySqlIT
         String runId = UUID.randomUUID().toString().replace("-", "");
         String childKey = "workflowUrgeChild" + runId;
         String parentKey = "workflowUrgeParent" + runId;
-        String starterUserId = activeUserForPermission("workflow:process:start", null);
-        String approverUserId = activeUserForPermission(
-                "workflow:process:approval", starterUserId);
-        Deployment childDeployment = deploy(repositoryService, childKey,
-                notificationChildBpmn(childKey, approverUserId));
-        Deployment parentDeployment = deploy(repositoryService, parentKey,
-                parentBpmn(parentKey, childKey));
+        List<Long> permissionActorUserIds = new ArrayList<>();
+        Deployment childDeployment = null;
+        Deployment parentDeployment = null;
         ProcessInstance parentInstance = null;
         ProcessInstance childInstance = null;
         try
         {
+            // 每个用例独立创建真实角色账号，避免空库基线和测试执行顺序影响权限闭环。
+            String starterUserId = String.valueOf(createPermissionActor(
+                    runId, "starter", "workflow_starter", permissionActorUserIds));
+            String approverUserId = String.valueOf(createPermissionActor(
+                    runId, "approver", "workflow_approver", permissionActorUserIds));
+            childDeployment = deploy(repositoryService, childKey,
+                    notificationChildBpmn(childKey, approverUserId));
+            parentDeployment = deploy(repositoryService, parentKey,
+                    parentBpmn(parentKey, childKey));
             processEngine.getIdentityService().setAuthenticatedUserId(starterUserId);
             try
             {
@@ -178,21 +184,22 @@ class WorkflowCallActivityMySqlIT
                     .processInstanceId(childProcessInstanceId).singleResult();
             assertThat(childTask).as("子实例必须停留在真实人工审批任务").isNotNull();
 
-            // 非发起人且没有 urge:any 的办理人必须在任何通知或审计副作用前被拒绝。
+            // 非发起人且没有 urge:any 的办理人必须在任何通知副作用前被拒绝。
             authenticate(approverUserId);
-            assertThatThrownBy(() -> notificationService.urge(new WorkflowManualUrgeRequest(
+            assertThatThrownBy(() -> manualUrgeService.urge(new WorkflowManualUrgeRequest(
                     rootProcessInstanceId, "无权催办子流程")))
                     .isInstanceOfSatisfying(ServiceException.class,
                             exception -> assertThat(exception.getCode())
                                     .isEqualTo(HttpStatus.FORBIDDEN));
             assertThat(countManualUrgeOutboxes(rootProcessInstanceId, childProcessInstanceId))
                     .isZero();
-            assertThat(countUrgeAudits(rootProcessInstanceId)).isZero();
 
             authenticate(starterUserId);
-            Map<String, Object> result = notificationService.urge(
+            var result = manualUrgeService.urge(
                     new WorkflowManualUrgeRequest(rootProcessInstanceId, "请处理子流程审批"));
-            assertThat(result).containsEntry("recipientCount", 1).containsEntry("outboxCount", 1);
+            assertThat(result.recipientCount()).isEqualTo(1);
+            assertThat(result.outboxCount()).isEqualTo(1);
+            assertThat(result.urgeEventKey()).startsWith("URGE:");
             Map<String, Object> outbox = jdbcTemplate.queryForMap(
                     "select outbox_id,process_definition_key,process_instance_id,task_id," +
                     "task_definition_key,recipient_user_id,route_path from wf_notification_outbox " +
@@ -206,7 +213,6 @@ class WorkflowCallActivityMySqlIT
                     .isEqualTo(Long.parseLong(approverUserId));
             assertThat(String.valueOf(outbox.get("route_path")))
                     .contains(childProcessInstanceId, childTask.getId());
-            assertThat(countUrgeAudits(rootProcessInstanceId)).isOne();
 
             SecurityContextHolder.clearContext();
             taskService.complete(childTask.getId());
@@ -217,17 +223,14 @@ class WorkflowCallActivityMySqlIT
                     String.class, manualUrgeOutboxId)).isEqualTo("CANCELLED");
             int outboxCountAfterCompletion = countManualUrgeOutboxes(
                     rootProcessInstanceId, childProcessInstanceId);
-            int auditCountAfterCompletion = countUrgeAudits(rootProcessInstanceId);
             authenticate(starterUserId);
-            assertThatThrownBy(() -> notificationService.urge(new WorkflowManualUrgeRequest(
+            assertThatThrownBy(() -> manualUrgeService.urge(new WorkflowManualUrgeRequest(
                     rootProcessInstanceId, "终态后不得催办")))
                     .isInstanceOfSatisfying(ServiceException.class,
                             exception -> assertThat(exception.getCode())
                                     .isEqualTo(HttpStatus.CONFLICT));
             assertThat(countManualUrgeOutboxes(rootProcessInstanceId, childProcessInstanceId))
                     .isEqualTo(outboxCountAfterCompletion);
-            assertThat(countUrgeAudits(rootProcessInstanceId))
-                    .isEqualTo(auditCountAfterCompletion);
         }
         finally
         {
@@ -237,8 +240,15 @@ class WorkflowCallActivityMySqlIT
             {
                 deleteNotificationFacts(parentInstance.getId(), childInstance.getId());
             }
-            deleteDeployment(repositoryService, parentDeployment);
-            deleteDeployment(repositoryService, childDeployment);
+            try
+            {
+                deleteDeployment(repositoryService, parentDeployment);
+                deleteDeployment(repositoryService, childDeployment);
+            }
+            finally
+            {
+                deletePermissionActors(runId, permissionActorUserIds);
+            }
         }
     }
 
@@ -257,18 +267,23 @@ class WorkflowCallActivityMySqlIT
         String runId = UUID.randomUUID().toString().replace("-", "");
         String childKey = "workflowUrgeRaceChild" + runId;
         String parentKey = "workflowUrgeRaceParent" + runId;
-        String starterUserId = activeUserForPermission("workflow:process:start", null);
-        String approverUserId = activeUserForPermission(
-                "workflow:process:approval", starterUserId);
-        Deployment childDeployment = deploy(repositoryService, childKey,
-                notificationChildBpmn(childKey, approverUserId));
-        Deployment parentDeployment = deploy(repositoryService, parentKey,
-                parentBpmn(parentKey, childKey));
+        List<Long> permissionActorUserIds = new ArrayList<>();
+        Deployment childDeployment = null;
+        Deployment parentDeployment = null;
         ProcessInstance parentInstance = null;
         ProcessInstance childInstance = null;
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try
         {
+            // 并发用例也使用本轮独立账号，确保两条线程共享同一正式权限主数据而不依赖其他用例。
+            String starterUserId = String.valueOf(createPermissionActor(
+                    runId, "starter", "workflow_starter", permissionActorUserIds));
+            String approverUserId = String.valueOf(createPermissionActor(
+                    runId, "approver", "workflow_approver", permissionActorUserIds));
+            childDeployment = deploy(repositoryService, childKey,
+                    notificationChildBpmn(childKey, approverUserId));
+            parentDeployment = deploy(repositoryService, parentKey,
+                    parentBpmn(parentKey, childKey));
             processEngine.getIdentityService().setAuthenticatedUserId(starterUserId);
             try
             {
@@ -297,7 +312,7 @@ class WorkflowCallActivityMySqlIT
                     throw new IllegalStateException("子流程催办并发起跑超时");
                 try
                 {
-                    notificationService.urge(new WorkflowManualUrgeRequest(
+                    manualUrgeService.urge(new WorkflowManualUrgeRequest(
                             rootProcessInstanceId, "与子任务完成竞争"));
                     return 0;
                 }
@@ -330,7 +345,6 @@ class WorkflowCallActivityMySqlIT
                     "and process_instance_id in (?,?) and status in " +
                     "('PENDING','RETRYING','DELIVERING')", Integer.class,
                     rootProcessInstanceId, childProcessInstanceId)).isZero();
-            assertThat(countUrgeAudits(rootProcessInstanceId)).isLessThanOrEqualTo(1);
         }
         finally
         {
@@ -341,8 +355,15 @@ class WorkflowCallActivityMySqlIT
             {
                 deleteNotificationFacts(parentInstance.getId(), childInstance.getId());
             }
-            deleteDeployment(repositoryService, parentDeployment);
-            deleteDeployment(repositoryService, childDeployment);
+            try
+            {
+                deleteDeployment(repositoryService, parentDeployment);
+                deleteDeployment(repositoryService, childDeployment);
+            }
+            finally
+            {
+                deletePermissionActors(runId, permissionActorUserIds);
+            }
         }
     }
 
@@ -663,29 +684,63 @@ class WorkflowCallActivityMySqlIT
     }
 
     /**
-     * 查询具备指定正式菜单权限的有效用户；指定排除用户时同时排除超级管理员。
+     * 创建真实启用用户并绑定现有工作流角色，使权限校验基于正式角色和菜单主数据执行。
      *
-     * @param permission String，必须由有效角色菜单授予的权限码
-     * @param excludedUserId String，可空；不得返回的用户主键
-     * @return String，满足权限和有效状态的最小数字用户主键
+     * @param runId String，当前测试的唯一运行标识
+     * @param suffix String，当前测试用户的稳定业务后缀
+     * @param roleKey String，必须存在且启用的正式角色标识
+     * @param permissionActorUserIds List&lt;Long&gt;，记录本轮新建用户主键的清理清单
+     * @return long，新建用户主键
      */
-    private String activeUserForPermission(String permission, String excludedUserId)
+    private long createPermissionActor(String runId, String suffix, String roleKey,
+            List<Long> permissionActorUserIds)
     {
-        String exclusion = excludedUserId == null ? "" : " and u.user_id<>? and u.user_id<>1";
-        Object[] parameters = excludedUserId == null
-                ? new Object[] { permission }
-                : new Object[] { permission, Long.valueOf(excludedUserId) };
-        String userId = jdbcTemplate.queryForObject(
-                "select cast(min(u.user_id) as char) from sys_user u " +
-                "join sys_user_role ur on ur.user_id=u.user_id " +
-                "join sys_role r on r.role_id=ur.role_id " +
-                "join sys_role_menu rm on rm.role_id=r.role_id " +
-                "join sys_menu m on m.menu_id=rm.menu_id " +
-                "where u.status='0' and u.del_flag='0' and r.status='0' and r.del_flag='0' " +
-                "and m.status='0' and m.perms=?" + exclusion,
-                String.class, parameters);
-        assertThat(userId).as("真实权限用户必须存在: " + permission).isNotBlank();
+        String userName = permissionActorPrefix(runId) + suffix;
+        Long roleId = jdbcTemplate.queryForObject("select role_id from sys_role " +
+                "where role_key=? and status='0' and del_flag='0'", Long.class, roleKey);
+        assertThat(roleId).as(roleKey + " 正式角色").isNotNull();
+        jdbcTemplate.update("insert into sys_user " +
+                        "(user_name,nick_name,password,status,del_flag,create_by,create_time) " +
+                        "values (?,?,'','0','0','workflow_call_activity_it',current_timestamp(3))",
+                userName, "子流程催办集成测试" + suffix);
+        Long userId = jdbcTemplate.queryForObject(
+                "select user_id from sys_user where user_name=?", Long.class, userName);
+        assertThat(userId).isNotNull().isPositive();
+        jdbcTemplate.update("insert into sys_user_role (user_id,role_id) values (?,?)", userId, roleId);
+        permissionActorUserIds.add(userId);
         return userId;
+    }
+
+    /**
+     * 按通知偏好、角色关系、用户的外键顺序回收本轮临时权限账号。
+     *
+     * @param runId String，当前测试的唯一运行标识
+     * @param permissionActorUserIds List&lt;Long&gt;，本轮创建的真实权限用户主键
+     * @return void，任一测试账号残留时测试失败
+     */
+    private void deletePermissionActors(String runId, List<Long> permissionActorUserIds)
+    {
+        for (Long userId : permissionActorUserIds)
+        {
+            jdbcTemplate.update("delete from wf_notification_preference where user_id=?", userId);
+            jdbcTemplate.update("delete from sys_user_role where user_id=?", userId);
+            jdbcTemplate.update("delete from sys_user where user_id=?", userId);
+        }
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from sys_user where user_name like ?", Integer.class,
+                permissionActorPrefix(runId) + "%")).isZero();
+        permissionActorUserIds.clear();
+    }
+
+    /**
+     * 生成满足 sys_user.user_name 长度约束的本轮临时账号前缀。
+     *
+     * @param runId String，当前测试的唯一运行标识
+     * @return String，包含 runId 前十二位的隔离前缀
+     */
+    private String permissionActorPrefix(String runId)
+    {
+        return "wfcall_" + runId.substring(0, 12) + "_";
     }
 
     /**
@@ -727,24 +782,11 @@ class WorkflowCallActivityMySqlIT
     }
 
     /**
-     * 统计根业务实例的人工催办审计数量。
-     *
-     * @param rootProcessInstanceId String，根业务实例主键
-     * @return int，根实例正式催办审计数
-     */
-    private int countUrgeAudits(String rootProcessInstanceId)
-    {
-        return jdbcTemplate.queryForObject(
-                "select count(*) from wf_notification_urge_audit where process_instance_id=?",
-                Integer.class, rootProcessInstanceId);
-    }
-
-    /**
      * 按外键顺序只删除当前根与子实例产生的通知事实，不影响共享验收库其他记录。
      *
      * @param rootProcessInstanceId String，本测试根业务实例主键
      * @param childProcessInstanceId String，本测试 CallActivity 子实例主键
-     * @return void，目标通知、投递审计和催办审计清理完成后正常返回
+     * @return void，目标通知 inbox 与 outbox 清理完成后正常返回
      */
     private void deleteNotificationFacts(String rootProcessInstanceId,
             String childProcessInstanceId)
@@ -754,14 +796,9 @@ class WorkflowCallActivityMySqlIT
                 Long.class, rootProcessInstanceId, childProcessInstanceId);
         for (Long outboxId : outboxIds)
         {
-            jdbcTemplate.update("delete from wf_notification_delivery_audit where outbox_id=?",
-                    outboxId);
             jdbcTemplate.update("delete from wf_notification_inbox where outbox_id=?", outboxId);
             jdbcTemplate.update("delete from wf_notification_outbox where outbox_id=?", outboxId);
         }
-        jdbcTemplate.update(
-                "delete from wf_notification_urge_audit where process_instance_id=?",
-                rootProcessInstanceId);
     }
 
     /**

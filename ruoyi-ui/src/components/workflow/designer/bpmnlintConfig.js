@@ -321,7 +321,16 @@ function requireConditionalFlows () {
 	}
 
 	function hasCondition(flow) {
-	  return !!flow.conditionExpression;
+	  if (flow.conditionExpression) {
+	    return true;
+	  }
+
+	  // 条件设计器只保存版本化业务规则，部署时后端才编译为固定路由表达式；lint 必须识别该受控作者配置。
+	  const extensionValues = flow.extensionElements && flow.extensionElements.values || [];
+	  return extensionValues.some((extension) => {
+	    const properties = extension && extension.values || [];
+	    return properties.some((property) => property && property.name === 'approva.conditionRule.config');
+	  });
 	}
 
 	function isDefaultFlow(node, flow) {

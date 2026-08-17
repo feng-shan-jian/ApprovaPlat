@@ -46,9 +46,13 @@ import com.ruoyi.flowable.domain.dto.WorkflowManualUrgeRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowNotificationPolicyRequest;
 import com.ruoyi.flowable.engine.WorkflowProcessEngineAdapter;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.DeliveryOutcome;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.OutboxRow;
+import com.ruoyi.flowable.service.notification.WorkflowManualUrgeService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationDeliveryCoordinator;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationDeliveryResult;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxRecord;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationPolicyService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 import com.ruoyi.flowable.service.task.WorkflowTaskCopyAction;
 import com.ruoyi.flowable.service.task.WorkflowTaskCopyService;
 
@@ -76,12 +80,25 @@ class WorkflowNotificationMySqlIT
     /** 仅允许显式带有验收或集成测试语义的 ApprovaPlat 隔离库执行全量通知清理。 */
     private static final Pattern ISOLATED_SCHEMA_PATTERN = Pattern.compile(
             "^(?:approvaplat_(?:accept|acceptance|it|test)_[a-z0-9]+(?:_[a-z0-9]+)*"
-                    + "|ry_vue(?:_codex)?_flowable_it)$");
+                    + "|ry_vue(?:_codex)?_flowable_it"
+                    + "|wf_arch_[0-9]{8}_flowable_it)$");
+
+    /** 本轮通知事实的稳定过滤条件，兼容真实流程事实和直接插入的 worker 失败事实。 */
+    private static final String OWN_OUTBOX_FILTER =
+            "(o.process_instance_id=? or (o.process_definition_key like 'notification%' " +
+                    "and locate(?,o.process_definition_key)>0))";
+
+    /** 同一 Failsafe JVM 只重置一次共享通知队列，后续用例继续按 runId 精确清理。 */
+    private static boolean sharedNotificationQueueReset;
 
     @Autowired private RepositoryService repositoryService;
     @Autowired private RuntimeService runtimeService;
     @Autowired private TaskService taskService;
-    @Autowired private WorkflowNotificationService notificationService;
+    @Autowired private WorkflowNotificationRegistrar notificationRegistrar;
+    @Autowired private WorkflowNotificationPolicyService notificationPolicyService;
+    @Autowired private WorkflowNotificationOutboxService notificationOutboxService;
+    @Autowired private WorkflowNotificationDeliveryCoordinator notificationDeliveryCoordinator;
+    @Autowired private WorkflowManualUrgeService manualUrgeService;
     @Autowired private WorkflowProcessEngineAdapter workflowProcessEngineAdapter;
     @Autowired private WorkflowTaskCopyService taskCopyService;
     @Autowired private JdbcTemplate jdbc;
@@ -89,7 +106,7 @@ class WorkflowNotificationMySqlIT
     @Value("${flowable.it.expected-schema}")
     private String expectedSchema;
 
-    /** 本轮测试稳定前缀，只清理自身 Flowable 与 wf_copy 数据。 */
+    /** 本轮测试稳定前缀，用于隔离通知、Flowable 与 wf_copy 事实。 */
     private final String runId = UUID.randomUUID().toString().replace("-", "");
     private String starterUserId;
     private String approverUserId;
@@ -98,16 +115,24 @@ class WorkflowNotificationMySqlIT
     private String deploymentId;
     private final List<String> deploymentIds = new ArrayList<>();
     private final List<String> processInstanceIds = new ArrayList<>();
+    /** 本轮测试创建的真实权限用户主键，按外键逆序精确回收。 */
+    private final List<Long> permissionActorUserIds = new ArrayList<>();
     private ProcessInstance instance;
 
     /**
-     * 清空隔离库通知队列并选择真实有效的发起人和审批人。
+     * 校验测试库连接、清理本轮残留事实并选择真实有效的发起人和审批人。
      * @return void，正式用户或通知基线缺失时测试立即失败
      */
     @BeforeEach
     void setUp()
     {
+        if (!sharedNotificationQueueReset)
+        {
+            clearSharedNotificationQueue();
+            sharedNotificationQueueReset = true;
+        }
         clearNotificationFacts();
+        createPermissionActors();
         starterUserId = activeUserForPermission("workflow:process:start");
         approverUserId = activeUserForPermissionExcluding(
                 "workflow:process:approval", starterUserId);
@@ -148,23 +173,47 @@ class WorkflowNotificationMySqlIT
                 repositoryService.deleteDeployment(id, true);
             }
         }
+        deletePermissionActors();
     }
 
     /**
-     * 在单个数据库事务中按外键依赖顺序清理通知测试事实。
-     * @return void，先删除 delivery_audit 与 inbox 子表，再删除 outbox 和独立 urge 审计
+     * 在单个数据库事务中按外键依赖顺序清理本轮通知测试事实。
+     * @return void，先精确删除本轮 inbox 子表，再删除本轮 outbox 主表
      */
     private void clearNotificationFacts()
     {
         new TransactionTemplate(transactionManager).executeWithoutResult(status ->
         {
-            // 库名查询与四表清理必须复用同一事务连接，避免连接池切换绕过 fail-closed 门禁。
+            // 库名查询与通知表清理必须复用同一事务连接，避免连接池切换绕过 fail-closed 门禁。
             requireNotificationCleanupSchema();
-            // 四表必须共用一个提交边界，防止 autocommit 间隙中的回调重新建立 outbox 子行。
-            jdbc.update("delete from wf_notification_delivery_audit");
+            // 先按本轮 outbox 关联删除 inbox，满足旧版本外键约束且不触碰共享库其他通知。
+            jdbc.update("delete n from wf_notification_inbox n " +
+                    "join wf_notification_outbox o on o.outbox_id=n.outbox_id where " +
+                    OWN_OUTBOX_FILTER, runId, runId);
+            assertThat(countInbox()).isZero();
+            // outbox 与其子表清理共用提交边界，避免留下半清理状态。
+            jdbc.update("delete o from wf_notification_outbox o where " + OWN_OUTBOX_FILTER,
+                    runId, runId);
+            assertThat(countOwnedOutbox()).isZero();
+        });
+    }
+
+    /**
+     * 在通知 IT 首次执行前清理同一隔离库中其他集成测试遗留的通知投递事实。
+     * @return void，仅在期望库与当前库一致且具备隔离测试命名时清空 inbox/outbox
+     */
+    private void clearSharedNotificationQueue()
+    {
+        new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+        {
+            // 全套 IT 共享同一临时库，先删除投影再删除 outbox，避免历史候选影响租约顺序。
+            requireNotificationCleanupSchema();
             jdbc.update("delete from wf_notification_inbox");
             jdbc.update("delete from wf_notification_outbox");
-            jdbc.update("delete from wf_notification_urge_audit");
+            assertThat(jdbc.queryForObject("select count(*) from wf_notification_inbox",
+                    Integer.class)).isZero();
+            assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox",
+                    Integer.class)).isZero();
         });
     }
 
@@ -178,29 +227,31 @@ class WorkflowNotificationMySqlIT
         startProcess();
         assertThat(countOutbox("TASK_ARRIVED")).isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox where " +
+                "process_instance_id=? and " +
                 "event_type in ('TASK_CLAIMED','TASK_UNCLAIMED','TASK_DELEGATED'," +
-                "'TASK_DELEGATION_RESOLVED','TASK_TRANSFERRED')", Integer.class)).isZero();
+                "'TASK_DELEGATION_RESOLVED','TASK_TRANSFERRED')", Integer.class,
+                instance.getId())).isZero();
         Task task = taskService.createTaskQuery().processInstanceId(instance.getId()).singleResult();
 
         // 同一任务到达事件再次进入事务时必须命中相同幂等键，不新增 outbox。
         new TransactionTemplate(transactionManager).executeWithoutResult(status ->
-                notificationService.onTaskEvent("create", task.getId(), task.getProcessInstanceId(),
+                notificationRegistrar.onTaskEvent("create", task.getId(), task.getProcessInstanceId(),
                         task.getProcessDefinitionId(), task.getTaskDefinitionKey(), task.getName(),
                         task.getAssignee(), task.getOwner()));
         assertThat(countOutbox("TASK_ARRIVED")).isEqualTo(1);
 
-        OutboxRow firstClaim = notificationService.claimNext("worker-a");
+        WorkflowNotificationOutboxRecord firstClaim = claimNextForRun("worker-a");
         assertThat(firstClaim).isNotNull();
-        notificationService.deliverInbox(firstClaim, "worker-a");
+        notificationDeliveryCoordinator.deliverClaimed(firstClaim, "worker-a");
         assertThat(countInbox()).isEqualTo(1);
 
         // 模拟进程在提交站内信后状态确认前重启，过期租约由新 worker 接管且 inbox 唯一键去重。
         jdbc.update("update wf_notification_outbox set status='DELIVERING',processed_time=null," +
                 "lease_owner='dead-worker',lease_expires_at=?,revision=revision+1 where outbox_id=?",
                 Timestamp.from(Instant.now().minusSeconds(10)), firstClaim.outboxId());
-        OutboxRow takeover = notificationService.claimNext("worker-b");
+        WorkflowNotificationOutboxRecord takeover = claimNextForRun("worker-b");
         assertThat(takeover).isNotNull();
-        notificationService.deliverInbox(takeover, "worker-b");
+        notificationDeliveryCoordinator.deliverClaimed(takeover, "worker-b");
         assertThat(countInbox()).isEqualTo(1);
         assertThat(outboxStatus(firstClaim.outboxId())).isEqualTo("PROCESSED");
     }
@@ -219,7 +270,6 @@ class WorkflowNotificationMySqlIT
         {
             // 同一事务连接先校验隔离库，再清理本用例要重新并发登记的到达事实。
             requireNotificationCleanupSchema();
-            jdbc.update("delete from wf_notification_delivery_audit");
             jdbc.update("delete from wf_notification_outbox where task_id=? and event_type='TASK_ARRIVED'",
                     task.getId());
         });
@@ -243,12 +293,10 @@ class WorkflowNotificationMySqlIT
         }
         assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox " +
                 "where task_id=? and event_type='TASK_ARRIVED'", Integer.class, task.getId())).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select count(*) from wf_notification_delivery_audit " +
-                "where action_type='ENQUEUE'", Integer.class)).isEqualTo(1);
     }
 
     /**
-     * 查询当前 JDBC 会话的真实库名，并在执行任何通知表全量删除前做 fail-closed 校验。
+     * 查询当前 JDBC 会话的真实库名，并在执行通知事实精确清理前做 fail-closed 校验。
      *
      * @return void，期望库缺失、当前库不一致或库名不具备隔离测试语义时立即拒绝清理
      */
@@ -259,11 +307,11 @@ class WorkflowNotificationMySqlIT
     }
 
     /**
-     * 校验通知 MySQL IT 的期望库、当前库和隔离命名契约。
+     * 校验通知 MySQL IT 的期望库、当前库和测试命名契约。
      *
      * @param expectedSchema String，必填环境变量 FLOWABLE_IT_EXPECTED_SCHEMA 映射出的期望库名
      * @param currentSchema String，当前 JDBC 连接执行 select database() 得到的真实库名
-     * @return void，两个库名完全一致且符合验收或测试隔离命名时正常返回
+     * @return void，两个库名完全一致且符合验收或集成测试命名时正常返回
      */
     static void requireIsolatedNotificationSchema(String expectedSchema, String currentSchema)
     {
@@ -290,7 +338,7 @@ class WorkflowNotificationMySqlIT
     {
         String processKey = "notification_policy_" + runId + "_replay";
         authenticate(starterUserId);
-        Map<String, Object> saved = notificationService.savePolicy(
+        Map<String, Object> saved = notificationPolicyService.savePolicy(
                 new WorkflowNotificationPolicyRequest(null, "PROCESS", processKey, null,
                         "TASK_ARRIVED", "TASK_RECIPIENT", "INBOX", null,
                         "首次-{{taskName}}", "首次正文-{{processInstanceId}}", 3,
@@ -302,7 +350,7 @@ class WorkflowNotificationMySqlIT
                 "from wf_notification_outbox where task_id=? and event_type='TASK_ARRIVED'", task.getId());
 
         authenticate(starterUserId);
-        notificationService.savePolicy(new WorkflowNotificationPolicyRequest(
+        notificationPolicyService.savePolicy(new WorkflowNotificationPolicyRequest(
                 ((Number) saved.get("policyId")).longValue(), "PROCESS", processKey, null,
                 "TASK_ARRIVED", "TASK_RECIPIENT", "INBOX", null,
                 "更新-{{taskName}}", "更新正文-{{processInstanceId}}", 9,
@@ -310,16 +358,13 @@ class WorkflowNotificationMySqlIT
         SecurityContextHolder.clearContext();
 
         Integer replayed = new TransactionTemplate(transactionManager).execute(status ->
-                notificationService.onTaskEvent("create", task.getId(), task.getProcessInstanceId(),
+                notificationRegistrar.onTaskEvent("create", task.getId(), task.getProcessInstanceId(),
                         task.getProcessDefinitionId(), task.getTaskDefinitionKey(), task.getName(),
                         task.getAssignee(), task.getOwner()));
         assertThat(replayed).isZero();
         assertThat(jdbc.queryForMap("select outbox_id,title,content,max_attempts " +
                 "from wf_notification_outbox where task_id=? and event_type='TASK_ARRIVED'", task.getId()))
                 .isEqualTo(frozen);
-        assertThat(jdbc.queryForObject("select count(*) from wf_notification_delivery_audit " +
-                "where outbox_id=? and action_type='ENQUEUE'", Integer.class,
-                ((Number) frozen.get("outbox_id")).longValue())).isEqualTo(1);
     }
 
     /**
@@ -339,7 +384,7 @@ class WorkflowNotificationMySqlIT
         int outboxCountBefore = countOutbox("TASK_ARRIVED");
 
         assertThatThrownBy(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status ->
-                notificationService.onTaskEvent("create", originalTask.getId(), alternateInstance.getId(),
+                notificationRegistrar.onTaskEvent("create", originalTask.getId(), alternateInstance.getId(),
                         originalTask.getProcessDefinitionId(), originalTask.getTaskDefinitionKey(),
                         originalTask.getName(), originalTask.getAssignee(), originalTask.getOwner())))
                 .isInstanceOf(ServiceException.class)
@@ -347,8 +392,6 @@ class WorkflowNotificationMySqlIT
         assertThat(countOutbox("TASK_ARRIVED")).isEqualTo(outboxCountBefore);
         assertThat(jdbc.queryForObject("select process_instance_id from wf_notification_outbox " +
                 "where outbox_id=?", String.class, originalOutboxId)).isEqualTo(originalInstance.getId());
-        assertThat(jdbc.queryForObject("select count(*) from wf_notification_delivery_audit " +
-                "where outbox_id=? and action_type='ENQUEUE'", Integer.class, originalOutboxId)).isEqualTo(1);
     }
 
     /**
@@ -359,23 +402,23 @@ class WorkflowNotificationMySqlIT
     void rejectsMismatchedExistingInboxWithoutFakeSuccess()
     {
         long outboxId = insertOutbox("INBOX", approverUserId, 3);
-        OutboxRow claimed = notificationService.claimNext("worker-inbox-mismatch");
+        WorkflowNotificationOutboxRecord claimed = claimNextForRun("worker-inbox-mismatch");
         assertThat(claimed).isNotNull();
-        jdbc.update("insert into wf_notification_inbox (outbox_id,recipient_user_id,event_type," +
-                "title,content,process_instance_id,task_id,route_path,read_status,create_time) " +
-                "select outbox_id,recipient_user_id,'TASK_COMPLETED','错误标题',content," +
+        jdbc.update("insert into wf_notification_inbox (outbox_id,notification_key,source_type,source_id," +
+                "recipient_user_id,event_type,title,content,process_instance_id,task_id,route_path," +
+                "read_status,create_time) " +
+                "select outbox_id,sha2(concat_ws('|',source_type,source_id,event_type),256)," +
+                "source_type,source_id,recipient_user_id,'TASK_COMPLETED','错误标题',content," +
                 "process_instance_id,task_id,route_path,'UNREAD',current_timestamp(3) " +
                 "from wf_notification_outbox where outbox_id=?", outboxId);
 
-        assertThatThrownBy(() -> notificationService.deliverInbox(
-                claimed, "worker-inbox-mismatch"))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("持久化事实");
-        assertThat(outboxStatus(outboxId)).isEqualTo("DELIVERING");
+        notificationDeliveryCoordinator.deliverClaimed(claimed, "worker-inbox-mismatch");
+        assertThat(outboxStatus(outboxId)).isEqualTo("RETRYING");
+        assertThat(jdbc.queryForObject("select last_error_code from wf_notification_outbox " +
+                "where outbox_id=?", String.class, outboxId))
+                .isEqualTo("DELIVERY_INTERNAL_ERROR");
         assertThat(jdbc.queryForObject("select processed_time is null from wf_notification_outbox " +
                 "where outbox_id=?", Boolean.class, outboxId)).isTrue();
-        assertThat(jdbc.queryForObject("select count(*) from wf_notification_delivery_audit " +
-                "where outbox_id=? and action_type='DELIVER'", Integer.class, outboxId)).isZero();
     }
 
     /**
@@ -391,8 +434,8 @@ class WorkflowNotificationMySqlIT
         try
         {
             jdbc.update("update sys_user set status='1' where user_id=?", approverUserId);
-            OutboxRow invalid = notificationService.claimNext("worker-invalid");
-            notificationService.deliverInbox(invalid, "worker-invalid");
+            WorkflowNotificationOutboxRecord invalid = claimNextForRun("worker-invalid");
+            notificationDeliveryCoordinator.deliverClaimed(invalid, "worker-invalid");
             assertThat(outboxStatus(inboxOutboxId)).isEqualTo("DEAD_LETTER");
             assertThat(countInbox()).isZero();
         }
@@ -402,49 +445,45 @@ class WorkflowNotificationMySqlIT
         }
 
         long emailOutboxId = insertOutbox("EMAIL", approverUserId, 2);
-        OutboxRow first = notificationService.claimNext("worker-retry");
-        notificationService.completeDelivery(first, "worker-retry",
-                DeliveryOutcome.failure("SMTP_TIMEOUT", "SMTP 投递超时", false));
+        WorkflowNotificationOutboxRecord first = claimNextForRun("worker-retry");
+        notificationOutboxService.completeDelivery(first, "worker-retry",
+                WorkflowNotificationDeliveryResult.failure(
+                        "SMTP_TIMEOUT", "SMTP 投递超时", false));
         assertThat(outboxStatus(emailOutboxId)).isEqualTo("RETRYING");
         jdbc.update("update wf_notification_outbox set next_attempt_at=? where outbox_id=?",
                 Timestamp.from(Instant.now().minusSeconds(1)), emailOutboxId);
-        OutboxRow second = notificationService.claimNext("worker-retry");
+        WorkflowNotificationOutboxRecord second = claimNextForRun("worker-retry");
         assertThat(second.attemptCount()).isEqualTo(2);
         assertThat(second.totalAttemptCount()).isEqualTo(2);
         // 模拟最终一次 SMTP 已开始但进程退出；租约接管只能死信，不得把次数增加到上限之外。
         jdbc.update("update wf_notification_outbox set lease_expires_at=? where outbox_id=?",
                 Timestamp.from(Instant.now().minusSeconds(1)), emailOutboxId);
-        assertThat(notificationService.claimNext("worker-final-lease")).isNull();
+        assertThat(claimNextForRun("worker-final-lease")).isNull();
         assertThat(outboxStatus(emailOutboxId)).isEqualTo("DEAD_LETTER");
         assertOutboxSequence(emailOutboxId, 1, 2, 2);
         authenticate(starterUserId);
-        notificationService.compensate(emailOutboxId);
+        notificationOutboxService.compensate(emailOutboxId);
         SecurityContextHolder.clearContext();
         assertThat(outboxStatus(emailOutboxId)).isEqualTo("RETRYING");
         assertOutboxSequence(emailOutboxId, 2, 0, 2);
         assertThat(jdbc.queryForObject("select processed_time is null from wf_notification_outbox " +
                 "where outbox_id=?", Boolean.class, emailOutboxId)).isTrue();
 
-        OutboxRow cycleTwoFirst = notificationService.claimNext("worker-cycle-two");
-        notificationService.completeDelivery(cycleTwoFirst, "worker-cycle-two",
-                DeliveryOutcome.failure("SMTP_TIMEOUT", "SMTP 投递超时", false));
+        WorkflowNotificationOutboxRecord cycleTwoFirst = claimNextForRun("worker-cycle-two");
+        notificationOutboxService.completeDelivery(cycleTwoFirst, "worker-cycle-two",
+                WorkflowNotificationDeliveryResult.failure(
+                        "SMTP_TIMEOUT", "SMTP 投递超时", false));
         jdbc.update("update wf_notification_outbox set next_attempt_at=? where outbox_id=?",
                 Timestamp.from(Instant.now().minusSeconds(1)), emailOutboxId);
-        OutboxRow cycleTwoSecond = notificationService.claimNext("worker-cycle-two");
-        notificationService.completeDelivery(cycleTwoSecond, "worker-cycle-two",
-                DeliveryOutcome.failure("SMTP_5XX", "SMTP 服务暂时不可用", false));
+        WorkflowNotificationOutboxRecord cycleTwoSecond = claimNextForRun("worker-cycle-two");
+        notificationOutboxService.completeDelivery(cycleTwoSecond, "worker-cycle-two",
+                WorkflowNotificationDeliveryResult.failure(
+                        "SMTP_5XX", "SMTP 服务暂时不可用", false));
         assertOutboxSequence(emailOutboxId, 2, 2, 4);
         authenticate(starterUserId);
-        notificationService.compensate(emailOutboxId);
+        notificationOutboxService.compensate(emailOutboxId);
         SecurityContextHolder.clearContext();
         assertOutboxSequence(emailOutboxId, 3, 0, 4);
-        assertThat(jdbc.queryForList("select concat(action_type,':',delivery_cycle,':'," +
-                "attempt_no,':',total_attempt_no) from wf_notification_delivery_audit " +
-                "where outbox_id=? order by audit_id", String.class, emailOutboxId))
-                .containsExactly("CLAIM:1:1:1", "RETRY:1:1:1", "CLAIM:1:2:2",
-                        "DEAD_LETTER:1:2:2", "COMPENSATE:2:0:2", "CLAIM:2:1:3",
-                        "RETRY:2:1:3", "CLAIM:2:2:4", "DEAD_LETTER:2:2:4",
-                        "COMPENSATE:3:0:4");
     }
 
     /**
@@ -458,7 +497,7 @@ class WorkflowNotificationMySqlIT
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
         transaction.executeWithoutResult(status ->
         {
-            notificationService.onProcessResult("PROCESS_CANCELED",
+            notificationRegistrar.onProcessResult("PROCESS_CANCELED",
                     instance.getProcessDefinitionId(), instance.getId());
             status.setRollbackOnly();
         });
@@ -476,8 +515,8 @@ class WorkflowNotificationMySqlIT
                 Long.class, "COPY_IT_" + runId, Long.valueOf(approverUserId));
         transaction.executeWithoutResult(status ->
         {
-            assertThat(notificationService.onCopyCreated(copyId)).isEqualTo(1);
-            assertThat(notificationService.onCopyCreated(copyId)).isZero();
+            assertThat(notificationRegistrar.onCopyCreated(copyId)).isEqualTo(1);
+            assertThat(notificationRegistrar.onCopyCreated(copyId)).isZero();
         });
         assertThat(countOutbox("COPY_CREATED")).isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from wf_copy where copy_id=?",
@@ -498,8 +537,8 @@ class WorkflowNotificationMySqlIT
                 Integer.class, "TASK_ARRIVED:" + task.getId(), Long.valueOf(copyUserId)))
                 .isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox where " +
-                "event_type='COPY_CREATED' and recipient_user_id=?", Integer.class,
-                Long.valueOf(copyUserId))).isEqualTo(1);
+                "process_instance_id=? and event_type='COPY_CREATED' and recipient_user_id=?",
+                Integer.class, instance.getId(), Long.valueOf(copyUserId))).isEqualTo(1);
 
         WorkflowCurrentIdentity actor = new WorkflowCurrentIdentity(approverUserId, Set.of());
         WorkflowTaskCopyService.CopyPlan failingPlan = taskCopyService.prepare(
@@ -532,16 +571,16 @@ class WorkflowNotificationMySqlIT
                 Integer.class, "TASK_COMPLETED:" + task.getId(), Long.valueOf(copyUserId)))
                 .isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox where " +
-                "event_type='COPY_CREATED' and recipient_user_id=?", Integer.class,
-                Long.valueOf(copyUserId))).isEqualTo(2);
+                "process_instance_id=? and event_type='COPY_CREATED' and recipient_user_id=?",
+                Integer.class, instance.getId(), Long.valueOf(copyUserId))).isEqualTo(2);
     }
 
     /**
-     * 验证全部实际通道关闭时催办返回 409，且事务不留下 outbox 或空审计。
+     * 验证全部实际通道关闭时催办返回 409，且事务不留下空 outbox。
      * @return void，关闭偏好仍返回成功或产生副作用时测试失败
      */
     @Test
-    void rejectsUrgeWithoutDeliverableChannelAndLeavesNoAudit()
+    void rejectsUrgeWithoutDeliverableChannelAndLeavesNoOutbox()
     {
         startProcess();
         PreferenceSnapshot original = preferenceSnapshot(Long.valueOf(approverUserId));
@@ -553,14 +592,12 @@ class WorkflowNotificationMySqlIT
                     "inbox_enabled=0,sms_enabled=0,revision=revision+1,update_time=current_timestamp(3)",
                     Long.valueOf(approverUserId));
             authenticate(starterUserId);
-            assertThatThrownBy(() -> notificationService.urge(new WorkflowManualUrgeRequest(
+            assertThatThrownBy(() -> manualUrgeService.urge(new WorkflowManualUrgeRequest(
                     instance.getId(), "无可投递通道")))
                     .isInstanceOf(ServiceException.class)
                     .satisfies(exception -> assertThat(((ServiceException) exception).getCode())
                             .isEqualTo(HttpStatus.CONFLICT));
             assertThat(countOutbox("MANUAL_URGE")).isZero();
-            assertThat(jdbc.queryForObject("select count(*) from wf_notification_urge_audit " +
-                    "where process_instance_id=?", Integer.class, instance.getId())).isZero();
         }
         finally
         {
@@ -578,13 +615,13 @@ class WorkflowNotificationMySqlIT
     {
         String processKey = "notification_policy_" + runId;
         authenticate(starterUserId);
-        Map<String, Object> saved = notificationService.savePolicy(
+        Map<String, Object> saved = notificationPolicyService.savePolicy(
                 new WorkflowNotificationPolicyRequest(null, "PROCESS", processKey, null,
                         "TASK_ARRIVED", "TASK_RECIPIENT", "EMAIL,INBOX", null,
                         "{{processName}}{{processName}}", "{{processName}}".repeat(20),
                         6, "ENABLED", null));
         assertThat(saved.get("channels")).isEqualTo("INBOX,EMAIL");
-        assertThatThrownBy(() -> notificationService.savePolicy(
+        assertThatThrownBy(() -> notificationPolicyService.savePolicy(
                 new WorkflowNotificationPolicyRequest(null, "PROCESS",
                         processKey + "_invalid_attempt", null, "TASK_ARRIVED",
                         "TASK_RECIPIENT", "INBOX", null, "标题", "正文", null,
@@ -592,7 +629,7 @@ class WorkflowNotificationMySqlIT
                 .isInstanceOf(ServiceException.class)
                 .satisfies(exception -> assertThat(((ServiceException) exception).getCode())
                         .isEqualTo(HttpStatus.BAD_REQUEST));
-        assertThatThrownBy(() -> notificationService.savePolicy(
+        assertThatThrownBy(() -> notificationPolicyService.savePolicy(
                 new WorkflowNotificationPolicyRequest(null, "PROCESS",
                         processKey + "_invalid_title", null, "TASK_ARRIVED",
                         "TASK_RECIPIENT", "INBOX", null, "x".repeat(161), "正文", 6,
@@ -604,15 +641,18 @@ class WorkflowNotificationMySqlIT
 
         startSingleProcess(processKey, "长流程".repeat(80), true, null);
         assertThat(jdbc.queryForObject("select max(char_length(title)) from wf_notification_outbox " +
-                "where event_type='TASK_ARRIVED'", Integer.class)).isEqualTo(160);
+                "where process_definition_key=? and event_type='TASK_ARRIVED'",
+                Integer.class, processKey)).isEqualTo(160);
         assertThat(jdbc.queryForObject("select max(char_length(content)) from wf_notification_outbox " +
-                "where event_type='TASK_ARRIVED'", Integer.class)).isEqualTo(700);
+                "where process_definition_key=? and event_type='TASK_ARRIVED'",
+                Integer.class, processKey)).isEqualTo(700);
         assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox where " +
-                "event_type='TASK_ARRIVED'", Integer.class)).isEqualTo(2);
+                "process_definition_key=? and event_type='TASK_ARRIVED'",
+                Integer.class, processKey)).isEqualTo(2);
     }
 
     /**
-     * 验证两个并发催办被运行实例行锁串行化，只有一方成功并生成一份正式审计。
+     * 验证两个并发催办由运行实例锁与 Redis 原子冷却共同串行化，只有一方生成正式 outbox。
      * @return void，并发请求双成功、双失败或产生重复副作用时测试失败
      * @throws Exception 并发执行或等待失败
      */
@@ -637,8 +677,6 @@ class WorkflowNotificationMySqlIT
             executor.shutdownNow();
         }
         assertThat(countOutbox("MANUAL_URGE")).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select count(*) from wf_notification_urge_audit " +
-                "where process_instance_id=?", Integer.class, instance.getId())).isEqualTo(1);
     }
 
     /**
@@ -676,8 +714,9 @@ class WorkflowNotificationMySqlIT
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(processInstanceId).count()).isZero();
         assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox " +
-                "where event_type='MANUAL_URGE' and status in ('PENDING','RETRYING','DELIVERING')",
-                Integer.class)).isZero();
+                "where process_instance_id=? and event_type='MANUAL_URGE' " +
+                "and status in ('PENDING','RETRYING','DELIVERING')",
+                Integer.class, processInstanceId)).isZero();
     }
 
     /**
@@ -714,9 +753,9 @@ class WorkflowNotificationMySqlIT
         assertThat(taskService.createTaskQuery().taskId(task.getId()).singleResult().getAssignee())
                 .isEqualTo(transferTargetUserId);
         assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox where " +
-                "event_type='MANUAL_URGE' and recipient_user_id=? " +
+                "process_instance_id=? and event_type='MANUAL_URGE' and recipient_user_id=? " +
                 "and status in ('PENDING','RETRYING','DELIVERING')", Integer.class,
-                Long.valueOf(approverUserId))).isZero();
+                instance.getId(), Long.valueOf(approverUserId))).isZero();
     }
 
     /**
@@ -728,16 +767,17 @@ class WorkflowNotificationMySqlIT
     {
         startParallelProcess();
         authenticate(starterUserId);
-        Map<String, Object> result = notificationService.urge(new WorkflowManualUrgeRequest(
+        var result = manualUrgeService.urge(new WorkflowManualUrgeRequest(
                 instance.getId(), "并行待办催办"));
-        assertThat(result.get("recipientCount")).isEqualTo(1);
-        assertThat(result.get("outboxCount")).isEqualTo(2);
+        assertThat(result.recipientCount()).isEqualTo(1);
+        assertThat(result.outboxCount()).isEqualTo(2);
+        assertThat(result.urgeEventKey()).startsWith("URGE:");
         assertThat(countOutbox("MANUAL_URGE")).isEqualTo(2);
     }
 
     /**
      * 验证发起人催办真实待办、频率限制、越权拒绝和流程结束拒绝，且催办不改变审批状态。
-     * @return void，权限、状态、审计或 outbox 任一事实不一致时失败
+     * @return void，权限、状态、Redis 冷却或 outbox 任一事实不一致时失败
      */
     @Test
     void enforcesUrgeAuthorizationFrequencyAndRunningState()
@@ -747,32 +787,42 @@ class WorkflowNotificationMySqlIT
         // 清除节点到达通知，确保后续 claimNext 领取的是通过真实催办入口登记的目标 outbox。
         clearNotificationFacts();
         authenticate(starterUserId);
-        var first = notificationService.urge(new WorkflowManualUrgeRequest(
+        var first = manualUrgeService.urge(new WorkflowManualUrgeRequest(
                 instance.getId(), "请及时处理真实待办"));
-        assertThat(first.get("recipientCount")).isEqualTo(1);
+        assertThat(first.recipientCount()).isEqualTo(1);
+        assertThat(first.outboxCount()).isEqualTo(1);
+        assertThat(first.urgeEventKey()).startsWith("URGE:");
         assertThat(countOutbox("MANUAL_URGE")).isEqualTo(1);
-        assertThat(jdbc.queryForObject(
-                "select count(*) from wf_notification_urge_audit where process_instance_id=?",
-                Integer.class, instance.getId())).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) " +
+                "from wf_notification_outbox where process_instance_id=? " +
+                "and event_type='MANUAL_URGE' and source_id like ? " +
+                "and content like ?", Integer.class, instance.getId(),
+                first.urgeEventKey() + ":%", "%请及时处理真实待办%")).isEqualTo(1);
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(instance.getId()).count()).isEqualTo(1);
         assertThat(taskService.createTaskQuery().taskId(task.getId()).count()).isEqualTo(1);
         long urgeOutboxId = jdbc.queryForObject("select outbox_id from wf_notification_outbox " +
-                "where event_type='MANUAL_URGE'", Long.class);
+                "where process_instance_id=? and event_type='MANUAL_URGE'",
+                Long.class, instance.getId());
         String terminalWorkerId = "worker-terminal-task";
-        OutboxRow activeUrge = notificationService.claimNext(terminalWorkerId);
+        WorkflowNotificationOutboxRecord activeUrge = claimNextForRun(terminalWorkerId);
         assertThat(activeUrge).isNotNull();
         assertThat(activeUrge.outboxId()).isEqualTo(urgeOutboxId);
         assertThat(outboxStatus(urgeOutboxId)).isEqualTo("DELIVERING");
 
-        assertThatThrownBy(() -> notificationService.urge(new WorkflowManualUrgeRequest(
+        assertThatThrownBy(() -> manualUrgeService.urge(new WorkflowManualUrgeRequest(
                 instance.getId(), "重复催办")))
                 .isInstanceOf(ServiceException.class)
-                .satisfies(exception -> assertThat(((ServiceException) exception).getCode())
-                        .isEqualTo(HttpStatus.TOO_MANY_REQUESTS));
+                .satisfies(exception ->
+                {
+                    ServiceException serviceException = (ServiceException) exception;
+                    assertThat(serviceException.getCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+                    assertThat(serviceException.getSubCode())
+                            .isEqualTo("WORKFLOW_URGE_COOLDOWN_ACTIVE");
+                });
 
         authenticate(approverUserId);
-        assertThatThrownBy(() -> notificationService.urge(new WorkflowManualUrgeRequest(
+        assertThatThrownBy(() -> manualUrgeService.urge(new WorkflowManualUrgeRequest(
                 instance.getId(), "越权催办")))
                 .isInstanceOf(ServiceException.class)
                 .satisfies(exception -> assertThat(((ServiceException) exception).getCode())
@@ -788,31 +838,27 @@ class WorkflowNotificationMySqlIT
                 .containsEntry("last_error_code", "BUSINESS_OBJECT_COMPLETED")
                 .containsEntry("lease_owner", null)
                 .containsEntry("lease_expires_at", null);
-        assertThat(jdbc.queryForObject("select count(*) from wf_notification_delivery_audit " +
-                "where outbox_id=? and action_type='CANCEL'", Integer.class, urgeOutboxId))
-                .isEqualTo(1);
         // 终态事务撤销活动租约后，成功或失败回写都不得覆盖 CANCELLED，也不得创建站内信。
-        assertThatThrownBy(() -> notificationService.deliverInbox(activeUrge, terminalWorkerId))
+        assertThatThrownBy(() -> notificationDeliveryCoordinator.deliverClaimed(
+                activeUrge, terminalWorkerId))
                 .isInstanceOf(ServiceException.class)
                 .satisfies(exception -> assertThat(((ServiceException) exception).getCode())
                         .isEqualTo(HttpStatus.CONFLICT));
-        assertThatThrownBy(() -> notificationService.completeDelivery(activeUrge, terminalWorkerId,
-                DeliveryOutcome.delivered()))
+        assertThatThrownBy(() -> notificationOutboxService.completeDelivery(
+                activeUrge, terminalWorkerId, WorkflowNotificationDeliveryResult.delivered()))
                 .isInstanceOf(ServiceException.class)
                 .satisfies(exception -> assertThat(((ServiceException) exception).getCode())
                         .isEqualTo(HttpStatus.CONFLICT));
-        assertThatThrownBy(() -> notificationService.completeDelivery(activeUrge, terminalWorkerId,
-                DeliveryOutcome.failure("SMTP_DELIVERY_FAILED", "SMTP 投递失败", false)))
+        assertThatThrownBy(() -> notificationOutboxService.completeDelivery(
+                activeUrge, terminalWorkerId, WorkflowNotificationDeliveryResult.failure(
+                        "SMTP_DELIVERY_FAILED", "SMTP 投递失败", false)))
                 .isInstanceOf(ServiceException.class)
                 .satisfies(exception -> assertThat(((ServiceException) exception).getCode())
                         .isEqualTo(HttpStatus.CONFLICT));
         assertThat(countInbox()).isZero();
         assertThat(outboxStatus(urgeOutboxId)).isEqualTo("CANCELLED");
-        assertThat(jdbc.queryForObject("select count(*) from wf_notification_delivery_audit " +
-                "where outbox_id=? and action_type in ('DELIVER','RETRY','DEAD_LETTER')",
-                Integer.class, urgeOutboxId)).isZero();
         authenticate(starterUserId);
-        assertThatThrownBy(() -> notificationService.urge(new WorkflowManualUrgeRequest(
+        assertThatThrownBy(() -> manualUrgeService.urge(new WorkflowManualUrgeRequest(
                 instance.getId(), "结束后催办")))
                 .isInstanceOf(ServiceException.class)
                 .satisfies(exception -> assertThat(((ServiceException) exception).getCode())
@@ -831,10 +877,11 @@ class WorkflowNotificationMySqlIT
         // 清除节点到达通知，确保活动租约来自本次真实人工催办。
         clearNotificationFacts();
         authenticate(starterUserId);
-        notificationService.urge(new WorkflowManualUrgeRequest(instance.getId(), "流程结束取消"));
+        manualUrgeService.urge(new WorkflowManualUrgeRequest(instance.getId(), "流程结束取消"));
         long urgeOutboxId = jdbc.queryForObject("select outbox_id from wf_notification_outbox " +
-                "where event_type='MANUAL_URGE'", Long.class);
-        OutboxRow activeUrge = notificationService.claimNext("worker-terminal-process");
+                "where process_instance_id=? and event_type='MANUAL_URGE'",
+                Long.class, instance.getId());
+        WorkflowNotificationOutboxRecord activeUrge = claimNextForRun("worker-terminal-process");
         assertThat(activeUrge).isNotNull();
         assertThat(activeUrge.outboxId()).isEqualTo(urgeOutboxId);
         assertThat(outboxStatus(urgeOutboxId)).isEqualTo("DELIVERING");
@@ -849,9 +896,6 @@ class WorkflowNotificationMySqlIT
             Authentication.setAuthenticatedUserId(null);
         }
         assertThat(outboxStatus(urgeOutboxId)).isEqualTo("CANCELLED");
-        assertThat(jdbc.queryForObject("select count(*) from wf_notification_delivery_audit " +
-                "where outbox_id=? and action_type='CANCEL'", Integer.class, urgeOutboxId))
-                .isEqualTo(1);
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(instance.getId()).count()).isZero();
     }
@@ -1066,17 +1110,116 @@ class WorkflowNotificationMySqlIT
                 String.class);
     }
 
-    /** @param eventType String，事件类型；@return int，当前隔离测试 outbox 数量。 */
+    /**
+     * 统计本轮指定事件类型的 outbox 数量。
+     * @param eventType String，事件类型
+     * @return int，仅包含 runId 所属真实流程或直接插入事实的数量
+     */
     private int countOutbox(String eventType)
     {
-        return jdbc.queryForObject("select count(*) from wf_notification_outbox where event_type=?",
-                Integer.class, eventType);
+        return jdbc.queryForObject("select count(*) from wf_notification_outbox o where event_type=? " +
+                "and " + OWN_OUTBOX_FILTER, Integer.class, eventType, runId, runId);
     }
 
-    /** @return int，当前隔离测试 inbox 数量。 */
+    /**
+     * 在隔离库创建一个发起人和两个审批人，确保权限与并发转办测试不依赖预置业务账号。
+     * @return void，角色基线缺失或用户创建失败时立即失败
+     */
+    private void createPermissionActors()
+    {
+        permissionActorUserIds.clear();
+        createPermissionActor("starter", "workflow_starter");
+        createPermissionActor("approver", "workflow_approver");
+        createPermissionActor("transfer", "workflow_approver");
+    }
+
+    /**
+     * 创建真实启用用户并绑定现有工作流角色。
+     * @param suffix String，当前测试用户的稳定业务后缀
+     * @param roleKey String，必须存在且启用的正式角色标识
+     * @return long，新建用户主键
+     */
+    private long createPermissionActor(String suffix, String roleKey)
+    {
+        String userName = permissionActorPrefix() + suffix;
+        Long roleId = jdbc.queryForObject("select role_id from sys_role " +
+                "where role_key=? and status='0' and del_flag='0'", Long.class, roleKey);
+        assertThat(roleId).as(roleKey + " 正式角色").isNotNull();
+        jdbc.update("insert into sys_user (user_name,nick_name,password,status,del_flag,create_by,create_time) " +
+                "values (?,?,'','0','0','workflow_notification_it',current_timestamp(3))",
+                userName, "通知集成测试" + suffix);
+        Long userId = jdbc.queryForObject("select user_id from sys_user where user_name=?",
+                Long.class, userName);
+        assertThat(userId).isNotNull().isPositive();
+        jdbc.update("insert into sys_user_role (user_id,role_id) values (?,?)", userId, roleId);
+        permissionActorUserIds.add(userId);
+        return userId;
+    }
+
+    /**
+     * 按通知偏好、角色关系、用户的外键顺序回收本轮临时权限账号。
+     * @return void，任一用户或角色关系残留时测试失败
+     */
+    private void deletePermissionActors()
+    {
+        for (Long userId : permissionActorUserIds)
+        {
+            jdbc.update("delete from wf_notification_preference where user_id=?", userId);
+            jdbc.update("delete from sys_user_role where user_id=?", userId);
+            jdbc.update("delete from sys_user where user_id=?", userId);
+        }
+        assertThat(jdbc.queryForObject("select count(*) from sys_user where user_name like ?",
+                Integer.class, permissionActorPrefix() + "%")).isZero();
+        permissionActorUserIds.clear();
+    }
+
+    /**
+     * 生成满足 sys_user.user_name 长度约束的本轮临时账号前缀。
+     * @return String，包含 runId 前十二位的隔离前缀
+     */
+    private String permissionActorPrefix()
+    {
+        return "wfnotif_" + runId.substring(0, 12) + "_";
+    }
+
+    /**
+     * 统计本轮 outbox 投影出的 inbox 数量。
+     * @return int，仅包含 runId 所属通知事实的站内信数量
+     */
     private int countInbox()
     {
-        return jdbc.queryForObject("select count(*) from wf_notification_inbox", Integer.class);
+        return jdbc.queryForObject("select count(*) from wf_notification_inbox n " +
+                "join wf_notification_outbox o on o.outbox_id=n.outbox_id where " +
+                OWN_OUTBOX_FILTER, Integer.class, runId, runId);
+    }
+
+    /**
+     * 统计本轮全部 outbox 数量，供精确清理后验证不留测试事实。
+     * @return int，仅包含 runId 所属真实流程或直接插入事实的数量
+     */
+    private int countOwnedOutbox()
+    {
+        return jdbc.queryForObject("select count(*) from wf_notification_outbox o where " +
+                OWN_OUTBOX_FILTER, Integer.class, runId, runId);
+    }
+
+    /**
+     * 在共享通知队列中只领取本轮测试事实。
+     * @param workerId String，本次测试使用的 worker 标识
+     * @return WorkflowNotificationOutboxRecord，本轮可领取通知；本轮没有到期事实时为 null
+     */
+    private WorkflowNotificationOutboxRecord claimNextForRun(String workerId)
+    {
+        // 类级初始化已隔离共享队列，正式领取后仍核对 runId，防止未来测试并发时误消费。
+        WorkflowNotificationOutboxRecord claimed = notificationOutboxService.claimNext(workerId);
+        if (claimed == null)
+        {
+            return null;
+        }
+        assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox o " +
+                "where o.outbox_id=? and " + OWN_OUTBOX_FILTER,
+                Integer.class, claimed.outboxId(), runId, runId)).isOne();
+        return claimed;
     }
 
     /** @param outboxId long，outbox 主键；@return String，正式状态。 */
@@ -1155,7 +1298,7 @@ class WorkflowNotificationMySqlIT
             throw new IllegalStateException("并发通知登记起跑超时");
         }
         Integer inserted = new TransactionTemplate(transactionManager).execute(status ->
-                notificationService.onTaskEvent("create", task.getId(), task.getProcessInstanceId(),
+                notificationRegistrar.onTaskEvent("create", task.getId(), task.getProcessInstanceId(),
                         task.getProcessDefinitionId(), task.getTaskDefinitionKey(), task.getName(),
                         task.getAssignee(), task.getOwner()));
         if (inserted == null)
@@ -1184,7 +1327,7 @@ class WorkflowNotificationMySqlIT
             {
                 throw new IllegalStateException("并发催办起跑超时");
             }
-            notificationService.urge(new WorkflowManualUrgeRequest(instance.getId(), reason));
+            manualUrgeService.urge(new WorkflowManualUrgeRequest(instance.getId(), reason));
             return 0;
         }
         catch (ServiceException exception)

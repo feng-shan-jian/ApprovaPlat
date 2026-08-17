@@ -22,6 +22,8 @@ output/
 /logs/
 /META-INF/
 /ruoyi-ui/tests/ui/output/
+/deployment/Now_Task/**/*-before-*.sql
+/deployment/Now_Task/**/*dump*.sql
 
 tests/**/coverage/
 tests/e2e/reports

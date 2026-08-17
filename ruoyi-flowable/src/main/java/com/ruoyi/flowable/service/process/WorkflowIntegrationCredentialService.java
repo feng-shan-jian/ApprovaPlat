@@ -8,6 +8,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Date;
@@ -17,9 +19,10 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
-import org.springframework.transaction.annotation.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfIntegrationCredential;
@@ -29,23 +32,33 @@ import com.ruoyi.flowable.domain.vo.WorkflowIntegrationCredentialSecretView;
 import com.ruoyi.flowable.domain.vo.WorkflowIntegrationCredentialView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfIntegrationCredentialMapper;
+import com.ruoyi.flowable.runtime.WorkflowCredentialRateLimitMetrics;
+import com.ruoyi.flowable.runtime.WorkflowRedisAtomicOperations;
 
 /**
- * 集成账号生命周期、Token 哈希认证、范围校验和数据库原子限流服务。
+ * 集成账号生命周期、Token 哈希认证、范围校验和 Redis 原子限流服务。
  */
 @Service
 public class WorkflowIntegrationCredentialService
 {
+    private static final Logger log = LoggerFactory.getLogger(
+            WorkflowIntegrationCredentialService.class);
     private static final Pattern VARIABLE_NAME =
             Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,127}");
     private static final Set<String> SUPPORTED_SCOPES = Set.of("MESSAGE", "SIGNAL", "RECEIVE");
     private static final Duration RATE_WINDOW = Duration.ofMinutes(1);
+    private static final Duration LAST_USED_WRITE_INTERVAL = Duration.ofMinutes(5);
     private static final Duration MINIMUM_EXPIRY = Duration.ofMinutes(1);
+    private static final DateTimeFormatter RATE_BUCKET_FORMATTER =
+            DateTimeFormatter.ofPattern("yyyyMMddHHmm").withZone(ZoneOffset.UTC);
+    private static final String RATE_KEY_PREFIX = "workflow:credential:rate:";
     private static final int TOKEN_RANDOM_BYTES = 32;
     private static final int TOKEN_PREFIX_LENGTH = 12;
 
     private final WorkflowEngineOperations engineOperations;
     private final WfIntegrationCredentialMapper credentialMapper;
+    private final WorkflowRedisAtomicOperations redisOperations;
+    private final WorkflowCredentialRateLimitMetrics rateLimitMetrics;
     private final SecureRandom secureRandom;
     private final Clock clock;
 
@@ -53,29 +66,40 @@ public class WorkflowIntegrationCredentialService
      * 创建正式集成账号服务。
      * @param engineOperations WorkflowEngineOperations，管理操作身份和事务边界
      * @param credentialMapper WfIntegrationCredentialMapper，正式凭据表 Mapper
+     * @param redisOperations WorkflowRedisAtomicOperations，共享 Redis 原子执行组件
+     * @param rateLimitMetrics WorkflowCredentialRateLimitMetrics，固定低基数限流指标
      * @return void，构造后由 Spring 管理
      */
     @Autowired
     public WorkflowIntegrationCredentialService(WorkflowEngineOperations engineOperations,
-            WfIntegrationCredentialMapper credentialMapper)
+            WfIntegrationCredentialMapper credentialMapper,
+            WorkflowRedisAtomicOperations redisOperations,
+            WorkflowCredentialRateLimitMetrics rateLimitMetrics)
     {
-        this(engineOperations, credentialMapper, new SecureRandom(), Clock.systemUTC());
+        this(engineOperations, credentialMapper, redisOperations, rateLimitMetrics,
+                new SecureRandom(), Clock.systemUTC());
     }
 
     /**
      * 创建可注入随机源和时钟的服务实例，供边界测试稳定控制时间。
      * @param engineOperations WorkflowEngineOperations，管理操作身份和事务边界
      * @param credentialMapper WfIntegrationCredentialMapper，正式凭据表 Mapper
+     * @param redisOperations WorkflowRedisAtomicOperations，共享 Redis 原子执行组件
+     * @param rateLimitMetrics WorkflowCredentialRateLimitMetrics，固定低基数限流指标
      * @param secureRandom SecureRandom，至少 256 位 Token 随机源
      * @param clock Clock，到期和限流时钟
      * @return void，构造完成后可执行业务方法
      */
     WorkflowIntegrationCredentialService(WorkflowEngineOperations engineOperations,
-            WfIntegrationCredentialMapper credentialMapper, SecureRandom secureRandom,
-            Clock clock)
+            WfIntegrationCredentialMapper credentialMapper,
+            WorkflowRedisAtomicOperations redisOperations,
+            WorkflowCredentialRateLimitMetrics rateLimitMetrics,
+            SecureRandom secureRandom, Clock clock)
     {
         this.engineOperations = engineOperations;
         this.credentialMapper = credentialMapper;
+        this.redisOperations = redisOperations;
+        this.rateLimitMetrics = rateLimitMetrics;
         this.secureRandom = secureRandom;
         this.clock = clock;
     }
@@ -173,12 +197,11 @@ public class WorkflowIntegrationCredentialService
     }
 
     /**
-     * 使用数据库行锁完成 Token、吊销、到期、范围和分钟限流认证。
+     * 完成 Token、吊销、到期和范围校验，并通过 Redis 原子分钟计数消费限额。
      * @param plaintextToken String，X-Integration-Token 原始值
      * @param requiredScope String，本次 MESSAGE、SIGNAL 或 RECEIVE 范围
      * @return AuthenticatedCredential，后续引擎事务使用的可信身份和变量白名单
      */
-    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public AuthenticatedCredential authenticateAndConsume(String plaintextToken,
             String requiredScope)
     {
@@ -192,7 +215,7 @@ public class WorkflowIntegrationCredentialService
             throw new ServiceException("运行事件范围不受支持", HttpStatus.BAD_REQUEST);
         }
         String prefix = plaintextToken.substring(0, TOKEN_PREFIX_LENGTH);
-        WfIntegrationCredential credential = credentialMapper.selectByPrefixForUpdate(prefix);
+        WfIntegrationCredential credential = credentialMapper.selectByPrefix(prefix);
         if (credential == null || !constantTimeEquals(credential.getTokenHash(), sha256(plaintextToken)))
         {
             throw unauthorized();
@@ -205,30 +228,64 @@ public class WorkflowIntegrationCredentialService
                     .setSubCode("INTEGRATION_SCOPE_DENIED");
         }
 
-        // 行锁内滚动固定一分钟窗口，多个节点和线程共享同一计数，不依赖本机内存。
         Instant now = clock.instant();
-        Instant windowStart = credential.getRateWindowStart() == null
-                ? now : credential.getRateWindowStart().toInstant();
-        int count = credential.getRateWindowCount() == null ? 0
-                : credential.getRateWindowCount();
-        if (!now.isBefore(windowStart.plus(RATE_WINDOW)))
+        long count = consumeRateLimit(credential, now);
+        if (count > credential.getRateLimitPerMinute())
         {
-            windowStart = now;
-            count = 0;
-        }
-        if (count >= credential.getRateLimitPerMinute())
-        {
+            rateLimitMetrics.record("limited");
             throw new ServiceException("集成账号请求频率超过限制", HttpStatus.TOO_MANY_REQUESTS)
                     .setSubCode("INTEGRATION_RATE_LIMITED");
         }
-        Date nowDate = Date.from(now);
-        if (credentialMapper.updateRateWindow(credential.getCredentialId(),
-                Date.from(windowStart), count + 1, nowDate) != 1)
-        {
-            throw new ServiceException("集成账号限流状态更新失败", HttpStatus.CONFLICT);
-        }
+        rateLimitMetrics.record("allowed");
+        updateLastUsedAtIfDue(credential, now);
         return new AuthenticatedCredential(credential.getCredentialId(),
                 credential.getCreateBy(), Set.copyOf(split(credential.getAllowedVariables())));
+    }
+
+    /**
+     * 使用 credentialId、revision 和 UTC 分钟生成独立 Key，并由 Lua 原子执行 INCR + EXPIRE。
+     * @param credential WfIntegrationCredential，已通过 Token 与状态校验的正式凭据
+     * @param now Instant，本次认证时刻
+     * @return long，本分钟窗口递增后的精确计数
+     */
+    private long consumeRateLimit(WfIntegrationCredential credential, Instant now)
+    {
+        String key = RATE_KEY_PREFIX + credential.getCredentialId() + ':'
+                + credential.getRevisionNo() + ':' + RATE_BUCKET_FORMATTER.format(now);
+        try
+        {
+            return redisOperations.incrementWithExpiry(key, RATE_WINDOW);
+        }
+        catch (DataAccessException exception)
+        {
+            rateLimitMetrics.record("unavailable");
+            // 日志只记录非敏感主键和 revision，禁止输出 Token、摘要或业务载荷。
+            log.warn("operation=credentialRateLimit credentialId={} revision={} "
+                            + "resultCode=INTEGRATION_RATE_LIMIT_UNAVAILABLE causeType={}",
+                    credential.getCredentialId(), credential.getRevisionNo(),
+                    exception.getClass().getSimpleName());
+            throw new ServiceException("集成账号限流服务暂时不可用",
+                    HttpStatus.SERVICE_UNAVAILABLE)
+                    .setSubCode("INTEGRATION_RATE_LIMIT_UNAVAILABLE");
+        }
+    }
+
+    /**
+     * 仅当数据库最近使用时间已超过固定窗口时尝试更新，条件更新处理并发认证竞争。
+     * @param credential WfIntegrationCredential，已通过认证的当前 revision 凭据
+     * @param now Instant，本次认证时刻
+     * @return void，未到降频窗口或并发轮换时不执行实际写入
+     */
+    private void updateLastUsedAtIfDue(WfIntegrationCredential credential, Instant now)
+    {
+        Instant updateBefore = now.minus(LAST_USED_WRITE_INTERVAL);
+        Date previous = credential.getLastUsedAt();
+        if (previous != null && !previous.toInstant().isBefore(updateBefore))
+        {
+            return;
+        }
+        credentialMapper.updateLastUsedAt(credential.getCredentialId(),
+                credential.getRevisionNo(), Date.from(now), Date.from(updateBefore));
     }
 
     /**

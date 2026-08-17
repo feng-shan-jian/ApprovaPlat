@@ -1,4 +1,4 @@
--- Flowable 8 工作流菜单、权限与职责分离角色只读验收脚本。
+-- 工作流 8.1.0 目标版本菜单、权限与职责分离角色只读验收脚本。
 -- 所有检查都应返回 PASS；本脚本不会创建、修改或删除数据。
 
 WITH workflow_menu AS (
@@ -170,7 +170,7 @@ SELECT
                  WHEN 'workflow_admin' THEN COALESCE(assignment.assignment_count, 0) = 99
                  WHEN 'workflow_designer' THEN COALESCE(assignment.assignment_count, 0) = 48
                  WHEN 'workflow_starter' THEN COALESCE(assignment.assignment_count, 0) = 21
-                 WHEN 'workflow_approver' THEN COALESCE(assignment.assignment_count, 0) = 18
+                 WHEN 'workflow_approver' THEN COALESCE(assignment.assignment_count, 0) = 21
                  WHEN 'workflow_auditor' THEN COALESCE(assignment.assignment_count, 0) = 25
                  ELSE 0
              END) = 5

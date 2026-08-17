@@ -12,14 +12,12 @@ import org.springframework.boot.health.contributor.Status;
 import org.springframework.mock.env.MockEnvironment;
 import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
-import com.ruoyi.flowable.service.attachment.WorkflowAttachmentCleanupCoordinator;
 
 class WorkflowRuntimeHealthIndicatorTest
 {
     private WorkflowRuntimeMetrics runtimeMetrics;
     private WorkflowRuntimeProperties runtimeProperties;
     private WorkflowAttachmentProperties attachmentProperties;
-    private WorkflowAttachmentCleanupCoordinator cleanupCoordinator;
 
     /**
      * 创建稳定健康快照基线，各测试只覆盖单一失败条件。
@@ -34,15 +32,12 @@ class WorkflowRuntimeHealthIndicatorTest
         runtimeProperties.setMetricsSnapshotMaxAge(Duration.ofMinutes(3));
         attachmentProperties = new WorkflowAttachmentProperties();
         attachmentProperties.setMinFreeBytes(100L);
-        cleanupCoordinator = mock(WorkflowAttachmentCleanupCoordinator.class);
-
         when(runtimeMetrics.readHealthSnapshot()).thenReturn(
                 snapshot(30_000L, 1000L, false, false));
-        when(cleanupCoordinator.isLockDegraded()).thenReturn(false);
     }
 
     /**
-     * 验证快照、锁和低水位一致时返回 UP，健康线程只消费原子快照字段。
+     * 验证快照和低水位一致时返回 UP，健康线程只消费原子快照字段。
      *
      * @return void，正常节点被错误摘流或详情缺失关键门禁时测试失败
      */
@@ -61,9 +56,9 @@ class WorkflowRuntimeHealthIndicatorTest
                 .containsEntry("asyncHistoryExpected", false)
                 .containsEntry("asyncHistoryActive", false)
                 .containsEntry("storageAboveLowWatermark", true)
-                .containsEntry("cleanupLockDegraded", false)
                 .doesNotContainKeys("activeInstances", "activeTasks",
-                        "deadletterJobs", "pendingAttachmentCleanup");
+                        "deadletterJobs", "pendingAttachmentCleanup",
+                        "cleanupLockDegraded");
     }
 
     /**
@@ -100,22 +95,6 @@ class WorkflowRuntimeHealthIndicatorTest
 
         assertThat(health.getStatus()).isEqualTo(Status.DOWN);
         assertThat(health.getDetails()).containsEntry("storageAboveLowWatermark", false);
-    }
-
-    /**
-     * 验证无法确认成功的 GET_LOCK 或 RELEASE_LOCK 会持续将本节点 readiness 置为 DOWN。
-     *
-     * @return void，可能仍持锁或曾泄漏连接的节点继续接流时测试失败
-     */
-    @Test
-    void reportsDownWhenAttachmentCleanupLockIsDegraded()
-    {
-        when(cleanupCoordinator.isLockDegraded()).thenReturn(true);
-
-        Health health = indicator(new MockEnvironment()).health();
-
-        assertThat(health.getStatus()).isEqualTo(Status.DOWN);
-        assertThat(health.getDetails()).containsEntry("cleanupLockDegraded", true);
     }
 
     /**
@@ -205,6 +184,6 @@ class WorkflowRuntimeHealthIndicatorTest
     private WorkflowRuntimeHealthIndicator indicator(MockEnvironment environment)
     {
         return new WorkflowRuntimeHealthIndicator(environment, runtimeMetrics,
-                runtimeProperties, attachmentProperties, cleanupCoordinator);
+                runtimeProperties, attachmentProperties);
     }
 }

@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.mapper;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import org.apache.ibatis.annotations.Param;
@@ -12,14 +13,7 @@ import com.ruoyi.flowable.domain.WorkflowAttachmentQuotaUsage;
 public interface WfAttachmentMapper
 {
     /**
-     * 锁定迁移脚本预置的固定全局配额行，使全部上传容量检查严格串行。
-     *
-     * @return Long，成功锁定时固定返回 0；部署数据缺失时返回 null
-     */
-    Long selectGlobalQuotaGuardForUpdate();
-
-    /**
-     * 在已持有全局配额行锁时幂等创建用户附件配额互斥行。
+     * 幂等创建用户附件配额互斥行；不同用户使用不同主键，不形成跨用户串行锁。
      *
      * @param ownerUserId Long，事务内核验的正式用户主键
      * @return int，首次创建返回 1，已存在返回 0
@@ -27,7 +21,7 @@ public interface WfAttachmentMapper
     int ensureOwnerQuotaGuard(@Param("ownerUserId") Long ownerUserId);
 
     /**
-     * 在已持有全局配额行锁时锁定用户配额互斥行。
+     * 锁定同一用户配额互斥行，串行化该用户的临时附件容量核算。
      *
      * @param ownerUserId Long，事务内核验的正式用户主键
      * @return Long，成功锁定的同一用户主键；数据异常时返回 null
@@ -42,13 +36,6 @@ public interface WfAttachmentMapper
      */
     WorkflowAttachmentQuotaUsage selectTemporaryQuotaUsage(
             @Param("ownerUserId") Long ownerUserId);
-
-    /**
-     * 聚合全部尚未完成物理删除的附件字节数，包含 TEMP、BOUND、EXPIRED 和 DELETED。
-     *
-     * @return Long，已持有全局 guard 行锁时读取的非负全局占用
-     */
-    Long selectUndeletedTotalBytes();
 
     /**
      * 写入已完成私有文件落盘和摘要计算的临时附件元数据。
@@ -207,35 +194,87 @@ public interface WfAttachmentMapper
      * @param limit int，单批最多返回的记录数
      * @return List&lt;WfAttachment&gt;，按失效时间和附件 UUID 排序的清理候选
      */
-    List<WfAttachment> selectCleanupCandidates(@Param("limit") int limit);
+    List<WfAttachment> selectCleanupCandidatesForUpdate(@Param("limit") int limit);
 
     /**
-     * 将到期且仍未绑定的临时附件原子标记为过期。
+     * 将锁定候选原子领取到同一批次；到期 TEMP 同时迁移为 EXPIRED。
      *
-     * @param attachmentId String，到期附件 UUID
-     * @return int，成功标记返回 1；状态已变化返回 0
+     * @param attachmentIds Collection&lt;String&gt;，本事务已锁定的候选 UUID
+     * @param claimToken String，本批次规范 UUID 领取令牌
+     * @param leaseSeconds long，以数据库当前时间计算的正数租约秒数
+     * @return int，成功领取的候选行数
      */
-    int markExpired(@Param("attachmentId") String attachmentId);
+    int claimCleanupCandidates(@Param("attachmentIds") Collection<String> attachmentIds,
+            @Param("claimToken") String claimToken,
+            @Param("leaseSeconds") long leaseSeconds);
 
     /**
-     * 在私有文件实际不存在后记录物理清理完成时间。
+     * 原子领取单条已进入 DELETED 的手工删除附件。
+     *
+     * @param attachmentId String，手工删除附件 UUID
+     * @param claimToken String，本次删除的规范 UUID 令牌
+     * @param leaseSeconds long，以数据库当前时间计算的正数租约秒数
+     * @return int，领取成功返回 1；其他节点持有有效租约时返回 0
+     */
+    int claimDeletedAttachment(@Param("attachmentId") String attachmentId,
+            @Param("claimToken") String claimToken,
+            @Param("leaseSeconds") long leaseSeconds);
+
+    /**
+     * 按批次令牌读取本事务刚领取的正式附件行。
+     *
+     * @param claimToken String，规范 UUID 批次令牌
+     * @return List&lt;WfAttachment&gt;，按清理到期顺序返回的领取行
+     */
+    List<WfAttachment> selectClaimedByToken(@Param("claimToken") String claimToken);
+
+    /**
+     * 仅允许当前领取令牌在私有文件实际不存在后记录物理清理完成时间。
      *
      * @param attachmentId String，已处于 EXPIRED 或 DELETED 的附件 UUID
+     * @param claimToken String，执行对象删除的领取令牌
      * @return int，首次记录返回 1；状态不允许或已记录返回 0
      */
-    int markStorageDeleted(@Param("attachmentId") String attachmentId);
+    int markStorageDeleted(@Param("attachmentId") String attachmentId,
+            @Param("claimToken") String claimToken);
 
     /**
      * 在期望重试版本仍一致时持久化下次清理时间和稳定错误码，避免固定前 N 条饥饿。
      *
      * @param attachmentId String，清理失败附件 UUID
+     * @param claimToken String，执行对象删除的领取令牌
      * @param expectedRetryCount int，候选快照中的当前重试次数
-     * @param nextRetryTime java.time.LocalDateTime，指数退避后的下次候选时间
+     * @param nextRetryTime LocalDateTime，指数退避后的下次候选时间
      * @param errorCode String，固定脱敏错误码
      * @return int，成功调度返回 1；并发状态或版本变化返回 0
      */
     int scheduleCleanupRetry(@Param("attachmentId") String attachmentId,
+            @Param("claimToken") String claimToken,
             @Param("expectedRetryCount") int expectedRetryCount,
-            @Param("nextRetryTime") java.time.LocalDateTime nextRetryTime,
+            @Param("nextRetryTime") LocalDateTime nextRetryTime,
             @Param("errorCode") String errorCode);
+
+    /**
+     * 锁定一批已完成物理删除且超过元数据保留期的附件。
+     * @param cutoffTime LocalDateTime，物理删除时间截止点
+     * @param limit int，单批最大记录数
+     * @return List&lt;String&gt;，按物理删除时间和附件主键稳定排序的锁定主键
+     */
+    List<String> selectRetentionIdsForUpdate(@Param("cutoffTime") LocalDateTime cutoffTime,
+            @Param("limit") int limit);
+
+    /**
+     * 删除仍已完成物理删除且超过截止时间的附件元数据。
+     * @param attachmentIds List&lt;String&gt;，当前事务已锁定的附件主键
+     * @param cutoffTime LocalDateTime，物理删除时间截止点
+     * @return int，实际删除记录数
+     */
+    int deleteRetentionByIds(@Param("attachmentIds") List<String> attachmentIds,
+            @Param("cutoffTime") LocalDateTime cutoffTime);
+
+    /**
+     * 查询最早的附件物理删除完成时间。
+     * @return LocalDateTime，最早物理删除时间；没有时为空
+     */
+    LocalDateTime selectOldestRetentionTime();
 }

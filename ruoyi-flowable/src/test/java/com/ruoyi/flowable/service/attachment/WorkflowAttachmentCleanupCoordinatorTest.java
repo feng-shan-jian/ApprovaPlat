@@ -2,462 +2,218 @@ package com.ruoyi.flowable.service.attachment;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.Collections;
+import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import javax.sql.DataSource;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
-import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
+import com.ruoyi.flowable.domain.WfAttachment;
+import com.ruoyi.flowable.domain.WorkflowAttachmentStatus;
 
 class WorkflowAttachmentCleanupCoordinatorTest
 {
     /**
-     * 验证锁覆盖内部事务完成边界，RELEASE_LOCK 在清理事务返回后才由同一连接执行。
+     * 验证领取和每条状态回写使用独立短事务，对象存储删除始终位于事务之外。
      *
-     * @return void，释放早于提交可见边界或更换连接时测试失败
-     * @throws Exception JDBC 测试替身配置失败
+     * @return void，事务边界覆盖对象存储 IO 或遗漏完成回写时测试失败
      */
     @Test
-    void releasesSamePhysicalConnectionOnlyAfterCleanupTransactionCompletes() throws Exception
+    void separatesShortDatabaseTransactionsFromStorageDeletion()
     {
-        List<String> events = new ArrayList<>();
-        LockJdbc jdbc = lockJdbc(1, 1, events);
         WorkflowAttachmentService service = mock(WorkflowAttachmentService.class);
-        when(service.cleanupExpiredBatch()).thenAnswer(invocation ->
+        RecordingTransactionOperations transactions = new RecordingTransactionOperations();
+        WfAttachment first = claimedAttachment(
+                "d9428888-122b-4c6f-8f0c-9c3e1dbd3210");
+        WfAttachment second = claimedAttachment(
+                "7f0f5db2-0664-4e5c-a54f-49d9ca16b773");
+        when(service.claimCleanupBatch(anyString())).thenAnswer(invocation ->
         {
-            events.add("cleanup");
-            return new WorkflowAttachmentCleanupResult(2, 0);
+            assertThat(transactions.isActive()).isTrue();
+            return List.of(first, second);
         });
-        TransactionOperations transaction = transactionOperations(events);
-        WorkflowAttachmentCleanupCoordinator coordinator = newCoordinator(
-                service, jdbc.dataSource(), transaction);
-
-        Optional<WorkflowAttachmentCleanupResult> result =
-                coordinator.cleanupIfLockAcquired();
-
-        assertThat(result).contains(new WorkflowAttachmentCleanupResult(2, 0));
-        assertThat(events).containsExactly(
-                "acquire", "transaction_begin", "cleanup",
-                "transaction_completed", "release");
-        verify(jdbc.connection()).prepareStatement("select get_lock(?, 0)");
-        verify(jdbc.connection()).prepareStatement("select release_lock(?)");
-        verify(jdbc.connection()).close();
-        assertThat(coordinator.isLockActive()).isFalse();
-        assertThat(coordinator.isLockDegraded()).isFalse();
-    }
-
-    /**
-     * 验证未获取 MySQL 锁时不创建事务、不查询候选、不执行 RELEASE_LOCK，形成零副作用分支。
-     *
-     * @return void，竞争失败仍进入任何清理步骤时测试失败
-     * @throws Exception JDBC 测试替身配置失败
-     */
-    @Test
-    void skipsWithoutStartingTransactionWhenLockIsOwnedByAnotherNode() throws Exception
-    {
-        List<String> events = new ArrayList<>();
-        LockJdbc jdbc = lockJdbc(0, 1, events);
-        WorkflowAttachmentService service = mock(WorkflowAttachmentService.class);
-        TransactionOperations transaction = mock(TransactionOperations.class);
-        WorkflowAttachmentCleanupCoordinator coordinator = newCoordinator(
-                service, jdbc.dataSource(), transaction);
-
-        assertThat(coordinator.cleanupIfLockAcquired()).isEmpty();
-
-        assertThat(events).containsExactly("acquire");
-        verifyNoInteractions(service, transaction);
-        verify(jdbc.connection(), never()).prepareStatement("select release_lock(?)");
-        verify(jdbc.connection()).close();
-        assertThat(coordinator.isLockDegraded()).isFalse();
-    }
-
-    /**
-     * 验证清理事务异常回滚返回后仍释放原锁连接，并保留原始异常作为主失败。
-     *
-     * @return void，异常路径漏释放、提前释放或替换主异常时测试失败
-     * @throws Exception JDBC 测试替身配置失败
-     */
-    @Test
-    void releasesLockAfterCleanupTransactionRollsBack() throws Exception
-    {
-        List<String> events = new ArrayList<>();
-        LockJdbc jdbc = lockJdbc(1, 1, events);
-        WorkflowAttachmentService service = mock(WorkflowAttachmentService.class);
-        IllegalStateException cleanupFailure = new IllegalStateException("forced cleanup failure");
-        when(service.cleanupExpiredBatch()).thenAnswer(invocation ->
+        doAnswer(invocation ->
         {
-            events.add("cleanup_failed");
-            throw cleanupFailure;
+            assertThat(transactions.isActive()).isFalse();
+            return null;
+        }).when(service).deleteClaimedStorage(first);
+        doAnswer(invocation ->
+        {
+            assertThat(transactions.isActive()).isFalse();
+            return null;
+        }).when(service).deleteClaimedStorage(second);
+        when(service.completeClaimedCleanup(first)).thenAnswer(invocation ->
+        {
+            assertThat(transactions.isActive()).isTrue();
+            return true;
         });
-        TransactionOperations transaction = transactionOperations(events);
-        WorkflowAttachmentCleanupCoordinator coordinator = newCoordinator(
-                service, jdbc.dataSource(), transaction);
+        when(service.completeClaimedCleanup(second)).thenReturn(true);
+        WorkflowAttachmentCleanupCoordinator coordinator =
+                new WorkflowAttachmentCleanupCoordinator(service, transactions);
 
-        assertThatThrownBy(coordinator::cleanupIfLockAcquired).isSameAs(cleanupFailure);
+        WorkflowAttachmentCleanupResult result = coordinator.cleanupBatch();
 
-        assertThat(events).containsExactly(
-                "acquire", "transaction_begin", "cleanup_failed",
-                "transaction_rolled_back", "release");
-        verify(jdbc.connection()).close();
-        assertThat(coordinator.isLockActive()).isFalse();
-        assertThat(coordinator.isLockDegraded()).isFalse();
+        assertThat(result).isEqualTo(new WorkflowAttachmentCleanupResult(2, 0, 0));
+        assertThat(transactions.executions()).isEqualTo(3);
+        verify(service).deleteClaimedStorage(first);
+        verify(service).deleteClaimedStorage(second);
     }
 
     /**
-     * 验证 RELEASE_LOCK 返回非 1 时立即 abort 专用会话并保持运行健康降级。
+     * 验证对象删除失败后仅在新的短事务中持久化重试，并继续返回可观测失败数。
      *
-     * @return void，异常物理连接可能回池或降级状态被遗漏时测试失败
-     * @throws Exception JDBC 测试替身配置失败
+     * @return void，存储失败未进入重试或错误地执行完成回写时测试失败
      */
     @Test
-    void abortsPhysicalSessionAndDegradesWhenReleaseResultIsNotOne() throws Exception
+    void schedulesRetryAfterStorageFailure()
     {
-        List<String> events = new ArrayList<>();
-        LockJdbc jdbc = lockJdbc(1, 0, events);
         WorkflowAttachmentService service = mock(WorkflowAttachmentService.class);
-        when(service.cleanupExpiredBatch())
-                .thenReturn(new WorkflowAttachmentCleanupResult(1, 0));
-        WorkflowAttachmentCleanupCoordinator coordinator = newCoordinator(
-                service, jdbc.dataSource(), transactionOperations(events));
+        RecordingTransactionOperations transactions = new RecordingTransactionOperations();
+        WfAttachment attachment = claimedAttachment(
+                "d9428888-122b-4c6f-8f0c-9c3e1dbd3210");
+        WorkflowAttachmentStorageOperationException storageFailure =
+                new WorkflowAttachmentStorageOperationException(
+                        "forced cleanup failure", new java.io.IOException());
+        when(service.claimCleanupBatch(anyString())).thenReturn(List.of(attachment));
+        doThrow(storageFailure).when(service).deleteClaimedStorage(attachment);
+        when(service.persistCleanupRetry(attachment)).thenReturn(true);
+        WorkflowAttachmentCleanupCoordinator coordinator =
+                new WorkflowAttachmentCleanupCoordinator(service, transactions);
 
-        assertThatThrownBy(coordinator::cleanupIfLockAcquired)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("工作流附件 MySQL 清理锁释放结果异常");
-
-        verify(jdbc.connection()).abort(any());
-        verify(jdbc.connection()).close();
-        assertThat(coordinator.isLockActive()).isFalse();
-        assertThat(coordinator.isLockDegraded()).isTrue();
+        assertThat(coordinator.cleanupBatch())
+                .isEqualTo(new WorkflowAttachmentCleanupResult(0, 1, 0));
+        assertThat(transactions.executions()).isEqualTo(2);
+        verify(service, never()).completeClaimedCleanup(attachment);
     }
 
     /**
-     * 验证事务回滚后 RELEASE_LOCK 的 JDBC 异常不会替换业务主异常，且连接仍被 abort。
+     * 验证租约过期重领后旧执行者不覆盖新 token，并计入 lease_lost 结果。
      *
-     * @return void，主异常、suppressed 证据或异常连接淘汰任一丢失时测试失败
-     * @throws Exception JDBC 测试替身配置失败
+     * @return void，旧执行者被误记为完成或失败时测试失败
      */
     @Test
-    void preservesCleanupFailureAndAbortsWhenReleaseThrowsSQLException() throws Exception
+    void recordsLeaseLossWithoutOverwritingNewOwner()
     {
-        List<String> events = new ArrayList<>();
-        LockJdbc jdbc = lockJdbc(1, 1, events);
-        SQLException releaseFailure = new SQLException("forced release failure");
-        doThrow(releaseFailure).when(jdbc.releaseStatement()).executeQuery();
         WorkflowAttachmentService service = mock(WorkflowAttachmentService.class);
-        IllegalStateException cleanupFailure = new IllegalStateException(
-                "forced cleanup failure");
-        when(service.cleanupExpiredBatch()).thenThrow(cleanupFailure);
-        WorkflowAttachmentCleanupCoordinator coordinator = newCoordinator(
-                service, jdbc.dataSource(), transactionOperations(events));
+        WfAttachment attachment = claimedAttachment(
+                "d9428888-122b-4c6f-8f0c-9c3e1dbd3210");
+        when(service.claimCleanupBatch(anyString())).thenReturn(List.of(attachment));
+        when(service.completeClaimedCleanup(attachment)).thenReturn(false);
+        WorkflowAttachmentCleanupCoordinator coordinator =
+                new WorkflowAttachmentCleanupCoordinator(service,
+                        new RecordingTransactionOperations());
 
-        assertThatThrownBy(coordinator::cleanupIfLockAcquired)
-                .isSameAs(cleanupFailure)
+        assertThat(coordinator.cleanupBatch())
+                .isEqualTo(new WorkflowAttachmentCleanupResult(0, 0, 1));
+        verify(service, never()).persistCleanupRetry(attachment);
+    }
+
+    /**
+     * 验证重试状态无法持久化时保留原存储异常为主异常，并附加数据库失败证据。
+     *
+     * @return void，主异常被替换或数据库失败被吞掉时测试失败
+     */
+    @Test
+    void preservesStorageFailureWhenRetryPersistenceFails()
+    {
+        WorkflowAttachmentService service = mock(WorkflowAttachmentService.class);
+        WfAttachment attachment = claimedAttachment(
+                "d9428888-122b-4c6f-8f0c-9c3e1dbd3210");
+        WorkflowAttachmentStorageOperationException storageFailure =
+                new WorkflowAttachmentStorageOperationException(
+                        "forced cleanup failure", new java.io.IOException());
+        IllegalStateException retryFailure = new IllegalStateException("forced db failure");
+        when(service.claimCleanupBatch(anyString())).thenReturn(List.of(attachment));
+        doThrow(storageFailure).when(service).deleteClaimedStorage(attachment);
+        when(service.persistCleanupRetry(attachment)).thenThrow(retryFailure);
+        WorkflowAttachmentCleanupCoordinator coordinator =
+                new WorkflowAttachmentCleanupCoordinator(service,
+                        new RecordingTransactionOperations());
+
+        assertThatThrownBy(coordinator::cleanupBatch)
+                .isSameAs(storageFailure)
                 .satisfies(failure -> assertThat(failure.getSuppressed())
-                        .containsExactly(releaseFailure));
-
-        verify(jdbc.connection()).abort(any());
-        verify(jdbc.connection()).close();
-        assertThat(coordinator.isLockActive()).isFalse();
-        assertThat(coordinator.isLockDegraded()).isTrue();
+                        .containsExactly(retryFailure));
     }
 
     /**
-     * 验证 abort 自身失败作为 suppressed 证据保留，仍不掩盖 RELEASE_LOCK 主失败。
+     * 创建带完整领取 token 和租约的终态附件快照。
      *
-     * @return void，连接淘汰失败证据丢失或错误层级倒置时测试失败
-     * @throws Exception JDBC 测试替身配置失败
+     * @param attachmentId String，测试附件 UUID
+     * @return WfAttachment，可执行事务外对象删除的领取快照
      */
-    @Test
-    void retainsAbortFailureAsSuppressedOnReleaseFailure() throws Exception
+    private WfAttachment claimedAttachment(String attachmentId)
     {
-        LockJdbc jdbc = lockJdbc(1, 0, new ArrayList<>());
-        SQLException abortFailure = new SQLException("forced abort failure");
-        doThrow(abortFailure).when(jdbc.connection()).abort(any());
-        WorkflowAttachmentService service = mock(WorkflowAttachmentService.class);
-        when(service.cleanupExpiredBatch())
-                .thenReturn(new WorkflowAttachmentCleanupResult(1, 0));
-        WorkflowAttachmentCleanupCoordinator coordinator = newCoordinator(
-                service, jdbc.dataSource(), transactionOperations(new ArrayList<>()));
-
-        assertThatThrownBy(coordinator::cleanupIfLockAcquired)
-                .isInstanceOf(IllegalStateException.class)
-                .satisfies(failure -> assertThat(failure.getSuppressed())
-                        .containsExactly(abortFailure));
-
-        verify(jdbc.connection()).close();
-        assertThat(coordinator.isLockDegraded()).isTrue();
+        LocalDateTime now = LocalDateTime.now();
+        return new WfAttachment(attachmentId, 7L, "files", "invoice.pdf",
+                "2026/08/16/0123456789abcdef0123456789abcdef.pdf",
+                "application/pdf", 128L, "a".repeat(64),
+                WorkflowAttachmentStatus.EXPIRED, now.minusHours(1), null,
+                null, null, null, null, null, 0, null, null,
+                "b9428888-122b-4c6f-8f0c-9c3e1dbd3210", now.plusMinutes(5),
+                now.minusHours(2), now);
     }
 
     /**
-     * 验证 GET_LOCK 返回 null、2 等非法结果时按锁状态不确定处理，禁止连接直接回池。
-     *
-     * @return void，非法结果未触发 abort、降级或零副作用约束时测试失败
-     * @throws Exception JDBC 测试替身配置失败
+     * 记录并暴露测试事务是否处于执行中，用于验证对象存储调用不占用数据库事务。
      */
-    @Test
-    void abortsAndDegradesWhenAcquireResultIsInvalid() throws Exception
+    private static final class RecordingTransactionOperations
+            implements TransactionOperations
     {
-        LockJdbc jdbc = lockJdbc(2, 1, new ArrayList<>());
-        WorkflowAttachmentService service = mock(WorkflowAttachmentService.class);
-        TransactionOperations transaction = mock(TransactionOperations.class);
-        WorkflowAttachmentCleanupCoordinator coordinator = newCoordinator(
-                service, jdbc.dataSource(), transaction);
+        /** 当前线程是否正在执行短事务回调。 */
+        private final AtomicBoolean active = new AtomicBoolean(false);
+        /** 已完成的短事务回调次数。 */
+        private int executions;
 
-        assertThatThrownBy(coordinator::cleanupIfLockAcquired)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("工作流附件 MySQL 清理锁获取结果异常");
-
-        verify(jdbc.connection()).abort(any());
-        verify(jdbc.connection()).close();
-        verify(jdbc.connection(), never()).prepareStatement("select release_lock(?)");
-        verifyNoInteractions(service, transaction);
-        assertThat(coordinator.isLockDegraded()).isTrue();
-        assertThat(coordinator.getLockAcquisitionFailures()).isEqualTo(1L);
-        assertThat(coordinator.getLockReleaseFailures()).isZero();
-    }
-
-    /**
-     * 验证 GET_LOCK 已读取结果但 ResultSet 关闭异常时仍视为不确定，并淘汰物理会话。
-     *
-     * @return void，JDBC 资源关闭异常允许可能持锁的连接回池时测试失败
-     * @throws Exception JDBC 测试替身配置失败
-     */
-    @Test
-    void abortsAndDegradesWhenAcquireResultSetCloseFails() throws Exception
-    {
-        LockJdbc jdbc = lockJdbc(1, 1, new ArrayList<>());
-        SQLException acquireFailure = new SQLException("forced acquire close failure");
-        doThrow(acquireFailure).when(jdbc.acquireResultSet()).close();
-        WorkflowAttachmentService service = mock(WorkflowAttachmentService.class);
-        TransactionOperations transaction = mock(TransactionOperations.class);
-        WorkflowAttachmentCleanupCoordinator coordinator = newCoordinator(
-                service, jdbc.dataSource(), transaction);
-
-        assertThatThrownBy(coordinator::cleanupIfLockAcquired)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("工作流附件 MySQL 清理锁连接异常")
-                .hasCause(acquireFailure);
-
-        verify(jdbc.connection()).abort(any());
-        verify(jdbc.connection()).close();
-        verify(jdbc.connection(), never()).prepareStatement("select release_lock(?)");
-        verifyNoInteractions(service, transaction);
-        assertThat(coordinator.isLockDegraded()).isTrue();
-        assertThat(coordinator.getLockAcquisitionFailures()).isEqualTo(1L);
-    }
-
-    /**
-     * 验证获取结果不确定且 abort 自身失败时保留获取异常为主异常，并附加淘汰失败证据。
-     *
-     * @return void，abort 失败覆盖主异常或丢失 suppressed 证据时测试失败
-     * @throws Exception JDBC 测试替身配置失败
-     */
-    @Test
-    void retainsAbortFailureAsSuppressedOnAcquireFailure() throws Exception
-    {
-        LockJdbc jdbc = lockJdbc(2, 1, new ArrayList<>());
-        SQLException abortFailure = new SQLException("forced acquire abort failure");
-        doThrow(abortFailure).when(jdbc.connection()).abort(any());
-        WorkflowAttachmentCleanupCoordinator coordinator = newCoordinator(
-                mock(WorkflowAttachmentService.class), jdbc.dataSource(),
-                mock(TransactionOperations.class));
-
-        assertThatThrownBy(coordinator::cleanupIfLockAcquired)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("工作流附件 MySQL 清理锁获取结果异常")
-                .satisfies(failure -> assertThat(failure.getSuppressed())
-                        .containsExactly(abortFailure));
-
-        verify(jdbc.connection()).close();
-        assertThat(coordinator.isLockDegraded()).isTrue();
-        assertThat(coordinator.getLockAcquisitionFailures()).isEqualTo(1L);
-    }
-
-    /**
-     * 验证一个节点事务尚未完成时，第二节点未获锁且不会启动自己的清理事务。
-     *
-     * @return void，第二节点在第一节点提交边界前进入清理时测试失败
-     * @throws Exception 并发执行或等待超时
-     */
-    @Test
-    void concurrentNodeCannotCleanBeforeFirstTransactionCompletes() throws Exception
-    {
-        CountDownLatch cleanupEntered = new CountDownLatch(1);
-        CountDownLatch allowCommit = new CountDownLatch(1);
-        LockJdbc firstJdbc = lockJdbc(1, 1,
-                Collections.synchronizedList(new ArrayList<>()));
-        LockJdbc secondJdbc = lockJdbc(0, 1,
-                Collections.synchronizedList(new ArrayList<>()));
-        WorkflowAttachmentService firstService = mock(WorkflowAttachmentService.class);
-        WorkflowAttachmentService secondService = mock(WorkflowAttachmentService.class);
-        when(firstService.cleanupExpiredBatch()).thenAnswer(invocation ->
+        /**
+         * 同步执行事务回调并在返回前恢复非事务状态。
+         *
+         * @param action TransactionCallback&lt;T&gt;，待执行的数据库动作
+         * @param <T> 回调返回值类型
+         * @return T，回调返回值
+         */
+        @Override
+        public <T> T execute(TransactionCallback<T> action)
         {
-            cleanupEntered.countDown();
-            assertThat(allowCommit.await(5, TimeUnit.SECONDS)).isTrue();
-            return new WorkflowAttachmentCleanupResult(1, 0);
-        });
-        TransactionOperations firstTransaction = transactionOperations(new ArrayList<>());
-        TransactionOperations secondTransaction = mock(TransactionOperations.class);
-        WorkflowAttachmentCleanupCoordinator first = newCoordinator(
-                firstService, firstJdbc.dataSource(), firstTransaction);
-        WorkflowAttachmentCleanupCoordinator second = newCoordinator(
-                secondService, secondJdbc.dataSource(), secondTransaction);
-
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        try
-        {
-            Future<Optional<WorkflowAttachmentCleanupResult>> firstRun =
-                    executor.submit(first::cleanupIfLockAcquired);
-            assertThat(cleanupEntered.await(5, TimeUnit.SECONDS)).isTrue();
-
-            assertThat(second.cleanupIfLockAcquired()).isEmpty();
-            verifyNoInteractions(secondService, secondTransaction);
-
-            allowCommit.countDown();
-            assertThat(firstRun.get(5, TimeUnit.SECONDS))
-                    .contains(new WorkflowAttachmentCleanupResult(1, 0));
-        }
-        finally
-        {
-            allowCommit.countDown();
-            executor.shutdownNow();
-            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
-        }
-    }
-
-    /**
-     * 创建使用 MySQL advisory lock 的被测协调器。
-     *
-     * @param service WorkflowAttachmentService，清理领域服务替身
-     * @param dataSource DataSource，锁连接来源
-     * @param transaction TransactionOperations，可观测提交边界的事务替身
-     * @return WorkflowAttachmentCleanupCoordinator，被测协调器
-     */
-    private WorkflowAttachmentCleanupCoordinator newCoordinator(
-            WorkflowAttachmentService service, DataSource dataSource,
-            TransactionOperations transaction)
-    {
-        WorkflowRuntimeProperties properties = new WorkflowRuntimeProperties();
-        return new WorkflowAttachmentCleanupCoordinator(
-                service, properties, dataSource, transaction);
-    }
-
-    /**
-     * 创建会真实调用事务回调并记录完成或回滚边界的事务操作器替身。
-     *
-     * @param events List&lt;String&gt;，按执行顺序收集的事件
-     * @return TransactionOperations，回调返回后记录完成、异常后记录回滚
-     */
-    private TransactionOperations transactionOperations(List<String> events)
-    {
-        TransactionOperations transaction = mock(TransactionOperations.class);
-        when(transaction.execute(any())).thenAnswer(invocation ->
-        {
-            @SuppressWarnings("unchecked")
-            TransactionCallback<WorkflowAttachmentCleanupResult> callback =
-                    invocation.getArgument(0);
-            events.add("transaction_begin");
+            executions++;
+            active.set(true);
             try
             {
-                WorkflowAttachmentCleanupResult result = callback.doInTransaction(
-                        mock(TransactionStatus.class));
-                events.add("transaction_completed");
-                return result;
+                return action.doInTransaction(mock(TransactionStatus.class));
             }
-            catch (RuntimeException | Error failure)
+            finally
             {
-                events.add("transaction_rolled_back");
-                throw failure;
+                active.set(false);
             }
-        });
-        return transaction;
-    }
+        }
 
-    /**
-     * 创建单一物理连接及两条锁函数语句，结果分别模拟获取和释放。
-     *
-     * @param acquireResult Integer，GET_LOCK 返回值
-     * @param releaseResult Integer，RELEASE_LOCK 返回值
-     * @param events List&lt;String&gt;，锁函数执行顺序记录
-     * @return LockJdbc，数据源、同一连接和语句测试替身
-     * @throws Exception JDBC 替身配置失败
-     */
-    private LockJdbc lockJdbc(Integer acquireResult, Integer releaseResult,
-            List<String> events) throws Exception
-    {
-        DataSource dataSource = mock(DataSource.class);
-        Connection connection = mock(Connection.class);
-        PreparedStatement acquire = lockStatement(acquireResult, "acquire", events);
-        PreparedStatement release = lockStatement(releaseResult, "release", events);
-        when(dataSource.getConnection()).thenReturn(connection);
-        when(connection.prepareStatement(anyString())).thenAnswer(invocation ->
+        /**
+         * 返回当前测试线程是否位于短事务回调中。
+         *
+         * @return boolean，事务回调执行中为 true
+         */
+        boolean isActive()
         {
-            String sql = invocation.getArgument(0);
-            return sql.contains("release_lock") ? release : acquire;
-        });
-        return new LockJdbc(dataSource, connection, acquire, release,
-                acquire.getResultSet());
-    }
+            return active.get();
+        }
 
-    /**
-     * 创建返回单行数值的锁函数 PreparedStatement。
-     *
-     * @param result Integer，MySQL 锁函数返回值
-     * @param event String，执行时记录的事件名
-     * @param events List&lt;String&gt;，顺序事件集合
-     * @return PreparedStatement，可重复关闭的 JDBC 替身
-     * @throws Exception JDBC 替身配置失败
-     */
-    private PreparedStatement lockStatement(Integer result, String event,
-            List<String> events) throws Exception
-    {
-        PreparedStatement statement = mock(PreparedStatement.class);
-        ResultSet resultSet = mock(ResultSet.class);
-        when(statement.executeQuery()).thenAnswer(invocation ->
+        /**
+         * 返回累计执行的短事务次数。
+         *
+         * @return int，事务回调次数
+         */
+        int executions()
         {
-            events.add(event);
-            return resultSet;
-        });
-        when(resultSet.next()).thenReturn(true, false);
-        when(resultSet.getObject(1)).thenReturn(result);
-        when(statement.getResultSet()).thenReturn(resultSet);
-        return statement;
-    }
-
-    /**
-     * JDBC 锁测试所需的同一数据源与物理连接。
-     *
-     * @param dataSource DataSource，返回固定连接
-     * @param connection Connection，获取和释放均使用的连接
-     * @param acquireStatement PreparedStatement，供获取异常分支精确注入的语句
-     * @param releaseStatement PreparedStatement，供释放异常分支精确注入的语句
-     * @param acquireResultSet ResultSet，供结果读取和关闭异常分支精确注入
-     */
-    private record LockJdbc(DataSource dataSource, Connection connection,
-            PreparedStatement acquireStatement, PreparedStatement releaseStatement,
-            ResultSet acquireResultSet)
-    {
+            return executions;
+        }
     }
 }

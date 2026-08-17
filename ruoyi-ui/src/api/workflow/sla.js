@@ -50,19 +50,21 @@ export function changeSlaCalendarStatus(calendarId, enabled) {
 }
 
 /**
- * 查询最近 SLA 执行状态。
- * @returns {Promise<object>} 当前权限范围内的正式执行记录。
+ * 分页查询 SLA 执行状态。
+ * @param {object} query 分页、状态、关键字和时间筛选。
+ * @returns {Promise<object>} 当前权限范围内的 rows/total。
  */
-export function listSlaExecutions() {
-  return request({ url: '/workflow/sla/executions', method: 'get' })
+export function listSlaExecutions(query) {
+  return request({ url: '/workflow/sla/executions', method: 'get', params: query })
 }
 
 /**
- * 查询最近 SLA 生命周期与触发审计。
- * @returns {Promise<object>} 创建、提醒、升级、暂停、恢复和完成审计。
+ * 分页查询 SLA 生命周期与触发审计。
+ * @param {object} query 分页、动作、关键字和时间筛选。
+ * @returns {Promise<object>} 创建、提醒、升级、暂停、恢复和完成审计 rows/total。
  */
-export function listSlaAudits() {
-  return request({ url: '/workflow/sla/audits', method: 'get' })
+export function listSlaAudits(query) {
+  return request({ url: '/workflow/sla/audits', method: 'get', params: query })
 }
 
 /**

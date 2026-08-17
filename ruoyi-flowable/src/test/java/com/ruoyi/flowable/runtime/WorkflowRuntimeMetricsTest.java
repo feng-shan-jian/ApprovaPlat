@@ -19,7 +19,6 @@ import com.ruoyi.flowable.mapper.WorkflowRuntimeMetricsMapper;
 import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties.AttachmentStorageMode;
-import com.ruoyi.flowable.service.attachment.WorkflowAttachmentCleanupCoordinator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
 
 class WorkflowRuntimeMetricsTest
@@ -37,8 +36,6 @@ class WorkflowRuntimeMetricsTest
         SpringProcessEngineConfiguration engineConfiguration = mock(
                 SpringProcessEngineConfiguration.class, RETURNS_DEEP_STUBS);
         WorkflowAttachmentStorage storage = mock(WorkflowAttachmentStorage.class);
-        WorkflowAttachmentCleanupCoordinator coordinator =
-                mock(WorkflowAttachmentCleanupCoordinator.class);
         WorkflowRuntimeProperties runtimeProperties = runtimeProperties();
         runtimeProperties.setProductionGateEnabled(true);
         runtimeProperties.setAttachmentStorageMode(
@@ -59,13 +56,8 @@ class WorkflowRuntimeMetricsTest
         when(engineConfiguration.getAsyncHistoryExecutor()).thenReturn(historyExecutor);
         when(asyncExecutor.isActive()).thenReturn(true);
         when(historyExecutor.isActive()).thenReturn(false);
-        when(coordinator.isLockActive()).thenReturn(true);
-        when(coordinator.isLockDegraded()).thenReturn(true);
-        when(coordinator.getLockAcquisitionFailures()).thenReturn(3L);
-        when(coordinator.getLockReleaseFailures()).thenReturn(2L);
-
         WorkflowRuntimeMetrics metrics = new WorkflowRuntimeMetrics(metricsMapper,
-                engineConfiguration, storage, coordinator, runtimeProperties,
+                engineConfiguration, storage, runtimeProperties,
                 attachmentProperties);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         metrics.bindTo(registry);
@@ -97,10 +89,6 @@ class WorkflowRuntimeMetricsTest
                 "state", "usable", 2048.0D);
         assertGauge(registry, "workflow.attachment.cleanup.pending", 11.0D);
         assertGauge(registry, "workflow.attachment.cleanup.deferred", 12.0D);
-        assertGauge(registry, "workflow.attachment.cleanup.lock.active", 1.0D);
-        assertGauge(registry, "workflow.attachment.cleanup.lock.degraded", 1.0D);
-        assertGauge(registry, "workflow.attachment.cleanup.lock.acquisition.failures", 3.0D);
-        assertGauge(registry, "workflow.attachment.cleanup.lock.release.failures", 2.0D);
         assertGauge(registry, "workflow.runtime.metrics.refresh.failures", 0.0D);
         assertGauge(registry, "workflow.runtime.metrics.refresh.inflight", 0.0D);
 
@@ -130,8 +118,7 @@ class WorkflowRuntimeMetricsTest
         WorkflowRuntimeMetrics metrics = new WorkflowRuntimeMetrics(
                 mock(WorkflowRuntimeMetricsMapper.class),
                 mock(SpringProcessEngineConfiguration.class, RETURNS_DEEP_STUBS),
-                mock(WorkflowAttachmentStorage.class),
-                mock(WorkflowAttachmentCleanupCoordinator.class), runtimeProperties(),
+                mock(WorkflowAttachmentStorage.class), runtimeProperties(),
                 attachmentProperties(0L));
 
         assertThat(metrics.readHealthSnapshot()).isEqualTo(
@@ -153,8 +140,6 @@ class WorkflowRuntimeMetricsTest
         SpringProcessEngineConfiguration engineConfiguration = mock(
                 SpringProcessEngineConfiguration.class, RETURNS_DEEP_STUBS);
         WorkflowAttachmentStorage storage = mock(WorkflowAttachmentStorage.class);
-        WorkflowAttachmentCleanupCoordinator coordinator =
-                mock(WorkflowAttachmentCleanupCoordinator.class);
         CountDownLatch storageEntered = new CountDownLatch(1);
         CountDownLatch releaseStorage = new CountDownLatch(1);
         when(metricsMapper.selectRuntimeMetricValues()).thenReturn(
@@ -170,7 +155,7 @@ class WorkflowRuntimeMetricsTest
             return 1024L;
         });
         WorkflowRuntimeMetrics metrics = new WorkflowRuntimeMetrics(metricsMapper,
-                engineConfiguration, storage, coordinator, runtimeProperties(),
+                engineConfiguration, storage, runtimeProperties(),
                 attachmentProperties(0L));
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         metrics.bindTo(registry);
@@ -209,8 +194,6 @@ class WorkflowRuntimeMetricsTest
         SpringProcessEngineConfiguration engineConfiguration = mock(
                 SpringProcessEngineConfiguration.class, RETURNS_DEEP_STUBS);
         WorkflowAttachmentStorage storage = mock(WorkflowAttachmentStorage.class);
-        WorkflowAttachmentCleanupCoordinator coordinator =
-                mock(WorkflowAttachmentCleanupCoordinator.class);
         WorkflowRuntimeMetricValues values = new WorkflowRuntimeMetricValues(
                 9L, 8L, 7L, 6L, 5L, 4L, 3L, 2L,
                 1L, 0L, 0L, 0L, 512L, 1L, 1L);
@@ -220,7 +203,7 @@ class WorkflowRuntimeMetricsTest
         when(storage.usableSpace()).thenReturn(4096L);
 
         WorkflowRuntimeMetrics metrics = new WorkflowRuntimeMetrics(metricsMapper,
-                engineConfiguration, storage, coordinator, runtimeProperties(),
+                engineConfiguration, storage, runtimeProperties(),
                 attachmentProperties(0L));
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         metrics.bindTo(registry);

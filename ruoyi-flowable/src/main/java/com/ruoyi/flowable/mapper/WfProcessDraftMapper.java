@@ -126,4 +126,28 @@ public interface WfProcessDraftMapper
             @Param("formValues") String formValues,
             @Param("multiInstanceUserIds") String multiInstanceUserIds,
             @Param("businessKey") String businessKey);
+
+    /**
+     * 锁定一批已提交或已删除且超过保留期的草稿。
+     * @param cutoffTime LocalDateTime，终态时间截止点
+     * @param limit int，单批最大记录数
+     * @return List&lt;String&gt;，按终态时间和草稿主键稳定排序的锁定主键
+     */
+    List<String> selectRetentionIdsForUpdate(@Param("cutoffTime") LocalDateTime cutoffTime,
+            @Param("limit") int limit);
+
+    /**
+     * 按锁定主键删除仍满足终态和截止时间的草稿。
+     * @param draftIds List&lt;String&gt;，当前事务已锁定的草稿主键
+     * @param cutoffTime LocalDateTime，终态时间截止点
+     * @return int，实际删除记录数
+     */
+    int deleteRetentionByIds(@Param("draftIds") List<String> draftIds,
+            @Param("cutoffTime") LocalDateTime cutoffTime);
+
+    /**
+     * 查询当前最早的草稿终态时间。
+     * @return LocalDateTime，最早 SUBMITTED/DELETED 时间；没有时为空
+     */
+    LocalDateTime selectOldestRetentionTime();
 }

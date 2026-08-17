@@ -30,14 +30,15 @@ const conditionRuleProperty = 'approva.conditionRule.config'
 /**
  * 读取命令行参数并限制只接受脚本公开的配置项。
  * @param {string[]} argv Node.js 传入的命令行参数数组。
- * @returns {{baseUrl: string, username: string, catalogPath: string, identitiesOnly: boolean}} 规范化脚本配置。
+ * @returns {{baseUrl: string, username: string, catalogPath: string, identitiesOnly: boolean, modelKeys: string[]}} 规范化脚本配置。
  */
 function parseArguments(argv) {
   const options = {
     baseUrl: 'http://127.0.0.1:8080',
     username: 'admin',
     catalogPath: defaultCatalogPath,
-    identitiesOnly: false
+    identitiesOnly: false,
+    modelKeys: []
   }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
@@ -46,12 +47,13 @@ function parseArguments(argv) {
       continue
     }
     const value = argv[index + 1]
-    if (!['--base-url', '--username', '--catalog'].includes(argument) || !value) {
+    if (!['--base-url', '--username', '--catalog', '--model-key'].includes(argument) || !value) {
       throw new Error(`不支持或缺少值的参数: ${argument}`)
     }
     if (argument === '--base-url') options.baseUrl = value
     if (argument === '--username') options.username = value
     if (argument === '--catalog') options.catalogPath = path.resolve(value)
+    if (argument === '--model-key') options.modelKeys.push(value)
     index += 1
   }
   options.baseUrl = options.baseUrl.replace(/\/+$/, '')
@@ -59,6 +61,10 @@ function parseArguments(argv) {
     throw new Error('服务地址必须是有效的 HTTP 或 HTTPS URL')
   }
   if (!options.username.trim()) throw new Error('管理员账号不能为空')
+  if (options.modelKeys.some(key => !/^[A-Za-z][A-Za-z0-9_-]{0,127}$/u.test(key)) ||
+      new Set(options.modelKeys).size !== options.modelKeys.length) {
+    throw new Error('流程模型筛选标识为空、重复或不符合受控语法')
+  }
   return options
 }
 
@@ -1109,6 +1115,78 @@ function createSampleGraph(sample, formId, tasks) {
       ]
     }
   }
+  if (template === 'composite') {
+    if (tasks.length !== 8 || !tasks[6].multiInstanceMode || !sample.routing ||
+        !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(sample.routing.variable) ||
+        !Number.isFinite(Number(sample.routing.threshold)) || !sample.extension) {
+      throw new Error(`综合复杂审批模板定义不完整: ${sample.modelKey}`)
+    }
+    const [initial, normalReview, riskReview, upper, lower, selector, multiInstance, final] = tasks
+    const threshold = Number(sample.routing.threshold)
+    // 两个排他网关分别承担条件分流与无状态汇合，避免条件分支直接跨越并行审批阶段。
+    const route = {
+      id: 'risk_route', kind: 'exclusiveGateway', name: '风险分级',
+      defaultFlow: 'flow_route_risk', x: 620, y: 265
+    }
+    const routeJoin = { id: 'risk_route_join', kind: 'exclusiveGateway', name: '分级汇合', x: 1010, y: 265 }
+    // 并行拆分与汇合必须成对存在，确保两个专业部门全部办理后才允许选择多人评审人员。
+    const split = { id: 'professional_split', kind: 'parallelGateway', name: '专业并审', x: 1160, y: 265 }
+    const join = { id: 'professional_join', kind: 'parallelGateway', name: '并审汇总', x: 1470, y: 265 }
+    end.x = 2180
+    return {
+      nodes: [
+        start,
+        { id: 'automation', kind: 'service', extension: sample.extension, x: 180, y: 250 },
+        { ...initial, kind: 'user', x: 390, y: 250 },
+        route,
+        { ...normalReview, kind: 'user', x: 780, y: 130 },
+        { ...riskReview, kind: 'user', x: 780, y: 370 },
+        routeJoin,
+        split,
+        { ...upper, kind: 'user', x: 1290, y: 130 },
+        { ...lower, kind: 'user', x: 1290, y: 370 },
+        join,
+        { ...selector, kind: 'user', x: 1580, y: 250 },
+        { ...multiInstance, kind: 'user', x: 1770, y: 250 },
+        { ...final, kind: 'user', x: 1960, y: 250 },
+        end
+      ],
+      flows: [
+        { id: 'flow_start_automation', source: 'start', target: 'automation' },
+        { id: 'flow_automation_initial', source: 'automation', target: initial.id },
+        { id: 'flow_initial_route', source: initial.id, target: route.id },
+        {
+          id: 'flow_route_normal', name: sample.routing.normalLabel || '常规审查',
+          source: route.id, target: normalReview.id,
+          conditionRule: {
+            version: 1,
+            default: false,
+            combinator: 'AND',
+            groups: [{
+              combinator: 'AND',
+              rules: [{ field: sample.routing.variable, operator: 'LTE', value: threshold }]
+            }]
+          }
+        },
+        {
+          id: 'flow_route_risk', name: sample.routing.riskLabel || '加强审查',
+          source: route.id, target: riskReview.id,
+          conditionRule: { version: 1, default: true }
+        },
+        { id: 'flow_normal_route_join', source: normalReview.id, target: routeJoin.id },
+        { id: 'flow_risk_route_join', source: riskReview.id, target: routeJoin.id },
+        { id: 'flow_route_join_split', source: routeJoin.id, target: split.id },
+        { id: 'flow_split_upper', source: split.id, target: upper.id },
+        { id: 'flow_split_lower', source: split.id, target: lower.id },
+        { id: 'flow_upper_join', source: upper.id, target: join.id },
+        { id: 'flow_lower_join', source: lower.id, target: join.id },
+        { id: 'flow_join_selector', source: join.id, target: selector.id },
+        { id: 'flow_selector_multi', source: selector.id, target: multiInstance.id },
+        { id: 'flow_multi_final', source: multiInstance.id, target: final.id },
+        { id: 'flow_final_end', source: final.id, target: 'end' }
+      ]
+    }
+  }
   throw new Error(`不支持的审批样例模板: ${template}`)
 }
 
@@ -1556,8 +1634,16 @@ async function main() {
       identityResult.directory.roles
     )
     const requiredExtensions = await loadRequiredExtensions(api, catalog)
+    const selectedSamples = options.modelKeys.length === 0
+      ? catalog.samples
+      : catalog.samples.filter(sample => options.modelKeys.includes(sample.modelKey))
+    if (selectedSamples.length !== (options.modelKeys.length || catalog.samples.length)) {
+      const selectedKeys = new Set(selectedSamples.map(sample => sample.modelKey))
+      const missingKeys = options.modelKeys.filter(key => !selectedKeys.has(key))
+      throw new Error(`审批样例目录不存在指定模型: ${missingKeys.join(', ')}`)
+    }
     const results = []
-    for (const sample of catalog.samples) {
+    for (const sample of selectedSamples) {
       results.push(await installSample(
         api,
         sample,

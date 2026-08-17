@@ -8,7 +8,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService;
 import com.ruoyi.flowable.service.process.WorkflowProcessCompletionStatusListener;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
@@ -19,7 +20,9 @@ import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 public class WorkflowProcessCompletionStatusConfiguration
 {
     /** 仅保存延迟提供器，Flowable 引擎创建阶段不得提前实例化反向依赖其公共服务的通知服务。 */
-    private ObjectProvider<WorkflowNotificationService> notificationServiceProvider;
+    private ObjectProvider<WorkflowNotificationRegistrar> notificationServiceProvider;
+    /** 子流程完成时延迟解析 outbox 状态服务，避免引擎初始化阶段提前创建数据访问依赖。 */
+    private ObjectProvider<WorkflowNotificationOutboxService> notificationOutboxServiceProvider;
 
     /**
      * 注入普通审批通知服务。
@@ -28,9 +31,11 @@ public class WorkflowProcessCompletionStatusConfiguration
      */
     @Autowired
     public void setNotificationServiceProvider(
-            ObjectProvider<WorkflowNotificationService> notificationServiceProvider)
+            ObjectProvider<WorkflowNotificationRegistrar> notificationServiceProvider,
+            ObjectProvider<WorkflowNotificationOutboxService> notificationOutboxServiceProvider)
     {
         this.notificationServiceProvider = notificationServiceProvider;
+        this.notificationOutboxServiceProvider = notificationOutboxServiceProvider;
     }
     /**
      * 创建流程自然完成状态监听器。
@@ -44,7 +49,8 @@ public class WorkflowProcessCompletionStatusConfiguration
             ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider)
     {
         return new WorkflowProcessCompletionStatusListener(
-                automaticCopyServiceProvider, notificationServiceProvider);
+                automaticCopyServiceProvider, notificationServiceProvider,
+                notificationOutboxServiceProvider);
     }
 
     /**

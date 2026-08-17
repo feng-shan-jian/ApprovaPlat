@@ -27,6 +27,7 @@
       </el-form-item>
     </el-form>
     <template #footer>
+      <el-button @click="restoreDefaults">恢复默认</el-button>
       <el-button @click="$emit('update:modelValue', false)">取消</el-button>
       <el-button type="primary" :loading="saving" @click="submit">保存设置</el-button>
     </template>
@@ -37,13 +38,13 @@
 const props = defineProps({
   /** 抽屉显示状态。 */
   modelValue: { type: Boolean, default: false },
-  /** 服务端回读的完整设计器偏好。 */
+  /** 当前用户本地存储回读的完整设计器偏好。 */
   preference: { type: Object, required: true },
   /** 偏好保存请求是否进行中。 */
   saving: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['update:modelValue', 'save'])
+const emit = defineEmits(['update:modelValue', 'save', 'reset'])
 const draft = reactive(createDraft(props.preference))
 const themeOptions = [
   { label: '跟随系统', value: 'SYSTEM' },
@@ -52,8 +53,8 @@ const themeOptions = [
 ]
 
 /**
- * 从只读服务端偏好创建可编辑草稿，避免取消抽屉时污染已应用状态。
- * @param {object} preference 服务端回读的完整偏好。
+ * 从只读当前用户偏好创建可编辑草稿，避免取消抽屉时污染已应用状态。
+ * @param {object} preference 当前用户浏览器存储回读的完整偏好。
  * @returns {object} 字段完整且布尔值规范化的草稿。
  */
 function createDraft(preference) {
@@ -68,11 +69,19 @@ function createDraft(preference) {
 }
 
 /**
- * 提交字段完整的偏好草稿，由页面调用真实后端保存。
+ * 提交字段完整的偏好草稿，由页面写入当前用户浏览器存储。
  * @returns {void} 保存结果通过 preference Prop 回写。
  */
 function submit() {
   emit('save', { ...draft })
+}
+
+/**
+ * 请求页面仅删除当前用户偏好键并恢复默认值。
+ * @returns {void} 默认值通过 preference Prop 回写后刷新草稿。
+ */
+function restoreDefaults() {
+  emit('reset')
 }
 
 watch(() => props.preference, value => Object.assign(draft, createDraft(value)), { deep: true })

@@ -3,6 +3,7 @@ package com.ruoyi.flowable.mapper;
 import java.util.List;
 import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WfBpmnEventCode;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventAuditView;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventNotificationView;
 
@@ -85,8 +86,19 @@ public interface WfBpmnEventMapper
     /** @param idempotencyKey String，幂等摘要；@return Long，审计主键。 */
     Long selectAuditId(@Param("idempotencyKey") String idempotencyKey);
 
-    /** @return List&lt;WorkflowBpmnEventAuditView&gt;，最近 500 条运行审计。 */
-    List<WorkflowBpmnEventAuditView> selectAuditList();
+    /** @param query BpmnEventAudit，运维筛选条件；@return long，符合条件的审计总数。 */
+    long countAuditList(@Param("query") WorkflowOperationsQuery.BpmnEventAudit query);
+
+    /**
+     * 分页查询 BPMN 事件运行审计。
+     * @param query BpmnEventAudit，运维筛选条件
+     * @param offset int，数据库起始偏移
+     * @param pageSize int，本页最大记录数
+     * @return List&lt;WorkflowBpmnEventAuditView&gt;，按时间和审计主键倒序的当前页
+     */
+    List<WorkflowBpmnEventAuditView> selectAuditList(
+            @Param("query") WorkflowOperationsQuery.BpmnEventAudit query,
+            @Param("offset") int offset, @Param("pageSize") int pageSize);
 
     /** @param userId String，当前用户主键；@return List&lt;WorkflowBpmnEventNotificationView&gt;，最近 200 条通知。 */
     List<WorkflowBpmnEventNotificationView> selectNotifications(@Param("userId") String userId);

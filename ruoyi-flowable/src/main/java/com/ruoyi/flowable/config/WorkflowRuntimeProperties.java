@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 工作流生产运行拓扑、共享存储和分布式清理锁配置。
+ * 工作流生产运行拓扑、共享存储和指标刷新配置。
  */
 @Component
 @ConfigurationProperties(prefix = "flowable.runtime")
@@ -33,13 +33,6 @@ public class WorkflowRuntimeProperties
         SHARED_FILESYSTEM
     }
 
-    /** 附件清理调度的跨节点互斥方式。 */
-    public enum AttachmentCleanupLockMode
-    {
-        NONE,
-        MYSQL_ADVISORY
-    }
-
     /** 仅部署覆盖配置开启；开发和测试环境不因生产审批字段缺失而启动失败。 */
     private boolean productionGateEnabled;
 
@@ -64,13 +57,6 @@ public class WorkflowRuntimeProperties
 
     /** 共享卷预置 .storage-id 的期望值，不由应用自动创建。 */
     private String attachmentStorageId = "";
-
-    /** 默认使用 MySQL advisory lock，保证多个调度节点不会同时进入清理批次。 */
-    private AttachmentCleanupLockMode attachmentCleanupLockMode =
-            AttachmentCleanupLockMode.MYSQL_ADVISORY;
-
-    /** MySQL GET_LOCK 使用的集群级稳定锁名，必须在所有节点保持一致。 */
-    private String attachmentCleanupLockName = "approvaplat:wf-attachment-cleanup";
 
     /** 启动后首次采集工作流合并指标前的默认等待时间。 */
     private Duration metricsRefreshInitialDelay = Duration.ofSeconds(10);
@@ -247,49 +233,6 @@ public class WorkflowRuntimeProperties
     public void setAttachmentStorageId(String attachmentStorageId)
     {
         this.attachmentStorageId = normalize(attachmentStorageId);
-    }
-
-    /**
-     * 获取附件清理锁模式。
-     *
-     * @return AttachmentCleanupLockMode，无锁或 MySQL advisory lock
-     */
-    public AttachmentCleanupLockMode getAttachmentCleanupLockMode()
-    {
-        return attachmentCleanupLockMode;
-    }
-
-    /**
-     * 设置附件清理锁模式。
-     *
-     * @param attachmentCleanupLockMode AttachmentCleanupLockMode，不能为空
-     * @return void，无返回值
-     */
-    public void setAttachmentCleanupLockMode(
-            AttachmentCleanupLockMode attachmentCleanupLockMode)
-    {
-        this.attachmentCleanupLockMode = attachmentCleanupLockMode;
-    }
-
-    /**
-     * 获取附件清理集群锁名。
-     *
-     * @return String，MySQL GET_LOCK 使用的稳定名称
-     */
-    public String getAttachmentCleanupLockName()
-    {
-        return attachmentCleanupLockName;
-    }
-
-    /**
-     * 设置附件清理集群锁名。
-     *
-     * @param attachmentCleanupLockName String，所有应用节点必须一致的非敏感锁名
-     * @return void，无返回值
-     */
-    public void setAttachmentCleanupLockName(String attachmentCleanupLockName)
-    {
-        this.attachmentCleanupLockName = normalize(attachmentCleanupLockName);
     }
 
     /**

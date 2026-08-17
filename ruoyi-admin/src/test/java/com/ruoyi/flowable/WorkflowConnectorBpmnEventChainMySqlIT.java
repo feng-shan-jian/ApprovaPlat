@@ -143,11 +143,6 @@ class WorkflowConnectorBpmnEventChainMySqlIT
         {
             List<WfDeployDmnSnapshot> dmnSnapshots = artifactRepository
                     .selectDmnSnapshots(deploymentId);
-            jdbc.update("delete d from wf_notification_delivery_audit d "
-                    + "join wf_notification_outbox o on o.outbox_id=d.outbox_id "
-                    + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
-                    + "and o.source_id=cast(a.audit_id as char) "
-                    + "where a.deployment_id=?", deploymentId);
             jdbc.update("delete n from wf_notification_inbox n "
                     + "join wf_notification_outbox o on o.outbox_id=n.outbox_id "
                     + "join wf_bpmn_event_audit a on o.source_type='BPMN_EVENT' "
@@ -158,7 +153,6 @@ class WorkflowConnectorBpmnEventChainMySqlIT
                     + "and o.source_id=cast(a.audit_id as char) "
                     + "where a.deployment_id=?", deploymentId);
             jdbc.update("delete from wf_bpmn_event_audit where deployment_id=?", deploymentId);
-            jdbc.update("delete from wf_connector_invocation where deployment_id=?", deploymentId);
             artifactRepository.delete(deploymentId);
             if (repositoryService.createDeploymentQuery().deploymentId(deploymentId).count() == 1L)
             {
@@ -214,13 +208,6 @@ class WorkflowConnectorBpmnEventChainMySqlIT
         assertThat(processEngine.getRuntimeService().getVariable(
                 instance.getId(), "httpStatus")).isEqualTo(202L);
         assertCaptured(instance, deployment, "HTTP", "producerTask");
-        assertThat(jdbc.queryForMap(
-                "select connector_type, status, result_code from wf_connector_invocation "
-                        + "where deployment_id=? and process_instance_id=?",
-                deployment.getId(), instance.getId()))
-                .containsEntry("connector_type", "HTTP")
-                .containsEntry("status", "SUCCESS")
-                .containsEntry("result_code", 202);
         completeAndAssertFinished(instance.getId());
     }
 
@@ -237,6 +224,10 @@ class WorkflowConnectorBpmnEventChainMySqlIT
         ProcessInstance instance = processEngine.getRuntimeService().startProcessInstanceByKey(
                 processKey, Map.of("initiator", "1", "dataSourceKey", dataSourceKey,
                         "nextName", "连接器事件链已提交"));
+        Job job = processEngine.getManagementService().createJobQuery()
+                .processInstanceId(instance.getId()).singleResult();
+        assertThat(job).isNotNull();
+        processEngine.getManagementService().executeJob(job.getId());
 
         Object affected = processEngine.getRuntimeService().getVariable(
                 instance.getId(), "sqlAffected");
@@ -278,8 +269,8 @@ class WorkflowConnectorBpmnEventChainMySqlIT
     }
 
     /**
-     * 验证 SQL 写入后受控 Error 未匹配时同一 Flowable 命令整体回滚，仅保留独立诊断审计。
-     * @return void，SQL、流程、历史、通知任一出现部分提交时测试失败
+     * 验证异步 SQL Job 写入后受控 Error 未匹配时业务事务回滚，仅保留独立诊断审计。
+     * @return void，SQL 泄漏、流程误完成、诊断审计缺失或通知误投递时测试失败
      */
     @Test
     void rollsBackSqlWriteWhenControlledErrorIsUnmatched()
@@ -307,18 +298,22 @@ class WorkflowConnectorBpmnEventChainMySqlIT
                         deployment.getId(), extensionPrepared),
                 List.of(), List.of(), List.of()));
 
-        assertThatThrownBy(() -> processEngine.getRuntimeService().startProcessInstanceByKey(
+        ProcessInstance instance = processEngine.getRuntimeService().startProcessInstanceByKey(
                 processKey, Map.of("initiator", "1", "dataSourceKey", dataSourceKey,
-                        "nextName", "不应泄漏")))
+                        "nextName", "不应泄漏"));
+        Job job = processEngine.getManagementService().createJobQuery()
+                .processInstanceId(instance.getId()).singleResult();
+        assertThat(job).isNotNull();
+        assertThatThrownBy(() -> processEngine.getManagementService().executeJob(job.getId()))
                 .hasMessageContaining("APPROVAL_BUSINESS_ERROR");
 
         assertThat(jdbc.queryForObject(
                 "select datasource_name from wf_sql_datasource where datasource_id=?",
                 String.class, dataSourceId)).isEqualTo(ORIGINAL_SQL_NAME);
         assertThat(processEngine.getRuntimeService().createProcessInstanceQuery()
-                .processDefinitionKey(processKey).count()).isZero();
+                .processInstanceId(instance.getId()).count()).isOne();
         assertThat(processEngine.getHistoryService().createHistoricProcessInstanceQuery()
-                .processDefinitionKey(processKey).count()).isZero();
+                .processInstanceId(instance.getId()).finished().count()).isZero();
         assertThat(jdbc.queryForMap(
                 "select source_type, match_status, source_element_id "
                         + "from wf_bpmn_event_audit where deployment_id=?",
@@ -490,7 +485,7 @@ class WorkflowConnectorBpmnEventChainMySqlIT
      */
     private String sqlTask()
     {
-        return "<serviceTask id=\"producerTask\" name=\"更新审批联动状态\" "
+        return "<serviceTask id=\"producerTask\" name=\"更新审批联动状态\" flowable:async=\"true\" "
                 + "flowable:delegateExpression=\"${workflowExtensionDelegate}\">"
                 + "<extensionElements><flowable:field name=\"approvaExtensionKey\" "
                 + "stringValue=\"approva.sql-connector\"/>"

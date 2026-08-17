@@ -326,8 +326,8 @@ test('@full [UI-INTEGRATION-002] 集成Token每分钟限流由正式运行事件
 
     const escapedCredentialId = String(assets.credentialId).replaceAll("'", "''")
     expect(queryReadOnly(
-      `SELECT rate_limit_per_minute, rate_window_count, last_used_at IS NOT NULL, revoked_at IS NULL FROM wf_integration_credential WHERE credential_id = '${escapedCredentialId}'`
-    ), '限流窗口必须只消费第一请求且凭据保持有效').toEqual([['1', '1', '1', '1']])
+      `SELECT rate_limit_per_minute, last_used_at IS NOT NULL, revoked_at IS NULL FROM wf_integration_credential WHERE credential_id = '${escapedCredentialId}'`
+    ), '限流必须只在 Redis 消费且凭据最近使用时间已降频落库').toEqual([['1', '1', '1']])
     expect(queryReadOnly(
       `SELECT event_type, event_name, correlation_value, status, result_code FROM wf_runtime_event_request WHERE request_id = '${assets.firstRequestId.replaceAll("'", "''")}'`
     ), '第一请求必须形成脱敏失败审计').toEqual([[
@@ -352,8 +352,8 @@ test('@full [UI-INTEGRATION-002] 集成Token每分钟限流由正式运行事件
         await integration.revokeCredential(assets.credentialName)
         credential.token = ''
         expect(queryReadOnly(
-          `SELECT revoked_at IS NOT NULL, rate_window_count FROM wf_integration_credential WHERE credential_id = '${String(assets.credentialId).replaceAll("'", "''")}'`
-        ), '凭据必须经 UI 吊销且保留限流计数审计').toEqual([['1', '1']])
+          `SELECT revoked_at IS NOT NULL, last_used_at IS NOT NULL FROM wf_integration_credential WHERE credential_id = '${String(assets.credentialId).replaceAll("'", "''")}'`
+        ), '凭据必须经 UI 吊销且数据库不保存高频限流计数').toEqual([['1', '1']])
       }
     } catch (error) {
       failed = true

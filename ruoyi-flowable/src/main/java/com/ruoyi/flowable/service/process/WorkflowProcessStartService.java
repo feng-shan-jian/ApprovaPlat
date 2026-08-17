@@ -16,7 +16,6 @@ import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow;
-import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.domain.WfProcessDraft;
 import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
@@ -267,8 +266,10 @@ public class WorkflowProcessStartService
             throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT);
         }
         // 草稿提交必须重新按当前组织身份校验发起范围，不能沿用创建或保存草稿时的历史权限。
-        WfDeployParticipantRule startScopeRule = participantRuleRuntimeService == null
-                ? null : participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
+        if (participantRuleRuntimeService != null)
+        {
+            participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
+        }
         LinkedHashMap<String, Object> engineVariables = new LinkedHashMap<>(clientVariables);
         // 草稿成员字段不进入普通变量白名单；提交时按部署模型和最新审批资格生成保留变量。
         engineVariables.putAll(WorkflowStartMultiInstanceContract.prepareVariables(
@@ -287,12 +288,6 @@ public class WorkflowProcessStartService
                 draft.processDefinitionId(), businessKey);
         attachmentService.bindDraftStartAttachments(actor.userId(), draft.draftId(),
                 snapshot.id(), startForm.nodeKey(), validated.attachmentIdsByField());
-        if (participantRuleRuntimeService != null && startScopeRule != null)
-        {
-            // 仅在实例和附件均成功后记录允许审计；后续异常由同一事务整体回滚。
-            participantRuleRuntimeService.recordStartAllowed(startScopeRule,
-                    activeDefinition, snapshot.id(), actor.userId());
-        }
         return snapshot;
     }
 
@@ -343,8 +338,10 @@ public class WorkflowProcessStartService
         }
 
         // 发起范围在引擎写入前按不可变部署快照和当前有效组织授权，拒绝请求不得创建实例。
-        WfDeployParticipantRule startScopeRule = participantRuleRuntimeService == null
-                ? null : participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
+        if (participantRuleRuntimeService != null)
+        {
+            participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
+        }
 
         LinkedHashMap<String, Object> engineVariables = new LinkedHashMap<>(clientVariables);
         // 发起多实例字段不属于通用表单变量；必须按部署 BPMN 精确校验后由服务端生成保留变量。
@@ -367,12 +364,6 @@ public class WorkflowProcessStartService
         // 实例主键取自 RuntimeService，节点 key 取自部署快照；任一附件失败都会回滚本次引擎发起。
         attachmentService.bindStartAttachments(actor.userId(), snapshot.id(),
                 startForm.nodeKey(), validatedVariables.attachmentIdsByField());
-        if (participantRuleRuntimeService != null && startScopeRule != null)
-        {
-            // 成功审计与实例、首任务和附件绑定同事务提交，后续异常会整体回滚。
-            participantRuleRuntimeService.recordStartAllowed(startScopeRule,
-                    activeDefinition, snapshot.id(), actor.userId());
-        }
         return snapshot;
     }
 

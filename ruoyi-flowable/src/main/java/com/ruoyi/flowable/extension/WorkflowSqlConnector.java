@@ -2,12 +2,14 @@ package com.ruoyi.flowable.extension;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.sql.DataSource;
 import org.flowable.engine.delegate.DelegateExecution;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -17,9 +19,8 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfSqlDataSource;
-import com.ruoyi.flowable.domain.vo.WorkflowConnectorInvocationClaim;
+import com.ruoyi.flowable.runtime.WorkflowConnectorMetrics;
 import com.ruoyi.flowable.service.model.WorkflowSqlDataSourceService;
-import com.ruoyi.flowable.service.process.WorkflowConnectorInvocationService;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -32,12 +33,14 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class WorkflowSqlConnector
 {
+    private static final Logger log = LoggerFactory.getLogger(WorkflowSqlConnector.class);
     public static final String IMPLEMENTATION_KEY = "SQL_CONNECTOR_V1";
     private static final Set<String> AUTHOR_FIELDS = Set.of(
-            "dataSourceKey", "sql", "parameters", "resultVariable", "maxRows");
+            "dataSourceKey", "sql", "parameters", "resultVariable", "maxRows",
+            "idempotencyColumn");
     private static final Set<String> FROZEN_FIELDS = Set.of(
             "dataSourceKey", "sql", "parameters", "resultVariable", "maxRows",
-            "operation", "tables", "dataSourceSnapshot");
+            "idempotencyColumn", "operation", "tables", "dataSourceSnapshot");
     private static final String CONFIG_SCHEMA = """
             {"type":"object","additionalProperties":false,
              "required":["dataSourceKey","sql","parameters"],
@@ -45,6 +48,7 @@ public class WorkflowSqlConnector
              "sql":{"type":"string","minLength":1,"maxLength":8192},
              "parameters":{"type":"object","additionalProperties":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$"}},
              "resultVariable":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
+             "idempotencyColumn":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_$]{0,127}$"},
              "maxRows":{"type":"integer","minimum":1,"maximum":1000}}}
             """;
 
@@ -52,7 +56,7 @@ public class WorkflowSqlConnector
     private final WorkflowSqlDataSourceService dataSourceService;
     private final WorkflowSqlTemplateValidator templateValidator;
     private final WorkflowSqlSecretResolver secretResolver;
-    private final WorkflowConnectorInvocationService invocationService;
+    private final WorkflowConnectorMetrics connectorMetrics;
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
@@ -61,20 +65,20 @@ public class WorkflowSqlConnector
      * @param dataSourceService WorkflowSqlDataSourceService，受控数据源目录
      * @param templateValidator WorkflowSqlTemplateValidator，SQL AST 门禁
      * @param secretResolver WorkflowSqlSecretResolver，外库环境引用解析器
-     * @param invocationService WorkflowConnectorInvocationService，外部副作用幂等台账
+     * @param connectorMetrics WorkflowConnectorMetrics，单次 Flowable Job 尝试指标
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowSqlConnector(DataSource primaryDataSource,
             WorkflowSqlDataSourceService dataSourceService,
             WorkflowSqlTemplateValidator templateValidator,
             WorkflowSqlSecretResolver secretResolver,
-            WorkflowConnectorInvocationService invocationService)
+            WorkflowConnectorMetrics connectorMetrics)
     {
         this.primaryDataSource = primaryDataSource;
         this.dataSourceService = dataSourceService;
         this.templateValidator = templateValidator;
         this.secretResolver = secretResolver;
-        this.invocationService = invocationService;
+        this.connectorMetrics = connectorMetrics;
     }
 
     /**
@@ -94,6 +98,11 @@ public class WorkflowSqlConnector
      */
     public String freezeConfig(JsonNode config, boolean asynchronous)
     {
+        if (!asynchronous)
+        {
+            throw new ServiceException("SQL 连接器必须启用进入前异步以承载 Flowable Job 重试",
+                    HttpStatus.BAD_REQUEST);
+        }
         AuthorConfig author = parseAuthor(config, AUTHOR_FIELDS);
         WfSqlDataSource dataSource = dataSourceService.lockEnabledForDeployment(
                 author.dataSourceKey());
@@ -102,10 +111,10 @@ public class WorkflowSqlConnector
         requireParameterMapping(author, template);
         boolean externalWrite = "EXTERNAL".equals(dataSource.getConnectionType())
                 && !"SELECT".equals(template.operation());
-        if (externalWrite && (!asynchronous || !template.parameterNames().contains("idempotencyKey")))
+        if (externalWrite)
         {
-            throw new ServiceException("SQL 外库写入必须异步并消费命名参数 idempotencyKey",
-                    HttpStatus.BAD_REQUEST);
+            templateValidator.requireIdempotentExternalWrite(template,
+                    author.idempotencyColumn());
         }
         if (externalWrite && author.resultVariable() != null)
         {
@@ -119,6 +128,7 @@ public class WorkflowSqlConnector
             frozen.put("sql", template.sql());
             frozen.set("parameters", author.parameters().deepCopy());
             putOptional(frozen, "resultVariable", author.resultVariable());
+            putOptional(frozen, "idempotencyColumn", author.idempotencyColumn());
             frozen.put("maxRows", author.maxRows());
             frozen.put("operation", template.operation());
             frozen.set("tables", objectMapper.valueToTree(template.tables()));
@@ -144,7 +154,7 @@ public class WorkflowSqlConnector
     }
 
     /**
-     * 复核并执行冻结 SQL；主库复用 Flowable 事务，外库通过稳定幂等台账承载至少一次重试。
+     * 复核并执行冻结 SQL；失败交回 Flowable Job 重试，外库写由业务唯一键契约消除重复副作用。
      * @param execution DelegateExecution，当前 Flowable 执行上下文
      * @param snapshot WfDeployExtensionSnapshot，扩展部署快照
      * @param config JsonNode，冻结 SQL 配置
@@ -155,35 +165,27 @@ public class WorkflowSqlConnector
     {
         FrozenConfig frozen = parseFrozen(config);
         Map<String, Object> parameters = resolveParameters(execution, frozen);
-        if ("PRIMARY".equals(frozen.dataSource().connectionType()))
+        boolean external = "EXTERNAL".equals(frozen.dataSource().connectionType());
+        boolean write = !"SELECT".equals(frozen.operation());
+        if (external && write)
         {
-            Object result = executeSql(primaryDataSource, frozen, parameters);
-            setResult(execution, frozen.author().resultVariable(), result);
-            return;
-        }
-
-        String idempotencyKey = WorkflowExtensionChecksum.sha256(snapshot.getDeployId(),
-                execution.getProcessInstanceId(), execution.getId(), execution.getCurrentActivityId());
-        parameters.put("idempotencyKey", idempotencyKey);
-        WorkflowConnectorInvocationClaim claim = invocationService.begin(snapshot.getDeployId(),
-                execution.getProcessInstanceId(), execution.getId(), execution.getCurrentActivityId(),
-                "SQL", frozen.author().dataSourceKey(), frozen.dataSource().revisionNo(), idempotencyKey,
-                frozen.operation(), String.join(",", frozen.tables()));
-        if ("SUCCESS".equals(claim.status()))
-        {
-            return;
+            String idempotencyKey = WorkflowExtensionChecksum.sha256(
+                    execution.getProcessInstanceId(), execution.getId(),
+                    execution.getCurrentActivityId());
+            parameters.put("idempotencyKey", idempotencyKey);
         }
         long started = System.nanoTime();
         try
         {
-            Object result = executeSql(externalDataSource(frozen.dataSource()), frozen, parameters);
-            invocationService.success(claim, elapsedMillis(started), 200, summarize(result));
+            DataSource dataSource = external
+                    ? externalDataSource(frozen.dataSource()) : primaryDataSource;
+            Object result = executeSql(dataSource, frozen, parameters);
             setResult(execution, frozen.author().resultVariable(), result);
+            recordAttempt(execution, started, true, "SUCCESS");
         }
         catch (RuntimeException exception)
         {
-            invocationService.failure(claim, elapsedMillis(started), null,
-                    "SQL_EXECUTION_ERROR", "sql-execution-failed");
+            recordAttempt(execution, started, false, "SQL_EXECUTION_ERROR");
             throw exception;
         }
     }
@@ -281,12 +283,19 @@ public class WorkflowSqlConnector
             }
         });
         String result = optionalVariable(config, "resultVariable");
+        String idempotencyColumn = optionalText(config, "idempotencyColumn");
+        if (idempotencyColumn != null
+                && !idempotencyColumn.matches("[A-Za-z_][A-Za-z0-9_$]{0,127}"))
+        {
+            throw new ServiceException("SQL 幂等唯一列格式不合法", HttpStatus.BAD_REQUEST);
+        }
         int maxRows = config.has("maxRows") ? config.get("maxRows").asInt(-1) : 100;
         if (maxRows < 1 || maxRows > 1000)
         {
             throw new ServiceException("SQL 查询行数上限不合法", HttpStatus.BAD_REQUEST);
         }
-        return new AuthorConfig(key, sql, (ObjectNode) mappings, result, maxRows);
+        return new AuthorConfig(key, sql, (ObjectNode) mappings, result,
+                idempotencyColumn, maxRows);
     }
 
     /**
@@ -318,6 +327,12 @@ public class WorkflowSqlConnector
         WorkflowSqlTemplate template = templateValidator.validate(author.sql(),
                 Set.of(dataSource.allowedTables().split(",")));
         requireParameterMapping(author, template);
+        if ("EXTERNAL".equals(dataSource.connectionType())
+                && !"SELECT".equals(template.operation()))
+        {
+            templateValidator.requireIdempotentExternalWrite(template,
+                    author.idempotencyColumn());
+        }
         String operation = requiredText(config, "operation", 16);
         if (!operation.equals(template.operation()) || !config.path("tables").isArray()
                 || !config.path("tables").equals(objectMapper.valueToTree(template.tables())))
@@ -384,17 +399,32 @@ public class WorkflowSqlConnector
     }
 
     /**
-     * 生成不包含行值和 SQL 正文的审计摘要。
-     * @param result Object，连接器执行结果
-     * @return String，结果类型和计数摘要
+     * 记录单次 Flowable Job 尝试的结构化日志和指标，不输出 SQL、参数、结果行或凭据。
+     * @param execution DelegateExecution，当前 Flowable 执行上下文
+     * @param started long，System.nanoTime 起点
+     * @param success boolean，本次尝试是否成功
+     * @param resultCode String，稳定低敏结果码
+     * @return void，日志与指标只承担诊断，不参与业务恢复
      */
-    private String summarize(Object result)
+    private void recordAttempt(DelegateExecution execution, long started,
+            boolean success, String resultCode)
     {
-        if (result instanceof List<?> rows)
-        {
-            return "rows=" + rows.size();
-        }
-        return "affectedRows=" + result;
+        long durationMs = elapsedMillis(started);
+        connectorMetrics.record("SQL", success, durationMs);
+        log.info("operation=workflowConnector type=SQL traceId={} processInstanceId={} "
+                        + "executionId={} elementId={} resultCode={} durationMs={}",
+                safeTraceId(), execution.getProcessInstanceId(), execution.getId(),
+                execution.getCurrentActivityId(), resultCode, durationMs);
+    }
+
+    /**
+     * 读取当前链路标识，未配置 MDC 时使用空字符串。
+     * @return String，当前 traceId 或空字符串
+     */
+    private String safeTraceId()
+    {
+        String traceId = MDC.get("traceId");
+        return traceId == null ? "" : traceId;
     }
 
     /**
@@ -470,7 +500,7 @@ public class WorkflowSqlConnector
     }
 
     private record AuthorConfig(String dataSourceKey, String sql, ObjectNode parameters,
-            String resultVariable, int maxRows) { }
+            String resultVariable, String idempotencyColumn, int maxRows) { }
     private record FrozenConfig(AuthorConfig author, String operation, List<String> tables,
             DataSourceSnapshot dataSource) { }
     private record DataSourceSnapshot(long dataSourceId, String dataSourceName,

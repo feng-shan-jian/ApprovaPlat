@@ -1,7 +1,3 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
 export const WORKFLOW_ROLE_KEYS = Object.freeze([
   'workflow_admin',
   'workflow_designer',
@@ -80,18 +76,6 @@ export const ROLE_REQUIRED_PERMISSIONS = Object.freeze({
  */
 function route(key, pagePath, endpoint, roles) {
   return Object.freeze({ key, path: pagePath, endpoint, roles: Object.freeze(roles) })
-}
-
-/**
- * 从正式菜单 SQL 提取全部按钮权限，作为 75 个权限点的独立源码基线。
- * @returns {string[]} 排序去重后的按钮权限字符。
- */
-export function loadWorkflowButtonPermissions() {
-  const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
-  const sqlPath = path.resolve(currentDirectory, '../../../../sql/flowable/menu/8.0.0__workflow_menu.sql')
-  const source = fs.readFileSync(sqlPath, 'utf8')
-  const permissions = [...source.matchAll(/'F',\s*'(workflow:[^']+)'/gu)].map(match => match[1])
-  return [...new Set(permissions)].sort()
 }
 
 /**

@@ -35,8 +35,46 @@
       </el-tab-pane>
 
       <el-tab-pane label="投递运维" name="outbox">
+        <el-form inline class="notification-admin__filter">
+          <el-form-item label="检索">
+            <el-input v-model="outboxQuery.keyword" clearable prefix-icon="Search" placeholder="ID、来源、流程、任务或错误码" @keyup.enter="queryOutbox" />
+          </el-form-item>
+          <el-form-item label="状态">
+            <el-select v-model="outboxQuery.status" clearable placeholder="全部状态">
+              <el-option v-for="status in outboxStatusOptions" :key="status" :label="statusLabel(status)" :value="status" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="来源">
+            <el-select v-model="outboxQuery.sourceType" clearable placeholder="全部来源">
+              <el-option label="审批" value="APPROVAL" />
+              <el-option label="SLA" value="SLA" />
+              <el-option label="BPMN 事件" value="BPMN_EVENT" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="事件">
+            <el-select v-model="outboxQuery.eventType" clearable filterable placeholder="全部事件">
+              <el-option v-for="event in eventOptions" :key="event" :label="event" :value="event" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="通道">
+            <el-select v-model="outboxQuery.channel" clearable placeholder="全部通道">
+              <el-option label="站内" value="INBOX" />
+              <el-option label="邮件" value="EMAIL" />
+              <el-option label="短信" value="SMS" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="创建时间">
+            <el-date-picker v-model="outboxQuery.timeRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" icon="Search" @click="queryOutbox">查询</el-button>
+            <el-button icon="Refresh" @click="resetOutboxQuery">重置</el-button>
+          </el-form-item>
+        </el-form>
         <el-table v-loading="loading" :data="outbox" row-key="outboxId">
           <el-table-column prop="outboxId" label="ID" width="88" />
+          <el-table-column prop="sourceType" label="来源" width="110" />
+          <el-table-column prop="sourceId" label="来源标识" min-width="180" show-overflow-tooltip />
           <el-table-column prop="eventType" label="事件" min-width="180" />
           <el-table-column prop="channel" label="通道" width="90" />
           <el-table-column prop="recipientUserId" label="接收人 ID" width="110" />
@@ -57,6 +95,7 @@
             </template>
           </el-table-column>
         </el-table>
+        <pagination v-show="outboxTotal > 0" :total="outboxTotal" v-model:page="outboxQuery.pageNum" v-model:limit="outboxQuery.pageSize" @pagination="loadOutbox" />
       </el-tab-pane>
     </el-tabs>
 
@@ -137,6 +176,11 @@ const loading = ref(false)
 const saving = ref(false)
 const policies = ref([])
 const outbox = ref([])
+const outboxTotal = ref(0)
+const outboxQuery = reactive({
+  pageNum: 1, pageSize: 20, keyword: '', status: '', sourceType: '', eventType: '', channel: '', timeRange: []
+})
+const outboxStatusOptions = ['PENDING', 'RETRYING', 'DELIVERING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED']
 const policyFormRef = ref(null)
 const eventOptions = [
   'TASK_ARRIVED', 'TASK_CLAIMED', 'TASK_UNCLAIMED', 'TASK_DELEGATED',
@@ -174,10 +218,56 @@ async function loadActiveTab() {
   loading.value = true
   try {
     if (activeTab.value === 'policies') policies.value = (await listWorkflowNotificationPolicies()).data || []
-    else outbox.value = (await listWorkflowNotificationOutbox()).data || []
+    else await loadOutbox(false)
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 按当前筛选和页码读取正式通知 outbox。
+ * @param {boolean} manageLoading 是否由本函数独立维护加载状态。
+ * @returns {Promise<void>} 成功后同步当前页 rows 和 total。
+ */
+async function loadOutbox(manageLoading = true) {
+  if (manageLoading) loading.value = true
+  try {
+    const response = await listWorkflowNotificationOutbox(buildOutboxQuery())
+    outbox.value = Array.isArray(response.rows) ? response.rows : []
+    outboxTotal.value = Number(response.total || 0)
+  } finally {
+    if (manageLoading) loading.value = false
+  }
+}
+
+/**
+ * 构造通知 outbox 分页筛选参数。
+ * @returns {object} 后端可直接绑定的分页和领域筛选条件。
+ */
+function buildOutboxQuery() {
+  const [beginTime, endTime] = outboxQuery.timeRange || []
+  return {
+    pageNum: outboxQuery.pageNum,
+    pageSize: outboxQuery.pageSize,
+    keyword: outboxQuery.keyword.trim() || undefined,
+    status: outboxQuery.status || undefined,
+    sourceType: outboxQuery.sourceType || undefined,
+    eventType: outboxQuery.eventType || undefined,
+    channel: outboxQuery.channel || undefined,
+    beginTime,
+    endTime
+  }
+}
+
+/** @returns {void} 从第一页按当前筛选查询 outbox。 */
+function queryOutbox() { outboxQuery.pageNum = 1; loadOutbox() }
+
+/** @returns {void} 恢复默认分页与筛选并重新查询 outbox。 */
+function resetOutboxQuery() {
+  Object.assign(outboxQuery, {
+    pageNum: 1, pageSize: 20, keyword: '', status: '', sourceType: '', eventType: '', channel: '', timeRange: []
+  })
+  loadOutbox()
 }
 
 /**
@@ -294,6 +384,10 @@ onMounted(loadActiveTab)
 .notification-admin__form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
 .notification-admin__form-grid .el-select, .notification-admin__form-grid .el-input { width: 100%; }
 .notification-admin__variables { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 110px; }
+.notification-admin__filter { margin: 12px 0 4px; }
+.notification-admin__filter :deep(.el-input) { width: 260px; }
+.notification-admin__filter :deep(.el-select) { width: 150px; }
+.notification-admin__filter :deep(.el-date-editor) { width: 360px; }
 .notification-admin__variables button { padding: 3px 7px; border: 1px solid var(--el-border-color); border-radius: 4px; background: var(--el-fill-color-light); color: var(--el-text-color-regular); font-size: 11px; cursor: pointer; }
 .notification-admin__variables button:hover { border-color: var(--el-color-primary); color: var(--el-color-primary); }
 @media (max-width: 700px) {
@@ -301,5 +395,8 @@ onMounted(loadActiveTab)
   .notification-admin__actions { width: 100%; justify-content: flex-end; }
   .notification-admin__form-grid { grid-template-columns: 1fr; }
   .notification-admin__variables { padding-left: 0; }
+  .notification-admin__filter :deep(.el-input),
+  .notification-admin__filter :deep(.el-select),
+  .notification-admin__filter :deep(.el-date-editor) { width: 100%; }
 }
 </style>

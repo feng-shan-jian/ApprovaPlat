@@ -47,10 +47,10 @@ function deploymentSnapshot(deploymentId, processInstanceId = '') {
 }
 
 /**
- * 读取部署、活动草稿和草稿审计的跨表一致性快照。
+ * 读取部署与活动草稿当前状态的跨表一致性快照。
  * @param {string} deploymentId Flowable 部署主键。
  * @param {string} draftId 申请草稿 UUID。
- * @returns {{deployment:string[][],draft:string[][],audit:string[][]}} 删除门禁前后可直接比较的只读快照。
+ * @returns {{deployment:string[][],draft:string[][]}} 删除门禁前后可直接比较的只读快照。
  */
 function draftReferenceSnapshot(deploymentId, draftId) {
   const deployment = sqlLiteral(deploymentId)
@@ -65,10 +65,7 @@ function draftReferenceSnapshot(deploymentId, draftId) {
       process_definition_version,deployment_id,process_name,draft_status,revision_no,
       COALESCE(business_key,''),submitted_process_instance_id IS NULL,deleted_time IS NULL,
       form_snapshot_sha256
-      FROM wf_process_draft WHERE draft_id='${draft}'`),
-    audit: queryReadOnly(`SELECT action_type,COALESCE(from_status,''),to_status,
-      COALESCE(from_revision,0),to_revision,process_instance_id IS NULL
-      FROM wf_process_draft_audit WHERE draft_id='${draft}' ORDER BY audit_id`)
+      FROM wf_process_draft WHERE draft_id='${draft}'`)
   }
 }
 
@@ -437,7 +434,6 @@ test('@full [UI-DEPLOY-002] 活动草稿阻止部署删除且草稿删除后解�
     ])
     expect(activeSnapshot.draft[0][9], '活动草稿不得提前登记删除时间').toBe('1')
     expect(activeSnapshot.draft[0][10], '草稿必须冻结非空表单快照摘要').toMatch(/^[0-9a-f]{64}$/u)
-    expect(activeSnapshot.audit).toEqual([['CREATED', '', 'ACTIVE', '0', '1', '1']])
     evidence.creation = { payload: created.payload, snapshot: activeSnapshot }
 
     administrator = await openRoleSession(browser, 'workflow_admin', testInfo)
@@ -449,7 +445,7 @@ test('@full [UI-DEPLOY-002] 活动草稿阻止部署删除且草稿删除后解�
       assets.modelKey, assets.deploymentId, '部署仍有未提交申请草稿，不能删除')
     const rejectedSnapshot = draftReferenceSnapshot(assets.deploymentId, assets.draftId)
     expect(rejectedSnapshot,
-      '活动草稿删除拒绝不得改写部署、定义、资源、模型关联、草稿或审计').toEqual(activeSnapshot)
+      '活动草稿删除拒绝不得改写部署、定义、资源、模型关联或草稿当前状态').toEqual(activeSnapshot)
     evidence.conflict = { payload: conflict, before: activeSnapshot, after: rejectedSnapshot }
 
     // 只有草稿所有者从正式列表完成状态迁移后，部署删除门禁才允许解除。
@@ -463,10 +459,6 @@ test('@full [UI-DEPLOY-002] 活动草稿阻止部署删除且草稿删除后解�
       'DELETED', '2', assets.businessKey, '1'
     ])
     expect(deletedDraftSnapshot.draft[0][9], '删除草稿必须登记删除时间').toBe('0')
-    expect(deletedDraftSnapshot.audit).toEqual([
-      ['CREATED', '', 'ACTIVE', '0', '1', '1'],
-      ['DELETED', 'ACTIVE', 'DELETED', '1', '2', '1']
-    ])
 
     evidence.deletion.deployment = await deployments.deleteLatest(
       assets.modelKey, assets.deploymentId)
@@ -475,8 +467,6 @@ test('@full [UI-DEPLOY-002] 活动草稿阻止部署删除且草稿删除后解�
       '门禁解除后部署、定义、部署资源和模型关联必须全部清理').toEqual([['0', '0', '0', '0']])
     expect(finalSnapshot.draft, '部署删除必须保留已删除草稿的不可变快照').toEqual(
       deletedDraftSnapshot.draft)
-    expect(finalSnapshot.audit, '部署删除必须保留草稿不可变审计').toEqual(
-      deletedDraftSnapshot.audit)
     expect(queryReadOnly(
       `SELECT VERSION_,COALESCE(DEPLOYMENT_ID_,'') FROM ACT_RE_MODEL WHERE KEY_='${modelKey}'`
     ), '部署删除必须保留作者模型并清空部署关联').toEqual([['1', '']])

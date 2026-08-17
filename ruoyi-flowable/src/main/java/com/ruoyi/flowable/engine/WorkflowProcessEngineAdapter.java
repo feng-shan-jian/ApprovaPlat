@@ -31,7 +31,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 
 /**
  * 面向 P3 任务业务服务的核心流程引擎适配器，只调用 Flowable 8 公共 API。
@@ -65,7 +65,7 @@ public class WorkflowProcessEngineAdapter
     private final WorkflowIdentityResolver identityResolver;
 
     /** 任务动作通知服务；生产容器必须注入，旧直接构造单元测试可为空。 */
-    private WorkflowNotificationService notificationService;
+    private WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建核心流程引擎适配器。
@@ -90,11 +90,11 @@ public class WorkflowProcessEngineAdapter
 
     /**
      * 注入稳定任务动作通知服务，使归属变更和 outbox 共享同一 Flowable 写事务。
-     * @param notificationService WorkflowNotificationService，任务动作事务 outbox 服务
+     * @param notificationService WorkflowNotificationRegistrar，任务动作事务 outbox 服务
      * @return void，生产 Spring 容器完成注入
      */
     @Autowired
-    public void setNotificationService(WorkflowNotificationService notificationService)
+    public void setNotificationService(WorkflowNotificationRegistrar notificationService)
     {
         this.notificationService = notificationService;
     }

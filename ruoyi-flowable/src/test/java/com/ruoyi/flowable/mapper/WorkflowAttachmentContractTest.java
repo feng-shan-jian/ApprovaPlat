@@ -3,12 +3,8 @@ package com.ruoyi.flowable.mapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Pattern;
 import org.apache.ibatis.builder.xml.XMLMapperBuilder;
 import org.apache.ibatis.mapping.BoundSql;
 import org.apache.ibatis.session.Configuration;
@@ -16,108 +12,6 @@ import org.junit.jupiter.api.Test;
 
 class WorkflowAttachmentContractTest
 {
-    /**
-     * 验证正式附件表包含完整状态、关联、摘要约束和清理查询索引。
-     * @return void，DDL 缺少任一生产约束时测试失败
-     * @throws Exception 读取正式 SQL 失败
-     */
-    @Test
-    void definesFormalAttachmentStateAndIntegrityConstraints() throws Exception
-    {
-        String ddl = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0__workflow_business.sql"),
-                StandardCharsets.UTF_8).toLowerCase();
-
-        assertThat(ddl).contains(
-                "create table if not exists `wf_attachment_quota_guard`",
-                "constraint `chk_wf_attachment_quota_guard_owner`",
-                "check (`owner_user_id` >= 0)",
-                "insert ignore into `wf_attachment_quota_guard` (`owner_user_id`)",
-                "values (0)",
-                "create table if not exists `wf_attachment`",
-                "unique key `uk_wf_attachment_storage_key` (`storage_key`)",
-                "key `idx_wf_attachment_owner_status_expire` (`owner_user_id`, `attachment_status`, `expire_time`)",
-                "key `idx_wf_attachment_cleanup_due` (`attachment_status`, `cleanup_next_retry_time`, `expire_time`)",
-                "key `idx_wf_attachment_draft_field` (`draft_id`, `field_name`, `attachment_status`)",
-                "key `idx_wf_attachment_instance_field` (`process_instance_id`, `field_name`, `attachment_status`)",
-                "constraint `fk_wf_attachment_draft` foreign key (`draft_id`)",
-                "references `wf_process_draft` (`draft_id`)",
-                "constraint `chk_wf_attachment_status`",
-                "constraint `chk_wf_attachment_sha256`",
-                "constraint `chk_wf_attachment_state_relation`",
-                "constraint `chk_wf_attachment_cleanup_retry`",
-                "`cleanup_retry_count` int",
-                "not null default 0 comment '物理清理连续失败并已调度重试的次数'",
-                "`cleanup_next_retry_time` datetime(3)",
-                "`cleanup_last_error_code` varchar(64)",
-                "`attachment_status` in ('temp', 'draft', 'bound', 'expired', 'deleted')",
-                "`attachment_status` = 'draft'",
-                "`draft_id` is not null",
-                "`attachment_status` = 'bound'",
-                "`draft_id` is null",
-                "`process_instance_id` is not null",
-                "`node_key` is not null",
-                "`storage_deleted_time` is null")
-                .doesNotContain("drop table");
-    }
-
-    /**
-     * 验证首个正式数据库基线直接包含附件清理重试结构，且不包含破坏性语句。
-     * @return void，基线缺少重试结构或包含破坏性语句时测试失败
-     * @throws Exception 读取正式基线 SQL 失败
-     */
-    @Test
-    void definesAttachmentCleanupRetryInFormalBaseline() throws Exception
-    {
-        String baseline = Files.readString(findProjectSql(
-                "sql/flowable/business/8.0.0__workflow_business.sql"),
-                StandardCharsets.UTF_8).toLowerCase();
-
-        assertThat(baseline).contains(
-                "create table if not exists `wf_attachment`",
-                "`cleanup_retry_count` int",
-                "`cleanup_next_retry_time` datetime(3)",
-                "`cleanup_last_error_code` varchar(64)",
-                "idx_wf_attachment_cleanup_due",
-                "chk_wf_attachment_cleanup_retry")
-                .doesNotContain("drop table", "drop column", "delete from", "update `wf_attachment`");
-    }
-
-    /**
-     * 验证附件验收 SQL 保持只读并覆盖所有者、实例、任务和状态数据关联。
-     * @return void，验收脚本存在写操作或覆盖不足时测试失败
-     * @throws Exception 读取正式验收 SQL 失败
-     */
-    @Test
-    void verifiesAttachmentSchemaAndRelationsReadOnly() throws Exception
-    {
-        String verification = Files.readString(findProjectSql(
-                "sql/flowable/verify/8.0.0__verify_workflow_business.sql"),
-                StandardCharsets.UTF_8);
-        Pattern mutation = Pattern.compile(
-                "(?im)^\\s*(insert|update|delete|create|drop|alter|truncate|replace|call|set)\\b");
-
-        assertThat(mutation.matcher(verification).find()).isFalse();
-        assertThat(verification.toLowerCase()).contains(
-                "wf_attachment_invalid_row",
-                "wf_attachment_missing_owner",
-                "wf_attachment_bound_missing_process_instance",
-                "wf_attachment_bound_task_mismatch",
-                "wf_attachment_bound_node_mismatch",
-                "wf_attachment_draft_relation_mismatch",
-                "wf_attachment_quota_guard_invalid_owner",
-                "wf_attachment_quota_guard_global_missing",
-                "wf_attachment_invalid_cleanup_retry",
-                "wf_attachment_cleanup_retry_columns",
-                "wf_attachment_cleanup_retry_check_clause",
-                "previous_audit.to_revision = current_audit.to_revision - 1",
-                "current_audit.from_status <> previous_audit.to_status",
-                "where owner_user_id < 0",
-                "uk_wf_attachment_storage_key",
-                "chk_wf_attachment_state_relation",
-                "chk_wf_attachment_cleanup_retry");
-    }
-
     /**
      * 使用真实 MyBatis XML 解析器验证全部附件语句可注册，并核对行锁及空集合防护 SQL。
      * @return void，Mapper XML 无法解析或动态 SQL 契约漂移时测试失败
@@ -138,15 +32,11 @@ class WorkflowAttachmentContractTest
 
         String namespace = WfAttachmentMapper.class.getName() + ".";
         assertThat(configuration.hasStatement(namespace + "insert")).isTrue();
-        assertThat(configuration.hasStatement(namespace
-                + "selectGlobalQuotaGuardForUpdate")).isTrue();
         assertThat(configuration.hasStatement(namespace + "ensureOwnerQuotaGuard")).isTrue();
         assertThat(configuration.hasStatement(namespace
                 + "selectOwnerQuotaGuardForUpdate")).isTrue();
         assertThat(configuration.hasStatement(namespace
                 + "selectTemporaryQuotaUsage")).isTrue();
-        assertThat(configuration.hasStatement(namespace
-                + "selectUndeletedTotalBytes")).isTrue();
         assertThat(configuration.hasStatement(namespace + "selectById")).isTrue();
         assertThat(configuration.hasStatement(namespace + "selectByIdsForUpdate")).isTrue();
         assertThat(configuration.hasStatement(namespace
@@ -166,8 +56,11 @@ class WorkflowAttachmentContractTest
                 + "countPendingStorageDeletion")).isTrue();
         assertThat(configuration.hasStatement(namespace
                 + "countDeferredStorageDeletion")).isTrue();
-        assertThat(configuration.hasStatement(namespace + "selectCleanupCandidates")).isTrue();
-        assertThat(configuration.hasStatement(namespace + "markExpired")).isTrue();
+        assertThat(configuration.hasStatement(namespace
+                + "selectCleanupCandidatesForUpdate")).isTrue();
+        assertThat(configuration.hasStatement(namespace + "claimCleanupCandidates")).isTrue();
+        assertThat(configuration.hasStatement(namespace + "claimDeletedAttachment")).isTrue();
+        assertThat(configuration.hasStatement(namespace + "selectClaimedByToken")).isTrue();
         assertThat(configuration.hasStatement(namespace + "markStorageDeleted")).isTrue();
         assertThat(configuration.hasStatement(namespace + "scheduleCleanupRetry")).isTrue();
         var fileSizeMapping = configuration.getResultMap(
@@ -189,20 +82,14 @@ class WorkflowAttachmentContractTest
         assertThat(quotaMappings).extracting(mapping -> mapping.getColumn())
                 .containsExactly("temporary_count", "temporary_bytes");
 
-        BoundSql globalQuotaLock = configuration.getMappedStatement(
-                namespace + "selectGlobalQuotaGuardForUpdate").getBoundSql(Map.of());
-        assertThat(normalizeSql(globalQuotaLock.getSql())).contains(
-                "from wf_attachment_quota_guard",
-                "where owner_user_id = 0",
-                "for update");
-
         BoundSql ensureOwnerGuard = configuration.getMappedStatement(
                 namespace + "ensureOwnerQuotaGuard").getBoundSql(
                         Map.of("ownerUserId", 7L));
         assertThat(normalizeSql(ensureOwnerGuard.getSql())).contains(
-                "insert ignore into wf_attachment_quota_guard",
+                "insert into wf_attachment_quota_guard",
                 "select ?",
-                "where ? > 0");
+                "where ? > 0",
+                "on duplicate key update owner_user_id = values(owner_user_id)");
 
         BoundSql quotaLock = configuration.getMappedStatement(
                 namespace + "selectOwnerQuotaGuardForUpdate").getBoundSql(
@@ -220,13 +107,6 @@ class WorkflowAttachmentContractTest
                 "attachment_status in ('temp', 'draft')",
                 "attachment_status in ('expired', 'deleted')",
                 "storage_deleted_time is null");
-
-        BoundSql globalUsage = configuration.getMappedStatement(
-                namespace + "selectUndeletedTotalBytes").getBoundSql(Map.of());
-        assertThat(normalizeSql(globalUsage.getSql())).contains(
-                "from wf_attachment",
-                "storage_deleted_time is null",
-                "attachment_status in ('temp', 'draft', 'bound', 'expired', 'deleted')");
 
         BoundSql statusCount = configuration.getMappedStatement(
                 namespace + "countByStatus").getBoundSql(Map.of("status", "TEMP"));
@@ -247,16 +127,32 @@ class WorkflowAttachmentContractTest
                 "cleanup_next_retry_time > current_timestamp(3)");
 
         BoundSql cleanupCandidates = configuration.getMappedStatement(
-                namespace + "selectCleanupCandidates").getBoundSql(Map.of("limit", 100));
+                namespace + "selectCleanupCandidatesForUpdate")
+                .getBoundSql(Map.of("limit", 100));
         assertThat(normalizeSql(cleanupCandidates.getSql())).contains(
                 "cleanup_next_retry_time is null",
                 "cleanup_next_retry_time <= current_timestamp(3)",
+                "cleanup_claim_token is null",
+                "cleanup_lease_until <= current_timestamp(3)",
                 "coalesce(cleanup_next_retry_time, expire_time)",
-                "limit ?");
+                "limit ?", "for update skip locked");
+
+        BoundSql claimBatch = configuration.getMappedStatement(
+                namespace + "claimCleanupCandidates").getBoundSql(Map.of(
+                        "attachmentIds", List.of(
+                                "d9428888-122b-4c6f-8f0c-9c3e1dbd3210"),
+                        "claimToken", "b9428888-122b-4c6f-8f0c-9c3e1dbd3210",
+                        "leaseSeconds", 300L));
+        assertThat(normalizeSql(claimBatch.getSql())).contains(
+                "when attachment_status = 'temp' then 'expired'",
+                "cleanup_claim_token = ?",
+                "cleanup_lease_until = timestampadd(second, ?, current_timestamp(3))",
+                "attachment_id in ( ? )");
 
         BoundSql scheduleRetry = configuration.getMappedStatement(
                 namespace + "scheduleCleanupRetry").getBoundSql(Map.of(
                         "attachmentId", "d9428888-122b-4c6f-8f0c-9c3e1dbd3210",
+                        "claimToken", "b9428888-122b-4c6f-8f0c-9c3e1dbd3210",
                         "expectedRetryCount", 2,
                         "nextRetryTime", java.time.LocalDateTime.now(),
                         "errorCode", "attachment_storage_cleanup_failed"));
@@ -264,6 +160,9 @@ class WorkflowAttachmentContractTest
                 "when cleanup_retry_count < 2147483647 then cleanup_retry_count + 1",
                 "cleanup_next_retry_time = ?",
                 "cleanup_last_error_code = ?",
+                "cleanup_claim_token = null",
+                "cleanup_lease_until = null",
+                "cleanup_claim_token = ?",
                 "cleanup_retry_count = ?");
 
         BoundSql locked = configuration.getMappedStatement(
@@ -384,28 +283,4 @@ class WorkflowAttachmentContractTest
         return sql.replaceAll("\\s+", " ").trim().toLowerCase();
     }
 
-    /**
-     * 从 Maven 模块或聚合工程工作目录向上定位正式 SQL 文件。
-     * @param moduleRelativePath String，以 back 或当前后端模块为基准的 SQL 相对路径
-     * @return Path，正式 SQL 的绝对路径
-     */
-    private Path findProjectSql(String moduleRelativePath)
-    {
-        Path current = Path.of("").toAbsolutePath().normalize();
-        while (current != null)
-        {
-            Path candidate = current.resolve(moduleRelativePath);
-            if (Files.isRegularFile(candidate))
-            {
-                return candidate;
-            }
-            candidate = current.resolve("back").resolve(moduleRelativePath);
-            if (Files.isRegularFile(candidate))
-            {
-                return candidate;
-            }
-            current = current.getParent();
-        }
-        throw new AssertionError("未找到正式工作流 SQL: " + moduleRelativePath);
-    }
 }

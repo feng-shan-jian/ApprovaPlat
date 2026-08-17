@@ -13,7 +13,8 @@ import org.flowable.spring.boot.ProcessEngineConfigurationConfigurer;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 import com.ruoyi.flowable.service.process.WorkflowProcessCompletionStatusListener;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
@@ -36,9 +37,13 @@ class WorkflowProcessCompletionStatusConfigurationTest
         ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider =
                 mock(ObjectProvider.class);
         @SuppressWarnings("unchecked")
-        ObjectProvider<WorkflowNotificationService> notificationServiceProvider =
+        ObjectProvider<WorkflowNotificationRegistrar> notificationServiceProvider =
                 mock(ObjectProvider.class);
-        configuration.setNotificationServiceProvider(notificationServiceProvider);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<WorkflowNotificationOutboxService> notificationOutboxServiceProvider =
+                mock(ObjectProvider.class);
+        configuration.setNotificationServiceProvider(notificationServiceProvider,
+                notificationOutboxServiceProvider);
         WorkflowProcessCompletionStatusListener completionListener =
                 configuration.workflowProcessCompletionStatusListener(
                         automaticCopyServiceProvider);
@@ -56,5 +61,7 @@ class WorkflowProcessCompletionStatusConfigurationTest
         verify(engineConfiguration).setEventListeners(listeners.capture());
         assertThat(listeners.getValue()).containsExactly(existingListener, completionListener);
         verify(automaticCopyServiceProvider, never()).getObject();
+        verify(notificationServiceProvider, never()).getIfAvailable();
+        verify(notificationOutboxServiceProvider, never()).getIfAvailable();
     }
 }

@@ -7,6 +7,15 @@ The maintained installation and release procedures are documented in
 [`docs/operations/workflow-deployment.md`](../docs/operations/workflow-deployment.md) and
 [`docs/operations/workflow-release.md`](../docs/operations/workflow-release.md).
 
+## Database Release Contract
+
+- `sql/release-order.txt` is the core fresh-install order and produces exactly 94 tables, including
+  27 `wf_*` tables.
+- `sql/integration/8.0.0__sms_oss.sql` is optional. Its four integration tables are excluded from the
+  workflow core order, the 94-table schema contract, and the 35-check database release gate.
+- The current development baseline supports fresh installation only. A failed partial installation
+  must be discarded and recreated from an empty schema; no development upgrade path is shipped.
+
 ## Token Secret Lifecycle
 
 The standard single-node deployment requires no manual token-secret generation:

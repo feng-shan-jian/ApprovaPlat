@@ -41,7 +41,7 @@ export function saveWorkflowNotificationPreference(data) {
 /**
  * 催办运行流程的真实活动待办。
  * @param {{processInstanceId:string,reason:string}} data 流程实例和催办原因。
- * @returns {Promise<object>} 审计主键和投递数量。
+ * @returns {Promise<object>} data 含 urgeEventKey、recipientCount 和 outboxCount。
  */
 export function urgeWorkflow(data) {
   return request({ url: '/workflow/notification/urge', method: 'post', data })
@@ -57,9 +57,13 @@ export function saveWorkflowNotificationPolicy(data) {
   return request({ url: '/workflow/notification/policies', method: 'put', data })
 }
 
-/** @returns {Promise<object>} 脱敏 outbox 运维列表。 */
-export function listWorkflowNotificationOutbox() {
-  return request({ url: '/workflow/notification/outbox', method: 'get' })
+/**
+ * 分页查询脱敏 outbox 运维列表。
+ * @param {{pageNum:number,pageSize:number,status?:string,sourceType?:string,eventType?:string,channel?:string,keyword?:string,beginTime?:string,endTime?:string}} query 分页和筛选条件。
+ * @returns {Promise<object>} 若依标准 rows、total 分页响应。
+ */
+export function listWorkflowNotificationOutbox(query) {
+  return request({ url: '/workflow/notification/outbox', method: 'get', params: query })
 }
 
 /** @param {number|string} outboxId 死信主键。 @returns {Promise<object>} 补偿结果。 */

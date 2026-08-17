@@ -92,13 +92,28 @@ flowable:
     max-size: ${FLOWABLE_ATTACHMENT_MAX_SIZE}
     max-temporary-count: ${FLOWABLE_ATTACHMENT_MAX_TEMPORARY_COUNT}
     max-temporary-bytes: ${FLOWABLE_ATTACHMENT_MAX_TEMPORARY_BYTES}
-    max-total-bytes: ${FLOWABLE_ATTACHMENT_MAX_TOTAL_BYTES}
     min-free-bytes: ${FLOWABLE_ATTACHMENT_MIN_FREE_BYTES}
     cleanup-batch-size: ${FLOWABLE_ATTACHMENT_CLEANUP_BATCH_SIZE:100}
+    cleanup-lease-duration: ${FLOWABLE_ATTACHMENT_CLEANUP_LEASE_DURATION:PT5M}
     cleanup-retry-initial-delay: ${FLOWABLE_ATTACHMENT_CLEANUP_RETRY_INITIAL_DELAY:PT1M}
     cleanup-retry-max-delay: ${FLOWABLE_ATTACHMENT_CLEANUP_RETRY_MAX_DELAY:PT6H}
     cleanup-initial-delay: ${FLOWABLE_ATTACHMENT_CLEANUP_INITIAL_DELAY:PT1M}
     cleanup-fixed-delay: ${FLOWABLE_ATTACHMENT_CLEANUP_FIXED_DELAY:PT10M}
+  data-retention:
+    # 未读 inbox、待处理 outbox 和未解决死信没有自动删除配置，必须永久保留至业务解决。
+    batch-size: ${FLOWABLE_DATA_RETENTION_BATCH_SIZE:100}
+    notification-outbox-retention: ${FLOWABLE_NOTIFICATION_OUTBOX_RETENTION:P90D}
+    runtime-event-retention: ${FLOWABLE_RUNTIME_EVENT_RETENTION:P90D}
+    process-draft-retention: ${FLOWABLE_PROCESS_DRAFT_RETENTION:P30D}
+    collaboration-retention: ${FLOWABLE_COLLABORATION_RETENTION:P90D}
+    attachment-metadata-retention: ${FLOWABLE_ATTACHMENT_METADATA_RETENTION:P90D}
+    notification-inbox-retention: ${FLOWABLE_NOTIFICATION_INBOX_RETENTION:P180D}
+    bpmn-event-audit-retention: ${FLOWABLE_BPMN_EVENT_AUDIT_RETENTION:P180D}
+    task-sla-retention: ${FLOWABLE_TASK_SLA_RETENTION:P180D}
+    copy-retention: ${FLOWABLE_COPY_RETENTION:P180D}
+    controlled-loop-retention: ${FLOWABLE_CONTROLLED_LOOP_RETENTION:P180D}
+    initial-delay: ${FLOWABLE_DATA_RETENTION_INITIAL_DELAY:PT5M}
+    fixed-delay: ${FLOWABLE_DATA_RETENTION_FIXED_DELAY:PT1H}
   runtime:
     # 生产覆盖固定开启门禁；任一非法组合会在 ApplicationContext 完成前失败。
     production-gate-enabled: true
@@ -109,8 +124,6 @@ flowable:
     capacity-approval-reference: ${FLOWABLE_RUNTIME_CAPACITY_APPROVAL_REFERENCE}
     attachment-storage-mode: ${FLOWABLE_ATTACHMENT_STORAGE_MODE}
     attachment-storage-id: ${FLOWABLE_ATTACHMENT_STORAGE_ID:}
-    attachment-cleanup-lock-mode: ${FLOWABLE_ATTACHMENT_CLEANUP_LOCK_MODE}
-    attachment-cleanup-lock-name: ${FLOWABLE_ATTACHMENT_CLEANUP_LOCK_NAME}
     metrics-refresh-initial-delay: ${FLOWABLE_RUNTIME_METRICS_REFRESH_INITIAL_DELAY:PT10S}
     metrics-refresh-interval: ${FLOWABLE_RUNTIME_METRICS_REFRESH_INTERVAL:PT1M}
     metrics-snapshot-max-age: ${FLOWABLE_RUNTIME_METRICS_SNAPSHOT_MAX_AGE:PT3M}

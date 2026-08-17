@@ -13,15 +13,18 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.Execution;
 import org.flowable.identitylink.api.IdentityLink;
 import org.flowable.task.service.delegate.DelegateTask;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
-import com.ruoyi.flowable.domain.WfParticipantResolutionAudit;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.identity.WorkflowUserIdValueParser;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
+import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 
 /**
@@ -30,12 +33,15 @@ import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 @Service
 public class WorkflowParticipantRuleRuntimeService
 {
+    private static final Logger log = LoggerFactory.getLogger(
+            WorkflowParticipantRuleRuntimeService.class);
+
     private final RepositoryService repositoryService;
     private final RuntimeService runtimeService;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WorkflowIdentityMapper identityMapper;
     private final WorkflowIdentityResolver identityResolver;
-    private final WorkflowParticipantResolutionAuditService auditService;
+    private final WorkflowParticipantResolutionMetrics metrics;
 
     /**
      * 创建参与者规则运行服务。
@@ -44,7 +50,7 @@ public class WorkflowParticipantRuleRuntimeService
      * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署规则仓库
      * @param identityMapper WorkflowIdentityMapper，实时组织关系查询 Mapper
      * @param identityResolver WorkflowIdentityResolver，审批与认领资格解析器
-     * @param auditService WorkflowParticipantResolutionAuditService，正式解析审计服务
+     * @param metrics WorkflowParticipantResolutionMetrics，固定错误码失败指标
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowParticipantRuleRuntimeService(RepositoryService repositoryService,
@@ -52,14 +58,14 @@ public class WorkflowParticipantRuleRuntimeService
             WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowIdentityMapper identityMapper,
             WorkflowIdentityResolver identityResolver,
-            WorkflowParticipantResolutionAuditService auditService)
+            WorkflowParticipantResolutionMetrics metrics)
     {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.artifactRepository = artifactRepository;
         this.identityMapper = identityMapper;
         this.identityResolver = identityResolver;
-        this.auditService = auditService;
+        this.metrics = metrics;
     }
 
     /**
@@ -77,8 +83,8 @@ public class WorkflowParticipantRuleRuntimeService
         boolean allowed = matchesStartRule(actor, rule);
         if (!allowed)
         {
-            auditService.recordRejected(rule, "START", definition.getId(), null, null,
-                    actor.userId(), actor.userId(), "DENIED", "当前用户未命中流程发起范围");
+            recordFailure(rule, "START", definition.getId(), null, rule.getActivityId(),
+                    "PROCESS_START_SCOPE_DENIED", null);
             throw new ServiceException("当前用户不在流程发起范围内", HttpStatus.FORBIDDEN)
                     .setSubCode("PROCESS_START_SCOPE_DENIED");
         }
@@ -119,24 +125,6 @@ public class WorkflowParticipantRuleRuntimeService
     }
 
     /**
-     * 在实例成功创建后记录发起范围命中结果，审计与实例写入同事务提交。
-     * @param rule WfDeployParticipantRule，发起前已命中的规则
-     * @param definition ProcessDefinition，流程定义
-     * @param processInstanceId String，新实例主键
-     * @param actorUserId String，发起用户主键
-     * @return void，审计失败时回滚流程实例
-     */
-    public void recordStartAllowed(WfDeployParticipantRule rule, ProcessDefinition definition,
-            String processInstanceId, String actorUserId)
-    {
-        WfParticipantResolutionAudit audit = auditService.base(rule, "START",
-                definition.getId(), processInstanceId, null, actorUserId, actorUserId,
-                "ALLOWED", "当前用户命中已部署流程发起范围");
-        audit.setResolvedUserIds(actorUserId);
-        auditService.record(audit);
-    }
-
-    /**
      * 在 Flowable create 事件内按实时组织解析并写入单实例任务办理人或候选身份。
      * @param task DelegateTask，当前创建中的真实 Flowable 任务
      * @return void，无匹配、直接办理多人冲突或身份失效时抛出并回滚任务创建
@@ -152,12 +140,12 @@ public class WorkflowParticipantRuleRuntimeService
         Resolution resolution;
         try
         {
-            // 目录查询、表单用户字段解析和身份资格过滤都属于同一次实时解析，失败必须留下稳定拒绝审计。
+            // 目录查询、表单用户字段解析和身份资格过滤属于同一次实时解析，失败统一记录脱敏诊断。
             resolution = resolveRule(rule, task, initiator);
         }
         catch (RuntimeException exception)
         {
-            rejectResolutionFailure(rule, task, initiator, exception);
+            rejectResolutionFailure(rule, task, exception);
             return;
         }
         // 先移除作者 BPMN 的旧静态候选链接，再写入实时解析结果，避免组织变更后残留越权候选人。
@@ -165,22 +153,16 @@ public class WorkflowParticipantRuleRuntimeService
         if ("ASSIGNEE".equals(rule.getAssignmentMode()))
         {
             if (resolution.userIds().size() != 1)
-                rejectNoMatch(rule, task, initiator, "直接办理规则没有解析出唯一有效审批人");
+                rejectNoMatch(rule, task, "直接办理规则没有解析出唯一有效审批人");
             task.setAssignee(resolution.userIds().iterator().next());
         }
         else
         {
             if (resolution.userIds().isEmpty() && resolution.groupIds().isEmpty())
-                rejectNoMatch(rule, task, initiator, "候选规则没有解析出有效认领身份");
+                rejectNoMatch(rule, task, "候选规则没有解析出有效认领身份");
             resolution.userIds().forEach(task::addCandidateUser);
             resolution.groupIds().forEach(task::addCandidateGroup);
         }
-        WfParticipantResolutionAudit audit = auditService.base(rule, "TASK",
-                task.getProcessDefinitionId(), task.getProcessInstanceId(), task.getId(),
-                initiator, null, "RESOLVED", "任务参与者按实时组织数据解析成功");
-        audit.setResolvedUserIds(String.join(",", resolution.userIds()));
-        audit.setResolvedGroupIds(String.join(",", resolution.groupIds()));
-        auditService.record(audit);
     }
 
     /**
@@ -259,15 +241,13 @@ public class WorkflowParticipantRuleRuntimeService
      * 记录无匹配或直接办理多人冲突，并以固定失败策略回滚任务创建。
      * @param rule WfDeployParticipantRule，当前任务命中的不可变规则快照
      * @param task DelegateTask，正在创建且不能成为无人任务的任务
-     * @param initiator String，已规范化的流程发起人主键
      * @param summary String，稳定且不包含敏感目录数据的拒绝摘要
-     * @return void，独立写入 NO_MATCH 审计后始终抛出稳定业务异常
+     * @return void，记录脱敏日志和指标后始终抛出稳定业务异常
      */
-    private void rejectNoMatch(WfDeployParticipantRule rule, DelegateTask task,
-            String initiator, String summary)
+    private void rejectNoMatch(WfDeployParticipantRule rule, DelegateTask task, String summary)
     {
-        auditService.recordRejected(rule, "TASK", task.getProcessDefinitionId(),
-                task.getProcessInstanceId(), task.getId(), initiator, null, "NO_MATCH", summary);
+        recordFailure(rule, "TASK", task.getProcessDefinitionId(), task.getProcessInstanceId(),
+                task.getTaskDefinitionKey(), "TASK_PARTICIPANT_NO_MATCH", null);
         throw new ServiceException(summary, HttpStatus.CONFLICT)
                 .setSubCode("TASK_PARTICIPANT_NO_MATCH");
     }
@@ -276,20 +256,66 @@ public class WorkflowParticipantRuleRuntimeService
      * 将表单值非法、实时目录异常或资格解析失败统一转换为可审计的稳定任务失败。
      * @param rule WfDeployParticipantRule，当前任务命中的不可变规则快照
      * @param task DelegateTask，正在创建且会被主事务回滚的任务
-     * @param initiator String，已规范化的流程发起人主键
      * @param cause RuntimeException，原始解析异常，仅作为服务端异常链保留
-     * @return void，独立写入 NO_MATCH 审计后始终抛出稳定业务异常
+     * @return void，记录脱敏日志和指标后始终抛出稳定业务异常
      */
     private void rejectResolutionFailure(WfDeployParticipantRule rule, DelegateTask task,
-            String initiator, RuntimeException cause)
+            RuntimeException cause)
     {
         String summary = "任务参与者规则实时解析失败";
-        auditService.recordRejected(rule, "TASK", task.getProcessDefinitionId(),
-                task.getProcessInstanceId(), task.getId(), initiator, null, "NO_MATCH", summary);
+        recordFailure(rule, "TASK", task.getProcessDefinitionId(), task.getProcessInstanceId(),
+                task.getTaskDefinitionKey(), "TASK_PARTICIPANT_RESOLUTION_FAILED", cause);
         ServiceException failure = new ServiceException(summary, HttpStatus.CONFLICT)
                 .setSubCode("TASK_PARTICIPANT_RESOLUTION_FAILED");
         failure.initCause(cause);
         throw failure;
+    }
+
+    /**
+     * 记录不含人员集合和表单正文的结构化失败日志，并按稳定错误码累计指标。
+     *
+     * @param rule WfDeployParticipantRule，命中的不可变部署规则
+     * @param eventType String，START 或 TASK
+     * @param processDefinitionId String，流程定义主键
+     * @param processInstanceId String，可空流程实例主键
+     * @param elementId String，可空 BPMN 节点主键
+     * @param errorCode String，对外稳定错误码
+     * @param cause RuntimeException，可空原始异常，只记录异常类型而不记录敏感消息
+     * @return void，日志系统异常不改变原业务失败；指标错误表示代码注册缺失并向上抛出
+     */
+    private void recordFailure(WfDeployParticipantRule rule, String eventType,
+            String processDefinitionId, String processInstanceId, String elementId,
+            String errorCode, RuntimeException cause)
+    {
+        metrics.recordFailure(errorCode);
+        log.warn("operation=workflowParticipantResolution traceId={} deploymentId={} "
+                        + "processDefinitionId={} processInstanceId={} elementId={} eventType={} "
+                        + "ruleType={} errorCode={} causeType={}",
+                safeTraceId(), safe(rule.getDeployId()), safe(processDefinitionId),
+                safe(processInstanceId), safe(elementId), eventType, safe(rule.getRuleType()),
+                errorCode, cause == null ? "" : cause.getClass().getSimpleName());
+    }
+
+    /**
+     * 读取当前链路标识，未配置 MDC 时返回空字符串且不伪造业务值。
+     *
+     * @return String，当前 traceId 或空字符串
+     */
+    private String safeTraceId()
+    {
+        String traceId = MDC.get("traceId");
+        return traceId == null ? "" : traceId;
+    }
+
+    /**
+     * 将可空诊断字段转换为空字符串，保持结构化日志字段稳定。
+     *
+     * @param value String，可空低敏业务标识
+     * @return String，原值或空字符串
+     */
+    private String safe(String value)
+    {
+        return value == null ? "" : value;
     }
 
     /**

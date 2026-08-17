@@ -9,9 +9,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
 import org.flowable.engine.ProcessEngine;
+import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.engine.repository.Deployment;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,16 +31,15 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfSqlDataSource;
-import com.ruoyi.flowable.domain.vo.WorkflowConnectorInvocationClaim;
-import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
 import com.ruoyi.flowable.extension.WorkflowSqlConnector;
 import com.ruoyi.flowable.extension.WorkflowSqlSecretResolver;
-import com.ruoyi.flowable.mapper.WfConnectorInvocationMapper;
+import com.ruoyi.flowable.extension.WorkflowSqlTemplateValidator;
+import com.ruoyi.flowable.runtime.WorkflowConnectorMetrics;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowSqlDataSourceService;
-import com.ruoyi.flowable.service.process.WorkflowConnectorInvocationService;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -64,7 +65,7 @@ import tools.jackson.databind.json.JsonMapper;
         })
 class WorkflowExternalSqlConnectorMySqlIT
 {
-    /** 外库测试数据统一前缀，仅清理本轮目标和主库台账。 */
+    /** 外库测试数据统一前缀，仅清理本轮目录、部署和业务副作用。 */
     private static final String PREFIX = "workflow-external-sql-it-";
     /** executor 三次重试和正常轮询允许的最长等待时间。 */
     private static final Duration EXECUTION_TIMEOUT = Duration.ofSeconds(40);
@@ -74,11 +75,9 @@ class WorkflowExternalSqlConnectorMySqlIT
     @Autowired
     private ProcessEngine processEngine;
     @Autowired
-    private WorkflowSqlConnector connector;
+    private FaultInjectingSqlConnector connector;
     @Autowired
     private WorkflowDeploymentArtifactRepository artifactRepository;
-    @Autowired
-    private FaultInjectingInvocationService invocationService;
     @Autowired
     private ExternalSqlTestSettings externalSettings;
 
@@ -86,6 +85,7 @@ class WorkflowExternalSqlConnectorMySqlIT
     private final String runId = UUID.randomUUID().toString().replace("-", "");
     private JdbcTemplate externalJdbc;
     private String dataSourceKey;
+    private String externalTable;
     private Long dataSourceId;
     private Deployment deployment;
 
@@ -97,10 +97,16 @@ class WorkflowExternalSqlConnectorMySqlIT
     void setUp()
     {
         dataSourceKey = PREFIX + runId;
+        externalTable = "workflow_connector_effect_" + runId;
         externalJdbc = new JdbcTemplate(externalSettings.dataSource());
         assertThat(primaryJdbc.queryForObject("select database()", String.class))
                 .isNotEqualTo(externalJdbc.queryForObject("select database()", String.class));
-        invocationService.resetFailure();
+        externalJdbc.execute("create table `" + externalTable + "` ("
+                + "idempotency_key varchar(64) not null, "
+                + "target_key varchar(128) not null, "
+                + "effect_value varchar(128) not null, "
+                + "primary key (idempotency_key)) engine=InnoDB");
+        connector.resetFailure();
 
         WfSqlDataSource source = externalSource();
         primaryJdbc.update("insert into wf_sql_datasource "
@@ -109,9 +115,9 @@ class WorkflowExternalSqlConnectorMySqlIT
                         + "query_timeout_seconds, revision_no, status, checksum, create_by, "
                         + "create_time, update_by, update_time) values (?, ?, 'EXTERNAL', "
                         + "'WORKFLOW_SQL_JDBC_URL_IT', 'WORKFLOW_SQL_USERNAME_IT', "
-                        + "'WORKFLOW_SQL_PASSWORD_IT', 'wf_connector_invocation', 1000, 10, "
+                        + "'WORKFLOW_SQL_PASSWORD_IT', ?, 1000, 10, "
                         + "1, 'ENABLED', ?, 'flowable-it', current_timestamp(3), '', null)",
-                dataSourceKey, "外库 SQL 至少一次测试", source.getChecksum());
+                dataSourceKey, "外库 SQL 至少一次测试", externalTable, source.getChecksum());
         dataSourceId = primaryJdbc.queryForObject(
                 "select datasource_id from wf_sql_datasource where datasource_key = ?",
                 Long.class, dataSourceKey);
@@ -119,16 +125,12 @@ class WorkflowExternalSqlConnectorMySqlIT
     }
 
     /**
-     * 先删除外库副作用，再按主库外键顺序清理台账、快照、部署和目录。
+     * 按主库外键顺序清理快照、部署和目录，最后删除本轮外库临时业务表。
      * @return void，任一侧残留本轮记录时测试失败
      */
     @AfterEach
     void tearDown()
     {
-        externalJdbc.update("delete from wf_connector_invocation where target_key = ?",
-                dataSourceKey);
-        primaryJdbc.update("delete from wf_connector_invocation where target_key = ?",
-                dataSourceKey);
         if (deployment != null)
         {
             artifactRepository.delete(deployment.getId());
@@ -146,9 +148,10 @@ class WorkflowExternalSqlConnectorMySqlIT
         assertThat(primaryJdbc.queryForObject(
                 "select count(*) from wf_sql_datasource where datasource_key = ?",
                 Integer.class, dataSourceKey)).isZero();
-        assertThat(externalJdbc.queryForObject(
-                "select count(*) from wf_connector_invocation where target_key = ?",
-                Integer.class, dataSourceKey)).isZero();
+        if (externalJdbc != null && externalTable != null)
+        {
+            externalJdbc.execute("drop table if exists `" + externalTable + "`");
+        }
     }
 
     /**
@@ -164,11 +167,8 @@ class WorkflowExternalSqlConnectorMySqlIT
         insertExternalSnapshot(deployment.getId(), processKey);
 
         var instance = processEngine.getRuntimeService().startProcessInstanceByKey(processKey,
-                Map.of("deploymentMarker", "external-deployment-" + runId,
-                        "processMarker", "external-process-" + runId,
-                        "executionMarker", "external-execution-" + runId,
-                        "elementMarker", "external-element-" + runId,
-                        "targetKey", dataSourceKey));
+                Map.of("targetKey", dataSourceKey,
+                        "effectValue", "external-idempotent-effect"));
         String processInstanceId = instance.getId();
 
         awaitCondition("外库 SQL 应在本地提交故障后由 executor 重试并结束流程",
@@ -176,28 +176,17 @@ class WorkflowExternalSqlConnectorMySqlIT
                         .createHistoricProcessInstanceQuery().processInstanceId(processInstanceId)
                         .finished().count() == 1);
 
-        Map<String, Object> primary = primaryJdbc.queryForMap(
-                "select idempotency_key, status, attempt_count, error_code, claim_token, "
-                        + "lease_expires_at from wf_connector_invocation where target_key = ?",
-                dataSourceKey);
         Map<String, Object> external = externalJdbc.queryForMap(
-                "select idempotency_key, status, attempt_count, target_summary "
-                        + "from wf_connector_invocation where target_key = ?", dataSourceKey);
-        assertThat(primary).containsEntry("status", "SUCCESS")
-                .containsEntry("attempt_count", 2)
-                .containsEntry("error_code", null)
-                .containsEntry("claim_token", null)
-                .containsEntry("lease_expires_at", null);
-        assertThat(external).containsEntry("status", "SUCCESS")
-                .containsEntry("attempt_count", 1)
-                .containsEntry("target_summary", "external-idempotent-effect");
-        assertThat(external.get("idempotency_key"))
-                .isEqualTo(primary.get("idempotency_key"));
-        assertThat(String.valueOf(primary.get("idempotency_key"))).matches("[0-9a-f]{64}");
+                "select idempotency_key, target_key, effect_value from `" + externalTable
+                        + "` where target_key = ?", dataSourceKey);
+        assertThat(external).containsEntry("target_key", dataSourceKey)
+                .containsEntry("effect_value", "external-idempotent-effect");
+        assertThat(String.valueOf(external.get("idempotency_key"))).matches("[0-9a-f]{64}");
         assertThat(externalJdbc.queryForObject(
-                "select count(*) from wf_connector_invocation where target_key = ?",
+                "select count(*) from `" + externalTable + "` where target_key = ?",
                 Integer.class, dataSourceKey)).isEqualTo(1);
-        assertThat(invocationService.failureInjected()).isTrue();
+        assertThat(connector.failureInjected()).isTrue();
+        assertThat(connector.attemptCount()).isEqualTo(2);
         assertThat(processEngine.getManagementService().createJobQuery()
                 .processInstanceId(processInstanceId).count()).isZero();
         assertThat(processEngine.getManagementService().createDeadLetterJobQuery()
@@ -237,23 +226,17 @@ class WorkflowExternalSqlConnectorMySqlIT
     private void insertExternalSnapshot(String deploymentId, String processKey)
             throws Exception
     {
-        String sql = "insert into wf_connector_invocation "
-                + "(deployment_id, process_instance_id, execution_id, element_id, connector_type, "
-                + "target_key, target_revision, idempotency_key, operation, target_summary, "
-                + "status, attempt_count, create_time, update_time) values "
-                + "(:deploymentMarker, :processMarker, :executionMarker, :elementMarker, 'SQL', "
-                + ":targetKey, 1, :idempotencyKey, 'INSERT', 'external-idempotent-effect', "
-                + "'SUCCESS', 1, current_timestamp(3), current_timestamp(3)) "
-                + "on duplicate key update target_summary = 'external-idempotent-effect'";
+        String sql = "insert into " + externalTable + " "
+                + "(idempotency_key, target_key, effect_value) values "
+                + "(:idempotencyKey, :targetKey, :effectValue) "
+                + "on duplicate key update idempotency_key = idempotency_key";
         var parameters = JsonMapper.shared().createObjectNode()
-                .put("deploymentMarker", "deploymentMarker")
-                .put("processMarker", "processMarker")
-                .put("executionMarker", "executionMarker")
-                .put("elementMarker", "elementMarker")
-                .put("targetKey", "targetKey");
+                .put("targetKey", "targetKey")
+                .put("effectValue", "effectValue");
         String author = JsonMapper.shared().createObjectNode()
                 .put("dataSourceKey", dataSourceKey).put("sql", sql)
-                .set("parameters", parameters).put("maxRows", 1).toString();
+                .set("parameters", parameters).put("idempotencyColumn", "idempotency_key")
+                .put("maxRows", 1).toString();
         String frozen = connector.freezeConfig(JsonMapper.shared().readTree(author), true);
         Map<String, Object> version = primaryJdbc.queryForMap(
                 "select v.version_id, v.version_no, v.checksum from wf_bpmn_extension e "
@@ -290,7 +273,7 @@ class WorkflowExternalSqlConnectorMySqlIT
         source.setJdbcUrlRef("WORKFLOW_SQL_JDBC_URL_IT");
         source.setUsernameRef("WORKFLOW_SQL_USERNAME_IT");
         source.setPasswordRef("WORKFLOW_SQL_PASSWORD_IT");
-        source.setAllowedTables("wf_connector_invocation");
+        source.setAllowedTables(externalTable);
         source.setConnectTimeoutMs(1000);
         source.setQueryTimeoutSeconds(10);
         source.setRevisionNo(1);
@@ -322,7 +305,7 @@ class WorkflowExternalSqlConnectorMySqlIT
     }
 
     /**
-     * 测试专用真实外库连接、受控引用解析和本地提交故障注入 Bean。
+     * 测试专用真实外库连接、受控引用解析和 Job 提交故障注入 Bean。
      */
     @TestConfiguration
     static class TestBeans
@@ -356,16 +339,24 @@ class WorkflowExternalSqlConnectorMySqlIT
         }
 
         /**
-         * 创建首轮成功落外库后注入本地台账提交失败的调用服务。
-         * @param mapper WfConnectorInvocationMapper，正式主库幂等台账 Mapper
-         * @return FaultInjectingInvocationService，测试上下文首选调用服务
+         * 创建首轮成功落外库后抛错的 SQL Connector，驱动 Flowable Job 真实重试。
+         * @param dataSource DataSource，主业务库数据源
+         * @param dataSourceService WorkflowSqlDataSourceService，受控数据源目录服务
+         * @param templateValidator WorkflowSqlTemplateValidator，SQL AST 门禁
+         * @param secretResolver WorkflowSqlSecretResolver，测试首选外库引用解析器
+         * @param connectorMetrics WorkflowConnectorMetrics，连接器尝试指标
+         * @return FaultInjectingSqlConnector，测试上下文首选 SQL Connector
          */
         @Bean
         @Primary
-        FaultInjectingInvocationService faultInjectingInvocationService(
-                WfConnectorInvocationMapper mapper)
+        FaultInjectingSqlConnector faultInjectingSqlConnector(DataSource dataSource,
+                WorkflowSqlDataSourceService dataSourceService,
+                WorkflowSqlTemplateValidator templateValidator,
+                WorkflowSqlSecretResolver secretResolver,
+                WorkflowConnectorMetrics connectorMetrics)
         {
-            return new FaultInjectingInvocationService(mapper);
+            return new FaultInjectingSqlConnector(dataSource, dataSourceService,
+                    templateValidator, secretResolver, connectorMetrics);
         }
     }
 
@@ -434,53 +425,62 @@ class WorkflowExternalSqlConnectorMySqlIT
     }
 
     /**
-     * 首轮把本地台账标为失败并抛错，第二轮恢复正式成功提交，模拟外部提交后的本地故障。
+     * 首轮外库提交成功后抛错，第二轮由 Flowable Job 重放同一幂等写入。
      */
-    static class FaultInjectingInvocationService extends WorkflowConnectorInvocationService
+    static class FaultInjectingSqlConnector extends WorkflowSqlConnector
     {
-        private final AtomicBoolean injectNextSuccessFailure = new AtomicBoolean(true);
+        private final AtomicBoolean injectNextExecutionFailure = new AtomicBoolean(true);
         private final AtomicBoolean failureInjected = new AtomicBoolean();
+        private final AtomicInteger attemptCount = new AtomicInteger();
 
         /**
-         * 创建故障注入服务。
-         * @param mapper WfConnectorInvocationMapper，正式主库 Mapper
-         * @return 无返回值，构造后首轮 success 会失败
+         * 创建只在测试上下文生效的 SQL Connector。
+         * @param dataSource DataSource，主业务库数据源
+         * @param dataSourceService WorkflowSqlDataSourceService，受控数据源目录服务
+         * @param templateValidator WorkflowSqlTemplateValidator，SQL AST 门禁
+         * @param secretResolver WorkflowSqlSecretResolver，外库引用解析器
+         * @param connectorMetrics WorkflowConnectorMetrics，连接器尝试指标
+         * @return 无返回值，构造后首轮 execute 会在外库提交后失败
          */
-        FaultInjectingInvocationService(WfConnectorInvocationMapper mapper)
+        FaultInjectingSqlConnector(DataSource dataSource,
+                WorkflowSqlDataSourceService dataSourceService,
+                WorkflowSqlTemplateValidator templateValidator,
+                WorkflowSqlSecretResolver secretResolver,
+                WorkflowConnectorMetrics connectorMetrics)
         {
-            super(mapper);
+            super(dataSource, dataSourceService, templateValidator, secretResolver,
+                    connectorMetrics);
         }
 
         /**
-         * 首次完成时释放租约并抛出稳定故障，后续调用执行正式成功提交。
-         * @param claim WorkflowConnectorInvocationClaim，本次调用租约
-         * @param durationMs long，外库调用耗时
-         * @param resultCode int，连接器结果码
-         * @param summary String，脱敏结果摘要
-         * @return void，首次必抛错，重试后正常返回
+         * 先执行正式外库写入，再在首轮模拟本地 Job 提交失败。
+         * @param execution DelegateExecution，当前 Flowable 执行上下文
+         * @param snapshot WfDeployExtensionSnapshot，已冻结扩展快照
+         * @param config JsonNode，已复核 SQL 配置
+         * @return void，首次外库提交后抛错，后续重放正常返回
          */
         @Override
-        public void success(WorkflowConnectorInvocationClaim claim, long durationMs,
-                int resultCode, String summary)
+        public void execute(DelegateExecution execution, WfDeployExtensionSnapshot snapshot,
+                JsonNode config)
         {
-            if (injectNextSuccessFailure.compareAndSet(true, false))
+            attemptCount.incrementAndGet();
+            super.execute(execution, snapshot, config);
+            if (injectNextExecutionFailure.compareAndSet(true, false))
             {
                 failureInjected.set(true);
-                super.failure(claim, durationMs, null, "TEST_LOCAL_COMMIT_FAILURE",
-                        "test-local-commit-failed");
                 throw new ServiceException("TEST_LOCAL_COMMIT_FAILURE", HttpStatus.ERROR);
             }
-            super.success(claim, durationMs, resultCode, summary);
         }
 
         /**
          * 为每个测试恢复一次性故障开关。
-         * @return void，下一次 success 将注入失败
+         * @return void，下一次 execute 将在外库提交后注入失败
          */
         void resetFailure()
         {
-            injectNextSuccessFailure.set(true);
+            injectNextExecutionFailure.set(true);
             failureInjected.set(false);
+            attemptCount.set(0);
         }
 
         /**
@@ -490,6 +490,15 @@ class WorkflowExternalSqlConnectorMySqlIT
         boolean failureInjected()
         {
             return failureInjected.get();
+        }
+
+        /**
+         * 返回本轮由 Flowable executor 发起的真实连接器执行次数。
+         * @return int，首次失败和后续重试的累计次数
+         */
+        int attemptCount()
+        {
+            return attemptCount.get();
         }
     }
 }

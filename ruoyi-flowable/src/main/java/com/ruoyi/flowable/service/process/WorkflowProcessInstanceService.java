@@ -40,7 +40,7 @@ import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 
 /**
  * 流程实例状态管理、受控终止和已结束历史删除服务。
@@ -110,7 +110,7 @@ public class WorkflowProcessInstanceService
     private WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
 
     /** 普通审批结果通知服务；旧直接构造单元测试时可为空。 */
-    private WorkflowNotificationService notificationService;
+    private WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建流程实例写操作服务。
@@ -155,11 +155,11 @@ public class WorkflowProcessInstanceService
 
     /**
      * 延迟注入普通审批结果通知服务。
-     * @param notificationService WorkflowNotificationService，显式取消/终止 outbox 服务
+     * @param notificationService WorkflowNotificationRegistrar，显式取消/终止 outbox 服务
      * @return void，生产 Spring 容器完成注入
      */
     @Autowired
-    public void setNotificationService(WorkflowNotificationService notificationService)
+    public void setNotificationService(WorkflowNotificationRegistrar notificationService)
     {
         this.notificationService = notificationService;
     }

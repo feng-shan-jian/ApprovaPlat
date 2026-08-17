@@ -15,6 +15,7 @@ import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.EndEvent;
 import org.flowable.bpmn.model.Escalation;
 import org.flowable.bpmn.model.EscalationEventDefinition;
+import org.flowable.bpmn.model.ExtensionAttribute;
 import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.FlowNode;
 import org.flowable.bpmn.model.FlowableListener;
@@ -44,6 +45,8 @@ import tools.jackson.databind.json.JsonMapper;
 public class WorkflowTaskSlaDeploymentService
 {
     public static final String TIMER_ELEMENT_PREFIX = "approva_sla_";
+    public static final String SOURCE_TASK_DEFINITION_KEY_PROPERTY =
+            "approva.sla.sourceTaskDefinitionKey";
     private static final String USER_TASK_LISTENER = "${userTaskListener}";
     private static final Pattern USER_ID = Pattern.compile("[1-9][0-9]{0,18}");
     private static final int MAX_MINUTES = 525600;
@@ -313,6 +316,8 @@ public class WorkflowTaskSlaDeploymentService
             escalationTask.setName((task.getName() == null ? "审批" : task.getName()) + "超时升级处理");
             escalationTask.setAssignee(config.escalationUserId());
             escalationTask.setTaskListeners(systemTaskListeners());
+            appendGeneratedProperty(escalationTask, SOURCE_TASK_DEFINITION_KEY_PROPERTY,
+                    task.getId());
             EndEvent end = new EndEvent();
             end.setId(baseId + "_end");
             process.addFlowElement(escalationTask);
@@ -391,6 +396,27 @@ public class WorkflowTaskSlaDeploymentService
     private List<FlowableListener> systemTaskListeners()
     {
         return List.of(taskListener("create"), taskListener("assignment"), taskListener("complete"));
+    }
+
+    /**
+     * 为编译器生成节点写入只读运行属性，运行时据此关联原审批 SLA 执行。
+     * @param task UserTask，编译器生成的升级任务
+     * @param name String，平台保留属性名
+     * @param value String，部署时冻结的原节点标识
+     * @return void，属性以标准 flowable:properties 结构写入执行 BPMN
+     */
+    private void appendGeneratedProperty(UserTask task, String name, String value)
+    {
+        ExtensionElement property = new ExtensionElement();
+        property.setName("property");
+        property.setNamespace("http://flowable.org/bpmn");
+        property.addAttribute(new ExtensionAttribute("name", name));
+        property.addAttribute(new ExtensionAttribute("value", value));
+        ExtensionElement container = new ExtensionElement();
+        container.setName("properties");
+        container.setNamespace("http://flowable.org/bpmn");
+        container.setChildElements(Map.of("property", List.of(property)));
+        task.addExtensionElement(container);
     }
 
     /** @param event String，固定任务事件；@return FlowableListener，固定 userTaskListener 委托表达式。 */

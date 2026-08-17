@@ -29,8 +29,8 @@ public class WorkflowModelDto
     /** BPMN 2.0 XML 正文。 */
     private String bpmnXml;
 
-    /** 用户本次保存意图的 UUID 幂等键。 */
-    private String saveRequestId;
+    /** 设计页加载时取得的服务端 BPMN 内容摘要。 */
+    private String expectedBpmnSha256;
 
     /** 保存设计时是否显式创建新模型版本；已部署或历史版本会由服务端自动创建新版本。 */
     private Boolean newVersion;
@@ -204,24 +204,24 @@ public class WorkflowModelDto
     }
 
     /**
-     * 获取用户本次保存意图的幂等键。
+     * 获取设计页加载时的 BPMN 内容摘要。
      *
-     * @return String，符合 UUID 格式的保存请求主键
+     * @return String，64 位小写 SHA-256 摘要
      */
-    public String getSaveRequestId()
+    public String getExpectedBpmnSha256()
     {
-        return saveRequestId;
+        return expectedBpmnSha256;
     }
 
     /**
-     * 设置用户本次保存意图的幂等键。
+     * 设置设计页加载时的 BPMN 内容摘要。
      *
-     * @param saveRequestId String，符合 UUID 格式的保存请求主键
+     * @param expectedBpmnSha256 String，64 位小写 SHA-256 摘要
      * @return 无返回值
      */
-    public void setSaveRequestId(String saveRequestId)
+    public void setExpectedBpmnSha256(String expectedBpmnSha256)
     {
-        this.saveRequestId = saveRequestId;
+        this.expectedBpmnSha256 = expectedBpmnSha256;
     }
 
     /**

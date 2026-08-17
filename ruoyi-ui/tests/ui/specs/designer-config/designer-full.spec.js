@@ -2,7 +2,6 @@ import fs from 'node:fs'
 import { test, expect } from '@playwright/test'
 import { WorkflowConfigurationPage } from '../../page-objects/configuration.js'
 import { WorkflowDesignerPage } from '../../page-objects/designer.js'
-import { expectAjaxSuccess, matchesEndpoint } from '../../../e2e/support/http.js'
 import { openRoleSession } from '../../support/role-session.js'
 
 /**
@@ -88,8 +87,13 @@ test('@full [UI-DESIGNER-001] 设计器通过UI完成导入、Lint、属性配�
   }
   const designer = await openRoleSession(browser, 'workflow_designer', testInfo)
   let failed = true
+  let originalPreferenceEntries
   try {
     const page = designer.page
+    originalPreferenceEntries = await page.evaluate(() => Object.fromEntries(
+      Object.keys(localStorage)
+        .filter(key => key.startsWith('workflow:designer:preference:v1:'))
+        .map(key => [key, localStorage.getItem(key)])))
     const configuration = new WorkflowConfigurationPage(page)
     await configuration.createCategory({ name: assets.categoryName, code: assets.categoryCode, remark: prefix })
     await configuration.createTextForm({ name: assets.formName, remark: prefix })
@@ -162,37 +166,64 @@ test('@full [UI-DESIGNER-001] 设计器通过UI完成导入、Lint、属性配�
     const originalMinimap = await minimapSwitch.isChecked()
     await settings.getByText(targetThemeLabel, { exact: true }).click()
     await settings.locator('.el-form-item').filter({ hasText: '小地图' }).locator('.el-switch').click()
-    const preferenceSave = page.waitForResponse(response => matchesEndpoint(response, '/workflow/designer/preference', 'PUT'))
     await settings.getByRole('button', { name: '保存设置' }).click()
-    await expectAjaxSuccess(await preferenceSave, '/workflow/designer/preference')
+    const targetTheme = targetThemeLabel === '深色' ? 'DARK' : 'LIGHT'
+    await expect.poll(async () => page.evaluate(({ theme, minimap }) => Object.keys(localStorage)
+      .filter(key => key.startsWith('workflow:designer:preference:v1:'))
+      .find(key => {
+        const value = JSON.parse(localStorage.getItem(key))
+        return value.theme === theme && value.minimapEnabled === minimap
+      }) || '', { theme: targetTheme, minimap: !originalMinimap })).not.toBe('')
+    const currentPreferenceKey = await page.evaluate(({ theme, minimap }) => Object.keys(localStorage)
+      .filter(key => key.startsWith('workflow:designer:preference:v1:'))
+      .find(key => {
+        const value = JSON.parse(localStorage.getItem(key))
+        return value.theme === theme && value.minimapEnabled === minimap
+      }), { theme: targetTheme, minimap: !originalMinimap })
     await page.reload()
     await expect(page.locator('.process-designer')).toBeVisible()
     if (targetThemeLabel === '深色') await expect(page.locator('.process-designer')).toHaveClass(/process-designer--dark/u)
     else await expect(page.locator('.process-designer')).not.toHaveClass(/process-designer--dark/u)
 
     const simulationButton = page.getByRole('button', { name: 'Token 流程模拟' })
-    const enableSimulation = page.waitForResponse(response => matchesEndpoint(response, '/workflow/designer/preference', 'PUT'))
     await simulationButton.click()
-    await expectAjaxSuccess(await enableSimulation, '/workflow/designer/preference')
     await expect(simulationButton).toHaveClass(/is-active/u)
-    const disableSimulation = page.waitForResponse(response => matchesEndpoint(response, '/workflow/designer/preference', 'PUT'))
+    await expect.poll(async () => page.evaluate(key =>
+      JSON.parse(localStorage.getItem(key)).tokenSimulationEnabled, currentPreferenceKey))
+      .toBe(true)
     await simulationButton.click()
-    await expectAjaxSuccess(await disableSimulation, '/workflow/designer/preference')
     await expect(simulationButton).not.toHaveClass(/is-active/u)
+    await expect.poll(async () => page.evaluate(key =>
+      JSON.parse(localStorage.getItem(key)).tokenSimulationEnabled, currentPreferenceKey))
+      .toBe(false)
 
-    // 通过 UI 恢复测试前偏好，避免主题和小地图状态污染开发环境。
+    // 恢复默认只能删除当前用户键，不能清除同源浏览器内其他用户的偏好。
+    const otherUserKey = 'workflow:designer:preference:v1:e2e-other-user'
+    await page.evaluate(key => localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 1,
+      theme: 'LIGHT',
+      gridEnabled: true,
+      minimapEnabled: true,
+      lintEnabled: true,
+      tokenSimulationEnabled: false,
+      propertiesCollapsed: false
+    })), otherUserKey)
     await page.getByRole('button', { name: '设计器设置' }).click()
     settings = page.getByRole('dialog', { name: '设计器设置' })
-    await settings.getByText(originalThemeLabel, { exact: true }).click()
-    const currentMinimap = await settings.getByRole('switch', { name: '小地图' }).isChecked()
-    if (currentMinimap !== originalMinimap) {
-      await settings.locator('.el-form-item').filter({ hasText: '小地图' }).locator('.el-switch').click()
-    }
-    const preferenceRestore = page.waitForResponse(response => matchesEndpoint(response, '/workflow/designer/preference', 'PUT'))
-    await settings.getByRole('button', { name: '保存设置' }).click()
-    await expectAjaxSuccess(await preferenceRestore, '/workflow/designer/preference')
+    await settings.getByRole('button', { name: '恢复默认' }).click()
+    await expect.poll(async () => page.evaluate(key => localStorage.getItem(key), currentPreferenceKey))
+      .toBeNull()
+    expect(await page.evaluate(key => localStorage.getItem(key), otherUserKey)).not.toBeNull()
     failed = false
   } finally {
+    if (originalPreferenceEntries) {
+      await designer.page.evaluate(entries => {
+        Object.keys(localStorage)
+          .filter(key => key.startsWith('workflow:designer:preference:v1:'))
+          .forEach(key => localStorage.removeItem(key))
+        Object.entries(entries).forEach(([key, value]) => localStorage.setItem(key, value))
+      }, originalPreferenceEntries).catch(() => undefined)
+    }
     await designer.close(failed)
     await testInfo.attach('asset-result.json', { body: Buffer.from(JSON.stringify(assets, null, 2)), contentType: 'application/json' })
   }

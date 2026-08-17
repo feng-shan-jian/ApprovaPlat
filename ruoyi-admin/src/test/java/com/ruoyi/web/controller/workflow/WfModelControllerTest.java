@@ -1,6 +1,8 @@
 package com.ruoyi.web.controller.workflow;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.argThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -19,6 +21,7 @@ import com.ruoyi.flowable.service.IWfCategoryService;
 import com.ruoyi.flowable.service.model.WorkflowModelService;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationReport;
+import com.ruoyi.flowable.domain.vo.WorkflowModelSaveResult;
 
 /**
  * WfModelController 的 BPMN 资源响应协议测试。
@@ -90,5 +93,58 @@ class WfModelControllerTest
                 .andExpect(jsonPath("$.data.issues[0].elementId").value("leave"));
 
         verify(modelService).validateBpmn(bpmnXml);
+    }
+
+    /**
+     * 验证模型保存请求映射内容基线摘要，并完整返回服务端真实保存结果。
+     *
+     * @return 无返回值，保存请求字段或响应结果漂移时测试失败
+     * @throws Exception MockMvc 执行请求失败时抛出
+     */
+    @Test
+    void returnsModelVersionAndDigestAfterSave() throws Exception
+    {
+        String expectedDigest = "a".repeat(64);
+        String savedDigest = "b".repeat(64);
+        when(modelService.saveModel(argThat(request -> request != null
+                && "model-1".equals(request.getModelId())
+                && "<definitions/>".equals(request.getBpmnXml())
+                && expectedDigest.equals(request.getExpectedBpmnSha256())
+                && Boolean.FALSE.equals(request.getNewVersion()))))
+                .thenReturn(new WorkflowModelSaveResult("model-1", 3, savedDigest));
+
+        mockMvc.perform(post("/workflow/model/save")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"modelId\":\"model-1\","
+                                + "\"bpmnXml\":\"<definitions/>\","
+                                + "\"expectedBpmnSha256\":\"" + expectedDigest + "\","
+                                + "\"newVersion\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.modelId").value("model-1"))
+                .andExpect(jsonPath("$.data.version").value(3))
+                .andExpect(jsonPath("$.data.bpmnSha256").value(savedDigest));
+
+        verify(modelService).saveModel(argThat(request -> expectedDigest.equals(
+                request.getExpectedBpmnSha256())));
+    }
+
+    /**
+     * 验证非法模型基线摘要由 Web 参数门禁拒绝，不能进入模型保存事务。
+     *
+     * @return 无返回值，非法摘要进入 Service 时测试失败
+     * @throws Exception MockMvc 执行请求失败时抛出
+     */
+    @Test
+    void rejectsInvalidModelBaselineDigestBeforeService() throws Exception
+    {
+        mockMvc.perform(post("/workflow/model/save")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"modelId\":\"model-1\","
+                                + "\"bpmnXml\":\"<definitions/>\","
+                                + "\"expectedBpmnSha256\":\"INVALID\","
+                                + "\"newVersion\":false}"))
+                .andExpect(status().isBadRequest());
+
+        verify(modelService, never()).saveModel(argThat(request -> true));
     }
 }

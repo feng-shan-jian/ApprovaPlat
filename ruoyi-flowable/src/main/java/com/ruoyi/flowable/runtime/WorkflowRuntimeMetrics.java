@@ -23,7 +23,6 @@ import com.ruoyi.flowable.mapper.WorkflowRuntimeMetricsMapper;
 import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties.AttachmentStorageMode;
-import com.ruoyi.flowable.service.attachment.WorkflowAttachmentCleanupCoordinator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
 
 /**
@@ -42,7 +41,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     private final WorkflowRuntimeMetricsMapper metricsMapper;
     private final SpringProcessEngineConfiguration engineConfiguration;
     private final WorkflowAttachmentStorage attachmentStorage;
-    private final WorkflowAttachmentCleanupCoordinator cleanupCoordinator;
     private final WorkflowRuntimeProperties runtimeProperties;
     private final WorkflowAttachmentProperties attachmentProperties;
     private final Clock clock;
@@ -74,7 +72,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param metricsMapper WorkflowRuntimeMetricsMapper，单次数据库往返的合并只读查询
      * @param engineConfiguration SpringProcessEngineConfiguration，两个 executor 实际状态
      * @param attachmentStorage WorkflowAttachmentStorage，当前挂载点可用空间
-     * @param cleanupCoordinator WorkflowAttachmentCleanupCoordinator，清理锁实时和降级状态
      * @param runtimeProperties WorkflowRuntimeProperties，生产门禁、存储模式和共享卷标识
      * @param attachmentProperties WorkflowAttachmentProperties，生产磁盘低水位
      * @return 无返回值，构造后由 Spring 调度并绑定到 Micrometer
@@ -83,11 +80,10 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     public WorkflowRuntimeMetrics(WorkflowRuntimeMetricsMapper metricsMapper,
             SpringProcessEngineConfiguration engineConfiguration,
             WorkflowAttachmentStorage attachmentStorage,
-            WorkflowAttachmentCleanupCoordinator cleanupCoordinator,
             WorkflowRuntimeProperties runtimeProperties,
             WorkflowAttachmentProperties attachmentProperties)
     {
-        this(metricsMapper, engineConfiguration, attachmentStorage, cleanupCoordinator,
+        this(metricsMapper, engineConfiguration, attachmentStorage,
                 runtimeProperties, attachmentProperties, Clock.systemUTC());
     }
 
@@ -97,7 +93,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param metricsMapper WorkflowRuntimeMetricsMapper，合并指标查询
      * @param engineConfiguration SpringProcessEngineConfiguration，executor 实际状态
      * @param attachmentStorage WorkflowAttachmentStorage，附件挂载点边界
-     * @param cleanupCoordinator WorkflowAttachmentCleanupCoordinator，清理锁状态
      * @param runtimeProperties WorkflowRuntimeProperties，生产门禁与存储模式
      * @param attachmentProperties WorkflowAttachmentProperties，附件磁盘低水位
      * @param clock Clock，快照完成时间来源
@@ -106,14 +101,12 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     WorkflowRuntimeMetrics(WorkflowRuntimeMetricsMapper metricsMapper,
             SpringProcessEngineConfiguration engineConfiguration,
             WorkflowAttachmentStorage attachmentStorage,
-            WorkflowAttachmentCleanupCoordinator cleanupCoordinator,
             WorkflowRuntimeProperties runtimeProperties,
             WorkflowAttachmentProperties attachmentProperties, Clock clock)
     {
         this.metricsMapper = metricsMapper;
         this.engineConfiguration = engineConfiguration;
         this.attachmentStorage = attachmentStorage;
-        this.cleanupCoordinator = cleanupCoordinator;
         this.runtimeProperties = runtimeProperties;
         this.attachmentProperties = attachmentProperties;
         this.clock = clock;
@@ -289,24 +282,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
                 metrics -> metrics.snapshot.get().asyncHistoryActive())
                 .description("当前 JVM Flowable executor 实际激活状态")
                 .tag("type", "async_history")
-                .register(registry);
-        Gauge.builder("workflow.attachment.cleanup.lock.active", cleanupCoordinator,
-                coordinator -> coordinator.isLockActive() ? 1.0D : 0.0D)
-                .description("当前 JVM 是否持有附件 MySQL 清理锁")
-                .register(registry);
-        Gauge.builder("workflow.attachment.cleanup.lock.degraded", cleanupCoordinator,
-                coordinator -> coordinator.isLockDegraded() ? 1.0D : 0.0D)
-                .description("当前 JVM 是否发生过无法确认成功的附件清理锁获取或释放")
-                .register(registry);
-        Gauge.builder("workflow.attachment.cleanup.lock.acquisition.failures",
-                cleanupCoordinator,
-                WorkflowAttachmentCleanupCoordinator::getLockAcquisitionFailures)
-                .description("附件 MySQL 清理锁获取结果不确定累计次数")
-                .register(registry);
-        Gauge.builder("workflow.attachment.cleanup.lock.release.failures",
-                cleanupCoordinator,
-                WorkflowAttachmentCleanupCoordinator::getLockReleaseFailures)
-                .description("附件 MySQL 清理锁释放失败累计次数")
                 .register(registry);
         Gauge.builder("workflow.runtime.metrics.snapshot.available", this,
                 metrics -> metrics.snapshot.get().available() ? 1.0D : 0.0D)

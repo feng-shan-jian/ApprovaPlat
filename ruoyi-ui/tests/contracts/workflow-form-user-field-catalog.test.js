@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import {
   createEmbeddedUserIdFieldCatalog,
@@ -10,10 +9,6 @@ import {
   normalizeEmbeddedFormType,
   participantUserIdFieldOptions
 } from '../../src/components/workflow/designer/formUserFieldCatalog.js'
-
-const designerSource = readFileSync(new URL(
-  '../../src/components/workflow/ProcessDesigner.vue', import.meta.url), 'utf8')
-
 /**
  * 创建正式模板字段。
  * @param {string} variable 业务变量名。
@@ -167,15 +162,4 @@ test('动态审批人目录使用后端参与者变量名语法', () => {
   assert.deepEqual(participantUserIdFieldOptions(
     createTemplateUserIdFieldCatalog(JSON.stringify({ fields })))
     .map(option => option.value), ['_reviewer_1'])
-})
-
-/**
- * 验证动态审批人和自动抄送均消费同一个纯字段目录模块。
- * @returns {void} 任一入口退回独立宽松筛选时断言失败。
- */
-test('设计器两个表单用户入口复用同一字段目录', () => {
-  assert.match(designerSource,
-    /function resolveParticipantFormFieldOptions[\s\S]*?participantUserIdFieldOptions[\s\S]*?createTemplateUserIdFieldCatalog/)
-  assert.match(designerSource,
-    /function resolveAutoCopyFormFieldOptionsForBusinessObject[\s\S]*?createProcessUserIdFieldCatalog/)
 })

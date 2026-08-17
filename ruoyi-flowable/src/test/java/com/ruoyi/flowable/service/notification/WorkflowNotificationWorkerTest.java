@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.service.notification;
 
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -11,8 +10,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.Test;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.DeliveryOutcome;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.OutboxRow;
 
 /**
  * 通知 worker 单条领取和投递失败隔离测试。
@@ -26,17 +23,18 @@ class WorkflowNotificationWorkerTest
     @Test
     void stopsBatchAfterPermanentClaimFailure()
     {
-        WorkflowNotificationService service = mock(WorkflowNotificationService.class);
-        when(service.batchSize()).thenReturn(10);
-        when(service.claimNext(anyString()))
+        WorkflowNotificationDeliveryCoordinator coordinator =
+                mock(WorkflowNotificationDeliveryCoordinator.class);
+        when(coordinator.batchSize()).thenReturn(10);
+        when(coordinator.claimNext(anyString()))
                 .thenThrow(new IllegalStateException("永久损坏的最低领取记录"));
-        WorkflowNotificationWorker worker = new WorkflowNotificationWorker(service);
+        WorkflowNotificationWorker worker = new WorkflowNotificationWorker(coordinator);
 
         worker.deliverBatch();
 
-        verify(service, times(1)).claimNext(anyString());
-        verify(service, never()).deliverInbox(any(OutboxRow.class), anyString());
-        verify(service, never()).deliverEmail(any(OutboxRow.class), anyString());
+        verify(coordinator, times(1)).claimNext(anyString());
+        verify(coordinator, never()).deliverClaimed(
+                org.mockito.ArgumentMatchers.any(WorkflowNotificationOutboxRecord.class), anyString());
     }
 
     /**
@@ -46,21 +44,21 @@ class WorkflowNotificationWorkerTest
     @Test
     void continuesAfterIsolatedDeliveryFailure()
     {
-        WorkflowNotificationService service = mock(WorkflowNotificationService.class);
-        OutboxRow failed = outbox(9L, "task-1");
-        OutboxRow next = outbox(10L, "task-2");
-        when(service.batchSize()).thenReturn(3);
-        when(service.claimNext(anyString())).thenReturn(failed, next, null);
+        WorkflowNotificationDeliveryCoordinator coordinator =
+                mock(WorkflowNotificationDeliveryCoordinator.class);
+        WorkflowNotificationOutboxRecord failed = outbox(9L, "task-1");
+        WorkflowNotificationOutboxRecord next = outbox(10L, "task-2");
+        when(coordinator.batchSize()).thenReturn(3);
+        when(coordinator.claimNext(anyString())).thenReturn(failed, next, null);
         doThrow(new IllegalStateException("单条站内投递异常"))
-                .when(service).deliverInbox(eq(failed), anyString());
-        WorkflowNotificationWorker worker = new WorkflowNotificationWorker(service);
+                .when(coordinator).deliverClaimed(eq(failed), anyString());
+        WorkflowNotificationWorker worker = new WorkflowNotificationWorker(coordinator);
 
         worker.deliverBatch();
 
-        verify(service, times(3)).claimNext(anyString());
-        verify(service).deliverInbox(eq(failed), anyString());
-        verify(service).completeDelivery(eq(failed), anyString(), any(DeliveryOutcome.class));
-        verify(service).deliverInbox(eq(next), anyString());
+        verify(coordinator, times(3)).claimNext(anyString());
+        verify(coordinator).deliverClaimed(eq(failed), anyString());
+        verify(coordinator).deliverClaimed(eq(next), anyString());
     }
 
     /**
@@ -68,18 +66,19 @@ class WorkflowNotificationWorkerTest
      * @return void，worker 再次拆分邮件结果回写时测试失败
      */
     @Test
-    void delegatesEmailToTransactionalDeliveryBoundary()
+    void delegatesEmailToTransactionFreeCoordinator()
     {
-        WorkflowNotificationService service = mock(WorkflowNotificationService.class);
-        OutboxRow email = outbox(11L, "task-email", "EMAIL");
-        when(service.batchSize()).thenReturn(2);
-        when(service.claimNext(anyString())).thenReturn(email, (OutboxRow) null);
-        WorkflowNotificationWorker worker = new WorkflowNotificationWorker(service);
+        WorkflowNotificationDeliveryCoordinator coordinator =
+                mock(WorkflowNotificationDeliveryCoordinator.class);
+        WorkflowNotificationOutboxRecord email = outbox(11L, "task-email", "EMAIL");
+        when(coordinator.batchSize()).thenReturn(2);
+        when(coordinator.claimNext(anyString()))
+                .thenReturn(email, (WorkflowNotificationOutboxRecord) null);
+        WorkflowNotificationWorker worker = new WorkflowNotificationWorker(coordinator);
 
         worker.deliverBatch();
 
-        verify(service).deliverEmail(eq(email), anyString());
-        verify(service, never()).completeDelivery(eq(email), anyString(), any(DeliveryOutcome.class));
+        verify(coordinator).deliverClaimed(eq(email), anyString());
     }
 
     /**
@@ -87,27 +86,28 @@ class WorkflowNotificationWorkerTest
      * @return void，worker 拆分短信投递步骤或进入其他通道时测试失败
      */
     @Test
-    void delegatesSmsToTransactionalDeliveryBoundary()
+    void delegatesSmsToTransactionFreeCoordinator()
     {
-        WorkflowNotificationService service = mock(WorkflowNotificationService.class);
-        OutboxRow sms = outbox(12L, "task-sms", "SMS");
-        when(service.batchSize()).thenReturn(2);
-        when(service.claimNext(anyString())).thenReturn(sms, (OutboxRow) null);
-        WorkflowNotificationWorker worker = new WorkflowNotificationWorker(service);
+        WorkflowNotificationDeliveryCoordinator coordinator =
+                mock(WorkflowNotificationDeliveryCoordinator.class);
+        WorkflowNotificationOutboxRecord sms = outbox(12L, "task-sms", "SMS");
+        when(coordinator.batchSize()).thenReturn(2);
+        when(coordinator.claimNext(anyString()))
+                .thenReturn(sms, (WorkflowNotificationOutboxRecord) null);
+        WorkflowNotificationWorker worker = new WorkflowNotificationWorker(coordinator);
 
         worker.deliverBatch();
 
-        verify(service).deliverSms(eq(sms), anyString());
-        verify(service, never()).completeDelivery(eq(sms), anyString(), any(DeliveryOutcome.class));
+        verify(coordinator).deliverClaimed(eq(sms), anyString());
     }
 
     /**
      * 创建站内通道 worker 测试记录。
      * @param outboxId long，测试 outbox 主键
      * @param taskId String，测试任务主键
-     * @return OutboxRow，可直接进入站内投递分支的不可变记录
+     * @return WorkflowNotificationOutboxRecord，可直接进入站内投递分支的不可变记录
      */
-    private OutboxRow outbox(long outboxId, String taskId)
+    private WorkflowNotificationOutboxRecord outbox(long outboxId, String taskId)
     {
         return outbox(outboxId, taskId, "INBOX");
     }
@@ -117,11 +117,14 @@ class WorkflowNotificationWorkerTest
      * @param outboxId long，测试 outbox 主键
      * @param taskId String，测试任务主键
      * @param channel String，INBOX、EMAIL 或 SMS
-     * @return OutboxRow，可进入对应 worker 投递分支的不可变记录
+     * @return WorkflowNotificationOutboxRecord，可进入对应 worker 投递分支的不可变记录
      */
-    private OutboxRow outbox(long outboxId, String taskId, String channel)
+    private WorkflowNotificationOutboxRecord outbox(long outboxId, String taskId, String channel)
     {
-        return new OutboxRow(outboxId, "key-" + outboxId, "TASK_ARRIVED", channel, 7L,
+        String deliveryTarget = "EMAIL".equals(channel) ? "user@example.test"
+                : "SMS".equals(channel) ? "13800000000" : null;
+        return new WorkflowNotificationOutboxRecord(outboxId, "key-" + outboxId,
+                "TASK_ARRIVED", channel, 7L, deliveryTarget,
                 "instance-1", taskId, "标题", "正文", null, "/workflow/process-detail/instance-1",
                 "PENDING", 1, 1, 1, 6, 1);
     }

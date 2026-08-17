@@ -29,7 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.springframework.beans.factory.ObjectProvider;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 
 /**
  * WorkflowProcessCompletionStatusListener 的自然完成状态一致性测试。
@@ -110,11 +111,14 @@ class WorkflowProcessCompletionStatusListenerTest
         @SuppressWarnings("unchecked")
         ObjectProvider<WorkflowAutomaticCopyService> copyProvider = mock(ObjectProvider.class);
         @SuppressWarnings("unchecked")
-        ObjectProvider<WorkflowNotificationService> notificationProvider = mock(ObjectProvider.class);
-        WorkflowNotificationService notificationService = mock(WorkflowNotificationService.class);
-        when(notificationProvider.getIfAvailable()).thenReturn(notificationService);
+        ObjectProvider<WorkflowNotificationRegistrar> notificationProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<WorkflowNotificationOutboxService> outboxProvider = mock(ObjectProvider.class);
+        WorkflowNotificationOutboxService outboxService = mock(WorkflowNotificationOutboxService.class);
+        when(outboxProvider.getIfAvailable()).thenReturn(outboxService);
         WorkflowProcessCompletionStatusListener listener =
-                new WorkflowProcessCompletionStatusListener(copyProvider, notificationProvider);
+                new WorkflowProcessCompletionStatusListener(copyProvider, notificationProvider,
+                        outboxProvider);
         FlowableEngineEntityEvent event = mock(FlowableEngineEntityEvent.class);
         ExecutionEntity child = mock(ExecutionEntity.class);
         when(event.getType()).thenReturn(FlowableEngineEventType.PROCESS_COMPLETED);
@@ -126,10 +130,11 @@ class WorkflowProcessCompletionStatusListenerTest
 
         listener.onEvent(event);
 
-        verify(notificationService).scheduleUrgeCancellationForCompletedProcessInstance(
-                "child-instance");
+        verify(outboxService).schedulePendingUrgeCancellation("child-instance", null,
+                "子流程已结束，取消未投递催办");
         verifyNoInteractions(copyProvider);
-        verifyNoMoreInteractions(notificationService);
+        verifyNoInteractions(notificationProvider);
+        verifyNoMoreInteractions(outboxService);
     }
 
     /**

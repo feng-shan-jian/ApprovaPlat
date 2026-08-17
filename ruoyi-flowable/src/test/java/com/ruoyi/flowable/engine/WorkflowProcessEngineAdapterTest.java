@@ -57,7 +57,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 
 class WorkflowProcessEngineAdapterTest
 {
@@ -71,7 +71,7 @@ class WorkflowProcessEngineAdapterTest
 
     private WorkflowIdentityResolver identityResolver;
 
-    private WorkflowNotificationService notificationService;
+    private WorkflowNotificationRegistrar notificationService;
 
     private WorkflowProcessEngineAdapter adapter;
 
@@ -92,7 +92,7 @@ class WorkflowProcessEngineAdapterTest
         runtimeService = mock(RuntimeService.class);
         taskService = mock(TaskService.class);
         identityResolver = mock(WorkflowIdentityResolver.class);
-        notificationService = mock(WorkflowNotificationService.class);
+        notificationService = mock(WorkflowNotificationRegistrar.class);
         IdentityService identityService = mock(IdentityService.class);
         WorkflowAuthenticationContext authenticationContext = new WorkflowAuthenticationContext(
                 identityService, new WorkflowIdentityCodec());

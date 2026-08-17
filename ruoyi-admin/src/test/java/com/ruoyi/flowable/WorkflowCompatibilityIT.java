@@ -284,9 +284,6 @@ class WorkflowCompatibilityIT
             jdbcTemplate.update("delete attachment from wf_attachment attachment "
                     + "inner join wf_process_draft draft on draft.draft_id = attachment.draft_id "
                     + "where draft.deployment_id = ?", deploymentId);
-            jdbcTemplate.update("delete audit from wf_process_draft_audit audit "
-                    + "inner join wf_process_draft draft on draft.draft_id = audit.draft_id "
-                    + "where draft.deployment_id = ?", deploymentId);
             jdbcTemplate.update("delete from wf_process_draft where deployment_id = ?",
                     deploymentId);
             artifactRepository.delete(deploymentId);

@@ -242,10 +242,11 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
     expect(rejectedModelId, '负向回归模型创建必须返回正式主键').not.toBe('')
     // 模型创建成功后立即登记，后续保存门禁断言失败时仍由 finally 删除正式半成品。
     resources.modelIds.push(rejectedModelId)
+    const rejectedModelDetail = await callWorkflowApi(
+      pages.designer, 'GET', `/workflow/model/${encodeURIComponent(rejectedModelId)}`)
     await callWorkflowApi(pages.designer, 'POST', '/workflow/model/save', {
       expectedCode: 409,
       data: {
-        requestId: randomUUID(),
         modelId: rejectedModelId,
         bpmnXml: buildCandidateGroupBpmn({
           processKey: rejectedProcessKey,
@@ -253,6 +254,7 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
           formId: resources.formId,
           candidateGroup
         }),
+        expectedBpmnSha256: rejectedModelDetail.data?.bpmnSha256,
         newVersion: false
       }
     })
@@ -272,9 +274,10 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
     const modelId = String(created.data?.modelId || '')
     expect(modelId, '正向回归模型创建必须返回正式主键').not.toBe('')
     resources.modelIds.push(modelId)
+    const modelDetail = await callWorkflowApi(
+      pages.designer, 'GET', `/workflow/model/${encodeURIComponent(modelId)}`)
     await callWorkflowApi(pages.designer, 'POST', '/workflow/model/save', {
       data: {
-        requestId: randomUUID(),
         modelId,
         bpmnXml: buildCandidateGroupBpmn({
           processKey,
@@ -282,6 +285,7 @@ test('候选组阻断无人可办配置并允许合格角色真实认领', async
           formId: resources.formId,
           candidateGroup: claimableCandidateGroup
         }),
+        expectedBpmnSha256: modelDetail.data?.bpmnSha256,
         newVersion: false
       }
     })

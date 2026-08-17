@@ -122,7 +122,7 @@ class WorkflowRbacHttpIT
     private static final Pattern PATH_VARIABLE_PATTERN = Pattern.compile("\\{([^{}]+)\\}");
 
     /**
-     * 145 个冻结入口允许出现的全部路径变量及其类型合法、固定不存在探针值。
+     * 143 个冻结入口允许出现的全部路径变量及其类型合法、固定不存在探针值。
      * 数字主键统一使用 Long 最大正数，UUID 与枚举保留各自 Web 参数契约。
      */
     private static final Map<String, String> DENIED_PROBE_PATH_VALUES = Map.ofEntries(
@@ -194,7 +194,7 @@ class WorkflowRbacHttpIT
     /** 真实 HttpClient，不配置 Cookie 或重试，所有身份仅通过 Authorization 头传递。 */
     private HttpClient httpClient;
 
-    /** 145 个正式入口的机器可读矩阵。 */
+    /** 143 个正式入口的机器可读矩阵。 */
     private List<Endpoint> matrix;
 
     /** 正式菜单 SQL 解析出的五角色 workflow 权限集合。 */
@@ -231,7 +231,7 @@ class WorkflowRbacHttpIT
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
 
-        assertThat(matrix).hasSize(145);
+        assertThat(matrix).hasSize(143);
         assertThat(jdbcTemplate.queryForObject("select database()", String.class))
                 .as("RBAC IT 只能连接显式批准的隔离 schema")
                 .isEqualTo(expectedSchema);
@@ -1153,16 +1153,12 @@ class WorkflowRbacHttpIT
                 "{\"modelId\":\"" + STRING_ID + "\","
                         + "\"modelName\":\"RBAC拒绝探针\"}";
             case "WfModelController#save" ->
-                "{\"requestId\":\"" + UUID.randomUUID() + "\","
-                        + "\"modelId\":\"" + STRING_ID + "\","
-                        + "\"bpmnXml\":\"<definitions/>\",\"newVersion\":false}";
+                "{\"modelId\":\"" + STRING_ID + "\","
+                        + "\"bpmnXml\":\"<definitions/>\","
+                        + "\"expectedBpmnSha256\":\"" + "0".repeat(64) + "\","
+                        + "\"newVersion\":false}";
             case "WfModelController#validate" ->
                 "{\"bpmnXml\":\"<definitions/>\"}";
-            case "WfDesignerController#savePreference" ->
-                "{\"theme\":\"SYSTEM\",\"gridEnabled\":true,"
-                        + "\"minimapEnabled\":true,\"lintEnabled\":true,"
-                        + "\"tokenSimulationEnabled\":false,"
-                        + "\"propertiesCollapsed\":false}";
             case "WfProcessDraftController#create" ->
                 "{\"processDefinitionId\":\"" + STRING_ID + "\","
                         + "\"variables\":{},\"multiInstanceUserIds\":{}}";

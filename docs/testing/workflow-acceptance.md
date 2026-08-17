@@ -4,30 +4,16 @@
 
 工作流验收按以下层级执行，后一级不能被前一级替代：
 
-1. 编译和静态契约：确认源码、SQL、菜单、权限矩阵和配置没有结构漂移。
-2. 真实数据库：在隔离 MySQL 中从空 schema 安装 101 表（若依 20、Quartz 11、Flowable 36、ApprovaPlat `wf_*` 34），执行约束、备份恢复和三组共 57 项只读验收，并核对十张退役表缺失、Flowable 部署制品资源完整及三类通知来源关联。
+1. 编译和结构门禁：确认编译、架构依赖、菜单、权限矩阵和配置没有结构漂移。
+2. 真实数据库：在隔离 MySQL 中从空 schema 安装 94 表（若依 20、Quartz 11、Flowable 36、工作流 `wf_*` 27），执行约束和三组共 35 项只读验收，并核对 17 张累计退役表缺失、Flowable 部署制品资源完整及通知稳定来源关联。
 3. 真实服务 API：启动 Spring Boot、MySQL、Redis 和附件目录，通过真实登录与 HTTP 调用验证状态和副作用。
 4. 浏览器 E2E：通过真实页面执行发起、审批动作、工作台、导出、附件和权限可见性。
-5. 并发与故障：验证重复提交、竞态、事务回滚、连接器失败、executor、清理锁和存储异常。
-6. 非功能与发布：验证性能、容量、多节点、长稳、监控、告警、备份、彩排和 24/72 小时观察。
+5. 并发与故障：验证重复提交、竞态、事务回滚、连接器失败、executor、附件清理租约和存储异常。
+6. 非功能与发布：验证性能、容量、多节点、长稳、监控、告警和真实发布流程。
 
 任何未执行层级必须明确标记为 `not executed`，不能用构建成功、静态搜索或门禁 fixture 宣称真实业务已通过。
 
-## 数据库契约测试
-
-数据库基线相关测试位于 `ruoyi-flowable/src/test/java/com/ruoyi/flowable/mapper`，覆盖：
-
-- 正式业务 DDL、附件、模型保存幂等和设计器偏好
-- 扩展、连接器、DMN 和运行事件结构
-- 菜单数量、树结构、职责角色和只读验收 SQL
-
-定向执行：
-
-```powershell
-mvn -pl ruoyi-flowable -am `
-  "-Dtest=WorkflowBusinessDdlContractTest,WorkflowAttachmentContractTest,WorkflowModelSaveDdlContractTest,WorkflowDesignerPreferenceDdlContractTest,WorkflowExtensionDdlContractTest,WorkflowMenuSqlContractTest" `
-  "-Dsurefire.failIfNoSpecifiedTests=false" test
-```
+HTTP/SQL ServiceTask 验收必须启动真实 Flowable async executor：验证 HTTP 成功、超时重试、稳定幂等头和最终死信；验证 SQL 查询、业务唯一键幂等写重试、非法非幂等写发布拒绝；并通过 `ManagementService` 查询及人工重试原生死信。单独调用 Delegate 单元测试不能替代该链路。
 
 ## RBAC 矩阵
 
@@ -51,17 +37,6 @@ mvn -pl ruoyi-admin -am `
 ```
 
 真实 HTTP 集成测试必须使用隔离 MySQL、专用 Redis database、五个不同的非超级管理员账号和真实 `/login`。允许请求必须核对业务结果，拒绝请求必须核对传输状态、业务码以及数据库、Flowable、附件和审计零副作用。
-
-## 发布门禁测试
-
-在 WSL2 Ubuntu 中执行：
-
-```bash
-cd /mnt/d/ruoyiflowable
-bash deployment/scripts/tests/workflow-release-gate-test.sh
-```
-
-该测试验证发布包完整性、SQL 顺序、配置红线、敏感信息、证据清单、安装、彩排、生产、回滚和观察反例。它使用受控 fixture 验证门禁逻辑，不等同于真实生产环境执行。
 
 ## 真实闭环判定
 

@@ -59,7 +59,8 @@ import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
 import com.ruoyi.flowable.service.process.WorkflowValidatedStartVariables;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationConstants;
 import org.springframework.beans.factory.annotation.Autowired;
 
 /**
@@ -162,7 +163,7 @@ public class WorkflowTaskLifecycleService
     private final WorkflowControlledLoopService controlledLoopService;
 
     /** 普通审批流程结果通知服务；旧直接构造单元测试时可为空。 */
-    private WorkflowNotificationService notificationService;
+    private WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建完整任务生命周期服务。
@@ -213,11 +214,11 @@ public class WorkflowTaskLifecycleService
 
     /**
      * 延迟注入普通审批通知服务，保持既有构造器和测试兼容。
-     * @param notificationService WorkflowNotificationService，显式业务终态 outbox 服务
+     * @param notificationService WorkflowNotificationRegistrar，显式业务终态 outbox 服务
      * @return void，生产 Spring 容器完成注入
      */
     @Autowired
-    public void setNotificationService(WorkflowNotificationService notificationService)
+    public void setNotificationService(WorkflowNotificationRegistrar notificationService)
     {
         this.notificationService = notificationService;
     }
@@ -759,7 +760,7 @@ public class WorkflowTaskLifecycleService
                 {
                     // 执行树迁移会先创建原办理配置任务，先抑制中间通知，待改派发起人后只发布稳定退回事件。
                     runtimeService.setVariable(task.getProcessInstanceId(),
-                            WorkflowNotificationService.CONTROLLED_TRANSITION_VARIABLE, "RETURN");
+                            WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE, "RETURN");
                 }
                 var stateBuilder = runtimeService.createChangeActivityStateBuilder()
                         .processInstanceId(task.getProcessInstanceId());
@@ -784,7 +785,7 @@ public class WorkflowTaskLifecycleService
                 {
                     notificationService.onStableTaskEvent("TASK_RETURNED", returnedTask);
                     runtimeService.removeVariable(task.getProcessInstanceId(),
-                            WorkflowNotificationService.CONTROLLED_TRANSITION_VARIABLE);
+                            WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE);
                 }
             });
             return null;
@@ -863,7 +864,7 @@ public class WorkflowTaskLifecycleService
                 {
                     // assignee 与候选关系尚未全部恢复，暂不允许 assignment 监听器投递半成品接收人。
                     runtimeService.setVariable(instance.getId(),
-                            WorkflowNotificationService.CONTROLLED_TRANSITION_VARIABLE, "RESUBMIT");
+                            WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE, "RESUBMIT");
                 }
                 restoreAssignment(taskId, assignment);
                 taskService.removeVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE);
@@ -877,7 +878,7 @@ public class WorkflowTaskLifecycleService
                 {
                     notificationService.onStableTaskEvent("TASK_RESUBMITTED", task);
                     runtimeService.removeVariable(instance.getId(),
-                            WorkflowNotificationService.CONTROLLED_TRANSITION_VARIABLE);
+                            WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE);
                 }
             });
             return null;

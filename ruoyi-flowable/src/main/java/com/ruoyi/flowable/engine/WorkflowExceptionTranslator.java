@@ -2,7 +2,6 @@ package com.ruoyi.flowable.engine;
 
 import java.sql.SQLException;
 import java.sql.SQLTransactionRollbackException;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import org.flowable.common.engine.api.FlowableException;
@@ -24,9 +23,6 @@ import com.ruoyi.flowable.extension.WorkflowConditionRoutingException;
 @Component
 public class WorkflowExceptionTranslator
 {
-    /** MySQL 唯一键冲突错误码。 */
-    private static final int MYSQL_DUPLICATE_KEY_ERROR = 1062;
-
     /** MySQL InnoDB 死锁错误码。 */
     private static final int MYSQL_DEADLOCK_ERROR = 1213;
 
@@ -35,9 +31,6 @@ public class WorkflowExceptionTranslator
 
     /** JDBC 事务回滚类 SQLState 前缀，包含死锁和序列化冲突。 */
     private static final String TRANSACTION_ROLLBACK_SQL_STATE_PREFIX = "40";
-
-    /** 项目为 Flowable 模型版本增加的数据库唯一约束名称。 */
-    private static final String MODEL_VERSION_UNIQUE_CONSTRAINT = "ACT_UNIQ_MODEL";
 
     /** 参数错误对外提示，禁止透传引擎参数和值。 */
     static final String INVALID_ARGUMENT_MESSAGE = "工作流请求参数不合法";
@@ -76,7 +69,7 @@ public class WorkflowExceptionTranslator
 
         int code;
         String message;
-        if (isModelVersionConflict(exception) || isDatabaseConcurrencyConflict(exception))
+        if (isDatabaseConcurrencyConflict(exception))
         {
             code = HttpStatus.CONFLICT;
             message = CONFLICT_MESSAGE;
@@ -178,16 +171,11 @@ public class WorkflowExceptionTranslator
      * 判断完整 cause 链是否代表允许客户端刷新后重试的真实并发失败。
      *
      * @param exception Throwable，原始异常或已经翻译并保留 cause 的 ServiceException
-     * @return boolean，仅 Flowable 乐观锁、模型版本唯一键、Spring 并发异常或数据库事务冲突返回 true
+     * @return boolean，仅 Flowable 乐观锁、Spring 并发异常或数据库事务冲突返回 true
      */
     public boolean isRetryableConcurrencyConflict(Throwable exception)
     {
         Objects.requireNonNull(exception, "并发异常不能为空");
-        // 模型版本唯一键可能在 MyBatis flush 或事务提交阶段绕过 FlowableException 包装。
-        if (isModelVersionConflict(exception))
-        {
-            return true;
-        }
         Throwable current = exception;
         while (current != null)
         {
@@ -200,36 +188,6 @@ public class WorkflowExceptionTranslator
             current = current.getCause();
         }
         return false;
-    }
-
-    /**
-     * 判断异常链是否来自模型 key、版本和租户唯一约束的并发冲突。
-     *
-     * @param exception Throwable，Flowable 保存模型时产生的完整异常链
-     * @return boolean，仅当 MySQL 1062 与模型版本约束名称同时出现时返回 true
-     */
-    private boolean isModelVersionConflict(Throwable exception)
-    {
-        boolean duplicateKeyError = false;
-        boolean modelConstraintMatched = false;
-        // SQLException 和约束名称可能被不同层包装，必须遍历完整 cause 链后组合判断。
-        Throwable current = exception;
-        while (current != null)
-        {
-            if (current instanceof SQLException sqlException
-                    && sqlException.getErrorCode() == MYSQL_DUPLICATE_KEY_ERROR)
-            {
-                duplicateKeyError = true;
-            }
-            String message = current.getMessage();
-            if (message != null && message.toUpperCase(Locale.ROOT)
-                    .contains(MODEL_VERSION_UNIQUE_CONSTRAINT))
-            {
-                modelConstraintMatched = true;
-            }
-            current = current.getCause();
-        }
-        return duplicateKeyError && modelConstraintMatched;
     }
 
     /**

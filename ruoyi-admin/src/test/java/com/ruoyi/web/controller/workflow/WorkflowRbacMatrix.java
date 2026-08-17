@@ -43,7 +43,6 @@ final class WorkflowRbacMatrix
             WfAttachmentController.class,
             WfCategoryController.class,
             WfDeployController.class,
-            WfDesignerController.class,
             WfConnectorController.class,
             WfDmnController.class,
             WfExtensionController.class,

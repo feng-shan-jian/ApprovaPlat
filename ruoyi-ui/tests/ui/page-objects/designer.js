@@ -1722,6 +1722,8 @@ export class WorkflowDesignerPage {
     const validationDialog = this.page.getByRole('dialog', { name: '流程校验' })
     await expect(validationDialog.getByText('校验通过', { exact: true })).toBeVisible()
     await validationDialog.getByRole('button', { name: '关闭此对话框' }).click()
+    // Element Plus 关闭动画期间遮罩仍会拦截工具栏点击，必须等待弹窗完全隐藏后再保存。
+    await expect(validationDialog, '流程校验弹窗关闭后必须释放页面交互').toBeHidden()
 
     const savePromise = this.page.waitForResponse(response => matchesEndpoint(response, '/workflow/model/save', 'POST'))
     await this.page.getByRole('button', { name: '保存', exact: true }).click()

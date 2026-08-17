@@ -36,7 +36,6 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfProcessDraftAuditMapper;
 import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
@@ -55,7 +54,6 @@ class WorkflowProcessDraftServiceTest
     private WorkflowStartVariableValidator variableValidator;
     private WorkflowAttachmentService attachmentService;
     private WfProcessDraftMapper draftMapper;
-    private WfProcessDraftAuditMapper auditMapper;
     private WorkflowProcessDefinitionLockMapper processDefinitionLockMapper;
     private WorkflowProcessDraftService service;
 
@@ -75,7 +73,6 @@ class WorkflowProcessDraftServiceTest
         variableValidator = mock(WorkflowStartVariableValidator.class);
         attachmentService = mock(WorkflowAttachmentService.class);
         draftMapper = mock(WfProcessDraftMapper.class);
-        auditMapper = mock(WfProcessDraftAuditMapper.class);
         processDefinitionLockMapper = mock(WorkflowProcessDefinitionLockMapper.class);
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(engineOperations.writeAsCurrentUser(any(Function.class))).thenAnswer(invocation ->
@@ -86,7 +83,7 @@ class WorkflowProcessDraftServiceTest
 
         service = new WorkflowProcessDraftService(engineOperations, identityResolver,
                 repositoryService, processQueryService, processStartService,
-                variableValidator, attachmentService, draftMapper, auditMapper,
+                variableValidator, attachmentService, draftMapper,
                 processDefinitionLockMapper);
         stubDefinition();
     }
@@ -111,7 +108,6 @@ class WorkflowProcessDraftServiceTest
             persisted.set(invocation.getArgument(0));
             return 1;
         });
-        when(auditMapper.insert(any())).thenReturn(1);
         when(draftMapper.selectOwnedById(anyString(), eq(7L)))
                 .thenAnswer(invocation -> persisted.get());
 
@@ -130,7 +126,7 @@ class WorkflowProcessDraftServiceTest
     }
 
     /**
-     * 验证定义查询后部署被并发删除时稳定返回 409，且不读取表单或写入草稿、审计和附件。
+     * 验证定义查询后部署被并发删除时稳定返回 409，且不读取表单或写入草稿和附件。
      *
      * @return void，无法取得共享部署锁时仍产生任一草稿副作用则测试失败
      */
@@ -151,7 +147,7 @@ class WorkflowProcessDraftServiceTest
 
         verify(processDefinitionLockMapper).selectDeploymentIdForUpdate(DEPLOYMENT_ID);
         verifyNoInteractions(processQueryService, variableValidator, draftMapper,
-                auditMapper, attachmentService);
+                attachmentService);
     }
 
     /**
@@ -177,7 +173,6 @@ class WorkflowProcessDraftServiceTest
         when(draftMapper.markSubmitted(eq(DRAFT_ID), eq(7L), eq(1L),
                 eq("instance-42"), anyString(), anyString(), eq("expense-submit-42")))
                 .thenReturn(1);
-        when(auditMapper.insert(any())).thenReturn(1);
 
         var result = service.submit(DRAFT_ID, submitRequest());
 
@@ -197,7 +192,7 @@ class WorkflowProcessDraftServiceTest
     }
 
     /**
-     * 验证部署锁前后的草稿定义关系发生漂移时拒绝提交，且不产生实例、状态或审计副作用。
+     * 验证部署锁前后的草稿定义关系发生漂移时拒绝提交，且不产生实例或状态副作用。
      *
      * @return void，损坏的定义部署关系仍进入正式实例创建时测试失败
      */
@@ -226,7 +221,7 @@ class WorkflowProcessDraftServiceTest
         lockOrder.verify(processDefinitionLockMapper)
                 .selectDeploymentIdForUpdate(DEPLOYMENT_ID);
         lockOrder.verify(draftMapper).selectOwnedByIdForUpdate(DRAFT_ID, 7L);
-        verifyNoInteractions(processStartService, auditMapper, attachmentService);
+        verifyNoInteractions(processStartService, attachmentService);
         verify(draftMapper, never()).markSubmitted(eq(DRAFT_ID), eq(7L), eq(1L),
                 anyString(), anyString(), anyString(), anyString());
     }
@@ -252,7 +247,7 @@ class WorkflowProcessDraftServiceTest
         verify(draftMapper).selectOwnedById(DRAFT_ID, 7L);
         verify(draftMapper, never()).selectOwnedByIdForUpdate(anyString(), eq(7L));
         verifyNoInteractions(processDefinitionLockMapper, processStartService,
-                variableValidator, auditMapper, attachmentService);
+                variableValidator, attachmentService);
     }
 
     /**

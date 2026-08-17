@@ -2,8 +2,9 @@
 
 ## 适用范围
 
-当前仓库定义 ApprovaPlat 的正式数据库版本。
-## 初始化顺序
+当前仓库定义开发期最终数据库结构，只支持从空库直接安装 27 张 `wf_*` 表。仓库不交付旧结构升级脚本、回填、双写或影子表；开发库结构变化时直接删除并按本基线重建。
+
+## 空库初始化顺序
 
 先执行若依和 Quartz 基线：
 
@@ -22,21 +23,24 @@
 
 所有 MySQL 客户端执行必须显式使用 `--default-character-set=utf8mb4`。Flowable 官方基础脚本包含破坏性初始化语句，只能在已经验证为空的目标 schema 中执行。
 
-## 表与菜单基线
+## 开发库重建
+
+开发库数据不属于保留资产。结构变化时直接删除目标 schema，按上述九个初始化文件重建，然后执行三组只读验收和 `mysqlcheck`。不得创建开发库 dump、旧 SQL 副本、回填脚本或兼容迁移。
+
+## 表基线
 
 | 模块 | 表数 |
 | --- | ---: |
 | 若依 | 20 |
 | Quartz | 11 |
 | Flowable Common/Process/History/DMN | 36 |
-| ApprovaPlat `wf_*` | 34 |
-| 合计 | 101 |
+| 工作流 `wf_*` | 27 |
+| 合计 | 94 |
 
-34 张业务表：
+27 张业务表：
 
 - `wf_category`
 - `wf_form`
-- `wf_participant_resolution_audit`
 - `wf_controlled_loop_execution`
 - `wf_bpmn_extension`
 - `wf_bpmn_extension_version`
@@ -45,7 +49,6 @@
 - `wf_task_sla_execution`
 - `wf_task_sla_audit`
 - `wf_connector_endpoint`
-- `wf_connector_invocation`
 - `wf_sql_datasource`
 - `wf_integration_credential`
 - `wf_runtime_event_request`
@@ -54,10 +57,7 @@
 - `wf_collaboration_outbox`
 - `wf_collaboration_message_audit`
 - `wf_copy`
-- `wf_model_save_idempotency`
-- `wf_designer_preference`
 - `wf_process_draft`
-- `wf_process_draft_audit`
 - `wf_attachment_quota_guard`
 - `wf_attachment`
 - `wf_bpmn_event_code`
@@ -66,21 +66,28 @@
 - `wf_notification_preference`
 - `wf_notification_outbox`
 - `wf_notification_inbox`
+
+本版本删除：
+
+- `wf_model_save_idempotency`
+- `wf_designer_preference`
+- `wf_participant_resolution_audit`
+- `wf_process_draft_audit`
+- `wf_connector_invocation`
 - `wf_notification_delivery_audit`
 - `wf_notification_urge_audit`
 
-表单、条件、受控循环、参与者、扩展、DMN、调用活动和 SLA 共 8 类不可变部署快照，不再创建自定义快照表。每个可执行流程部署拥有一个 Flowable 业务制品子部署，固定保存 `manifest-v1.json` 以及 8 个分类 JSON 资源；子部署通过 `parentDeploymentId` 关联父部署，并与父部署共享发布事务和生命周期。
+## 关键结构约束
 
-普通审批、SLA 和 BPMN 事件通知统一写入 `wf_notification_outbox`、`wf_notification_inbox` 与 `wf_notification_delivery_audit`。`source_type/source_id` 关联各自业务事实，不再维护 SLA 或 BPMN 事件专用通知表。
-
-菜单基线为 3 个目录、21 个页面、75 个按钮，共 99 条记录，并维护五个职责分离角色。菜单脚本不会自动给用户分配角色。
-
-## 结构约束
-
-- `ACT_RE_MODEL(KEY_, VERSION_, TENANT_ID_)` 必须具有唯一约束，防止模型版本并发冲突。
-- 业务自然键、幂等请求、连接器调用和扩展版本必须由数据库唯一键提供最终一致性保护。
-- JSON 字段、状态字段、所有者、版本号和生命周期字段必须具有必要的 CHECK、索引或外键约束。
-- `wf_*` 与 `ACT_*` 的业务写入必须使用同一 Spring 事务；数据库账号不能用应用自动建表弥补缺失结构。
+- `ACT_RE_MODEL(KEY_, VERSION_, TENANT_ID_)` 保留唯一约束，模型并发由内容摘要、Flowable revision 和自然版本唯一键保护。
+- `wf_integration_credential` 只保存固定限额、Token 摘要、scope、revision、轮换、吊销和最近使用时间，不保存分钟窗口计数。
+- `wf_attachment_quota_guard.owner_user_id` 只允许正数用户 ID；同用户配额计算使用行锁，不存在用户 0 全局锁行。
+- `wf_attachment.cleanup_claim_token/cleanup_lease_until` 必须同时为空或同时有效，领取中的附件必须尚未物理删除且处于 `EXPIRED/DELETED`。
+- `wf_notification_inbox` 使用 `notification_key + recipient_user_id` 唯一约束，并保存 `source_type/source_id`；`outbox_id` 仅为创建时软关联，不再建立 outbox 外键。
+- `wf_task_sla_audit.sla_execution_id` 使用 `ON DELETE CASCADE`，SLA execution 满足保留条件后由数据库同步删除审计，禁止孤立增长。
+- 生命周期候选索引统一包含终态、终态时间和稳定主键；协作审计按 `message_id + direction` 随父记录同事务删除。
+- 业务自然键、扩展版本、入站请求、outbox 和消息顺序继续由 MySQL 唯一键兜底；只读验收同时固定核对 SQL Connector v1 Schema 与运行时代码摘要。
+- `wf_*` 与 `ACT_*` 的业务写入使用同一 Spring 事务；应用账号不得依赖自动建表修复缺失结构。
 
 ## 只读验收
 
@@ -90,7 +97,6 @@
 2. `sql/flowable/verify/8.0.0__verify_workflow_business.sql`
 3. `sql/flowable/verify/8.0.0__verify_workflow_menu.sql`
 
-三组脚本共定义 57 项只读检查，所有结果都必须为 `PASS`。表数检查固定核对总表数 101、分项表数 `20/11/36/34`；部署制品检查必须证明十张退役表不存在、每个制品子部署只关联一个父部署、九个固定资源完整且 JSON 有效，并且不产生可执行流程定义。通知检查必须证明审批、SLA 和 BPMN 事件共享统一通知模型且来源关联有效；还必须核对菜单 99 条以及应用账号只拥有目标 schema 的最小 DML 权限。
+所有结果都必须为 `PASS`。验收固定核对总表数 94、分项表数 `20/11/36/27`、17 张累计退役表缺失、27 张保留表关键列与约束、inbox 稳定关联、附件清理租约、凭据无 MySQL 运行时窗口、Flowable 部署制品、菜单和职责角色。
 
-静态契约测试和发布门禁自测不能代替真实 MySQL 空库安装。正式发布前必须保存真实执行日志、表清单、约束结果、`mysqlcheck`、备份恢复和三组验收输出。
-
+静态契约测试和构建成功不能代替真实 MySQL 空库安装。正式发布前必须保存空库安装、表数、三组验收、`mysqlcheck` 和真实业务烟测的脱敏结果摘要。

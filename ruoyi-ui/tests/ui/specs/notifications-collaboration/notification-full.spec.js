@@ -165,7 +165,7 @@ async function createFixedApproverProcess(page, assets) {
 }
 
 /**
- * 等待通知 outbox、收件箱和投递审计形成一致的已处理事实。
+ * 等待通知 outbox 累计投递状态与收件箱形成一致的已处理事实。
  * @param {string} processInstanceId 流程实例主键。
  * @param {string} eventType 通知事件类型。
  * @returns {Promise<string[][]>} 唯一 outbox 与收件箱联合投影。
@@ -181,7 +181,7 @@ async function waitForProcessedInbox(processInstanceId, eventType) {
     intervals: [250, 500, 1000]
   }).toBe('1')
   return queryReadOnly(
-    `SELECT o.outbox_id,o.recipient_user_id,o.status,i.notification_id,i.read_status,COUNT(a.audit_id) FROM wf_notification_outbox o JOIN wf_notification_inbox i ON i.outbox_id=o.outbox_id LEFT JOIN wf_notification_delivery_audit a ON a.outbox_id=o.outbox_id WHERE o.process_instance_id='${instanceId}' AND o.event_type='${event}' AND o.channel='INBOX' GROUP BY o.outbox_id,o.recipient_user_id,o.status,i.notification_id,i.read_status`
+    `SELECT o.outbox_id,o.recipient_user_id,o.status,i.notification_id,i.read_status,o.attempt_count,o.total_attempt_count,COALESCE(o.last_error_code,''),COALESCE(o.last_error_summary,''),o.processed_time IS NOT NULL,o.source_id,o.content FROM wf_notification_outbox o JOIN wf_notification_inbox i ON i.outbox_id=o.outbox_id WHERE o.process_instance_id='${instanceId}' AND o.event_type='${event}' AND o.channel='INBOX'`
   )
 }
 
@@ -254,7 +254,9 @@ test('@full [UI-NOTIFY-003] 任务到达策略通过真实流程形成站内通�
     expect(deliveryRows, '任务到达通知必须只有一条站内投递').toHaveLength(1)
     expect(deliveryRows[0][2], 'outbox 必须提交为已处理').toBe('PROCESSED')
     expect(deliveryRows[0][4], '消息中心打开前必须为未读').toBe('UNREAD')
-    expect(Number(deliveryRows[0][5]), '投递必须至少形成登记与成功审计').toBeGreaterThanOrEqual(2)
+    expect(deliveryRows[0].slice(5, 10), '站内投递必须累计一次成功尝试并清空错误').toEqual([
+      '1', '1', '', '', '1'
+    ])
 
     approver = await openRoleSession(browser, 'workflow_approver', testInfo)
     await openNotificationFromHeader(approver.page, assets.notificationTitle)
@@ -341,16 +343,25 @@ test('@full [UI-NOTIFY-004] 发起人真实催办形成通知且重复催办被�
     )
     await urgeDialog.getByRole('button', { name: '发送催办', exact: true }).click()
     const urgePayload = await expectAjaxSuccess(await urgeResponsePromise, '/workflow/notification/urge')
+    const urgeEventKey = String(urgePayload.data?.urgeEventKey || '')
+    expect(urgeEventKey, '催办必须返回稳定业务事件键').toMatch(/^URGE:[0-9a-f-]{36}$/u)
     expect(Number(urgePayload.data?.recipientCount), '催办必须解析唯一当前办理人').toBe(1)
+    expect(Number(urgePayload.data?.outboxCount), '催办必须返回真实新增 outbox 数量').toBe(1)
     await expect(starter.page.getByText('催办已发送给 1 名当前办理人', { exact: true })).toBeVisible()
 
     const deliveryRows = await waitForProcessedInbox(assets.processInstanceId, 'MANUAL_URGE')
     expect(deliveryRows, '人工催办必须只有一条站内投递').toHaveLength(1)
+    expect(deliveryRows[0][10].startsWith(`${urgeEventKey}:`), '催办来源键必须以事件键开头').toBe(true)
+    expect(deliveryRows[0][11], '催办 outbox 必须保存用户填写的业务原因摘要').toContain(assets.urgeReason)
     const escapedInstanceId = sqlLiteral(assets.processInstanceId)
+    const escapedEventKey = sqlLiteral(urgeEventKey)
+    const escapedReason = sqlLiteral(assets.urgeReason)
     const firstSnapshot = queryReadOnly(
-      `SELECT (SELECT COUNT(*) FROM wf_notification_urge_audit WHERE process_instance_id='${escapedInstanceId}'),(SELECT COUNT(*) FROM wf_notification_outbox WHERE process_instance_id='${escapedInstanceId}' AND event_type='MANUAL_URGE'),(SELECT COUNT(*) FROM wf_notification_inbox i JOIN wf_notification_outbox o ON o.outbox_id=i.outbox_id WHERE o.process_instance_id='${escapedInstanceId}' AND o.event_type='MANUAL_URGE')`
+      `SELECT COUNT(*),SUM(source_id LIKE '${escapedEventKey}:%'),SUM(content LIKE '%${escapedReason}%'),(SELECT COUNT(*) FROM wf_notification_inbox i JOIN wf_notification_outbox oi ON oi.outbox_id=i.outbox_id WHERE oi.process_instance_id='${escapedInstanceId}' AND oi.event_type='MANUAL_URGE' AND oi.source_id LIKE '${escapedEventKey}:%') FROM wf_notification_outbox WHERE process_instance_id='${escapedInstanceId}' AND event_type='MANUAL_URGE'`
     )
-    expect(firstSnapshot, '首次催办必须形成审计、outbox 和收件箱').toEqual([['1', '1', '1']])
+    expect(firstSnapshot, '首次催办必须形成带稳定来源和原因摘要的 outbox/inbox').toEqual([
+      ['1', '1', '1', '1']
+    ])
 
     approver = await openRoleSession(browser, 'workflow_approver', testInfo)
     await openNotificationFromHeader(approver.page, assets.notificationTitle)
@@ -366,12 +377,14 @@ test('@full [UI-NOTIFY-004] 发起人真实催办形成通知且重复催办被�
     expect(rejectedResponse.status(), '频率拒绝仍应返回统一 AjaxResult').toBe(200)
     const rejectedPayload = await rejectedResponse.json()
     expect(rejectedPayload.code, '重复催办必须返回限流业务码').toBe(429)
-    expect(rejectedPayload.msg, '重复催办必须给出明确频率语义').toContain('催办过于频繁')
-    await expect(starter.page.getByText(/催办过于频繁/u)).toBeVisible()
+    expect(rejectedPayload.subCode, '重复催办必须返回稳定 Redis 冷却子码')
+      .toBe('WORKFLOW_URGE_COOLDOWN_ACTIVE')
+    expect(rejectedPayload.msg, '重复催办必须给出明确冷却语义').toContain('催办冷却中')
+    await expect(starter.page.getByText(/催办冷却中/u)).toBeVisible()
     const rejectedSnapshot = queryReadOnly(
-      `SELECT (SELECT COUNT(*) FROM wf_notification_urge_audit WHERE process_instance_id='${escapedInstanceId}'),(SELECT COUNT(*) FROM wf_notification_outbox WHERE process_instance_id='${escapedInstanceId}' AND event_type='MANUAL_URGE'),(SELECT COUNT(*) FROM wf_notification_inbox i JOIN wf_notification_outbox o ON o.outbox_id=i.outbox_id WHERE o.process_instance_id='${escapedInstanceId}' AND o.event_type='MANUAL_URGE')`
+      `SELECT COUNT(*),SUM(source_id LIKE '${escapedEventKey}:%'),SUM(content LIKE '%${escapedReason}%'),(SELECT COUNT(*) FROM wf_notification_inbox i JOIN wf_notification_outbox oi ON oi.outbox_id=i.outbox_id WHERE oi.process_instance_id='${escapedInstanceId}' AND oi.event_type='MANUAL_URGE' AND oi.source_id LIKE '${escapedEventKey}:%') FROM wf_notification_outbox WHERE process_instance_id='${escapedInstanceId}' AND event_type='MANUAL_URGE'`
     )
-    expect(rejectedSnapshot, '频率拒绝后审计、outbox 和收件箱必须零新增').toEqual(firstSnapshot)
+    expect(rejectedSnapshot, '频率拒绝后 outbox 和收件箱必须零新增').toEqual(firstSnapshot)
 
     await approver.page.getByRole('button', { name: '通过', exact: true }).click()
     const approvalDialog = approver.page.getByRole('dialog', { name: '通过任务' })

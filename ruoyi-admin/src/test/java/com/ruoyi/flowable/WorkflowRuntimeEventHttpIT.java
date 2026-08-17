@@ -192,9 +192,9 @@ class WorkflowRuntimeEventHttpIT
         String expires = expiresExpression == null ? "null" : expiresExpression;
         jdbc.update("insert into wf_integration_credential "
                         + "(credential_name, token_prefix, token_hash, scopes, allowed_variables, "
-                        + "rate_limit_per_minute, rate_window_start, rate_window_count, expires_at, "
+                        + "rate_limit_per_minute, expires_at, "
                         + "revoked_at, revision_no, create_by, create_time) values (?, ?, ?, ?, "
-                        + "'approved', 100, current_timestamp(3), 0, " + expires + ", " + revoked
+                        + "'approved', 100, " + expires + ", " + revoked
                         + ", 1, ?, date_sub(current_timestamp(3), interval 2 minute))",
                 PREFIX + runId + "-" + credentialIds.size(), token.substring(0, 12),
                 sha256(token), scopes, actorUserId);

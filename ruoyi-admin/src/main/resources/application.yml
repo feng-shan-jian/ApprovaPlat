@@ -167,12 +167,28 @@ flowable:
   process:
     enable-safe-xml: true
   attachment:
-    # 单文件、用户 TEMP、全局未删除容量和磁盘低水位均在数据库 guard 行锁内校验。
+    # 单文件和同用户 TEMP 配额在用户 guard 行锁内校验，磁盘低水位通过真实存储检查。
     max-size: 52428800
     max-temporary-count: 100
     max-temporary-bytes: 536870912
-    max-total-bytes: 53687091200
     min-free-bytes: 1073741824
+    # 对象存储删除位于数据库事务外，租约到期后允许其他节点重新领取。
+    cleanup-lease-duration: PT5M
+  data-retention:
+    # 各领域通过短事务和 SKIP LOCKED 分摊批次，不使用全局锁或持久化游标。
+    batch-size: 100
+    notification-outbox-retention: P90D
+    runtime-event-retention: P90D
+    process-draft-retention: P30D
+    collaboration-retention: P90D
+    attachment-metadata-retention: P90D
+    notification-inbox-retention: P180D
+    bpmn-event-audit-retention: P180D
+    task-sla-retention: P180D
+    copy-retention: P180D
+    controlled-loop-retention: P180D
+    initial-delay: PT5M
+    fixed-delay: PT1H
   notification:
     worker-enabled: ${APPROVAPLAT_NOTIFICATION_WORKER_ENABLED:true}
     batch-size: ${APPROVAPLAT_NOTIFICATION_BATCH_SIZE:50}

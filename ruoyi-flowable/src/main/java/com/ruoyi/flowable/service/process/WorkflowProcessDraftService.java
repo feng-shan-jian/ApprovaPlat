@@ -18,11 +18,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
-import tools.jackson.databind.node.ObjectNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfProcessDraft;
-import com.ruoyi.flowable.domain.WfProcessDraftAudit;
 import com.ruoyi.flowable.domain.WorkflowProcessDraftStatus;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftCreateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftQueryDto;
@@ -38,13 +36,12 @@ import com.ruoyi.flowable.domain.vo.WorkflowStartMultiInstanceAssignmentView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfProcessDraftAuditMapper;
 import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 
 /**
- * 企业流程申请草稿的本人授权、CAS 保存、附件对账、审计和正式提交服务。
+ * 企业流程申请草稿的本人授权、CAS 保存、附件对账和正式提交服务。
  */
 @Service
 public class WorkflowProcessDraftService
@@ -68,7 +65,6 @@ public class WorkflowProcessDraftService
     private final WorkflowStartVariableValidator variableValidator;
     private final WorkflowAttachmentService attachmentService;
     private final WfProcessDraftMapper draftMapper;
-    private final WfProcessDraftAuditMapper auditMapper;
     /** 与部署删除共用的 Flowable 部署行锁，阻止创建孤儿活动草稿。 */
     private final WorkflowProcessDefinitionLockMapper processDefinitionLockMapper;
     private final ObjectMapper objectMapper = JsonMapper.shared();
@@ -84,7 +80,6 @@ public class WorkflowProcessDraftService
      * @param variableValidator WorkflowStartVariableValidator，草稿和正式字段校验器
      * @param attachmentService WorkflowAttachmentService，草稿附件对账和迁移服务
      * @param draftMapper WfProcessDraftMapper，草稿正式持久化 Mapper
-     * @param auditMapper WfProcessDraftAuditMapper，草稿业务审计 Mapper
      * @param processDefinitionLockMapper WorkflowProcessDefinitionLockMapper，Flowable 部署行锁 Mapper
      * @return 无返回值，构造后由 Spring 管理
      */
@@ -94,7 +89,6 @@ public class WorkflowProcessDraftService
             WorkflowProcessStartService processStartService,
             WorkflowStartVariableValidator variableValidator,
             WorkflowAttachmentService attachmentService, WfProcessDraftMapper draftMapper,
-            WfProcessDraftAuditMapper auditMapper,
             WorkflowProcessDefinitionLockMapper processDefinitionLockMapper)
     {
         this.engineOperations = engineOperations;
@@ -105,7 +99,6 @@ public class WorkflowProcessDraftService
         this.variableValidator = variableValidator;
         this.attachmentService = attachmentService;
         this.draftMapper = draftMapper;
-        this.auditMapper = auditMapper;
         this.processDefinitionLockMapper = processDefinitionLockMapper;
     }
 
@@ -209,8 +202,6 @@ public class WorkflowProcessDraftService
                     businessKey, WorkflowProcessDraftStatus.ACTIVE, 1L, null, null, null,
                     null, null);
             requireOne(draftMapper.insert(draft), "流程申请草稿写入失败");
-            insertAudit(draft, "CREATED", null, WorkflowProcessDraftStatus.ACTIVE,
-                    null, 1L, null);
             // 先落草稿主行满足附件外键，再绑定首次保存前已经上传的 TEMP 附件；失败时同事务回滚。
             attachmentService.reconcileDraftAttachments(actor.userId(), draftId,
                     validated.attachmentIdsByField());
@@ -247,9 +238,6 @@ public class WorkflowProcessDraftService
                     request.expectedVersion(), writeJson(validated.variables()),
                     writeJson(memberSelections),
                     optionalText(request.businessKey(), 255)));
-            insertAudit(current, "SAVED", WorkflowProcessDraftStatus.ACTIVE,
-                    WorkflowProcessDraftStatus.ACTIVE, current.revisionNo(),
-                    current.revisionNo() + 1, null);
             return toView(requireOwned(draftMapper.selectOwnedById(normalizedId, ownerUserId)));
         });
     }
@@ -276,15 +264,12 @@ public class WorkflowProcessDraftService
             requireActiveRevision(current, expectedVersion);
             attachmentService.deleteDraftAttachments(actor.userId(), normalizedId);
             requireCas(draftMapper.markDeleted(normalizedId, ownerUserId, expectedVersion));
-            insertAudit(current, "DELETED", WorkflowProcessDraftStatus.ACTIVE,
-                    WorkflowProcessDraftStatus.DELETED, current.revisionNo(),
-                    current.revisionNo() + 1, null);
             return null;
         });
     }
 
     /**
-     * 以草稿行锁实现重复提交幂等，并在同一事务创建实例、迁移附件、审计和置为已提交。
+     * 以草稿行锁实现重复提交幂等，并在同一事务创建实例、迁移附件和置为已提交。
      *
      * @param draftId String，草稿 UUID
      * @param request WorkflowProcessDraftSubmitRequest，期望版本和完整正式字段值
@@ -336,9 +321,6 @@ public class WorkflowProcessDraftService
                     request.expectedVersion(), instance.id(), writeJson(validated.variables()),
                     writeJson(memberSelections),
                     optionalText(request.businessKey(), 255)));
-            insertAudit(current, "SUBMITTED", WorkflowProcessDraftStatus.ACTIVE,
-                    WorkflowProcessDraftStatus.SUBMITTED, current.revisionNo(),
-                    current.revisionNo() + 1, instance.id());
             return new WorkflowProcessDraftSubmitView(normalizedId, instance.id(),
                     instance.processDefinitionId(), current.revisionNo() + 1);
         });
@@ -452,33 +434,6 @@ public class WorkflowProcessDraftService
             throw conflict("草稿绑定的部署表单快照已失效", "DRAFT_SNAPSHOT_MISMATCH");
         }
         return form;
-    }
-
-    /**
-     * 写入不含表单明文的草稿状态迁移审计，并要求正式审计表单行落库。
-     *
-     * @param draft WfProcessDraft，发生状态或版本变化的草稿事实
-     * @param action String，CREATED、SAVED、DELETED 或 SUBMITTED 业务动作
-     * @param fromStatus WorkflowProcessDraftStatus，可空；迁移前草稿状态
-     * @param toStatus WorkflowProcessDraftStatus，迁移后的草稿状态
-     * @param fromRevision Long，可空；迁移前 CAS 版本
-     * @param toRevision long，迁移后 CAS 版本
-     * @param processInstanceId String，可空；提交成功后关联的真实流程实例主键
-     * @return void，审计未精确写入一行时抛出数据异常并回滚外层事务
-     */
-    private void insertAudit(WfProcessDraft draft, String action,
-            WorkflowProcessDraftStatus fromStatus, WorkflowProcessDraftStatus toStatus,
-            Long fromRevision, long toRevision, String processInstanceId)
-    {
-        ObjectNode detail = objectMapper.createObjectNode();
-        detail.put("processDefinitionId", draft.processDefinitionId());
-        detail.put("deploymentId", draft.deploymentId());
-        detail.put("formSnapshotSha256", draft.formSnapshotSha256());
-        WfProcessDraftAudit audit = new WfProcessDraftAudit(draft.draftId(),
-                draft.ownerUserId(), action, fromStatus == null ? null : fromStatus.name(),
-                toStatus.name(), fromRevision, toRevision, processInstanceId,
-                writeJson(detail));
-        requireOne(auditMapper.insert(audit), "流程申请草稿审计写入失败");
     }
 
     /**

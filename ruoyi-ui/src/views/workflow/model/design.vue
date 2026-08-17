@@ -39,6 +39,7 @@
       @identity-search="searchIdentityDirectory"
       @identity-resolve="resolveSelectedIdentities"
       @preference-save="savePreference"
+      @preference-reset="restoreDefaultPreference"
       @save="saveDesign"
       @error="showDesignerError"
     />
@@ -49,12 +50,19 @@
 import { listForms } from '@/api/workflow/form'
 import { listApprovalUserOptions, listClaimableIdentityOptions, listIdentityOptions, resolveIdentityOptions } from '@/api/workflow/identity'
 import { getModel, getModelBpmnXml, saveModel } from '@/api/workflow/model'
-import { getDesignerPreference, saveDesignerPreference } from '@/api/workflow/designer'
 import ProcessDesigner from '@/components/workflow/ProcessDesigner.vue'
+import useUserStore from '@/store/modules/user'
+import {
+  DEFAULT_DESIGNER_PREFERENCE,
+  loadDesignerPreference,
+  resetDesignerPreference,
+  saveDesignerPreference
+} from '@/utils/workflowDesignerPreference'
 
 const route = useRoute()
 const router = useRouter()
 const { proxy } = getCurrentInstance()
+const userStore = useUserStore()
 const loading = ref(false)
 const saving = ref(false)
 const preferenceSaving = ref(false)
@@ -68,49 +76,18 @@ const identityOptions = reactive({
 })
 const identityPending = ref(0)
 const identityLoading = computed(() => identityPending.value > 0)
-// designerPreference 只接收服务端默认值或数据库回读值，不使用浏览器本地状态兜底。
-const designerPreference = reactive({
-  theme: 'SYSTEM',
-  gridEnabled: true,
-  minimapEnabled: true,
-  lintEnabled: true,
-  tokenSimulationEnabled: false,
-  propertiesCollapsed: false
-})
+// designerPreference 是当前登录用户在当前浏览器中的非业务界面偏好。
+const designerPreference = reactive({ ...DEFAULT_DESIGNER_PREFERENCE })
 const identityRequestVersion = {
   assignees: 0, candidateUsers: 0, candidateGroups: 0, candidateRoles: 0,
   activeUsers: 0, activeRoles: 0, activeDepts: 0, autoCopyUsers: 0, autoCopyGroups: 0
 }
-// pendingSaveRequest 保存尚未取得完整成功响应的用户保存意图，网络重试必须复用同一幂等键。
-let pendingSaveRequest
-
 /**
  * 获取当前路由中的 Flowable 模型主键。
  * @returns {string} 去除首尾空白的模型主键。
  */
 function currentModelId() {
   return String(route.params.modelId || '').trim()
-}
-
-/**
- * 为当前保存意图创建或复用稳定 UUID，只有来源模型或 XML 改变时才形成新意图。
- * @param {string} modelId 当前设计页打开的 Flowable 模型主键。
- * @param {string} xml 本次准备持久化的完整 BPMN XML。
- * @returns {string} 可在失败重试中复用的 UUID 保存请求主键。
- */
-function resolveSaveRequestId(modelId, xml) {
-  if (pendingSaveRequest?.modelId === modelId && pendingSaveRequest?.xml === xml) {
-    return pendingSaveRequest.requestId
-  }
-  if (typeof globalThis.crypto?.randomUUID !== 'function') {
-    throw new Error('当前浏览器不支持安全保存请求标识')
-  }
-  pendingSaveRequest = Object.freeze({
-    modelId,
-    xml,
-    requestId: globalThis.crypto.randomUUID()
-  })
-  return pendingSaveRequest.requestId
 }
 
 /**
@@ -297,10 +274,9 @@ async function loadDesigner() {
   loading.value = true
   ready.value = false
   try {
-    const [modelResponse, xmlResponse, preferenceResponse] = await Promise.all([
+    const [modelResponse, xmlResponse] = await Promise.all([
       getModel(modelId),
       getModelBpmnXml(modelId),
-      getDesignerPreference(),
       loadAllForms(),
       searchIdentityDirectory({ target: 'assignees', type: 'user', capability: 'approval', keyword: '' }),
       searchIdentityDirectory({ target: 'candidateUsers', type: 'user', capability: 'claim', keyword: '' }),
@@ -314,7 +290,7 @@ async function loadDesigner() {
     ])
     Object.keys(model).forEach(key => delete model[key])
     Object.assign(model, modelResponse.data || {})
-    Object.assign(designerPreference, preferenceResponse.data || {})
+    Object.assign(designerPreference, loadDesignerPreference(userStore.id))
     bpmnXml.value = xmlResponse.data || ''
     ready.value = true
   } finally {
@@ -323,19 +299,27 @@ async function loadDesigner() {
 }
 
 /**
- * 原子保存当前用户的完整设计器偏好，并只采用数据库回读结果。
+ * 保存当前用户的完整设计器偏好，并立即采用白名单规范化后的本地结果。
  * @param {object} preference 主题、网格、小地图、Lint、Token 模拟和属性面板状态。
- * @returns {Promise<void>} 服务端成功后回写真实偏好，失败时保持原状态。
+ * @returns {void} localStorage 写入成功后回写当前偏好。
  */
-async function savePreference(preference) {
+function savePreference(preference) {
   preferenceSaving.value = true
   try {
-    const response = await saveDesignerPreference(preference)
-    Object.assign(designerPreference, response.data || {})
+    Object.assign(designerPreference, saveDesignerPreference(userStore.id, preference))
     proxy.$modal.msgSuccess('设计器设置已保存')
   } finally {
     preferenceSaving.value = false
   }
+}
+
+/**
+ * 恢复当前用户默认设置，只删除当前用户对应的偏好键。
+ * @returns {void} 删除成功后立即应用默认偏好。
+ */
+function restoreDefaultPreference() {
+  Object.assign(designerPreference, resetDesignerPreference(userStore.id))
+  proxy.$modal.msgSuccess('已恢复默认设置')
 }
 
 /**
@@ -347,22 +331,28 @@ async function saveDesign(xml) {
   saving.value = true
   try {
     const sourceModelId = currentModelId()
-    const requestId = resolveSaveRequestId(sourceModelId, xml)
+    const expectedBpmnSha256 = String(model.bpmnSha256 || '').trim()
     const response = await saveModel({
-      requestId,
       modelId: sourceModelId,
       bpmnXml: xml,
+      expectedBpmnSha256,
       // 前端不再暴露手动版本开关；后端按已部署或历史版本状态自动另存并返回实际模型主键。
       newVersion: false
     })
-    // savedModelId 是后端本次真实落库版本；缺失时不能回退旧路由并伪装保存成功。
+    // 三个字段共同证明后端真实保存版本，任一缺失都不能沿用旧状态伪装成功。
     const savedModelId = String(response.data?.modelId || '').trim()
-    if (!savedModelId) {
+    const savedVersion = Number(response.data?.version)
+    const savedBpmnSha256 = String(response.data?.bpmnSha256 || '').trim()
+    if (!savedModelId || !Number.isInteger(savedVersion) || savedVersion <= 0 ||
+      !/^[0-9a-f]{64}$/.test(savedBpmnSha256)) {
       proxy.$modal.msgError('流程模型保存结果不完整')
       return
     }
-    // 只有后端返回真实落库主键后才结束该保存意图；响应丢失时下次点击会复用 requestId。
-    pendingSaveRequest = undefined
+    Object.assign(model, {
+      modelId: savedModelId,
+      version: savedVersion,
+      bpmnSha256: savedBpmnSha256
+    })
     proxy.$modal.msgSuccess('流程设计保存成功')
     if (savedModelId !== currentModelId()) {
       await router.replace({ name: 'WorkflowModelDesign', params: { modelId: savedModelId } })
@@ -372,6 +362,12 @@ async function saveDesign(xml) {
     saving.value = false
   }
 }
+
+watch(() => userStore.id, userId => {
+  if (String(userId ?? '').trim()) {
+    Object.assign(designerPreference, loadDesignerPreference(userId))
+  }
+})
 
 /**
  * 显示 BPMN 导入、导出或本地结构校验错误。

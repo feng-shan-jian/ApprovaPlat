@@ -26,6 +26,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -82,12 +83,10 @@ class WorkflowAttachmentServiceTest
                 identityResolver, processAccessService);
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new WorkflowCurrentIdentity("7", Set.of()));
-        when(attachmentMapper.selectGlobalQuotaGuardForUpdate()).thenReturn(0L);
         when(attachmentMapper.ensureOwnerQuotaGuard(7L)).thenReturn(1);
         when(attachmentMapper.selectOwnerQuotaGuardForUpdate(7L)).thenReturn(7L);
         when(attachmentMapper.selectTemporaryQuotaUsage(7L))
                 .thenReturn(new WorkflowAttachmentQuotaUsage(0L, 0L));
-        when(attachmentMapper.selectUndeletedTotalBytes()).thenReturn(0L);
         doReturn(Long.MAX_VALUE).when(storage).usableSpace();
     }
 
@@ -152,30 +151,11 @@ class WorkflowAttachmentServiceTest
     }
 
     /**
-     * 验证跨用户共享的全局容量在私有文件落盘前拒绝超限请求。
-     * @return void，全局占用超限后仍访问磁盘或写入元数据时测试失败
+     * 验证上传事务只锁定当前用户 guard，并在同一用户占用快照后执行真实存储预留。
+     * @return void，同用户配额未串行或重新引入跨用户全局锁时测试失败
      */
     @Test
-    void rejectsGlobalQuotaBeforeWritingPrivateFile()
-    {
-        properties.setMaxTotalBytes(10L);
-        when(attachmentMapper.selectUndeletedTotalBytes()).thenReturn(9L);
-
-        assertServiceError(() -> service.uploadTemporary("files", new MockMultipartFile(
-                "file", "global.txt", "text/plain", new byte[] { 1, 2 })),
-                HttpStatus.CONFLICT, "工作流附件全局存储容量已达到上限");
-
-        verify(storage, never()).usableSpace();
-        verify(storage, never()).store(any());
-        verify(attachmentMapper, never()).insert(any());
-    }
-
-    /**
-     * 验证上传事务始终先取得全局 guard，再取得用户 guard 并读取两级占用。
-     * @return void，锁顺序漂移导致跨用户容量超卖或死锁风险时测试失败
-     */
-    @Test
-    void locksGlobalGuardBeforeOwnerGuardAndStorageReservation()
+    void locksOwnerGuardBeforeStorageReservation()
     {
         when(attachmentMapper.insert(any())).thenReturn(1);
 
@@ -183,11 +163,9 @@ class WorkflowAttachmentServiceTest
                 "file", "ordered.txt", "text/plain", new byte[] { 1 }));
 
         var ordered = inOrder(attachmentMapper, storage);
-        ordered.verify(attachmentMapper).selectGlobalQuotaGuardForUpdate();
         ordered.verify(attachmentMapper).ensureOwnerQuotaGuard(7L);
         ordered.verify(attachmentMapper).selectOwnerQuotaGuardForUpdate(7L);
         ordered.verify(attachmentMapper).selectTemporaryQuotaUsage(7L);
-        ordered.verify(attachmentMapper).selectUndeletedTotalBytes();
         ordered.verify(storage).usableSpace();
         ordered.verify(storage).store(any());
         ordered.verify(storage).usableSpace();
@@ -212,20 +190,19 @@ class WorkflowAttachmentServiceTest
     }
 
     /**
-     * 验证迁移期预置的固定全局 guard 缺失时上传失败关闭，且不会在运行时竞争创建 guard。
-     * @return void，全局 guard 缺失后仍创建用户 guard、写文件或写元数据时测试失败
+     * 验证当前用户 guard 锁定结果异常时上传失败关闭，不产生文件或元数据副作用。
+     * @return void，用户 guard 异常后仍访问存储或写入元数据时测试失败
      */
     @Test
-    void rejectsUploadWhenPreseededGlobalGuardIsMissing()
+    void rejectsUploadWhenOwnerGuardCannotBeLocked()
     {
-        when(attachmentMapper.selectGlobalQuotaGuardForUpdate()).thenReturn(null);
+        when(attachmentMapper.selectOwnerQuotaGuardForUpdate(7L)).thenReturn(null);
 
         assertServiceError(() -> service.uploadTemporary("files", new MockMultipartFile(
-                "file", "missing-global-guard.txt", "text/plain", new byte[] { 1 })),
-                HttpStatus.ERROR, "工作流附件全局配额锁数据异常");
+                "file", "missing-owner-guard.txt", "text/plain", new byte[] { 1 })),
+                HttpStatus.ERROR, "工作流附件配额锁数据异常");
 
-        verify(attachmentMapper, never()).ensureOwnerQuotaGuard(anyLong());
-        verify(attachmentMapper, never()).selectOwnerQuotaGuardForUpdate(anyLong());
+        verify(attachmentMapper).ensureOwnerQuotaGuard(7L);
         verify(storage, never()).store(any());
         verify(attachmentMapper, never()).insert(any());
     }
@@ -521,70 +498,84 @@ class WorkflowAttachmentServiceTest
     }
 
     /**
-     * 验证到期临时附件先迁移为 EXPIRED，再真实删除私有文件并记录清理完成时间。
-     * @return void，状态迁移、物理删除或完成标记任一步缺失时测试失败
+     * 验证短事务会锁定候选、写入同一批次租约，并只返回数据库确认的领取行。
+     * @return void，领取数量、token 或状态校验缺失时测试失败
      */
     @Test
-    void expiresAndPhysicallyDeletesTemporaryAttachment()
+    void claimsCleanupBatchWithDatabaseLease()
+    {
+        String claimToken = "b9428888-122b-4c6f-8f0c-9c3e1dbd3210";
+        WfAttachment candidate = attachment(ATTACHMENT_ID, 7L, "files",
+                WorkflowAttachmentStatus.TEMP, LocalDateTime.now().minusMinutes(1), null);
+        WfAttachment claimed = withCleanupClaim(candidate,
+                WorkflowAttachmentStatus.EXPIRED, claimToken);
+        when(attachmentMapper.selectCleanupCandidatesForUpdate(
+                properties.getCleanupBatchSize())).thenReturn(List.of(candidate));
+        when(attachmentMapper.claimCleanupCandidates(List.of(ATTACHMENT_ID),
+                claimToken, properties.getCleanupLeaseDuration().toSeconds())).thenReturn(1);
+        when(attachmentMapper.selectClaimedByToken(claimToken))
+                .thenReturn(List.of(claimed));
+
+        assertThat(service.claimCleanupBatch(claimToken)).containsExactly(claimed);
+        verify(attachmentMapper).claimCleanupCandidates(List.of(ATTACHMENT_ID),
+                claimToken, 300L);
+    }
+
+    /**
+     * 验证对象删除和完成回写必须携带同一领取 token，并真实删除私有文件。
+     * @return void，对象未删除或旧式无 token 完成更新仍被调用时测试失败
+     */
+    @Test
+    void deletesClaimedStorageAndCompletesByToken()
     {
         StoredAttachmentFile stored = storage.store(new MockMultipartFile(
                 "file", "expired.txt", "text/plain",
                 "expired attachment".getBytes(StandardCharsets.UTF_8)));
-        LocalDateTime now = LocalDateTime.now();
-        WfAttachment candidate = new WfAttachment(
+        WfAttachment base = new WfAttachment(
                 ATTACHMENT_ID, 7L, "files", stored.originalName(), stored.storageKey(),
                 stored.contentType(), stored.fileSize(), stored.sha256(),
-                WorkflowAttachmentStatus.TEMP, now.minusSeconds(1), null, null,
-                null, null, null, 0, null, null, now.minusHours(1), null);
-        when(attachmentMapper.selectCleanupCandidates(properties.getCleanupBatchSize()))
-                .thenReturn(List.of(candidate));
-        when(attachmentMapper.markExpired(ATTACHMENT_ID)).thenReturn(1);
-        when(attachmentMapper.markStorageDeleted(ATTACHMENT_ID)).thenReturn(1);
+                WorkflowAttachmentStatus.EXPIRED, LocalDateTime.now().minusMinutes(1),
+                null, null, null, null, null, 0, null, null,
+                LocalDateTime.now().minusHours(1), null);
+        WfAttachment claimed = withCleanupClaim(base, WorkflowAttachmentStatus.EXPIRED,
+                "b9428888-122b-4c6f-8f0c-9c3e1dbd3210");
+        when(attachmentMapper.markStorageDeleted(ATTACHMENT_ID,
+                claimed.cleanupClaimToken())).thenReturn(1);
 
-        WorkflowAttachmentCleanupResult result = service.cleanupExpiredBatch();
-        assertThat(result.cleaned()).isEqualTo(1);
-        assertThat(result.failures()).isZero();
+        service.deleteClaimedStorage(claimed);
+        assertThat(service.completeClaimedCleanup(claimed)).isTrue();
 
-        verify(attachmentMapper).markExpired(ATTACHMENT_ID);
-        verify(attachmentMapper).markStorageDeleted(ATTACHMENT_ID);
-        Path storedPath = profileRoot.resolve(WorkflowAttachmentStorage.PRIVATE_DIRECTORY_NAME)
-                .resolve(stored.storageKey());
-        assertThat(storedPath).doesNotExist();
+        verify(attachmentMapper).markStorageDeleted(ATTACHMENT_ID,
+                claimed.cleanupClaimToken());
+        assertThat(profileRoot.resolve(WorkflowAttachmentStorage.PRIVATE_DIRECTORY_NAME)
+                .resolve(stored.storageKey())).doesNotExist();
     }
 
     /**
-     * 验证终态附件物理删除失败时写入首次退避和固定脱敏错误码，且不误写完成标记。
-     * @return void，失败未进入正式重试状态或错误正文被持久化时测试失败
+     * 验证清理失败按领取 token 写入首次退避和固定脱敏错误码。
+     * @return void，失败未释放租约进入重试或错误正文被持久化时测试失败
      */
     @Test
-    void persistsInitialBackoffAfterStorageFailure()
+    void persistsInitialBackoffByClaimToken()
     {
-        WorkflowAttachmentStorage retryStorage = mock(WorkflowAttachmentStorage.class);
-        WorkflowAttachmentService retryService = new WorkflowAttachmentService(
-                attachmentMapper, retryStorage, properties, identityResolver,
-                processAccessService);
-        WfAttachment candidate = attachment(ATTACHMENT_ID, 7L, "files",
-                WorkflowAttachmentStatus.EXPIRED, LocalDateTime.now().minusMinutes(1), null);
-        when(attachmentMapper.selectCleanupCandidates(properties.getCleanupBatchSize()))
-                .thenReturn(List.of(candidate));
-        when(retryStorage.delete(candidate.storageKey()))
-                .thenThrow(new WorkflowAttachmentStorageOperationException(
-                        "forced sensitive cleanup failure", new java.io.IOException()));
-        when(attachmentMapper.scheduleCleanupRetry(eq(ATTACHMENT_ID), eq(0),
-                any(LocalDateTime.class), eq("attachment_storage_cleanup_failed")))
-                .thenReturn(1);
+        WfAttachment claimed = withCleanupClaim(attachment(ATTACHMENT_ID, 7L, "files",
+                WorkflowAttachmentStatus.EXPIRED,
+                LocalDateTime.now().minusMinutes(1), null),
+                WorkflowAttachmentStatus.EXPIRED,
+                "b9428888-122b-4c6f-8f0c-9c3e1dbd3210");
+        when(attachmentMapper.scheduleCleanupRetry(eq(ATTACHMENT_ID),
+                eq(claimed.cleanupClaimToken()), eq(0), any(LocalDateTime.class),
+                eq("attachment_storage_cleanup_failed"))).thenReturn(1);
 
         LocalDateTime startedAt = LocalDateTime.now();
-        WorkflowAttachmentCleanupResult failedResult = retryService.cleanupExpiredBatch();
+        assertThat(service.persistCleanupRetry(claimed)).isTrue();
         LocalDateTime completedAt = LocalDateTime.now();
 
-        assertThat(failedResult.cleaned()).isZero();
-        assertThat(failedResult.failures()).isEqualTo(1);
-        verify(attachmentMapper, never()).markStorageDeleted(ATTACHMENT_ID);
         ArgumentCaptor<LocalDateTime> nextRetryTime =
                 ArgumentCaptor.forClass(LocalDateTime.class);
-        verify(attachmentMapper).scheduleCleanupRetry(eq(ATTACHMENT_ID), eq(0),
-                nextRetryTime.capture(), eq("attachment_storage_cleanup_failed"));
+        verify(attachmentMapper).scheduleCleanupRetry(eq(ATTACHMENT_ID),
+                eq(claimed.cleanupClaimToken()), eq(0), nextRetryTime.capture(),
+                eq("attachment_storage_cleanup_failed"));
         assertThat(nextRetryTime.getValue())
                 .isAfterOrEqualTo(startedAt.plus(properties.getCleanupRetryInitialDelay()))
                 .isBeforeOrEqualTo(completedAt.plus(properties.getCleanupRetryInitialDelay()));
@@ -592,39 +583,32 @@ class WorkflowAttachmentServiceTest
 
     /**
      * 验证异常大的既有重试次数只会调度到配置上限，不会溢出或形成无界循环。
-     * @return void，退避超过上限或重试版本未参与乐观更新时测试失败
+     * @return void，退避超过上限或重试版本未参与 token 条件更新时测试失败
      */
     @Test
     void capsCleanupRetryBackoffAtConfiguredMaximum()
     {
         properties.setCleanupRetryInitialDelay(Duration.ofMinutes(1));
         properties.setCleanupRetryMaxDelay(Duration.ofMinutes(5));
-        WorkflowAttachmentStorage retryStorage = mock(WorkflowAttachmentStorage.class);
-        WorkflowAttachmentService retryService = new WorkflowAttachmentService(
-                attachmentMapper, retryStorage, properties, identityResolver,
-                processAccessService);
-        WfAttachment candidate = withCleanupRetryCount(attachment(ATTACHMENT_ID, 7L,
-                "files", WorkflowAttachmentStatus.EXPIRED,
-                LocalDateTime.now().minusMinutes(1), null), Integer.MAX_VALUE);
-        when(attachmentMapper.selectCleanupCandidates(properties.getCleanupBatchSize()))
-                .thenReturn(List.of(candidate));
-        when(retryStorage.delete(candidate.storageKey()))
-                .thenThrow(new WorkflowAttachmentStorageOperationException(
-                        "forced cleanup failure", new java.io.IOException()));
+        WfAttachment claimed = withCleanupClaim(withCleanupRetryCount(
+                attachment(ATTACHMENT_ID, 7L, "files",
+                        WorkflowAttachmentStatus.EXPIRED,
+                        LocalDateTime.now().minusMinutes(1), null),
+                Integer.MAX_VALUE), WorkflowAttachmentStatus.EXPIRED,
+                "b9428888-122b-4c6f-8f0c-9c3e1dbd3210");
         when(attachmentMapper.scheduleCleanupRetry(eq(ATTACHMENT_ID),
-                eq(Integer.MAX_VALUE), any(LocalDateTime.class), anyString()))
-                .thenReturn(1);
+                eq(claimed.cleanupClaimToken()), eq(Integer.MAX_VALUE),
+                any(LocalDateTime.class), anyString())).thenReturn(1);
 
         LocalDateTime startedAt = LocalDateTime.now();
-        WorkflowAttachmentCleanupResult result = retryService.cleanupExpiredBatch();
+        assertThat(service.persistCleanupRetry(claimed)).isTrue();
         LocalDateTime completedAt = LocalDateTime.now();
 
-        assertThat(result).isEqualTo(new WorkflowAttachmentCleanupResult(0, 1));
         ArgumentCaptor<LocalDateTime> nextRetryTime =
                 ArgumentCaptor.forClass(LocalDateTime.class);
         verify(attachmentMapper).scheduleCleanupRetry(eq(ATTACHMENT_ID),
-                eq(Integer.MAX_VALUE), nextRetryTime.capture(),
-                eq("attachment_storage_cleanup_failed"));
+                eq(claimed.cleanupClaimToken()), eq(Integer.MAX_VALUE),
+                nextRetryTime.capture(), eq("attachment_storage_cleanup_failed"));
         assertThat(nextRetryTime.getValue())
                 .isAfterOrEqualTo(startedAt.plus(Duration.ofMinutes(5)))
                 .isBeforeOrEqualTo(completedAt.plus(Duration.ofMinutes(5)));
@@ -648,50 +632,59 @@ class WorkflowAttachmentServiceTest
     }
 
     /**
-     * 验证 Mapper 故障会中止整批并交由事务回滚，不能被误记为可重试文件系统失败。
-     * @return void，数据库异常被吞并、继续其他候选或写入退避状态时测试失败
+     * 验证完成回写的 Mapper 故障会直接传播，不能被误记为可重试文件系统失败。
+     * @return void，数据库异常被吞并或错误调度存储重试时测试失败
      */
     @Test
     void propagatesDatabaseFailureInsteadOfSchedulingStorageRetry()
     {
-        WorkflowAttachmentStorage retryStorage = mock(WorkflowAttachmentStorage.class);
-        WorkflowAttachmentService retryService = new WorkflowAttachmentService(
-                attachmentMapper, retryStorage, properties, identityResolver,
-                processAccessService);
-        WfAttachment candidate = attachment(ATTACHMENT_ID, 7L, "files",
+        WfAttachment candidate = withCleanupClaim(attachment(ATTACHMENT_ID, 7L, "files",
                 WorkflowAttachmentStatus.EXPIRED,
-                LocalDateTime.now().minusMinutes(1), null);
+                LocalDateTime.now().minusMinutes(1), null),
+                WorkflowAttachmentStatus.EXPIRED,
+                "b9428888-122b-4c6f-8f0c-9c3e1dbd3210");
         DataAccessResourceFailureException databaseFailure =
                 new DataAccessResourceFailureException("forced database failure");
-        when(attachmentMapper.selectCleanupCandidates(properties.getCleanupBatchSize()))
-                .thenReturn(List.of(candidate));
-        when(retryStorage.delete(candidate.storageKey())).thenReturn(true);
-        when(attachmentMapper.markStorageDeleted(ATTACHMENT_ID))
+        when(attachmentMapper.markStorageDeleted(ATTACHMENT_ID,
+                candidate.cleanupClaimToken()))
                 .thenThrow(databaseFailure);
 
-        assertThatThrownBy(retryService::cleanupExpiredBatch).isSameAs(databaseFailure);
+        assertThatThrownBy(() -> service.completeClaimedCleanup(candidate))
+                .isSameAs(databaseFailure);
 
-        verify(attachmentMapper, never()).scheduleCleanupRetry(anyString(), anyInt(),
-                any(LocalDateTime.class), anyString());
+        verify(attachmentMapper, never()).scheduleCleanupRetry(anyString(), anyString(),
+                anyInt(), any(LocalDateTime.class), anyString());
     }
 
     /**
-     * 验证手工删除与调度清理并发时，0 行更新只有在正式行已完成清理后才按幂等成功处理。
-     * @return void，并发完成结果被误报为 500 或重复产生状态副作用时测试失败
+     * 验证手工删除会领取单行租约，并使用同一 token 完成物理删除状态回写。
+     * @return void，手工删除绕过租约或无 token 更新清理状态时测试失败
      */
     @Test
-    void acceptsConcurrentStorageCleanupAfterReloadingTerminalState()
+    void claimsLeaseBeforeManualStorageCleanup()
     {
         WfAttachment pending = attachment(ATTACHMENT_ID, 7L, "files",
                 WorkflowAttachmentStatus.DELETED, LocalDateTime.now().minusMinutes(1), null);
-        WfAttachment completed = withStorageDeletedTime(pending, LocalDateTime.now());
-        when(attachmentMapper.selectById(ATTACHMENT_ID)).thenReturn(pending, completed);
-        when(attachmentMapper.markStorageDeleted(ATTACHMENT_ID)).thenReturn(0);
+        AtomicReference<String> claimToken = new AtomicReference<>();
+        when(attachmentMapper.selectById(ATTACHMENT_ID)).thenReturn(pending)
+                .thenAnswer(invocation -> withCleanupClaim(pending,
+                        WorkflowAttachmentStatus.DELETED,
+                        claimToken.get()));
+        when(attachmentMapper.claimDeletedAttachment(eq(ATTACHMENT_ID),
+                anyString(), eq(300L))).thenAnswer(invocation ->
+                {
+                    claimToken.set(invocation.getArgument(1));
+                    return 1;
+                });
+        when(attachmentMapper.markStorageDeleted(eq(ATTACHMENT_ID), anyString()))
+                .thenReturn(1);
 
         service.deleteOwnedTemporary(ATTACHMENT_ID);
 
         verify(storage).delete(pending.storageKey());
-        verify(attachmentMapper).markStorageDeleted(ATTACHMENT_ID);
+        verify(attachmentMapper).claimDeletedAttachment(eq(ATTACHMENT_ID),
+                anyString(), eq(300L));
+        verify(attachmentMapper).markStorageDeleted(eq(ATTACHMENT_ID), anyString());
         verify(attachmentMapper, times(2)).selectById(ATTACHMENT_ID);
     }
 
@@ -704,13 +697,26 @@ class WorkflowAttachmentServiceTest
     {
         WfAttachment pending = attachment(ATTACHMENT_ID, 7L, "files",
                 WorkflowAttachmentStatus.TEMP, LocalDateTime.now().plusMinutes(1), null);
-        when(attachmentMapper.selectById(ATTACHMENT_ID)).thenReturn(pending);
+        AtomicReference<String> claimToken = new AtomicReference<>();
+        when(attachmentMapper.selectById(ATTACHMENT_ID))
+                .thenReturn(pending)
+                .thenAnswer(invocation -> withCleanupClaim(pending,
+                        WorkflowAttachmentStatus.DELETED, claimToken.get()))
+                .thenAnswer(invocation -> withCleanupClaim(pending,
+                        WorkflowAttachmentStatus.DELETED, claimToken.get()));
         when(attachmentMapper.markDeletedByOwner(ATTACHMENT_ID, 7L)).thenReturn(1);
-        when(attachmentMapper.markStorageDeleted(ATTACHMENT_ID)).thenReturn(0);
+        when(attachmentMapper.claimDeletedAttachment(eq(ATTACHMENT_ID),
+                anyString(), eq(300L))).thenAnswer(invocation ->
+                {
+                    claimToken.set(invocation.getArgument(1));
+                    return 1;
+                });
+        when(attachmentMapper.markStorageDeleted(eq(ATTACHMENT_ID), anyString()))
+                .thenReturn(0);
 
         assertServiceError(() -> service.deleteOwnedTemporary(ATTACHMENT_ID),
                 HttpStatus.ERROR, "工作流附件清理状态写入失败");
-        verify(attachmentMapper, times(2)).selectById(ATTACHMENT_ID);
+        verify(attachmentMapper, times(3)).selectById(ATTACHMENT_ID);
     }
 
     /**
@@ -791,6 +797,28 @@ class WorkflowAttachmentServiceTest
                 processInstanceId, taskId, nodeKey,
                 status == WorkflowAttachmentStatus.BOUND ? now : null,
                 null, 0, null, null, now.minusMinutes(1), null);
+    }
+
+    /**
+     * 复制附件并写入当前清理领取 token、租约和终态，用于验证 token 条件更新。
+     * @param attachment WfAttachment，待复制的附件正式行
+     * @param status WorkflowAttachmentStatus，领取后必须为 EXPIRED 或 DELETED
+     * @param claimToken String，当前清理领取 UUID
+     * @return WfAttachment，带五分钟有效租约的清理候选
+     */
+    private WfAttachment withCleanupClaim(WfAttachment attachment,
+            WorkflowAttachmentStatus status, String claimToken)
+    {
+        return new WfAttachment(attachment.attachmentId(), attachment.ownerUserId(),
+                attachment.fieldName(), attachment.originalName(), attachment.storageKey(),
+                attachment.contentType(), attachment.fileSize(), attachment.sha256(), status,
+                attachment.expireTime(), attachment.draftId(),
+                attachment.processInstanceId(), attachment.taskId(), attachment.nodeKey(),
+                attachment.boundTime(), attachment.storageDeletedTime(),
+                attachment.cleanupRetryCount(), attachment.cleanupNextRetryTime(),
+                attachment.cleanupLastErrorCode(), claimToken,
+                LocalDateTime.now().plusMinutes(5), attachment.createTime(),
+                LocalDateTime.now());
     }
 
     /**

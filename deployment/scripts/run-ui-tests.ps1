@@ -34,16 +34,16 @@ if ($normalizedRunId -notmatch '^[A-Za-z0-9_.-]{1,64}$')
 # 日期目录使用本机 Asia/Shanghai 工作日口径，runId 保留为单次运行的唯一标识。
 $runDate = Get-Date -Format 'yyyy-MM-dd'
 $outputRoot = Join-Path $uiRoot "tests\ui\output\$runDate\$normalizedRunId"
-$databaseOutput = Join-Path $outputRoot 'database'
 $orchestrationPath = Join-Path $outputRoot 'orchestration.json'
-$faultProfileRoot = Join-Path $outputRoot 'runtime\profile'
-$faultProxyEnabled = $Phase -in @('fault', 'all')
 $phaseResults = [ordered]@{}
 $helperProcess = $null
 $backendRestarted = $false
 $buildAttempted = $false
 $buildSucceeded = $false
 $preBuildJarBackup = Join-Path $outputRoot 'runtime\pre-build-ruoyi-admin.jar'
+$redisCli = 'C:\Program Files\Memurai\memurai-cli.exe'
+$captchaInitiallyEnabled = $null
+$captchaChanged = $false
 
 <#
  * 从受控环境变量或仓库忽略文件读取 MySQL 管理密码。
@@ -56,7 +56,7 @@ function Get-MySqlPassword
     $credentialPath = Join-Path $repositoryRoot 'mysql-root.txt'
     if (-not (Test-Path -LiteralPath $credentialPath))
     {
-        throw '缺少 RUOYI_E2E_MYSQL_ROOT_PASSWORD 或 mysql-root.txt，不能执行测试前数据库备份。'
+        throw '缺少 RUOYI_E2E_MYSQL_ROOT_PASSWORD 或 mysql-root.txt，不能启动真实 UI 验收后端。'
     }
     $match = [regex]::Match(
         [IO.File]::ReadAllText($credentialPath, [Text.UTF8Encoding]::new($false)),
@@ -94,6 +94,103 @@ function Wait-HttpReady
 }
 
 <#
+ * 根据当前验证码开关通过真实登录入口获取管理员令牌。
+ * @param {string} Password 管理员密码，仅在当前进程请求体中使用。
+ * @returns {string} 配置管理 API 使用的 Bearer token。
+#>
+function Get-CaptchaAdminToken
+{
+    param([Parameter(Mandatory = $true)][string]$Password)
+
+    $captcha = Invoke-RestMethod -Method Get -Uri "$BackendUrl/captchaImage"
+    $captchaUuid = ''
+    $captchaCode = ''
+    if ([bool]$captcha.captchaEnabled)
+    {
+        if (-not (Test-Path -LiteralPath $redisCli))
+        {
+            throw '登录验证码已启用，但未找到本机 Memurai CLI。'
+        }
+        $captchaUuid = [string]$captcha.uuid
+        if ([string]::IsNullOrWhiteSpace($captchaUuid)) { throw '验证码入口未返回 UUID。' }
+        $rawCode = [string](& $redisCli GET ("captcha_codes:{0}" -f $captchaUuid))
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($rawCode))
+        {
+            throw 'Redis 中未取得本轮一次性验证码答案。'
+        }
+        # 若依 RedisCache 使用 JSON 字符串序列化验证码，不能把引号作为答案提交。
+        $captchaCode = [string]($rawCode | ConvertFrom-Json)
+    }
+
+    $loginBody = @{
+        username = $AdminUsername
+        password = $Password
+        code = $captchaCode
+        uuid = $captchaUuid
+    } | ConvertTo-Json -Compress
+    $login = Invoke-RestMethod -Method Post -Uri "$BackendUrl/login" `
+        -ContentType 'application/json' -Body $loginBody
+    if ([int]$login.code -ne 200 -or [string]::IsNullOrWhiteSpace([string]$login.token))
+    {
+        throw "验证码配置管理登录失败，业务码：$($login.code)。"
+    }
+    return [string]$login.token
+}
+
+<#
+ * 通过正式参数管理 API 切换验证码，并核验匿名入口的实际运行状态。
+ * @param {boolean} Enabled true 表示启用验证码，false 表示关闭验证码。
+ * @param {string} Password 管理员密码，仅用于本次配置切换登录。
+ * @returns {void} 数据库、缓存和匿名入口均已达到目标状态后返回。
+#>
+function Set-TestCaptchaEnabled
+{
+    param(
+        [Parameter(Mandatory = $true)][boolean]$Enabled,
+        [Parameter(Mandatory = $true)][string]$Password
+    )
+
+    $token = Get-CaptchaAdminToken -Password $Password
+    $headers = @{ Authorization = "Bearer $token" }
+    $list = Invoke-RestMethod -Method Get -Headers $headers -Uri `
+        "$BackendUrl/system/config/list?pageNum=1&pageSize=10&configKey=sys.account.captchaEnabled"
+    $rows = @($list.rows | Where-Object { $_.configKey -eq 'sys.account.captchaEnabled' })
+    if ([int]$list.code -ne 200 -or $rows.Count -ne 1 -or [int]$list.total -ne 1)
+    {
+        throw '登录验证码参数缺失或重复。'
+    }
+    $detailResponse = Invoke-RestMethod -Method Get -Headers $headers `
+        -Uri "$BackendUrl/system/config/$($rows[0].configId)"
+    $config = $detailResponse.data
+    if (-not $config) { throw '登录验证码参数详情缺失。' }
+
+    $targetValue = $Enabled.ToString().ToLowerInvariant()
+    if ([string]$config.configValue -ne $targetValue)
+    {
+        $updateBody = @{
+            configId = [long]$config.configId
+            configName = [string]$config.configName
+            configKey = [string]$config.configKey
+            configValue = $targetValue
+            configType = [string]$config.configType
+            remark = [string]$config.remark
+        } | ConvertTo-Json -Compress
+        $updated = Invoke-RestMethod -Method Put -Headers $headers `
+            -Uri "$BackendUrl/system/config" -ContentType 'application/json' -Body $updateBody
+        if ([int]$updated.code -ne 200)
+        {
+            throw "登录验证码参数更新失败，业务码：$($updated.code)。"
+        }
+    }
+
+    $verified = Invoke-RestMethod -Method Get -Uri "$BackendUrl/captchaImage"
+    if ([bool]$verified.captchaEnabled -ne $Enabled)
+    {
+        throw "验证码目标状态 $targetValue 与匿名入口回显不一致。"
+    }
+}
+
+<#
  * 停止由当前仓库启动且监听指定端口的进程。
  * @param {int} Port 本机监听端口。
  * @param {string} ExpectedCommandFragment 命令行必须包含的仓库片段。
@@ -123,55 +220,10 @@ function Stop-RepositoryListener
 }
 
 <#
- * 移除当前 Windows 身份在本轮隔离附件目录上的显式拒绝写入 ACL，并执行无残留写入验证。
- * @param {string} ProfileRoot 当前 runId 的测试 profile 根目录。
- * @param {string} ExpectedOutputRoot 当前 runId 的证据输出根目录。
- * @returns {void} ACL 已恢复且目录重新可写后结束；越界、链接或恢复失败时抛出错误。
-#>
-function Restore-FaultAttachmentAcl
-{
-    param(
-        [Parameter(Mandatory = $true)][string]$ProfileRoot,
-        [Parameter(Mandatory = $true)][string]$ExpectedOutputRoot
-    )
-    $resolvedProfileRoot = [IO.Path]::GetFullPath($ProfileRoot)
-    $resolvedOutputRoot = [IO.Path]::GetFullPath($ExpectedOutputRoot)
-    $expectedProfileRoot = [IO.Path]::GetFullPath((Join-Path $resolvedOutputRoot 'runtime\profile'))
-    if (-not [string]::Equals($resolvedProfileRoot, $expectedProfileRoot, [StringComparison]::OrdinalIgnoreCase))
-    {
-        throw '附件 ACL 恢复目标不属于当前 runId 隔离 profile。'
-    }
-    $attachmentRoot = Join-Path $resolvedProfileRoot 'workflow-attachments'
-    if (-not (Test-Path -LiteralPath $attachmentRoot)) { return }
-    $attachmentItem = Get-Item -LiteralPath $attachmentRoot -Force
-    if (-not $attachmentItem.PSIsContainer -or ($attachmentItem.Attributes -band [IO.FileAttributes]::ReparsePoint))
-    {
-        throw '附件 ACL 恢复目标不是普通目录。'
-    }
-
-    # 该目录由本轮总控新建且不承载开发数据，只移除当前身份的显式 deny ACE。
-    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    & icacls.exe $attachmentRoot '/remove:d' ("*$currentSid") '/T' '/C' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw '附件 ACL 显式拒绝项移除失败。' }
-
-    $probePath = Join-Path $attachmentRoot ('.e2e-acl-restore-{0}.tmp' -f [guid]::NewGuid().ToString('N'))
-    try
-    {
-        [IO.File]::WriteAllBytes($probePath, [Text.Encoding]::ASCII.GetBytes('acl-restore-probe'))
-    }
-    finally
-    {
-        if (Test-Path -LiteralPath $probePath) { Remove-Item -LiteralPath $probePath -Force }
-    }
-}
-
-<#
  * 使用当前源码构建的 jar 启动独占后端，并按测试阶段切换真实异步执行器和测试环境。
  * @param {boolean} AsyncExecutor 是否启用 Flowable 异步执行器。
  * @param {string} MySqlPassword 当前本机 MySQL 管理密码。
  * @param {boolean} ConfigureTestEnvironment 是否注入 UI 测试数据库、监控和 SMTP 参数。
- * @param {boolean} UseFaultProxies 是否把 MySQL 和 Redis 接入本机透明故障代理。
- * @param {string} ProfileRoot 测试附件隔离目录；空字符串表示沿用开发配置。
  * @returns {void} 后端健康检查成功后结束。
 #>
 function Start-TestBackend
@@ -179,20 +231,16 @@ function Start-TestBackend
     param(
         [Parameter(Mandatory = $true)][boolean]$AsyncExecutor,
         [Parameter(Mandatory = $true)][string]$MySqlPassword,
-        [boolean]$ConfigureTestEnvironment = $true,
-        [boolean]$UseFaultProxies = $false,
-        [string]$ProfileRoot = ''
+        [boolean]$ConfigureTestEnvironment = $true
     )
     if (-not (Test-Path -LiteralPath $backendJar)) { throw "后端构建产物不存在：$backendJar" }
     [void](Stop-RepositoryListener -Port 8080 -ExpectedCommandFragment 'ruoyi-admin')
     # 测试后端和恢复后的开发后端都必须显式连接本次已备份的开发库，避免父进程没有数据库环境变量时恢复为空配置。
-    $databasePort = if ($UseFaultProxies) { 13306 } else { 3306 }
-    $faultDatabaseTimeouts = if ($UseFaultProxies) { '&connectTimeout=3000&socketTimeout=3000' } else { '' }
-    $env:RUOYI_DB_URL = "jdbc:mysql://127.0.0.1:${databasePort}/${Database}?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true${faultDatabaseTimeouts}"
+    $env:RUOYI_DB_URL = "jdbc:mysql://127.0.0.1:3306/${Database}?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
     $env:RUOYI_DB_USERNAME = 'root'
     $env:RUOYI_DB_PASSWORD = $MySqlPassword
     # 当前 Spring 版本要求 @Scheduled 字符串显式携带时间单位；测试和开发恢复都必须覆盖旧的裸数字默认值。
-    $env:APPROVAPLAT_NOTIFICATION_WORKER_DELAY = if ($UseFaultProxies) { '200ms' } else { '1000ms' }
+    $env:APPROVAPLAT_NOTIFICATION_WORKER_DELAY = '1000ms'
     if ($ConfigureTestEnvironment)
     {
         # 测试后端显式连接已备份的开发库，并使用本地可控 SMTP 服务验证真实通知链路。
@@ -202,12 +250,14 @@ function Start-TestBackend
         $env:APPROVAPLAT_SMTP_PORT = '2525'
         $env:APPROVAPLAT_SMTP_AUTH = 'false'
         $env:APPROVAPLAT_SMTP_STARTTLS = 'false'
-        $env:APPROVAPLAT_SMTP_CONNECT_TIMEOUT = if ($UseFaultProxies) { '1500' } else { '5000' }
-        $env:APPROVAPLAT_SMTP_READ_TIMEOUT = if ($UseFaultProxies) { '5000' } else { '10000' }
-        $env:APPROVAPLAT_SMTP_WRITE_TIMEOUT = if ($UseFaultProxies) { '1500' } else { '10000' }
-        $env:APPROVAPLAT_NOTIFICATION_LEASE_DURATION = if ($UseFaultProxies) { '10s' } else { '2m' }
-        $env:APPROVAPLAT_NOTIFICATION_MAX_RETRY_DELAY = if ($UseFaultProxies) { '1s' } else { '30m' }
+        $env:APPROVAPLAT_SMTP_CONNECT_TIMEOUT = '5000'
+        $env:APPROVAPLAT_SMTP_READ_TIMEOUT = '10000'
+        $env:APPROVAPLAT_SMTP_WRITE_TIMEOUT = '10000'
+        $env:APPROVAPLAT_NOTIFICATION_LEASE_DURATION = '2m'
+        $env:APPROVAPLAT_NOTIFICATION_MAX_RETRY_DELAY = '30m'
         $env:APPROVAPLAT_NOTIFICATION_MAIL_FROM = 'workflow-ui-test@localhost'
+        # 协作端点只保存环境变量引用；随机正文同时注入后端和 Playwright 子进程，测试结束后由统一环境恢复移除。
+        $env:WORKFLOW_CONNECTOR_SECRET_COLLABORATION_UI = [guid]::NewGuid().ToString('N')
     }
     $arguments = @(
         '-jar', $backendJar,
@@ -216,23 +266,6 @@ function Start-TestBackend
         '--spring.devtools.restart.enabled=false',
         "--flowable.async-executor-activate=$($AsyncExecutor.ToString().ToLowerInvariant())"
     )
-    if ($UseFaultProxies)
-    {
-        # 数据库和 Redis 通过协议透明代理连接；代理只切断 socket，不读取或记录任何协议正文。
-        $arguments += @(
-            '--spring.data.redis.host=127.0.0.1',
-            '--spring.data.redis.port=16379',
-            '--spring.data.redis.timeout=3s',
-            '--spring.datasource.druid.maxWait=3000',
-            '--spring.datasource.druid.connectTimeout=3000',
-            '--spring.datasource.druid.socketTimeout=3000'
-        )
-    }
-    if (-not [string]::IsNullOrWhiteSpace($ProfileRoot))
-    {
-        New-Item -ItemType Directory -Path $ProfileRoot -Force | Out-Null
-        $arguments += "--ruoyi.profile=$ProfileRoot"
-    }
     if ($ConfigureTestEnvironment)
     {
         # UI 回归使用短周期真实调度器完成物理清理验收；恢复开发服务时不继承这些测试参数。
@@ -247,33 +280,6 @@ function Start-TestBackend
     $stderrPath = Join-Path $outputRoot "$backendLogPrefix.err.log"
     Start-Process -FilePath 'java.exe' -ArgumentList $arguments -WorkingDirectory $repositoryRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
     Wait-HttpReady -Uri "$BackendUrl/captchaImage" -TimeoutSeconds 240
-}
-
-<#
- * 从当前正式开发库创建单事务完整备份，备份失败时禁止任何写场景继续。
- * @param {string} MySqlPassword 当前本机 MySQL 管理密码。
- * @returns {string} 备份文件绝对路径。
-#>
-function Backup-Database
-{
-    param([Parameter(Mandatory = $true)][string]$MySqlPassword)
-    New-Item -ItemType Directory -Path $databaseOutput -Force | Out-Null
-    $backupPath = Join-Path $databaseOutput "$Database-before.sql"
-    $previousPassword = $env:MYSQL_PWD
-    try
-    {
-        $env:MYSQL_PWD = $MySqlPassword
-        & mysqldump.exe '--host=127.0.0.1' '--user=root' '--default-character-set=utf8mb4' '--single-transaction' '--routines' '--events' '--triggers' '--set-gtid-purged=OFF' '--skip-comments' "--result-file=$backupPath" $Database
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $backupPath) -or (Get-Item -LiteralPath $backupPath).Length -eq 0)
-        {
-            throw '正式开发数据库备份失败，已阻止 UI 写测试。'
-        }
-    }
-    finally
-    {
-        $env:MYSQL_PWD = $previousPassword
-    }
-    return $backupPath
 }
 
 <#
@@ -322,8 +328,7 @@ $mysqlPassword = Get-MySqlPassword
 $previousEnvironment = @{}
 $managedEnvironmentNames = @(
     'FLOWABLE_E2E_RUN_ID', 'FLOWABLE_E2E_BASE_URL', 'FLOWABLE_E2E_START_FRONTEND',
-    'FLOWABLE_E2E_DB_NAME', 'FLOWABLE_E2E_OUTPUT_ROOT', 'FLOWABLE_E2E_PROFILE_ROOT',
-    'FLOWABLE_E2E_FAULT_CONTROL_URL', 'FLOWABLE_E2E_FAULT_PROXY_ENABLED',
+    'FLOWABLE_E2E_DB_NAME', 'FLOWABLE_E2E_DB_PASSWORD', 'FLOWABLE_E2E_OUTPUT_ROOT', 'FLOWABLE_E2E_PROFILE_ROOT',
     'FLOWABLE_E2E_BACKEND_URL', 'FLOWABLE_RBAC_ACCOUNTS_REGISTERED',
     'FLOWABLE_E2E_ADMIN_USERNAME', 'FLOWABLE_E2E_ADMIN_PASSWORD',
     'FLOWABLE_RBAC_WORKFLOW_ADMIN_USERNAME', 'FLOWABLE_RBAC_WORKFLOW_DESIGNER_USERNAME',
@@ -335,7 +340,8 @@ $managedEnvironmentNames = @(
     'APPROVAPLAT_SMTP_CONNECT_TIMEOUT', 'APPROVAPLAT_SMTP_READ_TIMEOUT',
     'APPROVAPLAT_SMTP_WRITE_TIMEOUT', 'APPROVAPLAT_NOTIFICATION_LEASE_DURATION',
     'APPROVAPLAT_NOTIFICATION_MAX_RETRY_DELAY',
-    'APPROVAPLAT_NOTIFICATION_WORKER_DELAY', 'APPROVAPLAT_NOTIFICATION_MAIL_FROM'
+    'APPROVAPLAT_NOTIFICATION_WORKER_DELAY', 'APPROVAPLAT_NOTIFICATION_MAIL_FROM',
+    'WORKFLOW_CONNECTOR_SECRET_COLLABORATION_UI'
 )
 foreach ($name in $managedEnvironmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
@@ -359,17 +365,15 @@ if ($RestoreOnly)
 try
 {
     New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
-    $backupPath = Backup-Database -MySqlPassword $mysqlPassword
-    $phaseResults['backup'] = 0
 
     $env:FLOWABLE_E2E_RUN_ID = $normalizedRunId
     $env:FLOWABLE_E2E_BASE_URL = $BaseUrl
     $env:FLOWABLE_E2E_START_FRONTEND = 'false'
     $env:FLOWABLE_E2E_DB_NAME = $Database
+    # Playwright 的数据库 helper 仅执行只读 SQL；密码只通过当前进程传给子进程，并在 finally 中恢复。
+    $env:FLOWABLE_E2E_DB_PASSWORD = $mysqlPassword
     $env:FLOWABLE_E2E_OUTPUT_ROOT = $outputRoot
-    $env:FLOWABLE_E2E_PROFILE_ROOT = if ($faultProxyEnabled) { $faultProfileRoot } else { 'D:\approvaplat\uploadPath' }
-    $env:FLOWABLE_E2E_FAULT_CONTROL_URL = 'http://127.0.0.1:18081'
-    $env:FLOWABLE_E2E_FAULT_PROXY_ENABLED = $faultProxyEnabled.ToString().ToLowerInvariant()
+    $env:FLOWABLE_E2E_PROFILE_ROOT = 'D:\approvaplat\uploadPath'
     $env:FLOWABLE_E2E_BACKEND_URL = $BackendUrl
     $env:FLOWABLE_E2E_ADMIN_USERNAME = $AdminUsername
     $env:FLOWABLE_RBAC_ACCOUNTS_REGISTERED = 'true'
@@ -422,18 +426,16 @@ try
         $helperStdout = Join-Path $outputRoot 'test-services.out.log'
         $helperStderr = Join-Path $outputRoot 'test-services.err.log'
         $helperProcess = Start-Process -FilePath 'node.exe' -ArgumentList @($serviceScript) -WorkingDirectory $uiRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $helperStdout -RedirectStandardError $helperStderr
-        Wait-HttpReady -Uri 'http://127.0.0.1:18081/health' -TimeoutSeconds 30
+        Wait-HttpReady -Uri 'http://127.0.0.1:18082/health' -TimeoutSeconds 30
     }
 
-    if (-not $SkipBuild -or $RestartServices -or $faultProxyEnabled)
+    if (-not $SkipBuild -or $RestartServices)
     {
         # 标记必须在停止原服务前写入；即使测试后端启动失败，finally 仍会恢复开发后端。
         $backendRestarted = $true
         Start-TestBackend `
             -AsyncExecutor:($Phase -in @('full', 'fault', 'all')) `
-            -MySqlPassword $mysqlPassword `
-            -UseFaultProxies:$faultProxyEnabled `
-            -ProfileRoot $(if ($faultProxyEnabled) { $faultProfileRoot } else { '' })
+            -MySqlPassword $mysqlPassword
     }
     if ($RestartServices)
     {
@@ -446,6 +448,20 @@ try
     # 无论是否由总控重启前端，都必须在置备数据和执行浏览器用例前确认真实登录页可访问，避免连接拒绝被批量记成业务失败。
     $frontendReadyTimeoutSeconds = if ($RestartServices) { 60 } else { 15 }
     Wait-HttpReady -Uri "$BaseUrl/login" -TimeoutSeconds $frontendReadyTimeoutSeconds
+
+    # 浏览器登录夹具不使用 OCR，总控对干净基线默认开启的验证码负责完整恢复周期。
+    $captchaStatus = Invoke-RestMethod -Method Get -Uri "$BackendUrl/captchaImage"
+    $captchaInitiallyEnabled = [bool]$captchaStatus.captchaEnabled
+    if ($captchaInitiallyEnabled)
+    {
+        if ([string]::IsNullOrWhiteSpace($adminPassword))
+        {
+            throw '干净基线已启用验证码，缺少 FLOWABLE_E2E_ADMIN_PASSWORD 无法进入隔离 UI 验收。'
+        }
+        Set-TestCaptchaEnabled -Enabled:$false -Password $adminPassword
+        $captchaChanged = $true
+        $phaseResults['captchaDisable'] = 0
+    }
 
     if (-not $SkipProvision)
     {
@@ -467,7 +483,6 @@ try
     [ordered]@{
         runId = $normalizedRunId
         phase = $Phase
-        backup = $backupPath
         results = $phaseResults
         finishedAt = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $orchestrationPath -Encoding utf8NoBOM
@@ -477,32 +492,15 @@ finally
     $recoveryErrors = [Collections.Generic.List[string]]::new()
     try
     {
-        if ($helperProcess -and -not $helperProcess.HasExited)
+        if ($captchaChanged)
         {
             try
             {
-                # full 阶段使用开发附件目录且不会注入 ACL 故障，禁止把它交给仅接受 runId 隔离目录的附件控制器。
-                $recoveryMode = [ordered]@{
-                    mysqlMode = 'ok'
-                    redisMode = 'ok'
-                    httpMode = 'ok'
-                    smtpMode = 'accept'
-                }
-                if ($faultProxyEnabled) { $recoveryMode['attachmentMode'] = 'writable' }
-                Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:18081/mode' `
-                    -ContentType 'application/json' `
-                    -Body ($recoveryMode | ConvertTo-Json -Compress) | Out-Null
+                # 必须在恢复开发后端前连接同一测试库恢复配置，避免把隔离环境参数遗留为开发默认。
+                Set-TestCaptchaEnabled -Enabled:$true -Password $adminPassword
+                $phaseResults['captchaRestore'] = 0
             }
-            catch { $recoveryErrors.Add("故障服务恢复请求失败：$($_.Exception.Message)") }
-        }
-        if ($faultProxyEnabled)
-        {
-            try
-            {
-                # 即使辅助服务被强制终止，也由总控在恢复开发后端前直接移除本轮隔离目录 ACL。
-                Restore-FaultAttachmentAcl -ProfileRoot $faultProfileRoot -ExpectedOutputRoot $outputRoot
-            }
-            catch { $recoveryErrors.Add("附件 ACL 兜底恢复失败：$($_.Exception.Message)") }
+            catch { $recoveryErrors.Add("登录验证码恢复失败：$($_.Exception.Message)") }
         }
         # 先恢复父进程环境，随后启动的开发后端才不会继承临时数据库、监控、代理或 SMTP 参数。
         foreach ($name in $managedEnvironmentNames)

@@ -107,7 +107,6 @@ class WorkflowSqlConnectorMySqlIT
             artifactRepository.delete(deploymentId);
             processEngine.getRepositoryService().deleteDeployment(deploymentId, true);
         }
-        jdbc.update("delete from wf_connector_invocation where target_key = ?", dataSourceKey);
         if (dataSourceId != null)
         {
             jdbc.update("delete from wf_sql_datasource where datasource_id = ?", dataSourceId);
@@ -127,10 +126,14 @@ class WorkflowSqlConnectorMySqlIT
     {
         String processKey = PREFIX + "commit-" + runId;
         Deployment deployment = deploy(processKey, false);
-        insertSnapshot(deployment.getId(), processKey);
+        insertWriteSnapshot(deployment.getId(), processKey);
 
         var instance = processEngine.getRuntimeService().startProcessInstanceByKey(
                 processKey, Map.of("dataSourceKey", dataSourceKey, "resultValue", "committed"));
+        var job = processEngine.getManagementService().createJobQuery()
+                .processInstanceId(instance.getId()).singleResult();
+        assertThat(job).isNotNull();
+        processEngine.getManagementService().executeJob(job.getId());
 
         assertThat(processEngine.getHistoryService().createHistoricProcessInstanceQuery()
                 .processInstanceId(instance.getId()).finished().singleResult()).isNotNull();
@@ -140,8 +143,40 @@ class WorkflowSqlConnectorMySqlIT
     }
 
     /**
-     * 验证 SQL 后续 Flowable 节点抛错时，流程实例与同库业务写入一起回滚。
-     * @return void，任一侧出现部分提交时测试失败
+     * 验证主库 SELECT 通过 Flowable async Job 执行，并把有界结果写入受控流程变量。
+     * @return void，查询结果、结果变量或流程终态任一不一致时测试失败
+     * @throws Exception JSON 解析失败
+     */
+    @Test
+    void queriesPrimarySqlIntoBoundedProcessVariable() throws Exception
+    {
+        String processKey = PREFIX + "query-" + runId;
+        Deployment deployment = deploy(processKey, false);
+        insertQuerySnapshot(deployment.getId(), processKey);
+
+        var instance = processEngine.getRuntimeService().startProcessInstanceByKey(
+                processKey, Map.of("dataSourceKey", dataSourceKey));
+        var job = processEngine.getManagementService().createJobQuery()
+                .processInstanceId(instance.getId()).singleResult();
+        assertThat(job).isNotNull();
+        processEngine.getManagementService().executeJob(job.getId());
+
+        // 查询结果变量按生产契约保存为有界 JSON，避免 Flowable 持久化 JDBC 容器实现。
+        Object queryRows = processEngine.getHistoryService().createHistoricVariableInstanceQuery()
+                .processInstanceId(instance.getId()).variableName("queryRows")
+                .singleResult().getValue();
+        var result = JsonMapper.shared().readTree(String.valueOf(queryRows));
+        assertThat(result.isArray()).isTrue();
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).path("datasource_id").asLong()).isEqualTo(dataSourceId);
+        assertThat(result.get(0).path("datasource_name").asText()).isEqualTo(ORIGINAL_NAME);
+        assertThat(processEngine.getHistoryService().createHistoricProcessInstanceQuery()
+                .processInstanceId(instance.getId()).finished().singleResult()).isNotNull();
+    }
+
+    /**
+     * 验证异步 SQL Job 后续节点抛错时，同库业务写入回滚且流程实例不会被误判完成。
+     * @return void，根因丢失、业务写入泄漏或流程被误判完成时测试失败
      * @throws Exception JSON 解析失败
      */
     @Test
@@ -149,19 +184,23 @@ class WorkflowSqlConnectorMySqlIT
     {
         String processKey = PREFIX + "rollback-" + runId;
         Deployment deployment = deploy(processKey, true);
-        insertSnapshot(deployment.getId(), processKey);
+        insertWriteSnapshot(deployment.getId(), processKey);
 
-        assertThatThrownBy(() -> processEngine.getRuntimeService().startProcessInstanceByKey(
-                processKey, Map.of("dataSourceKey", dataSourceKey, "resultValue", "leaked")))
-                .hasMessageContaining("FLOWABLE_SQL_ROLLBACK_TEST");
+        var instance = processEngine.getRuntimeService().startProcessInstanceByKey(
+                processKey, Map.of("dataSourceKey", dataSourceKey, "resultValue", "leaked"));
+        var job = processEngine.getManagementService().createJobQuery()
+                .processInstanceId(instance.getId()).singleResult();
+        assertThat(job).isNotNull();
+        assertThatThrownBy(() -> processEngine.getManagementService().executeJob(job.getId()))
+                .hasRootCauseMessage("FLOWABLE_SQL_ROLLBACK_TEST");
 
         assertThat(jdbc.queryForObject(
                 "select datasource_name from wf_sql_datasource where datasource_key = ?",
                 String.class, dataSourceKey)).isEqualTo(ORIGINAL_NAME);
         assertThat(processEngine.getRuntimeService().createProcessInstanceQuery()
-                .processDefinitionKey(processKey).count()).isZero();
+                .processInstanceId(instance.getId()).count()).isOne();
         assertThat(processEngine.getHistoryService().createHistoricProcessInstanceQuery()
-                .processDefinitionKey(processKey).count()).isZero();
+                .processInstanceId(instance.getId()).finished().count()).isZero();
     }
 
     /**
@@ -182,7 +221,7 @@ class WorkflowSqlConnectorMySqlIT
                 + "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
                 + "xmlns:flowable=\"http://flowable.org/bpmn\" targetNamespace=\"ApprovaPlatIT\">"
                 + "<process id=\"" + processKey + "\" isExecutable=\"true\">"
-                + "<startEvent id=\"start\"/><serviceTask id=\"sqlTask\" "
+                + "<startEvent id=\"start\"/><serviceTask id=\"sqlTask\" flowable:async=\"true\" "
                 + "flowable:delegateExpression=\"${workflowExtensionDelegate}\"/>"
                 + failureTask + "<endEvent id=\"end\"/>"
                 + "<sequenceFlow id=\"f1\" sourceRef=\"start\" targetRef=\"sqlTask\"/>"
@@ -201,7 +240,7 @@ class WorkflowSqlConnectorMySqlIT
      * @return void，快照可由运行时唯一调度器复核
      * @throws Exception JSON 解析失败
      */
-    private void insertSnapshot(String deploymentId, String processKey) throws Exception
+    private void insertWriteSnapshot(String deploymentId, String processKey) throws Exception
     {
         String author = JsonMapper.shared().createObjectNode()
                 .put("dataSourceKey", dataSourceKey)
@@ -210,7 +249,42 @@ class WorkflowSqlConnectorMySqlIT
                 .set("parameters", JsonMapper.shared().createObjectNode()
                         .put("dataSourceKey", "dataSourceKey").put("resultValue", "resultValue"))
                 .toString();
-        String frozen = connector.freezeConfig(JsonMapper.shared().readTree(author), false);
+        persistSnapshot(deploymentId, processKey, author);
+    }
+
+    /**
+     * 生成并落库有界 SELECT 的不可变部署快照。
+     * @param deploymentId String，Flowable 部署主键
+     * @param processKey String，流程 key
+     * @return void，查询结果只允许写入 queryRows 流程变量
+     * @throws Exception JSON 解析失败
+     */
+    private void insertQuerySnapshot(String deploymentId, String processKey) throws Exception
+    {
+        String author = JsonMapper.shared().createObjectNode()
+                .put("dataSourceKey", dataSourceKey)
+                .put("sql", "select datasource_id, datasource_name from wf_sql_datasource "
+                        + "where datasource_key = :dataSourceKey")
+                .put("resultVariable", "queryRows")
+                .put("maxRows", 10)
+                .set("parameters", JsonMapper.shared().createObjectNode()
+                        .put("dataSourceKey", "dataSourceKey"))
+                .toString();
+        persistSnapshot(deploymentId, processKey, author);
+    }
+
+    /**
+     * 冻结 SQL 作者配置并写入正式部署扩展账本。
+     * @param deploymentId String，Flowable 部署主键
+     * @param processKey String，流程 key
+     * @param author String，已通过结构化 JSON API 构造的作者配置
+     * @return void，运行时可按部署、流程和节点唯一读取冻结快照
+     * @throws Exception JSON 解析失败
+     */
+    private void persistSnapshot(String deploymentId, String processKey, String author)
+            throws Exception
+    {
+        String frozen = connector.freezeConfig(JsonMapper.shared().readTree(author), true);
         Map<String, Object> version = jdbc.queryForMap(
                 "select v.version_id, v.version_no, v.checksum from wf_bpmn_extension e "
                         + "join wf_bpmn_extension_version v on v.extension_id = e.extension_id "

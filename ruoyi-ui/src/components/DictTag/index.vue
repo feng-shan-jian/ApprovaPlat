@@ -19,15 +19,12 @@
       </template>
     </template>
     <template v-if="unmatch && showValue">
-      {{ unmatchArray | handleArray }}
+      {{ handleArray(unmatchArray) }}
     </template>
   </div>
 </template>
 
 <script setup>
-// 记录未匹配的项
-const unmatchArray = ref([])
-
 const props = defineProps({
   // 数据
   options: {
@@ -53,21 +50,18 @@ const values = computed(() => {
   return Array.isArray(props.value) ? props.value.map(item => '' + item) : String(props.value).split(props.separator)
 })
 
-const unmatch = computed(() => {
-  unmatchArray.value = []
-  // 没有value不显示
-  if (props.value === null || typeof props.value === 'undefined' || props.value === '' || !Array.isArray(props.options) || props.options.length === 0) return false
-  // 传入值为数组
-  let unmatch = false // 添加一个标志来判断是否有未匹配项
-  values.value.forEach(item => {
-    if (!props.options.some(v => v.value == item)) {
-      unmatchArray.value.push(item)
-      unmatch = true // 如果有未匹配项，将标志设置为true
-    }
-  })
-  return unmatch // 返回标志的值
+// 未匹配值由输入纯计算得到，避免 computed 在求值期间回写响应式状态。
+const unmatchArray = computed(() => {
+  if (props.value === null || typeof props.value === 'undefined' || props.value === '' || !Array.isArray(props.options) || props.options.length === 0) return []
+  return values.value.filter(item => !props.options.some(option => option.value == item))
 })
+const unmatch = computed(() => unmatchArray.value.length > 0)
 
+/**
+ * 将未匹配字典值拼接为用户可读文本。
+ * @param {Array<string|number>} array 未匹配的原始字典值。
+ * @returns {string} 使用空格分隔的展示文本。
+ */
 function handleArray(array) {
   if (array.length === 0) return ""
   return array.reduce((pre, cur) => {

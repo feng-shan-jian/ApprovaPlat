@@ -42,7 +42,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract;
 import com.ruoyi.system.mapper.SysUserMapper;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 
 /**
  * 自动抄送运行时身份解析、事件幂等键和失败零写入测试。
@@ -56,7 +56,7 @@ class WorkflowAutomaticCopyServiceTest
     @Mock private WorkflowIdentityResolver identityResolver;
     @Mock private WfCopyMapper copyMapper;
     @Mock private SysUserMapper userMapper;
-    @Mock private WorkflowNotificationService notificationService;
+    @Mock private WorkflowNotificationRegistrar notificationService;
 
     private ProcessDefinitionQuery definitionQuery;
     private ProcessInstanceQuery instanceQuery;

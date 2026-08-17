@@ -12,12 +12,15 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -184,8 +187,6 @@ final class WorkflowRbacAllowFixture
     /** 新增通知策略使用唯一 PROCESS 作用域，避免触碰正式默认策略。 */
     private final Set<Long> notificationPolicyIds = new LinkedHashSet<>();
     private final Set<String> modelIds = new LinkedHashSet<>();
-    /** 本轮真实保存 API 使用的幂等请求主键，仅用于精确回收测试创建的正式记录。 */
-    private final Set<String> modelSaveRequestIds = new LinkedHashSet<>();
     private final Set<Long> categoryIds = new LinkedHashSet<>();
     private final Set<Long> formIds = new LinkedHashSet<>();
     private final Set<Long> copyIds = new LinkedHashSet<>();
@@ -319,7 +320,6 @@ final class WorkflowRbacAllowFixture
                 case "WfAttachmentController" -> executeAttachment(roleKey, endpoint);
                 case "WfCategoryController" -> executeCategory(roleKey, endpoint);
                 case "WfDeployController" -> executeDeploy(roleKey, endpoint);
-                case "WfDesignerController" -> executeDesigner(roleKey, endpoint);
                 case "WfConnectorController" -> executeConnector(roleKey, endpoint);
                 case "WfDmnController" -> executeDmn(roleKey, endpoint);
                 case "WfExtensionController" -> executeExtension(roleKey, endpoint);
@@ -479,10 +479,12 @@ final class WorkflowRbacAllowFixture
                             + "?, ?, 'FAILED', 'RBAC_AUDIT_FIXTURE', '测试审计摘要', now(3), now(3))",
                     requestId, credentialId, PREFIX + runId, "b".repeat(64));
             JsonNode body = callJson(roleKey, endpoint,
-                    "/workflow/runtime-event-audit/list", null);
-            requireFixture(arrayContains(body.path("data"), "requestId", requestId),
+                    "/workflow/runtime-event-audit/list?pageNum=1&pageSize=100&keyword="
+                            + encode(requestId), null);
+            requireFixture(body.path("total").asLong() >= 1
+                            && arrayContains(body.path("rows"), "requestId", requestId),
                     "RUNTIME_EVENT_AUDIT_ROW_MISSING");
-            String serialized = body.path("data").toString();
+            String serialized = body.path("rows").toString();
             requireFixture(!serialized.contains("token_hash")
                             && !serialized.contains("variables_sha256"),
                     "RUNTIME_EVENT_AUDIT_SENSITIVE_FIELD_EXPOSED");
@@ -506,9 +508,9 @@ final class WorkflowRbacAllowFixture
         String prefix = "rb" + String.format("%010d", sequence.incrementAndGet());
         jdbcTemplate.update("insert into wf_integration_credential "
                         + "(credential_name, token_prefix, token_hash, scopes, allowed_variables, "
-                        + "rate_limit_per_minute, rate_window_start, rate_window_count, "
+                        + "rate_limit_per_minute, "
                         + "revision_no, create_by, create_time) values (?, ?, ?, "
-                        + "'MESSAGE,RECEIVE,SIGNAL', 'amount,approved', 100, now(3), 0, 1, ?, now(3))",
+                        + "'MESSAGE,RECEIVE,SIGNAL', 'amount,approved', 100, 1, ?, now(3))",
                 name, prefix, "a".repeat(64),
                 String.valueOf(roleUserIds.get("workflow_admin")));
         Long credentialId = jdbcTemplate.queryForObject(
@@ -594,7 +596,6 @@ final class WorkflowRbacAllowFixture
                                 "select business_key from wf_process_draft where draft_id = ?",
                                 String.class, draft.id())),
                         "DRAFT_SAVE_BUSINESS_KEY_MISMATCH");
-                assertDraftAudit(draft.id(), "SAVED", 2L);
                 yield Execution.passedJson();
             }
             case "delete" ->
@@ -603,7 +604,6 @@ final class WorkflowRbacAllowFixture
                         "/workflow/process/draft/" + encode(draft.id())
                                 + "?expectedVersion=1", null);
                 assertDraftState(draft.id(), roleKey, "DELETED", 2L, null);
-                assertDraftAudit(draft.id(), "DELETED", 2L);
                 yield Execution.passedJson();
             }
             case "submit" ->
@@ -615,7 +615,6 @@ final class WorkflowRbacAllowFixture
                 String instanceId = body.path("data").path("processInstanceId").asText();
                 trackProcessInstance(instanceId);
                 assertDraftState(draft.id(), roleKey, "SUBMITTED", 2L, instanceId);
-                assertDraftAudit(draft.id(), "SUBMITTED", 2L);
                 requireFixture(runtimeService.createProcessInstanceQuery()
                                 .processInstanceId(instanceId).count() == 1L
                                 && taskService.createTaskQuery()
@@ -650,7 +649,6 @@ final class WorkflowRbacAllowFixture
                         && response.path("data").path("revisionNo").asLong() == 1L,
                 "DRAFT_CREATE_RESPONSE_MISMATCH");
         processDraftIds.add(draftId);
-        assertDraftAudit(draftId, "CREATED", 1L);
         return new DraftFixture(draftId, businessKey);
     }
 
@@ -711,23 +709,6 @@ final class WorkflowRbacAllowFixture
                         && java.util.Objects.equals(processInstanceId,
                                 row.get("submitted_process_instance_id")),
                 "DRAFT_PERSISTED_STATE_MISMATCH");
-    }
-
-    /**
-     * 核对草稿不可变审计中的动作与目标 revision。
-     *
-     * @param draftId String，草稿 UUID
-     * @param action String，CREATED、SAVED、DELETED 或 SUBMITTED
-     * @param revision long，动作后的目标 revision
-     * @return void，审计缺失或重复即失败
-     */
-    private void assertDraftAudit(String draftId, String action, long revision)
-    {
-        requireFixture(jdbcTemplate.queryForObject(
-                        "select count(*) from wf_process_draft_audit where draft_id = ? "
-                                + "and action_type = ? and to_revision = ?",
-                        Long.class, draftId, action, revision) == 1L,
-                "DRAFT_AUDIT_MISSING");
     }
 
     /**
@@ -816,8 +797,11 @@ final class WorkflowRbacAllowFixture
             case "audit" ->
             {
                 BpmnEventRuntimeFixture fixture = insertBpmnEventRuntimeFixture(roleKey, false);
-                JsonNode body = callJson(roleKey, endpoint, "/workflow/bpmn-event/audit", null);
-                requireFixture(arrayContains(body.path("data"), "auditId",
+                JsonNode body = callJson(roleKey, endpoint,
+                        "/workflow/bpmn-event/audit?pageNum=1&pageSize=100&keyword="
+                                + fixture.auditId(), null);
+                requireFixture(body.path("total").asLong() >= 1
+                                && arrayContains(body.path("rows"), "auditId",
                                 String.valueOf(fixture.auditId())),
                         "BPMN_EVENT_AUDIT_ROW_MISSING");
                 yield Execution.passedJson();
@@ -1026,8 +1010,10 @@ final class WorkflowRbacAllowFixture
             {
                 TaskSlaRuntimeFixture fixture = insertTaskSlaRuntimeFixture(roleKey, false);
                 JsonNode body = callJson(roleKey, endpoint,
-                        "/workflow/sla/executions", null);
-                requireFixture(arrayContains(body.path("data"), "slaExecutionId",
+                        "/workflow/sla/executions?pageNum=1&pageSize=100&keyword="
+                                + fixture.executionId(), null);
+                requireFixture(body.path("total").asLong() >= 1
+                                && arrayContains(body.path("rows"), "slaExecutionId",
                                 String.valueOf(fixture.executionId())),
                         "SLA_EXECUTION_ROW_MISSING");
                 yield Execution.passedJson();
@@ -1036,8 +1022,10 @@ final class WorkflowRbacAllowFixture
             {
                 TaskSlaRuntimeFixture fixture = insertTaskSlaRuntimeFixture(roleKey, false);
                 JsonNode body = callJson(roleKey, endpoint,
-                        "/workflow/sla/audits", null);
-                requireFixture(arrayContains(body.path("data"), "auditId",
+                        "/workflow/sla/audits?pageNum=1&pageSize=100&keyword="
+                                + fixture.auditId(), null);
+                requireFixture(body.path("total").asLong() >= 1
+                                && arrayContains(body.path("rows"), "auditId",
                                 String.valueOf(fixture.auditId())),
                         "SLA_AUDIT_ROW_MISSING");
                 yield Execution.passedJson();
@@ -1242,24 +1230,12 @@ final class WorkflowRbacAllowFixture
         long outboxId = outboxKey.getKey().longValue();
         notificationOutboxIds.add(outboxId);
 
-        // 同步站内信在业务事务内完成登记与交付，两条审计保持与正式服务一致的状态轨迹。
-        jdbcTemplate.update("insert into wf_notification_delivery_audit "
-                        + "(outbox_id,action_type,delivery_cycle,attempt_no,total_attempt_no,"
-                        + "from_status,to_status,actor_type,actor_id,detail,create_time) "
-                        + "values (?,'ENQUEUE',1,0,0,null,'PENDING','SYSTEM',?,"
-                        + "'业务事务内登记统一站内通知',current_timestamp(3))",
-                outboxId, sourceType);
-        jdbcTemplate.update("insert into wf_notification_delivery_audit "
-                        + "(outbox_id,action_type,delivery_cycle,attempt_no,total_attempt_no,"
-                        + "from_status,to_status,actor_type,actor_id,detail,create_time) "
-                        + "values (?,'DELIVER',1,0,0,'PENDING','PROCESSED','SYSTEM',?,"
-                        + "'业务事务内同步持久化站内通知',current_timestamp(3))",
-                outboxId, sourceType);
-
         int inboxRows = jdbcTemplate.update("insert into wf_notification_inbox "
-                        + "(outbox_id,recipient_user_id,event_type,title,content,"
-                        + "process_instance_id,task_id,route_path,read_status,create_time) "
-                        + "select outbox_id,recipient_user_id,event_type,title,content,"
+                        + "(outbox_id,notification_key,source_type,source_id,recipient_user_id,"
+                        + "event_type,title,content,process_instance_id,task_id,route_path,"
+                        + "read_status,create_time) "
+                        + "select outbox_id,sha2(concat_ws('|',source_type,source_id,event_type),256),"
+                        + "source_type,source_id,recipient_user_id,event_type,title,content,"
                         + "process_instance_id,task_id,route_path,'UNREAD',current_timestamp(3) "
                         + "from wf_notification_outbox where outbox_id=?",
                 outboxId);
@@ -1406,18 +1382,22 @@ final class WorkflowRbacAllowFixture
                             "/workflow/notification/urge",
                             json(Map.of("processInstanceId", process.instanceId(),
                                     "reason", "RBAC真实人工催办")));
-                    long urgeId = body.path("data").path("urgeId").asLong();
+                    String urgeEventKey = body.path("data").path("urgeEventKey").asText();
                     int outboxCount = body.path("data").path("outboxCount").asInt();
-                    requireFixture(urgeId > 0L && outboxCount > 0
+                    requireFixture(urgeEventKey.startsWith("URGE:") && outboxCount > 0
                                     && body.path("data").path("recipientCount").asInt() >= 1,
                             "NOTIFICATION_URGE_RESPONSE_MISMATCH");
                     requireFixture(jdbcTemplate.queryForObject(
-                                    "select count(*) from wf_notification_urge_audit "
-                                            + "where urge_id = ? and process_instance_id = ? "
-                                            + "and actor_user_id = ? and reason = ?",
-                                    Long.class, urgeId, process.instanceId(),
-                                    roleUserIds.get(roleKey), "RBAC真实人工催办") == 1L,
-                            "NOTIFICATION_URGE_AUDIT_MISSING");
+                                    "select count(*) from wf_notification_outbox "
+                                            + "where process_instance_id = ? "
+                                            + "and event_type = 'MANUAL_URGE' "
+                                            + "and source_id like concat(?,':%') "
+                                            + "and actor_user_id = ? "
+                                            + "and content like ?",
+                                    Long.class, process.instanceId(), urgeEventKey,
+                                    roleUserIds.get(roleKey), "%RBAC真实人工催办%")
+                                    == outboxCount,
+                            "NOTIFICATION_URGE_BUSINESS_FACT_MISSING");
                     List<Long> outboxIds = jdbcTemplate.queryForList(
                             "select outbox_id from wf_notification_outbox "
                                     + "where process_instance_id = ? and event_type = 'MANUAL_URGE'",
@@ -1485,10 +1465,11 @@ final class WorkflowRbacAllowFixture
             {
                 NotificationOutboxFixture fixture = insertNotificationFixture(roleKey, false);
                 JsonNode body = callJson(roleKey, endpoint,
-                        "/workflow/notification/outbox", null);
-                JsonNode row = findArrayObject(body.path("data"), "outboxId",
+                        "/workflow/notification/outbox?pageNum=1&pageSize=100&keyword="
+                                + fixture.outboxId(), null);
+                JsonNode row = findArrayObject(body.path("rows"), "outboxId",
                         String.valueOf(fixture.outboxId()));
-                requireFixture(row != null
+                requireFixture(body.path("total").asLong() >= 1 && row != null
                                 && "DEAD_LETTER".equals(row.path("status").asText())
                                 && row.path("deliveryCycle").asInt() == 1,
                         "NOTIFICATION_OUTBOX_ROW_MISSING");
@@ -1508,15 +1489,6 @@ final class WorkflowRbacAllowFixture
                                         + "and processed_time is null",
                                 Long.class, fixture.outboxId()) == 1L,
                         "NOTIFICATION_COMPENSATE_STATE_MISMATCH");
-                requireFixture(jdbcTemplate.queryForObject(
-                                "select count(*) from wf_notification_delivery_audit "
-                                        + "where outbox_id = ? and action_type = 'COMPENSATE' "
-                                        + "and delivery_cycle = 2 and attempt_no = 0 "
-                                        + "and total_attempt_no = 3 "
-                                        + "and from_status = 'DEAD_LETTER' "
-                                        + "and to_status = 'RETRYING'",
-                                Long.class, fixture.outboxId()) == 1L,
-                        "NOTIFICATION_COMPENSATE_AUDIT_MISSING");
                 yield Execution.passedJson();
             }
             default -> throw new AssertionError("未知审批通知 ALLOW 入口");
@@ -1576,26 +1548,21 @@ final class WorkflowRbacAllowFixture
         Long notificationId = null;
         if (withInbox)
         {
-            GeneratedKeyHolder inboxKey = new GeneratedKeyHolder();
-            jdbcTemplate.update(connection ->
-            {
-                PreparedStatement statement = connection.prepareStatement(
-                        "insert into wf_notification_inbox "
-                                + "(outbox_id,recipient_user_id,event_type,title,content,"
-                                + "process_instance_id,task_id,route_path,read_status,"
-                                + "create_time,read_time) values (?,?,'COPY_CREATED',"
-                                + "'RBAC审批通知','RBAC真实审批通知正文',?,?,?,"
-                                + "'UNREAD',current_timestamp(3),null)",
-                        Statement.RETURN_GENERATED_KEYS);
-                statement.setLong(1, outboxId);
-                statement.setLong(2, roleUserIds.get(recipientRole));
-                statement.setString(3, process.instanceId());
-                statement.setString(4, process.taskId());
-                statement.setString(5,
-                        "/workflow/process/detail?procInsId=" + process.instanceId());
-                return statement;
-            }, inboxKey);
-            notificationId = inboxKey.getKey().longValue();
+            int inboxRows = jdbcTemplate.update("insert into wf_notification_inbox "
+                            + "(outbox_id,notification_key,source_type,source_id,recipient_user_id,"
+                            + "event_type,title,content,process_instance_id,task_id,route_path,"
+                            + "read_status,create_time,read_time) "
+                            + "select outbox_id,"
+                            + "sha2(concat_ws('|',source_type,source_id,event_type),256),"
+                            + "source_type,source_id,recipient_user_id,event_type,title,content,"
+                            + "process_instance_id,task_id,route_path,'UNREAD',"
+                            + "current_timestamp(3),null from wf_notification_outbox "
+                            + "where outbox_id = ?",
+                    outboxId);
+            requireFixture(inboxRows == 1, "NOTIFICATION_INBOX_INSERT_FAILED");
+            notificationId = jdbcTemplate.queryForObject(
+                    "select notification_id from wf_notification_inbox where outbox_id = ?",
+                    Long.class, outboxId);
         }
         return new NotificationOutboxFixture(outboxId, notificationId, process);
     }
@@ -1723,10 +1690,11 @@ final class WorkflowRbacAllowFixture
                 {
                     insertCollaborationInbound(fixture, "RETRYING");
                     JsonNode body = callJson(roleKey, endpoint,
-                            "/workflow/collaboration/inbound", null);
-                    JsonNode row = findArrayObject(body.path("data"), "messageId",
+                            "/workflow/collaboration/inbound?pageNum=1&pageSize=100&keyword="
+                                    + encode(fixture.messageId()), null);
+                    JsonNode row = findArrayObject(body.path("rows"), "messageId",
                             fixture.messageId());
-                    requireFixture(row != null
+                    requireFixture(body.path("total").asLong() >= 1 && row != null
                                     && "RETRYING".equals(row.path("status").asText()),
                             "COLLABORATION_INBOUND_ROW_MISSING");
                     yield Execution.passedJson();
@@ -1735,10 +1703,11 @@ final class WorkflowRbacAllowFixture
                 {
                     insertCollaborationOutbox(fixture, "PENDING");
                     JsonNode body = callJson(roleKey, endpoint,
-                            "/workflow/collaboration/outbox", null);
-                    JsonNode row = findArrayObject(body.path("data"), "messageId",
+                            "/workflow/collaboration/outbox?pageNum=1&pageSize=100&keyword="
+                                    + encode(fixture.messageId()), null);
+                    JsonNode row = findArrayObject(body.path("rows"), "messageId",
                             fixture.messageId());
-                    requireFixture(row != null
+                    requireFixture(body.path("total").asLong() >= 1 && row != null
                                     && "PENDING".equals(row.path("status").asText()),
                             "COLLABORATION_OUTBOX_ROW_MISSING");
                     yield Execution.passedJson();
@@ -2621,88 +2590,6 @@ final class WorkflowRbacAllowFixture
     }
 
     /**
-     * 执行设计器偏好查询和真实数据库写入，并在断言后恢复测试账号原始偏好。
-     *
-     * @param roleKey String，当前角色
-     * @param endpoint Endpoint，设计器偏好入口
-     * @return Execution，成功执行结果
-     * @throws IOException HTTP 读取失败
-     * @throws InterruptedException 请求线程中断
-     */
-    private Execution executeDesigner(String roleKey, Endpoint endpoint)
-            throws IOException, InterruptedException
-    {
-        long userId = roleUserIds.get(roleKey);
-        return switch (endpoint.handler())
-        {
-            case "getPreference" ->
-            {
-                JsonNode body = callJson(roleKey, endpoint,
-                        "/workflow/designer/preference", null);
-                assertThat(body.path("data").path("theme").asText())
-                        .isIn("LIGHT", "DARK", "SYSTEM");
-                yield Execution.passedJson();
-            }
-            case "savePreference" ->
-            {
-                // 偏好属于正式用户数据，矩阵验收必须在 finally 中逐字段恢复原始状态。
-                List<Map<String, Object>> original = jdbcTemplate.queryForList(
-                        "select theme, grid_enabled, minimap_enabled, lint_enabled, "
-                                + "token_simulation_enabled, properties_collapsed, "
-                                + "create_time, update_time from wf_designer_preference "
-                                + "where user_id = ?",
-                        userId);
-                try
-                {
-                    JsonNode body = callJson(roleKey, endpoint,
-                            "/workflow/designer/preference",
-                            json(Map.of("theme", "DARK", "gridEnabled", false,
-                                    "minimapEnabled", true, "lintEnabled", true,
-                                    "tokenSimulationEnabled", false,
-                                    "propertiesCollapsed", true)));
-                    assertThat(body.path("data").path("theme").asText()).isEqualTo("DARK");
-                    assertThat(jdbcTemplate.queryForObject(
-                            "select theme from wf_designer_preference where user_id = ?",
-                            String.class, userId)).isEqualTo("DARK");
-                    yield Execution.passedJson();
-                }
-                finally
-                {
-                    restoreDesignerPreference(userId, original);
-                }
-            }
-            default -> throw new AssertionError("未知设计器偏好入口");
-        };
-    }
-
-    /**
-     * 恢复设计器偏好验收前的精确数据库状态，避免 RBAC 测试污染正式用户设置。
-     *
-     * @param userId long，当前测试角色的正式用户主键
-     * @param original List&lt;Map&lt;String, Object&gt;&gt;，写入前零行或唯一一行快照
-     * @return void，无返回值；恢复失败时由测试直接失败
-     */
-    private void restoreDesignerPreference(long userId,
-            List<Map<String, Object>> original)
-    {
-        if (original.isEmpty())
-        {
-            jdbcTemplate.update("delete from wf_designer_preference where user_id = ?", userId);
-            return;
-        }
-        Map<String, Object> row = original.get(0);
-        jdbcTemplate.update(
-                "update wf_designer_preference set theme = ?, grid_enabled = ?, "
-                        + "minimap_enabled = ?, lint_enabled = ?, token_simulation_enabled = ?, "
-                        + "properties_collapsed = ?, create_time = ?, update_time = ? "
-                        + "where user_id = ?",
-                row.get("theme"), row.get("grid_enabled"), row.get("minimap_enabled"),
-                row.get("lint_enabled"), row.get("token_simulation_enabled"),
-                row.get("properties_collapsed"), row.get("create_time"),
-                row.get("update_time"), userId);
-    }
-
-    /**
      * 执行附件上传、对象授权元数据、逐字节下载和所有者删除。
      *
      * @param roleKey String，当前角色
@@ -3159,8 +3046,8 @@ final class WorkflowRbacAllowFixture
                 ModelFixture fixture = createModel(roleKey, "保存模型");
                 String xml = deployableModelXml(roleKey, fixture);
                 JsonNode body = callJson(roleKey, endpoint, "/workflow/model/save",
-                        json(Map.of("requestId", newModelSaveRequestId(),
-                                "modelId", fixture.id(), "bpmnXml", xml,
+                        json(Map.of("modelId", fixture.id(), "bpmnXml", xml,
+                                "expectedBpmnSha256", modelBpmnSha256(fixture.id()),
                                 "newVersion", false)));
                 assertThat(body.path("data").path("modelId").asText())
                         .isEqualTo(fixture.id());
@@ -4013,13 +3900,6 @@ final class WorkflowRbacAllowFixture
                     Long.class, instanceIds));
         }
 
-        if (!processInstanceIds.isEmpty())
-        {
-            jdbcTemplate.update("delete from wf_notification_urge_audit "
-                            + "where process_instance_id in ("
-                            + placeholders(processInstanceIds.size()) + ")",
-                    processInstanceIds.toArray());
-        }
         if (!notificationPolicyIds.isEmpty())
         {
             jdbcTemplate.update("delete from wf_notification_policy where policy_id in ("
@@ -4061,8 +3941,6 @@ final class WorkflowRbacAllowFixture
         {
             String draftPlaceholders = placeholders(processDraftIds.size());
             Object[] draftIds = processDraftIds.toArray();
-            jdbcTemplate.update("delete from wf_process_draft_audit where draft_id in ("
-                    + draftPlaceholders + ")", draftIds);
             jdbcTemplate.update("delete from wf_process_draft where draft_id in ("
                     + draftPlaceholders + ")", draftIds);
         }
@@ -4079,15 +3957,6 @@ final class WorkflowRbacAllowFixture
                 businessCalendarIds, "ALLOW fixture 不得残留 SLA 日历");
         assertTrackedRowsRemoved("wf_process_draft", "draft_id",
                 processDraftIds, "ALLOW fixture 不得残留申请草稿");
-        if (!processInstanceIds.isEmpty())
-        {
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_notification_urge_audit "
-                            + "where process_instance_id in ("
-                            + placeholders(processInstanceIds.size()) + ")",
-                    Long.class, processInstanceIds.toArray()))
-                    .as("ALLOW fixture 不得残留人工催办审计").isZero();
-        }
     }
 
     /**
@@ -4133,18 +4002,12 @@ final class WorkflowRbacAllowFixture
 
         String outboxPlaceholders = placeholders(notificationOutboxIds.size());
         Object[] outboxIds = notificationOutboxIds.toArray();
-        // 三步均限定已跟踪 outbox 主键；子表先于父表，保留验收库预存的取消通知及其审计。
-        jdbcTemplate.update("delete from wf_notification_delivery_audit where outbox_id in ("
-                + outboxPlaceholders + ")", outboxIds);
+        // 两步均限定已跟踪 outbox 主键；子表先于父表，保留验收库其他通知事实。
         jdbcTemplate.update("delete from wf_notification_inbox where outbox_id in ("
                 + outboxPlaceholders + ")", outboxIds);
         jdbcTemplate.update("delete from wf_notification_outbox where outbox_id in ("
                 + outboxPlaceholders + ")", outboxIds);
 
-        assertThat(jdbcTemplate.queryForObject(
-                "select count(*) from wf_notification_delivery_audit where outbox_id in ("
-                        + outboxPlaceholders + ")",
-                Long.class, outboxIds)).as("ALLOW fixture 不得残留通知投递审计").isZero();
         assertThat(jdbcTemplate.queryForObject(
                 "select count(*) from wf_notification_inbox where outbox_id in ("
                         + outboxPlaceholders + ")",
@@ -4204,9 +4067,6 @@ final class WorkflowRbacAllowFixture
         deployments.sort(Comparator.comparing(id -> id.equals(mainDeploymentId) ? 1 : 0));
         for (String deploymentId : deployments)
         {
-            // 参与者解析审计是业务运行事实，仍需按父部署主键先行清理。
-            jdbcTemplate.update("delete from wf_participant_resolution_audit where deploy_id = ?",
-                    deploymentId);
             artifactRepository.delete(deploymentId);
             if (repositoryService.createDeploymentQuery()
                     .deploymentId(deploymentId).count() > 0L)
@@ -4220,13 +4080,6 @@ final class WorkflowRbacAllowFixture
             {
                 repositoryService.deleteModel(modelId);
             }
-        }
-        // 幂等记录是模型的审计软引用，不随 ACT_RE_MODEL 级联；fixture 必须按已登记 UUID 精确回收。
-        for (String requestId : List.copyOf(modelSaveRequestIds))
-        {
-            jdbcTemplate.update(
-                    "delete from wf_model_save_idempotency where request_id = ?",
-                    requestId);
         }
         for (Long formId : List.copyOf(formIds))
         {
@@ -4268,13 +4121,6 @@ final class WorkflowRbacAllowFixture
                             + placeholders(attachmentIds.size()) + ")",
                     Long.class, attachmentIds.toArray())).isZero();
         }
-        if (!modelSaveRequestIds.isEmpty())
-        {
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_model_save_idempotency where request_id in ("
-                            + placeholders(modelSaveRequestIds.size()) + ")",
-                    Long.class, modelSaveRequestIds.toArray())).isZero();
-        }
         if (!processInstanceIds.isEmpty())
         {
             assertThat(jdbcTemplate.queryForObject(
@@ -4286,12 +4132,6 @@ final class WorkflowRbacAllowFixture
         }
         if (!deploymentIds.isEmpty())
         {
-            assertThat(jdbcTemplate.queryForObject(
-                    "select count(*) from wf_participant_resolution_audit where deploy_id in ("
-                            + placeholders(deploymentIds.size()) + ")",
-                    Long.class, deploymentIds.toArray()))
-                    .as("ALLOW fixture 部署不得残留参与者解析审计")
-                    .isZero();
             for (String deploymentId : deploymentIds)
             {
                 assertThat(repositoryService.createDeploymentQuery()
@@ -4348,9 +4188,9 @@ final class WorkflowRbacAllowFixture
             throws IOException, InterruptedException
     {
         JsonNode body = callJsonRaw(roleKey, "/workflow/model/save", "POST",
-                json(Map.of("requestId", newModelSaveRequestId(),
-                        "modelId", original.id(),
+                json(Map.of("modelId", original.id(),
                         "bpmnXml", deployableModelXml(roleKey, original),
+                        "expectedBpmnSha256", modelBpmnSha256(original.id()),
                         "newVersion", true)), true);
         String id = body.path("data").path("modelId").asText();
         modelIds.add(id);
@@ -4371,8 +4211,8 @@ final class WorkflowRbacAllowFixture
     {
         String deployableXml = deployableModelXml(roleKey, fixture);
         JsonNode body = callJsonRaw(roleKey, "/workflow/model/save", "POST",
-                json(Map.of("requestId", newModelSaveRequestId(),
-                        "modelId", fixture.id(), "bpmnXml", deployableXml,
+                json(Map.of("modelId", fixture.id(), "bpmnXml", deployableXml,
+                        "expectedBpmnSha256", modelBpmnSha256(fixture.id()),
                         "newVersion", false)), true);
         assertThat(body.path("data").path("modelId").asText()).isEqualTo(fixture.id());
     }
@@ -4413,19 +4253,6 @@ final class WorkflowRbacAllowFixture
     }
 
     /**
-     * 生成并登记本轮真实模型保存请求的 UUID，确保持久化幂等记录可按请求边界精确清理。
-     *
-     * @return String，符合后端保存契约的随机 UUID
-     */
-    private String newModelSaveRequestId()
-    {
-        // requestId 同时是业务幂等键和测试清理边界，必须在发出 HTTP 请求前登记。
-        String requestId = UUID.randomUUID().toString();
-        modelSaveRequestIds.add(requestId);
-        return requestId;
-    }
-
-    /**
      * 读取 Flowable 模型编辑器真实 BPMN 字节。
      *
      * @param modelId String，模型主键
@@ -4436,6 +4263,27 @@ final class WorkflowRbacAllowFixture
         byte[] source = repositoryService.getModelEditorSource(modelId);
         assertThat(source).isNotNull().isNotEmpty();
         return new String(source, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 计算模型当前 BPMN 基线摘要，保持与正式保存服务相同的换行规范化规则。
+     *
+     * @param modelId String，待读取的 Flowable 模型主键
+     * @return String，LF 规范化后 BPMN XML 的小写 SHA-256 十六进制摘要
+     */
+    private String modelBpmnSha256(String modelId)
+    {
+        String normalizedXml = modelXml(modelId).replace("\r\n", "\n").replace('\r', '\n');
+        try
+        {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(normalizedXml.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        }
+        catch (NoSuchAlgorithmException exception)
+        {
+            throw new IllegalStateException("当前 JVM 不支持 SHA-256", exception);
+        }
     }
 
     /**

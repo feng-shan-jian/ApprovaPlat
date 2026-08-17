@@ -418,9 +418,16 @@ test('条件规则由设计器配置并在真实 MySQL 流程中安全路由', a
     await selectDiagramElement(pages.designer, 'flowDefault')
     await expect(pages.designer.locator('.condition-editor')).toContainText('默认分支已设置')
 
+    const exclusiveModelDetail = await callWorkflowApi(
+      pages.designer, 'GET', `/workflow/model/${encodeURIComponent(exclusiveModelId)}`)
     await callWorkflowApi(pages.starter, 'POST', '/workflow/model/save', {
       expectedCode: 403,
-      data: { requestId: randomUUID(), modelId: exclusiveModelId, bpmnXml: configuredV1Xml, newVersion: false }
+      data: {
+        modelId: exclusiveModelId,
+        bpmnXml: configuredV1Xml,
+        expectedBpmnSha256: exclusiveModelDetail.data?.bpmnSha256,
+        newVersion: false
+      }
     })
     const exclusiveV1Deploy = await callWorkflowApi(pages.designer, 'POST', '/workflow/model/deploy', { query: { modelId: exclusiveModelId } })
     const exclusiveV1DeploymentId = String(exclusiveV1Deploy.data?.deploymentId || '')

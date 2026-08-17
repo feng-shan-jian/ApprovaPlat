@@ -422,14 +422,16 @@ export class WorkflowConfigurationPage {
     await this.filterTable('请输入模型标识', modelKey)
     const row = this.row(modelKey)
     await row.locator('button').nth(3).click()
+    const deployPromise = this.page.waitForResponse(response => matchesEndpoint(response, '/workflow/model/deploy', 'POST'))
     await this.page.locator('.el-message-box').getByRole('button', { name: '确定', exact: true }).click()
+    await expectAjaxSuccess(await deployPromise, '/workflow/model/deploy')
     await expect(this.page.getByText('流程模型部署成功', { exact: true })).toBeVisible()
     await expect(this.row(modelKey).getByText('已部署', { exact: true })).toBeVisible()
   }
 
   /**
    * 通过连接端点管理页创建正式 HTTP 白名单端点。
-   * @param {{name:string,key:string,baseUrl:string,pathPrefix:string,connectTimeoutMs:number,requestTimeoutMs:number}} endpoint 端点名称、稳定键、地址边界和超时。
+   * @param {{name:string,key:string,baseUrl:string,pathPrefix:string,connectTimeoutMs:number,requestTimeoutMs:number,authType?:string,secretRef?:string,apiKeyHeader?:string}} endpoint 端点名称、稳定键、地址边界、认证和超时。
    * @returns {Promise<void>} 端点保存成功并在列表回显启用状态后结束。
    */
   async createHttpEndpoint(endpoint) {
@@ -450,6 +452,20 @@ export class WorkflowConfigurationPage {
     const privateScope = dialog.locator('.el-segmented__item').filter({ hasText: '内网' })
     await expect(privateScope, '本机故障端点必须提供内网范围选项').toHaveCount(1)
     await privateScope.click()
+
+    if (endpoint.authType && endpoint.authType !== 'NONE') {
+      // 外部认证必须通过页面正式控件配置，测试不得直接改库绕过端点校验和修订快照。
+      const authSelect = dialog.locator('.el-form-item').filter({ hasText: '认证类型' }).locator('.el-select')
+      await authSelect.click()
+      const authLabel = endpoint.authType === 'API_KEY' ? 'API Key' : 'Bearer Token'
+      await this.page.locator('.el-select-dropdown:visible').getByRole('option', {
+        name: authLabel, exact: true
+      }).click()
+      await dialog.getByLabel('密钥引用').fill(endpoint.secretRef || '')
+      if (endpoint.authType === 'API_KEY') {
+        await dialog.getByLabel('认证请求头').fill(endpoint.apiKeyHeader || '')
+      }
+    }
 
     const connectTimeout = dialog.locator('.el-form-item').filter({ hasText: '连接超时' }).getByRole('spinbutton')
     await connectTimeout.fill(String(endpoint.connectTimeoutMs))
@@ -472,9 +488,9 @@ export class WorkflowConfigurationPage {
    * 通过连接端点列表停用当前测试创建的端点，避免继续进入后续作者目录。
    * @param {string} endpointKey `E2E_UI_` 前缀的正式端点稳定键。
    * @returns {Promise<void>} 端点不存在或已经停用时直接结束，否则确认停用并核对回显。
-   */
+  */
   async disableHttpEndpoint(endpointKey) {
-    expect(endpointKey.startsWith('E2E_UI_'), '自动停用只能作用于 UI 测试端点').toBe(true)
+    expect(endpointKey.toUpperCase().startsWith('E2E_UI_'), '自动停用只能作用于 UI 测试端点').toBe(true)
     await this.page.goto('/workflow/extensions/connector')
     await expect(this.page.getByRole('heading', { name: '连接端点', exact: true })).toBeVisible()
     await this.refreshHttpEndpointList(endpointKey)

@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.JdbcNamedParameter;
 import net.sf.jsqlparser.expression.JdbcParameter;
+import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.Statements;
@@ -16,6 +17,7 @@ import net.sf.jsqlparser.statement.delete.Delete;
 import net.sf.jsqlparser.statement.insert.Insert;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.update.Update;
+import net.sf.jsqlparser.statement.update.UpdateSet;
 import net.sf.jsqlparser.util.TablesNamesFinder;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
@@ -80,6 +82,101 @@ public class WorkflowSqlTemplateValidator
         catch (JSQLParserException exception)
         {
             throw invalid("SQL 模板无法解析");
+        }
+    }
+
+    /**
+     * 校验外库写模板具有可重放的业务唯一键契约。
+     * @param template WorkflowSqlTemplate，已经通过单语句与表白名单校验的模板
+     * @param idempotencyColumn String，目标表由唯一约束保护的幂等键列
+     * @return void，仅接受写入系统 idempotencyKey 且重复键分支为空操作的 INSERT
+     */
+    public void requireIdempotentExternalWrite(WorkflowSqlTemplate template,
+            String idempotencyColumn)
+    {
+        String columnName = idempotencyColumn == null ? "" : idempotencyColumn.trim();
+        if (!TABLE_NAME.matcher(columnName).matches() || columnName.contains("."))
+        {
+            throw invalid("SQL 外库幂等唯一列格式不合法");
+        }
+        if (template == null || !"INSERT".equals(template.operation())
+                || !template.parameterNames().contains("idempotencyKey"))
+        {
+            throw invalid("SQL 外库写入只允许使用 idempotencyKey 的幂等 INSERT 模板");
+        }
+        try
+        {
+            Statement statement = CCJSqlParserUtil.parse(template.sql());
+            if (!(statement instanceof Insert insert))
+            {
+                throw invalid("SQL 外库写入只允许幂等 INSERT 模板");
+            }
+            requireIdempotencyValue(insert, columnName);
+            requireNoOpDuplicateUpdate(insert, columnName);
+        }
+        catch (JSQLParserException exception)
+        {
+            throw invalid("SQL 外库幂等模板无法解析");
+        }
+    }
+
+    /**
+     * 校验幂等唯一列在 INSERT values 中由系统参数 idempotencyKey 直接赋值。
+     * @param insert Insert，外库写入 AST
+     * @param idempotencyColumn String，业务唯一列
+     * @return void，列缺失、值非命名参数或参数名错误时拒绝
+     */
+    private void requireIdempotencyValue(Insert insert, String idempotencyColumn)
+    {
+        if (insert.getColumns() == null || insert.getValues() == null
+                || insert.getValues().getExpressions() == null
+                || insert.getColumns().size() != insert.getValues().getExpressions().size())
+        {
+            throw invalid("SQL 外库幂等 INSERT 必须显式列出单行 values");
+        }
+        for (int index = 0; index < insert.getColumns().size(); index++)
+        {
+            Column column = insert.getColumns().get(index);
+            if (column.getColumnName().equalsIgnoreCase(idempotencyColumn))
+            {
+                Object value = insert.getValues().getExpressions().get(index);
+                if (value instanceof JdbcNamedParameter parameter
+                        && "idempotencyKey".equals(parameter.getName()))
+                {
+                    return;
+                }
+                throw invalid("SQL 外库幂等唯一列必须直接绑定 :idempotencyKey");
+            }
+        }
+        throw invalid("SQL 外库幂等 INSERT 缺少业务唯一列");
+    }
+
+    /**
+     * 校验重复键分支只把幂等列赋回自身，禁止计数累加、函数和其他业务字段二次变更。
+     * @param insert Insert，外库写入 AST
+     * @param idempotencyColumn String，业务唯一列
+     * @return void，不是唯一 no-op 更新时拒绝
+     */
+    private void requireNoOpDuplicateUpdate(Insert insert, String idempotencyColumn)
+    {
+        List<UpdateSet> updates = insert.getDuplicateUpdateSets();
+        if (updates == null || updates.size() != 1)
+        {
+            throw invalid("SQL 外库幂等 INSERT 必须包含唯一 no-op 重复键分支");
+        }
+        UpdateSet update = updates.get(0);
+        if (update.getColumns() == null || update.getColumns().size() != 1
+                || update.getValues() == null || update.getValues().size() != 1)
+        {
+            throw invalid("SQL 外库重复键分支只能更新幂等唯一列");
+        }
+        Column target = update.getColumn(0);
+        Object value = update.getValue(0);
+        if (!(value instanceof Column source)
+                || !target.getColumnName().equalsIgnoreCase(idempotencyColumn)
+                || !source.getColumnName().equalsIgnoreCase(idempotencyColumn))
+        {
+            throw invalid("SQL 外库重复键分支必须将幂等唯一列赋回自身");
         }
     }
 

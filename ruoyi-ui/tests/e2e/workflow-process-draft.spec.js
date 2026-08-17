@@ -202,7 +202,7 @@ async function purgeBoundAttachmentFixture(fixture) {
 }
 
 /**
- * 清除本轮已提交草稿及其审计，使随后删除流程历史时不会留下悬空正式引用。
+ * 清除本轮已提交草稿当前状态，使随后删除流程历史时不会留下悬空正式引用。
  * @param {{draftId: string, processInstanceId: string}} fixture 本轮草稿 UUID 与唯一提交实例关系。
  * @returns {Promise<void>} 草稿关系经唯一性校验并在同一事务删除后结束。
  */
@@ -217,28 +217,21 @@ async function purgeSubmittedDraftFixture(fixture) {
   const draftLiteral = escapeLiteral(draftId)
   const instanceLiteral = escapeLiteral(processInstanceId)
   const rows = runDraftFixtureMysql(
-    `SELECT draft_status, submitted_process_instance_id FROM wf_process_draft `
-      + `WHERE draft_id='${draftLiteral}';\n`
-      + `SELECT COUNT(*) FROM wf_process_draft_audit WHERE draft_id='${draftLiteral}';\n`)
-  if (rows.length !== 2) throw new Error('草稿 E2E 已提交记录或审计计数不唯一')
-  const [status, storedInstanceId] = rows[0].split('\t')
-  const auditCount = Number(rows[1])
+    `SELECT draft_status, revision_no, submitted_process_instance_id FROM wf_process_draft `
+      + `WHERE draft_id='${draftLiteral}';\n`)
+  if (rows.length !== 1) throw new Error('草稿 E2E 已提交当前状态不唯一')
+  const [status, revisionText, storedInstanceId] = rows[0].split('\t')
+  const revision = Number(revisionText)
   if (status !== 'SUBMITTED' || storedInstanceId !== processInstanceId
-      || !Number.isInteger(auditCount) || auditCount < 1) {
+      || !Number.isInteger(revision) || revision < 2) {
     throw new Error('草稿 E2E 已提交记录不满足清理门禁')
   }
 
   const deleted = runDraftFixtureMysql(
-    `START TRANSACTION;\n`
-      + `DELETE FROM wf_process_draft_audit WHERE draft_id='${draftLiteral}';\n`
-      + `SELECT ROW_COUNT();\n`
-      + `DELETE FROM wf_process_draft WHERE draft_id='${draftLiteral}' `
+    `DELETE FROM wf_process_draft WHERE draft_id='${draftLiteral}' `
       + `AND draft_status='SUBMITTED' AND submitted_process_instance_id='${instanceLiteral}';\n`
-      + `SELECT ROW_COUNT();\n`
-      + `COMMIT;\n`)
-  if (Number(deleted.at(-2)) !== auditCount || deleted.at(-1) !== '1') {
-    throw new Error('草稿 E2E 已提交记录事务删除计数不一致')
-  }
+      + `SELECT ROW_COUNT();\n`)
+  if (deleted.at(-1) !== '1') throw new Error('草稿 E2E 已提交记录条件删除计数不一致')
 }
 
 test('草稿跨登录恢复、附件迁移、CAS、越权、过期和重复提交保持真实一致', async ({ browser }) => {
@@ -472,8 +465,15 @@ test('草稿跨登录恢复、附件迁移、CAS、越权、过期和重复提�
     })
     staleDraftId = requireDraftId(staleCreated)
     staleDraftRevision = Number(staleCreated.data?.revisionNo)
+    const sourceModelDetail = await callWorkflowApi(
+      pages.designer, 'GET', `/workflow/model/${encodeURIComponent(model.modelId)}`)
     const savedVersionTwo = await callWorkflowApi(pages.designer, 'POST', '/workflow/model/save', {
-      data: { requestId: randomUUID(), modelId: model.modelId, bpmnXml, newVersion: true }
+      data: {
+        modelId: model.modelId,
+        bpmnXml,
+        expectedBpmnSha256: sourceModelDetail.data?.bpmnSha256,
+        newVersion: true
+      }
     })
     const versionTwoModelId = String(savedVersionTwo.data?.modelId || '')
     expect(versionTwoModelId, '另存新版本必须返回新的正式模型主键').not.toBe('')

@@ -164,11 +164,11 @@ async function saveDraftThroughUi(page, endpoint, method) {
 }
 
 /**
- * 读取草稿、不可变定义、Flowable 实例任务和附件的只读一致性快照。
+ * 读取草稿当前状态、不可变定义、Flowable 实例任务和附件的只读一致性快照。
  * @param {string} draftId 当前正式草稿 UUID。
  * @param {string} businessKey 当前用例唯一业务主键。
  * @param {string} processKey 当前 UI 建模流程的稳定 key。
- * @returns {{draftRows:string[][],auditRows:string[][],definitionRows:string[][],historyProcessRows:string[][],runtimeProcessCount:number,runtimeTaskCount:number,historyTaskRows:string[][],attachmentRows:string[][]}} 不包含表单正文和凭据的业务快照。
+ * @returns {{draftRows:string[][],definitionRows:string[][],historyProcessRows:string[][],runtimeProcessCount:number,runtimeTaskCount:number,historyTaskRows:string[][],attachmentRows:string[][]}} 不包含表单正文和凭据的业务快照。
  */
 function draftSubmissionSnapshot(draftId, businessKey, processKey) {
   const escapedDraftId = sqlLiteral(draftId)
@@ -183,9 +183,6 @@ function draftSubmissionSnapshot(draftId, businessKey, processKey) {
   return {
     draftRows: queryReadOnly(
       `SELECT process_definition_id,process_definition_version,deployment_id,draft_status,revision_no,COALESCE(submitted_process_instance_id,''),COALESCE(business_key,''),SHA2(form_values,256),submitted_time IS NULL,deleted_time IS NULL FROM wf_process_draft WHERE draft_id='${escapedDraftId}'`
-    ),
-    auditRows: queryReadOnly(
-      `SELECT action_type,COALESCE(from_status,''),to_status,COALESCE(from_revision,0),to_revision,COALESCE(process_instance_id,'') FROM wf_process_draft_audit WHERE draft_id='${escapedDraftId}' ORDER BY audit_id`
     ),
     definitionRows: queryReadOnly(
       `SELECT VERSION_,ID_,DEPLOYMENT_ID_,SUSPENSION_STATE_ FROM ACT_RE_PROCDEF WHERE KEY_='${escapedProcessKey}' ORDER BY VERSION_`
@@ -287,10 +284,6 @@ function expectUniqueSubmittedDraft(snapshot, expected) {
   ])
   expect(snapshot.draftRows[0][8], '提交后必须登记 submitted_time').toBe('0')
   expect(snapshot.draftRows[0][9], '提交后不得登记 deleted_time').toBe('1')
-  expect(snapshot.auditRows).toEqual([
-    ['CREATED', '', 'ACTIVE', '0', '1', ''],
-    ['SUBMITTED', 'ACTIVE', 'SUBMITTED', '1', '2', expected.processInstanceId]
-  ])
   expect(snapshot.historyProcessRows).toHaveLength(1)
   expect(snapshot.historyProcessRows[0].slice(0, 4)).toEqual([
     expected.processInstanceId, expected.definitionId, expected.businessKey, '0'
@@ -529,11 +522,6 @@ test('@full [UI-DRAFT-001] 草稿跨登录恢复、双标签CAS冲突和UI删除
     expect(queryReadOnly(
       `SELECT draft_status, revision_no, deleted_time IS NOT NULL FROM wf_process_draft WHERE draft_id = '${sqlLiteral(draftId)}'`
     )).toEqual([['DELETED', '3', '1']])
-    expect(queryReadOnly(
-      `SELECT action_type, to_status, to_revision FROM wf_process_draft_audit WHERE draft_id = '${sqlLiteral(draftId)}' ORDER BY audit_id`
-    )).toEqual([
-      ['CREATED', 'ACTIVE', '1'], ['SAVED', 'ACTIVE', '2'], ['DELETED', 'DELETED', '3']
-    ])
     failed = false
   } finally {
     await stalePage?.close().catch(() => {})
@@ -574,7 +562,6 @@ test('@full [UI-DRAFT-002] V1草稿在UI发布V2后提交拒绝且零业务副�
     expect(beforePublish.draftRows[0].slice(1, 7)).toEqual([
       '1', beforePublish.draftRows[0][2], 'ACTIVE', '1', '', businessKey
     ])
-    expect(beforePublish.auditRows).toEqual([['CREATED', '', 'ACTIVE', '0', '1', '']])
     expect(beforePublish.definitionRows).toHaveLength(1)
     expect(beforePublish.definitionRows[0][0]).toBe('1')
     expect(beforePublish.historyProcessRows).toHaveLength(0)
@@ -588,7 +575,6 @@ test('@full [UI-DRAFT-002] V1草稿在UI发布V2后提交拒绝且零业务副�
       ['1', '2'], ['2', '1']
     ])
     expect(afterPublish.draftRows, '发布 V2 不得主动改写 V1 活动草稿').toEqual(beforePublish.draftRows)
-    expect(afterPublish.auditRows, '发布 V2 不得追加草稿业务审计').toEqual(beforePublish.auditRows)
     expect(afterPublish.historyProcessRows).toHaveLength(0)
     evidence.afterPublish = afterPublish
 
@@ -611,8 +597,6 @@ test('@full [UI-DRAFT-002] V1草稿在UI发布V2后提交拒绝且零业务副�
     const afterReject = draftSubmissionSnapshot(draftId, businessKey, assets.modelKey)
     expect(afterReject.draftRows, '过期定义提交拒绝不得改写草稿状态、版本或正文摘要')
       .toEqual(afterPublish.draftRows)
-    expect(afterReject.auditRows, '过期定义提交拒绝不得追加业务审计')
-      .toEqual(afterPublish.auditRows)
     expect(afterReject.historyProcessRows, '过期定义提交拒绝不得创建 Flowable 历史实例')
       .toHaveLength(0)
     expect(afterReject.runtimeProcessCount).toBe(0)
@@ -690,7 +674,6 @@ test('@full [UI-DRAFT-003] 两个真实标签并发提交同一草稿复用唯�
     expect(before.draftRows[0].slice(0, 7)).toEqual([
       definitionId, '1', deploymentId, 'ACTIVE', '1', '', businessKey
     ])
-    expect(before.auditRows).toEqual([['CREATED', '', 'ACTIVE', '0', '1', '']])
     expect(before.historyProcessRows).toHaveLength(0)
     evidence.before = before
 
@@ -735,7 +718,6 @@ test('@full [UI-DRAFT-003] 两个真实标签并发提交同一草稿复用唯�
     await workbench.approveProcess(assets.modelName, `${assets.prefix}_并发幂等审批通过`)
     const completed = draftSubmissionSnapshot(draftId, businessKey, assets.modelKey)
     expect(completed.draftRows, '审批完成不得再次推进草稿 revision').toEqual(submitted.draftRows)
-    expect(completed.auditRows, '审批完成不得追加草稿状态迁移').toEqual(submitted.auditRows)
     expect(completed.historyProcessRows).toHaveLength(1)
     expect(completed.historyProcessRows[0].slice(0, 5)).toEqual([
       assets.processInstanceId, definitionId, businessKey, '1', ''

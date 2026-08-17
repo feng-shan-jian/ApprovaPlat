@@ -8,6 +8,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
+import org.flowable.bpmn.model.BaseElement;
+import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.ExtensionElement;
+import org.flowable.bpmn.model.FlowElement;
+import org.flowable.bpmn.model.Process;
 import org.flowable.engine.ManagementService;
 import org.flowable.engine.ProcessEngineConfiguration;
 import org.flowable.engine.RepositoryService;
@@ -20,16 +25,19 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployTaskSla;
 import com.ruoyi.flowable.domain.WfTaskSlaExecution;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
+import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
+import com.ruoyi.flowable.service.support.WorkflowPageSupport;
 import com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowTaskSlaDeploymentService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.SynchronousNotification;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowSynchronousNotification;
 
 /**
  * 审批 SLA 任务生命周期、定时触发、通知、暂停恢复和查询服务。
@@ -44,7 +52,7 @@ public class WorkflowTaskSlaRuntimeService
     private final WorkflowEngineOperations engineOperations;
     private final WfTaskSlaMapper slaMapper;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
-    private final WorkflowNotificationService notificationService;
+    private final WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建 SLA 运行服务。
@@ -55,7 +63,7 @@ public class WorkflowTaskSlaRuntimeService
      * @param engineOperations WorkflowEngineOperations，查询和当前身份事务边界
      * @param slaMapper WfTaskSlaMapper，运行状态、审计和通知数据访问层
      * @param artifactRepository WorkflowDeploymentArtifactRepository，SLA 部署资源仓库
-     * @param notificationService WorkflowNotificationService，统一 outbox、inbox 和投递审计服务
+     * @param notificationService WorkflowNotificationRegistrar，统一 outbox、inbox 和投递审计服务
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowTaskSlaRuntimeService(RepositoryService repositoryService,
@@ -64,7 +72,7 @@ public class WorkflowTaskSlaRuntimeService
             WorkflowBusinessCalendarService calendarService,
             WorkflowEngineOperations engineOperations, WfTaskSlaMapper slaMapper,
             WorkflowDeploymentArtifactRepository artifactRepository,
-            WorkflowNotificationService notificationService)
+            WorkflowNotificationRegistrar notificationService)
     {
         this.repositoryService = repositoryService;
         this.managementService = managementService;
@@ -97,6 +105,21 @@ public class WorkflowTaskSlaRuntimeService
             return;
         }
         WfTaskSlaExecution execution = slaMapper.selectExecutionByTaskForUpdate(taskId);
+        if (execution == null && "complete".equals(eventName))
+        {
+            // 中断升级会创建新任务；其完成事件必须回写原审批节点的 ESCALATED 执行。
+            String sourceTaskDefinitionKey = resolveEscalationSourceTaskDefinitionKey(
+                    processDefinitionId, taskDefinitionKey);
+            if (sourceTaskDefinitionKey != null)
+            {
+                execution = slaMapper.selectActiveExecutionForUpdate(
+                        processInstanceId, sourceTaskDefinitionKey);
+                if (execution != null && !"ESCALATED".equals(execution.getStatus()))
+                {
+                    return;
+                }
+            }
+        }
         if (execution == null)
         {
             return;
@@ -127,6 +150,60 @@ public class WorkflowTaskSlaRuntimeService
             requireAudit(execution.getSlaExecutionId(), "COMPLETE", 0,
                     assignee, "审批任务按业务路径完成");
         }
+    }
+
+    /**
+     * 从部署后的 BPMN 读取生成升级任务冻结的原节点标识。
+     * @param processDefinitionId String，当前流程定义主键
+     * @param generatedTaskDefinitionKey String，完成事件对应的生成任务节点标识
+     * @return String，原审批节点标识；普通任务或属性缺失时返回 null
+     */
+    private String resolveEscalationSourceTaskDefinitionKey(String processDefinitionId,
+            String generatedTaskDefinitionKey)
+    {
+        BpmnModel model = repositoryService.getBpmnModel(processDefinitionId);
+        if (model == null || generatedTaskDefinitionKey == null)
+        {
+            return null;
+        }
+        for (Process process : model.getProcesses())
+        {
+            FlowElement element = process.getFlowElement(generatedTaskDefinitionKey, true);
+            String source = readExtensionProperty(element,
+                    WorkflowTaskSlaDeploymentService.SOURCE_TASK_DEFINITION_KEY_PROPERTY);
+            if (source != null && !source.isBlank())
+            {
+                return source;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 读取一个 Flowable properties 属性值。
+     * @param element BaseElement，部署后 BPMN 元素
+     * @param propertyName String，精确平台属性名
+     * @return String，属性值；元素或属性不存在时返回 null
+     */
+    private String readExtensionProperty(BaseElement element, String propertyName)
+    {
+        if (element == null || element.getExtensionElements() == null)
+        {
+            return null;
+        }
+        for (ExtensionElement container : element.getExtensionElements()
+                .getOrDefault("properties", List.of()))
+        {
+            for (ExtensionElement property : container.getChildElements()
+                    .getOrDefault("property", List.of()))
+            {
+                if (propertyName.equals(property.getAttributeValue(null, "name")))
+                {
+                    return property.getAttributeValue(null, "value");
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -286,16 +363,36 @@ public class WorkflowTaskSlaRuntimeService
         }
     }
 
-    /** @return List&lt;WorkflowTaskSlaExecutionView&gt;，最近正式执行状态。 */
-    public List<WorkflowTaskSlaExecutionView> listExecutions()
+    /**
+     * 分页查询 SLA 当前执行状态。
+     * @param query SlaExecution，状态、关键字和开始时间范围
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @return WorkflowPageResult&lt;WorkflowTaskSlaExecutionView&gt;，当前页和符合条件的总数
+     */
+    public WorkflowPageResult<WorkflowTaskSlaExecutionView> listExecutions(
+            WorkflowOperationsQuery.SlaExecution query, int pageNum, int pageSize)
     {
-        return engineOperations.read(() -> List.copyOf(slaMapper.selectExecutions()));
+        WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());
+        return engineOperations.read(() -> WorkflowPageSupport.query(pageNum, pageSize,
+                () -> slaMapper.countExecutions(query),
+                (offset, size) -> slaMapper.selectExecutions(query, offset, size)));
     }
 
-    /** @return List&lt;WorkflowTaskSlaAuditView&gt;，最近不可变审计。 */
-    public List<WorkflowTaskSlaAuditView> listAudits()
+    /**
+     * 分页查询 SLA 不可变生命周期审计。
+     * @param query SlaAudit，动作、关键字和动作时间范围
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @return WorkflowPageResult&lt;WorkflowTaskSlaAuditView&gt;，当前页和符合条件的总数
+     */
+    public WorkflowPageResult<WorkflowTaskSlaAuditView> listAudits(
+            WorkflowOperationsQuery.SlaAudit query, int pageNum, int pageSize)
     {
-        return engineOperations.read(() -> List.copyOf(slaMapper.selectAudits()));
+        WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());
+        return engineOperations.read(() -> WorkflowPageSupport.query(pageNum, pageSize,
+                () -> slaMapper.countAudits(query),
+                (offset, size) -> slaMapper.selectAudits(query, offset, size)));
     }
 
     /** @return List&lt;WorkflowTaskSlaNotificationView&gt;，当前用户通知。 */
@@ -439,7 +536,7 @@ public class WorkflowTaskSlaRuntimeService
         String routePath = "/workflow/process-detail/" + execution.getProcessInstanceId()
                 + "?source=todo&taskId=" + execution.getTaskId();
         Long notificationId = notificationService.publishSynchronousInbox(
-                new SynchronousNotification("SLA", String.valueOf(auditId), action,
+                new WorkflowSynchronousNotification("SLA", String.valueOf(auditId), action,
                         recipient, processDefinitionKey, execution.getProcessInstanceId(),
                         execution.getTaskId(), execution.getTaskDefinitionKey(), title, content,
                         routePath));

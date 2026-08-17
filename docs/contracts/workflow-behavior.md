@@ -48,8 +48,10 @@
 ## 扩展、连接器、DMN 与运行事件
 
 - BPMN 扩展目录和版本不可绕过服务端已安装处理器白名单；部署时将不可变执行快照和校验和保存到 `approvaplat/extensions-v1.json`。
-- HTTP 连接器只能访问登记端点；SQL 连接器只能使用登记数据源和受控查询能力，不能接受任意 JDBC 配置或任意写 SQL。
-- 连接器调用使用正式幂等台账，重试不能产生重复外部副作用。
+- 建模用户只能选择目录登记的固定 Delegate；发布门禁拒绝任意 Java Class、未登记 `delegateExpression` 和表达式字段注入。
+- HTTP 连接器只能访问登记端点；请求必须通过 Flowable async Job 执行，并发送由 `processInstanceId + executionId + elementId + payloadSha256` 生成的稳定 `Idempotency-Key`。
+- SQL 连接器只能使用登记数据源和 AST 校验模板。外库查询允许至少一次重试；外库写只接受绑定系统 `idempotencyKey`、由真实业务唯一键保护且重复键分支为空操作的幂等 INSERT。
+- HTTP/SQL 失败直接保留在 Flowable 原生 Job、Timer Job 和 Dead Letter Job；逐次结果只进入脱敏结构化日志与 Micrometer 指标，不新增连接器调用台账。
 - DMN 部署必须通过 XML 安全校验，并在流程部署时将引用快照固化到 `approvaplat/dmn-v1.json`。
 - Message、Signal 和 ReceiveTask 运行事件使用独立集成 Token；Token 正文不落库，只保存前缀、哈希、限流状态和完整调用审计。
 

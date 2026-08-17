@@ -206,14 +206,16 @@ test('设计器通过真实页面完成导入导出、校验、偏好、模拟�
   const resources = { modelIds: [], deploymentIds: [] }
   const sessions = []
   let designerSession
-  let originalPreference
+  let originalPreferenceEntries
 
   try {
     designerSession = await openWorkflowRoleSession(browser, 'workflow_designer')
     sessions.push(designerSession)
     const page = designerSession.page
-    originalPreference = (await callWorkflowApi(
-      page, 'GET', '/workflow/designer/preference')).data
+    originalPreferenceEntries = await page.evaluate(() => Object.fromEntries(
+      Object.keys(localStorage)
+        .filter(key => key.startsWith('workflow:designer:preference:v1:'))
+        .map(key => [key, localStorage.getItem(key)])))
     const approver = await findWorkflowUserOption(page, 'workflow_approver')
     expect(approver, '设计器回归必须取得具备真实办理资格的用户').toBeTruthy()
 
@@ -470,7 +472,7 @@ test('设计器通过真实页面完成导入导出、校验、偏好、模拟�
     expect(modelAfterRejectedDeploy.data?.deployed,
       '标准循环部署拒绝后模型不得产生部署副作用').not.toBe(true)
 
-    // 偏好必须由 PUT 写入数据库并在刷新后的新 Modeler 实例中恢复。
+    // 偏好只写当前用户的版本化浏览器键，并在刷新后的新 Modeler 实例中恢复。
     await page.getByRole('button', { name: '设计器设置' }).click()
     const settingsDialog = page.getByRole('dialog', { name: '设计器设置' })
     await settingsDialog.getByText('深色', { exact: true }).click()
@@ -479,31 +481,52 @@ test('设计器通过真实页面完成导入导出、校验、偏好、模拟�
       await settingsDialog.locator('.el-form-item').filter({ hasText: '小地图' })
         .locator('.el-switch').click()
     }
-    const preferencePutPromise = page.waitForResponse(response => matchesEndpoint(
-      response, '/workflow/designer/preference', 'PUT'))
     await settingsDialog.getByRole('button', { name: '保存设置' }).click()
-    await expectAjaxSuccess(await preferencePutPromise, '/workflow/designer/preference')
+    await expect.poll(async () => page.evaluate(() => {
+      const keys = Object.keys(localStorage)
+        .filter(key => key.startsWith('workflow:designer:preference:v1:'))
+      return keys.find(key => {
+        const value = JSON.parse(localStorage.getItem(key))
+        return value.theme === 'DARK' && value.minimapEnabled === false
+      }) || ''
+    })).not.toBe('')
+    const currentPreferenceKey = await page.evaluate(() => Object.keys(localStorage)
+      .filter(key => key.startsWith('workflow:designer:preference:v1:'))
+      .find(key => {
+        const value = JSON.parse(localStorage.getItem(key))
+        return value.theme === 'DARK' && value.minimapEnabled === false
+      }))
+    const storedPreference = await page.evaluate(key =>
+      JSON.parse(localStorage.getItem(key)), currentPreferenceKey)
+    expect(storedPreference).toMatchObject({
+      schemaVersion: 1,
+      theme: 'DARK',
+      minimapEnabled: false
+    })
     await page.reload()
     await expect(page.locator('.process-designer')).toHaveClass(/process-designer--dark/)
     await expect(page.locator('.djs-minimap')).not.toHaveClass(/open/)
 
     // Token 模拟开关同样持久化，但只改变设计器模式，不写入流程业务状态。
     const simulationButton = page.getByRole('button', { name: 'Token 流程模拟' })
-    const simulationEnablePromise = page.waitForResponse(response => matchesEndpoint(
-      response, '/workflow/designer/preference', 'PUT'))
     await simulationButton.click()
-    await expectAjaxSuccess(await simulationEnablePromise, '/workflow/designer/preference')
     await expect(simulationButton).toHaveClass(/is-active/)
-    const simulationDisablePromise = page.waitForResponse(response => matchesEndpoint(
-      response, '/workflow/designer/preference', 'PUT'))
+    await expect.poll(async () => page.evaluate(key =>
+      JSON.parse(localStorage.getItem(key)).tokenSimulationEnabled, currentPreferenceKey))
+      .toBe(true)
     await simulationButton.click()
-    await expectAjaxSuccess(await simulationDisablePromise, '/workflow/designer/preference')
     await expect(simulationButton).not.toHaveClass(/is-active/)
+    await expect.poll(async () => page.evaluate(key =>
+      JSON.parse(localStorage.getItem(key)).tokenSimulationEnabled, currentPreferenceKey))
+      .toBe(false)
   } finally {
-    if (designerSession && originalPreference) {
-      await callWorkflowApi(
-        designerSession.page, 'PUT', '/workflow/designer/preference', { data: originalPreference })
-        .catch(() => undefined)
+    if (designerSession && originalPreferenceEntries) {
+      await designerSession.page.evaluate(entries => {
+        Object.keys(localStorage)
+          .filter(key => key.startsWith('workflow:designer:preference:v1:'))
+          .forEach(key => localStorage.removeItem(key))
+        Object.entries(entries).forEach(([key, value]) => localStorage.setItem(key, value))
+      }, originalPreferenceEntries).catch(() => undefined)
     }
     const cleanupErrors = designerSession
       ? await cleanupWorkflowResources({ designer: designerSession.page }, resources)
