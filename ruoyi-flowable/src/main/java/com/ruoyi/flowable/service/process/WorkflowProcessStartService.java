@@ -8,7 +8,6 @@ import org.flowable.engine.RuntimeService;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.flowable.engine.runtime.ProcessInstance;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,8 +55,8 @@ public class WorkflowProcessStartService
     private final WorkflowProcessDefinitionLockMapper definitionLockMapper;
     private final WorkflowUserSelectionValidator userSelectionValidator;
 
-    /** 流程级发起范围运行授权服务；旧直接构造单元测试时可为空。 */
-    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
+    /** 流程级发起范围运行授权服务。 */
+    private final WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
 
     /**
      * 创建真实流程发起服务。
@@ -70,6 +69,7 @@ public class WorkflowProcessStartService
      * @param attachmentService WorkflowAttachmentService，临时附件校验、投影和事务绑定服务
      * @param definitionLockMapper WorkflowProcessDefinitionLockMapper，key 发起最终版本当前读与行锁
      * @param userSelectionValidator WorkflowUserSelectionValidator，发起时会签或或签成员审批资格校验器
+     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，部署快照与实时组织授权服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessStartService(WorkflowEngineOperations engineOperations,
@@ -78,7 +78,8 @@ public class WorkflowProcessStartService
             WorkflowStartVariableValidator variableValidator,
             WorkflowAttachmentService attachmentService,
             WorkflowProcessDefinitionLockMapper definitionLockMapper,
-            WorkflowUserSelectionValidator userSelectionValidator)
+            WorkflowUserSelectionValidator userSelectionValidator,
+            WorkflowParticipantRuleRuntimeService participantRuleRuntimeService)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
@@ -88,18 +89,6 @@ public class WorkflowProcessStartService
         this.attachmentService = attachmentService;
         this.definitionLockMapper = definitionLockMapper;
         this.userSelectionValidator = userSelectionValidator;
-    }
-
-    /**
-     * 延迟注入流程发起范围服务，保留既有直接构造测试兼容性。
-     *
-     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，部署快照与实时组织授权服务
-     * @return void，生产 Spring 容器启动后必须完成注入
-     */
-    @Autowired
-    public void setParticipantRuleRuntimeService(
-            WorkflowParticipantRuleRuntimeService participantRuleRuntimeService)
-    {
         this.participantRuleRuntimeService = participantRuleRuntimeService;
     }
 
@@ -266,10 +255,7 @@ public class WorkflowProcessStartService
             throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT);
         }
         // 草稿提交必须重新按当前组织身份校验发起范围，不能沿用创建或保存草稿时的历史权限。
-        if (participantRuleRuntimeService != null)
-        {
-            participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
-        }
+        participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
         LinkedHashMap<String, Object> engineVariables = new LinkedHashMap<>(clientVariables);
         // 草稿成员字段不进入普通变量白名单；提交时按部署模型和最新审批资格生成保留变量。
         engineVariables.putAll(WorkflowStartMultiInstanceContract.prepareVariables(
@@ -338,10 +324,7 @@ public class WorkflowProcessStartService
         }
 
         // 发起范围在引擎写入前按不可变部署快照和当前有效组织授权，拒绝请求不得创建实例。
-        if (participantRuleRuntimeService != null)
-        {
-            participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
-        }
+        participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
 
         LinkedHashMap<String, Object> engineVariables = new LinkedHashMap<>(clientVariables);
         // 发起多实例字段不属于通用表单变量；必须按部署 BPMN 精确校验后由服务端生成保留变量。

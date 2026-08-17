@@ -2,7 +2,7 @@
 
 ## 组件简介
 
-`ProcessDesigner` 是基于 `bpmn-js` 的 Flowable BPMN 编辑器。组件负责画布编辑、受控 Flowable 属性、导入导出、XML/JSON 预览、布局命令、Lint、Token 模拟和保存前即时门禁；页面负责加载模型、表单、身份选项，并把模型保存提交到真实后端、把非业务界面偏好写入当前用户浏览器存储。
+`ProcessDesigner` 是基于 `bpmn-js` 的 Flowable BPMN 编辑器。组件负责画布编辑、受控 Flowable 属性、导入导出、XML/JSON 预览、布局命令、Token 模拟和保存前即时门禁；页面负责加载模型、表单、身份选项，并把模型保存提交到真实后端、把非业务界面偏好写入当前用户浏览器存储。
 
 ## 使用方式
 
@@ -155,7 +155,7 @@ onMounted(async () => {
 | `height` | `string` | `calc(100vh - 128px)` | 设计器稳定高度；页面级接入推荐传入 `100%`，由可用工作区决定实际高度。 |
 | `saving` | `boolean` | `false` | 页面真实保存请求的加载状态。 |
 | `identityLoading` | `boolean` | `false` | 用户、角色或部门远程检索的加载状态。 |
-| `preference` | `object` | 当前协议默认值 | 从当前用户版本化 `localStorage` 键回读的主题、网格、小地图、Lint、Token 模拟和属性面板状态。 |
+| `preference` | `object` | 当前协议默认值 | 从当前用户版本化 `localStorage` 键回读的主题、网格、小地图、Token 模拟和属性面板状态。 |
 | `preferenceSaving` | `boolean` | `false` | 页面写入浏览器存储期间的交互锁定状态。 |
 
 ## Emits
@@ -219,12 +219,12 @@ onMounted(async () => {
 - 保存事件只交付 XML，不在组件内绕过页面权限或直接调用接口。
 - 显式校验直接调用无副作用 `/workflow/model/validate`；保存时只序列化一次 XML，同一冻结快照依次通过本地结构门禁、服务端 BPMN/身份/表单门禁和真实保存。页面只在服务端明确返回 `valid=true` 且没有 ERROR 时显示通过，不用空问题列表推断成功。
 - BPMN/XML 导入设置 2 MiB 上限，失败不覆盖当前画布；BPMN/XML 导出继续自动重建内部审计监听器，SVG 使用 Modeler 图形输出。
-- 导入时根据全部 `sequenceFlow.sourceRef/targetRef` 重建流程节点的 `incoming/outgoing` 反向引用，兼容历史模型和外部工具省略冗余引用的 XML；Lint、画布命令栈和下一次正式保存统一使用修复后的图关系。被 `keep-alive` 缓存的旧设计页重新激活时会检查当前画布快照，仅在引用仍不完整时保留未保存编辑并重建内存图，避免旧红色 Lint 标记残留。
+- 导入时根据全部 `sequenceFlow.sourceRef/targetRef` 重建流程节点的 `incoming/outgoing` 反向引用，兼容历史模型和外部工具省略冗余引用的 XML；画布命令栈和下一次正式保存统一使用修复后的图关系。被 `keep-alive` 缓存的旧设计页重新激活时会检查当前画布快照，仅在引用仍不完整时保留未保存编辑并重建内存图。
 - JSON 预览通过 DOM 结构递归转换，不使用字符串替换；XML、属性和文本均保持明确层级。
-- 网格显示与 `gridSnapping` 同步，避免只显示网格却不吸附；小地图、Lint 和 Token 模拟使用真实扩展服务。小地图切换按钮使用 `+ / ×` 紧凑符号，原生 `title` 继续提供打开或关闭提示，避免动作文本遮挡画布。
+- 网格显示与 `gridSnapping` 同步，避免只显示网格却不吸附；小地图和 Token 模拟使用真实扩展服务。小地图切换按钮使用 `+ / ×` 紧凑符号，原生 `title` 继续提供打开或关闭提示，避免动作文本遮挡画布。
 - 设计器不再设置固定最小宽高。属性检查器默认宽度为 368px，可通过分隔条拖拽、左右方向键调整，双击或按 `Home` 恢复默认宽度；每次尺寸变化通过 `canvas.resized()` 同步 bpmn-js 命中区域、小地图与连线视口。
 - 当设计器主体不足 960px 时，属性检查器切换为工作区内浮层，不再通过页面横向滚动挤出右侧内容；面板仍可调整宽度、滚动、折叠和关闭。可持久化的折叠状态属于当前用户的非业务界面偏好。
-- 偏好键固定为 `workflow:designer:preference:v1:{userId}`，值包含 `schemaVersion: 1` 和 `theme`、`gridEnabled`、`minimapEnabled`、`lintEnabled`、`tokenSimulationEnabled`、`propertiesCollapsed` 六个白名单字段。损坏 JSON、旧协议或非法字段会恢复并覆盖为默认值；登出不删除，恢复默认只删除当前用户键。
+- 偏好键固定为 `workflow:designer:preference:v1:{userId}`，值包含 `schemaVersion: 1` 和 `theme`、`gridEnabled`、`minimapEnabled`、`tokenSimulationEnabled`、`propertiesCollapsed` 五个白名单字段。损坏 JSON、旧协议或非法字段会恢复并覆盖为默认值；登出不删除，恢复默认只删除当前用户键。
 - 模型详情返回当前 `bpmnSha256`，页面保存时作为 `expectedBpmnSha256` 提交。后端返回真实 `modelId`、`version` 和新摘要；内容基线变化返回 409，同内容重试直接返回当前已保存模型。
 - XML 序列化开始至后端保存结束期间锁定画布、属性面板和命令栈，阻止重复保存以及“已保存响应覆盖保存期间新修改”的竞态。
 - 保存按钮要求 `workflow:model:save` 权限；`workflow:model:designer` 只负责进入设计页并读取设计上下文，后端继续独立校验保存权限。

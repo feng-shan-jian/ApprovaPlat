@@ -26,7 +26,6 @@ import org.flowable.task.api.TaskQuery;
 import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.task.api.history.HistoricTaskInstanceQuery;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.entity.SysUser;
@@ -114,8 +113,8 @@ public class WorkflowProcessQueryService
 
     private final WorkflowTaskLifecycleService taskLifecycleService;
 
-    /** 部署快照发起范围只读过滤服务；旧直接构造单元测试时可为空。 */
-    private WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
+    /** 部署快照发起范围只读过滤服务。 */
+    private final WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
 
     /**
      * 创建流程工作台查询服务。
@@ -132,6 +131,7 @@ public class WorkflowProcessQueryService
      * @param copyMapper WfCopyMapper，正式抄送记录 Mapper
      * @param userService ISysUserService，历史发起人显示名称查询服务
      * @param taskLifecycleService WorkflowTaskLifecycleService，复用正式撤回校验计算已办能力
+     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，发起范围运行服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessQueryService(WorkflowEngineOperations engineOperations,
@@ -140,9 +140,10 @@ public class WorkflowProcessQueryService
             WorkflowIdentityResolver identityResolver,
              WorkflowProcessAccessService processAccessService,
              WorkflowDeploymentService deploymentService,
-             WorkflowDeploymentArtifactRepository artifactRepository,
-             WfCopyMapper copyMapper, ISysUserService userService,
-             WorkflowTaskLifecycleService taskLifecycleService)
+              WorkflowDeploymentArtifactRepository artifactRepository,
+              WfCopyMapper copyMapper, ISysUserService userService,
+              WorkflowTaskLifecycleService taskLifecycleService,
+              WorkflowParticipantRuleRuntimeService participantRuleRuntimeService)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
@@ -156,17 +157,6 @@ public class WorkflowProcessQueryService
         this.copyMapper = copyMapper;
         this.userService = userService;
         this.taskLifecycleService = taskLifecycleService;
-    }
-
-    /**
-     * 延迟注入发起范围过滤服务，保留既有直接构造测试兼容性。
-     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，发起范围运行服务
-     * @return void，生产 Spring 容器启动后必须完成注入
-     */
-    @Autowired
-    public void setParticipantRuleRuntimeService(
-            WorkflowParticipantRuleRuntimeService participantRuleRuntimeService)
-    {
         this.participantRuleRuntimeService = participantRuleRuntimeService;
     }
 
@@ -639,15 +629,12 @@ public class WorkflowProcessQueryService
         {
             throw dataError("流程定义数据异常");
         }
-        if (participantRuleRuntimeService != null)
+        // 新部署定义统一读取不可变规则快照，列表、表单预览与真实发起使用同一授权来源。
+        Boolean snapshotDecision = participantRuleRuntimeService
+                .canStartIfManaged(actor, definition);
+        if (snapshotDecision != null)
         {
-            // 新部署定义统一读取不可变规则快照，列表、表单预览与真实发起使用同一授权来源。
-            Boolean snapshotDecision = participantRuleRuntimeService
-                    .canStartIfManaged(actor, definition);
-            if (snapshotDecision != null)
-            {
-                return snapshotDecision;
-            }
+            return snapshotDecision;
         }
         List<IdentityLink> links = repositoryService.getIdentityLinksForProcessDefinition(definition.getId());
         if (links == null)

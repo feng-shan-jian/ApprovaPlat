@@ -28,7 +28,6 @@ import org.flowable.common.engine.api.FlowableException;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.identitylink.api.IdentityLink;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -93,7 +92,6 @@ public class WorkflowCallActivityReferenceService
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单结构安全校验器
      * @return 无返回值，构造后由 Spring 管理
      */
-    @Autowired
     public WorkflowCallActivityReferenceService(RepositoryService repositoryService,
             WorkflowEngineOperations engineOperations, WorkflowIdentityResolver identityResolver,
             WorkflowDeploymentArtifactRepository artifactRepository, WfFormMapper formMapper,
@@ -108,17 +106,6 @@ public class WorkflowCallActivityReferenceService
     }
 
     /**
-     * 兼容只验证旧精确版本冻结行为的纯单元测试。
-     *
-     * @param repositoryService RepositoryService，Flowable 仓储 API
-     * @return 无返回值，不提供目录、权限、字段和快照能力
-     */
-    public WorkflowCallActivityReferenceService(RepositoryService repositoryService)
-    {
-        this(repositoryService, null, null, null, null, null);
-    }
-
-    /**
      * 查询当前用户有权引用的全部已发布子流程版本及其变量字段目录。
      *
      * @param keyword String，可选流程名称或 key 模糊过滤
@@ -126,7 +113,6 @@ public class WorkflowCallActivityReferenceService
      */
     public List<WorkflowCallActivityOptionView> listReferenceOptions(String keyword)
     {
-        requireProductionDependencies();
         String normalizedKeyword = keyword == null ? "" : keyword.trim().toLowerCase();
         if (normalizedKeyword.length() > 255)
         {
@@ -197,7 +183,6 @@ public class WorkflowCallActivityReferenceService
      */
     public void validateAuthorReferences(WorkflowBpmnDocument document)
     {
-        requireProductionDependencies();
         validateAuthorReferences(document, identityResolver.resolveCurrentIdentity());
     }
 
@@ -212,7 +197,6 @@ public class WorkflowCallActivityReferenceService
     public WorkflowPreparedCallActivityDeployment prepare(byte[] compiledBpmn,
             WorkflowBpmnDocument authorDocument, WorkflowCurrentIdentity actor)
     {
-        requireProductionDependencies();
         validateAuthorReferences(authorDocument, actor);
         org.flowable.bpmn.model.BpmnModel compiledModel = parse(compiledBpmn);
         Set<String> localProcessKeys = executableProcessKeys(authorDocument.bpmnModel());
@@ -238,33 +222,6 @@ public class WorkflowCallActivityReferenceService
     }
 
     /**
-     * 兼容旧测试和底层工具，把 key 或定义 ID 直接冻结为精确定义 ID。
-     *
-     * @param compiledBpmn byte[]，待冻结 BPMN
-     * @return byte[]，所有 CallActivity 均引用精确定义 ID 的 BPMN
-     */
-    public byte[] freezeReferences(byte[] compiledBpmn)
-    {
-        org.flowable.bpmn.model.BpmnModel model = parse(compiledBpmn);
-        Set<String> localProcessKeys = executableProcessKeys(model);
-        for (Process process : model.getProcesses())
-        {
-            for (CallActivity callActivity : process.findFlowElementsOfType(CallActivity.class, true))
-            {
-                ProcessDefinition target = resolveTarget(callActivity);
-                if (localProcessKeys.contains(target.getKey()))
-                {
-                    throw new ServiceException("调用活动不允许直接或间接循环调用", HttpStatus.BAD_REQUEST);
-                }
-                callActivity.setCalledElement(target.getId());
-                callActivity.setCalledElementType(CALLED_ELEMENT_TYPE_ID);
-                callActivity.setSameDeployment(false);
-            }
-        }
-        return new BpmnXMLConverter().convertToXML(model);
-    }
-
-    /**
      * 在父 Flowable 部署成功后写入同事务调用依赖快照。
      *
      * @param deployId String，父流程部署主键
@@ -276,7 +233,6 @@ public class WorkflowCallActivityReferenceService
             WorkflowPreparedCallActivityDeployment prepared,
             String actorUserId)
     {
-        requireProductionDependencies();
         String normalizedDeployId = requireText(deployId, "调用活动父部署主键不能为空");
         String normalizedActor = requireText(actorUserId, "调用活动部署操作人不能为空");
         List<WfDeployCallActivitySnapshot> snapshots = prepared == null
@@ -296,7 +252,6 @@ public class WorkflowCallActivityReferenceService
      */
     public List<WfDeployCallActivitySnapshot> snapshotsByDeploymentId(String deploymentId)
     {
-        requireProductionDependencies();
         return artifactRepository.selectCallActivitySnapshots(
                 requireText(deploymentId, "调用活动父部署主键不能为空"));
     }
@@ -575,10 +530,6 @@ public class WorkflowCallActivityReferenceService
      */
     private Map<String, Map<String, FieldSpec>> parentFieldCatalogs(WorkflowBpmnDocument document)
     {
-        if (formTemplateValidator == null || formMapper == null)
-        {
-            return Map.of();
-        }
         Map<String, Map<String, FieldSpec>> catalogs = new LinkedHashMap<>();
         for (WorkflowBpmnFormReference reference : document.formReferences())
         {
@@ -610,10 +561,6 @@ public class WorkflowCallActivityReferenceService
      */
     private TargetFieldCatalog targetFieldCatalog(ProcessDefinition definition)
     {
-        if (artifactRepository == null || formTemplateValidator == null)
-        {
-            return TargetFieldCatalog.empty();
-        }
         List<WfDeployForm> snapshots = artifactRepository.selectForms(definition.getDeploymentId());
         if (snapshots == null)
         {
@@ -950,16 +897,6 @@ public class WorkflowCallActivityReferenceService
     {
         if (!hasText(value)) throw new ServiceException(message, HttpStatus.BAD_REQUEST);
         return value.trim();
-    }
-
-    /** @return void，生产依赖缺失时阻止假目录或假快照。 */
-    private void requireProductionDependencies()
-    {
-        if (engineOperations == null || identityResolver == null || artifactRepository == null
-                || formMapper == null || formTemplateValidator == null)
-        {
-            throw new ServiceException("调用活动生产依赖未完整配置", HttpStatus.ERROR);
-        }
     }
 
     /** @param message String，稳定数据错误提示。@return ServiceException，HTTP 500 数据异常。 */

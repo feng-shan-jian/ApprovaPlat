@@ -4,7 +4,7 @@
 
 工作流验收按以下层级执行，后一级不能被前一级替代：
 
-1. 编译和结构门禁：确认编译、架构依赖、菜单、权限矩阵和配置没有结构漂移。
+1. 编译和结构门禁：确认编译、架构依赖、菜单、权限配置和运行配置没有结构漂移。
 2. 真实数据库：在隔离 MySQL 中从空 schema 安装 94 表（若依 20、Quartz 11、Flowable 36、工作流 `wf_*` 27），执行约束和三组共 35 项只读验收，并核对 17 张累计退役表缺失、Flowable 部署制品资源完整及通知稳定来源关联。
 3. 真实服务 API：启动 Spring Boot、MySQL、Redis 和附件目录，通过真实登录与 HTTP 调用验证状态和副作用。
 4. 浏览器 E2E：通过真实页面执行发起、审批动作、工作台、导出、附件和权限可见性。
@@ -15,10 +15,6 @@
 
 HTTP/SQL ServiceTask 验收必须启动真实 Flowable async executor：验证 HTTP 成功、超时重试、稳定幂等头和最终死信；验证 SQL 查询、业务唯一键幂等写重试、非法非幂等写发布拒绝；并通过 `ManagementService` 查询及人工重试原生死信。单独调用 Delegate 单元测试不能替代该链路。
 
-## RBAC 矩阵
-
-`WorkflowRbacMatrixContractTest` 冻结 19 个登录用户 Controller、126 个入口和五角色 630 个权限单元。机器调用的 3 个运行事件入口使用独立集成 Token 测试，不计入登录用户矩阵。
-
 ## P1 多池协作验收
 
 - 从设计器创建两个可执行 Participant，使用绑定 `COLLABORATION_OUTBOX_V1` 的 SendTask 和目标 Message Catch/ReceiveTask 建立 MessageFlow；保存、部署和重新打开后配置一致。
@@ -27,14 +23,6 @@ HTTP/SQL ServiceTask 验收必须启动真实 Flowable async executor：验证 H
 - 同一关联键连续发送至少两条消息，注入重复、乱序、5xx、超时和 worker 重启；验证严格序号、幂等重放、指数退避、租约接管、死信和人工补偿。
 - 使用流程管理员、审计角色和无关用户验证列表、审计、补偿和取消权限；拒绝请求不得修改 Flowable、outbox、入站台账或审计。
 - 通过 Chromium 打开多池协作管理页，核对当前数据库状态、逐次审计、死信补偿及刷新后回显；浏览器缓存或本地状态不得成为事实来源。
-
-静态矩阵执行：
-
-```powershell
-mvn -pl ruoyi-admin -am `
-  "-Dtest=WorkflowRbacMatrixContractTest" `
-  "-Dsurefire.failIfNoSpecifiedTests=false" test
-```
 
 真实 HTTP 集成测试必须使用隔离 MySQL、专用 Redis database、五个不同的非超级管理员账号和真实 `/login`。允许请求必须核对业务结果，拒绝请求必须核对传输状态、业务码以及数据库、Flowable、附件和审计零副作用。
 

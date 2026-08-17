@@ -23,7 +23,6 @@ import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.engine.task.Comment;
 import org.flowable.variable.api.history.HistoricVariableInstance;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -106,11 +105,11 @@ public class WorkflowProcessInstanceService
 
     private final PermissionService permissionService;
 
-    /** SLA 时钟冻结和 Flowable timer job 重排服务；旧直接构造测试时可为空。 */
-    private WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
+    /** SLA 时钟冻结和 Flowable timer job 重排服务。 */
+    private final WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
 
-    /** 普通审批结果通知服务；旧直接构造单元测试时可为空。 */
-    private WorkflowNotificationRegistrar notificationService;
+    /** 普通审批结果通知服务，业务终态与 outbox 必须同事务提交。 */
+    private final WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建流程实例写操作服务。
@@ -123,6 +122,8 @@ public class WorkflowProcessInstanceService
      * @param copyMapper WfCopyMapper，正式抄送记录引用检查和逻辑删除 Mapper
      * @param controlledLoopExecutionMapper WfControlledLoopExecutionMapper，受控循环逐轮审计 Mapper
      * @param permissionService PermissionService，Token 权限与当前正式主数据的统一复核服务
+     * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，SLA 暂停恢复服务
+     * @param notificationService WorkflowNotificationRegistrar，显式取消或终止 outbox 服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessInstanceService(WorkflowEngineOperations engineOperations,
@@ -130,7 +131,9 @@ public class WorkflowProcessInstanceService
             TaskService taskService, WfAttachmentMapper attachmentMapper,
             WfCopyMapper copyMapper,
             WfControlledLoopExecutionMapper controlledLoopExecutionMapper,
-            PermissionService permissionService)
+            PermissionService permissionService,
+            WorkflowTaskSlaRuntimeService taskSlaRuntimeService,
+            WorkflowNotificationRegistrar notificationService)
     {
         this.engineOperations = engineOperations;
         this.historyService = historyService;
@@ -140,27 +143,7 @@ public class WorkflowProcessInstanceService
         this.copyMapper = copyMapper;
         this.controlledLoopExecutionMapper = controlledLoopExecutionMapper;
         this.permissionService = permissionService;
-    }
-
-    /**
-     * 延迟注入审批 SLA 状态服务，保留既有直接构造单元测试兼容性。
-     * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，SLA 暂停恢复服务
-     * @return void，生产 Spring 容器完成注入
-     */
-    @Autowired
-    public void setTaskSlaRuntimeService(WorkflowTaskSlaRuntimeService taskSlaRuntimeService)
-    {
         this.taskSlaRuntimeService = taskSlaRuntimeService;
-    }
-
-    /**
-     * 延迟注入普通审批结果通知服务。
-     * @param notificationService WorkflowNotificationRegistrar，显式取消/终止 outbox 服务
-     * @return void，生产 Spring 容器完成注入
-     */
-    @Autowired
-    public void setNotificationService(WorkflowNotificationRegistrar notificationService)
-    {
         this.notificationService = notificationService;
     }
 
@@ -283,10 +266,7 @@ public class WorkflowProcessInstanceService
                     for (String processTreeInstanceId : stateChangeOrder)
                     {
                         runtimeService.suspendProcessInstanceById(processTreeInstanceId);
-                        if (taskSlaRuntimeService != null)
-                        {
-                            taskSlaRuntimeService.pauseInstance(processTreeInstanceId, actor.userId());
-                        }
+                        taskSlaRuntimeService.pauseInstance(processTreeInstanceId, actor.userId());
                     }
                 }
                 else
@@ -295,11 +275,8 @@ public class WorkflowProcessInstanceService
                     for (String processTreeInstanceId : stateChangeOrder)
                     {
                         runtimeService.activateProcessInstanceById(processTreeInstanceId);
-                        if (taskSlaRuntimeService != null)
-                        {
-                            // 激活与 timer job 平移处于同一事务，异步执行器不能抢占未平移的过期作业。
-                            taskSlaRuntimeService.resumeInstance(processTreeInstanceId, actor.userId());
-                        }
+                        // 激活与 timer job 平移处于同一事务，异步执行器不能抢占未平移的过期作业。
+                        taskSlaRuntimeService.resumeInstance(processTreeInstanceId, actor.userId());
                     }
                 }
             }
@@ -366,13 +343,10 @@ public class WorkflowProcessInstanceService
                 runtimeService.updateBusinessStatus(rootInstanceId, decision.processStatus());
                 runtimeService.setVariable(rootInstanceId, PROCESS_STATUS_VARIABLE,
                         decision.processStatus());
-                if (notificationService != null)
-                {
-                    String eventType = CANCELED_STATUS.equals(decision.processStatus())
-                            ? "PROCESS_CANCELED" : "PROCESS_TERMINATED";
-                    notificationService.onProcessResult(eventType,
-                            rootInstance.getProcessDefinitionId(), rootInstanceId);
-                }
+                String eventType = CANCELED_STATUS.equals(decision.processStatus())
+                        ? "PROCESS_CANCELED" : "PROCESS_TERMINATED";
+                notificationService.onProcessResult(eventType,
+                        rootInstance.getProcessDefinitionId(), rootInstanceId);
                 String auditMessage = buildTerminationAudit(decision, actor.userId(), reason,
                         wasSuspended, requestedInstanceId, rootInstanceId,
                         processTreeInstanceIds.size());

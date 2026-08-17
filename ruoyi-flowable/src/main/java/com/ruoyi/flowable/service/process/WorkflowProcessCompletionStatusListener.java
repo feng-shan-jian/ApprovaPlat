@@ -36,8 +36,6 @@ public final class WorkflowProcessCompletionStatusListener
 
     /** 引擎初始化结束后再解析通知服务，避免通知服务反向依赖 Flowable 公共服务形成启动环。 */
     private final ObjectProvider<WorkflowNotificationRegistrar> notificationServiceProvider;
-    /** 旧直接构造单元测试传入的通知登记服务；生产使用延迟提供器。 */
-    private final WorkflowNotificationRegistrar directNotificationRegistrar;
     /** CallActivity 子流程完成时只取消其催办，不经过事件登记服务。 */
     private final ObjectProvider<WorkflowNotificationOutboxService> notificationOutboxServiceProvider;
     /** 自然完成实例的正式业务状态。 */
@@ -54,39 +52,6 @@ public final class WorkflowProcessCompletionStatusListener
     private static final String STRING_VARIABLE_TYPE = "string";
 
     /**
-     * 创建仅监听流程完成事件的引擎监听器。
-     *
-     * @return 无返回值，构造后仅接收 PROCESS_COMPLETED 事件
-     */
-    public WorkflowProcessCompletionStatusListener()
-    {
-        this(null, null, null, null);
-    }
-
-    /**
-     * 创建流程完成状态与自动抄送的同事务监听器。
-     * @param automaticCopyServiceProvider ObjectProvider&lt;WorkflowAutomaticCopyService&gt;，
-     *        引擎事件发生时才解析的自动抄送服务提供器；旧纯单元测试可为空
-     * @return void，监听器初始化完成
-     */
-    public WorkflowProcessCompletionStatusListener(
-            ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider)
-    {
-        this(automaticCopyServiceProvider, null, null, null);
-    }
-
-    /**
-     * 创建同时登记自然完成通知的监听器。
-     * @param notificationService WorkflowNotificationRegistrar，可为空的事务 outbox 服务
-     * @return void，配置后仅处理 PROCESS_COMPLETED
-     */
-    public WorkflowProcessCompletionStatusListener(
-            WorkflowNotificationRegistrar notificationService)
-    {
-        this(null, null, null, notificationService);
-    }
-
-    /**
      * 创建延迟解析自动抄送与普通审批通知服务的监听器，供 Flowable 引擎初始化配置使用。
      * @param automaticCopyServiceProvider ObjectProvider，流程完成后获取自动抄送服务
      * @param notificationServiceProvider ObjectProvider，流程完成后获取通知服务
@@ -97,29 +62,10 @@ public final class WorkflowProcessCompletionStatusListener
             ObjectProvider<WorkflowNotificationRegistrar> notificationServiceProvider,
             ObjectProvider<WorkflowNotificationOutboxService> notificationOutboxServiceProvider)
     {
-        this(automaticCopyServiceProvider, notificationServiceProvider,
-                notificationOutboxServiceProvider, null);
-    }
-
-    /**
-     * 初始化流程完成监听器持有的延迟依赖。
-     * @param automaticCopyServiceProvider ObjectProvider，自动抄送服务延迟提供器，可为空
-     * @param notificationServiceProvider ObjectProvider，通知登记服务延迟提供器
-     * @param notificationOutboxServiceProvider ObjectProvider，outbox 服务延迟提供器
-     * @param directNotificationRegistrar WorkflowNotificationRegistrar，旧单元测试直接依赖
-     * @return void，构造后仅处理 PROCESS_COMPLETED
-     */
-    private WorkflowProcessCompletionStatusListener(
-            ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider,
-            ObjectProvider<WorkflowNotificationRegistrar> notificationServiceProvider,
-            ObjectProvider<WorkflowNotificationOutboxService> notificationOutboxServiceProvider,
-            WorkflowNotificationRegistrar directNotificationRegistrar)
-    {
         super(Set.of(FlowableEngineEventType.PROCESS_COMPLETED));
         this.automaticCopyServiceProvider = automaticCopyServiceProvider;
         this.notificationServiceProvider = notificationServiceProvider;
         this.notificationOutboxServiceProvider = notificationOutboxServiceProvider;
-        this.directNotificationRegistrar = directNotificationRegistrar;
     }
 
     /**
@@ -143,41 +89,28 @@ public final class WorkflowProcessCompletionStatusListener
             // CallActivity 子流程有独立 PROCESS_COMPLETED，但它不是用户发起的根业务实例。
             // 只清理已失去业务对象的催办；不得收敛根业务状态、触发流程级抄送或结果通知。
             WorkflowNotificationOutboxService outboxService =
-                    notificationOutboxServiceProvider == null ? null
-                            : notificationOutboxServiceProvider.getIfAvailable();
-            if (outboxService != null)
-            {
-                outboxService.schedulePendingUrgeCancellation(processInstance.getId(), null,
-                        "子流程已结束，取消未投递催办");
-            }
+                    notificationOutboxServiceProvider.getObject();
+            outboxService.schedulePendingUrgeCancellation(processInstance.getId(), null,
+                    "子流程已结束，取消未投递催办");
             return;
         }
 
         // Registrar 只服务根业务流程结果登记，子流程完成不得解析无关依赖。
-        WorkflowNotificationRegistrar notificationService = directNotificationRegistrar != null
-                ? directNotificationRegistrar
-                : notificationServiceProvider == null ? null
-                        : notificationServiceProvider.getIfAvailable();
+        WorkflowNotificationRegistrar notificationService = notificationServiceProvider.getObject();
         boolean naturallyCompleted = updateHistoricProcessStatus(processInstance.getId());
         if (!naturallyCompleted)
         {
             return;
         }
-        if (automaticCopyServiceProvider != null)
-        {
-            // 引擎配置阶段仅持有提供器；这里已进入运行命令，才可解析依赖 Flowable 服务的业务 Bean。
-            WorkflowAutomaticCopyService automaticCopyService =
-                    automaticCopyServiceProvider.getObject();
-            // 只有 running 收敛为 completed 才触发，驳回、取消和终止不得误发流程完成抄送。
-            automaticCopyService.onProcessCompleted(processInstance.getId(),
-                    processInstance.getProcessDefinitionId());
-        }
-        if (notificationService != null)
-        {
-            // 只有 running 真正收敛为 completed 才登记结果，显式业务终态不会重复通知。
-            notificationService.onProcessResult("PROCESS_COMPLETED",
-                    processInstance.getProcessDefinitionId(), processInstance.getId());
-        }
+        // 引擎配置阶段仅持有提供器；这里已进入运行命令，才可解析依赖 Flowable 服务的业务 Bean。
+        WorkflowAutomaticCopyService automaticCopyService =
+                automaticCopyServiceProvider.getObject();
+        // 只有 running 收敛为 completed 才触发，驳回、取消和终止不得误发流程完成抄送。
+        automaticCopyService.onProcessCompleted(processInstance.getId(),
+                processInstance.getProcessDefinitionId());
+        // 只有 running 真正收敛为 completed 才登记结果，显式业务终态不会重复通知。
+        notificationService.onProcessResult("PROCESS_COMPLETED",
+                processInstance.getProcessDefinitionId(), processInstance.getId());
     }
 
     /**
@@ -211,7 +144,7 @@ public final class WorkflowProcessCompletionStatusListener
      * 使用当前 Flowable CommandContext 按终态优先级更新已存在的 processStatus 历史变量。
      *
      * @param processInstanceId String，已自然完成的 Flowable 流程实例主键
-     * @return void，无返回值；旧实例没有该变量时兼容跳过，重复、类型或状态值异常时阻止错误数据提交
+     * @return boolean，running 成功收敛时返回 true，既有业务终态返回 false
      */
     private boolean updateHistoricProcessStatus(String processInstanceId)
     {
@@ -230,10 +163,9 @@ public final class WorkflowProcessCompletionStatusListener
                 .findHistoricalVariableInstancesByProcessInstanceId(processInstanceId,
                         Set.of(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE));
 
-        // 兼容没有 processStatus 的存量或引擎外部实例；新服务发起的实例必须命中下面的正式更新链路。
         if (statusVariables == null || statusVariables.isEmpty())
         {
-            return false;
+            throw new FlowableException("流程历史状态变量缺失: " + processInstanceId);
         }
         if (statusVariables.size() != 1)
         {

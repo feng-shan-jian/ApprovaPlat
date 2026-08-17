@@ -38,7 +38,6 @@ import org.flowable.engine.repository.Model;
 import org.flowable.engine.repository.ModelQuery;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
@@ -142,21 +141,21 @@ public class WorkflowModelService
     private final WorkflowControlledLoopDeploymentService controlledLoopDeploymentService;
 
     /** 排他和包容网关的受控条件编译及部署快照服务。 */
-    private WorkflowConditionDeploymentService conditionDeploymentService;
+    private final WorkflowConditionDeploymentService conditionDeploymentService;
 
     private final WorkflowDmnDecisionService dmnDecisionService;
 
-    /** 部署时锁定自定义表单字段精确版本；旧构造测试可为空。 */
+    /** 部署时锁定自定义表单字段精确版本。 */
     private final WorkflowFormFieldExtensionService formFieldExtensionService;
 
-    /** 部署时把调用活动编译为精确定义引用；旧构造测试可为空。 */
+    /** 部署时把调用活动编译为精确定义引用。 */
     private final WorkflowCallActivityReferenceService callActivityReferenceService;
 
-    /** 审批 SLA 真实边界定时器编译和部署快照服务；兼容旧单元构造时可为空。 */
-    private WorkflowTaskSlaDeploymentService taskSlaDeploymentService;
+    /** 审批 SLA 真实边界定时器编译和部署快照服务。 */
+    private final WorkflowTaskSlaDeploymentService taskSlaDeploymentService;
 
-    /** 发起范围和单实例任务参与者规则编译及部署快照服务；兼容旧单元构造时可为空。 */
-    private WorkflowParticipantRuleDeploymentService participantRuleDeploymentService;
+    /** 发起范围和单实例任务参与者规则编译及部署快照服务。 */
+    private final WorkflowParticipantRuleDeploymentService participantRuleDeploymentService;
 
     /** Flowable 模型 metaInfo 的 Jackson 3 结构化读写器。 */
     private final ObjectMapper metadataMapper = JsonMapper.shared();
@@ -174,12 +173,14 @@ public class WorkflowModelService
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单 JSON 安全结构验证器
      * @param extensionDeploymentService WorkflowExtensionDeploymentService，扩展编译和版本快照服务
      * @param controlledLoopDeploymentService WorkflowControlledLoopDeploymentService，受控循环编译和快照服务
+     * @param conditionDeploymentService WorkflowConditionDeploymentService，受控条件编译服务
+     * @param participantRuleDeploymentService WorkflowParticipantRuleDeploymentService，参与者规则编译服务
      * @param dmnDecisionService WorkflowDmnDecisionService，DMN 精确引用编译和冻结服务
      * @param formFieldExtensionService WorkflowFormFieldExtensionService，自定义字段部署冻结服务
      * @param callActivityReferenceService WorkflowCallActivityReferenceService，调用活动精确版本编译与保护服务
+     * @param taskSlaDeploymentService WorkflowTaskSlaDeploymentService，真实边界定时器编译和快照服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
-    @Autowired
     public WorkflowModelService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, WorkflowBpmnService bpmnService,
             WorkflowBpmnIdentityValidator bpmnIdentityValidator,
@@ -188,9 +189,12 @@ public class WorkflowModelService
             WorkflowFormTemplateValidator formTemplateValidator,
             WorkflowExtensionDeploymentService extensionDeploymentService,
             WorkflowControlledLoopDeploymentService controlledLoopDeploymentService,
+            WorkflowConditionDeploymentService conditionDeploymentService,
+            WorkflowParticipantRuleDeploymentService participantRuleDeploymentService,
             WorkflowDmnDecisionService dmnDecisionService,
             WorkflowFormFieldExtensionService formFieldExtensionService,
-            WorkflowCallActivityReferenceService callActivityReferenceService)
+            WorkflowCallActivityReferenceService callActivityReferenceService,
+            WorkflowTaskSlaDeploymentService taskSlaDeploymentService)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
@@ -203,74 +207,12 @@ public class WorkflowModelService
         this.startVariableValidator = new WorkflowStartVariableValidator(formTemplateValidator);
         this.extensionDeploymentService = extensionDeploymentService;
         this.controlledLoopDeploymentService = controlledLoopDeploymentService;
+        this.conditionDeploymentService = conditionDeploymentService;
+        this.participantRuleDeploymentService = participantRuleDeploymentService;
         this.dmnDecisionService = dmnDecisionService;
         this.formFieldExtensionService = formFieldExtensionService;
         this.callActivityReferenceService = callActivityReferenceService;
-    }
-
-    /**
-     * 延迟注入 SLA 部署编译器，保留既有大量直接构造单元测试的兼容性。
-     * @param taskSlaDeploymentService WorkflowTaskSlaDeploymentService，真实边界定时器编译和快照服务
-     * @return void，生产 Spring 容器启动后必须完成注入
-     */
-    @Autowired
-    public void setTaskSlaDeploymentService(
-            WorkflowTaskSlaDeploymentService taskSlaDeploymentService)
-    {
         this.taskSlaDeploymentService = taskSlaDeploymentService;
-    }
-
-    /**
-     * 延迟注入参与者规则部署服务，保留既有直接构造单元测试兼容性。
-     * @param participantRuleDeploymentService WorkflowParticipantRuleDeploymentService，规则编译与快照服务
-     * @return void，生产 Spring 容器启动后必须完成注入
-     */
-    @Autowired
-    public void setParticipantRuleDeploymentService(
-            WorkflowParticipantRuleDeploymentService participantRuleDeploymentService)
-    {
-        this.participantRuleDeploymentService = participantRuleDeploymentService;
-    }
-
-    /**
-     * 延迟注入条件分支编译器，避免扩大既有直接构造单元测试的构造参数。
-     * @param conditionDeploymentService WorkflowConditionDeploymentService，受控条件编译服务
-     * @return void，生产 Spring 容器启动后必须完成注入
-     */
-    @Autowired
-    public void setConditionDeploymentService(
-            WorkflowConditionDeploymentService conditionDeploymentService)
-    {
-        this.conditionDeploymentService = conditionDeploymentService;
-    }
-
-    /**
-     * 兼容不涉及自定义表单字段的既有纯单元测试构造方式。
-     * @param engineOperations WorkflowEngineOperations，统一事务、身份和异常边界
-     * @param repositoryService RepositoryService，Flowable 仓储 API
-     * @param bpmnService WorkflowBpmnService，BPMN 校验服务
-     * @param bpmnIdentityValidator WorkflowBpmnIdentityValidator，身份校验器
-     * @param categoryMapper WfCategoryMapper，分类数据访问层
-     * @param formMapper WfFormMapper，表单数据访问层
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，Flowable 部署业务资源仓库
-     * @param formTemplateValidator WorkflowFormTemplateValidator，表单安全验证器
-     * @param extensionDeploymentService WorkflowExtensionDeploymentService，扩展部署服务
-     * @param dmnDecisionService WorkflowDmnDecisionService，DMN 冻结服务
-     * @return 无返回值，仅为既有测试保留
-     */
-    public WorkflowModelService(WorkflowEngineOperations engineOperations,
-            RepositoryService repositoryService, WorkflowBpmnService bpmnService,
-            WorkflowBpmnIdentityValidator bpmnIdentityValidator,
-            WfCategoryMapper categoryMapper, WfFormMapper formMapper,
-            WorkflowDeploymentArtifactRepository artifactRepository,
-            WorkflowFormTemplateValidator formTemplateValidator,
-            WorkflowExtensionDeploymentService extensionDeploymentService,
-            WorkflowDmnDecisionService dmnDecisionService)
-    {
-        this(engineOperations, repositoryService, bpmnService, bpmnIdentityValidator,
-                categoryMapper, formMapper, artifactRepository,
-                formTemplateValidator, extensionDeploymentService, null,
-                dmnDecisionService, null, null);
     }
 
     /**
@@ -498,11 +440,8 @@ public class WorkflowModelService
 
                 WorkflowBpmnDocument document = bpmnService.validateForSave(bpmnBytes);
                 validateDeploymentReferences(document);
-                if (callActivityReferenceService != null)
-                {
-                    // 保存阶段使用服务端当前身份和正式目录重新核验，客户端 XML 不能夹带越权定义 ID。
-                    callActivityReferenceService.validateAuthorReferences(document, identity);
-                }
+                // 保存阶段使用服务端当前身份和正式目录重新核验，客户端 XML 不能夹带越权定义 ID。
+                callActivityReferenceService.validateAuthorReferences(document, identity);
 
                 requireActiveCategory(source.getCategory());
                 Model latest = latestModel(source.getKey());
@@ -575,10 +514,7 @@ public class WorkflowModelService
                 WorkflowBpmnDocument document = bpmnService.validateForSave(
                         source.getBytes(StandardCharsets.UTF_8));
                 validateDeploymentReferences(document);
-                if (callActivityReferenceService != null)
-                {
-                    callActivityReferenceService.validateAuthorReferences(document);
-                }
+                callActivityReferenceService.validateAuthorReferences(document);
                 List<WorkflowBpmnValidationIssue> compatibilityIssues =
                         bpmnService.deploymentCompatibilityIssues(document);
                 if (compatibilityIssues.isEmpty())
@@ -856,39 +792,26 @@ public class WorkflowModelService
             List<WorkflowControlledLoopFormSchema> formSchemas =
                     buildControlledLoopFormSchemas(snapshotSources);
             WorkflowPreparedConditionDeployment conditionDeployment =
-                    conditionDeploymentService == null
-                            ? new WorkflowPreparedConditionDeployment(
-                                    extensionDeployment.compiledBpmn(), List.of())
-                            : conditionDeploymentService.prepare(document,
-                                    extensionDeployment.compiledBpmn(), formSchemas,
-                                    identity.userId());
+                    conditionDeploymentService.prepare(document,
+                            extensionDeployment.compiledBpmn(), formSchemas,
+                            identity.userId());
             WorkflowPreparedControlledLoopDeployment controlledLoopDeployment =
-                    controlledLoopDeploymentService == null
-                            ? new WorkflowPreparedControlledLoopDeployment(
-                                    conditionDeployment.compiledBpmn(), List.of())
-                            : controlledLoopDeploymentService.prepare(document,
-                                    conditionDeployment.compiledBpmn(),
-                                    formSchemas, identity.userId());
+                    controlledLoopDeploymentService.prepare(document,
+                            conditionDeployment.compiledBpmn(),
+                            formSchemas, identity.userId());
             WorkflowPreparedParticipantRuleDeployment participantDeployment =
-                    participantRuleDeploymentService == null
-                            ? new WorkflowPreparedParticipantRuleDeployment(
-                                    controlledLoopDeployment.compiledBpmn(), List.of())
-                            : participantRuleDeploymentService.prepare(document,
-                                    controlledLoopDeployment.compiledBpmn(),
-                                    authorValidation.formFieldCatalog(),
-                                    identity.userId());
+                    participantRuleDeploymentService.prepare(document,
+                            controlledLoopDeployment.compiledBpmn(),
+                            authorValidation.formFieldCatalog(),
+                            identity.userId());
             WorkflowPreparedDmnDeployment dmnDeployment =
                     dmnDecisionService.prepare(participantDeployment.compiledBpmn());
             WorkflowPreparedCallActivityDeployment callActivityDeployment =
-                    callActivityReferenceService == null
-                            ? new WorkflowPreparedCallActivityDeployment(
-                                    dmnDeployment.compiledBpmn(), List.of())
-                            : callActivityReferenceService.prepare(
-                                    dmnDeployment.compiledBpmn(), document, identity);
+                    callActivityReferenceService.prepare(
+                            dmnDeployment.compiledBpmn(), document, identity);
             byte[] executableBpmn = callActivityDeployment.compiledBpmn();
-            WorkflowPreparedSlaDeployment slaDeployment = taskSlaDeploymentService == null
-                    ? new WorkflowPreparedSlaDeployment(executableBpmn, List.of())
-                    : taskSlaDeploymentService.prepare(executableBpmn, identity.userId());
+            WorkflowPreparedSlaDeployment slaDeployment =
+                    taskSlaDeploymentService.prepare(executableBpmn, identity.userId());
             executableBpmn = slaDeployment.compiledBpmn();
             // 最终执行资源必须再次通过编译阶段门禁，确保循环与 SLA 作者属性均已剥离，且生成结构满足 Flowable 校验。
             bpmnService.validateCompiledDeployment(executableBpmn);
@@ -933,9 +856,8 @@ public class WorkflowModelService
             List<WfDeployDmnSnapshot> dmnSnapshots = dmnDecisionService.freezeSnapshots(
                     deployment.getId(), dmnDeployment, identity.userId());
             List<WfDeployCallActivitySnapshot> callActivitySnapshots =
-                    callActivityReferenceService == null ? List.of()
-                            : callActivityReferenceService.snapshotsForDeployment(
-                                    deployment.getId(), callActivityDeployment, identity.userId());
+                    callActivityReferenceService.snapshotsForDeployment(
+                            deployment.getId(), callActivityDeployment, identity.userId());
 
             // 8 类不可变快照作为一个 Flowable 资源子部署原子提交，禁止出现部分表已写、部分表缺失。
             artifactRepository.persist(deployment.getId(), new WorkflowDeploymentArtifacts(
@@ -950,8 +872,7 @@ public class WorkflowModelService
             // 新定义默认保持活动；旧定义只禁止承接新实例，不冻结仍在办理的历史版本实例。
             Set<String> newDefinitionIds = definitions.stream()
                     .map(ProcessDefinition::getId).collect(java.util.stream.Collectors.toSet());
-            Set<String> frozenCallTargets = callActivityReferenceService == null
-                    ? Set.of() : callActivityReferenceService.frozenTargetDefinitionIds();
+            Set<String> frozenCallTargets = callActivityReferenceService.frozenTargetDefinitionIds();
             activeHistoryByKey.values().stream().flatMap(Collection::stream)
                     .filter(definition -> !newDefinitionIds.contains(definition.getId()))
                     // 被已发布父流程精确引用的定义必须保持可调用；业务发起链仍只允许最新版。
@@ -1161,9 +1082,8 @@ public class WorkflowModelService
                 String formName = hasText(reference.nodeName())
                         ? reference.nodeName() + "内嵌表单"
                         : reference.nodeKey() + "内嵌表单";
-                WorkflowFrozenFormContent frozen = formFieldExtensionService == null
-                        ? new WorkflowFrozenFormContent(reference.embeddedContent(), List.of())
-                        : formFieldExtensionService.freezeEmbeddedContentWithSnapshots(
+                WorkflowFrozenFormContent frozen =
+                        formFieldExtensionService.freezeEmbeddedContentWithSnapshots(
                                 reference.embeddedContent(), reference.processKey(),
                                 reference.nodeKey());
                 // 冻结后再执行正式表单验证，防止版本元数据更新破坏渲染协议。
@@ -1187,21 +1107,15 @@ public class WorkflowModelService
         bpmnIdentityValidator.validate(document);
         dmnDecisionService.validateReferences(document);
         List<FormSnapshotSource> sources = loadSnapshotSources(document.formReferences());
-        if (conditionDeploymentService != null)
-        {
-            // 保存、校验和部署共用冻结表单字段门禁，不能只在最终 deploy 才发现非法规则。
-            conditionDeploymentService.validate(document,
-                    buildControlledLoopFormSchemas(sources));
-        }
+        // 保存、校验和部署共用冻结表单字段门禁，不能只在最终 deploy 才发现非法规则。
+        conditionDeploymentService.validate(document,
+                buildControlledLoopFormSchemas(sources));
         WorkflowAuthorFormFieldCatalog formFieldCatalog =
                 buildAuthorFormFieldCatalog(sources);
         // 自动抄送和动态参与者必须消费同一次冻结的权限化表单目录，避免三个入口语义漂移。
         WorkflowAutoCopyRuleContract.validateFormUserFields(
                 document.bpmnModel(), formFieldCatalog);
-        if (participantRuleDeploymentService != null)
-        {
-            participantRuleDeploymentService.validateAuthorRules(document, formFieldCatalog);
-        }
+        participantRuleDeploymentService.validateAuthorRules(document, formFieldCatalog);
         return new AuthorValidationContext(sources, formFieldCatalog);
     }
 

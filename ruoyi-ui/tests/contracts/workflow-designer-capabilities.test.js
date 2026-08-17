@@ -392,7 +392,6 @@ test('设计器偏好按用户隔离并自动恢复损坏本地数据', () => {
     theme: 'DARK',
     gridEnabled: false,
     minimapEnabled: false,
-    lintEnabled: true,
     tokenSimulationEnabled: true,
     propertiesCollapsed: true,
     ignoredField: '不能持久化'
@@ -402,7 +401,7 @@ test('设计器偏好按用户隔离并自动恢复损坏本地数据', () => {
   assert.deepEqual(loadDesignerPreference(101, storage), firstPreference)
   assert.equal(loadDesignerPreference(202, storage).theme, 'LIGHT')
   assert.deepEqual(Object.keys(JSON.parse(values.get(firstKey))).sort(), [
-    'gridEnabled', 'lintEnabled', 'minimapEnabled', 'propertiesCollapsed',
+    'gridEnabled', 'minimapEnabled', 'propertiesCollapsed',
     'schemaVersion', 'theme', 'tokenSimulationEnabled'
   ])
 

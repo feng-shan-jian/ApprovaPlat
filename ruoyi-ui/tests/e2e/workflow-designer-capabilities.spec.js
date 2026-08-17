@@ -15,8 +15,8 @@ import { expectAjaxSuccess, matchesEndpoint } from './support/http.js'
 test.describe.configure({ mode: 'serial' })
 
 /**
- * 生成用于真实设计器往返的最小可执行 BPMN，并可加入一个故意断连的节点触发客户端 Lint。
- * @param {{processKey: string, processName: string, formId: string, approverUserId: string, disconnected?: boolean, embedded?: boolean, advanced?: boolean}} input 流程标识、名称、正式表单主键、办理用户主键、内嵌表单及高级注释开关。
+ * 生成用于真实设计器往返的最小可执行 BPMN。
+ * @param {{processKey: string, processName: string, formId: string, approverUserId: string, embedded?: boolean, advanced?: boolean}} input 流程标识、名称、正式表单主键、办理用户主键、内嵌表单及高级注释开关。
  * @returns {string} 包含完整 BPMN DI 坐标的 UTF-8 XML 正文。
  */
 function buildDesignerBpmn({
@@ -24,7 +24,6 @@ function buildDesignerBpmn({
   processName,
   formId,
   approverUserId,
-  disconnected = false,
   embedded = false,
   advanced = false
 }) {
@@ -37,12 +36,6 @@ function buildDesignerBpmn({
         <outgoing>flow_start_review</outgoing>
       </startEvent>`
     : `<startEvent id="start" name="提交申请" flowable:formKey="key_${formId}"><outgoing>flow_start_review</outgoing></startEvent>`
-  const disconnectedTask = disconnected
-    ? '<userTask id="orphanTask" name="孤立节点" />'
-    : ''
-  const disconnectedShape = disconnected
-    ? '<bpmndi:BPMNShape id="shape_orphan" bpmnElement="orphanTask"><omgdc:Bounds x="260" y="270" width="100" height="80" /></bpmndi:BPMNShape>'
-    : ''
   const advancedElements = advanced
     ? '<textAnnotation id="designNote"><text>内嵌表单高级往返</text></textAnnotation><association id="association_review_note" sourceRef="review" targetRef="designNote" />'
     : ''
@@ -58,14 +51,12 @@ function buildDesignerBpmn({
     <sequenceFlow id="flow_review_end" sourceRef="review" targetRef="end" />
     <endEvent id="end" name="结束"><incoming>flow_review_end</incoming></endEvent>
     ${advancedElements}
-    ${disconnectedTask}
   </process>
   <bpmndi:BPMNDiagram id="diagram_${processKey}">
     <bpmndi:BPMNPlane id="plane_${processKey}" bpmnElement="${processKey}">
       <bpmndi:BPMNShape id="shape_start" bpmnElement="start"><omgdc:Bounds x="100" y="172" width="36" height="36" /></bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_review" bpmnElement="review"><omgdc:Bounds x="260" y="150" width="100" height="80" /></bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_end" bpmnElement="end"><omgdc:Bounds x="520" y="172" width="36" height="36" /></bpmndi:BPMNShape>
-      ${disconnectedShape}
       ${advancedDi}
       <bpmndi:BPMNEdge id="edge_start_review" bpmnElement="flow_start_review"><omgdi:waypoint x="136" y="190" /><omgdi:waypoint x="260" y="190" /></bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_review_end" bpmnElement="flow_review_end"><omgdi:waypoint x="360" y="190" /><omgdi:waypoint x="520" y="190" /></bpmndi:BPMNEdge>
@@ -242,26 +233,7 @@ test('设计器通过真实页面完成导入导出、校验、偏好、模拟�
     await expectAjaxSuccess(await modelResponsePromise, `/workflow/model/${modelId}`)
     await expect(page.getByRole('button', { name: '保存', exact: true })).toBeVisible()
 
-    // 先导入断连节点并展开 Lint，证明问题来自真实 BPMN 模型而不是固定提示。
-    const invalidXml = buildDesignerBpmn({
-      processKey, processName, formId, approverUserId: String(approver.value), disconnected: true
-    })
-    await page.locator('input.process-designer__file-input').setInputFiles({
-      name: `${processKey}-invalid.bpmn`,
-      mimeType: 'application/xml',
-      buffer: Buffer.from(invalidXml, 'utf8')
-    })
-    const lintButton = page.locator('.bjsl-button-error')
-    await expect(lintButton).toBeVisible()
-    await lintButton.click()
-    await expect(page.locator('.bjsl-button-inactive')).toBeVisible()
-    await page.locator('.bjsl-button-inactive').click()
-    await expect(lintButton).toBeVisible()
-    const lintOverlay = page.locator('.bjsl-overlay').first()
-    await expect(lintOverlay).toBeVisible()
-    await expect(lintOverlay.locator('.bjsl-issues')).not.toHaveText('')
-
-    // 再导入可执行版本，后续所有保存和导出均使用同一份真实 Modeler 状态。
+    // 导入可执行版本，后续所有保存和导出均使用同一份真实 Modeler 状态。
     const validXml = buildDesignerBpmn({
       processKey, processName, formId, approverUserId: String(approver.value)
     })
@@ -270,9 +242,7 @@ test('设计器通过真实页面完成导入导出、校验、偏好、模拟�
       mimeType: 'application/xml',
       buffer: Buffer.from(validXml, 'utf8')
     })
-    await expect(page.locator('.djs-label').filter({ hasText: '孤立节点' })).toHaveCount(0)
     await expect(page.locator('.djs-label').filter({ hasText: '提交申请' }).first()).toBeVisible()
-    await expect(page.locator('.bjsl-button-error')).toHaveCount(0)
 
     // 两个正式目标视口都执行 DOM 几何断言，截图只是复核材料而不是唯一通过依据。
     await assertDesignerViewport(page, { width: 1024, height: 768 })

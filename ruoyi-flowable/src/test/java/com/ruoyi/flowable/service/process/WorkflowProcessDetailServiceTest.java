@@ -525,7 +525,7 @@ class WorkflowProcessDetailServiceTest
         when(processAccessService.requireReadableTask("task-active"))
                 .thenReturn(new WorkflowTaskAccessSnapshot("task-active", "instance-1",
                         "definition-1", "approve", "审批", "8", null, null,
-                        true, Instant.parse("2026-07-25T08:01:00Z"), null));
+                        true, Instant.parse("2026-07-25T08:01:00Z"), null, null, null));
         ProcessDefinition definition = stubDefinitionAndModel();
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
         when(artifactRepository.selectForms("deployment-1"))
@@ -1107,7 +1107,7 @@ class WorkflowProcessDetailServiceTest
         when(processAccessService.requireReadableTask("task-forged"))
                 .thenReturn(new WorkflowTaskAccessSnapshot("task-forged", "instance-other",
                         "definition-1", "approve", "审批", "7", null, null,
-                        true, Instant.parse("2026-07-25T08:00:00Z"), null));
+                        true, Instant.parse("2026-07-25T08:00:00Z"), null, null, null));
 
         assertThatThrownBy(() -> service.getDetail(
                 new WorkflowProcessDetailQueryDto("instance-1", "task-forged")))
@@ -1158,7 +1158,7 @@ class WorkflowProcessDetailServiceTest
                 .thenReturn(new WorkflowTaskAccessSnapshot(taskId, instanceId, "definition-1",
                         "approve", "审批", "8", null, null, false,
                         Instant.parse("2026-07-25T08:01:00Z"),
-                        Instant.parse("2026-07-25T09:00:00Z")));
+                        Instant.parse("2026-07-25T09:00:00Z"), null, null));
     }
 
     /**
@@ -1240,7 +1240,7 @@ class WorkflowProcessDetailServiceTest
         when(processAccessService.requireReadableTask("task-active"))
                 .thenReturn(new WorkflowTaskAccessSnapshot("task-active", "instance-1",
                         "definition-1", "approve", "审批", "8", null, null,
-                        true, Instant.parse("2026-07-25T08:01:00Z"), null));
+                        true, Instant.parse("2026-07-25T08:01:00Z"), null, null, null));
         ProcessDefinition definition = stubDefinitionAndModel();
         when(repositoryService.getProcessDefinition("definition-1")).thenReturn(definition);
         when(artifactRepository.selectForms("deployment-1")).thenReturn(List.of(

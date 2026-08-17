@@ -286,7 +286,8 @@ class WorkflowTaskReadServiceTest
     private WorkflowTaskAccessSnapshot taskSnapshot()
     {
         return new WorkflowTaskAccessSnapshot(TASK_ID, INSTANCE_ID, DEFINITION_ID,
-                "review", "审核", "7", null, null, true, Instant.now(), null);
+                "review", "审核", "7", null, null, true, Instant.now(), null,
+                null, null);
     }
 
     /**

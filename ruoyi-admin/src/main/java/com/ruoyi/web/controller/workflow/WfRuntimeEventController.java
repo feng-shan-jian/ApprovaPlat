@@ -27,21 +27,11 @@ public class WfRuntimeEventController extends BaseController
     private final WorkflowCollaborationMessageService collaborationMessageService;
 
     /**
-     * 创建运行事件发布 Controller。
-     * @param runtimeEventService WorkflowRuntimeEventService，包含 Token 强认证的领域服务
-     * @return void，构造后由 Spring 管理
-     */
-    public WfRuntimeEventController(WorkflowRuntimeEventService runtimeEventService)
-    {
-        this(runtimeEventService, null);
-    }
-
-    /**
      * 创建同时支持单实例运行事件和跨 Participant 协作消息的入口。
      * @param runtimeEventService WorkflowRuntimeEventService，既有消息/信号/ReceiveTask 入口
      * @param collaborationMessageService WorkflowCollaborationMessageService，协作消息可靠投递服务
+     * @return void，构造后由 Spring 管理
      */
-    @org.springframework.beans.factory.annotation.Autowired
     public WfRuntimeEventController(WorkflowRuntimeEventService runtimeEventService,
             WorkflowCollaborationMessageService collaborationMessageService)
     {
@@ -103,10 +93,6 @@ public class WfRuntimeEventController extends BaseController
             @RequestHeader(value = "X-Integration-Token", required = false) String token,
             @Valid @RequestBody WorkflowCollaborationMessageRequest request)
     {
-        if (collaborationMessageService == null)
-        {
-            throw new IllegalStateException("协作消息服务未初始化");
-        }
         return success(collaborationMessageService.publish(token, request));
     }
 

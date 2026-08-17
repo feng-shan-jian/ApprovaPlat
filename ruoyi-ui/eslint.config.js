@@ -127,13 +127,6 @@ export default [
     }
   },
   {
-    // 生成器产物保留上游兼容代码，不手工改写生成文件中的空 catch。
-    files: ['src/components/workflow/designer/bpmnlintConfig.js'],
-    rules: {
-      'no-empty': 'off'
-    }
-  },
-  {
     // 既有 URL 和邮箱正则经过业务使用验证，保留显式转义以便与后端规则对照。
     files: ['src/utils/validate.js'],
     rules: {

@@ -300,7 +300,7 @@ async function loadDesigner() {
 
 /**
  * 保存当前用户的完整设计器偏好，并立即采用白名单规范化后的本地结果。
- * @param {object} preference 主题、网格、小地图、Lint、Token 模拟和属性面板状态。
+ * @param {object} preference 主题、网格、小地图、Token 模拟和属性面板状态。
  * @returns {void} localStorage 写入成功后回写当前偏好。
  */
 function savePreference(preference) {

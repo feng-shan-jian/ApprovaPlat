@@ -21,7 +21,7 @@
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `modelValue` | `boolean` | 抽屉显示状态。 |
-| `preference` | `object` | 主题、网格、小地图、Lint、Token 模拟和面板状态。 |
+| `preference` | `object` | 主题、网格、小地图、Token 模拟和面板状态。 |
 | `saving` | `boolean` | 浏览器存储写入期间的加载状态。 |
 
 ## Emits
@@ -40,5 +40,5 @@
 
 - 抽屉打开时从父页面当前偏好重新创建草稿，取消不会改变已应用偏好。
 - 父页面使用 `workflow:designer:preference:v1:{userId}` 隔离用户，值固定包含 `schemaVersion: 1` 和六个白名单字段。
-- 主题默认 `SYSTEM`；网格、小地图和 Lint 默认开启；Token 模拟和属性面板折叠默认关闭。损坏 JSON、旧协议或非法字段由父页面恢复为这些默认值。
+- 主题默认 `SYSTEM`；网格和小地图默认开启；Token 模拟和属性面板折叠默认关闭。损坏 JSON、旧协议或非法字段由父页面恢复为这些默认值。
 - `reset` 不枚举或清空其他用户键；登出也不删除偏好。

@@ -16,7 +16,6 @@ import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.Model;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -52,11 +51,11 @@ public class WorkflowDeploymentService
     /** 8 类部署业务资源的统一 Flowable 子部署仓库。 */
     private final WorkflowDeploymentArtifactRepository artifactRepository;
 
-    /** 申请草稿部署引用删除门禁；使用 setter 保持既有构造测试兼容。 */
-    private WfProcessDraftMapper processDraftMapper;
+    /** 申请草稿部署引用删除门禁，部署删除前必须执行当前读。 */
+    private final WfProcessDraftMapper processDraftMapper;
 
     /** 部署生命周期数据库行锁；与草稿创建共用相同锁顺序。 */
-    private WorkflowProcessDefinitionLockMapper processDefinitionLockMapper;
+    private final WorkflowProcessDefinitionLockMapper processDefinitionLockMapper;
 
     /** 活动申请草稿仍引用部署时对外返回的稳定冲突消息。 */
     static final String ACTIVE_DRAFT_REFERENCE_MESSAGE =
@@ -66,7 +65,7 @@ public class WorkflowDeploymentService
 
     private final WorkflowBpmnService bpmnService;
 
-    /** 删除部署前保护被调用活动精确引用的流程定义；旧构造测试可为空。 */
+    /** 删除部署前保护被调用活动精确引用的流程定义。 */
     private final WorkflowCallActivityReferenceService callActivityReferenceService;
 
     /**
@@ -77,16 +76,19 @@ public class WorkflowDeploymentService
      * @param runtimeService RuntimeService，运行实例公共 API
      * @param historyService HistoryService，历史实例公共 API
      * @param artifactRepository WorkflowDeploymentArtifactRepository，Flowable 部署业务资源仓库
+     * @param processDraftMapper WfProcessDraftMapper，申请草稿正式数据访问层
+     * @param processDefinitionLockMapper WorkflowProcessDefinitionLockMapper，部署生命周期行锁 Mapper
      * @param dmnDecisionService WorkflowDmnDecisionService，冻结 DMN 子部署清理服务
      * @param bpmnService WorkflowBpmnService，BPMN 安全解析和校验组件
      * @param callActivityReferenceService WorkflowCallActivityReferenceService，调用活动目标删除保护服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
-    @Autowired
     public WorkflowDeploymentService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, RuntimeService runtimeService,
             HistoryService historyService,
             WorkflowDeploymentArtifactRepository artifactRepository,
+            WfProcessDraftMapper processDraftMapper,
+            WorkflowProcessDefinitionLockMapper processDefinitionLockMapper,
             WorkflowDmnDecisionService dmnDecisionService,
             WorkflowBpmnService bpmnService,
             WorkflowCallActivityReferenceService callActivityReferenceService)
@@ -96,57 +98,11 @@ public class WorkflowDeploymentService
         this.runtimeService = runtimeService;
         this.historyService = historyService;
         this.artifactRepository = artifactRepository;
+        this.processDraftMapper = processDraftMapper;
+        this.processDefinitionLockMapper = processDefinitionLockMapper;
         this.dmnDecisionService = dmnDecisionService;
         this.bpmnService = bpmnService;
         this.callActivityReferenceService = callActivityReferenceService;
-    }
-
-    /**
-     * 注入申请草稿 Mapper，确保部署删除不会使仍可提交的正式草稿失效。
-     *
-     * @param processDraftMapper WfProcessDraftMapper，申请草稿正式数据访问层
-     * @return void，生产 Spring 容器启动后必须完成注入
-     */
-    @Autowired
-    public void setProcessDraftMapper(WfProcessDraftMapper processDraftMapper)
-    {
-        this.processDraftMapper = processDraftMapper;
-    }
-
-    /**
-     * 注入流程部署生命周期锁 Mapper，串行化部署删除与活动草稿创建。
-     *
-     * @param processDefinitionLockMapper WorkflowProcessDefinitionLockMapper，Flowable 部署行锁 Mapper
-     * @return void，生产 Spring 容器启动后必须完成注入
-     */
-    @Autowired
-    public void setProcessDefinitionLockMapper(
-            WorkflowProcessDefinitionLockMapper processDefinitionLockMapper)
-    {
-        this.processDefinitionLockMapper = processDefinitionLockMapper;
-    }
-
-    /**
-     * 兼容既有不涉及 CallActivity 删除保护的纯单元测试构造方式。
-     *
-     * @param engineOperations WorkflowEngineOperations，统一事务、身份和异常边界
-     * @param repositoryService RepositoryService，Flowable 仓储 API
-     * @param runtimeService RuntimeService，运行实例 API
-     * @param historyService HistoryService，历史实例 API
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，Flowable 部署业务资源仓库
-     * @param dmnDecisionService WorkflowDmnDecisionService，冻结 DMN 清理服务
-     * @param bpmnService WorkflowBpmnService，BPMN 安全读取服务
-     * @return 无返回值，仅为既有测试保留
-     */
-    public WorkflowDeploymentService(WorkflowEngineOperations engineOperations,
-            RepositoryService repositoryService, RuntimeService runtimeService,
-            HistoryService historyService,
-            WorkflowDeploymentArtifactRepository artifactRepository,
-            WorkflowDmnDecisionService dmnDecisionService,
-            WorkflowBpmnService bpmnService)
-    {
-        this(engineOperations, repositoryService, runtimeService, historyService,
-                artifactRepository, dmnDecisionService, bpmnService, null);
     }
 
     /**
@@ -303,11 +259,8 @@ public class WorkflowDeploymentService
         {
             // 全部部署先按主键稳定顺序持锁；后续草稿当前读与删除提交前，新草稿创建都会等待。
             lockDeployments(normalizedIds);
-            if (callActivityReferenceService != null)
-            {
-                // 全部部署先统一预检，避免逐个删除后才发现剩余父流程仍引用目标定义。
-                callActivityReferenceService.assertDeploymentsNotReferenced(normalizedIds);
-            }
+            // 全部部署先统一预检，避免逐个删除后才发现剩余父流程仍引用目标定义。
+            callActivityReferenceService.assertDeploymentsNotReferenced(normalizedIds);
             List<DeploymentDeletionPlan> plans = new ArrayList<>(normalizedIds.size());
             for (String deploymentId : normalizedIds)
             {
@@ -484,10 +437,6 @@ public class WorkflowDeploymentService
      */
     private void assertNoActiveDraftReferences(String deploymentId)
     {
-        if (processDraftMapper == null)
-        {
-            throw new ServiceException("流程申请草稿删除门禁未初始化", HttpStatus.ERROR);
-        }
         Integer currentActiveReference = processDraftMapper
                 .selectActiveReferenceForUpdate(deploymentId);
         if (currentActiveReference != null)
@@ -504,10 +453,6 @@ public class WorkflowDeploymentService
      */
     private void lockDeployments(List<String> deploymentIds)
     {
-        if (processDefinitionLockMapper == null)
-        {
-            throw new ServiceException("流程部署锁服务未初始化", HttpStatus.ERROR);
-        }
         for (String deploymentId : deploymentIds)
         {
             String lockedDeploymentId = processDefinitionLockMapper

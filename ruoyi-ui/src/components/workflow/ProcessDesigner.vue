@@ -161,13 +161,11 @@
 import Modeler from 'bpmn-js/lib/Modeler'
 import minimapModule from 'diagram-js-minimap'
 import gridSnappingModule from 'bpmn-js/lib/features/grid-snapping'
-import lintModule from 'bpmn-js-bpmnlint'
 import tokenSimulationModule from 'bpmn-js-token-simulation'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import 'bpmn-js/dist/assets/diagram-js.css'
 import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css'
 import 'diagram-js-minimap/assets/diagram-js-minimap.css'
-import 'bpmn-js-bpmnlint/dist/assets/css/bpmn-js-bpmnlint.css'
 import 'bpmn-js-token-simulation/assets/css/bpmn-js-token-simulation.css'
 import Download from '@/plugins/download'
 import { listCallActivityOptions, validateModelBpmn } from '@/api/workflow/model'
@@ -184,7 +182,6 @@ import DesignerToolbar from './designer/DesignerToolbar.vue'
 import DesignerSettingsDrawer from './designer/DesignerSettingsDrawer.vue'
 import AdvancedElementPalette from './designer/AdvancedElementPalette.vue'
 import DesignerPropertiesPanel from './designer/DesignerPropertiesPanel.vue'
-import bpmnlintConfig from './designer/bpmnlintConfig'
 import {
   createEmbeddedUserIdFieldCatalog,
   createProcessUserIdFieldCatalog,
@@ -334,7 +331,6 @@ const props = defineProps({
       theme: 'SYSTEM',
       gridEnabled: true,
       minimapEnabled: true,
-      lintEnabled: true,
       tokenSimulationEnabled: false,
       propertiesCollapsed: false
     })
@@ -364,7 +360,6 @@ const validationVisible = ref(false)
 const validationIssues = ref([])
 // validationPassed 表示最近一次真实服务端报告是否明确允许保存，不能由空问题列表推断。
 const validationPassed = ref(false)
-const clientLintIssues = ref([])
 const validating = ref(false)
 const simulationActive = ref(false)
 const systemDark = ref(false)
@@ -413,7 +408,7 @@ const designerBodyStyle = computed(() => ({
 }))
 const designerLocked = computed(() => props.saving || savePreparing.value)
 const appliedPreference = computed(() => normalizePreference(props.preference))
-const totalIssueCount = computed(() => validationIssues.value.length + clientLintIssues.value.length)
+const totalIssueCount = computed(() => validationIssues.value.length)
 const designerClasses = computed(() => ({
   'process-designer--dark': appliedPreference.value.theme === 'DARK'
     || (appliedPreference.value.theme === 'SYSTEM' && systemDark.value),
@@ -567,7 +562,6 @@ function normalizePreference(preference) {
     theme: ['LIGHT', 'DARK', 'SYSTEM'].includes(preference?.theme) ? preference.theme : 'SYSTEM',
     gridEnabled: preference?.gridEnabled !== false,
     minimapEnabled: preference?.minimapEnabled !== false,
-    lintEnabled: preference?.lintEnabled !== false,
     tokenSimulationEnabled: preference?.tokenSimulationEnabled === true,
     propertiesCollapsed: preference?.propertiesCollapsed === true
   })
@@ -759,9 +753,8 @@ function createModeler() {
   if (modeler || !canvasRef.value) return
   modeler = new Modeler({
     container: canvasRef.value,
-    linting: { bpmnlint: bpmnlintConfig },
     gridSnapping: { active: appliedPreference.value.gridEnabled },
-    additionalModules: [minimapModule, gridSnappingModule, lintModule, tokenSimulationModule],
+    additionalModules: [minimapModule, gridSnappingModule, tokenSimulationModule],
     moddleExtensions: { flowable: flowableModdle }
   })
   const eventBus = modeler.get('eventBus')
@@ -774,9 +767,6 @@ function createModeler() {
   })
   eventBus.on('commandStack.shape.replace.postExecute', handleShapeReplace)
   eventBus.on('commandStack.changed', handleCommandStackChanged)
-  eventBus.on('linting.completed', event => {
-    clientLintIssues.value = Object.values(event.issues || {}).flat()
-  })
   eventBus.on('tokenSimulation.toggleMode', event => {
     simulationActive.value = Boolean(event.active)
   })
@@ -854,7 +844,7 @@ async function importXml(xml) {
   loading.value = true
   try {
     const rawSource = xml?.trim() ? xml : createInitialXml()
-    // 旧模型可能只有 sequenceFlow.sourceRef/targetRef，必须补齐 FlowNode 反向引用后再交给 Lint 和命令栈。
+    // 旧模型可能只有 sequenceFlow.sourceRef/targetRef，必须补齐 FlowNode 反向引用后再交给命令栈。
     const source = normalizeSequenceFlowReferences(rawSource)
     await modeler.importXML(source)
     applyDesignerPreference()
@@ -4060,7 +4050,7 @@ function toggleSimulation() {
 }
 
 /**
- * 把当前用户浏览器偏好同步到网格、小地图、Lint 和 Token 模拟服务。
+ * 把当前用户浏览器偏好同步到网格、小地图和 Token 模拟服务。
  * @returns {void} Modeler 尚未初始化时只保留 Prop 状态。
  */
 function applyDesignerPreference() {
@@ -4068,7 +4058,6 @@ function applyDesignerPreference() {
   const preference = appliedPreference.value
   modeler.get('gridSnapping').setActive(preference.gridEnabled)
   modeler.get('minimap').toggle(preference.minimapEnabled)
-  modeler.get('linting').toggle(preference.lintEnabled)
   const toggleMode = modeler.get('toggleMode')
   if (simulationActive.value !== preference.tokenSimulationEnabled) {
     toggleMode.toggleMode(preference.tokenSimulationEnabled)

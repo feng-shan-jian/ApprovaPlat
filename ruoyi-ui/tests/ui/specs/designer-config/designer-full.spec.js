@@ -15,16 +15,10 @@ function designerPrefix() {
 
 /**
  * 构造仅用于“导入功能”测试的标准 BPMN XML。
- * @param {{processKey:string,processName:string,disconnected?:boolean}} input 流程键、名称和是否附加断连节点。
+ * @param {{processKey:string,processName:string}} input 流程键和名称。
  * @returns {string} 含稳定 DI 坐标的 BPMN 2.0 XML。
  */
-function buildImportBpmn({ processKey, processName, disconnected = false }) {
-  const disconnectedNode = disconnected
-    ? '<userTask id="orphan" name="孤立节点" />'
-    : ''
-  const disconnectedShape = disconnected
-    ? '<bpmndi:BPMNShape id="shape_orphan" bpmnElement="orphan"><omgdc:Bounds x="300" y="290" width="100" height="80" /></bpmndi:BPMNShape>'
-    : ''
+function buildImportBpmn({ processKey, processName }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" targetNamespace="https://approvaplat.local/workflow">
   <process id="${processKey}" name="${processName}" isExecutable="true">
@@ -33,14 +27,12 @@ function buildImportBpmn({ processKey, processName, disconnected = false }) {
     <userTask id="review" name="流程审批" />
     <sequenceFlow id="flow_review_end" sourceRef="review" targetRef="end" />
     <endEvent id="end" name="结束" />
-    ${disconnectedNode}
   </process>
   <bpmndi:BPMNDiagram id="diagram_${processKey}">
     <bpmndi:BPMNPlane id="plane_${processKey}" bpmnElement="${processKey}">
       <bpmndi:BPMNShape id="shape_start" bpmnElement="start"><omgdc:Bounds x="100" y="172" width="36" height="36" /></bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_review" bpmnElement="review"><omgdc:Bounds x="240" y="150" width="100" height="80" /></bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_end" bpmnElement="end"><omgdc:Bounds x="430" y="172" width="36" height="36" /></bpmndi:BPMNShape>
-      ${disconnectedShape}
       <bpmndi:BPMNEdge id="edge_start_review" bpmnElement="flow_start_review"><omgdi:waypoint x="136" y="190" /><omgdi:waypoint x="240" y="190" /></bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_review_end" bpmnElement="flow_review_end"><omgdi:waypoint x="340" y="190" /><omgdi:waypoint x="430" y="190" /></bpmndi:BPMNEdge>
     </bpmndi:BPMNPlane>
@@ -79,7 +71,7 @@ async function readDesignerPreview(page, menuLabel) {
   return content
 }
 
-test('@full [UI-DESIGNER-001] 设计器通过UI完成导入、Lint、属性配置、导出、预览、偏好、模拟、保存和重开', async ({ browser }, testInfo) => {
+test('@full [UI-DESIGNER-001] 设计器通过UI完成导入、属性配置、导出、预览、偏好、模拟、保存和重开', async ({ browser }, testInfo) => {
   const prefix = designerPrefix()
   const assets = {
     categoryName: `${prefix}_分类`, categoryCode: `${prefix}_category`,
@@ -105,20 +97,6 @@ test('@full [UI-DESIGNER-001] 设计器通过UI完成导入、Lint、属性配�
       description: `${prefix} 设计器全量回归`
     })
     await configuration.openDesigner(assets.modelKey)
-
-    const invalidXml = buildImportBpmn({ processKey: assets.modelKey, processName: assets.modelName, disconnected: true })
-    await page.locator('input.process-designer__file-input').setInputFiles({
-      name: `${assets.modelKey}-invalid.bpmn`, mimeType: 'application/xml', buffer: Buffer.from(invalidXml, 'utf8')
-    })
-    const lintButton = page.locator('.bjsl-button-error')
-    await expect(lintButton).toBeVisible()
-    await lintButton.click()
-    const lintDisabledButton = page.locator('.bjsl-button-inactive')
-    await expect(lintDisabledButton).toBeVisible()
-    await lintDisabledButton.click()
-    await expect(lintButton).toBeVisible()
-    await expect(page.locator('.bjsl-overlay').first()).toBeVisible()
-    await expect(page.locator('.bjsl-issues')).not.toHaveText('')
 
     const validXml = buildImportBpmn({ processKey: assets.modelKey, processName: assets.modelName })
     await page.locator('input.process-designer__file-input').setInputFiles({
@@ -204,7 +182,6 @@ test('@full [UI-DESIGNER-001] 设计器通过UI完成导入、Lint、属性配�
       theme: 'LIGHT',
       gridEnabled: true,
       minimapEnabled: true,
-      lintEnabled: true,
       tokenSimulationEnabled: false,
       propertiesCollapsed: false
     })), otherUserKey)

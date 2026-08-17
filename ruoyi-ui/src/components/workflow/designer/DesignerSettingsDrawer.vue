@@ -16,9 +16,6 @@
       <el-form-item label="小地图">
         <el-switch v-model="draft.minimapEnabled" />
       </el-form-item>
-      <el-form-item label="客户端 Lint">
-        <el-switch v-model="draft.lintEnabled" />
-      </el-form-item>
       <el-form-item label="Token 流程模拟">
         <el-switch v-model="draft.tokenSimulationEnabled" />
       </el-form-item>
@@ -62,7 +59,6 @@ function createDraft(preference) {
     theme: ['LIGHT', 'DARK', 'SYSTEM'].includes(preference?.theme) ? preference.theme : 'SYSTEM',
     gridEnabled: preference?.gridEnabled !== false,
     minimapEnabled: preference?.minimapEnabled !== false,
-    lintEnabled: preference?.lintEnabled !== false,
     tokenSimulationEnabled: preference?.tokenSimulationEnabled === true,
     propertiesCollapsed: preference?.propertiesCollapsed === true
   }

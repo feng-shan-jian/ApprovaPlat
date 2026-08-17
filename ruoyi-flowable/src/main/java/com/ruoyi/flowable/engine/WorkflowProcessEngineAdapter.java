@@ -24,7 +24,6 @@ import org.flowable.identitylink.api.IdentityLinkType;
 import org.flowable.task.api.DelegationState;
 import org.flowable.task.api.Task;
 import org.springframework.stereotype.Component;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -64,8 +63,8 @@ public class WorkflowProcessEngineAdapter
 
     private final WorkflowIdentityResolver identityResolver;
 
-    /** 任务动作通知服务；生产容器必须注入，旧直接构造单元测试可为空。 */
-    private WorkflowNotificationRegistrar notificationService;
+    /** 任务动作通知服务，必须与引擎写操作共享当前事务。 */
+    private final WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建核心流程引擎适配器。
@@ -75,27 +74,19 @@ public class WorkflowProcessEngineAdapter
      * @param taskService TaskService，Flowable 任务公共服务
      * @param engineOperations WorkflowEngineOperations，统一事务、认证和异常执行边界
      * @param identityResolver WorkflowIdentityResolver，正式用户主数据解析器
+     * @param notificationService WorkflowNotificationRegistrar，任务动作事务 outbox 服务
      * @return 无返回值，构造后由 Spring 管理该组件
      */
     public WorkflowProcessEngineAdapter(RepositoryService repositoryService, RuntimeService runtimeService,
             TaskService taskService, WorkflowEngineOperations engineOperations,
-            WorkflowIdentityResolver identityResolver)
+            WorkflowIdentityResolver identityResolver,
+            WorkflowNotificationRegistrar notificationService)
     {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
-    }
-
-    /**
-     * 注入稳定任务动作通知服务，使归属变更和 outbox 共享同一 Flowable 写事务。
-     * @param notificationService WorkflowNotificationRegistrar，任务动作事务 outbox 服务
-     * @return void，生产 Spring 容器完成注入
-     */
-    @Autowired
-    public void setNotificationService(WorkflowNotificationRegistrar notificationService)
-    {
         this.notificationService = notificationService;
     }
 
@@ -484,10 +475,7 @@ public class WorkflowProcessEngineAdapter
      */
     private void publishStableTaskAction(String eventType, String taskId)
     {
-        if (notificationService != null)
-        {
-            notificationService.onStableTaskAction(eventType, taskId);
-        }
+        notificationService.onStableTaskAction(eventType, taskId);
     }
 
     /**

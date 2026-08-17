@@ -6,7 +6,6 @@ export const DEFAULT_DESIGNER_PREFERENCE = Object.freeze({
   theme: 'SYSTEM',
   gridEnabled: true,
   minimapEnabled: true,
-  lintEnabled: true,
   tokenSimulationEnabled: false,
   propertiesCollapsed: false
 })
@@ -36,8 +35,6 @@ export function normalizeDesignerPreference(preference) {
       ? preference.gridEnabled : defaults.gridEnabled,
     minimapEnabled: typeof preference?.minimapEnabled === 'boolean'
       ? preference.minimapEnabled : defaults.minimapEnabled,
-    lintEnabled: typeof preference?.lintEnabled === 'boolean'
-      ? preference.lintEnabled : defaults.lintEnabled,
     tokenSimulationEnabled: typeof preference?.tokenSimulationEnabled === 'boolean'
       ? preference.tokenSimulationEnabled : defaults.tokenSimulationEnabled,
     propertiesCollapsed: typeof preference?.propertiesCollapsed === 'boolean'

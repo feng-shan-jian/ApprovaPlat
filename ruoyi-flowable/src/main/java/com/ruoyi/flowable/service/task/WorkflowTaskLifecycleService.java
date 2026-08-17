@@ -61,7 +61,6 @@ import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
 import com.ruoyi.flowable.service.process.WorkflowValidatedStartVariables;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationConstants;
-import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * 任务完成、驳回、退回、流程取消和已办撤回的事务性生命周期服务。
@@ -162,8 +161,8 @@ public class WorkflowTaskLifecycleService
     /** 受控重复审批循环的路由、轮次和审计服务。 */
     private final WorkflowControlledLoopService controlledLoopService;
 
-    /** 普通审批流程结果通知服务；旧直接构造单元测试时可为空。 */
-    private WorkflowNotificationRegistrar notificationService;
+    /** 普通审批流程结果通知服务，显式业务动作与 outbox 必须同事务提交。 */
+    private final WorkflowNotificationRegistrar notificationService;
 
     /**
      * 创建完整任务生命周期服务。
@@ -182,6 +181,7 @@ public class WorkflowTaskLifecycleService
      * @param nextTaskAssignmentService WorkflowNextTaskAssignmentService，完成后的动态下一办理人服务
      * @param multiInstanceService WorkflowMultiInstanceService，动态多实例完成 revision CAS 服务
      * @param controlledLoopService WorkflowControlledLoopService，受控循环完成判断和审计服务
+     * @param notificationService WorkflowNotificationRegistrar，显式业务终态 outbox 服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowTaskLifecycleService(WorkflowEngineOperations engineOperations,
@@ -194,7 +194,8 @@ public class WorkflowTaskLifecycleService
             WorkflowTaskCopyService taskCopyService,
             WorkflowNextTaskAssignmentService nextTaskAssignmentService,
             WorkflowMultiInstanceService multiInstanceService,
-            WorkflowControlledLoopService controlledLoopService)
+            WorkflowControlledLoopService controlledLoopService,
+            WorkflowNotificationRegistrar notificationService)
     {
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
@@ -210,16 +211,6 @@ public class WorkflowTaskLifecycleService
         this.nextTaskAssignmentService = nextTaskAssignmentService;
         this.multiInstanceService = multiInstanceService;
         this.controlledLoopService = controlledLoopService;
-    }
-
-    /**
-     * 延迟注入普通审批通知服务，保持既有构造器和测试兼容。
-     * @param notificationService WorkflowNotificationRegistrar，显式业务终态 outbox 服务
-     * @return void，生产 Spring 容器完成注入
-     */
-    @Autowired
-    public void setNotificationService(WorkflowNotificationRegistrar notificationService)
-    {
         this.notificationService = notificationService;
     }
 
@@ -277,11 +268,8 @@ public class WorkflowTaskLifecycleService
                 runtimeService.setVariable(rootProcessInstance.getId(),
                         WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, CANCELED_STATUS);
                 runtimeService.updateBusinessStatus(rootProcessInstance.getId(), CANCELED_STATUS);
-                if (notificationService != null)
-                {
-                    notificationService.onProcessResult("PROCESS_CANCELED",
-                            rootProcessInstance.getProcessDefinitionId(), rootProcessInstance.getId());
-                }
+                notificationService.onProcessResult("PROCESS_CANCELED",
+                        rootProcessInstance.getProcessDefinitionId(), rootProcessInstance.getId());
                 for (Task activeTask : activeTasks)
                 {
                     if (activeTask == null || !StringUtils.hasText(activeTask.getId())
@@ -574,11 +562,8 @@ public class WorkflowTaskLifecycleService
                 runtimeService.setVariable(rootProcessInstance.getId(),
                         WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, REJECTED_STATUS);
                 runtimeService.updateBusinessStatus(rootProcessInstance.getId(), REJECTED_STATUS);
-                if (notificationService != null)
-                {
-                    notificationService.onProcessResult("PROCESS_REJECTED",
-                            rootProcessInstance.getProcessDefinitionId(), rootProcessInstance.getId());
-                }
+                notificationService.onProcessResult("PROCESS_REJECTED",
+                        rootProcessInstance.getProcessDefinitionId(), rootProcessInstance.getId());
                 // CallActivity 子任务也属于同一业务实例；始终删除根实例才能级联结束全部子流程和 sibling。
                 runtimeService.deleteProcessInstance(rootProcessInstance.getId(), audit);
                 taskCopyService.persist(copyPlan);
@@ -756,12 +741,9 @@ public class WorkflowTaskLifecycleService
                     addAuditComment(activeTask, RETURN_COMMENT_TYPE, "RETURN",
                         actor.userId(), opinion, targetKey, null);
                 }
-                if (notificationService != null)
-                {
-                    // 执行树迁移会先创建原办理配置任务，先抑制中间通知，待改派发起人后只发布稳定退回事件。
-                    runtimeService.setVariable(task.getProcessInstanceId(),
-                            WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE, "RETURN");
-                }
+                // 执行树迁移会先创建原办理配置任务，先抑制中间通知，待改派发起人后只发布稳定退回事件。
+                runtimeService.setVariable(task.getProcessInstanceId(),
+                        WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE, "RETURN");
                 var stateBuilder = runtimeService.createChangeActivityStateBuilder()
                         .processInstanceId(task.getProcessInstanceId());
                 stateBuilder.moveExecutionToActivityId(executionId, targetKey);
@@ -781,12 +763,9 @@ public class WorkflowTaskLifecycleService
                 taskService.setAssignee(returnedTask.getId(), processInstance.getStartUserId());
                 taskCopyService.persist(copyPlan);
                 verifyReturnedApplication(returnedTask.getId(), processInstance.getStartUserId());
-                if (notificationService != null)
-                {
-                    notificationService.onStableTaskEvent("TASK_RETURNED", returnedTask);
-                    runtimeService.removeVariable(task.getProcessInstanceId(),
-                            WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE);
-                }
+                notificationService.onStableTaskEvent("TASK_RETURNED", returnedTask);
+                runtimeService.removeVariable(task.getProcessInstanceId(),
+                        WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE);
             });
             return null;
         });
@@ -860,12 +839,9 @@ public class WorkflowTaskLifecycleService
                         task.getTaskDefinitionKey(), null);
                 // 先删除退回专用标记，恢复首审批人时必须重新走完整审批资格校验。
                 taskService.removeVariableLocal(taskId, RETURN_APPLICANT_VARIABLE);
-                if (notificationService != null)
-                {
-                    // assignee 与候选关系尚未全部恢复，暂不允许 assignment 监听器投递半成品接收人。
-                    runtimeService.setVariable(instance.getId(),
-                            WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE, "RESUBMIT");
-                }
+                // assignee 与候选关系尚未全部恢复，暂不允许 assignment 监听器投递半成品接收人。
+                runtimeService.setVariable(instance.getId(),
+                        WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE, "RESUBMIT");
                 restoreAssignment(taskId, assignment);
                 taskService.removeVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE);
                 runtimeService.setVariable(instance.getId(),
@@ -874,12 +850,9 @@ public class WorkflowTaskLifecycleService
                 runtimeService.updateBusinessStatus(instance.getId(),
                         WorkflowProcessStartService.RUNNING_STATUS);
                 verifyResubmittedApplication(taskId, assignment);
-                if (notificationService != null)
-                {
-                    notificationService.onStableTaskEvent("TASK_RESUBMITTED", task);
-                    runtimeService.removeVariable(instance.getId(),
-                            WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE);
-                }
+                notificationService.onStableTaskEvent("TASK_RESUBMITTED", task);
+                runtimeService.removeVariable(instance.getId(),
+                        WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE);
             });
             return null;
         });

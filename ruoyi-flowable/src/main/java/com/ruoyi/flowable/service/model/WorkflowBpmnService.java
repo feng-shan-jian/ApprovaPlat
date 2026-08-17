@@ -42,7 +42,6 @@ import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.RepositoryService;
 import org.flowable.validation.ValidationError;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -142,35 +141,11 @@ public class WorkflowBpmnService
 
     private final RepositoryService repositoryService;
 
-    /** 正式自定义表单字段目录解析器；纯解析单测可不启用。 */
+    /** 正式自定义表单字段目录解析器。 */
     private final WorkflowFormFieldExtensionService formFieldExtensionService;
 
-    /** 错误与升级正式编码目录；纯解析单测可不启用。 */
+    /** 错误与升级正式编码目录。 */
     private final WorkflowBpmnEventCodeService bpmnEventCodeService;
-
-    /**
-     * 创建 BPMN 安全校验组件。
-     *
-     * @param repositoryService RepositoryService，执行 Flowable 官方流程模型校验的公共 API
-     * @return 无返回值，构造后由 Spring 管理该组件
-     */
-    public WorkflowBpmnService(RepositoryService repositoryService)
-    {
-        this(repositoryService, null, null);
-    }
-
-    /**
-     * 创建接入正式自定义表单字段目录的 BPMN 安全校验组件。
-     * @param repositoryService RepositoryService，Flowable 官方模型校验公共 API
-     * @param formFieldExtensionService WorkflowFormFieldExtensionService，自定义字段目录解析器
-     * @return 无返回值，构造后由 Spring 管理
-     */
-    @Autowired
-    public WorkflowBpmnService(RepositoryService repositoryService,
-            WorkflowFormFieldExtensionService formFieldExtensionService)
-    {
-        this(repositoryService, formFieldExtensionService, null);
-    }
 
     /**
      * 创建接入正式表单字段和 BPMN 事件编码目录的安全校验组件。
@@ -784,11 +759,8 @@ public class WorkflowBpmnService
                 {
                     throw invalidBpmn("BPMN 错误或升级必须引用正式业务编码", null);
                 }
-                if (bpmnEventCodeService != null)
-                {
-                    // 保存和部署均核验当前启用目录，停用编码只能由历史部署继续运行。
-                    bpmnEventCodeService.requireEnabled(resolved.eventType(), resolved.eventCode());
-                }
+                // 保存和部署均核验当前启用目录，停用编码只能由历史部署继续运行。
+                bpmnEventCodeService.requireEnabled(resolved.eventType(), resolved.eventCode());
                 if (event instanceof BoundaryEvent boundaryEvent)
                 {
                     validateBusinessBoundaryEvent(boundaryEvent, resolved, attachedMatches);
@@ -1873,13 +1845,12 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("流程包含重复的节点表单引用", null);
         }
-        String embeddedContent = formFieldExtensionService == null
-                ? WorkflowEmbeddedFormConverter.convert(properties)
-                : WorkflowEmbeddedFormConverter.convert(properties,
-                        formFieldExtensionService::resolveForAuthor);
+        String embeddedContent = WorkflowEmbeddedFormConverter.convert(properties,
+                formFieldExtensionService::resolveForAuthor);
         references.add(new WorkflowBpmnFormReference(WorkflowFormSourceType.EMBEDDED,
                 null, formKeyForSnapshot, normalizedNodeKey,
-                nodeName == null ? "" : nodeName, embeddedContent, normalizedProcessKey));
+                nodeName == null ? "" : nodeName, embeddedContent, normalizedProcessKey,
+                null, Map.of()));
     }
 
     /**

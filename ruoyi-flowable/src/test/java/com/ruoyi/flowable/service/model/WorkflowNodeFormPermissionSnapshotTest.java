@@ -84,30 +84,6 @@ class WorkflowNodeFormPermissionSnapshotTest
     }
 
     /**
-     * 验证旧模型没有权限描述时保留原模板正文，已部署版本不被后续模板编译覆盖。
-     *
-     * @return void，兼容模型正文被改写或旧快照随新模板漂移时测试失败
-     */
-    @Test
-    void preservesLegacyContentAndKeepsCompiledSnapshotImmutable()
-    {
-        WorkflowBpmnFormReference legacy = new WorkflowBpmnFormReference(
-                1L, "key_1", "approve", "审批");
-        String legacySnapshot = WorkflowNodeFormPermissionSnapshot.apply(
-                TEMPLATE, legacy, validator);
-
-        String firstDeployment = WorkflowNodeFormPermissionSnapshot.apply(
-                TEMPLATE, reference(WorkflowFormFieldPermissionMode.READONLY, Map.of()), validator);
-        String changedTemplate = TEMPLATE.replace("addedLater", "changedAfterDeployment");
-        String secondDeployment = WorkflowNodeFormPermissionSnapshot.apply(
-                changedTemplate, reference(WorkflowFormFieldPermissionMode.READONLY, Map.of()), validator);
-
-        assertThat(legacySnapshot).isSameAs(TEMPLATE);
-        assertThat(firstDeployment).contains("addedLater").doesNotContain("changedAfterDeployment");
-        assertThat(secondDeployment).contains("changedAfterDeployment").doesNotContain("addedLater");
-    }
-
-    /**
      * 创建正式模板节点权限引用。
      *
      * @param defaultMode WorkflowFormFieldPermissionMode，模板新增字段采用的默认策略
