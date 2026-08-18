@@ -101,7 +101,6 @@ import com.ruoyi.flowable.engine.WorkflowProcessEngineAdapter;
 import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
-import com.ruoyi.flowable.service.model.WorkflowModelService;
 import com.ruoyi.flowable.service.model.WorkflowConnectorEndpointService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
@@ -253,8 +252,6 @@ class FlowableEngineIT
     private final WorkflowProcessStartService workflowProcessStartService;
     /** Flowable 官方子部署资源仓库，用于手工部署夹具的不可变业务快照。 */
     private final WorkflowDeploymentArtifactRepository artifactRepository;
-    /** 真实模型保存服务，用于验证内容摘要、Flowable revision 和自然版本唯一约束。 */
-    private final WorkflowModelService workflowModelService;
     /** 真实 HTTP 端点白名单服务，用于验证管理配置到部署冻结的完整链路。 */
     private final WorkflowConnectorEndpointService workflowConnectorEndpointService;
     /** 真实历史提交快照详情服务。 */
@@ -284,7 +281,6 @@ class FlowableEngineIT
      * @param workflowProcessEngineAdapter WorkflowProcessEngineAdapter，P2 流程引擎公共适配器
      * @param workflowProcessStartService WorkflowProcessStartService，P14 真实流程发起服务
      * @param artifactRepository WorkflowDeploymentArtifactRepository，正式部署资源仓库
-     * @param workflowModelService WorkflowModelService，真实流程模型保存服务
      * @param workflowConnectorEndpointService WorkflowConnectorEndpointService，真实 HTTP 端点白名单服务
      * @param workflowProcessDetailService WorkflowProcessDetailService，历史表单快照详情服务
      * @param workflowProcessInstanceService WorkflowProcessInstanceService，I01/I02/P15 实例写服务
@@ -310,7 +306,6 @@ class FlowableEngineIT
         WorkflowProcessEngineAdapter workflowProcessEngineAdapter,
         WorkflowProcessStartService workflowProcessStartService,
         WorkflowDeploymentArtifactRepository artifactRepository,
-        WorkflowModelService workflowModelService,
         WorkflowConnectorEndpointService workflowConnectorEndpointService,
         WorkflowProcessDetailService workflowProcessDetailService,
         WorkflowProcessInstanceService workflowProcessInstanceService,
@@ -334,7 +329,6 @@ class FlowableEngineIT
         this.workflowProcessEngineAdapter = workflowProcessEngineAdapter;
         this.workflowProcessStartService = workflowProcessStartService;
         this.artifactRepository = artifactRepository;
-        this.workflowModelService = workflowModelService;
         this.workflowConnectorEndpointService = workflowConnectorEndpointService;
         this.workflowProcessDetailService = workflowProcessDetailService;
         this.workflowProcessInstanceService = workflowProcessInstanceService;
@@ -2148,10 +2142,9 @@ class FlowableEngineIT
     }
 
     /**
-     * 使用真实 MySQL 和 Flowable revision 验证模型内容基线并发、冲突及同内容重放。
+     * 验证 Flowable、数据库和 Redis 测试残留已完成清理。
      *
-     * @return 无返回值；双客户端同时写入、稳定 409 或同内容重放任一漂移时测试失败
-     * @throws Exception 并发线程等待、执行或关闭失败时传播给 JUnit
+     * @return 无返回值；任一引擎表、业务表或 Redis 残留不符合基线时测试失败
      */
     @Test
     @Order(99)

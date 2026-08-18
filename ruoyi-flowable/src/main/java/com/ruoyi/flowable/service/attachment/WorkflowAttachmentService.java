@@ -125,8 +125,8 @@ public class WorkflowAttachmentService
                     UUID.randomUUID().toString(), ownerUserId, normalizedFieldName,
                     stored.originalName(), stored.storageKey(), stored.contentType(),
                     stored.fileSize(), stored.sha256(), WorkflowAttachmentStatus.TEMP,
-                    now.plus(properties.getTemporaryTtl()), null, null, null, null, null,
-                    0, null, null, now, null);
+                    now.plus(properties.getTemporaryTtl()), null, null, null, null, null, null,
+                    0, null, null, null, null, now, null);
             if (attachmentMapper.insert(attachment) != 1)
             {
                 throw new ServiceException("工作流附件元数据写入失败", HttpStatus.ERROR);

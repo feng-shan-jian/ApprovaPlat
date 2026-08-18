@@ -417,7 +417,7 @@ public class WorkflowModelService
         String expectedBpmnSha256 = requireBpmnSha256(request.getExpectedBpmnSha256());
         byte[] bpmnBytes = bpmnXml.getBytes(StandardCharsets.UTF_8);
         String submittedBpmnSha256 = createBpmnSha256(bpmnXml);
-        SaveAttempt attempt = new SaveAttempt(modelId, submittedBpmnSha256);
+        SaveAttempt attempt = new SaveAttempt(submittedBpmnSha256);
 
         try
         {
@@ -1787,9 +1787,6 @@ public class WorkflowModelService
     /** 当前保存请求发生事务提交竞态时使用的短生命周期回查上下文。 */
     private static final class SaveAttempt
     {
-        /** 保存请求最初打开的模型主键。 */
-        private final String sourceModelId;
-
         /** 本次提交 BPMN XML 的规范内容摘要。 */
         private final String submittedBpmnSha256;
 
@@ -1803,14 +1800,11 @@ public class WorkflowModelService
         private String targetModelId;
 
         /**
-         * 创建一次模型保存尝试上下文。
-         * @param sourceModelId String，保存请求最初打开的模型主键
          * @param submittedBpmnSha256 String，本次提交内容摘要
          * @return 无返回值，构造后仅由当前请求线程使用
          */
-        private SaveAttempt(String sourceModelId, String submittedBpmnSha256)
+        private SaveAttempt(String submittedBpmnSha256)
         {
-            this.sourceModelId = sourceModelId;
             this.submittedBpmnSha256 = submittedBpmnSha256;
         }
 
@@ -1839,7 +1833,6 @@ public class WorkflowModelService
             this.targetModelId = targetModelId;
         }
 
-        private String sourceModelId() { return sourceModelId; }
         private String submittedBpmnSha256() { return submittedBpmnSha256; }
         private String modelKey() { return modelKey; }
         private Integer targetVersion() { return targetVersion; }

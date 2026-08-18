@@ -1540,16 +1540,6 @@ public class WorkflowAttachmentStorage
     }
 
     /**
-     * 获取规范化后的私有存储根目录，仅供资源映射安全测试使用。
-     *
-     * @return Path，profile/workflow-attachments 绝对路径
-     */
-    Path storageRoot()
-    {
-        return storageRoot;
-    }
-
-    /**
      * 流式复制上传内容并计算实际大小与 SHA-256。
      *
      * @param file MultipartFile，待读取的上传文件

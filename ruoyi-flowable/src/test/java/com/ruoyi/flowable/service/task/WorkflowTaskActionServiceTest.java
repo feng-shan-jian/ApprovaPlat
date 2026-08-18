@@ -344,7 +344,7 @@ class WorkflowTaskActionServiceTest
      */
     private WorkflowTaskCopyService.CopyPlan copyPlan()
     {
-        return new WorkflowTaskCopyService.CopyPlan(List.of(new WfCopy()));
+        return new WorkflowTaskCopyService.CopyPlan(List.of(new WfCopy()), false);
     }
 
     /**

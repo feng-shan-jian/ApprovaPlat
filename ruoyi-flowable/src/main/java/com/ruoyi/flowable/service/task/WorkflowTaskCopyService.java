@@ -342,15 +342,6 @@ public class WorkflowTaskCopyService
         }
 
         /**
-         * 保留既有测试和内部调用的一参数构造语义，默认使用严格插入。
-         * @param copies List&lt;WfCopy&gt;，待写入抄送记录
-         */
-        public CopyPlan(List<WfCopy> copies)
-        {
-            this(copies, false);
-        }
-
-        /**
          * 创建无需写库的空抄送计划。
          *
          * @return CopyPlan，不包含抄送记录的不可变计划
