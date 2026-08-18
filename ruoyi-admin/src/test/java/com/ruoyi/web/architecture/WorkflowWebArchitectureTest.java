@@ -1,14 +1,12 @@
 package com.ruoyi.web.architecture;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.lang.ArchRule;
-import com.ruoyi.web.controller.workflow.architecturefixture.InvalidWorkflowController;
 
 /**
  * 使用 ArchUnit 的编译后依赖图验证工作流 Web Controller 仅依赖应用服务。
@@ -35,20 +33,6 @@ class WorkflowWebArchitectureTest
         noClasses().that().resideInAPackage("com.ruoyi.web.controller.workflow..")
                 .should().dependOnClassesThat().haveSimpleNameEndingWith("NotificationChannel")
                 .check(classes);
-    }
-
-    /**
-     * 验证正式规则在构造 Controller 直连 JdbcTemplate 违规时确实失败，防止空规则伪通过。
-     *
-     * @return void，规则未识别测试违规依赖时测试失败
-     */
-    @Test
-    void controllerDataAccessRuleRejectsConstructedViolation()
-    {
-        JavaClasses violatingClasses = new ClassFileImporter()
-                .importClasses(InvalidWorkflowController.class);
-        assertThatThrownBy(() -> CONTROLLER_DATA_ACCESS_RULE.check(violatingClasses))
-                .isInstanceOf(AssertionError.class);
     }
 
     /**

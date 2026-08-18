@@ -133,7 +133,7 @@ mvn -pl ruoyi-admin -am -DskipTests package
 java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
 ```
 
-`-DskipTests` only shortens the first local startup. If `RUOYI_TOKEN_SECRET` is not set, a single-node installation generates and reuses a random HS512 secret in the user's private directory. See the [deployment guide](docs/operations/workflow-deployment.md) for production secrets and multi-node requirements.
+`-DskipTests` only shortens the first local startup. If `RUOYI_TOKEN_SECRET` is not set, a single-node installation generates and reuses a random HS512 secret in the user's private directory; production deployments must manage secrets and database configuration explicitly.
 
 ### 3. Start the frontend
 
@@ -149,8 +149,6 @@ npm run dev -- --host 127.0.0.1 --port 1024
 Open `http://127.0.0.1:1024`. The clean local baseline account is `admin` with initial password `wang`. It is for local development only; change it before exposing the service beyond your machine.
 
 To explore the included approval samples, follow the [sample provisioning guide](deployment/samples/workflow/README.md). It creates them through platform APIs rather than writing directly to Flowable or business tables.
-
-For production, follow [workflow installation and operations](docs/operations/workflow-deployment.md) and [release and rollback](docs/operations/workflow-release.md) instead of copying the local startup commands.
 
 ## Development and testing
 
@@ -188,7 +186,7 @@ ApprovaPlat/
 |- ruoyi-ui/     Vue 3 frontend, contract tests, and real-browser E2E
 |- sql/          Database baseline, business schema, and read-only checks
 |- docs/         Architecture, behavior, database, operations, and acceptance docs
-`- deployment/   Production config, systemd, Nginx, samples, and release gates
+`- deployment/   Production config, systemd, Nginx, and approval samples
 ```
 
 ## Documentation
@@ -199,7 +197,6 @@ ApprovaPlat/
 | Constraints for every approval action          | [Approval behavior contract](docs/contracts/workflow-behavior.md)                                     |
 | Participant and MessageFlow                    | [Multi-pool collaboration contract](docs/contracts/workflow-collaboration.md)                         |
 | Clean installation and managed migrations      | [Workflow database baseline](docs/database/workflow-baseline.md)                                      |
-| Installation, operation, release, and rollback | [Deployment](docs/operations/workflow-deployment.md) / [Release](docs/operations/workflow-release.md) |
 | Testing and real-environment acceptance        | [Workflow testing and acceptance](docs/testing/workflow-acceptance.md)                                |
 
 ## Contributing

@@ -50,9 +50,7 @@ export default [
       'node_modules/**',
       'html/**',
       'output/**',
-      'tests/**/output/**',
-      'tests/ui/reports/**',
-      'tests/ui/output/**'
+      'tests/**/output/**'
     ]
   },
   js.configs.recommended,

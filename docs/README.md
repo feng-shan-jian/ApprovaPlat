@@ -10,8 +10,6 @@
 | 业务契约 | [contracts/workflow-behavior.md](contracts/workflow-behavior.md) | 定义审批动作、复杂 BPMN、附件、连接器和运行事件行为 |
 | 协作契约 | [contracts/workflow-collaboration.md](contracts/workflow-collaboration.md) | 定义 Participant、MessageFlow 与多池消息运行语义 |
 | 数据库 | [database/workflow-baseline.md](database/workflow-baseline.md) | 定义首个正式数据库基线、安装顺序和未来迁移规则 |
-| 安装运维 | [operations/workflow-deployment.md](operations/workflow-deployment.md) | 定义生产安装、配置、启动和运行就绪要求 |
-| 发布回滚 | [operations/workflow-release.md](operations/workflow-release.md) | 定义发布包、数据库变更、回滚和证据门禁 |
 | 测试验收 | [testing/workflow-acceptance.md](testing/workflow-acceptance.md) | 定义静态契约、真实环境和上线验收层级 |
 | 决策记录 | [project-clarifications.md](project-clarifications.md) | 记录已经由项目负责人确认的范围与治理结论 |
 

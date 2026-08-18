@@ -120,7 +120,7 @@ mvn -pl ruoyi-admin -am -DskipTests package
 java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
 ```
 
-`-DskipTests` 只用于缩短本地首次启动。未显式设置 `RUOYI_TOKEN_SECRET` 时，单节点环境会在用户私有目录中生成并复用随机 HS512 密钥；生产密钥与多节点要求见[部署文档](docs/operations/workflow-deployment.md)。
+`-DskipTests` 只用于缩短本地首次启动。未显式设置 `RUOYI_TOKEN_SECRET` 时，单节点环境会在用户私有目录中生成并复用随机 HS512 密钥；生产环境必须显式管理密钥和数据库配置。
 
 ### 3. 启动前端
 
@@ -136,8 +136,6 @@ npm run dev -- --host 127.0.0.1 --port 1024
 访问 `http://127.0.0.1:1024`。全新本地基线账号为 `admin`，初始密码为 `wang`；它只用于本机开发，对外开放服务前必须更换。
 
 如果希望快速体验仓库里的审批样例，可以按[审批样例置备](deployment/samples/workflow/README.md)通过平台 API 创建，不需要直接修改 Flowable 表或业务表。
-
-生产安装请使用[工作流安装与运行](docs/operations/workflow-deployment.md)和[发布与回滚](docs/operations/workflow-release.md)，不要直接照搬本地启动命令。
 
 ## 开发与测试
 
@@ -175,7 +173,7 @@ ApprovaPlat/
 |- ruoyi-ui/     Vue 3 前端、契约测试与真实浏览器 E2E
 |- sql/          数据库基线、业务结构与只读验收脚本
 |- docs/         架构、业务契约、数据库、运维与验收文档
-`- deployment/   生产配置、systemd、Nginx、样例与发布门禁
+`- deployment/   生产配置、systemd、Nginx 与审批样例
 ```
 
 ## 文档
@@ -186,7 +184,6 @@ ApprovaPlat/
 | 每个审批动作的约束         | [审批业务行为契约](docs/contracts/workflow-behavior.md)                                              |
 | Participant 与 MessageFlow | [多池协作运行契约](docs/contracts/workflow-collaboration.md)                                         |
 | 空库安装和正式迁移         | [工作流数据库基线](docs/database/workflow-baseline.md)                                               |
-| 安装、运行、发布和回滚     | [部署文档](docs/operations/workflow-deployment.md) / [发布文档](docs/operations/workflow-release.md) |
 | 测试和真实环境验收         | [工作流测试与验收](docs/testing/workflow-acceptance.md)                                              |
 
 ## 参与项目

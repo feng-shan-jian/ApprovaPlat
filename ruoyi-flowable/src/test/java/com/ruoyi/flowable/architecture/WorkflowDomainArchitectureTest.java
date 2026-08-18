@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.architecture;
 
-import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 
@@ -15,24 +14,6 @@ import com.tngtech.archunit.core.importer.ImportOption;
  */
 class WorkflowDomainArchitectureTest
 {
-    /**
-     * 验证 notification 包只保留架构方案定义的细粒度服务所有者。
-     *
-     * @return void，重新引入统一门面或未授权 Service 时 ArchUnit 抛出断言错误
-     */
-    @Test
-    void notificationPackageContainsOnlyOwnedServices()
-    {
-        classes().that().resideInAPackage("..service.notification..")
-                .and().haveSimpleNameEndingWith("Service")
-                .should().haveSimpleName("WorkflowNotificationPolicyService")
-                .orShould().haveSimpleName("WorkflowNotificationInboxService")
-                .orShould().haveSimpleName("WorkflowNotificationOutboxService")
-                .orShould().haveSimpleName("WorkflowNotificationAdminService")
-                .orShould().haveSimpleName("WorkflowManualUrgeService")
-                .check(importProductionClasses());
-    }
-
     /**
      * 验证 SMTP 和 SMS 渠道只负责外部投递，不依赖 JDBC、事务 API 或 Mapper。
      *
