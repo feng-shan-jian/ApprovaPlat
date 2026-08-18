@@ -93,7 +93,7 @@ The view below shows a dynamic multi-instance approval completed in a real front
 The following cannot yet be described as fully supported:
 
 - The first production database baseline supports a clean, empty schema. It does not promise automatic upgrades from unpublished development databases.
-- `flowable.database-schema-update=false` is a fixed boundary. Production schema changes must use maintained SQL and read-only acceptance checks.
+- `flowable.database-schema-update=false` is a fixed boundary. Production schema changes must use maintained SQL and runtime validation.
 - `ComplexGateway` cannot currently be deployed. Native standard loops may round-trip as XML; business repetition uses the project's controlled-loop capability.
 - Async executors are disabled by default. Enabling timers, SLAs, or background work requires database, topology, capacity, monitoring, and single-executor coordination validation.
 - Multi-node deployment, shared attachment storage, real external side effects, backup recovery, and long-duration stability still require validation in the actual target environment.
@@ -183,9 +183,9 @@ Verification against real MySQL and Redis instances, real roles, and APIs requir
 ApprovaPlat/
 |- pom.xml       Maven reactor entry point
 |- ruoyi-*/      Spring Boot backend modules and Flowable domain module
-|- ruoyi-ui/     Vue 3 frontend, contract tests, and real-browser E2E
-|- sql/          Database baseline, business schema, and read-only checks
-|- docs/         Architecture, behavior, database, operations, and acceptance docs
+|- ruoyi-ui/     Vue 3 frontend, workflow designer, and contract tests
+|- sql/          Database baseline, business schema, and menu permissions
+|- docs/         Architecture, behavior, database, and project decision docs
 `- deployment/   Production config, systemd, Nginx, and approval samples
 ```
 
