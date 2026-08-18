@@ -130,12 +130,5 @@ export default [
     rules: {
       'no-useless-escape': 'off'
     }
-  },
-  {
-    // 浏览器验收脚本在 finally 中优先报告清理失败；保留 warning 以持续提示该控制流风险。
-    files: ['tests/**/*.js'],
-    rules: {
-      'no-unsafe-finally': 'warn'
-    }
   }
 ]

@@ -79,7 +79,7 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 - 区分设计、发起、办理、管理和审计职责，并对实例、任务、部署、附件和审计数据做对象级授权。
 - Flowable 数据和业务数据共用主数据源与事务边界，前端不保存第二份权威流程状态。
 - 提供健康检查、运行快照、Micrometer/Prometheus 指标、附件清理锁和运行就绪校验。
-- 仓库包含生产配置、systemd、Nginx、数据库只读验收和发布门禁资产。
+- 仓库包含生产配置、systemd、Nginx 和审批样例置备资产。
 
 ## 项目截图
 
@@ -149,7 +149,7 @@ npm run test:contracts
 npm run build:prod
 ```
 
-真实 MySQL、Redis、角色、API 和浏览器验收需要额外环境变量与隔离库，执行方式见[测试与验收](docs/testing/workflow-acceptance.md)和 [E2E 说明](ruoyi-ui/tests/e2e/README.md)。
+真实 MySQL、Redis、角色和 API 验证需要准备对应的运行环境与隔离数据。
 
 ## 技术栈
 
@@ -162,7 +162,7 @@ npm run build:prod
 | 设计器       | BPMN.js 18.22.0                              |
 | 规则与连接器 | CEL、JSqlParser、受控 Java / HTTP / SQL      |
 | 可观测性     | Spring Boot Actuator、Micrometer、Prometheus |
-| 验证         | JUnit 5、Playwright、k6、数据库只读验收      |
+| 验证         | JUnit 5、前端契约测试与生产构建              |
 
 ## 仓库结构
 
@@ -170,9 +170,9 @@ npm run build:prod
 ApprovaPlat/
 |- pom.xml       Maven 聚合入口
 |- ruoyi-*/      Spring Boot 后端模块与 Flowable 领域模块
-|- ruoyi-ui/     Vue 3 前端、契约测试与真实浏览器 E2E
-|- sql/          数据库基线、业务结构与只读验收脚本
-|- docs/         架构、业务契约、数据库、运维与验收文档
+|- ruoyi-ui/     Vue 3 前端、工作流设计器与契约测试
+|- sql/          数据库基线、业务结构与菜单权限
+|- docs/         架构、业务契约与数据库文档
 `- deployment/   生产配置、systemd、Nginx 与审批样例
 ```
 
@@ -184,7 +184,6 @@ ApprovaPlat/
 | 每个审批动作的约束         | [审批业务行为契约](docs/contracts/workflow-behavior.md)                                              |
 | Participant 与 MessageFlow | [多池协作运行契约](docs/contracts/workflow-collaboration.md)                                         |
 | 空库安装和正式迁移         | [工作流数据库基线](docs/database/workflow-baseline.md)                                               |
-| 测试和真实环境验收         | [工作流测试与验收](docs/testing/workflow-acceptance.md)                                              |
 
 ## 参与项目
 

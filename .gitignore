@@ -5,15 +5,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 **/*.log
-.playwright-cli/
 output/
 /mysql-root.txt
 /mysql-password.txt
 /mysql-app.txt
 /testcount/*.local.md
 
-# Repository-local operational documents excluded from published history
-/deployment/k6/README.md
 /testcount/
 
 # Local test/runtime copies and generated evidence
@@ -25,7 +22,6 @@ output/
 /deployment/Now_Task/**/*dump*.sql
 
 tests/**/coverage/
-tests/e2e/reports
 selenium-debug.log
 
 # Editor directories and files

@@ -10,11 +10,8 @@
     "build:prod": "vite build",
     "build:stage": "vite build --mode staging",
     "preview": "vite preview",
-    "lint": "eslint src tests plugins vite.config.js playwright.config.js",
-    "test:contracts": "node --test tests/contracts/workflow-approval-eligibility.test.js tests/contracts/workflow-call-activity-moddle.test.js tests/contracts/workflow-designer-capabilities.test.js tests/contracts/workflow-participant-rules.test.js tests/contracts/workflow-form-user-field-catalog.test.js tests/contracts/workflow-condition-rules.test.js tests/contracts/workflow-form-field-permissions.test.js tests/contracts/playwright-config-secrets.test.js tests/contracts/workflow-samples-provisioning.test.js",
-    "test:e2e": "node tests/e2e/support/run-e2e.js",
-    "test:e2e:headed": "playwright test --headed",
-    "test:e2e:report": "playwright show-report output/playwright/html"
+    "lint": "eslint src tests plugins vite.config.js",
+    "test:contracts": "node --test tests/contracts/workflow-approval-eligibility.test.js tests/contracts/workflow-call-activity-moddle.test.js tests/contracts/workflow-designer-capabilities.test.js tests/contracts/workflow-participant-rules.test.js tests/contracts/workflow-form-user-field-catalog.test.js tests/contracts/workflow-condition-rules.test.js tests/contracts/workflow-form-field-permissions.test.js tests/contracts/workflow-samples-provisioning.test.js"
   },
   "repository": {
     "type": "git",
@@ -45,7 +42,6 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",
-    "@playwright/test": "1.62.0",
     "@vitejs/plugin-vue": "5.2.4",
     "@xmldom/xmldom": "0.9.10",
     "bpmn-moddle": "10.0.0",

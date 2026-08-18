@@ -27,8 +27,8 @@ flowchart LR
 - `ruoyi-flowable`：对象授权、状态校验、事务、Flowable 命令、业务表写入、附件和集成能力。
 - `ruoyi-system`：用户、角色、部门、菜单和系统操作日志主数据。
 - `ruoyi-ui`：真实 API 调用、管理页面、工作台、BPMN 设计/查看和表单运行时。
-- `sql/flowable`：Flowable 官方表、工作流业务表、菜单权限和只读验收 SQL。
-- `deployment`：生产配置、systemd、Nginx、发布门禁和受控样本。
+- `sql/flowable`：Flowable 官方表、工作流业务表和菜单权限。
+- `deployment`：生产配置、systemd、Nginx 和受控样本。
 
 ## 接口边界
 

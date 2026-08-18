@@ -25,7 +25,7 @@
 
 ## 开发库重建
 
-开发库数据不属于保留资产。结构变化时直接删除目标 schema，按上述九个初始化文件重建，然后执行三组只读验收和 `mysqlcheck`。不得创建开发库 dump、旧 SQL 副本、回填脚本或兼容迁移。
+开发库数据不属于保留资产。结构变化时直接删除目标 schema，按上述九个初始化文件重建，然后执行 `mysqlcheck`。不得创建开发库 dump、旧 SQL 副本、回填脚本或兼容迁移。
 
 ## 表基线
 
@@ -86,17 +86,5 @@
 - `wf_notification_inbox` 使用 `notification_key + recipient_user_id` 唯一约束，并保存 `source_type/source_id`；`outbox_id` 仅为创建时软关联，不再建立 outbox 外键。
 - `wf_task_sla_audit.sla_execution_id` 使用 `ON DELETE CASCADE`，SLA execution 满足保留条件后由数据库同步删除审计，禁止孤立增长。
 - 生命周期候选索引统一包含终态、终态时间和稳定主键；协作审计按 `message_id + direction` 随父记录同事务删除。
-- 业务自然键、扩展版本、入站请求、outbox 和消息顺序继续由 MySQL 唯一键兜底；只读验收同时固定核对 SQL Connector v1 Schema 与运行时代码摘要。
+- 业务自然键、扩展版本、入站请求、outbox 和消息顺序继续由 MySQL 唯一键兜底。
 - `wf_*` 与 `ACT_*` 的业务写入使用同一 Spring 事务；应用账号不得依赖自动建表修复缺失结构。
-
-## 只读验收
-
-初始化完成后依次执行：
-
-1. `sql/flowable/verify/8.0.0__verify.sql`
-2. `sql/flowable/verify/8.0.0__verify_workflow_business.sql`
-3. `sql/flowable/verify/8.0.0__verify_workflow_menu.sql`
-
-所有结果都必须为 `PASS`。验收固定核对总表数 94、分项表数 `20/11/36/27`、17 张累计退役表缺失、27 张保留表关键列与约束、inbox 稳定关联、附件清理租约、凭据无 MySQL 运行时窗口、Flowable 部署制品、菜单和职责角色。
-
-静态契约测试和构建成功不能代替真实 MySQL 空库安装。正式发布前必须保存空库安装、表数、三组验收、`mysqlcheck` 和真实业务烟测的脱敏结果摘要。
