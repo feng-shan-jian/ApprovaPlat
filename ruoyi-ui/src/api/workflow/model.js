@@ -62,8 +62,8 @@ export function updateModel(data) {
 
 /**
  * 原子保存 BPMN XML；已部署或历史版本由后端自动创建新模型版本。
- * @param {object} data modelId、bpmnXml、expectedBpmnSha256 和 newVersion。
- * @returns {Promise<object>} data 包含真实 modelId、version 和 bpmnSha256。
+ * @param {object} data modelId、bpmnXml 和 expectedRevision。
+ * @returns {Promise<object>} data 包含真实 modelId、version 和 revision。
  */
 export function saveModel(data) {
   return request({ url: '/workflow/model/save', method: 'post', data })

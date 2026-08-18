@@ -29,11 +29,8 @@ public class WorkflowModelDto
     /** BPMN 2.0 XML 正文。 */
     private String bpmnXml;
 
-    /** 设计页加载时取得的服务端 BPMN 内容摘要。 */
-    private String expectedBpmnSha256;
-
-    /** 保存设计时是否显式创建新模型版本；已部署或历史版本会由服务端自动创建新版本。 */
-    private Boolean newVersion;
+    /** 设计页加载时取得的 Flowable 模型修订号。 */
+    private Integer expectedRevision;
 
     /**
      * 获取 Flowable 模型主键。
@@ -204,44 +201,23 @@ public class WorkflowModelDto
     }
 
     /**
-     * 获取设计页加载时的 BPMN 内容摘要。
+     * 获取设计页加载时的 Flowable 模型修订号。
      *
-     * @return String，64 位小写 SHA-256 摘要
+     * @return Integer，Flowable REV_ 乐观锁修订号
      */
-    public String getExpectedBpmnSha256()
+    public Integer getExpectedRevision()
     {
-        return expectedBpmnSha256;
+        return expectedRevision;
     }
 
     /**
-     * 设置设计页加载时的 BPMN 内容摘要。
+     * 设置设计页加载时的 Flowable 模型修订号。
      *
-     * @param expectedBpmnSha256 String，64 位小写 SHA-256 摘要
+     * @param expectedRevision Integer，Flowable REV_ 乐观锁修订号
      * @return 无返回值
      */
-    public void setExpectedBpmnSha256(String expectedBpmnSha256)
+    public void setExpectedRevision(Integer expectedRevision)
     {
-        this.expectedBpmnSha256 = expectedBpmnSha256;
-    }
-
-    /**
-     * 获取是否创建新模型版本。
-     *
-     * @return Boolean，true 表示显式创建新版本，false 仍会由服务端按部署和历史版本状态判定
-     */
-    public Boolean getNewVersion()
-    {
-        return newVersion;
-    }
-
-    /**
-     * 设置是否创建新模型版本。
-     *
-     * @param newVersion Boolean，true 表示显式创建新版本，false 表示由服务端按版本状态自动判定
-     * @return 无返回值
-     */
-    public void setNewVersion(Boolean newVersion)
-    {
-        this.newVersion = newVersion;
+        this.expectedRevision = expectedRevision;
     }
 }

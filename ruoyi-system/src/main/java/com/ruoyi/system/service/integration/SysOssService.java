@@ -39,6 +39,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.system.domain.integration.OssConfigRequest;
 
@@ -281,18 +282,29 @@ public class SysOssService
     }
 
     /**
-     * 查询对象台账，私有对象不返回可绕过授权的远端 URL。
+     * 分页查询对象台账，私有对象不返回可绕过授权的远端 URL。
      *
-     * @return List&lt;Map&lt;String,Object&gt;&gt;，最近 1000 条对象元数据
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数
+     * @return TableDataInfo，包含当前页对象元数据和总记录数
      */
     @Transactional(readOnly = true)
-    public List<Map<String, Object>> listObjects()
+    public TableDataInfo listObjects(int pageNum, int pageSize)
     {
-        return jdbcTemplate.queryForList("select object_id as objectId,config_id as configId," +
+        long total = jdbcTemplate.queryForObject(
+                "select count(*) from sys_oss_object", Long.class);
+        long offset = (long) (pageNum - 1) * pageSize;
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "select object_id as objectId,config_id as configId," +
                 "original_name as originalName,file_suffix as fileSuffix,content_type as contentType," +
                 "file_size as fileSize,sha256,access_policy as accessPolicy,public_url as publicUrl," +
                 "status,last_error as lastError,create_by as createBy,create_time as createTime," +
-                "delete_time as deleteTime from sys_oss_object order by object_id desc limit 1000");
+                "delete_time as deleteTime from sys_oss_object order by object_id desc limit ? offset ?",
+                pageSize, offset);
+        TableDataInfo result = new TableDataInfo(rows, total);
+        result.setCode(HttpStatus.SUCCESS);
+        result.setMsg("查询成功");
+        return result;
     }
 
     /**

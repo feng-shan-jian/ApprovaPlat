@@ -54,11 +54,12 @@ export function deleteOssConfig(configId) {
 }
 
 /**
- * 查询当前用户有权查看的 OSS 对象台账。
+ * 分页查询当前用户有权查看的 OSS 对象台账。
+ * @param {object} params pageNum 和 pageSize 分页参数。
  * @returns {Promise<object>} 包含对象元数据和生命周期状态的接口响应。
  */
-export function listOssObjects() {
-  return request({ url: '/system/oss/objects', method: 'get' })
+export function listOssObjects(params) {
+  return request({ url: '/system/oss/objects', method: 'get', params })
 }
 
 /**

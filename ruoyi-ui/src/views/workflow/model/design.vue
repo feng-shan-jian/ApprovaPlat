@@ -331,27 +331,25 @@ async function saveDesign(xml) {
   saving.value = true
   try {
     const sourceModelId = currentModelId()
-    const expectedBpmnSha256 = String(model.bpmnSha256 || '').trim()
+    const expectedRevision = Number(model.revision)
     const response = await saveModel({
       modelId: sourceModelId,
       bpmnXml: xml,
-      expectedBpmnSha256,
-      // 前端不再暴露手动版本开关；后端按已部署或历史版本状态自动另存并返回实际模型主键。
-      newVersion: false
+      expectedRevision
     })
     // 三个字段共同证明后端真实保存版本，任一缺失都不能沿用旧状态伪装成功。
     const savedModelId = String(response.data?.modelId || '').trim()
     const savedVersion = Number(response.data?.version)
-    const savedBpmnSha256 = String(response.data?.bpmnSha256 || '').trim()
+    const savedRevision = Number(response.data?.revision)
     if (!savedModelId || !Number.isInteger(savedVersion) || savedVersion <= 0 ||
-      !/^[0-9a-f]{64}$/.test(savedBpmnSha256)) {
+      !Number.isInteger(savedRevision) || savedRevision <= 0) {
       proxy.$modal.msgError('流程模型保存结果不完整')
       return
     }
     Object.assign(model, {
       modelId: savedModelId,
       version: savedVersion,
-      bpmnSha256: savedBpmnSha256
+      revision: savedRevision
     })
     proxy.$modal.msgSuccess('流程设计保存成功')
     if (savedModelId !== currentModelId()) {

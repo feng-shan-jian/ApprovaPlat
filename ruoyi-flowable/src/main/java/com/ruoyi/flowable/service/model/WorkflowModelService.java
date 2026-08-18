@@ -1,13 +1,10 @@
 package com.ruoyi.flowable.service.model;
 
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -32,6 +29,7 @@ import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.delegate.TaskListener;
 import org.flowable.engine.RepositoryService;
+import org.flowable.engine.impl.persistence.entity.ModelEntity;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.DeploymentBuilder;
 import org.flowable.engine.repository.Model;
@@ -106,13 +104,7 @@ public class WorkflowModelService
             TaskListener.EVENTNAME_ASSIGNMENT,
             TaskListener.EVENTNAME_COMPLETE);
 
-    /** BPMN 内容版本使用的稳定摘要算法。 */
-    private static final String BPMN_DIGEST_ALGORITHM = "SHA-256";
-
-    /** BPMN 内容版本摘要的规范小写十六进制格式。 */
-    private static final Pattern BPMN_SHA256_PATTERN = Pattern.compile("[0-9a-f]{64}");
-
-    /** 模型内容基线变化时返回的稳定业务子码。 */
+    /** 模型修订基线变化时返回的稳定业务子码。 */
     public static final String MODEL_VERSION_CONFLICT_SUB_CODE =
             "WORKFLOW_MODEL_VERSION_CONFLICT";
 
@@ -404,20 +396,18 @@ public class WorkflowModelService
     }
 
     /**
-     * 安全校验并保存 BPMN；已部署或历史版本会自动另存为新的最高版本。
+     * 按 Flowable revision 安全保存 BPMN；已部署或历史版本自动另存最高版本。
      *
-     * @param request WorkflowModelDto，模型主键、BPMN XML、加载基线摘要和新版本标志
-     * @return WorkflowModelSaveResult，真实保存模型主键、版本和最新 BPMN 摘要
+     * @param request WorkflowModelDto，模型主键、BPMN XML 和加载时取得的模型修订号
+     * @return WorkflowModelSaveResult，真实保存模型主键、版本和最新修订号
      */
     public WorkflowModelSaveResult saveModel(WorkflowModelDto request)
     {
         requireRequest(request);
         String modelId = requireText(request.getModelId(), "模型主键不能为空");
         String bpmnXml = requireText(request.getBpmnXml(), "BPMN XML 不能为空");
-        String expectedBpmnSha256 = requireBpmnSha256(request.getExpectedBpmnSha256());
+        int expectedRevision = requireModelRevision(request.getExpectedRevision());
         byte[] bpmnBytes = bpmnXml.getBytes(StandardCharsets.UTF_8);
-        String submittedBpmnSha256 = createBpmnSha256(bpmnXml);
-        SaveAttempt attempt = new SaveAttempt(submittedBpmnSha256);
 
         try
         {
@@ -425,15 +415,14 @@ public class WorkflowModelService
             {
                 Model source = requireModel(modelId);
                 byte[] currentBpmnBytes = requireModelSource(modelId);
-                String currentBpmnSha256 = createBpmnSha256(
-                        bpmnService.validateDraft(currentBpmnBytes).bpmnXml());
+                String currentBpmnXml = bpmnService.validateDraft(currentBpmnBytes).bpmnXml();
 
-                // 响应丢失后客户端仍携带旧基线；只要提交内容已经落库，就直接返回当前真实版本。
-                if (submittedBpmnSha256.equals(currentBpmnSha256))
+                // 相同内容无需写库，也无需为重复点击或响应丢失建立额外幂等持久化。
+                if (normalizeBpmnXml(bpmnXml).equals(normalizeBpmnXml(currentBpmnXml)))
                 {
-                    return toSaveResult(source, currentBpmnSha256);
+                    return toSaveResult(source);
                 }
-                if (!expectedBpmnSha256.equals(currentBpmnSha256))
+                if (modelRevision(source) != expectedRevision)
                 {
                     throw modelVersionConflict(null);
                 }
@@ -445,8 +434,7 @@ public class WorkflowModelService
 
                 requireActiveCategory(source.getCategory());
                 Model latest = latestModel(source.getKey());
-                boolean createVersion = shouldCreateSaveVersion(
-                        source, latest, request.getNewVersion());
+                boolean createVersion = shouldCreateSaveVersion(source, latest);
 
                 Model target = source;
                 if (createVersion)
@@ -460,15 +448,17 @@ public class WorkflowModelService
                         "流程名称不能为空", "流程名称过长", MODEL_TEXT_MAX_LENGTH);
                 target.setName(processName);
 
-                // 先记录自然版本和目标主键，事务提交阶段发生唯一键或 revision 竞态时用于回查获胜内容。
-                attempt.prepareTarget(source.getKey(), target.getVersion(),
-                        createVersion ? null : source.getId());
                 repositoryService.saveModel(target);
                 String savedModelId = requireText(target.getId(), "流程模型保存结果不完整");
-                attempt.setTargetModelId(savedModelId);
                 repositoryService.addModelEditorSource(savedModelId, bpmnBytes);
-                return toSaveResult(target, submittedBpmnSha256);
+                // 新模型首次写入编辑器源码还会推进一次 REV_，必须回读真实修订号返回客户端。
+                return toSaveResult(requireModel(savedModelId));
             });
+        }
+        catch (DuplicateKeyException exception)
+        {
+            // 不同内容竞争同一自然版本时由数据库唯一约束裁决，失败方直接返回 409。
+            throw modelVersionConflict(exception);
         }
         catch (RuntimeException exception)
         {
@@ -477,25 +467,36 @@ public class WorkflowModelService
             {
                 throw serviceException;
             }
-
-            DuplicateKeyException duplicateKey = findCause(
-                    exception, DuplicateKeyException.class);
-            RuntimeException conflict = duplicateKey == null
-                    ? engineOperations.withConcurrencyConflictSubCode(
-                            exception, MODEL_VERSION_CONFLICT_SUB_CODE)
-                    : modelVersionConflict(exception);
-            if (duplicateKey == null && conflict == exception)
+            // 事务代理可能把唯一键异常包装为 TransactionSystemException 或数据访问异常；
+            // 沿 cause 链识别它，避免包装层改变模型版本冲突的稳定 HTTP 语义。
+            DuplicateKeyException duplicateKeyException = findDuplicateKeyException(exception);
+            if (duplicateKeyException != null)
             {
-                throw exception;
+                throw modelVersionConflict(duplicateKeyException);
             }
-
-            WorkflowModelSaveResult replay = resolveConcurrentSave(attempt);
-            if (replay != null)
-            {
-                return replay;
-            }
-            throw conflict;
+            throw engineOperations.withConcurrencyConflictSubCode(
+                    exception, MODEL_VERSION_CONFLICT_SUB_CODE);
         }
+    }
+
+    /**
+     * 从事务代理或数据访问包装链中查找唯一键冲突。
+     *
+     * @param exception RuntimeException，保存事务向外暴露的最外层异常
+     * @return DuplicateKeyException，找到时返回底层唯一键异常；否则返回 null
+     */
+    private DuplicateKeyException findDuplicateKeyException(RuntimeException exception)
+    {
+        Throwable current = exception;
+        while (current != null)
+        {
+            if (current instanceof DuplicateKeyException duplicateKeyException)
+            {
+                return duplicateKeyException;
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     /**
@@ -534,17 +535,15 @@ public class WorkflowModelService
     }
 
     /**
-     * 判断本次保存是否必须写入新的模型版本，所有状态均来自已锁定的数据库当前读。
+     * 判断本次保存是否必须写入新的模型版本。
      *
      * @param source Model，当前设计页来源模型的事务内快照
      * @param latest Model，同 key 当前最高版本的事务内快照
-     * @param requestedNewVersion Boolean，兼容旧客户端的显式另存标志
      * @return boolean，true 表示保存结果必须创建最高新版本并由前端切换到返回主键
      */
-    private boolean shouldCreateSaveVersion(Model source,
-            Model latest, Boolean requestedNewVersion)
+    private boolean shouldCreateSaveVersion(Model source, Model latest)
     {
-        if (Boolean.TRUE.equals(requestedNewVersion) || hasText(source.getDeploymentId()))
+        if (hasText(source.getDeploymentId()))
         {
             return true;
         }
@@ -553,98 +552,9 @@ public class WorkflowModelService
     }
 
     /**
-     * 校验并规范化设计页加载时取得的 BPMN 内容摘要。
-     *
-     * @param sha256 String，客户端随保存请求提交的基线摘要
-     * @return String，64 位小写十六进制 SHA-256 摘要
-     */
-    private String requireBpmnSha256(String sha256)
-    {
-        String normalized = requireText(sha256, "模型基线摘要不能为空");
-        if (!BPMN_SHA256_PATTERN.matcher(normalized).matches())
-        {
-            throw new ServiceException("模型基线摘要必须为小写 SHA-256", HttpStatus.BAD_REQUEST);
-        }
-        return normalized;
-    }
-
-    /**
-     * 为规范化 BPMN XML 生成稳定内容版本摘要。
-     *
-     * @param bpmnXml String，已经通过严格 UTF-8 解码的完整 BPMN XML
-     * @return String，64 位小写十六进制 SHA-256 摘要
-     */
-    private String createBpmnSha256(String bpmnXml)
-    {
-        try
-        {
-            MessageDigest digest = MessageDigest.getInstance(BPMN_DIGEST_ALGORITHM);
-            // 浏览器、Git 和服务端可能产生不同换行符；统一为 LF 后再计算内容版本。
-            String normalizedXml = bpmnXml.replace("\r\n", "\n").replace('\r', '\n');
-            digest.update(normalizedXml.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest.digest());
-        }
-        catch (NoSuchAlgorithmException exception)
-        {
-            ServiceException failure = new ServiceException(
-                    "流程模型内容摘要初始化失败", HttpStatus.ERROR);
-            failure.initCause(exception);
-            throw failure;
-        }
-    }
-
-    /**
-     * 在并发写事务回滚后按目标主键或自然版本回查获胜模型。
-     *
-     * @param attempt SaveAttempt，本次写入前记录的来源、自然版本和提交内容摘要
-     * @return WorkflowModelSaveResult，获胜内容与本次提交相同时返回；否则返回 null
-     */
-    private WorkflowModelSaveResult resolveConcurrentSave(SaveAttempt attempt)
-    {
-        return engineOperations.read(() ->
-        {
-            Model winner = attempt.targetModelId() == null
-                    ? findModelByNaturalVersion(attempt.modelKey(), attempt.targetVersion())
-                    : repositoryService.getModel(attempt.targetModelId());
-            if (winner == null)
-            {
-                return null;
-            }
-            byte[] winnerBytes = repositoryService.getModelEditorSource(winner.getId());
-            if (winnerBytes == null || winnerBytes.length == 0)
-            {
-                return null;
-            }
-            String winnerSha256 = createBpmnSha256(
-                    bpmnService.validateDraft(winnerBytes).bpmnXml());
-            return attempt.submittedBpmnSha256().equals(winnerSha256)
-                    ? toSaveResult(winner, winnerSha256) : null;
-        });
-    }
-
-    /**
-     * 使用 Flowable 公共查询 API 按模型自然版本回查唯一获胜记录。
-     *
-     * @param modelKey String，模型版本分组 key
-     * @param version Integer，模型业务版本号
-     * @return Model，默认租户下的获胜模型；目标信息不完整或不存在时返回 null
-     */
-    private Model findModelByNaturalVersion(String modelKey, Integer version)
-    {
-        if (!hasText(modelKey) || version == null || version <= 0)
-        {
-            return null;
-        }
-        return repositoryService.createModelQuery()
-                .modelKey(modelKey)
-                .modelVersion(version)
-                .singleResult();
-    }
-
-    /**
      * 构造稳定模型版本冲突异常，对外不泄露 Flowable revision 或数据库约束信息。
      *
-     * @param cause Throwable，触发冲突的底层异常；主动摘要冲突时允许为空
+     * @param cause Throwable，触发冲突的底层异常；主动 revision 冲突时允许为空
      * @return ServiceException，HTTP 409 且带稳定业务子码
      */
     private ServiceException modelVersionConflict(Throwable cause)
@@ -660,38 +570,16 @@ public class WorkflowModelService
     }
 
     /**
-     * 遍历异常链查找指定 Spring 异常类型，不依赖数据库索引名称或异常文案。
-     *
-     * @param exception Throwable，事务代理或 Flowable 包装后的完整异常链
-     * @param type Class&lt;T&gt;，需要识别的异常类型
-     * @return T，找到的首个匹配异常；不存在时返回 null
-     */
-    private <T extends Throwable> T findCause(Throwable exception, Class<T> type)
-    {
-        Throwable current = exception;
-        while (current != null)
-        {
-            if (type.isInstance(current))
-            {
-                return type.cast(current);
-            }
-            current = current.getCause();
-        }
-        return null;
-    }
-
-    /**
-     * 将 Flowable 模型和规范 BPMN 摘要转换为保存接口结果。
+     * 将 Flowable 模型转换为保存接口结果。
      *
      * @param model Model，已经真实存在的 Flowable 模型
-     * @param bpmnSha256 String，模型编辑器源码的规范内容摘要
-     * @return WorkflowModelSaveResult，字段完整的保存响应
+     * @return WorkflowModelSaveResult，包含真实主键、版本和修订号的保存响应
      */
-    private WorkflowModelSaveResult toSaveResult(Model model, String bpmnSha256)
+    private WorkflowModelSaveResult toSaveResult(Model model)
     {
         return new WorkflowModelSaveResult(
                 requireText(model.getId(), "流程模型保存结果不完整"),
-                model.getVersion(), bpmnSha256);
+                model.getVersion(), modelRevision(model));
     }
 
     /**
@@ -989,12 +877,49 @@ public class WorkflowModelService
     private WorkflowModelView toView(Model model, String bpmnXml, String content)
     {
         ObjectNode metadata = readMetadata(model);
-        String bpmnSha256 = bpmnXml == null ? null : createBpmnSha256(bpmnXml);
         return new WorkflowModelView(model.getId(), model.getName(), model.getKey(),
-                model.getCategory(), model.getVersion(), optionalInt(metadata, "formType"),
+                model.getCategory(), model.getVersion(), modelRevision(model),
+                optionalInt(metadata, "formType"),
                 optionalLong(metadata, "formId"), optionalText(metadata, "description"),
-                model.getCreateTime(), model.getLastUpdateTime(), bpmnXml, bpmnSha256,
-                content, isDeployed(model));
+                model.getCreateTime(), model.getLastUpdateTime(), bpmnXml, content,
+                isDeployed(model));
+    }
+
+    /**
+     * 读取 Flowable ModelEntity 的 REV_ 乐观锁修订号。
+     *
+     * @param model Model，RepositoryService 返回的 Flowable 模型实体
+     * @return int，当前持久化修订号
+     */
+    private int modelRevision(Model model)
+    {
+        return ((ModelEntity) model).getRevision();
+    }
+
+    /**
+     * 校验客户端提交的模型修订号。
+     *
+     * @param revision Integer，设计页加载模型时取得的 REV_ 修订号
+     * @return int，可用于乐观锁比较的正整数修订号
+     */
+    private int requireModelRevision(Integer revision)
+    {
+        if (revision == null || revision <= 0)
+        {
+            throw new ServiceException("模型修订号必须大于0", HttpStatus.BAD_REQUEST);
+        }
+        return revision;
+    }
+
+    /**
+     * 统一浏览器、Git 和服务端可能产生的 XML 换行符，用于无副作用内容判重。
+     *
+     * @param bpmnXml String，完整 BPMN XML 正文
+     * @return String，换行符统一为 LF 的 BPMN XML
+     */
+    private String normalizeBpmnXml(String bpmnXml)
+    {
+        return bpmnXml.replace("\r\n", "\n").replace('\r', '\n');
     }
 
     /**
@@ -1782,61 +1707,6 @@ public class WorkflowModelService
     private static boolean hasText(String value)
     {
         return value != null && !value.isBlank();
-    }
-
-    /** 当前保存请求发生事务提交竞态时使用的短生命周期回查上下文。 */
-    private static final class SaveAttempt
-    {
-        /** 本次提交 BPMN XML 的规范内容摘要。 */
-        private final String submittedBpmnSha256;
-
-        /** 新版本冲突回查使用的模型 key。 */
-        private String modelKey;
-
-        /** 新版本冲突回查使用的目标版本号。 */
-        private Integer targetVersion;
-
-        /** 原模型覆盖或已分配新模型主键的回查目标。 */
-        private String targetModelId;
-
-        /**
-         * @param submittedBpmnSha256 String，本次提交内容摘要
-         * @return 无返回值，构造后仅由当前请求线程使用
-         */
-        private SaveAttempt(String submittedBpmnSha256)
-        {
-            this.submittedBpmnSha256 = submittedBpmnSha256;
-        }
-
-        /**
-         * 记录真正写入前已确定的自然版本和目标主键。
-         * @param modelKey String，模型版本分组 key
-         * @param targetVersion Integer，本次尝试写入的版本号
-         * @param targetModelId String，覆盖现有模型时的主键；新版本保存前允许为空
-         * @return void，无返回值
-         */
-        private void prepareTarget(String modelKey, Integer targetVersion,
-                String targetModelId)
-        {
-            this.modelKey = modelKey;
-            this.targetVersion = targetVersion;
-            this.targetModelId = targetModelId;
-        }
-
-        /**
-         * 记录 Flowable 为新模型分配的真实主键。
-         * @param targetModelId String，已经过非空校验的模型主键
-         * @return void，无返回值
-         */
-        private void setTargetModelId(String targetModelId)
-        {
-            this.targetModelId = targetModelId;
-        }
-
-        private String submittedBpmnSha256() { return submittedBpmnSha256; }
-        private String modelKey() { return modelKey; }
-        private Integer targetVersion() { return targetVersion; }
-        private String targetModelId() { return targetModelId; }
     }
 
     /**

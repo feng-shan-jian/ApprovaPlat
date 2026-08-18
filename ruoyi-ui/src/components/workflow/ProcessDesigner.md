@@ -101,10 +101,9 @@ async function saveToServer(xml) {
   saving.value = true
   try {
     await saveModel({
-      requestId: crypto.randomUUID(),
       modelId: props.modelId,
       bpmnXml: xml,
-      newVersion: false
+      expectedRevision: props.model.revision
     })
     ElMessage.success('流程设计保存成功')
   } finally {
@@ -225,7 +224,7 @@ onMounted(async () => {
 - 设计器不再设置固定最小宽高。属性检查器默认宽度为 368px，可通过分隔条拖拽、左右方向键调整，双击或按 `Home` 恢复默认宽度；每次尺寸变化通过 `canvas.resized()` 同步 bpmn-js 命中区域、小地图与连线视口。
 - 当设计器主体不足 960px 时，属性检查器切换为工作区内浮层，不再通过页面横向滚动挤出右侧内容；面板仍可调整宽度、滚动、折叠和关闭。可持久化的折叠状态属于当前用户的非业务界面偏好。
 - 偏好键固定为 `workflow:designer:preference:v1:{userId}`，值包含 `schemaVersion: 1` 和 `theme`、`gridEnabled`、`minimapEnabled`、`tokenSimulationEnabled`、`propertiesCollapsed` 五个白名单字段。损坏 JSON、旧协议或非法字段会恢复并覆盖为默认值；登出不删除，恢复默认只删除当前用户键。
-- 模型详情返回当前 `bpmnSha256`，页面保存时作为 `expectedBpmnSha256` 提交。后端返回真实 `modelId`、`version` 和新摘要；内容基线变化返回 409，同内容重试直接返回当前已保存模型。
+- 模型详情返回当前 Flowable `revision`，页面保存时作为 `expectedRevision` 提交。后端返回真实 `modelId`、`version` 和新 revision；修订基线变化返回 409，相同内容直接返回当前模型且不写库。
 - XML 序列化开始至后端保存结束期间锁定画布、属性面板和命令栈，阻止重复保存以及“已保存响应覆盖保存期间新修改”的竞态。
 - 保存按钮要求 `workflow:model:save` 权限；`workflow:model:designer` 只负责进入设计页并读取设计上下文，后端继续独立校验保存权限。
 

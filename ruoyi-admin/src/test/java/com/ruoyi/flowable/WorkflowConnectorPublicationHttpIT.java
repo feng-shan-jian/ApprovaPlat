@@ -298,14 +298,13 @@ class WorkflowConnectorPublicationHttpIT
 
         JsonNode detail = requireCode(jsonRequest("GET", "/workflow/model/" + encode(modelId),
                 loginToken, null), 200);
-        String expectedBpmnSha256 = detail.path("data").path("bpmnSha256").asText();
-        assertThat(expectedBpmnSha256).hasSize(64);
+        int expectedRevision = detail.path("data").path("revision").asInt();
+        assertThat(expectedRevision).isPositive();
         JsonNode saved = requireCode(jsonRequest("POST", "/workflow/model/save", loginToken,
                 objectMapper.createObjectNode()
                         .put("modelId", modelId)
                         .put("bpmnXml", safeBpmn(processKey))
-                        .put("expectedBpmnSha256", expectedBpmnSha256)
-                        .put("newVersion", false)
+                        .put("expectedRevision", expectedRevision)
                         .toString()), 200);
         assertThat(saved.path("data").path("modelId").asText()).isEqualTo(modelId);
 

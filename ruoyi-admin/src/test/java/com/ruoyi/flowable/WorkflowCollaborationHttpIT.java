@@ -386,13 +386,12 @@ class WorkflowCollaborationHttpIT
         modelIds.add(modelId);
         JsonNode modelDetail = requireCode(jsonRequest("GET", "/workflow/model/"
                 + encode(modelId), adminToken, null), 200);
-        String expectedBpmnSha256 = modelDetail.path("data").path("bpmnSha256").asText();
-        assertThat(expectedBpmnSha256).hasSize(64);
+        int expectedRevision = modelDetail.path("data").path("revision").asInt();
+        assertThat(expectedRevision).isPositive();
         JsonNode saved = requireCode(jsonRequest("POST", "/workflow/model/save", adminToken,
                 objectMapper.createObjectNode().put("modelId", modelId)
                         .put("bpmnXml", dualPoolBpmn())
-                        .put("expectedBpmnSha256", expectedBpmnSha256)
-                        .put("newVersion", false).toString()), 200);
+                        .put("expectedRevision", expectedRevision).toString()), 200);
         assertThat(saved.path("data").path("modelId").asText()).isEqualTo(modelId);
         JsonNode deployed = requireCode(jsonRequest("POST", "/workflow/model/deploy?modelId="
                 + encode(modelId), adminToken, null), 200);

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
@@ -1451,25 +1450,36 @@ async function installSample(
     formId
   }
   let modelId = existing?.modelId
+  let modelDetail
   if (!modelId) {
     const created = await api.request('POST', '/workflow/model', metadata)
     modelId = created.data?.modelId
     if (typeof modelId !== 'string' || !modelId) {
       throw new Error(`创建模型响应缺少有效主键: ${sample.modelKey}`)
     }
-    const createdDetail = await api.request(
+    modelDetail = await api.request(
       'GET',
       `/workflow/model/${encodeURIComponent(modelId)}`
     )
-    assertModelMetadataMatches(createdDetail.data, sample, category, formId)
+    assertModelMetadataMatches(modelDetail.data, sample, category, formId)
+  } else {
+    modelDetail = await api.request(
+      'GET',
+      `/workflow/model/${encodeURIComponent(modelId)}`
+    )
+    assertModelMetadataMatches(modelDetail.data, sample, category, formId)
+  }
+
+  const expectedRevision = Number(modelDetail.data?.revision)
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+    throw new Error(`模型详情缺少有效 revision: ${sample.modelKey}`)
   }
 
   // 只允许保存本次新建模型，或 BPMN 已与目录一致的既有未部署模型，禁止覆盖人工草稿。
   await api.request('POST', '/workflow/model/save', {
-    requestId: randomUUID(),
     modelId,
     bpmnXml: expectedBpmn,
-    newVersion: false
+    expectedRevision
   })
   const savedDetail = await api.request(
     'GET',

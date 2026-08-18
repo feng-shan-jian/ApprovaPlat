@@ -14,7 +14,7 @@
 | `getBpmnXml(modelId)` | 返回经过安全校验的 BPMN XML |
 | `createModel(request)` | 创建未设计模型并写入可信创建人 |
 | `updateModel(request)` | 修改名称、分类和兼容 metaInfo，不允许改变模型 key |
-| `saveModel(request)` | 按 BPMN 内容摘要基线保存；返回真实模型主键、版本和最新摘要 |
+| `saveModel(request)` | 按 Flowable revision 保存；返回真实模型主键、版本和最新修订号 |
 | `promoteToLatest(modelId)` | 将旧版本内容复制为新的最高版本 |
 | `deleteModels(modelIds)` | 预检全部模型后删除，拒绝任何已部署或已有定义的模型 |
 | `deployModel(modelId)` | 校验 BPMN、分类和全部节点表单，部署、保存不可变表单快照并停用历史定义 |
@@ -26,9 +26,9 @@
 - 部署前按每个 `StartEvent/UserTask` 的 `key_<formId>` 读取有效 `wf_form`，并通过共享 `WorkflowFormTemplateValidator` 重新校验真实 JSON；部署后把名称和正文整体写入 Flowable 业务制品 `approvaplat/forms-v1.json`。
 - 同一个模型版本只允许成功部署一次；再次保存已部署或历史版本时服务端自动另存为新的最高版本，避免用户手动切换版本。
 - 新版本部署成功后，同流程标识的旧活动定义会在同一事务自动挂起。挂起仅阻止旧定义承接新实例，不会冻结旧版本中仍在办理的流程实例。
-- 模型加载返回规范化 BPMN XML 的 `bpmnSha256`；保存必须携带该值作为 `expectedBpmnSha256`。CRLF 和 CR 在计算前统一为 LF，摘要固定为 64 位小写 SHA-256。
-- 提交内容与当前内容相同会直接返回当前模型，覆盖服务端成功但响应丢失后的重试；提交内容不同且加载基线已变化时返回 HTTP 409 和 `WORKFLOW_MODEL_VERSION_CONFLICT`。
-- 更新同一模型依赖 Flowable revision 乐观锁；新建版本依赖模型自然版本唯一约束。`DuplicateKeyException` 或 revision 并发发生后按模型 key、版本和目标主键回查，获胜内容相同则返回获胜结果，否则返回稳定 409。
+- 模型加载返回 Flowable `REV_` 对应的 `revision`；保存必须携带该值作为 `expectedRevision`，不新增业务 revision 表或幂等记录。
+- 提交内容与当前内容相同会直接返回当前模型且不写库；内容不同且 revision 已变化时返回 HTTP 409 和 `WORKFLOW_MODEL_VERSION_CONFLICT`。
+- 更新同一模型依赖 Flowable revision 乐观锁；新建版本依赖模型自然版本唯一约束。唯一键或 revision 竞争失败方直接返回稳定 409，不在异常后回查或自动回放。
 - 保存会在 Flowable 模型或编辑器源码写入前完成 BPMN、正式表单、自动抄送、参与者身份目标、条件和调用活动作者校验；任何无效作者引用均保证模型源码零变化。
 - 业务 Mapper 不读取或锁定 `ACT_RE_MODEL`，异常翻译不匹配 Flowable 索引名或数据库错误文本。
 - `approvaplat/forms-v1.json` 中的 `content` 是部署时快照，运行时不得回连当前 `wf_form.content` 重建。

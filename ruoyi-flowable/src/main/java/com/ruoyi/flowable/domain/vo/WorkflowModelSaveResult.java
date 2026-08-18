@@ -5,8 +5,8 @@ package com.ruoyi.flowable.domain.vo;
  *
  * @param modelId String，真实保存成功的 Flowable 模型主键
  * @param version Integer，真实保存成功的模型版本号
- * @param bpmnSha256 String，服务端规范化 BPMN XML 的 SHA-256 摘要
+ * @param revision Integer，保存完成后的 Flowable 模型修订号
  */
-public record WorkflowModelSaveResult(String modelId, Integer version, String bpmnSha256)
+public record WorkflowModelSaveResult(String modelId, Integer version, Integer revision)
 {
 }

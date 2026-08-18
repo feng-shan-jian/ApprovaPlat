@@ -401,15 +401,14 @@ class WorkflowControlledLoopHttpIT
         assertThat(modelId).isNotBlank();
         JsonNode modelDetail = requireCode(jsonRequest("GET",
                 "/workflow/model/" + encode(modelId), designerToken, null), 200);
-        String expectedBpmnSha256 = modelDetail.path("data").path("bpmnSha256").asText();
-        assertThat(expectedBpmnSha256).hasSize(64);
+        int expectedRevision = modelDetail.path("data").path("revision").asInt();
+        assertThat(expectedRevision).isPositive();
 
         String authorBpmn = controlledLoopAuthorBpmn();
         JsonNode saveBody = objectMapper.createObjectNode()
                 .put("modelId", modelId)
                 .put("bpmnXml", authorBpmn)
-                .put("expectedBpmnSha256", expectedBpmnSha256)
-                .put("newVersion", false);
+                .put("expectedRevision", expectedRevision);
         JsonNode saved = requireCode(jsonRequest("POST", "/workflow/model/save",
                 designerToken, saveBody.toString()), 200);
         assertThat(saved.path("data").path("modelId").asText()).isEqualTo(modelId);

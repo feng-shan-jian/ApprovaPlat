@@ -79,7 +79,7 @@
 
 ## 关键结构约束
 
-- `ACT_RE_MODEL(KEY_, VERSION_, TENANT_ID_)` 保留唯一约束，模型并发由内容摘要、Flowable revision 和自然版本唯一键保护。
+- `ACT_RE_MODEL(KEY_, VERSION_, TENANT_ID_)` 保留唯一约束，模型并发由 Flowable revision 和自然版本唯一键保护。
 - `wf_integration_credential` 只保存固定限额、Token 摘要、scope、revision、轮换、吊销和最近使用时间，不保存分钟窗口计数。
 - `wf_attachment_quota_guard.owner_user_id` 只允许正数用户 ID；同用户配额计算使用行锁，不存在用户 0 全局锁行。
 - `wf_attachment.cleanup_claim_token/cleanup_lease_until` 必须同时为空或同时有效，领取中的附件必须尚未物理删除且处于 `EXPIRED/DELETED`。

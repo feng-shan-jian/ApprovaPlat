@@ -10,19 +10,19 @@ import java.util.Date;
  * @param modelKey String，模型版本分组标识
  * @param category String，工作流分类编码
  * @param version Integer，模型版本号
+ * @param revision Integer，Flowable 模型乐观锁修订号
  * @param formType Integer，表单模式编码
  * @param formId Long，模型级流程表单主键
  * @param description String，模型业务描述
  * @param createTime Date，模型创建时间
  * @param lastUpdateTime Date，模型最后更新时间
  * @param bpmnXml String，详情场景返回的 BPMN XML
- * @param bpmnSha256 String，详情场景返回的规范化 BPMN XML SHA-256 摘要
  * @param content String，详情场景返回的模型级表单内容
  * @param deployed boolean，模型是否已关联部署
  */
 public record WorkflowModelView(String modelId, String modelName, String modelKey, String category,
-        Integer version, Integer formType, Long formId, String description, Date createTime,
-        Date lastUpdateTime, String bpmnXml, String bpmnSha256, String content, boolean deployed)
+        Integer version, Integer revision, Integer formType, Long formId, String description,
+        Date createTime, Date lastUpdateTime, String bpmnXml, String content, boolean deployed)
 {
     /**
      * 创建模型视图并复制可变时间对象。
@@ -32,13 +32,13 @@ public record WorkflowModelView(String modelId, String modelName, String modelKe
      * @param modelKey String，模型版本分组标识
      * @param category String，工作流分类编码
      * @param version Integer，模型版本号
+     * @param revision Integer，Flowable 模型乐观锁修订号
      * @param formType Integer，表单模式编码
      * @param formId Long，模型级流程表单主键
      * @param description String，模型业务描述
      * @param createTime Date，模型创建时间
      * @param lastUpdateTime Date，模型最后更新时间
      * @param bpmnXml String，详情场景返回的 BPMN XML
-     * @param bpmnSha256 String，详情场景返回的规范化 BPMN XML SHA-256 摘要
      * @param content String，详情场景返回的模型级表单内容
      * @param deployed boolean，模型是否已关联部署
      * @return 无返回值，构造后得到不可变模型视图

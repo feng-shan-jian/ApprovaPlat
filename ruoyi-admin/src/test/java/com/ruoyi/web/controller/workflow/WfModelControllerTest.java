@@ -96,53 +96,50 @@ class WfModelControllerTest
     }
 
     /**
-     * 验证模型保存请求映射内容基线摘要，并完整返回服务端真实保存结果。
+     * 验证模型保存请求映射 revision 基线，并完整返回服务端真实保存结果。
      *
      * @return 无返回值，保存请求字段或响应结果漂移时测试失败
      * @throws Exception MockMvc 执行请求失败时抛出
      */
     @Test
-    void returnsModelVersionAndDigestAfterSave() throws Exception
+    void returnsModelVersionAndRevisionAfterSave() throws Exception
     {
-        String expectedDigest = "a".repeat(64);
-        String savedDigest = "b".repeat(64);
+        int expectedRevision = 4;
+        int savedRevision = 5;
         when(modelService.saveModel(argThat(request -> request != null
                 && "model-1".equals(request.getModelId())
                 && "<definitions/>".equals(request.getBpmnXml())
-                && expectedDigest.equals(request.getExpectedBpmnSha256())
-                && Boolean.FALSE.equals(request.getNewVersion()))))
-                .thenReturn(new WorkflowModelSaveResult("model-1", 3, savedDigest));
+                && Integer.valueOf(expectedRevision).equals(request.getExpectedRevision()))))
+                .thenReturn(new WorkflowModelSaveResult("model-1", 3, savedRevision));
 
         mockMvc.perform(post("/workflow/model/save")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"modelId\":\"model-1\","
                                 + "\"bpmnXml\":\"<definitions/>\","
-                                + "\"expectedBpmnSha256\":\"" + expectedDigest + "\","
-                                + "\"newVersion\":false}"))
+                                + "\"expectedRevision\":" + expectedRevision + "}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.modelId").value("model-1"))
                 .andExpect(jsonPath("$.data.version").value(3))
-                .andExpect(jsonPath("$.data.bpmnSha256").value(savedDigest));
+                .andExpect(jsonPath("$.data.revision").value(savedRevision));
 
-        verify(modelService).saveModel(argThat(request -> expectedDigest.equals(
-                request.getExpectedBpmnSha256())));
+        verify(modelService).saveModel(argThat(request -> Integer.valueOf(expectedRevision)
+                .equals(request.getExpectedRevision())));
     }
 
     /**
-     * 验证非法模型基线摘要由 Web 参数门禁拒绝，不能进入模型保存事务。
+     * 验证非法模型修订号由 Web 参数门禁拒绝，不能进入模型保存事务。
      *
-     * @return 无返回值，非法摘要进入 Service 时测试失败
+     * @return 无返回值，非法 revision 进入 Service 时测试失败
      * @throws Exception MockMvc 执行请求失败时抛出
      */
     @Test
-    void rejectsInvalidModelBaselineDigestBeforeService() throws Exception
+    void rejectsInvalidModelRevisionBeforeService() throws Exception
     {
         mockMvc.perform(post("/workflow/model/save")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"modelId\":\"model-1\","
                                 + "\"bpmnXml\":\"<definitions/>\","
-                                + "\"expectedBpmnSha256\":\"INVALID\","
-                                + "\"newVersion\":false}"))
+                                + "\"expectedRevision\":0}"))
                 .andExpect(status().isBadRequest());
 
         verify(modelService, never()).saveModel(argThat(request -> true));
