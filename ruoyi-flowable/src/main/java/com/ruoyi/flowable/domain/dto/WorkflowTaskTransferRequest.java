@@ -44,16 +44,4 @@ public record WorkflowTaskTransferRequest(
                 : Collections.unmodifiableList(new ArrayList<>(copyUserIds));
     }
 
-    /**
-     * 兼容原有未提交抄送人的 Java 调用方。
-     *
-     * @param taskId String，待转办的活动任务主键
-     * @param userId Long，目标办理用户主键
-     * @param comment String，转办业务意见
-     * @return 无返回值，抄送用户使用空集合
-     */
-    public WorkflowTaskTransferRequest(String taskId, Long userId, String comment)
-    {
-        this(taskId, userId, comment, List.of());
-    }
 }

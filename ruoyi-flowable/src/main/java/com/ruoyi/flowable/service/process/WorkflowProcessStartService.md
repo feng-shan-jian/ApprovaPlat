@@ -18,18 +18,6 @@ WorkflowProcessInstanceSnapshot started = processStartService.start(
 
 返回值只包含实例 ID、定义 ID、业务主键和挂起状态，不向调用方暴露可变的 Flowable `ProcessInstance`。
 
-仓库外 Java 调用方需要沿用旧入口时，使用精确兼容签名：
-
-```java
-processStartService.startProcessByDefKey(
-        "expense",
-        Map.of("amount", 1280, "reason", "采购办公设备"));
-```
-
-该方法按旧契约返回 `void`。需要业务主键时可调用
-`startProcessByDefKey(String procDefKey, String businessKey, Map<String, Object> variables)`；
-实例结果仍通过正式运行中/历史查询入口读取，不向兼容调用方返回可变引擎对象。
-
 ## 发起链路
 
 1. 校验并规范化 `processDefinitionId` 和可选 `businessKey`。
@@ -43,14 +31,6 @@ processStartService.startProcessByDefKey(
 9. 服务端写入 `initiator=<当前用户ID>`、`processStatus=running`，并把附件安全投影后的开始表单值编码为内部不可变提交快照。
 10. 业务变量与内部快照随同一次 `RuntimeService.startProcessInstanceById(...)` 原子写入，避免实例已经创建但开始提交值缺失。
 11. 将附件绑定到真实实例和部署快照开始节点；任一绑定失败均回滚附件、内部快照和流程发起。
-
-## 按定义 key 兼容链
-
-1. 在显式 `REPEATABLE_READ` 外层写事务及 `WorkflowEngineOperations.writeAsCurrentUser(...)` 的同一认证边界内解析 key，禁止事务外先查定义再发起，且不会以低隔离外层事务削弱统一引擎写边界的 revision 并发契约。
-2. 查询条件固定为精确 `processDefinitionKey`、`processDefinitionWithoutTenantId` 和 `latestVersion`，不会跨租户选择定义，也不会回退到旧激活版本。
-3. 最新版不存在返回 `404`，最新版挂起返回 `409`。
-4. 解析出 definitionId 后调用与 `start(StartProcessRequest)` 相同的 starter、部署快照、变量、附件、身份和审计链。
-5. 先取得目标 deployment 行锁，再在真正调用 `RuntimeService` 前通过 `ACT_UNIQ_PROCDEF` 对默认租户该 key 的当前最新版执行有界 `FOR UPDATE` 当前读；它能看见变量校验期间已提交的新版本，并把锁后的并发部署串行化到本次发起事务结束。definitionId、deploymentId 或激活状态变化时返回 `409`，旧版本不会产生新实例。
 
 ## 权限与数据来源
 
@@ -77,11 +57,6 @@ processStartService.startProcessByDefKey(
 - `409`：定义不是最新版本、已挂起或校验后状态发生变化。
 - `500`：部署关系、表单快照或引擎返回存在内部数据异常。
 
-key 兼容入口沿用以上错误语义；key 为空或过长返回 `400`，默认租户无定义返回
-`404`，最新版挂起或解析期间并发部署返回 `409`。
-
 ## 接入约束
 
 真实入口为 `WfProcessController` 的 `POST /workflow/process/start/{processDefId}`。Controller 使用 `workflow:process:start` 权限、操作日志和新旧请求协议归一化，只采信路径中的流程定义 ID；不得在 Controller 中补写 `initiator`、`processStatus`，也不得绕过本服务直接调用 `RuntimeService`。
-
-`startProcessByDefKey` 仅用于受信任的仓库外 Java 兼容调用，不新增匿名 HTTP 入口。调用方必须处于若依已登录用户上下文；服务会在事务内重新核验该用户及 starter 对象权限。

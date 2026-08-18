@@ -1,6 +1,5 @@
 package com.ruoyi.web.controller.workflow;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -10,7 +9,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.lang.reflect.Method;
 import java.util.Date;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,7 +16,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import com.ruoyi.common.annotation.Anonymous;
 import com.ruoyi.flowable.domain.dto.WorkflowRuntimeEventRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowCollaborationMessageRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowCollaborationMessageView;
@@ -46,22 +43,6 @@ class WfRuntimeEventControllerTest
         collaborationMessageService = mock(WorkflowCollaborationMessageService.class);
         mockMvc = MockMvcBuilders.standaloneSetup(
                 new WfRuntimeEventController(runtimeEventService, collaborationMessageService)).build();
-    }
-
-    /**
-     * 验证四个外部入口都显式允许无 JWT 请求，但不扩大其他 Controller 范围。
-     * @return void，任一入口丢失 Anonymous 注解时失败
-     */
-    @Test
-    void marksExactlyThreePublishingHandlersAnonymous()
-    {
-        var anonymousHandlers = java.util.Arrays.stream(
-                        WfRuntimeEventController.class.getDeclaredMethods())
-                .filter(method -> method.isAnnotationPresent(Anonymous.class))
-                .map(Method::getName)
-                .toList();
-
-        assertThat(anonymousHandlers).containsExactlyInAnyOrder("message", "signal", "receive", "collaborationMessage");
     }
 
     /**

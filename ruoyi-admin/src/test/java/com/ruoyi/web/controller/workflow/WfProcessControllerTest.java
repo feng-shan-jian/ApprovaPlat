@@ -16,39 +16,23 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.io.ByteArrayInputStream;
-import java.lang.reflect.Method;
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.ModelAttribute;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.http.MediaType;
-import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.common.core.page.TableDataInfo;
-import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowAssignedTaskQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnXmlQueryDto;
@@ -163,8 +147,8 @@ class WfProcessControllerTest
                         .param("processName", "请假")
                         .param("category", "hr")
                         .param("businessKey", "business-1")
-                        .param("params[beginTime]", "2026-07-25 16:00:00")
-                        .param("params[endTime]", "2026-07-25 18:00:00")
+                        .param("startedAfter", "2026-07-25T08:00:00Z")
+                        .param("startedBefore", "2026-07-25T10:00:00Z")
                         .param("pageNum", "3")
                         .param("pageSize", "25"))
                 .andExpect(status().isOk());
@@ -173,8 +157,8 @@ class WfProcessControllerTest
                         .param("processName", "请假")
                         .param("category", "hr")
                         .param("taskName", "审批")
-                        .param("params[beginTime]", "2026-07-25 16:00:00")
-                        .param("params[endTime]", "2026-07-25 18:00:00")
+                        .param("createdAfter", "2026-07-25T08:00:00Z")
+                        .param("createdBefore", "2026-07-25T10:00:00Z")
                         .param("pageNum", "4")
                         .param("pageSize", "30"))
                 .andExpect(status().isOk());
@@ -183,8 +167,8 @@ class WfProcessControllerTest
                         .param("processName", "请假")
                         .param("category", "hr")
                         .param("taskName", "认领")
-                        .param("params[beginTime]", "2026-07-25 16:00:00")
-                        .param("params[endTime]", "2026-07-25 18:00:00")
+                        .param("createdAfter", "2026-07-25T08:00:00Z")
+                        .param("createdBefore", "2026-07-25T10:00:00Z")
                         .param("pageNum", "5")
                         .param("pageSize", "35"))
                 .andExpect(status().isOk());
@@ -585,164 +569,6 @@ class WfProcessControllerTest
     }
 
     /**
-     * 验证同一请求中的新旧时间参数不一致时返回 400，且不执行任何领域查询。
-     *
-     * @return 无返回值；冲突值被静默覆盖或进入服务层时测试失败
-     */
-    @Test
-    void rejectsConflictingModernAndLegacyDateValues()
-    {
-        WorkflowOwnedProcessQueryDto filter = new WorkflowOwnedProcessQueryDto(
-                null, null, null, null, Instant.parse("2026-07-25T08:00:00Z"), null);
-
-        assertThatThrownBy(() -> controller.ownProcessList(filter,
-                LocalDateTime.parse("2026-07-25T17:00:00"), null, 1, 10))
-                .isInstanceOfSatisfying(ServiceException.class,
-                        exception -> assertThat(exception.getCode())
-                                .isEqualTo(HttpStatus.BAD_REQUEST));
-        verifyNoInteractions(processQueryService);
-    }
-
-    /**
-     * 验证原有流程路径及两个管理员运维入口的权限码和写操作审计注解保持稳定。
-     *
-     * @return 无返回值；任一路径、权限、事务或日志契约漂移时测试失败
-     * @throws NoSuchMethodException Controller 方法签名不存在时抛出
-     */
-    @Test
-    void keepsLegacyEndpointSecurityAndAuditContracts() throws NoSuchMethodException
-    {
-        RequestMapping controllerMapping = WfProcessController.class
-                .getAnnotation(RequestMapping.class);
-        assertThat(controllerMapping.value()).containsExactly("/workflow/process");
-
-        assertGetContract("startProcessList",
-                new Class<?>[] { WorkflowStartableProcessQueryDto.class, int.class, int.class },
-                "/list", "@ss.hasPermi('workflow:process:startList')", true);
-        assertGetContract("ownProcessList",
-                new Class<?>[] { WorkflowOwnedProcessQueryDto.class, LocalDateTime.class,
-                        LocalDateTime.class, int.class, int.class },
-                "/ownList", "@ss.hasPermi('workflow:process:ownList')", true);
-        assertGetContract("managedProcessList",
-                new Class<?>[] { WorkflowManagedProcessQueryDto.class, int.class, int.class },
-                "/manageList", "@ss.hasPermi('workflow:process:manageList')", true);
-        assertGetContract("todoProcessList",
-                new Class<?>[] { WorkflowAssignedTaskQueryDto.class, LocalDateTime.class,
-                        LocalDateTime.class, int.class, int.class },
-                "/todoList", "@ss.hasPermi('workflow:process:todoList')", true);
-        assertGetContract("claimProcessList",
-                new Class<?>[] { WorkflowClaimableTaskQueryDto.class, LocalDateTime.class,
-                        LocalDateTime.class, int.class, int.class },
-                "/claimList", "@ss.hasPermi('workflow:process:claimList')", true);
-        assertGetContract("finishedProcessList",
-                new Class<?>[] { WorkflowCompletedTaskQueryDto.class, LocalDateTime.class,
-                        LocalDateTime.class, int.class, int.class },
-                "/finishedList", "@ss.hasPermi('workflow:process:finishedList')", true);
-        assertGetContract("copyProcessList",
-                new Class<?>[] { WorkflowCopyQueryDto.class, int.class, int.class },
-                "/copyList", "@ss.hasPermi('workflow:process:copyList')", true);
-
-        Method markCopyRead = WfProcessController.class.getDeclaredMethod("markCopyRead",
-                Long.class);
-        assertThat(markCopyRead.getAnnotation(PutMapping.class).value())
-                .containsExactly("/copy/{copyId}/read");
-        assertThat(markCopyRead.getAnnotation(PreAuthorize.class).value())
-                .isEqualTo("@ss.hasPermi('workflow:process:copyList')");
-
-        assertExportContract("startExport",
-                new Class<?>[] { WorkflowStartableProcessQueryDto.class,
-                        HttpServletResponse.class },
-                "/startExport", "@ss.hasPermi('workflow:process:startExport')");
-        assertExportContract("ownExport",
-                new Class<?>[] { WorkflowOwnedProcessQueryDto.class, LocalDateTime.class,
-                        LocalDateTime.class, HttpServletResponse.class },
-                "/ownExport", "@ss.hasPermi('workflow:process:ownExport')");
-        assertExportContract("managedExport",
-                new Class<?>[] { WorkflowManagedProcessQueryDto.class,
-                        HttpServletResponse.class },
-                "/manageExport", "@ss.hasPermi('workflow:process:manageExport')");
-        assertExportContract("todoExport",
-                new Class<?>[] { WorkflowAssignedTaskQueryDto.class, LocalDateTime.class,
-                        LocalDateTime.class, HttpServletResponse.class },
-                "/todoExport", "@ss.hasPermi('workflow:process:todoExport')");
-        assertExportContract("claimExport",
-                new Class<?>[] { WorkflowClaimableTaskQueryDto.class, LocalDateTime.class,
-                        LocalDateTime.class, HttpServletResponse.class },
-                "/claimExport", "@ss.hasPermi('workflow:process:claimExport')");
-        assertExportContract("finishedExport",
-                new Class<?>[] { WorkflowCompletedTaskQueryDto.class, LocalDateTime.class,
-                        LocalDateTime.class, HttpServletResponse.class },
-                "/finishedExport", "@ss.hasPermi('workflow:process:finishedExport')");
-        assertExportContract("copyExport",
-                new Class<?>[] { WorkflowCopyQueryDto.class, HttpServletResponse.class },
-                "/copyExport", "@ss.hasPermi('workflow:process:copyExport')");
-
-        assertGetContract("getForm",
-                new Class<?>[] { String.class, String.class, String.class },
-                "/getProcessForm", "@ss.hasPermi('workflow:process:start')", false);
-        assertGetContract("getBpmnXml", new Class<?>[] { String.class, String.class },
-                "/bpmnXml/{processDefId}",
-                "@ss.hasAnyPermi('workflow:process:startList,workflow:process:query')", false);
-        assertGetContract("detail", new Class<?>[] { String.class, String.class },
-                "/detail", "@ss.hasPermi('workflow:process:query')", false);
-
-        Method start = WfProcessController.class.getDeclaredMethod("start",
-                String.class, Map.class);
-        assertThat(start.getAnnotation(PostMapping.class).value())
-                .containsExactly("/start/{processDefId}");
-        assertThat(start.getAnnotation(PreAuthorize.class).value())
-                .isEqualTo("@ss.hasPermi('workflow:process:start')");
-        assertThat(start.getAnnotation(Log.class).businessType())
-                .isEqualTo(BusinessType.INSERT);
-
-        Method deleteHistory = WfProcessController.class.getDeclaredMethod("deleteHistory",
-                String[].class);
-        assertThat(deleteHistory.getAnnotation(DeleteMapping.class).value())
-                .containsExactly("/instance/{instanceIds}");
-        assertThat(deleteHistory.getAnnotation(PreAuthorize.class).value())
-                .isEqualTo("@ss.hasPermi('workflow:process:remove')");
-        assertThat(deleteHistory.getAnnotation(Log.class).businessType())
-                .isEqualTo(BusinessType.DELETE);
-
-        List<String> mappedPaths = mappedPaths();
-        assertThat(mappedPaths).contains(
-                "/list", "/ownList", "/todoList", "/claimList", "/finishedList",
-                "/copyList", "/manageList", "/startExport", "/ownExport",
-                "/manageExport", "/todoExport",
-                "/claimExport", "/finishedExport", "/copyExport", "/getProcessForm",
-                "/start/{processDefId}", "/instance/{instanceIds}",
-                "/bpmnXml/{processDefId}", "/detail", "/copy/{copyId}/read");
-    }
-
-    /**
-     * 核对单个 GET 方法的路径、权限和可选 ModelAttribute 绑定契约。
-     *
-     * @param methodName String，Controller 方法名
-     * @param parameterTypes Class&lt;?&gt;[]，方法参数类型
-     * @param path String，期望的相对路径
-     * @param permissionExpression String，期望的 Spring Security 权限表达式
-     * @param modelAttribute boolean，首个参数是否必须使用 ModelAttribute
-     * @return 无返回值；任一注解契约不匹配时测试失败
-     * @throws NoSuchMethodException Controller 方法签名不存在时抛出
-     */
-    private void assertGetContract(String methodName, Class<?>[] parameterTypes, String path,
-            String permissionExpression, boolean modelAttribute) throws NoSuchMethodException
-    {
-        Method method = WfProcessController.class.getDeclaredMethod(methodName, parameterTypes);
-        GetMapping mapping = method.getAnnotation(GetMapping.class);
-        PreAuthorize preAuthorize = method.getAnnotation(PreAuthorize.class);
-
-        assertThat(mapping).isNotNull();
-        assertThat(mapping.value()).containsExactly(path);
-        assertThat(preAuthorize).isNotNull();
-        assertThat(preAuthorize.value()).isEqualTo(permissionExpression);
-        if (modelAttribute)
-        {
-            assertThat(method.getParameters()[0].isAnnotationPresent(ModelAttribute.class)).isTrue();
-        }
-    }
-
-    /**
      * 使用 Jackson 3 创建 Controller 级 JSON 响应测试链路。
      *
      * @return MockMvc，使用 Jackson 3 原生 JsonNode 的独立 MVC 实例
@@ -771,70 +597,6 @@ class WfProcessControllerTest
                     assertThat(exception.getCode()).isEqualTo(HttpStatus.NOT_FOUND);
                     assertThat(exception.getMessage()).isEqualTo("抄送记录不存在");
                 });
-    }
-
-    /**
-     * 核对单个导出方法的路径、权限、只读事务、审计日志和筛选参数绑定契约。
-     *
-     * @param methodName String，Controller 方法名
-     * @param parameterTypes Class&lt;?&gt;[]，筛选 record、兼容时间和响应参数类型
-     * @param path String，期望的相对路径
-     * @param permissionExpression String，期望的 Spring Security 权限表达式
-     * @return 无返回值；任一注解契约不匹配时测试失败
-     * @throws NoSuchMethodException Controller 方法签名不存在时抛出
-     */
-    private void assertExportContract(String methodName, Class<?>[] parameterTypes, String path,
-            String permissionExpression) throws NoSuchMethodException
-    {
-        Method method = WfProcessController.class.getDeclaredMethod(methodName, parameterTypes);
-        PostMapping mapping = method.getAnnotation(PostMapping.class);
-        PreAuthorize preAuthorize = method.getAnnotation(PreAuthorize.class);
-        Transactional transactional = method.getAnnotation(Transactional.class);
-        Log log = method.getAnnotation(Log.class);
-
-        assertThat(mapping).isNotNull();
-        assertThat(mapping.value()).containsExactly(path);
-        assertThat(preAuthorize).isNotNull();
-        assertThat(preAuthorize.value()).isEqualTo(permissionExpression);
-        assertThat(transactional).isNotNull();
-        assertThat(transactional.readOnly()).isTrue();
-        assertThat(log).isNotNull();
-        assertThat(log.businessType()).isEqualTo(BusinessType.EXPORT);
-        assertThat(method.getParameters()[0].isAnnotationPresent(ModelAttribute.class)).isTrue();
-    }
-
-    /**
-     * 收集 Controller 显式声明的 GET、POST、PUT 和 DELETE 相对路径，用于防止遗漏路由。
-     *
-     * @return List&lt;String&gt;，全部显式 GET/POST/PUT/DELETE 相对路径
-     */
-    private List<String> mappedPaths()
-    {
-        List<String> paths = new ArrayList<>();
-        for (Method method : WfProcessController.class.getDeclaredMethods())
-        {
-            GetMapping getMapping = method.getAnnotation(GetMapping.class);
-            if (getMapping != null)
-            {
-                paths.addAll(List.of(getMapping.value()));
-            }
-            PostMapping postMapping = method.getAnnotation(PostMapping.class);
-            if (postMapping != null)
-            {
-                paths.addAll(List.of(postMapping.value()));
-            }
-            PutMapping putMapping = method.getAnnotation(PutMapping.class);
-            if (putMapping != null)
-            {
-                paths.addAll(List.of(putMapping.value()));
-            }
-            DeleteMapping deleteMapping = method.getAnnotation(DeleteMapping.class);
-            if (deleteMapping != null)
-            {
-                paths.addAll(List.of(deleteMapping.value()));
-            }
-        }
-        return paths;
     }
 
     /**

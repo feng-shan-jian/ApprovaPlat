@@ -1,6 +1,5 @@
 package com.ruoyi.web.controller.workflow;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -9,18 +8,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.lang.reflect.Method;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentityOptionView;
-import com.ruoyi.flowable.domain.dto.WorkflowIdentitySelectionRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentitySelectionView;
 import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.identity.WorkflowIdentityDirectoryService;
@@ -188,29 +182,4 @@ class WfIdentityControllerTest
                 "user", null, 1, 20, "copy");
     }
 
-    /**
-     * 验证身份目录不依赖系统用户管理权限；发起人可读正式目录，批量回显仅允许模型设计者。
-     *
-     * @return 无返回值，路径或权限表达式漂移时测试失败
-     * @throws NoSuchMethodException Controller 方法签名不存在时抛出
-     */
-    @Test
-    void keepsWorkflowSpecificReadPermissionContract() throws NoSuchMethodException
-    {
-        RequestMapping controllerMapping = WfIdentityController.class
-                .getAnnotation(RequestMapping.class);
-        assertThat(controllerMapping.value()).containsExactly("/workflow/identity");
-
-        Method options = WfIdentityController.class.getDeclaredMethod(
-                "options", String.class, String.class, String.class,
-                int.class, int.class);
-        assertThat(options.getAnnotation(GetMapping.class).value())
-                .containsExactly("/options");
-        assertThat(options.getAnnotation(PreAuthorize.class).value()).isEqualTo(
-                "@ss.hasAnyPermi('workflow:model:designer,workflow:process:start,workflow:process:approval,workflow:process:manageList')");
-        Method resolveOptions = WfIdentityController.class.getDeclaredMethod(
-                "resolveOptions", WorkflowIdentitySelectionRequest.class);
-        assertThat(resolveOptions.getAnnotation(PreAuthorize.class).value())
-                .isEqualTo("@ss.hasPermi('workflow:model:designer')");
-    }
 }

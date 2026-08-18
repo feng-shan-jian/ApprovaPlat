@@ -25,15 +25,4 @@ public record WorkflowAttachmentCleanupResult(int cleaned, int failures, int lea
         }
     }
 
-    /**
-     * 兼容不关心租约丢失计数的既有调用。
-     *
-     * @param cleaned int，本轮清理完成数
-     * @param failures int，本轮单条失败数
-     * @return 无返回值，leaseLost 固定为零
-     */
-    public WorkflowAttachmentCleanupResult(int cleaned, int failures)
-    {
-        this(cleaned, failures, 0);
-    }
 }

@@ -51,15 +51,6 @@ public final class WorkflowAuthorFormFieldCatalog
     }
 
     /**
-     * 创建空字段目录，供没有节点表单的流程和兼容单元测试使用。
-     * @return WorkflowAuthorFormFieldCatalog，不包含任何正式字段的不可变目录
-     */
-    public static WorkflowAuthorFormFieldCatalog empty()
-    {
-        return new WorkflowAuthorFormFieldCatalog(Map.of(), Map.of());
-    }
-
-    /**
      * 创建字段目录构建器，同一节点被重复读取时字段按首次顺序合并。
      * @return Builder，可逐个加入本次事务冻结的节点表单字段
      */

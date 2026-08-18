@@ -39,15 +39,4 @@ public record WorkflowTaskReturnRequest(
                 : Collections.unmodifiableList(new ArrayList<>(copyUserIds));
     }
 
-    /**
-     * 兼容原有未提交抄送人的 Java 调用方。
-     *
-     * @param taskId String，待退回的活动任务主键
-     * @param comment String，退回原因
-     * @return 无返回值，抄送用户使用空集合
-     */
-    public WorkflowTaskReturnRequest(String taskId, String comment)
-    {
-        this(taskId, comment, List.of());
-    }
 }

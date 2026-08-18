@@ -1,8 +1,5 @@
 package com.ruoyi.web.controller.workflow;
 
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -17,7 +14,6 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -88,12 +84,6 @@ public class WfProcessController extends BaseController
     /** 导出逐页读取大小，复用领域服务的分页门禁。 */
     private static final int EXPORT_PAGE_SIZE = 200;
 
-    /** 旧前端日期范围格式。 */
-    private static final String LEGACY_DATE_PATTERN = "yyyy-MM-dd HH:mm:ss";
-
-    /** 旧项目及当前 Jackson 配置使用的固定业务时区。 */
-    private static final ZoneId LEGACY_DATE_ZONE = ZoneId.of("GMT+8");
-
     /** 发起请求体中一律忽略、仅允许由路径决定的流程定义字段别名。 */
     private static final Set<String> START_DEFINITION_ALIASES = Set.of(
             "processDefId", "processDefinitionId", "definitionId");
@@ -154,8 +144,6 @@ public class WfProcessController extends BaseController
      * 查询当前用户真实发起的流程实例。
      *
      * @param filter WorkflowOwnedProcessQueryDto，流程实例筛选条件
-     * @param legacyBeginTime LocalDateTime，旧前端 params[beginTime] 开始时间
-     * @param legacyEndTime LocalDateTime，旧前端 params[endTime] 结束时间
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数
      * @return TableDataInfo，当前用户发起实例分页结果
@@ -163,20 +151,11 @@ public class WfProcessController extends BaseController
     @PreAuthorize("@ss.hasPermi('workflow:process:ownList')")
     @GetMapping("/ownList")
     public TableDataInfo ownProcessList(@ModelAttribute WorkflowOwnedProcessQueryDto filter,
-            @RequestParam(value = "params[beginTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyBeginTime,
-            @RequestParam(value = "params[endTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyEndTime,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int pageNum,
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        DateRange range = mergeDateRange(filter.startedAfter(), filter.startedBefore(),
-                legacyBeginTime, legacyEndTime);
-        WorkflowOwnedProcessQueryDto normalizedFilter = new WorkflowOwnedProcessQueryDto(
-                filter.processKey(), filter.processName(), filter.category(), filter.businessKey(),
-                range.begin(), range.end());
-        return toTableData(processQueryService.listOwned(normalizedFilter, pageNum, pageSize));
+        return toTableData(processQueryService.listOwned(filter, pageNum, pageSize));
     }
 
     /**
@@ -202,8 +181,6 @@ public class WfProcessController extends BaseController
      * 查询当前用户作为 assignee 的活动待办。
      *
      * @param filter WorkflowAssignedTaskQueryDto，活动任务筛选条件
-     * @param legacyBeginTime LocalDateTime，旧前端 params[beginTime] 开始时间
-     * @param legacyEndTime LocalDateTime，旧前端 params[endTime] 结束时间
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数
      * @return TableDataInfo，当前办理人的活动任务分页结果
@@ -211,28 +188,17 @@ public class WfProcessController extends BaseController
     @PreAuthorize("@ss.hasPermi('workflow:process:todoList')")
     @GetMapping("/todoList")
     public TableDataInfo todoProcessList(@ModelAttribute WorkflowAssignedTaskQueryDto filter,
-            @RequestParam(value = "params[beginTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyBeginTime,
-            @RequestParam(value = "params[endTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyEndTime,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int pageNum,
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        DateRange range = mergeDateRange(filter.createdAfter(), filter.createdBefore(),
-                legacyBeginTime, legacyEndTime);
-        WorkflowAssignedTaskQueryDto normalizedFilter = new WorkflowAssignedTaskQueryDto(
-                filter.processKey(), filter.processName(), filter.category(), filter.taskName(),
-                range.begin(), range.end());
-        return toTableData(processQueryService.listAssigned(normalizedFilter, pageNum, pageSize));
+        return toTableData(processQueryService.listAssigned(filter, pageNum, pageSize));
     }
 
     /**
      * 查询当前用户或其有效角色、部门可认领的未分配任务。
      *
      * @param filter WorkflowClaimableTaskQueryDto，可认领任务筛选条件
-     * @param legacyBeginTime LocalDateTime，旧前端 params[beginTime] 开始时间
-     * @param legacyEndTime LocalDateTime，旧前端 params[endTime] 结束时间
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数
      * @return TableDataInfo，当前身份可认领任务分页结果
@@ -240,28 +206,17 @@ public class WfProcessController extends BaseController
     @PreAuthorize("@ss.hasPermi('workflow:process:claimList')")
     @GetMapping("/claimList")
     public TableDataInfo claimProcessList(@ModelAttribute WorkflowClaimableTaskQueryDto filter,
-            @RequestParam(value = "params[beginTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyBeginTime,
-            @RequestParam(value = "params[endTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyEndTime,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int pageNum,
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        DateRange range = mergeDateRange(filter.createdAfter(), filter.createdBefore(),
-                legacyBeginTime, legacyEndTime);
-        WorkflowClaimableTaskQueryDto normalizedFilter = new WorkflowClaimableTaskQueryDto(
-                filter.processKey(), filter.processName(), filter.category(), filter.taskName(),
-                range.begin(), range.end());
-        return toTableData(processQueryService.listClaimable(normalizedFilter, pageNum, pageSize));
+        return toTableData(processQueryService.listClaimable(filter, pageNum, pageSize));
     }
 
     /**
      * 查询 Flowable 记录为当前用户真实完成的历史任务。
      *
      * @param filter WorkflowCompletedTaskQueryDto，已办任务筛选条件
-     * @param legacyBeginTime LocalDateTime，旧前端 params[beginTime] 开始时间
-     * @param legacyEndTime LocalDateTime，旧前端 params[endTime] 结束时间
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数
      * @return TableDataInfo，当前用户真实已办任务分页结果
@@ -270,20 +225,11 @@ public class WfProcessController extends BaseController
     @GetMapping("/finishedList")
     public TableDataInfo finishedProcessList(
             @ModelAttribute WorkflowCompletedTaskQueryDto filter,
-            @RequestParam(value = "params[beginTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyBeginTime,
-            @RequestParam(value = "params[endTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyEndTime,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int pageNum,
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        DateRange range = mergeDateRange(filter.completedAfter(), filter.completedBefore(),
-                legacyBeginTime, legacyEndTime);
-        WorkflowCompletedTaskQueryDto normalizedFilter = new WorkflowCompletedTaskQueryDto(
-                filter.processKey(), filter.processName(), filter.category(), filter.taskName(),
-                range.begin(), range.end());
-        return toTableData(processQueryService.listCompleted(normalizedFilter, pageNum, pageSize));
+        return toTableData(processQueryService.listCompleted(filter, pageNum, pageSize));
     }
 
     /**
@@ -347,8 +293,6 @@ public class WfProcessController extends BaseController
      * 导出当前用户真实发起的有界流程实例。
      *
      * @param filter WorkflowOwnedProcessQueryDto，流程实例筛选条件
-     * @param legacyBeginTime LocalDateTime，旧前端 params[beginTime] 开始时间
-     * @param legacyEndTime LocalDateTime，旧前端 params[endTime] 结束时间
      * @param response HttpServletResponse，Excel 下载响应
      * @return 无返回值，Excel 内容直接写入响应
      */
@@ -357,19 +301,10 @@ public class WfProcessController extends BaseController
     @PostMapping("/ownExport")
     @Transactional(readOnly = true)
     public void ownExport(@ModelAttribute WorkflowOwnedProcessQueryDto filter,
-            @RequestParam(value = "params[beginTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyBeginTime,
-            @RequestParam(value = "params[endTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyEndTime,
             HttpServletResponse response)
     {
-        DateRange range = mergeDateRange(filter.startedAfter(), filter.startedBefore(),
-                legacyBeginTime, legacyEndTime);
-        WorkflowOwnedProcessQueryDto normalizedFilter = new WorkflowOwnedProcessQueryDto(
-                filter.processKey(), filter.processName(), filter.category(), filter.businessKey(),
-                range.begin(), range.end());
         List<WorkflowOwnedProcessView> rows = collectForExport(
-                page -> processQueryService.listOwned(normalizedFilter, page, EXPORT_PAGE_SIZE),
+                page -> processQueryService.listOwned(filter, page, EXPORT_PAGE_SIZE),
                 "我发起的流程");
         List<WorkflowOwnedProcessExportView> exports = rows.stream()
                 .map(row -> new WorkflowOwnedProcessExportView(row.processInstanceId(),
@@ -413,8 +348,6 @@ public class WfProcessController extends BaseController
      * 导出当前用户作为 assignee 的有界活动待办。
      *
      * @param filter WorkflowAssignedTaskQueryDto，活动任务筛选条件
-     * @param legacyBeginTime LocalDateTime，旧前端 params[beginTime] 开始时间
-     * @param legacyEndTime LocalDateTime，旧前端 params[endTime] 结束时间
      * @param response HttpServletResponse，Excel 下载响应
      * @return 无返回值，Excel 内容直接写入响应
      */
@@ -423,19 +356,10 @@ public class WfProcessController extends BaseController
     @PostMapping("/todoExport")
     @Transactional(readOnly = true)
     public void todoExport(@ModelAttribute WorkflowAssignedTaskQueryDto filter,
-            @RequestParam(value = "params[beginTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyBeginTime,
-            @RequestParam(value = "params[endTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyEndTime,
             HttpServletResponse response)
     {
-        DateRange range = mergeDateRange(filter.createdAfter(), filter.createdBefore(),
-                legacyBeginTime, legacyEndTime);
-        WorkflowAssignedTaskQueryDto normalizedFilter = new WorkflowAssignedTaskQueryDto(
-                filter.processKey(), filter.processName(), filter.category(), filter.taskName(),
-                range.begin(), range.end());
         List<WorkflowAssignedTaskView> rows = collectForExport(
-                page -> processQueryService.listAssigned(normalizedFilter, page, EXPORT_PAGE_SIZE),
+                page -> processQueryService.listAssigned(filter, page, EXPORT_PAGE_SIZE),
                 "待办流程");
         List<WorkflowAssignedTaskExportView> exports = rows.stream()
                 .map(row -> new WorkflowAssignedTaskExportView(row.taskId(), row.processName(),
@@ -450,8 +374,6 @@ public class WfProcessController extends BaseController
      * 导出当前用户或其有效角色、部门可认领的有界任务。
      *
      * @param filter WorkflowClaimableTaskQueryDto，可认领任务筛选条件
-     * @param legacyBeginTime LocalDateTime，旧前端 params[beginTime] 开始时间
-     * @param legacyEndTime LocalDateTime，旧前端 params[endTime] 结束时间
      * @param response HttpServletResponse，Excel 下载响应
      * @return 无返回值，Excel 内容直接写入响应
      */
@@ -460,19 +382,10 @@ public class WfProcessController extends BaseController
     @PostMapping("/claimExport")
     @Transactional(readOnly = true)
     public void claimExport(@ModelAttribute WorkflowClaimableTaskQueryDto filter,
-            @RequestParam(value = "params[beginTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyBeginTime,
-            @RequestParam(value = "params[endTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyEndTime,
             HttpServletResponse response)
     {
-        DateRange range = mergeDateRange(filter.createdAfter(), filter.createdBefore(),
-                legacyBeginTime, legacyEndTime);
-        WorkflowClaimableTaskQueryDto normalizedFilter = new WorkflowClaimableTaskQueryDto(
-                filter.processKey(), filter.processName(), filter.category(), filter.taskName(),
-                range.begin(), range.end());
         List<WorkflowClaimableTaskView> rows = collectForExport(
-                page -> processQueryService.listClaimable(normalizedFilter, page, EXPORT_PAGE_SIZE),
+                page -> processQueryService.listClaimable(filter, page, EXPORT_PAGE_SIZE),
                 "待签流程");
         List<WorkflowClaimableTaskExportView> exports = rows.stream()
                 .map(row -> new WorkflowClaimableTaskExportView(row.taskId(), row.processName(),
@@ -487,8 +400,6 @@ public class WfProcessController extends BaseController
      * 导出当前用户真实完成的有界历史任务。
      *
      * @param filter WorkflowCompletedTaskQueryDto，已办任务筛选条件
-     * @param legacyBeginTime LocalDateTime，旧前端 params[beginTime] 开始时间
-     * @param legacyEndTime LocalDateTime，旧前端 params[endTime] 结束时间
      * @param response HttpServletResponse，Excel 下载响应
      * @return 无返回值，Excel 内容直接写入响应
      */
@@ -497,19 +408,10 @@ public class WfProcessController extends BaseController
     @PostMapping("/finishedExport")
     @Transactional(readOnly = true)
     public void finishedExport(@ModelAttribute WorkflowCompletedTaskQueryDto filter,
-            @RequestParam(value = "params[beginTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyBeginTime,
-            @RequestParam(value = "params[endTime]", required = false)
-            @DateTimeFormat(pattern = LEGACY_DATE_PATTERN) LocalDateTime legacyEndTime,
             HttpServletResponse response)
     {
-        DateRange range = mergeDateRange(filter.completedAfter(), filter.completedBefore(),
-                legacyBeginTime, legacyEndTime);
-        WorkflowCompletedTaskQueryDto normalizedFilter = new WorkflowCompletedTaskQueryDto(
-                filter.processKey(), filter.processName(), filter.category(), filter.taskName(),
-                range.begin(), range.end());
         List<WorkflowCompletedTaskView> rows = collectForExport(
-                page -> processQueryService.listCompleted(normalizedFilter, page, EXPORT_PAGE_SIZE),
+                page -> processQueryService.listCompleted(filter, page, EXPORT_PAGE_SIZE),
                 "已办流程");
         List<WorkflowCompletedTaskExportView> exports = rows.stream()
                 .map(row -> new WorkflowCompletedTaskExportView(row.taskId(), row.processName(),
@@ -755,48 +657,6 @@ public class WfProcessController extends BaseController
     }
 
     /**
-     * 合并新 ISO 时间与旧前端本地时间范围，并校验请求内时间语义唯一且顺序合法。
-     *
-     * @param modernBegin Instant，新协议开始时间，允许为空
-     * @param modernEnd Instant，新协议结束时间，允许为空
-     * @param legacyBegin LocalDateTime，旧协议 GMT+8 开始时间，允许为空
-     * @param legacyEnd LocalDateTime，旧协议 GMT+8 结束时间，允许为空
-     * @return DateRange，统一转换后的 UTC 时间范围
-     */
-    private DateRange mergeDateRange(Instant modernBegin, Instant modernEnd,
-            LocalDateTime legacyBegin, LocalDateTime legacyEnd)
-    {
-        Instant legacyBeginInstant = legacyBegin == null ? null
-                : legacyBegin.atZone(LEGACY_DATE_ZONE).toInstant();
-        Instant legacyEndInstant = legacyEnd == null ? null
-                : legacyEnd.atZone(LEGACY_DATE_ZONE).toInstant();
-        Instant begin = mergeDateValue(modernBegin, legacyBeginInstant, "开始时间");
-        Instant end = mergeDateValue(modernEnd, legacyEndInstant, "结束时间");
-        if (begin != null && end != null && begin.isAfter(end))
-        {
-            throw new ServiceException("开始时间不能晚于结束时间", HttpStatus.BAD_REQUEST);
-        }
-        return new DateRange(begin, end);
-    }
-
-    /**
-     * 合并同一边界的新旧协议值，拒绝同一请求中的歧义时间。
-     *
-     * @param modernValue Instant，新 ISO 参数转换结果，允许为空
-     * @param legacyValue Instant，旧本地时间转换结果，允许为空
-     * @param fieldName String，稳定错误提示中的字段名称
-     * @return Instant，唯一有效值或空值
-     */
-    private Instant mergeDateValue(Instant modernValue, Instant legacyValue, String fieldName)
-    {
-        if (modernValue != null && legacyValue != null && !modernValue.equals(legacyValue))
-        {
-            throw new ServiceException(fieldName + "的新旧参数值不一致", HttpStatus.BAD_REQUEST);
-        }
-        return modernValue == null ? legacyValue : modernValue;
-    }
-
-    /**
      * 在固定总量和分页一致性门禁下收集导出数据。
      *
      * @param pageLoader IntFunction&lt;WorkflowPageResult&lt;T&gt;&gt;，按页读取同一身份范围的函数
@@ -865,13 +725,4 @@ public class WfProcessController extends BaseController
         return result;
     }
 
-    /**
-     * 新旧协议归一化后的 UTC 查询范围。
-     *
-     * @param begin Instant，开始时间，允许为空
-     * @param end Instant，结束时间，允许为空
-     */
-    private record DateRange(Instant begin, Instant end)
-    {
-    }
 }

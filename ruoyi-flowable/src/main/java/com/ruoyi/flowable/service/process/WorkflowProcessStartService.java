@@ -9,8 +9,6 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -67,7 +65,7 @@ public class WorkflowProcessStartService
      * @param processQueryService WorkflowProcessQueryService，starter 授权与部署开始表单快照门禁
      * @param variableValidator WorkflowStartVariableValidator，开始表单变量 schema 验证器
      * @param attachmentService WorkflowAttachmentService，临时附件校验、投影和事务绑定服务
-     * @param definitionLockMapper WorkflowProcessDefinitionLockMapper，key 发起最终版本当前读与行锁
+     * @param definitionLockMapper WorkflowProcessDefinitionLockMapper，草稿提交最新版定义当前读和部署生命周期行锁
      * @param userSelectionValidator WorkflowUserSelectionValidator，发起时会签或或签成员审批资格校验器
      * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，部署快照与实时组织授权服务
      * @return 无返回值，构造后由 Spring 管理该服务
@@ -111,47 +109,7 @@ public class WorkflowProcessStartService
 
         return engineOperations.writeAsCurrentUser(actor -> startInCurrentTransaction(
                 actor, definitionId, businessKey, request.variables(),
-                request.multiInstanceUserIds(), null));
-    }
-
-    /**
-     * 通过默认租户下的流程定义 key 发起最新激活版本，保留参考工程的精确 void 兼容签名。
-     *
-     * @param procDefKey String，流程定义 key，不是流程定义主键
-     * @param variables Map&lt;String, Object&gt;，开始表单业务变量；允许为 null
-     * @return void，无返回值；成功实例通过标准运行时、历史和业务查询链读取
-     */
-    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
-    public void startProcessByDefKey(String procDefKey, Map<String, Object> variables)
-    {
-        startProcessByDefKey(procDefKey, null, variables);
-    }
-
-    /**
-     * 通过默认租户下的流程定义 key 和可选业务主键发起最新激活版本。
-     *
-     * @param procDefKey String，流程定义 key，不是流程定义主键
-     * @param businessKey String，可为空的业务主键
-     * @param variables Map&lt;String, Object&gt;，开始表单业务变量；允许为 null
-     * @return void，无返回值；发起、附件绑定或审计失败时同一事务整体回滚
-     */
-    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
-    public void startProcessByDefKey(String procDefKey, String businessKey,
-            Map<String, Object> variables)
-    {
-        String normalizedProcessKey = requireText(procDefKey,
-                "流程定义标识不能为空", MAX_ENGINE_ID_LENGTH);
-        String normalizedBusinessKey = optionalText(businessKey,
-                "流程业务主键长度不能超过" + MAX_ENGINE_ID_LENGTH, MAX_ENGINE_ID_LENGTH);
-
-        engineOperations.writeAsCurrentUser(actor ->
-        {
-            // key 解析必须和 starter、变量、附件及真实引擎写入处于同一事务和同一认证身份中。
-            ProcessDefinition selectedDefinition = requireLatestActiveDefaultTenantDefinition(
-                    normalizedProcessKey);
-            return startInCurrentTransaction(actor, selectedDefinition.getId(),
-                    normalizedBusinessKey, variables, Map.of(), normalizedProcessKey);
-        });
+                request.multiInstanceUserIds()));
     }
 
     /**
@@ -278,20 +236,18 @@ public class WorkflowProcessStartService
     }
 
     /**
-     * 在已建立的当前用户写事务内执行 definitionId 与 definitionKey 共用的完整发起链。
+     * 在已建立的当前用户写事务内执行完整发起链。
      *
      * @param actor WorkflowCurrentIdentity，事务内重新核验的正式当前用户
      * @param definitionId String，服务端已选定的流程定义主键
      * @param businessKey String，规范化后的可选业务主键
      * @param variables Map&lt;String, Object&gt;，待按部署表单 schema 校验的客户端变量
      * @param multiInstanceUserIds Map&lt;String,List&lt;Long&gt;&gt;，发起时按活动选择的多实例成员
-     * @param expectedDefaultTenantKey String，key 兼容入口使用的默认租户定义 key；按 ID 发起时为 null
      * @return WorkflowProcessInstanceSnapshot，新实例的稳定不可变快照
      */
     private WorkflowProcessInstanceSnapshot startInCurrentTransaction(
             WorkflowCurrentIdentity actor, String definitionId, String businessKey,
-            Map<String, Object> variables, Map<String, java.util.List<Long>> multiInstanceUserIds,
-            String expectedDefaultTenantKey)
+            Map<String, Object> variables, Map<String, java.util.List<Long>> multiInstanceUserIds)
     {
         // 首次查询只用于取得服务端真实 deploymentId，客户端不能声明或替换部署关系。
         ProcessDefinition selectedDefinition = requireExistingDefinition(definitionId);
@@ -316,13 +272,6 @@ public class WorkflowProcessStartService
         {
             throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT);
         }
-        if (expectedDefaultTenantKey != null)
-        {
-            // 锁定当前已提交最新版并持有 key 范围锁，避免旧快照漏检或复核后又插入新版本。
-            assertLatestDefaultTenantDefinition(expectedDefaultTenantKey,
-                    definitionId, deploymentId);
-        }
-
         // 发起范围在引擎写入前按不可变部署快照和当前有效组织授权，拒绝请求不得创建实例。
         participantRuleRuntimeService.assertCanStart(actor, activeDefinition);
 
@@ -351,42 +300,12 @@ public class WorkflowProcessStartService
     }
 
     /**
-     * 解析默认租户下指定 key 的最新定义，并拒绝无定义或最新版挂起状态。
+     * 通过 MySQL 锁定当前读复核草稿仍指向同一默认租户最新激活定义。
+     * 锁随外层发起事务提交或回滚释放，使并发部署与草稿提交具备确定线性化顺序。
      *
-     * @param processKey String，已经过长度和空值校验的流程定义 key
-     * @return ProcessDefinition，默认租户下最新且激活的流程定义
-     */
-    private ProcessDefinition requireLatestActiveDefaultTenantDefinition(String processKey)
-    {
-        ProcessDefinition latestDefinition = repositoryService.createProcessDefinitionQuery()
-                .processDefinitionKey(processKey)
-                .processDefinitionWithoutTenantId()
-                .latestVersion()
-                .singleResult();
-        if (latestDefinition == null)
-        {
-            throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND);
-        }
-        if (!StringUtils.hasText(latestDefinition.getId())
-                || !processKey.equals(latestDefinition.getKey())
-                || StringUtils.hasText(latestDefinition.getTenantId()))
-        {
-            throw new ServiceException("流程定义解析结果异常", HttpStatus.ERROR);
-        }
-        if (latestDefinition.isSuspended())
-        {
-            throw new ServiceException("流程定义已挂起", HttpStatus.CONFLICT);
-        }
-        return latestDefinition;
-    }
-
-    /**
-     * 通过 MySQL 锁定当前读复核 key 入口仍指向同一默认租户最新激活定义。
-     * 锁随外层发起事务提交或回滚释放，使并发部署与实例创建具备确定线性化顺序。
-     *
-     * @param processKey String，兼容入口解析的流程定义 key
-     * @param expectedDefinitionId String，事务开始阶段选定的流程定义主键
-     * @param expectedDeploymentId String，事务开始阶段解析的部署主键
+     * @param processKey String，草稿持久化的流程定义 key
+     * @param expectedDefinitionId String，草稿绑定的流程定义主键
+     * @param expectedDeploymentId String，草稿绑定的部署主键
      * @return void，无返回值；并发部署导致最新版变化时抛出 HTTP 409
      */
     private void assertLatestDefaultTenantDefinition(String processKey,

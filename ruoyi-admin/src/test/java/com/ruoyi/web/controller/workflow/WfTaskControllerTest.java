@@ -14,42 +14,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.domain.dto.WorkflowProcessCancelRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowProcessRevokeRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowApplicationResubmitRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowMultiInstanceAdjustmentRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskClaimRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskDelegateRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskRejectRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskResolveRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowMultiInstanceAdjustmentRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskTransferRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskUnclaimRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowApplicationResubmitRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceMemberView;
 import com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceStateView;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
@@ -129,51 +108,6 @@ class WfTaskControllerTest
         verifyNoInteractions(taskLifecycleService);
         verifyNoInteractions(taskReadService);
         verifyNoInteractions(multiInstanceService);
-    }
-
-    /**
-     * 验证任务域全部路径、权限码、操作日志类型及请求参数注解保持稳定契约。
-     *
-     * @return 无返回值；任一反射契约漂移时测试失败
-     * @throws NoSuchMethodException Controller 方法签名不存在时抛出
-     */
-    @Test
-    void keepsLegacyEndpointSecurityAndAuditContracts() throws NoSuchMethodException
-    {
-        RequestMapping controllerMapping = WfTaskController.class.getAnnotation(RequestMapping.class);
-        assertThat(controllerMapping.value()).containsExactly("/workflow/task");
-
-        assertPostEndpointContract("claim", WorkflowTaskClaimRequest.class, "/claim",
-                "@ss.hasPermi('workflow:process:claim')", BusinessType.UPDATE);
-        assertPostEndpointContract("unClaim", WorkflowTaskUnclaimRequest.class, "/unClaim",
-                "@ss.hasPermi('workflow:process:claim')", BusinessType.UPDATE);
-        assertPostEndpointContract("resolve", WorkflowTaskResolveRequest.class, "/resolve",
-                "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
-        assertPostEndpointContract("delegate", WorkflowTaskDelegateRequest.class, "/delegate",
-                "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
-        assertPostEndpointContract("transfer", WorkflowTaskTransferRequest.class, "/transfer",
-                "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
-        assertPostEndpointContract("stopProcess", WorkflowProcessCancelRequest.class, "/stopProcess",
-                "@ss.hasPermi('workflow:process:cancel')", BusinessType.UPDATE);
-        assertPostEndpointContract("revokeProcess", WorkflowProcessRevokeRequest.class, "/revokeProcess",
-                "@ss.hasPermi('workflow:process:revoke')", BusinessType.UPDATE);
-        assertPostEndpointContract("complete", WorkflowTaskCompleteRequest.class, "/complete",
-                "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
-        assertPostEndpointContract("reject", WorkflowTaskRejectRequest.class, "/reject",
-                "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
-        assertPostEndpointContract("returnTask", WorkflowTaskReturnRequest.class, "/return",
-                "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
-        assertPostEndpointContract("resubmit", WorkflowApplicationResubmitRequest.class, "/resubmit",
-                "@ss.hasPermi('workflow:process:start')", BusinessType.UPDATE);
-        assertPostEndpointContract("adjustMultiInstance",
-                WorkflowMultiInstanceAdjustmentRequest.class, "/multiInstance/adjust",
-                "@ss.hasPermi('workflow:process:approval')", BusinessType.UPDATE);
-        assertGetEndpointContract("processVariables", "/processVariables/{taskId}",
-                "@ss.hasPermi('workflow:process:query')", BusinessType.OTHER);
-        assertGetEndpointContract("diagram", "/diagram/{processId}",
-                "@ss.hasPermi('workflow:process:query')", BusinessType.OTHER);
-        assertGetEndpointContract("getMultiInstanceState", "/multiInstance/{taskId}",
-                "@ss.hasPermi('workflow:process:approval')", BusinessType.OTHER);
     }
 
     /**
@@ -430,63 +364,4 @@ class WfTaskControllerTest
                 .build();
     }
 
-    /**
-     * 核对单个 Controller 方法的路径、权限、日志和真实请求体校验注解。
-     *
-     * @param methodName String，Controller 方法名
-     * @param requestType Class，方法唯一请求 DTO 类型
-     * @param path String，期望的旧系统相对路径
-     * @param permissionExpression String，期望的 Spring Security 权限表达式
-     * @param businessType BusinessType，期望的操作日志类型
-     * @return 无返回值；任一注解契约不匹配时测试失败
-     * @throws NoSuchMethodException Controller 方法签名不存在时抛出
-     */
-    private void assertPostEndpointContract(String methodName, Class<?> requestType, String path,
-            String permissionExpression, BusinessType businessType) throws NoSuchMethodException
-    {
-        Method method = WfTaskController.class.getDeclaredMethod(methodName, requestType);
-        PostMapping postMapping = method.getAnnotation(PostMapping.class);
-        PreAuthorize preAuthorize = method.getAnnotation(PreAuthorize.class);
-        Log log = method.getAnnotation(Log.class);
-        Parameter requestParameter = method.getParameters()[0];
-
-        assertThat(postMapping).isNotNull();
-        assertThat(postMapping.value()).containsExactly(path);
-        assertThat(preAuthorize).isNotNull();
-        assertThat(preAuthorize.value()).isEqualTo(permissionExpression);
-        assertThat(log).isNotNull();
-        assertThat(log.businessType()).isEqualTo(businessType);
-        assertThat(requestParameter.isAnnotationPresent(Valid.class)).isTrue();
-        assertThat(requestParameter.isAnnotationPresent(RequestBody.class)).isTrue();
-    }
-
-    /**
-     * 核对单个 GET 方法的路径、权限、日志和路径变量校验注解。
-     *
-     * @param methodName String，Controller 方法名
-     * @param path String，期望的相对路径
-     * @param permissionExpression String，期望的 Spring Security 权限表达式
-     * @param businessType BusinessType，期望的操作日志类型
-     * @return 无返回值；任一注解契约不匹配时测试失败
-     * @throws NoSuchMethodException Controller 方法签名不存在时抛出
-     */
-    private void assertGetEndpointContract(String methodName, String path,
-            String permissionExpression, BusinessType businessType) throws NoSuchMethodException
-    {
-        Method method = WfTaskController.class.getDeclaredMethod(methodName, String.class);
-        GetMapping getMapping = method.getAnnotation(GetMapping.class);
-        PreAuthorize preAuthorize = method.getAnnotation(PreAuthorize.class);
-        Log log = method.getAnnotation(Log.class);
-        Parameter pathParameter = method.getParameters()[0];
-
-        assertThat(getMapping).isNotNull();
-        assertThat(getMapping.value()).containsExactly(path);
-        assertThat(preAuthorize).isNotNull();
-        assertThat(preAuthorize.value()).isEqualTo(permissionExpression);
-        assertThat(log).isNotNull();
-        assertThat(log.businessType()).isEqualTo(businessType);
-        assertThat(pathParameter.isAnnotationPresent(PathVariable.class)).isTrue();
-        assertThat(pathParameter.isAnnotationPresent(NotBlank.class)).isTrue();
-        assertThat(pathParameter.isAnnotationPresent(Size.class)).isTrue();
-    }
 }

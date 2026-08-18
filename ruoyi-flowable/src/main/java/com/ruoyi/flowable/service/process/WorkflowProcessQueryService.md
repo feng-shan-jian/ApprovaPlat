@@ -36,12 +36,6 @@ WorkflowPageResult<WorkflowAssignedTaskView> page = processQueryService.listAssi
 `isSuspended()` 生成 `running/suspended`，已结束实例才使用历史状态。当前环节查询不使用
 会排除挂起任务的 `TaskQuery.active()`，因此挂起前后的状态、任务名称和操作按钮保持一致。
 
-旧前端的日期范围使用 `params[beginTime]`、`params[endTime]` 和
-`yyyy-MM-dd HH:mm:ss` 格式。`WfProcessController` 按项目固定 `GMT+8` 转成
-`Instant` 后再调用本服务；新接口仍可直接使用各 DTO 的 ISO-8601
-`started/created/completedAfter`、`Before` 字段。同一请求的新旧时间值不一致时返回
-400，不会静默覆盖。抄送查询同时保留旧字段 `processId`，但客户端 `userId` 始终被忽略。
-
 ## 查询方法
 
 | 方法 | DTO | 返回视图 | 身份范围 |
