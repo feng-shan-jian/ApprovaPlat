@@ -31,7 +31,7 @@ import com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 
 /**
- * 审批 SLA 业务日历、运行状态、审计和用户通知真实 API。
+ * 审批 SLA 业务日历、运行状态和审计真实 API。
  */
 @Validated
 @RestController
@@ -166,25 +166,4 @@ public class WfTaskSlaController extends BaseController
                 actionType, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
-    /** @return AjaxResult，当前用户最近 200 条提醒和升级通知。 */
-    @PreAuthorize("@ss.hasPermi('workflow:sla:notification')")
-    @GetMapping("/notifications")
-    public AjaxResult myNotifications()
-    {
-        return success(slaRuntimeService.myNotifications());
-    }
-
-    /**
-     * 将当前用户拥有的一条 SLA 通知标记为已读。
-     * @param notificationId Long，通知主键
-     * @return AjaxResult，不存在、已读或越权统一返回 404
-     */
-    @PreAuthorize("@ss.hasPermi('workflow:sla:notification')")
-    @Log(title = "处理审批 SLA 通知", businessType = BusinessType.UPDATE)
-    @PutMapping("/notifications/{notificationId}/read")
-    public AjaxResult markNotificationRead(@PathVariable @Positive Long notificationId)
-    {
-        slaRuntimeService.markNotificationRead(notificationId);
-        return success();
-    }
 }

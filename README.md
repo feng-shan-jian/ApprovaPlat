@@ -79,7 +79,7 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 - 区分设计、发起、办理、管理和审计职责，并对实例、任务、部署、附件和审计数据做对象级授权。
 - Flowable 数据和业务数据共用主数据源与事务边界，前端不保存第二份权威流程状态。
 - 提供健康检查、运行快照、Micrometer/Prometheus 指标、附件清理锁和运行就绪校验。
-- 仓库包含生产配置、systemd、Nginx 和审批样例置备资产。
+- 仓库包含生产配置、systemd 和 Nginx 部署资产。
 
 ## 项目截图
 
@@ -135,8 +135,6 @@ npm run dev -- --host 127.0.0.1 --port 1024
 
 访问 `http://127.0.0.1:1024`。全新本地基线账号为 `admin`，初始密码为 `wang`；它只用于本机开发，对外开放服务前必须更换。
 
-如果希望快速体验仓库里的审批样例，可以按[审批样例置备](deployment/samples/workflow/README.md)通过平台 API 创建，不需要直接修改 Flowable 表或业务表。
-
 ## 开发与测试
 
 常用开发验证：
@@ -173,7 +171,7 @@ ApprovaPlat/
 |- ruoyi-ui/     Vue 3 前端、工作流设计器与契约测试
 |- sql/          数据库基线、业务结构与菜单权限
 |- docs/         架构、业务契约与数据库文档
-`- deployment/   生产配置、systemd、Nginx 与审批样例
+`- deployment/   生产配置、systemd 与 Nginx
 ```
 
 ## 文档

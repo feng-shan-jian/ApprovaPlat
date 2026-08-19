@@ -37,13 +37,3 @@ export function changeBpmnEventCodeStatus(eventCodeId, enabled) {
 export function listBpmnEventAudit(query) {
   return request({ url: '/workflow/bpmn-event/audit', method: 'get', params: query })
 }
-
-/** @returns {Promise<object>} 当前用户 BPMN 事件通知。 */
-export function listMyBpmnEventNotifications() {
-  return request({ url: '/workflow/bpmn-event/notifications/my', method: 'get' })
-}
-
-/** @param {number|string} notificationId 通知主键；@returns {Promise<object>} 已读结果。 */
-export function markBpmnEventNotificationRead(notificationId) {
-  return request({ url: `/workflow/bpmn-event/notifications/${notificationId}/read`, method: 'put' })
-}

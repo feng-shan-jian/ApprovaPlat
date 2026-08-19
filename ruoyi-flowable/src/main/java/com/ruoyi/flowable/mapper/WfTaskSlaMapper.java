@@ -7,7 +7,6 @@ import com.ruoyi.flowable.domain.WfBusinessCalendar;
 import com.ruoyi.flowable.domain.WfTaskSlaExecution;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
-import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
 
 /**
@@ -160,13 +159,6 @@ public interface WfTaskSlaMapper
     List<WorkflowTaskSlaAuditView> selectAudits(
             @Param("query") WorkflowOperationsQuery.SlaAudit query,
             @Param("offset") int offset, @Param("pageSize") int pageSize);
-
-    /** @param userId String，当前用户主键；@return List&lt;WorkflowTaskSlaNotificationView&gt;，最近 200 条通知。 */
-    List<WorkflowTaskSlaNotificationView> selectNotifications(@Param("userId") String userId);
-
-    /** @param notificationId Long，通知主键；@param userId String，当前用户主键；@return int，首次标记行数。 */
-    int markNotificationRead(@Param("notificationId") Long notificationId,
-            @Param("userId") String userId);
 
     /** @param query SlaExecution，执行筛选条件；@return long，符合条件的执行总数。 */
     long countExecutions(@Param("query") WorkflowOperationsQuery.SlaExecution query);

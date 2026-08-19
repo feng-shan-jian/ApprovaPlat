@@ -144,20 +144,4 @@ public class WfBpmnEventController extends BaseController
                 status, eventType, sourceType, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
-    /** @return AjaxResult，当前用户真实站内通知。 */
-    @PreAuthorize("@ss.hasAnyPermi('workflow:process:approval,workflow:process:start,workflow:bpmnEvent:list')")
-    @GetMapping("/notifications/my")
-    public AjaxResult myNotifications()
-    {
-        return success(eventService.myNotifications());
-    }
-
-    /** @param notificationId Long，当前用户通知主键；@return AjaxResult，已读结果。 */
-    @PreAuthorize("@ss.hasAnyPermi('workflow:process:approval,workflow:process:start,workflow:bpmnEvent:list')")
-    @PutMapping("/notifications/{notificationId}/read")
-    public AjaxResult markRead(@PathVariable @Positive Long notificationId)
-    {
-        eventService.markNotificationRead(notificationId);
-        return success();
-    }
 }

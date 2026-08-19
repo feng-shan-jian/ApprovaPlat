@@ -1,15 +1,19 @@
 package com.ruoyi.flowable.service.notification;
 
-import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.domain.vo.WorkflowNotificationInboxResult;
+import com.ruoyi.flowable.domain.vo.WorkflowNotificationItem;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.service.support.WorkflowPageSupport;
 
 /**
  * 用户通知收件箱服务，唯一负责当前用户查询和已读状态迁移。
@@ -34,32 +38,67 @@ public class WorkflowNotificationInboxService
     }
 
     /**
-     * 查询当前用户审批通知，支持未读和已读过滤。
+     * 查询当前用户统一通知收件箱，支持状态筛选和物理分页。
      * @param readStatus String，ALL、UNREAD 或 READ
-     * @param limit int，1 至 100
-     * @return Map&lt;String,Object&gt;，items 和当前用户未读总数
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @return WorkflowNotificationInboxResult，当前页、筛选总数和全局未读数
      */
     @Transactional(readOnly = true)
-    public Map<String, Object> inbox(String readStatus, int limit)
+    public WorkflowNotificationInboxResult inbox(String readStatus, int pageNum, int pageSize)
     {
         long userId = currentUserId();
         String status = readStatus == null ? "ALL"
                 : readStatus.trim().toUpperCase(Locale.ROOT);
-        if (!Set.of("ALL", "UNREAD", "READ").contains(status) || limit < 1 || limit > 100)
+        if (!Set.of("ALL", "UNREAD", "READ").contains(status))
         {
             throw new ServiceException("通知查询参数不合法", HttpStatus.BAD_REQUEST);
         }
-        String filter = "ALL".equals(status) ? "" : " and read_status='" + status + "'";
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "select notification_id as notificationId,event_type as eventType,title,content," +
-                "process_instance_id as processInstanceId,task_id as taskId,route_path as routePath," +
-                "read_status as readStatus,create_time as createTime,read_time as readTime " +
-                "from wf_notification_inbox where recipient_user_id=?" + filter +
-                " order by notification_id desc limit ?", userId, limit);
-        Integer unread = jdbcTemplate.queryForObject(
-                "select count(*) from wf_notification_inbox " +
-                "where recipient_user_id=? and read_status='UNREAD'", Integer.class, userId);
-        return Map.of("items", rows, "unreadCount", unread == null ? 0 : unread);
+        String statusClause = "ALL".equals(status) ? "" : " and read_status=?";
+        String countSql = "select count(*) from wf_notification_inbox "
+                + "where recipient_user_id=?" + statusClause;
+        String unreadSql = "select count(*) from wf_notification_inbox "
+                + "where recipient_user_id=? and read_status=?";
+        List<Object> filterArgs = "ALL".equals(status) ? List.of(userId) : List.of(userId, status);
+        Long unreadValue = jdbcTemplate.queryForObject(unreadSql, Long.class, userId, "UNREAD");
+        long unreadCount = unreadValue == null ? 0L : unreadValue;
+        var page = WorkflowPageSupport.query(pageNum, pageSize,
+                () -> {
+                    Long value = jdbcTemplate.queryForObject(countSql, Long.class, filterArgs.toArray());
+                    return value == null ? 0L : value;
+                },
+                (offset, size) -> loadItems(userId, status, offset, size));
+        return new WorkflowNotificationInboxResult(page.rows(), page.total(), unreadCount);
+    }
+
+    /**
+     * 从统一收件箱读取当前页，不连接 outbox、审计或 SLA 执行表。
+     * @param userId long，已由身份解析器校验的当前用户主键
+     * @param status String，ALL、UNREAD 或 READ
+     * @param offset int，数据库分页偏移量
+     * @param pageSize int，当前页大小
+     * @return List&lt;WorkflowNotificationItem&gt;，当前页通知
+     */
+    private List<WorkflowNotificationItem> loadItems(long userId, String status, int offset, int pageSize)
+    {
+        String statusClause = "ALL".equals(status) ? "" : " and read_status=?";
+        String sql = "select notification_id,event_type,title,content,process_instance_id,task_id,"
+                + "route_path,read_status,create_time,read_time from wf_notification_inbox "
+                + "where recipient_user_id=?" + statusClause
+                + " order by notification_id desc limit ? offset ?";
+        Object[] args = "ALL".equals(status) ? new Object[] { userId, pageSize, offset }
+                : new Object[] { userId, status, pageSize, offset };
+        return jdbcTemplate.query(sql, (rs, rowNum) -> new WorkflowNotificationItem(
+                rs.getLong("notification_id"), rs.getString("event_type"), rs.getString("title"),
+                rs.getString("content"), rs.getString("process_instance_id"), rs.getString("task_id"),
+                rs.getString("route_path"), rs.getString("read_status"), toLocalDateTime(rs.getTimestamp("create_time")),
+                toLocalDateTime(rs.getTimestamp("read_time"))), args);
+    }
+
+    /** @param timestamp Timestamp，可为空的数据库时间值；@return LocalDateTime，业务时间或 null */
+    private LocalDateTime toLocalDateTime(Timestamp timestamp)
+    {
+        return timestamp == null ? null : timestamp.toLocalDateTime();
     }
 
     /**
@@ -105,13 +144,6 @@ public class WorkflowNotificationInboxService
      */
     private long currentUserId()
     {
-        try
-        {
-            return Long.parseLong(identityResolver.resolveCurrentIdentity().userId());
-        }
-        catch (RuntimeException exception)
-        {
-            throw new ServiceException("当前用户身份无效", HttpStatus.UNAUTHORIZED);
-        }
+        return Long.parseLong(identityResolver.resolveCurrentIdentity().userId());
     }
 }

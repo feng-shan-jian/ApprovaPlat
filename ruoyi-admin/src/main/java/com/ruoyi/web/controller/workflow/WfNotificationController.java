@@ -34,7 +34,7 @@ import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService
 import com.ruoyi.flowable.service.notification.WorkflowNotificationPolicyService;
 
 /**
- * 普通审批通知、偏好、策略、outbox 和人工催办正式 API。
+ * 统一工作流通知、偏好、策略、outbox 和人工催办正式 API。
  */
 @Validated
 @RestController
@@ -70,22 +70,24 @@ public class WfNotificationController extends BaseController
     }
 
     /**
-     * 查询当前用户审批通知及未读数。
+     * 查询当前用户统一工作流通知、筛选总数及全局未读数。
      * @param readStatus ALL、UNREAD 或 READ
-     * @param limit 返回数量上限
-     * @return AjaxResult，data 含 items 和 unreadCount
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @return AjaxResult，data 含当前页 items、total 和全局 unreadCount
      */
     @PreAuthorize("@ss.hasPermi('workflow:notification:list')")
     @GetMapping("/inbox")
     public AjaxResult inbox(@RequestParam(defaultValue = "ALL") String readStatus,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit)
+            @RequestParam(defaultValue = "1") @Min(1) int pageNum,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize)
     {
-        return success(notificationInboxService.inbox(readStatus, limit));
+        return success(notificationInboxService.inbox(readStatus, pageNum, pageSize));
     }
 
     /**
-     * 标记当前用户一条审批通知已读。
-     * @param notificationId 站内通知主键
+     * 标记当前用户一条统一工作流通知已读。
+     * @param notificationId 统一工作流通知主键
      * @return AjaxResult，成功响应
      */
     @PreAuthorize("@ss.hasPermi('workflow:notification:list')")
@@ -97,7 +99,7 @@ public class WfNotificationController extends BaseController
     }
 
     /**
-     * 标记当前用户全部审批通知已读。
+     * 标记当前用户全部统一工作流通知已读。
      * @return AjaxResult，data 为实际变更数量
      */
     @PreAuthorize("@ss.hasPermi('workflow:notification:list')")

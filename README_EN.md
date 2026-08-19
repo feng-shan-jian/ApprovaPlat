@@ -80,7 +80,7 @@ It is currently best suited to:
 - Separate design, submission, approval, administration, and audit duties, with object-level authorization for instances, tasks, deployments, attachments, and audit data.
 - Keep Flowable and business data in the same primary datasource and transaction boundary. The frontend does not keep a second authoritative workflow state.
 - Provide health checks, runtime snapshots, Micrometer/Prometheus metrics, attachment cleanup locks, and runtime readiness validation.
-- Include production configuration, systemd, Nginx, and approval sample provisioning assets.
+- Include production configuration, systemd, and Nginx deployment assets.
 
 ## Screenshots
 
@@ -148,8 +148,6 @@ npm run dev -- --host 127.0.0.1 --port 1024
 
 Open `http://127.0.0.1:1024`. The clean local baseline account is `admin` with initial password `wang`. It is for local development only; change it before exposing the service beyond your machine.
 
-To explore the included approval samples, follow the [sample provisioning guide](deployment/samples/workflow/README.md). It creates them through platform APIs rather than writing directly to Flowable or business tables.
-
 ## Development and testing
 
 Common development checks:
@@ -186,7 +184,7 @@ ApprovaPlat/
 |- ruoyi-ui/     Vue 3 frontend, workflow designer, and contract tests
 |- sql/          Database baseline, business schema, and menu permissions
 |- docs/         Architecture, behavior, database, and project decision docs
-`- deployment/   Production config, systemd, Nginx, and approval samples
+`- deployment/   Production config, systemd, and Nginx
 ```
 
 ## Documentation

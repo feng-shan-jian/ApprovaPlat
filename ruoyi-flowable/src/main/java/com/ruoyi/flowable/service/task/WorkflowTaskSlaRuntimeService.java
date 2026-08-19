@@ -29,7 +29,6 @@ import com.ruoyi.flowable.domain.WfTaskSlaExecution;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
-import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
 import com.ruoyi.flowable.service.support.WorkflowPageSupport;
@@ -393,30 +392,6 @@ public class WorkflowTaskSlaRuntimeService
         return engineOperations.read(() -> WorkflowPageSupport.query(pageNum, pageSize,
                 () -> slaMapper.countAudits(query),
                 (offset, size) -> slaMapper.selectAudits(query, offset, size)));
-    }
-
-    /** @return List&lt;WorkflowTaskSlaNotificationView&gt;，当前用户通知。 */
-    public List<WorkflowTaskSlaNotificationView> myNotifications()
-    {
-        return engineOperations.read(() -> List.copyOf(slaMapper.selectNotifications(
-                com.ruoyi.common.utils.SecurityUtils.getUserId().toString())));
-    }
-
-    /** @param notificationId Long，通知主键；@return void，仅当前接收人可首次标记已读。 */
-    public void markNotificationRead(Long notificationId)
-    {
-        if (notificationId == null || notificationId <= 0)
-        {
-            throw new ServiceException("审批 SLA 通知主键不合法", HttpStatus.BAD_REQUEST);
-        }
-        engineOperations.writeAsCurrentUser(identity ->
-        {
-            if (slaMapper.markNotificationRead(notificationId, identity.userId()) != 1)
-            {
-                throw new ServiceException("审批 SLA 通知不存在或已处理", HttpStatus.NOT_FOUND);
-            }
-            return null;
-        });
     }
 
     /**

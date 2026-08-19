@@ -2,18 +2,14 @@ package com.ruoyi.system.service.impl;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.annotation.DataScope;
-import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.constant.UserConstants;
-import com.ruoyi.common.core.domain.entity.SysMenu;
 import com.ruoyi.common.core.domain.entity.SysRole;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.SecurityUtils;
@@ -22,7 +18,6 @@ import com.ruoyi.common.utils.spring.SpringUtils;
 import com.ruoyi.system.domain.SysRoleDept;
 import com.ruoyi.system.domain.SysRoleMenu;
 import com.ruoyi.system.domain.SysUserRole;
-import com.ruoyi.system.mapper.SysMenuMapper;
 import com.ruoyi.system.mapper.SysRoleDeptMapper;
 import com.ruoyi.system.mapper.SysRoleMapper;
 import com.ruoyi.system.mapper.SysRoleMenuMapper;
@@ -37,14 +32,8 @@ import com.ruoyi.system.service.ISysRoleService;
 @Service
 public class SysRoleServiceImpl implements ISysRoleService
 {
-    /** 单次增量授权菜单上限，与 HTTP 请求契约保持一致。 */
-    private static final int MAX_GRANT_MENU_COUNT = 100;
-
     @Autowired
     private SysRoleMapper roleMapper;
-
-    @Autowired
-    private SysMenuMapper menuMapper;
 
     @Autowired
     private SysRoleMenuMapper roleMenuMapper;
@@ -264,73 +253,6 @@ public class SysRoleServiceImpl implements ISysRoleService
         // 删除角色与菜单关联
         roleMenuMapper.deleteRoleMenuByRoleId(role.getRoleId());
         return insertRoleMenu(role);
-    }
-
-    /**
-     * 校验角色和启用菜单后，仅追加缺失的角色菜单关联。
-     *
-     * @param roleId Long，目标正式角色主键
-     * @param menuIds Collection&lt;Long&gt;，待追加的正式菜单主键集合
-     * @return int，本次真实新增的关联数；重复关联返回0且不删除任何既有权限
-     */
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public int grantRoleMenus(Long roleId, Collection<Long> menuIds)
-    {
-        if (roleId == null || roleId <= 0)
-        {
-            throw new ServiceException("角色主键必须为正数", HttpStatus.BAD_REQUEST);
-        }
-        SysRole role = roleMapper.selectRoleById(roleId);
-        if (role == null || !UserConstants.NORMAL.equals(role.getDelFlag()))
-        {
-            throw new ServiceException("角色不存在或已删除", HttpStatus.NOT_FOUND);
-        }
-        if (!UserConstants.ROLE_NORMAL.equals(role.getStatus()))
-        {
-            throw new ServiceException("角色已停用，不能追加菜单权限", HttpStatus.BAD_REQUEST);
-        }
-        if (menuIds == null || menuIds.isEmpty())
-        {
-            throw new ServiceException("待授权菜单不能为空", HttpStatus.BAD_REQUEST);
-        }
-        if (menuIds.size() > MAX_GRANT_MENU_COUNT)
-        {
-            throw new ServiceException("单次最多授权100个菜单", HttpStatus.BAD_REQUEST);
-        }
-
-        // 先限制原始请求规模，再去重并逐项核验正式启用菜单，禁止写入悬空或停用权限。
-        LinkedHashSet<Long> normalizedMenuIds = new LinkedHashSet<>();
-        for (Long menuId : menuIds)
-        {
-            if (menuId == null || menuId <= 0)
-            {
-                throw new ServiceException("菜单主键必须为正数", HttpStatus.BAD_REQUEST);
-            }
-            SysMenu menu = menuMapper.selectMenuById(menuId);
-            if (menu == null || !UserConstants.NORMAL.equals(menu.getStatus()))
-            {
-                throw new ServiceException("菜单不存在或已停用", HttpStatus.BAD_REQUEST);
-            }
-            normalizedMenuIds.add(menuId);
-        }
-
-        List<SysRoleMenu> roleMenus = new ArrayList<>(normalizedMenuIds.size());
-        for (Long menuId : normalizedMenuIds)
-        {
-            SysRoleMenu roleMenu = new SysRoleMenu();
-            roleMenu.setRoleId(roleId);
-            roleMenu.setMenuId(menuId);
-            roleMenus.add(roleMenu);
-        }
-
-        // 复合主键配合 INSERT IGNORE 保证并发重复授权幂等，整个事务从不执行删除语句。
-        int added = roleMenuMapper.batchRoleMenuIgnore(roleMenus);
-        if (added < 0 || added > roleMenus.size())
-        {
-            throw new ServiceException("角色菜单增量授权结果异常", HttpStatus.ERROR);
-        }
-        return added;
     }
 
     /**

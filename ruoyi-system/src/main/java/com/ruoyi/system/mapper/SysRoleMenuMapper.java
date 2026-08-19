@@ -42,11 +42,4 @@ public interface SysRoleMenuMapper
      */
     public int batchRoleMenu(List<SysRoleMenu> roleMenuList);
 
-    /**
-     * 幂等批量追加角色菜单关联，已存在的复合主键保持不变。
-     *
-     * @param roleMenuList List&lt;SysRoleMenu&gt;，待追加的角色菜单关联
-     * @return int，本次真实插入的关联数
-     */
-    public int batchRoleMenuIgnore(List<SysRoleMenu> roleMenuList);
 }

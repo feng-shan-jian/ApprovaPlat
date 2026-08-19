@@ -66,20 +66,3 @@ export function listSlaExecutions(query) {
 export function listSlaAudits(query) {
   return request({ url: '/workflow/sla/audits', method: 'get', params: query })
 }
-
-/**
- * 查询当前用户 SLA 提醒与升级通知。
- * @returns {Promise<object>} 服务端按接收人隔离的通知集合。
- */
-export function listMySlaNotifications() {
-  return request({ url: '/workflow/sla/notifications', method: 'get' })
-}
-
-/**
- * 将当前用户的一条 SLA 通知标记为已读。
- * @param {number|string} notificationId 通知主键。
- * @returns {Promise<object>} 服务端鉴权后的已读结果。
- */
-export function markSlaNotificationRead(notificationId) {
-  return request({ url: `/workflow/sla/notifications/${notificationId}/read`, method: 'put' })
-}

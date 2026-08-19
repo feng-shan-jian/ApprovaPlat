@@ -9,13 +9,12 @@ import com.ruoyi.flowable.domain.WfBpmnEventCode;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnEventCodeRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventAuditView;
-import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventNotificationView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
 import com.ruoyi.flowable.service.support.WorkflowPageSupport;
 
 /**
- * BPMN 错误与升级编码目录、审计和站内通知领域服务。
+ * BPMN 错误与升级编码目录和运行审计领域服务。
  */
 @Service
 public class WorkflowBpmnEventCodeService
@@ -180,32 +179,6 @@ public class WorkflowBpmnEventCodeService
         return engineOperations.read(() -> WorkflowPageSupport.query(pageNum, pageSize,
                 () -> eventMapper.countAuditList(query),
                 (offset, size) -> eventMapper.selectAuditList(query, offset, size)));
-    }
-
-    /** @return List&lt;WorkflowBpmnEventNotificationView&gt;，当前用户最近通知。 */
-    public List<WorkflowBpmnEventNotificationView> myNotifications()
-    {
-        return engineOperations.read(() ->
-                List.copyOf(eventMapper.selectNotifications(
-                        com.ruoyi.common.utils.SecurityUtils.getUserId().toString())));
-    }
-
-    /**
-     * 标记当前用户拥有的通知已读。
-     * @param notificationId Long，通知主键
-     * @return void，不存在、已读或越权时返回 404，避免泄露他人通知
-     */
-    public void markNotificationRead(Long notificationId)
-    {
-        requirePositiveId(notificationId);
-        engineOperations.writeAsCurrentUser(identity ->
-        {
-            if (eventMapper.markNotificationRead(notificationId, identity.userId()) != 1)
-            {
-                throw new ServiceException("BPMN 事件通知不存在或已处理", HttpStatus.NOT_FOUND);
-            }
-            return null;
-        });
     }
 
     /** @param eventType String，待核验类型；@return void，非法类型抛出 400。 */

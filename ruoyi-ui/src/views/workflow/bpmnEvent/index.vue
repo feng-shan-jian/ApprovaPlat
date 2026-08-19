@@ -64,20 +64,6 @@
         <pagination v-show="auditTotal > 0" :total="auditTotal" v-model:page="auditQuery.pageNum" v-model:limit="auditQuery.pageSize" @pagination="loadAudit" />
       </el-tab-pane>
 
-      <el-tab-pane label="我的通知" name="notifications">
-        <el-table v-loading="loading.notifications" :data="notifications">
-          <el-table-column label="时间" width="170"><template #default="scope">{{ parseTime(scope.row.createTime) }}</template></el-table-column>
-          <el-table-column label="标题" min-width="220" prop="title" />
-          <el-table-column label="内容" min-width="300" prop="content" show-overflow-tooltip />
-          <el-table-column label="状态" width="90">
-            <template #default="scope"><el-tag :type="scope.row.readStatus === 'READ' ? 'info' : 'warning'">{{ scope.row.readStatus === 'READ' ? '已读' : '未读' }}</el-tag></template>
-          </el-table-column>
-          <el-table-column label="操作" width="88">
-            <template #default="scope"><el-button v-if="scope.row.readStatus === 'UNREAD'" link type="primary" @click="markRead(scope.row)">标为已读</el-button></template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
-
       <el-tab-pane label="业务日历" name="calendars">
         <el-table v-loading="loading.calendars" :data="calendars">
           <el-table-column label="编码" min-width="180"><template #default="scope"><code>{{ scope.row.calendarKey }}</code></template></el-table-column>
@@ -139,20 +125,6 @@
         <pagination v-show="slaAuditTotal > 0" :total="slaAuditTotal" v-model:page="slaAuditQuery.pageNum" v-model:limit="slaAuditQuery.pageSize" @pagination="loadSlaAudit" />
       </el-tab-pane>
 
-      <el-tab-pane label="SLA 通知" name="slaNotifications">
-        <el-table v-loading="loading.slaNotifications" :data="slaNotifications">
-          <el-table-column label="时间" width="170"><template #default="scope">{{ parseTime(scope.row.createTime) }}</template></el-table-column>
-          <el-table-column label="动作" width="110" prop="actionType" />
-          <el-table-column label="标题" min-width="220" prop="title" />
-          <el-table-column label="内容" min-width="300" prop="content" show-overflow-tooltip />
-          <el-table-column label="状态" width="90">
-            <template #default="scope"><el-tag :type="scope.row.readStatus === 'READ' ? 'info' : 'warning'">{{ scope.row.readStatus === 'READ' ? '已读' : '未读' }}</el-tag></template>
-          </el-table-column>
-          <el-table-column label="操作" width="88">
-            <template #default="scope"><el-button v-if="scope.row.readStatus === 'UNREAD'" link type="primary" @click="markSlaRead(scope.row)">标为已读</el-button></template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="dialogOpen" :title="form.eventCodeId ? '编辑事件编码' : '新增事件编码'" width="560px" append-to-body>
@@ -213,18 +185,14 @@ import {
   createBpmnEventCode,
   listBpmnEventAudit,
   listBpmnEventCodes,
-  listMyBpmnEventNotifications,
-  markBpmnEventNotificationRead,
   updateBpmnEventCode
 } from '@/api/workflow/bpmnEvent'
 import {
   changeSlaCalendarStatus,
   createSlaCalendar,
-  listMySlaNotifications,
   listSlaAudits,
   listSlaCalendars,
   listSlaExecutions,
-  markSlaNotificationRead,
   updateSlaCalendar
 } from '@/api/workflow/sla'
 
@@ -233,18 +201,15 @@ const activeTab = ref('codes')
 const loading = reactive({
   codes: false,
   audit: false,
-  notifications: false,
   calendars: false,
   slaExecutions: false,
-  slaAudit: false,
-  slaNotifications: false
+  slaAudit: false
 })
 const saving = ref(false)
 const codes = ref([])
 const auditRows = ref([])
 const auditTotal = ref(0)
 const auditQuery = reactive({ pageNum: 1, pageSize: 20, keyword: '', status: '', eventType: '', sourceType: '', timeRange: [] })
-const notifications = ref([])
 const dialogOpen = ref(false)
 const formRef = ref(null)
 const form = reactive(emptyForm())
@@ -255,7 +220,6 @@ const slaExecutionQuery = reactive({ pageNum: 1, pageSize: 20, keyword: '', stat
 const slaAuditRows = ref([])
 const slaAuditTotal = ref(0)
 const slaAuditQuery = reactive({ pageNum: 1, pageSize: 20, keyword: '', actionType: '', timeRange: [] })
-const slaNotifications = ref([])
 const calendarDialogOpen = ref(false)
 const calendarSaving = ref(false)
 const calendarFormRef = ref(null)
@@ -317,11 +281,9 @@ function emptyCalendarForm() {
 async function loadActiveTab() {
   if (activeTab.value === 'codes') return loadCodes()
   if (activeTab.value === 'audit') return loadAudit()
-  if (activeTab.value === 'notifications') return loadNotifications()
   if (activeTab.value === 'calendars') return loadCalendars()
   if (activeTab.value === 'slaExecutions') return loadSlaExecutions()
-  if (activeTab.value === 'slaAudit') return loadSlaAudit()
-  return loadSlaNotifications()
+  return loadSlaAudit()
 }
 
 /** @returns {Promise<void>} 加载正式编码目录。 */
@@ -340,11 +302,6 @@ async function loadAudit() {
   } finally { loading.audit = false }
 }
 
-/** @returns {Promise<void>} 加载当前用户站内通知。 */
-async function loadNotifications() {
-  loading.notifications = true
-  try { notifications.value = (await listMyBpmnEventNotifications()).data || [] } finally { loading.notifications = false }
-}
 
 /**
  * 从 AjaxResult 或 TableDataInfo 响应中提取正式行集合。
@@ -430,14 +387,6 @@ function resetSlaAuditQuery() {
   loadSlaAudit()
 }
 
-/**
- * 加载当前用户可读的 SLA 提醒与升级通知。
- * @returns {Promise<void>} 请求结束后解除页签加载状态。
- */
-async function loadSlaNotifications() {
-  loading.slaNotifications = true
-  try { slaNotifications.value = responseRows(await listMySlaNotifications()) } finally { loading.slaNotifications = false }
-}
 
 /**
  * 将 ISO 工作周序号转换为稳定中文摘要。
@@ -590,15 +539,6 @@ async function toggleCalendarStatus(row) {
   await loadCalendars()
 }
 
-/**
- * 将当前用户的一条 SLA 通知标记为已读并重新查询。
- * @param {object} row 当前用户可读的通知行。
- * @returns {Promise<void>} 服务端鉴权和更新成功后刷新状态。
- */
-async function markSlaRead(row) {
-  await markSlaNotificationRead(row.notificationId)
-  await loadSlaNotifications()
-}
 
 /** @returns {void} 打开空白新增表单。 */
 function openCreate() {
@@ -640,12 +580,6 @@ async function toggleStatus(row) {
   await proxy.$modal.confirm(`确认${enabled ? '启用' : '停用'}“${row.eventName}”吗？`)
   await changeBpmnEventCodeStatus(row.eventCodeId, enabled)
   await loadCodes()
-}
-
-/** @param {object} row 当前用户通知；@returns {Promise<void>} 服务端鉴权后标记已读。 */
-async function markRead(row) {
-  await markBpmnEventNotificationRead(row.notificationId)
-  await loadNotifications()
 }
 
 onMounted(loadCodes)

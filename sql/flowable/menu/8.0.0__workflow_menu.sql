@@ -26,6 +26,16 @@ FROM sys_role_menu role_menu
 JOIN sys_menu legacy ON legacy.menu_id = role_menu.menu_id
 WHERE legacy.perms IN ('workflow:deploy:status', 'workflow:model:import');
 
+-- 清理已移除的 BPMN/SLA 专用通知权限及其角色关联，统一收件箱仅保留 workflow:notification:list。
+DELETE role_menu
+FROM sys_role_menu role_menu
+JOIN sys_menu legacy ON legacy.menu_id = role_menu.menu_id
+WHERE legacy.perms IN ('workflow:bpmnEvent:notification',
+                       'workflow:sla:notification');
+DELETE FROM sys_menu
+WHERE perms IN ('workflow:bpmnEvent:notification',
+                'workflow:sla:notification');
+
 DELETE FROM sys_menu
 WHERE perms IN ('workflow:deploy:status', 'workflow:model:import');
 
@@ -99,7 +109,7 @@ VALUES
      'list', '流程管理员跨用户实例运维菜单'),
     ('workflow:notification:policyList', 'workflow', '审批通知', 14, 'notification',
      'workflow/notification/index', 'WorkflowNotification', 'C', 'workflow:notification:policyList',
-     'message', '普通审批通知策略、可靠 outbox、死信和补偿管理菜单'),
+     'message', '统一工作流通知策略、可靠 outbox、死信和补偿管理菜单'),
     ('workflow:process:startList', 'office', '新建流程', 1, 'create',
      'workflow/work/index', 'WorkflowCreate', 'C', 'workflow:process:startList',
      'guide', '当前用户可发起流程菜单'),
@@ -210,8 +220,6 @@ VALUES
      'F', 'workflow:bpmnEvent:edit', '#', '维护名称通知策略并启停编码目录'),
     ('workflow:bpmnEvent:audit', 'workflow:bpmnEvent:list', '事件运行审计', 3, '', NULL, '',
      'F', 'workflow:bpmnEvent:audit', '#', '查询 BPMN 错误与升级专用运行审计'),
-    ('workflow:bpmnEvent:notification', 'workflow:bpmnEvent:list', '事件通知查询', 4, '', NULL, '',
-     'F', 'workflow:bpmnEvent:notification', '#', '查询并处理当前用户 BPMN 事件通知'),
     ('workflow:sla:list', 'workflow:bpmnEvent:list', 'SLA 日历查询', 5, '', NULL, '',
      'F', 'workflow:sla:list', '#', '查询审批 SLA 正式业务日历'),
     ('workflow:sla:add', 'workflow:bpmnEvent:list', 'SLA 日历新增', 6, '', NULL, '',
@@ -220,19 +228,17 @@ VALUES
      'F', 'workflow:sla:edit', '#', '修改和启停审批 SLA 业务日历'),
     ('workflow:sla:audit', 'workflow:bpmnEvent:list', 'SLA 运行审计', 8, '', NULL, '',
      'F', 'workflow:sla:audit', '#', '查询审批 SLA 执行状态和不可变审计'),
-    ('workflow:sla:notification', 'workflow:bpmnEvent:list', 'SLA 通知查询', 9, '', NULL, '',
-     'F', 'workflow:sla:notification', '#', '查询并处理当前用户审批 SLA 通知'),
 
     ('workflow:notification:manage', 'workflow:notification:policyList', '通知策略维护', 1, '', NULL, '',
-     'F', 'workflow:notification:manage', '#', '维护流程和节点普通审批通知策略'),
+     'F', 'workflow:notification:manage', '#', '维护流程和节点统一工作流通知策略'),
     ('workflow:notification:audit', 'workflow:notification:policyList', '通知投递审计', 2, '', NULL, '',
-     'F', 'workflow:notification:audit', '#', '查询脱敏普通审批通知 outbox 状态'),
+     'F', 'workflow:notification:audit', '#', '查询脱敏统一工作流通知 outbox 状态'),
     ('workflow:notification:retry', 'workflow:notification:policyList', '通知死信补偿', 3, '', NULL, '',
-     'F', 'workflow:notification:retry', '#', '重新开启普通审批通知死信的有界投递'),
+     'F', 'workflow:notification:retry', '#', '重新开启统一工作流通知死信的有界投递'),
     ('workflow:notification:urge:any', 'workflow:notification:policyList', '跨实例催办', 4, '', NULL, '',
      'F', 'workflow:notification:urge:any', '#', '允许管理员催办任意有权管理的运行流程'),
-    ('workflow:notification:list', 'workflow:process:ownList', '审批通知查询', 20, '', NULL, '',
-     'F', 'workflow:notification:list', '#', '查询当前用户普通审批通知和偏好'),
+    ('workflow:notification:list', 'workflow:process:ownList', '统一工作流通知查询', 20, '', NULL, '',
+     'F', 'workflow:notification:list', '#', '查询当前用户统一工作流通知和偏好'),
     ('workflow:notification:urge', 'workflow:process:ownList', '人工催办', 21, '', NULL, '',
      'F', 'workflow:notification:urge', '#', '由发起人或管理员催办真实活动待办'),
 
@@ -520,9 +526,9 @@ WHERE seed_key IN (
     'workflow:sqlDatasource:list', 'workflow:sqlDatasource:add', 'workflow:sqlDatasource:edit',
     'workflow:dmn:list', 'workflow:dmn:add', 'workflow:dmn:remove',
     'workflow:bpmnEvent:list', 'workflow:bpmnEvent:add', 'workflow:bpmnEvent:edit',
-    'workflow:bpmnEvent:audit', 'workflow:bpmnEvent:notification',
+    'workflow:bpmnEvent:audit',
     'workflow:sla:list', 'workflow:sla:add', 'workflow:sla:edit',
-    'workflow:sla:audit', 'workflow:sla:notification',
+    'workflow:sla:audit',
     'workflow:notification:policyList', 'workflow:notification:manage',
     'workflow:notification:audit'
 );
@@ -541,7 +547,7 @@ WHERE seed_key IN (
     'workflow:process:cancel',
     'workflow:process:ownExport', 'workflow:process:copyExport',
     'workflow:attachment:upload', 'workflow:attachment:query',
-    'workflow:attachment:remove', 'workflow:sla:notification',
+    'workflow:attachment:remove',
     'workflow:notification:list', 'workflow:notification:urge'
 );
 
@@ -558,7 +564,7 @@ WHERE seed_key IN (
     'workflow:process:claimExport', 'workflow:process:revoke',
     'workflow:process:finishedExport', 'workflow:process:copyExport',
     'workflow:attachment:upload', 'workflow:attachment:query',
-    'workflow:attachment:remove', 'workflow:sla:notification',
+    'workflow:attachment:remove',
     'workflow:notification:list'
 );
 
@@ -570,8 +576,8 @@ WHERE seed_key IN (
     'workflow', 'extensions', 'workflow:runtimeEvent:list', 'workflow:collaboration:list',
     'workflow:collaboration:audit',
     'workflow:bpmnEvent:list',
-    'workflow:bpmnEvent:audit', 'workflow:bpmnEvent:notification',
-    'workflow:sla:list', 'workflow:sla:audit', 'workflow:sla:notification',
+    'workflow:bpmnEvent:audit',
+    'workflow:sla:list', 'workflow:sla:audit',
     'office', 'workflow:process:ownList', 'workflow:process:todoList',
     'workflow:process:claimList', 'workflow:process:finishedList',
     'workflow:process:copyList', 'workflow:process:query',

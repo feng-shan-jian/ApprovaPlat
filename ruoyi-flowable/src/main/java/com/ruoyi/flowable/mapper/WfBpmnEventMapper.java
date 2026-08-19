@@ -5,7 +5,6 @@ import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WfBpmnEventCode;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventAuditView;
-import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventNotificationView;
 
 /**
  * BPMN 错误、升级目录及运行审计数据访问层。
@@ -100,15 +99,4 @@ public interface WfBpmnEventMapper
             @Param("query") WorkflowOperationsQuery.BpmnEventAudit query,
             @Param("offset") int offset, @Param("pageSize") int pageSize);
 
-    /** @param userId String，当前用户主键；@return List&lt;WorkflowBpmnEventNotificationView&gt;，最近 200 条通知。 */
-    List<WorkflowBpmnEventNotificationView> selectNotifications(@Param("userId") String userId);
-
-    /**
-     * 标记当前用户通知已读。
-     * @param notificationId Long，通知主键
-     * @param userId String，当前用户主键
-     * @return int，首次标记 1，不存在或越权 0
-     */
-    int markNotificationRead(@Param("notificationId") Long notificationId,
-            @Param("userId") String userId);
 }

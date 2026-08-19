@@ -3,11 +3,12 @@ import request from '@/utils/request'
 /**
  * 查询当前用户审批通知。
  * @param {'ALL'|'UNREAD'|'READ'} readStatus 阅读状态。
- * @param {number} limit 最大返回数量。
- * @returns {Promise<object>} data 含 items 和 unreadCount。
+ * @param {number} pageNum 页码。
+ * @param {number} pageSize 每页数量。
+ * @returns {Promise<object>} data 含 items、total 和 unreadCount。
  */
-export function listWorkflowNotifications(readStatus = 'ALL', limit = 20) {
-  return request({ url: '/workflow/notification/inbox', method: 'get', params: { readStatus, limit } })
+export function listWorkflowNotifications(readStatus = 'ALL', pageNum = 1, pageSize = 20) {
+  return request({ url: '/workflow/notification/inbox', method: 'get', params: { readStatus, pageNum, pageSize } })
 }
 
 /**

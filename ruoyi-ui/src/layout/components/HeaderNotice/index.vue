@@ -29,7 +29,7 @@
             <span>审批通知 <el-badge v-if="workflowUnread" :value="workflowUnread" :max="99" /></span>
           </template>
           <div class="notice-filter">
-            <el-segmented v-model="workflowReadStatus" :options="readOptions" size="small" @change="loadWorkflowNotices" />
+            <el-segmented v-model="workflowReadStatus" :options="readOptions" size="small" @change="resetWorkflowNotices" />
             <el-button text type="primary" :disabled="workflowUnread === 0" @click="markWorkflowAllRead">全部已读</el-button>
           </div>
           <div v-if="noticeLoading" class="notice-state"><el-icon class="is-loading"><Loading /></el-icon>加载中</div>
@@ -51,6 +51,9 @@
               </span>
               <el-icon><ArrowRight /></el-icon>
             </button>
+            <div v-if="workflowHasMore" class="notice-filter notice-filter--end">
+              <el-button text type="primary" :loading="workflowLoadingMore" @click="loadMoreWorkflowNotices">加载更多</el-button>
+            </div>
           </div>
         </el-tab-pane>
 
@@ -138,6 +141,10 @@ const activeTab = ref(canReadWorkflowNotifications.value ? 'workflow' : 'announc
 const workflowReadStatus = ref('ALL')
 const workflowNotices = ref([])
 const workflowUnread = ref(0)
+const workflowPageNum = ref(1)
+const workflowTotal = ref(0)
+const workflowLoadingMore = ref(false)
+const workflowHasMore = computed(() => workflowNotices.value.length < workflowTotal.value)
 const announcements = ref([])
 const announcementUnread = ref(0)
 const preferenceVisible = ref(false)
@@ -162,6 +169,8 @@ function clearWorkflowNoticeState() {
   refreshSequence += 1
   workflowNotices.value = []
   workflowUnread.value = 0
+  workflowPageNum.value = 1
+  workflowTotal.value = 0
 }
 
 /**
@@ -174,10 +183,42 @@ async function loadWorkflowNotices() {
     return
   }
   const sequence = ++refreshSequence
-  const response = await listWorkflowNotifications(workflowReadStatus.value, 30)
+  const response = await listWorkflowNotifications(workflowReadStatus.value, workflowPageNum.value, 30)
   if (sequence !== refreshSequence || !canReadWorkflowNotifications.value) return
-  workflowNotices.value = response.data?.items || []
-  workflowUnread.value = Number(response.data?.unreadCount || 0)
+  const data = response.data || {}
+  workflowNotices.value = workflowPageNum.value === 1
+    ? (data.items || [])
+    : [...workflowNotices.value, ...(data.items || [])]
+  workflowTotal.value = Number(data.total || 0)
+  workflowUnread.value = Number(data.unreadCount || 0)
+}
+
+/**
+ * 切换阅读状态后从第一页重新读取，避免不同筛选条件的记录混在一起。
+ * @returns {Promise<void>} 当前筛选条件第一页加载结果。
+ */
+async function resetWorkflowNotices() {
+  workflowPageNum.value = 1
+  workflowTotal.value = 0
+  await loadWorkflowNotices()
+}
+
+/**
+ * 追加下一页统一收件箱记录，服务端返回的 total 决定是否继续请求。
+ * @returns {Promise<void>} 下一页加载完成后的列表状态。
+ */
+async function loadMoreWorkflowNotices() {
+  if (!workflowHasMore.value || workflowLoadingMore.value) return
+  workflowLoadingMore.value = true
+  workflowPageNum.value += 1
+  try {
+    await loadWorkflowNotices()
+  } catch (error) {
+    workflowPageNum.value -= 1
+    throw error
+  } finally {
+    workflowLoadingMore.value = false
+  }
 }
 
 /**
@@ -197,6 +238,8 @@ async function loadAnnouncements() {
 async function refreshAll() {
   noticeLoading.value = true
   try {
+    workflowPageNum.value = 1
+    workflowTotal.value = 0
     // 公告对所有已登录用户保持原行为，审批通知请求则按权限动态加入刷新任务。
     const refreshTasks = [loadAnnouncements()]
     if (canReadWorkflowNotifications.value) {
@@ -248,6 +291,7 @@ async function markWorkflowAllRead() {
   if (!canReadWorkflowNotifications.value) return
   await markAllWorkflowNotificationsRead()
   workflowUnread.value = 0
+  workflowPageNum.value = 1
   await loadWorkflowNotices()
 }
 

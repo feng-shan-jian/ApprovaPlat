@@ -248,31 +248,6 @@
         limit #{pageSize} offset #{offset}
     </select>
 
-    <select id="selectNotifications" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView">
-        select n.notification_id as notificationId, a.audit_id as auditId,
-               e.process_instance_id as processInstanceId, e.task_id as taskId,
-               o.event_type as actionType, n.title, n.content,
-               n.read_status as readStatus, n.create_time as createTime,
-               n.read_time as readTime
-        from wf_notification_inbox n
-        join wf_notification_outbox o
-          on o.outbox_id = n.outbox_id and o.source_type = 'SLA'
-        join wf_task_sla_audit a on o.source_id = cast(a.audit_id as char)
-        join wf_task_sla_execution e on e.sla_execution_id = a.sla_execution_id
-        where n.recipient_user_id = cast(#{userId} as unsigned)
-        order by n.notification_id desc limit 200
-    </select>
-
-    <update id="markNotificationRead">
-        update wf_notification_inbox n
-        join wf_notification_outbox o
-          on o.outbox_id = n.outbox_id and o.source_type = 'SLA'
-        set n.read_status = 'READ', n.read_time = current_timestamp(3)
-        where n.notification_id = #{notificationId}
-          and n.recipient_user_id = cast(#{userId} as unsigned)
-          and n.read_status = 'UNREAD'
-    </update>
-
     <sql id="ExecutionListFilters">
         <where>
             <if test="query.status != null and query.status != ''">and status = #{query.status}</if>

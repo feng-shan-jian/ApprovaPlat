@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 普通审批通知 worker、重试、催办频控和邮件发件身份配置。
+ * 统一工作流通知 worker、重试、催办频控和邮件发件身份配置。
  */
 @Component
 @ConfigurationProperties(prefix = "flowable.notification")
