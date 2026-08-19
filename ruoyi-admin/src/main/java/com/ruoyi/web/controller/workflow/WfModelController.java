@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.annotation.RepeatSubmit;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
@@ -41,7 +42,6 @@ import com.ruoyi.flowable.domain.dto.WorkflowBpmnValidationRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowModelExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowModelSaveResult;
 import com.ruoyi.flowable.domain.vo.WorkflowModelView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.IWfCategoryService;
 import com.ruoyi.flowable.service.model.WorkflowModelService;
 
@@ -92,7 +92,7 @@ public class WfModelController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(modelService.list(filter, pageNum, pageSize));
+        return getDataTable(modelService.list(filter, pageNum, pageSize));
     }
 
     /**
@@ -110,7 +110,7 @@ public class WfModelController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(modelService.historyList(filter, pageNum, pageSize));
+        return getDataTable(modelService.historyList(filter, pageNum, pageSize));
     }
 
     /**
@@ -279,18 +279,11 @@ public class WfModelController extends BaseController
     /**
      * 把领域分页结果转换为若依稳定分页协议。
      *
-     * @param page WorkflowPageResult&lt;?&gt;，Flowable 原生 count/listPage 查询结果
+     * @param page PageResult&lt;?&gt;，Flowable 原生 count/listPage 查询结果
      * @return TableDataInfo，若依前端可直接消费的分页响应
      */
-    private TableDataInfo toTableData(WorkflowPageResult<?> page)
-    {
-        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
-    }
 
-    /**
+/**
      * 在确认总量不超过门禁后，按 Flowable 服务上限分批读取全部导出行。
      *
      * @param filter WorkflowModelDto，模型查询条件
@@ -298,7 +291,7 @@ public class WfModelController extends BaseController
      */
     private List<WorkflowModelView> loadModelsForExport(WorkflowModelDto filter)
     {
-        WorkflowPageResult<WorkflowModelView> firstPage = modelService.list(filter, 1, MAX_PAGE_SIZE);
+        PageResult<WorkflowModelView> firstPage = modelService.list(filter, 1, MAX_PAGE_SIZE);
         if (firstPage.total() > MAX_EXPORT_ROWS)
         {
             throw new ServiceException("模型导出数据不能超过5000条，请缩小查询范围",

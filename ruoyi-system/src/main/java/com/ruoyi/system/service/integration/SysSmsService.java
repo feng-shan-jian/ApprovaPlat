@@ -34,7 +34,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.common.core.page.TableDataInfo;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.system.domain.integration.SmsConfigRequest;
 import com.ruoyi.system.domain.integration.SmsSendRequest;
@@ -244,10 +244,10 @@ public class SysSmsService
      *
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return TableDataInfo，包含当前页脱敏投递审计和总记录数
+     * @return PageResult&lt;Map&lt;String, Object&gt;&gt;，包含当前页脱敏投递审计和总记录数
      */
     @Transactional(readOnly = true)
-    public TableDataInfo listLogs(int pageNum, int pageSize)
+    public PageResult<Map<String, Object>> listLogs(int pageNum, int pageSize)
     {
         long total = jdbcTemplate.queryForObject(
                 "select count(*) from sys_sms_log", Long.class);
@@ -259,10 +259,7 @@ public class SysSmsService
                 "error_summary as errorSummary,create_by as createBy,create_time as createTime," +
                 "finish_time as finishTime from sys_sms_log order by log_id desc limit ? offset ?",
                 pageSize, offset);
-        TableDataInfo result = new TableDataInfo(rows, total);
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
+        return new PageResult<>(rows, total);
     }
 
     /**

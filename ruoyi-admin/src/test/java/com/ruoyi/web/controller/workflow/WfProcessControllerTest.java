@@ -33,6 +33,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.http.MediaType;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowAssignedTaskQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnXmlQueryDto;
@@ -52,7 +53,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowCopyView;
 import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessView;
 import com.ruoyi.flowable.domain.vo.WorkflowOwnedProcessView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessViewerView;
@@ -114,21 +114,21 @@ class WfProcessControllerTest
     {
         WorkflowStartableDefinitionView definition = definitionRow();
         when(processQueryService.listStartable(any(WorkflowStartableProcessQueryDto.class),
-                eq(2), eq(20))).thenReturn(new WorkflowPageResult<>(List.of(definition), 7));
+                eq(2), eq(20))).thenReturn(new PageResult<>(List.of(definition), 7));
         when(processQueryService.listOwned(any(WorkflowOwnedProcessQueryDto.class),
-                eq(3), eq(25))).thenReturn(new WorkflowPageResult<WorkflowOwnedProcessView>(
+                eq(3), eq(25))).thenReturn(new PageResult<WorkflowOwnedProcessView>(
                         List.of(), 0));
         when(processQueryService.listAssigned(any(WorkflowAssignedTaskQueryDto.class),
-                eq(4), eq(30))).thenReturn(new WorkflowPageResult<WorkflowAssignedTaskView>(
+                eq(4), eq(30))).thenReturn(new PageResult<WorkflowAssignedTaskView>(
                         List.of(), 0));
         when(processQueryService.listClaimable(any(WorkflowClaimableTaskQueryDto.class),
-                eq(5), eq(35))).thenReturn(new WorkflowPageResult<WorkflowClaimableTaskView>(
+                eq(5), eq(35))).thenReturn(new PageResult<WorkflowClaimableTaskView>(
                         List.of(), 0));
         when(processQueryService.listCompleted(any(WorkflowCompletedTaskQueryDto.class),
-                eq(6), eq(40))).thenReturn(new WorkflowPageResult<WorkflowCompletedTaskView>(
+                eq(6), eq(40))).thenReturn(new PageResult<WorkflowCompletedTaskView>(
                         List.of(), 0));
         when(processQueryService.listCopies(any(WorkflowCopyQueryDto.class),
-                eq(7), eq(45))).thenReturn(new WorkflowPageResult<WorkflowCopyView>(
+                eq(7), eq(45))).thenReturn(new PageResult<WorkflowCopyView>(
                         List.of(), 0));
 
         mockMvc.perform(get("/workflow/process/list")
@@ -232,7 +232,7 @@ class WfProcessControllerTest
                 Instant.parse("2026-07-25T08:00:00Z"),
                 Instant.parse("2026-07-26T08:00:00Z"));
         when(processQueryService.listManaged(filter, 8, 50)).thenReturn(
-                new WorkflowPageResult<>(List.of(managedRow()), 12));
+                new PageResult<>(List.of(managedRow()), 12));
 
         mockMvc.perform(get("/workflow/process/manageList")
                         .param("processInstanceId", "instance-9")
@@ -478,9 +478,9 @@ class WfProcessControllerTest
                 new WorkflowStartableProcessQueryDto("leave", "请假", "hr");
         WorkflowStartableDefinitionView row = definitionRow();
         when(processQueryService.listStartable(filter, 1, 200)).thenReturn(
-                new WorkflowPageResult<>(Collections.nCopies(200, row), 201));
+                new PageResult<>(Collections.nCopies(200, row), 201));
         when(processQueryService.listStartable(filter, 2, 200)).thenReturn(
-                new WorkflowPageResult<>(List.of(row), 201));
+                new PageResult<>(List.of(row), 201));
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         controller.startExport(filter, response);
@@ -512,7 +512,7 @@ class WfProcessControllerTest
                 Instant.parse("2026-07-25T08:00:00Z"),
                 Instant.parse("2026-07-26T08:00:00Z"));
         when(processQueryService.listManaged(filter, 1, 200)).thenReturn(
-                new WorkflowPageResult<>(List.of(managedRow()), 1));
+                new PageResult<>(List.of(managedRow()), 1));
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         controller.managedExport(filter, response);
@@ -538,7 +538,7 @@ class WfProcessControllerTest
         WorkflowCopyQueryDto filter = new WorkflowCopyQueryDto(
                 null, null, null, null, null, null, null, null);
         when(processQueryService.listCopies(filter, 1, 200)).thenReturn(
-                new WorkflowPageResult<>(List.of(), 10_001));
+                new PageResult<>(List.of(), 10_001));
 
         assertThatThrownBy(() -> controller.copyExport(filter, new MockHttpServletResponse()))
                 .isInstanceOfSatisfying(ServiceException.class,
@@ -558,9 +558,9 @@ class WfProcessControllerTest
                 new WorkflowStartableProcessQueryDto("leave", null, null);
         WorkflowStartableDefinitionView row = definitionRow();
         when(processQueryService.listStartable(filter, 1, 200)).thenReturn(
-                new WorkflowPageResult<>(Collections.nCopies(200, row), 201));
+                new PageResult<>(Collections.nCopies(200, row), 201));
         when(processQueryService.listStartable(filter, 2, 200)).thenReturn(
-                new WorkflowPageResult<>(List.of(row), 202));
+                new PageResult<>(List.of(row), 202));
 
         assertThatThrownBy(() -> controller.startExport(filter, new MockHttpServletResponse()))
                 .isInstanceOfSatisfying(ServiceException.class,

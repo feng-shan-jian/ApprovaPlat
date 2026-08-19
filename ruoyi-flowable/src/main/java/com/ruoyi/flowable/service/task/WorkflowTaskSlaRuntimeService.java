@@ -22,13 +22,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployTaskSla;
 import com.ruoyi.flowable.domain.WfTaskSlaExecution;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
@@ -368,9 +368,9 @@ public class WorkflowTaskSlaRuntimeService
      * @param query SlaExecution，状态、关键字和开始时间范围
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数，最大 100
-     * @return WorkflowPageResult&lt;WorkflowTaskSlaExecutionView&gt;，当前页和符合条件的总数
+     * @return PageResult&lt;WorkflowTaskSlaExecutionView&gt;，当前页和符合条件的总数
      */
-    public WorkflowPageResult<WorkflowTaskSlaExecutionView> listExecutions(
+    public PageResult<WorkflowTaskSlaExecutionView> listExecutions(
             WorkflowOperationsQuery.SlaExecution query, int pageNum, int pageSize)
     {
         WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());
@@ -384,9 +384,9 @@ public class WorkflowTaskSlaRuntimeService
      * @param query SlaAudit，动作、关键字和动作时间范围
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数，最大 100
-     * @return WorkflowPageResult&lt;WorkflowTaskSlaAuditView&gt;，当前页和符合条件的总数
+     * @return PageResult&lt;WorkflowTaskSlaAuditView&gt;，当前页和符合条件的总数
      */
-    public WorkflowPageResult<WorkflowTaskSlaAuditView> listAudits(
+    public PageResult<WorkflowTaskSlaAuditView> listAudits(
             WorkflowOperationsQuery.SlaAudit query, int pageNum, int pageSize)
     {
         WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());

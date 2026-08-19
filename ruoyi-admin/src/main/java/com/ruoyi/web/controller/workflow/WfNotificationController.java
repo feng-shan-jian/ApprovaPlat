@@ -22,13 +22,11 @@ import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
-import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.flowable.domain.dto.WorkflowManualUrgeRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowNotificationPolicyRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowNotificationPreferenceRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.notification.WorkflowManualUrgeService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationAdminService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationInboxService;
@@ -203,7 +201,7 @@ public class WfNotificationController extends BaseController
             @RequestParam(required = false)
             @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return toTableData(notificationAdminService.listOutbox(
+        return getDataTable(notificationAdminService.listOutbox(
                 new WorkflowOperationsQuery.NotificationOutbox(status, sourceType, eventType,
                         channel, keyword, beginTime, endTime), pageNum, pageSize));
     }
@@ -220,18 +218,5 @@ public class WfNotificationController extends BaseController
     {
         notificationOutboxService.compensate(outboxId);
         return success();
-    }
-
-    /**
-     * 将领域分页结果转换为若依标准列表响应。
-     * @param page WorkflowPageResult&lt;?&gt;，服务层当前页和总数
-     * @return TableDataInfo，包含 code、msg、rows 和 total
-     */
-    private TableDataInfo toTableData(WorkflowPageResult<?> page)
-    {
-        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
     }
 }

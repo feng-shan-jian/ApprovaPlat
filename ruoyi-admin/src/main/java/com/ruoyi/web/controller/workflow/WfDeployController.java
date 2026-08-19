@@ -17,13 +17,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.annotation.RepeatSubmit;
-import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.flowable.domain.dto.WorkflowDeploymentQueryDto;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 
 /**
@@ -65,7 +63,7 @@ public class WfDeployController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(deploymentService.listLatest(filter, pageNum, pageSize));
+        return getDataTable(deploymentService.listLatest(filter, pageNum, pageSize));
     }
 
     /**
@@ -84,7 +82,7 @@ public class WfDeployController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(deploymentService.publishList(processKey, pageNum, pageSize));
+        return getDataTable(deploymentService.publishList(processKey, pageNum, pageSize));
     }
 
     /**
@@ -138,17 +136,4 @@ public class WfDeployController extends BaseController
         return success();
     }
 
-    /**
-     * 把领域分页结果转换为若依稳定分页协议。
-     *
-     * @param page WorkflowPageResult&lt;?&gt;，Flowable 原生 count/listPage 查询结果
-     * @return TableDataInfo，若依前端可直接消费的分页响应
-     */
-    private TableDataInfo toTableData(WorkflowPageResult<?> page)
-    {
-        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
-    }
 }

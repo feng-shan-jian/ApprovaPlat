@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.LongSupplier;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 
 /**
  * 工作流运维查询的统一页边界和总数装配支持。
@@ -28,18 +28,18 @@ public final class WorkflowPageSupport
      * @param countSupplier LongSupplier，按相同筛选条件统计总数
      * @param rowLoader BiFunction&lt;Integer, Integer, List&lt;T&gt;&gt;，按 offset、pageSize 读取当前页
      * @param <T> 当前页业务视图类型
-     * @return WorkflowPageResult&lt;T&gt;，包含当前页 rows 和筛选后 total
+     * @return PageResult&lt;T&gt;，包含当前页 rows 和筛选后 total
      */
-    public static <T> WorkflowPageResult<T> query(int pageNum, int pageSize,
+    public static <T> PageResult<T> query(int pageNum, int pageSize,
             LongSupplier countSupplier, BiFunction<Integer, Integer, List<T>> rowLoader)
     {
         PageWindow page = requirePage(pageNum, pageSize);
         long total = countSupplier.getAsLong();
         if (total == 0 || page.offset() >= total)
         {
-            return new WorkflowPageResult<>(List.of(), total);
+            return new PageResult<>(List.of(), total);
         }
-        return new WorkflowPageResult<>(rowLoader.apply(page.offset(), page.pageSize()), total);
+        return new PageResult<>(rowLoader.apply(page.offset(), page.pageSize()), total);
     }
 
     /**

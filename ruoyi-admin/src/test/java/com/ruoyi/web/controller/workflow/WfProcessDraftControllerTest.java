@@ -22,11 +22,11 @@ import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftCreateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.process.WorkflowProcessDraftService;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -85,7 +85,7 @@ class WfProcessDraftControllerTest
     void bindsDraftHttpProtocol() throws Exception
     {
         when(draftService.list(any(), eq(2), eq(20)))
-                .thenReturn(new WorkflowPageResult<>(List.of(), 0));
+                .thenReturn(new PageResult<>(List.of(), 0));
         mockMvc.perform(get("/workflow/process/draft/list")
                         .param("processName", "采购").param("pageNum", "2")
                         .param("pageSize", "20"))

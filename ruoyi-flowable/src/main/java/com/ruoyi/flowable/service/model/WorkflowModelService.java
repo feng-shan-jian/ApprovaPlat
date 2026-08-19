@@ -39,6 +39,7 @@ import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCategory;
 import com.ruoyi.flowable.domain.WfDeployCallActivitySnapshot;
@@ -51,7 +52,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationReport;
 import com.ruoyi.flowable.domain.vo.WorkflowModelView;
 import com.ruoyi.flowable.domain.vo.WorkflowModelSaveResult;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfCategoryMapper;
@@ -213,9 +213,9 @@ public class WorkflowModelService
      * @param filter WorkflowModelDto，模型 key、名称和分类查询条件，允许为空
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowModelView&gt;，最新模型分页结果
+     * @return PageResult&lt;WorkflowModelView&gt;，最新模型分页结果
      */
-    public WorkflowPageResult<WorkflowModelView> list(WorkflowModelDto filter, int pageNum, int pageSize)
+    public PageResult<WorkflowModelView> list(WorkflowModelDto filter, int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
         return engineOperations.read(() ->
@@ -224,12 +224,12 @@ public class WorkflowModelService
             long total = query.count();
             if (total == 0)
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             List<WorkflowModelView> rows = query.listPage(page.offset(), page.pageSize()).stream()
                     .map(model -> toView(model, null, null))
                     .toList();
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
     }
 
@@ -239,9 +239,9 @@ public class WorkflowModelService
      * @param filter WorkflowModelDto，必须包含模型 key，可附带名称和分类条件
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowModelView&gt;，旧版本模型分页结果
+     * @return PageResult&lt;WorkflowModelView&gt;，旧版本模型分页结果
      */
-    public WorkflowPageResult<WorkflowModelView> historyList(WorkflowModelDto filter,
+    public PageResult<WorkflowModelView> historyList(WorkflowModelDto filter,
             int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
@@ -254,14 +254,14 @@ public class WorkflowModelService
             long historyTotal = Math.max(0, versionCount - 1);
             if (historyTotal == 0 || page.offset() >= historyTotal)
             {
-                return new WorkflowPageResult<>(List.of(), historyTotal);
+                return new PageResult<>(List.of(), historyTotal);
             }
 
             // 排序后的第 0 条是最新版本，历史分页必须整体向后偏移一条。
             List<WorkflowModelView> rows = query.listPage(page.offset() + 1, page.pageSize()).stream()
                     .map(model -> toView(model, null, null))
                     .toList();
-            return new WorkflowPageResult<>(rows, historyTotal);
+            return new PageResult<>(rows, historyTotal);
         });
     }
 

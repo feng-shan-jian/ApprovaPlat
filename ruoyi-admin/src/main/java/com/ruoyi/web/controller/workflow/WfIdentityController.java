@@ -14,12 +14,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
-import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.flowable.domain.dto.WorkflowIdentitySelectionRequest;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.identity.WorkflowIdentityDirectoryService;
 
 /**
@@ -80,12 +78,8 @@ public class WfIdentityController extends BaseController
                     message = "每页记录数不能超过200")
             int pageSize)
     {
-        WorkflowPageResult<?> page = identityDirectoryService.listOptions(
-                type, keyword, pageNum, pageSize, capability);
-        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
+        return getDataTable(identityDirectoryService.listOptions(
+                type, keyword, pageNum, pageSize, capability));
     }
 
     /**

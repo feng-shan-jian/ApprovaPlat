@@ -19,12 +19,12 @@ import org.flowable.eventsubscription.api.EventSubscription;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfRuntimeEventRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.dto.WorkflowRuntimeEventRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowRuntimeEventView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
 import com.ruoyi.flowable.mapper.WfRuntimeEventRequestMapper;
@@ -76,9 +76,9 @@ public class WorkflowRuntimeEventService
      * @param query RuntimeEvent，状态、事件类型、关联类型、关键字和时间范围
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数，最大 100
-     * @return WorkflowPageResult&lt;WorkflowRuntimeEventView&gt;，不含 Token 和变量正文
+     * @return PageResult&lt;WorkflowRuntimeEventView&gt;，不含 Token 和变量正文
      */
-    public WorkflowPageResult<WorkflowRuntimeEventView> list(
+    public PageResult<WorkflowRuntimeEventView> list(
             WorkflowOperationsQuery.RuntimeEvent query, int pageNum, int pageSize)
     {
         WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());

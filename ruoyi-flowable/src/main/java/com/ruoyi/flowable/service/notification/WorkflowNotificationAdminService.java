@@ -8,9 +8,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.support.WorkflowPageSupport;
 
 /**
@@ -41,10 +41,10 @@ public class WorkflowNotificationAdminService
      * @param query WorkflowOperationsQuery.NotificationOutbox，状态、来源、事件、通道、时间和关键字筛选
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数，最大 100
-     * @return WorkflowPageResult&lt;Map&lt;String,Object&gt;&gt;，当前页记录和筛选后总数
+     * @return PageResult&lt;Map&lt;String,Object&gt;&gt;，当前页记录和筛选后总数
      */
     @Transactional(readOnly = true)
-    public WorkflowPageResult<Map<String, Object>> listOutbox(
+    public PageResult<Map<String, Object>> listOutbox(
             WorkflowOperationsQuery.NotificationOutbox query, int pageNum, int pageSize)
     {
         WorkflowOperationsQuery.NotificationOutbox normalized = query == null

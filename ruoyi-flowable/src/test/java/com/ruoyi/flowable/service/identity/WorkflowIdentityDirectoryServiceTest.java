@@ -11,10 +11,10 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentityOptionView;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentitySelectionView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 
 /**
@@ -52,7 +52,7 @@ class WorkflowIdentityDirectoryServiceTest
         when(identityMapper.selectActiveIdentityOptions("user", "张三", 20L, 20))
                 .thenReturn(List.of(option));
 
-        WorkflowPageResult<WorkflowIdentityOptionView> page = service.listOptions(
+        PageResult<WorkflowIdentityOptionView> page = service.listOptions(
                 " USER ", "  张三  ", 2, 20);
 
         assertThat(page.total()).isEqualTo(21L);
@@ -75,7 +75,7 @@ class WorkflowIdentityDirectoryServiceTest
         when(identityMapper.selectApprovalEligibleUserOptions("张三", 0L, 20))
                 .thenReturn(List.of(option));
 
-        WorkflowPageResult<WorkflowIdentityOptionView> page = service.listOptions(
+        PageResult<WorkflowIdentityOptionView> page = service.listOptions(
                 "user", " 张三 ", 1, 20,
                 WorkflowIdentityDirectoryService.APPROVAL_CAPABILITY);
 
@@ -100,7 +100,7 @@ class WorkflowIdentityDirectoryServiceTest
         when(identityMapper.selectClaimEligibleIdentityOptions(
                 "role", "财务", 0L, 20)).thenReturn(List.of(option));
 
-        WorkflowPageResult<WorkflowIdentityOptionView> page = service.listOptions(
+        PageResult<WorkflowIdentityOptionView> page = service.listOptions(
                 "role", " 财务 ", 1, 20,
                 WorkflowIdentityDirectoryService.CLAIM_CAPABILITY);
 
@@ -121,7 +121,7 @@ class WorkflowIdentityDirectoryServiceTest
     {
         when(identityMapper.countActiveIdentityOptions("role", null)).thenReturn(0L);
 
-        WorkflowPageResult<WorkflowIdentityOptionView> page = service.listOptions(
+        PageResult<WorkflowIdentityOptionView> page = service.listOptions(
                 "role", "  ", 1, 50);
 
         assertThat(page.total()).isZero();

@@ -151,7 +151,7 @@ public class SysOssController extends BaseController
             @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = 100, message = "每页记录数不能超过100") int pageSize)
     {
-        return ossService.listObjects(pageNum, pageSize);
+        return getDataTable(ossService.listObjects(pageNum, pageSize));
     }
 
     /**

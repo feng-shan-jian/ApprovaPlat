@@ -3,13 +3,13 @@ package com.ruoyi.flowable.service.model;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfBpmnEventCode;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnEventCodeRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventAuditView;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventNotificationView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
 import com.ruoyi.flowable.service.support.WorkflowPageSupport;
@@ -171,9 +171,9 @@ public class WorkflowBpmnEventCodeService
      * @param query BpmnEventAudit，状态、类型、来源、关键字和时间范围
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数，最大 100
-     * @return WorkflowPageResult&lt;WorkflowBpmnEventAuditView&gt;，当前页和符合条件的总数
+     * @return PageResult&lt;WorkflowBpmnEventAuditView&gt;，当前页和符合条件的总数
      */
-    public WorkflowPageResult<WorkflowBpmnEventAuditView> listAudit(
+    public PageResult<WorkflowBpmnEventAuditView> listAudit(
             WorkflowOperationsQuery.BpmnEventAudit query, int pageNum, int pageSize)
     {
         WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());

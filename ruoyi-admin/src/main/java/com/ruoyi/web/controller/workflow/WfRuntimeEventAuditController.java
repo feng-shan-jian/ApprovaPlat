@@ -12,11 +12,9 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.process.WorkflowRuntimeEventService;
 
 /**
@@ -63,20 +61,7 @@ public class WfRuntimeEventAuditController extends BaseController
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return toTableData(runtimeEventService.list(new WorkflowOperationsQuery.RuntimeEvent(
+        return getDataTable(runtimeEventService.list(new WorkflowOperationsQuery.RuntimeEvent(
                 status, eventType, sourceType, keyword, beginTime, endTime), pageNum, pageSize));
-    }
-
-    /**
-     * 将领域分页结果转换为若依标准列表响应。
-     * @param page WorkflowPageResult&lt;?&gt;，服务层当前页和总数
-     * @return TableDataInfo，包含 code、msg、rows 和 total
-     */
-    private TableDataInfo toTableData(WorkflowPageResult<?> page)
-    {
-        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
     }
 }

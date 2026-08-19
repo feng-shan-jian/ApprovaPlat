@@ -16,12 +16,12 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.config.WorkflowCollaborationProperties;
 import com.ruoyi.flowable.domain.WfCollaborationOutbox;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowCollaborationOutboxView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
 import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
@@ -288,9 +288,9 @@ public class WorkflowCollaborationOutboxService
      * @param query Collaboration，状态、关键字和创建时间范围
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数，最大 100
-     * @return WorkflowPageResult&lt;WorkflowCollaborationOutboxView&gt;，不含变量和端点认证字段
+     * @return PageResult&lt;WorkflowCollaborationOutboxView&gt;，不含变量和端点认证字段
      */
-    public WorkflowPageResult<WorkflowCollaborationOutboxView> list(
+    public PageResult<WorkflowCollaborationOutboxView> list(
             WorkflowOperationsQuery.Collaboration query, int pageNum, int pageSize)
     {
         WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());

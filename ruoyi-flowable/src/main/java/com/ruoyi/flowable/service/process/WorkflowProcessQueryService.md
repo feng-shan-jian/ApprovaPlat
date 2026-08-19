@@ -24,7 +24,7 @@
 Controller 注入该服务，并把查询参数转换为对应动作 DTO：
 
 ```java
-WorkflowPageResult<WorkflowAssignedTaskView> page = processQueryService.listAssigned(
+PageResult<WorkflowAssignedTaskView> page = processQueryService.listAssigned(
         new WorkflowAssignedTaskQueryDto(processKey, processName, category,
                 taskName, createdAfter, createdBefore),
         pageNum,

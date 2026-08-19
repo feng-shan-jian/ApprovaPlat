@@ -10,10 +10,10 @@ import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentityOptionView;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentitySelectionView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.identity.WorkflowIdentityOptionType;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 
@@ -61,9 +61,9 @@ public class WorkflowIdentityDirectoryService
      * @param keyword String，可为空的名称、账号或编码检索词
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数，上限 200
-     * @return WorkflowPageResult&lt;WorkflowIdentityOptionView&gt;，最小身份分页结果
+     * @return PageResult&lt;WorkflowIdentityOptionView&gt;，最小身份分页结果
      */
-    public WorkflowPageResult<WorkflowIdentityOptionView> listOptions(String typeValue,
+    public PageResult<WorkflowIdentityOptionView> listOptions(String typeValue,
             String keyword, int pageNum, int pageSize)
     {
         return listOptions(typeValue, keyword, pageNum, pageSize, null);
@@ -78,9 +78,9 @@ public class WorkflowIdentityDirectoryService
      * @param pageSize int，单页记录数，上限 200
      * @param capability String，可为空；approval 查询直接办理用户，claim 查询候选用户或候选组，
      *        copy 查询具备抄送列表和流程详情权限的用户、角色或部门
-     * @return WorkflowPageResult&lt;WorkflowIdentityOptionView&gt;，最小身份分页结果
+     * @return PageResult&lt;WorkflowIdentityOptionView&gt;，最小身份分页结果
      */
-    public WorkflowPageResult<WorkflowIdentityOptionView> listOptions(String typeValue,
+    public PageResult<WorkflowIdentityOptionView> listOptions(String typeValue,
             String keyword, int pageNum, int pageSize, String capability)
     {
         validatePagination(pageNum, pageSize);
@@ -108,7 +108,7 @@ public class WorkflowIdentityDirectoryService
         }
         if (total == 0L)
         {
-            return new WorkflowPageResult<>(List.of(), 0L);
+            return new PageResult<>(List.of(), 0L);
         }
 
         // 使用 long 计算偏移量，避免较大合法页码在进入 MySQL 前发生 int 溢出。
@@ -138,7 +138,7 @@ public class WorkflowIdentityDirectoryService
         {
             throw new ServiceException("工作流身份主数据查询结果异常", HttpStatus.ERROR);
         }
-        return new WorkflowPageResult<>(rows, total);
+        return new PageResult<>(rows, total);
     }
 
     /**

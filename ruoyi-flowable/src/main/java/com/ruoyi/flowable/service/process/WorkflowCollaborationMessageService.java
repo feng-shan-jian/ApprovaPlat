@@ -21,12 +21,12 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCollaborationMessage;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.dto.WorkflowCollaborationMessageRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowCollaborationMessageView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfCollaborationMessageMapper;
 import com.ruoyi.flowable.service.support.WorkflowPageSupport;
@@ -119,9 +119,9 @@ public class WorkflowCollaborationMessageService
      * @param query Collaboration，状态、关键字和创建时间范围
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数，最大 100
-     * @return WorkflowPageResult&lt;WorkflowCollaborationMessageView&gt;，不含变量正文和 Token
+     * @return PageResult&lt;WorkflowCollaborationMessageView&gt;，不含变量正文和 Token
      */
-    public WorkflowPageResult<WorkflowCollaborationMessageView> list(
+    public PageResult<WorkflowCollaborationMessageView> list(
             WorkflowOperationsQuery.Collaboration query, int pageNum, int pageSize)
     {
         WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());

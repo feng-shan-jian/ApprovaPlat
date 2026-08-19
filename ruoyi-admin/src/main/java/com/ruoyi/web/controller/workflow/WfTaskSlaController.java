@@ -20,7 +20,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.annotation.RepeatSubmit;
-import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
@@ -28,7 +27,6 @@ import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.flowable.domain.dto.WorkflowBusinessCalendarRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowEnabledStatusRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 
@@ -139,7 +137,7 @@ public class WfTaskSlaController extends BaseController
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return toTableData(slaRuntimeService.listExecutions(new WorkflowOperationsQuery.SlaExecution(
+        return getDataTable(slaRuntimeService.listExecutions(new WorkflowOperationsQuery.SlaExecution(
                 status, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
@@ -164,7 +162,7 @@ public class WfTaskSlaController extends BaseController
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return toTableData(slaRuntimeService.listAudits(new WorkflowOperationsQuery.SlaAudit(
+        return getDataTable(slaRuntimeService.listAudits(new WorkflowOperationsQuery.SlaAudit(
                 actionType, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
@@ -188,18 +186,5 @@ public class WfTaskSlaController extends BaseController
     {
         slaRuntimeService.markNotificationRead(notificationId);
         return success();
-    }
-
-    /**
-     * 将领域分页结果转换为若依标准列表响应。
-     * @param page WorkflowPageResult&lt;?&gt;，服务层当前页和总数
-     * @return TableDataInfo，包含 code、msg、rows 和 total
-     */
-    private TableDataInfo toTableData(WorkflowPageResult<?> page)
-    {
-        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
     }
 }

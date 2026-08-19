@@ -39,7 +39,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.common.core.page.TableDataInfo;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.system.domain.integration.OssConfigRequest;
 
@@ -286,10 +286,10 @@ public class SysOssService
      *
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return TableDataInfo，包含当前页对象元数据和总记录数
+     * @return PageResult&lt;Map&lt;String, Object&gt;&gt;，包含当前页对象元数据和总记录数
      */
     @Transactional(readOnly = true)
-    public TableDataInfo listObjects(int pageNum, int pageSize)
+    public PageResult<Map<String, Object>> listObjects(int pageNum, int pageSize)
     {
         long total = jdbcTemplate.queryForObject(
                 "select count(*) from sys_oss_object", Long.class);
@@ -301,10 +301,7 @@ public class SysOssService
                 "status,last_error as lastError,create_by as createBy,create_time as createTime," +
                 "delete_time as deleteTime from sys_oss_object order by object_id desc limit ? offset ?",
                 pageSize, offset);
-        TableDataInfo result = new TableDataInfo(rows, total);
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
+        return new PageResult<>(rows, total);
     }
 
     /**

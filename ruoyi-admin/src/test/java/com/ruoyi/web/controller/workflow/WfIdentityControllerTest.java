@@ -14,9 +14,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentityOptionView;
 import com.ruoyi.flowable.domain.vo.WorkflowIdentitySelectionView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.identity.WorkflowIdentityDirectoryService;
 
 /**
@@ -53,7 +53,7 @@ class WfIdentityControllerTest
         WorkflowIdentityOptionView option = new WorkflowIdentityOptionView(
                 "ROLE7", "角色: 财务审批", "role");
         when(identityDirectoryService.listOptions("role", "财务", 2, 10, null))
-                .thenReturn(new WorkflowPageResult<>(List.of(option), 11L));
+                .thenReturn(new PageResult<>(List.of(option), 11L));
 
         mockMvc.perform(get("/workflow/identity/options")
                         .param("type", "role")
@@ -82,7 +82,7 @@ class WfIdentityControllerTest
                 "21", "张三 (zhangsan)", "user");
         when(identityDirectoryService.listOptions(
                 "user", null, 1, 20, "approval"))
-                .thenReturn(new WorkflowPageResult<>(List.of(option), 1L));
+                .thenReturn(new PageResult<>(List.of(option), 1L));
 
         mockMvc.perform(get("/workflow/identity/options")
                         .param("type", "user")
@@ -110,7 +110,7 @@ class WfIdentityControllerTest
                 "ROLE7", "角色: 财务审批", "role");
         when(identityDirectoryService.listOptions(
                 "role", null, 1, 20, "claim"))
-                .thenReturn(new WorkflowPageResult<>(List.of(option), 1L));
+                .thenReturn(new PageResult<>(List.of(option), 1L));
 
         mockMvc.perform(get("/workflow/identity/options")
                         .param("type", "role")
@@ -168,7 +168,7 @@ class WfIdentityControllerTest
                 "103", "抄送接收人", "user");
         when(identityDirectoryService.listOptions(
                 "user", null, 1, 20, "copy"))
-                .thenReturn(new WorkflowPageResult<>(List.of(option), 1L));
+                .thenReturn(new PageResult<>(List.of(option), 1L));
 
         mockMvc.perform(get("/workflow/identity/options")
                         .param("type", "user")

@@ -38,10 +38,10 @@
 ## 最小接入示例
 
 ```java
-WorkflowPageResult<WorkflowIdentityOptionView> assignees =
+PageResult<WorkflowIdentityOptionView> assignees =
         identityDirectoryService.listOptions("user", keyword, 1, 50, "approval");
 
-WorkflowPageResult<WorkflowIdentityOptionView> candidateRoles =
+PageResult<WorkflowIdentityOptionView> candidateRoles =
         identityDirectoryService.listOptions("role", keyword, 1, 50, "claim");
 ```
 

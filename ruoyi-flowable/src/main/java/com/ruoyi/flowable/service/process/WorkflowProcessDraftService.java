@@ -19,6 +19,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfProcessDraft;
 import com.ruoyi.flowable.domain.WorkflowProcessDraftStatus;
@@ -27,7 +28,6 @@ import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSubmitView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSummaryView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftView;
@@ -108,13 +108,13 @@ public class WorkflowProcessDraftService
      * @param filter WorkflowProcessDraftQueryDto，流程名称和更新时间条件
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数
-     * @return WorkflowPageResult&lt;WorkflowProcessDraftSummaryView&gt;，本人草稿分页
+     * @return PageResult&lt;WorkflowProcessDraftSummaryView&gt;，本人草稿分页
      */
-    public WorkflowPageResult<WorkflowProcessDraftSummaryView> list(
+    public PageResult<WorkflowProcessDraftSummaryView> list(
             WorkflowProcessDraftQueryDto filter, int pageNum, int pageSize)
     {
         requirePage(pageNum, pageSize);
-        WorkflowPageResult<WfProcessDraft> draftPage = engineOperations.read(() ->
+        PageResult<WfProcessDraft> draftPage = engineOperations.read(() ->
         {
             long ownerUserId = Long.parseLong(identityResolver.resolveCurrentIdentity().userId());
             String processName = escapeLike(optionalText(filter == null ? null : filter.processName(), 255));
@@ -125,16 +125,16 @@ public class WorkflowProcessDraftService
                     updatedAfter, updatedBefore);
             if (total == 0)
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             int offset = Math.multiplyExact(pageNum - 1, pageSize);
             List<WfProcessDraft> rows = draftMapper.selectOwnedActivePage(ownerUserId,
                     processName, updatedAfter, updatedBefore, offset, pageSize);
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
         // 实时可用性查询可能稳定返回定义删除、停用或过期；必须在本人数据事务提交后投影，
         // 避免内层预期业务异常把草稿列表的共享只读事务标记为 rollback-only。
-        return new WorkflowPageResult<>(draftPage.rows().stream().map(this::toSummary).toList(),
+        return new PageResult<>(draftPage.rows().stream().map(this::toSummary).toList(),
                 draftPage.total());
     }
 

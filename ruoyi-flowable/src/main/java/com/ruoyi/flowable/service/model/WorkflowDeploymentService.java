@@ -18,12 +18,12 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.dto.WorkflowDeploymentQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowDeploymentView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
@@ -111,9 +111,9 @@ public class WorkflowDeploymentService
      * @param filter WorkflowDeploymentQueryDto，流程 key、名称、分类和状态条件，允许为空
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowDeploymentView&gt;，最新流程定义分页结果
+     * @return PageResult&lt;WorkflowDeploymentView&gt;，最新流程定义分页结果
      */
-    public WorkflowPageResult<WorkflowDeploymentView> listLatest(
+    public PageResult<WorkflowDeploymentView> listLatest(
             WorkflowDeploymentQueryDto filter, int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
@@ -126,12 +126,12 @@ public class WorkflowDeploymentService
             long total = query.count();
             if (total == 0)
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             List<WorkflowDeploymentView> rows = query.listPage(page.offset(), page.pageSize()).stream()
                     .map(this::toView)
                     .toList();
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
     }
 
@@ -141,9 +141,9 @@ public class WorkflowDeploymentService
      * @param processKey String，流程定义 key
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowDeploymentView&gt;，按版本倒序的发布记录
+     * @return PageResult&lt;WorkflowDeploymentView&gt;，按版本倒序的发布记录
      */
-    public WorkflowPageResult<WorkflowDeploymentView> publishList(String processKey,
+    public PageResult<WorkflowDeploymentView> publishList(String processKey,
             int pageNum, int pageSize)
     {
         String normalizedKey = requireText(processKey, "流程标识不能为空");
@@ -157,12 +157,12 @@ public class WorkflowDeploymentService
             long total = query.count();
             if (total == 0)
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             List<WorkflowDeploymentView> rows = query.listPage(page.offset(), page.pageSize()).stream()
                     .map(this::toView)
                     .toList();
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
     }
 

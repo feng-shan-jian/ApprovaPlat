@@ -38,7 +38,7 @@
 ## 最小接入示例
 
 ```java
-WorkflowPageResult<WorkflowDeploymentView> page =
+PageResult<WorkflowDeploymentView> page =
         workflowDeploymentService.listLatest(filter, 1, 20);
 workflowDeploymentService.changeState("expense:3:1201", "suspended");
 ```

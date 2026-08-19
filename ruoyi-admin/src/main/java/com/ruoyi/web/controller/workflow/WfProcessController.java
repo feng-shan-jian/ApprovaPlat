@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
@@ -57,7 +58,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessView;
 import com.ruoyi.flowable.domain.vo.WorkflowOwnedProcessExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowOwnedProcessView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessStartView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionView;
@@ -137,7 +137,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(processQueryService.listStartable(filter, pageNum, pageSize));
+        return getDataTable(processQueryService.listStartable(filter, pageNum, pageSize));
     }
 
     /**
@@ -155,7 +155,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(processQueryService.listOwned(filter, pageNum, pageSize));
+        return getDataTable(processQueryService.listOwned(filter, pageNum, pageSize));
     }
 
     /**
@@ -174,7 +174,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(processQueryService.listManaged(filter, pageNum, pageSize));
+        return getDataTable(processQueryService.listManaged(filter, pageNum, pageSize));
     }
 
     /**
@@ -192,7 +192,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(processQueryService.listAssigned(filter, pageNum, pageSize));
+        return getDataTable(processQueryService.listAssigned(filter, pageNum, pageSize));
     }
 
     /**
@@ -210,7 +210,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(processQueryService.listClaimable(filter, pageNum, pageSize));
+        return getDataTable(processQueryService.listClaimable(filter, pageNum, pageSize));
     }
 
     /**
@@ -229,7 +229,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(processQueryService.listCompleted(filter, pageNum, pageSize));
+        return getDataTable(processQueryService.listCompleted(filter, pageNum, pageSize));
     }
 
     /**
@@ -247,7 +247,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(processQueryService.listCopies(filter, pageNum, pageSize));
+        return getDataTable(processQueryService.listCopies(filter, pageNum, pageSize));
     }
 
     /**
@@ -659,15 +659,15 @@ public class WfProcessController extends BaseController
     /**
      * 在固定总量和分页一致性门禁下收集导出数据。
      *
-     * @param pageLoader IntFunction&lt;WorkflowPageResult&lt;T&gt;&gt;，按页读取同一身份范围的函数
+     * @param pageLoader IntFunction&lt;PageResult&lt;T&gt;&gt;，按页读取同一身份范围的函数
      * @param exportName String，导出业务名称，用于稳定错误提示
      * @param <T> 领域列表视图类型
      * @return List&lt;T&gt;，条数与首个真实 total 完全一致的不可变导出数据
      */
     private <T> List<T> collectForExport(
-            IntFunction<WorkflowPageResult<T>> pageLoader, String exportName)
+            IntFunction<PageResult<T>> pageLoader, String exportName)
     {
-        WorkflowPageResult<T> firstPage = pageLoader.apply(1);
+        PageResult<T> firstPage = pageLoader.apply(1);
         long expectedTotal = firstPage.total();
         if (expectedTotal > MAX_EXPORT_ROWS)
         {
@@ -693,13 +693,13 @@ public class WfProcessController extends BaseController
      * 校验一页导出结果的 total 和行数后追加到累计集合。
      *
      * @param target List&lt;T&gt;，当前已收集的导出行
-     * @param page WorkflowPageResult&lt;T&gt;，本次领域分页结果
+     * @param page PageResult&lt;T&gt;，本次领域分页结果
      * @param expectedTotal long，第一页确定的真实总数
      * @param exportName String，导出业务名称
      * @param <T> 领域列表视图类型
      * @return 无返回值，分页漂移或超量时抛出稳定异常
      */
-    private <T> void addExportPage(List<T> target, WorkflowPageResult<T> page,
+    private <T> void addExportPage(List<T> target, PageResult<T> page,
             long expectedTotal, String exportName)
     {
         if (page == null || page.total() != expectedTotal
@@ -709,20 +709,6 @@ public class WfProcessController extends BaseController
                     HttpStatus.CONFLICT);
         }
         target.addAll(page.rows());
-    }
-
-    /**
-     * 把领域分页结果转换为若依稳定分页协议。
-     *
-     * @param page WorkflowPageResult&lt;?&gt;，Flowable 原生 count/listPage 查询结果
-     * @return TableDataInfo，若依前端可直接消费的分页响应
-     */
-    private TableDataInfo toTableData(WorkflowPageResult<?> page)
-    {
-        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
     }
 
 }

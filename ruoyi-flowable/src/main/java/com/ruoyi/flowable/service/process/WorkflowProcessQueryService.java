@@ -28,6 +28,7 @@ import org.flowable.task.api.history.HistoricTaskInstanceQuery;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
@@ -49,7 +50,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowCopyView;
 import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessView;
 import com.ruoyi.flowable.domain.vo.WorkflowOwnedProcessView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartMultiInstanceAssignmentView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionView;
@@ -166,9 +166,9 @@ public class WorkflowProcessQueryService
      * @param filter WorkflowStartableProcessQueryDto，流程标识、名称和分类条件，允许为空
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowStartableDefinitionView&gt;，授权过滤后的真实分页结果
+     * @return PageResult&lt;WorkflowStartableDefinitionView&gt;，授权过滤后的真实分页结果
      */
-    public WorkflowPageResult<WorkflowStartableDefinitionView> listStartable(
+    public PageResult<WorkflowStartableDefinitionView> listStartable(
             WorkflowStartableProcessQueryDto filter, int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
@@ -181,7 +181,7 @@ public class WorkflowProcessQueryService
                     filter == null ? null : filter.category());
             if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             if (categoryDeploymentIds != null)
             {
@@ -191,7 +191,7 @@ public class WorkflowProcessQueryService
             long baseTotal = checkedCount(query.count());
             if (baseTotal == 0)
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             if (baseTotal > MAX_STARTABLE_SCAN)
             {
@@ -208,9 +208,9 @@ public class WorkflowProcessQueryService
      * @param filter WorkflowOwnedProcessQueryDto，流程与开始时间条件，允许为空
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowOwnedProcessView&gt;，服务端固定发起人的分页结果
+     * @return PageResult&lt;WorkflowOwnedProcessView&gt;，服务端固定发起人的分页结果
      */
-    public WorkflowPageResult<WorkflowOwnedProcessView> listOwned(
+    public PageResult<WorkflowOwnedProcessView> listOwned(
             WorkflowOwnedProcessQueryDto filter, int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
@@ -221,7 +221,7 @@ public class WorkflowProcessQueryService
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
-                return new WorkflowPageResult<>(List.of(), total);
+                return new PageResult<>(List.of(), total);
             }
             List<HistoricProcessInstance> instances = checkedRows(
                     query.listPage(page.offset(), page.pageSize()), page.pageSize());
@@ -231,7 +231,7 @@ public class WorkflowProcessQueryService
                     .map(instance -> toOwnedView(instance,
                             runtimeSuspensionStates.get(instance.getId())))
                     .toList();
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
     }
 
@@ -241,9 +241,9 @@ public class WorkflowProcessQueryService
      * @param filter WorkflowManagedProcessQueryDto，实例、定义、发起人和开始时间条件，允许为空
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowManagedProcessView&gt;，不按当前发起人缩小的管理员分页结果
+     * @return PageResult&lt;WorkflowManagedProcessView&gt;，不按当前发起人缩小的管理员分页结果
      */
-    public WorkflowPageResult<WorkflowManagedProcessView> listManaged(
+    public PageResult<WorkflowManagedProcessView> listManaged(
             WorkflowManagedProcessQueryDto filter, int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
@@ -255,7 +255,7 @@ public class WorkflowProcessQueryService
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
-                return new WorkflowPageResult<>(List.of(), total);
+                return new PageResult<>(List.of(), total);
             }
             List<HistoricProcessInstance> instances = checkedRows(
                     query.listPage(page.offset(), page.pageSize()), page.pageSize());
@@ -266,7 +266,7 @@ public class WorkflowProcessQueryService
                     .map(instance -> toManagedView(instance, cache,
                             runtimeSuspensionStates.get(instance.getId())))
                     .toList();
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
     }
 
@@ -276,9 +276,9 @@ public class WorkflowProcessQueryService
      * @param filter WorkflowAssignedTaskQueryDto，流程、任务和创建时间条件，允许为空
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowAssignedTaskView&gt;，仅包含当前办理人任务的分页结果
+     * @return PageResult&lt;WorkflowAssignedTaskView&gt;，仅包含当前办理人任务的分页结果
      */
-    public WorkflowPageResult<WorkflowAssignedTaskView> listAssigned(
+    public PageResult<WorkflowAssignedTaskView> listAssigned(
             WorkflowAssignedTaskQueryDto filter, int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
@@ -290,7 +290,7 @@ public class WorkflowProcessQueryService
                     filter == null ? null : filter.category());
             if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             if (categoryDeploymentIds != null)
             {
@@ -300,14 +300,14 @@ public class WorkflowProcessQueryService
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
-                return new WorkflowPageResult<>(List.of(), total);
+                return new PageResult<>(List.of(), total);
             }
             List<Task> tasks = checkedRows(query.listPage(page.offset(), page.pageSize()), page.pageSize());
             EnrichmentCache cache = new EnrichmentCache();
             List<WorkflowAssignedTaskView> rows = tasks.stream()
                     .map(task -> toAssignedView(task, cache))
                     .toList();
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
     }
 
@@ -318,9 +318,9 @@ public class WorkflowProcessQueryService
      * @param filter WorkflowClaimableTaskQueryDto，流程、任务和创建时间条件，允许为空
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowClaimableTaskView&gt;，直接候选用户与候选组并集分页结果
+     * @return PageResult&lt;WorkflowClaimableTaskView&gt;，直接候选用户与候选组并集分页结果
      */
-    public WorkflowPageResult<WorkflowClaimableTaskView> listClaimable(
+    public PageResult<WorkflowClaimableTaskView> listClaimable(
             WorkflowClaimableTaskQueryDto filter, int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
@@ -333,14 +333,14 @@ public class WorkflowProcessQueryService
             if (!claimEligibleUserIds.contains(actor.userId()))
             {
                 // 菜单允许进入待签页不代表账号能完成认领和后续审批；页面只返回真实可执行任务。
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             TaskQuery query = buildClaimableQuery(filter, actor);
             Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
                     filter == null ? null : filter.category());
             if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             if (categoryDeploymentIds != null)
             {
@@ -350,14 +350,14 @@ public class WorkflowProcessQueryService
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
-                return new WorkflowPageResult<>(List.of(), total);
+                return new PageResult<>(List.of(), total);
             }
             List<Task> tasks = checkedRows(query.listPage(page.offset(), page.pageSize()), page.pageSize());
             EnrichmentCache cache = new EnrichmentCache();
             List<WorkflowClaimableTaskView> rows = tasks.stream()
                     .map(task -> toClaimableView(task, cache))
                     .toList();
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
     }
 
@@ -367,9 +367,9 @@ public class WorkflowProcessQueryService
      * @param filter WorkflowCompletedTaskQueryDto，流程、任务和完成时间条件，允许为空
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowCompletedTaskView&gt;，按 completedBy 固定当前用户的分页结果
+     * @return PageResult&lt;WorkflowCompletedTaskView&gt;，按 completedBy 固定当前用户的分页结果
      */
-    public WorkflowPageResult<WorkflowCompletedTaskView> listCompleted(
+    public PageResult<WorkflowCompletedTaskView> listCompleted(
             WorkflowCompletedTaskQueryDto filter, int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
@@ -381,7 +381,7 @@ public class WorkflowProcessQueryService
                     filter == null ? null : filter.category());
             if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             if (categoryDeploymentIds != null)
             {
@@ -391,7 +391,7 @@ public class WorkflowProcessQueryService
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
-                return new WorkflowPageResult<>(List.of(), total);
+                return new PageResult<>(List.of(), total);
             }
             List<HistoricTaskInstance> tasks = checkedRows(
                     query.listPage(page.offset(), page.pageSize()), page.pageSize());
@@ -399,7 +399,7 @@ public class WorkflowProcessQueryService
             List<WorkflowCompletedTaskView> rows = tasks.stream()
                     .map(task -> toCompletedView(task, cache))
                     .toList();
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
     }
 
@@ -409,9 +409,9 @@ public class WorkflowProcessQueryService
      * @param filter WorkflowCopyQueryDto，抄送业务条件，允许为空且不包含 userId
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，每页记录数
-     * @return WorkflowPageResult&lt;WorkflowCopyView&gt;，服务端固定接收人的抄送分页结果
+     * @return PageResult&lt;WorkflowCopyView&gt;，服务端固定接收人的抄送分页结果
      */
-    public WorkflowPageResult<WorkflowCopyView> listCopies(
+    public PageResult<WorkflowCopyView> listCopies(
             WorkflowCopyQueryDto filter, int pageNum, int pageSize)
     {
         PageWindow page = requirePage(pageNum, pageSize);
@@ -423,7 +423,7 @@ public class WorkflowProcessQueryService
             long total = checkedCount(copyMapper.countListByUserId(currentUserId, trustedFilter));
             if (total == 0 || page.offset() >= total)
             {
-                return new WorkflowPageResult<>(List.of(), total);
+                return new PageResult<>(List.of(), total);
             }
             List<WfCopy> copies = checkedRows(copyMapper.selectPageByUserId(
                     currentUserId, trustedFilter, page.offset(), page.pageSize()), page.pageSize());
@@ -437,7 +437,7 @@ public class WorkflowProcessQueryService
                 }
                 rows.add(toCopyView(copy));
             }
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
     }
 
@@ -583,9 +583,9 @@ public class WorkflowProcessQueryService
      * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
      * @param baseTotal long，基础定义真实总数
      * @param page PageWindow，目标分页窗口
-     * @return WorkflowPageResult&lt;WorkflowStartableDefinitionView&gt;，授权过滤后的真实分页结果
+     * @return PageResult&lt;WorkflowStartableDefinitionView&gt;，授权过滤后的真实分页结果
      */
-    private WorkflowPageResult<WorkflowStartableDefinitionView> filterStartableDefinitions(
+    private PageResult<WorkflowStartableDefinitionView> filterStartableDefinitions(
             ProcessDefinitionQuery query, WorkflowCurrentIdentity actor, long baseTotal, PageWindow page)
     {
         List<WorkflowStartableDefinitionView> rows = new ArrayList<>(page.pageSize());
@@ -613,7 +613,7 @@ public class WorkflowProcessQueryService
             }
             baseOffset += definitions.size();
         }
-        return new WorkflowPageResult<>(rows, visibleTotal);
+        return new PageResult<>(rows, visibleTotal);
     }
 
     /**

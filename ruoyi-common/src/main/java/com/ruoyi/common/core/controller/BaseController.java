@@ -13,6 +13,7 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.core.page.PageDomain;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.core.page.TableSupport;
 import com.ruoyi.common.utils.DateUtils;
@@ -87,6 +88,22 @@ public class BaseController
         rspData.setMsg("查询成功");
         rspData.setRows(list);
         rspData.setTotal(new PageInfo(list).getTotal());
+        return rspData;
+    }
+
+    /**
+     * 将公共领域分页结果转换为 Web 层标准分页响应。
+     *
+     * @param page PageResult&lt;?&gt;，服务层返回的当前页数据和总记录数
+     * @return TableDataInfo，包含 rows、total、成功状态码和成功消息
+     */
+    protected TableDataInfo getDataTable(PageResult<?> page)
+    {
+        TableDataInfo rspData = new TableDataInfo();
+        rspData.setCode(HttpStatus.SUCCESS);
+        rspData.setMsg("查询成功");
+        rspData.setRows(page.rows());
+        rspData.setTotal(page.total());
         return rspData;
     }
 
