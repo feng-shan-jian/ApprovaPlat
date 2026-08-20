@@ -6,7 +6,7 @@ package com.ruoyi.flowable.service.notification;
  * @param outboxId long，通知 outbox 主键
  * @param idempotencyKey String，跨重试稳定幂等键
  * @param eventType String，通知业务事件类型
- * @param channel String，INBOX、EMAIL 或 SMS
+ * @param channel String，EMAIL 或 SMS 外部通道
  * @param recipientUserId long，接收用户主键
  * @param deliveryTarget String，可空；领取时冻结的邮箱或手机号
  * @param processInstanceId String，可空流程实例主键

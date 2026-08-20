@@ -15,7 +15,7 @@ import org.flowable.variable.service.VariableServiceConfiguration;
 import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntity;
 import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntityManager;
 import org.springframework.util.StringUtils;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
@@ -35,7 +35,7 @@ public final class WorkflowProcessCompletionStatusListener
     private final ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider;
 
     /** 引擎初始化结束后再解析通知服务，避免通知服务反向依赖 Flowable 公共服务形成启动环。 */
-    private final ObjectProvider<WorkflowNotificationRegistrar> notificationServiceProvider;
+    private final ObjectProvider<WorkflowNotificationService> notificationServiceProvider;
     /** CallActivity 子流程完成时只取消其催办，不经过事件登记服务。 */
     private final ObjectProvider<WorkflowNotificationOutboxService> notificationOutboxServiceProvider;
     /** 自然完成实例的正式业务状态。 */
@@ -59,7 +59,7 @@ public final class WorkflowProcessCompletionStatusListener
      */
     public WorkflowProcessCompletionStatusListener(
             ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider,
-            ObjectProvider<WorkflowNotificationRegistrar> notificationServiceProvider,
+            ObjectProvider<WorkflowNotificationService> notificationServiceProvider,
             ObjectProvider<WorkflowNotificationOutboxService> notificationOutboxServiceProvider)
     {
         super(Set.of(FlowableEngineEventType.PROCESS_COMPLETED));
@@ -95,8 +95,8 @@ public final class WorkflowProcessCompletionStatusListener
             return;
         }
 
-        // Registrar 只服务根业务流程结果登记，子流程完成不得解析无关依赖。
-        WorkflowNotificationRegistrar notificationService = notificationServiceProvider.getObject();
+        // 通知服务只处理根业务流程结果，子流程完成不得解析无关依赖。
+        WorkflowNotificationService notificationService = notificationServiceProvider.getObject();
         boolean naturallyCompleted = updateHistoricProcessStatus(processInstance.getId());
         if (!naturallyCompleted)
         {

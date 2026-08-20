@@ -7,7 +7,7 @@ public interface WorkflowNotificationChannel
 {
     /**
      * 返回当前策略处理的稳定通道编码。
-     * @return String，INBOX、EMAIL 或 SMS
+     * @return String，EMAIL 或 SMS 外部通道
      */
     String channel();
 

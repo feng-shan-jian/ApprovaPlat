@@ -22,7 +22,7 @@ public class WorkflowNotificationAdminService
     private static final Set<String> STATUSES = Set.of(
             "PENDING", "RETRYING", "DELIVERING", "PROCESSED", "DEAD_LETTER", "CANCELLED");
     private static final Set<String> SOURCE_TYPES = Set.of("APPROVAL", "SLA", "BPMN_EVENT");
-    private static final Set<String> CHANNELS = Set.of("INBOX", "EMAIL", "SMS");
+    private static final Set<String> CHANNELS = Set.of("EMAIL", "SMS");
 
     private final JdbcTemplate jdbcTemplate;
 

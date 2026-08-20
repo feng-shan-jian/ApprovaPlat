@@ -1047,7 +1047,7 @@ CREATE TABLE IF NOT EXISTS `wf_notification_outbox`
     `source_type`            VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'APPROVAL、SLA 或 BPMN_EVENT',
     `source_id`              VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '普通审批事件键或关联业务审计主键',
     `event_type`             VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '来源域内稳定事件类型',
-    `channel`                VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'INBOX、EMAIL 或 SMS',
+    `channel`                VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'EMAIL 或 SMS 外部投递通道',
     `recipient_user_id`      BIGINT       NOT NULL COMMENT '正式接收人主键',
     `process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     `process_instance_id`    VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -1082,7 +1082,7 @@ CREATE TABLE IF NOT EXISTS `wf_notification_outbox`
     CONSTRAINT `chk_wf_notification_outbox_hash` CHECK (`idempotency_key` REGEXP '^[0-9a-f]{64}$'),
     CONSTRAINT `chk_wf_notification_outbox_source` CHECK
         (`source_type` IN ('APPROVAL', 'SLA', 'BPMN_EVENT') AND `source_id` <> ''),
-    CONSTRAINT `chk_wf_notification_outbox_channel` CHECK (`channel` IN ('INBOX', 'EMAIL', 'SMS')),
+    CONSTRAINT `chk_wf_notification_outbox_channel` CHECK (`channel` IN ('EMAIL', 'SMS')),
     CONSTRAINT `chk_wf_notification_outbox_sms_template` CHECK
         ((`channel` = 'SMS' AND `sms_template_id` IS NOT NULL AND `sms_template_id` <> '')
             OR (`channel` <> 'SMS' AND `sms_template_id` IS NULL)),
@@ -1090,12 +1090,11 @@ CREATE TABLE IF NOT EXISTS `wf_notification_outbox`
     CONSTRAINT `chk_wf_notification_outbox_attempts` CHECK (`max_attempts` BETWEEN 1 AND 20 AND `attempt_count` <= `max_attempts`),
     CONSTRAINT `chk_wf_notification_outbox_sequence` CHECK (`delivery_cycle` >= 1 AND `total_attempt_count` >= `attempt_count`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
-  COMMENT = '工作流统一通知可靠 outbox';
+  COMMENT = '工作流外部通知可靠 outbox，仅承载 EMAIL 和 SMS 副作用';
 
 CREATE TABLE IF NOT EXISTS `wf_notification_inbox`
 (
     `notification_id`    BIGINT       NOT NULL AUTO_INCREMENT,
-    `outbox_id`          BIGINT       NOT NULL COMMENT '创建收件箱时的 outbox 软关联主键',
     `notification_key`   CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '来源类型、来源主键和事件类型生成的稳定 SHA-256 关联键',
     `source_type`        VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'APPROVAL、SLA 或 BPMN_EVENT',
     `source_id`          VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '来源域内稳定业务事实主键',

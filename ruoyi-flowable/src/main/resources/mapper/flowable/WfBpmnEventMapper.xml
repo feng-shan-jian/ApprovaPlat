@@ -65,8 +65,8 @@
         where event_code_id = #{eventCodeId}
     </update>
 
-    <insert id="insertAudit">
-        insert ignore into wf_bpmn_event_audit
+    <insert id="insertAudit" useGeneratedKeys="true" keyProperty="auditId">
+        insert into wf_bpmn_event_audit
             (idempotency_key, deployment_id, process_instance_id, process_definition_id,
              execution_id, source_element_id, source_type, event_type, event_code, event_name,
              match_status, boundary_event_id, interrupting, message_summary, initiator_user_id,
@@ -76,11 +76,8 @@
              #{executionId}, #{sourceElementId}, #{sourceType}, #{eventType}, #{eventCode}, #{eventName},
              #{matchStatus}, #{boundaryEventId}, #{interrupting}, #{messageSummary}, #{initiatorUserId},
              current_timestamp(3))
+        on duplicate key update audit_id = last_insert_id(audit_id)
     </insert>
-
-    <select id="selectAuditId" resultType="java.lang.Long">
-        select audit_id from wf_bpmn_event_audit where idempotency_key = #{idempotencyKey}
-    </select>
 
     <sql id="AuditFilters">
         <where>

@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 
 /**
@@ -29,8 +29,8 @@ public class WorkflowUserTaskListener implements TaskListener
     /** 自动抄送生命周期服务，任务事件必须写入正式抄送事实。 */
     private final WorkflowAutomaticCopyService automaticCopyService;
 
-    /** 普通审批生命周期通知服务，任务事实与 outbox 必须同事务提交。 */
-    private final WorkflowNotificationRegistrar notificationService;
+    /** 普通审批生命周期通知服务，任务事实与站内信、外部 Outbox 必须同事务提交。 */
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建受控用户任务监听器。
@@ -39,14 +39,14 @@ public class WorkflowUserTaskListener implements TaskListener
      * @param slaRuntimeService WorkflowTaskSlaRuntimeService，任务 SLA 正式状态服务
      * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，实时组织解析服务
      * @param automaticCopyService WorkflowAutomaticCopyService，自动抄送运行时服务
-     * @param notificationService WorkflowNotificationRegistrar，事务 outbox 服务
+     * @param notificationService WorkflowNotificationService，事务通知服务
      * @return 无返回值，构造后由 Spring 以 userTaskListener 名称管理
      */
     public WorkflowUserTaskListener(WorkflowUserTaskAuditService auditService,
             WorkflowTaskSlaRuntimeService slaRuntimeService,
             WorkflowParticipantRuleRuntimeService participantRuleRuntimeService,
             WorkflowAutomaticCopyService automaticCopyService,
-            WorkflowNotificationRegistrar notificationService)
+            WorkflowNotificationService notificationService)
     {
         this.auditService = auditService;
         this.slaRuntimeService = slaRuntimeService;
@@ -96,11 +96,11 @@ public class WorkflowUserTaskListener implements TaskListener
                         delegateTask.getProcessInstanceId(),
                         delegateTask.getProcessDefinitionId(),
                         delegateTask.getTaskDefinitionKey(), delegateTask.getAssignee());
-                // 普通通知 outbox 与任务状态、监听审计共用事务，回滚时不会产生孤立通知。
+                // 通知写模型与任务状态、监听审计共用事务，回滚时不会留下孤立站内信或外部 Outbox。
                 notificationService.onTaskEvent(eventName, delegateTask.getId(),
                         delegateTask.getProcessInstanceId(), delegateTask.getProcessDefinitionId(),
                         delegateTask.getTaskDefinitionKey(), delegateTask.getName(),
-                        delegateTask.getAssignee(), delegateTask.getOwner());
+                        delegateTask.getAssignee());
             }
             default -> throw new FlowableIllegalArgumentException(
                     "用户任务监听事件不受支持");

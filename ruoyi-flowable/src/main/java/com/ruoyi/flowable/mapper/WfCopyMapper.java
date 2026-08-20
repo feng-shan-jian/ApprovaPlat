@@ -32,6 +32,13 @@ public interface WfCopyMapper
     int insertBatchIdempotent(@Param("copies") List<WfCopy> copies);
 
     /**
+     * 按抄送自然键批量读取当前有效的完整事实。
+     * @param copies List&lt;WfCopy&gt;，仅使用 copyEventId 和 userId 作为查询键
+     * @return List&lt;WfCopy&gt;，数据库当前仍有效的正式事实
+     */
+    List<WfCopy> selectActiveByNaturalKeys(@Param("copies") List<WfCopy> copies);
+
+    /**
      * 按当前认证用户查询有效抄送，避免越权请求探测他人记录。
      * @param copyId Long，抄送记录主键
      * @param userId Long，当前认证用户主键

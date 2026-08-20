@@ -38,7 +38,7 @@ public class WorkflowManualUrgeService
     private final JdbcTemplate jdbcTemplate;
     private final WorkflowEngineOperations engineOperations;
     private final PermissionService permissionService;
-    private final WorkflowNotificationRegistrar registrar;
+    private final WorkflowNotificationService notificationService;
     private final WorkflowRedisAtomicOperations redisAtomicOperations;
     private final WorkflowNotificationProperties properties;
     private final WorkflowNotificationMetrics metrics;
@@ -48,7 +48,7 @@ public class WorkflowManualUrgeService
      * @param jdbcTemplate JdbcTemplate，Flowable 运行树、任务和候选关系锁定入口
      * @param engineOperations WorkflowEngineOperations，当前用户写事务入口
      * @param permissionService PermissionService，跨实例催办权限实时复核入口
-     * @param registrar WorkflowNotificationRegistrar，策略解析和 outbox 登记入口
+     * @param notificationService WorkflowNotificationService，策略解析和通知登记入口
      * @param redisAtomicOperations WorkflowRedisAtomicOperations，Redis 原子冷却操作
      * @param properties WorkflowNotificationProperties，催办冷却时长配置
      * @param metrics WorkflowNotificationMetrics，催办固定结果指标
@@ -56,14 +56,14 @@ public class WorkflowManualUrgeService
      */
     public WorkflowManualUrgeService(JdbcTemplate jdbcTemplate,
             WorkflowEngineOperations engineOperations, PermissionService permissionService,
-            WorkflowNotificationRegistrar registrar,
+            WorkflowNotificationService notificationService,
             WorkflowRedisAtomicOperations redisAtomicOperations,
             WorkflowNotificationProperties properties, WorkflowNotificationMetrics metrics)
     {
         this.jdbcTemplate = jdbcTemplate;
         this.engineOperations = engineOperations;
         this.permissionService = permissionService;
-        this.registrar = registrar;
+        this.notificationService = notificationService;
         this.redisAtomicOperations = redisAtomicOperations;
         this.properties = properties;
         this.metrics = metrics;
@@ -72,7 +72,7 @@ public class WorkflowManualUrgeService
     /**
      * 由流程发起人或具备跨实例权限的管理员催办完整活动流程树。
      * @param request WorkflowManualUrgeRequest，根流程实例和催办原因
-     * @return WorkflowManualUrgeView，稳定事件键、真实接收人数和 outbox 数量
+     * @return WorkflowManualUrgeView，稳定事件键、真实接收人数和通知通道记录数
      */
     public WorkflowManualUrgeView urge(WorkflowManualUrgeRequest request)
     {
@@ -119,7 +119,7 @@ public class WorkflowManualUrgeService
             for (Map.Entry<LockedTask, Set<String>> entry : recipientsByTask.entrySet())
             {
                 LockedTask task = entry.getKey();
-                WorkflowManualUrgeRegistrationResult result = registrar.registerManualUrge(
+                WorkflowManualUrgeRegistrationResult result = notificationService.registerManualUrge(
                         new WorkflowManualUrgeRegistration(task.processDefinitionId(),
                                 task.processInstanceId(), process.startUserId(), task.taskId(),
                                 task.taskDefinitionKey(), task.taskName(), actor.userId(),
@@ -127,7 +127,8 @@ public class WorkflowManualUrgeService
                 outboxCount += result.outboxCount();
                 deliveredRecipients.addAll(result.recipientUserIds());
             }
-            if (outboxCount == 0 || deliveredRecipients.isEmpty())
+            // 成功标准以 Writer 返回的真实可登记接收人为准，INBOX 已不再经过 Outbox。
+            if (deliveredRecipients.isEmpty())
             {
                 throw new ServiceException("当前催办没有可投递通知", HttpStatus.CONFLICT);
             }
@@ -139,7 +140,7 @@ public class WorkflowManualUrgeService
     }
 
     /**
-     * 在业务校验和 outbox 登记后原子建立催办冷却窗口。
+     * 在业务校验和通知通道登记后原子建立催办冷却窗口。
      * @param actorUserId String，当前已授权操作者主键
      * @param processInstanceId String，运行中的根流程实例主键
      * @return void，冷却冲突返回 429，Redis 不可用返回 503

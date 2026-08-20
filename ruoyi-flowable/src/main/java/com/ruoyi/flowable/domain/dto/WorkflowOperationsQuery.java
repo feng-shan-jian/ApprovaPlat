@@ -82,7 +82,7 @@ public final class WorkflowOperationsQuery
      * @param status String，PENDING、RETRYING、DELIVERING、PROCESSED、DEAD_LETTER 或 CANCELLED，可空
      * @param sourceType String，APPROVAL、SLA 或 BPMN_EVENT，可空
      * @param eventType String，通知业务事件类型，可空
-     * @param channel String，INBOX、EMAIL 或 SMS，可空
+     * @param channel String，EMAIL 或 SMS，可空
      * @param keyword String，outbox、来源、流程、任务或错误码关键字，可空
      * @param beginTime LocalDateTime，创建时间下界，可空
      * @param endTime LocalDateTime，创建时间上界，可空

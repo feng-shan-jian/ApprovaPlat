@@ -175,28 +175,9 @@ public class WorkflowNotificationOutboxService
     }
 
     /**
-     * 将同步站内通知的 PENDING outbox 原子提交为 PROCESSED。
-     * @param outboxId long，已创建 inbox 的同步 outbox 主键
-     * @param sourceType String，SLA 或 BPMN_EVENT 来源类型
-     * @return void，状态漂移时回滚调用方业务事务
-     */
-    public void completeSynchronous(long outboxId, String sourceType)
-    {
-        int completed = jdbcTemplate.update("update wf_notification_outbox set status='PROCESSED'," +
-                "processed_time=current_timestamp(3),revision=revision+1 " +
-                "where outbox_id=? and status='PENDING' and revision=0", outboxId);
-        if (completed != 1)
-        {
-            throw new ServiceException("同步通知 outbox 状态提交失败", HttpStatus.ERROR);
-        }
-        recordTransition(outboxId, "DELIVER", 0, "PENDING", "PROCESSED", "SYSTEM",
-                sourceType, null, "业务事务内同步持久化站内通知");
-    }
-
-    /**
      * 记录新 outbox 已在当前业务事务内登记的固定动作。
      * @param outboxId long，新建 outbox 主键
-     * @param actorId String，Flowable 或同步通知来源
+     * @param actorId String，Flowable 或业务通知来源
      * @param detail String，不含正文和地址的登记说明
      * @return void，记录结构化日志和低基数指标
      */
@@ -259,7 +240,8 @@ public class WorkflowNotificationOutboxService
         if (taskId != null) parameters.add(taskId);
         List<CancelableOutbox> rows = jdbcTemplate.query(
                 "select outbox_id,status,attempt_count,revision from wf_notification_outbox " +
-                "where event_type='MANUAL_URGE' and process_instance_id in (" + placeholders + ")" +
+                "where channel in ('EMAIL','SMS') and event_type='MANUAL_URGE' " +
+                "and process_instance_id in (" + placeholders + ")" +
                 taskFilter + " and status in ('PENDING','RETRYING','DELIVERING') " +
                 "order by outbox_id for update",
                 (result, rowNum) -> new CancelableOutbox(result.getLong("outbox_id"),

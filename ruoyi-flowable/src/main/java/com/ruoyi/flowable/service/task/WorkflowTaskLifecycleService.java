@@ -59,7 +59,7 @@ import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
 import com.ruoyi.flowable.service.process.WorkflowValidatedStartVariables;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationConstants;
 
 /**
@@ -161,8 +161,8 @@ public class WorkflowTaskLifecycleService
     /** 受控重复审批循环的路由、轮次和审计服务。 */
     private final WorkflowControlledLoopService controlledLoopService;
 
-    /** 普通审批流程结果通知服务，显式业务动作与 outbox 必须同事务提交。 */
-    private final WorkflowNotificationRegistrar notificationService;
+    /** 普通审批流程结果通知服务，显式业务动作与站内信、外部 Outbox 必须同事务提交。 */
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建完整任务生命周期服务。
@@ -181,7 +181,7 @@ public class WorkflowTaskLifecycleService
      * @param nextTaskAssignmentService WorkflowNextTaskAssignmentService，完成后的动态下一办理人服务
      * @param multiInstanceService WorkflowMultiInstanceService，动态多实例完成 revision CAS 服务
      * @param controlledLoopService WorkflowControlledLoopService，受控循环完成判断和审计服务
-     * @param notificationService WorkflowNotificationRegistrar，显式业务终态 outbox 服务
+     * @param notificationService WorkflowNotificationService，显式业务终态通知服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowTaskLifecycleService(WorkflowEngineOperations engineOperations,
@@ -195,7 +195,7 @@ public class WorkflowTaskLifecycleService
             WorkflowNextTaskAssignmentService nextTaskAssignmentService,
             WorkflowMultiInstanceService multiInstanceService,
             WorkflowControlledLoopService controlledLoopService,
-            WorkflowNotificationRegistrar notificationService)
+            WorkflowNotificationService notificationService)
     {
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;

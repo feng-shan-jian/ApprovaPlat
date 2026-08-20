@@ -7,7 +7,7 @@ import org.flowable.spring.boot.ProcessEngineConfigurationConfigurer;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService;
 import com.ruoyi.flowable.service.process.WorkflowProcessCompletionStatusListener;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
@@ -23,8 +23,8 @@ public class WorkflowProcessCompletionStatusConfiguration
      *
      * @param automaticCopyServiceProvider ObjectProvider&lt;WorkflowAutomaticCopyService&gt;，
      *        延迟到引擎事件发生后解析自动抄送服务，避免流程引擎初始化循环依赖
-     * @param notificationServiceProvider ObjectProvider&lt;WorkflowNotificationRegistrar&gt;，
-     *        延迟到完成事件解析通知登记服务，避免反向依赖 Flowable 公共服务
+     * @param notificationServiceProvider ObjectProvider&lt;WorkflowNotificationService&gt;，
+     *        延迟到完成事件解析通知服务，避免反向依赖 Flowable 公共服务
      * @param notificationOutboxServiceProvider ObjectProvider&lt;WorkflowNotificationOutboxService&gt;，
      *        延迟到子流程完成事件解析催办状态服务
      * @return WorkflowProcessCompletionStatusListener，受 Spring 管理的无状态引擎监听器
@@ -32,7 +32,7 @@ public class WorkflowProcessCompletionStatusConfiguration
     @Bean
     public WorkflowProcessCompletionStatusListener workflowProcessCompletionStatusListener(
             ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider,
-            ObjectProvider<WorkflowNotificationRegistrar> notificationServiceProvider,
+            ObjectProvider<WorkflowNotificationService> notificationServiceProvider,
             ObjectProvider<WorkflowNotificationOutboxService> notificationOutboxServiceProvider)
     {
         return new WorkflowProcessCompletionStatusListener(

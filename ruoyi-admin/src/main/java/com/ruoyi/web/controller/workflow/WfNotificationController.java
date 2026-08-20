@@ -135,7 +135,7 @@ public class WfNotificationController extends BaseController
     /**
      * 由发起人或具备跨实例权限的管理员催办真实活动待办。
      * @param request WorkflowManualUrgeRequest，流程实例和原因
-     * @return AjaxResult，data 为催办事件键、真实接收人数和 outbox 数量
+     * @return AjaxResult，data 为催办事件键、真实接收人数和通知通道记录数
      */
     @PreAuthorize("@ss.hasPermi('workflow:notification:urge')")
     @Log(title = "人工催办审批", businessType = BusinessType.INSERT)
@@ -176,7 +176,7 @@ public class WfNotificationController extends BaseController
      * @param status String，通知投递状态
      * @param sourceType String，APPROVAL、SLA 或 BPMN_EVENT
      * @param eventType String，通知业务事件类型
-     * @param channel String，INBOX、EMAIL 或 SMS
+     * @param channel String，EMAIL 或 SMS
      * @param keyword String，outbox、来源、流程、任务或错误码关键字
      * @param beginTime LocalDateTime，创建时间下界
      * @param endTime LocalDateTime，创建时间上界
@@ -196,7 +196,7 @@ public class WfNotificationController extends BaseController
             @RequestParam(required = false)
             @Pattern(regexp = "[A-Z][A-Z0-9_]{1,39}", message = "通知事件类型不受支持") String eventType,
             @RequestParam(required = false)
-            @Pattern(regexp = "INBOX|EMAIL|SMS", message = "通知通道不受支持") String channel,
+            @Pattern(regexp = "EMAIL|SMS", message = "通知通道不受支持") String channel,
             @RequestParam(required = false) @Size(max = 128, message = "检索关键字过长") String keyword,
             @RequestParam(required = false)
             @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,

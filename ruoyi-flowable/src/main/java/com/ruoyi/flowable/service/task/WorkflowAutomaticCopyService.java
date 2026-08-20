@@ -37,7 +37,7 @@ import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.RecipientTy
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.Rule;
 import com.ruoyi.flowable.service.model.WorkflowAutoCopyRuleContract.Trigger;
 import com.ruoyi.system.mapper.SysUserMapper;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 在 Flowable 生命周期事务内解析部署冻结规则并幂等写入正式自动抄送记录。
@@ -56,8 +56,8 @@ public class WorkflowAutomaticCopyService
     private final WfCopyMapper copyMapper;
     private final SysUserMapper userMapper;
 
-    /** 自动抄送创建通知服务，抄送事实与 outbox 必须同事务提交。 */
-    private final WorkflowNotificationRegistrar notificationService;
+    /** 自动抄送创建通知服务，抄送事实与站内信、外部 Outbox 必须同事务提交。 */
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建自动抄送运行时服务。
@@ -68,14 +68,14 @@ public class WorkflowAutomaticCopyService
      * @param identityResolver WorkflowIdentityResolver，正式用户、角色和部门解析器
      * @param copyMapper WfCopyMapper，正式抄送记录 Mapper
      * @param userMapper SysUserMapper，发起人名称快照 Mapper
-     * @param notificationService WorkflowNotificationRegistrar，正式通知 outbox 服务
+     * @param notificationService WorkflowNotificationService，正式通知服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowAutomaticCopyService(RepositoryService repositoryService,
             RuntimeService runtimeService, HistoryService historyService,
             WorkflowIdentityResolver identityResolver, WfCopyMapper copyMapper,
             SysUserMapper userMapper,
-            WorkflowNotificationRegistrar notificationService)
+            WorkflowNotificationService notificationService)
     {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
@@ -248,7 +248,7 @@ public class WorkflowAutomaticCopyService
         {
             throw dataError("自动抄送写入结果异常");
         }
-        // 幂等重放会读取同一 wf_copy 事实，COPY_CREATED 自身幂等键保证不会重复生成 outbox。
+        // 幂等重放直接复用当前冻结的 WfCopy 批次，自然来源键保证通知通道记录不会重复生成。
         notificationService.onCopiesCreated(copies);
     }
 

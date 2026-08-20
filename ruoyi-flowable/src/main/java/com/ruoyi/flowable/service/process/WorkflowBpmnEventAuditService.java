@@ -6,8 +6,9 @@ import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
-import com.ruoyi.flowable.service.notification.WorkflowSynchronousNotification;
+import com.ruoyi.flowable.mapper.param.WfBpmnEventAuditWriteParam;
+import com.ruoyi.flowable.service.notification.WorkflowInboxNotification;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationWriter;
 
 /**
  * BPMN 错误与升级运行审计及通知的独立事务服务。
@@ -16,19 +17,19 @@ import com.ruoyi.flowable.service.notification.WorkflowSynchronousNotification;
 public class WorkflowBpmnEventAuditService
 {
     private final WfBpmnEventMapper eventMapper;
-    private final WorkflowNotificationRegistrar notificationService;
+    private final WorkflowNotificationWriter notificationWriter;
 
     /**
      * 创建运行审计服务。
      * @param eventMapper WfBpmnEventMapper，审计和通知数据访问层
-     * @param notificationService WorkflowNotificationRegistrar，统一 outbox、inbox 和投递审计服务
+     * @param notificationWriter WorkflowNotificationWriter，当前事务内直接写必达站内通知
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowBpmnEventAuditService(WfBpmnEventMapper eventMapper,
-            WorkflowNotificationRegistrar notificationService)
+            WorkflowNotificationWriter notificationWriter)
     {
         this.eventMapper = eventMapper;
-        this.notificationService = notificationService;
+        this.notificationWriter = notificationWriter;
     }
 
     /**
@@ -39,12 +40,24 @@ public class WorkflowBpmnEventAuditService
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public Long record(RuntimeEvent event)
     {
-        eventMapper.insertAudit(event.idempotencyKey(), event.deploymentId(),
-                event.processInstanceId(), event.processDefinitionId(), event.executionId(),
-                event.sourceElementId(), event.sourceType(), event.eventType(), event.eventCode(),
-                event.eventName(), event.matchStatus(), event.boundaryEventId(),
-                event.interrupting(), event.messageSummary(), event.initiatorUserId());
-        Long auditId = eventMapper.selectAuditId(event.idempotencyKey());
+        WfBpmnEventAuditWriteParam param = new WfBpmnEventAuditWriteParam();
+        param.setIdempotencyKey(event.idempotencyKey());
+        param.setDeploymentId(event.deploymentId());
+        param.setProcessInstanceId(event.processInstanceId());
+        param.setProcessDefinitionId(event.processDefinitionId());
+        param.setExecutionId(event.executionId());
+        param.setSourceElementId(event.sourceElementId());
+        param.setSourceType(event.sourceType());
+        param.setEventType(event.eventType());
+        param.setEventCode(event.eventCode());
+        param.setEventName(event.eventName());
+        param.setMatchStatus(event.matchStatus());
+        param.setBoundaryEventId(event.boundaryEventId());
+        param.setInterrupting(event.interrupting());
+        param.setMessageSummary(event.messageSummary());
+        param.setInitiatorUserId(event.initiatorUserId());
+        eventMapper.insertAudit(param);
+        Long auditId = param.getAuditId();
         if (auditId == null)
         {
             throw new ServiceException("BPMN 事件审计保存不完整", HttpStatus.ERROR);
@@ -58,10 +71,9 @@ public class WorkflowBpmnEventAuditService
                     + "：" + event.eventName();
             String content = event.eventCode() + " · " + event.matchStatus()
                     + (event.messageSummary() == null ? "" : " · " + event.messageSummary());
-            notificationService.publishSynchronousInbox(new WorkflowSynchronousNotification(
+            notificationWriter.writeRequiredInbox(new WorkflowInboxNotification(
                     "BPMN_EVENT", String.valueOf(auditId), event.eventType(),
-                    event.initiatorUserId(), event.processDefinitionKey(),
-                    event.processInstanceId(), null, null, title, content,
+                    event.initiatorUserId(), event.processInstanceId(), null, title, content,
                     "/workflow/process-detail/" + event.processInstanceId() + "?source=own"));
         }
         return auditId;

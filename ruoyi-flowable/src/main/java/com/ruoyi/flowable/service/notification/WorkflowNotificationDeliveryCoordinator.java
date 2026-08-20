@@ -20,7 +20,7 @@ public class WorkflowNotificationDeliveryCoordinator
     /**
      * 创建通知投递协调器。
      * @param outboxService WorkflowNotificationOutboxService，outbox 状态唯一所有者
-     * @param channelStrategies List&lt;WorkflowNotificationChannel&gt;，三个正式通知通道
+     * @param channelStrategies List&lt;WorkflowNotificationChannel&gt;，EMAIL 和 SMS 两个外部通道
      * @return void，构造后由 Spring 管理
      */
     public WorkflowNotificationDeliveryCoordinator(WorkflowNotificationOutboxService outboxService,
@@ -36,9 +36,9 @@ public class WorkflowNotificationDeliveryCoordinator
                 throw new IllegalStateException("通知通道策略重复: " + strategy.channel());
             }
         }
-        if (!indexed.keySet().equals(java.util.Set.of("INBOX", "EMAIL", "SMS")))
+        if (!indexed.keySet().equals(java.util.Set.of("EMAIL", "SMS")))
         {
-            throw new IllegalStateException("通知通道策略必须完整注册 INBOX、EMAIL 和 SMS");
+            throw new IllegalStateException("通知外部通道策略必须完整注册 EMAIL 和 SMS");
         }
         this.channels = Map.copyOf(indexed);
     }

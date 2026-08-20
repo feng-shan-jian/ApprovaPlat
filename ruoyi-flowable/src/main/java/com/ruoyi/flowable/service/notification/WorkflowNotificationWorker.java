@@ -8,7 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 统一工作流通知后台 worker，按数据库租约处理站内信、SMTP 和短信通道。
+ * 工作流外部通知后台 worker，按数据库租约处理 EMAIL 和 SMS 通道。
  */
 @Component
 @ConditionalOnProperty(prefix = "flowable.notification", name = "worker-enabled",

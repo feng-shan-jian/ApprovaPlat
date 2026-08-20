@@ -31,12 +31,13 @@ import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
+import com.ruoyi.flowable.mapper.param.WfTaskSlaAuditWriteParam;
 import com.ruoyi.flowable.service.support.WorkflowPageSupport;
 import com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowTaskSlaDeploymentService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
-import com.ruoyi.flowable.service.notification.WorkflowSynchronousNotification;
+import com.ruoyi.flowable.service.notification.WorkflowInboxNotification;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationWriter;
 
 /**
  * 审批 SLA 任务生命周期、定时触发、通知、暂停恢复和查询服务。
@@ -51,7 +52,7 @@ public class WorkflowTaskSlaRuntimeService
     private final WorkflowEngineOperations engineOperations;
     private final WfTaskSlaMapper slaMapper;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
-    private final WorkflowNotificationRegistrar notificationService;
+    private final WorkflowNotificationWriter notificationWriter;
 
     /**
      * 创建 SLA 运行服务。
@@ -62,7 +63,7 @@ public class WorkflowTaskSlaRuntimeService
      * @param engineOperations WorkflowEngineOperations，查询和当前身份事务边界
      * @param slaMapper WfTaskSlaMapper，运行状态、审计和通知数据访问层
      * @param artifactRepository WorkflowDeploymentArtifactRepository，SLA 部署资源仓库
-     * @param notificationService WorkflowNotificationRegistrar，统一 outbox、inbox 和投递审计服务
+     * @param notificationWriter WorkflowNotificationWriter，当前事务内直接写必达站内通知
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowTaskSlaRuntimeService(RepositoryService repositoryService,
@@ -71,7 +72,7 @@ public class WorkflowTaskSlaRuntimeService
             WorkflowBusinessCalendarService calendarService,
             WorkflowEngineOperations engineOperations, WfTaskSlaMapper slaMapper,
             WorkflowDeploymentArtifactRepository artifactRepository,
-            WorkflowNotificationRegistrar notificationService)
+            WorkflowNotificationWriter notificationWriter)
     {
         this.repositoryService = repositoryService;
         this.managementService = managementService;
@@ -80,7 +81,7 @@ public class WorkflowTaskSlaRuntimeService
         this.engineOperations = engineOperations;
         this.slaMapper = slaMapper;
         this.artifactRepository = artifactRepository;
-        this.notificationService = notificationService;
+        this.notificationWriter = notificationWriter;
     }
 
     /**
@@ -478,8 +479,14 @@ public class WorkflowTaskSlaRuntimeService
     private Long requireAudit(Long executionId, String action, int ordinal,
             String actor, String detail)
     {
-        slaMapper.insertAudit(executionId, action, ordinal, actor, detail);
-        Long auditId = slaMapper.selectAuditId(executionId, action, ordinal);
+        WfTaskSlaAuditWriteParam param = new WfTaskSlaAuditWriteParam();
+        param.setExecutionId(executionId);
+        param.setActionType(action);
+        param.setActionOrdinal(ordinal);
+        param.setActorUserId(actor);
+        param.setDetail(detail);
+        slaMapper.insertAudit(param);
+        Long auditId = param.getAuditId();
         if (auditId == null)
         {
             throw dataError("审批 SLA 审计保存不完整");
@@ -497,7 +504,7 @@ public class WorkflowTaskSlaRuntimeService
      * @param action String，REMINDER 或 ESCALATE
      * @param title String，通知标题
      * @param content String，脱敏通知正文
-     * @return void，统一 outbox、inbox 或审计任一未完整写入时抛出异常
+     * @return void，必达站内信或审计任一未完整写入时抛出异常
      */
     private void requireNotification(Long auditId, WfTaskSlaExecution execution,
             String processDefinitionKey, String recipient, String action,
@@ -510,10 +517,9 @@ public class WorkflowTaskSlaRuntimeService
         }
         String routePath = "/workflow/process-detail/" + execution.getProcessInstanceId()
                 + "?source=todo&taskId=" + execution.getTaskId();
-        Long notificationId = notificationService.publishSynchronousInbox(
-                new WorkflowSynchronousNotification("SLA", String.valueOf(auditId), action,
-                        recipient, processDefinitionKey, execution.getProcessInstanceId(),
-                        execution.getTaskId(), execution.getTaskDefinitionKey(), title, content,
+        Long notificationId = notificationWriter.writeRequiredInbox(
+                new WorkflowInboxNotification("SLA", String.valueOf(auditId), action,
+                        recipient, execution.getProcessInstanceId(), execution.getTaskId(), title, content,
                         routePath));
         if (notificationId == null)
         {

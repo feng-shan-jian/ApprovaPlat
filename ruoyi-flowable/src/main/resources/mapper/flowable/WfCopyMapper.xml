@@ -114,6 +114,17 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             update_time = current_timestamp(3)
     </insert>
 
+    <select id="selectActiveByNaturalKeys" resultMap="WfCopyResult">
+        select <include refid="copyColumns"/>
+        from wf_copy
+        where del_flag = '0'
+          and (
+          <foreach collection="copies" item="copy" separator=" or ">
+              (copy_event_id = #{copy.copyEventId} and user_id = #{copy.userId})
+          </foreach>
+          )
+    </select>
+
     <sql id="copyListConditions">
         where user_id = #{userId}
           and del_flag = '0'

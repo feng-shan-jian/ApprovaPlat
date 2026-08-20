@@ -19,7 +19,7 @@
 | `status` | 投递状态 | 全部 |
 | `sourceType` | `APPROVAL`、`SLA` 或 `BPMN_EVENT` | 全部 |
 | `eventType` | 通知业务事件 | 全部 |
-| `channel` | `INBOX`、`EMAIL` 或 `SMS` | 全部 |
+| `channel` | `EMAIL` 或 `SMS` | 全部 |
 | `keyword` | outbox、来源、流程、任务或错误码关键字 | 空 |
 | `beginTime` / `endTime` | 创建时间范围 | 空 |
 

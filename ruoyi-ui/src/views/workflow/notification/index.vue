@@ -58,7 +58,6 @@
           </el-form-item>
           <el-form-item label="通道">
             <el-select v-model="outboxQuery.channel" clearable placeholder="全部通道">
-              <el-option label="站内" value="INBOX" />
               <el-option label="邮件" value="EMAIL" />
               <el-option label="短信" value="SMS" />
             </el-select>

@@ -39,7 +39,7 @@ import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 流程实例状态管理、受控终止和已结束历史删除服务。
@@ -108,8 +108,8 @@ public class WorkflowProcessInstanceService
     /** SLA 时钟冻结和 Flowable timer job 重排服务。 */
     private final WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
 
-    /** 普通审批结果通知服务，业务终态与 outbox 必须同事务提交。 */
-    private final WorkflowNotificationRegistrar notificationService;
+    /** 普通审批结果通知服务，业务终态与站内信、外部 Outbox 必须同事务提交。 */
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建流程实例写操作服务。
@@ -123,7 +123,7 @@ public class WorkflowProcessInstanceService
      * @param controlledLoopExecutionMapper WfControlledLoopExecutionMapper，受控循环逐轮审计 Mapper
      * @param permissionService PermissionService，Token 权限与当前正式主数据的统一复核服务
      * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，SLA 暂停恢复服务
-     * @param notificationService WorkflowNotificationRegistrar，显式取消或终止 outbox 服务
+     * @param notificationService WorkflowNotificationService，显式取消或终止通知服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessInstanceService(WorkflowEngineOperations engineOperations,
@@ -133,7 +133,7 @@ public class WorkflowProcessInstanceService
             WfControlledLoopExecutionMapper controlledLoopExecutionMapper,
             PermissionService permissionService,
             WorkflowTaskSlaRuntimeService taskSlaRuntimeService,
-            WorkflowNotificationRegistrar notificationService)
+            WorkflowNotificationService notificationService)
     {
         this.engineOperations = engineOperations;
         this.historyService = historyService;

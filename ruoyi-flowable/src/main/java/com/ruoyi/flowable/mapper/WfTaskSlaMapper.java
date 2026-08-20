@@ -7,6 +7,7 @@ import com.ruoyi.flowable.domain.WfBusinessCalendar;
 import com.ruoyi.flowable.domain.WfTaskSlaExecution;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
+import com.ruoyi.flowable.mapper.param.WfTaskSlaAuditWriteParam;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
 
 /**
@@ -141,16 +142,7 @@ public interface WfTaskSlaMapper
      * @param detail String，脱敏摘要
      * @return int，首次写入 1，重复触发 0
      */
-    int insertAudit(@Param("executionId") Long executionId,
-            @Param("actionType") String actionType,
-            @Param("actionOrdinal") Integer actionOrdinal,
-            @Param("actorUserId") String actorUserId,
-            @Param("detail") String detail);
-
-    /** @param executionId Long，执行主键；@param actionType String，动作；@param actionOrdinal Integer，序号；@return Long，审计主键或 null。 */
-    Long selectAuditId(@Param("executionId") Long executionId,
-            @Param("actionType") String actionType,
-            @Param("actionOrdinal") Integer actionOrdinal);
+    int insertAudit(WfTaskSlaAuditWriteParam param);
 
     /** @param query SlaAudit，审计筛选条件；@return long，符合条件的审计总数。 */
     long countAudits(@Param("query") WorkflowOperationsQuery.SlaAudit query);

@@ -19,7 +19,7 @@ import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WorkflowRuntimeTaskMapper;
 import com.ruoyi.system.mapper.SysUserMapper;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationRegistrar;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
  * 为任务写动作准备并持久化抄送记录，确保身份校验、引擎动作和业务表写入共享事务。
@@ -45,8 +45,8 @@ public class WorkflowTaskCopyService
 
     private final SysUserMapper sysUserMapper;
 
-    /** 抄送创建通知服务，任务抄送事实与 outbox 必须同事务提交。 */
-    private final WorkflowNotificationRegistrar notificationService;
+    /** 抄送创建通知服务，任务抄送事实与站内信、外部 Outbox 必须同事务提交。 */
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建任务抄送服务。
@@ -57,14 +57,14 @@ public class WorkflowTaskCopyService
      * @param repositoryService RepositoryService，流程定义元数据查询服务
      * @param runtimeService RuntimeService，活动流程实例查询服务
      * @param sysUserMapper SysUserMapper，流程发起人名称快照查询 Mapper
-     * @param notificationService WorkflowNotificationRegistrar，正式通知 outbox 服务
+     * @param notificationService WorkflowNotificationService，正式通知服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowTaskCopyService(WorkflowUserSelectionValidator userSelectionValidator,
             WfCopyMapper copyMapper, WorkflowRuntimeTaskMapper runtimeTaskMapper,
             RepositoryService repositoryService,
             RuntimeService runtimeService, SysUserMapper sysUserMapper,
-            WorkflowNotificationRegistrar notificationService)
+            WorkflowNotificationService notificationService)
     {
         this.userSelectionValidator = userSelectionValidator;
         this.copyMapper = copyMapper;
@@ -193,7 +193,7 @@ public class WorkflowTaskCopyService
         {
             throw dataError();
         }
-        // 仅在正式 wf_copy 写入成功后消费真实主键；通知失败会抛出并回滚任务动作和抄送事实。
+        // 仅在正式 wf_copy 写入或幂等命中后消费当前冻结事实；通知失败会回滚任务动作和抄送事实。
         notificationService.onCopiesCreated(plan.copies());
     }
 

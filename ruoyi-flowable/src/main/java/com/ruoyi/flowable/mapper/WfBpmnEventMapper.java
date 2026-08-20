@@ -5,6 +5,7 @@ import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WfBpmnEventCode;
 import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventAuditView;
+import com.ruoyi.flowable.mapper.param.WfBpmnEventAuditWriteParam;
 
 /**
  * BPMN 错误、升级目录及运行审计数据访问层。
@@ -68,22 +69,7 @@ public interface WfBpmnEventMapper
      * @param initiatorUserId String，发起人用户主键
      * @return int，首次写入 1，重复触发 0
      */
-    int insertAudit(@Param("idempotencyKey") String idempotencyKey,
-            @Param("deploymentId") String deploymentId,
-            @Param("processInstanceId") String processInstanceId,
-            @Param("processDefinitionId") String processDefinitionId,
-            @Param("executionId") String executionId,
-            @Param("sourceElementId") String sourceElementId,
-            @Param("sourceType") String sourceType,
-            @Param("eventType") String eventType, @Param("eventCode") String eventCode,
-            @Param("eventName") String eventName, @Param("matchStatus") String matchStatus,
-            @Param("boundaryEventId") String boundaryEventId,
-            @Param("interrupting") Boolean interrupting,
-            @Param("messageSummary") String messageSummary,
-            @Param("initiatorUserId") String initiatorUserId);
-
-    /** @param idempotencyKey String，幂等摘要；@return Long，审计主键。 */
-    Long selectAuditId(@Param("idempotencyKey") String idempotencyKey);
+    int insertAudit(WfBpmnEventAuditWriteParam param);
 
     /** @param query BpmnEventAudit，运维筛选条件；@return long，符合条件的审计总数。 */
     long countAuditList(@Param("query") WorkflowOperationsQuery.BpmnEventAudit query);

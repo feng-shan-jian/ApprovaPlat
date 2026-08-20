@@ -2,7 +2,7 @@
 
 ## 组件简介
 
-`WorkflowNotificationOutboxService` 是通知 outbox 状态迁移的唯一所有者，负责领取、成功完成、重试、死信、补偿和业务终态取消。
+`WorkflowNotificationOutboxService` 是外部通知 outbox 状态迁移的唯一所有者，负责领取、成功完成、重试、死信、补偿和业务终态取消。站内信不写入 outbox。
 
 ## 使用方式
 

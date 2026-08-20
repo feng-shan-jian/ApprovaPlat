@@ -199,19 +199,14 @@
           and paused_at is not null
     </update>
 
-    <insert id="insertAudit">
-        insert ignore into wf_task_sla_audit
+    <insert id="insertAudit" useGeneratedKeys="true" keyProperty="auditId">
+        insert into wf_task_sla_audit
             (sla_execution_id, action_type, action_ordinal, actor_user_id, detail, create_time)
         values
             (#{executionId}, #{actionType}, #{actionOrdinal}, #{actorUserId}, #{detail},
              current_timestamp(3))
+        on duplicate key update audit_id = last_insert_id(audit_id)
     </insert>
-
-    <select id="selectAuditId" resultType="java.lang.Long">
-        select audit_id from wf_task_sla_audit
-        where sla_execution_id = #{executionId} and action_type = #{actionType}
-          and action_ordinal = #{actionOrdinal}
-    </select>
 
     <sql id="AuditListFilters">
         <where>
