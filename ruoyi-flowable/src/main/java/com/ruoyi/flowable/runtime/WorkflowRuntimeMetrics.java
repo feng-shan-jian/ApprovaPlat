@@ -20,9 +20,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import com.ruoyi.flowable.mapper.WorkflowRuntimeMetricsMapper;
-import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
-import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
-import com.ruoyi.flowable.config.WorkflowRuntimeProperties.AttachmentStorageMode;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
 
 /**
@@ -41,8 +38,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     private final WorkflowRuntimeMetricsMapper metricsMapper;
     private final SpringProcessEngineConfiguration engineConfiguration;
     private final WorkflowAttachmentStorage attachmentStorage;
-    private final WorkflowRuntimeProperties runtimeProperties;
-    private final WorkflowAttachmentProperties attachmentProperties;
     private final Clock clock;
 
     /** 文件系统或驱动阻塞只占用此单一 daemon worker，不能占住 Spring 调度线程。 */
@@ -72,19 +67,14 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param metricsMapper WorkflowRuntimeMetricsMapper，单次数据库往返的合并只读查询
      * @param engineConfiguration SpringProcessEngineConfiguration，两个 executor 实际状态
      * @param attachmentStorage WorkflowAttachmentStorage，当前挂载点可用空间
-     * @param runtimeProperties WorkflowRuntimeProperties，生产门禁、存储模式和共享卷标识
-     * @param attachmentProperties WorkflowAttachmentProperties，生产磁盘低水位
      * @return 无返回值，构造后由 Spring 调度并绑定到 Micrometer
      */
     @Autowired
     public WorkflowRuntimeMetrics(WorkflowRuntimeMetricsMapper metricsMapper,
             SpringProcessEngineConfiguration engineConfiguration,
-            WorkflowAttachmentStorage attachmentStorage,
-            WorkflowRuntimeProperties runtimeProperties,
-            WorkflowAttachmentProperties attachmentProperties)
+            WorkflowAttachmentStorage attachmentStorage)
     {
-        this(metricsMapper, engineConfiguration, attachmentStorage,
-                runtimeProperties, attachmentProperties, Clock.systemUTC());
+        this(metricsMapper, engineConfiguration, attachmentStorage, Clock.systemUTC());
     }
 
     /**
@@ -93,22 +83,16 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param metricsMapper WorkflowRuntimeMetricsMapper，合并指标查询
      * @param engineConfiguration SpringProcessEngineConfiguration，executor 实际状态
      * @param attachmentStorage WorkflowAttachmentStorage，附件挂载点边界
-     * @param runtimeProperties WorkflowRuntimeProperties，生产门禁与存储模式
-     * @param attachmentProperties WorkflowAttachmentProperties，附件磁盘低水位
      * @param clock Clock，快照完成时间来源
      * @return 无返回值，依赖会固定到当前组件
      */
     WorkflowRuntimeMetrics(WorkflowRuntimeMetricsMapper metricsMapper,
             SpringProcessEngineConfiguration engineConfiguration,
-            WorkflowAttachmentStorage attachmentStorage,
-            WorkflowRuntimeProperties runtimeProperties,
-            WorkflowAttachmentProperties attachmentProperties, Clock clock)
+            WorkflowAttachmentStorage attachmentStorage, Clock clock)
     {
         this.metricsMapper = metricsMapper;
         this.engineConfiguration = engineConfiguration;
         this.attachmentStorage = attachmentStorage;
-        this.runtimeProperties = runtimeProperties;
-        this.attachmentProperties = attachmentProperties;
         this.clock = clock;
     }
 
@@ -166,8 +150,7 @@ public class WorkflowRuntimeMetrics implements MeterBinder
             {
                 throw new IllegalStateException("工作流运行指标合并查询未返回结果");
             }
-            // 生产周期采集必须覆盖真实写入、跨目录移动、回读、清理和低水位检查；
-            // readiness 请求线程只会读取这里完成后原子发布的结果。
+            // 指标采集只读取文件系统可用空间，启动探针由 readiness 单独执行一次。
             long usableBytes = collectAttachmentUsableBytes();
             if (usableBytes < 0L)
             {
@@ -192,22 +175,12 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     }
 
     /**
-     * 按最终运行配置采集附件存储状态；生产门禁开启时执行完整可写探针，开发和测试环境
-     * 只读取可用空间，避免非生产实例周期性创建运维探针文件。
-     *
-     * @return long，本轮完整探针清理后附件文件系统的非负可用字节数
+     * 读取附件所在文件系统的可用空间，不创建或删除任何文件。
+     * @return long，文件系统可用字节数
      */
     private long collectAttachmentUsableBytes()
     {
-        if (!runtimeProperties.isProductionGateEnabled())
-        {
-            return attachmentStorage.usableSpace();
-        }
-        String expectedStorageId = runtimeProperties.getAttachmentStorageMode()
-                == AttachmentStorageMode.SHARED_FILESYSTEM
-                        ? runtimeProperties.getAttachmentStorageId() : null;
-        return attachmentStorage.probeRuntimeReadiness(expectedStorageId,
-                attachmentProperties.getMinFreeBytes());
+        return attachmentStorage.usableSpace();
     }
 
     /**
