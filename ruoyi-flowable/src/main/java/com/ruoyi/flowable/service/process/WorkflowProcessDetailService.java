@@ -46,6 +46,7 @@ import org.flowable.identitylink.api.IdentityLinkInfo;
 import org.flowable.task.api.Task;
 import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.variable.api.history.HistoricVariableInstance;
+import org.flowable.variable.api.history.HistoricVariableInstanceQuery;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import tools.jackson.core.JacksonException;
@@ -362,14 +363,9 @@ public class WorkflowProcessDetailService
         Map<String, List<WorkflowProcessCommentView>> commentsByTask =
                 loadComments(instanceId, tasksById.keySet());
 
-        Set<String> variableTaskIds = new LinkedHashSet<>(tasksById.keySet());
-        if (requestedTask != null)
-        {
-            variableTaskIds.add(requestedTask.taskId());
-        }
         Set<String> ancestorDeploymentIds = loadAncestorDeploymentIds(instanceId);
-        VariableStore variables = loadVariables(instanceId, variableTaskIds,
-                instance.deploymentId(), ancestorDeploymentIds);
+        VariableStore variables = loadSubmissionSnapshots(instanceId, instance.deploymentId(),
+                ancestorDeploymentIds);
         // 只有活动任务才代表当前循环轮次；历史任务虽然保留节点 key，但不能把详情投影成“下一轮”。
         String activeControlledLoopActivityId = requestedTask != null && requestedTask.active()
                 ? requestedTask.taskDefinitionKey() : null;
@@ -388,11 +384,8 @@ public class WorkflowProcessDetailService
         WorkflowProcessFormSnapshotView currentTaskForm = requestedTask == null ? null
                 : buildCurrentTaskForm(requestedTask, tasksById, bpmn.process(), snapshots,
                         variables, instance.deploymentId(), currentTaskControlledLoop,
+                        "returned".equals(instance.businessStatus()) ? processForms : null,
                         responseBudget);
-        if (requestedTask != null && "returned".equals(instance.businessStatus()))
-        {
-            currentTaskForm = buildReturnedStartForm(processForms, requestedTask.taskId());
-        }
 
         Map<String, String> userNames = new HashMap<>();
         String startUserName = resolveUserName(instance.startUserId(), userNames);
@@ -846,72 +839,6 @@ public class WorkflowProcessDetailService
     }
 
     /**
-     * 分别查询当前变量和正式提交快照，任意值都延迟到受控变量名及类型命中后读取。
-     *
-     * @param instanceId String，已授权流程实例主键
-     * @param taskIds Set&lt;String&gt;，需要支持当前表单回显的历史及活动任务主键
-     * @param deploymentId String，当前实例流程定义所属部署主键
-     * @param ancestorDeploymentIds Set&lt;String&gt;，当前实例所属 CallActivity 执行树的祖先部署主键
-     * @return VariableStore，当前变量元数据及不可变提交快照索引
-     */
-    private VariableStore loadVariables(String instanceId, Set<String> taskIds,
-            String deploymentId, Set<String> ancestorDeploymentIds)
-    {
-        List<HistoricVariableInstance> processRows = historyService
-                .createHistoricVariableInstanceQuery()
-                .processInstanceId(instanceId)
-                .excludeTaskVariables()
-                .excludeLocalVariables()
-                .excludeVariableInitialization()
-                .orderByVariableName().asc()
-                .listPage(0, MAX_VARIABLE_ROWS + 1);
-        if (processRows == null || processRows.size() > MAX_VARIABLE_ROWS)
-        {
-            throw dataError("流程变量数量超过安全上限");
-        }
-        Map<String, HistoricVariableInstance> processVariables =
-                indexVariables(processRows, instanceId, null);
-
-        Map<String, Map<String, HistoricVariableInstance>> taskVariables = new HashMap<>();
-        if (!taskIds.isEmpty())
-        {
-            List<HistoricVariableInstance> taskRows = historyService
-                    .createHistoricVariableInstanceQuery()
-                    .taskIds(taskIds)
-                    .excludeVariableInitialization()
-                    .orderByVariableName().asc()
-                    .listPage(0, MAX_VARIABLE_ROWS + 1);
-            if (taskRows == null || taskRows.size() > MAX_VARIABLE_ROWS)
-            {
-                throw dataError("任务局部变量数量超过安全上限");
-            }
-            for (HistoricVariableInstance variable : taskRows)
-            {
-                if (variable == null || !instanceId.equals(variable.getProcessInstanceId())
-                        || !taskIds.contains(variable.getTaskId())
-                        || !StringUtils.hasText(variable.getVariableName()))
-                {
-                    throw dataError("任务局部变量关联数据异常");
-                }
-                Map<String, HistoricVariableInstance> byName = taskVariables.computeIfAbsent(
-                        variable.getTaskId(), ignored -> new LinkedHashMap<>());
-                if (byName.putIfAbsent(variable.getVariableName(), variable) != null)
-                {
-                    throw dataError("任务局部变量名称不唯一");
-                }
-            }
-        }
-        Map<String, Map<String, HistoricVariableInstance>> immutableTasks = new HashMap<>();
-        taskVariables.forEach((key, value) ->
-                immutableTasks.put(key, Collections.unmodifiableMap(value)));
-        SubmissionSnapshotIndex submissions = loadSubmissionSnapshots(instanceId,
-                deploymentId, ancestorDeploymentIds);
-        return new VariableStore(Collections.unmodifiableMap(processVariables),
-                Collections.unmodifiableMap(immutableTasks), submissions.startSubmission(),
-                submissions.taskSubmissions());
-    }
-
-    /**
      * 以两阶段方式读取 FULL 历史中的固定内部提交快照。
      *
      * 第一阶段必须看见固定变量名的全部行并完成类型、存储列、Blob 关联和累计容量校验；
@@ -920,9 +847,9 @@ public class WorkflowProcessDetailService
      * @param instanceId String，快照必须所属的已授权流程实例主键
      * @param deploymentId String，当前实例流程定义所属部署主键
      * @param ancestorDeploymentIds Set&lt;String&gt;，CallActivity 执行树中祖先实例的部署主键
-     * @return SubmissionSnapshotIndex，唯一开始快照及按真实 taskId 建立的任务快照索引
+     * @return VariableStore，唯一开始快照及按真实 taskId 建立的任务快照索引
      */
-    private SubmissionSnapshotIndex loadSubmissionSnapshots(String instanceId,
+    private VariableStore loadSubmissionSnapshots(String instanceId,
             String deploymentId, Set<String> ancestorDeploymentIds)
     {
         List<WorkflowHistoricSubmissionRow> rows = historicVariableMapper
@@ -935,7 +862,7 @@ public class WorkflowProcessDetailService
         }
         if (rows.isEmpty())
         {
-            return new SubmissionSnapshotIndex(null, Map.of());
+            return new VariableStore(null, Map.of());
         }
 
         Map<String, WorkflowHistoricSubmissionRow> metadataById = new LinkedHashMap<>();
@@ -1005,7 +932,7 @@ public class WorkflowProcessDetailService
                 }
             }
         }
-        return new SubmissionSnapshotIndex(startSubmission,
+        return new VariableStore(startSubmission,
                 Collections.unmodifiableMap(taskSubmissions));
     }
 
@@ -1250,7 +1177,7 @@ public class WorkflowProcessDetailService
      * @param tasksById Map&lt;String, HistoricTaskInstance&gt;，真实历史任务主键索引
      * @param process org.flowable.bpmn.model.Process，目标定义的 BPMN 流程
      * @param snapshots Map&lt;NodeFormKey, SnapshotSchema&gt;，部署表单快照索引
-     * @param variables VariableStore，当前变量与正式提交快照索引
+     * @param variables VariableStore，正式提交快照索引
      * @param deploymentId String，流程实例所属部署主键
      * @param budget DetailResponseBudget，详情累计正文大小预算
      * @return List&lt;WorkflowProcessFormSnapshotView&gt;，仅包含可证明提交值的历史表单
@@ -1364,9 +1291,10 @@ public class WorkflowProcessDetailService
      * @param tasksById Map&lt;String, HistoricTaskInstance&gt;，实例历史任务索引
      * @param process org.flowable.bpmn.model.Process，目标定义的 BPMN 流程
      * @param snapshots Map&lt;NodeFormKey, SnapshotSchema&gt;，部署表单快照索引
-     * @param variables VariableStore，当前变量与正式提交快照索引
+     * @param variables VariableStore，正式提交快照索引
      * @param deploymentId String，流程实例所属部署主键
      * @param controlledLoop boolean，活动任务是否为部署快照确认的受控循环节点
+     * @param returnedProcessForms List&lt;WorkflowProcessFormSnapshotView&gt;，退回态使用的历史表单；普通任务为空
      * @param budget DetailResponseBudget，详情累计正文大小预算
      * @return WorkflowProcessFormSnapshotView，合法任务表单；无表单或旧实例无提交快照时返回 null
      */
@@ -1375,7 +1303,9 @@ public class WorkflowProcessDetailService
             Map<String, HistoricTaskInstance> tasksById,
             org.flowable.bpmn.model.Process process,
             Map<NodeFormKey, SnapshotSchema> snapshots, VariableStore variables,
-            String deploymentId, boolean controlledLoop, DetailResponseBudget budget)
+            String deploymentId, boolean controlledLoop,
+            List<WorkflowProcessFormSnapshotView> returnedProcessForms,
+            DetailResponseBudget budget)
     {
         if (!StringUtils.hasText(task.taskDefinitionKey()))
         {
@@ -1397,6 +1327,11 @@ public class WorkflowProcessDetailService
         if (!(element instanceof UserTask))
         {
             throw dataError("任务与 BPMN 用户节点关系不一致");
+        }
+        if (returnedProcessForms != null)
+        {
+            // 保留任务、历史任务和 BPMN 关系门禁，退回值只继承开始提交快照，不查询当前变量。
+            return buildReturnedStartForm(returnedProcessForms, task.taskId());
         }
         String formKey = formKey(element);
         if (!StringUtils.hasText(formKey))
@@ -1424,7 +1359,7 @@ public class WorkflowProcessDetailService
      * @param element FlowElement，BPMN 用户任务元素
      * @param formKey String，BPMN 表单键
      * @param snapshots Map&lt;NodeFormKey, SnapshotSchema&gt;，部署表单快照索引
-     * @param variables VariableStore，当前变量元数据索引
+     * @param variables VariableStore，受控循环继承需要的正式提交快照索引
      * @param deploymentId String，流程实例所属部署主键
      * @param controlledLoop boolean，是否允许从同节点上一轮正式快照继承初始值
      * @param budget DetailResponseBudget，详情累计正文大小预算
@@ -1437,9 +1372,10 @@ public class WorkflowProcessDetailService
     {
         SnapshotSchema schema = requireSnapshotSchema(element, formKey, snapshots);
         boolean taskLocal = isTaskLocal(element);
-        Map<String, HistoricVariableInstance> source = taskLocal
-                ? variables.taskVariables().getOrDefault(taskId, Map.of())
-                : variables.processVariables();
+        // 仅活动且确有部署表单的请求任务会走到这里；局部表单只绑定当前 taskId，
+        // 非局部表单只绑定流程根作用域，查询结果随即按 schema 和安全门禁投影。
+        Map<String, HistoricVariableInstance> source = loadCurrentVariables(
+                instanceId, taskId, taskLocal);
         Map<String, JsonNode> currentValues = buildSafeValues(instanceId, taskId, taskLocal,
                 schema.readableVariableNames(), source, budget);
         Map<String, JsonNode> values = currentValues;
@@ -1469,6 +1405,40 @@ public class WorkflowProcessDetailService
         }
         return toFormView(activityId, taskId, schema.snapshot(), taskLocal, values,
                 null, budget);
+    }
+
+    /**
+     * 按活动表单真实作用域有界加载当前变量元数据，禁止跨任务或子执行读取。
+     *
+     * @param instanceId String，已经完成对象授权的流程实例主键
+     * @param taskId String，真实活动任务主键
+     * @param taskLocal boolean，true 只查询当前任务局部变量，false 只查询流程根变量
+     * @return Map&lt;String, HistoricVariableInstance&gt;，按变量名唯一索引的当前作用域元数据
+     */
+    private Map<String, HistoricVariableInstance> loadCurrentVariables(String instanceId,
+            String taskId, boolean taskLocal)
+    {
+        HistoricVariableInstanceQuery query = historyService
+                .createHistoricVariableInstanceQuery();
+        if (taskLocal)
+        {
+            // 单元素任务集合是查询边界，历史任务以及其他并行活动任务均不得进入当前表单。
+            query.processInstanceId(instanceId).taskIds(Set.of(taskId));
+        }
+        else
+        {
+            // 非局部表单只允许根执行变量，排除任务局部和子执行 local 变量。
+            query.processInstanceId(instanceId).excludeTaskVariables().excludeLocalVariables();
+        }
+        List<HistoricVariableInstance> rows = query.excludeVariableInitialization()
+                .orderByVariableName().asc()
+                .listPage(0, MAX_VARIABLE_ROWS + 1);
+        if (rows == null || rows.size() > MAX_VARIABLE_ROWS)
+        {
+            throw dataError(taskLocal ? "任务局部变量数量超过安全上限" : "流程变量数量超过安全上限");
+        }
+        return Collections.unmodifiableMap(indexVariables(rows, instanceId,
+                taskLocal ? taskId : null));
     }
 
     /**
@@ -2769,28 +2739,12 @@ public class WorkflowProcessDetailService
     }
 
     /**
-     * 当前变量元数据与正式提交快照索引。
+     * 正式提交快照索引，不承载任何活动或历史任务的当前变量。
      *
-     * @param processVariables Map&lt;String, HistoricVariableInstance&gt;，当前流程变量名索引
-     * @param taskVariables Map&lt;String, Map&lt;String, HistoricVariableInstance&gt;&gt;，当前任务局部变量索引
      * @param startSubmission StoredSubmission，开始表单正式提交快照；旧实例允许为空
-     * @param taskSubmissions Map&lt;String, StoredSubmission&gt;，按真实任务主键索引的正式提交快照
+     * @param taskSubmissions Map&lt;String, StoredSubmission&gt;，按真实任务主键索引的正式任务提交快照
      */
-    private record VariableStore(
-            Map<String, HistoricVariableInstance> processVariables,
-            Map<String, Map<String, HistoricVariableInstance>> taskVariables,
-            StoredSubmission startSubmission,
-            Map<String, StoredSubmission> taskSubmissions)
-    {
-    }
-
-    /**
-     * 历史变量查询解析后的提交快照索引。
-     *
-     * @param startSubmission StoredSubmission，唯一开始提交；旧实例允许为空
-     * @param taskSubmissions Map&lt;String, StoredSubmission&gt;，任务主键到唯一提交的映射
-     */
-    private record SubmissionSnapshotIndex(StoredSubmission startSubmission,
+    private record VariableStore(StoredSubmission startSubmission,
             Map<String, StoredSubmission> taskSubmissions)
     {
     }

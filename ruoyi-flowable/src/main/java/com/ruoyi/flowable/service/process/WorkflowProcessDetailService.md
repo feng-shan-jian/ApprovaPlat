@@ -26,13 +26,13 @@ Flowable 8 的 `HistoricDetailQuery` 不支持按变量名、变量类型过滤�
 
 因此，后续节点即使覆盖同名全局字段，也不会污染前序节点已经提交的历史值；多个 `localScope` 任务的同名字段也按 task ID 隔离。升级前旧实例没有内部提交快照时，详情会省略对应历史表单，而不是用最终变量伪造提交值。
 
-活动任务尚未提交，仍按部署 schema 从当前变量回显：普通节点读取当前流程变量，BPMN 节点声明 `localScope=true` 或 `localScope=1` 时读取对应 task ID 的当前局部变量，并固定返回 `snapshotTime=null`。`initiator`、`processStatus`、多实例计数、Flowable 跳过标志和所有 `__ruoyi_workflow_` 保留变量始终隐藏，即使表单 schema 错误地声明了这些名称。
+只有请求明确指向活动任务且该 BPMN 节点确有部署表单时，才按部署 schema 查询当前变量并固定返回 `snapshotTime=null`：普通节点只读取流程根变量，BPMN 节点声明 `localScope=true` 或 `localScope=1` 时只读取当前 task ID 的局部变量。无任务请求、无表单节点和已完成任务不会创建当前变量查询；历史详情始终直接使用正式提交快照。`initiator`、`processStatus`、多实例计数、Flowable 跳过标志和所有 `__ruoyi_workflow_` 保留变量始终隐藏，即使表单 schema 错误地声明了这些名称。
 
 普通流程变量和任务局部变量查询统一启用 `excludeVariableInitialization()`，先只取得变量元数据，再与 `ACT_HI_VARINST` 的类型、作用域、`BYTEARRAY_ID_` 和真实正文长度逐项核对。`json` / `longJson` 以及实际关联 Blob 的 `string` / `longString` 一律执行两阶段受控正文读取并计入累计物理字节预算：字符串 Blob 只允许反序列化单个 `String`，JSON Blob 按 UTF-8 严格解析；只有确认没有任何 Blob 关联的安全标量才允许调用 `getValue()`。`bytes`、`serializable`、自定义对象和未知类型不会被初始化、反序列化或返回。JSON 还会执行深度、节点数、容器成员数、单文本和累计响应字节门禁；Java 浮点值和 Jackson 原生浮点节点中的 `NaN`、正负 `Infinity` 均不会进入响应。
 
 ## 容量门禁
 
-单个详情最多读取 1000 个历史活动、500 个历史任务、500 个部署表单快照、每类 2000 个当前历史变量、10000 条历史变量更新和 1000 条原始意见。单条意见最多 8 KiB，全部意见最多 512 KiB；响应中重复出现的表单正文累计最多 4 MiB，全部变量 JSON 最多 1 MiB。任何计数或关联异常都会停止整个详情，不返回截断的审计结果。
+单个详情最多读取 1000 个历史活动、500 个历史任务、500 个部署表单快照、活动表单当前作用域 2000 个历史变量、10000 条正式提交历史更新和 1000 条原始意见。单条意见最多 8 KiB，全部意见最多 512 KiB；响应中重复出现的表单正文累计最多 4 MiB，全部变量 JSON 最多 1 MiB。当前变量不会按全部历史 task ID 预加载；任何实际读取的计数或关联异常都会停止整个详情，不返回截断的审计结果。
 
 ## 异常语义
 
