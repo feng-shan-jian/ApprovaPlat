@@ -2,14 +2,15 @@
 
 ## 作用
 
-`WorkflowProcessInstanceService` 统一承载 Flowable 8 流程实例的状态切换、发起人取消、管理员终止和已结束历史删除。所有写动作均通过 `WorkflowEngineOperations.writeAsCurrentUser` 在同一 Spring 事务及 Flowable 认证用户上下文中完成。
+`WorkflowProcessInstanceService` 统一承载 Flowable 8 流程实例的状态切换、发起人取消、管理员终止和已结束历史删除。所有写动作均通过 `WorkflowEngineOperations.writeAsCurrentUser` 在同一 Spring 事务及 Flowable 认证用户上下文中完成。`terminateRootProcessInstance` 是取消、驳回和管理员终止唯一的根实例终止写入口。
 
 ## 对外方法
 
 | 方法 | 权限与对象约束 | 持久化结果 |
 | --- | --- | --- |
 | `updateState(request)` | 必须拥有 `workflow:process:state`；实例必须存在且仍在运行 | 使用 Flowable 公共 API 激活或挂起；相同状态返回 `changed=false` |
-| `terminate(request)` | `workflow:process:terminate` 按管理员终止，写 `terminated`；`workflow:process:cancel` 仅允许根实例真实发起人取消本人业务树，写 `canceled` | 子实例请求提升到根实例，更新根历史变量、写类型 `6` 的结构化 comment、级联删除完整运行树并保留结束历史 |
+| `terminate(request)` | `workflow:process:terminate` 按管理员终止，写 `terminated`；`workflow:process:cancel` 仅允许根实例真实发起人取消本人业务树，写 `canceled` | 授权后调用统一根终止写入口；子实例请求提升到根实例，更新双状态、写类型 `6` 的结构化 comment、级联删除完整运行树并保留结束历史 |
+| `terminateRootProcessInstance(...)` | 仅供当前 Flowable 写事务内的取消、驳回和管理员终止调用 | 一次确认根/执行树，必要时按根优先顺序临时激活完整挂起执行树，派生流程结果通知，双写状态，只删根并执行一次性后置对账 |
 | `deleteCompletedHistory(ids)` | 必须拥有 `workflow:process:remove`；整批实例及子流程必须全部结束，且不存在 `BOUND` 附件 | 同事务逻辑删除 `wf_copy`、物理删除 `wf_controlled_loop_execution` 与 Flowable 历史，随后复核无残留 |
 
 ## 请求示例
@@ -38,8 +39,8 @@
 - 具备 `workflow:process:terminate` 的流程管理员执行终止，结果为 `processStatus=terminated`，不会因为恰好也是发起人而降级成取消。
 - CallActivity 子实例 ID 只作为定位信息；服务端校验 `rootProcessInstanceId`、`superExecutionId` 和完整执行树后，始终以根实例执行对象授权、状态写入和级联删除，禁止单独删除子实例。
 - 结构化 comment 固定包含 `action`、`actorUserId`、`processStatus`、`reason`、`wasSuspended`、`requestedInstanceId`、`rootInstanceId` 和 `processTreeInstanceCount`，字段结构不接受客户端控制。
-- 挂起根实例会在同一事务内临时激活，以便写入变量和 comment，随后立即终止；任何一步失败都会整体回滚。
-- 写后门禁同时核对冻结的根/子实例、根 execution 树和所有活动 task 均无残留，并复核根历史终态、历史变量和审计 comment；任一漂移触发事务回滚。
+- 挂起根及 CallActivity 子流程会按根优先顺序在同一事务内临时激活，以便根和子流程任务都能写入变量及 comment，随后立即终止；不调用 SLA 恢复，任何一步失败都会整体回滚。
+- 写后门禁使用 `processInstanceIds` 批量核对冻结的根/子实例，另行核对根 execution 树和所有活动 task 均无残留，并复核根历史双状态、历史变量和可选审计 comment；任一漂移触发事务回滚。
 - 已结束、重复终止或状态竞争返回 `409`；不存在返回 `404`；对象越权返回 `403`。
 
 ## 历史删除一致性

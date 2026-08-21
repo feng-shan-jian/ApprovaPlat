@@ -56,6 +56,7 @@ import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
+import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
 import com.ruoyi.flowable.service.process.WorkflowValidatedStartVariables;
@@ -94,10 +95,6 @@ public class WorkflowTaskLifecycleService
 
     /** 撤回时允许一次冻结并原子合并的最大直接后继任务数量。 */
     private static final int MAX_ACTIVE_TASKS_FOR_REVOKE = 100;
-
-    /** 动态多实例退回时允许一次冻结并原子合并的最大同节点任务数量。 */
-    /** 整实例取消或驳回时允许一次冻结的最大根实例及 CallActivity 子实例数量。 */
-    private static final int MAX_ACTIVE_PROCESS_INSTANCES_FOR_TERMINATION = 2000;
 
     /** 取消后的稳定流程状态。 */
     private static final String CANCELED_STATUS = "canceled";
@@ -164,6 +161,9 @@ public class WorkflowTaskLifecycleService
     /** 普通审批流程结果通知服务，显式业务动作与站内信、外部 Outbox 必须同事务提交。 */
     private final WorkflowNotificationService notificationService;
 
+    /** 根流程终止写入服务，取消、驳回与管理员终止共用同一 Flowable 写链。 */
+    private final WorkflowProcessInstanceService processInstanceService;
+
     /**
      * 创建完整任务生命周期服务。
      *
@@ -182,6 +182,7 @@ public class WorkflowTaskLifecycleService
      * @param multiInstanceService WorkflowMultiInstanceService，动态多实例完成 revision CAS 服务
      * @param controlledLoopService WorkflowControlledLoopService，受控循环完成判断和审计服务
      * @param notificationService WorkflowNotificationService，显式业务终态通知服务
+     * @param processInstanceService WorkflowProcessInstanceService，统一根实例终止写入服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowTaskLifecycleService(WorkflowEngineOperations engineOperations,
@@ -195,7 +196,8 @@ public class WorkflowTaskLifecycleService
             WorkflowNextTaskAssignmentService nextTaskAssignmentService,
             WorkflowMultiInstanceService multiInstanceService,
             WorkflowControlledLoopService controlledLoopService,
-            WorkflowNotificationService notificationService)
+            WorkflowNotificationService notificationService,
+            WorkflowProcessInstanceService processInstanceService)
     {
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
@@ -212,6 +214,7 @@ public class WorkflowTaskLifecycleService
         this.multiInstanceService = multiInstanceService;
         this.controlledLoopService = controlledLoopService;
         this.notificationService = notificationService;
+        this.processInstanceService = processInstanceService;
     }
 
     /**
@@ -232,63 +235,49 @@ public class WorkflowTaskLifecycleService
         {
             ProcessInstance requestedProcessInstance = requireRunningProcessInstanceForCancellation(
                     requestedProcessInstanceId);
-            ProcessInstance rootProcessInstance = requireRunningRootProcessInstanceForCancellation(
-                    requestedProcessInstance);
-            if (!actor.userId().equals(rootProcessInstance.getStartUserId()) && !isAdministrator(actor))
+            ProcessInstance rootProcessInstance = processInstanceService
+                    .resolveRootProcessInstanceForTermination(requestedProcessInstance);
+            if (!actor.userId().equals(rootProcessInstance.getStartUserId())
+                    && !isAdministrator(actor))
             {
                 throw forbidden();
             }
-
-            // Flowable 禁止向挂起执行树写变量和 comment；记录原状态后在同一事务内短暂激活。
-            boolean wasSuspended = rootProcessInstance.isSuspended();
-            ObjectNode auditPayload = buildAuditPayload(
-                    "CANCEL", actor.userId(), opinion, null, null);
-            auditPayload.put("wasSuspended", wasSuspended);
-            String audit = auditPayload.toString();
-            executeConcurrentSensitive(() ->
-            {
-                if (wasSuspended)
-                {
-                    runtimeService.activateProcessInstanceById(rootProcessInstance.getId());
-                }
-
-                // CallActivity 子实例 ID 只用于定位所属业务树；正式取消始终冻结并终止根实例。
-                List<String> processTreeInstanceIds = requireActiveProcessTreeInstanceIds(
-                        rootProcessInstance);
-                List<Task> activeTasks = taskService.createTaskQuery()
-                        .processInstanceIdIn(processTreeInstanceIds)
-                        .active()
-                        .list();
-                if (activeTasks == null || activeTasks.size() > MAX_ACTIVE_TASKS_FOR_CANCEL)
-                {
-                    throw conflict();
-                }
-
-                // 状态变量和 businessStatus 同时维护，供旧查询及 Flowable 8 历史查询分别使用。
-                runtimeService.setVariable(rootProcessInstance.getId(),
-                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, CANCELED_STATUS);
-                runtimeService.updateBusinessStatus(rootProcessInstance.getId(), CANCELED_STATUS);
-                notificationService.onProcessResult("PROCESS_CANCELED",
-                        rootProcessInstance.getProcessDefinitionId(), rootProcessInstance.getId());
-                for (Task activeTask : activeTasks)
-                {
-                    if (activeTask == null || !StringUtils.hasText(activeTask.getId())
-                            || !StringUtils.hasText(activeTask.getProcessInstanceId())
-                            || !processTreeInstanceIds.contains(
-                                    activeTask.getProcessInstanceId().trim()))
+            processInstanceService.terminateRootProcessInstance(rootProcessInstance,
+                    CANCELED_STATUS,
+                    context ->
                     {
-                        throw dataError();
-                    }
-                    // 意见必须关联任务真实所属子实例，否则 Flowable 不能保持历史外键语义。
-                    taskService.addComment(activeTask.getId(),
-                            activeTask.getProcessInstanceId(),
-                            CANCEL_COMMENT_TYPE, audit);
-                }
-                // 删除根实例才能级联结束所有 CallActivity 子流程，并保留统一结构化删除原因。
-                runtimeService.deleteProcessInstance(rootProcessInstance.getId(), audit);
-                verifyTerminatedInstance(rootProcessInstance.getId(),
-                        processTreeInstanceIds, CANCELED_STATUS);
-            });
+                        // 统一入口已按完整执行树完成挂起根激活；这里仅写取消动作的活动任务意见。
+                        ObjectNode auditPayload = buildAuditPayload(
+                                "CANCEL", actor.userId(), opinion, null, null);
+                        auditPayload.put("wasSuspended", context.wasSuspended());
+                        String audit = auditPayload.toString();
+                        List<String> processTreeInstanceIds = context.processTreeInstanceIds();
+                        List<Task> activeTasks = taskService.createTaskQuery()
+                                .processInstanceIdIn(processTreeInstanceIds)
+                                .active()
+                                .list();
+                        if (activeTasks == null
+                                || activeTasks.size() > MAX_ACTIVE_TASKS_FOR_CANCEL)
+                        {
+                            throw conflict();
+                        }
+                        for (Task activeTask : activeTasks)
+                        {
+                            if (activeTask == null || !StringUtils.hasText(activeTask.getId())
+                                    || !StringUtils.hasText(activeTask.getProcessInstanceId())
+                                    || !processTreeInstanceIds.contains(
+                                            activeTask.getProcessInstanceId().trim()))
+                            {
+                                throw dataError();
+                            }
+                            // 意见必须关联任务真实所属子实例，否则 Flowable 不能保持历史外键语义。
+                            taskService.addComment(activeTask.getId(),
+                                    activeTask.getProcessInstanceId(),
+                                    CANCEL_COMMENT_TYPE, audit);
+                        }
+                        return new WorkflowProcessInstanceService.RootTerminationInstruction(
+                                audit, null);
+                    });
             return null;
         });
     }
@@ -521,177 +510,53 @@ public class WorkflowTaskLifecycleService
             Task task = requireActiveTask(taskId);
             ProcessInstance taskProcessInstance = requireActiveProcessInstance(
                     task.getProcessInstanceId());
-            ProcessInstance rootProcessInstance = requireActiveRootProcessInstance(
-                    taskProcessInstance);
             requireCurrentAssignee(task, actor);
             requireMovableTask(task);
-            // 先冻结根实例及全部 CallActivity 子实例主键；Flowable 的
-            // processInstanceIdWithChildren 仅查询 entity link，不能代表真实执行树。
-            List<String> processTreeInstanceIds = requireActiveProcessTreeInstanceIds(
-                    rootProcessInstance);
-            List<Task> activeTasks = taskService.createTaskQuery()
-                    .processInstanceIdIn(processTreeInstanceIds)
-                    .active()
-                    .list();
-            if (activeTasks == null || activeTasks.isEmpty()
-                    || activeTasks.size() > MAX_ACTIVE_TASKS_FOR_CANCEL
-                    || activeTasks.stream().noneMatch(activeTask -> activeTask != null
-                            && taskId.equals(activeTask.getId())))
-            {
-                throw conflict();
-            }
-            WorkflowTaskCopyService.CopyPlan copyPlan = taskCopyService.prepare(
-                    WorkflowTaskCopyAction.REJECT, task, actor, request.copyUserIds());
-            String audit = buildAudit("REJECT", actor.userId(), opinion,
-                    task.getTaskDefinitionKey(), null);
-
-            executeConcurrentSensitive(() ->
-            {
-                // 先把同一结构化意见写到全部活动任务，确保并行和多实例 sibling 的历史均可追踪。
-                for (Task activeTask : activeTasks)
-                {
-                    if (activeTask == null || !StringUtils.hasText(activeTask.getId())
-                            || !StringUtils.hasText(activeTask.getProcessInstanceId()))
+            // 回调在统一执行树校验后才赋值，避免无效终止请求提前生成抄送计划。
+            WorkflowTaskCopyService.CopyPlan[] copyPlanHolder = new WorkflowTaskCopyService.CopyPlan[1];
+            processInstanceService.terminateRootProcessInstance(taskProcessInstance,
+                    REJECTED_STATUS,
+                    context ->
                     {
-                        throw dataError();
-                    }
-                    taskService.addComment(activeTask.getId(),
-                            activeTask.getProcessInstanceId(),
-                            REJECT_COMMENT_TYPE, audit);
-                }
-                runtimeService.setVariable(rootProcessInstance.getId(),
-                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, REJECTED_STATUS);
-                runtimeService.updateBusinessStatus(rootProcessInstance.getId(), REJECTED_STATUS);
-                notificationService.onProcessResult("PROCESS_REJECTED",
-                        rootProcessInstance.getProcessDefinitionId(), rootProcessInstance.getId());
-                // CallActivity 子任务也属于同一业务实例；始终删除根实例才能级联结束全部子流程和 sibling。
-                runtimeService.deleteProcessInstance(rootProcessInstance.getId(), audit);
-                taskCopyService.persist(copyPlan);
-                verifyTerminatedInstance(rootProcessInstance.getId(),
-                        processTreeInstanceIds, REJECTED_STATUS);
-            });
+                        String audit = buildAudit("REJECT", actor.userId(), opinion,
+                                task.getTaskDefinitionKey(), null);
+                        List<Task> activeTasks = taskService.createTaskQuery()
+                                .processInstanceIdIn(context.processTreeInstanceIds())
+                                .active()
+                                .list();
+                        if (activeTasks == null || activeTasks.isEmpty()
+                                || activeTasks.size() > MAX_ACTIVE_TASKS_FOR_CANCEL
+                                || activeTasks.stream().noneMatch(activeTask -> activeTask != null
+                                        && taskId.equals(activeTask.getId())))
+                        {
+                            throw conflict();
+                        }
+                        copyPlanHolder[0] = taskCopyService.prepare(
+                                WorkflowTaskCopyAction.REJECT, task, actor,
+                                request.copyUserIds());
+                        // 驳回 comment 属于任务特有审计；根状态、通知和删除由统一入口负责。
+                        for (Task activeTask : activeTasks)
+                        {
+                            if (activeTask == null || !StringUtils.hasText(activeTask.getId())
+                                    || !StringUtils.hasText(activeTask.getProcessInstanceId()))
+                            {
+                                throw dataError();
+                            }
+                            taskService.addComment(activeTask.getId(),
+                                    activeTask.getProcessInstanceId(),
+                                    REJECT_COMMENT_TYPE, audit);
+                        }
+                        return new WorkflowProcessInstanceService.RootTerminationInstruction(
+                                audit, null);
+                    });
+            // 抄送持久化仍处于同一 Flowable 写事务，且位于根终止通知之后，保持原有副作用顺序。
+            if (copyPlanHolder[0] == null)
+            {
+                throw dataError();
+            }
+            taskCopyService.persist(copyPlanHolder[0]);
             return null;
         });
-    }
-
-    /**
-     * 在整实例取消或驳回写命令后核对运行树已消失且历史业务终态准确。
-     *
-     * @param processInstanceId String，本次被整实例终止的根流程实例主键
-     * @param processTreeInstanceIds List&lt;String&gt;，删除前冻结的根实例及全部子实例主键
-     * @param expectedBusinessStatus String，本次动作必须持久化的 canceled 或 rejected 终态
-     * @return 无返回值，运行态残留或历史终态漂移时抛出异常并回滚整个事务
-     */
-    private void verifyTerminatedInstance(String processInstanceId,
-            List<String> processTreeInstanceIds, String expectedBusinessStatus)
-    {
-        long remainingInstanceCount = processTreeInstanceIds.stream()
-                .mapToLong(instanceId -> runtimeService.createProcessInstanceQuery()
-                        .processInstanceId(instanceId)
-                        .count())
-                .sum();
-        long remainingExecutionCount = runtimeService.createExecutionQuery()
-                .rootProcessInstanceId(processInstanceId)
-                .count();
-        long remainingTaskCount = taskService.createTaskQuery()
-                .processInstanceIdIn(processTreeInstanceIds)
-                .count();
-        HistoricProcessInstance historicInstance = historyService.createHistoricProcessInstanceQuery()
-                .processInstanceId(processInstanceId)
-                .singleResult();
-        if (remainingInstanceCount != 0L || remainingExecutionCount != 0L
-                || remainingTaskCount != 0L || historicInstance == null
-                || historicInstance.getEndTime() == null
-                || !expectedBusinessStatus.equals(historicInstance.getBusinessStatus()))
-        {
-            throw dataError();
-        }
-    }
-
-    /**
-     * 冻结根流程实例及其全部活动 CallActivity 子实例主键，并校验父子执行边界完整。
-     *
-     * @param rootProcessInstance ProcessInstance，已经确认活动且无 super execution 的根业务实例
-     * @return List&lt;String&gt;，按实例主键排序且至少包含根实例的完整活动流程树
-     */
-    private List<String> requireActiveProcessTreeInstanceIds(
-            ProcessInstance rootProcessInstance)
-    {
-        String rootProcessInstanceId = rootProcessInstance.getId();
-        List<Execution> processTreeExecutions = runtimeService.createExecutionQuery()
-                .rootProcessInstanceId(rootProcessInstanceId)
-                .list();
-        if (processTreeExecutions == null)
-        {
-            throw dataError();
-        }
-
-        // execution 查询覆盖并行分支和多层 CallActivity；这里只提取正式流程实例主键并去重。
-        Set<String> processInstanceIds = new LinkedHashSet<>();
-        processInstanceIds.add(rootProcessInstanceId);
-        for (Execution execution : processTreeExecutions)
-        {
-            if (execution == null || !StringUtils.hasText(execution.getProcessInstanceId())
-                    || (StringUtils.hasText(execution.getRootProcessInstanceId())
-                            && !rootProcessInstanceId.equals(
-                                    execution.getRootProcessInstanceId().trim())))
-            {
-                throw dataError();
-            }
-            processInstanceIds.add(execution.getProcessInstanceId().trim());
-        }
-        if (processInstanceIds.size() > MAX_ACTIVE_PROCESS_INSTANCES_FOR_TERMINATION)
-        {
-            throw conflict();
-        }
-
-        List<ProcessInstance> activeInstances = runtimeService.createProcessInstanceQuery()
-                .processInstanceIds(processInstanceIds)
-                .active()
-                .list();
-        if (activeInstances == null || activeInstances.size() != processInstanceIds.size())
-        {
-            throw conflict();
-        }
-
-        // 再读取正式 ProcessInstance，避免仅凭 execution 字段终止已挂起或父子关系漂移的实例。
-        Map<String, ProcessInstance> instancesById = new LinkedHashMap<>();
-        for (ProcessInstance activeInstance : activeInstances)
-        {
-            if (activeInstance == null || !StringUtils.hasText(activeInstance.getId())
-                    || activeInstance.isSuspended())
-            {
-                throw dataError();
-            }
-            String instanceId = activeInstance.getId().trim();
-            String declaredRootId = activeInstance.getRootProcessInstanceId();
-            boolean rootInstance = rootProcessInstanceId.equals(instanceId);
-            if (rootInstance)
-            {
-                if (StringUtils.hasText(activeInstance.getSuperExecutionId())
-                        || (StringUtils.hasText(declaredRootId)
-                                && !rootProcessInstanceId.equals(declaredRootId.trim())))
-                {
-                    throw dataError();
-                }
-            }
-            else if (!StringUtils.hasText(declaredRootId)
-                    || !rootProcessInstanceId.equals(declaredRootId.trim())
-                    || !StringUtils.hasText(activeInstance.getSuperExecutionId()))
-            {
-                throw dataError();
-            }
-            if (!processInstanceIds.contains(instanceId)
-                    || instancesById.put(instanceId, activeInstance) != null)
-            {
-                throw dataError();
-            }
-        }
-        if (!instancesById.keySet().equals(processInstanceIds))
-        {
-            throw dataError();
-        }
-        return instancesById.keySet().stream().sorted().toList();
     }
 
     /**
@@ -1138,80 +1003,6 @@ public class WorkflowTaskLifecycleService
             throw conflict();
         }
         throw notFound();
-    }
-
-    /**
-     * 从取消请求直接定位的根或子实例解析未结束根业务实例。
-     *
-     * @param directProcessInstance ProcessInstance，可为 active 或 suspended 的直接目标实例
-     * @return ProcessInstance，取消动作必须写状态并级联结束的根业务实例
-     */
-    private ProcessInstance requireRunningRootProcessInstanceForCancellation(
-            ProcessInstance directProcessInstance)
-    {
-        if (directProcessInstance == null || !StringUtils.hasText(directProcessInstance.getId()))
-        {
-            throw dataError();
-        }
-        String directProcessInstanceId = directProcessInstance.getId();
-        String declaredRootId = directProcessInstance.getRootProcessInstanceId();
-        String rootProcessInstanceId = StringUtils.hasText(declaredRootId)
-                ? declaredRootId.trim() : directProcessInstanceId;
-        boolean directIsRoot = directProcessInstanceId.equals(rootProcessInstanceId);
-        if (!directIsRoot && !StringUtils.hasText(directProcessInstance.getSuperExecutionId()))
-        {
-            throw dataError();
-        }
-
-        ProcessInstance rootProcessInstance = directIsRoot
-                ? directProcessInstance
-                : requireRunningProcessInstanceForCancellation(rootProcessInstanceId);
-        String rootDeclaredId = rootProcessInstance.getRootProcessInstanceId();
-        if (!rootProcessInstanceId.equals(rootProcessInstance.getId())
-                || StringUtils.hasText(rootProcessInstance.getSuperExecutionId())
-                || (StringUtils.hasText(rootDeclaredId)
-                        && !rootProcessInstanceId.equals(rootDeclaredId.trim())))
-        {
-            throw dataError();
-        }
-        return rootProcessInstance;
-    }
-
-    /**
-     * 从任意直接实例解析仍活动的根业务流程实例，并校验 CallActivity 父子关系完整。
-     *
-     * @param directProcessInstance ProcessInstance，任务或请求直接定位的活动流程实例
-     * @return ProcessInstance，整业务实例取消或驳回时必须删除的活动根流程实例
-     */
-    private ProcessInstance requireActiveRootProcessInstance(
-            ProcessInstance directProcessInstance)
-    {
-        if (directProcessInstance == null || !StringUtils.hasText(directProcessInstance.getId()))
-        {
-            throw dataError();
-        }
-        String taskProcessInstanceId = directProcessInstance.getId();
-        String declaredRootId = directProcessInstance.getRootProcessInstanceId();
-        String rootProcessInstanceId = StringUtils.hasText(declaredRootId)
-                ? declaredRootId.trim() : taskProcessInstanceId;
-        boolean taskBelongsToRoot = taskProcessInstanceId.equals(rootProcessInstanceId);
-        if (!taskBelongsToRoot && !StringUtils.hasText(directProcessInstance.getSuperExecutionId()))
-        {
-            // 根 ID 指向其他实例但缺少 CallActivity super execution，属于不可安全终止的数据漂移。
-            throw dataError();
-        }
-
-        ProcessInstance rootProcessInstance = taskBelongsToRoot
-                ? directProcessInstance : requireActiveProcessInstance(rootProcessInstanceId);
-        String rootDeclaredId = rootProcessInstance.getRootProcessInstanceId();
-        if (!rootProcessInstanceId.equals(rootProcessInstance.getId())
-                || StringUtils.hasText(rootProcessInstance.getSuperExecutionId())
-                || (StringUtils.hasText(rootDeclaredId)
-                        && !rootProcessInstanceId.equals(rootDeclaredId.trim())))
-        {
-            throw dataError();
-        }
-        return rootProcessInstance;
     }
 
     /**
