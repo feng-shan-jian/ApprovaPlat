@@ -566,10 +566,10 @@ public class WorkflowTaskLifecycleService
     }
 
     /**
-     * 由当前办理人将普通串行任务退回实时合法历史节点。
+     * 由当前办理人将普通串行任务退回服务端从真实历史确定的首个审批节点。
      *
-     * @param request WorkflowTaskReturnRequest，任务、目标节点和退回原因
-     * @return 无返回值，成功时原任务关闭、目标任务重建且意见同事务持久化
+     * @param request WorkflowTaskReturnRequest，任务、退回原因和可选抄送人
+     * @return 无返回值，成功时原任务关闭、首审任务重建且意见同事务持久化
      */
     public void returnTask(WorkflowTaskReturnRequest request)
     {
@@ -581,45 +581,28 @@ public class WorkflowTaskLifecycleService
         String opinion = requireOpinion(request.comment());
         engineOperations.writeAsCurrentUser(actor ->
         {
-            Task task = requireActiveTask(taskId);
-            ProcessInstance processInstance = requireActiveProcessInstance(task.getProcessInstanceId());
-            requireCurrentAssignee(task, actor);
-            requireMovableTask(task);
-            if (!WorkflowProcessStartService.RUNNING_STATUS.equals(runtimeService.getVariable(
-                    processInstance.getId(), WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)))
-            {
-                throw conflict();
-            }
-            if (!StringUtils.hasText(processInstance.getStartUserId()))
-            {
-                throw dataError();
-            }
-            BpmnContext context = requireBpmnContext(task.getProcessDefinitionId());
-            UserTask currentNode = movementPolicy.requireMainProcessReturnSource(context.model(),
-                    context.definition().getKey(), task.getTaskDefinitionKey());
-            String targetKey = requireFirstApprovalNode(task, context, currentNode);
-            List<Task> activeTasks = requireReturnableActiveTasks(task);
-            String executionId = activeTasks.get(0).getExecutionId();
+            ReturnPreparation preparation = requireReturnPreparation(taskId, actor);
+            Task task = preparation.task();
+            ProcessInstance processInstance = preparation.processInstance();
             WorkflowTaskCopyService.CopyPlan copyPlan = taskCopyService.prepare(
                     WorkflowTaskCopyAction.RETURN, task, actor, request.copyUserIds());
 
             executeConcurrentSensitive(() ->
             {
                 // 退回只处理唯一活动审批分支；并行、会签和多实例结构在写审计前已被拒绝。
-                for (Task activeTask : activeTasks)
-                {
-                    // 退回任务关系已由 Flowable comment 的 taskId 固化；sourceTaskId 仅表示撤回来源，不能混入退回契约。
-                    addAuditComment(activeTask, RETURN_COMMENT_TYPE, "RETURN",
-                        actor.userId(), opinion, targetKey, null);
-                }
+                // 退回任务关系已由 Flowable comment 的 taskId 固化；sourceTaskId 仅表示撤回来源，不能混入退回契约。
+                addAuditComment(task, RETURN_COMMENT_TYPE, "RETURN",
+                        actor.userId(), opinion, preparation.targetNodeKey(), null);
                 // 执行树迁移会先创建原办理配置任务，先抑制中间通知，待改派发起人后只发布稳定退回事件。
                 runtimeService.setVariable(task.getProcessInstanceId(),
                         WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE, "RETURN");
                 var stateBuilder = runtimeService.createChangeActivityStateBuilder()
                         .processInstanceId(task.getProcessInstanceId());
-                stateBuilder.moveExecutionToActivityId(executionId, targetKey);
+                stateBuilder.moveExecutionToActivityId(
+                        preparation.executionId(), preparation.targetNodeKey());
                 stateBuilder.changeState();
-                Task returnedTask = requireSingleActiveTask(task.getProcessInstanceId(), targetKey);
+                Task returnedTask = requireSingleActiveTask(
+                        task.getProcessInstanceId(), preparation.targetNodeKey());
                 ReturnedAssignmentSnapshot assignment = captureAssignment(returnedTask);
                 taskService.setVariableLocal(returnedTask.getId(), RETURN_ASSIGNMENT_VARIABLE,
                         encodeReturnedAssignment(assignment));
@@ -733,7 +716,7 @@ public class WorkflowTaskLifecycleService
      * 判断当前用户能否对指定任务执行真实退回。
      *
      * @param taskId String，详情页请求并已完成对象关系核验的任务主键
-     * @return boolean，正式退回全部只读前置条件满足且至少存在一个合法目标时返回 true
+     * @return boolean，正式退回全部只读前置条件满足时返回 true
      */
     public boolean isTaskReturnAllowed(String taskId)
     {
@@ -742,24 +725,7 @@ public class WorkflowTaskLifecycleService
             // 能力投影复用直接退回发起人的对象、执行树和首审批历史准备链。
             String normalizedTaskId = requireId(taskId);
             WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-            Task task = requireActiveTask(normalizedTaskId);
-            ProcessInstance instance = requireActiveProcessInstance(task.getProcessInstanceId());
-            requireCurrentAssignee(task, actor);
-            requireMovableTask(task);
-            if (!WorkflowProcessStartService.RUNNING_STATUS.equals(runtimeService.getVariable(
-                    instance.getId(), WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)))
-            {
-                throw conflict();
-            }
-            if (!StringUtils.hasText(instance.getStartUserId()))
-            {
-                throw dataError();
-            }
-            BpmnContext context = requireBpmnContext(task.getProcessDefinitionId());
-            UserTask currentNode = movementPolicy.requireMainProcessReturnSource(context.model(),
-                    context.definition().getKey(), task.getTaskDefinitionKey());
-            requireFirstApprovalNode(task, context, currentNode);
-            requireReturnableActiveTasks(task);
+            requireReturnPreparation(normalizedTaskId, actor);
             return true;
         }, exception ->
         {
@@ -773,50 +739,49 @@ public class WorkflowTaskLifecycleService
     }
 
     /**
-     * 冻结普通串行退回任务及其唯一 execution。
+     * 在同一只读快照中完成退回所需的对象、权限、历史、BPMN 和唯一活动任务门禁。
      *
-     * @param task Task，当前用户真实持有并发起退回的活动任务
-     * @param currentNode UserTask，已通过 BPMN 退回来源白名单的普通当前节点
-     * @return ReturnExecutionPlan，仅包含当前活动任务和唯一 execution 主键
+     * @param taskId String，待退回的活动任务主键
+     * @param actor WorkflowCurrentIdentity，事务内重新解析的当前用户
+     * @return ReturnPreparation，后续退回写链直接使用的任务、实例、首审节点和 execution
      */
-    private ReturnExecutionPlan prepareReturnExecutionPlan(Task task, UserTask currentNode)
+    private ReturnPreparation requireReturnPreparation(String taskId,
+            WorkflowCurrentIdentity actor)
     {
-        // 防御性复核 BPMN 来源，避免未来调用绕过 movementPolicy 后重新开放多实例跨轮退回。
-        if (currentNode == null || currentNode.hasMultiInstanceLoopCharacteristics())
+        Task task = requireActiveTask(taskId);
+        ProcessInstance processInstance = requireActiveProcessInstance(
+                task.getProcessInstanceId());
+        requireCurrentAssignee(task, actor);
+        requireMovableTask(task);
+        if (!WorkflowProcessStartService.RUNNING_STATUS.equals(runtimeService.getVariable(
+                processInstance.getId(), WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)))
         {
             throw conflict();
         }
-        requireSingleExecutionTree(task);
-        return new ReturnExecutionPlan(List.of(task), List.of(task.getExecutionId()));
-    }
+        if (!StringUtils.hasText(processInstance.getStartUserId()))
+        {
+            throw dataError();
+        }
 
-    /**
-     * 核对普通退回状态迁移只生成一个目标活动任务，且原任务已离开运行时表。
-     *
-     * @param processInstanceId String，发生退回的真实流程实例主键
-     * @param targetKey String，服务端实时校验后的目标用户任务节点 key
-     * @param sourceTasks List&lt;Task&gt;，退回命令前冻结的单一来源活动任务
-     * @return 无返回值，迁移结果不完整时抛出异常并回滚整个事务
-     */
-    private void verifyReturnResult(String processInstanceId, String targetKey,
-            List<Task> sourceTasks)
-    {
+        // BPMN 上下文只装载一次，首审节点及安全路径都以当前部署和真实历史为准。
+        BpmnContext context = requireBpmnContext(task.getProcessDefinitionId());
+        UserTask currentNode = movementPolicy.requireMainProcessReturnSource(context.model(),
+                context.definition().getKey(), task.getTaskDefinitionKey());
+        String targetNodeKey = requireFirstApprovalNode(task, context, currentNode);
+
         List<Task> activeTasks = taskService.createTaskQuery()
-                .processInstanceId(processInstanceId)
-                .active()
-                .list();
+                .processInstanceId(task.getProcessInstanceId()).active().list();
         if (activeTasks == null || activeTasks.size() != 1
-                || !targetKey.equals(activeTasks.get(0).getTaskDefinitionKey()))
+                || activeTasks.get(0) == null
+                || !task.getId().equals(activeTasks.get(0).getId())
+                || !StringUtils.hasText(activeTasks.get(0).getExecutionId())
+                || !task.getProcessDefinitionId().equals(
+                        activeTasks.get(0).getProcessDefinitionId()))
         {
-            throw dataError();
+            throw conflict();
         }
-        Set<String> sourceTaskIds = sourceTasks.stream()
-                .map(Task::getId)
-                .collect(java.util.stream.Collectors.toSet());
-        if (sourceTaskIds.contains(activeTasks.get(0).getId()))
-        {
-            throw dataError();
-        }
+        return new ReturnPreparation(task, processInstance, targetNodeKey,
+                activeTasks.get(0).getExecutionId());
     }
 
     /**
@@ -1592,45 +1557,6 @@ public class WorkflowTaskLifecycleService
     }
 
     /**
-     * 校验当前活动任务是实例唯一活动节点且拥有可迁移的真实执行主键。
-     *
-     * @param task Task，待驳回、退回或撤回的活动任务
-     * @return 无返回值，并行、孤立或变化中的执行树抛出 HTTP 409 业务异常
-     */
-    private void requireSingleExecutionTree(Task task)
-    {
-        List<Task> activeTasks = taskService.createTaskQuery()
-                .processInstanceId(task.getProcessInstanceId())
-                .active()
-                .list();
-        if (activeTasks == null || activeTasks.size() != 1
-                || !task.getId().equals(activeTasks.get(0).getId())
-                || !StringUtils.hasText(task.getExecutionId()))
-        {
-            throw conflict();
-        }
-        List<String> activeActivityIds = runtimeService.getActiveActivityIds(task.getProcessInstanceId());
-        if (activeActivityIds == null || activeActivityIds.size() != 1
-                || !task.getTaskDefinitionKey().equals(activeActivityIds.get(0)))
-        {
-            throw conflict();
-        }
-        Execution execution = runtimeService.createExecutionQuery()
-                .executionId(task.getExecutionId())
-                .singleResult();
-        if (execution == null || execution.isEnded() || execution.isSuspended()
-                || !task.getProcessInstanceId().equals(execution.getProcessInstanceId())
-                || !task.getTaskDefinitionKey().equals(execution.getActivityId())
-                || StringUtils.hasText(execution.getSuperExecutionId())
-                || (StringUtils.hasText(execution.getRootProcessInstanceId())
-                        && !task.getProcessInstanceId().equals(
-                                execution.getRootProcessInstanceId())))
-        {
-            throw conflict();
-        }
-    }
-
-    /**
      * 校验状态迁移任务不是委派任务，防止破坏 owner 和 delegation 状态机。
      *
      * @param task Task，待驳回、退回或撤回的活动任务
@@ -1747,28 +1673,6 @@ public class WorkflowTaskLifecycleService
             }
         }
         throw conflict();
-    }
-
-    /**
-     * 冻结同一主流程实例的唯一活动审批任务及 execution，供整申请一次性退回。
-     *
-     * @param sourceTask Task，触发退回的当前任务
-     * @return List&lt;Task&gt;，只包含当前来源任务的不可变单元素集合
-     */
-    private List<Task> requireReturnableActiveTasks(Task sourceTask)
-    {
-        List<Task> activeTasks = taskService.createTaskQuery()
-                .processInstanceId(sourceTask.getProcessInstanceId()).active().list();
-        if (activeTasks == null || activeTasks.size() != 1
-                || activeTasks.get(0) == null
-                || !sourceTask.getId().equals(activeTasks.get(0).getId())
-                || !StringUtils.hasText(activeTasks.get(0).getExecutionId())
-                || !sourceTask.getProcessDefinitionId().equals(
-                        activeTasks.get(0).getProcessDefinitionId()))
-        {
-            throw conflict();
-        }
-        return List.copyOf(activeTasks);
     }
 
     /**
@@ -2347,29 +2251,16 @@ public class WorkflowTaskLifecycleService
     }
 
     /**
-     * 普通串行退回命令执行前冻结的单一活动任务与 execution。
+     * 普通串行退回的共享只读准备结果。
      *
-     * @param activeTasks List&lt;Task&gt;，普通任务单元素集合
-     * @param executionIds List&lt;String&gt;，与活动任务对应的唯一 execution 主键
+     * @param task Task，当前用户持有的唯一活动任务
+     * @param processInstance ProcessInstance，任务所属活动流程实例
+     * @param targetNodeKey String，服务端从真实历史确定的首审节点 key
+     * @param executionId String，唯一活动任务的真实 execution 主键
      */
-    private record ReturnExecutionPlan(List<Task> activeTasks, List<String> executionIds)
+    private record ReturnPreparation(Task task, ProcessInstance processInstance,
+            String targetNodeKey, String executionId)
     {
-        /**
-         * 创建不可变单任务退回计划并拒绝数量漂移。
-         *
-         * @param activeTasks List&lt;Task&gt;，已经完成运行态校验的来源任务
-         * @param executionIds List&lt;String&gt;，已经完成唯一性校验的来源 execution 主键
-         * @return 无返回值，构造后两项集合均不可修改
-         */
-        private ReturnExecutionPlan
-        {
-            activeTasks = List.copyOf(activeTasks);
-            executionIds = List.copyOf(executionIds);
-            if (activeTasks.size() != 1 || executionIds.size() != 1)
-            {
-                throw new IllegalArgumentException("退回执行计划不完整");
-            }
-        }
     }
 
     /**
