@@ -23,6 +23,7 @@ import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.identitylink.api.IdentityLink;
 import org.flowable.task.api.Task;
+import org.flowable.task.api.TaskInfo;
 import org.flowable.task.api.TaskQuery;
 import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.task.api.history.HistoricTaskInstanceQuery;
@@ -284,9 +285,9 @@ public class WorkflowProcessQueryService
             List<HistoricProcessInstance> instances = checkedRows(
                     query.listPage(page.offset(), page.pageSize()), page.pageSize());
             InstancePageFacts facts = loadInstancePageFacts(instances);
-            EnrichmentCache cache = new EnrichmentCache();
+            UserNameCache userNameCache = new UserNameCache();
             List<WorkflowManagedProcessView> rows = instances.stream()
-                    .map(instance -> toManagedView(instance, cache, facts))
+                    .map(instance -> toManagedView(instance, userNameCache, facts))
                     .toList();
             return new PageResult<>(rows, total);
         });
@@ -325,9 +326,10 @@ public class WorkflowProcessQueryService
                 return new PageResult<>(List.of(), total);
             }
             List<Task> tasks = checkedRows(query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            EnrichmentCache cache = new EnrichmentCache();
+            UserNameCache userNameCache = new UserNameCache();
+            Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
             List<WorkflowAssignedTaskView> rows = tasks.stream()
-                    .map(task -> toAssignedView(task, cache))
+                    .map(task -> toAssignedView(task, contexts.get(task.getId())))
                     .toList();
             return new PageResult<>(rows, total);
         });
@@ -375,9 +377,10 @@ public class WorkflowProcessQueryService
                 return new PageResult<>(List.of(), total);
             }
             List<Task> tasks = checkedRows(query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            EnrichmentCache cache = new EnrichmentCache();
+            UserNameCache userNameCache = new UserNameCache();
+            Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
             List<WorkflowClaimableTaskView> rows = tasks.stream()
-                    .map(task -> toClaimableView(task, cache))
+                    .map(task -> toClaimableView(task, contexts.get(task.getId())))
                     .toList();
             return new PageResult<>(rows, total);
         });
@@ -417,9 +420,10 @@ public class WorkflowProcessQueryService
             }
             List<HistoricTaskInstance> tasks = checkedRows(
                     query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            EnrichmentCache cache = new EnrichmentCache();
+            UserNameCache userNameCache = new UserNameCache();
+            Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
             List<WorkflowCompletedTaskView> rows = tasks.stream()
-                    .map(task -> toCompletedView(task, cache))
+                    .map(task -> toCompletedView(task, contexts.get(task.getId())))
                     .toList();
             return new PageResult<>(rows, total);
         });
@@ -510,7 +514,7 @@ public class WorkflowProcessQueryService
         String instanceId = optionalText(request.processInstanceId(), "流程实例主键过长");
         return engineOperations.read(() ->
         {
-            ProcessDefinition definition = requireDefinition(definitionId, null);
+            ProcessDefinition definition = requireDefinition(definitionId);
             requireSame(deploymentId, definition.getDeploymentId(), "流程定义与部署关系不一致");
             if (instanceId == null)
             {
@@ -552,7 +556,7 @@ public class WorkflowProcessQueryService
         String instanceId = optionalText(request.processInstanceId(), "流程实例主键过长");
         return engineOperations.read(() ->
         {
-            ProcessDefinition definition = requireDefinition(definitionId, null);
+            ProcessDefinition definition = requireDefinition(definitionId);
             if (instanceId == null)
             {
                 WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
@@ -1030,12 +1034,12 @@ public class WorkflowProcessQueryService
      * 将任意发起人的历史实例转换为流程管理员运维视图。
      *
      * @param instance HistoricProcessInstance，管理员查询返回的历史实例
-     * @param cache EnrichmentCache，当前页发起人显示名称缓存
+     * @param userNameCache UserNameCache，当前页发起人显示名称缓存
      * @param facts InstancePageFacts，当前页一次性取得的任务、分类和挂起状态
      * @return WorkflowManagedProcessView，含发起人、活动节点和稳定状态的运维视图
      */
     private WorkflowManagedProcessView toManagedView(HistoricProcessInstance instance,
-            EnrichmentCache cache, InstancePageFacts facts)
+            UserNameCache userNameCache, InstancePageFacts facts)
     {
         if (instance == null || !StringUtils.hasText(instance.getId()))
         {
@@ -1044,7 +1048,7 @@ public class WorkflowProcessQueryService
         String category = facts.deploymentCategories().get(instance.getDeploymentId());
         List<String> taskNames = facts.runtimeTaskNames().getOrDefault(instance.getId(), List.of());
         Boolean runtimeSuspended = facts.runtimeSuspensionStates().get(instance.getId());
-        String startUserName = resolveUserName(instance.getStartUserId(), cache);
+        String startUserName = resolveUserName(instance.getStartUserId(), userNameCache);
         return new WorkflowManagedProcessView(instance.getId(), instance.getProcessDefinitionId(),
                 instance.getProcessDefinitionKey(), instance.getProcessDefinitionName(),
                 safeVersion(instance.getProcessDefinitionVersion()), category,
@@ -1226,12 +1230,11 @@ public class WorkflowProcessQueryService
      * 将当前办理人的活动任务转换为不可变待办视图。
      *
      * @param task Task，taskAssignee 已固定当前用户的活动任务
-     * @param cache EnrichmentCache，当前页定义、实例和用户名缓存
+     * @param context TaskContext，当前页批量装载并完成关系核验的任务上下文
      * @return WorkflowAssignedTaskView，活动待办视图
      */
-    private WorkflowAssignedTaskView toAssignedView(Task task, EnrichmentCache cache)
+    private WorkflowAssignedTaskView toAssignedView(Task task, TaskContext context)
     {
-        TaskContext context = requireTaskContext(task, cache);
         return new WorkflowAssignedTaskView(task.getId(), task.getName(), task.getTaskDefinitionKey(),
                 task.getAssignee(), task.getOwner(), context.definition().getId(),
                 context.definition().getKey(), context.definition().getName(),
@@ -1246,16 +1249,15 @@ public class WorkflowProcessQueryService
      * 将当前身份可认领的活动任务转换为不可变待签视图。
      *
      * @param task Task，候选身份查询返回的未分配活动任务
-     * @param cache EnrichmentCache，当前页定义、实例和用户名缓存
+     * @param context TaskContext，当前页批量装载并完成关系核验的任务上下文
      * @return WorkflowClaimableTaskView，未分配待签任务视图
      */
-    private WorkflowClaimableTaskView toClaimableView(Task task, EnrichmentCache cache)
+    private WorkflowClaimableTaskView toClaimableView(Task task, TaskContext context)
     {
         if (StringUtils.hasText(task.getAssignee()))
         {
             throw dataError("待签任务已经存在办理人");
         }
-        TaskContext context = requireTaskContext(task, cache);
         return new WorkflowClaimableTaskView(task.getId(), task.getName(), task.getTaskDefinitionKey(),
                 context.definition().getId(), context.definition().getKey(),
                 context.definition().getName(), context.definition().getVersion(), context.category(),
@@ -1268,13 +1270,12 @@ public class WorkflowProcessQueryService
      * 将当前用户真实完成的历史任务转换为不可变已办视图。
      *
      * @param task HistoricTaskInstance，taskCompletedBy 已固定当前用户的历史任务
-     * @param cache EnrichmentCache，当前页定义、实例和用户名缓存
+     * @param context TaskContext，当前页批量装载并完成关系核验的任务上下文
      * @return WorkflowCompletedTaskView，真实已办任务视图
      */
     private WorkflowCompletedTaskView toCompletedView(HistoricTaskInstance task,
-            EnrichmentCache cache)
+            TaskContext context)
     {
-        TaskContext context = requireTaskContext(task, cache);
         // 能力字段调用正式撤回准备路径；页面快照只用于隐藏入口，提交时仍会再次加锁校验。
         boolean revocable = taskLifecycleService.isProcessRevocable(
                 task.getProcessInstanceId(), task.getId());
@@ -1289,30 +1290,142 @@ public class WorkflowProcessQueryService
     }
 
     /**
-     * 查询并核验任务所属定义、实例和历史发起人，禁止伪造或缺失关联静默进入页面。
+     * 一次性批量查询当前任务页的定义、历史实例和部署，并完成全部关联核验。
      *
-     * @param task org.flowable.task.api.TaskInfo，活动或历史任务公共信息
-     * @param cache EnrichmentCache，当前页关联对象缓存
-     * @return TaskContext，核验后的定义、实例、分类及发起人名称
+     * @param tasks List&lt;? extends TaskInfo&gt;，当前页活动或历史任务
+     * @param userNameCache UserNameCache，保持既有逐用户显示名称解析规则的页内缓存
+     * @return Map&lt;String, TaskContext&gt;，任务主键到已核验上下文的不可变映射
      */
-    private TaskContext requireTaskContext(org.flowable.task.api.TaskInfo task,
-            EnrichmentCache cache)
+    private Map<String, TaskContext> loadTaskContexts(List<? extends TaskInfo> tasks,
+            UserNameCache userNameCache)
     {
-        if (task == null || !StringUtils.hasText(task.getId())
-                || !StringUtils.hasText(task.getProcessDefinitionId())
-                || !StringUtils.hasText(task.getProcessInstanceId()))
+        // tasksById 同时保留当前页顺序并检测重复任务主键，避免覆盖后返回错误上下文。
+        Map<String, TaskInfo> tasksById = new LinkedHashMap<>();
+        Set<String> definitionIds = new LinkedHashSet<>();
+        Set<String> instanceIds = new LinkedHashSet<>();
+        for (TaskInfo task : tasks)
         {
-            throw dataError("任务关联数据异常");
+            if (task == null || !StringUtils.hasText(task.getId())
+                    || !StringUtils.hasText(task.getProcessDefinitionId())
+                    || !StringUtils.hasText(task.getProcessInstanceId())
+                    || tasksById.put(task.getId(), task) != null)
+            {
+                throw dataError("任务关联数据异常");
+            }
+            definitionIds.add(task.getProcessDefinitionId());
+            instanceIds.add(task.getProcessInstanceId());
         }
-        ProcessDefinition definition = requireDefinition(task.getProcessDefinitionId(), cache);
-        HistoricProcessInstance instance = requireHistoricInstance(task.getProcessInstanceId(), cache);
-        requireSame(definition.getId(), instance.getProcessDefinitionId(), "任务与流程实例定义关系不一致");
-        requireSame(definition.getDeploymentId(), instance.getDeploymentId(), "任务与流程实例部署关系不一致");
-        Deployment deployment = requireDeployment(definition.getDeploymentId(), cache);
-        // 展示和筛选必须共享 Deployment.category 口径，禁止回退出一个无法筛选的旧分类。
-        String category = resolveDeploymentCategory(deployment.getCategory());
-        String startUserName = resolveUserName(instance.getStartUserId(), cache);
-        return new TaskContext(definition, instance, category, startUserName);
+        if (tasksById.isEmpty())
+        {
+            return Map.of();
+        }
+
+        // definitionsById 只接受本页请求范围内、主键唯一且部署关系可继续核验的定义。
+        List<ProcessDefinition> definitions = repositoryService.createProcessDefinitionQuery()
+                .processDefinitionIds(definitionIds)
+                .list();
+        if (definitions == null || definitions.size() > definitionIds.size())
+        {
+            throw dataError("流程定义批量查询结果异常");
+        }
+        Map<String, ProcessDefinition> definitionsById = new HashMap<>();
+        Set<String> deploymentIds = new LinkedHashSet<>();
+        for (ProcessDefinition definition : definitions)
+        {
+            if (definition == null || !StringUtils.hasText(definition.getId())
+                    || !definitionIds.contains(definition.getId())
+                    || definitionsById.put(definition.getId(), definition) != null)
+            {
+                throw dataError("流程定义批量查询结果异常");
+            }
+            if (!StringUtils.hasText(definition.getDeploymentId()))
+            {
+                throw dataError("流程部署关联主键为空");
+            }
+            deploymentIds.add(definition.getDeploymentId());
+        }
+        for (String definitionId : definitionIds)
+        {
+            if (!definitionsById.containsKey(definitionId))
+            {
+                throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND);
+            }
+        }
+
+        // instancesById 来自一次历史查询；任何缺行都保持整页 500 数据异常合同。
+        List<HistoricProcessInstance> instances = historyService
+                .createHistoricProcessInstanceQuery()
+                .processInstanceIds(instanceIds)
+                .list();
+        if (instances == null || instances.size() > instanceIds.size())
+        {
+            throw dataError("历史流程实例批量查询结果异常");
+        }
+        Map<String, HistoricProcessInstance> instancesById = new HashMap<>();
+        for (HistoricProcessInstance instance : instances)
+        {
+            if (instance == null || !StringUtils.hasText(instance.getId())
+                    || !instanceIds.contains(instance.getId())
+                    || instancesById.put(instance.getId(), instance) != null)
+            {
+                throw dataError("历史流程实例批量查询结果异常");
+            }
+        }
+        for (String instanceId : instanceIds)
+        {
+            if (!instancesById.containsKey(instanceId))
+            {
+                throw dataError("任务缺少所属历史流程实例");
+            }
+        }
+
+        // deploymentsById 只按定义中的真实部署主键一次性读取，分类不得回退到其他对象。
+        List<Deployment> deployments = repositoryService.createDeploymentQuery()
+                .deploymentIds(new ArrayList<>(deploymentIds))
+                .list();
+        if (deployments == null || deployments.size() > deploymentIds.size())
+        {
+            throw dataError("流程部署批量查询结果异常");
+        }
+        Map<String, Deployment> deploymentsById = new HashMap<>();
+        for (Deployment deployment : deployments)
+        {
+            if (deployment == null || !StringUtils.hasText(deployment.getId())
+                    || !deploymentIds.contains(deployment.getId())
+                    || deploymentsById.put(deployment.getId(), deployment) != null)
+            {
+                throw dataError("流程部署批量查询结果异常");
+            }
+        }
+        for (String deploymentId : deploymentIds)
+        {
+            if (!deploymentsById.containsKey(deploymentId))
+            {
+                throw dataError("任务缺少所属流程部署");
+            }
+        }
+
+        Map<String, TaskContext> contexts = new LinkedHashMap<>();
+        for (TaskInfo task : tasksById.values())
+        {
+            ProcessDefinition definition = definitionsById.get(task.getProcessDefinitionId());
+            HistoricProcessInstance instance = instancesById.get(task.getProcessInstanceId());
+            if (!definition.getId().equals(instance.getProcessDefinitionId()))
+            {
+                throw dataError("任务与流程实例定义关系不一致");
+            }
+            if (!definition.getDeploymentId().equals(instance.getDeploymentId()))
+            {
+                throw dataError("任务与流程实例部署关系不一致");
+            }
+            Deployment deployment = deploymentsById.get(definition.getDeploymentId());
+            // 展示和筛选共享 Deployment.category 口径，禁止回退出一个无法筛选的旧分类。
+            String category = resolveDeploymentCategory(deployment.getCategory());
+            String startUserName = resolveUserName(instance.getStartUserId(), userNameCache);
+            contexts.put(task.getId(), new TaskContext(definition, instance,
+                    category, startUserName));
+        }
+        return Map.copyOf(contexts);
     }
 
     /**
@@ -1481,102 +1594,41 @@ public class WorkflowProcessQueryService
     }
 
     /**
-     * 查询流程定义，并在当前页内复用已核验结果。
+     * 按主键查询单个流程定义，供表单和 BPMN XML 读取复用。
      *
      * @param definitionId String，流程定义主键
-     * @param cache EnrichmentCache，当前页缓存；单对象查询时允许为空
      * @return ProcessDefinition，存在且主键有效的流程定义
      */
-    private ProcessDefinition requireDefinition(String definitionId, EnrichmentCache cache)
+    private ProcessDefinition requireDefinition(String definitionId)
     {
         if (!StringUtils.hasText(definitionId))
         {
             throw dataError("流程定义关联主键为空");
-        }
-        if (cache != null && cache.definitions.containsKey(definitionId))
-        {
-            return cache.definitions.get(definitionId);
         }
         ProcessDefinition definition = repositoryService.getProcessDefinition(definitionId);
         if (definition == null)
         {
             throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND);
         }
-        if (cache != null)
-        {
-            cache.definitions.put(definitionId, definition);
-        }
         return definition;
-    }
-
-    /**
-     * 查询任务所属部署，并在当前页内复用已核验结果。
-     *
-     * @param deploymentId String，流程定义关联的 Flowable 部署主键
-     * @param cache EnrichmentCache，当前页关联对象缓存
-     * @return Deployment，存在且主键有效的流程部署
-     */
-    private Deployment requireDeployment(String deploymentId, EnrichmentCache cache)
-    {
-        if (!StringUtils.hasText(deploymentId))
-        {
-            throw dataError("流程部署关联主键为空");
-        }
-        if (cache.deployments.containsKey(deploymentId))
-        {
-            return cache.deployments.get(deploymentId);
-        }
-        Deployment deployment = repositoryService.createDeploymentQuery()
-                .deploymentId(deploymentId)
-                .singleResult();
-        if (deployment == null || !deploymentId.equals(deployment.getId()))
-        {
-            throw dataError("任务缺少所属流程部署");
-        }
-        cache.deployments.put(deploymentId, deployment);
-        return deployment;
-    }
-
-    /**
-     * 查询任务所属历史实例，并在当前页内复用已核验结果。
-     *
-     * @param instanceId String，流程实例主键
-     * @param cache EnrichmentCache，当前页关联对象缓存
-     * @return HistoricProcessInstance，任务所属历史实例
-     */
-    private HistoricProcessInstance requireHistoricInstance(String instanceId, EnrichmentCache cache)
-    {
-        if (cache.instances.containsKey(instanceId))
-        {
-            return cache.instances.get(instanceId);
-        }
-        HistoricProcessInstance instance = historyService.createHistoricProcessInstanceQuery()
-                .processInstanceId(instanceId)
-                .singleResult();
-        if (instance == null)
-        {
-            throw dataError("任务缺少所属历史流程实例");
-        }
-        cache.instances.put(instanceId, instance);
-        return instance;
     }
 
     /**
      * 查询历史发起人的当前显示名称，缺失用户以原始主键回显而不篡改历史关联。
      *
      * @param userId String，Flowable 历史发起人主键，允许为空
-     * @param cache EnrichmentCache，当前页用户名缓存
+     * @param userNameCache UserNameCache，当前页用户名缓存
      * @return String，用户昵称、原始主键或 null
      */
-    private String resolveUserName(String userId, EnrichmentCache cache)
+    private String resolveUserName(String userId, UserNameCache userNameCache)
     {
         if (!StringUtils.hasText(userId))
         {
             return null;
         }
-        if (cache.userNames.containsKey(userId))
+        if (userNameCache.userNames.containsKey(userId))
         {
-            return cache.userNames.get(userId);
+            return userNameCache.userNames.get(userId);
         }
         String displayName = userId;
         try
@@ -1591,7 +1643,7 @@ public class WorkflowProcessQueryService
         {
             // 存量异常身份不做名称猜测，保留原值便于迁移对账和问题追踪。
         }
-        cache.userNames.put(userId, displayName);
+        userNameCache.userNames.put(userId, displayName);
         return displayName;
     }
 
@@ -1868,18 +1920,9 @@ public class WorkflowProcessQueryService
     {
     }
 
-    /** 当前页关联对象缓存，避免同一实例的并行任务重复查询定义、部署、实例和用户。 */
-    private static final class EnrichmentCache
+    /** 当前页用户名缓存，保持历史用户逐对象查询和原始主键回显规则不变。 */
+    private static final class UserNameCache
     {
-        /** 流程定义主键到定义对象的当前页映射。 */
-        private final Map<String, ProcessDefinition> definitions = new HashMap<>();
-
-        /** 流程部署主键到部署对象的当前页映射，分类必须从正式部署元数据读取。 */
-        private final Map<String, Deployment> deployments = new HashMap<>();
-
-        /** 流程实例主键到历史实例的当前页映射。 */
-        private final Map<String, HistoricProcessInstance> instances = new HashMap<>();
-
         /** 历史用户主键到显示名称的当前页映射。 */
         private final Map<String, String> userNames = new HashMap<>();
     }

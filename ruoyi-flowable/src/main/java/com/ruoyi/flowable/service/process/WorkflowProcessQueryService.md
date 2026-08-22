@@ -39,6 +39,18 @@ PageResult<WorkflowAssignedTaskView> page = processQueryService.listAssigned(
 批量查询使用“当前页实例数 × 200 + 1”的有界 `listPage`；当前页任务总量或任一实例任务数
 超过安全上限时返回稳定数据异常，没有当前任务的实例返回空列表。
 
+`listAssigned`、`listClaimable` 和 `listCompleted` 在取得当前页任务后统一批量装载
+`TaskContext`：分别使用一次 `processDefinitionIds`、一次 `processInstanceIds` 和一次
+`deploymentIds` 查询流程定义、历史实例与部署，再按任务主键映射给视图转换。视图转换阶段
+不再访问这三类引擎查询。任务、定义、实例和部署的主键、唯一性及相互关系会在整页返回前
+统一核验；定义缺失保持 `404`，历史实例、部署缺失或关系不一致保持 `500`，不会返回缺失
+上下文的空行。流程分类仍只读取 `Deployment.category`。
+
+发起人名称暂不纳入引擎关联对象批量化：当前页仅缓存既有逐用户查询结果，`nickName` 有值时
+显示昵称；用户不存在、昵称为空或历史 `userId` 非数字时回显原始 `userId`，空
+`startUserId` 返回 `null`。已办列表仍逐项调用 `WorkflowTaskLifecycleService.isProcessRevocable`，
+不从历史字段或本页映射推导撤回能力。
+
 ## 查询方法
 
 | 方法 | DTO | 返回视图 | 身份范围 |
@@ -101,6 +113,6 @@ Flowable 8 的 `startableByUserOrGroups` 只返回存在匹配 starter identity 
 - `403`：当前用户不能发起目标定义，或实例对象授权拒绝；
 - `404`：流程定义或授权服务查询的对象不存在；
 - `409`：客户端声明的定义、部署、实例关系不一致，或定义不是最新激活版本；
-- `500`：Flowable 定义、实例、任务与部署快照的内部关联异常，任务数量超过安全上限，或分页结果违反计数契约。实例列表允许旧历史记录缺少部署，此时仅返回空分类。
+- `500`：Flowable 定义、实例、任务与部署快照的内部关联异常，任务上下文中的定义、实例、部署关系不一致，任务数量超过安全上限，或分页结果违反计数契约。实例列表允许旧历史记录缺少部署，此时仅返回空分类；待办、待签和已办任务缺少部署时整页失败。
 
 七类列表均使用 `count + listPage` 或业务 Mapper 的等价计数/分页 SQL。任何关联异常都会停止整页返回，避免把不完整或未授权数据伪装为正常结果。
