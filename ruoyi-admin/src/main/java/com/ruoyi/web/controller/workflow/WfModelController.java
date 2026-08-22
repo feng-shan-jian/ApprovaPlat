@@ -355,7 +355,6 @@ public class WfModelController extends BaseController
         WorkflowModelDto dto = new WorkflowModelDto();
         dto.setModelId(request.modelId());
         dto.setModelName(request.modelName());
-        dto.setModelKey(request.modelKey());
         dto.setCategory(request.category());
         dto.setDescription(request.description());
         dto.setFormType(request.formType());

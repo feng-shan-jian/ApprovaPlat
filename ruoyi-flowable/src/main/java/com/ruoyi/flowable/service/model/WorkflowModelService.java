@@ -371,10 +371,6 @@ public class WorkflowModelService
         {
             validateMetadataRequest(request);
             Model model = requireModel(modelId);
-            if (hasText(request.getModelKey()) && !model.getKey().equals(request.getModelKey().trim()))
-            {
-                throw new ServiceException("模型标识不允许修改", HttpStatus.CONFLICT);
-            }
             if (hasText(request.getCategory()))
             {
                 String category = requireBoundedText(request.getCategory(), "流程分类不能为空",

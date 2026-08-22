@@ -12,7 +12,6 @@ import jakarta.validation.constraints.Size;
  *
  * @param modelId String，Flowable 模型主键
  * @param modelName String，模型显示名称，允许为空表示保持不变
- * @param modelKey String，兼容旧客户端回传的模型标识，只允许与原值一致
  * @param category String，工作流分类编码，允许为空表示保持不变
  * @param description String，模型业务描述，允许为空
  * @param formType Integer，表单模式编码，允许为空
@@ -25,8 +24,6 @@ public record WorkflowModelUpdateRequest(
         @Pattern(regexp = "(?s).*\\S.*", message = "模型名称不能为空")
         @Size(max = 255, message = "模型名称长度不能超过255个字符")
         String modelName,
-        @Pattern(regexp = "[A-Za-z_][A-Za-z0-9_.-]{0,127}", message = "模型标识格式不合法")
-        String modelKey,
         @Pattern(regexp = "(?s).*\\S.*", message = "流程分类不能为空")
         @Size(max = 64, message = "流程分类编码长度不能超过64个字符")
         String category,

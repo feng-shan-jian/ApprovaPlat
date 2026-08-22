@@ -324,16 +324,19 @@ async function submitForm() {
   if (!valid) return
   saving.value = true
   try {
-    const payload = {
-      ...form,
+    // 修改契约只携带可变元数据；modelKey 仅在创建时发送，从请求结构上保证编辑入口无法改 key。
+    const metadataPayload = {
       modelName: form.modelName.trim(),
-      modelKey: form.modelKey.trim(),
       category: form.category.trim(),
       description: form.description?.trim() || undefined,
+      formType: form.formType,
       formId: form.formType === 0 ? form.formId : undefined
     }
-    if (form.modelId) await updateModel(payload)
-    else await createModel(payload)
+    if (form.modelId) {
+      await updateModel({ modelId: form.modelId, ...metadataPayload })
+    } else {
+      await createModel({ modelKey: form.modelKey.trim(), ...metadataPayload })
+    }
     proxy.$modal.msgSuccess('流程模型保存成功')
     dialogOpen.value = false
     await loadList()
