@@ -316,7 +316,7 @@
         <el-form-item
           v-if="actionDialog.type === 'complete' && nextUserSelectionEnabled"
           :label="nextUserSelectionLabel"
-          :required="nextUserSelectionRequired"
+          :required="isNextUserSelectionRequired"
         >
           <el-select
             v-model="actionDialog.nextUserIds"
@@ -545,7 +545,7 @@ const copyUserOptionCache = new Map()
 const verifiedCopyUserIds = new Set()
 // 动态加签使用独立的身份目录缓存，仅负责远程检索后的稳定标签展示。
 const multiInstanceUserOptionCache = new Map()
-// 下一办理人策略只接受服务端冻结枚举；旧接口缺少显式策略时对非必填能力失败关闭。
+// 下一办理人策略只接受详情 API 返回的服务端冻结枚举。
 const NEXT_USER_ASSIGNMENT_POLICIES = Object.freeze([
   'DISABLED',
   'OPTIONAL',
@@ -657,16 +657,16 @@ const multiInstanceSelectionLimit = computed(() => Math.max(1, remainingMultiIns
 // 下一办理人显示、必填和模式完全采用详情 API 的部署模型策略，页面不自行解析 BPMN 或试错探测。
 const nextUserAssignmentPolicy = computed(() => String(detail.nextUserAssignmentPolicy || 'DISABLED'))
 const nextUserSelectionEnabled = computed(() => nextUserAssignmentPolicy.value !== 'DISABLED')
-const nextUserSelectionRequired = computed(() => nextUserAssignmentPolicy.value.startsWith('REQUIRED_'))
-const nextUserSelectionMode = computed(() => ({
+const isNextUserSelectionRequired = computed(() => nextUserAssignmentPolicy.value.startsWith('REQUIRED_'))
+const nextUserAssignmentMode = computed(() => ({
   REQUIRED_ALL: 'ALL',
   REQUIRED_ANY: 'ANY'
 }[nextUserAssignmentPolicy.value] || null))
 const nextUserSelectionLabel = computed(() => ({
   ALL: '会签办理人',
   ANY: '或签办理人'
-}[nextUserSelectionMode.value] || '下一办理人'))
-const nextUserSelectionPlaceholder = computed(() => nextUserSelectionRequired.value
+}[nextUserAssignmentMode.value] || '下一办理人'))
+const nextUserSelectionPlaceholder = computed(() => isNextUserSelectionRequired.value
   ? `请选择${nextUserSelectionLabel.value}`
   : '选择下一办理人（可选）')
 // 任务操作必须同时满足活动任务存在、当前登录用户就是 assignee，不能仅凭页面路由推断所有权。
@@ -807,36 +807,15 @@ function currentActionDialogTaskContext() {
 }
 
 /**
- * 规范服务端下一办理人策略，并兼容旧版必填 ALL/ANY 字段。
- * @param {object} payload 流程详情 API 返回的原始聚合对象。
- * @returns {'DISABLED'|'OPTIONAL'|'REQUIRED_ALL'|'REQUIRED_ANY'} 可直接驱动字段显示和校验的冻结策略。
+ * 校验服务端下一办理人正式策略，详情缺失或枚举越界时拒绝开放办理页面。
+ * @param {unknown} policy 流程详情 API 返回的 nextUserAssignmentPolicy。
+ * @returns {void} 策略合法时无返回值，否则抛出错误。
  */
-function normalizeNextUserAssignmentPolicy(payload) {
-  const legacyMode = payload.nextUserSelectionMode == null
-    ? null
-    : String(payload.nextUserSelectionMode).toUpperCase()
-  const legacyRequired = payload.nextUserSelectionRequired === true
-  if (legacyRequired !== ['ALL', 'ANY'].includes(legacyMode)) {
-    throw new Error('动态下一办理人兼容能力不完整')
-  }
-
-  const rawPolicy = payload.nextUserAssignmentPolicy == null
-    ? ''
-    : String(payload.nextUserAssignmentPolicy).trim().toUpperCase()
-  if (!rawPolicy) {
-    // 旧后端只能证明动态多实例后继为必填；无法证明普通后继可选时必须隐藏字段，避免错误承诺能力。
-    return legacyRequired ? `REQUIRED_${legacyMode}` : 'DISABLED'
-  }
-  if (!NEXT_USER_ASSIGNMENT_POLICIES.includes(rawPolicy)) {
+function validateNextUserAssignmentPolicy(policy) {
+  if (typeof policy !== 'string'
+    || !NEXT_USER_ASSIGNMENT_POLICIES.includes(policy)) {
     throw new Error('下一办理人策略不合法')
   }
-
-  const expectedLegacyRequired = rawPolicy.startsWith('REQUIRED_')
-  const expectedLegacyMode = expectedLegacyRequired ? rawPolicy.slice('REQUIRED_'.length) : null
-  if (legacyRequired !== expectedLegacyRequired || legacyMode !== expectedLegacyMode) {
-    throw new Error('下一办理人策略与兼容字段不一致')
-  }
-  return rawPolicy
 }
 
 /**
@@ -901,12 +880,7 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
     if (String(payload.processInstanceId || '').trim() !== expectedProcessInstanceId) {
       throw new Error('流程详情实例关系不一致')
     }
-    const nextUserPolicy = normalizeNextUserAssignmentPolicy(payload)
-    payload.nextUserAssignmentPolicy = nextUserPolicy
-    payload.nextUserSelectionRequired = nextUserPolicy.startsWith('REQUIRED_')
-    payload.nextUserSelectionMode = payload.nextUserSelectionRequired
-      ? nextUserPolicy.slice('REQUIRED_'.length)
-      : null
+    validateNextUserAssignmentPolicy(payload.nextUserAssignmentPolicy)
     // 时间线进入页面状态前即移除原始 message/audit，只保留后端明确投影的用户可见 opinion。
     payload.historyProcNodeList = normalizeTimelineComments(payload.historyProcNodeList)
     payload.multiInstanceState = payload.multiInstanceState == null
@@ -1746,7 +1720,7 @@ function assertActionAllowed(type, validateInput = false) {
   }
   if (supportsCopyAction.value
     && !validSelectedUsers(actionDialog.copyUserIds, '抄送人', verifiedCopyUserIds)) return false
-  if (type === 'complete' && nextUserSelectionRequired.value && actionDialog.nextUserIds.length === 0) {
+  if (type === 'complete' && isNextUserSelectionRequired.value && actionDialog.nextUserIds.length === 0) {
     return denyAction(`${nextUserSelectionLabel.value}不能为空`)
   }
   if (type === 'complete' && !nextUserSelectionEnabled.value && actionDialog.nextUserIds.length > 0) {

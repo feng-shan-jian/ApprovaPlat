@@ -413,23 +413,13 @@ public class WorkflowProcessDetailService
                 && taskLifecycleService.isTaskReturnAllowed(requestedTask.taskId());
         NextUserAssignmentPolicy nextUserAssignmentPolicy = resolveNextUserAssignmentPolicy(
                 instance, requestedTask, bpmn.process());
-        boolean nextUserSelectionRequired = nextUserAssignmentPolicy
-                == NextUserAssignmentPolicy.REQUIRED_ALL
-                || nextUserAssignmentPolicy == NextUserAssignmentPolicy.REQUIRED_ANY;
-        String nextUserSelectionMode = switch (nextUserAssignmentPolicy)
-        {
-            case REQUIRED_ALL -> "ALL";
-            case REQUIRED_ANY -> "ANY";
-            default -> null;
-        };
         return new WorkflowProcessDetailView(instance.processInstanceId(), definition.getId(),
                 definition.getKey(), definition.getName(), definition.getVersion(),
                 definition.getCategory(), definition.getDeploymentId(), instance.businessKey(),
                 instance.startUserId(), startUserName, startTime, instance.endTime(),
                 durationMillis, normalizeProcessStatus(instance), requestedTask,
-                nextUserAssignmentPolicy.name(), nextUserSelectionRequired,
-                nextUserSelectionMode,
-                multiInstanceState, returnAllowed, controlledLoopStates, currentTaskForm,
+                nextUserAssignmentPolicy.name(), multiInstanceState, returnAllowed,
+                controlledLoopStates, currentTaskForm,
                 processForms, timeline, processRelations, bpmnXml, viewer);
     }
 

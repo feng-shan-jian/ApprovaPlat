@@ -35,7 +35,7 @@ router.push({
 - 当前任务表单按部署 schema 校验；附件只提交正式附件 UUID，并通过授权元数据接口完成回显。
 - 动态加签、减签和完成共享服务端 revision 契约。完成弹窗打开时冻结 `multiInstanceState.revision`，普通或静态任务不发送 `expectedRevision`。
 - 动态调整成功后的详情重载只关闭弹窗，不会在关闭动画中提前重置 `ADD`/`REMOVE` 动作、成员目标或目录缓存；从 `close` 到 `closed` 的完整区间由关闭期锁禁用加签、减签入口，`closed` 后才清理草稿并解锁。用户连续执行加签、减签时，上一轮弹窗身份和回调不得清空下一轮真实提交参数。
-- 下一办理人字段只接受详情 API 的 `nextUserAssignmentPolicy`：`DISABLED` 隐藏、`OPTIONAL` 可选、`REQUIRED_ALL` 会签必填、`REQUIRED_ANY` 或签必填。兼容旧后端时只继承可证明的必填 ALL/ANY，非必填能力失败关闭为 `DISABLED`，不从 BPMN 或 409 试错推断。
+- 下一办理人字段只接受详情 API 的 `nextUserAssignmentPolicy`：`DISABLED` 隐藏、`OPTIONAL` 可选、`REQUIRED_ALL` 会签必填、`REQUIRED_ANY` 或签必填；页面不从旧字段、BPMN 或 409 试错推断。
 - 动态完成或成员调整只有在业务码为 `409` 且机器子码精确等于 `WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT` 时，才调用 `getMultiInstanceState` 或重载详情获取最新 revision。刷新成功只替换成员快照，保留办理意见、抄送人、下一办理人、表单值和附件草稿，并要求用户明确再次提交；其他 409 按原始状态冲突展示，不伪装成成员变化。
 - 强制刷新确认原任务已失效时，页面关闭办理弹窗并完整重载详情，避免对历史任务重复提交。
 - 普通完成、退回、驳回、委派和转办在异步表单校验前即占用动作锁；请求期间禁止关闭弹窗，失败时保留意见、表单和身份选择并展示稳定错误，避免双击并发和不可恢复输入丢失。
