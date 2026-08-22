@@ -62,6 +62,7 @@ PageResult<WorkflowAssignedTaskView> page = processQueryService.listAssigned(
 | `listAssigned` | `WorkflowAssignedTaskQueryDto` | `WorkflowAssignedTaskView` | `active + assignee=当前用户` |
 | `listClaimable` | `WorkflowClaimableTaskQueryDto` | `WorkflowClaimableTaskView` | 当前用户具备完整五项认领权限，且任务为 `active + unassigned + 当前 user/ROLE/DEPT` |
 | `listCompleted` | `WorkflowCompletedTaskQueryDto` | `WorkflowCompletedTaskView` | `finished + completedBy=当前用户`，逐行返回服务端 `revocable` |
+| `listCompletedForExport` | `WorkflowCompletedTaskQueryDto` | `WorkflowCompletedTaskExportView` | 与已办列表相同分页和上下文，跳过 `revocable` 计算 |
 | `listCopies` | `WorkflowCopyQueryDto` | `WorkflowCopyView` | `wf_copy.user_id=当前用户` |
 | `getProcessForm` | `WorkflowProcessFormQueryDto` | `WorkflowProcessFormView` | 可发起或实例对象授权 |
 | `getBpmnXml` | `WorkflowBpmnXmlQueryDto` | `String` | 可发起或实例对象授权 |
@@ -85,7 +86,9 @@ PageResult<WorkflowAssignedTaskView> page = processQueryService.listAssigned(
 
 可发起导出调用 `listStartableForExport` 一次：一次解析当前身份、一次完整授权扫描，
 最多返回 10000 条，并与列表复用同一个内部扫描实现。其余六类导出继续每页固定读取
-200 条，并在只读事务内校验后续页 `total` 与第一页一致。超过上限返回 400；其余导出
+200 条，并在只读事务内校验后续页 `total` 与第一页一致。已办导出调用
+`listCompletedForExport`，与列表复用历史任务分页、分类筛选和 `TaskContext` 装载，但直接生成
+现有 `WorkflowCompletedTaskExportView`，不会触发任何撤回能力计算。超过上限返回 400；其余导出
 分页期间总量漂移、缺行或超量返回 409，不生成看似成功但内容不完整的 Excel。
 
 ## 可发起权限

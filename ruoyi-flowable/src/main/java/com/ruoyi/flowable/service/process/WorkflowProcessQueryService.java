@@ -48,6 +48,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowStartableProcessQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowAssignedTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowClaimableTaskView;
+import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowCopyView;
 import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessView;
@@ -397,31 +398,42 @@ public class WorkflowProcessQueryService
         return engineOperations.read(() ->
         {
             WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-            HistoricTaskInstanceQuery query = buildCompletedQuery(filter, actor.userId());
-            Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
-                    filter == null ? null : filter.category());
-            if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
+            CompletedTaskPage completedPage = loadCompletedTaskPage(
+                    filter, page, actor.userId());
+            if (completedPage.tasks().isEmpty())
             {
-                return new PageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), completedPage.total());
             }
-            if (categoryDeploymentIds != null)
-            {
-                // 历史任务与活动任务使用同一发布分类口径，避免筛选结果和表格显示不一致。
-                query.deploymentIdIn(categoryDeploymentIds);
-            }
-            long total = checkedCount(query.count());
-            if (total == 0 || page.offset() >= total)
-            {
-                return new PageResult<>(List.of(), total);
-            }
-            List<HistoricTaskInstance> tasks = checkedRows(
-                    query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            UserNameCache userNameCache = new UserNameCache();
-            Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
-            List<WorkflowCompletedTaskView> rows = tasks.stream()
-                    .map(task -> toCompletedView(task, contexts.get(task.getId())))
+            List<WorkflowCompletedTaskView> rows = completedPage.tasks().stream()
+                    .map(task -> toCompletedView(task,
+                            completedPage.contextsByTaskId().get(task.getId())))
                     .toList();
-            return new PageResult<>(rows, total);
+            return new PageResult<>(rows, completedPage.total());
+        });
+    }
+
+    /**
+     * 分页查询当前用户真实完成的历史任务并直接生成导出视图，不装载撤回能力事实。
+     *
+     * @param filter WorkflowCompletedTaskQueryDto，流程、任务和完成时间条件，允许为空
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数
+     * @return PageResult&lt;WorkflowCompletedTaskExportView&gt;，与已办列表相同身份和分页口径的导出页
+     */
+    public PageResult<WorkflowCompletedTaskExportView> listCompletedForExport(
+            WorkflowCompletedTaskQueryDto filter, int pageNum, int pageSize)
+    {
+        PageWindow page = requirePage(pageNum, pageSize);
+        return engineOperations.read(() ->
+        {
+            WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
+            CompletedTaskPage completedPage = loadCompletedTaskPage(
+                    filter, page, actor.userId());
+            List<WorkflowCompletedTaskExportView> rows = completedPage.tasks().stream()
+                    .map(task -> toCompletedExportView(task,
+                            completedPage.contextsByTaskId().get(task.getId())))
+                    .toList();
+            return new PageResult<>(rows, completedPage.total());
         });
     }
 
@@ -1026,6 +1038,41 @@ public class WorkflowProcessQueryService
     }
 
     /**
+     * 复用同一查询、分类、分页与上下文装载链读取一页已办任务事实。
+     *
+     * @param filter WorkflowCompletedTaskQueryDto，历史任务筛选条件，允许为空
+     * @param page PageWindow，已校验的分页窗口
+     * @param currentUserId String，服务端解析的当前用户主键
+     * @return CompletedTaskPage，任务、上下文和真实总量组成的不可变分页事实
+     */
+    private CompletedTaskPage loadCompletedTaskPage(
+            WorkflowCompletedTaskQueryDto filter, PageWindow page, String currentUserId)
+    {
+        HistoricTaskInstanceQuery query = buildCompletedQuery(filter, currentUserId);
+        Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
+                filter == null ? null : filter.category());
+        if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
+        {
+            return new CompletedTaskPage(List.of(), Map.of(), 0);
+        }
+        if (categoryDeploymentIds != null)
+        {
+            // 历史任务与活动任务使用同一发布分类口径，避免列表和导出出现筛选漂移。
+            query.deploymentIdIn(categoryDeploymentIds);
+        }
+        long total = checkedCount(query.count());
+        if (total == 0 || page.offset() >= total)
+        {
+            return new CompletedTaskPage(List.of(), Map.of(), total);
+        }
+        List<HistoricTaskInstance> tasks = checkedRows(
+                query.listPage(page.offset(), page.pageSize()), page.pageSize());
+        UserNameCache userNameCache = new UserNameCache();
+        Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
+        return new CompletedTaskPage(tasks, contexts, total);
+    }
+
+    /**
      * 将业务分类编码解析为 Flowable 正式部署主键集合。
      *
      * @param category String，分类目录提交的业务分类编码，允许为空
@@ -1454,6 +1501,22 @@ public class WorkflowProcessQueryService
                 context.instance().getBusinessKey(), context.instance().getStartUserId(),
                 context.startUserName(), toInstant(task.getCreateTime()), toInstant(task.getEndTime()),
                 task.getDurationInMillis(), revocable);
+    }
+
+    /**
+     * 将已办分页事实直接转换为既有导出视图，明确跳过撤回能力计算。
+     *
+     * @param task HistoricTaskInstance，taskCompletedBy 已固定当前用户的历史任务
+     * @param context TaskContext，当前页批量装载并完成关系核验的任务上下文
+     * @return WorkflowCompletedTaskExportView，列定义与现有 Excel 导出保持一致的视图
+     */
+    private WorkflowCompletedTaskExportView toCompletedExportView(
+            HistoricTaskInstance task, TaskContext context)
+    {
+        return new WorkflowCompletedTaskExportView(task.getId(), context.definition().getName(),
+                task.getName(), context.definition().getVersion(), context.startUserName(),
+                task.getCompletedBy(), toInstant(task.getCreateTime()),
+                toInstant(task.getEndTime()), task.getDurationInMillis());
     }
 
     /**
@@ -2144,6 +2207,33 @@ public class WorkflowProcessQueryService
      */
     private record PageWindow(int offset, int pageSize)
     {
+    }
+
+    /**
+     * 已办列表与导出共享的一页历史任务事实。
+     *
+     * @param tasks List&lt;HistoricTaskInstance&gt;，确定顺序的当前页已结束任务
+     * @param contextsByTaskId Map&lt;String, TaskContext&gt;，任务主键到批量关联上下文的映射
+     * @param total long，过滤条件下的真实任务总量
+     */
+    private record CompletedTaskPage(
+            List<HistoricTaskInstance> tasks,
+            Map<String, TaskContext> contextsByTaskId,
+            long total)
+    {
+        /**
+         * 冻结已办分页事实，防止列表和导出转换阶段改写共享结果。
+         *
+         * @param tasks List&lt;HistoricTaskInstance&gt;，当前页历史任务
+         * @param contextsByTaskId Map&lt;String, TaskContext&gt;，任务上下文映射
+         * @param total long，真实总量
+         * @return 无返回值，构造时复制任务和上下文集合
+         */
+        private CompletedTaskPage
+        {
+            tasks = List.copyOf(tasks);
+            contextsByTaskId = Map.copyOf(contextsByTaskId);
+        }
     }
 
     /**

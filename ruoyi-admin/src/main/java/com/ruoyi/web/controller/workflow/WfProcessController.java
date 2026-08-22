@@ -51,7 +51,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowAssignedTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowClaimableTaskExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowClaimableTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskExportView;
-import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowCopyExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowCopyView;
 import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessExportView;
@@ -410,14 +409,10 @@ public class WfProcessController extends BaseController
     public void finishedExport(@ModelAttribute WorkflowCompletedTaskQueryDto filter,
             HttpServletResponse response)
     {
-        List<WorkflowCompletedTaskView> rows = collectForExport(
-                page -> processQueryService.listCompleted(filter, page, EXPORT_PAGE_SIZE),
+        List<WorkflowCompletedTaskExportView> exports = collectForExport(
+                page -> processQueryService.listCompletedForExport(
+                        filter, page, EXPORT_PAGE_SIZE),
                 "已办流程");
-        List<WorkflowCompletedTaskExportView> exports = rows.stream()
-                .map(row -> new WorkflowCompletedTaskExportView(row.taskId(), row.processName(),
-                        row.taskName(), row.version(), row.startUserName(), row.completedBy(),
-                        row.createTime(), row.finishTime(), row.durationMillis()))
-                .toList();
         new ExcelUtil<>(WorkflowCompletedTaskExportView.class)
                 .exportExcel(response, exports, "已办流程");
     }
