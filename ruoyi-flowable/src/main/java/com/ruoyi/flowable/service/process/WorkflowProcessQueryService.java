@@ -1120,13 +1120,9 @@ public class WorkflowProcessQueryService
             return trusted;
         }
         trusted.setTitle(optionalText(filter.title(), "抄送标题过长"));
-        trusted.setProcessId(optionalText(filter.processId(), "流程定义主键过长"));
         trusted.setProcessName(optionalText(filter.processName(), "流程名称过长"));
         trusted.setOriginatorName(optionalText(filter.originatorName(), "发起人名称过长"));
-        trusted.setInstanceId(optionalText(filter.instanceId(), "流程实例主键过长"));
-        trusted.setTaskId(optionalText(filter.taskId(), "任务主键过长"));
         trusted.setCategoryId(optionalText(filter.categoryId(), "流程分类过长"));
-        trusted.setDeploymentId(optionalText(filter.deploymentId(), "部署主键过长"));
         String readStatus = optionalText(filter.readStatus(), "阅读状态不合法");
         if (readStatus != null && !Set.of("0", "1").contains(readStatus))
         {

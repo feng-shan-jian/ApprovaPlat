@@ -135,7 +135,7 @@ public class WfNotificationController extends BaseController
     /**
      * 由发起人或具备跨实例权限的管理员催办真实活动待办。
      * @param request WorkflowManualUrgeRequest，流程实例和原因
-     * @return AjaxResult，data 为催办事件键、真实接收人数和通知通道记录数
+     * @return AjaxResult，data 仅包含实际接收人数 recipientCount
      */
     @PreAuthorize("@ss.hasPermi('workflow:notification:urge')")
     @Log(title = "人工催办审批", businessType = BusinessType.INSERT)

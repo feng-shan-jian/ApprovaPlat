@@ -124,26 +124,14 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         <if test="filter != null and filter.title != null and filter.title != ''">
             and title like concat('%', #{filter.title}, '%')
         </if>
-        <if test="filter != null and filter.processId != null and filter.processId != ''">
-            and process_id = #{filter.processId}
-        </if>
         <if test="filter != null and filter.processName != null and filter.processName != ''">
             and process_name like concat('%', #{filter.processName}, '%')
         </if>
         <if test="filter != null and filter.originatorName != null and filter.originatorName != ''">
             and originator_name like concat('%', #{filter.originatorName}, '%')
         </if>
-        <if test="filter != null and filter.instanceId != null and filter.instanceId != ''">
-            and instance_id = #{filter.instanceId}
-        </if>
-        <if test="filter != null and filter.taskId != null and filter.taskId != ''">
-            and task_id = #{filter.taskId}
-        </if>
         <if test="filter != null and filter.categoryId != null and filter.categoryId != ''">
             and category_id = #{filter.categoryId}
-        </if>
-        <if test="filter != null and filter.deploymentId != null and filter.deploymentId != ''">
-            and deployment_id = #{filter.deploymentId}
         </if>
         <if test="filter != null and filter.readStatus != null and filter.readStatus != ''">
             and read_status = #{filter.readStatus}

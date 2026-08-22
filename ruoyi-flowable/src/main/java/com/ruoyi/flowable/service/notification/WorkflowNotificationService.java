@@ -239,7 +239,7 @@ public class WorkflowNotificationService
     /**
      * 根据人工催办服务已锁定的任务事实登记一次最终正文通知。
      * @param registration WorkflowManualUrgeRegistration，权限和接收人冻结后的催办命令
-     * @return WorkflowManualUrgeRegistrationResult，通道记录数和实际可登记接收人
+     * @return WorkflowManualUrgeRegistrationResult，实际可登记接收人
      */
     public WorkflowManualUrgeRegistrationResult registerManualUrge(
             WorkflowManualUrgeRegistration registration)
@@ -263,8 +263,7 @@ public class WorkflowNotificationService
                 registration.startUserId(), false, route(processInstanceId, taskId),
                 "\n催办原因：" + reason);
         WorkflowNotificationWriter.WriteResult result = writer.write(planner.plan(request));
-        return new WorkflowManualUrgeRegistrationResult(result.channelRecordCount(),
-                result.recipientUserIds());
+        return new WorkflowManualUrgeRegistrationResult(result.recipientUserIds());
     }
 
     /**

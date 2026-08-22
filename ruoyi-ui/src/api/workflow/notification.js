@@ -42,7 +42,7 @@ export function saveWorkflowNotificationPreference(data) {
 /**
  * 催办运行流程的真实活动待办。
  * @param {{processInstanceId:string,reason:string}} data 流程实例和催办原因。
- * @returns {Promise<object>} data 含 urgeEventKey、recipientCount 和通知通道记录数 outboxCount。
+ * @returns {Promise<object>} data 仅含实际收件人数 recipientCount。
  */
 export function urgeWorkflow(data) {
   return request({ url: '/workflow/notification/urge', method: 'post', data })

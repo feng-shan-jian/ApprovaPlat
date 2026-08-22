@@ -12,7 +12,7 @@
 
 ## 公开方法
 
-- `write(NotificationPlan)`：批量参数化写入 inbox 和外部 Outbox，返回首次新增通道记录数及实际可登记接收人；HTTP 兼容字段 `outboxCount` 保持该语义。
+- `write(NotificationPlan)`：批量参数化写入 inbox 和外部 Outbox，返回首次新增通道记录数及实际可登记接收人。
 - `writeRequiredInbox(WorkflowInboxNotification)`：幂等写入必达站内信，并通过数据库生成键返回 `notification_id`。
 
 ## 关键设计

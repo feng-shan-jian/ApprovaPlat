@@ -317,7 +317,7 @@ public class WorkflowNotificationWriter
     /**
      * 通知写入结果。
      *
-     * @param channelRecordCount int，本次首次新增的通知通道记录数，兼容 HTTP outboxCount 语义
+     * @param channelRecordCount int，本次首次新增的通知通道记录数
      * @param recipientUserIds Set&lt;String&gt;，至少存在一个实际通道的接收用户
      */
     public record WriteResult(int channelRecordCount, Set<String> recipientUserIds)

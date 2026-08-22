@@ -72,7 +72,7 @@ public class WorkflowManualUrgeService
     /**
      * 由流程发起人或具备跨实例权限的管理员催办完整活动流程树。
      * @param request WorkflowManualUrgeRequest，根流程实例和催办原因
-     * @return WorkflowManualUrgeView，稳定事件键、真实接收人数和通知通道记录数
+     * @return WorkflowManualUrgeView，真实接收人数
      */
     public WorkflowManualUrgeView urge(WorkflowManualUrgeRequest request)
     {
@@ -113,8 +113,8 @@ public class WorkflowManualUrgeService
                 throw new ServiceException("活动待办没有有效接收人", HttpStatus.CONFLICT);
             }
 
+            // urgeEventKey 只用于各任务通知的幂等登记，不再暴露给 HTTP 客户端。
             String urgeEventKey = "URGE:" + UUID.randomUUID();
-            int outboxCount = 0;
             LinkedHashSet<String> deliveredRecipients = new LinkedHashSet<>();
             for (Map.Entry<LockedTask, Set<String>> entry : recipientsByTask.entrySet())
             {
@@ -124,7 +124,6 @@ public class WorkflowManualUrgeService
                                 task.processInstanceId(), process.startUserId(), task.taskId(),
                                 task.taskDefinitionKey(), task.taskName(), actor.userId(),
                                 entry.getValue(), urgeEventKey + ":" + task.taskId(), reason));
-                outboxCount += result.outboxCount();
                 deliveredRecipients.addAll(result.recipientUserIds());
             }
             // 成功标准以 Writer 返回的真实可登记接收人为准，INBOX 已不再经过 Outbox。
@@ -134,8 +133,7 @@ public class WorkflowManualUrgeService
             }
             acquireCooldown(actor.userId(), processInstanceId);
             metrics.recordUrge("accepted");
-            return new WorkflowManualUrgeView(urgeEventKey, deliveredRecipients.size(),
-                    outboxCount);
+            return new WorkflowManualUrgeView(deliveredRecipients.size());
         });
     }
 
