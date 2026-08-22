@@ -137,7 +137,9 @@ public class WorkflowMultiInstanceService
         return engineOperations.read(() ->
         {
             WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-            MultiInstanceContext context = loadContext(normalizedTaskId, actor);
+            Task currentTask = requireActiveTask(normalizedTaskId, actor);
+            UserTask userTask = requireControlledUserTask(currentTask);
+            MultiInstanceContext context = loadContext(currentTask, userTask);
             return buildState(context);
         });
     }
@@ -166,7 +168,10 @@ public class WorkflowMultiInstanceService
             {
                 return null;
             }
-            return buildState(loadContext(normalizedTaskId, actor));
+            // 保留详情投影原有的正式任务、实例和 BPMN 复核，再进入统一的实时状态装载。
+            Task currentTask = requireActiveTask(normalizedTaskId, actor);
+            UserTask userTask = requireControlledUserTask(currentTask);
+            return buildState(loadContext(currentTask, userTask));
         });
     }
 
@@ -184,7 +189,9 @@ public class WorkflowMultiInstanceService
         {
             return engineOperations.writeAsCurrentUser(actor ->
             {
-                MultiInstanceContext context = loadContext(input.taskId(), actor);
+                Task currentTask = requireActiveTask(input.taskId(), actor);
+                UserTask userTask = requireControlledUserTask(currentTask);
+                MultiInstanceContext context = loadContext(currentTask, userTask);
                 if (context.revision() != input.expectedRevision())
                 {
                     throw revisionConflict();
@@ -208,18 +215,19 @@ public class WorkflowMultiInstanceService
      * 在完成动态多实例任务前校验客户端 revision，并把服务端 revision 原子推进一位。
      *
      * @param task Task，生命周期服务已完成活动态和办理人校验的当前任务
+     * @param currentUserTask UserTask，生命周期服务已从唯一 BPMN 上下文定位的当前节点
      * @param expectedRevision Long，客户端从详情读取的动态多实例 revision；普通任务为空
-     * @param actor WorkflowCurrentIdentity，当前事务内重新核验的正式办理人
      * @return CompletionRevision，动态多实例返回活动及前后 revision；普通任务返回空计划
      */
-    CompletionRevision reserveCompletionRevision(Task task, Long expectedRevision,
-            WorkflowCurrentIdentity actor)
+    CompletionRevision reserveCompletionRevision(Task task, UserTask currentUserTask,
+            Long expectedRevision)
     {
-        if (task == null || actor == null)
+        if (task == null || currentUserTask == null
+                || !Objects.equals(task.getTaskDefinitionKey(), currentUserTask.getId()))
         {
             throw dataError();
         }
-        boolean controlledMultiInstance = isSupportedControlledTask(task);
+        boolean controlledMultiInstance = isSupportedControlledTask(currentUserTask);
         if (!controlledMultiInstance)
         {
             if (expectedRevision != null)
@@ -234,7 +242,7 @@ public class WorkflowMultiInstanceService
             throw completionRevisionInvalid();
         }
 
-        MultiInstanceContext context = loadContext(task.getId(), actor);
+        MultiInstanceContext context = loadContext(task, currentUserTask);
         if (context.revision() != expectedRevision.intValue())
         {
             throw revisionConflict();
@@ -333,7 +341,9 @@ public class WorkflowMultiInstanceService
                 context.activityId(), context.revision(), nextRevision, input.comment(),
                 targetUserIds, null, null);
 
-        MultiInstanceContext updated = loadContext(input.taskId(), actor);
+        Task updatedTask = requireActiveTask(input.taskId(), actor);
+        UserTask updatedUserTask = requireControlledUserTask(updatedTask);
+        MultiInstanceContext updated = loadContext(updatedTask, updatedUserTask);
         if (updated.revision() != nextRevision || !updated.memberIds().equals(nextMembers))
         {
             throw dataError();
@@ -391,7 +401,9 @@ public class WorkflowMultiInstanceService
                 context.activityId(), context.revision(), nextRevision, input.comment(),
                 List.of(), targetTask.getId(), targetTask.getAssignee());
 
-        MultiInstanceContext updated = loadContext(input.taskId(), actor);
+        Task updatedTask = requireActiveTask(input.taskId(), actor);
+        UserTask updatedUserTask = requireControlledUserTask(updatedTask);
+        MultiInstanceContext updated = loadContext(updatedTask, updatedUserTask);
         boolean targetStillActive = updated.activeTasks().stream()
                 .anyMatch(task -> input.targetTaskId().equals(task.getId())
                         || targetTask.getExecutionId().equals(task.getExecutionId()));
@@ -461,16 +473,14 @@ public class WorkflowMultiInstanceService
     }
 
     /**
-     * 从公共 Flowable API 重新加载并核验当前任务、多实例根、BPMN、变量、任务和 execution 一致性。
+     * 使用已经过入口校验的任务和 UserTask，统一装载多实例根、变量、任务和 execution 实时状态。
      *
-     * @param taskId String，当前活动任务主键
-     * @param actor WorkflowCurrentIdentity，当前事务内正式用户身份
+     * @param currentTask Task，独立入口重新校验或完成链正式校验后的当前活动任务
+     * @param userTask UserTask，独立入口重新解析或完成链从唯一 BPMN 上下文定位的当前节点
      * @return MultiInstanceContext，可用于一次读或写决策的完整不可变状态
      */
-    private MultiInstanceContext loadContext(String taskId, WorkflowCurrentIdentity actor)
+    private MultiInstanceContext loadContext(Task currentTask, UserTask userTask)
     {
-        Task currentTask = requireActiveTask(taskId, actor);
-        UserTask userTask = requireControlledUserTask(currentTask);
         String activityId = userTask.getId();
         Execution rootExecution = requireMultiInstanceRoot(currentTask, activityId);
         EngineCounts counts = loadEngineCounts(rootExecution.getId());
@@ -584,8 +594,22 @@ public class WorkflowMultiInstanceService
     private boolean isSupportedControlledTask(Task task)
     {
         FlowElement element = requireTaskFlowElement(task);
-        if (!(element instanceof UserTask userTask)
-                || userTask.getLoopCharacteristics() == null
+        if (!(element instanceof UserTask userTask))
+        {
+            return false;
+        }
+        return isSupportedControlledTask(userTask);
+    }
+
+    /**
+     * 使用完成链已解析的 UserTask 判断是否属于受控动态多实例，避免重新读取部署定义。
+     *
+     * @param userTask UserTask，生命周期服务从当前部署 BPMN Process 定位的节点
+     * @return boolean，节点使用受控 handler 且满足完整模式契约时返回 true
+     */
+    private boolean isSupportedControlledTask(UserTask userTask)
+    {
+        if (userTask.getLoopCharacteristics() == null
                 || !WorkflowMultiInstanceModelContract.usesControlledHandler(
                         userTask.getLoopCharacteristics()))
         {

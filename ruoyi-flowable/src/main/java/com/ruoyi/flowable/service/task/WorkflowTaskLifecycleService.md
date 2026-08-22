@@ -20,11 +20,11 @@
 
 ## 变量
 
-完成任务时从任务所属流程定义解析部署 ID、BPMN `formKey` 和节点 key，再从 Flowable 业务制品 `approvaplat/forms-v1.json` 读取唯一不可变部署快照。客户端变量复用 `WorkflowStartVariableValidator` 的字段白名单、类型、大小、嵌套深度和保留字段门禁；客户端字段和表单 schema 均不得使用 `__ruoyi_workflow_` 服务端保留前缀。上传字段还会经 `WorkflowAttachmentService` 锁行校验和安全投影：当前用户可绑定自己的 `TEMP` 附件，也可复用同实例同字段的 `BOUND` 附件。节点声明 `localScope=true` 或 `localScope=1` 时，业务变量通过 Flowable 的局部变量完成重载。
+完成任务在活动任务、活动实例、办理人和委派状态正式校验后，只装载一次流程定义和 BPMN Model，并在对应 `Process` 中只定位一次当前 `UserTask`。私有不可变 `CompletionPreparation` 携带该 `BpmnContext`、当前节点、规范化变量、附件引用、`localScope` 和部署表单快照，供后续完成环节在同一事务复用。表单校验再从 Flowable 业务制品 `approvaplat/forms-v1.json` 读取唯一不可变部署快照。客户端变量复用 `WorkflowStartVariableValidator` 的字段白名单、类型、大小、嵌套深度和保留字段门禁；客户端字段和表单 schema 均不得使用 `__ruoyi_workflow_` 服务端保留前缀。上传字段还会经 `WorkflowAttachmentService` 锁行校验和安全投影：当前用户可绑定自己的 `TEMP` 附件，也可复用同实例同字段的 `BOUND` 附件。节点声明 `localScope=true` 或 `localScope=1` 时，业务变量通过 Flowable 的局部变量完成重载。
 
 部署表单快照只固化 schema；任务提交值另行编码为内部字符串变量 `__ruoyi_workflow_form_submission_v1`。快照包含 deployment、form、node、真实 task ID、业务字段是否 localScope 和本次安全投影值。无论业务字段使用全局还是局部作用域，内部提交快照始终调用 `TaskService.setVariableLocal` 写到当前任务，确保 `HistoricVariableUpdate.taskId` 能与本次提交强关联，并避免内部字段污染流程业务变量。
 
-写入顺序固定为：生成审批 comment、绑定附件、写入 task-local 内部快照、调用显式携带当前用户 ID 的 `TaskService.complete`、应用并复核动态下一办理人、写入抄送记录。Flowable 8 由该 userId 写入历史任务 `completedBy`，已办列表、对象授权、撤回校验、导出和审计都以此为真实办理人依据。后续任务覆盖同名全局字段时，详情仍从各任务自己的内部快照返回提交当时的值；多个 localScope 任务的同名字段也不会串值。升级前已经完成但没有内部提交快照的任务，不会用最终全局变量伪造历史表单。
+完成顺序固定为：任务/实例/办理人校验、唯一 BPMN 与节点上下文、表单变量校验、附件安全投影、冻结抄送计划、冻结下一办理人计划、多实例 revision CAS、受控循环决策、生成审批 comment、绑定附件、写入 task-local 内部快照、调用显式携带当前用户 ID 的 `TaskService.complete`、应用并复核动态下一办理人、持久化抄送及通知。Flowable 8 由该 userId 写入历史任务 `completedBy`，已办列表、对象授权、撤回校验、导出和审计都以此为真实办理人依据。后续任务覆盖同名全局字段时，详情仍从各任务自己的内部快照返回提交当时的值；多个 localScope 任务的同名字段也不会串值。升级前已经完成但没有内部提交快照的任务，不会用最终全局变量伪造历史表单。
 
 ## 抄送与动态下一办理人
 

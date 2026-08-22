@@ -32,8 +32,32 @@ public final class WorkflowNextTaskAssignmentContract
     public static Optional<RequiredMultiInstanceTarget> findRequiredMultiInstanceTarget(
             org.flowable.bpmn.model.Process process, String sourceTaskDefinitionKey)
     {
-        Optional<UserTask> target = findDirectUserTaskTarget(
-                process, sourceTaskDefinitionKey);
+        Optional<UserTask> target = findDirectUserTaskTarget(process, sourceTaskDefinitionKey);
+        return toRequiredMultiInstanceTarget(target);
+    }
+
+    /**
+     * 复用完成链已定位的当前 UserTask，识别唯一无条件直连的受控动态多实例节点。
+     *
+     * @param process Process，生命周期服务已唯一读取的当前部署 BPMN Process
+     * @param sourceTask UserTask，生命周期服务已在同一 Process 中定位的当前任务
+     * @return Optional&lt;RequiredMultiInstanceTarget&gt;，需要成员初始化时返回目标节点和 ALL/ANY 模式
+     */
+    public static Optional<RequiredMultiInstanceTarget> findRequiredMultiInstanceTarget(
+            org.flowable.bpmn.model.Process process, UserTask sourceTask)
+    {
+        return toRequiredMultiInstanceTarget(findDirectUserTaskTarget(process, sourceTask));
+    }
+
+    /**
+     * 把安全直接后继归类为受控动态多实例目标，普通或静态后继保持空结果。
+     *
+     * @param target Optional&lt;UserTask&gt;，已通过唯一无条件直连约束的后继节点
+     * @return Optional&lt;RequiredMultiInstanceTarget&gt;，受控动态多实例目标及完成模式
+     */
+    private static Optional<RequiredMultiInstanceTarget> toRequiredMultiInstanceTarget(
+            Optional<UserTask> target)
+    {
         if (target.isEmpty() || target.get().getLoopCharacteristics() == null)
         {
             return Optional.empty();
@@ -98,6 +122,28 @@ public final class WorkflowNextTaskAssignmentContract
         }
         FlowElement sourceElement = process.getFlowElement(sourceTaskDefinitionKey, false);
         if (!(sourceElement instanceof UserTask sourceTask)
+                || sourceTask.getLoopCharacteristics() != null)
+        {
+            return Optional.empty();
+        }
+        return findDirectUserTaskTarget(process, sourceTask);
+    }
+
+    /**
+     * 从已定位来源节点查找唯一无条件直连用户任务，并核验来源和目标都属于主 Process。
+     *
+     * @param process Process，已部署可执行流程
+     * @param sourceTask UserTask，完成链已定位的当前来源任务
+     * @return Optional&lt;UserTask&gt;，拓扑满足约束时返回真实后继用户任务，否则为空
+     */
+    private static Optional<UserTask> findDirectUserTaskTarget(
+            org.flowable.bpmn.model.Process process, UserTask sourceTask)
+    {
+        if (process == null || sourceTask == null || !StringUtils.hasText(sourceTask.getId()))
+        {
+            throw new IllegalArgumentException("动态下一办理人模型上下文不完整");
+        }
+        if (sourceTask.getParentContainer() != process
                 || sourceTask.getLoopCharacteristics() != null)
         {
             return Optional.empty();

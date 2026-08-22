@@ -4,14 +4,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.UserTask;
-import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
-import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.Execution;
 import org.flowable.identitylink.api.IdentityLink;
 import org.flowable.identitylink.api.IdentityLinkType;
@@ -30,8 +27,6 @@ public class WorkflowNextTaskAssignmentService
 {
     private final WorkflowUserSelectionValidator userSelectionValidator;
 
-    private final RepositoryService repositoryService;
-
     private final TaskService taskService;
 
     private final RuntimeService runtimeService;
@@ -40,18 +35,15 @@ public class WorkflowNextTaskAssignmentService
      * 创建动态下一办理人服务。
      *
      * @param userSelectionValidator WorkflowUserSelectionValidator，正式审批资格用户严格校验器
-     * @param repositoryService RepositoryService，已部署 BPMN 模型查询服务
      * @param taskService TaskService，活动任务和候选身份公共服务
      * @param runtimeService RuntimeService，多实例集合变量、execution 和计数公共服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowNextTaskAssignmentService(
             WorkflowUserSelectionValidator userSelectionValidator,
-            RepositoryService repositoryService, TaskService taskService,
-            RuntimeService runtimeService)
+            TaskService taskService, RuntimeService runtimeService)
     {
         this.userSelectionValidator = userSelectionValidator;
-        this.repositoryService = repositoryService;
         this.taskService = taskService;
         this.runtimeService = runtimeService;
     }
@@ -60,17 +52,20 @@ public class WorkflowNextTaskAssignmentService
      * 在完成来源任务前校验用户、BPMN 拓扑和目标分配方式，并为受控多实例后继写入专属集合变量。
      *
      * @param sourceTask Task，已经通过活动态和办理人校验的当前任务
+     * @param process Process，生命周期服务已唯一读取并核验的当前部署 BPMN Process
+     * @param sourceNode UserTask，生命周期服务已在同一 Process 中唯一定位的当前节点
      * @param requestedUserIds List&lt;Long&gt;，客户端可选的动态下一办理人主键
      * @return AssignmentPlan，不可变分配计划；未选择用户时返回空计划
      */
-    public AssignmentPlan prepare(Task sourceTask, List<Long> requestedUserIds)
+    public AssignmentPlan prepare(Task sourceTask, org.flowable.bpmn.model.Process process,
+            UserTask sourceNode, List<Long> requestedUserIds)
     {
         // 先冻结直接办理资格用户和顺序；多人候选计划在识别目标拓扑后追加完整认领权限门禁。
         List<String> approvalUserIds = userSelectionValidator
                 .requireApprovalEligibleUserIds(requestedUserIds);
         if (approvalUserIds.isEmpty())
         {
-            return prepareWithoutRequestedUsers(sourceTask);
+            return prepareWithoutRequestedUsers(sourceTask, process, sourceNode);
         }
         if (sourceTask == null || !StringUtils.hasText(sourceTask.getId())
                 || !StringUtils.hasText(sourceTask.getProcessInstanceId())
@@ -91,21 +86,13 @@ public class WorkflowNextTaskAssignmentService
             throw conflict();
         }
 
-        ProcessDefinition definition = repositoryService.getProcessDefinition(
-                sourceTask.getProcessDefinitionId());
-        BpmnModel model = repositoryService.getBpmnModel(sourceTask.getProcessDefinitionId());
-        if (definition == null || model == null || !StringUtils.hasText(definition.getKey()))
+        if (process == null || sourceNode == null
+                || !sourceTask.getTaskDefinitionKey().equals(sourceNode.getId())
+                || sourceNode.getParentContainer() != process)
         {
-            throw dataError();
+            throw conflict();
         }
-        org.flowable.bpmn.model.Process process = model.getProcessById(definition.getKey());
-        if (process == null)
-        {
-            throw dataError();
-        }
-        FlowElement sourceElement = process.getFlowElement(sourceTask.getTaskDefinitionKey(), false);
-        if (!(sourceElement instanceof UserTask sourceNode)
-                || sourceNode.getLoopCharacteristics() != null)
+        if (sourceNode.getLoopCharacteristics() != null)
         {
             throw conflict();
         }
@@ -163,27 +150,23 @@ public class WorkflowNextTaskAssignmentService
     }
 
     /**
-     * 在空选择场景读取正式部署模型，阻止受控动态多实例在集合变量缺失后才由引擎失败。
+     * 在空选择场景复用正式部署模型，阻止受控动态多实例在集合变量缺失后才由引擎失败。
      *
      * @param sourceTask Task，已经通过活动态和办理人校验的当前任务
+     * @param process Process，生命周期服务已唯一读取并核验的当前部署 BPMN Process
+     * @param sourceNode UserTask，生命周期服务已在同一 Process 中唯一定位的当前节点
      * @return AssignmentPlan，普通后继返回空计划；动态多实例后继直接返回稳定 400
      */
-    private AssignmentPlan prepareWithoutRequestedUsers(Task sourceTask)
+    private AssignmentPlan prepareWithoutRequestedUsers(Task sourceTask,
+            org.flowable.bpmn.model.Process process, UserTask sourceNode)
     {
         if (sourceTask == null || !StringUtils.hasText(sourceTask.getProcessDefinitionId())
                 || !StringUtils.hasText(sourceTask.getTaskDefinitionKey()))
         {
             throw dataError();
         }
-        ProcessDefinition definition = repositoryService.getProcessDefinition(
-                sourceTask.getProcessDefinitionId());
-        BpmnModel model = repositoryService.getBpmnModel(sourceTask.getProcessDefinitionId());
-        if (definition == null || model == null || !StringUtils.hasText(definition.getKey()))
-        {
-            throw dataError();
-        }
-        org.flowable.bpmn.model.Process process = model.getProcessById(definition.getKey());
-        if (process == null)
+        if (process == null || sourceNode == null
+                || !sourceTask.getTaskDefinitionKey().equals(sourceNode.getId()))
         {
             throw dataError();
         }
@@ -191,7 +174,7 @@ public class WorkflowNextTaskAssignmentService
         {
             // 只对受控动态多实例后继强制成员，普通 BPMN 默认分配仍保持既有行为。
             if (WorkflowNextTaskAssignmentContract.findRequiredMultiInstanceTarget(
-                    process, sourceTask.getTaskDefinitionKey()).isPresent())
+                    process, sourceNode).isPresent())
             {
                 throw new ServiceException("动态多实例下一办理人不能为空", HttpStatus.BAD_REQUEST);
             }

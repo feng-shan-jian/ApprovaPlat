@@ -393,42 +393,48 @@ public class WorkflowTaskLifecycleService
                     throw conflict();
                 }
 
-                CompletionVariables completionVariables = validateCompletionVariables(task,
+                CompletionPreparation completionPreparation = requireCompletionPreparation(task,
                         request.variables());
                 Map<String, Object> projectedVariables = attachmentService.prepareTaskVariables(
-                        actor.userId(), task.getProcessInstanceId(), completionVariables.values(),
-                        completionVariables.attachmentIdsByField());
+                        actor.userId(), task.getProcessInstanceId(), completionPreparation.values(),
+                        completionPreparation.attachmentIdsByField());
                 // 在完成前冻结抄送事件和唯一直接后继拓扑，避免任务删除后再信任客户端或推断来源元数据。
                 WorkflowTaskCopyService.CopyPlan copyPlan = taskCopyService.prepare(
                         WorkflowTaskCopyAction.COMPLETE, task, actor, request.copyUserIds());
                 WorkflowNextTaskAssignmentService.AssignmentPlan assignmentPlan =
-                        nextTaskAssignmentService.prepare(task, request.nextUserIds());
+                        nextTaskAssignmentService.prepare(task,
+                                completionPreparation.bpmnContext().process(),
+                                completionPreparation.currentUserTask(),
+                                request.nextUserIds());
                 executeConcurrentSensitive(() ->
                 {
                     // 动态 MI 必须先占用 expectedRevision；普通任务返回空计划并保持原有兼容路径。
                     WorkflowMultiInstanceService.CompletionRevision completionRevision =
                             multiInstanceService.reserveCompletionRevision(task,
-                                    request.expectedRevision(), actor);
+                                    completionPreparation.currentUserTask(),
+                                    request.expectedRevision());
                     // 循环判断只读取已通过正式节点表单 schema 的投影值，并在任务完成前写入同事务路由与审计。
                     controlledLoopService.prepareCompletion(task,
-                            completionVariables.deploymentId(), projectedVariables, actor.userId());
+                            completionPreparation.bpmnContext().definition().getKey(),
+                            completionPreparation.bpmnContext().definition().getDeploymentId(),
+                            projectedVariables, actor.userId());
                     addCompletionAuditComment(task, actor.userId(), opinion,
                             completionRevision);
                     // 附件条件更新与意见、变量和任务完成共享事务，任何失败都会整体回滚。
                     attachmentService.bindTaskAttachments(actor.userId(),
                             task.getProcessInstanceId(), taskId, task.getTaskDefinitionKey(),
-                            completionVariables.attachmentIdsByField());
-                    if (completionVariables.formSnapshot() != null)
+                            completionPreparation.attachmentIdsByField());
+                    if (completionPreparation.formSnapshot() != null)
                     {
                         Map<String, Object> submissionValues = buildTaskSubmissionValues(
-                                task, completionVariables, projectedVariables);
+                                task, completionPreparation, projectedVariables);
                         String submissionSnapshot = WorkflowFormSubmissionSnapshotCodec.encodeTask(
-                                completionVariables.deploymentId(),
-                                completionVariables.formSnapshot().getSourceType(),
-                                completionVariables.formSnapshot().getFormId(),
-                                completionVariables.formSnapshot().getFormKey(),
-                                completionVariables.formSnapshot().getNodeKey(), taskId,
-                                completionVariables.localScope(), submissionValues);
+                                completionPreparation.bpmnContext().definition().getDeploymentId(),
+                                completionPreparation.formSnapshot().getSourceType(),
+                                completionPreparation.formSnapshot().getFormId(),
+                                completionPreparation.formSnapshot().getFormKey(),
+                                completionPreparation.formSnapshot().getNodeKey(), taskId,
+                                completionPreparation.localScope(), submissionValues);
                         // 内部快照始终使用 task-local，确保历史更新由真实 taskId 强关联且不污染业务变量。
                         taskService.setVariableLocal(taskId,
                                 WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
@@ -436,7 +442,7 @@ public class WorkflowTaskLifecycleService
                     }
                     // Flowable 8 只有显式传入 userId 的重载会写 completedBy；该字段是已办查询、对象授权和审计的正式依据。
                     taskService.complete(taskId, actor.userId(), projectedVariables,
-                            completionVariables.localScope());
+                            completionPreparation.localScope());
                     // 完成产生真实后继任务后再应用动态身份，并在写后复核；任一步失败都会回滚整个完成事务。
                     nextTaskAssignmentService.apply(assignmentPlan);
                     taskCopyService.persist(copyPlan);
@@ -461,16 +467,16 @@ public class WorkflowTaskLifecycleService
      * 合成任务完成时的完整可读值，用 task-local 快照冻结只读字段且拒绝带入隐藏字段。
      *
      * @param task Task，当前仍活动且已通过办理人校验的真实任务
-     * @param completionVariables CompletionVariables，部署快照、作用域和合法写字段计划
+     * @param completionPreparation CompletionPreparation，部署上下文、表单快照、作用域和合法写字段计划
      * @param projectedVariables Map&lt;String,Object&gt;，附件投影后的本次合法写补丁
      * @return Map&lt;String,Object&gt;，按部署表单顺序合并当时现值和本次补丁的不可修改映射
      */
     private Map<String, Object> buildTaskSubmissionValues(Task task,
-            CompletionVariables completionVariables, Map<String, Object> projectedVariables)
+            CompletionPreparation completionPreparation, Map<String, Object> projectedVariables)
     {
         Set<String> readableNames = variableValidator.readableFieldNames(
-                completionVariables.formSnapshot().getContent());
-        Map<String, Object> currentValues = completionVariables.localScope()
+                completionPreparation.formSnapshot().getContent());
+        Map<String, Object> currentValues = completionPreparation.localScope()
                 ? taskService.getVariablesLocal(task.getId(), readableNames)
                 : runtimeService.getVariables(task.getProcessInstanceId(), readableNames);
         if (currentValues == null)
@@ -814,13 +820,13 @@ public class WorkflowTaskLifecycleService
     }
 
     /**
-     * 使用部署时固化的当前节点表单 schema 校验完成变量并解析局部作用域。
+     * 一次装载部署 BPMN 上下文和当前节点，并使用部署表单 schema 校验完成变量。
      *
      * @param task Task，已经完成活动态和办理人校验的当前任务
      * @param requestedVariables Map&lt;String, Object&gt;，客户端提交的表单变量
-     * @return CompletionVariables，规范化变量和 BPMN localScope 设置
+     * @return CompletionPreparation，不可变 BPMN、当前 UserTask、规范化变量和部署表单准备结果
      */
-    private CompletionVariables validateCompletionVariables(Task task,
+    private CompletionPreparation requireCompletionPreparation(Task task,
             Map<String, Object> requestedVariables)
     {
         BpmnContext context = requireBpmnContext(task.getProcessDefinitionId());
@@ -838,8 +844,8 @@ public class WorkflowTaskLifecycleService
             {
                 throw invalidArgument();
             }
-            return new CompletionVariables(Map.of(), isTaskLocal(userTask), Map.of(),
-                    context.definition().getDeploymentId(), null);
+            return new CompletionPreparation(context, userTask, Map.of(), Map.of(),
+                    isTaskLocal(userTask), null);
         }
 
         List<WfDeployForm> snapshots = artifactRepository.selectForms(
@@ -862,9 +868,8 @@ public class WorkflowTaskLifecycleService
         }
         WorkflowValidatedStartVariables validated = variableValidator.validateForStart(
                 matched.get(0).getContent(), variables);
-        return new CompletionVariables(validated.variables(), isTaskLocal(userTask),
-                validated.attachmentIdsByField(), context.definition().getDeploymentId(),
-                matched.get(0));
+        return new CompletionPreparation(context, userTask, validated.variables(),
+                validated.attachmentIdsByField(), isTaskLocal(userTask), matched.get(0));
     }
 
     /**
@@ -2395,30 +2400,34 @@ public class WorkflowTaskLifecycleService
     }
 
     /**
-     * 经过部署表单 schema 校验的任务完成变量。
+     * 完成写链一次装载并冻结的部署上下文、当前节点和表单变量准备结果。
      *
+     * @param bpmnContext BpmnContext，唯一读取并核验的流程定义、BPMN Model 和所属 Process
+     * @param currentUserTask UserTask，在同一 Process 中唯一定位的当前任务节点
      * @param values Map&lt;String, Object&gt;，规范化且不可修改的任务变量
-     * @param localScope boolean，是否按任务局部变量持久化
      * @param attachmentIdsByField Map&lt;String, List&lt;String&gt;&gt;，上传字段附件 UUID 引用
-     * @param deploymentId String，任务定义所属部署主键
+     * @param localScope boolean，是否按任务局部变量持久化
      * @param formSnapshot WfDeployForm，任务节点部署表单快照；无表单节点为空
      */
-    private record CompletionVariables(Map<String, Object> values, boolean localScope,
-            Map<String, List<String>> attachmentIdsByField, String deploymentId,
-            WfDeployForm formSnapshot)
+    private record CompletionPreparation(BpmnContext bpmnContext, UserTask currentUserTask,
+            Map<String, Object> values, Map<String, List<String>> attachmentIdsByField,
+            boolean localScope, WfDeployForm formSnapshot)
     {
         /**
-         * 创建完成变量计划并复制顶层映射。
+         * 创建完成准备结果并复制变量及附件映射，禁止后续环节替换已解析上下文。
          *
+         * @param bpmnContext BpmnContext，已核验的部署 BPMN 上下文
+         * @param currentUserTask UserTask，已在所属 Process 中定位的当前节点
          * @param values Map&lt;String, Object&gt;，已经通过 schema 校验的变量
-         * @param localScope boolean，BPMN 当前节点的变量作用域设置
          * @param attachmentIdsByField Map&lt;String, List&lt;String&gt;&gt;，按字段分组的附件引用
-         * @param deploymentId String，任务定义所属部署主键
+         * @param localScope boolean，BPMN 当前节点的变量作用域设置
          * @param formSnapshot WfDeployForm，任务节点部署表单快照；无表单节点为空
          * @return 无返回值，构造后变量与两层附件引用均不可修改
          */
-        private CompletionVariables
+        private CompletionPreparation
         {
+            Objects.requireNonNull(bpmnContext);
+            Objects.requireNonNull(currentUserTask);
             values = Collections.unmodifiableMap(new LinkedHashMap<>(values));
             LinkedHashMap<String, List<String>> copiedReferences = new LinkedHashMap<>();
             attachmentIdsByField.forEach((fieldName, attachmentIds) ->

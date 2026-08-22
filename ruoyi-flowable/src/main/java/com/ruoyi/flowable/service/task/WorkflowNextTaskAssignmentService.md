@@ -6,15 +6,19 @@
 
 ## 接入方式
 
-完成前调用 `prepare` 校验用户、当前执行树和 BPMN 拓扑；`TaskService.complete` 创建真实后继任务后调用 `apply`：
+完成链先装载唯一 BPMN 上下文并定位当前 `UserTask`，再调用 `prepare` 校验用户、当前执行树和同一 `Process` 内的 BPMN 拓扑；`TaskService.complete` 创建真实后继任务后调用 `apply`：
 
 ```java
-AssignmentPlan plan = nextTaskAssignmentService.prepare(task, List.of(12L, 13L));
+AssignmentPlan plan = nextTaskAssignmentService.prepare(
+        task,
+        bpmnContext.process(),
+        currentUserTask,
+        List.of(12L, 13L));
 taskService.complete(task.getId());
 nextTaskAssignmentService.apply(plan);
 ```
 
-两个调用必须处于同一写事务。`apply` 失败时，来源任务完成和已经产生的后继任务均必须回滚。
+`prepare` 不自行读取流程定义或 BPMN Model。两个调用必须处于同一写事务；`apply` 失败时，来源任务完成和已经产生的后继任务均必须回滚。
 
 `nextUserIds` 中每个用户都必须处于启用、未删除状态。服务端在访问执行树或写集合变量前先按正式 RBAC 数据校验直接办理资格，不依赖页面候选列表；普通后继选择多人时，还会在任何任务身份写入前追加完整认领资格校验。用户 `1` 按既有超级管理员契约视为合格。
 
@@ -47,4 +51,4 @@ nextTaskAssignmentService.apply(plan);
 - 选择多人：删除静态候选身份、清空 assignee，并逐个写入 candidate user。
 - 受控并行多实例：完成前写集合变量，完成后核对真实 task/execution、成员快照、ALL/ANY 模式、revision=0 和 `nrOf*` 根计数。
 - 写入后重新读取任务和 identity link；assignee、候选用户或候选组与计划不一致时抛错回滚。
-- 未提交 `nextUserIds` 时仍读取正式部署模型；普通后继返回空计划并保留 BPMN 默认分配行为，唯一无条件直连受控动态多实例时在完成命令前返回 HTTP 400。
+- 未提交 `nextUserIds` 时仍使用完成链已经装载的正式部署模型；普通后继返回空计划并保留 BPMN 默认分配行为，唯一无条件直连受控动态多实例时在完成命令前返回 HTTP 400。
