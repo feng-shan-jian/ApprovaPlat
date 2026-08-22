@@ -106,9 +106,13 @@ Flowable 8 的 `startableByUserOrGroups` 只返回存在匹配 starter identity 
 
 开始节点从该定义的 BPMN 公共模型中确定，返回内容只读取 Flowable 业务制品 `approvaplat/forms-v1.json` 中的 `content`。服务不会查询或回连当前 `wf_form`，所以模板后续编辑不会改变旧部署和在途实例的表单快照。
 
+正式写链使用包级 `loadStartFormInCurrentTransaction(...)`：调用方传入外层事务已经核验的 `WorkflowCurrentIdentity` 和真实 `ProcessDefinition`，该方法不再进入 `engineOperations.read(...)`，也不重新解析身份。一次取得的 `BpmnModel` 同时供开始节点定位、部署表单快照和多实例字段描述使用，并与表单视图组成简单数据载体返回发起服务。
+
+授权分为两个明确边界：`getProcessForm(...)` 和 `getBpmnXml(...)` 使用纯只读 `canStartIfManaged(...)`，拒绝保持既有“当前用户无权发起该流程”的 `403` 且不携带 `subCode`，也不累计正式发起失败指标；正式写链只调用一次 `assertCanStart(...)`，受管拒绝保留 `PROCESS_START_SCOPE_DENIED` 和失败指标。两条路径都只有在结果为 `null`、明确表示历史未托管部署时，才检查 Flowable starter identity link；受管 `false` 或异常拒绝都不能进入历史兼容路径。
+
 ## BPMN XML
 
-首次发起预览使用当前用户可发起规则。详情预览必须携带实例 ID，并通过实例对象授权及定义、部署关系核验。授权通过后统一调用 `WorkflowDeploymentService.getBpmnXml`，由其执行大小限制、UTF-8 解码、安全 XML 解析及 Flowable 校验。
+首次发起预览使用当前用户可发起规则的纯只读判定，不调用正式写入授权或产生发起失败指标。详情预览必须携带实例 ID，并通过实例对象授权及定义、部署关系核验。授权通过后统一调用 `WorkflowDeploymentService.getBpmnXml`，由其执行大小限制、UTF-8 解码、安全 XML 解析及 Flowable 校验。
 
 ## 异常与一致性
 

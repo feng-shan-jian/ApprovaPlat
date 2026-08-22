@@ -515,25 +515,41 @@ public class WorkflowProcessQueryService
             if (instanceId == null)
             {
                 WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-                assertStartableDefinition(definition, actor);
+                assertLatestActiveDefinition(definition);
+                assertPreviewStartPermission(definition, actor);
+                return loadStartForm(definition).form();
             }
-            else
-            {
-                WorkflowProcessAccessSnapshot instance = processAccessService.requireReadableInstance(instanceId);
-                requireInstanceRelation(instance, definition);
-                requireSame(deploymentId, instance.deploymentId(), "流程实例与部署关系不一致");
-            }
-            WfDeployForm snapshot = requireStartFormSnapshot(definition, deploymentId);
-            // 只有发起场景投影部署 BPMN 中的专用成员字段，实例详情不接受再次选人。
-            List<WorkflowStartMultiInstanceAssignmentView> startAssignments = instanceId == null
-                    ? WorkflowStartMultiInstanceContract.describe(
-                            repositoryService.getBpmnModel(definitionId), definition.getKey())
-                    : List.of();
+            WorkflowProcessAccessSnapshot instance = processAccessService.requireReadableInstance(instanceId);
+            requireInstanceRelation(instance, definition);
+            requireSame(deploymentId, instance.deploymentId(), "流程实例与部署关系不一致");
+            BpmnModel model = requireBpmnModel(definition);
+            WfDeployForm snapshot = requireStartFormSnapshot(definition, deploymentId, model);
             return new WorkflowProcessFormView(definitionId, deploymentId, instanceId,
                     snapshot.getSourceType(), snapshot.getFormId(), snapshot.getFormKey(), snapshot.getNodeKey(),
                     snapshot.getFormName(), snapshot.getNodeName(), snapshot.getContent(),
-                    toInstant(snapshot.getCreateTime()), startAssignments);
+                    toInstant(snapshot.getCreateTime()), List.of());
         });
+    }
+
+    /**
+     * 在调用方已经建立的当前用户事务中一次完成正式发起授权、BPMN 与开始表单装载。
+     *
+     * @param actor WorkflowCurrentIdentity，外层写事务已经核验的当前有效身份
+     * @param definition ProcessDefinition，调用方从 Flowable 仓库取得的真实流程定义
+     * @return StartFormLoad，同一次仓库读取的 BPMN 模型与不可变开始表单视图
+     */
+    StartFormLoad loadStartFormInCurrentTransaction(WorkflowCurrentIdentity actor,
+            ProcessDefinition definition)
+    {
+        if (actor == null || definition == null
+                || !StringUtils.hasText(definition.getId())
+                || !StringUtils.hasText(definition.getDeploymentId()))
+        {
+            throw dataError("流程发起上下文数据异常");
+        }
+        assertLatestActiveDefinition(definition);
+        assertStartPermissionForWrite(definition, actor);
+        return loadStartForm(definition);
     }
 
     /**
@@ -556,7 +572,8 @@ public class WorkflowProcessQueryService
             if (instanceId == null)
             {
                 WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-                assertStartableDefinition(definition, actor);
+                assertLatestActiveDefinition(definition);
+                assertPreviewStartPermission(definition, actor);
             }
             else
             {
@@ -1595,13 +1612,12 @@ public class WorkflowProcessQueryService
     }
 
     /**
-     * 校验定义为同一租户下最新激活版本且当前身份具备真实发起权限。
+     * 校验定义仍是同一租户下的最新激活版本，不混入任何授权副作用。
      *
-     * @param definition ProcessDefinition，待发起或预览的流程定义
-     * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
-     * @return 无返回值，非法版本、状态或权限分别抛出稳定业务异常
+     * @param definition ProcessDefinition，待发起或预览的真实流程定义
+     * @return void，非最新版本或挂起状态分别抛出既有 409 异常
      */
-    private void assertStartableDefinition(ProcessDefinition definition, WorkflowCurrentIdentity actor)
+    private void assertLatestActiveDefinition(ProcessDefinition definition)
     {
         ProcessDefinitionQuery latestQuery = repositoryService.createProcessDefinitionQuery()
                 .processDefinitionKey(definition.getKey())
@@ -1623,10 +1639,81 @@ public class WorkflowProcessQueryService
         {
             throw new ServiceException("流程定义已挂起", HttpStatus.CONFLICT);
         }
-        if (!isDefinitionStartable(definition, actor))
+    }
+
+    /**
+     * 以纯只读方式校验表单和 BPMN 预览权限，拒绝时保持原有通用 403 契约。
+     *
+     * @param definition ProcessDefinition，已通过最新激活状态校验的流程定义
+     * @param actor WorkflowCurrentIdentity，只读边界内解析的当前有效身份
+     * @return void，受管规则或历史 starter identity link 拒绝时抛出无 subCode 的 403
+     */
+    private void assertPreviewStartPermission(ProcessDefinition definition,
+            WorkflowCurrentIdentity actor)
+    {
+        Boolean managedDecision = participantRuleRuntimeService
+                .canStartIfManaged(actor, definition);
+        if (Boolean.FALSE.equals(managedDecision)
+                || (managedDecision == null
+                    && !isHistoricalDefinitionStartable(definition, actor)))
         {
             throw new ServiceException("当前用户无权发起该流程", HttpStatus.FORBIDDEN);
         }
+    }
+
+    /**
+     * 在真实发起写入前执行正式授权，保留拒绝指标和专用稳定 subCode。
+     *
+     * @param definition ProcessDefinition，已通过最新激活状态校验的流程定义
+     * @param actor WorkflowCurrentIdentity，外层写事务已经核验的当前有效身份
+     * @return void，受管规则拒绝沿用 assertCanStart 异常，历史拒绝沿用通用 403
+     */
+    private void assertStartPermissionForWrite(ProcessDefinition definition,
+            WorkflowCurrentIdentity actor)
+    {
+        // 受管部署的允许或异常拒绝均是正式决定；只有 null 才进入历史兼容路径。
+        if (participantRuleRuntimeService.assertCanStart(actor, definition) == null
+                && !isHistoricalDefinitionStartable(definition, actor))
+        {
+            throw new ServiceException("当前用户无权发起该流程", HttpStatus.FORBIDDEN);
+        }
+    }
+
+    /**
+     * 使用一次 BPMN Model 读取组装开始节点表单与多实例字段，不负责事务或授权。
+     *
+     * @param definition ProcessDefinition，已经完成结构和对应场景授权校验的真实定义
+     * @return StartFormLoad，同一次模型读取生成的 BPMN 模型和开始表单视图
+     */
+    private StartFormLoad loadStartForm(ProcessDefinition definition)
+    {
+        BpmnModel model = requireBpmnModel(definition);
+        WfDeployForm snapshot = requireStartFormSnapshot(definition,
+                definition.getDeploymentId(), model);
+        List<WorkflowStartMultiInstanceAssignmentView> startAssignments =
+                WorkflowStartMultiInstanceContract.describe(model, definition.getKey());
+        WorkflowProcessFormView form = new WorkflowProcessFormView(definition.getId(),
+                definition.getDeploymentId(), null, snapshot.getSourceType(),
+                snapshot.getFormId(), snapshot.getFormKey(), snapshot.getNodeKey(),
+                snapshot.getFormName(), snapshot.getNodeName(), snapshot.getContent(),
+                toInstant(snapshot.getCreateTime()), startAssignments);
+        return new StartFormLoad(model, form);
+    }
+
+    /**
+     * 读取并核验流程定义的唯一 BPMN 公共模型。
+     *
+     * @param definition ProcessDefinition，已经完成定义关系校验的真实流程定义
+     * @return BpmnModel，可同时用于开始节点、表单快照与多实例字段解析的模型
+     */
+    private BpmnModel requireBpmnModel(ProcessDefinition definition)
+    {
+        BpmnModel model = repositoryService.getBpmnModel(definition.getId());
+        if (model == null)
+        {
+            throw dataError("流程定义缺少 BPMN 模型");
+        }
+        return model;
     }
 
     /**
@@ -1634,15 +1721,12 @@ public class WorkflowProcessQueryService
      *
      * @param definition ProcessDefinition，已完成关系与权限校验的流程定义
      * @param deploymentId String，定义所属真实部署主键
+     * @param model BpmnModel，本次发起准备已经唯一读取并校验存在的流程模型
      * @return WfDeployForm，仅来自 Flowable 业务制品 forms-v1.json 的开始节点快照
      */
-    private WfDeployForm requireStartFormSnapshot(ProcessDefinition definition, String deploymentId)
+    private WfDeployForm requireStartFormSnapshot(ProcessDefinition definition,
+            String deploymentId, BpmnModel model)
     {
-        BpmnModel model = repositoryService.getBpmnModel(definition.getId());
-        if (model == null)
-        {
-            throw dataError("流程定义缺少 BPMN 模型");
-        }
         org.flowable.bpmn.model.Process process = model.getProcessById(definition.getKey());
         if (process == null)
         {
@@ -1682,6 +1766,14 @@ public class WorkflowProcessQueryService
         }
         return snapshot;
     }
+
+    /**
+     * 承载一次正式发起准备读取的 BPMN 模型和开始表单，不引入额外行为边界。
+     *
+     * @param bpmnModel BpmnModel，本次准备唯一读取的流程模型
+     * @param form WorkflowProcessFormView，基于同一模型和部署制品生成的开始表单
+     */
+    record StartFormLoad(BpmnModel bpmnModel, WorkflowProcessFormView form) { }
 
     /**
      * 解析开始节点实际使用的部署表单键，并区分正式模板权限元数据与内嵌 FormData。

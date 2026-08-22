@@ -24,13 +24,17 @@ WorkflowProcessInstanceSnapshot started = processStartService.start(
 2. 通过 `WorkflowEngineOperations.writeAsCurrentUser(...)` 开启事务，重新核验当前正式用户并设置 Flowable 认证身份。
 3. 从 `RepositoryService` 查询定义并取得服务端真实 `deploymentId`。
 4. 对真实 `deploymentId` 的 `ACT_RE_DEPLOYMENT` 行执行 `SELECT ... FOR UPDATE`，与受控部署删除形成同一线性化顺序。
-5. 复用 `WorkflowProcessQueryService.getProcessForm(...)` 校验同租户最新版本、激活状态、starter 用户/ROLE/DEPT 身份，并精确读取 BPMN 开始节点在 `approvaplat/forms-v1.json` 中的 `content`。
+5. 直接调用 `WorkflowProcessQueryService.loadStartFormInCurrentTransaction(...)`，复用外层已核验身份和真实定义，一次完成最新版本、激活状态、starter 用户/ROLE/DEPT 授权，并只读取一次 BPMN Model；同一模型同时用于开始节点、表单快照和多实例字段。
 6. 使用 `WorkflowStartVariableValidator` 按部署时固化的表单 schema 校验并深度复制客户端变量。
 7. 对上传字段锁定当前用户的 `TEMP` 附件，将 UUID 列表替换为六项安全元数据投影。
 8. 在真正写入前再次按定义 ID 查询激活状态，阻止校验期间被挂起或删除的定义继续发起。
 9. 服务端写入 `initiator=<当前用户ID>`、`processStatus=running`，并把附件安全投影后的开始表单值编码为内部不可变提交快照。
 10. 业务变量与内部快照随同一次 `RuntimeService.startProcessInstanceById(...)` 原子写入，避免实例已经创建但开始提交值缺失。
 11. 将附件绑定到真实实例和部署快照开始节点；任一绑定失败均回滚附件、内部快照和流程发起。
+
+直接发起只由 `start(...)` 建立一次 `writeAsCurrentUser` 写边界。草稿提交由 `WorkflowProcessDraftService.submit(...)` 建立唯一写边界，包级 `startDraft(...)` 直接接收外层身份、已规范化业务主键和多实例选择，不再开启事务或重新解析身份。两条入口在完成各自准备后统一调用私有引擎写入段：合并业务变量、生成多实例保留变量、写入 `initiator`、`processStatus=running` 和不可变表单提交快照，再且仅再调用一次 `startProcessInstanceById(...)`。
+
+`startDraft(...)` 返回真实实例快照和本次唯一一次 schema 校验得到的规范化变量。草稿服务使用该结果更新 `SUBMITTED`，不会重新解析 JSON 或再次校验变量。
 
 ## 权限与数据来源
 

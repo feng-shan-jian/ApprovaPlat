@@ -51,6 +51,8 @@ attachmentService.bindTaskAttachments(
 
 任务场景允许复用同一流程实例、同一表单字段的 `BOUND` 附件，且不会覆盖其首次任务和节点归属。跨实例 `BOUND` 返回 `403`，跨字段返回 `400`，其他用户的 `TEMP` 返回 `403`，不存在或已清理附件返回 `404`，过期或状态竞争返回 `409`。
 
+草稿创建和保存继续使用 `reconcileDraftAttachments(...)` 完成附件对账。正式提交改用 `prepareDraftSubmissionVariables(...)`：先按草稿锁定当前 `DRAFT` 集合，再仅对不在该集合中的新增 UUID 执行一次补充批量锁定，因此支持草稿创建后才上传、提交时首次引用的 `TEMP` 附件；每个附件只进行一次归属、状态、字段和物理文件完整性校验。同一批锁定实体完成 `TEMP -> DRAFT`、移除项 `DELETED` 处理及安全元数据投影，不再先对账后重新查询和校验。真实实例创建后仍由 `bindDraftStartAttachments(...)` 完成 `DRAFT -> BOUND`，并与实例和草稿状态更新共用外层事务。
+
 ## 安全投影
 
 进入 Flowable 变量的每个附件只包含：`attachmentId`、`fieldName`、`originalName`、`contentType`、`fileSize`、`sha256`。`storageKey`、`ownerUserId`、磁盘路径和静态下载 URL 永不进入变量或 API 视图。

@@ -28,3 +28,17 @@ ACTIVE 草稿正式提交先普通读取本人草稿以取得不可变 `deployme
 `ACT_RE_DEPLOYMENT` 和 `wf_process_draft`，并重新核验所有者、状态、版本、定义和部署关系。
 部署删除采用同一首锁，因此不会出现提交持有草稿锁、删除持有部署锁的反向等待。已提交草稿的
 重复请求只返回原实例，不再产生实例，也不要求已经允许删除的部署仍然存在。
+
+## 正式提交单事务链
+
+`submit(...)` 是草稿提交唯一的 `writeAsCurrentUser` 事务入口，锁和状态迁移顺序固定为：
+
+```text
+ACT_RE_DEPLOYMENT
+  -> wf_process_draft
+  -> wf_attachment
+  -> Flowable 实例创建
+  -> 草稿 SUBMITTED
+```
+
+部署行、草稿行和本次草稿附件都只锁定一次。提交入口只规范化一次 `businessKey` 和多实例人员选择；包级 `WorkflowProcessStartService.startDraft(...)` 只执行一次 `validateForStart`，同一份规范化变量同时用于引擎写入和 `markSubmitted`。引擎创建后的 `DRAFT -> BOUND` 与草稿 CAS 更新仍在同一事务内，任何异常都会回滚实例、草稿和附件。处于 `SUBMITTED` 的重复请求在部署锁之前直接返回原实例。

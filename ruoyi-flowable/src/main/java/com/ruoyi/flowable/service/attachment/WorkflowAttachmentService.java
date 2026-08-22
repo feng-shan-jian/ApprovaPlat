@@ -489,42 +489,67 @@ public class WorkflowAttachmentService
     }
 
     /**
-     * 锁定同一草稿附件并生成可安全写入 Flowable 的附件元数据投影。
+     * 正式提交草稿时一次锁定现有与新增附件，并用同一批结果完成对账、校验和安全投影。
      *
-     * @param actorUserId String，事务内重新核验的草稿所有者 ID
-     * @param draftId String，草稿 UUID
-     * @param normalizedVariables Map&lt;String,Object&gt;，正式 schema 校验后的字段值
-     * @param attachmentIdsByField Map&lt;String,List&lt;String&gt;&gt;，上传字段引用
-     * @return Map&lt;String,Object&gt;，附件 UUID 已替换为安全元数据数组的引擎变量
+     * @param actorUserId String，外层写事务已经核验的草稿所有者 ID
+     * @param draftId String，已经锁定主行的草稿 UUID
+     * @param normalizedVariables Map&lt;String,Object&gt;，唯一一次正式 schema 校验后的字段值
+     * @param attachmentIdsByField Map&lt;String,List&lt;String&gt;&gt;，上传字段到附件 UUID 的受控映射
+     * @return Map&lt;String,Object&gt;，完成 TEMP 到 DRAFT 对账且附件字段已安全投影的引擎变量
      */
     @Transactional(rollbackFor = Exception.class)
-    public Map<String, Object> prepareDraftStartVariables(String actorUserId, String draftId,
-            Map<String, Object> normalizedVariables,
+    public Map<String, Object> prepareDraftSubmissionVariables(String actorUserId,
+            String draftId, Map<String, Object> normalizedVariables,
             Map<String, List<String>> attachmentIdsByField)
     {
         Long ownerUserId = requireNumericUserId(actorUserId);
         String normalizedDraftId = requireAttachmentId(draftId);
         Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
-        if (references.isEmpty())
+        LinkedHashSet<String> requestedIds = new LinkedHashSet<>(flattenUniqueIds(references));
+
+        // 先锁当前 DRAFT 集合，再只锁本次新增 UUID；同一附件不会被第二个批量查询重复取得。
+        List<WfAttachment> currentRows = attachmentMapper.selectByDraftIdForUpdate(
+                normalizedDraftId, ownerUserId);
+        Map<String, WfAttachment> lockedById = new LinkedHashMap<>(
+                indexLockedRows(currentRows));
+        LinkedHashSet<String> newIds = new LinkedHashSet<>(requestedIds);
+        newIds.removeAll(lockedById.keySet());
+        if (!newIds.isEmpty())
         {
-            return normalizedVariables;
+            Map<String, WfAttachment> newRows = indexLockedRows(
+                    attachmentMapper.selectByIdsForUpdate(newIds));
+            lockedById.putAll(newRows);
         }
-        List<WfAttachment> rows = attachmentMapper.selectByIdsForUpdate(
-                flattenUniqueIds(references));
-        Map<String, WfAttachment> byId = indexLockedRows(rows);
+
         LinkedHashMap<String, Object> projected = new LinkedHashMap<>(normalizedVariables);
+        LocalDateTime now = LocalDateTime.now();
         for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
         {
             ArrayNode safeAttachments = objectMapper.createArrayNode();
             for (String attachmentId : fieldEntry.getValue())
             {
-                WfAttachment attachment = byId.get(attachmentId);
-                assertPersistedDraftAttachment(attachment, ownerUserId, normalizedDraftId,
-                        fieldEntry.getKey());
+                WfAttachment attachment = lockedById.get(attachmentId);
+                assertDraftAttachmentReference(attachment, ownerUserId, normalizedDraftId,
+                        fieldEntry.getKey(), now);
                 verifyStoredAttachment(attachment);
+                if (attachment.status() == WorkflowAttachmentStatus.TEMP
+                        && attachmentMapper.bindDraftAttachment(attachmentId, ownerUserId,
+                                fieldEntry.getKey(), normalizedDraftId) != 1)
+                {
+                    throw stateConflict();
+                }
                 safeAttachments.add(toSafeVariableProjection(attachment));
             }
             projected.put(fieldEntry.getKey(), safeAttachments);
+        }
+        for (WfAttachment current : currentRows)
+        {
+            if (!requestedIds.contains(current.attachmentId())
+                    && attachmentMapper.markDraftAttachmentDeleted(current.attachmentId(),
+                            ownerUserId, normalizedDraftId) != 1)
+            {
+                throw stateConflict();
+            }
         }
         return Collections.unmodifiableMap(projected);
     }

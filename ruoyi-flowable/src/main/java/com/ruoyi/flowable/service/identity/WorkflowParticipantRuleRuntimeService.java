@@ -81,7 +81,7 @@ public class WorkflowParticipantRuleRuntimeService
             ProcessDefinition definition)
     {
         WfDeployParticipantRule rule = findStartRule(definition);
-        // 历史未托管部署返回 null；调用方必须已通过 getProcessForm 完成原 Flowable starter identity link 门禁。
+        // 历史未托管部署返回 null；正式写入口继续执行原 Flowable starter identity link 门禁。
         if (rule == null) return null;
         Set<String> activeDeptIds = "DEPTS".equals(rule.getRuleType())
                 ? loadActiveScopeDeptIds(actor) : Set.of();

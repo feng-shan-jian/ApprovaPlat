@@ -34,7 +34,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartMultiInstanceAssignmentView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
-import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
@@ -311,18 +310,17 @@ public class WorkflowProcessDraftService
             Map<String, List<Long>> memberSelections = normalizeDraftSelections(
                     readAssignments(current.startMultiInstanceAssignments()),
                     request.multiInstanceUserIds());
-            // startDraft 内部重新执行身份、starter、最新版锁、快照、正式必填和附件完整性校验。
-            WorkflowProcessInstanceSnapshot instance = processStartService.startDraft(current,
-                    optionalText(request.businessKey(), 255), request.variables(),
-                    memberSelections);
-            WorkflowValidatedStartVariables validated = variableValidator.validateForStart(
-                    current.formSnapshot(), request.variables());
+            // 业务主键只规范化一次；启动结果同时带回唯一一次 schema 校验得到的正式字段。
+            String businessKey = optionalText(request.businessKey(), 255);
+            WorkflowProcessStartService.DraftStartResult started = processStartService
+                    .startDraft(actor, current, businessKey, request.variables(),
+                            memberSelections);
             requireCas(draftMapper.markSubmitted(normalizedId, ownerUserId,
-                    request.expectedVersion(), instance.id(), writeJson(validated.variables()),
-                    writeJson(memberSelections),
-                    optionalText(request.businessKey(), 255)));
-            return new WorkflowProcessDraftSubmitView(normalizedId, instance.id(),
-                    instance.processDefinitionId(), current.revisionNo() + 1);
+                    request.expectedVersion(), started.instance().id(),
+                    writeJson(started.normalizedVariables()), writeJson(memberSelections),
+                    businessKey));
+            return new WorkflowProcessDraftSubmitView(normalizedId, started.instance().id(),
+                    started.instance().processDefinitionId(), current.revisionNo() + 1);
         });
     }
 
