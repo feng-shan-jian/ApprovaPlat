@@ -253,14 +253,14 @@ function replaceMultiInstanceSelections(selections) {
  */
 async function loadNewContext() {
   const definitionId = routeDefinitionId()
-  const deployId = routeDeploymentId()
-  if (!definitionId || !deployId) throw new Error('流程定义或部署关系不能为空')
+  const deploymentIdFromRoute = routeDeploymentId()
+  if (!definitionId || !deploymentIdFromRoute) throw new Error('流程定义或部署关系不能为空')
   const [formResponse, xmlResponse] = await Promise.all([
-    getProcessForm({ definitionId, deployId }),
+    getProcessForm({ definitionId, deploymentId: deploymentIdFromRoute }),
     getProcessBpmnXml(definitionId)
   ])
   processDefinitionId.value = definitionId
-  deploymentId.value = deployId
+  deploymentId.value = deploymentIdFromRoute
   replaceFormSnapshot(formResponse.data || {})
   replaceMultiInstanceSelections({})
   if (startAssignments.value.length) await searchApprovalUsers('')
@@ -453,9 +453,8 @@ async function submitDraft() {
       expectedVersion: draftState.revisionNo,
       ...draftValuesPayload(variables)
     })
-    const result = response.data || {}
-    const processInstanceId = result.id || result.processInstanceId || result.procInsId
-      || result.processInstance?.id || result.processInstance?.processInstanceId
+    // 提交响应只接受统一后的正式协议字段，缺失时禁止猜测旧别名并跳转错误实例。
+    const processInstanceId = response.data?.processInstanceId
     if (!processInstanceId) throw new Error('草稿提交结果缺少流程实例主键')
     dirty.value = false
     proxy.$modal.msgSuccess('申请提交成功')

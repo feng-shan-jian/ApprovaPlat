@@ -736,12 +736,11 @@ const actionCommentPlaceholder = computed(() => ({
 }[actionDialog.type] || '请输入办理意见'))
 
 /**
- * 从兼容的新旧隐藏路由参数中读取流程实例主键。
+ * 从详情页唯一命名路由参数中读取流程实例主键。
  * @returns {string} 去除首尾空白后的流程实例主键。
  */
 function processInstanceId() {
-  return String(route.params.instanceId || route.params.processInstanceId || route.params.procInsId || route.params.id
-    || route.query.procInsId || route.query.processInstanceId || '').trim()
+  return String(route.params.instanceId || '').trim()
 }
 
 /**
@@ -749,7 +748,7 @@ function processInstanceId() {
  * @returns {string} 去除首尾空白后的任务主键，未传入时为空字符串。
  */
 function routeTaskId() {
-  return String(route.query.taskId || route.params.taskId || '').trim()
+  return String(route.query.taskId || '').trim()
 }
 
 /**

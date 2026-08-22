@@ -571,9 +571,9 @@ async function submitAction() {
     if (!valid) return
     const row = actionDialog.row
     const comment = actionDialog.comment.trim()
-    if (type === 'cancel') await cancelProcess({ procInsId: row.processInstanceId, comment })
+    if (type === 'cancel') await cancelProcess({ processInstanceId: row.processInstanceId, comment })
     else if (type === 'terminate') await terminateProcessInstance({ instanceId: row.processInstanceId, reason: comment })
-    else await revokeTask({ procInsId: row.processInstanceId, taskId: row.taskId, comment })
+    else await revokeTask({ processInstanceId: row.processInstanceId, taskId: row.taskId, comment })
     proxy.$modal.msgSuccess('流程操作成功')
     actionDialog.open = false
     await loadList()

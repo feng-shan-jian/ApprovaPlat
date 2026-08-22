@@ -229,7 +229,7 @@ public class WorkflowTaskLifecycleService
         {
             throw invalidArgument();
         }
-        String requestedProcessInstanceId = requireId(request.procInsId());
+        String requestedProcessInstanceId = requireId(request.processInstanceId());
         String opinion = requireOpinion(request.comment());
         engineOperations.writeAsCurrentUser(actor ->
         {
@@ -323,7 +323,7 @@ public class WorkflowTaskLifecycleService
         {
             throw invalidArgument();
         }
-        String processInstanceId = requireId(request.procInsId());
+        String processInstanceId = requireId(request.processInstanceId());
         String historicTaskId = requireId(request.taskId());
         String opinion = requireOpinion(request.comment());
         engineOperations.writeAsCurrentUser(actor ->

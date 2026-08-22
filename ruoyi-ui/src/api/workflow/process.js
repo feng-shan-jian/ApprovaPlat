@@ -77,7 +77,7 @@ export function markCopyRead(copyId) {
 
 /**
  * 查询定义、部署和可选实例关系校验后的开始表单快照。
- * @param {object} query definitionId、deployId 和可选 procInsId。
+ * @param {object} query definitionId、deploymentId 和可选 processInstanceId。
  * @returns {Promise<object>} data 为不可变部署表单快照的响应。
  */
 export function getProcessForm(query) {
@@ -105,7 +105,7 @@ export function getProcessBpmnXml(processDefinitionId, processInstanceId) {
   return request({
     url: `/workflow/process/bpmnXml/${encodeURIComponent(processDefinitionId)}`,
     method: 'get',
-    params: processInstanceId ? { procInsId: processInstanceId } : undefined
+    params: processInstanceId ? { processInstanceId } : undefined
   })
 }
 
@@ -119,6 +119,6 @@ export function getProcessDetail(processInstanceId, taskId) {
   return request({
     url: '/workflow/process/detail',
     method: 'get',
-    params: { procInsId: processInstanceId, taskId }
+    params: { processInstanceId, taskId }
   })
 }

@@ -424,19 +424,22 @@ public class WfProcessController extends BaseController
      * 查询定义、部署及可选实例关系核验后的开始表单快照。
      *
      * @param definitionId String，流程定义主键
-     * @param deployId String，旧接口兼容的部署主键参数名
-     * @param procInsId String，旧接口兼容的可选流程实例主键参数名
+     * @param deploymentId String，流程定义所属的 Flowable 部署主键
+     * @param processInstanceId String，可选流程实例主键，首次发起时为空
      * @return AjaxResult，不回连当前模板的部署表单快照
      */
     @PreAuthorize("@ss.hasPermi('workflow:process:start')")
     @GetMapping("/getProcessForm")
     public AjaxResult getForm(
             @RequestParam @NotBlank(message = "流程定义主键不能为空") String definitionId,
-            @RequestParam("deployId") @NotBlank(message = "流程部署主键不能为空") String deployId,
-            @RequestParam(value = "procInsId", required = false) String procInsId)
+            @RequestParam("deploymentId")
+            @NotBlank(message = "流程部署主键不能为空") String deploymentId,
+            @RequestParam(value = "processInstanceId", required = false)
+            String processInstanceId)
     {
         return success(processQueryService.getProcessForm(
-                new WorkflowProcessFormQueryDto(definitionId, deployId, procInsId)));
+                new WorkflowProcessFormQueryDto(definitionId, deploymentId,
+                        processInstanceId)));
     }
 
     /**
@@ -457,35 +460,37 @@ public class WfProcessController extends BaseController
      * 按可发起权限或实例对象权限读取安全 BPMN XML。
      *
      * @param processDefId String，旧接口兼容的流程定义路径主键
-     * @param procInsId String，详情场景可选流程实例主键
+     * @param processInstanceId String，详情场景可选流程实例主键
      * @return AjaxResult，经过大小、UTF-8、安全 XML 和 Flowable 校验的 BPMN XML
      */
     @PreAuthorize("@ss.hasAnyPermi('workflow:process:startList,workflow:process:query')")
     @GetMapping("/bpmnXml/{processDefId}")
     public AjaxResult getBpmnXml(
             @PathVariable @NotBlank(message = "流程定义主键不能为空") String processDefId,
-            @RequestParam(value = "procInsId", required = false) String procInsId)
+            @RequestParam(value = "processInstanceId", required = false)
+            String processInstanceId)
     {
         // 显式使用数据响应，避免 BaseController.success(String) 重载把 XML 误写入 msg 字段。
         return AjaxResult.success((Object) processQueryService.getBpmnXml(
-                new WorkflowBpmnXmlQueryDto(processDefId, procInsId)));
+                new WorkflowBpmnXmlQueryDto(processDefId, processInstanceId)));
     }
 
     /**
      * 查询对象授权后的完整流程实例详情。
      *
-     * @param procInsId String，旧接口兼容的流程实例主键参数名
+     * @param processInstanceId String，流程实例主键
      * @param taskId String，可选的活动或历史任务主键
      * @return AjaxResult，表单值、时间线、意见、BPMN 和 Viewer 状态详情
      */
     @PreAuthorize("@ss.hasPermi('workflow:process:query')")
     @GetMapping("/detail")
     public AjaxResult detail(
-            @RequestParam("procInsId") @NotBlank(message = "流程实例主键不能为空") String procInsId,
+            @RequestParam("processInstanceId")
+            @NotBlank(message = "流程实例主键不能为空") String processInstanceId,
             @RequestParam(value = "taskId", required = false) String taskId)
     {
         return success(processDetailService.getDetail(
-                new WorkflowProcessDetailQueryDto(procInsId, taskId)));
+                new WorkflowProcessDetailQueryDto(processInstanceId, taskId)));
     }
 
     /**
