@@ -176,26 +176,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         </choose>
     </select>
 
-    <update id="bindStartAttachment">
-        update wf_attachment
-        set attachment_status = 'BOUND',
-            process_instance_id = #{processInstanceId},
-            task_id = null,
-            node_key = #{nodeKey},
-            bound_time = current_timestamp(3),
-            update_time = current_timestamp(3)
-        where attachment_id = #{attachmentId}
-          and owner_user_id = #{ownerUserId}
-          and field_name = #{fieldName}
-          and attachment_status = 'TEMP'
-          and expire_time > current_timestamp(3)
-          and process_instance_id is null
-          and task_id is null
-          and node_key is null
-          and bound_time is null
-          and storage_deleted_time is null
-    </update>
-
     <update id="bindTaskAttachment">
         update wf_attachment
         set attachment_status = 'BOUND',

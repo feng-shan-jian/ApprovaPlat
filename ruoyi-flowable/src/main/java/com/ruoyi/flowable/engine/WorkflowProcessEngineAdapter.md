@@ -12,7 +12,7 @@ P3 Service 通过构造器注入 Adapter。需要同时修改业务表和 Flowab
 
 禁止绕过 Adapter 直接调用 `TaskService` 的 claim、unclaim、delegate、resolve、setAssignee 或 complete 命令。直接调用会跳过候选人、当前办理人、认领来源、目标用户主数据、委派态、挂起态和稳定异常映射。
 
-Adapter 不提供原始 BPMN 部署或按 definitionId 直接发起方法。模型发布必须走 `WorkflowModelService` 的校验、版本和部署表单链；流程发起必须走 `WorkflowProcessStartService`，统一执行 starter 授权、变量 schema、附件绑定、发起快照、`initiator` 和 `processStatus`。测试 fixture 可在测试源码中直接调用 Flowable 公共 API，但不得把该能力重新暴露为生产 Bean 方法。
+Adapter 不提供原始 BPMN 部署或人工启动方法。模型发布必须走 `WorkflowModelService` 的校验、版本和部署表单链；人工发起必须先持久化草稿，再由 `WorkflowProcessDraftService.submit(...)` 在同一事务中调用 `WorkflowProcessStartService.startDraft(...)`，统一执行 starter 授权、变量 schema、附件绑定、发起快照、`initiator` 和 `processStatus`。测试 fixture 可在测试源码中调用 Flowable 公共 API，但不得把人工启动能力暴露为独立生产入口。
 
 ## 公开方法
 

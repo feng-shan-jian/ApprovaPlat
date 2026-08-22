@@ -8,7 +8,7 @@
 
 | 状态 | 允许操作 | 归属约束 |
 | --- | --- | --- |
-| `TEMP` | 上传者读取、下载、删除；发起或任务完成时绑定 | 必须属于当前用户、未过期、字段一致，且流程/任务/节点均为空 |
+| `TEMP` | 上传者读取、下载、删除；保存草稿或任务完成时绑定业务对象 | 必须属于当前用户、未过期、字段一致，且草稿/流程/任务/节点均为空 |
 | `BOUND` | 具备实例读取权限的用户读取、下载；后续任务可引用 | 必须有实例、节点和绑定时间；任务节点附件同时保存首次任务 ID |
 | `EXPIRED` | 清理任务重试物理删除 | 不允许业务读取或再次绑定 |
 | `DELETED` | 清理任务重试物理删除 | 不允许业务读取或再次绑定 |
@@ -31,13 +31,15 @@ multipart 声明大小只用于落盘前快速拒绝。持有用户行锁期间�
 
 ## 表单绑定
 
-开始表单调用：
+开始表单草稿调用：
 
 ```java
-Map<String, Object> projected = attachmentService.prepareStartVariables(
-        actorUserId, normalizedVariables, attachmentIdsByField);
-attachmentService.bindStartAttachments(
-        actorUserId, processInstanceId, startNodeKey, attachmentIdsByField);
+attachmentService.reconcileDraftAttachments(
+        actorUserId, draftId, attachmentIdsByField);
+Map<String, Object> projected = attachmentService.prepareDraftSubmissionVariables(
+        actorUserId, draftId, normalizedVariables, attachmentIdsByField);
+attachmentService.bindDraftStartAttachments(
+        actorUserId, draftId, processInstanceId, startNodeKey, attachmentIdsByField);
 ```
 
 任务表单调用：
@@ -63,7 +65,7 @@ API 元数据可以返回 `processInstanceId`、`taskId`、`nodeKey`，用于前
 
 临时上传的身份校验、用户 guard 行锁、用户配额查询、私有文件写入及附件元数据插入由同一个 Spring `READ_COMMITTED` 事务管理。文件系统不参与数据库事务，因此服务会同时注册事务回滚补偿，并在代理外直接调用或元数据写入异常时立即删除本次文件。定时清理则刻意把数据库领取、对象删除、完成或重试拆成短事务、事务外 IO、短事务三个阶段。
 
-prepare 阶段使用 `SELECT ... FOR UPDATE` 锁定稳定排序的附件行。发起或任务完成在附件状态迁移前重新读取完整物理正文并核对数据库记录的大小和 SHA-256；同长度正文替换也会拒绝绑定。上述操作必须在 `WorkflowEngineOperations.writeAsCurrentUser(...)` 的同一事务中依次完成投影、意见、附件条件更新和 Flowable 状态变更。任一附件缺失、摘要不一致或绑定失败都会回滚前序附件、comment、变量、任务完成或流程发起。
+prepare 阶段使用 `SELECT ... FOR UPDATE` 锁定稳定排序的附件行。草稿提交或任务完成在附件状态迁移前重新读取完整物理正文并核对数据库记录的大小和 SHA-256；同长度正文替换也会拒绝绑定。上述操作必须在 `WorkflowEngineOperations.writeAsCurrentUser(...)` 的同一事务中依次完成投影、意见、附件条件更新和 Flowable 状态变更。任一附件缺失、摘要不一致或绑定失败都会回滚前序附件、comment、变量、任务完成或草稿提交。
 
 下载通过存储边界一次打开文件，在同一通道上完成路径、大小和 SHA-256 校验，复位后直接把该通道交给响应流，避免校验后由 Controller 再次按路径打开文件。
 

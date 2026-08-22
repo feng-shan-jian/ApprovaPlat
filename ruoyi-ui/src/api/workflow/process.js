@@ -85,20 +85,6 @@ export function getProcessForm(query) {
 }
 
 /**
- * 发起经过 starter、快照和变量白名单校验的真实流程实例。
- * @param {string} processDefinitionId Flowable 流程定义主键。
- * @param {object} data 可选业务主键和开始表单变量。
- * @returns {Promise<object>} data 为新流程实例快照的响应。
- */
-export function startProcess(processDefinitionId, data) {
-  return request({
-    url: `/workflow/process/start/${encodeURIComponent(processDefinitionId)}`,
-    method: 'post',
-    data: { ...data, processDefinitionId }
-  })
-}
-
-/**
  * 受控删除一个或多个已结束且无业务引用的流程实例历史。
  * @param {Array<string>|string} processInstanceIds 流程实例主键集合或单个主键。
  * @returns {Promise<object>} 引用与状态校验后的删除结果。

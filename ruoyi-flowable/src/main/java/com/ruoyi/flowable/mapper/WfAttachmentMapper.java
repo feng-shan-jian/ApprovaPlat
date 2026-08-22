@@ -114,22 +114,6 @@ public interface WfAttachmentMapper
             @Param("nodeKey") String nodeKey);
 
     /**
-     * 将仍属于指定用户、字段且未过期的临时附件原子绑定到真实流程实例。
-     *
-     * @param attachmentId String，待绑定附件 UUID
-     * @param ownerUserId Long，事务内核验的当前用户主键
-     * @param fieldName String，部署表单白名单中的上传字段名
-     * @param processInstanceId String，刚创建的真实 Flowable 流程实例主键
-     * @param nodeKey String，部署快照中的 BPMN 开始节点 key
-     * @return int，成功绑定返回 1；状态或归属竞争失败返回 0
-     */
-    int bindStartAttachment(@Param("attachmentId") String attachmentId,
-            @Param("ownerUserId") Long ownerUserId,
-            @Param("fieldName") String fieldName,
-            @Param("processInstanceId") String processInstanceId,
-            @Param("nodeKey") String nodeKey);
-
-    /**
      * 将仍属于当前办理人、字段且未过期的临时附件原子绑定到真实任务节点。
      *
      * @param attachmentId String，待绑定附件 UUID

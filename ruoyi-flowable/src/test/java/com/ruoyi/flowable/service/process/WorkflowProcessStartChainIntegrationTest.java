@@ -3,7 +3,6 @@ package com.ruoyi.flowable.service.process;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
@@ -64,7 +63,6 @@ import com.ruoyi.flowable.domain.WfProcessDraft;
 import com.ruoyi.flowable.domain.WorkflowAttachmentStatus;
 import com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow;
 import com.ruoyi.flowable.domain.WorkflowProcessDraftStatus;
-import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnXmlQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftCreateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
@@ -73,7 +71,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSubmitView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
-import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
@@ -100,7 +97,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 使用同一真实 H2 数据源、Flowable 8、Spring 事务和正式 MyBatis XML 验证流程发起写链。
+ * 使用同一真实 H2 数据源、Flowable 8、Spring 事务和正式 MyBatis XML 验证草稿提交发起写链。
  */
 class WorkflowProcessStartChainIntegrationTest
 {
@@ -224,8 +221,8 @@ class WorkflowProcessStartChainIntegrationTest
                 definition.getKey())).thenReturn(new WorkflowProcessDefinitionLockRow(
                         definition.getId(), deployment.getId(), 1));
 
-        startService = new WorkflowProcessStartService(engineOperations, repositoryService,
-                runtimeService, queryService, variableValidator, attachmentService,
+        startService = new WorkflowProcessStartService(repositoryService, runtimeService,
+                queryService, variableValidator, attachmentService,
                 definitionLockMapper, new WorkflowUserSelectionValidator(identityResolver));
         draftService = new WorkflowProcessDraftService(engineOperations, identityResolver,
                 repositoryService, queryService, startService, variableValidator,
@@ -248,42 +245,9 @@ class WorkflowProcessStartChainIntegrationTest
     }
 
     /**
-     * 验证直接发起只解析一次身份、读取一次模型并执行一次真实引擎启动。
+     * 验证草稿真实提交持久化规范变量，创建唯一实例并绑定附件；重复提交返回原实例。
      *
-     * @return void，实例数、保留变量、快照或调用次数不一致时失败
-     */
-    @Test
-    void startsOneRealInstanceWithReservedVariablesAndSinglePreparation()
-    {
-        WorkflowProcessInstanceSnapshot snapshot = startService.start(
-                new StartProcessRequest(definition.getId(), " DIRECT-1 ", VALID_VARIABLES));
-
-        assertThat(runtimeService.createProcessInstanceQuery()
-                .processInstanceId(snapshot.id()).count()).isOne();
-        assertThat(runtimeService.getVariable(snapshot.id(), "initiator")).isEqualTo(USER_ID);
-        assertThat(runtimeService.getVariable(snapshot.id(), "processStatus"))
-                .isEqualTo("running");
-        assertThat(runtimeService.getVariable(snapshot.id(), "requester")).isEqualTo("Alice");
-        assertThat(runtimeService.getVariable(snapshot.id(),
-                WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME)).isInstanceOf(String.class);
-        assertThat(snapshot.businessKey()).isEqualTo("DIRECT-1");
-
-        verify(identityResolver, times(1)).resolveCurrentIdentity();
-        verify(runtimeService, times(1)).startProcessInstanceById(
-                eq(definition.getId()), eq("DIRECT-1"), anyMap());
-        verify(repositoryService, times(1)).getBpmnModel(definition.getId());
-        verify(variableValidator, times(1)).validateForStart(FORM_CONTENT, VALID_VARIABLES);
-        verify(definitionLockMapper, times(1))
-                .selectDeploymentIdForUpdate(definition.getDeploymentId());
-        verify(participantRuntimeService, times(1))
-                .assertCanStart(any(WorkflowCurrentIdentity.class),
-                        any(ProcessDefinition.class));
-    }
-
-    /**
-     * 验证草稿提交复用同一规范变量和锁定附件，重复提交不再触碰部署或引擎。
-     *
-     * @return void，草稿、实例、附件状态或单次调用契约不一致时失败
+     * @return void，数据库、Flowable 变量、提交快照、唯一实例或附件状态不一致时失败
      */
     @Test
     void submitsDraftOncePersistsSameNormalizedFieldsAndReturnsOriginalOnRetry()
@@ -292,7 +256,7 @@ class WorkflowProcessStartChainIntegrationTest
         Map<String, Object> submittedVariables = Map.of(
                 "requester", "Alice", "evidence", List.of(attachmentId));
         WorkflowProcessDraftView draft = createDraft(submittedVariables);
-        clearObservedCalls();
+        long instanceCountBefore = runtimeService.createProcessInstanceQuery().count();
 
         WorkflowProcessDraftSubmitView first = draftService.submit(draft.draftId(),
                 new WorkflowProcessDraftSubmitRequest(draft.revisionNo(), " DRAFT-1 ",
@@ -302,74 +266,68 @@ class WorkflowProcessStartChainIntegrationTest
         Map<String, Object> persisted = readJsonMap(submitted.formValues());
         assertThat(submitted.draftStatus()).isEqualTo(WorkflowProcessDraftStatus.SUBMITTED);
         assertThat(submitted.businessKey()).isEqualTo("DRAFT-1");
+        assertThat(submitted.submittedProcessInstanceId()).isEqualTo(first.processInstanceId());
+        assertThat(submitted.submittedTime()).isNotNull();
+        assertThat(jdbcTemplate.queryForObject("""
+                select count(*) from wf_process_draft
+                where draft_id = ? and draft_status = 'SUBMITTED'
+                  and submitted_process_instance_id = ?
+                """, Long.class, draft.draftId(), first.processInstanceId())).isOne();
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(first.processInstanceId()).count()).isOne();
-        assertThat(runtimeService.getVariables(first.processInstanceId()))
+        assertThat(runtimeService.createProcessInstanceQuery().count())
+                .isEqualTo(instanceCountBefore + 1);
+        Map<String, Object> engineVariables = runtimeService.getVariables(
+                first.processInstanceId());
+        assertThat(engineVariables).containsEntry("initiator", USER_ID)
+                .containsEntry("processStatus", "running")
                 .containsEntry("requester", persisted.get("requester"));
+        WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot submissionSnapshot =
+                WorkflowFormSubmissionSnapshotCodec.decode((String) engineVariables.get(
+                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
+        assertThat(submissionSnapshot.kind())
+                .isEqualTo(WorkflowFormSubmissionSnapshotCodec.SnapshotKind.START);
+        assertThat(submissionSnapshot.deploymentId()).isEqualTo(definition.getDeploymentId());
+        assertThat(submissionSnapshot.formKey()).isEqualTo("startForm");
+        assertThat(submissionSnapshot.nodeKey()).isEqualTo("start");
+        assertThat(submissionSnapshot.values().get("requester").textValue()).isEqualTo("Alice");
+        assertThat(submissionSnapshot.values().get("evidence").get(0)
+                .get("attachmentId").textValue()).isEqualTo(attachmentId);
         WfAttachment bound = attachmentMapper.selectById(attachmentId);
         assertThat(bound.status()).isEqualTo(WorkflowAttachmentStatus.BOUND);
         assertThat(bound.processInstanceId()).isEqualTo(first.processInstanceId());
+        assertThat(bound.draftId()).isNull();
+        assertThat(bound.taskId()).isNull();
+        assertThat(bound.nodeKey()).isEqualTo("start");
+        assertThat(bound.boundTime()).isNotNull();
 
-        verify(identityResolver, times(1)).resolveCurrentIdentity();
-        verify(runtimeService, times(1)).startProcessInstanceById(
-                eq(definition.getId()), eq("DRAFT-1"), anyMap());
-        verify(variableValidator, times(1)).validateForStart(FORM_CONTENT,
-                submittedVariables);
-        verify(repositoryService, times(1)).getBpmnModel(definition.getId());
-        verify(definitionLockMapper, times(1))
-                .selectDeploymentIdForUpdate(definition.getDeploymentId());
-        verify(draftMapper, times(1)).selectOwnedByIdForUpdate(draft.draftId(), OWNER_ID);
-        verify(attachmentMapper, times(1)).selectByDraftIdForUpdate(
-                draft.draftId(), OWNER_ID);
-        verify(attachmentMapper, never()).selectByIdsForUpdate(any());
-
-        clearObservedCalls();
         WorkflowProcessDraftSubmitView repeated = draftService.submit(draft.draftId(),
                 new WorkflowProcessDraftSubmitRequest(draft.revisionNo(), "ignored",
                         Map.of(), Map.of()));
         assertThat(repeated.processInstanceId()).isEqualTo(first.processInstanceId());
-        verify(identityResolver, times(1)).resolveCurrentIdentity();
-        verify(runtimeService, never()).startProcessInstanceById(
-                anyString(), nullable(String.class), anyMap());
-        verify(definitionLockMapper, never()).selectDeploymentIdForUpdate(anyString());
-        verify(draftMapper, never()).selectOwnedByIdForUpdate(anyString(), any());
-        verify(attachmentMapper, never()).selectByDraftIdForUpdate(anyString(), any());
+        assertThat(runtimeService.createProcessInstanceQuery().count())
+                .isEqualTo(instanceCountBefore + 1);
     }
 
     /**
-     * 验证受管部署拒绝和非法变量均在真实引擎命令前失败。
+     * 验证非法正式变量通过真实草稿提交链被拒绝且不创建实例。
      *
-     * @return void，任一拒绝场景产生实例或历史权限兜底时失败
+     * @return void，非法变量产生实例或改变草稿正式状态时失败
      */
     @Test
-    void rejectsUnauthorizedAndInvalidVariablesWithoutCreatingInstances()
+    void rejectsInvalidDraftVariablesWithoutCreatingInstance()
     {
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
         long before = runtimeService.createProcessInstanceQuery().count();
-        currentIdentity.set(new WorkflowCurrentIdentity("999", Set.of()));
-        assertThatThrownBy(() -> startService.start(new StartProcessRequest(
-                definition.getId(), null, VALID_VARIABLES)))
-                .isInstanceOfSatisfying(ServiceException.class, exception ->
-                {
-                    assertThat(exception.getCode()).isEqualTo(HttpStatus.FORBIDDEN);
-                    assertThat(exception.getSubCode())
-                            .isEqualTo("PROCESS_START_SCOPE_DENIED");
-                });
-        assertThat(runtimeService.createProcessInstanceQuery().count()).isEqualTo(before);
-        verify(repositoryService, never())
-                .getIdentityLinksForProcessDefinition(definition.getId());
-        assertThat(meterRegistry.get("workflow.participant.resolution.failures")
-                .tag("error_code", "PROCESS_START_SCOPE_DENIED")
-                .counter().count()).isEqualTo(1.0d);
-
-        currentIdentity.set(new WorkflowCurrentIdentity(USER_ID, Set.of()));
-        clearObservedCalls();
-        assertThatThrownBy(() -> startService.start(new StartProcessRequest(
-                definition.getId(), null, Map.of("unknown", "value"))))
+        assertThatThrownBy(() -> draftService.submit(draft.draftId(),
+                new WorkflowProcessDraftSubmitRequest(draft.revisionNo(), null,
+                        Map.of("unknown", "value"), Map.of())))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
                         assertThat(exception.getCode()).isEqualTo(HttpStatus.BAD_REQUEST));
         assertThat(runtimeService.createProcessInstanceQuery().count()).isEqualTo(before);
-        verify(runtimeService, never()).startProcessInstanceById(
-                anyString(), nullable(String.class), anyMap());
+        WfProcessDraft unchanged = draftMapper.selectOwnedById(draft.draftId(), OWNER_ID);
+        assertThat(unchanged.draftStatus()).isEqualTo(WorkflowProcessDraftStatus.ACTIVE);
+        assertThat(unchanged.submittedProcessInstanceId()).isNull();
     }
 
     /**
@@ -426,7 +384,6 @@ class WorkflowProcessStartChainIntegrationTest
         String attachmentId = insertTemporaryAttachment();
         Map<String, Object> submittedVariables = Map.of(
                 "requester", "Late upload", "evidence", List.of(attachmentId));
-        clearObservedCalls();
 
         WorkflowProcessDraftSubmitView submitted = draftService.submit(draft.draftId(),
                 new WorkflowProcessDraftSubmitRequest(draft.revisionNo(), "LATE-TEMP",
@@ -437,11 +394,6 @@ class WorkflowProcessStartChainIntegrationTest
         WfAttachment bound = attachmentMapper.selectById(attachmentId);
         assertThat(bound.status()).isEqualTo(WorkflowAttachmentStatus.BOUND);
         assertThat(bound.processInstanceId()).isEqualTo(submitted.processInstanceId());
-        verify(attachmentMapper, times(1)).selectByDraftIdForUpdate(
-                draft.draftId(), OWNER_ID);
-        verify(attachmentMapper, times(1)).selectByIdsForUpdate(any());
-        verify(runtimeService, times(1)).startProcessInstanceById(
-                eq(definition.getId()), eq("LATE-TEMP"), anyMap());
     }
 
     /**
@@ -467,8 +419,6 @@ class WorkflowProcessStartChainIntegrationTest
         assertThat(runtimeService.createProcessInstanceQuery().count()).isEqualTo(before);
         assertThat(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID).draftStatus())
                 .isEqualTo(WorkflowProcessDraftStatus.ACTIVE);
-        verify(runtimeService, never()).startProcessInstanceById(
-                anyString(), nullable(String.class), anyMap());
     }
 
     /**
@@ -704,7 +654,7 @@ class WorkflowProcessStartChainIntegrationTest
     }
 
     /**
-     * 清空夹具阶段调用，只保留每个正式命令自己的调用次数证据。
+     * 清空夹具阶段调用，避免只读授权测试读取初始化噪声。
      *
      * @return void，无返回值
      */

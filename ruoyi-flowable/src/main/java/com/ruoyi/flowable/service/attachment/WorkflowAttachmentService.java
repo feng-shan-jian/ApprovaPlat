@@ -356,23 +356,6 @@ public class WorkflowAttachmentService
     }
 
     /**
-     * 在发起事务中锁定并校验附件归属、状态、有效期和字段，生成无路径的 JSON 安全投影。
-     *
-     * @param actorUserId String，WorkflowEngineOperations 事务内核验的当前用户 ID
-     * @param normalizedVariables Map&lt;String, Object&gt;，表单 schema 已规范化的全部变量
-     * @param attachmentIdsByField Map&lt;String, List&lt;String&gt;&gt;，上传字段到附件 UUID 的白名单映射
-     * @return Map&lt;String, Object&gt;，上传字段已替换为安全 JSON 数组的引擎变量
-     */
-    @Transactional(rollbackFor = Exception.class)
-    public Map<String, Object> prepareStartVariables(String actorUserId,
-            Map<String, Object> normalizedVariables,
-            Map<String, List<String>> attachmentIdsByField)
-    {
-        return prepareReferencedVariables(requireNumericUserId(actorUserId), null,
-                normalizedVariables, attachmentIdsByField, false);
-    }
-
-    /**
      * 在任务完成事务中锁定附件并生成安全变量投影，允许复用同实例同字段的 BOUND 附件。
      *
      * @param actorUserId String，WorkflowEngineOperations 事务内核验的当前办理人 ID
@@ -388,53 +371,8 @@ public class WorkflowAttachmentService
     {
         Long actorId = requireNumericUserId(actorUserId);
         String normalizedInstanceId = requireEngineId(processInstanceId);
-        return prepareReferencedVariables(actorId, normalizedInstanceId,
-                normalizedVariables, attachmentIdsByField, true);
-    }
-
-    /**
-     * 在同一发起事务中把已锁定附件绑定到刚创建的真实流程实例。
-     *
-     * @param actorUserId String，WorkflowEngineOperations 事务内核验的当前用户 ID
-     * @param processInstanceId String，RuntimeService 刚创建的真实实例主键
-     * @param nodeKey String，部署开始表单快照对应的 BPMN 节点 key
-     * @param attachmentIdsByField Map&lt;String, List&lt;String&gt;&gt;，已校验上传字段引用
-     * @return void，任一附件发生状态竞争时抛错并回滚引擎与全部附件更新
-     */
-    @Transactional(rollbackFor = Exception.class)
-    public void bindStartAttachments(String actorUserId, String processInstanceId,
-            String nodeKey,
-            Map<String, List<String>> attachmentIdsByField)
-    {
-        Long ownerUserId = requireNumericUserId(actorUserId);
-        String normalizedInstanceId = requireEngineId(processInstanceId);
-        String normalizedNodeKey = requireNodeKey(nodeKey);
-        Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
-        if (references.isEmpty())
-        {
-            return;
-        }
-        List<WfAttachment> lockedRows = attachmentMapper.selectByIdsForUpdate(
-                flattenUniqueIds(references));
-        Map<String, WfAttachment> attachmentsById = indexLockedRows(lockedRows);
-        LocalDateTime now = LocalDateTime.now();
-        for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
-        {
-            for (String attachmentId : fieldEntry.getValue())
-            {
-                WfAttachment attachment = attachmentsById.get(attachmentId);
-                assertBindableAttachment(attachment, ownerUserId, fieldEntry.getKey(), now);
-                verifyStoredAttachment(attachment);
-                int updated = attachmentMapper.bindStartAttachment(attachmentId,
-                        ownerUserId, fieldEntry.getKey(), normalizedInstanceId,
-                        normalizedNodeKey);
-                if (updated != 1)
-                {
-                    // 任何一个附件失败都抛出运行时异常，让外层引擎事务整体回滚。
-                    throw stateConflict();
-                }
-            }
-        }
+        return prepareTaskReferencedVariables(actorId, normalizedInstanceId,
+                normalizedVariables, attachmentIdsByField);
     }
 
     /**
@@ -918,18 +856,17 @@ public class WorkflowAttachmentService
     }
 
     /**
-     * 锁定表单引用附件并按发起或任务语义生成不含内部路径的变量投影。
+     * 锁定任务表单引用附件并生成不含内部路径的变量投影。
      *
      * @param actorUserId Long，事务内核验的当前用户主键
-     * @param processInstanceId String，任务场景的流程实例主键；发起场景为空
+     * @param processInstanceId String，当前任务所属流程实例主键
      * @param normalizedVariables Map&lt;String, Object&gt;，表单 schema 已规范化的变量
      * @param attachmentIdsByField Map&lt;String, List&lt;String&gt;&gt;，上传字段附件 UUID 映射
-     * @param allowBoundReuse boolean，是否允许同实例同字段的 BOUND 附件复用
      * @return Map&lt;String, Object&gt;，附件字段替换为六项安全元数据后的不可变变量
      */
-    private Map<String, Object> prepareReferencedVariables(Long actorUserId,
+    private Map<String, Object> prepareTaskReferencedVariables(Long actorUserId,
             String processInstanceId, Map<String, Object> normalizedVariables,
-            Map<String, List<String>> attachmentIdsByField, boolean allowBoundReuse)
+            Map<String, List<String>> attachmentIdsByField)
     {
         Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
         if (references.isEmpty())
@@ -950,15 +887,8 @@ public class WorkflowAttachmentService
             for (String attachmentId : fieldEntry.getValue())
             {
                 WfAttachment attachment = attachmentsById.get(attachmentId);
-                if (allowBoundReuse)
-                {
-                    assertTaskAttachmentReference(attachment, actorUserId,
-                            processInstanceId, fieldName, now);
-                }
-                else
-                {
-                    assertBindableAttachment(attachment, actorUserId, fieldName, now);
-                }
+                assertTaskAttachmentReference(attachment, actorUserId,
+                        processInstanceId, fieldName, now);
                 safeAttachments.add(toSafeVariableProjection(attachment));
             }
             projectedVariables.put(fieldName, safeAttachments);

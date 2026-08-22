@@ -23,7 +23,7 @@ WfDeployParticipantRule matchedRule = participantRuleRuntimeService
 
 - `resolveManagedStartDecisions(actor, definitions)`：整批读取部署快照并返回受管定义的正式允许或拒绝决定。Map 缺少定义 ID 才表示历史未托管；存在且为 `false` 时禁止历史兜底。同一批多个 `DEPTS` 规则只读取一次当前用户有效部门范围。
 - `canStartIfManaged(actor, definition)`：单定义只读判定，委托同一套批量规则选择和匹配逻辑；历史未托管返回 `null`。
-- `assertCanStart(actor, definition)`：真实发起写入前复核。允许时返回命中的规则供成功审计，拒绝时记录固定失败指标和脱敏日志后抛出 403；历史未托管返回 `null`。该方法本身不会重新读取或校验 Flowable starter identity link，当前安全边界来自草稿提交与直接发起两个真实入口在调用它之前均通过 `getProcessForm` 完成历史门禁，其他调用方不得把它单独视为完整的历史授权检查。
+- `assertCanStart(actor, definition)`：草稿正式提交写入前复核。允许时返回命中的规则供成功审计，拒绝时记录固定失败指标和脱敏日志后抛出 403；历史未托管返回 `null`。该方法本身不会重新读取或校验 Flowable starter identity link，当前安全边界来自草稿提交在调用它之前通过开始表单装载完成历史门禁，其他调用方不得把它单独视为完整的历史授权检查。
 - `resolveCreatedTask(task)`：Flowable 任务创建时按任务规则解析办理人或候选身份，保持原有实时资格、失败审计和事务回滚语义。
 
 ## 关键设计

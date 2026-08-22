@@ -2,11 +2,7 @@ package com.ruoyi.web.controller.workflow;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.function.IntFunction;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.constraints.Size;
@@ -22,7 +18,6 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -36,7 +31,6 @@ import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.poi.ExcelUtil;
 import com.ruoyi.flowable.domain.dto.WorkflowAssignedTaskQueryDto;
-import com.ruoyi.flowable.domain.dto.StartProcessRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnXmlQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowClaimableTaskQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowCompletedTaskQueryDto;
@@ -57,14 +51,11 @@ import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessView;
 import com.ruoyi.flowable.domain.vo.WorkflowOwnedProcessExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowOwnedProcessView;
-import com.ruoyi.flowable.domain.vo.WorkflowProcessStartView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionView;
-import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.service.process.WorkflowProcessDetailService;
 import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
 import com.ruoyi.flowable.service.process.WorkflowProcessQueryService;
-import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 
 /**
  * 流程工作台列表、导出、表单、BPMN 和实例详情接口。
@@ -83,20 +74,9 @@ public class WfProcessController extends BaseController
     /** 导出逐页读取大小，复用领域服务的分页门禁。 */
     private static final int EXPORT_PAGE_SIZE = 200;
 
-    /** 发起请求体中一律忽略、仅允许由路径决定的流程定义字段别名。 */
-    private static final Set<String> START_DEFINITION_ALIASES = Set.of(
-            "processDefId", "processDefinitionId", "definitionId");
-
-    /** 包装发起协议允许的全部顶层字段，其他字段视为协议混用。 */
-    private static final Set<String> START_WRAPPER_FIELDS = Set.of(
-            "variables", "businessKey", "multiInstanceUserIds", "processDefId",
-            "processDefinitionId", "definitionId");
-
     private final WorkflowProcessQueryService processQueryService;
 
     private final WorkflowProcessDetailService processDetailService;
-
-    private final WorkflowProcessStartService processStartService;
 
     private final WorkflowProcessInstanceService processInstanceService;
 
@@ -105,18 +85,15 @@ public class WfProcessController extends BaseController
      *
      * @param processQueryService WorkflowProcessQueryService，七类身份受控列表与快照查询服务
      * @param processDetailService WorkflowProcessDetailService，完整对象授权详情服务
-     * @param processStartService WorkflowProcessStartService，真实流程发起服务
      * @param processInstanceService WorkflowProcessInstanceService，已结束历史删除服务
      * @return 无返回值，构造后由 Spring 管理该 Controller
      */
     public WfProcessController(WorkflowProcessQueryService processQueryService,
             WorkflowProcessDetailService processDetailService,
-            WorkflowProcessStartService processStartService,
             WorkflowProcessInstanceService processInstanceService)
     {
         this.processQueryService = processQueryService;
         this.processDetailService = processDetailService;
-        this.processStartService = processStartService;
         this.processInstanceService = processInstanceService;
     }
 
@@ -463,30 +440,6 @@ public class WfProcessController extends BaseController
     }
 
     /**
-     * 根据路径中的流程定义主键真实发起实例，并兼容旧直接变量和包装请求体。
-     *
-     * @param processDefId String，服务端唯一采信的 Flowable 流程定义主键
-     * @param body Map&lt;String, Object&gt;，旧直接变量或 variables/businessKey 包装对象
-     * @return AjaxResult，包含真实实例主键及 procInsId 兼容别名的成功响应
-     */
-    @PreAuthorize("@ss.hasPermi('workflow:process:start')")
-    @Log(title = "发起流程", businessType = BusinessType.INSERT)
-    @PostMapping("/start/{processDefId}")
-    public AjaxResult start(
-            @PathVariable @NotBlank(message = "流程定义主键不能为空")
-            @Size(max = 255, message = "流程定义主键长度不能超过255个字符")
-            String processDefId,
-            @RequestBody(required = false) Map<String, Object> body)
-    {
-        StartProcessRequest request = normalizeStartRequest(processDefId, body);
-        WorkflowProcessInstanceSnapshot processInstance = processStartService.start(request);
-        WorkflowProcessStartView result = new WorkflowProcessStartView(processInstance.id(),
-                processInstance.id(), processInstance.processDefinitionId(),
-                processInstance.businessKey());
-        return AjaxResult.success("流程启动成功", result);
-    }
-
-    /**
      * 由受控流程管理员批量删除已结束实例历史和关联抄送记录。
      *
      * @param instanceIds String[]，旧逗号路径协议绑定的流程实例主键集合
@@ -533,122 +486,6 @@ public class WfProcessController extends BaseController
     {
         return success(processDetailService.getDetail(
                 new WorkflowProcessDetailQueryDto(procInsId, taskId)));
-    }
-
-    /**
-     * 将新包装协议和旧直接变量协议归一为领域发起请求，路径定义主键始终优先。
-     *
-     * @param processDefId String，已经过方法参数校验的路径流程定义主键
-     * @param body Map&lt;String, Object&gt;，允许为空的 JSON 对象请求体
-     * @return StartProcessRequest，仅包含服务端路径定义、可选业务主键和表单变量
-     */
-    private StartProcessRequest normalizeStartRequest(String processDefId,
-            Map<String, Object> body)
-    {
-        Map<String, Object> source = body == null ? Map.of() : body;
-        boolean wrapped = source.containsKey("variables") || source.containsKey("businessKey")
-                || source.containsKey("multiInstanceUserIds");
-        if (!wrapped)
-        {
-            // 直接变量协议也忽略客户端夹带的定义 ID，实际定义只能来自受权限保护的路径。
-            LinkedHashMap<String, Object> variables = new LinkedHashMap<>(source);
-            START_DEFINITION_ALIASES.forEach(variables::remove);
-            return new StartProcessRequest(processDefId, null, variables);
-        }
-
-        if (source.keySet().stream().anyMatch(key -> !START_WRAPPER_FIELDS.contains(key)))
-        {
-            throw new ServiceException("流程发起请求不能混用包装字段和直接变量",
-                    HttpStatus.BAD_REQUEST);
-        }
-        Object rawVariables = source.get("variables");
-        Map<String, Object> variables = normalizeWrappedVariables(rawVariables);
-        Object rawBusinessKey = source.get("businessKey");
-        if (rawBusinessKey != null && !(rawBusinessKey instanceof String))
-        {
-            throw new ServiceException("流程业务主键必须为字符串", HttpStatus.BAD_REQUEST);
-        }
-        Map<String, List<Long>> multiInstanceUserIds = normalizeStartMultiInstanceUsers(
-                source.get("multiInstanceUserIds"));
-        return new StartProcessRequest(processDefId, (String) rawBusinessKey, variables,
-                multiInstanceUserIds);
-    }
-
-    /**
-     * 将发起页面会签或或签成员字段转换为严格的活动到用户主键列表。
-     *
-     * @param rawSelections Object，JSON 反序列化后的 multiInstanceUserIds 字段。
-     * @return Map<String,List<Long>> 保持客户端节点和成员顺序的不可变请求数据。
-     */
-    private Map<String, List<Long>> normalizeStartMultiInstanceUsers(Object rawSelections)
-    {
-        if (rawSelections == null)
-        {
-            return Map.of();
-        }
-        if (!(rawSelections instanceof Map<?, ?> rawMap) || rawMap.size() > 100)
-        {
-            throw new ServiceException("发起时会签或或签成员格式不合法", HttpStatus.BAD_REQUEST);
-        }
-        LinkedHashMap<String, List<Long>> result = new LinkedHashMap<>();
-        for (Map.Entry<?, ?> entry : rawMap.entrySet())
-        {
-            if (!(entry.getKey() instanceof String activityId) || activityId.isBlank()
-                    || activityId.length() > 128
-                    || !(entry.getValue() instanceof Collection<?> rawUserIds)
-                    || rawUserIds.size() > 100)
-            {
-                throw new ServiceException("发起时会签或或签成员格式不合法",
-                        HttpStatus.BAD_REQUEST);
-            }
-            List<Long> userIds = new ArrayList<>(rawUserIds.size());
-            for (Object rawUserId : rawUserIds)
-            {
-                if (!(rawUserId instanceof Byte || rawUserId instanceof Short
-                        || rawUserId instanceof Integer || rawUserId instanceof Long))
-                {
-                    throw new ServiceException("发起时会签或或签成员格式不合法",
-                            HttpStatus.BAD_REQUEST);
-                }
-                long userId = ((Number) rawUserId).longValue();
-                if (userId <= 0)
-                {
-                    throw new ServiceException("发起时会签或或签成员格式不合法",
-                            HttpStatus.BAD_REQUEST);
-                }
-                userIds.add(userId);
-            }
-            result.put(activityId, List.copyOf(userIds));
-        }
-        return Map.copyOf(result);
-    }
-
-    /**
-     * 将包装协议中的 variables 安全转换为字符串键映射。
-     *
-     * @param rawVariables Object，JSON 反序列化后的 variables 字段
-     * @return Map&lt;String, Object&gt;，保持客户端字段顺序的变量映射
-     */
-    private Map<String, Object> normalizeWrappedVariables(Object rawVariables)
-    {
-        if (rawVariables == null)
-        {
-            return Map.of();
-        }
-        if (!(rawVariables instanceof Map<?, ?> rawMap))
-        {
-            throw new ServiceException("流程变量必须为JSON对象", HttpStatus.BAD_REQUEST);
-        }
-        LinkedHashMap<String, Object> variables = new LinkedHashMap<>();
-        for (Map.Entry<?, ?> entry : rawMap.entrySet())
-        {
-            if (!(entry.getKey() instanceof String key))
-            {
-                throw new ServiceException("流程变量字段名必须为字符串", HttpStatus.BAD_REQUEST);
-            }
-            variables.put(key, entry.getValue());
-        }
-        return variables;
     }
 
     /**
