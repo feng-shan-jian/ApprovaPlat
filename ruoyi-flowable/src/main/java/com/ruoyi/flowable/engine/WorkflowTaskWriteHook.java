@@ -17,16 +17,4 @@ public interface WorkflowTaskWriteHook
      * @return Runnable，引擎动作成功后在同一事务执行的业务写入，不允许返回 null
      */
     Runnable prepare(WorkflowCurrentIdentity actor, Task task);
-
-    /**
-     * 创建不附加业务写入的事务钩子，供兼容原有适配器调用方式使用。
-     *
-     * @return WorkflowTaskWriteHook，准备及成功阶段均不产生副作用的钩子
-     */
-    static WorkflowTaskWriteHook none()
-    {
-        return (actor, task) -> () ->
-        {
-        };
-    }
 }

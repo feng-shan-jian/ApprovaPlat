@@ -228,7 +228,8 @@ class WorkflowTaskCompletionContextIntegrationTest
         clearInvocations(repositoryService);
 
         lifecycleService.completeTask(new WorkflowTaskCompleteRequest(task.getId(),
-                "表单审批通过", Map.of("approvalResult", "approved")));
+                "表单审批通过", Map.of("approvalResult", "approved"),
+                List.of(), List.of(), null));
 
         HistoricTaskInstance historicTask = historyService.createHistoricTaskInstanceQuery()
                 .taskId(task.getId()).finished().singleResult();
@@ -340,7 +341,8 @@ class WorkflowTaskCompletionContextIntegrationTest
         Task firstRound = requireSingleTask(instance.getId(), "loopReview");
 
         lifecycleService.completeTask(new WorkflowTaskCompleteRequest(firstRound.getId(),
-                "再次整改", Map.of("loopDecision", "repeat")));
+                "再次整改", Map.of("loopDecision", "repeat"),
+                List.of(), List.of(), null));
 
         Task secondRound = requireSingleTask(instance.getId(), "loopReview");
         assertThat(secondRound.getId()).isNotEqualTo(firstRound.getId());
@@ -357,7 +359,8 @@ class WorkflowTaskCompletionContextIntegrationTest
         });
 
         lifecycleService.completeTask(new WorkflowTaskCompleteRequest(secondRound.getId(),
-                "退出循环", Map.of("loopDecision", "exit")));
+                "退出循环", Map.of("loopDecision", "exit"),
+                List.of(), List.of(), null));
 
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(instance.getId()).count()).isZero();

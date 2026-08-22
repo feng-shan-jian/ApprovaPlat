@@ -1,11 +1,6 @@
 package com.ruoyi.flowable.engine;
 
-import java.time.Instant;
-import java.util.Collections;
-import java.util.Date;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -91,67 +86,6 @@ public class WorkflowProcessEngineAdapter
     }
 
     /**
-     * 查询仍处于运行态的流程实例。
-     *
-     * @param processInstanceId String，流程实例 ID
-     * @return Optional&lt;WorkflowProcessInstanceSnapshot&gt;，存在时返回不可变流程实例快照
-     */
-    public Optional<WorkflowProcessInstanceSnapshot> findActiveProcessInstance(String processInstanceId)
-    {
-        requireText(processInstanceId);
-        return engineOperations.read(() -> Optional.ofNullable(runtimeService.createProcessInstanceQuery()
-                .processInstanceId(processInstanceId)
-                .active()
-                .singleResult()).map(this::toProcessSnapshot));
-    }
-
-    /**
-     * 查询仍处于活动态的用户任务。
-     *
-     * @param taskId String，Flowable 任务 ID
-     * @return Optional&lt;WorkflowTaskSnapshot&gt;，存在时返回不可变任务快照
-     */
-    public Optional<WorkflowTaskSnapshot> findActiveTask(String taskId)
-    {
-        requireText(taskId);
-        return engineOperations.read(() -> Optional.ofNullable(taskService.createTaskQuery()
-                .taskId(taskId)
-                .active()
-                .singleResult()).map(this::toTaskSnapshot));
-    }
-
-    /**
-     * 将 Flowable 流程实例转换为模块自有不可变快照，防止运行时对象越过适配层。
-     *
-     * @param processInstance ProcessInstance，查询得到的活动流程实例
-     * @return WorkflowProcessInstanceSnapshot，仅包含业务层读取所需字段的快照
-     */
-    private WorkflowProcessInstanceSnapshot toProcessSnapshot(ProcessInstance processInstance)
-    {
-        return new WorkflowProcessInstanceSnapshot(processInstance.getId(),
-                processInstance.getProcessDefinitionId(), processInstance.getBusinessKey(),
-                processInstance.isSuspended());
-    }
-
-    /**
-     * 将 Flowable 任务转换为模块自有不可变快照，并把委派枚举转换为稳定字符串。
-     *
-     * @param task Task，查询得到的活动用户任务
-     * @return WorkflowTaskSnapshot，仅包含业务层读取所需字段的快照
-     */
-    private WorkflowTaskSnapshot toTaskSnapshot(Task task)
-    {
-        Date engineClaimTime = task.getClaimTime();
-        // Flowable 的可变 Date 只在适配层读取，对外统一转换为不可变的 Java 时间类型。
-        Instant claimTime = engineClaimTime == null ? null : engineClaimTime.toInstant();
-        String delegationState = task.getDelegationState() == null
-                ? null : task.getDelegationState().name();
-        return new WorkflowTaskSnapshot(task.getId(), task.getName(), task.getProcessInstanceId(),
-                task.getTaskDefinitionKey(), task.getAssignee(), task.getClaimedBy(), claimTime,
-                task.getOwner(), delegationState, task.isSuspended());
-    }
-
-    /**
      * 由当前有效登录用户认领指定任务。
      *
      * @param taskId String，待认领任务 ID
@@ -220,31 +154,6 @@ public class WorkflowProcessEngineAdapter
     }
 
     /**
-     * 由当前办理人把普通活动任务委派给当前具备流程办理权限的有效用户。
-     *
-     * @param taskId String，待委派任务 ID
-     * @param targetUserId String，目标受托人的若依用户 ID
-     * @return 无返回值
-     */
-    public void delegateTaskForCurrentUser(String taskId, String targetUserId)
-    {
-        delegateTaskForCurrentUser(taskId, targetUserId, "未填写委派意见");
-    }
-
-    /**
-     * 由当前办理人把普通活动任务委派给具备流程办理权限的用户，并原子写入受控审计意见。
-     *
-     * @param taskId String，待委派任务 ID
-     * @param targetUserId String，目标受托人的若依用户 ID
-     * @param opinion String，客户端业务意见，审计结构由服务端生成
-     * @return 无返回值
-     */
-    public void delegateTaskForCurrentUser(String taskId, String targetUserId, String opinion)
-    {
-        delegateTaskForCurrentUser(taskId, targetUserId, opinion, WorkflowTaskWriteHook.none());
-    }
-
-    /**
      * 由当前办理人委派任务，并把业务侧写入钩子纳入同一引擎事务。
      *
      * @param taskId String，待委派任务 ID
@@ -296,18 +205,6 @@ public class WorkflowProcessEngineAdapter
     }
 
     /**
-     * 由当前受托人解决 PENDING 委派任务，并原子写入真实办理意见。
-     *
-     * @param taskId String，待解决委派的任务 ID
-     * @param opinion String，受托人的业务办理意见，审计结构由服务端生成
-     * @return 无返回值
-     */
-    public void resolveTaskForCurrentUser(String taskId, String opinion)
-    {
-        resolveTaskForCurrentUser(taskId, opinion, WorkflowTaskWriteHook.none());
-    }
-
-    /**
      * 由当前受托人解决 PENDING 委派，并把抄送等业务写入纳入同一引擎事务。
      *
      * @param taskId String，待解决委派的任务 ID
@@ -353,31 +250,6 @@ public class WorkflowProcessEngineAdapter
             publishStableTaskAction("TASK_DELEGATION_RESOLVED", taskId);
             return null;
         });
-    }
-
-    /**
-     * 由当前办理人把普通活动任务永久转办给当前具备流程办理权限的有效用户。
-     *
-     * @param taskId String，待转办任务 ID
-     * @param targetUserId String，目标办理人的若依用户 ID
-     * @return 无返回值
-     */
-    public void transferTaskForCurrentUser(String taskId, String targetUserId)
-    {
-        transferTaskForCurrentUser(taskId, targetUserId, "未填写转办意见");
-    }
-
-    /**
-     * 由当前办理人把普通活动任务永久转办给具备流程办理权限的用户，并原子写入受控审计意见。
-     *
-     * @param taskId String，待转办任务 ID
-     * @param targetUserId String，目标办理人的若依用户 ID
-     * @param opinion String，客户端业务意见，审计结构由服务端生成
-     * @return 无返回值
-     */
-    public void transferTaskForCurrentUser(String taskId, String targetUserId, String opinion)
-    {
-        transferTaskForCurrentUser(taskId, targetUserId, opinion, WorkflowTaskWriteHook.none());
     }
 
     /**
@@ -433,36 +305,6 @@ public class WorkflowProcessEngineAdapter
             // 业务表写入必须晚于引擎动作，并依赖外层 Spring 事务实现任一失败整体回滚。
             afterSuccess.run();
             publishStableTaskAction("TASK_TRANSFERRED", taskId);
-            return null;
-        });
-    }
-
-    /**
-     * 由当前有效登录用户完成指定任务并持久化流程变量。
-     *
-     * @param taskId String，待完成任务 ID
-     * @param variables Map&lt;String, Object&gt;，任务完成变量；传 null 等同空变量
-     * @return 无返回值
-     */
-    public void completeTask(String taskId, Map<String, Object> variables)
-    {
-        requireText(taskId);
-        Map<String, Object> effectiveVariables = variables == null ? Collections.emptyMap() : variables;
-        engineOperations.writeAsCurrentUser(actor ->
-        {
-            Task task = requireActiveTask(taskId);
-            if (!actor.userId().equals(task.getAssignee()))
-            {
-                throw forbidden();
-            }
-            rejectControlledDynamicTaskMutation(task);
-            if (task.getDelegationState() == DelegationState.PENDING)
-            {
-                // PENDING 表示受托人尚未 resolve，直接 complete 会跳过委派回退语义。
-                throw conflict();
-            }
-            // 显式写入真实办理人，避免 Flowable 8 历史任务 completedBy 为空而破坏已办授权与审计。
-            taskService.complete(taskId, actor.userId(), effectiveVariables);
             return null;
         });
     }

@@ -86,7 +86,7 @@ public final class WorkflowAuthorFormFieldCatalog
     }
 
     /**
-     * 规范目录键，空值保持为空串以兼容既有不携带 processKey 的测试引用。
+     * 规范目录键，空值规范为空串，使缺失目录键按未命中处理。
      * @param value String，流程、节点或字段原始值
      * @return String，去除首尾空白后的稳定目录键
      */
@@ -111,38 +111,6 @@ public final class WorkflowAuthorFormFieldCatalog
         /** 流程级字段首次出现的值形态签名，用于识别跨节点同名异构声明。 */
         private final Map<String, Map<String, String>> fieldSignaturesByProcess =
                 new LinkedHashMap<>();
-
-        /**
-         * 加入一个已经过正式表单验证器筛选的节点字段集合。
-         * @param processKey String，表单节点所属可执行流程标识
-         * @param nodeKey String，开始节点或用户任务标识
-         * @param fieldNames Set&lt;String&gt;，可见可读且能承载单一用户主键的字段
-         * @return Builder，当前构建器，便于连续加入节点
-         */
-        public Builder add(String processKey, String nodeKey, Set<String> fieldNames)
-        {
-            return add(processKey, nodeKey, fieldNames, fieldNames);
-        }
-
-        /**
-         * 同时加入合格字段与表单中的全部字段声明，供流程级同名冲突失败关闭。
-         * @param processKey String，表单节点所属可执行流程标识
-         * @param nodeKey String，开始节点或用户任务标识
-         * @param eligibleFieldNames Set&lt;String&gt;，可见可读且能承载单一用户主键的字段
-         * @param declaredFieldNames Set&lt;String&gt;，当前正式表单声明的全部业务字段
-         * @return Builder，当前构建器
-         */
-        public Builder add(String processKey, String nodeKey,
-                Set<String> eligibleFieldNames, Set<String> declaredFieldNames)
-        {
-            LinkedHashMap<String, String> compatibleSignatures = new LinkedHashMap<>();
-            if (eligibleFieldNames != null)
-            {
-                eligibleFieldNames.forEach(fieldName ->
-                        compatibleSignatures.put(fieldName, "LEGACY_SINGLE_VALUE"));
-            }
-            return add(processKey, nodeKey, compatibleSignatures, declaredFieldNames);
-        }
 
         /**
          * 同时加入合格字段签名与全部声明，并对跨节点同名异构字段失败关闭。

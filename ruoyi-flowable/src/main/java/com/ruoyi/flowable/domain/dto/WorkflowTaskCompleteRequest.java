@@ -59,52 +59,6 @@ public record WorkflowTaskCompleteRequest(
     }
 
     /**
-     * 兼容原有仅提交任务、意见和变量的 Java 调用方。
-     *
-     * @param taskId String，待完成的活动任务主键
-     * @param comment String，审批意见
-     * @param variables Map&lt;String, Object&gt;，当前任务表单变量
-     * @return 无返回值，抄送人与动态下一办理人均使用空集合
-     */
-    public WorkflowTaskCompleteRequest(String taskId, String comment,
-            Map<String, Object> variables)
-    {
-        this(taskId, comment, variables, List.of(), List.of(), null);
-    }
-
-    /**
-     * 兼容已接入抄送但未指定动态下一办理人的 Java 调用方。
-     *
-     * @param taskId String，待完成的活动任务主键
-     * @param comment String，审批意见
-     * @param variables Map&lt;String, Object&gt;，当前任务表单变量
-     * @param copyUserIds List&lt;Long&gt;，可选抄送接收用户主键
-     * @return 无返回值，动态下一办理人使用空集合
-     */
-    public WorkflowTaskCompleteRequest(String taskId, String comment,
-            Map<String, Object> variables, List<Long> copyUserIds)
-    {
-        this(taskId, comment, variables, copyUserIds, List.of(), null);
-    }
-
-    /**
-     * 兼容已接入抄送和动态下一办理人、但当前任务不是动态多实例的 Java 调用方。
-     *
-     * @param taskId String，待完成的活动任务主键
-     * @param comment String，审批意见
-     * @param variables Map&lt;String, Object&gt;，当前任务表单变量
-     * @param copyUserIds List&lt;Long&gt;，可选抄送接收用户主键
-     * @param nextUserIds List&lt;Long&gt;，可选动态下一办理人主键
-     * @return 无返回值，动态多实例 expectedRevision 使用 null
-     */
-    public WorkflowTaskCompleteRequest(String taskId, String comment,
-            Map<String, Object> variables, List<Long> copyUserIds,
-            List<Long> nextUserIds)
-    {
-        this(taskId, comment, variables, copyUserIds, nextUserIds, null);
-    }
-
-    /**
      * 复制可选用户主键集合，同时保留 null 元素交给 Bean Validation 返回稳定的 400 响应。
      *
      * @param values List&lt;Long&gt;，客户端提交的可选用户主键集合

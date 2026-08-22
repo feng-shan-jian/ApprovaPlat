@@ -11,13 +11,6 @@ import com.ruoyi.flowable.domain.WfCopy;
 public interface WfCopyMapper
 {
     /**
-     * 查询有效抄送详情。
-     * @param copyId Long，抄送记录主键
-     * @return WfCopy，有效抄送记录；不存在时返回 null
-     */
-    WfCopy selectById(@Param("copyId") Long copyId);
-
-    /**
      * 批量写入抄送记录，由数据库唯一键阻止同一事件重复抄送给同一用户。
      * @param copies List&lt;WfCopy&gt;，已由服务端解析并校验的抄送记录
      * @return int，实际写入行数
@@ -58,15 +51,6 @@ public interface WfCopyMapper
             @Param("updateBy") String updateBy);
 
     /**
-     * 查询当前用户的有效抄送列表；用户主键必须由服务端认证上下文提供。
-     * @param userId Long，当前登录用户主键
-     * @param filter WfCopy，标题、实例和流程名称等可选过滤条件，不读取其中的 userId
-     * @return List&lt;WfCopy&gt;，当前用户可见的抄送列表
-     */
-    List<WfCopy> selectListByUserId(@Param("userId") Long userId,
-            @Param("filter") WfCopy filter);
-
-    /**
      * 统计当前用户符合条件的有效抄送记录，供领域层执行真实分页。
      * @param userId Long，当前登录用户主键
      * @param filter WfCopy，服务端构造的查询条件，不读取其中的 userId
@@ -86,15 +70,6 @@ public interface WfCopyMapper
     List<WfCopy> selectPageByUserId(@Param("userId") Long userId,
             @Param("filter") WfCopy filter, @Param("offset") int offset,
             @Param("limit") int limit);
-
-    /**
-     * 逻辑删除指定有效抄送记录。
-     * @param copyIds Collection&lt;Long&gt;，抄送记录主键集合
-     * @param updateBy String，可信操作人账号
-     * @return int，实际逻辑删除行数
-     */
-    int logicalDelete(@Param("copyIds") Collection<Long> copyIds,
-            @Param("updateBy") String updateBy);
 
     /**
      * 统计指定流程实例中当前用户的有效抄送记录，用于实例级对象授权。

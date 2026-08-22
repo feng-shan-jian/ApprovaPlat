@@ -4,17 +4,18 @@
 
 `WorkflowAuthenticationContext` 统一设置和清理 Flowable 的 `authenticatedUserId`，保证流程发起、任务命令和审计记录使用规范的若依 `sys_user.user_id` 字符串。它处理异常、线程复用和嵌套调用时的身份恢复，避免一个请求的操作人泄漏到后续请求。
 
-本组件只管理 Flowable 操作人上下文，不提供 Spring 事务、业务授权、任务状态校验或 Flowable 异常翻译。任务基础命令应通过 [WorkflowProcessEngineAdapter](../engine/WorkflowProcessEngineAdapter.md) 接入；模型发布、流程发起、动态多实例和复杂生命周期由专用领域服务接入。两类入口都必须由 [WorkflowEngineOperations](../engine/WorkflowEngineOperations.md) 在事务内完成身份复核后调用本组件。
+本组件只管理 Flowable 操作人上下文，不提供 Spring 事务、业务授权、任务状态校验或 Flowable 异常翻译。任务动作命令应通过 [WorkflowProcessEngineAdapter](../engine/WorkflowProcessEngineAdapter.md) 接入，任务完成应通过 `WorkflowTaskLifecycleService.completeTask(...)` 接入；模型发布、流程发起、动态多实例和复杂生命周期由专用领域服务接入。各类入口都必须由 [WorkflowEngineOperations](../engine/WorkflowEngineOperations.md) 在事务内完成身份复核后调用本组件。
 
 ## 接入与使用方式
 
-任务命令的推荐调用链是业务 Service 注入 Adapter，而不是直接注入本组件：
+任务完成的推荐调用链是业务 Service 注入正式生命周期服务，而不是直接注入本组件：
 
 ```java
-processEngineAdapter.completeTask(taskId, variables);
+taskLifecycleService.completeTask(new WorkflowTaskCompleteRequest(
+        taskId, comment, variables, copyUserIds, nextUserIds, expectedRevision));
 ```
 
-只有 `WorkflowEngineOperations` 等引擎执行基础设施才可直接使用本组件。专用领域服务可以组合 Flowable 公共 API，但只能通过 `WorkflowEngineOperations.writeAsCurrentUser(...)` 或受控 `writeAsUser(...)` 建立操作人作用域。禁止在业务 Service 中使用 `runAsCurrentUser(() -> taskService.complete(...))`，该写法会绕过 Adapter 的 candidate、assignee、委派和挂起状态校验。
+只有 `WorkflowEngineOperations` 等引擎执行基础设施才可直接使用本组件。专用领域服务可以组合 Flowable 公共 API，但只能通过 `WorkflowEngineOperations.writeAsCurrentUser(...)` 或受控 `writeAsUser(...)` 建立操作人作用域。禁止在业务 Service 中使用 `runAsCurrentUser(() -> taskService.complete(...))`，该写法会绕过正式完成链的表单、附件、抄送、动态下一办理人、动态多实例 revision、assignee、委派和挂起状态校验。
 
 ## 公开方法
 
@@ -42,17 +43,18 @@ processEngineAdapter.completeTask(taskId, variables);
 @Service
 public class ApprovalService
 {
-    private final WorkflowProcessEngineAdapter processEngineAdapter;
+    private final WorkflowTaskLifecycleService taskLifecycleService;
 
-    public ApprovalService(WorkflowProcessEngineAdapter processEngineAdapter)
+    public ApprovalService(WorkflowTaskLifecycleService taskLifecycleService)
     {
-        this.processEngineAdapter = processEngineAdapter;
+        this.taskLifecycleService = taskLifecycleService;
     }
 
-    public void complete(String taskId, Map<String, Object> variables)
+    public void complete(String taskId, String comment, Map<String, Object> variables)
     {
-        // Adapter 内部通过 EngineOperations 间接使用 AuthenticationContext。
-        processEngineAdapter.completeTask(taskId, variables);
+        // LifecycleService 通过 EngineOperations 间接使用 AuthenticationContext。
+        taskLifecycleService.completeTask(new WorkflowTaskCompleteRequest(
+                taskId, comment, variables, List.of(), List.of(), null));
     }
 }
 ```

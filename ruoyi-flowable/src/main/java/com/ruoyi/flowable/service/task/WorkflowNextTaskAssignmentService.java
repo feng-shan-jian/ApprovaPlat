@@ -505,22 +505,6 @@ public class WorkflowNextTaskAssignmentService
         }
 
         /**
-         * 兼容普通单任务动态分配的既有 Java 调用方式。
-         *
-         * @param processInstanceId String，来源任务所属流程实例主键
-         * @param sourceTaskId String，完成前来源任务主键
-         * @param expectedTaskDefinitionKey String，预期后继节点主键
-         * @param userIds List&lt;String&gt;，有效用户主键集合
-         * @return 无返回值，创建普通单任务分配计划
-         */
-        public AssignmentPlan(String processInstanceId, String sourceTaskId,
-                String expectedTaskDefinitionKey, List<String> userIds)
-        {
-            this(processInstanceId, sourceTaskId, expectedTaskDefinitionKey,
-                    userIds, false, null);
-        }
-
-        /**
          * 创建未请求动态办理人的空计划。
          *
          * @return AssignmentPlan，不改变 BPMN 默认分配结果的空计划

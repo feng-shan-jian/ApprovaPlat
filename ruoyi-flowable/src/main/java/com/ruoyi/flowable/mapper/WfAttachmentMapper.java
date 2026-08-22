@@ -141,28 +141,6 @@ public interface WfAttachmentMapper
             @Param("processInstanceIds") Collection<String> processInstanceIds);
 
     /**
-     * 统计指定正式状态的附件数量，状态值只由监控组件固定枚举提供。
-     *
-     * @param status String，TEMP、BOUND、EXPIRED 或 DELETED
-     * @return long，当前状态记录数
-     */
-    long countByStatus(@Param("status") String status);
-
-    /**
-     * 统计已经终态但尚未完成物理文件删除的附件数。
-     *
-     * @return long，清理调度需要继续处理的持久化记录数
-     */
-    long countPendingStorageDeletion();
-
-    /**
-     * 统计已按退避策略推迟、当前尚未到重试时间的物理清理记录。
-     *
-     * @return long，未来时间再次进入候选的持久化记录数
-     */
-    long countDeferredStorageDeletion();
-
-    /**
      * 仅将当前所有者仍未绑定的临时附件原子标记为已删除。
      *
      * @param attachmentId String，待删除附件 UUID

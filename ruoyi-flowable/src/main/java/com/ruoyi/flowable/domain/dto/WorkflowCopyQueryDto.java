@@ -24,22 +24,4 @@ public record WorkflowCopyQueryDto(
         String deploymentId,
         String readStatus)
 {
-    /**
-     * 保留旧调用方的八参数构造方式，未显式筛选时查询全部阅读状态。
-     * @param title String，抄送标题
-     * @param processId String，流程定义主键
-     * @param processName String，流程名称
-     * @param originatorName String，发起人名称
-     * @param instanceId String，流程实例主键
-     * @param taskId String，任务主键
-     * @param categoryId String，分类编码
-     * @param deploymentId String，部署主键
-     */
-    public WorkflowCopyQueryDto(String title, String processId, String processName,
-            String originatorName, String instanceId, String taskId,
-            String categoryId, String deploymentId)
-    {
-        this(title, processId, processName, originatorName, instanceId, taskId,
-                categoryId, deploymentId, null);
-    }
 }

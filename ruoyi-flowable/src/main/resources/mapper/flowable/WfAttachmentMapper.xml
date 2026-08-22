@@ -210,27 +210,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
           and storage_deleted_time is null
     </update>
 
-    <select id="countByStatus" resultType="long">
-        select count(*)
-        from wf_attachment
-        where attachment_status = #{status}
-    </select>
-
-    <select id="countPendingStorageDeletion" resultType="long">
-        select count(*)
-        from wf_attachment
-        where attachment_status in ('EXPIRED', 'DELETED')
-          and storage_deleted_time is null
-    </select>
-
-    <select id="countDeferredStorageDeletion" resultType="long">
-        select count(*)
-        from wf_attachment
-        where attachment_status in ('EXPIRED', 'DELETED')
-          and storage_deleted_time is null
-          and cleanup_next_retry_time > current_timestamp(3)
-    </select>
-
     <select id="selectCleanupCandidatesForUpdate" resultMap="WfAttachmentResult"
             timeout="10">
         select <include refid="attachmentColumns"/>
