@@ -277,9 +277,9 @@ public class WfProcessController extends BaseController
     public void startExport(@ModelAttribute WorkflowStartableProcessQueryDto filter,
             HttpServletResponse response)
     {
-        List<WorkflowStartableDefinitionView> rows = collectForExport(
-                page -> processQueryService.listStartable(filter, page, EXPORT_PAGE_SIZE),
-                "可发起流程");
+        // 可发起定义由领域服务一次解析身份并完成整批授权扫描，禁止按导出页重复全量扫描。
+        List<WorkflowStartableDefinitionView> rows =
+                processQueryService.listStartableForExport(filter);
         List<WorkflowStartableDefinitionExportView> exports = rows.stream()
                 .map(row -> new WorkflowStartableDefinitionExportView(row.definitionId(),
                         row.processName(), row.processKey(), row.category(), row.version(),

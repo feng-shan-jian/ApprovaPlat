@@ -180,30 +180,26 @@ public class WorkflowProcessQueryService
         return engineOperations.read(() ->
         {
             WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-            ProcessDefinitionQuery query = buildStartableBaseQuery(filter);
-            // categoryDeploymentIds 为 null 表示未筛选，空集合表示正式部署中没有该业务分类。
-            Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
-                    filter == null ? null : filter.category());
-            if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
-            {
-                return new PageResult<>(List.of(), 0);
-            }
-            if (categoryDeploymentIds != null)
-            {
-                // 业务分类属于部署元数据，不能用可能保存 targetNamespace 的定义分类筛选。
-                query.deploymentIds(categoryDeploymentIds);
-            }
-            long baseTotal = checkedCount(query.count());
-            if (baseTotal == 0)
-            {
-                return new PageResult<>(List.of(), 0);
-            }
-            if (baseTotal > MAX_STARTABLE_SCAN)
-            {
-                // Flowable 原生 startableByUserOrGroups 会漏掉无 starter 限制的公开定义，禁止截断扫描后返回虚假 total。
-                throw new ServiceException("可发起流程范围过大，请增加筛选条件", HttpStatus.BAD_REQUEST);
-            }
-            return filterStartableDefinitions(query, actor, baseTotal, page);
+            StartableDefinitionSelection selection = scanStartableDefinitions(filter, actor, page);
+            return new PageResult<>(toStartableViews(selection.definitions()), selection.visibleTotal());
+        });
+    }
+
+    /**
+     * 一次扫描导出当前用户可发起的全部有界最新激活流程定义。
+     *
+     * @param filter WorkflowStartableProcessQueryDto，流程标识、名称和分类条件，允许为空
+     * @return List&lt;WorkflowStartableDefinitionView&gt;，与分页列表权限和稳定顺序完全一致的不可变全集
+     */
+    public List<WorkflowStartableDefinitionView> listStartableForExport(
+            WorkflowStartableProcessQueryDto filter)
+    {
+        return engineOperations.read(() ->
+        {
+            WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
+            StartableDefinitionSelection selection = scanStartableDefinitions(
+                    filter, actor, new PageWindow(0, MAX_STARTABLE_SCAN));
+            return toStartableViews(selection.definitions());
         });
     }
 
@@ -603,43 +599,96 @@ public class WorkflowProcessQueryService
     }
 
     /**
-     * 分块扫描基础定义并按 starter identity link 计算真实可发起总数和当前页。
+     * 构造、分块读取并一次授权扫描可发起定义，供分页列表和导出共享。
      *
-     * @param query ProcessDefinitionQuery，已限定最新激活定义的基础查询
+     * @param filter WorkflowStartableProcessQueryDto，流程定义条件，允许为空
      * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
-     * @param baseTotal long，基础定义真实总数
-     * @param page PageWindow，目标分页窗口
-     * @return PageResult&lt;WorkflowStartableDefinitionView&gt;，授权过滤后的真实分页结果
+     * @param page PageWindow，本次需要收集的可见结果窗口
+     * @return StartableDefinitionSelection，真实可见总数及当前窗口定义
      */
-    private PageResult<WorkflowStartableDefinitionView> filterStartableDefinitions(
-            ProcessDefinitionQuery query, WorkflowCurrentIdentity actor, long baseTotal, PageWindow page)
+    private StartableDefinitionSelection scanStartableDefinitions(
+            WorkflowStartableProcessQueryDto filter, WorkflowCurrentIdentity actor, PageWindow page)
     {
-        List<WorkflowStartableDefinitionView> rows = new ArrayList<>(page.pageSize());
+        ProcessDefinitionQuery query = buildStartableBaseQuery(filter);
+        // categoryDeploymentIds 为 null 表示未筛选，空集合表示正式部署中没有该业务分类。
+        Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
+                filter == null ? null : filter.category());
+        if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
+        {
+            return new StartableDefinitionSelection(List.of(), 0);
+        }
+        if (categoryDeploymentIds != null)
+        {
+            // 业务分类属于部署元数据，不能用可能保存 targetNamespace 的定义分类筛选。
+            query.deploymentIds(categoryDeploymentIds);
+        }
+        long baseTotal = checkedCount(query.count());
+        if (baseTotal == 0)
+        {
+            return new StartableDefinitionSelection(List.of(), 0);
+        }
+        if (baseTotal > MAX_STARTABLE_SCAN)
+        {
+            // Flowable 原生 startableByUserOrGroups 会漏掉公开定义，禁止截断扫描后返回虚假 total。
+            throw new ServiceException("可发起流程范围过大，请增加筛选条件", HttpStatus.BAD_REQUEST);
+        }
+
+        List<ProcessDefinition> definitions = loadStartableDefinitions(query, baseTotal);
+        // 整批快照授权只调用一次；Map 缺席的定义才允许进入历史 starter identity link 兜底。
+        Map<String, Boolean> managedDecisions = participantRuleRuntimeService
+                .resolveManagedStartDecisions(actor, definitions);
+        if (managedDecisions == null)
+        {
+            throw dataError("流程发起范围批量判定结果异常");
+        }
+
+        List<ProcessDefinition> selected = new ArrayList<>(
+                Math.min(page.pageSize(), definitions.size()));
         long visibleTotal = 0;
+        for (ProcessDefinition definition : definitions)
+        {
+            if (!isDefinitionStartable(definition, actor, managedDecisions))
+            {
+                continue;
+            }
+            if (visibleTotal >= page.offset() && selected.size() < page.pageSize())
+            {
+                selected.add(definition);
+            }
+            visibleTotal++;
+        }
+        return new StartableDefinitionSelection(List.copyOf(selected), visibleTotal);
+    }
+
+    /**
+     * 按固定 200 条分块装载一次扫描的全部有界基础定义。
+     *
+     * @param query ProcessDefinitionQuery，已限定最新、激活、分类和文本筛选的稳定查询
+     * @param baseTotal long，执行扫描前取得的真实基础定义总数
+     * @return List&lt;ProcessDefinition&gt;，按流程 key、定义 ID 排序且数量与 count 一致的不可变定义集合
+     */
+    private List<ProcessDefinition> loadStartableDefinitions(
+            ProcessDefinitionQuery query, long baseTotal)
+    {
+        List<ProcessDefinition> definitions = new ArrayList<>((int) baseTotal);
         int baseOffset = 0;
         while (baseOffset < baseTotal)
         {
             int batchLimit = (int) Math.min(STARTABLE_SCAN_CHUNK, baseTotal - baseOffset);
-            List<ProcessDefinition> definitions = checkedRows(
+            List<ProcessDefinition> batch = checkedRows(
                     query.listPage(baseOffset, batchLimit), batchLimit);
-            if (definitions.isEmpty())
+            if (batch.isEmpty())
             {
                 throw dataError("流程定义分页计数与结果不一致");
             }
-            for (ProcessDefinition definition : definitions)
-            {
-                if (isDefinitionStartable(definition, actor))
-                {
-                    if (visibleTotal >= page.offset() && rows.size() < page.pageSize())
-                    {
-                        rows.add(toStartableView(definition));
-                    }
-                    visibleTotal++;
-                }
-            }
-            baseOffset += definitions.size();
+            definitions.addAll(batch);
+            baseOffset += batch.size();
         }
-        return new PageResult<>(rows, visibleTotal);
+        if (definitions.size() != baseTotal)
+        {
+            throw dataError("流程定义分页计数与结果不一致");
+        }
+        return List.copyOf(definitions);
     }
 
     /**
@@ -662,6 +711,47 @@ public class WorkflowProcessQueryService
         {
             return snapshotDecision;
         }
+        return isHistoricalDefinitionStartable(definition, actor);
+    }
+
+    /**
+     * 使用整批部署快照决定判断定义权限，只有决定缺席时才执行历史兼容查询。
+     *
+     * @param definition ProcessDefinition，当前有界扫描中的流程定义
+     * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
+     * @param managedDecisions Map&lt;String, Boolean&gt;，受管定义的正式整批授权决定
+     * @return boolean，新版正式决定或历史 starter identity link 兼容结果
+     */
+    private boolean isDefinitionStartable(ProcessDefinition definition, WorkflowCurrentIdentity actor,
+            Map<String, Boolean> managedDecisions)
+    {
+        if (definition == null || !StringUtils.hasText(definition.getId()))
+        {
+            throw dataError("流程定义数据异常");
+        }
+        if (managedDecisions.containsKey(definition.getId()))
+        {
+            Boolean decision = managedDecisions.get(definition.getId());
+            if (decision == null)
+            {
+                throw dataError("流程发起范围批量判定结果异常");
+            }
+            // 新版 false 是正式拒绝，绝对不能继续进入历史 starter identity link 兜底。
+            return decision;
+        }
+        return isHistoricalDefinitionStartable(definition, actor);
+    }
+
+    /**
+     * 对历史未托管定义执行原 Flowable starter identity link 发起权限兼容。
+     *
+     * @param definition ProcessDefinition，已确认没有业务资源子部署的历史定义
+     * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
+     * @return boolean，无 starter 限制或显式用户、候选组命中时返回 true
+     */
+    private boolean isHistoricalDefinitionStartable(
+            ProcessDefinition definition, WorkflowCurrentIdentity actor)
+    {
         List<IdentityLink> links = repositoryService.getIdentityLinksForProcessDefinition(definition.getId());
         if (links == null)
         {
@@ -983,25 +1073,85 @@ public class WorkflowProcessQueryService
     }
 
     /**
-     * 将可发起流程定义及其部署转换为不可变视图。
+     * 批量装载可见定义的部署并转换为不可变视图，转换阶段不再逐行访问引擎。
      *
-     * @param definition ProcessDefinition，已通过发起授权的最新激活定义
-     * @return WorkflowStartableDefinitionView，可发起流程定义视图
+     * @param definitions List&lt;ProcessDefinition&gt;，已通过发起授权且保持稳定顺序的定义
+     * @return List&lt;WorkflowStartableDefinitionView&gt;，分类、部署时间和部署主键完整的不可变视图列表
      */
-    private WorkflowStartableDefinitionView toStartableView(ProcessDefinition definition)
+    private List<WorkflowStartableDefinitionView> toStartableViews(
+            List<ProcessDefinition> definitions)
     {
-        Deployment deployment = repositoryService.createDeploymentQuery()
-                .deploymentId(definition.getDeploymentId())
-                .singleResult();
-        if (deployment == null)
+        if (definitions.isEmpty())
+        {
+            return List.of();
+        }
+        Map<String, Deployment> deployments = loadStartableDeployments(definitions);
+        List<WorkflowStartableDefinitionView> rows = new ArrayList<>(definitions.size());
+        for (ProcessDefinition definition : definitions)
+        {
+            Deployment deployment = deployments.get(definition.getDeploymentId());
+            if (deployment == null)
+            {
+                throw dataError("流程定义缺少部署数据");
+            }
+            // 只返回发布事务写入的正式部署分类，定义分类可能是 targetNamespace，不能作为回退值。
+            String category = resolveDeploymentCategory(deployment.getCategory());
+            rows.add(new WorkflowStartableDefinitionView(definition.getId(), definition.getKey(),
+                    definition.getName(), category, definition.getVersion(),
+                    definition.getDeploymentId(), toInstant(deployment.getDeploymentTime())));
+        }
+        return List.copyOf(rows);
+    }
+
+    /**
+     * 按最多 200 个部署主键批量读取可发起视图需要的部署元数据。
+     *
+     * 当前分页最多 200 行，因此只产生一次 deploymentIds 查询；导出超过 200 行时按相同上限分块。
+     *
+     * @param definitions List&lt;ProcessDefinition&gt;，待投影的已授权定义
+     * @return Map&lt;String, Deployment&gt;，部署主键到唯一 Flowable 部署的不可变映射
+     */
+    private Map<String, Deployment> loadStartableDeployments(List<ProcessDefinition> definitions)
+    {
+        LinkedHashSet<String> deploymentIds = new LinkedHashSet<>();
+        for (ProcessDefinition definition : definitions)
+        {
+            if (definition == null || !StringUtils.hasText(definition.getDeploymentId()))
+            {
+                throw dataError("流程定义部署关系异常");
+            }
+            deploymentIds.add(definition.getDeploymentId());
+        }
+
+        List<String> orderedIds = new ArrayList<>(deploymentIds);
+        LinkedHashMap<String, Deployment> deployments = new LinkedHashMap<>();
+        for (int offset = 0; offset < orderedIds.size(); offset += STARTABLE_SCAN_CHUNK)
+        {
+            int end = Math.min(offset + STARTABLE_SCAN_CHUNK, orderedIds.size());
+            List<String> batchIds = orderedIds.subList(offset, end);
+            List<Deployment> batch = repositoryService.createDeploymentQuery()
+                    .deploymentIds(new ArrayList<>(batchIds))
+                    .list();
+            if (batch == null || batch.size() > batchIds.size())
+            {
+                throw dataError("流程部署批量查询结果异常");
+            }
+            Set<String> requestedBatchIds = Set.copyOf(batchIds);
+            for (Deployment deployment : batch)
+            {
+                if (deployment == null || !StringUtils.hasText(deployment.getId())
+                        || !requestedBatchIds.contains(deployment.getId())
+                        || deployments.put(deployment.getId(), deployment) != null)
+                {
+                    throw dataError("流程部署批量查询结果异常");
+                }
+            }
+        }
+        if (deployments.size() != deploymentIds.size())
         {
             throw dataError("流程定义缺少部署数据");
         }
-        // 只返回发布事务写入的正式部署分类，定义分类可能是 targetNamespace，不能作为回退值。
-        String category = resolveDeploymentCategory(deployment.getCategory());
-        return new WorkflowStartableDefinitionView(definition.getId(), definition.getKey(),
-                definition.getName(), category, definition.getVersion(),
-                definition.getDeploymentId(), toInstant(deployment.getDeploymentTime()));
+        return Map.copyOf(deployments);
     }
 
     /**
@@ -1881,6 +2031,17 @@ public class WorkflowProcessQueryService
     private ServiceException dataError(String message)
     {
         return new ServiceException(message, HttpStatus.ERROR);
+    }
+
+    /**
+     * 一次完整权限扫描选出的定义窗口及真实可见总数。
+     *
+     * @param definitions List&lt;ProcessDefinition&gt;，保持基础查询稳定顺序的当前窗口定义
+     * @param visibleTotal long，扫描全部基础定义后得到的真实可见总数
+     */
+    private record StartableDefinitionSelection(
+            List<ProcessDefinition> definitions, long visibleTotal)
+    {
     }
 
     /**

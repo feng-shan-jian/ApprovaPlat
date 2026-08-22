@@ -56,6 +56,7 @@ PageResult<WorkflowAssignedTaskView> page = processQueryService.listAssigned(
 | 方法 | DTO | 返回视图 | 身份范围 |
 | --- | --- | --- | --- |
 | `listStartable` | `WorkflowStartableProcessQueryDto` | `WorkflowStartableDefinitionView` | 当前用户可真实发起 |
+| `listStartableForExport` | `WorkflowStartableProcessQueryDto` | `List<WorkflowStartableDefinitionView>` | 当前用户可真实发起的有界导出全集 |
 | `listOwned` | `WorkflowOwnedProcessQueryDto` | `WorkflowOwnedProcessView` | `startedBy=当前用户` |
 | `listManaged` | `WorkflowManagedProcessQueryDto` | `WorkflowManagedProcessView` | 流程管理员跨用户实例 |
 | `listAssigned` | `WorkflowAssignedTaskQueryDto` | `WorkflowAssignedTaskView` | `active + assignee=当前用户` |
@@ -82,9 +83,10 @@ PageResult<WorkflowAssignedTaskView> page = processQueryService.listAssigned(
 `detail` 共 17 个只读接口。列表返回若依 `TableDataInfo`，并明确设置 `code=200`、
 `msg=查询成功` 和真实 `total`。
 
-七类导出复用相同领域查询和身份范围，每页固定读取 200 条，最多导出 10000 条，
-并在只读事务内校验后续页 `total` 与第一页一致。超过上限返回 400；分页期间总量漂移、
-缺行或超量返回 409，不生成看似成功但内容不完整的 Excel。
+可发起导出调用 `listStartableForExport` 一次：一次解析当前身份、一次完整授权扫描，
+最多返回 10000 条，并与列表复用同一个内部扫描实现。其余六类导出继续每页固定读取
+200 条，并在只读事务内校验后续页 `total` 与第一页一致。超过上限返回 400；其余导出
+分页期间总量漂移、缺行或超量返回 409，不生成看似成功但内容不完整的 Excel。
 
 ## 可发起权限
 
@@ -92,10 +94,11 @@ Flowable 8 的 `startableByUserOrGroups` 只返回存在匹配 starter identity 
 
 1. 使用 Flowable 原生查询限定最新、激活和业务筛选条件，并执行 `count`；
 2. 基础定义超过 10000 条时拒绝查询，要求增加筛选条件；
-3. 按流程 key、定义 ID 的确定顺序分块执行 `listPage`；
-4. 没有 starter identity link 的定义视为公开；
-5. 存在 starter identity link 时，仅当前用户或其有效角色、部门候选组命中才可见；
-6. 扫描完整有界结果后返回真实 `total` 和当前页，不截断伪造分页总数。
+3. 按流程 key、定义 ID 的确定顺序，以 200 条分块执行 `listPage` 并保存最多 10000 条有界定义；
+4. 整批定义只调用一次部署快照授权：Map 中存在定义 ID 的 `true/false` 是新版正式决定，`false` 不进入历史兜底；
+5. 只有 Map 中缺少的历史未托管定义才逐定义读取 starter identity link；无链接视为公开，用户或有效角色、部门候选组命中时可见；
+6. 扫描完整有界结果后返回真实 `total` 和当前页，不截断伪造分页总数；
+7. 当前页部署元数据只执行一次 `deploymentIds(...)` 查询，导出超过 200 个部署时按 200 分块，视图转换不再逐行查询部署。
 
 ## 表单快照
 
