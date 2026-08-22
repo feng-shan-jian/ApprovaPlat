@@ -32,9 +32,12 @@ PageResult<WorkflowAssignedTaskView> page = processQueryService.listAssigned(
 ```
 
 分页结果中的 `rows` 已复制为不可变集合，Controller 只负责转换为目标框架 `TableDataInfo`。
-`listOwned` 与 `listManaged` 会按当前页实例 ID 批量读取 `RuntimeService`：运行中实例以实时
-`isSuspended()` 生成 `running/suspended`，已结束实例才使用历史状态。当前环节查询不使用
-会排除挂起任务的 `TaskQuery.active()`，因此挂起前后的状态、任务名称和操作按钮保持一致。
+`listOwned` 与 `listManaged` 会在视图转换前一次性装载当前页事实：按实例 ID 批量读取
+`RuntimeService` 挂起状态，按部署 ID 批量读取 `Deployment.category`，并使用一个
+`processInstanceIdIn` 的 `TaskQuery` 批量读取当前任务。任务查询按 `taskCreateTime ASC、taskId ASC`
+稳定排序，不使用会排除挂起任务的 `active()`，因此挂起前后的状态、任务名称和操作按钮保持一致。
+批量查询使用“当前页实例数 × 200 + 1”的有界 `listPage`；当前页任务总量或任一实例任务数
+超过安全上限时返回稳定数据异常，没有当前任务的实例返回空列表。
 
 ## 查询方法
 
@@ -55,7 +58,7 @@ PageResult<WorkflowAssignedTaskView> page = processQueryService.listAssigned(
 
 待签菜单权限本身不代表任务可执行。`listClaimable` 会先按正式用户、角色和菜单数据实时复核当前用户同时具备 `claimList`、`claim`、`todoList`、`query`、`approval`；缺少任一项时返回真实空页 `rows=[]、total=0`，不会展示点击后必然被 `claim` 拒绝的任务。身份主数据查询异常仍按 `500` 失败，不伪造空页。
 
-流程分类以 Flowable `Deployment.category` 中发布时冻结的业务分类编码为准，再由前端通过正式分类目录映射名称。可发起、待办、待签和已办的分类筛选也先按该字段解析部署主键，再约束定义或任务查询；分类下没有部署时直接返回空页，禁止空集合退化为全量结果。空页短路前仍会完整校验其他查询参数。页面不回退 `ProcessDefinition.category` 或历史实例分类；部署分类为空或被错误写成 BPMN `targetNamespace` 绝对 URI 时返回空分类，避免显示一个无法按相同口径筛选的伪分类。
+流程分类以 Flowable `Deployment.category` 中发布时冻结的业务分类编码为准，再由前端通过正式分类目录映射名称。可发起、我发起的、管理员实例、待办、待签和已办的分类筛选都先按该字段解析部署主键，再约束定义、实例或任务查询；分类下没有部署时直接返回空页，禁止空集合退化为全量结果。空页短路前仍会完整校验其他查询参数。实例列表当前页只执行一次 `deploymentIds` 批量查询，页面不回退 `ProcessDefinition.category` 或历史实例分类；部署记录缺失、分类为空或被错误写成 BPMN `targetNamespace` 绝对 URI 时返回空分类，避免旧历史数据造成整页失败或显示无法按相同口径筛选的伪分类。
 
 完整实例详情不在本服务拼装。`/workflow/process/detail` 统一调用
 `WorkflowProcessDetailService`，由该服务先完成实例和任务对象授权，再读取表单值、
@@ -98,6 +101,6 @@ Flowable 8 的 `startableByUserOrGroups` 只返回存在匹配 starter identity 
 - `403`：当前用户不能发起目标定义，或实例对象授权拒绝；
 - `404`：流程定义或授权服务查询的对象不存在；
 - `409`：客户端声明的定义、部署、实例关系不一致，或定义不是最新激活版本；
-- `500`：Flowable 定义、实例、任务与部署快照的内部关联缺失或分页结果违反计数契约。
+- `500`：Flowable 定义、实例、任务与部署快照的内部关联异常，任务数量超过安全上限，或分页结果违反计数契约。实例列表允许旧历史记录缺少部署，此时仅返回空分类。
 
 七类列表均使用 `count + listPage` 或业务 Mapper 的等价计数/分页 SQL。任何关联异常都会停止整页返回，避免把不完整或未授权数据伪装为正常结果。

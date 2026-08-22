@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -82,6 +83,9 @@ public class WorkflowProcessQueryService
 
     /** 普通查询文本允许的最大字符数。 */
     private static final int MAX_FILTER_LENGTH = 255;
+
+    /** 单个流程实例允许返回的最大当前任务数。 */
+    private static final int MAX_RUNTIME_TASKS_PER_INSTANCE = 200;
 
     /** 正式表单节点的批量默认字段权限属性主键。 */
     private static final String FORM_PERMISSION_DEFAULT_ID = "approva_permission_default";
@@ -218,6 +222,17 @@ public class WorkflowProcessQueryService
         {
             WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
             HistoricProcessInstanceQuery query = buildOwnedQuery(filter, actor.userId());
+            Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
+                    filter == null ? null : filter.category());
+            if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
+            {
+                return new PageResult<>(List.of(), 0);
+            }
+            if (categoryDeploymentIds != null)
+            {
+                // 历史实例分类必须服从发布时冻结的 Deployment.category。
+                query.deploymentIdIn(new ArrayList<>(categoryDeploymentIds));
+            }
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
@@ -225,11 +240,9 @@ public class WorkflowProcessQueryService
             }
             List<HistoricProcessInstance> instances = checkedRows(
                     query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            Map<String, Boolean> runtimeSuspensionStates =
-                    loadRuntimeSuspensionStates(instances);
+            InstancePageFacts facts = loadInstancePageFacts(instances);
             List<WorkflowOwnedProcessView> rows = instances.stream()
-                    .map(instance -> toOwnedView(instance,
-                            runtimeSuspensionStates.get(instance.getId())))
+                    .map(instance -> toOwnedView(instance, facts))
                     .toList();
             return new PageResult<>(rows, total);
         });
@@ -252,6 +265,17 @@ public class WorkflowProcessQueryService
             // 即使 Controller 已做权限校验，也必须解析当前有效身份，禁止停用或删除账号继续读取全量实例。
             identityResolver.resolveCurrentIdentity();
             HistoricProcessInstanceQuery query = buildManagedQuery(filter);
+            Set<String> categoryDeploymentIds = resolveCategoryDeploymentIds(
+                    filter == null ? null : filter.category());
+            if (categoryDeploymentIds != null && categoryDeploymentIds.isEmpty())
+            {
+                return new PageResult<>(List.of(), 0);
+            }
+            if (categoryDeploymentIds != null)
+            {
+                // 管理员列表与普通工作台使用同一正式部署分类口径。
+                query.deploymentIdIn(new ArrayList<>(categoryDeploymentIds));
+            }
             long total = checkedCount(query.count());
             if (total == 0 || page.offset() >= total)
             {
@@ -259,12 +283,10 @@ public class WorkflowProcessQueryService
             }
             List<HistoricProcessInstance> instances = checkedRows(
                     query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            Map<String, Boolean> runtimeSuspensionStates =
-                    loadRuntimeSuspensionStates(instances);
+            InstancePageFacts facts = loadInstancePageFacts(instances);
             EnrichmentCache cache = new EnrichmentCache();
             List<WorkflowManagedProcessView> rows = instances.stream()
-                    .map(instance -> toManagedView(instance, cache,
-                            runtimeSuspensionStates.get(instance.getId())))
+                    .map(instance -> toManagedView(instance, cache, facts))
                     .toList();
             return new PageResult<>(rows, total);
         });
@@ -674,8 +696,9 @@ public class WorkflowProcessQueryService
             validateRange(filter.startedAfter(), filter.startedBefore(), "流程开始时间范围不合法");
             String processKey = optionalText(filter.processKey(), "流程标识过长");
             String processName = optionalText(filter.processName(), "流程名称过长");
-            String category = optionalText(filter.category(), "流程分类过长");
             String businessKey = optionalText(filter.businessKey(), "业务主键过长");
+            // 分类部署解析在查询构造后执行，但非法请求的其余参数必须先完成校验。
+            optionalText(filter.category(), "流程分类过长");
             if (processKey != null)
             {
                 query.processDefinitionKey(processKey);
@@ -683,10 +706,6 @@ public class WorkflowProcessQueryService
             if (processName != null)
             {
                 query.processDefinitionNameLike("%" + processName + "%");
-            }
-            if (category != null)
-            {
-                query.processDefinitionCategory(category);
             }
             if (businessKey != null)
             {
@@ -720,9 +739,10 @@ public class WorkflowProcessQueryService
             String instanceId = optionalText(filter.processInstanceId(), "流程实例主键过长");
             String processKey = optionalText(filter.processKey(), "流程标识过长");
             String processName = optionalText(filter.processName(), "流程名称过长");
-            String category = optionalText(filter.category(), "流程分类过长");
             String businessKey = optionalText(filter.businessKey(), "业务主键过长");
             String startUserId = normalizeOptionalUserId(filter.startUserId());
+            // 分类部署解析在查询构造后执行，但管理员的其余条件必须先完整校验。
+            optionalText(filter.category(), "流程分类过长");
             if (instanceId != null)
             {
                 query.processInstanceId(instanceId);
@@ -734,10 +754,6 @@ public class WorkflowProcessQueryService
             if (processName != null)
             {
                 query.processDefinitionNameLike("%" + processName + "%");
-            }
-            if (category != null)
-            {
-                query.processDefinitionCategory(category);
             }
             if (businessKey != null)
             {
@@ -988,20 +1004,22 @@ public class WorkflowProcessQueryService
      * 将当前用户发起的历史实例转换为不可变工作台视图。
      *
      * @param instance HistoricProcessInstance，startedBy 已固定当前用户的历史实例
-     * @param runtimeSuspended Boolean，运行时实例是否挂起；实例已结束时为空
+     * @param facts InstancePageFacts，当前页一次性取得的任务、分类和挂起状态
      * @return WorkflowOwnedProcessView，含活动任务名称和稳定流程状态的视图
      */
     private WorkflowOwnedProcessView toOwnedView(HistoricProcessInstance instance,
-            Boolean runtimeSuspended)
+            InstancePageFacts facts)
     {
         if (instance == null || !StringUtils.hasText(instance.getId()))
         {
             throw dataError("历史流程实例数据异常");
         }
-        List<String> taskNames = loadRuntimeTaskNames(instance.getId());
+        String category = facts.deploymentCategories().get(instance.getDeploymentId());
+        List<String> taskNames = facts.runtimeTaskNames().getOrDefault(instance.getId(), List.of());
+        Boolean runtimeSuspended = facts.runtimeSuspensionStates().get(instance.getId());
         return new WorkflowOwnedProcessView(instance.getId(), instance.getProcessDefinitionId(),
                 instance.getProcessDefinitionKey(), instance.getProcessDefinitionName(),
-                safeVersion(instance.getProcessDefinitionVersion()), instance.getProcessDefinitionCategory(),
+                safeVersion(instance.getProcessDefinitionVersion()), category,
                 instance.getDeploymentId(), instance.getBusinessKey(), instance.getStartUserId(),
                 toInstant(instance.getStartTime()), toInstant(instance.getEndTime()),
                 instance.getDurationInMillis(),
@@ -1013,21 +1031,23 @@ public class WorkflowProcessQueryService
      *
      * @param instance HistoricProcessInstance，管理员查询返回的历史实例
      * @param cache EnrichmentCache，当前页发起人显示名称缓存
-     * @param runtimeSuspended Boolean，运行时实例是否挂起；实例已结束时为空
+     * @param facts InstancePageFacts，当前页一次性取得的任务、分类和挂起状态
      * @return WorkflowManagedProcessView，含发起人、活动节点和稳定状态的运维视图
      */
     private WorkflowManagedProcessView toManagedView(HistoricProcessInstance instance,
-            EnrichmentCache cache, Boolean runtimeSuspended)
+            EnrichmentCache cache, InstancePageFacts facts)
     {
         if (instance == null || !StringUtils.hasText(instance.getId()))
         {
             throw dataError("历史流程实例数据异常");
         }
-        List<String> taskNames = loadRuntimeTaskNames(instance.getId());
+        String category = facts.deploymentCategories().get(instance.getDeploymentId());
+        List<String> taskNames = facts.runtimeTaskNames().getOrDefault(instance.getId(), List.of());
+        Boolean runtimeSuspended = facts.runtimeSuspensionStates().get(instance.getId());
         String startUserName = resolveUserName(instance.getStartUserId(), cache);
         return new WorkflowManagedProcessView(instance.getId(), instance.getProcessDefinitionId(),
                 instance.getProcessDefinitionKey(), instance.getProcessDefinitionName(),
-                safeVersion(instance.getProcessDefinitionVersion()), instance.getProcessDefinitionCategory(),
+                safeVersion(instance.getProcessDefinitionVersion()), category,
                 instance.getDeploymentId(), instance.getBusinessKey(), instance.getStartUserId(),
                 startUserName, toInstant(instance.getStartTime()), toInstant(instance.getEndTime()),
                 instance.getDurationInMillis(),
@@ -1035,30 +1055,130 @@ public class WorkflowProcessQueryService
     }
 
     /**
-     * 查询单个流程实例的全部运行时任务名称并执行数量和空对象门禁。
-     * 挂起任务仍是未结束的当前环节，不能使用 active 过滤后错误显示为空。
+     * 一次性装载当前实例页转换视图所需的全部引擎事实。
      *
-     * @param processInstanceId String，已经从历史实例读取的真实流程实例主键
-     * @return List&lt;String&gt;，按创建时间和任务主键排序的不可变当前任务名称
+     * @param instances List&lt;HistoricProcessInstance&gt;，当前页历史实例
+     * @return InstancePageFacts，批量任务名称、正式部署分类和运行时挂起状态
      */
-    private List<String> loadRuntimeTaskNames(String processInstanceId)
+    private InstancePageFacts loadInstancePageFacts(List<HistoricProcessInstance> instances)
     {
+        return new InstancePageFacts(loadRuntimeTaskNamesByInstance(instances),
+                loadDeploymentCategories(instances), loadRuntimeSuspensionStates(instances));
+    }
+
+    /**
+     * 使用一个有界 TaskQuery 批量读取当前页全部实例的未结束任务名称。
+     * 查询不得添加 active，挂起任务仍是需要展示的当前环节。
+     *
+     * @param instances List&lt;HistoricProcessInstance&gt;，当前页已完成分页门禁的历史实例
+     * @return Map&lt;String, List&lt;String&gt;&gt;，实例 ID 到稳定排序任务名称的不可变映射
+     */
+    private Map<String, List<String>> loadRuntimeTaskNamesByInstance(
+            List<HistoricProcessInstance> instances)
+    {
+        LinkedHashSet<String> instanceIds = new LinkedHashSet<>();
+        for (HistoricProcessInstance instance : instances)
+        {
+            if (instance == null || !StringUtils.hasText(instance.getId())
+                    || !instanceIds.add(instance.getId()))
+            {
+                throw dataError("历史流程实例数据异常");
+            }
+        }
+        if (instanceIds.isEmpty())
+        {
+            return Map.of();
+        }
+
+        // pageTaskLimit 多取一条，用一次有界查询识别当前页任务总量越界。
+        int pageTaskLimit = instanceIds.size() * MAX_RUNTIME_TASKS_PER_INSTANCE + 1;
         TaskQuery runtimeTaskQuery = taskService.createTaskQuery()
-                .processInstanceId(processInstanceId)
+                .processInstanceIdIn(new ArrayList<>(instanceIds))
                 .orderByTaskCreateTime().asc()
                 .orderByTaskId().asc();
-        long runtimeTaskCount = checkedCount(runtimeTaskQuery.count());
-        if (runtimeTaskCount > MAX_PAGE_SIZE)
+        List<Task> tasks = checkedRows(runtimeTaskQuery.listPage(0, pageTaskLimit), pageTaskLimit);
+        if (tasks.size() == pageTaskLimit)
         {
-            throw dataError("单个流程实例的当前任务数量超过安全上限");
+            throw dataError("当前页流程实例的当前任务总数超过安全上限");
         }
-        List<Task> checkedTasks = runtimeTaskCount == 0 ? List.of()
-                : checkedRows(runtimeTaskQuery.listPage(0, (int) runtimeTaskCount),
-                        (int) runtimeTaskCount);
-        return checkedTasks.stream()
-                .map(Task::getName)
-                .filter(StringUtils::hasText)
-                .toList();
+
+        Map<String, List<String>> mutableNames = new LinkedHashMap<>();
+        instanceIds.forEach(instanceId -> mutableNames.put(instanceId, new ArrayList<>()));
+        Map<String, Integer> taskCounts = new HashMap<>();
+        Set<String> taskIds = new LinkedHashSet<>();
+        for (Task task : tasks)
+        {
+            if (task == null || !StringUtils.hasText(task.getId())
+                    || !taskIds.add(task.getId())
+                    || !instanceIds.contains(task.getProcessInstanceId()))
+            {
+                throw dataError("当前任务数据异常");
+            }
+            int taskCount = taskCounts.merge(task.getProcessInstanceId(), 1, Integer::sum);
+            if (taskCount > MAX_RUNTIME_TASKS_PER_INSTANCE)
+            {
+                throw dataError("单个流程实例的当前任务数量超过安全上限");
+            }
+            if (StringUtils.hasText(task.getName()))
+            {
+                // Flowable 已按创建时间、任务主键升序返回，分组追加必须保持该顺序。
+                mutableNames.get(task.getProcessInstanceId()).add(task.getName());
+            }
+        }
+
+        Map<String, List<String>> names = new LinkedHashMap<>();
+        mutableNames.forEach((instanceId, taskNames) ->
+                names.put(instanceId, List.copyOf(taskNames)));
+        return Map.copyOf(names);
+    }
+
+    /**
+     * 批量读取当前页实例所属部署，并只保留可作为业务分类的 Deployment.category。
+     * 存量部署缺失、分类为空或绝对 URI 时返回空分类，不回退历史定义分类。
+     *
+     * @param instances List&lt;HistoricProcessInstance&gt;，当前页历史实例
+     * @return Map&lt;String, String&gt;，部署 ID 到规范业务分类的不可变映射
+     */
+    private Map<String, String> loadDeploymentCategories(
+            List<HistoricProcessInstance> instances)
+    {
+        LinkedHashSet<String> deploymentIds = new LinkedHashSet<>();
+        for (HistoricProcessInstance instance : instances)
+        {
+            if (instance != null && StringUtils.hasText(instance.getDeploymentId()))
+            {
+                deploymentIds.add(instance.getDeploymentId());
+            }
+        }
+        if (deploymentIds.isEmpty())
+        {
+            return Map.of();
+        }
+
+        List<Deployment> deployments = repositoryService.createDeploymentQuery()
+                .deploymentIds(new ArrayList<>(deploymentIds))
+                .list();
+        if (deployments == null || deployments.size() > deploymentIds.size())
+        {
+            throw dataError("流程部署批量查询结果异常");
+        }
+        Map<String, String> categories = new HashMap<>();
+        Set<String> returnedDeploymentIds = new LinkedHashSet<>();
+        for (Deployment deployment : deployments)
+        {
+            if (deployment == null || !StringUtils.hasText(deployment.getId())
+                    || !deploymentIds.contains(deployment.getId())
+                    || !returnedDeploymentIds.add(deployment.getId()))
+            {
+                throw dataError("流程部署批量查询结果异常");
+            }
+            String category = resolveDeploymentCategory(deployment.getCategory());
+            if (category != null)
+            {
+                categories.put(deployment.getId(), category);
+            }
+        }
+        return Map.copyOf(categories);
     }
 
     /**
@@ -1718,6 +1838,20 @@ public class WorkflowProcessQueryService
      * @param pageSize int，每页最大记录数
      */
     private record PageWindow(int offset, int pageSize)
+    {
+    }
+
+    /**
+     * 当前实例页转换视图所需的批量事实，禁止视图转换阶段再次访问引擎查询。
+     *
+     * @param runtimeTaskNames Map&lt;String, List&lt;String&gt;&gt;，实例 ID 到当前任务名称
+     * @param deploymentCategories Map&lt;String, String&gt;，部署 ID 到正式业务分类
+     * @param runtimeSuspensionStates Map&lt;String, Boolean&gt;，运行实例 ID 到挂起状态
+     */
+    private record InstancePageFacts(
+            Map<String, List<String>> runtimeTaskNames,
+            Map<String, String> deploymentCategories,
+            Map<String, Boolean> runtimeSuspensionStates)
     {
     }
 
