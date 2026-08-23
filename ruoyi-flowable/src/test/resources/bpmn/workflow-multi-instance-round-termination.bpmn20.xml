@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:flowable="http://flowable.org/bpmn"
+  targetNamespace="http://ruoyi.vip/workflow/multi-instance-round/termination">
+
+  <process id="roundTerminationRoot" name="多实例轮次终止根流程" isExecutable="true">
+    <startEvent id="rootStart"/>
+    <parallelGateway id="rootFork"/>
+    <userTask id="rootReview" name="根流程会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <callActivity id="callChild" calledElement="roundTerminationChild"/>
+    <parallelGateway id="rootJoin"/>
+    <endEvent id="rootEnd"/>
+    <sequenceFlow sourceRef="rootStart" targetRef="rootFork"/>
+    <sequenceFlow sourceRef="rootFork" targetRef="rootReview"/>
+    <sequenceFlow sourceRef="rootFork" targetRef="callChild"/>
+    <sequenceFlow sourceRef="rootReview" targetRef="rootJoin"/>
+    <sequenceFlow sourceRef="callChild" targetRef="rootJoin"/>
+    <sequenceFlow sourceRef="rootJoin" targetRef="rootEnd"/>
+  </process>
+
+  <process id="roundTerminationChild" name="多实例轮次终止子流程" isExecutable="true">
+    <startEvent id="childStart"/>
+    <userTask id="childReview" name="子流程会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="childEnd"/>
+    <sequenceFlow sourceRef="childStart" targetRef="childReview"/>
+    <sequenceFlow sourceRef="childReview" targetRef="childEnd"/>
+  </process>
+</definitions>

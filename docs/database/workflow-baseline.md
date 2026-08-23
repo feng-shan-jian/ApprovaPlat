@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-当前仓库定义开发期最终数据库结构，只支持从空库直接安装 27 张 `wf_*` 表。仓库不交付旧结构升级脚本、回填、双写或影子表；开发库结构变化时直接删除并按本基线重建。
+当前仓库定义开发期最终数据库结构，只支持从空库直接安装 28 张 `wf_*` 表。仓库不交付旧结构升级脚本、回填、双写或影子表；开发库结构变化时直接删除并按本基线重建。
 
 ## 空库初始化顺序
 
@@ -34,14 +34,15 @@
 | 若依 | 20 |
 | Quartz | 11 |
 | Flowable Common/Process/History/DMN | 36 |
-| 工作流 `wf_*` | 27 |
-| 合计 | 94 |
+| 工作流 `wf_*` | 28 |
+| 合计 | 95 |
 
-27 张业务表：
+28 张业务表：
 
 - `wf_category`
 - `wf_form`
 - `wf_controlled_loop_execution`
+- `wf_multi_instance_round`
 - `wf_bpmn_extension`
 - `wf_bpmn_extension_version`
 - `wf_business_calendar`
@@ -82,6 +83,7 @@
 - `ACT_RE_MODEL(KEY_, VERSION_, TENANT_ID_)` 保留唯一约束，模型并发由 Flowable revision 和自然版本唯一键保护。
 - `wf_integration_credential` 只保存固定限额、Token 摘要、scope、revision、轮换、吊销和最近使用时间，不保存分钟窗口计数。
 - `wf_attachment_quota_guard.owner_user_id` 只允许正数用户 ID；同用户配额计算使用行锁，不存在用户 0 全局锁行。
+- `wf_multi_instance_round` 仅保存有序成员快照、轮次状态和审计关联；Flowable 变量仍是实时执行源。同实例同节点最多一条 `ACTIVE/RETURNED` 轮次，不对 `ACT_*` 表增加字段或外键。
 - `wf_attachment.cleanup_claim_token/cleanup_lease_until` 必须同时为空或同时有效，领取中的附件必须尚未物理删除且处于 `EXPIRED/DELETED`。
 - `wf_notification_inbox` 使用 `notification_key + recipient_user_id` 唯一约束，并保存 `source_type/source_id`；站内信在业务事务内直接写入，不依赖 Outbox 关联。
 - `wf_notification_outbox` 只允许 `EMAIL`、`SMS`，仅承载外部投递副作用；普通策略仍可在 `wf_notification_policy.channels` 选择 `INBOX`。

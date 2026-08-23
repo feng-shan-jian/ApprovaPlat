@@ -34,6 +34,7 @@ import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceUserRow;
+import com.ruoyi.flowable.domain.WfMultiInstanceRound;
 import com.ruoyi.flowable.domain.dto.WorkflowMultiInstanceAdjustmentAction;
 import com.ruoyi.flowable.domain.dto.WorkflowMultiInstanceAdjustmentRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceMemberView;
@@ -95,6 +96,8 @@ public class WorkflowMultiInstanceService
 
     private final HistoryService historyService;
 
+    private final WorkflowMultiInstanceRoundService roundService;
+
     /**
      * 创建动态多实例领域服务。
      *
@@ -106,6 +109,7 @@ public class WorkflowMultiInstanceService
      * @param runtimeService RuntimeService，execution、变量和动态多实例公共写服务
      * @param taskService TaskService，活动任务和 Flowable comment 公共服务
      * @param historyService HistoryService，区分过期任务和不存在对象的历史查询服务
+     * @param roundService WorkflowMultiInstanceRoundService，正式轮次对账和业务表 CAS 服务
      * @return 无返回值，构造后由 Spring 管理该领域服务
      */
     public WorkflowMultiInstanceService(WorkflowEngineOperations engineOperations,
@@ -113,7 +117,8 @@ public class WorkflowMultiInstanceService
             WorkflowUserSelectionValidator userSelectionValidator,
             WorkflowMultiInstanceUserMapper userMapper,
             RepositoryService repositoryService, RuntimeService runtimeService,
-            TaskService taskService, HistoryService historyService)
+            TaskService taskService, HistoryService historyService,
+            WorkflowMultiInstanceRoundService roundService)
     {
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
@@ -123,6 +128,7 @@ public class WorkflowMultiInstanceService
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.historyService = historyService;
+        this.roundService = roundService;
     }
 
     /**
@@ -250,7 +256,152 @@ public class WorkflowMultiInstanceService
         int nextRevision = requireNextRevision(context.revision());
         // COMPLETE 与 ADD/REMOVE 共用同一 revision-first 锁顺序，禁止同版本动作双提交。
         advanceRevision(context, nextRevision);
-        return new CompletionRevision(context.activityId(), context.revision(), nextRevision);
+        // 完成动作的成员集合不变，但业务轮次也必须在引擎任务动作前争抢同一旧 revision。
+        roundService.compareAndSetActiveSnapshot(context.round(), context.revision(),
+                nextRevision, context.memberIds());
+        // complete 监听器只接受正式预留链写入的 task-local 标记，直接调用引擎完成必须失败关闭。
+        taskService.setVariableLocal(task.getId(),
+                WorkflowMultiInstanceVariables.COMPLETION_REVISION_VARIABLE,
+                nextRevision);
+        boolean completesGroup = context.mode() == WorkflowMultiInstanceMode.ANY
+                || (context.counts().active() == 1
+                    && context.counts().completed() + 1 == context.counts().instances());
+        return new CompletionRevision(context.activityId(),
+                context.rootExecution().getId(), context.revision(), nextRevision,
+                context.counts().instances(), context.counts().active(),
+                context.counts().completed(), completesGroup);
+    }
+
+    /**
+     * 在 Flowable 完成命令返回后复核旧根、实时计数、活动任务、变量和正式轮次同步结果。
+     *
+     * @param processInstanceId String，完成任务所属流程实例主键
+     * @param completion CompletionRevision，完成前冻结的根、计数和 revision 计划
+     * @return void，普通任务不处理；动态任务任一写后事实漂移时回滚当前完成事务
+     */
+    void verifyCompletionResult(String processInstanceId, CompletionRevision completion)
+    {
+        if (completion == null)
+        {
+            throw dataError();
+        }
+        if (!completion.applied())
+        {
+            return;
+        }
+        if (!StringUtils.hasText(processInstanceId))
+        {
+            throw dataError();
+        }
+        WfMultiInstanceRound completedRound = roundService.requireCompletionPersisted(
+                completion.rootExecutionId(),
+                completion.afterRevision(), completion.groupCompleted());
+        Execution root = runtimeService.createExecutionQuery()
+                .executionId(completion.rootExecutionId()).singleResult();
+        ProcessInstance runtimeInstance = runtimeService.createProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult();
+        if (runtimeInstance == null)
+        {
+            // 节点直达 EndEvent 时流程变量随运行实例正常删除，只能依靠旧根、活动任务、历史和轮次终态闭合。
+            if (!completion.groupCompleted() || root != null
+                    || taskService.createTaskQuery().processInstanceId(processInstanceId)
+                        .taskDefinitionKey(completion.activityId()).active().count() != 0
+                    || historyService.createHistoricProcessInstanceQuery()
+                        .processInstanceId(processInstanceId).finished().singleResult() == null)
+            {
+                throw dataError();
+            }
+            return;
+        }
+        if (runtimeInstance.isSuspended())
+        {
+            throw dataError();
+        }
+        if (loadRevision(processInstanceId, completion.activityId())
+                != completion.afterRevision())
+        {
+            throw dataError();
+        }
+        List<String> members = loadMemberSnapshot(processInstanceId,
+                completion.activityId());
+        WorkflowMultiInstanceMode mode = loadMode(processInstanceId,
+                completion.activityId());
+        try
+        {
+            if (!WfMultiInstanceRound.decodeMembers(completedRound.getMembersJson())
+                    .equals(members)
+                    || !Objects.equals(completedRound.getMode(), mode.name()))
+            {
+                throw dataError();
+            }
+        }
+        catch (IllegalArgumentException exception)
+        {
+            ServiceException failure = dataError();
+            failure.initCause(exception);
+            throw failure;
+        }
+        if (completion.groupCompleted())
+        {
+            // ALL 最后一人或 ANY 任一人完成后旧根必须消失；同节点即时重入也只能生成新根。
+            if (root != null)
+            {
+                throw dataError();
+            }
+            return;
+        }
+        if (root == null || root.isEnded() || root.isSuspended()
+                || !Objects.equals(processInstanceId, root.getProcessInstanceId())
+                || !Objects.equals(completion.activityId(), root.getActivityId()))
+        {
+            throw dataError();
+        }
+        EngineCounts counts = loadEngineCounts(root.getId());
+        if (counts.instances() != completion.instancesBefore()
+                || counts.active() != completion.activeBefore() - 1
+                || counts.completed() != completion.completedBefore() + 1)
+        {
+            throw dataError();
+        }
+
+        List<Execution> children = runtimeService.createExecutionQuery()
+                .parentId(root.getId()).list();
+        if (children == null || children.size() != counts.instances())
+        {
+            throw dataError();
+        }
+        Map<String, Execution> childrenById = new LinkedHashMap<>();
+        for (Execution child : children)
+        {
+            if (child == null || child.isEnded() || child.isSuspended()
+                    || !Objects.equals(root.getId(), child.getParentId())
+                    || !Objects.equals(processInstanceId, child.getProcessInstanceId())
+                    || !Objects.equals(completion.activityId(), child.getActivityId())
+                    || !StringUtils.hasText(child.getId())
+                    || childrenById.putIfAbsent(child.getId(), child) != null)
+            {
+                throw dataError();
+            }
+        }
+        List<Task> remainingTasks = taskService.createTaskQuery()
+                .processInstanceId(processInstanceId)
+                .taskDefinitionKey(completion.activityId()).active().list();
+        if (remainingTasks == null || remainingTasks.size() != counts.active())
+        {
+            throw dataError();
+        }
+        for (Task remainingTask : remainingTasks)
+        {
+            if (remainingTask == null || !StringUtils.hasText(remainingTask.getExecutionId())
+                    || !childrenById.containsKey(remainingTask.getExecutionId()))
+            {
+                throw dataError();
+            }
+        }
+        if (members.size() != counts.instances())
+        {
+            throw dataError();
+        }
     }
 
     /**
@@ -326,17 +477,21 @@ public class WorkflowMultiInstanceService
                 throw invalidArgument();
             }
         }
+        List<String> nextMembers = new ArrayList<>(context.memberIds());
+        nextMembers.addAll(targetUserIds);
 
         // 三类动作必须先争抢同一 revision 变量，再改变 execution，避免反向锁序和双提交。
         advanceRevision(context, nextRevision);
+        // 业务轮次固定在 Flowable revision 之后争抢同一旧版本，输掉 CAS 时禁止创建 execution。
+        roundService.compareAndSetActiveSnapshot(context.round(), context.revision(),
+                nextRevision, nextMembers);
+        // create 监听会立即核对新任务，业务 CAS 成功后必须在公共加签命令前同步实时成员变量。
+        persistMemberState(context, nextMembers);
         // Flowable 公共 API 负责真实创建 execution 和 task，禁止直接改写 nrOf* 计数变量。
         for (String targetUserId : targetUserIds)
         {
             addMultiInstanceExecution(context, targetUserId);
         }
-        List<String> nextMembers = new ArrayList<>(context.memberIds());
-        nextMembers.addAll(targetUserIds);
-        persistMemberState(context, nextMembers);
         addAuditComment(context.currentTask(), "MULTI_INSTANCE_ADD", actor.userId(),
                 context.activityId(), context.revision(), nextRevision, input.comment(),
                 targetUserIds, null, null);
@@ -394,9 +549,12 @@ public class WorkflowMultiInstanceService
         }
         // 与加签、完成使用相同的 revision-first 锁顺序，输掉 CAS 的事务不得先删除 execution。
         advanceRevision(context, nextRevision);
+        roundService.compareAndSetActiveSnapshot(context.round(), context.revision(),
+                nextRevision, nextMembers);
+        // 业务 CAS 成功后同步实时成员变量，再执行真实删除；任一步失败仍由同一事务整体回滚。
+        persistMemberState(context, nextMembers);
         // false 保留真实历史语义，减签不得伪装成完成或级联物理删除已完成成员。
         deleteMultiInstanceExecution(targetTask);
-        persistMemberState(context, nextMembers);
         addAuditComment(context.currentTask(), "MULTI_INSTANCE_REMOVE", actor.userId(),
                 context.activityId(), context.revision(), nextRevision, input.comment(),
                 List.of(), targetTask.getId(), targetTask.getAssignee());
@@ -505,8 +663,16 @@ public class WorkflowMultiInstanceService
             throw dataError();
         }
         verifyEngineState(memberIds, activeTasks, counts);
+        if (mode == WorkflowMultiInstanceMode.ANY && counts.completed() != 0)
+        {
+            // ANY 在首个完成后立即离开当前根，活动根暴露已完成 child 属于引擎状态漂移。
+            throw dataError();
+        }
+        WfMultiInstanceRound round = roundService.requireActiveRound(currentTask,
+                rootExecution.getId(), mode, memberIds, revision);
         return new MultiInstanceContext(currentTask, currentTask.getProcessInstanceId(),
-                activityId, rootExecution, activeTasks, memberIds, revision, mode, counts);
+                activityId, rootExecution, activeTasks, memberIds, revision, mode,
+                round, counts);
     }
 
     /**
@@ -1305,28 +1471,46 @@ public class WorkflowMultiInstanceService
      * 完成任务占用的动态多实例 revision 区间；普通任务返回空计划。
      *
      * @param activityId String，动态多实例活动 ID；普通任务为空
+     * @param rootExecutionId String，完成前冻结的多实例根主键；普通任务为空
      * @param beforeRevision Integer，完成前 revision；普通任务为空
      * @param afterRevision Integer，完成占用后的 revision；普通任务为空
+     * @param instancesBefore Integer，完成前总实例数；普通任务为空
+     * @param activeBefore Integer，完成前活动实例数；普通任务为空
+     * @param completedBefore Integer，完成前已完成实例数；普通任务为空
+     * @param groupCompleted boolean，本次完成是否按固定 ALL/ANY 规则结束整组
      */
-    record CompletionRevision(String activityId, Integer beforeRevision,
-            Integer afterRevision)
+    record CompletionRevision(String activityId, String rootExecutionId,
+            Integer beforeRevision, Integer afterRevision, Integer instancesBefore,
+            Integer activeBefore, Integer completedBefore, boolean groupCompleted)
     {
         /**
          * 校验普通任务空计划或动态任务完整 revision 区间，禁止部分字段进入审计链。
          *
          * @param activityId String，动态多实例活动 ID；普通任务为空
+         * @param rootExecutionId String，多实例根主键；普通任务为空
          * @param beforeRevision Integer，完成前 revision；普通任务为空
          * @param afterRevision Integer，完成占用后的 revision；普通任务为空
+         * @param instancesBefore Integer，完成前总实例数；普通任务为空
+         * @param activeBefore Integer，完成前活动实例数；普通任务为空
+         * @param completedBefore Integer，完成前已完成实例数；普通任务为空
+         * @param groupCompleted boolean，本次完成是否结束整组
          * @return 无返回值，字段不完整或 revision 非严格递增一时拒绝构造
          */
         CompletionRevision
         {
-            boolean empty = activityId == null && beforeRevision == null
-                    && afterRevision == null;
+            boolean empty = activityId == null && rootExecutionId == null
+                    && beforeRevision == null && afterRevision == null
+                    && instancesBefore == null && activeBefore == null
+                    && completedBefore == null && !groupCompleted;
             boolean complete = StringUtils.hasText(activityId)
+                    && StringUtils.hasText(rootExecutionId)
                     && beforeRevision != null && beforeRevision >= 0
                     && beforeRevision < Integer.MAX_VALUE
-                    && afterRevision != null && afterRevision == beforeRevision + 1;
+                    && afterRevision != null && afterRevision == beforeRevision + 1
+                    && instancesBefore != null && instancesBefore >= 1
+                    && activeBefore != null && activeBefore >= 1
+                    && completedBefore != null && completedBefore >= 0
+                    && activeBefore + completedBefore == instancesBefore;
             if (!empty && !complete)
             {
                 throw new IllegalArgumentException("动态多实例完成版本区间不合法");
@@ -1340,7 +1524,8 @@ public class WorkflowMultiInstanceService
          */
         static CompletionRevision none()
         {
-            return new CompletionRevision(null, null, null);
+            return new CompletionRevision(null, null, null, null,
+                    null, null, null, false);
         }
 
         /**
@@ -1350,7 +1535,10 @@ public class WorkflowMultiInstanceService
          */
         boolean applied()
         {
-            return activityId != null && beforeRevision != null && afterRevision != null;
+            return activityId != null && rootExecutionId != null
+                    && beforeRevision != null && afterRevision != null
+                    && instancesBefore != null && activeBefore != null
+                    && completedBefore != null;
         }
     }
 
@@ -1365,12 +1553,13 @@ public class WorkflowMultiInstanceService
      * @param memberIds List&lt;String&gt;，服务端正式成员快照
      * @param revision int，服务端调整版本
      * @param mode WorkflowMultiInstanceMode，ALL 或 ANY
+     * @param round WfMultiInstanceRound，与实时引擎状态完整对账的当前 ACTIVE 轮次
      * @param counts EngineCounts，Flowable 根计数快照
      */
     private record MultiInstanceContext(Task currentTask, String processInstanceId,
             String activityId, Execution rootExecution, List<Task> activeTasks,
             List<String> memberIds, int revision, WorkflowMultiInstanceMode mode,
-            EngineCounts counts)
+            WfMultiInstanceRound round, EngineCounts counts)
     {
     }
 

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:flowable="http://flowable.org/bpmn" targetNamespace="termination-it">
+  <process id="terminationRoot" name="terminationRoot" isExecutable="true">
+    <startEvent id="start"/><parallelGateway id="fork"/>
+    <userTask id="rootTask" name="Root task"/>
+    <callActivity id="callChild" calledElement="terminationChild"/>
+    <parallelGateway id="join"/><endEvent id="end"/>
+    <sequenceFlow sourceRef="start" targetRef="fork"/>
+    <sequenceFlow sourceRef="fork" targetRef="rootTask"/>
+    <sequenceFlow sourceRef="fork" targetRef="callChild"/>
+    <sequenceFlow sourceRef="rootTask" targetRef="join"/>
+    <sequenceFlow sourceRef="callChild" targetRef="join"/>
+    <sequenceFlow sourceRef="join" targetRef="end"/>
+  </process>
+  <process id="terminationChild" name="terminationChild" isExecutable="true">
+    <startEvent id="childStart"/><userTask id="childTask" name="Child task"/>
+    <endEvent id="childEnd"/>
+    <sequenceFlow sourceRef="childStart" targetRef="childTask"/>
+    <sequenceFlow sourceRef="childTask" targetRef="childEnd"/>
+  </process>
+</definitions>

@@ -443,6 +443,9 @@ public class WorkflowTaskLifecycleService
                     // Flowable 8 只有显式传入 userId 的重载会写 completedBy；该字段是已办查询、对象授权和审计的正式依据。
                     taskService.complete(taskId, actor.userId(), projectedVariables,
                             completionPreparation.localScope());
+                    // 完成监听写入轮次后立即对账旧根、计数、活动任务和 revision，禁止部分提交继续流转。
+                    multiInstanceService.verifyCompletionResult(
+                            task.getProcessInstanceId(), completionRevision);
                     // 完成产生真实后继任务后再应用动态身份，并在写后复核；任一步失败都会回滚整个完成事务。
                     nextTaskAssignmentService.apply(assignmentPlan);
                     taskCopyService.persist(copyPlan);

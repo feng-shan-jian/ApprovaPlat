@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:flowable="http://flowable.org/bpmn"
+  targetNamespace="http://ruoyi.vip/workflow/multi-instance-round">
+
+  <process id="roundDynamicAll" name="办理时成员会签轮次" isExecutable="true">
+    <startEvent id="dynamicStart"/>
+    <userTask id="dynamicReview" name="办理时成员会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="dynamicEnd"/>
+    <sequenceFlow sourceRef="dynamicStart" targetRef="dynamicReview"/>
+    <sequenceFlow sourceRef="dynamicReview" targetRef="dynamicEnd"/>
+  </process>
+
+  <process id="roundStartAll" name="发起时成员会签轮次" isExecutable="true">
+    <startEvent id="startSourceStart"/>
+    <userTask id="startReview" name="发起时成员会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getStartUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="startSourceEnd"/>
+    <sequenceFlow sourceRef="startSourceStart" targetRef="startReview"/>
+    <sequenceFlow sourceRef="startReview" targetRef="startSourceEnd"/>
+  </process>
+
+  <process id="roundFixedAll" name="固定成员会签轮次" isExecutable="true">
+    <startEvent id="fixedStart"/>
+    <userTask id="fixedReview" name="固定成员会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="fixedEnd"/>
+    <sequenceFlow sourceRef="fixedStart" targetRef="fixedReview"/>
+    <sequenceFlow sourceRef="fixedReview" targetRef="fixedEnd"/>
+  </process>
+
+  <process id="roundConfiguredAll" name="指定成员会签轮次" isExecutable="true">
+    <startEvent id="configuredStart"/>
+    <userTask id="configuredReview" name="指定成员会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.multiInstance.identityType" value="USER"/>
+          <flowable:property name="approva.multiInstance.identityIds" value="201,202"/>
+        </flowable:properties>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getConfiguredUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="configuredEnd"/>
+    <sequenceFlow sourceRef="configuredStart" targetRef="configuredReview"/>
+    <sequenceFlow sourceRef="configuredReview" targetRef="configuredEnd"/>
+  </process>
+
+  <process id="roundLifecycleAll" name="会签轮次调整与重入" isExecutable="true">
+    <startEvent id="lifecycleStart"/>
+    <userTask id="lifecycleReview" name="会签轮次" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <exclusiveGateway id="lifecycleGateway" default="lifecycleExit"/>
+    <endEvent id="lifecycleEnd"/>
+    <sequenceFlow sourceRef="lifecycleStart" targetRef="lifecycleReview"/>
+    <sequenceFlow sourceRef="lifecycleReview" targetRef="lifecycleGateway"/>
+    <sequenceFlow id="lifecycleRepeat" sourceRef="lifecycleGateway" targetRef="lifecycleReview">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${repeatRound == true}]]></conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="lifecycleExit" sourceRef="lifecycleGateway" targetRef="lifecycleEnd"/>
+  </process>
+
+  <process id="roundDynamicAny" name="办理时成员或签轮次" isExecutable="true">
+    <startEvent id="anyStart"/>
+    <userTask id="anyReview" name="办理时成员或签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances > 0}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="anyEnd"/>
+    <sequenceFlow sourceRef="anyStart" targetRef="anyReview"/>
+    <sequenceFlow sourceRef="anyReview" targetRef="anyEnd"/>
+  </process>
+</definitions>

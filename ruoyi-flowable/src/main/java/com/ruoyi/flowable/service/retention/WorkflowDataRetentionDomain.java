@@ -15,7 +15,8 @@ public enum WorkflowDataRetentionDomain
     BPMN_EVENT_AUDIT("bpmn_event_audit"),
     TASK_SLA_EXECUTION("task_sla_execution"),
     COPY("copy"),
-    CONTROLLED_LOOP_EXECUTION("controlled_loop_execution");
+    CONTROLLED_LOOP_EXECUTION("controlled_loop_execution"),
+    MULTI_INSTANCE_ROUND("multi_instance_round");
 
     /** 指标标签使用的稳定值，不包含主键等高基数数据。 */
     private final String metricTag;

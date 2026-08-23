@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper">
+    <resultMap id="RoundResult" type="com.ruoyi.flowable.domain.WfMultiInstanceRound">
+        <id property="roundId" column="round_id"/>
+        <result property="deployId" column="deploy_id"/>
+        <result property="processDefinitionId" column="process_definition_id"/>
+        <result property="processInstanceId" column="process_instance_id"/>
+        <result property="activityId" column="activity_id"/>
+        <result property="rootExecutionId" column="root_execution_id"/>
+        <result property="roundNo" column="round_no"/>
+        <result property="mode" column="mode"/>
+        <result property="membersJson" column="members_json"/>
+        <result property="revisionNo" column="revision_no"/>
+        <result property="roundStatus" column="round_status"/>
+        <result property="returnSourceTaskId" column="return_source_task_id"/>
+        <result property="returnActorUserId" column="return_actor_user_id"/>
+        <result property="applicantTaskId" column="applicant_task_id"/>
+        <result property="createTime" column="create_time"/>
+        <result property="returnTime" column="return_time"/>
+        <result property="reopenTime" column="reopen_time"/>
+        <result property="completeTime" column="complete_time"/>
+        <result property="terminateTime" column="terminate_time"/>
+    </resultMap>
+
+    <sql id="columns">
+        round_id, deploy_id, process_definition_id, process_instance_id, activity_id,
+        root_execution_id, round_no, mode, members_json, revision_no, round_status,
+        return_source_task_id, return_actor_user_id, applicant_task_id, create_time,
+        return_time, reopen_time, complete_time, terminate_time
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="roundId">
+        insert into wf_multi_instance_round
+        (deploy_id, process_definition_id, process_instance_id, activity_id,
+         root_execution_id, round_no, mode, members_json, revision_no, round_status,
+         return_source_task_id, return_actor_user_id, applicant_task_id, create_time,
+         return_time, reopen_time, complete_time, terminate_time)
+        values
+        (#{deployId}, #{processDefinitionId}, #{processInstanceId}, #{activityId},
+         #{rootExecutionId}, #{roundNo}, #{mode}, #{membersJson}, #{revisionNo},
+         #{roundStatus}, #{returnSourceTaskId}, #{returnActorUserId}, #{applicantTaskId},
+         current_timestamp(3),
+         case when #{roundStatus} in ('RETURNED', 'REOPENED')
+                   or (#{roundStatus}='TERMINATED'
+                       and #{returnSourceTaskId} is not null)
+              then current_timestamp(3) else null end,
+         case when #{roundStatus}='REOPENED'
+              then current_timestamp(3) else null end,
+         case when #{roundStatus}='COMPLETED'
+              then current_timestamp(3) else null end,
+         case when #{roundStatus}='TERMINATED'
+              then current_timestamp(3) else null end)
+    </insert>
+
+    <select id="selectByRootExecutionId" resultMap="RoundResult">
+        select <include refid="columns"/>
+        from wf_multi_instance_round
+        where root_execution_id=#{rootExecutionId}
+    </select>
+
+    <select id="selectOpenByProcessInstanceAndActivity" resultMap="RoundResult">
+        select <include refid="columns"/>
+        from wf_multi_instance_round
+        where process_instance_id=#{processInstanceId} and activity_id=#{activityId}
+          and round_status in ('ACTIVE', 'RETURNED')
+        order by round_no, round_id
+    </select>
+
+    <select id="selectActiveByProcessInstanceAndActivity" resultMap="RoundResult">
+        select <include refid="columns"/>
+        from wf_multi_instance_round
+        where process_instance_id=#{processInstanceId} and activity_id=#{activityId}
+          and round_status='ACTIVE'
+        order by round_no, round_id
+    </select>
+
+    <select id="selectMaxRoundNo" resultType="java.lang.Integer">
+        select max(round_no)
+        from wf_multi_instance_round
+        where process_instance_id=#{processInstanceId} and activity_id=#{activityId}
+    </select>
+
+    <update id="compareAndSetActiveSnapshot">
+        update wf_multi_instance_round
+        set members_json=#{membersJson}, revision_no=#{newRevision}
+        where round_id=#{roundId} and revision_no=#{expectedRevision}
+          and round_status='ACTIVE'
+    </update>
+
+    <update id="compareAndSetCompletedStatus">
+        update wf_multi_instance_round
+        set members_json=#{membersJson}, round_status='COMPLETED',
+            complete_time=greatest(current_timestamp(3), create_time)
+        where round_id=#{roundId} and revision_no=#{expectedRevision}
+          and round_status='ACTIVE'
+    </update>
+
+    <update id="compareAndSetTerminatedStatus">
+        update wf_multi_instance_round
+        set round_status='TERMINATED',
+            terminate_time=greatest(current_timestamp(3), create_time,
+                coalesce(return_time, create_time))
+        where round_id=#{roundId} and revision_no=#{expectedRevision}
+          and round_status=#{expectedStatus}
+          and round_status in ('ACTIVE', 'RETURNED')
+    </update>
+
+    <select id="selectOpenByProcessInstanceIds" resultMap="RoundResult">
+        select <include refid="columns"/>
+        from wf_multi_instance_round
+        where round_status in ('ACTIVE', 'RETURNED') and
+        <choose>
+            <when test="processInstanceIds != null and !processInstanceIds.isEmpty()">
+                process_instance_id in
+                <foreach collection="processInstanceIds" item="instanceId"
+                         open="(" separator="," close=")">#{instanceId}</foreach>
+            </when>
+            <otherwise>1=0</otherwise>
+        </choose>
+        order by round_id
+    </select>
+
+    <select id="selectOpenForUpdateByProcessInstanceIds" resultMap="RoundResult">
+        select <include refid="columns"/>
+        from wf_multi_instance_round
+        where round_status in ('ACTIVE', 'RETURNED') and
+        <choose>
+            <when test="processInstanceIds != null and !processInstanceIds.isEmpty()">
+                process_instance_id in
+                <foreach collection="processInstanceIds" item="instanceId"
+                         open="(" separator="," close=")">#{instanceId}</foreach>
+            </when>
+            <otherwise>1=0</otherwise>
+        </choose>
+        order by round_id
+        for update
+    </select>
+
+    <update id="terminateOpenByRoundIds">
+        update wf_multi_instance_round
+        set round_status='TERMINATED',
+            terminate_time=greatest(current_timestamp(3), create_time,
+                coalesce(return_time, create_time))
+        where round_status in ('ACTIVE', 'RETURNED') and
+        <choose>
+            <when test="roundIds != null and !roundIds.isEmpty()">
+                round_id in
+                <foreach collection="roundIds" item="roundId"
+                         open="(" separator="," close=")">#{roundId}</foreach>
+            </when>
+            <otherwise>1=0</otherwise>
+        </choose>
+    </update>
+
+    <select id="selectByRoundIds" resultMap="RoundResult">
+        select <include refid="columns"/>
+        from wf_multi_instance_round
+        where
+        <choose>
+            <when test="roundIds != null and !roundIds.isEmpty()">
+                round_id in
+                <foreach collection="roundIds" item="roundId"
+                         open="(" separator="," close=")">#{roundId}</foreach>
+            </when>
+            <otherwise>1=0</otherwise>
+        </choose>
+        order by round_id
+    </select>
+
+    <select id="countOpenByProcessInstanceIds" resultType="long">
+        select count(*) from wf_multi_instance_round
+        where round_status in ('ACTIVE', 'RETURNED') and
+        <choose>
+            <when test="processInstanceIds != null and !processInstanceIds.isEmpty()">
+                process_instance_id in
+                <foreach collection="processInstanceIds" item="instanceId"
+                         open="(" separator="," close=")">#{instanceId}</foreach>
+            </when>
+            <otherwise>1=0</otherwise>
+        </choose>
+    </select>
+
+    <select id="selectByProcessInstanceId" resultMap="RoundResult">
+        select <include refid="columns"/>
+        from wf_multi_instance_round
+        where process_instance_id=#{processInstanceId}
+        order by activity_id, round_no, round_id
+    </select>
+
+    <select id="countByProcessInstanceIds" resultType="long">
+        select count(*) from wf_multi_instance_round
+        where
+        <choose>
+            <when test="processInstanceIds != null and !processInstanceIds.isEmpty()">
+                process_instance_id in
+                <foreach collection="processInstanceIds" item="instanceId"
+                         open="(" separator="," close=")">#{instanceId}</foreach>
+            </when>
+            <otherwise>1=0</otherwise>
+        </choose>
+    </select>
+
+    <delete id="deleteByProcessInstanceIds">
+        delete from wf_multi_instance_round
+        where
+        <choose>
+            <when test="processInstanceIds != null and !processInstanceIds.isEmpty()">
+                process_instance_id in
+                <foreach collection="processInstanceIds" item="instanceId"
+                         open="(" separator="," close=")">#{instanceId}</foreach>
+            </when>
+            <otherwise>1=0</otherwise>
+        </choose>
+    </delete>
+</mapper>

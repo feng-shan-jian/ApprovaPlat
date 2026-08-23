@@ -33,6 +33,8 @@ public class WorkflowDataRetentionProperties
     private Duration copyRetention = Duration.ofDays(180);
     /** 已结束流程的受控循环执行记录默认保留期。 */
     private Duration controlledLoopRetention = Duration.ofDays(180);
+    /** 已结束流程的多实例轮次快照默认保留期。 */
+    private Duration multiInstanceRoundRetention = Duration.ofDays(180);
     /** 调度器首次执行前的等待时间。 */
     private Duration initialDelay = Duration.ofMinutes(5);
     /** 相邻两轮统一保留任务之间的固定等待时间。 */
@@ -101,6 +103,10 @@ public class WorkflowDataRetentionProperties
     public Duration getControlledLoopRetention() { return controlledLoopRetention; }
     /** 设置受控循环执行保留期。 @param value Duration，正数且不超过 3650 天 @return void */
     public void setControlledLoopRetention(Duration value) { controlledLoopRetention = requireRetention(value); }
+    /** 获取多实例轮次快照保留期。 @return Duration，流程结束后轮次快照保留时长 */
+    public Duration getMultiInstanceRoundRetention() { return multiInstanceRoundRetention; }
+    /** 设置多实例轮次快照保留期。 @param value Duration，正数且不超过 3650 天 @return void */
+    public void setMultiInstanceRoundRetention(Duration value) { multiInstanceRoundRetention = requireRetention(value); }
     /** 获取首次调度等待时间。 @return Duration，允许为零的首次等待时长 */
     public Duration getInitialDelay() { return initialDelay; }
     /** 设置首次调度等待时间。 @param value Duration，零至七天 @return void */

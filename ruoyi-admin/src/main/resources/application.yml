@@ -197,6 +197,7 @@ flowable:
     task-sla-retention: P180D
     copy-retention: P180D
     controlled-loop-retention: P180D
+    multi-instance-round-retention: P180D
     initial-delay: PT5M
     fixed-delay: PT1H
   notification:

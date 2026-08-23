@@ -62,6 +62,7 @@ class WorkflowReturnedApplicantListenerContractTest
     private WorkflowAutomaticCopyService automaticCopyService;
     private WorkflowTaskSlaRuntimeService slaRuntimeService;
     private WorkflowNotificationService notificationService;
+    private WorkflowMultiInstanceRoundService multiInstanceRoundService;
     private DelegateTask delegateTask;
     private WorkflowUserTaskListener listener;
 
@@ -80,12 +81,13 @@ class WorkflowReturnedApplicantListenerContractTest
         automaticCopyService = mock(WorkflowAutomaticCopyService.class);
         slaRuntimeService = mock(WorkflowTaskSlaRuntimeService.class);
         notificationService = mock(WorkflowNotificationService.class);
+        multiInstanceRoundService = mock(WorkflowMultiInstanceRoundService.class);
         delegateTask = mock(DelegateTask.class);
         WorkflowUserTaskAuditService auditService = new WorkflowUserTaskAuditService(
                 taskService, identityResolver, new WorkflowIdentityCodec());
         listener = new WorkflowUserTaskListener(auditService, slaRuntimeService,
                 participantRuleRuntimeService, automaticCopyService,
-                notificationService);
+                notificationService, multiInstanceRoundService);
     }
 
     /**

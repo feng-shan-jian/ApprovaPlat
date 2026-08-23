@@ -122,6 +122,7 @@ flowable:
     task-sla-retention: ${FLOWABLE_TASK_SLA_RETENTION:P180D}
     copy-retention: ${FLOWABLE_COPY_RETENTION:P180D}
     controlled-loop-retention: ${FLOWABLE_CONTROLLED_LOOP_RETENTION:P180D}
+    multi-instance-round-retention: ${FLOWABLE_MULTI_INSTANCE_ROUND_RETENTION:P180D}
     initial-delay: ${FLOWABLE_DATA_RETENTION_INITIAL_DELAY:PT5M}
     fixed-delay: ${FLOWABLE_DATA_RETENTION_FIXED_DELAY:PT1H}
   runtime:

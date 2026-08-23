@@ -17,7 +17,7 @@ import com.ruoyi.flowable.runtime.WorkflowDataRetentionMetrics;
 @Component
 public class WorkflowDataRetentionCoordinator
 {
-    /** 十一个固定父领域清理器，按枚举顺序执行以保持运行证据稳定。 */
+    /** 十二个固定父领域清理器，按枚举顺序执行以保持运行证据稳定。 */
     private final List<WorkflowDataRetentionCleaner> cleaners;
     private final WorkflowDataRetentionMetrics metrics;
     private final Clock clock;

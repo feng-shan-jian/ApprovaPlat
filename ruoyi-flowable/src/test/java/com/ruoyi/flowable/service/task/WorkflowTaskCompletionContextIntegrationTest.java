@@ -2,9 +2,11 @@ package com.ruoyi.flowable.service.task;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -52,6 +54,7 @@ import org.flowable.spring.SpringProcessEngineConfiguration;
 import com.ruoyi.flowable.domain.WfControlledLoopExecution;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
 import com.ruoyi.flowable.domain.WfDeployForm;
+import com.ruoyi.flowable.domain.WfMultiInstanceRound;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
@@ -183,10 +186,20 @@ class WorkflowTaskCompletionContextIntegrationTest
         WorkflowNextTaskAssignmentService nextTaskAssignmentService =
                 new WorkflowNextTaskAssignmentService(userSelectionValidator,
                         taskService, runtimeService);
+        WorkflowMultiInstanceRoundService roundService =
+                mock(WorkflowMultiInstanceRoundService.class);
+        WfMultiInstanceRound round = mock(WfMultiInstanceRound.class);
+        when(roundService.requireActiveRound(any(Task.class), anyString(),
+                any(WorkflowMultiInstanceMode.class), anyList(), anyInt()))
+                .thenReturn(round);
+        when(roundService.requireCompletionPersisted(anyString(), anyInt(), anyBoolean()))
+                .thenReturn(round);
+        when(round.getMembersJson()).thenReturn("[\"100\",\"200\"]");
+        when(round.getMode()).thenReturn(WorkflowMultiInstanceMode.ALL.name());
         WorkflowMultiInstanceService multiInstanceService = new WorkflowMultiInstanceService(
                 engineOperations, identityResolver, userSelectionValidator,
                 mock(WorkflowMultiInstanceUserMapper.class), repositoryService,
-                runtimeService, taskService, historyService);
+                runtimeService, taskService, historyService, roundService);
         WorkflowControlledLoopService controlledLoopService =
                 new WorkflowControlledLoopService(runtimeService, taskService,
                         artifactRepository, loopExecutionMapper);

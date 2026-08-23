@@ -38,6 +38,9 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
+import com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService.TerminationPrecheck;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
@@ -107,6 +110,12 @@ public class WorkflowProcessInstanceService
 
     private final WfControlledLoopExecutionMapper controlledLoopExecutionMapper;
 
+    /** 多实例轮次快照必须与 Flowable 历史在同一事务中精确删除。 */
+    private final WfMultiInstanceRoundMapper multiInstanceRoundMapper;
+
+    /** 受控多实例轮次终止前引擎对账与删除后异常关闭服务。 */
+    private final WorkflowMultiInstanceRoundService multiInstanceRoundService;
+
     private final PermissionService permissionService;
 
     /** SLA 时钟冻结和 Flowable timer job 重排服务。 */
@@ -125,6 +134,8 @@ public class WorkflowProcessInstanceService
      * @param attachmentMapper WfAttachmentMapper，已绑定审计附件引用检查 Mapper
      * @param copyMapper WfCopyMapper，正式抄送记录引用检查和逻辑删除 Mapper
      * @param controlledLoopExecutionMapper WfControlledLoopExecutionMapper，受控循环逐轮审计 Mapper
+     * @param multiInstanceRoundMapper WfMultiInstanceRoundMapper，多实例轮次快照审计 Mapper
+     * @param multiInstanceRoundService WorkflowMultiInstanceRoundService，轮次终止严格预检与关闭服务
      * @param permissionService PermissionService，Token 权限与当前正式主数据的统一复核服务
      * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，SLA 暂停恢复服务
      * @param notificationService WorkflowNotificationService，显式取消或终止通知服务
@@ -135,6 +146,8 @@ public class WorkflowProcessInstanceService
             TaskService taskService, WfAttachmentMapper attachmentMapper,
             WfCopyMapper copyMapper,
             WfControlledLoopExecutionMapper controlledLoopExecutionMapper,
+            WfMultiInstanceRoundMapper multiInstanceRoundMapper,
+            WorkflowMultiInstanceRoundService multiInstanceRoundService,
             PermissionService permissionService,
             WorkflowTaskSlaRuntimeService taskSlaRuntimeService,
             WorkflowNotificationService notificationService)
@@ -146,6 +159,8 @@ public class WorkflowProcessInstanceService
         this.attachmentMapper = attachmentMapper;
         this.copyMapper = copyMapper;
         this.controlledLoopExecutionMapper = controlledLoopExecutionMapper;
+        this.multiInstanceRoundMapper = multiInstanceRoundMapper;
+        this.multiInstanceRoundService = multiInstanceRoundService;
         this.permissionService = permissionService;
         this.taskSlaRuntimeService = taskSlaRuntimeService;
         this.notificationService = notificationService;
@@ -189,6 +204,14 @@ public class WorkflowProcessInstanceService
                 throw new ServiceException("循环审计记录数量超过可删除范围", HttpStatus.CONFLICT);
             }
 
+            // 轮次快照属于历史审计和整组重建依据，必须在删除引擎历史前冻结精确数量。
+            long multiInstanceRoundCount = multiInstanceRoundMapper
+                    .countByProcessInstanceIds(allIds);
+            if (multiInstanceRoundCount > Integer.MAX_VALUE)
+            {
+                throw new ServiceException("多实例轮次记录数量超过可删除范围", HttpStatus.CONFLICT);
+            }
+
             int deletedCopyCount = copyMapper.logicalDeleteByInstanceIds(allIds, actor.userId());
             if (deletedCopyCount != (int) activeCopyCount)
             {
@@ -200,6 +223,13 @@ public class WorkflowProcessInstanceService
             if (deletedControlledLoopCount != (int) controlledLoopCount)
             {
                 throw conflict("循环审计记录已发生变化，请刷新后重试");
+            }
+
+            int deletedMultiInstanceRoundCount = multiInstanceRoundMapper
+                    .deleteByProcessInstanceIds(allIds);
+            if (deletedMultiInstanceRoundCount != (int) multiInstanceRoundCount)
+            {
+                throw conflict("多实例轮次记录已发生变化，请刷新后重试");
             }
 
             // 只删除请求集合中的顶层根；Flowable 会递归删除其调用活动子流程历史。
@@ -221,8 +251,10 @@ public class WorkflowProcessInstanceService
             long remainingCopies = copyMapper.countActiveByInstanceIds(allIds);
             long remainingControlledLoops = controlledLoopExecutionMapper
                     .countByProcessInstanceIds(allIds);
+            long remainingMultiInstanceRounds = multiInstanceRoundMapper
+                    .countByProcessInstanceIds(allIds);
             if (remainingHistory != 0 || remainingCopies != 0
-                    || remainingControlledLoops != 0)
+                    || remainingControlledLoops != 0 || remainingMultiInstanceRounds != 0)
             {
                 throw conflict("流程历史删除结果不完整，请刷新后重试");
             }
@@ -407,11 +439,18 @@ public class WorkflowProcessInstanceService
             runtimeService.setVariable(rootInstance.getId(), PROCESS_STATUS_VARIABLE,
                     processStatus);
             runtimeService.updateBusinessStatus(rootInstance.getId(), processStatus);
+            // 上述引擎写入已经取得 Flowable 写锁；此时执行树仍完整，使用普通 SELECT 冻结
+            // 全树开放轮次并逐一对账活动受控根，避免缺行或合法格式篡改被级联删除掩盖。
+            TerminationPrecheck roundPrecheck = multiInstanceRoundService
+                    .precheckTermination(context.processTreeInstanceIds());
             notificationService.onProcessResult(resultEventType,
                     rootInstance.getProcessDefinitionId(), rootInstance.getId());
             // 只删除根实例，让 Flowable 级联结束 CallActivity 子流程并保留历史审计。
             runtimeService.deleteProcessInstance(rootInstance.getId(),
                     instruction.deleteReason());
+            // 删除成功后才取得业务行锁，并要求锁定集合与删除前令牌完全相同；任一失败都会
+            // 在同一 Spring 事务中回滚引擎状态写入、根删除及轮次更新。
+            multiInstanceRoundService.terminatePrechecked(roundPrecheck);
             verifyTermination(context, processStatus, instruction.auditComment());
         }
         catch (FlowableObjectNotFoundException exception)
@@ -690,9 +729,13 @@ public class WorkflowProcessInstanceService
         long remainingTaskCount = taskService.createTaskQuery()
                 .processInstanceIdIn(processTreeInstanceIds)
                 .count();
+        long remainingOpenRoundCount = multiInstanceRoundMapper
+                .countOpenByProcessInstanceIds(
+                        new LinkedHashSet<>(processTreeInstanceIds));
         HistoricProcessInstance finished = findHistoricInstance(rootInstanceId);
         if (remainingInstanceCount != 0L || remainingExecutionCount != 0L
-                || remainingTaskCount != 0L || finished == null
+                || remainingTaskCount != 0L || remainingOpenRoundCount != 0L
+                || finished == null
                 || finished.getEndTime() == null
                 || !processStatus.equals(finished.getBusinessStatus()))
         {

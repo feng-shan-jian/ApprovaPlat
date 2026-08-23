@@ -52,6 +52,22 @@ final class WorkflowCoreRetentionSql
             + "and history.END_TIME_ is not null)";
 
     /**
+     * 多实例轮次从流程结束时间开始计算保留期，避免长流程结束时提前删除较早创建的轮次审计。
+     * 候选领取与删除均重复核验同一历史结束时间，确保并发历史变更不会扩大删除范围。
+     */
+    static final String MULTI_INSTANCE_ROUND_SELECT = "select round_row.round_id from wf_multi_instance_round round_row "
+            + "where exists (select 1 from ACT_HI_PROCINST history "
+            + "where history.PROC_INST_ID_=round_row.process_instance_id and history.END_TIME_<=?) "
+            + "order by round_row.round_id limit ? for update skip locked";
+    static final String MULTI_INSTANCE_ROUND_DELETE_PREFIX = "delete from wf_multi_instance_round where round_id in (";
+    static final String MULTI_INSTANCE_ROUND_DELETE_SUFFIX = ") and exists "
+            + "(select 1 from ACT_HI_PROCINST history "
+            + "where history.PROC_INST_ID_=wf_multi_instance_round.process_instance_id and history.END_TIME_<=?)";
+    static final String MULTI_INSTANCE_ROUND_OLDEST = "select min(history.END_TIME_) "
+            + "from wf_multi_instance_round round_row join ACT_HI_PROCINST history "
+            + "on history.PROC_INST_ID_=round_row.process_instance_id where history.END_TIME_ is not null";
+
+    /**
      * 禁止实例化固定 SQL 容器。
      * @return 无返回值，仅由 JVM 执行私有构造
      */

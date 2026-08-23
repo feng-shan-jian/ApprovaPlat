@@ -9,9 +9,10 @@ import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService;
 
 /**
- * BPMN 用户任务固定监听入口，只转发批准事件，不执行脚本、字段注入或业务状态改写。
+ * BPMN 用户任务固定监听入口，只编排受控领域服务，不执行脚本或直接改写业务持久化状态。
  */
 @Component("userTaskListener")
 public class WorkflowUserTaskListener implements TaskListener
@@ -32,6 +33,9 @@ public class WorkflowUserTaskListener implements TaskListener
     /** 普通审批生命周期通知服务，任务事实与站内信、外部 Outbox 必须同事务提交。 */
     private final WorkflowNotificationService notificationService;
 
+    /** 受控多实例轮次服务，create/complete 事件必须同步维护正式轮次快照。 */
+    private final WorkflowMultiInstanceRoundService multiInstanceRoundService;
+
     /**
      * 创建受控用户任务监听器。
      *
@@ -40,19 +44,22 @@ public class WorkflowUserTaskListener implements TaskListener
      * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，实时组织解析服务
      * @param automaticCopyService WorkflowAutomaticCopyService，自动抄送运行时服务
      * @param notificationService WorkflowNotificationService，事务通知服务
+     * @param multiInstanceRoundService WorkflowMultiInstanceRoundService，多实例轮次生命周期服务
      * @return 无返回值，构造后由 Spring 以 userTaskListener 名称管理
      */
     public WorkflowUserTaskListener(WorkflowUserTaskAuditService auditService,
             WorkflowTaskSlaRuntimeService slaRuntimeService,
             WorkflowParticipantRuleRuntimeService participantRuleRuntimeService,
             WorkflowAutomaticCopyService automaticCopyService,
-            WorkflowNotificationService notificationService)
+            WorkflowNotificationService notificationService,
+            WorkflowMultiInstanceRoundService multiInstanceRoundService)
     {
         this.auditService = auditService;
         this.slaRuntimeService = slaRuntimeService;
         this.participantRuleRuntimeService = participantRuleRuntimeService;
         this.automaticCopyService = automaticCopyService;
         this.notificationService = notificationService;
+        this.multiInstanceRoundService = multiInstanceRoundService;
     }
 
     /**
@@ -78,6 +85,13 @@ public class WorkflowUserTaskListener implements TaskListener
                 {
                     // create 事务内先按部署快照和实时组织解析，使后续身份审计看到最终 assignee/candidate。
                     participantRuleRuntimeService.resolveCreatedTask(delegateTask);
+                    // 参与者解析完成后再创建或核对正式轮次，确保成员快照与最终办理人属于同一事务事实。
+                    multiInstanceRoundService.onTaskCreated(delegateTask);
+                }
+                else if (EVENTNAME_COMPLETE.equals(eventName))
+                {
+                    // 完成监听发生在 Flowable 应用本次根计数之前，按真实前置计数同步 revision 和终态。
+                    multiInstanceRoundService.onTaskCompleted(delegateTask);
                 }
                 // 固定监听入口只负责编排，规则解析和任务审计分别由独立领域服务维护。
                 auditService.recordAudit(eventName, delegateTask.getId(),

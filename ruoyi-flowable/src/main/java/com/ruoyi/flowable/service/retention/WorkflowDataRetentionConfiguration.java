@@ -13,7 +13,7 @@ import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
 import com.ruoyi.flowable.mapper.WfRuntimeEventRequestMapper;
 
 /**
- * 将各领域已有 Mapper 或通知 JdbcTemplate 适配为独立生命周期清理器。
+ * 将各领域已有 Mapper 或 JdbcTemplate SQL 适配为独立生命周期清理器。
  */
 @Configuration
 public class WorkflowDataRetentionConfiguration
@@ -308,6 +308,24 @@ public class WorkflowDataRetentionConfiguration
                 WorkflowCoreRetentionSql.CONTROLLED_LOOP_DELETE_PREFIX,
                 WorkflowCoreRetentionSql.CONTROLLED_LOOP_DELETE_SUFFIX,
                 WorkflowCoreRetentionSql.CONTROLLED_LOOP_OLDEST);
+    }
+
+    /**
+     * 创建已结束流程多实例轮次快照清理器。
+     * @param jdbcTemplate JdbcTemplate，正式工作流数据访问入口
+     * @param properties WorkflowDataRetentionProperties，批次与保留期配置
+     * @return WorkflowDataRetentionCleaner，仅按流程结束时间清理超过保留期的轮次快照
+     */
+    @Bean
+    WorkflowDataRetentionCleaner multiInstanceRoundRetentionCleaner(
+            JdbcTemplate jdbcTemplate, WorkflowDataRetentionProperties properties)
+    {
+        return jdbcCleaner(WorkflowDataRetentionDomain.MULTI_INSTANCE_ROUND, jdbcTemplate,
+                properties::getMultiInstanceRoundRetention, properties,
+                WorkflowCoreRetentionSql.MULTI_INSTANCE_ROUND_SELECT,
+                WorkflowCoreRetentionSql.MULTI_INSTANCE_ROUND_DELETE_PREFIX,
+                WorkflowCoreRetentionSql.MULTI_INSTANCE_ROUND_DELETE_SUFFIX,
+                WorkflowCoreRetentionSql.MULTI_INSTANCE_ROUND_OLDEST);
     }
 
     /**

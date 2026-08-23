@@ -10,7 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 通知领域使用 JdbcTemplate 执行终态历史清理，不接管 outbox 状态机。
+ * 使用 JdbcTemplate 执行固定领域的有界历史清理，不接管任何业务状态机。
  */
 public class WorkflowJdbcDataRetentionCleaner implements WorkflowDataRetentionCleaner
 {
@@ -24,8 +24,8 @@ public class WorkflowJdbcDataRetentionCleaner implements WorkflowDataRetentionCl
     private final String oldestSql;
 
     /**
-     * 创建通知数据域清理器。
-     * @param domain WorkflowDataRetentionDomain，通知 outbox 或已读 inbox 数据域
+     * 创建 JdbcTemplate 数据域清理器。
+     * @param domain WorkflowDataRetentionDomain，清理器唯一负责的固定数据域
      * @param jdbcTemplate JdbcTemplate，正式 MySQL 数据访问入口
      * @param retentionSupplier Supplier&lt;Duration&gt;，动态读取保留期
      * @param batchSizeSupplier Supplier&lt;Integer&gt;，动态读取批次上限
@@ -57,9 +57,9 @@ public class WorkflowJdbcDataRetentionCleaner implements WorkflowDataRetentionCl
     }
 
     /**
-     * 在短事务内领取通知终态主键并删除，受保护状态不会进入领取或删除条件。
+     * 在短事务内领取满足领域 SQL 的历史主键并删除，删除阶段必须复核原候选条件。
      * @param executionTime LocalDateTime，本轮统一业务时间
-     * @return WorkflowDataRetentionBatchResult，成功提交的真实通知清理结果
+     * @return WorkflowDataRetentionBatchResult，成功提交的真实领域清理结果
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -71,7 +71,7 @@ public class WorkflowJdbcDataRetentionCleaner implements WorkflowDataRetentionCl
         int deleted = deleteClaimed(claimedIds, cutoffTime);
         if (deleted != claimedIds.size())
         {
-            throw new IllegalStateException("工作流通知保留删除行数与事务内领取行数不一致: " + domain);
+            throw new IllegalStateException("工作流数据保留删除行数与事务内领取行数不一致: " + domain);
         }
         LocalDateTime oldestPendingTime = jdbcTemplate.queryForObject(oldestSql, LocalDateTime.class);
         return new WorkflowDataRetentionBatchResult(domain, claimedIds.size(),
@@ -80,7 +80,7 @@ public class WorkflowJdbcDataRetentionCleaner implements WorkflowDataRetentionCl
 
     /**
      * 使用参数占位符删除已锁定主键，并在 SQL 尾部重复终态和截止条件。
-     * @param claimedIds List&lt;Long&gt;，当前事务已锁定的通知主键
+     * @param claimedIds List&lt;Long&gt;，当前事务已锁定的领域主键
      * @param cutoffTime LocalDateTime，领域保留截止时间
      * @return int，实际删除记录数
      */

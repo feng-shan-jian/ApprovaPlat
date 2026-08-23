@@ -16,7 +16,15 @@ import org.flowable.task.api.Task;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper;
+import com.ruoyi.flowable.mapper.WfAttachmentMapper;
+import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
+import com.ruoyi.flowable.mapper.WfCopyMapper;
+import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService;
+import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
+import com.ruoyi.framework.web.service.PermissionService;
 
 /**
  * 使用真实 Flowable 引擎验证挂起根流程及 CallActivity 子流程的终止审计链。
@@ -47,10 +55,19 @@ class WorkflowProcessInstanceTerminationIntegrationTest
         historyService = processEngine.getHistoryService();
         taskService = processEngine.getTaskService();
         repositoryService.createDeployment()
-                .addString("termination-root.bpmn20.xml", BPMN)
+                .addClasspathResource(
+                        "bpmn/workflow-process-instance-termination.bpmn20.xml")
                 .deploy();
+        WfMultiInstanceRoundMapper roundMapper = mock(WfMultiInstanceRoundMapper.class);
+        WorkflowMultiInstanceRoundService roundService =
+                new WorkflowMultiInstanceRoundService(roundMapper,
+                        repositoryService, runtimeService);
         processInstanceService = new WorkflowProcessInstanceService(
-                null, historyService, runtimeService, taskService, null, null, null, null, null,
+                mock(WorkflowEngineOperations.class), historyService, runtimeService,
+                taskService, mock(WfAttachmentMapper.class), mock(WfCopyMapper.class),
+                mock(WfControlledLoopExecutionMapper.class),
+                roundMapper, roundService, mock(PermissionService.class),
+                mock(WorkflowTaskSlaRuntimeService.class),
                 mock(WorkflowNotificationService.class));
     }
 
@@ -139,29 +156,4 @@ class WorkflowProcessInstanceTerminationIntegrationTest
         }
     }
 
-    /** 真实 Flowable 部署用的并行根流程和 CallActivity 子流程。 */
-    private static final String BPMN = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
-              xmlns:flowable="http://flowable.org/bpmn" targetNamespace="termination-it">
-              <process id="terminationRoot" name="terminationRoot" isExecutable="true">
-                <startEvent id="start"/><parallelGateway id="fork"/>
-                <userTask id="rootTask" name="Root task"/>
-                <callActivity id="callChild" calledElement="terminationChild"/>
-                <parallelGateway id="join"/><endEvent id="end"/>
-                <sequenceFlow sourceRef="start" targetRef="fork"/>
-                <sequenceFlow sourceRef="fork" targetRef="rootTask"/>
-                <sequenceFlow sourceRef="fork" targetRef="callChild"/>
-                <sequenceFlow sourceRef="rootTask" targetRef="join"/>
-                <sequenceFlow sourceRef="callChild" targetRef="join"/>
-                <sequenceFlow sourceRef="join" targetRef="end"/>
-              </process>
-              <process id="terminationChild" name="terminationChild" isExecutable="true">
-                <startEvent id="childStart"/><userTask id="childTask" name="Child task"/>
-                <endEvent id="childEnd"/>
-                <sequenceFlow sourceRef="childStart" targetRef="childTask"/>
-                <sequenceFlow sourceRef="childTask" targetRef="childEnd"/>
-              </process>
-            </definitions>
-            """;
 }

@@ -73,6 +73,111 @@ CREATE TABLE IF NOT EXISTS `wf_controlled_loop_execution`
   COLLATE = utf8mb4_unicode_ci
   COMMENT = '受控重复审批循环逐轮运行审计';
 
+CREATE TABLE IF NOT EXISTS `wf_multi_instance_round`
+(
+    `round_id`                  BIGINT       NOT NULL AUTO_INCREMENT COMMENT '多实例轮次主键',
+    `deploy_id`                 VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 部署主键快照',
+    `process_definition_id`     VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 流程定义主键快照',
+    `process_instance_id`       VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Flowable 流程实例主键',
+    `activity_id`               VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '多实例用户任务 BPMN 节点标识',
+    `root_execution_id`         VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '本轮多实例根 execution 主键',
+    `round_no`                  INT          NOT NULL COMMENT '同实例同节点从 1 开始的轮次号',
+    `mode`                      VARCHAR(3) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '多实例模式：ALL 或 ANY',
+    `members_json`              JSON         NOT NULL COMMENT '按引擎执行顺序固化的 1～100 个规范用户主键',
+    `revision_no`               INT          NOT NULL DEFAULT 0 COMMENT '与 Flowable 多实例变更共同推进的 CAS 版本',
+    `round_status`              VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'ACTIVE' COMMENT '轮次状态：ACTIVE、RETURNED、REOPENED、COMPLETED、TERMINATED',
+    `return_source_task_id`     VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '整组退回的源任务主键',
+    `return_actor_user_id`      VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '整组退回操作人的规范用户主键',
+    `applicant_task_id`         VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL COMMENT '整组退回后的申请人任务主键',
+    `create_time`               DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '轮次首次进入时间',
+    `return_time`               DATETIME(3)           DEFAULT NULL COMMENT '整组退回时间',
+    `reopen_time`               DATETIME(3)           DEFAULT NULL COMMENT '申请人重提使本轮关闭时间',
+    `complete_time`             DATETIME(3)           DEFAULT NULL COMMENT '多实例整组正常完成时间',
+    `terminate_time`            DATETIME(3)           DEFAULT NULL COMMENT '流程显式终止或引擎原生中断导致的异常关闭时间',
+    `open_process_instance_id`  VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS
+        (CASE WHEN `round_status` IN ('ACTIVE', 'RETURNED') THEN `process_instance_id` ELSE NULL END) STORED
+        COMMENT '仅开放轮次参与唯一约束的实例主键',
+    `open_activity_id`          VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS
+        (CASE WHEN `round_status` IN ('ACTIVE', 'RETURNED') THEN `activity_id` ELSE NULL END) STORED
+        COMMENT '仅开放轮次参与唯一约束的节点标识',
+    PRIMARY KEY (`round_id`),
+    UNIQUE KEY `uk_wf_mi_round_instance_activity_no`
+        (`process_instance_id`, `activity_id`, `round_no`),
+    UNIQUE KEY `uk_wf_mi_round_root_execution` (`root_execution_id`),
+    UNIQUE KEY `uk_wf_mi_round_open_activity`
+        (`open_process_instance_id`, `open_activity_id`),
+    KEY `idx_wf_mi_round_instance_status`
+        (`process_instance_id`, `round_status`, `activity_id`, `round_id`),
+    KEY `idx_wf_mi_round_instance_round` (`process_instance_id`, `round_id`),
+    KEY `idx_wf_mi_round_deploy_activity` (`deploy_id`, `activity_id`),
+    CONSTRAINT `chk_wf_mi_round_references` CHECK
+        (CHAR_LENGTH(`deploy_id`) BETWEEN 1 AND 64
+         AND CHAR_LENGTH(`process_definition_id`) BETWEEN 1 AND 64
+         AND CHAR_LENGTH(`process_instance_id`) BETWEEN 1 AND 64
+         AND CHAR_LENGTH(`activity_id`) BETWEEN 1 AND 255
+         AND CHAR_LENGTH(`root_execution_id`) BETWEEN 1 AND 64),
+    CONSTRAINT `chk_wf_mi_round_no` CHECK (`round_no` BETWEEN 1 AND 2147483647),
+    CONSTRAINT `chk_wf_mi_round_mode` CHECK (`mode` IN ('ALL', 'ANY')),
+    CONSTRAINT `chk_wf_mi_round_members` CHECK
+    (
+        JSON_SCHEMA_VALID(
+            '{"type":"array","minItems":1,"maxItems":100,"uniqueItems":true,"items":{"type":"string","pattern":"^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9(?:[0-1][0-9]{17}|2(?:[0-1][0-9]{16}|2(?:[0-2][0-9]{15}|3(?:[0-2][0-9]{14}|3(?:[0-6][0-9]{13}|7(?:[0-1][0-9]{12}|20(?:[0-2][0-9]{10}|3(?:[0-5][0-9]{9}|6(?:[0-7][0-9]{8}|8(?:[0-4][0-9]{7}|5(?:[0-3][0-9]{6}|4(?:[0-6][0-9]{5}|7(?:[0-6][0-9]{4}|7(?:[0-4][0-9]{3}|5(?:[0-7][0-9]{2}|80(?:[0-6]|7)))))))))))))))))$"}}',
+            `members_json`
+        )
+    ),
+    CONSTRAINT `chk_wf_mi_round_revision` CHECK
+        (`revision_no` BETWEEN 0 AND 2147483647),
+    CONSTRAINT `chk_wf_mi_round_status` CHECK
+        (`round_status` IN ('ACTIVE', 'RETURNED', 'REOPENED', 'COMPLETED', 'TERMINATED')),
+    CONSTRAINT `chk_wf_mi_round_return_actor` CHECK
+        (`return_actor_user_id` IS NULL OR `return_actor_user_id` REGEXP
+         '^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9(?:[0-1][0-9]{17}|2(?:[0-1][0-9]{16}|2(?:[0-2][0-9]{15}|3(?:[0-2][0-9]{14}|3(?:[0-6][0-9]{13}|7(?:[0-1][0-9]{12}|20(?:[0-2][0-9]{10}|3(?:[0-5][0-9]{9}|6(?:[0-7][0-9]{8}|8(?:[0-4][0-9]{7}|5(?:[0-3][0-9]{6}|4(?:[0-6][0-9]{5}|7(?:[0-6][0-9]{4}|7(?:[0-4][0-9]{3}|5(?:[0-7][0-9]{2}|80(?:[0-6]|7)))))))))))))))))$'),
+    CONSTRAINT `chk_wf_mi_round_lifecycle` CHECK
+    (
+        (`round_status` = 'ACTIVE'
+            AND `return_source_task_id` IS NULL AND `return_actor_user_id` IS NULL
+            AND `applicant_task_id` IS NULL AND `return_time` IS NULL
+            AND `reopen_time` IS NULL AND `complete_time` IS NULL
+            AND `terminate_time` IS NULL)
+        OR (`round_status` = 'RETURNED'
+            AND `return_source_task_id` IS NOT NULL AND `return_source_task_id` <> ''
+            AND `return_actor_user_id` IS NOT NULL
+            AND `applicant_task_id` IS NOT NULL AND `applicant_task_id` <> ''
+            AND `return_time` IS NOT NULL AND `reopen_time` IS NULL
+            AND `complete_time` IS NULL AND `terminate_time` IS NULL)
+        OR (`round_status` = 'REOPENED'
+            AND `return_source_task_id` IS NOT NULL AND `return_source_task_id` <> ''
+            AND `return_actor_user_id` IS NOT NULL
+            AND `applicant_task_id` IS NOT NULL AND `applicant_task_id` <> ''
+            AND `return_time` IS NOT NULL AND `reopen_time` IS NOT NULL
+            AND `complete_time` IS NULL AND `terminate_time` IS NULL)
+        OR (`round_status` = 'COMPLETED'
+            AND `return_source_task_id` IS NULL AND `return_actor_user_id` IS NULL
+            AND `applicant_task_id` IS NULL AND `return_time` IS NULL
+            AND `reopen_time` IS NULL AND `complete_time` IS NOT NULL
+            AND `terminate_time` IS NULL)
+        OR (`round_status` = 'TERMINATED'
+            AND `reopen_time` IS NULL AND `complete_time` IS NULL
+            AND `terminate_time` IS NOT NULL
+            AND ((`return_source_task_id` IS NULL AND `return_actor_user_id` IS NULL
+                    AND `applicant_task_id` IS NULL AND `return_time` IS NULL)
+                OR (`return_source_task_id` IS NOT NULL AND `return_source_task_id` <> ''
+                    AND `return_actor_user_id` IS NOT NULL
+                    AND `applicant_task_id` IS NOT NULL AND `applicant_task_id` <> ''
+                    AND `return_time` IS NOT NULL)))
+    ),
+    CONSTRAINT `chk_wf_mi_round_times` CHECK
+        ((`return_time` IS NULL OR `return_time` >= `create_time`)
+         AND (`reopen_time` IS NULL OR `reopen_time` >= `return_time`)
+         AND (`complete_time` IS NULL OR `complete_time` >= `create_time`)
+         AND (`terminate_time` IS NULL
+            OR (`terminate_time` >= `create_time`
+                AND (`return_time` IS NULL OR `terminate_time` >= `return_time`))))
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+  COMMENT = '多实例实时执行对应的轮次快照与审计';
+
 CREATE TABLE IF NOT EXISTS `wf_bpmn_extension`
 (
     `extension_id`   BIGINT       NOT NULL AUTO_INCREMENT COMMENT 'BPMN 扩展目录主键',
