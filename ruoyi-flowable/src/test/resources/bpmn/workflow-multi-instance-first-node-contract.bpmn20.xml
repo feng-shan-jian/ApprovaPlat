@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:flowable="http://flowable.org/bpmn"
+  targetNamespace="workflow-multi-instance-first-node-contract">
+  <process id="firstAllReturn" name="首节点会签退回契约" isExecutable="true">
+    <startEvent id="firstAllStart"/>
+    <userTask id="firstAllGroup" name="首节点会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:executionListener event="start" delegateExpression="${firstNodeMigrationFailureGuard}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${lateAssignmentFailureGuard}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <userTask id="firstAllAfter" name="后续审批" flowable:assignee="301"/>
+    <endEvent id="firstAllEnd"/>
+    <sequenceFlow sourceRef="firstAllStart" targetRef="firstAllGroup"/>
+    <sequenceFlow sourceRef="firstAllGroup" targetRef="firstAllAfter"/>
+    <sequenceFlow sourceRef="firstAllAfter" targetRef="firstAllEnd"/>
+  </process>
+
+  <process id="firstAnyReturn" name="首节点或签退回契约" isExecutable="true">
+    <startEvent id="firstAnyStart"/>
+    <userTask id="firstAnyGroup" name="首节点或签" flowable:assignee="${assignee}">
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances > 0}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <userTask id="firstAnyAfter" name="后续审批" flowable:assignee="301"/>
+    <endEvent id="firstAnyEnd"/>
+    <sequenceFlow sourceRef="firstAnyStart" targetRef="firstAnyGroup"/>
+    <sequenceFlow sourceRef="firstAnyGroup" targetRef="firstAnyAfter"/>
+    <sequenceFlow sourceRef="firstAnyAfter" targetRef="firstAnyEnd"/>
+  </process>
+</definitions>

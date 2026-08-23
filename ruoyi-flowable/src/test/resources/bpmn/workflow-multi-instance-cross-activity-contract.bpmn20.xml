@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:flowable="http://flowable.org/bpmn"
+  targetNamespace="workflow-multi-instance-cross-activity-contract">
+  <process id="middleAllReturn" name="中间会签退回契约" isExecutable="true">
+    <startEvent id="middleStart"/>
+    <userTask id="middlePre" name="真实首审批" flowable:assignee="301">
+      <extensionElements>
+        <flowable:executionListener event="start" delegateExpression="${crossActivityMigrationFailureGuard}"/>
+      </extensionElements>
+    </userTask>
+    <userTask id="middleAllGroup" name="中间会签" flowable:assignee="${assignee}">
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <userTask id="middlePost" name="后置审批" flowable:assignee="301"/>
+    <endEvent id="middleEnd"/>
+    <sequenceFlow sourceRef="middleStart" targetRef="middlePre"/>
+    <sequenceFlow sourceRef="middlePre" targetRef="middleAllGroup"/>
+    <sequenceFlow sourceRef="middleAllGroup" targetRef="middlePost"/>
+    <sequenceFlow sourceRef="middlePost" targetRef="middleEnd"/>
+  </process>
+
+  <process id="ordinaryToFirstAllReturn" name="普通节点退回首会签契约" isExecutable="true">
+    <startEvent id="ordinaryFirstAllStart"/>
+    <userTask id="ordinaryFirstAllGroup" name="首节点会签" flowable:assignee="${assignee}">
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <userTask id="ordinaryFirstAllAfter" name="后续普通审批" flowable:assignee="301"/>
+    <endEvent id="ordinaryFirstAllEnd"/>
+    <sequenceFlow sourceRef="ordinaryFirstAllStart" targetRef="ordinaryFirstAllGroup"/>
+    <sequenceFlow sourceRef="ordinaryFirstAllGroup" targetRef="ordinaryFirstAllAfter"/>
+    <sequenceFlow sourceRef="ordinaryFirstAllAfter" targetRef="ordinaryFirstAllEnd"/>
+  </process>
+</definitions>
