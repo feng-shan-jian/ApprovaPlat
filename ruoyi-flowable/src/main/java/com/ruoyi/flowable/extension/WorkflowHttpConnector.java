@@ -445,7 +445,15 @@ public class WorkflowHttpConnector
         if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long)
             return objectMapper.getNodeFactory().numberNode(((Number) value).longValue());
         if (value instanceof Float || value instanceof Double)
-            return objectMapper.getNodeFactory().numberNode(((Number) value).doubleValue());
+        {
+            double numericValue = ((Number) value).doubleValue();
+            // 外部 HTTP JSON 不允许 NaN 和 Infinity，必须在网络副作用发生前拒绝。
+            if (!Double.isFinite(numericValue))
+            {
+                throw new ServiceException("HTTP 请求正文包含非有限数字", HttpStatus.ERROR);
+            }
+            return objectMapper.getNodeFactory().numberNode(numericValue);
+        }
         if (value instanceof BigInteger integer) return objectMapper.getNodeFactory().numberNode(integer);
         if (value instanceof BigDecimal decimal) return objectMapper.getNodeFactory().numberNode(decimal);
         if (value instanceof List<?> list)
