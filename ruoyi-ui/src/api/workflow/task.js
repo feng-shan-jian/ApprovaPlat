@@ -64,18 +64,6 @@ export function revokeTask(data) {
 }
 
 /**
- * 查询任务参与者可见的安全变量投影。
- * @param {string} taskId 活动或历史任务主键。
- * @returns {Promise<object>} data 为允许展示的变量映射。
- */
-export function getTaskVariables(taskId) {
-  return request({
-    url: `/workflow/task/processVariables/${encodeURIComponent(taskId)}`,
-    method: 'get'
-  })
-}
-
-/**
  * 查询当前办理任务所在动态并行多实例根的正式成员状态。
  * @param {string} taskId 当前登录用户真实办理的 Flowable 活动任务主键。
  * @returns {Promise<object>} data 包含 mode、activityId、revision 和有序 members。
@@ -130,17 +118,4 @@ export function returnTask(data) {
  */
 export function resubmitApplication(data) {
   return request({ url: '/workflow/task/resubmit', method: 'post', data })
-}
-
-/**
- * 查询对象授权后的流程实例图形资源。
- * @param {string} processInstanceId 流程实例主键。
- * @returns {Promise<Blob>} 后端生成的流程图二进制内容。
- */
-export function getProcessDiagram(processInstanceId) {
-  return request({
-    url: `/workflow/task/diagram/${encodeURIComponent(processInstanceId)}`,
-    method: 'get',
-    responseType: 'blob'
-  })
 }

@@ -3,9 +3,6 @@ package com.ruoyi.web.controller.workflow;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
-import org.springframework.http.CacheControl;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,7 +29,6 @@ import com.ruoyi.flowable.domain.dto.WorkflowTaskTransferRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskUnclaimRequest;
 import com.ruoyi.flowable.service.task.WorkflowTaskActionService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
-import com.ruoyi.flowable.service.task.WorkflowTaskReadService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
 
 /**
@@ -47,8 +43,6 @@ public class WfTaskController extends BaseController
 
     private final WorkflowTaskLifecycleService taskLifecycleService;
 
-    private final WorkflowTaskReadService taskReadService;
-
     private final WorkflowMultiInstanceService multiInstanceService;
 
     /**
@@ -56,18 +50,15 @@ public class WfTaskController extends BaseController
      *
      * @param taskActionService WorkflowTaskActionService，认领、取消认领、完成委派、委派和转办服务
      * @param taskLifecycleService WorkflowTaskLifecycleService，完成、驳回、退回、取消和撤回服务
-     * @param taskReadService WorkflowTaskReadService，变量安全投影和授权流程图服务
      * @param multiInstanceService WorkflowMultiInstanceService，动态并行多实例状态和调整服务
      * @return 无返回值，构造后由 Spring 管理该 Controller
      */
     public WfTaskController(WorkflowTaskActionService taskActionService,
             WorkflowTaskLifecycleService taskLifecycleService,
-            WorkflowTaskReadService taskReadService,
             WorkflowMultiInstanceService multiInstanceService)
     {
         this.taskActionService = taskActionService;
         this.taskLifecycleService = taskLifecycleService;
-        this.taskReadService = taskReadService;
         this.multiInstanceService = multiInstanceService;
     }
 
@@ -99,24 +90,6 @@ public class WfTaskController extends BaseController
     {
         taskLifecycleService.revokeProcess(request);
         return success();
-    }
-
-    /**
-     * 返回任务参与者可见的部署表单白名单变量。
-     *
-     * @param taskId String，活动或历史任务主键
-     * @return AjaxResult，data 为安全 JSON 字段映射
-     */
-    @PreAuthorize("@ss.hasPermi('workflow:process:query')")
-    @Log(title = "查询流程变量", businessType = BusinessType.OTHER)
-    @GetMapping("/processVariables/{taskId}")
-    public AjaxResult processVariables(
-            @PathVariable("taskId")
-            @NotBlank(message = "任务主键不能为空")
-            @Size(max = 64, message = "任务主键长度不能超过64个字符")
-            String taskId)
-    {
-        return success(taskReadService.getProcessVariables(taskId));
     }
 
     /**
@@ -287,24 +260,4 @@ public class WfTaskController extends BaseController
         return success();
     }
 
-    /**
-     * 为有实例读取权限的用户生成带历史活动高亮的 PNG 流程图。
-     *
-     * @param processId String，活动或历史流程实例主键
-     * @return ResponseEntity&lt;byte[]&gt;，禁用缓存的 image/png 响应
-     */
-    @PreAuthorize("@ss.hasPermi('workflow:process:query')")
-    @Log(title = "查询流程图", businessType = BusinessType.OTHER)
-    @GetMapping(value = "/diagram/{processId}", produces = MediaType.IMAGE_PNG_VALUE)
-    public ResponseEntity<byte[]> diagram(
-            @PathVariable("processId")
-            @NotBlank(message = "流程实例主键不能为空")
-            @Size(max = 64, message = "流程实例主键长度不能超过64个字符")
-            String processId)
-    {
-        return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
-                .contentType(MediaType.IMAGE_PNG)
-                .body(taskReadService.generateDiagram(processId));
-    }
 }
