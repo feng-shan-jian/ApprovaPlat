@@ -1,9 +1,6 @@
 package com.ruoyi.flowable.runtime;
 
 import java.time.Clock;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -11,7 +8,6 @@ import java.util.function.ToDoubleFunction;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.binder.MeterBinder;
-import jakarta.annotation.PreDestroy;
 import org.flowable.job.service.impl.asyncexecutor.AsyncExecutor;
 import org.flowable.spring.SpringProcessEngineConfiguration;
 import org.slf4j.Logger;
@@ -40,15 +36,7 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     private final WorkflowAttachmentStorage attachmentStorage;
     private final Clock clock;
 
-    /** 文件系统或驱动阻塞只占用此单一 daemon worker，不能占住 Spring 调度线程。 */
-    private final ExecutorService refreshExecutor = Executors.newSingleThreadExecutor(task ->
-    {
-        Thread worker = new Thread(task, "workflow-runtime-metrics-refresh");
-        worker.setDaemon(true);
-        return worker;
-    });
-
-    /** 防止上一轮阻塞时重复提交采集任务并形成无界队列或线程增长。 */
+    /** 标记指标刷新任务是否正在采集，供运维指标实时观察刷新状态。 */
     private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
 
     /** 最近一次成功快照采用原子整体替换，避免一次抓取读到跨批次混合字段。 */
@@ -97,47 +85,29 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     }
 
     /**
-     * 从 Spring 调度线程向唯一采集 worker 提交刷新；上一轮未结束时跳过本轮，避免共享
-     * 文件系统硬阻塞拖死全局 scheduler 或形成无界任务积压。
+     * 在 Spring 标准调度线程中同步刷新指标；fixedDelay 保证同一任务不会与自身重叠。
      *
-     * @return void，无返回值，提交后立即释放 Spring 调度线程
+     * @return void，无返回值，本轮采集结束后才开始计算下一次固定延迟
      */
     @Scheduled(
             initialDelayString = "${flowable.runtime.metrics-refresh-initial-delay:PT10S}",
             fixedDelayString = "${flowable.runtime.metrics-refresh-interval:PT1M}")
     public void scheduleSnapshotRefresh()
     {
-        if (!refreshInFlight.compareAndSet(false, true))
-        {
-            return;
-        }
+        refreshInFlight.set(true);
         try
         {
-            refreshExecutor.execute(() ->
-            {
-                try
-                {
-                    refreshSnapshot();
-                }
-                finally
-                {
-                    refreshInFlight.set(false);
-                }
-            });
+            refreshSnapshot();
         }
-        catch (RejectedExecutionException failure)
+        finally
         {
             refreshInFlight.set(false);
-            if (!refreshExecutor.isShutdown())
-            {
-                recordRefreshFailure(failure);
-            }
         }
     }
 
     /**
      * 原子刷新数据库、存储和 executor 快照；失败时保留上次成功值并累计失败次数。
-     * 本函数由专用 worker 调用，包内测试可同步执行以验证完整采集语义。
+     * 本函数由指标刷新任务调用，包内测试可同步执行以验证完整采集语义。
      *
      * @return void，无返回值，下一次固定延迟调度会继续重试
      */
@@ -186,7 +156,7 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     /**
      * 累计一次采集失败并按连续异常类型抑制重复日志，不记录 SQL、路径或异常正文。
      *
-     * @param failure RuntimeException，采集或任务提交阶段异常
+     * @param failure RuntimeException，指标采集阶段异常
      * @return void，无返回值
      */
     private void recordRefreshFailure(RuntimeException failure)
@@ -270,7 +240,7 @@ public class WorkflowRuntimeMetrics implements MeterBinder
                 .register(registry);
         Gauge.builder("workflow.runtime.metrics.refresh.inflight", refreshInFlight,
                 inFlight -> inFlight.get() ? 1.0D : 0.0D)
-                .description("工作流运行指标采集 worker 是否仍在执行上一轮刷新")
+                .description("工作流运行指标刷新任务是否正在执行")
                 .register(registry);
     }
 
@@ -395,18 +365,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
             return -1L;
         }
         return Math.max(0L, clock.millis() - current.capturedAtMillis());
-    }
-
-    /**
-     * 应用关闭时中断并停止专用采集 worker；线程为 daemon，底层硬挂载忽略中断时也不会
-     * 阻止 JVM 退出。
-     *
-     * @return void，无返回值
-     */
-    @PreDestroy
-    public void shutdownRefreshExecutor()
-    {
-        refreshExecutor.shutdownNow();
     }
 
     /**

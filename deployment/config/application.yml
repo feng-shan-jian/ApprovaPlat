@@ -41,6 +41,14 @@ ruoyi:
   profile: ${RUOYI_PROFILE:/var/lib/ruoyi/uploadPath}
 
 spring:
+  task:
+    scheduling:
+      pool:
+        size: ${FLOWABLE_SCHEDULING_POOL_SIZE:5}
+      thread-name-prefix: workflow-scheduler-
+      shutdown:
+        await-termination: true
+        await-termination-period: 30s
   servlet:
     multipart:
       # 与 50 MiB 工作流业务上限一致；请求上限额外保留 5 MiB multipart 开销。
@@ -71,6 +79,8 @@ spring:
         enabled: false
 
 flowable:
+  scheduling:
+    enabled: ${FLOWABLE_SCHEDULING_ENABLED:true}
   # 生产库只允许发布系统执行已审计 SQL，禁止应用启动自动建表或升级。
   database-schema-update: "false"
   check-process-definitions: false

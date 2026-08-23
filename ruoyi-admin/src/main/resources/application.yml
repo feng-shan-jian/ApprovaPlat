@@ -61,6 +61,14 @@ user:
 
 # Spring配置
 spring:
+  task:
+    scheduling:
+      pool:
+        size: ${FLOWABLE_SCHEDULING_POOL_SIZE:5}
+      thread-name-prefix: workflow-scheduler-
+      shutdown:
+        await-termination: true
+        await-termination-period: 30s
   # SMTP 凭据只允许由部署环境或正式密钥注入；未配置时邮件 outbox 会进入可补偿死信。
   mail:
     host: ${APPROVAPLAT_SMTP_HOST:}
@@ -149,6 +157,8 @@ pagehelper:
 
 # Flowable 流程引擎配置
 flowable:
+  scheduling:
+    enabled: ${FLOWABLE_SCHEDULING_ENABLED:true}
   # 所有环境都由正式 SQL 管理 schema，应用启动不得自动改表。
   database-schema-update: "false"
   check-process-definitions: false
