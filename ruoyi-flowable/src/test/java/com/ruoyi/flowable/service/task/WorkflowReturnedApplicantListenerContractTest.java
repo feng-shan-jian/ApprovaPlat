@@ -62,7 +62,7 @@ class WorkflowReturnedApplicantListenerContractTest
     private WorkflowAutomaticCopyService automaticCopyService;
     private WorkflowTaskSlaRuntimeService slaRuntimeService;
     private WorkflowNotificationService notificationService;
-    private WorkflowMultiInstanceRoundService multiInstanceRoundService;
+    private WorkflowMultiInstanceRoundLifecycleService roundLifecycleService;
     private DelegateTask delegateTask;
     private WorkflowUserTaskListener listener;
 
@@ -81,13 +81,13 @@ class WorkflowReturnedApplicantListenerContractTest
         automaticCopyService = mock(WorkflowAutomaticCopyService.class);
         slaRuntimeService = mock(WorkflowTaskSlaRuntimeService.class);
         notificationService = mock(WorkflowNotificationService.class);
-        multiInstanceRoundService = mock(WorkflowMultiInstanceRoundService.class);
+        roundLifecycleService = mock(WorkflowMultiInstanceRoundLifecycleService.class);
         delegateTask = mock(DelegateTask.class);
         WorkflowUserTaskAuditService auditService = new WorkflowUserTaskAuditService(
                 taskService, identityResolver, new WorkflowIdentityCodec());
         listener = new WorkflowUserTaskListener(auditService, slaRuntimeService,
                 participantRuleRuntimeService, automaticCopyService,
-                notificationService, multiInstanceRoundService);
+                notificationService, roundLifecycleService);
     }
 
     /**
@@ -110,11 +110,11 @@ class WorkflowReturnedApplicantListenerContractTest
     void acceptsReturnedApplicantOnlyAfterMarkerAndAuthenticatedActorAreVisible()
     {
         Map<String, Object> returnVariables = Map.of(
-                WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE,
+                WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE,
                 "RETURN");
         configureAssignment(APPLICANT_ID, returnVariables);
         when(taskService.getVariableLocal(TASK_ID,
-                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE))
+                WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE))
                 .thenReturn(APPLICANT_ID);
         when(identityResolver.resolveActiveUserIds(
                 List.of(APPLICANT_ID), List.of()))
@@ -130,7 +130,7 @@ class WorkflowReturnedApplicantListenerContractTest
         InOrder order = inOrder(taskService, identityResolver,
                 automaticCopyService, slaRuntimeService, notificationService);
         order.verify(taskService).getVariableLocal(TASK_ID,
-                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE);
+                WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE);
         order.verify(identityResolver).resolveActiveUserIds(
                 List.of(APPLICANT_ID), List.of());
         order.verify(identityResolver).resolveApprovalEligibleUserIds(
@@ -163,11 +163,11 @@ class WorkflowReturnedApplicantListenerContractTest
     void restoresOriginalAssigneeOnlyAfterReturnMarkerIsRemovedForResubmit()
     {
         Map<String, Object> resubmitVariables = Map.of(
-                WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE,
+                WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE,
                 "RESUBMIT");
         configureAssignment(RESTORED_ASSIGNEE_ID, resubmitVariables);
         when(taskService.getVariableLocal(TASK_ID,
-                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE))
+                WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE))
                 .thenReturn(null);
         when(identityResolver.resolveApprovalEligibleUserIds(
                 Set.of(RESTORED_ASSIGNEE_ID)))
@@ -180,7 +180,7 @@ class WorkflowReturnedApplicantListenerContractTest
         InOrder order = inOrder(taskService, identityResolver,
                 automaticCopyService, slaRuntimeService, notificationService);
         order.verify(taskService).getVariableLocal(TASK_ID,
-                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE);
+                WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE);
         order.verify(identityResolver).resolveApprovalEligibleUserIds(
                 Set.of(RESTORED_ASSIGNEE_ID));
         order.verify(taskService).addComment(eq(TASK_ID),
@@ -214,10 +214,10 @@ class WorkflowReturnedApplicantListenerContractTest
     void rejectsApplicantAssignmentWithoutReturnedApplicantMarker()
     {
         configureAssignment(APPLICANT_ID, Map.of(
-                WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE,
+                WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE,
                 "RETURN"));
         when(taskService.getVariableLocal(TASK_ID,
-                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE))
+                WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE))
                 .thenReturn(null);
         when(identityResolver.resolveApprovalEligibleUserIds(Set.of(APPLICANT_ID)))
                 .thenReturn(Set.of());
@@ -244,10 +244,10 @@ class WorkflowReturnedApplicantListenerContractTest
     void rejectsReturnedApplicantMarkerWithoutAuthenticatedActor()
     {
         configureAssignment(APPLICANT_ID, Map.of(
-                WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE,
+                WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE,
                 "RETURN"));
         when(taskService.getVariableLocal(TASK_ID,
-                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE))
+                WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE))
                 .thenReturn(APPLICANT_ID);
         Authentication.setAuthenticatedUserId(null);
 

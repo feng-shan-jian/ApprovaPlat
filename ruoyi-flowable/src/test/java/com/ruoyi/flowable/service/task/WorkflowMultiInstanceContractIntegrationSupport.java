@@ -12,20 +12,17 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.UUID;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.runtime.Execution;
-import org.flowable.spring.SpringProcessEngineConfiguration;
 import org.flowable.task.api.Task;
-import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
+import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
 
 /**
  * 为两个多实例公共 API 契约类提供真实引擎生命周期、只读查询和完整事务快照。
@@ -55,6 +52,9 @@ abstract class WorkflowMultiInstanceContractIntegrationSupport
     protected TaskService taskService;
     protected TransactionTemplate transactionTemplate;
 
+    /** 当前用例独占且在 teardown 显式关闭的引擎基础设施。 */
+    private WorkflowFlowableEngineTestSupport engineInfrastructure;
+
     /**
      * 为每个用例创建独立的真实 Flowable 8 引擎、H2 数据库和 Spring 事务。
      *
@@ -63,13 +63,6 @@ abstract class WorkflowMultiInstanceContractIntegrationSupport
     @BeforeEach
     protected final void setUpEngine()
     {
-        JdbcDataSource dataSource = new JdbcDataSource();
-        dataSource.setURL("jdbc:h2:mem:mi-change-state-" + UUID.randomUUID()
-                + ";DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000");
-        dataSource.setUser("sa");
-        DataSourceTransactionManager transactionManager =
-                new DataSourceTransactionManager(dataSource);
-
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveApprovalEligibleUserIds(anyCollection()))
                 .thenAnswer(invocation ->
@@ -79,23 +72,19 @@ abstract class WorkflowMultiInstanceContractIntegrationSupport
                 });
         WorkflowMultiInstanceHandler multiInstanceHandler =
                 new WorkflowMultiInstanceHandler(
-                        new WorkflowUserSelectionValidator(identityResolver));
+                        new WorkflowUserSelectionValidator(identityResolver),
+                        new WorkflowMultiInstanceTransitionCoordinator());
 
         Map<Object, Object> beans = new LinkedHashMap<>();
         beans.put("multiInstanceHandler", multiInstanceHandler);
         beans.putAll(scenarioBeans());
 
-        SpringProcessEngineConfiguration configuration =
-                new SpringProcessEngineConfiguration();
-        configuration.setDataSource(dataSource);
-        configuration.setTransactionManager(transactionManager);
-        configuration.setDatabaseSchemaUpdate("true");
-        configuration.setHistory("full");
-        configuration.setBeans(beans);
-        processEngine = configuration.buildProcessEngine();
+        engineInfrastructure = WorkflowFlowableEngineTestSupport.start(
+                "mi-change-state", beans);
+        processEngine = engineInfrastructure.processEngine();
         runtimeService = processEngine.getRuntimeService();
         taskService = processEngine.getTaskService();
-        transactionTemplate = new TransactionTemplate(transactionManager);
+        transactionTemplate = engineInfrastructure.transactionTemplate();
         processEngine.getRepositoryService().createDeployment()
                 .addClasspathResource(bpmnResource())
                 .deploy();
@@ -109,10 +98,12 @@ abstract class WorkflowMultiInstanceContractIntegrationSupport
     @AfterEach
     protected final void tearDownEngine()
     {
-        if (processEngine != null)
+        if (engineInfrastructure != null)
         {
-            processEngine.close();
+            engineInfrastructure.close();
         }
+        processEngine = null;
+        engineInfrastructure = null;
     }
 
     /**

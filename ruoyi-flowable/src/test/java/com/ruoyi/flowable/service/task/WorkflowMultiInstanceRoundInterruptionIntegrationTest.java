@@ -13,6 +13,7 @@ import org.flowable.engine.runtime.Execution;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -23,14 +24,42 @@ import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
  * 使用真实 Flowable signal 边界事件验证引擎原生中断、非中断旁路和同节点新轮次。
  */
 class WorkflowMultiInstanceRoundInterruptionIntegrationTest
-        extends WorkflowMultiInstanceRoundFlowableSupport
 {
+    private WorkflowMultiInstanceRoundScenario fixture;
+    private org.flowable.engine.RepositoryService repositoryService;
+    private org.flowable.engine.RuntimeService runtimeService;
+    private org.flowable.engine.TaskService taskService;
+    private org.flowable.engine.HistoryService historyService;
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+    private com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper roundMapper;
+
+    /** 创建当前功能所需的轮次夹具并部署中断流程。 @return void，无返回值 */
+    @BeforeEach
+    void setUpFixture()
+    {
+        fixture = new WorkflowMultiInstanceRoundScenario();
+        repositoryService = fixture.repositoryService;
+        runtimeService = fixture.runtimeService;
+        taskService = fixture.taskService;
+        historyService = fixture.historyService;
+        jdbcTemplate = fixture.jdbcTemplate;
+        transactionTemplate = fixture.transactionTemplate;
+        roundMapper = fixture.roundMapper;
+        deployInterruptionProcesses();
+    }
+
+    /** 显式关闭轮次夹具。 @return void，无返回值 */
+    @AfterEach
+    void closeFixture()
+    {
+        fixture.close();
+    }
     /**
      * 部署包含多实例、CallActivity 和边界事件的正式 BPMN。
      *
      * @return void，无返回值；全局中断监听器已由公共 Flowable 支撑按生产语义注册
      */
-    @BeforeEach
     void deployInterruptionProcesses()
     {
         repositoryService.createDeployment()
@@ -255,7 +284,8 @@ class WorkflowMultiInstanceRoundInterruptionIntegrationTest
     void rollsBackBoundaryInterruptionWhenRoundCasConflicts()
     {
         ProcessInstance instance = start("roundInterruptReentry");
-        RuntimeSnapshot before = capture(instance.getId());
+        WorkflowMultiInstanceRoundScenario.CoreRuntimeSnapshot before =
+                fixture.captureCore(instance.getId());
         doReturn(0).when(roundMapper).compareAndSetTerminatedStatus(
                 anyLong(), anyInt(), any(WorkflowMultiInstanceRoundStatus.class));
 
@@ -263,7 +293,7 @@ class WorkflowMultiInstanceRoundInterruptionIntegrationTest
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
                         assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
 
-        assertThat(capture(instance.getId())).isEqualTo(before);
+        assertThat(fixture.captureCore(instance.getId())).isEqualTo(before);
         assertThat(runtimeService.createExecutionQuery()
                 .processInstanceId(instance.getId())
                 .signalEventSubscriptionName("interruptReentrySignal")
@@ -287,6 +317,56 @@ class WorkflowMultiInstanceRoundInterruptionIntegrationTest
             assertThat(subscription).isNotNull();
             runtimeService.signalEventReceived(signalName, subscription.getId());
         });
+    }
+
+    /** 委派轮次启动。 @param processKey String，流程定义 key @return ProcessInstance，运行实例 */
+    private ProcessInstance start(String processKey)
+    {
+        return fixture.start(processKey);
+    }
+
+    /** 委派带成员变量的轮次启动。 @param processKey String，流程定义 key @param activityId String，活动 ID @param members List，成员 @param variables Map，变量 @return ProcessInstance，运行实例 */
+    private ProcessInstance start(String processKey, String activityId,
+            List<String> members, Map<String, Object> variables)
+    {
+        return fixture.start(processKey, activityId, members, variables);
+    }
+
+    /** 委派活动轮次查询。 @param processInstanceId String，实例 ID @param activityId String，活动 ID @return WfMultiInstanceRound，活动轮次 */
+    private WfMultiInstanceRound activeRound(String processInstanceId,
+            String activityId)
+    {
+        return fixture.activeRound(processInstanceId, activityId);
+    }
+
+    /** 委派任务列表查询。 @param processInstanceId String，实例 ID @param activityId String，活动 ID @return List，活动任务 */
+    private List<Task> tasks(String processInstanceId, String activityId)
+    {
+        return fixture.tasks(processInstanceId, activityId);
+    }
+
+    /** 委派轮次列表查询。 @param processInstanceId String，实例 ID @return List，轮次列表 */
+    private List<WfMultiInstanceRound> rounds(String processInstanceId)
+    {
+        return fixture.rounds(processInstanceId);
+    }
+
+    /** 委派测试身份切换。 @param userId String，用户 ID @return void，无返回值 */
+    private void setCurrentUser(String userId)
+    {
+        fixture.setCurrentUser(userId);
+    }
+
+    /** 委派受控任务完成。 @param task Task，任务 @param revision int，预期 revision @return void，无返回值 */
+    private void complete(Task task, int revision)
+    {
+        fixture.complete(task, revision);
+    }
+
+    /** 委派唯一任务查询。 @param processInstanceId String，实例 ID @param activityId String，活动 ID @param assignee String，办理人 @return Task，唯一任务 */
+    private Task task(String processInstanceId, String activityId, String assignee)
+    {
+        return fixture.task(processInstanceId, activityId, assignee);
     }
 
     /**

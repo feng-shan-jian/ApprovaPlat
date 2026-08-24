@@ -3,7 +3,7 @@ package com.ruoyi.flowable.service.notification;
 import java.util.Set;
 
 /**
- * 通知策略和 Flowable 受控迁移共享的稳定领域常量。
+ * 通知策略稳定领域常量。
  */
 public final class WorkflowNotificationConstants
 {
@@ -19,10 +19,6 @@ public final class WorkflowNotificationConstants
             "TASK_RESUBMITTED", "TASK_COMPLETED", "PROCESS_COMPLETED",
             "PROCESS_CANCELED", "PROCESS_REJECTED", "PROCESS_TERMINATED", "MANUAL_URGE",
             "COPY_CREATED");
-
-    /** 退回和重提在最终任务归属稳定前使用的流程变量。 */
-    public static final String CONTROLLED_TRANSITION_VARIABLE =
-            "__ruoyi_workflow_notification_transition";
 
     private WorkflowNotificationConstants()
     {

@@ -20,6 +20,7 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCopy;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
+import com.ruoyi.flowable.service.task.WorkflowReturnedApplicationProtocol;
 
 /**
  * 工作流通知业务入口，负责冻结 Flowable 事实并协调 Planner 与 Writer。
@@ -89,7 +90,7 @@ public class WorkflowNotificationService
             return 0;
         }
         Object controlledTransition = runtimeService.getVariable(processInstanceId,
-                WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE);
+                WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE);
         if (controlledTransition != null)
         {
             if (!(controlledTransition instanceof String transition)
@@ -143,6 +144,46 @@ public class WorkflowNotificationService
                 stableTask, Set.of(), null, true, null, true,
                 route(stableTask.getProcessInstanceId(), stableTask.getId()), null);
         return writer.write(planner.plan(request)).channelRecordCount();
+    }
+
+    /**
+     * 在受控状态迁移删除活动任务前，登记这些任务尚未投递的人工催办取消动作。
+     *
+     * @param processInstanceId String，待撤销任务所属流程实例主键
+     * @param taskIds Collection&lt;String&gt;，本次迁移将删除的全部活动任务主键
+     * @return void，任务不存在、已非活动态或不属于同一实例时中止当前业务事务
+     */
+    public void onTasksWithdrawn(String processInstanceId, Collection<String> taskIds)
+    {
+        requireWriteTransaction();
+        String normalizedInstanceId = normalized(processInstanceId, 64,
+                "流程实例主键不合法");
+        if (taskIds == null || taskIds.isEmpty())
+        {
+            throw invalid("撤销任务集合不能为空");
+        }
+        LinkedHashSet<String> normalizedTaskIds = new LinkedHashSet<>();
+        for (String taskId : taskIds)
+        {
+            String normalizedTaskId = normalized(taskId, 64, "任务主键不合法");
+            if (!normalizedTaskIds.add(normalizedTaskId))
+            {
+                throw invalid("撤销任务集合不能包含重复任务");
+            }
+            Task activeTask = taskService.createTaskQuery().taskId(normalizedTaskId)
+                    .active().singleResult();
+            if (activeTask == null || !normalizedInstanceId.equals(
+                    activeTask.getProcessInstanceId()))
+            {
+                throw new ServiceException("撤销任务状态已变化", HttpStatus.CONFLICT);
+            }
+        }
+        // beforeCommit 回调在 Flowable flush 后执行；后续迁移失败或事务回滚时不会误取消催办。
+        for (String taskId : normalizedTaskIds)
+        {
+            outboxService.schedulePendingUrgeCancellation(normalizedInstanceId, taskId,
+                    "任务已被受控状态迁移撤销，取消未投递催办");
+        }
     }
 
     /**

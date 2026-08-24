@@ -43,6 +43,7 @@ import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.task.Comment;
 import org.flowable.identitylink.api.IdentityLinkInfo;
+import org.flowable.identitylink.api.IdentityLinkType;
 import org.flowable.task.api.Task;
 import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.variable.api.history.HistoricVariableInstance;
@@ -90,6 +91,7 @@ import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
+import com.ruoyi.flowable.service.task.WorkflowReturnedApplicationProtocol;
 import com.ruoyi.flowable.service.task.WorkflowControlledLoopService;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract.NextUserAssignmentPolicy;
@@ -331,7 +333,9 @@ public class WorkflowProcessDetailService
                 processAccessService.requireReadableInstance(instanceId);
         WorkflowTaskAccessSnapshot requestedTask = taskId == null ? null
                 : processAccessService.requireReadableTask(taskId);
-        if (requestedTask == null && "returned".equals(instance.businessStatus())
+        if (requestedTask == null
+                && WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
+                        instance.businessStatus())
                 && StringUtils.hasText(instance.startUserId()))
         {
             // “我的流程”详情不携带 taskId；退回态由服务端定位发起人独占任务并再次走对象授权。
@@ -384,7 +388,8 @@ public class WorkflowProcessDetailService
         WorkflowProcessFormSnapshotView currentTaskForm = requestedTask == null ? null
                 : buildCurrentTaskForm(requestedTask, tasksById, bpmn.process(), snapshots,
                         variables, instance.deploymentId(), currentTaskControlledLoop,
-                        "returned".equals(instance.businessStatus()) ? processForms : null,
+                        WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
+                                instance.businessStatus()) ? processForms : null,
                         responseBudget);
 
         Map<String, String> userNames = new HashMap<>();
@@ -392,7 +397,8 @@ public class WorkflowProcessDetailService
         List<WorkflowProcessActivityView> timeline = buildTimeline(activities, tasksById,
                 commentsByTask, instance, startUserName, userNames);
         WorkflowProcessViewerView viewer = buildViewer(activities, tasksById, commentsByTask,
-                "returned".equals(normalizeProcessStatus(instance)));
+                WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
+                        normalizeProcessStatus(instance)));
         String bpmnXml = deploymentService.getBpmnXml(definition.getId());
         List<WorkflowProcessRelationView> processRelations = buildProcessRelations(
                 instance.processInstanceId());
@@ -404,9 +410,11 @@ public class WorkflowProcessDetailService
         }
         Long durationMillis = instance.endTime() == null ? null
                 : safeDurationMillis(startTime, instance.endTime());
+        // 临时申请人任务只承载表单修改，不属于正式 ACTIVE 审批轮次，不能交给多实例服务解析。
+        boolean returnedApplicantTask = isReturnedApplicantTask(instance, requestedTask);
         // capability 由服务端对象所有权和部署模型共同计算，普通任务返回 null，页面无需用 409 探测。
         com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceStateView multiInstanceState =
-                requestedTask == null ? null
+                requestedTask == null || returnedApplicantTask ? null
                         : multiInstanceService.getOptionalState(requestedTask.taskId());
         // 退回入口必须由正式动作准备链投影；静态多实例、子流程和复杂执行树统一失败关闭。
         boolean returnAllowed = requestedTask != null && requestedTask.active()
@@ -421,6 +429,61 @@ public class WorkflowProcessDetailService
                 nextUserAssignmentPolicy.name(), multiInstanceState, returnAllowed,
                 controlledLoopStates, currentTaskForm,
                 processForms, timeline, processRelations, bpmnXml, viewer);
+    }
+
+    /**
+     * 严格识别退回阶段唯一的申请人待修改任务，避免把临时多实例根投影成正式审批轮次。
+     *
+     * @param instance WorkflowProcessAccessSnapshot，已经通过对象授权的流程实例快照
+     * @param task WorkflowTaskAccessSnapshot，可选的请求任务快照
+     * @return boolean，流程为 returned、局部标记和发起人一致且该任务是唯一活动任务时返回 true
+     */
+    private boolean isReturnedApplicantTask(WorkflowProcessAccessSnapshot instance,
+            WorkflowTaskAccessSnapshot task)
+    {
+        if (task == null || !task.active()
+                || !WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
+                        instance.businessStatus())
+                || !StringUtils.hasText(instance.startUserId())
+                || !Objects.equals(instance.processInstanceId(), task.processInstanceId())
+                || !Objects.equals(instance.startUserId(), task.assignee())
+                || task.owner() != null || StringUtils.hasText(task.delegationState()))
+        {
+            return false;
+        }
+        Object applicantMarker = taskService.getVariableLocal(
+                task.taskId(), WorkflowReturnedApplicationProtocol
+                        .RETURN_APPLICANT_VARIABLE);
+        if (!Objects.equals(instance.startUserId(), applicantMarker))
+        {
+            return false;
+        }
+
+        // 只有整个流程唯一的活动任务才可能是申请人待修改任务，组内或组外并行都继续走正式投影校验。
+        List<Task> activeTasks = taskService.createTaskQuery()
+                .processInstanceId(instance.processInstanceId()).active().list();
+        if (activeTasks == null || activeTasks.size() != 1)
+        {
+            return false;
+        }
+        Task activeTask = activeTasks.get(0);
+        boolean exactApplicantTask = activeTask != null
+                && Objects.equals(task.taskId(), activeTask.getId())
+                && Objects.equals(instance.startUserId(), activeTask.getAssignee())
+                && activeTask.getOwner() == null
+                && activeTask.getDelegationState() == null;
+        if (!exactApplicantTask)
+        {
+            return false;
+        }
+        // 临时待修改任务必须是申请人独占任务；残留候选关系属于持久化漂移，详情直接失败关闭。
+        var identityLinks = taskService.getIdentityLinksForTask(activeTask.getId());
+        if (identityLinks == null || identityLinks.stream().anyMatch(link -> link != null
+                && IdentityLinkType.CANDIDATE.equals(link.getType())))
+        {
+            throw dataError("退回申请人任务候选关系异常");
+        }
+        return true;
     }
 
     /**

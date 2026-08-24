@@ -8,8 +8,11 @@ import org.flowable.engine.delegate.event.FlowableActivityCancelledEvent;
 import org.flowable.engine.delegate.event.FlowableCancelledEvent;
 import org.flowable.engine.delegate.event.FlowableMultiInstanceActivityCancelledEvent;
 import org.flowable.engine.impl.persistence.entity.ExecutionEntity;
+import org.flowable.common.engine.impl.identity.Authentication;
 import org.springframework.beans.factory.ObjectProvider;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService;
+import com.ruoyi.flowable.service.task.MultiInstanceRootCancellationEvent;
+import com.ruoyi.flowable.service.task.ProcessInstanceCancellationEventSnapshot;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundTerminationService;
 
 /**
  * 接收 Flowable 多实例根异常取消事件，并在当前引擎事务内关闭正式业务轮次。
@@ -18,23 +21,25 @@ public final class WorkflowMultiInstanceRoundInterruptionListener
         extends AbstractFlowableEngineEventListener
 {
     /** 延迟解析轮次服务，避免流程引擎配置阶段反向创建 RuntimeService。 */
-    private final ObjectProvider<WorkflowMultiInstanceRoundService> roundServiceProvider;
+    private final ObjectProvider<WorkflowMultiInstanceRoundTerminationService>
+            terminationServiceProvider;
 
     /**
      * 创建仅处理多实例根取消事件的全局引擎监听器。
      *
-     * @param roundServiceProvider ObjectProvider&lt;WorkflowMultiInstanceRoundService&gt;，
+     * @param terminationServiceProvider ObjectProvider&lt;WorkflowMultiInstanceRoundTerminationService&gt;，
      *        引擎启动完成后再解析的正式轮次服务
      * @return 无返回值，构造后的监听器由 Flowable 全局事件分发器同步调用
      */
     public WorkflowMultiInstanceRoundInterruptionListener(
-            ObjectProvider<WorkflowMultiInstanceRoundService> roundServiceProvider)
+            ObjectProvider<WorkflowMultiInstanceRoundTerminationService>
+                    terminationServiceProvider)
     {
         super(Set.of(FlowableEngineEventType.ACTIVITY_CANCELLED,
                 FlowableEngineEventType.MULTI_INSTANCE_ACTIVITY_CANCELLED,
                 FlowableEngineEventType.PROCESS_CANCELLED));
-        this.roundServiceProvider = java.util.Objects.requireNonNull(
-                roundServiceProvider, "多实例轮次服务提供器不能为空");
+        this.terminationServiceProvider = java.util.Objects.requireNonNull(
+                terminationServiceProvider, "多实例轮次终止服务提供器不能为空");
     }
 
     /**
@@ -78,8 +83,13 @@ public final class WorkflowMultiInstanceRoundInterruptionListener
         {
             return;
         }
-        roundServiceProvider.getObject().onProcessInstanceCancelled(event,
-                processInstance);
+        terminationServiceProvider.getObject().onProcessInstanceCancelled(
+                new ProcessInstanceCancellationEventSnapshot(
+                        event.getProcessInstanceId(), event.getProcessDefinitionId(),
+                        event.getExecutionId(), processInstance.getId(),
+                        processInstance.getProcessDefinitionId(),
+                        processInstance.isProcessInstanceType(),
+                        processInstance.isDeleted()));
     }
 
     /**
@@ -97,7 +107,15 @@ public final class WorkflowMultiInstanceRoundInterruptionListener
         {
             return;
         }
-        roundServiceProvider.getObject().onMultiInstanceActivityCancelled(event,
-                multiInstanceRoot);
+        terminationServiceProvider.getObject().onMultiInstanceRootCancelled(
+                new MultiInstanceRootCancellationEvent(event.getProcessInstanceId(),
+                        event.getProcessDefinitionId(), event.getActivityId(),
+                        event.getActivityType(), event.getExecutionId(),
+                        multiInstanceRoot.getId(), multiInstanceRoot.getActivityId(),
+                        multiInstanceRoot.getProcessInstanceId(),
+                        multiInstanceRoot.getProcessDefinitionId(),
+                        multiInstanceRoot.isMultiInstanceRoot(),
+                        multiInstanceRoot.isSuspended(),
+                        Authentication.getAuthenticatedUserId()));
     }
 }

@@ -7,11 +7,13 @@
 ## 规则
 
 - 状态迁移端点必须是主流程中的普通用户任务或结束节点。
-- 动态、静态、串行或并行多实例任务都不能作为退回来源；成员快照和 revision 未按轮次隔离前，禁止退回后再次进入同一活动。
+- 普通退回来源仍必须是主流程普通同步用户任务。整组退回只额外允许使用平台受控 handler、无异步/补偿/边界事件的主流程并行多实例用户任务，并由正式轮次服务证明成员、模式、revision 和根 execution。
 - 任一路径出现并行、包容、复杂或事件网关时，整条迁移关系不可用；排他网关可保留串行语义。
-- 任一路径出现多实例活动、子流程、调用活动或跨作用域节点时，整条迁移关系不可用。
+- 受控多实例来源可以是首审批节点本身，此时目标与来源是同一 activity；位于后续位置时，服务端首审批目标必须是普通安全用户任务。不同受控多实例节点、静态多实例以及路径中间的任何多实例活动仍不可用。
+- 任一路径出现子流程、调用活动、服务/脚本活动、并行或包容网关、事件边界、补偿、异步或跨作用域节点时，整条迁移关系不可用。
 - 退回目标只能由服务端从实例真实历史确定为首个审批节点，客户端不能查询或提交目标节点。
 - 驳回接口不接收结束节点，因此 BPMN 只能存在一个主流程结束节点，且当前任务到该节点的路径必须安全。
+- 撤回只允许来源用户任务的直接同步普通用户任务后继；并行网关必须形成可证明的纯分支，且每个分支只有一个无条件普通用户任务。分析结果以不可变 `RevokeMovementPlan` 返回。
 - BPMN 图遍历有硬上限，异常模型以状态冲突拒绝，不执行猜测式迁移。
 
 ## 接入示例
@@ -20,6 +22,14 @@
 UserTask current = movementPolicy.requireMainProcessReturnSource(
         bpmnModel, processDefinition.getKey(), task.getTaskDefinitionKey());
 movementPolicy.requireSafeDirectReturnPath(process, firstApprovalTask, current);
+
+UserTask controlledCurrent = movementPolicy.requireMainProcessControlledReturnSource(
+        bpmnModel, processDefinition.getKey(), task.getTaskDefinitionKey());
+movementPolicy.requireSafeControlledReturnPath(
+        process, firstApprovalTask, controlledCurrent);
+
+WorkflowTaskMovementPolicy.RevokeMovementPlan revokePlan =
+        movementPolicy.requireSafeRevokeMovement(process, completedUserTask);
 ```
 
-调用方必须在同一事务内重新查询任务、流程实例、历史和执行树，并在真正执行 `changeState()` 前由服务端确定首审批节点，再使用本策略校验直达路径。客户端不参与目标选择。
+调用方必须在同一事务内重新查询任务、流程实例、历史和执行树，并在真正执行 `changeState()` 前由服务端确定首审批节点，再使用与来源类型对应的策略校验路径。该类只证明 BPMN 拓扑可安全重放；受控多实例成员、计数、轮次和并发事实仍由轮次服务负责。客户端不参与目标选择。

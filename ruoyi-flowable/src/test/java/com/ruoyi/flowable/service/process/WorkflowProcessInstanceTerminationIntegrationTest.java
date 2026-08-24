@@ -22,7 +22,10 @@ import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundTerminationService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundRepository;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRuntimeSnapshotReader;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceTransitionCoordinator;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
 
@@ -59,14 +62,21 @@ class WorkflowProcessInstanceTerminationIntegrationTest
                         "bpmn/workflow-process-instance-termination.bpmn20.xml")
                 .deploy();
         WfMultiInstanceRoundMapper roundMapper = mock(WfMultiInstanceRoundMapper.class);
-        WorkflowMultiInstanceRoundService roundService =
-                new WorkflowMultiInstanceRoundService(roundMapper,
-                        repositoryService, runtimeService);
+        WorkflowMultiInstanceRuntimeSnapshotReader snapshotReader =
+                new WorkflowMultiInstanceRuntimeSnapshotReader(repositoryService,
+                        runtimeService, taskService);
+        WorkflowMultiInstanceRoundRepository roundRepository =
+                new WorkflowMultiInstanceRoundRepository(roundMapper);
+        WorkflowMultiInstanceRoundTerminationService roundTerminationService =
+                new WorkflowMultiInstanceRoundTerminationService(roundRepository,
+                        snapshotReader,
+                        new WorkflowMultiInstanceTransitionCoordinator(),
+                        runtimeService, taskService);
         processInstanceService = new WorkflowProcessInstanceService(
                 mock(WorkflowEngineOperations.class), historyService, runtimeService,
                 taskService, mock(WfAttachmentMapper.class), mock(WfCopyMapper.class),
                 mock(WfControlledLoopExecutionMapper.class),
-                roundMapper, roundService, mock(PermissionService.class),
+                roundMapper, roundTerminationService, mock(PermissionService.class),
                 mock(WorkflowTaskSlaRuntimeService.class),
                 mock(WorkflowNotificationService.class));
     }

@@ -5,7 +5,9 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Collection;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import org.flowable.bpmn.model.BaseElement;
@@ -45,6 +47,29 @@ import com.ruoyi.flowable.service.notification.WorkflowNotificationWriter;
 @Service
 public class WorkflowTaskSlaRuntimeService
 {
+    /** 受控状态迁移撤销任务时允许写入 COMPLETE 审计的固定业务原因。 */
+    public enum ControlledWithdrawal
+    {
+        /** 整组退回撤销多实例根下全部剩余成员任务。 */
+        GROUP_RETURN("受控整组退回撤销审批任务"),
+
+        /** 重提撤销唯一申请人待修改任务并重建原审批组。 */
+        GROUP_RESUBMIT("受控重提撤销申请人待修改任务");
+
+        /** 写入不可变 COMPLETE 审计的稳定业务详情。 */
+        private final String auditDetail;
+
+        /**
+         * 创建固定受控撤销原因。
+         * @param auditDetail String，不可由客户端覆盖的审计详情
+         * @return 无返回值，枚举初始化后只读
+         */
+        ControlledWithdrawal(String auditDetail)
+        {
+            this.auditDetail = auditDetail;
+        }
+    }
+
     private final RepositoryService repositoryService;
     private final ManagementService managementService;
     private final ProcessEngineConfiguration processEngineConfiguration;
@@ -149,6 +174,51 @@ public class WorkflowTaskSlaRuntimeService
             }
             requireAudit(execution.getSlaExecutionId(), "COMPLETE", 0,
                     assignee, "审批任务按业务路径完成");
+        }
+    }
+
+    /**
+     * 在受控整组状态迁移删除任务前，将这些精确任务仍开放的 SLA 原子收口为 COMPLETED。
+     * @param processInstanceId String，任务所属流程实例主键
+     * @param taskIds Collection&lt;String&gt;，本次迁移即将撤销的精确任务主键
+     * @param actorUserId String，已由上层校验的退回成员或重提发起人主键
+     * @param withdrawal ControlledWithdrawal，只允许服务端固定的整组退回或重提原因
+     * @return void，没有配置 SLA 的任务按幂等成功处理；任一 CAS 或审计失败时回滚整笔 Flowable 命令
+     */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public void completeControlledWithdrawal(String processInstanceId,
+            Collection<String> taskIds, String actorUserId,
+            ControlledWithdrawal withdrawal)
+    {
+        if (processInstanceId == null || processInstanceId.isBlank()
+                || actorUserId == null || actorUserId.isBlank()
+                || withdrawal == null || taskIds == null || taskIds.isEmpty())
+        {
+            throw dataError("受控撤销 SLA 参数不完整");
+        }
+        // 精确任务集合来自已对账的活动任务；拒绝空主键并去重，避免构造无边界 SQL。
+        LinkedHashSet<String> normalizedTaskIds = new LinkedHashSet<>();
+        for (String taskId : taskIds)
+        {
+            if (taskId == null || taskId.isBlank())
+            {
+                throw dataError("受控撤销 SLA 任务主键无效");
+            }
+            normalizedTaskIds.add(taskId);
+        }
+        List<WfTaskSlaExecution> executions = slaMapper
+                .selectWithdrawableExecutionsForUpdate(processInstanceId,
+                        List.copyOf(normalizedTaskIds));
+        for (WfTaskSlaExecution execution : executions)
+        {
+            // 锁行后仍以 revision 和开放状态 CAS，防止定时升级或正常完成竞争产生双重终态。
+            if (slaMapper.completeExecution(execution.getSlaExecutionId(),
+                    execution.getRevision()) != 1)
+            {
+                throw conflict();
+            }
+            requireAudit(execution.getSlaExecutionId(), "COMPLETE", 0,
+                    actorUserId, withdrawal.auditDetail);
         }
     }
 

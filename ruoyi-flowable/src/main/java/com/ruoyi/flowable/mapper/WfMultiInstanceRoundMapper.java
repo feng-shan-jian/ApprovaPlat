@@ -53,6 +53,18 @@ public interface WfMultiInstanceRoundMapper
             @Param("activityId") String activityId);
 
     /**
+     * 按申请人待修改任务主键查询唯一应处于 RETURNED 的轮次。
+     *
+     * 返回集合而非限制一行，确保历史脏数据或并发异常造成重复关联时由上层失败关闭，
+     * 不会静默选择任意轮次继续重提。
+     *
+     * @param applicantTaskId String，Flowable 申请人待修改任务主键
+     * @return List&lt;WfMultiInstanceRound&gt;，按轮次主键升序排列的 RETURNED 轮次
+     */
+    List<WfMultiInstanceRound> selectReturnedByApplicantTaskId(
+            @Param("applicantTaskId") String applicantTaskId);
+
+    /**
      * 查询同实例同节点已分配的最大轮次号。
      *
      * @param processInstanceId String，Flowable 流程实例主键
@@ -75,6 +87,44 @@ public interface WfMultiInstanceRoundMapper
             @Param("expectedRevision") int expectedRevision,
             @Param("newRevision") int newRevision,
             @Param("membersJson") String membersJson);
+
+    /**
+     * 整组退回写链在引擎任务迁移完成后，将唯一 ACTIVE 轮次 CAS 为 RETURNED。
+     *
+     * 退回时间固定使用数据库时钟；revision 和成员快照保持不变，作为随后重建新轮次的
+     * 冻结事实。状态或旧 revision 漂移时返回 0，由上层回滚同一 Flowable 命令。
+     *
+     * @param roundId long，已经完成 Flowable/业务对账的 ACTIVE 轮次主键
+     * @param expectedRevision int，退回前 Flowable 与轮次表共同 revision
+     * @param returnSourceTaskId String，触发整组退回的活动任务主键
+     * @param returnActorUserId String，执行退回的规范用户主键
+     * @param applicantTaskId String，迁移后唯一申请人待修改任务主键
+     * @return int，仅主键、revision 和 ACTIVE 状态匹配时返回 1
+     */
+    int compareAndSetReturnedStatus(@Param("roundId") long roundId,
+            @Param("expectedRevision") int expectedRevision,
+            @Param("returnSourceTaskId") String returnSourceTaskId,
+            @Param("returnActorUserId") String returnActorUserId,
+            @Param("applicantTaskId") String applicantTaskId);
+
+    /**
+     * 发起人重提写链按完整退回关联，将唯一 RETURNED 轮次 CAS 为 REOPENED。
+     *
+     * 除主键、revision 和状态外，还必须精确匹配申请人任务、退回源任务及操作人，避免
+     * 旧页面、串线任务或错误内部迁移标识关闭其他轮次。重开时间固定使用数据库时钟。
+     *
+     * @param roundId long，通过 applicantTaskId 唯一定位并完成对账的轮次主键
+     * @param expectedRevision int，退回时冻结且重提时再次对账的 revision
+     * @param applicantTaskId String，本次重提的唯一申请人待修改任务主键
+     * @param returnSourceTaskId String，轮次冻结的原退回源任务主键
+     * @param returnActorUserId String，轮次冻结的原退回操作人用户主键
+     * @return int，仅全部严格条件匹配时返回 1，竞争或关联漂移返回 0
+     */
+    int compareAndSetReopenedStatus(@Param("roundId") long roundId,
+            @Param("expectedRevision") int expectedRevision,
+            @Param("applicantTaskId") String applicantTaskId,
+            @Param("returnSourceTaskId") String returnSourceTaskId,
+            @Param("returnActorUserId") String returnActorUserId);
 
     /**
      * 完成监听器在修订号已由前置链路推进后，仅 CAS 关闭 ACTIVE 轮次。

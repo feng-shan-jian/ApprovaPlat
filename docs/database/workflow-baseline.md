@@ -83,10 +83,11 @@
 - `ACT_RE_MODEL(KEY_, VERSION_, TENANT_ID_)` 保留唯一约束，模型并发由 Flowable revision 和自然版本唯一键保护。
 - `wf_integration_credential` 只保存固定限额、Token 摘要、scope、revision、轮换、吊销和最近使用时间，不保存分钟窗口计数。
 - `wf_attachment_quota_guard.owner_user_id` 只允许正数用户 ID；同用户配额计算使用行锁，不存在用户 0 全局锁行。
-- `wf_multi_instance_round` 仅保存有序成员快照、轮次状态和审计关联；Flowable 变量仍是实时执行源。同实例同节点最多一条 `ACTIVE/RETURNED` 轮次，不对 `ACT_*` 表增加字段或外键。
+- `wf_multi_instance_round` 仅保存有序成员快照、轮次状态和审计关联；Flowable 变量仍是实时执行源。同实例同节点最多一条 `ACTIVE/RETURNED` 轮次，不对 `ACT_*` 表增加字段或外键。整组退回以单行 CAS 执行 `ACTIVE -> RETURNED` 并保存来源任务、操作人、唯一申请人任务和数据库时间；重提通过 `applicant_task_id` 精确定位后以 CAS 执行 `RETURNED -> REOPENED`，新 root execution 另建下一轮 `ACTIVE`，不得从客户端或历史 identity link 回填快照。
 - `wf_attachment.cleanup_claim_token/cleanup_lease_until` 必须同时为空或同时有效，领取中的附件必须尚未物理删除且处于 `EXPIRED/DELETED`。
 - `wf_notification_inbox` 使用 `notification_key + recipient_user_id` 唯一约束，并保存 `source_type/source_id`；站内信在业务事务内直接写入，不依赖 Outbox 关联。
 - `wf_notification_outbox` 只允许 `EMAIL`、`SMS`，仅承载外部投递副作用；普通策略仍可在 `wf_notification_policy.channels` 选择 `INBOX`。
+- `wf_task_sla_execution.status=COMPLETED` 表示 SLA 时钟已经关闭，不等同于审批业务通过；受控整组退回和重提必须在对应 `wf_task_sla_audit` 保存固定撤销详情，以区别正常任务完成。
 - `wf_task_sla_audit.sla_execution_id` 使用 `ON DELETE CASCADE`，SLA execution 满足保留条件后由数据库同步删除审计，禁止孤立增长。
 - 生命周期候选索引统一包含终态、终态时间和稳定主键；协作审计按 `message_id + direction` 随父记录同事务删除。
 - 业务自然键、扩展版本、入站请求、outbox 和消息顺序继续由 MySQL 唯一键兜底。

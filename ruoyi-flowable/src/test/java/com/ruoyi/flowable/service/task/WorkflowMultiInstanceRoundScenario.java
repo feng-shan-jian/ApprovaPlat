@@ -7,11 +7,9 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -20,14 +18,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
-import org.apache.ibatis.builder.xml.XMLMapperBuilder;
-import org.apache.ibatis.mapping.Environment;
-import org.apache.ibatis.session.SqlSessionFactory;
-import org.apache.ibatis.session.SqlSessionFactoryBuilder;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.common.engine.api.FlowableException;
@@ -37,21 +29,13 @@ import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.delegate.TaskListener;
+import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
-import org.flowable.engine.runtime.Execution;
 import org.flowable.engine.runtime.ProcessInstance;
-import org.flowable.spring.SpringProcessEngineConfiguration;
 import org.flowable.task.api.Task;
 import org.flowable.task.service.delegate.DelegateTask;
-import org.h2.jdbcx.JdbcDataSource;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.mybatis.spring.SqlSessionTemplate;
-import org.mybatis.spring.transaction.SpringManagedTransactionFactory;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
@@ -71,63 +55,59 @@ import com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper;
 import com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
+import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
 
-/**
- * 为多组轮次事务集成测试提供真实 Flowable 生命周期、正式 Mapper、查询和快照能力。
+/** 为轮次核心集成测试提供真实引擎、正式 Mapper、生产监听器、核心动作与运行快照。
  */
-abstract class WorkflowMultiInstanceRoundFlowableSupport
+final class WorkflowMultiInstanceRoundScenario implements AutoCloseable
 {
     /** 默认受控多实例成员。 */
-    protected static final List<String> MEMBERS = List.of("201", "202");
+    static final List<String> MEMBERS = List.of("201", "202");
 
     /** 测试注入的稳定监听故障消息。 */
-    protected static final String AUDIT_FAILURE_MESSAGE =
+    static final String AUDIT_FAILURE_MESSAGE =
             "injected round completion audit failure";
 
-    protected ProcessEngine processEngine;
-    protected RepositoryService repositoryService;
-    protected RuntimeService runtimeService;
-    protected TaskService taskService;
-    protected HistoryService historyService;
-    protected JdbcTemplate jdbcTemplate;
-    protected TransactionTemplate transactionTemplate;
-    protected WfMultiInstanceRoundMapper roundMapper;
-    protected WorkflowMultiInstanceRoundService roundService;
-    protected WorkflowMultiInstanceService multiInstanceService;
-    protected WorkflowIdentityResolver identityResolver;
-    protected WorkflowEngineOperations engineOperations;
+    ProcessEngine processEngine;
+    RepositoryService repositoryService;
+    RuntimeService runtimeService;
+    TaskService taskService;
+    HistoryService historyService;
+    JdbcTemplate jdbcTemplate;
+    TransactionTemplate transactionTemplate;
+    WfMultiInstanceRoundMapper roundMapper;
+    /** 正式 XML Mapper 委托，供故障和并发测试在观察点后继续执行真实 SQL。 */
+    WfMultiInstanceRoundMapper roundMapperDelegate;
+    WorkflowMultiInstanceRoundRepository roundRepository;
+    WorkflowMultiInstanceRuntimeSnapshotReader snapshotReader;
+    WorkflowMultiInstanceRoundLifecycleService roundLifecycleService;
+    WorkflowMultiInstanceRoundTerminationService roundTerminationService;
+    WorkflowMultiInstanceTransitionCoordinator transitionCoordinator;
+    WorkflowMultiInstanceService multiInstanceService;
+    WorkflowIdentityResolver identityResolver;
+    WorkflowEngineOperations engineOperations;
+    /** 生产任务监听器使用的通知依赖，组退回夹具可增加故障注入。 */
+    WorkflowNotificationService notificationService;
+    String deploymentId;
 
-    /** 当前动态接口操作人，测试在每次正式查询或调整前显式设置。 */
-    private final AtomicReference<String> currentUserId =
-            new AtomicReference<>(MEMBERS.get(0));
+    /** 真实 Flowable、共享事务与独立 H2 生命周期基础设施。 */
+    private WorkflowFlowableEngineTestSupport engineInfrastructure;
+
+    /** 当前动态接口操作人；线程隔离保证并发动作分别使用各自真实办理人。 */
+    private final ThreadLocal<String> currentUserId =
+            ThreadLocal.withInitial(() -> MEMBERS.get(0));
 
     /** complete 轮次 CAS 后的审计故障开关。 */
     private final AtomicBoolean failNextCompleteAudit = new AtomicBoolean();
 
-    /**
-     * 为每个用例创建共享 H2 数据源、真实 Flowable 引擎、正式 Mapper、
-     * 生产任务监听器、全局中断监听器和领域服务。
-     *
-     * @return void，无返回值；无关身份、SLA、抄送和通知依赖使用显式 mock 隔离
-     */
-    @BeforeEach
-    protected final void setUpRoundEngine()
-    {
-        JdbcDataSource dataSource = new JdbcDataSource();
-        dataSource.setURL("jdbc:h2:mem:mi-round-" + UUID.randomUUID()
-                + ";DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000");
-        dataSource.setUser("sa");
-        DataSourceTransactionManager transactionManager =
-                new DataSourceTransactionManager(dataSource);
-        transactionTemplate = new TransactionTemplate(transactionManager);
-        transactionTemplate.setIsolationLevel(
-                TransactionDefinition.ISOLATION_REPEATABLE_READ);
-        jdbcTemplate = new JdbcTemplate(dataSource);
-        createRoundTable();
-        WfMultiInstanceRoundMapper realMapper = createRoundMapper(dataSource);
-        // 可委托 mock 保留正式 XML 行为，同时允许单个用例在明确 Mapper 调用点注入故障。
-        roundMapper = mock(WfMultiInstanceRoundMapper.class, delegatesTo(realMapper));
+    /** create 监听器在轮次写入后的故障开关。 */
+    private final AtomicBoolean failNextCreateAudit = new AtomicBoolean();
 
+    /** 为每个用例创建共享 H2、真实 Flowable、正式轮次 Mapper、生产监听器和核心服务。
+     * @return void，不创建附件表、SLA 表、部署表单制品或完整任务生命周期服务 */
+    WorkflowMultiInstanceRoundScenario()
+    {
         identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveApprovalEligibleUserIds(anyCollection()))
                 .thenAnswer(invocation ->
@@ -139,38 +119,61 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
                 new WorkflowCurrentIdentity(currentUserId.get(), Set.of()));
         WorkflowUserSelectionValidator userSelectionValidator =
                 new WorkflowUserSelectionValidator(identityResolver);
+        // Handler 与轮次监听服务必须共享同一命令内迁移协议，才能对账创建和取消事件。
+        transitionCoordinator = new WorkflowMultiInstanceTransitionCoordinator();
         WorkflowMultiInstanceHandler handler =
-                new WorkflowMultiInstanceHandler(userSelectionValidator);
+                new WorkflowMultiInstanceHandler(userSelectionValidator,
+                        transitionCoordinator);
         LateBindingTaskListener listenerBinding = new LateBindingTaskListener();
 
-        SpringProcessEngineConfiguration configuration =
-                new SpringProcessEngineConfiguration();
-        configuration.setDataSource(dataSource);
-        configuration.setTransactionManager(transactionManager);
-        configuration.setDatabaseSchemaUpdate("true");
-        configuration.setHistory("full");
-        configuration.setBeans(Map.of(
+        engineInfrastructure = WorkflowFlowableEngineTestSupport.start("mi-round", Map.of(
                 "multiInstanceHandler", handler,
                 "userTaskListener", listenerBinding));
-        processEngine = configuration.buildProcessEngine();
+        DataSource dataSource = engineInfrastructure.dataSource();
+        processEngine = engineInfrastructure.processEngine();
+        jdbcTemplate = engineInfrastructure.jdbcTemplate();
+        transactionTemplate = engineInfrastructure.transactionTemplate();
+        // Flowable 完成自身 H2 DDL 后再切换兼容模式并创建正式轮次测试表。
+        jdbcTemplate.execute("set mode MySQL");
+        WorkflowH2SchemaMapperSupport.executeSchema(dataSource,
+                WorkflowH2SchemaMapperSupport.MULTI_INSTANCE_ROUND_SCHEMA);
+        roundMapperDelegate = WorkflowH2SchemaMapperSupport.createSpringMapper(dataSource,
+                "mi-round-it", WfMultiInstanceRoundMapper.class,
+                "mapper/flowable/WfMultiInstanceRoundMapper.xml");
+        // 可委托 mock 保留正式 XML 行为，同时允许单个用例精确注入 Mapper 故障。
+        roundMapper = mock(WfMultiInstanceRoundMapper.class,
+                delegatesTo(roundMapperDelegate));
+        roundRepository = new WorkflowMultiInstanceRoundRepository(roundMapper);
         repositoryService = processEngine.getRepositoryService();
-        runtimeService = processEngine.getRuntimeService();
+        // 组退回故障用例需要在精确 setVariable 调用点注入异常，其余调用保持真实行为。
+        runtimeService = spy(processEngine.getRuntimeService());
         taskService = processEngine.getTaskService();
         historyService = processEngine.getHistoryService();
 
-        roundService = new WorkflowMultiInstanceRoundService(roundMapper,
-                repositoryService, runtimeService);
-        // 所有轮次事务集成组都必须带上生产全局监听器，同时验证自然完成、显式终止和原生中断不双写。
+        snapshotReader = new WorkflowMultiInstanceRuntimeSnapshotReader(
+                repositoryService, runtimeService, taskService);
+        roundLifecycleService = new WorkflowMultiInstanceRoundLifecycleService(
+                roundRepository, snapshotReader, transitionCoordinator);
+        roundTerminationService = new WorkflowMultiInstanceRoundTerminationService(
+                roundRepository, snapshotReader, transitionCoordinator,
+                runtimeService, taskService);
         DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
-        beanFactory.registerSingleton("workflowMultiInstanceRoundService", roundService);
+        beanFactory.registerSingleton("workflowMultiInstanceRoundTerminationService",
+                roundTerminationService);
         processEngine.getProcessEngineConfiguration().getEventDispatcher()
                 .addEventListener(new WorkflowMultiInstanceRoundInterruptionListener(
                         beanFactory.getBeanProvider(
-                                WorkflowMultiInstanceRoundService.class)));
+                                WorkflowMultiInstanceRoundTerminationService.class)));
+        notificationService = mock(WorkflowNotificationService.class);
         WorkflowUserTaskAuditService auditService = mock(WorkflowUserTaskAuditService.class);
         doAnswer(invocation ->
         {
             String eventName = invocation.getArgument(0);
+            if (TaskListener.EVENTNAME_CREATE.equals(eventName)
+                    && failNextCreateAudit.compareAndSet(true, false))
+            {
+                throw new FlowableException("injected task create audit failure");
+            }
             if (TaskListener.EVENTNAME_COMPLETE.equals(eventName)
                     && failNextCompleteAudit.compareAndSet(true, false))
             {
@@ -184,14 +187,15 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
                 auditService, mock(WorkflowTaskSlaRuntimeService.class),
                 mock(WorkflowParticipantRuleRuntimeService.class),
                 mock(WorkflowAutomaticCopyService.class),
-                mock(WorkflowNotificationService.class), roundService);
+                notificationService, roundLifecycleService);
         listenerBinding.bind(productionListener);
 
         WorkflowAuthenticationContext authenticationContext =
                 new WorkflowAuthenticationContext(processEngine.getIdentityService(),
                         new WorkflowIdentityCodec());
-        engineOperations = new WorkflowEngineOperations(
+        WorkflowEngineOperations operationsTarget = new WorkflowEngineOperations(
                 authenticationContext, new WorkflowExceptionTranslator(), identityResolver);
+        engineOperations = transactionalProxy(operationsTarget);
         WorkflowMultiInstanceUserMapper userMapper =
                 mock(WorkflowMultiInstanceUserMapper.class);
         when(userMapper.selectUserNamesByIds(anyList())).thenAnswer(invocation ->
@@ -201,37 +205,58 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
                     id, "用户" + id)).toList();
         });
         multiInstanceService = new WorkflowMultiInstanceService(engineOperations,
-                identityResolver, userSelectionValidator, userMapper, repositoryService,
-                runtimeService, taskService, historyService, roundService);
-        repositoryService.createDeployment()
+                identityResolver, userSelectionValidator, userMapper,
+                runtimeService, taskService, historyService, snapshotReader,
+                roundLifecycleService);
+        Deployment deployment = repositoryService.createDeployment()
                 .addClasspathResource(
                         "bpmn/workflow-multi-instance-round-lifecycle.bpmn20.xml")
                 .deploy();
+        deploymentId = deployment.getId();
     }
 
-    /**
-     * 关闭真实引擎并清理线程身份，隔离各测试的任务、execution、变量与轮次。
-     *
-     * @return void，无返回值
-     */
-    @AfterEach
-    protected final void tearDownRoundEngine()
+    /** 关闭真实引擎并清理线程身份，隔离各测试的任务、execution、变量与轮次。
+     * @return void，即使关闭异常也清理当前线程身份 */
+    @Override
+    public void close()
     {
-        if (processEngine != null)
+        try
         {
-            processEngine.close();
+            if (engineInfrastructure != null)
+            {
+                engineInfrastructure.close();
+            }
+        }
+        finally
+        {
+            processEngine = null;
+            engineInfrastructure = null;
+            currentUserId.remove();
         }
     }
 
-    /**
-     * 启动需要流程变量成员集合的受控多实例流程。
-     *
+    /** 返回核心引擎与 Mapper 共用的数据源，供一层专用夹具创建自身业务表。
+     * @return DataSource，当前测试独占数据源 */
+    protected final DataSource dataSource()
+    {
+        return engineInfrastructure.dataSource();
+    }
+
+    /** 为专用夹具创建的生产服务应用当前真实 Spring 事务。
+     * @param target T，需要加入 Flowable 共享事务的生产服务
+     * @param <T> 生产服务类型
+     * @return T，保留生产类型的 CGLIB 事务代理 */
+    protected final <T> T transactionalProxy(T target)
+    {
+        return engineInfrastructure.transactionalProxy(target);
+    }
+
+    /** 启动需要流程变量成员集合的受控多实例流程。
      * @param processKey String，部署流程定义 key
      * @param activityId String，受控多实例活动 ID
      * @param members List&lt;String&gt;，有序成员用户主键
      * @param additionalVariables Map&lt;String,Object&gt;，循环等场景附加变量
-     * @return ProcessInstance，已经创建正式首轮及全部成员任务的活动实例
-     */
+     * @return ProcessInstance，已经创建正式首轮及全部成员任务的活动实例 */
     protected final ProcessInstance start(String processKey, String activityId,
             List<String> members, Map<String, Object> additionalVariables)
     {
@@ -241,35 +266,26 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
         return runtimeService.startProcessInstanceByKey(processKey, variables);
     }
 
-    /**
-     * 启动无需外部成员变量的固定或指定成员流程。
-     *
+    /** 启动无需外部成员变量的固定或指定成员流程。
      * @param processKey String，部署流程定义 key
-     * @return ProcessInstance，已经创建正式首轮的活动实例
-     */
+     * @return ProcessInstance，已经创建正式首轮的活动实例 */
     protected final ProcessInstance start(String processKey)
     {
         return runtimeService.startProcessInstanceByKey(processKey);
     }
 
-    /**
-     * 设置下一次生产服务命令使用的当前正式用户。
-     *
-     * @param userId String，规范数字用户主键；测试需与发起人或任务办理人一致
-     * @return void，无返回值
-     */
+    /** 设置下一次生产服务命令使用的当前正式用户。
+     * @param userId String，规范数字用户主键
+     * @return void，无返回值 */
     protected final void setCurrentUser(String userId)
     {
         currentUserId.set(userId);
     }
 
-    /**
-     * 通过生产完成预留、真实 taskService.complete 和写后对账完成一个多实例成员任务。
-     *
+    /** 通过生产完成预留、真实 taskService.complete 和写后对账完成一个多实例成员任务。
      * @param task Task，当前活动成员任务
      * @param expectedRevision int，客户端读取到的正式 revision
-     * @return void，任一引擎或轮次事实不一致时整个事务回滚
-     */
+     * @return void，任一引擎或轮次事实不一致时整个事务回滚 */
     protected final void complete(Task task, int expectedRevision)
     {
         transactionTemplate.executeWithoutResult(status ->
@@ -286,35 +302,29 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
         });
     }
 
-    /**
-     * 使用生产动态调整服务增加一个正式成员。
-     *
+    /** 使用生产动态调整服务增加一个正式成员。
      * @param currentTask Task，当前操作人的活动任务
      * @param expectedRevision int，客户端预期 revision
      * @param userId long，新增成员用户主键
-     * @return void，调整和写后对账在同一可重复读事务内完成
-     */
+     * @return void，调整和写后对账在同一可重复读事务内完成 */
     protected final void addMember(Task currentTask, int expectedRevision, long userId)
     {
-        currentUserId.set(currentTask.getAssignee());
+        setCurrentUser(currentTask.getAssignee());
         transactionTemplate.execute(status -> multiInstanceService.adjust(
                 new WorkflowMultiInstanceAdjustmentRequest(currentTask.getId(),
                         WorkflowMultiInstanceAdjustmentAction.ADD,
                         (long) expectedRevision, "增加复核成员", List.of(userId), null)));
     }
 
-    /**
-     * 使用生产动态调整服务删除同根尚未完成的 sibling 成员。
-     *
+    /** 使用生产动态调整服务删除同根尚未完成的 sibling 成员。
      * @param currentTask Task，当前操作人的活动任务
      * @param targetTask Task，待删除的 sibling 任务
      * @param expectedRevision int，客户端预期 revision
-     * @return void，调整和写后对账在同一可重复读事务内完成
-     */
+     * @return void，调整和写后对账在同一可重复读事务内完成 */
     protected final void removeMember(Task currentTask, Task targetTask,
             int expectedRevision)
     {
-        currentUserId.set(currentTask.getAssignee());
+        setCurrentUser(currentTask.getAssignee());
         transactionTemplate.execute(status -> multiInstanceService.adjust(
                 new WorkflowMultiInstanceAdjustmentRequest(currentTask.getId(),
                         WorkflowMultiInstanceAdjustmentAction.REMOVE,
@@ -322,13 +332,10 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
                         targetTask.getId())));
     }
 
-    /**
-     * 查询指定节点活动任务并按办理人稳定排序。
-     *
+    /** 查询指定节点活动任务并按办理人稳定排序。
      * @param processInstanceId String，流程实例主键
      * @param activityId String，受控多实例活动 ID
-     * @return List&lt;Task&gt;，当前活动成员任务
-     */
+     * @return List&lt;Task&gt;，当前活动成员任务 */
     protected final List<Task> tasks(String processInstanceId, String activityId)
     {
         return taskService.createTaskQuery().processInstanceId(processInstanceId)
@@ -336,14 +343,11 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
                 .sorted(Comparator.comparing(Task::getAssignee)).toList();
     }
 
-    /**
-     * 查询指定办理人的唯一活动任务。
-     *
+    /** 查询指定办理人的唯一活动任务。
      * @param processInstanceId String，流程实例主键
      * @param activityId String，受控多实例活动 ID
      * @param assignee String，目标办理人主键
-     * @return Task，唯一匹配任务
-     */
+     * @return Task，唯一匹配任务 */
     protected final Task task(String processInstanceId, String activityId,
             String assignee)
     {
@@ -354,25 +358,19 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
         return task;
     }
 
-    /**
-     * 查询实例全部轮次并按轮次主键稳定返回。
-     *
+    /** 查询实例全部轮次并按轮次主键稳定返回。
      * @param processInstanceId String，流程实例主键
-     * @return List&lt;WfMultiInstanceRound&gt;，正式 Mapper 返回的轮次列表
-     */
+     * @return List&lt;WfMultiInstanceRound&gt;，正式 Mapper 返回的轮次列表 */
     protected final List<WfMultiInstanceRound> rounds(String processInstanceId)
     {
         return roundMapper.selectByProcessInstanceId(processInstanceId).stream()
                 .sorted(Comparator.comparing(WfMultiInstanceRound::getRoundId)).toList();
     }
 
-    /**
-     * 查询实例当前唯一 ACTIVE 轮次。
-     *
+    /** 查询实例当前唯一 ACTIVE 轮次。
      * @param processInstanceId String，流程实例主键
      * @param activityId String，受控多实例活动 ID
-     * @return WfMultiInstanceRound，唯一 ACTIVE 轮次
-     */
+     * @return WfMultiInstanceRound，唯一 ACTIVE 轮次 */
     protected final WfMultiInstanceRound activeRound(String processInstanceId,
             String activityId)
     {
@@ -382,21 +380,17 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
         return rounds.get(0);
     }
 
-    /**
-     * 冻结当前流程的任务、execution、变量和轮次，用于故障前后严格回滚对账。
-     *
+    /** 冻结当前流程的任务、execution、变量和轮次核心事实。
      * @param processInstanceId String，活动流程实例主键
-     * @return RuntimeSnapshot，可直接值比较的完整事务快照
-     */
-    protected final RuntimeSnapshot capture(String processInstanceId)
+     * @return CoreRuntimeSnapshot，可直接值比较的核心事务快照 */
+    protected final CoreRuntimeSnapshot captureCore(String processInstanceId)
     {
         List<TaskFact> taskFacts = taskService.createTaskQuery()
                 .processInstanceId(processInstanceId).active().list().stream()
                 .map(task -> new TaskFact(task.getId(), task.getExecutionId(),
                         task.getTaskDefinitionKey(), task.getAssignee(),
-                        taskService.getVariableLocal(task.getId(),
-                                WorkflowMultiInstanceVariables
-                                    .COMPLETION_REVISION_VARIABLE)))
+                        task.getOwner(), task.getDelegationState(),
+                        new TreeMap<>(taskService.getVariablesLocal(task.getId()))))
                 .sorted(Comparator.comparing(TaskFact::id)).toList();
         List<ExecutionFact> executionFacts = runtimeService.createExecutionQuery()
                 .processInstanceId(processInstanceId).list().stream()
@@ -407,28 +401,31 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
                 .map(round -> new RoundFact(round.getRoundId(), round.getRootExecutionId(),
                         round.getRoundNo(), round.getMembersJson(), round.getRevisionNo(),
                         round.getRoundStatus(), round.getCompleteTime(),
-                        round.getTerminateTime()))
+                        round.getTerminateTime(), round.getReturnSourceTaskId(),
+                        round.getReturnActorUserId(), round.getApplicantTaskId(),
+                        round.getReturnTime(), round.getReopenTime()))
                 .toList();
-        return new RuntimeSnapshot(taskFacts, executionFacts,
+        return new CoreRuntimeSnapshot(taskFacts, executionFacts,
                 new TreeMap<>(runtimeService.getVariables(processInstanceId)), roundFacts);
     }
 
-    /**
-     * 开启下一次 complete 审计故障，故障发生在轮次监听写入之后。
-     *
-     * @return void，无返回值
-     */
+    /** 开启下一次 complete 审计故障，故障发生在轮次监听写入之后。
+     * @return void，无返回值 */
     protected final void failNextCompleteAudit()
     {
         failNextCompleteAudit.set(true);
     }
 
-    /**
-     * 从任务所属部署模型定位当前受控 UserTask。
-     *
+    /** 令下一次 create 监听器在轮次写入之后失败，用于证明新轮与旧轮 CAS 同时回滚。
+     * @return void，无返回值 */
+    protected final void failNextCreateAudit()
+    {
+        failNextCreateAudit.set(true);
+    }
+
+    /** 从任务所属部署模型定位当前受控 UserTask。
      * @param task Task，真实活动任务
-     * @return UserTask，任务流程定义所属 Process 中的节点
-     */
+     * @return UserTask，任务流程定义所属 Process 中的节点 */
     private UserTask requireUserTask(Task task)
     {
         ProcessDefinition definition = repositoryService.getProcessDefinition(
@@ -438,86 +435,16 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
         return (UserTask) process.getFlowElement(task.getTaskDefinitionKey(), true);
     }
 
-    /**
-     * 创建轮次正式 Mapper 在 H2 事务集成测试中使用的等价业务表。
-     *
-     * @return void，建表失败时终止测试装配
-     */
-    private void createRoundTable()
-    {
-        jdbcTemplate.execute("""
-                create table wf_multi_instance_round (
-                  round_id bigint generated by default as identity primary key,
-                  deploy_id varchar(64) not null,
-                  process_definition_id varchar(64) not null,
-                  process_instance_id varchar(64) not null,
-                  activity_id varchar(64) not null,
-                  root_execution_id varchar(64) not null,
-                  round_no int not null,
-                  mode varchar(8) not null,
-                  members_json varchar(4096) not null,
-                  revision_no int not null,
-                  round_status varchar(16) not null,
-                  return_source_task_id varchar(64),
-                  return_actor_user_id varchar(64),
-                  applicant_task_id varchar(64),
-                  create_time timestamp(3) not null,
-                  return_time timestamp(3),
-                  reopen_time timestamp(3),
-                  complete_time timestamp(3),
-                  terminate_time timestamp(3),
-                  constraint uk_round_number unique(process_instance_id, activity_id, round_no),
-                  constraint uk_round_root unique(root_execution_id)
-                )
-                """);
-    }
-
-    /**
-     * 使用生产 XML 创建与 Flowable 共享同一 Spring 事务的数据 Mapper。
-     *
-     * @param dataSource DataSource，Flowable 引擎和轮次表共享的数据源
-     * @return WfMultiInstanceRoundMapper，正式 MyBatis XML Mapper
-     */
-    private WfMultiInstanceRoundMapper createRoundMapper(DataSource dataSource)
-    {
-        Environment environment = new Environment("mi-round-it",
-                new SpringManagedTransactionFactory(), dataSource);
-        org.apache.ibatis.session.Configuration configuration =
-                new org.apache.ibatis.session.Configuration(environment);
-        configuration.addMapper(WfMultiInstanceRoundMapper.class);
-        String resource = "mapper/flowable/WfMultiInstanceRoundMapper.xml";
-        try (InputStream input = getClass().getClassLoader().getResourceAsStream(resource))
-        {
-            if (input == null)
-            {
-                throw new IllegalStateException("测试无法加载正式 Mapper: " + resource);
-            }
-            new XMLMapperBuilder(input, configuration, resource,
-                    configuration.getSqlFragments()).parse();
-        }
-        catch (IOException | RuntimeException exception)
-        {
-            throw new IllegalStateException("测试解析正式 Mapper 失败: " + resource,
-                    exception);
-        }
-        SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(configuration);
-        return new SqlSessionTemplate(factory).getMapper(WfMultiInstanceRoundMapper.class);
-    }
-
-    /**
-     * 延迟绑定生产监听器，解决 Flowable 服务只能在引擎构建完成后取得的测试装配顺序。
+    /** 延迟绑定生产监听器，解决 Flowable 服务只能在引擎构建完成后取得的测试装配顺序。
      */
     private static final class LateBindingTaskListener implements TaskListener
     {
         /** 引擎启动后绑定且后续只读的生产监听器。 */
         private WorkflowUserTaskListener delegate;
 
-        /**
-         * 绑定本用例唯一生产监听器。
-         *
+        /** 绑定本用例唯一生产监听器。
          * @param listener WorkflowUserTaskListener，依赖真实引擎服务的监听器
-         * @return void，重复绑定被拒绝
-         */
+         * @return void，重复绑定被拒绝 */
         private void bind(WorkflowUserTaskListener listener)
         {
             if (delegate != null || listener == null)
@@ -527,12 +454,9 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
             delegate = listener;
         }
 
-        /**
-         * 把真实 Flowable 任务事件转发给已经绑定的生产监听器。
-         *
+        /** 把真实 Flowable 任务事件转发给已经绑定的生产监听器。
          * @param delegateTask DelegateTask，真实 create、assignment 或 complete 事件
-         * @return void，未绑定时中止流程命令
-         */
+         * @return void，未绑定时中止流程命令 */
         @Override
         public void notify(DelegateTask delegateTask)
         {
@@ -544,34 +468,30 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
         }
     }
 
-    /**
-     * 活动任务事务快照。
-     *
+    /** 活动任务核心事务快照。
      * @param id String，任务主键
      * @param executionId String，任务 execution 主键
      * @param activityId String，任务活动 ID
      * @param assignee String，办理人主键
-     * @param completionRevision Object，正式完成链 task-local revision 预留标记
-     */
+     * @param owner String，任务所有者
+     * @param delegationState DelegationState，委派状态
+     * @param localVariables Map&lt;String,Object&gt;，全部任务局部变量的稳定副本 */
     protected record TaskFact(String id, String executionId, String activityId,
-            String assignee, Object completionRevision)
+            String assignee, String owner,
+            org.flowable.task.api.DelegationState delegationState,
+            Map<String, Object> localVariables)
     {
     }
 
-    /**
-     * execution 树事务快照。
-     *
+    /** execution 树事务快照。
      * @param id String，execution 主键
      * @param parentId String，父 execution 主键
-     * @param activityId String，活动 ID
-     */
+     * @param activityId String，活动 ID */
     protected record ExecutionFact(String id, String parentId, String activityId)
     {
     }
 
-    /**
-     * 轮次事务快照。
-     *
+    /** 轮次事务快照。
      * @param id Long，轮次主键
      * @param rootExecutionId String，多实例根主键
      * @param roundNo Integer，轮次号
@@ -580,24 +500,28 @@ abstract class WorkflowMultiInstanceRoundFlowableSupport
      * @param status WorkflowMultiInstanceRoundStatus，轮次状态
      * @param completeTime java.time.LocalDateTime，正常完成时间
      * @param terminateTime java.time.LocalDateTime，异常关闭时间
-     */
+     * @param returnSourceTaskId String，整组退回来源任务主键
+     * @param returnActorUserId String，整组退回操作人主键
+     * @param applicantTaskId String，唯一申请人任务主键
+     * @param returnTime java.time.LocalDateTime，数据库生成的退回时间
+     * @param reopenTime java.time.LocalDateTime，数据库生成的重开时间 */
     protected record RoundFact(Long id, String rootExecutionId, Integer roundNo,
             String membersJson, Integer revision,
             WorkflowMultiInstanceRoundStatus status,
             java.time.LocalDateTime completeTime,
-            java.time.LocalDateTime terminateTime)
+            java.time.LocalDateTime terminateTime,
+            String returnSourceTaskId, String returnActorUserId,
+            String applicantTaskId, java.time.LocalDateTime returnTime,
+            java.time.LocalDateTime reopenTime)
     {
     }
 
-    /**
-     * 故障前后可直接值比较的完整运行时快照。
-     *
+    /** 故障前后可直接值比较的轮次核心运行时快照。
      * @param tasks List&lt;TaskFact&gt;，活动任务
      * @param executions List&lt;ExecutionFact&gt;，运行 execution 树
      * @param variables Map&lt;String,Object&gt;，流程实例变量
-     * @param rounds List&lt;RoundFact&gt;，正式业务轮次
-     */
-    protected record RuntimeSnapshot(List<TaskFact> tasks,
+     * @param rounds List&lt;RoundFact&gt;，正式业务轮次 */
+    protected record CoreRuntimeSnapshot(List<TaskFact> tasks,
             List<ExecutionFact> executions, Map<String, Object> variables,
             List<RoundFact> rounds)
     {

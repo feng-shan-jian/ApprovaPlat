@@ -14,19 +14,14 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.util.Date;
+import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
-import org.apache.ibatis.builder.xml.XMLMapperBuilder;
-import org.apache.ibatis.mapping.Environment;
-import org.apache.ibatis.session.SqlSessionFactory;
-import org.apache.ibatis.session.SqlSessionFactoryBuilder;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RepositoryService;
@@ -39,22 +34,15 @@ import org.flowable.engine.task.Comment;
 import org.flowable.task.api.Task;
 import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.variable.api.history.HistoricVariableInstance;
-import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mybatis.spring.SqlSessionTemplate;
-import org.mybatis.spring.transaction.SpringManagedTransactionFactory;
-import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
-import org.springframework.transaction.interceptor.TransactionInterceptor;
-import org.flowable.spring.SpringProcessEngineConfiguration;
 import com.ruoyi.flowable.domain.WfControlledLoopExecution;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
+import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
@@ -75,6 +63,8 @@ import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
 import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
+import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
+import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
 import com.ruoyi.system.mapper.SysUserMapper;
 
 /**
@@ -100,6 +90,8 @@ class WorkflowTaskCompletionContextIntegrationTest
             """;
 
     private ProcessEngine processEngine;
+    /** 当前用例独占且在 teardown 显式关闭的引擎基础设施。 */
+    private WorkflowFlowableEngineTestSupport engineInfrastructure;
     private RepositoryService repositoryService;
     private RuntimeService runtimeService;
     private TaskService taskService;
@@ -129,31 +121,27 @@ class WorkflowTaskCompletionContextIntegrationTest
                         (List<String>) invocation.getArgument(0)));
         WorkflowUserSelectionValidator userSelectionValidator =
                 new WorkflowUserSelectionValidator(identityResolver);
+        WorkflowMultiInstanceTransitionCoordinator transitionCoordinator =
+                new WorkflowMultiInstanceTransitionCoordinator();
         WorkflowMultiInstanceHandler multiInstanceHandler =
-                new WorkflowMultiInstanceHandler(userSelectionValidator);
+                new WorkflowMultiInstanceHandler(userSelectionValidator,
+                        transitionCoordinator);
 
-        JdbcDataSource dataSource = new JdbcDataSource();
-        dataSource.setURL("jdbc:h2:mem:completion-context-" + UUID.randomUUID()
-                + ";DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000");
-        dataSource.setUser("sa");
-        DataSourceTransactionManager transactionManager =
-                new DataSourceTransactionManager(dataSource);
-
-        SpringProcessEngineConfiguration configuration =
-                new SpringProcessEngineConfiguration();
-        configuration.setDataSource(dataSource);
-        configuration.setTransactionManager(transactionManager);
-        configuration.setDatabaseSchemaUpdate("true");
-        configuration.setHistory("full");
-        configuration.setBeans(Map.of("multiInstanceHandler", multiInstanceHandler));
-        processEngine = configuration.buildProcessEngine();
+        engineInfrastructure = WorkflowFlowableEngineTestSupport.start(
+                "completion-context",
+                Map.of("multiInstanceHandler", multiInstanceHandler));
+        DataSource dataSource = engineInfrastructure.dataSource();
+        processEngine = engineInfrastructure.processEngine();
         repositoryService = spy(processEngine.getRepositoryService());
         runtimeService = processEngine.getRuntimeService();
         taskService = processEngine.getTaskService();
         historyService = processEngine.getHistoryService();
-        jdbcTemplate = new JdbcTemplate(dataSource);
-        createLoopExecutionTable();
-        loopExecutionMapper = createLoopMapper(dataSource);
+        jdbcTemplate = engineInfrastructure.jdbcTemplate();
+        WorkflowH2SchemaMapperSupport.executeSchema(dataSource,
+                WorkflowH2SchemaMapperSupport.CONTROLLED_LOOP_EXECUTION_SCHEMA);
+        loopExecutionMapper = WorkflowH2SchemaMapperSupport.createSpringMapper(dataSource,
+                "completion-context-it", WfControlledLoopExecutionMapper.class,
+                "mapper/flowable/WfControlledLoopExecutionMapper.xml");
 
         Deployment deployment = repositoryService.createDeployment()
                 .addString("completion-context.bpmn20.xml", BPMN)
@@ -171,8 +159,8 @@ class WorkflowTaskCompletionContextIntegrationTest
                         new WorkflowIdentityCodec());
         WorkflowEngineOperations operationsTarget = new WorkflowEngineOperations(
                 authenticationContext, new WorkflowExceptionTranslator(), identityResolver);
-        WorkflowEngineOperations engineOperations = transactionalProxy(
-                operationsTarget, transactionManager);
+        WorkflowEngineOperations engineOperations =
+                engineInfrastructure.transactionalProxy(operationsTarget);
 
         WorkflowAttachmentService attachmentService = mock(WorkflowAttachmentService.class);
         when(attachmentService.prepareTaskVariables(anyString(), anyString(), anyMap(), anyMap()))
@@ -183,35 +171,83 @@ class WorkflowTaskCompletionContextIntegrationTest
                 userSelectionValidator, mock(WfCopyMapper.class),
                 mock(WorkflowRuntimeTaskMapper.class), repositoryService, runtimeService,
                 mock(SysUserMapper.class), notificationService);
+        WorkflowMultiInstanceRuntimeSnapshotReader snapshotReader =
+                new WorkflowMultiInstanceRuntimeSnapshotReader(repositoryService,
+                        runtimeService, taskService);
         WorkflowNextTaskAssignmentService nextTaskAssignmentService =
                 new WorkflowNextTaskAssignmentService(userSelectionValidator,
-                        taskService, runtimeService);
-        WorkflowMultiInstanceRoundService roundService =
-                mock(WorkflowMultiInstanceRoundService.class);
-        WfMultiInstanceRound round = mock(WfMultiInstanceRound.class);
-        when(roundService.requireActiveRound(any(Task.class), anyString(),
-                any(WorkflowMultiInstanceMode.class), anyList(), anyInt()))
-                .thenReturn(round);
-        when(roundService.requireCompletionPersisted(anyString(), anyInt(), anyBoolean()))
-                .thenReturn(round);
-        when(round.getMembersJson()).thenReturn("[\"100\",\"200\"]");
-        when(round.getMode()).thenReturn(WorkflowMultiInstanceMode.ALL.name());
-        WorkflowMultiInstanceService multiInstanceService = new WorkflowMultiInstanceService(
-                engineOperations, identityResolver, userSelectionValidator,
-                mock(WorkflowMultiInstanceUserMapper.class), repositoryService,
-                runtimeService, taskService, historyService, roundService);
+                        taskService, runtimeService, snapshotReader);
+        WorkflowMultiInstanceRoundLifecycleService roundLifecycleService =
+                mock(WorkflowMultiInstanceRoundLifecycleService.class);
+        AtomicReference<ControlledMultiInstanceSnapshot> controlledRuntime =
+                new AtomicReference<>();
+        when(roundLifecycleService.requireActiveRound(
+                any(ControlledMultiInstanceSnapshot.class))).thenAnswer(invocation ->
+        {
+            ControlledMultiInstanceSnapshot runtime = invocation.getArgument(0);
+            controlledRuntime.set(runtime);
+            return roundSnapshot(runtime, runtime.revision());
+        });
+        when(roundLifecycleService.requireCompletionPersisted(anyString(), anyInt(),
+                anyBoolean())).thenAnswer(invocation -> roundSnapshot(
+                        controlledRuntime.get(), invocation.getArgument(1)));
+        WorkflowMultiInstanceService multiInstanceService =
+                new WorkflowMultiInstanceService(engineOperations, identityResolver,
+                        userSelectionValidator,
+                        mock(WorkflowMultiInstanceUserMapper.class), runtimeService,
+                        taskService, historyService, snapshotReader,
+                        roundLifecycleService);
+        WorkflowMultiInstanceGroupTransitionService groupTransitionService =
+                mock(WorkflowMultiInstanceGroupTransitionService.class);
         WorkflowControlledLoopService controlledLoopService =
                 new WorkflowControlledLoopService(runtimeService, taskService,
                         artifactRepository, loopExecutionMapper);
 
+        WorkflowTaskCompletionApplicationService completionApplicationService =
+                new WorkflowTaskCompletionApplicationService(engineOperations,
+                        new WorkflowTaskRequestValidator(),
+                        new WorkflowTaskRuntimeReader(runtimeService, taskService,
+                                historyService),
+                        new WorkflowTaskBpmnReader(repositoryService),
+                        artifactRepository,
+                        new WorkflowStartVariableValidator(
+                                new WorkflowFormTemplateValidator()),
+                        attachmentService, taskCopyService,
+                        nextTaskAssignmentService, multiInstanceService,
+                        controlledLoopService,
+                        new WorkflowTaskActionAuditWriter(taskService),
+                        new WorkflowTaskConcurrencyExecutor(),
+                        runtimeService, taskService);
         lifecycleService = new WorkflowTaskLifecycleService(
-                engineOperations, identityResolver, repositoryService, runtimeService,
-                taskService, historyService, artifactRepository,
-                new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator()),
-                attachmentService, mock(WorkflowTaskMovementPolicy.class), taskCopyService,
-                nextTaskAssignmentService, multiInstanceService, controlledLoopService,
-                notificationService, mock(WorkflowProcessInstanceService.class));
+                mock(WorkflowProcessCancelApplicationService.class),
+                mock(WorkflowTaskRevokeApplicationService.class),
+                completionApplicationService,
+                mock(WorkflowTaskRejectionApplicationService.class),
+                mock(WorkflowTaskReturnApplicationService.class),
+                mock(WorkflowApplicationResubmitApplicationService.class));
         clearInvocations(repositoryService);
+    }
+
+    /**
+     * 为本测试的真实 Flowable 执行树构造对应的不可变 ACTIVE 轮次事实。
+     *
+     * @param runtime ControlledMultiInstanceSnapshot，真实读取器得到的受控根快照
+     * @param revision int，预留前或写后应当持久化的 revision
+     * @return MultiInstanceRoundSnapshot，与运行时身份、成员和模式一致的测试轮次
+     */
+    private MultiInstanceRoundSnapshot roundSnapshot(
+            ControlledMultiInstanceSnapshot runtime, int revision)
+    {
+        if (runtime == null)
+        {
+            throw new IllegalStateException("受控多实例运行时快照尚未建立");
+        }
+        return new MultiInstanceRoundSnapshot(1L, runtime.deployId(),
+                runtime.processDefinitionId(), runtime.processInstanceId(),
+                runtime.activityId(), runtime.rootExecutionId(), 1, runtime.mode(),
+                runtime.members(), revision, WorkflowMultiInstanceRoundStatus.ACTIVE,
+                null, null, null, LocalDateTime.of(2026, 8, 24, 9, 0),
+                null, null, null, null);
     }
 
     /**
@@ -222,10 +258,12 @@ class WorkflowTaskCompletionContextIntegrationTest
     @AfterEach
     void tearDown()
     {
-        if (processEngine != null)
+        if (engineInfrastructure != null)
         {
-            processEngine.close();
+            engineInfrastructure.close();
         }
+        processEngine = null;
+        engineInfrastructure = null;
     }
 
     /**
@@ -420,81 +458,6 @@ class WorkflowTaskCompletionContextIntegrationTest
                 .processInstanceId(processInstanceId).variableName(variableName).singleResult();
         assertThat(variable).isNotNull();
         return variable.getValue();
-    }
-
-    /**
-     * 创建受控循环正式 Mapper 所需的 H2 业务表及双唯一并发约束。
-     *
-     * @return void，建表失败时终止测试装配
-     */
-    private void createLoopExecutionTable()
-    {
-        jdbcTemplate.execute("""
-                create table wf_controlled_loop_execution (
-                  execution_id bigint generated by default as identity primary key,
-                  deploy_id varchar(64) not null,
-                  process_definition_id varchar(64) not null,
-                  process_instance_id varchar(64) not null,
-                  activity_id varchar(255) not null,
-                  task_id varchar(64) not null,
-                  iteration_no int not null,
-                  actor_user_id varchar(64) not null,
-                  decision_value varchar(128) not null,
-                  outcome varchar(16) not null,
-                  create_time timestamp(3) not null,
-                  constraint uk_loop_task unique (task_id),
-                  constraint uk_loop_round unique (process_instance_id, activity_id, iteration_no)
-                )
-                """);
-    }
-
-    /**
-     * 使用生产 XML 创建与 Spring 事务共享同一 H2 数据源的循环审计 Mapper。
-     *
-     * @param dataSource DataSource，Flowable 引擎和业务表共享的数据源
-     * @return WfControlledLoopExecutionMapper，正式 MyBatis XML Mapper
-     */
-    private WfControlledLoopExecutionMapper createLoopMapper(DataSource dataSource)
-    {
-        Environment environment = new Environment("completion-context-it",
-                new SpringManagedTransactionFactory(), dataSource);
-        org.apache.ibatis.session.Configuration configuration =
-                new org.apache.ibatis.session.Configuration(environment);
-        configuration.addMapper(WfControlledLoopExecutionMapper.class);
-        String resource = "mapper/flowable/WfControlledLoopExecutionMapper.xml";
-        try (InputStream input = getClass().getClassLoader().getResourceAsStream(resource))
-        {
-            if (input == null)
-            {
-                throw new IllegalStateException("测试无法加载正式 Mapper: " + resource);
-            }
-            new XMLMapperBuilder(input, configuration, resource,
-                    configuration.getSqlFragments()).parse();
-        }
-        catch (IOException | RuntimeException exception)
-        {
-            throw new IllegalStateException("测试解析正式 Mapper 失败: " + resource,
-                    exception);
-        }
-        SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(configuration);
-        return new SqlSessionTemplate(factory).getMapper(WfControlledLoopExecutionMapper.class);
-    }
-
-    /**
-     * 为生产对象应用基于注解的真实 Spring 事务代理。
-     *
-     * @param target T，需要代理的生产服务
-     * @param manager DataSourceTransactionManager，共享 H2 事务管理器
-     * @return T，保留生产类型的 CGLIB 代理
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T transactionalProxy(T target, DataSourceTransactionManager manager)
-    {
-        ProxyFactory proxyFactory = new ProxyFactory(target);
-        proxyFactory.setProxyTargetClass(true);
-        proxyFactory.addAdvice(new TransactionInterceptor(manager,
-                new AnnotationTransactionAttributeSource()));
-        return (T) proxyFactory.getProxy();
     }
 
     /**

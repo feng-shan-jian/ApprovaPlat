@@ -49,6 +49,6 @@ nextTaskAssignmentService.apply(plan);
 - 单一 assignee 或受控多实例成员页面可通过 `GET /workflow/identity/options?type=user&capability=approval` 分页读取合格用户；允许为普通后继选择多名候选人时，应改用 `capability=claim`。目录只用于交互，不能替代写命令实时资格校验。
 - 选择一人：删除静态候选身份并设置唯一 assignee。
 - 选择多人：删除静态候选身份、清空 assignee，并逐个写入 candidate user。
-- 受控并行多实例：完成前写集合变量，完成后核对真实 task/execution、成员快照、ALL/ANY 模式、revision=0 和 `nrOf*` 根计数。
+- 受控并行多实例：完成前写集合变量，完成后通过 `WorkflowMultiInstanceRuntimeSnapshotReader` 唯一解析真实 task/execution、成员快照、ALL/ANY 模式、revision=0 和 `nrOf*` 根计数。
 - 写入后重新读取任务和 identity link；assignee、候选用户或候选组与计划不一致时抛错回滚。
 - 未提交 `nextUserIds` 时仍使用完成链已经装载的正式部署模型；普通后继返回空计划并保留 BPMN 默认分配行为，唯一无条件直连受控动态多实例时在完成命令前返回 HTTP 400。

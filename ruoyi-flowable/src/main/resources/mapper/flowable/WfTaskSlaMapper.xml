@@ -150,6 +150,17 @@
         order by sla_execution_id for update
     </select>
 
+    <select id="selectWithdrawableExecutionsForUpdate" resultMap="SlaExecutionResult">
+        select <include refid="ExecutionColumns"/> from wf_task_sla_execution
+        where process_instance_id = #{processInstanceId}
+          and status in ('ACTIVE', 'ESCALATED')
+          and task_id in
+          <foreach collection="taskIds" item="taskId" open="(" separator="," close=")">
+              #{taskId}
+          </foreach>
+        order by sla_execution_id for update
+    </select>
+
     <update id="updateAssignee">
         update wf_task_sla_execution set assignee_user_id = #{assigneeUserId},
             revision = revision + 1, update_time = current_timestamp(3)

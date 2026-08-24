@@ -39,8 +39,8 @@ import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService.TerminationPrecheck;
+import com.ruoyi.flowable.service.task.MultiInstanceRoundTerminationPlan;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundTerminationService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
@@ -114,7 +114,8 @@ public class WorkflowProcessInstanceService
     private final WfMultiInstanceRoundMapper multiInstanceRoundMapper;
 
     /** 受控多实例轮次终止前引擎对账与删除后异常关闭服务。 */
-    private final WorkflowMultiInstanceRoundService multiInstanceRoundService;
+    private final WorkflowMultiInstanceRoundTerminationService
+            multiInstanceRoundTerminationService;
 
     private final PermissionService permissionService;
 
@@ -135,7 +136,7 @@ public class WorkflowProcessInstanceService
      * @param copyMapper WfCopyMapper，正式抄送记录引用检查和逻辑删除 Mapper
      * @param controlledLoopExecutionMapper WfControlledLoopExecutionMapper，受控循环逐轮审计 Mapper
      * @param multiInstanceRoundMapper WfMultiInstanceRoundMapper，多实例轮次快照审计 Mapper
-     * @param multiInstanceRoundService WorkflowMultiInstanceRoundService，轮次终止严格预检与关闭服务
+     * @param multiInstanceRoundTerminationService WorkflowMultiInstanceRoundTerminationService，轮次终止严格预检与关闭服务
      * @param permissionService PermissionService，Token 权限与当前正式主数据的统一复核服务
      * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，SLA 暂停恢复服务
      * @param notificationService WorkflowNotificationService，显式取消或终止通知服务
@@ -147,7 +148,8 @@ public class WorkflowProcessInstanceService
             WfCopyMapper copyMapper,
             WfControlledLoopExecutionMapper controlledLoopExecutionMapper,
             WfMultiInstanceRoundMapper multiInstanceRoundMapper,
-            WorkflowMultiInstanceRoundService multiInstanceRoundService,
+            WorkflowMultiInstanceRoundTerminationService
+                    multiInstanceRoundTerminationService,
             PermissionService permissionService,
             WorkflowTaskSlaRuntimeService taskSlaRuntimeService,
             WorkflowNotificationService notificationService)
@@ -160,7 +162,8 @@ public class WorkflowProcessInstanceService
         this.copyMapper = copyMapper;
         this.controlledLoopExecutionMapper = controlledLoopExecutionMapper;
         this.multiInstanceRoundMapper = multiInstanceRoundMapper;
-        this.multiInstanceRoundService = multiInstanceRoundService;
+        this.multiInstanceRoundTerminationService =
+                multiInstanceRoundTerminationService;
         this.permissionService = permissionService;
         this.taskSlaRuntimeService = taskSlaRuntimeService;
         this.notificationService = notificationService;
@@ -441,7 +444,8 @@ public class WorkflowProcessInstanceService
             runtimeService.updateBusinessStatus(rootInstance.getId(), processStatus);
             // 上述引擎写入已经取得 Flowable 写锁；此时执行树仍完整，使用普通 SELECT 冻结
             // 全树开放轮次并逐一对账活动受控根，避免缺行或合法格式篡改被级联删除掩盖。
-            TerminationPrecheck roundPrecheck = multiInstanceRoundService
+            MultiInstanceRoundTerminationPlan roundPrecheck =
+                    multiInstanceRoundTerminationService
                     .precheckTermination(context.processTreeInstanceIds());
             notificationService.onProcessResult(resultEventType,
                     rootInstance.getProcessDefinitionId(), rootInstance.getId());
@@ -450,7 +454,7 @@ public class WorkflowProcessInstanceService
                     instruction.deleteReason());
             // 删除成功后才取得业务行锁，并要求锁定集合与删除前令牌完全相同；任一失败都会
             // 在同一 Spring 事务中回滚引擎状态写入、根删除及轮次更新。
-            multiInstanceRoundService.terminatePrechecked(roundPrecheck);
+            multiInstanceRoundTerminationService.terminatePrechecked(roundPrecheck);
             verifyTermination(context, processStatus, instruction.auditComment());
         }
         catch (FlowableObjectNotFoundException exception)

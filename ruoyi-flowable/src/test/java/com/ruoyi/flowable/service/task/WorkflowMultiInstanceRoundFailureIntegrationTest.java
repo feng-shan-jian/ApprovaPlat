@@ -15,6 +15,8 @@ import org.flowable.common.engine.api.FlowableException;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
@@ -24,8 +26,34 @@ import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
  * 使用共享真实引擎和正式 Mapper 验证 ANY 完成、双向事务回滚及篡改失败关闭。
  */
 class WorkflowMultiInstanceRoundFailureIntegrationTest
-        extends WorkflowMultiInstanceRoundFlowableSupport
 {
+    private WorkflowMultiInstanceRoundScenario fixture;
+    private org.flowable.engine.RuntimeService runtimeService;
+    private org.flowable.engine.TaskService taskService;
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+    private com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper roundMapper;
+    private WorkflowMultiInstanceService multiInstanceService;
+
+    /** 创建并公开本测试实际使用的轮次依赖。 @return void，无返回值 */
+    @BeforeEach
+    void setUpFixture()
+    {
+        fixture = new WorkflowMultiInstanceRoundScenario();
+        runtimeService = fixture.runtimeService;
+        taskService = fixture.taskService;
+        jdbcTemplate = fixture.jdbcTemplate;
+        transactionTemplate = fixture.transactionTemplate;
+        roundMapper = fixture.roundMapper;
+        multiInstanceService = fixture.multiInstanceService;
+    }
+
+    /** 显式关闭轮次夹具。 @return void，无返回值 */
+    @AfterEach
+    void closeFixture()
+    {
+        fixture.close();
+    }
     /**
      * 验证 ANY 任一成员完成即关闭轮次，直达 EndEvent 时不要求已删除的运行时变量仍存在。
      *
@@ -34,16 +62,16 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
     @Test
     void completesAnyRoundAndFinishedProcessAtomically()
     {
-        ProcessInstance instance = start("roundDynamicAny", "anyReview",
+        ProcessInstance instance = fixture.start("roundDynamicAny", "anyReview",
                 List.of("201", "202", "203"), Map.of());
 
-        complete(task(instance.getId(), "anyReview", "201"), 0);
+        fixture.complete(fixture.task(instance.getId(), "anyReview", "201"), 0);
 
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(instance.getId()).singleResult()).isNull();
         assertThat(taskService.createTaskQuery().processInstanceId(instance.getId())
                 .active().count()).isZero();
-        assertThat(rounds(instance.getId())).singleElement().satisfies(round ->
+        assertThat(fixture.rounds(instance.getId())).singleElement().satisfies(round ->
         {
             assertThat(round.getRoundStatus())
                     .isEqualTo(WorkflowMultiInstanceRoundStatus.COMPLETED);
@@ -65,8 +93,8 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
         doThrow(new IllegalStateException("injected round insert failure"))
                 .when(roundMapper).insert(any(WfMultiInstanceRound.class));
 
-        assertThatThrownBy(() -> start("roundDynamicAll", "dynamicReview",
-                MEMBERS, Map.of()))
+        assertThatThrownBy(() -> fixture.start("roundDynamicAll", "dynamicReview",
+                fixture.MEMBERS, Map.of()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("injected round insert failure");
 
@@ -86,18 +114,19 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
     @Test
     void rollsBackRoundUpdateWhenFlowableCompletionListenerFails()
     {
-        ProcessInstance instance = start("roundDynamicAny", "anyReview",
-                MEMBERS, Map.of());
-        RuntimeSnapshot before = capture(instance.getId());
-        failNextCompleteAudit();
+        ProcessInstance instance = fixture.start("roundDynamicAny", "anyReview",
+                fixture.MEMBERS, Map.of());
+        WorkflowMultiInstanceRoundScenario.CoreRuntimeSnapshot before =
+                fixture.captureCore(instance.getId());
+        fixture.failNextCompleteAudit();
 
-        assertThatThrownBy(() -> complete(
-                task(instance.getId(), "anyReview", "201"), 0))
+        assertThatThrownBy(() -> fixture.complete(
+                fixture.task(instance.getId(), "anyReview", "201"), 0))
                 .isInstanceOf(FlowableException.class)
-                .hasMessageContaining(AUDIT_FAILURE_MESSAGE);
+                .hasMessageContaining(fixture.AUDIT_FAILURE_MESSAGE);
 
-        assertThat(capture(instance.getId())).isEqualTo(before);
-        WfMultiInstanceRound round = activeRound(instance.getId(), "anyReview");
+        assertThat(fixture.captureCore(instance.getId())).isEqualTo(before);
+        WfMultiInstanceRound round = fixture.activeRound(instance.getId(), "anyReview");
         assertThat(round.getRevisionNo()).isZero();
         assertThat(round.getRoundStatus())
                 .isEqualTo(WorkflowMultiInstanceRoundStatus.ACTIVE);
@@ -111,14 +140,15 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
     @Test
     void rollsBackEngineRevisionWhenRoundCasFails()
     {
-        ProcessInstance instance = start("roundDynamicAll", "dynamicReview",
-                MEMBERS, Map.of());
-        Task current = task(instance.getId(), "dynamicReview", "201");
-        RuntimeSnapshot before = capture(instance.getId());
+        ProcessInstance instance = fixture.start("roundDynamicAll", "dynamicReview",
+                fixture.MEMBERS, Map.of());
+        Task current = fixture.task(instance.getId(), "dynamicReview", "201");
+        WorkflowMultiInstanceRoundScenario.CoreRuntimeSnapshot before =
+                fixture.captureCore(instance.getId());
         doReturn(0).when(roundMapper).compareAndSetActiveSnapshot(
                         anyLong(), anyInt(), anyInt(), anyString());
 
-        assertThatThrownBy(() -> addMember(current, 0, 203L))
+        assertThatThrownBy(() -> fixture.addMember(current, 0, 203L))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
                 {
                     assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT);
@@ -126,7 +156,7 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
                             WorkflowMultiInstanceService.REVISION_CONFLICT_SUB_CODE);
                 });
 
-        assertThat(capture(instance.getId())).isEqualTo(before);
+        assertThat(fixture.captureCore(instance.getId())).isEqualTo(before);
     }
 
     /**
@@ -137,16 +167,17 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
     @Test
     void rejectsDirectFlowableCompletionWithoutReservedRevision()
     {
-        ProcessInstance instance = start("roundDynamicAll", "dynamicReview",
-                MEMBERS, Map.of());
-        Task current = task(instance.getId(), "dynamicReview", "201");
-        RuntimeSnapshot before = capture(instance.getId());
+        ProcessInstance instance = fixture.start("roundDynamicAll", "dynamicReview",
+                fixture.MEMBERS, Map.of());
+        Task current = fixture.task(instance.getId(), "dynamicReview", "201");
+        WorkflowMultiInstanceRoundScenario.CoreRuntimeSnapshot before =
+                fixture.captureCore(instance.getId());
 
         assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(
                 status -> taskService.complete(current.getId())))
                 .satisfies(this::assertNestedDataError);
 
-        assertThat(capture(instance.getId())).isEqualTo(before);
+        assertThat(fixture.captureCore(instance.getId())).isEqualTo(before);
     }
 
     /**
@@ -157,21 +188,22 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
     @Test
     void rejectsTamperedMemberSnapshotOnReadAndWrite()
     {
-        ProcessInstance instance = start("roundDynamicAll", "dynamicReview",
-                MEMBERS, Map.of());
-        Task current = task(instance.getId(), "dynamicReview", "201");
+        ProcessInstance instance = fixture.start("roundDynamicAll", "dynamicReview",
+                fixture.MEMBERS, Map.of());
+        Task current = fixture.task(instance.getId(), "dynamicReview", "201");
         jdbcTemplate.update("""
                 update wf_multi_instance_round
                 set members_json='["202","201"]'
                 where process_instance_id=? and activity_id='dynamicReview'
                 """, instance.getId());
-        RuntimeSnapshot tampered = capture(instance.getId());
+        WorkflowMultiInstanceRoundScenario.CoreRuntimeSnapshot tampered =
+                fixture.captureCore(instance.getId());
 
         assertDataError(() -> transactionTemplate.execute(
                 status -> multiInstanceService.getState(current.getId())));
-        assertDataError(() -> addMember(current, 0, 203L));
+        assertDataError(() -> fixture.addMember(current, 0, 203L));
 
-        assertThat(capture(instance.getId())).isEqualTo(tampered);
+        assertThat(fixture.captureCore(instance.getId())).isEqualTo(tampered);
     }
 
     /**
@@ -182,22 +214,23 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
     @Test
     void rejectsTamperedLifecycleFieldsOnReadAndWrite()
     {
-        ProcessInstance instance = start("roundDynamicAll", "dynamicReview",
-                MEMBERS, Map.of());
-        Task current = task(instance.getId(), "dynamicReview", "201");
+        ProcessInstance instance = fixture.start("roundDynamicAll", "dynamicReview",
+                fixture.MEMBERS, Map.of());
+        Task current = fixture.task(instance.getId(), "dynamicReview", "201");
         jdbcTemplate.update("""
                 update wf_multi_instance_round
                 set return_source_task_id='tampered-task'
                 where process_instance_id=? and activity_id='dynamicReview'
                 """, instance.getId());
-        RuntimeSnapshot tampered = capture(instance.getId());
+        WorkflowMultiInstanceRoundScenario.CoreRuntimeSnapshot tampered =
+                fixture.captureCore(instance.getId());
 
         assertDataError(() -> transactionTemplate.execute(
                 status -> multiInstanceService.getState(current.getId())));
-        assertDataError(() -> addMember(current, 0, 203L));
+        assertDataError(() -> fixture.addMember(current, 0, 203L));
 
-        assertThat(capture(instance.getId())).isEqualTo(tampered);
-        assertThat(activeRound(instance.getId(), "dynamicReview")
+        assertThat(fixture.captureCore(instance.getId())).isEqualTo(tampered);
+        assertThat(fixture.activeRound(instance.getId(), "dynamicReview")
                 .getReturnSourceTaskId()).isEqualTo("tampered-task");
     }
 
@@ -209,9 +242,9 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
     @Test
     void rejectsModeDriftEvenWhenEngineVariableAndRoundAgree()
     {
-        ProcessInstance instance = start("roundDynamicAll", "dynamicReview",
-                MEMBERS, Map.of());
-        Task current = task(instance.getId(), "dynamicReview", "201");
+        ProcessInstance instance = fixture.start("roundDynamicAll", "dynamicReview",
+                fixture.MEMBERS, Map.of());
+        Task current = fixture.task(instance.getId(), "dynamicReview", "201");
         transactionTemplate.executeWithoutResult(status ->
         {
             runtimeService.setVariable(instance.getId(),
@@ -221,13 +254,14 @@ class WorkflowMultiInstanceRoundFailureIntegrationTest
                     where process_instance_id=? and activity_id='dynamicReview'
                     """, instance.getId());
         });
-        RuntimeSnapshot tampered = capture(instance.getId());
+        WorkflowMultiInstanceRoundScenario.CoreRuntimeSnapshot tampered =
+                fixture.captureCore(instance.getId());
 
         assertDataError(() -> transactionTemplate.execute(
                 status -> multiInstanceService.getState(current.getId())));
-        assertDataError(() -> addMember(current, 0, 203L));
+        assertDataError(() -> fixture.addMember(current, 0, 203L));
 
-        assertThat(capture(instance.getId())).isEqualTo(tampered);
+        assertThat(fixture.captureCore(instance.getId())).isEqualTo(tampered);
     }
 
     /**

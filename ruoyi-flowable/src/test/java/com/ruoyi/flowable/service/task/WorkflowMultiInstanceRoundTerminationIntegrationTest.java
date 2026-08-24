@@ -2,8 +2,6 @@ package com.ruoyi.flowable.service.task;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -16,42 +14,68 @@ import java.util.Set;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
 import com.ruoyi.flowable.domain.dto.WorkflowInstanceTerminateRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowProcessCancelRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowTaskRejectRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowInstanceTerminateView;
-import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
-import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
-import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
-import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
 import com.ruoyi.framework.web.service.PermissionService;
 
 /**
  * 使用真实 Spring Flowable 事务和正式 Mapper SQL 验证三种运行实例删除入口的轮次异常关闭。
  */
 class WorkflowMultiInstanceRoundTerminationIntegrationTest
-        extends WorkflowMultiInstanceRoundFlowableSupport
 {
+    private WorkflowMultiInstanceRoundScenario fixture;
+    private org.flowable.engine.RepositoryService repositoryService;
+    private org.flowable.engine.RuntimeService runtimeService;
+    private org.flowable.engine.TaskService taskService;
+    private org.flowable.engine.HistoryService historyService;
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+    private com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper roundMapper;
+    private WorkflowMultiInstanceRoundTerminationService roundTerminationService;
+    private com.ruoyi.flowable.engine.WorkflowEngineOperations engineOperations;
     private WorkflowProcessInstanceService processInstanceService;
-    private WorkflowTaskLifecycleService taskLifecycleService;
     private PermissionService permissionService;
+
+    /** 创建当前功能所需的轮次夹具并装配终止服务。 @return void，无返回值 */
+    @BeforeEach
+    void setUpFixture()
+    {
+        fixture = new WorkflowMultiInstanceRoundScenario();
+        repositoryService = fixture.repositoryService;
+        runtimeService = fixture.runtimeService;
+        taskService = fixture.taskService;
+        historyService = fixture.historyService;
+        jdbcTemplate = fixture.jdbcTemplate;
+        transactionTemplate = fixture.transactionTemplate;
+        roundMapper = fixture.roundMapper;
+        roundTerminationService = fixture.roundTerminationService;
+        engineOperations = fixture.engineOperations;
+        setUpTerminationServices();
+    }
+
+    /** 显式关闭轮次夹具。 @return void，无返回值 */
+    @AfterEach
+    void closeFixture()
+    {
+        fixture.close();
+    }
 
     /**
      * 部署根流程与 CallActivity 子流程，并以显式 mock 装配未触达的生产依赖。
      *
      * @return void，无返回值；实际 Flowable、轮次 Mapper 和事务管理器均来自公共支撑
      */
-    @BeforeEach
     void setUpTerminationServices()
     {
         repositoryService.createDeployment()
@@ -65,66 +89,10 @@ class WorkflowMultiInstanceRoundTerminationIntegrationTest
                 engineOperations, historyService, runtimeService, taskService,
                 mock(WfAttachmentMapper.class), mock(WfCopyMapper.class),
                 mock(WfControlledLoopExecutionMapper.class), roundMapper,
-                roundService, permissionService,
+                roundTerminationService, permissionService,
                 mock(WorkflowTaskSlaRuntimeService.class),
                 notificationService);
 
-        WorkflowTaskCopyService taskCopyService = mock(WorkflowTaskCopyService.class);
-        when(taskCopyService.prepare(any(WorkflowTaskCopyAction.class), any(Task.class),
-                any(WorkflowCurrentIdentity.class), anyList()))
-                .thenReturn(WorkflowTaskCopyService.CopyPlan.empty());
-        taskLifecycleService = new WorkflowTaskLifecycleService(
-                engineOperations, identityResolver, repositoryService, runtimeService,
-                taskService, historyService,
-                mock(WorkflowDeploymentArtifactRepository.class),
-                mock(WorkflowStartVariableValidator.class),
-                mock(WorkflowAttachmentService.class),
-                mock(WorkflowTaskMovementPolicy.class), taskCopyService,
-                mock(WorkflowNextTaskAssignmentService.class), multiInstanceService,
-                mock(WorkflowControlledLoopService.class), notificationService,
-                processInstanceService);
-    }
-
-    /**
-     * 验证发起人取消完整流程树时，根和子流程的 ACTIVE 轮次均异常关闭。
-     *
-     * @return void，流程树、历史状态或任一轮次终态不一致时测试失败
-     */
-    @Test
-    void cancelsAllOpenRoundsInCompleteProcessTree()
-    {
-        RunningTree tree = startTreeAs("201");
-
-        transactionTemplate.executeWithoutResult(status ->
-                taskLifecycleService.cancelProcess(new WorkflowProcessCancelRequest(
-                        tree.rootId(), "发起人取消多实例流程")));
-
-        assertTerminatedTree(tree, "canceled");
-    }
-
-    /**
-     * 验证从 CallActivity 子流程多实例任务驳回时，统一根删除链关闭根和子流程全部开放轮次。
-     *
-     * @return void，公开驳回入口未原子结束流程树和轮次时测试失败
-     */
-    @Test
-    void rejectsAllOpenRoundsInCompleteProcessTree()
-    {
-        RunningTree tree = startTreeAs("201");
-        // 显式选择非根实例，证明子流程公开驳回入口仍会解析并关闭完整根流程树。
-        String childId = tree.instanceIds().stream()
-                .filter(instanceId -> !instanceId.equals(tree.rootId()))
-                .findFirst().orElseThrow();
-        Task assigneeTask = taskService.createTaskQuery()
-                .processInstanceId(childId)
-                .taskAssignee("201").active().list().stream().findFirst().orElseThrow();
-        setCurrentUser("201");
-
-        transactionTemplate.executeWithoutResult(status ->
-                taskLifecycleService.rejectTask(new WorkflowTaskRejectRequest(
-                        assigneeTask.getId(), "办理人驳回多实例流程", List.of())));
-
-        assertTerminatedTree(tree, "rejected");
     }
 
     /**
@@ -167,10 +135,11 @@ class WorkflowMultiInstanceRoundTerminationIntegrationTest
     void rollsBackFlowableDeletionWhenRoundTerminationCountDiffers()
     {
         RunningTree tree = startTreeAs("201");
+        when(permissionService.hasPermi("workflow:process:cancel")).thenReturn(true);
         doReturn(0).when(roundMapper).terminateOpenByRoundIds(anySet());
 
-        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status ->
-                taskLifecycleService.cancelProcess(new WorkflowProcessCancelRequest(
+        assertThatThrownBy(() -> transactionTemplate.execute(status ->
+                processInstanceService.terminate(new WorkflowInstanceTerminateRequest(
                         tree.rootId(), "注入轮次更新数量冲突"))))
                 .isInstanceOf(ServiceException.class)
                 .hasMessage("流程多实例轮次异常关闭数量不一致")
@@ -200,6 +169,7 @@ class WorkflowMultiInstanceRoundTerminationIntegrationTest
     void rejectsCancellationWhenActiveRoundIsMissingAndRollsBackEngine()
     {
         RunningTree tree = startTreeAs("201");
+        when(permissionService.hasPermi("workflow:process:cancel")).thenReturn(true);
         WfMultiInstanceRound removed = roundsFor(tree).stream()
                 .filter(round -> "rootReview".equals(round.getActivityId()))
                 .findFirst().orElseThrow();
@@ -207,8 +177,8 @@ class WorkflowMultiInstanceRoundTerminationIntegrationTest
                 "delete from wf_multi_instance_round where round_id=?",
                 removed.getRoundId())).isOne();
 
-        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status ->
-                taskLifecycleService.cancelProcess(new WorkflowProcessCancelRequest(
+        assertThatThrownBy(() -> transactionTemplate.execute(status ->
+                processInstanceService.terminate(new WorkflowInstanceTerminateRequest(
                         tree.rootId(), "缺失活动轮次时取消"))))
                 .isInstanceOf(ServiceException.class)
                 .hasMessage("工作流多实例轮次状态不一致")
@@ -405,6 +375,30 @@ class WorkflowMultiInstanceRoundTerminationIntegrationTest
         }
         rounds.sort(java.util.Comparator.comparing(WfMultiInstanceRound::getRoundId));
         return rounds;
+    }
+
+    /** 委派测试身份切换。 @param userId String，用户 ID @return void，无返回值 */
+    private void setCurrentUser(String userId)
+    {
+        fixture.setCurrentUser(userId);
+    }
+
+    /** 委派受控任务完成。 @param task Task，任务 @param revision int，预期 revision @return void，无返回值 */
+    private void complete(Task task, int revision)
+    {
+        fixture.complete(task, revision);
+    }
+
+    /** 委派唯一任务查询。 @param processInstanceId String，实例 ID @param activityId String，活动 ID @param assignee String，办理人 @return Task，唯一任务 */
+    private Task task(String processInstanceId, String activityId, String assignee)
+    {
+        return fixture.task(processInstanceId, activityId, assignee);
+    }
+
+    /** 委派任务列表查询。 @param processInstanceId String，实例 ID @param activityId String，活动 ID @return List，活动任务 */
+    private List<Task> tasks(String processInstanceId, String activityId)
+    {
+        return fixture.tasks(processInstanceId, activityId);
     }
 
     /**

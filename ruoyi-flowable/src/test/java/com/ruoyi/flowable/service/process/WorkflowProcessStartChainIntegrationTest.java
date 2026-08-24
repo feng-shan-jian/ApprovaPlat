@@ -15,8 +15,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.Date;
@@ -26,10 +24,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
-import org.apache.ibatis.builder.xml.XMLMapperBuilder;
-import org.apache.ibatis.mapping.Environment;
-import org.apache.ibatis.session.SqlSessionFactory;
-import org.apache.ibatis.session.SqlSessionFactoryBuilder;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RepositoryService;
@@ -37,21 +31,12 @@ import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
-import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.mybatis.spring.SqlSessionTemplate;
-import org.mybatis.spring.transaction.SpringManagedTransactionFactory;
-import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
-import org.springframework.transaction.interceptor.TransactionInterceptor;
-import org.springframework.transaction.support.TransactionTemplate;
-import org.flowable.spring.SpringProcessEngineConfiguration;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
@@ -91,6 +76,8 @@ import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
+import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
 import com.ruoyi.system.service.ISysUserService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import tools.jackson.core.type.TypeReference;
@@ -115,10 +102,11 @@ class WorkflowProcessStartChainIntegrationTest
     Path profileRoot;
 
     private ProcessEngine processEngine;
+    /** 当前用例独占且在 teardown 显式关闭的引擎基础设施。 */
+    private WorkflowFlowableEngineTestSupport engineInfrastructure;
     private RepositoryService repositoryService;
     private RuntimeService runtimeService;
     private JdbcTemplate jdbcTemplate;
-    private DataSourceTransactionManager transactionManager;
     private WfProcessDraftMapper draftMapper;
     private WfAttachmentMapper attachmentMapper;
     private WorkflowProcessDefinitionLockMapper definitionLockMapper;
@@ -142,29 +130,26 @@ class WorkflowProcessStartChainIntegrationTest
     @SuppressWarnings({ "unchecked", "rawtypes" })
     void setUp()
     {
-        JdbcDataSource dataSource = new JdbcDataSource();
-        dataSource.setURL("jdbc:h2:mem:start-chain-" + UUID.randomUUID()
-                + ";DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000");
-        dataSource.setUser("sa");
-        transactionManager = new DataSourceTransactionManager(dataSource);
-
-        SpringProcessEngineConfiguration configuration =
-                new SpringProcessEngineConfiguration();
-        configuration.setDataSource(dataSource);
-        configuration.setTransactionManager(transactionManager);
-        configuration.setDatabaseSchemaUpdate("true");
-        configuration.setHistory("full");
-        processEngine = configuration.buildProcessEngine();
+        engineInfrastructure = WorkflowFlowableEngineTestSupport.start(
+                "start-chain", Map.of());
+        DataSource dataSource = engineInfrastructure.dataSource();
+        processEngine = engineInfrastructure.processEngine();
         repositoryService = spy(processEngine.getRepositoryService());
         runtimeService = spy(processEngine.getRuntimeService());
         HistoryService historyService = processEngine.getHistoryService();
         TaskService taskService = processEngine.getTaskService();
 
-        jdbcTemplate = new JdbcTemplate(dataSource);
-        createBusinessTables();
-        SqlSessionTemplate mapperTemplate = createMapperTemplate(dataSource);
-        draftMapper = spy(mapperTemplate.getMapper(WfProcessDraftMapper.class));
-        attachmentMapper = spy(mapperTemplate.getMapper(WfAttachmentMapper.class));
+        jdbcTemplate = engineInfrastructure.jdbcTemplate();
+        WorkflowH2SchemaMapperSupport.executeSchema(dataSource,
+                WorkflowH2SchemaMapperSupport.PROCESS_DRAFT_SCHEMA);
+        WorkflowH2SchemaMapperSupport.executeSchema(dataSource,
+                WorkflowH2SchemaMapperSupport.ATTACHMENT_SCHEMA);
+        draftMapper = spy(WorkflowH2SchemaMapperSupport.createSpringMapper(dataSource,
+                "start-chain-draft-it", WfProcessDraftMapper.class,
+                "mapper/flowable/WfProcessDraftMapper.xml"));
+        attachmentMapper = spy(WorkflowH2SchemaMapperSupport.createSpringMapper(dataSource,
+                "start-chain-attachment-it", WfAttachmentMapper.class,
+                "mapper/flowable/WfAttachmentMapper.xml"));
 
         Deployment deployment = repositoryService.createDeployment()
                 .addString("start-chain.bpmn20.xml", BPMN)
@@ -194,8 +179,8 @@ class WorkflowProcessStartChainIntegrationTest
                         new WorkflowIdentityCodec());
         WorkflowEngineOperations operationsTarget = new WorkflowEngineOperations(
                 authenticationContext, new WorkflowExceptionTranslator(), identityResolver);
-        WorkflowEngineOperations engineOperations = transactionalProxy(
-                operationsTarget, transactionManager);
+        WorkflowEngineOperations engineOperations =
+                engineInfrastructure.transactionalProxy(operationsTarget);
 
         queryService = new WorkflowProcessQueryService(
                 engineOperations, repositoryService, historyService, runtimeService, taskService,
@@ -210,8 +195,8 @@ class WorkflowProcessStartChainIntegrationTest
         WorkflowAttachmentService attachmentTarget = new WorkflowAttachmentService(
                 attachmentMapper, attachmentStorage, attachmentProperties, identityResolver,
                 mock(WorkflowProcessAccessService.class));
-        WorkflowAttachmentService attachmentService = transactionalProxy(
-                attachmentTarget, transactionManager);
+        WorkflowAttachmentService attachmentService =
+                engineInfrastructure.transactionalProxy(attachmentTarget);
         variableValidator = spy(new WorkflowStartVariableValidator(
                 new WorkflowFormTemplateValidator()));
         definitionLockMapper = mock(WorkflowProcessDefinitionLockMapper.class);
@@ -238,10 +223,12 @@ class WorkflowProcessStartChainIntegrationTest
     @AfterEach
     void tearDown()
     {
-        if (processEngine != null)
+        if (engineInfrastructure != null)
         {
-            processEngine.close();
+            engineInfrastructure.close();
         }
+        processEngine = null;
+        engineInfrastructure = null;
     }
 
     /**
@@ -483,141 +470,9 @@ class WorkflowProcessStartChainIntegrationTest
                 stored.fileSize(), stored.sha256(), WorkflowAttachmentStatus.TEMP,
                 now.plusHours(1), null, null, null, null, null, null, 0,
                 null, null, null, null, now, now);
-        new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+        engineInfrastructure.transactionTemplate().executeWithoutResult(status ->
                 assertThat(attachmentMapper.insert(attachment)).isOne());
         return attachmentId;
-    }
-
-    /**
-     * 创建测试所需的草稿和附件业务表；列名与生产 Mapper 契约一致。
-     *
-     * @return void，无返回值
-     */
-    private void createBusinessTables()
-    {
-        jdbcTemplate.execute("""
-                create table wf_process_draft (
-                  draft_id varchar(36) primary key,
-                  owner_user_id bigint not null,
-                  process_definition_id varchar(255) not null,
-                  process_definition_key varchar(255) not null,
-                  process_definition_version int not null,
-                  deployment_id varchar(64) not null,
-                  process_name varchar(255) not null,
-                  source_type varchar(32) not null,
-                  form_id bigint,
-                  form_key varchar(255) not null,
-                  start_node_key varchar(255) not null,
-                  form_name varchar(255) not null,
-                  node_name varchar(255) not null,
-                  snapshot_create_time timestamp(3) not null,
-                  form_snapshot clob not null,
-                  form_snapshot_sha256 varchar(64) not null,
-                  start_multi_instance_assignments clob not null,
-                  form_values clob not null,
-                  multi_instance_user_ids clob not null,
-                  business_key varchar(255),
-                  draft_status varchar(16) not null,
-                  revision_no bigint not null,
-                  submitted_process_instance_id varchar(64),
-                  submitted_time timestamp(3),
-                  deleted_time timestamp(3),
-                  create_time timestamp(3) not null,
-                  update_time timestamp(3) not null
-                )
-                """);
-        jdbcTemplate.execute("""
-                create table wf_attachment (
-                  attachment_id varchar(36) primary key,
-                  owner_user_id bigint not null,
-                  field_name varchar(128) not null,
-                  original_name varchar(255) not null,
-                  storage_key varchar(512) not null,
-                  content_type varchar(255) not null,
-                  file_size bigint not null,
-                  sha256 varchar(64) not null,
-                  attachment_status varchar(16) not null,
-                  expire_time timestamp(3) not null,
-                  draft_id varchar(36),
-                  process_instance_id varchar(64),
-                  task_id varchar(64),
-                  node_key varchar(255),
-                  bound_time timestamp(3),
-                  storage_deleted_time timestamp(3),
-                  cleanup_retry_count int not null,
-                  cleanup_next_retry_time timestamp(3),
-                  cleanup_last_error_code varchar(128),
-                  cleanup_claim_token varchar(36),
-                  cleanup_lease_until timestamp(3),
-                  create_time timestamp(3) not null,
-                  update_time timestamp(3) not null
-                )
-                """);
-    }
-
-    /**
-     * 从生产 XML 创建可参与 Spring 事务的正式草稿与附件 Mapper。
-     *
-     * @param dataSource DataSource，与真实 Flowable 8 共用的数据源
-     * @return SqlSessionTemplate，使用 SpringManagedTransactionFactory 的 Mapper 会话
-     */
-    private SqlSessionTemplate createMapperTemplate(DataSource dataSource)
-    {
-        Environment environment = new Environment("start-chain-it",
-                new SpringManagedTransactionFactory(), dataSource);
-        org.apache.ibatis.session.Configuration configuration =
-                new org.apache.ibatis.session.Configuration(environment);
-        addMapper(configuration, WfProcessDraftMapper.class,
-                "mapper/flowable/WfProcessDraftMapper.xml");
-        addMapper(configuration, WfAttachmentMapper.class,
-                "mapper/flowable/WfAttachmentMapper.xml");
-        SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(configuration);
-        return new SqlSessionTemplate(factory);
-    }
-
-    /**
-     * 注册一个 Mapper 接口并完整解析对应生产 XML。
-     *
-     * @param configuration Configuration，当前测试 MyBatis 配置
-     * @param mapperType Class&lt;T&gt;，正式 Mapper 接口类型
-     * @param resource String，classpath 下生产 Mapper XML
-     * @return void，资源缺失或解析失败时终止测试装配
-     */
-    private <T> void addMapper(org.apache.ibatis.session.Configuration configuration,
-            Class<T> mapperType, String resource)
-    {
-        configuration.addMapper(mapperType);
-        try (InputStream input = getClass().getClassLoader().getResourceAsStream(resource))
-        {
-            if (input == null)
-            {
-                throw new IllegalStateException("测试无法加载正式 Mapper: " + resource);
-            }
-            new XMLMapperBuilder(input, configuration, resource,
-                    configuration.getSqlFragments()).parse();
-        }
-        catch (IOException | RuntimeException exception)
-        {
-            throw new IllegalStateException("测试解析正式 Mapper 失败: " + resource,
-                    exception);
-        }
-    }
-
-    /**
-     * 为生产对象应用基于 @Transactional 的真实 Spring 事务代理。
-     *
-     * @param target T，需要代理的生产服务
-     * @param manager DataSourceTransactionManager，共享 H2 事务管理器
-     * @return T，保留原生产类型的 CGLIB 事务代理
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T transactionalProxy(T target, DataSourceTransactionManager manager)
-    {
-        ProxyFactory proxyFactory = new ProxyFactory(target);
-        proxyFactory.setProxyTargetClass(true);
-        proxyFactory.addAdvice(new TransactionInterceptor(manager,
-                new AnnotationTransactionAttributeSource()));
-        return (T) proxyFactory.getProxy();
     }
 
     /**

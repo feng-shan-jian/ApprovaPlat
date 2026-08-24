@@ -26,15 +26,21 @@ public class WorkflowMultiInstanceHandler
 
     private final WorkflowUserSelectionValidator userSelectionValidator;
 
+    /** 命令内受控迁移协议，退回临时任务和重提重建不得重新解析客户端或实时目录成员。 */
+    private final WorkflowMultiInstanceTransitionObserver transitionObserver;
+
     /**
      * 创建动态多实例集合处理器。
      *
      * @param userSelectionValidator WorkflowUserSelectionValidator，正式启用用户严格校验器
+     * @param transitionObserver WorkflowMultiInstanceTransitionObserver，整组退回与重提命令内观察协议
      * @return 无返回值，构造后以 multiInstanceHandler 名称注册到 Spring
      */
-    public WorkflowMultiInstanceHandler(WorkflowUserSelectionValidator userSelectionValidator)
+    public WorkflowMultiInstanceHandler(WorkflowUserSelectionValidator userSelectionValidator,
+            WorkflowMultiInstanceTransitionObserver transitionObserver)
     {
         this.userSelectionValidator = userSelectionValidator;
+        this.transitionObserver = transitionObserver;
     }
 
     /**
@@ -64,6 +70,13 @@ public class WorkflowMultiInstanceHandler
             throw invalidArgument();
         }
 
+        List<String> transitionMembers = resolveTransitionMembers(execution,
+                activityId, mode);
+        if (transitionMembers != null)
+        {
+            return transitionMembers;
+        }
+
         Object rawUsers = execution.getVariable(
                 WorkflowMultiInstanceVariables.userCollectionName(activityId));
         List<Long> requestedUserIds = requireBoundedPositiveUserIds(rawUsers);
@@ -90,7 +103,6 @@ public class WorkflowMultiInstanceHandler
         {
             throw invalidArgument();
         }
-        List<Long> requestedUserIds = requireFixedUserIds(fixedUserIdsText);
         String activityId;
         WorkflowMultiInstanceMode mode;
         try
@@ -104,6 +116,13 @@ public class WorkflowMultiInstanceHandler
         {
             throw invalidArgument();
         }
+        List<String> transitionMembers = resolveTransitionMembers(execution,
+                activityId, mode);
+        if (transitionMembers != null)
+        {
+            return transitionMembers;
+        }
+        List<Long> requestedUserIds = requireFixedUserIds(fixedUserIdsText);
         List<String> activeUserIds = userSelectionValidator.requireApprovalEligibleUserIds(
                 requestedUserIds);
         if (activeUserIds.isEmpty())
@@ -157,6 +176,13 @@ public class WorkflowMultiInstanceHandler
             throw invalidArgument();
         }
 
+        List<String> transitionMembers = resolveTransitionMembers(execution,
+                activityId, mode);
+        if (transitionMembers != null)
+        {
+            return transitionMembers;
+        }
+
         // targetIds 是作者冻结的用户、角色或部门主键；角色和部门必须在每次进入节点时按实时 RBAC 展开。
         List<String> eligibleUserIds = switch (configuredIdentity.type())
         {
@@ -172,6 +198,38 @@ public class WorkflowMultiInstanceHandler
             throw invalidArgument();
         }
         return initializeMemberState(execution, activityId, mode, eligibleUserIds);
+    }
+
+    /**
+     * 在整组退回或重提命令中只使用轮次绑定成员，并核对既有流程变量未被修改。
+     *
+     * @param execution DelegateExecution，Flowable 正在创建目标多实例根的执行上下文
+     * @param activityId String，当前受控多实例节点
+     * @param mode WorkflowMultiInstanceMode，部署模型固定模式
+     * @return List&lt;String&gt;，RETURN 临时单成员或 REOPEN 完整冻结成员；普通进入返回 null
+     */
+    private List<String> resolveTransitionMembers(DelegateExecution execution,
+            String activityId, WorkflowMultiInstanceMode mode)
+    {
+        List<String> transitionMembers = transitionObserver.resolveTransitionMembers(
+                execution.getProcessInstanceId(), activityId, mode);
+        if (transitionMembers == null)
+        {
+            return null;
+        }
+
+        DelegateExecution processScope = requireProcessScope(execution);
+        List<String> existingMembers = requireExistingState(processScope, activityId, mode);
+        if (existingMembers == null)
+        {
+            // 受控迁移只能复用已由原正式轮次建立的服务端状态，缺失变量说明执行事实损坏。
+            throw dataError();
+        }
+        int existingRevision = requireNonNegativeRevision(processScope.getVariable(
+                WorkflowMultiInstanceVariables.revisionName(activityId)));
+            transitionObserver.requirePersistedSnapshot(execution.getProcessInstanceId(),
+                activityId, mode, existingMembers, existingRevision);
+        return List.copyOf(transitionMembers);
     }
 
     /**

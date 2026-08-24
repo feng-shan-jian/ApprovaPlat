@@ -41,7 +41,7 @@ import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundTerminationService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
 
@@ -88,7 +88,7 @@ class WorkflowProcessHistoryRoundDeletionTest
         service = new WorkflowProcessInstanceService(engineOperations, historyService,
                 mock(RuntimeService.class), mock(TaskService.class), attachmentMapper, copyMapper,
                 controlledLoopMapper, roundMapper,
-                mock(WorkflowMultiInstanceRoundService.class), permissionService,
+                mock(WorkflowMultiInstanceRoundTerminationService.class), permissionService,
                 mock(WorkflowTaskSlaRuntimeService.class),
                 mock(WorkflowNotificationService.class));
     }

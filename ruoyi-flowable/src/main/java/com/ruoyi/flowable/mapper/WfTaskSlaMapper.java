@@ -76,6 +76,16 @@ public interface WfTaskSlaMapper
             @Param("processInstanceId") String processInstanceId);
 
     /**
+     * 按流程实例和精确任务集合锁定仍需收口的 SLA 执行。
+     * @param processInstanceId String，流程实例主键
+     * @param taskIds List&lt;String&gt;，本次受控迁移即将撤销的精确任务主键集合
+     * @return List&lt;WfTaskSlaExecution&gt;，状态为 ACTIVE 或 ESCALATED 的锁定执行
+     */
+    List<WfTaskSlaExecution> selectWithdrawableExecutionsForUpdate(
+            @Param("processInstanceId") String processInstanceId,
+            @Param("taskIds") List<String> taskIds);
+
+    /**
      * 同步当前办理人。
      * @param executionId Long，SLA 执行主键
      * @param assigneeUserId String，可空办理人

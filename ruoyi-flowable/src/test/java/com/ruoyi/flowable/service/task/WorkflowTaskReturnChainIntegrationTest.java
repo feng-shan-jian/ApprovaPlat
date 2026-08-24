@@ -15,7 +15,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.ProcessEngine;
@@ -26,17 +25,13 @@ import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.engine.task.Comment;
 import org.flowable.identitylink.api.IdentityLinkType;
-import org.flowable.spring.SpringProcessEngineConfiguration;
 import org.flowable.task.api.Task;
 import org.flowable.task.api.history.HistoricTaskInstance;
-import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.aop.framework.ProxyFactory;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
-import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployForm;
@@ -58,6 +53,7 @@ import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
+import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
 
 /**
  * 使用真实 Flowable 8、H2 和 Spring 事务验证退回发起人与重新提交完整状态机。
@@ -85,6 +81,8 @@ class WorkflowTaskReturnChainIntegrationTest
             new AtomicReference<>(SECOND_APPROVER_ID);
 
     private ProcessEngine processEngine;
+    /** 当前用例独占且在 teardown 显式关闭的引擎基础设施。 */
+    private WorkflowFlowableEngineTestSupport engineInfrastructure;
     private RepositoryService repositoryService;
     private RuntimeService runtimeService;
     private TaskService taskService;
@@ -108,20 +106,9 @@ class WorkflowTaskReturnChainIntegrationTest
         when(identityResolver.resolveCurrentIdentity()).thenAnswer(invocation ->
                 new WorkflowCurrentIdentity(currentUserId.get(), Set.of()));
 
-        JdbcDataSource dataSource = new JdbcDataSource();
-        dataSource.setURL("jdbc:h2:mem:return-chain-" + UUID.randomUUID()
-                + ";DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000");
-        dataSource.setUser("sa");
-        DataSourceTransactionManager transactionManager =
-                new DataSourceTransactionManager(dataSource);
-
-        SpringProcessEngineConfiguration configuration =
-                new SpringProcessEngineConfiguration();
-        configuration.setDataSource(dataSource);
-        configuration.setTransactionManager(transactionManager);
-        configuration.setDatabaseSchemaUpdate("true");
-        configuration.setHistory("full");
-        processEngine = configuration.buildProcessEngine();
+        engineInfrastructure = WorkflowFlowableEngineTestSupport.start(
+                "return-chain", Map.of());
+        processEngine = engineInfrastructure.processEngine();
         repositoryService = processEngine.getRepositoryService();
         runtimeService = processEngine.getRuntimeService();
         taskService = processEngine.getTaskService();
@@ -140,8 +127,8 @@ class WorkflowTaskReturnChainIntegrationTest
                         new WorkflowIdentityCodec());
         WorkflowEngineOperations operationsTarget = new WorkflowEngineOperations(
                 authenticationContext, new WorkflowExceptionTranslator(), identityResolver);
-        WorkflowEngineOperations engineOperations = transactionalProxy(
-                operationsTarget, transactionManager);
+        WorkflowEngineOperations engineOperations =
+                engineInfrastructure.transactionalProxy(operationsTarget);
 
         attachmentService = mock(WorkflowAttachmentService.class);
         when(attachmentService.prepareTaskVariables(
@@ -153,16 +140,43 @@ class WorkflowTaskReturnChainIntegrationTest
                 any(WorkflowCurrentIdentity.class), anyList()))
                 .thenReturn(WorkflowTaskCopyService.CopyPlan.empty());
         notificationService = mock(WorkflowNotificationService.class);
+        WorkflowMultiInstanceGroupTransitionService groupTransitionService =
+                mock(WorkflowMultiInstanceGroupTransitionService.class);
 
+        WorkflowTaskReturnApplicationService returnApplicationService =
+                new WorkflowTaskReturnApplicationService(engineOperations,
+                        new WorkflowTaskRequestValidator(),
+                        new WorkflowTaskRuntimeReader(runtimeService, taskService,
+                                historyService),
+                        new WorkflowTaskBpmnReader(repositoryService),
+                        new WorkflowTaskMovementPolicy(),
+                        new WorkflowReturnedTaskStateService(
+                                new WorkflowReturnedAssignmentCodec(),
+                                runtimeService, taskService),
+                        new WorkflowTaskActionAuditWriter(taskService),
+                        new WorkflowTaskConcurrencyExecutor(),
+                        groupTransitionService, taskCopyService,
+                        notificationService, runtimeService);
+        WorkflowApplicationResubmitApplicationService resubmitApplicationService =
+                new WorkflowApplicationResubmitApplicationService(engineOperations,
+                        new WorkflowTaskRequestValidator(),
+                        new WorkflowTaskRuntimeReader(runtimeService, taskService,
+                                historyService),
+                        new WorkflowReturnedTaskStateService(
+                                new WorkflowReturnedAssignmentCodec(),
+                                runtimeService, taskService),
+                        new WorkflowTaskActionAuditWriter(taskService),
+                        new WorkflowTaskConcurrencyExecutor(),
+                        groupTransitionService, artifactRepository,
+                        new WorkflowStartVariableValidator(
+                                new WorkflowFormTemplateValidator()),
+                        attachmentService, notificationService, runtimeService);
         lifecycleService = new WorkflowTaskLifecycleService(
-                engineOperations, identityResolver, repositoryService, runtimeService,
-                taskService, historyService, artifactRepository,
-                new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator()),
-                attachmentService, new WorkflowTaskMovementPolicy(), taskCopyService,
-                mock(WorkflowNextTaskAssignmentService.class),
-                mock(WorkflowMultiInstanceService.class),
-                mock(WorkflowControlledLoopService.class), notificationService,
-                mock(WorkflowProcessInstanceService.class));
+                mock(WorkflowProcessCancelApplicationService.class),
+                mock(WorkflowTaskRevokeApplicationService.class),
+                mock(WorkflowTaskCompletionApplicationService.class),
+                mock(WorkflowTaskRejectionApplicationService.class),
+                returnApplicationService, resubmitApplicationService);
     }
 
     /**
@@ -173,10 +187,12 @@ class WorkflowTaskReturnChainIntegrationTest
     @AfterEach
     void tearDown()
     {
-        if (processEngine != null)
+        if (engineInfrastructure != null)
         {
-            processEngine.close();
+            engineInfrastructure.close();
         }
+        processEngine = null;
+        engineInfrastructure = null;
     }
 
     /**
@@ -202,7 +218,7 @@ class WorkflowTaskReturnChainIntegrationTest
         assertThat(taskService.getIdentityLinksForTask(returnedTask.getId()))
                 .noneMatch(link -> IdentityLinkType.CANDIDATE.equals(link.getType()));
         assertDoubleStatus(scenario.instance().getId(),
-                WorkflowTaskLifecycleService.RETURNED_STATUS);
+                WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
 
         Comment returnComment = taskService.getProcessInstanceComments(
                 scenario.instance().getId(), "2").stream().findFirst().orElseThrow();
@@ -252,11 +268,11 @@ class WorkflowTaskReturnChainIntegrationTest
         assertDoubleStatus(scenario.instance().getId(),
                 WorkflowProcessStartService.RUNNING_STATUS);
         assertThat(taskService.getVariableLocal(resubmittedTask.getId(),
-                WorkflowTaskLifecycleService.RETURN_ASSIGNMENT_VARIABLE)).isNull();
+                WorkflowReturnedApplicationProtocol.RETURN_ASSIGNMENT_VARIABLE)).isNull();
         assertThat(taskService.getVariableLocal(resubmittedTask.getId(),
-                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE)).isNull();
+                WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE)).isNull();
         assertThat(runtimeService.getVariable(scenario.instance().getId(),
-                WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE)).isNull();
+                WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE)).isNull();
         verify(attachmentService).bindTaskAttachments(APPLICANT_ID,
                 scenario.instance().getId(), resubmittedTask.getId(), "start", Map.of());
     }
@@ -293,10 +309,101 @@ class WorkflowTaskReturnChainIntegrationTest
                 .containsExactlyInAnyOrderElementsOf(
                         beforeTasks.stream().map(Task::getId).toList());
         assertThat(taskService.getProcessInstanceComments(instance.getId(), "2")).isEmpty();
-        assertDoubleStatus(instance.getId(), WorkflowProcessStartService.RUNNING_STATUS);
         assertThat(runtimeService.getVariable(instance.getId(),
-                WorkflowNotificationConstants.CONTROLLED_TRANSITION_VARIABLE)).isNull();
+                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE))
+                .isEqualTo(WorkflowProcessStartService.RUNNING_STATUS);
+        assertThat(runtimeService.createProcessInstanceQuery()
+                .processInstanceId(instance.getId()).singleResult()
+                .getBusinessStatus()).isNull();
+        assertThat(runtimeService.getVariable(instance.getId(),
+                WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE)).isNull();
         verifyNoInteractions(taskCopyService, notificationService, attachmentService);
+    }
+
+    /**
+     * 验证既有普通运行实例允许空 businessStatus，也允许显式 running。
+     * @param businessStatus String，历史空值或新链路显式运行态
+     * @return void，能力读取必须保持可退且不得产生写副作用
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "", WorkflowProcessStartService.RUNNING_STATUS })
+    void acceptsBlankOrRunningBusinessStatus(String businessStatus)
+    {
+        ReturnScenario scenario = startAtSecondApproval();
+        runtimeService.updateBusinessStatus(scenario.instance().getId(), businessStatus);
+
+        assertThat(lifecycleService.isTaskReturnAllowed(
+                scenario.secondTask().getId())).isTrue();
+        assertThat(taskService.getProcessInstanceComments(
+                scenario.instance().getId(), "2")).isEmpty();
+        verifyNoInteractions(taskCopyService, notificationService, attachmentService);
+    }
+
+    /**
+     * 验证明确业务终态不能借兼容规则进入普通退回链路。
+     * @param businessStatus String，returned/canceled/rejected/terminated 冲突状态
+     * @return void，能力为 false、正式命令为 409 且没有部分副作用
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "returned", "canceled", "rejected", "terminated" })
+    void rejectsConflictingBusinessStatus(String businessStatus)
+    {
+        ReturnScenario scenario = startAtSecondApproval();
+        runtimeService.updateBusinessStatus(scenario.instance().getId(), businessStatus);
+
+        assertThat(lifecycleService.isTaskReturnAllowed(
+                scenario.secondTask().getId())).isFalse();
+        assertThatThrownBy(() -> lifecycleService.returnTask(
+                new WorkflowTaskReturnRequest(scenario.secondTask().getId(),
+                        "冲突状态不得退回", List.of())))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(requireSingleTask(scenario.instance().getId(), "secondApproval")
+                .getId()).isEqualTo(scenario.secondTask().getId());
+        assertThat(taskService.getProcessInstanceComments(
+                scenario.instance().getId(), "2")).isEmpty();
+        verifyNoInteractions(taskCopyService, notificationService, attachmentService);
+    }
+
+    /**
+     * 验证 processStatus 缺失时即使 businessStatus 为空也不能退回。
+     * @return void，能力为 false且正式命令稳定返回 409
+     */
+    @Test
+    void rejectsMissingProcessStatus()
+    {
+        ReturnScenario scenario = startAtSecondApproval();
+        runtimeService.removeVariable(scenario.instance().getId(),
+                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE);
+
+        assertThat(lifecycleService.isTaskReturnAllowed(
+                scenario.secondTask().getId())).isFalse();
+        assertThatThrownBy(() -> lifecycleService.returnTask(
+                new WorkflowTaskReturnRequest(scenario.secondTask().getId(),
+                        "缺失运行态不得退回", List.of())))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    /**
+     * 验证 processStatus 已进入非运行态时不能依赖空 businessStatus 绕过失败关闭。
+     * @return void，能力为 false且正式命令稳定返回 409
+     */
+    @Test
+    void rejectsConflictingProcessStatus()
+    {
+        ReturnScenario scenario = startAtSecondApproval();
+        runtimeService.setVariable(scenario.instance().getId(),
+                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
+                WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
+
+        assertThat(lifecycleService.isTaskReturnAllowed(
+                scenario.secondTask().getId())).isFalse();
+        assertThatThrownBy(() -> lifecycleService.returnTask(
+                new WorkflowTaskReturnRequest(scenario.secondTask().getId(),
+                        "非运行态不得退回", List.of())))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
     }
 
     /**
@@ -314,7 +421,7 @@ class WorkflowTaskReturnChainIntegrationTest
     }
 
     /**
-     * 以真实 Flowable 认证发起人启动流程，并写入开始快照及 running 双状态。
+     * 以真实 Flowable 认证发起人启动流程，并只写正式 processStatus 运行态。
      *
      * @param processKey String，待启动的流程定义 key
      * @return ProcessInstance，真实活动流程实例
@@ -332,8 +439,6 @@ class WorkflowTaskReturnChainIntegrationTest
                             WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot,
                             WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
                             WorkflowProcessStartService.RUNNING_STATUS));
-            runtimeService.updateBusinessStatus(instance.getId(),
-                    WorkflowProcessStartService.RUNNING_STATUS);
             return runtimeService.createProcessInstanceQuery()
                     .processInstanceId(instance.getId()).singleResult();
         }
@@ -374,23 +479,6 @@ class WorkflowTaskReturnChainIntegrationTest
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(processInstanceId).singleResult().getBusinessStatus())
                 .isEqualTo(expectedStatus);
-    }
-
-    /**
-     * 为生产对象应用基于 @Transactional 的真实 Spring 事务代理。
-     *
-     * @param target T，需要代理的生产服务
-     * @param manager DataSourceTransactionManager，共享 H2 事务管理器
-     * @return T，保留原生产类型的 CGLIB 事务代理
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T transactionalProxy(T target, DataSourceTransactionManager manager)
-    {
-        ProxyFactory proxyFactory = new ProxyFactory(target);
-        proxyFactory.setProxyTargetClass(true);
-        proxyFactory.addAdvice(new TransactionInterceptor(manager,
-                new AnnotationTransactionAttributeSource()));
-        return (T) proxyFactory.getProxy();
     }
 
     /**

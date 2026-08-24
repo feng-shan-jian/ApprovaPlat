@@ -6,27 +6,18 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import com.mysql.cj.jdbc.MysqlDataSource;
 import org.apache.ibatis.builder.xml.XMLMapperBuilder;
 import org.apache.ibatis.io.Resources;
 import org.apache.ibatis.mapping.Environment;
 import org.apache.ibatis.session.Configuration;
-import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.apache.ibatis.session.SqlSessionFactoryBuilder;
 import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,32 +25,28 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import tools.jackson.databind.json.JsonMapper;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
-import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
 
 /**
- * 在显式指定的隔离 MySQL 8 空库基线上验收多实例轮次 Mapper 和数据库约束。
+ * 在显式指定的隔离 MySQL 8 空库基线上执行公共 Mapper 契约和 MySQL 专属门禁。
  *
- * 本类不创建、变更或自动修复表结构；运行前必须已按当前空库基线安装
- * {@code wf_multi_instance_round}。
+ * 本类不创建、变更或修复表结构；JSON、CHECK、STORED 生成列、排序规则、InnoDB、
+ * 数据库时钟及真实并发均由现有基线和真实 MySQL 执行，不能由 H2 替代。
  */
 @EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL",
         matches = "jdbc:mysql:.*")
-class WfMultiInstanceRoundMapperMySqlTest
+class WfMultiInstanceRoundMapperMySqlTest extends AbstractWfMultiInstanceRoundMapperContractTest
 {
-    private static final String TEST_INSTANCE_PREFIX = "mi-round-it-";
     private static MysqlDataSource dataSource;
-    private static SqlSessionFactory sessionFactory;
-    private static ExecutorService executor;
+    private static SqlSessionFactory mySqlSessionFactory;
 
     /**
-     * 使用显式环境变量连接隔离基线库，加载生产 Mapper XML 并验证真实表结构。
+     * 使用显式环境变量连接隔离基线库，加载正式 Mapper XML 并验证环境门禁。
      *
-     * @return void，测试类共享一个 MySQL 数据源和 SqlSessionFactory
+     * @return void，当前环境向公共契约提供 MySQL SqlSessionFactory
      * @throws Exception 连接、基线校验或 Mapper XML 加载失败时报告
      */
     @BeforeAll
@@ -83,29 +70,14 @@ class WfMultiInstanceRoundMapperMySqlTest
             new XMLMapperBuilder(input, configuration, mapperResource,
                     configuration.getSqlFragments()).parse();
         }
-        sessionFactory = new SqlSessionFactoryBuilder().build(configuration);
-        executor = Executors.newFixedThreadPool(2);
+        mySqlSessionFactory = new SqlSessionFactoryBuilder().build(configuration);
     }
 
     /**
-     * 停止真实 InnoDB 并发 CAS 用例的固定线程池。
+     * 每个场景前精确清除公共契约固定前缀的数据。
      *
-     * @return void，不保留测试线程
-     */
-    @AfterAll
-    static void tearDownMySql()
-    {
-        if (executor != null)
-        {
-            executor.shutdownNow();
-        }
-    }
-
-    /**
-     * 每个用例前清除仅属于本测试前缀的轮次记录。
-     *
-     * @return void，不影响基线库中其他数据
-     * @throws SQLException 清理失败时报告
+     * @return void，不影响隔离库中的其他记录
+     * @throws SQLException 清理失败时向 JUnit 报告
      */
     @BeforeEach
     void clearBefore() throws SQLException
@@ -114,10 +86,10 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 每个用例后精确清除本测试前缀数据，包括失败用例已写入的记录。
+     * 每个场景后再次清理，即使负例中途失败也不遗留测试数据。
      *
-     * @return void，不遗留临时验收数据
-     * @throws SQLException 清理失败时报告
+     * @return void，不遗留 MySQL 验收记录
+     * @throws SQLException 清理失败时向 JUnit 报告
      */
     @AfterEach
     void clearAfter() throws SQLException
@@ -126,122 +98,73 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 验证正式 Mapper 的插入、数据库时钟、查询、CAS 和批量历史删除。
+     * 返回已加载正式 Mapper XML 的 MySQL 会话工厂。
      *
-     * @return void，断言 JVM 时钟领先时仍可快速完成，并覆盖 CRUD/CAS 与历史删除闭环
+     * @return SqlSessionFactory，当前 MySQL 契约环境的会话工厂
+     */
+    @Override
+    protected SqlSessionFactory sessionFactory()
+    {
+        return mySqlSessionFactory;
+    }
+
+    /**
+     * 返回 MySQL DATETIME(3) 可稳定表示的当前测试时间。
+     *
+     * @return LocalDateTime，去除纳秒后的 JVM 当前时间
+     */
+    @Override
+    protected LocalDateTime stableTime()
+    {
+        return LocalDateTime.now().withNano(0);
+    }
+
+    /**
+     * 验证真实表继续使用 InnoDB、STORED 生成列和大小写敏感 ASCII 排序规则。
+     *
+     * @return void，断言开放轮次唯一键所依赖的 MySQL 物理属性没有漂移
+     * @throws SQLException information_schema 查询失败时向 JUnit 报告
      */
     @Test
-    void shouldRunMapperCrudCasHistoryDeletionAndDatabaseClock()
+    void shouldRetainMySqlPhysicalSchemaCapabilities() throws SQLException
     {
-        String processA = instanceId("crud-a");
-        String processB = instanceId("crud-b");
-        String processC = instanceId("terminate-active");
-        WfMultiInstanceRound active = activeRound(processA, "activity-a", rootId(), 1);
-        active.setCreateTime(LocalDateTime.now().plusDays(1));
-        WfMultiInstanceRound returned = returnedRound(processB, "activity-b", rootId(), 1);
-        WfMultiInstanceRound activeToTerminate = activeRound(processC,
-                "activity-c", rootId(), 1);
-        try (SqlSession session = sessionFactory.openSession(true))
+        try (Connection connection = dataSource.getConnection();
+                Statement statement = connection.createStatement())
         {
-            WfMultiInstanceRoundMapper mapper = session.getMapper(WfMultiInstanceRoundMapper.class);
-            assertEquals(1, mapper.insert(active));
-            assertEquals(1, mapper.insert(returned));
-            assertEquals(1, mapper.insert(activeToTerminate));
-            assertNotNull(active.getRoundId());
-            WfMultiInstanceRound created = mapper.selectByRootExecutionId(active.getRootExecutionId());
-            WfMultiInstanceRound returnedCreated = mapper.selectByRootExecutionId(returned.getRootExecutionId());
-            assertEquals(active.getRoundId(), created.getRoundId());
-            assertTrue(created.getCreateTime().isBefore(active.getCreateTime().minusHours(23)));
-            assertEquals(1, mapper.selectActiveByProcessInstanceAndActivity(
-                    processA, "activity-a").size());
-            assertEquals(1, mapper.selectOpenByProcessInstanceAndActivity(
-                    processB, "activity-b").size());
-            assertEquals(1, mapper.selectMaxRoundNo(processA, "activity-a"));
-            assertEquals(null, mapper.selectMaxRoundNo(instanceId("missing"), "activity-a"));
-
-            String revised = WfMultiInstanceRound.encodeMembers(List.of("1", "3", "2"));
-            assertEquals(1, mapper.compareAndSetActiveSnapshot(
-                    active.getRoundId(), 0, 1, revised));
-            assertEquals(0, mapper.compareAndSetActiveSnapshot(
-                    active.getRoundId(), 0, 1, revised));
-            assertEquals(1, mapper.compareAndSetCompletedStatus(
-                    active.getRoundId(), 1, revised));
-            WfMultiInstanceRound completed = mapper.selectByRootExecutionId(
-                    active.getRootExecutionId());
-            assertEquals(WorkflowMultiInstanceRoundStatus.COMPLETED,
-                    completed.getRoundStatus());
-            assertEquals(1, completed.getRevisionNo());
-            assertNotNull(completed.getCompleteTime());
-            Duration elapsed = Duration.between(created.getCreateTime(), completed.getCompleteTime());
-            assertTrue(!elapsed.isNegative() && elapsed.compareTo(Duration.ofHours(1)) < 0);
-
-            Set<Long> terminatingIds = Set.of(returned.getRoundId(), activeToTerminate.getRoundId());
-            assertEquals(2, mapper.terminateOpenByRoundIds(terminatingIds));
-            List<WfMultiInstanceRound> terminated = mapper.selectByRoundIds(terminatingIds);
-            assertTrue(terminated.stream().allMatch(round -> round.getRoundStatus()
-                    == WorkflowMultiInstanceRoundStatus.TERMINATED
-                    && round.getTerminateTime() != null));
-            assertEquals(returnedCreated.getReturnTime(), mapper.selectByRootExecutionId(
-                    returned.getRootExecutionId()).getReturnTime());
-
-            Set<String> instances = Set.of(processA, processB, processC);
-            assertEquals(3, mapper.countByProcessInstanceIds(instances));
-            assertEquals(3, mapper.deleteByProcessInstanceIds(instances));
-            assertEquals(0, mapper.countByProcessInstanceIds(instances));
+            try (ResultSet table = statement.executeQuery(
+                    "select engine from information_schema.tables "
+                    + "where table_schema=database() and table_name='wf_multi_instance_round'"))
+            {
+                assertTrue(table.next());
+                assertEquals("InnoDB", table.getString("engine"));
+            }
+            try (ResultSet columns = statement.executeQuery(
+                    "select column_name, collation_name, extra from information_schema.columns "
+                    + "where table_schema=database() and table_name='wf_multi_instance_round' "
+                    + "and column_name in ('open_process_instance_id','open_activity_id') "
+                    + "order by column_name"))
+            {
+                int generatedColumnCount = 0;
+                while (columns.next())
+                {
+                    assertEquals("ascii_bin", columns.getString("collation_name"));
+                    assertTrue(columns.getString("extra").toUpperCase().contains("STORED GENERATED"));
+                    generatedColumnCount++;
+                }
+                assertEquals(2, generatedColumnCount);
+            }
         }
     }
 
     /**
-     * 验证轮次自然键、根 execution 和同节点开放轮次三项 MySQL 唯一约束。
+     * 验证 MySQL JSON Schema 对数组类型、数量、唯一性和规范 Long 用户主键的约束。
      *
-     * @return void，断言三种冲突分别被 InnoDB 拒绝且终态后可建第二轮
-     */
-    @Test
-    void shouldEnforceAllThreeMySqlUniqueConstraints()
-    {
-        String process = instanceId("unique");
-        WfMultiInstanceRound first = activeRound(process, "activity-u", rootId(), 1);
-        try (SqlSession session = sessionFactory.openSession(true))
-        {
-            WfMultiInstanceRoundMapper mapper = session.getMapper(WfMultiInstanceRoundMapper.class);
-            mapper.insert(first);
-        }
-
-        WfMultiInstanceRound duplicateRoot = activeRound(
-                instanceId("other"), "activity-other", first.getRootExecutionId(), 1);
-        assertMapperInsertRejected(duplicateRoot);
-        WfMultiInstanceRound duplicateOpen = activeRound(
-                process, "activity-u", rootId(), 2);
-        assertMapperInsertRejected(duplicateOpen);
-
-        try (SqlSession session = sessionFactory.openSession(true))
-        {
-            WfMultiInstanceRoundMapper mapper = session.getMapper(WfMultiInstanceRoundMapper.class);
-            assertEquals(1, mapper.compareAndSetCompletedStatus(
-                    first.getRoundId(), 0, first.getMembersJson()));
-        }
-        WfMultiInstanceRound duplicateNatural = activeRound(
-                process, "activity-u", rootId(), 1);
-        assertMapperInsertRejected(duplicateNatural);
-
-        try (SqlSession session = sessionFactory.openSession(true))
-        {
-            WfMultiInstanceRoundMapper mapper = session.getMapper(WfMultiInstanceRoundMapper.class);
-            assertEquals(1, mapper.insert(duplicateOpen));
-            assertEquals(2, mapper.selectMaxRoundNo(process, "activity-u"));
-        }
-    }
-
-    /**
-     * 验证 MySQL JSON Schema 对数组类型、数量、唯一性和规范 Long 用户主键的强制约束。
-     *
-     * @return void，断言 Long 正整数上界可写，且损坏 JSON、空/超长/重复数组和非法用户主键全部被拒绝
+     * @return void，断言合法上界可写，损坏 JSON、空/超长/重复数组和非法主键均被拒绝
      * @throws Exception JSON 编码失败时报告
      */
     @Test
     void shouldEnforceMySqlMemberJsonChecks() throws Exception
     {
-        // 先验证规范用户主键的 Long 上界，避免 SQL 正则误伤合法边界值。
         RawRound maximumUserId = rawActive("json-max-user-id");
         maximumUserId.membersJson = json(List.of("9223372036854775807"));
         insertRaw(maximumUserId);
@@ -312,9 +235,9 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 验证 ACTIVE/RETURNED/REOPENED/COMPLETED/TERMINATED 各时间字段组合和顺序 CHECK。
+     * 验证各轮次状态的生命周期时间组合和先后顺序 CHECK。
      *
-     * @return void，断言提前完成、ACTIVE 夹带完成时间和重开时间倒置均被拒绝
+     * @return void，断言提前完成、ACTIVE 夹带完成时间和终止/重开时间倒置均被拒绝
      */
     @Test
     void shouldEnforceMySqlLifecycleTimeChecks()
@@ -347,35 +270,7 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 验证两个真实 InnoDB 事务同时用相同旧修订号 CAS 时只有一个成功。
-     *
-     * @return void，断言两个事务影响行数之和为 1
-     * @throws Exception 线程协调、锁等待或 SQL 失败时报告
-     */
-    @Test
-    void shouldAllowOnlyOneRealMySqlConcurrentCas() throws Exception
-    {
-        WfMultiInstanceRound round = activeRound(
-                instanceId("concurrent"), "activity-cas", rootId(), 1);
-        try (SqlSession session = sessionFactory.openSession(true))
-        {
-            session.getMapper(WfMultiInstanceRoundMapper.class).insert(round);
-        }
-
-        CountDownLatch start = new CountDownLatch(1);
-        Future<Integer> first = executor.submit(() -> concurrentCas(
-                round.getRoundId(), WfMultiInstanceRound.encodeMembers(List.of("1", "2")),
-                start));
-        Future<Integer> second = executor.submit(() -> concurrentCas(
-                round.getRoundId(), WfMultiInstanceRound.encodeMembers(List.of("2", "1")),
-                start));
-        start.countDown();
-
-        assertEquals(1, first.get() + second.get());
-    }
-
-    /**
-     * 验证当前连接是 MySQL 8 且基线表已注册全部必要 CHECK 约束。
+     * 验证当前连接是 MySQL 8、目标表存在且已安装完整 CHECK 集合。
      *
      * @return void，只读校验环境，不创建或修改表
      * @throws SQLException 连接或 information_schema 查询失败时报告
@@ -427,45 +322,6 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 在独立 InnoDB 事务中执行成员快照 CAS 并提交。
-     *
-     * @param roundId long，竞争轮次主键
-     * @param membersJson String，当前竞争者的有序成员快照
-     * @param start CountDownLatch，两个事务的同步起点
-     * @return int，当前事务 CAS 影响行数
-     * @throws Exception 等待或数据库事务失败时向 Future 传递
-     */
-    private int concurrentCas(long roundId, String membersJson, CountDownLatch start)
-            throws Exception
-    {
-        start.await();
-        try (SqlSession session = sessionFactory.openSession(false))
-        {
-            int affected = session.getMapper(WfMultiInstanceRoundMapper.class)
-                    .compareAndSetActiveSnapshot(roundId, 0, 1, membersJson);
-            session.commit();
-            return affected;
-        }
-    }
-
-    /**
-     * 断言一次通过生产 Mapper 发起的写入被 MySQL 唯一约束拒绝。
-     *
-     * @param round WfMultiInstanceRound，与已有记录冲突的轮次
-     * @return void，断言 MyBatis 向上报告数据库冲突
-     */
-    private void assertMapperInsertRejected(WfMultiInstanceRound round)
-    {
-        assertThrows(RuntimeException.class, () ->
-        {
-            try (SqlSession session = sessionFactory.openSession(true))
-            {
-                session.getMapper(WfMultiInstanceRoundMapper.class).insert(round);
-            }
-        });
-    }
-
-    /**
      * 断言原始负例记录被 MySQL 类型或 CHECK 约束拒绝。
      *
      * @param round RawRound，仅某个受控字段不合法的负例记录
@@ -477,7 +333,7 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 用 JDBC 执行一次负例写入，避免领域门禁提前拦截而未命中真实 MySQL CHECK。
+     * 用 JDBC 执行一次负例写入，确保真实命中 MySQL 类型和 CHECK 门禁。
      *
      * @param round RawRound，准备由 MySQL 验证的原始字段
      * @return void，写入成功时正常返回
@@ -519,55 +375,6 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 构造可通过真实 MySQL 全部约束的 ACTIVE 轮次。
-     *
-     * @param processInstanceId String，本测试前缀流程实例主键
-     * @param activityId String，多实例节点标识
-     * @param rootExecutionId String，唯一根 execution 主键
-     * @param roundNo int，同节点轮次号
-     * @return WfMultiInstanceRound，字段完整的 ACTIVE 轮次
-     */
-    private WfMultiInstanceRound activeRound(String processInstanceId, String activityId,
-            String rootExecutionId, int roundNo)
-    {
-        WfMultiInstanceRound round = new WfMultiInstanceRound();
-        round.setDeployId("deployment-it");
-        round.setProcessDefinitionId("approval:1:definition");
-        round.setProcessInstanceId(processInstanceId);
-        round.setActivityId(activityId);
-        round.setRootExecutionId(rootExecutionId);
-        round.setRoundNo(roundNo);
-        round.setMode("ALL");
-        round.setMembers(List.of("1", "2"));
-        round.setRevisionNo(0);
-        round.setRoundStatus(WorkflowMultiInstanceRoundStatus.ACTIVE);
-        round.setCreateTime(LocalDateTime.now().withNano(0));
-        return round;
-    }
-
-    /**
-     * 构造可通过真实 MySQL 全部退回约束的 RETURNED 轮次。
-     *
-     * @param processInstanceId String，本测试前缀流程实例主键
-     * @param activityId String，多实例节点标识
-     * @param rootExecutionId String，唯一根 execution 主键
-     * @param roundNo int，同节点轮次号
-     * @return WfMultiInstanceRound，具备完整退回关联的开放轮次
-     */
-    private WfMultiInstanceRound returnedRound(String processInstanceId, String activityId,
-            String rootExecutionId, int roundNo)
-    {
-        WfMultiInstanceRound round = activeRound(
-                processInstanceId, activityId, rootExecutionId, roundNo);
-        round.setRoundStatus(WorkflowMultiInstanceRoundStatus.RETURNED);
-        round.setReturnSourceTaskId("task-return");
-        round.setReturnActorUserId("1");
-        round.setApplicantTaskId("task-applicant");
-        round.setReturnTime(round.getCreateTime().plusSeconds(1));
-        return round;
-    }
-
-    /**
      * 构造可被单字段改写为数据库负例的原始 ACTIVE 记录。
      *
      * @param suffix String，用于隔离当前负例的实例名后缀
@@ -592,9 +399,9 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 使用 Jackson 将测试值编码为 JSON，避免手工拼接生产快照。
+     * 使用 Jackson 编码 MySQL JSON 负例，避免手工拼接结构化快照。
      *
-     * @param value Object，负例需要提交给 MySQL 的结构化值
+     * @param value Object，需要提交给 MySQL 的结构化值
      * @return String，Jackson 产生的 JSON
      * @throws Exception JSON 编码失败时报告
      */
@@ -604,30 +411,7 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 生成带固定测试前缀且不超过 64 字符的流程实例主键。
-     *
-     * @param suffix String，用例内可读后缀
-     * @return String，可被精确清理的唯一实例主键
-     */
-    private String instanceId(String suffix)
-    {
-        String random = UUID.randomUUID().toString().substring(0, 8);
-        String compactSuffix = suffix.length() > 30 ? suffix.substring(0, 30) : suffix;
-        return TEST_INSTANCE_PREFIX + compactSuffix + "-" + random;
-    }
-
-    /**
-     * 生成不超过 64 字符的唯一多实例根 execution 主键。
-     *
-     * @return String，当前记录独占的根 execution 主键
-     */
-    private String rootId()
-    {
-        return "mi-root-it-" + UUID.randomUUID();
-    }
-
-    /**
-     * 删除仅属于本类固定实例前缀的测试数据。
+     * 删除仅属于公共契约固定实例前缀的 MySQL 测试数据。
      *
      * @return void，不影响其他流程实例轮次
      * @throws SQLException 清理 SQL 失败时报告
@@ -638,13 +422,13 @@ class WfMultiInstanceRoundMapperMySqlTest
                 PreparedStatement statement = connection.prepareStatement(
                         "delete from wf_multi_instance_round where process_instance_id like ?"))
         {
-            statement.setString(1, TEST_INSTANCE_PREFIX + "%");
+            statement.setString(1, CONTRACT_INSTANCE_PREFIX + "%");
             statement.executeUpdate();
         }
     }
 
     /**
-     * 绕过 Java 领域门禁、专门验证真实 MySQL CHECK 的原始轮次字段。
+     * 绕过 Java 领域门禁、专门验证真实 MySQL 类型和 CHECK 的原始轮次字段。
      */
     private static final class RawRound
     {

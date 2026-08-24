@@ -9,7 +9,9 @@ import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceVariables;
+import com.ruoyi.flowable.service.task.WorkflowTaskEventSnapshot;
 
 /**
  * BPMN 用户任务固定监听入口，只编排受控领域服务，不执行脚本或直接改写业务持久化状态。
@@ -34,7 +36,7 @@ public class WorkflowUserTaskListener implements TaskListener
     private final WorkflowNotificationService notificationService;
 
     /** 受控多实例轮次服务，create/complete 事件必须同步维护正式轮次快照。 */
-    private final WorkflowMultiInstanceRoundService multiInstanceRoundService;
+    private final WorkflowMultiInstanceRoundLifecycleService roundLifecycleService;
 
     /**
      * 创建受控用户任务监听器。
@@ -44,7 +46,7 @@ public class WorkflowUserTaskListener implements TaskListener
      * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，实时组织解析服务
      * @param automaticCopyService WorkflowAutomaticCopyService，自动抄送运行时服务
      * @param notificationService WorkflowNotificationService，事务通知服务
-     * @param multiInstanceRoundService WorkflowMultiInstanceRoundService，多实例轮次生命周期服务
+     * @param roundLifecycleService WorkflowMultiInstanceRoundLifecycleService，ACTIVE 轮次生命周期服务
      * @return 无返回值，构造后由 Spring 以 userTaskListener 名称管理
      */
     public WorkflowUserTaskListener(WorkflowUserTaskAuditService auditService,
@@ -52,14 +54,14 @@ public class WorkflowUserTaskListener implements TaskListener
             WorkflowParticipantRuleRuntimeService participantRuleRuntimeService,
             WorkflowAutomaticCopyService automaticCopyService,
             WorkflowNotificationService notificationService,
-            WorkflowMultiInstanceRoundService multiInstanceRoundService)
+            WorkflowMultiInstanceRoundLifecycleService roundLifecycleService)
     {
         this.auditService = auditService;
         this.slaRuntimeService = slaRuntimeService;
         this.participantRuleRuntimeService = participantRuleRuntimeService;
         this.automaticCopyService = automaticCopyService;
         this.notificationService = notificationService;
-        this.multiInstanceRoundService = multiInstanceRoundService;
+        this.roundLifecycleService = roundLifecycleService;
     }
 
     /**
@@ -86,12 +88,14 @@ public class WorkflowUserTaskListener implements TaskListener
                     // create 事务内先按部署快照和实时组织解析，使后续身份审计看到最终 assignee/candidate。
                     participantRuleRuntimeService.resolveCreatedTask(delegateTask);
                     // 参与者解析完成后再创建或核对正式轮次，确保成员快照与最终办理人属于同一事务事实。
-                    multiInstanceRoundService.onTaskCreated(delegateTask);
+                    roundLifecycleService.onTaskCreated(toEventSnapshot(delegateTask,
+                            false));
                 }
                 else if (EVENTNAME_COMPLETE.equals(eventName))
                 {
                     // 完成监听发生在 Flowable 应用本次根计数之前，按真实前置计数同步 revision 和终态。
-                    multiInstanceRoundService.onTaskCompleted(delegateTask);
+                    roundLifecycleService.onTaskCompleted(toEventSnapshot(delegateTask,
+                            true));
                 }
                 // 固定监听入口只负责编排，规则解析和任务审计分别由独立领域服务维护。
                 auditService.recordAudit(eventName, delegateTask.getId(),
@@ -119,5 +123,37 @@ public class WorkflowUserTaskListener implements TaskListener
             default -> throw new FlowableIllegalArgumentException(
                     "用户任务监听事件不受支持");
         }
+    }
+
+    /**
+     * 把可变 DelegateTask 冻结为轮次生命周期服务可消费的不可变事件事实。
+     *
+     * @param delegateTask DelegateTask，当前 Flowable 命令中的任务上下文
+     * @param includeCompletionRevision boolean，complete 事件需要读取任务局部预留 revision
+     * @return WorkflowTaskEventSnapshot，稳定任务身份和可选完成 revision
+     */
+    private WorkflowTaskEventSnapshot toEventSnapshot(DelegateTask delegateTask,
+            boolean includeCompletionRevision)
+    {
+        Integer completionRevision = null;
+        if (includeCompletionRevision)
+        {
+            Object rawRevision = delegateTask.getVariableLocal(
+                    WorkflowMultiInstanceVariables.COMPLETION_REVISION_VARIABLE);
+            if (rawRevision instanceof Byte || rawRevision instanceof Short
+                    || rawRevision instanceof Integer || rawRevision instanceof Long)
+            {
+                long value = ((Number) rawRevision).longValue();
+                if (value >= 0 && value <= Integer.MAX_VALUE)
+                {
+                    completionRevision = (int) value;
+                }
+            }
+        }
+        return new WorkflowTaskEventSnapshot(delegateTask.getId(),
+                delegateTask.getProcessInstanceId(),
+                delegateTask.getProcessDefinitionId(),
+                delegateTask.getTaskDefinitionKey(), delegateTask.getExecutionId(),
+                delegateTask.getAssignee(), completionRevision);
     }
 }

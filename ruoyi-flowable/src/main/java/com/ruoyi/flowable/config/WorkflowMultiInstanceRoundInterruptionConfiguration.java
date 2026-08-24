@@ -8,7 +8,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import com.ruoyi.flowable.listener.WorkflowMultiInstanceRoundInterruptionListener;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundTerminationService;
 
 /**
  * 注册受控多实例根异常退出监听器，补齐非任务 complete 路径的轮次关闭。
@@ -19,16 +19,18 @@ public class WorkflowMultiInstanceRoundInterruptionConfiguration
     /**
      * 创建延迟解析轮次服务的多实例根取消监听器。
      *
-     * @param roundServiceProvider ObjectProvider&lt;WorkflowMultiInstanceRoundService&gt;，
+     * @param terminationServiceProvider ObjectProvider&lt;WorkflowMultiInstanceRoundTerminationService&gt;，
      *        避免引擎配置与 RuntimeService 之间形成初始化循环
      * @return WorkflowMultiInstanceRoundInterruptionListener，只处理根取消事件的同步监听器
      */
     @Bean
     public WorkflowMultiInstanceRoundInterruptionListener
             workflowMultiInstanceRoundInterruptionListener(
-                    ObjectProvider<WorkflowMultiInstanceRoundService> roundServiceProvider)
+                    ObjectProvider<WorkflowMultiInstanceRoundTerminationService>
+                            terminationServiceProvider)
     {
-        return new WorkflowMultiInstanceRoundInterruptionListener(roundServiceProvider);
+        return new WorkflowMultiInstanceRoundInterruptionListener(
+                terminationServiceProvider);
     }
 
     /**

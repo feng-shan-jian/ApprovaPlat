@@ -75,6 +75,13 @@
         order by round_no, round_id
     </select>
 
+    <select id="selectReturnedByApplicantTaskId" resultMap="RoundResult">
+        select <include refid="columns"/>
+        from wf_multi_instance_round
+        where applicant_task_id=#{applicantTaskId} and round_status='RETURNED'
+        order by round_id
+    </select>
+
     <select id="selectMaxRoundNo" resultType="java.lang.Integer">
         select max(round_no)
         from wf_multi_instance_round
@@ -86,6 +93,28 @@
         set members_json=#{membersJson}, revision_no=#{newRevision}
         where round_id=#{roundId} and revision_no=#{expectedRevision}
           and round_status='ACTIVE'
+    </update>
+
+    <update id="compareAndSetReturnedStatus">
+        update wf_multi_instance_round
+        set round_status='RETURNED',
+            return_source_task_id=#{returnSourceTaskId},
+            return_actor_user_id=#{returnActorUserId},
+            applicant_task_id=#{applicantTaskId},
+            return_time=greatest(current_timestamp(3), create_time)
+        where round_id=#{roundId} and revision_no=#{expectedRevision}
+          and round_status='ACTIVE'
+    </update>
+
+    <update id="compareAndSetReopenedStatus">
+        update wf_multi_instance_round
+        set round_status='REOPENED',
+            reopen_time=greatest(current_timestamp(3), return_time)
+        where round_id=#{roundId} and revision_no=#{expectedRevision}
+          and round_status='RETURNED'
+          and applicant_task_id=#{applicantTaskId}
+          and return_source_task_id=#{returnSourceTaskId}
+          and return_actor_user_id=#{returnActorUserId}
     </update>
 
     <update id="compareAndSetCompletedStatus">

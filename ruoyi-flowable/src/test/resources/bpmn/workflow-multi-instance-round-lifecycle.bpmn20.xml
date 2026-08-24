@@ -126,4 +126,69 @@
     <sequenceFlow sourceRef="anyStart" targetRef="anyReview"/>
     <sequenceFlow sourceRef="anyReview" targetRef="anyEnd"/>
   </process>
+
+  <process id="roundGroupFirstAll" name="首节点会签整组退回重提" isExecutable="true">
+    <startEvent id="firstAllReturnStart" flowable:formKey="startForm"/>
+    <userTask id="firstAllReview" name="首节点会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="firstAllReturnEnd"/>
+    <sequenceFlow sourceRef="firstAllReturnStart" targetRef="firstAllReview"/>
+    <sequenceFlow sourceRef="firstAllReview" targetRef="firstAllReturnEnd"/>
+  </process>
+
+  <process id="roundGroupFirstAny" name="首节点或签整组退回重提" isExecutable="true">
+    <startEvent id="firstAnyReturnStart" flowable:formKey="startForm"/>
+    <userTask id="firstAnyReview" name="首节点或签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances > 0}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="firstAnyReturnEnd"/>
+    <sequenceFlow sourceRef="firstAnyReturnStart" targetRef="firstAnyReview"/>
+    <sequenceFlow sourceRef="firstAnyReview" targetRef="firstAnyReturnEnd"/>
+  </process>
+
+  <process id="roundGroupLaterAll" name="后续节点会签整组退回重提" isExecutable="true">
+    <startEvent id="laterAllReturnStart" flowable:formKey="startForm"/>
+    <userTask id="laterInitialApproval" name="普通首审批" flowable:assignee="150">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <userTask id="laterAllReview" name="后续会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="laterAllReturnEnd"/>
+    <sequenceFlow sourceRef="laterAllReturnStart" targetRef="laterInitialApproval"/>
+    <sequenceFlow sourceRef="laterInitialApproval" targetRef="laterAllReview"/>
+    <sequenceFlow sourceRef="laterAllReview" targetRef="laterAllReturnEnd"/>
+  </process>
 </definitions>
