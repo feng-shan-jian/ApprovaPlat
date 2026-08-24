@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.flowable.bpmn.model.Activity;
@@ -143,20 +144,25 @@ public class WorkflowTaskMovementPolicy
      * @param process Process，当前流程定义中的主流程
      * @param target UserTask，实例真实历史确定的首个审批节点
      * @param current UserTask，当前受控多实例整组退回来源节点
-     * @return 无返回值，仅允许普通安全目标，或目标就是当前同一受控多实例节点
+     * @return ControlledReturnPathPlan，首审批至来源之间按图遍历冻结的受控多实例节点集合
      */
-    public void requireSafeControlledReturnPath(org.flowable.bpmn.model.Process process,
+    public ControlledReturnPathPlan requireSafeControlledReturnPath(
+            org.flowable.bpmn.model.Process process,
             UserTask target, UserTask current)
     {
-        boolean sameControlledEndpoint = target != null && current != null
-                && target.getId().equals(current.getId())
-                && isSafeControlledMultiInstanceNode(process, target);
+        boolean safeTarget = isSafeNode(process, target)
+                || isSafeControlledMultiInstanceNode(process, target);
+        PathEvaluation evaluation = safeTarget
+                && isSafeControlledMultiInstanceNode(process, current)
+                        ? evaluateReturnPaths(process, target, current, true)
+                        : PathEvaluation.UNREACHABLE;
         if (!isSafeControlledMultiInstanceNode(process, current)
-                || (!sameControlledEndpoint && !isSafeNode(process, target))
-                || !isSafeReturnReachable(process, target, current, true))
+                || !safeTarget || !evaluation.reachable() || !evaluation.safe())
         {
             throw unsupportedMovement();
         }
+        return new ControlledReturnPathPlan(
+                List.copyOf(evaluation.controlledActivityIds()));
     }
 
     /**
@@ -403,10 +409,25 @@ public class WorkflowTaskMovementPolicy
     private boolean isSafeReturnReachable(org.flowable.bpmn.model.Process process,
             FlowNode source, FlowNode target, boolean allowControlledTarget)
     {
-        TraversalBudget budget = new TraversalBudget();
-        PathEvaluation evaluation = evaluatePaths(process, source, target,
-                new HashSet<>(), budget, allowControlledTarget);
+        PathEvaluation evaluation = evaluateReturnPaths(process, source, target,
+                allowControlledTarget);
         return evaluation.reachable() && evaluation.safe();
+    }
+
+    /**
+     * 使用独立遍历预算计算退回路径，并冻结所有可达安全路径上的受控多实例节点。
+     *
+     * @param process Process，当前流程定义中的主流程
+     * @param source FlowNode，服务端历史确定的首审批节点
+     * @param target FlowNode，当前退回来源节点
+     * @param allowControlledNodes boolean，是否允许路径中的平台受控同步多实例节点
+     * @return PathEvaluation，可达性、安全性和受控节点集合
+     */
+    private PathEvaluation evaluateReturnPaths(org.flowable.bpmn.model.Process process,
+            FlowNode source, FlowNode target, boolean allowControlledNodes)
+    {
+        return evaluatePaths(process, source, target, new HashSet<>(),
+                new TraversalBudget(), allowControlledNodes);
     }
 
     /**
@@ -443,7 +464,13 @@ public class WorkflowTaskMovementPolicy
         budget.increment();
         if (current.getId().equals(target.getId()))
         {
-            return PathEvaluation.REACHABLE_SAFE;
+            LinkedHashSet<String> controlled = new LinkedHashSet<>();
+            if (allowControlledTarget && current instanceof UserTask userTask
+                    && isSafeControlledMultiInstanceNode(process, userTask))
+            {
+                controlled.add(current.getId());
+            }
+            return new PathEvaluation(true, true, controlled);
         }
 
         Set<String> nextPath = new HashSet<>(path);
@@ -454,6 +481,7 @@ public class WorkflowTaskMovementPolicy
 
         boolean reachable = false;
         boolean safe = true;
+        LinkedHashSet<String> controlledActivityIds = new LinkedHashSet<>();
         List<SequenceFlow> outgoingFlows = current.getOutgoingFlows();
         if (outgoingFlows == null)
         {
@@ -462,9 +490,14 @@ public class WorkflowTaskMovementPolicy
         for (SequenceFlow sequenceFlow : outgoingFlows)
         {
             FlowElement targetElement = resolveTargetElement(process, sequenceFlow);
-            if (!(targetElement instanceof FlowNode nextNode) || nextPath.contains(nextNode.getId()))
+            if (!(targetElement instanceof FlowNode nextNode))
             {
                 continue;
+            }
+            if (nextPath.contains(nextNode.getId()))
+            {
+                // 退回重放不能依赖循环的退出条件；一旦真实可遍历图出现回边即稳定失败关闭。
+                throw unsupportedMovement();
             }
             PathEvaluation child = evaluatePaths(process, nextNode, target, nextPath,
                     budget, allowControlledTarget);
@@ -473,13 +506,20 @@ public class WorkflowTaskMovementPolicy
                 reachable = true;
                 boolean safeNextNode = isSafeNode(process, nextNode)
                         || (allowControlledTarget
-                                && nextNode.getId().equals(target.getId())
                                 && nextNode instanceof UserTask userTask
                                 && isSafeControlledMultiInstanceNode(process, userTask));
                 safe = safe && child.safe() && safeNextNode;
+                controlledActivityIds.addAll(child.controlledActivityIds());
             }
         }
-        return new PathEvaluation(reachable, reachable && safe);
+        if (reachable && allowControlledTarget
+                && current instanceof UserTask userTask
+                && isSafeControlledMultiInstanceNode(process, userTask))
+        {
+            controlledActivityIds.add(current.getId());
+        }
+        return new PathEvaluation(reachable, reachable && safe,
+                controlledActivityIds);
     }
 
     /**
@@ -631,18 +671,60 @@ public class WorkflowTaskMovementPolicy
     }
 
     /**
+     * 首审批到受控退回来源之间可安全重新流转的受控节点计划。
+     *
+     * @param controlledActivityIds List&lt;String&gt;，所有可达安全路径上的受控多实例节点 key
+     */
+    public record ControlledReturnPathPlan(List<String> controlledActivityIds)
+    {
+        /**
+         * 冻结并校验节点集合，后续轮次准备不得接受空白或重复节点。
+         *
+         * @return 无返回值，构造时完成不可变约束
+         */
+        public ControlledReturnPathPlan
+        {
+            controlledActivityIds = controlledActivityIds == null
+                    ? List.of() : List.copyOf(controlledActivityIds);
+            if (controlledActivityIds.stream().anyMatch(
+                    activityId -> !StringUtils.hasText(activityId))
+                    || new HashSet<>(controlledActivityIds).size()
+                            != controlledActivityIds.size())
+            {
+                throw new IllegalArgumentException("受控退回路径节点不完整");
+            }
+        }
+    }
+
+    /**
      * 图路径可达性与安全性计算结果。
      *
      * @param reachable boolean，当前节点是否可以到达目标
      * @param safe boolean，所有可达路径是否均满足安全边界
+     * @param controlledActivityIds Set&lt;String&gt;，可达安全路径中的受控多实例节点
      */
-    private record PathEvaluation(boolean reachable, boolean safe)
+    private record PathEvaluation(boolean reachable, boolean safe,
+            Set<String> controlledActivityIds)
     {
         /** 不可达路径结果。 */
-        private static final PathEvaluation UNREACHABLE = new PathEvaluation(false, false);
+        private static final PathEvaluation UNREACHABLE =
+                new PathEvaluation(false, false, Set.of());
 
         /** 已到达目标且端点安全的路径结果。 */
-        private static final PathEvaluation REACHABLE_SAFE = new PathEvaluation(true, true);
+        private static final PathEvaluation REACHABLE_SAFE =
+                new PathEvaluation(true, true, Set.of());
+
+        /**
+         * 冻结图遍历结果中的受控节点集合。
+         *
+         * @return 无返回值，构造时完成不可变复制
+         */
+        private PathEvaluation
+        {
+            controlledActivityIds = controlledActivityIds == null
+                    ? Set.of() : java.util.Collections.unmodifiableSet(
+                            new LinkedHashSet<>(controlledActivityIds));
+        }
     }
 
     /** 单次递归共享的 BPMN 节点访问预算。 */

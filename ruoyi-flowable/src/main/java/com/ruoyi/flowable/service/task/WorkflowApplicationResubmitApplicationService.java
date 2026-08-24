@@ -116,8 +116,9 @@ public class WorkflowApplicationResubmitApplicationService
             MultiInstanceGroupReopenPlan groupPlan =
                     groupTransitionService.prepareGroupReopen(
                             task.getId(), actor.userId());
-            ReturnedAssignmentSnapshot assignment = groupPlan == null
-                    ? returnedTaskStateService.requireOrdinaryAssignment(taskId) : null;
+            // 普通退回和整组退回都会冻结迁移后首审批任务配置；重提前必须先验证该快照存在。
+            ReturnedAssignmentSnapshot assignment =
+                    returnedTaskStateService.requireOrdinaryAssignment(taskId);
             ResubmitFormPlan formPlan = prepareFormPlan(request, task, instance,
                     actor.userId());
             concurrencyExecutor.execute(() -> executeResubmit(task, instance,
@@ -173,6 +174,14 @@ public class WorkflowApplicationResubmitApplicationService
         {
             returnedTaskStateService.restoreOrdinary(task.getId(), instance.getId(),
                     Objects.requireNonNull(assignment));
+            notificationService.onStableTaskEvent("TASK_RESUBMITTED", task);
+        }
+        else if (groupPlan.application().sourceKind()
+                == ReturnedApplicationSnapshot.SourceKind.ORDINARY_EXECUTION)
+        {
+            // 来源轮次只作为退回审计关闭；当前任务就是首审批任务，严禁再跳回来源多实例节点。
+            groupTransitionService.reopenAtOrdinaryFirst(groupPlan,
+                    Objects.requireNonNull(assignment), applicantUserId);
             notificationService.onStableTaskEvent("TASK_RESUBMITTED", task);
         }
         else

@@ -27,10 +27,13 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
         MultiInstanceGroupReturnPlan plan = returnPlan();
 
         try (WorkflowMultiInstanceTransitionScope scope =
-                coordinator.beginReturn(plan, "201", "approve"))
+                coordinator.beginReturn(returnExecutionPlan(plan), "201"))
         {
-            assertThat(coordinator.resolveTransitionMembers("pi", "approve",
-                    WorkflowMultiInstanceMode.ALL)).containsExactly("201");
+            WorkflowMultiInstanceTransitionMembers members =
+                    coordinator.resolveTransitionMembers("pi", "approve",
+                            WorkflowMultiInstanceMode.ALL);
+            assertThat(members.overrideMembers()).containsExactly("201");
+            assertThat(members.refreshAuthoritative()).isFalse();
             assertThat(coordinator.observeControlledRootCancellation("pi", "pd",
                     "approve", "root", "201")).isNotNull();
             assertThat(coordinator.observeTemporaryTask("pi", "approve",
@@ -58,28 +61,29 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
         assertThatThrownBy(() ->
         {
             try (WorkflowMultiInstanceTransitionScope ignored =
-                    coordinator.beginReturn(plan, "201", "approve"))
+                    coordinator.beginReturn(returnExecutionPlan(plan), "201"))
             {
                 throw new IllegalStateException("injected command failure");
             }
         }).isInstanceOf(IllegalStateException.class);
 
         try (WorkflowMultiInstanceTransitionScope ignored =
-                coordinator.beginReturn(plan, "201", "approve"))
+                coordinator.beginReturn(returnExecutionPlan(plan), "201"))
         {
-            assertThatThrownBy(() -> coordinator.beginReturn(plan, "201", "approve"))
+            assertThatThrownBy(() -> coordinator.beginReturn(
+                    returnExecutionPlan(plan), "201"))
                     .isInstanceOf(ServiceException.class)
                     .hasMessage("工作流多实例受控迁移上下文异常");
         }
     }
 
     /**
-     * 验证重提只接受冻结成员、唯一新根和完整创建数量。
+     * 验证重提刷新权威成员，并只接受唯一新根和完整创建数量。
      *
      * @return void，成员、根或创建数量漂移时测试失败
      */
     @Test
-    void completesReopenProtocolWithFrozenMembers()
+    void completesReopenProtocolWithAuthoritativeMembers()
     {
         WorkflowMultiInstanceTransitionCoordinator coordinator =
                 new WorkflowMultiInstanceTransitionCoordinator();
@@ -88,15 +92,40 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
         try (WorkflowMultiInstanceTransitionScope scope =
                 coordinator.beginReopen(plan, "100"))
         {
-            assertThat(coordinator.resolveTransitionMembers("pi", "approve",
-                    WorkflowMultiInstanceMode.ALL)).containsExactly("201", "202");
-            coordinator.requirePersistedSnapshot("pi", "approve",
+            WorkflowMultiInstanceTransitionMembers members =
+                    coordinator.resolveTransitionMembers("pi", "firstApprove",
+                            WorkflowMultiInstanceMode.ALL);
+            assertThat(members.overrideMembers()).isEmpty();
+            assertThat(members.refreshAuthoritative()).isTrue();
+            coordinator.requirePersistedSnapshot("pi", "firstApprove",
                     WorkflowMultiInstanceMode.ALL, List.of("201", "202"), 3);
-            coordinator.observeReopenedTask("pi", "approve", "new-root", "201");
-            coordinator.observeReopenedTask("pi", "approve", "new-root", "202");
+            assertThat(coordinator.resolveTransitionMembers("pi", "firstApprove",
+                    WorkflowMultiInstanceMode.ALL)).isNull();
+            assertThat(coordinator.observeControlledRootCancellation("pi", "pd",
+                    "firstApprove", "first-root", "100")).isNotNull();
+            coordinator.observeReopenedTask("pi", "firstApprove", "new-root", "301");
+            coordinator.observeReopenedTask("pi", "firstApprove", "new-root", "302");
 
-            coordinator.requireReopenCompleted(scope, "new-root", false);
+            coordinator.requireReopenCompleted(scope, "new-root",
+                    List.of("301", "302"), true);
         }
+    }
+
+    /**
+     * 将来源轮次计划包装为包含唯一受控节点的退回路径执行计划。
+     *
+     * @param source MultiInstanceGroupReturnPlan，已经对账的来源轮次和运行树
+     * @return MultiInstanceGroupReturnExecutionPlan，目标和来源均为 approve 的冻结计划
+     */
+    private MultiInstanceGroupReturnExecutionPlan returnExecutionPlan(
+            MultiInstanceGroupReturnPlan source)
+    {
+        ControlledMultiInstanceReplaySnapshot replay = replay(
+                source.round().activityId(), source.round());
+        return new MultiInstanceGroupReturnExecutionPlan(source, "approve",
+                new WorkflowTaskMovementPolicy.ControlledReturnPathPlan(
+                        List.of("approve")),
+                List.of(replay));
     }
 
     /**
@@ -121,19 +150,40 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
     }
 
     /**
-     * 构造一份 RETURNED 轮次和普通申请人任务组成的重提计划。
+     * 构造一份 RETURNED 来源轮次和首审批受控临时任务组成的重提计划。
      *
      * @return MultiInstanceGroupReopenPlan，申请人任务与正式轮次关联一致
      */
     private MultiInstanceGroupReopenPlan reopenPlan()
     {
         ReturnedApplicationSnapshot application = new ReturnedApplicationSnapshot(
-                "applicant-task", "applicant-exec", "applicant-exec", "pi", "pd",
-                "startApprove", "100",
-                ReturnedApplicationSnapshot.SourceKind.ORDINARY_EXECUTION);
-        return new MultiInstanceGroupReopenPlan(round(
-                WorkflowMultiInstanceRoundStatus.RETURNED, "applicant-task"),
-                application);
+                "applicant-task", "applicant-exec", "first-root", "pi", "pd",
+                "firstApprove", "100",
+                ReturnedApplicationSnapshot.SourceKind.TEMPORARY_MULTI_INSTANCE_ROOT);
+        MultiInstanceRoundSnapshot source = round(
+                WorkflowMultiInstanceRoundStatus.RETURNED, "applicant-task");
+        MultiInstanceRoundSnapshot target = round("firstApprove", "first-root",
+                WorkflowMultiInstanceRoundStatus.COMPLETED, null);
+        return new MultiInstanceGroupReopenPlan(source, application,
+                new WorkflowTaskMovementPolicy.ControlledReturnPathPlan(
+                        List.of("firstApprove", "approve")),
+                List.of(replay("firstApprove", target), replay("approve", source)));
+    }
+
+    /**
+     * 构造与正式轮次身份、节点和模式一致的受控重放快照。
+     *
+     * @param activityId String，受控多实例节点 key
+     * @param round MultiInstanceRoundSnapshot，该节点最近正式轮次
+     * @return ControlledMultiInstanceReplaySnapshot，可供协调器逐项核验的部署和轮次事实
+     */
+    private ControlledMultiInstanceReplaySnapshot replay(String activityId,
+            MultiInstanceRoundSnapshot round)
+    {
+        return new ControlledMultiInstanceReplaySnapshot(
+                new ControlledMultiInstanceDefinitionSnapshot(
+                        "dep", "pd", activityId, WorkflowMultiInstanceMode.ALL),
+                round);
     }
 
     /**
@@ -146,9 +196,26 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
     private MultiInstanceRoundSnapshot round(WorkflowMultiInstanceRoundStatus status,
             String applicantTaskId)
     {
+        return round("approve", "root", status, applicantTaskId);
+    }
+
+    /**
+     * 按指定节点和根 execution 构造测试使用的完整正式轮次快照。
+     *
+     * @param activityId String，受控多实例节点 key
+     * @param rootExecutionId String，正式轮次根 execution 主键
+     * @param status WorkflowMultiInstanceRoundStatus，待构造轮次状态
+     * @param applicantTaskId String，RETURNED 状态关联的申请人任务主键
+     * @return MultiInstanceRoundSnapshot，稳定身份、成员和 revision 均完整
+     */
+    private MultiInstanceRoundSnapshot round(String activityId,
+            String rootExecutionId, WorkflowMultiInstanceRoundStatus status,
+            String applicantTaskId)
+    {
         LocalDateTime now = LocalDateTime.of(2026, 8, 24, 9, 0);
-        return new MultiInstanceRoundSnapshot(1L, "dep", "pd", "pi", "approve",
-                "root", 1, WorkflowMultiInstanceMode.ALL, List.of("201", "202"),
+        return new MultiInstanceRoundSnapshot(1L, "dep", "pd", "pi", activityId,
+                rootExecutionId, 1, WorkflowMultiInstanceMode.ALL,
+                List.of("201", "202"),
                 3, status, "task-201", "201", applicantTaskId, now,
                 status == WorkflowMultiInstanceRoundStatus.RETURNED ? now : null,
                 null, null, null);

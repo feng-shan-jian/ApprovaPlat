@@ -105,9 +105,25 @@ final class WorkflowMultiInstanceBusinessDriver
     ProcessInstance startLifecycle(String processKey, String startNodeId,
             String activityId, List<String> members)
     {
+        return startLifecycle(processKey, startNodeId,
+                Map.of(activityId, members));
+    }
+
+    /**
+     * 以正式申请人和开始表单快照启动包含多个连续受控节点的业务流程。
+     *
+     * @param processKey String，流程定义 key
+     * @param startNodeId String，开始节点 ID
+     * @param membersByActivity Map&lt;String,List&lt;String&gt;&gt;，各节点服务端成员来源变量
+     * @return ProcessInstance，带运行双状态的真实实例
+     */
+    ProcessInstance startLifecycle(String processKey, String startNodeId,
+            Map<String, List<String>> membersByActivity)
+    {
         Map<String, Object> variables = new LinkedHashMap<>();
-        variables.put(WorkflowMultiInstanceVariables.userCollectionName(activityId),
-                members.stream().map(Long::valueOf).toList());
+        membersByActivity.forEach((activityId, members) -> variables.put(
+                WorkflowMultiInstanceVariables.userCollectionName(activityId),
+                members.stream().map(Long::valueOf).toList()));
         variables.put("requestTitle", "原始申请");
         variables.put(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
                 WorkflowProcessStartService.RUNNING_STATUS);

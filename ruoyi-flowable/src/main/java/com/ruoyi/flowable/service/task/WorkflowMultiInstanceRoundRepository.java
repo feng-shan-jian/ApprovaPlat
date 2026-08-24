@@ -132,6 +132,18 @@ public class WorkflowMultiInstanceRoundRepository
     }
 
     /**
+     * 读取指定实例的全部正式轮次，用于退回重提路径按节点选择最近审计事实。
+     *
+     * @param processInstanceId String，流程实例主键
+     * @return List&lt;MultiInstanceRoundSnapshot&gt;，按 Mapper 稳定顺序返回的不可变轮次
+     */
+    public List<MultiInstanceRoundSnapshot> findByProcessInstanceId(
+            String processInstanceId)
+    {
+        return snapshots(roundMapper.selectByProcessInstanceId(processInstanceId));
+    }
+
+    /**
      * 以旧 revision CAS 更新 ACTIVE 成员快照。
      *
      * @param roundId long，轮次主键

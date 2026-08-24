@@ -16,7 +16,7 @@ import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 
 /**
- * 通过生产重提入口验证 RETURNED 轮次按冻结快照重建正式审批组。
+ * 通过生产重提入口验证来源轮次只关闭审计，并从可信首审批节点重新自然流转。
  */
 @SpringJUnitConfig(WorkflowMultiInstanceEngineHarness.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_EACH_TEST_METHOD)
@@ -31,12 +31,12 @@ class WorkflowMultiInstanceGroupResubmitIntegrationTest
     private WorkflowMultiInstanceStateProbe probe;
 
     /**
-     * 验证后续 ALL 轮次已有成员完成后，重提仍按原完整快照重建成员和 revision。
+     * 验证后续 ALL 轮次已有成员完成后，重提停留在普通首审批而不是直接重开来源组。
      *
-     * @return void，轮次、成员、模式、表单或运行状态漂移时失败
+     * @return void，来源轮次、新首审批任务、表单或运行状态漂移时失败
      */
     @Test
-    void rebuildsCompleteLaterAllGroupFromReturnedRoundSnapshot()
+    void resumesAtOrdinaryFirstApprovalBeforeReenteringLaterAll()
     {
         List<String> members = List.of("203", "201", "202");
         ProcessInstance instance = driver.startLifecycle("roundGroupLaterAll",
@@ -53,9 +53,8 @@ class WorkflowMultiInstanceGroupResubmitIntegrationTest
 
         driver.resubmit(applicantTask, Map.of("requestTitle", "修改后申请"));
 
-        List<WfMultiInstanceRound> rounds = probe.rounds(instance.getId());
-        assertThat(rounds).hasSize(2);
-        assertThat(rounds.get(0)).satisfies(reopened ->
+        List<WfMultiInstanceRound> roundsAfterResubmit = probe.rounds(instance.getId());
+        assertThat(roundsAfterResubmit).singleElement().satisfies(reopened ->
         {
             assertThat(reopened.getRoundId()).isEqualTo(original.getRoundId());
             assertThat(reopened.getRoundStatus())
@@ -63,36 +62,41 @@ class WorkflowMultiInstanceGroupResubmitIntegrationTest
             assertThat(reopened.getReturnTime()).isEqualTo(returned.getReturnTime());
             assertThat(reopened.getReopenTime()).isNotNull();
         });
-        assertThat(rounds.get(1)).satisfies(active ->
-        {
-            assertThat(active.getRoundNo()).isEqualTo(original.getRoundNo() + 1);
-            assertThat(active.getRoundStatus())
-                    .isEqualTo(WorkflowMultiInstanceRoundStatus.ACTIVE);
-            assertThat(active.getRootExecutionId())
-                    .isNotEqualTo(original.getRootExecutionId());
-            assertThat(active.getMembers()).containsExactlyElementsOf(members);
-            assertThat(active.getMode()).isEqualTo(WorkflowMultiInstanceMode.ALL.name());
-            assertThat(active.getRevisionNo()).isEqualTo(1);
-        });
-        assertThat(probe.tasks(instance.getId(), "laterAllReview"))
-                .extracting(Task::getAssignee)
-                .containsExactlyElementsOf(members.stream().sorted().toList());
-        assertThat(probe.taskById(applicantTask.getId())).isNull();
+        assertThat(probe.tasks(instance.getId(), "laterInitialApproval"))
+                .extracting(Task::getId, Task::getAssignee)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(
+                        applicantTask.getId(), "150"));
+        assertThat(probe.tasks(instance.getId(), "laterAllReview")).isEmpty();
         assertThat(probe.variable(instance.getId(),
                 WorkflowMultiInstanceVariables.memberSnapshotName("laterAllReview")))
-                .isEqualTo(members);
+                .isNull();
         assertThat(probe.variable(instance.getId(),
                 WorkflowMultiInstanceVariables.modeName("laterAllReview")))
-                .isEqualTo(WorkflowMultiInstanceMode.ALL.name());
+                .isNull();
         assertThat(probe.variable(instance.getId(),
                 WorkflowMultiInstanceVariables.revisionName("laterAllReview")))
-                .isEqualTo(1);
+                .isNull();
         probe.assertDoubleStatus(instance.getId(), WorkflowProcessStartService.RUNNING_STATUS);
         WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot snapshot =
                 WorkflowFormSubmissionSnapshotCodec.decode((String) probe.variable(
                         instance.getId(), WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
         assertThat(snapshot.values().get("requestTitle").stringValue())
                 .isEqualTo("修改后申请");
+
+        driver.completeOrdinary(probe.task(
+                instance.getId(), "laterInitialApproval", "150"));
+        assertThat(probe.tasks(instance.getId(), "laterAllReview"))
+                .extracting(Task::getAssignee)
+                .containsExactlyElementsOf(members.stream().sorted().toList());
+        assertThat(probe.rounds(instance.getId())).hasSize(2);
+        assertThat(probe.activeRound(instance.getId(), "laterAllReview"))
+                .satisfies(active ->
+                {
+                    assertThat(active.getRoundNo())
+                            .isEqualTo(original.getRoundNo() + 1);
+                    assertThat(active.getMembers()).containsExactlyElementsOf(members);
+                    assertThat(active.getRevisionNo()).isZero();
+                });
     }
 
     /**

@@ -67,7 +67,8 @@ class WorkflowMultiInstanceGroupReturnIntegrationTest
                 WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE))
                 .isEqualTo(WorkflowMultiInstanceBusinessDriver.APPLICANT_ID);
         assertThat(probe.taskVariable(applicantTask.getId(),
-                WorkflowReturnedApplicationProtocol.RETURN_ASSIGNMENT_VARIABLE)).isNull();
+                WorkflowReturnedApplicationProtocol.RETURN_ASSIGNMENT_VARIABLE))
+                .isInstanceOf(String.class);
         assertThat(probe.tasks(instance.getId(), "laterAllReview")).isEmpty();
         probe.assertDoubleStatus(instance.getId(),
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS);

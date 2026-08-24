@@ -538,7 +538,9 @@ class WorkflowMultiInstanceEngineHarness
         List<WfDeployForm> forms = List.of(
                 startForm(deployment.getId(), "firstAllReturnStart"),
                 startForm(deployment.getId(), "firstAnyReturnStart"),
-                startForm(deployment.getId(), "laterAllReturnStart"));
+                startForm(deployment.getId(), "laterAllReturnStart"),
+                startForm(deployment.getId(), "allAllAnyReturnStart"),
+                startForm(deployment.getId(), "firstAllLaterAnyReturnStart"));
         artifactRepository.persist(deployment.getId(),
                 new WorkflowDeploymentArtifacts(forms, List.of(), List.of(),
                         List.of(), List.of(), List.of(), List.of(), List.of()));

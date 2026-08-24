@@ -196,7 +196,9 @@ public class WorkflowTaskReturnApplicationService
             String actorUserId, String opinion,
             WorkflowTaskCopyService.CopyPlan copyPlan)
     {
-        MultiInstanceGroupReturnPlan plan = preparation.groupPlan();
+        MultiInstanceGroupReturnExecutionPlan executionPlan =
+                preparation.groupExecutionPlan();
+        MultiInstanceGroupReturnPlan plan = executionPlan.source();
         String processInstanceId = plan.round().processInstanceId();
         auditWriter.write(preparation.task(), RETURN_COMMENT_TYPE, "RETURN",
                 actorUserId, opinion, preparation.targetNodeKey(), null);
@@ -205,8 +207,8 @@ public class WorkflowTaskReturnApplicationService
         notificationService.onTasksWithdrawn(processInstanceId,
                 plan.activeTaskIds());
         WorkflowMultiInstanceGroupTransitionService.GroupReturnResult result =
-                groupTransitionService.returnGroup(plan,
-                        preparation.targetNodeKey(), actorUserId);
+                groupTransitionService.returnGroup(executionPlan,
+                        actorUserId);
         taskCopyService.persist(copyPlan);
         Task applicantTask = runtimeReader.requireActiveTask(result.applicantTaskId());
         notificationService.onStableTaskEvent("TASK_RETURNED", applicantTask);
@@ -241,15 +243,18 @@ public class WorkflowTaskReturnApplicationService
                         context.definition().getKey(), task.getTaskDefinitionKey())
                 : movementPolicy.requireMainProcessControlledReturnSource(context.model(),
                         context.definition().getKey(), task.getTaskDefinitionKey());
-        String targetNodeKey = requireFirstApprovalNode(task, context,
+        FirstApprovalTarget target = requireFirstApprovalNode(task, context,
                 currentNode, groupPlan != null);
         if (groupPlan != null)
         {
+            MultiInstanceGroupReturnExecutionPlan executionPlan =
+                    groupTransitionService.prepareGroupReturnExecution(
+                            groupPlan, target.nodeKey(), target.controlledPath());
             return new GroupReturnPreparation(task, instance.getStartUserId(),
-                    targetNodeKey, groupPlan);
+                    target.nodeKey(), executionPlan);
         }
         return new OrdinaryReturnPreparation(task, instance.getStartUserId(),
-                targetNodeKey, runtimeReader.requireOnlyActiveExecution(task));
+                target.nodeKey(), runtimeReader.requireOnlyActiveExecution(task));
     }
 
     /**
@@ -258,9 +263,9 @@ public class WorkflowTaskReturnApplicationService
      * @param context WorkflowTaskBpmnSnapshot，部署 BPMN 事实
      * @param currentNode UserTask，当前普通或受控多实例来源节点
      * @param controlledGroupReturn boolean，是否按受控端点规则验证
-     * @return String，实例最早创建的主流程用户任务节点 key
+     * @return FirstApprovalTarget，首审批节点 key 和受控路径计划
      */
-    private String requireFirstApprovalNode(Task task,
+    private FirstApprovalTarget requireFirstApprovalNode(Task task,
             WorkflowTaskBpmnSnapshot context, UserTask currentNode,
             boolean controlledGroupReturn)
     {
@@ -282,15 +287,19 @@ public class WorkflowTaskReturnApplicationService
             }
             if (controlledGroupReturn)
             {
-                movementPolicy.requireSafeControlledReturnPath(
+                WorkflowTaskMovementPolicy.ControlledReturnPathPlan path =
+                        movementPolicy.requireSafeControlledReturnPath(
                         context.process(), targetNode, currentNode);
+                return new FirstApprovalTarget(
+                        historicTask.getTaskDefinitionKey(), path);
             }
             else
             {
                 movementPolicy.requireSafeDirectReturnPath(
                         context.process(), targetNode, currentNode);
+                return new FirstApprovalTarget(
+                        historicTask.getTaskDefinitionKey(), null);
             }
-            return historicTask.getTaskDefinitionKey();
         }
         throw conflict();
     }
@@ -325,8 +334,20 @@ public class WorkflowTaskReturnApplicationService
 
     /** 受控多实例整组退回计划，不展开轮次内部字段。 */
     private record GroupReturnPreparation(Task task, String applicantUserId,
-            String targetNodeKey, MultiInstanceGroupReturnPlan groupPlan)
+            String targetNodeKey,
+            MultiInstanceGroupReturnExecutionPlan groupExecutionPlan)
             implements ReturnPreparation
+    {
+    }
+
+    /**
+     * 历史首审批节点及其到受控来源之间的安全路径。
+     *
+     * @param nodeKey String，服务端历史确定的首审批节点 key
+     * @param controlledPath ControlledReturnPathPlan，整组退回路径；普通退回为空
+     */
+    private record FirstApprovalTarget(String nodeKey,
+            WorkflowTaskMovementPolicy.ControlledReturnPathPlan controlledPath)
     {
     }
 }

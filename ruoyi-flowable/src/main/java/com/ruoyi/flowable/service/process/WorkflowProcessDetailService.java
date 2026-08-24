@@ -385,6 +385,7 @@ public class WorkflowProcessDetailService
         List<WorkflowProcessFormSnapshotView> processForms = buildExecutedForms(
                 activities, tasksById, bpmn.process(), snapshots, variables,
                 instance.deploymentId(), responseBudget);
+        requireAtMostOneApplicationForm(processForms);
         WorkflowProcessFormSnapshotView currentTaskForm = requestedTask == null ? null
                 : buildCurrentTaskForm(requestedTask, tasksById, bpmn.process(), snapshots,
                         variables, instance.deploymentId(), currentTaskControlledLoop,
@@ -1458,6 +1459,23 @@ public class WorkflowProcessDetailService
         }
         return toFormView(activityId, taskId, schema.snapshot(), taskLocal, values,
                 null, budget);
+    }
+
+    /**
+     * 校验详情列表至多包含一个 taskId 为空的正式开始提交快照。
+     *
+     * @param processForms List&lt;WorkflowProcessFormSnapshotView&gt;，已构建的正式提交快照
+     * @return 无返回值，多个开始快照按数据损坏失败；零个由页面明确显示缺失且禁止变量伪造
+     */
+    private void requireAtMostOneApplicationForm(
+            List<WorkflowProcessFormSnapshotView> processForms)
+    {
+        if (processForms == null || processForms.stream()
+                .filter(Objects::nonNull).filter(form -> form.taskId() == null)
+                .limit(2).count() > 1)
+        {
+            throw dataError("流程申请表单提交快照不唯一");
+        }
     }
 
     /**

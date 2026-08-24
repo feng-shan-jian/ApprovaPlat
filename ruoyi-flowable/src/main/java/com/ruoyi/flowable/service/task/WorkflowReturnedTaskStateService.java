@@ -120,19 +120,24 @@ public class WorkflowReturnedTaskStateService
     }
 
     /**
-     * 将整组迁移生成的唯一任务切换为发起人独占 returned 状态，不保存虚假办理配置。
+     * 冻结整组迁移生成的首审批任务办理配置，再切换为发起人独占 returned 状态。
      *
      * @param taskId String，整组迁移后唯一申请人任务主键
      * @param processInstanceId String，流程实例主键
      * @param applicantUserId String，流程正式发起人主键
-     * @return 无返回值，任何身份链或双状态漂移均失败关闭
+     * @return ReturnedAssignmentSnapshot，重提从普通首审批继续时需要恢复的完整办理配置
      */
-    public void enterGroupReturned(String taskId, String processInstanceId,
+    public ReturnedAssignmentSnapshot enterGroupReturned(String taskId,
+            String processInstanceId,
             String applicantUserId)
     {
         Task task = requireTask(taskId, processInstanceId);
-        taskService.removeVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE);
+        // 无论退回来源是否为多实例，迁移目标都是真实首审批任务；必须先冻结该节点配置。
+        ReturnedAssignmentSnapshot assignment = captureAssignment(task);
+        taskService.setVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE,
+                assignmentCodec.encode(assignment));
         enterReturned(task, applicantUserId);
+        return assignment;
     }
 
     /**

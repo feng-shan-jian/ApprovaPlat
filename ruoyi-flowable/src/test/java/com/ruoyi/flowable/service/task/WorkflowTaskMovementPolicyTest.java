@@ -9,6 +9,7 @@ import org.flowable.bpmn.model.BoundaryEvent;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.CallActivity;
 import org.flowable.bpmn.model.ExclusiveGateway;
+import org.flowable.bpmn.model.EndEvent;
 import org.flowable.bpmn.model.FlowNode;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.ParallelGateway;
@@ -94,21 +95,47 @@ class WorkflowTaskMovementPolicyTest
     }
 
     /**
-     * 验证不能把另一个多实例节点当作历史首节点，从而跨多实例根回放执行树。
+     * 验证普通首审批经过已完成 ALL 后到 ANY 的连续受控路径允许整组退回。
      *
-     * @return void，策略必须返回 HTTP 409
+     * @return void，策略应冻结 ALL 和 ANY 两个受控节点
      */
     @Test
-    void rejectsDifferentControlledMultiInstanceTarget()
+    void allowsOrdinaryAllAnyControlledReturnPath()
     {
-        UserTask earlierJointReview = controlledTask("earlierJointReview");
-        UserTask currentJointReview = controlledTask("currentJointReview");
+        UserTask firstApproval = ordinaryTask("firstApproval");
+        UserTask allReview = controlledTask("allReview");
+        UserTask anyReview = controlledAnyTask("anyReview");
         org.flowable.bpmn.model.Process process = process(
-                earlierJointReview, currentJointReview);
-        connect(process, earlierJointReview, currentJointReview);
+                firstApproval, allReview, anyReview);
+        connect(process, firstApproval, allReview);
+        connect(process, allReview, anyReview);
 
-        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
-                process, earlierJointReview, currentJointReview));
+        assertThat(policy.requireSafeControlledReturnPath(
+                process, firstApproval, anyReview).controlledActivityIds())
+                .containsExactlyInAnyOrder("allReview", "anyReview");
+    }
+
+    /**
+     * 验证普通首审批经过两个连续 ALL 后到 ANY 的路径保持可重放。
+     *
+     * @return void，三个受控节点必须全部进入服务端重放计划
+     */
+    @Test
+    void allowsOrdinaryAllAllAnyControlledReturnPath()
+    {
+        UserTask firstApproval = ordinaryTask("firstApproval");
+        UserTask firstAll = controlledTask("firstAll");
+        UserTask secondAll = controlledTask("secondAll");
+        UserTask anyReview = controlledAnyTask("anyReview");
+        org.flowable.bpmn.model.Process process = process(
+                firstApproval, firstAll, secondAll, anyReview);
+        connect(process, firstApproval, firstAll);
+        connect(process, firstAll, secondAll);
+        connect(process, secondAll, anyReview);
+
+        assertThat(policy.requireSafeControlledReturnPath(
+                process, firstApproval, anyReview).controlledActivityIds())
+                .containsExactlyInAnyOrder("firstAll", "secondAll", "anyReview");
     }
 
     /**
@@ -140,6 +167,81 @@ class WorkflowTaskMovementPolicyTest
     {
         assertUnsafeIntermediate(node(new CallActivity(), "calledProcess"));
         assertUnsafeIntermediate(node(new ServiceTask(), "externalService"));
+    }
+
+    /**
+     * 验证静态多实例和带边界事件的中间任务仍属于不可安全重放结构。
+     *
+     * @return void，两类路径都必须使用稳定 HTTP 409 失败关闭
+     */
+    @Test
+    void rejectsStaticMultiInstanceAndBoundaryIntermediate()
+    {
+        UserTask staticMulti = ordinaryTask("staticMulti");
+        MultiInstanceLoopCharacteristics staticLoop =
+                new MultiInstanceLoopCharacteristics();
+        staticLoop.setInputDataItem("${legacyUsers}");
+        staticMulti.setLoopCharacteristics(staticLoop);
+        assertUnsafeIntermediate(staticMulti);
+
+        UserTask boundaryTask = ordinaryTask("boundaryTask");
+        BoundaryEvent boundary = node(new BoundaryEvent(), "boundaryTimer");
+        boundary.setAttachedToRef(boundaryTask);
+        boundaryTask.getBoundaryEvents().add(boundary);
+        UserTask first = ordinaryTask("firstBoundary");
+        UserTask current = controlledTask("currentBoundary");
+        org.flowable.bpmn.model.Process process = process(
+                first, boundaryTask, boundary, current);
+        connect(process, first, boundaryTask);
+        connect(process, boundaryTask, current);
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                process, first, current));
+    }
+
+    /**
+     * 验证循环、损坏引用和超过遍历预算的图稳定返回业务冲突。
+     *
+     * @return void，异常图不得超时、栈溢出或被当作安全路径
+     */
+    @Test
+    void rejectsLoopDamagedReferenceAndTraversalOverflow()
+    {
+        UserTask loopFirst = ordinaryTask("loopFirst");
+        ExclusiveGateway loopGateway = node(new ExclusiveGateway(), "loopGateway");
+        UserTask loopCurrent = controlledTask("loopCurrent");
+        org.flowable.bpmn.model.Process loopProcess = process(
+                loopFirst, loopGateway, loopCurrent);
+        connect(loopProcess, loopFirst, loopGateway);
+        connect(loopProcess, loopGateway, loopFirst);
+        connect(loopProcess, loopGateway, loopCurrent);
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                loopProcess, loopFirst, loopCurrent));
+
+        UserTask damagedFirst = ordinaryTask("damagedFirst");
+        UserTask damagedCurrent = controlledTask("damagedCurrent");
+        org.flowable.bpmn.model.Process damaged = process(
+                damagedFirst, damagedCurrent);
+        SequenceFlow broken = new SequenceFlow();
+        broken.setId("broken");
+        broken.setSourceFlowElement(damagedFirst);
+        broken.setTargetRef("missingNode");
+        damagedFirst.getOutgoingFlows().add(broken);
+        damaged.addFlowElement(broken);
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                damaged, damagedFirst, damagedCurrent));
+
+        UserTask wideFirst = ordinaryTask("wideFirst");
+        UserTask wideCurrent = controlledTask("wideCurrent");
+        org.flowable.bpmn.model.Process wide = process(wideFirst, wideCurrent);
+        connect(wide, wideFirst, wideCurrent);
+        for (int index = 0; index < 2049; index++)
+        {
+            EndEvent deadEnd = node(new EndEvent(), "deadEnd" + index);
+            wide.addFlowElement(deadEnd);
+            connect(wide, wideFirst, deadEnd);
+        }
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                wide, wideFirst, wideCurrent));
     }
 
     /**
@@ -294,6 +396,21 @@ class WorkflowTaskMovementPolicyTest
         loop.setSequential(false);
         task.setAssignee(WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION);
         task.setLoopCharacteristics(loop);
+        return task;
+    }
+
+    /**
+     * 创建使用平台受控 handler 的同步 ANY 或签任务。
+     *
+     * @param id String，BPMN 用户任务节点 key
+     * @return UserTask，完成一个成员即可结束的受控多实例任务
+     */
+    private UserTask controlledAnyTask(String id)
+    {
+        UserTask task = controlledTask(id);
+        ((MultiInstanceLoopCharacteristics) task.getLoopCharacteristics())
+                .setCompletionCondition(
+                        WorkflowMultiInstanceModelContract.ANY_COMPLETION_CONDITION);
         return task;
     }
 

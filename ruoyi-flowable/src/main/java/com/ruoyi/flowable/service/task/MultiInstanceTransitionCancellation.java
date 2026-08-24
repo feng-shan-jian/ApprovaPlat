@@ -18,12 +18,19 @@ import org.springframework.util.StringUtils;
  * @param mode WorkflowMultiInstanceMode，冻结模式
  * @param members List&lt;String&gt;，冻结有序成员
  * @param revision int，冻结 revision
+ * @param cancelledActivityId String，本次实际取消的多实例节点
+ * @param cancelledRootExecutionId String，本次实际取消的根 execution
+ * @param cancelledMode WorkflowMultiInstanceMode，取消根流程变量中的固定模式
+ * @param cancelledMembers List&lt;String&gt;，取消根流程变量中的有序成员
+ * @param cancelledRevision int，取消根流程变量中的 revision
  */
 public record MultiInstanceTransitionCancellation(MultiInstanceTransitionAction action,
         long roundId, String deployId, String processDefinitionId,
         String processInstanceId, String activityId, String roundRootExecutionId,
         String sourceTaskId, String applicantTaskId, WorkflowMultiInstanceMode mode,
-        List<String> members, int revision)
+        List<String> members, int revision, String cancelledActivityId,
+        String cancelledRootExecutionId, WorkflowMultiInstanceMode cancelledMode,
+        List<String> cancelledMembers, int cancelledRevision)
 {
     /**
      * 冻结成员并校验取消授权包含全部稳定业务事实。
@@ -39,6 +46,10 @@ public record MultiInstanceTransitionCancellation(MultiInstanceTransitionAction 
                 || !StringUtils.hasText(roundRootExecutionId)
                 || !StringUtils.hasText(sourceTaskId) || mode == null
                 || members == null || members.isEmpty() || revision < 0
+                || !StringUtils.hasText(cancelledActivityId)
+                || !StringUtils.hasText(cancelledRootExecutionId)
+                || cancelledMode == null || cancelledMembers == null
+                || cancelledMembers.isEmpty() || cancelledRevision < 0
                 || (action == MultiInstanceTransitionAction.REOPEN
                         && !StringUtils.hasText(applicantTaskId))
                 || (action == MultiInstanceTransitionAction.RETURN
@@ -47,5 +58,6 @@ public record MultiInstanceTransitionCancellation(MultiInstanceTransitionAction 
             throw new IllegalArgumentException("多实例迁移取消授权不完整");
         }
         members = List.copyOf(members);
+        cancelledMembers = List.copyOf(cancelledMembers);
     }
 }

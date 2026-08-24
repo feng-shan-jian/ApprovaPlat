@@ -191,4 +191,89 @@
     <sequenceFlow sourceRef="laterInitialApproval" targetRef="laterAllReview"/>
     <sequenceFlow sourceRef="laterAllReview" targetRef="laterAllReturnEnd"/>
   </process>
+
+  <process id="roundGroupAllAllAny" name="连续会签或签退回重提" isExecutable="true">
+    <startEvent id="allAllAnyReturnStart" flowable:formKey="startForm"/>
+    <userTask id="allAllAnyInitialApproval" name="普通首审批" flowable:assignee="150">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+    </userTask>
+    <userTask id="firstSerialAll" name="第一轮会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <userTask id="secondSerialAll" name="第二轮会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <userTask id="thirdSerialAny" name="第三轮或签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances > 0}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="allAllAnyReturnEnd"/>
+    <sequenceFlow sourceRef="allAllAnyReturnStart" targetRef="allAllAnyInitialApproval"/>
+    <sequenceFlow sourceRef="allAllAnyInitialApproval" targetRef="firstSerialAll"/>
+    <sequenceFlow sourceRef="firstSerialAll" targetRef="secondSerialAll"/>
+    <sequenceFlow sourceRef="secondSerialAll" targetRef="thirdSerialAny"/>
+    <sequenceFlow sourceRef="thirdSerialAny" targetRef="allAllAnyReturnEnd"/>
+  </process>
+
+  <process id="roundGroupFirstAllLaterAny" name="首会签后续或签退回重提" isExecutable="true">
+    <startEvent id="firstAllLaterAnyReturnStart" flowable:formKey="startForm"/>
+    <userTask id="firstReplayAll" name="首节点会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getStartUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <userTask id="laterReplayAny" name="后续或签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances > 0}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <endEvent id="firstAllLaterAnyReturnEnd"/>
+    <sequenceFlow sourceRef="firstAllLaterAnyReturnStart" targetRef="firstReplayAll"/>
+    <sequenceFlow sourceRef="firstReplayAll" targetRef="laterReplayAny"/>
+    <sequenceFlow sourceRef="laterReplayAny" targetRef="firstAllLaterAnyReturnEnd"/>
+  </process>
 </definitions>

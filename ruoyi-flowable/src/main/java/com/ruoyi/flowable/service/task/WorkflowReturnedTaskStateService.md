@@ -9,7 +9,7 @@
 ## 使用方式
 
 - 普通退回：`markTransition` → Flowable 迁移 → `enterOrdinaryReturned` → 外部副作用 → `clearTransition`。
-- 整组退回：`markTransition` → Flowable 整组迁移 → `enterGroupReturned` → 轮次 CAS → `clearTransition`。
+- 整组退回：`markTransition` → Flowable 整组迁移 → `enterGroupReturned`（冻结迁移后首审批任务办理配置）→ 轮次 CAS → `clearTransition`。
 - 普通重提：`requireReturnedApplicant` → `requireOrdinaryAssignment` → `restoreOrdinary`。
 - 整组重提：`requireReturnedApplicant` → 轮次计划核验 → `prepareGroupRunning` → Flowable 重建。
 
@@ -20,7 +20,7 @@
 | `requireRunning` | 流程实例 ID | 要求 `processStatus=running`；兼容 `businessStatus` 为空或 `running`，明确终态仍冲突 |
 | `markTransition` / `clearTransition` | 流程实例 ID、稳定标记 | 建立或清除单命令迁移标记 |
 | `enterOrdinaryReturned` | 任务、实例、申请人 ID | 返回不可变原办理配置快照 |
-| `enterGroupReturned` | 任务、实例、申请人 ID | 建立无普通办理配置的整组退回态 |
+| `enterGroupReturned` | 任务、实例、申请人 ID | 冻结迁移后首审批任务办理配置并建立整组退回态 |
 | `requireReturnedApplicant` | 任务、实例、申请人 ID | 核验独占指派、无候选关系、无 owner/委派及 `returned` 双状态 |
 | `requireOrdinaryAssignment` | 任务 ID | 解码普通退回办理配置 |
 | `restoreOrdinary` | 任务、实例、办理配置 | 恢复原办理配置并切换 `running` |
@@ -31,6 +31,8 @@
 所有公开调用只接收主键、稳定标记或不可变快照，不向调用方暴露 `TaskService`、`RuntimeService` 或可变 Flowable 对象。状态变更必须位于 `WorkflowEngineOperations` 打开的同一可重复读写事务中，任一步失败由外层事务整体回滚。
 
 `requireRunning` 的空 `businessStatus` 兼容仅适用于尚未进入退回协议的普通运行实例。写入口保留写前任务、申请人和状态校验；同步 TaskService/RuntimeService 写入正常返回即交由外层事务提交，不再回读刚写入的任务指派、局部变量或双状态自证成功。
+
+`RETURN_ASSIGNMENT_VARIABLE` 在整组退回时同样必须保留到重提命令完成：普通首审批用它恢复当前同一任务的 assignee/owner/candidate 配置；受控首审批也先验证该快照存在，再由迁移服务取消临时根并重建。`prepareGroupRunning` 只能在计划和轮次 CAS 完成后清除该变量。
 
 ## 最小接入示例
 

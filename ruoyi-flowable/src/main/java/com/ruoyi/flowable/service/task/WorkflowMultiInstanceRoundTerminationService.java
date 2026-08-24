@@ -280,21 +280,35 @@ public class WorkflowMultiInstanceRoundTerminationService
                         ? WorkflowMultiInstanceRoundStatus.ACTIVE
                         : WorkflowMultiInstanceRoundStatus.REOPENED;
         if (round.roundId() != controlled.roundId()
-                || !round.deployId().equals(root.deployId())
-                || !round.processDefinitionId().equals(root.processDefinitionId())
-                || !round.processInstanceId().equals(root.processInstanceId())
-                || !round.activityId().equals(root.activityId())
+                || !round.deployId().equals(controlled.deployId())
+                || !round.processDefinitionId().equals(
+                        controlled.processDefinitionId())
+                || !round.processInstanceId().equals(
+                        controlled.processInstanceId())
+                || !round.activityId().equals(controlled.activityId())
                 || !round.rootExecutionId().equals(
                         controlled.roundRootExecutionId())
                 || round.mode() != controlled.mode()
                 || round.revision() != controlled.revision()
                 || !round.members().equals(controlled.members())
-                || root.mode() != controlled.mode()
-                || root.revision() != controlled.revision()
-                || !root.members().equals(controlled.members())
+                || !root.deployId().equals(controlled.deployId())
+                || !root.processDefinitionId().equals(
+                        controlled.processDefinitionId())
+                || !root.processInstanceId().equals(
+                        controlled.processInstanceId())
+                || !root.activityId().equals(
+                        controlled.cancelledActivityId())
+                || !root.rootExecutionId().equals(
+                        controlled.cancelledRootExecutionId())
+                || root.mode() != controlled.cancelledMode()
+                || root.revision() != controlled.cancelledRevision()
+                || !root.members().equals(controlled.cancelledMembers())
                 || round.status() != expectedStatus
                 || (controlled.action() == MultiInstanceTransitionAction.RETURN
-                        && !round.rootExecutionId().equals(root.rootExecutionId()))
+                        && (!controlled.activityId().equals(
+                                controlled.cancelledActivityId())
+                                || !round.rootExecutionId().equals(
+                                        root.rootExecutionId())))
                 || (controlled.action() == MultiInstanceTransitionAction.REOPEN
                         && (!Objects.equals(round.returnSourceTaskId(),
                                 controlled.sourceTaskId())

@@ -28,6 +28,8 @@ Flowable 8 的 `HistoricDetailQuery` 不支持按变量名、变量类型过滤�
 
 因此，后续节点即使覆盖同名全局字段，也不会污染前序节点已经提交的历史值；多个 `localScope` 任务的同名字段也按 task ID 隔离。升级前旧实例没有内部提交快照时，详情会省略对应历史表单，而不是用最终变量伪造提交值。
 
+`processFormList` 的业务身份由 `taskId` 明确区分：至多一个 `taskId=null` 的表单表示正式开始提交，也就是申请表单；`taskId!=null` 才表示节点历史提交。多个开始提交按数据损坏返回 `500`；零个开始提交保持省略，由页面明确显示缺失并默认流程图。退回态的 `currentTaskForm` 只是在当前申请人任务上投影同一开始快照，部署、formKey、formId、sourceType 和开始节点身份必须一致；普通办理态的 `currentTaskForm` 仍只表示当前 UserTask 的节点表单，节点没有表单时返回空。
+
 只有请求明确指向活动任务且该 BPMN 节点确有部署表单时，才按部署 schema 查询当前变量并固定返回 `snapshotTime=null`：普通节点只读取流程根变量，BPMN 节点声明 `localScope=true` 或 `localScope=1` 时只读取当前 task ID 的局部变量。无任务请求、无表单节点和已完成任务不会创建当前变量查询；历史详情始终直接使用正式提交快照。`initiator`、`processStatus`、多实例计数、Flowable 跳过标志和所有 `__ruoyi_workflow_` 保留变量始终隐藏，即使表单 schema 错误地声明了这些名称。
 
 普通流程变量和任务局部变量查询统一启用 `excludeVariableInitialization()`，先只取得变量元数据，再与 `ACT_HI_VARINST` 的类型、作用域、`BYTEARRAY_ID_` 和真实正文长度逐项核对。`json` / `longJson` 以及实际关联 Blob 的 `string` / `longString` 一律执行两阶段受控正文读取并计入累计物理字节预算：字符串 Blob 只允许反序列化单个 `String`，JSON Blob 按 UTF-8 严格解析；只有确认没有任何 Blob 关联的安全标量才允许调用 `getValue()`。`bytes`、`serializable`、自定义对象和未知类型不会被初始化、反序列化或返回。JSON 还会执行深度、节点数、容器成员数、单文本和累计响应字节门禁；Java 浮点值和 Jackson 原生浮点节点中的 `NaN`、正负 `Infinity` 均不会进入响应。

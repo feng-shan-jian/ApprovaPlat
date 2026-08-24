@@ -198,25 +198,60 @@
       </el-table>
     </section>
 
+    <el-alert
+      v-if="ready && applicationFormMissing"
+      class="workflow-detail__application-missing"
+      type="warning"
+      title="申请表单快照缺失，无法证明原申请值；当前仅展示流程图和可用审计信息。"
+      show-icon
+      :closable="false"
+    />
+
     <el-tabs v-if="ready" v-model="activeTab" class="workflow-detail__tabs">
-      <el-tab-pane label="办理表单" name="taskForm">
-        <div v-if="detail.currentTaskForm" class="workflow-detail__section">
+      <el-tab-pane v-if="applicationForm" :label="applicationFormTabLabel" name="applicationForm">
+        <div class="workflow-detail__section">
           <div class="workflow-detail__section-title">
             <div>
-              <h3>{{ detail.currentTaskForm.formName || detail.currentTaskForm.nodeName || '当前任务表单' }}</h3>
-              <span>{{ detail.currentTaskForm.nodeName || detail.currentTask?.taskName }}</span>
+              <h3>{{ applicationForm.formName || '申请表单' }}</h3>
+              <span>{{ applicationForm.nodeName || applicationForm.nodeKey || '开始节点' }}</span>
             </div>
-            <el-tag v-if="!canComplete && !canResubmit" type="info">只读</el-tag>
+            <el-tag v-if="!canResubmit" type="info">只读</el-tag>
+          </div>
+          <ProcessFormRenderer
+            v-if="canResubmit"
+            ref="taskFormRef"
+            v-model="taskFormValues"
+            :content="applicationForm.content"
+            :readonly="false"
+            @error="showComponentError"
+          />
+          <ProcessFormRenderer
+            v-else
+            :content="applicationForm.content"
+            :model-value="applicationFormValues"
+            readonly
+            @error="showComponentError"
+          />
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane v-if="nodeTaskForm" label="本节点办理表单" name="nodeTaskForm">
+        <div class="workflow-detail__section">
+          <div class="workflow-detail__section-title">
+            <div>
+              <h3>{{ nodeTaskForm.formName || nodeTaskForm.nodeName || '本节点办理表单' }}</h3>
+              <span>{{ nodeTaskForm.nodeName || detail.currentTask?.taskName }}</span>
+            </div>
+            <el-tag v-if="!canComplete" type="info">只读</el-tag>
           </div>
           <ProcessFormRenderer
             ref="taskFormRef"
             v-model="taskFormValues"
-            :content="detail.currentTaskForm.content"
-            :readonly="!canComplete && !canResubmit"
+            :content="nodeTaskForm.content"
+            :readonly="!canComplete"
             @error="showComponentError"
           />
         </div>
-        <el-empty v-else description="当前没有可展示的任务表单" :image-size="80" />
       </el-tab-pane>
 
       <el-tab-pane label="流程图" name="diagram" lazy>
@@ -497,6 +532,7 @@ import { listApprovalUserOptions, listIdentityOptions } from '@/api/workflow/ide
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
 import { flattenFormFields, normalizeFormTemplate } from '@/components/workflow/form/formTemplate'
+import { normalizeDetailFormSemantics } from './detailFormSemantics'
 import useUserStore from '@/store/modules/user'
 import { useWindowSize } from '@vueuse/core'
 
@@ -510,9 +546,14 @@ const ready = ref(false)
 const actionBusy = ref(false)
 // 催办只记录通知与独立审计，不复用任务办理锁或伪装成审批状态动作。
 const urgeBusy = ref(false)
-const activeTab = ref('taskForm')
+const activeTab = ref('applicationForm')
 const detail = reactive({})
 const taskFormValues = ref({})
+// 申请表单和本节点表单必须保持独立语义；开始快照绝不进入历史节点列表。
+const applicationForm = ref(null)
+const applicationFormValues = ref({})
+const nodeTaskForm = ref(null)
+const applicationFormMissing = ref(false)
 const historyForms = ref([])
 const taskFormRef = ref(null)
 const actionFormRef = ref(null)
@@ -689,7 +730,10 @@ const canComplete = computed(() => canOperateTask.value && !pendingDelegation.va
 const canResubmit = computed(() => currentTaskOwned.value
   && detail.processStatus === 'returned'
   && String(detail.startUserId || '') === currentUserId.value
-  && hasPermission('workflow:process:start'))
+    && hasPermission('workflow:process:start'))
+const applicationFormTabLabel = computed(() => canResubmit.value
+  ? '修改申请表单'
+  : '申请表单')
 const canMoveTask = computed(() => canOperateTask.value && !hasDelegationContext.value)
 // 退回能力由后端复用正式动作准备链投影，前端不再把缺少动态多实例状态误判为普通安全任务。
 const canReturnTask = computed(() => canMoveTask.value && detail.returnAllowed === true)
@@ -844,8 +888,12 @@ function validateRouteParams() {
 function clearDetailState(preserveMultiInstanceDraft = false) {
   Object.keys(detail).forEach(key => delete detail[key])
   taskFormValues.value = {}
+  applicationForm.value = null
+  applicationFormValues.value = {}
+  nodeTaskForm.value = null
+  applicationFormMissing.value = false
   historyForms.value = []
-  activeTab.value = 'taskForm'
+  activeTab.value = 'applicationForm'
   actionDialog.visible = false
   resetActionDialog()
   if (!preserveMultiInstanceDraft) {
@@ -888,20 +936,27 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
       : normalizeMultiInstanceState(payload.multiInstanceState)
     // 旧响应或非严格布尔值一律失败关闭，避免页面开放后端必定拒绝的复杂执行树动作。
     payload.returnAllowed = payload.returnAllowed === true
+    const formSemantics = normalizeDetailFormSemantics(payload)
     const attachmentCache = new Map()
-    const currentValues = payload.currentTaskForm
-      ? await hydrateFormValues(payload.currentTaskForm, attachmentCache, expectedProcessInstanceId)
+    const hydratedApplicationValues = formSemantics.applicationForm
+      ? await hydrateFormValues(formSemantics.applicationForm, attachmentCache, expectedProcessInstanceId)
       : {}
-    const historySnapshots = (payload.processFormList || []).filter(form => form.taskId !== payload.currentTask?.taskId)
-    const hydratedHistory = await Promise.all(historySnapshots.map(async form => ({
+    const currentValues = formSemantics.nodeTaskForm
+      ? await hydrateFormValues(formSemantics.nodeTaskForm, attachmentCache, expectedProcessInstanceId)
+      : formSemantics.returnedApplication ? hydratedApplicationValues : {}
+    const hydratedHistory = await Promise.all(formSemantics.historyForms.map(async form => ({
       ...form,
       hydratedValues: await hydrateFormValues(form, attachmentCache, expectedProcessInstanceId)
     })))
     if (requestSequence !== detailLoadSequence || processInstanceId() !== expectedProcessInstanceId) return
     Object.assign(detail, payload)
     taskFormValues.value = currentValues
+    applicationForm.value = formSemantics.applicationForm
+    applicationFormValues.value = hydratedApplicationValues
+    nodeTaskForm.value = formSemantics.nodeTaskForm
+    applicationFormMissing.value = formSemantics.applicationMissing
     historyForms.value = hydratedHistory
-    activeTab.value = payload.currentTaskForm ? 'taskForm' : 'diagram'
+    activeTab.value = formSemantics.defaultTab
     ready.value = true
     if (preserveMultiInstanceDraft) reconcileMultiInstanceDraft()
   } catch (error) {
@@ -1017,7 +1072,7 @@ async function confirmResubmit() {
   if (!assertActionAllowed('resubmit')) return
   const taskContext = freezeCurrentTaskContext()
   if (!isCurrentTaskContext(taskContext)) return denyAction('当前任务状态已变化，请刷新后重试')
-  if (!detail.currentTaskForm || !taskFormRef.value) return denyAction('原申请表单尚未就绪')
+  if (!applicationForm.value || !taskFormRef.value) return denyAction('原申请表单尚未就绪')
 
   actionBusy.value = true
   try {
@@ -1579,7 +1634,7 @@ async function submitAction() {
   const actionTitle = actionDialogTitle.value
   try {
     let variables = {}
-    if (type === 'complete' && detail.currentTaskForm) {
+    if (type === 'complete' && nodeTaskForm.value) {
       if (!taskFormRef.value) {
         actionDialog.error = '任务表单尚未就绪'
         return

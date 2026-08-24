@@ -13,9 +13,10 @@ public interface WorkflowMultiInstanceTransitionObserver
      * @param processInstanceId String，流程实例主键
      * @param activityId String，正在创建的受控节点
      * @param mode WorkflowMultiInstanceMode，部署固定模式
-     * @return List&lt;String&gt;，受控迁移成员；普通进入返回 null
+     * @return WorkflowMultiInstanceTransitionMembers，受控迁移指令；普通进入返回 null
      */
-    List<String> resolveTransitionMembers(String processInstanceId, String activityId,
+    WorkflowMultiInstanceTransitionMembers resolveTransitionMembers(
+            String processInstanceId, String activityId,
             WorkflowMultiInstanceMode mode);
 
     /**

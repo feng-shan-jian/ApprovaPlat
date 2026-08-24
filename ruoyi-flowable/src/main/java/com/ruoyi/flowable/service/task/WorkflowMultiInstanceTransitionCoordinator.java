@@ -1,6 +1,7 @@
 package com.ruoyi.flowable.service.task;
 
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Objects;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -20,27 +21,28 @@ public class WorkflowMultiInstanceTransitionCoordinator
     /**
      * 由整组迁移服务开启一次 RETURN 命令作用域。
      *
-     * @param plan MultiInstanceGroupReturnPlan，已经与实时执行树对账的正式计划
+     * @param plan MultiInstanceGroupReturnExecutionPlan，已经与路径轮次逐项对账的正式计划
      * @param actorUserId String，来源任务真实办理人
-     * @param targetActivityId String，服务端历史确定的退回目标节点
      * @return WorkflowMultiInstanceTransitionScope，调用方必须在同一线程关闭
      */
-    WorkflowMultiInstanceTransitionScope beginReturn(MultiInstanceGroupReturnPlan plan,
-            String actorUserId, String targetActivityId)
+    WorkflowMultiInstanceTransitionScope beginReturn(
+            MultiInstanceGroupReturnExecutionPlan plan, String actorUserId)
     {
-        if (plan == null || !hasText(actorUserId) || !hasText(targetActivityId)
-                || !actorUserId.equals(plan.runtime().sourceTask().assignee()))
+        if (plan == null || !hasText(actorUserId)
+                || !actorUserId.equals(
+                        plan.source().runtime().sourceTask().assignee()))
         {
             throw dataError();
         }
-        MultiInstanceRoundSnapshot round = plan.round();
-        ControlledMultiInstanceSnapshot runtime = plan.runtime();
+        MultiInstanceRoundSnapshot round = plan.source().round();
+        ControlledMultiInstanceSnapshot runtime = plan.source().runtime();
         return begin(new TransitionContext(MultiInstanceTransitionAction.RETURN,
                 round.roundId(), round.deployId(), round.processDefinitionId(),
                 round.processInstanceId(), round.activityId(),
                 round.rootExecutionId(), runtime.rootExecutionId(),
-                runtime.sourceTaskId(), actorUserId, null, targetActivityId,
-                round.mode(), round.members(), round.revision()));
+                round.activityId(), runtime.sourceTaskId(), actorUserId, null,
+                plan.targetActivityId(), round.mode(), round.members(),
+                round.revision(), plan.targetReplay()));
     }
 
     /**
@@ -60,12 +62,20 @@ public class WorkflowMultiInstanceTransitionCoordinator
         }
         MultiInstanceRoundSnapshot round = plan.round();
         ReturnedApplicationSnapshot application = plan.application();
+        ControlledMultiInstanceReplaySnapshot targetReplay = plan.targetReplay();
+        if (targetReplay == null
+                || application.sourceKind() != ReturnedApplicationSnapshot.SourceKind
+                        .TEMPORARY_MULTI_INSTANCE_ROOT)
+        {
+            throw dataError();
+        }
         return begin(new TransitionContext(MultiInstanceTransitionAction.REOPEN,
                 round.roundId(), round.deployId(), round.processDefinitionId(),
                 round.processInstanceId(), round.activityId(),
                 round.rootExecutionId(), application.sourceExecutionId(),
-                round.returnSourceTaskId(), actorUserId, application.taskId(),
-                round.activityId(), round.mode(), round.members(), round.revision()));
+                application.activityId(), round.returnSourceTaskId(), actorUserId,
+                application.taskId(), application.activityId(), round.mode(),
+                round.members(), round.revision(), targetReplay));
     }
 
     /**
@@ -92,9 +102,10 @@ public class WorkflowMultiInstanceTransitionCoordinator
      * @param processInstanceId String，表达式所属流程实例主键
      * @param activityId String，正在创建的受控多实例节点
      * @param mode WorkflowMultiInstanceMode，部署模型固定的 ALL 或 ANY 模式
-     * @return List&lt;String&gt;，RETURN 时仅含真实退回人，REOPEN 时为轮次冻结的完整成员；普通进入返回 null
+     * @return WorkflowMultiInstanceTransitionMembers，RETURN 单成员覆盖或 REOPEN 权威刷新指令
      */
-    public List<String> resolveTransitionMembers(String processInstanceId,
+    public WorkflowMultiInstanceTransitionMembers resolveTransitionMembers(
+            String processInstanceId,
             String activityId, WorkflowMultiInstanceMode mode)
     {
         TransitionState state = current.get();
@@ -103,15 +114,25 @@ public class WorkflowMultiInstanceTransitionCoordinator
             return null;
         }
         TransitionContext context = state.context;
-        if (!Objects.equals(context.processInstanceId(), processInstanceId)
+        ControlledMultiInstanceReplaySnapshot targetReplay = context.targetReplay();
+        if (targetReplay == null
+                || !Objects.equals(context.processInstanceId(), processInstanceId)
                 || !Objects.equals(context.targetActivityId(), activityId)
-                || context.mode() != mode)
+                || targetReplay.definition().mode() != mode)
         {
             throw dataError();
         }
+        if (context.action() == MultiInstanceTransitionAction.REOPEN
+                && state.collectionResolved)
+        {
+            // Flowable 可能在同一建根命令中重复求值集合；首次已完成权威刷新，后续必须复用新状态。
+            return null;
+        }
         state.collectionResolved = true;
         return context.action() == MultiInstanceTransitionAction.RETURN
-                ? List.of(context.operationActorUserId()) : context.members();
+                ? WorkflowMultiInstanceTransitionMembers.override(
+                        context.operationActorUserId())
+                : WorkflowMultiInstanceTransitionMembers.refresh();
     }
 
     /**
@@ -134,10 +155,13 @@ public class WorkflowMultiInstanceTransitionCoordinator
             throw dataError();
         }
         TransitionContext context = state.context;
-        if (!Objects.equals(context.processInstanceId(), processInstanceId)
-                || !Objects.equals(context.activityId(), activityId)
-                || context.mode() != mode || context.revision() != persistedRevision
-                || !context.members().equals(persistedMembers))
+        ControlledMultiInstanceReplaySnapshot targetReplay = context.targetReplay();
+        if (targetReplay == null
+                || !Objects.equals(context.processInstanceId(), processInstanceId)
+                || !Objects.equals(targetReplay.definition().activityId(), activityId)
+                || targetReplay.definition().mode() != mode
+                || targetReplay.round().revision() != persistedRevision
+                || !targetReplay.round().members().equals(persistedMembers))
         {
             throw dataError();
         }
@@ -195,9 +219,10 @@ public class WorkflowMultiInstanceTransitionCoordinator
         TransitionContext context = state.context;
         if (!Objects.equals(context.processInstanceId(), processInstanceId)
                 || !Objects.equals(context.targetActivityId(), activityId)
-                || !context.members().contains(assignee) || !hasText(rootExecutionId)
+                || !hasText(assignee) || !hasText(rootExecutionId)
                 || (state.reopenedRootExecutionId != null
-                        && !state.reopenedRootExecutionId.equals(rootExecutionId)))
+                        && !state.reopenedRootExecutionId.equals(rootExecutionId))
+                || !state.reopenedAssignees.add(assignee))
         {
             throw dataError();
         }
@@ -227,7 +252,7 @@ public class WorkflowMultiInstanceTransitionCoordinator
         TransitionContext context = state.context;
         if (!Objects.equals(context.processInstanceId(), processInstanceId)
                 || !Objects.equals(context.processDefinitionId(), processDefinitionId)
-                || !Objects.equals(context.activityId(), activityId)
+                || !Objects.equals(context.cancelledActivityId(), activityId)
                 || !Objects.equals(context.sourceExecutionId(), rootExecutionId)
                 || !Objects.equals(context.operationActorUserId(), authenticatedUserId)
                 || state.cancellationObserved)
@@ -235,12 +260,23 @@ public class WorkflowMultiInstanceTransitionCoordinator
             throw dataError();
         }
         state.cancellationObserved = true;
-        return new MultiInstanceTransitionCancellation(context.action(), context.roundId(),
-                context.deployId(), context.processDefinitionId(),
+        ControlledMultiInstanceReplaySnapshot targetReplay = context.targetReplay();
+        WorkflowMultiInstanceMode cancelledMode =
+                context.action() == MultiInstanceTransitionAction.RETURN
+                        ? context.mode() : targetReplay.definition().mode();
+        List<String> cancelledMembers =
+                context.action() == MultiInstanceTransitionAction.RETURN
+                        ? context.members() : targetReplay.round().members();
+        int cancelledRevision = context.action() == MultiInstanceTransitionAction.RETURN
+                ? context.revision() : targetReplay.round().revision();
+        return new MultiInstanceTransitionCancellation(context.action(),
+                context.roundId(), context.deployId(), context.processDefinitionId(),
                 context.processInstanceId(), context.activityId(),
                 context.roundRootExecutionId(), context.sourceTaskId(),
                 context.applicantTaskId(), context.mode(), context.members(),
-                context.revision());
+                context.revision(), context.cancelledActivityId(),
+                context.sourceExecutionId(), cancelledMode,
+                cancelledMembers, cancelledRevision);
     }
 
     /**
@@ -271,17 +307,21 @@ public class WorkflowMultiInstanceTransitionCoordinator
      *
      * @param scope Scope，本次 resubmitApplication 持有的命令作用域
      * @param newRootExecutionId String，迁移后新轮次根 execution
+     * @param expectedMembers List&lt;String&gt;，新轮次按节点权威来源生成的完整成员
      * @param sourceWasMultiInstanceRoot boolean，申请人临时任务是否位于受控多实例根
      * @return 无返回值，观察链不完整时抛出稳定异常
      */
     public void requireReopenCompleted(
             WorkflowMultiInstanceTransitionScope scope, String newRootExecutionId,
-            boolean sourceWasMultiInstanceRoot)
+            List<String> expectedMembers, boolean sourceWasMultiInstanceRoot)
     {
         TransitionState state = requireScope(scope, MultiInstanceTransitionAction.REOPEN);
         if (!state.collectionResolved
                 || !Objects.equals(state.reopenedRootExecutionId, newRootExecutionId)
-                || state.reopenedTaskCount != state.context.members().size()
+                || expectedMembers == null
+                || !state.reopenedAssignees.equals(
+                        new LinkedHashSet<>(expectedMembers))
+                || state.reopenedTaskCount != expectedMembers.size()
                 || state.cancellationObserved != sourceWasMultiInstanceRoot)
         {
             throw dataError();
@@ -339,6 +379,7 @@ public class WorkflowMultiInstanceTransitionCoordinator
                 || !hasText(context.processInstanceId()) || !hasText(context.activityId())
                 || !hasText(context.roundRootExecutionId())
                 || !hasText(context.sourceExecutionId()) || !hasText(context.sourceTaskId())
+                || !hasText(context.cancelledActivityId())
                 || !hasText(context.operationActorUserId())
                 || !hasText(context.targetActivityId()) || context.mode() == null
                 || context.revision() < 0)
@@ -359,7 +400,8 @@ public class WorkflowMultiInstanceTransitionCoordinator
             throw dataError();
         }
         if (context.action() == MultiInstanceTransitionAction.REOPEN
-                && !hasText(context.applicantTaskId()))
+                && (!hasText(context.applicantTaskId())
+                        || context.targetReplay() == null))
         {
             throw dataError();
         }
@@ -372,9 +414,11 @@ public class WorkflowMultiInstanceTransitionCoordinator
                 context.deployId(), context.processDefinitionId(),
                 context.processInstanceId(), context.activityId(),
                 context.roundRootExecutionId(), context.sourceExecutionId(),
-                context.sourceTaskId(), context.operationActorUserId(),
+                context.cancelledActivityId(), context.sourceTaskId(),
+                context.operationActorUserId(),
                 context.applicantTaskId(), context.targetActivityId(),
-                context.mode(), members, context.revision());
+                context.mode(), members, context.revision(),
+                context.targetReplay());
     }
 
     /**
@@ -409,6 +453,7 @@ public class WorkflowMultiInstanceTransitionCoordinator
      * @param activityId String，原受控多实例节点
      * @param roundRootExecutionId String，轮次表冻结的原审批根 execution
      * @param sourceExecutionId String，本次状态迁移实际撤销的 execution 或多实例根
+     * @param cancelledActivityId String，本次状态迁移实际撤销根所属节点
      * @param sourceTaskId String，原退回来源审批任务主键
      * @param operationActorUserId String，本次 API 操作人的规范用户主键
      * @param applicantTaskId String，REOPEN 时唯一申请人任务主键；RETURN 时为空
@@ -416,14 +461,17 @@ public class WorkflowMultiInstanceTransitionCoordinator
      * @param mode WorkflowMultiInstanceMode，冻结 ALL/ANY 模式
      * @param members List&lt;String&gt;，冻结有序完整成员
      * @param revision int，冻结 revision
+     * @param targetReplay ControlledMultiInstanceReplaySnapshot，首节点受控旧状态；普通目标为空
      */
     private record TransitionContext(MultiInstanceTransitionAction action,
             long roundId, String deployId,
             String processDefinitionId, String processInstanceId, String activityId,
             String roundRootExecutionId, String sourceExecutionId,
-            String sourceTaskId, String operationActorUserId, String applicantTaskId,
+            String cancelledActivityId, String sourceTaskId,
+            String operationActorUserId, String applicantTaskId,
             String targetActivityId, WorkflowMultiInstanceMode mode,
-            List<String> members, int revision)
+            List<String> members, int revision,
+            ControlledMultiInstanceReplaySnapshot targetReplay)
     {
     }
 
@@ -490,6 +538,9 @@ public class WorkflowMultiInstanceTransitionCoordinator
 
         /** REOPEN 新根实际触发的任务 create 次数。 */
         private int reopenedTaskCount;
+
+        /** REOPEN 新根按任务 create 事件观察到的唯一办理人集合。 */
+        private final LinkedHashSet<String> reopenedAssignees = new LinkedHashSet<>();
 
         /**
          * 创建一次命令观察状态。
