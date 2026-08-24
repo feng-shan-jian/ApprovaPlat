@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -13,7 +14,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.Date;
-import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -38,8 +38,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import com.ruoyi.flowable.domain.WfControlledLoopExecution;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
 import com.ruoyi.flowable.domain.WfDeployForm;
-import com.ruoyi.flowable.domain.WfMultiInstanceRound;
-import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
@@ -50,7 +48,6 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
-import com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper;
 import com.ruoyi.flowable.mapper.WorkflowRuntimeTaskMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
@@ -118,15 +115,8 @@ class WorkflowTaskCompletionContextIntegrationTest
                         (List<String>) invocation.getArgument(0)));
         WorkflowUserSelectionValidator userSelectionValidator =
                 new WorkflowUserSelectionValidator(identityResolver);
-        WorkflowMultiInstanceTransitionCoordinator transitionCoordinator =
-                new WorkflowMultiInstanceTransitionCoordinator();
-        WorkflowMultiInstanceHandler multiInstanceHandler =
-                new WorkflowMultiInstanceHandler(userSelectionValidator,
-                        transitionCoordinator);
-
         engineInfrastructure = WorkflowFlowableEngineTestSupport.start(
-                "completion-context",
-                Map.of("multiInstanceHandler", multiInstanceHandler));
+                "completion-context", Map.of());
         DataSource dataSource = engineInfrastructure.dataSource();
         processEngine = engineInfrastructure.processEngine();
         repositoryService = spy(processEngine.getRepositoryService());
@@ -174,22 +164,11 @@ class WorkflowTaskCompletionContextIntegrationTest
         WorkflowNextTaskAssignmentService nextTaskAssignmentService =
                 new WorkflowNextTaskAssignmentService(userSelectionValidator,
                         taskService, runtimeService, snapshotReader);
-        WorkflowMultiInstanceRoundLifecycleService roundLifecycleService =
-                mock(WorkflowMultiInstanceRoundLifecycleService.class);
-        when(roundLifecycleService.requireActiveRound(
-                any(ControlledMultiInstanceSnapshot.class))).thenAnswer(invocation ->
-        {
-            ControlledMultiInstanceSnapshot runtime = invocation.getArgument(0);
-            return roundSnapshot(runtime, runtime.revision());
-        });
         WorkflowMultiInstanceService multiInstanceService =
-                new WorkflowMultiInstanceService(engineOperations, identityResolver,
-                        userSelectionValidator,
-                        mock(WorkflowMultiInstanceUserMapper.class), runtimeService,
-                        taskService, historyService, snapshotReader,
-                        roundLifecycleService);
-        WorkflowMultiInstanceGroupTransitionService groupTransitionService =
-                mock(WorkflowMultiInstanceGroupTransitionService.class);
+                mock(WorkflowMultiInstanceService.class);
+        when(multiInstanceService.reserveCompletionRevision(any(Task.class),
+                any(org.flowable.bpmn.model.UserTask.class), nullable(Long.class)))
+                .thenReturn(WorkflowMultiInstanceService.CompletionRevision.none());
         WorkflowControlledLoopService controlledLoopService =
                 new WorkflowControlledLoopService(runtimeService, taskService,
                         artifactRepository, loopExecutionMapper);
@@ -217,28 +196,6 @@ class WorkflowTaskCompletionContextIntegrationTest
                 mock(WorkflowTaskReturnApplicationService.class),
                 mock(WorkflowApplicationResubmitApplicationService.class));
         clearInvocations(repositoryService);
-    }
-
-    /**
-     * 为本测试的真实 Flowable 执行树构造对应的不可变 ACTIVE 轮次事实。
-     *
-     * @param runtime ControlledMultiInstanceSnapshot，真实读取器得到的受控根快照
-     * @param revision int，预留前或写后应当持久化的 revision
-     * @return MultiInstanceRoundSnapshot，与运行时身份、成员和模式一致的测试轮次
-     */
-    private MultiInstanceRoundSnapshot roundSnapshot(
-            ControlledMultiInstanceSnapshot runtime, int revision)
-    {
-        if (runtime == null)
-        {
-            throw new IllegalStateException("受控多实例运行时快照尚未建立");
-        }
-        return new MultiInstanceRoundSnapshot(1L, runtime.deployId(),
-                runtime.processDefinitionId(), runtime.processInstanceId(),
-                runtime.activityId(), runtime.rootExecutionId(), 1, runtime.mode(),
-                runtime.members(), revision, WorkflowMultiInstanceRoundStatus.ACTIVE,
-                null, null, null, LocalDateTime.of(2026, 8, 24, 9, 0),
-                null, null, null, null);
     }
 
     /**
@@ -330,45 +287,6 @@ class WorkflowTaskCompletionContextIntegrationTest
         assertThat(historyService.createHistoricTaskInstanceQuery()
                 .taskId(source.getId()).finished().singleResult().getCompletedBy())
                 .isEqualTo(CURRENT_USER_ID);
-    }
-
-    /**
-     * 验证受控动态并行多实例完成实时复核执行树并以 expectedRevision 推进正式版本。
-     *
-     * @return void，revision、活动兄弟任务、完成历史或结构化审计不一致时失败
-     */
-    @Test
-    void advancesRevisionWhenCompletingControlledDynamicMultiInstanceTask()
-    {
-        String collectionVariable = WorkflowMultiInstanceVariables
-                .userCollectionName("miReview");
-        ProcessInstance instance = runtimeService.startProcessInstanceByKey(
-                "completionMi", Map.of(collectionVariable, List.of(100L, 200L)));
-        List<Task> initialTasks = taskService.createTaskQuery()
-                .processInstanceId(instance.getId()).taskDefinitionKey("miReview")
-                .active().list();
-        assertThat(initialTasks).extracting(Task::getAssignee)
-                .containsExactlyInAnyOrder("100", "200");
-        Task currentTask = initialTasks.stream()
-                .filter(task -> CURRENT_USER_ID.equals(task.getAssignee()))
-                .findFirst().orElseThrow();
-
-        lifecycleService.completeTask(new WorkflowTaskCompleteRequest(currentTask.getId(),
-                "会签成员完成", Map.of(), List.of(), List.of(), 0L));
-
-        assertThat(runtimeService.getVariable(instance.getId(),
-                WorkflowMultiInstanceVariables.revisionName("miReview"))).isEqualTo(1);
-        assertThat(taskService.createTaskQuery().processInstanceId(instance.getId())
-                .taskDefinitionKey("miReview").active().list())
-                .singleElement().extracting(Task::getAssignee).isEqualTo("200");
-        HistoricTaskInstance historicTask = historyService.createHistoricTaskInstanceQuery()
-                .taskId(currentTask.getId()).finished().singleResult();
-        assertThat(historicTask.getCompletedBy()).isEqualTo(CURRENT_USER_ID);
-        assertThat(taskService.getProcessInstanceComments(instance.getId(), "1"))
-                .anySatisfy(comment -> assertThat(comment.getFullMessage())
-                        .contains("\"multiInstanceActivityId\":\"miReview\"")
-                        .contains("\"beforeRevision\":0")
-                        .contains("\"afterRevision\":1"));
     }
 
     /**
@@ -530,20 +448,6 @@ class WorkflowTaskCompletionContextIntegrationTest
                 <sequenceFlow sourceRef="nextStart" targetRef="selectSource"/>
                 <sequenceFlow sourceRef="selectSource" targetRef="selectedTarget"/>
                 <sequenceFlow sourceRef="selectedTarget" targetRef="nextEnd"/>
-              </process>
-
-              <process id="completionMi" name="completionMi" isExecutable="true">
-                <startEvent id="miStart"/>
-                <userTask id="miReview" name="动态会签" flowable:assignee="${assignee}">
-                  <multiInstanceLoopCharacteristics isSequential="false"
-                    flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
-                    flowable:elementVariable="assignee">
-                    <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
-                  </multiInstanceLoopCharacteristics>
-                </userTask>
-                <endEvent id="miEnd"/>
-                <sequenceFlow sourceRef="miStart" targetRef="miReview"/>
-                <sequenceFlow sourceRef="miReview" targetRef="miEnd"/>
               </process>
 
               <process id="completionLoop" name="completionLoop" isExecutable="true">

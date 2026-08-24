@@ -1,4 +1,8 @@
 -- 需要真实附件绑定链的 H2 集成测试共享表结构。
+create table wf_attachment_quota_guard (
+    owner_user_id bigint primary key
+);
+
 create table wf_attachment (
     attachment_id varchar(36) primary key,
     owner_user_id bigint not null,
@@ -22,5 +26,5 @@ create table wf_attachment (
     cleanup_claim_token varchar(36),
     cleanup_lease_until timestamp(3),
     create_time timestamp(3) not null,
-    update_time timestamp(3) not null
+    update_time timestamp(3)
 );

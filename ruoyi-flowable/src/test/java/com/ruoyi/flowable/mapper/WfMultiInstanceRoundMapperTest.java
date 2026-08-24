@@ -9,6 +9,7 @@ import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
 
@@ -18,7 +19,7 @@ import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
  * H2 仅提供事务和正式 Mapper XML 的快速反馈；MySQL JSON/CHECK、STORED 生成列、
  * 排序规则、数据库时钟和 InnoDB 并发仍由 MySQL 环境类独立验收。
  */
-class WfMultiInstanceRoundMapperTest extends AbstractWfMultiInstanceRoundMapperContractTest
+class WfMultiInstanceRoundMapperTest
 {
     private static JdbcDataSource dataSource;
     private static SqlSessionFactory h2SessionFactory;
@@ -70,24 +71,19 @@ class WfMultiInstanceRoundMapperTest extends AbstractWfMultiInstanceRoundMapperC
     }
 
     /**
-     * 返回已加载正式 Mapper XML 的 H2 会话工厂。
+     * 以组合方式执行 H2 上的完整 Mapper/CAS 合同，不通过父类共享测试状态。
      *
-     * @return SqlSessionFactory，当前 H2 契约环境的会话工厂
+     * @return void，任一数据库中立合同漂移时失败
+     * @throws Exception 并发合同等待失败时向 JUnit 报告
      */
-    @Override
-    protected SqlSessionFactory sessionFactory()
+    @Test
+    void honorsSharedMapperContract() throws Exception
     {
-        return h2SessionFactory;
-    }
-
-    /**
-     * 返回 H2 timestamp(3) 可稳定表示的当前测试时间。
-     *
-     * @return LocalDateTime，去除纳秒后的 JVM 当前时间
-     */
-    @Override
-    protected LocalDateTime stableTime()
-    {
-        return LocalDateTime.now().withNano(0);
+        try (WfMultiInstanceRoundMapperContract contract =
+                new WfMultiInstanceRoundMapperContract(h2SessionFactory,
+                        LocalDateTime.now().withNano(0)))
+        {
+            contract.verifyAll();
+        }
     }
 }

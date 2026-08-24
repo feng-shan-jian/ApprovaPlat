@@ -38,7 +38,7 @@ import com.ruoyi.flowable.domain.WfMultiInstanceRound;
  */
 @EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL",
         matches = "jdbc:mysql:.*")
-class WfMultiInstanceRoundMapperMySqlTest extends AbstractWfMultiInstanceRoundMapperContractTest
+class WfMultiInstanceRoundMapperMySqlTest
 {
     private static MysqlDataSource dataSource;
     private static SqlSessionFactory mySqlSessionFactory;
@@ -98,25 +98,20 @@ class WfMultiInstanceRoundMapperMySqlTest extends AbstractWfMultiInstanceRoundMa
     }
 
     /**
-     * 返回已加载正式 Mapper XML 的 MySQL 会话工厂。
+     * 以组合方式执行 MySQL 上的完整 Mapper/CAS 合同，不通过父类共享测试状态。
      *
-     * @return SqlSessionFactory，当前 MySQL 契约环境的会话工厂
+     * @return void，任一数据库中立合同漂移时失败
+     * @throws Exception 并发合同等待失败时向 JUnit 报告
      */
-    @Override
-    protected SqlSessionFactory sessionFactory()
+    @Test
+    void honorsSharedMapperContract() throws Exception
     {
-        return mySqlSessionFactory;
-    }
-
-    /**
-     * 返回 MySQL DATETIME(3) 可稳定表示的当前测试时间。
-     *
-     * @return LocalDateTime，去除纳秒后的 JVM 当前时间
-     */
-    @Override
-    protected LocalDateTime stableTime()
-    {
-        return LocalDateTime.now().withNano(0);
+        try (WfMultiInstanceRoundMapperContract contract =
+                new WfMultiInstanceRoundMapperContract(mySqlSessionFactory,
+                        LocalDateTime.now().withNano(0)))
+        {
+            contract.verifyAll();
+        }
     }
 
     /**
@@ -399,6 +394,71 @@ class WfMultiInstanceRoundMapperMySqlTest extends AbstractWfMultiInstanceRoundMa
     }
 
     /**
+     * 构造 MySQL 专属负例使用的合法 ACTIVE 基线。
+     *
+     * @param processInstanceId String，流程实例主键
+     * @param activityId String，节点主键
+     * @param rootExecutionId String，多实例根主键
+     * @param roundNo int，轮次号
+     * @return WfMultiInstanceRound，字段完整的 ACTIVE 行
+     */
+    private WfMultiInstanceRound activeRound(String processInstanceId,
+            String activityId, String rootExecutionId, int roundNo)
+    {
+        WfMultiInstanceRound round = new WfMultiInstanceRound();
+        round.setDeployId("deployment-contract");
+        round.setProcessDefinitionId("approval:1:definition");
+        round.setProcessInstanceId(processInstanceId);
+        round.setActivityId(activityId);
+        round.setRootExecutionId(rootExecutionId);
+        round.setRoundNo(roundNo);
+        round.setMode("ALL");
+        round.setMembers(List.of("1", "2"));
+        round.setRevisionNo(0);
+        round.setRoundStatus(
+                com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus.ACTIVE);
+        round.setCreateTime(LocalDateTime.now().withNano(0));
+        return round;
+    }
+
+    /**
+     * 构造 MySQL 专属负例使用的合法 RETURNED 基线。
+     *
+     * @param processInstanceId String，流程实例主键
+     * @param activityId String，节点主键
+     * @param rootExecutionId String，多实例根主键
+     * @param roundNo int，轮次号
+     * @return WfMultiInstanceRound，带完整退回关联的 RETURNED 行
+     */
+    private WfMultiInstanceRound returnedRound(String processInstanceId,
+            String activityId, String rootExecutionId, int roundNo)
+    {
+        WfMultiInstanceRound round = activeRound(processInstanceId, activityId,
+                rootExecutionId, roundNo);
+        round.setRoundStatus(
+                com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus.RETURNED);
+        round.setReturnSourceTaskId("task-return");
+        round.setReturnActorUserId("1");
+        round.setApplicantTaskId("task-applicant");
+        round.setReturnTime(round.getCreateTime().plusSeconds(1));
+        return round;
+    }
+
+    /** @param suffix String，可读后缀；@return String，隔离清理前缀下的实例主键。 */
+    private String instanceId(String suffix)
+    {
+        String compact = suffix.length() > 24 ? suffix.substring(0, 24) : suffix;
+        return WfMultiInstanceRoundMapperContract.CONTRACT_INSTANCE_PREFIX
+                + compact + "-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    /** @return String，不超过字段上限的唯一根 execution 主键。 */
+    private String rootId()
+    {
+        return "mi-root-contract-" + java.util.UUID.randomUUID();
+    }
+
+    /**
      * 使用 Jackson 编码 MySQL JSON 负例，避免手工拼接结构化快照。
      *
      * @param value Object，需要提交给 MySQL 的结构化值
@@ -422,7 +482,8 @@ class WfMultiInstanceRoundMapperMySqlTest extends AbstractWfMultiInstanceRoundMa
                 PreparedStatement statement = connection.prepareStatement(
                         "delete from wf_multi_instance_round where process_instance_id like ?"))
         {
-            statement.setString(1, CONTRACT_INSTANCE_PREFIX + "%");
+            statement.setString(1,
+                    WfMultiInstanceRoundMapperContract.CONTRACT_INSTANCE_PREFIX + "%");
             statement.executeUpdate();
         }
     }

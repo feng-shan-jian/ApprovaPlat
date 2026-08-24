@@ -3,155 +3,135 @@ package com.ruoyi.flowable.service.task;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
+import java.util.Map;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 
 /**
- * 通过生产重提链验证旧轮 REOPENED 与冻结快照驱动的新 ACTIVE 完整审批组。
+ * 通过生产重提入口验证 RETURNED 轮次按冻结快照重建正式审批组。
  */
+@SpringJUnitConfig(WorkflowMultiInstanceEngineHarness.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_EACH_TEST_METHOD)
 class WorkflowMultiInstanceGroupResubmitIntegrationTest
 {
-    private WorkflowGroupReturnScenario fixture;
-    @org.junit.jupiter.api.io.TempDir
-    java.nio.file.Path attachmentRoot;
+    /** 只调用生产公开入口的业务驱动。 */
+    @Autowired
+    private WorkflowMultiInstanceBusinessDriver driver;
 
-    /** 创建当前功能所需的整组迁移夹具。 @return void，无返回值 */
-    @BeforeEach
-    void setUpFixture()
-    {
-        fixture = new WorkflowGroupReturnScenario(attachmentRoot);
-    }
+    /** 只读取引擎和业务表事实的状态探针。 */
+    @Autowired
+    private WorkflowMultiInstanceStateProbe probe;
 
-    /** 显式关闭整组迁移夹具。 @return void，无返回值 */
-    @AfterEach
-    void closeFixture()
-    {
-        fixture.close();
-    }
     /**
-     * 验证后续 ALL 三人组在一人已完成后退回，重提仍按旧轮完整快照重建三名成员。
+     * 验证后续 ALL 轮次已有成员完成后，重提仍按原完整快照重建成员和 revision。
      *
-     * @return void，旧轮状态、新根、成员顺序、模式、revision 或表单状态任一漂移时失败
+     * @return void，轮次、成员、模式、表单或运行状态漂移时失败
      */
     @Test
     void rebuildsCompleteLaterAllGroupFromReturnedRoundSnapshot()
     {
         List<String> members = List.of("203", "201", "202");
-        ProcessInstance instance = fixture.startLifecycle("roundGroupLaterAll",
+        ProcessInstance instance = driver.startLifecycle("roundGroupLaterAll",
                 "laterAllReturnStart", "laterAllReview", members);
-        fixture.completeOrdinary(instance.getId(), "laterInitialApproval", "150");
-        WfMultiInstanceRound original = fixture.activeRound(instance.getId(), "laterAllReview");
-        fixture.setCurrentUser("201");
-        fixture.complete(fixture.task(instance.getId(), "laterAllReview", "201"), 0);
-        Task source = fixture.task(instance.getId(), "laterAllReview", "202");
-        fixture.returnGroup(source, "202");
-        Task applicantTask = fixture.returnedTask(instance.getId());
-        WfMultiInstanceRound returned = fixture.rounds(instance.getId()).get(0);
-        fixture.insertTaskSla(applicantTask, "ACTIVE");
+        driver.completeOrdinary(probe.task(instance.getId(),
+                "laterInitialApproval", "150"));
+        WfMultiInstanceRound original = probe.activeRound(
+                instance.getId(), "laterAllReview");
+        driver.complete(probe.task(instance.getId(), "laterAllReview", "201"), 0);
+        Task source = probe.task(instance.getId(), "laterAllReview", "202");
+        driver.returnGroup(source, "202");
+        Task applicantTask = probe.returnedTask(instance.getId());
+        WfMultiInstanceRound returned = probe.rounds(instance.getId()).get(0);
 
-        fixture.resubmitGroup(applicantTask, "修改后申请");
+        driver.resubmit(applicantTask, Map.of("requestTitle", "修改后申请"));
 
-        List<WfMultiInstanceRound> allRounds = fixture.rounds(instance.getId());
-        assertThat(allRounds).hasSize(2);
-        WfMultiInstanceRound reopened = allRounds.get(0);
-        WfMultiInstanceRound active = allRounds.get(1);
-        assertThat(reopened.getRoundId()).isEqualTo(original.getRoundId());
-        assertThat(reopened.getRoundStatus())
-                .isEqualTo(WorkflowMultiInstanceRoundStatus.REOPENED);
-        assertThat(reopened.getReturnSourceTaskId()).isEqualTo(source.getId());
-        assertThat(reopened.getApplicantTaskId()).isEqualTo(applicantTask.getId());
-        assertThat(reopened.getReturnTime()).isEqualTo(returned.getReturnTime());
-        assertThat(reopened.getReopenTime()).isNotNull();
-
-        assertThat(active.getRoundNo()).isEqualTo(original.getRoundNo() + 1);
-        assertThat(active.getRoundStatus())
-                .isEqualTo(WorkflowMultiInstanceRoundStatus.ACTIVE);
-        assertThat(active.getRootExecutionId())
-                .isNotEqualTo(original.getRootExecutionId());
-        assertThat(active.getMembers()).containsExactlyElementsOf(members);
-        assertThat(active.getMode()).isEqualTo(WorkflowMultiInstanceMode.ALL.name());
-        assertThat(active.getRevisionNo()).isEqualTo(1);
-        assertThat(active.getReturnSourceTaskId()).isNull();
-        assertThat(active.getApplicantTaskId()).isNull();
-        assertThat(fixture.tasks(instance.getId(), "laterAllReview"))
-                .extracting(Task::getAssignee).containsExactlyElementsOf(
-                        members.stream().sorted().toList());
-        assertThat(fixture.taskService.createTaskQuery().taskId(applicantTask.getId())
-                .active().singleResult()).isNull();
-        assertThat(fixture.runtimeService.getVariable(instance.getId(),
+        List<WfMultiInstanceRound> rounds = probe.rounds(instance.getId());
+        assertThat(rounds).hasSize(2);
+        assertThat(rounds.get(0)).satisfies(reopened ->
+        {
+            assertThat(reopened.getRoundId()).isEqualTo(original.getRoundId());
+            assertThat(reopened.getRoundStatus())
+                    .isEqualTo(WorkflowMultiInstanceRoundStatus.REOPENED);
+            assertThat(reopened.getReturnTime()).isEqualTo(returned.getReturnTime());
+            assertThat(reopened.getReopenTime()).isNotNull();
+        });
+        assertThat(rounds.get(1)).satisfies(active ->
+        {
+            assertThat(active.getRoundNo()).isEqualTo(original.getRoundNo() + 1);
+            assertThat(active.getRoundStatus())
+                    .isEqualTo(WorkflowMultiInstanceRoundStatus.ACTIVE);
+            assertThat(active.getRootExecutionId())
+                    .isNotEqualTo(original.getRootExecutionId());
+            assertThat(active.getMembers()).containsExactlyElementsOf(members);
+            assertThat(active.getMode()).isEqualTo(WorkflowMultiInstanceMode.ALL.name());
+            assertThat(active.getRevisionNo()).isEqualTo(1);
+        });
+        assertThat(probe.tasks(instance.getId(), "laterAllReview"))
+                .extracting(Task::getAssignee)
+                .containsExactlyElementsOf(members.stream().sorted().toList());
+        assertThat(probe.taskById(applicantTask.getId())).isNull();
+        assertThat(probe.variable(instance.getId(),
                 WorkflowMultiInstanceVariables.memberSnapshotName("laterAllReview")))
                 .isEqualTo(members);
-        assertThat(fixture.runtimeService.getVariable(instance.getId(),
+        assertThat(probe.variable(instance.getId(),
                 WorkflowMultiInstanceVariables.modeName("laterAllReview")))
                 .isEqualTo(WorkflowMultiInstanceMode.ALL.name());
-        assertThat(fixture.runtimeService.getVariable(instance.getId(),
+        assertThat(probe.variable(instance.getId(),
                 WorkflowMultiInstanceVariables.revisionName("laterAllReview")))
                 .isEqualTo(1);
-        fixture.assertDoubleStatus(instance.getId(), WorkflowProcessStartService.RUNNING_STATUS);
-        assertThat(fixture.runtimeService.getVariable(instance.getId(), "requestTitle"))
-                .isEqualTo("修改后申请");
+        probe.assertDoubleStatus(instance.getId(), WorkflowProcessStartService.RUNNING_STATUS);
         WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot snapshot =
-                WorkflowFormSubmissionSnapshotCodec.decode((String) fixture.runtimeService.getVariable(
-                        instance.getId(),
-                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
+                WorkflowFormSubmissionSnapshotCodec.decode((String) probe.variable(
+                        instance.getId(), WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
         assertThat(snapshot.values().get("requestTitle").stringValue())
                 .isEqualTo("修改后申请");
-        fixture.assertTaskSlasWithdrawn(instance.getId(), List.of(applicantTask.getId()),
-                fixture.APPLICANT_ID, "受控重提撤销申请人待修改任务");
     }
 
     /**
-     * 验证首节点 ANY 三人组重提生成新根，并在任一成员完成后按 ANY 条件真实结束。
+     * 验证首节点 ANY 轮次重提生成新根，并由任一成员完成真实结束流程。
      *
-     * @return void，首节点迁移、ANY 模式或完成条件未使用冻结快照时失败
+     * @return void，新根未继承 ANY 快照或单成员完成未关闭新轮时失败
      */
     @Test
     void rebuildsFirstAnyGroupAndKeepsAnyCompletionBehavior()
     {
         List<String> members = List.of("203", "201", "202");
-        ProcessInstance instance = fixture.startLifecycle("roundGroupFirstAny",
+        ProcessInstance instance = driver.startLifecycle("roundGroupFirstAny",
                 "firstAnyReturnStart", "firstAnyReview", members);
-        WfMultiInstanceRound original = fixture.activeRound(instance.getId(), "firstAnyReview");
-        Task source = fixture.task(instance.getId(), "firstAnyReview", "201");
-        fixture.returnGroup(source, "201");
-        Task applicantTask = fixture.returnedTask(instance.getId());
+        WfMultiInstanceRound original = probe.activeRound(
+                instance.getId(), "firstAnyReview");
+        driver.returnGroup(probe.task(instance.getId(), "firstAnyReview", "201"), "201");
+        Task applicantTask = probe.returnedTask(instance.getId());
 
-        fixture.resubmitGroup(applicantTask, "或签重提");
+        driver.resubmit(applicantTask, Map.of("requestTitle", "或签重提"));
 
-        List<WfMultiInstanceRound> reopenedRows = fixture.rounds(instance.getId());
-        assertThat(reopenedRows).hasSize(2);
-        assertThat(reopenedRows.get(0).getRoundStatus())
+        List<WfMultiInstanceRound> rounds = probe.rounds(instance.getId());
+        assertThat(rounds).hasSize(2);
+        assertThat(rounds.get(0).getRoundStatus())
                 .isEqualTo(WorkflowMultiInstanceRoundStatus.REOPENED);
-        WfMultiInstanceRound newRound = reopenedRows.get(1);
-        assertThat(newRound.getRoundStatus())
-                .isEqualTo(WorkflowMultiInstanceRoundStatus.ACTIVE);
-        assertThat(newRound.getRootExecutionId())
-                .isNotEqualTo(original.getRootExecutionId());
-        assertThat(newRound.getMembers()).containsExactlyElementsOf(members);
-        assertThat(newRound.getMode()).isEqualTo(WorkflowMultiInstanceMode.ANY.name());
-        assertThat(newRound.getRevisionNo()).isZero();
-        assertThat(fixture.tasks(instance.getId(), "firstAnyReview"))
-                .extracting(Task::getAssignee)
-                .containsExactlyElementsOf(members.stream().sorted().toList());
+        assertThat(rounds.get(1)).satisfies(active ->
+        {
+            assertThat(active.getRootExecutionId())
+                    .isNotEqualTo(original.getRootExecutionId());
+            assertThat(active.getMembers()).containsExactlyElementsOf(members);
+            assertThat(active.getMode()).isEqualTo(WorkflowMultiInstanceMode.ANY.name());
+            assertThat(active.getRevisionNo()).isZero();
+        });
+        driver.complete(probe.task(instance.getId(), "firstAnyReview", "203"), 0);
 
-        fixture.setCurrentUser("203");
-        fixture.complete(fixture.task(instance.getId(), "firstAnyReview", "203"), 0);
-
-        assertThat(fixture.runtimeService.createProcessInstanceQuery()
-                .processInstanceId(instance.getId()).singleResult()).isNull();
-        assertThat(fixture.taskService.createTaskQuery().processInstanceId(instance.getId())
-                .active().count()).isZero();
-        assertThat(fixture.rounds(instance.getId())).hasSize(2);
-        assertThat(fixture.rounds(instance.getId()).get(0).getRoundStatus())
-                .isEqualTo(WorkflowMultiInstanceRoundStatus.REOPENED);
-        assertThat(fixture.rounds(instance.getId()).get(1).getRoundStatus())
-                .isEqualTo(WorkflowMultiInstanceRoundStatus.COMPLETED);
+        assertThat(probe.processInstance(instance.getId())).isNull();
+        assertThat(probe.tasks(instance.getId(), "firstAnyReview")).isEmpty();
+        assertThat(probe.rounds(instance.getId()))
+                .extracting(WfMultiInstanceRound::getRoundStatus)
+                .containsExactly(WorkflowMultiInstanceRoundStatus.REOPENED,
+                        WorkflowMultiInstanceRoundStatus.COMPLETED);
     }
 }

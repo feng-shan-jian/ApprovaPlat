@@ -12,9 +12,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -30,39 +27,60 @@ import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
  * 本契约直接执行正式 Mapper XML，并保留每个业务场景的显式断言；数据库环境类只负责
  * SqlSessionFactory、数据源生命周期、数据清理和当前数据库可用的稳定时间。
  */
-abstract class AbstractWfMultiInstanceRoundMapperContractTest
+final class WfMultiInstanceRoundMapperContract implements AutoCloseable
 {
-    protected static final String CONTRACT_INSTANCE_PREFIX = "mi-round-contract-";
+    static final String CONTRACT_INSTANCE_PREFIX = "mi-round-contract-";
 
-    private SqlSession contractSession;
-    private WfMultiInstanceRoundMapper contractMapper;
-    private ExecutorService executor;
+    private final SqlSessionFactory sessionFactory;
+    private final LocalDateTime stableTime;
+    private final SqlSession contractSession;
+    private final WfMultiInstanceRoundMapper contractMapper;
+    private final ExecutorService executor;
 
-    /**
-     * 返回当前数据库环境加载了正式 Mapper XML 的会话工厂。
-     *
-     * @return SqlSessionFactory，供普通写入和独立并发事务共同使用
-     */
-    protected abstract SqlSessionFactory sessionFactory();
-
-    /**
-     * 返回当前数据库可稳定持久化和比较的时间值。
-     *
-     * @return LocalDateTime，精度必须兼容当前数据库的 timestamp 列
-     */
-    protected abstract LocalDateTime stableTime();
-
-    /**
-     * 为每个契约场景创建自动提交 Mapper 和两线程并发执行器。
-     *
-     * @return void，场景可直接调用 {@link #mapper()}，并发写入使用独立事务
-     */
-    @BeforeEach
-    void setUpContractInfrastructure()
+    /** @return SqlSessionFactory，当前环境正式 Mapper 的会话工厂。 */
+    private SqlSessionFactory sessionFactory()
     {
+        return sessionFactory;
+    }
+
+    /** @return LocalDateTime，当前数据库可稳定比较的时间。 */
+    private LocalDateTime stableTime()
+    {
+        return stableTime;
+    }
+
+    /**
+     * 创建一次独立 Mapper 合同执行器。
+     *
+     * @param sessionFactory SqlSessionFactory，加载正式 Mapper XML 的会话工厂
+     * @param stableTime LocalDateTime，当前数据库可稳定比较的时间
+     * @return 无返回值，构造后持有独立会话和线程池
+     */
+    WfMultiInstanceRoundMapperContract(SqlSessionFactory sessionFactory,
+            LocalDateTime stableTime)
+    {
+        this.sessionFactory = sessionFactory;
+        this.stableTime = stableTime;
         contractSession = sessionFactory().openSession(true);
         contractMapper = contractSession.getMapper(WfMultiInstanceRoundMapper.class);
         executor = Executors.newFixedThreadPool(2);
+    }
+
+    /**
+     * 顺序执行数据库中立的全部 Mapper/CAS 合同。
+     *
+     * @return void，任一 SQL、约束、时钟或并发合同漂移时失败
+     * @throws Exception 并发等待失败时向调用测试报告
+     */
+    void verifyAll() throws Exception
+    {
+        shouldInsertQueryAndCompareAndSetActiveSnapshot();
+        shouldReturnAndReopenWithStrictCasAndDatabaseClock();
+        shouldExposeDuplicateReturnedApplicantTaskAssociations();
+        shouldEnforceThreeUniqueKeys();
+        shouldAllowOnlyOneConcurrentActiveSnapshotCas();
+        shouldAllowOnlyOneConcurrentReturnAndReopenCas();
+        shouldTerminateCountAndDeleteHistoryRounds();
     }
 
     /**
@@ -71,8 +89,8 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      * @return void，不向后续用例泄漏连接或线程
      * @throws InterruptedException 等待线程池退出被中断时向 JUnit 报告
      */
-    @AfterEach
-    void tearDownContractInfrastructure() throws InterruptedException
+    @Override
+    public void close() throws InterruptedException
     {
         try
         {
@@ -97,7 +115,6 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      *
      * @return void，断言正式 Mapper XML 的核心 CRUD 与 ACTIVE 状态路径
      */
-    @Test
     void shouldInsertQueryAndCompareAndSetActiveSnapshot()
     {
         String processInstanceId = instanceId("crud");
@@ -140,7 +157,6 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      *
      * @return void，断言错误 revision 或任一退回关联漂移均失败关闭，成功重提释放开放键
      */
-    @Test
     void shouldReturnAndReopenWithStrictCasAndDatabaseClock()
     {
         String processInstanceId = instanceId("return-reopen");
@@ -216,7 +232,6 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      *
      * @return void，断言重复关联可由业务层通过 List 大小明确识别
      */
-    @Test
     void shouldExposeDuplicateReturnedApplicantTaskAssociations()
     {
         WfMultiInstanceRound first = returnedRound(
@@ -237,7 +252,6 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      *
      * @return void，断言 ACTIVE/RETURNED 均占用开放键，终态释放开放键但不释放自然键
      */
-    @Test
     void shouldEnforceThreeUniqueKeys()
     {
         String processInstanceId = instanceId("unique");
@@ -274,7 +288,6 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      * @return void，断言并发更新影响行数之和为 1
      * @throws Exception 线程协调或数据库事务失败时向 JUnit 报告
      */
-    @Test
     void shouldAllowOnlyOneConcurrentActiveSnapshotCas() throws Exception
     {
         WfMultiInstanceRound round = activeRound(
@@ -297,7 +310,6 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      * @return void，断言退回关联来自同一胜方，且同一冻结关联只能重开一次
      * @throws Exception 线程协调、锁竞争或数据库事务失败时向 JUnit 报告
      */
-    @Test
     void shouldAllowOnlyOneConcurrentReturnAndReopenCas() throws Exception
     {
         WfMultiInstanceRound round = activeRound(
@@ -337,7 +349,6 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      *
      * @return void，断言 ACTIVE/RETURNED 可终止，指定历史可删除且保留实例不受影响
      */
-    @Test
     void shouldTerminateCountAndDeleteHistoryRounds()
     {
         String activeProcess = instanceId("delete-active");
@@ -379,7 +390,7 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      *
      * @return WfMultiInstanceRoundMapper，绑定当前环境正式 XML 的自动提交 Mapper
      */
-    protected final WfMultiInstanceRoundMapper mapper()
+    private WfMultiInstanceRoundMapper mapper()
     {
         return contractMapper;
     }
@@ -393,7 +404,7 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      * @param roundNo int，同节点轮次号
      * @return WfMultiInstanceRound，字段完整的 ACTIVE 轮次
      */
-    protected final WfMultiInstanceRound activeRound(String processInstanceId, String activityId,
+    private WfMultiInstanceRound activeRound(String processInstanceId, String activityId,
             String rootExecutionId, int roundNo)
     {
         WfMultiInstanceRound round = new WfMultiInstanceRound();
@@ -420,7 +431,7 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      * @param roundNo int，同节点轮次号
      * @return WfMultiInstanceRound，字段完整的 RETURNED 轮次
      */
-    protected final WfMultiInstanceRound returnedRound(String processInstanceId, String activityId,
+    private WfMultiInstanceRound returnedRound(String processInstanceId, String activityId,
             String rootExecutionId, int roundNo)
     {
         WfMultiInstanceRound round = activeRound(
@@ -439,7 +450,7 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      * @param suffix String，用例内可读后缀
      * @return String，可由 MySQL 环境精确清理的唯一实例主键
      */
-    protected final String instanceId(String suffix)
+    private String instanceId(String suffix)
     {
         String compactSuffix = suffix.length() > 24 ? suffix.substring(0, 24) : suffix;
         return CONTRACT_INSTANCE_PREFIX + compactSuffix + "-"
@@ -451,7 +462,7 @@ abstract class AbstractWfMultiInstanceRoundMapperContractTest
      *
      * @return String，当前记录独占的根 execution 主键
      */
-    protected final String rootId()
+    private String rootId()
     {
         return "mi-root-contract-" + UUID.randomUUID();
     }

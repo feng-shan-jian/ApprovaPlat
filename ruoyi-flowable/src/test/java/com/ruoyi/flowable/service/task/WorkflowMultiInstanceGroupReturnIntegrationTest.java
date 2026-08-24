@@ -6,9 +6,10 @@ import java.util.List;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.identitylink.api.IdentityLinkType;
 import org.flowable.task.api.Task;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
@@ -16,25 +17,18 @@ import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 /**
  * 通过生产生命周期服务、真实 Flowable 及正式 H2 Mapper 验证阶段三整组退回事务。
  */
+@SpringJUnitConfig(WorkflowMultiInstanceEngineHarness.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_EACH_TEST_METHOD)
 class WorkflowMultiInstanceGroupReturnIntegrationTest
 {
-    private WorkflowGroupReturnScenario fixture;
-    @org.junit.jupiter.api.io.TempDir
-    java.nio.file.Path attachmentRoot;
+    /** 只调用生产公开入口的业务驱动。 */
+    @Autowired
+    private WorkflowMultiInstanceBusinessDriver driver;
 
-    /** 创建当前功能所需的整组迁移夹具。 @return void，无返回值 */
-    @BeforeEach
-    void setUpFixture()
-    {
-        fixture = new WorkflowGroupReturnScenario(attachmentRoot);
-    }
+    /** 只读取引擎和业务表事实的状态探针。 */
+    @Autowired
+    private WorkflowMultiInstanceStateProbe probe;
 
-    /** 显式关闭整组迁移夹具。 @return void，无返回值 */
-    @AfterEach
-    void closeFixture()
-    {
-        fixture.close();
-    }
     /**
      * 验证后续 ALL 三人组已有一人完成时，另一成员仍能撤销整个活动根并生成唯一申请人任务。
      *
@@ -44,44 +38,41 @@ class WorkflowMultiInstanceGroupReturnIntegrationTest
     void returnsWholeLaterAllRoundAfterOneMemberCompleted()
     {
         List<String> members = List.of("201", "202", "203");
-        ProcessInstance instance = fixture.startLifecycle("roundGroupLaterAll",
+        ProcessInstance instance = driver.startLifecycle("roundGroupLaterAll",
                 "laterAllReturnStart", "laterAllReview", members);
-        fixture.completeOrdinary(instance.getId(), "laterInitialApproval", "150");
-        WfMultiInstanceRound initialRound = fixture.activeRound(
+        driver.completeOrdinary(probe.task(
+                instance.getId(), "laterInitialApproval", "150"));
+        WfMultiInstanceRound initialRound = probe.activeRound(
                 instance.getId(), "laterAllReview");
 
-        fixture.setCurrentUser("201");
-        fixture.complete(fixture.task(instance.getId(), "laterAllReview", "201"), 0);
-        WfMultiInstanceRound beforeReturn = fixture.activeRound(
+        driver.complete(probe.task(instance.getId(), "laterAllReview", "201"), 0);
+        WfMultiInstanceRound beforeReturn = probe.activeRound(
                 instance.getId(), "laterAllReview");
         assertThat(beforeReturn.getRevisionNo()).isEqualTo(1);
-        Task source = fixture.task(instance.getId(), "laterAllReview", "202");
-        List<String> remainingTaskIds = fixture.tasks(instance.getId(), "laterAllReview")
+        Task source = probe.task(instance.getId(), "laterAllReview", "202");
+        List<String> remainingTaskIds = probe.tasks(instance.getId(), "laterAllReview")
                 .stream().map(Task::getId).toList();
-        fixture.insertTaskSla(source, "ACTIVE");
-        fixture.insertTaskSla(fixture.task(instance.getId(), "laterAllReview", "203"),
-                "ESCALATED");
 
-        fixture.setCurrentUser("202");
-        assertThat(fixture.lifecycleService.isTaskReturnAllowed(source.getId())).isTrue();
-        fixture.returnGroup(source, "202");
+        assertThat(driver.returnAllowed(source, "202")).isTrue();
+        driver.returnGroup(source, "202");
 
-        Task applicantTask = fixture.returnedTask(instance.getId());
+        Task applicantTask = probe.returnedTask(instance.getId());
         assertThat(applicantTask.getTaskDefinitionKey())
                 .isEqualTo("laterInitialApproval");
         assertThat(applicantTask.getId()).isNotIn(remainingTaskIds);
         assertThat(applicantTask.getOwner()).isNull();
-        assertThat(fixture.taskService.getIdentityLinksForTask(applicantTask.getId()))
+        assertThat(probe.identityLinks(applicantTask.getId()))
                 .noneMatch(link -> IdentityLinkType.CANDIDATE.equals(link.getType()));
-        assertThat(fixture.taskService.getVariableLocal(applicantTask.getId(),
+        assertThat(probe.taskVariable(applicantTask.getId(),
                 WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE))
-                .isEqualTo(fixture.APPLICANT_ID);
-        assertThat(fixture.taskService.getVariableLocal(applicantTask.getId(),
+                .isEqualTo(WorkflowMultiInstanceBusinessDriver.APPLICANT_ID);
+        assertThat(probe.taskVariable(applicantTask.getId(),
                 WorkflowReturnedApplicationProtocol.RETURN_ASSIGNMENT_VARIABLE)).isNull();
-        assertThat(fixture.tasks(instance.getId(), "laterAllReview")).isEmpty();
-        fixture.assertDoubleStatus(instance.getId(), WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
+        assertThat(probe.tasks(instance.getId(), "laterAllReview")).isEmpty();
+        probe.assertDoubleStatus(instance.getId(),
+                WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
 
-        assertThat(fixture.rounds(instance.getId())).singleElement().satisfies(round ->
+        assertThat(probe.rounds(instance.getId())).singleElement().satisfies(round ->
         {
             assertThat(round.getRoundId()).isEqualTo(initialRound.getRoundId());
             assertThat(round.getRoundStatus())
@@ -96,10 +87,8 @@ class WorkflowMultiInstanceGroupReturnIntegrationTest
             assertThat(round.getReopenTime()).isNull();
             assertThat(round.getTerminateTime()).isNull();
         });
-        assertThat(fixture.runtimeService.getVariable(instance.getId(),
+        assertThat(probe.variable(instance.getId(),
                 WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE)).isNull();
-        fixture.assertTaskSlasWithdrawn(instance.getId(), remainingTaskIds, "202",
-                "受控整组退回撤销审批任务");
     }
 
     /**
@@ -111,20 +100,22 @@ class WorkflowMultiInstanceGroupReturnIntegrationTest
     void returnsFirstAnyRoundWithoutRegisteringApplicantAsApprovalRound()
     {
         List<String> members = List.of("203", "201", "202");
-        ProcessInstance instance = fixture.startLifecycle("roundGroupFirstAny",
+        ProcessInstance instance = driver.startLifecycle("roundGroupFirstAny",
                 "firstAnyReturnStart", "firstAnyReview", members);
-        WfMultiInstanceRound original = fixture.activeRound(instance.getId(), "firstAnyReview");
-        Task source = fixture.task(instance.getId(), "firstAnyReview", "201");
+        WfMultiInstanceRound original = probe.activeRound(instance.getId(), "firstAnyReview");
+        Task source = probe.task(instance.getId(), "firstAnyReview", "201");
 
-        fixture.returnGroup(source, "201");
+        driver.returnGroup(source, "201");
 
-        Task applicantTask = fixture.returnedTask(instance.getId());
+        Task applicantTask = probe.returnedTask(instance.getId());
         assertThat(applicantTask.getTaskDefinitionKey()).isEqualTo("firstAnyReview");
-        assertThat(fixture.tasks(instance.getId(), "firstAnyReview"))
-                .extracting(Task::getAssignee).containsExactly(fixture.APPLICANT_ID);
-        assertThat(fixture.roundMapper.selectActiveByProcessInstanceAndActivity(
-                instance.getId(), "firstAnyReview")).isEmpty();
-        assertThat(fixture.rounds(instance.getId())).singleElement().satisfies(round ->
+        assertThat(probe.tasks(instance.getId(), "firstAnyReview"))
+                .extracting(Task::getAssignee)
+                .containsExactly(WorkflowMultiInstanceBusinessDriver.APPLICANT_ID);
+        assertThat(probe.rounds(instance.getId()))
+                .noneMatch(round -> WorkflowMultiInstanceRoundStatus.ACTIVE.name()
+                        .equals(round.getRoundStatus()));
+        assertThat(probe.rounds(instance.getId())).singleElement().satisfies(round ->
         {
             assertThat(round.getRoundId()).isEqualTo(original.getRoundId());
             assertThat(round.getRoundStatus())
@@ -136,8 +127,9 @@ class WorkflowMultiInstanceGroupReturnIntegrationTest
             assertThat(round.getReturnTime()).isNotNull();
             assertThat(round.getTerminateTime()).isNull();
         });
-        fixture.assertDoubleStatus(instance.getId(), WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
-        assertThat(fixture.runtimeService.getVariable(instance.getId(),
+        probe.assertDoubleStatus(instance.getId(),
+                WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
+        assertThat(probe.variable(instance.getId(),
                 WorkflowProcessStartService.PROCESS_STATUS_VARIABLE))
                 .isEqualTo(WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
     }

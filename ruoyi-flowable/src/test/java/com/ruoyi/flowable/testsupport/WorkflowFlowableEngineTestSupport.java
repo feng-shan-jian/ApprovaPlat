@@ -140,6 +140,16 @@ public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
     }
 
     /**
+     * 返回 Flowable 与测试业务 Bean 共用的事务管理器。
+     *
+     * @return DataSourceTransactionManager，绑定当前独立 H2 数据源
+     */
+    public DataSourceTransactionManager transactionManager()
+    {
+        return transactionManager;
+    }
+
+    /**
      * 为生产服务对象应用真实 @Transactional 拦截器。
      *
      * @param target T，需要加入 Flowable 共享事务的生产服务
