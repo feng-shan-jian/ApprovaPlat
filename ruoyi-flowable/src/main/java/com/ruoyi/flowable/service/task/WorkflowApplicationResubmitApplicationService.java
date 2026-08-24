@@ -194,15 +194,8 @@ public class WorkflowApplicationResubmitApplicationService
             String applicantUserId, MultiInstanceGroupReopenPlan groupPlan)
     {
         notificationService.onTasksWithdrawn(instance.getId(), List.of(task.getId()));
-        MultiInstanceRoundSnapshot reopenedRound =
-                groupTransitionService.reopenRound(groupPlan);
-        returnedTaskStateService.prepareGroupRunning(task.getId(), instance.getId());
         WorkflowMultiInstanceGroupTransitionService.GroupReopenResult result =
-                groupTransitionService.migrateReopen(groupPlan, reopenedRound,
-                        applicantUserId);
-        returnedTaskStateService.verifySynchronizedStatus(instance.getId(),
-                com.ruoyi.flowable.service.process.WorkflowProcessStartService
-                        .RUNNING_STATUS);
+                groupTransitionService.reopenGroup(groupPlan, applicantUserId);
         for (String activeTaskId : result.activeTaskIds())
         {
             notificationService.onStableTaskEvent("TASK_RESUBMITTED",

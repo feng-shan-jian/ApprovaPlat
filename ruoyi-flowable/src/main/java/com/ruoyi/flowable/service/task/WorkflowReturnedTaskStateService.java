@@ -226,19 +226,6 @@ public class WorkflowReturnedTaskStateService
     }
 
     /**
-     * 核验流程变量和 business status 保持期望双状态。
-     *
-     * @param processInstanceId String，流程实例主键
-     * @param expectedStatus String，期望的 returned 或 running 状态
-     * @return 无返回值，不一致时抛出数据错误
-     */
-    public void verifySynchronizedStatus(String processInstanceId,
-            String expectedStatus)
-    {
-        verifyProcessStatus(processInstanceId, expectedStatus, false);
-    }
-
-    /**
      * 捕获普通任务办理人、所有者和候选关系。
      *
      * @param task Task，迁移后刚创建的首审批任务

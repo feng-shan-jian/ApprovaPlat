@@ -183,10 +183,15 @@ final class WorkflowGroupReturnScenario implements AutoCloseable
                 mock(WfControlledLoopExecutionMapper.class), roundMapper,
                 roundTerminationService, processPermissionService, taskSlaRuntimeService,
                 notificationService);
+        WorkflowReturnedTaskStateService returnedTaskStateService =
+                new WorkflowReturnedTaskStateService(
+                        new WorkflowReturnedAssignmentCodec(), runtimeService,
+                        taskService);
         WorkflowMultiInstanceGroupTransitionService groupTransitionService =
                 new WorkflowMultiInstanceGroupTransitionService(roundRepository,
                         snapshotReader, roundLifecycleService,
-                        transitionCoordinator, new WorkflowTaskRuntimeReader(
+                        transitionCoordinator, returnedTaskStateService,
+                        new WorkflowTaskRuntimeReader(
                                 runtimeService, taskService, historyService),
                         runtimeService, taskSlaRuntimeService);
         WorkflowTaskRequestValidator requestValidator =
@@ -199,10 +204,6 @@ final class WorkflowGroupReturnScenario implements AutoCloseable
                 new WorkflowTaskActionAuditWriter(taskService);
         WorkflowTaskConcurrencyExecutor concurrencyExecutor =
                 new WorkflowTaskConcurrencyExecutor();
-        WorkflowReturnedTaskStateService returnedTaskStateService =
-                new WorkflowReturnedTaskStateService(
-                        new WorkflowReturnedAssignmentCodec(), runtimeService,
-                        taskService);
         WorkflowProcessCancelApplicationService cancelApplicationService =
                 new WorkflowProcessCancelApplicationService(engineOperations,
                         requestValidator, taskRuntimeReader, processInstanceService,

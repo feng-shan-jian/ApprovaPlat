@@ -24,6 +24,7 @@ public class WorkflowMultiInstanceGroupTransitionService
     private final WorkflowMultiInstanceRuntimeSnapshotReader snapshotReader;
     private final WorkflowMultiInstanceRoundLifecycleService roundLifecycleService;
     private final WorkflowMultiInstanceTransitionCoordinator transitionCoordinator;
+    private final WorkflowReturnedTaskStateService returnedTaskStateService;
     private final WorkflowTaskRuntimeReader runtimeReader;
     private final RuntimeService runtimeService;
     private final WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
@@ -34,6 +35,7 @@ public class WorkflowMultiInstanceGroupTransitionService
      * @param snapshotReader WorkflowMultiInstanceRuntimeSnapshotReader，实时快照读取器
      * @param roundLifecycleService WorkflowMultiInstanceRoundLifecycleService，ACTIVE 轮次读取服务
      * @param transitionCoordinator WorkflowMultiInstanceTransitionCoordinator，单命令迁移协议协调器
+     * @param returnedTaskStateService WorkflowReturnedTaskStateService，退回和重提双状态写入边界
      * @param runtimeReader WorkflowTaskRuntimeReader，任务和实例公共事实读取器
      * @param runtimeService RuntimeService，Flowable 执行树迁移和结构查询服务
      * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，撤销任务 SLA 收口服务
@@ -44,6 +46,7 @@ public class WorkflowMultiInstanceGroupTransitionService
             WorkflowMultiInstanceRuntimeSnapshotReader snapshotReader,
             WorkflowMultiInstanceRoundLifecycleService roundLifecycleService,
             WorkflowMultiInstanceTransitionCoordinator transitionCoordinator,
+            WorkflowReturnedTaskStateService returnedTaskStateService,
             WorkflowTaskRuntimeReader runtimeReader, RuntimeService runtimeService,
             WorkflowTaskSlaRuntimeService taskSlaRuntimeService)
     {
@@ -51,6 +54,7 @@ public class WorkflowMultiInstanceGroupTransitionService
         this.snapshotReader = snapshotReader;
         this.roundLifecycleService = roundLifecycleService;
         this.transitionCoordinator = transitionCoordinator;
+        this.returnedTaskStateService = returnedTaskStateService;
         this.runtimeReader = runtimeReader;
         this.runtimeService = runtimeService;
         this.taskSlaRuntimeService = taskSlaRuntimeService;
@@ -108,16 +112,17 @@ public class WorkflowMultiInstanceGroupTransitionService
     }
 
     /**
-     * 在 Coordinator 协议中执行 Flowable 整组迁移并关闭旧任务 SLA。
+     * 原子完成整组退回的 Flowable 迁移、状态写入、轮次 CAS、SLA 和写后对账。
      * @param plan MultiInstanceGroupReturnPlan，写前冻结计划
      * @param targetActivityId String，服务端确定的首审批节点
      * @param actorUserId String，已核验真实办理人主键
-     * @return GroupReturnMigration，新申请人任务和迁移观察结果
+     * @return GroupReturnResult，RETURNED 轮次和唯一申请人任务主键
      */
-    public GroupReturnMigration migrateReturn(MultiInstanceGroupReturnPlan plan,
+    public GroupReturnResult returnGroup(MultiInstanceGroupReturnPlan plan,
             String targetActivityId, String actorUserId)
     {
         requireReturnCommand(plan, targetActivityId, actorUserId);
+        String applicantTaskId;
         try (WorkflowMultiInstanceTransitionScope scope =
                 transitionCoordinator.beginReturn(plan, actorUserId,
                         targetActivityId))
@@ -143,48 +148,26 @@ public class WorkflowMultiInstanceGroupTransitionService
             {
                 throw dataError();
             }
-            return new GroupReturnMigration(applicantTask.getId(), targetActivityId);
+            applicantTaskId = applicantTask.getId();
         }
-    }
 
-    /**
-     * 在申请人状态写入后完成 ACTIVE→RETURNED CAS 及轮次对账。
-     * @param plan MultiInstanceGroupReturnPlan，写前冻结计划
-     * @param migration GroupReturnMigration，真实 Flowable 迁移结果
-     * @param sourceTaskId String，触发整组退回的来源任务主键
-     * @param actorUserId String，真实办理人主键
-     * @return GroupReturnResult，RETURNED 轮次和申请人任务主键
-     */
-    public GroupReturnResult completeReturn(MultiInstanceGroupReturnPlan plan,
-            GroupReturnMigration migration, String sourceTaskId, String actorUserId)
-    {
-        if (plan == null || migration == null
-                || !plan.runtime().sourceTaskId().equals(sourceTaskId)
-                || !actorUserId.equals(plan.runtime().sourceTask().assignee()))
-        {
-            throw dataError();
-        }
+        // Flowable 迁移完成后再写申请人状态和轮次；任何一步失败都由外层事务整体回滚。
+        returnedTaskStateService.enterGroupReturned(applicantTaskId,
+                plan.round().processInstanceId(), plan.applicantUserId());
+        String sourceTaskId = plan.runtime().sourceTaskId();
         roundRepository.compareAndSetReturned(plan.round(), sourceTaskId,
-                actorUserId, migration.applicantTaskId());
+                actorUserId, applicantTaskId);
         MultiInstanceRoundSnapshot returned = roundRepository.findByRootExecutionId(
                 plan.round().rootExecutionId());
         if (returned.status() != WorkflowMultiInstanceRoundStatus.RETURNED
                 || !Objects.equals(returned.returnSourceTaskId(), sourceTaskId)
                 || !Objects.equals(returned.returnActorUserId(), actorUserId)
-                || !Objects.equals(returned.applicantTaskId(),
-                        migration.applicantTaskId())
+                || !Objects.equals(returned.applicantTaskId(), applicantTaskId)
                 || returned.returnTime() == null || !plan.round().sameRoundFacts(returned))
         {
             throw dataError();
         }
-        Task applicantTask = runtimeReader.requireActiveTask(
-                migration.applicantTaskId());
-        if (!migration.targetActivityId().equals(
-                applicantTask.getTaskDefinitionKey()))
-        {
-            throw conflict();
-        }
-        return new GroupReturnResult(migration.applicantTaskId(), returned);
+        return new GroupReturnResult(applicantTaskId, returned);
     }
 
     /**
@@ -266,13 +249,16 @@ public class WorkflowMultiInstanceGroupTransitionService
     }
 
     /**
-     * 把唯一 RETURNED 旧轮 CAS 为 REOPENED 并复核不可变事实。
+     * 原子完成旧轮 CAS、running 状态恢复、完整审批组重建、SLA 和写后对账。
      * @param plan MultiInstanceGroupReopenPlan，重提前冻结计划
-     * @return MultiInstanceRoundSnapshot，写后 REOPENED 旧轮
+     * @param actorUserId String，已核验流程发起人主键
+     * @return GroupReopenResult，旧轮、新轮、新根和按成员顺序任务主键
      */
-    public MultiInstanceRoundSnapshot reopenRound(MultiInstanceGroupReopenPlan plan)
+    public GroupReopenResult reopenGroup(MultiInstanceGroupReopenPlan plan,
+            String actorUserId)
     {
-        if (plan == null)
+        if (plan == null
+                || !actorUserId.equals(plan.application().applicantUserId()))
         {
             throw dataError();
         }
@@ -291,26 +277,10 @@ public class WorkflowMultiInstanceGroupTransitionService
         {
             throw dataError();
         }
-        return reopened;
-    }
 
-    /**
-     * 从 REOPENED 旧轮重建完整新根和任务组并完成 SLA、计数和协议对账。
-     * @param plan MultiInstanceGroupReopenPlan，重提前冻结计划
-     * @param reopenedRound MultiInstanceRoundSnapshot，刚完成 CAS 的旧轮
-     * @param actorUserId String，已核验流程发起人主键
-     * @return GroupReopenResult，旧轮、新轮、新根和按成员顺序任务主键
-     */
-    public GroupReopenResult migrateReopen(MultiInstanceGroupReopenPlan plan,
-            MultiInstanceRoundSnapshot reopenedRound, String actorUserId)
-    {
-        if (plan == null || reopenedRound == null
-                || !plan.round().sameRoundFacts(reopenedRound)
-                || reopenedRound.status() != WorkflowMultiInstanceRoundStatus.REOPENED
-                || !actorUserId.equals(plan.application().applicantUserId()))
-        {
-            throw dataError();
-        }
+        // 旧轮成功关闭后再清理 returned 标记，避免并发重提在轮次 CAS 前暴露 running 状态。
+        returnedTaskStateService.prepareGroupRunning(plan.application().taskId(),
+                source.processInstanceId());
         try (WorkflowMultiInstanceTransitionScope scope =
                 transitionCoordinator.beginReopen(plan, actorUserId))
         {
@@ -322,7 +292,7 @@ public class WorkflowMultiInstanceGroupTransitionService
                     plan.round().processInstanceId(),
                     List.of(plan.application().taskId()), actorUserId,
                     WorkflowTaskSlaRuntimeService.ControlledWithdrawal.GROUP_RESUBMIT);
-            GroupReopenResult result = requireReopenedGroup(plan, reopenedRound);
+            GroupReopenResult result = requireReopenedGroup(plan, reopened);
             MultiInstanceTransitionResult observed =
                     transitionCoordinator.requireReopenCompleted(scope,
                             result.newRootExecutionId(),
@@ -471,25 +441,6 @@ public class WorkflowMultiInstanceGroupTransitionService
     {
         return new ServiceException("工作流多实例轮次状态不一致",
                 HttpStatus.ERROR);
-    }
-
-    /**
-     * Flowable 整组退回命令刚完成的不可变事实。
-     * @param applicantTaskId String，新申请人任务主键
-     * @param targetActivityId String，服务端目标节点
-     */
-    public record GroupReturnMigration(String applicantTaskId,
-            String targetActivityId)
-    {
-        /** @return 无返回值，构造时校验稳定主键。 */
-        public GroupReturnMigration
-        {
-            if (!StringUtils.hasText(applicantTaskId)
-                    || !StringUtils.hasText(targetActivityId))
-            {
-                throw new IllegalArgumentException("整组退回迁移结果不完整");
-            }
-        }
     }
 
     /**

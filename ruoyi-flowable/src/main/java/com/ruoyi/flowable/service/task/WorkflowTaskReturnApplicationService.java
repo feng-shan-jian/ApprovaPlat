@@ -180,8 +180,6 @@ public class WorkflowTaskReturnApplicationService
         returnedTaskStateService.enterOrdinaryReturned(returnedTask.getId(),
                 processInstanceId, preparation.applicantUserId());
         taskCopyService.persist(copyPlan);
-        returnedTaskStateService.requireReturnedApplicant(returnedTask.getId(),
-                processInstanceId, preparation.applicantUserId());
         notificationService.onStableTaskEvent("TASK_RETURNED", returnedTask);
         returnedTaskStateService.clearTransition(processInstanceId);
     }
@@ -206,17 +204,10 @@ public class WorkflowTaskReturnApplicationService
                 WorkflowReturnedApplicationProtocol.RETURN_TRANSITION_MARKER);
         notificationService.onTasksWithdrawn(processInstanceId,
                 plan.activeTaskIds());
-        WorkflowMultiInstanceGroupTransitionService.GroupReturnMigration migration =
-                groupTransitionService.migrateReturn(plan,
-                        preparation.targetNodeKey(), actorUserId);
-        returnedTaskStateService.enterGroupReturned(migration.applicantTaskId(),
-                processInstanceId, preparation.applicantUserId());
         WorkflowMultiInstanceGroupTransitionService.GroupReturnResult result =
-                groupTransitionService.completeReturn(plan, migration,
-                        preparation.task().getId(), actorUserId);
+                groupTransitionService.returnGroup(plan,
+                        preparation.targetNodeKey(), actorUserId);
         taskCopyService.persist(copyPlan);
-        returnedTaskStateService.requireReturnedApplicant(result.applicantTaskId(),
-                processInstanceId, preparation.applicantUserId());
         Task applicantTask = runtimeReader.requireActiveTask(result.applicantTaskId());
         notificationService.onStableTaskEvent("TASK_RETURNED", applicantTask);
         returnedTaskStateService.clearTransition(processInstanceId);
