@@ -76,9 +76,9 @@
   事务提交并发异常、MySQL 死锁/锁等待，或 CAS 后目标 task/execution 被并发删除，
   返回 `409` 并携带稳定子码 `WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT`。调用方据此
   重新查询服务端状态，不得在本地递增 revision 后盲目重试。
-- 写动作后重新核对多实例根、活动 task/execution、成员快照、revision、三项引擎计数
-  和正式轮次；流程直接结束时改以已结束历史、旧根消失和 `COMPLETED` 轮次闭合，任何
-  漂移都会抛错并回滚。
+- 完成命令后继续核对多实例根、活动 task/execution、冻结成员、模式和三项引擎计数；
+  正式轮次的完成状态只由同步 completion listener 的 Mapper CAS 确认，外层不再回读
+  刚更新的轮次。流程直接结束时仍核对已结束历史和旧根消失。
 - 每次成功调整写入结构化 Flowable comment，若依 Controller 同时记录操作日志。
 
 ## 错误语义

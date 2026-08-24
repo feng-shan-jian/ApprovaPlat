@@ -18,7 +18,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
 
 /**
- * 异常根取消、流程取消和管理员终止时的轮次预检、CAS 关闭与写后完整性服务。
+ * 异常根取消、流程取消和管理员终止时的轮次预检与 CAS 关闭服务。
  */
 @Service
 public class WorkflowMultiInstanceRoundTerminationService
@@ -100,9 +100,7 @@ public class WorkflowMultiInstanceRoundTerminationService
         }
         MultiInstanceRoundSnapshot round = roundRepository.findByRootExecutionId(
                 root.rootExecutionId());
-        if (round.status() != WorkflowMultiInstanceRoundStatus.ACTIVE
-                || !round.status().canTransitionTo(
-                        WorkflowMultiInstanceRoundStatus.TERMINATED))
+        if (round == null || round.status() != WorkflowMultiInstanceRoundStatus.ACTIVE)
         {
             throw dataError();
         }
@@ -115,9 +113,6 @@ public class WorkflowMultiInstanceRoundTerminationService
         }
         requireRootRound(root, round, WorkflowMultiInstanceRoundStatus.ACTIVE);
         roundRepository.compareAndSetTerminated(round);
-        MultiInstanceRoundSnapshot terminated = roundRepository.findByRootExecutionId(
-                root.rootExecutionId());
-        requireTerminatedFrom(round, terminated);
     }
 
     /**
@@ -169,11 +164,6 @@ public class WorkflowMultiInstanceRoundTerminationService
         for (MultiInstanceRoundSnapshot round : expected.values())
         {
             roundRepository.compareAndSetTerminated(round);
-        }
-        requireTerminatedRows(expected, roundRepository.findByRoundIds(expected.keySet()));
-        if (!roundRepository.findOpenForUpdate(instanceIds).isEmpty())
-        {
-            throw dataError();
         }
     }
 
@@ -265,12 +255,6 @@ public class WorkflowMultiInstanceRoundTerminationService
         if (!plan.roundsById().isEmpty())
         {
             roundRepository.terminateOpen(plan.roundsById().keySet());
-            requireTerminatedRows(plan.roundsById(), roundRepository.findByRoundIds(
-                    plan.roundsById().keySet()));
-        }
-        if (!roundRepository.findOpenForUpdate(plan.processInstanceIds()).isEmpty())
-        {
-            throw dataError();
         }
     }
 
@@ -498,60 +482,6 @@ public class WorkflowMultiInstanceRoundTerminationService
                 throw terminationConflict(
                         "流程多实例轮次开放状态已发生变化，请刷新后重试");
             }
-            throw dataError();
-        }
-    }
-
-    /**
-     * 校验 TERMINATED 写后行只新增终止状态和数据库时间。
-     *
-     * @param expected Map&lt;Long,MultiInstanceRoundSnapshot&gt;，写前开放事实
-     * @param entities List&lt;MultiInstanceRoundSnapshot&gt;，写后轮次快照
-     * @return void，缺行、重复或稳定字段漂移时失败
-     */
-    private void requireTerminatedRows(
-            Map<Long, MultiInstanceRoundSnapshot> expected,
-            List<MultiInstanceRoundSnapshot> entities)
-    {
-        if (entities.size() != expected.size())
-        {
-            throw dataError();
-        }
-        Set<Long> verified = new LinkedHashSet<>();
-        for (MultiInstanceRoundSnapshot terminated : entities)
-        {
-            MultiInstanceRoundSnapshot source = expected.get(terminated.roundId());
-            if (!verified.add(terminated.roundId()) || source == null)
-            {
-                throw dataError();
-            }
-            requireTerminatedFrom(source, terminated);
-        }
-    }
-
-    /**
-     * 校验单条 TERMINATED 结果完整保留来源轮次事实。
-     *
-     * @param source MultiInstanceRoundSnapshot，写前开放轮次
-     * @param terminated MultiInstanceRoundSnapshot，写后终止轮次
-     * @return void，状态、时间或任一保留字段漂移时失败
-     */
-    private void requireTerminatedFrom(MultiInstanceRoundSnapshot source,
-            MultiInstanceRoundSnapshot terminated)
-    {
-        if (terminated.status() != WorkflowMultiInstanceRoundStatus.TERMINATED
-                || terminated.terminateTime() == null
-                || !source.sameRoundFacts(terminated)
-                || !Objects.equals(source.returnSourceTaskId(),
-                        terminated.returnSourceTaskId())
-                || !Objects.equals(source.returnActorUserId(),
-                        terminated.returnActorUserId())
-                || !Objects.equals(source.applicantTaskId(),
-                        terminated.applicantTaskId())
-                || !Objects.equals(source.returnTime(), terminated.returnTime())
-                || !Objects.equals(source.reopenTime(), terminated.reopenTime())
-                || !Objects.equals(source.completeTime(), terminated.completeTime()))
-        {
             throw dataError();
         }
     }

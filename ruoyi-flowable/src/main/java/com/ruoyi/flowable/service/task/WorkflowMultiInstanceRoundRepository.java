@@ -270,17 +270,6 @@ public class WorkflowMultiInstanceRoundRepository
     }
 
     /**
-     * 统计实例集合中仍开放的轮次数量。
-     *
-     * @param processInstanceIds Set&lt;String&gt;，流程树实例主键集合
-     * @return long，ACTIVE 和 RETURNED 轮次数量
-     */
-    public long countOpen(Set<String> processInstanceIds)
-    {
-        return roundMapper.countOpenByProcessInstanceIds(processInstanceIds);
-    }
-
-    /**
      * 规范 Mapper 列表并转换为不可变轮次快照。
      *
      * @param source List&lt;WfMultiInstanceRound&gt;，Mapper 原始列表

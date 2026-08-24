@@ -12,7 +12,6 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import org.flowable.bpmn.model.UserTask;
-import org.flowable.engine.HistoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.runtime.Execution;
@@ -29,7 +28,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 
 /**
- * 已办任务撤回资格计算、安全路径迁移、审计和写后验证应用服务。
+ * 已办任务撤回资格计算、安全路径迁移和审计应用服务。
  */
 @Service
 public class WorkflowTaskRevokeApplicationService
@@ -58,8 +57,6 @@ public class WorkflowTaskRevokeApplicationService
     private final WorkflowTaskConcurrencyExecutor concurrencyExecutor;
     private final RuntimeService runtimeService;
     private final TaskService taskService;
-    private final HistoryService historyService;
-
     /**
      * 创建已办撤回应用服务。
      *
@@ -73,7 +70,6 @@ public class WorkflowTaskRevokeApplicationService
      * @param concurrencyExecutor WorkflowTaskConcurrencyExecutor，并发对象消失翻译器
      * @param runtimeService RuntimeService，执行树读取和原子状态迁移服务
      * @param taskService TaskService，任务锁、comment 和任务事实服务
-     * @param historyService HistoryService，已办来源和写后历史查询服务
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowTaskRevokeApplicationService(
@@ -85,8 +81,7 @@ public class WorkflowTaskRevokeApplicationService
             WorkflowTaskMovementPolicy movementPolicy,
             WorkflowTaskActionAuditWriter auditWriter,
             WorkflowTaskConcurrencyExecutor concurrencyExecutor,
-            RuntimeService runtimeService, TaskService taskService,
-            HistoryService historyService)
+            RuntimeService runtimeService, TaskService taskService)
     {
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
@@ -98,7 +93,6 @@ public class WorkflowTaskRevokeApplicationService
         this.concurrencyExecutor = concurrencyExecutor;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
-        this.historyService = historyService;
     }
 
     /**
@@ -174,7 +168,6 @@ public class WorkflowTaskRevokeApplicationService
                             plan.executionIds(), plan.sourceNodeKey());
                 }
                 stateBuilder.changeState();
-                verifyRevokeResult(plan, audit);
             });
             return null;
         });
@@ -435,7 +428,6 @@ public class WorkflowTaskRevokeApplicationService
                 completedTask.getProcessInstanceId(), orderedSuccessors,
                 expectedNodeKeys);
         return new RevokePlan(completedTask.getProcessInstanceId(),
-                completedTask.getProcessDefinitionId(), completedTask.getId(),
                 movementPlan.sourceNodeKey(), orderedSuccessors, executionIds);
     }
 
@@ -481,80 +473,6 @@ public class WorkflowTaskRevokeApplicationService
     }
 
     /**
-     * 迁移后核对恢复任务、活动节点、历史关闭记录和撤回意见。
-     *
-     * @param plan RevokePlan，迁移前冻结计划
-     * @param audit String，写入全部后继的结构化撤回意见
-     * @return 无返回值，写后任何漂移都回滚当前事务
-     */
-    private void verifyRevokeResult(RevokePlan plan, String audit)
-    {
-        List<Task> restoredTasks = taskService.createTaskQuery()
-                .processInstanceId(plan.processInstanceId()).active().list();
-        if (restoredTasks == null || restoredTasks.size() != 1)
-        {
-            throw dataError();
-        }
-        Task restored = restoredTasks.get(0);
-        if (restored == null || restored.isSuspended()
-                || !Task.CREATED.equals(restored.getState())
-                || !plan.processInstanceId().equals(restored.getProcessInstanceId())
-                || !plan.processDefinitionId().equals(restored.getProcessDefinitionId())
-                || !plan.sourceNodeKey().equals(restored.getTaskDefinitionKey())
-                || !StringUtils.hasText(restored.getId())
-                || !StringUtils.hasText(restored.getExecutionId())
-                || plan.sourceHistoricTaskId().equals(restored.getId())
-                || restored.getCreateTime() == null)
-        {
-            throw dataError();
-        }
-        List<String> activeActivityIds = runtimeService.getActiveActivityIds(
-                plan.processInstanceId());
-        if (activeActivityIds == null || activeActivityIds.size() != 1
-                || !plan.sourceNodeKey().equals(activeActivityIds.get(0)))
-        {
-            throw dataError();
-        }
-        List<HistoricTaskInstance> finishedTasks = historyService
-                .createHistoricTaskInstanceQuery()
-                .processInstanceId(plan.processInstanceId()).finished().list();
-        if (finishedTasks == null || finishedTasks.stream().noneMatch(task -> task != null
-                && plan.sourceHistoricTaskId().equals(task.getId())
-                && task.getEndTime() != null))
-        {
-            throw dataError();
-        }
-        for (Task successor : plan.successorTasks())
-        {
-            long matches = finishedTasks.stream().filter(task -> task != null
-                    && successor.getId().equals(task.getId())
-                    && task.getEndTime() != null).count();
-            if (matches != 1L)
-            {
-                throw dataError();
-            }
-        }
-        List<Comment> comments = taskService.getProcessInstanceComments(
-                plan.processInstanceId(), REVOKE_COMMENT_TYPE);
-        if (comments == null)
-        {
-            throw dataError();
-        }
-        for (Task successor : plan.successorTasks())
-        {
-            long matches = comments.stream().filter(comment -> comment != null
-                    && successor.getId().equals(comment.getTaskId())
-                    && plan.processInstanceId().equals(comment.getProcessInstanceId())
-                    && REVOKE_COMMENT_TYPE.equals(comment.getType())
-                    && audit.equals(comment.getFullMessage())).count();
-            if (matches != 1L)
-            {
-                throw dataError();
-            }
-        }
-    }
-
-    /**
      * 创建稳定状态冲突错误。
      *
      * @return ServiceException，既有 HTTP 409 错误
@@ -585,8 +503,7 @@ public class WorkflowTaskRevokeApplicationService
     }
 
     /** 撤回命令执行前冻结的安全迁移计划。 */
-    private record RevokePlan(String processInstanceId, String processDefinitionId,
-            String sourceHistoricTaskId, String sourceNodeKey,
+    private record RevokePlan(String processInstanceId, String sourceNodeKey,
             List<Task> successorTasks, List<String> executionIds)
     {
     }

@@ -11,5 +11,6 @@
 ## 关键设计
 
 - 只依赖 `RepositoryService`、`RuntimeService` 和 `TaskService`，不写 Flowable、Mapper、审计或通知。
+- `readActiveRoots` 在一次扫描内按流程定义复用已加载的 ProcessDefinition/BPMN model，并复用同批 execution 与 task 完成根、child 和成员对账。
 - 正式 ACTIVE 根要求任务办理人属于冻结成员；RETURNED 临时申请人根只在流程树扫描入口允许申请人改派，后续由正式轮次和申请人任务关系继续严格核对。
 - 集合均在 record 构造时复制，服务间不长期传递可变 Flowable `Task`。

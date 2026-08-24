@@ -249,9 +249,9 @@ public class WorkflowMultiInstanceTransitionCoordinator
      * @param scope Scope，本次 returnTask 持有的命令作用域
      * @param applicantTaskId String，状态迁移后唯一申请人任务主键
      * @param temporaryMultiInstanceTask boolean，首审批节点本身是否为同一受控多实例节点
-     * @return MultiInstanceTransitionResult，整组退回命令内汇总的不可变观察结果
+     * @return 无返回值，观察链不完整时抛出稳定异常
      */
-    public MultiInstanceTransitionResult requireReturnCompleted(
+    public void requireReturnCompleted(
             WorkflowMultiInstanceTransitionScope scope, String applicantTaskId,
             boolean temporaryMultiInstanceTask)
     {
@@ -264,18 +264,17 @@ public class WorkflowMultiInstanceTransitionCoordinator
         {
             throw dataError();
         }
-        return result(state);
     }
 
     /**
      * 校验重提已创建唯一新根和完整成员数量，并按来源结构要求核对旧临时根取消事件。
      *
      * @param scope Scope，本次 resubmitApplication 持有的命令作用域
-     * @param newRootExecutionId String，写后对账得到的新轮次根 execution
+     * @param newRootExecutionId String，迁移后新轮次根 execution
      * @param sourceWasMultiInstanceRoot boolean，申请人临时任务是否位于受控多实例根
-     * @return MultiInstanceTransitionResult，重提命令内汇总的不可变观察结果
+     * @return 无返回值，观察链不完整时抛出稳定异常
      */
-    public MultiInstanceTransitionResult requireReopenCompleted(
+    public void requireReopenCompleted(
             WorkflowMultiInstanceTransitionScope scope, String newRootExecutionId,
             boolean sourceWasMultiInstanceRoot)
     {
@@ -287,7 +286,6 @@ public class WorkflowMultiInstanceTransitionCoordinator
         {
             throw dataError();
         }
-        return result(state);
     }
 
     /**
@@ -377,20 +375,6 @@ public class WorkflowMultiInstanceTransitionCoordinator
                 context.sourceTaskId(), context.operationActorUserId(),
                 context.applicantTaskId(), context.targetActivityId(),
                 context.mode(), members, context.revision());
-    }
-
-    /**
-     * 把命令期间的可变观察状态冻结为只读结果。
-     *
-     * @param state TransitionState，仍属于当前作用域的内部观察状态
-     * @return MultiInstanceTransitionResult，供整组服务执行写后最终核对
-     */
-    private MultiInstanceTransitionResult result(TransitionState state)
-    {
-        return new MultiInstanceTransitionResult(state.context.action(),
-                state.collectionResolved, state.cancellationObserved,
-                state.temporaryRootExecutionId, state.temporaryTaskId,
-                state.reopenedRootExecutionId, state.reopenedTaskCount);
     }
 
     /**

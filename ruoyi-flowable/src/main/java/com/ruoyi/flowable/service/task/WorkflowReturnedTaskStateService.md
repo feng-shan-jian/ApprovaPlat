@@ -8,8 +8,8 @@
 
 ## 使用方式
 
-- 普通退回：`markTransition` → Flowable 迁移 → `enterOrdinaryReturned` → 外部副作用与对账 → `clearTransition`。
-- 整组退回：`markTransition` → Flowable 整组迁移 → `enterGroupReturned` → 轮次 CAS 与对账 → `clearTransition`。
+- 普通退回：`markTransition` → Flowable 迁移 → `enterOrdinaryReturned` → 外部副作用 → `clearTransition`。
+- 整组退回：`markTransition` → Flowable 整组迁移 → `enterGroupReturned` → 轮次 CAS → `clearTransition`。
 - 普通重提：`requireReturnedApplicant` → `requireOrdinaryAssignment` → `restoreOrdinary`。
 - 整组重提：`requireReturnedApplicant` → 轮次计划核验 → `prepareGroupRunning` → Flowable 重建。
 
@@ -30,7 +30,7 @@
 
 所有公开调用只接收主键、稳定标记或不可变快照，不向调用方暴露 `TaskService`、`RuntimeService` 或可变 Flowable 对象。状态变更必须位于 `WorkflowEngineOperations` 打开的同一可重复读写事务中，任一步失败由外层事务整体回滚。
 
-`requireRunning` 的空 `businessStatus` 兼容仅适用于尚未进入退回协议的普通运行实例。`enterOrdinaryReturned`、`enterGroupReturned`、`restoreOrdinary`、`prepareGroupRunning` 均在自身写边界内核验一次流程变量与 Flowable `businessStatus`，调用方不再重复执行相同写后核验。
+`requireRunning` 的空 `businessStatus` 兼容仅适用于尚未进入退回协议的普通运行实例。写入口保留写前任务、申请人和状态校验；同步 TaskService/RuntimeService 写入正常返回即交由外层事务提交，不再回读刚写入的任务指派、局部变量或双状态自证成功。
 
 ## 最小接入示例
 

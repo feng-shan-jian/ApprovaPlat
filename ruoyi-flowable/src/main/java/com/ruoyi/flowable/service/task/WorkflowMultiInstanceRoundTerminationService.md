@@ -2,7 +2,7 @@
 
 ## 作用
 
-`WorkflowMultiInstanceRoundTerminationService` 只负责异常中断、流程取消和管理员终止下的开放轮次冻结、预检、`TERMINATED` CAS 与写后完整性验证。
+`WorkflowMultiInstanceRoundTerminationService` 只负责异常中断、流程取消和管理员终止下的开放轮次冻结、预检与 `TERMINATED` CAS。
 
 ## 使用方式
 
@@ -10,4 +10,4 @@
 
 ## 安全边界
 
-受控整组 RETURN/REOPEN 的根取消必须先由窄观察协议确认，不能用通知变量放行。普通异常中断必须核对部署、实例、节点、根、成员、模式和 revision；任何缺行、漂移、CAS 冲突或终止后残留都会回滚当前 Flowable 命令。
+受控整组 RETURN/REOPEN 的根取消必须先由窄观察协议确认，不能用通知变量放行。普通异常中断必须核对部署、实例、节点、根、成员、模式和 revision；管理员终止保留锁定及锁后快照复核。单行 CAS 或批量更新影响行数确认写入成功，不再回读全部轮次或重复 OPEN 查询。

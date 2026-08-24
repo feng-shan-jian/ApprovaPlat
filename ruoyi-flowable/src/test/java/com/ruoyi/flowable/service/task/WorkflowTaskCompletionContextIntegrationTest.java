@@ -2,11 +2,9 @@ package com.ruoyi.flowable.service.task;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -20,7 +18,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.ProcessEngine;
@@ -179,18 +176,12 @@ class WorkflowTaskCompletionContextIntegrationTest
                         taskService, runtimeService, snapshotReader);
         WorkflowMultiInstanceRoundLifecycleService roundLifecycleService =
                 mock(WorkflowMultiInstanceRoundLifecycleService.class);
-        AtomicReference<ControlledMultiInstanceSnapshot> controlledRuntime =
-                new AtomicReference<>();
         when(roundLifecycleService.requireActiveRound(
                 any(ControlledMultiInstanceSnapshot.class))).thenAnswer(invocation ->
         {
             ControlledMultiInstanceSnapshot runtime = invocation.getArgument(0);
-            controlledRuntime.set(runtime);
             return roundSnapshot(runtime, runtime.revision());
         });
-        when(roundLifecycleService.requireCompletionPersisted(anyString(), anyInt(),
-                anyBoolean())).thenAnswer(invocation -> roundSnapshot(
-                        controlledRuntime.get(), invocation.getArgument(1)));
         WorkflowMultiInstanceService multiInstanceService =
                 new WorkflowMultiInstanceService(engineOperations, identityResolver,
                         userSelectionValidator,

@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -95,9 +94,9 @@ class WfMultiInstanceRoundDomainTest
     }
 
     /**
-     * 验证状态解析和唯一允许的生命周期跳转。
+     * 验证状态解析和开放状态语义。
      *
-     * @return void，断言 ACTIVE/RETURNED 开放语义和终态跳转
+     * @return void，断言 ACTIVE/RETURNED 开放语义和严格文本解析
      */
     @Test
     void shouldEnforceStatusTransitions()
@@ -106,28 +105,10 @@ class WfMultiInstanceRoundDomainTest
                 WorkflowMultiInstanceRoundStatus.require("ACTIVE"));
         assertTrue(WorkflowMultiInstanceRoundStatus.ACTIVE.isOpen());
         assertTrue(WorkflowMultiInstanceRoundStatus.RETURNED.isOpen());
-        assertTrue(WorkflowMultiInstanceRoundStatus.REOPENED.isTerminal());
-        assertTrue(WorkflowMultiInstanceRoundStatus.COMPLETED.isTerminal());
-        assertTrue(WorkflowMultiInstanceRoundStatus.TERMINATED.isTerminal());
-        assertTrue(WorkflowMultiInstanceRoundStatus.ACTIVE.canTransitionTo(
-                WorkflowMultiInstanceRoundStatus.RETURNED));
-        assertTrue(WorkflowMultiInstanceRoundStatus.ACTIVE.canTransitionTo(
-                WorkflowMultiInstanceRoundStatus.COMPLETED));
-        assertTrue(WorkflowMultiInstanceRoundStatus.ACTIVE.canTransitionTo(
-                WorkflowMultiInstanceRoundStatus.TERMINATED));
-        assertTrue(WorkflowMultiInstanceRoundStatus.RETURNED.canTransitionTo(
-                WorkflowMultiInstanceRoundStatus.REOPENED));
-        assertTrue(WorkflowMultiInstanceRoundStatus.RETURNED.canTransitionTo(
-                WorkflowMultiInstanceRoundStatus.TERMINATED));
-        assertFalse(WorkflowMultiInstanceRoundStatus.RETURNED.canTransitionTo(
-                WorkflowMultiInstanceRoundStatus.COMPLETED));
         assertThrows(IllegalArgumentException.class,
                 () -> WorkflowMultiInstanceRoundStatus.require("completed"));
         assertThrows(IllegalArgumentException.class,
                 () -> WorkflowMultiInstanceRoundStatus.require("CANCELLED"));
-        assertThrows(IllegalStateException.class,
-                () -> WorkflowMultiInstanceRoundStatus.COMPLETED.requireTransitionTo(
-                        WorkflowMultiInstanceRoundStatus.ACTIVE));
     }
 
     /**

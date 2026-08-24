@@ -109,10 +109,10 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
             return null;
         }
         MultiInstanceEngineCounts counts = readCounts(rootSnapshot.rootExecutionId());
-        List<Execution> children = requireChildExecutions(rootSnapshot, counts);
+        List<Execution> children = requireChildExecutions(rootSnapshot, counts, null);
         List<MultiInstanceActiveTaskSnapshot> activeTasks = requireActiveTasks(
                 event, rootSnapshot, counts, children,
-                ActiveTaskMembershipRule.REQUIRE_FROZEN_MEMBER);
+                ActiveTaskMembershipRule.REQUIRE_FROZEN_MEMBER, null);
         return new ControlledMultiInstanceSnapshot(rootSnapshot.deployId(),
                 rootSnapshot.processDefinitionId(), rootSnapshot.processInstanceId(),
                 rootSnapshot.activityId(), rootSnapshot.rootExecutionId(),
@@ -216,6 +216,8 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
         }
         Map<String, ActiveControlledMultiInstanceRootSnapshot> snapshots =
                 new LinkedHashMap<>();
+        Map<String, ProcessDefinition> definitions = new LinkedHashMap<>();
+        Map<String, BpmnModel> models = new LinkedHashMap<>();
         for (String processInstanceId : processInstanceIds)
         {
             ProcessInstance instance = runtimeService.createProcessInstanceQuery()
@@ -224,6 +226,25 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
                     || !StringUtils.hasText(instance.getProcessDefinitionId()))
             {
                 throw drift();
+            }
+            String processDefinitionId = instance.getProcessDefinitionId();
+            ProcessDefinition definition = definitions.get(processDefinitionId);
+            BpmnModel model = models.get(processDefinitionId);
+            if (definition == null || model == null)
+            {
+                try
+                {
+                    definition = repositoryService.getProcessDefinition(
+                            processDefinitionId);
+                    model = repositoryService.getBpmnModel(processDefinitionId);
+                }
+                catch (FlowableObjectNotFoundException exception)
+                {
+                    throw drift(exception);
+                }
+                requireDefinition(definition, model);
+                definitions.put(processDefinitionId, definition);
+                models.put(processDefinitionId, model);
             }
             List<Execution> executions = runtimeService.createExecutionQuery()
                     .processInstanceId(processInstanceId).list();
@@ -235,26 +256,38 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
                     processInstanceId, executions);
             for (Map.Entry<String, List<Execution>> entry : byActivity.entrySet())
             {
-                ControlledNodeDefinition node = resolveControlledNode(
-                        instance.getProcessDefinitionId(), entry.getKey());
+                ControlledNodeDefinition node = resolveControlledNode(definition, model,
+                        entry.getKey());
                 if (node == null)
                 {
                     continue;
                 }
                 Execution root = requireUniqueRoot(entry.getValue());
-                Task representative = requireRepresentativeTask(processInstanceId,
-                        entry.getKey(), root.getId());
+                if (root.isEnded() || root.isSuspended()
+                        || !Objects.equals(processInstanceId,
+                                root.getProcessInstanceId())
+                        || !Objects.equals(entry.getKey(), root.getActivityId()))
+                {
+                    throw drift();
+                }
+                List<Task> tasks = taskService.createTaskQuery()
+                        .processInstanceId(processInstanceId)
+                        .taskDefinitionKey(entry.getKey()).active().list();
+                Task representative = requireRepresentativeTask(root.getId(),
+                        entry.getValue(), tasks);
                 WorkflowTaskEventSnapshot taskEvent = new WorkflowTaskEventSnapshot(
                         representative.getId(), representative.getProcessInstanceId(),
                         representative.getProcessDefinitionId(),
                         representative.getTaskDefinitionKey(),
                         representative.getExecutionId(), representative.getAssignee(), null);
-                ControlledMultiInstanceRootSnapshot rootSnapshot = readEventRoot(taskEvent);
+                ControlledMultiInstanceRootSnapshot rootSnapshot = readRootVariables(node,
+                        processDefinitionId, processInstanceId, entry.getKey(), root.getId());
                 MultiInstanceEngineCounts counts = readCounts(root.getId());
-                List<Execution> children = requireChildExecutions(rootSnapshot, counts);
+                List<Execution> children = requireChildExecutions(rootSnapshot, counts,
+                        entry.getValue());
                 List<MultiInstanceActiveTaskSnapshot> activeTasks = requireActiveTasks(
                         taskEvent, rootSnapshot, counts, children,
-                        ActiveTaskMembershipRule.ALLOW_RETURNED_APPLICANT);
+                        ActiveTaskMembershipRule.ALLOW_RETURNED_APPLICANT, tasks);
                 ActiveControlledMultiInstanceRootSnapshot snapshot =
                         new ActiveControlledMultiInstanceRootSnapshot(rootSnapshot, counts,
                                 activeTasks, children.stream().map(Execution::getId).toList());
@@ -337,31 +370,65 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
             ProcessDefinition definition = repositoryService.getProcessDefinition(
                     processDefinitionId);
             BpmnModel model = repositoryService.getBpmnModel(processDefinitionId);
-            if (definition == null || model == null
-                    || !StringUtils.hasText(definition.getDeploymentId())
-                    || !StringUtils.hasText(definition.getKey()))
-            {
-                throw drift();
-            }
+            requireDefinition(definition, model);
+            return resolveControlledNode(definition, model, activityId);
+        }
+        catch (FlowableObjectNotFoundException | IllegalArgumentException exception)
+        {
+            throw drift(exception);
+        }
+    }
+
+    /**
+     * 使用本次读取已加载的部署定义和 BPMN 模型解析受控节点。
+     *
+     * @param definition ProcessDefinition，已校验的流程定义
+     * @param model BpmnModel，与定义对应的部署模型
+     * @param activityId String，待识别节点主键
+     * @return ControlledNodeDefinition，普通节点返回 null
+     */
+    private ControlledNodeDefinition resolveControlledNode(
+            ProcessDefinition definition, BpmnModel model, String activityId)
+    {
+        if (!StringUtils.hasText(activityId))
+        {
+            throw drift();
+        }
+        try
+        {
             org.flowable.bpmn.model.Process process = model.getProcessById(
                     definition.getKey());
             FlowElement element = process == null ? null
                     : process.getFlowElement(activityId, true);
-        if (!(element instanceof UserTask userTask))
-        {
-            return null;
-        }
-            if (!WorkflowMultiInstanceModelContract.usesControlledHandler(
-                    userTask.getLoopCharacteristics()))
+            if (!(element instanceof UserTask userTask)
+                    || !WorkflowMultiInstanceModelContract.usesControlledHandler(
+                            userTask.getLoopCharacteristics()))
             {
                 return null;
             }
             return new ControlledNodeDefinition(definition.getDeploymentId(),
                     WorkflowMultiInstanceModelContract.requireMode(userTask));
         }
-        catch (FlowableObjectNotFoundException | IllegalArgumentException exception)
+        catch (IllegalArgumentException exception)
         {
             throw drift(exception);
+        }
+    }
+
+    /**
+     * 校验部署定义和 BPMN 模型可用于本次只读解析。
+     *
+     * @param definition ProcessDefinition，仓库返回的流程定义
+     * @param model BpmnModel，仓库返回的 BPMN 模型
+     * @return 无返回值，缺失关键部署身份时抛出快照漂移异常
+     */
+    private void requireDefinition(ProcessDefinition definition, BpmnModel model)
+    {
+        if (definition == null || model == null
+                || !StringUtils.hasText(definition.getDeploymentId())
+                || !StringUtils.hasText(definition.getKey()))
+        {
+            throw drift();
         }
     }
 
@@ -425,14 +492,18 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
      *
      * @param root ControlledMultiInstanceRootSnapshot，受控根事实
      * @param counts MultiInstanceEngineCounts，根计数
+     * @param loadedExecutions List&lt;Execution&gt;，活动根扫描已加载的同节点 execution；其他入口为空
      * @return List&lt;Execution&gt;，保持引擎查询顺序的全部 child execution
      */
     private List<Execution> requireChildExecutions(
             ControlledMultiInstanceRootSnapshot root,
-            MultiInstanceEngineCounts counts)
+            MultiInstanceEngineCounts counts, List<Execution> loadedExecutions)
     {
-        List<Execution> children = runtimeService.createExecutionQuery()
-                .parentId(root.rootExecutionId()).list();
+        List<Execution> children = loadedExecutions == null
+                ? runtimeService.createExecutionQuery()
+                        .parentId(root.rootExecutionId()).list()
+                : loadedExecutions.stream().filter(execution -> execution != null
+                        && root.rootExecutionId().equals(execution.getParentId())).toList();
         if (children == null || children.size() != counts.instances())
         {
             throw drift();
@@ -481,16 +552,17 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
      * @param counts MultiInstanceEngineCounts，根计数
      * @param children List&lt;Execution&gt;，已核验 child execution
      * @param membershipRule ActiveTaskMembershipRule，正式审批根或 RETURNED 临时申请人根规则
+     * @param loadedTasks List&lt;Task&gt;，活动根扫描已加载的任务；其他入口为空
      * @return List&lt;MultiInstanceActiveTaskSnapshot&gt;，按创建时间和主键稳定排序
      */
     private List<MultiInstanceActiveTaskSnapshot> requireActiveTasks(
             WorkflowTaskEventSnapshot event, ControlledMultiInstanceRootSnapshot root,
             MultiInstanceEngineCounts counts, List<Execution> children,
-            ActiveTaskMembershipRule membershipRule)
+            ActiveTaskMembershipRule membershipRule, List<Task> loadedTasks)
     {
-        List<Task> tasks = taskService.createTaskQuery()
+        List<Task> tasks = loadedTasks == null ? taskService.createTaskQuery()
                 .processInstanceId(root.processInstanceId())
-                .taskDefinitionKey(root.activityId()).active().list();
+                .taskDefinitionKey(root.activityId()).active().list() : loadedTasks;
         if (tasks == null || tasks.size() != counts.active() || tasks.isEmpty())
         {
             throw drift();
@@ -603,25 +675,30 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
     /**
      * 为活动根选择一个真实成员任务，后续统一读取器会核对完整任务组。
      *
-     * @param processInstanceId String，流程实例主键
-     * @param activityId String，受控节点
      * @param rootExecutionId String，多实例根主键
+     * @param executions List&lt;Execution&gt;，本次扫描已加载的同节点 execution
+     * @param tasks List&lt;Task&gt;，本次扫描已加载的同节点活动任务
      * @return Task，直接挂在该根下的唯一候选集合中的第一个任务
      */
-    private Task requireRepresentativeTask(String processInstanceId,
-            String activityId, String rootExecutionId)
+    private Task requireRepresentativeTask(String rootExecutionId,
+            List<Execution> executions, List<Task> tasks)
     {
-        List<Task> tasks = taskService.createTaskQuery()
-                .processInstanceId(processInstanceId)
-                .taskDefinitionKey(activityId).active().list();
-        if (tasks == null)
+        if (tasks == null || executions == null)
         {
             throw drift();
         }
+        Map<String, Execution> executionsById = new LinkedHashMap<>();
+        for (Execution execution : executions)
+        {
+            if (execution == null || executionsById.putIfAbsent(
+                    execution.getId(), execution) != null)
+            {
+                throw drift();
+            }
+        }
         return tasks.stream().filter(Objects::nonNull).filter(task ->
         {
-            Execution execution = runtimeService.createExecutionQuery()
-                    .executionId(task.getExecutionId()).singleResult();
+            Execution execution = executionsById.get(task.getExecutionId());
             return execution != null && rootExecutionId.equals(execution.getParentId());
         }).findFirst().orElseThrow(this::drift);
     }

@@ -255,11 +255,12 @@ public class WorkflowMultiInstanceService
         return new CompletionRevision(context.activityId(),
                 context.rootExecutionId(), context.revision(), nextRevision,
                 context.counts().instances(), context.counts().active(),
-                context.counts().completed(), completesGroup);
+                context.counts().completed(), context.mode(), context.memberIds(),
+                completesGroup);
     }
 
     /**
-     * 在 Flowable 完成命令返回后复核旧根、实时计数、活动任务、变量和正式轮次同步结果。
+     * 在 Flowable 完成命令返回后复核旧根、实时计数、活动任务和冻结成员模式。
      *
      * @param processInstanceId String，完成任务所属流程实例主键
      * @param completion CompletionRevision，完成前冻结的根、计数和 revision 计划
@@ -279,10 +280,6 @@ public class WorkflowMultiInstanceService
         {
             throw dataError();
         }
-        MultiInstanceRoundSnapshot completedRound =
-                roundLifecycleService.requireCompletionPersisted(
-                completion.rootExecutionId(),
-                completion.afterRevision(), completion.groupCompleted());
         Execution root = runtimeService.createExecutionQuery()
                 .executionId(completion.rootExecutionId()).singleResult();
         ProcessInstance runtimeInstance = runtimeService.createProcessInstanceQuery()
@@ -304,7 +301,6 @@ public class WorkflowMultiInstanceService
         {
             throw dataError();
         }
-        requirePersistedRoundSnapshot(completedRound);
         if (completion.groupCompleted())
         {
             // ALL 最后一人或 ANY 任一人完成后旧根必须消失；同节点即时重入也只能生成新根。
@@ -333,8 +329,8 @@ public class WorkflowMultiInstanceService
         {
             throw dataError();
         }
-        if (!runtime.members().equals(completedRound.members())
-                || runtime.mode() != completedRound.mode())
+        if (!runtime.members().equals(completion.members())
+                || runtime.mode() != completion.mode())
         {
             throw dataError();
         }
@@ -613,21 +609,6 @@ public class WorkflowMultiInstanceService
     {
         return WorkflowMultiInstanceSnapshotExceptionTranslator.asMultiInstanceDataError(
                 () -> snapshotReader.readTask(taskId));
-    }
-
-    /**
-     * 在完成后使用唯一读取器核对仍存在的流程变量与正式轮次一致。
-     *
-     * @param round MultiInstanceRoundSnapshot，完成监听器已经持久化的轮次
-     * @return void，成员、模式或 revision 漂移时回滚完成事务
-     */
-    private void requirePersistedRoundSnapshot(MultiInstanceRoundSnapshot round)
-    {
-        WorkflowMultiInstanceSnapshotExceptionTranslator.asMultiInstanceDataError(() ->
-                snapshotReader.requirePersistedSnapshot(round.processDefinitionId(),
-                    round.processInstanceId(), round.activityId(),
-                    round.rootExecutionId(), round.mode(), round.members(),
-                    round.revision()));
     }
 
     /**
@@ -1088,11 +1069,15 @@ public class WorkflowMultiInstanceService
      * @param instancesBefore Integer，完成前总实例数；普通任务为空
      * @param activeBefore Integer，完成前活动实例数；普通任务为空
      * @param completedBefore Integer，完成前已完成实例数；普通任务为空
+     * @param mode WorkflowMultiInstanceMode，完成前冻结的 ALL/ANY 模式；普通任务为空
+     * @param members List&lt;String&gt;，完成前冻结的有序成员；普通任务为空
      * @param groupCompleted boolean，本次完成是否按固定 ALL/ANY 规则结束整组
      */
     record CompletionRevision(String activityId, String rootExecutionId,
             Integer beforeRevision, Integer afterRevision, Integer instancesBefore,
-            Integer activeBefore, Integer completedBefore, boolean groupCompleted)
+            Integer activeBefore, Integer completedBefore,
+            WorkflowMultiInstanceMode mode, List<String> members,
+            boolean groupCompleted)
     {
         /**
          * 校验普通任务空计划或动态任务完整 revision 区间，禁止部分字段进入审计链。
@@ -1104,6 +1089,8 @@ public class WorkflowMultiInstanceService
          * @param instancesBefore Integer，完成前总实例数；普通任务为空
          * @param activeBefore Integer，完成前活动实例数；普通任务为空
          * @param completedBefore Integer，完成前已完成实例数；普通任务为空
+         * @param mode WorkflowMultiInstanceMode，完成前冻结模式；普通任务为空
+         * @param members List&lt;String&gt;，完成前冻结成员；普通任务为空
          * @param groupCompleted boolean，本次完成是否结束整组
          * @return 无返回值，字段不完整或 revision 非严格递增一时拒绝构造
          */
@@ -1112,7 +1099,8 @@ public class WorkflowMultiInstanceService
             boolean empty = activityId == null && rootExecutionId == null
                     && beforeRevision == null && afterRevision == null
                     && instancesBefore == null && activeBefore == null
-                    && completedBefore == null && !groupCompleted;
+                    && completedBefore == null && mode == null && members == null
+                    && !groupCompleted;
             boolean complete = StringUtils.hasText(activityId)
                     && StringUtils.hasText(rootExecutionId)
                     && beforeRevision != null && beforeRevision >= 0
@@ -1121,35 +1109,38 @@ public class WorkflowMultiInstanceService
                     && instancesBefore != null && instancesBefore >= 1
                     && activeBefore != null && activeBefore >= 1
                     && completedBefore != null && completedBefore >= 0
-                    && activeBefore + completedBefore == instancesBefore;
+                    && activeBefore + completedBefore == instancesBefore
+                    && mode != null && members != null && !members.isEmpty()
+                    && members.size() == instancesBefore;
             if (!empty && !complete)
             {
                 throw new IllegalArgumentException("动态多实例完成版本区间不合法");
             }
+            members = members == null ? null : List.copyOf(members);
         }
 
         /**
          * 创建普通任务的空 revision 计划。
          *
-         * @return CompletionRevision，三个字段均为空且不会写入多实例审计扩展
+         * @return CompletionRevision，全部动态字段均为空且不会写入多实例审计扩展
          */
         static CompletionRevision none()
         {
             return new CompletionRevision(null, null, null, null,
-                    null, null, null, false);
+                    null, null, null, null, null, false);
         }
 
         /**
          * 判断当前完成动作是否已占用动态多实例 revision。
          *
-         * @return boolean，三个动态字段完整存在时返回 true
+         * @return boolean，全部动态字段完整存在时返回 true
          */
         boolean applied()
         {
             return activityId != null && rootExecutionId != null
                     && beforeRevision != null && afterRevision != null
                     && instancesBefore != null && activeBefore != null
-                    && completedBefore != null;
+                    && completedBefore != null && mode != null && members != null;
         }
     }
 

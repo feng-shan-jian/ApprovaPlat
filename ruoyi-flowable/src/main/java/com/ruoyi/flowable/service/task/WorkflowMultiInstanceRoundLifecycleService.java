@@ -65,18 +65,15 @@ public class WorkflowMultiInstanceRoundLifecycleService
                     root.activityId(), root.rootExecutionId(), event.assignee());
             return;
         }
-        if (!roundRepository.findOpen(root.processInstanceId(), root.activityId()).isEmpty()
-                || !roundRepository.findActive(
-                        root.processInstanceId(), root.activityId()).isEmpty())
+        if (!roundRepository.findOpen(root.processInstanceId(), root.activityId()).isEmpty())
         {
             throw dataError();
         }
         Integer maxRoundNo = roundRepository.findMaxRoundNo(root.processInstanceId(),
                 root.activityId());
         int roundNo = maxRoundNo == null ? 1 : nextRoundNo(maxRoundNo);
-        roundRepository.insertActive(root, roundNo);
-        requireCurrentActiveRound(root, roundRepository.findByRootExecutionId(
-                root.rootExecutionId()));
+        MultiInstanceRoundSnapshot inserted = roundRepository.insertActive(root, roundNo);
+        requireCurrentActiveRound(root, inserted);
         transitionObserver.observeReopenedTask(root.processInstanceId(),
                 root.activityId(), root.rootExecutionId(), event.assignee());
     }
@@ -109,19 +106,6 @@ public class WorkflowMultiInstanceRoundLifecycleService
             roundRepository.compareAndSetCompleted(round.roundId(),
                     runtime.revision(), runtime.members());
         }
-        MultiInstanceRoundSnapshot updated = roundRepository.findByRootExecutionId(
-                runtime.rootExecutionId());
-        requireRoundIdentity(runtime, updated);
-        WorkflowMultiInstanceRoundStatus expected = completed
-                ? WorkflowMultiInstanceRoundStatus.COMPLETED
-                : WorkflowMultiInstanceRoundStatus.ACTIVE;
-        if (updated.status() != expected
-                || updated.revision() != runtime.revision()
-                || updated.mode() != runtime.mode()
-                || !updated.members().equals(runtime.members()))
-        {
-            throw dataError();
-        }
     }
 
     /**
@@ -139,14 +123,11 @@ public class WorkflowMultiInstanceRoundLifecycleService
         }
         List<MultiInstanceRoundSnapshot> open = roundRepository.findOpen(
                 runtime.processInstanceId(), runtime.activityId());
-        List<MultiInstanceRoundSnapshot> active = roundRepository.findActive(
-                runtime.processInstanceId(), runtime.activityId());
-        if (open.size() != 1 || active.size() != 1
-                || open.get(0).roundId() != active.get(0).roundId())
+        if (open.size() != 1)
         {
             throw dataError();
         }
-        MultiInstanceRoundSnapshot round = active.get(0);
+        MultiInstanceRoundSnapshot round = open.get(0);
         requireCurrentActiveRound(runtime, round);
         return round;
     }
@@ -172,29 +153,6 @@ public class WorkflowMultiInstanceRoundLifecycleService
         }
         roundRepository.compareAndSetActiveSnapshot(round.roundId(), expectedRevision,
                 newRevision, members);
-    }
-
-    /**
-     * taskService.complete 返回后复核完成监听器已经落库目标状态。
-     *
-     * @param rootExecutionId String，完成前冻结的多实例根主键
-     * @param expectedRevision int，本次完成占用后的 revision
-     * @param groupCompleted boolean，本次完成是否结束整组
-     * @return MultiInstanceRoundSnapshot，监听器已经同步的目标轮次
-     */
-    public MultiInstanceRoundSnapshot requireCompletionPersisted(
-            String rootExecutionId, int expectedRevision, boolean groupCompleted)
-    {
-        MultiInstanceRoundSnapshot round = roundRepository.findByRootExecutionId(
-                rootExecutionId);
-        WorkflowMultiInstanceRoundStatus expected = groupCompleted
-                ? WorkflowMultiInstanceRoundStatus.COMPLETED
-                : WorkflowMultiInstanceRoundStatus.ACTIVE;
-        if (round.revision() != expectedRevision || round.status() != expected)
-        {
-            throw dataError();
-        }
-        return round;
     }
 
     /**

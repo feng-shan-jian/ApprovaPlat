@@ -187,7 +187,7 @@ public class WorkflowReturnedTaskStateService
      * @param taskId String，重新开放的首审批任务主键
      * @param processInstanceId String，流程实例主键
      * @param assignment ReturnedAssignmentSnapshot，退回时冻结的办理配置
-     * @return 无返回值，写后办理配置或双状态不一致时回滚
+     * @return 无返回值，任一同步写操作失败时由外层事务回滚
      */
     public void restoreOrdinary(String taskId, String processInstanceId,
             ReturnedAssignmentSnapshot assignment)
@@ -204,7 +204,6 @@ public class WorkflowReturnedTaskStateService
                 taskService.addCandidateGroup(taskId, groupId));
         setProcessStatus(processInstanceId,
                 WorkflowProcessStartService.RUNNING_STATUS);
-        verifyRestoredAssignment(taskId, processInstanceId, assignment);
     }
 
     /**
@@ -212,7 +211,7 @@ public class WorkflowReturnedTaskStateService
      *
      * @param taskId String，待撤销的申请人任务主键
      * @param processInstanceId String，流程实例主键
-     * @return 无返回值，双状态写后不一致时失败关闭
+     * @return 无返回值，任一同步写操作失败时由外层事务回滚
      */
     public void prepareGroupRunning(String taskId, String processInstanceId)
     {
@@ -221,8 +220,6 @@ public class WorkflowReturnedTaskStateService
         taskService.removeVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE);
         setProcessStatus(processInstanceId,
                 WorkflowProcessStartService.RUNNING_STATUS);
-        verifyProcessStatus(processInstanceId,
-                WorkflowProcessStartService.RUNNING_STATUS, false);
     }
 
     /**
@@ -269,18 +266,21 @@ public class WorkflowReturnedTaskStateService
      *
      * @param task Task，待修改真实活动任务
      * @param applicantUserId String，流程正式发起人主键
-     * @return 无返回值，写后核验包含候选关系和 owner
+     * @return 无返回值，任一同步写操作失败时由外层事务回滚
      */
     private void enterReturned(Task task, String applicantUserId)
     {
+        ProcessInstance instance = requireProcess(task.getProcessInstanceId());
+        if (!Objects.equals(applicantUserId, instance.getStartUserId()))
+        {
+            throw forbidden();
+        }
         taskService.setVariableLocal(task.getId(), RETURN_APPLICANT_VARIABLE,
                 applicantUserId);
         removeCandidateLinks(task.getId());
         taskService.setOwner(task.getId(), null);
         setProcessStatus(task.getProcessInstanceId(), RETURNED_STATUS);
         taskService.setAssignee(task.getId(), applicantUserId);
-        requireReturnedApplicant(task.getId(), task.getProcessInstanceId(),
-                applicantUserId);
     }
 
     /**
@@ -310,50 +310,6 @@ public class WorkflowReturnedTaskStateService
                 throw dataError();
             }
         }
-    }
-
-    /**
-     * 核验普通办理配置已完整恢复。
-     *
-     * @param taskId String，重新开放任务主键
-     * @param processInstanceId String，流程实例主键
-     * @param expected ReturnedAssignmentSnapshot，预期办理配置
-     * @return 无返回值，任一身份事实漂移时抛出 HTTP 409
-     */
-    private void verifyRestoredAssignment(String taskId, String processInstanceId,
-            ReturnedAssignmentSnapshot expected)
-    {
-        Task task = requireTask(taskId, processInstanceId);
-        LinkedHashSet<String> users = new LinkedHashSet<>();
-        LinkedHashSet<String> groups = new LinkedHashSet<>();
-        for (IdentityLink link : requireIdentityLinks(taskId))
-        {
-            if (link == null || !IdentityLinkType.CANDIDATE.equals(link.getType()))
-            {
-                continue;
-            }
-            if (StringUtils.hasText(link.getUserId()))
-            {
-                users.add(link.getUserId());
-            }
-            else if (StringUtils.hasText(link.getGroupId()))
-            {
-                groups.add(link.getGroupId());
-            }
-            else
-            {
-                throw dataError();
-            }
-        }
-        if (!Objects.equals(expected.assignee(), task.getAssignee())
-                || !Objects.equals(expected.owner(), task.getOwner())
-                || !expected.candidateUserIds().equals(List.copyOf(users))
-                || !expected.candidateGroupIds().equals(List.copyOf(groups)))
-        {
-            throw conflict();
-        }
-        verifyProcessStatus(processInstanceId,
-                WorkflowProcessStartService.RUNNING_STATUS, true);
     }
 
     /**

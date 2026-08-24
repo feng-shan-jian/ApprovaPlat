@@ -10,7 +10,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
 
 /**
- * 聚焦验证命令内迁移协调器的状态机、观察结果和 ThreadLocal 清理边界。
+ * 聚焦验证命令内迁移协调器的状态机、完成命令和 ThreadLocal 清理边界。
  */
 class WorkflowMultiInstanceTransitionCoordinatorTest
 {
@@ -36,12 +36,7 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
             assertThat(coordinator.observeTemporaryTask("pi", "approve",
                     "temporary-root", "applicant-task", "201")).isTrue();
 
-            MultiInstanceTransitionResult result = coordinator
-                    .requireReturnCompleted(scope, "applicant-task", true);
-            assertThat(result.action()).isEqualTo(MultiInstanceTransitionAction.RETURN);
-            assertThat(result.cancellationObserved()).isTrue();
-            assertThat(result.temporaryRootExecutionId())
-                    .isEqualTo("temporary-root");
+            coordinator.requireReturnCompleted(scope, "applicant-task", true);
         }
 
         assertThat(coordinator.resolveTransitionMembers("pi", "approve",
@@ -79,7 +74,7 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
     }
 
     /**
-     * 验证重提只接受冻结成员、唯一新根和完整创建数量，并汇总不可变结果。
+     * 验证重提只接受冻结成员、唯一新根和完整创建数量。
      *
      * @return void，成员、根或创建数量漂移时测试失败
      */
@@ -100,11 +95,7 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
             coordinator.observeReopenedTask("pi", "approve", "new-root", "201");
             coordinator.observeReopenedTask("pi", "approve", "new-root", "202");
 
-            MultiInstanceTransitionResult result = coordinator
-                    .requireReopenCompleted(scope, "new-root", false);
-            assertThat(result.action()).isEqualTo(MultiInstanceTransitionAction.REOPEN);
-            assertThat(result.reopenedTaskCount()).isEqualTo(2);
-            assertThat(result.reopenedRootExecutionId()).isEqualTo("new-root");
+            coordinator.requireReopenCompleted(scope, "new-root", false);
         }
     }
 

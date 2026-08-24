@@ -112,11 +112,11 @@ public class WorkflowMultiInstanceGroupTransitionService
     }
 
     /**
-     * 原子完成整组退回的 Flowable 迁移、状态写入、轮次 CAS、SLA 和写后对账。
+     * 原子完成整组退回的 Flowable 迁移、状态写入、轮次 CAS 和 SLA。
      * @param plan MultiInstanceGroupReturnPlan，写前冻结计划
      * @param targetActivityId String，服务端确定的首审批节点
      * @param actorUserId String，已核验真实办理人主键
-     * @return GroupReturnResult，RETURNED 轮次和唯一申请人任务主键
+     * @return GroupReturnResult，后续通知所需的唯一申请人任务主键
      */
     public GroupReturnResult returnGroup(MultiInstanceGroupReturnPlan plan,
             String targetActivityId, String actorUserId)
@@ -140,14 +140,8 @@ public class WorkflowMultiInstanceGroupTransitionService
             taskSlaRuntimeService.completeControlledWithdrawal(
                     plan.round().processInstanceId(), plan.activeTaskIds(), actorUserId,
                     WorkflowTaskSlaRuntimeService.ControlledWithdrawal.GROUP_RETURN);
-            MultiInstanceTransitionResult observed =
-                    transitionCoordinator.requireReturnCompleted(scope,
-                            applicantTask.getId(),
-                            plan.round().activityId().equals(targetActivityId));
-            if (!observed.cancellationObserved())
-            {
-                throw dataError();
-            }
+            transitionCoordinator.requireReturnCompleted(scope, applicantTask.getId(),
+                    plan.round().activityId().equals(targetActivityId));
             applicantTaskId = applicantTask.getId();
         }
 
@@ -157,17 +151,7 @@ public class WorkflowMultiInstanceGroupTransitionService
         String sourceTaskId = plan.runtime().sourceTaskId();
         roundRepository.compareAndSetReturned(plan.round(), sourceTaskId,
                 actorUserId, applicantTaskId);
-        MultiInstanceRoundSnapshot returned = roundRepository.findByRootExecutionId(
-                plan.round().rootExecutionId());
-        if (returned.status() != WorkflowMultiInstanceRoundStatus.RETURNED
-                || !Objects.equals(returned.returnSourceTaskId(), sourceTaskId)
-                || !Objects.equals(returned.returnActorUserId(), actorUserId)
-                || !Objects.equals(returned.applicantTaskId(), applicantTaskId)
-                || returned.returnTime() == null || !plan.round().sameRoundFacts(returned))
-        {
-            throw dataError();
-        }
-        return new GroupReturnResult(applicantTaskId, returned);
+        return new GroupReturnResult(applicantTaskId);
     }
 
     /**
@@ -249,10 +233,10 @@ public class WorkflowMultiInstanceGroupTransitionService
     }
 
     /**
-     * 原子完成旧轮 CAS、running 状态恢复、完整审批组重建、SLA 和写后对账。
+     * 原子完成旧轮 CAS、running 状态恢复、完整审批组重建和 SLA。
      * @param plan MultiInstanceGroupReopenPlan，重提前冻结计划
      * @param actorUserId String，已核验流程发起人主键
-     * @return GroupReopenResult，旧轮、新轮、新根和按成员顺序任务主键
+     * @return GroupReopenResult，新根和按成员顺序排列的新任务主键
      */
     public GroupReopenResult reopenGroup(MultiInstanceGroupReopenPlan plan,
             String actorUserId)
@@ -264,19 +248,6 @@ public class WorkflowMultiInstanceGroupTransitionService
         }
         MultiInstanceRoundSnapshot source = plan.round();
         roundRepository.compareAndSetReopened(source);
-        MultiInstanceRoundSnapshot reopened = roundRepository.findByRootExecutionId(
-                source.rootExecutionId());
-        if (reopened.status() != WorkflowMultiInstanceRoundStatus.REOPENED
-                || reopened.reopenTime() == null || !source.sameRoundFacts(reopened)
-                || !Objects.equals(source.returnSourceTaskId(),
-                        reopened.returnSourceTaskId())
-                || !Objects.equals(source.returnActorUserId(),
-                        reopened.returnActorUserId())
-                || !Objects.equals(source.applicantTaskId(),
-                        reopened.applicantTaskId()))
-        {
-            throw dataError();
-        }
 
         // 旧轮成功关闭后再清理 returned 标记，避免并发重提在轮次 CAS 前暴露 running 状态。
         returnedTaskStateService.prepareGroupRunning(plan.application().taskId(),
@@ -292,18 +263,12 @@ public class WorkflowMultiInstanceGroupTransitionService
                     plan.round().processInstanceId(),
                     List.of(plan.application().taskId()), actorUserId,
                     WorkflowTaskSlaRuntimeService.ControlledWithdrawal.GROUP_RESUBMIT);
-            GroupReopenResult result = requireReopenedGroup(plan, reopened);
-            MultiInstanceTransitionResult observed =
-                    transitionCoordinator.requireReopenCompleted(scope,
-                            result.newRootExecutionId(),
-                            plan.application().sourceKind()
-                                    == ReturnedApplicationSnapshot.SourceKind
-                                            .TEMPORARY_MULTI_INSTANCE_ROOT);
-            if (!observed.collectionResolved()
-                    || observed.reopenedTaskCount() != plan.round().members().size())
-            {
-                throw dataError();
-            }
+            GroupReopenResult result = requireReopenedGroup(plan, source);
+            transitionCoordinator.requireReopenCompleted(scope,
+                    result.newRootExecutionId(),
+                    plan.application().sourceKind()
+                            == ReturnedApplicationSnapshot.SourceKind
+                                    .TEMPORARY_MULTI_INSTANCE_ROOT);
             return result;
         }
     }
@@ -311,12 +276,12 @@ public class WorkflowMultiInstanceGroupTransitionService
     /**
      * 核验旧轮、新轮、实时根、成员顺序和 Flowable 计数。
      * @param plan MultiInstanceGroupReopenPlan，重建计划
-     * @param reopenedRound MultiInstanceRoundSnapshot，REOPENED 旧轮
-     * @return GroupReopenResult，完整不可变写后事实
+     * @param sourceRound MultiInstanceRoundSnapshot，CAS 前冻结的 RETURNED 旧轮
+     * @return GroupReopenResult，后续通知所需的新根和任务主键
      */
     private GroupReopenResult requireReopenedGroup(
             MultiInstanceGroupReopenPlan plan,
-            MultiInstanceRoundSnapshot reopenedRound)
+            MultiInstanceRoundSnapshot sourceRound)
     {
         List<MultiInstanceRoundSnapshot> activeRows = roundRepository.findActive(
                 plan.round().processInstanceId(), plan.round().activityId());
@@ -326,11 +291,11 @@ public class WorkflowMultiInstanceGroupTransitionService
         }
         MultiInstanceRoundSnapshot newRound = activeRows.get(0);
         if (newRound.status() != WorkflowMultiInstanceRoundStatus.ACTIVE
-                || newRound.roundNo() != reopenedRound.roundNo() + 1
-                || newRound.rootExecutionId().equals(reopenedRound.rootExecutionId())
+                || newRound.roundNo() != sourceRound.roundNo() + 1
+                || newRound.rootExecutionId().equals(sourceRound.rootExecutionId())
                 || newRound.rootExecutionId().equals(
                         plan.application().sourceExecutionId())
-                || !reopenedRound.sameReopenFacts(newRound)
+                || !sourceRound.sameReopenFacts(newRound)
                 || !newRound.members().equals(plan.round().members()))
         {
             throw dataError();
@@ -361,8 +326,8 @@ public class WorkflowMultiInstanceGroupTransitionService
         {
             throw dataError();
         }
-        return new GroupReopenResult(reopenedRound, newRound,
-                newRound.rootExecutionId(), plan.round().members().stream()
+        return new GroupReopenResult(newRound.rootExecutionId(),
+                plan.round().members().stream()
                         .map(taskByAssignee::get).toList());
     }
 
@@ -444,24 +409,19 @@ public class WorkflowMultiInstanceGroupTransitionService
     }
 
     /**
-     * 整组退回 CAS 和写后对账结果。
+     * 整组退回后续通知所需结果。
      * @param applicantTaskId String，唯一申请人任务主键
-     * @param returnedRound MultiInstanceRoundSnapshot，RETURNED 旧轮
      */
-    public record GroupReturnResult(String applicantTaskId,
-            MultiInstanceRoundSnapshot returnedRound)
+    public record GroupReturnResult(String applicantTaskId)
     {
     }
 
     /**
      * 整组重建后的完整不可变结果。
-     * @param reopenedRound MultiInstanceRoundSnapshot，REOPENED 旧轮
-     * @param activeRound MultiInstanceRoundSnapshot，新 ACTIVE 轮
      * @param newRootExecutionId String，新多实例根 execution 主键
      * @param activeTaskIds List&lt;String&gt;，按冻结成员顺序排列的新任务主键
      */
-    public record GroupReopenResult(MultiInstanceRoundSnapshot reopenedRound,
-            MultiInstanceRoundSnapshot activeRound, String newRootExecutionId,
+    public record GroupReopenResult(String newRootExecutionId,
             List<String> activeTaskIds)
     {
         /** @return 无返回值，构造时冻结任务主键列表。 */

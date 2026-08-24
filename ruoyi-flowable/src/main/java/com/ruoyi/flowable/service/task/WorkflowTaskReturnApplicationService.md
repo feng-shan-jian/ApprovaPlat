@@ -7,7 +7,7 @@
 ## 路由边界
 
 - 普通串行任务：服务端确定真实首审批节点，由 `WorkflowReturnedTaskStateService` 冻结 BPMN 生成的办理配置，迁移为唯一申请人任务，并维护 `returned` 双状态。
-- 受控多实例：取得 `MultiInstanceGroupReturnPlan`，单次调用迁移服务原子完成执行树、退回双状态、轮次 CAS、SLA 和写后对账；本应用服务只编排审计、抄送和通知。
+- 受控多实例：取得 `MultiInstanceGroupReturnPlan`，单次调用迁移服务原子完成执行树、退回双状态、轮次 CAS 和 SLA；本应用服务只复用返回的申请人任务主键编排审计、抄送和通知。
 
 ## 退回写链
 

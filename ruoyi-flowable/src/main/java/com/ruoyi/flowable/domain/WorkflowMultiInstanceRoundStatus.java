@@ -1,7 +1,5 @@
 package com.ruoyi.flowable.domain;
 
-import java.util.Objects;
-
 /**
  * 多实例轮次的可持久化生命周期状态。
  */
@@ -55,50 +53,4 @@ public enum WorkflowMultiInstanceRoundStatus
         return this == ACTIVE || this == RETURNED;
     }
 
-    /**
-     * 判断当前状态是否已终态关闭。
-     *
-     * @return boolean，REOPENED、COMPLETED 或 TERMINATED 时返回 true
-     */
-    public boolean isTerminal()
-    {
-        return this == REOPENED || this == COMPLETED || this == TERMINATED;
-    }
-
-    /**
-     * 判断是否允许执行指定的真实生命周期跳转。
-     *
-     * @param target WorkflowMultiInstanceRoundStatus，目标状态
-     * @return boolean，仅 ACTIVE→RETURNED/COMPLETED/TERMINATED 或
-     *         RETURNED→REOPENED/TERMINATED 返回 true
-     */
-    public boolean canTransitionTo(WorkflowMultiInstanceRoundStatus target)
-    {
-        if (target == null)
-        {
-            return false;
-        }
-        return (this == ACTIVE && (target == RETURNED || target == COMPLETED
-                || target == TERMINATED))
-                || (this == RETURNED && (target == REOPENED
-                        || target == TERMINATED));
-    }
-
-    /**
-     * 校验并返回允许的目标状态，让调用方在写库前失败关闭。
-     *
-     * @param target WorkflowMultiInstanceRoundStatus，准备写入的目标状态
-     * @return WorkflowMultiInstanceRoundStatus，通过校验的目标状态
-     */
-    public WorkflowMultiInstanceRoundStatus requireTransitionTo(
-            WorkflowMultiInstanceRoundStatus target)
-    {
-        Objects.requireNonNull(target, "多实例轮次目标状态不能为空");
-        if (!canTransitionTo(target))
-        {
-            throw new IllegalStateException("多实例轮次状态不允许从 " + this
-                    + " 跳转到 " + target);
-        }
-        return target;
-    }
 }

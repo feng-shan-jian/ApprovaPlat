@@ -75,8 +75,7 @@ class WorkflowTaskRevokeApplicationServiceIntegrationTest
                 new WorkflowTaskBpmnReader(processEngine.getRepositoryService()),
                 new WorkflowTaskMovementPolicy(),
                 new WorkflowTaskActionAuditWriter(taskService),
-                new WorkflowTaskConcurrencyExecutor(), runtimeService, taskService,
-                processEngine.getHistoryService());
+                new WorkflowTaskConcurrencyExecutor(), runtimeService, taskService);
     }
 
     /** 关闭真实引擎。 @return void，无返回值 */

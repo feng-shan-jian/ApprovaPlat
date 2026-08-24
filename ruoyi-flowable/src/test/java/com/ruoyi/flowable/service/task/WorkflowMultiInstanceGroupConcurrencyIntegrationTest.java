@@ -176,7 +176,7 @@ class WorkflowMultiInstanceGroupConcurrencyIntegrationTest
                 "firstAllReturnStart", "firstAllReview", members);
         Task returnSource = fixture.task(instance.getId(), "firstAllReview", "201");
         Task adjustmentSource = fixture.task(instance.getId(), "firstAllReview", "202");
-        synchronizeFirstTwoActiveRoundReads();
+        synchronizeFirstTwoOpenRoundReads();
 
         List<Throwable> results = runRace(
                 () -> invokeReturn(returnSource, "201"),
@@ -211,7 +211,7 @@ class WorkflowMultiInstanceGroupConcurrencyIntegrationTest
         Task returnSource = fixture.task(instance.getId(), "firstAllReview", "201");
         Task adjustmentSource = fixture.task(instance.getId(), "firstAllReview", "202");
         Task removalTarget = fixture.task(instance.getId(), "firstAllReview", "203");
-        synchronizeFirstTwoActiveRoundReads();
+        synchronizeFirstTwoOpenRoundReads();
 
         List<Throwable> results = runRace(
                 () -> invokeReturn(returnSource, "201"),
@@ -453,11 +453,11 @@ class WorkflowMultiInstanceGroupConcurrencyIntegrationTest
     }
 
     /**
-     * 在两个动作首次读取正式 ACTIVE 轮次时同步放行，随后所有查询继续执行真实 Mapper SQL。
+     * 在两个动作首次读取正式 OPEN 轮次时同步放行，随后所有查询继续执行真实 Mapper SQL。
      *
      * @return void，无返回值；仅前两次读取参与屏障，监听器写后查询不会再次等待
      */
-    private void synchronizeFirstTwoActiveRoundReads()
+    private void synchronizeFirstTwoOpenRoundReads()
     {
         CyclicBarrier barrier = new CyclicBarrier(2);
         AtomicInteger calls = new AtomicInteger();
@@ -467,9 +467,9 @@ class WorkflowMultiInstanceGroupConcurrencyIntegrationTest
             {
                 barrier.await(10, TimeUnit.SECONDS);
             }
-            return fixture.roundMapperDelegate.selectActiveByProcessInstanceAndActivity(
+            return fixture.roundMapperDelegate.selectOpenByProcessInstanceAndActivity(
                     invocation.getArgument(0), invocation.getArgument(1));
-        }).when(fixture.roundMapper).selectActiveByProcessInstanceAndActivity(
+        }).when(fixture.roundMapper).selectOpenByProcessInstanceAndActivity(
                 anyString(), anyString());
     }
 
