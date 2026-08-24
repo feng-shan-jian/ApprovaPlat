@@ -706,11 +706,41 @@ function durationText(value) {
   return `${seconds}秒`
 }
 
+// hasActivatedOnce 表示 KeepAlive 首次 activated 已经发生；首次挂载只登记，不重复发起列表查询。
+let hasActivatedOnce = false
+// initialListLoaded 表示首次分类和业务列表均已结束，供后续重新激活决定立即刷新或延迟刷新。
+let initialListLoaded = false
+// pendingActivatedRefresh 表示初始化尚未结束时发生了第二次及后续激活，结束后必须补做一次真实查询。
+let pendingActivatedRefresh = false
 Promise.all([
   loadCategories(),
   loadList(),
   ...(props.mode === 'manage' ? [searchManagedUsers('')] : [])
-])
+]).finally(() => {
+  initialListLoaded = true
+  if (pendingActivatedRefresh) {
+    pendingActivatedRefresh = false
+    loadList()
+  }
+})
+
+/**
+ * 从详情页返回并重新激活缓存列表时回读服务端状态。
+ * @returns {Promise<void>} 首次激活直接返回；后续激活刷新当前分页或登记延迟刷新。
+ */
+async function refreshActivatedList() {
+  if (!hasActivatedOnce) {
+    hasActivatedOnce = true
+    return
+  }
+  if (!initialListLoaded) {
+    pendingActivatedRefresh = true
+    return
+  }
+  await loadList()
+}
+
+onActivated(refreshActivatedList)
 </script>
 
 <style scoped>
