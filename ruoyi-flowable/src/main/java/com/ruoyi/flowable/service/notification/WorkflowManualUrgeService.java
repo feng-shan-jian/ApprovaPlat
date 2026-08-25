@@ -119,12 +119,12 @@ public class WorkflowManualUrgeService
             for (Map.Entry<LockedTask, Set<String>> entry : recipientsByTask.entrySet())
             {
                 LockedTask task = entry.getKey();
-                WorkflowManualUrgeRegistrationResult result = notificationService.registerManualUrge(
+                Set<String> recipientUserIds = notificationService.registerManualUrge(
                         new WorkflowManualUrgeRegistration(task.processDefinitionId(),
                                 task.processInstanceId(), process.startUserId(), task.taskId(),
                                 task.taskDefinitionKey(), task.taskName(), actor.userId(),
                                 entry.getValue(), urgeEventKey + ":" + task.taskId(), reason));
-                deliveredRecipients.addAll(result.recipientUserIds());
+                deliveredRecipients.addAll(recipientUserIds);
             }
             // 成功标准以 Writer 返回的真实可登记接收人为准，INBOX 已不再经过 Outbox。
             if (deliveredRecipients.isEmpty())
