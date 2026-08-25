@@ -37,6 +37,7 @@ import org.flowable.engine.HistoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.delegate.TaskListener;
+import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.spring.SpringProcessEngineConfiguration;
 import org.flowable.task.api.Task;
 import org.flowable.task.service.delegate.DelegateTask;
@@ -206,8 +207,7 @@ class WorkflowNotificationPipelineMySqlIT
                         smtpUsername, smtpCredential))
         {
             saveTestMailConfiguration(receiver.port());
-            NotificationPlan deliveredPlan = planner.plan(notificationRequest(
-                    deliveredSourceId));
+            NotificationPlan deliveredPlan = planTaskEvent(deliveredSourceId);
 
             WorkflowNotificationWriter.WriteResult firstWrite = write(deliveredPlan);
             WorkflowNotificationWriter.WriteResult duplicateWrite = write(deliveredPlan);
@@ -257,8 +257,7 @@ class WorkflowNotificationPipelineMySqlIT
             assertStoredCredentialIsEncrypted();
         }
 
-        NotificationPlan deadLetterPlan = planner.plan(notificationRequest(
-                deadLetterSourceId));
+        NotificationPlan deadLetterPlan = planTaskEvent(deadLetterSourceId);
         assertThat(write(deadLetterPlan).channelRecordCount()).isEqualTo(2);
         OutboxState deadLetterPending = loadOutbox(deadLetterSourceId);
         forceDeadLetter(deadLetterPending.outboxId());
@@ -589,14 +588,33 @@ class WorkflowNotificationPipelineMySqlIT
     private WorkflowNotificationPlanner.NotificationRequest notificationRequest(
             String sourceId)
     {
-        return new WorkflowNotificationPlanner.NotificationRequest(EVENT_TYPE, sourceId,
-                processDefinitionKey, "Pipeline 审批", processInstanceId, taskId,
-                taskDefinitionKey, "Pipeline 审批节点", null,
-                Set.of(String.valueOf(testUserId)), String.valueOf(testUserId), false,
-                null, false,
+        ProcessDefinition definition = mock(ProcessDefinition.class);
+        when(definition.getKey()).thenReturn(processDefinitionKey);
+        when(definition.getName()).thenReturn("Pipeline 审批");
+        return WorkflowNotificationPlanner.NotificationRequest.taskEvent(EVENT_TYPE,
+                sourceId, definition, processInstanceId, taskId, taskDefinitionKey,
+                "Pipeline 审批节点", null, Set.of(String.valueOf(testUserId)),
                 "/workflow/process-detail/" + processInstanceId
-                        + "?source=todo&taskId=" + taskId,
-                null);
+                        + "?source=todo&taskId=" + taskId);
+    }
+
+    /**
+     * 在与生产任务监听一致的 Flowable 认证上下文中生成任务通知计划。
+     *
+     * @param sourceId String，当前业务事实的唯一来源键
+     * @return NotificationPlan，已冻结操作者审计字段的生产规划结果
+     */
+    private NotificationPlan planTaskEvent(String sourceId)
+    {
+        Authentication.setAuthenticatedUserId(String.valueOf(testUserId));
+        try
+        {
+            return planner.plan(notificationRequest(sourceId));
+        }
+        finally
+        {
+            Authentication.setAuthenticatedUserId(null);
+        }
     }
 
     /**

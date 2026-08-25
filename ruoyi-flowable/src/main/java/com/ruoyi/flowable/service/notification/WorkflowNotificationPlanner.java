@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -99,26 +100,26 @@ public class WorkflowNotificationPlanner
         for (NotificationRequest original : requests)
         {
             NotificationRequest request = validateRequest(original);
-            PolicyKey policyKey = new PolicyKey(request.eventType(),
-                    request.processDefinitionKey(), request.taskDefinitionKey());
+            PolicyKey policyKey = new PolicyKey(request.eventType,
+                    request.processDefinitionKey, request.taskDefinitionKey);
             Policy policy = policies.computeIfAbsent(policyKey, this::loadPolicy);
             if (policy == null) continue;
 
             Set<String> recipients = resolveRecipients(policy, request);
             if (recipients.isEmpty()) continue;
             Map<String, String> variables = Map.of(
-                    "processName", safe(request.processName()),
-                    "processDefinitionKey", request.processDefinitionKey(),
-                    "processInstanceId", request.processInstanceId(),
-                    "taskName", safe(request.taskName()),
-                    "taskDefinitionKey", safe(request.taskDefinitionKey()),
-                    "eventType", request.eventType());
+                    "processName", safe(request.processName),
+                    "processDefinitionKey", request.processDefinitionKey,
+                    "processInstanceId", request.processInstanceId,
+                    "taskName", safe(request.taskName),
+                    "taskDefinitionKey", safe(request.taskDefinitionKey),
+                    "eventType", request.eventType);
             String title = truncate(render(policy.titleTemplate(), variables), MAX_TITLE_LENGTH);
             String content = render(policy.contentTemplate(), variables);
-            if (StringUtils.hasText(request.contentSuffix()))
+            if (StringUtils.hasText(request.contentSuffix))
             {
                 // 催办原因先与完整模板结果拼接，随后统一执行一次最终字段截断。
-                content += request.contentSuffix();
+                content += request.contentSuffix;
             }
             content = truncate(content, MAX_CONTENT_LENGTH);
             events.add(new PlannedEvent(request, policy, recipients, title, content));
@@ -139,11 +140,11 @@ public class WorkflowNotificationPlanner
                 Set<String> channels = effectiveChannels(event.policy(), preference);
                 if (channels.isEmpty()) continue;
                 notifications.add(new NotificationPlan.Notification("APPROVAL",
-                        request.sourceId(), request.eventType(), recipient,
-                        request.processDefinitionKey(), request.processInstanceId(),
-                        request.taskId(), request.taskDefinitionKey(),
+                        request.sourceId, request.eventType, recipient,
+                        request.processDefinitionKey, request.processInstanceId,
+                        request.taskId, request.taskDefinitionKey,
                         actorUserId, event.title(), event.content(),
-                        event.policy().smsTemplateId(), request.routePath(), channels,
+                        event.policy().smsTemplateId(), request.routePath, channels,
                         event.policy().maxAttempts()));
             }
         }
@@ -170,7 +171,7 @@ public class WorkflowNotificationPlanner
             CopyIdentity identity = new CopyIdentity(copy.getCopyEventId().trim(),
                     String.valueOf(copy.getUserId()));
             NotificationRequest previous = requests.putIfAbsent(identity, request);
-            if (previous != null && !previous.equals(request))
+            if (previous != null && !previous.hasSameContent(request))
             {
                 throw new ServiceException("抄送通知事实身份冲突", HttpStatus.ERROR);
             }
@@ -199,19 +200,7 @@ public class WorkflowNotificationPlanner
         {
             throw new ServiceException("抄送流程定义不存在", HttpStatus.ERROR);
         }
-        String processInstanceId = normalized(copy.getInstanceId(), 64,
-                "抄送流程实例主键不合法");
-        String taskId = optional(copy.getTaskId(), 64);
-        String route = "/workflow/process-detail/" + processInstanceId + "?source=copy"
-                + (taskId == null ? "" : "&taskId=" + taskId);
-        return new NotificationRequest("COPY_CREATED",
-                normalizedSourceId("COPY:" + copyEventId + ":" + copy.getUserId()),
-                normalized(definition.getKey(), 255, "抄送流程定义标识不合法"),
-                normalized(copy.getProcessName(), 255, "抄送流程名称不合法"),
-                processInstanceId, taskId, null,
-                normalized(copy.getTitle(), 255, "抄送标题不合法"), null,
-                Set.of(String.valueOf(copy.getUserId())), optional(copy.getCreateBy(), 64),
-                false, null, false, route, null);
+        return NotificationRequest.copyCreated(copy, definition, copyEventId);
     }
 
     /**
@@ -286,24 +275,24 @@ public class WorkflowNotificationPlanner
         {
             if ("TASK_RECIPIENT".equals(rule))
             {
-                Set<String> taskRecipients = request.task() == null
-                        ? canonicalUserIds(request.taskRecipientUserIds())
-                        : resolveTaskRecipients(request.task());
+                Set<String> taskRecipients = request.task == null
+                        ? canonicalUserIds(request.taskRecipientUserIds)
+                        : resolveTaskRecipients(request.task);
                 recipients.addAll(taskRecipients);
             }
             if ("INITIATOR".equals(rule))
             {
-                String initiator = StringUtils.hasText(request.initiatorUserId())
-                        ? request.initiatorUserId()
-                        : (request.resolveInitiatorFromProcess()
-                                ? processInitiator(request.processInstanceId()) : null);
+                String initiator = StringUtils.hasText(request.initiatorUserId)
+                        ? request.initiatorUserId
+                        : (request.identityContext == IdentityContext.FLOWABLE_CONTEXT
+                                ? processInitiator(request.processInstanceId) : null);
                 if (StringUtils.hasText(initiator)) recipients.add(initiator);
             }
             if ("ACTOR".equals(rule))
             {
-                String actor = StringUtils.hasText(request.actorUserId())
-                        ? request.actorUserId()
-                        : (request.resolveActorFromAuthentication()
+                String actor = StringUtils.hasText(request.actorUserId)
+                        ? request.actorUserId
+                        : (request.identityContext == IdentityContext.FLOWABLE_CONTEXT
                                 ? Authentication.getAuthenticatedUserId() : null);
                 if (StringUtils.hasText(actor)) recipients.add(actor);
             }
@@ -430,8 +419,8 @@ public class WorkflowNotificationPlanner
      */
     private String resolvedActor(NotificationRequest request)
     {
-        String actor = StringUtils.hasText(request.actorUserId()) ? request.actorUserId()
-                : (request.resolveActorFromAuthentication()
+        String actor = StringUtils.hasText(request.actorUserId) ? request.actorUserId
+                : (request.identityContext == IdentityContext.FLOWABLE_CONTEXT
                         ? Authentication.getAuthenticatedUserId() : null);
         return optional(actor, 64);
     }
@@ -447,23 +436,23 @@ public class WorkflowNotificationPlanner
         {
             throw new ServiceException("通知规划请求不能为空", HttpStatus.ERROR);
         }
-        String eventType = upper(request.eventType());
+        String eventType = upper(request.eventType);
         if (!WorkflowNotificationConstants.EVENT_TYPES.contains(eventType))
         {
             throw invalid("通知事件类型不受支持");
         }
-        return new NotificationRequest(eventType, normalizedSourceId(request.sourceId()),
-                normalized(request.processDefinitionKey(), 255, "流程定义标识不合法"),
-                optional(request.processName(), 255),
-                normalized(request.processInstanceId(), 64, "流程实例主键不合法"),
-                optional(request.taskId(), 64), optional(request.taskDefinitionKey(), 255),
-                optional(request.taskName(), 255), request.task(),
-                request.taskRecipientUserIds() == null ? Set.of()
-                        : immutableLinkedSet(request.taskRecipientUserIds()),
-                optional(request.actorUserId(), 64), request.resolveActorFromAuthentication(),
-                optional(request.initiatorUserId(), 64), request.resolveInitiatorFromProcess(),
-                normalized(request.routePath(), 500, "通知业务路由不合法"),
-                request.contentSuffix());
+        return new NotificationRequest(eventType, normalizedSourceId(request.sourceId),
+                normalized(request.processDefinitionKey, 255, "流程定义标识不合法"),
+                optional(request.processName, 255),
+                normalized(request.processInstanceId, 64, "流程实例主键不合法"),
+                optional(request.taskId, 64), optional(request.taskDefinitionKey, 255),
+                optional(request.taskName, 255), request.task,
+                request.taskRecipientUserIds == null ? Set.of()
+                        : immutableLinkedSet(request.taskRecipientUserIds),
+                optional(request.actorUserId, 64), optional(request.initiatorUserId, 64),
+                request.identityContext,
+                normalized(request.routePath, 500, "通知业务路由不合法"),
+                request.contentSuffix);
     }
 
     /**
@@ -559,7 +548,7 @@ public class WorkflowNotificationPlanner
      * @param message String，稳定错误提示
      * @return String，去除首尾空白的合法文本
      */
-    private String normalized(String value, int max, String message)
+    private static String normalized(String value, int max, String message)
     {
         if (!StringUtils.hasText(value)) throw invalid(message);
         String normalized = value.trim();
@@ -574,7 +563,7 @@ public class WorkflowNotificationPlanner
      * @param max int，最大长度
      * @return String，规范值；无内容时为 null
      */
-    private String optional(String value, int max)
+    private static String optional(String value, int max)
     {
         return StringUtils.hasText(value) ? normalized(value, max, "通知上下文字段不合法") : null;
     }
@@ -584,7 +573,7 @@ public class WorkflowNotificationPlanner
      * @param value String，业务来源键
      * @return String，可写入 ascii_bin 字段的来源键
      */
-    private String normalizedSourceId(String value)
+    private static String normalizedSourceId(String value)
     {
         String sourceId = normalized(value, 191, "通知来源标识不合法");
         if (sourceId.chars().anyMatch(character -> character < 0x21 || character > 0x7e))
@@ -617,38 +606,217 @@ public class WorkflowNotificationPlanner
      * @param message String，稳定错误提示
      * @return ServiceException，参数异常
      */
-    private ServiceException invalid(String message)
+    private static ServiceException invalid(String message)
     {
         return new ServiceException(message, HttpStatus.BAD_REQUEST);
     }
 
     /**
-     * Service 交给 Planner 的流程、任务和身份上下文。
-     *
-     * @param eventType String，通知事件类型
-     * @param sourceId String，稳定业务来源键
-     * @param processDefinitionKey String，流程定义 key
-     * @param processName String，流程名称快照
-     * @param processInstanceId String，流程实例主键
-     * @param taskId String，可空任务主键
-     * @param taskDefinitionKey String，可空任务节点 key
-     * @param taskName String，可空任务名称
-     * @param task Task，可空真实任务；非空时由 Planner 解析候选关系
-     * @param taskRecipientUserIds Set&lt;String&gt;，无 Task 对象时的冻结任务接收人
-     * @param actorUserId String，可空显式操作者
-     * @param resolveActorFromAuthentication boolean，是否从当前 Flowable 认证解析操作者
-     * @param initiatorUserId String，可空显式发起人
-     * @param resolveInitiatorFromProcess boolean，是否从流程实例解析发起人
-     * @param routePath String，业务详情相对路由
-     * @param contentSuffix String，可空最终正文后缀，仅用于催办原因
+     * 身份解析上下文由有名工厂固定，调用方不能用布尔标志拼装操作者和发起人来源。
      */
-    public record NotificationRequest(String eventType, String sourceId,
-            String processDefinitionKey, String processName, String processInstanceId,
-            String taskId, String taskDefinitionKey, String taskName, Task task,
-            Set<String> taskRecipientUserIds, String actorUserId,
-            boolean resolveActorFromAuthentication, String initiatorUserId,
-            boolean resolveInitiatorFromProcess, String routePath, String contentSuffix)
+    private enum IdentityContext
     {
+        /** 任务事件和流程结果在规划时读取当前 Flowable 认证及流程发起人。 */
+        FLOWABLE_CONTEXT,
+        /** 催办和抄送只使用业务服务已冻结的显式身份。 */
+        FROZEN_CONTEXT
+    }
+
+    /**
+     * Service 交给 Planner 的单一不可变规划请求。
+     *
+     * <p>构造器保持私有，四个有名工厂分别固化任务事件、流程结果、人工催办和
+     * 抄送创建的合法字段组合，避免调用方依赖参数顺序或身份解析标志。</p>
+     */
+    public static final class NotificationRequest
+    {
+        /** 策略匹配使用的稳定通知事件类型。 */
+        private final String eventType;
+        /** Inbox/Outbox 幂等约束使用的稳定业务来源键。 */
+        private final String sourceId;
+        /** 策略作用域匹配使用的流程定义 key。 */
+        private final String processDefinitionKey;
+        /** 模板渲染使用的流程名称快照。 */
+        private final String processName;
+        /** 通知归属的流程实例主键。 */
+        private final String processInstanceId;
+        /** 可空任务主键。 */
+        private final String taskId;
+        /** 可空 BPMN 任务节点 key。 */
+        private final String taskDefinitionKey;
+        /** 可空任务名称快照。 */
+        private final String taskName;
+        /** 可空真实任务；存在时由 Planner 解析当前办理人与候选关系。 */
+        private final Task task;
+        /** 无真实 Task 时由业务服务冻结的任务接收人。 */
+        private final Set<String> taskRecipientUserIds;
+        /** 可空显式操作者；冻结身份事件不得回退到认证上下文。 */
+        private final String actorUserId;
+        /** 可空显式发起人；冻结身份事件不得回退到流程查询。 */
+        private final String initiatorUserId;
+        /** 工厂固定的身份来源语义，不向调用方暴露控制标志。 */
+        private final IdentityContext identityContext;
+        /** 用户打开业务详情时使用的站内相对路由。 */
+        private final String routePath;
+        /** 可空最终正文后缀，仅人工催办携带已校验原因。 */
+        private final String contentSuffix;
+
+        /**
+         * 构造已确定身份来源的不可变规划请求；仅允许有名工厂和 Planner 校验流程调用。
+         * @param eventType String，通知事件类型
+         * @param sourceId String，稳定业务来源键
+         * @param processDefinitionKey String，流程定义 key
+         * @param processName String，流程名称快照
+         * @param processInstanceId String，流程实例主键
+         * @param taskId String，可空任务主键
+         * @param taskDefinitionKey String，可空任务节点 key
+         * @param taskName String，可空任务名称
+         * @param task Task，可空真实任务
+         * @param taskRecipientUserIds Set&lt;String&gt;，无 Task 时的冻结任务接收人
+         * @param actorUserId String，可空显式操作者
+         * @param initiatorUserId String，可空显式发起人
+         * @param identityContext IdentityContext，工厂固定的身份解析语义
+         * @param routePath String，业务详情相对路由
+         * @param contentSuffix String，可空正文后缀
+         * @return void，构造结果仅在当前规划协议内部使用
+         */
+        private NotificationRequest(String eventType, String sourceId,
+                String processDefinitionKey, String processName, String processInstanceId,
+                String taskId, String taskDefinitionKey, String taskName, Task task,
+                Set<String> taskRecipientUserIds, String actorUserId,
+                String initiatorUserId, IdentityContext identityContext, String routePath,
+                String contentSuffix)
+        {
+            this.eventType = eventType;
+            this.sourceId = sourceId;
+            this.processDefinitionKey = processDefinitionKey;
+            this.processName = processName;
+            this.processInstanceId = processInstanceId;
+            this.taskId = taskId;
+            this.taskDefinitionKey = taskDefinitionKey;
+            this.taskName = taskName;
+            this.task = task;
+            this.taskRecipientUserIds = taskRecipientUserIds == null ? null
+                    : Collections.unmodifiableSet(new LinkedHashSet<>(taskRecipientUserIds));
+            this.actorUserId = actorUserId;
+            this.initiatorUserId = initiatorUserId;
+            this.identityContext = Objects.requireNonNull(identityContext,
+                    "通知身份上下文不能为空");
+            this.routePath = routePath;
+            this.contentSuffix = contentSuffix;
+        }
+
+        /**
+         * 构造任务到达、完成、受控退回/重提或稳定归属动作的规划请求。
+         * @param eventType String，受支持的任务通知事件类型
+         * @param sourceId String，任务事实及 revision 派生的稳定来源键
+         * @param definition ProcessDefinition，已确认存在的流程定义事实
+         * @param processInstanceId String，任务所属流程实例主键
+         * @param taskId String，任务主键
+         * @param taskDefinitionKey String，BPMN 节点 key
+         * @param taskName String，任务名称快照
+         * @param task Task，可空真实活动任务
+         * @param taskRecipientUserIds Set&lt;String&gt;，Task 不存在时的冻结接收人
+         * @param routePath String，待办业务详情相对路由
+         * @return NotificationRequest，身份来源固定为当前 Flowable 上下文的请求
+         */
+        public static NotificationRequest taskEvent(String eventType, String sourceId,
+                ProcessDefinition definition, String processInstanceId, String taskId,
+                String taskDefinitionKey, String taskName, Task task,
+                Set<String> taskRecipientUserIds, String routePath)
+        {
+            return new NotificationRequest(eventType, sourceId, definition.getKey(),
+                    definition.getName(), processInstanceId, taskId, taskDefinitionKey,
+                    taskName, task, taskRecipientUserIds, null, null,
+                    IdentityContext.FLOWABLE_CONTEXT, routePath, null);
+        }
+
+        /**
+         * 构造流程自然完成、取消、拒绝或终止的结果通知请求。
+         * @param eventType String，受支持的流程结果事件类型
+         * @param sourceId String，流程实例和结果事件派生的稳定来源键
+         * @param definition ProcessDefinition，已确认存在的流程定义事实
+         * @param processInstanceId String，已经结束或即将结束的流程实例主键
+         * @param routePath String，已办业务详情相对路由
+         * @return NotificationRequest，身份来源固定为当前 Flowable 上下文的请求
+         */
+        public static NotificationRequest processResult(String eventType, String sourceId,
+                ProcessDefinition definition, String processInstanceId, String routePath)
+        {
+            return new NotificationRequest(eventType, sourceId, definition.getKey(),
+                    definition.getName(), processInstanceId, null, null, null, null,
+                    Set.of(), null, null, IdentityContext.FLOWABLE_CONTEXT, routePath, null);
+        }
+
+        /**
+         * 构造权限、任务状态和接收人均已由人工催办服务冻结的通知请求。
+         * @param sourceId String，人工催办服务生成并校验的稳定来源键
+         * @param definition ProcessDefinition，已确认存在的流程定义事实
+         * @param registration WorkflowManualUrgeRegistration，已锁定的催办业务事实
+         * @param routePath String，催办任务详情相对路由
+         * @param contentSuffix String，包含已校验催办原因的正文后缀
+         * @return NotificationRequest，只使用 registration 显式身份的请求
+         */
+        public static NotificationRequest manualUrge(String sourceId,
+                ProcessDefinition definition, WorkflowManualUrgeRegistration registration,
+                String routePath, String contentSuffix)
+        {
+            return new NotificationRequest("MANUAL_URGE", sourceId, definition.getKey(),
+                    definition.getName(), registration.processInstanceId(),
+                    registration.taskId(), registration.taskDefinitionKey(),
+                    registration.taskName(), null, registration.recipientUserIds(),
+                    registration.actorUserId(), registration.startUserId(),
+                    IdentityContext.FROZEN_CONTEXT, routePath, contentSuffix);
+        }
+
+        /**
+         * 构造直接消费已持久化 WfCopy 事实的抄送创建通知请求。
+         * @param copy WfCopy，当前事务内已经冻结的有效抄送事实
+         * @param definition ProcessDefinition，抄送事实引用的流程定义
+         * @param copyEventId String，已校验的抄送业务事件幂等键
+         * @return NotificationRequest，只使用抄送创建人且不解析流程发起人的请求
+         */
+        public static NotificationRequest copyCreated(WfCopy copy,
+                ProcessDefinition definition, String copyEventId)
+        {
+            String processInstanceId = normalized(copy.getInstanceId(), 64,
+                    "抄送流程实例主键不合法");
+            String taskId = optional(copy.getTaskId(), 64);
+            String routePath = "/workflow/process-detail/" + processInstanceId + "?source=copy"
+                    + (taskId == null ? "" : "&taskId=" + taskId);
+            return new NotificationRequest("COPY_CREATED",
+                    normalizedSourceId("COPY:" + copyEventId + ":" + copy.getUserId()),
+                    normalized(definition.getKey(), 255, "抄送流程定义标识不合法"),
+                    normalized(copy.getProcessName(), 255, "抄送流程名称不合法"),
+                    processInstanceId, taskId, null,
+                    normalized(copy.getTitle(), 255, "抄送标题不合法"), null,
+                    Set.of(String.valueOf(copy.getUserId())), optional(copy.getCreateBy(), 64),
+                    null, IdentityContext.FROZEN_CONTEXT, routePath, null);
+        }
+
+        /**
+         * 比较同一抄送自然身份下的完整规划事实，拒绝幂等键对应不同内容。
+         * @param other NotificationRequest，待比较的另一个规划请求
+         * @return boolean，全部不可变字段语义一致时为 true
+         */
+        private boolean hasSameContent(NotificationRequest other)
+        {
+            return other != null && Objects.equals(eventType, other.eventType)
+                    && Objects.equals(sourceId, other.sourceId)
+                    && Objects.equals(processDefinitionKey, other.processDefinitionKey)
+                    && Objects.equals(processName, other.processName)
+                    && Objects.equals(processInstanceId, other.processInstanceId)
+                    && Objects.equals(taskId, other.taskId)
+                    && Objects.equals(taskDefinitionKey, other.taskDefinitionKey)
+                    && Objects.equals(taskName, other.taskName)
+                    && Objects.equals(task, other.task)
+                    && Objects.equals(taskRecipientUserIds, other.taskRecipientUserIds)
+                    && Objects.equals(actorUserId, other.actorUserId)
+                    && Objects.equals(initiatorUserId, other.initiatorUserId)
+                    && identityContext == other.identityContext
+                    && Objects.equals(routePath, other.routePath)
+                    && Objects.equals(contentSuffix, other.contentSuffix);
+        }
     }
 
     private record PolicyKey(String eventType, String processDefinitionKey,

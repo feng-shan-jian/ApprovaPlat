@@ -1,7 +1,6 @@
 package com.ruoyi.flowable.service.notification;
 
 import java.util.Collection;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -117,10 +116,12 @@ public class WorkflowNotificationService
         String sourceEventKey = "TASK_ARRIVED".equals(eventType)
                 ? "TASK:" + taskId + ":ARRIVED"
                 : "TASK:" + taskId + ":" + flowableEvent + ":" + (ordinal == null ? 0 : ordinal);
-        WorkflowNotificationPlanner.NotificationRequest request = requestForTask(eventType,
-                sourceEventKey, processDefinitionId, processInstanceId, taskId,
-                taskDefinitionKey, taskName, task, fallbackRecipients, null, true, null, true,
-                route(processInstanceId, taskId), null);
+        ProcessDefinition definition = requireProcessDefinition(processDefinitionId);
+        WorkflowNotificationPlanner.NotificationRequest request =
+                WorkflowNotificationPlanner.NotificationRequest.taskEvent(eventType,
+                        sourceEventKey, definition, processInstanceId, taskId,
+                        taskDefinitionKey, taskName, task, fallbackRecipients,
+                        route(processInstanceId, taskId));
         return writer.write(planner.plan(request)).channelRecordCount();
     }
 
@@ -137,12 +138,14 @@ public class WorkflowNotificationService
             throw invalid("稳定任务通知事件不合法");
         Task stableTask = taskService.createTaskQuery().taskId(task.getId()).active().singleResult();
         if (stableTask == null) throw new ServiceException("稳定任务不存在", HttpStatus.CONFLICT);
-        WorkflowNotificationPlanner.NotificationRequest request = requestForTask(eventType,
-                "TASK:" + stableTask.getId() + ":" + eventType,
-                stableTask.getProcessDefinitionId(), stableTask.getProcessInstanceId(),
-                stableTask.getId(), stableTask.getTaskDefinitionKey(), stableTask.getName(),
-                stableTask, Set.of(), null, true, null, true,
-                route(stableTask.getProcessInstanceId(), stableTask.getId()), null);
+        ProcessDefinition definition = requireProcessDefinition(
+                stableTask.getProcessDefinitionId());
+        WorkflowNotificationPlanner.NotificationRequest request =
+                WorkflowNotificationPlanner.NotificationRequest.taskEvent(eventType,
+                        "TASK:" + stableTask.getId() + ":" + eventType, definition,
+                        stableTask.getProcessInstanceId(), stableTask.getId(),
+                        stableTask.getTaskDefinitionKey(), stableTask.getName(), stableTask,
+                        Set.of(), route(stableTask.getProcessInstanceId(), stableTask.getId()));
         return writer.write(planner.plan(request)).channelRecordCount();
     }
 
@@ -207,12 +210,14 @@ public class WorkflowNotificationService
             throw new ServiceException("任务归属版本不存在", HttpStatus.ERROR);
         outboxService.cancelPendingUrges(stableTask.getProcessInstanceId(), stableTask.getId(),
                 "任务办理关系已变化，取消旧接收人催办");
-        WorkflowNotificationPlanner.NotificationRequest request = requestForTask(eventType,
-                "TASK:" + stableTask.getId() + ":" + eventType + ":r" + revision,
-                stableTask.getProcessDefinitionId(), stableTask.getProcessInstanceId(),
-                stableTask.getId(), stableTask.getTaskDefinitionKey(), stableTask.getName(),
-                stableTask, Set.of(), null, true, null, true,
-                route(stableTask.getProcessInstanceId(), stableTask.getId()), null);
+        ProcessDefinition definition = requireProcessDefinition(
+                stableTask.getProcessDefinitionId());
+        WorkflowNotificationPlanner.NotificationRequest request =
+                WorkflowNotificationPlanner.NotificationRequest.taskEvent(eventType,
+                        "TASK:" + stableTask.getId() + ":" + eventType + ":r" + revision,
+                        definition, stableTask.getProcessInstanceId(), stableTask.getId(),
+                        stableTask.getTaskDefinitionKey(), stableTask.getName(), stableTask,
+                        Set.of(), route(stableTask.getProcessInstanceId(), stableTask.getId()));
         return writer.write(planner.plan(request)).channelRecordCount();
     }
 
@@ -270,10 +275,11 @@ public class WorkflowNotificationService
             throw invalid("流程通知事件不受支持");
         outboxService.schedulePendingUrgeCancellation(processInstanceId, null,
                 "流程已结束，取消未投递催办");
-        WorkflowNotificationPlanner.NotificationRequest request = requestForTask(eventType,
-                "PROCESS:" + processInstanceId + ":" + eventType, processDefinitionId,
-                processInstanceId, null, null, null, null, Set.of(), null, true, null, true,
-                route(processInstanceId, null), null);
+        ProcessDefinition definition = requireProcessDefinition(processDefinitionId);
+        WorkflowNotificationPlanner.NotificationRequest request =
+                WorkflowNotificationPlanner.NotificationRequest.processResult(eventType,
+                        "PROCESS:" + processInstanceId + ":" + eventType, definition,
+                        processInstanceId, route(processInstanceId, null));
         return writer.write(planner.plan(request)).channelRecordCount();
     }
 
@@ -295,51 +301,27 @@ public class WorkflowNotificationService
                 "流程实例主键不合法");
         String taskId = normalized(registration.taskId(), 64, "任务主键不合法");
         String reason = normalized(registration.reason(), 500, "催办原因不合法");
-        WorkflowNotificationPlanner.NotificationRequest request = requestForTask(
-                "MANUAL_URGE", normalizedSourceId(registration.sourceId()), processDefinitionId,
-                processInstanceId, taskId, optional(registration.taskDefinitionKey(), 255),
-                optional(registration.taskName(), 255), null,
-                Collections.unmodifiableSet(new LinkedHashSet<>(registration.recipientUserIds())),
-                registration.actorUserId(), false,
-                registration.startUserId(), false, route(processInstanceId, taskId),
-                "\n催办原因：" + reason);
+        String sourceId = normalizedSourceId(registration.sourceId());
+        ProcessDefinition definition = requireProcessDefinition(processDefinitionId);
+        WorkflowNotificationPlanner.NotificationRequest request =
+                WorkflowNotificationPlanner.NotificationRequest.manualUrge(sourceId,
+                        definition, registration, route(processInstanceId, taskId),
+                        "\n催办原因：" + reason);
         WorkflowNotificationWriter.WriteResult result = writer.write(planner.plan(request));
         return result.recipientUserIds();
     }
 
     /**
-     * 构造带流程定义名称和业务路由的规划请求。
-     * @param eventType String，通知事件类型
-     * @param sourceId String，稳定来源键
+     * 校验流程定义主键并读取不可变部署事实，供有名请求工厂冻结流程上下文。
      * @param processDefinitionId String，流程定义主键
-     * @param processInstanceId String，流程实例主键
-     * @param taskId String，可空任务主键
-     * @param taskDefinitionKey String，可空节点 key
-     * @param taskName String，可空任务名称
-     * @param task Task，可空真实任务
-     * @param taskRecipientUserIds Set&lt;String&gt;，无 Task 时的冻结任务接收人
-     * @param actorUserId String，可空操作者
-     * @param resolveActor boolean，是否从 Flowable 认证解析操作者
-     * @param initiatorUserId String，可空发起人
-     * @param resolveInitiator boolean，是否从流程实例解析发起人
-     * @param routePath String，业务详情路由
-     * @param contentSuffix String，可空正文后缀
-     * @return WorkflowNotificationPlanner.NotificationRequest，冻结的规划上下文
+     * @return ProcessDefinition，当前部署中的流程定义事实
      */
-    private WorkflowNotificationPlanner.NotificationRequest requestForTask(String eventType,
-            String sourceId, String processDefinitionId, String processInstanceId,
-            String taskId, String taskDefinitionKey, String taskName, Task task,
-            Set<String> taskRecipientUserIds, String actorUserId, boolean resolveActor,
-            String initiatorUserId, boolean resolveInitiator, String routePath,
-            String contentSuffix)
+    private ProcessDefinition requireProcessDefinition(String processDefinitionId)
     {
         String definitionId = normalized(processDefinitionId, 64, "流程定义主键不合法");
         ProcessDefinition definition = repositoryService.getProcessDefinition(definitionId);
         if (definition == null) throw new ServiceException("流程定义不存在", HttpStatus.ERROR);
-        return new WorkflowNotificationPlanner.NotificationRequest(eventType, sourceId,
-                definition.getKey(), definition.getName(), processInstanceId, taskId,
-                taskDefinitionKey, taskName, task, taskRecipientUserIds, actorUserId,
-                resolveActor, initiatorUserId, resolveInitiator, routePath, contentSuffix);
+        return definition;
     }
 
     /**
