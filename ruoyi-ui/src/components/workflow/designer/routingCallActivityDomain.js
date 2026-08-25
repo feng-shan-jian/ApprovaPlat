@@ -178,7 +178,7 @@ export function createRoutingCallActivityDomain(context) {
    * @returns {void} 非 BusinessRuleTask、未知 decisionId 或多值引用会恢复当前 BPMN 状态。
    */
   function updateDmnDecision() {
-    if (!propertyFlags.value.businessRuleTask) return
+    if (!selectedBusinessObject.value?.$instanceOf?.('bpmn:BusinessRuleTask')) return
     const decisionId = String(propertyState.dmnDecisionId || '').trim()
     const selected = dmnOptions.value.find(option => option.decisionId === decisionId)
     if (!selected || decisionId.includes(',')) {

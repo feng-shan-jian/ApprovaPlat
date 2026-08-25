@@ -46,6 +46,7 @@
 
 <script setup name="AdvancedElementPalette">
 import { Plus } from '@element-plus/icons-vue'
+import { getTaskCapability } from './taskCapabilityMap.js'
 
 defineProps({
   /** 是否禁止开始新的建模命令。 */
@@ -55,16 +56,21 @@ defineProps({
 const emit = defineEmits(['create'])
 const visible = ref(false)
 
+// 任务入口保留自身展示元数据，并以唯一能力表决定能否创建，避免菜单与属性面板各自维护可用类型。
+const taskItems = [
+  paletteItem('service-task', '服务任务', 'bpmn:ServiceTask', 'bpmn-icon-service-task'),
+  paletteItem('send-task', '发送任务', 'bpmn:SendTask', 'bpmn-icon-send-task'),
+  paletteItem('receive-task', '接收任务', 'bpmn:ReceiveTask', 'bpmn-icon-receive-task'),
+  paletteItem('business-rule-task', '业务规则任务', 'bpmn:BusinessRuleTask', 'bpmn-icon-business-rule-task')
+].filter(item => getTaskCapability(item.type)?.creationAllowed)
+
 // 元素定义只描述标准 BPMN 类型和创建提示，真实业务对象由父级 Modeler 服务创建。
 const groups = Object.freeze([
   {
     key: 'tasks',
     label: '任务与活动',
     items: [
-      paletteItem('manual-task', '手工任务', 'bpmn:ManualTask', 'bpmn-icon-manual-task'),
-      paletteItem('receive-task', '接收任务', 'bpmn:ReceiveTask', 'bpmn-icon-receive-task'),
-      paletteItem('send-task', '发送任务', 'bpmn:SendTask', 'bpmn-icon-send-task'),
-      paletteItem('business-rule-task', '业务规则任务', 'bpmn:BusinessRuleTask', 'bpmn-icon-business-rule-task'),
+      ...taskItems,
       paletteItem('call-activity', '调用活动', 'bpmn:CallActivity', 'bpmn-icon-call-activity'),
       paletteItem('sub-process', '展开子流程', 'bpmn:SubProcess', 'bpmn-icon-subprocess-expanded', { withStartEvent: true }),
       paletteItem('event-sub-process', '事件子流程', 'bpmn:SubProcess', 'bpmn-icon-event-subprocess-expanded', { withStartEvent: true, triggeredByEvent: true }),

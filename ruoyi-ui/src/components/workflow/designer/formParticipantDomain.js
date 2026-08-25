@@ -1460,7 +1460,7 @@ export function createFormParticipantDomain(context) {
   function validatePendingMultiInstanceSelection() {
     const configuredSource = Object.hasOwn(
       MULTI_INSTANCE_IDENTITY_TYPES, propertyState.multiInstanceMemberSource)
-    if (propertyFlags.value.userTask
+    if (isUserTask.value
       && propertyState.multiInstanceType === 'controlled'
       && configuredSource
       && !normalizeConfiguredMultiInstanceIdentity(

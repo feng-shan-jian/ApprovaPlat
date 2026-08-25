@@ -108,7 +108,7 @@ export function createExtensionEventSlaDomain(context) {
   const slaLoading = ref(false)
   const autoCopyTriggerOptions = computed(() => {
     if (propertyFlags.value.process) return [{ label: '流程完成', value: 'PROCESS_COMPLETED' }]
-    if (propertyFlags.value.userTask) {
+    if (isType('bpmn:UserTask')) {
       return [
         { label: '节点到达', value: 'NODE_ARRIVED' },
         { label: '节点完成', value: 'NODE_COMPLETED' }
@@ -173,11 +173,11 @@ export function createExtensionEventSlaDomain(context) {
   }
 
   /**
-   * 从 ServiceTask 的受控 Flowable Field 回读作者扩展键和配置。
+   * 从 ServiceTask 或 SendTask 的受控 Flowable Field 回读作者扩展键和配置。
    * @param {object} businessObject 当前 BPMN 业务对象。
    * @returns {{extensionKey: string, extensionConfig: string}} 稳定作者配置；缺失时使用空键和空对象。
    */
-  function readServiceTaskExtension(businessObject) {
+  function readControlledTaskExtension(businessObject) {
     const result = { extensionKey: '', extensionConfig: '{}' }
     for (const value of businessObject?.extensionElements?.values || []) {
       if (value?.$type !== 'flowable:Field') continue
@@ -210,10 +210,10 @@ export function createExtensionEventSlaDomain(context) {
   }
 
   /**
-   * 将服务任务扩展键和 JSON 配置写入作者 XML，并固定为系统调度器。
+   * 将 ServiceTask 或 SendTask 的扩展键和 JSON 配置写入作者 XML，并固定为系统调度器。
    * @returns {void} 校验失败时恢复当前 BPMN 值并触发 error。
    */
-  function updateServiceTask() {
+  function updateControlledTask() {
     try {
       const extensionKey = propertyState.extensionKey.trim()
       const configText = propertyState.extensionConfig.trim() || '{}'
@@ -252,9 +252,11 @@ export function createExtensionEventSlaDomain(context) {
 
   /**
    * 切换受控扩展类型时建立与服务端 Schema 一致的初始配置。
+   * @param {string} extensionKey ServiceTask 或 SendTask 从正式目录选择的稳定扩展键。
    * @returns {void} 更新编辑状态并通过命令栈写入作者 BPMN。
    */
-  function updateExtensionSelection() {
+  function updateControlledTaskSelection(extensionKey) {
+    propertyState.extensionKey = String(extensionKey || '')
     const selectedOption = extensionOptions.value.find(option => (
       option.extensionKey === propertyState.extensionKey
     ))
@@ -301,7 +303,7 @@ export function createExtensionEventSlaDomain(context) {
     } else {
       propertyState.extensionConfig = '{}'
     }
-    updateServiceTask()
+    updateControlledTask()
   }
 
   /**
@@ -500,7 +502,7 @@ export function createExtensionEventSlaDomain(context) {
    */
   function updateAutoCopyRules(rules) {
     if (designerLocked.value || !getModeler() || !selectedElement.value
-      || (!propertyFlags.value.process && !propertyFlags.value.userTask)) return
+      || (!propertyFlags.value.process && !isType('bpmn:UserTask'))) return
     try {
       const normalized = Array.isArray(rules) && rules.length
         ? normalizeAndValidateAutoCopyRules(rules)
@@ -736,7 +738,7 @@ export function createExtensionEventSlaDomain(context) {
    * @returns {void} 目录或跨字段约束不合法时恢复 BPMN 原值并向页面上报。
    */
   function updateSlaProperties(config) {
-    if (designerLocked.value || !getModeler() || !selectedElement.value || !propertyFlags.value.userTask) return
+    if (designerLocked.value || !getModeler() || !selectedElement.value || !isType('bpmn:UserTask')) return
     try {
       const normalized = normalizeAndValidateSlaConfig(config)
       propertyState.sla = normalized
@@ -845,10 +847,10 @@ export function createExtensionEventSlaDomain(context) {
     readAutoCopyRules,
     resolveAutoCopyFormFieldOptions,
     resolveAutoCopyFormFieldOptionsForBusinessObject,
-    readServiceTaskExtension,
+    readControlledTaskExtension,
     readBusinessListeners,
-    updateServiceTask,
-    updateExtensionSelection,
+    updateControlledTask,
+    updateControlledTaskSelection,
     loadExtensionOptions,
     updateBusinessExecutionListeners,
     updateBusinessTaskListeners,

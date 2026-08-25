@@ -10,7 +10,7 @@
 <HttpConnectorEditor
   v-model="extensionConfig"
   :endpoints="connectorEndpoints"
-  @change="updateServiceTask"
+  @change="updateControlledTask"
 />
 ```
 

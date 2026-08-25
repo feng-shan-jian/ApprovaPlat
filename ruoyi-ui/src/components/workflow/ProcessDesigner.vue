@@ -64,6 +64,7 @@
         :title="selectedTypeLabel"
         :state="propertyState"
         :flags="propertyFlags"
+        :task-capability="selectedTaskCapability"
         :forms="forms"
         :identity-options="identityOptions"
         :identity-loading="identityLoading"
@@ -104,8 +105,9 @@
         @assignment-change="updateAssignment"
         @participant-rule-change="updateParticipantRule"
         @user-task-change="updateUserTaskProperties"
-        @extension-selection-change="updateExtensionSelection"
-        @service-task-change="updateServiceTask"
+        @extension-selection-change="updateControlledTaskSelection"
+        @controlled-task-config-update="updateControlledTaskConfig"
+        @controlled-task-change="updateControlledTask"
         @condition-rule-change="updateConditionRule"
         @condition-default-change="makeConditionDefault"
         @documentation-change="updateDocumentation"
@@ -188,6 +190,8 @@ import DesignerToolbar from './designer/DesignerToolbar.vue'
 import DesignerSettingsDrawer from './designer/DesignerSettingsDrawer.vue'
 import AdvancedElementPalette from './designer/AdvancedElementPalette.vue'
 import DesignerPropertiesPanel from './designer/DesignerPropertiesPanel.vue'
+import taskCapabilityReplaceMenuModule from './designer/taskCapabilityReplaceMenu.js'
+import { getTaskCapability } from './designer/taskCapabilityMap.js'
 import {
   createExtensionEventSlaDomain,
   createDefaultSlaConfig,
@@ -317,18 +321,16 @@ const selectedBusinessObject = computed(() => selectedElement.value?.businessObj
 const isProcess = computed(() => isType('bpmn:Process'))
 const isStartEvent = computed(() => isType('bpmn:StartEvent'))
 const isUserTask = computed(() => isType('bpmn:UserTask'))
-const isBusinessRuleTask = computed(() => isType('bpmn:BusinessRuleTask'))
 const isSequenceFlow = computed(() => isType('bpmn:SequenceFlow'))
 const isParticipant = computed(() => isType('bpmn:Participant'))
+// 当前任务能力只按标准 BPMN 类型读取；非任务元素返回 null，由非任务能力独立决定业务分区。
+const selectedTaskCapability = computed(() => getTaskCapability(selectedBusinessObject.value?.$type))
 const propertyFlags = computed(() => {
   const eventDefinitionType = propertyState.eventDefinitionType
   return Object.freeze({
     process: isProcess.value,
     participant: isParticipant.value,
     startEvent: isStartEvent.value,
-    userTask: isUserTask.value,
-    serviceTaskLike: isType('bpmn:ServiceTask') || isType('bpmn:SendTask'),
-    businessRuleTask: isBusinessRuleTask.value,
     formSupported: isStartEvent.value || isUserTask.value,
     sequenceFlow: isSequenceFlow.value,
     conditionGatewayFlow: isConditionGatewayFlow(),
@@ -533,7 +535,12 @@ function createModeler() {
   modeler = new Modeler({
     container: canvasRef.value,
     gridSnapping: { active: appliedPreference.value.gridEnabled },
-    additionalModules: [minimapModule, gridSnappingModule, tokenSimulationModule],
+    additionalModules: [
+      minimapModule,
+      gridSnappingModule,
+      tokenSimulationModule,
+      taskCapabilityReplaceMenuModule
+    ],
     moddleExtensions: { flowable: flowableModdle }
   })
   const eventBus = modeler.get('eventBus')
@@ -754,9 +761,9 @@ function loadPropertyState(element) {
   propertyState.conditionExpression = businessObject.conditionExpression?.body || ''
   propertyState.conditionRule = readConditionRule(businessObject)
   propertyState.conditionDefault = isDefaultConditionFlow(element)
-  const serviceExtension = readServiceTaskExtension(businessObject)
-  propertyState.extensionKey = serviceExtension.extensionKey
-  propertyState.extensionConfig = serviceExtension.extensionConfig
+  const controlledTaskExtension = readControlledTaskExtension(businessObject)
+  propertyState.extensionKey = controlledTaskExtension.extensionKey
+  propertyState.extensionConfig = controlledTaskExtension.extensionConfig
   propertyState.businessExecutionListeners = readBusinessListeners(businessObject, 'flowable:ExecutionListener')
   propertyState.businessTaskListeners = readBusinessListeners(businessObject, 'flowable:TaskListener')
   const extensionProperties = readExtensionProperties(businessObject)
@@ -836,6 +843,15 @@ function readExtensionProperties(businessObject) {
     .filter(property => !isFormParticipantProperty(property.name)
       && !isRoutingCallActivityProperty(property.name))
     .map(property => ({ name: property.name || '', value: property.value || '' })))
+}
+
+/**
+ * 同步结构化受控任务编辑器的 JSON 草稿，实际 BPMN 写入仍由 change 事件统一执行。
+ * @param {string} config ServiceTask 或 SendTask 的受控处理器配置 JSON。
+ * @returns {void} 仅更新当前属性面板状态。
+ */
+function updateControlledTaskConfig(config) {
+  propertyState.extensionConfig = String(config ?? '')
 }
 
 
@@ -1935,10 +1951,10 @@ const {
   autoCopyTriggerOptions,
   autoCopyFormFieldOptions,
   readAutoCopyRules,
-  readServiceTaskExtension,
+  readControlledTaskExtension,
   readBusinessListeners,
-  updateServiceTask,
-  updateExtensionSelection,
+  updateControlledTask,
+  updateControlledTaskSelection,
   loadExtensionOptions,
   updateBusinessExecutionListeners,
   updateBusinessTaskListeners,

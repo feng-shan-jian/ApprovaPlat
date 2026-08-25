@@ -221,6 +221,9 @@ onMounted(async () => {
 - 身份选择器禁止自由创建值，并对远程检索做 250ms 防抖；用户审批资格及身份真伪仍由保存、部署后端校验兜底。
 - 新建流程只有在 `model.formId` 明确指定时才预绑定发起表单，不会隐式选择表单列表第一项。
 - 服务任务只提供受控扩展注册表入口，作者 XML 保存稳定扩展键和 JSON 配置，最终版本、实现和校验和由后端部署时冻结。
+- 任务创建、转换目标、属性面板类型和运行语义统一来自简单不可变 `taskCapabilityMap`。ServiceTask、SendTask、ReceiveTask、BusinessRuleTask 使用明确面板类型，不再合并为 `serviceTaskLike` 或由布尔标志猜测业务分区。
+- 高级元素面板明确提供 ServiceTask、SendTask、ReceiveTask 和 BusinessRuleTask；ManualTask 从创建入口和 bpmn-js 转换目标中隐藏。历史 ManualTask 仍可导入、渲染、编辑基础信息、保存和导出，并在属性面板提示不会生成平台待办。
+- ReceiveTask 面板只展示真实 `/workflow/runtime-event/receive` 契约，不写入浏览器字段；调用方必须用 `X-Integration-Token`、当前 activityId、互斥实例关联条件和凭据变量白名单触发。
 - 选择 HTTP 或 SQL 扩展时设计器自动开启 `flowable:async`；运行失败由 Flowable Job 按引擎/BPMN 重试配置处理，最终死信保留在 Flowable 原生表中。
 - 业务规则任务独立于通用服务任务，只能选择后端 DMN 来源目录中的精确 `decisionId`；作者 XML 写入 `flowable:rules`，流程部署时创建同部署冻结 DMN 副本。
 - 通过 bpmn-js“更改元素”把 UserTask 转换为业务规则任务或其他任务时，转换命令会在同一撤销单元内清理任务监听器、表单、办理规则、SLA、自动抄送、受控整改循环和受控多实例状态；普通 BPMN 循环、通用执行监听器及普通扩展属性继续保留，撤销和重做会原子恢复或再次清理。

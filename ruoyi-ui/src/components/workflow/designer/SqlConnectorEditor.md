@@ -10,7 +10,7 @@
 <SqlConnectorEditor
   v-model="extensionConfig"
   :data-sources="sqlDataSources"
-  @change="updateServiceTask"
+  @change="updateControlledTask"
 />
 ```
 
