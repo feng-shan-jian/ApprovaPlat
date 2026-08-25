@@ -12,4 +12,4 @@
 
 ## 并发与事务
 
-Flowable revision/执行树锁始终先于业务表 CAS。CAS 影响行数不为一时保持稳定 `409` 子码；同一路径只读取一次 OPEN 轮次并由其状态判断 ACTIVE，`insertActive` 返回的正式快照由监听器直接复用，不再按根重复查询。完成 listener 的 CAS 是完成状态唯一确认点，外层不再回读轮次。
+Flowable revision/执行树锁始终先于业务表 CAS。CAS 影响行数等于一时提交，其他结果返回稳定 `409` 子码；同一路径只读取一次 OPEN 轮次并由其状态判断 ACTIVE，`insertActive` 返回的正式快照由监听器直接复用。完成 listener 的 CAS 是完成状态唯一确认点。

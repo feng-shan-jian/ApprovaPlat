@@ -2,7 +2,7 @@
 
 ## 组件简介与作用
 
-`WorkflowIdentityDirectoryService` 从 `sys_user`、`sys_role`、`sys_dept` 及正式关联表提供有界分页的工作流身份目录。它为通用主数据、直接办理人和候选认领身份提供不同查询契约，避免设计器把“存在”误当成“可执行”。
+`WorkflowIdentityDirectoryService` 从 `sys_user`、`sys_role`、`sys_dept` 及正式关联表提供有界分页的工作流身份目录。它为通用主数据、直接办理人和候选认领身份提供不同查询契约，使每个目录项明确表达对应执行资格。
 
 对外 HTTP 入口为 `GET /workflow/identity/options`，由 `WfIdentityController` 执行菜单权限和参数注解校验；本服务再执行服务层边界和实时 RBAC 查询。
 
@@ -13,7 +13,7 @@
 | `listOptions(type, keyword, pageNum, pageSize)` | `type` 为 `user`/`role`/`dept`，可选检索词和分页 | 启用且未删除的通用身份页 |
 | `listOptions(type, keyword, pageNum, pageSize, capability)` | 在通用参数上增加 `approval` 或 `claim` | 按正式资格过滤的最小身份页 |
 
-返回行只包含 `value`、`label` 和 `type`，不返回密码、手机、邮箱、角色菜单明细或其他组织敏感字段。
+返回行采用 `value`、`label` 和 `type` 三字段白名单；密码、手机、邮箱、角色菜单明细及其他组织敏感字段保留在主数据边界。
 
 ## 能力与类型组合
 

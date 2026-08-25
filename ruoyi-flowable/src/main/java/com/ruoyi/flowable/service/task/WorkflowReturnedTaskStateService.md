@@ -4,7 +4,7 @@
 
 该服务是申请退回态的唯一写入和核验边界。它管理普通退回办理配置快照、申请人局部变量、候选用户/候选组/owner、任务指派、受控迁移标记，以及流程变量与 Flowable `businessStatus` 的 `returned/running` 双状态。
 
-它不处理审计、附件、抄送、通知、SLA、轮次 CAS 或 Flowable 执行树迁移；这些副作用仍由对应 ApplicationService 和多实例迁移服务按冻结顺序编排。
+它专注于退回态状态机；审计、附件、抄送、通知、SLA、轮次 CAS 和 Flowable 执行树迁移由对应 ApplicationService 及多实例迁移服务按冻结顺序编排。
 
 ## 使用方式
 
@@ -28,9 +28,9 @@
 
 ## 关键约束
 
-所有公开调用只接收主键、稳定标记或不可变快照，不向调用方暴露 `TaskService`、`RuntimeService` 或可变 Flowable 对象。状态变更必须位于 `WorkflowEngineOperations` 打开的同一可重复读写事务中，任一步失败由外层事务整体回滚。
+所有公开调用接收主键、稳定标记或不可变快照；`TaskService`、`RuntimeService` 和可变 Flowable 对象封装在服务内部。状态变更必须位于 `WorkflowEngineOperations` 打开的同一可重复读写事务中，任一步失败由外层事务整体回滚。
 
-`requireRunning` 的空 `businessStatus` 兼容仅适用于尚未进入退回协议的普通运行实例。写入口保留写前任务、申请人和状态校验；同步 TaskService/RuntimeService 写入正常返回即交由外层事务提交，不再回读刚写入的任务指派、局部变量或双状态自证成功。
+`requireRunning` 将退回协议启用前且仍处于普通运行态的空 `businessStatus` 解析为运行中。写入口保留写前任务、申请人和状态校验；同步 TaskService/RuntimeService 正常返回即作为写入成功确认并交由外层事务提交。
 
 `RETURN_ASSIGNMENT_VARIABLE` 在整组退回时同样必须保留到重提命令完成：普通首审批用它恢复当前同一任务的 assignee/owner/candidate 配置；受控首审批也先验证该快照存在，再由迁移服务取消临时根并重建。`prepareGroupRunning` 只能在计划和轮次 CAS 完成后清除该变量。
 

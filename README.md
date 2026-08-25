@@ -3,11 +3,11 @@
 # ApprovaPlat
 
 
-一个基于 RuoYi、Flowable 8、Spring Boot 4 和 Vue 3，仍在持续演进的开源审批中台。
+一个基于 RuoYi、Flowable 8、Spring Boot 4 和 Vue 3，覆盖设计、运行、权限、数据与审计的开源审批中台。
 
 **中文** | [English](README_EN.md)
 
-[快速开始](#快速开始) · [当前能力](#现在能做什么) · [当前边界](#当前边界) · [项目文档](docs/README.md)
+[快速开始](#快速开始) · [当前能力](#现在能做什么) · [生产验收边界](#生产验收边界) · [项目文档](docs/README.md)
 
 [![Flowable 8.0.0](https://img.shields.io/badge/Flowable-8.0.0-2f855a?style=flat-square)](https://github.com/flowable/flowable-engine) [![Spring Boot 4.0.6](https://img.shields.io/badge/Spring%20Boot-4.0.6-6db33f?style=flat-square)](https://spring.io/projects/spring-boot) [![Vue 3.5.26](https://img.shields.io/badge/Vue-3.5.26-42b883?style=flat-square)](https://vuejs.org/) [![Project status](https://img.shields.io/badge/Status-Early%20Stage-f59e0b?style=flat-square)](#项目现在是什么状态) [![MIT License](https://img.shields.io/badge/License-MIT-1f2937?style=flat-square)](LICENSE)
 
@@ -31,25 +31,23 @@
 
 我在一次 B 端 AI 产品实习中接触到企业审批，也开始关注一套审批中台是怎样把流程、表单、权限和业务数据串起来的。
 
-当时我想找一个技术栈较新、基于 Flowable 8 的开源项目作为参考。找了一圈，相对完整的还是[芋道](https://github.com/YunaiV/ruoyi-vue-pro)，但它并不是 Flowable 8 项目。它的 README 写着“现在、未来都不会有商业版本，所有代码全部开源”，官方[工作流文档](https://doc.iocoder.cn/bpm/)中的 BPM SQL 却注明“仅芋道星球成员可使用和商用”。
+在调研 [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue)、[芋道](https://github.com/YunaiV/ruoyi-vue-pro)、[Flowable](https://github.com/flowable/flowable-engine) 和 [bpmn.io](https://github.com/bpmn-io/bpmn-js) 等项目后，我希望建立一套技术栈较新、开放范围清晰、代码与数据库资产完整公开的 Flowable 8 工程实现。
 
-为了继续看相关文档，我还用过 [`Fuck-Yudao`](https://github.com/AntHubTC/AntHubTC.github.io/blob/master/tampermonkey-script/Fuck-Yudao.js) 油猴脚本，也看到过第三方仓库[“芋道源码（无遮羞布版）”](https://github.com/talkpoin/ruoyi-spring-boot-all)。这也是我不认同的地方：既然把“所有代码全部开源”作为承诺，开放范围和收费边界就应该一开始说清楚。
-
-找不到合适的项目，我就开始做 ApprovaPlat。它不是简单地替换 Flowable 版本，而是希望基于 Flowable 8，把设计、部署、发起、办理、权限、数据与审计完整串起来。
+ApprovaPlat 因此以 Flowable 8 为运行核心，把设计、部署、发起、办理、权限、数据与审计完整串起来，并将业务规则、SQL、文档和验证入口放在同一仓库持续维护。
 
 项目目前还在早期，核心代码、SQL、文档和测试会保持公开。欢迎各位大佬多提建议，也希望正在开发、准备开发或迁移审批系统的人，能从这里找到一些真正用得上的实现和经验。
 
 ## 项目现在是什么状态
 
-ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库里已经实现的能力。
+ApprovaPlat 当前处于早期阶段。下面列出仓库里已经实现的能力。
 
-目前，流程设计、部署、发起、办理、历史和审计已经可以走通。流程由 Flowable 8 执行，业务数据写入 MySQL，登录状态和缓存使用 Redis。它已经能作为学习、验证和二次开发的基础，但还不适合未经目标环境验收就直接用于生产。
+目前，流程设计、部署、发起、办理、历史和审计已经可以走通。流程由 Flowable 8 执行，业务数据写入 MySQL，登录状态和缓存使用 Redis。它可以作为学习、验证和二次开发基础；生产使用以目标环境完成部署、容量、故障与恢复验收为准。
 
 现在更适合这些场景：
 
 - 学习 Flowable 8，以及一套审批系统如何把前端、后端、权限和数据接起来。
 - 作为新审批项目的参考实现或二次开发基础。
-- 为旧版 Flowable 或其他流程引擎的迁移做验证和能力对照。
+- 验证 Flowable 版本升级或其他流程引擎迁移的目标能力。
 - 在正式上线前开展试点，并按目标环境补齐部署、容量和故障验收。
 
 ## 现在能做什么
@@ -58,7 +56,7 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 
 - 管理流程分类、动态表单、BPMN 模型、版本和部署状态。
 - 在 BPMN.js 设计器中导入、导出、预览源码、执行 Lint 和 Token 模拟，并配置节点属性。
-- 部署前由后端校验 BPMN；部署时冻结表单、扩展、DMN 与 SLA 快照，并自动挂起旧定义，在途实例继续运行。
+- 部署前由后端校验 BPMN；部署时冻结表单、扩展、DMN 与 SLA 快照，并自动挂起上一版本定义，在途实例继续运行。
 
 ### 发起与办理
 
@@ -77,7 +75,7 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 ### 权限、数据与运维
 
 - 区分设计、发起、办理、管理和审计职责，并对实例、任务、部署、附件和审计数据做对象级授权。
-- Flowable 数据和业务数据共用主数据源与事务边界，前端不保存第二份权威流程状态。
+- Flowable 数据和业务数据共用主数据源与事务边界，后端运行态与正式数据库构成唯一权威流程状态。
 - 提供健康检查、运行快照、Micrometer/Prometheus 指标、附件清理锁和运行就绪校验。
 - 仓库包含生产配置、systemd 和 Nginx 部署资产。
 
@@ -86,6 +84,16 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 下面是一条在真实前端、后端、Flowable、MySQL 和 Redis 环境中完成的动态多人会签流程。页面重新读取实例状态和已经部署的 BPMN，并高亮实际走过的路径。
 
 ![ApprovaPlat 已完成动态多人会签实例](docs/assets/readme/process-trace.png)
+
+## 生产验收边界
+
+- 首个生产数据库基线面向空 schema 安装；已安装 8.0.0 正式基线的环境通过 `8.0.1__workflow_mail_config.sql` 前向升级。
+- 生产配置固定 `flowable.database-schema-update=false`，数据库结构统一通过仓库维护的 SQL 和运行核验更新。
+- 正式网关入口覆盖排他、并行、包容和事件网关；业务重复审批使用受控整改循环，标准循环保留 XML 往返能力。
+- 异步执行器在数据库、拓扑、容量、监控和唯一执行协调全部验收通过后启用，用于定时器、SLA 和后台任务。
+- 多节点、共享附件存储、真实外部副作用、备份恢复与长时间稳定性在目标环境完成验收后进入生产发布。
+
+精确业务边界见[审批业务行为契约](docs/contracts/workflow-behavior.md)和[多池协作运行契约](docs/contracts/workflow-collaboration.md)。
 
 ## 快速开始
 
@@ -102,9 +110,9 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 
 创建一个空的 MySQL schema，并严格按照[数据库基线](docs/database/workflow-baseline.md)中的顺序执行 RuoYi、Quartz、Flowable 与 ApprovaPlat SQL。所有 MySQL 客户端连接都应显式使用 `utf8mb4`。
 
-当前首发基线包含破坏性的全新安装脚本。不要对已有业务库直接执行，也不要开启 Flowable 自动建表来绕过缺失结构。
+当前首发基线中的全新安装脚本仅用于空 schema。已有业务库使用经过评审的前向迁移；Flowable 自动建表保持关闭。
 
-已经安装 8.0.0 正式基线的数据库只执行 `8.0.1__workflow_mail_config.sql`，随后重放幂等菜单脚本；完整备份、核验和命令顺序见[现有基线升级](docs/database/workflow-baseline.md#现有基线升级)。迁移只创建空表，不复制旧 SMTP 环境变量，也不生成默认邮件账号或授权码。
+已经安装 8.0.0 正式基线的数据库执行 `8.0.1__workflow_mail_config.sql`，随后重放幂等菜单脚本；完整备份、核验和命令顺序见[现有基线升级](docs/database/workflow-baseline.md#现有基线升级)。迁移创建空表，SMTP 配置由管理员写入 `sys_mail_config`；环境变量配置源已删除，邮件账号和授权码初始保持空值。
 
 ### 2. 配置并启动后端
 
@@ -122,9 +130,9 @@ mvn -pl ruoyi-admin -am -DskipTests package
 java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
 ```
 
-`-DskipTests` 只用于缩短本地首次启动。未显式设置 `RUOYI_TOKEN_SECRET` 时，单节点环境会在用户私有目录中生成并复用随机 HS512 密钥；生产环境必须显式管理 Token 密钥和数据库配置。
+`-DskipTests` 用于缩短本地首次启动。单节点环境在缺少 `RUOYI_TOKEN_SECRET` 时会在用户私有目录生成并复用随机 HS512 密钥；生产环境显式管理 Token 密钥和数据库配置。
 
-SMTP 主机、端口、账号和发件身份保存后按数据库 revision 动态生效，不需要重启应用。授权码使用 RuoYi Token 密钥派生的用途子密钥加密，用户无需生成或配置第二把密钥。Token 密钥必须在重启和多节点之间保持稳定；更换后已有登录令牌会失效，SMTP 授权码也必须通过邮件服务页面重新保存。
+SMTP 主机、端口、账号和发件身份保存后按数据库 revision 动态生效。授权码使用 RuoYi Token 密钥派生的用途子密钥加密，一把稳定 Token 密钥同时支持登录令牌和 SMTP 授权码密文。Token 密钥在重启和多节点之间保持一致；密钥轮换时同步重新登录，并通过邮件服务页面重新保存 SMTP 授权码。
 
 ### 3. 启动前端
 
@@ -137,7 +145,7 @@ $env:VITE_OPEN_BROWSER = 'false'
 npm run dev -- --host 127.0.0.1 --port 1024
 ```
 
-访问 `http://127.0.0.1:1024`。全新本地基线账号为 `admin`，初始密码为 `wang`；它只用于本机开发，对外开放服务前必须更换。
+访问 `http://127.0.0.1:1024`。全新本地基线账号为 `admin`，初始密码为 `wang`；本机开发使用该初始凭据，对外开放服务前完成密码轮换。
 
 ## 开发与测试
 
@@ -151,7 +159,7 @@ npm run test:contracts
 npm run build:prod
 ```
 
-真实 MySQL `*IT` 使用独立的 opt-in Failsafe profile。CI 必须先准备只用于验收的 `approvaplat_it` schema，再显式提供以下三个环境变量；profile 会在变量缺失时直接失败，普通 `mvn test` / `mvn verify` 不会连接 MySQL：
+真实 MySQL `*IT` 使用独立的 opt-in Failsafe profile。CI 先准备专用 `approvaplat_it` schema，再显式提供以下三个环境变量；profile 在变量完整时连接该隔离 MySQL，变量缺失时直接失败。普通 `mvn test` / `mvn verify` 运行单元和本地集成测试：
 
 ```powershell
 $env:WORKFLOW_MYSQL_TEST_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat_it?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia%2FShanghai'
@@ -207,6 +215,6 @@ ApprovaPlat/
 
 ApprovaPlat 建立在 [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue)、[Flowable](https://github.com/flowable/flowable-engine) 和 [bpmn.io](https://github.com/bpmn-io/bpmn-js) 等开源项目之上。
 
-这是一个独立开源项目，不是上述项目的官方组件。代码使用 [MIT License](LICENSE)。
+这是一个独立开源项目，代码使用 [MIT License](LICENSE)，并独立维护自身发布与支持边界。
 
 > 愿我们都能在 AI 时代找到自己的方向，做成想做的事，事业有成，一路顺遂。

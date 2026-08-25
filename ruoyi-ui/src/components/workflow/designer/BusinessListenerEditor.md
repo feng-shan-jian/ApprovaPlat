@@ -15,7 +15,7 @@
 
 ## Emits
 
-`update:modelValue` 和 `change` 返回不含客户端临时标识的监听器数组。
+`update:modelValue` 和 `change` 返回仅含正式 BPMN 字段的监听器数组。
 
 ## 最小接入示例
 

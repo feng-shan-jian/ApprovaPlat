@@ -13,4 +13,4 @@
 5. 调用 Flowable `complete`，立即执行轮次写后对账。
 6. 应用下一办理人并持久化抄送。
 
-普通任务没有 `expectedRevision` 时继续使用原冲突契约；动态多实例在事务提交阶段出现乐观锁时继续附带既有 revision 冲突子码。
+普通任务提交 `expectedRevision=null` 时继续使用原冲突契约；动态多实例在事务提交阶段出现乐观锁时继续附带既有 revision 冲突子码。

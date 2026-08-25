@@ -4,7 +4,7 @@
 
 `WorkflowControlledLoopService` 负责受控重复审批节点的完成决策和详情投影。完成任务时，它使用部署阶段冻结的循环配置判断本轮是 `REPEAT` 还是 `EXIT`，校验最大轮次，并在同一事务写入路由变量、Flowable comment 和 `wf_controlled_loop_execution` 审计记录。
 
-该服务不负责查询当前任务所属流程定义。任务完成链必须先完成任务、实例、办理人和 BPMN 关系校验，再把同一不可变 BPMN 上下文中的 `processKey`、`deploymentId` 传入本服务。详情查询入口则直接传入已完成对象授权的部署和流程信息。
+当前任务所属流程定义由任务完成链查询并校验。完成链在核验任务、实例、办理人和 BPMN 关系后，把同一不可变 BPMN 上下文中的 `processKey`、`deploymentId` 传入本服务；详情查询入口直接传入已完成对象授权的部署和流程信息。
 
 ## 使用方式
 
@@ -19,7 +19,7 @@ controlledLoopService.prepareCompletion(
         currentUserId);
 ```
 
-`prepareCompletion` 必须位于任务完成事务内，并在普通完成审计、附件绑定、提交快照和 `taskService.complete(...)` 之前调用。普通节点没有部署循环快照时直接返回，不产生变量或数据库写入。
+`prepareCompletion` 必须位于任务完成事务内，并在普通完成审计、附件绑定、提交快照和 `taskService.complete(...)` 之前调用。普通节点缺少部署循环快照时直接返回，变量和数据库保持原状态。
 
 参数说明：
 
@@ -61,11 +61,11 @@ List<WorkflowControlledLoopStateView> states = controlledLoopService.buildStates
 
 ## 关键设计
 
-- 循环配置来自不可变部署资源，不读取设计草稿或客户端配置。
-- `processKey` 与 `deploymentId` 来自完成链已经核验的单一 BPMN 上下文，本服务不重复查询流程定义。
-- 判断变量只能来自节点表单 schema 已放行的标量值，服务端保留路由变量不能由客户端直接控制。
-- 审计表、路由变量、循环 comment 和任务完成共享同一事务；任一步失败都不能留下部分副作用。
-- 最大轮次达到上限时不会自动替用户选择退出，仍要求明确提交退出结果。
+- 循环配置唯一来自不可变部署资源，设计草稿和客户端配置仅用于发布前编辑。
+- `processKey` 与 `deploymentId` 来自完成链已经核验的单一 BPMN 上下文，本服务复用该上下文定位部署快照。
+- 判断变量来自节点表单 schema 已放行的标量值，路由变量由服务端独占生成。
+- 审计表、路由变量、循环 comment 和任务完成共享同一事务；任一步失败都触发整体回滚。
+- 最大轮次达到上限时要求用户明确提交退出结果，业务选择始终由本次完成请求表达。
 
 ## 最小接入示例
 
@@ -83,4 +83,4 @@ controlledLoopService.prepareCompletion(
 taskService.complete(task.getId(), actor.userId(), projectedVariables, false);
 ```
 
-示例中的上下文装载、表单校验和任务完成都应由统一生命周期写入口组织；不要在本服务外另起事务或缓存 BPMN/任务状态。
+示例中的上下文装载、表单校验和任务完成都由统一生命周期写入口组织，并共享同一事务中的实时 BPMN 与任务状态。

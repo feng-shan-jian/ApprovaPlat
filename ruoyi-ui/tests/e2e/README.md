@@ -12,4 +12,4 @@ $env:PLAYWRIGHT_CHANNEL = 'msedge'
 npm run test:e2e:designer
 ```
 
-CI 使用 Playwright Chromium 时不设置 `PLAYWRIGHT_CHANNEL`，并在执行前安装对应浏览器。测试账号至少需要模型查询、创建、设计、保存、校验和删除权限；测试环境至少需要一个启用的流程分类。
+CI 浏览器固定为 Playwright Chromium，`PLAYWRIGHT_CHANNEL` 保持空值，并在执行前安装对应浏览器。测试账号至少需要模型查询、创建、设计、保存、校验和删除权限；测试环境至少需要一个启用的流程分类。

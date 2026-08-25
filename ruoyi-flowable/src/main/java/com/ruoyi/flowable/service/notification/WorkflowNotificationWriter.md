@@ -7,8 +7,8 @@
 ## 使用方式
 
 - 普通审批通知在已有 Spring/Flowable 写事务中调用 `write(plan)`。
-- SLA、BPMN 必达站内通知调用 `writeRequiredInbox(notification)`，只校验用户有效状态，不读取 inbox 偏好。
-- 两个入口都要求当前存在非只读事务，否则拒绝写入。
+- SLA、BPMN 必达站内通知调用 `writeRequiredInbox(notification)`，校验用户有效状态并按必达语义直接写入 inbox。
+- 两个入口都要求当前存在活动写事务，事务门禁失败时返回稳定错误。
 
 ## 公开方法
 
@@ -18,10 +18,10 @@
 ## 关键设计
 
 - inbox 使用 `notification_key + recipient_user_id` 唯一约束，Outbox 使用 `idempotency_key` 唯一约束。
-- 幂等冲突只捕获数据库 `DuplicateKeyException`，不读取并比较标题、正文或路由等整行事实；其他数据库异常继续向上抛出并回滚。
+- 数据库 `DuplicateKeyException` 按自然键幂等命中处理；标题、正文和路由使用首次写入事实。其他数据库异常继续向上抛出并回滚。
 - Writer 通过普通 INSERT 的 generated key 判断首次新增；只有首次新增才累计通道数量并记录一次 `ENQUEUE`。
 - 普通 inbox 与外部 Outbox 共享调用方事务，任一数据库错误都会整体回滚。
-- Writer 不分派外部通道；提交后的 EMAIL、SMS 由 worker 和投递协调器处理。
+- Writer 将 EMAIL、SMS 写入 outbox，提交后由 worker 和投递协调器分派外部通道。
 
 ## 最小接入示例
 

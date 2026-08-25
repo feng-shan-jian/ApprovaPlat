@@ -6,7 +6,7 @@
 
 ## 使用与边界
 
-组件只读取 `RepositoryService`，不做路径决策。撤回、完成和退回应用服务在当前事务快照内读取后，由各自业务规则解释节点。
+组件通过 `RepositoryService` 返回只读 BPMN 上下文；撤回、完成和退回应用服务在当前事务快照内读取后，由各自业务规则完成路径决策。
 
 ```java
 WorkflowTaskBpmnSnapshot snapshot = bpmnReader.require(processDefinitionId);
