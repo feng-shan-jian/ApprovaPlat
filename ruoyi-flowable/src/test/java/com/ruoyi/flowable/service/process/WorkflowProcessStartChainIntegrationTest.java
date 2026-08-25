@@ -24,11 +24,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
-import org.flowable.engine.HistoryService;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
-import org.flowable.engine.TaskService;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.junit.jupiter.api.AfterEach;
@@ -62,7 +60,6 @@ import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import com.ruoyi.flowable.mapper.WfAttachmentMapper;
-import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
@@ -75,10 +72,8 @@ import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
-import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
 import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
-import com.ruoyi.system.service.ISysUserService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
@@ -115,7 +110,7 @@ class WorkflowProcessStartChainIntegrationTest
     private WorkflowParticipantRuleRuntimeService participantRuntimeService;
     private SimpleMeterRegistry meterRegistry;
     private WorkflowAttachmentStorage attachmentStorage;
-    private WorkflowProcessQueryService queryService;
+    private WorkflowProcessDefinitionQueryService queryService;
     private WorkflowProcessStartService startService;
     private WorkflowProcessDraftService draftService;
     private ProcessDefinition definition;
@@ -136,8 +131,6 @@ class WorkflowProcessStartChainIntegrationTest
         processEngine = engineInfrastructure.processEngine();
         repositoryService = spy(processEngine.getRepositoryService());
         runtimeService = spy(processEngine.getRuntimeService());
-        HistoryService historyService = processEngine.getHistoryService();
-        TaskService taskService = processEngine.getTaskService();
 
         jdbcTemplate = engineInfrastructure.jdbcTemplate();
         WorkflowH2SchemaMapperSupport.executeSchema(dataSource,
@@ -182,12 +175,11 @@ class WorkflowProcessStartChainIntegrationTest
         WorkflowEngineOperations engineOperations =
                 engineInfrastructure.transactionalProxy(operationsTarget);
 
-        queryService = new WorkflowProcessQueryService(
-                engineOperations, repositoryService, historyService, runtimeService, taskService,
-                identityResolver, mock(WorkflowProcessAccessService.class),
+        queryService = new WorkflowProcessDefinitionQueryService(
+                engineOperations, repositoryService, identityResolver,
+                mock(WorkflowProcessAccessService.class),
                 mock(WorkflowDeploymentService.class), artifactRepository,
-                mock(WfCopyMapper.class), mock(ISysUserService.class),
-                mock(WorkflowTaskLifecycleService.class), participantRuntimeService);
+                participantRuntimeService);
         WorkflowAttachmentProperties attachmentProperties = new WorkflowAttachmentProperties();
         attachmentProperties.setMinFreeBytes(0);
         attachmentStorage = new WorkflowAttachmentStorage(profileRoot,

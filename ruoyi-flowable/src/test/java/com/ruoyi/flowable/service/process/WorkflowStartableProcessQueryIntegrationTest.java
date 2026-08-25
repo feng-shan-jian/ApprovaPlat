@@ -17,12 +17,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
-import org.flowable.engine.HistoryService;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.ProcessEngineConfiguration;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
-import org.flowable.engine.TaskService;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.junit.jupiter.api.AfterEach;
@@ -38,15 +36,12 @@ import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
-import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
-import com.ruoyi.system.service.ISysUserService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
@@ -67,7 +62,7 @@ class WorkflowStartableProcessQueryIntegrationTest
     private WorkflowIdentityMapper identityMapper;
     private WorkflowIdentityResolver identityResolver;
     private WorkflowParticipantRuleRuntimeService participantRuntimeService;
-    private WorkflowProcessQueryService queryService;
+    private WorkflowProcessDefinitionQueryService queryService;
 
     /** 流程 key 到真实定义。 */
     private final Map<String, ProcessDefinition> definitions = new LinkedHashMap<>();
@@ -90,8 +85,6 @@ class WorkflowStartableProcessQueryIntegrationTest
                 .buildProcessEngine();
         repositoryService = spy(processEngine.getRepositoryService());
         RuntimeService runtimeService = processEngine.getRuntimeService();
-        HistoryService historyService = processEngine.getHistoryService();
-        TaskService taskService = processEngine.getTaskService();
 
         artifactRepository = new WorkflowDeploymentArtifactRepository(repositoryService);
         identityMapper = mock(WorkflowIdentityMapper.class);
@@ -124,11 +117,10 @@ class WorkflowStartableProcessQueryIntegrationTest
         WorkflowEngineOperations engineOperations = mock(WorkflowEngineOperations.class);
         when(engineOperations.read(any(Supplier.class))).thenAnswer(invocation ->
                 ((Supplier<?>) invocation.getArgument(0)).get());
-        queryService = new WorkflowProcessQueryService(engineOperations, repositoryService,
-                historyService, runtimeService, taskService, identityResolver,
-                mock(WorkflowProcessAccessService.class), mock(WorkflowDeploymentService.class),
-                artifactRepository, mock(WfCopyMapper.class), mock(ISysUserService.class),
-                mock(WorkflowTaskLifecycleService.class), participantRuntimeService);
+        queryService = new WorkflowProcessDefinitionQueryService(engineOperations,
+                repositoryService, identityResolver, mock(WorkflowProcessAccessService.class),
+                mock(WorkflowDeploymentService.class), artifactRepository,
+                participantRuntimeService);
 
         // 夹具创建阶段的真实部署和 starter link 写入不属于待验证的查询次数。
         clearInvocations(repositoryService, identityMapper, identityResolver,

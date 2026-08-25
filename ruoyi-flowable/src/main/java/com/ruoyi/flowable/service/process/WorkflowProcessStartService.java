@@ -43,7 +43,8 @@ public class WorkflowProcessStartService
 
     private final RepositoryService repositoryService;
     private final RuntimeService runtimeService;
-    private final WorkflowProcessQueryService processQueryService;
+    /** 发起定义授权与不可变开始表单装载边界。 */
+    private final WorkflowProcessDefinitionQueryService definitionQueryService;
     private final WorkflowStartVariableValidator variableValidator;
     private final WorkflowAttachmentService attachmentService;
     private final WorkflowProcessDefinitionLockMapper definitionLockMapper;
@@ -54,7 +55,7 @@ public class WorkflowProcessStartService
      *
      * @param repositoryService RepositoryService，流程定义和状态公共 API
      * @param runtimeService RuntimeService，真实发起流程实例公共 API
-     * @param processQueryService WorkflowProcessQueryService，starter 授权与部署开始表单快照门禁
+     * @param definitionQueryService WorkflowProcessDefinitionQueryService，starter 授权与部署开始表单快照门禁
      * @param variableValidator WorkflowStartVariableValidator，开始表单变量 schema 验证器
      * @param attachmentService WorkflowAttachmentService，草稿附件校验、投影和事务绑定服务
      * @param definitionLockMapper WorkflowProcessDefinitionLockMapper，草稿提交最新版定义当前读和部署生命周期行锁
@@ -63,7 +64,7 @@ public class WorkflowProcessStartService
      */
     public WorkflowProcessStartService(RepositoryService repositoryService,
             RuntimeService runtimeService,
-            WorkflowProcessQueryService processQueryService,
+            WorkflowProcessDefinitionQueryService definitionQueryService,
             WorkflowStartVariableValidator variableValidator,
             WorkflowAttachmentService attachmentService,
             WorkflowProcessDefinitionLockMapper definitionLockMapper,
@@ -71,7 +72,7 @@ public class WorkflowProcessStartService
     {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
-        this.processQueryService = processQueryService;
+        this.definitionQueryService = definitionQueryService;
         this.variableValidator = variableValidator;
         this.attachmentService = attachmentService;
         this.definitionLockMapper = definitionLockMapper;
@@ -130,7 +131,7 @@ public class WorkflowProcessStartService
             }
             throw exception;
         }
-        WorkflowProcessQueryService.StartFormLoad formLoad = processQueryService
+        WorkflowProcessDefinitionQueryService.StartFormLoad formLoad = definitionQueryService
                 .loadStartFormInCurrentTransaction(actor, definition);
         WorkflowProcessFormView startForm = formLoad.form();
         assertSnapshotRelation(startForm, draft.processDefinitionId(), draft.deploymentId());

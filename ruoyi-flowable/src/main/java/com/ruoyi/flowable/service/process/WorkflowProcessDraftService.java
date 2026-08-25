@@ -59,7 +59,8 @@ public class WorkflowProcessDraftService
     private final WorkflowEngineOperations engineOperations;
     private final WorkflowIdentityResolver identityResolver;
     private final RepositoryService repositoryService;
-    private final WorkflowProcessQueryService processQueryService;
+    /** 可发起定义与不可变部署表单查询边界。 */
+    private final WorkflowProcessDefinitionQueryService definitionQueryService;
     private final WorkflowProcessStartService processStartService;
     private final WorkflowStartVariableValidator variableValidator;
     private final WorkflowAttachmentService attachmentService;
@@ -74,7 +75,7 @@ public class WorkflowProcessDraftService
      * @param engineOperations WorkflowEngineOperations，统一身份和事务边界
      * @param identityResolver WorkflowIdentityResolver，当前有效用户解析器
      * @param repositoryService RepositoryService，真实流程定义查询 API
-     * @param processQueryService WorkflowProcessQueryService，starter 和部署表单快照门禁
+     * @param definitionQueryService WorkflowProcessDefinitionQueryService，starter 和部署表单快照门禁
      * @param processStartService WorkflowProcessStartService，真实 Flowable 发起服务
      * @param variableValidator WorkflowStartVariableValidator，草稿和正式字段校验器
      * @param attachmentService WorkflowAttachmentService，草稿附件对账和迁移服务
@@ -84,7 +85,7 @@ public class WorkflowProcessDraftService
      */
     public WorkflowProcessDraftService(WorkflowEngineOperations engineOperations,
             WorkflowIdentityResolver identityResolver, RepositoryService repositoryService,
-            WorkflowProcessQueryService processQueryService,
+            WorkflowProcessDefinitionQueryService definitionQueryService,
             WorkflowProcessStartService processStartService,
             WorkflowStartVariableValidator variableValidator,
             WorkflowAttachmentService attachmentService, WfProcessDraftMapper draftMapper,
@@ -93,7 +94,7 @@ public class WorkflowProcessDraftService
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
         this.repositoryService = repositoryService;
-        this.processQueryService = processQueryService;
+        this.definitionQueryService = definitionQueryService;
         this.processStartService = processStartService;
         this.variableValidator = variableValidator;
         this.attachmentService = attachmentService;
@@ -181,7 +182,7 @@ public class WorkflowProcessDraftService
             ProcessDefinition definition = requireDefinition(definitionId);
             // 与部署删除统一先锁 ACT_RE_DEPLOYMENT，再读取部署快照并写入 wf_process_draft。
             String deploymentId = lockDraftDeployment(definition);
-            WorkflowProcessFormView form = processQueryService.getProcessForm(
+            WorkflowProcessFormView form = definitionQueryService.getProcessForm(
                     new WorkflowProcessFormQueryDto(definitionId,
                             deploymentId, null));
             WorkflowValidatedStartVariables validated = variableValidator.validateForDraft(
@@ -416,7 +417,7 @@ public class WorkflowProcessDraftService
      */
     private WorkflowProcessFormView requireLiveSnapshot(WfProcessDraft draft)
     {
-        WorkflowProcessFormView form = processQueryService.getProcessForm(
+        WorkflowProcessFormView form = definitionQueryService.getProcessForm(
                 new WorkflowProcessFormQueryDto(draft.processDefinitionId(),
                         draft.deploymentId(), null));
         if (!draft.deploymentId().equals(form.deploymentId())

@@ -9,7 +9,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.flowable.engine.HistoryService;
@@ -27,17 +26,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.core.page.PageResult;
-import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.domain.vo.WorkflowAssignedTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowClaimableTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfCopyMapper;
-import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
-import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
-import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.system.service.ISysUserService;
 
@@ -58,7 +52,7 @@ class WorkflowProcessTaskContextIntegrationTest
     private RuntimeService runtimeService;
     private TaskService taskService;
     private WorkflowTaskLifecycleService taskLifecycleService;
-    private WorkflowProcessQueryService service;
+    private WorkflowProcessTaskQueryService service;
 
     /**
      * 创建启用完整历史的真实内存引擎，并装配只对外部依赖使用 mock 的查询服务。
@@ -96,13 +90,9 @@ class WorkflowProcessTaskContextIntegrationTest
         when(userService.selectUserById(Long.valueOf(CURRENT_USER_ID))).thenReturn(currentUser);
         taskLifecycleService = mock(WorkflowTaskLifecycleService.class);
 
-        service = new WorkflowProcessQueryService(engineOperations, repositoryService,
-                historyService, runtimeService, taskService, identityResolver,
-                mock(WorkflowProcessAccessService.class),
-                mock(WorkflowDeploymentService.class),
-                mock(WorkflowDeploymentArtifactRepository.class), mock(WfCopyMapper.class),
-                userService, taskLifecycleService,
-                mock(WorkflowParticipantRuleRuntimeService.class));
+        service = new WorkflowProcessTaskQueryService(engineOperations, repositoryService,
+                historyService, taskService, identityResolver, userService,
+                taskLifecycleService);
     }
 
     /**

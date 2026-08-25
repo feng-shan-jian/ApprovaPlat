@@ -27,7 +27,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.core.page.PageResult;
-import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.domain.dto.WorkflowManagedProcessQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowOwnedProcessQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowManagedProcessView;
@@ -36,16 +35,12 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
-import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
-import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
-import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
-import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.system.service.ISysUserService;
 
 /**
  * 使用真实 Flowable 8 和 H2 验证实例列表的部署分类及当前任务批量查询边界。
  */
-class WorkflowProcessQueryServiceIntegrationTest
+class WorkflowProcessInstanceQueryServiceIntegrationTest
 {
     private static final String CURRENT_USER_ID = "100";
 
@@ -53,7 +48,7 @@ class WorkflowProcessQueryServiceIntegrationTest
     private RepositoryService repositoryService;
     private RuntimeService runtimeService;
     private TaskService taskService;
-    private WorkflowProcessQueryService service;
+    private WorkflowProcessInstanceQueryService service;
     private ProcessInstance firstFinanceInstance;
     private ProcessInstance secondFinanceInstance;
     private ProcessInstance hrInstance;
@@ -104,13 +99,9 @@ class WorkflowProcessQueryServiceIntegrationTest
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity()).thenReturn(
                 new WorkflowCurrentIdentity(CURRENT_USER_ID, Set.of()));
-        service = new WorkflowProcessQueryService(engineOperations, repositoryService,
-                historyService, runtimeService, taskService, identityResolver,
-                mock(WorkflowProcessAccessService.class),
-                mock(WorkflowDeploymentService.class),
-                mock(WorkflowDeploymentArtifactRepository.class), mock(WfCopyMapper.class),
-                mock(ISysUserService.class), mock(WorkflowTaskLifecycleService.class),
-                mock(WorkflowParticipantRuleRuntimeService.class));
+        service = new WorkflowProcessInstanceQueryService(engineOperations,
+                repositoryService, historyService, runtimeService, taskService,
+                identityResolver, mock(WfCopyMapper.class), mock(ISysUserService.class));
     }
 
     /**

@@ -55,7 +55,9 @@ import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartableDefinitionView;
 import com.ruoyi.flowable.service.process.WorkflowProcessDetailService;
 import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
-import com.ruoyi.flowable.service.process.WorkflowProcessQueryService;
+import com.ruoyi.flowable.service.process.WorkflowProcessDefinitionQueryService;
+import com.ruoyi.flowable.service.process.WorkflowProcessInstanceQueryService;
+import com.ruoyi.flowable.service.process.WorkflowProcessTaskQueryService;
 
 /**
  * 流程工作台列表、导出、表单、BPMN 和实例详情接口。
@@ -74,7 +76,14 @@ public class WfProcessController extends BaseController
     /** 导出逐页读取大小，复用领域服务的分页门禁。 */
     private static final int EXPORT_PAGE_SIZE = 200;
 
-    private final WorkflowProcessQueryService processQueryService;
+    /** 可发起定义、部署表单和 BPMN 预览查询边界。 */
+    private final WorkflowProcessDefinitionQueryService definitionQueryService;
+
+    /** 我的流程、管理员实例和抄送查询边界。 */
+    private final WorkflowProcessInstanceQueryService instanceQueryService;
+
+    /** 待办、可认领和已办任务查询边界。 */
+    private final WorkflowProcessTaskQueryService taskQueryService;
 
     private final WorkflowProcessDetailService processDetailService;
 
@@ -83,16 +92,22 @@ public class WfProcessController extends BaseController
     /**
      * 创建流程工作台 Controller。
      *
-     * @param processQueryService WorkflowProcessQueryService，七类身份受控列表与快照查询服务
+     * @param definitionQueryService WorkflowProcessDefinitionQueryService，可发起定义、表单和 BPMN 查询服务
+     * @param instanceQueryService WorkflowProcessInstanceQueryService，我的流程、管理员实例和抄送查询服务
+     * @param taskQueryService WorkflowProcessTaskQueryService，待办、可认领和已办任务查询服务
      * @param processDetailService WorkflowProcessDetailService，完整对象授权详情服务
      * @param processInstanceService WorkflowProcessInstanceService，已结束历史删除服务
      * @return 无返回值，构造后由 Spring 管理该 Controller
      */
-    public WfProcessController(WorkflowProcessQueryService processQueryService,
+    public WfProcessController(WorkflowProcessDefinitionQueryService definitionQueryService,
+            WorkflowProcessInstanceQueryService instanceQueryService,
+            WorkflowProcessTaskQueryService taskQueryService,
             WorkflowProcessDetailService processDetailService,
             WorkflowProcessInstanceService processInstanceService)
     {
-        this.processQueryService = processQueryService;
+        this.definitionQueryService = definitionQueryService;
+        this.instanceQueryService = instanceQueryService;
+        this.taskQueryService = taskQueryService;
         this.processDetailService = processDetailService;
         this.processInstanceService = processInstanceService;
     }
@@ -113,7 +128,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return getDataTable(processQueryService.listStartable(filter, pageNum, pageSize));
+        return getDataTable(definitionQueryService.listStartable(filter, pageNum, pageSize));
     }
 
     /**
@@ -131,7 +146,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return getDataTable(processQueryService.listOwned(filter, pageNum, pageSize));
+        return getDataTable(instanceQueryService.listOwned(filter, pageNum, pageSize));
     }
 
     /**
@@ -150,7 +165,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return getDataTable(processQueryService.listManaged(filter, pageNum, pageSize));
+        return getDataTable(instanceQueryService.listManaged(filter, pageNum, pageSize));
     }
 
     /**
@@ -168,7 +183,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return getDataTable(processQueryService.listAssigned(filter, pageNum, pageSize));
+        return getDataTable(taskQueryService.listAssigned(filter, pageNum, pageSize));
     }
 
     /**
@@ -186,7 +201,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return getDataTable(processQueryService.listClaimable(filter, pageNum, pageSize));
+        return getDataTable(taskQueryService.listClaimable(filter, pageNum, pageSize));
     }
 
     /**
@@ -205,7 +220,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return getDataTable(processQueryService.listCompleted(filter, pageNum, pageSize));
+        return getDataTable(taskQueryService.listCompleted(filter, pageNum, pageSize));
     }
 
     /**
@@ -223,7 +238,7 @@ public class WfProcessController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return getDataTable(processQueryService.listCopies(filter, pageNum, pageSize));
+        return getDataTable(instanceQueryService.listCopies(filter, pageNum, pageSize));
     }
 
     /**
@@ -236,7 +251,7 @@ public class WfProcessController extends BaseController
     @PutMapping("/copy/{copyId}/read")
     public AjaxResult markCopyRead(@PathVariable Long copyId)
     {
-        return success(processQueryService.markCopyRead(copyId));
+        return success(instanceQueryService.markCopyRead(copyId));
     }
 
     /**
@@ -255,7 +270,7 @@ public class WfProcessController extends BaseController
     {
         // 可发起定义由领域服务一次解析身份并完成整批授权扫描，禁止按导出页重复全量扫描。
         List<WorkflowStartableDefinitionView> rows =
-                processQueryService.listStartableForExport(filter);
+                definitionQueryService.listStartableForExport(filter);
         List<WorkflowStartableDefinitionExportView> exports = rows.stream()
                 .map(row -> new WorkflowStartableDefinitionExportView(row.definitionId(),
                         row.processName(), row.processKey(), row.category(), row.version(),
@@ -280,7 +295,7 @@ public class WfProcessController extends BaseController
             HttpServletResponse response)
     {
         List<WorkflowOwnedProcessView> rows = collectForExport(
-                page -> processQueryService.listOwned(filter, page, EXPORT_PAGE_SIZE),
+                page -> instanceQueryService.listOwned(filter, page, EXPORT_PAGE_SIZE),
                 "我发起的流程");
         List<WorkflowOwnedProcessExportView> exports = rows.stream()
                 .map(row -> new WorkflowOwnedProcessExportView(row.processInstanceId(),
@@ -307,7 +322,7 @@ public class WfProcessController extends BaseController
             HttpServletResponse response)
     {
         List<WorkflowManagedProcessView> rows = collectForExport(
-                page -> processQueryService.listManaged(filter, page, EXPORT_PAGE_SIZE),
+                page -> instanceQueryService.listManaged(filter, page, EXPORT_PAGE_SIZE),
                 "流程实例运维");
         List<WorkflowManagedProcessExportView> exports = rows.stream()
                 .map(row -> new WorkflowManagedProcessExportView(row.processInstanceId(),
@@ -335,7 +350,7 @@ public class WfProcessController extends BaseController
             HttpServletResponse response)
     {
         List<WorkflowAssignedTaskView> rows = collectForExport(
-                page -> processQueryService.listAssigned(filter, page, EXPORT_PAGE_SIZE),
+                page -> taskQueryService.listAssigned(filter, page, EXPORT_PAGE_SIZE),
                 "待办流程");
         List<WorkflowAssignedTaskExportView> exports = rows.stream()
                 .map(row -> new WorkflowAssignedTaskExportView(row.taskId(), row.processName(),
@@ -361,7 +376,7 @@ public class WfProcessController extends BaseController
             HttpServletResponse response)
     {
         List<WorkflowClaimableTaskView> rows = collectForExport(
-                page -> processQueryService.listClaimable(filter, page, EXPORT_PAGE_SIZE),
+                page -> taskQueryService.listClaimable(filter, page, EXPORT_PAGE_SIZE),
                 "待签流程");
         List<WorkflowClaimableTaskExportView> exports = rows.stream()
                 .map(row -> new WorkflowClaimableTaskExportView(row.taskId(), row.processName(),
@@ -387,7 +402,7 @@ public class WfProcessController extends BaseController
             HttpServletResponse response)
     {
         List<WorkflowCompletedTaskExportView> exports = collectForExport(
-                page -> processQueryService.listCompletedForExport(
+                page -> taskQueryService.listCompletedForExport(
                         filter, page, EXPORT_PAGE_SIZE),
                 "已办流程");
         new ExcelUtil<>(WorkflowCompletedTaskExportView.class)
@@ -409,7 +424,7 @@ public class WfProcessController extends BaseController
             HttpServletResponse response)
     {
         List<WorkflowCopyView> rows = collectForExport(
-                page -> processQueryService.listCopies(filter, page, EXPORT_PAGE_SIZE),
+                page -> instanceQueryService.listCopies(filter, page, EXPORT_PAGE_SIZE),
                 "抄送流程");
         List<WorkflowCopyExportView> exports = rows.stream()
                 .map(row -> new WorkflowCopyExportView(row.copyId(), row.title(),
@@ -437,7 +452,7 @@ public class WfProcessController extends BaseController
             @RequestParam(value = "processInstanceId", required = false)
             String processInstanceId)
     {
-        return success(processQueryService.getProcessForm(
+        return success(definitionQueryService.getProcessForm(
                 new WorkflowProcessFormQueryDto(definitionId, deploymentId,
                         processInstanceId)));
     }
@@ -471,7 +486,7 @@ public class WfProcessController extends BaseController
             String processInstanceId)
     {
         // 显式使用数据响应，避免 BaseController.success(String) 重载把 XML 误写入 msg 字段。
-        return AjaxResult.success((Object) processQueryService.getBpmnXml(
+        return AjaxResult.success((Object) definitionQueryService.getBpmnXml(
                 new WorkflowBpmnXmlQueryDto(processDefId, processInstanceId)));
     }
 
