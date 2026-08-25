@@ -1,6 +1,8 @@
 package com.ruoyi.flowable.service.notification;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -97,16 +99,20 @@ public class WorkflowNotificationAdminService
     {
         StringBuilder where = new StringBuilder(" where 1=1");
         List<Object> args = new ArrayList<>();
-        appendEquals(where, args, "status", query.status());
-        appendEquals(where, args, "source_type", query.sourceType());
-        appendEquals(where, args, "event_type", query.eventType());
-        appendEquals(where, args, "channel", query.channel());
+        appendEquals(where, args, "outbox.status", query.status());
+        appendEquals(where, args, "outbox.source_type", query.sourceType());
+        appendEquals(where, args, "outbox.event_type", query.eventType());
+        appendEquals(where, args, "outbox.channel", query.channel());
         if (query.keyword() != null)
         {
-            where.append(" and (cast(outbox_id as char)=? or source_id like ? or ")
-                    .append("process_instance_id like ? or task_id like ? or last_error_code like ?)");
+            where.append(" and (cast(outbox.outbox_id as char)=? or outbox.source_id like ? or ")
+                    .append("outbox.process_instance_id like ? or outbox.task_id like ? or ")
+                    .append("outbox.last_error_code like ? or user.user_name like ? or ")
+                    .append("user.nick_name like ?)");
             String like = "%" + query.keyword() + "%";
             args.add(query.keyword());
+            args.add(like);
+            args.add(like);
             args.add(like);
             args.add(like);
             args.add(like);
@@ -114,12 +120,12 @@ public class WorkflowNotificationAdminService
         }
         if (query.beginTime() != null)
         {
-            where.append(" and create_time>=?");
+            where.append(" and outbox.create_time>=?");
             args.add(query.beginTime());
         }
         if (query.endTime() != null)
         {
-            where.append(" and create_time<=?");
+            where.append(" and outbox.create_time<=?");
             args.add(query.endTime());
         }
         return new SqlFilter(where.toString(), List.copyOf(args));
@@ -148,7 +154,9 @@ public class WorkflowNotificationAdminService
     private long count(SqlFilter filter)
     {
         Long total = jdbcTemplate.queryForObject(
-                "select count(*) from wf_notification_outbox" + filter.where(),
+                "select count(*) from wf_notification_outbox outbox " +
+                "left join sys_user user on user.user_id=outbox.recipient_user_id" +
+                filter.where(),
                 Long.class, filter.args().toArray());
         return total == null ? 0 : total;
     }
@@ -165,16 +173,56 @@ public class WorkflowNotificationAdminService
         List<Object> args = new ArrayList<>(filter.args());
         args.add(offset);
         args.add(pageSize);
-        return jdbcTemplate.queryForList("select outbox_id as outboxId,source_type as sourceType," +
-                "source_id as sourceId,event_type as eventType,channel," +
-                "recipient_user_id as recipientUserId,process_instance_id as processInstanceId," +
-                "task_id as taskId,status,delivery_cycle as deliveryCycle," +
-                "attempt_count as attemptCount,total_attempt_count as totalAttemptCount," +
-                "max_attempts as maxAttempts,next_attempt_at as nextAttemptAt," +
-                "last_error_code as lastErrorCode,last_error_summary as lastErrorSummary," +
-                "create_time as createTime,processed_time as processedTime " +
-                "from wf_notification_outbox" + filter.where() +
-                " order by create_time desc,outbox_id desc limit ?,?", args.toArray());
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "select outbox.outbox_id as outboxId,outbox.source_type as sourceType," +
+                "outbox.source_id as sourceId,outbox.event_type as eventType,outbox.channel," +
+                "outbox.recipient_user_id as recipientUserId," +
+                "coalesce(nullif(user.nick_name,''),nullif(user.user_name,'')," +
+                "cast(outbox.recipient_user_id as char)) as recipientName," +
+                "outbox.process_instance_id as processInstanceId,outbox.task_id as taskId," +
+                "outbox.status,outbox.delivery_cycle as deliveryCycle," +
+                "outbox.attempt_count as attemptCount," +
+                "outbox.total_attempt_count as totalAttemptCount," +
+                "outbox.max_attempts as maxAttempts,outbox.next_attempt_at as nextAttemptAt," +
+                "outbox.last_error_code as lastErrorCode," +
+                "outbox.last_error_summary as lastErrorSummary,outbox.revision," +
+                "case when outbox.status='DEAD_LETTER' then 1 else 0 end as canCompensate," +
+                "outbox.create_time as createTime,outbox.processed_time as processedTime " +
+                "from wf_notification_outbox outbox left join sys_user user " +
+                "on user.user_id=outbox.recipient_user_id" + filter.where() +
+                " order by outbox.create_time desc,outbox.outbox_id desc limit ?,?",
+                args.toArray());
+        return rows.stream().map(this::sanitizeFailure).toList();
+    }
+
+    /**
+     * 将数据库错误摘要替换为按稳定错误码生成的用户可见原因，历史脏数据不得直接返回前端。
+     * @param row Map&lt;String,Object&gt;，数据库 outbox 运维投影
+     * @return Map&lt;String,Object&gt;，不包含地址、主机、账号或供应商原始消息的投影
+     */
+    private Map<String, Object> sanitizeFailure(Map<String, Object> row)
+    {
+        LinkedHashMap<String, Object> sanitized = new LinkedHashMap<>(row);
+        String code = row.get("lastErrorCode") == null ? null
+                : String.valueOf(row.get("lastErrorCode"));
+        Object originalSummary = row.get("lastErrorSummary");
+        String summary = switch (code == null ? "" : code)
+        {
+            case "SMTP_NOT_CONFIGURED" -> "SMTP 邮件服务尚未配置";
+            case "MAIL_CREDENTIAL_DECRYPT_FAILED" -> "SMTP 授权码无法解密";
+            case "SMTP_CONNECT_FAILED" -> "SMTP 服务器无法连接";
+            case "SMTP_TIMEOUT" -> "SMTP 连接或发送超时";
+            case "SMTP_AUTH_FAILED" -> "SMTP 认证失败";
+            case "SMTP_TLS_FAILED" -> "SMTP TLS 或 SSL 协商失败";
+            case "SMTP_FROM_REJECTED" -> "SMTP 服务器拒绝发件邮箱";
+            case "SMTP_DELIVERY_FAILED" -> "SMTP 投递失败";
+            case "RECIPIENT_INVALID" -> "通知接收人当前不可用";
+            case "BUSINESS_OBJECT_COMPLETED" -> "关联审批业务已经结束";
+            case "LEASE_EXPIRED_AFTER_FINAL_ATTEMPT" -> "最终投递租约过期";
+            default -> originalSummary == null ? null : "通知投递失败，详细信息已隐藏";
+        };
+        sanitized.put("lastErrorSummary", summary);
+        return Collections.unmodifiableMap(sanitized);
     }
 
     /**

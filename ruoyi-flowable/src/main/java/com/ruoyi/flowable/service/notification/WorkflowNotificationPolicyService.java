@@ -45,18 +45,26 @@ public class WorkflowNotificationPolicyService
 
     private final JdbcTemplate jdbcTemplate;
     private final WorkflowIdentityResolver identityResolver;
+    private final WorkflowNotificationCatalogService notificationCatalogService;
+    private final WorkflowMailConfigService mailConfigService;
 
     /**
      * 创建通知策略与偏好服务。
      * @param jdbcTemplate JdbcTemplate，策略和偏好正式数据访问入口
      * @param identityResolver WorkflowIdentityResolver，当前用户身份解析入口
+     * @param notificationCatalogService WorkflowNotificationCatalogService，真实流程和节点复核入口
+     * @param mailConfigService WorkflowMailConfigService，启用邮件策略前的 SMTP 可用性门禁
      * @return void，构造后由 Spring 管理
      */
     public WorkflowNotificationPolicyService(JdbcTemplate jdbcTemplate,
-            WorkflowIdentityResolver identityResolver)
+            WorkflowIdentityResolver identityResolver,
+            WorkflowNotificationCatalogService notificationCatalogService,
+            WorkflowMailConfigService mailConfigService)
     {
         this.jdbcTemplate = jdbcTemplate;
         this.identityResolver = identityResolver;
+        this.notificationCatalogService = notificationCatalogService;
+        this.mailConfigService = mailConfigService;
     }
 
     /**
@@ -152,19 +160,33 @@ public class WorkflowNotificationPolicyService
             {
                 throw invalid("通知策略版本不合法");
             }
-            int updated = jdbcTemplate.update("update wf_notification_policy set scope_type=?," +
-                    "process_definition_key=?,task_definition_key=?,event_type=?," +
-                    "recipient_rules=?,channels=?,sms_template_id=?,title_template=?," +
-                    "content_template=?,max_attempts=?,status=?,revision=revision+1," +
-                    "update_by=?,update_time=current_timestamp(3) " +
-                    "where policy_id=? and revision=?", policy.scopeType(),
-                    policy.processDefinitionKey(), policy.taskDefinitionKey(), policy.eventType(),
-                    policy.recipientRules(), policy.channels(), policy.smsTemplateId(),
-                    policy.titleTemplate(), policy.contentTemplate(), policy.maxAttempts(),
-                    policy.status(), actor, request.policyId(), request.expectedRevision());
+            int updated;
+            try
+            {
+                updated = jdbcTemplate.update("update wf_notification_policy set scope_type=?," +
+                        "process_definition_key=?,task_definition_key=?,event_type=?," +
+                        "recipient_rules=?,channels=?,sms_template_id=?,title_template=?," +
+                        "content_template=?,max_attempts=?,status=?,revision=revision+1," +
+                        "update_by=?,update_time=current_timestamp(3) " +
+                        "where policy_id=? and revision=?", policy.scopeType(),
+                        policy.processDefinitionKey(), policy.taskDefinitionKey(), policy.eventType(),
+                        policy.recipientRules(), policy.channels(), policy.smsTemplateId(),
+                        policy.titleTemplate(), policy.contentTemplate(), policy.maxAttempts(),
+                        policy.status(), actor, request.policyId(), request.expectedRevision());
+            }
+            catch (DuplicateKeyException exception)
+            {
+                throw new ServiceException("相同作用域和事件的通知策略已存在",
+                        HttpStatus.CONFLICT).setSubCode("NOTIFICATION_POLICY_DUPLICATE");
+            }
+            catch (DataAccessException exception)
+            {
+                throw new ServiceException("通知策略保存失败", HttpStatus.ERROR);
+            }
             if (updated != 1)
             {
-                throw new ServiceException("通知策略已变化，请刷新后重试", HttpStatus.CONFLICT);
+                throw new ServiceException("通知策略已变化，请刷新后重试", HttpStatus.CONFLICT)
+                        .setSubCode("NOTIFICATION_POLICY_REVISION_CONFLICT");
             }
             policyId = request.policyId();
         }
@@ -203,7 +225,8 @@ public class WorkflowNotificationPolicyService
         }
         catch (DuplicateKeyException exception)
         {
-            throw new ServiceException("相同作用域和事件的通知策略已存在", HttpStatus.CONFLICT);
+            throw new ServiceException("相同作用域和事件的通知策略已存在", HttpStatus.CONFLICT)
+                    .setSubCode("NOTIFICATION_POLICY_DUPLICATE");
         }
         catch (DataAccessException exception)
         {
@@ -235,18 +258,25 @@ public class WorkflowNotificationPolicyService
                 || ("PROCESS".equals(scope) && (processKey == null || taskKey != null))
                 || ("NODE".equals(scope) && (processKey == null || taskKey == null)))
             throw invalid("通知策略作用域字段不一致");
+        // 客户端目录值不是权威事实；每次保存都重新读取最新激活部署及真实 UserTask。
+        notificationCatalogService.validateScope(scope, processKey, taskKey);
         String recipients = normalizedCsv(request.recipientRules(), RECIPIENT_RULE_ORDER);
         String channels = normalizedCsv(request.channels(), CHANNEL_ORDER);
         String smsTemplateId = optional(request.smsTemplateId(), 64);
         if (channels.contains("SMS") != StringUtils.hasText(smsTemplateId))
             throw invalid("短信通道与供应商模板 ID 必须同时配置");
         String titleTemplate = validateTemplate(request.titleTemplate(), MAX_TITLE_LENGTH,
-                "通知标题模板不合法");
+                "通知标题模板不合法", false);
         String contentTemplate = validateTemplate(request.contentTemplate(), MAX_CONTENT_LENGTH,
-                "通知正文模板不合法");
+                "通知正文模板不合法", true);
         if (request.maxAttempts() == null || request.maxAttempts() < 1
                 || request.maxAttempts() > 20)
             throw invalid("通知最大投递次数必须为 1 至 20");
+        if ("ENABLED".equals(status) && csv(channels).contains("EMAIL"))
+        {
+            // 启用邮件策略必须绑定可解密正式 SMTP；停用策略允许预先编辑但不会进入 outbox。
+            mailConfigService.requireMailChannelAvailable();
+        }
         return new ValidatedPolicy(scope, processKey, taskKey, event, recipients, channels,
                 smsTemplateId, titleTemplate, contentTemplate, request.maxAttempts(), status);
     }
@@ -281,14 +311,24 @@ public class WorkflowNotificationPolicyService
      * @param template String，原始模板
      * @param maxCodePoints int，字段字符上限
      * @param message String，长度错误提示
+     * @param allowBodyWhitespace boolean，正文是否允许换行和制表符
      * @return String，规范化模板
      */
-    private String validateTemplate(String template, int maxCodePoints, String message)
+    private String validateTemplate(String template, int maxCodePoints, String message,
+            boolean allowBodyWhitespace)
     {
         if (!StringUtils.hasText(template)) throw invalid("通知模板不能为空");
         String normalized = template.trim();
         if (normalized.codePointCount(0, normalized.length()) > maxCodePoints)
             throw invalid(message);
+        // SMTP Subject 禁止任何控制字符；正文只允许业务排版需要的 CR、LF 和 TAB。
+        boolean hasForbiddenControl = normalized.chars().anyMatch(character ->
+                Character.isISOControl(character)
+                        && (!allowBodyWhitespace
+                                || (character != '\r' && character != '\n' && character != '\t')));
+        if (hasForbiddenControl)
+            throw invalid(allowBodyWhitespace ? "通知正文模板包含非法控制字符"
+                    : "通知标题模板不能包含换行或控制字符");
         Matcher matcher = TEMPLATE_VARIABLE.matcher(normalized);
         while (matcher.find())
         {

@@ -168,7 +168,8 @@ public class WorkflowNotificationOutboxService
                 "where outbox_id=? and status='DEAD_LETTER' and delivery_cycle<65535", outboxId);
         if (updated != 1)
         {
-            throw new ServiceException("当前通知状态不允许补偿", HttpStatus.CONFLICT);
+            throw new ServiceException("当前通知状态不允许补偿", HttpStatus.CONFLICT)
+                    .setSubCode("NOTIFICATION_OUTBOX_STATE_CONFLICT");
         }
         recordTransition(outboxId, "COMPENSATE", 0, "DEAD_LETTER", "RETRYING", "USER",
                 currentUserId(), null, "管理员重新开启有界投递");

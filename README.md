@@ -104,6 +104,8 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 
 当前首发基线包含破坏性的全新安装脚本。不要对已有业务库直接执行，也不要开启 Flowable 自动建表来绕过缺失结构。
 
+已经安装 8.0.0 正式基线的数据库只执行 `8.0.1__workflow_mail_config.sql`，随后重放幂等菜单脚本；完整备份、核验和命令顺序见[现有基线升级](docs/database/workflow-baseline.md#现有基线升级)。迁移只创建空表，不复制旧 SMTP 环境变量，也不生成默认邮件账号或授权码。
+
 ### 2. 配置并启动后端
 
 在 PowerShell 中为当前进程设置本地环境变量，值由你自己的 MySQL 环境提供：
@@ -120,7 +122,9 @@ mvn -pl ruoyi-admin -am -DskipTests package
 java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
 ```
 
-`-DskipTests` 只用于缩短本地首次启动。未显式设置 `RUOYI_TOKEN_SECRET` 时，单节点环境会在用户私有目录中生成并复用随机 HS512 密钥；生产环境必须显式管理密钥和数据库配置。
+`-DskipTests` 只用于缩短本地首次启动。未显式设置 `RUOYI_TOKEN_SECRET` 时，单节点环境会在用户私有目录中生成并复用随机 HS512 密钥；生产环境必须显式管理 Token 密钥和数据库配置。
+
+SMTP 主机、端口、账号和发件身份保存后按数据库 revision 动态生效，不需要重启应用。授权码使用 RuoYi Token 密钥派生的用途子密钥加密，用户无需生成或配置第二把密钥。Token 密钥必须在重启和多节点之间保持稳定；更换后已有登录令牌会失效，SMTP 授权码也必须通过邮件服务页面重新保存。
 
 ### 3. 启动前端
 
@@ -145,6 +149,16 @@ mvn clean verify
 Set-Location ruoyi-ui
 npm run test:contracts
 npm run build:prod
+```
+
+真实 MySQL `*IT` 使用独立的 opt-in Failsafe profile。CI 必须先准备只用于验收的 `approvaplat_it` schema，再显式提供以下三个环境变量；profile 会在变量缺失时直接失败，普通 `mvn test` / `mvn verify` 不会连接 MySQL：
+
+```powershell
+$env:WORKFLOW_MYSQL_TEST_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat_it?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia%2FShanghai'
+$env:WORKFLOW_MYSQL_TEST_USERNAME = '<隔离验收库账号>'
+$env:WORKFLOW_MYSQL_TEST_PASSWORD = '<隔离验收库密码>'
+
+mvn -pl ruoyi-flowable -am -Pworkflow-mysql-it verify
 ```
 
 真实 MySQL、Redis、角色和 API 验证需要准备对应的运行环境与隔离数据。

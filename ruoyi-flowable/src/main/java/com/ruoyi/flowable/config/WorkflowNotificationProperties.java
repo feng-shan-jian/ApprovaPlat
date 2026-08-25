@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 统一工作流通知 worker、重试、催办频控和邮件发件身份配置。
+ * 统一工作流通知 worker、重试和催办频控配置。
  */
 @Component
 @ConfigurationProperties(prefix = "flowable.notification")
@@ -15,7 +15,6 @@ public class WorkflowNotificationProperties
     private Duration leaseDuration = Duration.ofMinutes(2);
     private Duration maxRetryDelay = Duration.ofMinutes(30);
     private Duration urgeInterval = Duration.ofMinutes(5);
-    private String mailFrom;
 
     /** @return int，单轮最多处理的 outbox 数量。 */
     public int getBatchSize() { return batchSize; }
@@ -85,13 +84,4 @@ public class WorkflowNotificationProperties
         this.urgeInterval = urgeInterval;
     }
 
-    /** @return String，环境或正式配置注入的邮件 From 地址。 */
-    public String getMailFrom() { return mailFrom; }
-
-    /**
-     * 设置邮件 From 地址，凭据仍由 spring.mail 环境配置管理。
-     * @param mailFrom String，发件地址
-     * @return void，无返回值
-     */
-    public void setMailFrom(String mailFrom) { this.mailFrom = mailFrom; }
 }

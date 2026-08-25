@@ -2,11 +2,9 @@ package com.ruoyi.flowable.service.notification;
 
 import java.nio.charset.StandardCharsets;
 import jakarta.mail.internet.MimeMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
-import com.ruoyi.flowable.config.WorkflowNotificationProperties;
 
 /**
  * 邮件通知通道，只负责对领取快照执行 SMTP 副作用。
@@ -14,20 +12,20 @@ import com.ruoyi.flowable.config.WorkflowNotificationProperties;
 @Component
 public class MailNotificationChannel implements WorkflowNotificationChannel
 {
-    private final JavaMailSender mailSender;
-    private final WorkflowNotificationProperties properties;
+    private final WorkflowMailConfigService mailConfigService;
+    private final WorkflowMailFailureClassifier failureClassifier;
 
     /**
      * 创建邮件通知通道。
-     * @param mailSender JavaMailSender，SMTP 发送出口
-     * @param properties WorkflowNotificationProperties，发件配置
+     * @param mailConfigService WorkflowMailConfigService，按当前 revision 获取动态发送器
+     * @param failureClassifier WorkflowMailFailureClassifier，SMTP 失败脱敏分类器
      * @return void，构造后由 Spring 管理
      */
-    public MailNotificationChannel(JavaMailSender mailSender,
-            WorkflowNotificationProperties properties)
+    public MailNotificationChannel(WorkflowMailConfigService mailConfigService,
+            WorkflowMailFailureClassifier failureClassifier)
     {
-        this.mailSender = mailSender;
-        this.properties = properties;
+        this.mailConfigService = mailConfigService;
+        this.failureClassifier = failureClassifier;
     }
 
     /** @return String，固定为 EMAIL。 */
@@ -45,11 +43,6 @@ public class MailNotificationChannel implements WorkflowNotificationChannel
     @Override
     public WorkflowNotificationDeliveryResult deliver(WorkflowNotificationOutboxRecord row)
     {
-        if (!StringUtils.hasText(properties.getMailFrom()))
-        {
-            return WorkflowNotificationDeliveryResult.failure(
-                    "SMTP_NOT_CONFIGURED", "SMTP 发件配置未启用", false);
-        }
         if (!StringUtils.hasText(row.deliveryTarget()))
         {
             return WorkflowNotificationDeliveryResult.failure(
@@ -57,24 +50,26 @@ public class MailNotificationChannel implements WorkflowNotificationChannel
         }
         try
         {
-            MimeMessage message = mailSender.createMimeMessage();
+            // 每次投递都从数据库 revision 边界获取不可变快照，已经取得的旧快照允许完成本次发送。
+            WorkflowMailConfigService.MailSenderSnapshot sender =
+                    mailConfigService.currentSender();
+            MimeMessage message = sender.mailSender().createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(
                     message, false, StandardCharsets.UTF_8.name());
-            helper.setFrom(properties.getMailFrom().trim());
+            helper.setFrom(sender.fromAddress(), sender.senderName());
             helper.setTo(row.deliveryTarget());
             helper.setSubject(row.title());
             helper.setText(row.content(), false);
             message.setHeader("Message-ID", "<" + row.idempotencyKey()
                     + "@approvaplat.notification>");
             message.setHeader("X-ApprovaPlat-Idempotency-Key", row.idempotencyKey());
-            mailSender.send(message);
+            sender.mailSender().send(message);
             return WorkflowNotificationDeliveryResult.delivered();
         }
         catch (Exception exception)
         {
-            // SMTP 主机、账号、异常栈和收件地址不得进入 outbox 错误摘要。
-            return WorkflowNotificationDeliveryResult.failure(
-                    "SMTP_DELIVERY_FAILED", "SMTP 投递失败", false);
+            // SMTP 主机、账号、底层异常消息和收件地址均不得进入 outbox 错误摘要。
+            return failureClassifier.deliveryFailure(exception);
         }
     }
 }
