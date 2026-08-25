@@ -2,10 +2,19 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-const API_SOURCE = readFileSync(new URL('../../src/api/workflow/notification.js', import.meta.url), 'utf8')
-const REQUEST_SOURCE = readFileSync(new URL('../../src/utils/request.js', import.meta.url), 'utf8')
-const PAGE_SOURCE = readFileSync(new URL('../../src/views/workflow/notification/index.vue', import.meta.url), 'utf8')
-const MAIL_DIALOG_SOURCE = readFileSync(new URL('../../src/views/workflow/notification/MailConfigDialog.vue', import.meta.url), 'utf8')
+/**
+ * 读取契约测试目标源码，并统一 Windows 与 Unix 换行，避免源码区间定位受检出策略影响。
+ * @param {string} relativePath 相对于当前测试文件的源码路径。
+ * @returns {string} 使用 LF 换行的源码文本。
+ */
+function readSource(relativePath) {
+  return readFileSync(new URL(relativePath, import.meta.url), 'utf8').replace(/\r\n?/g, '\n')
+}
+
+const API_SOURCE = readSource('../../src/api/workflow/notification.js')
+const REQUEST_SOURCE = readSource('../../src/utils/request.js')
+const PAGE_SOURCE = readSource('../../src/views/workflow/notification/index.vue')
+const MAIL_DIALOG_SOURCE = readSource('../../src/views/workflow/notification/MailConfigDialog.vue')
 
 /**
  * 提取一个导出 API 函数的源码区间，避免其他函数中的安全配置造成误判。
