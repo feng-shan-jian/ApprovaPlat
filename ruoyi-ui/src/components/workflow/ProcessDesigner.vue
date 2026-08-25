@@ -169,7 +169,13 @@ import 'diagram-js-minimap/assets/diagram-js-minimap.css'
 import 'bpmn-js-token-simulation/assets/css/bpmn-js-token-simulation.css'
 import Download from '@/plugins/download'
 import { listCallActivityOptions, validateModelBpmn } from '@/api/workflow/model'
-import { listCelExtensionOptions, listFormFieldExtensionOptions, listHttpExtensionOptions, listJavaExtensionOptions, listSqlExtensionOptions } from '@/api/workflow/extension'
+import {
+  listCelExtensionOptions,
+  listFormFieldExtensionOptions,
+  listHttpExtensionOptions,
+  listJavaExtensionOptions,
+  listSqlExtensionOptions
+} from '@/api/workflow/extension'
 import { listConnectorEndpointOptions } from '@/api/workflow/connector'
 import { listSqlDataSourceOptions } from '@/api/workflow/sqlDatasource'
 import { listDmnDecisionOptions } from '@/api/workflow/dmn'
@@ -183,125 +189,18 @@ import DesignerSettingsDrawer from './designer/DesignerSettingsDrawer.vue'
 import AdvancedElementPalette from './designer/AdvancedElementPalette.vue'
 import DesignerPropertiesPanel from './designer/DesignerPropertiesPanel.vue'
 import {
-  createEmbeddedUserIdFieldCatalog,
-  createProcessUserIdFieldCatalog,
-  createTemplateUserIdFieldCatalog,
-  eligibleUserIdFieldOptions,
-  normalizeEmbeddedFormType,
-  participantUserIdFieldOptions
-} from './designer/formUserFieldCatalog'
-import { multiInstanceAuthorProperties } from './designer/multiInstancePropertyContract'
-
-// 受控多实例的技术属性由设计器固定写入，页面不向设计者开放任意方法或变量名。
-const CONTROLLED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getUserIds(execution)}'
-const START_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getStartUserIds(execution)}'
-const CONFIGURED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getConfiguredUserIds(execution)}'
-const FIXED_MULTI_INSTANCE_COLLECTION_PATTERN = /^\$\{multiInstanceHandler\.getFixedUserIds\(execution, '([1-9]\d*(?:,[1-9]\d*)*)'\)\}$/
-const CONTROLLED_MULTI_INSTANCE_ASSIGNEE = '${assignee}'
-const CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE = 'assignee'
-const CONTROLLED_MULTI_INSTANCE_ALL_CONDITION = '${nrOfCompletedInstances == nrOfInstances}'
-const CONTROLLED_MULTI_INSTANCE_ANY_CONDITION = '${nrOfCompletedInstances > 0}'
-// 指定身份只保存类型和正式主键，运行时由后端展开角色或部门并生成真实 assignee 任务。
-const MULTI_INSTANCE_IDENTITY_PROPERTIES = Object.freeze({
-  type: 'approva.multiInstance.identityType',
-  ids: 'approva.multiInstance.identityIds'
-})
-const MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES = new Set(Object.values(MULTI_INSTANCE_IDENTITY_PROPERTIES))
-const MULTI_INSTANCE_IDENTITY_TYPES = Object.freeze({
-  user: 'USER',
-  role: 'ROLE',
-  dept: 'DEPT'
-})
-const MULTI_INSTANCE_IDENTITY_SOURCES = Object.freeze(
-  Object.fromEntries(Object.entries(MULTI_INSTANCE_IDENTITY_TYPES).map(([source, type]) => [type, source]))
-)
-const MULTI_INSTANCE_IDENTITY_VALUE_PATTERNS = Object.freeze({
-  user: /^[1-9]\d{0,18}$/,
-  role: /^ROLE[1-9]\d{0,18}$/,
-  dept: /^DEPT[1-9]\d{0,18}$/
-})
-const JAVA_LONG_MAX_TEXT = '9223372036854775807'
-// 业务监听器的作者 XML 只允许固定调度 Bean；后端部署时会冻结版本并剥离字段。
-const BUSINESS_LISTENER_DELEGATE_EXPRESSION = '${workflowBusinessListener}'
-// 受控整改循环只保存固定属性；运行路由、轮次和审计均由后端部署编译与任务完成服务维护。
-const CONTROLLED_LOOP_PROPERTY_PREFIX = 'approva.controlledLoop.'
-const CONTROLLED_LOOP_PROPERTIES = Object.freeze({
-  enabled: `${CONTROLLED_LOOP_PROPERTY_PREFIX}enabled`,
-  decisionVariable: `${CONTROLLED_LOOP_PROPERTY_PREFIX}decisionVariable`,
-  repeatValue: `${CONTROLLED_LOOP_PROPERTY_PREFIX}repeatValue`,
-  exitValue: `${CONTROLLED_LOOP_PROPERTY_PREFIX}exitValue`,
-  maxIterations: `${CONTROLLED_LOOP_PROPERTY_PREFIX}maxIterations`
-})
-const CONTROLLED_LOOP_PROPERTY_NAMES = new Set(Object.values(CONTROLLED_LOOP_PROPERTIES))
-// 条件分支作者 XML 只保存版本化受控 JSON，部署后端会剥离该属性并生成固定路由表达式。
-const CONDITION_RULE_PROPERTY = 'approva.conditionRule.config'
-
-// 内嵌字段类型、变量和日期格式与后端 WorkflowEmbeddedFormConverter 使用同一安全边界。
-const EMBEDDED_FORM_TYPES = Object.freeze(['string', 'long', 'integer', 'boolean', 'date', 'enum'])
-const EMBEDDED_FORM_VARIABLE_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
-const EMBEDDED_FORM_DATE_PATTERN = /^[A-Za-z0-9 /:._-]{1,64}$/
-const EMBEDDED_FORM_RESERVED_VARIABLES = new Set([
-  'initiator', 'processStatus', 'processInstanceId', 'processDefinitionId',
-  'deploymentId', 'startUserId', 'authenticatedUserId', 'businessKey',
-  'assignee', 'nrOfInstances', 'nrOfActiveInstances', 'nrOfCompletedInstances',
-  'loopCounter', '_FLOWABLE_SKIP_EXPRESSION_ENABLED'
-])
-const EMBEDDED_FORM_RESERVED_PREFIXES = Object.freeze([
-  'wfMiUsers_', '_wfMiMembers_', '_wfMiRevision_', '_wfMiMode_', '__ruoyi_workflow_'
-])
-const EXTENSION_PROPERTY_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/
-// SLA 作者属性由结构化面板独占维护，通用扩展属性编辑器不能覆盖这些保留字段。
-const SLA_PROPERTY_NAMES = Object.freeze({
-  enabled: 'approva.sla.enabled',
-  calendarKey: 'approva.sla.calendarKey',
-  reminderMinutes: 'approva.sla.reminderMinutes',
-  reminderRepeatMinutes: 'approva.sla.reminderRepeatMinutes',
-  maxReminders: 'approva.sla.maxReminders',
-  escalationMinutes: 'approva.sla.escalationMinutes',
-  escalationUserId: 'approva.sla.escalationUserId',
-  escalationEventCode: 'approva.sla.escalationEventCode'
-})
-const SLA_PROPERTY_NAME_SET = new Set(Object.values(SLA_PROPERTY_NAMES))
-// 发起范围和单实例任务规则由结构化组件独占维护，部署后会冻结到正式快照。
-const PARTICIPANT_RULE_PROPERTIES = Object.freeze({
-  startVersion: 'approva.startScope.ruleVersion',
-  startType: 'approva.startScope.type',
-  startTargetIds: 'approva.startScope.targetIds',
-  startNoMatch: 'approva.startScope.noMatchPolicy',
-  taskVersion: 'approva.assignment.ruleVersion',
-  taskType: 'approva.assignment.type',
-  taskTargetIds: 'approva.assignment.targetIds',
-  taskFormField: 'approva.assignment.formField',
-  taskNoMatch: 'approva.assignment.noMatchPolicy'
-})
-const PARTICIPANT_RULE_PROPERTY_NAMES = new Set(Object.values(PARTICIPANT_RULE_PROPERTIES))
-
-// 正式模板字段权限使用 Flowable FormProperty 保存，避免通用属性长度限制和旁路草稿数据。
-const FORM_PERMISSION_DEFAULT_ID = 'approva_permission_default'
-const FORM_PERMISSION_FIELD_ID_PREFIX = 'approva_permission_field_'
-const FORM_PERMISSION_MODES = new Set(['HIDDEN', 'READONLY', 'EDITABLE', 'REQUIRED'])
-
-// 自动抄送作者配置由结构化编辑器独占维护，并与后端 WorkflowAutoCopyRuleContract 边界保持一致。
-const AUTO_COPY_PROPERTY_NAME = 'approva.autoCopyRules'
-const AUTO_COPY_MAX_PROPERTY_LENGTH = 8192
-const AUTO_COPY_MAX_RULES = 10
-const AUTO_COPY_MAX_SOURCES = 20
-const AUTO_COPY_MAX_VALUES = 100
-const AUTO_COPY_RULE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/
-const AUTO_COPY_USER_ID_PATTERN = /^[1-9]\d{0,18}$/
-const AUTO_COPY_GROUP_ID_PATTERN = /^(?:ROLE|DEPT)[1-9]\d{0,18}$/
-const AUTO_COPY_VARIABLE_PATTERN = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/
-
-// 作者 BPMN 只保存稳定键和配置；部署版本、实现和校验和均由后端注册表冻结。
-const EXTENSION_DELEGATE_EXPRESSION = '${workflowExtensionDelegate}'
-const EXTENSION_KEY_FIELD = 'approvaExtensionKey'
-const EXTENSION_CONFIG_FIELD = 'approvaExtensionConfig'
-const CEL_DEFAULT_CONFIG = Object.freeze({
-  expression: 'true',
-  resultVariable: 'celResult',
-  resultType: 'BOOL',
-  variables: []
-})
+  createExtensionEventSlaDomain,
+  createDefaultSlaConfig,
+  isExtensionEventSlaProperty
+} from './designer/extensionEventSlaDomain'
+import {
+  createFormParticipantDomain,
+  isFormParticipantProperty
+} from './designer/formParticipantDomain'
+import {
+  createRoutingCallActivityDomain,
+  isRoutingCallActivityProperty
+} from './designer/routingCallActivityDomain'
 
 const props = defineProps({
   /** 设计器当前 BPMN XML。 */
@@ -418,7 +317,6 @@ const selectedBusinessObject = computed(() => selectedElement.value?.businessObj
 const isProcess = computed(() => isType('bpmn:Process'))
 const isStartEvent = computed(() => isType('bpmn:StartEvent'))
 const isUserTask = computed(() => isType('bpmn:UserTask'))
-const isServiceTask = computed(() => isType('bpmn:ServiceTask'))
 const isBusinessRuleTask = computed(() => isType('bpmn:BusinessRuleTask'))
 const isSequenceFlow = computed(() => isType('bpmn:SequenceFlow'))
 const isParticipant = computed(() => isType('bpmn:Participant'))
@@ -454,77 +352,6 @@ const propertyFlags = computed(() => {
   })
 })
 const selectedTypeLabel = computed(() => typeLabel(selectedBusinessObject.value?.$type))
-const assignmentOptions = [
-  { label: '办理人', value: 'assignee' },
-  { label: '用户', value: 'users' },
-  { label: '角色/部门', value: 'groups' }
-]
-// none/sequential/parallel 对应标准 BPMN 多实例；controlled 提供受控动态和固定成员两种来源。
-const multiInstanceOptions = [
-  { label: '无', value: 'none' },
-  { label: '标准循环（仅往返）', value: 'standard' },
-  { label: '整改循环（受控）', value: 'approvalLoop' },
-  { label: '串行', value: 'sequential' },
-  { label: '并行', value: 'parallel' },
-  { label: '会签 / 或签', value: 'controlled' }
-]
-// all/any 分别映射全员完成与任一完成条件，决定动态多实例的会签或或签终止语义。
-const multiInstanceApprovalOptions = [
-  { label: '会签', value: 'all' },
-  { label: '或签', value: 'any' }
-]
-const extensionOptions = ref([])
-// 监听器仅允许选择后端明确安装的 JAVA 处理器，CEL/HTTP/SQL 不进入生命周期回调。
-const businessListenerOptions = computed(() => extensionOptions.value.filter(option => option.extensionType === 'JAVA'))
-// formFieldOptions 只包含后端 FORM_FIELD 注册表选项，不接受本地组件名或模板。
-const formFieldOptions = ref([])
-// connectorEndpoints 只保存后端白名单元数据，接口从不返回认证密钥正文。
-const connectorEndpoints = ref([])
-// sqlDataSources 只保存数据源环境引用和白名单元数据，不包含连接凭据正文。
-const sqlDataSources = ref([])
-const extensionLoading = ref(false)
-// dmnOptions 只包含服务端过滤后的来源决策最新版本，每项仍以精确 decisionId 作为作者引用。
-const dmnOptions = ref([])
-const dmnLoading = ref(false)
-// 子流程目录只使用服务端权限过滤结果，设计器不从当前画布或客户端缓存伪造已发布定义。
-const callActivityOptions = ref([])
-const callActivityLoading = ref(false)
-// 错误与升级目录来自正式数据库，作者 XML 只保存稳定编码。
-const errorEventOptions = ref([])
-const escalationEventOptions = ref([])
-const eventCodeLoading = ref(false)
-// 字段目录来自当前节点正式模板或内嵌表单，设计者不能输入任意流程变量作为循环条件。
-const controlledLoopFieldOptions = computed(() => resolveControlledLoopFieldOptions())
-// 表单用户规则只允许选择当前任务正式模板或内嵌 FormData 中可见、可读的单值变量。
-const participantFormFieldOptions = computed(() => resolveParticipantFormFieldOptions())
-// 条件字段覆盖当前可执行流程全部正式表单，重复异构字段会从可选项剔除并在上下文中提示。
-const conditionFieldCatalog = computed(() => resolveConditionFieldCatalog())
-const conditionFieldOptions = computed(() => conditionFieldCatalog.value.fields)
-const conditionContext = computed(() => resolveConditionContext(conditionFieldCatalog.value.conflicts, {
-  id: propertyState.id,
-  name: propertyState.name,
-  conditionRule: propertyState.conditionRule,
-  conditionDefault: propertyState.conditionDefault
-}))
-// 父流程字段从当前画布真实表单引用解析，供结构化 in/out 映射选择。
-const callActivityParentFields = computed(() => resolveCallActivityParentFields())
-
-// 自动抄送触发时机严格由所选 BPMN 元素类型决定，避免作者写入运行时无法触发的组合。
-const autoCopyTriggerOptions = computed(() => {
-  if (isProcess.value) return [{ label: '流程完成', value: 'PROCESS_COMPLETED' }]
-  if (isUserTask.value) {
-    return [
-      { label: '节点到达', value: 'NODE_ARRIVED' },
-      { label: '节点完成', value: 'NODE_COMPLETED' }
-    ]
-  }
-  return []
-})
-// 表单用户来源只允许引用当前节点或当前流程已有的可见、可读单值字段，不开放自由变量输入。
-const autoCopyFormFieldOptions = computed(() => resolveAutoCopyFormFieldOptions())
-// slaCalendarOptions 只包含后端返回的启用日历，作者 XML 不接受自由输入日历键。
-const slaCalendarOptions = ref([])
-const slaLoading = ref(false)
 let modeler
 let changeTimer
 let systemThemeQuery
@@ -536,21 +363,7 @@ let resizeStartClientX = 0
 let resizeStartWidth = PROPERTIES_PANEL_DEFAULT_WIDTH
 let previousDocumentCursor = ''
 let previousDocumentUserSelect = ''
-const identitySearchTimers = new Map()
 let importing = false
-
-// 九类选项池分别冻结后端身份类型和能力，防止切换办理方式时降级为通用目录。
-const IDENTITY_SEARCH_CONTRACTS = Object.freeze({
-  assignees: Object.freeze({ type: 'user', capability: 'approval' }),
-  candidateUsers: Object.freeze({ type: 'user', capability: 'claim' }),
-  candidateGroups: Object.freeze({ type: 'group', capability: 'claim' }),
-  candidateRoles: Object.freeze({ type: 'role', capability: 'claim' }),
-  activeUsers: Object.freeze({ type: 'user', capability: '' }),
-  activeRoles: Object.freeze({ type: 'role', capability: '' }),
-  activeDepts: Object.freeze({ type: 'dept', capability: '' }),
-  autoCopyUsers: Object.freeze({ type: 'user', capability: 'copy' }),
-  autoCopyGroups: Object.freeze({ type: 'group', capability: 'copy' })
-})
 
 /**
  * 规范化服务端设计器偏好，拒绝未知主题并为旧版本缺失字段提供服务端契约默认值。
@@ -712,40 +525,6 @@ function createInitialXml() {
 }
 
 /**
- * 按办理身份目标对远程检索进行独立防抖，避免资格不同的请求互相覆盖。
- * @param {'assignees'|'candidateUsers'|'candidateGroups'|'candidateRoles'|'activeUsers'|'activeRoles'|'activeDepts'|'autoCopyUsers'|'autoCopyGroups'} target 受控身份选项池。
- * @param {string} keyword 用户输入的名称关键字。
- * @returns {void} 到达防抖窗口后通过事件交由页面请求真实后端。
- */
-function scheduleIdentitySearch(target, keyword) {
-  const previousTimer = identitySearchTimers.get(target)
-  window.clearTimeout(previousTimer)
-  const timer = window.setTimeout(() => {
-    identitySearchTimers.delete(target)
-    // directoryContract 是当前选项池不可降级的服务端资格契约。
-    const directoryContract = IDENTITY_SEARCH_CONTRACTS[target]
-    if (!directoryContract) return
-    emit('identity-search', {
-      target,
-      ...directoryContract,
-      keyword: String(keyword || '').trim()
-    })
-  }, 250)
-  identitySearchTimers.set(target, timer)
-}
-
-/**
- * 接收属性面板的身份检索请求并转入受控资格目录。
- * @param {{target:string, keyword:string}|undefined} request 属性面板给出的目标池和检索词。
- * @returns {void} 未知目标会被拒绝，不向页面发出降级目录请求。
- */
-function handlePanelIdentitySearch(request) {
-  const target = request?.target
-  if (!IDENTITY_SEARCH_CONTRACTS[target]) return
-  scheduleIdentitySearch(target, request?.keyword)
-}
-
-/**
  * 初始化 bpmn-js Modeler、Flowable moddle 和事件监听。
  * @returns {void} Modeler 生命周期由组件管理。
  */
@@ -825,11 +604,7 @@ function createNonUserTaskExtensionElements(businessObject) {
  * @returns {boolean} 办理规则、SLA、自动抄送、受控循环或多实例身份属性返回 true。
  */
 function isUserTaskOnlyProperty(name) {
-  return PARTICIPANT_RULE_PROPERTY_NAMES.has(name)
-    || SLA_PROPERTY_NAME_SET.has(name)
-    || CONTROLLED_LOOP_PROPERTY_NAMES.has(name)
-    || MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(name)
-    || name === AUTO_COPY_PROPERTY_NAME
+  return isFormParticipantProperty(name) || isExtensionEventSlaProperty(name)
 }
 
 /**
@@ -988,12 +763,9 @@ function loadPropertyState(element) {
   propertyState.participantRule = readParticipantRule(businessObject)
   propertyState.sla = readSlaConfig(extensionProperties)
   propertyState.autoCopyRules = readAutoCopyRules(extensionProperties)
-  // 通用属性面板排除 SLA、参与者规则、多实例身份和自动抄送平台保留字段，避免绕过结构化校验。
+  // 三个领域的协议属性由各自结构化编辑器维护，通用属性面板只能展示普通扩展字段。
   propertyState.extensionProperties = extensionProperties.filter(item => (
-    !SLA_PROPERTY_NAME_SET.has(item.name)
-      && !PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
-      && !MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name)
-      && item.name !== AUTO_COPY_PROPERTY_NAME
+    !isExtensionEventSlaProperty(item.name)
   ))
   const controlledLoop = readControlledLoop(businessObject)
   if (controlledLoop) {
@@ -1045,9 +817,7 @@ function loadPropertyState(element) {
       propertyState.configuredMultiInstanceIdentityIds = isFixedMultiInstanceLoop(loop)
         ? readFixedMultiInstanceUserIds(loop)
         : (configuredIdentity?.selectionValues || [])
-      propertyState.multiInstanceApprovalMode = propertyState.completionCondition === CONTROLLED_MULTI_INSTANCE_ANY_CONDITION
-        ? 'any'
-        : 'all'
+      propertyState.multiInstanceApprovalMode = controlledMultiInstanceApprovalMode(loop)
     } else {
       propertyState.multiInstanceType = loop.isSequential ? 'sequential' : 'parallel'
     }
@@ -1063,113 +833,11 @@ function readExtensionProperties(businessObject) {
   const containers = (businessObject?.extensionElements?.values || [])
     .filter(value => value?.$type === 'flowable:Properties')
   return containers.flatMap(container => (container.values || [])
-    .filter(property => !CONTROLLED_LOOP_PROPERTY_NAMES.has(property.name) && property.name !== CONDITION_RULE_PROPERTY)
+    .filter(property => !isFormParticipantProperty(property.name)
+      && !isRoutingCallActivityProperty(property.name))
     .map(property => ({ name: property.name || '', value: property.value || '' })))
 }
 
-  /**
- * 转发受控目录中未加载已选值的批量回显请求。
- * @param {{target:string,values:string[]}} request 目录池与作者 BPMN 已保存值。
- * @returns {void} 未知目录池或空值请求直接丢弃。
- */
-function handlePanelIdentityResolve(request) {
-  const target = String(request?.target || '')
-  const values = Array.isArray(request?.values)
-    ? [...new Set(request.values.map(value => String(value || '').trim()).filter(Boolean))]
-    : []
-  if (!IDENTITY_SEARCH_CONTRACTS[target] || !values.length || values.length > 200) return
-  emit('identity-resolve', {
-    target,
-    type: IDENTITY_SEARCH_CONTRACTS[target].type,
-    capability: IDENTITY_SEARCH_CONTRACTS[target].capability,
-    values
-  })
-}
-
-/**
- * 从流程或单实例 UserTask 的平台属性回读受控参与者规则。
- * @param {object} businessObject 当前 BPMN 流程或元素业务对象。
- * @returns {{type:string,targetIds:string[],formField:string}} 可直接交给规则编辑器的值。
- */
-function readParticipantRule(businessObject) {
-  const values = new Map(readAllFlowableProperties(businessObject)
-    .filter(item => PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
-    .map(item => [item.name, item.value]))
-  if (businessObject?.$instanceOf?.('bpmn:Process')) {
-    const type = values.get(PARTICIPANT_RULE_PROPERTIES.startType) || 'PUBLIC'
-    return {
-      type,
-      targetIds: decorateParticipantTargets(type,
-        splitValues(values.get(PARTICIPANT_RULE_PROPERTIES.startTargetIds))),
-      formField: ''
-    }
-  }
-  const configuredType = values.get(PARTICIPANT_RULE_PROPERTIES.taskType) || ''
-  if (configuredType) {
-    return {
-      type: configuredType,
-      targetIds: decorateParticipantTargets(configuredType,
-        splitValues(values.get(PARTICIPANT_RULE_PROPERTIES.taskTargetIds))),
-      formField: values.get(PARTICIPANT_RULE_PROPERTIES.taskFormField) || ''
-    }
-  }
-  // 旧模型的静态身份在第一次修改时平滑转换为受控规则，表达式继续由后端兼容链处理。
-  const assignee = String(businessObject?.get?.('flowable:assignee') || '').trim()
-  if (/^[1-9]\d{0,18}$/.test(assignee)) {
-    return { type: 'FIXED_USER', targetIds: [assignee], formField: '' }
-  }
-  const candidateUsers = splitValues(businessObject?.get?.('flowable:candidateUsers'))
-  if (candidateUsers.length && candidateUsers.every(value => /^[1-9]\d{0,18}$/.test(value))) {
-    return { type: 'CANDIDATE_USERS', targetIds: candidateUsers, formField: '' }
-  }
-  const candidateGroups = splitValues(businessObject?.get?.('flowable:candidateGroups'))
-  if (candidateGroups.length && candidateGroups.every(value => /^(?:ROLE|DEPT)[1-9]\d{0,18}$/.test(value))) {
-    return { type: 'CANDIDATE_GROUPS', targetIds: candidateGroups, formField: '' }
-  }
-  return { type: '', targetIds: [], formField: '' }
-}
-
-/**
- * 把后端快照使用的数字目标还原为目录选项值，混合候选组已自带类型前缀。
- * @param {string} type 受控规则类型。
- * @param {string[]} values 作者属性中的目标值。
- * @returns {string[]} 可与正式目录选项精确匹配的值。
- */
-function decorateParticipantTargets(type, values) {
-  if (type === 'ROLES' || type === 'STARTER_DEPT_ROLE') return values.map(value => `ROLE${value}`)
-  if (type === 'DEPTS' || type === 'DEPT_MANAGER') return values.map(value => `DEPT${value}`)
-  return values
-}
-
-/**
- * 从 Flowable 属性中读取并校验自动抄送 JSON，供选中元素回显结构化规则。
- * @param {Array<{name:string,value:string}>} properties 当前 BPMN 元素的全部非循环扩展属性。
- * @param {boolean} strict 是否将非法历史配置作为异常抛出；普通回显采用失败关闭的空草稿。
- * @returns {Array<object>} 契约合法的自动抄送规则；未配置或非严格模式解析失败时返回空数组。
- */
-function readAutoCopyRules(properties, strict = false) {
-  try {
-    const matches = (Array.isArray(properties) ? properties : [])
-      .filter(item => item.name === AUTO_COPY_PROPERTY_NAME)
-    if (!matches.length) return []
-    if (matches.length !== 1) throw new Error('同一元素不能重复配置自动抄送规则')
-    const json = String(matches[0].value ?? '')
-    if (!json || json.length > AUTO_COPY_MAX_PROPERTY_LENGTH) {
-      throw new Error('自动抄送规则内容为空或超过长度限制')
-    }
-    const document = JSON.parse(json)
-    if (!document || Array.isArray(document) || document.version !== 1 || !Array.isArray(document.rules)) {
-      throw new Error('自动抄送规则版本不受支持')
-    }
-    return normalizeAndValidateAutoCopyRules(document.rules, {
-      validatePlacement: false,
-      validateFormFields: false
-    })
-  } catch (error) {
-    if (strict) throw error
-    return []
-  }
-}
 
 /**
  * 在画布用户任务右上角绘制受控整改循环标识和最大轮次，避免配置只藏在属性面板中。
@@ -1192,528 +860,6 @@ function refreshControlledLoopOverlays() {
       show: { minZoom: 0.5 }
     })
   }
-}
-
-/**
- * 从用户任务固定 Flowable 属性回读受控整改循环配置。
- * @param {object} businessObject 当前 BPMN 用户任务业务对象。
- * @returns {{decisionVariable:string,repeatValue:string,exitValue:string,maxIterations:number}|null} 完整配置；未启用时为空。
- */
-function readControlledLoop(businessObject) {
-  const properties = (businessObject?.extensionElements?.values || [])
-    .filter(value => value?.$type === 'flowable:Properties')
-    .flatMap(container => container.values || [])
-  const values = Object.fromEntries(properties
-    .filter(property => CONTROLLED_LOOP_PROPERTY_NAMES.has(property.name))
-    .map(property => [property.name, String(property.value ?? '')]))
-  if (!Object.keys(values).length) return null
-  if (values[CONTROLLED_LOOP_PROPERTIES.enabled] !== 'true') return null
-  const maxIterations = Number(values[CONTROLLED_LOOP_PROPERTIES.maxIterations])
-  return {
-    decisionVariable: values[CONTROLLED_LOOP_PROPERTIES.decisionVariable] || '',
-    repeatValue: values[CONTROLLED_LOOP_PROPERTIES.repeatValue] || '',
-    exitValue: values[CONTROLLED_LOOP_PROPERTIES.exitValue] || '',
-    maxIterations: Number.isInteger(maxIterations) ? maxIterations : 3
-  }
-}
-
-/**
- * 从当前节点正式模板或内嵌 FormData 提取可作为循环判断条件的字段和值目录。
- * @returns {Array<{value:string,label:string,values:Array<{value:string,label:string}>,valueRestricted:boolean}>} 去重后的字段选项。
- */
-function resolveControlledLoopFieldOptions() {
-  if (!isUserTask.value) return []
-  return describeFormalFormFields(selectedBusinessObject.value)
-}
-
-/**
- * 从 SequenceFlow 的平台保留属性回读版本化条件规则。
- * @param {object|undefined} businessObject 当前顺序流业务对象。
- * @returns {object|null} 结构完整的规则对象；缺失或历史异常值返回空并交由后端校验提示。
- */
-function readConditionRule(businessObject) {
-  const values = (businessObject?.extensionElements?.values || [])
-    .filter(value => value?.$type === 'flowable:Properties')
-    .flatMap(container => container.values || [])
-    .filter(property => property.name === CONDITION_RULE_PROPERTY)
-  if (values.length !== 1) return null
-  try {
-    const config = JSON.parse(String(values[0].value || ''))
-    return config?.version === 1 && typeof config.default === 'boolean' ? config : null
-  } catch {
-    return null
-  }
-}
-
-/**
- * 以网关标准 default 引用判断当前顺序流是否为真实默认分支。
- * @param {object|undefined} element 当前 bpmn-js 连接元素。
- * @returns {boolean} 网关 default 精确指向当前连线时返回 true。
- */
-function isDefaultConditionFlow(element) {
-  const source = element?.source?.businessObject
-  const flow = element?.businessObject
-  const defaultId = source?.default?.id || source?.default || ''
-  return Boolean(flow?.id && defaultId === flow.id)
-}
-
-/**
- * 从正式模板或 BPMN 内嵌 FormData 提取后端允许参与条件判断的可写标量字段。
- * @param {object|undefined} businessObject 开始节点或用户任务业务对象。
- * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
- */
-function describeFormalFormFields(businessObject) {
-  const embeddedFields = readEmbeddedFormFields(businessObject)
-  if (embeddedFields.length) {
-    return embeddedFields
-      .filter(field => field.writable !== false && field.variable)
-      .map(field => {
-        const type = ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
-        if (!type) return null
-        return {
-          value: field.variable,
-          label: field.name ? `${field.name}（${field.variable}）` : field.variable,
-          type,
-          values: field.type === 'boolean'
-            ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
-            : (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id })),
-          valueRestricted: field.type === 'boolean' || field.type === 'enum'
-        }
-      }).filter(Boolean)
-  }
-  const formId = Number(String(businessObject?.get?.('flowable:formKey') || '').replace(/^key_/, ''))
-  const form = props.forms.find(item => Number(item.formId) === formId)
-  if (!form?.content) return []
-  return describeTemplateFormFields(form.content)
-}
-
-/**
- * 解析已由后端模板校验器返回的正式表单 JSON，并收窄为条件字段目录。
- * @param {string} content 正式 wf_form 模板 JSON。
- * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
- */
-function describeTemplateFormFields(content) {
-  try {
-    const root = JSON.parse(content)
-    const result = []
-    const seen = new Set()
-    const visit = fields => {
-      for (const field of Array.isArray(fields) ? fields : []) {
-        const variable = String(field?.__vModel__ || '').trim()
-        const kind = resolveTemplateControlledLoopKind(field)
-        if (variable && kind && field?.__config__?.workflowWritable !== false && !seen.has(variable)) {
-          seen.add(variable)
-          const options = Array.isArray(field?.__slot__?.options)
-            ? field.__slot__.options.map(item => ({
-                value: String(item?.value ?? item?.label ?? ''),
-                label: String(item?.label ?? item?.value ?? '')
-              })).filter(item => item.value)
-            : []
-          result.push({
-            value: variable,
-            label: field?.__config__?.label ? `${field.__config__.label}（${variable}）` : variable,
-            type: kind,
-            values: kind === 'BOOLEAN'
-              ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
-              : options,
-            valueRestricted: kind === 'BOOLEAN' || field?.__config__?.workflowEnum === true
-          })
-        }
-        visit(field?.__config__?.children)
-      }
-    }
-    visit(root.fields)
-    return result
-  } catch {
-    return []
-  }
-}
-
-/**
- * 解析服务端确认会转换为单值 el-input 的内嵌自定义字段类型。
- * @returns {Set<string>} 可参与用户主键字段目录的 custom: 类型集合。
- */
-function supportedEmbeddedUserIdCustomTypes() {
-  return new Set(formFieldOptions.value
-    .filter(option => option?.implementationKey === 'FORM_FIELD_TEXTAREA_V1')
-    .map(option => `custom:${option.extensionKey}`))
-}
-
-/**
- * 从指定 BPMN 节点构建后端同口径的用户主键字段完整声明目录。
- * @param {object|undefined} businessObject 开始节点或用户任务业务对象。
- * @returns {Array<{value:string,label:string,eligible:boolean}>} 包含不合格声明的字段目录。
- */
-function resolveUserIdFieldCatalog(businessObject) {
-  const embeddedFields = readEmbeddedFormFields(businessObject)
-  if (embeddedFields.length) {
-    return createEmbeddedUserIdFieldCatalog(
-      embeddedFields, supportedEmbeddedUserIdCustomTypes())
-  }
-  const formId = Number(String(businessObject?.get?.('flowable:formKey') || '').replace(/^key_/, ''))
-  const form = props.forms.find(item => Number(item.formId) === formId)
-  return form?.content
-    ? createTemplateUserIdFieldCatalog(form.content, readTemplatePermissionPolicy(businessObject))
-    : []
-}
-
-/**
- * 从当前 UserTask 正式表单提取可供 FORM_USER 规则读取的可见、可读单值变量。
- * @returns {Array<{value:string,label:string}>} 去重且保持表单顺序的正式字段目录。
- */
-function resolveParticipantFormFieldOptions() {
-  if (!isUserTask.value) return []
-  if (propertyState.formSource === 'EMBEDDED') {
-    return participantUserIdFieldOptions(createEmbeddedUserIdFieldCatalog(
-      propertyState.embeddedFields, supportedEmbeddedUserIdCustomTypes()))
-  }
-  const formId = Number(String(propertyState.formKey || '').replace(/^key_/, ''))
-  const form = props.forms.find(item => Number(item.formId) === formId)
-  const permissionPolicy = {
-    configured: propertyState.formPermissionFields.length > 0,
-    defaultMode: propertyState.formPermissionDefault,
-    permissions: new Map(propertyState.formPermissionFields
-      .map(field => [field.variable, field.mode]))
-  }
-  return form?.content
-    ? participantUserIdFieldOptions(createTemplateUserIdFieldCatalog(form.content, permissionPolicy))
-    : []
-}
-
-/**
- * 合并当前可执行流程全部正式表单字段，并识别同名异构冲突。
- * @returns {{fields:Array<object>,conflicts:string[]}} 可选字段和被剔除的冲突变量名。
- */
-function resolveConditionFieldCatalog() {
-  // 在 modeler 门禁前读取响应式选中项，避免首次空画布求值后永久缓存空目录。
-  const selected = selectedElement.value
-  if (!modeler || !selected || !isConditionGatewayFlow()) return { fields: [], conflicts: [] }
-  // 顺序流自身的 moddle 父链是导入、撤销和重建后的稳定归属，不依赖图形 source 短暂引用。
-  const sourceProcess = owningProcess(selected.businessObject)
-  if (!sourceProcess) return { fields: [], conflicts: [] }
-  const fieldsByName = new Map()
-  const conflicts = new Set()
-  const visited = new Set()
-  for (const element of modeler.get('elementRegistry').getAll()) {
-    const businessObject = element?.businessObject
-    if (!businessObject?.id || visited.has(businessObject.id) || owningProcess(businessObject) !== sourceProcess) continue
-    if (!businessObject.$instanceOf?.('bpmn:StartEvent') && !businessObject.$instanceOf?.('bpmn:UserTask')) continue
-    visited.add(businessObject.id)
-    for (const field of describeFormalFormFields(businessObject)) {
-      const signature = JSON.stringify({ type: field.type, values: field.values, valueRestricted: field.valueRestricted })
-      const existing = fieldsByName.get(field.value)
-      if (existing && existing.signature !== signature) {
-        conflicts.add(field.value)
-        fieldsByName.delete(field.value)
-      } else if (!existing && !conflicts.has(field.value)) {
-        fieldsByName.set(field.value, { ...field, signature })
-      }
-    }
-  }
-  return {
-    fields: [...fieldsByName.values()].map(({ signature, ...field }) => field),
-    conflicts: [...conflicts].sort()
-  }
-}
-
-/**
- * 构造当前网关全部出线的配置状态，供属性面板提示默认遗漏和半成品分支。
- * @param {string[]} fieldConflicts 当前流程同名异构字段名。
- * @param {{id:string,name:string,conditionRule:object|null,conditionDefault:boolean}} currentState 当前出线刚写入的响应式状态。
- * @returns {{gatewayType:string,branches:Array<object>,fieldConflicts:string[]}} 网关上下文。
- */
-function resolveConditionContext(fieldConflicts = [], currentState = {}) {
-  if (!isConditionGatewayFlow()) return { gatewayType: '', branches: [], fieldConflicts }
-  const source = selectedElement.value.source.businessObject
-  const defaultId = source.default?.id || source.default || ''
-  const branches = (source.outgoing || []).map(flow => {
-    const isCurrent = flow.id === currentState.id
-    // bpmn-js 原位修改 moddle 对象，当前出线使用 propertyState 触发即时视图刷新。
-    const config = isCurrent ? currentState.conditionRule : readConditionRule(flow)
-    const isDefault = isCurrent ? Boolean(currentState.conditionDefault) : defaultId === flow.id
-    return {
-      id: flow.id,
-      name: isCurrent ? currentState.name || '' : flow.name || '',
-      default: isDefault,
-      configured: Boolean(config && config.default === isDefault)
-    }
-  })
-  return {
-    gatewayType: source.$type === 'bpmn:InclusiveGateway' ? 'INCLUSIVE' : 'EXCLUSIVE',
-    branches,
-    fieldConflicts
-  }
-}
-
-/**
- * 判断当前连线是否来自具有多条出线的排他或包容网关。
- * @returns {boolean} 满足无代码条件编辑适用范围时返回 true。
- */
-function isConditionGatewayFlow() {
-  const source = selectedElement.value?.source?.businessObject
-  return Boolean(source
-    && ['bpmn:ExclusiveGateway', 'bpmn:InclusiveGateway'].includes(source.$type)
-    && Array.isArray(source.outgoing)
-    && source.outgoing.length > 1)
-}
-
-/**
- * 沿 BPMN moddle 父链解析所属可执行流程。
- * @param {object|undefined} businessObject 任意流程元素业务对象。
- * @returns {object|null} 所属 bpmn:Process；未找到时为空。
- */
-function owningProcess(businessObject) {
-  let current = businessObject
-  while (current) {
-    if (current.$type === 'bpmn:Process') return current
-    current = current.$parent
-  }
-  return null
-}
-
-/**
- * 汇总当前自动抄送元素允许引用的正式标量表单字段。
- * @returns {Array<{value:string,label:string}>} UserTask 返回自身字段，Process 返回其开始节点和全部用户任务字段并按变量去重。
- */
-function resolveAutoCopyFormFieldOptions() {
-  return resolveAutoCopyFormFieldOptionsForBusinessObject(selectedBusinessObject.value)
-}
-
-/**
- * 解析指定流程或用户任务可供自动抄送引用的正式标量表单字段。
- * @param {object|undefined} businessObject BPMN Process 或 UserTask 业务对象。
- * @returns {Array<{value:string,label:string}>} 按变量名去重后的受控字段目录。
- */
-function resolveAutoCopyFormFieldOptionsForBusinessObject(businessObject) {
-  if (businessObject?.$type === 'bpmn:UserTask') {
-    return eligibleUserIdFieldOptions(resolveUserIdFieldCatalog(businessObject))
-      .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
-  }
-  if (businessObject?.$type !== 'bpmn:Process') return []
-  return eligibleUserIdFieldOptions(createProcessUserIdFieldCatalog(
-    businessObject, resolveUserIdFieldCatalog))
-    .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
-}
-
-/**
- * 将正式模板组件收窄为后端循环条件允许的可写标量种类。
- * @param {object} field 使用 __config__ 的正式模板字段。
- * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 标量种类；集合、附件、表格和范围字段返回空。
- */
-function resolveTemplateControlledLoopKind(field) {
-  const tag = String(field?.__config__?.tag || '')
-  if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
-  if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
-  if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'
-  if (tag === 'el-switch') return 'BOOLEAN'
-  if (tag === 'el-radio-group') return 'SCALAR'
-  if (tag === 'el-select') return field?.multiple === true ? null : 'SCALAR'
-  if (['el-time-picker', 'el-date-picker'].includes(tag)) {
-    const temporalType = String(field?.type || '').toLowerCase()
-    return field?.['is-range'] === true || temporalType.includes('range') ? null : 'TEXT'
-  }
-  return null
-}
-
-/**
- * 从 ServiceTask 的受控 Flowable Field 回读作者扩展键和配置。
- * @param {object} businessObject 当前 BPMN 业务对象。
- * @returns {{extensionKey: string, extensionConfig: string}} 稳定作者配置；缺失时使用空键和空对象。
- */
-function readServiceTaskExtension(businessObject) {
-  const result = { extensionKey: '', extensionConfig: '{}' }
-  for (const value of businessObject?.extensionElements?.values || []) {
-    if (value?.$type !== 'flowable:Field') continue
-    if (value.name === EXTENSION_KEY_FIELD) result.extensionKey = value.stringValue || ''
-    if (value.name === EXTENSION_CONFIG_FIELD) result.extensionConfig = value.stringValue || '{}'
-  }
-  return result
-}
-
-/**
- * 从 moddle 监听器集合回读固定业务监听器，系统审计和未知实现不会进入可编辑状态。
- * @param {object} businessObject 当前 BPMN 元素业务对象。
- * @param {string} listenerType flowable:ExecutionListener 或 flowable:TaskListener。
- * @returns {Array<object>} 包含 event、extensionKey 和 config 的业务监听器数组。
- */
-function readBusinessListeners(businessObject, listenerType) {
-  return (businessObject?.extensionElements?.values || [])
-    .filter(listener => listener?.$type === listenerType)
-    .filter(listener => listener?.delegateExpression === BUSINESS_LISTENER_DELEGATE_EXPRESSION)
-    .map(listener => {
-      const fields = Array.isArray(listener.fields) ? listener.fields : []
-      const keyField = fields.find(field => field?.name === EXTENSION_KEY_FIELD)
-      const configField = fields.find(field => field?.name === EXTENSION_CONFIG_FIELD)
-      return {
-        event: listener.event || '',
-        extensionKey: keyField?.stringValue || '',
-        config: configField?.stringValue || '{}'
-      }
-    })
-}
-
-/**
- * 从当前 BPMN 元素的 extensionElements 回读 Flowable FormData。
- * @param {object} businessObject StartEvent 或 UserTask 的 moddle 业务对象。
- * @returns {Array<object>} 可供字段编辑器使用的确定性字段列表；正式模板权限描述不作为内嵌字段。
- */
-function readEmbeddedFormFields(businessObject) {
-  const formKey = String(businessObject?.get?.('flowable:formKey') || businessObject?.formKey || '').trim()
-  if (formKey) {
-    // 正式模板的 FormProperty 只承载节点字段权限，模型重开时不能据此切换为 EMBEDDED 来源。
-    return []
-  }
-  const extensionValues = businessObject?.extensionElements?.values || []
-  return extensionValues
-    .filter(value => value?.$type === 'flowable:FormProperty')
-    .map(property => ({
-      id: property.id || '',
-      variable: property.variable || '',
-      name: property.name || property.id || property.variable || '',
-      type: normalizeEmbeddedFormType(property.type),
-      required: property.required === true,
-      readable: property.readable !== false,
-      writable: property.writable !== false,
-      datePattern: property.datePattern || '',
-      values: (property.values || []).map(value => ({
-        id: value.id || '',
-        name: value.name || value.id || ''
-      }))
-    }))
-}
-
-/**
- * 判断循环配置是否引用平台受控多实例 handler；完整结构仍由保存门禁单独核验。
- * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
- * @returns {boolean} 集合表达式精确引用动态或固定人员 handler 时返回 true。
- */
-function isControlledMultiInstanceLoop(loop) {
-  const collection = String(loop?.get?.('flowable:collection') || '').trim()
-  return collection === CONTROLLED_MULTI_INSTANCE_COLLECTION
-    || collection === START_MULTI_INSTANCE_COLLECTION
-    || collection === CONFIGURED_MULTI_INSTANCE_COLLECTION
-    || FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)
-}
-
-/**
- * 判断受控多实例是否由流程发起页面提供正式成员。
- * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
- * @returns {boolean} 集合表达式精确命中发起时 handler 时返回 true。
- */
-function isStartMultiInstanceLoop(loop) {
-  return String(loop?.get?.('flowable:collection') || '').trim() === START_MULTI_INSTANCE_COLLECTION
-}
-
-/**
- * 判断受控多实例是否使用设计时指定用户、角色或部门来源。
- * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
- * @returns {boolean} 集合表达式精确命中指定身份 handler 时返回 true。
- */
-function isConfiguredMultiInstanceLoop(loop) {
-  return String(loop?.get?.('flowable:collection') || '').trim() === CONFIGURED_MULTI_INSTANCE_COLLECTION
-}
-
-/**
- * 判断受控多实例是否使用设计时固定人员来源。
- * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
- * @returns {boolean} 集合表达式命中固定人员 handler 时返回 true。
- */
-function isFixedMultiInstanceLoop(loop) {
-  return Boolean(loop && FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(
-    String(loop.get?.('flowable:collection') || '').trim()
-  ))
-}
-
-/**
- * 从固定人员 handler 表达式读取会签或或签成员，并保留设计时选择顺序。
- * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
- * @returns {string[]} 已去重的用户主键数组；表达式不符合受控契约时返回空数组。
- */
-function readFixedMultiInstanceUserIds(loop) {
-  const collection = String(loop?.get?.('flowable:collection') || '').trim()
-  const match = collection.match(FIXED_MULTI_INSTANCE_COLLECTION_PATTERN)
-  return match ? splitValues(match[1]) : []
-}
-
-/**
- * 校验文本是否为 Java Long 范围内的规范正整数主键。
- * @param {unknown} value 待校验的用户、角色或部门数字主键。
- * @returns {boolean} 无前导零且不超过 Long.MAX_VALUE 时返回 true。
- */
-function isCanonicalJavaLongId(value) {
-  const text = String(value ?? '')
-  if (!/^[1-9]\d{0,18}$/.test(text)) return false
-  return text.length < JAVA_LONG_MAX_TEXT.length || text <= JAVA_LONG_MAX_TEXT
-}
-
-/**
- * 将指定身份选择值严格转换为后端属性使用的数字主键。
- * @param {'user'|'role'|'dept'} source 指定用户、角色或部门来源。
- * @param {unknown[]} values 正式目录返回的选择值；角色和部门必须携带 ROLE/DEPT 前缀。
- * @returns {{source:string,type:string,ids:string[],selectionValues:string[]}|null} 合法且唯一的 1 至 100 项配置；非法时返回 null。
- */
-function normalizeConfiguredMultiInstanceIdentity(source, values) {
-  const type = MULTI_INSTANCE_IDENTITY_TYPES[source]
-  const pattern = MULTI_INSTANCE_IDENTITY_VALUE_PATTERNS[source]
-  if (!type || !pattern || !Array.isArray(values) || values.length < 1 || values.length > 100) return null
-  const ids = []
-  const selectionValues = []
-  const seenIds = new Set()
-  const prefix = source === 'role' ? 'ROLE' : source === 'dept' ? 'DEPT' : ''
-  for (const value of values) {
-    const selectionValue = String(value ?? '')
-    if (!pattern.test(selectionValue)) return null
-    const id = prefix ? selectionValue.slice(prefix.length) : selectionValue
-    if (!isCanonicalJavaLongId(id) || seenIds.has(id)) return null
-    seenIds.add(id)
-    ids.push(id)
-    selectionValues.push(selectionValue)
-  }
-  return { source, type, ids, selectionValues }
-}
-
-/**
- * 从 UserTask 的平台保留属性严格回读指定身份配置。
- * @param {object|undefined} task bpmn-js 用户任务业务对象。
- * @returns {{source:string,type:string,ids:string[],selectionValues:string[]}|null} 完整合法配置；缺失、重复或格式非法时返回 null。
- */
-function readConfiguredMultiInstanceIdentity(task) {
-  const properties = readAllFlowableProperties(task)
-    .filter(item => MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name))
-  if (properties.length !== MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.size) return null
-  const values = new Map()
-  for (const property of properties) {
-    if (values.has(property.name)) return null
-    values.set(property.name, property.value)
-  }
-  const type = values.get(MULTI_INSTANCE_IDENTITY_PROPERTIES.type)
-  const source = MULTI_INSTANCE_IDENTITY_SOURCES[type]
-  const rawIds = String(values.get(MULTI_INSTANCE_IDENTITY_PROPERTIES.ids) ?? '').split(',')
-  const prefix = source === 'role' ? 'ROLE' : source === 'dept' ? 'DEPT' : ''
-  return source
-    ? normalizeConfiguredMultiInstanceIdentity(source, rawIds.map(id => `${prefix}${id}`))
-    : null
-}
-
-/**
- * 将已校验的指定身份配置转换为两个 Flowable 平台保留属性。
- * @param {{type:string,ids:string[]}} identity 用户、角色或部门的规范配置。
- * @returns {Array<{name:string,value:string}>} 可原子写入 BPMN extensionElements 的属性项。
- */
-function configuredMultiInstancePropertyItems(identity) {
-  return [
-    { name: MULTI_INSTANCE_IDENTITY_PROPERTIES.type, value: identity.type },
-    { name: MULTI_INSTANCE_IDENTITY_PROPERTIES.ids, value: identity.ids.join(',') }
-  ]
-}
-
-/**
- * 将 Flowable 逗号分隔身份列表转换为去重数组。
- * @param {unknown} value Flowable 属性值。
- * @returns {string[]} 去除空值后的身份数组。
- */
-function splitValues(value) {
-  return [...new Set(String(value || '').split(',').map(item => item.trim()).filter(Boolean))]
 }
 
 /**
@@ -1852,850 +998,6 @@ function updateParticipantProperties() {
 }
 
 /**
- * 规范化节点字段权限，未知值不会进入 BPMN 作者模型。
- * @param {unknown} mode 待校验权限值。
- * @returns {'HIDDEN'|'READONLY'|'EDITABLE'|'REQUIRED'} 四态权限之一。
- */
-function normalizeFormPermissionMode(mode) {
-  const normalized = String(mode || '').trim().toUpperCase()
-  return FORM_PERMISSION_MODES.has(normalized) ? normalized : 'EDITABLE'
-}
-
-/**
- * 从正式模板字段配置或 BPMN 权限描述恢复隐藏、只读、可编辑或必填权限。
- * @param {object} field 字段配置或内嵌字段。
- * @param {boolean} embedded 是否为 Flowable FormProperty 内嵌字段。
- * @returns {'HIDDEN'|'READONLY'|'EDITABLE'|'REQUIRED'} 当前字段权限。
- */
-function permissionModeFromField(field, embedded = false) {
-  const config = embedded ? field : (field?.__config__ || {})
-  const readable = embedded ? field?.readable !== false : config.workflowReadable !== false
-  const writable = embedded
-    ? field?.writable !== false
-    : config.workflowWritable !== false && field?.disabled !== true
-  const hidden = embedded
-    ? !readable && !writable
-    : config.workflowHidden === true || (!readable && !writable)
-  if (hidden) return 'HIDDEN'
-  if (!writable) return 'READONLY'
-  return config.required === true || field?.required === true ? 'REQUIRED' : 'EDITABLE'
-}
-
-/**
- * 从当前绑定的正式模板提取唯一字段目录，内嵌 FormData 不进入节点权限策略。
- * @returns {Array<{variable:string,label:string,mode:string}>} 按正式表单顺序排列的字段目录。
- */
-function resolveFormPermissionSourceFields() {
-  if (propertyState.formSource !== 'TEMPLATE') return []
-  const formId = Number(String(propertyState.formKey || '').replace(/^key_/, ''))
-  const form = props.forms.find(item => Number(item.formId) === formId)
-  if (!form?.content) return []
-  try {
-    const root = typeof form.content === 'string' ? JSON.parse(form.content) : form.content
-    const fields = []
-    const seen = new Set()
-
-    /**
-     * 递归收集正式模板业务字段，布局节点不产生权限项且重复变量只保留首次定义。
-     * @param {Array<object>} nodes 当前层正式模板字段节点。
-     * @returns {void} 字段目录直接写入外层 fields，并由 seen 保证变量唯一。
-     */
-    const visit = nodes => {
-      for (const field of Array.isArray(nodes) ? nodes : []) {
-        const variable = String(field?.__vModel__ || '').trim()
-        if (variable && !seen.has(variable)) {
-          seen.add(variable)
-          fields.push({
-            variable,
-            label: String(field?.__config__?.label || variable).trim(),
-            mode: permissionModeFromField(field)
-          })
-        }
-        visit(field?.__config__?.children)
-      }
-    }
-    visit(root?.fields)
-    return fields
-  } catch {
-    return []
-  }
-}
-
-/**
- * 从正式模板节点的受控 FormProperty 描述恢复批量默认策略和逐字段权限。
- * @param {object} businessObject StartEvent 或 UserTask 的 BPMN 业务对象。
- * @returns {{configured:boolean,defaultMode:string,permissions:Map<string,string>}} 权限作者状态。
- */
-function readTemplatePermissionPolicy(businessObject) {
-  let configured = false
-  let defaultMode = 'EDITABLE'
-  const permissions = new Map()
-  for (const property of businessObject?.extensionElements?.values || []) {
-    if (property?.$type !== 'flowable:FormProperty') continue
-    const id = String(property.id || '')
-    if (id === FORM_PERMISSION_DEFAULT_ID) {
-      configured = true
-      defaultMode = permissionModeFromField({
-        readable: property.readable,
-        writable: property.writable,
-        required: property.required
-      }, true)
-      continue
-    }
-    if (!id.startsWith(FORM_PERMISSION_FIELD_ID_PREFIX)) continue
-    configured = true
-    const variable = String(property.variable || '').trim()
-    if (variable) {
-      permissions.set(variable, permissionModeFromField({
-        readable: property.readable,
-        writable: property.writable,
-        required: property.required
-      }, true))
-    }
-  }
-  return { configured, defaultMode, permissions }
-}
-
-/**
- * 依据当前正式表单重建属性面板字段目录，并按变量名保留仍然有效的设计权限。
- * @param {{configured:boolean,defaultMode:string,permissions:Map<string,string>}|undefined} policy 从 BPMN 回读的正式策略。
- * @returns {void} 无返回值。
- */
-function rebuildFormPermissionFields(policy) {
-  const previous = new Map(propertyState.formPermissionFields.map(field => [field.variable, field.mode]))
-  const defaultMode = normalizeFormPermissionMode(policy?.configured
-    ? policy.defaultMode
-    : propertyState.formPermissionDefault)
-  propertyState.formPermissionDefault = defaultMode
-  propertyState.formPermissionFields = resolveFormPermissionSourceFields().map(field => ({
-    ...field,
-    mode: normalizeFormPermissionMode(
-      policy?.permissions?.get(field.variable)
-      || (policy?.configured ? defaultMode : undefined)
-      || previous.get(field.variable)
-      || field.mode
-      || defaultMode
-    )
-  }))
-}
-
-/**
- * 选择元素时从 BPMN 和正式表单共同恢复节点字段权限。
- * @param {object} businessObject 当前节点业务对象。
- * @returns {void} 无返回值。
- */
-function loadFormPermissionState(businessObject) {
-  const policy = propertyState.formSource === 'TEMPLATE'
-    ? readTemplatePermissionPolicy(businessObject)
-    : undefined
-  rebuildFormPermissionFields(policy)
-}
-
-/**
- * 切换正式模板或内嵌 FormData，并在一条命令中清理另一来源。
- * @returns {void} 来源非法或当前元素不支持表单时恢复 BPMN 原值。
- */
-function updateFormSource() {
-  if (!['TEMPLATE', 'EMBEDDED'].includes(propertyState.formSource) || !propertyFlags.value.formSupported) {
-    loadPropertyState(selectedElement.value)
-    return
-  }
-  if (propertyState.formSource === 'EMBEDDED' && !propertyState.embeddedFields.length) {
-    // 空 FormData 无法在 XML 中表达来源；切换时创建首个合法字段，后续可继续编辑或删除。
-    propertyState.embeddedFields = [{
-      id: 'field1', variable: '', name: '字段 1', type: 'string', required: false,
-      readable: true, writable: true, datePattern: '', values: []
-    }]
-  }
-  rebuildFormPermissionFields()
-  syncFormDefinition()
-}
-
-/**
- * 更新开始节点或用户任务的正式表单键，并确保不存在内嵌字段。
- * @returns {void} 当前来源不是正式模板时不执行。
- */
-function updateFormKey() {
-  if (propertyState.formSource !== 'TEMPLATE') return
-  rebuildFormPermissionFields()
-  syncFormDefinition()
-}
-
-/**
- * 接收字段编辑器的完整值，执行与后端一致的即时门禁后写入 BPMN。
- * @param {Array<object>} fields 用户编辑后的完整内嵌字段列表。
- * @returns {void} 校验失败时恢复当前 BPMN 值并触发 error。
- */
-function updateEmbeddedForm(fields) {
-  try {
-    validateEmbeddedFormFields(fields)
-    propertyState.embeddedFields = fields.map(field => ({
-      ...field,
-      values: (field.values || []).map(value => ({ ...value }))
-    }))
-    propertyState.formSource = 'EMBEDDED'
-    rebuildFormPermissionFields()
-    syncFormDefinition()
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
-}
-
-/**
- * 校验并保存正式模板的完整节点字段权限。
- * @param {{defaultMode:string,fields:Array<object>}} policy 字段编辑器提交的完整策略。
- * @returns {void} 配置不完整时恢复 BPMN 真实状态并上报错误。
- */
-function updateFormPermissions(policy) {
-  try {
-    if (propertyState.formSource !== 'TEMPLATE' || !propertyState.formKey) {
-      throw new Error('节点字段权限只能配置绑定的正式表单')
-    }
-    const sourceFields = resolveFormPermissionSourceFields()
-    const requested = Array.isArray(policy?.fields) ? policy.fields : []
-    const requestedByVariable = new Map(requested.map(field => [String(field?.variable || '').trim(), field]))
-    if (requestedByVariable.size !== sourceFields.length
-      || sourceFields.some(field => !requestedByVariable.has(field.variable))) {
-      throw new Error('节点字段权限与当前正式表单不一致')
-    }
-    propertyState.formPermissionDefault = normalizeFormPermissionMode(policy.defaultMode)
-    propertyState.formPermissionFields = sourceFields.map(field => ({
-      ...field,
-      mode: normalizeFormPermissionMode(requestedByVariable.get(field.variable)?.mode)
-    }))
-    syncFormDefinition()
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
-}
-
-/**
- * 将四态字段权限转换为 Flowable FormProperty readable/writeable/required 标志。
- * @param {string} mode 字段权限模式。
- * @returns {{readable:boolean,writable:boolean,required:boolean}} Flowable 原生权限标志。
- */
-function permissionFlags(mode) {
-  const normalized = normalizeFormPermissionMode(mode)
-  return {
-    readable: normalized !== 'HIDDEN',
-    writable: ['EDITABLE', 'REQUIRED'].includes(normalized),
-    required: normalized === 'REQUIRED'
-  }
-}
-
-/**
- * 校验内嵌字段数量、变量、类型、日期格式和静态枚举完整性。
- * @param {Array<object>} fields 待写入 BPMN 的内嵌字段列表。
- * @returns {void} 任一字段违反后端协议时抛出业务错误。
- */
-function validateEmbeddedFormFields(fields) {
-  if (!Array.isArray(fields) || !fields.length || fields.length > 500) {
-    throw new Error('内嵌表单必须包含 1 至 500 个字段')
-  }
-  const fieldIds = new Set()
-  const variables = new Set()
-  for (const field of fields) {
-    const fieldId = String(field?.id || '')
-    if (!EMBEDDED_FORM_VARIABLE_PATTERN.test(fieldId) || fieldIds.has(fieldId)) {
-      throw new Error('内嵌表单字段标识非法或重复')
-    }
-    fieldIds.add(fieldId)
-    const configuredVariable = String(field?.variable || '')
-    const variable = configuredVariable || fieldId
-    const reserved = EMBEDDED_FORM_RESERVED_VARIABLES.has(variable)
-      || EMBEDDED_FORM_RESERVED_PREFIXES.some(prefix => variable.startsWith(prefix))
-    if ((configuredVariable && configuredVariable !== configuredVariable.trim())
-      || !EMBEDDED_FORM_VARIABLE_PATTERN.test(variable) || reserved || variables.has(variable)) {
-      throw new Error('内嵌表单变量名非法、重复或属于保留变量')
-    }
-    variables.add(variable)
-    if (!String(field.name || '').trim() || String(field.name).trim().length > 255) {
-      throw new Error('内嵌表单字段名称不能为空且不能超过 255 个字符')
-    }
-    const customType = String(field.type || '').startsWith('custom:')
-      && formFieldOptions.value.some(option => `custom:${option.extensionKey}` === field.type)
-    if (!EMBEDDED_FORM_TYPES.includes(field.type) && !customType) {
-      throw new Error(`内嵌表单字段类型不受支持: ${field.type || ''}`)
-    }
-    if (field.type === 'date' && !EMBEDDED_FORM_DATE_PATTERN.test(String(field.datePattern || '').trim())) {
-      throw new Error('内嵌表单日期格式不合法')
-    }
-    if (field.type !== 'enum') continue
-    const values = field.values || []
-    if (!values.length || values.length > 500) throw new Error('内嵌枚举字段必须配置 1 至 500 个静态选项')
-    const optionIds = new Set()
-    for (const value of values) {
-      const id = String(value?.id || '')
-      const name = String(value?.name || '').trim()
-      if (!id || id !== id.trim() || id.length > 255 || optionIds.has(id) || !name || name.length > 255) {
-        throw new Error('内嵌枚举选项非法或重复')
-      }
-      optionIds.add(id)
-    }
-  }
-}
-
-/**
- * 把一个已校验字段转换为 Flowable FormProperty moddle 对象。
- * @param {object} field 字段编辑器中的确定性字段值。
- * @returns {object} 可放入 bpmn:ExtensionElements.values 的 FormProperty。
- */
-function createEmbeddedFormProperty(field) {
-  const moddle = modeler.get('moddle')
-  const values = field.type === 'enum'
-    ? field.values.map(value => moddle.create('flowable:Value', {
-      id: value.id,
-      name: value.name.trim()
-    }))
-    : []
-  return moddle.create('flowable:FormProperty', {
-    id: field.id,
-    variable: field.variable?.trim() || undefined,
-    name: field.name.trim(),
-    type: field.type,
-    required: Boolean(field.required && field.writable),
-    readable: Boolean(field.readable),
-    writable: Boolean(field.writable),
-    datePattern: field.type === 'date' ? field.datePattern.trim() : undefined,
-    values
-  })
-}
-
-/**
- * 创建正式模板节点的批量默认和逐字段权限 FormProperty 描述。
- * @returns {object[]} 可随模型 XML 稳定往返并由后端部署编译器解析的权限描述。
- */
-function createTemplatePermissionProperties() {
-  if (!propertyState.formKey || !propertyState.formPermissionFields.length) return []
-  const moddle = modeler.get('moddle')
-
-  /**
-   * 创建一条只承载权限、不会作为运行表单字段使用的 Flowable FormProperty。
-   * @param {string} id 稳定权限描述主键。
-   * @param {string|undefined} variable 正式模板字段变量；批量默认策略为空。
-   * @param {string} label 字段显示名称。
-   * @param {string} mode 四态权限模式。
-   * @returns {object} Flowable FormProperty moddle 对象。
-   */
-  function createPermissionProperty(id, variable, label, mode) {
-    return moddle.create('flowable:FormProperty', {
-      id,
-      variable,
-      name: label,
-      type: 'string',
-      ...permissionFlags(mode)
-    })
-  }
-
-  return [
-    createPermissionProperty(
-      FORM_PERMISSION_DEFAULT_ID,
-      undefined,
-      '批量默认字段权限',
-      propertyState.formPermissionDefault
-    ),
-    ...propertyState.formPermissionFields.map((field, index) => createPermissionProperty(
-      `${FORM_PERMISSION_FIELD_ID_PREFIX}${index + 1}`,
-      field.variable,
-      field.label || field.variable,
-      field.mode
-    ))
-  ]
-}
-
-/**
- * 同步当前表单定义，保留审计监听器等非表单扩展并原子互斥两种来源。
- * @returns {void} 未选中可配置元素或设计器锁定时不执行。
- */
-function syncFormDefinition() {
-  if (designerLocked.value || !modeler || !selectedElement.value || !propertyFlags.value.formSupported) return
-  const businessObject = selectedBusinessObject.value
-  const preservedValues = (businessObject.extensionElements?.values || [])
-    .filter(value => value?.$type !== 'flowable:FormProperty')
-  const formValues = propertyState.formSource === 'EMBEDDED'
-    ? propertyState.embeddedFields.map(createEmbeddedFormProperty)
-    : createTemplatePermissionProperties()
-  const extensionValues = [...formValues, ...preservedValues]
-  const extensionElements = extensionValues.length
-    ? modeler.get('moddle').create('bpmn:ExtensionElements', { values: extensionValues })
-    : undefined
-  modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
-    'flowable:formKey': propertyState.formSource === 'TEMPLATE'
-      ? propertyState.formKey || undefined
-      : undefined,
-    extensionElements
-  })
-}
-
-/**
- * 按办理方式互斥写入办理人、候选用户或候选组。
- * @returns {void} 无返回值。
- */
-function updateAssignment() {
-  if (propertyState.multiInstanceType === 'controlled') return
-  // 当前办理方式是尚未选择具体身份时唯一的编辑态，不能依赖 BPMN 空属性反推。
-  const assignmentType = propertyState.assignmentType
-  updateProperties({
-    'flowable:assignee': assignmentType === 'assignee' ? propertyState.assignee || undefined : undefined,
-    'flowable:candidateUsers': assignmentType === 'users' ? propertyState.candidateUsers.join(',') || undefined : undefined,
-    'flowable:candidateGroups': assignmentType === 'groups' ? propertyState.candidateGroups.join(',') || undefined : undefined
-  })
-  // bpmn-js 会同步触发属性回读；候选值为空时需恢复用户显式选择的办理方式。
-  propertyState.assignmentType = assignmentType
-}
-
-/**
- * 校验并把流程发起范围或单实例任务规则写入平台属性集合。
- * @param {{type:string,targetIds:string[],formField:string}} rule 规则编辑器提交的完整值。
- * @returns {void} 非法目录值会恢复 BPMN 当前状态；分步选择产生的暂存空值由保存门禁拦截。
- */
-function updateParticipantRule(rule) {
-  if (designerLocked.value || !modeler || !selectedElement.value) return
-  try {
-    const processRule = isProcess.value
-    if (!processRule && (!isUserTask.value || propertyState.multiInstanceType !== 'none')) return
-    // 规则类型与目录目标是两个独立控件；切换类型时允许目标暂空，才能继续展示正式目录选择器。
-    const normalized = normalizeParticipantRule(rule, processRule, true)
-    propertyState.participantRule = normalized
-    const preserved = readAllFlowableProperties(selectedBusinessObject.value)
-      .filter(item => !PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
-    persistExtensionProperties([...preserved, ...participantRulePropertyItems(normalized, processRule)])
-    if (!processRule) {
-      // 受控规则是单一事实来源，清理旧静态身份以免 Flowable 在监听器解析前创建残留链接。
-      updateProperties({
-        'flowable:assignee': undefined,
-        'flowable:candidateUsers': undefined,
-        'flowable:candidateGroups': undefined
-      })
-    }
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
-}
-
-/**
- * 按后端参与者协议规范规则类型、目标数量、目录编码和表单字段。
- * @param {object} rule 编辑器提交值。
- * @param {boolean} processRule 是否为流程级发起范围。
- * @param {boolean} allowIncomplete 是否允许分步编辑期间暂缺目录目标或表单字段。
- * @returns {{type:string,targetIds:string[],formField:string}} 可持久化规则。
- */
-function normalizeParticipantRule(rule, processRule, allowIncomplete = false) {
-  const type = String(rule?.type || '')
-  const targetIds = [...new Set((Array.isArray(rule?.targetIds) ? rule.targetIds : [])
-    .map(value => String(value || '').trim()).filter(Boolean))]
-  const formField = String(rule?.formField || '').trim()
-  const allowed = processRule
-    ? new Set(['PUBLIC', 'USERS', 'ROLES', 'DEPTS'])
-    : new Set(['FIXED_USER', 'CANDIDATE_USERS', 'CANDIDATE_GROUPS', 'STARTER',
-        'STARTER_MANAGER', 'DEPT_MANAGER', 'STARTER_DEPT_ROLE', 'FORM_USER'])
-  if (!allowed.has(type)) throw new Error(processRule ? '请选择流程发起范围' : '请选择单实例任务办理人规则')
-  const requiresTargets = new Set(['USERS', 'ROLES', 'DEPTS', 'FIXED_USER',
-    'CANDIDATE_USERS', 'CANDIDATE_GROUPS', 'DEPT_MANAGER', 'STARTER_DEPT_ROLE'])
-  const singleTarget = new Set(['FIXED_USER', 'DEPT_MANAGER', 'STARTER_DEPT_ROLE'])
-  if (requiresTargets.has(type) && (targetIds.length > 200 || (!allowIncomplete && !targetIds.length))) {
-    throw new Error('参与者规则必须选择 1 至 200 个正式目录对象')
-  }
-  if (singleTarget.has(type) && (targetIds.length > 1 || (!allowIncomplete && targetIds.length !== 1))) {
-    throw new Error('当前办理规则只能选择一个目录对象')
-  }
-  if (!requiresTargets.has(type) && targetIds.length) throw new Error('当前参与者规则不能携带目录目标')
-  const numericTypes = new Set(['USERS', 'FIXED_USER', 'CANDIDATE_USERS'])
-  const roleTypes = new Set(['ROLES', 'STARTER_DEPT_ROLE'])
-  const deptTypes = new Set(['DEPTS', 'DEPT_MANAGER'])
-  if (numericTypes.has(type) && targetIds.some(value => !/^[1-9]\d{0,18}$/.test(value))) {
-    throw new Error('用户目录选项不合法')
-  }
-  if (roleTypes.has(type) && targetIds.some(value => !/^ROLE[1-9]\d{0,18}$/.test(value))) {
-    throw new Error('角色目录选项不合法')
-  }
-  if (deptTypes.has(type) && targetIds.some(value => !/^DEPT[1-9]\d{0,18}$/.test(value))) {
-    throw new Error('部门目录选项不合法')
-  }
-  if (type === 'CANDIDATE_GROUPS'
-    && targetIds.some(value => !/^(?:ROLE|DEPT)[1-9]\d{0,18}$/.test(value))) {
-    throw new Error('候选角色或部门目录选项不合法')
-  }
-  if (type === 'FORM_USER') {
-    if ((!allowIncomplete || formField)
-      && !participantFormFieldOptions.value.some(option => option.value === formField)) {
-      throw new Error('表单用户字段必须来自当前任务正式表单')
-    }
-  } else if (formField) {
-    throw new Error('非表单用户规则不能携带表单字段')
-  }
-  return { type, targetIds, formField }
-}
-
-/**
- * 将界面目录值转换为作者 BPMN 固定的五项受控属性。
- * @param {{type:string,targetIds:string[],formField:string}} rule 已校验规则。
- * @param {boolean} processRule 是否为流程级发起范围。
- * @returns {Array<{name:string,value:string}>} 后端可完整冻结的稳定属性集合。
- */
-function participantRulePropertyItems(rule, processRule) {
-  const numericTargets = rule.targetIds.map(value => (
-    ['ROLES', 'STARTER_DEPT_ROLE'].includes(rule.type)
-      ? value.substring(4)
-      : ['DEPTS', 'DEPT_MANAGER'].includes(rule.type) ? value.substring(4) : value
-  ))
-  if (processRule) {
-    return [
-      { name: PARTICIPANT_RULE_PROPERTIES.startVersion, value: '1' },
-      { name: PARTICIPANT_RULE_PROPERTIES.startType, value: rule.type },
-      { name: PARTICIPANT_RULE_PROPERTIES.startTargetIds, value: numericTargets.join(',') },
-      { name: PARTICIPANT_RULE_PROPERTIES.startNoMatch, value: 'FAIL' }
-    ]
-  }
-  return [
-    { name: PARTICIPANT_RULE_PROPERTIES.taskVersion, value: '1' },
-    { name: PARTICIPANT_RULE_PROPERTIES.taskType, value: rule.type },
-    { name: PARTICIPANT_RULE_PROPERTIES.taskTargetIds, value: numericTargets.join(',') },
-    { name: PARTICIPANT_RULE_PROPERTIES.taskFormField, value: rule.formField },
-    { name: PARTICIPANT_RULE_PROPERTIES.taskNoMatch, value: 'FAIL' }
-  ]
-}
-
-/**
- * 更新用户任务到期时间和优先级表达式。
- * @returns {void} 无返回值。
- */
-function updateUserTaskProperties() {
-  updateProperties({
-    'flowable:dueDate': propertyState.dueDate.trim() || undefined,
-    'flowable:priority': propertyState.priority.trim() || undefined,
-    'flowable:category': propertyState.taskCategory.trim() || undefined,
-    'flowable:skipExpression': propertyState.skipExpression.trim() || undefined,
-    'flowable:localScope': Boolean(propertyState.localScope)
-  })
-}
-
-/**
- * 将服务任务扩展键和 JSON 配置写入作者 XML，并固定为系统调度器。
- * @returns {void} 校验失败时恢复当前 BPMN 值并触发 error。
- */
-function updateServiceTask() {
-  try {
-    const extensionKey = propertyState.extensionKey.trim()
-    const configText = propertyState.extensionConfig.trim() || '{}'
-    const config = JSON.parse(configText)
-    if (!config || Array.isArray(config) || typeof config !== 'object') {
-      throw new Error('处理器配置必须是 JSON 对象')
-    }
-    const businessObject = selectedBusinessObject.value
-    const preservedValues = (businessObject.extensionElements?.values || []).filter(value => (
-      value?.$type !== 'flowable:Field'
-      || ![EXTENSION_KEY_FIELD, EXTENSION_CONFIG_FIELD].includes(value.name)
-    ))
-    const moddle = modeler.get('moddle')
-    const extensionValues = extensionKey
-      ? [
-          moddle.create('flowable:Field', { name: EXTENSION_KEY_FIELD, stringValue: extensionKey }),
-          moddle.create('flowable:Field', { name: EXTENSION_CONFIG_FIELD, stringValue: JSON.stringify(config) }),
-          ...preservedValues
-        ]
-      : preservedValues
-    const extensionElements = extensionValues.length
-      ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
-      : undefined
-    modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
-      'flowable:class': undefined,
-      'flowable:delegateExpression': extensionKey ? EXTENSION_DELEGATE_EXPRESSION : undefined,
-      'flowable:expression': undefined,
-      'flowable:resultVariable': undefined,
-      extensionElements
-    })
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
-}
-
-/**
- * 切换受控扩展类型时建立与服务端 Schema 一致的初始配置。
- * @returns {void} 更新编辑状态并通过命令栈写入作者 BPMN。
- */
-function updateExtensionSelection() {
-  const selectedOption = extensionOptions.value.find(option => (
-    option.extensionKey === propertyState.extensionKey
-  ))
-  if (selectedOption?.extensionType === 'CEL') {
-    propertyState.extensionConfig = JSON.stringify(CEL_DEFAULT_CONFIG)
-  } else if (selectedOption?.extensionType === 'HTTP') {
-    const endpoint = connectorEndpoints.value[0]
-    // HTTP 外部副作用必须交给 Flowable Job 重试；该技术约束由系统自动维护。
-    propertyState.asyncBefore = true
-    updateProperties({ 'flowable:async': true })
-    propertyState.extensionConfig = JSON.stringify({
-      endpointKey: endpoint?.endpointKey || '',
-      method: String(endpoint?.allowedMethods || '').split(',').filter(Boolean)[0] || '',
-      path: endpoint?.pathPrefix || '/'
-    })
-  } else if (selectedOption?.implementationKey === 'COLLABORATION_OUTBOX_V1') {
-    const endpoint = connectorEndpoints.value[0]
-    propertyState.extensionConfig = JSON.stringify({
-      endpointKey: endpoint?.endpointKey || '',
-      path: '/workflow/runtime-event/collaboration/message',
-      messageName: '',
-      targetProcessDefinitionKey: '',
-      variableNames: [],
-      maxAttempts: 5
-    })
-  } else if (selectedOption?.extensionType === 'SQL') {
-    const source = sqlDataSources.value[0]
-    // SQL 查询和写入统一交给 Flowable Job，异常才能按引擎配置重试并进入原生死信。
-    propertyState.asyncBefore = true
-    updateProperties({ 'flowable:async': true })
-    propertyState.extensionConfig = JSON.stringify({
-      dataSourceKey: source?.dataSourceKey || '',
-      sql: '',
-      parameters: {},
-      maxRows: 100
-    })
-  } else if (selectedOption?.implementationKey === 'RAISE_BPMN_EVENT') {
-    propertyState.extensionConfig = JSON.stringify({
-      eventType: 'ERROR',
-      eventCode: errorEventOptions.value[0]?.eventCode || '',
-      sourceType: 'SERVICE_TASK',
-      operator: 'ALWAYS'
-    })
-  } else {
-    propertyState.extensionConfig = '{}'
-  }
-  updateServiceTask()
-}
-
-/**
- * 将业务规则任务绑定到一个服务端目录中的精确 DMN 来源版本。
- * @returns {void} 非 BusinessRuleTask、未知 decisionId 或多值引用会恢复当前 BPMN 状态。
- */
-function updateDmnDecision() {
-  if (!propertyFlags.value.businessRuleTask) return
-  const decisionId = String(propertyState.dmnDecisionId || '').trim()
-  const selected = dmnOptions.value.find(option => option.decisionId === decisionId)
-  if (!selected || decisionId.includes(',')) {
-    loadPropertyState(selectedElement.value)
-    emit('error', new Error('请选择一个正式 DMN 决策精确版本'))
-    return
-  }
-  updateProperties({
-    'flowable:rules': decisionId,
-    'flowable:class': undefined,
-    'flowable:ruleVariablesInput': undefined,
-    'flowable:exclude': false
-  })
-}
-
-/**
- * 从正式后端加载每个 DMN key 的最新来源版本供设计器选择。
- * @returns {Promise<void>} 失败时清空选项并向页面上报，不使用本地回退目录。
- */
-async function loadDmnOptions() {
-  dmnLoading.value = true
-  try {
-    const response = await listDmnDecisionOptions()
-    dmnOptions.value = Array.isArray(response?.data) ? response.data : []
-  } catch (error) {
-    dmnOptions.value = []
-    emit('error', error)
-  } finally {
-    dmnLoading.value = false
-  }
-}
-
-/**
- * 从当前 CallActivity 所属父流程的正式模板和内嵌表单提取可映射标量字段。
- * @returns {Array<{name:string,label:string,type:string,required:boolean,readable:boolean,writable:boolean}>} 按变量名排序的父流程字段目录。
- */
-function resolveCallActivityParentFields(callActivity = selectedBusinessObject.value) {
-  if (!callActivity || callActivity.$type !== 'bpmn:CallActivity') return []
-  let process = callActivity
-  while (process && process.$type !== 'bpmn:Process') process = process.$parent
-  if (!process) return []
-  const fields = new Map()
-  const visit = flowElements => {
-    for (const element of Array.isArray(flowElements) ? flowElements : []) {
-      if (['bpmn:StartEvent', 'bpmn:UserTask'].includes(element?.$type)) {
-        const embedded = readEmbeddedFormFields(element).map(field => ({
-          name: String(field.variable || '').trim(),
-          label: field.name || field.variable,
-          type: embeddedCallFieldType(field.type),
-          required: field.required === true,
-          readable: field.readable !== false,
-          writable: field.writable !== false
-        }))
-        mergeCallVariableFields(fields, embedded)
-        const formId = Number(String(element.get?.('flowable:formKey') || '').replace(/^key_/, ''))
-        const form = props.forms.find(item => Number(item.formId) === formId)
-        if (form?.content) mergeCallVariableFields(fields, extractTemplateCallFields(form.content))
-      }
-      visit(element?.flowElements)
-    }
-  }
-  visit(process.flowElements)
-  return [...fields.values()].sort((left, right) => left.name.localeCompare(right.name))
-}
-
-/**
- * 从正式表单 JSON 提取 CallActivity 允许映射的单值字段。
- * @param {string} content 已由页面从正式表单接口回读的 JSON。
- * @returns {Array<object>} 不包含集合、附件、表格和范围字段的字段目录。
- */
-function extractTemplateCallFields(content) {
-  try {
-    const root = JSON.parse(content)
-    const result = []
-    const visit = nodes => {
-      for (const field of Array.isArray(nodes) ? nodes : []) {
-        const config = field?.__config__ || {}
-        const name = String(field?.__vModel__ || '').trim()
-        const type = templateCallFieldType(config.tag, field)
-        if (name && type) {
-          result.push({
-            name,
-            label: config.label || name,
-            type,
-            required: config.required === true,
-            readable: config.workflowReadable !== false,
-            writable: config.workflowWritable !== false && field.disabled !== true
-          })
-        }
-        visit(config.children)
-      }
-    }
-    visit(root?.fields)
-    return result
-  } catch {
-    return []
-  }
-}
-
-/**
- * 将正式表单组件类型归一为服务端调用映射的四类标量。
- * @param {string} tag Element Plus 组件 tag。
- * @param {object} field 完整字段配置。
- * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 可映射类型或空。
- */
-function templateCallFieldType(tag, field) {
-  if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
-  if (['el-date-picker', 'el-time-picker'].includes(tag)) {
-    return String(field?.type || '').toLowerCase().includes('range') ? null : 'TEXT'
-  }
-  if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
-  if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'
-  if (tag === 'el-switch') return 'BOOLEAN'
-  if (tag === 'el-radio-group') return 'SCALAR'
-  if (tag === 'el-select') return field?.multiple === true ? null : 'SCALAR'
-  return null
-}
-
-/**
- * 将 Flowable 内嵌 FormData 类型归一为服务端调用映射类型。
- * @param {string} type 内嵌表单字段类型。
- * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 可映射类型或空。
- */
-function embeddedCallFieldType(type) {
-  if (['long', 'integer'].includes(type)) return 'NUMBER'
-  if (type === 'boolean') return 'BOOLEAN'
-  if (type === 'enum') return 'SCALAR'
-  if (['string', 'date'].includes(type)) return 'TEXT'
-  return null
-}
-
-/**
- * 合并父流程字段并移除同名异构字段，避免页面提供必然被服务端拒绝的映射。
- * @param {Map<string, object>} target 当前字段目录。
- * @param {Array<object>} source 待合并字段。
- * @returns {void} 同名同型保留首次名称，同名异型从目录移除。
- */
-function mergeCallVariableFields(target, source) {
-  for (const field of source) {
-    if (!field?.name || !field.type) continue
-    const previous = target.get(field.name)
-    if (previous && previous.type !== field.type) {
-      target.delete(field.name)
-      continue
-    }
-    if (!previous) target.set(field.name, field)
-  }
-}
-
-/**
- * 加载当前设计者有权引用的全部已发布子流程版本和正式变量字段。
- * @returns {Promise<void>} 失败时清空目录并把真实接口错误交给页面。
- */
-async function loadCallActivityOptions() {
-  callActivityLoading.value = true
-  try {
-    const response = await listCallActivityOptions()
-    callActivityOptions.value = Array.isArray(response?.data) ? response.data : []
-    if (propertyFlags.value.callActivity) {
-      propertyState.callDefinitionId = resolveCallDefinitionId(
-        propertyState.calledElement,
-        propertyState.callVersionPolicy === 'FIXED' ? 'id' : 'key'
-      )
-    }
-  } catch (error) {
-    callActivityOptions.value = []
-    emit('error', error)
-  } finally {
-    callActivityLoading.value = false
-  }
-}
-
-/**
- * 从正式后端加载可选择的 Java、CEL、HTTP 扩展和 HTTP 端点白名单。
- * @returns {Promise<void>} 请求完成后更新扩展选项；失败时不提供本地伪造回退。
- */
-async function loadExtensionOptions() {
-  extensionLoading.value = true
-  eventCodeLoading.value = true
-  slaLoading.value = true
-  try {
-    const [javaResponse, celResponse, httpResponse, sqlResponse, formFieldResponse, endpointResponse, sqlSourceResponse, errorCodeResponse, escalationCodeResponse, calendarResponse] = await Promise.all([
-      listJavaExtensionOptions(),
-      listCelExtensionOptions(),
-      listHttpExtensionOptions(),
-      listSqlExtensionOptions(),
-      listFormFieldExtensionOptions(),
-      listConnectorEndpointOptions(),
-      listSqlDataSourceOptions(),
-      listBpmnEventCodeOptions('ERROR'),
-      listBpmnEventCodeOptions('ESCALATION'),
-      listEnabledSlaCalendars()
-    ])
-    extensionOptions.value = [
-      ...(Array.isArray(javaResponse?.data) ? javaResponse.data : []),
-      ...(Array.isArray(celResponse?.data) ? celResponse.data : []),
-      ...(Array.isArray(httpResponse?.data) ? httpResponse.data : []),
-      ...(Array.isArray(sqlResponse?.data) ? sqlResponse.data : [])
-    ]
-    formFieldOptions.value = Array.isArray(formFieldResponse?.data) ? formFieldResponse.data : []
-    connectorEndpoints.value = Array.isArray(endpointResponse?.data) ? endpointResponse.data : []
-    sqlDataSources.value = Array.isArray(sqlSourceResponse?.data) ? sqlSourceResponse.data : []
-    errorEventOptions.value = Array.isArray(errorCodeResponse?.data) ? errorCodeResponse.data : []
-    escalationEventOptions.value = Array.isArray(escalationCodeResponse?.data) ? escalationCodeResponse.data : []
-    slaCalendarOptions.value = Array.isArray(calendarResponse?.data) ? calendarResponse.data : []
-  } catch (error) {
-    extensionOptions.value = []
-    formFieldOptions.value = []
-    connectorEndpoints.value = []
-    sqlDataSources.value = []
-    errorEventOptions.value = []
-    escalationEventOptions.value = []
-    slaCalendarOptions.value = []
-    emit('error', error)
-  } finally {
-    extensionLoading.value = false
-    eventCodeLoading.value = false
-    slaLoading.value = false
-  }
-}
-
-/**
  * 更新活动的 Flowable 异步作业属性和标准补偿标志。
  * @returns {void} 所有字段通过 bpmn-js 命令栈写入并支持撤销、重做。
  */
@@ -2706,184 +1008,6 @@ function updateActivityProperties() {
     'flowable:exclusive': Boolean(propertyState.exclusive),
     isForCompensation: Boolean(propertyState.forCompensation)
   })
-}
-
-/**
- * 更新当前 FlowNode 的受控执行监听器。
- * @param {Array<object>} listeners 属性面板提交的事件、扩展键和 JSON 配置数组。
- * @returns {void} 配置合法时通过 moddle 命令栈写入，异常时恢复当前 BPMN 状态。
- */
-function updateBusinessExecutionListeners(listeners) {
-  updateBusinessListeners('EXECUTION', listeners)
-}
-
-/**
- * 更新当前 UserTask 的受控任务监听器，同时保留系统身份审计监听器。
- * @param {Array<object>} listeners 属性面板提交的事件、扩展键和 JSON 配置数组。
- * @returns {void} 配置合法时通过 moddle 命令栈写入，异常时恢复当前 BPMN 状态。
- */
-function updateBusinessTaskListeners(listeners) {
-  updateBusinessListeners('TASK', listeners)
-}
-
-/**
- * 校验并写入当前流程或元素的 Flowable 通用扩展属性。
- * @param {Array<{name:string,value:string}>} properties 属性编辑器提交的完整名值列表。
- * @returns {void} 非法名称、重复名称、超长值或超量输入会恢复当前 XML 并上报错误。
- */
-function updateExtensionProperties(properties) {
-  if (designerLocked.value || !modeler || !selectedElement.value) return
-  try {
-    if (!Array.isArray(properties) || properties.length > 32) {
-      throw new Error('单个元素最多允许 32 个扩展属性')
-    }
-    const normalized = properties.map(item => ({
-      name: String(item?.name || '').trim(),
-      value: String(item?.value || '')
-    }))
-    const names = new Set()
-    for (const item of normalized) {
-      if (!EXTENSION_PROPERTY_NAME_PATTERN.test(item.name) || item.name.startsWith('approva.')) {
-        throw new Error('扩展属性名必须为合法非保留标识')
-      }
-      if (item.value.length > 1024) throw new Error('扩展属性值不能超过 1024 个字符')
-      if (names.has(item.name)) throw new Error('同一元素的扩展属性名不能重复')
-      names.add(item.name)
-    }
-    const businessObject = selectedBusinessObject.value
-    const platformProperties = readAllFlowableProperties(businessObject)
-      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
-        || SLA_PROPERTY_NAME_SET.has(item.name)
-        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
-        || MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name)
-        || item.name === CONDITION_RULE_PROPERTY
-        || item.name === AUTO_COPY_PROPERTY_NAME)
-    const extensionElements = buildPropertiesExtensionElements(
-      businessObject, normalized, platformProperties)
-    modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
-      extensionElements
-    })
-    propertyState.extensionProperties = normalized
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
-}
-
-/**
- * 规范化并校验自动抄送规则的结构、元素触发范围和表单字段引用。
- * @param {Array<object>} rules 结构化编辑器或 BPMN JSON 提供的规则集合。
- * @param {object} options 校验开关及可选触发、字段白名单覆盖值。
- * @returns {Array<object>} 字段类型稳定、可直接序列化为后端契约的规则副本。
- */
-function normalizeAndValidateAutoCopyRules(rules, options = {}) {
-  if (!Array.isArray(rules) || !rules.length || rules.length > AUTO_COPY_MAX_RULES) {
-    throw new Error(`自动抄送规则数量必须为 1 至 ${AUTO_COPY_MAX_RULES}`)
-  }
-  const validatePlacement = options.validatePlacement !== false
-  const validateFormFields = options.validateFormFields !== false
-  const allowedTriggers = new Set(options.allowedTriggers || autoCopyTriggerOptions.value.map(item => item.value))
-  const allowedFormFields = new Set(options.allowedFormFields || autoCopyFormFieldOptions.value.map(item => item.value))
-  const ruleIds = new Set()
-  return rules.map(rule => {
-    const id = String(rule?.id || '')
-    const trigger = String(rule?.trigger || '')
-    if (!AUTO_COPY_RULE_ID_PATTERN.test(id) || ruleIds.has(id)) {
-      throw new Error('自动抄送规则主键不合法或重复')
-    }
-    ruleIds.add(id)
-    if (!['NODE_ARRIVED', 'NODE_COMPLETED', 'PROCESS_COMPLETED'].includes(trigger)
-      || (validatePlacement && !allowedTriggers.has(trigger))) {
-      throw new Error('自动抄送触发时机与当前元素不匹配')
-    }
-    if (!Array.isArray(rule?.recipients)
-      || !rule.recipients.length
-      || rule.recipients.length > AUTO_COPY_MAX_SOURCES) {
-      throw new Error(`自动抄送接收人来源数量必须为 1 至 ${AUTO_COPY_MAX_SOURCES}`)
-    }
-    const sourceKeys = new Set()
-    const recipients = rule.recipients.map(source => {
-      const type = String(source?.type || '')
-      if (!['USER', 'GROUP', 'INITIATOR', 'FORM_USER_FIELD'].includes(type)) {
-        throw new Error('自动抄送接收人来源不受支持')
-      }
-      if (!Array.isArray(source?.values) || source.values.length > AUTO_COPY_MAX_VALUES) {
-        throw new Error('自动抄送来源值必须为有界数组')
-      }
-      const values = source.values.map(value => String(value))
-      const valuePattern = {
-        USER: AUTO_COPY_USER_ID_PATTERN,
-        GROUP: AUTO_COPY_GROUP_ID_PATTERN,
-        FORM_USER_FIELD: AUTO_COPY_VARIABLE_PATTERN
-      }[type]
-      if (type === 'INITIATOR') {
-        if (values.length) throw new Error('流程发起人来源不能携带额外值')
-      } else if (!values.length
-        || new Set(values).size !== values.length
-        || values.some(value => !valuePattern.test(value))) {
-        throw new Error('自动抄送来源值格式不合法、为空或重复')
-      }
-      if (type === 'FORM_USER_FIELD' && validateFormFields
-        && values.some(value => !allowedFormFields.has(value))) {
-        throw new Error('自动抄送表单用户字段必须来自当前元素可见的正式标量字段')
-      }
-      const sourceKey = `${type}:${values.join(',')}`
-      if (sourceKeys.has(sourceKey)) throw new Error('同一自动抄送规则不能重复配置接收人来源')
-      sourceKeys.add(sourceKey)
-      return { type, values }
-    })
-    return { id, trigger, recipients }
-  })
-}
-
-/**
- * 对指定 Process/UserTask 的已保存自动抄送属性执行完整本地部署前门禁。
- * @param {object} businessObject 当前待校验的 BPMN 业务对象。
- * @param {Array<string>} allowedTriggers 该元素生命周期允许的触发时机。
- * @returns {void} 未配置时直接返回，非法 JSON、位置或表单字段引用会抛出稳定错误。
- */
-function validateAutoCopyRulesForElement(businessObject, allowedTriggers) {
-  const properties = readExtensionProperties(businessObject)
-  if (!properties.some(item => item.name === AUTO_COPY_PROPERTY_NAME)) return
-  const rules = readAutoCopyRules(properties, true)
-  normalizeAndValidateAutoCopyRules(rules, {
-    allowedTriggers,
-    allowedFormFields: resolveAutoCopyFormFieldOptionsForBusinessObject(businessObject).map(item => item.value)
-  })
-}
-
-/**
- * 原子创建、更新或删除当前 Process/UserTask 的自动抄送受控属性。
- * @param {Array<object>} rules 自动抄送编辑器显式应用的完整规则数组；空数组表示删除该属性。
- * @returns {void} 校验失败时回读 BPMN 原值并向页面上报，绝不写入部分规则。
- */
-function updateAutoCopyRules(rules) {
-  if (designerLocked.value || !modeler || !selectedElement.value
-    || (!propertyFlags.value.process && !propertyFlags.value.userTask)) return
-  try {
-    const normalized = Array.isArray(rules) && rules.length
-      ? normalizeAndValidateAutoCopyRules(rules)
-      : []
-    const document = normalized.length ? JSON.stringify({ version: 1, rules: normalized }) : ''
-    if (document.length > AUTO_COPY_MAX_PROPERTY_LENGTH) {
-      throw new Error(`自动抄送规则不能超过 ${AUTO_COPY_MAX_PROPERTY_LENGTH} 个字符`)
-    }
-    propertyState.autoCopyRules = normalized
-    // 写自动抄送时携带其他受控属性，避免删除整改循环、SLA、发起范围或单实例审批人规则。
-    const platformProperties = readAllFlowableProperties(selectedBusinessObject.value)
-      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
-        || SLA_PROPERTY_NAME_SET.has(item.name)
-        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
-        || MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name))
-    persistExtensionProperties([
-      ...propertyState.extensionProperties,
-      ...platformProperties,
-      ...(document ? [{ name: AUTO_COPY_PROPERTY_NAME, value: document }] : [])
-    ])
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
 }
 
 /**
@@ -2924,328 +1048,6 @@ function buildPropertiesExtensionElements(businessObject, editableProperties, co
 }
 
 /**
- * 将属性面板状态转换为后端白名单要求的完整受控循环固定属性。
- * @returns {Array<{name:string,value:string}>} 按稳定顺序生成的五项平台属性。
- */
-function controlledLoopPropertyItems() {
-  return [
-    { name: CONTROLLED_LOOP_PROPERTIES.enabled, value: 'true' },
-    { name: CONTROLLED_LOOP_PROPERTIES.decisionVariable, value: propertyState.controlledLoopDecisionVariable.trim() },
-    { name: CONTROLLED_LOOP_PROPERTIES.repeatValue, value: propertyState.controlledLoopRepeatValue.trim() },
-    { name: CONTROLLED_LOOP_PROPERTIES.exitValue, value: propertyState.controlledLoopExitValue.trim() },
-    { name: CONTROLLED_LOOP_PROPERTIES.maxIterations, value: String(propertyState.controlledLoopMaxIterations) }
-  ]
-}
-
-/**
- * 校验并写入固定 Bean 业务监听器，禁止重复事件、未知目录和非对象 JSON 配置。
- * @param {'EXECUTION'|'TASK'} kind 监听器种类，决定 moddle 类型和目标属性。
- * @param {Array<object>} listeners 待写入的业务监听器编辑值。
- * @returns {void} 无返回值；失败时向页面上报稳定错误并回读原状态。
- */
-function updateBusinessListeners(kind, listeners) {
-  if (designerLocked.value || !modeler || !selectedElement.value) return
-  try {
-    const allowedEvents = kind === 'TASK'
-      ? new Set(['create', 'assignment', 'complete', 'delete'])
-      : new Set(['start', 'end', 'take'])
-    const seenEvents = new Set()
-    const moddle = modeler.get('moddle')
-    const generated = (Array.isArray(listeners) ? listeners : []).map(listener => {
-      const event = String(listener?.event || '').trim()
-      const extensionKey = String(listener?.extensionKey || '').trim()
-      if (!allowedEvents.has(event) || !seenEvents.add(event)) {
-        throw new Error('同一元素的业务监听器事件必须合法且唯一')
-      }
-      const option = businessListenerOptions.value.find(item => item.extensionKey === extensionKey)
-      if (!option) throw new Error('请选择已启用的 Java 业务监听处理器')
-      const config = JSON.parse(String(listener?.config || '{}'))
-      if (!config || Array.isArray(config) || typeof config !== 'object') {
-        throw new Error('业务监听器配置必须是 JSON 对象')
-      }
-      return moddle.create(kind === 'TASK' ? 'flowable:TaskListener' : 'flowable:ExecutionListener', {
-        event,
-        delegateExpression: BUSINESS_LISTENER_DELEGATE_EXPRESSION,
-        fields: [
-          moddle.create('flowable:Field', { name: EXTENSION_KEY_FIELD, stringValue: extensionKey }),
-          moddle.create('flowable:Field', { name: EXTENSION_CONFIG_FIELD, stringValue: JSON.stringify(config) })
-        ]
-      })
-    })
-    const businessObject = selectedBusinessObject.value
-    const listenerType = kind === 'TASK' ? 'flowable:TaskListener' : 'flowable:ExecutionListener'
-    const preserved = (businessObject.extensionElements?.values || []).filter(value => (
-      value?.$type !== listenerType
-      || value?.delegateExpression !== BUSINESS_LISTENER_DELEGATE_EXPRESSION
-    ))
-    const extensionValues = [...preserved, ...generated]
-    const extensionElements = extensionValues.length
-      ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
-      : undefined
-    modeler.get('modeling').updateModdleProperties(selectedElement.value, businessObject, {
-      extensionElements
-    })
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
-}
-
-/**
- * 从服务端流程目录解析作者引用对应的精确定义选项。
- * @param {string} calledElement 作者 XML 中的流程 key 或定义 ID。
- * @param {'id'|'key'|string} calledElementType Flowable 调用绑定类型。
- * @returns {string} 设计器选中的定义 ID；目录尚未加载或目标已不可见时为空。
- */
-function resolveCallDefinitionId(calledElement, calledElementType) {
-  const reference = String(calledElement || '').trim()
-  if (!reference) return ''
-  if (calledElementType === 'id') {
-    return callActivityOptions.value.some(option => option.definitionId === reference) ? reference : ''
-  }
-  return callActivityOptions.value
-    .filter(option => option.processKey === reference && option.status === 'ACTIVE')
-    .sort((left, right) => Number(right.version) - Number(left.version))[0]?.definitionId || ''
-}
-
-/**
- * 从 CallActivity 的 extensionElements 回读 Flowable 原生 in/out 变量映射。
- * @param {object} businessObject 当前 CallActivity 业务对象。
- * @param {'flowable:In'|'flowable:Out'} mappingType 映射元素类型。
- * @returns {Array<{source:string,target:string}>} 保持 XML 顺序的结构化映射。
- */
-function readCallMappings(businessObject, mappingType) {
-  return (businessObject?.extensionElements?.values || [])
-    .filter(value => value?.$type === mappingType)
-    .map(value => ({ source: String(value.source || ''), target: String(value.target || '') }))
-}
-
-/**
- * 更新调用活动的目录引用、版本策略、变量作用域和原生 in/out 映射。
- * @returns {void} 所有变更通过单个 bpmn-js 命令进入撤销、重做和 XML 保存链路。
- */
-function updateCallActivityProperties() {
-  if (!modeler || !selectedElement.value || !propertyFlags.value.callActivity) return
-  const selectedDefinition = callActivityOptions.value.find(option => (
-    option.definitionId === propertyState.callDefinitionId
-  ))
-  const fixedVersion = propertyState.callVersionPolicy === 'FIXED'
-  propertyState.calledElement = selectedDefinition
-    ? (fixedVersion ? selectedDefinition.definitionId : selectedDefinition.processKey)
-    : ''
-
-  const businessObject = selectedBusinessObject.value
-  const moddle = modeler.get('moddle')
-  // 只替换调用映射，监听器、通用属性和其他扩展必须原样保留。
-  const preservedValues = (businessObject.extensionElements?.values || [])
-    .filter(value => !['flowable:In', 'flowable:Out'].includes(value?.$type))
-  const inputMappings = propertyState.callInMappings
-    .filter(mapping => mapping.source && mapping.target)
-    .map(mapping => moddle.create('flowable:In', {
-      source: String(mapping.source).trim(),
-      target: String(mapping.target).trim()
-    }))
-  const outputMappings = propertyState.callOutMappings
-    .filter(mapping => mapping.source && mapping.target)
-    .map(mapping => moddle.create('flowable:Out', {
-      source: String(mapping.source).trim(),
-      target: String(mapping.target).trim()
-    }))
-  const extensionValues = [...preservedValues, ...inputMappings, ...outputMappings]
-  const extensionElements = extensionValues.length
-    ? moddle.create('bpmn:ExtensionElements', { values: extensionValues })
-    : undefined
-
-  updateProperties({
-    calledElement: propertyState.calledElement || undefined,
-    'flowable:calledElementType': fixedVersion ? 'id' : 'key',
-    'flowable:businessKey': undefined,
-    'flowable:inheritBusinessKey': propertyState.callBusinessKeyPolicy === 'INHERIT',
-    'flowable:inheritVariables': propertyState.callInheritVariables === true,
-    'flowable:sameDeployment': false,
-    'flowable:completeAsync': false,
-    'flowable:useLocalScopeForOutParameters': propertyState.callOutputScope === 'LOCAL',
-    'flowable:processInstanceName': propertyState.processInstanceName.trim() || undefined,
-    extensionElements
-  })
-}
-
-/**
- * 返回引用型事件的根元素类型、引用属性和业务键字段。
- * @param {string} eventDefinitionType BPMN 事件定义类型。
- * @returns {object|undefined} 引用配置；非引用型事件返回 undefined。
- */
-function eventReferenceConfig(eventDefinitionType) {
-  return {
-    'bpmn:MessageEventDefinition': {
-      rootType: 'bpmn:Message', referenceProperty: 'messageRef', keyProperty: 'name', idPrefix: 'Message'
-    },
-    'bpmn:SignalEventDefinition': {
-      rootType: 'bpmn:Signal', referenceProperty: 'signalRef', keyProperty: 'name', idPrefix: 'Signal'
-    },
-    'bpmn:ErrorEventDefinition': {
-      rootType: 'bpmn:Error', referenceProperty: 'errorRef', keyProperty: 'errorCode', idPrefix: 'Error'
-    },
-    'bpmn:EscalationEventDefinition': {
-      rootType: 'bpmn:Escalation', referenceProperty: 'escalationRef', keyProperty: 'escalationCode', idPrefix: 'Escalation'
-    }
-  }[eventDefinitionType]
-}
-
-/**
- * 沿 moddle 父级查找 Definitions，供事件引用登记为 BPMN 根元素。
- * @param {object|undefined} businessObject 当前事件业务对象。
- * @returns {object|undefined} BPMN Definitions；找不到时返回 undefined。
- */
-function findDefinitions(businessObject) {
-  let current = businessObject
-  while (current && current.$type !== 'bpmn:Definitions') current = current.$parent
-  return current
-}
-
-/**
- * 将业务键转换为稳定且合法的 BPMN 根元素标识片段。
- * @param {string} value 消息、信号、错误或升级的业务键。
- * @returns {string} 可用于 BPMN id 的非空片段。
- */
-function eventReferenceIdPart(value) {
-  const normalized = value.replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^[^A-Za-z_]+/, '')
-  return normalized || 'Reference'
-}
-
-/**
- * 查找或创建消息、信号、错误、升级根元素，并通过命令栈登记到 Definitions。
- * @param {object} eventDefinition 当前事件定义。
- * @param {object} config 引用类型配置。
- * @param {string} key 用户维护的稳定业务键。
- * @returns {object|undefined} 可写入事件定义的根元素；空键返回 undefined。
- */
-function resolveEventRootReference(eventDefinition, config, key) {
-  if (!key) return undefined
-  const definitions = findDefinitions(eventDefinition)
-  if (!definitions) return undefined
-  const roots = Array.isArray(definitions.rootElements) ? definitions.rootElements : []
-  const existing = roots.find(root => root.$type === config.rootType
-    && (root[config.keyProperty] === key || root.name === key || root.id === key))
-  if (existing) return existing
-  const reference = modeler.get('moddle').create(config.rootType, {
-    id: `${config.idPrefix}_${eventReferenceIdPart(key)}`,
-    [config.keyProperty]: key,
-    ...(config.keyProperty === 'name' ? {} : { name: key })
-  })
-  modeler.get('modeling').updateModdleProperties(selectedElement.value, definitions, {
-    rootElements: [...roots, reference]
-  })
-  return reference
-}
-
-/**
- * 更新当前事件定义的根引用、定时表达式和边界中断语义。
- * @returns {void} 事件内部对象使用 updateModdleProperties，确保 XML 与撤销栈一致。
- */
-function updateEventProperties() {
-  if (designerLocked.value || !modeler || !selectedElement.value) return
-  const businessObject = selectedBusinessObject.value
-  const eventDefinition = businessObject?.eventDefinitions?.[0]
-  if (isType('bpmn:BoundaryEvent')) {
-    updateProperties({ cancelActivity: Boolean(propertyState.cancelActivity) })
-  }
-  if (!eventDefinition) return
-  const modeling = modeler.get('modeling')
-  const config = eventReferenceConfig(eventDefinition.$type)
-  if (config) {
-    const key = propertyState.eventReference.trim()
-    const reference = resolveEventRootReference(eventDefinition, config, key)
-    modeling.updateModdleProperties(selectedElement.value, eventDefinition, {
-      [config.referenceProperty]: reference
-    })
-    return
-  }
-  if (eventDefinition.$type !== 'bpmn:TimerEventDefinition') return
-  const timerType = ['timeDate', 'timeDuration', 'timeCycle'].includes(propertyState.timerDefinitionType)
-    ? propertyState.timerDefinitionType
-    : 'timeDuration'
-  const expression = propertyState.timerDefinition.trim()
-  const formalExpression = expression
-    ? modeler.get('moddle').create('bpmn:FormalExpression', { body: expression })
-    : undefined
-  modeling.updateModdleProperties(selectedElement.value, eventDefinition, {
-    timeDate: timerType === 'timeDate' ? formalExpression : undefined,
-    timeDuration: timerType === 'timeDuration' ? formalExpression : undefined,
-    timeCycle: timerType === 'timeCycle' ? formalExpression : undefined
-  })
-}
-
-/**
- * 校验并把结构化条件规则写入当前网关出线，作者 XML 不生成任意 EL。
- * @param {{name:string,config:object}} payload 编辑器提交的分支名称与完整规则。
- * @returns {void} 配置与真实默认状态不一致时恢复当前 BPMN 状态并上报。
- */
-function updateConditionRule(payload) {
-  if (designerLocked.value || !modeler || !isConditionGatewayFlow()) return
-  try {
-    const name = String(payload?.name || '').trim()
-    const config = payload?.config
-    if (!name || name.length > 100 || config?.version !== 1
-      || config?.default !== propertyState.conditionDefault) {
-      throw new Error('条件分支名称或默认状态不完整')
-    }
-    persistConditionConfig(selectedElement.value, name, config)
-    loadPropertyState(selectedElement.value)
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
-}
-
-/**
- * 将当前出线设为网关唯一默认分支，并清除旧默认分支的过期默认配置。
- * @returns {void} 旧默认分支会进入“待配置”状态，保存 API 会阻止半成品发布。
- */
-function makeConditionDefault() {
-  if (designerLocked.value || !modeler || !isConditionGatewayFlow()) return
-  try {
-    const sourceElement = selectedElement.value.source
-    const source = sourceElement.businessObject
-    const oldDefaultId = source.default?.id || source.default || ''
-    const oldDefaultElement = oldDefaultId ? modeler.get('elementRegistry').get(oldDefaultId) : null
-    modeler.get('modeling').updateProperties(sourceElement, { default: selectedBusinessObject.value })
-    if (oldDefaultElement && oldDefaultElement !== selectedElement.value) {
-      persistConditionConfig(oldDefaultElement, oldDefaultElement.businessObject.name || '', null)
-    }
-    persistConditionConfig(selectedElement.value, propertyState.name || '', { version: 1, default: true })
-    loadPropertyState(selectedElement.value)
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
-}
-
-/**
- * 使用 bpmn-js 命令栈更新任意网关出线的名称、受控规则属性并移除历史表达式。
- * @param {object} flowElement bpmn-js SequenceFlow 图形元素。
- * @param {string} name 分支名称，允许旧默认切换时暂为空并由保存门禁阻止。
- * @param {object|null} config 版本化受控规则；null 表示清除过期配置。
- * @returns {void} 当前命令不会直接序列化 XML。
- */
-function persistConditionConfig(flowElement, name, config) {
-  const businessObject = flowElement?.businessObject
-  if (!businessObject) throw new Error('条件分支元素不存在')
-  const ordinaryProperties = readAllFlowableProperties(businessObject)
-    .filter(item => item.name !== CONDITION_RULE_PROPERTY)
-  const controlledProperties = config
-    ? [{ name: CONDITION_RULE_PROPERTY, value: JSON.stringify(config) }]
-    : []
-  const extensionElements = buildPropertiesExtensionElements(
-    businessObject, ordinaryProperties, controlledProperties)
-  modeler.get('modeling').updateProperties(flowElement, {
-    name: String(name || '').trim() || undefined,
-    conditionExpression: undefined,
-    extensionElements
-  })
-}
-
-/**
  * 创建、更新或删除 BPMN 文档说明。
  * @returns {void} 无返回值。
  */
@@ -3253,225 +1055,6 @@ function updateDocumentation() {
   const text = propertyState.documentation.trim()
   const moddle = modeler.get('moddle')
   updateProperties({ documentation: text ? [moddle.create('bpmn:Documentation', { text })] : [] })
-}
-
-/**
- * 创建、更新或删除活动循环配置；受控模式一次写入完整的人员来源和签署技术契约。
- * @returns {void} 无返回值。
- */
-function updateMultiInstance() {
-  const existingLoop = selectedBusinessObject.value?.loopCharacteristics
-  const wasControlled = isControlledMultiInstanceLoop(existingLoop)
-  const wasApprovalLoop = Boolean(readControlledLoop(selectedBusinessObject.value))
-  const editableProperties = propertyState.extensionProperties.map(item => ({
-    name: String(item.name || '').trim(), value: String(item.value ?? '')
-  }))
-  // 循环命令栈必须携带 SLA 和自动抄送属性，并统一剔除只适用于单实例的参与者规则。
-  const preservedPlatformProperties = readAllFlowableProperties(selectedBusinessObject.value)
-    .filter(item => SLA_PROPERTY_NAME_SET.has(item.name)
-      || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
-      || item.name === AUTO_COPY_PROPERTY_NAME)
-  const editableWithPlatformProperties = multiInstanceAuthorProperties(
-    [...editableProperties, ...preservedPlatformProperties], PARTICIPANT_RULE_PROPERTY_NAMES)
-  const participantProperties = readAllFlowableProperties(selectedBusinessObject.value)
-    .filter(item => PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
-  const editableSingleInstanceProperties = [...editableWithPlatformProperties, ...participantProperties]
-  const clearedControlledExtensions = wasApprovalLoop || wasControlled
-    ? buildPropertiesExtensionElements(selectedBusinessObject.value, editableSingleInstanceProperties, [])
-    : selectedBusinessObject.value?.extensionElements
-  const plainMultiInstanceExtensions = buildPropertiesExtensionElements(
-    selectedBusinessObject.value, editableWithPlatformProperties, [])
-  if (propertyState.multiInstanceType === 'approvalLoop') {
-    try {
-      if (!isUserTask.value) throw new Error('整改循环只能配置在用户任务上')
-      const maxIterations = Number(propertyState.controlledLoopMaxIterations)
-      const field = controlledLoopFieldOptions.value.find(option => (
-        option.value === propertyState.controlledLoopDecisionVariable
-      ))
-      const repeatValue = propertyState.controlledLoopRepeatValue.trim()
-      const exitValue = propertyState.controlledLoopExitValue.trim()
-      if (!Number.isInteger(maxIterations) || maxIterations < 2 || maxIterations > 50) {
-        throw new Error('最大办理轮次必须是 2 至 50 的整数')
-      }
-      if (!field) throw new Error('循环判断字段必须来自当前节点正式表单')
-      if (!repeatValue || !exitValue || repeatValue.length > 128 || exitValue.length > 128) {
-        throw new Error('再次进入和退出条件值必须填写且不能超过 128 个字符')
-      }
-      if (repeatValue === exitValue) throw new Error('再次进入和退出条件不能相同')
-      const extensionElements = buildPropertiesExtensionElements(
-        selectedBusinessObject.value, editableWithPlatformProperties, controlledLoopPropertyItems())
-      const changes = { loopCharacteristics: undefined, extensionElements }
-      if (wasControlled) resetControlledAssignment(changes)
-      updateProperties(changes)
-      return
-    } catch (error) {
-      loadPropertyState(selectedElement.value)
-      emit('error', error)
-      return
-    }
-  }
-  if (propertyState.multiInstanceType === 'none') {
-    const changes = { loopCharacteristics: undefined, extensionElements: clearedControlledExtensions }
-    if (wasControlled) resetControlledAssignment(changes)
-    updateProperties(changes)
-    return
-  }
-  const moddle = modeler.get('moddle')
-  if (propertyState.multiInstanceType === 'standard') {
-    const maximumText = propertyState.loopMaximum.trim()
-    const maximum = maximumText ? Number(maximumText) : undefined
-    if (maximumText && (!Number.isInteger(maximum) || maximum < 1 || maximum > 10000)) {
-      loadPropertyState(selectedElement.value)
-      emit('error', new Error('最大循环次数必须是 1 至 10000 的整数'))
-      return
-    }
-    const loopCondition = propertyState.loopCondition.trim()
-    const standardLoop = moddle.create('bpmn:StandardLoopCharacteristics', {
-      testBefore: Boolean(propertyState.testBefore),
-      loopMaximum: maximum,
-      loopCondition: loopCondition
-        ? moddle.create('bpmn:FormalExpression', { body: loopCondition })
-        : undefined
-    })
-    const changes = { loopCharacteristics: standardLoop, extensionElements: plainMultiInstanceExtensions }
-    if (wasControlled) resetControlledAssignment(changes)
-    updateProperties(changes)
-    return
-  }
-  const controlled = propertyState.multiInstanceType === 'controlled'
-  const configuredMemberSource = controlled
-    && Object.hasOwn(MULTI_INSTANCE_IDENTITY_TYPES, propertyState.multiInstanceMemberSource)
-  const leavingControlled = !controlled && wasControlled
-  let collection = controlled
-    ? propertyState.multiInstanceMemberSource === 'start'
-      ? START_MULTI_INSTANCE_COLLECTION
-      : configuredMemberSource
-        ? CONFIGURED_MULTI_INSTANCE_COLLECTION
-        : CONTROLLED_MULTI_INSTANCE_COLLECTION
-    : propertyState.collection.trim()
-  let elementVariable = controlled
-    ? CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE
-    : propertyState.elementVariable.trim()
-  let condition = controlled
-    ? propertyState.multiInstanceApprovalMode === 'any'
-      ? CONTROLLED_MULTI_INSTANCE_ANY_CONDITION
-      : CONTROLLED_MULTI_INSTANCE_ALL_CONDITION
-    : propertyState.completionCondition.trim()
-
-  // 固定 handler 不能作为静态集合继续存在，否则属性回读会把刚切换的静态模式再次识别成动态模式。
-  if (leavingControlled) {
-    collection = ''
-    elementVariable = ''
-    condition = ''
-    propertyState.collection = ''
-    propertyState.elementVariable = ''
-    propertyState.completionCondition = ''
-  }
-
-  let configuredIdentity = null
-  if (controlled && !['dynamic', 'start'].includes(propertyState.multiInstanceMemberSource)
-    && !configuredMemberSource) {
-    loadPropertyState(selectedElement.value)
-    emit('error', new Error('会签或或签人员来源不合法'))
-    return
-  }
-  if (configuredMemberSource) {
-    configuredIdentity = normalizeConfiguredMultiInstanceIdentity(
-      propertyState.multiInstanceMemberSource,
-      propertyState.configuredMultiInstanceIdentityIds
-    )
-    if (!configuredIdentity) {
-      loadPropertyState(selectedElement.value)
-      emit('error', new Error('指定会签或或签身份必须选择 1 至 100 个有效用户、角色或部门'))
-      return
-    }
-    // 只把类型和正式主键写入作者 BPMN；角色或部门成员在每次进入节点时由后端按实时 RBAC 展开。
-    propertyState.configuredMultiInstanceIdentityIds = configuredIdentity.selectionValues
-  }
-
-  const multiInstanceExtensions = buildPropertiesExtensionElements(
-    selectedBusinessObject.value,
-    editableWithPlatformProperties,
-    configuredIdentity ? configuredMultiInstancePropertyItems(configuredIdentity) : [])
-
-  // 已导入的静态多实例可能带有后端允许但面板未编辑的标准属性，原位更新可保持其往返完整性。
-  if (!controlled && !wasControlled
-    && existingLoop?.$type === 'bpmn:MultiInstanceLoopCharacteristics') {
-    updateExistingStaticMultiInstance(
-      existingLoop, collection, elementVariable, condition, multiInstanceExtensions)
-    return
-  }
-
-  const loop = moddle.create('bpmn:MultiInstanceLoopCharacteristics', {
-    isSequential: controlled ? false : propertyState.multiInstanceType === 'sequential',
-    completionCondition: condition
-      ? moddle.create('bpmn:FormalExpression', { body: condition })
-      : undefined
-  })
-  loop.set('flowable:collection', collection || undefined)
-  loop.set('flowable:elementVariable', elementVariable || undefined)
-  // 任一多实例模式都必须移除单实例参与者属性，避免切回单实例时恢复未经确认的旧办理人。
-  const changes = { loopCharacteristics: loop, extensionElements: multiInstanceExtensions }
-  if (controlled) {
-    propertyState.assignmentType = 'assignee'
-    propertyState.assignee = CONTROLLED_MULTI_INSTANCE_ASSIGNEE
-    propertyState.candidateUsers = []
-    propertyState.candidateGroups = []
-    propertyState.collection = collection
-    propertyState.elementVariable = elementVariable
-    propertyState.completionCondition = condition
-    Object.assign(changes, {
-      'flowable:assignee': CONTROLLED_MULTI_INSTANCE_ASSIGNEE,
-      'flowable:candidateUsers': undefined,
-      'flowable:candidateGroups': undefined
-    })
-  } else if (wasControlled) {
-    resetControlledAssignment(changes)
-  }
-  updateProperties(changes)
-}
-
-/**
- * 原位更新已导入的静态多实例核心字段，保留 loopCardinality、索引变量及标准数据引用等未编辑属性。
- * @param {object} loop 当前用户任务已有的 bpmn:MultiInstanceLoopCharacteristics。
- * @param {string} collection 静态集合表达式或变量名。
- * @param {string} elementVariable 单个实例使用的元素变量名。
- * @param {string} condition 可选完成条件表达式。
- * @param {object|undefined} extensionElements 已清除单实例参与者规则的扩展元素。
- * @returns {void} 通过 bpmn-js 命令栈更新循环和扩展属性，可由撤销操作恢复。
- */
-function updateExistingStaticMultiInstance(
-  loop, collection, elementVariable, condition, extensionElements
-) {
-  if (designerLocked.value || !modeler || !selectedElement.value) return
-  const moddle = modeler.get('moddle')
-  // 已导入的静态多实例走原位更新分支，也必须同步清理隐藏的单实例规则。
-  modeler.get('modeling').updateProperties(selectedElement.value, { extensionElements })
-  modeler.get('modeling').updateModdleProperties(selectedElement.value, loop, {
-    isSequential: propertyState.multiInstanceType === 'sequential',
-    completionCondition: condition
-      ? moddle.create('bpmn:FormalExpression', { body: condition })
-      : undefined,
-    'flowable:collection': collection || undefined,
-    'flowable:elementVariable': elementVariable || undefined
-  })
-}
-
-/**
- * 离开动态模式时清理仅对 handler 有意义的固定办理人，要求设计者重新选择静态身份。
- * @param {object} changes 本次 bpmn-js 属性更新映射。
- * @returns {void} 同步重置属性面板及待提交属性。
- */
-function resetControlledAssignment(changes) {
-  propertyState.assignmentType = 'assignee'
-  propertyState.assignee = ''
-  propertyState.candidateUsers = []
-  propertyState.candidateGroups = []
-  Object.assign(changes, {
-    'flowable:assignee': undefined,
-    'flowable:candidateUsers': undefined,
-    'flowable:candidateGroups': undefined
-  })
 }
 
 /**
@@ -3648,31 +1231,6 @@ async function handleImportFile(event) {
   } catch (error) {
     emit('error', error)
   }
-}
-
-/**
- * 从当前事件定义读取引用或定时表达式，保证属性面板与作者 XML 保持一致。
- * @param {object} businessObject 当前选中 BPMN 元素的业务对象。
- * @returns {void} 非事件或无事件定义时保留空状态。
- */
-function loadEventPropertyState(businessObject) {
-  const eventDefinition = businessObject.eventDefinitions?.[0]
-  if (!eventDefinition) return
-  propertyState.eventDefinitionType = eventDefinition.$type || ''
-  const referenceConfig = eventReferenceConfig(eventDefinition.$type)
-  if (referenceConfig) {
-    const reference = eventDefinition[referenceConfig.referenceProperty]
-    propertyState.eventReference = reference?.[referenceConfig.keyProperty]
-      || reference?.name
-      || reference?.id
-      || ''
-    return
-  }
-  if (eventDefinition.$type !== 'bpmn:TimerEventDefinition') return
-  const timerType = ['timeDate', 'timeDuration', 'timeCycle']
-    .find(type => eventDefinition[type]) || 'timeDuration'
-  propertyState.timerDefinitionType = timerType
-  propertyState.timerDefinition = eventDefinition[timerType]?.body || ''
 }
 
 /**
@@ -4090,16 +1648,8 @@ async function requestSave() {
   // 清除最后一次建模命令留下的延迟导出，保证本次保存窗口内只有一个 XML 序列化任务。
   window.clearTimeout(changeTimer)
   try {
-    const configuredSource = Object.hasOwn(
-      MULTI_INSTANCE_IDENTITY_TYPES, propertyState.multiInstanceMemberSource)
-    if (propertyFlags.value.userTask
-      && propertyState.multiInstanceType === 'controlled'
-      && configuredSource
-      && !normalizeConfiguredMultiInstanceIdentity(
-        propertyState.multiInstanceMemberSource,
-        propertyState.configuredMultiInstanceIdentityIds)) {
-      throw new Error('指定会签或或签身份必须选择 1 至 100 个有效用户、角色或部门')
-    }
+    const pendingMultiInstanceError = validatePendingMultiInstanceSelection()
+    if (pendingMultiInstanceError) throw new Error(pendingMultiInstanceError)
     const error = validateDiagram()
     if (error) throw new Error(error)
     // 保存窗口只序列化一次，服务端校验与正式保存必须使用同一内容快照。
@@ -4219,234 +1769,6 @@ function collectProcessFlowElements(process) {
 }
 
 /**
- * 对全部流程和单实例任务执行参与者规则的即时结构校验。
- * @param {object} businessObject BPMN Process 或 UserTask 业务对象。
- * @param {boolean} processRule 是否校验流程发起范围。
- * @returns {string} 空串表示通过，否则返回稳定错误提示。
- */
-function validateParticipantProperties(businessObject, processRule) {
-  if (!processRule && businessObject?.loopCharacteristics) return ''
-  const properties = new Map(readAllFlowableProperties(businessObject)
-    .filter(item => PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name))
-    .map(item => [item.name, item.value]))
-  const names = processRule
-    ? [PARTICIPANT_RULE_PROPERTIES.startVersion, PARTICIPANT_RULE_PROPERTIES.startType,
-        PARTICIPANT_RULE_PROPERTIES.startTargetIds, PARTICIPANT_RULE_PROPERTIES.startNoMatch]
-    : [PARTICIPANT_RULE_PROPERTIES.taskVersion, PARTICIPANT_RULE_PROPERTIES.taskType,
-        PARTICIPANT_RULE_PROPERTIES.taskTargetIds, PARTICIPANT_RULE_PROPERTIES.taskFormField,
-        PARTICIPANT_RULE_PROPERTIES.taskNoMatch]
-  if (!properties.size) {
-    if (processRule) return ''
-    const legacy = ['flowable:assignee', 'flowable:candidateUsers', 'flowable:candidateGroups']
-      .some(name => String(businessObject?.get?.(name) || '').trim())
-    return legacy ? '' : `用户任务 ${businessObject?.name || businessObject?.id || ''} 必须配置办理人规则`
-  }
-  if (names.some(name => !properties.has(name))) return processRule ? '流程发起范围配置不完整' : '用户任务办理人规则配置不完整'
-  const version = properties.get(processRule
-    ? PARTICIPANT_RULE_PROPERTIES.startVersion : PARTICIPANT_RULE_PROPERTIES.taskVersion)
-  const policy = properties.get(processRule
-    ? PARTICIPANT_RULE_PROPERTIES.startNoMatch : PARTICIPANT_RULE_PROPERTIES.taskNoMatch)
-  if (version !== '1' || policy !== 'FAIL') return '参与者规则版本或无匹配策略不受支持'
-  return ''
-}
-
-/**
- * 校验一个 CallActivity 的正式目录引用、版本策略和原生变量映射。
- * @param {object} callActivity 当前画布中的 bpmn:CallActivity 业务对象。
- * @returns {string} 空串表示通过，否则返回带节点名称的首个业务错误。
- */
-function validateCallActivityConfiguration(callActivity) {
-  const nodeName = String(callActivity?.name || callActivity?.id || '调用活动')
-  const reference = String(callActivity?.calledElement || '').trim()
-  const referenceType = String(callActivity?.get?.('flowable:calledElementType') || 'key').trim()
-  if (!reference || !['key', 'id'].includes(referenceType) || reference.includes('${') || reference.includes('#{')) {
-    return `${nodeName}必须从已发布子流程目录选择目标和版本策略`
-  }
-  const target = referenceType === 'id'
-    ? callActivityOptions.value.find(option => option.definitionId === reference)
-    : callActivityOptions.value
-      .filter(option => option.processKey === reference && option.status === 'ACTIVE')
-      .sort((left, right) => Number(right.version) - Number(left.version))[0]
-  if (!target) return `${nodeName}引用的子流程不存在或当前用户无权引用`
-  if (target.status !== 'ACTIVE') return `${nodeName}引用的子流程已停用`
-
-  // 当前选中节点可能保留尚未写入 XML 的半行草稿，保存前必须显式阻止丢失。
-  if (selectedBusinessObject.value === callActivity) {
-    const drafts = [...propertyState.callInMappings, ...propertyState.callOutMappings]
-    if (drafts.some(mapping => !String(mapping?.source || '').trim() || !String(mapping?.target || '').trim())) {
-      return `${nodeName}存在未完成的变量映射`
-    }
-  }
-  const parentFields = resolveCallActivityParentFields(callActivity)
-  const inputError = validateCallMappings(
-    readCallMappings(callActivity, 'flowable:In'),
-    parentFields,
-    target.inputFields || [],
-    `${nodeName}输入`
-  )
-  if (inputError) return inputError
-  return validateCallMappings(
-    readCallMappings(callActivity, 'flowable:Out'),
-    target.outputFields || [],
-    parentFields,
-    `${nodeName}输出`
-  )
-}
-
-/**
- * 校验一组调用变量映射的数量、目录权限、重复目标和标量类型兼容性。
- * @param {Array<{source:string,target:string}>} mappings Flowable 原生 in 或 out 映射。
- * @param {Array<object>} sourceFields 来源变量字段目录。
- * @param {Array<object>} targetFields 目标变量字段目录。
- * @param {string} direction 包含节点名称的输入或输出方向。
- * @returns {string} 空串表示通过，否则返回稳定业务错误。
- */
-function validateCallMappings(mappings, sourceFields, targetFields, direction) {
-  if (mappings.length > 64) return `${direction}变量映射不能超过64项`
-  const sources = new Map(sourceFields.map(field => [field.name, field]))
-  const targets = new Map(targetFields.map(field => [field.name, field]))
-  const usedTargets = new Set()
-  for (const mapping of mappings) {
-    const sourceName = String(mapping?.source || '').trim()
-    const targetName = String(mapping?.target || '').trim()
-    if (!sourceName || !targetName) return `${direction}存在未完成的变量映射`
-    if (usedTargets.has(targetName)) return `${direction}变量目标不能重复`
-    usedTargets.add(targetName)
-    const source = sources.get(sourceName)
-    const target = targets.get(targetName)
-    if (!source?.readable || !target?.writable) return `${direction}变量不在可映射字段目录中`
-    if (!callVariableTypesCompatible(source.type, target.type)) return `${direction}变量字段类型不兼容`
-  }
-  return ''
-}
-
-/**
- * 判断两个受控标量字段类型是否可安全映射。
- * @param {string} sourceType 来源字段的 TEXT、NUMBER、BOOLEAN 或 SCALAR 类型。
- * @param {string} targetType 目标字段的 TEXT、NUMBER、BOOLEAN 或 SCALAR 类型。
- * @returns {boolean} 同型或一端为受控 SCALAR 时返回 true。
- */
-function callVariableTypesCompatible(sourceType, targetType) {
-  if (sourceType === targetType) return true
-  const scalarTypes = new Set(['TEXT', 'NUMBER', 'BOOLEAN'])
-  return (sourceType === 'SCALAR' && scalarTypes.has(targetType))
-    || (targetType === 'SCALAR' && scalarTypes.has(sourceType))
-}
-
-/**
- * 从 Flowable 通用属性集合解析 UserTask SLA 作者配置。
- * @param {Array<{name:string,value:string}>} properties 当前元素全部扩展属性。
- * @returns {object} 字段完整的结构化 SLA 配置；旧模型没有属性时返回停用默认值。
- */
-function readSlaConfig(properties) {
-  const values = new Map((Array.isArray(properties) ? properties : [])
-    .filter(item => SLA_PROPERTY_NAME_SET.has(item.name))
-    .map(item => [item.name, String(item.value ?? '')]))
-  const defaults = createDefaultSlaConfig()
-  return {
-    enabled: values.get(SLA_PROPERTY_NAMES.enabled) === 'true',
-    calendarKey: values.get(SLA_PROPERTY_NAMES.calendarKey) || defaults.calendarKey,
-    reminderMinutes: Number(values.get(SLA_PROPERTY_NAMES.reminderMinutes) || defaults.reminderMinutes),
-    reminderRepeatMinutes: Number(values.get(SLA_PROPERTY_NAMES.reminderRepeatMinutes) || defaults.reminderRepeatMinutes),
-    maxReminders: Number(values.get(SLA_PROPERTY_NAMES.maxReminders) || defaults.maxReminders),
-    escalationMinutes: Number(values.get(SLA_PROPERTY_NAMES.escalationMinutes) || defaults.escalationMinutes),
-    escalationUserId: values.get(SLA_PROPERTY_NAMES.escalationUserId) || defaults.escalationUserId,
-    escalationEventCode: values.get(SLA_PROPERTY_NAMES.escalationEventCode) || defaults.escalationEventCode
-  }
-}
-
-/**
- * 校验并写入当前 UserTask 的受控 SLA 属性。
- * @param {object} config SLA 编辑器提交的八个结构化作者字段。
- * @returns {void} 目录或跨字段约束不合法时恢复 BPMN 原值并向页面上报。
- */
-function updateSlaProperties(config) {
-  if (designerLocked.value || !modeler || !selectedElement.value || !propertyFlags.value.userTask) return
-  try {
-    const normalized = normalizeAndValidateSlaConfig(config)
-    propertyState.sla = normalized
-    // SLA 命令栈必须携带受控循环、单实例参与者和自动抄送属性，避免修改超时策略破坏其他闭环。
-    const controlledProperties = readAllFlowableProperties(selectedBusinessObject.value)
-      .filter(item => CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
-        || PARTICIPANT_RULE_PROPERTY_NAMES.has(item.name)
-        || MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name)
-        || item.name === AUTO_COPY_PROPERTY_NAME)
-    persistExtensionProperties([
-      ...propertyState.extensionProperties,
-      ...controlledProperties,
-      ...slaConfigToProperties(normalized)
-    ])
-  } catch (error) {
-    loadPropertyState(selectedElement.value)
-    emit('error', error)
-  }
-}
-
-/**
- * 规范化并校验 SLA 数值、目录引用、提醒顺序和升级目标。
- * @param {object} config UserTask SLA 编辑值或从 XML 回读的配置。
- * @returns {object} 字段类型确定且可写入 XML 的 SLA 配置。
- */
-function normalizeAndValidateSlaConfig(config) {
-  const normalized = {
-    enabled: config?.enabled === true,
-    calendarKey: String(config?.calendarKey || '').trim(),
-    reminderMinutes: Number(config?.reminderMinutes),
-    reminderRepeatMinutes: Number(config?.reminderRepeatMinutes),
-    maxReminders: Number(config?.maxReminders),
-    escalationMinutes: Number(config?.escalationMinutes),
-    escalationUserId: String(config?.escalationUserId || '').trim(),
-    escalationEventCode: String(config?.escalationEventCode || '').trim()
-  }
-  if (!normalized.enabled) return { ...createDefaultSlaConfig(), ...normalized }
-  if (!slaCalendarOptions.value.some(item => item.calendarKey === normalized.calendarKey)) {
-    throw new Error('审批 SLA 必须选择已启用的正式业务日历')
-  }
-  if (!isBoundedSlaMinute(normalized.reminderMinutes)
-    || !isBoundedSlaMinute(normalized.reminderRepeatMinutes)
-    || !isBoundedSlaMinute(normalized.escalationMinutes)) {
-    throw new Error('SLA 提醒与升级时间必须是 1 至 525600 的整数分钟')
-  }
-  if (!Number.isInteger(normalized.maxReminders) || normalized.maxReminders < 1 || normalized.maxReminders > 100) {
-    throw new Error('SLA 最大提醒次数必须是 1 至 100 的整数')
-  }
-  const lastReminderMinutes = normalized.reminderMinutes
-    + normalized.reminderRepeatMinutes * (normalized.maxReminders - 1)
-  if (normalized.escalationMinutes <= lastReminderMinutes) {
-    throw new Error('SLA 超时升级时间必须晚于最后一次提醒')
-  }
-  if (!normalized.escalationUserId && !normalized.escalationEventCode) {
-    throw new Error('SLA 必须配置升级办理人或受控升级事件')
-  }
-  if (normalized.escalationEventCode && !escalationEventOptions.value
-    .some(item => item.eventCode === normalized.escalationEventCode)) {
-    throw new Error('SLA 超时升级只能引用已启用的正式升级编码')
-  }
-  return normalized
-}
-
-/**
- * 判断 SLA 工作分钟是否处于后端允许的一年上限内。
- * @param {number} value 待校验的提醒或升级工作分钟。
- * @returns {boolean} 值为 1 至 525600 的整数时返回 true。
- */
-function isBoundedSlaMinute(value) {
-  return Number.isInteger(value) && value >= 1 && value <= 525600
-}
-
-/**
- * 将结构化 SLA 配置转换为后端部署编译器约定的八个 Flowable 属性。
- * @param {object} config 已规范化的 SLA 配置。
- * @returns {Array<{name:string,value:string}>} 按固定顺序输出的属性名值列表。
- */
-function slaConfigToProperties(config) {
-  return Object.entries(SLA_PROPERTY_NAMES).map(([field, name]) => ({
-    name,
-    value: field === 'enabled' ? String(config.enabled === true) : String(config[field] ?? '')
-  }))
-}
-
-/**
  * 将已经过调用方校验的完整扩展属性集合原子写入当前 BPMN 元素。
  * @param {Array<{name:string,value:string}>} properties 包含通用属性和受控 SLA 属性的完整集合。
  * @returns {void} 保留监听器、表单和服务任务字段等其他 extensionElements。
@@ -4472,100 +1794,165 @@ function persistExtensionProperties(properties) {
   })
 }
 
-/**
- * 创建字段完整的 UserTask SLA 默认配置。
- * @returns {object} 未启用且数值处于合法范围的作者配置。
- */
-function createDefaultSlaConfig() {
-  return {
-    enabled: false,
-    calendarKey: '',
-    reminderMinutes: 60,
-    reminderRepeatMinutes: 60,
-    maxReminders: 1,
-    escalationMinutes: 240,
-    escalationUserId: '',
-    escalationEventCode: ''
-  }
-}
+// 三个领域模块共享同一个选择视图，但只能通过主组件提供的 bpmn-js 命令栈入口写回模型。
+let formParticipantDomain
+let routingCallActivityDomain
+const extensionEventSlaDomain = createExtensionEventSlaDomain({
+  buildPropertiesExtensionElements,
+  designerLocked,
+  emit,
+  getModeler: () => modeler,
+  isForeignProtectedPropertyName: name => (
+    isFormParticipantProperty(name) || isRoutingCallActivityProperty(name)
+  ),
+  isType,
+  listBpmnEventCodeOptions,
+  listCelExtensionOptions,
+  listConnectorEndpointOptions,
+  listEnabledSlaCalendars,
+  listFormFieldExtensionOptions,
+  listHttpExtensionOptions,
+  listJavaExtensionOptions,
+  listSqlDataSourceOptions,
+  listSqlExtensionOptions,
+  loadPropertyState,
+  persistExtensionProperties,
+  propertyFlags,
+  propertyState,
+  readAllFlowableProperties,
+  readExtensionProperties,
+  resolveUserIdFieldCatalog: businessObject => (
+    formParticipantDomain.resolveUserIdFieldCatalog(businessObject)
+  ),
+  selectedBusinessObject,
+  selectedElement,
+  updateProperties
+})
+formParticipantDomain = createFormParticipantDomain({
+  buildPropertiesExtensionElements,
+  designerLocked,
+  emit,
+  formFieldOptions: extensionEventSlaDomain.formFieldOptions,
+  getModeler: () => modeler,
+  isProcess,
+  isUserTask,
+  loadPropertyState,
+  persistExtensionProperties,
+  propertyFlags,
+  propertyState,
+  props,
+  readAllFlowableProperties,
+  selectedBusinessObject,
+  selectedElement,
+  updateProperties
+})
+routingCallActivityDomain = createRoutingCallActivityDomain({
+  buildPropertiesExtensionElements,
+  describeFormalFormFields: formParticipantDomain.describeFormalFormFields,
+  designerLocked,
+  emit,
+  getModeler: () => modeler,
+  listCallActivityOptions,
+  listDmnDecisionOptions,
+  loadPropertyState,
+  propertyFlags,
+  propertyState,
+  props,
+  readAllFlowableProperties,
+  readEmbeddedFormFields: formParticipantDomain.readEmbeddedFormFields,
+  selectedBusinessObject,
+  selectedElement,
+  updateProperties
+})
 
-/**
- * 从错误或升级事件定义读取最终作者编码。
- * @param {object} eventDefinition bpmn-js 事件定义对象。
- * @returns {string} 根引用中的稳定业务编码。
- */
-function readEventReference(eventDefinition) {
-  const config = eventReferenceConfig(eventDefinition?.$type)
-  const reference = config ? eventDefinition?.[config.referenceProperty] : undefined
-  return String(reference?.[config?.keyProperty] || reference?.name || '').trim()
-}
-
-/**
- * 判断 BPMN 元素是否包含至少一个 Flowable 内嵌表单字段。
- * @param {object} businessObject StartEvent 或 UserTask 的 moddle 业务对象。
- * @returns {boolean} extensionElements 中存在 FormProperty 时返回 true。
- */
-function hasEmbeddedFormFields(businessObject) {
-  return (businessObject?.extensionElements?.values || [])
-    .some(value => value?.$type === 'flowable:FormProperty')
-}
-
-/**
- * 校验用户任务的受控 handler 只以固定并行会签/或签组合出现，并阻断近似方法名。
- * @param {object} task bpmn-js 用户任务业务对象。
- * @returns {string} 空串表示通过，否则返回稳定业务错误。
- */
-function validateUserTaskMultiInstance(task) {
-  const configuredProperties = readAllFlowableProperties(task)
-    .filter(item => MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name))
-  const loop = task.loopCharacteristics
-  if (!loop) return configuredProperties.length ? '指定多实例身份属性缺少会签或或签循环' : ''
-  const collection = String(loop.get?.('flowable:collection') || '').trim()
-  const configuredCollection = collection === CONFIGURED_MULTI_INSTANCE_COLLECTION
-  const controlledCollection = collection === CONTROLLED_MULTI_INSTANCE_COLLECTION
-    || collection === START_MULTI_INSTANCE_COLLECTION
-    || configuredCollection
-    || FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)
-  if (!controlledCollection) {
-    return configuredProperties.length ? '指定多实例身份属性与集合表达式不一致' : ''
-  }
-  const condition = String(loop.completionCondition?.body || '').trim()
-  const approvedCondition = [
-    CONTROLLED_MULTI_INSTANCE_ALL_CONDITION,
-    CONTROLLED_MULTI_INSTANCE_ANY_CONDITION
-  ].includes(condition)
-  const parentIsMainProcess = task.$parent?.$type === 'bpmn:Process'
-  const hasBoundaryEvents = Array.isArray(task.boundaryEventRefs) && task.boundaryEventRefs.length > 0
-  if (loop.isSequential
-    || loop.get('flowable:elementVariable') !== CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE
-    || task.get('flowable:assignee') !== CONTROLLED_MULTI_INSTANCE_ASSIGNEE
-    || task.get('flowable:candidateUsers')
-    || task.get('flowable:candidateGroups')
-    || loop.loopCardinality
-    || !approvedCondition
-    || task.isForCompensation
-    || hasBoundaryEvents
-    || !parentIsMainProcess) {
-    return '受控多实例配置不符合会签或或签契约'
-  }
-  if (FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)) {
-    const fixedUserIds = collection.match(FIXED_MULTI_INSTANCE_COLLECTION_PATTERN)?.[1]?.split(',') || []
-    if (!fixedUserIds.length || fixedUserIds.length > 100
-      || new Set(fixedUserIds).size !== fixedUserIds.length
-      || fixedUserIds.some(userId => !isCanonicalJavaLongId(userId))) {
-      return '固定会签或或签必须预设 1 至 100 名有效办理人'
-    }
-  }
-  if (configuredCollection) {
-    if (configuredProperties.length !== MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.size
-      || !readConfiguredMultiInstanceIdentity(task)) {
-      return '指定会签或或签身份配置不完整或不合法'
-    }
-  } else if (configuredProperties.length) {
-    return '指定多实例身份属性与集合表达式不一致'
-  }
-  return ''
-}
+const {
+  assignmentOptions,
+  multiInstanceOptions,
+  multiInstanceApprovalOptions,
+  controlledLoopFieldOptions,
+  participantFormFieldOptions,
+  handlePanelIdentitySearch,
+  handlePanelIdentityResolve,
+  readParticipantRule,
+  readControlledLoop,
+  readEmbeddedFormFields,
+  isControlledMultiInstanceLoop,
+  controlledMultiInstanceApprovalMode,
+  isStartMultiInstanceLoop,
+  isConfiguredMultiInstanceLoop,
+  isFixedMultiInstanceLoop,
+  readFixedMultiInstanceUserIds,
+  readConfiguredMultiInstanceIdentity,
+  splitValues,
+  loadFormPermissionState,
+  updateFormSource,
+  updateFormKey,
+  updateEmbeddedForm,
+  updateFormPermissions,
+  updateAssignment,
+  updateParticipantRule,
+  updateUserTaskProperties,
+  updateMultiInstance,
+  validateParticipantProperties,
+  hasEmbeddedFormFields,
+  validateUserTaskMultiInstance,
+  disposeIdentitySearchTimers,
+  validatePendingMultiInstanceSelection
+} = formParticipantDomain
+const {
+  dmnOptions,
+  dmnLoading,
+  callActivityOptions,
+  callActivityLoading,
+  conditionFieldOptions,
+  conditionContext,
+  callActivityParentFields,
+  readConditionRule,
+  isDefaultConditionFlow,
+  isConditionGatewayFlow,
+  updateDmnDecision,
+  loadDmnOptions,
+  loadCallActivityOptions,
+  resolveCallDefinitionId,
+  readCallMappings,
+  updateCallActivityProperties,
+  updateConditionRule,
+  makeConditionDefault,
+  validateCallActivityConfiguration
+} = routingCallActivityDomain
+const {
+  extensionOptions,
+  businessListenerOptions,
+  formFieldOptions,
+  connectorEndpoints,
+  sqlDataSources,
+  extensionLoading,
+  errorEventOptions,
+  escalationEventOptions,
+  eventCodeLoading,
+  slaCalendarOptions,
+  slaLoading,
+  autoCopyTriggerOptions,
+  autoCopyFormFieldOptions,
+  readAutoCopyRules,
+  readServiceTaskExtension,
+  readBusinessListeners,
+  updateServiceTask,
+  updateExtensionSelection,
+  loadExtensionOptions,
+  updateBusinessExecutionListeners,
+  updateBusinessTaskListeners,
+  updateExtensionProperties,
+  validateAutoCopyRulesForElement,
+  updateAutoCopyRules,
+  findDefinitions,
+  updateEventProperties,
+  loadEventPropertyState,
+  readSlaConfig,
+  updateSlaProperties,
+  normalizeAndValidateSlaConfig,
+  readEventReference
+} = extensionEventSlaDomain
 
 watch(() => props.modelValue, value => {
   if (value && value !== lastExportedXml.value && modeler) importXml(value)
@@ -4605,8 +1992,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.clearTimeout(changeTimer)
   unbindDesignerLifecycleListeners()
-  identitySearchTimers.forEach(timer => window.clearTimeout(timer))
-  identitySearchTimers.clear()
+  disposeIdentitySearchTimers()
   if (modeler) modeler.destroy()
   modeler = undefined
 })

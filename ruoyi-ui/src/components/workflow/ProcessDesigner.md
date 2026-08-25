@@ -2,7 +2,19 @@
 
 ## 组件简介
 
-`ProcessDesigner` 是基于 `bpmn-js` 的 Flowable BPMN 编辑器。组件负责画布编辑、受控 Flowable 属性、导入导出、XML/JSON 预览、布局命令、Token 模拟和保存前即时门禁；页面负责加载模型、表单、身份选项，并把模型保存提交到真实后端、把非业务界面偏好写入当前用户浏览器存储。
+`ProcessDesigner` 是基于 `bpmn-js` 的 Flowable BPMN 编辑器。主组件负责 Modeler 生命周期、选择状态、命令栈、导入导出、保存时序和对外事件；页面负责加载模型、表单、身份选项，并把模型保存提交到真实后端、把非业务界面偏好写入当前用户浏览器存储。
+
+## 职责模块
+
+设计器按业务内聚性拆分为三个领域模块，避免新增 BPMN 能力继续堆叠到主组件闭包：
+
+| 模块 | 负责范围 | 边界 |
+| --- | --- | --- |
+| `formParticipantDomain.js` | 表单来源与权限、参与者、任务分配、多实例 | 只读取当前 BPMN 和正式身份/表单目录；写入统一经过主组件提供的 `bpmn-js` modeling 命令栈。 |
+| `routingCallActivityDomain.js` | 条件路由、DMN、CallActivity 引用与变量映射 | 目录查询函数由主组件注入；受控条件和调用映射仍使用固定技术协议。 |
+| `extensionEventSlaDomain.js` | 服务扩展、业务监听器、错误/升级事件、自动抄送、SLA | 保留其他领域属性，禁止用面板快照覆盖当前 BPMN 中的权威扩展属性。 |
+
+三个模块共享选择状态但不持有 Modeler 生命周期。所有模型变更仍通过 `modeling.updateProperties`、`modeling.updateModdleProperties` 或命令栈组合命令完成，因此撤销/重做语义不变。保存仍按“本地结构门禁 → 序列化一次 → 服务端权威校验 → `save` emit”执行，模块内校验不能替代服务端校验。
 
 ## 使用方式
 

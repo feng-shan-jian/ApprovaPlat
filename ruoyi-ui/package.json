@@ -11,7 +11,8 @@
     "build:stage": "vite build --mode staging",
     "preview": "vite preview",
     "lint": "eslint src tests plugins vite.config.js",
-    "test:contracts": "node --test tests/contracts/*.test.js"
+    "test:contracts": "node --test tests/contracts/*.test.js",
+    "test:e2e:designer": "playwright test tests/e2e/workflow-designer.spec.js"
   },
   "repository": {
     "type": "git",
@@ -42,6 +43,7 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",
+    "@playwright/test": "1.62.1",
     "@vitejs/plugin-vue": "5.2.4",
     "@xmldom/xmldom": "0.9.10",
     "bpmn-moddle": "10.0.0",
