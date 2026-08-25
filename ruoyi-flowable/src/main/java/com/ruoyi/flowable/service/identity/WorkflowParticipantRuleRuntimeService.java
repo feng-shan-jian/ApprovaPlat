@@ -4,8 +4,10 @@ import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -13,15 +15,19 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.Execution;
 import org.flowable.identitylink.api.IdentityLink;
 import org.flowable.task.service.delegate.DelegateTask;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
-import com.ruoyi.flowable.domain.WfParticipantResolutionAudit;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.identity.WorkflowUserIdValueParser;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
+import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 
 /**
@@ -30,12 +36,15 @@ import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 @Service
 public class WorkflowParticipantRuleRuntimeService
 {
+    private static final Logger log = LoggerFactory.getLogger(
+            WorkflowParticipantRuleRuntimeService.class);
+
     private final RepositoryService repositoryService;
     private final RuntimeService runtimeService;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WorkflowIdentityMapper identityMapper;
     private final WorkflowIdentityResolver identityResolver;
-    private final WorkflowParticipantResolutionAuditService auditService;
+    private final WorkflowParticipantResolutionMetrics metrics;
 
     /**
      * 创建参与者规则运行服务。
@@ -44,7 +53,7 @@ public class WorkflowParticipantRuleRuntimeService
      * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署规则仓库
      * @param identityMapper WorkflowIdentityMapper，实时组织关系查询 Mapper
      * @param identityResolver WorkflowIdentityResolver，审批与认领资格解析器
-     * @param auditService WorkflowParticipantResolutionAuditService，正式解析审计服务
+     * @param metrics WorkflowParticipantResolutionMetrics，固定错误码失败指标
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowParticipantRuleRuntimeService(RepositoryService repositoryService,
@@ -52,33 +61,35 @@ public class WorkflowParticipantRuleRuntimeService
             WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowIdentityMapper identityMapper,
             WorkflowIdentityResolver identityResolver,
-            WorkflowParticipantResolutionAuditService auditService)
+            WorkflowParticipantResolutionMetrics metrics)
     {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.artifactRepository = artifactRepository;
         this.identityMapper = identityMapper;
         this.identityResolver = identityResolver;
-        this.auditService = auditService;
+        this.metrics = metrics;
     }
 
     /**
      * 在真实引擎发起前按部署快照校验当前用户是否命中发起范围。
      * @param actor WorkflowCurrentIdentity，事务内重新核验的当前用户和有效组
      * @param definition ProcessDefinition，服务端选定的激活流程定义
-     * @return WfDeployParticipantRule，已命中的发起范围，供成功后写审计
+     * @return WfDeployParticipantRule，受管部署允许时返回命中规则；历史未托管部署返回 null
      */
     public WfDeployParticipantRule assertCanStart(WorkflowCurrentIdentity actor,
             ProcessDefinition definition)
     {
         WfDeployParticipantRule rule = findStartRule(definition);
-        // 历史部署没有本版本快照时返回空，由人工发起入口继续执行原 Flowable starter identity link 门禁。
+        // 历史未托管部署返回 null；正式写入口继续执行原 Flowable starter identity link 门禁。
         if (rule == null) return null;
-        boolean allowed = matchesStartRule(actor, rule);
+        Set<String> activeDeptIds = "DEPTS".equals(rule.getRuleType())
+                ? loadActiveScopeDeptIds(actor) : Set.of();
+        boolean allowed = matchesStartRule(actor, rule, activeDeptIds);
         if (!allowed)
         {
-            auditService.recordRejected(rule, "START", definition.getId(), null, null,
-                    actor.userId(), actor.userId(), "DENIED", "当前用户未命中流程发起范围");
+            recordFailure(rule, "START", definition.getId(), null, rule.getActivityId(),
+                    "PROCESS_START_SCOPE_DENIED", null);
             throw new ServiceException("当前用户不在流程发起范围内", HttpStatus.FORBIDDEN)
                     .setSubCode("PROCESS_START_SCOPE_DENIED");
         }
@@ -89,51 +100,75 @@ public class WorkflowParticipantRuleRuntimeService
      * 只读判断当前用户是否命中定义发起范围，供可发起列表和表单预览保持一致。
      * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
      * @param definition ProcessDefinition，服务端查询的流程定义
-     * @return boolean，命中不可变部署范围时返回 true
+     * @return Boolean，受管部署允许返回 true、拒绝返回 false；历史未托管部署返回 null
      */
     public Boolean canStartIfManaged(WorkflowCurrentIdentity actor, ProcessDefinition definition)
     {
-        WfDeployParticipantRule rule = findStartRule(definition);
-        return rule == null ? null : matchesStartRule(actor, rule);
+        Map<String, Boolean> decisions = resolveManagedStartDecisions(
+                actor, Collections.singletonList(definition));
+        return decisions.get(definition.getId());
+    }
+
+    /**
+     * 对一次有界流程定义扫描执行部署快照发起授权判定。
+     *
+     * 返回 Map 中存在定义主键表示新版受管部署的正式允许或拒绝决定；缺失定义主键只表示
+     * 父部署没有业务资源子部署，调用方必须继续执行历史 Flowable starter identity link 兼容逻辑。
+     *
+     * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
+     * @param definitions List&lt;ProcessDefinition&gt;，同一次列表扫描得到的可信流程定义
+     * @return Map&lt;String, Boolean&gt;，受管定义主键到正式授权决定的不可变映射
+     */
+    public Map<String, Boolean> resolveManagedStartDecisions(
+            WorkflowCurrentIdentity actor, List<ProcessDefinition> definitions)
+    {
+        Map<String, WfDeployParticipantRule> rulesByDefinition =
+                resolveManagedStartRules(definitions);
+        if (rulesByDefinition.isEmpty())
+        {
+            return Map.of();
+        }
+        // 同一批存在任意部门规则时只查询一次当前用户有效部门范围，再供全部 DEPTS 规则复用。
+        Set<String> activeDeptIds = rulesByDefinition.values().stream()
+                .anyMatch(rule -> "DEPTS".equals(rule.getRuleType()))
+                        ? loadActiveScopeDeptIds(actor) : Set.of();
+        LinkedHashMap<String, Boolean> decisions = new LinkedHashMap<>();
+        rulesByDefinition.forEach((definitionId, rule) ->
+                decisions.put(definitionId, matchesStartRule(actor, rule, activeDeptIds)));
+        return Collections.unmodifiableMap(decisions);
     }
 
     /**
      * 按公开、用户、角色或部门类型执行纯内存范围匹配。
      * @param actor WorkflowCurrentIdentity，当前有效身份
      * @param rule WfDeployParticipantRule，发起范围快照
+     * @param activeDeptIds Set&lt;String&gt;，本批预先查询的当前用户有效部门范围
      * @return boolean，当前用户命中时返回 true
      */
     private boolean matchesStartRule(WorkflowCurrentIdentity actor,
-            WfDeployParticipantRule rule)
+            WfDeployParticipantRule rule, Set<String> activeDeptIds)
     {
         return switch (rule.getRuleType())
         {
             case "PUBLIC" -> true;
             case "USERS" -> parsePositiveIds(rule.getTargetIds()).contains(actor.userId());
             case "ROLES" -> intersects(actor.candidateGroups(), groupTargets("ROLE", rule.getTargetIds()));
-            case "DEPTS" -> intersects(new LinkedHashSet<>(toTexts(safe(identityMapper
-                    .selectActiveScopeDeptIdsByUserId(Long.valueOf(actor.userId()))))),
+            case "DEPTS" -> intersects(activeDeptIds,
                     new LinkedHashSet<>(parsePositiveIds(rule.getTargetIds())));
             default -> false;
         };
     }
 
     /**
-     * 在实例成功创建后记录发起范围命中结果，审计与实例写入同事务提交。
-     * @param rule WfDeployParticipantRule，发起前已命中的规则
-     * @param definition ProcessDefinition，流程定义
-     * @param processInstanceId String，新实例主键
-     * @param actorUserId String，发起用户主键
-     * @return void，审计失败时回滚流程实例
+     * 从正式组织目录读取当前用户可用于发起范围判定的有效部门主键。
+     *
+     * @param actor WorkflowCurrentIdentity，当前有效用户身份
+     * @return Set&lt;String&gt;，稳定去重且不可修改的有效部门主键文本集合
      */
-    public void recordStartAllowed(WfDeployParticipantRule rule, ProcessDefinition definition,
-            String processInstanceId, String actorUserId)
+    private Set<String> loadActiveScopeDeptIds(WorkflowCurrentIdentity actor)
     {
-        WfParticipantResolutionAudit audit = auditService.base(rule, "START",
-                definition.getId(), processInstanceId, null, actorUserId, actorUserId,
-                "ALLOWED", "当前用户命中已部署流程发起范围");
-        audit.setResolvedUserIds(actorUserId);
-        auditService.record(audit);
+        return immutableOrderedSet(toTexts(safe(identityMapper
+                .selectActiveScopeDeptIdsByUserId(Long.valueOf(actor.userId())))));
     }
 
     /**
@@ -152,12 +187,12 @@ public class WorkflowParticipantRuleRuntimeService
         Resolution resolution;
         try
         {
-            // 目录查询、表单用户字段解析和身份资格过滤都属于同一次实时解析，失败必须留下稳定拒绝审计。
+            // 目录查询、表单用户字段解析和身份资格过滤属于同一次实时解析，失败统一记录脱敏诊断。
             resolution = resolveRule(rule, task, initiator);
         }
         catch (RuntimeException exception)
         {
-            rejectResolutionFailure(rule, task, initiator, exception);
+            rejectResolutionFailure(rule, task, exception);
             return;
         }
         // 先移除作者 BPMN 的旧静态候选链接，再写入实时解析结果，避免组织变更后残留越权候选人。
@@ -165,22 +200,16 @@ public class WorkflowParticipantRuleRuntimeService
         if ("ASSIGNEE".equals(rule.getAssignmentMode()))
         {
             if (resolution.userIds().size() != 1)
-                rejectNoMatch(rule, task, initiator, "直接办理规则没有解析出唯一有效审批人");
+                rejectNoMatch(rule, task, "直接办理规则没有解析出唯一有效审批人");
             task.setAssignee(resolution.userIds().iterator().next());
         }
         else
         {
             if (resolution.userIds().isEmpty() && resolution.groupIds().isEmpty())
-                rejectNoMatch(rule, task, initiator, "候选规则没有解析出有效认领身份");
+                rejectNoMatch(rule, task, "候选规则没有解析出有效认领身份");
             resolution.userIds().forEach(task::addCandidateUser);
             resolution.groupIds().forEach(task::addCandidateGroup);
         }
-        WfParticipantResolutionAudit audit = auditService.base(rule, "TASK",
-                task.getProcessDefinitionId(), task.getProcessInstanceId(), task.getId(),
-                initiator, null, "RESOLVED", "任务参与者按实时组织数据解析成功");
-        audit.setResolvedUserIds(String.join(",", resolution.userIds()));
-        audit.setResolvedGroupIds(String.join(",", resolution.groupIds()));
-        auditService.record(audit);
     }
 
     /**
@@ -259,15 +288,13 @@ public class WorkflowParticipantRuleRuntimeService
      * 记录无匹配或直接办理多人冲突，并以固定失败策略回滚任务创建。
      * @param rule WfDeployParticipantRule，当前任务命中的不可变规则快照
      * @param task DelegateTask，正在创建且不能成为无人任务的任务
-     * @param initiator String，已规范化的流程发起人主键
      * @param summary String，稳定且不包含敏感目录数据的拒绝摘要
-     * @return void，独立写入 NO_MATCH 审计后始终抛出稳定业务异常
+     * @return void，记录脱敏日志和指标后始终抛出稳定业务异常
      */
-    private void rejectNoMatch(WfDeployParticipantRule rule, DelegateTask task,
-            String initiator, String summary)
+    private void rejectNoMatch(WfDeployParticipantRule rule, DelegateTask task, String summary)
     {
-        auditService.recordRejected(rule, "TASK", task.getProcessDefinitionId(),
-                task.getProcessInstanceId(), task.getId(), initiator, null, "NO_MATCH", summary);
+        recordFailure(rule, "TASK", task.getProcessDefinitionId(), task.getProcessInstanceId(),
+                task.getTaskDefinitionKey(), "TASK_PARTICIPANT_NO_MATCH", null);
         throw new ServiceException(summary, HttpStatus.CONFLICT)
                 .setSubCode("TASK_PARTICIPANT_NO_MATCH");
     }
@@ -276,20 +303,66 @@ public class WorkflowParticipantRuleRuntimeService
      * 将表单值非法、实时目录异常或资格解析失败统一转换为可审计的稳定任务失败。
      * @param rule WfDeployParticipantRule，当前任务命中的不可变规则快照
      * @param task DelegateTask，正在创建且会被主事务回滚的任务
-     * @param initiator String，已规范化的流程发起人主键
      * @param cause RuntimeException，原始解析异常，仅作为服务端异常链保留
-     * @return void，独立写入 NO_MATCH 审计后始终抛出稳定业务异常
+     * @return void，记录脱敏日志和指标后始终抛出稳定业务异常
      */
     private void rejectResolutionFailure(WfDeployParticipantRule rule, DelegateTask task,
-            String initiator, RuntimeException cause)
+            RuntimeException cause)
     {
         String summary = "任务参与者规则实时解析失败";
-        auditService.recordRejected(rule, "TASK", task.getProcessDefinitionId(),
-                task.getProcessInstanceId(), task.getId(), initiator, null, "NO_MATCH", summary);
+        recordFailure(rule, "TASK", task.getProcessDefinitionId(), task.getProcessInstanceId(),
+                task.getTaskDefinitionKey(), "TASK_PARTICIPANT_RESOLUTION_FAILED", cause);
         ServiceException failure = new ServiceException(summary, HttpStatus.CONFLICT)
                 .setSubCode("TASK_PARTICIPANT_RESOLUTION_FAILED");
         failure.initCause(cause);
         throw failure;
+    }
+
+    /**
+     * 记录不含人员集合和表单正文的结构化失败日志，并按稳定错误码累计指标。
+     *
+     * @param rule WfDeployParticipantRule，命中的不可变部署规则
+     * @param eventType String，START 或 TASK
+     * @param processDefinitionId String，流程定义主键
+     * @param processInstanceId String，可空流程实例主键
+     * @param elementId String，可空 BPMN 节点主键
+     * @param errorCode String，对外稳定错误码
+     * @param cause RuntimeException，可空原始异常，只记录异常类型而不记录敏感消息
+     * @return void，日志系统异常不改变原业务失败；指标错误表示代码注册缺失并向上抛出
+     */
+    private void recordFailure(WfDeployParticipantRule rule, String eventType,
+            String processDefinitionId, String processInstanceId, String elementId,
+            String errorCode, RuntimeException cause)
+    {
+        metrics.recordFailure(errorCode);
+        log.warn("operation=workflowParticipantResolution traceId={} deploymentId={} "
+                        + "processDefinitionId={} processInstanceId={} elementId={} eventType={} "
+                        + "ruleType={} errorCode={} causeType={}",
+                safeTraceId(), safe(rule.getDeployId()), safe(processDefinitionId),
+                safe(processInstanceId), safe(elementId), eventType, safe(rule.getRuleType()),
+                errorCode, cause == null ? "" : cause.getClass().getSimpleName());
+    }
+
+    /**
+     * 读取当前链路标识，未配置 MDC 时返回空字符串且不伪造业务值。
+     *
+     * @return String，当前 traceId 或空字符串
+     */
+    private String safeTraceId()
+    {
+        String traceId = MDC.get("traceId");
+        return traceId == null ? "" : traceId;
+    }
+
+    /**
+     * 将可空诊断字段转换为空字符串，保持结构化日志字段稳定。
+     *
+     * @param value String，可空低敏业务标识
+     * @return String，原值或空字符串
+     */
+    private String safe(String value)
+    {
+        return value == null ? "" : value;
     }
 
     /**
@@ -299,15 +372,67 @@ public class WorkflowParticipantRuleRuntimeService
      */
     private WfDeployParticipantRule findStartRule(ProcessDefinition definition)
     {
-        if (definition == null || definition.getDeploymentId() == null)
-            throw new ServiceException("流程定义部署关系异常", HttpStatus.ERROR);
-        WfDeployParticipantRule rule = artifactRepository.selectStartParticipantRule(
-                definition.getDeploymentId(), definition.getKey());
-        if (rule == null) return null;
-        if (rule.getRuleVersion() == null || rule.getRuleVersion() != 1)
-            throw new ServiceException("流程发起范围部署快照缺失", HttpStatus.CONFLICT)
-                    .setSubCode("PROCESS_START_SCOPE_SNAPSHOT_MISSING");
-        return rule;
+        Map<String, WfDeployParticipantRule> rules = resolveManagedStartRules(
+                Collections.singletonList(definition));
+        return rules.get(definition.getId());
+    }
+
+    /**
+     * 批量选择受管定义的唯一发起规则，并保留历史未托管定义缺席语义。
+     *
+     * @param definitions List&lt;ProcessDefinition&gt;，待判定的可信流程定义
+     * @return Map&lt;String, WfDeployParticipantRule&gt;，仅包含受管定义及其版本受支持规则的不可变映射
+     */
+    private Map<String, WfDeployParticipantRule> resolveManagedStartRules(
+            List<ProcessDefinition> definitions)
+    {
+        if (definitions == null)
+        {
+            throw new ServiceException("流程定义数据异常", HttpStatus.ERROR);
+        }
+        LinkedHashMap<String, ProcessDefinition> definitionsById = new LinkedHashMap<>();
+        LinkedHashSet<String> deploymentIds = new LinkedHashSet<>();
+        for (ProcessDefinition definition : definitions)
+        {
+            if (definition == null || !StringUtils.hasText(definition.getId())
+                    || !StringUtils.hasText(definition.getDeploymentId())
+                    || !StringUtils.hasText(definition.getKey())
+                    || definitionsById.put(definition.getId(), definition) != null)
+            {
+                throw new ServiceException("流程定义部署关系异常", HttpStatus.ERROR);
+            }
+            deploymentIds.add(definition.getDeploymentId());
+        }
+        if (definitionsById.isEmpty())
+        {
+            return Map.of();
+        }
+
+        Map<String, Map<String, WfDeployParticipantRule>> rulesByDeployment =
+                artifactRepository.selectStartParticipantRulesByDeploymentIds(deploymentIds);
+        if (rulesByDeployment == null)
+        {
+            throw new ServiceException("流程发起范围部署快照数据异常", HttpStatus.ERROR);
+        }
+        LinkedHashMap<String, WfDeployParticipantRule> rulesByDefinition = new LinkedHashMap<>();
+        for (ProcessDefinition definition : definitionsById.values())
+        {
+            Map<String, WfDeployParticipantRule> deploymentRules =
+                    rulesByDeployment.get(definition.getDeploymentId());
+            if (deploymentRules == null)
+            {
+                // 没有业务资源子部署才是历史未托管定义；不得伪造成新版拒绝决定。
+                continue;
+            }
+            WfDeployParticipantRule rule = deploymentRules.get(definition.getKey());
+            if (rule == null || rule.getRuleVersion() == null || rule.getRuleVersion() != 1)
+            {
+                throw new ServiceException("流程发起范围部署快照缺失", HttpStatus.CONFLICT)
+                        .setSubCode("PROCESS_START_SCOPE_SNAPSHOT_MISSING");
+            }
+            rulesByDefinition.put(definition.getId(), rule);
+        }
+        return Collections.unmodifiableMap(rulesByDefinition);
     }
 
     /**

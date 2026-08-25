@@ -1,477 +1,228 @@
 package com.ruoyi.flowable.extension;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import java.util.stream.Stream;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.json.JsonMapper;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfConnectorEndpoint;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
-import com.ruoyi.flowable.domain.vo.WorkflowConnectorInvocationClaim;
+import com.ruoyi.flowable.runtime.WorkflowConnectorMetrics;
 import com.ruoyi.flowable.service.model.WorkflowConnectorEndpointService;
-import com.ruoyi.flowable.service.process.WorkflowConnectorInvocationService;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
- * 受控 HTTP 连接器部署冻结、真实请求和幂等终态测试。
+ * HTTP 连接器请求正文浮点数协议边界测试。
  */
 class WorkflowHttpConnectorTest
 {
+    private static final String BODY_VARIABLE = "payload";
     private final ObjectMapper objectMapper = JsonMapper.shared();
+    private final AtomicInteger requestCount = new AtomicInteger();
+    private final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
     private HttpServer server;
+    private WorkflowHttpConnector connector;
 
     /**
-     * 每个真实本机 HTTP Server 测试结束后释放监听端口。
-     * @return void，避免测试进程遗留外部副作用
+     * 为每个测试启动随机端口的本机 HTTP 接收端并创建真实连接器实例。
+     * @return void，端口创建失败时测试失败
+     * @throws IOException 本机监听端口创建失败
+     */
+    @BeforeEach
+    void setUp() throws IOException
+    {
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/connector/test", this::receiveRequest);
+        server.start();
+        connector = new WorkflowHttpConnector(
+                mock(WorkflowConnectorEndpointService.class),
+                mock(WorkflowConnectorSecretResolver.class),
+                mock(WorkflowConnectorMetrics.class));
+    }
+
+    /**
+     * 停止当前测试的本机 HTTP 接收端，避免监听资源泄漏到其他测试。
+     * @return void，无返回值
      */
     @AfterEach
-    void stopServer()
+    void tearDown()
     {
-        if (server != null)
-        {
-            server.stop(0);
-            server = null;
-        }
+        server.stop(0);
     }
 
     /**
-     * 验证冻结端点、JSON 请求正文、幂等请求头和成功状态变量的真实执行闭环。
-     * @return void，本机 HTTP 请求、台账和 Flowable 变量任一不一致时测试失败
-     * @throws Exception HTTP Server 或 JSON 处理失败
+     * 验证有限 Double 经公开执行入口发送后仍是数值节点且数值不变。
+     * @return void，请求未到达或 JSON 类型、数值变化时测试失败
      */
     @Test
-    void executesSuccessfulRequestAgainstRealHttpServer() throws Exception
+    void sendsFiniteDoubleAsJsonNumber()
     {
-        AtomicReference<String> requestBody = new AtomicReference<>();
-        AtomicReference<String> idempotency = new AtomicReference<>();
-        startServer(200, requestBody, idempotency, "{\"accepted\":true}");
-        WorkflowConnectorInvocationService invocationService = mock(
-                WorkflowConnectorInvocationService.class);
-        when(invocationService.begin(anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyInt(), anyString(), anyString(), anyString()))
-                .thenReturn(new WorkflowConnectorInvocationClaim(3L, "RUNNING", "claim", 1, null));
-        WorkflowHttpConnector connector = connector(invocationService);
-        JsonNode config = objectMapper.readTree(connector.freezeConfig(authorConfig("POST",
-                "/api/audit", "payload", "httpStatus"), true));
-        DelegateExecution execution = execution();
-        when(execution.hasVariable("payload")).thenReturn(true);
-        LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
-        payload.put("message", "审批完成");
-        payload.put("amount", 12);
-        when(execution.getVariable("payload")).thenReturn(payload);
-
-        connector.execute(execution, snapshot(), config);
-
-        assertThat(requestBody.get()).contains("\"amount\":12", "\"message\":\"审批完成\"");
-        assertThat(idempotency.get()).matches("[0-9a-f]{64}");
-        verify(invocationService).success(any(WorkflowConnectorInvocationClaim.class),
-                anyLong(), eq(200), anyString());
-        verify(execution).setVariable("httpStatus", 200L);
+        assertFiniteNumber(1250.75D, 1250.75D);
     }
 
     /**
-     * 验证非 2xx 响应落失败台账一次并让 Flowable 看到失败，不能伪造成功。
-     * @return void，真实 HTTP 业务失败或重复台账写入时测试失败
-     * @throws Exception HTTP Server 启停失败
+     * 验证有限 Float 经公开执行入口发送后仍是数值节点且数值不变。
+     * @return void，请求未到达或 JSON 类型、数值变化时测试失败
      */
     @Test
-    void recordsNonSuccessHttpStatusExactlyOnce() throws Exception
+    void sendsFiniteFloatAsJsonNumber()
     {
-        startServer(500, new AtomicReference<>(), new AtomicReference<>(), "failed");
-        WorkflowConnectorInvocationService invocationService = mock(
-                WorkflowConnectorInvocationService.class);
-        when(invocationService.begin(anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyInt(), anyString(), anyString(), anyString()))
-                .thenReturn(new WorkflowConnectorInvocationClaim(3L, "RUNNING", "claim", 1, null));
-        WorkflowHttpConnector connector = connector(invocationService);
-        JsonNode config = objectMapper.readTree(connector.freezeConfig(authorConfig("POST",
-                "/api/audit", null, "httpStatus"), true));
-
-        assertThatThrownBy(() -> connector.execute(execution(), snapshot(), config))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("非成功状态");
-        verify(invocationService).failure(any(WorkflowConnectorInvocationClaim.class),
-                anyLong(), eq(500), eq("HTTP_STATUS"), anyString());
-        verify(invocationService, never()).success(any(), anyLong(), anyInt(), anyString());
+        assertFiniteNumber(6.25F, 6.25D);
     }
 
     /**
-     * 验证成功台账重放不再访问真实 HTTP Server，只回填已记录的状态码。
-     * @return void，幂等重放再次产生外部副作用时测试失败
-     * @throws Exception JSON 解析失败
+     * 验证六种非有限浮点值在生成安全 JSON 树时失败且不会触发 HTTP 请求。
+     * @param label String，参数化用例名称
+     * @param value Number，待验证的 Float 或 Double 非有限值
+     * @return void，异常类型、状态、提示或请求计数不符合契约时测试失败
      */
-    @Test
-    void replaysSuccessfulLedgerWithoutCallingHttpServer() throws Exception
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("nonFiniteNumbers")
+    void rejectsNonFiniteNumbersBeforeHttpRequest(String label, Number value)
     {
-        AtomicInteger requests = new AtomicInteger();
-        startServer(204, new AtomicReference<>(), new AtomicReference<>(), "");
-        server.removeContext("/api");
-        server.createContext("/api", exchange ->
-        {
-            requests.incrementAndGet();
-            exchange.sendResponseHeaders(204, -1);
-            exchange.close();
-        });
-        WorkflowConnectorInvocationService invocationService = mock(
-                WorkflowConnectorInvocationService.class);
-        when(invocationService.begin(anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyInt(), anyString(), anyString(), anyString()))
-                .thenReturn(new WorkflowConnectorInvocationClaim(3L, "SUCCESS", null, 1, 204));
-        WorkflowHttpConnector connector = connector(invocationService);
-        JsonNode config = objectMapper.readTree(connector.freezeConfig(authorConfig("POST",
-                "/api/audit", null, "httpStatus"), true));
-        DelegateExecution execution = execution();
+        ServiceException exception = assertThrows(ServiceException.class,
+                () -> connector.execute(execution(value), mock(WfDeployExtensionSnapshot.class), config()));
 
-        connector.execute(execution, snapshot(), config);
-
-        assertThat(requests).hasValue(0);
-        verify(execution).setVariable("httpStatus", 204L);
-        verify(invocationService, never()).success(any(), anyLong(), anyInt(), anyString());
+        assertThat(exception.getMessage()).as(label).contains("非有限数字");
+        assertThat(exception.getCode()).isEqualTo(HttpStatus.ERROR);
+        assertThat(requestCount.get()).isZero();
+        assertThat(receivedBody.get()).isNull();
     }
 
     /**
-     * 验证节点路径越过端点前缀和编码目录穿越在部署阶段失败，不创建运行台账。
-     * @return void，路径白名单被绕过时测试失败
+     * 提供 Double 和 Float 的 NaN、正无穷与负无穷协议非法值。
+     * @return Stream&lt;Arguments&gt;，六个独立参数化场景
      */
-    @Test
-    void rejectsPathOutsideFrozenEndpointPrefix() throws Exception
+    private static Stream<Arguments> nonFiniteNumbers()
     {
-        startServer(200, new AtomicReference<>(), new AtomicReference<>(), "ok");
-        WorkflowConnectorInvocationService invocationService = mock(
-                WorkflowConnectorInvocationService.class);
-        WorkflowHttpConnector connector = connector(invocationService);
-
-        assertThatThrownBy(() -> connector.freezeConfig(authorConfig("POST", "/admin", null, null), true))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("越过端点白名单");
-        assertThatThrownBy(() -> connector.freezeConfig(authorConfig("POST", "/api/%2e%2e/admin",
-                null, null), true))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("请求路径不合法");
-        verify(invocationService, never()).begin(anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyInt(), anyString(), anyString(), anyString());
+        return Stream.of(
+                Arguments.of("Double.NaN", Double.NaN),
+                Arguments.of("Double.POSITIVE_INFINITY", Double.POSITIVE_INFINITY),
+                Arguments.of("Double.NEGATIVE_INFINITY", Double.NEGATIVE_INFINITY),
+                Arguments.of("Float.NaN", Float.NaN),
+                Arguments.of("Float.POSITIVE_INFINITY", Float.POSITIVE_INFINITY),
+                Arguments.of("Float.NEGATIVE_INFINITY", Float.NEGATIVE_INFINITY));
     }
 
     /**
-     * 验证真实请求超过冻结超时后写入 TIMEOUT 台账，并把失败交还 Flowable 重试。
-     * @return void，超时被误记为普通 IO 或伪造成功时测试失败
-     * @throws Exception HTTP Server 或 JSON 处理失败
+     * 通过公开执行入口发送有限数字，并核对接收端观察到的真实 JSON 正文。
+     * @param value Number，放入 Flowable 请求正文变量的有限浮点值
+     * @param expected double，期望接收的数值
+     * @return void，请求或 JSON 断言不成立时测试失败
      */
-    @Test
-    void recordsRequestTimeoutWithStableErrorCode() throws Exception
+    private void assertFiniteNumber(Number value, double expected)
     {
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/api", exchange ->
-        {
-            try
-            {
-                Thread.sleep(1000L);
-                exchange.sendResponseHeaders(204, -1);
-            }
-            catch (InterruptedException exception)
-            {
-                Thread.currentThread().interrupt();
-            }
-            finally
-            {
-                exchange.close();
-            }
-        });
-        server.start();
-        WorkflowConnectorInvocationService invocationService = runningInvocationService();
-        WfConnectorEndpoint endpoint = endpoint();
-        endpoint.setRequestTimeoutMs(500);
-        endpoint.setChecksum(WorkflowConnectorEndpointService.endpointChecksum(endpoint));
-        WorkflowHttpConnector connector = connector(invocationService, endpoint,
-                mock(WorkflowConnectorSecretResolver.class));
-        JsonNode config = objectMapper.readTree(connector.freezeConfig(authorConfig("POST",
-                "/api/audit", null, null), true));
+        connector.execute(execution(value), mock(WfDeployExtensionSnapshot.class), config());
 
-        assertThatThrownBy(() -> connector.execute(execution(), snapshot(), config))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("调用超时");
-        verify(invocationService).failure(any(WorkflowConnectorInvocationClaim.class),
-                anyLong(), eq(null), eq("TIMEOUT"), eq("request-timeout"));
-        verify(invocationService, never()).success(any(), anyLong(), anyInt(), anyString());
+        assertThat(requestCount.get()).isEqualTo(1);
+        JsonNode body = read(receivedBody.get());
+        assertThat(body.get("value").isNumber()).isTrue();
+        assertThat(body.get("value").doubleValue()).isEqualTo(expected);
     }
 
     /**
-     * 验证响应正文超过 64 KiB 时关闭读取并写入独立超限错误码。
-     * @return void，超限响应进入成功分支或被误记为配置校验错误时测试失败
-     * @throws Exception HTTP Server 或 JSON 处理失败
+     * 创建只暴露请求正文及幂等键所需标识的 Flowable 执行上下文。
+     * @param value Number，请求正文字段值
+     * @return DelegateExecution，可交给连接器公开 execute(...) 入口的执行模拟
      */
-    @Test
-    void rejectsOversizedResponseAndRecordsBoundedFailure() throws Exception
-    {
-        startServer(200, new AtomicReference<>(), new AtomicReference<>(),
-                "x".repeat(64 * 1024 + 1));
-        WorkflowConnectorInvocationService invocationService = runningInvocationService();
-        WorkflowHttpConnector connector = connector(invocationService);
-        JsonNode config = objectMapper.readTree(connector.freezeConfig(authorConfig("POST",
-                "/api/audit", null, null), true));
-
-        assertThatThrownBy(() -> connector.execute(execution(), snapshot(), config))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("响应正文超过大小限制");
-        verify(invocationService).failure(any(WorkflowConnectorInvocationClaim.class),
-                anyLong(), eq(null), eq("RESPONSE_TOO_LARGE"), eq("response-too-large"));
-        verify(invocationService, never()).success(any(), anyLong(), anyInt(), anyString());
-    }
-
-    /**
-     * 验证 Bearer 密钥只从外部解析器进入真实请求头，不进入冻结配置和结果摘要。
-     * @return void，认证头缺失或冻结快照包含密钥正文时测试失败
-     * @throws Exception HTTP Server 或 JSON 处理失败
-     */
-    @Test
-    void appliesExternalBearerSecretWithoutPersistingSecretValue() throws Exception
-    {
-        AtomicReference<String> authorization = new AtomicReference<>();
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/api", exchange ->
-        {
-            authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
-            exchange.sendResponseHeaders(204, -1);
-            exchange.close();
-        });
-        server.start();
-        WorkflowConnectorInvocationService invocationService = runningInvocationService();
-        WorkflowConnectorSecretResolver secretResolver = mock(
-                WorkflowConnectorSecretResolver.class);
-        when(secretResolver.requireSecret("WORKFLOW_CONNECTOR_SECRET_AUDIT"))
-                .thenReturn("runtime-secret-value");
-        WfConnectorEndpoint endpoint = endpoint();
-        endpoint.setAuthType("BEARER");
-        endpoint.setSecretRef("WORKFLOW_CONNECTOR_SECRET_AUDIT");
-        endpoint.setChecksum(WorkflowConnectorEndpointService.endpointChecksum(endpoint));
-        WorkflowHttpConnector connector = connector(invocationService, endpoint, secretResolver);
-        String frozen = connector.freezeConfig(authorConfig("POST", "/api/audit", null, null),
-                true);
-
-        assertThat(frozen).contains("WORKFLOW_CONNECTOR_SECRET_AUDIT")
-                .doesNotContain("runtime-secret-value");
-        connector.execute(execution(), snapshot(), objectMapper.readTree(frozen));
-
-        assertThat(authorization).hasValue("Bearer runtime-secret-value");
-        verify(secretResolver).requireSecret("WORKFLOW_CONNECTOR_SECRET_AUDIT");
-        verify(invocationService).success(any(WorkflowConnectorInvocationClaim.class),
-                anyLong(), eq(204), anyString());
-    }
-
-    /**
-     * 验证成功终态提交失败时禁止再写失败终态，避免同一领取令牌被二次终结。
-     * @return void，成功提交异常触发补写 failure 时测试失败
-     * @throws Exception HTTP Server 或 JSON 处理失败
-     */
-    @Test
-    void doesNotWriteFailureAfterSuccessFinalizationStarts() throws Exception
-    {
-        startServer(200, new AtomicReference<>(), new AtomicReference<>(), "ok");
-        WorkflowConnectorInvocationService invocationService = runningInvocationService();
-        doThrow(new ServiceException("成功台账提交失败"))
-                .when(invocationService).success(any(WorkflowConnectorInvocationClaim.class),
-                        anyLong(), eq(200), anyString());
-        WorkflowHttpConnector connector = connector(invocationService);
-        JsonNode config = objectMapper.readTree(connector.freezeConfig(authorConfig("POST",
-                "/api/audit", null, null), true));
-
-        assertThatThrownBy(() -> connector.execute(execution(), snapshot(), config))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("成功台账提交失败");
-        verify(invocationService, never()).failure(any(), anyLong(), any(), anyString(), anyString());
-    }
-
-    /**
-     * 验证 HTTP 失败终态提交自身失败时不会再次调用 failure 覆盖原始冲突。
-     * @return void，失败提交异常触发第二次 failure 时测试失败
-     * @throws Exception HTTP Server 或 JSON 处理失败
-     */
-    @Test
-    void doesNotWriteFailureTwiceWhenFailureFinalizationFails() throws Exception
-    {
-        startServer(500, new AtomicReference<>(), new AtomicReference<>(), "failed");
-        WorkflowConnectorInvocationService invocationService = runningInvocationService();
-        doThrow(new ServiceException("失败台账提交失败"))
-                .when(invocationService).failure(any(WorkflowConnectorInvocationClaim.class),
-                        anyLong(), eq(500), eq("HTTP_STATUS"), anyString());
-        WorkflowHttpConnector connector = connector(invocationService);
-        JsonNode config = objectMapper.readTree(connector.freezeConfig(authorConfig("POST",
-                "/api/audit", null, null), true));
-
-        assertThatThrownBy(() -> connector.execute(execution(), snapshot(), config))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("失败台账提交失败");
-        verify(invocationService).failure(any(WorkflowConnectorInvocationClaim.class),
-                anyLong(), eq(500), eq("HTTP_STATUS"), anyString());
-        verify(invocationService, never()).success(any(), anyLong(), anyInt(), anyString());
-    }
-
-    /**
-     * 创建使用本机真实监听端口的 HTTP 连接器及端点快照依赖。
-     * @param invocationService WorkflowConnectorInvocationService，幂等台账替身
-     * @return WorkflowHttpConnector，绑定测试端点服务的执行器
-     */
-    private WorkflowHttpConnector connector(WorkflowConnectorInvocationService invocationService)
-    {
-        WorkflowConnectorEndpointService endpointService = mock(WorkflowConnectorEndpointService.class);
-        when(endpointService.lockEnabledForDeployment("audit-endpoint"))
-                .thenReturn(endpoint());
-        return new WorkflowHttpConnector(endpointService, invocationService,
-                mock(WorkflowConnectorSecretResolver.class));
-    }
-
-    /**
-     * 创建绑定指定端点和密钥解析器的 HTTP 连接器。
-     * @param invocationService WorkflowConnectorInvocationService，幂等台账替身
-     * @param endpoint WfConnectorEndpoint，部署时需要冻结的端点修订
-     * @param secretResolver WorkflowConnectorSecretResolver，运行时外部密钥解析器
-     * @return WorkflowHttpConnector，使用指定依赖的执行器
-     */
-    private WorkflowHttpConnector connector(WorkflowConnectorInvocationService invocationService,
-            WfConnectorEndpoint endpoint, WorkflowConnectorSecretResolver secretResolver)
-    {
-        WorkflowConnectorEndpointService endpointService = mock(WorkflowConnectorEndpointService.class);
-        when(endpointService.lockEnabledForDeployment("audit-endpoint")).thenReturn(endpoint);
-        return new WorkflowHttpConnector(endpointService, invocationService, secretResolver);
-    }
-
-    /**
-     * 创建已成功领取 RUNNING 租约的台账替身。
-     * @return WorkflowConnectorInvocationService，每次 begin 返回固定领取结果
-     */
-    private WorkflowConnectorInvocationService runningInvocationService()
-    {
-        WorkflowConnectorInvocationService invocationService = mock(
-                WorkflowConnectorInvocationService.class);
-        when(invocationService.begin(anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyInt(), anyString(), anyString(), anyString()))
-                .thenReturn(new WorkflowConnectorInvocationClaim(3L, "RUNNING", "claim", 1, null));
-        return invocationService;
-    }
-
-    /**
-     * 创建作者配置，使用固定端点键和显式流程变量。
-     * @param method String，HTTP 方法
-     * @param path String，相对绝对路径
-     * @param bodyVariable String，可空请求正文变量
-     * @param statusVariable String，可空状态变量
-     * @return JsonNode，作者配置对象
-     * @throws Exception JSON 读取失败
-     */
-    private JsonNode authorConfig(String method, String path, String bodyVariable,
-            String statusVariable) throws Exception
-    {
-        String body = bodyVariable == null ? "" : ",\"bodyVariable\":\"" + bodyVariable + "\"";
-        String status = statusVariable == null ? "" : ",\"statusVariable\":\""
-                + statusVariable + "\"";
-        return objectMapper.readTree("{\"endpointKey\":\"audit-endpoint\",\"method\":\""
-                + method + "\",\"path\":\"" + path + "\"" + body + status + "}");
-    }
-
-    /**
-     * 创建部署运行上下文使用的最小流程快照。
-     * @return WfDeployExtensionSnapshot，含稳定部署主键
-     */
-    private WfDeployExtensionSnapshot snapshot()
-    {
-        WfDeployExtensionSnapshot snapshot = new WfDeployExtensionSnapshot();
-        snapshot.setDeployId("deployment");
-        return snapshot;
-    }
-
-    /**
-     * 创建带固定流程实例、执行和活动标识的 DelegateExecution。
-     * @return DelegateExecution，真实 HTTP 执行所需上下文替身
-     */
-    private DelegateExecution execution()
+    private DelegateExecution execution(Number value)
     {
         DelegateExecution execution = mock(DelegateExecution.class);
-        when(execution.getProcessInstanceId()).thenReturn("instance");
-        when(execution.getId()).thenReturn("execution");
-        when(execution.getCurrentActivityId()).thenReturn("httpTask");
+        when(execution.hasVariable(BODY_VARIABLE)).thenReturn(true);
+        when(execution.getVariable(BODY_VARIABLE)).thenReturn(Map.of("value", value));
+        when(execution.getProcessInstanceId()).thenReturn("process-1");
+        when(execution.getId()).thenReturn("execution-1");
+        when(execution.getCurrentActivityId()).thenReturn("http-task-1");
         return execution;
     }
 
     /**
-     * 创建指向本机 HTTP Server 的端点白名单。
-     * @return WfConnectorEndpoint，完整启用端点配置
+     * 创建通过快照摘要、方法、路径和本机网络范围校验的冻结配置。
+     * @return JsonNode，指向当前随机端口接收端的 POST 配置
      */
-    private WfConnectorEndpoint endpoint()
+    private JsonNode config()
     {
         WfConnectorEndpoint endpoint = new WfConnectorEndpoint();
-        endpoint.setEndpointId(7L);
-        endpoint.setEndpointKey("audit-endpoint");
-        endpoint.setEndpointName("审计回调");
+        endpoint.setEndpointId(1L);
+        endpoint.setEndpointKey("local-test");
+        endpoint.setEndpointName("本机测试端点");
         endpoint.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
         endpoint.setAllowedMethods("POST");
-        endpoint.setPathPrefix("/api");
+        endpoint.setPathPrefix("/connector");
         endpoint.setAuthType("NONE");
         endpoint.setConnectTimeoutMs(1000);
-        endpoint.setRequestTimeoutMs(3000);
+        endpoint.setRequestTimeoutMs(5000);
         endpoint.setNetworkScope("PRIVATE");
         endpoint.setRevisionNo(1);
         endpoint.setChecksum(WorkflowConnectorEndpointService.endpointChecksum(endpoint));
-        return endpoint;
+
+        ObjectNode config = objectMapper.createObjectNode();
+        config.put("endpointKey", endpoint.getEndpointKey());
+        config.put("method", "POST");
+        config.put("path", "/connector/test");
+        config.put("bodyVariable", BODY_VARIABLE);
+        ObjectNode snapshot = config.putObject("endpointSnapshot");
+        snapshot.put("endpointId", endpoint.getEndpointId());
+        snapshot.put("endpointName", endpoint.getEndpointName());
+        snapshot.put("revisionNo", endpoint.getRevisionNo());
+        snapshot.put("baseUrl", endpoint.getBaseUrl());
+        snapshot.put("allowedMethods", endpoint.getAllowedMethods());
+        snapshot.put("pathPrefix", endpoint.getPathPrefix());
+        snapshot.put("authType", endpoint.getAuthType());
+        snapshot.put("connectTimeoutMs", endpoint.getConnectTimeoutMs());
+        snapshot.put("requestTimeoutMs", endpoint.getRequestTimeoutMs());
+        snapshot.put("networkScope", endpoint.getNetworkScope());
+        snapshot.put("checksum", endpoint.getChecksum());
+        return config;
     }
 
     /**
-     * 启动本机真实 HTTP 服务并记录请求正文和幂等请求头。
-     * @param status int，响应 HTTP 状态
-     * @param requestBody AtomicReference&lt;String&gt;，请求正文捕获器
-     * @param idempotency AtomicReference&lt;String&gt;，幂等头捕获器
-     * @param responseBody String，响应正文
-     * @return void，监听器启动后端口可供端点快照使用
-     * @throws IOException 监听端口启动失败
+     * 接收连接器的真实 HTTP 请求并保存正文，计数在读取前递增以覆盖异常请求。
+     * @param exchange HttpExchange，本机测试服务收到的请求交换
+     * @return void，响应固定为 204
+     * @throws IOException 请求读取或响应写入失败
      */
-    private void startServer(int status, AtomicReference<String> requestBody,
-            AtomicReference<String> idempotency, String responseBody) throws IOException
+    private void receiveRequest(HttpExchange exchange) throws IOException
     {
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/api", exchange -> handle(exchange, status, requestBody,
-                idempotency, responseBody));
-        server.start();
-    }
-
-    /**
-     * 处理一次测试 HTTP 请求并返回固定状态和正文。
-     * @param exchange HttpExchange，本机服务请求上下文
-     * @param status int，固定响应状态
-     * @param requestBody AtomicReference&lt;String&gt;，请求正文捕获器
-     * @param idempotency AtomicReference&lt;String&gt;，幂等头捕获器
-     * @param responseBody String，固定响应正文
-     * @return void，请求处理完成后关闭交换
-     * @throws IOException 读取或写响应失败
-     */
-    private void handle(HttpExchange exchange, int status, AtomicReference<String> requestBody,
-            AtomicReference<String> idempotency, String responseBody) throws IOException
-    {
-        requestBody.set(new String(exchange.getRequestBody().readAllBytes(),
-                java.nio.charset.StandardCharsets.UTF_8));
-        idempotency.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
-        byte[] bytes = responseBody.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        exchange.sendResponseHeaders(status, bytes.length);
-        exchange.getResponseBody().write(bytes);
+        requestCount.incrementAndGet();
+        receivedBody.set(exchange.getRequestBody().readAllBytes());
+        exchange.sendResponseHeaders(204, -1);
         exchange.close();
+    }
+
+    /**
+     * 解析本机接收端捕获的请求正文。
+     * @param body byte[]，连接器发送的 JSON 字节
+     * @return JsonNode，解析后的请求正文树
+     */
+    private JsonNode read(byte[] body)
+    {
+        try
+        {
+            return objectMapper.readTree(body);
+        }
+        catch (Exception exception)
+        {
+            throw new AssertionError("连接器发送的请求正文必须是合法 JSON", exception);
+        }
     }
 }

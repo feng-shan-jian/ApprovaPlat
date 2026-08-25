@@ -1,0 +1,30 @@
+-- 需要真实附件绑定链的 H2 集成测试共享表结构。
+create table wf_attachment_quota_guard (
+    owner_user_id bigint primary key
+);
+
+create table wf_attachment (
+    attachment_id varchar(36) primary key,
+    owner_user_id bigint not null,
+    field_name varchar(128) not null,
+    original_name varchar(255) not null,
+    storage_key varchar(512) not null,
+    content_type varchar(255) not null,
+    file_size bigint not null,
+    sha256 varchar(64) not null,
+    attachment_status varchar(16) not null,
+    expire_time timestamp(3) not null,
+    draft_id varchar(36),
+    process_instance_id varchar(64),
+    task_id varchar(64),
+    node_key varchar(255),
+    bound_time timestamp(3),
+    storage_deleted_time timestamp(3),
+    cleanup_retry_count int not null,
+    cleanup_next_retry_time timestamp(3),
+    cleanup_last_error_code varchar(128),
+    cleanup_claim_token varchar(36),
+    cleanup_lease_until timestamp(3),
+    create_time timestamp(3) not null,
+    update_time timestamp(3)
+);

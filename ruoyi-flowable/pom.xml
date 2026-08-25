@@ -63,7 +63,7 @@
             <artifactId>spring-boot-health</artifactId>
         </dependency>
 
-        <!-- 邮件通知仅使用 Spring 正式 SMTP 配置；用户名和密码由环境或密钥注入。 -->
+        <!-- 动态邮件发送器复用 Jakarta Mail；SMTP 字段和加密凭据只从 sys_mail_config 读取。 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-mail</artifactId>
@@ -85,10 +85,83 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- 终止执行树集成测试使用官方 Flowable 引擎和内存 H2，不依赖生产数据库。 -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- 多实例轮次约束和并发 CAS 必须在真实 MySQL 8 上验证，H2 不代替该验收层。 -->
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <profiles>
+        <!--
+            真实 MySQL 验收只在显式 profile 下由 Failsafe 执行，普通 test/verify 不连接数据库。
+            CI 命令：mvn -pl ruoyi-flowable -am -Pworkflow-mysql-it verify
+        -->
+        <profile>
+            <id>workflow-mysql-it</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>require-workflow-mysql-it-environment</id>
+                                <phase>validate</phase>
+                                <goals>
+                                    <goal>enforce</goal>
+                                </goals>
+                                <configuration>
+                                    <rules>
+                                        <requireProperty>
+                                            <property>env.WORKFLOW_MYSQL_TEST_URL</property>
+                                            <regex>jdbc:mysql:.*</regex>
+                                            <message>workflow-mysql-it 必须显式配置隔离 MySQL JDBC URL。</message>
+                                        </requireProperty>
+                                        <requireProperty>
+                                            <property>env.WORKFLOW_MYSQL_TEST_USERNAME</property>
+                                            <regex>.+</regex>
+                                            <message>workflow-mysql-it 必须显式配置隔离 MySQL 用户名。</message>
+                                        </requireProperty>
+                                        <requireProperty>
+                                            <property>env.WORKFLOW_MYSQL_TEST_PASSWORD</property>
+                                            <message>workflow-mysql-it 必须显式配置隔离 MySQL 密码。</message>
+                                        </requireProperty>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.5.4</version>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <includes>
+                                <include>**/*IT.java</include>
+                            </includes>
+                            <failIfNoTests>true</failIfNoTests>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

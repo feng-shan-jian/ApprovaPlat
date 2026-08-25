@@ -85,7 +85,7 @@
               @change="emit('participant-rule-change', $event)"
             />
 
-            <template v-if="flags.userTask">
+            <template v-if="isUserTaskPanel">
               <section v-if="['none', 'controlled'].includes(state.multiInstanceType)" class="user-task-approval" aria-labelledby="user-task-approval-heading">
                 <div class="user-task-approval__heading">
                   <div>
@@ -161,7 +161,7 @@
                   </el-radio-group>
                 </div>
               </section>
-              <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType) && !flags.userTask">
+              <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType) && !isUserTaskPanel">
                 <el-form-item label="集合表达式">
                   <el-input v-model="state.collection" maxlength="256" @change="emit('multi-instance-change')" />
                 </el-form-item>
@@ -246,7 +246,7 @@
               />
             </template>
 
-            <el-form-item v-if="flags.process || flags.userTask" label="自动抄送">
+            <el-form-item v-if="flags.process || isUserTaskPanel" label="自动抄送">
               <AutoCopyRuleEditor
                 v-model="state.autoCopyRules"
                 :trigger-options="autoCopyTriggerOptions"
@@ -259,49 +259,68 @@
               />
             </el-form-item>
 
-            <template v-if="flags.serviceTaskLike">
-              <el-form-item label="受控处理器" required>
-                <el-select v-model="state.extensionKey" filterable :loading="extensionLoading" @change="emit('extension-selection-change')">
-                  <el-option
-                    v-for="option in extensionOptions"
-                    :key="option.versionId"
-                    :label="`${option.extensionName} · ${option.extensionType} · v${option.versionNo}`"
-                    :value="option.extensionKey"
-                  />
-                </el-select>
-              </el-form-item>
-              <CollaborationMessageEditor
-                v-if="selectedExtensionImplementation === 'COLLABORATION_OUTBOX_V1'"
-                v-model="state.extensionConfig"
-                :endpoints="connectorEndpoints"
-                @change="emit('service-task-change')"
+            <template v-if="taskPanelType === TASK_PANEL_TYPES.SERVICE">
+              <el-alert type="info" show-icon :closable="false" :title="taskCapability.runtimeSemantics" />
+              <ControlledTaskHandlerEditor
+                :state="state"
+                :options="extensionOptions"
+                :connector-endpoints="connectorEndpoints"
+                :sql-data-sources="sqlDataSources"
+                :error-event-options="errorEventOptions"
+                :escalation-event-options="escalationEventOptions"
+                :loading="extensionLoading"
+                @selection-change="emit('extension-selection-change', $event)"
+                @config-update="emit('controlled-task-config-update', $event)"
+                @change="emit('controlled-task-change')"
               />
-              <CelExpressionEditor v-else-if="selectedExtensionType === 'CEL'" v-model="state.extensionConfig" @change="emit('service-task-change')" />
-              <HttpConnectorEditor
-                v-else-if="selectedExtensionType === 'HTTP'"
-                v-model="state.extensionConfig"
-                :endpoints="connectorEndpoints"
-                @change="emit('service-task-change')"
-              />
-              <SqlConnectorEditor
-                v-else-if="selectedExtensionType === 'SQL'"
-                v-model="state.extensionConfig"
-                :data-sources="sqlDataSources"
-                @change="emit('service-task-change')"
-              />
-              <BpmnEventRaiseEditor
-                v-else-if="selectedExtensionImplementation === 'RAISE_BPMN_EVENT'"
-                v-model="state.extensionConfig"
-                :error-options="errorEventOptions"
-                :escalation-options="escalationEventOptions"
-                @change="emit('service-task-change')"
-              />
-              <el-form-item v-else label="处理器配置" required>
-                <el-input v-model="state.extensionConfig" type="textarea" :rows="5" maxlength="16384" @change="emit('service-task-change')" />
-              </el-form-item>
             </template>
 
-            <template v-if="flags.businessRuleTask">
+            <template v-else-if="taskPanelType === TASK_PANEL_TYPES.SEND">
+              <el-alert type="info" show-icon :closable="false" :title="taskCapability.runtimeSemantics" />
+              <el-alert
+                type="warning"
+                show-icon
+                :closable="false"
+                title="连接 MessageFlow 时必须使用事务 outbox 处理器；设计器不根据连线猜测能力，保存与部署由后端权威校验。"
+              />
+              <ControlledTaskHandlerEditor
+                :state="state"
+                :options="extensionOptions"
+                :connector-endpoints="connectorEndpoints"
+                :sql-data-sources="sqlDataSources"
+                :error-event-options="errorEventOptions"
+                :escalation-event-options="escalationEventOptions"
+                :loading="extensionLoading"
+                @selection-change="emit('extension-selection-change', $event)"
+                @config-update="emit('controlled-task-config-update', $event)"
+                @change="emit('controlled-task-change')"
+              />
+            </template>
+
+            <template v-else-if="taskPanelType === TASK_PANEL_TYPES.RECEIVE">
+              <el-alert type="info" show-icon :closable="false" :title="taskCapability.runtimeSemantics" />
+              <dl class="task-runtime-contract">
+                <div>
+                  <dt>外部触发端点</dt>
+                  <dd><code>POST /workflow/runtime-event/receive</code></dd>
+                </div>
+                <div>
+                  <dt>activityId</dt>
+                  <dd><code>{{ state.id || '请先设置元素标识' }}</code></dd>
+                </div>
+                <div>
+                  <dt>关联条件</dt>
+                  <dd><code>processInstanceId</code> 与 <code>businessKey</code> 必须且只能提供一个。</dd>
+                </div>
+                <div>
+                  <dt>鉴权要求</dt>
+                  <dd>请求头必须携带具备 RECEIVE 能力的 <code>X-Integration-Token</code>，变量还受该凭据白名单约束。</dd>
+                </div>
+              </dl>
+            </template>
+
+            <template v-else-if="taskPanelType === TASK_PANEL_TYPES.BUSINESS_RULE">
+              <el-alert type="info" show-icon :closable="false" :title="taskCapability.runtimeSemantics" />
               <el-form-item label="DMN 决策版本" required>
                 <el-select v-model="state.dmnDecisionId" filterable :loading="dmnLoading" @change="emit('dmn-change')">
                   <el-option
@@ -313,6 +332,15 @@
                 </el-select>
               </el-form-item>
             </template>
+
+            <el-alert
+              v-else-if="taskPanelType === TASK_PANEL_TYPES.MANUAL_WARNING"
+              type="warning"
+              show-icon
+              :closable="false"
+              :title="taskCapability.runtimeSemantics"
+              description="历史元素仍可导入、显示、编辑基础信息并原样保存；如需平台办理，请转换为 UserTask。"
+            />
 
             <template v-if="flags.callActivity">
               <el-form-item label="已发布子流程" required>
@@ -455,7 +483,7 @@
           </el-collapse-item>
 
           <el-collapse-item v-if="flags.activity" title="执行配置" name="execution">
-            <el-form-item v-if="!flags.userTask || state.multiInstanceType !== 'controlled'" label="循环方式">
+            <el-form-item v-if="!isUserTaskPanel || state.multiInstanceType !== 'controlled'" label="循环方式">
               <el-select v-model="state.multiInstanceType" @change="handleLoopTypeChange">
                 <el-option v-for="option in activityLoopOptions" :key="option.value" :label="option.label" :value="option.value" />
               </el-select>
@@ -526,7 +554,7 @@
                 应用整改循环配置
               </el-button>
             </template>
-            <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType) && !flags.userTask">
+            <template v-if="['sequential', 'parallel'].includes(state.multiInstanceType) && !isUserTaskPanel">
               <el-form-item label="集合表达式">
                 <el-input v-model="state.collection" maxlength="256" @change="emit('multi-instance-change')" />
               </el-form-item>
@@ -565,7 +593,7 @@
                 @change="emit('business-execution-listener-change', $event)"
               />
             </el-form-item>
-            <el-form-item v-if="flags.userTask" label="任务监听器">
+            <el-form-item v-if="isUserTaskPanel" label="任务监听器">
               <BusinessListenerEditor
                 v-model="state.businessTaskListeners"
                 kind="TASK"
@@ -585,23 +613,21 @@
 <script setup name="DesignerPropertiesPanel">
 import EmbeddedFormFieldEditor from './EmbeddedFormFieldEditor.vue'
 import FormFieldPermissionEditor from './FormFieldPermissionEditor.vue'
-import CelExpressionEditor from './CelExpressionEditor.vue'
-import HttpConnectorEditor from './HttpConnectorEditor.vue'
-import SqlConnectorEditor from './SqlConnectorEditor.vue'
-import BpmnEventRaiseEditor from './BpmnEventRaiseEditor.vue'
 import BusinessListenerEditor from './BusinessListenerEditor.vue'
 import ExtensionPropertyEditor from './ExtensionPropertyEditor.vue'
-import CollaborationMessageEditor from './CollaborationMessageEditor.vue'
+import ControlledTaskHandlerEditor from './ControlledTaskHandlerEditor.vue'
 import UserTaskSlaEditor from './UserTaskSlaEditor.vue'
 import ParticipantRuleEditor from './ParticipantRuleEditor.vue'
 import SequenceFlowRuleEditor from './SequenceFlowRuleEditor.vue'
 import AutoCopyRuleEditor from './AutoCopyRuleEditor.vue'
+import { TASK_PANEL_TYPES } from './taskCapabilityMap.js'
 
 const props = defineProps({
   selected: { type: Boolean, default: false },
   title: { type: String, default: '元素属性' },
   state: { type: Object, required: true },
   flags: { type: Object, required: true },
+  taskCapability: { type: Object, default: null },
   forms: { type: Array, default: () => [] },
   identityOptions: {
     type: Object,
@@ -653,6 +679,7 @@ const emit = defineEmits([
   'common-change',
   'id-change',
   'process-change',
+  'participant-change',
   'form-source-change',
   'form-change',
   'embedded-form-change',
@@ -661,7 +688,8 @@ const emit = defineEmits([
   'participant-rule-change',
   'user-task-change',
   'extension-selection-change',
-  'service-task-change',
+  'controlled-task-config-update',
+  'controlled-task-change',
   'condition-change',
   'condition-rule-change',
   'condition-default-change',
@@ -711,7 +739,20 @@ const callOutputScopeOptions = Object.freeze([
   { label: '调用节点局部变量', value: 'LOCAL' }
 ])
 
-const hasBusinessSection = computed(() => Object.values(props.flags).some(Boolean))
+// 任务业务分区由唯一能力表决定；非任务元素只列出模板中确实有业务控件的明确能力。
+const taskPanelType = computed(() => props.taskCapability?.panelType || '')
+const isUserTaskPanel = computed(() => taskPanelType.value === TASK_PANEL_TYPES.USER)
+const hasTaskBusinessSection = computed(() => Boolean(taskPanelType.value))
+const hasNonTaskBusinessSection = computed(() => (
+  props.flags.process
+  || (props.flags.formSupported && !isUserTaskPanel.value)
+  || props.flags.sequenceFlow
+  || props.flags.callActivity
+  || props.flags.event
+))
+const hasBusinessSection = computed(() => (
+  hasTaskBusinessSection.value || hasNonTaskBusinessSection.value
+))
 const availableSections = computed(() => [
   'base',
   ...(hasBusinessSection.value ? ['business'] : []),
@@ -719,15 +760,11 @@ const availableSections = computed(() => [
   ...(props.flags.extensionPropertiesSupported ? ['properties'] : []),
   ...(props.flags.listenerSupported ? ['listeners'] : [])
 ])
-const selectedExtensionType = computed(() => props.extensionOptions.find(option => option.extensionKey === props.state.extensionKey)?.extensionType || '')
 const selectedCallActivityOption = computed(() => props.callActivityOptions.find(option => option.definitionId === props.state.callDefinitionId))
 const selectedCallActivityInputFields = computed(() => (selectedCallActivityOption.value?.inputFields || []).filter(field => field.writable))
 const selectedCallActivityOutputFields = computed(() => (selectedCallActivityOption.value?.outputFields || []).filter(field => field.readable))
 const callActivityParentReadableFields = computed(() => props.callActivityParentFields.filter(field => field.readable))
 const callActivityParentWritableFields = computed(() => props.callActivityParentFields.filter(field => field.writable))
-const selectedExtensionImplementation = computed(
-  () => props.extensionOptions.find(option => option.extensionKey === props.state.extensionKey)?.implementationKey || ''
-)
 /**
  * 生成当前指定身份来源对应的正式目录池和安全回显选项。
  * @returns {{label:string,pool:string,placeholder:string,options:object[]}|null} 当前来源的选择器配置；动态来源返回 null。
@@ -770,7 +807,7 @@ const businessEventOptions = computed(() =>
 // UserTask 的会签/或签入口已并入审批人设置；执行配置只保留普通循环和整改循环。
 const activityLoopOptions = computed(() =>
   props.multiInstanceOptions.filter(option => {
-    if (props.flags.userTask) return !['sequential', 'parallel', 'controlled'].includes(option.value)
+    if (isUserTaskPanel.value) return !['sequential', 'parallel', 'controlled'].includes(option.value)
     return !['controlled', 'approvalLoop'].includes(option.value)
   })
 )
@@ -1196,6 +1233,37 @@ watch(
 .designer-properties-panel__form :deep(.el-segmented),
 .designer-properties-panel__form :deep(.el-input-number) {
   width: 100%;
+}
+
+.task-runtime-contract {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  margin: 12px 0 0;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+}
+
+.task-runtime-contract div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.task-runtime-contract dt {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.task-runtime-contract dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .user-task-approval {

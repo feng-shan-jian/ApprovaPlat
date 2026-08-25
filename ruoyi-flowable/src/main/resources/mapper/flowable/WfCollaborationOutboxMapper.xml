@@ -18,6 +18,21 @@
     <result property="createTime" column="create_time"/><result property="lastAttemptTime" column="last_attempt_time"/><result property="completeTime" column="complete_time"/>
   </resultMap>
   <sql id="Columns">message_id,channel_id,sequence_no,source_process_definition_key,source_process_instance_id,source_execution_id,source_element_id,message_name,target_process_definition_key,correlation_key,endpoint_id,endpoint_revision,request_path,delivery_config_json,variables_json,payload_sha256,status,attempt_count,max_attempts,compensation_count,revision_no,lease_owner,lease_until,next_attempt_time,last_http_status,last_error_code,last_error_summary,create_time,last_attempt_time,complete_time</sql>
+  <sql id="ListFilters">
+    <where>
+      <if test="query.status != null and query.status != ''">and status=#{query.status}</if>
+      <if test="query.keyword != null and query.keyword != ''">
+        and (message_id like concat('%',#{query.keyword},'%')
+          or message_name like concat('%',#{query.keyword},'%')
+          or source_process_definition_key like concat('%',#{query.keyword},'%')
+          or target_process_definition_key like concat('%',#{query.keyword},'%')
+          or correlation_key like concat('%',#{query.keyword},'%')
+          or source_process_instance_id like concat('%',#{query.keyword},'%'))
+      </if>
+      <if test="query.beginTime != null">and create_time&gt;=#{query.beginTime}</if>
+      <if test="query.endTime != null">and create_time&lt;=#{query.endTime}</if>
+    </where>
+  </sql>
   <insert id="insert">
     insert into wf_collaboration_outbox
       (message_id,channel_id,sequence_no,source_process_definition_key,source_process_instance_id,
@@ -30,9 +45,13 @@
        #{endpointId},#{endpointRevision},#{requestPath},#{deliveryConfigJson},#{variablesJson},#{payloadSha256},
        'PENDING',0,#{maxAttempts},current_timestamp(3))
   </insert>
+  <select id="countList" resultType="long">
+    select count(*) from wf_collaboration_outbox <include refid="ListFilters"/>
+  </select>
   <select id="selectList" resultMap="OutboxResult">
     select <include refid="Columns"/> from wf_collaboration_outbox
-    order by create_time desc,message_id desc limit 1000
+    <include refid="ListFilters"/>
+    order by create_time desc,message_id desc limit #{pageSize} offset #{offset}
   </select>
   <select id="selectById" resultMap="OutboxResult">
     select <include refid="Columns"/> from wf_collaboration_outbox where message_id=#{messageId}
@@ -93,7 +112,27 @@
     update wf_collaboration_outbox
     set status='CANCELLED',lease_owner=null,lease_until=null,complete_time=current_timestamp(3),
         revision_no=revision_no+1
-    where message_id=#{messageId} and status in ('PENDING','RETRYING','DEAD_LETTER')
+    where message_id=#{messageId}
+      and (status in ('PENDING','RETRYING','DEAD_LETTER')
+        or (status='DELIVERING' and lease_until &lt;= current_timestamp(3)))
       and revision_no=#{expectedRevision}
   </update>
+  <select id="selectRetentionIdsForUpdate" resultType="java.lang.String" timeout="10">
+    select message_id from wf_collaboration_outbox
+    where status in ('PROCESSED','CANCELLED') and complete_time &lt;= #{cutoffTime}
+    order by complete_time,message_id limit #{limit} for update skip locked
+  </select>
+  <delete id="deleteRetentionAuditsByIds">
+    delete from wf_collaboration_message_audit where direction='OUTBOUND' and message_id in
+    <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">#{messageId}</foreach>
+  </delete>
+  <delete id="deleteRetentionByIds">
+    delete from wf_collaboration_outbox where message_id in
+    <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">#{messageId}</foreach>
+      and status in ('PROCESSED','CANCELLED') and complete_time &lt;= #{cutoffTime}
+  </delete>
+  <select id="selectOldestRetentionTime" resultType="java.time.LocalDateTime">
+    select min(complete_time) from wf_collaboration_outbox
+    where status in ('PROCESSED','CANCELLED') and complete_time is not null
+  </select>
 </mapper>

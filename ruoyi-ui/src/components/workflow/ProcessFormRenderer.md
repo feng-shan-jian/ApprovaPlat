@@ -15,12 +15,19 @@
 />
 ```
 
-提交真实发起接口前：
+保存并提交真实草稿链：
 
 ```js
-await formRendererRef.value.validate()
+await formRendererRef.value.ensureAttachmentsIdle()
 const variables = formRendererRef.value.getValues()
-await startProcess(definitionId, { businessKey, variables })
+const created = await createProcessDraft({ processDefinitionId, businessKey, variables })
+
+await formRendererRef.value.validate()
+await submitProcessDraft(created.data.draftId, {
+  expectedVersion: created.data.revisionNo,
+  businessKey,
+  variables: formRendererRef.value.getValues()
+})
 ```
 
 ## Props

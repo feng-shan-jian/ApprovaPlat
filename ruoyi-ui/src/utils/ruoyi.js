@@ -110,8 +110,13 @@ export function selectDictLabels(datas, value, separator) {
   return actions.join('').substring(0, actions.join('').length - 1)
 }
 
-// 字符串格式化(%s )
-export function sprintf(str) {
+/**
+ * 按顺序使用参数替换字符串中的 %s 占位符。
+ * @param {string} str 包含 %s 占位符的模板字符串。
+ * @param {...unknown} args 用于替换占位符的参数。
+ * @returns {string} 完整替换后的字符串；参数不足时返回空字符串。
+ */
+export function sprintf(str, ...args) {
   let flag = true, i = 1
   str = str.replace(/%s/g, function () {
     const arg = args[i++]

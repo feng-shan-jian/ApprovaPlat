@@ -54,9 +54,10 @@ export function sendSmsTest(data) {
 }
 
 /**
- * 查询最近的脱敏短信发送审计日志。
+ * 分页查询最近的脱敏短信发送审计日志。
+ * @param {object} params pageNum 和 pageSize 分页参数。
  * @returns {Promise<object>} 包含短信发送审计列表的接口响应。
  */
-export function listSmsLogs() {
-  return request({ url: '/system/sms/logs', method: 'get' })
+export function listSmsLogs(params) {
+  return request({ url: '/system/sms/logs', method: 'get', params })
 }

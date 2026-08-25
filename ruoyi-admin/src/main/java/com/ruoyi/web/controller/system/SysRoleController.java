@@ -1,10 +1,6 @@
 package com.ruoyi.web.controller.system;
 
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
-import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -18,25 +14,20 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
-import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.domain.entity.SysDept;
-import com.ruoyi.common.core.domain.entity.SysMenu;
 import com.ruoyi.common.core.domain.entity.SysRole;
 import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.enums.BusinessType;
-import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.poi.ExcelUtil;
 import com.ruoyi.framework.web.service.SysPermissionService;
 import com.ruoyi.framework.web.service.TokenService;
 import com.ruoyi.system.domain.SysUserRole;
 import com.ruoyi.system.service.ISysDeptService;
-import com.ruoyi.system.service.ISysMenuService;
 import com.ruoyi.system.service.ISysRoleService;
 import com.ruoyi.system.service.ISysUserService;
-import com.ruoyi.web.controller.system.dto.SysRoleMenuGrantRequest;
 
 /**
  * 角色信息
@@ -61,9 +52,6 @@ public class SysRoleController extends BaseController
 
     @Autowired
     private ISysDeptService deptService;
-
-    @Autowired
-    private ISysMenuService menuService;
 
     @PreAuthorize("@ss.hasPermi('system:role:list')")
     @GetMapping("/list")
@@ -143,38 +131,6 @@ public class SysRoleController extends BaseController
             return success();
         }
         return error("修改角色'" + role.getRoleName() + "'失败，请联系管理员");
-    }
-
-    /**
-     * 增量追加角色菜单权限，不删除目标角色已有菜单关联。
-     *
-     * @param roleId Long，目标正式角色主键
-     * @param request SysRoleMenuGrantRequest，待追加的正式菜单主键集合
-     * @return AjaxResult，data.added 为本次真实新增的角色菜单关联数
-     */
-    @PreAuthorize("@ss.hasPermi('system:role:edit')")
-    @Log(title = "角色菜单增量授权", businessType = BusinessType.GRANT)
-    @PutMapping("/{roleId}/menus/grant")
-    public AjaxResult grantMenus(@PathVariable Long roleId,
-            @Valid @RequestBody SysRoleMenuGrantRequest request)
-    {
-        SysRole role = new SysRole(roleId);
-        roleService.checkRoleAllowed(role);
-        roleService.checkRoleDataScope(roleId);
-
-        // 增量授权仍受当前操作人菜单边界约束，禁止凭猜测的主键提升其他角色权限。
-        Set<Long> grantableMenuIds = menuService.selectMenuList(getUserId()).stream()
-                .map(SysMenu::getMenuId)
-                .collect(Collectors.toSet());
-        if (!grantableMenuIds.containsAll(request.menuIds()))
-        {
-            throw new ServiceException("无权授予超出当前账号菜单范围的权限", HttpStatus.FORBIDDEN);
-        }
-
-        // 服务层只追加缺失关联；每次成功调用后都刷新缓存，使首次提交后刷新失败的重试能够自愈。
-        int added = roleService.grantRoleMenus(roleId, request.menuIds());
-        tokenService.refreshPermissionByRoleId(roleId, permissionService);
-        return success(Map.of("added", added));
     }
 
     /**

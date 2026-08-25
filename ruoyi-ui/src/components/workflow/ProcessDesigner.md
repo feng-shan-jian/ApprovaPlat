@@ -2,7 +2,19 @@
 
 ## 组件简介
 
-`ProcessDesigner` 是基于 `bpmn-js` 的 Flowable BPMN 编辑器。组件负责画布编辑、受控 Flowable 属性、导入导出、XML/JSON 预览、布局命令、Lint、Token 模拟和保存前即时门禁；页面负责加载模型、表单、身份选项与正式偏好，并把 `save`、`preference-save` 事件提交到真实后端。
+`ProcessDesigner` 是基于 `bpmn-js` 的 Flowable BPMN 编辑器。主组件负责 Modeler 生命周期、选择状态、命令栈、导入导出、保存时序和对外事件；页面负责加载模型、表单、身份选项，并把模型保存提交到真实后端、把非业务界面偏好写入当前用户浏览器存储。
+
+## 职责模块
+
+设计器按业务内聚性拆分为三个领域模块，避免新增 BPMN 能力继续堆叠到主组件闭包：
+
+| 模块 | 负责范围 | 边界 |
+| --- | --- | --- |
+| `formParticipantDomain.js` | 表单来源与权限、参与者、任务分配、多实例 | 只读取当前 BPMN 和正式身份/表单目录；写入统一经过主组件提供的 `bpmn-js` modeling 命令栈。 |
+| `routingCallActivityDomain.js` | 条件路由、DMN、CallActivity 引用与变量映射 | 目录查询函数由主组件注入；受控条件和调用映射仍使用固定技术协议。 |
+| `extensionEventSlaDomain.js` | 服务扩展、业务监听器、错误/升级事件、自动抄送、SLA | 保留其他领域属性，禁止用面板快照覆盖当前 BPMN 中的权威扩展属性。 |
+
+三个模块共享选择状态但不持有 Modeler 生命周期。所有模型变更仍通过 `modeling.updateProperties`、`modeling.updateModdleProperties` 或命令栈组合命令完成，因此撤销/重做语义不变。保存仍按“本地结构门禁 → 序列化一次 → 服务端权威校验 → `save` emit”执行，模块内校验不能替代服务端校验。
 
 ## 使用方式
 
@@ -21,6 +33,7 @@
     @identity-search="searchIdentityDirectory"
     @identity-resolve="resolveSelectedIdentities"
     @preference-save="savePreference"
+    @preference-reset="restoreDefaultPreference"
     @save="saveToServer"
     @error="showError"
   />
@@ -100,10 +113,9 @@ async function saveToServer(xml) {
   saving.value = true
   try {
     await saveModel({
-      requestId: crypto.randomUUID(),
       modelId: props.modelId,
       bpmnXml: xml,
-      newVersion: false
+      expectedRevision: props.model.revision
     })
     ElMessage.success('流程设计保存成功')
   } finally {
@@ -154,8 +166,8 @@ onMounted(async () => {
 | `height` | `string` | `calc(100vh - 128px)` | 设计器稳定高度；页面级接入推荐传入 `100%`，由可用工作区决定实际高度。 |
 | `saving` | `boolean` | `false` | 页面真实保存请求的加载状态。 |
 | `identityLoading` | `boolean` | `false` | 用户、角色或部门远程检索的加载状态。 |
-| `preference` | `object` | 服务端默认值 | 从 `wf_designer_preference` 回读的主题、网格、小地图、Lint、Token 模拟和属性面板状态。 |
-| `preferenceSaving` | `boolean` | `false` | 偏好真实写库请求的加载状态。 |
+| `preference` | `object` | 当前协议默认值 | 从当前用户版本化 `localStorage` 键回读的主题、网格、小地图、Token 模拟和属性面板状态。 |
+| `preferenceSaving` | `boolean` | `false` | 页面写入浏览器存储期间的交互锁定状态。 |
 
 ## Emits
 
@@ -167,7 +179,8 @@ onMounted(async () => {
 | `error` | `Error` | 导入、导出或本地校验失败。 |
 | `identity-search` | `{ target, type: 'user' \| 'role' \| 'dept' \| 'group', keyword: string, capability: '' \| 'approval' \| 'claim' \| 'copy' }` | 请求页面检索正式目录；指定角色、部门使用 `activeRoles`、`activeDepts` 目标池和启用对象目录，最终办理资格及展开人数由后端校验。 |
 | `identity-resolve` | `{ target, type, capability, values }` | 请求页面通过 `/workflow/identity/options/resolve` 批量核验并回显当前分页外的已选正式对象。 |
-| `preference-save` | `object` | 请求页面把字段完整的当前用户偏好写入正式数据库。 |
+| `preference-save` | `object` | 请求页面按六字段白名单写入当前用户浏览器存储。 |
+| `preference-reset` | 无 | 请求页面只删除当前用户当前协议版本的偏好键并恢复默认值。 |
 
 ## 公开方法
 
@@ -183,6 +196,7 @@ onMounted(async () => {
 
 ## 关键设计
 
+- Participant 的 `processRef` 始终绑定真实 `bpmn:Process` 根元素；属性面板修改的是被引用 Process 的稳定 id，不把 IDREF 误写为普通字符串，也不改变该 Process 原有的 `isExecutable` 状态。异常导入缺失 Process 时补建不可执行空池；保存门禁从 `Definitions.rootElements` 读取全部流程，不依赖 Collaboration 画布是否注册 Process 图形，并递归校验子流程中的任务和边界事件。
 - 表单来源支持正式模板与 Flowable 内嵌 FormData。正式模板保存为 `flowable:formKey="key_正整数"`；内嵌表单保存为 `flowable:formProperty`，覆盖六种内置类型及正式 FORM_FIELD 注册表返回的 `custom:<extensionKey>`，两种来源在同一 moddle 命令中互斥。
 - 节点字段权限目录只来自当前绑定的正式模板；隐藏、只读、可编辑和必填策略使用受控 `flowable:formProperty` 随模型保存。部署时后端将其编译进当前节点不可变表单快照，模板后续新增字段按节点批量默认策略处理。
 - 内嵌字段独立保存稳定 `id` 和可选 `variable`；`variable` 为空时使用 `id`。变量、保留前缀、日期格式、字段/枚举上限和重复值在前端即时校验，保存与部署时后端再次校验；自定义字段的精确版本、实现键和校验和冻结到 Flowable 业务制品 `approvaplat/forms-v1.json`。
@@ -207,21 +221,25 @@ onMounted(async () => {
 - 身份选择器禁止自由创建值，并对远程检索做 250ms 防抖；用户审批资格及身份真伪仍由保存、部署后端校验兜底。
 - 新建流程只有在 `model.formId` 明确指定时才预绑定发起表单，不会隐式选择表单列表第一项。
 - 服务任务只提供受控扩展注册表入口，作者 XML 保存稳定扩展键和 JSON 配置，最终版本、实现和校验和由后端部署时冻结。
+- 任务创建、转换目标、属性面板类型和运行语义统一来自简单不可变 `taskCapabilityMap`。ServiceTask、SendTask、ReceiveTask、BusinessRuleTask 使用明确面板类型，不再合并为 `serviceTaskLike` 或由布尔标志猜测业务分区。
+- 高级元素面板明确提供 ServiceTask、SendTask、ReceiveTask 和 BusinessRuleTask；ManualTask 从创建入口和 bpmn-js 转换目标中隐藏。历史 ManualTask 仍可导入、渲染、编辑基础信息、保存和导出，并在属性面板提示不会生成平台待办。
+- ReceiveTask 面板只展示真实 `/workflow/runtime-event/receive` 契约，不写入浏览器字段；调用方必须用 `X-Integration-Token`、当前 activityId、互斥实例关联条件和凭据变量白名单触发。
+- 选择 HTTP 或 SQL 扩展时设计器自动开启 `flowable:async`；运行失败由 Flowable Job 按引擎/BPMN 重试配置处理，最终死信保留在 Flowable 原生表中。
 - 业务规则任务独立于通用服务任务，只能选择后端 DMN 来源目录中的精确 `decisionId`；作者 XML 写入 `flowable:rules`，流程部署时创建同部署冻结 DMN 副本。
 - 通过 bpmn-js“更改元素”把 UserTask 转换为业务规则任务或其他任务时，转换命令会在同一撤销单元内清理任务监听器、表单、办理规则、SLA、自动抄送、受控整改循环和受控多实例状态；普通 BPMN 循环、通用执行监听器及普通扩展属性继续保留，撤销和重做会原子恢复或再次清理。
 - CallActivity 只从 `/workflow/call-activity/catalog` 返回的授权已发布目录选择，不开放流程 key、定义 ID 或表达式输入。作者可选择“发布时最新版”或“固定所选版本”，部署时两种策略都会冻结为不可变定义 ID，并写入 Flowable 业务制品 `approvaplat/call-activities-v1.json`。
 - CallActivity 输入和输出只允许在父子流程正式表单字段间映射，分别保存为 Flowable 原生 `flowable:in` 与 `flowable:out`。保存前即时检查半成品、重复目标、64 项上限、可读写权限和标量类型，后端保存及部署再次按正式表单快照校验。
 - 模型重开和复制直接回读 BPMN 的版本策略、业务键继承、变量继承、输出作用域、实例名称和原生映射；页面目录只用于解析与展示，不把浏览器状态当成正式配置。
 - 保存事件只交付 XML，不在组件内绕过页面权限或直接调用接口。
-- 显式校验直接调用无副作用 `/workflow/model/validate`；保存前必须再次通过同一服务端 BPMN、身份和表单门禁。
+- 显式校验直接调用无副作用 `/workflow/model/validate`；保存时只序列化一次 XML，同一冻结快照依次通过本地结构门禁、服务端 BPMN/身份/表单门禁和真实保存。页面只在服务端明确返回 `valid=true` 且没有 ERROR 时显示通过，不用空问题列表推断成功。
 - BPMN/XML 导入设置 2 MiB 上限，失败不覆盖当前画布；BPMN/XML 导出继续自动重建内部审计监听器，SVG 使用 Modeler 图形输出。
-- 导入时根据全部 `sequenceFlow.sourceRef/targetRef` 重建流程节点的 `incoming/outgoing` 反向引用，兼容历史模型和外部工具省略冗余引用的 XML；Lint、画布命令栈和下一次正式保存统一使用修复后的图关系。被 `keep-alive` 缓存的旧设计页重新激活时会检查当前画布快照，仅在引用仍不完整时保留未保存编辑并重建内存图，避免旧红色 Lint 标记残留。
+- 导入时根据全部 `sequenceFlow.sourceRef/targetRef` 重建流程节点的 `incoming/outgoing` 反向引用，兼容历史模型和外部工具省略冗余引用的 XML；画布命令栈和下一次正式保存统一使用修复后的图关系。被 `keep-alive` 缓存的旧设计页重新激活时会检查当前画布快照，仅在引用仍不完整时保留未保存编辑并重建内存图。
 - JSON 预览通过 DOM 结构递归转换，不使用字符串替换；XML、属性和文本均保持明确层级。
-- 网格显示与 `gridSnapping` 同步，避免只显示网格却不吸附；小地图、Lint 和 Token 模拟使用真实扩展服务。小地图切换按钮使用 `+ / ×` 紧凑符号，原生 `title` 继续提供打开或关闭提示，避免动作文本遮挡画布。
+- 网格显示与 `gridSnapping` 同步，避免只显示网格却不吸附；小地图和 Token 模拟使用真实扩展服务。小地图切换按钮使用 `+ / ×` 紧凑符号，原生 `title` 继续提供打开或关闭提示，避免动作文本遮挡画布。
 - 设计器不再设置固定最小宽高。属性检查器默认宽度为 368px，可通过分隔条拖拽、左右方向键调整，双击或按 `Home` 恢复默认宽度；每次尺寸变化通过 `canvas.resized()` 同步 bpmn-js 命中区域、小地图与连线视口。
-- 当设计器主体不足 960px 时，属性检查器切换为工作区内浮层，不再通过页面横向滚动挤出右侧内容；面板仍可调整宽度、滚动、折叠和关闭。宽度只属于当前会话视觉状态，不使用浏览器本地状态冒充正式用户偏好。
-- 偏好由页面调用正式 API 保存，服务端成功回读前不把抽屉草稿或内存状态视为已应用配置。
-- 页面必须为一次用户保存意图生成 UUID `requestId`；响应丢失后的同内容重试复用该值，只有取得后端真实 `modelId` 后才清除，服务端据此返回首次落库结果而不重复建版。
+- 当设计器主体不足 960px 时，属性检查器切换为工作区内浮层，不再通过页面横向滚动挤出右侧内容；面板仍可调整宽度、滚动、折叠和关闭。可持久化的折叠状态属于当前用户的非业务界面偏好。
+- 偏好键固定为 `workflow:designer:preference:v1:{userId}`，值包含 `schemaVersion: 1` 和 `theme`、`gridEnabled`、`minimapEnabled`、`tokenSimulationEnabled`、`propertiesCollapsed` 五个白名单字段。损坏 JSON、旧协议或非法字段会恢复并覆盖为默认值；登出不删除，恢复默认只删除当前用户键。
+- 模型详情返回当前 Flowable `revision`，页面保存时作为 `expectedRevision` 提交。后端返回真实 `modelId`、`version` 和新 revision；修订基线变化返回 409，相同内容直接返回当前模型且不写库。
 - XML 序列化开始至后端保存结束期间锁定画布、属性面板和命令栈，阻止重复保存以及“已保存响应覆盖保存期间新修改”的竞态。
 - 保存按钮要求 `workflow:model:save` 权限；`workflow:model:designer` 只负责进入设计页并读取设计上下文，后端继续独立校验保存权限。
 

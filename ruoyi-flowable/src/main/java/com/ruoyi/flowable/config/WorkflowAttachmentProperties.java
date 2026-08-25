@@ -20,9 +20,6 @@ public class WorkflowAttachmentProperties
     /** 单个用户默认最多占用 512 MiB 临时附件磁盘空间。 */
     private long maxTemporaryBytes = 512L * 1024L * 1024L;
 
-    /** 全部尚未物理删除附件默认最多占用 50 GiB 私有存储。 */
-    private long maxTotalBytes = 50L * 1024L * 1024L * 1024L;
-
     /** 附件落盘后文件系统默认至少保留 1 GiB 可用空间。 */
     private long minFreeBytes = 1024L * 1024L * 1024L;
 
@@ -31,6 +28,9 @@ public class WorkflowAttachmentProperties
 
     /** 每轮过期清理默认最多处理 100 条。 */
     private int cleanupBatchSize = 100;
+
+    /** 清理领取租约默认保留 5 分钟，超时后允许其他节点重领。 */
+    private Duration cleanupLeaseDuration = Duration.ofMinutes(5);
 
     /** 首次物理清理失败默认延迟 1 分钟重试。 */
     private Duration cleanupRetryInitialDelay = Duration.ofMinutes(1);
@@ -115,32 +115,6 @@ public class WorkflowAttachmentProperties
     }
 
     /**
-     * 获取全部未物理删除附件允许占用的总字节数。
-     *
-     * @return long，正数全局私有存储容量上限
-     */
-    public long getMaxTotalBytes()
-    {
-        return maxTotalBytes;
-    }
-
-    /**
-     * 设置全部未物理删除附件允许占用的总字节数。
-     *
-     * @param maxTotalBytes long，必须处于 1 字节至 16 TiB 范围
-     * @return void，无返回值
-     */
-    public void setMaxTotalBytes(long maxTotalBytes)
-    {
-        if (maxTotalBytes <= 0L
-                || maxTotalBytes > 16L * 1024L * 1024L * 1024L * 1024L)
-        {
-            throw new IllegalArgumentException("工作流附件全局容量必须处于1字节至16TiB范围");
-        }
-        this.maxTotalBytes = maxTotalBytes;
-    }
-
-    /**
      * 获取附件文件系统必须保留的最小可用字节数。
      *
      * @return long，允许为零的磁盘低水位
@@ -215,6 +189,33 @@ public class WorkflowAttachmentProperties
             throw new IllegalArgumentException("工作流附件清理批次必须处于1至1000范围");
         }
         this.cleanupBatchSize = cleanupBatchSize;
+    }
+
+    /**
+     * 获取附件清理领取租约时长。
+     *
+     * @return Duration，事务外对象删除允许占用领取权的最长时间
+     */
+    public Duration getCleanupLeaseDuration()
+    {
+        return cleanupLeaseDuration;
+    }
+
+    /**
+     * 设置附件清理领取租约时长。
+     *
+     * @param cleanupLeaseDuration Duration，必须大于零且不超过一天
+     * @return void，无返回值
+     */
+    public void setCleanupLeaseDuration(Duration cleanupLeaseDuration)
+    {
+        if (cleanupLeaseDuration == null || cleanupLeaseDuration.isZero()
+                || cleanupLeaseDuration.isNegative()
+                || cleanupLeaseDuration.compareTo(Duration.ofDays(1)) > 0)
+        {
+            throw new IllegalArgumentException("工作流附件清理租约必须大于0且不能超过1天");
+        }
+        this.cleanupLeaseDuration = cleanupLeaseDuration;
     }
 
     /**

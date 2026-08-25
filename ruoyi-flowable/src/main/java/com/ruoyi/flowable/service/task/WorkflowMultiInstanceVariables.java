@@ -19,6 +19,10 @@ public final class WorkflowMultiInstanceVariables
     /** 服务端完成模式变量前缀。 */
     public static final String MODE_PREFIX = "_wfMiMode_";
 
+    /** 正式完成链写入当前任务本地作用域的 revision 预留标记。 */
+    public static final String COMPLETION_REVISION_VARIABLE =
+            "_wfMiCompletionRevision";
+
     /** 受控 BPMN 活动 ID 的最大字符数。 */
     public static final int MAX_ACTIVITY_ID_LENGTH = 64;
 
@@ -91,7 +95,8 @@ public final class WorkflowMultiInstanceVariables
         return variableName != null && (variableName.startsWith(USER_COLLECTION_PREFIX)
                 || variableName.startsWith(MEMBER_SNAPSHOT_PREFIX)
                 || variableName.startsWith(REVISION_PREFIX)
-                || variableName.startsWith(MODE_PREFIX));
+                || variableName.startsWith(MODE_PREFIX)
+                || COMPLETION_REVISION_VARIABLE.equals(variableName));
     }
 
     /**

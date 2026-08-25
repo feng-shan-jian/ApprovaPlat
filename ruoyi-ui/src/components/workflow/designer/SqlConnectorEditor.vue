@@ -13,6 +13,9 @@
     <el-form-item label="命名参数 SQL" required>
       <el-input v-model="draft.sql" type="textarea" :rows="6" maxlength="8192" @change="emitChange" />
     </el-form-item>
+    <el-form-item v-if="isExternalWrite" label="幂等唯一列" required>
+      <el-input v-model="draft.idempotencyColumn" maxlength="128" @change="emitChange" />
+    </el-form-item>
     <div class="sql-connector-editor__section">
       <div class="sql-connector-editor__heading">
         <span>参数映射</span>
@@ -53,13 +56,16 @@ const emit = defineEmits(['update:modelValue', 'change'])
 const draft = reactive(createEmptyConfig())
 let parameterSequence = 0
 const selectedSource = computed(() => props.dataSources.find(source => source.dataSourceKey === draft.dataSourceKey))
+// 外库写必须显式声明由目标表唯一约束保护的幂等列，查询和主库事务写无需该字段。
+const isExternalWrite = computed(() => selectedSource.value?.connectionType === 'EXTERNAL'
+  && /^\s*(insert|update|delete)\b/i.test(draft.sql))
 
 /**
  * 创建 SQL 作者配置初始值。
  * @returns {object} 与服务端 Schema 一致的可编辑状态。
  */
 function createEmptyConfig() {
-  return { dataSourceKey: '', sql: '', parameters: [], resultVariable: '', maxRows: 100 }
+  return { dataSourceKey: '', sql: '', parameters: [], resultVariable: '', idempotencyColumn: '', maxRows: 100 }
 }
 
 /**
@@ -75,6 +81,7 @@ function loadConfig(value) {
     draft.dataSourceKey = typeof parsed.dataSourceKey === 'string' ? parsed.dataSourceKey : ''
     draft.sql = typeof parsed.sql === 'string' ? parsed.sql : ''
     draft.resultVariable = typeof parsed.resultVariable === 'string' ? parsed.resultVariable : ''
+    draft.idempotencyColumn = typeof parsed.idempotencyColumn === 'string' ? parsed.idempotencyColumn : ''
     draft.maxRows = Number.isInteger(parsed.maxRows) ? parsed.maxRows : 100
     draft.parameters = Object.entries(parsed.parameters || {}).map(([name, variable]) => ({
       key: ++parameterSequence,
@@ -122,6 +129,9 @@ function emitChange() {
     maxRows: draft.maxRows
   }
   if (draft.resultVariable.trim()) normalized.resultVariable = draft.resultVariable.trim()
+  if (isExternalWrite.value && draft.idempotencyColumn.trim()) {
+    normalized.idempotencyColumn = draft.idempotencyColumn.trim()
+  }
   const json = JSON.stringify(normalized)
   emit('update:modelValue', json)
   emit('change', json)

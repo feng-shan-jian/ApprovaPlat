@@ -33,17 +33,7 @@ export function changeBpmnEventCodeStatus(eventCodeId, enabled) {
   })
 }
 
-/** @returns {Promise<object>} 最近 BPMN 错误与升级运行审计。 */
-export function listBpmnEventAudit() {
-  return request({ url: '/workflow/bpmn-event/audit', method: 'get' })
-}
-
-/** @returns {Promise<object>} 当前用户 BPMN 事件通知。 */
-export function listMyBpmnEventNotifications() {
-  return request({ url: '/workflow/bpmn-event/notifications/my', method: 'get' })
-}
-
-/** @param {number|string} notificationId 通知主键；@returns {Promise<object>} 已读结果。 */
-export function markBpmnEventNotificationRead(notificationId) {
-  return request({ url: `/workflow/bpmn-event/notifications/${notificationId}/read`, method: 'put' })
+/** @param {object} query 分页、状态、类型、来源和时间筛选；@returns {Promise<object>} 若依 rows/total 分页结果。 */
+export function listBpmnEventAudit(query) {
+  return request({ url: '/workflow/bpmn-event/audit', method: 'get', params: query })
 }

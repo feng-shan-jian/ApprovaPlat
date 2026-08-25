@@ -1,21 +1,32 @@
 package com.ruoyi.web.controller.workflow;
 
+import java.time.LocalDateTime;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.annotation.RepeatSubmit;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
+import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.enums.BusinessType;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.service.process.WorkflowCollaborationAuditService;
 import com.ruoyi.flowable.service.process.WorkflowCollaborationMessageService;
 import com.ruoyi.flowable.service.process.WorkflowCollaborationOutboxService;
 
 /** Participant/MessageFlow 入站、outbox、审计、死信和人工补偿管理接口。 */
+@Validated
 @RestController
 @RequestMapping("/workflow/collaboration")
 public class WfCollaborationController extends BaseController
@@ -40,20 +51,53 @@ public class WfCollaborationController extends BaseController
         this.auditService = auditService;
     }
 
-    /** @return AjaxResult，最近 1000 条脱敏入站消息。 */
+    /**
+     * 分页查询脱敏入站消息台账。
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @param status String，消息正式状态
+     * @param keyword String，消息、流程或关联键关键字
+     * @param beginTime LocalDateTime，创建时间下界
+     * @param endTime LocalDateTime，创建时间上界
+     * @return TableDataInfo，若依标准 rows、total 分页响应
+     */
     @PreAuthorize("@ss.hasPermi('workflow:collaboration:list')")
     @GetMapping("/inbound")
-    public AjaxResult inbound()
+    public TableDataInfo inbound(
+            @RequestParam(defaultValue = "1") @Min(1) int pageNum,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize,
+            @RequestParam(required = false) @Pattern(regexp = "RECEIVED|RETRYING|PROCESSED|DEAD_LETTER") String status,
+            @RequestParam(required = false) @Size(max = 128) String keyword,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return success(messageService.list());
+        return getDataTable(messageService.list(new WorkflowOperationsQuery.Collaboration(
+                status, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
-    /** @return AjaxResult，最近 1000 条脱敏事务 outbox。 */
+    /**
+     * 分页查询脱敏事务 outbox 台账。
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @param status String，消息正式状态
+     * @param keyword String，消息、流程或关联键关键字
+     * @param beginTime LocalDateTime，创建时间下界
+     * @param endTime LocalDateTime，创建时间上界
+     * @return TableDataInfo，若依标准 rows、total 分页响应
+     */
     @PreAuthorize("@ss.hasPermi('workflow:collaboration:list')")
     @GetMapping("/outbox")
-    public AjaxResult outbox()
+    public TableDataInfo outbox(
+            @RequestParam(defaultValue = "1") @Min(1) int pageNum,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize,
+            @RequestParam(required = false)
+            @Pattern(regexp = "PENDING|DELIVERING|RETRYING|PROCESSED|DEAD_LETTER|CANCELLED") String status,
+            @RequestParam(required = false) @Size(max = 128) String keyword,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return success(outboxService.list());
+        return getDataTable(outboxService.list(new WorkflowOperationsQuery.Collaboration(
+                status, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
     /**

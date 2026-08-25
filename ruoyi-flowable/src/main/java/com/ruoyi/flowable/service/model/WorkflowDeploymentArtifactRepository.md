@@ -11,7 +11,8 @@
 ## 公开方法
 
 - `persist(deploymentId, artifacts)`：在当前发布事务内创建唯一业务资源子部署。
-- `selectForms`、`selectConditionRules`、`selectControlledLoops`、`selectParticipantRules`：读取运行时规则。
+- `selectForms`、`selectConditionRules`、`selectControlledLoops`、`selectParticipantRules`：读取单个父部署的运行时规则。
+- `selectStartParticipantRulesByDeploymentIds(deploymentIds)`：按最多 200 个父部署分块读取发起规则；外层按父部署 ID、内层按流程 key 返回。
 - `selectExtensionSnapshots`、`selectDmnSnapshots`、`selectCallActivitySnapshots`、`selectTaskSlaSnapshots`：读取扩展和依赖资源。
 - `hasFormReference`、`countExtensionVersionReferences`、`countDmnSourceReferences`：执行低频删除保护。
 - `delete(deploymentId)`：删除父部署拥有的业务资源子部署。
@@ -19,6 +20,8 @@
 ## 关键设计
 
 - 子部署通过 `parentDeploymentId` 与可执行流程部署建立生命周期关系。
+- 发起范围批量读取使用 Flowable 8 官方 `parentDeploymentIds(...)`，不直接访问 `ACT_*` 表；同一父部署存在多个业务资源子部署时按数据错误失败。
+- 批量结果外层缺少父部署表示历史未托管；外层存在但内层缺少流程规则仍属于受管快照缺失，调用方不得把它当作历史公开定义。
 - 每类资源使用独立、带版本号的 JSON 文件，未知版本会 fail-closed。
 - 单资源和总资源均有字节上限，读取使用有界缓冲。
 - 原数据库唯一键由持久化前的自然键校验替代。
@@ -32,4 +35,7 @@ WorkflowDeploymentArtifacts artifacts = new WorkflowDeploymentArtifacts(
 artifactRepository.persist(processDeploymentId, artifacts);
 
 List<WfDeployForm> frozenForms = artifactRepository.selectForms(processDeploymentId);
+
+Map<String, Map<String, WfDeployParticipantRule>> startRules =
+        artifactRepository.selectStartParticipantRulesByDeploymentIds(deploymentIds);
 ```

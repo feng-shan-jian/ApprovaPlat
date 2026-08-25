@@ -23,7 +23,6 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.variable.api.history.HistoricVariableInstance;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.entity.SysUser;
@@ -57,8 +56,8 @@ public class WorkflowAutomaticCopyService
     private final WfCopyMapper copyMapper;
     private final SysUserMapper userMapper;
 
-    /** 自动抄送创建通知服务；生产容器注入，旧直接构造单元测试可为空。 */
-    private WorkflowNotificationService notificationService;
+    /** 自动抄送创建通知服务，抄送事实与站内信、外部 Outbox 必须同事务提交。 */
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建自动抄送运行时服务。
@@ -69,11 +68,14 @@ public class WorkflowAutomaticCopyService
      * @param identityResolver WorkflowIdentityResolver，正式用户、角色和部门解析器
      * @param copyMapper WfCopyMapper，正式抄送记录 Mapper
      * @param userMapper SysUserMapper，发起人名称快照 Mapper
+     * @param notificationService WorkflowNotificationService，正式通知服务
+     * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowAutomaticCopyService(RepositoryService repositoryService,
             RuntimeService runtimeService, HistoryService historyService,
             WorkflowIdentityResolver identityResolver, WfCopyMapper copyMapper,
-            SysUserMapper userMapper)
+            SysUserMapper userMapper,
+            WorkflowNotificationService notificationService)
     {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
@@ -81,16 +83,6 @@ public class WorkflowAutomaticCopyService
         this.identityResolver = identityResolver;
         this.copyMapper = copyMapper;
         this.userMapper = userMapper;
-    }
-
-    /**
-     * 注入抄送事实通知服务，使自动 wf_copy 和 COPY_CREATED outbox 同事务提交。
-     * @param notificationService WorkflowNotificationService，正式通知 outbox 服务
-     * @return void，生产 Spring 容器完成注入
-     */
-    @Autowired
-    public void setNotificationService(WorkflowNotificationService notificationService)
-    {
         this.notificationService = notificationService;
     }
 
@@ -256,11 +248,8 @@ public class WorkflowAutomaticCopyService
         {
             throw dataError("自动抄送写入结果异常");
         }
-        if (notificationService != null)
-        {
-            // 幂等重放会读取同一 wf_copy 事实，COPY_CREATED 自身幂等键保证不会重复生成 outbox。
-            notificationService.onCopiesCreated(copies);
-        }
+        // 幂等重放直接复用当前冻结的 WfCopy 批次，自然来源键保证通知通道记录不会重复生成。
+        notificationService.onCopiesCreated(copies);
     }
 
     /**

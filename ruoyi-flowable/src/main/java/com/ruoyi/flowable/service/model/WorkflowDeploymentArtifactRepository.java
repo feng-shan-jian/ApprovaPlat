@@ -6,11 +6,15 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.Deployment;
@@ -51,6 +55,8 @@ public class WorkflowDeploymentArtifactRepository
     private static final int MAX_RESOURCE_BYTES = 32 * 1024 * 1024;
     /** 一个部署全部业务资源最大 64 MiB。 */
     private static final int MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+    /** Flowable 父部署批量查询上限，避免为大量定义生成超大 IN 条件。 */
+    private static final int PARENT_DEPLOYMENT_QUERY_BATCH_SIZE = 200;
 
     private static final String MANIFEST_RESOURCE = "approvaplat/manifest-v1.json";
     private static final String FORMS_RESOURCE = "approvaplat/forms-v1.json";
@@ -274,20 +280,97 @@ public class WorkflowDeploymentArtifactRepository
     }
 
     /**
-     * 查询流程级发起范围规则。
+     * 批量读取父流程部署中的流程级发起范围规则。
      *
-     * @param deploymentId String，父流程部署主键
-     * @param processKey String，BPMN 可执行流程标识
-     * @return WfDeployParticipantRule，唯一发起范围；历史未托管部署返回 null
+     * 外层只包含已经存在业务资源子部署的父部署；因此外层缺失表示历史未托管部署，
+     * 外层存在但内层缺少流程 key 则保留为受管快照缺失，交由运行服务按数据错误处理。
+     *
+     * @param deploymentIds Collection&lt;String&gt;，待查询的父流程部署主键集合
+     * @return Map&lt;String, Map&lt;String, WfDeployParticipantRule&gt;&gt;，父部署主键到流程 key 发起规则的不可变映射
      */
-    public WfDeployParticipantRule selectStartParticipantRule(String deploymentId,
-            String processKey)
+    public Map<String, Map<String, WfDeployParticipantRule>>
+            selectStartParticipantRulesByDeploymentIds(Collection<String> deploymentIds)
     {
-        String normalizedProcessKey = requireText(processKey, "流程标识不能为空");
-        return uniqueOrNull(selectParticipantRules(deploymentId).stream()
-                .filter(rule -> normalizedProcessKey.equals(rule.getProcessKey())
-                        && "START".equals(rule.getRuleScope()))
-                .toList(), "流程发起范围部署快照关系不唯一");
+        LinkedHashSet<String> requestedIds = new LinkedHashSet<>();
+        if (deploymentIds != null)
+        {
+            for (String deploymentId : deploymentIds)
+            {
+                requestedIds.add(requireText(deploymentId, "流程部署主键不能为空"));
+            }
+        }
+        if (requestedIds.isEmpty())
+        {
+            return Map.of();
+        }
+
+        List<String> parentIds = new ArrayList<>(requestedIds);
+        LinkedHashMap<String, Deployment> artifactsByParent = new LinkedHashMap<>();
+        for (int offset = 0; offset < parentIds.size(); offset += PARENT_DEPLOYMENT_QUERY_BATCH_SIZE)
+        {
+            int end = Math.min(offset + PARENT_DEPLOYMENT_QUERY_BATCH_SIZE, parentIds.size());
+            List<String> batchParentIds = parentIds.subList(offset, end);
+            // 只通过 Flowable 8 官方父部署批量条件定位业务资源，禁止读取 ACT_* 内部表。
+            List<Deployment> artifacts = repositoryService.createDeploymentQuery()
+                    .parentDeploymentIds(new ArrayList<>(batchParentIds))
+                    .deploymentCategory(ARTIFACT_CATEGORY)
+                    .list();
+            if (artifacts == null)
+            {
+                throw new ServiceException("流程部署业务资源批量查询结果异常", HttpStatus.ERROR);
+            }
+            Set<String> batchIds = Set.copyOf(batchParentIds);
+            for (Deployment artifact : artifacts)
+            {
+                if (artifact == null || !StringUtils.hasText(artifact.getId())
+                        || !StringUtils.hasText(artifact.getParentDeploymentId())
+                        || !batchIds.contains(artifact.getParentDeploymentId()))
+                {
+                    throw new ServiceException("流程部署业务资源批量查询结果异常", HttpStatus.ERROR);
+                }
+                if (artifactsByParent.put(artifact.getParentDeploymentId(), artifact) != null)
+                {
+                    // 同一父部署出现多个业务资源子部署属于持久化关系损坏，不能静默选择任意一个。
+                    throw new ServiceException("流程部署业务资源数量异常", HttpStatus.ERROR);
+                }
+            }
+        }
+
+        LinkedHashMap<String, Map<String, WfDeployParticipantRule>> rulesByDeployment =
+                new LinkedHashMap<>();
+        for (String parentId : parentIds)
+        {
+            Deployment artifact = artifactsByParent.get(parentId);
+            if (artifact == null)
+            {
+                continue;
+            }
+            LinkedHashMap<String, WfDeployParticipantRule> startRules = new LinkedHashMap<>();
+            for (WfDeployParticipantRule rule : readListFromArtifact(
+                    artifact, PARTICIPANTS_RESOURCE, PARTICIPANT_LIST))
+            {
+                if (rule == null)
+                {
+                    throw new ServiceException("参与者规则部署快照不能为空", HttpStatus.ERROR);
+                }
+                if (!"START".equals(rule.getRuleScope()))
+                {
+                    continue;
+                }
+                if (!StringUtils.hasText(rule.getProcessKey())
+                        || !rule.getProcessKey().equals(rule.getProcessKey().trim()))
+                {
+                    throw new ServiceException("流程发起范围部署快照关系异常", HttpStatus.ERROR);
+                }
+                String processKey = rule.getProcessKey();
+                if (startRules.put(processKey, rule) != null)
+                {
+                    throw new ServiceException("流程发起范围部署快照关系不唯一", HttpStatus.ERROR);
+                }
+            }
+            rulesByDeployment.put(parentId, Map.copyOf(startRules));
+        }
+        return java.util.Collections.unmodifiableMap(rulesByDeployment);
     }
 
     /**

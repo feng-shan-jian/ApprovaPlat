@@ -71,7 +71,6 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
-        <!-- 完整应用集成测试 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -108,32 +107,5 @@
         </plugins>
         <finalName>${project.artifactId}</finalName>
     </build>
-
-    <profiles>
-        <profile>
-            <id>flowable-it</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-failsafe-plugin</artifactId>
-                        <version>3.5.4</version>
-                        <configuration>
-                            <classesDirectory>${project.build.outputDirectory}</classesDirectory>
-                            <useManifestOnlyJar>false</useManifestOnlyJar>
-                        </configuration>
-                        <executions>
-                            <execution>
-                                <goals>
-                                    <goal>integration-test</goal>
-                                    <goal>verify</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
 
 </project>

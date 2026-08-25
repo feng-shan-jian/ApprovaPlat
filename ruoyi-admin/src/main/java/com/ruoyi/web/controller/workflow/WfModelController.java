@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.annotation.RepeatSubmit;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
@@ -39,8 +40,8 @@ import com.ruoyi.flowable.domain.dto.WorkflowModelSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowModelUpdateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnValidationRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowModelExportView;
+import com.ruoyi.flowable.domain.vo.WorkflowModelSaveResult;
 import com.ruoyi.flowable.domain.vo.WorkflowModelView;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.service.IWfCategoryService;
 import com.ruoyi.flowable.service.model.WorkflowModelService;
 
@@ -91,7 +92,7 @@ public class WfModelController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(modelService.list(filter, pageNum, pageSize));
+        return getDataTable(modelService.list(filter, pageNum, pageSize));
     }
 
     /**
@@ -109,7 +110,7 @@ public class WfModelController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        return toTableData(modelService.historyList(filter, pageNum, pageSize));
+        return getDataTable(modelService.historyList(filter, pageNum, pageSize));
     }
 
     /**
@@ -176,8 +177,8 @@ public class WfModelController extends BaseController
     /**
      * 原子保存模型 BPMN；已部署或历史版本由服务端自动创建新的最高版本。
      *
-     * @param request WorkflowModelSaveRequest，模型主键、BPMN XML 和版本策略
-     * @return AjaxResult，包含实际保存模型主键的响应
+     * @param request WorkflowModelSaveRequest，模型主键、BPMN XML 和 expectedRevision
+     * @return AjaxResult，包含保存后模型主键、业务版本和 revision 的响应
      */
     @PreAuthorize("@ss.hasPermi('workflow:model:save')")
     @Log(title = "保存流程模型", businessType = BusinessType.UPDATE,
@@ -185,8 +186,8 @@ public class WfModelController extends BaseController
     @PostMapping("/save")
     public AjaxResult save(@Valid @RequestBody WorkflowModelSaveRequest request)
     {
-        String savedModelId = modelService.saveModel(toModelDto(request));
-        return success(Map.of("modelId", savedModelId));
+        WorkflowModelSaveResult result = modelService.saveModel(toModelDto(request));
+        return success(result);
     }
 
     /**
@@ -278,18 +279,11 @@ public class WfModelController extends BaseController
     /**
      * 把领域分页结果转换为若依稳定分页协议。
      *
-     * @param page WorkflowPageResult&lt;?&gt;，Flowable 原生 count/listPage 查询结果
+     * @param page PageResult&lt;?&gt;，Flowable 原生 count/listPage 查询结果
      * @return TableDataInfo，若依前端可直接消费的分页响应
      */
-    private TableDataInfo toTableData(WorkflowPageResult<?> page)
-    {
-        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
-    }
 
-    /**
+/**
      * 在确认总量不超过门禁后，按 Flowable 服务上限分批读取全部导出行。
      *
      * @param filter WorkflowModelDto，模型查询条件
@@ -297,7 +291,7 @@ public class WfModelController extends BaseController
      */
     private List<WorkflowModelView> loadModelsForExport(WorkflowModelDto filter)
     {
-        WorkflowPageResult<WorkflowModelView> firstPage = modelService.list(filter, 1, MAX_PAGE_SIZE);
+        PageResult<WorkflowModelView> firstPage = modelService.list(filter, 1, MAX_PAGE_SIZE);
         if (firstPage.total() > MAX_EXPORT_ROWS)
         {
             throw new ServiceException("模型导出数据不能超过5000条，请缩小查询范围",
@@ -361,7 +355,6 @@ public class WfModelController extends BaseController
         WorkflowModelDto dto = new WorkflowModelDto();
         dto.setModelId(request.modelId());
         dto.setModelName(request.modelName());
-        dto.setModelKey(request.modelKey());
         dto.setCategory(request.category());
         dto.setDescription(request.description());
         dto.setFormType(request.formType());
@@ -370,7 +363,7 @@ public class WfModelController extends BaseController
     }
 
     /**
-     * 将设计保存请求映射为只含幂等键、模型主键和 BPMN 的领域 DTO。
+     * 将设计保存请求映射为只含修订基线、模型主键和 BPMN 的领域 DTO。
      *
      * @param request WorkflowModelSaveRequest，已通过 Web 校验的设计保存请求
      * @return WorkflowModelDto，模型服务保存参数
@@ -378,10 +371,9 @@ public class WfModelController extends BaseController
     private WorkflowModelDto toModelDto(WorkflowModelSaveRequest request)
     {
         WorkflowModelDto dto = new WorkflowModelDto();
-        dto.setSaveRequestId(request.requestId());
         dto.setModelId(request.modelId());
         dto.setBpmnXml(request.bpmnXml());
-        dto.setNewVersion(request.newVersion());
+        dto.setExpectedRevision(request.expectedRevision());
         return dto;
     }
 }

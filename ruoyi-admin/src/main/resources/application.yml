@@ -40,10 +40,6 @@ management:
   endpoint:
     health:
       enabled: true
-  health:
-    # SMTP 是可选通知通道；只有部署环境已提供真实 SMTP 时才显式启用连通性健康检查。
-    mail:
-      enabled: ${APPROVAPLAT_SMTP_HEALTH_ENABLED:false}
 
 # 日志配置
 logging:
@@ -61,18 +57,14 @@ user:
 
 # Spring配置
 spring:
-  # SMTP 凭据只允许由部署环境或正式密钥注入；未配置时邮件 outbox 会进入可补偿死信。
-  mail:
-    host: ${APPROVAPLAT_SMTP_HOST:}
-    port: ${APPROVAPLAT_SMTP_PORT:587}
-    username: ${APPROVAPLAT_SMTP_USERNAME:}
-    password: ${APPROVAPLAT_SMTP_PASSWORD:}
-    properties:
-      mail.smtp.auth: ${APPROVAPLAT_SMTP_AUTH:true}
-      mail.smtp.starttls.enable: ${APPROVAPLAT_SMTP_STARTTLS:true}
-      mail.smtp.connectiontimeout: ${APPROVAPLAT_SMTP_CONNECT_TIMEOUT:5000}
-      mail.smtp.timeout: ${APPROVAPLAT_SMTP_READ_TIMEOUT:10000}
-      mail.smtp.writetimeout: ${APPROVAPLAT_SMTP_WRITE_TIMEOUT:10000}
+  task:
+    scheduling:
+      pool:
+        size: ${FLOWABLE_SCHEDULING_POOL_SIZE:5}
+      thread-name-prefix: workflow-scheduler-
+      shutdown:
+        await-termination: true
+        await-termination-period: 30s
   # 资源信息
   messages:
     # 国际化资源文件路径
@@ -149,6 +141,8 @@ pagehelper:
 
 # Flowable 流程引擎配置
 flowable:
+  scheduling:
+    enabled: ${FLOWABLE_SCHEDULING_ENABLED:true}
   # 所有环境都由正式 SQL 管理 schema，应用启动不得自动改表。
   database-schema-update: "false"
   check-process-definitions: false
@@ -167,12 +161,29 @@ flowable:
   process:
     enable-safe-xml: true
   attachment:
-    # 单文件、用户 TEMP、全局未删除容量和磁盘低水位均在数据库 guard 行锁内校验。
+    # 单文件和同用户 TEMP 配额在用户 guard 行锁内校验，磁盘低水位通过真实存储检查。
     max-size: 52428800
     max-temporary-count: 100
     max-temporary-bytes: 536870912
-    max-total-bytes: 53687091200
     min-free-bytes: 1073741824
+    # 对象存储删除位于数据库事务外，租约到期后允许其他节点重新领取。
+    cleanup-lease-duration: PT5M
+  data-retention:
+    # 各领域通过短事务和 SKIP LOCKED 分摊批次，不使用全局锁或持久化游标。
+    batch-size: 100
+    notification-outbox-retention: P90D
+    runtime-event-retention: P90D
+    process-draft-retention: P30D
+    collaboration-retention: P90D
+    attachment-metadata-retention: P90D
+    notification-inbox-retention: P180D
+    bpmn-event-audit-retention: P180D
+    task-sla-retention: P180D
+    copy-retention: P180D
+    controlled-loop-retention: P180D
+    multi-instance-round-retention: P180D
+    initial-delay: PT5M
+    fixed-delay: PT1H
   notification:
     worker-enabled: ${APPROVAPLAT_NOTIFICATION_WORKER_ENABLED:true}
     batch-size: ${APPROVAPLAT_NOTIFICATION_BATCH_SIZE:50}
@@ -180,8 +191,6 @@ flowable:
     max-retry-delay: ${APPROVAPLAT_NOTIFICATION_MAX_RETRY_DELAY:30m}
     urge-interval: ${APPROVAPLAT_NOTIFICATION_URGE_INTERVAL:5m}
     worker-delay: ${APPROVAPLAT_NOTIFICATION_WORKER_DELAY:1000}
-    # 只保存公开 From 地址；SMTP 用户名和密码位于上方 spring.mail 环境配置。
-    mail-from: ${APPROVAPLAT_NOTIFICATION_MAIL_FROM:}
 
 # OpenAPI 文档配置
 springdoc:

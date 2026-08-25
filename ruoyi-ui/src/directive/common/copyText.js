@@ -47,7 +47,9 @@ function copyTextToClipboard(input, { target = document.body } = {}) {
   let isSuccess = false
   try {
     isSuccess = document.execCommand('copy')
-  } catch { }
+  } catch {
+    // 浏览器不支持 execCommand 时保持失败结果，由调用方按 false 处理。
+  }
 
   element.remove()
 

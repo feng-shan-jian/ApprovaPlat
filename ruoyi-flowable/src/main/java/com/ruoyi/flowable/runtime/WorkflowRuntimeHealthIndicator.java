@@ -9,10 +9,9 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
-import com.ruoyi.flowable.service.attachment.WorkflowAttachmentCleanupCoordinator;
 
 /**
- * 工作流无阻塞就绪检查，只读取定时采集的原子快照和进程内锁状态；数据库、共享文件系统
+ * 工作流无阻塞就绪检查，只读取定时采集的原子快照；数据库、共享文件系统
  * 与 executor 的实时读取均不会发生在 Actuator 请求线程。
  */
 @Component
@@ -25,7 +24,6 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
     private final WorkflowRuntimeMetrics runtimeMetrics;
     private final WorkflowRuntimeProperties runtimeProperties;
     private final WorkflowAttachmentProperties attachmentProperties;
-    private final WorkflowAttachmentCleanupCoordinator cleanupCoordinator;
 
     /** 最近一次已记录的健康失败类型，用于抑制每次抓取重复刷屏。 */
     private final AtomicReference<String> lastLoggedProblem = new AtomicReference<>();
@@ -37,24 +35,21 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
      * @param runtimeMetrics WorkflowRuntimeMetrics，读取一次性原子运行快照
      * @param runtimeProperties WorkflowRuntimeProperties，读取快照最大允许年龄
      * @param attachmentProperties WorkflowAttachmentProperties，附件磁盘低水位
-     * @param cleanupCoordinator WorkflowAttachmentCleanupCoordinator，清理锁获取和释放完整性
      * @return 无返回值，构造后作为 workflowRuntime 健康贡献者
      */
     public WorkflowRuntimeHealthIndicator(Environment environment,
             WorkflowRuntimeMetrics runtimeMetrics,
             WorkflowRuntimeProperties runtimeProperties,
-            WorkflowAttachmentProperties attachmentProperties,
-            WorkflowAttachmentCleanupCoordinator cleanupCoordinator)
+            WorkflowAttachmentProperties attachmentProperties)
     {
         this.environment = environment;
         this.runtimeMetrics = runtimeMetrics;
         this.runtimeProperties = runtimeProperties;
         this.attachmentProperties = attachmentProperties;
-        this.cleanupCoordinator = cleanupCoordinator;
     }
 
     /**
-     * 读取一份原子快照完成轻量检查；快照缺失、陈旧、锁降级、executor 漂移或磁盘低水位
+     * 读取一份原子快照完成轻量检查；快照缺失、陈旧、executor 漂移或磁盘低水位
      * 均返回 DOWN，且本函数不直接访问数据库或文件系统。
      *
      * @return Health，当前节点满足接流条件时为 UP
@@ -79,9 +74,7 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
             boolean storageAboveLowWatermark = snapshot.available()
                     && snapshot.attachmentUsableBytes()
                             >= attachmentProperties.getMinFreeBytes();
-            boolean cleanupLockDegraded = cleanupCoordinator.isLockDegraded();
-
-            String problem = healthProblem(cleanupLockDegraded, snapshot.available(),
+            String problem = healthProblem(snapshot.available(),
                     snapshotFresh, asyncExecutorMatches, asyncHistoryMatches,
                     storageAboveLowWatermark);
             Health.Builder builder;
@@ -99,8 +92,7 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
                     .withDetail("metricsSnapshotFresh", snapshotFresh)
                     .withDetail("metricsSnapshotAgeMillis", snapshot.ageMillis())
                     .withDetail("asyncExecutorExpected", asyncExecutorExpected)
-                    .withDetail("asyncHistoryExpected", asyncHistoryExpected)
-                    .withDetail("cleanupLockDegraded", cleanupLockDegraded);
+                    .withDetail("asyncHistoryExpected", asyncHistoryExpected);
             if (snapshot.available())
             {
                 // 只有真实成功快照才回显采集值，避免首次启动零值被误认为真实运行状态。
@@ -126,7 +118,6 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
     /**
      * 以稳定优先级返回首个就绪失败类型，避免把配置值或物理资源正文写入日志。
      *
-     * @param cleanupLockDegraded boolean，清理锁获取或释放是否出现无法确认成功
      * @param snapshotAvailable boolean，是否存在完整成功快照
      * @param snapshotFresh boolean，成功快照是否未超过最大允许年龄
      * @param asyncExecutorMatches boolean，普通 executor 配置与快照状态是否一致
@@ -134,15 +125,10 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
      * @param storageAboveLowWatermark boolean，附件存储快照是否高于低水位
      * @return String，健康时为 null，否则为稳定失败类型
      */
-    private String healthProblem(boolean cleanupLockDegraded,
-            boolean snapshotAvailable, boolean snapshotFresh,
+    private String healthProblem(boolean snapshotAvailable, boolean snapshotFresh,
             boolean asyncExecutorMatches, boolean asyncHistoryMatches,
             boolean storageAboveLowWatermark)
     {
-        if (cleanupLockDegraded)
-        {
-            return "attachment_cleanup_lock_degraded";
-        }
         if (!snapshotAvailable)
         {
             return "workflow_runtime_snapshot_unavailable";

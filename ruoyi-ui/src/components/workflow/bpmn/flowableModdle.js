@@ -34,9 +34,21 @@ export default {
       ]
     },
     {
-      name: 'ServiceTaskLike',
+      name: 'ServiceTaskImplementation',
       isAbstract: true,
-      extends: ['bpmn:ServiceTask', 'bpmn:SendTask'],
+      extends: ['bpmn:ServiceTask'],
+      properties: [
+        { name: 'class', isAttr: true, type: 'String' },
+        { name: 'delegateExpression', isAttr: true, type: 'String' },
+        { name: 'expression', isAttr: true, type: 'String' },
+        { name: 'resultVariable', isAttr: true, type: 'String' },
+        { name: 'skipExpression', isAttr: true, type: 'String' }
+      ]
+    },
+    {
+      name: 'SendTaskImplementation',
+      isAbstract: true,
+      extends: ['bpmn:SendTask'],
       properties: [
         { name: 'class', isAttr: true, type: 'String' },
         { name: 'delegateExpression', isAttr: true, type: 'String' },

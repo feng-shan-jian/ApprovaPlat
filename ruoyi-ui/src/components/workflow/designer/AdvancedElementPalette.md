@@ -31,7 +31,8 @@
 
 ## 关键设计
 
-- 高级任务、网关、事件、子流程、事务、调用活动、池、泳道、数据对象、分组和注释均使用标准 BPMN moddle 类型；泳道命令作用于当前选中的池或泳道。
+- ServiceTask、SendTask、ReceiveTask 和 BusinessRuleTask 使用明确创建入口，并通过唯一不可变 `taskCapabilityMap` 判断是否允许创建；泳道命令作用于当前选中的池或泳道。
+- ManualTask 不进入高级面板，也会从 bpmn-js“更改元素”目标中移除。历史 BPMN 的 ManualTask 仍由 Modeler 正常导入、渲染和导出。
 - Popover 的 reference 使用稳定原生元素承载 Tooltip 和触发器，避免运行时指令落到非元素根节点并导致点击入口失效。
 - 边界事件携带 `eventDefinitionType` 和中断提示，最终能否附着由 bpmn-js 规则服务决定。
 - “协作消息流 / 关联”进入 Modeler 的全局连接工具；只有连接不同池中 SendTask/消息抛出事件与 ReceiveTask/消息捕获事件，且消息名称与消息定义完整时，后端才允许部署。

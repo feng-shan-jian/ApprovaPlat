@@ -85,8 +85,11 @@ service.interceptors.request.use(config => {
   }
   return config
 }, error => {
-    console.log(error)
-    Promise.reject(error)
+    // 请求构造失败时只保留可展示语义和“是否由页面提示”，严禁继续传播含 SMTP 表单的 Axios config。
+    const safeError = new Error('请求发送失败')
+    safeError.name = 'RequestError'
+    safeError.suppressErrorMessage = error?.config?.suppressErrorMessage === true
+    return Promise.reject(safeError)
 })
 
 /**
@@ -97,6 +100,8 @@ service.interceptors.request.use(config => {
 service.interceptors.response.use(res => {
     // 未设置状态码则默认成功状态
     const code = res.data.code || 200
+    // 局部业务流程会按稳定 subCode 输出更准确提示，统一层只负责构造安全错误对象。
+    const suppressErrorMessage = res.config?.suppressErrorMessage === true
     // 获取错误信息
     const msg = errorCode[code] || res.data.msg || errorCode['default']
     // 二进制数据则直接返回
@@ -117,21 +122,30 @@ service.interceptors.response.use(res => {
     }
       return Promise.reject('无效的会话，或者会话已过期，请重新登录。')
     } else if (code === 500) {
-      ElMessage({ message: msg, type: 'error' })
+      if (!suppressErrorMessage) ElMessage({ message: msg, type: 'error' })
       return Promise.reject(createBusinessError(code, msg, res.data.subCode))
     } else if (code === 601) {
-      ElMessage({ message: msg, type: 'warning' })
+      if (!suppressErrorMessage) ElMessage({ message: msg, type: 'warning' })
       return Promise.reject(createBusinessError(code, msg, res.data.subCode))
     } else if (code !== 200) {
-      ElNotification.error({ title: msg })
+      if (!suppressErrorMessage) ElNotification.error({ title: msg })
       return Promise.reject(createBusinessError(code, msg, res.data.subCode))
     } else {
       return  Promise.resolve(res.data)
     }
   },
   error => {
-    console.log('err' + error)
-    let { message } = error
+    const responseData = error?.response?.data
+    const responseCode = Number(responseData?.code || error?.response?.status)
+    const suppressErrorMessage = error?.suppressErrorMessage === true || error?.config?.suppressErrorMessage === true
+    if (responseData && Number.isFinite(responseCode)) {
+      // 真实非 2xx 响应仍使用后端安全 AjaxResult，并丢弃可能携带请求体的 AxiosError。
+      const backendMessage = typeof responseData.msg === 'string' ? responseData.msg.trim() : ''
+      const message = (backendMessage || errorCode[responseCode] || errorCode.default).slice(0, 180)
+      if (!suppressErrorMessage) ElMessage({ message, type: 'error', duration: 5 * 1000 })
+      return Promise.reject(createBusinessError(responseCode, message, responseData.subCode))
+    }
+    let message = typeof error?.message === 'string' ? error.message : errorCode.default
     if (message == "Network Error") {
       message = "后端接口连接异常"
     } else if (message.includes("timeout")) {
@@ -139,8 +153,11 @@ service.interceptors.response.use(res => {
     } else if (message.includes("Request failed with status code")) {
       message = "系统接口" + message.slice(-3) + "异常"
     }
-    ElMessage({ message: message, type: 'error', duration: 5 * 1000 })
-    return Promise.reject(error)
+    if (!suppressErrorMessage) ElMessage({ message, type: 'error', duration: 5 * 1000 })
+    // 不把包含原请求配置的 AxiosError 传给页面，避免授权码经控制台或组件意外输出。
+    const safeError = new Error(message)
+    safeError.name = 'RequestError'
+    return Promise.reject(safeError)
   }
 )
 

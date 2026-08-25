@@ -1,9 +1,14 @@
 package com.ruoyi.web.controller.workflow;
 
+import java.time.LocalDateTime;
 import java.util.Map;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,14 +17,17 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.annotation.RepeatSubmit;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
+import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnEventCodeRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnEventCodeStatusRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.service.model.WorkflowBpmnEventCodeService;
 
 /**
@@ -105,28 +113,35 @@ public class WfBpmnEventController extends BaseController
         return success();
     }
 
-    /** @return AjaxResult，最近 500 条专用运行审计。 */
+    /**
+     * 分页查询 BPMN 事件执行审计。
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @param status String，CAPTURED 或 UNMATCHED
+     * @param eventType String，ERROR 或 ESCALATION
+     * @param sourceType String，事件产生来源类型
+     * @param keyword String，审计主键、实例、编码或节点关键字
+     * @param beginTime LocalDateTime，触发时间下界
+     * @param endTime LocalDateTime，触发时间上界
+     * @return TableDataInfo，若依标准 rows、total 分页响应
+     */
     @PreAuthorize("@ss.hasPermi('workflow:bpmnEvent:audit')")
     @GetMapping("/audit")
-    public AjaxResult audit()
+    public TableDataInfo audit(
+            @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int pageNum,
+            @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页记录数必须大于0")
+            @Max(value = 100, message = "每页记录数不能超过100") int pageSize,
+            @RequestParam(required = false)
+            @Pattern(regexp = "CAPTURED|UNMATCHED", message = "捕获状态不受支持") String status,
+            @RequestParam(required = false)
+            @Pattern(regexp = "ERROR|ESCALATION", message = "事件类型不受支持") String eventType,
+            @RequestParam(required = false) @Size(max = 64, message = "来源类型过长") String sourceType,
+            @RequestParam(required = false) @Size(max = 128, message = "检索关键字过长") String keyword,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime beginTime,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime endTime)
     {
-        return success(eventService.listAudit());
+        return getDataTable(eventService.listAudit(new WorkflowOperationsQuery.BpmnEventAudit(
+                status, eventType, sourceType, keyword, beginTime, endTime), pageNum, pageSize));
     }
 
-    /** @return AjaxResult，当前用户真实站内通知。 */
-    @PreAuthorize("@ss.hasAnyPermi('workflow:process:approval,workflow:process:start,workflow:bpmnEvent:list')")
-    @GetMapping("/notifications/my")
-    public AjaxResult myNotifications()
-    {
-        return success(eventService.myNotifications());
-    }
-
-    /** @param notificationId Long，当前用户通知主键；@return AjaxResult，已读结果。 */
-    @PreAuthorize("@ss.hasAnyPermi('workflow:process:approval,workflow:process:start,workflow:bpmnEvent:list')")
-    @PutMapping("/notifications/{notificationId}/read")
-    public AjaxResult markRead(@PathVariable @Positive Long notificationId)
-    {
-        eventService.markNotificationRead(notificationId);
-        return success();
-    }
 }

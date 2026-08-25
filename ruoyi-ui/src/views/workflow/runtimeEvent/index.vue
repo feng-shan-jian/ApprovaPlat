@@ -5,25 +5,33 @@
         <h2>运行事件</h2>
         <p>消息、信号和 ReceiveTask 的处理与幂等审计</p>
       </div>
-      <div class="summary"><strong>{{ filteredRows.length }}</strong><span>当前结果</span></div>
+      <div class="summary"><strong>{{ total }}</strong><span>符合条件</span></div>
     </header>
 
     <el-form inline class="page-filter">
-      <el-form-item label="检索"><el-input v-model="keyword" clearable prefix-icon="Search" placeholder="requestId、事件或关联值" /></el-form-item>
+      <el-form-item label="检索"><el-input v-model="queryParams.keyword" clearable prefix-icon="Search" placeholder="requestId、事件或关联值" @keyup.enter="handleQuery" /></el-form-item>
       <el-form-item label="类型">
-        <el-select v-model="typeFilter" clearable placeholder="全部类型">
+        <el-select v-model="queryParams.eventType" clearable placeholder="全部类型">
           <el-option label="Message" value="MESSAGE" /><el-option label="Signal" value="SIGNAL" /><el-option label="ReceiveTask" value="RECEIVE" />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
-        <el-select v-model="statusFilter" clearable placeholder="全部状态">
+        <el-select v-model="queryParams.status" clearable placeholder="全部状态">
           <el-option label="已处理" value="PROCESSED" /><el-option label="失败" value="FAILED" /><el-option label="处理中" value="RECEIVED" />
         </el-select>
       </el-form-item>
-      <el-form-item><el-button icon="Refresh" @click="loadRows">刷新</el-button></el-form-item>
+      <el-form-item label="来源">
+        <el-select v-model="queryParams.sourceType" clearable placeholder="全部来源">
+          <el-option label="流程实例" value="PROCESS_INSTANCE" /><el-option label="业务标识" value="BUSINESS_KEY" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="请求时间">
+        <el-date-picker v-model="queryParams.timeRange" type="datetimerange" value-format="YYYY-MM-DD HH:mm:ss" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" />
+      </el-form-item>
+      <el-form-item><el-button type="primary" icon="Search" @click="handleQuery">查询</el-button><el-button icon="Refresh" @click="resetQuery">重置</el-button></el-form-item>
     </el-form>
 
-    <el-table v-loading="loading" :data="filteredRows" row-key="requestId">
+    <el-table v-loading="loading" :data="rows" row-key="requestId">
       <el-table-column label="请求" min-width="230">
         <template #default="scope"><div class="request-cell"><code>{{ scope.row.requestId }}</code><span>凭据 #{{ scope.row.credentialId }}</span></div></template>
       </el-table-column>
@@ -34,6 +42,7 @@
       <el-table-column label="状态" width="92" align="center"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
       <el-table-column label="完成时间" width="172"><template #default="scope">{{ scope.row.completeTime ? parseTime(scope.row.completeTime) : '未完成' }}</template></el-table-column>
     </el-table>
+    <pagination v-show="total > 0" :total="total" v-model:page="queryParams.pageNum" v-model:limit="queryParams.pageSize" @pagination="loadRows" />
   </div>
 </template>
 
@@ -42,30 +51,46 @@ import { listRuntimeEvents } from '@/api/workflow/runtimeEvent'
 
 const loading = ref(false)
 const rows = ref([])
-const keyword = ref('')
-const typeFilter = ref('')
-const statusFilter = ref('')
-const filteredRows = computed(() => {
-  const query = keyword.value.trim().toLowerCase()
-  return rows.value.filter(row => {
-    const searchable = [row.requestId, row.eventName, row.correlationValue, row.resultCode].filter(Boolean).join(' ').toLowerCase()
-    return (!query || searchable.includes(query)) && (!typeFilter.value || row.eventType === typeFilter.value) && (!statusFilter.value || row.status === statusFilter.value)
-  })
-})
+const total = ref(0)
+const queryParams = reactive({ pageNum: 1, pageSize: 20, keyword: '', eventType: '', status: '', sourceType: '', timeRange: [] })
 let initialized = false
 
 /**
- * 从正式后端加载最近 1000 条脱敏运行事件台账。
- * @returns {Promise<void>} 请求完成后替换当前表格数据。
+ * 从正式后端加载当前筛选页的脱敏运行事件台账。
+ * @returns {Promise<void>} 请求完成后同步替换 rows 和 total。
  */
 async function loadRows() {
   loading.value = true
   try {
-    const response = await listRuntimeEvents()
-    rows.value = Array.isArray(response.data) ? response.data : []
+    const response = await listRuntimeEvents(buildQuery())
+    rows.value = Array.isArray(response.rows) ? response.rows : []
+    total.value = Number(response.total || 0)
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 构造后端分页筛选参数，时间范围拆成明确上下界。
+ * @returns {object} 不包含页面本地 timeRange 字段的请求参数。
+ */
+function buildQuery() {
+  const [beginTime, endTime] = queryParams.timeRange || []
+  return {
+    pageNum: queryParams.pageNum, pageSize: queryParams.pageSize,
+    keyword: queryParams.keyword.trim() || undefined,
+    eventType: queryParams.eventType || undefined, status: queryParams.status || undefined,
+    sourceType: queryParams.sourceType || undefined, beginTime, endTime
+  }
+}
+
+/** @returns {void} 回到第一页并按当前筛选查询。 */
+function handleQuery() { queryParams.pageNum = 1; loadRows() }
+
+/** @returns {void} 恢复默认筛选和分页后重新查询。 */
+function resetQuery() {
+  Object.assign(queryParams, { pageNum: 1, pageSize: 20, keyword: '', eventType: '', status: '', sourceType: '', timeRange: [] })
+  loadRows()
 }
 
 /**
@@ -99,6 +124,7 @@ onActivated(() => { if (initialized) loadRows() })
 .summary strong { color: var(--el-text-color-primary); font-family: Consolas, monospace; font-size: 24px; }
 .page-filter :deep(.el-input) { width: 280px; }
 .page-filter :deep(.el-select) { width: 145px; }
+.page-filter :deep(.el-date-editor) { width: 360px; }
 .request-cell, .result-cell { display: grid; gap: 4px; }
 .request-cell code { font-family: Consolas, monospace; font-size: 12px; }
 .request-cell span, .result-cell span { color: var(--el-text-color-secondary); font-size: 12px; }

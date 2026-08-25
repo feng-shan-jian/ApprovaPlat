@@ -50,6 +50,13 @@
             </template>
           </el-table-column>
         </el-table>
+        <pagination
+          v-show="objectTotal > 0"
+          :total="objectTotal"
+          v-model:page="objectQueryParams.pageNum"
+          v-model:limit="objectQueryParams.pageSize"
+          @pagination="loadObjects"
+        />
       </el-tab-pane>
     </el-tabs>
 
@@ -85,6 +92,8 @@ const saving = ref(false)
 const uploading = ref(false)
 const configs = ref([])
 const objects = ref([])
+const objectTotal = ref(0)
+const objectQueryParams = reactive({ pageNum: 1, pageSize: 10 })
 const formRef = ref(null)
 const dialog = reactive({ visible: false, form: emptyConfig() })
 const pathOptions = [{ label: '路径风格', value: 'Y' }, { label: '虚拟主机', value: 'N' }]
@@ -139,10 +148,20 @@ async function loadActiveTab() {
   loading.value = true
   try {
     if (activeTab.value === 'configs') configs.value = (await listOssConfigs()).data || []
-    else objects.value = (await listOssObjects()).data || []
+    else await loadObjects()
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 按当前页码查询对象台账并同步总记录数。
+ * @returns {Promise<void>} 查询完成后更新对象列表和分页总数。
+ */
+async function loadObjects() {
+  const response = await listOssObjects(objectQueryParams)
+  objects.value = response.rows || []
+  objectTotal.value = response.total || 0
 }
 
 /**

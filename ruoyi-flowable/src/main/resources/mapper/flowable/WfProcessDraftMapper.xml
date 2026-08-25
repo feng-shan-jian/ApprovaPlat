@@ -98,4 +98,23 @@
         where draft_id=#{draftId} and owner_user_id=#{ownerUserId}
           and draft_status='ACTIVE' and revision_no=#{expectedRevision}
     </update>
+    <select id="selectRetentionIdsForUpdate" resultType="java.lang.String" timeout="10">
+        select draft_id from wf_process_draft
+        where (draft_status='SUBMITTED' and submitted_time &lt;= #{cutoffTime})
+           or (draft_status='DELETED' and deleted_time &lt;= #{cutoffTime})
+        order by case when draft_status='SUBMITTED' then submitted_time else deleted_time end,
+                 draft_id
+        limit #{limit} for update skip locked
+    </select>
+    <delete id="deleteRetentionByIds">
+        delete from wf_process_draft
+        where draft_id in
+        <foreach collection="draftIds" item="draftId" open="(" separator="," close=")">#{draftId}</foreach>
+          and ((draft_status='SUBMITTED' and submitted_time &lt;= #{cutoffTime})
+            or (draft_status='DELETED' and deleted_time &lt;= #{cutoffTime}))
+    </delete>
+    <select id="selectOldestRetentionTime" resultType="java.time.LocalDateTime">
+        select min(case when draft_status='SUBMITTED' then submitted_time else deleted_time end)
+        from wf_process_draft where draft_status in ('SUBMITTED','DELETED')
+    </select>
 </mapper>

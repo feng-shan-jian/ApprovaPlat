@@ -9,7 +9,6 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.entity.SysUser;
@@ -46,8 +45,8 @@ public class WorkflowTaskCopyService
 
     private final SysUserMapper sysUserMapper;
 
-    /** 抄送创建通知服务；生产容器注入，旧直接构造单元测试可为空。 */
-    private WorkflowNotificationService notificationService;
+    /** 抄送创建通知服务，任务抄送事实与站内信、外部 Outbox 必须同事务提交。 */
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建任务抄送服务。
@@ -58,12 +57,14 @@ public class WorkflowTaskCopyService
      * @param repositoryService RepositoryService，流程定义元数据查询服务
      * @param runtimeService RuntimeService，活动流程实例查询服务
      * @param sysUserMapper SysUserMapper，流程发起人名称快照查询 Mapper
+     * @param notificationService WorkflowNotificationService，正式通知服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowTaskCopyService(WorkflowUserSelectionValidator userSelectionValidator,
             WfCopyMapper copyMapper, WorkflowRuntimeTaskMapper runtimeTaskMapper,
             RepositoryService repositoryService,
-            RuntimeService runtimeService, SysUserMapper sysUserMapper)
+            RuntimeService runtimeService, SysUserMapper sysUserMapper,
+            WorkflowNotificationService notificationService)
     {
         this.userSelectionValidator = userSelectionValidator;
         this.copyMapper = copyMapper;
@@ -71,16 +72,6 @@ public class WorkflowTaskCopyService
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.sysUserMapper = sysUserMapper;
-    }
-
-    /**
-     * 注入抄送事实通知服务，使 wf_copy 和 COPY_CREATED outbox 在同一事务内提交。
-     * @param notificationService WorkflowNotificationService，正式通知 outbox 服务
-     * @return void，生产 Spring 容器完成注入
-     */
-    @Autowired
-    public void setNotificationService(WorkflowNotificationService notificationService)
-    {
         this.notificationService = notificationService;
     }
 
@@ -202,11 +193,8 @@ public class WorkflowTaskCopyService
         {
             throw dataError();
         }
-        if (notificationService != null)
-        {
-            // 仅在正式 wf_copy 写入成功后消费真实主键；通知失败会抛出并回滚任务动作和抄送事实。
-            notificationService.onCopiesCreated(plan.copies());
-        }
+        // 仅在正式 wf_copy 写入或幂等命中后消费当前冻结事实；通知失败会回滚任务动作和抄送事实。
+        notificationService.onCopiesCreated(plan.copies());
     }
 
     /**
@@ -351,15 +339,6 @@ public class WorkflowTaskCopyService
                 throw new IllegalArgumentException("抄送计划不能为空");
             }
             copies = Collections.unmodifiableList(new ArrayList<>(copies));
-        }
-
-        /**
-         * 保留既有测试和内部调用的一参数构造语义，默认使用严格插入。
-         * @param copies List&lt;WfCopy&gt;，待写入抄送记录
-         */
-        public CopyPlan(List<WfCopy> copies)
-        {
-            this(copies, false);
         }
 
         /**

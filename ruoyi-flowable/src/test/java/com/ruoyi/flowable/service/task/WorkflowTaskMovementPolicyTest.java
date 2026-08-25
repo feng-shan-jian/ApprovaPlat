@@ -2,245 +2,475 @@ package com.ruoyi.flowable.service.task;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.concurrent.atomic.AtomicInteger;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.flowable.bpmn.model.BoundaryEvent;
 import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.CallActivity;
+import org.flowable.bpmn.model.ExclusiveGateway;
 import org.flowable.bpmn.model.EndEvent;
+import org.flowable.bpmn.model.FlowNode;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.ParallelGateway;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.ServiceTask;
+import org.flowable.bpmn.model.SubProcess;
 import org.flowable.bpmn.model.UserTask;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 
+/**
+ * 普通退回与受控多实例整组退回 BPMN 移动边界的聚焦单元测试。
+ */
 class WorkflowTaskMovementPolicyTest
 {
-    private WorkflowTaskMovementPolicy movementPolicy;
+    /** 测试流程定义 key。 */
+    private static final String PROCESS_KEY = "movement-policy";
+
+    /** 不支持结构的稳定业务提示。 */
+    private static final String UNSUPPORTED_MESSAGE = "当前流程结构不支持该流转操作";
+
+    /** 顺序流主键生成器，避免同一测试图中的连线重名。 */
+    private final AtomicInteger sequence = new AtomicInteger();
+
+    /** 待验证的移动策略。 */
+    private final WorkflowTaskMovementPolicy policy = new WorkflowTaskMovementPolicy();
 
     /**
-     * 为每个测试创建无共享状态的 BPMN 流转策略。
+     * 验证普通用户任务经过安全排他网关的既有串行退回路径保持可用。
      *
-     * @return 无返回值，初始化后测试可直接构造模型
-     */
-    @BeforeEach
-    void setUp()
-    {
-        movementPolicy = new WorkflowTaskMovementPolicy();
-    }
-
-    /**
-     * 验证候选节点到当前任务穿越并行网关时不会进入可退节点列表。
-     *
-     * @return 无返回值，并行路径被错误放行时测试失败
-     */
-    @Test
-    void rejectsDirectReturnPathAcrossParallelGateway()
-    {
-        BpmnModel model = new BpmnModel();
-        org.flowable.bpmn.model.Process process = process(model);
-        UserTask source = userTask(process, "source", "来源");
-        ParallelGateway parallel = new ParallelGateway();
-        parallel.setId("parallel");
-        process.addFlowElement(parallel);
-        UserTask current = userTask(process, "current", "当前");
-        connect(process, source, parallel, "flow-1");
-        connect(process, parallel, current, "flow-2");
-
-        assertConflict(() -> movementPolicy.requireSafeDirectReturnPath(
-                process, source, current));
-    }
-
-    /**
-     * 验证多实例用户任务不能作为状态迁移端点。
-     *
-     * @return 无返回值，多实例端点未返回冲突时测试失败
+     * @return void，策略不抛异常即表示普通路径回归通过
      */
     @Test
-    void rejectsMultiInstanceMovementEndpoint()
+    void keepsOrdinarySerialReturnPathCompatible()
     {
-        BpmnModel model = new BpmnModel();
-        org.flowable.bpmn.model.Process process = process(model);
-        UserTask current = userTask(process, "current", "当前");
-        current.setLoopCharacteristics(new MultiInstanceLoopCharacteristics());
+        UserTask firstApproval = ordinaryTask("firstApproval");
+        ExclusiveGateway route = node(new ExclusiveGateway(), "route");
+        UserTask currentApproval = ordinaryTask("currentApproval");
+        org.flowable.bpmn.model.Process process = process(
+                firstApproval, route, currentApproval);
+        connect(process, firstApproval, route);
+        connect(process, route, currentApproval);
 
-        assertConflict(() -> movementPolicy.requireMainProcessUserTask(
-                model, process.getId(), current.getId()));
+        policy.requireSafeDirectReturnPath(process, firstApproval, currentApproval);
+        assertThat(policy.requireMainProcessReturnSource(model(process), PROCESS_KEY,
+                currentApproval.getId())).isSameAs(currentApproval);
     }
 
     /**
-     * 验证历史任务到当前任务之间经过 ServiceTask 时不允许退回，防止重复外部业务副作用。
+     * 验证受控多实例节点本身就是首审批节点时，可以在同一节点执行整组退回。
      *
-     * @return 无返回值，服务任务路径仍被列为合法退回目标时测试失败
+     * @return void，策略接受同一受控端点即表示首节点场景通过
      */
     @Test
-    void rejectsDirectReturnPathAcrossServiceTask()
+    void allowsSameControlledMultiInstanceAsFirstApprovalNode()
     {
-        BpmnModel model = new BpmnModel();
-        org.flowable.bpmn.model.Process process = process(model);
-        UserTask source = userTask(process, "source", "来源");
-        ServiceTask sideEffect = new ServiceTask();
-        sideEffect.setId("send-payment");
-        process.addFlowElement(sideEffect);
-        UserTask current = userTask(process, "current", "当前");
-        connect(process, source, sideEffect, "flow-source-service");
-        connect(process, sideEffect, current, "flow-service-current");
+        UserTask jointReview = controlledTask("jointReview");
+        org.flowable.bpmn.model.Process process = process(jointReview);
 
-        assertConflict(() -> movementPolicy.requireSafeDirectReturnPath(
-                process, source, current));
+        policy.requireSafeControlledReturnPath(process, jointReview, jointReview);
+        assertThat(policy.requireMainProcessControlledReturnSource(model(process),
+                PROCESS_KEY, jointReview.getId())).isSameAs(jointReview);
     }
 
     /**
-     * 验证补偿、边界事件和 async 用户任务均不能作为退回端点。
+     * 验证普通首审批节点到后续受控多实例节点之间仅含安全节点时允许整组退回。
      *
-     * @return 无返回值，任一不可逆用户任务端点未返回冲突时测试失败
+     * @return void，策略不抛异常即表示后续多实例安全路径通过
      */
     @Test
-    void rejectsCompensationBoundaryAndAsyncUserTaskEndpoints()
+    void allowsOrdinaryFirstNodeToLaterControlledMultiInstance()
     {
-        BpmnModel compensationModel = new BpmnModel();
-        org.flowable.bpmn.model.Process compensationProcess = process(compensationModel);
-        UserTask compensationTask = userTask(
-                compensationProcess, "compensation", "补偿任务");
-        compensationTask.setForCompensation(true);
-        assertConflict(() -> movementPolicy.requireMainProcessUserTask(
-                compensationModel, compensationProcess.getId(), compensationTask.getId()));
+        UserTask firstApproval = ordinaryTask("firstApproval");
+        ExclusiveGateway route = node(new ExclusiveGateway(), "route");
+        UserTask jointReview = controlledTask("jointReview");
+        org.flowable.bpmn.model.Process process = process(
+                firstApproval, route, jointReview);
+        connect(process, firstApproval, route);
+        connect(process, route, jointReview);
 
-        BpmnModel boundaryModel = new BpmnModel();
-        org.flowable.bpmn.model.Process boundaryProcess = process(boundaryModel);
-        UserTask boundaryTask = userTask(boundaryProcess, "bounded", "带边界事件任务");
-        BoundaryEvent boundaryEvent = new BoundaryEvent();
-        boundaryEvent.setId("timeout-boundary");
-        boundaryEvent.setAttachedToRef(boundaryTask);
-        boundaryTask.getBoundaryEvents().add(boundaryEvent);
-        boundaryProcess.addFlowElement(boundaryEvent);
-        assertConflict(() -> movementPolicy.requireMainProcessUserTask(
-                boundaryModel, boundaryProcess.getId(), boundaryTask.getId()));
-
-        BpmnModel asyncModel = new BpmnModel();
-        org.flowable.bpmn.model.Process asyncProcess = process(asyncModel);
-        UserTask asyncTask = userTask(asyncProcess, "async-task", "异步任务");
-        asyncTask.setAsynchronous(true);
-        assertConflict(() -> movementPolicy.requireMainProcessUserTask(
-                asyncModel, asyncProcess.getId(), asyncTask.getId()));
+        policy.requireSafeControlledReturnPath(process, firstApproval, jointReview);
     }
 
     /**
-     * 验证驳回只接受唯一且沿安全串行路径可达的主流程结束节点。
+     * 验证普通首审批经过已完成 ALL 后到 ANY 的连续受控路径允许整组退回。
      *
-     * @return 无返回值，唯一结束节点解析错误时测试失败
+     * @return void，策略应冻结 ALL 和 ANY 两个受控节点
      */
     @Test
-    void resolvesUniqueSerialRejectEndEvent()
+    void allowsOrdinaryAllAnyControlledReturnPath()
     {
-        BpmnFixture fixture = serialFixture();
-        EndEvent endEvent = new EndEvent();
-        endEvent.setId("end");
-        fixture.process().addFlowElement(endEvent);
-        connect(fixture.process(), fixture.currentTask(), endEvent, "flow-end");
+        UserTask firstApproval = ordinaryTask("firstApproval");
+        UserTask allReview = controlledTask("allReview");
+        UserTask anyReview = controlledAnyTask("anyReview");
+        org.flowable.bpmn.model.Process process = process(
+                firstApproval, allReview, anyReview);
+        connect(process, firstApproval, allReview);
+        connect(process, allReview, anyReview);
 
-        assertThat(movementPolicy.requireRejectEndEvent(
-                fixture.process(), fixture.currentTask()).getId()).isEqualTo("end");
+        assertThat(policy.requireSafeControlledReturnPath(
+                process, firstApproval, anyReview).controlledActivityIds())
+                .containsExactlyInAnyOrder("allReview", "anyReview");
     }
 
     /**
-     * 验证多个主流程结束节点不能由无目标参数的驳回接口擅自选择。
+     * 验证普通首审批经过两个连续 ALL 后到 ANY 的路径保持可重放。
      *
-     * @return 无返回值，多结束节点未返回冲突时测试失败
+     * @return void，三个受控节点必须全部进入服务端重放计划
      */
     @Test
-    void rejectsAmbiguousRejectEndEvents()
+    void allowsOrdinaryAllAllAnyControlledReturnPath()
     {
-        BpmnFixture fixture = serialFixture();
-        EndEvent first = endEvent(fixture.process(), "end-1");
-        EndEvent second = endEvent(fixture.process(), "end-2");
-        connect(fixture.process(), fixture.currentTask(), first, "flow-end-1");
-        connect(fixture.process(), fixture.currentTask(), second, "flow-end-2");
+        UserTask firstApproval = ordinaryTask("firstApproval");
+        UserTask firstAll = controlledTask("firstAll");
+        UserTask secondAll = controlledTask("secondAll");
+        UserTask anyReview = controlledAnyTask("anyReview");
+        org.flowable.bpmn.model.Process process = process(
+                firstApproval, firstAll, secondAll, anyReview);
+        connect(process, firstApproval, firstAll);
+        connect(process, firstAll, secondAll);
+        connect(process, secondAll, anyReview);
 
-        assertConflict(() -> movementPolicy.requireRejectEndEvent(
-                fixture.process(), fixture.currentTask()));
+        assertThat(policy.requireSafeControlledReturnPath(
+                process, firstApproval, anyReview).controlledActivityIds())
+                .containsExactlyInAnyOrder("firstAll", "secondAll", "anyReview");
     }
 
     /**
-     * 构造包含两个历史节点和一个当前节点的主流程串行模型。
+     * 验证并行网关会改变 execution 拓扑，整组退回路径必须失败关闭。
      *
-     * @return BpmnFixture，可直接用于退回和驳回策略测试的模型上下文
+     * @return void，策略必须返回 HTTP 409
      */
-    private BpmnFixture serialFixture()
+    @Test
+    void rejectsParallelGatewayOnControlledReturnPath()
     {
-        BpmnModel model = new BpmnModel();
-        org.flowable.bpmn.model.Process process = process(model);
-        UserTask first = userTask(process, "task-a", "申请");
-        UserTask second = userTask(process, "task-b", "复核");
-        UserTask current = userTask(process, "task-c", "审批");
-        connect(process, first, second, "flow-a-b");
-        connect(process, second, current, "flow-b-c");
-        return new BpmnFixture(model, process, current);
+        UserTask firstApproval = ordinaryTask("firstApproval");
+        ParallelGateway fork = node(new ParallelGateway(), "fork");
+        UserTask jointReview = controlledTask("jointReview");
+        org.flowable.bpmn.model.Process process = process(firstApproval, fork, jointReview);
+        connect(process, firstApproval, fork);
+        connect(process, fork, jointReview);
+
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                process, firstApproval, jointReview));
     }
 
     /**
-     * 创建并注册一个具有稳定 key 的 BPMN 主流程。
+     * 验证 CallActivity 和 ServiceTask 的外部副作用均不能被整组退回重放。
      *
-     * @param model BpmnModel，待注册流程的模型
-     * @return Process，已经加入模型的主流程
+     * @return void，两类路径都必须返回 HTTP 409
      */
-    private org.flowable.bpmn.model.Process process(BpmnModel model)
+    @Test
+    void rejectsCallActivityAndServiceTaskOnControlledReturnPath()
     {
-        org.flowable.bpmn.model.Process process = new org.flowable.bpmn.model.Process();
-        process.setId("approval-process");
-        process.setExecutable(true);
-        model.addProcess(process);
-        return process;
+        assertUnsafeIntermediate(node(new CallActivity(), "calledProcess"));
+        assertUnsafeIntermediate(node(new ServiceTask(), "externalService"));
     }
 
     /**
-     * 创建并注册普通用户任务。
+     * 验证静态多实例和带边界事件的中间任务仍属于不可安全重放结构。
      *
-     * @param process Process，任务所属主流程
-     * @param id String，任务节点 key
-     * @param name String，任务显示名称
-     * @return UserTask，已加入主流程的用户任务
+     * @return void，两类路径都必须使用稳定 HTTP 409 失败关闭
      */
-    private UserTask userTask(org.flowable.bpmn.model.Process process, String id, String name)
+    @Test
+    void rejectsStaticMultiInstanceAndBoundaryIntermediate()
     {
-        UserTask task = new UserTask();
-        task.setId(id);
-        task.setName(name);
-        process.addFlowElement(task);
+        UserTask staticMulti = ordinaryTask("staticMulti");
+        MultiInstanceLoopCharacteristics staticLoop =
+                new MultiInstanceLoopCharacteristics();
+        staticLoop.setInputDataItem("${legacyUsers}");
+        staticMulti.setLoopCharacteristics(staticLoop);
+        assertUnsafeIntermediate(staticMulti);
+
+        UserTask boundaryTask = ordinaryTask("boundaryTask");
+        BoundaryEvent boundary = node(new BoundaryEvent(), "boundaryTimer");
+        boundary.setAttachedToRef(boundaryTask);
+        boundaryTask.getBoundaryEvents().add(boundary);
+        UserTask first = ordinaryTask("firstBoundary");
+        UserTask current = controlledTask("currentBoundary");
+        org.flowable.bpmn.model.Process process = process(
+                first, boundaryTask, boundary, current);
+        connect(process, first, boundaryTask);
+        connect(process, boundaryTask, current);
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                process, first, current));
+    }
+
+    /**
+     * 验证循环、损坏引用和超过遍历预算的图稳定返回业务冲突。
+     *
+     * @return void，异常图不得超时、栈溢出或被当作安全路径
+     */
+    @Test
+    void rejectsLoopDamagedReferenceAndTraversalOverflow()
+    {
+        UserTask loopFirst = ordinaryTask("loopFirst");
+        ExclusiveGateway loopGateway = node(new ExclusiveGateway(), "loopGateway");
+        UserTask loopCurrent = controlledTask("loopCurrent");
+        org.flowable.bpmn.model.Process loopProcess = process(
+                loopFirst, loopGateway, loopCurrent);
+        connect(loopProcess, loopFirst, loopGateway);
+        connect(loopProcess, loopGateway, loopFirst);
+        connect(loopProcess, loopGateway, loopCurrent);
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                loopProcess, loopFirst, loopCurrent));
+
+        UserTask damagedFirst = ordinaryTask("damagedFirst");
+        UserTask damagedCurrent = controlledTask("damagedCurrent");
+        org.flowable.bpmn.model.Process damaged = process(
+                damagedFirst, damagedCurrent);
+        SequenceFlow broken = new SequenceFlow();
+        broken.setId("broken");
+        broken.setSourceFlowElement(damagedFirst);
+        broken.setTargetRef("missingNode");
+        damagedFirst.getOutgoingFlows().add(broken);
+        damaged.addFlowElement(broken);
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                damaged, damagedFirst, damagedCurrent));
+
+        UserTask wideFirst = ordinaryTask("wideFirst");
+        UserTask wideCurrent = controlledTask("wideCurrent");
+        org.flowable.bpmn.model.Process wide = process(wideFirst, wideCurrent);
+        connect(wide, wideFirst, wideCurrent);
+        for (int index = 0; index < 2049; index++)
+        {
+            EndEvent deadEnd = node(new EndEvent(), "deadEnd" + index);
+            wide.addFlowElement(deadEnd);
+            connect(wide, wideFirst, deadEnd);
+        }
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                wide, wideFirst, wideCurrent));
+    }
+
+    /**
+     * 验证边界事件或异步延续会破坏同步受控迁移，来源节点必须失败关闭。
+     *
+     * @return void，两类受控多实例节点都必须返回 HTTP 409
+     */
+    @Test
+    void rejectsBoundaryEventAndAsyncControlledSource()
+    {
+        UserTask boundarySource = controlledTask("boundarySource");
+        BoundaryEvent timeout = node(new BoundaryEvent(), "timeout");
+        timeout.setAttachedToRef(boundarySource);
+        boundarySource.getBoundaryEvents().add(timeout);
+        org.flowable.bpmn.model.Process boundaryProcess = process(boundarySource, timeout);
+        assertUnsupported(() -> policy.requireMainProcessControlledReturnSource(
+                model(boundaryProcess), PROCESS_KEY, boundarySource.getId()));
+
+        UserTask asyncSource = controlledTask("asyncSource");
+        asyncSource.setAsynchronous(true);
+        org.flowable.bpmn.model.Process asyncProcess = process(asyncSource);
+        assertUnsupported(() -> policy.requireMainProcessControlledReturnSource(
+                model(asyncProcess), PROCESS_KEY, asyncSource.getId()));
+    }
+
+    /**
+     * 验证子流程中的受控多实例任务不属于主流程作用域，不能参与整组退回。
+     *
+     * @return void，跨作用域来源必须返回 HTTP 409
+     */
+    @Test
+    void rejectsControlledMultiInstanceFromNestedScope()
+    {
+        UserTask nestedJointReview = controlledTask("nestedJointReview");
+        SubProcess nestedScope = node(new SubProcess(), "nestedScope");
+        nestedScope.addFlowElement(nestedJointReview);
+        org.flowable.bpmn.model.Process process = process(nestedScope);
+
+        assertUnsupported(() -> policy.requireMainProcessControlledReturnSource(
+                model(process), PROCESS_KEY, nestedJointReview.getId()));
+    }
+
+    /**
+     * 验证普通撤回只冻结来源及唯一直接同步后继。
+     * @return void，计划节点必须稳定且不可变
+     */
+    @Test
+    void buildsImmutableDirectRevokePlan()
+    {
+        UserTask source = ordinaryTask("revokeSource");
+        UserTask successor = ordinaryTask("revokeSuccessor");
+        org.flowable.bpmn.model.Process process = process(source, successor);
+        connect(process, source, successor);
+
+        WorkflowTaskMovementPolicy.RevokeMovementPlan plan =
+                policy.requireSafeRevokeMovement(process, source);
+        assertThat(plan.sourceNodeKey()).isEqualTo("revokeSource");
+        assertThat(plan.successorNodeKeys()).containsExactly("revokeSuccessor");
+        assertThatThrownBy(() -> plan.successorNodeKeys().add("other"))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    /**
+     * 验证纯并行拆分撤回按节点 key 冻结全部普通后继。
+     * @return void，计划不得依赖 BPMN 登记顺序
+     */
+    @Test
+    void buildsSortedParallelRevokePlan()
+    {
+        UserTask source = ordinaryTask("parallelSource");
+        ParallelGateway fork = node(new ParallelGateway(), "parallelFork");
+        UserTask second = ordinaryTask("secondReview");
+        UserTask first = ordinaryTask("firstReview");
+        org.flowable.bpmn.model.Process process = process(source, fork, second, first);
+        connect(process, source, fork);
+        connect(process, fork, second);
+        connect(process, fork, first);
+
+        assertThat(policy.requireSafeRevokeMovement(process, source)
+                .successorNodeKeys()).containsExactly("firstReview", "secondReview");
+    }
+
+    /**
+     * 验证条件顺序流和复杂后继不能进入撤回计划。
+     * @return void，两种结构都必须使用稳定 409 失败关闭
+     */
+    @Test
+    void rejectsConditionalAndComplexRevokeSuccessors()
+    {
+        UserTask conditionalSource = ordinaryTask("conditionalSource");
+        UserTask conditionalTarget = ordinaryTask("conditionalTarget");
+        org.flowable.bpmn.model.Process conditionalProcess = process(
+                conditionalSource, conditionalTarget);
+        connect(conditionalProcess, conditionalSource, conditionalTarget);
+        conditionalSource.getOutgoingFlows().get(0).setConditionExpression("${approved}");
+        assertRevokeConflict(() -> policy.requireSafeRevokeMovement(
+                conditionalProcess, conditionalSource));
+
+        UserTask asyncSource = ordinaryTask("asyncRevokeSource");
+        UserTask asyncTarget = ordinaryTask("asyncRevokeTarget");
+        asyncTarget.setAsynchronous(true);
+        org.flowable.bpmn.model.Process asyncProcess = process(asyncSource, asyncTarget);
+        connect(asyncProcess, asyncSource, asyncTarget);
+        assertRevokeConflict(() -> policy.requireSafeRevokeMovement(
+                asyncProcess, asyncSource));
+    }
+
+    /**
+     * 为不安全中间节点构造完整可达路径并验证策略拒绝。
+     *
+     * @param intermediate FlowNode，CallActivity、ServiceTask 等不可重放节点
+     * @return void，路径未被拒绝时由断言使测试失败
+     */
+    private void assertUnsafeIntermediate(FlowNode intermediate)
+    {
+        UserTask firstApproval = ordinaryTask("first-" + intermediate.getId());
+        UserTask jointReview = controlledTask("current-" + intermediate.getId());
+        org.flowable.bpmn.model.Process process = process(
+                firstApproval, intermediate, jointReview);
+        connect(process, firstApproval, intermediate);
+        connect(process, intermediate, jointReview);
+
+        assertUnsupported(() -> policy.requireSafeControlledReturnPath(
+                process, firstApproval, jointReview));
+    }
+
+    /**
+     * 创建无多实例、无边界事件和无异步语义的普通审批任务。
+     *
+     * @param id String，BPMN 用户任务节点 key
+     * @return UserTask，可用于普通安全路径的用户任务
+     */
+    private UserTask ordinaryTask(String id)
+    {
+        return node(new UserTask(), id);
+    }
+
+    /**
+     * 创建使用平台动态成员表达式的同步并行多实例任务。
+     *
+     * @param id String，BPMN 多实例用户任务节点 key
+     * @return UserTask，满足移动策略分类所需的受控多实例任务
+     */
+    private UserTask controlledTask(String id)
+    {
+        UserTask task = ordinaryTask(id);
+        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
+        loop.setInputDataItem(WorkflowMultiInstanceModelContract.COLLECTION_EXPRESSION);
+        loop.setElementVariable(WorkflowMultiInstanceModelContract.ELEMENT_VARIABLE);
+        loop.setCompletionCondition(
+                WorkflowMultiInstanceModelContract.ALL_COMPLETION_CONDITION);
+        loop.setSequential(false);
+        task.setAssignee(WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION);
+        task.setLoopCharacteristics(loop);
         return task;
     }
 
     /**
-     * 创建并注册主流程结束节点。
+     * 创建使用平台受控 handler 的同步 ANY 或签任务。
      *
-     * @param process Process，结束节点所属主流程
-     * @param id String，结束节点 key
-     * @return EndEvent，已加入主流程的结束节点
+     * @param id String，BPMN 用户任务节点 key
+     * @return UserTask，完成一个成员即可结束的受控多实例任务
      */
-    private EndEvent endEvent(org.flowable.bpmn.model.Process process, String id)
+    private UserTask controlledAnyTask(String id)
     {
-        EndEvent endEvent = new EndEvent();
-        endEvent.setId(id);
-        process.addFlowElement(endEvent);
-        return endEvent;
+        UserTask task = controlledTask(id);
+        ((MultiInstanceLoopCharacteristics) task.getLoopCharacteristics())
+                .setCompletionCondition(
+                        WorkflowMultiInstanceModelContract.ANY_COMPLETION_CONDITION);
+        return task;
     }
 
     /**
-     * 使用完整双向引用连接两个 BPMN 节点。
+     * 为 Flowable 节点设置测试图内唯一标识。
      *
-     * @param process Process，顺序流所属主流程
-     * @param source FlowNode，来源节点
-     * @param target FlowNode，目标节点
-     * @param id String，顺序流 key
-     * @return 无返回值，顺序流注册到流程及两个端点
+     * @param <T> FlowNode 的具体节点类型
+     * @param flowNode T，待初始化的 BPMN 节点
+     * @param id String，节点 key
+     * @return T，已设置 key 的原节点
+     */
+    private <T extends FlowNode> T node(T flowNode, String id)
+    {
+        flowNode.setId(id);
+        return flowNode;
+    }
+
+    /**
+     * 创建主流程并登记指定节点，确保 parentContainer 与生产模型一致。
+     *
+     * @param flowNodes FlowNode[]，按测试图需要登记的主流程节点
+     * @return Process，包含指定节点的可执行主流程模型
+     */
+    private org.flowable.bpmn.model.Process process(FlowNode... flowNodes)
+    {
+        org.flowable.bpmn.model.Process process = new org.flowable.bpmn.model.Process();
+        process.setId(PROCESS_KEY);
+        for (FlowNode flowNode : flowNodes)
+        {
+            process.addFlowElement(flowNode);
+        }
+        return process;
+    }
+
+    /**
+     * 将测试主流程装入 BpmnModel，供按流程 key 和节点 key 的解析门禁使用。
+     *
+     * @param process Process，已经登记节点的测试主流程
+     * @return BpmnModel，仅包含该主流程的 BPMN 模型
+     */
+    private BpmnModel model(org.flowable.bpmn.model.Process process)
+    {
+        BpmnModel model = new BpmnModel();
+        model.addProcess(process);
+        return model;
+    }
+
+    /**
+     * 建立带双向对象引用的顺序流，使策略按真实模型引用遍历测试路径。
+     *
+     * @param process Process，承载连线的主流程
+     * @param source FlowNode，顺序流来源节点
+     * @param target FlowNode，顺序流目标节点
+     * @return void，连线同时登记到流程及两端节点
      */
     private void connect(org.flowable.bpmn.model.Process process,
-            org.flowable.bpmn.model.FlowNode source,
-            org.flowable.bpmn.model.FlowNode target, String id)
+            FlowNode source, FlowNode target)
     {
         SequenceFlow flow = new SequenceFlow(source.getId(), target.getId());
-        flow.setId(id);
+        flow.setId("flow-" + sequence.incrementAndGet());
         flow.setSourceFlowElement(source);
         flow.setTargetFlowElement(target);
         source.getOutgoingFlows().add(flow);
@@ -249,27 +479,34 @@ class WorkflowTaskMovementPolicyTest
     }
 
     /**
-     * 断言动作以稳定 HTTP 409 业务异常拒绝。
+     * 断言不安全结构使用稳定 HTTP 409 业务契约失败关闭。
      *
-     * @param action Runnable，预期被策略拒绝的动作
-     * @return 无返回值，异常类型或状态码错误时测试失败
+     * @param callable ThrowingCallable，预计被移动策略拒绝的调用
+     * @return void，异常类型、状态码或提示不匹配时由断言使测试失败
      */
-    private void assertConflict(Runnable action)
+    private void assertUnsupported(ThrowingCallable callable)
     {
-        assertThatThrownBy(action::run)
-                .isInstanceOfSatisfying(ServiceException.class,
-                        exception -> assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
+        assertThatThrownBy(callable)
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(exception.getMessage()).isEqualTo(UNSUPPORTED_MESSAGE);
+                });
     }
 
     /**
-     * 流转策略测试使用的 BPMN 主流程上下文。
-     *
-     * @param model BpmnModel，完整模型
-     * @param process Process，模型主流程
-     * @param currentTask UserTask，当前活动任务节点
+     * 断言撤回图规则沿用应用服务的稳定状态冲突契约。
+     * @param callable ThrowingCallable，预计被撤回策略拒绝的读取动作
+     * @return void，异常类型、状态码或消息不匹配时失败
      */
-    private record BpmnFixture(BpmnModel model,
-            org.flowable.bpmn.model.Process process, UserTask currentTask)
+    private void assertRevokeConflict(ThrowingCallable callable)
     {
+        assertThatThrownBy(callable)
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(exception.getMessage())
+                            .isEqualTo("工作流状态已发生变化，请刷新后重试");
+                });
     }
 }

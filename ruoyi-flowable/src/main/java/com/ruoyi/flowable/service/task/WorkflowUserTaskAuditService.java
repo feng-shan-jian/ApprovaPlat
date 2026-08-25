@@ -248,7 +248,7 @@ public class WorkflowUserTaskAuditService
             return false;
         }
         Object marker = taskService.getVariableLocal(taskId,
-                WorkflowTaskLifecycleService.RETURN_APPLICANT_VARIABLE);
+                WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE);
         if (marker == null)
         {
             return false;

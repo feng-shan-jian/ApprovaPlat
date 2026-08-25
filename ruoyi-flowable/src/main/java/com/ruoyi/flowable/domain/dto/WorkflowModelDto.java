@@ -29,11 +29,8 @@ public class WorkflowModelDto
     /** BPMN 2.0 XML 正文。 */
     private String bpmnXml;
 
-    /** 用户本次保存意图的 UUID 幂等键。 */
-    private String saveRequestId;
-
-    /** 保存设计时是否显式创建新模型版本；已部署或历史版本会由服务端自动创建新版本。 */
-    private Boolean newVersion;
+    /** 设计页加载时取得的 Flowable 模型修订号。 */
+    private Integer expectedRevision;
 
     /**
      * 获取 Flowable 模型主键。
@@ -204,44 +201,23 @@ public class WorkflowModelDto
     }
 
     /**
-     * 获取用户本次保存意图的幂等键。
+     * 获取设计页加载时的 Flowable 模型修订号。
      *
-     * @return String，符合 UUID 格式的保存请求主键
+     * @return Integer，Flowable REV_ 乐观锁修订号
      */
-    public String getSaveRequestId()
+    public Integer getExpectedRevision()
     {
-        return saveRequestId;
+        return expectedRevision;
     }
 
     /**
-     * 设置用户本次保存意图的幂等键。
+     * 设置设计页加载时的 Flowable 模型修订号。
      *
-     * @param saveRequestId String，符合 UUID 格式的保存请求主键
+     * @param expectedRevision Integer，Flowable REV_ 乐观锁修订号
      * @return 无返回值
      */
-    public void setSaveRequestId(String saveRequestId)
+    public void setExpectedRevision(Integer expectedRevision)
     {
-        this.saveRequestId = saveRequestId;
-    }
-
-    /**
-     * 获取是否创建新模型版本。
-     *
-     * @return Boolean，true 表示显式创建新版本，false 仍会由服务端按部署和历史版本状态判定
-     */
-    public Boolean getNewVersion()
-    {
-        return newVersion;
-    }
-
-    /**
-     * 设置是否创建新模型版本。
-     *
-     * @param newVersion Boolean，true 表示显式创建新版本，false 表示由服务端按版本状态自动判定
-     * @return 无返回值
-     */
-    public void setNewVersion(Boolean newVersion)
-    {
-        this.newVersion = newVersion;
+        this.expectedRevision = expectedRevision;
     }
 }

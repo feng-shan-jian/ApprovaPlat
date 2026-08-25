@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -23,7 +24,6 @@ import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.engine.task.Comment;
 import org.flowable.variable.api.history.HistoricVariableInstance;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -38,6 +38,9 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
+import com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper;
+import com.ruoyi.flowable.service.task.MultiInstanceRoundTerminationPlan;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundTerminationService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.framework.web.service.PermissionService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
@@ -84,6 +87,9 @@ public class WorkflowProcessInstanceService
     /** 发起人取消流程后的持久化状态。 */
     private static final String CANCELED_STATUS = "canceled";
 
+    /** 办理人驳回流程后的持久化状态。 */
+    private static final String REJECTED_STATUS = "rejected";
+
     /** 流程管理员终止流程后的持久化状态。 */
     private static final String TERMINATED_STATUS = "terminated";
 
@@ -104,13 +110,20 @@ public class WorkflowProcessInstanceService
 
     private final WfControlledLoopExecutionMapper controlledLoopExecutionMapper;
 
+    /** 多实例轮次快照必须与 Flowable 历史在同一事务中精确删除。 */
+    private final WfMultiInstanceRoundMapper multiInstanceRoundMapper;
+
+    /** 受控多实例轮次终止前引擎对账与删除后异常关闭服务。 */
+    private final WorkflowMultiInstanceRoundTerminationService
+            multiInstanceRoundTerminationService;
+
     private final PermissionService permissionService;
 
-    /** SLA 时钟冻结和 Flowable timer job 重排服务；旧直接构造测试时可为空。 */
-    private WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
+    /** SLA 时钟冻结和 Flowable timer job 重排服务。 */
+    private final WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
 
-    /** 普通审批结果通知服务；旧直接构造单元测试时可为空。 */
-    private WorkflowNotificationService notificationService;
+    /** 普通审批结果通知服务，业务终态与站内信、外部 Outbox 必须同事务提交。 */
+    private final WorkflowNotificationService notificationService;
 
     /**
      * 创建流程实例写操作服务。
@@ -122,7 +135,11 @@ public class WorkflowProcessInstanceService
      * @param attachmentMapper WfAttachmentMapper，已绑定审计附件引用检查 Mapper
      * @param copyMapper WfCopyMapper，正式抄送记录引用检查和逻辑删除 Mapper
      * @param controlledLoopExecutionMapper WfControlledLoopExecutionMapper，受控循环逐轮审计 Mapper
+     * @param multiInstanceRoundMapper WfMultiInstanceRoundMapper，多实例轮次快照审计 Mapper
+     * @param multiInstanceRoundTerminationService WorkflowMultiInstanceRoundTerminationService，轮次终止严格预检与关闭服务
      * @param permissionService PermissionService，Token 权限与当前正式主数据的统一复核服务
+     * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，SLA 暂停恢复服务
+     * @param notificationService WorkflowNotificationService，显式取消或终止通知服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessInstanceService(WorkflowEngineOperations engineOperations,
@@ -130,7 +147,12 @@ public class WorkflowProcessInstanceService
             TaskService taskService, WfAttachmentMapper attachmentMapper,
             WfCopyMapper copyMapper,
             WfControlledLoopExecutionMapper controlledLoopExecutionMapper,
-            PermissionService permissionService)
+            WfMultiInstanceRoundMapper multiInstanceRoundMapper,
+            WorkflowMultiInstanceRoundTerminationService
+                    multiInstanceRoundTerminationService,
+            PermissionService permissionService,
+            WorkflowTaskSlaRuntimeService taskSlaRuntimeService,
+            WorkflowNotificationService notificationService)
     {
         this.engineOperations = engineOperations;
         this.historyService = historyService;
@@ -139,28 +161,11 @@ public class WorkflowProcessInstanceService
         this.attachmentMapper = attachmentMapper;
         this.copyMapper = copyMapper;
         this.controlledLoopExecutionMapper = controlledLoopExecutionMapper;
+        this.multiInstanceRoundMapper = multiInstanceRoundMapper;
+        this.multiInstanceRoundTerminationService =
+                multiInstanceRoundTerminationService;
         this.permissionService = permissionService;
-    }
-
-    /**
-     * 延迟注入审批 SLA 状态服务，保留既有直接构造单元测试兼容性。
-     * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，SLA 暂停恢复服务
-     * @return void，生产 Spring 容器完成注入
-     */
-    @Autowired
-    public void setTaskSlaRuntimeService(WorkflowTaskSlaRuntimeService taskSlaRuntimeService)
-    {
         this.taskSlaRuntimeService = taskSlaRuntimeService;
-    }
-
-    /**
-     * 延迟注入普通审批结果通知服务。
-     * @param notificationService WorkflowNotificationService，显式取消/终止 outbox 服务
-     * @return void，生产 Spring 容器完成注入
-     */
-    @Autowired
-    public void setNotificationService(WorkflowNotificationService notificationService)
-    {
         this.notificationService = notificationService;
     }
 
@@ -202,6 +207,14 @@ public class WorkflowProcessInstanceService
                 throw new ServiceException("循环审计记录数量超过可删除范围", HttpStatus.CONFLICT);
             }
 
+            // 轮次快照属于历史审计和整组重建依据，必须在删除引擎历史前冻结精确数量。
+            long multiInstanceRoundCount = multiInstanceRoundMapper
+                    .countByProcessInstanceIds(allIds);
+            if (multiInstanceRoundCount > Integer.MAX_VALUE)
+            {
+                throw new ServiceException("多实例轮次记录数量超过可删除范围", HttpStatus.CONFLICT);
+            }
+
             int deletedCopyCount = copyMapper.logicalDeleteByInstanceIds(allIds, actor.userId());
             if (deletedCopyCount != (int) activeCopyCount)
             {
@@ -213,6 +226,13 @@ public class WorkflowProcessInstanceService
             if (deletedControlledLoopCount != (int) controlledLoopCount)
             {
                 throw conflict("循环审计记录已发生变化，请刷新后重试");
+            }
+
+            int deletedMultiInstanceRoundCount = multiInstanceRoundMapper
+                    .deleteByProcessInstanceIds(allIds);
+            if (deletedMultiInstanceRoundCount != (int) multiInstanceRoundCount)
+            {
+                throw conflict("多实例轮次记录已发生变化，请刷新后重试");
             }
 
             // 只删除请求集合中的顶层根；Flowable 会递归删除其调用活动子流程历史。
@@ -234,8 +254,10 @@ public class WorkflowProcessInstanceService
             long remainingCopies = copyMapper.countActiveByInstanceIds(allIds);
             long remainingControlledLoops = controlledLoopExecutionMapper
                     .countByProcessInstanceIds(allIds);
+            long remainingMultiInstanceRounds = multiInstanceRoundMapper
+                    .countByProcessInstanceIds(allIds);
             if (remainingHistory != 0 || remainingCopies != 0
-                    || remainingControlledLoops != 0)
+                    || remainingControlledLoops != 0 || remainingMultiInstanceRounds != 0)
             {
                 throw conflict("流程历史删除结果不完整，请刷新后重试");
             }
@@ -283,10 +305,7 @@ public class WorkflowProcessInstanceService
                     for (String processTreeInstanceId : stateChangeOrder)
                     {
                         runtimeService.suspendProcessInstanceById(processTreeInstanceId);
-                        if (taskSlaRuntimeService != null)
-                        {
-                            taskSlaRuntimeService.pauseInstance(processTreeInstanceId, actor.userId());
-                        }
+                        taskSlaRuntimeService.pauseInstance(processTreeInstanceId, actor.userId());
                     }
                 }
                 else
@@ -295,11 +314,8 @@ public class WorkflowProcessInstanceService
                     for (String processTreeInstanceId : stateChangeOrder)
                     {
                         runtimeService.activateProcessInstanceById(processTreeInstanceId);
-                        if (taskSlaRuntimeService != null)
-                        {
-                            // 激活与 timer job 平移处于同一事务，异步执行器不能抢占未平移的过期作业。
-                            taskSlaRuntimeService.resumeInstance(processTreeInstanceId, actor.userId());
-                        }
+                        // 激活与 timer job 平移处于同一事务，异步执行器不能抢占未平移的过期作业。
+                        taskSlaRuntimeService.resumeInstance(processTreeInstanceId, actor.userId());
                     }
                 }
             }
@@ -352,47 +368,114 @@ public class WorkflowProcessInstanceService
 
             // 客户端子实例 ID 只负责定位业务树；授权、状态和最终持久化均以根实例为准。
             TerminationDecision decision = authorizeTermination(actor, rootHistoric);
-            List<String> processTreeInstanceIds = requireProcessTreeInstanceIds(rootInstance);
-            boolean wasSuspended = rootInstance.isSuspended();
+            RootTerminationContext termination = terminateRootProcessInstance(requestedInstance,
+                    decision.processStatus(),
+                    context ->
+                    {
+                        // 挂起根实例已由统一终止入口临时激活，此处只负责流程级审计 comment。
+                        String auditMessage = buildTerminationAudit(decision, actor.userId(),
+                                reason, context.wasSuspended(), context.requestedInstanceId(),
+                                context.rootInstance().getId(),
+                                context.processTreeInstanceIds().size());
+                        Comment auditComment = taskService.addComment(null,
+                                context.rootInstance().getId(), TERMINATE_COMMENT_TYPE,
+                                auditMessage);
+                        requireAuditComment(auditComment);
+                        return new RootTerminationInstruction(
+                                decision.processStatus() + ": " + reason, auditComment);
+                    });
 
-            try
-            {
-                // 挂起实例不能写 comment；同一事务内短暂激活后立即终止，不会对外暴露中间状态。
-                if (wasSuspended)
-                {
-                    runtimeService.activateProcessInstanceById(rootInstanceId);
-                }
-                // businessStatus 与历史变量同步写入，保证列表、详情和审计读取同一业务终态。
-                runtimeService.updateBusinessStatus(rootInstanceId, decision.processStatus());
-                runtimeService.setVariable(rootInstanceId, PROCESS_STATUS_VARIABLE,
-                        decision.processStatus());
-                if (notificationService != null)
-                {
-                    String eventType = CANCELED_STATUS.equals(decision.processStatus())
-                            ? "PROCESS_CANCELED" : "PROCESS_TERMINATED";
-                    notificationService.onProcessResult(eventType,
-                            rootInstance.getProcessDefinitionId(), rootInstanceId);
-                }
-                String auditMessage = buildTerminationAudit(decision, actor.userId(), reason,
-                        wasSuspended, requestedInstanceId, rootInstanceId,
-                        processTreeInstanceIds.size());
-                Comment auditComment = taskService.addComment(null, rootInstanceId,
-                        TERMINATE_COMMENT_TYPE, auditMessage);
-                requireAuditComment(auditComment);
-                // Flowable 只会在删除根实例时可靠级联 CallActivity 子流程和全部 sibling execution。
-                runtimeService.deleteProcessInstance(rootInstanceId,
-                        decision.processStatus() + ": " + reason);
-                verifyTermination(rootInstanceId, processTreeInstanceIds,
-                        decision.processStatus(), auditComment, auditMessage);
-            }
-            catch (FlowableObjectNotFoundException exception)
-            {
-                throw conflict("流程实例状态已发生变化，请刷新后重试");
-            }
-
-            return new WorkflowInstanceTerminateView(rootInstanceId, decision.processStatus(),
-                    actor.userId(), wasSuspended);
+            return new WorkflowInstanceTerminateView(termination.rootInstance().getId(),
+                    decision.processStatus(), actor.userId(), termination.wasSuspended());
         });
+    }
+
+    /**
+     * 在当前 Flowable 写事务内统一终止根业务流程实例。
+     *
+     * @param requestedInstance ProcessInstance，客户端直接定位的根或 CallActivity 子实例
+     * @param processStatus String，必须写入的 canceled、rejected 或 terminated 业务状态
+     * @param beforeDelete Function&lt;RootTerminationContext,RootTerminationInstruction&gt;，
+     *        在统一状态写入前执行的任务特有或流程审计写入动作
+     * @return RootTerminationContext，已完成根终止和统一后置检查的冻结上下文
+     */
+    public RootTerminationContext terminateRootProcessInstance(ProcessInstance requestedInstance,
+            String processStatus,
+            Function<RootTerminationContext, RootTerminationInstruction> beforeDelete)
+    {
+        if (requestedInstance == null || !StringUtils.hasText(requestedInstance.getId())
+                || !StringUtils.hasText(processStatus)
+                || beforeDelete == null)
+        {
+            throw dataError("流程终止写入参数不完整");
+        }
+        String resultEventType = processResultEventType(processStatus);
+
+        ProcessInstance rootInstance = requireRootProcessInstance(requestedInstance);
+        List<String> processTreeInstanceIds = requireProcessTreeInstanceIds(rootInstance);
+        RootTerminationContext context = new RootTerminationContext(
+                requestedInstance.getId().trim(), rootInstance, processTreeInstanceIds,
+                rootInstance.isSuspended());
+        try
+        {
+            // Flowable 禁止向挂起执行树写变量和 comment；当前事务内按根优先顺序激活完整执行树，
+            // 使根流程及 CallActivity 子流程的活动任务都能写入终止审计后再统一删除。
+            if (context.wasSuspended())
+            {
+                List<String> activationOrder = new ArrayList<>(
+                        context.processTreeInstanceIds());
+                activationOrder.remove(rootInstance.getId());
+                activationOrder.add(0, rootInstance.getId());
+                for (String processTreeInstanceId : activationOrder)
+                {
+                    runtimeService.activateProcessInstanceById(processTreeInstanceId);
+                }
+            }
+
+            RootTerminationInstruction instruction = beforeDelete.apply(context);
+            if (instruction == null || !StringUtils.hasText(instruction.deleteReason()))
+            {
+                throw dataError("流程终止审计写入参数不完整");
+            }
+
+            // processStatus 与 businessStatus 必须双写，查询、详情和历史归一化分别依赖两者。
+            runtimeService.setVariable(rootInstance.getId(), PROCESS_STATUS_VARIABLE,
+                    processStatus);
+            runtimeService.updateBusinessStatus(rootInstance.getId(), processStatus);
+            // 上述引擎写入已经取得 Flowable 写锁；此时执行树仍完整，使用普通 SELECT 冻结
+            // 全树开放轮次并逐一对账活动受控根，避免缺行或合法格式篡改被级联删除掩盖。
+            MultiInstanceRoundTerminationPlan roundPrecheck =
+                    multiInstanceRoundTerminationService
+                    .precheckTermination(context.processTreeInstanceIds());
+            notificationService.onProcessResult(resultEventType,
+                    rootInstance.getProcessDefinitionId(), rootInstance.getId());
+            // 只删除根实例，让 Flowable 级联结束 CallActivity 子流程并保留历史审计。
+            runtimeService.deleteProcessInstance(rootInstance.getId(),
+                    instruction.deleteReason());
+            // 删除成功后才取得业务行锁，并要求锁定集合与删除前令牌完全相同；任一失败都会
+            // 在同一 Spring 事务中回滚引擎状态写入、根删除及轮次更新。
+            multiInstanceRoundTerminationService.terminatePrechecked(roundPrecheck);
+            verifyTermination(context, processStatus, instruction.auditComment());
+        }
+        catch (FlowableObjectNotFoundException exception)
+        {
+            ServiceException failure = conflict("流程实例状态已发生变化，请刷新后重试");
+            failure.initCause(exception);
+            throw failure;
+        }
+        return context;
+    }
+
+    /**
+     * 仅解析终止动作的根实例，供任务服务在写入任务 comment 前完成根级授权。
+     *
+     * @param requestedInstance ProcessInstance，客户端或任务所属的根/子流程实例
+     * @return ProcessInstance，经过 CallActivity 父子关系校验的根流程实例
+     */
+    public ProcessInstance resolveRootProcessInstanceForTermination(
+            ProcessInstance requestedInstance)
+    {
+        return requireRootProcessInstance(requestedInstance);
     }
 
     /**
@@ -629,38 +712,40 @@ public class WorkflowProcessInstanceService
     }
 
     /**
-     * 复核终止后的运行数据、历史实例、历史变量和审计 comment 全部一致。
+     * 统一复核根终止后的运行树、双状态、历史变量和可选流程审计 comment。
      *
-     * @param rootInstanceId String，已执行终止命令的根实例主键
-     * @param processTreeInstanceIds List&lt;String&gt;，终止前冻结的根及子实例主键
-     * @param processStatus String，预期 canceled 或 terminated 状态
-     * @param auditComment Comment，终止前新增的 Flowable 审计 comment
-     * @param auditMessage String，服务端生成的完整结构化审计正文
-     * @return 无返回值，任一持久化结果不一致时抛出异常并回滚整个事务
+     * @param context RootTerminationContext，终止前冻结的根和完整执行树
+     * @param processStatus String，本次动作预期持久化的业务终态
+     * @param auditComment Comment，可选的流程级类型 6 审计 comment
+     * @return 无返回值，任一结果不一致时抛出异常并回滚当前事务
      */
-    private void verifyTermination(String rootInstanceId,
-            List<String> processTreeInstanceIds, String processStatus,
-            Comment auditComment, String auditMessage)
+    private void verifyTermination(RootTerminationContext context,
+            String processStatus, Comment auditComment)
     {
-        long remainingInstanceCount = processTreeInstanceIds.stream()
-                .mapToLong(instanceId -> runtimeService.createProcessInstanceQuery()
-                        .processInstanceId(instanceId)
-                        .count())
-                .sum();
+        String rootInstanceId = context.rootInstance().getId();
+        List<String> processTreeInstanceIds = context.processTreeInstanceIds();
+        long remainingInstanceCount = runtimeService.createProcessInstanceQuery()
+                .processInstanceIds(new LinkedHashSet<>(processTreeInstanceIds))
+                .count();
         long remainingExecutionCount = runtimeService.createExecutionQuery()
                 .rootProcessInstanceId(rootInstanceId)
                 .count();
         long remainingTaskCount = taskService.createTaskQuery()
                 .processInstanceIdIn(processTreeInstanceIds)
                 .count();
+        long remainingOpenRoundCount = multiInstanceRoundMapper
+                .countOpenByProcessInstanceIds(
+                        new LinkedHashSet<>(processTreeInstanceIds));
+        HistoricProcessInstance finished = findHistoricInstance(rootInstanceId);
         if (remainingInstanceCount != 0L || remainingExecutionCount != 0L
-                || remainingTaskCount != 0L)
+                || remainingTaskCount != 0L || remainingOpenRoundCount != 0L
+                || finished == null
+                || finished.getEndTime() == null
+                || !processStatus.equals(finished.getBusinessStatus()))
         {
             throw conflict("流程实例终止结果不完整，请刷新后重试");
         }
-        HistoricProcessInstance finished = findHistoricInstance(rootInstanceId);
-        if (finished == null || finished.getEndTime() == null
-                || !StringUtils.hasText(finished.getDeleteReason()))
+        if (!StringUtils.hasText(finished.getDeleteReason()))
         {
             throw new ServiceException("流程实例终止历史记录异常", HttpStatus.ERROR);
         }
@@ -675,16 +760,36 @@ public class WorkflowProcessInstanceService
             throw new ServiceException("流程实例终止状态记录异常", HttpStatus.ERROR);
         }
 
-        List<Comment> comments = taskService.getProcessInstanceComments(rootInstanceId,
-                TERMINATE_COMMENT_TYPE);
-        boolean auditPersisted = comments != null && comments.stream()
-                .anyMatch(comment -> comment != null
-                        && auditComment.getId().equals(comment.getId())
-                        && auditMessage.equals(comment.getFullMessage()));
-        if (!auditPersisted)
+        if (auditComment != null)
         {
-            throw new ServiceException("流程实例终止审计记录异常", HttpStatus.ERROR);
+            List<Comment> comments = taskService.getProcessInstanceComments(rootInstanceId,
+                    TERMINATE_COMMENT_TYPE);
+            boolean auditPersisted = comments != null && comments.stream()
+                    .anyMatch(comment -> comment != null
+                            && auditComment.getId().equals(comment.getId())
+                            && auditComment.getFullMessage().equals(comment.getFullMessage()));
+            if (!auditPersisted)
+            {
+                throw new ServiceException("流程实例终止审计记录异常", HttpStatus.ERROR);
+            }
         }
+    }
+
+    /**
+     * 根据稳定业务状态派生流程结果通知事件，避免三种终止动作各自维护映射。
+     *
+     * @param processStatus String，canceled、rejected 或 terminated 业务状态
+     * @return String，对应 WorkflowNotificationService 的流程结果事件
+     */
+    private String processResultEventType(String processStatus)
+    {
+        return switch (processStatus)
+        {
+            case CANCELED_STATUS -> "PROCESS_CANCELED";
+            case REJECTED_STATUS -> "PROCESS_REJECTED";
+            case TERMINATED_STATUS -> "PROCESS_TERMINATED";
+            default -> throw dataError("流程终止状态不受支持");
+        };
     }
 
     /**
@@ -915,6 +1020,42 @@ public class WorkflowProcessInstanceService
     private ServiceException dataError(String message)
     {
         return new ServiceException(message, HttpStatus.ERROR);
+    }
+
+    /**
+     * 根终止写入前冻结的业务执行树上下文。
+     *
+     * @param requestedInstanceId String，客户端直接提交的根或子流程实例主键
+     * @param rootInstance ProcessInstance，最终负责状态写入和级联删除的根实例
+     * @param processTreeInstanceIds List&lt;String&gt;，根及全部活动 CallActivity 子实例主键
+     * @param wasSuspended boolean，根实例在本次动作前是否挂起
+     */
+    public record RootTerminationContext(String requestedInstanceId,
+            ProcessInstance rootInstance, List<String> processTreeInstanceIds,
+            boolean wasSuspended)
+    {
+        /**
+         * 复制冻结的执行树主键，避免任务特有回调修改统一终止快照。
+         *
+         * @param requestedInstanceId String，客户端直接提交的实例主键
+         * @param rootInstance ProcessInstance，根流程实例
+         * @param processTreeInstanceIds List&lt;String&gt;，冻结的执行树实例主键
+         * @param wasSuspended boolean，根实例原始挂起状态
+         */
+        public RootTerminationContext
+        {
+            processTreeInstanceIds = List.copyOf(processTreeInstanceIds);
+        }
+    }
+
+    /**
+     * 根终止写入前由调用方补充的删除原因和可选流程级审计 comment。
+     *
+     * @param deleteReason String，写入 Flowable 历史的根实例删除原因
+     * @param auditComment Comment，可选的流程级类型 6 审计 comment
+     */
+    public record RootTerminationInstruction(String deleteReason, Comment auditComment)
+    {
     }
 
     /**

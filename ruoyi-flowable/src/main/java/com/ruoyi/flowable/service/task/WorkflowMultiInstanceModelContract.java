@@ -311,13 +311,12 @@ public final class WorkflowMultiInstanceModelContract
     public static WorkflowMultiInstanceMode requireMode(FlowElement flowElement)
     {
         // 动态目标必须在来源完成事务内同步创建；skip、异步或非排他语义都会破坏即时写后对账。
+        // 边界事件由全局引擎中断监听器维护轮次终态，不改变节点必须为 Process 直接子级等其余白名单。
         if (!(flowElement instanceof UserTask userTask)
                 || !(userTask.getParentContainer() instanceof org.flowable.bpmn.model.Process)
                 || userTask.isForCompensation()
                 || StringUtils.hasText(userTask.getSkipExpression())
-                || hasAsyncContinuation(userTask)
-                || (userTask.getBoundaryEvents() != null
-                    && !userTask.getBoundaryEvents().isEmpty()))
+                || hasAsyncContinuation(userTask))
         {
             throw new IllegalArgumentException("当前节点不支持动态多实例");
         }

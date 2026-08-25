@@ -43,23 +43,23 @@ class WorkflowExceptionTranslatorTest
     }
 
     /**
-     * 验证模型版本数据库唯一约束竞争被翻译为稳定 409，且不泄露数据库约束细节。
+     * 验证通用异常翻译器不再通过数据库索引名称猜测模型业务冲突。
      *
      * @return 无返回值；并发冲突被误报为 500 或泄露 SQL 信息时测试失败
      */
     @org.junit.jupiter.api.Test
-    void mapsModelVersionUniqueConstraintViolationToConflict()
+    void doesNotGuessModelConflictFromConstraintMessage()
     {
         SQLException databaseCause = new SQLException(
-                "Duplicate entry 'expense-2' for key 'ACT_RE_MODEL.ACT_UNIQ_MODEL'",
+                "Duplicate entry for key 'some_unique_constraint'",
                 "23000", 1062);
         FlowableException source = new FlowableException("internal model persistence failure", databaseCause);
 
         ServiceException translated = translator.translate(source);
 
-        assertThat(translated.getCode()).isEqualTo(409);
-        assertThat(translated.getMessage()).isEqualTo(WorkflowExceptionTranslator.CONFLICT_MESSAGE)
-                .doesNotContain("ACT_UNIQ_MODEL", "expense");
+        assertThat(translated.getCode()).isEqualTo(500);
+        assertThat(translated.getMessage()).isEqualTo(
+                WorkflowExceptionTranslator.ENGINE_FAILURE_MESSAGE);
         assertThat(translated.getCause()).isSameAs(source);
     }
 
@@ -83,27 +83,20 @@ class WorkflowExceptionTranslatorTest
     }
 
     /**
-     * 验证事务提交阶段直接暴露的模型版本唯一键异常同样稳定翻译为 409。
+     * 验证普通唯一键异常不会被通用并发翻译器误判为可重试模型冲突。
      *
      * @return 无返回值；MyBatis 或 Spring 包装路径回退为 500 时测试失败
      */
     @org.junit.jupiter.api.Test
-    void mapsRuntimeWrappedModelVersionConstraintViolationToConflict()
+    void preservesRuntimeDuplicateKeyForDomainSpecificRecovery()
     {
         SQLException databaseCause = new SQLException(
-                "Duplicate entry 'expense-2' for key 'ACT_RE_MODEL.ACT_UNIQ_MODEL'",
+                "Duplicate entry for key 'some_unique_constraint'",
                 "23000", 1062);
         RuntimeException source = new RuntimeException("transaction commit failed", databaseCause);
 
         assertThat(translator.translateRetryableConcurrencyConflict(source))
-                .hasValueSatisfying(translated ->
-                {
-                    assertThat(translated.getCode()).isEqualTo(409);
-                    assertThat(translated.getMessage())
-                            .isEqualTo(WorkflowExceptionTranslator.CONFLICT_MESSAGE)
-                            .doesNotContain("ACT_UNIQ_MODEL", "expense");
-                    assertThat(translated.getCause()).isSameAs(source);
-                });
+                .isEmpty();
     }
 
     /**

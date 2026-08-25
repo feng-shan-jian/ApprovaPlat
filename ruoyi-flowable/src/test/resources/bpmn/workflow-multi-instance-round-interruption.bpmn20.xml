@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:flowable="http://flowable.org/bpmn"
+  targetNamespace="http://ruoyi.vip/workflow/multi-instance-round/interruption">
+
+  <signal id="interruptReentrySignal" name="interruptReentrySignal"/>
+  <signal id="resumeReentrySignal" name="resumeReentrySignal"/>
+  <signal id="nonInterruptSignal" name="nonInterruptSignal"/>
+  <signal id="interruptCallSignal" name="interruptCallSignal"/>
+  <signal id="childRoundFinishedWaitSignal" name="childRoundFinishedWaitSignal"/>
+
+  <process id="roundInterruptReentry" name="多实例中断后重入" isExecutable="true">
+    <startEvent id="reentryStart"/>
+    <userTask id="reentryReview" name="中断后重入会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <boundaryEvent id="interruptReentryBoundary" attachedToRef="reentryReview"
+      cancelActivity="true">
+      <signalEventDefinition signalRef="interruptReentrySignal"/>
+    </boundaryEvent>
+    <intermediateCatchEvent id="waitForReentry">
+      <signalEventDefinition signalRef="resumeReentrySignal"/>
+    </intermediateCatchEvent>
+    <endEvent id="reentryEnd"/>
+    <sequenceFlow sourceRef="reentryStart" targetRef="reentryReview"/>
+    <sequenceFlow sourceRef="reentryReview" targetRef="reentryEnd"/>
+    <sequenceFlow sourceRef="interruptReentryBoundary" targetRef="waitForReentry"/>
+    <sequenceFlow sourceRef="waitForReentry" targetRef="reentryReview"/>
+  </process>
+
+  <process id="roundNonInterruptBoundary" name="多实例非中断边界" isExecutable="true">
+    <startEvent id="nonInterruptStart"/>
+    <userTask id="nonInterruptReview" name="非中断边界会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <boundaryEvent id="nonInterruptBoundary" attachedToRef="nonInterruptReview"
+      cancelActivity="false">
+      <signalEventDefinition signalRef="nonInterruptSignal"/>
+    </boundaryEvent>
+    <userTask id="nonInterruptSideTask" name="非中断旁路任务" flowable:assignee="999"/>
+    <endEvent id="nonInterruptMainEnd"/>
+    <endEvent id="nonInterruptSideEnd"/>
+    <sequenceFlow sourceRef="nonInterruptStart" targetRef="nonInterruptReview"/>
+    <sequenceFlow sourceRef="nonInterruptReview" targetRef="nonInterruptMainEnd"/>
+    <sequenceFlow sourceRef="nonInterruptBoundary" targetRef="nonInterruptSideTask"/>
+    <sequenceFlow sourceRef="nonInterruptSideTask" targetRef="nonInterruptSideEnd"/>
+  </process>
+
+  <process id="roundCallInterruptRoot" name="CallActivity 中断根流程" isExecutable="true">
+    <startEvent id="callRootStart"/>
+    <callActivity id="interruptibleCall" name="可中断子流程"
+      calledElement="roundCallInterruptChild"/>
+    <boundaryEvent id="interruptCallBoundary" attachedToRef="interruptibleCall"
+      cancelActivity="true">
+      <signalEventDefinition signalRef="interruptCallSignal"/>
+    </boundaryEvent>
+    <userTask id="callRecoveryTask" name="子流程取消后恢复任务" flowable:assignee="999"/>
+    <endEvent id="callRootEnd"/>
+    <sequenceFlow sourceRef="callRootStart" targetRef="interruptibleCall"/>
+    <sequenceFlow sourceRef="interruptibleCall" targetRef="callRootEnd"/>
+    <sequenceFlow sourceRef="interruptCallBoundary" targetRef="callRecoveryTask"/>
+    <sequenceFlow sourceRef="callRecoveryTask" targetRef="callRootEnd"/>
+  </process>
+
+  <process id="roundCallInterruptChild" name="CallActivity 中断子流程" isExecutable="true">
+    <startEvent id="callChildStart"/>
+    <userTask id="callChildReview" name="子流程会签" flowable:assignee="${assignee}">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
+        <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
+      </extensionElements>
+      <multiInstanceLoopCharacteristics isSequential="false"
+        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:elementVariable="assignee">
+        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
+      </multiInstanceLoopCharacteristics>
+    </userTask>
+    <intermediateCatchEvent id="childRoundFinishedWait">
+      <signalEventDefinition signalRef="childRoundFinishedWaitSignal"/>
+    </intermediateCatchEvent>
+    <endEvent id="callChildEnd"/>
+    <sequenceFlow sourceRef="callChildStart" targetRef="callChildReview"/>
+    <sequenceFlow sourceRef="callChildReview" targetRef="childRoundFinishedWait"/>
+    <sequenceFlow sourceRef="childRoundFinishedWait" targetRef="callChildEnd"/>
+  </process>
+</definitions>

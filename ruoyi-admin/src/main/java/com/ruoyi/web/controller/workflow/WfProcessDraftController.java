@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
-import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.page.TableDataInfo;
@@ -27,7 +26,6 @@ import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftCreateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSummaryView;
 import com.ruoyi.flowable.service.process.WorkflowProcessDraftService;
 
@@ -77,13 +75,9 @@ public class WfProcessDraftController extends BaseController
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页记录数必须大于0")
             @Max(value = MAX_PAGE_SIZE, message = "每页记录数不能超过200") int pageSize)
     {
-        WorkflowPageResult<WorkflowProcessDraftSummaryView> page = draftService.list(
+        return getDataTable(draftService.list(
                 new WorkflowProcessDraftQueryDto(processName, updatedAfter, updatedBefore),
-                pageNum, pageSize);
-        TableDataInfo result = new TableDataInfo(page.rows(), page.total());
-        result.setCode(HttpStatus.SUCCESS);
-        result.setMsg("查询成功");
-        return result;
+                pageNum, pageSize));
     }
 
     /**

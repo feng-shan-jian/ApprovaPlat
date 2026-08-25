@@ -7,14 +7,13 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
-import com.ruoyi.flowable.config.WorkflowRuntimeProperties.AttachmentCleanupLockMode;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties.AttachmentStorageMode;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties.DeploymentTopology;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties.ExecutorTopology;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
 
 /**
- * 在生产 ApplicationContext 完成创建前校验 executor、附件存储和清理锁组合。
+ * 在生产 ApplicationContext 完成创建前校验 executor、附件存储和容量组合。
  */
 @Component
 public class WorkflowRuntimeReadinessValidator implements InitializingBean
@@ -26,10 +25,6 @@ public class WorkflowRuntimeReadinessValidator implements InitializingBean
     /** 审批引用允许常见工单路径分隔符，但拒绝空白、占位符和控制字符。 */
     private static final Pattern APPROVAL_REFERENCE_PATTERN = Pattern.compile(
             "[A-Za-z0-9][A-Za-z0-9._:/-]{2,127}");
-
-    /** MySQL 8 advisory lock 名限制为最多 64 个 ASCII 字符。 */
-    private static final Pattern MYSQL_LOCK_NAME_PATTERN = Pattern.compile(
-            "[A-Za-z0-9][A-Za-z0-9:._-]{0,63}");
 
     private final Environment environment;
     private final WorkflowRuntimeProperties runtimeProperties;
@@ -140,23 +135,14 @@ public class WorkflowRuntimeReadinessValidator implements InitializingBean
     }
 
     /**
-     * 校验共享存储声明和清理互斥组合；本校验不会把单机探针当作多节点证据。
+     * 校验共享存储声明；本校验不会把单机探针当作多节点证据。
      *
-     * @return void，共享卷标识或多节点清理锁不符合生产约束时抛出启动异常
+     * @return void，共享卷标识或多节点存储不符合生产约束时抛出启动异常
      */
     private void requireAttachmentTopology()
     {
         AttachmentStorageMode storageMode = requireNonNull(
                 runtimeProperties.getAttachmentStorageMode(), "附件存储模式不能为空");
-        AttachmentCleanupLockMode lockMode = requireNonNull(
-                runtimeProperties.getAttachmentCleanupLockMode(), "附件清理锁模式不能为空");
-        String lockName = runtimeProperties.getAttachmentCleanupLockName();
-
-        if (lockMode == AttachmentCleanupLockMode.MYSQL_ADVISORY
-                && !MYSQL_LOCK_NAME_PATTERN.matcher(lockName).matches())
-        {
-            throw invalid("附件 MySQL 清理锁名必须为1至64位稳定 ASCII");
-        }
         if (storageMode == AttachmentStorageMode.SHARED_FILESYSTEM)
         {
             requireStableId(runtimeProperties.getAttachmentStorageId(), "共享附件存储标识");
@@ -166,10 +152,6 @@ public class WorkflowRuntimeReadinessValidator implements InitializingBean
             if (storageMode != AttachmentStorageMode.SHARED_FILESYSTEM)
             {
                 throw invalid("多节点部署必须使用经批准的共享附件文件系统");
-            }
-            if (lockMode != AttachmentCleanupLockMode.MYSQL_ADVISORY)
-            {
-                throw invalid("多节点部署必须使用 MySQL advisory lock 互斥附件清理");
             }
         }
     }
@@ -187,11 +169,6 @@ public class WorkflowRuntimeReadinessValidator implements InitializingBean
                 < attachmentProperties.getMaxSize())
         {
             throw invalid("单用户临时附件容量不能小于单文件上限");
-        }
-        if (attachmentProperties.getMaxTotalBytes()
-                < attachmentProperties.getMaxTemporaryBytes())
-        {
-            throw invalid("附件全局容量不能小于单用户临时容量");
         }
         if (runtimeProperties.getMetricsSnapshotMaxAge().compareTo(
                 runtimeProperties.getMetricsRefreshInterval()) <= 0)

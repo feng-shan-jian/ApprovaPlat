@@ -51,6 +51,13 @@
           <el-table-column prop="errorSummary" label="失败摘要" min-width="170" show-overflow-tooltip />
           <el-table-column prop="createTime" label="创建时间" width="168" />
         </el-table>
+        <pagination
+          v-show="logTotal > 0"
+          :total="logTotal"
+          v-model:page="logQueryParams.pageNum"
+          v-model:limit="logQueryParams.pageSize"
+          @pagination="loadLogs"
+        />
       </el-tab-pane>
     </el-tabs>
 
@@ -100,6 +107,8 @@ const saving = ref(false)
 const sending = ref(false)
 const configs = ref([])
 const logs = ref([])
+const logTotal = ref(0)
+const logQueryParams = reactive({ pageNum: 1, pageSize: 10 })
 const configFormRef = ref(null)
 const sendFormRef = ref(null)
 const configDialog = reactive({ visible: false, form: emptyConfig() })
@@ -164,10 +173,20 @@ async function loadActiveTab() {
   loading.value = true
   try {
     if (activeTab.value === 'configs') configs.value = (await listSmsConfigs()).data || []
-    else logs.value = (await listSmsLogs()).data || []
+    else await loadLogs()
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 按当前页码查询短信发送审计并同步总记录数。
+ * @returns {Promise<void>} 查询完成后更新日志列表和分页总数。
+ */
+async function loadLogs() {
+  const response = await listSmsLogs(logQueryParams)
+  logs.value = response.rows || []
+  logTotal.value = response.total || 0
 }
 
 /**

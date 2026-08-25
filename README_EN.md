@@ -80,7 +80,7 @@ It is currently best suited to:
 - Separate design, submission, approval, administration, and audit duties, with object-level authorization for instances, tasks, deployments, attachments, and audit data.
 - Keep Flowable and business data in the same primary datasource and transaction boundary. The frontend does not keep a second authoritative workflow state.
 - Provide health checks, runtime snapshots, Micrometer/Prometheus metrics, attachment cleanup locks, and runtime readiness validation.
-- Include production configuration, systemd, Nginx, read-only database acceptance checks, and release-gate assets.
+- Include production configuration, systemd, and Nginx deployment assets.
 
 ## Screenshots
 
@@ -93,7 +93,7 @@ The view below shows a dynamic multi-instance approval completed in a real front
 The following cannot yet be described as fully supported:
 
 - The first production database baseline supports a clean, empty schema. It does not promise automatic upgrades from unpublished development databases.
-- `flowable.database-schema-update=false` is a fixed boundary. Production schema changes must use maintained SQL and read-only acceptance checks.
+- `flowable.database-schema-update=false` is a fixed boundary. Production schema changes must use maintained SQL and runtime validation.
 - `ComplexGateway` cannot currently be deployed. Native standard loops may round-trip as XML; business repetition uses the project's controlled-loop capability.
 - Async executors are disabled by default. Enabling timers, SLAs, or background work requires database, topology, capacity, monitoring, and single-executor coordination validation.
 - Multi-node deployment, shared attachment storage, real external side effects, backup recovery, and long-duration stability still require validation in the actual target environment.
@@ -133,7 +133,7 @@ mvn -pl ruoyi-admin -am -DskipTests package
 java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
 ```
 
-`-DskipTests` only shortens the first local startup. If `RUOYI_TOKEN_SECRET` is not set, a single-node installation generates and reuses a random HS512 secret in the user's private directory. See the [deployment guide](docs/operations/workflow-deployment.md) for production secrets and multi-node requirements.
+`-DskipTests` only shortens the first local startup. If `RUOYI_TOKEN_SECRET` is not set, a single-node installation generates and reuses a random HS512 secret in the user's private directory; production deployments must manage secrets and database configuration explicitly.
 
 ### 3. Start the frontend
 
@@ -148,10 +148,6 @@ npm run dev -- --host 127.0.0.1 --port 1024
 
 Open `http://127.0.0.1:1024`. The clean local baseline account is `admin` with initial password `wang`. It is for local development only; change it before exposing the service beyond your machine.
 
-To explore the included approval samples, follow the [sample provisioning guide](deployment/samples/workflow/README.md). It creates them through platform APIs rather than writing directly to Flowable or business tables.
-
-For production, follow [workflow installation and operations](docs/operations/workflow-deployment.md) and [release and rollback](docs/operations/workflow-release.md) instead of copying the local startup commands.
-
 ## Development and testing
 
 Common development checks:
@@ -164,7 +160,7 @@ npm run test:contracts
 npm run build:prod
 ```
 
-Acceptance testing against real MySQL and Redis instances, real roles and APIs, and a real browser requires additional environment variables and an isolated database. See [testing and acceptance](docs/testing/workflow-acceptance.md) and the [E2E guide](ruoyi-ui/tests/e2e/README.md).
+Verification against real MySQL and Redis instances, real roles, and APIs requires the corresponding runtime environment and isolated data.
 
 ## Technology
 
@@ -177,7 +173,7 @@ Acceptance testing against real MySQL and Redis instances, real roles and APIs, 
 | Designer              | BPMN.js 18.22.0                                        |
 | Rules and connectors  | CEL, JSqlParser, controlled Java / HTTP / SQL          |
 | Observability         | Spring Boot Actuator, Micrometer, Prometheus           |
-| Verification          | JUnit 5, Playwright, k6, read-only database acceptance |
+| Verification          | JUnit 5, frontend contract tests, production builds    |
 
 ## Repository layout
 
@@ -185,10 +181,10 @@ Acceptance testing against real MySQL and Redis instances, real roles and APIs, 
 ApprovaPlat/
 |- pom.xml       Maven reactor entry point
 |- ruoyi-*/      Spring Boot backend modules and Flowable domain module
-|- ruoyi-ui/     Vue 3 frontend, contract tests, and real-browser E2E
-|- sql/          Database baseline, business schema, and read-only checks
-|- docs/         Architecture, behavior, database, operations, and acceptance docs
-`- deployment/   Production config, systemd, Nginx, samples, and release gates
+|- ruoyi-ui/     Vue 3 frontend, workflow designer, and contract tests
+|- sql/          Database baseline, business schema, and menu permissions
+|- docs/         Architecture, behavior, database, and project decision docs
+`- deployment/   Production config, systemd, and Nginx
 ```
 
 ## Documentation
@@ -199,8 +195,6 @@ ApprovaPlat/
 | Constraints for every approval action          | [Approval behavior contract](docs/contracts/workflow-behavior.md)                                     |
 | Participant and MessageFlow                    | [Multi-pool collaboration contract](docs/contracts/workflow-collaboration.md)                         |
 | Clean installation and managed migrations      | [Workflow database baseline](docs/database/workflow-baseline.md)                                      |
-| Installation, operation, release, and rollback | [Deployment](docs/operations/workflow-deployment.md) / [Release](docs/operations/workflow-release.md) |
-| Testing and real-environment acceptance        | [Workflow testing and acceptance](docs/testing/workflow-acceptance.md)                                |
 
 ## Contributing
 

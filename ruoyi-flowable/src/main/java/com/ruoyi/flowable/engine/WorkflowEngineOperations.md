@@ -4,15 +4,15 @@
 
 `WorkflowEngineOperations` 是 Flowable 公共 API 的统一执行边界，负责建立 Spring 事务、在写事务内核验当前若依用户、设置并清理 Flowable 操作人，以及把 `FlowableException` 和可重试并发异常翻译为稳定的若依 `ServiceException`。
 
-任务认领、取消认领、委派、解决委派、转办和低层完成必须调用 [WorkflowProcessEngineAdapter](WorkflowProcessEngineAdapter.md)，不能由业务 Service 直接发出对应 `TaskService` 命令。模型发布、标准/按 key 发起、动态多实例和复杂生命周期由各自领域服务直接组合 Flowable 公共 API，但必须统一经过本组件建立事务、身份和异常边界，并自行完成对象权限、业务状态、幂等及数据一致性校验。
+任务认领、取消认领、委派、解决委派和转办必须调用 [WorkflowProcessEngineAdapter](WorkflowProcessEngineAdapter.md)，不能由业务 Service 直接发出对应 `TaskService` 命令。任务完成必须调用 `WorkflowTaskLifecycleService.completeTask(...)`。模型发布、标准/按 key 发起、动态多实例和复杂生命周期由各自领域服务直接组合 Flowable 公共 API，但必须统一经过本组件建立事务、身份和异常边界，并自行完成对象权限、业务状态、幂等及数据一致性校验。
 
 ## 接入与使用方式
 
 正常调用链如下：
 
 ```text
-Controller -> 任务业务 Service -> WorkflowProcessEngineAdapter -----------+
-Controller -> 模型/发起/多实例/生命周期领域 Service ----------------------+
+Controller -> 任务动作 Service -> WorkflowProcessEngineAdapter -----------+
+Controller -> 完成/模型/发起/多实例/生命周期领域 Service -----------------+
                                                                           v
                                                        WorkflowEngineOperations
                                                          -> WorkflowIdentityResolver
@@ -51,24 +51,23 @@ Controller -> 模型/发起/多实例/生命周期领域 Service ---------------
 
 ## 最小接入示例
 
-业务层通过 Adapter 间接获得本组件的事务、身份和异常边界，不直接完成 Flowable 任务：
+业务层通过正式任务生命周期服务间接获得本组件的事务、身份和异常边界，不直接完成 Flowable 任务：
 
 ```java
 @Service
 public class ApprovalService
 {
-    private final WorkflowProcessEngineAdapter processEngineAdapter;
+    private final WorkflowTaskLifecycleService taskLifecycleService;
 
-    public ApprovalService(WorkflowProcessEngineAdapter processEngineAdapter)
+    public ApprovalService(WorkflowTaskLifecycleService taskLifecycleService)
     {
-        this.processEngineAdapter = processEngineAdapter;
+        this.taskLifecycleService = taskLifecycleService;
     }
 
-    @Transactional(rollbackFor = Exception.class)
-    public void approve(String taskId, Map<String, Object> variables)
+    public void approve(String taskId, String comment, Map<String, Object> variables)
     {
-        // 此处先完成业务对象权限、状态与幂等校验，并更新同事务业务记录。
-        processEngineAdapter.completeTask(taskId, variables);
+        taskLifecycleService.completeTask(new WorkflowTaskCompleteRequest(
+                taskId, comment, variables, List.of(), List.of(), null));
     }
 }
 ```

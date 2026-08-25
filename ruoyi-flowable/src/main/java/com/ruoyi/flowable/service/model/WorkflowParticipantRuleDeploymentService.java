@@ -79,7 +79,7 @@ public class WorkflowParticipantRuleDeploymentService
      * 无副作用核验作者参与者规则的正式身份目标和 FORM_USER 字段。
      *
      * 显式校验、模型保存和部署预检均调用该方法；它只查询正式身份目录并解析本次冻结的
-     * 表单字段目录，不写规则快照、Flowable 模型或保存幂等记录。
+     * 表单字段目录，不写规则快照或 Flowable 模型，也不介入模型摘要并发控制。
      *
      * @param authorDocument WorkflowBpmnDocument，已通过作者安全校验的 BPMN
      * @param formFieldCatalog WorkflowAuthorFormFieldCatalog，本次事务冻结的正式用户主键字段目录

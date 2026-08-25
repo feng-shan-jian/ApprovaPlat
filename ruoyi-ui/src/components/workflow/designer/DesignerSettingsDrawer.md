@@ -2,7 +2,7 @@
 
 ## 组件简介与作用
 
-`DesignerSettingsDrawer` 编辑当前用户保存在 `wf_designer_preference` 中的正式偏好。组件维护可取消的本地草稿，但不会把草稿当成已保存配置；只有父页面真实 API 成功并回写 `preference` 后，设计器才采用新状态。
+`DesignerSettingsDrawer` 编辑当前用户保存在浏览器 `localStorage` 中的非业务界面偏好。组件维护可取消草稿；父页面按用户和协议版本写入白名单字段并回写 `preference` 后，设计器采用新状态。
 
 ## 使用方式
 
@@ -12,6 +12,7 @@
   :preference="designerPreference"
   :saving="preferenceSaving"
   @save="savePreference"
+  @reset="restoreDefaultPreference"
 />
 ```
 
@@ -20,8 +21,8 @@
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `modelValue` | `boolean` | 抽屉显示状态。 |
-| `preference` | `object` | 主题、网格、小地图、Lint、Token 模拟和面板状态。 |
-| `saving` | `boolean` | 真实后端保存加载状态。 |
+| `preference` | `object` | 主题、网格、小地图、Token 模拟和面板状态。 |
+| `saving` | `boolean` | 浏览器存储写入期间的加载状态。 |
 
 ## Emits
 
@@ -29,6 +30,7 @@
 | --- | --- | --- |
 | `update:modelValue` | `boolean` | 打开或关闭抽屉。 |
 | `save` | `object` | 提交字段完整的偏好草稿。 |
+| `reset` | 无 | 请求父页面只删除当前用户键并恢复当前协议默认值。 |
 
 ## 公开方法
 
@@ -36,6 +38,7 @@
 
 ## 关键设计思路
 
-- 抽屉打开时总是从服务端回读状态重新创建草稿，取消不会改变已应用偏好。
-- 不使用 `localStorage`、Cookie 或内存默认值冒充持久化结果。
-- 父页面在 API 成功后回写偏好并关闭抽屉，失败时保留草稿供用户修正或重试。
+- 抽屉打开时从父页面当前偏好重新创建草稿，取消不会改变已应用偏好。
+- 父页面使用 `workflow:designer:preference:v1:{userId}` 隔离用户，值固定包含 `schemaVersion: 1` 和六个白名单字段。
+- 主题默认 `SYSTEM`；网格和小地图默认开启；Token 模拟和属性面板折叠默认关闭。损坏 JSON、旧协议或非法字段由父页面恢复为这些默认值。
+- `reset` 不枚举或清空其他用户键；登出也不删除偏好。

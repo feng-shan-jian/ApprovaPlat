@@ -3,16 +3,18 @@ package com.ruoyi.flowable.service.model;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfBpmnEventCode;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnEventCodeRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventAuditView;
-import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventNotificationView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfBpmnEventMapper;
+import com.ruoyi.flowable.service.support.WorkflowPageSupport;
 
 /**
- * BPMN 错误与升级编码目录、审计和站内通知领域服务。
+ * BPMN 错误与升级编码目录和运行审计领域服务。
  */
 @Service
 public class WorkflowBpmnEventCodeService
@@ -163,36 +165,20 @@ public class WorkflowBpmnEventCodeService
         return code;
     }
 
-    /** @return List&lt;WorkflowBpmnEventAuditView&gt;，最近运行审计。 */
-    public List<WorkflowBpmnEventAuditView> listAudit()
-    {
-        return engineOperations.read(() -> List.copyOf(eventMapper.selectAuditList()));
-    }
-
-    /** @return List&lt;WorkflowBpmnEventNotificationView&gt;，当前用户最近通知。 */
-    public List<WorkflowBpmnEventNotificationView> myNotifications()
-    {
-        return engineOperations.read(() ->
-                List.copyOf(eventMapper.selectNotifications(
-                        com.ruoyi.common.utils.SecurityUtils.getUserId().toString())));
-    }
-
     /**
-     * 标记当前用户拥有的通知已读。
-     * @param notificationId Long，通知主键
-     * @return void，不存在、已读或越权时返回 404，避免泄露他人通知
+     * 按运维筛选条件分页查询 BPMN 事件运行审计。
+     * @param query BpmnEventAudit，状态、类型、来源、关键字和时间范围
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @return PageResult&lt;WorkflowBpmnEventAuditView&gt;，当前页和符合条件的总数
      */
-    public void markNotificationRead(Long notificationId)
+    public PageResult<WorkflowBpmnEventAuditView> listAudit(
+            WorkflowOperationsQuery.BpmnEventAudit query, int pageNum, int pageSize)
     {
-        requirePositiveId(notificationId);
-        engineOperations.writeAsCurrentUser(identity ->
-        {
-            if (eventMapper.markNotificationRead(notificationId, identity.userId()) != 1)
-            {
-                throw new ServiceException("BPMN 事件通知不存在或已处理", HttpStatus.NOT_FOUND);
-            }
-            return null;
-        });
+        WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());
+        return engineOperations.read(() -> WorkflowPageSupport.query(pageNum, pageSize,
+                () -> eventMapper.countAuditList(query),
+                (offset, size) -> eventMapper.selectAuditList(query, offset, size)));
     }
 
     /** @param eventType String，待核验类型；@return void，非法类型抛出 400。 */

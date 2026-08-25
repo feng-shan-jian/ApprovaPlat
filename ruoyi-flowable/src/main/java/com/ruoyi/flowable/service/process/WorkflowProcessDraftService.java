@@ -18,33 +18,29 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
-import tools.jackson.databind.node.ObjectNode;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfProcessDraft;
-import com.ruoyi.flowable.domain.WfProcessDraftAudit;
 import com.ruoyi.flowable.domain.WorkflowProcessDraftStatus;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftCreateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
-import com.ruoyi.flowable.domain.vo.WorkflowPageResult;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSubmitView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSummaryView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartMultiInstanceAssignmentView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
-import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.mapper.WfProcessDraftAuditMapper;
 import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 
 /**
- * 企业流程申请草稿的本人授权、CAS 保存、附件对账、审计和正式提交服务。
+ * 企业流程申请草稿的本人授权、CAS 保存、附件对账和正式提交服务。
  */
 @Service
 public class WorkflowProcessDraftService
@@ -63,12 +59,12 @@ public class WorkflowProcessDraftService
     private final WorkflowEngineOperations engineOperations;
     private final WorkflowIdentityResolver identityResolver;
     private final RepositoryService repositoryService;
-    private final WorkflowProcessQueryService processQueryService;
+    /** 可发起定义与不可变部署表单查询边界。 */
+    private final WorkflowProcessDefinitionQueryService definitionQueryService;
     private final WorkflowProcessStartService processStartService;
     private final WorkflowStartVariableValidator variableValidator;
     private final WorkflowAttachmentService attachmentService;
     private final WfProcessDraftMapper draftMapper;
-    private final WfProcessDraftAuditMapper auditMapper;
     /** 与部署删除共用的 Flowable 部署行锁，阻止创建孤儿活动草稿。 */
     private final WorkflowProcessDefinitionLockMapper processDefinitionLockMapper;
     private final ObjectMapper objectMapper = JsonMapper.shared();
@@ -79,33 +75,30 @@ public class WorkflowProcessDraftService
      * @param engineOperations WorkflowEngineOperations，统一身份和事务边界
      * @param identityResolver WorkflowIdentityResolver，当前有效用户解析器
      * @param repositoryService RepositoryService，真实流程定义查询 API
-     * @param processQueryService WorkflowProcessQueryService，starter 和部署表单快照门禁
+     * @param definitionQueryService WorkflowProcessDefinitionQueryService，starter 和部署表单快照门禁
      * @param processStartService WorkflowProcessStartService，真实 Flowable 发起服务
      * @param variableValidator WorkflowStartVariableValidator，草稿和正式字段校验器
      * @param attachmentService WorkflowAttachmentService，草稿附件对账和迁移服务
      * @param draftMapper WfProcessDraftMapper，草稿正式持久化 Mapper
-     * @param auditMapper WfProcessDraftAuditMapper，草稿业务审计 Mapper
      * @param processDefinitionLockMapper WorkflowProcessDefinitionLockMapper，Flowable 部署行锁 Mapper
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowProcessDraftService(WorkflowEngineOperations engineOperations,
             WorkflowIdentityResolver identityResolver, RepositoryService repositoryService,
-            WorkflowProcessQueryService processQueryService,
+            WorkflowProcessDefinitionQueryService definitionQueryService,
             WorkflowProcessStartService processStartService,
             WorkflowStartVariableValidator variableValidator,
             WorkflowAttachmentService attachmentService, WfProcessDraftMapper draftMapper,
-            WfProcessDraftAuditMapper auditMapper,
             WorkflowProcessDefinitionLockMapper processDefinitionLockMapper)
     {
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
         this.repositoryService = repositoryService;
-        this.processQueryService = processQueryService;
+        this.definitionQueryService = definitionQueryService;
         this.processStartService = processStartService;
         this.variableValidator = variableValidator;
         this.attachmentService = attachmentService;
         this.draftMapper = draftMapper;
-        this.auditMapper = auditMapper;
         this.processDefinitionLockMapper = processDefinitionLockMapper;
     }
 
@@ -115,13 +108,13 @@ public class WorkflowProcessDraftService
      * @param filter WorkflowProcessDraftQueryDto，流程名称和更新时间条件
      * @param pageNum int，从 1 开始的页码
      * @param pageSize int，单页记录数
-     * @return WorkflowPageResult&lt;WorkflowProcessDraftSummaryView&gt;，本人草稿分页
+     * @return PageResult&lt;WorkflowProcessDraftSummaryView&gt;，本人草稿分页
      */
-    public WorkflowPageResult<WorkflowProcessDraftSummaryView> list(
+    public PageResult<WorkflowProcessDraftSummaryView> list(
             WorkflowProcessDraftQueryDto filter, int pageNum, int pageSize)
     {
         requirePage(pageNum, pageSize);
-        WorkflowPageResult<WfProcessDraft> draftPage = engineOperations.read(() ->
+        PageResult<WfProcessDraft> draftPage = engineOperations.read(() ->
         {
             long ownerUserId = Long.parseLong(identityResolver.resolveCurrentIdentity().userId());
             String processName = escapeLike(optionalText(filter == null ? null : filter.processName(), 255));
@@ -132,16 +125,16 @@ public class WorkflowProcessDraftService
                     updatedAfter, updatedBefore);
             if (total == 0)
             {
-                return new WorkflowPageResult<>(List.of(), 0);
+                return new PageResult<>(List.of(), 0);
             }
             int offset = Math.multiplyExact(pageNum - 1, pageSize);
             List<WfProcessDraft> rows = draftMapper.selectOwnedActivePage(ownerUserId,
                     processName, updatedAfter, updatedBefore, offset, pageSize);
-            return new WorkflowPageResult<>(rows, total);
+            return new PageResult<>(rows, total);
         });
         // 实时可用性查询可能稳定返回定义删除、停用或过期；必须在本人数据事务提交后投影，
         // 避免内层预期业务异常把草稿列表的共享只读事务标记为 rollback-only。
-        return new WorkflowPageResult<>(draftPage.rows().stream().map(this::toSummary).toList(),
+        return new PageResult<>(draftPage.rows().stream().map(this::toSummary).toList(),
                 draftPage.total());
     }
 
@@ -189,7 +182,7 @@ public class WorkflowProcessDraftService
             ProcessDefinition definition = requireDefinition(definitionId);
             // 与部署删除统一先锁 ACT_RE_DEPLOYMENT，再读取部署快照并写入 wf_process_draft。
             String deploymentId = lockDraftDeployment(definition);
-            WorkflowProcessFormView form = processQueryService.getProcessForm(
+            WorkflowProcessFormView form = definitionQueryService.getProcessForm(
                     new WorkflowProcessFormQueryDto(definitionId,
                             deploymentId, null));
             WorkflowValidatedStartVariables validated = variableValidator.validateForDraft(
@@ -209,8 +202,6 @@ public class WorkflowProcessDraftService
                     businessKey, WorkflowProcessDraftStatus.ACTIVE, 1L, null, null, null,
                     null, null);
             requireOne(draftMapper.insert(draft), "流程申请草稿写入失败");
-            insertAudit(draft, "CREATED", null, WorkflowProcessDraftStatus.ACTIVE,
-                    null, 1L, null);
             // 先落草稿主行满足附件外键，再绑定首次保存前已经上传的 TEMP 附件；失败时同事务回滚。
             attachmentService.reconcileDraftAttachments(actor.userId(), draftId,
                     validated.attachmentIdsByField());
@@ -247,9 +238,6 @@ public class WorkflowProcessDraftService
                     request.expectedVersion(), writeJson(validated.variables()),
                     writeJson(memberSelections),
                     optionalText(request.businessKey(), 255)));
-            insertAudit(current, "SAVED", WorkflowProcessDraftStatus.ACTIVE,
-                    WorkflowProcessDraftStatus.ACTIVE, current.revisionNo(),
-                    current.revisionNo() + 1, null);
             return toView(requireOwned(draftMapper.selectOwnedById(normalizedId, ownerUserId)));
         });
     }
@@ -276,15 +264,12 @@ public class WorkflowProcessDraftService
             requireActiveRevision(current, expectedVersion);
             attachmentService.deleteDraftAttachments(actor.userId(), normalizedId);
             requireCas(draftMapper.markDeleted(normalizedId, ownerUserId, expectedVersion));
-            insertAudit(current, "DELETED", WorkflowProcessDraftStatus.ACTIVE,
-                    WorkflowProcessDraftStatus.DELETED, current.revisionNo(),
-                    current.revisionNo() + 1, null);
             return null;
         });
     }
 
     /**
-     * 以草稿行锁实现重复提交幂等，并在同一事务创建实例、迁移附件、审计和置为已提交。
+     * 以草稿行锁实现重复提交幂等，并在同一事务创建实例、迁移附件和置为已提交。
      *
      * @param draftId String，草稿 UUID
      * @param request WorkflowProcessDraftSubmitRequest，期望版本和完整正式字段值
@@ -326,21 +311,17 @@ public class WorkflowProcessDraftService
             Map<String, List<Long>> memberSelections = normalizeDraftSelections(
                     readAssignments(current.startMultiInstanceAssignments()),
                     request.multiInstanceUserIds());
-            // startDraft 内部重新执行身份、starter、最新版锁、快照、正式必填和附件完整性校验。
-            WorkflowProcessInstanceSnapshot instance = processStartService.startDraft(current,
-                    optionalText(request.businessKey(), 255), request.variables(),
-                    memberSelections);
-            WorkflowValidatedStartVariables validated = variableValidator.validateForStart(
-                    current.formSnapshot(), request.variables());
+            // 业务主键只规范化一次；启动结果同时带回唯一一次 schema 校验得到的正式字段。
+            String businessKey = optionalText(request.businessKey(), 255);
+            WorkflowProcessStartService.DraftStartResult started = processStartService
+                    .startDraft(actor, current, businessKey, request.variables(),
+                            memberSelections);
             requireCas(draftMapper.markSubmitted(normalizedId, ownerUserId,
-                    request.expectedVersion(), instance.id(), writeJson(validated.variables()),
-                    writeJson(memberSelections),
-                    optionalText(request.businessKey(), 255)));
-            insertAudit(current, "SUBMITTED", WorkflowProcessDraftStatus.ACTIVE,
-                    WorkflowProcessDraftStatus.SUBMITTED, current.revisionNo(),
-                    current.revisionNo() + 1, instance.id());
-            return new WorkflowProcessDraftSubmitView(normalizedId, instance.id(),
-                    instance.processDefinitionId(), current.revisionNo() + 1);
+                    request.expectedVersion(), started.instance().id(),
+                    writeJson(started.normalizedVariables()), writeJson(memberSelections),
+                    businessKey));
+            return new WorkflowProcessDraftSubmitView(normalizedId, started.instance().id(),
+                    started.instance().processDefinitionId(), current.revisionNo() + 1);
         });
     }
 
@@ -436,7 +417,7 @@ public class WorkflowProcessDraftService
      */
     private WorkflowProcessFormView requireLiveSnapshot(WfProcessDraft draft)
     {
-        WorkflowProcessFormView form = processQueryService.getProcessForm(
+        WorkflowProcessFormView form = definitionQueryService.getProcessForm(
                 new WorkflowProcessFormQueryDto(draft.processDefinitionId(),
                         draft.deploymentId(), null));
         if (!draft.deploymentId().equals(form.deploymentId())
@@ -452,33 +433,6 @@ public class WorkflowProcessDraftService
             throw conflict("草稿绑定的部署表单快照已失效", "DRAFT_SNAPSHOT_MISMATCH");
         }
         return form;
-    }
-
-    /**
-     * 写入不含表单明文的草稿状态迁移审计，并要求正式审计表单行落库。
-     *
-     * @param draft WfProcessDraft，发生状态或版本变化的草稿事实
-     * @param action String，CREATED、SAVED、DELETED 或 SUBMITTED 业务动作
-     * @param fromStatus WorkflowProcessDraftStatus，可空；迁移前草稿状态
-     * @param toStatus WorkflowProcessDraftStatus，迁移后的草稿状态
-     * @param fromRevision Long，可空；迁移前 CAS 版本
-     * @param toRevision long，迁移后 CAS 版本
-     * @param processInstanceId String，可空；提交成功后关联的真实流程实例主键
-     * @return void，审计未精确写入一行时抛出数据异常并回滚外层事务
-     */
-    private void insertAudit(WfProcessDraft draft, String action,
-            WorkflowProcessDraftStatus fromStatus, WorkflowProcessDraftStatus toStatus,
-            Long fromRevision, long toRevision, String processInstanceId)
-    {
-        ObjectNode detail = objectMapper.createObjectNode();
-        detail.put("processDefinitionId", draft.processDefinitionId());
-        detail.put("deploymentId", draft.deploymentId());
-        detail.put("formSnapshotSha256", draft.formSnapshotSha256());
-        WfProcessDraftAudit audit = new WfProcessDraftAudit(draft.draftId(),
-                draft.ownerUserId(), action, fromStatus == null ? null : fromStatus.name(),
-                toStatus.name(), fromRevision, toRevision, processInstanceId,
-                writeJson(detail));
-        requireOne(auditMapper.insert(audit), "流程申请草稿审计写入失败");
     }
 
     /**

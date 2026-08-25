@@ -9,7 +9,7 @@
 ```vue
 <CelExpressionEditor
   v-model="propertyState.extensionConfig"
-  @change="updateServiceTask"
+  @change="updateControlledTask"
 />
 ```
 
@@ -51,6 +51,6 @@
  */
 function updateCelConfiguration(configJson) {
   propertyState.extensionConfig = configJson
-  updateServiceTask()
+  updateControlledTask()
 }
 ```

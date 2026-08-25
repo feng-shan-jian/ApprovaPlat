@@ -1,9 +1,10 @@
 import request from '@/utils/request'
 
 /**
- * 查询最近 1000 条脱敏运行事件台账。
- * @returns {Promise<object>} AjaxResult.data 为成功、失败和幂等结果数组。
+ * 分页查询脱敏运行事件台账。
+ * @param {object} query 分页、状态、类型、来源和时间筛选。
+ * @returns {Promise<object>} 若依 rows/total 分页结果。
  */
-export function listRuntimeEvents() {
-  return request({ url: '/workflow/runtime-event-audit/list', method: 'get' })
+export function listRuntimeEvents(query) {
+  return request({ url: '/workflow/runtime-event-audit/list', method: 'get', params: query })
 }

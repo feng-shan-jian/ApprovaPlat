@@ -1,9 +1,6 @@
 package com.ruoyi.flowable.runtime;
 
 import java.time.Clock;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -11,7 +8,6 @@ import java.util.function.ToDoubleFunction;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.binder.MeterBinder;
-import jakarta.annotation.PreDestroy;
 import org.flowable.job.service.impl.asyncexecutor.AsyncExecutor;
 import org.flowable.spring.SpringProcessEngineConfiguration;
 import org.slf4j.Logger;
@@ -20,10 +16,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import com.ruoyi.flowable.mapper.WorkflowRuntimeMetricsMapper;
-import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
-import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
-import com.ruoyi.flowable.config.WorkflowRuntimeProperties.AttachmentStorageMode;
-import com.ruoyi.flowable.service.attachment.WorkflowAttachmentCleanupCoordinator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
 
 /**
@@ -42,20 +34,9 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     private final WorkflowRuntimeMetricsMapper metricsMapper;
     private final SpringProcessEngineConfiguration engineConfiguration;
     private final WorkflowAttachmentStorage attachmentStorage;
-    private final WorkflowAttachmentCleanupCoordinator cleanupCoordinator;
-    private final WorkflowRuntimeProperties runtimeProperties;
-    private final WorkflowAttachmentProperties attachmentProperties;
     private final Clock clock;
 
-    /** 文件系统或驱动阻塞只占用此单一 daemon worker，不能占住 Spring 调度线程。 */
-    private final ExecutorService refreshExecutor = Executors.newSingleThreadExecutor(task ->
-    {
-        Thread worker = new Thread(task, "workflow-runtime-metrics-refresh");
-        worker.setDaemon(true);
-        return worker;
-    });
-
-    /** 防止上一轮阻塞时重复提交采集任务并形成无界队列或线程增长。 */
+    /** 标记指标刷新任务是否正在采集，供运维指标实时观察刷新状态。 */
     private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
 
     /** 最近一次成功快照采用原子整体替换，避免一次抓取读到跨批次混合字段。 */
@@ -74,21 +55,14 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param metricsMapper WorkflowRuntimeMetricsMapper，单次数据库往返的合并只读查询
      * @param engineConfiguration SpringProcessEngineConfiguration，两个 executor 实际状态
      * @param attachmentStorage WorkflowAttachmentStorage，当前挂载点可用空间
-     * @param cleanupCoordinator WorkflowAttachmentCleanupCoordinator，清理锁实时和降级状态
-     * @param runtimeProperties WorkflowRuntimeProperties，生产门禁、存储模式和共享卷标识
-     * @param attachmentProperties WorkflowAttachmentProperties，生产磁盘低水位
      * @return 无返回值，构造后由 Spring 调度并绑定到 Micrometer
      */
     @Autowired
     public WorkflowRuntimeMetrics(WorkflowRuntimeMetricsMapper metricsMapper,
             SpringProcessEngineConfiguration engineConfiguration,
-            WorkflowAttachmentStorage attachmentStorage,
-            WorkflowAttachmentCleanupCoordinator cleanupCoordinator,
-            WorkflowRuntimeProperties runtimeProperties,
-            WorkflowAttachmentProperties attachmentProperties)
+            WorkflowAttachmentStorage attachmentStorage)
     {
-        this(metricsMapper, engineConfiguration, attachmentStorage, cleanupCoordinator,
-                runtimeProperties, attachmentProperties, Clock.systemUTC());
+        this(metricsMapper, engineConfiguration, attachmentStorage, Clock.systemUTC());
     }
 
     /**
@@ -97,70 +71,43 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param metricsMapper WorkflowRuntimeMetricsMapper，合并指标查询
      * @param engineConfiguration SpringProcessEngineConfiguration，executor 实际状态
      * @param attachmentStorage WorkflowAttachmentStorage，附件挂载点边界
-     * @param cleanupCoordinator WorkflowAttachmentCleanupCoordinator，清理锁状态
-     * @param runtimeProperties WorkflowRuntimeProperties，生产门禁与存储模式
-     * @param attachmentProperties WorkflowAttachmentProperties，附件磁盘低水位
      * @param clock Clock，快照完成时间来源
      * @return 无返回值，依赖会固定到当前组件
      */
     WorkflowRuntimeMetrics(WorkflowRuntimeMetricsMapper metricsMapper,
             SpringProcessEngineConfiguration engineConfiguration,
-            WorkflowAttachmentStorage attachmentStorage,
-            WorkflowAttachmentCleanupCoordinator cleanupCoordinator,
-            WorkflowRuntimeProperties runtimeProperties,
-            WorkflowAttachmentProperties attachmentProperties, Clock clock)
+            WorkflowAttachmentStorage attachmentStorage, Clock clock)
     {
         this.metricsMapper = metricsMapper;
         this.engineConfiguration = engineConfiguration;
         this.attachmentStorage = attachmentStorage;
-        this.cleanupCoordinator = cleanupCoordinator;
-        this.runtimeProperties = runtimeProperties;
-        this.attachmentProperties = attachmentProperties;
         this.clock = clock;
     }
 
     /**
-     * 从 Spring 调度线程向唯一采集 worker 提交刷新；上一轮未结束时跳过本轮，避免共享
-     * 文件系统硬阻塞拖死全局 scheduler 或形成无界任务积压。
+     * 在 Spring 标准调度线程中同步刷新指标；fixedDelay 保证同一任务不会与自身重叠。
      *
-     * @return void，无返回值，提交后立即释放 Spring 调度线程
+     * @return void，无返回值，本轮采集结束后才开始计算下一次固定延迟
      */
     @Scheduled(
             initialDelayString = "${flowable.runtime.metrics-refresh-initial-delay:PT10S}",
             fixedDelayString = "${flowable.runtime.metrics-refresh-interval:PT1M}")
     public void scheduleSnapshotRefresh()
     {
-        if (!refreshInFlight.compareAndSet(false, true))
-        {
-            return;
-        }
+        refreshInFlight.set(true);
         try
         {
-            refreshExecutor.execute(() ->
-            {
-                try
-                {
-                    refreshSnapshot();
-                }
-                finally
-                {
-                    refreshInFlight.set(false);
-                }
-            });
+            refreshSnapshot();
         }
-        catch (RejectedExecutionException failure)
+        finally
         {
             refreshInFlight.set(false);
-            if (!refreshExecutor.isShutdown())
-            {
-                recordRefreshFailure(failure);
-            }
         }
     }
 
     /**
      * 原子刷新数据库、存储和 executor 快照；失败时保留上次成功值并累计失败次数。
-     * 本函数由专用 worker 调用，包内测试可同步执行以验证完整采集语义。
+     * 本函数由指标刷新任务调用，包内测试可同步执行以验证完整采集语义。
      *
      * @return void，无返回值，下一次固定延迟调度会继续重试
      */
@@ -173,8 +120,7 @@ public class WorkflowRuntimeMetrics implements MeterBinder
             {
                 throw new IllegalStateException("工作流运行指标合并查询未返回结果");
             }
-            // 生产周期采集必须覆盖真实写入、跨目录移动、回读、清理和低水位检查；
-            // readiness 请求线程只会读取这里完成后原子发布的结果。
+            // 指标采集只读取文件系统可用空间，启动探针由 readiness 单独执行一次。
             long usableBytes = collectAttachmentUsableBytes();
             if (usableBytes < 0L)
             {
@@ -199,28 +145,18 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     }
 
     /**
-     * 按最终运行配置采集附件存储状态；生产门禁开启时执行完整可写探针，开发和测试环境
-     * 只读取可用空间，避免非生产实例周期性创建运维探针文件。
-     *
-     * @return long，本轮完整探针清理后附件文件系统的非负可用字节数
+     * 读取附件所在文件系统的可用空间，不创建或删除任何文件。
+     * @return long，文件系统可用字节数
      */
     private long collectAttachmentUsableBytes()
     {
-        if (!runtimeProperties.isProductionGateEnabled())
-        {
-            return attachmentStorage.usableSpace();
-        }
-        String expectedStorageId = runtimeProperties.getAttachmentStorageMode()
-                == AttachmentStorageMode.SHARED_FILESYSTEM
-                        ? runtimeProperties.getAttachmentStorageId() : null;
-        return attachmentStorage.probeRuntimeReadiness(expectedStorageId,
-                attachmentProperties.getMinFreeBytes());
+        return attachmentStorage.usableSpace();
     }
 
     /**
      * 累计一次采集失败并按连续异常类型抑制重复日志，不记录 SQL、路径或异常正文。
      *
-     * @param failure RuntimeException，采集或任务提交阶段异常
+     * @param failure RuntimeException，指标采集阶段异常
      * @return void，无返回值
      */
     private void recordRefreshFailure(RuntimeException failure)
@@ -290,24 +226,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
                 .description("当前 JVM Flowable executor 实际激活状态")
                 .tag("type", "async_history")
                 .register(registry);
-        Gauge.builder("workflow.attachment.cleanup.lock.active", cleanupCoordinator,
-                coordinator -> coordinator.isLockActive() ? 1.0D : 0.0D)
-                .description("当前 JVM 是否持有附件 MySQL 清理锁")
-                .register(registry);
-        Gauge.builder("workflow.attachment.cleanup.lock.degraded", cleanupCoordinator,
-                coordinator -> coordinator.isLockDegraded() ? 1.0D : 0.0D)
-                .description("当前 JVM 是否发生过无法确认成功的附件清理锁获取或释放")
-                .register(registry);
-        Gauge.builder("workflow.attachment.cleanup.lock.acquisition.failures",
-                cleanupCoordinator,
-                WorkflowAttachmentCleanupCoordinator::getLockAcquisitionFailures)
-                .description("附件 MySQL 清理锁获取结果不确定累计次数")
-                .register(registry);
-        Gauge.builder("workflow.attachment.cleanup.lock.release.failures",
-                cleanupCoordinator,
-                WorkflowAttachmentCleanupCoordinator::getLockReleaseFailures)
-                .description("附件 MySQL 清理锁释放失败累计次数")
-                .register(registry);
         Gauge.builder("workflow.runtime.metrics.snapshot.available", this,
                 metrics -> metrics.snapshot.get().available() ? 1.0D : 0.0D)
                 .description("工作流运行指标是否已有成功快照")
@@ -322,7 +240,7 @@ public class WorkflowRuntimeMetrics implements MeterBinder
                 .register(registry);
         Gauge.builder("workflow.runtime.metrics.refresh.inflight", refreshInFlight,
                 inFlight -> inFlight.get() ? 1.0D : 0.0D)
-                .description("工作流运行指标采集 worker 是否仍在执行上一轮刷新")
+                .description("工作流运行指标刷新任务是否正在执行")
                 .register(registry);
     }
 
@@ -447,18 +365,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
             return -1L;
         }
         return Math.max(0L, clock.millis() - current.capturedAtMillis());
-    }
-
-    /**
-     * 应用关闭时中断并停止专用采集 worker；线程为 daemon，底层硬挂载忽略中断时也不会
-     * 阻止 JVM 退出。
-     *
-     * @return void，无返回值
-     */
-    @PreDestroy
-    public void shutdownRefreshExecutor()
-    {
-        refreshExecutor.shutdownNow();
     }
 
     /**

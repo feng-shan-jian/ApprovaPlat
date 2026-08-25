@@ -53,13 +53,18 @@
 - 附件状态不是 `TEMP`、`DRAFT` 或 `BOUND` 时拒绝移除，避免对异常生命周期数据执行错误操作。
 - 客户端的数量、类型和大小限制仅用于即时反馈，最终约束由后端强制执行。
 - 同一字段的上传、删除和引用移除按顺序处理；每次等待父级 `v-model` 回写后再处理下一项，避免并发完成覆盖附件数组。
-- 父表单提交时应把附件元数据转换为 UUID 数组，并由后端在流程发起或任务完成事务中校验、绑定和持久化引用。
+- 父表单提交时应把附件元数据转换为 UUID 数组；开始表单必须先保存到持久化草稿，再由草稿提交事务校验、绑定并创建实例，任务表单则在任务完成事务中处理。
 
 ## 最小接入示例
 
 ```js
 const attachmentIds = attachments.value.map(item => item.attachmentId)
-await startProcess(definitionId, {
+const created = await createProcessDraft({
+  processDefinitionId,
+  variables: { evidenceFiles: attachmentIds }
+})
+await submitProcessDraft(created.data.draftId, {
+  expectedVersion: created.data.revisionNo,
   variables: { evidenceFiles: attachmentIds }
 })
 ```

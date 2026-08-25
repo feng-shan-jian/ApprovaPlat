@@ -1,5 +1,6 @@
 -- ApprovaPlat 短信与 S3 兼容 OSS 正式数据结构及菜单权限。
--- 本脚本可重复执行；执行前仍应按正式变更流程完成整库备份。
+-- 本脚本面向空库或已完成通知模型迁移的库；不作为含 INBOX 历史行的旧库升级脚本。
+-- 执行前仍应按正式变更流程完成整库备份。
 
 CREATE TABLE IF NOT EXISTS `sys_sms_config`
 (
@@ -184,7 +185,7 @@ PREPARE drop_outbox_channel_check_statement FROM @drop_outbox_channel_check_sql;
 EXECUTE drop_outbox_channel_check_statement;
 DEALLOCATE PREPARE drop_outbox_channel_check_statement;
 ALTER TABLE `wf_notification_outbox` ADD CONSTRAINT `chk_wf_notification_outbox_channel` CHECK
-    (`channel` IN ('INBOX', 'EMAIL', 'SMS'));
+    (`channel` IN ('EMAIL', 'SMS'));
 
 SET @outbox_sms_template_check_exists =
     (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS

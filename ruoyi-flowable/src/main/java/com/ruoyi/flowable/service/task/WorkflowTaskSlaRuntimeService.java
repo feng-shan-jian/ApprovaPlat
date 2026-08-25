@@ -5,9 +5,16 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Collection;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import org.flowable.bpmn.model.BaseElement;
+import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.ExtensionElement;
+import org.flowable.bpmn.model.FlowElement;
+import org.flowable.bpmn.model.Process;
 import org.flowable.engine.ManagementService;
 import org.flowable.engine.ProcessEngineConfiguration;
 import org.flowable.engine.RepositoryService;
@@ -17,19 +24,22 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployTaskSla;
 import com.ruoyi.flowable.domain.WfTaskSlaExecution;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
-import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
+import com.ruoyi.flowable.mapper.param.WfTaskSlaAuditWriteParam;
+import com.ruoyi.flowable.service.support.WorkflowPageSupport;
 import com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowTaskSlaDeploymentService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
-import com.ruoyi.flowable.service.notification.WorkflowNotificationService.SynchronousNotification;
+import com.ruoyi.flowable.service.notification.WorkflowInboxNotification;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationWriter;
 
 /**
  * 审批 SLA 任务生命周期、定时触发、通知、暂停恢复和查询服务。
@@ -37,6 +47,29 @@ import com.ruoyi.flowable.service.notification.WorkflowNotificationService.Synch
 @Service
 public class WorkflowTaskSlaRuntimeService
 {
+    /** 受控状态迁移撤销任务时允许写入 COMPLETE 审计的固定业务原因。 */
+    public enum ControlledWithdrawal
+    {
+        /** 整组退回撤销多实例根下全部剩余成员任务。 */
+        GROUP_RETURN("受控整组退回撤销审批任务"),
+
+        /** 重提撤销唯一申请人待修改任务并重建原审批组。 */
+        GROUP_RESUBMIT("受控重提撤销申请人待修改任务");
+
+        /** 写入不可变 COMPLETE 审计的稳定业务详情。 */
+        private final String auditDetail;
+
+        /**
+         * 创建固定受控撤销原因。
+         * @param auditDetail String，不可由客户端覆盖的审计详情
+         * @return 无返回值，枚举初始化后只读
+         */
+        ControlledWithdrawal(String auditDetail)
+        {
+            this.auditDetail = auditDetail;
+        }
+    }
+
     private final RepositoryService repositoryService;
     private final ManagementService managementService;
     private final ProcessEngineConfiguration processEngineConfiguration;
@@ -44,7 +77,7 @@ public class WorkflowTaskSlaRuntimeService
     private final WorkflowEngineOperations engineOperations;
     private final WfTaskSlaMapper slaMapper;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
-    private final WorkflowNotificationService notificationService;
+    private final WorkflowNotificationWriter notificationWriter;
 
     /**
      * 创建 SLA 运行服务。
@@ -55,7 +88,7 @@ public class WorkflowTaskSlaRuntimeService
      * @param engineOperations WorkflowEngineOperations，查询和当前身份事务边界
      * @param slaMapper WfTaskSlaMapper，运行状态、审计和通知数据访问层
      * @param artifactRepository WorkflowDeploymentArtifactRepository，SLA 部署资源仓库
-     * @param notificationService WorkflowNotificationService，统一 outbox、inbox 和投递审计服务
+     * @param notificationWriter WorkflowNotificationWriter，当前事务内直接写必达站内通知
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowTaskSlaRuntimeService(RepositoryService repositoryService,
@@ -64,7 +97,7 @@ public class WorkflowTaskSlaRuntimeService
             WorkflowBusinessCalendarService calendarService,
             WorkflowEngineOperations engineOperations, WfTaskSlaMapper slaMapper,
             WorkflowDeploymentArtifactRepository artifactRepository,
-            WorkflowNotificationService notificationService)
+            WorkflowNotificationWriter notificationWriter)
     {
         this.repositoryService = repositoryService;
         this.managementService = managementService;
@@ -73,7 +106,7 @@ public class WorkflowTaskSlaRuntimeService
         this.engineOperations = engineOperations;
         this.slaMapper = slaMapper;
         this.artifactRepository = artifactRepository;
-        this.notificationService = notificationService;
+        this.notificationWriter = notificationWriter;
     }
 
     /**
@@ -97,6 +130,21 @@ public class WorkflowTaskSlaRuntimeService
             return;
         }
         WfTaskSlaExecution execution = slaMapper.selectExecutionByTaskForUpdate(taskId);
+        if (execution == null && "complete".equals(eventName))
+        {
+            // 中断升级会创建新任务；其完成事件必须回写原审批节点的 ESCALATED 执行。
+            String sourceTaskDefinitionKey = resolveEscalationSourceTaskDefinitionKey(
+                    processDefinitionId, taskDefinitionKey);
+            if (sourceTaskDefinitionKey != null)
+            {
+                execution = slaMapper.selectActiveExecutionForUpdate(
+                        processInstanceId, sourceTaskDefinitionKey);
+                if (execution != null && !"ESCALATED".equals(execution.getStatus()))
+                {
+                    return;
+                }
+            }
+        }
         if (execution == null)
         {
             return;
@@ -127,6 +175,105 @@ public class WorkflowTaskSlaRuntimeService
             requireAudit(execution.getSlaExecutionId(), "COMPLETE", 0,
                     assignee, "审批任务按业务路径完成");
         }
+    }
+
+    /**
+     * 在受控整组状态迁移删除任务前，将这些精确任务仍开放的 SLA 原子收口为 COMPLETED。
+     * @param processInstanceId String，任务所属流程实例主键
+     * @param taskIds Collection&lt;String&gt;，本次迁移即将撤销的精确任务主键
+     * @param actorUserId String，已由上层校验的退回成员或重提发起人主键
+     * @param withdrawal ControlledWithdrawal，只允许服务端固定的整组退回或重提原因
+     * @return void，没有配置 SLA 的任务按幂等成功处理；任一 CAS 或审计失败时回滚整笔 Flowable 命令
+     */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public void completeControlledWithdrawal(String processInstanceId,
+            Collection<String> taskIds, String actorUserId,
+            ControlledWithdrawal withdrawal)
+    {
+        if (processInstanceId == null || processInstanceId.isBlank()
+                || actorUserId == null || actorUserId.isBlank()
+                || withdrawal == null || taskIds == null || taskIds.isEmpty())
+        {
+            throw dataError("受控撤销 SLA 参数不完整");
+        }
+        // 精确任务集合来自已对账的活动任务；拒绝空主键并去重，避免构造无边界 SQL。
+        LinkedHashSet<String> normalizedTaskIds = new LinkedHashSet<>();
+        for (String taskId : taskIds)
+        {
+            if (taskId == null || taskId.isBlank())
+            {
+                throw dataError("受控撤销 SLA 任务主键无效");
+            }
+            normalizedTaskIds.add(taskId);
+        }
+        List<WfTaskSlaExecution> executions = slaMapper
+                .selectWithdrawableExecutionsForUpdate(processInstanceId,
+                        List.copyOf(normalizedTaskIds));
+        for (WfTaskSlaExecution execution : executions)
+        {
+            // 锁行后仍以 revision 和开放状态 CAS，防止定时升级或正常完成竞争产生双重终态。
+            if (slaMapper.completeExecution(execution.getSlaExecutionId(),
+                    execution.getRevision()) != 1)
+            {
+                throw conflict();
+            }
+            requireAudit(execution.getSlaExecutionId(), "COMPLETE", 0,
+                    actorUserId, withdrawal.auditDetail);
+        }
+    }
+
+    /**
+     * 从部署后的 BPMN 读取生成升级任务冻结的原节点标识。
+     * @param processDefinitionId String，当前流程定义主键
+     * @param generatedTaskDefinitionKey String，完成事件对应的生成任务节点标识
+     * @return String，原审批节点标识；普通任务或属性缺失时返回 null
+     */
+    private String resolveEscalationSourceTaskDefinitionKey(String processDefinitionId,
+            String generatedTaskDefinitionKey)
+    {
+        BpmnModel model = repositoryService.getBpmnModel(processDefinitionId);
+        if (model == null || generatedTaskDefinitionKey == null)
+        {
+            return null;
+        }
+        for (Process process : model.getProcesses())
+        {
+            FlowElement element = process.getFlowElement(generatedTaskDefinitionKey, true);
+            String source = readExtensionProperty(element,
+                    WorkflowTaskSlaDeploymentService.SOURCE_TASK_DEFINITION_KEY_PROPERTY);
+            if (source != null && !source.isBlank())
+            {
+                return source;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 读取一个 Flowable properties 属性值。
+     * @param element BaseElement，部署后 BPMN 元素
+     * @param propertyName String，精确平台属性名
+     * @return String，属性值；元素或属性不存在时返回 null
+     */
+    private String readExtensionProperty(BaseElement element, String propertyName)
+    {
+        if (element == null || element.getExtensionElements() == null)
+        {
+            return null;
+        }
+        for (ExtensionElement container : element.getExtensionElements()
+                .getOrDefault("properties", List.of()))
+        {
+            for (ExtensionElement property : container.getChildElements()
+                    .getOrDefault("property", List.of()))
+            {
+                if (propertyName.equals(property.getAttributeValue(null, "name")))
+                {
+                    return property.getAttributeValue(null, "value");
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -286,40 +433,36 @@ public class WorkflowTaskSlaRuntimeService
         }
     }
 
-    /** @return List&lt;WorkflowTaskSlaExecutionView&gt;，最近正式执行状态。 */
-    public List<WorkflowTaskSlaExecutionView> listExecutions()
+    /**
+     * 分页查询 SLA 当前执行状态。
+     * @param query SlaExecution，状态、关键字和开始时间范围
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @return PageResult&lt;WorkflowTaskSlaExecutionView&gt;，当前页和符合条件的总数
+     */
+    public PageResult<WorkflowTaskSlaExecutionView> listExecutions(
+            WorkflowOperationsQuery.SlaExecution query, int pageNum, int pageSize)
     {
-        return engineOperations.read(() -> List.copyOf(slaMapper.selectExecutions()));
+        WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());
+        return engineOperations.read(() -> WorkflowPageSupport.query(pageNum, pageSize,
+                () -> slaMapper.countExecutions(query),
+                (offset, size) -> slaMapper.selectExecutions(query, offset, size)));
     }
 
-    /** @return List&lt;WorkflowTaskSlaAuditView&gt;，最近不可变审计。 */
-    public List<WorkflowTaskSlaAuditView> listAudits()
+    /**
+     * 分页查询 SLA 不可变生命周期审计。
+     * @param query SlaAudit，动作、关键字和动作时间范围
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @return PageResult&lt;WorkflowTaskSlaAuditView&gt;，当前页和符合条件的总数
+     */
+    public PageResult<WorkflowTaskSlaAuditView> listAudits(
+            WorkflowOperationsQuery.SlaAudit query, int pageNum, int pageSize)
     {
-        return engineOperations.read(() -> List.copyOf(slaMapper.selectAudits()));
-    }
-
-    /** @return List&lt;WorkflowTaskSlaNotificationView&gt;，当前用户通知。 */
-    public List<WorkflowTaskSlaNotificationView> myNotifications()
-    {
-        return engineOperations.read(() -> List.copyOf(slaMapper.selectNotifications(
-                com.ruoyi.common.utils.SecurityUtils.getUserId().toString())));
-    }
-
-    /** @param notificationId Long，通知主键；@return void，仅当前接收人可首次标记已读。 */
-    public void markNotificationRead(Long notificationId)
-    {
-        if (notificationId == null || notificationId <= 0)
-        {
-            throw new ServiceException("审批 SLA 通知主键不合法", HttpStatus.BAD_REQUEST);
-        }
-        engineOperations.writeAsCurrentUser(identity ->
-        {
-            if (slaMapper.markNotificationRead(notificationId, identity.userId()) != 1)
-            {
-                throw new ServiceException("审批 SLA 通知不存在或已处理", HttpStatus.NOT_FOUND);
-            }
-            return null;
-        });
+        WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());
+        return engineOperations.read(() -> WorkflowPageSupport.query(pageNum, pageSize,
+                () -> slaMapper.countAudits(query),
+                (offset, size) -> slaMapper.selectAudits(query, offset, size)));
     }
 
     /**
@@ -406,8 +549,14 @@ public class WorkflowTaskSlaRuntimeService
     private Long requireAudit(Long executionId, String action, int ordinal,
             String actor, String detail)
     {
-        slaMapper.insertAudit(executionId, action, ordinal, actor, detail);
-        Long auditId = slaMapper.selectAuditId(executionId, action, ordinal);
+        WfTaskSlaAuditWriteParam param = new WfTaskSlaAuditWriteParam();
+        param.setExecutionId(executionId);
+        param.setActionType(action);
+        param.setActionOrdinal(ordinal);
+        param.setActorUserId(actor);
+        param.setDetail(detail);
+        slaMapper.insertAudit(param);
+        Long auditId = param.getAuditId();
         if (auditId == null)
         {
             throw dataError("审批 SLA 审计保存不完整");
@@ -425,7 +574,7 @@ public class WorkflowTaskSlaRuntimeService
      * @param action String，REMINDER 或 ESCALATE
      * @param title String，通知标题
      * @param content String，脱敏通知正文
-     * @return void，统一 outbox、inbox 或审计任一未完整写入时抛出异常
+     * @return void，必达站内信或审计任一未完整写入时抛出异常
      */
     private void requireNotification(Long auditId, WfTaskSlaExecution execution,
             String processDefinitionKey, String recipient, String action,
@@ -438,10 +587,9 @@ public class WorkflowTaskSlaRuntimeService
         }
         String routePath = "/workflow/process-detail/" + execution.getProcessInstanceId()
                 + "?source=todo&taskId=" + execution.getTaskId();
-        Long notificationId = notificationService.publishSynchronousInbox(
-                new SynchronousNotification("SLA", String.valueOf(auditId), action,
-                        recipient, processDefinitionKey, execution.getProcessInstanceId(),
-                        execution.getTaskId(), execution.getTaskDefinitionKey(), title, content,
+        Long notificationId = notificationWriter.writeRequiredInbox(
+                new WorkflowInboxNotification("SLA", String.valueOf(auditId), action,
+                        recipient, execution.getProcessInstanceId(), execution.getTaskId(), title, content,
                         routePath));
         if (notificationId == null)
         {

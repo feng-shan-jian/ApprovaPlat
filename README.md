@@ -79,7 +79,7 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 - 区分设计、发起、办理、管理和审计职责，并对实例、任务、部署、附件和审计数据做对象级授权。
 - Flowable 数据和业务数据共用主数据源与事务边界，前端不保存第二份权威流程状态。
 - 提供健康检查、运行快照、Micrometer/Prometheus 指标、附件清理锁和运行就绪校验。
-- 仓库包含生产配置、systemd、Nginx、数据库只读验收和发布门禁资产。
+- 仓库包含生产配置、systemd 和 Nginx 部署资产。
 
 ## 项目截图
 
@@ -104,6 +104,8 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 
 当前首发基线包含破坏性的全新安装脚本。不要对已有业务库直接执行，也不要开启 Flowable 自动建表来绕过缺失结构。
 
+已经安装 8.0.0 正式基线的数据库只执行 `8.0.1__workflow_mail_config.sql`，随后重放幂等菜单脚本；完整备份、核验和命令顺序见[现有基线升级](docs/database/workflow-baseline.md#现有基线升级)。迁移只创建空表，不复制旧 SMTP 环境变量，也不生成默认邮件账号或授权码。
+
 ### 2. 配置并启动后端
 
 在 PowerShell 中为当前进程设置本地环境变量，值由你自己的 MySQL 环境提供：
@@ -120,7 +122,9 @@ mvn -pl ruoyi-admin -am -DskipTests package
 java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
 ```
 
-`-DskipTests` 只用于缩短本地首次启动。未显式设置 `RUOYI_TOKEN_SECRET` 时，单节点环境会在用户私有目录中生成并复用随机 HS512 密钥；生产密钥与多节点要求见[部署文档](docs/operations/workflow-deployment.md)。
+`-DskipTests` 只用于缩短本地首次启动。未显式设置 `RUOYI_TOKEN_SECRET` 时，单节点环境会在用户私有目录中生成并复用随机 HS512 密钥；生产环境必须显式管理 Token 密钥和数据库配置。
+
+SMTP 主机、端口、账号和发件身份保存后按数据库 revision 动态生效，不需要重启应用。授权码使用 RuoYi Token 密钥派生的用途子密钥加密，用户无需生成或配置第二把密钥。Token 密钥必须在重启和多节点之间保持稳定；更换后已有登录令牌会失效，SMTP 授权码也必须通过邮件服务页面重新保存。
 
 ### 3. 启动前端
 
@@ -135,10 +139,6 @@ npm run dev -- --host 127.0.0.1 --port 1024
 
 访问 `http://127.0.0.1:1024`。全新本地基线账号为 `admin`，初始密码为 `wang`；它只用于本机开发，对外开放服务前必须更换。
 
-如果希望快速体验仓库里的审批样例，可以按[审批样例置备](deployment/samples/workflow/README.md)通过平台 API 创建，不需要直接修改 Flowable 表或业务表。
-
-生产安装请使用[工作流安装与运行](docs/operations/workflow-deployment.md)和[发布与回滚](docs/operations/workflow-release.md)，不要直接照搬本地启动命令。
-
 ## 开发与测试
 
 常用开发验证：
@@ -151,7 +151,17 @@ npm run test:contracts
 npm run build:prod
 ```
 
-真实 MySQL、Redis、角色、API 和浏览器验收需要额外环境变量与隔离库，执行方式见[测试与验收](docs/testing/workflow-acceptance.md)和 [E2E 说明](ruoyi-ui/tests/e2e/README.md)。
+真实 MySQL `*IT` 使用独立的 opt-in Failsafe profile。CI 必须先准备只用于验收的 `approvaplat_it` schema，再显式提供以下三个环境变量；profile 会在变量缺失时直接失败，普通 `mvn test` / `mvn verify` 不会连接 MySQL：
+
+```powershell
+$env:WORKFLOW_MYSQL_TEST_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat_it?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia%2FShanghai'
+$env:WORKFLOW_MYSQL_TEST_USERNAME = '<隔离验收库账号>'
+$env:WORKFLOW_MYSQL_TEST_PASSWORD = '<隔离验收库密码>'
+
+mvn -pl ruoyi-flowable -am -Pworkflow-mysql-it verify
+```
+
+真实 MySQL、Redis、角色和 API 验证需要准备对应的运行环境与隔离数据。
 
 ## 技术栈
 
@@ -164,7 +174,7 @@ npm run build:prod
 | 设计器       | BPMN.js 18.22.0                              |
 | 规则与连接器 | CEL、JSqlParser、受控 Java / HTTP / SQL      |
 | 可观测性     | Spring Boot Actuator、Micrometer、Prometheus |
-| 验证         | JUnit 5、Playwright、k6、数据库只读验收      |
+| 验证         | JUnit 5、前端契约测试与生产构建              |
 
 ## 仓库结构
 
@@ -172,10 +182,10 @@ npm run build:prod
 ApprovaPlat/
 |- pom.xml       Maven 聚合入口
 |- ruoyi-*/      Spring Boot 后端模块与 Flowable 领域模块
-|- ruoyi-ui/     Vue 3 前端、契约测试与真实浏览器 E2E
-|- sql/          数据库基线、业务结构与只读验收脚本
-|- docs/         架构、业务契约、数据库、运维与验收文档
-`- deployment/   生产配置、systemd、Nginx、样例与发布门禁
+|- ruoyi-ui/     Vue 3 前端、工作流设计器与契约测试
+|- sql/          数据库基线、业务结构与菜单权限
+|- docs/         架构、业务契约与数据库文档
+`- deployment/   生产配置、systemd 与 Nginx
 ```
 
 ## 文档
@@ -186,8 +196,6 @@ ApprovaPlat/
 | 每个审批动作的约束         | [审批业务行为契约](docs/contracts/workflow-behavior.md)                                              |
 | Participant 与 MessageFlow | [多池协作运行契约](docs/contracts/workflow-collaboration.md)                                         |
 | 空库安装和正式迁移         | [工作流数据库基线](docs/database/workflow-baseline.md)                                               |
-| 安装、运行、发布和回滚     | [部署文档](docs/operations/workflow-deployment.md) / [发布文档](docs/operations/workflow-release.md) |
-| 测试和真实环境验收         | [工作流测试与验收](docs/testing/workflow-acceptance.md)                                              |
 
 ## 参与项目
 

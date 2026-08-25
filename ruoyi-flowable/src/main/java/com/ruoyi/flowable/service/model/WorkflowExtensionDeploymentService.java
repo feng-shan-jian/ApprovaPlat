@@ -274,6 +274,14 @@ public class WorkflowExtensionDeploymentService
     private WfDeployExtensionSnapshot compileBusinessListener(Process process, String elementId,
             String listenerKind, FlowableListener listener, String actorUserId)
     {
+        if (!ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION
+                .equals(listener.getImplementationType())
+                || !WorkflowExtensionBpmnContract.BUSINESS_LISTENER_DELEGATE_EXPRESSION
+                        .equals(listener.getImplementation()))
+        {
+            throw new ServiceException("业务监听器不允许未登记 Java Class 或表达式",
+                    HttpStatus.BAD_REQUEST);
+        }
         String extensionKey = null;
         String configJson = null;
         if (listener.getFieldExtensions() != null)
@@ -395,6 +403,15 @@ public class WorkflowExtensionDeploymentService
     private WfDeployExtensionSnapshot compileServiceTask(BpmnModel compiledModel,
             BpmnModel sourceModel, Process process, ServiceTask task, String actorUserId)
     {
+        if (org.springframework.util.StringUtils.hasText(task.getImplementation())
+                && (!ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION
+                        .equals(task.getImplementationType())
+                || !WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION
+                        .equals(task.getImplementation())))
+        {
+            throw new ServiceException("服务任务不允许未登记 Java Class 或表达式",
+                    HttpStatus.BAD_REQUEST);
+        }
         String extensionKey = null;
         String configJson = null;
         List<FieldExtension> fields = task.getFieldExtensions();

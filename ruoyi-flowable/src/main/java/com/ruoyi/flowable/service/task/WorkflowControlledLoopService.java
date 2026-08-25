@@ -8,10 +8,8 @@ import java.util.List;
 import java.util.Map;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
-import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
-import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.task.api.Task;
 import org.springframework.stereotype.Service;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -38,7 +36,6 @@ public class WorkflowControlledLoopService
     /** 已达到最大轮次却继续要求整改时使用的稳定子码。 */
     public static final String LIMIT_REACHED_SUB_CODE = "CONTROLLED_LOOP_LIMIT_REACHED";
 
-    private final RepositoryService repositoryService;
     private final RuntimeService runtimeService;
     private final TaskService taskService;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
@@ -46,19 +43,16 @@ public class WorkflowControlledLoopService
 
     /**
      * 创建受控循环运行服务。
-     * @param repositoryService RepositoryService，流程定义和 processKey 查询 API
      * @param runtimeService RuntimeService，写入编译网关保留变量的公共 API
      * @param taskService TaskService，写入同事务结构化循环 comment 的公共 API
      * @param artifactRepository WorkflowDeploymentArtifactRepository，循环部署资源仓库
      * @param executionMapper WfControlledLoopExecutionMapper，逐轮运行审计 Mapper
      * @return 无返回值，构造后由 Spring 管理
      */
-    public WorkflowControlledLoopService(RepositoryService repositoryService,
-            RuntimeService runtimeService, TaskService taskService,
+    public WorkflowControlledLoopService(RuntimeService runtimeService, TaskService taskService,
             WorkflowDeploymentArtifactRepository artifactRepository,
             WfControlledLoopExecutionMapper executionMapper)
     {
-        this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.artifactRepository = artifactRepository;
@@ -69,22 +63,22 @@ public class WorkflowControlledLoopService
      * 在真实任务完成前根据部署快照和已校验表单变量决定再次进入或退出，并同事务写入审计。
      *
      * @param task Task，已完成活动、办理人、权限和委派状态校验的真实任务
+     * @param processKey String，生命周期服务已从唯一流程定义上下文解析的流程 key
      * @param deploymentId String，任务定义所属 Flowable 部署主键
      * @param variables Map&lt;String,Object&gt;，已经过节点部署表单 schema 校验的业务变量
      * @param actorUserId String，当前真实完成人主键
      * @return void，普通任务不产生任何写入；循环任务失败时抛出稳定 400、409 或 500
      */
-    public void prepareCompletion(Task task, String deploymentId,
+    public void prepareCompletion(Task task, String processKey, String deploymentId,
             Map<String, Object> variables, String actorUserId)
     {
-        ProcessDefinition definition = repositoryService.createProcessDefinitionQuery()
-                .processDefinitionId(task.getProcessDefinitionId()).singleResult();
-        if (definition == null || !StringUtils.hasText(definition.getKey()))
+        if (task == null || !StringUtils.hasText(processKey)
+                || !StringUtils.hasText(deploymentId))
         {
             throw dataError("循环任务流程定义关系异常");
         }
         WfDeployControlledLoop config = artifactRepository.selectControlledLoop(
-                deploymentId, definition.getKey(), task.getTaskDefinitionKey());
+                deploymentId, processKey, task.getTaskDefinitionKey());
         if (config == null)
         {
             return;

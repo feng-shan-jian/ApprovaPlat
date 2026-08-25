@@ -5,8 +5,9 @@ import java.util.List;
 import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WfBusinessCalendar;
 import com.ruoyi.flowable.domain.WfTaskSlaExecution;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView;
-import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView;
+import com.ruoyi.flowable.mapper.param.WfTaskSlaAuditWriteParam;
 import com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView;
 
 /**
@@ -75,6 +76,16 @@ public interface WfTaskSlaMapper
             @Param("processInstanceId") String processInstanceId);
 
     /**
+     * 按流程实例和精确任务集合锁定仍需收口的 SLA 执行。
+     * @param processInstanceId String，流程实例主键
+     * @param taskIds List&lt;String&gt;，本次受控迁移即将撤销的精确任务主键集合
+     * @return List&lt;WfTaskSlaExecution&gt;，状态为 ACTIVE 或 ESCALATED 的锁定执行
+     */
+    List<WfTaskSlaExecution> selectWithdrawableExecutionsForUpdate(
+            @Param("processInstanceId") String processInstanceId,
+            @Param("taskIds") List<String> taskIds);
+
+    /**
      * 同步当前办理人。
      * @param executionId Long，SLA 执行主键
      * @param assigneeUserId String，可空办理人
@@ -141,27 +152,21 @@ public interface WfTaskSlaMapper
      * @param detail String，脱敏摘要
      * @return int，首次写入 1，重复触发 0
      */
-    int insertAudit(@Param("executionId") Long executionId,
-            @Param("actionType") String actionType,
-            @Param("actionOrdinal") Integer actionOrdinal,
-            @Param("actorUserId") String actorUserId,
-            @Param("detail") String detail);
+    int insertAudit(WfTaskSlaAuditWriteParam param);
 
-    /** @param executionId Long，执行主键；@param actionType String，动作；@param actionOrdinal Integer，序号；@return Long，审计主键或 null。 */
-    Long selectAuditId(@Param("executionId") Long executionId,
-            @Param("actionType") String actionType,
-            @Param("actionOrdinal") Integer actionOrdinal);
+    /** @param query SlaAudit，审计筛选条件；@return long，符合条件的审计总数。 */
+    long countAudits(@Param("query") WorkflowOperationsQuery.SlaAudit query);
 
-    /** @return List&lt;WorkflowTaskSlaAuditView&gt;，最近 500 条 SLA 审计。 */
-    List<WorkflowTaskSlaAuditView> selectAudits();
+    /** @param query SlaAudit，审计筛选条件；@param offset int，起始偏移；@param pageSize int，本页大小；@return List，当前页审计。 */
+    List<WorkflowTaskSlaAuditView> selectAudits(
+            @Param("query") WorkflowOperationsQuery.SlaAudit query,
+            @Param("offset") int offset, @Param("pageSize") int pageSize);
 
-    /** @param userId String，当前用户主键；@return List&lt;WorkflowTaskSlaNotificationView&gt;，最近 200 条通知。 */
-    List<WorkflowTaskSlaNotificationView> selectNotifications(@Param("userId") String userId);
+    /** @param query SlaExecution，执行筛选条件；@return long，符合条件的执行总数。 */
+    long countExecutions(@Param("query") WorkflowOperationsQuery.SlaExecution query);
 
-    /** @param notificationId Long，通知主键；@param userId String，当前用户主键；@return int，首次标记行数。 */
-    int markNotificationRead(@Param("notificationId") Long notificationId,
-            @Param("userId") String userId);
-
-    /** @return List&lt;WorkflowTaskSlaExecutionView&gt;，最近 500 条正式执行状态。 */
-    List<WorkflowTaskSlaExecutionView> selectExecutions();
+    /** @param query SlaExecution，执行筛选条件；@param offset int，起始偏移；@param pageSize int，本页大小；@return List，当前页执行。 */
+    List<WorkflowTaskSlaExecutionView> selectExecutions(
+            @Param("query") WorkflowOperationsQuery.SlaExecution query,
+            @Param("offset") int offset, @Param("pageSize") int pageSize);
 }

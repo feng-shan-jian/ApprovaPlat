@@ -96,7 +96,7 @@ const props = defineProps({
 })
 
 const { proxy } = getCurrentInstance()
-const emit = defineEmits()
+const emit = defineEmits(['update:modelValue'])
 const number = ref(0)
 const uploadList = ref([])
 const dialogImageUrl = ref("")

@@ -16,5 +16,10 @@ public enum LimitType
     /**
      * 根据请求者IP进行限流
      */
-    IP
+    IP,
+
+    /**
+     * 使用当前认证用户桶和可信代理来源 IP 桶同时限流。
+     */
+    USER_IP
 }

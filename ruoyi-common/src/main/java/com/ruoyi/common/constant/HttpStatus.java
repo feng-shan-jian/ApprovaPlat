@@ -93,6 +93,11 @@ public class HttpStatus
     public static final int NOT_IMPLEMENTED = 501;
 
     /**
+     * 服务暂时不可用
+     */
+    public static final int SERVICE_UNAVAILABLE = 503;
+
+    /**
      * 服务器存储空间不足
      */
     public static final int INSUFFICIENT_STORAGE = 507;

@@ -4,15 +4,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.UserTask;
-import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
-import org.flowable.engine.repository.ProcessDefinition;
-import org.flowable.engine.runtime.Execution;
 import org.flowable.identitylink.api.IdentityLink;
 import org.flowable.identitylink.api.IdentityLinkType;
 import org.flowable.task.api.Task;
@@ -30,47 +26,51 @@ public class WorkflowNextTaskAssignmentService
 {
     private final WorkflowUserSelectionValidator userSelectionValidator;
 
-    private final RepositoryService repositoryService;
-
     private final TaskService taskService;
 
     private final RuntimeService runtimeService;
+
+    /** 受控多实例执行树、成员、模式、revision、计数和活动任务的唯一只读解析器。 */
+    private final WorkflowMultiInstanceRuntimeSnapshotReader snapshotReader;
 
     /**
      * 创建动态下一办理人服务。
      *
      * @param userSelectionValidator WorkflowUserSelectionValidator，正式审批资格用户严格校验器
-     * @param repositoryService RepositoryService，已部署 BPMN 模型查询服务
      * @param taskService TaskService，活动任务和候选身份公共服务
-     * @param runtimeService RuntimeService，多实例集合变量、execution 和计数公共服务
+     * @param runtimeService RuntimeService，多实例集合变量和状态迁移公共服务
+     * @param snapshotReader WorkflowMultiInstanceRuntimeSnapshotReader，受控多实例唯一运行时快照读取器
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowNextTaskAssignmentService(
             WorkflowUserSelectionValidator userSelectionValidator,
-            RepositoryService repositoryService, TaskService taskService,
-            RuntimeService runtimeService)
+            TaskService taskService, RuntimeService runtimeService,
+            WorkflowMultiInstanceRuntimeSnapshotReader snapshotReader)
     {
         this.userSelectionValidator = userSelectionValidator;
-        this.repositoryService = repositoryService;
         this.taskService = taskService;
         this.runtimeService = runtimeService;
+        this.snapshotReader = snapshotReader;
     }
 
     /**
      * 在完成来源任务前校验用户、BPMN 拓扑和目标分配方式，并为受控多实例后继写入专属集合变量。
      *
      * @param sourceTask Task，已经通过活动态和办理人校验的当前任务
+     * @param process Process，生命周期服务已唯一读取并核验的当前部署 BPMN Process
+     * @param sourceNode UserTask，生命周期服务已在同一 Process 中唯一定位的当前节点
      * @param requestedUserIds List&lt;Long&gt;，客户端可选的动态下一办理人主键
      * @return AssignmentPlan，不可变分配计划；未选择用户时返回空计划
      */
-    public AssignmentPlan prepare(Task sourceTask, List<Long> requestedUserIds)
+    public AssignmentPlan prepare(Task sourceTask, org.flowable.bpmn.model.Process process,
+            UserTask sourceNode, List<Long> requestedUserIds)
     {
         // 先冻结直接办理资格用户和顺序；多人候选计划在识别目标拓扑后追加完整认领权限门禁。
         List<String> approvalUserIds = userSelectionValidator
                 .requireApprovalEligibleUserIds(requestedUserIds);
         if (approvalUserIds.isEmpty())
         {
-            return prepareWithoutRequestedUsers(sourceTask);
+            return prepareWithoutRequestedUsers(sourceTask, process, sourceNode);
         }
         if (sourceTask == null || !StringUtils.hasText(sourceTask.getId())
                 || !StringUtils.hasText(sourceTask.getProcessInstanceId())
@@ -91,21 +91,13 @@ public class WorkflowNextTaskAssignmentService
             throw conflict();
         }
 
-        ProcessDefinition definition = repositoryService.getProcessDefinition(
-                sourceTask.getProcessDefinitionId());
-        BpmnModel model = repositoryService.getBpmnModel(sourceTask.getProcessDefinitionId());
-        if (definition == null || model == null || !StringUtils.hasText(definition.getKey()))
+        if (process == null || sourceNode == null
+                || !sourceTask.getTaskDefinitionKey().equals(sourceNode.getId())
+                || sourceNode.getParentContainer() != process)
         {
-            throw dataError();
+            throw conflict();
         }
-        org.flowable.bpmn.model.Process process = model.getProcessById(definition.getKey());
-        if (process == null)
-        {
-            throw dataError();
-        }
-        FlowElement sourceElement = process.getFlowElement(sourceTask.getTaskDefinitionKey(), false);
-        if (!(sourceElement instanceof UserTask sourceNode)
-                || sourceNode.getLoopCharacteristics() != null)
+        if (sourceNode.getLoopCharacteristics() != null)
         {
             throw conflict();
         }
@@ -163,27 +155,23 @@ public class WorkflowNextTaskAssignmentService
     }
 
     /**
-     * 在空选择场景读取正式部署模型，阻止受控动态多实例在集合变量缺失后才由引擎失败。
+     * 在空选择场景复用正式部署模型，阻止受控动态多实例在集合变量缺失后才由引擎失败。
      *
      * @param sourceTask Task，已经通过活动态和办理人校验的当前任务
+     * @param process Process，生命周期服务已唯一读取并核验的当前部署 BPMN Process
+     * @param sourceNode UserTask，生命周期服务已在同一 Process 中唯一定位的当前节点
      * @return AssignmentPlan，普通后继返回空计划；动态多实例后继直接返回稳定 400
      */
-    private AssignmentPlan prepareWithoutRequestedUsers(Task sourceTask)
+    private AssignmentPlan prepareWithoutRequestedUsers(Task sourceTask,
+            org.flowable.bpmn.model.Process process, UserTask sourceNode)
     {
         if (sourceTask == null || !StringUtils.hasText(sourceTask.getProcessDefinitionId())
                 || !StringUtils.hasText(sourceTask.getTaskDefinitionKey()))
         {
             throw dataError();
         }
-        ProcessDefinition definition = repositoryService.getProcessDefinition(
-                sourceTask.getProcessDefinitionId());
-        BpmnModel model = repositoryService.getBpmnModel(sourceTask.getProcessDefinitionId());
-        if (definition == null || model == null || !StringUtils.hasText(definition.getKey()))
-        {
-            throw dataError();
-        }
-        org.flowable.bpmn.model.Process process = model.getProcessById(definition.getKey());
-        if (process == null)
+        if (process == null || sourceNode == null
+                || !sourceTask.getTaskDefinitionKey().equals(sourceNode.getId()))
         {
             throw dataError();
         }
@@ -191,7 +179,7 @@ public class WorkflowNextTaskAssignmentService
         {
             // 只对受控动态多实例后继强制成员，普通 BPMN 默认分配仍保持既有行为。
             if (WorkflowNextTaskAssignmentContract.findRequiredMultiInstanceTarget(
-                    process, sourceTask.getTaskDefinitionKey()).isPresent())
+                    process, sourceNode).isPresent())
             {
                 throw new ServiceException("动态多实例下一办理人不能为空", HttpStatus.BAD_REQUEST);
             }
@@ -273,101 +261,29 @@ public class WorkflowNextTaskAssignmentService
             throw conflict();
         }
 
-        LinkedHashSet<String> assignees = new LinkedHashSet<>();
-        LinkedHashSet<String> executionIds = new LinkedHashSet<>();
-        String rootExecutionId = null;
-        for (Task task : tasks)
-        {
-            if (task == null || task.isSuspended()
-                    || !plan.expectedTaskDefinitionKey().equals(task.getTaskDefinitionKey())
-                    || !StringUtils.hasText(task.getAssignee())
-                    || !StringUtils.hasText(task.getExecutionId())
-                    || StringUtils.hasText(task.getOwner())
-                    || task.getDelegationState() != null
-                    || !assignees.add(task.getAssignee())
-                    || !executionIds.add(task.getExecutionId()))
-            {
-                throw conflict();
-            }
-            Execution execution = runtimeService.createExecutionQuery()
-                    .executionId(task.getExecutionId()).singleResult();
-            if (execution == null || execution.isEnded() || execution.isSuspended()
-                    || !plan.expectedTaskDefinitionKey().equals(execution.getActivityId())
-                    || !StringUtils.hasText(execution.getParentId()))
-            {
-                throw conflict();
-            }
-            if (rootExecutionId == null)
-            {
-                rootExecutionId = execution.getParentId();
-            }
-            else if (!rootExecutionId.equals(execution.getParentId()))
-            {
-                throw conflict();
-            }
-        }
-        if (!assignees.equals(new LinkedHashSet<>(plan.userIds())))
+        // 新审批组稳定创建后，只通过共享读取器解释 execution、变量和根计数。
+        ControlledMultiInstanceSnapshot runtime =
+                WorkflowMultiInstanceSnapshotExceptionTranslator.asTransitionConflict(
+                        () -> snapshotReader.readTask(tasks.get(0).getId()));
+        if (runtime == null
+                || !plan.processInstanceId().equals(runtime.processInstanceId())
+                || !plan.expectedTaskDefinitionKey().equals(runtime.activityId())
+                || runtime.mode() != plan.multiInstanceMode()
+                || runtime.revision() != 0
+                || !runtime.members().equals(plan.userIds())
+                || runtime.counts().instances() != plan.userIds().size()
+                || runtime.counts().active() != plan.userIds().size()
+                || runtime.counts().completed() != 0
+                || runtime.activeTasks().stream().anyMatch(task -> task.owner() != null
+                        || task.delegated())
+                || !runtime.activeTasks().stream()
+                        .map(MultiInstanceActiveTaskSnapshot::assignee)
+                        .collect(java.util.stream.Collectors.toCollection(
+                                LinkedHashSet::new))
+                        .equals(new LinkedHashSet<>(plan.userIds())))
         {
             throw conflict();
         }
-
-        Execution rootExecution = runtimeService.createExecutionQuery()
-                .executionId(rootExecutionId).singleResult();
-        List<Execution> children = runtimeService.createExecutionQuery()
-                .parentId(rootExecutionId).list();
-        if (rootExecution == null || rootExecution.isEnded() || rootExecution.isSuspended()
-                || !plan.processInstanceId().equals(rootExecution.getProcessInstanceId())
-                || !plan.expectedTaskDefinitionKey().equals(rootExecution.getActivityId())
-                || children == null || children.size() != executionIds.size()
-                || !children.stream().map(Execution::getId).collect(
-                    java.util.stream.Collectors.toSet()).equals(executionIds))
-        {
-            throw conflict();
-        }
-
-        Object rawMembers = runtimeService.getVariable(plan.processInstanceId(),
-                WorkflowMultiInstanceVariables.memberSnapshotName(
-                        plan.expectedTaskDefinitionKey()));
-        Object rawRevision = runtimeService.getVariable(plan.processInstanceId(),
-                WorkflowMultiInstanceVariables.revisionName(
-                        plan.expectedTaskDefinitionKey()));
-        Object rawMode = runtimeService.getVariable(plan.processInstanceId(),
-                WorkflowMultiInstanceVariables.modeName(
-                        plan.expectedTaskDefinitionKey()));
-        if (!(rawMembers instanceof List<?> members)
-                || !members.equals(plan.userIds())
-                || !(rawRevision instanceof Number revision)
-                || revision.longValue() != 0L
-                || !plan.multiInstanceMode().name().equals(rawMode)
-                || requireEngineCount(rootExecutionId, "nrOfInstances") != plan.userIds().size()
-                || requireEngineCount(rootExecutionId, "nrOfActiveInstances") != plan.userIds().size()
-                || requireEngineCount(rootExecutionId, "nrOfCompletedInstances") != 0)
-        {
-            throw conflict();
-        }
-    }
-
-    /**
-     * 精确读取多实例根的非负 int 计数，拒绝类型漂移、浮点和溢出值。
-     *
-     * @param rootExecutionId String，多实例根 execution 主键
-     * @param variableName String，固定 nrOfInstances、nrOfActiveInstances 或 nrOfCompletedInstances
-     * @return int，Flowable 根本地计数
-     */
-    private int requireEngineCount(String rootExecutionId, String variableName)
-    {
-        Object rawCount = runtimeService.getVariableLocal(rootExecutionId, variableName);
-        if (!(rawCount instanceof Byte || rawCount instanceof Short
-                || rawCount instanceof Integer || rawCount instanceof Long))
-        {
-            throw conflict();
-        }
-        long count = ((Number) rawCount).longValue();
-        if (count < 0 || count > Integer.MAX_VALUE)
-        {
-            throw conflict();
-        }
-        return (int) count;
     }
 
     /**
@@ -468,6 +384,19 @@ public class WorkflowNextTaskAssignmentService
     }
 
     /**
+     * 创建保留运行时快照漂移原因的稳定冲突。
+     *
+     * @param cause Throwable，唯一快照读取器发现的真实漂移原因
+     * @return ServiceException，HTTP 409 且对外错误信息保持不变
+     */
+    private ServiceException conflict(Throwable cause)
+    {
+        ServiceException failure = conflict();
+        failure.initCause(cause);
+        return failure;
+    }
+
+    /**
      * 创建稳定的 BPMN 或任务关联数据异常。
      *
      * @return ServiceException，HTTP 500 数据一致性异常
@@ -519,22 +448,6 @@ public class WorkflowNextTaskAssignmentService
             {
                 throw new IllegalArgumentException("动态多实例计划模式不完整");
             }
-        }
-
-        /**
-         * 兼容普通单任务动态分配的既有 Java 调用方式。
-         *
-         * @param processInstanceId String，来源任务所属流程实例主键
-         * @param sourceTaskId String，完成前来源任务主键
-         * @param expectedTaskDefinitionKey String，预期后继节点主键
-         * @param userIds List&lt;String&gt;，有效用户主键集合
-         * @return 无返回值，创建普通单任务分配计划
-         */
-        public AssignmentPlan(String processInstanceId, String sourceTaskId,
-                String expectedTaskDefinitionKey, List<String> userIds)
-        {
-            this(processInstanceId, sourceTaskId, expectedTaskDefinitionKey,
-                    userIds, false, null);
         }
 
         /**

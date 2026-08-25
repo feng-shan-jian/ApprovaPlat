@@ -26,15 +26,21 @@ public class WorkflowMultiInstanceHandler
 
     private final WorkflowUserSelectionValidator userSelectionValidator;
 
+    /** 命令内受控迁移协议，退回临时任务和重提重建不得重新解析客户端或实时目录成员。 */
+    private final WorkflowMultiInstanceTransitionObserver transitionObserver;
+
     /**
      * 创建动态多实例集合处理器。
      *
      * @param userSelectionValidator WorkflowUserSelectionValidator，正式启用用户严格校验器
+     * @param transitionObserver WorkflowMultiInstanceTransitionObserver，整组退回与重提命令内观察协议
      * @return 无返回值，构造后以 multiInstanceHandler 名称注册到 Spring
      */
-    public WorkflowMultiInstanceHandler(WorkflowUserSelectionValidator userSelectionValidator)
+    public WorkflowMultiInstanceHandler(WorkflowUserSelectionValidator userSelectionValidator,
+            WorkflowMultiInstanceTransitionObserver transitionObserver)
     {
         this.userSelectionValidator = userSelectionValidator;
+        this.transitionObserver = transitionObserver;
     }
 
     /**
@@ -64,6 +70,14 @@ public class WorkflowMultiInstanceHandler
             throw invalidArgument();
         }
 
+        WorkflowMultiInstanceTransitionMembers transition =
+                resolveTransitionInstruction(execution,
+                activityId, mode);
+        if (transition != null && !transition.refreshAuthoritative())
+        {
+            return transition.overrideMembers();
+        }
+
         Object rawUsers = execution.getVariable(
                 WorkflowMultiInstanceVariables.userCollectionName(activityId));
         List<Long> requestedUserIds = requireBoundedPositiveUserIds(rawUsers);
@@ -74,7 +88,8 @@ public class WorkflowMultiInstanceHandler
             throw invalidArgument();
         }
 
-        return initializeMemberState(execution, activityId, mode, activeUserIds);
+        return initializeMemberState(execution, activityId, mode, activeUserIds,
+                transition != null);
     }
 
     /**
@@ -90,7 +105,6 @@ public class WorkflowMultiInstanceHandler
         {
             throw invalidArgument();
         }
-        List<Long> requestedUserIds = requireFixedUserIds(fixedUserIdsText);
         String activityId;
         WorkflowMultiInstanceMode mode;
         try
@@ -104,13 +118,22 @@ public class WorkflowMultiInstanceHandler
         {
             throw invalidArgument();
         }
+        WorkflowMultiInstanceTransitionMembers transition =
+                resolveTransitionInstruction(execution,
+                activityId, mode);
+        if (transition != null && !transition.refreshAuthoritative())
+        {
+            return transition.overrideMembers();
+        }
+        List<Long> requestedUserIds = requireFixedUserIds(fixedUserIdsText);
         List<String> activeUserIds = userSelectionValidator.requireApprovalEligibleUserIds(
                 requestedUserIds);
         if (activeUserIds.isEmpty())
         {
             throw invalidArgument();
         }
-        return initializeMemberState(execution, activityId, mode, activeUserIds);
+        return initializeMemberState(execution, activityId, mode, activeUserIds,
+                transition != null);
     }
 
     /**
@@ -157,6 +180,14 @@ public class WorkflowMultiInstanceHandler
             throw invalidArgument();
         }
 
+        WorkflowMultiInstanceTransitionMembers transition =
+                resolveTransitionInstruction(execution,
+                activityId, mode);
+        if (transition != null && !transition.refreshAuthoritative())
+        {
+            return transition.overrideMembers();
+        }
+
         // targetIds 是作者冻结的用户、角色或部门主键；角色和部门必须在每次进入节点时按实时 RBAC 展开。
         List<String> eligibleUserIds = switch (configuredIdentity.type())
         {
@@ -171,7 +202,42 @@ public class WorkflowMultiInstanceHandler
         {
             throw invalidArgument();
         }
-        return initializeMemberState(execution, activityId, mode, eligibleUserIds);
+        return initializeMemberState(execution, activityId, mode, eligibleUserIds,
+                transition != null);
+    }
+
+    /**
+     * 在整组退回或重提命令中解析迁移指令，并在重建前核对旧轮流程变量未被修改。
+     *
+     * @param execution DelegateExecution，Flowable 正在创建目标多实例根的执行上下文
+     * @param activityId String，当前受控多实例节点
+     * @param mode WorkflowMultiInstanceMode，部署模型固定模式
+     * @return WorkflowMultiInstanceTransitionMembers，RETURN 覆盖或 REOPEN 权威刷新指令；普通进入返回 null
+     */
+    private WorkflowMultiInstanceTransitionMembers resolveTransitionInstruction(
+            DelegateExecution execution,
+            String activityId, WorkflowMultiInstanceMode mode)
+    {
+        WorkflowMultiInstanceTransitionMembers transition =
+                transitionObserver.resolveTransitionMembers(
+                execution.getProcessInstanceId(), activityId, mode);
+        if (transition == null)
+        {
+            return null;
+        }
+
+        DelegateExecution processScope = requireProcessScope(execution);
+        List<String> existingMembers = requireExistingState(processScope, activityId, mode);
+        if (existingMembers == null)
+        {
+            // 受控迁移只能复用已由原正式轮次建立的服务端状态，缺失变量说明执行事实损坏。
+            throw dataError();
+        }
+        int existingRevision = requireNonNegativeRevision(processScope.getVariable(
+                WorkflowMultiInstanceVariables.revisionName(activityId)));
+        transitionObserver.requirePersistedSnapshot(execution.getProcessInstanceId(),
+                activityId, mode, existingMembers, existingRevision);
+        return transition;
     }
 
     /**
@@ -181,21 +247,27 @@ public class WorkflowMultiInstanceHandler
      * @param activityId String，当前受控多实例用户任务节点标识。
      * @param mode WorkflowMultiInstanceMode，部署 BPMN 固定的 ALL 或 ANY 完成模式。
      * @param eligibleUserIds List<String>，已重新验证审批资格的有序成员主键。
+     * @param replaceExisting boolean，是否以权威来源原子替换已对账的旧轮状态
      * @return List<String> 引擎用于创建实例的不可修改正式成员集合。
      */
     private List<String> initializeMemberState(DelegateExecution execution,
             String activityId, WorkflowMultiInstanceMode mode,
-            List<String> eligibleUserIds)
+            List<String> eligibleUserIds, boolean replaceExisting)
     {
         DelegateExecution processScope = requireProcessScope(execution);
         List<String> existingMembers = requireExistingState(processScope, activityId,
                 mode);
-        if (existingMembers != null)
+        if (existingMembers != null && !replaceExisting)
         {
             // 引擎重求值只能复用现有正式快照，绝不把已调整 revision 回退到零。
             return existingMembers;
         }
-        // 固定和动态来源必须写入同一流程实例状态，任务详情、CAS 调整和完成审计才有唯一事实来源。
+        if (replaceExisting && existingMembers == null)
+        {
+            // REOPEN 进入本方法前必须已对账旧轮状态；缺失说明同一引擎命令内状态发生漂移。
+            throw dataError();
+        }
+        // 使用同一次 setVariables 覆盖旧值，避免 remove 后同名变量重建被 Flowable 的待删除实体吞掉。
         processScope.setVariables(Map.of(
                 WorkflowMultiInstanceVariables.memberSnapshotName(activityId),
                 new ArrayList<>(eligibleUserIds),

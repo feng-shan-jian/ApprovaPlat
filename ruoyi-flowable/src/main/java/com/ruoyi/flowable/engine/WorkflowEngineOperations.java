@@ -84,6 +84,31 @@ public class WorkflowEngineOperations
     }
 
     /**
+     * 在同一只读事务中解析当前正式身份、执行查询并处理稳定业务异常。
+     *
+     * @param action Function&lt;WorkflowCurrentIdentity,T&gt;，接收已核验身份的只读业务查询
+     * @param exceptionHandler Function&lt;ServiceException,T&gt;，预期业务异常降级处理器
+     * @param <T> 查询返回类型
+     * @return T，查询结果或处理器生成的稳定投影
+     */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public <T> T readAsCurrentUserWithServiceExceptionHandler(
+            Function<WorkflowCurrentIdentity, T> action,
+            Function<ServiceException, T> exceptionHandler)
+    {
+        Objects.requireNonNull(action, "工作流只读身份操作不能为空");
+        Objects.requireNonNull(exceptionHandler, "工作流业务异常处理器不能为空");
+        try
+        {
+            return execute(() -> action.apply(identityResolver.resolveCurrentIdentity()));
+        }
+        catch (ServiceException exception)
+        {
+            return exceptionHandler.apply(exception);
+        }
+    }
+
+    /**
      * 在只读事务中执行无返回值的 Flowable 公共 API 操作。
      *
      * @param action Runnable，只读引擎操作

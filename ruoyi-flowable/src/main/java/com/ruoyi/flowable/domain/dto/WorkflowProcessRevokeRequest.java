@@ -6,14 +6,14 @@ import jakarta.validation.constraints.Size;
 /**
  * 撤回本人已完成任务的专用请求。
  *
- * @param procInsId String，任务所属流程实例主键，沿用旧接口字段名
+ * @param processInstanceId String，任务所属流程实例主键
  * @param taskId String，当前用户此前完成的历史任务主键
  * @param comment String，撤回原因
  */
 public record WorkflowProcessRevokeRequest(
         @NotBlank(message = "流程实例主键不能为空")
         @Size(max = 64, message = "流程实例主键长度不能超过64个字符")
-        String procInsId,
+        String processInstanceId,
         @NotBlank(message = "历史任务主键不能为空")
         @Size(max = 64, message = "历史任务主键长度不能超过64个字符")
         String taskId,

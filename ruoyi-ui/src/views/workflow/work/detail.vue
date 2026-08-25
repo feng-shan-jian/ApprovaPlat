@@ -198,25 +198,60 @@
       </el-table>
     </section>
 
+    <el-alert
+      v-if="ready && applicationFormMissing"
+      class="workflow-detail__application-missing"
+      type="warning"
+      title="申请表单快照缺失，无法证明原申请值；当前仅展示流程图和可用审计信息。"
+      show-icon
+      :closable="false"
+    />
+
     <el-tabs v-if="ready" v-model="activeTab" class="workflow-detail__tabs">
-      <el-tab-pane label="办理表单" name="taskForm">
-        <div v-if="detail.currentTaskForm" class="workflow-detail__section">
+      <el-tab-pane v-if="applicationForm" :label="applicationFormTabLabel" name="applicationForm">
+        <div class="workflow-detail__section">
           <div class="workflow-detail__section-title">
             <div>
-              <h3>{{ detail.currentTaskForm.formName || detail.currentTaskForm.nodeName || '当前任务表单' }}</h3>
-              <span>{{ detail.currentTaskForm.nodeName || detail.currentTask?.taskName }}</span>
+              <h3>{{ applicationForm.formName || '申请表单' }}</h3>
+              <span>{{ applicationForm.nodeName || applicationForm.nodeKey || '开始节点' }}</span>
             </div>
-            <el-tag v-if="!canComplete && !canResubmit" type="info">只读</el-tag>
+            <el-tag v-if="!canResubmit" type="info">只读</el-tag>
+          </div>
+          <ProcessFormRenderer
+            v-if="canResubmit"
+            ref="taskFormRef"
+            v-model="taskFormValues"
+            :content="applicationForm.content"
+            :readonly="false"
+            @error="showComponentError"
+          />
+          <ProcessFormRenderer
+            v-else
+            :content="applicationForm.content"
+            :model-value="applicationFormValues"
+            readonly
+            @error="showComponentError"
+          />
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane v-if="nodeTaskForm" label="本节点办理表单" name="nodeTaskForm">
+        <div class="workflow-detail__section">
+          <div class="workflow-detail__section-title">
+            <div>
+              <h3>{{ nodeTaskForm.formName || nodeTaskForm.nodeName || '本节点办理表单' }}</h3>
+              <span>{{ nodeTaskForm.nodeName || detail.currentTask?.taskName }}</span>
+            </div>
+            <el-tag v-if="!canComplete" type="info">只读</el-tag>
           </div>
           <ProcessFormRenderer
             ref="taskFormRef"
             v-model="taskFormValues"
-            :content="detail.currentTaskForm.content"
-            :readonly="!canComplete && !canResubmit"
+            :content="nodeTaskForm.content"
+            :readonly="!canComplete"
             @error="showComponentError"
           />
         </div>
-        <el-empty v-else description="当前没有可展示的任务表单" :image-size="80" />
       </el-tab-pane>
 
       <el-tab-pane label="流程图" name="diagram" lazy>
@@ -316,7 +351,7 @@
         <el-form-item
           v-if="actionDialog.type === 'complete' && nextUserSelectionEnabled"
           :label="nextUserSelectionLabel"
-          :required="nextUserSelectionRequired"
+          :required="isNextUserSelectionRequired"
         >
           <el-select
             v-model="actionDialog.nextUserIds"
@@ -497,6 +532,7 @@ import { listApprovalUserOptions, listIdentityOptions } from '@/api/workflow/ide
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
 import { flattenFormFields, normalizeFormTemplate } from '@/components/workflow/form/formTemplate'
+import { normalizeDetailFormSemantics } from './detailFormSemantics'
 import useUserStore from '@/store/modules/user'
 import { useWindowSize } from '@vueuse/core'
 
@@ -510,9 +546,14 @@ const ready = ref(false)
 const actionBusy = ref(false)
 // 催办只记录通知与独立审计，不复用任务办理锁或伪装成审批状态动作。
 const urgeBusy = ref(false)
-const activeTab = ref('taskForm')
+const activeTab = ref('applicationForm')
 const detail = reactive({})
 const taskFormValues = ref({})
+// 申请表单和本节点表单必须保持独立语义；开始快照绝不进入历史节点列表。
+const applicationForm = ref(null)
+const applicationFormValues = ref({})
+const nodeTaskForm = ref(null)
+const applicationFormMissing = ref(false)
 const historyForms = ref([])
 const taskFormRef = ref(null)
 const actionFormRef = ref(null)
@@ -545,7 +586,7 @@ const copyUserOptionCache = new Map()
 const verifiedCopyUserIds = new Set()
 // 动态加签使用独立的身份目录缓存，仅负责远程检索后的稳定标签展示。
 const multiInstanceUserOptionCache = new Map()
-// 下一办理人策略只接受服务端冻结枚举；旧接口缺少显式策略时对非必填能力失败关闭。
+// 下一办理人策略只接受详情 API 返回的服务端冻结枚举。
 const NEXT_USER_ASSIGNMENT_POLICIES = Object.freeze([
   'DISABLED',
   'OPTIONAL',
@@ -657,16 +698,16 @@ const multiInstanceSelectionLimit = computed(() => Math.max(1, remainingMultiIns
 // 下一办理人显示、必填和模式完全采用详情 API 的部署模型策略，页面不自行解析 BPMN 或试错探测。
 const nextUserAssignmentPolicy = computed(() => String(detail.nextUserAssignmentPolicy || 'DISABLED'))
 const nextUserSelectionEnabled = computed(() => nextUserAssignmentPolicy.value !== 'DISABLED')
-const nextUserSelectionRequired = computed(() => nextUserAssignmentPolicy.value.startsWith('REQUIRED_'))
-const nextUserSelectionMode = computed(() => ({
+const isNextUserSelectionRequired = computed(() => nextUserAssignmentPolicy.value.startsWith('REQUIRED_'))
+const nextUserAssignmentMode = computed(() => ({
   REQUIRED_ALL: 'ALL',
   REQUIRED_ANY: 'ANY'
 }[nextUserAssignmentPolicy.value] || null))
 const nextUserSelectionLabel = computed(() => ({
   ALL: '会签办理人',
   ANY: '或签办理人'
-}[nextUserSelectionMode.value] || '下一办理人'))
-const nextUserSelectionPlaceholder = computed(() => nextUserSelectionRequired.value
+}[nextUserAssignmentMode.value] || '下一办理人'))
+const nextUserSelectionPlaceholder = computed(() => isNextUserSelectionRequired.value
   ? `请选择${nextUserSelectionLabel.value}`
   : '选择下一办理人（可选）')
 // 任务操作必须同时满足活动任务存在、当前登录用户就是 assignee，不能仅凭页面路由推断所有权。
@@ -689,7 +730,10 @@ const canComplete = computed(() => canOperateTask.value && !pendingDelegation.va
 const canResubmit = computed(() => currentTaskOwned.value
   && detail.processStatus === 'returned'
   && String(detail.startUserId || '') === currentUserId.value
-  && hasPermission('workflow:process:start'))
+    && hasPermission('workflow:process:start'))
+const applicationFormTabLabel = computed(() => canResubmit.value
+  ? '修改申请表单'
+  : '申请表单')
 const canMoveTask = computed(() => canOperateTask.value && !hasDelegationContext.value)
 // 退回能力由后端复用正式动作准备链投影，前端不再把缺少动态多实例状态误判为普通安全任务。
 const canReturnTask = computed(() => canMoveTask.value && detail.returnAllowed === true)
@@ -736,12 +780,11 @@ const actionCommentPlaceholder = computed(() => ({
 }[actionDialog.type] || '请输入办理意见'))
 
 /**
- * 从兼容的新旧隐藏路由参数中读取流程实例主键。
+ * 从详情页唯一命名路由参数中读取流程实例主键。
  * @returns {string} 去除首尾空白后的流程实例主键。
  */
 function processInstanceId() {
-  return String(route.params.instanceId || route.params.processInstanceId || route.params.procInsId || route.params.id
-    || route.query.procInsId || route.query.processInstanceId || '').trim()
+  return String(route.params.instanceId || '').trim()
 }
 
 /**
@@ -749,7 +792,7 @@ function processInstanceId() {
  * @returns {string} 去除首尾空白后的任务主键，未传入时为空字符串。
  */
 function routeTaskId() {
-  return String(route.query.taskId || route.params.taskId || '').trim()
+  return String(route.query.taskId || '').trim()
 }
 
 /**
@@ -808,36 +851,15 @@ function currentActionDialogTaskContext() {
 }
 
 /**
- * 规范服务端下一办理人策略，并兼容旧版必填 ALL/ANY 字段。
- * @param {object} payload 流程详情 API 返回的原始聚合对象。
- * @returns {'DISABLED'|'OPTIONAL'|'REQUIRED_ALL'|'REQUIRED_ANY'} 可直接驱动字段显示和校验的冻结策略。
+ * 校验服务端下一办理人正式策略，详情缺失或枚举越界时拒绝开放办理页面。
+ * @param {unknown} policy 流程详情 API 返回的 nextUserAssignmentPolicy。
+ * @returns {void} 策略合法时无返回值，否则抛出错误。
  */
-function normalizeNextUserAssignmentPolicy(payload) {
-  const legacyMode = payload.nextUserSelectionMode == null
-    ? null
-    : String(payload.nextUserSelectionMode).toUpperCase()
-  const legacyRequired = payload.nextUserSelectionRequired === true
-  if (legacyRequired !== ['ALL', 'ANY'].includes(legacyMode)) {
-    throw new Error('动态下一办理人兼容能力不完整')
-  }
-
-  const rawPolicy = payload.nextUserAssignmentPolicy == null
-    ? ''
-    : String(payload.nextUserAssignmentPolicy).trim().toUpperCase()
-  if (!rawPolicy) {
-    // 旧后端只能证明动态多实例后继为必填；无法证明普通后继可选时必须隐藏字段，避免错误承诺能力。
-    return legacyRequired ? `REQUIRED_${legacyMode}` : 'DISABLED'
-  }
-  if (!NEXT_USER_ASSIGNMENT_POLICIES.includes(rawPolicy)) {
+function validateNextUserAssignmentPolicy(policy) {
+  if (typeof policy !== 'string'
+    || !NEXT_USER_ASSIGNMENT_POLICIES.includes(policy)) {
     throw new Error('下一办理人策略不合法')
   }
-
-  const expectedLegacyRequired = rawPolicy.startsWith('REQUIRED_')
-  const expectedLegacyMode = expectedLegacyRequired ? rawPolicy.slice('REQUIRED_'.length) : null
-  if (legacyRequired !== expectedLegacyRequired || legacyMode !== expectedLegacyMode) {
-    throw new Error('下一办理人策略与兼容字段不一致')
-  }
-  return rawPolicy
 }
 
 /**
@@ -866,8 +888,12 @@ function validateRouteParams() {
 function clearDetailState(preserveMultiInstanceDraft = false) {
   Object.keys(detail).forEach(key => delete detail[key])
   taskFormValues.value = {}
+  applicationForm.value = null
+  applicationFormValues.value = {}
+  nodeTaskForm.value = null
+  applicationFormMissing.value = false
   historyForms.value = []
-  activeTab.value = 'taskForm'
+  activeTab.value = 'applicationForm'
   actionDialog.visible = false
   resetActionDialog()
   if (!preserveMultiInstanceDraft) {
@@ -902,12 +928,7 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
     if (String(payload.processInstanceId || '').trim() !== expectedProcessInstanceId) {
       throw new Error('流程详情实例关系不一致')
     }
-    const nextUserPolicy = normalizeNextUserAssignmentPolicy(payload)
-    payload.nextUserAssignmentPolicy = nextUserPolicy
-    payload.nextUserSelectionRequired = nextUserPolicy.startsWith('REQUIRED_')
-    payload.nextUserSelectionMode = payload.nextUserSelectionRequired
-      ? nextUserPolicy.slice('REQUIRED_'.length)
-      : null
+    validateNextUserAssignmentPolicy(payload.nextUserAssignmentPolicy)
     // 时间线进入页面状态前即移除原始 message/audit，只保留后端明确投影的用户可见 opinion。
     payload.historyProcNodeList = normalizeTimelineComments(payload.historyProcNodeList)
     payload.multiInstanceState = payload.multiInstanceState == null
@@ -915,20 +936,27 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
       : normalizeMultiInstanceState(payload.multiInstanceState)
     // 旧响应或非严格布尔值一律失败关闭，避免页面开放后端必定拒绝的复杂执行树动作。
     payload.returnAllowed = payload.returnAllowed === true
+    const formSemantics = normalizeDetailFormSemantics(payload)
     const attachmentCache = new Map()
-    const currentValues = payload.currentTaskForm
-      ? await hydrateFormValues(payload.currentTaskForm, attachmentCache, expectedProcessInstanceId)
+    const hydratedApplicationValues = formSemantics.applicationForm
+      ? await hydrateFormValues(formSemantics.applicationForm, attachmentCache, expectedProcessInstanceId)
       : {}
-    const historySnapshots = (payload.processFormList || []).filter(form => form.taskId !== payload.currentTask?.taskId)
-    const hydratedHistory = await Promise.all(historySnapshots.map(async form => ({
+    const currentValues = formSemantics.nodeTaskForm
+      ? await hydrateFormValues(formSemantics.nodeTaskForm, attachmentCache, expectedProcessInstanceId)
+      : formSemantics.returnedApplication ? hydratedApplicationValues : {}
+    const hydratedHistory = await Promise.all(formSemantics.historyForms.map(async form => ({
       ...form,
       hydratedValues: await hydrateFormValues(form, attachmentCache, expectedProcessInstanceId)
     })))
     if (requestSequence !== detailLoadSequence || processInstanceId() !== expectedProcessInstanceId) return
     Object.assign(detail, payload)
     taskFormValues.value = currentValues
+    applicationForm.value = formSemantics.applicationForm
+    applicationFormValues.value = hydratedApplicationValues
+    nodeTaskForm.value = formSemantics.nodeTaskForm
+    applicationFormMissing.value = formSemantics.applicationMissing
     historyForms.value = hydratedHistory
-    activeTab.value = payload.currentTaskForm ? 'taskForm' : 'diagram'
+    activeTab.value = formSemantics.defaultTab
     ready.value = true
     if (preserveMultiInstanceDraft) reconcileMultiInstanceDraft()
   } catch (error) {
@@ -1044,7 +1072,7 @@ async function confirmResubmit() {
   if (!assertActionAllowed('resubmit')) return
   const taskContext = freezeCurrentTaskContext()
   if (!isCurrentTaskContext(taskContext)) return denyAction('当前任务状态已变化，请刷新后重试')
-  if (!detail.currentTaskForm || !taskFormRef.value) return denyAction('原申请表单尚未就绪')
+  if (!applicationForm.value || !taskFormRef.value) return denyAction('原申请表单尚未就绪')
 
   actionBusy.value = true
   try {
@@ -1606,7 +1634,7 @@ async function submitAction() {
   const actionTitle = actionDialogTitle.value
   try {
     let variables = {}
-    if (type === 'complete' && detail.currentTaskForm) {
+    if (type === 'complete' && nodeTaskForm.value) {
       if (!taskFormRef.value) {
         actionDialog.error = '任务表单尚未就绪'
         return
@@ -1747,7 +1775,7 @@ function assertActionAllowed(type, validateInput = false) {
   }
   if (supportsCopyAction.value
     && !validSelectedUsers(actionDialog.copyUserIds, '抄送人', verifiedCopyUserIds)) return false
-  if (type === 'complete' && nextUserSelectionRequired.value && actionDialog.nextUserIds.length === 0) {
+  if (type === 'complete' && isNextUserSelectionRequired.value && actionDialog.nextUserIds.length === 0) {
     return denyAction(`${nextUserSelectionLabel.value}不能为空`)
   }
   if (type === 'complete' && !nextUserSelectionEnabled.value && actionDialog.nextUserIds.length > 0) {

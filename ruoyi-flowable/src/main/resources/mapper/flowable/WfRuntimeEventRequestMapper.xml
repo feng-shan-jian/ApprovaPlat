@@ -25,11 +25,34 @@
         complete_time
     </sql>
 
+    <sql id="ListFilters">
+        <where>
+            <if test="query.status != null and query.status != ''">and status = #{query.status}</if>
+            <if test="query.eventType != null and query.eventType != ''">and event_type = #{query.eventType}</if>
+            <if test="query.sourceType != null and query.sourceType != ''">and correlation_type = #{query.sourceType}</if>
+            <if test="query.keyword != null and query.keyword != ''">
+                and (request_id like concat('%', #{query.keyword}, '%')
+                  or event_name like concat('%', #{query.keyword}, '%')
+                  or correlation_value like concat('%', #{query.keyword}, '%')
+                  or result_code like concat('%', #{query.keyword}, '%')
+                  or matched_process_instance_id like concat('%', #{query.keyword}, '%'))
+            </if>
+            <if test="query.beginTime != null">and create_time &gt;= #{query.beginTime}</if>
+            <if test="query.endTime != null">and create_time &lt;= #{query.endTime}</if>
+        </where>
+    </sql>
+
+    <select id="countList" resultType="long">
+        select count(*) from wf_runtime_event_request
+        <include refid="ListFilters"/>
+    </select>
+
     <select id="selectList" resultMap="RuntimeEventResult">
         select <include refid="Columns"/>
         from wf_runtime_event_request
+        <include refid="ListFilters"/>
         order by create_time desc, request_id desc
-        limit 1000
+        limit #{pageSize} offset #{offset}
     </select>
 
     <select id="selectByIdForUpdate" resultMap="RuntimeEventResult">
@@ -75,4 +98,19 @@
             complete_time = current_timestamp(3)
         where request_id = #{requestId} and status = 'RECEIVED'
     </update>
+  <select id="selectRetentionIdsForUpdate" resultType="java.lang.String" timeout="10">
+    select request_id from wf_runtime_event_request
+    where status in ('PROCESSED','FAILED') and complete_time &lt;= #{cutoffTime}
+    order by complete_time,request_id limit #{limit} for update skip locked
+  </select>
+  <delete id="deleteRetentionByIds">
+    delete from wf_runtime_event_request
+    where request_id in
+    <foreach collection="requestIds" item="requestId" open="(" separator="," close=")">#{requestId}</foreach>
+      and status in ('PROCESSED','FAILED') and complete_time &lt;= #{cutoffTime}
+  </delete>
+  <select id="selectOldestRetentionTime" resultType="java.time.LocalDateTime">
+    select min(complete_time) from wf_runtime_event_request
+    where status in ('PROCESSED','FAILED') and complete_time is not null
+  </select>
 </mapper>

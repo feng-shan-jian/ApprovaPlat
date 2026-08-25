@@ -69,6 +69,59 @@ public class IpUtils
     }
 
     /**
+     * 获取限流使用的可信客户端 IP。
+     *
+     * 生产 Nginx 通过回环地址访问应用，并覆盖 X-Real-IP；只有这种可信代理连接才读取该请求头。
+     * 直接访问应用时始终使用 TCP 对端地址，避免调用者伪造 X-Forwarded-For 绕过 IP 配额。
+     *
+     * @return String，限流使用的客户端 IP，不包含调用者可控的代理链
+     */
+    public static String getRateLimitIpAddr()
+    {
+        return getRateLimitIpAddr(ServletUtils.getRequest());
+    }
+
+    /**
+     * 获取限流使用的可信客户端 IP。
+     *
+     * @param request HttpServletRequest，当前 HTTP 请求
+     * @return String，回环代理后的 X-Real-IP 或直接连接的对端 IP
+     */
+    public static String getRateLimitIpAddr(HttpServletRequest request)
+    {
+        if (request == null)
+        {
+            return "unknown";
+        }
+        String remoteAddress = normalizeLoopback(request.getRemoteAddr());
+        if (!"127.0.0.1".equals(remoteAddress))
+        {
+            return remoteAddress;
+        }
+        String realIp = request.getHeader("X-Real-IP");
+        if (isUnknown(realIp) || realIp.indexOf(',') >= 0 || realIp.indexOf('\r') >= 0 || realIp.indexOf('\n') >= 0)
+        {
+            return remoteAddress;
+        }
+        return StringUtils.substring(realIp.trim(), 0, 255);
+    }
+
+    /**
+     * 统一 IPv4 与 IPv6 回环地址表示，供可信代理判断使用。
+     *
+     * @param ip String，TCP 对端地址
+     * @return String，规范化后的地址
+     */
+    private static String normalizeLoopback(String ip)
+    {
+        if ("0:0:0:0:0:0:0:1".equals(ip) || "::1".equals(ip))
+        {
+            return "127.0.0.1";
+        }
+        return StringUtils.isBlank(ip) ? "unknown" : StringUtils.substring(ip.trim(), 0, 255);
+    }
+
+    /**
      * 检查是否为内部IP地址
      * 
      * @param ip IP地址

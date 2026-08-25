@@ -6,17 +6,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
+import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.delegate.DelegateExecution;
+import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.config.WorkflowCollaborationProperties;
 import com.ruoyi.flowable.domain.WfCollaborationOutbox;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowCollaborationOutboxView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
@@ -24,6 +28,7 @@ import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
 import com.ruoyi.flowable.extension.WorkflowHttpConnector;
 import com.ruoyi.flowable.extension.WorkflowHttpConnector.WorkflowHttpDeliveryResult;
 import com.ruoyi.flowable.mapper.WfCollaborationOutboxMapper;
+import com.ruoyi.flowable.service.support.WorkflowPageSupport;
 import com.ruoyi.flowable.runtime.WorkflowCollaborationMetrics;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -40,6 +45,7 @@ public class WorkflowCollaborationOutboxService
     private final WorkflowCollaborationAuditService auditService;
     private final WorkflowHttpConnector httpConnector;
     private final RepositoryService repositoryService;
+    private final HistoryService historyService;
     private final WorkflowEngineOperations engineOperations;
     private final WorkflowCollaborationProperties properties;
     private final WorkflowCollaborationMetrics metrics;
@@ -52,6 +58,7 @@ public class WorkflowCollaborationOutboxService
      * @param auditService WorkflowCollaborationAuditService，逐次状态审计
      * @param httpConnector WorkflowHttpConnector，冻结端点和认证 HTTP 出口
      * @param repositoryService RepositoryService，流程定义到部署快照查询
+     * @param historyService HistoryService，发送方自然完成与取消终态判定
      * @param engineOperations WorkflowEngineOperations，当前用户事务边界
      * @param properties WorkflowCollaborationProperties，批次、租约和退避上限
      * @param metrics WorkflowCollaborationMetrics，低基数运行指标
@@ -61,6 +68,7 @@ public class WorkflowCollaborationOutboxService
             WorkflowCollaborationChannelService channelService,
             WorkflowCollaborationAuditService auditService,
             WorkflowHttpConnector httpConnector, RepositoryService repositoryService,
+            HistoryService historyService,
             WorkflowEngineOperations engineOperations, WorkflowCollaborationProperties properties,
             WorkflowCollaborationMetrics metrics)
     {
@@ -69,6 +77,7 @@ public class WorkflowCollaborationOutboxService
         this.auditService = auditService;
         this.httpConnector = httpConnector;
         this.repositoryService = repositoryService;
+        this.historyService = historyService;
         this.engineOperations = engineOperations;
         this.properties = properties;
         this.metrics = metrics;
@@ -161,6 +170,20 @@ public class WorkflowCollaborationOutboxService
     {
         WfCollaborationOutbox candidate = mapper.selectNextDueForUpdate();
         if (candidate == null) return null;
+        if (sourceInstanceWasCancelled(candidate.getSourceProcessInstanceId()))
+        {
+            // 自然结束的发送方仍应完成可靠投递；只有 Flowable 明确删除的取消/终止实例停止后续网络调用。
+            if (mapper.cancel(candidate.getMessageId(), candidate.getRevisionNo()) != 1)
+            {
+                throw new ServiceException("协作 outbox 源实例取消状态提交冲突", HttpStatus.CONFLICT)
+                        .setSubCode("COLLAB_OUTBOX_SOURCE_CANCEL_CONFLICT");
+            }
+            auditService.record(candidate.getMessageId(), "OUTBOUND", "CANCEL", "SYSTEM", workerId,
+                    candidate.getStatus(), "CANCELLED", candidate.getAttemptCount(), null,
+                    "发送方流程已取消，停止后续投递");
+            metrics.record("cancelled");
+            return null;
+        }
         int leaseSeconds = Math.toIntExact(properties.getLeaseDuration().toSeconds());
         if (mapper.claim(candidate.getMessageId(), candidate.getRevisionNo(), workerId,
                 leaseSeconds) != 1)
@@ -172,6 +195,19 @@ public class WorkflowCollaborationOutboxService
                 candidate.getStatus(), "DELIVERING", claimed.getAttemptCount(), null,
                 "后台 worker 已领取");
         return claimed;
+    }
+
+    /**
+     * 判断发送方流程是否由取消、驳回或终止命令删除。
+     * @param processInstanceId String，outbox 冻结的发送方流程实例主键
+     * @return boolean，历史实例存在非空删除原因时返回 true；自然完成或仍运行返回 false
+     */
+    private boolean sourceInstanceWasCancelled(String processInstanceId)
+    {
+        HistoricProcessInstance source = historyService.createHistoricProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult();
+        return source != null && source.getDeleteReason() != null
+                && !source.getDeleteReason().isBlank();
     }
 
     /**
@@ -248,12 +284,20 @@ public class WorkflowCollaborationOutboxService
     }
 
     /**
-     * 查询最近 1000 条脱敏 outbox 管理记录。
-     * @return List&lt;WorkflowCollaborationOutboxView&gt;，不含变量和端点认证字段
+     * 分页查询脱敏 outbox 管理记录。
+     * @param query Collaboration，状态、关键字和创建时间范围
+     * @param pageNum int，从 1 开始的页码
+     * @param pageSize int，每页记录数，最大 100
+     * @return PageResult&lt;WorkflowCollaborationOutboxView&gt;，不含变量和端点认证字段
      */
-    public List<WorkflowCollaborationOutboxView> list()
+    public PageResult<WorkflowCollaborationOutboxView> list(
+            WorkflowOperationsQuery.Collaboration query, int pageNum, int pageSize)
     {
-        return engineOperations.read(() -> mapper.selectList().stream().map(this::toView).toList());
+        WorkflowPageSupport.requireTimeRange(query.beginTime(), query.endTime());
+        return engineOperations.read(() -> WorkflowPageSupport.query(pageNum, pageSize,
+                () -> mapper.countList(query),
+                (offset, size) -> mapper.selectList(query, offset, size).stream()
+                        .map(this::toView).toList()));
     }
 
     /**

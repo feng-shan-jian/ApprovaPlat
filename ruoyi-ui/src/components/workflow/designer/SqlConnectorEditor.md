@@ -10,7 +10,7 @@
 <SqlConnectorEditor
   v-model="extensionConfig"
   :data-sources="sqlDataSources"
-  @change="updateServiceTask"
+  @change="updateControlledTask"
 />
 ```
 
@@ -35,7 +35,9 @@
 ## 关键设计思路
 
 - SQL 参数名与流程变量显式一对一映射，禁止表达式和任意 Bean 读取。
-- `idempotencyKey` 由外库写入运行时自动注入，不在页面映射。
+- HTTP/SQL 连接器节点必须启用进入前异步，失败由 Flowable Job 重试并最终进入原生死信。
+- 外库写只接受 `INSERT ... ON DUPLICATE KEY UPDATE idempotency_column = idempotency_column` 形式；`idempotencyColumn` 必须对应目标表真实唯一约束。
+- `idempotencyKey` 由运行时基于流程实例、execution 和节点稳定生成，不在页面映射。
 - 查询最多返回 1000 行，部署端仍会通过 JSqlParser 复核单语句、操作类型和表白名单。
 - 页面永远不接触外库凭据正文，历史部署使用冻结的数据源修订与校验和。
 
@@ -48,5 +50,17 @@ const extensionConfig = JSON.stringify({
   parameters: { businessId: 'businessId' },
   resultVariable: 'queryResult',
   maxRows: 10
+})
+```
+
+外库幂等写最小示例：
+
+```js
+const extensionConfig = JSON.stringify({
+  dataSourceKey: 'finance-external',
+  sql: 'insert into payment_request(request_id, amount) values (:idempotencyKey, :amount) on duplicate key update request_id = request_id',
+  parameters: { amount: 'amount' },
+  idempotencyColumn: 'request_id',
+  maxRows: 1
 })
 ```

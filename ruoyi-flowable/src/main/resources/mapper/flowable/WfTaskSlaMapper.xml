@@ -150,6 +150,17 @@
         order by sla_execution_id for update
     </select>
 
+    <select id="selectWithdrawableExecutionsForUpdate" resultMap="SlaExecutionResult">
+        select <include refid="ExecutionColumns"/> from wf_task_sla_execution
+        where process_instance_id = #{processInstanceId}
+          and status in ('ACTIVE', 'ESCALATED')
+          and task_id in
+          <foreach collection="taskIds" item="taskId" open="(" separator="," close=")">
+              #{taskId}
+          </foreach>
+        order by sla_execution_id for update
+    </select>
+
     <update id="updateAssignee">
         update wf_task_sla_execution set assignee_user_id = #{assigneeUserId},
             revision = revision + 1, update_time = current_timestamp(3)
@@ -199,18 +210,35 @@
           and paused_at is not null
     </update>
 
-    <insert id="insertAudit">
-        insert ignore into wf_task_sla_audit
+    <insert id="insertAudit" useGeneratedKeys="true" keyProperty="auditId">
+        insert into wf_task_sla_audit
             (sla_execution_id, action_type, action_ordinal, actor_user_id, detail, create_time)
         values
             (#{executionId}, #{actionType}, #{actionOrdinal}, #{actorUserId}, #{detail},
              current_timestamp(3))
+        on duplicate key update audit_id = last_insert_id(audit_id)
     </insert>
 
-    <select id="selectAuditId" resultType="java.lang.Long">
-        select audit_id from wf_task_sla_audit
-        where sla_execution_id = #{executionId} and action_type = #{actionType}
-          and action_ordinal = #{actionOrdinal}
+    <sql id="AuditListFilters">
+        <where>
+            <if test="query.actionType != null and query.actionType != ''">and a.action_type = #{query.actionType}</if>
+            <if test="query.keyword != null and query.keyword != ''">
+                and (cast(a.audit_id as char) = #{query.keyword}
+                  or cast(a.sla_execution_id as char) = #{query.keyword}
+                  or e.process_instance_id like concat('%', #{query.keyword}, '%')
+                  or e.task_id like concat('%', #{query.keyword}, '%')
+                  or e.task_definition_key like concat('%', #{query.keyword}, '%')
+                  or a.actor_user_id like concat('%', #{query.keyword}, '%'))
+            </if>
+            <if test="query.beginTime != null">and a.create_time &gt;= #{query.beginTime}</if>
+            <if test="query.endTime != null">and a.create_time &lt;= #{query.endTime}</if>
+        </where>
+    </sql>
+
+    <select id="countAudits" resultType="long">
+        select count(*) from wf_task_sla_audit a
+        join wf_task_sla_execution e on e.sla_execution_id = a.sla_execution_id
+        <include refid="AuditListFilters"/>
     </select>
 
     <select id="selectAudits" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaAuditView">
@@ -221,33 +249,30 @@
                a.detail, a.create_time as createTime
         from wf_task_sla_audit a
         join wf_task_sla_execution e on e.sla_execution_id = a.sla_execution_id
-        order by a.audit_id desc limit 500
+        <include refid="AuditListFilters"/>
+        order by a.create_time desc, a.audit_id desc
+        limit #{pageSize} offset #{offset}
     </select>
 
-    <select id="selectNotifications" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaNotificationView">
-        select n.notification_id as notificationId, a.audit_id as auditId,
-               e.process_instance_id as processInstanceId, e.task_id as taskId,
-               o.event_type as actionType, n.title, n.content,
-               n.read_status as readStatus, n.create_time as createTime,
-               n.read_time as readTime
-        from wf_notification_inbox n
-        join wf_notification_outbox o
-          on o.outbox_id = n.outbox_id and o.source_type = 'SLA'
-        join wf_task_sla_audit a on o.source_id = cast(a.audit_id as char)
-        join wf_task_sla_execution e on e.sla_execution_id = a.sla_execution_id
-        where n.recipient_user_id = cast(#{userId} as unsigned)
-        order by n.notification_id desc limit 200
-    </select>
+    <sql id="ExecutionListFilters">
+        <where>
+            <if test="query.status != null and query.status != ''">and status = #{query.status}</if>
+            <if test="query.keyword != null and query.keyword != ''">
+                and (cast(sla_execution_id as char) = #{query.keyword}
+                  or process_instance_id like concat('%', #{query.keyword}, '%')
+                  or task_id like concat('%', #{query.keyword}, '%')
+                  or task_definition_key like concat('%', #{query.keyword}, '%')
+                  or assignee_user_id like concat('%', #{query.keyword}, '%'))
+            </if>
+            <if test="query.beginTime != null">and started_at &gt;= #{query.beginTime}</if>
+            <if test="query.endTime != null">and started_at &lt;= #{query.endTime}</if>
+        </where>
+    </sql>
 
-    <update id="markNotificationRead">
-        update wf_notification_inbox n
-        join wf_notification_outbox o
-          on o.outbox_id = n.outbox_id and o.source_type = 'SLA'
-        set n.read_status = 'READ', n.read_time = current_timestamp(3)
-        where n.notification_id = #{notificationId}
-          and n.recipient_user_id = cast(#{userId} as unsigned)
-          and n.read_status = 'UNREAD'
-    </update>
+    <select id="countExecutions" resultType="long">
+        select count(*) from wf_task_sla_execution
+        <include refid="ExecutionListFilters"/>
+    </select>
 
     <select id="selectExecutions" resultType="com.ruoyi.flowable.domain.vo.WorkflowTaskSlaExecutionView">
         select sla_execution_id as slaExecutionId,
@@ -256,6 +281,9 @@
                status, started_at as startedAt, reminder_due_at as reminderDueAt,
                escalation_due_at as escalationDueAt, reminders_sent as remindersSent,
                paused_at as pausedAt, paused_millis as pausedMillis
-        from wf_task_sla_execution order by sla_execution_id desc limit 500
+        from wf_task_sla_execution
+        <include refid="ExecutionListFilters"/>
+        order by started_at desc, sla_execution_id desc
+        limit #{pageSize} offset #{offset}
     </select>
 </mapper>

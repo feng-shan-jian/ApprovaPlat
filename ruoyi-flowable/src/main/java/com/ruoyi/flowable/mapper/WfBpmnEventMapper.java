@@ -3,8 +3,9 @@ package com.ruoyi.flowable.mapper;
 import java.util.List;
 import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WfBpmnEventCode;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventAuditView;
-import com.ruoyi.flowable.domain.vo.WorkflowBpmnEventNotificationView;
+import com.ruoyi.flowable.mapper.param.WfBpmnEventAuditWriteParam;
 
 /**
  * BPMN 错误、升级目录及运行审计数据访问层。
@@ -68,35 +69,20 @@ public interface WfBpmnEventMapper
      * @param initiatorUserId String，发起人用户主键
      * @return int，首次写入 1，重复触发 0
      */
-    int insertAudit(@Param("idempotencyKey") String idempotencyKey,
-            @Param("deploymentId") String deploymentId,
-            @Param("processInstanceId") String processInstanceId,
-            @Param("processDefinitionId") String processDefinitionId,
-            @Param("executionId") String executionId,
-            @Param("sourceElementId") String sourceElementId,
-            @Param("sourceType") String sourceType,
-            @Param("eventType") String eventType, @Param("eventCode") String eventCode,
-            @Param("eventName") String eventName, @Param("matchStatus") String matchStatus,
-            @Param("boundaryEventId") String boundaryEventId,
-            @Param("interrupting") Boolean interrupting,
-            @Param("messageSummary") String messageSummary,
-            @Param("initiatorUserId") String initiatorUserId);
+    int insertAudit(WfBpmnEventAuditWriteParam param);
 
-    /** @param idempotencyKey String，幂等摘要；@return Long，审计主键。 */
-    Long selectAuditId(@Param("idempotencyKey") String idempotencyKey);
-
-    /** @return List&lt;WorkflowBpmnEventAuditView&gt;，最近 500 条运行审计。 */
-    List<WorkflowBpmnEventAuditView> selectAuditList();
-
-    /** @param userId String，当前用户主键；@return List&lt;WorkflowBpmnEventNotificationView&gt;，最近 200 条通知。 */
-    List<WorkflowBpmnEventNotificationView> selectNotifications(@Param("userId") String userId);
+    /** @param query BpmnEventAudit，运维筛选条件；@return long，符合条件的审计总数。 */
+    long countAuditList(@Param("query") WorkflowOperationsQuery.BpmnEventAudit query);
 
     /**
-     * 标记当前用户通知已读。
-     * @param notificationId Long，通知主键
-     * @param userId String，当前用户主键
-     * @return int，首次标记 1，不存在或越权 0
+     * 分页查询 BPMN 事件运行审计。
+     * @param query BpmnEventAudit，运维筛选条件
+     * @param offset int，数据库起始偏移
+     * @param pageSize int，本页最大记录数
+     * @return List&lt;WorkflowBpmnEventAuditView&gt;，按时间和审计主键倒序的当前页
      */
-    int markNotificationRead(@Param("notificationId") Long notificationId,
-            @Param("userId") String userId);
+    List<WorkflowBpmnEventAuditView> selectAuditList(
+            @Param("query") WorkflowOperationsQuery.BpmnEventAudit query,
+            @Param("offset") int offset, @Param("pageSize") int pageSize);
+
 }

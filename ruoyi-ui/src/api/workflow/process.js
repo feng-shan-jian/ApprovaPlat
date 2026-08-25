@@ -77,25 +77,11 @@ export function markCopyRead(copyId) {
 
 /**
  * 查询定义、部署和可选实例关系校验后的开始表单快照。
- * @param {object} query definitionId、deployId 和可选 procInsId。
+ * @param {object} query definitionId、deploymentId 和可选 processInstanceId。
  * @returns {Promise<object>} data 为不可变部署表单快照的响应。
  */
 export function getProcessForm(query) {
   return request({ url: '/workflow/process/getProcessForm', method: 'get', params: query })
-}
-
-/**
- * 发起经过 starter、快照和变量白名单校验的真实流程实例。
- * @param {string} processDefinitionId Flowable 流程定义主键。
- * @param {object} data 可选业务主键和开始表单变量。
- * @returns {Promise<object>} data 为新流程实例快照的响应。
- */
-export function startProcess(processDefinitionId, data) {
-  return request({
-    url: `/workflow/process/start/${encodeURIComponent(processDefinitionId)}`,
-    method: 'post',
-    data: { ...data, processDefinitionId }
-  })
 }
 
 /**
@@ -119,7 +105,7 @@ export function getProcessBpmnXml(processDefinitionId, processInstanceId) {
   return request({
     url: `/workflow/process/bpmnXml/${encodeURIComponent(processDefinitionId)}`,
     method: 'get',
-    params: processInstanceId ? { procInsId: processInstanceId } : undefined
+    params: processInstanceId ? { processInstanceId } : undefined
   })
 }
 
@@ -133,6 +119,6 @@ export function getProcessDetail(processInstanceId, taskId) {
   return request({
     url: '/workflow/process/detail',
     method: 'get',
-    params: { procInsId: processInstanceId, taskId }
+    params: { processInstanceId, taskId }
   })
 }

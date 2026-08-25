@@ -16,7 +16,7 @@
 - 当前用户办理完成过该实例中的任务。
 - `wf_copy` 中存在当前有效抄送记录。
 
-客户端提交的 `userId`、`procInsId` 与 `taskId` 关联不会作为授权依据。任务所属实例始终从 Flowable 任务记录重新查询。
+客户端提交的 `userId`、`processInstanceId` 与 `taskId` 关联不会作为授权依据。任务所属实例始终从 Flowable 任务记录重新查询。
 
 ## 公开方法
 

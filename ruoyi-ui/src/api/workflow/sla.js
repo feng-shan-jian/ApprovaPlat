@@ -50,34 +50,19 @@ export function changeSlaCalendarStatus(calendarId, enabled) {
 }
 
 /**
- * 查询最近 SLA 执行状态。
- * @returns {Promise<object>} 当前权限范围内的正式执行记录。
+ * 分页查询 SLA 执行状态。
+ * @param {object} query 分页、状态、关键字和时间筛选。
+ * @returns {Promise<object>} 当前权限范围内的 rows/total。
  */
-export function listSlaExecutions() {
-  return request({ url: '/workflow/sla/executions', method: 'get' })
+export function listSlaExecutions(query) {
+  return request({ url: '/workflow/sla/executions', method: 'get', params: query })
 }
 
 /**
- * 查询最近 SLA 生命周期与触发审计。
- * @returns {Promise<object>} 创建、提醒、升级、暂停、恢复和完成审计。
+ * 分页查询 SLA 生命周期与触发审计。
+ * @param {object} query 分页、动作、关键字和时间筛选。
+ * @returns {Promise<object>} 创建、提醒、升级、暂停、恢复和完成审计 rows/total。
  */
-export function listSlaAudits() {
-  return request({ url: '/workflow/sla/audits', method: 'get' })
-}
-
-/**
- * 查询当前用户 SLA 提醒与升级通知。
- * @returns {Promise<object>} 服务端按接收人隔离的通知集合。
- */
-export function listMySlaNotifications() {
-  return request({ url: '/workflow/sla/notifications', method: 'get' })
-}
-
-/**
- * 将当前用户的一条 SLA 通知标记为已读。
- * @param {number|string} notificationId 通知主键。
- * @returns {Promise<object>} 服务端鉴权后的已读结果。
- */
-export function markSlaNotificationRead(notificationId) {
-  return request({ url: `/workflow/sla/notifications/${notificationId}/read`, method: 'put' })
+export function listSlaAudits(query) {
+  return request({ url: '/workflow/sla/audits', method: 'get', params: query })
 }

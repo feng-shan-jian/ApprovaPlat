@@ -22,14 +22,16 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 import org.flowable.engine.delegate.DelegateExecution;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfConnectorEndpoint;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
-import com.ruoyi.flowable.domain.vo.WorkflowConnectorInvocationClaim;
+import com.ruoyi.flowable.runtime.WorkflowConnectorMetrics;
 import com.ruoyi.flowable.service.model.WorkflowConnectorEndpointService;
-import com.ruoyi.flowable.service.process.WorkflowConnectorInvocationService;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -43,6 +45,7 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class WorkflowHttpConnector
 {
+    private static final Logger log = LoggerFactory.getLogger(WorkflowHttpConnector.class);
     /** ApprovaPlat 协作协议固定使用的集成认证请求头。 */
     private static final String COLLABORATION_TOKEN_HEADER = "X-Integration-Token";
     /** 固定实现键。 */
@@ -76,24 +79,24 @@ public class WorkflowHttpConnector
             """;
 
     private final WorkflowConnectorEndpointService endpointService;
-    private final WorkflowConnectorInvocationService invocationService;
     private final WorkflowConnectorSecretResolver secretResolver;
+    private final WorkflowConnectorMetrics connectorMetrics;
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
      * 创建受控 HTTP 连接器。
      * @param endpointService WorkflowConnectorEndpointService，端点锁定服务
-     * @param invocationService WorkflowConnectorInvocationService，幂等调用台账
      * @param secretResolver WorkflowConnectorSecretResolver，外部密钥解析器
+     * @param connectorMetrics WorkflowConnectorMetrics，单次 Flowable Job 尝试指标
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowHttpConnector(WorkflowConnectorEndpointService endpointService,
-            WorkflowConnectorInvocationService invocationService,
-            WorkflowConnectorSecretResolver secretResolver)
+            WorkflowConnectorSecretResolver secretResolver,
+            WorkflowConnectorMetrics connectorMetrics)
     {
         this.endpointService = endpointService;
-        this.invocationService = invocationService;
         this.secretResolver = secretResolver;
+        this.connectorMetrics = connectorMetrics;
     }
 
     /**
@@ -259,7 +262,7 @@ public class WorkflowHttpConnector
     }
 
     /**
-     * 复核运行快照并执行一次可审计 HTTP 请求。
+     * 复核运行快照并执行一次 HTTP 请求；异常直接交回 Flowable Job 重试和死信。
      * @param execution DelegateExecution，Flowable 当前执行上下文
      * @param snapshot WfDeployExtensionSnapshot，已通过外层摘要校验的部署快照
      * @param config JsonNode，冻结节点配置
@@ -269,77 +272,60 @@ public class WorkflowHttpConnector
             JsonNode config)
     {
         FrozenConfig frozen = parseFrozen(config);
-        String idempotencyKey = WorkflowExtensionChecksum.sha256(snapshot.getDeployId(),
-                execution.getProcessInstanceId(), execution.getId(), execution.getCurrentActivityId());
-        WorkflowConnectorInvocationClaim claim = invocationService.begin(snapshot.getDeployId(),
-                execution.getProcessInstanceId(), execution.getId(), execution.getCurrentActivityId(),
-                "HTTP", frozen.author().endpointKey(), frozen.endpoint().revisionNo(), idempotencyKey,
-                frozen.author().method(), frozen.author().path());
-        if ("SUCCESS".equals(claim.status()))
-        {
-            setStatusVariable(execution, frozen.author().statusVariable(), claim.resultCode());
-            return;
-        }
-
+        byte[] requestBody = requestBody(execution, frozen.author());
+        String payloadSha256 = payloadSha256(requestBody);
+        String idempotencyKey = WorkflowExtensionChecksum.sha256(
+                execution.getProcessInstanceId(), execution.getId(),
+                execution.getCurrentActivityId(), payloadSha256);
         long started = System.nanoTime();
-        // 标记台账终态是否已开始提交，避免台账自身异常触发第二次失败写入。
-        boolean finalizationAttempted = false;
+        Integer responseStatus = null;
         try
         {
-            HttpResponse<InputStream> response = send(execution, frozen, idempotencyKey);
+            HttpResponse<InputStream> response = sendBytes(frozen, idempotencyKey, requestBody);
+            responseStatus = response.statusCode();
             byte[] responseBytes = readBounded(response.body(), MAX_BODY_BYTES);
-            long durationMs = elapsedMillis(started);
-            String summary = bodySummary(responseBytes);
             if (response.statusCode() < 200 || response.statusCode() >= 300)
             {
-                finalizationAttempted = true;
-                invocationService.failure(claim, durationMs, response.statusCode(),
-                        "HTTP_STATUS", summary);
-                throw new RecordedConnectorFailure("HTTP 连接器返回非成功状态");
+                throw new ServiceException("HTTP 连接器返回非成功状态", HttpStatus.ERROR)
+                        .setSubCode("WORKFLOW_CONNECTOR_HTTP_STATUS");
             }
-            finalizationAttempted = true;
-            invocationService.success(claim, durationMs, response.statusCode(), summary);
             setStatusVariable(execution, frozen.author().statusVariable(), response.statusCode());
+            recordAttempt(execution, started, true, String.valueOf(response.statusCode()));
         }
         catch (InterruptedException exception)
         {
             Thread.currentThread().interrupt();
-            recordFailure(claim, started, null, "INTERRUPTED", "request-interrupted");
-            throw new ServiceException("HTTP 连接器调用被中断", HttpStatus.ERROR);
+            recordAttempt(execution, started, false, "INTERRUPTED");
+            throw new ServiceException("HTTP 连接器调用被中断", HttpStatus.ERROR)
+                    .setSubCode("WORKFLOW_CONNECTOR_HTTP_INTERRUPTED");
         }
         catch (HttpTimeoutException exception)
         {
-            recordFailure(claim, started, null, "TIMEOUT", "request-timeout");
-            throw new ServiceException("HTTP 连接器调用超时", HttpStatus.ERROR);
+            recordAttempt(execution, started, false, "TIMEOUT");
+            throw new ServiceException("HTTP 连接器调用超时", HttpStatus.ERROR)
+                    .setSubCode("WORKFLOW_CONNECTOR_HTTP_TIMEOUT");
         }
         catch (IOException exception)
         {
-            recordFailure(claim, started, null, "IO_ERROR", "transport-error");
-            throw new ServiceException("HTTP 连接器网络调用失败", HttpStatus.ERROR);
+            recordAttempt(execution, started, false, "IO_ERROR");
+            throw new ServiceException("HTTP 连接器网络调用失败", HttpStatus.ERROR)
+                    .setSubCode("WORKFLOW_CONNECTOR_HTTP_IO_ERROR");
         }
         catch (ResponseTooLargeException exception)
         {
-            recordFailure(claim, started, null, "RESPONSE_TOO_LARGE", "response-too-large");
-            throw new ServiceException(exception.getMessage(), HttpStatus.ERROR);
-        }
-        catch (RecordedConnectorFailure exception)
-        {
-            throw new ServiceException(exception.getMessage(), HttpStatus.ERROR);
+            recordAttempt(execution, started, false, "RESPONSE_TOO_LARGE");
+            throw new ServiceException(exception.getMessage(), HttpStatus.ERROR)
+                    .setSubCode("WORKFLOW_CONNECTOR_HTTP_RESPONSE_TOO_LARGE");
         }
         catch (ServiceException exception)
         {
-            if (!finalizationAttempted)
-            {
-                recordFailure(claim, started, null, "VALIDATION_ERROR", "request-rejected");
-            }
+            recordAttempt(execution, started, false,
+                    responseStatus == null ? "VALIDATION_ERROR" : String.valueOf(responseStatus));
             throw exception;
         }
         catch (RuntimeException exception)
         {
-            if (!finalizationAttempted)
-            {
-                recordFailure(claim, started, null, "RUNTIME_ERROR", "runtime-error");
-            }
+            recordAttempt(execution, started, false, "RUNTIME_ERROR");
             throw exception;
         }
     }
@@ -363,21 +349,6 @@ public class WorkflowHttpConnector
         {
             throw new ServiceException("HTTP 冻结配置无法规范化", HttpStatus.ERROR);
         }
-    }
-
-    /**
-     * 使用冻结端点构造并发送禁止重定向的 HTTP 请求。
-     * @param execution DelegateExecution，流程变量来源
-     * @param frozen FrozenConfig，已复核冻结配置
-     * @param idempotencyKey String，稳定幂等键
-     * @return HttpResponse&lt;InputStream&gt;，未读取正文的响应
-     * @throws IOException 网络或正文序列化失败
-     * @throws InterruptedException 线程中断
-     */
-    private HttpResponse<InputStream> send(DelegateExecution execution, FrozenConfig frozen,
-            String idempotencyKey) throws IOException, InterruptedException
-    {
-        return sendBytes(frozen, idempotencyKey, requestBody(execution, frozen.author()));
     }
 
     /**
@@ -474,7 +445,15 @@ public class WorkflowHttpConnector
         if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long)
             return objectMapper.getNodeFactory().numberNode(((Number) value).longValue());
         if (value instanceof Float || value instanceof Double)
-            return objectMapper.getNodeFactory().numberNode(((Number) value).doubleValue());
+        {
+            double numericValue = ((Number) value).doubleValue();
+            // 外部 HTTP JSON 不允许 NaN 和 Infinity，必须在网络副作用发生前拒绝。
+            if (!Double.isFinite(numericValue))
+            {
+                throw new ServiceException("HTTP 请求正文包含非有限数字", HttpStatus.ERROR);
+            }
+            return objectMapper.getNodeFactory().numberNode(numericValue);
+        }
         if (value instanceof BigInteger integer) return objectMapper.getNodeFactory().numberNode(integer);
         if (value instanceof BigDecimal decimal) return objectMapper.getNodeFactory().numberNode(decimal);
         if (value instanceof List<?> list)
@@ -663,17 +642,17 @@ public class WorkflowHttpConnector
     }
 
     /**
-     * 生成不包含响应正文的结果摘要。
-     * @param bytes byte[]，有界响应正文
-     * @return String，长度和 SHA-256 摘要
+     * 计算请求正文摘要；无正文按空字节数组计算，确保 GET/DELETE 重试键稳定。
+     * @param body byte[]，可空受控请求正文
+     * @return String，64 位小写 SHA-256
      */
-    private String bodySummary(byte[] bytes)
+    private String payloadSha256(byte[] body)
     {
         try
         {
-            String digest = java.util.HexFormat.of().formatHex(
-                    MessageDigest.getInstance("SHA-256").digest(bytes));
-            return "bytes=" + bytes.length + ",sha256=" + digest;
+            byte[] payload = body == null ? new byte[0] : body;
+            return java.util.HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(payload));
         }
         catch (NoSuchAlgorithmException exception)
         {
@@ -694,18 +673,32 @@ public class WorkflowHttpConnector
     }
 
     /**
-     * 记录未获得响应的失败台账；台账异常优先暴露以避免静默丢审计。
-     * @param claim WorkflowConnectorInvocationClaim，本次领取
-     * @param started long，开始时间纳秒
-     * @param httpStatus Integer，可空响应状态
-     * @param errorCode String，稳定错误码
-     * @param summary String，脱敏摘要
-     * @return void，无返回值
+     * 记录单次 Flowable Job 尝试的结构化日志和指标，不输出端点密钥、请求头或正文。
+     * @param execution DelegateExecution，当前 Flowable 执行上下文
+     * @param started long，System.nanoTime 起点
+     * @param success boolean，本次尝试是否成功
+     * @param resultCode String，低敏稳定结果码或 HTTP 状态码
+     * @return void，日志和指标失败不得改变连接器业务结果
      */
-    private void recordFailure(WorkflowConnectorInvocationClaim claim, long started,
-            Integer httpStatus, String errorCode, String summary)
+    private void recordAttempt(DelegateExecution execution, long started,
+            boolean success, String resultCode)
     {
-        invocationService.failure(claim, elapsedMillis(started), httpStatus, errorCode, summary);
+        long durationMs = elapsedMillis(started);
+        connectorMetrics.record("HTTP", success, durationMs);
+        log.info("operation=workflowConnector type=HTTP traceId={} processInstanceId={} "
+                        + "executionId={} elementId={} resultCode={} durationMs={}",
+                safeTraceId(), execution.getProcessInstanceId(), execution.getId(),
+                execution.getCurrentActivityId(), resultCode, durationMs);
+    }
+
+    /**
+     * 读取当前链路标识，未配置 MDC 时使用空字符串且不伪造业务值。
+     * @return String，当前 traceId 或空字符串
+     */
+    private String safeTraceId()
+    {
+        String traceId = MDC.get("traceId");
+        return traceId == null ? "" : traceId;
     }
 
     /**
@@ -892,22 +885,6 @@ public class WorkflowHttpConnector
         public byte[] body()
         {
             return body == null ? new byte[0] : body.clone();
-        }
-    }
-
-    /** 表示失败台账已经提交，外层不得重复记录。 */
-    private static final class RecordedConnectorFailure extends RuntimeException
-    {
-        private static final long serialVersionUID = 1L;
-
-        /**
-         * 创建已记录失败异常。
-         * @param message String，对外稳定错误消息
-         * @return 无返回值，构造后由执行分支抛出
-         */
-        private RecordedConnectorFailure(String message)
-        {
-            super(message);
         }
     }
 

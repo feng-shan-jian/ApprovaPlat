@@ -1,10 +1,15 @@
 package com.ruoyi.framework.web.service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +47,9 @@ public class TokenService
 
     /** HS512 Token 密钥允许的最小解码字节数。 */
     private static final int MIN_TOKEN_SECRET_BYTES = 64;
+
+    /** 从 RuoYi Token 根密钥派生业务子密钥时使用的固定协议前缀。 */
+    private static final String KEY_DERIVATION_PREFIX = "ruoyi-purpose-key:v1:";
 
     /** JJWT 头和声明固定使用的 Jackson 3 流式编码器。 */
     private static final Serializer<Map<String, ?>> JWT_JSON_SERIALIZER =
@@ -337,6 +345,45 @@ public class TokenService
             throw new IllegalStateException("Token 签名密钥尚未初始化");
         }
         return signingKey;
+    }
+
+    /**
+     * 从 RuoYi Token 根密钥派生指定用途的 AES-256 子密钥。
+     *
+     * 派生过程使用 HMAC-SHA-256 和固定协议前缀隔离用途，调用方不会取得 Token
+     * 根密钥，也不能把派生出的邮件密钥用于伪造 JWT。根密钥变化时派生结果也会
+     * 变化，因此部署必须继续遵守既有 Token 密钥持久化和多节点共享规则。
+     *
+     * @param purpose String，调用方代码内固定的非空用途标识，不得来自用户输入
+     * @return SecretKey，长度固定为 32 字节且算法标记为 AES 的用途子密钥
+     */
+    public SecretKey deriveAes256Key(String purpose)
+    {
+        if (purpose == null || !purpose.matches("[A-Za-z0-9._-]{1,128}"))
+        {
+            throw new IllegalArgumentException("密钥派生用途不合法");
+        }
+        byte[] rootKey = requireSigningKey().getEncoded();
+        if (rootKey == null || rootKey.length < MIN_TOKEN_SECRET_BYTES)
+        {
+            throw new IllegalStateException("Token 根密钥不可用于业务密钥派生");
+        }
+        try
+        {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(rootKey, "HmacSHA256"));
+            byte[] derived = mac.doFinal((KEY_DERIVATION_PREFIX + purpose)
+                    .getBytes(StandardCharsets.UTF_8));
+            return new SecretKeySpec(derived, "AES");
+        }
+        catch (GeneralSecurityException exception)
+        {
+            throw new IllegalStateException("Token 业务密钥派生能力不可用", exception);
+        }
+        finally
+        {
+            Arrays.fill(rootKey, (byte) 0);
+        }
     }
 
     /**

@@ -10,7 +10,7 @@
 <HttpConnectorEditor
   v-model="extensionConfig"
   :endpoints="connectorEndpoints"
-  @change="updateServiceTask"
+  @change="updateControlledTask"
 />
 ```
 
@@ -37,6 +37,8 @@
 - 切换端点时，请求方法自动收敛到端点的 `allowedMethods`。
 - 相对路径必须处于端点 `pathPrefix` 内，最终仍由部署服务端复核。
 - `GET` 和 `DELETE` 不允许正文变量；正文只能来自显式流程变量。
+- 节点必须启用进入前异步，超时和非成功状态由 Flowable Job 重试并进入原生死信。
+- `Idempotency-Key` 固定由 `processInstanceId + executionId + elementId + payloadSha256` 生成，同一载荷重试稳定、载荷变化时隔离。
 - 认证只显示类型和外部密钥引用状态，密钥正文不进入浏览器、BPMN 或接口响应。
 
 ## 最小接入示例

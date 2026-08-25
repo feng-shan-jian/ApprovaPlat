@@ -25,6 +25,8 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             <arg column="cleanup_retry_count" javaType="_int"/>
             <arg column="cleanup_next_retry_time" javaType="java.time.LocalDateTime"/>
             <arg column="cleanup_last_error_code" javaType="java.lang.String"/>
+            <arg column="cleanup_claim_token" javaType="java.lang.String"/>
+            <arg column="cleanup_lease_until" javaType="java.time.LocalDateTime"/>
             <arg column="create_time" javaType="java.time.LocalDateTime"/>
             <arg column="update_time" javaType="java.time.LocalDateTime"/>
         </constructor>
@@ -43,20 +45,14 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         content_type, file_size, sha256, attachment_status, expire_time, draft_id,
         process_instance_id, task_id, node_key, bound_time, storage_deleted_time,
         cleanup_retry_count, cleanup_next_retry_time, cleanup_last_error_code,
-        create_time, update_time
+        cleanup_claim_token, cleanup_lease_until, create_time, update_time
     </sql>
 
-    <select id="selectGlobalQuotaGuardForUpdate" resultType="java.lang.Long">
-        select owner_user_id
-        from wf_attachment_quota_guard
-        where owner_user_id = 0
-        for update
-    </select>
-
     <insert id="ensureOwnerQuotaGuard">
-        insert ignore into wf_attachment_quota_guard (owner_user_id)
+        insert into wf_attachment_quota_guard (owner_user_id)
         select #{ownerUserId}
         where #{ownerUserId} > 0
+        on duplicate key update owner_user_id = values(owner_user_id)
     </insert>
 
     <select id="selectOwnerQuotaGuardForUpdate" resultType="java.lang.Long">
@@ -80,26 +76,19 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
               )
     </select>
 
-    <select id="selectUndeletedTotalBytes" resultType="java.lang.Long">
-        select coalesce(sum(file_size), 0)
-        from wf_attachment
-        where storage_deleted_time is null
-          and attachment_status in ('TEMP', 'DRAFT', 'BOUND', 'EXPIRED', 'DELETED')
-    </select>
-
     <insert id="insert">
         insert into wf_attachment
             (attachment_id, owner_user_id, field_name, original_name, storage_key,
              content_type, file_size, sha256, attachment_status, expire_time, draft_id,
              process_instance_id, task_id, node_key, bound_time, storage_deleted_time,
              cleanup_retry_count, cleanup_next_retry_time, cleanup_last_error_code,
-             create_time, update_time)
+             cleanup_claim_token, cleanup_lease_until, create_time, update_time)
         values
             (#{attachmentId}, #{ownerUserId}, #{fieldName}, #{originalName}, #{storageKey},
              #{contentType}, #{fileSize}, #{sha256}, #{status}, #{expireTime}, #{draftId},
              #{processInstanceId}, #{taskId}, #{nodeKey}, #{boundTime}, #{storageDeletedTime},
              #{cleanupRetryCount}, #{cleanupNextRetryTime}, #{cleanupLastErrorCode},
-             #{createTime}, #{updateTime})
+             #{cleanupClaimToken}, #{cleanupLeaseUntil}, #{createTime}, #{updateTime})
     </insert>
 
     <select id="selectById" resultMap="WfAttachmentResult">
@@ -187,26 +176,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         </choose>
     </select>
 
-    <update id="bindStartAttachment">
-        update wf_attachment
-        set attachment_status = 'BOUND',
-            process_instance_id = #{processInstanceId},
-            task_id = null,
-            node_key = #{nodeKey},
-            bound_time = current_timestamp(3),
-            update_time = current_timestamp(3)
-        where attachment_id = #{attachmentId}
-          and owner_user_id = #{ownerUserId}
-          and field_name = #{fieldName}
-          and attachment_status = 'TEMP'
-          and expire_time > current_timestamp(3)
-          and process_instance_id is null
-          and task_id is null
-          and node_key is null
-          and bound_time is null
-          and storage_deleted_time is null
-    </update>
-
     <update id="bindTaskAttachment">
         update wf_attachment
         set attachment_status = 'BOUND',
@@ -241,64 +210,80 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
           and storage_deleted_time is null
     </update>
 
-    <select id="countByStatus" resultType="long">
-        select count(*)
-        from wf_attachment
-        where attachment_status = #{status}
-    </select>
-
-    <select id="countPendingStorageDeletion" resultType="long">
-        select count(*)
-        from wf_attachment
-        where attachment_status in ('EXPIRED', 'DELETED')
-          and storage_deleted_time is null
-    </select>
-
-    <select id="countDeferredStorageDeletion" resultType="long">
-        select count(*)
-        from wf_attachment
-        where attachment_status in ('EXPIRED', 'DELETED')
-          and storage_deleted_time is null
-          and cleanup_next_retry_time > current_timestamp(3)
-    </select>
-
-    <select id="selectCleanupCandidates" resultMap="WfAttachmentResult">
+    <select id="selectCleanupCandidatesForUpdate" resultMap="WfAttachmentResult"
+            timeout="10">
         select <include refid="attachmentColumns"/>
         from wf_attachment
-        where (attachment_status = 'TEMP' and expire_time &lt;= current_timestamp(3))
-           or (attachment_status in ('EXPIRED', 'DELETED')
-               and storage_deleted_time is null
-               and (cleanup_next_retry_time is null
-                    or cleanup_next_retry_time &lt;= current_timestamp(3)))
+        where storage_deleted_time is null
+          and ((attachment_status = 'TEMP' and expire_time &lt;= current_timestamp(3))
+               or attachment_status in ('EXPIRED', 'DELETED'))
+          and (cleanup_next_retry_time is null
+               or cleanup_next_retry_time &lt;= current_timestamp(3))
+          and (cleanup_claim_token is null
+               or cleanup_lease_until &lt;= current_timestamp(3))
         order by case
                      when attachment_status = 'TEMP' then expire_time
                      else coalesce(cleanup_next_retry_time, expire_time)
                  end,
                  attachment_id
         limit #{limit}
+        for update skip locked
     </select>
 
-    <update id="markExpired">
+    <update id="claimCleanupCandidates">
         update wf_attachment
-        set attachment_status = 'EXPIRED',
+        set attachment_status = case
+                when attachment_status = 'TEMP' then 'EXPIRED'
+                else attachment_status
+            end,
+            cleanup_claim_token = #{claimToken},
+            cleanup_lease_until = timestampadd(second, #{leaseSeconds},
+                current_timestamp(3)),
+            update_time = current_timestamp(3)
+        where attachment_id in
+        <foreach collection="attachmentIds" item="attachmentId"
+                open="(" separator="," close=")">
+            #{attachmentId}
+        </foreach>
+          and storage_deleted_time is null
+          and attachment_status in ('TEMP', 'EXPIRED', 'DELETED')
+          and (cleanup_claim_token is null
+               or cleanup_lease_until &lt;= current_timestamp(3))
+    </update>
+
+    <update id="claimDeletedAttachment">
+        update wf_attachment
+        set cleanup_claim_token = #{claimToken},
+            cleanup_lease_until = timestampadd(second, #{leaseSeconds},
+                current_timestamp(3)),
             update_time = current_timestamp(3)
         where attachment_id = #{attachmentId}
-          and attachment_status = 'TEMP'
-          and expire_time &lt;= current_timestamp(3)
-          and process_instance_id is null
-          and task_id is null
-          and node_key is null
-          and bound_time is null
+          and attachment_status = 'DELETED'
           and storage_deleted_time is null
+          and (cleanup_claim_token is null
+               or cleanup_lease_until &lt;= current_timestamp(3))
     </update>
+
+    <select id="selectClaimedByToken" resultMap="WfAttachmentResult">
+        select <include refid="attachmentColumns"/>
+        from wf_attachment
+        where cleanup_claim_token = #{claimToken}
+          and attachment_status in ('EXPIRED', 'DELETED')
+          and storage_deleted_time is null
+        order by coalesce(cleanup_next_retry_time, expire_time), attachment_id
+    </select>
 
     <update id="markStorageDeleted">
         update wf_attachment
         set storage_deleted_time = current_timestamp(3),
+            cleanup_retry_count = 0,
             cleanup_next_retry_time = null,
             cleanup_last_error_code = null,
+            cleanup_claim_token = null,
+            cleanup_lease_until = null,
             update_time = current_timestamp(3)
         where attachment_id = #{attachmentId}
+          and cleanup_claim_token = #{claimToken}
           and attachment_status in ('EXPIRED', 'DELETED')
           and storage_deleted_time is null
     </update>
@@ -311,11 +296,27 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             end,
             cleanup_next_retry_time = #{nextRetryTime},
             cleanup_last_error_code = #{errorCode},
+            cleanup_claim_token = null,
+            cleanup_lease_until = null,
             update_time = current_timestamp(3)
         where attachment_id = #{attachmentId}
+          and cleanup_claim_token = #{claimToken}
           and attachment_status in ('EXPIRED', 'DELETED')
           and storage_deleted_time is null
           and cleanup_retry_count = #{expectedRetryCount}
     </update>
 
+    <select id="selectRetentionIdsForUpdate" resultType="java.lang.String" timeout="10">
+        select attachment_id from wf_attachment
+        where storage_deleted_time is not null and storage_deleted_time &lt;= #{cutoffTime}
+        order by storage_deleted_time,attachment_id limit #{limit} for update skip locked
+    </select>
+    <delete id="deleteRetentionByIds">
+        delete from wf_attachment where attachment_id in
+        <foreach collection="attachmentIds" item="attachmentId" open="(" separator="," close=")">#{attachmentId}</foreach>
+          and storage_deleted_time is not null and storage_deleted_time &lt;= #{cutoffTime}
+    </delete>
+    <select id="selectOldestRetentionTime" resultType="java.time.LocalDateTime">
+        select min(storage_deleted_time) from wf_attachment where storage_deleted_time is not null
+    </select>
 </mapper>

@@ -2,12 +2,12 @@
 
 ## 组件简介
 
-`DesignerPropertiesPanel` 是 BPMN 设计器的受控属性编辑界面，覆盖基础信息、流程版本、正式模板与内嵌 FormData、节点字段权限、办理配置、自动抄送、活动循环与多实例、受控服务任务扩展、DMN 精确版本、条件、调用活动、事件参数、异步执行标志、业务监听器和通用扩展属性。CEL、HTTP 和 SQL 使用结构化子编辑器，端点与数据源只能来自服务端白名单。组件不直接持有 Modeler，也不写 XML；所有变更通过事件交给父组件的 bpmn-js 命令栈。
+`DesignerPropertiesPanel` 是 BPMN 设计器的受控属性编辑界面，覆盖基础信息、流程版本、正式模板与内嵌 FormData、节点字段权限、办理配置、自动抄送、活动循环与多实例、独立任务能力面板、DMN 精确版本、条件、调用活动、事件参数、异步执行标志、业务监听器和通用扩展属性。CEL、HTTP 和 SQL 使用结构化子编辑器，端点与数据源只能来自服务端白名单。组件不直接持有 Modeler，也不写 XML；所有变更通过事件交给父组件的 bpmn-js 命令栈。
 
 ## 使用方式
 
 ```vue
-<DesignerPropertiesPanel :selected="Boolean(selectedElement)" :title="selectedTypeLabel" :state="propertyState" :flags="propertyFlags" :forms="forms" :controlled-loop-field-options="controlledLoopFieldOptions" :condition-field-options="conditionFieldOptions" :condition-context="conditionContext" :extension-options="extensionOptions" :form-field-options="formFieldOptions" :connector-endpoints="connectorEndpoints" :dmn-options="dmnOptions" :extension-loading="extensionLoading" @form-source-change="updateFormSource" @embedded-form-change="updateEmbeddedForm" @event-change="updateEventProperties" @activity-change="updateActivityProperties" @close="toggleProperties" />
+<DesignerPropertiesPanel :selected="Boolean(selectedElement)" :title="selectedTypeLabel" :state="propertyState" :flags="propertyFlags" :task-capability="selectedTaskCapability" :forms="forms" :controlled-loop-field-options="controlledLoopFieldOptions" :condition-field-options="conditionFieldOptions" :condition-context="conditionContext" :extension-options="extensionOptions" :form-field-options="formFieldOptions" :connector-endpoints="connectorEndpoints" :dmn-options="dmnOptions" :extension-loading="extensionLoading" @form-source-change="updateFormSource" @embedded-form-change="updateEmbeddedForm" @event-change="updateEventProperties" @activity-change="updateActivityProperties" @close="toggleProperties" />
 ```
 
 ## Props
@@ -18,6 +18,7 @@
 | `title`                       | `string`  | 选中 BPMN 类型的业务标题。                                                                                          |
 | `state`                       | `object`  | 父组件从 moddle 对象回读的响应式属性状态；表单域包含 `formSource`、`formKey` 和 `embeddedFields`。                  |
 | `flags`                       | `object`  | `process`、`participant`、`activity`、`event` 等类型能力开关；Participant 需要填写 `state.processRef`。             |
+| `taskCapability`              | `object`  | 当前标准任务的不可变能力条目；非任务元素为 `null`。任务面板不再由任意布尔标志组合决定。                              |
 | `forms`                       | `array`   | 可选择的正式 `wf_form` 列表。                                                                                       |
 | `controlledLoopFieldOptions`  | `array`   | 当前 UserTask 正式表单中的可写标量字段、静态值目录及是否禁止自由输入。                                              |
 | `conditionFieldOptions`       | `array`   | 当前可执行流程全部正式表单中的可写标量字段、类型和静态值目录。                                                      |
@@ -40,7 +41,7 @@
 
 ## Emits
 
-组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`participant-rule-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`service-task-change`、`dmn-change`、`condition-change`、`condition-rule-change`、`condition-default-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、`identity-resolve`、`auto-copy-change`、两类业务监听器事件和 `extension-properties-change`。`identity-search` 用于正式目录分页检索，`identity-resolve` 用于重开模型时核验当前分页外的已选对象；点击面板关闭按钮时发出 `close`。
+组件按属性域发出 `common-change`、`id-change`、`process-change`、`participant-change`、`participant-rule-change`、`form-source-change`、`form-change`、`embedded-form-change`、`assignment-change`、`user-task-change`、`controlled-task-config-update`、`controlled-task-change`、`dmn-change`、`condition-change`、`condition-rule-change`、`condition-default-change`、`documentation-change`、`multi-instance-change`、`activity-change`、`call-activity-change`、`event-change`、`identity-search`、`identity-resolve`、`auto-copy-change`、两类业务监听器事件和 `extension-properties-change`。`identity-search` 用于正式目录分页检索，`identity-resolve` 用于重开模型时核验当前分页外的已选对象；点击面板关闭按钮时发出 `close`。
 
 ## 公开方法
 
@@ -49,7 +50,7 @@
 ## 关键设计
 
 - 用户可见字段只描述业务语义；系统任务审计监听器、内部多实例 handler 等技术约束不在面板中出现。
-- 面板头部和当前元素上下文固定在可视区域，长表单只在面板内部滚动。基础、业务、执行、扩展属性和监听器分区使用受控折叠状态，可逐项切换，也可一键全部展开或收起；切换 BPMN 活动时默认展开基础、业务与执行配置，其他元素默认展开基础与业务配置。
+- 面板头部和当前元素上下文固定在可视区域，长表单只在面板内部滚动。基础、业务、执行、扩展属性和监听器分区使用受控折叠状态，可逐项切换，也可一键全部展开或收起；业务分区只由明确任务面板类型或确实存在业务控件的非任务能力开启，不再通过任意布尔值推断，因此 Participant 等元素不会出现空业务面板。
 - 流程属性提供公开、指定用户、角色、部门四种发起范围；普通单实例 UserTask 提供八种受控办理规则。规则说明始终展示最终命中对象和固定 `FAIL` 无匹配策略。
 - UserTask 将审批人设置与审批方式合并为同一个连续业务区。普通审批、会签和或签始终显式可见，设计者不需要先到“执行配置”开启多实例；当前方式通过标题标签回显，避免长面板滚动后失去上下文。
 - 普通审批继续使用单实例参与者规则；切换为会签或或签后，同一区域原位显示五种成员来源与真实目录选择器。两个持久化契约不会互相读写，切回普通审批时由父组件原子移除受控多实例属性。
@@ -58,7 +59,10 @@
 - 节点字段权限目录只来自当前绑定的正式模板，支持隐藏、只读、可编辑、必填和批量默认策略；内嵌 FormData 继续使用自身原生字段开关，不进入本权限面板。完整策略通过 `form-permission-change` 交给父组件写入 BPMN。
 - 消息、信号、错误和升级引用由父组件解析为 Definitions 根元素；定时器表达式写入对应 `FormalExpression`。
 - Participant 的 `processRef` 由面板显式编辑并写入标准 BPMN 属性；服务端保存/部署时再次核验流程定义存在性和可执行性，避免只绘制池而形成假运行能力。
-- MessageFlow 源 SendTask 选择 `COLLABORATION_OUTBOX_V1` 后使用专用编辑器，只保存端点键、消息名、目标流程、关联变量和变量白名单；部署冻结认证端点，运行时事务登记 outbox。
+- ServiceTask 与 SendTask 使用不同用途说明和独立面板分支，但共用 `ControlledTaskHandlerEditor` 写入同一受控作者字段。两者都只接受正式扩展目录，不开放 Bean、Java 类名或委托表达式。
+- MessageFlow 源 SendTask 选择 `COLLABORATION_OUTBOX_V1` 后使用专用编辑器，只保存端点键、消息名、目标流程、关联变量和变量白名单；前端不根据连线猜测处理器能力，后端保存和部署时权威核验 outbox 绑定。
+- ReceiveTask 不新增本地持久化字段；面板展示真实 `POST /workflow/runtime-event/receive`、当前 `activityId`、互斥关联条件、`X-Integration-Token` RECEIVE 能力和变量白名单要求。
+- 历史 ManualTask 只显示“不会生成平台待办”的明确警告，基础信息、导入、渲染和保存仍保持可用。
 - 异步开关只负责建模。生产能否启用仍由后端 executor、拓扑和启动门禁共同决定。
 - CallActivity 不提供自由文本 key 或表达式输入。用户从授权发布目录选择名称、key、版本和状态，并配置版本绑定、业务键继承、变量继承、子实例名称、输入/输出映射与输出作用域；取消和终止固定按平台整棵执行树原子传播。
 - 输入映射使用“父流程可读字段 -> 子流程可写开始字段”，输出映射使用“子流程可读字段 -> 父流程可写字段”。字段下拉同时展示变量名和类型，最多各 64 项；最终权限、状态、循环依赖和类型兼容仍由保存/部署后端重新校验。
