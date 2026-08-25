@@ -12,13 +12,14 @@ worker 先调用 `claimNext(workerId)` 获取已经提交的不可变领取快�
 
 - `batchSize()` 返回 worker 单轮有界批次大小。
 - `claimNext(String workerId)` 返回 `WorkflowNotificationOutboxRecord`，无到期记录时返回 `null`。
-- `deliverClaimed(WorkflowNotificationOutboxRecord row, String workerId)` 无返回值；租约漂移、未知通道或事务边界错误时抛出稳定异常。
+- `deliverClaimed(WorkflowNotificationOutboxRecord row, String workerId)` 无返回值；租约漂移、未知通道、事务边界错误或通道未分类异常时向 worker 抛出。
 
 ## 关键设计
 
 - `claimNext` 和 `completeDelivery` 的短事务由 `WorkflowNotificationOutboxService` 独占。
 - 渠道调用前显式确认当前线程没有活动数据库事务。
-- 渠道未处理异常转换为脱敏 `DELIVERY_INTERNAL_ERROR`，随后仍提交一次失败结果，避免长期停留 `DELIVERING`。
+- EMAIL/SMS 通道仍自行把其预期失败转换为稳定、脱敏结果；协调器不再兜底改写通道未处理的运行时异常。
+- 未知运行时异常由 worker 记录完整原因，记录保持 `DELIVERING`，并在租约过期后由领取边界恢复，避免把程序缺陷伪装成普通重试结果。
 - 两个外部通道必须完整且唯一注册，INBOX 由业务事务内 Writer 直接写入。
 
 ## 最小接入示例

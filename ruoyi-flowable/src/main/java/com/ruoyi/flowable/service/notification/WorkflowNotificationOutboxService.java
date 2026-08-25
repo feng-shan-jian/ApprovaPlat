@@ -113,7 +113,7 @@ public class WorkflowNotificationOutboxService
     }
 
     /**
-     * 提交一次已执行通道副作用的失败结果，供 worker 未知异常和测试入口复用。
+     * 提交一次通道已经明确分类的成功或失败结果。
      * @param row WorkflowNotificationOutboxRecord，领取快照
      * @param workerId String，租约持有者
      * @param outcome WorkflowNotificationDeliveryResult，稳定且脱敏的投递结果

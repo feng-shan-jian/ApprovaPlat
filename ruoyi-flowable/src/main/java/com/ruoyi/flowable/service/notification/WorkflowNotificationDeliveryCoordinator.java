@@ -66,7 +66,7 @@ public class WorkflowNotificationDeliveryCoordinator
      * 在数据库事务外执行通道副作用，并在随后短事务提交稳定结果。
      * @param row WorkflowNotificationOutboxRecord，claimNext 已提交的领取快照
      * @param workerId String，租约持有者
-     * @return void，未知通道或租约漂移时抛出稳定异常
+     * @return void，未知通道、租约漂移或通道未分类异常时向 worker 抛出
      */
     public void deliverClaimed(WorkflowNotificationOutboxRecord row, String workerId)
     {
@@ -79,16 +79,7 @@ public class WorkflowNotificationDeliveryCoordinator
         {
             throw new ServiceException("通知 outbox 包含不支持的通道", HttpStatus.ERROR);
         }
-        WorkflowNotificationDeliveryResult result;
-        try
-        {
-            result = channel.deliver(row);
-        }
-        catch (RuntimeException exception)
-        {
-            result = WorkflowNotificationDeliveryResult.failure(
-                    "DELIVERY_INTERNAL_ERROR", "通知投递发生内部错误", false);
-        }
+        WorkflowNotificationDeliveryResult result = channel.deliver(row);
         outboxService.completeDelivery(row, workerId, result);
     }
 }

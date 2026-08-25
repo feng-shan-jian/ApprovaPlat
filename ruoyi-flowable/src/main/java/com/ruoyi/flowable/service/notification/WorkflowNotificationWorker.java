@@ -58,8 +58,8 @@ public class WorkflowNotificationWorker
             }
             catch (RuntimeException exception)
             {
-                // 协调器已把通道异常转换为稳定结果；此处只可能是租约冲突或结果提交失败。
-                LOGGER.warn("审批通知结果提交未成功，outboxId={}", row.outboxId(), exception);
+                // 未分类的通道异常不伪造普通失败结果，保留完整原因并由过期租约恢复；提交异常同样留待恢复。
+                LOGGER.warn("审批通知投递未完成，等待租约恢复，outboxId={}", row.outboxId(), exception);
             }
         }
     }
