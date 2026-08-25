@@ -123,12 +123,20 @@ class WorkflowProcessDetailServiceIntegrationTest
         controlledLoopService = mock(WorkflowControlledLoopService.class);
         when(controlledLoopService.buildStates(anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of());
+        // 变量存储解码使用独立直接协作者，仍共享同一个真实 Flowable 引擎与生产 Mapper。
+        WorkflowProcessVariableProjection variableProjection =
+                new WorkflowProcessVariableProjection(historyService, historicVariableMapper);
+        WorkflowProcessFormDetailProjection formProjection =
+                new WorkflowProcessFormDetailProjection(artifactRepository,
+                        new WorkflowFormTemplateValidator(), variableProjection);
+        WorkflowProcessHistoryProjection historyProjection =
+                new WorkflowProcessHistoryProjection(historyService, taskService,
+                        repositoryService, mock(ISysUserService.class));
 
         service = new WorkflowProcessDetailService(engineOperations, processAccessService,
-                repositoryService, historyService, taskService, deploymentService,
-                artifactRepository, historicVariableMapper, new WorkflowFormTemplateValidator(),
-                mock(ISysUserService.class), multiInstanceService, taskLifecycleService,
-                controlledLoopService);
+                repositoryService, taskService, deploymentService, variableProjection,
+                formProjection, historyProjection, multiInstanceService,
+                taskLifecycleService, controlledLoopService);
     }
 
     /**
