@@ -24,6 +24,14 @@
 
 所有 MySQL 客户端执行必须显式使用 `--default-character-set=utf8mb4`。Flowable 官方基础脚本包含破坏性初始化语句，只能在已经验证为空的目标 schema 中执行。
 
+## 本地 Docker 开发环境
+
+在仓库根目录执行 `docker compose up -d` 会启动仅绑定 `127.0.0.1` 的 MySQL 和 Redis。MySQL 首次创建 `approvaplat-mysql-data` Volume 时，通过官方 `/docker-entrypoint-initdb.d/` 机制调用 `docker/mysql/init.sh`；该脚本按上述顺序直接读取并执行 `sql/` 中的十个正式基线文件，不复制、不合并 SQL。
+
+Docker 自动初始化只改变本地空库的执行入口，不改变 SQL 基线规则。
+
+Flowable 继续保持 `database-schema-update: "false"`，应用启动不得创建或修复数据库结构。
+
 ## 现有基线升级
 
 已经完成 8.0.0 九文件基线的数据库按以下顺序升级，不得重放带破坏性初始化语句的 Flowable create 脚本：
@@ -106,7 +114,7 @@
 - `wf_notification_inbox` 使用 `notification_key + recipient_user_id` 唯一约束，并保存 `source_type/source_id`；站内信在业务事务内直接写入，不依赖 Outbox 关联。
 - `wf_notification_outbox` 只允许 `EMAIL`、`SMS`，仅承载外部投递副作用；普通策略仍可在 `wf_notification_policy.channels` 选择 `INBOX`。
 - `sys_mail_config` 只允许 `config_id=1`。首次业务保存写入 revision 1，后续以 revision 条件更新；迁移和安装均不得预置配置行。
-- SMTP 授权码只以 AES-256-GCM 密文保存；加密子密钥从 RuoYi Token 密钥按固定用途派生，每次加密使用独立 12 字节随机 IV。数据库和查询接口均不得返回授权码明文或 IV。
+- SMTP 授权码只以 AES-256-GCM 密文保存，每次加密使用独立 12 字节随机 IV。数据库和查询接口均不得返回授权码明文或 IV。
 - `wf_task_sla_execution.status=COMPLETED` 表示 SLA 时钟已经关闭，不等同于审批业务通过；受控整组退回和重提必须在对应 `wf_task_sla_audit` 保存固定撤销详情，以区别正常任务完成。
 - `wf_task_sla_audit.sla_execution_id` 使用 `ON DELETE CASCADE`，SLA execution 满足保留条件后由数据库同步删除审计，禁止孤立增长。
 - 生命周期候选索引统一包含终态、终态时间和稳定主键；协作审计按 `message_id + direction` 随父记录同事务删除。

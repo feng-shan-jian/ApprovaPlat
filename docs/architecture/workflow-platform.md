@@ -28,7 +28,6 @@ flowchart LR
 - `ruoyi-system`：用户、角色、部门、菜单和系统操作日志主数据。
 - `ruoyi-ui`：真实 API 调用、管理页面、工作台、BPMN 设计/查看和表单运行时。
 - `sql/flowable`：Flowable 官方表、工作流业务表和菜单权限。
-- `deployment`：生产配置、systemd、Nginx 和受控样本。
 
 ## 接口边界
 
@@ -53,5 +52,5 @@ flowchart LR
 ## 运行原则
 
 - executor 默认关闭，只有数据库、拓扑、容量、监控和唯一执行协调全部通过后才能启用。
-- 单节点可以使用本地持久卷；多节点必须共享 Token 密钥、附件存储和经过验证的 executor/清理锁拓扑。
+- 单节点可以使用本地持久卷；多节点必须共享附件存储并采用经过验证的 executor/清理锁拓扑。
 - readiness、数据库、Redis、工作流运行快照、附件存储和关键低基数指标共同决定是否可以接收流量。

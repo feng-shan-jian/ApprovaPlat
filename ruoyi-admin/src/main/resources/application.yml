@@ -6,8 +6,8 @@ ruoyi:
   version: 0.1.0
   # 版权年份
   copyrightYear: 2026
-  # 文件路径 示例（Windows 配置 D:/approvaplat/uploadPath，Linux 配置 /var/lib/approvaplat/uploadPath）
-  profile: D:/approvaplat/uploadPath
+  # 本地默认使用当前用户私有目录，生产环境继续通过 RUOYI_PROFILE 覆盖。
+  profile: ${RUOYI_PROFILE:${user.home}/.approvaplat/uploads}
   # 获取ip地址开关
   addressEnabled: false
   # 验证码类型 math 数字计算 char 字符验证
@@ -114,12 +114,9 @@ spring:
 token:
   # 令牌自定义标识
   header: Authorization
-  # 显式环境密钥优先；未提供时由下方持久化文件自动生成并稳定复用。
   secret: ${RUOYI_TOKEN_SECRET:}
   secret-file:
-    # 开源默认配置允许零手工步骤启动，同时不会在源码或构建产物中写入真实密钥。
     enabled: ${RUOYI_TOKEN_SECRET_FILE_ENABLED:true}
-    # 开发环境默认写入当前用户私有目录，可通过环境变量改到受控持久化卷。
     path: ${RUOYI_TOKEN_SECRET_FILE:${user.home}/.approvaplat/token-secret}
   # 令牌有效期（默认30分钟）
   expireTime: 30

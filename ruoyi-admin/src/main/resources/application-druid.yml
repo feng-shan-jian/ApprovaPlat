@@ -6,10 +6,10 @@ spring:
         druid:
             # 主库数据源
             master:
-                # 开发与生产均通过环境变量提供运行账号；默认账号只需要目标库 DML 权限。
-                url: ${RUOYI_DB_URL}
-                username: ${RUOYI_DB_USERNAME}
-                password: ${RUOYI_DB_PASSWORD}
+                # 本地默认连接 Docker MySQL；生产环境仍由环境变量注入受控账号和连接参数。
+                url: ${RUOYI_DB_URL:jdbc:mysql://127.0.0.1:3306/approvaplat?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia%2FShanghai}
+                username: ${RUOYI_DB_USERNAME:root}
+                password: ${RUOYI_DB_PASSWORD:root123}
             # 从库数据源
             slave:
                 # 从数据源开关/默认关闭
@@ -47,9 +47,9 @@ spring:
                 # 设置白名单，不填则允许所有访问
                 allow:
                 url-pattern: /druid/*
-                # 控制台管理用户名和密码
-                login-username: ${DRUID_MONITOR_USERNAME}
-                login-password: ${DRUID_MONITOR_PASSWORD}
+                # 控制台默认关闭；临时启用时使用本地账号，生产环境必须显式覆盖。
+                login-username: ${DRUID_MONITOR_USERNAME:ap}
+                login-password: ${DRUID_MONITOR_PASSWORD:123456}
             filter:
                 stat:
                     enabled: true

@@ -1,0 +1,42 @@
+name: approvaplat
+
+services:
+  mysql:
+    image: mysql:8.4.11
+    environment:
+      # 本地端口仅绑定回环地址；允许 root 从宿主机连接，供 IDEA 直接启动后端使用。
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: approvaplat
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      # MySQL 官方入口只会在该数据卷为空时执行初始化目录中的脚本。
+      - approvaplat-mysql-data:/var/lib/mysql
+      - ./sql:/opt/approvaplat/sql:ro
+      - ./docker/mysql/init.sh:/docker-entrypoint-initdb.d/10-approvaplat-baseline.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  redis:
+    image: redis:7.4.11-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  approvaplat-mysql-data:
+    # 固定卷名，避免仓库目录名变化时意外创建另一套开发数据库。
+    name: approvaplat-mysql-data

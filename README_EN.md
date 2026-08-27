@@ -80,7 +80,6 @@ It is currently best suited to:
 - Separate design, submission, approval, administration, and audit duties, with object-level authorization for instances, tasks, deployments, attachments, and audit data.
 - Keep Flowable and business data in the same primary datasource and transaction boundary. The frontend does not keep a second authoritative workflow state.
 - Provide health checks, runtime snapshots, Micrometer/Prometheus metrics, attachment cleanup locks, and runtime readiness validation.
-- Include production configuration, systemd, and Nginx deployment assets.
 
 ## Screenshots
 
@@ -108,45 +107,61 @@ See the [approval behavior contract](docs/contracts/workflow-behavior.md) and [m
 - Maven 3.9+
 - Node.js 20+
 - npm 10+
-- MySQL 8
-- Redis 6+
+- Docker with Docker Compose
 
-### 1. Initialize the database
+### First-time development
 
-Create an empty MySQL schema and run the RuoYi, Quartz, Flowable, and ApprovaPlat SQL in the exact order documented in the [database baseline](docs/database/workflow-baseline.md). All MySQL client connections should explicitly use `utf8mb4`.
-
-The initial baseline contains a destructive clean-install script. Do not run it against an existing business database, and do not enable Flowable automatic schema updates to bypass missing structures.
-
-### 2. Configure and start the backend
-
-Set local environment variables in PowerShell using values from your MySQL environment:
+Start the local MySQL 8 and Redis services from the repository root:
 
 ```powershell
-$env:RUOYI_DB_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia%2FShanghai'
-$env:RUOYI_DB_USERNAME = '<application-user>'
-$env:RUOYI_DB_PASSWORD = '<application-password>'
-$env:DRUID_MONITOR_USERNAME = 'local'
-$env:DRUID_MONITOR_PASSWORD = '<separate-monitor-password>'
-$env:RUOYI_PROFILE = Join-Path $env:LOCALAPPDATA 'ApprovaPlat\uploads'
-
-mvn -pl ruoyi-admin -am -DskipTests package
-java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
+docker compose up -d
+docker compose ps
 ```
 
-`-DskipTests` only shortens the first local startup. If `RUOYI_TOKEN_SECRET` is not set, a single-node installation generates and reuses a random HS512 secret in the user's private directory; production deployments must manage secrets and database configuration explicitly.
+When the `approvaplat-mysql-data` volume is first created, MySQL runs the ten existing SQL files in the exact order defined by the [database baseline](docs/database/workflow-baseline.md). Wait until both MySQL and Redis report `healthy` in `docker compose ps` before starting the application. An existing volume is not initialized again.
 
-### 3. Start the frontend
-
-Open another PowerShell window:
+Install the frontend dependencies:
 
 ```powershell
 Set-Location ruoyi-ui
-npm ci
-$env:VITE_OPEN_BROWSER = 'false'
-npm run dev -- --host 127.0.0.1 --port 1024
+npm install
+```
+
+Open `ruoyi-admin` in IDEA and run `RuoYiApplication`. Local development does not require database, Druid Monitor, or upload-directory environment variables.
+
+Start the frontend from `ruoyi-ui`:
+
+```powershell
+npm run dev
 ```
 
 Open `http://127.0.0.1:1024`. The clean local baseline account is `admin` with initial password `wang`. It is for local development only; change it before exposing the service beyond your machine.
+
+### Daily development
+
+Run from the repository root:
+
+```powershell
+docker compose up -d
+```
+
+Then run `RuoYiApplication` in IDEA and execute the following command from `ruoyi-ui`:
+
+```powershell
+npm run dev
+```
+
+### Stop and local defaults
+
+Use the following command for a normal stop:
+
+```powershell
+docker compose down
+```
+
+Local MySQL uses `127.0.0.1:3306`, database `approvaplat`, username `root`, and password `root123`. Redis uses `127.0.0.1:6379` without a password. The default upload directory is `${user.home}/.approvaplat/uploads`.
+
+Druid Monitor is disabled by default. To enable it temporarily, set `DRUID_MONITOR_ENABLED=true`, open `http://localhost:8080/druid/`, and sign in with local username `ap` and password `123456`.
 
 ## Development and testing
 
@@ -183,8 +198,7 @@ ApprovaPlat/
 |- ruoyi-*/      Spring Boot backend modules and Flowable domain module
 |- ruoyi-ui/     Vue 3 frontend, workflow designer, and contract tests
 |- sql/          Database baseline, business schema, and menu permissions
-|- docs/         Architecture, behavior, database, and project decision docs
-`- deployment/   Production config, systemd, and Nginx
+`- docs/         Architecture, behavior, and database docs
 ```
 
 ## Documentation

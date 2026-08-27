@@ -79,7 +79,6 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 - 区分设计、发起、办理、管理和审计职责，并对实例、任务、部署、附件和审计数据做对象级授权。
 - Flowable 数据和业务数据共用主数据源与事务边界，前端不保存第二份权威流程状态。
 - 提供健康检查、运行快照、Micrometer/Prometheus 指标、附件清理锁和运行就绪校验。
-- 仓库包含生产配置、systemd 和 Nginx 部署资产。
 
 ## 项目截图
 
@@ -95,49 +94,61 @@ ApprovaPlat 离成熟的审批中台还有不少工作。下面列的是仓库�
 - Maven 3.9+
 - Node.js 20+
 - npm 10+
-- MySQL 8
-- Redis 6+
+- Docker（包含 Docker Compose）
 
-### 1. 初始化数据库
+### 首次开发
 
-创建一个空的 MySQL schema，并严格按照[数据库基线](docs/database/workflow-baseline.md)中的顺序执行 RuoYi、Quartz、Flowable 与 ApprovaPlat SQL。所有 MySQL 客户端连接都应显式使用 `utf8mb4`。
-
-当前首发基线包含破坏性的全新安装脚本。不要对已有业务库直接执行，也不要开启 Flowable 自动建表来绕过缺失结构。
-
-已经安装 8.0.0 正式基线的数据库只执行 `8.0.1__workflow_mail_config.sql`，随后重放幂等菜单脚本；完整备份、核验和命令顺序见[现有基线升级](docs/database/workflow-baseline.md#现有基线升级)。迁移只创建空表，不复制旧 SMTP 环境变量，也不生成默认邮件账号或授权码。
-
-### 2. 配置并启动后端
-
-在 PowerShell 中为当前进程设置本地环境变量，值由你自己的 MySQL 环境提供：
+在仓库根目录启动本地 MySQL 8 和 Redis：
 
 ```powershell
-$env:RUOYI_DB_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia%2FShanghai'
-$env:RUOYI_DB_USERNAME = '<应用账号>'
-$env:RUOYI_DB_PASSWORD = '<应用密码>'
-$env:DRUID_MONITOR_USERNAME = 'local'
-$env:DRUID_MONITOR_PASSWORD = '<独立监控密码>'
-$env:RUOYI_PROFILE = Join-Path $env:LOCALAPPDATA 'ApprovaPlat\uploads'
-
-mvn -pl ruoyi-admin -am -DskipTests package
-java -jar .\ruoyi-admin\target\ruoyi-admin.jar --server.address=127.0.0.1
+docker compose up -d
+docker compose ps
 ```
 
-`-DskipTests` 只用于缩短本地首次启动。未显式设置 `RUOYI_TOKEN_SECRET` 时，单节点环境会在用户私有目录中生成并复用随机 HS512 密钥；生产环境必须显式管理 Token 密钥和数据库配置。
+首次创建 `approvaplat-mysql-data` Volume 时，MySQL 会严格按照[数据库基线](docs/database/workflow-baseline.md)自动执行仓库现有的十个 SQL 文件。等待 `docker compose ps` 中 MySQL 和 Redis 均显示 `healthy` 后再启动应用；已有 Volume 不会重复初始化。
 
-SMTP 主机、端口、账号和发件身份保存后按数据库 revision 动态生效，不需要重启应用。授权码使用 RuoYi Token 密钥派生的用途子密钥加密，用户无需生成或配置第二把密钥。Token 密钥必须在重启和多节点之间保持稳定；更换后已有登录令牌会失效，SMTP 授权码也必须通过邮件服务页面重新保存。
-
-### 3. 启动前端
-
-打开新的 PowerShell：
+安装前端依赖：
 
 ```powershell
 Set-Location ruoyi-ui
-npm ci
-$env:VITE_OPEN_BROWSER = 'false'
-npm run dev -- --host 127.0.0.1 --port 1024
+npm install
+```
+
+在 IDEA 中打开 `ruoyi-admin`，运行 `RuoYiApplication`。本地开发无需设置数据库、Druid 或上传目录环境变量。
+
+在 `ruoyi-ui` 目录启动前端：
+
+```powershell
+npm run dev
 ```
 
 访问 `http://127.0.0.1:1024`。全新本地基线账号为 `admin`，初始密码为 `wang`；它只用于本机开发，对外开放服务前必须更换。
+
+### 日常开发
+
+在仓库根目录执行：
+
+```powershell
+docker compose up -d
+```
+
+随后在 IDEA 中运行 `RuoYiApplication`，并在 `ruoyi-ui` 目录执行：
+
+```powershell
+npm run dev
+```
+
+### 日常停止与本地默认值
+
+普通停止只执行：
+
+```powershell
+docker compose down
+```
+
+本地 MySQL 固定使用 `127.0.0.1:3306`、数据库 `approvaplat`、账号 `root`、密码 `root123`；Redis 使用 `127.0.0.1:6379` 且无密码。上传目录默认为 `${user.home}/.approvaplat/uploads`。
+
+Druid Monitor 默认关闭。需要临时启用时设置 `DRUID_MONITOR_ENABLED=true`，访问 `http://localhost:8080/druid/`，本地默认账号为 `ap`、密码为 `123456`。
 
 ## 开发与测试
 
@@ -184,8 +195,7 @@ ApprovaPlat/
 |- ruoyi-*/      Spring Boot 后端模块与 Flowable 领域模块
 |- ruoyi-ui/     Vue 3 前端、工作流设计器与契约测试
 |- sql/          数据库基线、业务结构与菜单权限
-|- docs/         架构、业务契约与数据库文档
-`- deployment/   生产配置、systemd 与 Nginx
+`- docs/         架构、业务契约与数据库文档
 ```
 
 ## 文档

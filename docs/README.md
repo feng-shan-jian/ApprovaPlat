@@ -10,7 +10,6 @@
 | 业务契约 | [contracts/workflow-behavior.md](contracts/workflow-behavior.md) | 定义审批动作、复杂 BPMN、附件、连接器和运行事件行为 |
 | 协作契约 | [contracts/workflow-collaboration.md](contracts/workflow-collaboration.md) | 定义 Participant、MessageFlow 与多池消息运行语义 |
 | 数据库 | [database/workflow-baseline.md](database/workflow-baseline.md) | 定义首个正式数据库基线、安装顺序和未来迁移规则 |
-| 决策记录 | [project-clarifications.md](project-clarifications.md) | 记录已经由项目负责人确认的范围与治理结论 |
 
 ## 维护规则
 

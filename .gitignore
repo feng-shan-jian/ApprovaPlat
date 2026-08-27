@@ -9,18 +9,8 @@ output/
 /mysql-root.txt
 /mysql-password.txt
 /mysql-app.txt
-/testcount/*.local.md
-
-/testcount/
-
-# Local test/runtime copies and generated evidence
-/back/
-/vite/
+# Local runtime logs and generated evidence
 /logs/
-/META-INF/
-/deployment/Now_Task/**/*-before-*.sql
-/deployment/Now_Task/**/*dump*.sql
-
 tests/**/coverage/
 selenium-debug.log
 

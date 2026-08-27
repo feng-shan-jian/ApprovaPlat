@@ -48,9 +48,9 @@ export default defineConfig((configEnv) => {
     },
     // vite 相关配置
     server: {
-      port: 80,
-      host: true,
-      open: process.env.VITE_OPEN_BROWSER?.trim().toLowerCase() !== 'false',
+      port: 1024,
+      host: '127.0.0.1',
+      open: false,
       proxy: {
         // https://cn.vitejs.dev/config/#server-proxy
         '/dev-api': {
