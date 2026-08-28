@@ -40,6 +40,10 @@ public final class WorkflowH2SchemaMapperSupport
     /** 流程申请草稿 H2 表资源。 */
     public static final String PROCESS_DRAFT_SCHEMA = "db/h2/wf_process_draft.sql";
 
+    /** 邮件配置业务测试共用的 H2 表资源。 */
+    public static final String MAIL_CONFIG_SCHEMA =
+            "com/ruoyi/flowable/service/notification/workflow-mail-config-h2.sql";
+
     /**
      * 禁止实例化无状态测试基础设施。
      *

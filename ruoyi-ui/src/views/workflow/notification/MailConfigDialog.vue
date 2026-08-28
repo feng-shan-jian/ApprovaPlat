@@ -90,6 +90,13 @@ import {
   saveWorkflowNotificationMailConfig,
   testWorkflowNotificationMailConfig
 } from '@/api/workflow/notification'
+import {
+  createEmptyMailAuthenticationIdentity,
+  createEmptyMailConfigForm,
+  hasMailAuthenticationIdentityChanged,
+  normalizeMailAuthenticationIdentity,
+  normalizeMailConfigResponse
+} from './notificationAdminRules.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false }
@@ -102,19 +109,17 @@ const testFormRef = ref(null)
 const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
-const form = reactive(createEmptyForm())
+const form = reactive(createEmptyMailConfigForm())
 const testForm = reactive({ testRecipient: '' })
 // meta 只保存服务端脱敏状态和 CAS 版本，不接收凭据、密文或密钥信息。
 const meta = reactive({ configured: false, credentialConfigured: false, revision: 0 })
 // loadedAuthenticationIdentity 是最近一次后端回读的认证身份基线，不包含授权码或密文。
-const loadedAuthenticationIdentity = reactive(createEmptyAuthenticationIdentity())
+const loadedAuthenticationIdentity = reactive(createEmptyMailAuthenticationIdentity())
 const testResult = reactive({ type: 'success', message: '' })
 const busy = computed(() => loading.value || saving.value || testing.value)
 const authenticationIdentityChanged = computed(() => {
   if (!meta.configured) return false
-  const currentIdentity = normalizeAuthenticationIdentity(form)
-  return Object.keys(loadedAuthenticationIdentity)
-    .some(key => currentIdentity[key] !== loadedAuthenticationIdentity[key])
+  return hasMailAuthenticationIdentityChanged(loadedAuthenticationIdentity, form)
 })
 const credentialPlaceholder = computed(() => {
   if (!meta.credentialConfigured) return '请输入授权码或密码'
@@ -160,46 +165,6 @@ const testRules = {
 }
 
 /**
- * 创建不含任何正式凭据的 SMTP 表单初始值。
- * @returns {object} 可编辑的未保存 SMTP 草稿。
- */
-function createEmptyForm() {
-  return {
-    smtpHost: '',
-    smtpPort: 587,
-    encryptionMode: 'STARTTLS',
-    username: '',
-    credential: '',
-    fromAddress: '',
-    senderName: 'ApprovaPlat 审批通知'
-  }
-}
-
-/**
- * 创建不含凭据的 SMTP 认证身份基线。
- * @returns {{smtpHost:string,smtpPort:number|null,encryptionMode:string,username:string}} 空认证身份。
- */
-function createEmptyAuthenticationIdentity() {
-  return { smtpHost: '', smtpPort: null, encryptionMode: '', username: '' }
-}
-
-/**
- * 规范化决定授权码归属的 SMTP 认证身份，From 地址和发件人名称不参与比较。
- * @param {object} source 当前表单或最近一次后端回读表单。
- * @returns {{smtpHost:string,smtpPort:number|null,encryptionMode:string,username:string}} 可比较的公开认证身份。
- */
-function normalizeAuthenticationIdentity(source) {
-  const parsedPort = Number(source?.smtpPort)
-  return {
-    smtpHost: String(source?.smtpHost || '').trim().toLowerCase(),
-    smtpPort: Number.isInteger(parsedPort) ? parsedPort : null,
-    encryptionMode: String(source?.encryptionMode || '').trim().toUpperCase(),
-    // SMTP 登录账号可能区分大小写，只去除输入两端空白，不擅自折叠大小写。
-    username: String(source?.username || '').trim()
-  }
-}
-
-/**
  * 校验普通 SMTP 文本字段不为空且不含控制字符。
  * @param {object} rule Element Plus 校验规则。
  * @param {string} value 当前字段值。
@@ -238,38 +203,6 @@ function validateCredential(rule, value, callback) {
 }
 
 /**
- * 只从查询响应提取前端允许展示的 SMTP 字段，主动丢弃所有未知和敏感字段。
- * @param {object|null|undefined} data 后端 mail-config 脱敏响应。
- * @returns {{form:object,meta:object}} 白名单 SMTP 表单和配置状态。
- */
-function normalizeMailConfig(data) {
-  const source = data && typeof data === 'object' ? data : {}
-  const configured = source.configured === true
-  const supportedEncryption = ['NONE', 'STARTTLS', 'SSL']
-  const responsePort = Number(source.smtpPort)
-  return {
-    form: {
-      smtpHost: typeof source.smtpHost === 'string' ? source.smtpHost : '',
-      smtpPort: Number.isInteger(responsePort) && responsePort >= 1 && responsePort <= 65535
-        ? responsePort
-        : (configured ? null : 587),
-      encryptionMode: supportedEncryption.includes(source.encryptionMode)
-        ? source.encryptionMode
-        : (configured ? '' : 'STARTTLS'),
-      username: typeof source.username === 'string' ? source.username : '',
-      credential: '',
-      fromAddress: typeof source.fromAddress === 'string' ? source.fromAddress : '',
-      senderName: typeof source.senderName === 'string' ? source.senderName : (configured ? '' : 'ApprovaPlat 审批通知')
-    },
-    meta: {
-      configured,
-      credentialConfigured: source.credentialConfigured === true,
-      revision: Number.isInteger(Number(source.revision)) && Number(source.revision) >= 0 ? Number(source.revision) : 0
-    }
-  }
-}
-
-/**
  * 从正式后端重新读取脱敏 SMTP 配置和最新 revision。
  * @param {{notifyFailure?:boolean}} options 是否由本函数展示唯一的加载失败提示。
  * @returns {Promise<{loaded:boolean,error?:unknown}>} 当前弹窗仍打开且回读成功时 loaded 为 true。
@@ -282,11 +215,11 @@ async function loadConfig(options = {}) {
   try {
     const response = await getWorkflowNotificationMailConfig()
     if (sequence !== loadSequence || !props.modelValue) return { loaded: false }
-    const normalized = normalizeMailConfig(response.data)
+    const normalized = normalizeMailConfigResponse(response.data)
     Object.assign(form, normalized.form)
     Object.assign(meta, normalized.meta)
     // 只有真实后端回读成功后才刷新认证身份基线，测试和未保存编辑绝不改变它。
-    Object.assign(loadedAuthenticationIdentity, normalizeAuthenticationIdentity(normalized.form))
+    Object.assign(loadedAuthenticationIdentity, normalizeMailAuthenticationIdentity(normalized.form))
     await nextTick()
     formRef.value?.clearValidate()
     return { loaded: true }
@@ -498,9 +431,9 @@ function updateVisible(visible) {
  */
 function resetDialogState() {
   loadSequence += 1
-  Object.assign(form, createEmptyForm())
+  Object.assign(form, createEmptyMailConfigForm())
   Object.assign(meta, { configured: false, credentialConfigured: false, revision: 0 })
-  Object.assign(loadedAuthenticationIdentity, createEmptyAuthenticationIdentity())
+  Object.assign(loadedAuthenticationIdentity, createEmptyMailAuthenticationIdentity())
   testForm.testRecipient = ''
   testResult.type = 'success'
   testResult.message = ''

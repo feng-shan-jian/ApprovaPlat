@@ -18,16 +18,12 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 import javax.crypto.spec.SecretKeySpec;
-import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.io.ClassPathResource;
+import org.h2.jdbcx.JdbcDataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -36,6 +32,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowMailTestRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowMailConfigView;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -44,9 +41,7 @@ import tools.jackson.databind.json.JsonMapper;
 class WorkflowMailConfigServiceTest
 {
     private static final String CREDENTIAL = "formal-mail-credential";
-    private static final String SCHEMA_RESOURCE =
-            "com/ruoyi/flowable/service/notification/workflow-mail-config-h2.sql";
-
+    private JdbcDataSource dataSource;
     private JdbcTemplate jdbcTemplate;
     private WorkflowIdentityResolver identityResolver;
     private WorkflowMailCredentialCipher credentialCipher;
@@ -60,14 +55,10 @@ class WorkflowMailConfigServiceTest
     @BeforeEach
     void setUp()
     {
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setDriverClassName("org.h2.Driver");
-        dataSource.setUrl("jdbc:h2:mem:workflow_mail_" +
-                UUID.randomUUID().toString().replace("-", "") +
-                ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE");
-        dataSource.setUsername("sa");
-        dataSource.setPassword("");
-        initializeSchema(dataSource);
+        dataSource = WorkflowH2SchemaMapperSupport.createDataSource(
+                "workflow_mail_" + System.nanoTime(), true, 5_000);
+        WorkflowH2SchemaMapperSupport.executeSchema(dataSource,
+                WorkflowH2SchemaMapperSupport.MAIL_CONFIG_SCHEMA);
         jdbcTemplate = new JdbcTemplate(dataSource);
 
         byte[] key = new byte[32];
@@ -90,10 +81,7 @@ class WorkflowMailConfigServiceTest
     @AfterEach
     void tearDown()
     {
-        if (jdbcTemplate != null)
-        {
-            jdbcTemplate.execute("DROP ALL OBJECTS");
-        }
+        WorkflowH2SchemaMapperSupport.shutdown(dataSource);
     }
 
     /**
@@ -395,19 +383,6 @@ class WorkflowMailConfigServiceTest
     {
         return new WorkflowMailTestRequest(host, port, encryptionMode, username, "",
                 "sender@example.com", "通知中心", "recipient@example.com", 1L);
-    }
-
-    /**
-     * 执行测试专用 H2 schema，表结构与生产 Service 实际 SQL 字段保持一致。
-     *
-     * @param dataSource DataSource，当前测试独占的 H2 数据源
-     * @return void，无返回值
-     */
-    private void initializeSchema(DataSource dataSource)
-    {
-        ResourceDatabasePopulator populator = new ResourceDatabasePopulator(
-                new ClassPathResource(SCHEMA_RESOURCE));
-        populator.execute(dataSource);
     }
 
     /**
