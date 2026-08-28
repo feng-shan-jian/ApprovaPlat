@@ -2,7 +2,7 @@
 
 ## 组件作用
 
-`WorkflowDeploymentArtifactRepository` 将表单、条件、受控循环、参与者、扩展、DMN、调用活动和 SLA 的不可变部署快照保存为 Flowable 子部署资源。业务代码只通过 `RepositoryService` 使用官方存储，不直接访问 Flowable 内部表。
+`WorkflowDeploymentArtifactRepository` 将表单、条件、受控循环、参与者、扩展、DMN、调用活动和 SLA 的不可变部署快照保存为 Flowable 子部署资源。业务代码统一通过 `RepositoryService` 使用官方存储，Flowable 内部表由引擎独占管理。
 
 ## 使用方式
 
@@ -20,8 +20,8 @@
 ## 关键设计
 
 - 子部署通过 `parentDeploymentId` 与可执行流程部署建立生命周期关系。
-- 发起范围批量读取使用 Flowable 8 官方 `parentDeploymentIds(...)`，不直接访问 `ACT_*` 表；同一父部署存在多个业务资源子部署时按数据错误失败。
-- 批量结果外层缺少父部署表示历史未托管；外层存在但内层缺少流程规则仍属于受管快照缺失，调用方不得把它当作历史公开定义。
+- 发起范围批量读取使用 Flowable 8 官方 `parentDeploymentIds(...)`；`ACT_*` 表由 Flowable 独占管理。同一父部署存在多个业务资源子部署时按数据错误失败。
+- 批量结果外层缺少父部署表示该定义沿用 Flowable 原生授权；外层存在但内层缺少流程规则表示受管快照损坏，并返回数据异常。
 - 每类资源使用独立、带版本号的 JSON 文件，未知版本会 fail-closed。
 - 单资源和总资源均有字节上限，读取使用有界缓冲。
 - 原数据库唯一键由持久化前的自然键校验替代。

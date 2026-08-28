@@ -1,18 +1,13 @@
 package com.ruoyi.flowable.service.notification;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.security.SecureRandom;
-import java.sql.Connection;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,27 +26,22 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
-import org.springframework.transaction.interceptor.TransactionInterceptor;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowMailConfigRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowMailConfigView;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.testsupport.WorkflowMySqlITSupport;
 
 /**
- * 在显式指定的 approvaplat_it MySQL 库验证 SMTP 单例配置的正式表结构、加密落库和乐观锁合同。
+ * 在显式指定的 approvaplat_it MySQL 库验证 SMTP 单例配置的正式表结构、约束和真实并发合同。
  *
  * 测试只通过生产 WorkflowMailConfigService 写入 config_id=1，并在每个用例前后仅删除该行；
  * 未配置专用 MySQL 环境变量时不会尝试连接数据库。
  */
-@EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL",
-        matches = "jdbc:mysql:.*")
 class WorkflowMailConfigMySqlIT
 {
     /** 本集成测试唯一允许连接并清理的数据库名。 */
@@ -76,11 +66,10 @@ class WorkflowMailConfigMySqlIT
     @BeforeAll
     static void setUpDataSource() throws SQLException
     {
-        dataSource = new MysqlDataSource();
-        dataSource.setURL(requireEnvironment("WORKFLOW_MYSQL_TEST_URL", false));
-        dataSource.setUser(requireEnvironment("WORKFLOW_MYSQL_TEST_USERNAME", false));
-        dataSource.setPassword(requireEnvironment("WORKFLOW_MYSQL_TEST_PASSWORD", true));
-        verifyTargetDatabase();
+        dataSource = WorkflowMySqlITSupport.createDataSource();
+        WorkflowMySqlITSupport.verifyIsolatedBaseline(dataSource,
+                "SMTP 配置 MySQL IT", REQUIRED_DATABASE,
+                List.of("sys_mail_config"));
     }
 
     /**
@@ -106,7 +95,7 @@ class WorkflowMailConfigMySqlIT
                 .thenReturn(new WorkflowCurrentIdentity("1", Set.of()));
         WorkflowMailConfigService target = new WorkflowMailConfigService(jdbcTemplate,
                 credentialCipher, new WorkflowMailFailureClassifier(), identityResolver);
-        mailConfigService = transactionalProxy(target,
+        mailConfigService = WorkflowMySqlITSupport.transactionalProxy(target,
                 new DataSourceTransactionManager(dataSource));
         credential = "mysql-it-" + UUID.randomUUID();
     }
@@ -212,116 +201,6 @@ class WorkflowMailConfigMySqlIT
     }
 
     /**
-     * 验证首次保存通过生产服务插入 revision 1，且授权码只以 GCM 密文和 12 字节 IV 落库。
-     *
-     * @return void，公开视图、数据库版本、操作者和加密存储任一不一致时断言失败
-     */
-    @Test
-    void insertsRevisionOneWithEncryptedCredentialAndTwelveByteIv()
-    {
-        WorkflowMailConfigView empty = mailConfigService.configuration();
-        assertFalse(empty.configured());
-        assertEquals(0L, empty.revision());
-
-        WorkflowMailConfigView saved = mailConfigService.save(
-                request("smtp.mysql-it.invalid", "首次保存", credential, 0L));
-        assertTrue(saved.configured());
-        assertTrue(saved.credentialConfigured());
-        assertEquals(1L, saved.revision());
-
-        StoredCredential stored = storedCredential();
-        assertNotNull(stored.ciphertext());
-        assertFalse(stored.ciphertext().isBlank());
-        assertNotNull(stored.iv());
-        assertEquals(12, stored.iv().length);
-        assertEquals(1L, stored.revision());
-        assertEquals("1", stored.createBy());
-        assertFalse(stored.ciphertext().contains(credential),
-                "数据库密文字段不得包含授权码明文");
-        assertEquals(0, plaintextOccurrenceCount(credential),
-                "sys_mail_config 的文本列不得包含授权码明文");
-    }
-
-    /**
-     * 验证认证身份不变时，后续保存空 credential 保留原密文与 IV 并更新发件人名称。
-     *
-     * @return void，留空语义或 revision 条件更新发生漂移时断言失败
-     */
-    @Test
-    void keepsCiphertextAndIvWhenCredentialIsEmpty()
-    {
-        mailConfigService.save(request(
-                "smtp.mysql-it.invalid", "初始配置", credential, 0L));
-        StoredCredential before = storedCredential();
-
-        WorkflowMailConfigView updated = mailConfigService.save(request(
-                "smtp.mysql-it.invalid", "留空更新", "", 1L));
-        StoredCredential after = storedCredential();
-
-        assertEquals(2L, updated.revision());
-        assertEquals("smtp.mysql-it.invalid", updated.smtpHost());
-        assertEquals("留空更新", updated.senderName());
-        assertEquals(2L, after.revision());
-        assertTrue(before.ciphertext().equals(after.ciphertext()),
-                "空 credential 更新必须保持原密文");
-        assertTrue(Arrays.equals(before.iv(), after.iv()),
-                "空 credential 更新必须保持原 IV");
-        assertEquals(0, plaintextOccurrenceCount(credential),
-                "更新后数据库仍不得包含授权码明文");
-    }
-
-    /**
-     * 验证真实 MySQL 中变更认证主机却留空授权码会在写库前返回稳定 HTTP 400。
-     *
-     * @return void，拒绝后 revision、认证主机或密文发生变化时断言失败
-     */
-    @Test
-    void rejectsBlankCredentialForChangedAuthenticationIdentityWithoutWriting()
-    {
-        mailConfigService.save(request(
-                "smtp.mysql-it.invalid", "初始配置", credential, 0L));
-        StoredCredential before = storedCredential();
-
-        ServiceException rejected = assertThrows(ServiceException.class,
-                () -> mailConfigService.save(request(
-                        "smtp-other.mysql-it.invalid", "不应保存", "", 1L)));
-
-        assertEquals(HttpStatus.BAD_REQUEST, rejected.getCode());
-        assertEquals("MAIL_CREDENTIAL_REENTRY_REQUIRED", rejected.getSubCode());
-        assertEquals("SMTP 服务器、端口、加密方式或登录账号已变更，请重新填写授权码或密码",
-                rejected.getMessage());
-        StoredCredential after = storedCredential();
-        assertEquals(1L, after.revision());
-        assertEquals(before.ciphertext(), after.ciphertext());
-        assertTrue(Arrays.equals(before.iv(), after.iv()));
-        assertEquals("smtp.mysql-it.invalid",
-                mailConfigService.configuration().smtpHost());
-    }
-
-    /**
-     * 验证使用已过期 revision 保存时返回稳定 HTTP 409 子码，且不覆盖已提交配置。
-     *
-     * @return void，陈旧写入未被拒绝或数据库版本继续增长时断言失败
-     */
-    @Test
-    void rejectsStaleRevisionWithConflict()
-    {
-        mailConfigService.save(request(
-                "smtp.mysql-it.invalid", "初始配置", credential, 0L));
-        mailConfigService.save(request(
-                "smtp.mysql-it.invalid", "当前配置", "", 1L));
-
-        ServiceException conflict = assertThrows(ServiceException.class,
-                () -> mailConfigService.save(request(
-                        "smtp-stale.mysql-it.invalid", "陈旧配置", "", 1L)));
-        assertEquals(HttpStatus.CONFLICT, conflict.getCode());
-        assertEquals("MAIL_CONFIG_REVISION_CONFLICT", conflict.getSubCode());
-        assertEquals(2L, storedCredential().revision());
-        assertEquals("smtp.mysql-it.invalid",
-                mailConfigService.configuration().smtpHost());
-    }
-
-    /**
      * 让两个线程携带相同 revision 同时调用生产服务，验证 MySQL CAS 只允许一个更新成功。
      *
      * @return void，成功数、冲突数或最终数据库 revision 不符合单写者语义时断言失败
@@ -416,41 +295,6 @@ class WorkflowMailConfigMySqlIT
     }
 
     /**
-     * 查询当前单例行的加密存储快照；对象不会参与断言的 expected/actual 格式化。
-     *
-     * @return StoredCredential，密文、IV、revision 和创建人
-     */
-    private StoredCredential storedCredential()
-    {
-        StoredCredential stored = jdbcTemplate.queryForObject(
-                "select credential_ciphertext,credential_iv,revision,create_by "
-                + "from sys_mail_config where config_id=1",
-                (result, rowNumber) -> new StoredCredential(
-                        result.getString("credential_ciphertext"),
-                        result.getBytes("credential_iv"),
-                        result.getLong("revision"), result.getString("create_by")));
-        assertNotNull(stored);
-        return stored;
-    }
-
-    /**
-     * 在数据库端检查单例行全部文本字段，不把待查授权码或命中字段输出到测试报告。
-     *
-     * @param plaintext String，当前用例内存中的随机授权码
-     * @return int，任一文本列包含该明文时为 1，否则为 0
-     */
-    private int plaintextOccurrenceCount(String plaintext)
-    {
-        Integer count = jdbcTemplate.queryForObject(
-                "select count(*) from sys_mail_config where config_id=1 and "
-                + "concat_ws('|',smtp_host,encryption_mode,username,credential_ciphertext,"
-                + "from_address,sender_name,create_by,update_by) "
-                + "like concat('%',?,'%')", Integer.class, plaintext);
-        assertNotNull(count);
-        return count;
-    }
-
-    /**
      * 严格对比一个 information_schema 列快照，避免迁移字段类型或排序规则静默漂移。
      *
      * @param columns Map&lt;String,ColumnShape&gt;，按列名索引的真实元数据
@@ -531,77 +375,9 @@ class WorkflowMailConfigMySqlIT
         return count;
     }
 
-    /**
-     * 为生产服务应用 Spring @Transactional 语义，使保存与提交后发送器失效走真实事务边界。
-     *
-     * @param target WorkflowMailConfigService，使用真实 JdbcTemplate 的生产服务对象
-     * @param manager DataSourceTransactionManager，绑定 approvaplat_it 数据源的事务管理器
-     * @return WorkflowMailConfigService，可并发调用的 CGLIB 事务代理
-     */
-    private WorkflowMailConfigService transactionalProxy(WorkflowMailConfigService target,
-            DataSourceTransactionManager manager)
-    {
-        ProxyFactory proxyFactory = new ProxyFactory(target);
-        proxyFactory.setProxyTargetClass(true);
-        proxyFactory.addAdvice(new TransactionInterceptor(manager,
-                new AnnotationTransactionAttributeSource()));
-        return (WorkflowMailConfigService) proxyFactory.getProxy();
-    }
-
-    /**
-     * 在进行任何 DELETE 前确认真实连接是 MySQL 8+、目标 schema 精确为 approvaplat_it 且表已迁移。
-     *
-     * @return void，只读验证数据库身份和 sys_mail_config 表存在性
-     * @throws SQLException JDBC 元数据读取失败时向 JUnit 报告
-     */
-    private static void verifyTargetDatabase() throws SQLException
-    {
-        try (Connection connection = dataSource.getConnection();
-                Statement statement = connection.createStatement())
-        {
-            try (ResultSet environment = statement.executeQuery(
-                    "select version(),database()"))
-            {
-                assertTrue(environment.next());
-                int major = Integer.parseInt(environment.getString(1).split("\\.")[0]);
-                assertTrue(major >= 8, "SMTP 配置 IT 只允许 MySQL 8+");
-                assertEquals(REQUIRED_DATABASE, environment.getString(2),
-                        "拒绝在非 approvaplat_it 数据库执行 SMTP 配置清理");
-            }
-            try (ResultSet table = statement.executeQuery(
-                    "select count(*) from information_schema.tables "
-                    + "where table_schema=database() and table_name='sys_mail_config'"))
-            {
-                assertTrue(table.next());
-                assertEquals(1, table.getInt(1), "请先执行 8.0.1 SMTP 正式迁移");
-            }
-        }
-    }
-
-    /**
-     * 读取真实 MySQL 验收环境变量，禁止使用默认账号、密码或数据库地址猜测。
-     *
-     * @param name String，环境变量名
-     * @param allowEmpty boolean，是否允许调用方显式提供空密码
-     * @return String，调用进程中已显式配置的环境变量值
-     */
-    private static String requireEnvironment(String name, boolean allowEmpty)
-    {
-        String value = System.getenv(name);
-        if (value == null || (!allowEmpty && value.isBlank()))
-        {
-            throw new IllegalStateException("未显式配置真实 MySQL 验收变量: " + name);
-        }
-        return value;
-    }
-
     /** information_schema 中与本合同相关的单列物理属性。 */
     private record ColumnShape(String dataType, String columnType, String nullable,
             Long maximumLength, String collation) { }
-
-    /** 数据库中不向日志输出的授权码加密存储快照。 */
-    private record StoredCredential(String ciphertext, byte[] iv, long revision,
-            String createBy) { }
 
     /** 两个并发写者允许出现的完整结果集合。 */
     private enum UpdateOutcome

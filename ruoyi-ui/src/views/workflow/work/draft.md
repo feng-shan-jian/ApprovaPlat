@@ -2,7 +2,7 @@
 
 ## 组件简介
 
-`WorkflowDraft` 是当前登录用户的申请草稿列表页。页面只调用后端对象授权接口，提供流程名称和更新时间筛选、继续编辑及带乐观锁版本的删除操作，不在浏览器保存草稿数据。
+`WorkflowDraft` 是当前登录用户的申请草稿列表页。页面调用后端对象授权接口，提供流程名称和更新时间筛选、继续编辑及带乐观锁版本的删除操作；草稿数据统一持久化到服务端。
 
 ## 使用方式
 
@@ -17,7 +17,7 @@ permission: workflow:process:draftList
 
 ## Props
 
-页面组件无 Props。当前用户身份从认证会话取得，禁止由路由或查询参数指定草稿所有者。
+页面组件无 Props。当前用户身份唯一来自认证会话，路由和查询参数仅承载草稿主键及业务筛选条件。
 
 ## Emits
 
@@ -25,15 +25,15 @@ permission: workflow:process:draftList
 
 ## 公开方法
 
-页面组件不暴露公开方法。
+页面组件通过内部方法完成查询、删除和路由跳转。
 
 ## 关键设计
 
 - 列表固定调用 `GET /workflow/process/draft/list`，服务端负责只返回本人草稿。
-- 流程名称在服务端查询，更新时间范围转换为 `updatedAfter/updatedBefore`，不在前端过滤正式结果。
-- 删除调用 `DELETE /workflow/process/draft/{id}?expectedVersion=...`；发生 CAS 冲突后立即刷新，不把旧行版本重试为新版本。
+- 流程名称在服务端查询，更新时间范围转换为 `updatedAfter/updatedBefore`，正式结果由服务端完成筛选。
+- 删除调用 `DELETE /workflow/process/draft/{id}?expectedVersion=...`；发生 CAS 冲突后立即刷新，下一次删除使用服务端返回的新版本。
 - 继续编辑只传 `draftId`，草稿所有权、状态和部署快照关系由详情接口复核。
-- 不使用 `localStorage`、`sessionStorage`、Pinia 或浏览器内存冒充持久化草稿；页面内响应状态只服务于本次交互。
+- 服务端草稿持久化直接替换 `localStorage`、`sessionStorage`、Pinia 和浏览器内存草稿；页面响应状态仅承载本次交互。
 
 ## 最小接入示例
 

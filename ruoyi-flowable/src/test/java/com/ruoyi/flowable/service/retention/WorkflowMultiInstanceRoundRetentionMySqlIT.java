@@ -4,10 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.sql.Connection;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -17,22 +14,17 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
-import org.springframework.transaction.interceptor.TransactionInterceptor;
 import com.ruoyi.flowable.config.WorkflowDataRetentionProperties;
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
+import com.ruoyi.flowable.testsupport.WorkflowMySqlITSupport;
 
 /**
  * 在显式指定的完整隔离 MySQL 基线上验证多实例轮次生产保留清理器。
  *
  * 测试只写入固定前缀夹具，不创建或修改表结构；未配置专用 URL 时不连接任何数据库。
  */
-@EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL",
-        matches = "jdbc:mysql:.*")
 class WorkflowMultiInstanceRoundRetentionMySqlIT
 {
     /** 本类唯一拥有的数据前缀，清理 SQL 只允许命中此前缀。 */
@@ -52,11 +44,11 @@ class WorkflowMultiInstanceRoundRetentionMySqlIT
     @BeforeAll
     static void setUpDataSource() throws SQLException
     {
-        dataSource = new MysqlDataSource();
-        dataSource.setURL(requireEnvironment("WORKFLOW_MYSQL_TEST_URL", false));
-        dataSource.setUser(requireEnvironment("WORKFLOW_MYSQL_TEST_USERNAME", false));
-        dataSource.setPassword(requireEnvironment("WORKFLOW_MYSQL_TEST_PASSWORD", true));
-        verifyInstalledIsolatedBaseline();
+        dataSource = WorkflowMySqlITSupport.createDataSource();
+        WorkflowMySqlITSupport.verifyIsolatedBaseline(dataSource,
+                "多实例轮次保留 IT", null,
+                List.of("sys_config", "act_ru_execution", "act_hi_procinst",
+                        "wf_multi_instance_round"));
     }
 
     /**
@@ -78,7 +70,7 @@ class WorkflowMultiInstanceRoundRetentionMySqlIT
         properties.setMultiInstanceRoundRetention(Duration.ofDays(RETENTION_DAYS));
         WorkflowDataRetentionCleaner target = new WorkflowDataRetentionConfiguration()
                 .multiInstanceRoundRetentionCleaner(jdbcTemplate, properties);
-        cleaner = transactionalProxy(target,
+        cleaner = WorkflowMySqlITSupport.transactionalProxy(target,
                 new DataSourceTransactionManager(dataSource));
     }
 
@@ -251,23 +243,6 @@ class WorkflowMultiInstanceRoundRetentionMySqlIT
     }
 
     /**
-     * 为生产对象应用基于 @Transactional 的 CGLIB Spring 事务代理。
-     * @param target T，需要代理的生产清理器
-     * @param manager DataSourceTransactionManager，共享真实 MySQL 事务管理器
-     * @param <T> 生产对象类型
-     * @return T，保留生产类型的事务代理
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T transactionalProxy(T target, DataSourceTransactionManager manager)
-    {
-        ProxyFactory proxyFactory = new ProxyFactory(target);
-        proxyFactory.setProxyTargetClass(true);
-        proxyFactory.addAdvice(new TransactionInterceptor(manager,
-                new AnnotationTransactionAttributeSource()));
-        return (T) proxyFactory.getProxy();
-    }
-
-    /**
      * 生成不超过数据库列长度且带固定清理前缀的流程实例主键。
      * @param suffix String，可读业务场景后缀
      * @return String，当前用例唯一流程实例主键
@@ -287,51 +262,4 @@ class WorkflowMultiInstanceRoundRetentionMySqlIT
         return prefix + "-" + UUID.randomUUID();
     }
 
-    /**
-     * 只读核验 MySQL 8、非系统 schema 以及完整基线的系统、引擎和业务哨兵表。
-     * @return void，环境不属于显式隔离完整基线时拒绝运行
-     * @throws SQLException JDBC 元数据查询失败时报告
-     */
-    private static void verifyInstalledIsolatedBaseline() throws SQLException
-    {
-        try (Connection connection = dataSource.getConnection();
-                Statement statement = connection.createStatement())
-        {
-            try (ResultSet environment = statement.executeQuery(
-                    "select version(),database()"))
-            {
-                assertTrue(environment.next());
-                assertTrue(Integer.parseInt(environment.getString(1).split("\\.")[0]) >= 8,
-                        "轮次保留 IT 只允许 MySQL 8+");
-                String schema = environment.getString(2);
-                assertNotNull(schema, "必须在 URL 中显式指定隔离 schema");
-                assertTrue(!List.of("mysql", "information_schema", "performance_schema", "sys")
-                        .contains(schema.toLowerCase()), "禁止连接 MySQL 系统 schema");
-            }
-            try (ResultSet tables = statement.executeQuery(
-                    "select count(*) from information_schema.tables "
-                    + "where table_schema=database() and lower(table_name) in "
-                    + "('sys_config','act_ru_execution','act_hi_procinst','wf_multi_instance_round')"))
-            {
-                assertTrue(tables.next());
-                assertEquals(4, tables.getInt(1), "请先安装当前完整空库基线");
-            }
-        }
-    }
-
-    /**
-     * 读取必需 MySQL 验收变量，禁止默认数据库、账号或密码猜测。
-     * @param name String，环境变量名
-     * @param allowEmpty boolean，是否允许显式空密码
-     * @return String，已显式配置的环境变量值
-     */
-    private static String requireEnvironment(String name, boolean allowEmpty)
-    {
-        String value = System.getenv(name);
-        if (value == null || (!allowEmpty && value.isBlank()))
-        {
-            throw new IllegalStateException("未显式配置真实 MySQL 验收变量: " + name);
-        }
-        return value;
-    }
 }

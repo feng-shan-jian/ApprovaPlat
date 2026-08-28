@@ -2,7 +2,7 @@
 --
 -- H2 只承担快速事务反馈，不冒充 MySQL 生产约束：
 -- 1. members_json 使用 VARCHAR；MySQL JSON 类型、JSON_SCHEMA_VALID、成员唯一性及 Long 正整数格式
---    继续由 WfMultiInstanceRoundMapperMySqlTest 覆盖。
+--    继续由 WfMultiInstanceRoundMapperMySqlIT 覆盖。
 -- 2. MySQL 的状态组合、字段长度/正则、revision、生命周期时间 CHECK 未在此重复；这些约束仍由
 --    独立 MySQL 门禁覆盖，避免两套方言逐步漂移。
 -- 3. 下方 H2 生成列不是 MySQL STORED/ASCII collation 的物理等价实现，但准确复现本测试依赖的

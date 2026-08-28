@@ -6,27 +6,15 @@ import { tansParams, blobValidate } from '@/utils/ruoyi'
 import cache from '@/plugins/cache'
 import { saveAs } from 'file-saver'
 import useUserStore from '@/store/modules/user'
+import {
+  createBusinessError,
+  createHttpBusinessError,
+  createSafeRequestError
+} from '@/utils/requestError'
 
 let downloadLoadingInstance
 // 是否显示重新登录
 export let isRelogin = { show: false }
-
-/**
- * 创建保留后端稳定业务码和安全子码的前端错误，供页面区分状态与具体并发分支。
- * @param {number|string} code 后端 AjaxResult 返回的业务状态码。
- * @param {string} message 经统一错误码表规范后的用户提示。
- * @param {unknown} subCode 后端可选的稳定机器子码，只接受大写字母、数字和下划线。
- * @returns {Error & {code: number, subCode?: string}} 不携带响应正文且可按 code/subCode 精确处理的错误。
- */
-function createBusinessError(code, message, subCode) {
-  const error = new Error(message)
-  error.name = 'BusinessError'
-  error.code = Number(code)
-  // 子码只保留有限机器字符，禁止把任意响应正文或诊断信息带入页面错误对象。
-  const normalizedSubCode = typeof subCode === 'string' ? subCode.trim() : ''
-  if (/^[A-Z][A-Z0-9_]{0,63}$/.test(normalizedSubCode)) error.subCode = normalizedSubCode
-  return error
-}
 
 axios.defaults.headers['Content-Type'] = 'application/json;charset=utf-8'
 // 创建axios实例
@@ -86,10 +74,7 @@ service.interceptors.request.use(config => {
   return config
 }, error => {
     // 请求构造失败时只保留可展示语义和“是否由页面提示”，严禁继续传播含 SMTP 表单的 Axios config。
-    const safeError = new Error('请求发送失败')
-    safeError.name = 'RequestError'
-    safeError.suppressErrorMessage = error?.config?.suppressErrorMessage === true
-    return Promise.reject(safeError)
+    return Promise.reject(createSafeRequestError(error, '请求发送失败', true))
 })
 
 /**
@@ -136,14 +121,12 @@ service.interceptors.response.use(res => {
   },
   error => {
     const responseData = error?.response?.data
-    const responseCode = Number(responseData?.code || error?.response?.status)
     const suppressErrorMessage = error?.suppressErrorMessage === true || error?.config?.suppressErrorMessage === true
-    if (responseData && Number.isFinite(responseCode)) {
+    const businessError = createHttpBusinessError(responseData, error?.response?.status, errorCode)
+    if (businessError) {
       // 真实非 2xx 响应仍使用后端安全 AjaxResult，并丢弃可能携带请求体的 AxiosError。
-      const backendMessage = typeof responseData.msg === 'string' ? responseData.msg.trim() : ''
-      const message = (backendMessage || errorCode[responseCode] || errorCode.default).slice(0, 180)
-      if (!suppressErrorMessage) ElMessage({ message, type: 'error', duration: 5 * 1000 })
-      return Promise.reject(createBusinessError(responseCode, message, responseData.subCode))
+      if (!suppressErrorMessage) ElMessage({ message: businessError.message, type: 'error', duration: 5 * 1000 })
+      return Promise.reject(businessError)
     }
     let message = typeof error?.message === 'string' ? error.message : errorCode.default
     if (message == "Network Error") {
@@ -155,9 +138,7 @@ service.interceptors.response.use(res => {
     }
     if (!suppressErrorMessage) ElMessage({ message, type: 'error', duration: 5 * 1000 })
     // 不把包含原请求配置的 AxiosError 传给页面，避免授权码经控制台或组件意外输出。
-    const safeError = new Error(message)
-    safeError.name = 'RequestError'
-    return Promise.reject(safeError)
+    return Promise.reject(createSafeRequestError(error, message))
   }
 )
 

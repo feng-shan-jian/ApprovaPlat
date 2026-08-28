@@ -2,7 +2,7 @@
 
 ## 作用
 
-该服务是普通退回、受控多实例整组退回和退回能力判断的命令入口。重提由独立的 `WorkflowApplicationResubmitApplicationService` 承担，本服务不再装配表单、附件或重提依赖。
+该服务是普通退回、受控多实例整组退回和退回能力判断的命令入口。`WorkflowApplicationResubmitApplicationService` 直接替换并删除本服务中的表单、附件和重提装配职责。
 
 ## 路由边界
 
@@ -17,4 +17,4 @@
 4. 普通路径写 `returned` 双状态；整组路径在迁移边界内完成状态、SLA、轮次 CAS 和对账。
 5. 按原顺序处理抄送和稳定通知。
 
-所有公开方法继续接收原 DTO，并通过 `WorkflowEngineOperations` 建立唯一外层事务或只读快照。客户端仍不能指定成员、模式或目标节点。
+所有公开方法继续接收原 DTO，并通过 `WorkflowEngineOperations` 建立唯一外层事务或只读快照。成员、模式和目标节点统一由服务端实时事实与冻结快照确定。

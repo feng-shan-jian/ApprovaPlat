@@ -45,14 +45,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
-import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
-import org.springframework.transaction.interceptor.TransactionInterceptor;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -69,6 +65,8 @@ import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundLifecycleService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
 import com.ruoyi.flowable.service.task.WorkflowUserTaskAuditService;
+import com.ruoyi.flowable.testsupport.LocalSmtpTestServer;
+import com.ruoyi.flowable.testsupport.WorkflowMySqlITSupport;
 import com.ruoyi.system.service.integration.SysSmsService;
 
 /**
@@ -76,8 +74,6 @@ import com.ruoyi.system.service.integration.SysSmsService;
  *
  * 测试不创建或修改表结构；每条业务夹具均使用本次随机身份，SMTP 单例修改前完整备份并在结束时原样恢复。
  */
-@EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL",
-        matches = "jdbc:mysql:.*")
 class WorkflowNotificationPipelineMySqlIT
 {
     private static final String REQUIRED_DATABASE = "approvaplat_it";
@@ -137,11 +133,12 @@ class WorkflowNotificationPipelineMySqlIT
     @BeforeAll
     static void setUpDataSource() throws SQLException
     {
-        dataSource = new MysqlDataSource();
-        dataSource.setURL(requireEnvironment("WORKFLOW_MYSQL_TEST_URL", false));
-        dataSource.setUser(requireEnvironment("WORKFLOW_MYSQL_TEST_USERNAME", false));
-        dataSource.setPassword(requireEnvironment("WORKFLOW_MYSQL_TEST_PASSWORD", true));
-        verifyTargetDatabase();
+        dataSource = WorkflowMySqlITSupport.createDataSource();
+        WorkflowMySqlITSupport.verifyIsolatedBaseline(dataSource,
+                "通知完整链路 IT", REQUIRED_DATABASE,
+                List.of("sys_user", "sys_mail_config", "wf_notification_policy",
+                        "wf_notification_preference", "wf_notification_inbox",
+                        "wf_notification_outbox"));
     }
 
     /**
@@ -201,9 +198,8 @@ class WorkflowNotificationPipelineMySqlIT
         insertTestUser();
         insertNodePolicy(EVENT_TYPE);
 
-        try (WorkflowMailSmtpIntegrationTest.LocalSmtpReceiver receiver =
-                new WorkflowMailSmtpIntegrationTest.LocalSmtpReceiver(
-                        WorkflowMailSmtpIntegrationTest.SmtpBehavior.ACCEPT,
+        try (LocalSmtpTestServer receiver =
+                new LocalSmtpTestServer(LocalSmtpTestServer.Behavior.ACCEPT,
                         smtpUsername, smtpCredential))
         {
             saveTestMailConfiguration(receiver.port());
@@ -230,8 +226,7 @@ class WorkflowNotificationPipelineMySqlIT
             // Worker 的 batchSize 固定为 1，唯一到期行经生产 SKIP LOCKED/CAS 领取后同步完成真实 SMTP 副作用。
             worker.deliverBatch();
 
-            WorkflowMailSmtpIntegrationTest.ReceivedMessage received =
-                    receiver.awaitMessage();
+            LocalSmtpTestServer.ReceivedMessage received = receiver.awaitMessage();
             MimeMessage mime = received.parse();
             OutboxState processed = loadOutbox(deliveredSourceId);
             assertThat(processed.outboxId()).isEqualTo(pending.outboxId());
@@ -294,9 +289,9 @@ class WorkflowNotificationPipelineMySqlIT
         insertTestUser();
         insertNodePolicy("TASK_COMPLETED");
 
-        try (WorkflowMailSmtpIntegrationTest.LocalSmtpReceiver receiver =
-                new WorkflowMailSmtpIntegrationTest.LocalSmtpReceiver(
-                        WorkflowMailSmtpIntegrationTest.SmtpBehavior.REJECT_AUTHENTICATION,
+        try (LocalSmtpTestServer receiver =
+                new LocalSmtpTestServer(
+                        LocalSmtpTestServer.Behavior.REJECT_AUTHENTICATION,
                         smtpUsername, smtpCredential))
         {
             saveTestMailConfiguration(receiver.port());
@@ -404,22 +399,27 @@ class WorkflowNotificationPipelineMySqlIT
         WorkflowNotificationOutboxService outboxTarget =
                 new WorkflowNotificationOutboxService(jdbcTemplate,
                         notificationProperties, metrics, identityResolver);
-        outboxService = transactionalProxy(outboxTarget);
+        outboxService = WorkflowMySqlITSupport.transactionalProxy(
+                outboxTarget, transactionManager);
 
         planner = new WorkflowNotificationPlanner(jdbcTemplate,
                 mock(RuntimeService.class), mock(HistoryService.class),
                 mock(TaskService.class), identityResolver);
-        writer = transactionalProxy(new WorkflowNotificationWriter(
-                jdbcTemplate, outboxService));
+        writer = WorkflowMySqlITSupport.transactionalProxy(
+                new WorkflowNotificationWriter(jdbcTemplate, outboxService),
+                transactionManager);
 
         byte[] purposeKey = new byte[32];
         Arrays.fill(purposeKey, (byte) 0x5A);
         WorkflowMailFailureClassifier failureClassifier =
                 new WorkflowMailFailureClassifier();
-        mailConfigService = transactionalProxy(new WorkflowMailConfigService(
-                jdbcTemplate, new WorkflowMailCredentialCipher(
-                        new SecretKeySpec(purposeKey, "AES"), new SecureRandom()),
-                failureClassifier, identityResolver));
+        mailConfigService = WorkflowMySqlITSupport.transactionalProxy(
+                new WorkflowMailConfigService(jdbcTemplate,
+                        new WorkflowMailCredentialCipher(
+                                new SecretKeySpec(purposeKey, "AES"),
+                                new SecureRandom()),
+                        failureClassifier, identityResolver),
+                transactionManager);
         Arrays.fill(purposeKey, (byte) 0);
 
         MailNotificationChannel mailChannel = new MailNotificationChannel(
@@ -1017,23 +1017,6 @@ class WorkflowNotificationPipelineMySqlIT
     }
 
     /**
-     * 为生产服务应用 Spring @Transactional 语义，确保 REQUIRES_NEW、MANDATORY 和提交后回调真实生效。
-     *
-     * @param target T，待代理生产服务
-     * @param <T> 生产服务类型
-     * @return T，使用本测试真实 MySQL 事务管理器的 CGLIB 代理
-     */
-    @SuppressWarnings("unchecked")
-    private <T> T transactionalProxy(T target)
-    {
-        ProxyFactory proxyFactory = new ProxyFactory(target);
-        proxyFactory.setProxyTargetClass(true);
-        proxyFactory.addAdvice(new TransactionInterceptor(transactionManager,
-                new AnnotationTransactionAttributeSource()));
-        return (T) proxyFactory.getProxy();
-    }
-
-    /**
      * 使用 MySQL 命名锁串行化本测试类的 SMTP 单例备份与恢复窗口。
      *
      * @return void，成功时锁由 isolationLockConnection 持有
@@ -1072,57 +1055,6 @@ class WorkflowNotificationPipelineMySqlIT
             isolationLockConnection.close();
             isolationLockConnection = null;
         }
-    }
-
-    /**
-     * 只读核验 MySQL 8、精确 schema 名和生产通知管道所需六张表。
-     *
-     * @return void，环境不属于显式 approvaplat_it 完整基线时拒绝运行
-     * @throws SQLException JDBC 元数据读取失败时报告
-     */
-    private static void verifyTargetDatabase() throws SQLException
-    {
-        try (Connection connection = dataSource.getConnection();
-                Statement statement = connection.createStatement())
-        {
-            try (ResultSet environment = statement.executeQuery(
-                    "select version(),database()"))
-            {
-                assertTrue(environment.next());
-                int major = Integer.parseInt(environment.getString(1).split("\\.")[0]);
-                assertTrue(major >= 8, "通知管道 IT 只允许 MySQL 8+");
-                assertEquals(REQUIRED_DATABASE, environment.getString(2),
-                        "拒绝在非 approvaplat_it 数据库执行通知管道 IT");
-            }
-            try (ResultSet tables = statement.executeQuery(
-                    "select count(*) from information_schema.tables "
-                    + "where table_schema=database() and table_name in "
-                    + "('sys_user','sys_mail_config','wf_notification_policy',"
-                    + "'wf_notification_preference','wf_notification_inbox',"
-                    + "'wf_notification_outbox')"))
-            {
-                assertTrue(tables.next());
-                assertEquals(6, tables.getInt(1),
-                        "请先安装包含 SMTP 单例的当前完整工作流基线");
-            }
-        }
-    }
-
-    /**
-     * 读取必需 MySQL 验收变量，禁止猜测默认数据库、账号或密码。
-     *
-     * @param name String，环境变量名
-     * @param allowEmpty boolean，是否允许调用方显式提供空密码
-     * @return String，调用进程已显式配置的值
-     */
-    private static String requireEnvironment(String name, boolean allowEmpty)
-    {
-        String value = System.getenv(name);
-        if (value == null || (!allowEmpty && value.isBlank()))
-        {
-            throw new IllegalStateException("未显式配置真实 MySQL 验收变量: " + name);
-        }
-        return value;
     }
 
     /**

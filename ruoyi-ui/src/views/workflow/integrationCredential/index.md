@@ -6,7 +6,7 @@
 
 ## 使用方式
 
-路由组件名为 `WorkflowIntegrationCredential`，正式菜单路径为 `workflow/integrationCredential/index`。页面激活时自动重新查询后端，避免缓存页显示过期状态。
+路由组件名为 `WorkflowIntegrationCredential`，正式菜单路径为 `workflow/integrationCredential/index`。页面激活时自动重新查询后端并展示最新凭据状态。
 
 ## Props 与 Emits
 
@@ -15,8 +15,8 @@
 ## 关键设计
 
 - 新增账号需要事件范围、变量白名单和每分钟上限。
-- 明文 Token 不写入本地存储、URL 或页面列表，仅存在于一次性响应对话框。
-- 轮换后旧 Token 立即失效；吊销不可撤销，历史运行事件保留。
+- 明文 Token 仅存在于创建或轮换的一次性响应对话框；本地存储、URL 和页面列表只保存非敏感元数据。
+- 轮换后上一枚 Token 立即失效；吊销是终态，历史运行事件保留。
 - 页面状态仅用于展示，权限、到期、限流和状态门禁均由后端重新校验。
 
 ## 最小接入

@@ -2,7 +2,7 @@
 
 ## 组件简介
 
-`WorkflowNotificationOutboxService` 是外部通知 outbox 状态迁移的唯一所有者，负责领取、成功完成、重试、死信、补偿和业务终态取消。站内信不写入 outbox。
+`WorkflowNotificationOutboxService` 是外部通知 outbox 状态迁移的唯一所有者，负责领取、成功完成、重试、死信、补偿和业务终态取消。站内信由 `WorkflowNotificationWriter` 在业务事务中直接持久化。
 
 ## 使用方式
 
@@ -13,14 +13,14 @@
 
 ## 参数与返回
 
-领取返回不可变 `WorkflowNotificationOutboxRecord`；完成方法无返回值。状态、租约持有者或 revision 不一致时返回冲突异常，禁止旧 worker 覆盖新租约结果。
+领取返回不可变 `WorkflowNotificationOutboxRecord`；完成方法无返回值。状态、租约持有者和 revision 全部一致时提交结果，其余组合返回冲突并保留当前租约结果。
 
 ## 关键设计
 
 - 允许 `PENDING/RETRYING -> DELIVERING`，以及 `DELIVERING -> PROCESSED/RETRYING/DEAD_LETTER`。
 - 所有完成更新使用 `outbox_id + DELIVERING + lease_owner + revision` 条件。
 - 重试使用有界次数和指数退避；永久失败或次数耗尽进入死信。
-- 服务不持有通知 Channel，外部网络调用由无事务协调器执行。
+- 无事务投递协调器持有通知 Channel 并执行外部网络调用，本服务专注于 outbox 状态迁移。
 
 ## 最小接入示例
 

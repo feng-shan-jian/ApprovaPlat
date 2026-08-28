@@ -2,13 +2,13 @@
 
 # ApprovaPlat
 
-**Run approval workflows for real, not just draw process diagrams.**
+**Run production-oriented approval workflows from design through audit.**
 
-An open-source approval platform built on RuoYi, Flowable 8, Spring Boot 4, and Vue 3, still under active development.
+An open-source approval platform built on RuoYi, Flowable 8, Spring Boot 4, and Vue 3, covering design, runtime, authorization, data, and audit.
 
 [中文](README.md) | **English**
 
-[Quick start](#quick-start) · [Current capabilities](#what-works-today) · [Current limits](#current-limits) · [Documentation (Chinese)](docs/README.md)
+[Quick start](#quick-start) · [Current capabilities](#what-works-today) · [Production acceptance boundary](#production-acceptance-boundary) · [Documentation (Chinese)](docs/README.md)
 
 [![Flowable 8.0.0](https://img.shields.io/badge/Flowable-8.0.0-2f855a?style=flat-square)](https://github.com/flowable/flowable-engine) [![Spring Boot 4.0.6](https://img.shields.io/badge/Spring%20Boot-4.0.6-6db33f?style=flat-square)](https://spring.io/projects/spring-boot) [![Vue 3.5.26](https://img.shields.io/badge/Vue-3.5.26-42b883?style=flat-square)](https://vuejs.org/) [![Project status](https://img.shields.io/badge/Status-Early%20Stage-f59e0b?style=flat-square)](#where-the-project-stands) [![MIT License](https://img.shields.io/badge/License-MIT-1f2937?style=flat-square)](LICENSE)
 
@@ -32,25 +32,23 @@ An open-source approval platform built on RuoYi, Flowable 8, Spring Boot 4, and 
 
 I encountered enterprise approvals during an internship on a B2B AI product and became interested in how an approval platform connects processes, forms, authorization, and business data.
 
-I wanted a modern open-source project built on Flowable 8 as a reference. The closest reasonably complete option I found was [Yudao](https://github.com/YunaiV/ruoyi-vue-pro), but it was not a Flowable 8 project. Its README says, “There is no commercial edition now and there never will be; all code is open source,” while its official [workflow documentation](https://doc.iocoder.cn/bpm/) marks the BPM SQL as available only to Yudao Planet members, including for commercial use.
+After studying projects such as [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue), [Yudao](https://github.com/YunaiV/ruoyi-vue-pro), [Flowable](https://github.com/flowable/flowable-engine), and [bpmn.io](https://github.com/bpmn-io/bpmn-js), I wanted a modern Flowable 8 implementation with a clear open-source scope and complete public code and database assets.
 
-To keep reading the related documentation, I used the [`Fuck-Yudao`](https://github.com/AntHubTC/AntHubTC.github.io/blob/master/tampermonkey-script/Fuck-Yudao.js) Tampermonkey script and also came across a third-party repository describing itself as [“Yudao source code, no fig leaf edition”](https://github.com/talkpoin/ruoyi-spring-boot-all). That is where I disagree: if “all code is open source” is the promise, the open scope and paid boundary should be clear from the start.
-
-Unable to find the project I wanted, I started ApprovaPlat. It is not simply a Flowable version replacement; the goal is to connect design, deployment, submission, task handling, authorization, data, and auditing on Flowable 8.
+ApprovaPlat therefore uses Flowable 8 as its runtime core, connects design, deployment, submission, task handling, authorization, data, and auditing, and maintains business rules, SQL, documentation, and verification entry points in one repository.
 
 The project is still early, and its core code, SQL, documentation, and tests will remain public. Feedback from experienced developers is always welcome, and I hope anyone building, planning, or migrating an approval system can find implementations and lessons here that are genuinely useful.
 
 ## Where the project stands
 
-ApprovaPlat still has a long way to go before it becomes a mature approval platform. The capabilities below exist in the repository today; they are not a roadmap written in the present tense.
+ApprovaPlat is currently at an early stage. The capabilities below exist in the repository today.
 
-Today, process design, deployment, submission, task handling, history, and audit queries form a working path. Flowable 8 executes the workflows, MySQL stores business data, and Redis handles login state and caching. It is ready to serve as a learning, evaluation, or secondary-development base, but it should not be placed into production without validation in the target environment.
+Today, process design, deployment, submission, task handling, history, and audit queries form a working path. Flowable 8 executes the workflows, MySQL stores business data, and Redis handles login state and caching. It can serve as a learning, evaluation, or secondary-development base; production use follows successful deployment, capacity, failure, and recovery acceptance in the target environment.
 
 It is currently best suited to:
 
 - Learning Flowable 8 and how an approval system connects its frontend, backend, authorization, and data.
 - Serving as a reference implementation or foundation for a new approval project.
-- Comparing capabilities and validating a migration from an older Flowable release or another workflow engine.
+- Validating target capabilities for a Flowable version upgrade or migration from another workflow engine.
 - Running a pilot before production while completing deployment, capacity, and failure testing for the target environment.
 
 ## What works today
@@ -78,7 +76,7 @@ It is currently best suited to:
 ### Authorization, data, and operations
 
 - Separate design, submission, approval, administration, and audit duties, with object-level authorization for instances, tasks, deployments, attachments, and audit data.
-- Keep Flowable and business data in the same primary datasource and transaction boundary. The frontend does not keep a second authoritative workflow state.
+- Keep Flowable and business data in the same primary datasource and transaction boundary. Backend runtime facts and the formal database form the single authoritative workflow state.
 - Provide health checks, runtime snapshots, Micrometer/Prometheus metrics, attachment cleanup locks, and runtime readiness validation.
 
 ## Screenshots
@@ -87,15 +85,13 @@ The view below shows a dynamic multi-instance approval completed in a real front
 
 ![ApprovaPlat completed dynamic multi-instance approval](docs/assets/readme/process-trace.png)
 
-## Current limits
+## Production acceptance boundary
 
-The following cannot yet be described as fully supported:
-
-- The first production database baseline supports a clean, empty schema. It does not promise automatic upgrades from unpublished development databases.
-- `flowable.database-schema-update=false` is a fixed boundary. Production schema changes must use maintained SQL and runtime validation.
-- `ComplexGateway` cannot currently be deployed. Native standard loops may round-trip as XML; business repetition uses the project's controlled-loop capability.
-- Async executors are disabled by default. Enabling timers, SLAs, or background work requires database, topology, capacity, monitoring, and single-executor coordination validation.
-- Multi-node deployment, shared attachment storage, real external side effects, backup recovery, and long-duration stability still require validation in the actual target environment.
+- The first production database baseline installs into an empty schema. Environments already on the formal 8.0.0 baseline move forward with `8.0.1__workflow_mail_config.sql`.
+- Production fixes `flowable.database-schema-update=false`; maintained repository SQL and runtime validation provide the schema update path.
+- Formal gateway entry points cover exclusive, parallel, inclusive, and event gateways. Controlled loops execute business repetition, while standard loops retain XML round-trip support.
+- Async executors are enabled after database, topology, capacity, monitoring, and single-executor coordination acceptance, then run timers, SLAs, and background work.
+- Multi-node operation, shared attachment storage, real external side effects, backup recovery, and long-duration stability enter production after acceptance in the target environment.
 
 See the [approval behavior contract](docs/contracts/workflow-behavior.md) and [multi-pool collaboration contract](docs/contracts/workflow-collaboration.md) for precise boundaries.
 
@@ -135,7 +131,7 @@ Start the frontend from `ruoyi-ui`:
 npm run dev
 ```
 
-Open `http://127.0.0.1:1024`. The clean local baseline account is `admin` with initial password `wang`. It is for local development only; change it before exposing the service beyond your machine.
+Open `http://127.0.0.1:1024`. The clean local baseline account is `admin` with initial password `wang`. Use it for local development and complete password rotation before exposing the service beyond your machine.
 
 ### Daily development
 
@@ -175,7 +171,17 @@ npm run test:contracts
 npm run build:prod
 ```
 
-Verification against real MySQL and Redis instances, real roles, and APIs requires the corresponding runtime environment and isolated data.
+Real MySQL `*IT` tests use an opt-in Failsafe profile. CI first prepares a dedicated `approvaplat_it` schema and then supplies these environment variables. The profile connects to that isolated MySQL when all values are present and fails immediately when configuration is incomplete. Regular `mvn test` and `mvn verify` run unit and local integration tests.
+
+```powershell
+$env:WORKFLOW_MYSQL_TEST_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat_it?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia%2FShanghai'
+$env:WORKFLOW_MYSQL_TEST_USERNAME = '<isolated-acceptance-user>'
+$env:WORKFLOW_MYSQL_TEST_PASSWORD = '<isolated-acceptance-password>'
+
+mvn -pl ruoyi-flowable -am -Pworkflow-mysql-it verify
+```
+
+Verification against real MySQL and Redis instances, real roles, and APIs uses the corresponding runtime environment and isolated data.
 
 ## Technology
 
@@ -220,6 +226,6 @@ For a new BPMN element or approval action, explain how it is edited, how it runs
 
 ApprovaPlat builds on open-source projects including [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue), [Flowable](https://github.com/flowable/flowable-engine), and [bpmn.io](https://github.com/bpmn-io/bpmn-js).
 
-This is an independent open-source project, not an official component of those projects. The code is available under the [MIT License](LICENSE).
+This is an independent open-source project with its own release and support boundaries. The code is available under the [MIT License](LICENSE).
 
 > May we all find our direction in the age of AI, build what we set out to build, and enjoy success and a smooth road ahead.

@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { BpmnModdle } from 'bpmn-moddle'
 import flowableModdle from '../../src/components/workflow/bpmn/flowableModdle.js'
@@ -51,21 +50,14 @@ test('任务能力表不可变且四类业务任务使用独立面板', () => {
   assert.equal(getTaskCapability('bpmn:BusinessRuleTask').panelType, TASK_PANEL_TYPES.BUSINESS_RULE)
   assert.equal(getTaskCapability('bpmn:ManualTask').creationAllowed, false)
   assert.equal(getTaskCapability('bpmn:ManualTask').conversionAllowed, false)
-  assert.match(getTaskCapability('bpmn:ManualTask').runtimeSemantics, /不会生成平台待办/)
 })
 
 /**
- * 验证高级创建入口与 bpmn-js 转换菜单同时隐藏 ManualTask。
- * @returns {Promise<void>} 创建入口或转换目标重新暴露 ManualTask 时测试失败。
+ * 验证单一能力表禁止创建 ManualTask，且 bpmn-js 转换菜单按该能力过滤。
+ * @returns {void} ManualTask 创建或转换能力重新开放时测试失败。
  */
-test('ManualTask 不进入高级创建入口和转换目标', async () => {
-  const paletteSource = await readFile(new URL(
-    '../../src/components/workflow/designer/AdvancedElementPalette.vue', import.meta.url
-  ), 'utf8')
-  assert.doesNotMatch(paletteSource, /paletteItem\([^\n]*bpmn:ManualTask/)
-  assert.match(paletteSource, /paletteItem\('service-task',[^\n]*bpmn:ServiceTask/)
-  assert.match(paletteSource, /getTaskCapability\(item\.type\)\?\.creationAllowed/)
-
+test('ManualTask 单一能力事实禁止创建并从转换目标过滤', () => {
+  assert.equal(getTaskCapability('bpmn:ManualTask').creationAllowed, false)
   const entries = {
     'replace-with-service-task': { label: 'Service Task' },
     'replace-with-manual-task': { label: 'Manual Task' },

@@ -13,13 +13,13 @@ Controller 将 `WorkflowManualUrgeRequest` 直接传入 `urge(request)`。调用
 - `urge(WorkflowManualUrgeRequest request)` 返回 `WorkflowManualUrgeView`，HTTP 响应仅包含本次实际接收人数 `recipientCount`。
 - `acquireCooldown(String actorUserId, String processInstanceId)` 建立用户与根流程维度的原子冷却键，供正式催办流程和依赖故障测试复用。
 
-非法流程状态、无活动任务、无有效接收人、越权、冷却冲突和 Redis 不可用分别返回稳定业务异常，不返回伪成功。
+非法流程状态、无活动任务、无有效接收人、越权、冷却冲突和 Redis 不可用分别返回稳定业务异常，响应与真实登记结果保持一致。
 
 ## 关键设计
 
 - 先锁定根运行树和活动任务，再基于冻结事实解析候选人。
 - 冷却键使用 Redis 原子 `SET NX EX`；依赖不可用返回 503，已有冷却返回 429。
-- 服务不直接写通知 SQL，通过 `WorkflowNotificationService.registerManualUrge` 登记。
+- 服务通过 `WorkflowNotificationService.registerManualUrge` 统一登记通知事实。
 - 催办事件键仅在服务内部生成，并作为每个任务通知 `sourceId` 的稳定前缀参与幂等登记。
 - CallActivity 子任务使用实际子流程、任务和节点身份生成通知。
 

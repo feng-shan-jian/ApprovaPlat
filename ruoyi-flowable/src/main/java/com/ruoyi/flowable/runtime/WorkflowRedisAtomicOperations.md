@@ -11,7 +11,7 @@
 
 ## 接入方式
 
-通过构造器注入组件，不直接在业务服务中访问 `StringRedisTemplate`。
+业务服务通过构造器注入本组件，由本组件统一访问 `StringRedisTemplate`。
 
 ```java
 long count = redisOperations.incrementWithExpiry(
@@ -28,16 +28,16 @@ ExpiringSetResult result = redisOperations.setIfAbsent(
 | `incrementWithExpiry` | 非敏感 Key、正整数秒 TTL | 递增后计数 | 单次 Lua 调用执行 `INCR`，首次计数时执行 `EXPIRE` |
 | `setIfAbsent` | 非敏感 Key、正整数秒 TTL | 是否成功及剩余秒数 | Redis `SET NX` 与 TTL 同一命令提交 |
 
-Redis `DataAccessException` 不在组件内吞掉，由不同业务服务分别映射为稳定 `503`、结构化日志和低基数指标。
+Redis `DataAccessException` 传播到业务服务，由各服务分别映射为稳定 `503`、结构化日志和低基数指标。
 
 ## 状态生命周期
 
 - 凭据限流 Key 保留 60 秒，唯一消费者是集成凭据认证服务。
 - 催办冷却 Key 按 `flowable.notification.urge-interval` 自动过期，唯一消费者是人工催办服务。
-- 两类状态都不是业务事实，不进入 MySQL、备份或恢复范围。
+- 两类状态属于短期运行协调数据，仅存储在 Redis 并按 TTL 自动清理。
 
 ## 设计约束
 
-- Key 不得包含 Token、摘要、通知正文或业务载荷。
-- TTL 必须是正整数秒，避免 Redis 秒级过期语义被静默截断。
-- 不使用本地缓存、Redisson 或额外持久化表。
+- Key 只包含固定业务前缀和脱敏主键。
+- TTL 使用正整数秒，与 Redis 秒级过期语义保持一致。
+- `StringRedisTemplate` 原子命令直接替换本地缓存、Redisson 和额外持久化表方案。

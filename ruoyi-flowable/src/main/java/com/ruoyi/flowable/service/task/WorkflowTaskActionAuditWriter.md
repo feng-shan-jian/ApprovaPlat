@@ -6,7 +6,7 @@
 
 ## 事务边界
 
-组件不创建事务。comment 写入由调用应用服务的 `WorkflowEngineOperations` 外层事务管理，后续附件、通知或 CAS 失败时一并回滚。
+comment 写入加入调用应用服务通过 `WorkflowEngineOperations` 建立的外层事务，后续附件、通知或 CAS 失败时一并回滚。
 
 ```java
 auditWriter.write(task, "3", "REJECT", actor.userId(), opinion, null, null);

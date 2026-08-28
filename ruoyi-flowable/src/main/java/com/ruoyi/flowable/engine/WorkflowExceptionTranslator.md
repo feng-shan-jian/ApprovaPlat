@@ -2,9 +2,9 @@
 
 ## 组件简介与作用
 
-`WorkflowExceptionTranslator` 将 Flowable 8 公共 API 抛出的 `FlowableException`，以及其 MyBatis flush 或 Spring 事务提交阶段可能直接外泄的并发异常，转换为若依全局异常处理器可识别的 `ServiceException`。转换结果使用稳定 HTTP 状态和通用中文提示，不向客户端透传流程变量、内部对象 ID、SQL 或引擎堆栈。
+`WorkflowExceptionTranslator` 将 Flowable 8 公共 API 抛出的 `FlowableException`，以及其 MyBatis flush 或 Spring 事务提交阶段可能直接外泄的并发异常，转换为若依全局异常处理器可识别的 `ServiceException`。转换结果使用稳定 HTTP 状态和通用中文提示，客户端字段白名单覆盖业务码与公开提示。
 
-正常业务代码不直接调用该组件。它由 [WorkflowEngineOperations](WorkflowEngineOperations.md) 统一使用，[WorkflowProcessEngineAdapter](WorkflowProcessEngineAdapter.md) 对主动识别的权限和状态错误使用相同 HTTP 语义。
+该组件由 [WorkflowEngineOperations](WorkflowEngineOperations.md) 统一调用；[WorkflowProcessEngineAdapter](WorkflowProcessEngineAdapter.md) 对主动识别的权限和状态错误使用相同 HTTP 语义。
 
 ## 接入与使用方式
 
@@ -14,7 +14,7 @@
 processEngineAdapter.claimTaskForCurrentUser(taskId);
 ```
 
-若后续新增引擎适配器方法，应把 Flowable 公共 API 调用放进 `WorkflowEngineOperations.read(...)` 或 `writeAsCurrentUser(...)`，不要在 Controller 中重复 `try/catch`，也不要直接把 `exception.getMessage()` 返回给前端。
+新增引擎适配器方法时，把 Flowable 公共 API 调用放进 `WorkflowEngineOperations.read(...)` 或 `writeAsCurrentUser(...)`；Controller 直接消费翻译后的稳定业务异常。
 
 ## 公开方法
 
@@ -25,7 +25,7 @@ processEngineAdapter.claimTaskForCurrentUser(taskId);
 | `translateRetryableConcurrencyConflict(RuntimeException exception)` | Flowable、Spring 事务或 MyBatis 包装的运行时异常 | `Optional<ServiceException>`，仅真实可重试并发失败有值，并保留最外层异常为 `cause` |
 | `isRetryableConcurrencyConflict(Throwable exception)` | 原始异常或已经翻译并保留 `cause` 的业务异常 | `boolean`，完整异常链命中 Flowable 乐观锁、Spring 并发异常或数据库事务冲突时为 `true` |
 
-传入 `null` 属于编程错误，会抛出 `NullPointerException`，不会生成业务响应。
+传入 `null` 属于编程错误，会抛出 `NullPointerException` 并终止当前翻译路径。
 
 ## 异常映射
 
@@ -43,12 +43,12 @@ processEngineAdapter.claimTaskForCurrentUser(taskId);
 
 ## 关键设计与约束
 
-- 原始 Flowable 异常保存在 `ServiceException.cause` 中，供服务端日志和链路追踪使用；客户端响应只能使用稳定提示，不应序列化 `cause`、堆栈或原始消息。
+- 原始 Flowable 异常保存在 `ServiceException.cause` 中供服务端日志和链路追踪使用；客户端响应字段白名单只包含稳定提示和业务码。
 - `WorkflowEngineOperations` 翻译 `FlowableException`，并额外识别 Flowable/MyBatis 直接外泄或 Spring 事务提交阶段包装的乐观锁、死锁、锁等待超时和事务回滚类并发冲突。识别会遍历完整 `cause` 链，因此已经翻译且保留原始 cause 的 `ServiceException` 仍可被动态多实例外层边界精确分类。
-- 普通业务 `409`、`FlowableIllegalStateException`、重复认领和对象不存在不属于 revision CAS 失败。它们不能仅凭 HTTP 状态被判为可重试并发，也不能自动获得动态多实例 revision 子码。
-- 并发认领、乐观锁和非法状态统一为 `409`，调用方应刷新任务状态后决定是否重试，不能把失败当作成功或盲目循环重试。
-- 未分类引擎异常统一为 `500`。服务端应记录完整 `cause`，但不能在 API 响应中暴露数据库或引擎内部细节。
-- 翻译器不负责事务回滚、操作人设置或业务权限；这些职责分别由 `WorkflowEngineOperations`、`WorkflowAuthenticationContext` 和 P3 业务 Service/Adapter 承担。
+- 普通业务 `409`、`FlowableIllegalStateException`、重复认领和对象缺失使用各自稳定业务码；只有 revision CAS 失败携带动态多实例 revision 子码并进入对应重试提示。
+- 并发认领、乐观锁和非法状态统一为 `409`，调用方刷新任务状态后依据稳定业务码决定一次明确重试或停止。
+- 未分类引擎异常统一为 `500`。服务端记录完整 `cause`，API 响应返回稳定通用提示。
+- 事务回滚、操作人设置和业务权限分别由 `WorkflowEngineOperations`、`WorkflowAuthenticationContext` 和 P3 业务 Service/Adapter 承担。
 
 ## 最小接入示例
 
@@ -65,4 +65,4 @@ public Optional<String> findDeploymentName(String deploymentId)
 }
 ```
 
-业务 Controller 只交给若依全局异常处理器，不自行暴露 Flowable 原始异常。
+业务 Controller 把异常交给若依全局异常处理器，由统一响应字段白名单生成结果。

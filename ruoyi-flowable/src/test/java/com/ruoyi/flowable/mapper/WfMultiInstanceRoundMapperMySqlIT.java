@@ -22,13 +22,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import tools.jackson.databind.json.JsonMapper;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
+import com.ruoyi.flowable.testsupport.WorkflowMySqlITSupport;
 
 /**
  * 在显式指定的隔离 MySQL 8 空库基线上执行公共 Mapper 契约和 MySQL 专属门禁。
@@ -36,9 +36,7 @@ import com.ruoyi.flowable.domain.WfMultiInstanceRound;
  * 本类不创建、变更或修复表结构；JSON、CHECK、STORED 生成列、排序规则、InnoDB、
  * 数据库时钟及真实并发均由现有基线和真实 MySQL 执行，不能由 H2 替代。
  */
-@EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL",
-        matches = "jdbc:mysql:.*")
-class WfMultiInstanceRoundMapperMySqlTest
+class WfMultiInstanceRoundMapperMySqlIT
 {
     private static MysqlDataSource dataSource;
     private static SqlSessionFactory mySqlSessionFactory;
@@ -52,14 +50,11 @@ class WfMultiInstanceRoundMapperMySqlTest
     @BeforeAll
     static void setUpMySql() throws Exception
     {
-        String url = requireEnvironment("WORKFLOW_MYSQL_TEST_URL", false);
-        String username = requireEnvironment("WORKFLOW_MYSQL_TEST_USERNAME", false);
-        String password = requireEnvironment("WORKFLOW_MYSQL_TEST_PASSWORD", true);
-        dataSource = new MysqlDataSource();
-        dataSource.setURL(url);
-        dataSource.setUser(username);
-        dataSource.setPassword(password);
-        verifyInstalledBaseline();
+        dataSource = WorkflowMySqlITSupport.createDataSource();
+        WorkflowMySqlITSupport.verifyIsolatedBaseline(dataSource,
+                "多实例轮次 Mapper IT", null,
+                List.of("wf_multi_instance_round"));
+        verifyRoundCheckConstraints();
 
         Environment environment = new Environment("round-mysql",
                 new JdbcTransactionFactory(), dataSource);
@@ -265,29 +260,16 @@ class WfMultiInstanceRoundMapperMySqlTest
     }
 
     /**
-     * 验证当前连接是 MySQL 8、目标表存在且已安装完整 CHECK 集合。
+     * 验证目标表已安装完整 CHECK 集合；版本、隔离库和哨兵表由公共支撑统一校验。
      *
      * @return void，只读校验环境，不创建或修改表
      * @throws SQLException 连接或 information_schema 查询失败时报告
      */
-    private static void verifyInstalledBaseline() throws SQLException
+    private static void verifyRoundCheckConstraints() throws SQLException
     {
         try (Connection connection = dataSource.getConnection();
                 Statement statement = connection.createStatement())
         {
-            try (ResultSet version = statement.executeQuery("select version()"))
-            {
-                assertTrue(version.next() && Integer.parseInt(
-                        version.getString(1).split("\\.")[0]) >= 8,
-                        "真实 Mapper IT 只允许 MySQL 8+");
-            }
-            try (ResultSet table = statement.executeQuery(
-                    "select count(*) from information_schema.tables "
-                    + "where table_schema=database() and table_name='wf_multi_instance_round'"))
-            {
-                assertTrue(table.next());
-                assertEquals(1, table.getInt(1), "请先安装当前空库基线");
-            }
             try (ResultSet checks = statement.executeQuery(
                     "select count(*) from information_schema.table_constraints "
                     + "where table_schema=database() and table_name='wf_multi_instance_round' "
@@ -297,23 +279,6 @@ class WfMultiInstanceRoundMapperMySqlTest
                 assertTrue(checks.getInt(1) >= 9, "多实例轮次 CHECK 约束不完整");
             }
         }
-    }
-
-    /**
-     * 读取必需的真实 MySQL 验收环境变量，禁止默认账号或密码猜测。
-     *
-     * @param name String，环境变量名
-     * @param allowEmpty boolean，是否允许显式配置空密码
-     * @return String，已明确配置的环境变量值
-     */
-    private static String requireEnvironment(String name, boolean allowEmpty)
-    {
-        String value = System.getenv(name);
-        if (value == null || (!allowEmpty && value.isBlank()))
-        {
-            throw new IllegalStateException("未显式配置真实 MySQL 验收变量: " + name);
-        }
-        return value;
     }
 
     /**

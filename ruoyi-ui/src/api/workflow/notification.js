@@ -1,4 +1,13 @@
 import request from '@/utils/request'
+import {
+  notificationMailConfigReadRequest,
+  notificationMailConfigSaveRequest,
+  notificationMailConfigTestRequest,
+  notificationNodeCatalogRequest,
+  notificationOutboxCompensationRequest,
+  notificationPolicySaveRequest,
+  notificationProcessCatalogRequest
+} from './notificationRequestConfig.js'
 
 /**
  * 查询当前用户审批通知。
@@ -55,12 +64,7 @@ export function listWorkflowNotificationPolicies() {
 
 /** @param {object} data 完整策略请求。 @returns {Promise<object>} 写后策略。 */
 export function saveWorkflowNotificationPolicy(data) {
-  return request({
-    url: '/workflow/notification/policies',
-    method: 'put',
-    data,
-    suppressErrorMessage: true
-  })
+  return request(notificationPolicySaveRequest(data))
 }
 
 /**
@@ -68,7 +72,7 @@ export function saveWorkflowNotificationPolicy(data) {
  * @returns {Promise<object>} data 为 processDefinitionKey、processName 和 version 组成的流程数组。
  */
 export function listWorkflowNotificationProcesses() {
-  return request({ url: '/workflow/notification/catalog/processes', method: 'get' })
+  return request(notificationProcessCatalogRequest())
 }
 
 /**
@@ -77,12 +81,7 @@ export function listWorkflowNotificationProcesses() {
  * @returns {Promise<object>} data 为 taskDefinitionKey 和 taskName 组成的节点数组。
  */
 export function listWorkflowNotificationNodes(processDefinitionKey) {
-  return request({
-    url: `/workflow/notification/catalog/processes/${encodeURIComponent(processDefinitionKey)}/nodes`,
-    method: 'get',
-    // 节点目录由页面区分“真实空目录”和“加载失败”，统一拦截器不得重复弹出错误提示。
-    suppressErrorMessage: true
-  })
+  return request(notificationNodeCatalogRequest(processDefinitionKey))
 }
 
 /**
@@ -90,12 +89,7 @@ export function listWorkflowNotificationNodes(processDefinitionKey) {
  * @returns {Promise<object>} data 只包含可展示字段、credentialConfigured 和 revision。
  */
 export function getWorkflowNotificationMailConfig() {
-  return request({
-    url: '/workflow/notification/mail-config',
-    method: 'get',
-    // 弹窗需要区分首次读取失败与“保存成功但回读失败”，由组件输出唯一且准确的提示。
-    suppressErrorMessage: true
-  })
+  return request(notificationMailConfigReadRequest())
 }
 
 /**
@@ -104,14 +98,7 @@ export function getWorkflowNotificationMailConfig() {
  * @returns {Promise<object>} 保存结果；调用方成功后必须重新查询正式配置。
  */
 export function saveWorkflowNotificationMailConfig(data) {
-  return request({
-    url: '/workflow/notification/mail-config',
-    method: 'put',
-    data,
-    suppressErrorMessage: true,
-    // 授权码不得进入通用重复提交 sessionStorage 缓存，防重由页面状态和后端 CAS 共同保证。
-    headers: { repeatSubmit: false }
-  })
+  return request(notificationMailConfigSaveRequest(data))
 }
 
 /**
@@ -120,16 +107,7 @@ export function saveWorkflowNotificationMailConfig(data) {
  * @returns {Promise<object>} data.success 表示测试邮件已由当前输入成功发送。
  */
 export function testWorkflowNotificationMailConfig(data) {
-  return request({
-    url: '/workflow/notification/mail-config/test',
-    method: 'post',
-    data,
-    suppressErrorMessage: true,
-    // 测试同样携带明文授权码，禁止通用请求拦截器写入浏览器会话缓存。
-    headers: { repeatSubmit: false },
-    // 客户端等待时间覆盖后端受控的连接、读取和发送超时，保留可区分的业务错误。
-    timeout: 30000
-  })
+  return request(notificationMailConfigTestRequest(data))
 }
 
 /**
@@ -143,9 +121,5 @@ export function listWorkflowNotificationOutbox(query) {
 
 /** @param {number|string} outboxId 死信主键。 @returns {Promise<object>} 补偿结果。 */
 export function compensateWorkflowNotification(outboxId) {
-  return request({
-    url: `/workflow/notification/outbox/${outboxId}/compensate`,
-    method: 'post',
-    suppressErrorMessage: true
-  })
+  return request(notificationOutboxCompensationRequest(outboxId))
 }

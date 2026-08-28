@@ -160,7 +160,7 @@
           </el-table-column>
           <el-table-column label="操作" width="82" align="center" fixed="right">
             <template #default="{ row }">
-              <el-tooltip v-if="canRetryOutbox && canCompensate(row)" content="补偿重试" placement="top">
+              <el-tooltip v-if="canCompensate(row)" content="补偿重试" placement="top">
                 <el-button
                   circle
                   text
@@ -327,6 +327,13 @@ import {
   saveWorkflowNotificationPolicy
 } from '@/api/workflow/notification'
 import MailConfigDialog from './MailConfigDialog.vue'
+import {
+  WORKFLOW_NOTIFICATION_PERMISSIONS,
+  canCompensateNotificationOutbox,
+  nodeCatalogValidationError,
+  processCatalogValidationError,
+  resolveNotificationInitialTab
+} from './notificationAdminRules.js'
 
 const { proxy } = getCurrentInstance()
 
@@ -390,10 +397,10 @@ const defaultTemplates = Object.freeze({
 const outboxStatusOptions = Object.freeze(['PENDING', 'RETRYING', 'DELIVERING', 'PROCESSED', 'DEAD_LETTER', 'CANCELLED'])
 
 // 四个权限分别约束页面读取和业务入口，避免仅隐藏按钮却继续发出无权请求。
-const canManagePolicy = computed(() => proxy.$auth.hasPermi('workflow:notification:manage'))
-const canAuditOutbox = computed(() => proxy.$auth.hasPermi('workflow:notification:audit'))
-const canRetryOutbox = computed(() => proxy.$auth.hasPermi('workflow:notification:retry'))
-const canMailManage = computed(() => proxy.$auth.hasPermi('workflow:notification:mailManage'))
+const canManagePolicy = computed(() => proxy.$auth.hasPermi(WORKFLOW_NOTIFICATION_PERMISSIONS.manage))
+const canAuditOutbox = computed(() => proxy.$auth.hasPermi(WORKFLOW_NOTIFICATION_PERMISSIONS.audit))
+const canRetryOutbox = computed(() => proxy.$auth.hasPermi(WORKFLOW_NOTIFICATION_PERMISSIONS.retry))
+const canMailManage = computed(() => proxy.$auth.hasPermi(WORKFLOW_NOTIFICATION_PERMISSIONS.mailManage))
 
 const activeTab = ref(resolveInitialTab())
 const policyLoading = ref(false)
@@ -456,9 +463,7 @@ const policyRules = {
  * @returns {'policies'|'outbox'|''} 策略、投递或无可读页签。
  */
 function resolveInitialTab() {
-  if (proxy.$auth.hasPermi('workflow:notification:manage')) return 'policies'
-  if (proxy.$auth.hasPermi('workflow:notification:audit')) return 'outbox'
-  return ''
+  return resolveNotificationInitialTab(permission => proxy.$auth.hasPermi(permission))
 }
 
 /**
@@ -758,15 +763,12 @@ function appendVariable(variable) {
  * @returns {void} 全局范围或合法目录项通过校验。
  */
 function validateProcessSelection(rule, value, callback) {
-  if (policyDialog.form.scopeType === 'DEFAULT') {
-    callback()
-    return
-  }
-  if (!value || !processOptions.value.some(item => item.processDefinitionKey === value)) {
-    callback(new Error('请选择当前有权管理的真实流程'))
-    return
-  }
-  callback()
+  const errorMessage = processCatalogValidationError(
+    policyDialog.form.scopeType,
+    value,
+    processOptions.value
+  )
+  callback(errorMessage ? new Error(errorMessage) : undefined)
 }
 
 /**
@@ -777,19 +779,13 @@ function validateProcessSelection(rule, value, callback) {
  * @returns {void} 非节点范围或合法节点通过校验。
  */
 function validateNodeSelection(rule, value, callback) {
-  if (policyDialog.form.scopeType !== 'NODE') {
-    callback()
-    return
-  }
-  if (currentNodeLoadError.value) {
-    callback(new Error('节点目录加载失败，请重新加载后再保存'))
-    return
-  }
-  if (!value || !currentNodeOptions.value.some(item => item.taskDefinitionKey === value)) {
-    callback(new Error('请选择当前流程中的真实节点'))
-    return
-  }
-  callback()
+  const errorMessage = nodeCatalogValidationError(
+    policyDialog.form.scopeType,
+    value,
+    currentNodeOptions.value,
+    currentNodeLoadError.value
+  )
+  callback(errorMessage ? new Error(errorMessage) : undefined)
 }
 
 /**
@@ -975,7 +971,7 @@ function handleMailConfigSaved(result) {
  * @returns {Promise<void>} 接受补偿后只提示重新入队并刷新真实状态。
  */
 async function compensate(row) {
-  if (!canRetryOutbox.value || !canCompensate(row) || isCompensating(row.outboxId)) return
+  if (!canCompensate(row) || isCompensating(row.outboxId)) return
   await proxy.$modal.confirm(`确认重新投递通知 ${row.outboxId} 吗？`)
   setCompensating(row.outboxId, true)
   try {
@@ -1000,8 +996,7 @@ async function compensate(row) {
  * @returns {boolean} 服务端明确允许且当前状态仍为死信时返回 true。
  */
 function canCompensate(row) {
-  const allowed = row?.canCompensate === true || Number(row?.canCompensate) === 1
-  return allowed && row?.status === 'DEAD_LETTER'
+  return canCompensateNotificationOutbox(canRetryOutbox.value, row)
 }
 
 /**

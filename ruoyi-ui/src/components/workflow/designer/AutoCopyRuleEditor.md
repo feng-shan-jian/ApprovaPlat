@@ -4,7 +4,7 @@
 
 `AutoCopyRuleEditor` 用于编辑流程或用户任务上的结构化自动抄送规则。组件只维护尚未应用的页面草稿；设计者点击“应用自动抄送规则”后，父级 `ProcessDesigner` 才会校验并把完整规则写入 `approva.autoCopyRules` Flowable 扩展属性。
 
-组件不自行请求用户、角色或部门接口。固定身份检索通过 `identity-search` 事件交给模型设计页，并复用正式 `/workflow/identity/options?capability=copy` 身份目录。
+固定身份检索通过 `identity-search` 事件交给模型设计页，由父级统一调用正式 `/workflow/identity/options?capability=copy` 身份目录。
 
 ## 使用方式
 
@@ -45,14 +45,14 @@
 
 ## 公开方法
 
-组件没有公开方法。规则通过 props 和 emits 受控管理。
+规则通过 props 和 emits 的声明式契约受控管理。
 
 ## 关键设计思路
 
 - 规则结构与后端 `WorkflowAutoCopyRuleContract` 一致：`id`、`trigger`、`recipients`；来源包含 `type` 和 `values`。
 - 固定用户只接受正整数用户主键；组只接受 `ROLE<id>`、`DEPT<id>`；表单字段只接受受控变量名。
-- 发起人来源不携带值。固定用户、角色、部门和表单字段都必须至少选择一个值。
-- 编辑过程保留在组件草稿中，不会把空来源、错误触发时机或跨类型残留值写入 BPMN。
+- 发起人来源的值固定为空。固定用户、角色、部门和表单字段都必须至少选择一个值。
+- 编辑过程保留在组件草稿中；完整规则通过校验后才提交父级写入 BPMN，切换来源时同步清理跨类型值。
 - 组件只做即时门禁。保存、部署和运行时仍由后端复核正式身份、规则位置、字段值和对象可见性。
 
 ## 最小接入示例
