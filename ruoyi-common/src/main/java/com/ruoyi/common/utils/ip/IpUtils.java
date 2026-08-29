@@ -122,58 +122,39 @@ public class IpUtils
     }
 
     /**
-     * 检查是否为内部IP地址
-     * 
-     * @param ip IP地址
-     * @return 结果
+     * 检查 IPv4 文本是否属于内部地址；缺失或非法输入按内部地址失败关闭。
+     *
+     * @param ip String，待判断的 IPv4 文本
+     * @return boolean，内部、缺失或非法地址返回 true，合法公网地址返回 false
      */
     public static boolean internalIp(String ip)
     {
+        if (ip == null || ip.isBlank())
+        {
+            return true;
+        }
         byte[] addr = textToNumericFormatV4(ip);
         return internalIp(addr) || "127.0.0.1".equals(ip);
     }
 
     /**
-     * 检查是否为内部IP地址
-     * 
-     * @param addr byte地址
-     * @return 结果
+     * 按 RFC1918 三段私有网段判断 IPv4 字节，避免不同网段的分支相互穿透。
+     *
+     * @param addr byte[]，IPv4 的四段字节；缺失或长度不足表示非法地址
+     * @return boolean，私有或非法地址返回 true，合法公网地址返回 false
      */
     private static boolean internalIp(byte[] addr)
     {
-        if (StringUtils.isNull(addr) || addr.length < 2)
+        if (addr == null || addr.length < 2)
         {
             return true;
         }
-        final byte b0 = addr[0];
-        final byte b1 = addr[1];
-        // 10.x.x.x/8
-        final byte SECTION_1 = 0x0A;
-        // 172.16.x.x/12
-        final byte SECTION_2 = (byte) 0xAC;
-        final byte SECTION_3 = (byte) 0x10;
-        final byte SECTION_4 = (byte) 0x1F;
-        // 192.168.x.x/16
-        final byte SECTION_5 = (byte) 0xC0;
-        final byte SECTION_6 = (byte) 0xA8;
-        switch (b0)
-        {
-            case SECTION_1:
-                return true;
-            case SECTION_2:
-                if (b1 >= SECTION_3 && b1 <= SECTION_4)
-                {
-                    return true;
-                }
-            case SECTION_5:
-                switch (b1)
-                {
-                    case SECTION_6:
-                        return true;
-                }
-            default:
-                return false;
-        }
+        // 转成无符号网段值，避免 128-255 在 byte 中变为负数后掩盖边界关系。
+        int firstOctet = Byte.toUnsignedInt(addr[0]);
+        int secondOctet = Byte.toUnsignedInt(addr[1]);
+        return firstOctet == 10
+                || (firstOctet == 172 && secondOctet >= 16 && secondOctet <= 31)
+                || (firstOctet == 192 && secondOctet == 168);
     }
 
     /**

@@ -15,24 +15,24 @@ public class UserAgentUtils
 {
     public static final String UNKNOWN = "";
 
-    // 浏览器正则表达式模式
-    private static final Pattern CHROME_PATTERN = Pattern.compile("Chrome/(\\d+)(?:\\.\\d+)*");
-    private static final Pattern FIREFOX_PATTERN = Pattern.compile("Firefox/(\\d+)(?:\\.\\d+)*");
-    private static final Pattern EDGE_PATTERN = Pattern.compile("Edg(?:e)?/(\\d+)(?:\\.\\d+)*");
-    private static final Pattern SAFARI_PATTERN = Pattern.compile("Version/(\\d+)(?:\\.\\d+)*");
-    private static final Pattern OPERA_PATTERN = Pattern.compile("Opera/(\\d+)(?:\\.\\d+)*");
-    private static final Pattern IE_PATTERN = Pattern.compile("(?:MSIE |Trident/.*rv:)(\\d+)(?:\\.\\d+)*");
-    private static final Pattern SAMSUNG_PATTERN = Pattern.compile("SamsungBrowser/(\\d+)(?:\\.\\d+)*");
-    private static final Pattern UC_PATTERN = Pattern.compile("UCBrowser/(\\d+)(?:\\.\\d+)*");
-    private static final Pattern QQ_PATTERN = Pattern.compile("QQBrowser/(\\d+)(?:\\.\\d+)*");
-    private static final Pattern WECHAT_PATTERN = Pattern.compile("MicroMessenger/(\\d+)(?:\\.\\d+)*");
-    private static final Pattern BAIDU_PATTERN = Pattern.compile("baidubrowser/(\\d+)(?:\\.\\d+)*");
+    // 回退结果只使用主版本；不匹配无用的完整版本尾部，避免超长外部请求头耗尽正则线程栈。
+    private static final Pattern CHROME_PATTERN = Pattern.compile("Chrome/(\\d+)");
+    private static final Pattern FIREFOX_PATTERN = Pattern.compile("Firefox/(\\d+)");
+    private static final Pattern EDGE_PATTERN = Pattern.compile("Edg(?:e)?/(\\d+)");
+    private static final Pattern SAFARI_PATTERN = Pattern.compile("Version/(\\d+)");
+    private static final Pattern OPERA_PATTERN = Pattern.compile("Opera/(\\d+)");
+    private static final Pattern IE_PATTERN = Pattern.compile("(?:MSIE |Trident/.*rv:)(\\d+)");
+    private static final Pattern SAMSUNG_PATTERN = Pattern.compile("SamsungBrowser/(\\d+)");
+    private static final Pattern UC_PATTERN = Pattern.compile("UCBrowser/(\\d+)");
+    private static final Pattern QQ_PATTERN = Pattern.compile("QQBrowser/(\\d+)");
+    private static final Pattern WECHAT_PATTERN = Pattern.compile("MicroMessenger/(\\d+)");
+    private static final Pattern BAIDU_PATTERN = Pattern.compile("baidubrowser/(\\d+)");
 
     // 操作系统正则表达式模式
     private static final Pattern WINDOWS_PATTERN = Pattern.compile("Windows NT (\\d+\\.\\d+)");
-    private static final Pattern MACOS_PATTERN = Pattern.compile("Mac OS X (\\d+[_\\d]*)");
-    private static final Pattern ANDROID_PATTERN = Pattern.compile("Android (\\d+)(?:\\.\\d+)*");
-    private static final Pattern IOS_PATTERN = Pattern.compile("OS[\\s_](\\d+)(?:_\\d+)*");
+    private static final Pattern MACOS_PATTERN = Pattern.compile("Mac OS X (\\d+)");
+    private static final Pattern ANDROID_PATTERN = Pattern.compile("Android (\\d+)");
+    private static final Pattern IOS_PATTERN = Pattern.compile("OS[\\s_](\\d+)");
     private static final Pattern LINUX_PATTERN = Pattern.compile("Linux");
     private static final Pattern CHROMEOS_PATTERN = Pattern.compile("CrOS");
 
@@ -73,9 +73,12 @@ public class UserAgentUtils
     }
 
     /**
-     * 全面浏览器检测
+     * 当 YAUAA 无法识别时，从 User-Agent 中提取浏览器名称和主版本。
+     *
+     * @param browser String，待兜底解析的 User-Agent 文本
+     * @return String，浏览器名称与主版本；无法识别时返回空字符串
      */
-    private static String formatBrowser(String browser)
+    static String formatBrowser(String browser)
     {
         // Chrome系列浏览器
         Matcher chromeMatcher = CHROME_PATTERN.matcher(browser);
@@ -147,9 +150,12 @@ public class UserAgentUtils
     }
 
     /**
-     * 检测操作系统
+     * 当 YAUAA 无法识别时，从 User-Agent 中提取操作系统名称和主版本。
+     *
+     * @param operatingSystem String，待兜底解析的 User-Agent 文本
+     * @return String，操作系统名称与主版本；无法识别时返回空字符串
      */
-    private static String formatOperatingSystem(String operatingSystem)
+    static String formatOperatingSystem(String operatingSystem)
     {
         // Windows系统
         Matcher windowsMatcher = WINDOWS_PATTERN.matcher(operatingSystem);
