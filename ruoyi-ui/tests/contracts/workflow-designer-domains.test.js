@@ -8,6 +8,10 @@ import {
   createDefaultSlaConfig,
   createExtensionEventSlaDomain
 } from '../../src/components/workflow/designer/extensionEventSlaDomain.js'
+import {
+  createUserTaskSlaDomain,
+  isUserTaskSlaProperty
+} from '../../src/components/workflow/designer/userTaskSlaDomain.js'
 
 /**
  * 创建三个设计器领域测试共用的只读上下文。
@@ -582,4 +586,34 @@ test('扩展事件与 SLA 领域独立校验自动抄送契约', () => {
     escalationUserId: '',
     escalationEventCode: ''
   })
+  const slaDomain = createUserTaskSlaDomain({
+    readSlaCalendarOptions: () => [{ calendarKey: 'workday' }],
+    readEscalationEventOptions: () => [{ eventCode: 'ESCALATE' }]
+  })
+  const normalizedSla = slaDomain.normalizeAndValidateSlaConfig({
+    enabled: true,
+    calendarKey: ' workday ',
+    reminderMinutes: '30',
+    reminderRepeatMinutes: '60',
+    maxReminders: '2',
+    escalationMinutes: '180',
+    escalationUserId: '',
+    escalationEventCode: ' ESCALATE '
+  })
+  const slaProperties = slaDomain.slaConfigToProperties(normalizedSla)
+  assert.deepEqual(slaDomain.readSlaConfig(slaProperties), normalizedSla)
+  assert.equal(isUserTaskSlaProperty('approva.sla.maxReminders'), true)
+  assert.equal(isUserTaskSlaProperty('approva.autoCopyRules'), false)
+  assert.equal(slaDomain.isBoundedSlaMinute(525600), true)
+  assert.throws(() => slaDomain.normalizeAndValidateSlaConfig({
+    ...normalizedSla,
+    calendarKey: 'disabled-calendar'
+  }), /审批 SLA 必须选择已启用的正式业务日历/)
+  domain.updateSlaProperties(createDefaultSlaConfig())
+  assert.deepEqual(propertyState.sla, createDefaultSlaConfig())
+  assert.deepEqual(persistedProperties.slice(0, 2), [
+    { name: 'approva.conditionRule.config', value: 'keep' },
+    { name: 'approva.autoCopyRules', value: 'old' }
+  ])
+  assert.deepEqual(persistedProperties.slice(2), slaDomain.slaConfigToProperties(createDefaultSlaConfig()))
 })
