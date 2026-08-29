@@ -1,10 +1,5 @@
 import { computed } from 'vue'
-import {
-  createEmbeddedUserIdFieldCatalog,
-  createTemplateUserIdFieldCatalog,
-  normalizeEmbeddedFormType,
-  participantUserIdFieldOptions
-} from './formUserFieldCatalog.js'
+import { participantUserIdFieldOptions } from './formUserFieldCatalog.js'
 import { multiInstanceAuthorProperties } from './multiInstancePropertyContract.js'
 
 // 受控多实例的技术表达式属于发布协议，设计器只能在结构化业务选项间切换。
@@ -100,6 +95,7 @@ export function createFormParticipantDomain(context) {
     buildPropertiesExtensionElements,
     designerLocked,
     emit,
+    formFieldCatalog,
     formFieldOptions,
     getModeler,
     isProcess,
@@ -108,7 +104,6 @@ export function createFormParticipantDomain(context) {
     persistExtensionProperties,
     propertyFlags,
     propertyState,
-    props,
     readAllFlowableProperties,
     selectedBusinessObject,
     selectedElement,
@@ -296,28 +291,7 @@ export function createFormParticipantDomain(context) {
    * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
    */
   function describeFormalFormFields(businessObject) {
-    const embeddedFields = readEmbeddedFormFields(businessObject)
-    if (embeddedFields.length) {
-      return embeddedFields
-        .filter(field => field.writable !== false && field.variable)
-        .map(field => {
-          const type = ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
-          if (!type) return null
-          return {
-            value: field.variable,
-            label: field.name ? `${field.name}（${field.variable}）` : field.variable,
-            type,
-            values: field.type === 'boolean'
-              ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
-              : (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id })),
-            valueRestricted: field.type === 'boolean' || field.type === 'enum'
-          }
-        }).filter(Boolean)
-    }
-    const formId = Number(String(businessObject?.get?.('flowable:formKey') || '').replace(/^key_/, ''))
-    const form = props.forms.find(item => Number(item.formId) === formId)
-    if (!form?.content) return []
-    return describeTemplateFormFields(form.content)
+    return describeControlledLoopFields(formFieldCatalog.resolveElementFieldDescriptors(businessObject))
   }
 
   /**
@@ -326,50 +300,42 @@ export function createFormParticipantDomain(context) {
    * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
    */
   function describeTemplateFormFields(content) {
-    try {
-      const root = JSON.parse(content)
-      const result = []
-      const seen = new Set()
-      const visit = fields => {
-        for (const field of Array.isArray(fields) ? fields : []) {
-          const variable = String(field?.__vModel__ || '').trim()
-          const kind = resolveTemplateControlledLoopKind(field)
-          if (variable && kind && field?.__config__?.workflowWritable !== false && !seen.has(variable)) {
-            seen.add(variable)
-            const options = Array.isArray(field?.__slot__?.options)
-              ? field.__slot__.options.map(item => ({
-                  value: String(item?.value ?? item?.label ?? ''),
-                  label: String(item?.label ?? item?.value ?? '')
-                })).filter(item => item.value)
-              : []
-            result.push({
-              value: variable,
-              label: field?.__config__?.label ? `${field.__config__.label}（${variable}）` : variable,
-              type: kind,
-              values: kind === 'BOOLEAN'
-                ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
-                : options,
-              valueRestricted: kind === 'BOOLEAN' || field?.__config__?.workflowEnum === true
-            })
-          }
-          visit(field?.__config__?.children)
-        }
-      }
-      visit(root.fields)
-      return result
-    } catch {
-      return []
-    }
+    return describeControlledLoopFields(formFieldCatalog.readTemplateFieldDescriptors(content))
   }
 
   /**
-   * 解析服务端确认会转换为单值 el-input 的内嵌自定义字段类型。
-   * @returns {Set<string>} 可参与用户主键字段目录的 custom: 类型集合。
+   * 将中性字段描述投影为整改循环可选的可写标量目录。
+   * @param {Array<{source:string,variable:string,field:object}>} descriptors 正式模板或内嵌字段描述。
+   * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 保持来源顺序的循环字段。
    */
-  function supportedEmbeddedUserIdCustomTypes() {
-    return new Set(formFieldOptions.value
-      .filter(option => option?.implementationKey === 'FORM_FIELD_TEXTAREA_V1')
-      .map(option => `custom:${option.extensionKey}`))
+  function describeControlledLoopFields(descriptors) {
+    const result = []
+    const seen = new Set()
+    for (const { source, variable, field } of descriptors) {
+      const embedded = source === 'EMBEDDED'
+      const type = embedded
+        ? ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
+        : resolveTemplateControlledLoopKind(field)
+      if (!variable || !type || (embedded ? field.writable === false
+        : field?.__config__?.workflowWritable === false || seen.has(variable))) continue
+      if (!embedded) seen.add(variable)
+      result.push({
+        value: variable,
+        label: (embedded ? field.name : field?.__config__?.label)
+          ? `${embedded ? field.name : field.__config__.label}（${variable}）` : variable,
+        type,
+        values: type === 'BOOLEAN'
+          ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
+          : embedded
+            ? (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id }))
+            : (Array.isArray(field?.__slot__?.options) ? field.__slot__.options : []).map(item => ({
+                value: String(item?.value ?? item?.label ?? ''),
+                label: String(item?.label ?? item?.value ?? '')
+              })).filter(item => item.value),
+        valueRestricted: type === 'BOOLEAN' || (embedded ? field.type === 'enum' : field?.__config__?.workflowEnum === true)
+      })
+    }
+    return result
   }
 
   /**
@@ -378,16 +344,7 @@ export function createFormParticipantDomain(context) {
    * @returns {Array<{value:string,label:string,eligible:boolean}>} 包含不合格声明的字段目录。
    */
   function resolveUserIdFieldCatalog(businessObject) {
-    const embeddedFields = readEmbeddedFormFields(businessObject)
-    if (embeddedFields.length) {
-      return createEmbeddedUserIdFieldCatalog(
-        embeddedFields, supportedEmbeddedUserIdCustomTypes())
-    }
-    const formId = Number(String(businessObject?.get?.('flowable:formKey') || '').replace(/^key_/, ''))
-    const form = props.forms.find(item => Number(item.formId) === formId)
-    return form?.content
-      ? createTemplateUserIdFieldCatalog(form.content, readTemplatePermissionPolicy(businessObject))
-      : []
+    return formFieldCatalog.resolveUserIdFieldCatalog(businessObject, readTemplatePermissionPolicy(businessObject))
   }
 
   /**
@@ -397,11 +354,10 @@ export function createFormParticipantDomain(context) {
   function resolveParticipantFormFieldOptions() {
     if (!isUserTask.value) return []
     if (propertyState.formSource === 'EMBEDDED') {
-      return participantUserIdFieldOptions(createEmbeddedUserIdFieldCatalog(
-        propertyState.embeddedFields, supportedEmbeddedUserIdCustomTypes()))
+      return participantUserIdFieldOptions(
+        formFieldCatalog.resolveUserIdFieldCatalog(propertyState.embeddedFields))
     }
-    const formId = Number(String(propertyState.formKey || '').replace(/^key_/, ''))
-    const form = props.forms.find(item => Number(item.formId) === formId)
+    const form = formFieldCatalog.resolveTemplateForm(propertyState.formKey)
     const permissionPolicy = {
       configured: propertyState.formPermissionFields.length > 0,
       defaultMode: propertyState.formPermissionDefault,
@@ -409,7 +365,7 @@ export function createFormParticipantDomain(context) {
         .map(field => [field.variable, field.mode]))
     }
     return form?.content
-      ? participantUserIdFieldOptions(createTemplateUserIdFieldCatalog(form.content, permissionPolicy))
+      ? participantUserIdFieldOptions(formFieldCatalog.resolveUserIdFieldCatalog(propertyState.formKey, permissionPolicy))
       : []
   }
 
@@ -439,28 +395,7 @@ export function createFormParticipantDomain(context) {
    * @returns {Array<object>} 可供字段编辑器使用的确定性字段列表；正式模板权限描述不作为内嵌字段。
    */
   function readEmbeddedFormFields(businessObject) {
-    const formKey = String(businessObject?.get?.('flowable:formKey') || businessObject?.formKey || '').trim()
-    if (formKey) {
-      // 正式模板的 FormProperty 只承载节点字段权限，模型重开时不能据此切换为 EMBEDDED 来源。
-      return []
-    }
-    const extensionValues = businessObject?.extensionElements?.values || []
-    return extensionValues
-      .filter(value => value?.$type === 'flowable:FormProperty')
-      .map(property => ({
-        id: property.id || '',
-        variable: property.variable || '',
-        name: property.name || property.id || property.variable || '',
-        type: normalizeEmbeddedFormType(property.type),
-        required: property.required === true,
-        readable: property.readable !== false,
-        writable: property.writable !== false,
-        datePattern: property.datePattern || '',
-        values: (property.values || []).map(value => ({
-          id: value.id || '',
-          name: value.name || value.id || ''
-        }))
-      }))
+    return formFieldCatalog.readEmbeddedFormFields(businessObject)
   }
 
   /**
@@ -644,38 +579,20 @@ export function createFormParticipantDomain(context) {
    */
   function resolveFormPermissionSourceFields() {
     if (propertyState.formSource !== 'TEMPLATE') return []
-    const formId = Number(String(propertyState.formKey || '').replace(/^key_/, ''))
-    const form = props.forms.find(item => Number(item.formId) === formId)
+    const form = formFieldCatalog.resolveTemplateForm(propertyState.formKey)
     if (!form?.content) return []
-    try {
-      const root = typeof form.content === 'string' ? JSON.parse(form.content) : form.content
-      const fields = []
-      const seen = new Set()
-
-      /**
-       * 递归收集正式模板业务字段，布局节点不产生权限项且重复变量只保留首次定义。
-       * @param {Array<object>} nodes 当前层正式模板字段节点。
-       * @returns {void} 字段目录直接写入外层 fields，并由 seen 保证变量唯一。
-       */
-      const visit = nodes => {
-        for (const field of Array.isArray(nodes) ? nodes : []) {
-          const variable = String(field?.__vModel__ || '').trim()
-          if (variable && !seen.has(variable)) {
-            seen.add(variable)
-            fields.push({
-              variable,
-              label: String(field?.__config__?.label || variable).trim(),
-              mode: permissionModeFromField(field)
-            })
-          }
-          visit(field?.__config__?.children)
-        }
-      }
-      visit(root?.fields)
-      return fields
-    } catch {
-      return []
+    const fields = []
+    const seen = new Set()
+    for (const { variable, field } of formFieldCatalog.readTemplateFieldDescriptors(form.content, true)) {
+      if (!variable || seen.has(variable)) continue
+      seen.add(variable)
+      fields.push({
+        variable,
+        label: String(field?.__config__?.label || variable).trim(),
+        mode: permissionModeFromField(field)
+      })
     }
+    return fields
   }
 
   /**
@@ -1487,7 +1404,6 @@ export function createFormParticipantDomain(context) {
     resolveControlledLoopFieldOptions,
     describeFormalFormFields,
     describeTemplateFormFields,
-    supportedEmbeddedUserIdCustomTypes,
     resolveUserIdFieldCatalog,
     resolveParticipantFormFieldOptions,
     resolveTemplateControlledLoopKind,

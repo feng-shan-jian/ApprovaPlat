@@ -61,7 +61,7 @@ export function isExtensionEventSlaProperty(name) {
 
 /**
  * 创建扩展事件与 SLA 设计器领域模块。
- * @param {object} context 主组件提供的命令栈、选择状态、跨域字段目录和错误出口。
+ * @param {object} context 主组件提供的命令栈、选择状态、中性字段目录、权限读取和错误出口。
  * @returns {object} 扩展处理器、事件、自动抄送和 SLA 的状态、BPMN 读写与校验入口。
  */
 export function createExtensionEventSlaDomain(context) {
@@ -69,6 +69,8 @@ export function createExtensionEventSlaDomain(context) {
     buildPropertiesExtensionElements,
     designerLocked,
     emit,
+    formFieldCatalog,
+    formFieldOptions,
     getModeler,
     isForeignProtectedPropertyName,
     isType,
@@ -87,7 +89,7 @@ export function createExtensionEventSlaDomain(context) {
     propertyState,
     readAllFlowableProperties,
     readExtensionProperties,
-    resolveUserIdFieldCatalog,
+    readTemplatePermissionPolicy,
     selectedBusinessObject,
     selectedElement,
     updateProperties
@@ -97,7 +99,6 @@ export function createExtensionEventSlaDomain(context) {
   const businessListenerOptions = computed(() => (
     extensionOptions.value.filter(option => option.extensionType === 'JAVA')
   ))
-  const formFieldOptions = ref([])
   const connectorEndpoints = ref([])
   const sqlDataSources = ref([])
   const extensionLoading = ref(false)
@@ -162,13 +163,16 @@ export function createExtensionEventSlaDomain(context) {
    * @returns {Array<{value:string,label:string}>} 按变量名去重后的受控字段目录。
    */
   function resolveAutoCopyFormFieldOptionsForBusinessObject(businessObject) {
+    // 自动抄送只消费中性目录；模板权限仍由表单领域按原协议解释。
+    const resolveCatalog = element => formFieldCatalog.resolveUserIdFieldCatalog(
+      element, readTemplatePermissionPolicy(element))
     if (businessObject?.$type === 'bpmn:UserTask') {
-      return eligibleUserIdFieldOptions(resolveUserIdFieldCatalog(businessObject))
+      return eligibleUserIdFieldOptions(resolveCatalog(businessObject))
         .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
     }
     if (businessObject?.$type !== 'bpmn:Process') return []
     return eligibleUserIdFieldOptions(createProcessUserIdFieldCatalog(
-      businessObject, resolveUserIdFieldCatalog))
+      businessObject, resolveCatalog))
       .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
   }
 

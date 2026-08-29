@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { ref } from 'vue'
+import { createDesignerFormFieldCatalog } from '../../src/components/workflow/designer/designerFormFieldCatalog.js'
 import { createFormParticipantDomain } from '../../src/components/workflow/designer/formParticipantDomain.js'
 import { createRoutingCallActivityDomain } from '../../src/components/workflow/designer/routingCallActivityDomain.js'
 import {
@@ -14,12 +15,19 @@ import {
  * @returns {object} 不连接浏览器和 bpmn-js 的领域契约测试上下文。
  */
 function createDomainContext(overrides = {}) {
+  // 测试上下文与生产装配相同：先创建共享扩展目录，再创建只读字段目录实例。
+  const formFieldOptions = overrides.formFieldOptions || ref([])
+  const props = overrides.props || { forms: [], identityOptions: {} }
+  const formFieldCatalog = overrides.formFieldCatalog || createDesignerFormFieldCatalog({
+    forms: () => props.forms,
+    formFieldOptions: () => formFieldOptions.value
+  })
   return {
     buildPropertiesExtensionElements() {},
-    describeFormalFormFields() { return [] },
     designerLocked: ref(false),
     emit() {},
-    formFieldOptions: ref([]),
+    formFieldCatalog,
+    formFieldOptions,
     getModeler() { return null },
     isForeignProtectedPropertyName() { return false },
     isProcess: ref(false),
@@ -40,17 +48,264 @@ function createDomainContext(overrides = {}) {
     persistExtensionProperties() {},
     propertyFlags: ref({ process: false, formSupported: true, callActivity: false }),
     propertyState: {},
-    props: { forms: [], identityOptions: {} },
+    props,
     readAllFlowableProperties() { return [] },
-    readEmbeddedFormFields() { return [] },
     readExtensionProperties() { return [] },
-    resolveUserIdFieldCatalog() { return { fields: [], conflicts: [] } },
     selectedBusinessObject: ref(null),
     selectedElement: ref(null),
     updateProperties() {},
     ...overrides
   }
 }
+
+/**
+ * 验证共享字段目录保持正式模板与内嵌 FormProperty 的既有字段顺序和投影结果。
+ * @returns {void} 新目录或旧 facade 的字段类型、枚举值、标签和顺序漂移时测试失败。
+ */
+test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
+  const templateContent = JSON.stringify({
+    fields: [
+      {
+        __vModel__: 'amount',
+        __config__: { tag: 'el-input-number', label: '申请金额' }
+      },
+      {
+        __vModel__: 'decision',
+        __config__: { tag: 'el-radio-group', label: '审批结论', workflowEnum: true },
+        __slot__: { options: [{ value: 'PASS', label: '通过' }, { value: 'REJECT', label: '驳回' }] }
+      },
+      {
+        __config__: {
+          children: [{
+            __vModel__: 'readonlyNote',
+            __config__: { tag: 'el-input', label: '只读说明', workflowWritable: false }
+          }]
+        }
+      }
+    ]
+  })
+  const props = { forms: [{ formId: 7, content: templateContent }], identityOptions: {} }
+  const context = createDomainContext({
+    props,
+    propertyState: {
+      formSource: 'TEMPLATE',
+      formKey: 'key_7',
+      formPermissionDefault: 'EDITABLE',
+      formPermissionFields: []
+    }
+  })
+  const legacyFacade = createFormParticipantDomain(context)
+  const templateBusinessObject = {
+    get(name) { return name === 'flowable:formKey' ? 'key_7' : '' },
+    extensionElements: {
+      values: [{
+        $type: 'flowable:FormProperty',
+        id: 'approva_permission_field_1',
+        variable: 'decision',
+        readable: false,
+        writable: false
+      }]
+    }
+  }
+  const embeddedBusinessObject = {
+    get() { return '' },
+    extensionElements: {
+      values: [
+        {
+          $type: 'flowable:FormProperty',
+          id: 'approved',
+          variable: 'approved',
+          name: '是否通过',
+          type: 'BOOLEAN'
+        },
+        {
+          $type: 'flowable:FormProperty',
+          id: 'result',
+          variable: 'result',
+          name: '处理结果',
+          type: 'enum',
+          values: [{ id: 'DONE', name: '完成' }]
+        },
+        {
+          $type: 'flowable:FormProperty',
+          id: 'readonlyDate',
+          variable: 'readonlyDate',
+          name: '只读日期',
+          type: 'date',
+          writable: false
+        }
+      ]
+    }
+  }
+  const expectedTemplate = [
+    {
+      value: 'amount',
+      label: '申请金额（amount）',
+      type: 'NUMBER',
+      values: [],
+      valueRestricted: false
+    },
+    {
+      value: 'decision',
+      label: '审批结论（decision）',
+      type: 'SCALAR',
+      values: [{ value: 'PASS', label: '通过' }, { value: 'REJECT', label: '驳回' }],
+      valueRestricted: true
+    }
+  ]
+  const expectedEmbedded = [
+    {
+      value: 'approved',
+      label: '是否通过（approved）',
+      type: 'BOOLEAN',
+      values: [{ value: 'true', label: '是' }, { value: 'false', label: '否' }],
+      valueRestricted: true
+    },
+    {
+      value: 'result',
+      label: '处理结果（result）',
+      type: 'SCALAR',
+      values: [{ value: 'DONE', label: '完成' }],
+      valueRestricted: true
+    }
+  ]
+
+  assert.deepEqual(context.formFieldCatalog.readTemplateFieldDescriptors(templateContent)
+    .map(field => field.variable), ['amount', 'decision', 'readonlyNote'])
+  assert.deepEqual(context.formFieldCatalog.resolveElementFieldDescriptors(templateBusinessObject)
+    .map(field => field.source), ['TEMPLATE', 'TEMPLATE', 'TEMPLATE'])
+  assert.deepEqual(context.formFieldCatalog.resolveElementFieldDescriptors(embeddedBusinessObject)
+    .map(field => field.variable), ['approved', 'result', 'readonlyDate'])
+  assert.deepEqual(legacyFacade.describeFormalFormFields(templateBusinessObject), expectedTemplate)
+  assert.deepEqual(legacyFacade.describeFormalFormFields(embeddedBusinessObject), expectedEmbedded)
+  assert.deepEqual(legacyFacade.resolveFormPermissionSourceFields(), [
+    { variable: 'amount', label: '申请金额', mode: 'EDITABLE' },
+    { variable: 'decision', label: '审批结论', mode: 'EDITABLE' },
+    { variable: 'readonlyNote', label: '只读说明', mode: 'READONLY' }
+  ])
+  assert.deepEqual(legacyFacade.readTemplatePermissionPolicy(templateBusinessObject), {
+    configured: true,
+    defaultMode: 'EDITABLE',
+    permissions: new Map([['decision', 'HIDDEN']])
+  })
+  assert.deepEqual(legacyFacade.resolveUserIdFieldCatalog(templateBusinessObject), [
+    { value: 'amount', label: '申请金额（amount）', eligible: true, signature: 'el-input-number' },
+    { value: 'decision', label: '审批结论（decision）', eligible: false, signature: '' },
+    { value: 'readonlyNote', label: '只读说明（readonlyNote）', eligible: true, signature: 'el-input' }
+  ])
+  assert.deepEqual(legacyFacade.resolveUserIdFieldCatalog(embeddedBusinessObject), [
+    { value: 'approved', label: '是否通过（approved）', eligible: false, signature: '' },
+    { value: 'result', label: '处理结果（result）', eligible: true, signature: 'el-select' },
+    { value: 'readonlyDate', label: '只读日期（readonlyDate）', eligible: false, signature: '' }
+  ])
+
+  const process = { $type: 'bpmn:Process', flowElements: [] }
+  const embeddedStart = {
+    id: 'Start_1',
+    $type: 'bpmn:StartEvent',
+    $parent: process,
+    $instanceOf(type) { return type === 'bpmn:StartEvent' },
+    get() { return '' },
+    extensionElements: {
+      values: [
+        { $type: 'flowable:FormProperty', variable: 'amount', name: '文本金额', type: 'string' },
+        { $type: 'flowable:FormProperty', variable: 'approved', name: '是否通过', type: 'boolean' }
+      ]
+    }
+  }
+  const templateTask = {
+    ...templateBusinessObject,
+    id: 'Task_1',
+    $type: 'bpmn:UserTask',
+    $parent: process,
+    $instanceOf(type) { return type === 'bpmn:UserTask' }
+  }
+  const callActivity = { $type: 'bpmn:CallActivity', $parent: process }
+  process.flowElements = [embeddedStart, templateTask, callActivity]
+  const routingFacade = createRoutingCallActivityDomain(context)
+  assert.deepEqual(routingFacade.resolveCallActivityParentFields(callActivity), [
+    { name: 'approved', label: '是否通过', type: 'BOOLEAN', required: false, readable: true, writable: true },
+    { name: 'decision', label: '审批结论', type: 'SCALAR', required: false, readable: true, writable: true },
+    { name: 'readonlyNote', label: '只读说明', type: 'TEXT', required: false, readable: true, writable: false }
+  ])
+
+  const gateway = { $type: 'bpmn:ExclusiveGateway', outgoing: [{ id: 'Flow_1' }, { id: 'Flow_2' }] }
+  const selectedFlow = { businessObject: { $parent: process }, source: { businessObject: gateway } }
+  const conditionDomain = createRoutingCallActivityDomain(createDomainContext({
+    props,
+    selectedElement: { value: selectedFlow },
+    getModeler() {
+      return {
+        get(service) {
+          assert.equal(service, 'elementRegistry')
+          return { getAll: () => [{ businessObject: embeddedStart }, { businessObject: templateTask }] }
+        }
+      }
+    }
+  }))
+  assert.deepEqual(conditionDomain.resolveConditionFieldCatalog(), {
+    fields: [
+      {
+        value: 'approved',
+        label: '是否通过（approved）',
+        type: 'BOOLEAN',
+        values: [{ value: 'true', label: '是' }, { value: 'false', label: '否' }],
+        valueRestricted: true
+      },
+      {
+        value: 'decision',
+        label: '审批结论（decision）',
+        type: 'SCALAR',
+        values: [{ value: 'PASS', label: '通过' }, { value: 'REJECT', label: '驳回' }],
+        valueRestricted: true
+      }
+    ],
+    conflicts: ['amount']
+  })
+})
+
+/**
+ * 验证三个领域按中性目录、表单权限 facade、字段消费者的固定顺序完成初始化。
+ * @returns {void} 任一领域仍要求另一个尚未赋值的领域变量时测试失败。
+ */
+test('三个设计器领域按确定顺序初始化且无延迟领域引用', () => {
+  const userTask = {
+    $type: 'bpmn:UserTask',
+    get() { return '' },
+    extensionElements: {
+      values: [{
+        $type: 'flowable:FormProperty',
+        id: 'reviewerId',
+        variable: 'reviewerId',
+        name: '复核人',
+        type: 'string'
+      }]
+    }
+  }
+  const context = createDomainContext({ selectedBusinessObject: ref(userTask) })
+
+  // 生产装配先完成表单领域，再向扩展领域注入已初始化的一行用户字段 facade。
+  const formDomain = createFormParticipantDomain(context)
+  const routingDomain = createRoutingCallActivityDomain(context)
+  const extensionDomain = createExtensionEventSlaDomain({
+    ...context,
+    readTemplatePermissionPolicy: formDomain.readTemplatePermissionPolicy
+  })
+  assert.deepEqual(extensionDomain.resolveAutoCopyFormFieldOptionsForBusinessObject(userTask), [
+    { value: 'reviewerId', label: '复核人（reviewerId）' }
+  ])
+
+  assert.deepEqual(Object.keys(context.formFieldCatalog), [
+    'resolveTemplateForm',
+    'readEmbeddedFormFields',
+    'readTemplateFieldDescriptors',
+    'resolveElementFieldDescriptors',
+    'resolveUserIdFieldCatalog'
+  ])
+  assert.equal(typeof formDomain.resolveUserIdFieldCatalog, 'function')
+  assert.equal(routingDomain.embeddedCallFieldType('long'), 'NUMBER')
+  assert.equal(extensionDomain.formFieldOptions, context.formFieldOptions)
+})
 
 /**
  * 验证表单与参与者模块严格规范化多实例身份，并在保存前拒绝未完成选择。

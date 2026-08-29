@@ -192,6 +192,7 @@ import AdvancedElementPalette from './designer/AdvancedElementPalette.vue'
 import DesignerPropertiesPanel from './designer/DesignerPropertiesPanel.vue'
 import taskCapabilityReplaceMenuModule from './designer/taskCapabilityReplaceMenu.js'
 import { getTaskCapability } from './designer/taskCapabilityMap.js'
+import { createDesignerFormFieldCatalog } from './designer/designerFormFieldCatalog.js'
 import {
   createExtensionEventSlaDomain,
   createDefaultSlaConfig,
@@ -1810,13 +1811,54 @@ function persistExtensionProperties(properties) {
   })
 }
 
-// 三个领域模块共享同一个选择视图，但只能通过主组件提供的 bpmn-js 命令栈入口写回模型。
-let formParticipantDomain
-let routingCallActivityDomain
+// 主组件显式装配唯一字段扩展目录；共享目录只读该引用，不持有 Vue、API 或 Modeler。
+const formFieldOptions = ref([])
+const formFieldCatalog = createDesignerFormFieldCatalog({
+  forms: () => props.forms,
+  formFieldOptions: () => formFieldOptions.value
+})
+
+// 先完成中性目录和表单领域装配，再按确定顺序提供消费者依赖；所有写操作仍走 bpmn-js 命令栈。
+const formParticipantDomain = createFormParticipantDomain({
+  buildPropertiesExtensionElements,
+  designerLocked,
+  emit,
+  formFieldCatalog,
+  formFieldOptions,
+  getModeler: () => modeler,
+  isProcess,
+  isUserTask,
+  loadPropertyState,
+  persistExtensionProperties,
+  propertyFlags,
+  propertyState,
+  readAllFlowableProperties,
+  selectedBusinessObject,
+  selectedElement,
+  updateProperties
+})
+const routingCallActivityDomain = createRoutingCallActivityDomain({
+  buildPropertiesExtensionElements,
+  designerLocked,
+  emit,
+  formFieldCatalog,
+  getModeler: () => modeler,
+  listCallActivityOptions,
+  listDmnDecisionOptions,
+  loadPropertyState,
+  propertyFlags,
+  propertyState,
+  readAllFlowableProperties,
+  selectedBusinessObject,
+  selectedElement,
+  updateProperties
+})
 const extensionEventSlaDomain = createExtensionEventSlaDomain({
   buildPropertiesExtensionElements,
   designerLocked,
   emit,
+  formFieldCatalog,
+  formFieldOptions,
   getModeler: () => modeler,
   isForeignProtectedPropertyName: name => (
     isFormParticipantProperty(name) || isRoutingCallActivityProperty(name)
@@ -1837,45 +1879,7 @@ const extensionEventSlaDomain = createExtensionEventSlaDomain({
   propertyState,
   readAllFlowableProperties,
   readExtensionProperties,
-  resolveUserIdFieldCatalog: businessObject => (
-    formParticipantDomain.resolveUserIdFieldCatalog(businessObject)
-  ),
-  selectedBusinessObject,
-  selectedElement,
-  updateProperties
-})
-formParticipantDomain = createFormParticipantDomain({
-  buildPropertiesExtensionElements,
-  designerLocked,
-  emit,
-  formFieldOptions: extensionEventSlaDomain.formFieldOptions,
-  getModeler: () => modeler,
-  isProcess,
-  isUserTask,
-  loadPropertyState,
-  persistExtensionProperties,
-  propertyFlags,
-  propertyState,
-  props,
-  readAllFlowableProperties,
-  selectedBusinessObject,
-  selectedElement,
-  updateProperties
-})
-routingCallActivityDomain = createRoutingCallActivityDomain({
-  buildPropertiesExtensionElements,
-  describeFormalFormFields: formParticipantDomain.describeFormalFormFields,
-  designerLocked,
-  emit,
-  getModeler: () => modeler,
-  listCallActivityOptions,
-  listDmnDecisionOptions,
-  loadPropertyState,
-  propertyFlags,
-  propertyState,
-  props,
-  readAllFlowableProperties,
-  readEmbeddedFormFields: formParticipantDomain.readEmbeddedFormFields,
+  readTemplatePermissionPolicy: formParticipantDomain.readTemplatePermissionPolicy,
   selectedBusinessObject,
   selectedElement,
   updateProperties
@@ -1939,7 +1943,6 @@ const {
 const {
   extensionOptions,
   businessListenerOptions,
-  formFieldOptions,
   connectorEndpoints,
   sqlDataSources,
   extensionLoading,

@@ -20,18 +20,16 @@ export function isRoutingCallActivityProperty(name) {
 export function createRoutingCallActivityDomain(context) {
   const {
     buildPropertiesExtensionElements,
-    describeFormalFormFields,
     designerLocked,
     emit,
+    formFieldCatalog,
     getModeler,
     listCallActivityOptions,
     listDmnDecisionOptions,
     loadPropertyState,
     propertyFlags,
     propertyState,
-    props,
     readAllFlowableProperties,
-    readEmbeddedFormFields,
     selectedBusinessObject,
     selectedElement,
     updateProperties
@@ -101,7 +99,7 @@ export function createRoutingCallActivityDomain(context) {
       if (!businessObject?.id || visited.has(businessObject.id) || owningProcess(businessObject) !== sourceProcess) continue
       if (!businessObject.$instanceOf?.('bpmn:StartEvent') && !businessObject.$instanceOf?.('bpmn:UserTask')) continue
       visited.add(businessObject.id)
-      for (const field of describeFormalFormFields(businessObject)) {
+      for (const field of describeConditionFormFields(businessObject)) {
         const signature = JSON.stringify({ type: field.type, values: field.values, valueRestricted: field.valueRestricted })
         const existing = fieldsByName.get(field.value)
         if (existing && existing.signature !== signature) {
@@ -116,6 +114,44 @@ export function createRoutingCallActivityDomain(context) {
       fields: [...fieldsByName.values()].map(({ signature: _signature, ...field }) => field),
       conflicts: [...conflicts].sort()
     }
+  }
+
+  /**
+   * 将元素中性字段描述投影为条件路由允许读取的可写标量目录。
+   * @param {object|undefined} businessObject StartEvent 或 UserTask 业务对象。
+   * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 保持来源顺序的条件字段。
+   */
+  function describeConditionFormFields(businessObject) {
+    const result = []
+    const seen = new Set()
+    for (const { source, variable, field } of formFieldCatalog.resolveElementFieldDescriptors(businessObject)) {
+      const embedded = source === 'EMBEDDED'
+      const tag = String(field?.__config__?.tag || '')
+      const type = embedded
+        ? ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
+        : (['el-time-picker', 'el-date-picker'].includes(tag) && field?.['is-range'] === true
+            ? null : templateCallFieldType(tag, field))
+      if (!variable || !type || (embedded ? field.writable === false
+        : field?.__config__?.workflowWritable === false || seen.has(variable))) continue
+      if (!embedded) seen.add(variable)
+      const options = embedded ? field.values : field?.__slot__?.options
+      result.push({
+        value: variable,
+        label: (embedded ? field.name : field?.__config__?.label)
+          ? `${embedded ? field.name : field.__config__.label}（${variable}）` : variable,
+        type,
+        values: type === 'BOOLEAN'
+          ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
+          : embedded
+            ? (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id }))
+            : (Array.isArray(options) ? options : []).map(item => ({
+                value: String(item?.value ?? item?.label ?? ''),
+                label: String(item?.label ?? item?.value ?? '')
+              })).filter(item => item.value),
+        valueRestricted: type === 'BOOLEAN' || (embedded ? field.type === 'enum' : field?.__config__?.workflowEnum === true)
+      })
+    }
+    return result
   }
 
   /**
@@ -224,7 +260,7 @@ export function createRoutingCallActivityDomain(context) {
     const visit = flowElements => {
       for (const element of Array.isArray(flowElements) ? flowElements : []) {
         if (['bpmn:StartEvent', 'bpmn:UserTask'].includes(element?.$type)) {
-          const embedded = readEmbeddedFormFields(element).map(field => ({
+          const embedded = formFieldCatalog.readEmbeddedFormFields(element).map(field => ({
             name: String(field.variable || '').trim(),
             label: field.name || field.variable,
             type: embeddedCallFieldType(field.type),
@@ -233,8 +269,7 @@ export function createRoutingCallActivityDomain(context) {
             writable: field.writable !== false
           }))
           mergeCallVariableFields(fields, embedded)
-          const formId = Number(String(element.get?.('flowable:formKey') || '').replace(/^key_/, ''))
-          const form = props.forms.find(item => Number(item.formId) === formId)
+          const form = formFieldCatalog.resolveTemplateForm(element)
           if (form?.content) mergeCallVariableFields(fields, extractTemplateCallFields(form.content))
         }
         visit(element?.flowElements)
@@ -250,32 +285,14 @@ export function createRoutingCallActivityDomain(context) {
    * @returns {Array<object>} 不包含集合、附件、表格和范围字段的字段目录。
    */
   function extractTemplateCallFields(content) {
-    try {
-      const root = JSON.parse(content)
-      const result = []
-      const visit = nodes => {
-        for (const field of Array.isArray(nodes) ? nodes : []) {
-          const config = field?.__config__ || {}
-          const name = String(field?.__vModel__ || '').trim()
-          const type = templateCallFieldType(config.tag, field)
-          if (name && type) {
-            result.push({
-              name,
-              label: config.label || name,
-              type,
-              required: config.required === true,
-              readable: config.workflowReadable !== false,
-              writable: config.workflowWritable !== false && field.disabled !== true
-            })
-          }
-          visit(config.children)
-        }
-      }
-      visit(root?.fields)
-      return result
-    } catch {
-      return []
-    }
+    return formFieldCatalog.readTemplateFieldDescriptors(content)
+      .map(({ field, variable: name }) => {
+        const config = field?.__config__ || {}
+        const type = templateCallFieldType(config.tag, field)
+        return name && type ? { name, label: config.label || name, type,
+          required: config.required === true, readable: config.workflowReadable !== false,
+          writable: config.workflowWritable !== false && field.disabled !== true } : null
+      }).filter(Boolean)
   }
 
   /**
