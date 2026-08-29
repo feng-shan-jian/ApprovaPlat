@@ -272,6 +272,54 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   }
   const callActivity = { $type: 'bpmn:CallActivity', $parent: process }
   process.flowElements = [embeddedStart, templateTask, callActivity]
+  const rolesRule = legacyFacade.normalizeParticipantRule(
+    { type: 'ROLES', targetIds: ['ROLE12', 'ROLE35'], formField: '' }, true)
+  assert.deepEqual(legacyFacade.participantRulePropertyItems(rolesRule, true), [
+    { name: 'approva.startScope.ruleVersion', value: '1' },
+    { name: 'approva.startScope.type', value: 'ROLES' },
+    { name: 'approva.startScope.targetIds', value: '12,35' },
+    { name: 'approva.startScope.noMatchPolicy', value: 'FAIL' }
+  ])
+  const formUserRule = legacyFacade.normalizeParticipantRule(
+    { type: 'FORM_USER', targetIds: [], formField: 'amount' }, false)
+  const formUserProperties = legacyFacade.participantRulePropertyItems(formUserRule, false)
+  assert.deepEqual(formUserProperties, [
+    { name: 'approva.assignment.ruleVersion', value: '1' },
+    { name: 'approva.assignment.type', value: 'FORM_USER' },
+    { name: 'approva.assignment.targetIds', value: '' },
+    { name: 'approva.assignment.formField', value: 'amount' },
+    { name: 'approva.assignment.noMatchPolicy', value: 'FAIL' }
+  ])
+  assert.throws(() => legacyFacade.normalizeParticipantRule(
+    { type: 'ROLES', targetIds: ['12'], formField: '' }, true),
+    { message: '角色目录选项不合法' })
+  assert.deepEqual(legacyFacade.readParticipantRule({
+    get(name) { return name === 'flowable:assignee' ? '12' : '' }
+  }), { type: 'FIXED_USER', targetIds: ['12'], formField: '' })
+
+  let participantWriteCount = 0
+  let persistedParticipantProperties
+  const participantState = {
+    formSource: 'TEMPLATE', formKey: 'key_7', formPermissionDefault: 'EDITABLE',
+    formPermissionFields: [], multiInstanceType: 'none'
+  }
+  const participantFacade = createFormParticipantDomain(createDomainContext({
+    props,
+    getModeler() { return {} },
+    propertyState: participantState,
+    readAllFlowableProperties() { return [{ name: 'business.property', value: 'keep' }] },
+    selectedBusinessObject: ref(templateTask),
+    selectedElement: ref({ businessObject: templateTask }),
+    persistExtensionProperties(properties) {
+      persistedParticipantProperties = properties
+      participantWriteCount += 1
+    }
+  }))
+  participantFacade.updateParticipantRule(formUserRule)
+  assert.equal(participantWriteCount, 1)
+  assert.deepEqual(persistedParticipantProperties, [
+    { name: 'business.property', value: 'keep' }, ...formUserProperties
+  ])
   const routingFacade = createRoutingCallActivityDomain(context)
   assert.deepEqual(routingFacade.resolveCallActivityParentFields(callActivity), [
     { name: 'approved', label: '是否通过', type: 'BOOLEAN', required: false, readable: true, writable: true },
