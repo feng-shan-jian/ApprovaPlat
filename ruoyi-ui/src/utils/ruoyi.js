@@ -84,30 +84,33 @@ export function selectDictLabel(datas, value) {
   return actions.join('')
 }
 
-// 回显数据字典（字符串、数组）
+/**
+ * 按输入顺序回显多值字典，同一值只采用首个匹配项，未知值保留原文本。
+ * @param {Array<object>|Record<string, object>} datas 字典项集合，每项包含 value 和 label。
+ * @param {string|number|Array<string|number>|null|undefined} value 待回显的单值、多值文本或数组。
+ * @param {string} [separator=','] 多值拆分与输出使用的分隔符。
+ * @returns {string} 按输入顺序拼接的标签文本。
+ */
 export function selectDictLabels(datas, value, separator) {
-  if (value === undefined || value.length ===0) {
+  if (value === undefined || value === null || value.length === 0) {
     return ""
   }
-  if (Array.isArray(value)) {
-    value = value.join(",")
-  }
-  const actions = []
   const currentSeparator = undefined === separator ? "," : separator
-  const temp = value.split(currentSeparator)
-  Object.keys(value.split(currentSeparator)).some((val) => {
-    let match = false
-    Object.keys(datas).some((key) => {
-      if (datas[key].value == ('' + temp[val])) {
-        actions.push(datas[key].label + currentSeparator)
-        match = true
+  const values = Array.isArray(value) ? value : String(value).split(currentSeparator)
+  const dictionaryKeys = Object.keys(datas)
+  const labels = []
+  for (const item of values) {
+    const normalizedValue = String(item)
+    let label = normalizedValue
+    for (const key of dictionaryKeys) {
+      if (String(datas[key].value) === normalizedValue) {
+        label = datas[key].label
+        break
       }
-    })
-    if (!match) {
-      actions.push(temp[val] + currentSeparator)
     }
-  })
-  return actions.join('').substring(0, actions.join('').length - 1)
+    labels.push(label)
+  }
+  return labels.join(currentSeparator)
 }
 
 /**
