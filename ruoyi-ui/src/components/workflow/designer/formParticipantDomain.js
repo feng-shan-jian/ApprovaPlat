@@ -1,4 +1,5 @@
 import { computed } from 'vue'
+import { createControlledLoopDomain, isControlledLoopProperty } from './controlledLoopDomain.js'
 import { participantUserIdFieldOptions } from './formUserFieldCatalog.js'
 import { multiInstanceAuthorProperties } from './multiInstancePropertyContract.js'
 
@@ -26,15 +27,6 @@ const MULTI_INSTANCE_IDENTITY_VALUE_PATTERNS = Object.freeze({
   dept: /^DEPT[1-9]\d{0,18}$/
 })
 const JAVA_LONG_MAX_TEXT = '9223372036854775807'
-const CONTROLLED_LOOP_PROPERTY_PREFIX = 'approva.controlledLoop.'
-const CONTROLLED_LOOP_PROPERTIES = Object.freeze({
-  enabled: `${CONTROLLED_LOOP_PROPERTY_PREFIX}enabled`,
-  decisionVariable: `${CONTROLLED_LOOP_PROPERTY_PREFIX}decisionVariable`,
-  repeatValue: `${CONTROLLED_LOOP_PROPERTY_PREFIX}repeatValue`,
-  exitValue: `${CONTROLLED_LOOP_PROPERTY_PREFIX}exitValue`,
-  maxIterations: `${CONTROLLED_LOOP_PROPERTY_PREFIX}maxIterations`
-})
-const CONTROLLED_LOOP_PROPERTY_NAMES = new Set(Object.values(CONTROLLED_LOOP_PROPERTIES))
 const PARTICIPANT_RULE_PROPERTIES = Object.freeze({
   startVersion: 'approva.startScope.ruleVersion',
   startType: 'approva.startScope.type',
@@ -82,7 +74,7 @@ const IDENTITY_SEARCH_CONTRACTS = Object.freeze({
 export function isFormParticipantProperty(name) {
   return PARTICIPANT_RULE_PROPERTY_NAMES.has(name)
     || MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(name)
-    || CONTROLLED_LOOP_PROPERTY_NAMES.has(name)
+    || isControlledLoopProperty(name)
 }
 
 /**
@@ -109,6 +101,11 @@ export function createFormParticipantDomain(context) {
     selectedElement,
     updateProperties
   } = context
+  const {
+    buildChanges, controlledLoopPropertyItems, describeFormalFormFields, describeTemplateFormFields,
+    readControlledLoop, resolveControlledLoopFieldOptions, resolveTemplateControlledLoopKind
+  } = createControlledLoopDomain({ buildPropertiesExtensionElements, formFieldCatalog,
+    isUserTask, propertyState, selectedBusinessObject })
   // 每个身份池独立防抖，不能让办理、认领和抄送资格请求相互覆盖。
   const identitySearchTimers = new Map()
   const assignmentOptions = [
@@ -240,105 +237,6 @@ export function createFormParticipantDomain(context) {
   }
 
   /**
-   * 从用户任务固定 Flowable 属性回读受控整改循环配置。
-   * @param {object} businessObject 当前 BPMN 用户任务业务对象。
-   * @returns {{decisionVariable:string,repeatValue:string,exitValue:string,maxIterations:number}|null} 完整配置；未启用时为空。
-   */
-  function readControlledLoop(businessObject) {
-    const properties = (businessObject?.extensionElements?.values || [])
-      .filter(value => value?.$type === 'flowable:Properties')
-      .flatMap(container => container.values || [])
-    const values = Object.fromEntries(properties
-      .filter(property => CONTROLLED_LOOP_PROPERTY_NAMES.has(property.name))
-      .map(property => [property.name, String(property.value ?? '')]))
-    if (!Object.keys(values).length) return null
-    if (values[CONTROLLED_LOOP_PROPERTIES.enabled] !== 'true') return null
-    const maxIterations = Number(values[CONTROLLED_LOOP_PROPERTIES.maxIterations])
-    return {
-      decisionVariable: values[CONTROLLED_LOOP_PROPERTIES.decisionVariable] || '',
-      repeatValue: values[CONTROLLED_LOOP_PROPERTIES.repeatValue] || '',
-      exitValue: values[CONTROLLED_LOOP_PROPERTIES.exitValue] || '',
-      maxIterations: Number.isInteger(maxIterations) ? maxIterations : 3
-    }
-  }
-
-  /**
-   * 将受控整改循环面板状态转换为固定 Flowable Property 集合。
-   * @returns {Array<{name:string,value:string}>} 可原子写入命令栈的协议属性。
-   */
-  function controlledLoopPropertyItems() {
-    return [
-      { name: CONTROLLED_LOOP_PROPERTIES.enabled, value: 'true' },
-      { name: CONTROLLED_LOOP_PROPERTIES.decisionVariable, value: propertyState.controlledLoopDecisionVariable.trim() },
-      { name: CONTROLLED_LOOP_PROPERTIES.repeatValue, value: propertyState.controlledLoopRepeatValue.trim() },
-      { name: CONTROLLED_LOOP_PROPERTIES.exitValue, value: propertyState.controlledLoopExitValue.trim() },
-      { name: CONTROLLED_LOOP_PROPERTIES.maxIterations, value: String(propertyState.controlledLoopMaxIterations) }
-    ]
-  }
-
-  /**
-   * 从当前节点正式模板或内嵌 FormData 提取可作为循环判断条件的字段和值目录。
-   * @returns {Array<{value:string,label:string,values:Array<{value:string,label:string}>,valueRestricted:boolean}>} 去重后的字段选项。
-   */
-  function resolveControlledLoopFieldOptions() {
-    if (!isUserTask.value) return []
-    return describeFormalFormFields(selectedBusinessObject.value)
-  }
-
-  /**
-   * 从正式模板或 BPMN 内嵌 FormData 提取后端允许参与条件判断的可写标量字段。
-   * @param {object|undefined} businessObject 开始节点或用户任务业务对象。
-   * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
-   */
-  function describeFormalFormFields(businessObject) {
-    return describeControlledLoopFields(formFieldCatalog.resolveElementFieldDescriptors(businessObject))
-  }
-
-  /**
-   * 解析已由后端模板校验器返回的正式表单 JSON，并收窄为条件字段目录。
-   * @param {string} content 正式 wf_form 模板 JSON。
-   * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
-   */
-  function describeTemplateFormFields(content) {
-    return describeControlledLoopFields(formFieldCatalog.readTemplateFieldDescriptors(content))
-  }
-
-  /**
-   * 将中性字段描述投影为整改循环可选的可写标量目录。
-   * @param {Array<{source:string,variable:string,field:object}>} descriptors 正式模板或内嵌字段描述。
-   * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 保持来源顺序的循环字段。
-   */
-  function describeControlledLoopFields(descriptors) {
-    const result = []
-    const seen = new Set()
-    for (const { source, variable, field } of descriptors) {
-      const embedded = source === 'EMBEDDED'
-      const type = embedded
-        ? ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
-        : resolveTemplateControlledLoopKind(field)
-      if (!variable || !type || (embedded ? field.writable === false
-        : field?.__config__?.workflowWritable === false || seen.has(variable))) continue
-      if (!embedded) seen.add(variable)
-      result.push({
-        value: variable,
-        label: (embedded ? field.name : field?.__config__?.label)
-          ? `${embedded ? field.name : field.__config__.label}（${variable}）` : variable,
-        type,
-        values: type === 'BOOLEAN'
-          ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
-          : embedded
-            ? (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id }))
-            : (Array.isArray(field?.__slot__?.options) ? field.__slot__.options : []).map(item => ({
-                value: String(item?.value ?? item?.label ?? ''),
-                label: String(item?.label ?? item?.value ?? '')
-              })).filter(item => item.value),
-        valueRestricted: type === 'BOOLEAN' || (embedded ? field.type === 'enum' : field?.__config__?.workflowEnum === true)
-      })
-    }
-    return result
-  }
-
-  /**
    * 从指定 BPMN 节点构建后端同口径的用户主键字段完整声明目录。
    * @param {object|undefined} businessObject 开始节点或用户任务业务对象。
    * @returns {Array<{value:string,label:string,eligible:boolean}>} 包含不合格声明的字段目录。
@@ -367,26 +265,6 @@ export function createFormParticipantDomain(context) {
     return form?.content
       ? participantUserIdFieldOptions(formFieldCatalog.resolveUserIdFieldCatalog(propertyState.formKey, permissionPolicy))
       : []
-  }
-
-  /**
-   * 将正式模板组件收窄为后端循环条件允许的可写标量种类。
-   * @param {object} field 使用 __config__ 的正式模板字段。
-   * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 标量种类；集合、附件、表格和范围字段返回空。
-   */
-  function resolveTemplateControlledLoopKind(field) {
-    const tag = String(field?.__config__?.tag || '')
-    if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
-    if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
-    if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'
-    if (tag === 'el-switch') return 'BOOLEAN'
-    if (tag === 'el-radio-group') return 'SCALAR'
-    if (tag === 'el-select') return field?.multiple === true ? null : 'SCALAR'
-    if (['el-time-picker', 'el-date-picker'].includes(tag)) {
-      const temporalType = String(field?.type || '').toLowerCase()
-      return field?.['is-range'] === true || temporalType.includes('range') ? null : 'TEXT'
-    }
-    return null
   }
 
   /**
@@ -1057,7 +935,7 @@ export function createFormParticipantDomain(context) {
     const wasApprovalLoop = Boolean(readControlledLoop(selectedBusinessObject.value))
     // 当前 BPMN 是命令栈的权威状态；只替换本模块拥有的循环和参与者字段，其余扩展能力原样保留。
     const preservedPlatformProperties = readAllFlowableProperties(selectedBusinessObject.value)
-      .filter(item => !CONTROLLED_LOOP_PROPERTY_NAMES.has(item.name)
+      .filter(item => !isControlledLoopProperty(item.name)
         && !MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name))
     const editableWithPlatformProperties = multiInstanceAuthorProperties(
       preservedPlatformProperties, PARTICIPANT_RULE_PROPERTY_NAMES)
@@ -1071,24 +949,7 @@ export function createFormParticipantDomain(context) {
       selectedBusinessObject.value, editableWithPlatformProperties, [])
     if (propertyState.multiInstanceType === 'approvalLoop') {
       try {
-        if (!isUserTask.value) throw new Error('整改循环只能配置在用户任务上')
-        const maxIterations = Number(propertyState.controlledLoopMaxIterations)
-        const field = controlledLoopFieldOptions.value.find(option => (
-          option.value === propertyState.controlledLoopDecisionVariable
-        ))
-        const repeatValue = propertyState.controlledLoopRepeatValue.trim()
-        const exitValue = propertyState.controlledLoopExitValue.trim()
-        if (!Number.isInteger(maxIterations) || maxIterations < 2 || maxIterations > 50) {
-          throw new Error('最大办理轮次必须是 2 至 50 的整数')
-        }
-        if (!field) throw new Error('循环判断字段必须来自当前节点正式表单')
-        if (!repeatValue || !exitValue || repeatValue.length > 128 || exitValue.length > 128) {
-          throw new Error('再次进入和退出条件值必须填写且不能超过 128 个字符')
-        }
-        if (repeatValue === exitValue) throw new Error('再次进入和退出条件不能相同')
-        const extensionElements = buildPropertiesExtensionElements(
-          selectedBusinessObject.value, editableWithPlatformProperties, controlledLoopPropertyItems())
-        const changes = { loopCharacteristics: undefined, extensionElements }
+        const changes = buildChanges(editableWithPlatformProperties)
         if (wasControlled) resetControlledAssignment(changes)
         updateProperties(changes)
         return

@@ -178,6 +178,56 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
     .map(field => field.variable), ['approved', 'result', 'readonlyDate'])
   assert.deepEqual(legacyFacade.describeFormalFormFields(templateBusinessObject), expectedTemplate)
   assert.deepEqual(legacyFacade.describeFormalFormFields(embeddedBusinessObject), expectedEmbedded)
+
+  const controlledLoopState = {
+    multiInstanceType: 'approvalLoop',
+    controlledLoopDecisionVariable: 'decision',
+    controlledLoopRepeatValue: 'REJECT',
+    controlledLoopExitValue: 'PASS',
+    controlledLoopMaxIterations: 3
+  }
+  let controlledLoopBuild
+  let controlledLoopWrite
+  let controlledLoopWriteCount = 0
+  let controlledLoopError
+  let controlledLoopRestoreCount = 0
+  const controlledLoopFacade = createFormParticipantDomain(createDomainContext({
+    props,
+    propertyState: controlledLoopState,
+    selectedBusinessObject: ref(templateBusinessObject),
+    selectedElement: ref({ businessObject: templateBusinessObject }),
+    buildPropertiesExtensionElements(businessObject, editable, controlled) {
+      controlledLoopBuild = { businessObject, editable, controlled }
+      return { id: 'controlled-loop-extension-elements' }
+    },
+    updateProperties(changes) {
+      controlledLoopWrite = changes
+      controlledLoopWriteCount += 1
+    },
+    loadPropertyState() { controlledLoopRestoreCount += 1 },
+    emit(name, error) {
+      assert.equal(name, 'error')
+      controlledLoopError = error
+    }
+  }))
+  controlledLoopFacade.updateMultiInstance()
+  assert.deepEqual(controlledLoopBuild.controlled, [
+    { name: 'approva.controlledLoop.enabled', value: 'true' },
+    { name: 'approva.controlledLoop.decisionVariable', value: 'decision' },
+    { name: 'approva.controlledLoop.repeatValue', value: 'REJECT' },
+    { name: 'approva.controlledLoop.exitValue', value: 'PASS' },
+    { name: 'approva.controlledLoop.maxIterations', value: '3' }
+  ])
+  assert.deepEqual(controlledLoopWrite, {
+    loopCharacteristics: undefined,
+    extensionElements: { id: 'controlled-loop-extension-elements' }
+  })
+
+  controlledLoopState.controlledLoopRepeatValue = 'PASS'
+  controlledLoopFacade.updateMultiInstance()
+  assert.equal(controlledLoopError.message, '再次进入和退出条件不能相同')
+  assert.equal(controlledLoopWriteCount, 1)
+  assert.equal(controlledLoopRestoreCount, 1)
   assert.deepEqual(legacyFacade.resolveFormPermissionSourceFields(), [
     { variable: 'amount', label: '申请金额', mode: 'EDITABLE' },
     { variable: 'decision', label: '审批结论', mode: 'EDITABLE' },
