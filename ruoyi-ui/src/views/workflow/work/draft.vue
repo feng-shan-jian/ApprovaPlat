@@ -167,7 +167,9 @@ async function removeDraft(row) {
     await deleteProcessDraft(draftId, Number(row.revisionNo))
     proxy.$modal.msgSuccess('草稿删除成功')
   } catch (error) {
-    if (Number(error?.code) === 409) proxy.$modal.msgWarning('草稿已被其他页面更新，列表已刷新')
+    if (error?.code === 409 && error?.subCode === 'DRAFT_VERSION_CONFLICT') {
+      proxy.$modal.msgWarning('草稿已被其他页面更新，列表已刷新')
+    }
   } finally {
     await loadList()
   }

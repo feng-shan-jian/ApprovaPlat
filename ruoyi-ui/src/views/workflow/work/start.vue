@@ -168,6 +168,8 @@ const dirty = ref(false)
 const conflict = ref(false)
 const actionType = ref('')
 const writing = computed(() => Boolean(actionType.value))
+// newDraftAuthorityValid 表示新建上下文最近一次后端开始能力校验是否成功，失败后关闭写入口。
+const newDraftAuthorityValid = ref(true)
 // syncingContext 标记服务端数据回填阶段，防止初始化值被误判为用户未保存修改。
 const syncingContext = ref(false)
 const draftState = reactive({
@@ -180,12 +182,8 @@ const draftState = reactive({
   updatedTime: ''
 })
 const definitionFileName = computed(() => `workflow_${String(processDefinitionId.value || 'process').replace(/[^A-Za-z0-9_.-]/g, '_')}`)
-const draftEditable = computed(() => {
-  if (!draftId.value) return true
-  const status = String(draftState.status).toUpperCase()
-  return draftState.editable !== false && ['ACTIVE'].includes(status)
-})
-const draftSubmittable = computed(() => draftEditable.value && draftState.submittable !== false)
+const draftEditable = computed(() => draftId.value ? draftState.editable : newDraftAuthorityValid.value)
+const draftSubmittable = computed(() => draftId.value ? draftState.submittable : newDraftAuthorityValid.value)
 const draftStatusLabel = computed(() => {
   const status = String(draftState.status).toUpperCase()
   if (status === 'SUBMITTED') return '已提交'
@@ -258,6 +256,7 @@ async function loadNewContext() {
   ])
   processDefinitionId.value = definitionId
   deploymentId.value = deploymentIdFromRoute
+  newDraftAuthorityValid.value = true
   replaceFormSnapshot(formResponse.data || {})
   replaceMultiInstanceSelections({})
   if (startAssignments.value.length) await searchApprovalUsers('')
@@ -305,9 +304,9 @@ async function applyDraft(draft, replaceValues) {
   Object.assign(draftState, {
     processName: draft.processName || '',
     status: draft.status,
-    statusReason: draft.statusReason || '',
-    editable: draft.editable !== false,
-    submittable: draft.submittable !== false,
+    statusReason: draft.statusReason,
+    editable: draft.editable,
+    submittable: draft.submittable,
     revisionNo,
     updatedTime: draft.updateTime || ''
   })
@@ -319,6 +318,27 @@ async function applyDraft(draft, replaceValues) {
     replaceMultiInstanceSelections(draft.multiInstanceUserIds)
     if (startAssignments.value.length) await searchApprovalUsers('')
   }
+}
+
+/**
+ * 只应用重新读取的草稿能力投影；页面旧输入继续绑定原 CAS 版本，禁止与服务端新版本组合。
+ * @param {object} draft 服务端重新读取的草稿详情。
+ * @returns {void} 版本变化时进入冲突状态，否则仅更新状态和能力投影。
+ */
+function applyDraftAuthority(draft) {
+  const id = String(draft?.draftId || '').trim()
+  const revisionNo = Number(draft?.revisionNo)
+  if (!id || id !== draftId.value || !Number.isInteger(revisionNo)) {
+    throw new Error('草稿权威投影的主键或乐观锁版本不完整')
+  }
+  // 服务端版本变化说明其他会话已成功写入；保留原 expectedVersion 和当前输入，交由冲突面板处理。
+  if (revisionNo !== draftState.revisionNo) conflict.value = true
+  Object.assign(draftState, {
+    status: draft.status,
+    statusReason: draft.statusReason,
+    editable: draft.editable,
+    submittable: draft.submittable
+  })
 }
 
 /**
@@ -416,7 +436,7 @@ async function saveDraft() {
     await persistDraft(formRendererRef.value.getValues())
     proxy.$modal.msgSuccess('草稿保存成功')
   } catch (error) {
-    handleWriteError(error)
+    await handleWriteError(error)
   } finally {
     actionType.value = ''
   }
@@ -456,7 +476,7 @@ async function submitDraft() {
     proxy.$modal.msgSuccess('申请提交成功')
     proxy.$tab.closeOpenPage({ path: `/workflow/process-detail/${processInstanceId}` })
   } catch (error) {
-    handleWriteError(error)
+    await handleWriteError(error)
   } finally {
     actionType.value = ''
   }
@@ -520,31 +540,42 @@ async function removeDraft() {
     proxy.$modal.msgSuccess('草稿删除成功')
     closePage(true)
   } catch (error) {
-    handleWriteError(error)
+    await handleWriteError(error)
   } finally {
     actionType.value = ''
   }
 }
 
 /**
- * 处理草稿写请求失败；CAS 冲突保留当前输入并禁止继续覆盖。
+ * 处理草稿写请求失败；既有草稿重读权威能力，新建草稿重校验开始能力并失败关闭。
  * @param {unknown} error 统一请求层返回的业务错误。
- * @returns {void} 无返回值。
+ * @returns {Promise<void>} 全程保留页面未保存输入和原 CAS 版本，不自动重试写请求。
  */
-function handleWriteError(error) {
-  const subCode = String(error?.subCode || '').toUpperCase()
-  const casConflict = !subCode || ['DRAFT_VERSION_CONFLICT'].includes(subCode)
-  if (Number(error?.code) === 409 && casConflict) {
+async function handleWriteError(error) {
+  if (error?.code === 409 && error?.subCode === 'DRAFT_VERSION_CONFLICT') {
     conflict.value = true
     return
   }
-  if (Number(error?.code) === 409 && subCode.includes('DEFINITION')) {
-    // 定义停用、删除或版本过期后锁定草稿编辑提交，但仍保留本人查看和删除入口。
-    draftState.editable = false
-    draftState.submittable = false
-    draftState.statusReason = error?.message || '草稿绑定的流程定义当前不可用'
-  }
   showComponentError(error)
+  if (typeof error?.code !== 'number') return
+  if (!draftId.value) {
+    try {
+      await getProcessForm({
+        definitionId: processDefinitionId.value,
+        deploymentId: deploymentId.value
+      })
+    } catch {
+      // 新建草稿没有 DraftView；开始能力重校验失败即关闭写入口，当前表单和附件输入保持原状。
+      newDraftAuthorityValid.value = false
+    }
+    return
+  }
+  try {
+    const response = await getProcessDraft(draftId.value)
+    applyDraftAuthority(response.data || {})
+  } catch {
+    // 读取失败由中央请求层安全提示；保留原页面状态且不自动重试，避免覆盖用户输入。
+  }
 }
 
 /**
