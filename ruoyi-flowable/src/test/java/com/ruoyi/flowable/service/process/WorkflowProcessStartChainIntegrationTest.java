@@ -7,7 +7,9 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -24,6 +26,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -33,8 +36,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
@@ -43,11 +49,13 @@ import com.ruoyi.flowable.domain.WfAttachment;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.domain.WfProcessDraft;
+import com.ruoyi.flowable.domain.WorkflowAttachmentQuotaUsage;
 import com.ruoyi.flowable.domain.WorkflowAttachmentStatus;
 import com.ruoyi.flowable.domain.WorkflowProcessDefinitionLockRow;
 import com.ruoyi.flowable.domain.WorkflowProcessDraftStatus;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnXmlQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftCreateRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSubmitView;
@@ -110,6 +118,12 @@ class WorkflowProcessStartChainIntegrationTest
     private WorkflowParticipantRuleRuntimeService participantRuntimeService;
     private SimpleMeterRegistry meterRegistry;
     private WorkflowAttachmentStorage attachmentStorage;
+    /** 当前用例使用的正式附件配置，可由配额负例在独立夹具内收紧。 */
+    private WorkflowAttachmentProperties attachmentProperties;
+    /** 加入 Spring 事务代理的真实附件领域服务。 */
+    private WorkflowAttachmentService attachmentService;
+    /** 加入 Spring 事务代理的统一 Flowable 写边界。 */
+    private WorkflowEngineOperations engineOperations;
     private WorkflowProcessDefinitionQueryService queryService;
     private WorkflowProcessStartService startService;
     private WorkflowProcessDraftService draftService;
@@ -172,7 +186,7 @@ class WorkflowProcessStartChainIntegrationTest
                         new WorkflowIdentityCodec());
         WorkflowEngineOperations operationsTarget = new WorkflowEngineOperations(
                 authenticationContext, new WorkflowExceptionTranslator(), identityResolver);
-        WorkflowEngineOperations engineOperations =
+        engineOperations =
                 engineInfrastructure.transactionalProxy(operationsTarget);
 
         queryService = new WorkflowProcessDefinitionQueryService(
@@ -180,14 +194,14 @@ class WorkflowProcessStartChainIntegrationTest
                 mock(WorkflowProcessAccessService.class),
                 mock(WorkflowDeploymentService.class), artifactRepository,
                 participantRuntimeService);
-        WorkflowAttachmentProperties attachmentProperties = new WorkflowAttachmentProperties();
+        attachmentProperties = new WorkflowAttachmentProperties();
         attachmentProperties.setMinFreeBytes(0);
         attachmentStorage = new WorkflowAttachmentStorage(profileRoot,
                 attachmentProperties.getMaxSize());
         WorkflowAttachmentService attachmentTarget = new WorkflowAttachmentService(
                 attachmentMapper, attachmentStorage, attachmentProperties, identityResolver,
                 mock(WorkflowProcessAccessService.class));
-        WorkflowAttachmentService attachmentService =
+        attachmentService =
                 engineInfrastructure.transactionalProxy(attachmentTarget);
         variableValidator = spy(new WorkflowStartVariableValidator(
                 new WorkflowFormTemplateValidator()));
@@ -432,6 +446,479 @@ class WorkflowProcessStartChainIntegrationTest
         WfAttachment attachment = attachmentMapper.selectById(attachmentId);
         assertThat(attachment.status()).isEqualTo(WorkflowAttachmentStatus.DRAFT);
         assertThat(attachment.processInstanceId()).isNull();
+    }
+
+    /**
+     * 验证保存、删除和提交使用旧 revision 时只返回既有草稿版本冲突子码。
+     *
+     * @return void，任一旧 revision 被接受、错误子码漂移或提交产生实例时失败
+     */
+    @Test
+    void rejectsStaleRevisionForSaveDeleteAndSubmitWithDraftVersionConflict()
+    {
+        WorkflowProcessDraftView saveDraft = createDraft(VALID_VARIABLES);
+        WorkflowProcessDraftView saved = draftService.save(saveDraft.draftId(),
+                new WorkflowProcessDraftSaveRequest(saveDraft.revisionNo(), "SAVE-NEW",
+                        VALID_VARIABLES, Map.of()));
+        assertThat(saved.revisionNo()).isEqualTo(saveDraft.revisionNo() + 1);
+        assertServiceError(() -> draftService.save(saveDraft.draftId(),
+                new WorkflowProcessDraftSaveRequest(saveDraft.revisionNo(), "SAVE-OLD",
+                        VALID_VARIABLES, Map.of())), HttpStatus.CONFLICT,
+                "DRAFT_VERSION_CONFLICT");
+
+        WorkflowProcessDraftView deleteDraft = createDraft(VALID_VARIABLES);
+        draftService.save(deleteDraft.draftId(), new WorkflowProcessDraftSaveRequest(
+                deleteDraft.revisionNo(), null, VALID_VARIABLES, Map.of()));
+        assertServiceError(() -> draftService.delete(deleteDraft.draftId(),
+                deleteDraft.revisionNo()), HttpStatus.CONFLICT,
+                "DRAFT_VERSION_CONFLICT");
+
+        WorkflowProcessDraftView submitDraft = createDraft(VALID_VARIABLES);
+        draftService.save(submitDraft.draftId(), new WorkflowProcessDraftSaveRequest(
+                submitDraft.revisionNo(), null, VALID_VARIABLES, Map.of()));
+        long instanceCountBefore = runtimeService.createProcessInstanceQuery().count();
+        assertServiceError(() -> draftService.submit(submitDraft.draftId(),
+                new WorkflowProcessDraftSubmitRequest(submitDraft.revisionNo(), null,
+                        VALID_VARIABLES, Map.of())), HttpStatus.CONFLICT,
+                "DRAFT_VERSION_CONFLICT");
+        assertThat(runtimeService.createProcessInstanceQuery().count())
+                .isEqualTo(instanceCountBefore);
+    }
+
+    /**
+     * 验证新建草稿回调内的真实可重试并发异常不会误用已有草稿版本冲突子码。
+     *
+     * @return void，仅 DRAFT_CREATE_CONCURRENCY_CONFLICT 被接受且数据库不产生草稿
+     */
+    @Test
+    void classifiesCreateConcurrencyFailureSeparatelyFromExistingDraftVersionConflict()
+    {
+        long draftCountBefore = jdbcTemplate.queryForObject(
+                "select count(*) from wf_process_draft", Long.class);
+        doThrow(new CannotAcquireLockException("test create lock conflict"))
+                .when(draftMapper).insert(any(WfProcessDraft.class));
+
+        assertServiceError(() -> createDraft(VALID_VARIABLES), HttpStatus.CONFLICT,
+                "DRAFT_CREATE_CONCURRENCY_CONFLICT");
+
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_process_draft", Long.class))
+                .isEqualTo(draftCountBefore);
+    }
+
+    /**
+     * 验证事务回调成功后、代理提交阶段才暴露的可重试并发异常仍由创建入口稳定分类。
+     *
+     * @return void，提交阶段异常逃逸、子码错误或事务没有回滚草稿行时失败
+     */
+    @Test
+    void classifiesCreateConcurrencyFailureRaisedDuringTransactionCommit()
+    {
+        WorkflowAttachmentService commitFailingAttachmentService =
+                mock(WorkflowAttachmentService.class);
+        doAnswer(invocation ->
+        {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization()
+                    {
+                        /**
+                         * 在 Spring 正式提交回调中模拟数据库并发失败，验证代理外捕获边界。
+                         *
+                         * @param readOnly boolean，当前事务是否只读
+                         * @return void，总是抛出可重试并发异常
+                         */
+                        @Override
+                        public void beforeCommit(boolean readOnly)
+                        {
+                            throw new CannotAcquireLockException(
+                                    "test commit-phase concurrency conflict");
+                        }
+                    });
+            return null;
+        }).when(commitFailingAttachmentService).reconcileDraftAttachments(
+                eq(USER_ID), anyString(), any());
+        WorkflowProcessDraftService commitFailingDraftService =
+                new WorkflowProcessDraftService(engineOperations, identityResolver,
+                        repositoryService, queryService, startService, variableValidator,
+                        commitFailingAttachmentService, draftMapper, definitionLockMapper);
+        long draftCountBefore = jdbcTemplate.queryForObject(
+                "select count(*) from wf_process_draft", Long.class);
+
+        assertServiceError(() -> commitFailingDraftService.create(
+                new WorkflowProcessDraftCreateRequest(definition.getId(), null,
+                        VALID_VARIABLES, Map.of())), HttpStatus.CONFLICT,
+                "DRAFT_CREATE_CONCURRENCY_CONFLICT");
+
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_process_draft", Long.class))
+                .isEqualTo(draftCountBefore);
+    }
+
+    /**
+     * 验证非最新版定义在查询源头赋予通用子码，并由草稿能力投影稳定关闭编辑与提交。
+     *
+     * @return void，查询子码、能力开关或展示原因依赖异常文案时失败
+     */
+    @Test
+    void projectsDefinitionVersionExpiryFromStatusAndStableSubCode()
+    {
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
+        deployNextVersion();
+
+        assertServiceError(() -> queryService.getProcessForm(
+                new WorkflowProcessFormQueryDto(definition.getId(),
+                        definition.getDeploymentId(), null)), HttpStatus.CONFLICT,
+                "PROCESS_DEFINITION_VERSION_EXPIRED");
+        WorkflowProcessDraftView projected = draftService.get(draft.draftId());
+        assertThat(projected.editable()).isFalse();
+        assertThat(projected.submittable()).isFalse();
+        assertThat(projected.statusReason()).isEqualTo("流程定义版本已过期");
+    }
+
+    /**
+     * 验证挂起定义在查询源头返回不可用子码，草稿能力投影只消费状态码和子码。
+     *
+     * @return void，挂起定义仍可编辑提交或稳定子码缺失时失败
+     */
+    @Test
+    void projectsSuspendedDefinitionAsUnavailableWithoutMessageClassification()
+    {
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
+        repositoryService.suspendProcessDefinitionById(definition.getId());
+
+        assertServiceError(() -> queryService.getProcessForm(
+                new WorkflowProcessFormQueryDto(definition.getId(),
+                        definition.getDeploymentId(), null)), HttpStatus.CONFLICT,
+                "PROCESS_DEFINITION_UNAVAILABLE");
+        WorkflowProcessDraftView projected = draftService.get(draft.draftId());
+        assertThat(projected.editable()).isFalse();
+        assertThat(projected.submittable()).isFalse();
+        assertThat(projected.statusReason()).isEqualTo("流程定义当前不可用");
+    }
+
+    /**
+     * 验证删除定义在查询源头返回 404 加不可用子码，并投影为已删除展示原因。
+     *
+     * @return void，删除后查询或草稿能力投影的状态、子码和原因不一致时失败
+     */
+    @Test
+    void projectsDeletedDefinitionAsUnavailableWithNotFoundStatus()
+    {
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
+        repositoryService.deleteDeployment(definition.getDeploymentId(), true);
+
+        assertServiceError(() -> queryService.getProcessForm(
+                new WorkflowProcessFormQueryDto(definition.getId(),
+                        definition.getDeploymentId(), null)), HttpStatus.NOT_FOUND,
+                "PROCESS_DEFINITION_UNAVAILABLE");
+        WorkflowProcessDraftView projected = draftService.get(draft.draftId());
+        assertThat(projected.editable()).isFalse();
+        assertThat(projected.submittable()).isFalse();
+        assertThat(projected.statusReason()).isEqualTo("流程定义已删除");
+    }
+
+    /**
+     * 验证创建草稿读取到已删除定义时由草稿定义源头返回稳定不可用子码。
+     *
+     * @return void，Flowable 不存在异常逃逸为未知错误或错误携带创建并发子码时失败
+     */
+    @Test
+    void rejectsDraftCreateAgainstDeletedDefinitionWithStableSubCode()
+    {
+        repositoryService.deleteDeployment(definition.getDeploymentId(), true);
+
+        assertServiceError(() -> createDraft(VALID_VARIABLES), HttpStatus.NOT_FOUND,
+                "DRAFT_DEFINITION_UNAVAILABLE");
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_process_draft", Long.class)).isZero();
+    }
+
+    /**
+     * 验证表单查询声明的部署主键漂移在定义关系源头返回专用稳定子码。
+     *
+     * @return void，部署关系冲突仍是无子码普通 409 时失败
+     */
+    @Test
+    void rejectsDefinitionDeploymentRelationDriftWithStableSubCode()
+    {
+        assertServiceError(() -> queryService.getProcessForm(
+                new WorkflowProcessFormQueryDto(definition.getId(),
+                        "drifted-deployment", null)), HttpStatus.CONFLICT,
+                "PROCESS_DEFINITION_RELATION_CONFLICT");
+    }
+
+    /**
+     * 验证草稿提交遇到真实最新版变化时返回草稿定义版本过期且不迁移附件或创建实例。
+     *
+     * @return void，错误子码、实例数量、草稿状态或附件状态发生漂移时失败
+     */
+    @Test
+    void rejectsDraftSubmitAgainstNewerDefinitionWithoutSideEffects()
+    {
+        String attachmentId = insertTemporaryAttachment();
+        Map<String, Object> variables = variablesWithAttachment("Version expired", attachmentId);
+        WorkflowProcessDraftView draft = createDraft(variables);
+        ProcessDefinition latest = deployNextVersion();
+        when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(
+                definition.getKey())).thenReturn(new WorkflowProcessDefinitionLockRow(
+                        latest.getId(), latest.getDeploymentId(), 1));
+        long instanceCountBefore = runtimeService.createProcessInstanceQuery().count();
+
+        assertServiceError(() -> submitDraft(draft, variables), HttpStatus.CONFLICT,
+                "DRAFT_DEFINITION_VERSION_EXPIRED");
+
+        assertDraftSubmitFailureHasNoSideEffects(draft.draftId(), attachmentId,
+                instanceCountBefore);
+    }
+
+    /**
+     * 验证草稿提交遇到挂起定义时返回草稿定义不可用且不迁移附件或创建实例。
+     *
+     * @return void，挂起错误分类或提交事务副作用没有完整回滚时失败
+     */
+    @Test
+    void rejectsDraftSubmitAgainstSuspendedDefinitionWithoutSideEffects()
+    {
+        String attachmentId = insertTemporaryAttachment();
+        Map<String, Object> variables = variablesWithAttachment("Suspended", attachmentId);
+        WorkflowProcessDraftView draft = createDraft(variables);
+        repositoryService.suspendProcessDefinitionById(definition.getId());
+        when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(
+                definition.getKey())).thenReturn(new WorkflowProcessDefinitionLockRow(
+                        definition.getId(), definition.getDeploymentId(), 2));
+        long instanceCountBefore = runtimeService.createProcessInstanceQuery().count();
+
+        assertServiceError(() -> submitDraft(draft, variables), HttpStatus.CONFLICT,
+                "DRAFT_DEFINITION_UNAVAILABLE");
+
+        assertDraftSubmitFailureHasNoSideEffects(draft.draftId(), attachmentId,
+                instanceCountBefore);
+    }
+
+    /**
+     * 验证草稿提交等待后发现定义已删除时返回草稿定义不可用且不产生业务副作用。
+     *
+     * @return void，删除错误分类、实例、草稿或附件状态不符合回滚契约时失败
+     */
+    @Test
+    void rejectsDraftSubmitAgainstDeletedDefinitionWithoutSideEffects()
+    {
+        String attachmentId = insertTemporaryAttachment();
+        Map<String, Object> variables = variablesWithAttachment("Deleted", attachmentId);
+        WorkflowProcessDraftView draft = createDraft(variables);
+        repositoryService.deleteDeployment(definition.getDeploymentId(), true);
+        long instanceCountBefore = runtimeService.createProcessInstanceQuery().count();
+
+        assertServiceError(() -> submitDraft(draft, variables), HttpStatus.NOT_FOUND,
+                "DRAFT_DEFINITION_UNAVAILABLE");
+
+        assertDraftSubmitFailureHasNoSideEffects(draft.draftId(), attachmentId,
+                instanceCountBefore);
+    }
+
+    /**
+     * 验证草稿提交的定义部署关系漂移返回专用关系冲突且不产生业务副作用。
+     *
+     * @return void，部署漂移被归为版本或不可用、或事务留下副作用时失败
+     */
+    @Test
+    void rejectsDraftSubmitDeploymentDriftWithoutSideEffects()
+    {
+        String attachmentId = insertTemporaryAttachment();
+        Map<String, Object> variables = variablesWithAttachment("Deployment drift", attachmentId);
+        WorkflowProcessDraftView draft = createDraft(variables);
+        when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(
+                definition.getKey())).thenReturn(new WorkflowProcessDefinitionLockRow(
+                        definition.getId(), "drifted-deployment", 1));
+        long instanceCountBefore = runtimeService.createProcessInstanceQuery().count();
+
+        assertServiceError(() -> submitDraft(draft, variables), HttpStatus.CONFLICT,
+                "PROCESS_DEFINITION_RELATION_CONFLICT");
+
+        assertDraftSubmitFailureHasNoSideEffects(draft.draftId(), attachmentId,
+                instanceCountBefore);
+    }
+
+    /**
+     * 验证草稿冻结表单正文漂移返回快照不一致子码且不创建实例或迁移附件。
+     *
+     * @return void，快照漂移分类或提交事务副作用不符合契约时失败
+     */
+    @Test
+    void rejectsDraftSnapshotDriftWithoutSideEffects()
+    {
+        String attachmentId = insertTemporaryAttachment();
+        Map<String, Object> variables = variablesWithAttachment("Snapshot drift", attachmentId);
+        WorkflowProcessDraftView draft = createDraft(variables);
+        engineInfrastructure.transactionTemplate().executeWithoutResult(status ->
+                assertThat(jdbcTemplate.update("""
+                        update wf_process_draft set form_snapshot='{}'
+                        where draft_id=? and owner_user_id=?
+                        """, draft.draftId(), OWNER_ID)).isOne());
+        long instanceCountBefore = runtimeService.createProcessInstanceQuery().count();
+
+        assertServiceError(() -> submitDraft(draft, variables), HttpStatus.CONFLICT,
+                "DRAFT_SNAPSHOT_MISMATCH");
+
+        assertDraftSubmitFailureHasNoSideEffects(draft.draftId(), attachmentId,
+                instanceCountBefore);
+    }
+
+    /**
+     * 验证用户临时附件字节配额超限返回附件配额专用子码且不落库。
+     *
+     * @return void，配额异常无子码、被归为附件状态冲突或产生元数据时失败
+     */
+    @Test
+    void rejectsAttachmentQuotaExceededWithStableSubCode()
+    {
+        attachmentProperties.setMaxTemporaryBytes(1L);
+        // H2 不支持正式 Mapper 的 MySQL ON DUPLICATE KEY；仅替换配额 guard 与聚合读。
+        doReturn(1).when(attachmentMapper).ensureOwnerQuotaGuard(OWNER_ID);
+        doReturn(OWNER_ID).when(attachmentMapper).selectOwnerQuotaGuardForUpdate(OWNER_ID);
+        doReturn(new WorkflowAttachmentQuotaUsage(0L, 0L)).when(attachmentMapper)
+                .selectTemporaryQuotaUsage(OWNER_ID);
+        long attachmentCountBefore = jdbcTemplate.queryForObject(
+                "select count(*) from wf_attachment", Long.class);
+
+        assertServiceError(() -> attachmentService.uploadTemporary("evidence",
+                new MockMultipartFile("file", "quota.txt", "text/plain",
+                        "too-large".getBytes())), HttpStatus.CONFLICT,
+                "WORKFLOW_ATTACHMENT_QUOTA_EXCEEDED");
+
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from wf_attachment", Long.class))
+                .isEqualTo(attachmentCountBefore);
+    }
+
+    /**
+     * 验证实例创建后的附件条件更新竞争返回附件状态子码并回滚实例、草稿和附件。
+     *
+     * @return void，附件状态竞争被覆盖成草稿版本冲突或留下孤儿实例时失败
+     */
+    @Test
+    void preservesAttachmentStateConflictAndRollsBackStartedInstance()
+    {
+        String attachmentId = insertTemporaryAttachment();
+        Map<String, Object> variables = variablesWithAttachment("Attachment conflict", attachmentId);
+        WorkflowProcessDraftView draft = createDraft(variables);
+        doReturn(0).when(attachmentMapper).bindDraftStartAttachment(
+                eq(attachmentId), eq(OWNER_ID), eq("evidence"), eq(draft.draftId()),
+                anyString(), eq("start"));
+        long instanceCountBefore = runtimeService.createProcessInstanceQuery().count();
+
+        assertServiceError(() -> submitDraft(draft, variables), HttpStatus.CONFLICT,
+                "WORKFLOW_ATTACHMENT_STATE_CONFLICT");
+
+        assertDraftSubmitFailureHasNoSideEffects(draft.draftId(), attachmentId,
+                instanceCountBefore);
+    }
+
+    /**
+     * 验证已有业务子码即使携带可重试并发 cause，也不会被草稿并发入口覆盖。
+     *
+     * @return void，已有子码被替换为 DRAFT_VERSION_CONFLICT 或事务留下实例时失败
+     */
+    @Test
+    void preservesExistingBusinessSubCodeAcrossDraftConcurrencyClassification()
+    {
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
+        ServiceException existingBusinessConflict = new ServiceException(
+                "附件状态竞争", HttpStatus.CONFLICT)
+                .setSubCode("WORKFLOW_ATTACHMENT_STATE_CONFLICT");
+        existingBusinessConflict.initCause(new CannotAcquireLockException(
+                "test retryable cause"));
+        doThrow(existingBusinessConflict).when(draftMapper).markSubmitted(
+                eq(draft.draftId()), eq(OWNER_ID), eq(draft.revisionNo()),
+                anyString(), anyString(), anyString(), nullable(String.class));
+        long instanceCountBefore = runtimeService.createProcessInstanceQuery().count();
+
+        assertServiceError(() -> submitDraft(draft, VALID_VARIABLES),
+                HttpStatus.CONFLICT, "WORKFLOW_ATTACHMENT_STATE_CONFLICT");
+
+        assertThat(runtimeService.createProcessInstanceQuery().count())
+                .isEqualTo(instanceCountBefore);
+        assertThat(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID).draftStatus())
+                .isEqualTo(WorkflowProcessDraftStatus.ACTIVE);
+    }
+
+    /**
+     * 断言服务调用返回指定状态码和稳定机器子码。
+     *
+     * @param action ThrowingCallable，预期抛出 ServiceException 的服务调用
+     * @param status int，预期业务状态码
+     * @param subCode String，预期稳定机器子码
+     * @return void，异常类型、状态码或子码不一致时由 AssertJ 报告
+     */
+    private void assertServiceError(ThrowingCallable action, int status, String subCode)
+    {
+        assertThatThrownBy(action)
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(status);
+                    assertThat(exception.getSubCode()).isEqualTo(subCode);
+                });
+    }
+
+    /**
+     * 使用当前草稿 revision 和正式变量调用唯一草稿提交入口。
+     *
+     * @param draft WorkflowProcessDraftView，当前活动草稿视图
+     * @param variables Map&lt;String,Object&gt;，本次提交的完整正式变量
+     * @return WorkflowProcessDraftSubmitView，真实提交成功结果
+     */
+    private WorkflowProcessDraftSubmitView submitDraft(WorkflowProcessDraftView draft,
+            Map<String, Object> variables)
+    {
+        return draftService.submit(draft.draftId(), new WorkflowProcessDraftSubmitRequest(
+                draft.revisionNo(), null, variables, Map.of()));
+    }
+
+    /**
+     * 断言草稿提交失败同时保持实例数、草稿活动状态和附件草稿状态。
+     *
+     * @param draftId String，提交失败的草稿 UUID
+     * @param attachmentId String，应继续属于草稿的附件 UUID
+     * @param instanceCountBefore long，提交前真实 Flowable 活动实例总数
+     * @return void，任一事务副作用未回滚时失败
+     */
+    private void assertDraftSubmitFailureHasNoSideEffects(String draftId,
+            String attachmentId, long instanceCountBefore)
+    {
+        assertThat(runtimeService.createProcessInstanceQuery().count())
+                .isEqualTo(instanceCountBefore);
+        assertThat(draftMapper.selectOwnedById(draftId, OWNER_ID).draftStatus())
+                .isEqualTo(WorkflowProcessDraftStatus.ACTIVE);
+        WfAttachment attachment = attachmentMapper.selectById(attachmentId);
+        assertThat(attachment.status()).isEqualTo(WorkflowAttachmentStatus.DRAFT);
+        assertThat(attachment.processInstanceId()).isNull();
+    }
+
+    /**
+     * 构造包含单个 evidence 附件引用的正式开始表单变量。
+     *
+     * @param requester String，开始表单申请人字段值
+     * @param attachmentId String，服务端生成的附件 UUID
+     * @return Map&lt;String,Object&gt;，可同时用于草稿创建与正式提交的变量
+     */
+    private Map<String, Object> variablesWithAttachment(String requester,
+            String attachmentId)
+    {
+        return Map.of("requester", requester, "evidence", List.of(attachmentId));
+    }
+
+    /**
+     * 部署同一流程 key 的下一真实 Flowable 版本，用于制造确定的最新版漂移。
+     *
+     * @return ProcessDefinition，新部署产生的当前最新版定义
+     */
+    private ProcessDefinition deployNextVersion()
+    {
+        Deployment latestDeployment = repositoryService.createDeployment()
+                .addString("start-chain-next-" + UUID.randomUUID() + ".bpmn20.xml", BPMN)
+                .deploy();
+        return repositoryService.createProcessDefinitionQuery()
+                .deploymentId(latestDeployment.getId()).singleResult();
     }
 
     /**

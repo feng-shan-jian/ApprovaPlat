@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.LinkedHashSet;
+import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.springframework.stereotype.Service;
@@ -55,6 +56,13 @@ public class WorkflowProcessDraftService
     /** 部署 BPMN 发起成员字段快照 JSON 的固定反序列化类型。 */
     private static final TypeReference<List<WorkflowStartMultiInstanceAssignmentView>>
             ASSIGNMENT_LIST_TYPE = new TypeReference<>() { };
+
+    /** 新建草稿事务在回调或提交阶段发生真实可重试并发失败时使用的稳定子码。 */
+    private static final String CREATE_CONCURRENCY_CONFLICT_SUB_CODE =
+            "DRAFT_CREATE_CONCURRENCY_CONFLICT";
+
+    /** 已有草稿写事务发生 revision/CAS 或真实可重试并发失败时使用的稳定子码。 */
+    private static final String VERSION_CONFLICT_SUB_CODE = "DRAFT_VERSION_CONFLICT";
 
     private final WorkflowEngineOperations engineOperations;
     private final WorkflowIdentityResolver identityResolver;
@@ -177,37 +185,45 @@ public class WorkflowProcessDraftService
         String definitionId = requireText(request.processDefinitionId(), 255,
                 "流程定义主键不能为空");
         String businessKey = optionalText(request.businessKey(), 255);
-        return engineOperations.writeAsCurrentUser(actor ->
+        try
         {
-            ProcessDefinition definition = requireDefinition(definitionId);
-            // 与部署删除统一先锁 ACT_RE_DEPLOYMENT，再读取部署快照并写入 wf_process_draft。
-            String deploymentId = lockDraftDeployment(definition);
-            WorkflowProcessFormView form = definitionQueryService.getProcessForm(
-                    new WorkflowProcessFormQueryDto(definitionId,
-                            deploymentId, null));
-            WorkflowValidatedStartVariables validated = variableValidator.validateForDraft(
-                    form.content(), request.variables());
-            Map<String, List<Long>> memberSelections = normalizeDraftSelections(
-                    form.startMultiInstanceAssignments(), request.multiInstanceUserIds());
-            String draftId = UUID.randomUUID().toString();
-            WfProcessDraft draft = new WfProcessDraft(draftId, Long.valueOf(actor.userId()),
-                    definition.getId(), definition.getKey(), definition.getVersion(),
-                    deploymentId, defaultText(definition.getName(), definition.getKey()),
-                    form.sourceType(), form.formId(), form.formKey(), form.nodeKey(),
-                    defaultText(form.formName(), definition.getName()),
-                    defaultText(form.nodeName(), ""), toLocal(form.snapshotTime()), form.content(),
-                    WorkflowProcessDraftChecksum.sha256(form),
-                    writeJson(form.startMultiInstanceAssignments()),
-                    writeJson(validated.variables()), writeJson(memberSelections),
-                    businessKey, WorkflowProcessDraftStatus.ACTIVE, 1L, null, null, null,
-                    null, null);
-            requireOne(draftMapper.insert(draft), "流程申请草稿写入失败");
-            // 先落草稿主行满足附件外键，再绑定首次保存前已经上传的 TEMP 附件；失败时同事务回滚。
-            attachmentService.reconcileDraftAttachments(actor.userId(), draftId,
-                    validated.attachmentIdsByField());
-            return toView(requireOwned(draftMapper.selectOwnedById(draftId,
-                    Long.valueOf(actor.userId()))));
-        });
+            return engineOperations.writeAsCurrentUser(actor ->
+            {
+                ProcessDefinition definition = requireDefinition(definitionId);
+                // 与部署删除统一先锁 ACT_RE_DEPLOYMENT，再读取部署快照并写入 wf_process_draft。
+                String deploymentId = lockDraftDeployment(definition);
+                WorkflowProcessFormView form = definitionQueryService.getProcessForm(
+                        new WorkflowProcessFormQueryDto(definitionId,
+                                deploymentId, null));
+                WorkflowValidatedStartVariables validated = variableValidator.validateForDraft(
+                        form.content(), request.variables());
+                Map<String, List<Long>> memberSelections = normalizeDraftSelections(
+                        form.startMultiInstanceAssignments(), request.multiInstanceUserIds());
+                String draftId = UUID.randomUUID().toString();
+                WfProcessDraft draft = new WfProcessDraft(draftId, Long.valueOf(actor.userId()),
+                        definition.getId(), definition.getKey(), definition.getVersion(),
+                        deploymentId, defaultText(definition.getName(), definition.getKey()),
+                        form.sourceType(), form.formId(), form.formKey(), form.nodeKey(),
+                        defaultText(form.formName(), definition.getName()),
+                        defaultText(form.nodeName(), ""), toLocal(form.snapshotTime()), form.content(),
+                        WorkflowProcessDraftChecksum.sha256(form),
+                        writeJson(form.startMultiInstanceAssignments()),
+                        writeJson(validated.variables()), writeJson(memberSelections),
+                        businessKey, WorkflowProcessDraftStatus.ACTIVE, 1L, null, null, null,
+                        null, null);
+                requireOne(draftMapper.insert(draft), "流程申请草稿写入失败");
+                // 先落草稿主行满足附件外键，再绑定首次保存前已经上传的 TEMP 附件；失败时同事务回滚。
+                attachmentService.reconcileDraftAttachments(actor.userId(), draftId,
+                        validated.attachmentIdsByField());
+                return toView(requireOwned(draftMapper.selectOwnedById(draftId,
+                        Long.valueOf(actor.userId()))));
+            });
+        }
+        catch (RuntimeException exception)
+        {
+            // 捕获范围位于事务代理之外，既覆盖回调异常，也覆盖代理提交阶段才暴露的并发失败。
+            throw classifyWriteConcurrency(exception, CREATE_CONCURRENCY_CONFLICT_SUB_CODE);
+        }
     }
 
     /**
@@ -221,25 +237,32 @@ public class WorkflowProcessDraftService
     {
         String normalizedId = requireDraftId(draftId);
         requireSaveRequest(request);
-        return engineOperations.writeAsCurrentUser(actor ->
+        try
         {
-            long ownerUserId = Long.parseLong(actor.userId());
-            WfProcessDraft current = requireOwned(draftMapper.selectOwnedByIdForUpdate(
-                    normalizedId, ownerUserId));
-            requireActiveRevision(current, request.expectedVersion());
-            WorkflowProcessFormView liveForm = requireLiveSnapshot(current);
-            WorkflowValidatedStartVariables validated = variableValidator.validateForDraft(
-                    liveForm.content(), request.variables());
-            Map<String, List<Long>> memberSelections = normalizeDraftSelections(
-                    liveForm.startMultiInstanceAssignments(), request.multiInstanceUserIds());
-            attachmentService.reconcileDraftAttachments(actor.userId(), normalizedId,
-                    validated.attachmentIdsByField());
-            requireCas(draftMapper.updateActive(normalizedId, ownerUserId,
-                    request.expectedVersion(), writeJson(validated.variables()),
-                    writeJson(memberSelections),
-                    optionalText(request.businessKey(), 255)));
-            return toView(requireOwned(draftMapper.selectOwnedById(normalizedId, ownerUserId)));
-        });
+            return engineOperations.writeAsCurrentUser(actor ->
+            {
+                long ownerUserId = Long.parseLong(actor.userId());
+                WfProcessDraft current = requireOwned(draftMapper.selectOwnedByIdForUpdate(
+                        normalizedId, ownerUserId));
+                requireActiveRevision(current, request.expectedVersion());
+                WorkflowProcessFormView liveForm = requireLiveSnapshot(current);
+                WorkflowValidatedStartVariables validated = variableValidator.validateForDraft(
+                        liveForm.content(), request.variables());
+                Map<String, List<Long>> memberSelections = normalizeDraftSelections(
+                        liveForm.startMultiInstanceAssignments(), request.multiInstanceUserIds());
+                attachmentService.reconcileDraftAttachments(actor.userId(), normalizedId,
+                        validated.attachmentIdsByField());
+                requireCas(draftMapper.updateActive(normalizedId, ownerUserId,
+                        request.expectedVersion(), writeJson(validated.variables()),
+                        writeJson(memberSelections),
+                        optionalText(request.businessKey(), 255)));
+                return toView(requireOwned(draftMapper.selectOwnedById(normalizedId, ownerUserId)));
+            });
+        }
+        catch (RuntimeException exception)
+        {
+            throw classifyWriteConcurrency(exception, VERSION_CONFLICT_SUB_CODE);
+        }
     }
 
     /**
@@ -256,16 +279,23 @@ public class WorkflowProcessDraftService
         {
             throw badRequest("草稿版本必须大于0");
         }
-        engineOperations.writeAsCurrentUser(actor ->
+        try
         {
-            long ownerUserId = Long.parseLong(actor.userId());
-            WfProcessDraft current = requireOwned(draftMapper.selectOwnedByIdForUpdate(
-                    normalizedId, ownerUserId));
-            requireActiveRevision(current, expectedVersion);
-            attachmentService.deleteDraftAttachments(actor.userId(), normalizedId);
-            requireCas(draftMapper.markDeleted(normalizedId, ownerUserId, expectedVersion));
-            return null;
-        });
+            engineOperations.writeAsCurrentUser(actor ->
+            {
+                long ownerUserId = Long.parseLong(actor.userId());
+                WfProcessDraft current = requireOwned(draftMapper.selectOwnedByIdForUpdate(
+                        normalizedId, ownerUserId));
+                requireActiveRevision(current, expectedVersion);
+                attachmentService.deleteDraftAttachments(actor.userId(), normalizedId);
+                requireCas(draftMapper.markDeleted(normalizedId, ownerUserId, expectedVersion));
+                return null;
+            });
+        }
+        catch (RuntimeException exception)
+        {
+            throw classifyWriteConcurrency(exception, VERSION_CONFLICT_SUB_CODE);
+        }
     }
 
     /**
@@ -283,46 +313,53 @@ public class WorkflowProcessDraftService
         {
             throw badRequest("草稿提交参数或版本不合法");
         }
-        return engineOperations.writeAsCurrentUser(actor ->
+        try
         {
-            long ownerUserId = Long.parseLong(actor.userId());
-            // 先做本人普通读只用于定位不可变 deploymentId；ACTIVE 路径随后必须按部署、草稿顺序重锁复核。
-            WfProcessDraft located = requireOwned(draftMapper.selectOwnedById(
-                    normalizedId, ownerUserId));
-            if (located.draftStatus() == WorkflowProcessDraftStatus.SUBMITTED)
+            return engineOperations.writeAsCurrentUser(actor ->
             {
-                // SUBMITTED 不会再次产生实例，且部署允许被后续删除；直接返回持久化幂等结果。
-                return submittedView(located);
-            }
-            if (located.draftStatus() != WorkflowProcessDraftStatus.ACTIVE)
-            {
-                requireActiveRevision(located, request.expectedVersion());
-            }
-            String deploymentId = requireDraftDeploymentId(located.deploymentId());
-            lockDraftDeployment(deploymentId);
-            WfProcessDraft current = requireOwned(draftMapper.selectOwnedByIdForUpdate(
-                    normalizedId, ownerUserId));
-            assertLocatedDraftRelation(located, current, ownerUserId);
-            if (current.draftStatus() == WorkflowProcessDraftStatus.SUBMITTED)
-            {
-                return submittedView(current);
-            }
-            requireActiveRevision(current, request.expectedVersion());
-            Map<String, List<Long>> memberSelections = normalizeDraftSelections(
-                    readAssignments(current.startMultiInstanceAssignments()),
-                    request.multiInstanceUserIds());
-            // 业务主键只规范化一次；启动结果同时带回唯一一次 schema 校验得到的正式字段。
-            String businessKey = optionalText(request.businessKey(), 255);
-            WorkflowProcessStartService.DraftStartResult started = processStartService
-                    .startDraft(actor, current, businessKey, request.variables(),
-                            memberSelections);
-            requireCas(draftMapper.markSubmitted(normalizedId, ownerUserId,
-                    request.expectedVersion(), started.instance().id(),
-                    writeJson(started.normalizedVariables()), writeJson(memberSelections),
-                    businessKey));
-            return new WorkflowProcessDraftSubmitView(normalizedId, started.instance().id(),
-                    started.instance().processDefinitionId(), current.revisionNo() + 1);
-        });
+                long ownerUserId = Long.parseLong(actor.userId());
+                // 先做本人普通读只用于定位不可变 deploymentId；ACTIVE 路径随后必须按部署、草稿顺序重锁复核。
+                WfProcessDraft located = requireOwned(draftMapper.selectOwnedById(
+                        normalizedId, ownerUserId));
+                if (located.draftStatus() == WorkflowProcessDraftStatus.SUBMITTED)
+                {
+                    // SUBMITTED 不会再次产生实例，且部署允许被后续删除；直接返回持久化幂等结果。
+                    return submittedView(located);
+                }
+                if (located.draftStatus() != WorkflowProcessDraftStatus.ACTIVE)
+                {
+                    requireActiveRevision(located, request.expectedVersion());
+                }
+                String deploymentId = requireDraftDeploymentId(located.deploymentId());
+                lockDraftDeployment(deploymentId);
+                WfProcessDraft current = requireOwned(draftMapper.selectOwnedByIdForUpdate(
+                        normalizedId, ownerUserId));
+                assertLocatedDraftRelation(located, current, ownerUserId);
+                if (current.draftStatus() == WorkflowProcessDraftStatus.SUBMITTED)
+                {
+                    return submittedView(current);
+                }
+                requireActiveRevision(current, request.expectedVersion());
+                Map<String, List<Long>> memberSelections = normalizeDraftSelections(
+                        readAssignments(current.startMultiInstanceAssignments()),
+                        request.multiInstanceUserIds());
+                // 业务主键只规范化一次；启动结果同时带回唯一一次 schema 校验得到的正式字段。
+                String businessKey = optionalText(request.businessKey(), 255);
+                WorkflowProcessStartService.DraftStartResult started = processStartService
+                        .startDraft(actor, current, businessKey, request.variables(),
+                                memberSelections);
+                requireCas(draftMapper.markSubmitted(normalizedId, ownerUserId,
+                        request.expectedVersion(), started.instance().id(),
+                        writeJson(started.normalizedVariables()), writeJson(memberSelections),
+                        businessKey));
+                return new WorkflowProcessDraftSubmitView(normalizedId, started.instance().id(),
+                        started.instance().processDefinitionId(), current.revisionNo() + 1);
+            });
+        }
+        catch (RuntimeException exception)
+        {
+            throw classifyWriteConcurrency(exception, VERSION_CONFLICT_SUB_CODE);
+        }
     }
 
     /**
@@ -389,21 +426,29 @@ public class WorkflowProcessDraftService
         catch (ServiceException exception)
         {
             int status = exception.getCode() == null ? HttpStatus.ERROR : exception.getCode();
+            String subCode = exception.getSubCode();
             if (status == HttpStatus.FORBIDDEN)
             {
                 return new Availability(false, false, "当前用户已无权发起该流程");
             }
-            if (status == HttpStatus.NOT_FOUND)
-            {
-                return new Availability(false, false, "流程定义已删除");
-            }
-            if (status == HttpStatus.CONFLICT && exception.getMessage().contains("最新"))
+            if ("PROCESS_DEFINITION_VERSION_EXPIRED".equals(subCode)
+                    || "DRAFT_DEFINITION_VERSION_EXPIRED".equals(subCode))
             {
                 return new Availability(false, false, "流程定义版本已过期");
             }
-            if (status == HttpStatus.CONFLICT && exception.getMessage().contains("挂起"))
+            if ("PROCESS_DEFINITION_UNAVAILABLE".equals(subCode)
+                    || "DRAFT_DEFINITION_UNAVAILABLE".equals(subCode))
             {
-                return new Availability(false, false, "流程定义已停用");
+                return new Availability(false, false, status == HttpStatus.NOT_FOUND
+                        ? "流程定义已删除" : "流程定义当前不可用");
+            }
+            if ("PROCESS_DEFINITION_RELATION_CONFLICT".equals(subCode))
+            {
+                return new Availability(false, false, "流程定义部署关系已变化");
+            }
+            if ("DRAFT_SNAPSHOT_MISMATCH".equals(subCode))
+            {
+                return new Availability(false, false, "草稿表单快照已失效");
             }
             return new Availability(false, false, "流程定义当前不可用");
         }
@@ -451,7 +496,7 @@ public class WorkflowProcessDraftService
         if (draft.revisionNo() != expectedVersion)
         {
             throw conflict("流程申请草稿已被其他会话更新，请刷新后重试",
-                    "DRAFT_VERSION_CONFLICT");
+                    VERSION_CONFLICT_SUB_CODE);
         }
     }
 
@@ -561,7 +606,19 @@ public class WorkflowProcessDraftService
      */
     private ProcessDefinition requireDefinition(String definitionId)
     {
-        ProcessDefinition definition = repositoryService.getProcessDefinition(definitionId);
+        ProcessDefinition definition;
+        try
+        {
+            definition = repositoryService.getProcessDefinition(definitionId);
+        }
+        catch (FlowableObjectNotFoundException exception)
+        {
+            ServiceException unavailable = new ServiceException(
+                    "流程定义不存在或已被删除", HttpStatus.NOT_FOUND)
+                    .setSubCode("DRAFT_DEFINITION_UNAVAILABLE");
+            unavailable.initCause(exception);
+            throw unavailable;
+        }
         if (definition == null)
         {
             throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND)
@@ -860,8 +917,28 @@ public class WorkflowProcessDraftService
         if (rows != 1)
         {
             throw conflict("流程申请草稿已被其他会话更新，请刷新后重试",
-                    "DRAFT_VERSION_CONFLICT");
+                    VERSION_CONFLICT_SUB_CODE);
         }
+    }
+
+    /**
+     * 为草稿写事务的真实可重试并发失败补充入口语义，并原样透传已有业务子码。
+     *
+     * @param exception RuntimeException，事务回调或事务代理提交阶段抛出的原始异常
+     * @param concurrencySubCode String，当前写入口允许补充的稳定并发子码
+     * @return RuntimeException，原异常或保留原异常 cause 的稳定 409 异常
+     */
+    private RuntimeException classifyWriteConcurrency(RuntimeException exception,
+            String concurrencySubCode)
+    {
+        if (exception instanceof ServiceException serviceException
+                && StringUtils.hasText(serviceException.getSubCode()))
+        {
+            // 附件、定义、权限和其他领域已经完成分类时，草稿入口不得覆盖其机器语义。
+            return exception;
+        }
+        return engineOperations.withConcurrencyConflictSubCode(exception,
+                concurrencySubCode);
     }
 
     /**

@@ -23,6 +23,8 @@
 
 multipart 声明大小用于落盘前快速门禁。持有用户行锁期间还会确认“待写字节 + 磁盘低水位”可用，文件写入后再使用服务端实际字节复核用户配额和低水位；任一复核、数据库写入或事务提交失败都会补偿删除刚写入的私有文件。用户 guard 在用户生命周期内持续存在，以稳定行锁序列化配额更新。
 
+数量或累计字节超过用户临时配额时返回 `409 + WORKFLOW_ATTACHMENT_QUOTA_EXCEEDED`。该子码只表示配额门禁，不与附件生命周期竞争或草稿版本冲突混用。
+
 ## 清理领取与租约
 
 清理调度使用 MySQL `FOR UPDATE SKIP LOCKED` 直接替换 `GET_LOCK`。每轮先在短 `REQUIRES_NEW` 事务中领取有界候选，将同一批次 UUID 写入 `cleanup_claim_token`，并将 `cleanup_lease_until` 设置为 `flowable.attachment.cleanup-lease-duration`，默认 5 分钟。到期 `TEMP` 在领取更新中同步迁移为 `EXPIRED`。有效租约由当前节点独占；租约过期后其他节点写入新 token 重领，原执行者后续完成或重试更新因 token 漂移返回 0 行，新所有者状态保持有效。
@@ -52,6 +54,8 @@ attachmentService.bindTaskAttachments(
 ```
 
 任务场景允许复用同一流程实例、同一表单字段的 `BOUND` 附件，并永久保留其首次任务和节点归属。跨实例 `BOUND` 返回 `403`，跨字段返回 `400`，其他用户的 `TEMP` 返回 `403`，不存在或已清理附件返回 `404`，过期或状态竞争返回 `409`。
+
+附件已过期、状态不允许当前动作，或任一带原状态条件的绑定/删除更新未命中一行时，统一返回 `409 + WORKFLOW_ATTACHMENT_STATE_CONFLICT`。草稿创建、保存、删除和提交入口必须原样透传该子码，不能包装为 `DRAFT_VERSION_CONFLICT`；事务仍负责回滚已经发生的附件迁移、Flowable 写入和草稿状态变化。
 
 草稿创建和保存继续使用 `reconcileDraftAttachments(...)` 完成附件对账。正式提交改用 `prepareDraftSubmissionVariables(...)`：先按草稿锁定当前 `DRAFT` 集合，再对集合外新增 UUID 执行一次补充批量锁定，因此支持草稿创建后上传、提交时首次引用的 `TEMP` 附件；每个附件只进行一次归属、状态、字段和物理文件完整性校验。同一批锁定实体完成 `TEMP -> DRAFT`、移除项 `DELETED` 处理及安全元数据投影，直接替换先对账再重新查询的重复路径。真实实例创建后由 `bindDraftStartAttachments(...)` 完成 `DRAFT -> BOUND`，并与实例和草稿状态更新共用外层事务。
 

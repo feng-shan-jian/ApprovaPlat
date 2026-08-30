@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Set;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.StartEvent;
+import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
@@ -66,6 +67,18 @@ public class WorkflowProcessDefinitionQueryService
 
     /** 正式表单节点的逐字段权限属性主键前缀。 */
     private static final String FORM_PERMISSION_FIELD_ID_PREFIX = "approva_permission_field_";
+
+    /** 流程定义不是当前最新版时返回的稳定机器子码。 */
+    private static final String DEFINITION_VERSION_EXPIRED_SUB_CODE =
+            "PROCESS_DEFINITION_VERSION_EXPIRED";
+
+    /** 流程定义已删除、挂起或仓库当前不可用时返回的稳定机器子码。 */
+    private static final String DEFINITION_UNAVAILABLE_SUB_CODE =
+            "PROCESS_DEFINITION_UNAVAILABLE";
+
+    /** 客户端声明部署与服务端定义部署不一致时返回的稳定机器子码。 */
+    private static final String DEFINITION_RELATION_CONFLICT_SUB_CODE =
+            "PROCESS_DEFINITION_RELATION_CONFLICT";
 
     private final WorkflowEngineOperations engineOperations;
     private final RepositoryService repositoryService;
@@ -161,7 +174,7 @@ public class WorkflowProcessDefinitionQueryService
         return engineOperations.read(() ->
         {
             ProcessDefinition definition = requireDefinition(definitionId);
-            requireSame(deploymentId, definition.getDeploymentId(), "流程定义与部署关系不一致");
+            requireDefinitionDeploymentRelation(deploymentId, definition.getDeploymentId());
             if (instanceId == null)
             {
                 WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
@@ -542,13 +555,20 @@ public class WorkflowProcessDefinitionQueryService
             latestQuery.processDefinitionWithoutTenantId();
         }
         ProcessDefinition latest = latestQuery.singleResult();
-        if (latest == null || !definition.getId().equals(latest.getId()))
+        if (latest == null)
         {
-            throw new ServiceException("流程定义不是最新版本", HttpStatus.CONFLICT);
+            throw new ServiceException("流程定义当前不可用", HttpStatus.CONFLICT)
+                    .setSubCode(DEFINITION_UNAVAILABLE_SUB_CODE);
+        }
+        if (!definition.getId().equals(latest.getId()))
+        {
+            throw new ServiceException("流程定义不是最新版本", HttpStatus.CONFLICT)
+                    .setSubCode(DEFINITION_VERSION_EXPIRED_SUB_CODE);
         }
         if (definition.isSuspended())
         {
-            throw new ServiceException("流程定义已挂起", HttpStatus.CONFLICT);
+            throw new ServiceException("流程定义已挂起", HttpStatus.CONFLICT)
+                    .setSubCode(DEFINITION_UNAVAILABLE_SUB_CODE);
         }
     }
 
@@ -733,6 +753,24 @@ public class WorkflowProcessDefinitionQueryService
     }
 
     /**
+     * 核验表单查询声明的部署主键仍与服务端流程定义关系一致。
+     *
+     * @param requestedDeploymentId String，调用方声明并已完成非空校验的部署主键
+     * @param definitionDeploymentId String，Flowable 当前定义返回的部署主键
+     * @return void，部署关系漂移时抛出带稳定子码的 HTTP 409
+     */
+    private void requireDefinitionDeploymentRelation(String requestedDeploymentId,
+            String definitionDeploymentId)
+    {
+        if (!StringUtils.hasText(requestedDeploymentId)
+                || !requestedDeploymentId.equals(definitionDeploymentId))
+        {
+            throw new ServiceException("流程定义与部署关系不一致", HttpStatus.CONFLICT)
+                    .setSubCode(DEFINITION_RELATION_CONFLICT_SUB_CODE);
+        }
+    }
+
+    /**
      * 核验实例授权快照与请求定义、部署的服务端真实关联。
      *
      * @param instance WorkflowProcessAccessSnapshot，已通过对象授权的实例快照
@@ -758,10 +796,23 @@ public class WorkflowProcessDefinitionQueryService
         {
             throw dataError("流程定义关联主键为空");
         }
-        ProcessDefinition definition = repositoryService.getProcessDefinition(definitionId);
+        ProcessDefinition definition;
+        try
+        {
+            definition = repositoryService.getProcessDefinition(definitionId);
+        }
+        catch (FlowableObjectNotFoundException exception)
+        {
+            ServiceException unavailable = new ServiceException(
+                    "流程定义不存在或已被删除", HttpStatus.NOT_FOUND)
+                    .setSubCode(DEFINITION_UNAVAILABLE_SUB_CODE);
+            unavailable.initCause(exception);
+            throw unavailable;
+        }
         if (definition == null)
         {
-            throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND);
+            throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND)
+                    .setSubCode(DEFINITION_UNAVAILABLE_SUB_CODE);
         }
         return definition;
     }

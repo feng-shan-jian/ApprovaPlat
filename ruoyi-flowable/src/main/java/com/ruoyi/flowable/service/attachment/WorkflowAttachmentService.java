@@ -59,6 +59,14 @@ public class WorkflowAttachmentService
     private static final String CLEANUP_FAILURE_ERROR_CODE =
             "attachment_storage_cleanup_failed";
 
+    /** 用户临时附件数量或字节配额超限时返回的稳定机器子码。 */
+    private static final String QUOTA_EXCEEDED_SUB_CODE =
+            "WORKFLOW_ATTACHMENT_QUOTA_EXCEEDED";
+
+    /** 附件生命周期状态或条件更新发生竞争时返回的稳定机器子码。 */
+    private static final String STATE_CONFLICT_SUB_CODE =
+            "WORKFLOW_ATTACHMENT_STATE_CONFLICT";
+
     private static final Logger log = LoggerFactory.getLogger(WorkflowAttachmentService.class);
 
     private final WfAttachmentMapper attachmentMapper;
@@ -207,7 +215,7 @@ public class WorkflowAttachmentService
         if (countExceeded || bytesExceeded)
         {
             throw new ServiceException("工作流临时附件数量或总大小已达到上限",
-                    HttpStatus.CONFLICT);
+                    HttpStatus.CONFLICT).setSubCode(QUOTA_EXCEEDED_SUB_CODE);
         }
     }
 
@@ -1364,7 +1372,8 @@ public class WorkflowAttachmentService
      */
     private ServiceException stateConflict()
     {
-        return new ServiceException("工作流附件状态已变化或已过期", HttpStatus.CONFLICT);
+        return new ServiceException("工作流附件状态已变化或已过期", HttpStatus.CONFLICT)
+                .setSubCode(STATE_CONFLICT_SUB_CODE);
     }
 
 }

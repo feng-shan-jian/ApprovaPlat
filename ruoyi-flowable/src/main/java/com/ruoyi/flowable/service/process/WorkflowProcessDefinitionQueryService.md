@@ -39,6 +39,18 @@ HTTP 权限仍由 `WfProcessController` 的 `@PreAuthorize` 控制；服务内�
 - 正式发起通过 `loadStartFormInCurrentTransaction` 复用同一次 BPMN 读取结果，并以该结果生成表单和多实例配置。
 - 定义、部署、实例关系缺失或漂移时返回稳定错误，完整关系验证通过后才返回快照。
 
+## 定义可用性机器协议
+
+开始表单和发起态 BPMN 预览在异常源头使用以下稳定子码，调用方不得解析 `message`：
+
+| 子码 | 状态与含义 |
+| --- | --- |
+| `PROCESS_DEFINITION_VERSION_EXPIRED` | `409`，指定定义仍存在但已不是同租户最新版 |
+| `PROCESS_DEFINITION_UNAVAILABLE` | `404` 表示定义已删除；`409` 表示定义已挂起或仓库当前不可用 |
+| `PROCESS_DEFINITION_RELATION_CONFLICT` | `409`，请求 deployment 与服务端定义 deployment 不一致 |
+
+实例详情场景原有对象读取授权和实例关系校验保持不变；普通参数错误、实例关系冲突、通用 `403` 和未知 `500` 不批量附加上述子码。只读预览授权拒绝继续返回无 `subCode` 的通用 `403`，不触发正式写授权指标。
+
 ## 最小接入示例
 
 ```java

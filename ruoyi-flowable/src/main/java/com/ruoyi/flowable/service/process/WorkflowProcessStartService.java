@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.repository.ProcessDefinition;
@@ -40,6 +41,18 @@ public class WorkflowProcessStartService
 
     /** Flowable 流程定义和部署主键对应数据库列的安全字符上限。 */
     private static final int MAX_ENGINE_ID_LENGTH = 255;
+
+    /** 草稿绑定定义不再是最新版时返回的稳定机器子码。 */
+    private static final String DRAFT_DEFINITION_VERSION_EXPIRED_SUB_CODE =
+            "DRAFT_DEFINITION_VERSION_EXPIRED";
+
+    /** 草稿绑定定义已删除、挂起或当前不可启动时返回的稳定机器子码。 */
+    private static final String DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE =
+            "DRAFT_DEFINITION_UNAVAILABLE";
+
+    /** 定义主键与部署主键关系发生漂移时返回的稳定机器子码。 */
+    private static final String DEFINITION_RELATION_CONFLICT_SUB_CODE =
+            "PROCESS_DEFINITION_RELATION_CONFLICT";
 
     private final RepositoryService repositoryService;
     private final RuntimeService runtimeService;
@@ -105,32 +118,23 @@ public class WorkflowProcessStartService
                 "草稿绑定的流程部署关系异常", MAX_ENGINE_ID_LENGTH, HttpStatus.ERROR);
         ProcessDefinition definition = requireExistingDefinition(draft.processDefinitionId());
         if (!draft.processDefinitionKey().equals(definition.getKey())
-                || draft.processDefinitionVersion() != definition.getVersion()
-                || !deploymentId.equals(definition.getDeploymentId()))
+                || draft.processDefinitionVersion() != definition.getVersion())
         {
             throw new ServiceException("草稿绑定的流程定义版本已失效", HttpStatus.CONFLICT)
-                    .setSubCode("DRAFT_DEFINITION_VERSION_EXPIRED");
+                    .setSubCode(DRAFT_DEFINITION_VERSION_EXPIRED_SUB_CODE);
+        }
+        if (!deploymentId.equals(definition.getDeploymentId()))
+        {
+            throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT)
+                    .setSubCode(DEFINITION_RELATION_CONFLICT_SUB_CODE);
         }
         if (StringUtils.hasText(definition.getTenantId()))
         {
             throw new ServiceException("草稿绑定的流程租户关系异常", HttpStatus.ERROR);
         }
         // 持有默认租户 key 的最新定义范围锁，防止复核后并发部署新版本。
-        try
-        {
-            assertLatestDefaultTenantDefinition(draft.processDefinitionKey(),
-                    draft.processDefinitionId(), draft.deploymentId());
-        }
-        catch (ServiceException exception)
-        {
-            if (Integer.valueOf(HttpStatus.CONFLICT).equals(exception.getCode()))
-            {
-                exception.setSubCode(exception.getMessage().contains("挂起")
-                        ? "DRAFT_DEFINITION_UNAVAILABLE"
-                        : "DRAFT_DEFINITION_VERSION_EXPIRED");
-            }
-            throw exception;
-        }
+        assertLatestDefaultTenantDefinition(draft.processDefinitionKey(),
+                draft.processDefinitionId(), draft.deploymentId());
         WorkflowProcessDefinitionQueryService.StartFormLoad formLoad = definitionQueryService
                 .loadStartFormInCurrentTransaction(actor, definition);
         WorkflowProcessFormView startForm = formLoad.form();
@@ -155,7 +159,8 @@ public class WorkflowProcessStartService
         ProcessDefinition activeDefinition = requireActiveDefinition(draft.processDefinitionId());
         if (!draft.deploymentId().equals(activeDefinition.getDeploymentId()))
         {
-            throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT);
+            throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT)
+                    .setSubCode(DEFINITION_RELATION_CONFLICT_SUB_CODE);
         }
         WorkflowProcessInstanceSnapshot snapshot = startEngine(actor, activeDefinition,
                 businessKey, formLoad.bpmnModel(), startForm, clientVariables,
@@ -211,21 +216,28 @@ public class WorkflowProcessStartService
     {
         WorkflowProcessDefinitionLockRow latestDefinition = definitionLockMapper
                 .selectLatestDefaultTenantDefinitionForUpdate(processKey);
-        if (latestDefinition == null
-                || !expectedDefinitionId.equals(latestDefinition.definitionId()))
+        if (latestDefinition == null)
         {
-            throw new ServiceException("流程定义最新版已发生变化", HttpStatus.CONFLICT);
+            throw new ServiceException("流程定义当前不可用", HttpStatus.CONFLICT)
+                    .setSubCode(DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE);
+        }
+        if (!expectedDefinitionId.equals(latestDefinition.definitionId()))
+        {
+            throw new ServiceException("流程定义最新版已发生变化", HttpStatus.CONFLICT)
+                    .setSubCode(DRAFT_DEFINITION_VERSION_EXPIRED_SUB_CODE);
         }
         if (!StringUtils.hasText(latestDefinition.deploymentId())
                 || !expectedDeploymentId.equals(latestDefinition.deploymentId()))
         {
-            throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT);
+            throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT)
+                    .setSubCode(DEFINITION_RELATION_CONFLICT_SUB_CODE);
         }
         if (!Integer.valueOf(1).equals(latestDefinition.suspensionState()))
         {
             if (Integer.valueOf(2).equals(latestDefinition.suspensionState()))
             {
-                throw new ServiceException("流程定义已挂起", HttpStatus.CONFLICT);
+                throw new ServiceException("流程定义已挂起", HttpStatus.CONFLICT)
+                        .setSubCode(DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE);
             }
             throw new ServiceException("流程定义状态数据异常", HttpStatus.ERROR);
         }
@@ -239,10 +251,23 @@ public class WorkflowProcessStartService
      */
     private ProcessDefinition requireExistingDefinition(String definitionId)
     {
-        ProcessDefinition definition = repositoryService.getProcessDefinition(definitionId);
+        ProcessDefinition definition;
+        try
+        {
+            definition = repositoryService.getProcessDefinition(definitionId);
+        }
+        catch (FlowableObjectNotFoundException exception)
+        {
+            ServiceException unavailable = new ServiceException(
+                    "流程定义不存在或已被删除", HttpStatus.NOT_FOUND)
+                    .setSubCode(DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE);
+            unavailable.initCause(exception);
+            throw unavailable;
+        }
         if (definition == null)
         {
-            throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND);
+            throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND)
+                    .setSubCode(DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE);
         }
         return definition;
     }
@@ -268,16 +293,31 @@ public class WorkflowProcessStartService
             return activeDefinition;
         }
 
-        ProcessDefinition existingDefinition = repositoryService.getProcessDefinition(definitionId);
+        ProcessDefinition existingDefinition;
+        try
+        {
+            existingDefinition = repositoryService.getProcessDefinition(definitionId);
+        }
+        catch (FlowableObjectNotFoundException exception)
+        {
+            ServiceException unavailable = new ServiceException(
+                    "流程定义不存在或已被删除", HttpStatus.NOT_FOUND)
+                    .setSubCode(DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE);
+            unavailable.initCause(exception);
+            throw unavailable;
+        }
         if (existingDefinition == null)
         {
-            throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND);
+            throw new ServiceException("流程定义不存在或已被删除", HttpStatus.NOT_FOUND)
+                    .setSubCode(DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE);
         }
         if (existingDefinition.isSuspended())
         {
-            throw new ServiceException("流程定义已挂起", HttpStatus.CONFLICT);
+            throw new ServiceException("流程定义已挂起", HttpStatus.CONFLICT)
+                    .setSubCode(DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE);
         }
-        throw new ServiceException("流程定义状态已发生变化，请刷新后重试", HttpStatus.CONFLICT);
+        throw new ServiceException("流程定义状态已发生变化，请刷新后重试", HttpStatus.CONFLICT)
+                .setSubCode(DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE);
     }
 
     /**
@@ -320,7 +360,8 @@ public class WorkflowProcessStartService
         if (processInstance.isSuspended())
         {
             // 新实例若在同一命令中已被挂起，回滚本次发起，避免返回不可办理实例。
-            throw new ServiceException("流程定义状态已发生变化，请刷新后重试", HttpStatus.CONFLICT);
+            throw new ServiceException("流程定义状态已发生变化，请刷新后重试", HttpStatus.CONFLICT)
+                    .setSubCode(DRAFT_DEFINITION_UNAVAILABLE_SUB_CODE);
         }
         return new WorkflowProcessInstanceSnapshot(processInstance.getId(), definitionId,
                 businessKey, false);

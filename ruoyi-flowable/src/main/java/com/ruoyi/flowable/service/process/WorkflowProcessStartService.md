@@ -48,6 +48,17 @@
 - `409`：草稿版本、定义版本、部署、快照、定义激活状态或附件状态发生变化。
 - `500`：持久化关联、部署快照或引擎返回存在内部数据异常。
 
+定义校验在异常源头直接赋予机器子码，不解析中文提示：
+
+| 失败事实 | 稳定子码 |
+| --- | --- |
+| 草稿绑定定义 key/version 已不是当前定义或最新版锁指向其他定义 | `DRAFT_DEFINITION_VERSION_EXPIRED` |
+| 定义已删除、挂起或启动前不再可用 | `DRAFT_DEFINITION_UNAVAILABLE` |
+| 定义主键仍存在但 deployment 关系漂移 | `PROCESS_DEFINITION_RELATION_CONFLICT` |
+| 冻结表单来源、节点、正文或 SHA-256 漂移 | `DRAFT_SNAPSHOT_MISMATCH` |
+
+附件服务产生的 `WORKFLOW_ATTACHMENT_QUOTA_EXCEEDED`、`WORKFLOW_ATTACHMENT_STATE_CONFLICT` 以及其他已有业务子码由草稿外层原样透传。任何上述失败都发生在同一外层事务内；实例已创建后的附件绑定或草稿 CAS 失败会同时回滚 Flowable 实例、表单提交快照、草稿状态和附件迁移。
+
 ## 接入约束
 
 人工发起统一经过“发起页面 → 创建/保存草稿 → 提交草稿 → `startDraft(...)` → Flowable”。Controller、其他 Service 和 Delegate 复用该唯一生产链创建人工发起实例。

@@ -24,6 +24,8 @@
 - `SUBMITTED` 和 `DELETED` 是终态，部署删除引用检查只统计活动草稿。
 - 创建锁失败、版本竞争、快照失效和附件状态变化均抛出稳定业务异常，由外层事务回滚全部副作用。
 
+四个写入口都在 `writeAsCurrentUser(...)` 事务代理调用之外捕获异常，因此既覆盖事务回调内失败，也覆盖代理提交阶段才暴露的死锁、锁等待超时和乐观锁失败。新建草稿只补充 `DRAFT_CREATE_CONCURRENCY_CONFLICT`；保存、删除和提交已有草稿的 revision/CAS 并发失败使用 `DRAFT_VERSION_CONFLICT`。异常已经携带定义、附件、权限或其他领域 `subCode` 时原样透传，不会被草稿并发分类覆盖，也不会自动重试。
+
 ACTIVE 草稿正式提交先普通读取本人草稿以取得不可变 `deploymentId`，再依次锁定
 `ACT_RE_DEPLOYMENT` 和 `wf_process_draft`，并重新核验所有者、状态、版本、定义和部署关系。
 部署删除采用同一首锁，提交和删除始终遵循 `ACT_RE_DEPLOYMENT -> wf_process_draft` 锁序。已提交草稿的
@@ -42,3 +44,18 @@ ACT_RE_DEPLOYMENT
 ```
 
 部署行、草稿行和本次草稿附件都只锁定一次。提交入口只规范化一次 `businessKey` 和多实例人员选择；包级 `WorkflowProcessStartService.startDraft(...)` 只执行一次 `validateForStart`，同一份规范化变量同时用于引擎写入和 `markSubmitted`。引擎创建后的 `DRAFT -> BOUND` 与草稿 CAS 更新仍在同一事务内，任何异常都会回滚实例、草稿和附件。处于 `SUBMITTED` 的重复请求在部署锁之前直接返回原实例。
+
+## 稳定冲突与能力投影
+
+| 子码 | 严格语义 |
+| --- | --- |
+| `DRAFT_CREATE_CONCURRENCY_CONFLICT` | 新建草稿事务的真实可重试并发失败 |
+| `DRAFT_VERSION_CONFLICT` | 已有草稿 revision/CAS 冲突，不用于新建或附件冲突 |
+| `DRAFT_STATE_CONFLICT` | 草稿已进入不允许当前写操作的终态 |
+| `DRAFT_DEFINITION_VERSION_EXPIRED` | 草稿绑定定义已不是最新版 |
+| `DRAFT_DEFINITION_UNAVAILABLE` | 草稿绑定定义已删除、挂起或当前不可启动 |
+| `DRAFT_SNAPSHOT_MISMATCH` | 草稿冻结表单关系、正文或校验和漂移 |
+
+列表和详情的 `editable`、`submittable`、`statusReason` 只消费草稿状态、业务状态码和稳定 `subCode`。`statusReason` 是展示文案，不参与服务端分支；定义异常消息文本改变不会改变能力投影。只读预览授权拒绝继续保持无业务子码的通用 `403`。
+
+`WorkflowProcessStartChainIntegrationTest` 使用真实 Flowable 8、H2、正式业务 Mapper 和 Spring 事务验证旧 revision、定义/快照/附件失败回滚、提交 CAS 孤儿实例防护和重复提交幂等。`WorkflowProcessDraftStartMySqlIT` 仅在 `workflow-mysql-it` profile 和显式隔离 MySQL 8 环境下，通过第二事务持有 `ACT_RE_DEPLOYMENT` 行锁验证真实锁等待失败；普通 H2 测试不能替代该 MySQL 并发验收。
