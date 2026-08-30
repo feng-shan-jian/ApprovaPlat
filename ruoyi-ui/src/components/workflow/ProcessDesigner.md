@@ -182,18 +182,6 @@ onMounted(async () => {
 | `preference-save` | `object` | 请求页面按六字段白名单写入当前用户浏览器存储。 |
 | `preference-reset` | 无 | 请求页面只删除当前用户当前协议版本的偏好键并恢复默认值。 |
 
-## 公开方法
-
-| 方法 | 返回值 | 说明 |
-| --- | --- | --- |
-| `requestSave()` | `Promise<void>` | 执行即时门禁并触发 `save`。 |
-| `getXml()` | `Promise<string>` | 获取已补齐内部任务审计监听器、可直接保存或部署的 BPMN XML。 |
-| `downloadXml()` | `Promise<void>` | 下载 `.bpmn20.xml` 文件。 |
-| `exportDiagram(format)` | `Promise<void>` | 按 `bpmn`、`xml` 或 `svg` 导出。 |
-| `openPreview(format)` | `Promise<void>` | 打开 `xml` 或结构化 `json` 预览。 |
-| `runServerValidation(showResult)` | `Promise<boolean>` | 调用保存/部署共同后端门禁并可显示结构化诊断。 |
-| `fitViewport()` | `void` | 将流程完整适配到画布。 |
-
 ## 关键设计
 
 - Participant 的 `processRef` 始终绑定真实 `bpmn:Process` 根元素；属性面板修改被引用 Process 的稳定 id，并保持该 Process 原有的 `isExecutable` 状态。异常导入缺失 Process 时补建不可执行空池；保存门禁从 `Definitions.rootElements` 读取全部流程，并递归校验子流程中的任务和边界事件。
@@ -216,7 +204,7 @@ onMounted(async () => {
 - 从动态模式切换为串行或普通并行时会同时清理固定 handler、元素变量、完成条件和办理人，确保静态模式按自身属性回读。
 - 串行和普通并行多实例保留静态集合、元素变量和完成条件编辑能力，并使用后端表达式白名单校验。
 - 更新已导入的静态多实例时修改面板负责的核心字段，并保留原循环对象中的标准数据引用、索引变量和 `loopCardinality`，使这些字段稳定往返。
-- 用户任务的“创建、分配、完成”审计监听器由后端运行时身份审计使用。保存、下载和 `getXml()` 会重建每个用户任务固定的 `delegateExpression="${userTaskListener}"` 三项监听器，并以允许的命名空间、属性和事件生成持久化结果；属性面板只展示业务字段，其他业务扩展保持不变。
+- 用户任务的“创建、分配、完成”审计监听器由后端运行时身份审计使用。保存、下载会重建每个用户任务固定的 `delegateExpression="${userTaskListener}"` 三项监听器，并以允许的命名空间、属性和事件生成持久化结果；属性面板只展示业务字段，其他业务扩展保持不变。
 - 切换办理方式时会立即清理上一身份来源属性；在新身份完成选择前，属性面板持续显示用户刚选择的模式，保持交互上下文稳定。
 - 身份选择器使用封闭目录选择并对远程检索做 250ms 防抖；保存和部署后端再次校验用户审批资格与身份真伪。
 - 新建流程以显式 `model.formId` 作为预绑定发起表单的唯一依据。

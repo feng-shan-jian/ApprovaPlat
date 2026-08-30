@@ -1479,45 +1479,42 @@ function normalizeTimelineComments(value) {
 
 /**
  * 判断请求失败是否为服务端 revision 或执行树变化导致的 HTTP 409。
- * @param {unknown} error Axios 错误或统一请求拦截器返回值。
- * @returns {boolean} 响应状态或业务状态为 409 时返回 true。
+ * @param {unknown} error 统一请求拦截器返回值。
+ * @returns {boolean} 业务状态为 409 时返回 true。
  */
 function isConflictResponse(error) {
   return Number(error?.code) === 409
-    || Number(error?.response?.status) === 409
-    || Number(error?.response?.data?.code) === 409
 }
 
 /**
  * 判断失败是否为服务端明确标识的动态多实例 revision 冲突。
- * @param {unknown} error 统一 BusinessError 或保留 Axios response 的传输错误。
+ * @param {unknown} error 统一 BusinessError。
  * @returns {boolean} 业务码为 409 且 subCode 精确匹配冻结值时返回 true。
  */
 function isMultiInstanceRevisionConflict(error) {
-  const subCode = String(error?.subCode || error?.response?.data?.subCode || '').trim()
+  const subCode = String(error?.subCode || '').trim()
   return isConflictResponse(error) && subCode === MULTI_INSTANCE_REVISION_CONFLICT_SUBCODE
 }
 
 /**
  * 判断冲突后的强制查询是否说明原活动任务已不能继续办理。
- * @param {unknown} error getMultiInstanceState 返回的统一业务错误或 Axios 错误。
+ * @param {unknown} error getMultiInstanceState 返回的统一业务错误。
  * @returns {boolean} 403/404/409 表示对象权限、存在性或活动状态已经变化。
  */
 function isTaskUnavailableResponse(error) {
-  const code = Number(error?.code ?? error?.response?.data?.code ?? error?.response?.status)
+  const code = Number(error?.code)
   return [403, 404, 409].includes(code)
 }
 
 /**
  * 从请求错误中提取不含敏感响应正文的稳定用户提示。
- * @param {unknown} error Axios 错误或普通 Error。
+ * @param {unknown} error 错误或普通 Error。
  * @param {string} fallback 无可用消息时的兜底文案。
  * @returns {string} 可展示的短错误消息。
  */
 function requestErrorMessage(error, fallback) {
-  const responseMessage = String(error?.response?.data?.msg || '').trim()
   const errorMessage = typeof error?.message === 'string' ? error.message.trim() : ''
-  return (responseMessage || errorMessage || fallback).slice(0, 200)
+  return (errorMessage || fallback).slice(0, 200)
 }
 
 /**

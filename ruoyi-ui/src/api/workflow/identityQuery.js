@@ -1,8 +1,8 @@
 /** 审批办理用户目录固定使用的后端能力值。 */
-export const APPROVAL_USER_CAPABILITY = 'approval'
+const APPROVAL_USER_CAPABILITY = 'approval'
 
 /** 候选身份目录固定使用的完整认领能力值。 */
-export const CLAIM_IDENTITY_CAPABILITY = 'claim'
+const CLAIM_IDENTITY_CAPABILITY = 'claim'
 
 /** 候选认领目录允许查询的正式身份类型。 */
 const CLAIM_IDENTITY_TYPES = Object.freeze(['user', 'role', 'dept'])

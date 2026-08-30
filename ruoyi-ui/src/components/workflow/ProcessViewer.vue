@@ -218,8 +218,6 @@ onBeforeUnmount(() => {
   if (viewer) viewer.destroy()
   viewer = undefined
 })
-
-defineExpose({ fitViewport, downloadSvg })
 </script>
 
 <style scoped lang="scss">

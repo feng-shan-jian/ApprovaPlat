@@ -53,7 +53,6 @@ await submitProcessDraft(created.data.draftId, {
 | `ensureAttachmentsIdle()` | `Promise<boolean>` | 仅确认附件上传和删除请求已完成；保存允许缺少正式必填项的草稿前使用。 |
 | `validate()` | `Promise<boolean>` | 校验必填项；附件全部完成后返回可提交结果。 |
 | `getValues()` | `object` | 只获取当前节点可写变量；上传字段转换为服务端 UUID 数组。 |
-| `reset()` | `void` | 恢复模板默认值并清除校验。 |
 
 ## 关键设计
 

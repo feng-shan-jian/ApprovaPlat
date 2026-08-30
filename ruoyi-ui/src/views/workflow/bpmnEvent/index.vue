@@ -390,13 +390,11 @@ function resetSlaAuditQuery() {
 
 /**
  * 将 ISO 工作周序号转换为稳定中文摘要。
- * @param {string|number[]|undefined} workingDays 后端逗号串或表单数字集合。
+ * @param {string|undefined} workingDays 后端逗号串。
  * @returns {string} 去重排序后的工作日中文文本。
  */
 function formatWorkingDays(workingDays) {
-  const values = Array.isArray(workingDays)
-    ? workingDays
-    : String(workingDays || '').split(',').map(Number)
+  const values = String(workingDays || '').split(',').map(Number)
   const labels = new Map(weekOptions.map(item => [item.value, item.label]))
   return [...new Set(values)].sort((left, right) => left - right)
     .map(value => labels.get(Number(value))).filter(Boolean).join('、')
@@ -432,9 +430,7 @@ function openCalendarCreate() {
  * @returns {void} 稳定编码保持只读。
  */
 function openCalendarEdit(row) {
-  const workingDays = Array.isArray(row.workingDays)
-    ? row.workingDays.map(Number)
-    : String(row.workingDays || '').split(',').map(Number).filter(Number.isInteger)
+  const workingDays = String(row.workingDays || '').split(',').map(Number).filter(Number.isInteger)
   Object.assign(calendarForm, {
     calendarId: row.calendarId,
     calendarKey: row.calendarKey,
@@ -443,7 +439,7 @@ function openCalendarEdit(row) {
     workingDays,
     workStart: row.workStart,
     workEnd: row.workEnd,
-    description: row.description || row.remark || '',
+    description: row.remark || '',
     days: editableCalendarDays(row.days)
   })
   calendarDialogOpen.value = true

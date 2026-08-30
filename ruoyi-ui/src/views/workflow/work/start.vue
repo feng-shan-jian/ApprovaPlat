@@ -182,14 +182,13 @@ const draftState = reactive({
 const definitionFileName = computed(() => `workflow_${String(processDefinitionId.value || 'process').replace(/[^A-Za-z0-9_.-]/g, '_')}`)
 const draftEditable = computed(() => {
   if (!draftId.value) return true
-  const status = String(draftState.status || 'DRAFT').toUpperCase()
-  return draftState.editable !== false && ['DRAFT', 'ACTIVE'].includes(status)
+  const status = String(draftState.status).toUpperCase()
+  return draftState.editable !== false && ['ACTIVE'].includes(status)
 })
 const draftSubmittable = computed(() => draftEditable.value && draftState.submittable !== false)
 const draftStatusLabel = computed(() => {
-  const status = String(draftState.status || 'DRAFT').toUpperCase()
+  const status = String(draftState.status).toUpperCase()
   if (status === 'SUBMITTED') return '已提交'
-  if (status === 'DELETED') return '已删除'
   if (!draftSubmittable.value) return '不可提交'
   return '草稿'
 })
@@ -227,9 +226,7 @@ function routeDraftId() {
 function replaceFormSnapshot(snapshot) {
   Object.keys(formSnapshot).forEach(key => delete formSnapshot[key])
   const source = snapshot || {}
-  // 草稿接口可直接返回已解析的模板 JSON；开始表单接口则返回含 content 的快照视图。
-  if (source.content) Object.assign(formSnapshot, source)
-  else Object.assign(formSnapshot, { content: source, formName: draftState.processName || '申请表单', nodeName: '提交申请' })
+  Object.assign(formSnapshot, source)
   if (!formSnapshot.content) throw new Error('草稿缺少不可变部署表单快照')
 }
 
@@ -299,27 +296,26 @@ async function hydrateDraftAttachments(snapshot, variables) {
  * @returns {Promise<void>} 草稿详情完成安全回填后结束。
  */
 async function applyDraft(draft, replaceValues) {
-  const id = String(draft?.draftId || draft?.id || draftId.value || '').trim()
+  const id = String(draft?.draftId || '').trim()
   const revisionNo = Number(draft?.revisionNo)
   if (!id || !Number.isInteger(revisionNo)) throw new Error('草稿主键或乐观锁版本不完整')
   draftId.value = id
-  processDefinitionId.value = String(draft.processDefinitionId || processDefinitionId.value || '').trim()
-  deploymentId.value = String(draft.deploymentId || deploymentId.value || '').trim()
+  processDefinitionId.value = String(draft.processDefinitionId || '').trim()
+  deploymentId.value = String(draft.deploymentId || '').trim()
   Object.assign(draftState, {
-    processName: draft.processName || draftState.processName || '',
-    status: draft.status || draftState.status || 'DRAFT',
+    processName: draft.processName || '',
+    status: draft.status,
     statusReason: draft.statusReason || '',
     editable: draft.editable !== false,
     submittable: draft.submittable !== false,
     revisionNo,
-    updatedTime: draft.updatedTime || draft.updateTime || draftState.updatedTime || ''
+    updatedTime: draft.updateTime || ''
   })
-  const snapshot = draft.formSnapshot || draft.processForm || draft.form
-  if (snapshot) replaceFormSnapshot(snapshot)
+  const snapshot = draft.formSnapshot
+  replaceFormSnapshot(snapshot)
   if (replaceValues) {
-    if (!snapshot && !formSnapshot.content) throw new Error('草稿缺少不可变部署表单快照')
     businessKey.value = draft.businessKey || ''
-    formValues.value = await hydrateDraftAttachments(formSnapshot, draft.variables || formSnapshot.values || {})
+    formValues.value = await hydrateDraftAttachments(formSnapshot, draft.variables || {})
     replaceMultiInstanceSelections(draft.multiInstanceUserIds)
     if (startAssignments.value.length) await searchApprovalUsers('')
   }
@@ -330,12 +326,12 @@ async function applyDraft(draft, replaceValues) {
  * @returns {Promise<void>} 草稿详情完成对象授权和附件水合后开放页面。
  */
 async function loadDraftContext() {
-  const id = routeDraftId() || draftId.value
+  const id = routeDraftId()
   if (!id) throw new Error('草稿主键不能为空')
   const response = await getProcessDraft(id)
   await applyDraft(response.data || {}, true)
-  bpmnXml.value = response.data?.bpmnXml || ''
-  if (!bpmnXml.value && processDefinitionId.value) {
+  bpmnXml.value = ''
+  if (processDefinitionId.value) {
     try {
       const xmlResponse = await getProcessBpmnXml(processDefinitionId.value)
       bpmnXml.value = xmlResponse.data || ''
@@ -537,7 +533,7 @@ async function removeDraft() {
  */
 function handleWriteError(error) {
   const subCode = String(error?.subCode || '').toUpperCase()
-  const casConflict = !subCode || ['DRAFT_VERSION_CONFLICT', 'DRAFT_CAS_CONFLICT', 'VERSION_CONFLICT', 'CAS_CONFLICT'].includes(subCode)
+  const casConflict = !subCode || ['DRAFT_VERSION_CONFLICT'].includes(subCode)
   if (Number(error?.code) === 409 && casConflict) {
     conflict.value = true
     return

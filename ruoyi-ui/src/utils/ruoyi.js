@@ -113,47 +113,12 @@ export function selectDictLabels(datas, value, separator) {
   return labels.join(currentSeparator)
 }
 
-/**
- * 按顺序使用参数替换字符串中的 %s 占位符。
- * @param {string} str 包含 %s 占位符的模板字符串。
- * @param {...unknown} args 用于替换占位符的参数。
- * @returns {string} 完整替换后的字符串；参数不足时返回空字符串。
- */
-export function sprintf(str, ...args) {
-  let flag = true, i = 1
-  str = str.replace(/%s/g, function () {
-    const arg = args[i++]
-    if (typeof arg === 'undefined') {
-      flag = false
-      return ''
-    }
-    return arg
-  })
-  return flag ? str : ''
-}
-
 // 转换字符串，undefined,null等转化为""
 export function parseStrEmpty(str) {
   if (!str || str == "undefined" || str == "null") {
     return ""
   }
   return str
-}
-
-// 数据合并
-export function mergeRecursive(source, target) {
-  for (const p in target) {
-    try {
-      if (target[p].constructor == Object) {
-        source[p] = mergeRecursive(source[p], target[p])
-      } else {
-        source[p] = target[p]
-      }
-    } catch (e) {
-      source[p] = target[p]
-    }
-  }
-  return source
 }
 
 /**

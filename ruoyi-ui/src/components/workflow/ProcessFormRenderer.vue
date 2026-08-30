@@ -148,22 +148,12 @@ function getValues() {
   return values
 }
 
-/**
- * 清除校验并恢复模板默认值。
- * @returns {void} 无返回值。
- */
-function reset() {
-  emit('update:modelValue', {})
-  rebuildModel()
-  formRef.value?.clearValidate()
-}
-
 watch(() => props.content, rebuildModel)
 watch(() => props.modelValue, rebuildModel, { deep: true })
 watch(formModel, emitModelChange, { deep: true })
 onMounted(rebuildModel)
 
-defineExpose({ ensureAttachmentsIdle, validate, getValues, reset })
+defineExpose({ ensureAttachmentsIdle, validate, getValues })
 </script>
 
 <style scoped>

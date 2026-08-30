@@ -901,30 +901,25 @@ async function promptPolicyReloadAfterConflict() {
 }
 
 /**
- * 从统一业务错误或真实 HTTP 错误响应读取受限稳定子码。
- * @param {unknown} error BusinessError 或 Axios 错误。
+ * 从统一业务错误读取受限稳定子码。
+ * @param {unknown} error BusinessError。
  * @returns {string} 合法大写机器子码，缺失或非法时返回空字符串。
  */
 function responseSubCode(error) {
-  const value = typeof error?.subCode === 'string'
-    ? error.subCode
-    : error?.response?.data?.subCode
+  const value = error?.subCode
   const normalized = typeof value === 'string' ? value.trim() : ''
   return /^[A-Z][A-Z0-9_]{0,63}$/.test(normalized) ? normalized : ''
 }
 
 /**
- * 提取后端允许展示的短错误消息，真实 HTTP 错误优先读取安全 AjaxResult.msg。
- * @param {unknown} error BusinessError 或 Axios 错误。
+ * 提取后端允许展示的短错误消息。
+ * @param {unknown} error BusinessError。
  * @param {string} fallback 后端没有稳定提示时的兜底消息。
  * @returns {string} 最多 180 个字符且不拼接请求体的用户提示。
  */
 function requestErrorMessage(error, fallback) {
-  const responseMessage = typeof error?.response?.data?.msg === 'string'
-    ? error.response.data.msg.trim()
-    : ''
   const businessMessage = typeof error?.message === 'string' ? error.message.trim() : ''
-  return (responseMessage || businessMessage || fallback).slice(0, 180)
+  return (businessMessage || fallback).slice(0, 180)
 }
 
 /**

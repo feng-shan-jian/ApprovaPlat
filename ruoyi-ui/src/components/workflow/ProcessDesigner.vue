@@ -1640,22 +1640,6 @@ function applyDesignerPreference() {
 }
 
 /**
- * 导出可被后端再次保存或部署的 BPMN XML 文件。
- * @returns {Promise<void>} 导出失败时触发 error。
- */
-async function downloadXml() {
-  if (designerLocked.value) return
-  try {
-    // 公开下载方法必须在自身边界显式标准化内部审计监听器，避免调用方绕过通用导出分支。
-    const xml = await emitPersistedXml()
-    const name = String(props.model.modelKey || 'workflow').replace(/[^A-Za-z0-9_.-]/g, '_')
-    Download.saveAs(new Blob([xml], { type: 'application/xml;charset=utf-8' }), `${name}.bpmn20.xml`)
-  } catch (error) {
-    emit('error', error)
-  }
-}
-
-/**
  * 对同一份冻结 XML 依次执行本地结构门禁、服务端门禁并交给页面真实保存。
  * @returns {Promise<void>} 校验失败时仅触发 error，不触发 save。
  */
@@ -2014,16 +1998,6 @@ onBeforeUnmount(() => {
   disposeIdentitySearchTimers()
   if (modeler) modeler.destroy()
   modeler = undefined
-})
-
-defineExpose({
-  requestSave,
-  downloadXml,
-  exportDiagram,
-  openPreview,
-  runServerValidation,
-  fitViewport,
-  getXml: () => emitPersistedXml()
 })
 </script>
 

@@ -63,7 +63,7 @@ const pendingMutations = ref(0)
 let mutationQueue = Promise.resolve()
 const fileList = computed(() => props.modelValue.map(attachment => ({
   uid: attachment.attachmentId,
-  name: attachment.originalName || attachment.name || attachment.attachmentId,
+  name: attachment.originalName || attachment.attachmentId,
   status: 'success',
   attachment
 })))
@@ -196,7 +196,6 @@ function handleExceed() {
   proxy.$modal.msgWarning(`当前字段最多上传 ${props.limit} 个附件`)
 }
 
-defineExpose({ isUploading: () => pendingMutations.value > 0 })
 </script>
 
 <style scoped>

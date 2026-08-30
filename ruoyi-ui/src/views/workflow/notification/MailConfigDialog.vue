@@ -320,7 +320,7 @@ async function sendTestMail() {
 
 /**
  * 判断请求失败是否为 SMTP 配置 revision 冲突，其他 HTTP 409 不得误导用户重新加载。
- * @param {unknown} error 统一 BusinessError 或 Axios 错误。
+ * @param {unknown} error 统一 BusinessError。
  * @returns {boolean} 后端稳定子码为 MAIL_CONFIG_REVISION_CONFLICT 时返回 true。
  */
 function isRevisionConflict(error) {
@@ -328,21 +328,19 @@ function isRevisionConflict(error) {
 }
 
 /**
- * 从统一业务错误或真实 HTTP 错误响应读取受限稳定子码。
- * @param {unknown} error BusinessError 或 Axios 错误。
+ * 从统一业务错误读取受限稳定子码。
+ * @param {unknown} error BusinessError。
  * @returns {string} 合法大写机器子码，缺失或非法时返回空字符串。
  */
 function responseSubCode(error) {
-  const value = typeof error?.subCode === 'string'
-    ? error.subCode
-    : error?.response?.data?.subCode
+  const value = error?.subCode
   const normalized = typeof value === 'string' ? value.trim() : ''
   return /^[A-Z][A-Z0-9_]{0,63}$/.test(normalized) ? normalized : ''
 }
 
 /**
  * 按稳定子码返回 SMTP 配置错误提示，认证身份变化时始终引导用户重新输入授权码。
- * @param {unknown} error BusinessError 或 Axios 错误。
+ * @param {unknown} error BusinessError。
  * @param {string} fallback 无稳定错误文本时的兜底提示。
  * @returns {string} 不包含凭据或请求体的用户提示。
  */
@@ -368,16 +366,13 @@ async function promptReloadAfterConflict() {
 
 /**
  * 从统一请求错误中提取经过后端分类的短提示，不拼接请求体或凭据。
- * @param {unknown} error BusinessError 或 Axios 错误。
+ * @param {unknown} error BusinessError。
  * @param {string} fallback 无稳定错误文本时的兜底提示。
  * @returns {string} 最多 180 个字符的用户提示。
  */
 function requestErrorMessage(error, fallback) {
-  const responseMessage = typeof error?.response?.data?.msg === 'string'
-    ? error.response.data.msg.trim()
-    : ''
   const businessMessage = typeof error?.message === 'string' ? error.message.trim() : ''
-  const message = responseMessage || businessMessage
+  const message = businessMessage
   return (message || fallback).slice(0, 180)
 }
 

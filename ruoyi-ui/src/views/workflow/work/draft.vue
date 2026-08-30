@@ -41,7 +41,7 @@
         </template>
       </el-table-column>
       <el-table-column label="更新时间" width="170">
-        <template #default="scope">{{ parseTime(scope.row.updatedTime || scope.row.updateTime) }}</template>
+        <template #default="scope">{{ parseTime(scope.row.updateTime) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="120" align="center" fixed="right">
         <template #default="scope">
@@ -134,7 +134,7 @@ function resetQuery() {
  * @returns {string} 草稿主键，不存在时为空字符串。
  */
 function draftIdOf(row) {
-  return String(row?.draftId || row?.id || '').trim()
+  return String(row?.draftId || '').trim()
 }
 
 /**
@@ -179,20 +179,17 @@ async function removeDraft(row) {
  * @returns {string} V 加版本号，未知时为短横线。
  */
 function processVersionText(row) {
-  const version = row?.version ?? row?.processDefinitionVersion ?? row?.definitionVersion
+  const version = row?.processDefinitionVersion
   return version === undefined || version === null ? '-' : `V${version}`
 }
 
 /**
  * 将服务端草稿稳定状态转换为中文标签。
  * @param {object} row 草稿列表行。
- * @returns {string} 可编辑、不可提交或已提交状态名称。
+ * @returns {string} 可编辑或不可提交状态名称。
  */
 function draftStatusLabel(row) {
-  const status = String(row?.status || 'DRAFT').toUpperCase()
-  if (status === 'SUBMITTED') return '已提交'
-  if (status === 'DELETED') return '已删除'
-  if (row?.submittable === false || ['EXPIRED', 'INVALID'].includes(status)) return '不可提交'
+  if (row?.submittable === false) return '不可提交'
   return '草稿'
 }
 
@@ -203,8 +200,7 @@ function draftStatusLabel(row) {
  */
 function draftStatusType(row) {
   const label = draftStatusLabel(row)
-  if (label === '已提交') return 'success'
-  if (label === '不可提交' || label === '已删除') return 'danger'
+  if (label === '不可提交') return 'danger'
   return 'info'
 }
 

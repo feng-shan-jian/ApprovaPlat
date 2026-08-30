@@ -590,23 +590,22 @@ async function submitAction() {
 
 /**
  * 提取不超过页面展示边界的稳定请求错误，避免把未知响应正文直接写入操作弹窗。
- * @param {unknown} error Axios 错误、统一业务错误或普通 Error。
+ * @param {unknown} error 统一业务错误或普通 Error。
  * @param {string} fallback 服务端未提供安全消息时的兜底文案。
  * @returns {string} 可供操作弹窗展示的短错误文本。
  */
 function requestErrorMessage(error, fallback) {
-  const responseMessage = String(error?.response?.data?.msg || '').trim()
   const errorMessage = typeof error?.message === 'string' ? error.message.trim() : ''
-  return (responseMessage || errorMessage || fallback).slice(0, 200)
+  return (errorMessage || fallback).slice(0, 200)
 }
 
 /**
  * 判断写动作失败是否说明当前页面对象快照已经失效。
- * @param {unknown} error 统一 BusinessError 或 Axios 传输异常。
+ * @param {unknown} error 统一 BusinessError。
  * @returns {boolean} 权限对象消失、资源不存在或状态冲突时返回 true。
  */
 function isStaleActionError(error) {
-  const code = Number(error?.code || error?.response?.data?.code || error?.response?.status)
+  const code = Number(error?.code)
   return [403, 404, 409].includes(code)
 }
 
