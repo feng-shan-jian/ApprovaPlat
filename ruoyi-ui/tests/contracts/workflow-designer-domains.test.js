@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { ref } from 'vue'
+import { createControlledLoopDomain } from '../../src/components/workflow/designer/controlledLoopDomain.js'
 import { createDesignerFormFieldCatalog } from '../../src/components/workflow/designer/designerFormFieldCatalog.js'
 import { createFormParticipantDomain } from '../../src/components/workflow/designer/formParticipantDomain.js'
+import { createParticipantRuleDomain } from '../../src/components/workflow/designer/participantRuleDomain.js'
 import { createRoutingCallActivityDomain } from '../../src/components/workflow/designer/routingCallActivityDomain.js'
 import {
   createDefaultSlaConfig,
@@ -99,6 +101,17 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
     }
   })
   const legacyFacade = createFormParticipantDomain(context)
+  const controlledLoopDomain = createControlledLoopDomain({
+    buildPropertiesExtensionElements: context.buildPropertiesExtensionElements,
+    formFieldCatalog: context.formFieldCatalog,
+    isUserTask: context.isUserTask,
+    propertyState: context.propertyState,
+    selectedBusinessObject: context.selectedBusinessObject
+  })
+  const participantRuleDomain = createParticipantRuleDomain({
+    readParticipantFormFieldOptions: () => legacyFacade.participantFormFieldOptions.value,
+    readAllFlowableProperties: context.readAllFlowableProperties
+  })
   const templateBusinessObject = {
     get(name) { return name === 'flowable:formKey' ? 'key_7' : '' },
     extensionElements: {
@@ -180,8 +193,8 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
     .map(field => field.source), ['TEMPLATE', 'TEMPLATE', 'TEMPLATE'])
   assert.deepEqual(context.formFieldCatalog.resolveElementFieldDescriptors(embeddedBusinessObject)
     .map(field => field.variable), ['approved', 'result', 'readonlyDate'])
-  assert.deepEqual(legacyFacade.describeFormalFormFields(templateBusinessObject), expectedTemplate)
-  assert.deepEqual(legacyFacade.describeFormalFormFields(embeddedBusinessObject), expectedEmbedded)
+  assert.deepEqual(controlledLoopDomain.describeFormalFormFields(templateBusinessObject), expectedTemplate)
+  assert.deepEqual(controlledLoopDomain.describeFormalFormFields(embeddedBusinessObject), expectedEmbedded)
 
   const controlledLoopState = {
     multiInstanceType: 'approvalLoop',
@@ -242,12 +255,18 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
     defaultMode: 'EDITABLE',
     permissions: new Map([['decision', 'HIDDEN']])
   })
-  assert.deepEqual(legacyFacade.resolveUserIdFieldCatalog(templateBusinessObject), [
+  assert.deepEqual(context.formFieldCatalog.resolveUserIdFieldCatalog(
+    templateBusinessObject,
+    legacyFacade.readTemplatePermissionPolicy(templateBusinessObject)
+  ), [
     { value: 'amount', label: '申请金额（amount）', eligible: true, signature: 'el-input-number' },
     { value: 'decision', label: '审批结论（decision）', eligible: false, signature: '' },
     { value: 'readonlyNote', label: '只读说明（readonlyNote）', eligible: true, signature: 'el-input' }
   ])
-  assert.deepEqual(legacyFacade.resolveUserIdFieldCatalog(embeddedBusinessObject), [
+  assert.deepEqual(context.formFieldCatalog.resolveUserIdFieldCatalog(
+    embeddedBusinessObject,
+    legacyFacade.readTemplatePermissionPolicy(embeddedBusinessObject)
+  ), [
     { value: 'approved', label: '是否通过（approved）', eligible: false, signature: '' },
     { value: 'result', label: '处理结果（result）', eligible: true, signature: 'el-select' },
     { value: 'readonlyDate', label: '只读日期（readonlyDate）', eligible: false, signature: '' }
@@ -276,17 +295,17 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   }
   const callActivity = { $type: 'bpmn:CallActivity', $parent: process }
   process.flowElements = [embeddedStart, templateTask, callActivity]
-  const rolesRule = legacyFacade.normalizeParticipantRule(
+  const rolesRule = participantRuleDomain.normalizeParticipantRule(
     { type: 'ROLES', targetIds: ['ROLE12', 'ROLE35'], formField: '' }, true)
-  assert.deepEqual(legacyFacade.participantRulePropertyItems(rolesRule, true), [
+  assert.deepEqual(participantRuleDomain.participantRulePropertyItems(rolesRule, true), [
     { name: 'approva.startScope.ruleVersion', value: '1' },
     { name: 'approva.startScope.type', value: 'ROLES' },
     { name: 'approva.startScope.targetIds', value: '12,35' },
     { name: 'approva.startScope.noMatchPolicy', value: 'FAIL' }
   ])
-  const formUserRule = legacyFacade.normalizeParticipantRule(
+  const formUserRule = participantRuleDomain.normalizeParticipantRule(
     { type: 'FORM_USER', targetIds: [], formField: 'amount' }, false)
-  const formUserProperties = legacyFacade.participantRulePropertyItems(formUserRule, false)
+  const formUserProperties = participantRuleDomain.participantRulePropertyItems(formUserRule, false)
   assert.deepEqual(formUserProperties, [
     { name: 'approva.assignment.ruleVersion', value: '1' },
     { name: 'approva.assignment.type', value: 'FORM_USER' },
@@ -294,7 +313,7 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
     { name: 'approva.assignment.formField', value: 'amount' },
     { name: 'approva.assignment.noMatchPolicy', value: 'FAIL' }
   ])
-  assert.throws(() => legacyFacade.normalizeParticipantRule(
+  assert.throws(() => participantRuleDomain.normalizeParticipantRule(
     { type: 'ROLES', targetIds: ['12'], formField: '' }, true),
     { message: '角色目录选项不合法' })
   assert.deepEqual(legacyFacade.readParticipantRule({
@@ -404,9 +423,7 @@ test('三个设计器领域按确定顺序初始化且无延迟领域引用', ()
     'resolveElementFieldDescriptors',
     'resolveUserIdFieldCatalog'
   ])
-  assert.equal(typeof formDomain.resolveUserIdFieldCatalog, 'function')
   assert.equal(routingDomain.embeddedCallFieldType('long'), 'NUMBER')
-  assert.equal(extensionDomain.formFieldOptions, context.formFieldOptions)
 })
 
 /**

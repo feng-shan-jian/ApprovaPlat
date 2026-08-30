@@ -90,8 +90,7 @@ export function createFormParticipantDomain(context) {
     updateProperties
   } = context
   const {
-    buildChanges, controlledLoopPropertyItems, describeFormalFormFields, describeTemplateFormFields,
-    readControlledLoop, resolveControlledLoopFieldOptions, resolveTemplateControlledLoopKind
+    buildChanges, readControlledLoop, resolveControlledLoopFieldOptions
   } = createControlledLoopDomain({ buildPropertiesExtensionElements, formFieldCatalog,
     isUserTask, propertyState, selectedBusinessObject })
   // 每个身份池独立防抖，不能让办理、认领和抄送资格请求相互覆盖。
@@ -116,7 +115,7 @@ export function createFormParticipantDomain(context) {
   const controlledLoopFieldOptions = computed(() => resolveControlledLoopFieldOptions())
   const participantFormFieldOptions = computed(() => resolveParticipantFormFieldOptions())
   const {
-    readParticipantRule, decorateParticipantTargets, normalizeParticipantRule,
+    readParticipantRule, normalizeParticipantRule,
     participantRulePropertyItems, validateParticipantProperties
   } = createParticipantRuleDomain({
     readParticipantFormFieldOptions: () => participantFormFieldOptions.value,
@@ -174,15 +173,6 @@ export function createFormParticipantDomain(context) {
       capability: IDENTITY_SEARCH_CONTRACTS[target].capability,
       values
     })
-  }
-
-  /**
-   * 从指定 BPMN 节点构建后端同口径的用户主键字段完整声明目录。
-   * @param {object|undefined} businessObject 开始节点或用户任务业务对象。
-   * @returns {Array<{value:string,label:string,eligible:boolean}>} 包含不合格声明的字段目录。
-   */
-  function resolveUserIdFieldCatalog(businessObject) {
-    return formFieldCatalog.resolveUserIdFieldCatalog(businessObject, readTemplatePermissionPolicy(businessObject))
   }
 
   /**
@@ -1080,19 +1070,10 @@ export function createFormParticipantDomain(context) {
     multiInstanceApprovalOptions,
     controlledLoopFieldOptions,
     participantFormFieldOptions,
-    scheduleIdentitySearch,
     handlePanelIdentitySearch,
     handlePanelIdentityResolve,
     readParticipantRule,
-    decorateParticipantTargets,
     readControlledLoop,
-    controlledLoopPropertyItems,
-    resolveControlledLoopFieldOptions,
-    describeFormalFormFields,
-    describeTemplateFormFields,
-    resolveUserIdFieldCatalog,
-    resolveParticipantFormFieldOptions,
-    resolveTemplateControlledLoopKind,
     readEmbeddedFormFields,
     isControlledMultiInstanceLoop,
     controlledMultiInstanceApprovalMode,
@@ -1100,34 +1081,20 @@ export function createFormParticipantDomain(context) {
     isConfiguredMultiInstanceLoop,
     isFixedMultiInstanceLoop,
     readFixedMultiInstanceUserIds,
-    isCanonicalJavaLongId,
     normalizeConfiguredMultiInstanceIdentity,
     readConfiguredMultiInstanceIdentity,
-    configuredMultiInstancePropertyItems,
     splitValues,
-    normalizeFormPermissionMode,
-    permissionModeFromField,
     resolveFormPermissionSourceFields,
     readTemplatePermissionPolicy,
-    rebuildFormPermissionFields,
     loadFormPermissionState,
     updateFormSource,
     updateFormKey,
     updateEmbeddedForm,
     updateFormPermissions,
-    permissionFlags,
-    validateEmbeddedFormFields,
-    createEmbeddedFormProperty,
-    createTemplatePermissionProperties,
-    syncFormDefinition,
     updateAssignment,
     updateParticipantRule,
-    normalizeParticipantRule,
-    participantRulePropertyItems,
     updateUserTaskProperties,
     updateMultiInstance,
-    updateExistingStaticMultiInstance,
-    resetControlledAssignment,
     validateParticipantProperties,
     hasEmbeddedFormFields,
     validateUserTaskMultiInstance,

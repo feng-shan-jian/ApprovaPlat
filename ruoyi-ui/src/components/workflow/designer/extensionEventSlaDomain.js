@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { createProcessUserIdFieldCatalog, eligibleUserIdFieldOptions } from './formUserFieldCatalog.js'
-import { createDefaultSlaConfig, createUserTaskSlaDomain, isUserTaskSlaProperty } from './userTaskSlaDomain.js'
+import { createUserTaskSlaDomain, isUserTaskSlaProperty } from './userTaskSlaDomain.js'
 export { createDefaultSlaConfig } from './userTaskSlaDomain.js'
 
 const BUSINESS_LISTENER_DELEGATE_EXPRESSION = '${workflowBusinessListener}'
@@ -81,7 +81,7 @@ export function createExtensionEventSlaDomain(context) {
   const slaCalendarOptions = ref([])
   const slaLoading = ref(false)
   const {
-    readSlaConfig, normalizeAndValidateSlaConfig, isBoundedSlaMinute, slaConfigToProperties
+    readSlaConfig, normalizeAndValidateSlaConfig, slaConfigToProperties
   } = createUserTaskSlaDomain({
     readSlaCalendarOptions: () => slaCalendarOptions.value,
     readEscalationEventOptions: () => escalationEventOptions.value
@@ -730,7 +730,6 @@ export function createExtensionEventSlaDomain(context) {
   return {
     extensionOptions,
     businessListenerOptions,
-    formFieldOptions,
     connectorEndpoints,
     sqlDataSources,
     extensionLoading,
@@ -742,7 +741,6 @@ export function createExtensionEventSlaDomain(context) {
     autoCopyTriggerOptions,
     autoCopyFormFieldOptions,
     readAutoCopyRules,
-    resolveAutoCopyFormFieldOptions,
     resolveAutoCopyFormFieldOptionsForBusinessObject,
     readControlledTaskExtension,
     readBusinessListeners,
@@ -755,19 +753,12 @@ export function createExtensionEventSlaDomain(context) {
     normalizeAndValidateAutoCopyRules,
     validateAutoCopyRulesForElement,
     updateAutoCopyRules,
-    updateBusinessListeners,
-    eventReferenceConfig,
     findDefinitions,
-    eventReferenceIdPart,
-    resolveEventRootReference,
     updateEventProperties,
     loadEventPropertyState,
     readSlaConfig,
     updateSlaProperties,
     normalizeAndValidateSlaConfig,
-    isBoundedSlaMinute,
-    slaConfigToProperties,
-    createDefaultSlaConfig,
     readEventReference
   }
 }
