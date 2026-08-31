@@ -358,7 +358,7 @@ public class WorkflowModelService
     }
 
     /**
-     * 修改模型名称、分类和 metaInfo，禁止改变既有模型的版本分组 key。
+     * 修改未部署模型的名称、分类和 metaInfo，禁止改变既有模型的版本分组 key。
      *
      * @param request WorkflowModelDto，模型主键和待修改元数据
      * @return 无返回值
@@ -371,6 +371,11 @@ public class WorkflowModelService
         {
             validateMetadataRequest(request);
             Model model = requireModel(modelId);
+            // 部署后的元数据属于已发布版本的不可变组成，任何变更都必须通过新模型版本完成。
+            if (isDeployed(model))
+            {
+                throw new ServiceException("已部署模型不能修改", HttpStatus.CONFLICT);
+            }
             if (hasText(request.getCategory()))
             {
                 String category = requireBoundedText(request.getCategory(), "流程分类不能为空",
