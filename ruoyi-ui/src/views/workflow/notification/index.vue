@@ -525,14 +525,14 @@ async function loadPolicies() {
       listWorkflowNotificationProcesses()
     ])
     const nextPolicies = Array.isArray(policyResponse.data) ? policyResponse.data : []
-    const nextProcesses = normalizeProcessCatalog(processResponse.data)
+    const nextProcesses = processResponse.data
     const nodeProcessKeys = [...new Set(nextPolicies
       .filter(row => row.scopeType === 'NODE' && typeof row.processDefinitionKey === 'string')
       .map(row => row.processDefinitionKey))]
     const nodeEntries = await Promise.all(nodeProcessKeys.map(async processKey => {
       try {
         const response = await listWorkflowNotificationNodes(processKey)
-        return { processKey, nodes: normalizeNodeCatalog(response.data), errorMessage: '' }
+        return { processKey, nodes: response.data, errorMessage: '' }
       } catch (error) {
         return {
           processKey,
@@ -563,40 +563,6 @@ async function loadPolicies() {
   } finally {
     if (sequence === policyLoadSequence) policyLoading.value = false
   }
-}
-
-/**
- * 规范化流程目录，只接受约定字段并去除重复流程定义 key。
- * @param {unknown} data 后端流程目录响应 data。
- * @returns {Array<object>} 可直接用于只读选择器的流程目录。
- */
-function normalizeProcessCatalog(data) {
-  if (!Array.isArray(data)) return []
-  const unique = new Map()
-  data.forEach(item => {
-    const processDefinitionKey = typeof item?.processDefinitionKey === 'string' ? item.processDefinitionKey.trim() : ''
-    const processName = typeof item?.processName === 'string' ? item.processName.trim() : ''
-    if (!processDefinitionKey || !processName || unique.has(processDefinitionKey)) return
-    unique.set(processDefinitionKey, { processDefinitionKey, processName, version: Number(item.version) || 0 })
-  })
-  return [...unique.values()]
-}
-
-/**
- * 规范化用户任务节点目录，只接受约定字段并去除重复节点 key。
- * @param {unknown} data 后端节点目录响应 data。
- * @returns {Array<object>} 当前流程可选择的真实节点目录。
- */
-function normalizeNodeCatalog(data) {
-  if (!Array.isArray(data)) return []
-  const unique = new Map()
-  data.forEach(item => {
-    const taskDefinitionKey = typeof item?.taskDefinitionKey === 'string' ? item.taskDefinitionKey.trim() : ''
-    const taskName = typeof item?.taskName === 'string' ? item.taskName.trim() : ''
-    if (!taskDefinitionKey || !taskName || unique.has(taskDefinitionKey)) return
-    unique.set(taskDefinitionKey, { taskDefinitionKey, taskName })
-  })
-  return [...unique.values()]
 }
 
 /**
@@ -715,7 +681,7 @@ async function loadDialogNodes(processDefinitionKey) {
   try {
     const response = await listWorkflowNotificationNodes(processDefinitionKey)
     if (sequence !== nodeLoadSequence || policyDialog.form.processDefinitionKey !== processDefinitionKey) return
-    nodeCatalogs.value = { ...nodeCatalogs.value, [processDefinitionKey]: normalizeNodeCatalog(response.data) }
+    nodeCatalogs.value = { ...nodeCatalogs.value, [processDefinitionKey]: response.data }
     const nextErrors = { ...nodeCatalogErrors.value }
     delete nextErrors[processDefinitionKey]
     nodeCatalogErrors.value = nextErrors

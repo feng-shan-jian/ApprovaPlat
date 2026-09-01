@@ -304,17 +304,6 @@ async function loadAudit() {
 
 
 /**
- * 从 AjaxResult 或 TableDataInfo 响应中提取正式行集合。
- * @param {object|undefined} response 后端列表接口响应。
- * @returns {Array<object>} 不存在合法集合时返回空数组。
- */
-function responseRows(response) {
-  if (Array.isArray(response?.data)) return response.data
-  if (Array.isArray(response?.rows)) return response.rows
-  return []
-}
-
-/**
  * 将页面分页筛选对象转换为后端查询参数。
  * @param {object} query 包含 pageNum、pageSize、timeRange 和领域字段的页面状态。
  * @returns {object} 拆分 beginTime/endTime 且去除空白字段的请求参数。
@@ -340,7 +329,7 @@ function resetAuditQuery() {
  */
 async function loadCalendars() {
   loading.calendars = true
-  try { calendars.value = responseRows(await listSlaCalendars()) } finally { loading.calendars = false }
+  try { calendars.value = (await listSlaCalendars()).data } finally { loading.calendars = false }
 }
 
 /**
