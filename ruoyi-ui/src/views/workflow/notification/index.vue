@@ -160,7 +160,7 @@
           </el-table-column>
           <el-table-column label="操作" width="82" align="center" fixed="right">
             <template #default="{ row }">
-              <el-tooltip v-if="canCompensate(row)" content="补偿重试" placement="top">
+              <el-tooltip v-if="canRetryOutbox && row.canCompensate === true" content="补偿重试" placement="top">
                 <el-button
                   circle
                   text
@@ -329,7 +329,6 @@ import {
 import MailConfigDialog from './MailConfigDialog.vue'
 import {
   WORKFLOW_NOTIFICATION_PERMISSIONS,
-  canCompensateNotificationOutbox,
   nodeCatalogValidationError,
   processCatalogValidationError,
   resolveNotificationInitialTab
@@ -927,12 +926,12 @@ function handleMailConfigSaved(result) {
 }
 
 /**
- * 经确认补偿当前死信，并以行级状态阻止浏览器重复提交。
+ * 经确认补偿后端明确允许的投递记录，并以行级状态阻止浏览器重复提交。
  * @param {object} row 当前脱敏 outbox 行。
  * @returns {Promise<void>} 接受补偿后只提示重新入队并刷新真实状态。
  */
 async function compensate(row) {
-  if (!canCompensate(row) || isCompensating(row.outboxId)) return
+  if (!canRetryOutbox.value || row.canCompensate !== true || isCompensating(row.outboxId)) return
   await proxy.$modal.confirm(`确认重新投递通知 ${row.outboxId} 吗？`)
   setCompensating(row.outboxId, true)
   try {
@@ -949,15 +948,6 @@ async function compensate(row) {
   } finally {
     setCompensating(row.outboxId, false)
   }
-}
-
-/**
- * 以服务端状态投影判断当前 outbox 是否允许发起补偿。
- * @param {object} row 当前脱敏 outbox 行。
- * @returns {boolean} 服务端明确允许且当前状态仍为死信时返回 true。
- */
-function canCompensate(row) {
-  return canCompensateNotificationOutbox(canRetryOutbox.value, row)
 }
 
 /**

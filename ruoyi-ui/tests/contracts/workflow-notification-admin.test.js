@@ -16,7 +16,6 @@ import {
 } from '../../src/utils/requestError.js'
 import {
   WORKFLOW_NOTIFICATION_PERMISSIONS,
-  canCompensateNotificationOutbox,
   hasMailAuthenticationIdentityChanged,
   nodeCatalogValidationError,
   normalizeMailAuthenticationIdentity,
@@ -137,7 +136,7 @@ test('SMTP 回读只投影公开字段且授权码归属只由认证身份决定
   }), true)
 })
 
-test('通知权限和死信补偿由不可变权限表、服务端投影和真实状态共同决定', () => {
+test('通知权限由不可变权限表决定并选择首个可读页签', () => {
   assert.equal(Object.isFrozen(WORKFLOW_NOTIFICATION_PERMISSIONS), true)
   assert.deepEqual(WORKFLOW_NOTIFICATION_PERMISSIONS, {
     manage: 'workflow:notification:manage',
@@ -148,12 +147,6 @@ test('通知权限和死信补偿由不可变权限表、服务端投影和真�
   const auditOnly = new Set([WORKFLOW_NOTIFICATION_PERMISSIONS.audit])
   assert.equal(resolveNotificationInitialTab(permission => auditOnly.has(permission)), 'outbox')
   assert.equal(resolveNotificationInitialTab(() => false), '')
-
-  const deadLetter = { status: 'DEAD_LETTER', canCompensate: true }
-  assert.equal(canCompensateNotificationOutbox(true, deadLetter), true)
-  assert.equal(canCompensateNotificationOutbox(false, deadLetter), false)
-  assert.equal(canCompensateNotificationOutbox(true, { ...deadLetter, status: 'RETRYING' }), false)
-  assert.equal(canCompensateNotificationOutbox(true, { ...deadLetter, canCompensate: false }), false)
 })
 
 test('策略流程和节点选择只接受授权目录且目录失败时保持失败关闭', () => {

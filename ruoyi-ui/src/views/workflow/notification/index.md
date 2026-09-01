@@ -10,7 +10,7 @@
 
 - `workflow:notification:manage`：查看、新增和编辑通知策略，同时读取当前管理员有权管理的流程与节点目录。
 - `workflow:notification:audit`：查看投递运维页签并分页查询脱敏 outbox。
-- `workflow:notification:retry`：对当前仍为 `DEAD_LETTER` 的记录发起补偿。
+- `workflow:notification:retry`：进入投递补偿操作并发起补偿请求。
 - `workflow:notification:mailManage`：查看、测试和保存 SMTP 邮件服务配置。
 
 页面按权限选择第一个可访问页签，并仅为已授权页签发出策略、outbox 或 SMTP 请求。按钮可见性改善用户体验，服务端权限是最终门禁。
@@ -43,7 +43,7 @@
 
 Outbox 使用若依标准 `rows/total` 分页响应，支持按关键字、通知场景、状态和通知方式查询。页面显示通知对象、通知方式、尝试次数、发生时间及服务端脱敏后的失败原因。
 
-补偿按钮只在同时具备 `workflow:notification:retry`、当前行状态为 `DEAD_LETTER` 且服务端返回 `canCompensate` 时显示。页面使用行级 loading 串行化点击；补偿成功仅提示“重新进入投递队列”，随后重新读取服务端状态。
+补偿按钮只由入口权限 `workflow:notification:retry` 和后端严格返回 `canCompensate === true` 共同决定。前端不再复判 `status` 或计算 `deliveryCycle`，最终业务门禁由后端原子更新负责。页面使用行级 loading 串行化点击；补偿成功仅提示“重新进入投递队列”，随后重新读取服务端状态。
 
 ## 邮件服务联动
 

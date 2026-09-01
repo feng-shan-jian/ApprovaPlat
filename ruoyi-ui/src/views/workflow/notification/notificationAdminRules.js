@@ -106,17 +106,6 @@ export function resolveNotificationInitialTab(hasPermission) {
 }
 
 /**
- * 以服务端状态投影和当前用户权限共同判断是否允许发起死信补偿。
- * @param {boolean} canRetry 当前用户是否具有补偿权限。
- * @param {object} row 当前脱敏 outbox 行。
- * @returns {boolean} 有权限、服务端明确允许且当前仍为死信时返回 true。
- */
-export function canCompensateNotificationOutbox(canRetry, row) {
-  const allowed = row?.canCompensate === true || Number(row?.canCompensate) === 1
-  return canRetry === true && allowed && row?.status === 'DEAD_LETTER'
-}
-
-/**
  * 校验流程范围必须来自当前用户有权读取的真实流程目录。
  * @param {string} scopeType DEFAULT、PROCESS 或 NODE。
  * @param {string} processDefinitionKey 当前选择的流程定义标识。
