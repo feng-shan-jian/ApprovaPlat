@@ -136,7 +136,7 @@
           <el-tooltip v-if="mode === 'claim'" content="认领任务" placement="top">
             <el-button link type="success" icon="Select" v-hasPermi="['workflow:process:claim']" @click="claim(scope.row)" />
           </el-tooltip>
-          <el-tooltip v-if="mode === 'todo' && canUnclaim(scope.row)" content="取消认领" placement="top">
+          <el-tooltip v-if="mode === 'todo' && scope.row.unclaimAllowed === true" content="取消认领" placement="top">
             <el-button link type="warning" icon="RefreshLeft" v-hasPermi="['workflow:process:claim']" @click="unclaim(scope.row)" />
           </el-tooltip>
           <el-tooltip v-if="mode === 'finished' && scope.row.revocable === true" content="撤回" placement="top">
@@ -473,17 +473,6 @@ async function claim(row) {
 async function unclaim(row) {
   await proxy.$modal.confirm(`确认取消认领任务“${row.taskName}”吗？`)
   await runListMutation(() => unclaimTask(row.taskId), '已取消任务认领')
-}
-
-/**
- * 判断待办是否由当前办理人通过 Flowable claim 真实认领。
- * @param {object} row 当前用户待办任务行。
- * @returns {boolean} 认领人与办理人一致、认领时间存在且无委派 owner 时返回 true。
- */
-function canUnclaim(row) {
-  return Boolean(row?.claimTime)
-    && String(row?.claimedById || '') === String(row?.assigneeId || '')
-    && !row?.ownerId
 }
 
 /**

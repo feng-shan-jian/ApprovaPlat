@@ -741,12 +741,8 @@ const canReturnTask = computed(() => canMoveTask.value && detail.returnAllowed =
 const canManageTask = computed(() => canMoveTask.value && !multiInstanceState.value)
 // 动态成员调整沿用普通节点移动的办理人、运行态、权限和委派门禁，并要求详情明确返回受控状态。
 const canAdjustMultiInstance = computed(() => canMoveTask.value && Boolean(multiInstanceState.value))
-// 取消认领只允许当前用户亲自认领且没有委派关系的运行中任务。
-const canUnclaim = computed(() => currentTaskOwned.value
-  && detail.processStatus === 'running'
-  && !hasDelegationContext.value
-  && String(detail.currentTask?.claimedBy || '') === currentUserId.value
-  && Boolean(detail.currentTask?.claimTime)
+// 取消认领业务能力只消费详情 API 的服务端快照，前端仅叠加入口权限。
+const canUnclaim = computed(() => detail.currentTask?.unclaimAllowed === true
   && hasPermission('workflow:process:claim'))
 // 委派办结只对当前受托人持有的 PENDING 任务开放。
 const canResolve = computed(() => currentTaskOwned.value
@@ -1725,11 +1721,10 @@ async function confirmUnclaim() {
  * @returns {boolean} 当前页面快照允许继续发起请求时返回 true。
  */
 function assertActionAllowed(type, validateInput = false) {
-  if (!['complete', 'reject', 'return', 'delegate', 'resolve', 'transfer', 'unclaim', 'resubmit'].includes(type)) {
+  if (!['complete', 'reject', 'return', 'delegate', 'resolve', 'transfer', 'resubmit'].includes(type)) {
     return denyAction('任务动作不合法')
   }
-  const requiredPermission = type === 'unclaim' ? 'workflow:process:claim'
-    : type === 'resubmit' ? 'workflow:process:start' : 'workflow:process:approval'
+  const requiredPermission = type === 'resubmit' ? 'workflow:process:start' : 'workflow:process:approval'
   if (!ready.value || loading.value) return denyAction('流程详情尚未就绪')
   if (!hasPermission(requiredPermission)) return denyAction('没有执行该操作的权限')
   if (actionBusy.value || multiInstanceBusy.value) return denyAction('任务正在处理中，请勿重复提交')
@@ -1744,7 +1739,7 @@ function assertActionAllowed(type, validateInput = false) {
   if (type === 'resolve' && !canResolve.value) {
     return denyAction('当前任务不允许完成委派')
   }
-  if (['reject', 'return', 'delegate', 'transfer', 'unclaim'].includes(type) && hasDelegationContext.value) {
+  if (['reject', 'return', 'delegate', 'transfer'].includes(type) && hasDelegationContext.value) {
     return denyAction('委派状态下不能执行该操作')
   }
   if (type === 'return' && detail.returnAllowed !== true) {
