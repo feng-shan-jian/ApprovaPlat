@@ -149,7 +149,7 @@ public class WorkflowCollaborationMessageService
             {
                 throw new ServiceException("协作消息不存在", HttpStatus.NOT_FOUND);
             }
-            if (!Set.of("RETRYING", "DEAD_LETTER").contains(row.getStatus()))
+            if (!retryAllowed(row))
             {
                 throw new ServiceException("当前消息状态不允许补偿", HttpStatus.CONFLICT);
             }
@@ -432,10 +432,32 @@ public class WorkflowCollaborationMessageService
                 && trim(a.getCorrelationKey()).equals(trim(b.getCorrelationKey()))
                 && trim(a.getTargetProcessInstanceId()).equals(trim(b.getTargetProcessInstanceId()));
     }
+    /**
+     * 统一判断入站消息当前状态是否允许人工补偿，写端门禁和查询投影必须复用此处。
+     * @param row WfCollaborationMessage，正式入站台账行
+     * @return boolean，RETRYING 或 DEAD_LETTER 时为 true
+     */
+    private boolean retryAllowed(WfCollaborationMessage row)
+    {
+        return row != null && ("RETRYING".equals(row.getStatus())
+                || "DEAD_LETTER".equals(row.getStatus()));
+    }
+
+    /**
+     * 将正式入站台账转换为脱敏管理视图，并投影唯一补偿能力判定。
+     * @param row WfCollaborationMessage，正式入站台账行
+     * @return WorkflowCollaborationMessageView，空行返回 null
+     */
     private WorkflowCollaborationMessageView toView(WfCollaborationMessage row)
     {
         if (row == null) return null;
-        return new WorkflowCollaborationMessageView(row.getMessageId(), row.getMessageName(), row.getSourceProcessDefinitionKey(), row.getTargetProcessDefinitionKey(), row.getCorrelationKey(), row.getTargetProcessInstanceId(), row.getMatchedProcessInstanceId(), row.getTargetExecutionId(), row.getSequenceNo(), row.getStatus(), row.getAttemptCount(), row.getMaxAttempts(), row.getCompensationCount(), row.getLastErrorCode(), row.getLastErrorSummary(), row.getCreateTime(), row.getNextAttemptTime(), row.getCompleteTime());
+        return new WorkflowCollaborationMessageView(row.getMessageId(), row.getMessageName(),
+                row.getSourceProcessDefinitionKey(), row.getTargetProcessDefinitionKey(),
+                row.getCorrelationKey(), row.getTargetProcessInstanceId(),
+                row.getMatchedProcessInstanceId(), row.getTargetExecutionId(), row.getSequenceNo(),
+                row.getStatus(), retryAllowed(row), row.getAttemptCount(), row.getMaxAttempts(),
+                row.getCompensationCount(), row.getLastErrorCode(), row.getLastErrorSummary(),
+                row.getCreateTime(), row.getNextAttemptTime(), row.getCompleteTime());
     }
     private String sha256(String value)
     {

@@ -35,6 +35,8 @@ public class WfCollaborationOutbox
     private Date createTime;
     private Date lastAttemptTime;
     private Date completeTime;
+    private boolean retryAllowed;
+    private boolean cancelAllowed;
 
     public String getMessageId() { return messageId; }
     public void setMessageId(String value) { messageId = value; }
@@ -96,5 +98,27 @@ public class WfCollaborationOutbox
     public void setLastAttemptTime(Date value) { lastAttemptTime = copy(value); }
     public Date getCompleteTime() { return copy(completeTime); }
     public void setCompleteTime(Date value) { completeTime = copy(value); }
+    /**
+     * 返回当前查询快照是否允许管理员补偿。
+     * @return boolean，正式 SQL 状态条件在数据库时钟下成立时为 true
+     */
+    public boolean isRetryAllowed() { return retryAllowed; }
+    /**
+     * 保存 Mapper 查询得到的补偿能力投影，不对应数据库持久化列。
+     * @param value boolean，正式 SQL 补偿条件的查询结果
+     * @return void，仅更新当前查询对象
+     */
+    public void setRetryAllowed(boolean value) { retryAllowed = value; }
+    /**
+     * 返回当前查询快照是否允许管理员取消。
+     * @return boolean，正式 SQL 状态和租约条件在数据库时钟下成立时为 true
+     */
+    public boolean isCancelAllowed() { return cancelAllowed; }
+    /**
+     * 保存 Mapper 查询得到的取消能力投影，不对应数据库持久化列。
+     * @param value boolean，正式 SQL 取消条件的查询结果
+     * @return void，仅更新当前查询对象
+     */
+    public void setCancelAllowed(boolean value) { cancelAllowed = value; }
     private Date copy(Date value) { return value == null ? null : new Date(value.getTime()); }
 }

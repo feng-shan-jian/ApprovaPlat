@@ -20,4 +20,23 @@ SendTask 在 Flowable 当前事务内登记 `wf_collaboration_outbox` 后完成�
 - `wf_collaboration_channel` 为同一目标流程和关联键分配连续序号。出站 worker 只有在所有前序消息完成或明确取消后才领取后序；接收端只消费当前期望序号，重复消息幂等返回，乱序消息持久化等待前序完成。
 - 每次登记、领取、成功、重试、死信、补偿和取消都写入 `wf_collaboration_message_audit`，并发布固定标签集合的低基数指标。
 
+## 管理动作能力快照
+
+管理列表由后端返回稳定能力字段，前端不得自行按状态数组推导。入站返回 `retryAllowed`；出站返回 `retryAllowed` 和 `cancelAllowed`。
+
+| 方向 | 状态 | `retryAllowed` | `cancelAllowed` |
+| --- | --- | --- | --- |
+| 入站 | `RECEIVED` | `false` | 不提供 |
+| 入站 | `RETRYING` | `true` | 不提供 |
+| 入站 | `DEAD_LETTER` | `true` | 不提供 |
+| 入站 | `PROCESSED` | `false` | 不提供 |
+| 出站 | `PENDING` | `false` | `true` |
+| 出站 | `RETRYING` | `false` | `true` |
+| 出站 | `DEAD_LETTER` | `true` | `true` |
+| 出站 | `DELIVERING` 且租约未过期 | `false` | `false` |
+| 出站 | `DELIVERING` 且租约已过期 | `false` | `true` |
+| 出站 | `PROCESSED` / `CANCELLED` | `false` | `false` |
+
+出站能力由正式 Mapper SQL 根据数据库状态和数据库 `current_timestamp(3)` 投影；`lease_until <= current_timestamp(3)` 视为租约已过期。能力只代表查询时快照，不能替代 Controller 权限、行锁、revision CAS、状态和租约条件更新，也不能替代审计、指标与幂等处理。补偿或取消成功后的响应必须重新查询正式状态及其能力。
+
 跨系统认证、权限隔离、变量白名单、幂等、状态和死信信息都落在正式数据库结构；通过上述全部门禁的元素标记为可执行。

@@ -16,8 +16,16 @@
     <result property="nextAttemptTime" column="next_attempt_time"/><result property="lastHttpStatus" column="last_http_status"/>
     <result property="lastErrorCode" column="last_error_code"/><result property="lastErrorSummary" column="last_error_summary"/>
     <result property="createTime" column="create_time"/><result property="lastAttemptTime" column="last_attempt_time"/><result property="completeTime" column="complete_time"/>
+    <result property="retryAllowed" column="retry_allowed"/><result property="cancelAllowed" column="cancel_allowed"/>
   </resultMap>
-  <sql id="Columns">message_id,channel_id,sequence_no,source_process_definition_key,source_process_instance_id,source_execution_id,source_element_id,message_name,target_process_definition_key,correlation_key,endpoint_id,endpoint_revision,request_path,delivery_config_json,variables_json,payload_sha256,status,attempt_count,max_attempts,compensation_count,revision_no,lease_owner,lease_until,next_attempt_time,last_http_status,last_error_code,last_error_summary,create_time,last_attempt_time,complete_time</sql>
+  <!-- 查询能力与最终写端条件必须同源；租约只使用数据库时钟，避免应用节点时钟漂移。 -->
+  <sql id="CompensateAllowedCondition">status='DEAD_LETTER'</sql>
+  <sql id="CancelAllowedCondition">(status in ('PENDING','RETRYING','DEAD_LETTER') or (status='DELIVERING' and lease_until &lt;= current_timestamp(3)))</sql>
+  <sql id="CapabilityColumns">
+    case when <include refid="CompensateAllowedCondition"/> then 1 else 0 end as retry_allowed,
+    case when <include refid="CancelAllowedCondition"/> then 1 else 0 end as cancel_allowed
+  </sql>
+  <sql id="Columns">message_id,channel_id,sequence_no,source_process_definition_key,source_process_instance_id,source_execution_id,source_element_id,message_name,target_process_definition_key,correlation_key,endpoint_id,endpoint_revision,request_path,delivery_config_json,variables_json,payload_sha256,status,attempt_count,max_attempts,compensation_count,revision_no,lease_owner,lease_until,next_attempt_time,last_http_status,last_error_code,last_error_summary,create_time,last_attempt_time,complete_time,<include refid="CapabilityColumns"/></sql>
   <sql id="ListFilters">
     <where>
       <if test="query.status != null and query.status != ''">and status=#{query.status}</if>
@@ -106,15 +114,15 @@
     set status='RETRYING',attempt_count=0,compensation_count=compensation_count+1,
         lease_owner=null,lease_until=null,next_attempt_time=current_timestamp(3),complete_time=null,
         last_error_code=null,last_error_summary=null,revision_no=revision_no+1
-    where message_id=#{messageId} and status='DEAD_LETTER' and revision_no=#{expectedRevision}
+    where message_id=#{messageId} and <include refid="CompensateAllowedCondition"/>
+      and revision_no=#{expectedRevision}
   </update>
   <update id="cancel">
     update wf_collaboration_outbox
     set status='CANCELLED',lease_owner=null,lease_until=null,complete_time=current_timestamp(3),
         revision_no=revision_no+1
     where message_id=#{messageId}
-      and (status in ('PENDING','RETRYING','DEAD_LETTER')
-        or (status='DELIVERING' and lease_until &lt;= current_timestamp(3)))
+      and <include refid="CancelAllowedCondition"/>
       and revision_no=#{expectedRevision}
   </update>
   <select id="selectRetentionIdsForUpdate" resultType="java.lang.String" timeout="10">

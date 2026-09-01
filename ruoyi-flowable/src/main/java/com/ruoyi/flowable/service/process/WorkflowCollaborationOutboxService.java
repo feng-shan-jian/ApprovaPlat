@@ -173,7 +173,8 @@ public class WorkflowCollaborationOutboxService
         if (sourceInstanceWasCancelled(candidate.getSourceProcessInstanceId()))
         {
             // 自然结束的发送方仍应完成可靠投递；只有 Flowable 明确删除的取消/终止实例停止后续网络调用。
-            if (mapper.cancel(candidate.getMessageId(), candidate.getRevisionNo()) != 1)
+            if (!candidate.isCancelAllowed()
+                    || mapper.cancel(candidate.getMessageId(), candidate.getRevisionNo()) != 1)
             {
                 throw new ServiceException("协作 outbox 源实例取消状态提交冲突", HttpStatus.CONFLICT)
                         .setSubCode("COLLAB_OUTBOX_SOURCE_CANCEL_CONFLICT");
@@ -310,8 +311,12 @@ public class WorkflowCollaborationOutboxService
         return engineOperations.writeAsCurrentUser(identity ->
         {
             WfCollaborationOutbox row = requireLocked(messageId);
-            if (!"DEAD_LETTER".equals(row.getStatus())
-                    || mapper.compensate(row.getMessageId(), row.getRevisionNo(), identity.userId()) != 1)
+            // 查询投影先给出当前事务快照能力；最终写入仍由同源 SQL 条件和 revision CAS 决定。
+            if (!row.isRetryAllowed())
+            {
+                throw new ServiceException("当前 outbox 状态不允许补偿", HttpStatus.CONFLICT);
+            }
+            if (mapper.compensate(row.getMessageId(), row.getRevisionNo(), identity.userId()) != 1)
             {
                 throw new ServiceException("当前 outbox 状态不允许补偿", HttpStatus.CONFLICT);
             }
@@ -332,6 +337,11 @@ public class WorkflowCollaborationOutboxService
         return engineOperations.writeAsCurrentUser(identity ->
         {
             WfCollaborationOutbox row = requireLocked(messageId);
+            // 过期 DELIVERING 由数据库时钟投影为可取消；最终 SQL 再次复核租约和 revision。
+            if (!row.isCancelAllowed())
+            {
+                throw new ServiceException("当前 outbox 状态不允许取消", HttpStatus.CONFLICT);
+            }
             if (mapper.cancel(row.getMessageId(), row.getRevisionNo()) != 1)
             {
                 throw new ServiceException("当前 outbox 状态不允许取消", HttpStatus.CONFLICT);
@@ -494,7 +504,8 @@ public class WorkflowCollaborationOutboxService
         return new WorkflowCollaborationOutboxView(row.getMessageId(), row.getMessageName(),
                 row.getSourceProcessDefinitionKey(), row.getSourceProcessInstanceId(),
                 row.getTargetProcessDefinitionKey(), row.getCorrelationKey(), row.getSequenceNo(),
-                row.getStatus(), row.getAttemptCount(), row.getMaxAttempts(),
+                row.getStatus(), row.isRetryAllowed(), row.isCancelAllowed(),
+                row.getAttemptCount(), row.getMaxAttempts(),
                 row.getCompensationCount(), row.getLastHttpStatus(), row.getLastErrorCode(),
                 row.getLastErrorSummary(), row.getCreateTime(), row.getNextAttemptTime(),
                 row.getCompleteTime());
