@@ -57,10 +57,10 @@
           <el-tooltip content="查看审计">
             <el-button link icon="View" aria-label="查看审计" v-hasPermi="['workflow:collaboration:audit']" @click="openAudit(scope.row)" />
           </el-tooltip>
-          <el-tooltip v-if="canRetry(scope.row)" content="重新投递">
+          <el-tooltip v-if="scope.row.retryAllowed" content="重新投递">
             <el-button link type="primary" icon="RefreshRight" aria-label="重新投递" v-hasPermi="['workflow:collaboration:retry']" @click="retryRow(scope.row)" />
           </el-tooltip>
-          <el-tooltip v-if="canCancel(scope.row)" content="取消投递">
+          <el-tooltip v-if="scope.row.cancelAllowed" content="取消投递">
             <el-button link type="danger" icon="CircleClose" aria-label="取消投递" v-hasPermi="['workflow:collaboration:cancel']" @click="cancelRow(scope.row)" />
           </el-tooltip>
         </template>
@@ -161,12 +161,6 @@ function statusMeta(status) {
 
 /** @param {string} status 状态编码。 @returns {string} 下拉框文案。 */
 function statusLabel(status) { return statusMeta(status).label }
-
-/** @param {object} row 消息行。 @returns {boolean} 当前行是否允许人工补偿。 */
-function canRetry(row) { return ['RETRYING', 'DEAD_LETTER'].includes(row.status) }
-
-/** @param {object} row 消息行。 @returns {boolean} 当前出站行是否允许取消。 */
-function canCancel(row) { return activeDirection.value === 'OUTBOUND' && ['PENDING', 'RETRYING', 'DEAD_LETTER'].includes(row.status) }
 
 /** @param {object} row 消息行。 @returns {Promise<void>} 打开并加载逐次审计。 */
 async function openAudit(row) {
