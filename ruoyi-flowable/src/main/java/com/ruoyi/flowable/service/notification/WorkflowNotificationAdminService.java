@@ -186,7 +186,8 @@ public class WorkflowNotificationAdminService
                 "outbox.max_attempts as maxAttempts,outbox.next_attempt_at as nextAttemptAt," +
                 "outbox.last_error_code as lastErrorCode," +
                 "outbox.last_error_summary as lastErrorSummary,outbox.revision," +
-                "case when outbox.status='DEAD_LETTER' then 1 else 0 end as canCompensate," +
+                "case when outbox.status='DEAD_LETTER' and outbox.delivery_cycle<65535 " +
+                "then 1 else 0 end as canCompensate," +
                 "outbox.create_time as createTime,outbox.processed_time as processedTime " +
                 "from wf_notification_outbox outbox left join sys_user user " +
                 "on user.user_id=outbox.recipient_user_id" + filter.where() +
@@ -203,6 +204,8 @@ public class WorkflowNotificationAdminService
     private Map<String, Object> sanitizeFailure(Map<String, Object> row)
     {
         LinkedHashMap<String, Object> sanitized = new LinkedHashMap<>(row);
+        // MySQL CASE 的 JDBC 返回类型由驱动决定；对外合同必须稳定收敛为 Java Boolean。
+        sanitized.put("canCompensate", booleanCapability(row.get("canCompensate")));
         String code = row.get("lastErrorCode") == null ? null
                 : String.valueOf(row.get("lastErrorCode"));
         Object originalSummary = row.get("lastErrorSummary");
@@ -223,6 +226,17 @@ public class WorkflowNotificationAdminService
         };
         sanitized.put("lastErrorSummary", summary);
         return Collections.unmodifiableMap(sanitized);
+    }
+
+    /**
+     * 将查询投影的 0/1 JDBC 数值收敛为严格布尔值，不接受字符串等非 SQL 投影类型。
+     * @param value Object，MySQL CASE 返回的 Boolean 或 Number
+     * @return Boolean，仅投影值明确为 true 或数值 1 时为 true
+     */
+    private Boolean booleanCapability(Object value)
+    {
+        if (value instanceof Boolean booleanValue) return booleanValue;
+        return value instanceof Number number && number.intValue() == 1;
     }
 
     /**

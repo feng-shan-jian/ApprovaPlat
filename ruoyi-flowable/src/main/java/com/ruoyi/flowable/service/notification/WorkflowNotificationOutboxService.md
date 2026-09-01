@@ -20,6 +20,8 @@
 - 允许 `PENDING/RETRYING -> DELIVERING`，以及 `DELIVERING -> PROCESSED/RETRYING/DEAD_LETTER`。
 - 所有完成更新使用 `outbox_id + DELIVERING + lease_owner + revision` 条件。
 - 重试使用有界次数和指数退避；永久失败或次数耗尽进入死信。
+- 运维查询仅在 `status = DEAD_LETTER && delivery_cycle < 65535` 时返回布尔型 `canCompensate=true`；该字段只是读取快照。
+- 最终补偿仍以相同状态和周期条件执行原子更新，成功后迁移为 `RETRYING`、递增 `delivery_cycle` 与 `revision`；条件不满足时返回 409 且不记录 `COMPENSATE`。
 - 无事务投递协调器持有通知 Channel 并执行外部网络调用，本服务专注于 outbox 状态迁移。
 
 ## 最小接入示例

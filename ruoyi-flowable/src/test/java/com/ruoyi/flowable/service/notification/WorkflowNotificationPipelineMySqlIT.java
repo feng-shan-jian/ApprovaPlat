@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -28,6 +29,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import javax.crypto.spec.SecretKeySpec;
 import jakarta.mail.internet.MimeMessage;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.mysql.cj.jdbc.MysqlDataSource;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.flowable.common.engine.api.FlowableException;
@@ -45,14 +49,17 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.config.WorkflowNotificationProperties;
+import com.ruoyi.flowable.domain.dto.WorkflowOperationsQuery;
 import com.ruoyi.flowable.domain.dto.WorkflowMailConfigRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowMailConfigView;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
@@ -89,6 +96,7 @@ class WorkflowNotificationPipelineMySqlIT
     private Connection isolationLockConnection;
     private WorkflowNotificationPlanner planner;
     private WorkflowNotificationWriter writer;
+    private WorkflowNotificationAdminService adminService;
     private WorkflowNotificationOutboxService outboxService;
     private WorkflowNotificationWorker worker;
     private WorkflowMailConfigService mailConfigService;
@@ -255,7 +263,7 @@ class WorkflowNotificationPipelineMySqlIT
         NotificationPlan deadLetterPlan = planTaskEvent(deadLetterSourceId);
         assertThat(write(deadLetterPlan).channelRecordCount()).isEqualTo(2);
         OutboxState deadLetterPending = loadOutbox(deadLetterSourceId);
-        forceDeadLetter(deadLetterPending.outboxId());
+        forceDeadLetter(deadLetterPending.outboxId(), deadLetterSourceId, 1);
 
         List<CompensationOutcome> outcomes = compensateConcurrently(
                 deadLetterPending.outboxId());
@@ -273,6 +281,68 @@ class WorkflowNotificationPipelineMySqlIT
         assertNull(compensated.lastErrorSummary());
         assertThat(meterRegistry.get("workflow.notification.delivery.transitions")
                 .tag("action", "COMPENSATE").counter().count()).isEqualTo(1.0d);
+    }
+
+    /**
+     * 验证真实 MySQL 查询能力与最终补偿 SQL 在 delivery_cycle 上限处完全一致：
+     * 65534 可补偿到 RETRYING/65535，65535 则返回布尔 false 且直接写入仍以原 409 合同失败关闭。
+     *
+     * @return void，能力类型、边界迁移、revision、COMPENSATE 审计或零副作用合同漂移时失败
+     */
+    @Test
+    void alignsAdminCapabilityWithAtomicCompensationCycleLimit()
+    {
+        insertTestUser();
+        insertNodePolicy(EVENT_TYPE);
+        assertThat(write(planTaskEvent(deliveredSourceId)).channelRecordCount()).isEqualTo(2);
+        assertThat(write(planTaskEvent(deadLetterSourceId)).channelRecordCount()).isEqualTo(2);
+
+        OutboxState compensatable = loadOutbox(deliveredSourceId);
+        OutboxState exhausted = loadOutbox(deadLetterSourceId);
+        forceDeadLetter(compensatable.outboxId(), deliveredSourceId, 65_534);
+        forceDeadLetter(exhausted.outboxId(), deadLetterSourceId, 65_535);
+
+        Map<String, Object> compensatableView = loadAdminOutbox(deliveredSourceId);
+        Map<String, Object> exhaustedView = loadAdminOutbox(deadLetterSourceId);
+        assertThat(compensatableView.get("canCompensate"))
+                .isEqualTo(Boolean.TRUE).isInstanceOf(Boolean.class);
+        assertThat(exhaustedView.get("canCompensate"))
+                .isEqualTo(Boolean.FALSE).isInstanceOf(Boolean.class);
+
+        Logger deliveryAuditLogger = (Logger) LoggerFactory.getLogger(
+                WorkflowNotificationOutboxService.class);
+        ListAppender<ILoggingEvent> auditAppender = new ListAppender<>();
+        auditAppender.start();
+        deliveryAuditLogger.addAppender(auditAppender);
+        try
+        {
+            OutboxState compensatableBefore = loadOutbox(deliveredSourceId);
+            outboxService.compensate(compensatableBefore.outboxId());
+            OutboxState compensated = loadOutbox(deliveredSourceId);
+            assertThat(compensated.status()).isEqualTo("RETRYING");
+            assertThat(compensated.deliveryCycle()).isEqualTo(65_535);
+            assertThat(compensated.revision()).isEqualTo(compensatableBefore.revision() + 1);
+            assertThat(countCompensationAudits(auditAppender, compensated.outboxId()))
+                    .isEqualTo(1L);
+
+            OutboxState exhaustedBefore = loadOutbox(deadLetterSourceId);
+            double metricBeforeRejection = compensationMetricCount();
+            ServiceException conflict = assertThrows(ServiceException.class,
+                    () -> outboxService.compensate(exhaustedBefore.outboxId()));
+            assertEquals(HttpStatus.CONFLICT, conflict.getCode());
+            assertEquals("NOTIFICATION_OUTBOX_STATE_CONFLICT", conflict.getSubCode());
+
+            // 写端条件未命中时事务在记录审计前终止，状态、revision、指标与结构化审计全部不变。
+            assertThat(loadOutbox(deadLetterSourceId)).isEqualTo(exhaustedBefore);
+            assertThat(compensationMetricCount()).isEqualTo(metricBeforeRejection);
+            assertThat(countCompensationAudits(auditAppender, exhaustedBefore.outboxId()))
+                    .isZero();
+        }
+        finally
+        {
+            deliveryAuditLogger.detachAppender(auditAppender);
+            auditAppender.stop();
+        }
     }
 
     /**
@@ -401,6 +471,8 @@ class WorkflowNotificationPipelineMySqlIT
                         notificationProperties, metrics, identityResolver);
         outboxService = WorkflowMySqlITSupport.transactionalProxy(
                 outboxTarget, transactionManager);
+        adminService = WorkflowMySqlITSupport.transactionalProxy(
+                new WorkflowNotificationAdminService(jdbcTemplate), transactionManager);
 
         planner = new WorkflowNotificationPlanner(jdbcTemplate,
                 mock(RuntimeService.class), mock(HistoryService.class),
@@ -632,19 +704,22 @@ class WorkflowNotificationPipelineMySqlIT
     }
 
     /**
-     * 将测试第二条 outbox 精确转换为合法 DEAD_LETTER，作为并发管理员补偿起点。
+     * 将指定测试 outbox 精确转换为合法 DEAD_LETTER，作为并发管理员补偿起点。
      *
      * @param outboxId long，当前测试独占的 outbox 主键
+     * @param sourceId String，当前测试精确来源键
+     * @param deliveryCycle int，待验证的正式投递周期
      * @return void，状态和有界尝试计数均通过真实 MySQL CHECK
      */
-    private void forceDeadLetter(long outboxId)
+    private void forceDeadLetter(long outboxId, String sourceId, int deliveryCycle)
     {
         int updated = jdbcTemplate.update("update wf_notification_outbox set "
                 + "status='DEAD_LETTER',attempt_count=max_attempts,"
                 + "total_attempt_count=max_attempts,processed_time=current_timestamp(3),"
-                + "last_error_code='SMTP_AUTH_FAILED',last_error_summary='SMTP 认证失败' "
+                + "delivery_cycle=?,last_error_code='SMTP_AUTH_FAILED',"
+                + "last_error_summary='SMTP 认证失败' "
                 + "where outbox_id=? and source_id=? and recipient_user_id=? "
-                + "and status='PENDING'", outboxId, deadLetterSourceId, testUserId);
+                + "and status='PENDING'", deliveryCycle, outboxId, sourceId, testUserId);
         assertEquals(1, updated);
     }
 
@@ -731,6 +806,51 @@ class WorkflowNotificationPipelineMySqlIT
                 sourceId, testUserId);
         assertThat(rows).singleElement();
         return rows.get(0);
+    }
+
+    /**
+     * 通过生产运维查询按随机来源键读取唯一公开 outbox 投影。
+     *
+     * @param sourceId String，当前测试精确来源键
+     * @return Map&lt;String,Object&gt;，已完成能力布尔化和失败摘要脱敏的公开行
+     */
+    private Map<String, Object> loadAdminOutbox(String sourceId)
+    {
+        PageResult<Map<String, Object>> page = adminService.listOutbox(
+                new WorkflowOperationsQuery.NotificationOutbox(
+                        null, null, null, null, sourceId, null, null),
+                1, 10);
+        assertThat(page.rows()).singleElement().satisfies(row ->
+                assertThat(row).containsEntry("sourceId", sourceId));
+        return page.rows().get(0);
+    }
+
+    /**
+     * 读取当前测试指标注册表中的 COMPENSATE 成功记录数。
+     *
+     * @return double，生产 outbox 服务实际记录的补偿迁移次数
+     */
+    private double compensationMetricCount()
+    {
+        return meterRegistry.get("workflow.notification.delivery.transitions")
+                .tag("action", "COMPENSATE").counter().count();
+    }
+
+    /**
+     * 统计指定 outbox 主键的结构化 COMPENSATE 审计日志，拒绝路径不得生成记录。
+     *
+     * @param appender ListAppender&lt;ILoggingEvent&gt;，当前用例独占的内存日志接收器
+     * @param outboxId long，待核对的测试 outbox 主键
+     * @return long，匹配该主键和 COMPENSATE 动作的审计日志数
+     */
+    private long countCompensationAudits(ListAppender<ILoggingEvent> appender, long outboxId)
+    {
+        String outboxField = "outboxId=" + outboxId;
+        return appender.list.stream().map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.contains("operation=workflowNotificationDelivery"))
+                .filter(message -> message.contains(outboxField))
+                .filter(message -> message.contains("action=COMPENSATE"))
+                .count();
     }
 
     /**
