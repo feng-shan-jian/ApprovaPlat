@@ -2,7 +2,20 @@
 
 ## 作用
 
-`WorkflowIntegrationCredentialService` 管理集成凭据的创建、轮换、吊销、Token 哈希认证、scope 校验和 Redis 分钟限流。明文 Token 只在创建或轮换响应中返回一次。
+`WorkflowIntegrationCredentialService` 管理集成凭据的创建、轮换、吊销、Token 哈希认证、scope 校验和 Redis 分钟限流。明文 Token 只在创建或轮换响应中返回一次。管理视图由服务端统一投影 `status`、`rotateAllowed` 和 `revokeAllowed`。
+
+## 状态与操作能力
+
+| 服务端事实 | `status` | `rotateAllowed` | `revokeAllowed` |
+| --- | --- | --- | --- |
+| `revokedAt != null` | `REVOKED` | `false` | `false` |
+| 未吊销且 `expiresAt == null` | `ACTIVE` | `true` | `true` |
+| 未吊销且 `expiresAt > now` | `ACTIVE` | `true` | `true` |
+| 未吊销且 `expiresAt <= now` | `EXPIRED` | `false` | `false` |
+
+吊销事实优先于到期事实。`now` 仅来自服务注入的 `Clock`；列表每次查询只取一个 `Instant`，同一响应中的所有记录共享该快照。视图投影、管理操作门禁与外部 Token 认证共用同一状态判定。
+
+`rotateAllowed` 和 `revokeAllowed` 只表示凭据当前业务状态的能力快照，不代表当前用户具有 Controller 权限，也不取代行锁、revision CAS 和写入时的最终服务端校验。吊销或到期的管理操作仍返回原有 409；外部 Token 认证对这两种状态统一返回 401，不泄露具体原因。
 
 ## 认证链路
 

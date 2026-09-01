@@ -110,8 +110,13 @@ public class WorkflowIntegrationCredentialService
      */
     public List<WorkflowIntegrationCredentialView> list()
     {
-        return engineOperations.read(() -> credentialMapper.selectList().stream()
-                .map(this::toView).toList());
+        return engineOperations.read(() ->
+        {
+            // 同一响应中的所有账号必须共享一个服务端时间快照，避免边界记录前后状态不一致。
+            Instant now = clock.instant();
+            return credentialMapper.selectList().stream()
+                    .map(credential -> toView(credential, now)).toList();
+        });
     }
 
     /**
@@ -122,7 +127,9 @@ public class WorkflowIntegrationCredentialService
     public WorkflowIntegrationCredentialSecretView create(
             WorkflowIntegrationCredentialCreateRequest request)
     {
-        NormalizedCredential normalized = normalize(request);
+        // 创建校验与响应投影共享同一时间快照，不依赖客户端或系统默认时区。
+        Instant now = clock.instant();
+        NormalizedCredential normalized = normalize(request, now);
         return engineOperations.writeAsCurrentUser(identity ->
         {
             GeneratedToken generated = generateToken();
@@ -141,7 +148,7 @@ public class WorkflowIntegrationCredentialService
                 throw new ServiceException("集成账号保存结果不完整", HttpStatus.CONFLICT);
             }
             return new WorkflowIntegrationCredentialSecretView(credential.getCredentialId(), 1,
-                    generated.plaintext(), toView(credential));
+                    generated.plaintext(), toView(credential, now));
         });
     }
 
@@ -158,10 +165,12 @@ public class WorkflowIntegrationCredentialService
         return engineOperations.writeAsCurrentUser(identity ->
         {
             WfIntegrationCredential current = requireLocked(credentialId);
-            requireActive(current);
+            // 锁定行后固定操作时间，状态门禁、到期校验和响应使用同一服务端事实。
+            Instant now = clock.instant();
+            requireActive(current, now);
             GeneratedToken generated = generateToken();
             Date expiry = request != null && request.expiresAt() != null
-                    ? validateExpiry(request.expiresAt()) : current.getExpiresAt();
+                    ? validateExpiry(request.expiresAt(), now) : current.getExpiresAt();
             current.setTokenPrefix(generated.prefix());
             current.setTokenHash(generated.hash());
             current.setExpiresAt(expiry);
@@ -172,7 +181,7 @@ public class WorkflowIntegrationCredentialService
                 throw new ServiceException("集成 Token 轮换发生并发冲突", HttpStatus.CONFLICT);
             }
             return new WorkflowIntegrationCredentialSecretView(current.getCredentialId(),
-                    current.getRevisionNo(), generated.plaintext(), toView(current));
+                    current.getRevisionNo(), generated.plaintext(), toView(current, now));
         });
     }
 
@@ -187,7 +196,7 @@ public class WorkflowIntegrationCredentialService
         engineOperations.writeAsCurrentUser(identity ->
         {
             WfIntegrationCredential current = requireLocked(credentialId);
-            requireActive(current);
+            requireActive(current, clock.instant());
             if (credentialMapper.revoke(credentialId, identity.userId()) != 1)
             {
                 throw new ServiceException("集成账号吊销发生并发冲突", HttpStatus.CONFLICT);
@@ -220,15 +229,15 @@ public class WorkflowIntegrationCredentialService
         {
             throw unauthorized();
         }
-        requireActiveForAuthentication(credential);
+        // 认证状态、限流分钟桶和最近使用时间共享同一可注入时钟快照。
+        Instant now = clock.instant();
+        requireActiveForAuthentication(credential, now);
         Set<String> scopes = split(credential.getScopes());
         if (!scopes.contains(scope))
         {
             throw new ServiceException("集成账号缺少运行事件范围", HttpStatus.FORBIDDEN)
                     .setSubCode("INTEGRATION_SCOPE_DENIED");
         }
-
-        Instant now = clock.instant();
         long count = consumeRateLimit(credential, now);
         if (count > credential.getRateLimitPerMinute())
         {
@@ -291,9 +300,11 @@ public class WorkflowIntegrationCredentialService
     /**
      * 规范化管理请求并阻止重复范围、变量名和过近到期时间。
      * @param request WorkflowIntegrationCredentialCreateRequest，外部创建请求
+     * @param now Instant，创建请求的统一服务端时间快照
      * @return NormalizedCredential，可直接落库的规范字段
      */
-    private NormalizedCredential normalize(WorkflowIntegrationCredentialCreateRequest request)
+    private NormalizedCredential normalize(WorkflowIntegrationCredentialCreateRequest request,
+            Instant now)
     {
         if (request == null)
         {
@@ -311,7 +322,8 @@ public class WorkflowIntegrationCredentialService
         {
             throw new ServiceException("集成账号限流配置不合法", HttpStatus.BAD_REQUEST);
         }
-        Date expiry = request.expiresAt() == null ? null : validateExpiry(request.expiresAt());
+        Date expiry = request.expiresAt() == null ? null
+                : validateExpiry(request.expiresAt(), now);
         return new NormalizedCredential(name, scopes, variables,
                 request.rateLimitPerMinute(), expiry);
     }
@@ -365,12 +377,13 @@ public class WorkflowIntegrationCredentialService
     /**
      * 验证到期时间至少晚于当前时间一分钟，避免建表约束边界竞态。
      * @param expiresAt OffsetDateTime，外部到期时间
+     * @param now Instant，本次业务操作的统一服务端时间快照
      * @return Date，可持久化 UTC 时刻
      */
-    private Date validateExpiry(OffsetDateTime expiresAt)
+    private Date validateExpiry(OffsetDateTime expiresAt, Instant now)
     {
         Instant instant = expiresAt.toInstant();
-        if (instant.isBefore(clock.instant().plus(MINIMUM_EXPIRY)))
+        if (instant.isBefore(now.plus(MINIMUM_EXPIRY)))
         {
             throw new ServiceException("集成 Token 到期时间必须晚于当前时间一分钟",
                     HttpStatus.BAD_REQUEST);
@@ -426,16 +439,17 @@ public class WorkflowIntegrationCredentialService
     /**
      * 校验管理操作读取到的凭据仍未吊销且未到期。
      * @param credential WfIntegrationCredential，锁定后的凭据
+     * @param now Instant，本次管理操作的服务端时间快照
      * @return void，非法状态抛出 409
      */
-    private void requireActive(WfIntegrationCredential credential)
+    private void requireActive(WfIntegrationCredential credential, Instant now)
     {
-        if (credential.getRevokedAt() != null)
+        CredentialStatus status = resolveStatus(credential, now);
+        if (status == CredentialStatus.REVOKED)
         {
             throw new ServiceException("集成账号已经吊销", HttpStatus.CONFLICT);
         }
-        if (credential.getExpiresAt() != null
-                && !credential.getExpiresAt().toInstant().isAfter(clock.instant()))
+        if (status == CredentialStatus.EXPIRED)
         {
             throw new ServiceException("集成账号已经到期", HttpStatus.CONFLICT);
         }
@@ -444,15 +458,35 @@ public class WorkflowIntegrationCredentialService
     /**
      * 校验外部认证状态并返回不泄露具体状态的 401。
      * @param credential WfIntegrationCredential，哈希已匹配的凭据
+     * @param now Instant，本次认证的服务端时间快照
      * @return void，吊销或到期时抛出统一未授权异常
      */
-    private void requireActiveForAuthentication(WfIntegrationCredential credential)
+    private void requireActiveForAuthentication(WfIntegrationCredential credential, Instant now)
     {
-        if (credential.getRevokedAt() != null || credential.getExpiresAt() != null
-                && !credential.getExpiresAt().toInstant().isAfter(clock.instant()))
+        if (resolveStatus(credential, now) != CredentialStatus.ACTIVE)
         {
             throw unauthorized();
         }
+    }
+
+    /**
+     * 依据吊销优先、到期边界闭区间的唯一规则解析账号状态。
+     * @param credential WfIntegrationCredential，待判定的正式凭据事实
+     * @param now Instant，调用方固定的服务端时间快照
+     * @return CredentialStatus，ACTIVE、EXPIRED 或 REVOKED
+     */
+    private CredentialStatus resolveStatus(WfIntegrationCredential credential, Instant now)
+    {
+        if (credential.getRevokedAt() != null)
+        {
+            return CredentialStatus.REVOKED;
+        }
+        Date expiresAt = credential.getExpiresAt();
+        if (expiresAt != null && !expiresAt.toInstant().isAfter(now))
+        {
+            return CredentialStatus.EXPIRED;
+        }
+        return CredentialStatus.ACTIVE;
     }
 
     /**
@@ -500,16 +534,20 @@ public class WorkflowIntegrationCredentialService
     /**
      * 转换为不含 Token 哈希或正文的管理视图。
      * @param credential WfIntegrationCredential，正式数据库实体
+     * @param now Instant，当前响应的服务端时间快照
      * @return WorkflowIntegrationCredentialView，脱敏视图
      */
-    private WorkflowIntegrationCredentialView toView(WfIntegrationCredential credential)
+    private WorkflowIntegrationCredentialView toView(WfIntegrationCredential credential,
+            Instant now)
     {
+        CredentialStatus status = resolveStatus(credential, now);
         return new WorkflowIntegrationCredentialView(credential.getCredentialId(),
                 credential.getCredentialName(), credential.getTokenPrefix(),
                 List.copyOf(split(credential.getScopes())),
                 List.copyOf(split(credential.getAllowedVariables())),
                 credential.getRateLimitPerMinute(), credential.getExpiresAt(),
                 credential.getRevokedAt(), credential.getRevisionNo(),
+                status.name(), status.rotateAllowed, status.revokeAllowed,
                 credential.getLastUsedAt(), credential.getCreateTime(),
                 credential.getUpdateTime());
     }
@@ -527,6 +565,31 @@ public class WorkflowIntegrationCredentialService
 
     /** 一次性 Token 生成结果。 */
     private record GeneratedToken(String plaintext, String prefix, String hash) { }
+
+    /** 集成账号服务端状态及其纯业务操作能力。 */
+    private enum CredentialStatus
+    {
+        ACTIVE(true, true),
+        EXPIRED(false, false),
+        REVOKED(false, false);
+
+        /** 当前状态是否允许轮换。 */
+        private final boolean rotateAllowed;
+        /** 当前状态是否允许吊销。 */
+        private final boolean revokeAllowed;
+
+        /**
+         * 定义状态对应的纯业务能力，不合并 Controller 用户权限。
+         * @param rotateAllowed boolean，是否允许轮换
+         * @param revokeAllowed boolean，是否允许吊销
+         * @return void，枚举常量初始化完成
+         */
+        CredentialStatus(boolean rotateAllowed, boolean revokeAllowed)
+        {
+            this.rotateAllowed = rotateAllowed;
+            this.revokeAllowed = revokeAllowed;
+        }
+    }
 
     /**
      * 通过认证后供运行事件服务使用的最小可信上下文。
