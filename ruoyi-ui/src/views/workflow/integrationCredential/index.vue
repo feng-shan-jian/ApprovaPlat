@@ -47,7 +47,7 @@
       </el-table-column>
       <el-table-column label="状态" width="94" align="center">
         <template #default="scope">
-          <el-tag :type="statusMeta(scope.row).type">{{ statusMeta(scope.row).label }}</el-tag>
+          <el-tag :type="statusMeta(scope.row.status).type">{{ statusMeta(scope.row.status).label }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="到期时间" width="172">
@@ -59,10 +59,10 @@
       <el-table-column label="操作" width="116" fixed="right" align="center">
         <template #default="scope">
           <el-tooltip content="轮换 Token">
-            <el-button link type="primary" icon="RefreshRight" aria-label="轮换 Token" :disabled="statusMeta(scope.row).value !== 'ACTIVE'" v-hasPermi="['workflow:integrationCredential:rotate']" @click="rotateToken(scope.row)" />
+            <el-button link type="primary" icon="RefreshRight" aria-label="轮换 Token" :disabled="!scope.row.rotateAllowed" v-hasPermi="['workflow:integrationCredential:rotate']" @click="rotateToken(scope.row)" />
           </el-tooltip>
           <el-tooltip content="吊销账号">
-            <el-button link type="danger" icon="CircleClose" aria-label="吊销账号" :disabled="statusMeta(scope.row).value !== 'ACTIVE'" v-hasPermi="['workflow:integrationCredential:revoke']" @click="revokeToken(scope.row)" />
+            <el-button link type="danger" icon="CircleClose" aria-label="吊销账号" :disabled="!scope.row.revokeAllowed" v-hasPermi="['workflow:integrationCredential:revoke']" @click="revokeToken(scope.row)" />
           </el-tooltip>
         </template>
       </el-table-column>
@@ -135,7 +135,7 @@ const filteredRows = computed(() => {
   const query = keyword.value.trim().toLowerCase()
   return rows.value.filter(row => {
     const matchesQuery = !query || row.credentialName.toLowerCase().includes(query) || row.tokenPrefix.toLowerCase().includes(query)
-    return matchesQuery && (!statusFilter.value || statusMeta(row).value === statusFilter.value)
+    return matchesQuery && (!statusFilter.value || row.status === statusFilter.value)
   })
 })
 let initialized = false
@@ -156,21 +156,21 @@ async function loadRows() {
   loading.value = true
   try {
     const response = await listIntegrationCredentials()
-    rows.value = Array.isArray(response.data) ? response.data : []
+    rows.value = response.data
   } finally {
     loading.value = false
   }
 }
 
 /**
- * 根据吊销和到期时间计算当前账号状态。
- * @param {object} row 后端脱敏账号行。
- * @returns {{value:string,label:string,type:string}} 表格筛选和标签共用的状态元数据。
+ * 将后端权威状态映射为表格标签展示元数据。
+ * @param {string} status 后端返回的账号状态。
+ * @returns {{label:string,type:string}} 状态对应的中文标签和颜色。
  */
-function statusMeta(row) {
-  if (row.revokedAt) return { value: 'REVOKED', label: '已吊销', type: 'danger' }
-  if (row.expiresAt && new Date(row.expiresAt).getTime() <= Date.now()) return { value: 'EXPIRED', label: '已到期', type: 'warning' }
-  return { value: 'ACTIVE', label: '有效', type: 'success' }
+function statusMeta(status) {
+  if (status === 'ACTIVE') return { label: '有效', type: 'success' }
+  if (status === 'EXPIRED') return { label: '已到期', type: 'warning' }
+  if (status === 'REVOKED') return { label: '已吊销', type: 'danger' }
 }
 
 /**
@@ -235,7 +235,7 @@ async function submitCreate() {
 
 /**
  * 经确认后原子轮换 Token，并展示一次性新正文。
- * @param {object} row 当前有效账号行。
+ * @param {object} row 当前账号行。
  * @returns {Promise<void>} 轮换成功后刷新修订号和时间。
  */
 async function rotateToken(row) {
@@ -248,7 +248,7 @@ async function rotateToken(row) {
 
 /**
  * 经确认后永久吊销账号，历史审计记录继续保留。
- * @param {object} row 当前有效账号行。
+ * @param {object} row 当前账号行。
  * @returns {Promise<void>} 吊销成功后刷新正式状态。
  */
 async function revokeToken(row) {
