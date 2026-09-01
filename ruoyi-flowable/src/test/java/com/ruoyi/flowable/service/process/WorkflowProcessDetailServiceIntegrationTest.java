@@ -1,7 +1,6 @@
 package com.ruoyi.flowable.service.process;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -44,8 +43,6 @@ import org.flowable.task.api.history.HistoricTaskInstance;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
@@ -80,6 +77,7 @@ class WorkflowProcessDetailServiceIntegrationTest
     private WorkflowProcessAccessService processAccessService;
     private WorkflowControlledLoopService controlledLoopService;
     private WorkflowMultiInstanceService multiInstanceService;
+    private WorkflowTaskLifecycleService taskLifecycleService;
     private WorkflowProcessDetailService service;
     private String deploymentId;
 
@@ -119,8 +117,9 @@ class WorkflowProcessDetailServiceIntegrationTest
         WorkflowDeploymentService deploymentService = mock(WorkflowDeploymentService.class);
         when(deploymentService.getBpmnXml(anyString())).thenReturn(BPMN);
         multiInstanceService = mock(WorkflowMultiInstanceService.class);
-        WorkflowTaskLifecycleService taskLifecycleService = mock(WorkflowTaskLifecycleService.class);
+        taskLifecycleService = mock(WorkflowTaskLifecycleService.class);
         when(taskLifecycleService.isTaskReturnAllowed(anyString())).thenReturn(false);
+        when(taskLifecycleService.isApplicationResubmitAllowed(anyString())).thenReturn(false);
         controlledLoopService = mock(WorkflowControlledLoopService.class);
         when(controlledLoopService.buildStates(anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of());
@@ -177,6 +176,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTaskForm().values().get("value").textValue())
                 .isEqualTo("root-current");
         assertThat(detail.currentTask().unclaimAllowed()).isFalse();
+        assertThat(detail.resubmitAllowed()).isFalse();
         verify(historyService).createHistoricVariableInstanceQuery();
         verify(historicVariableMapper).selectCurrentVariableMetadata(
                 eq(instance.getId()), eq(task.getId()), eq(false), eq(List.of("value")), eq(2));
@@ -252,6 +252,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTaskForm().snapshotTime()).isNotNull();
         assertThat(detail.currentTaskForm().values().get("value").textValue())
                 .isEqualTo("submitted-value");
+        assertThat(detail.resubmitAllowed()).isFalse();
         verifyNoCurrentVariableRead();
     }
 
@@ -275,8 +276,11 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTaskForm().snapshotTime()).isNull();
         assertThat(detail.currentTaskForm().values().get("startValue").textValue())
                 .isEqualTo("start-submitted");
+        assertThat(detail.resubmitAllowed()).isFalse();
         // 没有申请人局部标记的 returned 任务仍按原路径解析正式多实例 capability。
         verify(multiInstanceService).getOptionalState(active.getId());
+        verify(taskLifecycleService, never())
+                .isApplicationResubmitAllowed(anyString());
         verifyNoCurrentVariableRead();
     }
 
@@ -303,21 +307,25 @@ class WorkflowProcessDetailServiceIntegrationTest
         taskService.setAssignee(active.getId(), applicantUserId);
         taskService.setVariableLocal(active.getId(),
                 "__ruoyi_workflow_return_applicant", applicantUserId);
+        when(taskLifecycleService.isApplicationResubmitAllowed(active.getId()))
+                .thenReturn(true);
 
         WorkflowProcessDetailView detail = readDetail(
                 instance.getId(), active.getId(), "returned");
 
         assertThat(detail.multiInstanceState()).isNull();
+        assertThat(detail.resubmitAllowed()).isTrue();
         verify(multiInstanceService, never()).getOptionalState(anyString());
+        verify(taskLifecycleService).isApplicationResubmitAllowed(active.getId());
     }
 
     /**
-     * 验证临时申请人任务残留候选关系时详情失败关闭，不能把漂移任务当作可重提入口。
+     * 验证临时申请人任务残留候选关系时详情 capability 为 false，且不调用正式重提准备链。
      *
-     * @return void，候选关系漂移未返回数据一致性错误时测试失败
+     * @return void，候选关系漂移误报能力或触发正式能力查询时测试失败
      */
     @Test
-    void returnedApplicantTaskRejectsCandidateIdentityDrift()
+    void returnedApplicantTaskDisallowsCandidateIdentityDrift()
     {
         String applicantUserId = "applicant";
         processEngine.getIdentityService().setAuthenticatedUserId(applicantUserId);
@@ -336,12 +344,12 @@ class WorkflowProcessDetailServiceIntegrationTest
                 "__ruoyi_workflow_return_applicant", applicantUserId);
         taskService.addCandidateUser(active.getId(), "stale-candidate");
 
-        assertThatThrownBy(() -> readDetail(
-                instance.getId(), active.getId(), "returned"))
-                .isInstanceOfSatisfying(ServiceException.class,
-                        exception -> assertThat(exception.getCode())
-                                .isEqualTo(HttpStatus.ERROR));
-        verify(multiInstanceService, never()).getOptionalState(anyString());
+        WorkflowProcessDetailView detail = readDetail(
+                instance.getId(), active.getId(), "returned");
+
+        assertThat(detail.resubmitAllowed()).isFalse();
+        verify(taskLifecycleService, never())
+                .isApplicationResubmitAllowed(anyString());
     }
 
     /**
@@ -383,7 +391,9 @@ class WorkflowProcessDetailServiceIntegrationTest
     void noTaskAndNoFormDetailsDoNotQueryCurrentVariables()
     {
         ProcessInstance withoutTaskRequest = startMainProcess();
-        readDetail(withoutTaskRequest.getId(), null, "running");
+        WorkflowProcessDetailView noTaskDetail = readDetail(
+                withoutTaskRequest.getId(), null, "running");
+        assertThat(noTaskDetail.resubmitAllowed()).isFalse();
         verifyNoCurrentVariableRead();
 
         ProcessInstance withoutForm = startMainProcess();

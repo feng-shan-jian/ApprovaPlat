@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import tools.jackson.databind.JsonNode;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.engine.RuntimeService;
@@ -18,6 +19,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.dto.WorkflowApplicationResubmitRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
+import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
@@ -35,6 +37,10 @@ public class WorkflowApplicationResubmitApplicationService
     /** 重新提交由系统生成的稳定审计说明。 */
     private static final String RESUBMIT_AUDIT_OPINION =
             "申请人修改原表单后重新提交";
+    /** 能力投影可安全归一为 false 的既有业务状态码。 */
+    private static final Set<Integer> RESUBMIT_INELIGIBLE_STATUS_CODES = Set.of(
+            HttpStatus.BAD_REQUEST, HttpStatus.FORBIDDEN,
+            HttpStatus.NOT_FOUND, HttpStatus.CONFLICT);
 
     private final WorkflowEngineOperations engineOperations;
     private final WorkflowTaskRequestValidator requestValidator;
@@ -107,44 +113,83 @@ public class WorkflowApplicationResubmitApplicationService
         String taskId = requestValidator.requireId(request.taskId());
         engineOperations.writeAsCurrentUser(actor ->
         {
-            Task task = runtimeReader.requireActiveTask(taskId);
-            ProcessInstance instance = runtimeReader.requireActiveProcessInstance(
-                    task.getProcessInstanceId());
-            runtimeReader.requireCurrentAssignee(task, actor);
-            returnedTaskStateService.requireReturnedApplicant(taskId,
-                    instance.getId(), actor.userId());
-            MultiInstanceGroupReopenPlan groupPlan =
-                    groupTransitionService.prepareGroupReopen(
-                            task.getId(), actor.userId());
-            // 普通退回和整组退回都会冻结迁移后首审批任务配置；重提前必须先验证该快照存在。
-            ReturnedAssignmentSnapshot assignment =
-                    returnedTaskStateService.requireOrdinaryAssignment(taskId);
-            ResubmitFormPlan formPlan = prepareFormPlan(request, task, instance,
-                    actor.userId());
-            concurrencyExecutor.execute(() -> executeResubmit(task, instance,
-                    actor.userId(), assignment, groupPlan, formPlan));
+            ResubmitPreparation preparation = requireResubmitPreparation(taskId, actor);
+            ResubmitFormPlan formPlan = prepareFormPlan(
+                    request, preparation, actor.userId());
+            concurrencyExecutor.execute(() -> executeResubmit(
+                    preparation.task(), preparation.instance(), actor.userId(),
+                    preparation.assignment(), preparation.groupPlan(), formPlan));
             return null;
         });
     }
 
     /**
+     * 判断当前正式用户能否对指定申请人待修改任务执行真实重提。
+     * @param taskId String，详情页真实任务主键
+     * @return boolean，全部正式写入前置条件满足时返回 true
+     */
+    public boolean isApplicationResubmitAllowed(String taskId)
+    {
+        return engineOperations.readAsCurrentUserWithServiceExceptionHandler(actor ->
+        {
+            requireResubmitPreparation(requestValidator.requireId(taskId), actor);
+            return true;
+        }, exception ->
+        {
+            if (RESUBMIT_INELIGIBLE_STATUS_CODES.contains(exception.getCode()))
+            {
+                return false;
+            }
+            // 数据损坏和未知服务异常必须暴露给调用方，禁止把系统错误伪装为无能力。
+            throw exception;
+        });
+    }
+
+    /**
+     * 在当前事务快照内冻结写命令与能力查询共用的唯一无副作用重提准备结果。
+     * @param taskId String，已经过格式校验的申请人待修改任务主键
+     * @param actor WorkflowCurrentIdentity，事务内重新核验的正式当前身份
+     * @return ResubmitPreparation，任务、实例、办理配置、重开计划、部署表单和原提交快照
+     */
+    private ResubmitPreparation requireResubmitPreparation(String taskId,
+            WorkflowCurrentIdentity actor)
+    {
+        Task task = runtimeReader.requireActiveTask(taskId);
+        ProcessInstance instance = runtimeReader.requireActiveProcessInstance(
+                task.getProcessInstanceId());
+        runtimeReader.requireCurrentAssignee(task, actor);
+        returnedTaskStateService.requireReturnedApplicant(taskId,
+                instance.getId(), actor.userId());
+        MultiInstanceGroupReopenPlan groupPlan =
+                groupTransitionService.prepareGroupReopen(
+                        task.getId(), actor.userId());
+        // 普通退回和整组退回都会冻结迁移后首审批任务配置；重提前必须先验证该快照存在。
+        ReturnedAssignmentSnapshot assignment =
+                returnedTaskStateService.requireOrdinaryAssignment(taskId);
+        WfDeployForm startForm = requireStartFormSnapshot(task, instance);
+        WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot previous =
+                requireStartSubmissionSnapshot(instance, startForm);
+        return new ResubmitPreparation(task, instance, assignment, groupPlan,
+                startForm, previous);
+    }
+
+    /**
      * 校验开始表单快照、补丁和附件引用并冻结完整写计划。
      * @param request WorkflowApplicationResubmitRequest，重提请求
-     * @param task Task，真实申请人待修改任务
-     * @param instance ProcessInstance，真实活动实例
+     * @param preparation ResubmitPreparation，无副作用正式准备结果
      * @param applicantUserId String，流程正式发起人主键
      * @return ResubmitFormPlan，部署表单、补丁、附件和完整提交快照
      */
     private ResubmitFormPlan prepareFormPlan(WorkflowApplicationResubmitRequest request,
-            Task task, ProcessInstance instance, String applicantUserId)
+            ResubmitPreparation preparation, String applicantUserId)
     {
-        WfDeployForm startForm = requireStartFormSnapshot(task, instance);
+        WfDeployForm startForm = preparation.startForm();
         WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot previous =
-                requireStartSubmissionSnapshot(instance, startForm);
+                preparation.previousSubmission();
         WorkflowValidatedStartVariables validated = variableValidator.validatePatch(
                 startForm.getContent(), request.variables(), previous.values());
         Map<String, Object> projected = attachmentService.prepareTaskVariables(
-                applicantUserId, instance.getId(), validated.variables(),
+                applicantUserId, preparation.instance().getId(), validated.variables(),
                 validated.attachmentIdsByField());
         return new ResubmitFormPlan(startForm, validated, projected,
                 mergeStartSubmissionValues(previous.values(), projected));
@@ -333,6 +378,24 @@ public class WorkflowApplicationResubmitApplicationService
     private ServiceException dataError()
     {
         return new ServiceException("工作流对象关联数据异常", HttpStatus.ERROR);
+    }
+
+    /** 写命令和 capability 共用的无副作用正式重提准备快照。 */
+    private record ResubmitPreparation(Task task, ProcessInstance instance,
+            ReturnedAssignmentSnapshot assignment,
+            MultiInstanceGroupReopenPlan groupPlan,
+            WfDeployForm startForm,
+            WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot previousSubmission)
+    {
+        /** @return 无返回值，构造时拒绝缺失的正式重提事实。 */
+        private ResubmitPreparation
+        {
+            Objects.requireNonNull(task, "重提任务不能为空");
+            Objects.requireNonNull(instance, "重提流程实例不能为空");
+            Objects.requireNonNull(assignment, "退回办理配置不能为空");
+            Objects.requireNonNull(startForm, "部署开始表单不能为空");
+            Objects.requireNonNull(previousSubmission, "原开始提交快照不能为空");
+        }
     }
 
     /** 重提命令写入前冻结的表单、附件和完整提交快照。 */

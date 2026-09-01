@@ -221,6 +221,10 @@ public class WorkflowProcessDetailService
         // 退回入口必须由正式动作准备链投影；静态多实例、子流程和复杂执行树统一失败关闭。
         boolean returnAllowed = requestedTask != null && requestedTask.active()
                 && taskLifecycleService.isTaskReturnAllowed(requestedTask.taskId());
+        // 先用详情已识别的申请人待修改任务收窄调用，再由正式重提准备链完成全部权威重验。
+        boolean resubmitAllowed = returnedApplicantTask
+                && taskLifecycleService.isApplicationResubmitAllowed(
+                        requestedTask.taskId());
         NextUserAssignmentPolicy nextUserAssignmentPolicy = resolveNextUserAssignmentPolicy(
                 instance, requestedTask, bpmn.process());
         return new WorkflowProcessDetailView(instance.processInstanceId(), definition.getId(),
@@ -229,9 +233,9 @@ public class WorkflowProcessDetailService
                 instance.startUserId(), historyPresentation.startUserName(), startTime,
                 instance.endTime(), durationMillis, processStatus, requestedTask,
                 nextUserAssignmentPolicy.name(), multiInstanceState, returnAllowed,
-                controlledLoopStates, forms.currentTaskForm(), forms.processForms(),
-                historyPresentation.timeline(), processRelations, bpmnXml,
-                historyPresentation.viewer());
+                resubmitAllowed, controlledLoopStates, forms.currentTaskForm(),
+                forms.processForms(), historyPresentation.timeline(), processRelations,
+                bpmnXml, historyPresentation.viewer());
     }
 
     /**
@@ -278,14 +282,14 @@ public class WorkflowProcessDetailService
         {
             return false;
         }
-        // 临时待修改任务必须是申请人独占任务；残留候选关系属于持久化漂移，详情直接失败关闭。
+        // 临时待修改任务必须是申请人独占任务；残留候选关系只收窄为非重提任务，再由写门禁完整重验。
         var identityLinks = taskService.getIdentityLinksForTask(activeTask.getId());
-        if (identityLinks == null || identityLinks.stream().anyMatch(link -> link != null
-                && IdentityLinkType.CANDIDATE.equals(link.getType())))
+        if (identityLinks == null)
         {
             throw dataError("退回申请人任务候选关系异常");
         }
-        return true;
+        return identityLinks.stream().noneMatch(link -> link != null
+                && IdentityLinkType.CANDIDATE.equals(link.getType()));
     }
 
     /**

@@ -22,11 +22,12 @@ import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
  * @param startTime Instant，流程开始时间
  * @param endTime Instant，流程结束时间，运行中为空
  * @param durationMillis Long，流程耗时毫秒，运行中为空
- * @param processStatus String，running、suspended、completed、canceled、rejected 或 terminated
+ * @param processStatus String，running、returned、suspended、completed、canceled、rejected 或 terminated
  * @param currentTask WorkflowTaskAccessSnapshot，请求指定并通过关系核验的任务，允许为空
  * @param nextUserAssignmentPolicy String，DISABLED、OPTIONAL、REQUIRED_ALL 或 REQUIRED_ANY
  * @param multiInstanceState WorkflowMultiInstanceStateView，当前办理人可调整的动态多实例状态，非 MI 为 null
  * @param returnAllowed boolean，当前用户能否对请求任务执行真实退回
+ * @param resubmitAllowed boolean，当前用户能否对申请人待修改任务执行真实重提
  * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，部署循环配置、当前轮次和历史轨迹
  * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单及局部值，允许为空
  * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行节点的表单快照和值
@@ -54,6 +55,7 @@ public record WorkflowProcessDetailView(
         String nextUserAssignmentPolicy,
         WorkflowMultiInstanceStateView multiInstanceState,
         boolean returnAllowed,
+        boolean resubmitAllowed,
         List<WorkflowControlledLoopStateView> controlledLoopStates,
         WorkflowProcessFormSnapshotView currentTaskForm,
         List<WorkflowProcessFormSnapshotView> processFormList,
@@ -83,6 +85,7 @@ public record WorkflowProcessDetailView(
      * @param nextUserAssignmentPolicy String，动态下一办理人正式策略
      * @param multiInstanceState WorkflowMultiInstanceStateView，动态多实例能力和状态，允许为空
      * @param returnAllowed boolean，当前用户和执行树是否满足正式退回前置条件
+     * @param resubmitAllowed boolean，当前用户和完整准备链是否满足正式重提前置条件
      * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，受控循环状态列表
      * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单，允许为空
      * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行表单快照
@@ -111,6 +114,11 @@ public record WorkflowProcessDetailView(
         if (returnAllowed && (currentTask == null || !currentTask.active()))
         {
             throw new IllegalArgumentException("退回能力必须绑定活动任务");
+        }
+        if (resubmitAllowed && (currentTask == null || !currentTask.active()
+                || !"returned".equals(processStatus)))
+        {
+            throw new IllegalArgumentException("重提能力必须绑定 returned 活动任务");
         }
     }
 

@@ -13,7 +13,7 @@
 | `completeTask` | `WorkflowTaskCompletionApplicationService` |
 | `rejectTask` | `WorkflowTaskRejectionApplicationService` |
 | `returnTask` / `isTaskReturnAllowed` | `WorkflowTaskReturnApplicationService` |
-| `resubmitApplication` | `WorkflowApplicationResubmitApplicationService` |
+| `resubmitApplication` / `isApplicationResubmitAllowed` | `WorkflowApplicationResubmitApplicationService` |
 
 ## 事务边界
 
@@ -24,4 +24,5 @@
 ```java
 lifecycleService.completeTask(request);
 boolean revocable = lifecycleService.isProcessRevocable(instanceId, taskId);
+boolean resubmitAllowed = lifecycleService.isApplicationResubmitAllowed(taskId);
 ```

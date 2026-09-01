@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -275,6 +276,174 @@ class WorkflowTaskReturnChainIntegrationTest
                 WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE)).isNull();
         verify(attachmentService).bindTaskAttachments(APPLICANT_ID,
                 scenario.instance().getId(), resubmittedTask.getId(), "start", Map.of());
+    }
+
+    /**
+     * 验证重提 capability 对合法退回任务返回 true，且前后任务、变量、意见、附件和通知完全不变。
+     *
+     * @return void，任一正式 Flowable 状态或外部副作用发生变化时失败
+     */
+    @Test
+    void projectsApplicationResubmitCapabilityWithoutSideEffects()
+    {
+        ReturnScenario scenario = startAtSecondApproval();
+        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+                scenario.secondTask().getId(), "请补充申请信息", List.of()));
+        Task returnedTask = requireSingleTask(scenario.instance().getId(), "firstApproval");
+        currentUserId.set(APPLICANT_ID);
+
+        Map<String, Object> processVariablesBefore = runtimeService.getVariables(
+                scenario.instance().getId());
+        Map<String, Object> taskVariablesBefore = taskService.getVariablesLocal(
+                returnedTask.getId());
+        List<String> commentsBefore = taskService.getProcessInstanceComments(
+                scenario.instance().getId()).stream()
+                .map(comment -> comment.getId() + "|" + comment.getType()
+                        + "|" + comment.getFullMessage())
+                .toList();
+        List<String> identityLinksBefore = taskService.getIdentityLinksForTask(
+                returnedTask.getId()).stream()
+                .map(link -> link.getType() + "|" + link.getUserId()
+                        + "|" + link.getGroupId())
+                .toList();
+        assertThat(taskService.getTaskAttachments(returnedTask.getId())).isEmpty();
+        clearInvocations(attachmentService, notificationService);
+
+        assertThat(lifecycleService.isApplicationResubmitAllowed(
+                returnedTask.getId())).isTrue();
+
+        Task unchangedTask = requireSingleTask(
+                scenario.instance().getId(), "firstApproval");
+        assertThat(unchangedTask.getId()).isEqualTo(returnedTask.getId());
+        assertThat(unchangedTask.getAssignee()).isEqualTo(APPLICANT_ID);
+        assertThat(unchangedTask.getOwner()).isNull();
+        assertThat(unchangedTask.getDelegationState()).isNull();
+        assertThat(runtimeService.getVariables(scenario.instance().getId()))
+                .isEqualTo(processVariablesBefore);
+        assertThat(taskService.getVariablesLocal(returnedTask.getId()))
+                .isEqualTo(taskVariablesBefore);
+        assertThat(taskService.getProcessInstanceComments(
+                scenario.instance().getId()).stream()
+                .map(comment -> comment.getId() + "|" + comment.getType()
+                        + "|" + comment.getFullMessage()).toList())
+                .isEqualTo(commentsBefore);
+        assertThat(taskService.getIdentityLinksForTask(returnedTask.getId()).stream()
+                .map(link -> link.getType() + "|" + link.getUserId()
+                        + "|" + link.getGroupId()).toList())
+                .isEqualTo(identityLinksBefore);
+        assertThat(taskService.getTaskAttachments(returnedTask.getId())).isEmpty();
+        assertDoubleStatus(scenario.instance().getId(),
+                WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
+        verifyNoInteractions(attachmentService, notificationService);
+    }
+
+    /**
+     * 验证参数、不存在、普通运行、历史、非发起人和重提后的任务均投影为 false。
+     *
+     * @return void，预期 400/403/404/409 被泄漏或生命周期状态误报时失败
+     */
+    @Test
+    void normalizesExpectedResubmitIneligibilityAcrossLifecycle()
+    {
+        assertThat(lifecycleService.isApplicationResubmitAllowed(" ")).isFalse();
+        assertThat(lifecycleService.isApplicationResubmitAllowed("missing-task")).isFalse();
+
+        ReturnScenario scenario = startAtSecondApproval();
+        assertThat(lifecycleService.isApplicationResubmitAllowed(
+                scenario.secondTask().getId())).isFalse();
+        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+                scenario.secondTask().getId(), "请修改申请", List.of()));
+        Task returnedTask = requireSingleTask(scenario.instance().getId(), "firstApproval");
+
+        assertThat(lifecycleService.isApplicationResubmitAllowed(
+                scenario.secondTask().getId())).isFalse();
+        assertThat(lifecycleService.isApplicationResubmitAllowed(
+                returnedTask.getId())).isFalse();
+        currentUserId.set(APPLICANT_ID);
+        assertThat(lifecycleService.isApplicationResubmitAllowed(
+                returnedTask.getId())).isTrue();
+
+        lifecycleService.resubmitApplication(new WorkflowApplicationResubmitRequest(
+                returnedTask.getId(), Map.of("requestTitle", "再次提交")));
+        assertThat(lifecycleService.isApplicationResubmitAllowed(
+                returnedTask.getId())).isFalse();
+    }
+
+    /**
+     * 验证 owner、委派、候选、申请人标记或冻结办理配置漂移时 capability 为 false，写命令仍为 409。
+     *
+     * @param driftKind String，待注入的单一正式协议漂移类型
+     * @return void，能力误报、正式错误码变化或产生部分写副作用时失败
+     */
+    @ParameterizedTest
+    @ValueSource(strings = { "owner", "delegation", "candidate", "applicantMarker",
+            "assignment" })
+    void rejectsResubmitProtocolDriftWithoutWeakeningWriteGate(String driftKind)
+    {
+        ReturnScenario scenario = startAtSecondApproval();
+        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+                scenario.secondTask().getId(), "请修正材料", List.of()));
+        Task returnedTask = requireSingleTask(scenario.instance().getId(), "firstApproval");
+        currentUserId.set(APPLICANT_ID);
+
+        switch (driftKind)
+        {
+            case "owner" -> taskService.setOwner(returnedTask.getId(), "stale-owner");
+            case "delegation" -> taskService.delegateTask(
+                    returnedTask.getId(), APPLICANT_ID);
+            case "candidate" -> taskService.addCandidateUser(
+                    returnedTask.getId(), "stale-candidate");
+            case "applicantMarker" -> taskService.setVariableLocal(returnedTask.getId(),
+                    WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE,
+                    "wrong-applicant");
+            case "assignment" -> taskService.removeVariableLocal(returnedTask.getId(),
+                    WorkflowReturnedApplicationProtocol.RETURN_ASSIGNMENT_VARIABLE);
+            default -> throw new IllegalArgumentException("未知重提漂移类型");
+        }
+        clearInvocations(attachmentService, notificationService);
+
+        assertThat(lifecycleService.isApplicationResubmitAllowed(
+                returnedTask.getId())).isFalse();
+        assertThatThrownBy(() -> lifecycleService.resubmitApplication(
+                new WorkflowApplicationResubmitRequest(returnedTask.getId(),
+                        Map.of("requestTitle", "不应提交"))))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(taskService.getProcessInstanceComments(
+                scenario.instance().getId(), "1")).isEmpty();
+        assertThat(runtimeService.getVariable(scenario.instance().getId(), "requestTitle"))
+                .isEqualTo("原始申请");
+        verifyNoInteractions(attachmentService, notificationService);
+    }
+
+    /**
+     * 验证损坏的正式开始提交快照不会被 capability 吞成 false，而是继续暴露 500 数据错误。
+     *
+     * @return void，损坏快照被降级或查询触发表单附件副作用时失败
+     */
+    @Test
+    void propagatesDamagedSubmissionSnapshotFromResubmitCapability()
+    {
+        ReturnScenario scenario = startAtSecondApproval();
+        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+                scenario.secondTask().getId(), "请更新申请", List.of()));
+        Task returnedTask = requireSingleTask(scenario.instance().getId(), "firstApproval");
+        currentUserId.set(APPLICANT_ID);
+        runtimeService.setVariable(scenario.instance().getId(),
+                WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, "{");
+        clearInvocations(attachmentService, notificationService);
+
+        assertThatThrownBy(() -> lifecycleService.isApplicationResubmitAllowed(
+                returnedTask.getId()))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                        assertThat(exception.getCode()).isEqualTo(HttpStatus.ERROR));
+
+        assertThat(requireSingleTask(scenario.instance().getId(), "firstApproval")
+                .getId()).isEqualTo(returnedTask.getId());
+        assertThat(taskService.getProcessInstanceComments(
+                scenario.instance().getId(), "1")).isEmpty();
+        verifyNoInteractions(attachmentService, notificationService);
     }
 
     /**

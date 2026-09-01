@@ -128,6 +128,17 @@ public class WorkflowTaskLifecycleService
     }
 
     /**
+     * 委派申请人待修改任务正式重提能力判断。
+     *
+     * @param taskId String，既有活动任务主键
+     * @return boolean，当前身份与完整正式准备链允许重提时返回 true
+     */
+    public boolean isApplicationResubmitAllowed(String taskId)
+    {
+        return resubmitApplicationService.isApplicationResubmitAllowed(taskId);
+    }
+
+    /**
      * 委派当前任务正式退回能力判断。
      *
      * @param taskId String，既有活动任务主键
