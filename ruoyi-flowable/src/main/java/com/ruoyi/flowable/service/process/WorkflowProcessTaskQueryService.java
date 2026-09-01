@@ -48,6 +48,7 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.system.service.ISysUserService;
 
 /**
@@ -64,6 +65,9 @@ public class WorkflowProcessTaskQueryService
     private final ISysUserService userService;
     private final WorkflowTaskLifecycleService taskLifecycleService;
 
+    /** 待办能力、详情快照与写入门禁共享的取消认领纯规则组件。 */
+    private final WorkflowTaskUnclaimPolicy unclaimPolicy;
+
     /**
      * 创建流程任务查询服务。
      *
@@ -74,12 +78,14 @@ public class WorkflowProcessTaskQueryService
      * @param identityResolver WorkflowIdentityResolver，当前有效用户及候选组解析器
      * @param userService ISysUserService，历史发起人显示名称查询服务
      * @param taskLifecycleService WorkflowTaskLifecycleService，复用正式撤回校验计算已办能力
+     * @param unclaimPolicy WorkflowTaskUnclaimPolicy，取消认领能力纯规则组件
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessTaskQueryService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, HistoryService historyService,
             TaskService taskService, WorkflowIdentityResolver identityResolver,
-            ISysUserService userService, WorkflowTaskLifecycleService taskLifecycleService)
+            ISysUserService userService, WorkflowTaskLifecycleService taskLifecycleService,
+            WorkflowTaskUnclaimPolicy unclaimPolicy)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
@@ -88,6 +94,7 @@ public class WorkflowProcessTaskQueryService
         this.identityResolver = identityResolver;
         this.userService = userService;
         this.taskLifecycleService = taskLifecycleService;
+        this.unclaimPolicy = unclaimPolicy;
     }
 
     /**
@@ -126,7 +133,7 @@ public class WorkflowProcessTaskQueryService
             UserNameCache userNameCache = new UserNameCache();
             Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
             List<WorkflowAssignedTaskView> rows = tasks.stream()
-                    .map(task -> toAssignedView(task, contexts.get(task.getId())))
+                    .map(task -> toAssignedView(task, contexts.get(task.getId()), actor.userId()))
                     .toList();
             return new PageResult<>(rows, total);
         });
@@ -415,10 +422,21 @@ public class WorkflowProcessTaskQueryService
      *
      * @param task Task，taskAssignee 已固定当前用户的活动任务
      * @param context TaskContext，当前页批量装载并完成关系核验的任务上下文
+     * @param currentUserId String，服务端解析并固定查询范围的当前用户主键
      * @return WorkflowAssignedTaskView，活动待办视图
      */
-    private WorkflowAssignedTaskView toAssignedView(Task task, TaskContext context)
+    private WorkflowAssignedTaskView toAssignedView(Task task, TaskContext context,
+            String currentUserId)
     {
+        // 历史实例结束或删除即代表流程已离开活动态；任务本身来自 active + assignee 页查询。
+        boolean processActive = context.instance().getEndTime() == null
+                && !StringUtils.hasText(context.instance().getDeleteReason());
+        String delegationState = task.getDelegationState() == null
+                ? null : task.getDelegationState().name();
+        boolean unclaimAllowed = unclaimPolicy.isUnclaimAllowed(
+                processActive, true, task.isSuspended(), currentUserId,
+                task.getAssignee(), task.getOwner(), delegationState,
+                task.getClaimedBy(), task.getClaimTime() != null);
         return new WorkflowAssignedTaskView(task.getId(), task.getName(), task.getTaskDefinitionKey(),
                 task.getAssignee(), task.getOwner(), context.definition().getId(),
                 context.definition().getKey(), context.definition().getName(),
@@ -426,7 +444,7 @@ public class WorkflowProcessTaskQueryService
                 context.definition().getDeploymentId(), task.getProcessInstanceId(),
                 context.instance().getBusinessKey(), context.instance().getStartUserId(),
                 context.startUserName(), toInstant(task.getCreateTime()), toInstant(task.getDueDate()),
-                task.getClaimedBy(), toInstant(task.getClaimTime()));
+                task.getClaimedBy(), toInstant(task.getClaimTime()), unclaimAllowed);
     }
 
     /**

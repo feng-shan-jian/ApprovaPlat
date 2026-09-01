@@ -8,6 +8,7 @@
 
 - 实例、定义、部署、发起人、时间和稳定流程状态；
 - 请求指定的活动或历史任务快照，以及该节点部署表单快照；
+- 活动 `currentTask` 返回服务端 `unclaimAllowed` 快照；它由对象授权服务复用 `WorkflowTaskUnclaimPolicy` 计算，历史任务或无当前任务不会返回 `true`，且不替代 `workflow:process:claim` 权限及写入时重新校验；
 - 当前用户对请求任务的权威 `returnAllowed` 能力；该字段复用正式退回准备链，满足唯一 `ACTIVE` 轮次和完整实时快照的受控会签/或签可以返回 `true`，静态多实例、子流程、CallActivity、跨作用域和复杂执行树失败关闭；
 - 按实际执行顺序返回且能够由内部提交快照证明的开始节点和已完成用户任务表单；
 - 开始、用户任务、结束节点时间线，包含 `completedBy`、assignee、候选身份和受控审批意见；

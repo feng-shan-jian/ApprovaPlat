@@ -18,6 +18,7 @@ import java.time.Instant;
  * @param endTime Instant，可为空的任务结束时间
  * @param claimedBy String，可为空的真实认领用户 ID
  * @param claimTime Instant，可为空的真实认领时间
+ * @param unclaimAllowed boolean，当前服务端身份能否取消该任务的真实认领
  */
 public record WorkflowTaskAccessSnapshot(
         String taskId,
@@ -32,6 +33,7 @@ public record WorkflowTaskAccessSnapshot(
         Instant createTime,
         Instant endTime,
         String claimedBy,
-        Instant claimTime)
+        Instant claimTime,
+        boolean unclaimAllowed)
 {
 }

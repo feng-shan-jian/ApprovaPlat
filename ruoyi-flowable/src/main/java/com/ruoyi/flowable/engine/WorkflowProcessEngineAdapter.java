@@ -24,8 +24,9 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
+import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 
 /**
  * 面向 P3 任务业务服务的核心流程引擎适配器，只调用 Flowable 8 公共 API。
@@ -61,6 +62,9 @@ public class WorkflowProcessEngineAdapter
     /** 任务动作通知服务，必须与引擎写操作共享当前事务。 */
     private final WorkflowNotificationService notificationService;
 
+    /** 待办、详情与取消认领写入共享的纯规则门禁。 */
+    private final WorkflowTaskUnclaimPolicy unclaimPolicy;
+
     /**
      * 创建核心流程引擎适配器。
      *
@@ -70,12 +74,14 @@ public class WorkflowProcessEngineAdapter
      * @param engineOperations WorkflowEngineOperations，统一事务、认证和异常执行边界
      * @param identityResolver WorkflowIdentityResolver，正式用户主数据解析器
      * @param notificationService WorkflowNotificationService，任务动作事务通知服务
+     * @param unclaimPolicy WorkflowTaskUnclaimPolicy，取消认领能力纯规则组件
      * @return 无返回值，构造后由 Spring 管理该组件
      */
     public WorkflowProcessEngineAdapter(RepositoryService repositoryService, RuntimeService runtimeService,
             TaskService taskService, WorkflowEngineOperations engineOperations,
             WorkflowIdentityResolver identityResolver,
-            WorkflowNotificationService notificationService)
+            WorkflowNotificationService notificationService,
+            WorkflowTaskUnclaimPolicy unclaimPolicy)
     {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
@@ -83,6 +89,7 @@ public class WorkflowProcessEngineAdapter
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
         this.notificationService = notificationService;
+        this.unclaimPolicy = unclaimPolicy;
     }
 
     /**
@@ -130,19 +137,21 @@ public class WorkflowProcessEngineAdapter
         engineOperations.writeAsCurrentUser(actor ->
         {
             Task task = requireActiveTask(taskId);
-            requireActiveProcessInstance(task);
+            ProcessInstance processInstance = requireActiveProcessInstance(task);
             if (!actor.userId().equals(task.getAssignee()))
             {
                 throw forbidden();
             }
-            if (task.getDelegationState() != null || task.getOwner() != null)
+            String delegationState = task.getDelegationState() == null
+                    ? null : task.getDelegationState().name();
+            boolean unclaimAllowed = unclaimPolicy.isUnclaimAllowed(
+                    processInstance != null && !processInstance.isSuspended(),
+                    true, task.isSuspended(), actor.userId(), task.getAssignee(),
+                    task.getOwner(), delegationState, task.getClaimedBy(),
+                    task.getClaimTime() != null);
+            if (!unclaimAllowed)
             {
-                // 委派任务需要按 resolve/complete 语义流转，取消认领会破坏 owner 与 assignee 关系。
-                throw conflict();
-            }
-            if (!actor.userId().equals(task.getClaimedBy()) || task.getClaimTime() == null)
-            {
-                // 只有通过 claim 产生且认领元数据完整的任务才能取消认领，静态指派和转办任务保持原办理人。
+                // 403 已在办理人门禁中确定；其余委派、直接指派、元数据或生命周期漂移保持 409。
                 throw conflict();
             }
             taskService.unclaim(taskId);
@@ -409,9 +418,9 @@ public class WorkflowProcessEngineAdapter
      * 校验任务所属流程实例仍处于活动态，禁止对孤立或已挂起实例中的任务执行写动作。
      *
      * @param task Task，已经确认处于活动态的任务
-     * @return 无返回值，实例关联缺失或非活动态时抛出稳定 HTTP 409 业务异常
+     * @return ProcessInstance，重新查询且确认活动、未挂起的运行时实例
      */
-    private void requireActiveProcessInstance(Task task)
+    private ProcessInstance requireActiveProcessInstance(Task task)
     {
         String processInstanceId = task.getProcessInstanceId();
         if (!StringUtils.hasText(processInstanceId))
@@ -426,6 +435,7 @@ public class WorkflowProcessEngineAdapter
         {
             throw conflict();
         }
+        return processInstance;
     }
 
     /**

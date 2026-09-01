@@ -24,6 +24,7 @@ import java.time.Instant;
  * @param dueTime Instant，任务到期时间，允许为空
  * @param claimedById String，真实认领用户主键，直接指派或转办任务允许为空
  * @param claimTime Instant，真实认领时间，直接指派或转办任务允许为空
+ * @param unclaimAllowed boolean，当前服务端身份能否取消该任务的真实认领
  */
 public record WorkflowAssignedTaskView(
         String taskId,
@@ -44,6 +45,7 @@ public record WorkflowAssignedTaskView(
         Instant createTime,
         Instant dueTime,
         String claimedById,
-        Instant claimTime)
+        Instant claimTime,
+        boolean unclaimAllowed)
 {
 }

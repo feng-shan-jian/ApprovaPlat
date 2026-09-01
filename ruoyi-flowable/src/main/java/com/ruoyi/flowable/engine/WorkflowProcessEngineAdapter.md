@@ -2,7 +2,7 @@
 
 ## 组件简介与作用
 
-`WorkflowProcessEngineAdapter` 是 P3 任务动作 Service 调用 Flowable 8 的受控入口。它只使用 Flowable 公共 API，封装任务认领、取消认领、委派、解决委派和转办。
+`WorkflowProcessEngineAdapter` 是 P3 任务动作 Service 调用 Flowable 8 的受控入口。它只使用 Flowable 公共 API，封装任务认领、取消认领、委派、解决委派和转办。取消认领最终门禁复用 [WorkflowTaskUnclaimPolicy](../service/task/WorkflowTaskUnclaimPolicy.md)，与待办和详情能力快照保持同一规则。
 
 该组件实现引擎级身份、候选人、办理人、委派和挂起状态约束。P3 Service 负责菜单/接口权限、业务对象归属、业务状态、幂等、表单校验及业务表一致性检查。任务完成统一走 `WorkflowTaskLifecycleService.completeTask(...)`，执行表单、附件、抄送、动态下一办理人和动态多实例 revision 链。
 
@@ -36,6 +36,8 @@ Adapter 区分两类实时资格。直接办理资格 `approval` 要求 `workflo
 | 解决委派 | active、delegation=`PENDING` | 当前 delegate assignee；owner 规范、仍有效且实时具备流程办理权限 | 非 PENDING、owner 缺失/失效/无办理权限/非规范/自环或挂起为 `409`；非 assignee 为 `403` |
 | 转办 | active、owner/delegation 均为空，且不是受控动态多实例 | 当前 assignee；目标用户经正式主数据实时确认具备流程办理权限且不是本人；原认领来源在同一事务内终结 | 受控 handler 候选、已有 owner/delegation 或挂起为 `409`；非 assignee 为 `403`；无效、无办理权限或本人目标为 `400` |
 五类命令遇到运行时任务不存在均返回 `404`；Flowable 乐观锁、并发认领和非法引擎状态统一返回 `409`。当前用户已停用或删除时在任务访问前返回 `403`，任务保持原状态。认领还会在读取任务前实时核验完整 `claim` 资格；权限撤回后，历史页面提交返回 `403`，assignee 和审计保持原值。
+
+`unclaimAllowed` 只表示读取时的业务状态快照。`unclaimTaskForCurrentUser` 不信任该字段：每次提交仍在写事务中重新查询活动任务和活动流程实例，先保持“任务不存在 404、非当前 assignee 403”的原顺序，再把最新 owner、delegation、claimedBy、claimTime、挂起和生命周期事实交给共享规则；规则拒绝或并发漂移继续返回 `409`。成功后原有结构化 `UNCLAIM` comment 与 `TASK_UNCLAIMED` 事件顺序不变。
 
 委派和转办会先由任务的 `processDefinitionId` 读取流程定义 key，精确选择部署模型中的对应 `Process`，再递归读取 `SubProcess` 并同时检查多实例 `inputDataItem` 与 `collectionString`。同一 BPMN 部署包含多个 Process 时按任务的流程定义 key 精确定位归属 Process。任一字段命中固定 `${multiInstanceHandler.getUserIds(execution)}` 时都返回 `409`，包括完整动态模型和声明 handler 但白名单残缺的畸形模型。动态任务通过 `WorkflowTaskLifecycleService.completeTask` 提交服务端状态对应的 `expectedRevision`，以保证 COMPLETE 与 ADD/REMOVE 争抢同一 revision、记录前后版本并由同一事务回滚附件、抄送、表单快照和任务状态；动态成员任务的 assignee 始终由多实例运行态维护。
 

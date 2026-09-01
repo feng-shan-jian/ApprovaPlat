@@ -62,6 +62,7 @@ import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.task.WorkflowControlledLoopService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.system.service.ISysUserService;
 
 /**
@@ -175,9 +176,32 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTaskForm().taskLocal()).isFalse();
         assertThat(detail.currentTaskForm().values().get("value").textValue())
                 .isEqualTo("root-current");
+        assertThat(detail.currentTask().unclaimAllowed()).isFalse();
         verify(historyService).createHistoricVariableInstanceQuery();
         verify(historicVariableMapper).selectCurrentVariableMetadata(
                 eq(instance.getId()), eq(task.getId()), eq(false), eq(List.of("value")), eq(2));
+    }
+
+    /**
+     * 验证详情 currentTask 原样返回共享规则基于真实 claim 元数据生成的能力。
+     *
+     * @return void，真实认领任务未在详情中返回 unclaimAllowed=true 时测试失败
+     */
+    @Test
+    void returnsUnclaimCapabilityOnCurrentTaskSnapshot()
+    {
+        ProcessInstance instance = startMainProcess();
+        Task task = activeTask(instance.getId(), "globalTask");
+        // 测试夹具先清除 BPMN 静态分配，再通过 Flowable 公共 claim 形成完整真实认领元数据。
+        taskService.unclaim(task.getId());
+        taskService.claim(task.getId(), "approver");
+
+        WorkflowProcessDetailView detail = readDetail(
+                instance.getId(), task.getId(), "running");
+
+        assertThat(detail.currentTask().claimedBy()).isEqualTo("approver");
+        assertThat(detail.currentTask().claimTime()).isNotNull();
+        assertThat(detail.currentTask().unclaimAllowed()).isTrue();
     }
 
     /**
@@ -520,15 +544,32 @@ class WorkflowProcessDetailServiceIntegrationTest
             HistoricTaskInstance historicTask = processEngine.getHistoryService()
                     .createHistoricTaskInstanceQuery().taskId(taskId).singleResult();
             Task activeTask = taskService.createTaskQuery().taskId(taskId).singleResult();
+            String assignee = activeTask == null
+                    ? historicTask.getAssignee() : activeTask.getAssignee();
+            String owner = activeTask == null
+                    ? historicTask.getOwner() : activeTask.getOwner();
+            String delegationState = activeTask == null || activeTask.getDelegationState() == null
+                    ? null : activeTask.getDelegationState().name();
+            String claimedBy = activeTask == null
+                    ? historicTask.getClaimedBy() : activeTask.getClaimedBy();
+            Date claimTime = activeTask == null
+                    ? historicTask.getClaimTime() : activeTask.getClaimTime();
+            boolean processActive = runtimeService.createProcessInstanceQuery()
+                    .processInstanceId(processInstanceId).active().count() == 1;
+            boolean unclaimAllowed = activeTask != null
+                    && new WorkflowTaskUnclaimPolicy().isUnclaimAllowed(
+                            processActive, true, activeTask.isSuspended(), "approver",
+                            assignee, owner, delegationState, claimedBy, claimTime != null);
             when(processAccessService.requireReadableTask(taskId)).thenReturn(
                     new WorkflowTaskAccessSnapshot(taskId, processInstanceId,
-                            definition.getId(), historicTask.getTaskDefinitionKey(),
-                            historicTask.getName(), historicTask.getAssignee(),
-                            historicTask.getOwner(), null, activeTask != null,
-                            historicTask.getCreateTime().toInstant(),
-                            historicTask.getEndTime() == null ? null
-                                    : historicTask.getEndTime().toInstant(),
-                            null, null));
+                             definition.getId(), historicTask.getTaskDefinitionKey(),
+                             historicTask.getName(), assignee,
+                             owner, delegationState, activeTask != null,
+                             historicTask.getCreateTime().toInstant(),
+                             historicTask.getEndTime() == null ? null
+                                     : historicTask.getEndTime().toInstant(),
+                             claimedBy, claimTime == null ? null : claimTime.toInstant(),
+                             unclaimAllowed));
         }
         return service.getDetail(new WorkflowProcessDetailQueryDto(processInstanceId, taskId));
     }

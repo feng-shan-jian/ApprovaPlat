@@ -22,6 +22,7 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
+import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.framework.web.service.PermissionService;
 
 /**
@@ -59,6 +60,9 @@ public class WorkflowProcessAccessService
 
     private final PermissionService permissionService;
 
+    /** 详情任务能力与取消认领写入共享的纯规则组件。 */
+    private final WorkflowTaskUnclaimPolicy unclaimPolicy;
+
     /**
      * 创建工作流对象级授权服务。
      *
@@ -69,12 +73,14 @@ public class WorkflowProcessAccessService
      * @param identityResolver WorkflowIdentityResolver，当前有效用户及候选组解析器
      * @param copyMapper WfCopyMapper，正式抄送记录查询 Mapper
      * @param permissionService PermissionService，Token 权限与当前正式主数据的统一复核服务
+     * @param unclaimPolicy WorkflowTaskUnclaimPolicy，取消认领能力纯规则组件
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowProcessAccessService(HistoryService historyService,
             RuntimeService runtimeService, TaskService taskService,
             WorkflowEngineOperations engineOperations, WorkflowIdentityResolver identityResolver,
-            WfCopyMapper copyMapper, PermissionService permissionService)
+            WfCopyMapper copyMapper, PermissionService permissionService,
+            WorkflowTaskUnclaimPolicy unclaimPolicy)
     {
         this.historyService = historyService;
         this.runtimeService = runtimeService;
@@ -83,6 +89,7 @@ public class WorkflowProcessAccessService
         this.identityResolver = identityResolver;
         this.copyMapper = copyMapper;
         this.permissionService = permissionService;
+        this.unclaimPolicy = unclaimPolicy;
     }
 
     /**
@@ -139,7 +146,12 @@ public class WorkflowProcessAccessService
                 {
                     throw forbidden();
                 }
-                return toTaskSnapshot(activeTask);
+                ProcessInstance runtimeInstance = runtimeService.createProcessInstanceQuery()
+                        .processInstanceId(activeTask.getProcessInstanceId())
+                        .singleResult();
+                // 运行时实例缺失或挂起时仍允许按对象关系只读，但取消认领能力必须失败关闭。
+                boolean processActive = runtimeInstance != null && !runtimeInstance.isSuspended();
+                return toTaskSnapshot(activeTask, actor.userId(), processActive);
             }
 
             HistoricTaskInstance historicTask = historyService.createHistoricTaskInstanceQuery()
@@ -387,12 +399,19 @@ public class WorkflowProcessAccessService
     /**
      * 将 Flowable 活动任务转换为不可变授权快照。
      *
-     * @param task Task，已完成对象授权校验的活动任务
+     * @param task Task，已完成对象授权校验的运行时任务
+     * @param currentUserId String，服务端解析的当前用户主键
+     * @param processActive boolean，任务所属运行时实例是否仍活动且未挂起
      * @return WorkflowTaskAccessSnapshot，活动态任务快照
      */
-    private WorkflowTaskAccessSnapshot toTaskSnapshot(Task task)
+    private WorkflowTaskAccessSnapshot toTaskSnapshot(Task task, String currentUserId,
+            boolean processActive)
     {
         String delegationState = task.getDelegationState() == null ? null : task.getDelegationState().name();
+        boolean unclaimAllowed = unclaimPolicy.isUnclaimAllowed(
+                processActive, true, task.isSuspended(), currentUserId,
+                task.getAssignee(), task.getOwner(), delegationState,
+                task.getClaimedBy(), task.getClaimTime() != null);
         return new WorkflowTaskAccessSnapshot(
                 task.getId(),
                 task.getProcessInstanceId(),
@@ -406,7 +425,8 @@ public class WorkflowProcessAccessService
                 toInstant(task.getCreateTime()),
                 null,
                 task.getClaimedBy(),
-                toInstant(task.getClaimTime()));
+                toInstant(task.getClaimTime()),
+                unclaimAllowed);
     }
 
     /**
@@ -430,7 +450,8 @@ public class WorkflowProcessAccessService
                 toInstant(task.getCreateTime()),
                 toInstant(task.getEndTime()),
                 task.getClaimedBy(),
-                toInstant(task.getClaimTime()));
+                toInstant(task.getClaimTime()),
+                false);
     }
 
     /**

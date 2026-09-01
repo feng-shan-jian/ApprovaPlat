@@ -30,8 +30,10 @@
 ### `requireReadableTask(taskId)`
 
 - 入参：Flowable 活动或历史任务 ID。
-- 返回：`WorkflowTaskAccessSnapshot` 不可变任务快照。
+- 返回：`WorkflowTaskAccessSnapshot` 不可变任务快照；其中 `unclaimAllowed` 使用当前服务端身份、运行时实例、任务挂起状态和真实认领元数据交给 `WorkflowTaskUnclaimPolicy` 计算。
 - 异常：空参数返回业务码 400；任务不存在返回 404；无对象权限返回 403；任务与实例内部关联损坏返回 500。
+
+活动详情会在同一只读事务内重新读取任务所属运行时实例。实例缺失或挂起、任务挂起、当前身份不是 assignee、owner/delegation 存在、claimedBy 不匹配或 claimTime 缺失时，`unclaimAllowed=false`；历史任务固定为 `false`。该字段不替代 Controller 的 `workflow:process:claim` 权限，也不替代取消认领写事务的最终校验。
 
 ## 最小接入示例
 

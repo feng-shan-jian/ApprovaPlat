@@ -26,13 +26,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.core.page.PageResult;
+import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
+import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
 import com.ruoyi.flowable.domain.vo.WorkflowAssignedTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowClaimableTaskView;
 import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
+import com.ruoyi.framework.web.service.PermissionService;
 import com.ruoyi.system.service.ISysUserService;
 
 /**
@@ -52,6 +57,7 @@ class WorkflowProcessTaskContextIntegrationTest
     private RuntimeService runtimeService;
     private TaskService taskService;
     private WorkflowTaskLifecycleService taskLifecycleService;
+    private WorkflowProcessAccessService processAccessService;
     private WorkflowProcessTaskQueryService service;
 
     /**
@@ -89,10 +95,14 @@ class WorkflowProcessTaskContextIntegrationTest
         currentUser.setNickName("当前用户");
         when(userService.selectUserById(Long.valueOf(CURRENT_USER_ID))).thenReturn(currentUser);
         taskLifecycleService = mock(WorkflowTaskLifecycleService.class);
+        WorkflowTaskUnclaimPolicy unclaimPolicy = new WorkflowTaskUnclaimPolicy();
 
         service = new WorkflowProcessTaskQueryService(engineOperations, repositoryService,
                 historyService, taskService, identityResolver, userService,
-                taskLifecycleService);
+                taskLifecycleService, unclaimPolicy);
+        processAccessService = new WorkflowProcessAccessService(historyService,
+                runtimeService, taskService, engineOperations, identityResolver,
+                mock(WfCopyMapper.class), mock(PermissionService.class), unclaimPolicy);
     }
 
     /**
@@ -135,6 +145,33 @@ class WorkflowProcessTaskContextIntegrationTest
         assertAssignedRow(page, hrInstance, hrDefinition,
                 hrDeployment, "hr", "HR-1001");
         verifyOneAssociationQueryPerType();
+    }
+
+    /**
+     * 验证同一真实 claim 任务在待办行和详情 currentTask 来源快照中返回一致能力。
+     *
+     * @return void，列表与详情能力字段发生分叉时测试失败
+     */
+    @Test
+    void keepsAssignedListAndDetailTaskSnapshotUnclaimCapabilityConsistent()
+    {
+        deploy("claim", "consistentUnclaim", "取消认领一致性",
+                "flowable:candidateUsers=\"100\"");
+        ProcessInstance instance = start("consistentUnclaim", "UNCLAIM-1001");
+        Task task = taskService.createTaskQuery()
+                .processInstanceId(instance.getId()).singleResult();
+        taskService.claim(task.getId(), CURRENT_USER_ID);
+
+        PageResult<WorkflowAssignedTaskView> page = service.listAssigned(null, 1, 20);
+        WorkflowAssignedTaskView assignedRow = page.rows().stream()
+                .filter(row -> task.getId().equals(row.taskId()))
+                .findFirst().orElseThrow();
+        WorkflowTaskAccessSnapshot detailTask = processAccessService.requireReadableTask(
+                task.getId());
+
+        assertThat(assignedRow.unclaimAllowed()).isTrue();
+        assertThat(detailTask.unclaimAllowed()).isTrue();
+        assertThat(assignedRow.unclaimAllowed()).isEqualTo(detailTask.unclaimAllowed());
     }
 
     /**
@@ -312,6 +349,7 @@ class WorkflowProcessTaskContextIntegrationTest
                     assertThat(row.startUserId()).isEqualTo(CURRENT_USER_ID);
                     assertThat(row.startUserName()).isEqualTo("当前用户");
                     assertThat(row.assigneeId()).isEqualTo(CURRENT_USER_ID);
+                    assertThat(row.unclaimAllowed()).isFalse();
                 });
     }
 

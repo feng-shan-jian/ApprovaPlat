@@ -10,7 +10,7 @@
 
 | 方法 | 调用入口 | 返回与约束 |
 | --- | --- | --- |
-| `listAssigned(filter, pageNum, pageSize)` | `GET /workflow/process/todoList` 及 `POST /workflow/process/todoExport` | 当前用户作为 assignee 的活动任务 |
+| `listAssigned(filter, pageNum, pageSize)` | `GET /workflow/process/todoList` 及 `POST /workflow/process/todoExport` | 当前用户作为 assignee 的活动任务；每行返回服务端 `unclaimAllowed` 快照 |
 | `listClaimable(filter, pageNum, pageSize)` | `GET /workflow/process/claimList` 及 `POST /workflow/process/claimExport` | 当前用户或其有效 ROLE/DEPT 候选组可认领且尚未分配的任务 |
 | `listCompleted(filter, pageNum, pageSize)` | `GET /workflow/process/finishedList` | `completedBy` 为当前用户的历史任务，并计算正式撤回能力 |
 | `listCompletedForExport(filter, pageNum, pageSize)` | `POST /workflow/process/finishedExport` | 与已办列表使用相同身份、筛选和分页口径，并直接生成 Excel 所需字段 |
@@ -28,10 +28,12 @@
 | `WorkflowIdentityResolver` | 解析当前用户、ROLE/DEPT 候选组及实时认领资格 |
 | `ISysUserService` | 解析历史发起人的当前显示名称 |
 | `WorkflowTaskLifecycleService` | 复用正式撤回准备路径计算已办列表的 `revocable` 能力 |
+| `WorkflowTaskUnclaimPolicy` | 复用详情和写入端同一取消认领纯规则 |
 
 ## 关键设计
 
 - 每个非空任务页分别以一次定义查询、一次历史实例查询和一次部署查询批量装载完整上下文，视图转换直接消费该批次快照。
+- 待办 `unclaimAllowed` 直接使用当前页任务、批量历史实例和服务端当前身份计算，不新增逐行查询；流程或任务不再活动、任务挂起、身份或认领元数据不一致时失败关闭。
 - 定义缺失返回 404；历史实例、部署缺失或任务关系不一致返回 500；完整上下文校验通过后才生成任务视图。
 - 分类筛选使用 `Deployment.category` 对应的部署主键，未知分类返回真实空页。
 - `listCompleted` 逐项调用正式撤回校验，保留身份、实例状态、历史竞态和 BPMN 拓扑合同；导出入口只省略 `revocable` 计算。
