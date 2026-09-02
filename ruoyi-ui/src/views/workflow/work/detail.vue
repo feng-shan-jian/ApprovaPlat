@@ -593,8 +593,6 @@ const NEXT_USER_ASSIGNMENT_POLICIES = Object.freeze([
   'REQUIRED_ALL',
   'REQUIRED_ANY'
 ])
-// 历史意见上限与详情 API 的单条 UTF-8 正文门禁一致，兼容已持久化的旧流程长意见。
-const MAX_TIMELINE_OPINION_BYTES = 8 * 1024
 // 只有该机器子码表示 expectedRevision 失配；其他 409 可能是任务、权限或执行树变化。
 const MULTI_INSTANCE_REVISION_CONFLICT_SUBCODE = 'WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT'
 
@@ -923,8 +921,6 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
       throw new Error('流程详情实例关系不一致')
     }
     validateNextUserAssignmentPolicy(payload.nextUserAssignmentPolicy)
-    // 时间线进入页面状态前即移除原始 message/audit，只保留后端明确投影的用户可见 opinion。
-    payload.historyProcNodeList = normalizeTimelineComments(payload.historyProcNodeList)
     payload.multiInstanceState = payload.multiInstanceState == null
       ? null
       : normalizeMultiInstanceState(payload.multiInstanceState)
@@ -1442,36 +1438,6 @@ function normalizeMultiInstanceState(value) {
   return { mode: value.mode, activityId, revision: value.revision, members }
 }
 
-/**
- * 清理流程时间线意见投影，禁止原始审计 JSON 进入页面状态或用户可见 DOM。
- * @param {unknown} value 后端返回的历史活动列表。
- * @returns {object[]} 仅保留安全 opinion 的历史活动副本。
- */
-function normalizeTimelineComments(value) {
-  if (!Array.isArray(value)) throw new Error('流程时间线数据不合法')
-  return value.map(node => {
-    if (!node || typeof node !== 'object') throw new Error('流程时间线节点不合法')
-    const comments = Array.isArray(node.comments) ? node.comments : []
-    return {
-      ...node,
-      comments: comments.map(comment => {
-        if (!comment || typeof comment !== 'object') throw new Error('流程审批意见投影不合法')
-        if (comment.opinion != null && typeof comment.opinion !== 'string') {
-          throw new Error('流程审批意见正文不合法')
-        }
-        const opinion = String(comment.opinion || '').trim()
-        if (new TextEncoder().encode(opinion).byteLength > MAX_TIMELINE_OPINION_BYTES) {
-          throw new Error('流程审批意见正文超过安全上限')
-        }
-        const visibleComment = { ...comment, opinion }
-        // message 和 audit 是内部审计载体，即使后端兼容返回也不能保存在用户页面状态中。
-        delete visibleComment.message
-        delete visibleComment.audit
-        return visibleComment
-      })
-    }
-  })
-}
 
 /**
  * 判断请求失败是否为服务端 revision 或执行树变化导致的 HTTP 409。
