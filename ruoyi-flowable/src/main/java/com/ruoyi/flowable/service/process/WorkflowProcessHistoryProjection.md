@@ -34,7 +34,8 @@ List<WorkflowProcessRelationView> relations =
 ## 关键设计
 
 - 活动、任务、意见、候选身份和父子流程树都执行固定数量上限，超限时返回完整数据异常；
-- 意见只公开正式业务类型，结构化审计只提取用户可见 `opinion`；
+- 意见只公开正式业务类型；Flowable 原始 `fullMessage` 仅在读取栈内参与单条 8 KiB、累计 512 KiB 门禁与解析，绝不进入 VO 或 JSON；
+- 结构化审计只投影规范化的文本 `opinion`，存在文本 `action` 但没有文本 `opinion` 时固定返回 `null`，不依赖可选 `schemaVersion`；旧纯文本和以 `{` 开头的畸形旧正文仍按既有兼容路径规范化展示；
 - 时间线优先使用 `completedBy`，删除用户或异常历史身份保留原始主键；
 - Viewer 从同一份活动和意见数据生成已完成、未完成、驳回和退回集合；
 - 祖先部署集合只用于识别 CallActivity `inheritVariables` 复制的内部提交快照；

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
 import com.ruoyi.flowable.domain.dto.WorkflowCopyQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowManualUrgeView;
+import com.ruoyi.flowable.domain.vo.WorkflowProcessCommentView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessViewerView;
 import tools.jackson.databind.JsonNode;
@@ -44,6 +45,29 @@ class WorkflowHttpProtocolContractTest
     {
         assertThat(componentNames(WorkflowManualUrgeView.class))
                 .containsExactlyInAnyOrder("recipientCount");
+    }
+
+    /**
+     * 验证流程意见 HTTP 投影只包含可展示 opinion，不暴露原始正文或审计字段。
+     *
+     * @return void，record 或 JSON 重新出现 message、audit 时测试失败
+     */
+    @Test
+    void processCommentContainsOnlySafeOpinionProjection()
+    {
+        String[] expectedFields = { "commentId", "taskId", "type", "typeName",
+                "opinion", "userId", "time" };
+        assertThat(componentNames(WorkflowProcessCommentView.class))
+                .containsExactlyInAnyOrder(expectedFields)
+                .doesNotContain("message", "audit");
+
+        WorkflowProcessCommentView comment = new WorkflowProcessCommentView(
+                "comment", "task", "1", "通过", "可展示意见", "actor",
+                Instant.EPOCH);
+        JsonNode json = JsonMapper.shared().valueToTree(comment);
+        assertThat(json.propertyNames()).containsExactlyInAnyOrder(expectedFields);
+        assertThat(json.has("message")).isFalse();
+        assertThat(json.has("audit")).isFalse();
     }
 
     /**

@@ -726,11 +726,9 @@ const canOperateTask = computed(() => currentTaskOwned.value
   && hasPermission('workflow:process:approval'))
 // 完成、节点移动和管理动作根据委派上下文进一步收窄，页面门禁与后端状态校验保持一致。
 const canComplete = computed(() => canOperateTask.value && !pendingDelegation.value)
-// 退回修改任务只对原发起人开放，并使用流程发起权限而不是审批权限。
-const canResubmit = computed(() => currentTaskOwned.value
-  && detail.processStatus === 'returned'
-  && String(detail.startUserId || '') === currentUserId.value
-    && hasPermission('workflow:process:start'))
+// 重提业务能力只消费详情 API 的服务端快照，前端仅叠加入口权限。
+const canResubmit = computed(() => detail.resubmitAllowed === true
+  && hasPermission('workflow:process:start'))
 const applicationFormTabLabel = computed(() => canResubmit.value
   ? '修改申请表单'
   : '申请表单')
@@ -1065,7 +1063,9 @@ async function openReturnDialog() {
  * @returns {Promise<void>} 用户确认且后端同事务恢复首审批配置后返回来源列表。
  */
 async function confirmResubmit() {
-  if (!assertActionAllowed('resubmit')) return
+  if (!canResubmit.value || actionBusy.value || multiInstanceBusy.value) {
+    return denyAction('当前申请不允许重新提交')
+  }
   const taskContext = freezeCurrentTaskContext()
   if (!isCurrentTaskContext(taskContext)) return denyAction('当前任务状态已变化，请刷新后重试')
   if (!applicationForm.value || !taskFormRef.value) return denyAction('原申请表单尚未就绪')
@@ -1079,7 +1079,7 @@ async function confirmResubmit() {
     if (!valid) return
     const variables = taskFormRef.value.getValues()
     await proxy.$modal.confirm('确认使用当前表单内容重新提交吗？')
-    // 表单校验和用户确认均为异步步骤，写入前必须再次确认仍是同一退回任务。
+    // 表单校验和用户确认均为异步步骤，写入前必须再次确认任务上下文和服务端能力快照仍然有效。
     if (!isCurrentTaskContext(taskContext) || !canResubmit.value) {
       return denyAction('当前任务已切换，本次修改未提交')
     }
@@ -1721,18 +1721,15 @@ async function confirmUnclaim() {
  * @returns {boolean} 当前页面快照允许继续发起请求时返回 true。
  */
 function assertActionAllowed(type, validateInput = false) {
-  if (!['complete', 'reject', 'return', 'delegate', 'resolve', 'transfer', 'resubmit'].includes(type)) {
+  if (!['complete', 'reject', 'return', 'delegate', 'resolve', 'transfer'].includes(type)) {
     return denyAction('任务动作不合法')
   }
-  const requiredPermission = type === 'resubmit' ? 'workflow:process:start' : 'workflow:process:approval'
   if (!ready.value || loading.value) return denyAction('流程详情尚未就绪')
-  if (!hasPermission(requiredPermission)) return denyAction('没有执行该操作的权限')
+  if (!hasPermission('workflow:process:approval')) return denyAction('没有执行该操作的权限')
   if (actionBusy.value || multiInstanceBusy.value) return denyAction('任务正在处理中，请勿重复提交')
-  const expectedStatus = type === 'resubmit' ? 'returned' : 'running'
-  if (detail.processStatus !== expectedStatus || !detail.currentTask?.active) return denyAction('当前任务已不处于可办理状态')
+  if (detail.processStatus !== 'running' || !detail.currentTask?.active) return denyAction('当前任务已不处于可办理状态')
   if (!detail.currentTask.taskId || String(detail.currentTask.taskId).length > 64) return denyAction('当前任务主键不合法')
   if (!currentTaskOwned.value) return denyAction('当前任务不属于登录用户')
-  if (type === 'resubmit' && !canResubmit.value) return denyAction('当前申请不允许重新提交')
   if (type === 'complete' && pendingDelegation.value) {
     return denyAction('待处理委派任务不能直接完成')
   }

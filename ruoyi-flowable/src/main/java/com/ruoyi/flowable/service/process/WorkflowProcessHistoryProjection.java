@@ -402,22 +402,23 @@ public class WorkflowProcessHistoryProjection
                 // 引擎事件和未知扩展类型不进入用户可见审批意见，任务关系也不能由意见反向扩展。
                 continue;
             }
-            String message = comment.getFullMessage();
-            int messageBytes = message == null ? 0
-                    : message.getBytes(StandardCharsets.UTF_8).length;
-            if (messageBytes > MAX_COMMENT_BYTES)
+            String rawMessage = comment.getFullMessage();
+            int rawMessageBytes = rawMessage == null ? 0
+                    : rawMessage.getBytes(StandardCharsets.UTF_8).length;
+            if (rawMessageBytes > MAX_COMMENT_BYTES)
             {
                 throw dataError("单条流程审批意见超过安全上限");
             }
-            totalMessageBytes += messageBytes;
+            totalMessageBytes += rawMessageBytes;
             if (totalMessageBytes > MAX_TOTAL_COMMENT_BYTES)
             {
                 throw dataError("流程审批意见正文总量超过安全上限");
             }
-            String opinion = extractCommentOpinion(message);
+            // 原始正文只在当前读取栈内参与完整大小门禁和安全解析，禁止进入详情 VO。
+            String opinion = extractCommentOpinion(rawMessage);
             WorkflowProcessCommentView view = new WorkflowProcessCommentView(comment.getId(),
                     comment.getTaskId(), comment.getType(), COMMENT_TYPE_NAMES.get(comment.getType()),
-                    message, opinion, comment.getUserId(), toInstant(comment.getTime()));
+                    opinion, comment.getUserId(), toInstant(comment.getTime()));
             indexed.computeIfAbsent(comment.getTaskId(), ignored -> new ArrayList<>()).add(view);
         }
         Comparator<WorkflowProcessCommentView> comparator = Comparator
@@ -437,19 +438,19 @@ public class WorkflowProcessHistoryProjection
     /**
      * 从服务端结构化审计中提取纯文本业务意见，并兼容既有纯文本 comment。
      *
-     * @param message String，已经过单条及累计 UTF-8 大小门禁的原始 comment 正文
+     * @param rawMessage String，已经过单条及累计 UTF-8 大小门禁的原始 comment 正文
      * @return String，可直接展示的纯文本意见；结构化系统事件没有 opinion 时返回 null
      */
-    private String extractCommentOpinion(String message)
+    private String extractCommentOpinion(String rawMessage)
     {
-        if (!StringUtils.hasText(message))
+        if (rawMessage == null)
         {
-            return message;
+            return null;
         }
-        String normalized = message.trim();
-        if (!normalized.startsWith("{"))
+        String normalized = rawMessage.trim();
+        if (normalized.isEmpty() || !normalized.startsWith("{"))
         {
-            return message;
+            return normalized;
         }
         try
         {
@@ -459,11 +460,12 @@ public class WorkflowProcessHistoryProjection
                 JsonNode opinion = audit.get("opinion");
                 if (opinion != null && opinion.isTextual())
                 {
-                    return opinion.textValue();
+                    return opinion.textValue().trim();
                 }
-                if (audit.has("schemaVersion") && audit.has("action"))
+                JsonNode action = audit.get("action");
+                if (action != null && action.isTextual())
                 {
-                    // 已识别的结构化审计没有业务意见时不得把整段 JSON 当作用户可见正文。
+                    // 文本 action 已足以识别结构化审计，不依赖可选 schemaVersion。
                     return null;
                 }
             }
@@ -472,7 +474,7 @@ public class WorkflowProcessHistoryProjection
         {
             // 历史纯文本可能以左花括号开头；解析失败仍按原始业务意见兼容展示。
         }
-        return message;
+        return normalized;
     }
 
     /**

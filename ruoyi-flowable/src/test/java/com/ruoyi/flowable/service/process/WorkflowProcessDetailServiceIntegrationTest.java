@@ -1,6 +1,7 @@
 package com.ruoyi.flowable.service.process;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -16,8 +17,10 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -38,17 +41,21 @@ import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
+import org.flowable.engine.task.Comment;
 import org.flowable.task.api.Task;
 import org.flowable.task.api.history.HistoricTaskInstance;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDetailQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowControlledLoopStateView;
+import com.ruoyi.flowable.domain.vo.WorkflowProcessActivityView;
+import com.ruoyi.flowable.domain.vo.WorkflowProcessCommentView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
@@ -61,9 +68,11 @@ import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.system.service.ISysUserService;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 使用真实 Flowable 8、H2 历史表和正式 MyBatis Mapper 验证详情变量按需读取边界。
+ * 使用真实 Flowable 8、H2 历史表和正式 MyBatis Mapper 验证流程详情读取边界。
  */
 class WorkflowProcessDetailServiceIntegrationTest
 {
@@ -414,6 +423,133 @@ class WorkflowProcessDetailServiceIntegrationTest
     }
 
     /**
+     * 验证详情只投影规范化意见，保持排序、类型过滤、Viewer 判断和原始审计存储不变。
+     *
+     * @return void，原始审计泄露、兼容意见变化、顺序变化或读取产生写副作用时测试失败
+     */
+    @Test
+    void projectsSafeOpinionsWithoutChangingStoredAuditComments()
+    {
+        ProcessInstance instance = startMainProcess();
+        Task task = activeTask(instance.getId(), "globalTask");
+        Instant baseTime = Instant.now().plusSeconds(60);
+
+        processEngine.getProcessEngineConfiguration().getClock()
+                .setCurrentTime(Date.from(baseTime.plusSeconds(40)));
+        String structuredAudit = "{\"action\":\"COMPLETE\","
+                + "\"actorUserId\":\"internal-actor\","
+                + "\"targetUserId\":\"internal-target\","
+                + "\"beforeRevision\":7,\"afterRevision\":8,"
+                + "\"opinion\":\"  结构化意见\\n  \"}";
+        Comment structured = taskService.addComment(task.getId(), instance.getId(),
+                "1", structuredAudit);
+
+        processEngine.getProcessEngineConfiguration().getClock()
+                .setCurrentTime(Date.from(baseTime.plusSeconds(10)));
+        Comment legacy = taskService.addComment(task.getId(), instance.getId(),
+                "comment", "  旧版纯文本意见 \\n  第二行  ");
+
+        processEngine.getProcessEngineConfiguration().getClock()
+                .setCurrentTime(Date.from(baseTime.plusSeconds(30)));
+        String actionWithoutOpinion = "{\"action\":\"RETURN\","
+                + "\"actorUserId\":\"hidden-returner\","
+                + "\"targetNodeKey\":\"hidden-target\",\"revision\":9}";
+        Comment systemAudit = taskService.addComment(task.getId(), instance.getId(),
+                "2", actionWithoutOpinion);
+
+        processEngine.getProcessEngineConfiguration().getClock()
+                .setCurrentTime(Date.from(baseTime.plusSeconds(20)));
+        Comment malformed = taskService.addComment(task.getId(), instance.getId(),
+                "4", "  {旧版花括号意见  ");
+
+        processEngine.getProcessEngineConfiguration().getClock()
+                .setCurrentTime(Date.from(baseTime.plusSeconds(50)));
+        Comment filtered = taskService.addComment(task.getId(), instance.getId(),
+                "internal", "x".repeat(WorkflowProcessHistoryProjection.MAX_COMMENT_BYTES + 1));
+        Map<String, String> storedBefore = commentBodies(instance.getId());
+
+        WorkflowProcessDetailView detail = readDetail(
+                instance.getId(), task.getId(), "returned");
+        WorkflowProcessActivityView taskActivity = detail.historyProcNodeList().stream()
+                .filter(activity -> task.getId().equals(activity.taskId()))
+                .findFirst().orElseThrow();
+        List<WorkflowProcessCommentView> comments = taskActivity.comments();
+
+        assertThat(comments).extracting(WorkflowProcessCommentView::commentId)
+                .containsExactly(legacy.getId(), malformed.getId(), systemAudit.getId(),
+                        structured.getId());
+        Map<String, WorkflowProcessCommentView> commentsById = new LinkedHashMap<>();
+        comments.forEach(comment -> commentsById.put(comment.commentId(), comment));
+        assertThat(commentsById.get(structured.getId()).opinion()).isEqualTo("结构化意见");
+        assertThat(commentsById.get(systemAudit.getId()).opinion()).isNull();
+        assertThat(commentsById.get(legacy.getId()).opinion())
+                .isEqualTo("旧版纯文本意见 \\n  第二行");
+        assertThat(commentsById.get(malformed.getId()).opinion())
+                .isEqualTo("{旧版花括号意见");
+        assertThat(commentsById).doesNotContainKey(filtered.getId());
+        assertThat(detail.flowViewer().returnedActivityIds()).contains("globalTask");
+
+        JsonNode structuredJson = JsonMapper.shared().valueToTree(
+                commentsById.get(structured.getId()));
+        assertThat(structuredJson.propertyNames()).containsExactlyInAnyOrder(
+                "commentId", "taskId", "type", "typeName", "opinion", "userId", "time");
+        assertThat(structuredJson.toString()).doesNotContain(
+                "internal-actor", "internal-target", "beforeRevision", "afterRevision",
+                "message", "audit");
+        JsonNode systemJson = JsonMapper.shared().valueToTree(
+                commentsById.get(systemAudit.getId()));
+        assertThat(systemJson.path("opinion").isNull()).isTrue();
+        assertThat(systemJson.toString()).doesNotContain(
+                "hidden-returner", "hidden-target", "revision", "action");
+
+        assertThat(commentBodies(instance.getId())).isEqualTo(storedBefore);
+    }
+
+    /**
+     * 验证详情仍按 Flowable 原始正文执行单条 8 KiB 与累计 512 KiB 精确门禁。
+     *
+     * @return void，超大单条被放行、累计边界变化或门禁改为只计算 opinion 时测试失败
+     */
+    @Test
+    void retainsRawCommentBodyCapacityGates()
+    {
+        ProcessInstance oversizedInstance = startMainProcess();
+        Task oversizedTask = activeTask(oversizedInstance.getId(), "globalTask");
+        taskService.addComment(oversizedTask.getId(), oversizedInstance.getId(), "1",
+                structuredCommentBody(WorkflowProcessHistoryProjection.MAX_COMMENT_BYTES + 1));
+
+        assertThatThrownBy(() -> readDetail(oversizedInstance.getId(),
+                oversizedTask.getId(), "running"))
+                .isInstanceOf(ServiceException.class)
+                .hasMessage("单条流程审批意见超过安全上限");
+
+        ProcessInstance cumulativeInstance = startMainProcess();
+        Task cumulativeTask = activeTask(cumulativeInstance.getId(), "globalTask");
+        String fullSizeBody = structuredCommentBody(
+                WorkflowProcessHistoryProjection.MAX_COMMENT_BYTES);
+        int exactLimitCount = WorkflowProcessHistoryProjection.MAX_TOTAL_COMMENT_BYTES
+                / WorkflowProcessHistoryProjection.MAX_COMMENT_BYTES;
+        for (int index = 0; index < exactLimitCount; index++)
+        {
+            taskService.addComment(cumulativeTask.getId(), cumulativeInstance.getId(),
+                    "1", fullSizeBody);
+        }
+
+        WorkflowProcessDetailView exactLimitDetail = readDetail(cumulativeInstance.getId(),
+                cumulativeTask.getId(), "running");
+        WorkflowProcessActivityView cumulativeActivity = exactLimitDetail.historyProcNodeList()
+                .stream().filter(activity -> cumulativeTask.getId().equals(activity.taskId()))
+                .findFirst().orElseThrow();
+        assertThat(cumulativeActivity.comments()).hasSize(exactLimitCount);
+
+        taskService.addComment(cumulativeTask.getId(), cumulativeInstance.getId(), "1", "z");
+        assertThatThrownBy(() -> readDetail(cumulativeInstance.getId(),
+                cumulativeTask.getId(), "running"))
+                .isInstanceOf(ServiceException.class)
+                .hasMessage("流程审批意见正文总量超过安全上限");
+    }
+
+    /**
      * 使用 Flowable 数据源和正式 XML 映射创建独立 MyBatis Mapper。
      *
      * @param dataSource DataSource，当前真实内存 Flowable 引擎的数据源
@@ -444,6 +580,41 @@ class WorkflowProcessDetailServiceIntegrationTest
         SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(configuration);
         mapperSession = factory.openSession(true);
         return mapperSession.getMapper(WorkflowHistoricVariableMapper.class);
+    }
+
+    /**
+     * 读取 Flowable 当前保存的全部原始 comment 正文并按主键建立快照。
+     *
+     * @param processInstanceId String，待核对的真实流程实例主键
+     * @return Map&lt;String,String&gt;，comment 主键到原始 fullMessage 的稳定映射
+     */
+    private Map<String, String> commentBodies(String processInstanceId)
+    {
+        Map<String, String> bodies = new LinkedHashMap<>();
+        for (Comment comment : taskService.getProcessInstanceComments(processInstanceId))
+        {
+            bodies.put(comment.getId(), comment.getFullMessage());
+        }
+        return bodies;
+    }
+
+    /**
+     * 构造指定 UTF-8 总字节数、但只含短 opinion 的结构化原始审计正文。
+     *
+     * @param totalBytes int，期望的完整 JSON UTF-8 字节数
+     * @return String，使用 ASCII padding 精确补足后的结构化 comment 正文
+     */
+    private String structuredCommentBody(int totalBytes)
+    {
+        String prefix = "{\"action\":\"COMPLETE\",\"opinion\":\"ok\",\"padding\":\"";
+        String suffix = "\"}";
+        int paddingBytes = totalBytes - prefix.getBytes(StandardCharsets.UTF_8).length
+                - suffix.getBytes(StandardCharsets.UTF_8).length;
+        if (paddingBytes < 0)
+        {
+            throw new IllegalArgumentException("结构化意见目标字节数过小");
+        }
+        return prefix + "x".repeat(paddingBytes) + suffix;
     }
 
     /**
