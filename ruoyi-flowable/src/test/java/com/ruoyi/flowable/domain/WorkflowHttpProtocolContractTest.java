@@ -86,11 +86,38 @@ class WorkflowHttpProtocolContractTest
 
         WorkflowTaskAccessSnapshot activeTask = taskSnapshot(true);
         JsonNode allowed = JsonMapper.shared().valueToTree(
-                processDetail("returned", activeTask, true))
+                processDetail("returned", activeTask, true, false))
                 .path("resubmitAllowed");
         JsonNode disallowed = JsonMapper.shared().valueToTree(
-                processDetail("running", activeTask, false))
+                processDetail("running", activeTask, false, false))
                 .path("resubmitAllowed");
+
+        assertThat(allowed.isBoolean()).isTrue();
+        assertThat(allowed.booleanValue()).isTrue();
+        assertThat(disallowed.isBoolean()).isTrue();
+        assertThat(disallowed.booleanValue()).isFalse();
+    }
+
+    /**
+     * 验证流程详情催办能力是不可空的原始 boolean，JSON 稳定输出 true 和 false。
+     *
+     * @return void，字段类型或任一布尔字面量序列化漂移时测试失败
+     */
+    @Test
+    void processDetailUrgeCapabilityUsesStrictBooleanProtocol()
+    {
+        RecordComponent component = Arrays.stream(
+                WorkflowProcessDetailView.class.getRecordComponents())
+                .filter(candidate -> "urgeAllowed".equals(candidate.getName()))
+                .findFirst().orElseThrow();
+        assertThat(component.getType()).isEqualTo(boolean.class);
+
+        JsonNode allowed = JsonMapper.shared().valueToTree(
+                processDetail("running", null, false, true))
+                .path("urgeAllowed");
+        JsonNode disallowed = JsonMapper.shared().valueToTree(
+                processDetail("completed", null, false, false))
+                .path("urgeAllowed");
 
         assertThat(allowed.isBoolean()).isTrue();
         assertThat(allowed.booleanValue()).isTrue();
@@ -106,13 +133,13 @@ class WorkflowHttpProtocolContractTest
     @Test
     void processDetailRejectsContradictoryResubmitCapability()
     {
-        assertThatThrownBy(() -> processDetail("returned", null, true))
+        assertThatThrownBy(() -> processDetail("returned", null, true, false))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> processDetail(
-                "returned", taskSnapshot(false), true))
+                "returned", taskSnapshot(false), true, false))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> processDetail(
-                "running", taskSnapshot(true), true))
+                "running", taskSnapshot(true), true, false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -122,15 +149,17 @@ class WorkflowHttpProtocolContractTest
      * @param processStatus String，待验证的稳定流程状态
      * @param currentTask WorkflowTaskAccessSnapshot，可选活动或历史任务
      * @param resubmitAllowed boolean，待验证的重提能力值
+     * @param urgeAllowed boolean，待验证的催办能力值
      * @return WorkflowProcessDetailView，可直接交给 Jackson 序列化的详情快照
      */
     private WorkflowProcessDetailView processDetail(String processStatus,
-            WorkflowTaskAccessSnapshot currentTask, boolean resubmitAllowed)
+            WorkflowTaskAccessSnapshot currentTask, boolean resubmitAllowed,
+            boolean urgeAllowed)
     {
         return new WorkflowProcessDetailView("instance", "definition", "process",
                 "流程", 1, "category", "deployment", null, "applicant",
                 "申请人", Instant.EPOCH, null, null, processStatus, currentTask,
-                "DISABLED", null, false, resubmitAllowed, List.of(), null,
+                "DISABLED", null, false, resubmitAllowed, urgeAllowed, List.of(), null,
                 List.of(), List.of(), List.of(), "<definitions/>",
                 new WorkflowProcessViewerView(Set.of(), Set.of(), Set.of(),
                         Set.of(), Set.of()));

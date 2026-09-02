@@ -63,6 +63,7 @@ import com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
+import com.ruoyi.flowable.service.notification.WorkflowManualUrgeService;
 import com.ruoyi.flowable.service.task.WorkflowControlledLoopService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
@@ -87,6 +88,7 @@ class WorkflowProcessDetailServiceIntegrationTest
     private WorkflowControlledLoopService controlledLoopService;
     private WorkflowMultiInstanceService multiInstanceService;
     private WorkflowTaskLifecycleService taskLifecycleService;
+    private WorkflowManualUrgeService manualUrgeService;
     private WorkflowProcessDetailService service;
     private String deploymentId;
 
@@ -129,6 +131,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         taskLifecycleService = mock(WorkflowTaskLifecycleService.class);
         when(taskLifecycleService.isTaskReturnAllowed(anyString())).thenReturn(false);
         when(taskLifecycleService.isApplicationResubmitAllowed(anyString())).thenReturn(false);
+        manualUrgeService = mock(WorkflowManualUrgeService.class);
         controlledLoopService = mock(WorkflowControlledLoopService.class);
         when(controlledLoopService.buildStates(anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of());
@@ -145,7 +148,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         service = new WorkflowProcessDetailService(engineOperations, processAccessService,
                 repositoryService, taskService, deploymentService, variableProjection,
                 formProjection, historyProjection, multiInstanceService,
-                taskLifecycleService, controlledLoopService);
+                taskLifecycleService, manualUrgeService, controlledLoopService);
     }
 
     /**
@@ -211,6 +214,84 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTask().claimedBy()).isEqualTo("approver");
         assertThat(detail.currentTask().claimTime()).isNotNull();
         assertThat(detail.currentTask().unclaimAllowed()).isTrue();
+    }
+
+    /**
+     * 验证详情完成对象授权和根关系核验后，直接投影人工催办正式服务的 true 能力。
+     *
+     * @return void，运行中根流程未调用正式能力服务或返回值被改写时测试失败
+     */
+    @Test
+    void projectsManualUrgeCapabilityForAuthorizedRunningRoot()
+    {
+        ProcessInstance instance = startMainProcess();
+        when(manualUrgeService.isUrgeAllowed(instance.getId())).thenReturn(true);
+
+        WorkflowProcessDetailView detail = readDetail(instance.getId(), null, "running");
+
+        assertThat(detail.urgeAllowed()).isTrue();
+        verify(manualUrgeService).isUrgeAllowed(instance.getId());
+    }
+
+    /**
+     * 验证挂起和已结束根流程固定投影 false，且不进入人工催办数据库准备链。
+     *
+     * @return void，任一不可执行状态调用正式能力服务或返回 true 时测试失败
+     */
+    @Test
+    void keepsSuspendedAndCompletedProcessUrgeCapabilityFalse()
+    {
+        ProcessInstance suspended = startMainProcess();
+        runtimeService.suspendProcessInstanceById(suspended.getId());
+        WorkflowProcessDetailView suspendedDetail = readDetail(
+                suspended.getId(), null, "running");
+
+        ProcessInstance completed = runtimeService.startProcessInstanceByKey("detailTerminal");
+        WorkflowProcessDetailView completedDetail = readDetail(
+                completed.getId(), null, "completed");
+
+        assertThat(suspendedDetail.processStatus()).isEqualTo("suspended");
+        assertThat(suspendedDetail.urgeAllowed()).isFalse();
+        assertThat(completedDetail.processStatus()).isEqualTo("completed");
+        assertThat(completedDetail.urgeAllowed()).isFalse();
+        verify(manualUrgeService, never()).isUrgeAllowed(anyString());
+    }
+
+    /**
+     * 验证 CallActivity 子流程详情固定投影 false，根流程身份不能由子流程页面代替。
+     *
+     * @return void，子流程触发正式能力查询或返回 true 时测试失败
+     */
+    @Test
+    void keepsCallActivityChildUrgeCapabilityFalse()
+    {
+        ProcessInstance root = runtimeService.startProcessInstanceByKey("detailParent");
+        ProcessInstance child = runtimeService.createProcessInstanceQuery()
+                .superProcessInstanceId(root.getId()).singleResult();
+        assertThat(child).isNotNull();
+
+        WorkflowProcessDetailView detail = readDetail(child.getId(), null, "running");
+
+        assertThat(detail.urgeAllowed()).isFalse();
+        verify(manualUrgeService, never()).isUrgeAllowed(anyString());
+    }
+
+    /**
+     * 验证实例对象授权失败时不会提前计算催办能力。
+     *
+     * @return void，未授权请求触发人工催办准备链或异常被吞掉时测试失败
+     */
+    @Test
+    void authorizesProcessBeforeCalculatingManualUrgeCapability()
+    {
+        ServiceException forbidden = new ServiceException("无权查看流程", 403);
+        when(processAccessService.requireReadableInstance("forbidden-instance"))
+                .thenThrow(forbidden);
+
+        assertThatThrownBy(() -> service.getDetail(
+                new WorkflowProcessDetailQueryDto("forbidden-instance", null)))
+                .isSameAs(forbidden);
+        verify(manualUrgeService, never()).isUrgeAllowed(anyString());
     }
 
     /**
@@ -719,7 +800,7 @@ class WorkflowProcessDetailServiceIntegrationTest
                         instance.getStartUserId(), instance.getStartTime().toInstant(),
                         instance.getEndTime() == null ? null : instance.getEndTime().toInstant(),
                         instance.getDeleteReason(), businessStatus,
-                        instance.getEndTime() == null ? "running" : "completed"));
+                        processState(processInstanceId, instance)));
         if (taskId != null)
         {
             HistoricTaskInstance historicTask = processEngine.getHistoryService()
@@ -753,6 +834,23 @@ class WorkflowProcessDetailServiceIntegrationTest
                              unclaimAllowed));
         }
         return service.getDetail(new WorkflowProcessDetailQueryDto(processInstanceId, taskId));
+    }
+
+    /**
+     * 从真实运行时和历史实例确定授权快照使用的 Flowable 稳定状态。
+     * @param processInstanceId String，真实流程实例主键
+     * @param instance HistoricProcessInstance，已读取的历史流程实例
+     * @return String，running、suspended 或 completed
+     */
+    private String processState(String processInstanceId, HistoricProcessInstance instance)
+    {
+        if (instance.getEndTime() != null)
+        {
+            return "completed";
+        }
+        ProcessInstance runtime = runtimeService.createProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult();
+        return runtime != null && runtime.isSuspended() ? "suspended" : "running";
     }
 
     /**
@@ -852,6 +950,25 @@ class WorkflowProcessDetailServiceIntegrationTest
                   <conditionExpression xsi:type="tFormalExpression"><![CDATA[${repeat == true}]]></conditionExpression>
                 </sequenceFlow>
                 <sequenceFlow id="loopExit" sourceRef="loopGateway" targetRef="loopEnd"/>
+              </process>
+              <process id="detailParent" name="详情父流程" isExecutable="true">
+                <startEvent id="parentStart"/>
+                <callActivity id="callChild" name="调用子流程" calledElement="detailChild"/>
+                <endEvent id="parentEnd"/>
+                <sequenceFlow id="parentFlow1" sourceRef="parentStart" targetRef="callChild"/>
+                <sequenceFlow id="parentFlow2" sourceRef="callChild" targetRef="parentEnd"/>
+              </process>
+              <process id="detailChild" name="详情子流程" isExecutable="true">
+                <startEvent id="childStart"/>
+                <userTask id="childTask" name="子流程审批" flowable:assignee="approver"/>
+                <endEvent id="childEnd"/>
+                <sequenceFlow id="childFlow1" sourceRef="childStart" targetRef="childTask"/>
+                <sequenceFlow id="childFlow2" sourceRef="childTask" targetRef="childEnd"/>
+              </process>
+              <process id="detailTerminal" name="详情终态流程" isExecutable="true">
+                <startEvent id="terminalStart"/>
+                <endEvent id="terminalEnd"/>
+                <sequenceFlow id="terminalFlow" sourceRef="terminalStart" targetRef="terminalEnd"/>
               </process>
             </definitions>
             """;

@@ -1,9 +1,8 @@
 package com.ruoyi.flowable.service.notification;
 
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -19,12 +18,13 @@ import com.ruoyi.flowable.config.WorkflowNotificationProperties;
 import com.ruoyi.flowable.domain.dto.WorkflowManualUrgeRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowManualUrgeView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
+import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.runtime.WorkflowNotificationMetrics;
 import com.ruoyi.flowable.runtime.WorkflowRedisAtomicOperations;
 import com.ruoyi.framework.web.service.PermissionService;
 
 /**
- * 人工催办业务服务，唯一负责权限、运行状态、任务锁定、冷却频控和登记编排。
+ * 人工催办业务服务，唯一负责只读能力投影以及正式写入的权限、运行状态、任务、接收人和冷却编排。
  */
 @Service
 public class WorkflowManualUrgeService
@@ -33,7 +33,10 @@ public class WorkflowManualUrgeService
     private static final int MAX_EXECUTIONS_PER_URGE = 10_000;
     private static final int MAX_TASKS_PER_URGE = 2_000;
     private static final int MAX_RECIPIENTS_PER_EVENT = 2_000;
+    private static final String URGE_PERMISSION = "workflow:notification:urge";
     private static final String URGE_ANY_PERMISSION = "workflow:notification:urge:any";
+    private static final Set<Integer> URGE_INELIGIBLE_STATUS_CODES = Set.of(
+            HttpStatus.FORBIDDEN, HttpStatus.CONFLICT);
 
     private final JdbcTemplate jdbcTemplate;
     private final WorkflowEngineOperations engineOperations;
@@ -45,9 +48,9 @@ public class WorkflowManualUrgeService
 
     /**
      * 创建人工催办业务服务。
-     * @param jdbcTemplate JdbcTemplate，Flowable 运行树、任务和候选关系锁定入口
-     * @param engineOperations WorkflowEngineOperations，当前用户写事务入口
-     * @param permissionService PermissionService，跨实例催办权限实时复核入口
+     * @param jdbcTemplate JdbcTemplate，Flowable 运行树、任务和候选关系只读/锁定查询入口
+     * @param engineOperations WorkflowEngineOperations，当前用户只读与写事务入口
+     * @param permissionService PermissionService，基础及跨实例催办权限实时复核入口
      * @param notificationService WorkflowNotificationService，策略解析和通知登记入口
      * @param redisAtomicOperations WorkflowRedisAtomicOperations，Redis 原子冷却操作
      * @param properties WorkflowNotificationProperties，催办冷却时长配置
@@ -85,45 +88,22 @@ public class WorkflowManualUrgeService
         String reason = normalized(request.reason(), 500, "催办原因不合法");
         return engineOperations.writeAsCurrentUser(actor ->
         {
-            RuntimeProcessSnapshot process = lockRuntimeProcessTree(processInstanceId);
-            List<LockedTask> tasks = lockRuntimeTasks(process.processInstanceIds());
-            if (!actor.userId().equals(process.startUserId())
-                    && !permissionService.hasPermi(URGE_ANY_PERMISSION))
-            {
-                throw new ServiceException("无权催办当前流程", HttpStatus.FORBIDDEN);
-            }
-            if (tasks.isEmpty())
-            {
-                throw new ServiceException("流程没有可催办的活动待办", HttpStatus.CONFLICT);
-            }
-
-            LinkedHashMap<LockedTask, Set<String>> recipientsByTask = new LinkedHashMap<>();
-            LinkedHashSet<String> allRecipients = new LinkedHashSet<>();
-            for (LockedTask task : tasks)
-            {
-                Set<String> recipients = resolveLockedTaskRecipients(task);
-                if (!recipients.isEmpty())
-                {
-                    recipientsByTask.put(task, recipients);
-                    allRecipients.addAll(recipients);
-                }
-            }
-            if (allRecipients.isEmpty())
-            {
-                throw new ServiceException("活动待办没有有效接收人", HttpStatus.CONFLICT);
-            }
+            UrgePreparation preparation = requireUrgePreparation(
+                    processInstanceId, actor, QueryMode.LOCKING);
+            RuntimeProcessSnapshot process = preparation.process();
 
             // urgeEventKey 只用于各任务通知的幂等登记，不再暴露给 HTTP 客户端。
             String urgeEventKey = "URGE:" + UUID.randomUUID();
             LinkedHashSet<String> deliveredRecipients = new LinkedHashSet<>();
-            for (Map.Entry<LockedTask, Set<String>> entry : recipientsByTask.entrySet())
+            for (PreparedTask preparedTask : preparation.tasks())
             {
-                LockedTask task = entry.getKey();
+                RuntimeTaskSnapshot task = preparedTask.task();
                 Set<String> recipientUserIds = notificationService.registerManualUrge(
                         new WorkflowManualUrgeRegistration(task.processDefinitionId(),
                                 task.processInstanceId(), process.startUserId(), task.taskId(),
                                 task.taskDefinitionKey(), task.taskName(), actor.userId(),
-                                entry.getValue(), urgeEventKey + ":" + task.taskId(), reason));
+                                preparedTask.recipientUserIds(),
+                                urgeEventKey + ":" + task.taskId(), reason));
                 deliveredRecipients.addAll(recipientUserIds);
             }
             // 成功标准以 Writer 返回的真实可登记接收人为准，INBOX 已不再经过 Outbox。
@@ -135,6 +115,72 @@ public class WorkflowManualUrgeService
             metrics.recordUrge("accepted");
             return new WorkflowManualUrgeView(deliveredRecipients.size());
         });
+    }
+
+    /**
+     * 判断当前正式用户能否催办指定根流程实例。
+     * @param processInstanceId String，详情页已经完成对象授权的流程实例主键
+     * @return boolean，权限、完整运行树、活动任务、接收人和数量门禁全部满足时返回 true
+     */
+    public boolean isUrgeAllowed(String processInstanceId)
+    {
+        String normalizedProcessInstanceId = normalized(processInstanceId, 64,
+                "流程实例主键不合法");
+        return engineOperations.readAsCurrentUserWithServiceExceptionHandler(actor ->
+        {
+            requireUrgePreparation(normalizedProcessInstanceId, actor, QueryMode.READ_ONLY);
+            return true;
+        }, exception ->
+        {
+            if (URGE_INELIGIBLE_STATUS_CODES.contains(exception.getCode()))
+            {
+                return false;
+            }
+            // 数据损坏和未知依赖异常必须保持 500，禁止伪装成无催办能力。
+            throw exception;
+        });
+    }
+
+    /**
+     * 使用同一套无副作用规则冻结正式催办和详情能力查询需要的完整事实。
+     * @param processInstanceId String，已经过格式校验的根流程实例主键
+     * @param actor WorkflowCurrentIdentity，事务内重新核验的正式当前身份
+     * @param queryMode QueryMode，能力查询使用普通读，正式催办使用锁定读
+     * @return UrgePreparation，根流程身份及至少一个具备有效接收人的活动任务
+     */
+    private UrgePreparation requireUrgePreparation(String processInstanceId,
+            WorkflowCurrentIdentity actor, QueryMode queryMode)
+    {
+        RuntimeProcessSnapshot process = readRuntimeProcessTree(processInstanceId, queryMode);
+        List<RuntimeTaskSnapshot> tasks = readRuntimeTasks(
+                process.processInstanceIds(), queryMode);
+        if (!permissionService.hasPermi(URGE_PERMISSION)
+                || (!actor.userId().equals(process.startUserId())
+                        && !permissionService.hasPermi(URGE_ANY_PERMISSION)))
+        {
+            throw new ServiceException("无权催办当前流程", HttpStatus.FORBIDDEN);
+        }
+        if (tasks.isEmpty())
+        {
+            throw new ServiceException("流程没有可催办的活动待办", HttpStatus.CONFLICT);
+        }
+
+        List<PreparedTask> preparedTasks = new ArrayList<>();
+        LinkedHashSet<String> allRecipients = new LinkedHashSet<>();
+        for (RuntimeTaskSnapshot task : tasks)
+        {
+            Set<String> recipients = resolveTaskRecipients(task, queryMode);
+            if (!recipients.isEmpty())
+            {
+                preparedTasks.add(new PreparedTask(task, recipients));
+                allRecipients.addAll(recipients);
+            }
+        }
+        if (allRecipients.isEmpty())
+        {
+            throw new ServiceException("活动待办没有有效接收人", HttpStatus.CONFLICT);
+        }
+        return new UrgePreparation(process, List.copyOf(preparedTasks));
     }
 
     /**
@@ -174,25 +220,34 @@ public class WorkflowManualUrgeService
     }
 
     /**
-     * 锁定并验证根流程实例和完整活动执行树。
+     * 按调用模式读取并验证根流程实例和完整活动执行树。
      * @param processInstanceId String，已规范化根流程实例主键
+     * @param queryMode QueryMode，普通只读或正式写入锁定模式
      * @return RuntimeProcessSnapshot，根身份和完整活动实例集合
      */
-    private RuntimeProcessSnapshot lockRuntimeProcessTree(String processInstanceId)
+    private RuntimeProcessSnapshot readRuntimeProcessTree(String processInstanceId,
+            QueryMode queryMode)
     {
-        List<RuntimeProcessSnapshot> locked = jdbcTemplate.query(
-                "select e.PROC_DEF_ID_,e.SUSPENSION_STATE_,h.START_USER_ID_ " +
+        List<RuntimeProcessSnapshot> snapshots = jdbcTemplate.query(
+                "select e.PROC_DEF_ID_,e.ROOT_PROC_INST_ID_,e.SUSPENSION_STATE_,h.START_USER_ID_ " +
                 "from ACT_RU_EXECUTION e join ACT_HI_PROCINST h on h.PROC_INST_ID_=e.PROC_INST_ID_ " +
-                "where e.ID_=? and e.PROC_INST_ID_=? for update",
+                "where e.ID_=? and e.PROC_INST_ID_=?" + queryMode.exclusiveLockClause(),
                 (result, rowNum) -> new RuntimeProcessSnapshot(
-                        result.getString("PROC_DEF_ID_"), result.getInt("SUSPENSION_STATE_"),
+                        result.getString("PROC_DEF_ID_"),
+                        result.getString("ROOT_PROC_INST_ID_"),
+                        result.getInt("SUSPENSION_STATE_"),
                         result.getString("START_USER_ID_"), List.of()),
                 processInstanceId, processInstanceId);
-        if (locked.size() != 1)
+        if (snapshots.size() != 1)
         {
             throw new ServiceException("流程状态已变化，不能催办", HttpStatus.CONFLICT);
         }
-        RuntimeProcessSnapshot root = locked.get(0);
+        RuntimeProcessSnapshot root = snapshots.get(0);
+        if (StringUtils.hasText(root.rootProcessInstanceId())
+                && !processInstanceId.equals(root.rootProcessInstanceId()))
+        {
+            throw new ServiceException("只能催办根流程", HttpStatus.CONFLICT);
+        }
         if (!StringUtils.hasText(root.processDefinitionId())
                 || !StringUtils.hasText(root.startUserId()))
         {
@@ -206,7 +261,7 @@ public class WorkflowManualUrgeService
         List<RuntimeExecutionSnapshot> executions = jdbcTemplate.query(
                 "select ID_,PROC_INST_ID_,ROOT_PROC_INST_ID_,PROC_DEF_ID_,SUSPENSION_STATE_ " +
                 "from ACT_RU_EXECUTION where ROOT_PROC_INST_ID_=? or PROC_INST_ID_=? " +
-                "order by ID_ limit 10001 for update",
+                "order by ID_ limit 10001" + queryMode.exclusiveLockClause(),
                 (result, rowNum) -> new RuntimeExecutionSnapshot(result.getString("ID_"),
                         result.getString("PROC_INST_ID_"), result.getString("ROOT_PROC_INST_ID_"),
                         result.getString("PROC_DEF_ID_"), result.getInt("SUSPENSION_STATE_")),
@@ -249,16 +304,19 @@ public class WorkflowManualUrgeService
         {
             throw new ServiceException("活动流程树实例边界不完整", HttpStatus.ERROR);
         }
-        return new RuntimeProcessSnapshot(root.processDefinitionId(), root.suspensionState(),
-                root.startUserId(), processInstanceIds.stream().sorted().toList());
+        return new RuntimeProcessSnapshot(root.processDefinitionId(),
+                root.rootProcessInstanceId(), root.suspensionState(), root.startUserId(),
+                processInstanceIds.stream().sorted().toList());
     }
 
     /**
-     * 锁定完整活动实例树内全部任务。
+     * 按调用模式读取完整活动实例树内全部任务。
      * @param processInstanceIds List&lt;String&gt;，根及 CallActivity 子实例主键
-     * @return List&lt;LockedTask&gt;，按任务主键排序的活动任务快照
+     * @param queryMode QueryMode，普通只读或正式写入锁定模式
+     * @return List&lt;RuntimeTaskSnapshot&gt;，按任务主键排序的活动任务快照
      */
-    private List<LockedTask> lockRuntimeTasks(List<String> processInstanceIds)
+    private List<RuntimeTaskSnapshot> readRuntimeTasks(List<String> processInstanceIds,
+            QueryMode queryMode)
     {
         if (processInstanceIds == null || processInstanceIds.isEmpty())
         {
@@ -266,46 +324,48 @@ public class WorkflowManualUrgeService
         }
         String placeholders = String.join(",",
                 processInstanceIds.stream().map(ignored -> "?").toList());
-        List<LockedTask> lockedTasks = jdbcTemplate.query(
+        List<RuntimeTaskSnapshot> taskSnapshots = jdbcTemplate.query(
                 "select ID_,PROC_DEF_ID_,PROC_INST_ID_,TASK_DEF_KEY_,NAME_,ASSIGNEE_,SUSPENSION_STATE_ " +
                 "from ACT_RU_TASK where PROC_INST_ID_ in (" + placeholders + ") " +
-                "order by ID_ limit 2001 for update",
-                (result, rowNum) -> new LockedTask(result.getString("ID_"),
+                "order by ID_ limit 2001" + queryMode.exclusiveLockClause(),
+                (result, rowNum) -> new RuntimeTaskSnapshot(result.getString("ID_"),
                         result.getString("PROC_DEF_ID_"), result.getString("PROC_INST_ID_"),
                         result.getString("TASK_DEF_KEY_"), result.getString("NAME_"),
                         result.getString("ASSIGNEE_"), result.getInt("SUSPENSION_STATE_")),
                 processInstanceIds.toArray());
-        if (lockedTasks.size() > MAX_TASKS_PER_URGE)
+        if (taskSnapshots.size() > MAX_TASKS_PER_URGE)
         {
             throw new ServiceException("活动待办数量超过催办上限", HttpStatus.CONFLICT);
         }
         Set<String> allowedProcessInstanceIds = Set.copyOf(processInstanceIds);
-        if (lockedTasks.stream().anyMatch(task ->
+        if (taskSnapshots.stream().anyMatch(task ->
                 !allowedProcessInstanceIds.contains(task.processInstanceId())
                         || !StringUtils.hasText(task.taskId())
                         || !StringUtils.hasText(task.processDefinitionId())))
         {
             throw new ServiceException("活动待办锁定结果不一致", HttpStatus.ERROR);
         }
-        if (lockedTasks.stream().anyMatch(task -> task.suspensionState() != 1))
+        if (taskSnapshots.stream().anyMatch(task -> task.suspensionState() != 1))
         {
             throw new ServiceException("挂起任务不能催办", HttpStatus.CONFLICT);
         }
-        return List.copyOf(lockedTasks);
+        return List.copyOf(taskSnapshots);
     }
 
     /**
-     * 使用锁定任务和候选关系的 current-read 快照解析催办接收人。
-     * @param task LockedTask，已持有任务行锁的活动任务
+     * 按调用模式从活动任务及候选关系解析有效催办接收人。
+     * @param task RuntimeTaskSnapshot，已经完成关系核验的活动任务
+     * @param queryMode QueryMode，普通只读或正式写入锁定模式
      * @return Set&lt;String&gt;，有效办理人或具备认领权限的候选用户
      */
-    private Set<String> resolveLockedTaskRecipients(LockedTask task)
+    private Set<String> resolveTaskRecipients(RuntimeTaskSnapshot task,
+            QueryMode queryMode)
     {
         if (StringUtils.hasText(task.assignee()))
         {
             List<String> assigned = jdbcTemplate.queryForList(
                     "select cast(user_id as char) from sys_user where user_id=? " +
-                    "and status='0' and del_flag='0' for share", String.class,
+                    "and status='0' and del_flag='0'" + queryMode.sharedLockClause(), String.class,
                     Long.valueOf(task.assignee()));
             return Set.copyOf(assigned);
         }
@@ -325,7 +385,7 @@ public class WorkflowManualUrgeService
                 "where pur.user_id=u.user_id and pr.status='0' and pr.del_flag='0' and pr.role_id<>1 " +
                 "and m.status='0' and m.perms in ('workflow:process:claimList','workflow:process:claim'," +
                 "'workflow:process:todoList','workflow:process:query','workflow:process:approval'))) " +
-                "order by u.user_id limit 2001 for share", String.class,
+                "order by u.user_id limit 2001" + queryMode.sharedLockClause(), String.class,
                 task.taskId(), task.taskId(), task.taskId());
         if (candidates.size() > MAX_RECIPIENTS_PER_EVENT)
         {
@@ -362,14 +422,53 @@ public class WorkflowManualUrgeService
         return traceId == null ? "" : traceId;
     }
 
-    /** 根流程身份和完整活动实例集合的锁定快照。 */
-    private record RuntimeProcessSnapshot(String processDefinitionId, int suspensionState,
-            String startUserId, List<String> processInstanceIds) { }
-    /** 活动 execution 的根关系和挂起态锁定快照。 */
+    /** 根流程身份和完整活动实例集合的事务快照。 */
+    private record RuntimeProcessSnapshot(String processDefinitionId,
+            String rootProcessInstanceId, int suspensionState, String startUserId,
+            List<String> processInstanceIds) { }
+    /** 活动 execution 的根关系和挂起态事务快照。 */
     private record RuntimeExecutionSnapshot(String executionId, String processInstanceId,
             String rootProcessInstanceId, String processDefinitionId, int suspensionState) { }
-    /** 活动任务和最终归属的锁定快照。 */
-    private record LockedTask(String taskId, String processDefinitionId,
+    /** 活动任务和最终归属的事务快照。 */
+    private record RuntimeTaskSnapshot(String taskId, String processDefinitionId,
             String processInstanceId, String taskDefinitionKey, String taskName,
             String assignee, int suspensionState) { }
+    /** 单个活动任务和已冻结有效接收人的无副作用准备结果。 */
+    private record PreparedTask(RuntimeTaskSnapshot task, Set<String> recipientUserIds) { }
+    /** 根流程和全部可通知活动任务的无副作用准备结果。 */
+    private record UrgePreparation(RuntimeProcessSnapshot process, List<PreparedTask> tasks) { }
+
+    /** 查询一致性模式：能力查询不加锁，正式写入保持原有排他锁与共享锁。 */
+    private enum QueryMode
+    {
+        READ_ONLY("", ""),
+        LOCKING(" for update", " for share");
+
+        private final String exclusiveLockClause;
+        private final String sharedLockClause;
+
+        /**
+         * 创建固定查询一致性模式。
+         * @param exclusiveLockClause String，运行树与任务查询的锁子句
+         * @param sharedLockClause String，接收人查询的锁子句
+         * @return void，枚举实例保存不可变 SQL 子句
+         */
+        QueryMode(String exclusiveLockClause, String sharedLockClause)
+        {
+            this.exclusiveLockClause = exclusiveLockClause;
+            this.sharedLockClause = sharedLockClause;
+        }
+
+        /** @return String，运行树和任务查询使用的锁定子句。 */
+        private String exclusiveLockClause()
+        {
+            return exclusiveLockClause;
+        }
+
+        /** @return String，接收人查询使用的锁定子句。 */
+        private String sharedLockClause()
+        {
+            return sharedLockClause;
+        }
+    }
 }

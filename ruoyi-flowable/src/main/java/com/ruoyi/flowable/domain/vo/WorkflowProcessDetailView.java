@@ -28,6 +28,7 @@ import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
  * @param multiInstanceState WorkflowMultiInstanceStateView，当前办理人可调整的动态多实例状态，非 MI 为 null
  * @param returnAllowed boolean，当前用户能否对请求任务执行真实退回
  * @param resubmitAllowed boolean，当前用户能否对申请人待修改任务执行真实重提
+ * @param urgeAllowed boolean，当前用户能否对运行中的根流程执行真实人工催办
  * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，部署循环配置、当前轮次和历史轨迹
  * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单及局部值，允许为空
  * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行节点的表单快照和值
@@ -56,6 +57,7 @@ public record WorkflowProcessDetailView(
         WorkflowMultiInstanceStateView multiInstanceState,
         boolean returnAllowed,
         boolean resubmitAllowed,
+        boolean urgeAllowed,
         List<WorkflowControlledLoopStateView> controlledLoopStates,
         WorkflowProcessFormSnapshotView currentTaskForm,
         List<WorkflowProcessFormSnapshotView> processFormList,
@@ -86,6 +88,7 @@ public record WorkflowProcessDetailView(
      * @param multiInstanceState WorkflowMultiInstanceStateView，动态多实例能力和状态，允许为空
      * @param returnAllowed boolean，当前用户和执行树是否满足正式退回前置条件
      * @param resubmitAllowed boolean，当前用户和完整准备链是否满足正式重提前置条件
+     * @param urgeAllowed boolean，当前用户和完整运行树是否满足正式人工催办前置条件
      * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，受控循环状态列表
      * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单，允许为空
      * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行表单快照

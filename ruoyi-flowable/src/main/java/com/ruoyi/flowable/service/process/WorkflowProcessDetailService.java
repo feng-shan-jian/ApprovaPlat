@@ -20,8 +20,10 @@ import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDetailQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
+import com.ruoyi.flowable.domain.vo.WorkflowProcessRelationView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
+import com.ruoyi.flowable.service.notification.WorkflowManualUrgeService;
 import com.ruoyi.flowable.service.process.WorkflowProcessFormDetailProjection.FormProjection;
 import com.ruoyi.flowable.service.process.WorkflowProcessFormDetailProjection.FormProjectionRequest;
 import com.ruoyi.flowable.service.process.WorkflowProcessFormDetailProjection.FormSchemas;
@@ -70,6 +72,9 @@ public class WorkflowProcessDetailService
 
     private final WorkflowTaskLifecycleService taskLifecycleService;
 
+    /** 人工催办正式服务，详情仅消费其无副作用能力准备链。 */
+    private final WorkflowManualUrgeService manualUrgeService;
+
     /** 已授权流程详情的受控循环状态和逐轮审计投影服务。 */
     private final WorkflowControlledLoopService controlledLoopService;
 
@@ -86,6 +91,7 @@ public class WorkflowProcessDetailService
      * @param historyProjection WorkflowProcessHistoryProjection，历史展示与父子关系投影组件
      * @param multiInstanceService WorkflowMultiInstanceService，动态多实例 capability 服务
      * @param taskLifecycleService WorkflowTaskLifecycleService，正式退回能力与执行树校验服务
+     * @param manualUrgeService WorkflowManualUrgeService，人工催办正式能力查询服务
      * @param controlledLoopService WorkflowControlledLoopService，受控循环状态与审计投影服务
      * @return 无返回值，构造后由 Spring 管理该服务
      */
@@ -98,6 +104,7 @@ public class WorkflowProcessDetailService
             WorkflowProcessHistoryProjection historyProjection,
             WorkflowMultiInstanceService multiInstanceService,
             WorkflowTaskLifecycleService taskLifecycleService,
+            WorkflowManualUrgeService manualUrgeService,
             WorkflowControlledLoopService controlledLoopService)
     {
         this.engineOperations = engineOperations;
@@ -110,6 +117,7 @@ public class WorkflowProcessDetailService
         this.historyProjection = historyProjection;
         this.multiInstanceService = multiInstanceService;
         this.taskLifecycleService = taskLifecycleService;
+        this.manualUrgeService = manualUrgeService;
         this.controlledLoopService = controlledLoopService;
     }
 
@@ -225,6 +233,10 @@ public class WorkflowProcessDetailService
         boolean resubmitAllowed = returnedApplicantTask
                 && taskLifecycleService.isApplicationResubmitAllowed(
                         requestedTask.taskId());
+        // 终态、挂起态和 CallActivity 子流程固定失败关闭；只有已授权的活动根流程进入正式准备链。
+        boolean urgeAllowed = isUrgeProjectionCandidate(
+                instance, processStatus, processRelations)
+                && manualUrgeService.isUrgeAllowed(instance.processInstanceId());
         NextUserAssignmentPolicy nextUserAssignmentPolicy = resolveNextUserAssignmentPolicy(
                 instance, requestedTask, bpmn.process());
         return new WorkflowProcessDetailView(instance.processInstanceId(), definition.getId(),
@@ -233,9 +245,30 @@ public class WorkflowProcessDetailService
                 instance.startUserId(), historyPresentation.startUserName(), startTime,
                 instance.endTime(), durationMillis, processStatus, requestedTask,
                 nextUserAssignmentPolicy.name(), multiInstanceState, returnAllowed,
-                resubmitAllowed, controlledLoopStates, forms.currentTaskForm(),
+                resubmitAllowed, urgeAllowed, controlledLoopStates, forms.currentTaskForm(),
                 forms.processForms(), historyPresentation.timeline(), processRelations,
                 bpmnXml, historyPresentation.viewer());
+    }
+
+    /**
+     * 判断已授权详情是否允许调用人工催办正式能力准备链。
+     * @param instance WorkflowProcessAccessSnapshot，已完成对象授权的流程实例快照
+     * @param processStatus String，服务端规范化后的稳定流程状态
+     * @param processRelations List&lt;WorkflowProcessRelationView&gt;，已核验的完整父子流程关系
+     * @return boolean，运行中的根流程返回 true，终态、挂起态和子流程返回 false
+     */
+    private boolean isUrgeProjectionCandidate(WorkflowProcessAccessSnapshot instance,
+            String processStatus,
+            List<WorkflowProcessRelationView> processRelations)
+    {
+        if (instance.endTime() != null || "suspended".equals(processStatus))
+        {
+            return false;
+        }
+        return processRelations.stream().anyMatch(relation -> relation.current()
+                && relation.parentProcessInstanceId() == null
+                && Objects.equals(instance.processInstanceId(), relation.processInstanceId())
+                && Objects.equals(instance.processInstanceId(), relation.rootProcessInstanceId()));
     }
 
     /**

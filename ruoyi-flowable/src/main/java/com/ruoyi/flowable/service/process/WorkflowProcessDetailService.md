@@ -11,6 +11,7 @@
 - 活动 `currentTask` 返回服务端 `unclaimAllowed` 快照；它由对象授权服务复用 `WorkflowTaskUnclaimPolicy` 计算，历史任务或无当前任务不会返回 `true`，且不替代 `workflow:process:claim` 权限及写入时重新校验；
 - 当前用户对请求任务的权威 `returnAllowed` 能力；该字段复用正式退回准备链，满足唯一 `ACTIVE` 轮次和完整实时快照的受控会签/或签可以返回 `true`，静态多实例、子流程、CallActivity、跨作用域和复杂执行树失败关闭；
 - 当前用户对申请人待修改任务的权威原始布尔 `resubmitAllowed`；只有 `returnedApplicantTask` 前置识别命中后才调用正式重提准备链，合法原发起人返回 `true`，无任务、历史任务、普通运行态、非申请人和 returned 协议漂移返回 `false`；
+- 当前用户对运行中根流程的权威原始布尔 `urgeAllowed`；详情先完成实例和可选任务对象授权，再由 `WorkflowManualUrgeService.isUrgeAllowed` 复用正式催办的权限、完整 CallActivity 运行树、活动任务、有效接收人和数量门禁。已结束、挂起及 CallActivity 子流程详情固定返回 `false`，不会进入催办准备查询；
 - 按实际执行顺序返回且能够由内部提交快照证明的开始节点和已完成用户任务表单；
 - 开始、用户任务、结束节点时间线，包含 `completedBy`、assignee、候选身份和受控审批意见；
 - 经过 `WorkflowDeploymentService` 大小、UTF-8、安全 XML 和 Flowable 校验的 BPMN XML；
@@ -19,6 +20,8 @@
 当流程稳定状态为 `returned`，且请求任务是唯一活动任务、真实 assignee 为发起人、owner/委派/候选 identity link 均为空，并携带服务端写入且与发起人一致的 `RETURN_APPLICANT_VARIABLE` 时，该任务只表示“待修改”。详情固定返回空的多实例能力投影，把首审批节点退回时产生的临时单成员根与新 `ACTIVE` 审批轮次明确区分。该识别只负责收窄 capability 调用；owner、委派、候选关系、局部标记等不完整组合返回 `resubmitAllowed=false`，正式能力服务继续核验 returned 双状态、冻结办理配置、重开计划、部署开始表单和原提交快照。空身份链、损坏提交快照等数据损坏仍返回 `500`，不会降级为 `false`。
 
 `resubmitAllowed` 是详情只读事务中的瞬时快照，不参与 `/workflow/task/resubmit` 请求。写命令仍在自己的写事务内完整重验全部门禁，表单变量和附件合法性继续由后端决定。
+
+`urgeAllowed` 同样只是详情只读事务中的瞬时快照，不参与 `/workflow/notification/urge` 请求。能力查询使用普通 `SELECT`，不加数据库行锁、不获取 Redis 冷却锁，也不登记通知、Outbox、审计或指标；正式催办仍在独立写事务内锁定并重验全部事实，保持既有 403/409/429/503、通知登记、冷却和指标顺序。
 
 ## 表单值白名单
 
