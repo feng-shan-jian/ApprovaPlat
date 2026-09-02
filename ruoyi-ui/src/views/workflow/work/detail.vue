@@ -738,11 +738,9 @@ const canResolve = computed(() => currentTaskOwned.value
   && detail.processStatus === 'running'
   && pendingDelegation.value
   && hasPermission('workflow:process:approval'))
-// 发起人或持有跨实例催办权限的管理员才能看到入口，后端仍会复核运行状态和对象关系。
-const canUrge = computed(() => detail.processStatus === 'running'
-  && hasPermission('workflow:notification:urge')
-  && (String(detail.startUserId || '') === currentUserId.value
-    || hasPermission('workflow:notification:urge:any')))
+// 人工催办业务能力只消费详情 API 的服务端快照，前端仅叠加基础入口权限。
+const canUrge = computed(() => detail.urgeAllowed === true
+  && hasPermission('workflow:notification:urge'))
 const hasAnyTaskAction = computed(() => canComplete.value || canResubmit.value || canMoveTask.value || canManageTask.value || canUnclaim.value || canResolve.value)
 // 用户选择与抄送字段按动作白名单显示，未列入的动作不会向后端发送额外身份参数。
 const isUserAction = computed(() => ['delegate', 'transfer'].includes(actionDialog.type))
