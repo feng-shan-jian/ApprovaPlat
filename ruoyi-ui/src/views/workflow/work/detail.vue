@@ -586,13 +586,6 @@ const copyUserOptionCache = new Map()
 const verifiedCopyUserIds = new Set()
 // 动态加签使用独立的身份目录缓存，仅负责远程检索后的稳定标签展示。
 const multiInstanceUserOptionCache = new Map()
-// 下一办理人策略只接受详情 API 返回的服务端冻结枚举。
-const NEXT_USER_ASSIGNMENT_POLICIES = Object.freeze([
-  'DISABLED',
-  'OPTIONAL',
-  'REQUIRED_ALL',
-  'REQUIRED_ANY'
-])
 // 只有该机器子码表示 expectedRevision 失配；其他 409 可能是任务、权限或执行树变化。
 const MULTI_INSTANCE_REVISION_CONFLICT_SUBCODE = 'WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT'
 
@@ -843,18 +836,6 @@ function currentActionDialogTaskContext() {
 }
 
 /**
- * 校验服务端下一办理人正式策略，详情缺失或枚举越界时拒绝开放办理页面。
- * @param {unknown} policy 流程详情 API 返回的 nextUserAssignmentPolicy。
- * @returns {void} 策略合法时无返回值，否则抛出错误。
- */
-function validateNextUserAssignmentPolicy(policy) {
-  if (typeof policy !== 'string'
-    || !NEXT_USER_ASSIGNMENT_POLICIES.includes(policy)) {
-    throw new Error('下一办理人策略不合法')
-  }
-}
-
-/**
  * 校验详情路由主键的必填和长度边界，避免向后端发送明显非法请求。
  * @returns {boolean} 参数满足接口边界时返回 true。
  */
@@ -920,12 +901,6 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
     if (String(payload.processInstanceId || '').trim() !== expectedProcessInstanceId) {
       throw new Error('流程详情实例关系不一致')
     }
-    validateNextUserAssignmentPolicy(payload.nextUserAssignmentPolicy)
-    payload.multiInstanceState = payload.multiInstanceState == null
-      ? null
-      : normalizeMultiInstanceState(payload.multiInstanceState)
-    // 旧响应或非严格布尔值一律失败关闭，避免页面开放后端必定拒绝的复杂执行树动作。
-    payload.returnAllowed = payload.returnAllowed === true
     const formSemantics = normalizeDetailFormSemantics(payload)
     const attachmentCache = new Map()
     const hydratedApplicationValues = formSemantics.applicationForm
@@ -1270,7 +1245,7 @@ async function requestMultiInstanceState(taskId, force) {
   if (!force) multiInstanceError.value = ''
   try {
     const response = await getMultiInstanceState(normalizedTaskId)
-    const state = normalizeMultiInstanceState(response.data)
+    const state = response.data
     if (requestSequence === multiInstanceRefreshSequence
       && String(detail.currentTask?.taskId || '') === normalizedTaskId) {
       detail.multiInstanceState = state
@@ -1333,8 +1308,7 @@ async function submitMultiInstanceAdjustment() {
   multiInstanceBusy.value = true
   multiInstanceDialog.error = ''
   try {
-    const response = await adjustMultiInstance(request)
-    detail.multiInstanceState = normalizeMultiInstanceState(response.data)
+    await adjustMultiInstance(request)
     proxy.$modal.msgSuccess(action === 'ADD' ? '加签成功' : '减签成功')
     multiInstanceDialog.visible = false
     await loadDetail()
@@ -1395,49 +1369,6 @@ function assertMultiInstanceAdjustmentAllowed(action, member = null, validateInp
   if (!target?.active || !target.removable) return denyAction('减签目标状态已变化，请刷新后重试')
   return true
 }
-
-/**
- * 校验并规范服务端动态多实例状态，避免畸形或失配投影进入页面权限门禁。
- * @param {unknown} value 详情接口或调整接口返回的原始状态。
- * @returns {object} 字段边界、成员唯一性和活动任务关系均合法的状态副本。
- */
-function normalizeMultiInstanceState(value) {
-  if (!value || !['ALL', 'ANY'].includes(value.mode)) throw new Error('会签模式数据不合法')
-  const activityId = String(value.activityId || '').trim()
-  if (!activityId || activityId.length > 64) throw new Error('会签活动标识不合法')
-  if (!Number.isInteger(value.revision) || value.revision < 0 || value.revision > 2147483647) {
-    throw new Error('会签成员版本不合法')
-  }
-  if (!Array.isArray(value.members) || value.members.length < 1 || value.members.length > 100) {
-    throw new Error('会签成员数量不合法')
-  }
-  const userIds = new Set()
-  const activeTaskIds = new Set()
-  const members = value.members.map(member => {
-    if (!positiveUserId(member?.userId)) throw new Error('会签成员主键不合法')
-    const userId = Number(member.userId)
-    if (userIds.has(userId)) throw new Error('会签成员数据重复')
-    userIds.add(userId)
-    const name = String(member.name || '').trim()
-    if (name.length > 200 || typeof member.active !== 'boolean' || typeof member.removable !== 'boolean') {
-      throw new Error('会签成员状态不合法')
-    }
-    const activeTaskId = member.activeTaskId == null ? null : String(member.activeTaskId).trim()
-    const executionId = member.executionId == null ? null : String(member.executionId).trim()
-    if (member.active) {
-      if (!activeTaskId || activeTaskId.length > 64 || !executionId || executionId.length > 64) {
-        throw new Error('会签活动任务关系不合法')
-      }
-      if (activeTaskIds.has(activeTaskId)) throw new Error('会签活动任务数据重复')
-      activeTaskIds.add(activeTaskId)
-    } else if (activeTaskId || executionId || member.removable) {
-      throw new Error('已完成会签成员状态不合法')
-    }
-    return { userId, name, activeTaskId, executionId, active: member.active, removable: member.removable }
-  })
-  return { mode: value.mode, activityId, revision: value.revision, members }
-}
-
 
 /**
  * 判断请求失败是否为服务端 revision 或执行树变化导致的 HTTP 409。
