@@ -12,6 +12,7 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -85,6 +86,7 @@ class WorkflowProcessDetailServiceIntegrationTest
     private SqlSession mapperSession;
     private WorkflowHistoricVariableMapper historicVariableMapper;
     private WorkflowProcessAccessService processAccessService;
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     private WorkflowControlledLoopService controlledLoopService;
     private WorkflowMultiInstanceService multiInstanceService;
     private WorkflowTaskLifecycleService taskLifecycleService;
@@ -122,8 +124,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         when(engineOperations.read(any(Supplier.class))).thenAnswer(invocation ->
                 ((Supplier<?>) invocation.getArgument(0)).get());
         processAccessService = mock(WorkflowProcessAccessService.class);
-        WorkflowDeploymentArtifactRepository artifactRepository =
-                mock(WorkflowDeploymentArtifactRepository.class);
+        artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         when(artifactRepository.selectForms(deploymentId)).thenReturn(formSnapshots());
         WorkflowDeploymentService deploymentService = mock(WorkflowDeploymentService.class);
         when(deploymentService.getBpmnXml(anyString())).thenReturn(BPMN);
@@ -187,6 +188,11 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTaskForm().taskLocal()).isFalse();
         assertThat(detail.currentTaskForm().values().get("value").textValue())
                 .isEqualTo("root-current");
+        assertThat(detail.formDetail().applicationForm().nodeKey()).isEqualTo("mainStart");
+        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
+        assertThat(detail.formDetail().historyForms()).isEmpty();
+        assertThat(detail.formDetail().applicationMissing()).isFalse();
+        assertThat(detail.formDetail().returnedApplication()).isFalse();
         assertThat(detail.currentTask().unclaimAllowed()).isFalse();
         assertThat(detail.resubmitAllowed()).isFalse();
         verify(historyService).createHistoricVariableInstanceQuery();
@@ -316,6 +322,11 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTaskForm().taskLocal()).isTrue();
         assertThat(detail.currentTaskForm().values().get("value").textValue())
                 .isEqualTo("current-local");
+        assertThat(detail.formDetail().applicationForm().nodeKey()).isEqualTo("mainStart");
+        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
+        assertThat(detail.formDetail().historyForms())
+                .extracting(WorkflowProcessFormSnapshotView::taskId)
+                .containsExactly(completed.getId());
         verify(historyService).createHistoricVariableInstanceQuery();
         verify(historicVariableMapper).selectCurrentVariableMetadata(
                 eq(instance.getId()), eq(active.getId()), eq(true), eq(List.of("value")), eq(2));
@@ -342,6 +353,11 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTaskForm().snapshotTime()).isNotNull();
         assertThat(detail.currentTaskForm().values().get("value").textValue())
                 .isEqualTo("submitted-value");
+        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
+        assertThat(detail.formDetail().historyForms()).isEmpty();
+        assertThat(detail.processFormList())
+                .extracting(WorkflowProcessFormSnapshotView::taskId)
+                .containsExactly(null, completed.getId());
         assertThat(detail.resubmitAllowed()).isFalse();
         verifyNoCurrentVariableRead();
     }
@@ -366,6 +382,11 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTaskForm().snapshotTime()).isNull();
         assertThat(detail.currentTaskForm().values().get("startValue").textValue())
                 .isEqualTo("start-submitted");
+        assertThat(detail.formDetail().applicationForm()).isEqualTo(detail.currentTaskForm());
+        assertThat(detail.formDetail().nodeTaskForm()).isNull();
+        assertThat(detail.formDetail().historyForms()).isEmpty();
+        assertThat(detail.formDetail().applicationMissing()).isFalse();
+        assertThat(detail.formDetail().returnedApplication()).isTrue();
         assertThat(detail.resubmitAllowed()).isFalse();
         // 没有申请人局部标记的 returned 任务仍按原路径解析正式多实例 capability。
         verify(multiInstanceService).getOptionalState(active.getId());
@@ -405,8 +426,112 @@ class WorkflowProcessDetailServiceIntegrationTest
 
         assertThat(detail.multiInstanceState()).isNull();
         assertThat(detail.resubmitAllowed()).isTrue();
+        assertThat(detail.formDetail().returnedApplication()).isTrue();
+        assertThat(detail.formDetail().applicationForm().taskId()).isEqualTo(active.getId());
+        assertThat(detail.formDetail().nodeTaskForm()).isNull();
         verify(multiInstanceService, never()).getOptionalState(anyString());
         verify(taskLifecycleService).isApplicationResubmitAllowed(active.getId());
+    }
+
+    /**
+     * 验证没有正式开始提交快照时明确返回缺失语义，但当前节点表单仍按真实变量投影。
+     *
+     * @return void，申请表单被伪造、缺失标记错误或节点表单丢失时测试失败
+     */
+    @Test
+    void reportsMissingApplicationSnapshotWithoutFabricatingApplicationForm()
+    {
+        ProcessInstance instance = startMainProcessWithoutApplicationSnapshot();
+        Task active = activeTask(instance.getId(), "globalTask");
+        runtimeService.setVariable(instance.getId(), "value", "current-without-start");
+
+        WorkflowProcessDetailView detail = readDetail(
+                instance.getId(), active.getId(), "running");
+
+        assertThat(detail.formDetail().applicationForm()).isNull();
+        assertThat(detail.formDetail().applicationMissing()).isTrue();
+        assertThat(detail.formDetail().returnedApplication()).isFalse();
+        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
+        assertThat(detail.formDetail().historyForms()).isEmpty();
+    }
+
+    /**
+     * 验证同一实例出现两个版本关系矛盾的开始提交快照时继续按数据损坏失败关闭。
+     *
+     * @return void，多个正式开始快照被静默选择或降级时测试失败
+     */
+    @Test
+    void rejectsMultipleContradictoryApplicationSnapshots()
+    {
+        ProcessInstance instance = startMainProcess();
+        Task active = activeTask(instance.getId(), "globalTask");
+        String contradictory = WorkflowFormSubmissionSnapshotCodec.encodeStart(
+                deploymentId, 1L, "start-form", "differentStart",
+                Map.of("startValue", "second-start"));
+        runtimeService.setVariable(instance.getId(),
+                WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, contradictory);
+
+        assertThatThrownBy(() -> readDetail(
+                instance.getId(), active.getId(), "running"))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(500);
+                    assertThat(exception.getMessage())
+                            .isEqualTo("流程开始表单提交快照版本关联不一致");
+                });
+    }
+
+    /**
+     * 验证退回申请态缺少正式开始提交快照时拒绝生成可编辑申请表单。
+     *
+     * @return void，退回态缺失开始快照仍返回详情时测试失败
+     */
+    @Test
+    void rejectsReturnedApplicationWithoutApplicationSnapshot()
+    {
+        ProcessInstance instance = startMainProcessWithoutApplicationSnapshot();
+        Task active = activeTask(instance.getId(), "globalTask");
+
+        assertThatThrownBy(() -> readDetail(
+                instance.getId(), active.getId(), "returned"))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(500);
+                    assertThat(exception.getMessage()).isEqualTo("退回开始表单快照异常");
+                });
+    }
+
+    /**
+     * 验证新增表单语义只重组同一次投影结果，不增加部署、历史、快照 Mapper 或当前变量查询。
+     *
+     * @return void，任一既有读取边界被重复调用时测试失败
+     */
+    @Test
+    void reusesExistingProjectionWithoutAdditionalFormOrVariableQueries()
+    {
+        ProcessInstance instance = startMainProcess();
+        Task active = activeTask(instance.getId(), "globalTask");
+        runtimeService.setVariable(instance.getId(), "value", "counted-current");
+
+        WorkflowProcessDetailView detail = readDetail(
+                instance.getId(), active.getId(), "running");
+
+        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
+        verify(artifactRepository, times(1)).selectForms(deploymentId);
+        verify(historyService, times(1)).createHistoricActivityInstanceQuery();
+        verify(historyService, times(1)).createHistoricTaskInstanceQuery();
+        verify(historyService, times(1)).createHistoricVariableInstanceQuery();
+        verify(historicVariableMapper, times(1)).selectSubmissionMetadata(
+                eq(instance.getId()), eq(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME),
+                eq(WorkflowProcessVariableProjection.MAX_VARIABLE_UPDATE_ROWS + 1));
+        verify(historicVariableMapper, times(1)).selectSubmissionBodies(
+                eq(instance.getId()), eq(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME),
+                anyList());
+        verify(historicVariableMapper, times(1)).selectCurrentVariableMetadata(
+                eq(instance.getId()), eq(active.getId()), eq(false),
+                eq(List.of("value")), eq(2));
+        verify(historicVariableMapper, never()).selectCurrentVariableBodies(
+                anyString(), anyString(), anyBoolean(), anyList(), anyList());
     }
 
     /**
@@ -711,6 +836,17 @@ class WorkflowProcessDetailServiceIntegrationTest
         return runtimeService.startProcessInstanceByKey("detailMain", Map.of(
                 "startValue", "start-current",
                 WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot));
+    }
+
+    /**
+     * 启动不含正式开始提交快照的升级前主流程，用于验证明确缺失和退回失败关闭语义。
+     *
+     * @return ProcessInstance，停留在 globalTask 且没有内部开始提交变量的真实实例
+     */
+    private ProcessInstance startMainProcessWithoutApplicationSnapshot()
+    {
+        return runtimeService.startProcessInstanceByKey("detailMain",
+                Map.of("startValue", "legacy-current"));
     }
 
     /**

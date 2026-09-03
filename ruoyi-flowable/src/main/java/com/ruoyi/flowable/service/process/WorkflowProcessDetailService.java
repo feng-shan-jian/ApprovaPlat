@@ -187,6 +187,7 @@ public class WorkflowProcessDetailService
                 .loadAncestorDeploymentIds(instanceId);
         VariableStore variables = variableProjection.loadSubmissionSnapshots(instanceId,
                 instance.deploymentId(), ancestorDeploymentIds);
+        String processStatus = normalizeProcessStatus(instance);
 
         // 只有活动任务才代表当前循环轮次；历史任务不能把详情投影成“下一轮”。
         String activeControlledLoopActivityId = requestedTask != null && requestedTask.active()
@@ -199,13 +200,13 @@ public class WorkflowProcessDetailService
         boolean currentTaskControlledLoop = requestedTask != null
                 && controlledLoopStates.stream().anyMatch(state -> state.active()
                         && currentTaskActivityId.equals(state.activityId()));
+        // 退回申请态由稳定流程状态和本次已授权活动任务共同确定，前端无需重新组合推断。
         boolean returnedApplication = WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
-                instance.businessStatus());
+                processStatus) && requestedTask != null && requestedTask.active();
         FormProjection forms = formProjection.project(new FormProjectionRequest(
                 schemas, history, bpmn.process(), variables, instance.deploymentId(),
                 requestedTask, currentTaskControlledLoop, returnedApplication));
 
-        String processStatus = normalizeProcessStatus(instance);
         HistoryPresentation historyPresentation = historyProjection.projectPresentation(
                 history, instance,
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(processStatus));
@@ -245,9 +246,9 @@ public class WorkflowProcessDetailService
                 instance.startUserId(), historyPresentation.startUserName(), startTime,
                 instance.endTime(), durationMillis, processStatus, requestedTask,
                 nextUserAssignmentPolicy.name(), multiInstanceState, returnAllowed,
-                resubmitAllowed, urgeAllowed, controlledLoopStates, forms.currentTaskForm(),
-                forms.processForms(), historyPresentation.timeline(), processRelations,
-                bpmnXml, historyPresentation.viewer());
+                resubmitAllowed, urgeAllowed, controlledLoopStates, forms.formDetail(),
+                forms.currentTaskForm(), forms.processForms(), historyPresentation.timeline(),
+                processRelations, bpmnXml, historyPresentation.viewer());
     }
 
     /**

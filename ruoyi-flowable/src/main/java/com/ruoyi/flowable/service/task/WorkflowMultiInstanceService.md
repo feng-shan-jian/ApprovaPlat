@@ -46,13 +46,22 @@
 
 ## 返回状态
 
-返回 `mode`、`activityId`、`revision` 和有序 `members`。成员包含 `userId`、
-`name`、`activeTaskId`、`executionId`、`active`、`removable`。页面必须在每次
+返回 `mode`、`activityId`、`revision`、`adjustmentAllowed`、`addAllowed`、
+`remainingCapacity` 和有序 `members`。成员包含 `userId`、`name`、`activeTaskId`、
+`executionId`、`active`、`removable`。`adjustmentAllowed` 与 `addAllowed` 是不可空
+Boolean，`remainingCapacity` 是不可空 Number。页面必须直接消费这些正式能力；每次
 成功或 `409` 后重新查询，并以服务端引擎状态刷新本地视图。
 
 ## 关键设计
 
 - handler 在多实例创建命令内校验正式启用用户并初始化成员快照、模式和 revision。
+- 查询投影和正式 `adjust` 写端复用同一个私有能力规则：当前任务与流程活动、当前用户为
+  正式 assignee、当前任务没有 owner/委派、revision 可安全递增，才通过基础调整门禁。
+  `remainingCapacity` 只按 `WorkflowUserSelectionValidator.MAX_SELECTED_USERS` 减去正式成员数
+  计算并保持在合法范围；基础门禁通过且容量大于零时 `addAllowed=true`。每个成员的
+  `removable` 在相同基础门禁上继续保留“至少两个活动任务、不能减自己、目标无 owner/委派”
+  规则，`adjustmentAllowed = addAllowed || 任一 removable`。因此满员时仍可减签；revision
+  达到 `Integer.MAX_VALUE` 或当前任务进入 owner/委派上下文时，加签和全部减签同时关闭。
 - 动态加签在 revision、execution、变量和 comment 写入前实时核对每个目标用户：用户必须
   启用、未删除，并拥有 `workflow:process:approval` 权限；用户 `1` 保持若依超级管理员语义。
   页面候选目录使用 `GET /workflow/identity/options?type=user&capability=approval`，但服务端
@@ -83,12 +92,13 @@
 
 ## 错误语义
 
-- `400`：字段组合、用户集合、重复用户不合法，或目标用户不存在、停用、删除、缺少
+- `400`：字段组合、用户集合、重复用户、剩余容量不合法，或目标用户不存在、停用、删除、缺少
   `workflow:process:approval` 权限；资格失败时返回
   `所选用户不存在、已停用或无流程办理权限` 且零写副作用。
 - `403`：当前用户不是授权任务的真实 assignee。
 - `404`：任务不存在且当前用户的历史对象关系集合为空。
-- `409`：revision 过期、任务过期、模型超出受控白名单或 execution 状态高风险。只有客户端
+- `409`：revision 过期或到达上限、任务过期、当前任务存在 owner/委派、模型超出受控白名单
+  或 execution 状态高风险。只有客户端
   `expectedRevision` 与服务端不一致或异常链证明为真实动态并发 loser 时携带
   `WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT`；减签自身、仅剩一个活动成员、委派/owner、
   模型白名单冲突等普通业务 `409` 使用各自业务码。

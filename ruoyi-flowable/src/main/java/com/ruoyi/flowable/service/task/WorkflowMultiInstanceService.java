@@ -188,9 +188,25 @@ public class WorkflowMultiInstanceService
                 {
                     throw revisionConflict();
                 }
+                AdjustmentCapability capability = resolveAdjustmentCapability(context);
                 if (input.action() == WorkflowMultiInstanceAdjustmentAction.ADD)
                 {
-                    return addMembers(context, input, actor);
+                    if (!capability.baseAdjustmentAllowed())
+                    {
+                        // owner、委派或 revision 上限属于实时状态冲突，必须先于任何写入拒绝。
+                        throw conflict();
+                    }
+                    if (!capability.addAllowed()
+                            || input.userIds().size() > capability.remainingCapacity())
+                    {
+                        // 保留既有容量越界 400 语义，同时仍在 revision、execution 和审计写入前拒绝。
+                        throw invalidArgument();
+                    }
+                    return addMembers(context, capability, input, actor);
+                }
+                if (!capability.removableTaskIds().contains(input.targetTaskId()))
+                {
+                    throw conflict();
                 }
                 return removeMember(context, input, actor);
             });
@@ -383,21 +399,22 @@ public class WorkflowMultiInstanceService
      * 为当前并行多实例根增加一个或多个正式用户 execution，并通过 revision 变量形成并发 CAS。
      *
      * @param context MultiInstanceContext，写命令前冻结且已完整对账的引擎状态
+     * @param capability AdjustmentCapability，与查询投影复用的写前能力快照
      * @param input AdjustmentInput，ADD 命令及业务意见
      * @param actor WorkflowCurrentIdentity，事务内重新核验的当前办理人
      * @return WorkflowMultiInstanceStateView，写后重新查询并对账的最新状态
      */
     private WorkflowMultiInstanceStateView addMembers(MultiInstanceContext context,
-            AdjustmentInput input, WorkflowCurrentIdentity actor)
+            AdjustmentCapability capability, AdjustmentInput input,
+            WorkflowCurrentIdentity actor)
     {
-        // revision 已达到 int 上限时必须在任何 execution、变量和审计写入前拒绝，避免溢出回负数。
+        // 唯一能力规则已经拒绝 revision 上限；这里取得下一版本只用于后续统一 CAS 写链。
         int nextRevision = requireNextRevision(context.revision());
         // 加签执行前实时重查目标用户审批资格，失败时 revision、execution、变量和审计均不得写入。
         List<String> targetUserIds = userSelectionValidator
                 .requireApprovalEligibleUserIds(input.userIds());
         if (targetUserIds.isEmpty()
-                || context.memberIds().size() + targetUserIds.size()
-                    > WorkflowUserSelectionValidator.MAX_SELECTED_USERS)
+                || targetUserIds.size() > capability.remainingCapacity())
         {
             throw invalidArgument();
         }
@@ -455,20 +472,11 @@ public class WorkflowMultiInstanceService
     private WorkflowMultiInstanceStateView removeMember(MultiInstanceContext context,
             AdjustmentInput input, WorkflowCurrentIdentity actor)
     {
-        // 与加签共用同一写前上限门禁，确保减签不会先删除 execution 再发现 revision 无法递增。
+        // 唯一能力规则已经核验当前任务和目标成员；下一版本只用于后续统一 CAS 写链。
         int nextRevision = requireNextRevision(context.revision());
-        if (Objects.equals(input.taskId(), input.targetTaskId())
-                || context.activeTasks().size() <= 1)
-        {
-            throw conflict();
-        }
         MultiInstanceActiveTaskSnapshot targetTask = context.activeTasks().stream()
                 .filter(task -> input.targetTaskId().equals(task.taskId()))
                 .findFirst().orElseThrow(this::conflict);
-        if (StringUtils.hasText(targetTask.owner()) || targetTask.delegated())
-        {
-            throw conflict();
-        }
 
         List<String> nextMembers = new ArrayList<>(context.memberIds());
         if (!nextMembers.remove(targetTask.assignee())
@@ -691,13 +699,14 @@ public class WorkflowMultiInstanceService
     }
 
     /**
-     * 把完整引擎上下文转换为页面状态，并按一次批量主数据查询补齐最小用户名称。
+     * 把完整引擎上下文转换为页面状态，并复用唯一能力规则生成加签、减签和容量协议。
      *
      * @param context MultiInstanceContext，已通过全部一致性校验的当前状态
      * @return WorkflowMultiInstanceStateView，按成员快照顺序生成的不可变页面视图
      */
     private WorkflowMultiInstanceStateView buildState(MultiInstanceContext context)
     {
+        AdjustmentCapability capability = resolveAdjustmentCapability(context);
         Map<String, MultiInstanceActiveTaskSnapshot> activeTasksByUser =
                 context.activeTasks().stream().collect(Collectors.toMap(
                         MultiInstanceActiveTaskSnapshot::assignee,
@@ -708,11 +717,8 @@ public class WorkflowMultiInstanceService
         {
             MultiInstanceActiveTaskSnapshot activeTask = activeTasksByUser.get(userId);
             boolean active = activeTask != null;
-            boolean removable = active && context.activeTasks().size() > 1
-                    && !Objects.equals(context.currentTask().getId(),
-                            activeTask.taskId())
-                    && !StringUtils.hasText(activeTask.owner())
-                    && !activeTask.delegated();
+            boolean removable = active
+                    && capability.removableTaskIds().contains(activeTask.taskId());
             members.add(new WorkflowMultiInstanceMemberView(Long.valueOf(userId),
                     names.getOrDefault(userId, userId),
                     active ? activeTask.taskId() : null,
@@ -720,7 +726,52 @@ public class WorkflowMultiInstanceService
                     active, removable));
         }
         return new WorkflowMultiInstanceStateView(context.mode().name(),
-                context.activityId(), context.revision(), members);
+                context.activityId(), context.revision(), capability.adjustmentAllowed(),
+                capability.addAllowed(), capability.remainingCapacity(), members);
+    }
+
+    /**
+     * 由同一份实时任务、execution、成员、计数和轮次上下文计算全部动态调整资格。
+     *
+     * @param context MultiInstanceContext，已完成活动态、正式 assignee 和完整对账的上下文
+     * @return AdjustmentCapability，剩余容量、加签资格和允许减签的目标任务集合
+     */
+    private AdjustmentCapability resolveAdjustmentCapability(MultiInstanceContext context)
+    {
+        int remainingCapacity = WorkflowUserSelectionValidator.MAX_SELECTED_USERS
+                - context.memberIds().size();
+        if (remainingCapacity < 0
+                || remainingCapacity > WorkflowUserSelectionValidator.MAX_SELECTED_USERS)
+        {
+            throw dataError();
+        }
+        MultiInstanceActiveTaskSnapshot sourceTask = context.runtime().sourceTask();
+        // 上下文装载已证明任务和流程活动；此处继续把正式办理人、owner、委派和版本上限收敛为统一门禁。
+        boolean baseAdjustmentAllowed = !context.currentTask().isSuspended()
+                && StringUtils.hasText(context.currentTask().getAssignee())
+                && Objects.equals(context.currentTask().getAssignee(), sourceTask.assignee())
+                && context.currentTask().getOwner() == null
+                && context.currentTask().getDelegationState() == null
+                && sourceTask.owner() == null && !sourceTask.delegated()
+                && context.revision() < Integer.MAX_VALUE;
+        Set<String> removableTaskIds = new LinkedHashSet<>();
+        if (baseAdjustmentAllowed && context.activeTasks().size() > 1)
+        {
+            for (MultiInstanceActiveTaskSnapshot activeTask : context.activeTasks())
+            {
+                // 每个目标先叠加当前任务基础门禁，再保留不能减自己、目标无 owner/委派的原有规则。
+                if (!Objects.equals(context.currentTask().getId(), activeTask.taskId())
+                        && !StringUtils.hasText(activeTask.owner())
+                        && !activeTask.delegated())
+                {
+                    removableTaskIds.add(activeTask.taskId());
+                }
+            }
+        }
+        boolean addAllowed = baseAdjustmentAllowed && remainingCapacity > 0;
+        boolean adjustmentAllowed = addAllowed || !removableTaskIds.isEmpty();
+        return new AdjustmentCapability(baseAdjustmentAllowed, adjustmentAllowed,
+                addAllowed, remainingCapacity, Set.copyOf(removableTaskIds));
     }
 
     /**
@@ -1056,6 +1107,21 @@ public class WorkflowMultiInstanceService
     private record AdjustmentInput(String taskId,
             WorkflowMultiInstanceAdjustmentAction action, int expectedRevision,
             String comment, List<Long> userIds, String targetTaskId)
+    {
+    }
+
+    /**
+     * 查询投影和正式调整写端共同消费的唯一动态调整规则结果。
+     *
+     * @param baseAdjustmentAllowed boolean，是否通过活动办理人、owner、委派和 revision 基础门禁
+     * @param adjustmentAllowed boolean，是否至少允许一种调整动作
+     * @param addAllowed boolean，是否允许进入加签写链
+     * @param remainingCapacity int，正式成员剩余容量
+     * @param removableTaskIds Set&lt;String&gt;，当前允许减签的 sibling 任务主键
+     */
+    private record AdjustmentCapability(boolean baseAdjustmentAllowed,
+            boolean adjustmentAllowed, boolean addAllowed, int remainingCapacity,
+            Set<String> removableTaskIds)
     {
     }
 

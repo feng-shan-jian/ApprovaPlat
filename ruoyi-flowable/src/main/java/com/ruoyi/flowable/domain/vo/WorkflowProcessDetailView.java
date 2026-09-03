@@ -30,6 +30,7 @@ import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
  * @param resubmitAllowed boolean，当前用户能否对申请人待修改任务执行真实重提
  * @param urgeAllowed boolean，当前用户能否对运行中的根流程执行真实人工催办
  * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，部署循环配置、当前轮次和历史轨迹
+ * @param formDetail WorkflowProcessFormDetailView，申请、节点、历史及退回申请态的正式表单语义
  * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单及局部值，允许为空
  * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行节点的表单快照和值
  * @param historyProcNodeList List&lt;WorkflowProcessActivityView&gt;，开始、用户任务和结束时间线
@@ -59,6 +60,7 @@ public record WorkflowProcessDetailView(
         boolean resubmitAllowed,
         boolean urgeAllowed,
         List<WorkflowControlledLoopStateView> controlledLoopStates,
+        WorkflowProcessFormDetailView formDetail,
         WorkflowProcessFormSnapshotView currentTaskForm,
         List<WorkflowProcessFormSnapshotView> processFormList,
         List<WorkflowProcessActivityView> historyProcNodeList,
@@ -90,6 +92,7 @@ public record WorkflowProcessDetailView(
      * @param resubmitAllowed boolean，当前用户和完整准备链是否满足正式重提前置条件
      * @param urgeAllowed boolean，当前用户和完整运行树是否满足正式人工催办前置条件
      * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，受控循环状态列表
+     * @param formDetail WorkflowProcessFormDetailView，语义明确且不可为空的表单详情
      * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单，允许为空
      * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行表单快照
      * @param historyProcNodeList List&lt;WorkflowProcessActivityView&gt;，流程历史时间线
@@ -104,6 +107,7 @@ public record WorkflowProcessDetailView(
                 processFormList, "流程表单列表不能为空"));
         controlledLoopStates = List.copyOf(Objects.requireNonNull(
                 controlledLoopStates, "受控循环状态不能为空"));
+        Objects.requireNonNull(formDetail, "表单详情不能为空");
         historyProcNodeList = List.copyOf(Objects.requireNonNull(
                 historyProcNodeList, "流程时间线不能为空"));
         processRelations = List.copyOf(Objects.requireNonNull(
@@ -118,10 +122,27 @@ public record WorkflowProcessDetailView(
         {
             throw new IllegalArgumentException("退回能力必须绑定活动任务");
         }
-        if (resubmitAllowed && (currentTask == null || !currentTask.active()
-                || !"returned".equals(processStatus)))
+        // 退回申请标记必须与稳定流程状态及当前活动任务事实双向一致，避免普通表单伪装退回任务。
+        boolean returnedActivity = "returned".equals(processStatus)
+                && currentTask != null && currentTask.active();
+        if (formDetail.returnedApplication() != returnedActivity)
         {
-            throw new IllegalArgumentException("重提能力必须绑定 returned 活动任务");
+            throw new IllegalArgumentException("退回申请标记与 returned 活动任务矛盾");
+        }
+        if (returnedActivity)
+        {
+            if (!Objects.equals(currentTask.taskId(),
+                    formDetail.applicationForm().taskId()))
+            {
+                throw new IllegalArgumentException("退回申请表单与当前任务主键不一致");
+            }
+        }
+        if (resubmitAllowed && (currentTask == null || !currentTask.active()
+                || !"returned".equals(processStatus)
+                || !formDetail.returnedApplication()
+                || formDetail.applicationForm() == null))
+        {
+            throw new IllegalArgumentException("重提能力必须绑定退回申请表单");
         }
     }
 

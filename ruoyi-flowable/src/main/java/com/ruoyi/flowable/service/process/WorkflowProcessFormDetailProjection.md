@@ -25,7 +25,16 @@ FormProjection forms = projection.project(new FormProjectionRequest(
         requestedTask, currentTaskControlledLoop, returnedApplication));
 ```
 
-`FormSchemas` 只在授权后的详情编排链中传递部署表单索引；`FormProjection` 返回可选的 `currentTaskForm` 和正式 `processForms` 列表。
+`FormSchemas` 只在授权后的详情编排链中传递部署表单索引；`FormProjection` 由一次读取同时返回
+正式 `formDetail` 以及过渡期 `currentTaskForm`、`processForms`，旧字段不会重新查询或独立重建。
+
+`formDetail` 固定包含：
+
+- `applicationForm`：普通态为唯一正式开始提交快照；退回申请态为绑定当前活动任务的可编辑开始表单；
+- `nodeTaskForm`：普通态为本次请求任务的节点表单，退回申请态固定为空；
+- `historyForms`：仅正式历史 UserTask 提交，排除开始表单和本次请求 task ID，并复制为不可修改集合；
+- `applicationMissing`：严格表示正式开始提交快照不存在；
+- `returnedApplication`：仅由稳定 `returned` 状态和本次已授权活动任务确定。
 
 ## 关键设计
 
@@ -35,5 +44,7 @@ FormProjection forms = projection.project(new FormProjectionRequest(
 - 受控循环只继承同节点上一轮正式 task-local 快照，当前轮值优先；
 - 表单正文累计最多 4 MiB，变量 JSON 累计最多 1 MiB；预算在历史表单和当前表单之间共享；
 - deployment、form、node、task、localScope 或历史活动关系漂移时失败关闭。
+- 新 VO 构造时拒绝退回态缺少申请表单、退回态出现节点表单、申请表单 task 绑定错误、
+  缺失标记矛盾以及历史表单没有 task ID；流程详情继续核对 returned 状态、活动任务和任务主键。
 
 `WorkflowProcessDetailService` 直接注入并调用该具体组件，表单投影职责集中在这一实现中。

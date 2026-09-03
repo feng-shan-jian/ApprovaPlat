@@ -8,6 +8,9 @@
 
 - 实例、定义、部署、发起人、时间和稳定流程状态；
 - 请求指定的活动或历史任务快照，以及该节点部署表单快照；
+- 非空 `formDetail` 将申请表单、请求节点表单、正式历史 UserTask 表单、开始快照缺失和退回申请态
+  分别表达。退回申请态必须绑定稳定 `returned` 状态的活动 `currentTask`，申请表单 task ID 必须
+  与该任务一致；`resubmitAllowed=true` 还必须同时存在该退回申请表单；
 - 活动 `currentTask` 返回服务端 `unclaimAllowed` 快照；它由对象授权服务复用 `WorkflowTaskUnclaimPolicy` 计算，历史任务或无当前任务不会返回 `true`，且不替代 `workflow:process:claim` 权限及写入时重新校验；
 - 当前用户对请求任务的权威 `returnAllowed` 能力；该字段复用正式退回准备链，满足唯一 `ACTIVE` 轮次和完整实时快照的受控会签/或签可以返回 `true`，静态多实例、子流程、CallActivity、跨作用域和复杂执行树失败关闭；
 - 当前用户对申请人待修改任务的权威原始布尔 `resubmitAllowed`；只有 `returnedApplicantTask` 前置识别命中后才调用正式重提准备链，合法原发起人返回 `true`，无任务、历史任务、普通运行态、非申请人和 returned 协议漂移返回 `false`；
@@ -37,7 +40,14 @@
 
 因此，后续节点覆盖同名全局字段时，前序节点已经提交的历史值保持不变；多个 `localScope` 任务的同名字段按 task ID 隔离。存在正式内部提交快照的表单进入历史详情；缺少快照的记录由页面标记缺失并默认展示流程图。
 
-`processFormList` 的业务身份由 `taskId` 明确区分：至多一个 `taskId=null` 的表单表示正式开始提交，也就是申请表单；`taskId!=null` 才表示节点历史提交。多个开始提交按数据损坏返回 `500`；零个开始提交保持省略，由页面明确显示缺失并默认流程图。退回态的 `currentTaskForm` 只是在当前申请人任务上投影同一开始快照，部署、formKey、formId、sourceType 和开始节点身份必须一致；普通办理态的 `currentTaskForm` 仍只表示当前 UserTask 的节点表单，节点表单缺席时返回空。
+`formDetail.applicationForm` 直接表达唯一正式开始提交：普通态保持 `taskId=null`，退回申请态绑定
+当前活动任务；不存在时返回 null 并令 `applicationMissing=true`。`nodeTaskForm` 只表达本次请求
+UserTask，退回申请态固定为空。`historyForms` 只含正式历史 UserTask 提交，并排除本次请求的
+`currentTask.taskId`，避免历史任务详情重复显示。
+
+过渡期顶层 `currentTaskForm` 和 `processFormList` 暂时保留。二者与 `formDetail` 由同一次
+`WorkflowProcessFormDetailProjection` 结果生成，不增加部署制品、Mapper、Flowable 历史或当前变量
+查询，也不使用 alias、fallback、转换器或兼容 Adapter。后续前端完成正式协议切换后再单独删除旧字段。
 
 请求明确指向活动任务且该 BPMN 节点具有部署表单时，服务按部署 schema 查询当前变量并固定返回 `snapshotTime=null`：普通节点读取流程根变量，BPMN 节点声明 `localScope=true` 或 `localScope=1` 时读取当前 task ID 的局部变量。历史详情直接使用正式提交快照。响应字段白名单排除 `initiator`、`processStatus`、多实例计数、Flowable 跳过标志和所有 `__ruoyi_workflow_` 保留变量。
 

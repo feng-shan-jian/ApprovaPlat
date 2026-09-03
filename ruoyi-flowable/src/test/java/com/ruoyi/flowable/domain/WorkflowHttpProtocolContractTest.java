@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.lang.reflect.RecordComponent;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -12,9 +13,14 @@ import org.junit.jupiter.api.Test;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
 import com.ruoyi.flowable.domain.dto.WorkflowCopyQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowManualUrgeView;
+import com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceMemberView;
+import com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceStateView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessCommentView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
+import com.ruoyi.flowable.domain.vo.WorkflowProcessFormDetailView;
+import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessViewerView;
+import com.ruoyi.flowable.identity.WorkflowUserSelectionValidator;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -126,6 +132,195 @@ class WorkflowHttpProtocolContractTest
     }
 
     /**
+     * 验证既有退回能力继续使用不可空原始 boolean，字段名和 JSON 类型保持不变。
+     *
+     * @return void，returnAllowed 类型或序列化协议漂移时测试失败
+     */
+    @Test
+    void processDetailReturnCapabilityKeepsStrictBooleanProtocol()
+    {
+        RecordComponent component = Arrays.stream(
+                WorkflowProcessDetailView.class.getRecordComponents())
+                .filter(candidate -> "returnAllowed".equals(candidate.getName()))
+                .findFirst().orElseThrow();
+        assertThat(component.getType()).isEqualTo(boolean.class);
+
+        JsonNode json = JsonMapper.shared().valueToTree(
+                processDetail("running", taskSnapshot(true), false, false));
+        assertThat(json.path("returnAllowed").isBoolean()).isTrue();
+        assertThat(json.path("returnAllowed").booleanValue()).isFalse();
+        assertThat(json.path("resubmitAllowed").isBoolean()).isTrue();
+        assertThat(json.path("urgeAllowed").isBoolean()).isTrue();
+    }
+
+    /**
+     * 验证多实例调整、加签和剩余容量使用固定原始类型及 JSON 字面量。
+     *
+     * @return void，字段类型、名称或 JSON 类型漂移时测试失败
+     */
+    @Test
+    void multiInstanceCapabilitiesUseStrictPrimitiveProtocol()
+    {
+        RecordComponent adjustmentAllowed = component(
+                WorkflowMultiInstanceStateView.class, "adjustmentAllowed");
+        RecordComponent addAllowed = component(
+                WorkflowMultiInstanceStateView.class, "addAllowed");
+        RecordComponent remainingCapacity = component(
+                WorkflowMultiInstanceStateView.class, "remainingCapacity");
+        assertThat(adjustmentAllowed.getType()).isEqualTo(boolean.class);
+        assertThat(addAllowed.getType()).isEqualTo(boolean.class);
+        assertThat(remainingCapacity.getType()).isEqualTo(int.class);
+
+        WorkflowMultiInstanceMemberView member = new WorkflowMultiInstanceMemberView(
+                2L, "成员", "task-2", "execution-2", true, false);
+        int expectedRemainingCapacity = WorkflowUserSelectionValidator.MAX_SELECTED_USERS
+                - 1;
+        WorkflowMultiInstanceStateView state = new WorkflowMultiInstanceStateView(
+                "ALL", "approval", 7L, true, true,
+                expectedRemainingCapacity, List.of(member));
+        JsonNode json = JsonMapper.shared().valueToTree(state);
+        assertThat(json.path("adjustmentAllowed").isBoolean()).isTrue();
+        assertThat(json.path("adjustmentAllowed").booleanValue()).isTrue();
+        assertThat(json.path("addAllowed").isBoolean()).isTrue();
+        assertThat(json.path("addAllowed").booleanValue()).isTrue();
+        assertThat(json.path("remainingCapacity").isNumber()).isTrue();
+        assertThat(json.path("remainingCapacity").intValue())
+                .isEqualTo(expectedRemainingCapacity);
+    }
+
+    /**
+     * 验证多实例状态拒绝空成员、容量与成员数量不一致以及成员数量超过正式上限。
+     *
+     * @return void，任一矛盾成员容量组合能够构造时测试失败
+     */
+    @Test
+    void multiInstanceStateRejectsContradictoryMemberCapacity()
+    {
+        WorkflowMultiInstanceMemberView removable = new WorkflowMultiInstanceMemberView(
+                2L, "成员", "task-2", "execution-2", true, true);
+
+        assertThatThrownBy(() -> new WorkflowMultiInstanceStateView(
+                "ALL", "approval", 7L, false, false,
+                WorkflowUserSelectionValidator.MAX_SELECTED_USERS, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("多实例成员状态不能为空");
+        assertThatThrownBy(() -> new WorkflowMultiInstanceStateView(
+                "ALL", "approval", 7L, true, false, 0, List.of(removable)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("多实例剩余容量与成员数量矛盾");
+        assertThatThrownBy(() -> new WorkflowMultiInstanceStateView(
+                "ALL", "approval", 7L, true, false, -1,
+                java.util.Collections.nCopies(
+                        WorkflowUserSelectionValidator.MAX_SELECTED_USERS + 1,
+                        removable)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("多实例成员数量超过上限");
+    }
+
+    /**
+     * 验证 formDetail 始终序列化为对象，五个字段名称与 JSON 类型保持稳定。
+     *
+     * @return void，详情缺少对象、字段名或字段类型发生漂移时测试失败
+     */
+    @Test
+    void processFormDetailUsesStableObjectProtocol()
+    {
+        List<WorkflowProcessFormSnapshotView> mutableHistory = new ArrayList<>();
+        mutableHistory.add(formSnapshot("history-task"));
+        WorkflowProcessFormDetailView formDetail = new WorkflowProcessFormDetailView(
+                formSnapshot(null), formSnapshot("current-task"),
+                mutableHistory, false, false);
+        mutableHistory.clear();
+        assertThat(componentNames(WorkflowProcessFormDetailView.class))
+                .containsExactlyInAnyOrder("applicationForm", "nodeTaskForm",
+                        "historyForms", "applicationMissing", "returnedApplication");
+
+        JsonNode detailJson = JsonMapper.shared().valueToTree(formDetail);
+        assertThat(detailJson.path("applicationForm").isObject()).isTrue();
+        assertThat(detailJson.path("nodeTaskForm").isObject()).isTrue();
+        assertThat(detailJson.path("historyForms").isArray()).isTrue();
+        assertThat(detailJson.path("applicationMissing").isBoolean()).isTrue();
+        assertThat(detailJson.path("returnedApplication").isBoolean()).isTrue();
+        assertThat(formDetail.historyForms()).hasSize(1);
+        assertThatThrownBy(() -> formDetail.historyForms().add(formSnapshot("another-task")))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        JsonNode processJson = JsonMapper.shared().valueToTree(
+                processDetail("running", null, false, false));
+        assertThat(processJson.path("formDetail").isObject()).isTrue();
+    }
+
+    /**
+     * 验证表单语义 VO 拒绝全部明确定义的矛盾状态。
+     *
+     * @return void，任一矛盾组合能够构造时测试失败
+     */
+    @Test
+    void processFormDetailRejectsAllContradictoryCombinations()
+    {
+        WorkflowProcessFormSnapshotView application = formSnapshot(null);
+        WorkflowProcessFormSnapshotView returnedApplication = formSnapshot("task");
+        WorkflowProcessFormSnapshotView nodeTask = formSnapshot("node-task");
+
+        assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
+                null, null, List.of(), true, true))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
+                returnedApplication, nodeTask, List.of(), false, true))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
+                returnedApplication, null, List.of(), false, false))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
+                formSnapshot(" "), null, List.of(), false, true))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
+                application, null, List.of(), true, false))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
+                null, null, List.of(), false, false))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
+                application, null, List.of(application), false, false))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * 验证流程详情拒绝退回表单与稳定状态、活动任务、任务主键及重提能力的跨字段矛盾。
+     *
+     * @return void，任一跨字段矛盾能够进入 HTTP 响应时测试失败
+     */
+    @Test
+    void processDetailRejectsContradictoryReturnedFormBindings()
+    {
+        WorkflowProcessFormDetailView returned = new WorkflowProcessFormDetailView(
+                formSnapshot("task"), null, List.of(), false, true);
+        WorkflowProcessFormDetailView mismatched = new WorkflowProcessFormDetailView(
+                formSnapshot("other-task"), null, List.of(), false, true);
+        WorkflowProcessFormDetailView ordinaryMissing = new WorkflowProcessFormDetailView(
+                null, null, List.of(), true, false);
+
+        assertThatThrownBy(() -> processDetail(
+                "running", taskSnapshot(true), false, false, returned))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> processDetail(
+                "returned", taskSnapshot(false), false, false, returned))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> processDetail(
+                "returned", taskSnapshot(true), false, false, mismatched))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> processDetail(
+                "returned", taskSnapshot(true), false, false, ordinaryMissing))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> processDetail(
+                "returned", taskSnapshot(true), true, false, ordinaryMissing))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> processDetail(
+                "running", null, false, false, null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    /**
      * 验证详情构造器拒绝把 true 绑定到无任务、历史任务或非 returned 流程。
      *
      * @return void，任一矛盾 capability 快照能够构造时测试失败
@@ -156,13 +351,65 @@ class WorkflowHttpProtocolContractTest
             WorkflowTaskAccessSnapshot currentTask, boolean resubmitAllowed,
             boolean urgeAllowed)
     {
+        WorkflowProcessFormDetailView formDetail = "returned".equals(processStatus)
+                && currentTask != null && currentTask.active()
+                        ? new WorkflowProcessFormDetailView(
+                                formSnapshot(currentTask.taskId()), null,
+                                List.of(), false, true)
+                        : new WorkflowProcessFormDetailView(
+                                null, null, List.of(), true, false);
+        return processDetail(processStatus, currentTask, resubmitAllowed,
+                urgeAllowed, formDetail);
+    }
+
+    /**
+     * 创建允许显式注入表单语义的最小流程详情快照。
+     *
+     * @param processStatus String，待验证的稳定流程状态
+     * @param currentTask WorkflowTaskAccessSnapshot，可选活动或历史任务
+     * @param resubmitAllowed boolean，待验证的重提能力值
+     * @param urgeAllowed boolean，待验证的催办能力值
+     * @param formDetail WorkflowProcessFormDetailView，待验证的表单语义组合
+     * @return WorkflowProcessDetailView，构造成功时可直接交给 Jackson 序列化
+     */
+    private WorkflowProcessDetailView processDetail(String processStatus,
+            WorkflowTaskAccessSnapshot currentTask, boolean resubmitAllowed,
+            boolean urgeAllowed, WorkflowProcessFormDetailView formDetail)
+    {
         return new WorkflowProcessDetailView("instance", "definition", "process",
                 "流程", 1, "category", "deployment", null, "applicant",
                 "申请人", Instant.EPOCH, null, null, processStatus, currentTask,
-                "DISABLED", null, false, resubmitAllowed, urgeAllowed, List.of(), null,
-                List.of(), List.of(), List.of(), "<definitions/>",
+                "DISABLED", null, false, resubmitAllowed, urgeAllowed, List.of(),
+                formDetail, null, List.of(), List.of(), List.of(), "<definitions/>",
                 new WorkflowProcessViewerView(Set.of(), Set.of(), Set.of(),
                         Set.of(), Set.of()));
+    }
+
+    /**
+     * 创建协议测试使用的最小表单快照。
+     *
+     * @param taskId String，开始表单为空，任务表单使用非空主键
+     * @return WorkflowProcessFormSnapshotView，不含业务值的不可变表单快照
+     */
+    private WorkflowProcessFormSnapshotView formSnapshot(String taskId)
+    {
+        return new WorkflowProcessFormSnapshotView("activity", taskId,
+                "TEMPLATE", 1L, "form", "node", "表单", "节点",
+                "{\"fields\":[]}", false, java.util.Map.of(), Instant.EPOCH);
+    }
+
+    /**
+     * 按字段名读取 record 组件。
+     *
+     * @param recordType Class&lt;?&gt;，待检查的 record 类型
+     * @param componentName String，组件名称
+     * @return RecordComponent，唯一匹配的组件
+     */
+    private RecordComponent component(Class<?> recordType, String componentName)
+    {
+        return Arrays.stream(recordType.getRecordComponents())
+                .filter(candidate -> componentName.equals(candidate.getName()))
+                .findFirst().orElseThrow();
     }
 
     /**
