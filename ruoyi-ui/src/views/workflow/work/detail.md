@@ -30,9 +30,9 @@ router.push({
 
 ## 关键设计
 
-- 页面能力由详情 API 返回的活动任务、办理人、流程状态、`returnAllowed` 和动态多实例投影共同确定；详情响应、成员状态刷新响应以及调整成功后的详情响应均直接消费服务端 `multiInstanceState`，不再由前端重校验或规范化；后端在每个写命令中执行权威权限与状态校验。
-- `processFormList` 中唯一 `taskId=null` 的正式开始提交快照是“申请表单”，其余记录是历史节点表单；当前 UserTask 的 `currentTaskForm` 是独立的“本节点办理表单”，节点绑定表单时显示该页签。退回态把后端绑定当前任务的开始表单投影显示为可编辑“修改申请表单”，节点历史保持独立投影。
-- 默认页签顺序固定为：退回态申请表单；正常态优先显示本节点表单，其次显示申请表单。唯一开始提交快照缺失时固定显示默认流程图和“申请表单快照缺失”；多个开始快照或退回投影身份串线会使详情加载失败并关闭。
+- 页面能力直接消费详情 API 的正式字段：动态成员调整只认 `multiInstanceState.adjustmentAllowed === true`，加签只认 `addAllowed === true`，剩余容量只取 `remainingCapacity`，减签只认成员的 `removable === true`；前端仅叠加 `workflow:process:approval` 入口权限，后端在每个写命令中执行权威权限、状态和 revision 校验。
+- `formDetail` 是详情表单的唯一协议：`applicationForm`、`nodeTaskForm`、`historyForms`、`applicationMissing` 和 `returnedApplication` 分别表达申请表单、本节点办理表单、历史节点表单、申请快照缺失和退回申请态，页面不再根据流程、任务或表单来源关系推导这些语义。
+- 默认页签只处理展示优先级：申请快照缺失时显示流程图；存在本节点表单时优先显示本节点页签；否则显示申请表单页签。
 - 退回入口在 `returnAllowed=true` 时显示和提交。服务端使用可信历史中的首审批节点作为退回目标；受控会签/或签一次撤销来源同根全部活动任务并生成一个待修改任务。
 - 重提入口只消费详情 API 返回的 `resubmitAllowed === true` 业务能力，前端仅叠加 `workflow:process:start` 入口权限，不再根据 `currentTaskOwned`、`processStatus` 或 `startUserId` 推断。点击前与用户确认后分别复核能力，期间冻结并校验任务上下文；普通首审批重提在当前任务上恢复退回时冻结的办理配置，来源轮次完成 `RETURNED→REOPENED` 审计关闭，首审批为受控多实例时按该节点的开始选择、部署配置或正式目录来源重新建组。后续 ALL/ANY 节点在自然重新进入时从各自权威来源建立新轮。静态多实例、CallActivity、跨作用域、边界事件、循环和含副作用路径返回稳定冲突，最终写入仍由后端事务门禁决定。
 - 当前任务表单按部署 schema 校验；附件只提交正式附件 UUID，并通过授权元数据接口完成回显。

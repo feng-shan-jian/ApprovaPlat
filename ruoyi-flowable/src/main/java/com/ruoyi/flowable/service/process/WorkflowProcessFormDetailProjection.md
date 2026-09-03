@@ -25,8 +25,8 @@ FormProjection forms = projection.project(new FormProjectionRequest(
         requestedTask, currentTaskControlledLoop, returnedApplication));
 ```
 
-`FormSchemas` 只在授权后的详情编排链中传递部署表单索引；`FormProjection` 由一次读取同时返回
-正式 `formDetail` 以及过渡期 `currentTaskForm`、`processForms`，旧字段不会重新查询或独立重建。
+`FormSchemas` 只在授权后的详情编排链中传递部署表单索引；`FormProjection` 只返回正式
+`formDetail`，它是流程详情唯一的表单协议。
 
 `formDetail` 固定包含：
 

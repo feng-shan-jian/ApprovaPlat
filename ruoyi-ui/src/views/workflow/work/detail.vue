@@ -15,9 +15,9 @@
       <div v-if="ready && !loading && (hasAnyTaskAction || canUrge)" class="workflow-detail__actions">
         <el-button v-if="canUrge" icon="Bell" :loading="urgeBusy" @click="openUrgeDialog">催办</el-button>
         <el-button
-          v-if="canAdjustMultiInstance"
+          v-if="multiInstanceState?.addAllowed === true && hasPermission('workflow:process:approval')"
           icon="Plus"
-          :disabled="remainingMultiInstanceCapacity === 0 || multiInstanceBusy || multiInstanceDialogClosing || actionBusy"
+          :disabled="multiInstanceBusy || multiInstanceDialogClosing || actionBusy"
           @click="openMultiInstanceDialog('ADD')"
         >加签</el-button>
         <el-button v-if="canUnclaim" :loading="actionBusy" @click="confirmUnclaim">取消认领</el-button>
@@ -144,10 +144,10 @@
             />
           </el-tooltip>
           <el-button
-            v-if="canAdjustMultiInstance"
+            v-if="multiInstanceState?.addAllowed === true && hasPermission('workflow:process:approval')"
             type="primary"
             icon="Plus"
-            :disabled="remainingMultiInstanceCapacity === 0 || multiInstanceBusy || multiInstanceDialogClosing || actionBusy"
+            :disabled="multiInstanceBusy || multiInstanceDialogClosing || actionBusy"
             @click="openMultiInstanceDialog('ADD')"
           >加签</el-button>
         </div>
@@ -439,7 +439,7 @@
             collapse-tags
             collapse-tags-tooltip
             :max-collapse-tags="3"
-            :multiple-limit="multiInstanceSelectionLimit"
+            :multiple-limit="remainingMultiInstanceCapacity"
             :reserve-keyword="false"
             :remote-method="searchMultiInstanceUsers"
             :loading="multiInstanceUserLoading"
@@ -532,7 +532,6 @@ import { listApprovalUserOptions, listIdentityOptions } from '@/api/workflow/ide
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
 import { flattenFormFields, normalizeFormTemplate } from '@/components/workflow/form/formTemplate'
-import { normalizeDetailFormSemantics } from './detailFormSemantics'
 import useUserStore from '@/store/modules/user'
 import { useWindowSize } from '@vueuse/core'
 
@@ -683,9 +682,8 @@ const activeMultiInstanceCount = computed(() => multiInstanceMembers.value.filte
 const completedMultiInstanceCount = computed(() => multiInstanceMembers.value.length - activeMultiInstanceCount.value)
 // 成员 ID 集合仅用于提前提示重复加签；后端仍会在同一事务内重新校验身份、revision 和活动 execution。
 const multiInstanceMemberIds = computed(() => new Set(multiInstanceMembers.value.map(member => String(member.userId))))
-// 页面按正式 100 人上限约束选择器容量，不能代替后端并发写入后的最终容量校验。
-const remainingMultiInstanceCapacity = computed(() => Math.max(0, 100 - multiInstanceMembers.value.length))
-const multiInstanceSelectionLimit = computed(() => Math.max(1, remainingMultiInstanceCapacity.value))
+// 新增成员容量直接消费详情 API 的正式快照，后端在写事务内执行最终容量校验。
+const remainingMultiInstanceCapacity = computed(() => multiInstanceState.value?.remainingCapacity)
 // 下一办理人显示、必填和模式完全采用详情 API 的部署模型策略，页面不自行解析 BPMN 或试错探测。
 const nextUserAssignmentPolicy = computed(() => String(detail.nextUserAssignmentPolicy || 'DISABLED'))
 const nextUserSelectionEnabled = computed(() => nextUserAssignmentPolicy.value !== 'DISABLED')
@@ -728,8 +726,9 @@ const canMoveTask = computed(() => canOperateTask.value && !hasDelegationContext
 const canReturnTask = computed(() => canMoveTask.value && detail.returnAllowed === true)
 // 受控动态多实例的 assignee 必须与服务端成员快照一致，禁止页面开放委派或转办改写办理人。
 const canManageTask = computed(() => canMoveTask.value && !multiInstanceState.value)
-// 动态成员调整沿用普通节点移动的办理人、运行态、权限和委派门禁，并要求详情明确返回受控状态。
-const canAdjustMultiInstance = computed(() => canMoveTask.value && Boolean(multiInstanceState.value))
+// 动态成员调整只消费服务端正式能力，前端仅叠加审批入口权限。
+const canAdjustMultiInstance = computed(() => multiInstanceState.value?.adjustmentAllowed === true
+  && hasPermission('workflow:process:approval'))
 // 取消认领业务能力只消费详情 API 的服务端快照，前端仅叠加入口权限。
 const canUnclaim = computed(() => detail.currentTask?.unclaimAllowed === true
   && hasPermission('workflow:process:claim'))
@@ -899,27 +898,29 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
     if (String(payload.processInstanceId || '').trim() !== expectedProcessInstanceId) {
       throw new Error('流程详情实例关系不一致')
     }
-    const formSemantics = normalizeDetailFormSemantics(payload)
+    const formDetail = payload.formDetail
     const attachmentCache = new Map()
-    const hydratedApplicationValues = formSemantics.applicationForm
-      ? await hydrateFormValues(formSemantics.applicationForm, attachmentCache, expectedProcessInstanceId)
+    const hydratedApplicationValues = formDetail.applicationForm
+      ? await hydrateFormValues(formDetail.applicationForm, attachmentCache, expectedProcessInstanceId)
       : {}
-    const currentValues = formSemantics.nodeTaskForm
-      ? await hydrateFormValues(formSemantics.nodeTaskForm, attachmentCache, expectedProcessInstanceId)
-      : formSemantics.returnedApplication ? hydratedApplicationValues : {}
-    const hydratedHistory = await Promise.all(formSemantics.historyForms.map(async form => ({
+    const currentValues = formDetail.nodeTaskForm
+      ? await hydrateFormValues(formDetail.nodeTaskForm, attachmentCache, expectedProcessInstanceId)
+      : formDetail.returnedApplication ? hydratedApplicationValues : {}
+    const hydratedHistory = await Promise.all(formDetail.historyForms.map(async form => ({
       ...form,
       hydratedValues: await hydrateFormValues(form, attachmentCache, expectedProcessInstanceId)
     })))
     if (requestSequence !== detailLoadSequence || processInstanceId() !== expectedProcessInstanceId) return
     Object.assign(detail, payload)
     taskFormValues.value = currentValues
-    applicationForm.value = formSemantics.applicationForm
+    applicationForm.value = formDetail.applicationForm
     applicationFormValues.value = hydratedApplicationValues
-    nodeTaskForm.value = formSemantics.nodeTaskForm
-    applicationFormMissing.value = formSemantics.applicationMissing
+    nodeTaskForm.value = formDetail.nodeTaskForm
+    applicationFormMissing.value = formDetail.applicationMissing
     historyForms.value = hydratedHistory
-    activeTab.value = formSemantics.defaultTab
+    activeTab.value = formDetail.applicationMissing
+      ? 'diagram'
+      : formDetail.nodeTaskForm ? 'nodeTaskForm' : 'applicationForm'
     ready.value = true
     if (preserveMultiInstanceDraft) reconcileMultiInstanceDraft()
   } catch (error) {
@@ -1215,7 +1216,7 @@ function refreshMultiInstanceUserOptions(searchResults) {
  * @returns {Promise<void>} 查询成功后替换成员快照；失败时保留原快照并展示错误。
  */
 async function refreshMultiInstanceState() {
-  if (!canAdjustMultiInstance.value || actionBusy.value
+  if (actionBusy.value
     || multiInstanceRefreshing.value || multiInstanceBusy.value) return
   const result = await requestMultiInstanceState(detail.currentTask.taskId, false)
   if (result.state) return
@@ -1324,7 +1325,7 @@ async function submitMultiInstanceAdjustment() {
 }
 
 /**
- * 校验动态调整所需的对象权限、状态、revision、成员目标和用户目录来源。
+ * 校验动态调整所需的服务端能力、成员目标和用户输入格式。
  * @param {'ADD'|'REMOVE'} action 待执行的动态成员动作。
  * @param {object|null} member 打开 REMOVE 弹窗时的服务端成员对象。
  * @param {boolean} validateInput 是否同时校验弹窗意见和已选目标。
@@ -1336,17 +1337,15 @@ function assertMultiInstanceAdjustmentAllowed(action, member = null, validateInp
   if (!canAdjustMultiInstance.value) return denyAction('当前任务不允许调整会签成员')
   if (multiInstanceDialogClosing.value) return denyAction('会签调整窗口正在关闭，请稍后重试')
   if (actionBusy.value || multiInstanceBusy.value) return denyAction('任务正在处理中，请勿重复提交')
-  if (!Number.isInteger(multiInstanceState.value.revision)
-    || multiInstanceState.value.revision < 0
-    || multiInstanceState.value.revision > 2147483647) {
-    return denyAction('会签成员版本不合法，请刷新后重试')
+  if (action === 'ADD' && multiInstanceState.value.addAllowed !== true) {
+    return denyAction('当前任务不允许增加会签成员')
   }
   if (action === 'ADD' && remainingMultiInstanceCapacity.value < 1) {
-    return denyAction('会签成员已达到100人上限')
+    return denyAction('会签成员已无剩余容量')
   }
   if (member) {
     const currentMember = multiInstanceMembers.value.find(item => item.activeTaskId === member.activeTaskId)
-    if (!currentMember?.active || !currentMember.removable) return denyAction('该成员当前不能减签')
+    if (currentMember?.removable !== true) return denyAction('该成员当前不能减签')
   }
   if (!validateInput) return true
   const comment = multiInstanceDialog.comment.trim()
@@ -1364,7 +1363,7 @@ function assertMultiInstanceAdjustmentAllowed(action, member = null, validateInp
     return true
   }
   const target = multiInstanceMembers.value.find(item => item.activeTaskId === multiInstanceDialog.targetTaskId)
-  if (!target?.active || !target.removable) return denyAction('减签目标状态已变化，请刷新后重试')
+  if (target?.removable !== true) return denyAction('减签目标状态已变化，请刷新后重试')
   return true
 }
 
@@ -1410,10 +1409,16 @@ function requestErrorMessage(error, fallback) {
 
 /**
  * 详情并发刷新后按最新成员快照复核弹窗草稿，只保留仍可合法重试的输入。
- * @returns {void} 草稿合法时保持弹窗；目标失效时关闭并在成员区显示稳定提示。
+ * @returns {void} 草稿合法时保持弹窗；加签能力或调整目标失效时关闭并显示稳定提示。
  */
 function reconcileMultiInstanceDraft() {
   if (!multiInstanceDialog.visible) return
+  if (multiInstanceDialog.action === 'ADD' && multiInstanceState.value?.addAllowed !== true) {
+    multiInstanceDialog.visible = false
+    resetMultiInstanceDialog()
+    multiInstanceError.value = '当前任务状态已变化，不能继续增加会签成员'
+    return
+  }
   if (!canAdjustMultiInstance.value) {
     multiInstanceDialog.visible = false
     resetMultiInstanceDialog()
@@ -1434,7 +1439,7 @@ function reconcileMultiInstanceDraft() {
   }
   const target = multiInstanceMembers.value.find(
     member => member.activeTaskId === multiInstanceDialog.targetTaskId)
-  if (!target?.active || !target.removable) {
+  if (target?.removable !== true) {
     multiInstanceDialog.error = '减签目标状态已变化，请选择最新可移除成员'
   }
 }
@@ -1645,9 +1650,6 @@ function assertActionAllowed(type, validateInput = false) {
     const hasDynamicState = Boolean(multiInstanceState.value)
     if (hasDynamicState !== (revision !== null)) {
       return denyAction('会签成员状态已变化，请关闭办理窗口后重试')
-    }
-    if (revision !== null && (!Number.isInteger(revision) || revision < 0 || revision > 2147483647)) {
-      return denyAction('会签成员版本不合法，请刷新后重试')
     }
   }
   if (['delegate', 'transfer'].includes(type)) {

@@ -45,9 +45,9 @@
 UserTask，退回申请态固定为空。`historyForms` 只含正式历史 UserTask 提交，并排除本次请求的
 `currentTask.taskId`，避免历史任务详情重复显示。
 
-过渡期顶层 `currentTaskForm` 和 `processFormList` 暂时保留。二者与 `formDetail` 由同一次
-`WorkflowProcessFormDetailProjection` 结果生成，不增加部署制品、Mapper、Flowable 历史或当前变量
-查询，也不使用 alias、fallback、转换器或兼容 Adapter。后续前端完成正式协议切换后再单独删除旧字段。
+`formDetail` 是流程详情唯一的表单协议。`WorkflowProcessFormDetailProjection` 只向详情编排器返回
+该对象，不再暴露顶层表单别名；前端直接消费五个正式字段，服务端继续在同一次投影中维护部署制品、
+Mapper、Flowable 历史和当前变量的一致性。
 
 请求明确指向活动任务且该 BPMN 节点具有部署表单时，服务按部署 schema 查询当前变量并固定返回 `snapshotTime=null`：普通节点读取流程根变量，BPMN 节点声明 `localScope=true` 或 `localScope=1` 时读取当前 task ID 的局部变量。历史详情直接使用正式提交快照。响应字段白名单排除 `initiator`、`processStatus`、多实例计数、Flowable 跳过标志和所有 `__ruoyi_workflow_` 保留变量。
 

@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -115,10 +114,10 @@ public class WorkflowProcessFormDetailProjection
     }
 
     /**
-     * 使用同一响应预算生成正式表单语义分组和过渡期旧字段。
+     * 使用同一响应预算生成正式表单语义分组。
      *
      * @param request FormProjectionRequest，已授权且完成定义、历史、变量关联门禁的投影上下文
-     * @return FormProjection，新旧协议共同消费的一次性表单投影结果
+     * @return FormProjection，详情唯一表单协议的一次性投影结果
      */
     FormProjection project(FormProjectionRequest request)
     {
@@ -134,7 +133,7 @@ public class WorkflowProcessFormDetailProjection
             // 缺失语义只来自正式开始提交快照事实；历史/BPMN 无法投影该事实时按数据损坏失败。
             throw dataError("流程申请表单提交快照投影不一致");
         }
-        WorkflowProcessFormSnapshotView currentTaskForm = request.requestedTask() == null ? null
+        WorkflowProcessFormSnapshotView requestedTaskForm = request.requestedTask() == null ? null
                 : buildCurrentTaskForm(request.requestedTask(), request.history().tasksById(),
                         request.process(), request.schemas().schemas(), request.variables(),
                         request.deploymentId(), request.currentTaskControlledLoop(),
@@ -146,17 +145,17 @@ public class WorkflowProcessFormDetailProjection
                 .filter(form -> !Objects.equals(requestedTaskId, form.taskId()))
                 .toList();
         WorkflowProcessFormSnapshotView applicationForm = request.returnedApplication()
-                ? currentTaskForm : submittedApplicationForm;
+                ? requestedTaskForm : submittedApplicationForm;
         WorkflowProcessFormSnapshotView nodeTaskForm = request.returnedApplication()
-                ? null : currentTaskForm;
+                ? null : requestedTaskForm;
         WorkflowProcessFormDetailView formDetail = new WorkflowProcessFormDetailView(
                 applicationForm, nodeTaskForm, historyForms,
                 applicationMissing, request.returnedApplication());
-        return new FormProjection(formDetail, currentTaskForm, processForms);
+        return new FormProjection(formDetail);
     }
 
     /**
-     * 构建具有合法不可变提交快照的开始节点和已完成任务表单，并固定开始快照在首位。
+     * 构建具有合法不可变提交快照的开始节点和已完成任务表单。
      *
      * @param activities List&lt;HistoricActivityInstance&gt;，有界历史活动
      * @param tasksById Map&lt;String, HistoricTaskInstance&gt;，真实历史任务主键索引
@@ -165,7 +164,7 @@ public class WorkflowProcessFormDetailProjection
      * @param variables VariableStore，正式提交快照索引
      * @param deploymentId String，流程实例所属部署主键
      * @param budget DetailResponseBudget，详情累计正文大小预算
-     * @return List&lt;WorkflowProcessFormSnapshotView&gt;，开始快照在首位、其余保持历史顺序的正式表单
+     * @return List&lt;WorkflowProcessFormSnapshotView&gt;，按有界历史活动顺序生成的正式表单
      */
     private List<WorkflowProcessFormSnapshotView> buildExecutedForms(
             List<HistoricActivityInstance> activities,
@@ -226,7 +225,7 @@ public class WorkflowProcessFormDetailProjection
                 }
                 if (!taskFinished)
                 {
-                    // 活动任务只允许通过 currentTaskForm 读取当前值，不能进入历史提交列表。
+                    // 活动任务只允许通过节点表单投影读取当前值，不能进入历史提交列表。
                     continue;
                 }
                 submission = variables.taskSubmissions().get(activity.getTaskId());
@@ -244,8 +243,6 @@ public class WorkflowProcessFormDetailProjection
                     activity.getTaskId(), element, formKey, snapshots, submission,
                     deploymentId, budget));
         }
-        // 历史查询在毫秒时间相同时会按 activityId 排序；显式把唯一开始快照固定在首位，保持旧协议顺序稳定。
-        forms.sort(Comparator.comparing(form -> form.taskId() != null));
         return List.copyOf(forms);
     }
 
@@ -654,10 +651,8 @@ public class WorkflowProcessFormDetailProjection
     {
     }
 
-    /** 同一次读取生成的新表单语义和过渡期旧字段。 */
-    record FormProjection(WorkflowProcessFormDetailView formDetail,
-            WorkflowProcessFormSnapshotView currentTaskForm,
-            List<WorkflowProcessFormSnapshotView> processForms)
+    /** 同一次读取生成的唯一正式表单语义。 */
+    record FormProjection(WorkflowProcessFormDetailView formDetail)
     {
     }
 

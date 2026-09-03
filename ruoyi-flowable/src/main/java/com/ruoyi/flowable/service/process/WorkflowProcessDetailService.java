@@ -247,7 +247,7 @@ public class WorkflowProcessDetailService
                 instance.endTime(), durationMillis, processStatus, requestedTask,
                 nextUserAssignmentPolicy.name(), multiInstanceState, returnAllowed,
                 resubmitAllowed, urgeAllowed, controlledLoopStates, forms.formDetail(),
-                forms.currentTaskForm(), forms.processForms(), historyPresentation.timeline(),
+                historyPresentation.timeline(),
                 processRelations, bpmnXml, historyPresentation.viewer());
     }
 

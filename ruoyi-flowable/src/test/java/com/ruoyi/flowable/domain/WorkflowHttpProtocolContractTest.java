@@ -248,6 +248,8 @@ class WorkflowHttpProtocolContractTest
         JsonNode processJson = JsonMapper.shared().valueToTree(
                 processDetail("running", null, false, false));
         assertThat(processJson.path("formDetail").isObject()).isTrue();
+        assertThat(processJson.has("currentTaskForm")).isFalse();
+        assertThat(processJson.has("processFormList")).isFalse();
     }
 
     /**
@@ -380,7 +382,7 @@ class WorkflowHttpProtocolContractTest
                 "流程", 1, "category", "deployment", null, "applicant",
                 "申请人", Instant.EPOCH, null, null, processStatus, currentTask,
                 "DISABLED", null, false, resubmitAllowed, urgeAllowed, List.of(),
-                formDetail, null, List.of(), List.of(), List.of(), "<definitions/>",
+                formDetail, List.of(), List.of(), "<definitions/>",
                 new WorkflowProcessViewerView(Set.of(), Set.of(), Set.of(),
                         Set.of(), Set.of()));
     }

@@ -185,11 +185,10 @@ class WorkflowProcessDetailServiceIntegrationTest
 
         WorkflowProcessDetailView detail = readDetail(instance.getId(), task.getId(), "running");
 
-        assertThat(detail.currentTaskForm().taskLocal()).isFalse();
-        assertThat(detail.currentTaskForm().values().get("value").textValue())
+        assertThat(detail.formDetail().nodeTaskForm().taskLocal()).isFalse();
+        assertThat(detail.formDetail().nodeTaskForm().values().get("value").textValue())
                 .isEqualTo("root-current");
         assertThat(detail.formDetail().applicationForm().nodeKey()).isEqualTo("mainStart");
-        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
         assertThat(detail.formDetail().historyForms()).isEmpty();
         assertThat(detail.formDetail().applicationMissing()).isFalse();
         assertThat(detail.formDetail().returnedApplication()).isFalse();
@@ -319,11 +318,10 @@ class WorkflowProcessDetailServiceIntegrationTest
 
         WorkflowProcessDetailView detail = readDetail(instance.getId(), active.getId(), "running");
 
-        assertThat(detail.currentTaskForm().taskLocal()).isTrue();
-        assertThat(detail.currentTaskForm().values().get("value").textValue())
+        assertThat(detail.formDetail().nodeTaskForm().taskLocal()).isTrue();
+        assertThat(detail.formDetail().nodeTaskForm().values().get("value").textValue())
                 .isEqualTo("current-local");
         assertThat(detail.formDetail().applicationForm().nodeKey()).isEqualTo("mainStart");
-        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
         assertThat(detail.formDetail().historyForms())
                 .extracting(WorkflowProcessFormSnapshotView::taskId)
                 .containsExactly(completed.getId());
@@ -350,14 +348,10 @@ class WorkflowProcessDetailServiceIntegrationTest
         WorkflowProcessDetailView detail = readDetail(
                 instance.getId(), completed.getId(), "running");
 
-        assertThat(detail.currentTaskForm().snapshotTime()).isNotNull();
-        assertThat(detail.currentTaskForm().values().get("value").textValue())
+        assertThat(detail.formDetail().nodeTaskForm().snapshotTime()).isNotNull();
+        assertThat(detail.formDetail().nodeTaskForm().values().get("value").textValue())
                 .isEqualTo("submitted-value");
-        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
         assertThat(detail.formDetail().historyForms()).isEmpty();
-        assertThat(detail.processFormList())
-                .extracting(WorkflowProcessFormSnapshotView::taskId)
-                .containsExactly(null, completed.getId());
         assertThat(detail.resubmitAllowed()).isFalse();
         verifyNoCurrentVariableRead();
     }
@@ -377,12 +371,11 @@ class WorkflowProcessDetailServiceIntegrationTest
         WorkflowProcessDetailView detail = readDetail(
                 instance.getId(), active.getId(), "returned");
 
-        assertThat(detail.currentTaskForm().nodeKey()).isEqualTo("mainStart");
-        assertThat(detail.currentTaskForm().taskId()).isEqualTo(active.getId());
-        assertThat(detail.currentTaskForm().snapshotTime()).isNull();
-        assertThat(detail.currentTaskForm().values().get("startValue").textValue())
+        assertThat(detail.formDetail().applicationForm().nodeKey()).isEqualTo("mainStart");
+        assertThat(detail.formDetail().applicationForm().taskId()).isEqualTo(active.getId());
+        assertThat(detail.formDetail().applicationForm().snapshotTime()).isNull();
+        assertThat(detail.formDetail().applicationForm().values().get("startValue").textValue())
                 .isEqualTo("start-submitted");
-        assertThat(detail.formDetail().applicationForm()).isEqualTo(detail.currentTaskForm());
         assertThat(detail.formDetail().nodeTaskForm()).isNull();
         assertThat(detail.formDetail().historyForms()).isEmpty();
         assertThat(detail.formDetail().applicationMissing()).isFalse();
@@ -451,7 +444,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.formDetail().applicationForm()).isNull();
         assertThat(detail.formDetail().applicationMissing()).isTrue();
         assertThat(detail.formDetail().returnedApplication()).isFalse();
-        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
+        assertThat(detail.formDetail().nodeTaskForm()).isNotNull();
         assertThat(detail.formDetail().historyForms()).isEmpty();
     }
 
@@ -516,7 +509,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         WorkflowProcessDetailView detail = readDetail(
                 instance.getId(), active.getId(), "running");
 
-        assertThat(detail.formDetail().nodeTaskForm()).isEqualTo(detail.currentTaskForm());
+        assertThat(detail.formDetail().nodeTaskForm()).isNotNull();
         verify(artifactRepository, times(1)).selectForms(deploymentId);
         verify(historyService, times(1)).createHistoricActivityInstanceQuery();
         verify(historyService, times(1)).createHistoricTaskInstanceQuery();
@@ -589,8 +582,8 @@ class WorkflowProcessDetailServiceIntegrationTest
 
         WorkflowProcessDetailView detail = readDetail(instance.getId(), active.getId(), "running");
 
-        assertThat(detail.currentTaskForm().taskLocal()).isTrue();
-        assertThat(detail.currentTaskForm().values().get("decision").textValue())
+        assertThat(detail.formDetail().nodeTaskForm().taskLocal()).isTrue();
+        assertThat(detail.formDetail().nodeTaskForm().values().get("decision").textValue())
                 .isEqualTo("redo");
         verify(historyService).createHistoricVariableInstanceQuery();
         verify(historicVariableMapper, never()).selectCurrentVariableMetadata(
@@ -624,7 +617,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         WorkflowProcessDetailView detail = readDetailWithoutClearing(
                 withoutForm.getId(), noForm.getId(), "running");
 
-        assertThat(detail.currentTaskForm()).isNull();
+        assertThat(detail.formDetail().nodeTaskForm()).isNull();
         verifyNoCurrentVariableRead();
     }
 

@@ -31,8 +31,6 @@ import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
  * @param urgeAllowed boolean，当前用户能否对运行中的根流程执行真实人工催办
  * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，部署循环配置、当前轮次和历史轨迹
  * @param formDetail WorkflowProcessFormDetailView，申请、节点、历史及退回申请态的正式表单语义
- * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单及局部值，允许为空
- * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行节点的表单快照和值
  * @param historyProcNodeList List&lt;WorkflowProcessActivityView&gt;，开始、用户任务和结束时间线
  * @param processRelations List&lt;WorkflowProcessRelationView&gt;，同一 CallActivity 根执行树的父子实例关系
  * @param bpmnXml String，经过安全校验的 BPMN XML
@@ -61,8 +59,6 @@ public record WorkflowProcessDetailView(
         boolean urgeAllowed,
         List<WorkflowControlledLoopStateView> controlledLoopStates,
         WorkflowProcessFormDetailView formDetail,
-        WorkflowProcessFormSnapshotView currentTaskForm,
-        List<WorkflowProcessFormSnapshotView> processFormList,
         List<WorkflowProcessActivityView> historyProcNodeList,
         List<WorkflowProcessRelationView> processRelations,
         String bpmnXml,
@@ -93,8 +89,6 @@ public record WorkflowProcessDetailView(
      * @param urgeAllowed boolean，当前用户和完整运行树是否满足正式人工催办前置条件
      * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，受控循环状态列表
      * @param formDetail WorkflowProcessFormDetailView，语义明确且不可为空的表单详情
-     * @param currentTaskForm WorkflowProcessFormSnapshotView，当前任务表单，允许为空
-     * @param processFormList List&lt;WorkflowProcessFormSnapshotView&gt;，已执行表单快照
      * @param historyProcNodeList List&lt;WorkflowProcessActivityView&gt;，流程历史时间线
      * @param processRelations List&lt;WorkflowProcessRelationView&gt;，父子流程实例关系
      * @param bpmnXml String，经过安全校验的 BPMN XML
@@ -103,8 +97,6 @@ public record WorkflowProcessDetailView(
      */
     public WorkflowProcessDetailView
     {
-        processFormList = List.copyOf(Objects.requireNonNull(
-                processFormList, "流程表单列表不能为空"));
         controlledLoopStates = List.copyOf(Objects.requireNonNull(
                 controlledLoopStates, "受控循环状态不能为空"));
         Objects.requireNonNull(formDetail, "表单详情不能为空");
@@ -144,15 +136,5 @@ public record WorkflowProcessDetailView(
         {
             throw new IllegalArgumentException("重提能力必须绑定退回申请表单");
         }
-    }
-
-    /**
-     * 判断本次详情是否包含可办理任务表单。
-     *
-     * @return boolean，指定任务存在部署表单快照时返回 true
-     */
-    public boolean isExistTaskForm()
-    {
-        return currentTaskForm != null;
     }
 }
