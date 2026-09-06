@@ -9,17 +9,20 @@
 通过 Spring 注入验证器，在持久化或部署前调用：
 
 ```java
-templateValidator.validate(formContent);
+JsonNode root = templateValidator.validate(formContent);
+Set<String> variables = templateValidator.extractVariableNames(root);
 ```
 
-`validate(String content)` 无返回值。模板不合法时抛出 `ServiceException`，错误码为 `400`，异常消息使用稳定通用文本。
+`validate(String content)` 返回通过全部校验的 `JsonNode` 根节点；只需校验的调用方可以忽略返回值。模板不合法时抛出 `ServiceException`，错误码为 `400`，异常消息使用稳定通用文本。
 
 除完整结构校验外，验证器提供四个正式字段投影：
 
-- `extractVariableNames(content)` 返回模板声明的全部业务变量。
-- `extractReadableVariableNames(content)` 返回节点权限快照中可见且可读的字段。
-- `extractUserIdSourceVariableNames(content)` 返回可见、可读且由单值文本、数值或选择组件承载的字段。`FORM_USER` 和 `FORM_USER_FIELD` 规则从该目录选择字段，并把字段语义明确收窄为若依用户主键；集合、对象、附件、日期、布尔及同名异构声明在模板校验阶段过滤。
-- `extractUserIdSourceFieldSignatures(content)` 在上述目录基础上返回受控组件类型签名，供流程级规则校验跨节点同名字段的值形态一致性；动态渲染和组件执行继续使用各自正式入口。
+- `extractVariableNames(root)` 返回模板声明的全部业务变量。
+- `extractReadableVariableNames(root)` 返回节点权限快照中可见且可读的字段。
+- `extractAttachmentVariableNames(root)` 返回 `el-upload` 声明的附件字段。
+- `extractUserIdSourceFieldSignatures(root)` 返回可见、可读的单值文本、数值或选择字段及受控组件类型签名，供 `FORM_USER`、`FORM_USER_FIELD` 规则选择用户主键来源，并校验跨节点同名字段的值形态一致性；集合、对象、附件、日期、布尔及同名异构声明在投影时排除。
+
+四种投影只遍历本次 `validate` 返回且未经修改的根节点，不解析文本或重复执行全量校验，返回集合保持字段顺序、去重和不可修改性。原始 JSON 必须先经过正式校验，解析结果仅限本次调用只读复用。
 
 模型显式校验、保存和部署使用同一次权限化表单快照生成上述目录，字段白名单由已应用节点权限的正式模板投影得到。
 

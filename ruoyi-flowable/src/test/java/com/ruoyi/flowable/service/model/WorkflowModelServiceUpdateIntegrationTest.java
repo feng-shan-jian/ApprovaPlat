@@ -20,6 +20,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -37,6 +38,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -55,6 +58,7 @@ import com.ruoyi.flowable.mapper.WfFormMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -62,6 +66,51 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class WorkflowModelServiceUpdateIntegrationTest
 {
+    /**
+     * 直接执行真实作者目录构建，验证每个来源只校验解析一次且两种提取消费同一根节点。
+     * @return void，字段目录、节点身份或实际解析次数不符时测试失败
+     * @throws Exception 私有来源记录反射构造失败时报告
+     */
+    @Test
+    void buildsAuthorCatalogFromOneValidatedRootPerSource() throws Exception
+    {
+        WorkflowFormTemplateValidator template = spy(new WorkflowFormTemplateValidator());
+        ObjectMapper parser = spy((ObjectMapper) ReflectionTestUtils.getField(template, "objectMapper"));
+        ReflectionTestUtils.setField(template, "objectMapper", parser);
+        ReflectionTestUtils.setField(service, "formTemplateValidator", template);
+        String content = """
+                {"fields":[{"layout":"colFormItem","tag":"el-input","vModel":"owner",
+                "workflowHidden":false,"workflowReadable":true,"workflowWritable":true}]}
+                """;
+        var constructor = Class.forName(WorkflowModelService.class.getName() + "$FormSnapshotSource")
+                .getDeclaredConstructors()[0];
+        constructor.setAccessible(true);
+        List<Object> sources = new ArrayList<>();
+        for (String node : List.of("start", "review"))
+        {
+            var reference = new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE,
+                    200L, "key_200", node, node, null, "catalog", null, Map.of());
+            sources.add(constructor.newInstance(reference, "目录表单", content, List.of()));
+        }
+        WorkflowAuthorFormFieldCatalog catalog = ReflectionTestUtils.invokeMethod(
+                service, "buildAuthorFormFieldCatalog", sources);
+        assertNotNull(catalog);
+        assertTrue(catalog.containsTaskField("catalog", "start", "owner"));
+        assertTrue(catalog.containsTaskField("catalog", "review", "owner"));
+        assertTrue(catalog.containsProcessField("catalog", "owner"));
+        verify(template, times(2)).validate(content);
+        verify(parser, times(2)).readTree(content);
+        ArgumentCaptor<JsonNode> signatures = ArgumentCaptor.forClass(JsonNode.class);
+        ArgumentCaptor<JsonNode> variables = ArgumentCaptor.forClass(JsonNode.class);
+        verify(template, times(2)).extractUserIdSourceFieldSignatures(signatures.capture());
+        verify(template, times(2)).extractVariableNames(variables.capture());
+        for (int index = 0; index < sources.size(); index++)
+        {
+            org.junit.jupiter.api.Assertions.assertSame(signatures.getAllValues().get(index),
+                    variables.getAllValues().get(index));
+        }
+    }
+
     /** 测试事务内使用的规范操作人。 */
     private static final String ACTOR_ID = "100";
 

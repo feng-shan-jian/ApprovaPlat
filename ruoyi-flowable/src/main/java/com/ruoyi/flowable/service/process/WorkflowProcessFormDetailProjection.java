@@ -88,6 +88,7 @@ public class WorkflowProcessFormDetailProjection
 
     /**
      * 一次性读取部署表单快照，验证 schema 并建立节点与表单键联合索引。
+     * 每份快照只解析并全量校验一次，三种字段目录只读复用同一根节点。
      *
      * @param deploymentId String，实例所属真实部署主键
      * @return FormSchemas，不可变快照及字段白名单索引
@@ -110,11 +111,12 @@ public class WorkflowProcessFormDetailProjection
             {
                 throw dataError("部署表单快照关联数据异常");
             }
-            Set<String> variableNames = formTemplateValidator.extractVariableNames(row.getContent());
+            JsonNode root = formTemplateValidator.validate(row.getContent());
+            Set<String> variableNames = formTemplateValidator.extractVariableNames(root);
             Set<String> readableVariableNames =
-                    formTemplateValidator.extractReadableVariableNames(row.getContent());
+                    formTemplateValidator.extractReadableVariableNames(root);
             Set<String> attachmentVariableNames =
-                    formTemplateValidator.extractAttachmentVariableNames(row.getContent());
+                    formTemplateValidator.extractAttachmentVariableNames(root);
             NodeFormKey key = new NodeFormKey(row.getNodeKey(), row.getFormKey());
             if (indexed.putIfAbsent(key,
                     new SnapshotSchema(row, variableNames, readableVariableNames,

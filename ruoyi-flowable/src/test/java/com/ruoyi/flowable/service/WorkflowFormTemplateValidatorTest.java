@@ -3,9 +3,17 @@ package com.ruoyi.flowable.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 import com.ruoyi.common.exception.ServiceException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * 唯一正式平面表单 Schema 契约测试。
@@ -29,9 +37,110 @@ class WorkflowFormTemplateValidatorTest
                 "workflowReadable":true,"workflowWritable":true}]}
                 """;
         assertThatCode(() -> validator.validate(content)).doesNotThrowAnyException();
-        assertThat(validator.extractVariableNames(content)).containsExactly("files");
-        assertThat(validator.extractReadableVariableNames(content)).containsExactly("files");
-        assertThat(validator.extractAttachmentVariableNames(content)).containsExactly("files");
+        JsonNode root = validator.validate(content);
+        assertThat(validator.extractVariableNames(root)).containsExactly("files");
+        assertThat(validator.extractReadableVariableNames(root)).containsExactly("files");
+        assertThat(validator.extractAttachmentVariableNames(root)).containsExactly("files");
+    }
+
+    /**
+     * 用真实严格解析器验证四种投影共用根节点，保留嵌套顺序、去重、权限和异构排除。
+     * @return void，重复解析、修改根节点或投影集合可变时测试失败
+     */
+    @Test
+    void projectsValidatedRootWithoutReparsingOrMutation()
+    {
+        ObjectMapper mapper = spy((ObjectMapper) ReflectionTestUtils.getField(validator, "objectMapper"));
+        ReflectionTestUtils.setField(validator, "objectMapper", mapper);
+        String fields = String.join(",",
+                field("first", "el-input", false, true, ""),
+                "{\"layout\":\"rowFormItem\",\"workflowHidden\":false,\"workflowReadable\":true,"
+                        + "\"workflowWritable\":true,\"children\":["
+                        + field("files", "el-upload", false, true, "") + ","
+                        + field("first", "el-input", false, true, "") + "]}",
+                field("hidden", "el-input", true, false, ""),
+                field("unreadable", "el-input", false, false, ""),
+                field("mixed", "el-input", false, true, ""),
+                field("mixed", "el-input-number", false, true, ""),
+                field("multi", "el-select", false, true, ",\"multiple\":true"),
+                field("number", "el-input-number", false, true, ""),
+                field("choice", "el-select", false, true, ""),
+                field("hidden", "el-input", false, true, ""),
+                field("choice", "el-select", false, true, ""));
+        String content = "{\"fields\":[" + fields + "]}";
+        JsonNode root = validator.validate(content);
+        String original = root.toString();
+        Set<String> all = validator.extractVariableNames(root);
+        Set<String> readable = validator.extractReadableVariableNames(root);
+        Set<String> attachments = validator.extractAttachmentVariableNames(root);
+        Map<String, String> signatures = validator.extractUserIdSourceFieldSignatures(root);
+
+        assertThat(all).containsExactly("first", "files", "hidden", "unreadable", "mixed", "multi", "number", "choice");
+        assertThat(readable).containsExactly("first", "files", "mixed", "multi", "number", "choice", "hidden");
+        assertThat(attachments).containsExactly("files");
+        assertThat(signatures.keySet()).containsExactly("first", "number", "choice");
+        assertThat(signatures).containsEntry("first", "el-input")
+                .containsEntry("number", "el-input-number").containsEntry("choice", "el-select");
+        for (Set<String> projection : List.of(all, readable, attachments))
+        {
+            assertThatThrownBy(() -> projection.add("extra")).isInstanceOf(UnsupportedOperationException.class);
+        }
+        assertThatThrownBy(() -> signatures.put("extra", "el-input"))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThat(root.toString()).isEqualTo(original);
+        verify(mapper).readTree(content);
+    }
+
+    /**
+     * 验证唯一解析入口保留语法、重复键、尾随内容、资源、白名单和危险内容门禁。
+     * @return void，任一非法正文未以稳定模板 400 拒绝时测试失败
+     */
+    @Test
+    void rejectsInvalidSyntaxResourcesAndDangerousContent()
+    {
+        String component = field("value", "el-input", false, true, "");
+        String nested = component;
+        for (int depth = 0; depth < WorkflowFormTemplateValidator.MAX_COMPONENT_DEPTH; depth++)
+        {
+            nested = field("row", "el-input", false, true, ",\"children\":[" + nested + "]");
+        }
+        Map<String, String> invalid = Map.ofEntries(
+                Map.entry("{", "表单内容必须是合法且无重复键的 JSON 对象"),
+                Map.entry("{\"fields\":[],\"fields\":[]}", "表单内容必须是合法且无重复键的 JSON 对象"),
+                Map.entry("{\"fields\":[]} {}", "表单内容必须是合法且无重复键的 JSON 对象"),
+                Map.entry("{\"fields\":[],\"x\":\"" + "a".repeat(WorkflowFormTemplateValidator.MAX_CONTENT_BYTES) + "\"}",
+                        "表单内容不能超过1 MiB"),
+                Map.entry("{\"fields\":[],\"x\":" + "[".repeat(101) + "0" + "]".repeat(101) + "}",
+                        "表单内容必须是合法且无重复键的 JSON 对象"),
+                Map.entry("{\"fields\":[" + nested + "]}", "表单模板组件嵌套深度不能超过20"),
+                Map.entry("{\"fields\":[" + String.join(",", java.util.Collections.nCopies(501, component)) + "]}",
+                        "表单模板组件数量不能超过500"),
+                Map.entry("{\"fields\":[],\"x\":\"javascript:alert(1)\"}", "表单模板包含 javascript: 或 data: 危险协议"),
+                Map.entry("{\"fields\":[],\"x\":{\"constructor\":{}}}", "表单模板包含原型污染键"),
+                Map.entry("{\"fields\":[" + component.replace("el-input", "arbitrary-widget") + "]}",
+                        "不支持的表单组件: arbitrary-widget"));
+        invalid.forEach((content, message) -> assertThatThrownBy(() -> validator.validate(content))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(400);
+                    assertThat(exception.getMessage()).isEqualTo(message);
+                }));
+    }
+
+    /**
+     * 生成带显式节点权限的平面字段，供真实模板投影和拒绝用例使用。
+     * @param name String，变量名
+     * @param tag String，组件类型
+     * @param hidden boolean，隐藏标志
+     * @param readable boolean，可读标志
+     * @param extra String，附加 JSON 属性
+     * @return String，完整字段 JSON
+     */
+    private String field(String name, String tag, boolean hidden, boolean readable, String extra)
+    {
+        return "{\"layout\":\"colFormItem\",\"tag\":\"" + tag + "\",\"vModel\":\"" + name
+                + "\",\"workflowHidden\":" + hidden + ",\"workflowReadable\":" + readable
+                + ",\"workflowWritable\":false" + extra + "}";
     }
 
     /**

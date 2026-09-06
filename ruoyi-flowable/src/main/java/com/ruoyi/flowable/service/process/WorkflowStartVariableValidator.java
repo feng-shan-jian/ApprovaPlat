@@ -120,7 +120,7 @@ public class WorkflowStartVariableValidator
     }
 
     /**
-     * 按部署表单 schema 校验变量，并单独提取 el-upload 中的临时附件 UUID 白名单。
+     * 解析并校验部署表单后校验变量及附件 UUID；模板损坏仍转换为 500。
      *
      * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变 JSON 快照
      * @param variables Map&lt;String, Object&gt;，客户端提交的开始表单变量，允许为空
@@ -129,11 +129,12 @@ public class WorkflowStartVariableValidator
     public WorkflowValidatedStartVariables validateForStart(String snapshotContent,
             Map<String, Object> variables)
     {
-        return validateSubmission(snapshotContent, variables, Map.of(), true, true);
+        return validateSubmission(parseTrustedSnapshot(snapshotContent), variables, Map.of(), true, true);
     }
 
     /**
      * 从 CallActivity 已建立的子流程变量作用域提取并规范化自己的开始表单提交值。
+     * 字段提取与变量校验只读复用一次模板校验的根节点，模板错误保持 400。
      *
      * @param snapshotContent String，子流程定义所属部署的不可变开始表单 JSON
      * @param runtimeVariables Map&lt;String,Object&gt;，Flowable 已按调用映射建立的子流程变量
@@ -144,19 +145,21 @@ public class WorkflowStartVariableValidator
     {
         Map<String, Object> source = runtimeVariables == null ? Map.of() : runtimeVariables;
         LinkedHashMap<String, Object> submitted = new LinkedHashMap<>();
+        JsonNode snapshotRoot = templateValidator.validate(snapshotContent);
         // 调用映射属于服务端部署协议，可写权限只约束客户端；这里仍只接受正式 schema 声明字段。
-        for (String fieldName : templateValidator.extractVariableNames(snapshotContent))
+        for (String fieldName : templateValidator.extractVariableNames(snapshotRoot))
         {
             if (source.containsKey(fieldName))
             {
                 submitted.put(fieldName, source.get(fieldName));
             }
         }
-        return validateSubmission(snapshotContent, submitted, Map.of(), true, false).variables();
+        return validateSubmission(snapshotRoot, submitted, Map.of(), true, false).variables();
     }
 
     /**
      * 按部署表单快照校验草稿字段，但允许正式必填字段暂时缺失或为空。
+     * 复用正式模板校验返回的根节点，模板损坏仍转换为 500。
      *
      * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变节点表单 JSON
      * @param variables Map&lt;String,Object&gt;，客户端本次保存的草稿字段补丁
@@ -166,11 +169,12 @@ public class WorkflowStartVariableValidator
             Map<String, Object> variables)
     {
         // 草稿只放宽必填完整性，隐藏/只读防篡改、类型和资源边界必须与正式提交保持同源。
-        return validateSubmission(snapshotContent, variables, Map.of(), false, true);
+        return validateSubmission(parseTrustedSnapshot(snapshotContent), variables, Map.of(), false, true);
     }
 
     /**
      * 按部署表单校验局部更新，并允许未提交的必填字段沿用上一份正式提交快照。
+     * 复用正式模板校验返回的根节点，模板损坏仍转换为 500。
      *
      * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变节点表单 JSON
      * @param variables Map&lt;String,Object&gt;，客户端本次明确提交的字段补丁
@@ -180,36 +184,36 @@ public class WorkflowStartVariableValidator
     public WorkflowValidatedStartVariables validatePatch(String snapshotContent,
             Map<String, Object> variables, Map<String, JsonNode> existingValues)
     {
-        return validateSubmission(snapshotContent, variables,
+        return validateSubmission(parseTrustedSnapshot(snapshotContent), variables,
                 existingValues == null ? Map.of() : existingValues, true, true);
     }
 
     /**
      * 从不可变节点表单快照提取允许写入历史提交快照的可读字段目录。
+     * 只读提取正式模板校验返回的根节点，模板错误保持 400。
      *
      * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变节点表单 JSON
      * @return Set&lt;String&gt;，保持表单字段顺序且不包含隐藏字段的不可修改字段名集合
      */
     public Set<String> readableFieldNames(String snapshotContent)
     {
-        return templateValidator.extractReadableVariableNames(snapshotContent);
+        return templateValidator.extractReadableVariableNames(templateValidator.validate(snapshotContent));
     }
 
     /**
-     * 统一执行全量发起或局部重提的字段白名单、类型、权限和必填校验。
+     * 只读复用已校验根节点，统一执行全量发起或局部重提的字段、类型、权限和必填校验。
      *
-     * @param snapshotContent String，部署时固化的节点表单 JSON
+     * @param snapshotRoot JsonNode，本次正式模板校验返回且未经修改的节点表单根节点
      * @param variables Map&lt;String,Object&gt;，客户端本次提交的字段集合
      * @param existingValues Map&lt;String,JsonNode&gt;，局部更新可继承的正式旧值；首次发起或草稿为空
      * @param enforceRequired boolean，true 表示正式动作必须满足当前节点必填完整性
      * @param enforceWritable boolean，true 表示输入来自客户端并必须满足字段可写权限
      * @return WorkflowValidatedStartVariables，规范化字段补丁和附件引用
      */
-    private WorkflowValidatedStartVariables validateSubmission(String snapshotContent,
+    private WorkflowValidatedStartVariables validateSubmission(JsonNode snapshotRoot,
             Map<String, Object> variables, Map<String, JsonNode> existingValues,
             boolean enforceRequired, boolean enforceWritable)
     {
-        JsonNode snapshotRoot = parseTrustedSnapshot(snapshotContent);
         LinkedHashMap<String, FieldSpec> fieldSpecs = new LinkedHashMap<>();
         collectFieldSpecs(snapshotRoot.path("fields"), fieldSpecs);
 
@@ -345,7 +349,7 @@ public class WorkflowStartVariableValidator
     }
 
     /**
-     * 重新校验并解析数据库中的部署表单快照，将持久化损坏归为服务端数据异常。
+     * 返回正式模板校验产生的根节点，将持久化快照损坏保持转换为 500 服务端数据异常。
      *
      * @param snapshotContent String，数据库读取的部署表单 JSON
      * @return JsonNode，已经通过模板门禁的表单根对象
@@ -354,10 +358,9 @@ public class WorkflowStartVariableValidator
     {
         try
         {
-            templateValidator.validate(snapshotContent);
-            return objectMapper.readTree(snapshotContent);
+            return templateValidator.validate(snapshotContent);
         }
-        catch (ServiceException | JacksonException exception)
+        catch (ServiceException exception)
         {
             throw invalidSnapshot(exception);
         }

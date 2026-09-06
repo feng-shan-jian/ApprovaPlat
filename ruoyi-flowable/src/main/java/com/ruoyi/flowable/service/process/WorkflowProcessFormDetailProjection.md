@@ -9,7 +9,7 @@
 ## 依赖
 
 - `WorkflowDeploymentArtifactRepository`：读取部署时冻结的正式表单制品；
-- `WorkflowFormTemplateValidator`：验证表单结构并提取全部字段和可读字段白名单；
+- `WorkflowFormTemplateValidator`：每份快照只解析并全量校验一次，全部字段、可读字段和附件字段从同一根节点只读提取；
 - `WorkflowProcessVariableProjection`：按 Blob、类型和容量门禁读取当前变量或投影正式提交快照。
 - `WorkflowAttachmentService`：按每批最多 100 条查询并核验所有附件的对象、字段、状态和绑定关系，再返回安全元数据。
 

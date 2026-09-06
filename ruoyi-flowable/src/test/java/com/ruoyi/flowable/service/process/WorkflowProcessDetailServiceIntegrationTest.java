@@ -50,6 +50,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.mockito.ArgumentCaptor;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
@@ -79,6 +81,7 @@ import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.system.service.ISysUserService;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -86,6 +89,45 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class WorkflowProcessDetailServiceIntegrationTest
 {
+    /**
+     * 实际加载多份部署快照，验证三种字段目录共享每份快照唯一一次真实解析及校验的根节点。
+     * @return void，解析次数、节点复用或快照损坏错误分类不符时测试失败
+     */
+    @Test
+    void loadsSchemasFromOneValidatedRootPerSnapshot()
+    {
+        WorkflowFormTemplateValidator template = spy(new WorkflowFormTemplateValidator());
+        ObjectMapper parser = spy((ObjectMapper) ReflectionTestUtils.getField(template, "objectMapper"));
+        ReflectionTestUtils.setField(template, "objectMapper", parser);
+        WorkflowProcessFormDetailProjection projection = new WorkflowProcessFormDetailProjection(
+                artifactRepository, template,
+                new WorkflowProcessVariableProjection(historyService, historicVariableMapper),
+                mock(WorkflowAttachmentService.class));
+        List<WfDeployForm> rows = formSnapshots();
+        when(artifactRepository.selectForms(deploymentId)).thenReturn(rows);
+        assertThat(projection.loadSchemas(deploymentId)).isNotNull();
+        verify(template, times(rows.size())).validate(anyString());
+        verify(parser, times(rows.size())).readTree(anyString());
+        ArgumentCaptor<JsonNode> all = ArgumentCaptor.forClass(JsonNode.class);
+        ArgumentCaptor<JsonNode> readable = ArgumentCaptor.forClass(JsonNode.class);
+        ArgumentCaptor<JsonNode> attachments = ArgumentCaptor.forClass(JsonNode.class);
+        verify(template, times(rows.size())).extractVariableNames(all.capture());
+        verify(template, times(rows.size())).extractReadableVariableNames(readable.capture());
+        verify(template, times(rows.size())).extractAttachmentVariableNames(attachments.capture());
+        for (int index = 0; index < rows.size(); index++)
+        {
+            assertThat(all.getAllValues().get(index)).isSameAs(readable.getAllValues().get(index))
+                    .isSameAs(attachments.getAllValues().get(index));
+        }
+        rows.get(0).setContent("{");
+        assertThatThrownBy(() -> projection.loadSchemas(deploymentId))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(400);
+                    assertThat(exception.getMessage()).isEqualTo("表单内容必须是合法且无重复键的 JSON 对象");
+                });
+    }
+
     private ProcessEngine processEngine;
     private RepositoryService repositoryService;
     private RuntimeService runtimeService;

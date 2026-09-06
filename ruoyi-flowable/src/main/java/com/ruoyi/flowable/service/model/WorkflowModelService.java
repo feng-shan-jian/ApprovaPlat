@@ -1127,6 +1127,7 @@ public class WorkflowModelService
 
     /**
      * 从权限化表单快照构建自动抄送和参与者规则共用的正式用户主键字段目录。
+     * 每个来源只解析并全量校验一次，用户主键签名和全部变量名只读复用同一根节点。
      * @param sources List&lt;FormSnapshotSource&gt;，部署事务内固定读取的表单来源
      * @return WorkflowAuthorFormFieldCatalog，按流程和节点隔离的不可变正式字段目录
      */
@@ -1138,9 +1139,10 @@ public class WorkflowModelService
         for (FormSnapshotSource source : sources)
         {
             WorkflowBpmnFormReference reference = source.reference();
+            JsonNode root = formTemplateValidator.validate(source.content());
             builder.add(reference.processKey(), reference.nodeKey(),
-                    formTemplateValidator.extractUserIdSourceFieldSignatures(source.content()),
-                    formTemplateValidator.extractVariableNames(source.content()));
+                    formTemplateValidator.extractUserIdSourceFieldSignatures(root),
+                    formTemplateValidator.extractVariableNames(root));
         }
         return builder.build();
     }
@@ -1340,7 +1342,7 @@ public class WorkflowModelService
     }
 
     /**
-     * 为新模型绑定的开始表单写入完整默认及逐字段权限。
+     * 正式校验新模型绑定的开始表单，再只读提取字段并写入完整默认及逐字段权限。
      *
      * @param content String，已通过正式表单服务读取的平面 Schema
      * @return List&lt;FormProperty&gt;，默认可编辑且逐字段显式可编辑的权限描述
@@ -1350,7 +1352,7 @@ public class WorkflowModelService
         List<FormProperty> properties = new ArrayList<>();
         properties.add(formPermission("approva_permission_default", null));
         int index = 0;
-        for (String variable : formTemplateValidator.extractVariableNames(content))
+        for (String variable : formTemplateValidator.extractVariableNames(formTemplateValidator.validate(content)))
         {
             properties.add(formPermission("approva_permission_field_" + index++, variable));
         }

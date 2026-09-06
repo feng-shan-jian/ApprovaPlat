@@ -11,7 +11,7 @@ Map<String, Object> variables = variableValidator.validateAndNormalize(
         deployFormSnapshot.getContent(), request.variables());
 ```
 
-数据库快照会先经过 `WorkflowFormTemplateValidator` 的严格 JSON、组件白名单和安全校验。快照损坏返回服务端数据异常，客户端变量不合法返回 `400`。
+数据库快照会先经过 `WorkflowFormTemplateValidator` 的严格 JSON、组件白名单和安全校验，直接复用其返回的根节点。发起、草稿、补丁和受控循环字段入口通过 `parseTrustedSnapshot` 将模板损坏保持转换为 `500`，客户端变量不合法返回 `400`。可读字段目录及 CallActivity 开始值入口的模板错误保持 `400`；CallActivity 的字段提取和后续变量校验只读复用同一根节点。变量序列化和大小门禁仍由本类的 ObjectMapper 执行。
 
 ## 字段 schema
 
