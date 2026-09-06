@@ -1,9 +1,6 @@
 package com.ruoyi.flowable.service.task;
 
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
-import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskClaimRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskDelegateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskResolveRequest;
@@ -17,12 +14,6 @@ import com.ruoyi.flowable.engine.WorkflowProcessEngineAdapter;
 @Service
 public class WorkflowTaskActionService
 {
-    /** 服务层允许写入审计记录的最大意见长度。 */
-    private static final int MAX_OPINION_LENGTH = 500;
-
-    /** 参数校验失败时返回的稳定业务提示。 */
-    private static final String INVALID_ARGUMENT_MESSAGE = "工作流请求参数不合法";
-
     private final WorkflowProcessEngineAdapter processEngineAdapter;
 
     private final WorkflowTaskCopyService taskCopyService;
@@ -49,11 +40,7 @@ public class WorkflowTaskActionService
      */
     public void claim(WorkflowTaskClaimRequest request)
     {
-        if (request == null)
-        {
-            throw invalidArgument();
-        }
-        processEngineAdapter.claimTaskForCurrentUser(requireTaskId(request.taskId()));
+        processEngineAdapter.claimTaskForCurrentUser(request.taskId().trim());
     }
 
     /**
@@ -64,11 +51,7 @@ public class WorkflowTaskActionService
      */
     public void unclaim(WorkflowTaskUnclaimRequest request)
     {
-        if (request == null)
-        {
-            throw invalidArgument();
-        }
-        processEngineAdapter.unclaimTaskForCurrentUser(requireTaskId(request.taskId()));
+        processEngineAdapter.unclaimTaskForCurrentUser(request.taskId().trim());
     }
 
     /**
@@ -79,12 +62,8 @@ public class WorkflowTaskActionService
      */
     public void resolve(WorkflowTaskResolveRequest request)
     {
-        if (request == null)
-        {
-            throw invalidArgument();
-        }
-        processEngineAdapter.resolveTaskForCurrentUser(requireTaskId(request.taskId()),
-                normalizeOpinion(request.comment()), (actor, task) ->
+        processEngineAdapter.resolveTaskForCurrentUser(request.taskId().trim(),
+                request.comment().trim(), (actor, task) ->
                 {
                     WorkflowTaskCopyService.CopyPlan copyPlan = taskCopyService.prepare(
                             WorkflowTaskCopyAction.RESOLVE, task, actor, request.copyUserIds());
@@ -100,12 +79,8 @@ public class WorkflowTaskActionService
      */
     public void delegate(WorkflowTaskDelegateRequest request)
     {
-        if (request == null || request.userId() == null || request.userId() <= 0)
-        {
-            throw invalidArgument();
-        }
-        processEngineAdapter.delegateTaskForCurrentUser(requireTaskId(request.taskId()),
-                String.valueOf(request.userId()), normalizeOpinion(request.comment()),
+        processEngineAdapter.delegateTaskForCurrentUser(request.taskId().trim(),
+                String.valueOf(request.userId()), request.comment().trim(),
                 (actor, task) ->
                 {
                     WorkflowTaskCopyService.CopyPlan copyPlan = taskCopyService.prepare(
@@ -122,67 +97,13 @@ public class WorkflowTaskActionService
      */
     public void transfer(WorkflowTaskTransferRequest request)
     {
-        if (request == null || request.userId() == null || request.userId() <= 0)
-        {
-            throw invalidArgument();
-        }
-        processEngineAdapter.transferTaskForCurrentUser(requireTaskId(request.taskId()),
-                String.valueOf(request.userId()), normalizeOpinion(request.comment()),
+        processEngineAdapter.transferTaskForCurrentUser(request.taskId().trim(),
+                String.valueOf(request.userId()), request.comment().trim(),
                 (actor, task) ->
                 {
                     WorkflowTaskCopyService.CopyPlan copyPlan = taskCopyService.prepare(
                             WorkflowTaskCopyAction.TRANSFER, task, actor, request.copyUserIds());
                     return () -> taskCopyService.persist(copyPlan);
                 });
-    }
-
-    /**
-     * 二次校验任务主键，防止绕过 Controller 直接调用服务时把非法参数传给引擎。
-     *
-     * @param taskId String，客户端提交的任务主键
-     * @return String，去除首尾空白后的任务主键
-     */
-    private String requireTaskId(String taskId)
-    {
-        if (!StringUtils.hasText(taskId))
-        {
-            throw invalidArgument();
-        }
-        String normalizedTaskId = taskId.trim();
-        if (normalizedTaskId.length() > 64)
-        {
-            throw invalidArgument();
-        }
-        return normalizedTaskId;
-    }
-
-    /**
-     * 规范化委派、委派办结或转办意见，JSON 转义由适配器统一完成以保护审计结构。
-     *
-     * @param opinion String，客户端提交的业务意见
-     * @return String，非空且长度受控的意见正文
-     */
-    private String normalizeOpinion(String opinion)
-    {
-        if (!StringUtils.hasText(opinion))
-        {
-            throw invalidArgument();
-        }
-        String normalizedOpinion = opinion.trim();
-        if (normalizedOpinion.length() > MAX_OPINION_LENGTH)
-        {
-            throw invalidArgument();
-        }
-        return normalizedOpinion;
-    }
-
-    /**
-     * 创建稳定的参数错误异常，禁止暴露底层身份或引擎解析细节。
-     *
-     * @return ServiceException，HTTP 400 参数错误
-     */
-    private ServiceException invalidArgument()
-    {
-        return new ServiceException(INVALID_ARGUMENT_MESSAGE, HttpStatus.BAD_REQUEST);
     }
 }
