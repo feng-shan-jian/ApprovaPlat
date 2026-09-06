@@ -1,14 +1,11 @@
 package com.ruoyi.flowable.service.task;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.flowable.bpmn.model.BaseElement;
 import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.FlowElement;
@@ -57,9 +54,6 @@ public final class WorkflowMultiInstanceModelContract
     private static final Set<String> IDENTITY_PROPERTY_NAMES = Set.of(
             IDENTITY_TYPE_PROPERTY, IDENTITY_IDS_PROPERTY);
 
-    /** 固定成员多实例集合表达式的严格语法，成员只能是以逗号连接的规范正整数用户主键。 */
-    private static final Pattern FIXED_COLLECTION_EXPRESSION_PATTERN = Pattern.compile(
-            "\\$\\{multiInstanceHandler\\.getFixedUserIds\\(execution, '([1-9][0-9]*(?:,[1-9][0-9]*)*)'\\)\\}");
     /** 会签固定完成条件。 */
     public static final String ALL_COMPLETION_CONDITION =
             "${nrOfCompletedInstances == nrOfInstances}";
@@ -128,11 +122,9 @@ public final class WorkflowMultiInstanceModelContract
         return COLLECTION_EXPRESSION.equals(inputDataItem)
                 || START_COLLECTION_EXPRESSION.equals(inputDataItem)
                 || CONFIGURED_COLLECTION_EXPRESSION.equals(inputDataItem)
-                || FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(inputDataItem).matches()
                 || COLLECTION_EXPRESSION.equals(collectionString)
                 || START_COLLECTION_EXPRESSION.equals(collectionString)
-                || CONFIGURED_COLLECTION_EXPRESSION.equals(collectionString)
-                || FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(collectionString).matches();
+                || CONFIGURED_COLLECTION_EXPRESSION.equals(collectionString);
     }
 
     /**
@@ -182,72 +174,6 @@ public final class WorkflowMultiInstanceModelContract
         return CONFIGURED_COLLECTION_EXPRESSION.equals(trimToEmpty(loop.getInputDataItem()))
                 || CONFIGURED_COLLECTION_EXPRESSION.equals(
                         trimToEmpty(loop.getCollectionString()));
-    }
-
-    /**
-     * 判断循环是否使用由 BPMN 预设成员初始化的受控集合。
-     *
-     * @param loop MultiInstanceLoopCharacteristics，可为空的多实例循环配置。
-     * @return boolean，仅精确匹配固定成员集合表达式时返回 true。
-     */
-    public static boolean usesFixedHandler(MultiInstanceLoopCharacteristics loop)
-    {
-        if (loop == null)
-        {
-            return false;
-        }
-        return FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(
-                trimToEmpty(loop.getInputDataItem())).matches()
-                || FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(
-                        trimToEmpty(loop.getCollectionString())).matches();
-    }
-
-    /**
-     * 从固定成员集合表达式解析有序且无重复的用户主键。
-     *
-     * @param loop MultiInstanceLoopCharacteristics，已经从 BPMN 节点读取的循环配置。
-     * @return List<Long> 固定成员的规范正整数用户主键。
-     */
-    public static List<Long> requireFixedUserIds(MultiInstanceLoopCharacteristics loop)
-    {
-        if (loop == null)
-        {
-            throw new IllegalArgumentException("固定多实例集合配置不合法");
-        }
-        String inputDataItem = trimToEmpty(loop.getInputDataItem());
-        String collectionString = trimToEmpty(loop.getCollectionString());
-        Matcher inputMatcher = FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(inputDataItem);
-        Matcher collectionMatcher = FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(collectionString);
-        if (inputMatcher.matches() == collectionMatcher.matches())
-        {
-            throw new IllegalArgumentException("固定多实例集合配置不合法");
-        }
-        String userIdsText = inputMatcher.matches() ? inputMatcher.group(1)
-                : collectionMatcher.group(1);
-        String[] userIdTexts = userIdsText.split(",", -1);
-        if (userIdTexts.length == 0 || userIdTexts.length > 100)
-        {
-            throw new IllegalArgumentException("固定多实例成员数量不合法");
-        }
-        LinkedHashSet<Long> uniqueUserIds = new LinkedHashSet<>();
-        for (String userIdText : userIdTexts)
-        {
-            long userId;
-            try
-            {
-                userId = Long.parseLong(userIdText);
-            }
-            catch (NumberFormatException exception)
-            {
-                throw new IllegalArgumentException("固定多实例成员主键不合法", exception);
-            }
-            if (userId <= 0 || !Long.toString(userId).equals(userIdText)
-                    || !uniqueUserIds.add(userId))
-            {
-                throw new IllegalArgumentException("固定多实例成员主键不合法");
-            }
-        }
-        return List.copyOf(new ArrayList<>(uniqueUserIds));
     }
 
     /**
@@ -310,6 +236,27 @@ public final class WorkflowMultiInstanceModelContract
      */
     public static WorkflowMultiInstanceMode requireMode(FlowElement flowElement)
     {
+        return requireMode(flowElement, true);
+    }
+
+    /**
+     * 核验作者模型中的受控多实例结构；作者资源不允许携带执行期 assignee。
+     * @param flowElement FlowElement，作者模型中的目标活动
+     * @return WorkflowMultiInstanceMode，固定 ALL 或 ANY 模式
+     */
+    public static WorkflowMultiInstanceMode requireAuthorMode(FlowElement flowElement)
+    {
+        return requireMode(flowElement, false);
+    }
+
+    /**
+     * 按作者或执行阶段核验受控多实例结构。
+     * @param flowElement FlowElement，目标活动
+     * @param compiled boolean，true 要求服务端编译后的固定 assignee；false 要求作者字段为空
+     * @return WorkflowMultiInstanceMode，固定 ALL 或 ANY 模式
+     */
+    private static WorkflowMultiInstanceMode requireMode(FlowElement flowElement, boolean compiled)
+    {
         // 动态目标必须在来源完成事务内同步创建；skip、异步或非排他语义都会破坏即时写后对账。
         // 边界事件由全局引擎中断监听器维护轮次终态，不改变节点必须为 Process 直接子级等其余白名单。
         if (!(flowElement instanceof UserTask userTask)
@@ -324,25 +271,24 @@ public final class WorkflowMultiInstanceModelContract
         MultiInstanceLoopCharacteristics loop = userTask.getLoopCharacteristics();
         boolean dynamicSource = usesDynamicHandler(loop);
         boolean startSource = usesStartHandler(loop);
-        boolean fixedSource = usesFixedHandler(loop);
         boolean configuredSource = usesConfiguredHandler(loop);
         boolean configuredProperties = hasConfiguredIdentityProperties(userTask);
         if (loop == null || loop.isSequential() || loop.isNoWaitStatesAsyncLeave()
-                || !Objects.equals(ASSIGNEE_EXPRESSION, userTask.getAssignee())
+                || (compiled
+                    ? !Objects.equals(ASSIGNEE_EXPRESSION, userTask.getAssignee())
+                    : StringUtils.hasText(userTask.getAssignee()))
                 || (userTask.getCandidateUsers() != null
                     && !userTask.getCandidateUsers().isEmpty())
                 || (userTask.getCandidateGroups() != null
                     && !userTask.getCandidateGroups().isEmpty())
                 || (dynamicSource ? 1 : 0) + (startSource ? 1 : 0)
-                    + (fixedSource ? 1 : 0) + (configuredSource ? 1 : 0) != 1
+                    + (configuredSource ? 1 : 0) != 1
                 || (dynamicSource && !Objects.equals(COLLECTION_EXPRESSION,
                     loop.getInputDataItem()))
                 || (startSource && !Objects.equals(START_COLLECTION_EXPRESSION,
                     loop.getInputDataItem()))
                 || (configuredSource && !Objects.equals(CONFIGURED_COLLECTION_EXPRESSION,
                     loop.getInputDataItem()))
-                || (fixedSource && !FIXED_COLLECTION_EXPRESSION_PATTERN.matcher(
-                    trimToEmpty(loop.getInputDataItem())).matches())
                 || configuredSource != configuredProperties
                 || !Objects.equals(ELEMENT_VARIABLE, loop.getElementVariable())
                 || StringUtils.hasText(loop.getCollectionString())
@@ -351,10 +297,6 @@ public final class WorkflowMultiInstanceModelContract
                 || loop.getHandler() != null || loop.getAggregations() != null)
         {
             throw new IllegalArgumentException("当前节点不支持动态多实例");
-        }
-        if (fixedSource)
-        {
-            requireFixedUserIds(loop);
         }
         if (configuredSource)
         {

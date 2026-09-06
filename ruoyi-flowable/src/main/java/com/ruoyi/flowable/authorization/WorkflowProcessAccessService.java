@@ -226,7 +226,7 @@ public class WorkflowProcessAccessService
                 .count();
         if (assignedHistoricTaskCount > 0)
         {
-            // 保留静态指派历史兼容，原办理人即使不是最终 completedBy 也属于可验证参与者。
+            // 历史任务 assignee 是正式分配事实；即使委派后的 completedBy 不同，原办理人仍是可审计参与者。
             return true;
         }
 

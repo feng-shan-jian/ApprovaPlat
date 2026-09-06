@@ -9,6 +9,8 @@ import org.flowable.common.engine.api.delegate.event.FlowableEngineEntityEvent;
 import org.flowable.common.engine.api.delegate.event.FlowableEngineEventType;
 import org.flowable.engine.delegate.event.AbstractFlowableEngineEventListener;
 import org.flowable.engine.impl.cfg.ProcessEngineConfigurationImpl;
+import org.flowable.engine.impl.persistence.entity.HistoricProcessInstanceEntity;
+import org.flowable.engine.impl.persistence.entity.HistoricProcessInstanceEntityManager;
 import org.flowable.engine.impl.persistence.entity.ExecutionEntity;
 import org.flowable.engine.impl.util.CommandContextUtil;
 import org.flowable.variable.service.VariableServiceConfiguration;
@@ -55,7 +57,8 @@ public final class WorkflowProcessCompletionStatusListener
      * 创建延迟解析自动抄送与普通审批通知服务的监听器，供 Flowable 引擎初始化配置使用。
      * @param automaticCopyServiceProvider ObjectProvider，流程完成后获取自动抄送服务
      * @param notificationServiceProvider ObjectProvider，流程完成后获取通知服务
-     * @return void，配置后仅处理 PROCESS_COMPLETED
+     * @param notificationOutboxServiceProvider ObjectProvider，子流程结束后获取催办状态服务
+     * @return void，配置后只处理 PROCESS_COMPLETED
      */
     public WorkflowProcessCompletionStatusListener(
             ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider,
@@ -84,10 +87,15 @@ public final class WorkflowProcessCompletionStatusListener
         {
             throw new FlowableException("流程自然完成事件缺少有效的流程实例实体");
         }
-        if (!isRootBusinessProcessInstance(processInstance))
+        boolean rootBusinessProcess = isRootBusinessProcessInstance(processInstance);
+        boolean naturallyCompleted = updateHistoricProcessStatus(processInstance.getId());
+        if (!rootBusinessProcess)
         {
-            // CallActivity 子流程有独立 PROCESS_COMPLETED，但它不是用户发起的根业务实例。
-            // 只清理已失去业务对象的催办；不得收敛根业务状态、触发流程级抄送或结果通知。
+            // 子流程维护自己的 completed 双状态，但不得触发根业务流程级抄送或结果通知。
+            if (!naturallyCompleted)
+            {
+                return;
+            }
             WorkflowNotificationOutboxService outboxService =
                     notificationOutboxServiceProvider.getObject();
             outboxService.schedulePendingUrgeCancellation(processInstance.getId(), null,
@@ -97,7 +105,6 @@ public final class WorkflowProcessCompletionStatusListener
 
         // 通知服务只处理根业务流程结果，子流程完成不得解析无关依赖。
         WorkflowNotificationService notificationService = notificationServiceProvider.getObject();
-        boolean naturallyCompleted = updateHistoricProcessStatus(processInstance.getId());
         if (!naturallyCompleted)
         {
             return;
@@ -141,7 +148,7 @@ public final class WorkflowProcessCompletionStatusListener
     }
 
     /**
-     * 使用当前 Flowable CommandContext 按终态优先级更新已存在的 processStatus 历史变量。
+     * 使用当前 Flowable CommandContext 按终态优先级原子更新历史 processStatus 与 businessStatus。
      *
      * @param processInstanceId String，已自然完成的 Flowable 流程实例主键
      * @return boolean，running 成功收敛时返回 true，既有业务终态返回 false
@@ -180,14 +187,28 @@ public final class WorkflowProcessCompletionStatusListener
         }
         // 当前历史值决定终态优先级：业务显式终态和已完成值均不得被二次覆盖。
         String currentStatus = statusVariable.getTextValue();
+        HistoricProcessInstanceEntityManager historicProcessManager =
+                CommandContextUtil.getHistoricProcessInstanceEntityManager();
+        HistoricProcessInstanceEntity historicProcess = historicProcessManager.findById(
+                processInstanceId);
+        if (historicProcess == null)
+        {
+            throw new FlowableException("流程历史实例缺失: " + processInstanceId);
+        }
+        String currentBusinessStatus = historicProcess.getBusinessStatus();
         if (COMPLETED_STATUS.equals(currentStatus)
                 || BUSINESS_TERMINAL_STATUSES.contains(currentStatus))
         {
+            if (!currentStatus.equals(currentBusinessStatus))
+            {
+                throw new FlowableException("流程历史双状态不一致: " + processInstanceId);
+            }
             return false;
         }
-        if (!RUNNING_STATUS.equals(currentStatus))
+        if (!RUNNING_STATUS.equals(currentStatus)
+                || !RUNNING_STATUS.equals(currentBusinessStatus))
         {
-            throw new FlowableException("流程历史状态变量值异常: " + processInstanceId);
+            throw new FlowableException("流程历史双状态值异常: " + processInstanceId);
         }
 
         // 只有自然运行状态可收敛为 completed，并同步清理存储槽和缓存，避免最终记录不一致。
@@ -199,6 +220,8 @@ public final class WorkflowProcessCompletionStatusListener
         Date completedTime = engineConfiguration.getClock().getCurrentTime();
         statusVariable.setLastUpdatedTime(completedTime);
         historicVariableManager.update(statusVariable, false);
+        historicProcess.setBusinessStatus(COMPLETED_STATUS);
+        historicProcessManager.update(historicProcess, false);
         return true;
     }
 }

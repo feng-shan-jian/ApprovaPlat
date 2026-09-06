@@ -18,7 +18,6 @@ import org.flowable.bpmn.model.EscalationEventDefinition;
 import org.flowable.bpmn.model.ExtensionAttribute;
 import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.FlowNode;
-import org.flowable.bpmn.model.FlowableListener;
 import org.flowable.bpmn.model.ImplementationType;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.SequenceFlow;
@@ -47,7 +46,6 @@ public class WorkflowTaskSlaDeploymentService
     public static final String TIMER_ELEMENT_PREFIX = "approva_sla_";
     public static final String SOURCE_TASK_DEFINITION_KEY_PROPERTY =
             "approva.sla.sourceTaskDefinitionKey";
-    private static final String USER_TASK_LISTENER = "${userTaskListener}";
     private static final Pattern USER_ID = Pattern.compile("[1-9][0-9]{0,18}");
     private static final int MAX_MINUTES = 525600;
     private static final int MAX_REMINDERS = 100;
@@ -85,7 +83,7 @@ public class WorkflowTaskSlaDeploymentService
     }
 
     /**
-     * 复制上一阶段执行 BPMN，编译所有启用 SLA 的 UserTask。
+     * 复制上一阶段执行 BPMN，并把启用的 SLA 编译为真实边界定时器与动作拓扑。
      * @param sourceBpmn byte[]，已经完成受控扩展、DMN 和调用活动编译的 BPMN
      * @param actorUserId String，部署操作人正式用户主键
      * @return WorkflowPreparedSlaDeployment，真实定时器资源和待持久化快照
@@ -315,7 +313,6 @@ public class WorkflowTaskSlaDeploymentService
             escalationTask.setId(baseId + "_user_task");
             escalationTask.setName((task.getName() == null ? "审批" : task.getName()) + "超时升级处理");
             escalationTask.setAssignee(config.escalationUserId());
-            escalationTask.setTaskListeners(systemTaskListeners());
             appendGeneratedProperty(escalationTask, SOURCE_TASK_DEFINITION_KEY_PROPERTY,
                     task.getId());
             EndEvent end = new EndEvent();
@@ -392,12 +389,6 @@ public class WorkflowTaskSlaDeploymentService
         return delegate;
     }
 
-    /** @return List&lt;FlowableListener&gt;，固定 create、assignment、complete 三监听器。 */
-    private List<FlowableListener> systemTaskListeners()
-    {
-        return List.of(taskListener("create"), taskListener("assignment"), taskListener("complete"));
-    }
-
     /**
      * 为编译器生成节点写入只读运行属性，运行时据此关联原审批 SLA 执行。
      * @param task UserTask，编译器生成的升级任务
@@ -417,16 +408,6 @@ public class WorkflowTaskSlaDeploymentService
         container.setNamespace("http://flowable.org/bpmn");
         container.setChildElements(Map.of("property", List.of(property)));
         task.addExtensionElement(container);
-    }
-
-    /** @param event String，固定任务事件；@return FlowableListener，固定 userTaskListener 委托表达式。 */
-    private FlowableListener taskListener(String event)
-    {
-        FlowableListener listener = new FlowableListener();
-        listener.setEvent(event);
-        listener.setImplementationType(ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION);
-        listener.setImplementation(USER_TASK_LISTENER);
-        return listener;
     }
 
     /** @param process Process，目标流程；@param boundary BoundaryEvent，边界；@param delegate ServiceTask，动作；@param end EndEvent，结束；@return void。 */

@@ -20,14 +20,12 @@ import tools.jackson.databind.node.ObjectNode;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.EndEvent;
-import org.flowable.bpmn.model.FlowableListener;
+import org.flowable.bpmn.model.FormProperty;
 import org.flowable.bpmn.model.GraphicInfo;
-import org.flowable.bpmn.model.ImplementationType;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
-import org.flowable.engine.delegate.TaskListener;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.impl.persistence.entity.ModelEntity;
 import org.flowable.engine.repository.Deployment;
@@ -95,14 +93,9 @@ public class WorkflowModelService
     /** ACT_RE_MODEL.META_INFO_ 的字符上限。 */
     private static final int META_INFO_MAX_LENGTH = 4000;
 
-    /** 初始用户任务必须使用的受控任务监听 Bean 表达式。 */
-    private static final String USER_TASK_LISTENER_EXPRESSION = "${userTaskListener}";
-
-    /** 初始用户任务必须完整注册的身份审计生命周期事件。 */
-    private static final List<String> USER_TASK_LISTENER_EVENTS = List.of(
-            TaskListener.EVENTNAME_CREATE,
-            TaskListener.EVENTNAME_ASSIGNMENT,
-            TaskListener.EVENTNAME_COMPLETE);
+    /** 模型元数据唯一允许持久化的字段集合。 */
+    private static final Set<String> METADATA_FIELDS = Set.of(
+            "createUser", "description", "formType", "formId");
 
     /** 模型修订基线变化时返回的稳定业务子码。 */
     public static final String MODEL_VERSION_CONFLICT_SUB_CODE =
@@ -146,6 +139,9 @@ public class WorkflowModelService
     /** 审批 SLA 真实边界定时器编译和部署快照服务。 */
     private final WorkflowTaskSlaDeploymentService taskSlaDeploymentService;
 
+    /** 所有任务生成完成后的唯一固定运行时监听器编译器。 */
+    private final WorkflowRuntimeTaskListenerCompiler runtimeTaskListenerCompiler;
+
     /** 发起范围和单实例任务参与者规则编译及部署快照服务。 */
     private final WorkflowParticipantRuleDeploymentService participantRuleDeploymentService;
 
@@ -158,7 +154,7 @@ public class WorkflowModelService
      * @param engineOperations WorkflowEngineOperations，统一事务、身份和异常边界
      * @param repositoryService RepositoryService，Flowable 8 仓储公共 API
      * @param bpmnService WorkflowBpmnService，BPMN 安全解析和业务校验组件
-     * @param bpmnIdentityValidator WorkflowBpmnIdentityValidator，部署前静态身份主数据校验器
+     * @param bpmnIdentityValidator WorkflowBpmnIdentityValidator，正式参与者规则身份主数据校验器
      * @param categoryMapper WfCategoryMapper，工作流分类数据访问层
      * @param formMapper WfFormMapper，可编辑表单模板数据访问层
      * @param artifactRepository WorkflowDeploymentArtifactRepository，Flowable 部署业务资源仓库
@@ -171,6 +167,7 @@ public class WorkflowModelService
      * @param formFieldExtensionService WorkflowFormFieldExtensionService，自定义字段部署冻结服务
      * @param callActivityReferenceService WorkflowCallActivityReferenceService，调用活动精确版本编译与保护服务
      * @param taskSlaDeploymentService WorkflowTaskSlaDeploymentService，真实边界定时器编译和快照服务
+     * @param runtimeTaskListenerCompiler WorkflowRuntimeTaskListenerCompiler，最终运行时任务监听器编译器
      * @return 无返回值，构造后由 Spring 管理该服务
      */
     public WorkflowModelService(WorkflowEngineOperations engineOperations,
@@ -184,9 +181,10 @@ public class WorkflowModelService
             WorkflowConditionDeploymentService conditionDeploymentService,
             WorkflowParticipantRuleDeploymentService participantRuleDeploymentService,
             WorkflowDmnDecisionService dmnDecisionService,
-            WorkflowFormFieldExtensionService formFieldExtensionService,
-            WorkflowCallActivityReferenceService callActivityReferenceService,
-            WorkflowTaskSlaDeploymentService taskSlaDeploymentService)
+             WorkflowFormFieldExtensionService formFieldExtensionService,
+             WorkflowCallActivityReferenceService callActivityReferenceService,
+             WorkflowTaskSlaDeploymentService taskSlaDeploymentService,
+             WorkflowRuntimeTaskListenerCompiler runtimeTaskListenerCompiler)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
@@ -205,6 +203,7 @@ public class WorkflowModelService
         this.formFieldExtensionService = formFieldExtensionService;
         this.callActivityReferenceService = callActivityReferenceService;
         this.taskSlaDeploymentService = taskSlaDeploymentService;
+        this.runtimeTaskListenerCompiler = runtimeTaskListenerCompiler;
     }
 
     /**
@@ -277,7 +276,7 @@ public class WorkflowModelService
         return engineOperations.read(() ->
         {
             Model model = requireModel(normalizedId);
-            String bpmnXml = decodeOptionalBpmn(repositoryService.getModelEditorSource(normalizedId));
+            String bpmnXml = bpmnService.validateDraft(requireModelSource(normalizedId)).bpmnXml();
             ObjectNode metadata = readMetadata(model);
             String content = null;
             Integer formType = optionalInt(metadata, "formType");
@@ -295,7 +294,7 @@ public class WorkflowModelService
      * 查询模型编辑器保存的 BPMN XML。
      *
      * @param modelId String，Flowable 模型主键
-     * @return String，UTF-8 BPMN XML；兼容旧空模型时返回空串
+     * @return String，UTF-8 BPMN XML；资源缺失时按服务端数据异常拒绝
      */
     public String getBpmnXml(String modelId)
     {
@@ -303,13 +302,7 @@ public class WorkflowModelService
         return engineOperations.read(() ->
         {
             requireModel(normalizedId);
-            byte[] source = repositoryService.getModelEditorSource(normalizedId);
-            if (source == null || source.length == 0)
-            {
-                // 旧系统允许先建空模型，返回空串后由设计器生成初始图，避免兼容模型无法首次打开。
-                return "";
-            }
-            return bpmnService.validateDraft(source).bpmnXml();
+            return bpmnService.validateDraft(requireModelSource(normalizedId)).bpmnXml();
         });
     }
 
@@ -343,7 +336,9 @@ public class WorkflowModelService
             model.setMetaInfo(writeMetadata(newMetadata(identity, request)));
 
             // 初始 BPMN 在任何数据库写入前完成草稿安全校验，避免保存无法被设计器读取的半成品模型。
-            byte[] initialBpmn = createInitialBpmn(modelKey, modelName, request.getFormId());
+            WfForm initialForm = request.getFormId() == null ? null
+                    : requireActiveForm(request.getFormId());
+            byte[] initialBpmn = createInitialBpmn(modelKey, modelName, initialForm);
             bpmnService.validateDraft(initialBpmn);
             repositoryService.saveModel(model);
             String savedModelId = model.getId();
@@ -701,8 +696,9 @@ public class WorkflowModelService
             byte[] executableBpmn = callActivityDeployment.compiledBpmn();
             WorkflowPreparedSlaDeployment slaDeployment =
                     taskSlaDeploymentService.prepare(executableBpmn, identity.userId());
-            executableBpmn = slaDeployment.compiledBpmn();
-            // 最终执行资源必须再次通过编译阶段门禁，确保循环与 SLA 作者属性均已剥离，且生成结构满足 Flowable 校验。
+            // 所有可能生成 UserTask 的阶段完成后，统一注入身份核验与审计运行合同。
+            executableBpmn = runtimeTaskListenerCompiler.compile(slaDeployment.compiledBpmn());
+            // 最终执行资源必须再次通过编译阶段门禁，确保作者属性已剥离、固定监听器完整且生成结构满足 Flowable 校验。
             bpmnService.validateCompiledDeployment(executableBpmn);
             Map<String, List<ProcessDefinition>> activeHistoryByKey =
                     loadActiveDefinitionsByProcessKey(document);
@@ -878,12 +874,13 @@ public class WorkflowModelService
     private WorkflowModelView toView(Model model, String bpmnXml, String content)
     {
         ObjectNode metadata = readMetadata(model);
+        boolean deployed = isDeployed(model);
         return new WorkflowModelView(model.getId(), model.getName(), model.getKey(),
                 model.getCategory(), model.getVersion(), modelRevision(model),
                 optionalInt(metadata, "formType"),
                 optionalLong(metadata, "formId"), optionalText(metadata, "description"),
                 model.getCreateTime(), model.getLastUpdateTime(), bpmnXml, content,
-                isDeployed(model));
+                deployed, !deployed, !deployed, !deployed);
     }
 
     /**
@@ -1237,21 +1234,23 @@ public class WorkflowModelService
     }
 
     /**
-     * 判断模型是否由字段或 Flowable 原生查询报告为已部署。
+     * 只按模型正式 deploymentId 字段判断部署状态，并拒绝空白损坏值。
      *
      * @param model Model，待判断的 Flowable 模型
-     * @return boolean，true 表示模型已关联部署
+     * @return boolean，字段为合法非空部署主键时返回 true，null 时返回 false
      */
     private boolean isDeployed(Model model)
     {
-        if (hasText(model.getDeploymentId()))
+        String deploymentId = model.getDeploymentId();
+        if (deploymentId == null)
         {
-            return true;
+            return false;
         }
-        return repositoryService.createModelQuery()
-                .modelId(model.getId())
-                .deployed()
-                .count() > 0;
+        if (!hasText(deploymentId) || !deploymentId.equals(deploymentId.trim()))
+        {
+            throw new ServiceException("流程模型部署关系数据异常", HttpStatus.ERROR);
+        }
+        return true;
     }
 
     /**
@@ -1265,24 +1264,9 @@ public class WorkflowModelService
         byte[] source = repositoryService.getModelEditorSource(modelId);
         if (source == null || source.length == 0)
         {
-            throw new ServiceException("请先完成流程设计", HttpStatus.BAD_REQUEST);
+            throw new ServiceException("流程模型资源缺失", HttpStatus.ERROR);
         }
         return source;
-    }
-
-    /**
-     * 解码详情场景中的可选 BPMN，空设计返回 null，存在设计时复用草稿安全校验。
-     *
-     * @param source byte[]，模型编辑器源码，允许为空
-     * @return String，安全校验后的 BPMN XML 或 null
-     */
-    private String decodeOptionalBpmn(byte[] source)
-    {
-        if (source == null || source.length == 0)
-        {
-            return null;
-        }
-        return bpmnService.validateDraft(source).bpmnXml();
     }
 
     /**
@@ -1290,10 +1274,10 @@ public class WorkflowModelService
      *
      * @param modelKey String，已经通过模型标识规则校验的流程主键
      * @param modelName String，已经通过长度校验的流程显示名称
-     * @param formId Long，可选的流程级发起表单主键；为空时保留为待设计草稿
+     * @param form WfForm，可选的流程级发起表单；为空时创建无表单开始节点
      * @return byte[]，包含稳定画布坐标的 UTF-8 BPMN 2.0 XML
      */
-    private byte[] createInitialBpmn(String modelKey, String modelName, Long formId)
+    private byte[] createInitialBpmn(String modelKey, String modelName, WfForm form)
     {
         BpmnModel bpmnModel = new BpmnModel();
         bpmnModel.setTargetNamespace("http://ruoyi.example/workflow");
@@ -1307,9 +1291,10 @@ public class WorkflowModelService
         StartEvent startEvent = new StartEvent();
         startEvent.setId("start");
         startEvent.setName("提交申请");
-        if (formId != null)
+        if (form != null)
         {
-            startEvent.setFormKey("key_" + formId);
+            startEvent.setFormKey("key_" + form.getFormId());
+            startEvent.setFormProperties(initialFormPermissions(form.getContent()));
         }
 
         UserTask reviewTask = new UserTask();
@@ -1317,19 +1302,6 @@ public class WorkflowModelService
         reviewTask.setName("审批");
         // 新建模型立即冻结完整作者规则，未经页面编辑直接保存、重开或部署也不会产生无人任务。
         WorkflowParticipantRuleBpmnContract.addInitialAuthorRules(process, reviewTask);
-        List<FlowableListener> taskListeners = new ArrayList<>();
-        for (String event : USER_TASK_LISTENER_EVENTS)
-        {
-            // 初始草稿也必须满足正式部署契约，避免用户新建模型后未经编辑便生成不可发布 BPMN。
-            FlowableListener listener = new FlowableListener();
-            listener.setEvent(event);
-            listener.setImplementationType(
-                    ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION);
-            listener.setImplementation(USER_TASK_LISTENER_EXPRESSION);
-            taskListeners.add(listener);
-        }
-        reviewTask.setTaskListeners(taskListeners);
-
         EndEvent endEvent = new EndEvent();
         endEvent.setId("end");
         endEvent.setName("结束");
@@ -1368,6 +1340,43 @@ public class WorkflowModelService
     }
 
     /**
+     * 为新模型绑定的开始表单写入完整默认及逐字段权限。
+     *
+     * @param content String，已通过正式表单服务读取的平面 Schema
+     * @return List&lt;FormProperty&gt;，默认可编辑且逐字段显式可编辑的权限描述
+     */
+    private List<FormProperty> initialFormPermissions(String content)
+    {
+        List<FormProperty> properties = new ArrayList<>();
+        properties.add(formPermission("approva_permission_default", null));
+        int index = 0;
+        for (String variable : formTemplateValidator.extractVariableNames(content))
+        {
+            properties.add(formPermission("approva_permission_field_" + index++, variable));
+        }
+        return List.copyOf(properties);
+    }
+
+    /**
+     * 创建一个可编辑的正式节点字段权限描述。
+     *
+     * @param id String，BPMN FormProperty 唯一主键
+     * @param variable String，业务字段变量；默认权限为空
+     * @return FormProperty，固定 string 类型且可读可写的权限描述
+     */
+    private FormProperty formPermission(String id, String variable)
+    {
+        FormProperty property = new FormProperty();
+        property.setId(id);
+        property.setType("string");
+        property.setVariable(variable);
+        property.setReadable(true);
+        property.setWriteable(true);
+        property.setRequired(false);
+        return property;
+    }
+
+    /**
      * 从安全校验结果选择首个可执行流程名称，空名称时回退到当前模型名。
      *
      * @param document WorkflowBpmnDocument，安全校验后的 BPMN 文档
@@ -1401,7 +1410,7 @@ public class WorkflowModelService
     }
 
     /**
-     * 将请求中明确提供的业务字段合并到模型 metaInfo，并保留未知兼容字段。
+     * 将请求中明确提供的业务字段合并到模型 metaInfo。
      *
      * @param metadata ObjectNode，已有或新建的模型元数据对象
      * @param request WorkflowModelDto，包含可选描述和表单元数据的请求
@@ -1437,7 +1446,7 @@ public class WorkflowModelService
      * 解析 Flowable 模型 metaInfo，拒绝损坏或字段类型漂移的数据。
      *
      * @param model Model，包含 metaInfo 的 Flowable 模型
-     * @return ObjectNode，可保留未知字段的结构化元数据
+     * @return ObjectNode，只包含正式字段的结构化元数据
      */
     private ObjectNode readMetadata(Model model)
     {
@@ -1449,6 +1458,11 @@ public class WorkflowModelService
         {
             JsonNode parsed = metadataMapper.readTree(model.getMetaInfo());
             if (!(parsed instanceof ObjectNode metadata))
+            {
+                throw metadataFailure(null);
+            }
+            if (metadata.properties().stream()
+                    .anyMatch(entry -> !METADATA_FIELDS.contains(entry.getKey())))
             {
                 throw metadataFailure(null);
             }

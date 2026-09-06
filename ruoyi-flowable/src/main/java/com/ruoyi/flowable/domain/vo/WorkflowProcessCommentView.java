@@ -7,7 +7,7 @@ import java.time.Instant;
  *
  * @param commentId String，Flowable 意见主键
  * @param taskId String，意见所属任务主键
- * @param type String，1 至 7 的业务意见类型或 comment
+ * @param type String，REJECT、RETURN 等正式结构化业务动作编码
  * @param typeName String，稳定中文业务类型名称
  * @param opinion String，授权后可直接展示的纯文本业务意见，系统事件允许为空
  * @param userId String，意见记录人主键，允许为空

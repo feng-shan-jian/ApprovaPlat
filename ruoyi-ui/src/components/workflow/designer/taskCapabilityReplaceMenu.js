@@ -1,5 +1,3 @@
-import { getTaskCapability } from './taskCapabilityMap.js'
-
 const MANUAL_TASK_REPLACE_ACTION = 'replace-with-manual-task'
 const AFTER_DEFAULT_REPLACE_PROVIDER = 500
 
@@ -10,10 +8,7 @@ const AFTER_DEFAULT_REPLACE_PROVIDER = 500
  */
 export function filterTaskReplaceEntries(entries) {
   const filtered = { ...(entries || {}) }
-  const manualCapability = getTaskCapability('bpmn:ManualTask')
-  if (manualCapability?.conversionAllowed === false) {
-    delete filtered[MANUAL_TASK_REPLACE_ACTION]
-  }
+  delete filtered[MANUAL_TASK_REPLACE_ACTION]
   return filtered
 }
 

@@ -23,7 +23,7 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 
 /**
- * 旧表单生成器 JSON 的服务端结构和安全白名单验证器。
+ * 工作流正式平面表单 Schema 的服务端结构和安全白名单验证器。
  */
 @Component
 public class WorkflowFormTemplateValidator
@@ -34,18 +34,17 @@ public class WorkflowFormTemplateValidator
     /** 单个表单允许的最大组件节点数。 */
     public static final int MAX_COMPONENT_NODES = 500;
 
-    /** 通过 __config__.children 形成的最大组件嵌套深度。 */
+    /** 通过 children 形成的最大组件嵌套深度。 */
     public static final int MAX_COMPONENT_DEPTH = 20;
 
     private static final int MAX_JSON_NODES = 10000;
     private static final int MAX_JSON_DEPTH = 100;
 
-    private static final String CONFIG_FIELD = "__config__";
     private static final String FIELDS_FIELD = "fields";
     private static final String CHILDREN_FIELD = "children";
     private static final String TAG_FIELD = "tag";
     private static final String LAYOUT_FIELD = "layout";
-    private static final String VARIABLE_FIELD = "__vModel__";
+    private static final String VARIABLE_FIELD = "vModel";
 
     /** 单个表单字段名允许的最大字符数。 */
     private static final int MAX_VARIABLE_NAME_LENGTH = 128;
@@ -75,7 +74,7 @@ public class WorkflowFormTemplateValidator
 
     /**
      * 校验表单 JSON 的大小、语法、根结构、组件白名单及危险内容。
-     * @param content String，旧表单生成器产生的完整 JSON 文本
+     * @param content String，正式平面表单 Schema JSON 文本
      * @return void，任何门禁失败时抛出 400 业务异常
      */
     public void validate(String content)
@@ -100,8 +99,7 @@ public class WorkflowFormTemplateValidator
     /**
      * 校验表单快照并提取允许向用户回显的变量字段名。
      *
-     * 正式 wf_form 未声明 workflowReadable 时保持原有全量可读语义；BPMN 内嵌 FormData
-     * 会显式写入该标志，防止 write-only 字段进入详情响应。
+     * 部署快照必须显式声明 workflowReadable，防止缺失节点权限时形成隐式可读回退。
      *
      * @param content String，部署时固化的完整表单 JSON
      * @return Set&lt;String&gt;，按组件顺序保存的可读变量名不可变集合
@@ -111,6 +109,20 @@ public class WorkflowFormTemplateValidator
         JsonNode root = validateAndParse(content);
         LinkedHashSet<String> variableNames = new LinkedHashSet<>();
         collectReadableVariableNames(root.get(FIELDS_FIELD), variableNames);
+        return Collections.unmodifiableSet(variableNames);
+    }
+
+    /**
+     * 校验正式表单并提取附件字段名。
+     *
+     * @param content String，正式平面表单 Schema JSON 文本
+     * @return Set&lt;String&gt;，按组件顺序保存的 el-upload 变量名不可变集合
+     */
+    public Set<String> extractAttachmentVariableNames(String content)
+    {
+        JsonNode root = validateAndParse(content);
+        LinkedHashSet<String> variableNames = new LinkedHashSet<>();
+        collectAttachmentVariableNames(root.get(FIELDS_FIELD), variableNames);
         return Collections.unmodifiableSet(variableNames);
     }
 
@@ -154,7 +166,7 @@ public class WorkflowFormTemplateValidator
     /**
      * 校验表单 JSON 的全部安全约束并返回已解析根节点，供只读字段提取复用。
      *
-     * @param content String，旧表单生成器产生的完整 JSON 文本
+     * @param content String，正式平面表单 Schema JSON 文本
      * @return JsonNode，通过大小、语法、结构和组件白名单校验的根节点
      */
     private JsonNode validateAndParse(String content)
@@ -188,9 +200,9 @@ public class WorkflowFormTemplateValidator
     }
 
     /**
-     * 按表单组件顺序递归提取 __vModel__，不把布局容器或配置键当作业务变量。
+     * 按表单组件顺序递归提取 vModel，不把布局容器当作业务变量。
      *
-     * @param components JsonNode，当前层 fields 或 __config__.children 数组
+     * @param components JsonNode，当前层 fields 或 children 数组
      * @param variableNames Set&lt;String&gt;，全表单共享的有序字段名集合
      * @return 无返回值，字段名异常时抛出稳定 400
      */
@@ -208,10 +220,39 @@ public class WorkflowFormTemplateValidator
                 }
                 variableNames.add(variableNode.textValue().trim());
             }
-            JsonNode children = component.path(CONFIG_FIELD).get(CHILDREN_FIELD);
+            JsonNode children = component.get(CHILDREN_FIELD);
             if (children != null && children.isArray() && !children.isEmpty())
             {
                 collectVariableNames(children, variableNames);
+            }
+        }
+    }
+
+    /**
+     * 递归收集 el-upload 的正式 vModel 字段。
+     *
+     * @param components JsonNode，当前层字段数组
+     * @param variableNames Set&lt;String&gt;，全表单共享的有序附件字段集合
+     * @return 无返回值，变量格式异常由前置 Schema 校验统一拒绝
+     */
+    private void collectAttachmentVariableNames(JsonNode components,
+            Set<String> variableNames)
+    {
+        for (JsonNode component : components)
+        {
+            if ("el-upload".equals(component.path(TAG_FIELD).asText()))
+            {
+                JsonNode variable = component.get(VARIABLE_FIELD);
+                if (variable != null && variable.isTextual()
+                        && !variable.textValue().isBlank())
+                {
+                    variableNames.add(variable.textValue().trim());
+                }
+            }
+            JsonNode children = component.get(CHILDREN_FIELD);
+            if (children != null && children.isArray() && !children.isEmpty())
+            {
+                collectAttachmentVariableNames(children, variableNames);
             }
         }
     }
@@ -228,17 +269,12 @@ public class WorkflowFormTemplateValidator
         for (JsonNode component : components)
         {
             JsonNode variableNode = component.get(VARIABLE_FIELD);
-            JsonNode config = component.path(CONFIG_FIELD);
-            JsonNode readableNode = config.get("workflowReadable");
-            boolean readable = true;
-            if (readableNode != null && !readableNode.isNull())
+            JsonNode readableNode = component.get("workflowReadable");
+            if (readableNode == null || !readableNode.isBoolean())
             {
-                if (!readableNode.isBoolean())
-                {
-                    throw invalid("表单组件可读标志不合法");
-                }
-                readable = readableNode.booleanValue();
+                throw invalid("部署表单组件必须声明可读标志");
             }
+            boolean readable = readableNode.booleanValue();
             if (readable && variableNode != null && !variableNode.isNull())
             {
                 if (!variableNode.isTextual() || variableNode.textValue().isBlank()
@@ -248,7 +284,7 @@ public class WorkflowFormTemplateValidator
                 }
                 variableNames.add(variableNode.textValue().trim());
             }
-            JsonNode children = config.get(CHILDREN_FIELD);
+            JsonNode children = component.get(CHILDREN_FIELD);
             if (children != null && children.isArray() && !children.isEmpty())
             {
                 collectReadableVariableNames(children, variableNames);
@@ -258,7 +294,7 @@ public class WorkflowFormTemplateValidator
 
     /**
      * 递归收集可见、可读且可承载单一用户主键的字段，并拒绝同名异构声明被并集放宽。
-     * @param components JsonNode，当前层 fields 或 __config__.children 数组
+     * @param components JsonNode，当前层 fields 或 children 数组
      * @param signatureByName Map&lt;String,String&gt;，字段名到首次合格值形态签名的有序映射
      * @param disqualifiedNames Set&lt;String&gt;，包含任一不合格或异构声明的字段名
      * @return void，直接更新调用方目录
@@ -268,7 +304,6 @@ public class WorkflowFormTemplateValidator
     {
         for (JsonNode component : components)
         {
-            JsonNode config = component.path(CONFIG_FIELD);
             JsonNode variableNode = component.get(VARIABLE_FIELD);
             if (variableNode != null && !variableNode.isNull())
             {
@@ -278,11 +313,10 @@ public class WorkflowFormTemplateValidator
                     throw invalid("表单组件变量名不合法");
                 }
                 String variableName = variableNode.textValue().trim();
-                boolean hidden = config.path("workflowHidden").asBoolean(false);
-                boolean readable = !config.hasNonNull("workflowReadable")
-                        || config.path("workflowReadable").asBoolean(false);
+                boolean hidden = component.path("workflowHidden").asBoolean(false);
+                boolean readable = component.path("workflowReadable").asBoolean(false);
                 String signature = !hidden && readable
-                        ? singleUserIdValueSignature(component, config) : null;
+                        ? singleUserIdValueSignature(component) : null;
                 if (signature == null)
                 {
                     disqualifiedNames.add(variableName);
@@ -297,7 +331,7 @@ public class WorkflowFormTemplateValidator
                     }
                 }
             }
-            JsonNode children = config.get(CHILDREN_FIELD);
+            JsonNode children = component.get(CHILDREN_FIELD);
             if (children != null && children.isArray() && !children.isEmpty())
             {
                 collectUserIdSourceVariables(children, signatureByName, disqualifiedNames);
@@ -307,13 +341,12 @@ public class WorkflowFormTemplateValidator
 
     /**
      * 判断组件值是否能无歧义承载一个若依用户主键。
-     * @param component JsonNode，包含 multiple 等值形态配置的表单组件
-     * @param config JsonNode，包含受控 tag 的 __config__ 节点
+     * @param component JsonNode，包含 tag、multiple 等值形态配置的平面表单组件
      * @return String，单值文本、数值、下拉或单选组件的稳定类型签名；不合格时返回 null
      */
-    private String singleUserIdValueSignature(JsonNode component, JsonNode config)
+    private String singleUserIdValueSignature(JsonNode component)
     {
-        String tag = config.path(TAG_FIELD).asText("");
+        String tag = component.path(TAG_FIELD).asText("");
         return switch (tag)
         {
             case "el-input", "el-input-number", "el-radio-group" -> tag;
@@ -379,6 +412,10 @@ public class WorkflowFormTemplateValidator
                 while (fields.hasNext())
                 {
                     Map.Entry<String, JsonNode> field = fields.next();
+                    if (field.getKey().startsWith("__"))
+                    {
+                        throw invalid("表单模板包含已废止的内部生成器字段");
+                    }
                     if (PROTOTYPE_POLLUTION_KEYS.contains(field.getKey().toLowerCase(Locale.ROOT)))
                     {
                         throw invalid("表单模板包含原型污染键");
@@ -390,7 +427,7 @@ public class WorkflowFormTemplateValidator
     }
 
     /**
-     * 递归验证组件节点、布局、标签及 __config__.children。
+     * 递归验证平面组件节点、布局、标签及 children。
      * @param components JsonNode，当前层组件数组
      * @param depth int，当前组件嵌套深度，从 1 开始
      * @param counter ComponentCounter，全表单共享组件计数器
@@ -413,34 +450,28 @@ public class WorkflowFormTemplateValidator
             {
                 throw invalid("fields 和 children 中的组件必须是对象");
             }
-            JsonNode config = component.get(CONFIG_FIELD);
-            if (config == null || !config.isObject())
-            {
-                throw invalid("组件必须包含 __config__ 对象");
-            }
-
-            String layout = requiredText(config, LAYOUT_FIELD, "组件 layout 不能为空");
+            String layout = requiredText(component, LAYOUT_FIELD, "组件 layout 不能为空");
             if (!ALLOWED_LAYOUTS.contains(layout))
             {
                 throw invalid("不支持的表单组件布局: " + layout);
             }
-            JsonNode tagNode = config.get(TAG_FIELD);
+            JsonNode tagNode = component.get(TAG_FIELD);
             if (!"rowFormItem".equals(layout) || (tagNode != null && !tagNode.isNull()))
             {
-                String tag = requiredText(config, TAG_FIELD, "非行容器组件 tag 不能为空");
+                String tag = requiredText(component, TAG_FIELD, "非行容器组件 tag 不能为空");
                 if (!ALLOWED_TAGS.contains(tag))
                 {
                     throw invalid("不支持的表单组件: " + tag);
                 }
             }
 
-            JsonNode children = config.get(CHILDREN_FIELD);
-            validatePermissionMetadata(config);
+            JsonNode children = component.get(CHILDREN_FIELD);
+            validatePermissionMetadata(component);
             if (children != null && !children.isNull())
             {
                 if (!children.isArray())
                 {
-                    throw invalid("__config__.children 必须是数组");
+                    throw invalid("children 必须是数组");
                 }
                 if (!children.isEmpty())
                 {
@@ -453,27 +484,25 @@ public class WorkflowFormTemplateValidator
     /**
      * 校验部署快照中的节点字段权限元数据，防止数据库脏数据形成前后端语义分裂。
      *
-     * @param config JsonNode，当前字段的 __config__ 配置
+     * @param component JsonNode，当前平面字段配置
      * @return void，标志类型或四态组合非法时抛出稳定 400
      */
-    private void validatePermissionMetadata(JsonNode config)
+    private void validatePermissionMetadata(JsonNode component)
     {
-        JsonNode hiddenNode = config.get("workflowHidden");
-        JsonNode readableNode = config.get("workflowReadable");
-        JsonNode writableNode = config.get("workflowWritable");
+        JsonNode hiddenNode = component.get("workflowHidden");
+        JsonNode readableNode = component.get("workflowReadable");
+        JsonNode writableNode = component.get("workflowWritable");
         for (JsonNode flag : new JsonNode[] { hiddenNode, readableNode, writableNode })
         {
-            if (flag != null && !flag.isNull() && !flag.isBoolean())
+            if (flag == null || !flag.isBoolean())
             {
-                throw invalid("表单组件节点权限标志不合法");
+                throw invalid("表单组件必须声明完整节点权限标志");
             }
         }
-        boolean hidden = hiddenNode != null && hiddenNode.isBoolean() && hiddenNode.booleanValue();
-        boolean readable = readableNode == null || readableNode.isNull()
-                || (readableNode.isBoolean() && readableNode.booleanValue());
-        boolean writable = writableNode == null || writableNode.isNull()
-                || (writableNode.isBoolean() && writableNode.booleanValue());
-        JsonNode requiredNode = config.get("required");
+        boolean hidden = hiddenNode.booleanValue();
+        boolean readable = readableNode.booleanValue();
+        boolean writable = writableNode.booleanValue();
+        JsonNode requiredNode = component.get("required");
         if (requiredNode != null && !requiredNode.isNull() && !requiredNode.isBoolean())
         {
             throw invalid("表单组件必填标志不合法");

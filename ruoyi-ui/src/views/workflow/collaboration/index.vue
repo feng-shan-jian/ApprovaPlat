@@ -57,10 +57,10 @@
           <el-tooltip content="查看审计">
             <el-button link icon="View" aria-label="查看审计" v-hasPermi="['workflow:collaboration:audit']" @click="openAudit(scope.row)" />
           </el-tooltip>
-          <el-tooltip v-if="scope.row.retryAllowed" content="重新投递">
+          <el-tooltip v-if="scope.row.retryAllowed === true" content="重新投递">
             <el-button link type="primary" icon="RefreshRight" aria-label="重新投递" v-hasPermi="['workflow:collaboration:retry']" @click="retryRow(scope.row)" />
           </el-tooltip>
-          <el-tooltip v-if="scope.row.cancelAllowed" content="取消投递">
+          <el-tooltip v-if="scope.row.cancelAllowed === true" content="取消投递">
             <el-button link type="danger" icon="CircleClose" aria-label="取消投递" v-hasPermi="['workflow:collaboration:cancel']" @click="cancelRow(scope.row)" />
           </el-tooltip>
         </template>
@@ -177,7 +177,9 @@ async function openAudit(row) {
 
 /** @param {object} row 消息行。 @returns {Promise<void>} 确认后执行受权限保护的人工补偿。 */
 async function retryRow(row) {
+  if (row.retryAllowed !== true) return
   await proxy.$modal.confirm(`确认重新投递消息“${row.messageName}”吗？`)
+  if (row.retryAllowed !== true) return
   if (activeDirection.value === 'OUTBOUND') await retryCollaborationOutbox(row.messageId)
   else await retryCollaborationInbound(row.messageId)
   proxy.$modal.msgSuccess('消息已进入有界重试')
@@ -186,7 +188,9 @@ async function retryRow(row) {
 
 /** @param {object} row 出站消息行。 @returns {Promise<void>} 确认后取消未送达消息。 */
 async function cancelRow(row) {
+  if (row.cancelAllowed !== true) return
   await proxy.$modal.confirm(`确认取消消息“${row.messageName}”吗？已送达消息不会提供该操作。`)
+  if (row.cancelAllowed !== true) return
   await cancelCollaborationOutbox(row.messageId)
   proxy.$modal.msgSuccess('消息已取消')
   await loadRows()

@@ -126,19 +126,19 @@ export function createRoutingCallActivityDomain(context) {
     const seen = new Set()
     for (const { source, variable, field } of formFieldCatalog.resolveElementFieldDescriptors(businessObject)) {
       const embedded = source === 'EMBEDDED'
-      const tag = String(field?.__config__?.tag || '')
+      const tag = String(field?.tag || '')
       const type = embedded
         ? ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
         : (['el-time-picker', 'el-date-picker'].includes(tag) && field?.['is-range'] === true
             ? null : templateCallFieldType(tag, field))
       if (!variable || !type || (embedded ? field.writable === false
-        : field?.__config__?.workflowWritable === false || seen.has(variable))) continue
+        : field?.workflowWritable !== true || seen.has(variable))) continue
       if (!embedded) seen.add(variable)
-      const options = embedded ? field.values : field?.__slot__?.options
+      const options = embedded ? field.values : field?.options
       result.push({
         value: variable,
-        label: (embedded ? field.name : field?.__config__?.label)
-          ? `${embedded ? field.name : field.__config__.label}（${variable}）` : variable,
+        label: (embedded ? field.name : field?.label)
+          ? `${embedded ? field.name : field.label}（${variable}）` : variable,
         type,
         values: type === 'BOOLEAN'
           ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
@@ -148,7 +148,7 @@ export function createRoutingCallActivityDomain(context) {
                 value: String(item?.value ?? item?.label ?? ''),
                 label: String(item?.label ?? item?.value ?? '')
               })).filter(item => item.value),
-        valueRestricted: type === 'BOOLEAN' || (embedded ? field.type === 'enum' : field?.__config__?.workflowEnum === true)
+        valueRestricted: type === 'BOOLEAN' || (embedded ? field.type === 'enum' : field?.workflowEnum === true)
       })
     }
     return result
@@ -287,11 +287,10 @@ export function createRoutingCallActivityDomain(context) {
   function extractTemplateCallFields(content) {
     return formFieldCatalog.readTemplateFieldDescriptors(content)
       .map(({ field, variable: name }) => {
-        const config = field?.__config__ || {}
-        const type = templateCallFieldType(config.tag, field)
-        return name && type ? { name, label: config.label || name, type,
-          required: config.required === true, readable: config.workflowReadable !== false,
-          writable: config.workflowWritable !== false && field.disabled !== true } : null
+        const type = templateCallFieldType(field?.tag, field)
+        return name && type ? { name, label: field?.label || name, type,
+          required: field?.required === true, readable: field?.workflowReadable === true,
+          writable: field?.workflowWritable === true && field.disabled !== true } : null
       }).filter(Boolean)
   }
 

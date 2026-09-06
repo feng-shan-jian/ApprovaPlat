@@ -22,6 +22,10 @@ import java.util.Objects;
  * @param durationMillis Long，流程耗时毫秒，运行中为空
  * @param processStatus String，running/completed/terminated/canceled 等稳定状态
  * @param currentTaskNames List&lt;String&gt;，当前活动任务名称
+ * @param cancelAllowed boolean，当前列表身份能否取消流程
+ * @param terminateAllowed boolean，管理员能否终止流程
+ * @param stateAction String，ACTIVATE、SUSPEND 或 null
+ * @param historyDeleteAllowed boolean，管理员能否删除历史
  */
 public record WorkflowManagedProcessView(
         String processInstanceId,
@@ -38,7 +42,8 @@ public record WorkflowManagedProcessView(
         Instant endTime,
         Long durationMillis,
         String processStatus,
-        List<String> currentTaskNames)
+        List<String> currentTaskNames, boolean cancelAllowed, boolean terminateAllowed,
+        String stateAction, boolean historyDeleteAllowed)
 {
     /**
      * 创建实例运维视图并复制活动任务名称，防止页面调用方修改领域结果。
@@ -58,6 +63,10 @@ public record WorkflowManagedProcessView(
      * @param durationMillis Long，流程耗时毫秒，允许为空
      * @param processStatus String，稳定流程状态
      * @param currentTaskNames List&lt;String&gt;，当前活动任务名称
+     * @param cancelAllowed boolean，取消能力
+     * @param terminateAllowed boolean，终止能力
+     * @param stateAction String，状态切换动作
+     * @param historyDeleteAllowed boolean，历史删除能力
      * @return 无返回值，构造后得到不可变视图
      */
     public WorkflowManagedProcessView

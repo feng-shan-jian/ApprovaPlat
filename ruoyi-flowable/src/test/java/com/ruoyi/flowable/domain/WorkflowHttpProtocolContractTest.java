@@ -218,7 +218,7 @@ class WorkflowHttpProtocolContractTest
     }
 
     /**
-     * 验证 formDetail 始终序列化为对象，五个字段名称与 JSON 类型保持稳定。
+     * 验证 formDetail 始终序列化为对象，四个正式字段名称与 JSON 类型保持稳定。
      *
      * @return void，详情缺少对象、字段名或字段类型发生漂移时测试失败
      */
@@ -229,17 +229,17 @@ class WorkflowHttpProtocolContractTest
         mutableHistory.add(formSnapshot("history-task"));
         WorkflowProcessFormDetailView formDetail = new WorkflowProcessFormDetailView(
                 formSnapshot(null), formSnapshot("current-task"),
-                mutableHistory, false, false);
+                mutableHistory, false);
         mutableHistory.clear();
         assertThat(componentNames(WorkflowProcessFormDetailView.class))
                 .containsExactlyInAnyOrder("applicationForm", "nodeTaskForm",
-                        "historyForms", "applicationMissing", "returnedApplication");
+                        "historyForms", "returnedApplication");
 
         JsonNode detailJson = JsonMapper.shared().valueToTree(formDetail);
         assertThat(detailJson.path("applicationForm").isObject()).isTrue();
         assertThat(detailJson.path("nodeTaskForm").isObject()).isTrue();
         assertThat(detailJson.path("historyForms").isArray()).isTrue();
-        assertThat(detailJson.path("applicationMissing").isBoolean()).isTrue();
+        assertThat(detailJson.has("applicationMissing")).isFalse();
         assertThat(detailJson.path("returnedApplication").isBoolean()).isTrue();
         assertThat(formDetail.historyForms()).hasSize(1);
         assertThatThrownBy(() -> formDetail.historyForms().add(formSnapshot("another-task")))
@@ -265,26 +265,20 @@ class WorkflowHttpProtocolContractTest
         WorkflowProcessFormSnapshotView nodeTask = formSnapshot("node-task");
 
         assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
-                null, null, List.of(), true, true))
+                returnedApplication, nodeTask, List.of(), true))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
-                returnedApplication, nodeTask, List.of(), false, true))
+                returnedApplication, null, List.of(), false))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
-                returnedApplication, null, List.of(), false, false))
+                formSnapshot(" "), null, List.of(), true))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
-                formSnapshot(" "), null, List.of(), false, true))
+                application, null, List.of(application), false))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
-                application, null, List.of(), true, false))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
-                null, null, List.of(), false, false))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new WorkflowProcessFormDetailView(
-                application, null, List.of(application), false, false))
-                .isInstanceOf(IllegalArgumentException.class);
+                null, null, List.of(), false))
+                .isInstanceOf(NullPointerException.class);
     }
 
     /**
@@ -296,11 +290,11 @@ class WorkflowHttpProtocolContractTest
     void processDetailRejectsContradictoryReturnedFormBindings()
     {
         WorkflowProcessFormDetailView returned = new WorkflowProcessFormDetailView(
-                formSnapshot("task"), null, List.of(), false, true);
+                formSnapshot("task"), null, List.of(), true);
         WorkflowProcessFormDetailView mismatched = new WorkflowProcessFormDetailView(
-                formSnapshot("other-task"), null, List.of(), false, true);
-        WorkflowProcessFormDetailView ordinaryMissing = new WorkflowProcessFormDetailView(
-                null, null, List.of(), true, false);
+                formSnapshot("other-task"), null, List.of(), true);
+        WorkflowProcessFormDetailView ordinary = new WorkflowProcessFormDetailView(
+                formSnapshot(null), null, List.of(), false);
 
         assertThatThrownBy(() -> processDetail(
                 "running", taskSnapshot(true), false, false, returned))
@@ -312,10 +306,10 @@ class WorkflowHttpProtocolContractTest
                 "returned", taskSnapshot(true), false, false, mismatched))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> processDetail(
-                "returned", taskSnapshot(true), false, false, ordinaryMissing))
+                "returned", taskSnapshot(true), false, false, ordinary))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> processDetail(
-                "returned", taskSnapshot(true), true, false, ordinaryMissing))
+                "returned", taskSnapshot(true), true, false, ordinary))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> processDetail(
                 "running", null, false, false, null))
@@ -357,9 +351,9 @@ class WorkflowHttpProtocolContractTest
                 && currentTask != null && currentTask.active()
                         ? new WorkflowProcessFormDetailView(
                                 formSnapshot(currentTask.taskId()), null,
-                                List.of(), false, true)
+                                List.of(), true)
                         : new WorkflowProcessFormDetailView(
-                                null, null, List.of(), true, false);
+                                formSnapshot(null), null, List.of(), false);
         return processDetail(processStatus, currentTask, resubmitAllowed,
                 urgeAllowed, formDetail);
     }
@@ -381,7 +375,8 @@ class WorkflowHttpProtocolContractTest
         return new WorkflowProcessDetailView("instance", "definition", "process",
                 "流程", 1, "category", "deployment", null, "applicant",
                 "申请人", Instant.EPOCH, null, null, processStatus, currentTask,
-                "DISABLED", null, false, resubmitAllowed, urgeAllowed, List.of(),
+                "DISABLED", null, false, false, false, false, false, false,
+                resubmitAllowed, urgeAllowed, List.of(),
                 formDetail, List.of(), List.of(), "<definitions/>",
                 new WorkflowProcessViewerView(Set.of(), Set.of(), Set.of(),
                         Set.of(), Set.of()));

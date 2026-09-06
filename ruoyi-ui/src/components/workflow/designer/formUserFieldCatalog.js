@@ -48,20 +48,15 @@ function mergeFieldDeclarations(declarations) {
 
 /**
  * 判断正式模板字段是否可见、可读且能无歧义承载一个用户主键。
- * @param {object} field 使用 __config__ 描述组件类型与节点权限的正式模板字段。
- * @param {string} permissionMode BPMN 节点显式覆盖的四态权限；空值保留模板原权限。
+ * @param {object} field 使用平面正式 Schema 描述组件类型与节点权限的模板字段。
+ * @param {string} permissionMode BPMN 节点显式声明的四态权限。
  * @returns {string} 文本、数值、单选或单值下拉字段的稳定组件签名；不合格时返回空串。
  */
 function templateUserIdSignature(field, permissionMode) {
-  const config = field?.__config__ || {}
-  const explicitMode = FORM_PERMISSION_MODES.has(permissionMode)
-  const visible = explicitMode
-    ? permissionMode !== 'HIDDEN'
-    : config.workflowHidden == null || config.workflowHidden === false
-  const readable = explicitMode
-    ? permissionMode !== 'HIDDEN'
-    : config.workflowReadable == null || config.workflowReadable === true
-  const tag = String(config.tag || '')
+  if (!FORM_PERMISSION_MODES.has(permissionMode)) return ''
+  const visible = permissionMode !== 'HIDDEN'
+  const readable = permissionMode !== 'HIDDEN'
+  const tag = String(field?.tag || '')
   if (!visible || !readable || !TEMPLATE_USER_ID_TAGS.has(tag)) return ''
   return tag !== 'el-select' || field?.multiple == null || field.multiple === false ? tag : ''
 }
@@ -69,7 +64,7 @@ function templateUserIdSignature(field, permissionMode) {
 /**
  * 从正式模板 JSON 构建用户主键字段目录，保留不合格声明供流程级冲突失败关闭。
  * @param {string} content 已由正式表单接口返回的模板 JSON。
- * @param {{configured?:boolean,defaultMode?:string,permissions?:Map<string,string>}|undefined} permissionPolicy BPMN 节点权限策略。
+ * @param {{defaultMode?:string,permissions?:Map<string,string>}|undefined} permissionPolicy BPMN 节点的强制权限策略。
  * @returns {Array<{value:string,label:string,eligible:boolean,signature:string}>} 去重后的全部字段声明、资格和值形态。
  */
 export function createTemplateUserIdFieldCatalog(content, permissionPolicy) {
@@ -78,12 +73,11 @@ export function createTemplateUserIdFieldCatalog(content, permissionPolicy) {
     const declarations = []
     const visit = fields => {
       for (const field of Array.isArray(fields) ? fields : []) {
-        const value = String(field?.__vModel__ || '').trim()
+        const value = String(field?.vModel || '').trim()
         if (value) {
-          const label = String(field?.__config__?.label || '').trim()
-          const permissionMode = permissionPolicy?.configured === true
-            ? permissionPolicy.permissions?.get(value) || permissionPolicy.defaultMode || ''
-            : ''
+          const label = String(field?.label || '').trim()
+          const permissionMode = permissionPolicy?.permissions?.get(value)
+            || permissionPolicy?.defaultMode || ''
           const signature = templateUserIdSignature(field, permissionMode)
           declarations.push({
             value,
@@ -92,7 +86,7 @@ export function createTemplateUserIdFieldCatalog(content, permissionPolicy) {
             signature
           })
         }
-        visit(field?.__config__?.children)
+        visit(field?.children)
       }
     }
     visit(root?.fields)

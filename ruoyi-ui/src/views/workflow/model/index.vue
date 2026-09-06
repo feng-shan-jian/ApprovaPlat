@@ -35,7 +35,7 @@
     </el-row>
 
     <el-table v-loading="loading" :data="rows" @selection-change="handleSelectionChange">
-      <el-table-column type="selection" width="52" align="center" :selectable="canSelectModel" />
+      <el-table-column type="selection" width="52" align="center" :selectable="row => row.deleteAllowed === true" />
       <el-table-column label="模型名称" prop="modelName" min-width="190" show-overflow-tooltip />
       <el-table-column label="模型标识" prop="modelKey" min-width="180" show-overflow-tooltip />
       <el-table-column label="分类" min-width="130" show-overflow-tooltip>
@@ -61,16 +61,16 @@
             <el-button link type="primary" icon="EditPen" v-hasPermi="['workflow:model:designer']" @click="openDesigner(scope.row)" />
           </el-tooltip>
           <el-tooltip content="修改元数据" placement="top">
-            <el-button link type="primary" icon="Edit" :disabled="scope.row.deployed" v-hasPermi="['workflow:model:edit']" @click="openEdit(scope.row)" />
+            <el-button link type="primary" icon="Edit" :disabled="scope.row.metadataEditAllowed !== true" v-hasPermi="['workflow:model:edit']" @click="openEdit(scope.row)" />
           </el-tooltip>
           <el-tooltip content="版本历史" placement="top">
             <el-button link type="primary" icon="Clock" v-hasPermi="['workflow:model:list']" @click="openHistory(scope.row)" />
           </el-tooltip>
           <el-tooltip content="部署" placement="top">
-            <el-button link type="success" icon="Promotion" :disabled="scope.row.deployed" v-hasPermi="['workflow:model:deploy']" @click="deploy(scope.row)" />
+            <el-button link type="success" icon="Promotion" :disabled="scope.row.deployAllowed !== true" v-hasPermi="['workflow:model:deploy']" @click="deploy(scope.row)" />
           </el-tooltip>
           <el-tooltip content="删除" placement="top">
-            <el-button link type="danger" icon="Delete" :disabled="scope.row.deployed" v-hasPermi="['workflow:model:remove']" @click="removeModels(scope.row)" />
+            <el-button link type="danger" icon="Delete" :disabled="scope.row.deleteAllowed !== true" v-hasPermi="['workflow:model:remove']" @click="removeModels(scope.row)" />
           </el-tooltip>
         </template>
       </el-table-column>
@@ -260,15 +260,6 @@ function formTypeLabel(type) {
  */
 function handleSelectionChange(selection) {
   selectedIds.value = selection.map(item => item.modelId)
-}
-
-/**
- * 限制已部署模型不能进入批量物理删除操作。
- * @param {object} row 模型列表行。
- * @returns {boolean} true 表示允许选择。
- */
-function canSelectModel(row) {
-  return !row.deployed
 }
 
 /**

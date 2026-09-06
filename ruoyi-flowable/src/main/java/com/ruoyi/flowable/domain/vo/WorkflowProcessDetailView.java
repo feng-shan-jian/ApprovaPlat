@@ -26,7 +26,12 @@ import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
  * @param currentTask WorkflowTaskAccessSnapshot，请求指定并通过关系核验的任务，允许为空
  * @param nextUserAssignmentPolicy String，DISABLED、OPTIONAL、REQUIRED_ALL 或 REQUIRED_ANY
  * @param multiInstanceState WorkflowMultiInstanceStateView，当前办理人可调整的动态多实例状态，非 MI 为 null
+ * @param completeAllowed boolean，当前用户能否完成请求任务
+ * @param rejectAllowed boolean，当前用户能否驳回请求任务
  * @param returnAllowed boolean，当前用户能否对请求任务执行真实退回
+ * @param delegateAllowed boolean，当前用户能否委派请求任务
+ * @param transferAllowed boolean，当前用户能否转办请求任务
+ * @param resolveAllowed boolean，当前用户能否办结请求任务的委派
  * @param resubmitAllowed boolean，当前用户能否对申请人待修改任务执行真实重提
  * @param urgeAllowed boolean，当前用户能否对运行中的根流程执行真实人工催办
  * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，部署循环配置、当前轮次和历史轨迹
@@ -54,7 +59,12 @@ public record WorkflowProcessDetailView(
         WorkflowTaskAccessSnapshot currentTask,
         String nextUserAssignmentPolicy,
         WorkflowMultiInstanceStateView multiInstanceState,
+        boolean completeAllowed,
+        boolean rejectAllowed,
         boolean returnAllowed,
+        boolean delegateAllowed,
+        boolean transferAllowed,
+        boolean resolveAllowed,
         boolean resubmitAllowed,
         boolean urgeAllowed,
         List<WorkflowControlledLoopStateView> controlledLoopStates,
@@ -84,7 +94,12 @@ public record WorkflowProcessDetailView(
      * @param currentTask WorkflowTaskAccessSnapshot，通过对象关系核验的任务，允许为空
      * @param nextUserAssignmentPolicy String，动态下一办理人正式策略
      * @param multiInstanceState WorkflowMultiInstanceStateView，动态多实例能力和状态，允许为空
+     * @param completeAllowed boolean，正式任务完成能力
+     * @param rejectAllowed boolean，正式任务驳回能力
      * @param returnAllowed boolean，当前用户和执行树是否满足正式退回前置条件
+     * @param delegateAllowed boolean，正式任务委派能力
+     * @param transferAllowed boolean，正式任务转办能力
+     * @param resolveAllowed boolean，正式委派办结能力
      * @param resubmitAllowed boolean，当前用户和完整准备链是否满足正式重提前置条件
      * @param urgeAllowed boolean，当前用户和完整运行树是否满足正式人工催办前置条件
      * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，受控循环状态列表
@@ -110,9 +125,11 @@ public record WorkflowProcessDetailView(
         {
             throw new IllegalArgumentException("动态下一办理人策略不合法");
         }
-        if (returnAllowed && (currentTask == null || !currentTask.active()))
+        if ((completeAllowed || rejectAllowed || returnAllowed || delegateAllowed
+                || transferAllowed || resolveAllowed)
+                && (currentTask == null || !currentTask.active()))
         {
-            throw new IllegalArgumentException("退回能力必须绑定活动任务");
+            throw new IllegalArgumentException("任务动作能力必须绑定活动任务");
         }
         // 退回申请标记必须与稳定流程状态及当前活动任务事实双向一致，避免普通表单伪装退回任务。
         boolean returnedActivity = "returned".equals(processStatus)

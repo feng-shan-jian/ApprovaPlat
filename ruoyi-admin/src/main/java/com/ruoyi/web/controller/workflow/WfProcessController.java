@@ -1,10 +1,10 @@
 package com.ruoyi.web.controller.workflow;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.function.IntFunction;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -13,12 +13,12 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
@@ -39,6 +39,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowManagedProcessQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowOwnedProcessQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDetailQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
+import com.ruoyi.flowable.domain.dto.WorkflowProcessInstancesDeleteRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowStartableProcessQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowAssignedTaskExportView;
 import com.ruoyi.flowable.domain.vo.WorkflowAssignedTaskView;
@@ -460,15 +461,16 @@ public class WfProcessController extends BaseController
     /**
      * 由受控流程管理员批量删除已结束实例历史和关联抄送记录。
      *
-     * @param instanceIds String[]，旧逗号路径协议绑定的流程实例主键集合
+     * @param request WorkflowProcessInstancesDeleteRequest，正文承载的流程实例主键集合
      * @return AjaxResult，去重请求数及真实历史、抄送删除数量
      */
     @PreAuthorize("@ss.hasPermi('workflow:process:remove')")
     @Log(title = "删除流程历史", businessType = BusinessType.DELETE)
-    @DeleteMapping("/instance/{instanceIds}")
-    public AjaxResult deleteHistory(@PathVariable String[] instanceIds)
+    @PostMapping("/instances/delete")
+    public AjaxResult deleteHistory(
+            @Valid @RequestBody WorkflowProcessInstancesDeleteRequest request)
     {
-        return success(processInstanceService.deleteCompletedHistory(Arrays.asList(instanceIds)));
+        return success(processInstanceService.deleteCompletedHistory(request.instanceIds()));
     }
 
     /**

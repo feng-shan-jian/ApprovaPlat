@@ -34,15 +34,6 @@ import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 @Component
 public class WorkflowProcessEngineAdapter
 {
-    /** 普通任务操作沿用旧系统正常意见类型。 */
-    private static final String NORMAL_COMMENT_TYPE = "1";
-
-    /** 委派意见类型，与旧系统 FlowComment.DELEGATE 保持兼容。 */
-    private static final String DELEGATE_COMMENT_TYPE = "4";
-
-    /** 转办意见类型，与旧系统 FlowComment.TRANSFER 保持兼容。 */
-    private static final String TRANSFER_COMMENT_TYPE = "5";
-
     /** 委派和转办意见最大长度，与 HTTP DTO 及应用服务门禁一致。 */
     private static final int MAX_AUDIT_OPINION_LENGTH = 500;
 
@@ -118,7 +109,7 @@ public class WorkflowProcessEngineAdapter
 
             // 权限校验通过后再认领；并发认领由 Flowable 乐观锁异常统一翻译为 409。
             taskService.claim(taskId, actor.userId());
-            addAuditComment(task, NORMAL_COMMENT_TYPE, "CLAIM", actor.userId(), null,
+            addAuditComment(task, "CLAIM", actor.userId(), null,
                     "用户认领任务");
             publishStableTaskAction("TASK_CLAIMED", taskId);
             return null;
@@ -155,7 +146,7 @@ public class WorkflowProcessEngineAdapter
                 throw conflict();
             }
             taskService.unclaim(taskId);
-            addAuditComment(task, NORMAL_COMMENT_TYPE, "UNCLAIM", actor.userId(), null,
+            addAuditComment(task, "UNCLAIM", actor.userId(), null,
                     "用户取消认领任务");
             publishStableTaskAction("TASK_UNCLAIMED", taskId);
             return null;
@@ -204,7 +195,7 @@ public class WorkflowProcessEngineAdapter
                 throw dataError();
             }
             taskService.delegateTask(taskId, normalizedTargetUserId);
-            addAuditComment(task, DELEGATE_COMMENT_TYPE, "DELEGATE", actor.userId(),
+            addAuditComment(task, "DELEGATE", actor.userId(),
                     normalizedTargetUserId, normalizedOpinion);
             // 业务表写入必须晚于引擎动作，并依赖外层 Spring 事务实现任一失败整体回滚。
             afterSuccess.run();
@@ -252,7 +243,7 @@ public class WorkflowProcessEngineAdapter
             }
             taskService.resolveTask(taskId);
             // 受托人意见与 owner 回退写入同一事务，禁止固定占位文案冒充真实办理结果。
-            addAuditComment(task, DELEGATE_COMMENT_TYPE, "RESOLVE", actor.userId(), owner,
+            addAuditComment(task, "RESOLVE", actor.userId(), owner,
                     normalizedOpinion);
             // 抄送等业务写入晚于引擎动作，失败时依赖外层事务回滚 resolve 和审计 comment。
             afterSuccess.run();
@@ -309,7 +300,7 @@ public class WorkflowProcessEngineAdapter
                 taskService.unclaim(taskId);
             }
             taskService.setAssignee(taskId, normalizedTargetUserId);
-            addAuditComment(task, TRANSFER_COMMENT_TYPE, "TRANSFER", actor.userId(),
+            addAuditComment(task, "TRANSFER", actor.userId(),
                     normalizedTargetUserId, normalizedOpinion);
             // 业务表写入必须晚于引擎动作，并依赖外层 Spring 事务实现任一失败整体回滚。
             afterSuccess.run();
@@ -442,14 +433,14 @@ public class WorkflowProcessEngineAdapter
      * 在当前 Flowable 写事务中保存服务端生成的结构化审计 comment。
      *
      * @param task Task，动作前从引擎重新读取的真实任务
-     * @param commentType String，兼容旧系统的 Flowable comment 类型
+     * @param commentType String，服务端固定的正式 Flowable comment 动作类型
      * @param action String，服务端固定的动作编码
      * @param actorUserId String，事务内重新解析的当前用户主键
      * @param targetUserId String，正式启用目标用户主键；认领和取消认领时为空
      * @param opinion String，已通过长度门禁的受控业务意见
      * @return 无返回值，comment 写入失败时整个任务状态事务回滚
      */
-    private void addAuditComment(Task task, String commentType, String action,
+    private void addAuditComment(Task task, String action,
             String actorUserId, String targetUserId, String opinion)
     {
         ObjectNode audit = AUDIT_MAPPER.createObjectNode();
@@ -460,7 +451,7 @@ public class WorkflowProcessEngineAdapter
             audit.put("targetUserId", targetUserId);
         }
         audit.put("opinion", opinion);
-        taskService.addComment(task.getId(), task.getProcessInstanceId(), commentType, audit.toString());
+        taskService.addComment(task.getId(), task.getProcessInstanceId(), action, audit.toString());
     }
 
     /**

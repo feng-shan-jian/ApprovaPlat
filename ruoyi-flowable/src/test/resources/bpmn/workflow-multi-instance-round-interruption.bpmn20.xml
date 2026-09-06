@@ -14,12 +14,16 @@
     <startEvent id="reentryStart"/>
     <userTask id="reentryReview" name="中断后重入会签" flowable:assignee="${assignee}">
       <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.multiInstance.identityType" value="USER"/>
+          <flowable:property name="approva.multiInstance.identityIds" value="201,202"/>
+        </flowable:properties>
         <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
       </extensionElements>
       <multiInstanceLoopCharacteristics isSequential="false"
-        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:collection="${multiInstanceHandler.getConfiguredUserIds(execution)}"
         flowable:elementVariable="assignee">
         <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
       </multiInstanceLoopCharacteristics>
@@ -42,12 +46,16 @@
     <startEvent id="nonInterruptStart"/>
     <userTask id="nonInterruptReview" name="非中断边界会签" flowable:assignee="${assignee}">
       <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.multiInstance.identityType" value="USER"/>
+          <flowable:property name="approva.multiInstance.identityIds" value="201,202"/>
+        </flowable:properties>
         <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
       </extensionElements>
       <multiInstanceLoopCharacteristics isSequential="false"
-        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:collection="${multiInstanceHandler.getConfiguredUserIds(execution)}"
         flowable:elementVariable="assignee">
         <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
       </multiInstanceLoopCharacteristics>
@@ -85,12 +93,16 @@
     <startEvent id="callChildStart"/>
     <userTask id="callChildReview" name="子流程会签" flowable:assignee="${assignee}">
       <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.multiInstance.identityType" value="USER"/>
+          <flowable:property name="approva.multiInstance.identityIds" value="201,202"/>
+        </flowable:properties>
         <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
       </extensionElements>
       <multiInstanceLoopCharacteristics isSequential="false"
-        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:collection="${multiInstanceHandler.getConfiguredUserIds(execution)}"
         flowable:elementVariable="assignee">
         <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
       </multiInstanceLoopCharacteristics>

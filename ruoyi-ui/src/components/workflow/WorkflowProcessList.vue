@@ -143,18 +143,18 @@
             <el-button link type="warning" icon="RefreshLeft" v-hasPermi="['workflow:process:revoke']" @click="openAction('revoke', scope.row)" />
           </el-tooltip>
           <template v-if="mode === 'own'">
-            <el-tooltip v-if="isActiveProcess(scope.row)" content="取消流程" placement="top">
+            <el-tooltip v-if="scope.row.cancelAllowed === true" content="取消流程" placement="top">
               <el-button link type="warning" icon="CircleClose" v-hasPermi="['workflow:process:cancel']" @click="openAction('cancel', scope.row)" />
             </el-tooltip>
           </template>
           <template v-if="mode === 'own' || mode === 'manage'">
-            <el-tooltip v-if="supportsInstanceStateToggle(scope.row)" :content="scope.row.processStatus === 'suspended' ? '激活实例' : '挂起实例'" placement="top">
-              <el-button link :type="scope.row.processStatus === 'suspended' ? 'success' : 'warning'" :icon="scope.row.processStatus === 'suspended' ? 'VideoPlay' : 'VideoPause'" v-hasPermi="['workflow:process:state']" @click="toggleInstanceState(scope.row)" />
+            <el-tooltip v-if="['ACTIVATE', 'SUSPEND'].includes(scope.row.stateAction)" :content="scope.row.stateAction === 'ACTIVATE' ? '激活实例' : '挂起实例'" placement="top">
+              <el-button link :type="scope.row.stateAction === 'ACTIVATE' ? 'success' : 'warning'" :icon="scope.row.stateAction === 'ACTIVATE' ? 'VideoPlay' : 'VideoPause'" v-hasPermi="['workflow:process:state']" @click="toggleInstanceState(scope.row)" />
             </el-tooltip>
-            <el-tooltip v-if="isActiveProcess(scope.row)" content="终止实例" placement="top">
+            <el-tooltip v-if="scope.row.terminateAllowed === true" content="终止实例" placement="top">
               <el-button link type="danger" icon="SwitchButton" v-hasPermi="['workflow:process:terminate']" @click="openAction('terminate', scope.row)" />
             </el-tooltip>
-            <el-tooltip v-if="!isActiveProcess(scope.row)" content="删除历史" placement="top">
+            <el-tooltip v-if="scope.row.historyDeleteAllowed === true" content="删除历史" placement="top">
               <el-button link type="danger" icon="Delete" v-hasPermi="['workflow:process:remove']" @click="removeHistory(scope.row)" />
             </el-tooltip>
           </template>
@@ -471,26 +471,16 @@ async function claim(row) {
  * @returns {Promise<void>} 取消认领成功后刷新待办列表。
  */
 async function unclaim(row) {
+  if (row?.unclaimAllowed !== true) {
+    proxy.$modal.msgWarning('当前服务端能力快照不允许取消认领')
+    return
+  }
   await proxy.$modal.confirm(`确认取消认领任务“${row.taskName}”吗？`)
+  if (row?.unclaimAllowed !== true) {
+    proxy.$modal.msgWarning('取消认领能力已变化，请刷新列表后重试')
+    return
+  }
   await runListMutation(() => unclaimTask(row.taskId), '已取消任务认领')
-}
-
-/**
- * 判断流程实例是否仍保留活动执行树，可执行取消或管理员终止。
- * @param {object} row 我的流程或管理员运维实例行。
- * @returns {boolean} running、returned 或 suspended 状态返回 true。
- */
-function isActiveProcess(row) {
-  return ['running', 'returned', 'suspended'].includes(String(row.processStatus || '').toLowerCase())
-}
-
-/**
- * 判断流程实例是否允许在激活和挂起状态间切换。
- * @param {object} row 管理员运维实例行。
- * @returns {boolean} 仅 running 或 suspended 状态返回 true。
- */
-function supportsInstanceStateToggle(row) {
-  return ['running', 'suspended'].includes(String(row.processStatus || '').toLowerCase())
 }
 
 /**
@@ -505,12 +495,25 @@ function openAction(type, row) {
     proxy.$modal.msgWarning('流程动作不合法')
     return
   }
-  if (type === 'revoke' && row?.revocable !== true) {
-    proxy.$modal.msgWarning('当前已办任务不可撤回')
+  if (!hasRowActionCapability(type, row)) {
+    proxy.$modal.msgWarning('当前服务端能力快照不允许该流程动作')
     return
   }
   Object.assign(actionDialog, { open: true, type, row, comment: '', error: '', stale: false })
   nextTick(() => actionFormRef.value?.clearValidate())
+}
+
+/**
+ * 严格消费列表行的正式动作能力，不根据状态或对象身份补算资格。
+ * @param {'cancel'|'terminate'|'revoke'} type 固定流程动作。
+ * @param {object} row 服务端返回的当前列表行。
+ * @returns {boolean} 对应 capability 明确为 true 时返回 true。
+ */
+function hasRowActionCapability(type, row) {
+  if (type === 'cancel') return row?.cancelAllowed === true
+  if (type === 'terminate') return row?.terminateAllowed === true
+  if (type === 'revoke') return row?.revocable === true
+  return false
 }
 
 /**
@@ -548,8 +551,8 @@ async function submitAction() {
     actionDialog.error = '流程动作不合法'
     return
   }
-  if (type === 'revoke' && actionDialog.row?.revocable !== true) {
-    actionDialog.error = '当前已办任务不可撤回，请刷新列表'
+  if (!hasRowActionCapability(type, actionDialog.row)) {
+    actionDialog.error = '当前服务端能力快照不允许该流程动作，请刷新列表'
     return
   }
   // 校验 Promise 完成前即占用动作锁，阻止快速双击并发提交同一状态迁移命令。
@@ -594,8 +597,7 @@ function requestErrorMessage(error, fallback) {
  * @returns {boolean} 权限对象消失、资源不存在或状态冲突时返回 true。
  */
 function isStaleActionError(error) {
-  const code = Number(error?.code)
-  return [403, 404, 409].includes(code)
+  return [403, 404, 409].includes(error?.code)
 }
 
 /**
@@ -635,9 +637,18 @@ async function runListMutation(mutation, successMessage) {
  * @returns {Promise<void>} 状态切换成功后刷新列表。
  */
 async function toggleInstanceState(row) {
-  const state = row.processStatus === 'suspended' ? 'active' : 'suspended'
+  const capabilitySnapshot = row?.stateAction
+  if (!['ACTIVATE', 'SUSPEND'].includes(capabilitySnapshot)) {
+    proxy.$modal.msgWarning('当前服务端能力快照不允许切换实例状态')
+    return
+  }
+  const state = capabilitySnapshot === 'ACTIVATE' ? 'active' : 'suspended'
   const action = state === 'active' ? '激活' : '挂起'
   await proxy.$modal.confirm(`确认${action}流程实例吗？`)
+  if (row?.stateAction !== capabilitySnapshot) {
+    proxy.$modal.msgWarning('实例状态能力已变化，请刷新列表后重试')
+    return
+  }
   await runListMutation(
     () => changeProcessInstanceState({ instanceId: row.processInstanceId, state }),
     `流程实例已${action}`
@@ -650,7 +661,15 @@ async function toggleInstanceState(row) {
  * @returns {Promise<void>} 服务端状态和引用检查通过后刷新列表。
  */
 async function removeHistory(row) {
+  if (row?.historyDeleteAllowed !== true) {
+    proxy.$modal.msgWarning('当前服务端能力快照不允许删除流程历史')
+    return
+  }
   await proxy.$modal.confirm(`确认删除流程“${row.processName}”的历史记录吗？`)
+  if (row?.historyDeleteAllowed !== true) {
+    proxy.$modal.msgWarning('流程历史删除能力已变化，请刷新列表后重试')
+    return
+  }
   await runListMutation(() => deleteProcessInstances(row.processInstanceId), '流程历史删除成功')
 }
 

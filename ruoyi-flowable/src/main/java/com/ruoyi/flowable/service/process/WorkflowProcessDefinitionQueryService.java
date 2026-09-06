@@ -26,7 +26,6 @@ import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
-import org.flowable.identitylink.api.IdentityLink;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
@@ -216,6 +215,20 @@ public class WorkflowProcessDefinitionQueryService
     }
 
     /**
+     * 在 Flowable 已通过受控 CallActivity 创建子流程的同一命令内读取其正式开始表单。
+     *
+     * @param processDefinitionId String，子流程实例携带的精确流程定义主键
+     * @return WorkflowProcessFormView，与子定义、部署和唯一开始节点严格绑定的表单快照
+     */
+    WorkflowProcessFormView loadCallActivityStartForm(String processDefinitionId)
+    {
+        // 调用活动授权和精确版本已在父流程部署与运行阶段校验，此处不重复套用人工发起权限。
+        ProcessDefinition definition = requireDefinition(
+                requireText(processDefinitionId, "子流程定义主键不能为空"));
+        return loadStartForm(definition).form();
+    }
+
+    /**
      * 在发起场景执行可发起校验，或在详情场景执行实例对象授权后安全读取 BPMN XML。
      *
      * @param request WorkflowBpmnXmlQueryDto，定义主键及可选实例主键
@@ -314,7 +327,7 @@ public class WorkflowProcessDefinitionQueryService
         }
 
         List<ProcessDefinition> definitions = loadStartableDefinitions(query, baseTotal);
-        // 整批快照授权只调用一次；Map 缺席的定义才允许进入历史 starter identity link 兜底。
+        // 整批快照授权只调用一次，并要求返回值覆盖全部定义，避免逐定义查询或身份推断。
         Map<String, Boolean> managedDecisions = participantRuleRuntimeService
                 .resolveManagedStartDecisions(actor, definitions);
         if (managedDecisions == null)
@@ -372,35 +385,12 @@ public class WorkflowProcessDefinitionQueryService
     }
 
     /**
-     * 判断流程定义对当前身份是否公开或存在匹配的候选发起用户、角色、部门。
-     *
-     * @param definition ProcessDefinition，待判定流程定义
-     * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
-     * @return boolean，无 starter 限制或显式身份命中时返回 true
-     */
-    private boolean isDefinitionStartable(ProcessDefinition definition, WorkflowCurrentIdentity actor)
-    {
-        if (definition == null || !StringUtils.hasText(definition.getId()))
-        {
-            throw dataError("流程定义数据异常");
-        }
-        // 新部署定义统一读取不可变规则快照，列表、表单预览与真实发起使用同一授权来源。
-        Boolean snapshotDecision = participantRuleRuntimeService
-                .canStartIfManaged(actor, definition);
-        if (snapshotDecision != null)
-        {
-            return snapshotDecision;
-        }
-        return isHistoricalDefinitionStartable(definition, actor);
-    }
-
-    /**
-     * 使用整批部署快照决定判断定义权限，只有决定缺席时才执行历史兼容查询。
+     * 使用整批部署快照判断定义权限，结果必须覆盖当前扫描的全部定义。
      *
      * @param definition ProcessDefinition，当前有界扫描中的流程定义
      * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
      * @param managedDecisions Map&lt;String, Boolean&gt;，受管定义的正式整批授权决定
-     * @return boolean，新版正式决定或历史 starter identity link 兼容结果
+     * @return boolean，正式部署快照给出的允许或拒绝决定
      */
     private boolean isDefinitionStartable(ProcessDefinition definition, WorkflowCurrentIdentity actor,
             Map<String, Boolean> managedDecisions)
@@ -409,48 +399,16 @@ public class WorkflowProcessDefinitionQueryService
         {
             throw dataError("流程定义数据异常");
         }
-        if (managedDecisions.containsKey(definition.getId()))
+        if (!managedDecisions.containsKey(definition.getId()))
         {
-            Boolean decision = managedDecisions.get(definition.getId());
-            if (decision == null)
-            {
-                throw dataError("流程发起范围批量判定结果异常");
-            }
-            // 新版 false 是正式拒绝，绝对不能继续进入历史 starter identity link 兜底。
-            return decision;
+            throw dataError("流程发起范围批量判定结果缺失");
         }
-        return isHistoricalDefinitionStartable(definition, actor);
-    }
-
-    /**
-     * 对历史未托管定义执行原 Flowable starter identity link 发起权限兼容。
-     *
-     * @param definition ProcessDefinition，已确认没有业务资源子部署的历史定义
-     * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
-     * @return boolean，无 starter 限制或显式用户、候选组命中时返回 true
-     */
-    private boolean isHistoricalDefinitionStartable(
-            ProcessDefinition definition, WorkflowCurrentIdentity actor)
-    {
-        List<IdentityLink> links = repositoryService.getIdentityLinksForProcessDefinition(definition.getId());
-        if (links == null)
+        Boolean decision = managedDecisions.get(definition.getId());
+        if (decision == null)
         {
-            throw dataError("流程发起权限数据异常");
+            throw dataError("流程发起范围批量判定结果异常");
         }
-        if (links.isEmpty())
-        {
-            return true;
-        }
-        Set<String> groups = actor.candidateGroups();
-        for (IdentityLink link : links)
-        {
-            if (link != null && (actor.userId().equals(link.getUserId())
-                    || groups.contains(link.getGroupId())))
-            {
-                return true;
-            }
-        }
-        return false;
+        return decision;
     }
 
     /**
@@ -577,16 +535,14 @@ public class WorkflowProcessDefinitionQueryService
      *
      * @param definition ProcessDefinition，已通过最新激活状态校验的流程定义
      * @param actor WorkflowCurrentIdentity，只读边界内解析的当前有效身份
-     * @return void，受管规则或历史 starter identity link 拒绝时抛出无 subCode 的 403
+     * @return void，正式部署规则拒绝时抛出无 subCode 的 403，快照缺失直接失败
      */
     private void assertPreviewStartPermission(ProcessDefinition definition,
             WorkflowCurrentIdentity actor)
     {
-        Boolean managedDecision = participantRuleRuntimeService
+        Boolean decision = participantRuleRuntimeService
                 .canStartIfManaged(actor, definition);
-        if (Boolean.FALSE.equals(managedDecision)
-                || (managedDecision == null
-                    && !isHistoricalDefinitionStartable(definition, actor)))
+        if (!Boolean.TRUE.equals(decision))
         {
             throw new ServiceException("当前用户无权发起该流程", HttpStatus.FORBIDDEN);
         }
@@ -597,17 +553,12 @@ public class WorkflowProcessDefinitionQueryService
      *
      * @param definition ProcessDefinition，已通过最新激活状态校验的流程定义
      * @param actor WorkflowCurrentIdentity，外层写事务已经核验的当前有效身份
-     * @return void，受管规则拒绝沿用 assertCanStart 异常，历史拒绝沿用通用 403
+     * @return void，规则拒绝沿用 assertCanStart 异常，快照缺失按数据一致性错误失败
      */
     private void assertStartPermissionForWrite(ProcessDefinition definition,
             WorkflowCurrentIdentity actor)
     {
-        // 受管部署的允许或异常拒绝均是正式决定；只有 null 才进入历史兼容路径。
-        if (participantRuleRuntimeService.assertCanStart(actor, definition) == null
-                && !isHistoricalDefinitionStartable(definition, actor))
-        {
-            throw new ServiceException("当前用户无权发起该流程", HttpStatus.FORBIDDEN);
-        }
+        participantRuleRuntimeService.assertCanStart(actor, definition);
     }
 
     /**

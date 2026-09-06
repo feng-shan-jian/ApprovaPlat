@@ -48,7 +48,7 @@ public class WorkflowReturnedTaskStateService
     }
 
     /**
-     * 核验流程仍处于普通运行态，并兼容未写 business status 的既有运行实例。
+     * 核验流程变量和 businessStatus 均处于普通运行态。
      *
      * @param processInstanceId String，活动流程实例主键
      * @return 无返回值，processStatus 非 running 或 businessStatus 为冲突终态时抛出 HTTP 409
@@ -62,11 +62,8 @@ public class WorkflowReturnedTaskStateService
         String businessStatus = instance == null ? null : instance.getBusinessStatus();
         if (instance == null || instance.isSuspended()
                 || !WorkflowProcessStartService.RUNNING_STATUS.equals(processStatus)
-                || (StringUtils.hasText(businessStatus)
-                        && !WorkflowProcessStartService.RUNNING_STATUS.equals(
-                                businessStatus)))
+                || !WorkflowProcessStartService.RUNNING_STATUS.equals(businessStatus))
         {
-            // 只兼容历史运行实例未写 businessStatus；任何明确终态继续失败关闭。
             throw conflict();
         }
     }

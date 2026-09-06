@@ -7,8 +7,6 @@ import { createParticipantRuleDomain, isParticipantRuleProperty } from './partic
 const CONTROLLED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getUserIds(execution)}'
 const START_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getStartUserIds(execution)}'
 const CONFIGURED_MULTI_INSTANCE_COLLECTION = '${multiInstanceHandler.getConfiguredUserIds(execution)}'
-const FIXED_MULTI_INSTANCE_COLLECTION_PATTERN = /^\$\{multiInstanceHandler\.getFixedUserIds\(execution, '([1-9]\d*(?:,[1-9]\d*)*)'\)\}$/
-const CONTROLLED_MULTI_INSTANCE_ASSIGNEE = '${assignee}'
 const CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE = 'assignee'
 const CONTROLLED_MULTI_INSTANCE_ALL_CONDITION = '${nrOfCompletedInstances == nrOfInstances}'
 const CONTROLLED_MULTI_INSTANCE_ANY_CONDITION = '${nrOfCompletedInstances > 0}'
@@ -95,11 +93,6 @@ export function createFormParticipantDomain(context) {
     isUserTask, propertyState, selectedBusinessObject })
   // 每个身份池独立防抖，不能让办理、认领和抄送资格请求相互覆盖。
   const identitySearchTimers = new Map()
-  const assignmentOptions = [
-    { label: '办理人', value: 'assignee' },
-    { label: '用户', value: 'users' },
-    { label: '角色/部门', value: 'groups' }
-  ]
   const multiInstanceOptions = [
     { label: '无', value: 'none' },
     { label: '标准循环（仅往返）', value: 'standard' },
@@ -187,7 +180,6 @@ export function createFormParticipantDomain(context) {
     }
     const form = formFieldCatalog.resolveTemplateForm(propertyState.formKey)
     const permissionPolicy = {
-      configured: propertyState.formPermissionFields.length > 0,
       defaultMode: propertyState.formPermissionDefault,
       permissions: new Map(propertyState.formPermissionFields
         .map(field => [field.variable, field.mode]))
@@ -209,14 +201,13 @@ export function createFormParticipantDomain(context) {
   /**
    * 判断循环配置是否引用平台受控多实例 handler；完整结构仍由保存门禁单独核验。
    * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
-   * @returns {boolean} 集合表达式精确引用动态或固定人员 handler 时返回 true。
+   * @returns {boolean} 集合表达式精确引用平台正式 handler 时返回 true。
    */
   function isControlledMultiInstanceLoop(loop) {
     const collection = String(loop?.get?.('flowable:collection') || '').trim()
     return collection === CONTROLLED_MULTI_INSTANCE_COLLECTION
       || collection === START_MULTI_INSTANCE_COLLECTION
       || collection === CONFIGURED_MULTI_INSTANCE_COLLECTION
-      || FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)
   }
 
   /**
@@ -246,28 +237,6 @@ export function createFormParticipantDomain(context) {
    */
   function isConfiguredMultiInstanceLoop(loop) {
     return String(loop?.get?.('flowable:collection') || '').trim() === CONFIGURED_MULTI_INSTANCE_COLLECTION
-  }
-
-  /**
-   * 判断受控多实例是否使用设计时固定人员来源。
-   * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
-   * @returns {boolean} 集合表达式命中固定人员 handler 时返回 true。
-   */
-  function isFixedMultiInstanceLoop(loop) {
-    return Boolean(loop && FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(
-      String(loop.get?.('flowable:collection') || '').trim()
-    ))
-  }
-
-  /**
-   * 从固定人员 handler 表达式读取会签或或签成员，并保留设计时选择顺序。
-   * @param {object|undefined} loop bpmn-js 多实例循环业务对象。
-   * @returns {string[]} 已去重的用户主键数组；表达式不符合受控契约时返回空数组。
-   */
-  function readFixedMultiInstanceUserIds(loop) {
-    const collection = String(loop?.get?.('flowable:collection') || '').trim()
-    const match = collection.match(FIXED_MULTI_INSTANCE_COLLECTION_PATTERN)
-    return match ? splitValues(match[1]) : []
   }
 
   /**
@@ -368,11 +337,15 @@ export function createFormParticipantDomain(context) {
    * @returns {'HIDDEN'|'READONLY'|'EDITABLE'|'REQUIRED'} 当前字段权限。
    */
   function permissionModeFromField(field, embedded = false) {
-    const config = embedded ? field : (field?.__config__ || {})
-    const readable = embedded ? field?.readable !== false : config.workflowReadable !== false
+    const config = field || {}
+    if (!embedded && [config.workflowHidden, config.workflowReadable,
+      config.workflowWritable].some(flag => typeof flag !== 'boolean')) {
+      throw new Error('正式表单字段缺少完整节点权限标志')
+    }
+    const readable = embedded ? field?.readable !== false : config.workflowReadable === true
     const writable = embedded
       ? field?.writable !== false
-      : config.workflowWritable !== false && field?.disabled !== true
+      : config.workflowWritable === true && field?.disabled !== true
     const hidden = embedded
       ? !readable && !writable
       : config.workflowHidden === true || (!readable && !writable)
@@ -391,12 +364,12 @@ export function createFormParticipantDomain(context) {
     if (!form?.content) return []
     const fields = []
     const seen = new Set()
-    for (const { variable, field } of formFieldCatalog.readTemplateFieldDescriptors(form.content, true)) {
+    for (const { variable, field } of formFieldCatalog.readTemplateFieldDescriptors(form.content)) {
       if (!variable || seen.has(variable)) continue
       seen.add(variable)
       fields.push({
         variable,
-        label: String(field?.__config__?.label || variable).trim(),
+        label: String(field?.label || variable).trim(),
         mode: permissionModeFromField(field)
       })
     }
@@ -406,17 +379,15 @@ export function createFormParticipantDomain(context) {
   /**
    * 从正式模板节点的受控 FormProperty 描述恢复批量默认策略和逐字段权限。
    * @param {object} businessObject StartEvent 或 UserTask 的 BPMN 业务对象。
-   * @returns {{configured:boolean,defaultMode:string,permissions:Map<string,string>}} 权限作者状态。
+   * @returns {{defaultMode:string|null,permissions:Map<string,string>}} 权限作者状态。
    */
   function readTemplatePermissionPolicy(businessObject) {
-    let configured = false
-    let defaultMode = 'EDITABLE'
+    let defaultMode = null
     const permissions = new Map()
     for (const property of businessObject?.extensionElements?.values || []) {
       if (property?.$type !== 'flowable:FormProperty') continue
       const id = String(property.id || '')
       if (id === FORM_PERMISSION_DEFAULT_ID) {
-        configured = true
         defaultMode = permissionModeFromField({
           readable: property.readable,
           writable: property.writable,
@@ -425,7 +396,6 @@ export function createFormParticipantDomain(context) {
         continue
       }
       if (!id.startsWith(FORM_PERMISSION_FIELD_ID_PREFIX)) continue
-      configured = true
       const variable = String(property.variable || '').trim()
       if (variable) {
         permissions.set(variable, permissionModeFromField({
@@ -435,25 +405,24 @@ export function createFormParticipantDomain(context) {
         }, true))
       }
     }
-    return { configured, defaultMode, permissions }
+    return { defaultMode, permissions }
   }
 
   /**
    * 依据当前正式表单重建属性面板字段目录，并按变量名保留仍然有效的设计权限。
-   * @param {{configured:boolean,defaultMode:string,permissions:Map<string,string>}|undefined} policy 从 BPMN 回读的正式策略。
+   * @param {{defaultMode:string|null,permissions:Map<string,string>}|undefined} policy 从 BPMN 回读的正式策略。
    * @returns {void} 无返回值。
    */
   function rebuildFormPermissionFields(policy) {
     const previous = new Map(propertyState.formPermissionFields.map(field => [field.variable, field.mode]))
-    const defaultMode = normalizeFormPermissionMode(policy?.configured
-      ? policy.defaultMode
-      : propertyState.formPermissionDefault)
+    const defaultMode = normalizeFormPermissionMode(
+      policy?.defaultMode || propertyState.formPermissionDefault)
     propertyState.formPermissionDefault = defaultMode
     propertyState.formPermissionFields = resolveFormPermissionSourceFields().map(field => ({
       ...field,
       mode: normalizeFormPermissionMode(
         policy?.permissions?.get(field.variable)
-        || (policy?.configured ? defaultMode : undefined)
+        || (policy?.defaultMode ? defaultMode : undefined)
         || previous.get(field.variable)
         || field.mode
         || defaultMode
@@ -650,7 +619,7 @@ export function createFormParticipantDomain(context) {
    * @returns {object[]} 可随模型 XML 稳定往返并由后端部署编译器解析的权限描述。
    */
   function createTemplatePermissionProperties() {
-    if (!propertyState.formKey || !propertyState.formPermissionFields.length) return []
+    if (!propertyState.formKey) return []
     const moddle = getModeler().get('moddle')
 
     /**
@@ -709,23 +678,6 @@ export function createFormParticipantDomain(context) {
         : undefined,
       extensionElements
     })
-  }
-
-  /**
-   * 按办理方式互斥写入办理人、候选用户或候选组。
-   * @returns {void} 无返回值。
-   */
-  function updateAssignment() {
-    if (propertyState.multiInstanceType === 'controlled') return
-    // 当前办理方式是尚未选择具体身份时唯一的编辑态，不能依赖 BPMN 空属性反推。
-    const assignmentType = propertyState.assignmentType
-    updateProperties({
-      'flowable:assignee': assignmentType === 'assignee' ? propertyState.assignee || undefined : undefined,
-      'flowable:candidateUsers': assignmentType === 'users' ? propertyState.candidateUsers.join(',') || undefined : undefined,
-      'flowable:candidateGroups': assignmentType === 'groups' ? propertyState.candidateGroups.join(',') || undefined : undefined
-    })
-    // bpmn-js 会同步触发属性回读；候选值为空时需恢复用户显式选择的办理方式。
-    propertyState.assignmentType = assignmentType
   }
 
   /**
@@ -854,7 +806,7 @@ export function createFormParticipantDomain(context) {
         : CONTROLLED_MULTI_INSTANCE_ALL_CONDITION
       : propertyState.completionCondition.trim()
 
-    // 固定 handler 不能作为静态集合继续存在，否则属性回读会把刚切换的静态模式再次识别成动态模式。
+    // 离开平台受控模式时清空平台 handler，避免把内部集合表达式带入原生静态循环。
     if (leavingControlled) {
       collection = ''
       elementVariable = ''
@@ -909,15 +861,11 @@ export function createFormParticipantDomain(context) {
     // 任一多实例模式都必须移除单实例参与者属性，避免切回单实例时恢复未经确认的旧办理人。
     const changes = { loopCharacteristics: loop, extensionElements: multiInstanceExtensions }
     if (controlled) {
-      propertyState.assignmentType = 'assignee'
-      propertyState.assignee = CONTROLLED_MULTI_INSTANCE_ASSIGNEE
-      propertyState.candidateUsers = []
-      propertyState.candidateGroups = []
       propertyState.collection = collection
       propertyState.elementVariable = elementVariable
       propertyState.completionCondition = condition
       Object.assign(changes, {
-        'flowable:assignee': CONTROLLED_MULTI_INSTANCE_ASSIGNEE,
+        'flowable:assignee': undefined,
         'flowable:candidateUsers': undefined,
         'flowable:candidateGroups': undefined
       })
@@ -959,10 +907,6 @@ export function createFormParticipantDomain(context) {
    * @returns {void} 同步重置属性面板及待提交属性。
    */
   function resetControlledAssignment(changes) {
-    propertyState.assignmentType = 'assignee'
-    propertyState.assignee = ''
-    propertyState.candidateUsers = []
-    propertyState.candidateGroups = []
     Object.assign(changes, {
       'flowable:assignee': undefined,
       'flowable:candidateUsers': undefined,
@@ -995,7 +939,6 @@ export function createFormParticipantDomain(context) {
     const controlledCollection = collection === CONTROLLED_MULTI_INSTANCE_COLLECTION
       || collection === START_MULTI_INSTANCE_COLLECTION
       || configuredCollection
-      || FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)
     if (!controlledCollection) {
       return configuredProperties.length ? '指定多实例身份属性与集合表达式不一致' : ''
     }
@@ -1008,7 +951,7 @@ export function createFormParticipantDomain(context) {
     const hasBoundaryEvents = Array.isArray(task.boundaryEventRefs) && task.boundaryEventRefs.length > 0
     if (loop.isSequential
       || loop.get('flowable:elementVariable') !== CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE
-      || task.get('flowable:assignee') !== CONTROLLED_MULTI_INSTANCE_ASSIGNEE
+      || task.get('flowable:assignee')
       || task.get('flowable:candidateUsers')
       || task.get('flowable:candidateGroups')
       || loop.loopCardinality
@@ -1017,14 +960,6 @@ export function createFormParticipantDomain(context) {
       || hasBoundaryEvents
       || !parentIsMainProcess) {
       return '受控多实例配置不符合会签或或签契约'
-    }
-    if (FIXED_MULTI_INSTANCE_COLLECTION_PATTERN.test(collection)) {
-      const fixedUserIds = collection.match(FIXED_MULTI_INSTANCE_COLLECTION_PATTERN)?.[1]?.split(',') || []
-      if (!fixedUserIds.length || fixedUserIds.length > 100
-        || new Set(fixedUserIds).size !== fixedUserIds.length
-        || fixedUserIds.some(userId => !isCanonicalJavaLongId(userId))) {
-        return '固定会签或或签必须预设 1 至 100 名有效办理人'
-      }
     }
     if (configuredCollection) {
       if (configuredProperties.length !== MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.size
@@ -1065,7 +1000,6 @@ export function createFormParticipantDomain(context) {
   }
 
   return {
-    assignmentOptions,
     multiInstanceOptions,
     multiInstanceApprovalOptions,
     controlledLoopFieldOptions,
@@ -1079,8 +1013,6 @@ export function createFormParticipantDomain(context) {
     controlledMultiInstanceApprovalMode,
     isStartMultiInstanceLoop,
     isConfiguredMultiInstanceLoop,
-    isFixedMultiInstanceLoop,
-    readFixedMultiInstanceUserIds,
     normalizeConfiguredMultiInstanceIdentity,
     readConfiguredMultiInstanceIdentity,
     splitValues,
@@ -1091,7 +1023,6 @@ export function createFormParticipantDomain(context) {
     updateFormKey,
     updateEmbeddedForm,
     updateFormPermissions,
-    updateAssignment,
     updateParticipantRule,
     updateUserTaskProperties,
     updateMultiInstance,

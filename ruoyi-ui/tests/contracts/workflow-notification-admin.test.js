@@ -16,10 +16,7 @@ import {
 } from '../../src/utils/requestError.js'
 import {
   WORKFLOW_NOTIFICATION_PERMISSIONS,
-  hasMailAuthenticationIdentityChanged,
   nodeCatalogValidationError,
-  normalizeMailAuthenticationIdentity,
-  normalizeMailConfigResponse,
   processCatalogValidationError,
   resolveNotificationInitialTab
 } from '../../src/views/workflow/notification/notificationAdminRules.js'
@@ -94,46 +91,6 @@ test('请求错误只保留安全提示、稳定子码和局部提示控制位',
     subCode: 'bad detail with spaces'
   }, 400, { default: '系统异常' })
   assert.equal(Object.hasOwn(invalidSubCode, 'subCode'), false)
-})
-
-test('SMTP 回读只投影公开字段且授权码归属只由认证身份决定', () => {
-  const normalized = normalizeMailConfigResponse({
-    configured: true,
-    credentialConfigured: true,
-    revision: 7,
-    smtpHost: 'SMTP.EXAMPLE.COM',
-    smtpPort: 587,
-    encryptionMode: 'STARTTLS',
-    username: 'mailer@example.com',
-    fromAddress: 'sender@example.com',
-    senderName: '审批通知',
-    credential: 'plain-secret',
-    credentialCiphertext: 'cipher-secret',
-    credentialIv: 'iv-secret'
-  })
-  assert.deepEqual(Object.keys(normalized.form), [
-    'smtpHost',
-    'smtpPort',
-    'encryptionMode',
-    'username',
-    'credential',
-    'fromAddress',
-    'senderName'
-  ])
-  assert.equal(normalized.form.credential, '')
-  assert.equal(JSON.stringify(normalized).includes('secret'), false)
-
-  const baseline = normalizeMailAuthenticationIdentity(normalized.form)
-  assert.equal(hasMailAuthenticationIdentityChanged(baseline, {
-    ...normalized.form,
-    fromAddress: 'new-sender@example.com',
-    senderName: '新名称',
-    credential: 'new-secret'
-  }), false)
-  assert.equal(hasMailAuthenticationIdentityChanged(baseline, {
-    ...normalized.form,
-    smtpPort: 465
-  }), true)
 })
 
 test('通知权限由不可变权限表决定并选择首个可读页签', () => {

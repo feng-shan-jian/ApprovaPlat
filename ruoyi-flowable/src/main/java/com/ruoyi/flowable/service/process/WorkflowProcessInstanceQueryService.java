@@ -391,13 +391,17 @@ public class WorkflowProcessInstanceQueryService
         String category = facts.deploymentCategories().get(instance.getDeploymentId());
         List<String> taskNames = facts.runtimeTaskNames().getOrDefault(instance.getId(), List.of());
         Boolean runtimeSuspended = facts.runtimeSuspensionStates().get(instance.getId());
+        String processStatus = normalizeProcessState(instance, runtimeSuspended);
+        boolean active = Set.of("running", "returned", "suspended").contains(processStatus);
         return new WorkflowOwnedProcessView(instance.getId(), instance.getProcessDefinitionId(),
                 instance.getProcessDefinitionKey(), instance.getProcessDefinitionName(),
                 safeVersion(instance.getProcessDefinitionVersion()), category,
                 instance.getDeploymentId(), instance.getBusinessKey(), instance.getStartUserId(),
                 toInstant(instance.getStartTime()), toInstant(instance.getEndTime()),
                 instance.getDurationInMillis(),
-                normalizeProcessState(instance, runtimeSuspended), taskNames);
+                processStatus, taskNames,
+                active && !StringUtils.hasText(instance.getSuperProcessInstanceId()),
+                false, null, false);
     }
 
     /**
@@ -419,13 +423,17 @@ public class WorkflowProcessInstanceQueryService
         List<String> taskNames = facts.runtimeTaskNames().getOrDefault(instance.getId(), List.of());
         Boolean runtimeSuspended = facts.runtimeSuspensionStates().get(instance.getId());
         String startUserName = resolveUserName(instance.getStartUserId(), userNameCache);
+        String processStatus = normalizeProcessState(instance, runtimeSuspended);
+        boolean active = Set.of("running", "returned", "suspended").contains(processStatus);
+        String stateAction = "running".equals(processStatus) ? "SUSPEND"
+                : "suspended".equals(processStatus) ? "ACTIVATE" : null;
         return new WorkflowManagedProcessView(instance.getId(), instance.getProcessDefinitionId(),
                 instance.getProcessDefinitionKey(), instance.getProcessDefinitionName(),
                 safeVersion(instance.getProcessDefinitionVersion()), category,
                 instance.getDeploymentId(), instance.getBusinessKey(), instance.getStartUserId(),
                 startUserName, toInstant(instance.getStartTime()), toInstant(instance.getEndTime()),
                 instance.getDurationInMillis(),
-                normalizeProcessState(instance, runtimeSuspended), taskNames);
+                processStatus, taskNames, false, active, stateAction, !active);
     }
 
     /**
@@ -651,7 +659,7 @@ public class WorkflowProcessInstanceQueryService
      *
      * @param instance HistoricProcessInstance，历史流程实例
      * @param runtimeSuspended Boolean，运行时实例是否挂起；实例已结束时为空
-     * @return String，稳定的流程业务状态或兼容的小写引擎状态
+     * @return String，由强制 businessStatus 与实时引擎状态共同确定的稳定流程状态
      */
     private String normalizeProcessState(HistoricProcessInstance instance,
             Boolean runtimeSuspended)

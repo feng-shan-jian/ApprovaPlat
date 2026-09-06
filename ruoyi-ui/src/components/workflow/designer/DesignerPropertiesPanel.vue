@@ -172,53 +172,6 @@
                   <el-input v-model="state.completionCondition" type="textarea" :rows="2" maxlength="512" @change="emit('multi-instance-change')" />
                 </el-form-item>
               </template>
-              <template v-if="!['none', 'controlled'].includes(state.multiInstanceType)">
-                <el-form-item label="办理方式">
-                  <el-segmented v-model="state.assignmentType" :options="assignmentOptions" @change="emit('assignment-change')" />
-                </el-form-item>
-                <el-form-item v-if="state.assignmentType === 'assignee'" label="办理人">
-                  <el-select
-                    v-model="state.assignee"
-                    filterable
-                    clearable
-                    remote
-                    reserve-keyword
-                    :remote-method="searchAssignees"
-                    :loading="identityLoading"
-                    @change="emit('assignment-change')"
-                  >
-                    <el-option v-for="user in identityOptions.assignees" :key="user.value" :label="user.label" :value="String(user.value)" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item v-if="state.assignmentType === 'users'" label="候选用户">
-                  <el-select
-                    v-model="state.candidateUsers"
-                    multiple
-                    filterable
-                    remote
-                    reserve-keyword
-                    :remote-method="searchCandidateUsers"
-                    :loading="identityLoading"
-                    @change="emit('assignment-change')"
-                  >
-                    <el-option v-for="user in identityOptions.candidateUsers" :key="user.value" :label="user.label" :value="String(user.value)" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item v-if="state.assignmentType === 'groups'" label="候选角色或部门">
-                  <el-select
-                    v-model="state.candidateGroups"
-                    multiple
-                    filterable
-                    remote
-                    reserve-keyword
-                    :remote-method="searchCandidateGroups"
-                    :loading="identityLoading"
-                    @change="emit('assignment-change')"
-                  >
-                    <el-option v-for="group in identityOptions.candidateGroups" :key="group.value" :label="group.label" :value="group.value" />
-                  </el-select>
-                </el-form-item>
-              </template>
               <el-form-item label="到期时间">
                 <el-input v-model="state.dueDate" maxlength="128" placeholder="ISO-8601 或受控表达式" @change="emit('user-task-change')" />
               </el-form-item>
@@ -332,15 +285,6 @@
                 </el-select>
               </el-form-item>
             </template>
-
-            <el-alert
-              v-else-if="taskPanelType === TASK_PANEL_TYPES.MANUAL_WARNING"
-              type="warning"
-              show-icon
-              :closable="false"
-              :title="taskCapability.runtimeSemantics"
-              description="历史元素仍可导入、显示、编辑基础信息并原样保存；如需平台办理，请转换为 UserTask。"
-            />
 
             <template v-if="flags.callActivity">
               <el-form-item label="已发布子流程" required>
@@ -644,7 +588,6 @@ const props = defineProps({
     })
   },
   identityLoading: { type: Boolean, default: false },
-  assignmentOptions: { type: Array, default: () => [] },
   multiInstanceOptions: { type: Array, default: () => [] },
   multiInstanceApprovalOptions: { type: Array, default: () => [] },
   controlledLoopFieldOptions: { type: Array, default: () => [] },
@@ -684,7 +627,6 @@ const emit = defineEmits([
   'form-change',
   'embedded-form-change',
   'form-permission-change',
-  'assignment-change',
   'participant-rule-change',
   'user-task-change',
   'extension-selection-change',
@@ -878,33 +820,6 @@ function expandAllSections() {
  */
 function collapseAllSections() {
   activeSections.value = []
-}
-
-/**
- * 请求父组件查询直接办理人目录。
- * @param {string} keyword 用户输入的检索词。
- * @returns {void} 无返回值。
- */
-function searchAssignees(keyword) {
-  emit('identity-search', { target: 'assignees', keyword })
-}
-
-/**
- * 请求父组件查询候选认领用户目录。
- * @param {string} keyword 用户输入的检索词。
- * @returns {void} 无返回值。
- */
-function searchCandidateUsers(keyword) {
-  emit('identity-search', { target: 'candidateUsers', keyword })
-}
-
-/**
- * 请求父组件查询候选角色或部门目录。
- * @param {string} keyword 用户输入的检索词。
- * @returns {void} 无返回值。
- */
-function searchCandidateGroups(keyword) {
-  emit('identity-search', { target: 'candidateGroups', keyword })
 }
 
 /**

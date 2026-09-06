@@ -103,22 +103,22 @@ export function createControlledLoopDomain(context) {
         ? ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
         : resolveTemplateControlledLoopKind(field)
       if (!variable || !type || (embedded ? field.writable === false
-        : field?.__config__?.workflowWritable === false || seen.has(variable))) continue
+        : field?.workflowWritable !== true || seen.has(variable))) continue
       if (!embedded) seen.add(variable)
       result.push({
         value: variable,
-        label: (embedded ? field.name : field?.__config__?.label)
-          ? `${embedded ? field.name : field.__config__.label}（${variable}）` : variable,
+        label: (embedded ? field.name : field?.label)
+          ? `${embedded ? field.name : field.label}（${variable}）` : variable,
         type,
         values: type === 'BOOLEAN'
           ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
           : embedded
             ? (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id }))
-            : (Array.isArray(field?.__slot__?.options) ? field.__slot__.options : []).map(item => ({
+            : (Array.isArray(field?.options) ? field.options : []).map(item => ({
                 value: String(item?.value ?? item?.label ?? ''),
                 label: String(item?.label ?? item?.value ?? '')
               })).filter(item => item.value),
-        valueRestricted: type === 'BOOLEAN' || (embedded ? field.type === 'enum' : field?.__config__?.workflowEnum === true)
+        valueRestricted: type === 'BOOLEAN' || (embedded ? field.type === 'enum' : field?.workflowEnum === true)
       })
     }
     return result
@@ -126,11 +126,11 @@ export function createControlledLoopDomain(context) {
 
   /**
    * 将正式模板组件收窄为后端循环条件允许的可写标量种类。
-   * @param {object} field 使用 __config__ 的正式模板字段。
+   * @param {object} field 使用平面正式 Schema 的模板字段。
    * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 标量种类；集合、附件、表格和范围字段返回空。
    */
   function resolveTemplateControlledLoopKind(field) {
-    const tag = String(field?.__config__?.tag || '')
+    const tag = String(field?.tag || '')
     if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
     if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
     if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'

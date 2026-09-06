@@ -90,13 +90,7 @@ import {
   saveWorkflowNotificationMailConfig,
   testWorkflowNotificationMailConfig
 } from '@/api/workflow/notification'
-import {
-  createEmptyMailAuthenticationIdentity,
-  createEmptyMailConfigForm,
-  hasMailAuthenticationIdentityChanged,
-  normalizeMailAuthenticationIdentity,
-  normalizeMailConfigResponse
-} from './notificationAdminRules.js'
+import { createEmptyMailConfigForm } from './notificationAdminRules.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false }
@@ -113,26 +107,15 @@ const form = reactive(createEmptyMailConfigForm())
 const testForm = reactive({ testRecipient: '' })
 // meta 只保存服务端脱敏状态和 CAS 版本，不接收凭据、密文或密钥信息。
 const meta = reactive({ configured: false, credentialConfigured: false, revision: 0 })
-// loadedAuthenticationIdentity 是最近一次后端回读的认证身份基线，不包含授权码或密文。
-const loadedAuthenticationIdentity = reactive(createEmptyMailAuthenticationIdentity())
 const testResult = reactive({ type: 'success', message: '' })
 const busy = computed(() => loading.value || saving.value || testing.value)
-const authenticationIdentityChanged = computed(() => {
-  if (!meta.configured) return false
-  return hasMailAuthenticationIdentityChanged(loadedAuthenticationIdentity, form)
-})
 const credentialPlaceholder = computed(() => {
   if (!meta.credentialConfigured) return '请输入授权码或密码'
-  return authenticationIdentityChanged.value
-    ? '认证连接已变更，请重新填写'
-    : '已配置，留空则不修改'
+  return '已配置，留空则不修改'
 })
 const credentialHint = computed(() => {
   if (!meta.credentialConfigured) return '首次配置必须填写授权码或密码。'
-  if (authenticationIdentityChanged.value) {
-    return 'SMTP 服务器、端口、加密方式或登录账号已变更，必须重新填写授权码或密码。'
-  }
-  return '已配置，认证连接不变时留空则不修改。保存值不会再次回显。'
+  return '已配置时留空表示请求保留凭据；能否保留由服务端根据正式认证身份判定。保存值不会再次回显。'
 })
 let loadSequence = 0
 
@@ -193,10 +176,8 @@ function validateTextField(rule, value, callback) {
  * @returns {void} 首次配置缺少授权码时返回错误。
  */
 function validateCredential(rule, value, callback) {
-  if ((!meta.credentialConfigured || authenticationIdentityChanged.value) && !String(value || '').trim()) {
-    callback(new Error(authenticationIdentityChanged.value
-      ? '认证连接已变更，请重新填写授权码或密码'
-      : '首次配置必须填写授权码或密码'))
+  if (!meta.credentialConfigured && !String(value || '').trim()) {
+    callback(new Error('首次配置必须填写授权码或密码'))
     return
   }
   callback()
@@ -215,11 +196,21 @@ async function loadConfig(options = {}) {
   try {
     const response = await getWorkflowNotificationMailConfig()
     if (sequence !== loadSequence || !props.modelValue) return { loaded: false }
-    const normalized = normalizeMailConfigResponse(response.data)
-    Object.assign(form, normalized.form)
-    Object.assign(meta, normalized.meta)
-    // 只有真实后端回读成功后才刷新认证身份基线，测试和未保存编辑绝不改变它。
-    Object.assign(loadedAuthenticationIdentity, normalizeMailAuthenticationIdentity(normalized.form))
+    const config = response.data
+    Object.assign(form, {
+      smtpHost: config.smtpHost,
+      smtpPort: config.smtpPort,
+      encryptionMode: config.encryptionMode,
+      username: config.username,
+      credential: '',
+      fromAddress: config.fromAddress,
+      senderName: config.senderName
+    })
+    Object.assign(meta, {
+      configured: config.configured === true,
+      credentialConfigured: config.credentialConfigured === true,
+      revision: config.revision
+    })
     await nextTick()
     formRef.value?.clearValidate()
     return { loaded: true }
@@ -324,18 +315,7 @@ async function sendTestMail() {
  * @returns {boolean} 后端稳定子码为 MAIL_CONFIG_REVISION_CONFLICT 时返回 true。
  */
 function isRevisionConflict(error) {
-  return responseSubCode(error) === 'MAIL_CONFIG_REVISION_CONFLICT'
-}
-
-/**
- * 从统一业务错误读取受限稳定子码。
- * @param {unknown} error BusinessError。
- * @returns {string} 合法大写机器子码，缺失或非法时返回空字符串。
- */
-function responseSubCode(error) {
-  const value = error?.subCode
-  const normalized = typeof value === 'string' ? value.trim() : ''
-  return /^[A-Z][A-Z0-9_]{0,63}$/.test(normalized) ? normalized : ''
+  return error?.code === 409 && error?.subCode === 'MAIL_CONFIG_REVISION_CONFLICT'
 }
 
 /**
@@ -345,7 +325,7 @@ function responseSubCode(error) {
  * @returns {string} 不包含凭据或请求体的用户提示。
  */
 function mailConfigErrorMessage(error, fallback) {
-  if (responseSubCode(error) === 'MAIL_CREDENTIAL_REENTRY_REQUIRED') {
+  if (error?.code === 409 && error?.subCode === 'MAIL_CREDENTIAL_REENTRY_REQUIRED') {
     return 'SMTP 认证连接已变更，请重新填写授权码或密码'
   }
   return requestErrorMessage(error, fallback)
@@ -428,7 +408,6 @@ function resetDialogState() {
   loadSequence += 1
   Object.assign(form, createEmptyMailConfigForm())
   Object.assign(meta, { configured: false, credentialConfigured: false, revision: 0 })
-  Object.assign(loadedAuthenticationIdentity, createEmptyMailAuthenticationIdentity())
   testForm.testRecipient = ''
   testResult.type = 'success'
   testResult.message = ''

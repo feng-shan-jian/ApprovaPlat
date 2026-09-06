@@ -76,28 +76,12 @@ export function createParticipantRuleDomain({
       }
     }
     const configuredType = values.get(PARTICIPANT_RULE_PROPERTIES.taskType) || ''
-    if (configuredType) {
-      return {
-        type: configuredType,
-        targetIds: decorateParticipantTargets(configuredType,
-          splitParticipantValues(values.get(PARTICIPANT_RULE_PROPERTIES.taskTargetIds))),
-        formField: values.get(PARTICIPANT_RULE_PROPERTIES.taskFormField) || ''
-      }
+    return {
+      type: configuredType,
+      targetIds: decorateParticipantTargets(configuredType,
+        splitParticipantValues(values.get(PARTICIPANT_RULE_PROPERTIES.taskTargetIds))),
+      formField: values.get(PARTICIPANT_RULE_PROPERTIES.taskFormField) || ''
     }
-    // 旧模型的静态身份在第一次修改时平滑转换为受控规则，表达式继续由后端兼容链处理。
-    const assignee = String(businessObject?.get?.('flowable:assignee') || '').trim()
-    if (/^[1-9]\d{0,18}$/.test(assignee)) {
-      return { type: 'FIXED_USER', targetIds: [assignee], formField: '' }
-    }
-    const candidateUsers = splitParticipantValues(businessObject?.get?.('flowable:candidateUsers'))
-    if (candidateUsers.length && candidateUsers.every(value => /^[1-9]\d{0,18}$/.test(value))) {
-      return { type: 'CANDIDATE_USERS', targetIds: candidateUsers, formField: '' }
-    }
-    const candidateGroups = splitParticipantValues(businessObject?.get?.('flowable:candidateGroups'))
-    if (candidateGroups.length && candidateGroups.every(value => /^(?:ROLE|DEPT)[1-9]\d{0,18}$/.test(value))) {
-      return { type: 'CANDIDATE_GROUPS', targetIds: candidateGroups, formField: '' }
-    }
-    return { type: '', targetIds: [], formField: '' }
   }
   /**
    * 按后端参与者协议规范规则类型、目标数量、目录编码和表单字段。
@@ -196,10 +180,9 @@ export function createParticipantRuleDomain({
           PARTICIPANT_RULE_PROPERTIES.taskTargetIds, PARTICIPANT_RULE_PROPERTIES.taskFormField,
           PARTICIPANT_RULE_PROPERTIES.taskNoMatch]
     if (!properties.size) {
-      if (processRule) return ''
-      const legacy = ['flowable:assignee', 'flowable:candidateUsers', 'flowable:candidateGroups']
-        .some(name => String(businessObject?.get?.(name) || '').trim())
-      return legacy ? '' : `用户任务 ${businessObject?.name || businessObject?.id || ''} 必须配置办理人规则`
+      return processRule
+        ? '流程必须配置完整发起范围'
+        : `用户任务 ${businessObject?.name || businessObject?.id || ''} 必须配置办理人规则`
     }
     if (names.some(name => !properties.has(name))) return processRule ? '流程发起范围配置不完整' : '用户任务办理人规则配置不完整'
     const version = properties.get(processRule

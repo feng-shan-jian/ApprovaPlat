@@ -51,9 +51,6 @@ public class WorkflowMultiInstanceService
     public static final String REVISION_CONFLICT_SUB_CODE =
             "WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT";
 
-    /** 普通审批意见使用的既有 Flowable comment 类型。 */
-    private static final String NORMAL_COMMENT_TYPE = "1";
-
     /** 任务和 execution 主键允许的最大字符数。 */
     private static final int MAX_ID_LENGTH = 64;
 
@@ -875,7 +872,7 @@ public class WorkflowMultiInstanceService
             audit.put("targetUserId", targetUserId);
         }
         taskService.addComment(currentTask.getId(), currentTask.getProcessInstanceId(),
-                NORMAL_COMMENT_TYPE, audit.toString());
+                action, audit.toString());
     }
 
     /**
@@ -939,22 +936,6 @@ public class WorkflowMultiInstanceService
             throw conflict();
         }
         return currentRevision + 1;
-    }
-
-    /**
-     * 比较可空 Comparable 值，null 始终排在非 null 之前。
-     *
-     * @param left T，左侧可空值
-     * @param right T，右侧可空值
-     * @return int，标准比较结果
-     */
-    private <T extends Comparable<T>> int compareNullable(T left, T right)
-    {
-        if (left == null)
-        {
-            return right == null ? 0 : -1;
-        }
-        return right == null ? 1 : left.compareTo(right);
     }
 
     /**

@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.Locale;
 import java.util.Set;
 import org.springframework.util.StringUtils;
+import com.ruoyi.common.constant.HttpStatus;
+import com.ruoyi.common.exception.ServiceException;
 
 /**
  * 将 Flowable 历史实例的引擎状态和服务端业务状态归一为稳定 API 状态。
@@ -28,23 +30,26 @@ final class WorkflowProcessStatusNormalizer
     }
 
     /**
-     * 按业务终态、引擎完成、活动引擎状态、其他稳定状态和历史兜底的顺序解析流程状态。
+     * 按正式业务状态、引擎完成和活动引擎状态解析流程状态。
      *
-     * @param businessStatus String，服务端通过 Flowable businessStatus 写入的业务状态，允许为空
+     * @param businessStatus String，服务端通过 Flowable businessStatus 写入的强制业务状态
      * @param engineState String，Flowable HistoricProcessInstance.state，允许为空
      * @param endTime Instant，流程结束时间，运行实例为空
      * @param deleteReason String，历史删除或终止原因，允许为空
-     * @return String，running、returned、suspended、completed、canceled、rejected、terminated 或兼容的小写引擎状态
+     * @return String，running、returned、suspended、completed、canceled、rejected 或 terminated
      */
     static String normalize(String businessStatus, String engineState,
             Instant endTime, String deleteReason)
     {
         String normalizedBusinessStatus = normalizeText(businessStatus);
         String normalizedEngineState = normalizeText(engineState);
+        if (normalizedBusinessStatus == null || !STABLE_STATES.contains(normalizedBusinessStatus))
+        {
+            throw new ServiceException("流程实例 businessStatus 数据异常", HttpStatus.ERROR);
+        }
 
         // 取消、驳回和终止均可能让引擎呈现 completed/terminated，必须以服务端业务终态为准。
-        if (normalizedBusinessStatus != null
-                && BUSINESS_TERMINAL_STATES.contains(normalizedBusinessStatus))
+        if (BUSINESS_TERMINAL_STATES.contains(normalizedBusinessStatus))
         {
             return normalizedBusinessStatus;
         }
@@ -64,19 +69,7 @@ final class WorkflowProcessStatusNormalizer
         {
             return normalizedEngineState;
         }
-        if (normalizedBusinessStatus != null && STABLE_STATES.contains(normalizedBusinessStatus))
-        {
-            return normalizedBusinessStatus;
-        }
-        if (StringUtils.hasText(normalizedEngineState))
-        {
-            return normalizedEngineState;
-        }
-        if (endTime == null)
-        {
-            return "running";
-        }
-        return StringUtils.hasText(deleteReason) ? "canceled" : "completed";
+        return normalizedBusinessStatus;
     }
 
     /**

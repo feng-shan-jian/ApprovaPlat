@@ -49,13 +49,10 @@ public final class WorkflowFormSubmissionSnapshotCodec
     public static final String RESERVED_VARIABLE_PREFIX = "__ruoyi_workflow_";
 
     /** 表单提交快照变量名；开始表单重新提交会产生同实例的新版本，任务表单仍只写入一次。 */
-    public static final String VARIABLE_NAME = RESERVED_VARIABLE_PREFIX + "form_submission_v1";
+    public static final String VARIABLE_NAME = RESERVED_VARIABLE_PREFIX + "form_submission_v2";
 
-    /** 当前快照结构版本；版本 2 增加双表单来源类型。 */
+    /** 唯一正式快照结构版本。 */
     private static final int SNAPSHOT_VERSION = 2;
-
-    /** 升级前正式模板快照结构版本。 */
-    private static final int LEGACY_SNAPSHOT_VERSION = 1;
 
     /** 单份快照编码后的最大 UTF-8 字节数。 */
     private static final int MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
@@ -75,12 +72,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
     /** 引擎和业务关联主键允许的最大字符数。 */
     private static final int MAX_ID_LENGTH = 255;
 
-    /** 版本 1 快照根对象允许出现的固定字段。 */
-    private static final Set<String> LEGACY_ROOT_FIELDS = Set.of(
-            "version", "kind", "deploymentId", "formId", "formKey", "nodeKey",
-            "taskId", "taskLocal", "values");
-
-    /** 版本 2 快照根对象允许出现的固定字段。 */
+    /** 正式快照根对象允许出现的固定字段。 */
     private static final Set<String> ROOT_FIELDS = Set.of(
             "version", "kind", "deploymentId", "sourceType", "formId", "formKey",
             "nodeKey", "taskId", "taskLocal", "values");
@@ -109,24 +101,6 @@ public final class WorkflowFormSubmissionSnapshotCodec
     }
 
     /**
-     * 编码开始表单的不可变提交快照。
-     *
-     * @param deploymentId String，流程定义所属部署主键
-     * @param formId Long，部署表单快照来源主键
-     * @param formKey String，开始节点 BPMN 表单键
-     * @param nodeKey String，开始节点 BPMN 主键
-     * @param values Map&lt;String, Object&gt;，附件投影完成后的服务端安全字段值
-     * @return String，可作为 Flowable 普通字符串变量持久化的受限 JSON
-     */
-    public static String encodeStart(String deploymentId, Long formId, String formKey,
-            String nodeKey, Map<String, Object> values)
-    {
-        return encode(SnapshotKind.START, deploymentId, WorkflowFormSourceType.TEMPLATE.name(),
-                formId, formKey, nodeKey,
-                null, false, values);
-    }
-
-    /**
      * 编码支持正式模板或 BPMN 内嵌表单的开始提交快照。
      *
      * @param deploymentId String，流程定义所属部署主键
@@ -142,26 +116,6 @@ public final class WorkflowFormSubmissionSnapshotCodec
     {
         return encode(SnapshotKind.START, deploymentId, sourceType, formId, formKey,
                 nodeKey, null, false, values);
-    }
-
-    /**
-     * 编码任务表单的不可变提交快照。
-     *
-     * @param deploymentId String，任务定义所属部署主键
-     * @param formId Long，部署表单快照来源主键
-     * @param formKey String，任务节点 BPMN 表单键
-     * @param nodeKey String，任务节点 BPMN 主键
-     * @param taskId String，本次真实活动任务主键
-     * @param taskLocal boolean，业务字段是否按 BPMN localScope 写入任务局部作用域
-     * @param values Map&lt;String, Object&gt;，附件投影完成后的服务端安全字段值
-     * @return String，可作为任务局部字符串变量持久化的受限 JSON
-     */
-    public static String encodeTask(String deploymentId, Long formId, String formKey,
-            String nodeKey, String taskId, boolean taskLocal, Map<String, Object> values)
-    {
-        return encode(SnapshotKind.TASK, deploymentId, WorkflowFormSourceType.TEMPLATE.name(),
-                formId, formKey, nodeKey,
-                taskId, taskLocal, values);
     }
 
     /**
@@ -208,25 +162,21 @@ public final class WorkflowFormSubmissionSnapshotCodec
             throw dataError("工作流表单提交快照结构异常");
         }
         int version = root.path("version").intValue();
-        Set<String> allowedRootFields = version == LEGACY_SNAPSHOT_VERSION
-                ? LEGACY_ROOT_FIELDS : version == SNAPSHOT_VERSION ? ROOT_FIELDS : Set.of();
-        if (allowedRootFields.isEmpty() || root.size() != allowedRootFields.size())
+        if (version != SNAPSHOT_VERSION || root.size() != ROOT_FIELDS.size())
         {
             throw dataError("工作流表单提交快照版本不受支持");
         }
         Iterator<String> fieldNames = root.propertyNames().iterator();
         while (fieldNames.hasNext())
         {
-            if (!allowedRootFields.contains(fieldNames.next()))
+            if (!ROOT_FIELDS.contains(fieldNames.next()))
             {
                 throw dataError("工作流表单提交快照包含未知字段");
             }
         }
         SnapshotKind kind = parseKind(root.get("kind"));
         String deploymentId = requiredText(root.get("deploymentId"), "部署主键");
-        String sourceType = version == LEGACY_SNAPSHOT_VERSION
-                ? WorkflowFormSourceType.TEMPLATE.name()
-                : requiredSourceType(root.get("sourceType"));
+        String sourceType = requiredSourceType(root.get("sourceType"));
         Long formId = optionalPositiveLong(root.get("formId"), "表单主键");
         if (!WorkflowFormSourceType.isConsistent(sourceType, formId))
         {

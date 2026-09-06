@@ -72,14 +72,14 @@ class WorkflowTaskCompletionContextIntegrationTest
     /** 普通任务表单部署快照，只允许提交一个必填文本字段。 */
     private static final String APPROVAL_FORM = """
             {"fields":[
-              {"__vModel__":"approvalResult","__config__":{"layout":"colFormItem","tag":"el-input","required":true}}
+              {"vModel":"approvalResult","layout":"colFormItem","tag":"el-input","required":true,"workflowHidden":false,"workflowReadable":true,"workflowWritable":true}
             ]}
             """;
 
     /** 循环任务表单部署快照，判断值由受控循环服务精确解释。 */
     private static final String LOOP_FORM = """
             {"fields":[
-              {"__vModel__":"loopDecision","__config__":{"layout":"colFormItem","tag":"el-input","required":true}}
+              {"vModel":"loopDecision","layout":"colFormItem","tag":"el-input","required":true,"workflowHidden":false,"workflowReadable":true,"workflowWritable":true}
             ]}
             """;
 
@@ -238,7 +238,7 @@ class WorkflowTaskCompletionContextIntegrationTest
                 .processInstanceId(instance.getId()).variableName("approvalResult")
                 .singleResult().getValue()).isEqualTo("approved");
         Comment completionComment = taskService.getProcessInstanceComments(
-                instance.getId(), "1").stream()
+                instance.getId(), "COMPLETE").stream()
                 .filter(comment -> task.getId().equals(comment.getTaskId()))
                 .findFirst().orElseThrow();
         assertThat(completionComment.getFullMessage())

@@ -824,12 +824,11 @@ async function submitPolicy() {
     proxy.$modal.msgSuccess('通知策略已保存')
     await loadPolicies()
   } catch (error) {
-    const subCode = responseSubCode(error)
-    if (subCode === 'NOTIFICATION_POLICY_REVISION_CONFLICT') {
+    if (error?.code === 409 && error?.subCode === 'NOTIFICATION_POLICY_REVISION_CONFLICT') {
       await promptPolicyReloadAfterConflict()
-    } else if (subCode === 'SMTP_NOT_CONFIGURED') {
+    } else if (error?.code === 409 && error?.subCode === 'SMTP_NOT_CONFIGURED') {
       await handleMailChannelUnavailable()
-    } else if (subCode === 'NOTIFICATION_POLICY_DUPLICATE') {
+    } else if (error?.code === 409 && error?.subCode === 'NOTIFICATION_POLICY_DUPLICATE') {
       proxy.$modal.msgWarning(requestErrorMessage(error, '相同作用域和场景的通知策略已存在'))
       await loadPolicies()
     } else {
@@ -863,17 +862,6 @@ async function promptPolicyReloadAfterConflict() {
   } catch {
     // 用户取消后保留当前草稿；服务端 revision 会继续拒绝任何陈旧覆盖。
   }
-}
-
-/**
- * 从统一业务错误读取受限稳定子码。
- * @param {unknown} error BusinessError。
- * @returns {string} 合法大写机器子码，缺失或非法时返回空字符串。
- */
-function responseSubCode(error) {
-  const value = error?.subCode
-  const normalized = typeof value === 'string' ? value.trim() : ''
-  return /^[A-Z][A-Z0-9_]{0,63}$/.test(normalized) ? normalized : ''
 }
 
 /**
@@ -939,7 +927,7 @@ async function compensate(row) {
     proxy.$modal.msgSuccess('死信已重新进入投递队列')
     await loadOutbox()
   } catch (error) {
-    if (responseSubCode(error) === 'NOTIFICATION_OUTBOX_STATE_CONFLICT') {
+    if (error?.code === 409 && error?.subCode === 'NOTIFICATION_OUTBOX_STATE_CONFLICT') {
       proxy.$modal.msgWarning('投递记录状态已变化，列表已刷新')
       await loadOutbox()
     } else {

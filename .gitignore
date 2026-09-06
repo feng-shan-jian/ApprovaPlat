@@ -12,6 +12,8 @@ output/
 # Local runtime logs and generated evidence
 /logs/
 tests/**/coverage/
+ruoyi-ui/test-results/
+ruoyi-ui/playwright-report/
 selenium-debug.log
 
 # Editor directories and files

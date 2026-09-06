@@ -9,6 +9,11 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.ExtensionElement;
+import org.flowable.bpmn.model.FlowElement;
+import org.flowable.bpmn.model.Process;
+import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.repository.ProcessDefinition;
@@ -29,6 +34,8 @@ import com.ruoyi.flowable.identity.WorkflowUserIdValueParser;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowTaskSlaDeploymentService;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 /**
  * 按部署快照和实时有效组织数据解析发起范围及单实例任务参与者。
@@ -75,14 +82,12 @@ public class WorkflowParticipantRuleRuntimeService
      * 在真实引擎发起前按部署快照校验当前用户是否命中发起范围。
      * @param actor WorkflowCurrentIdentity，事务内重新核验的当前用户和有效组
      * @param definition ProcessDefinition，服务端选定的激活流程定义
-     * @return WfDeployParticipantRule，受管部署允许时返回命中规则；历史未托管部署返回 null
+     * @return WfDeployParticipantRule，部署快照完整且当前用户命中时返回正式规则
      */
     public WfDeployParticipantRule assertCanStart(WorkflowCurrentIdentity actor,
             ProcessDefinition definition)
     {
         WfDeployParticipantRule rule = findStartRule(definition);
-        // 历史未托管部署返回 null；正式写入口继续执行原 Flowable starter identity link 门禁。
-        if (rule == null) return null;
         Set<String> activeDeptIds = "DEPTS".equals(rule.getRuleType())
                 ? loadActiveScopeDeptIds(actor) : Set.of();
         boolean allowed = matchesStartRule(actor, rule, activeDeptIds);
@@ -100,7 +105,7 @@ public class WorkflowParticipantRuleRuntimeService
      * 只读判断当前用户是否命中定义发起范围，供可发起列表和表单预览保持一致。
      * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
      * @param definition ProcessDefinition，服务端查询的流程定义
-     * @return Boolean，受管部署允许返回 true、拒绝返回 false；历史未托管部署返回 null
+     * @return Boolean，正式部署快照允许返回 true、拒绝返回 false；快照缺失直接失败
      */
     public Boolean canStartIfManaged(WorkflowCurrentIdentity actor, ProcessDefinition definition)
     {
@@ -112,8 +117,8 @@ public class WorkflowParticipantRuleRuntimeService
     /**
      * 对一次有界流程定义扫描执行部署快照发起授权判定。
      *
-     * 返回 Map 中存在定义主键表示新版受管部署的正式允许或拒绝决定；缺失定义主键只表示
-     * 父部署没有业务资源子部署，调用方必须继续执行历史 Flowable starter identity link 兼容逻辑。
+     * 返回 Map 必须覆盖全部输入定义；任何部署资源或流程级规则缺失都属于迁移后数据一致性异常，
+     * 禁止回读 Flowable starter identity link 推断发起资格。
      *
      * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
      * @param definitions List&lt;ProcessDefinition&gt;，同一次列表扫描得到的可信流程定义
@@ -179,10 +184,20 @@ public class WorkflowParticipantRuleRuntimeService
     public void resolveCreatedTask(DelegateTask task)
     {
         DefinitionContext context = definitionContext(task.getProcessDefinitionId());
+        UserTask taskModel = requireCreatedTaskModel(task, context);
+        if (isControlledMultiInstanceTask(taskModel) || isGeneratedSlaEscalationTask(taskModel))
+        {
+            // 多实例成员和 SLA 升级办理人均由各自部署编译协议确定，不能再套用普通任务参与者快照。
+            return;
+        }
         WfDeployParticipantRule rule = artifactRepository.selectTaskParticipantRule(
                 context.deploymentId(),
                 context.processKey(), task.getTaskDefinitionKey());
-        if (rule == null) return;
+        if (rule == null)
+        {
+            throw new ServiceException("任务参与者规则部署快照缺失", HttpStatus.CONFLICT)
+                    .setSubCode("TASK_PARTICIPANT_SNAPSHOT_MISSING");
+        }
         String initiator = resolveRootInitiator(task);
         Resolution resolution;
         try
@@ -195,7 +210,7 @@ public class WorkflowParticipantRuleRuntimeService
             rejectResolutionFailure(rule, task, exception);
             return;
         }
-        // 先移除作者 BPMN 的旧静态候选链接，再写入实时解析结果，避免组织变更后残留越权候选人。
+        // 编译 BPMN 不携带作者身份字段；仍先清空引擎候选链接，确保只保留本次实时解析结果。
         clearCandidateLinks(task);
         if ("ASSIGNEE".equals(rule.getAssignmentMode()))
         {
@@ -210,6 +225,96 @@ public class WorkflowParticipantRuleRuntimeService
             resolution.userIds().forEach(task::addCandidateUser);
             resolution.groupIds().forEach(task::addCandidateGroup);
         }
+    }
+
+    /**
+     * 从当前部署模型中读取 create 事件对应的真实 UserTask，禁止仅凭任务 key 猜测任务类型。
+     *
+     * @param task DelegateTask，当前创建中的 Flowable 任务
+     * @param context DefinitionContext，服务端查询得到的部署与流程 key
+     * @return UserTask，与当前定义、流程和任务 key 完全对应的 BPMN 节点
+     */
+    private UserTask requireCreatedTaskModel(DelegateTask task, DefinitionContext context)
+    {
+        BpmnModel model = repositoryService.getBpmnModel(task.getProcessDefinitionId());
+        Process process = model == null ? null : model.getProcessById(context.processKey());
+        FlowElement element = process == null || !StringUtils.hasText(task.getTaskDefinitionKey())
+                ? null : process.getFlowElement(task.getTaskDefinitionKey(), true);
+        if (!(element instanceof UserTask userTask))
+        {
+            throw new ServiceException("任务部署模型关系异常", HttpStatus.ERROR);
+        }
+        return userTask;
+    }
+
+    /**
+     * 严格识别由平台受控协议编译的多实例任务，非法循环结构不能借缺少快照绕过门禁。
+     *
+     * @param task UserTask，部署模型中的真实任务节点
+     * @return boolean，节点为完整受控多实例时返回 true，普通任务返回 false
+     */
+    private boolean isControlledMultiInstanceTask(UserTask task)
+    {
+        if (task.getLoopCharacteristics() == null)
+        {
+            return false;
+        }
+        try
+        {
+            WorkflowMultiInstanceModelContract.requireMode(task);
+            return true;
+        }
+        catch (IllegalArgumentException exception)
+        {
+            ServiceException failure = new ServiceException("多实例任务部署模型异常",
+                    HttpStatus.ERROR);
+            failure.initCause(exception);
+            throw failure;
+        }
+    }
+
+    /**
+     * 识别 SLA 编译器生成且由冻结办理人直接负责的升级任务。
+     *
+     * @param task UserTask，部署模型中的真实任务节点
+     * @return boolean，节点携带唯一 SLA 来源任务属性时返回 true
+     */
+    private boolean isGeneratedSlaEscalationTask(UserTask task)
+    {
+        if (task.getExtensionElements() == null)
+        {
+            return false;
+        }
+        int matches = 0;
+        String sourceTaskKey = null;
+        for (ExtensionElement container : task.getExtensionElements()
+                .getOrDefault("properties", List.of()))
+        {
+            if (container == null || container.getChildElements() == null)
+            {
+                continue;
+            }
+            for (ExtensionElement property : container.getChildElements()
+                    .getOrDefault("property", List.of()))
+            {
+                if (WorkflowTaskSlaDeploymentService.SOURCE_TASK_DEFINITION_KEY_PROPERTY.equals(
+                        property.getAttributeValue(null, "name")))
+                {
+                    matches++;
+                    sourceTaskKey = property.getAttributeValue(null, "value");
+                }
+            }
+        }
+        if (matches == 0)
+        {
+            return false;
+        }
+        if (matches != 1 || !StringUtils.hasText(sourceTaskKey)
+                || !StringUtils.hasText(task.getAssignee()))
+        {
+            throw new ServiceException("SLA 升级任务部署模型异常", HttpStatus.ERROR);
+        }
+        return true;
     }
 
     /**
@@ -368,7 +473,7 @@ public class WorkflowParticipantRuleRuntimeService
     /**
      * 查询流程定义并读取对应部署的发起范围快照。
      * @param definition ProcessDefinition，服务端可信流程定义
-     * @return WfDeployParticipantRule，版本受支持的快照；历史部署未托管时返回 null
+     * @return WfDeployParticipantRule，版本受支持且与流程 key 唯一对应的快照
      */
     private WfDeployParticipantRule findStartRule(ProcessDefinition definition)
     {
@@ -378,10 +483,10 @@ public class WorkflowParticipantRuleRuntimeService
     }
 
     /**
-     * 批量选择受管定义的唯一发起规则，并保留历史未托管定义缺席语义。
+     * 批量选择全部定义的唯一发起规则，迁移后不允许存在未托管部署。
      *
      * @param definitions List&lt;ProcessDefinition&gt;，待判定的可信流程定义
-     * @return Map&lt;String, WfDeployParticipantRule&gt;，仅包含受管定义及其版本受支持规则的不可变映射
+     * @return Map&lt;String, WfDeployParticipantRule&gt;，覆盖全部输入定义的不可变规则映射
      */
     private Map<String, WfDeployParticipantRule> resolveManagedStartRules(
             List<ProcessDefinition> definitions)
@@ -421,8 +526,8 @@ public class WorkflowParticipantRuleRuntimeService
                     rulesByDeployment.get(definition.getDeploymentId());
             if (deploymentRules == null)
             {
-                // 没有业务资源子部署才是历史未托管定义；不得伪造成新版拒绝决定。
-                continue;
+                throw new ServiceException("流程发起范围部署快照缺失", HttpStatus.CONFLICT)
+                        .setSubCode("PROCESS_START_SCOPE_SNAPSHOT_MISSING");
             }
             WfDeployParticipantRule rule = deploymentRules.get(definition.getKey());
             if (rule == null || rule.getRuleVersion() == null || rule.getRuleVersion() != 1)

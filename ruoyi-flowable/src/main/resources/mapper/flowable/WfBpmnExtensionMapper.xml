@@ -44,6 +44,7 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             <arg column="implementation_key" javaType="java.lang.String"/>
             <arg column="checksum" javaType="java.lang.String"/>
             <arg column="effective_update_time" javaType="java.util.Date"/>
+            <arg column="delete_allowed" javaType="boolean"/>
         </constructor>
     </resultMap>
 
@@ -51,7 +52,8 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         select e.extension_id, e.extension_key, e.extension_name, e.extension_type,
                e.status, e.description, v.version_id, v.version_no,
                v.implementation_key, v.checksum,
-               coalesce(e.update_time, e.create_time) as effective_update_time
+               coalesce(e.update_time, e.create_time) as effective_update_time,
+               (e.status = 'DISABLED' and e.create_by &lt;&gt; 'system') as delete_allowed
         from wf_bpmn_extension e
         left join wf_bpmn_extension_version v
           on v.extension_id = e.extension_id

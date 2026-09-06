@@ -17,6 +17,25 @@ const SAFE_PROP_NAMES = new Set([
 ])
 
 /**
+ * 为生成器输出创建正式权限完整的字段副本，默认字段为可见、可读、可写。
+ * @param {object|object[]} source 单个生成器字段或字段数组。
+ * @returns {object|object[]} 保留生成器字段并递归补齐三个布尔权限标志的新对象。
+ */
+export function completeWorkflowFieldPermissions(source) {
+  if (Array.isArray(source)) return source.map(completeWorkflowFieldPermissions)
+  if (!source || typeof source !== 'object') return source
+  return {
+    ...source,
+    workflowHidden: typeof source.workflowHidden === 'boolean' ? source.workflowHidden : false,
+    workflowReadable: typeof source.workflowReadable === 'boolean' ? source.workflowReadable : true,
+    workflowWritable: typeof source.workflowWritable === 'boolean' ? source.workflowWritable : true,
+    ...(Array.isArray(source.children)
+      ? { children: source.children.map(completeWorkflowFieldPermissions) }
+      : {})
+  }
+}
+
+/**
  * 解析后端表单快照并规范为无执行逻辑的安全渲染描述。
  * @param {string|object} content 表单 JSON 文本或已解析对象。
  * @returns {{config: object, fields: object[]}} 表单级配置和字段描述。
@@ -39,43 +58,43 @@ export function normalizeFormTemplate(content) {
 }
 
 /**
- * 将单个旧版或 Vue 3 生成器组件规范为统一字段描述。
+ * 将单个正式 Vue 3 生成器组件规范为安全渲染描述。
  * @param {object} source 原始组件配置。
  * @returns {object} 只包含白名单属性的渲染描述。
  */
 function normalizeField(source) {
   if (!source || typeof source !== 'object') throw new Error('流程表单字段格式不合法')
-  const legacyConfig = source.__config__ && typeof source.__config__ === 'object'
-    ? source.__config__
-    : source
-  const tag = stringValue(legacyConfig.tag || source.tag, '')
-  const layout = stringValue(legacyConfig.layout || source.layout, 'colFormItem')
+  if (Object.keys(source).some(key => key.startsWith('__'))) {
+    throw new Error('流程表单包含已废止的内部生成器字段')
+  }
+  const tag = stringValue(source.tag, '')
+  const layout = stringValue(source.layout, 'colFormItem')
   if (!['colFormItem', 'rowFormItem', 'raw'].includes(layout)) {
     throw new Error('流程表单布局不受支持')
   }
   if (layout !== 'rowFormItem' && !ALLOWED_TAGS.has(tag)) {
     throw new Error('流程表单组件不受支持')
   }
-  const children = Array.isArray(legacyConfig.children)
-    ? legacyConfig.children.map(normalizeField)
+  const children = Array.isArray(source.children)
+    ? source.children.map(normalizeField)
     : []
   const props = {}
   Object.entries(source).forEach(([key, value]) => {
     if (SAFE_PROP_NAMES.has(key) && isSafeValue(value)) props[key] = value
   })
-  const options = source.__slot__?.options || source.options || []
+  const options = source.options || []
   return {
     layout,
     tag,
-    variable: stringValue(source.__vModel__ || source.vModel, ''),
-    label: stringValue(legacyConfig.label || source.label, ''),
-    span: boundedNumber(legacyConfig.span ?? source.span, 24, 1, 24),
-    labelWidth: boundedNumber(legacyConfig.labelWidth ?? source.labelWidth, 0, 0, 240),
-    required: Boolean(legacyConfig.required ?? source.required),
-    hidden: legacyConfig.workflowHidden === true,
-    readable: legacyConfig.workflowReadable !== false,
-    writable: legacyConfig.workflowWritable !== false,
-    defaultValue: cloneJsonValue(legacyConfig.defaultValue ?? source.defaultValue),
+    variable: stringValue(source.vModel, ''),
+    label: stringValue(source.label, ''),
+    span: boundedNumber(source.span, 24, 1, 24),
+    labelWidth: boundedNumber(source.labelWidth, 0, 0, 240),
+    required: source.required === true,
+    hidden: source.workflowHidden === true,
+    readable: source.workflowReadable === true,
+    writable: source.workflowWritable === true,
+    defaultValue: cloneJsonValue(source.defaultValue),
     props,
     options: normalizeOptions(options),
     children
@@ -164,84 +183,4 @@ export function flattenFormFields(fields) {
 
   visit(fields || [])
   return result
-}
-
-/**
- * 将旧项目正式表单模板转换为当前 Vue 3 生成器的平面组件结构。
- * @param {string|object} content 旧版表单 JSON 文本或对象。
- * @returns {object} 可直接交给现有拖拽生成器的表单配置。
- */
-export function legacyTemplateToBuilder(content) {
-  const root = typeof content === 'string' ? JSON.parse(content) : cloneJsonValue(content)
-  if (!root || typeof root !== 'object' || !Array.isArray(root.fields)) {
-    throw new Error('流程表单模板格式不合法')
-  }
-  return {
-    ...root,
-    fields: root.fields.map(legacyFieldToBuilder)
-  }
-}
-
-/**
- * 将当前 Vue 3 生成器配置转换为后端和旧流程兼容的正式模板。
- * @param {object} builderTemplate 生成器表单配置和 fields。
- * @returns {object} 使用 __config__/__vModel__ 的可持久化模板。
- */
-export function builderTemplateToLegacy(builderTemplate) {
-  if (!builderTemplate || typeof builderTemplate !== 'object'
-      || !Array.isArray(builderTemplate.fields)) {
-    throw new Error('流程表单设计数据不完整')
-  }
-  const root = cloneJsonValue(builderTemplate)
-  root.fields = builderTemplate.fields.map(builderFieldToLegacy)
-  return root
-}
-
-/**
- * 转换单个旧版字段为生成器字段，并递归处理行容器。
- * @param {object} source 旧版字段。
- * @returns {object} Vue 3 生成器字段。
- */
-function legacyFieldToBuilder(source) {
-  const config = source.__config__ || {}
-  const slot = source.__slot__ || {}
-  const result = {}
-  Object.entries(source).forEach(([key, value]) => {
-    if (!['__config__', '__slot__', '__vModel__'].includes(key)) result[key] = cloneJsonValue(value)
-  })
-  Object.assign(result, cloneJsonValue(config))
-  if (source.__vModel__) result.vModel = source.__vModel__
-  if (Array.isArray(slot.options)) result.options = cloneJsonValue(slot.options)
-  if (Array.isArray(config.children)) result.children = config.children.map(legacyFieldToBuilder)
-  return result
-}
-
-/**
- * 转换单个生成器字段为旧版正式字段，并递归处理行容器。
- * @param {object} source Vue 3 生成器字段。
- * @returns {object} 后端允许持久化的旧版字段。
- */
-function builderFieldToLegacy(source) {
-  if (!source || typeof source !== 'object') throw new Error('流程表单字段格式不合法')
-  const configKeys = new Set([
-    'label', 'labelWidth', 'showLabel', 'changeTag', 'tag', 'tagIcon',
-    'defaultValue', 'required', 'layout', 'span', 'document', 'regList',
-    'formId', 'renderKey', 'componentName', 'gutter', 'justify', 'align', 'children'
-  ])
-  const config = {}
-  const field = {}
-  Object.entries(source).forEach(([key, value]) => {
-    if (key === 'vModel' || key === 'options') return
-    if (configKeys.has(key)) config[key] = cloneJsonValue(value)
-    else field[key] = cloneJsonValue(value)
-  })
-  config.layout = config.layout || 'colFormItem'
-  if (config.layout !== 'rowFormItem' && !config.tag) {
-    throw new Error('流程表单字段组件类型不能为空')
-  }
-  if (Array.isArray(source.children)) config.children = source.children.map(builderFieldToLegacy)
-  field.__config__ = config
-  if (source.vModel) field.__vModel__ = source.vModel
-  if (Array.isArray(source.options)) field.__slot__ = { options: cloneJsonValue(source.options) }
-  return field
 }

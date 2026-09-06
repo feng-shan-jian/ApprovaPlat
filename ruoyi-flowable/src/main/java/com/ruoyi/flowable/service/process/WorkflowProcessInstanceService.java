@@ -78,9 +78,6 @@ public class WorkflowProcessInstanceService
     /** 发起人取消本人实例权限。 */
     private static final String CANCEL_PERMISSION = "workflow:process:cancel";
 
-    /** Flowable 兼容旧系统的终止意见类型。 */
-    private static final String TERMINATE_COMMENT_TYPE = "6";
-
     /** 服务端维护的流程状态变量名。 */
     private static final String PROCESS_STATUS_VARIABLE = "processStatus";
 
@@ -172,7 +169,7 @@ public class WorkflowProcessInstanceService
     /**
      * 由具备受控删除权限的流程管理员批量删除已结束实例及其子流程历史。
      *
-     * @param rawInstanceIds Collection&lt;String&gt;，路径绑定的一个或多个实例主键
+     * @param rawInstanceIds Collection&lt;String&gt;，正式请求 DTO 中的一个或多个实例主键
      * @return WorkflowHistoryDeletionView，真实历史实例和抄送记录删除数量
      */
     public WorkflowHistoryDeletionView deleteCompletedHistory(Collection<String> rawInstanceIds)
@@ -378,7 +375,7 @@ public class WorkflowProcessInstanceService
                                 context.rootInstance().getId(),
                                 context.processTreeInstanceIds().size());
                         Comment auditComment = taskService.addComment(null,
-                                context.rootInstance().getId(), TERMINATE_COMMENT_TYPE,
+                                context.rootInstance().getId(), decision.action(),
                                 auditMessage);
                         requireAuditComment(auditComment);
                         return new RootTerminationInstruction(
@@ -438,10 +435,13 @@ public class WorkflowProcessInstanceService
                 throw dataError("流程终止审计写入参数不完整");
             }
 
-            // processStatus 与 businessStatus 必须双写，查询、详情和历史归一化分别依赖两者。
-            runtimeService.setVariable(rootInstance.getId(), PROCESS_STATUS_VARIABLE,
-                    processStatus);
-            runtimeService.updateBusinessStatus(rootInstance.getId(), processStatus);
+            // 每个 CallActivity 实例都是可独立查询的正式对象，级联删除前必须各自收敛双状态。
+            for (String processTreeInstanceId : context.processTreeInstanceIds())
+            {
+                runtimeService.setVariable(processTreeInstanceId, PROCESS_STATUS_VARIABLE,
+                        processStatus);
+                runtimeService.updateBusinessStatus(processTreeInstanceId, processStatus);
+            }
             // 上述引擎写入已经取得 Flowable 写锁；此时执行树仍完整，使用普通 SELECT 冻结
             // 全树开放轮次并逐一对账活动受控根，避免缺行或合法格式篡改被级联删除掩盖。
             MultiInstanceRoundTerminationPlan roundPrecheck =
@@ -716,7 +716,7 @@ public class WorkflowProcessInstanceService
      *
      * @param context RootTerminationContext，终止前冻结的根和完整执行树
      * @param processStatus String，本次动作预期持久化的业务终态
-     * @param auditComment Comment，可选的流程级类型 6 审计 comment
+     * @param auditComment Comment，可选的流程级稳定动作类型审计 comment
      * @return 无返回值，任一结果不一致时抛出异常并回滚当前事务
      */
     private void verifyTermination(RootTerminationContext context,
@@ -750,20 +750,28 @@ public class WorkflowProcessInstanceService
             throw new ServiceException("流程实例终止历史记录异常", HttpStatus.ERROR);
         }
 
-        HistoricVariableInstance statusVariable = historyService
-                .createHistoricVariableInstanceQuery()
-                .processInstanceId(rootInstanceId)
-                .variableName(PROCESS_STATUS_VARIABLE)
-                .singleResult();
-        if (statusVariable == null || !processStatus.equals(statusVariable.getValue()))
+        // 根与每个子流程都能被详情、列表和父子关系投影独立读取，终止结果必须逐实例对账。
+        for (String processTreeInstanceId : processTreeInstanceIds)
         {
-            throw new ServiceException("流程实例终止状态记录异常", HttpStatus.ERROR);
+            HistoricProcessInstance historic = findHistoricInstance(processTreeInstanceId);
+            HistoricVariableInstance statusVariable = historyService
+                    .createHistoricVariableInstanceQuery()
+                    .processInstanceId(processTreeInstanceId)
+                    .variableName(PROCESS_STATUS_VARIABLE)
+                    .singleResult();
+            if (historic == null || historic.getEndTime() == null
+                    || !processStatus.equals(historic.getBusinessStatus())
+                    || statusVariable == null
+                    || !processStatus.equals(statusVariable.getValue()))
+            {
+                throw new ServiceException("流程实例终止状态记录异常", HttpStatus.ERROR);
+            }
         }
 
         if (auditComment != null)
         {
             List<Comment> comments = taskService.getProcessInstanceComments(rootInstanceId,
-                    TERMINATE_COMMENT_TYPE);
+                    processAuditAction(processStatus));
             boolean auditPersisted = comments != null && comments.stream()
                     .anyMatch(comment -> comment != null
                             && auditComment.getId().equals(comment.getId())
@@ -788,6 +796,23 @@ public class WorkflowProcessInstanceService
             case CANCELED_STATUS -> "PROCESS_CANCELED";
             case REJECTED_STATUS -> "PROCESS_REJECTED";
             case TERMINATED_STATUS -> "PROCESS_TERMINATED";
+            default -> throw dataError("流程终止状态不受支持");
+        };
+    }
+
+    /**
+     * 根据稳定业务状态返回正式结构化 comment 动作类型。
+     *
+     * @param processStatus String，canceled、rejected 或 terminated 业务状态
+     * @return String，与审计 JSON action 完全一致的 comment type
+     */
+    private String processAuditAction(String processStatus)
+    {
+        return switch (processStatus)
+        {
+            case CANCELED_STATUS -> "CANCEL";
+            case REJECTED_STATUS -> "REJECT";
+            case TERMINATED_STATUS -> "TERMINATE";
             default -> throw dataError("流程终止状态不受支持");
         };
     }
@@ -893,9 +918,9 @@ public class WorkflowProcessInstanceService
     }
 
     /**
-     * 对路径批量实例主键执行拆分、去重、数量和长度门禁。
+     * 对正式请求体中的实例主键执行去重、数量和长度门禁。
      *
-     * @param rawInstanceIds Collection&lt;String&gt;，可能包含逗号分隔值的路径绑定结果
+     * @param rawInstanceIds Collection&lt;String&gt;，请求体中的独立实例主键
      * @return List&lt;String&gt;，保持首次出现顺序的不可变实例主键集合
      */
     private List<String> normalizeInstanceIds(Collection<String> rawInstanceIds)
@@ -911,13 +936,14 @@ public class WorkflowProcessInstanceService
             {
                 throw invalidArgument("流程实例主键不能为空");
             }
-            for (String item : rawInstanceId.split(",", -1))
+            if (rawInstanceId.contains(","))
             {
-                normalizedIds.add(normalizeInstanceId(item));
-                if (normalizedIds.size() > MAX_DELETE_BATCH_SIZE)
-                {
-                    throw invalidArgument("单次最多删除" + MAX_DELETE_BATCH_SIZE + "个流程实例");
-                }
+                throw invalidArgument("不再支持逗号拼接的流程实例主键");
+            }
+            normalizedIds.add(normalizeInstanceId(rawInstanceId));
+            if (normalizedIds.size() > MAX_DELETE_BATCH_SIZE)
+            {
+                throw invalidArgument("单次最多删除" + MAX_DELETE_BATCH_SIZE + "个流程实例");
             }
         }
         return List.copyOf(normalizedIds);
@@ -1052,7 +1078,7 @@ public class WorkflowProcessInstanceService
      * 根终止写入前由调用方补充的删除原因和可选流程级审计 comment。
      *
      * @param deleteReason String，写入 Flowable 历史的根实例删除原因
-     * @param auditComment Comment，可选的流程级类型 6 审计 comment
+     * @param auditComment Comment，可选的流程级稳定动作类型审计 comment
      */
     public record RootTerminationInstruction(String deleteReason, Comment auditComment)
     {

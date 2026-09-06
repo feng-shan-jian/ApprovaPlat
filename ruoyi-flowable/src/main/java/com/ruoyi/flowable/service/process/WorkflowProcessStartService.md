@@ -18,27 +18,27 @@
 6. 通过 `prepareDraftSubmissionVariables(...)` 锁定草稿附件，完成新增 `TEMP -> DRAFT`、移除项清理、物理文件校验和安全变量投影。
 7. 启动前再次确认定义仍激活且 deployment 关系不变。
 8. 服务端生成多实例保留变量，写入 `initiator=<当前用户ID>`、`processStatus=running` 和不可变开始表单提交快照。
-9. 仅调用一次 `RuntimeService.startProcessInstanceById(...)` 创建真实实例。
+9. 通过 `createProcessInstanceBuilder()` 在 `start()` 前同时设置定义、业务主键、变量和 `businessStatus=running`；即使 start→end 或 service→end 在同一命令内同步结束，也无需二次更新已消失的运行实例。
 10. 通过 `bindDraftStartAttachments(...)` 将附件原子迁移为 `BOUND`；外层服务随后持久化规范变量、业务主键、成员选择、实例主键和 `SUBMITTED` 状态。任一步失败都会回滚实例、附件和草稿状态。
 
 重复提交已处于 `SUBMITTED` 的草稿时，草稿服务直接返回持久化的原实例主键，以已提交记录完成幂等响应。
 
 ## 权限与数据来源
 
-- 包含业务资源子部署的受管定义必须匹配不可变参与者部署快照；其余定义执行 Flowable starter identity link 门禁。
+- 所有定义必须匹配不可变参与者部署快照；缺少发起范围或任务规则时失败关闭，不读取 Flowable 原生身份字段。
 - deployment 来自持久化草稿绑定的真实流程定义，提交请求只携带草稿主键与业务数据。
 - Flowable 业务制品 `approvaplat/forms-v1.json` 的开始节点不可变快照是表单唯一来源。
 - `workflow:process:start` 仍用于发起页面和开始表单读取；草稿创建、保存与提交继续使用各自正式权限。
 
 ## 变量约束
 
-提交 `variables` 包含开始表单 `__vModel__` 白名单字段。`initiator`、`processStatus`、实例/定义/部署 ID、发起人、业务主键和 `__ruoyi_workflow_` 前缀变量由服务端独占生成。字段必填、类型、字符串长度、集合规模、嵌套深度、节点总数和序列化总大小均由服务端验证。
+提交 `variables` 包含开始表单平面 `vModel` 白名单字段。`initiator`、`processStatus`、实例/定义/部署 ID、发起人、业务主键和 `__ruoyi_workflow_` 前缀变量由服务端独占生成。字段必填、类型、字符串长度、集合规模、嵌套深度、节点总数和序列化总大小均由服务端验证。
 
 ## 不可变提交快照
 
-部署表单快照解决“使用哪一版 schema”，内部提交快照解决“用户当时提交了什么值”。服务将 deployment ID、form ID、form key、开始节点 key 和附件安全投影后的字段值编码为受限 JSON 字符串，固定写入 `__ruoyi_workflow_form_submission_v1`。该变量只由服务端生成。
+部署表单快照解决“使用哪一版 schema”，内部提交快照解决“用户当时提交了什么值”。服务将 deployment ID、明确的 `sourceType`、form ID、form key、开始节点 key 和附件安全投影后的字段值编码为版本 2 的受限 JSON 字符串，固定写入 `__ruoyi_workflow_form_submission_v2`。该变量只由服务端生成，不提供隐式推断表单来源的编码入口。
 
-详情服务后续从该变量的 `HistoricVariableUpdate` 读取开始提交值与真实写入时间。流程运行中其他节点修改同名全局变量时，开始表单仍回显首次提交快照；内部快照缺席的实例在详情中显示“申请表单快照缺失”。
+详情服务后续从该变量的 `HistoricVariableUpdate` 读取开始提交值与真实写入时间。流程运行中其他节点修改同名全局变量时，开始表单仍回显首次提交快照；内部快照缺失、版本不是唯一正式版本或结构损坏时均按数据一致性异常失败关闭。
 
 ## 异常语义
 

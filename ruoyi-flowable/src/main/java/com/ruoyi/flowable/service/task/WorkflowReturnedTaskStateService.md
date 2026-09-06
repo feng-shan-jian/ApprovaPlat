@@ -17,7 +17,7 @@
 
 | 方法 | 输入 | 结果 |
 | --- | --- | --- |
-| `requireRunning` | 流程实例 ID | 要求 `processStatus=running`；兼容 `businessStatus` 为空或 `running`，明确终态仍冲突 |
+| `requireRunning` | 流程实例 ID | 同时要求 `processStatus=running` 与 `businessStatus=running`；任一缺失或不一致均冲突 |
 | `markTransition` / `clearTransition` | 流程实例 ID、稳定标记 | 建立或清除单命令迁移标记 |
 | `enterOrdinaryReturned` | 任务、实例、申请人 ID | 返回不可变原办理配置快照 |
 | `enterGroupReturned` | 任务、实例、申请人 ID | 冻结迁移后首审批任务办理配置并建立整组退回态 |
@@ -30,7 +30,7 @@
 
 所有公开调用接收主键、稳定标记或不可变快照；`TaskService`、`RuntimeService` 和可变 Flowable 对象封装在服务内部。状态变更必须位于 `WorkflowEngineOperations` 打开的同一可重复读写事务中，任一步失败由外层事务整体回滚。
 
-`requireRunning` 将退回协议启用前且仍处于普通运行态的空 `businessStatus` 解析为运行中。写入口保留写前任务、申请人和状态校验；同步 TaskService/RuntimeService 正常返回即作为写入成功确认并交由外层事务提交。
+`requireRunning` 不推断或修复缺失状态。写入口保留写前任务、申请人和状态校验；同步 TaskService/RuntimeService 正常返回即作为写入成功确认并交由外层事务提交。
 
 `RETURN_ASSIGNMENT_VARIABLE` 在整组退回时同样必须保留到重提命令完成：普通首审批用它恢复当前同一任务的 assignee/owner/candidate 配置；受控首审批也先验证该快照存在，再由迁移服务取消临时根并重建。`prepareGroupRunning` 只能在计划和轮次 CAS 完成后清除该变量。
 

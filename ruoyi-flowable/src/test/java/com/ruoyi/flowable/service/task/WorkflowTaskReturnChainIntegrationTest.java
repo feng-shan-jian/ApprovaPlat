@@ -73,7 +73,7 @@ class WorkflowTaskReturnChainIntegrationTest
     /** 开始表单部署快照，重新提交时只允许更新申请标题。 */
     private static final String START_FORM = """
             {"fields":[
-              {"__vModel__":"requestTitle","__config__":{"layout":"colFormItem","tag":"el-input","required":true}}
+              {"vModel":"requestTitle","layout":"colFormItem","tag":"el-input","required":true,"workflowHidden":false,"workflowReadable":true,"workflowWritable":true}
             ]}
             """;
 
@@ -222,7 +222,7 @@ class WorkflowTaskReturnChainIntegrationTest
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
 
         Comment returnComment = taskService.getProcessInstanceComments(
-                scenario.instance().getId(), "2").stream().findFirst().orElseThrow();
+                scenario.instance().getId(), "RETURN").stream().findFirst().orElseThrow();
         assertThat(returnComment.getTaskId()).isEqualTo(scenario.secondTask().getId());
         assertThat(returnComment.getProcessInstanceId()).isEqualTo(scenario.instance().getId());
         assertThat(returnComment.getFullMessage())
@@ -477,34 +477,33 @@ class WorkflowTaskReturnChainIntegrationTest
                 .extracting(Task::getId)
                 .containsExactlyInAnyOrderElementsOf(
                         beforeTasks.stream().map(Task::getId).toList());
-        assertThat(taskService.getProcessInstanceComments(instance.getId(), "2")).isEmpty();
+        assertThat(taskService.getProcessInstanceComments(instance.getId(), "RETURN")).isEmpty();
         assertThat(runtimeService.getVariable(instance.getId(),
                 WorkflowProcessStartService.PROCESS_STATUS_VARIABLE))
                 .isEqualTo(WorkflowProcessStartService.RUNNING_STATUS);
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(instance.getId()).singleResult()
-                .getBusinessStatus()).isNull();
+                .getBusinessStatus()).isEqualTo(WorkflowProcessStartService.RUNNING_STATUS);
         assertThat(runtimeService.getVariable(instance.getId(),
                 WorkflowReturnedApplicationProtocol.CONTROLLED_TRANSITION_VARIABLE)).isNull();
         verifyNoInteractions(taskCopyService, notificationService, attachmentService);
     }
 
     /**
-     * 验证既有普通运行实例允许空 businessStatus，也允许显式 running。
-     * @param businessStatus String，历史空值或新链路显式运行态
+     * 验证普通运行实例只接受显式 running businessStatus。
      * @return void，能力读取必须保持可退且不得产生写副作用
      */
-    @ParameterizedTest
-    @ValueSource(strings = { "", WorkflowProcessStartService.RUNNING_STATUS })
-    void acceptsBlankOrRunningBusinessStatus(String businessStatus)
+    @Test
+    void acceptsExplicitRunningBusinessStatus()
     {
         ReturnScenario scenario = startAtSecondApproval();
-        runtimeService.updateBusinessStatus(scenario.instance().getId(), businessStatus);
+        runtimeService.updateBusinessStatus(scenario.instance().getId(),
+                WorkflowProcessStartService.RUNNING_STATUS);
 
         assertThat(lifecycleService.isTaskReturnAllowed(
                 scenario.secondTask().getId())).isTrue();
         assertThat(taskService.getProcessInstanceComments(
-                scenario.instance().getId(), "2")).isEmpty();
+                scenario.instance().getId(), "RETURN")).isEmpty();
         verifyNoInteractions(taskCopyService, notificationService, attachmentService);
     }
 
@@ -608,6 +607,8 @@ class WorkflowTaskReturnChainIntegrationTest
                             WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot,
                             WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
                             WorkflowProcessStartService.RUNNING_STATUS));
+            runtimeService.updateBusinessStatus(instance.getId(),
+                    WorkflowProcessStartService.RUNNING_STATUS);
             return runtimeService.createProcessInstanceQuery()
                     .processInstanceId(instance.getId()).singleResult();
         }

@@ -44,6 +44,7 @@ import org.springframework.util.FileSystemUtils;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
 import com.ruoyi.flowable.domain.WfDeployForm;
+import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
@@ -59,6 +60,8 @@ import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper;
 import com.ruoyi.flowable.mapper.WfTaskSlaMapper;
 import com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper;
+import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
+import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
@@ -109,8 +112,8 @@ class WorkflowMultiInstanceEngineHarness
     /** 开始表单允许修改的业务字段和附件字段。 */
     private static final String START_FORM = """
             {"fields":[
-              {"__vModel__":"requestTitle","__config__":{"layout":"colFormItem","tag":"el-input","required":true}},
-              {"__vModel__":"evidence","limit":3,"__config__":{"layout":"colFormItem","tag":"el-upload"}}
+              {"vModel":"requestTitle","layout":"colFormItem","tag":"el-input","required":true,"workflowHidden":false,"workflowReadable":true,"workflowWritable":true},
+              {"vModel":"evidence","layout":"colFormItem","tag":"el-upload","limit":3,"workflowHidden":false,"workflowReadable":true,"workflowWritable":true}
             ]}
             """;
 
@@ -471,6 +474,15 @@ class WorkflowMultiInstanceEngineHarness
     /**
      * 绑定生产用户任务监听器并保留审计故障注入点。
      *
+     * @param binding LateBindingTaskListener，引擎表达式监听器的延迟绑定入口
+     * @param hook WorkflowMultiInstanceFailureHook，任务创建审计故障注入器
+     * @param slaRuntimeService WorkflowTaskSlaRuntimeService，SLA 运行时服务
+     * @param notificationService WorkflowNotificationService，正式通知服务
+     * @param lifecycleService WorkflowMultiInstanceRoundLifecycleService，多实例轮次生命周期服务
+     * @param repositoryService RepositoryService，读取已部署 BPMN 的引擎仓储服务
+     * @param runtimeService RuntimeService，读取流程实例变量的引擎运行服务
+     * @param artifactRepository WorkflowDeploymentArtifactRepository，读取不可变参与者制品
+     * @param identityResolver WorkflowIdentityResolver，解析服务端身份和审批资格
      * @return WorkflowUserTaskListener，真实生产监听器
      */
     @Bean
@@ -478,7 +490,10 @@ class WorkflowMultiInstanceEngineHarness
             WorkflowMultiInstanceFailureHook hook,
             WorkflowTaskSlaRuntimeService slaRuntimeService,
             WorkflowNotificationService notificationService,
-            WorkflowMultiInstanceRoundLifecycleService lifecycleService)
+            WorkflowMultiInstanceRoundLifecycleService lifecycleService,
+            RepositoryService repositoryService, RuntimeService runtimeService,
+            WorkflowDeploymentArtifactRepository artifactRepository,
+            WorkflowIdentityResolver identityResolver)
     {
         WorkflowUserTaskAuditService audit = mock(WorkflowUserTaskAuditService.class);
         doAnswer(invocation ->
@@ -494,8 +509,12 @@ class WorkflowMultiInstanceEngineHarness
         }).when(audit).recordAudit(anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(),
                 org.mockito.ArgumentMatchers.nullable(String.class));
+        WorkflowParticipantRuleRuntimeService participantRuntimeService =
+                new WorkflowParticipantRuleRuntimeService(repositoryService, runtimeService,
+                        artifactRepository, mock(WorkflowIdentityMapper.class), identityResolver,
+                        mock(WorkflowParticipantResolutionMetrics.class));
         WorkflowUserTaskListener listener = new WorkflowUserTaskListener(audit,
-                slaRuntimeService, mock(WorkflowParticipantRuleRuntimeService.class),
+                slaRuntimeService, participantRuntimeService,
                 mock(WorkflowAutomaticCopyService.class), notificationService,
                 lifecycleService);
         binding.bind(listener);
@@ -541,10 +560,39 @@ class WorkflowMultiInstanceEngineHarness
                 startForm(deployment.getId(), "laterAllReturnStart"),
                 startForm(deployment.getId(), "allAllAnyReturnStart"),
                 startForm(deployment.getId(), "firstAllLaterAnyReturnStart"));
+        List<WfDeployParticipantRule> participantRules = List.of(
+                fixedTaskRule("roundGroupLaterAll", "laterInitialApproval", "普通首审批"),
+                fixedTaskRule("roundGroupAllAllAny", "allAllAnyInitialApproval", "普通首审批"));
         artifactRepository.persist(deployment.getId(),
-                new WorkflowDeploymentArtifacts(forms, List.of(), List.of(),
-                        List.of(), List.of(), List.of(), List.of(), List.of()));
+                new WorkflowDeploymentArtifacts(forms, List.of(), List.of(), participantRules,
+                        List.of(), List.of(), List.of(), List.of()));
         return deployment.getId();
+    }
+
+    /**
+     * 为测试 BPMN 中的普通首审批创建正式固定人员参与者快照。
+     *
+     * @param processKey String，任务所属流程 key
+     * @param activityId String，普通单实例任务节点 key
+     * @param activityName String，部署时任务名称
+     * @return WfDeployParticipantRule，可由真实监听器消费的完整 TASK 快照
+     */
+    private WfDeployParticipantRule fixedTaskRule(String processKey, String activityId,
+            String activityName)
+    {
+        WfDeployParticipantRule rule = new WfDeployParticipantRule();
+        rule.setProcessKey(processKey);
+        rule.setActivityId(activityId);
+        rule.setActivityName(activityName);
+        rule.setRuleScope("TASK");
+        rule.setAssignmentMode("ASSIGNEE");
+        rule.setRuleType("FIXED_USER");
+        rule.setTargetIds("150");
+        rule.setNoMatchPolicy("FAIL");
+        rule.setRuleVersion(1);
+        rule.setChecksum(processKey + "-" + activityId + "-fixed-user-150");
+        rule.setCreateBy("1");
+        return rule;
     }
 
     /**

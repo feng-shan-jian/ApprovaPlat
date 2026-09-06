@@ -46,9 +46,6 @@ public class WorkflowExtensionDeploymentService
 {
     /** 单节点扩展配置的 UTF-8 上限。 */
     private static final int MAX_CONFIG_BYTES = 16 * 1024;
-    /** 系统用户任务审计监听器只由模型服务维护，不生成业务快照。 */
-    private static final String SYSTEM_TASK_LISTENER = "${userTaskListener}";
-
     private final WorkflowExtensionRegistryService registryService;
     private final WorkflowJavaExtensionHandlerRegistry handlerRegistry;
     private final WorkflowHttpConnector httpConnector;
@@ -212,10 +209,6 @@ public class WorkflowExtensionDeploymentService
             }
             for (FlowableListener listener : listeners)
             {
-                if (SYSTEM_TASK_LISTENER.equals(listener.getImplementation()))
-                {
-                    continue;
-                }
                 snapshots.add(compileBusinessListener(process, element.getId(), "TASK",
                         listener, actorUserId));
             }

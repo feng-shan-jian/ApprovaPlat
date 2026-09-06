@@ -19,10 +19,14 @@ import java.util.Date;
  * @param bpmnXml String，详情场景返回的 BPMN XML
  * @param content String，详情场景返回的模型级表单内容
  * @param deployed boolean，模型是否已关联部署
+ * @param metadataEditAllowed boolean，模型元数据是否允许编辑
+ * @param deployAllowed boolean，模型是否允许部署
+ * @param deleteAllowed boolean，模型是否允许删除
  */
 public record WorkflowModelView(String modelId, String modelName, String modelKey, String category,
         Integer version, Integer revision, Integer formType, Long formId, String description,
-        Date createTime, Date lastUpdateTime, String bpmnXml, String content, boolean deployed)
+        Date createTime, Date lastUpdateTime, String bpmnXml, String content, boolean deployed,
+        boolean metadataEditAllowed, boolean deployAllowed, boolean deleteAllowed)
 {
     /**
      * 创建模型视图并复制可变时间对象。
@@ -41,6 +45,9 @@ public record WorkflowModelView(String modelId, String modelName, String modelKe
      * @param bpmnXml String，详情场景返回的 BPMN XML
      * @param content String，详情场景返回的模型级表单内容
      * @param deployed boolean，模型是否已关联部署
+     * @param metadataEditAllowed boolean，模型元数据编辑能力
+     * @param deployAllowed boolean，模型部署能力
+     * @param deleteAllowed boolean，模型删除能力
      * @return 无返回值，构造后得到不可变模型视图
      */
     public WorkflowModelView

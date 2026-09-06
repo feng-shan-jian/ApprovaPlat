@@ -59,10 +59,10 @@
       <el-table-column label="操作" width="116" fixed="right" align="center">
         <template #default="scope">
           <el-tooltip content="轮换 Token">
-            <el-button link type="primary" icon="RefreshRight" aria-label="轮换 Token" :disabled="!scope.row.rotateAllowed" v-hasPermi="['workflow:integrationCredential:rotate']" @click="rotateToken(scope.row)" />
+            <el-button link type="primary" icon="RefreshRight" aria-label="轮换 Token" :disabled="scope.row.rotateAllowed !== true" v-hasPermi="['workflow:integrationCredential:rotate']" @click="rotateToken(scope.row)" />
           </el-tooltip>
           <el-tooltip content="吊销账号">
-            <el-button link type="danger" icon="CircleClose" aria-label="吊销账号" :disabled="!scope.row.revokeAllowed" v-hasPermi="['workflow:integrationCredential:revoke']" @click="revokeToken(scope.row)" />
+            <el-button link type="danger" icon="CircleClose" aria-label="吊销账号" :disabled="scope.row.revokeAllowed !== true" v-hasPermi="['workflow:integrationCredential:revoke']" @click="revokeToken(scope.row)" />
           </el-tooltip>
         </template>
       </el-table-column>
@@ -239,7 +239,9 @@ async function submitCreate() {
  * @returns {Promise<void>} 轮换成功后刷新修订号和时间。
  */
 async function rotateToken(row) {
+  if (row.rotateAllowed !== true) return
   await proxy.$modal.confirm(`确认轮换“${row.credentialName}”的 Token 吗？旧 Token 将立即失效。`)
+  if (row.rotateAllowed !== true) return
   const response = await rotateIntegrationCredential(row.credentialId, { expiresAt: null })
   oneTimeToken.value = response.data.token
   secretOpen.value = true
@@ -252,7 +254,9 @@ async function rotateToken(row) {
  * @returns {Promise<void>} 吊销成功后刷新正式状态。
  */
 async function revokeToken(row) {
+  if (row.revokeAllowed !== true) return
   await proxy.$modal.confirm(`确认永久吊销“${row.credentialName}”吗？该操作不能撤销。`)
+  if (row.revokeAllowed !== true) return
   await revokeIntegrationCredential(row.credentialId)
   proxy.$modal.msgSuccess('集成账号已吊销')
   await loadRows()

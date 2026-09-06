@@ -22,6 +22,8 @@ import com.ruoyi.flowable.domain.dto.WorkflowProcessDetailQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessRelationView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
+import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
+import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.notification.WorkflowManualUrgeService;
 import com.ruoyi.flowable.service.process.WorkflowProcessFormDetailProjection.FormProjection;
@@ -72,6 +74,9 @@ public class WorkflowProcessDetailService
 
     private final WorkflowTaskLifecycleService taskLifecycleService;
 
+    /** 当前用户正式身份解析器，用于生成任务动作能力快照。 */
+    private final WorkflowIdentityResolver identityResolver;
+
     /** 人工催办正式服务，详情仅消费其无副作用能力准备链。 */
     private final WorkflowManualUrgeService manualUrgeService;
 
@@ -104,6 +109,7 @@ public class WorkflowProcessDetailService
             WorkflowProcessHistoryProjection historyProjection,
             WorkflowMultiInstanceService multiInstanceService,
             WorkflowTaskLifecycleService taskLifecycleService,
+            WorkflowIdentityResolver identityResolver,
             WorkflowManualUrgeService manualUrgeService,
             WorkflowControlledLoopService controlledLoopService)
     {
@@ -117,6 +123,7 @@ public class WorkflowProcessDetailService
         this.historyProjection = historyProjection;
         this.multiInstanceService = multiInstanceService;
         this.taskLifecycleService = taskLifecycleService;
+        this.identityResolver = identityResolver;
         this.manualUrgeService = manualUrgeService;
         this.controlledLoopService = controlledLoopService;
     }
@@ -204,8 +211,9 @@ public class WorkflowProcessDetailService
         boolean returnedApplication = WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
                 processStatus) && requestedTask != null && requestedTask.active();
         FormProjection forms = formProjection.project(new FormProjectionRequest(
-                schemas, history, bpmn.process(), variables, instance.deploymentId(),
-                requestedTask, currentTaskControlledLoop, returnedApplication));
+                schemas, history, bpmn.process(), variables, instance.processInstanceId(),
+                instance.deploymentId(), requestedTask, currentTaskControlledLoop,
+                returnedApplication));
 
         HistoryPresentation historyPresentation = historyProjection.projectPresentation(
                 history, instance,
@@ -230,6 +238,9 @@ public class WorkflowProcessDetailService
         // 退回入口必须由正式动作准备链投影；静态多实例、子流程和复杂执行树统一失败关闭。
         boolean returnAllowed = requestedTask != null && requestedTask.active()
                 && taskLifecycleService.isTaskReturnAllowed(requestedTask.taskId());
+        WorkflowTaskCapabilities taskCapabilities = projectTaskCapabilities(
+                identityResolver.resolveCurrentIdentity(), requestedTask, processStatus,
+                multiInstanceState, returnAllowed);
         // 先用详情已识别的申请人待修改任务收窄调用，再由正式重提准备链完成全部权威重验。
         boolean resubmitAllowed = returnedApplicantTask
                 && taskLifecycleService.isApplicationResubmitAllowed(
@@ -245,10 +256,52 @@ public class WorkflowProcessDetailService
                 definition.getCategory(), definition.getDeploymentId(), instance.businessKey(),
                 instance.startUserId(), historyPresentation.startUserName(), startTime,
                 instance.endTime(), durationMillis, processStatus, requestedTask,
-                nextUserAssignmentPolicy.name(), multiInstanceState, returnAllowed,
+                nextUserAssignmentPolicy.name(), multiInstanceState,
+                taskCapabilities.completeAllowed(), taskCapabilities.rejectAllowed(),
+                taskCapabilities.returnAllowed(), taskCapabilities.delegateAllowed(),
+                taskCapabilities.transferAllowed(), taskCapabilities.resolveAllowed(),
                 resubmitAllowed, urgeAllowed, controlledLoopStates, forms.formDetail(),
                 historyPresentation.timeline(),
                 processRelations, bpmnXml, historyPresentation.viewer());
+    }
+
+    /**
+     * 从同一详情事务的正式身份、任务和流程事实生成任务动作能力快照。
+     *
+     * @param actor WorkflowCurrentIdentity，当前有效用户身份
+     * @param task WorkflowTaskAccessSnapshot，已完成对象授权的请求任务，允许为空
+     * @param processStatus String，服务端规范化后的稳定流程状态
+     * @param multiInstanceState WorkflowMultiInstanceStateView，受控多实例状态，允许为空
+     * @param returnAllowed boolean，正式退回准备链的判定结果
+     * @return WorkflowTaskCapabilities，前端只能直接消费的六项动作能力
+     */
+    private WorkflowTaskCapabilities projectTaskCapabilities(WorkflowCurrentIdentity actor,
+            WorkflowTaskAccessSnapshot task, String processStatus,
+            com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceStateView multiInstanceState,
+            boolean returnAllowed)
+    {
+        if (task == null || !task.active() || !"running".equals(processStatus)
+                || !Objects.equals(actor.userId(), task.assignee()))
+        {
+            return WorkflowTaskCapabilities.NONE;
+        }
+        String delegationState = StringUtils.hasText(task.delegationState())
+                ? task.delegationState().trim().toUpperCase(java.util.Locale.ROOT) : null;
+        boolean pendingDelegation = "PENDING".equals(delegationState);
+        boolean delegationContext = delegationState != null || StringUtils.hasText(task.owner());
+        boolean movable = !delegationContext;
+        boolean assignable = movable && multiInstanceState == null;
+        return new WorkflowTaskCapabilities(!pendingDelegation, movable,
+                movable && returnAllowed, assignable, assignable, pendingDelegation);
+    }
+
+    /** 当前详情事务内的任务动作能力集合。 */
+    private record WorkflowTaskCapabilities(boolean completeAllowed,
+            boolean rejectAllowed, boolean returnAllowed, boolean delegateAllowed,
+            boolean transferAllowed, boolean resolveAllowed)
+    {
+        private static final WorkflowTaskCapabilities NONE =
+                new WorkflowTaskCapabilities(false, false, false, false, false, false);
     }
 
     /**

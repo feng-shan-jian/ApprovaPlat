@@ -37,8 +37,8 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
     /** 模型元数据中的表单键字段。 */
     private static final String FORM_KEY_FIELD = "formKey";
 
-    /** 兼容旧 BPMN 表单键的固定前缀。 */
-    private static final String LEGACY_FORM_KEY_PREFIX = "key_";
+    /** 正式 BPMN 表单键固定前缀。 */
+    private static final String FORM_KEY_PREFIX = "key_";
 
     private final RepositoryService repositoryService;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
@@ -371,7 +371,7 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
     }
 
     /**
-     * 判断表单键是否命中目标表单，兼容纯数字和旧 key_&lt;formId&gt; 格式。
+     * 判断正式 key_&lt;formId&gt; 表单键是否命中目标表单。
      * @param formKey String，模型元数据或 BPMN 中的表单键
      * @param targetFormIds Set&lt;Long&gt;，待检查表单主键集合
      * @return boolean，表单键命中任一目标表单时返回 true
@@ -385,8 +385,7 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
         String normalized = formKey.trim();
         for (Long formId : targetFormIds)
         {
-            if (normalized.equals(formId.toString())
-                    || normalized.equals(LEGACY_FORM_KEY_PREFIX + formId))
+            if (normalized.equals(FORM_KEY_PREFIX + formId))
             {
                 return true;
             }

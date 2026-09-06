@@ -13,7 +13,7 @@ import java.time.Instant;
  * @param startTime Instant，流程开始时间
  * @param endTime Instant，可为空的流程结束时间
  * @param deleteReason String，可为空的流程删除或终止原因
- * @param businessStatus String，可为空的服务端业务状态
+ * @param businessStatus String，迁移后强制存在的服务端业务状态
  * @param state String，可为空的 Flowable 实例状态；运行中实例使用实时 running/suspended，已结束实例使用历史状态
  */
 public record WorkflowProcessAccessSnapshot(

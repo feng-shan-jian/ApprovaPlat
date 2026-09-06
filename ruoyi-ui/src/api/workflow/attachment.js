@@ -20,18 +20,6 @@ export function uploadWorkflowAttachment(fieldName, file) {
 }
 
 /**
- * 查询经过附件或所属流程对象授权的安全元数据。
- * @param {string} attachmentId 服务端生成的附件 UUID。
- * @returns {Promise<object>} data 为附件安全元数据。
- */
-export function getWorkflowAttachment(attachmentId) {
-  return request({
-    url: `/workflow/attachment/${encodeURIComponent(attachmentId)}`,
-    method: 'get'
-  })
-}
-
-/**
  * 下载经过对象授权的私有工作流附件。
  * @param {string} attachmentId 服务端生成的附件 UUID。
  * @returns {Promise<Blob>} 私有附件二进制内容。

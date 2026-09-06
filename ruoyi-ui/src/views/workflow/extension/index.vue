@@ -66,7 +66,7 @@
         </template>
       </el-table-column>
       <el-table-column label="处理器" prop="implementationKey" min-width="150" show-overflow-tooltip>
-        <template #default="scope"><code v-if="scope.row.implementationKey">{{ scope.row.implementationKey }}</code><span v-else class="muted">-</span></template>
+        <template #default="scope"><code v-if="scope.row.extensionType === 'JAVA' && scope.row.implementationKey">{{ scope.row.implementationKey }}</code><span v-else class="muted">服务端固定</span></template>
       </el-table-column>
       <el-table-column label="说明" prop="description" min-width="220" show-overflow-tooltip>
         <template #default="scope">{{ scope.row.description || '-' }}</template>
@@ -103,12 +103,12 @@
               @click="toggleStatus(scope.row)"
             />
           </el-tooltip>
-          <el-tooltip :content="scope.row.status === 'ENABLED' ? '停用后可删除' : '删除目录'" placement="top">
+          <el-tooltip :content="scope.row.deleteAllowed === true ? '删除目录' : '当前目录不可删除'" placement="top">
             <el-button
               link
               type="danger"
               icon="Delete"
-              :disabled="scope.row.status === 'ENABLED'"
+              :disabled="scope.row.deleteAllowed !== true"
               aria-label="删除目录"
               v-hasPermi="['workflow:extension:remove']"
               @click="removeExtension(scope.row)"
@@ -334,14 +334,9 @@ async function submitCreate() {
  */
 function openVersion(row) {
   versionTarget.value = row
-  const fixedImplementations = {
-    CEL: 'CEL_EXPRESSION_V1',
-    HTTP: 'HTTP_CONNECTOR_V1',
-    SQL: 'SQL_CONNECTOR_V1',
-    FORM_FIELD: 'FORM_FIELD_TEXTAREA_V1'
-  }
-  versionForm.implementationKey = fixedImplementations[row.extensionType]
-    || row.implementationKey || (handlers.value.length === 1 ? handlers.value[0].implementationKey : '')
+  versionForm.implementationKey = row.extensionType === 'JAVA'
+    ? row.implementationKey || (handlers.value.length === 1 ? handlers.value[0].implementationKey : '')
+    : ''
   versionDialogOpen.value = true
   nextTick(() => versionFormRef.value?.clearValidate())
 }
@@ -351,14 +346,16 @@ function openVersion(row) {
  * @returns {Promise<void>} 后端生成版本和校验和后关闭对话框。
  */
 async function submitVersion() {
-  const valid = await versionFormRef.value.validate().catch(() => false)
+  const valid = versionTarget.value?.extensionType !== 'JAVA'
+    || await versionFormRef.value.validate().catch(() => false)
   if (!valid || !versionTarget.value) return
   await proxy.$modal.confirm(`确认发布“${versionTarget.value.extensionName}”的新版本吗？`)
   saving.value = true
   try {
-    await createWorkflowExtensionVersion(versionTarget.value.extensionId, {
-      implementationKey: versionForm.implementationKey
-    })
+    const data = versionTarget.value.extensionType === 'JAVA'
+      ? { implementationKey: versionForm.implementationKey }
+      : {}
+    await createWorkflowExtensionVersion(versionTarget.value.extensionId, data)
     proxy.$modal.msgSuccess('不可变版本发布成功')
     versionDialogOpen.value = false
     await loadRegistry()
@@ -387,8 +384,8 @@ async function toggleStatus(row) {
  * @returns {Promise<void>} 后端完成受约束删除后刷新页面。
  */
 async function removeExtension(row) {
-  if (row.status === 'ENABLED') {
-    proxy.$modal.msgWarning('请先停用扩展目录再删除')
+  if (row.deleteAllowed !== true) {
+    proxy.$modal.msgWarning('当前扩展目录不允许删除')
     return
   }
   await proxy.$modal.confirm(`确认删除扩展目录“${row.extensionName}”及其未部署版本吗？`)

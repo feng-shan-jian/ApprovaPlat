@@ -68,7 +68,6 @@
         :forms="forms"
         :identity-options="identityOptions"
         :identity-loading="identityLoading"
-        :assignment-options="assignmentOptions"
         :multi-instance-options="multiInstanceOptions"
         :multi-instance-approval-options="multiInstanceApprovalOptions"
         :controlled-loop-field-options="controlledLoopFieldOptions"
@@ -102,7 +101,6 @@
         @form-change="updateFormKey"
         @embedded-form-change="updateEmbeddedForm"
         @form-permission-change="updateFormPermissions"
-        @assignment-change="updateAssignment"
         @participant-rule-change="updateParticipantRule"
         @user-task-change="updateUserTaskProperties"
         @extension-selection-change="updateControlledTaskSelection"
@@ -184,8 +182,6 @@ import { listDmnDecisionOptions } from '@/api/workflow/dmn'
 import { listBpmnEventCodeOptions } from '@/api/workflow/bpmnEvent'
 import { listEnabledSlaCalendars } from '@/api/workflow/sla'
 import flowableModdle from './bpmn/flowableModdle'
-import { normalizeSequenceFlowReferences } from './bpmnGraphXml'
-import { normalizeTaskListenerXml } from './taskListenerXml'
 import DesignerToolbar from './designer/DesignerToolbar.vue'
 import DesignerSettingsDrawer from './designer/DesignerSettingsDrawer.vue'
 import AdvancedElementPalette from './designer/AdvancedElementPalette.vue'
@@ -369,7 +365,7 @@ let previousDocumentUserSelect = ''
 let importing = false
 
 /**
- * 规范化服务端设计器偏好，拒绝未知主题并为旧版本缺失字段提供服务端契约默认值。
+ * 规范化设计器偏好，拒绝未知主题并为可选字段提供界面缺省值。
  * @param {object|undefined} preference 页面从正式偏好接口回读的数据。
  * @returns {object} 字段完整、可直接应用到 Modeler 的只读偏好值。
  */
@@ -399,10 +395,6 @@ function createEmptyPropertyState() {
     embeddedFields: [],
     formPermissionDefault: 'EDITABLE',
     formPermissionFields: [],
-    assignmentType: 'assignee',
-    assignee: '',
-    candidateUsers: [],
-    candidateGroups: [],
     participantRule: { type: '', targetIds: [], formField: '' },
     dueDate: '',
     priority: '',
@@ -468,63 +460,6 @@ function escapeXml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;')
-}
-
-/**
- * 在模型尚无编辑器源码时生成可直接编辑的最小可执行流程。
- * @returns {string} 包含开始、用户任务和结束节点的 BPMN 2.0 XML。
- */
-function createInitialXml() {
-  const processId = String(props.model.modelKey || 'workflow_process').replace(/[^A-Za-z0-9_.-]/g, '_')
-  const processName = escapeXml(props.model.modelName || '新流程')
-  const formId = props.model.formId
-  const formAttribute = formId ? ` flowable:formKey="key_${escapeXml(formId)}"` : ''
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
-  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
-  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
-  xmlns:flowable="http://flowable.org/bpmn"
-  targetNamespace="http://ruoyi.example/workflow">
-  <process id="${escapeXml(processId)}" name="${processName}" isExecutable="true">
-    <extensionElements>
-      <flowable:properties>
-        <flowable:property name="approva.startScope.ruleVersion" value="1"/>
-        <flowable:property name="approva.startScope.type" value="PUBLIC"/>
-        <flowable:property name="approva.startScope.targetIds" value=""/>
-        <flowable:property name="approva.startScope.noMatchPolicy" value="FAIL"/>
-      </flowable:properties>
-    </extensionElements>
-    <startEvent id="start" name="提交申请"${formAttribute}/>
-    <sequenceFlow id="flow_start_review" sourceRef="start" targetRef="review"/>
-    <userTask id="review" name="审批">
-      <extensionElements>
-        <flowable:properties>
-          <flowable:property name="approva.assignment.ruleVersion" value="1"/>
-          <flowable:property name="approva.assignment.type" value="STARTER"/>
-          <flowable:property name="approva.assignment.targetIds" value=""/>
-          <flowable:property name="approva.assignment.formField" value=""/>
-          <flowable:property name="approva.assignment.noMatchPolicy" value="FAIL"/>
-        </flowable:properties>
-        <flowable:taskListener event="create" delegateExpression="\${userTaskListener}"/>
-        <flowable:taskListener event="assignment" delegateExpression="\${userTaskListener}"/>
-        <flowable:taskListener event="complete" delegateExpression="\${userTaskListener}"/>
-      </extensionElements>
-    </userTask>
-    <sequenceFlow id="flow_review_end" sourceRef="review" targetRef="end"/>
-    <endEvent id="end" name="结束"/>
-  </process>
-  <bpmndi:BPMNDiagram id="BPMNDiagram_${escapeXml(processId)}">
-    <bpmndi:BPMNPlane id="BPMNPlane_${escapeXml(processId)}" bpmnElement="${escapeXml(processId)}">
-      <bpmndi:BPMNShape id="start_di" bpmnElement="start"><dc:Bounds x="160" y="172" width="36" height="36"/></bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="review_di" bpmnElement="review"><dc:Bounds x="270" y="150" width="100" height="80"/></bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="end_di" bpmnElement="end"><dc:Bounds x="450" y="172" width="36" height="36"/></bpmndi:BPMNShape>
-      <bpmndi:BPMNEdge id="flow_start_review_di" bpmnElement="flow_start_review"><di:waypoint x="196" y="190"/><di:waypoint x="270" y="190"/></bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="flow_review_end_di" bpmnElement="flow_review_end"><di:waypoint x="370" y="190"/><di:waypoint x="450" y="190"/></bpmndi:BPMNEdge>
-    </bpmndi:BPMNPlane>
-  </bpmndi:BPMNDiagram>
-</definitions>`
 }
 
 /**
@@ -617,7 +552,7 @@ function isUserTaskOnlyProperty(name) {
 
 /**
  * 导入外部 XML；失败时清空旧图并向页面报告错误。
- * @param {string} xml BPMN XML，为空时创建初始流程。
+ * @param {string} xml 后端模型服务返回的正式 BPMN XML。
  * @returns {Promise<void>} 导入完成后更新撤销状态和 v-model。
  */
 async function importXml(xml) {
@@ -626,10 +561,7 @@ async function importXml(xml) {
   importing = true
   loading.value = true
   try {
-    const rawSource = xml?.trim() ? xml : createInitialXml()
-    // 旧模型可能只有 sequenceFlow.sourceRef/targetRef，必须补齐 FlowNode 反向引用后再交给命令栈。
-    const source = normalizeSequenceFlowReferences(rawSource)
-    await modeler.importXML(source)
+    await modeler.importXML(xml)
     applyDesignerPreference()
     refreshControlledLoopOverlays()
     fitViewport()
@@ -643,23 +575,6 @@ async function importXml(xml) {
     importing = false
     loading.value = false
     updateCommandState()
-  }
-}
-
-/**
- * 修复 keep-alive 页签中仍保留的旧版顺序流内存引用。
- * @returns {Promise<void>} 当前画布缺少 incoming/outgoing 时以完整 XML 重建；正常画布不产生变更。
- */
-async function repairCachedSequenceFlowReferences() {
-  if (!modeler || importing || designerLocked.value) return
-  try {
-    // cachedXml 是当前画布的完整快照，包含尚未保存的用户编辑，不能回退为服务端旧 XML。
-    const { xml: cachedXml } = await modeler.saveXML({ format: true })
-    const normalizedXml = normalizeSequenceFlowReferences(cachedXml)
-    if (normalizedXml === cachedXml) return
-    await importXml(normalizedXml)
-  } catch (error) {
-    emit('error', error)
   }
 }
 
@@ -704,21 +619,6 @@ async function emitXmlChange(notifyChange) {
 }
 
 /**
- * 导出可持久化 XML，并自动补齐后台任务身份审计监听器。
- * @returns {Promise<string>} 已满足后端保存门禁的 BPMN XML。
- */
-async function emitPersistedXml() {
-  const rawXml = await emitXmlChange(false)
-  const persistedXml = normalizeTaskListenerXml(rawXml)
-  if (persistedXml !== rawXml) {
-    // 持久化快照必须回写给父页面，避免保存请求和页面状态使用不同 XML。
-    lastExportedXml.value = persistedXml
-    emit('update:modelValue', persistedXml)
-  }
-  return persistedXml
-}
-
-/**
  * 选择画布元素并加载对应属性。
  * @param {object|undefined} element bpmn-js 图形元素。
  * @returns {void} 无返回值。
@@ -745,12 +645,6 @@ function loadPropertyState(element) {
   propertyState.embeddedFields = readEmbeddedFormFields(businessObject)
   propertyState.formSource = propertyState.embeddedFields.length ? 'EMBEDDED' : 'TEMPLATE'
   loadFormPermissionState(businessObject)
-  propertyState.assignee = businessObject.get('flowable:assignee') || ''
-  propertyState.candidateUsers = splitValues(businessObject.get('flowable:candidateUsers'))
-  propertyState.candidateGroups = splitValues(businessObject.get('flowable:candidateGroups'))
-  propertyState.assignmentType = propertyState.candidateGroups.length
-    ? 'groups'
-    : propertyState.candidateUsers.length ? 'users' : 'assignee'
   propertyState.dueDate = businessObject.get('flowable:dueDate') || ''
   propertyState.priority = businessObject.get('flowable:priority') || ''
   propertyState.taskCategory = businessObject.get('flowable:category') || ''
@@ -818,13 +712,8 @@ function loadPropertyState(element) {
       const configuredIdentity = readConfiguredMultiInstanceIdentity(businessObject)
       propertyState.multiInstanceMemberSource = isConfiguredMultiInstanceLoop(loop)
         ? (configuredIdentity?.source || '')
-        : isFixedMultiInstanceLoop(loop)
-          ? 'user'
-          : isStartMultiInstanceLoop(loop) ? 'start' : 'dynamic'
-      // 旧固定用户表达式只在回读时兼容；设计者下一次修改会迁移为统一受控属性。
-      propertyState.configuredMultiInstanceIdentityIds = isFixedMultiInstanceLoop(loop)
-        ? readFixedMultiInstanceUserIds(loop)
-        : (configuredIdentity?.selectionValues || [])
+        : isStartMultiInstanceLoop(loop) ? 'start' : 'dynamic'
+      propertyState.configuredMultiInstanceIdentityIds = configuredIdentity?.selectionValues || []
       propertyState.multiInstanceApprovalMode = controlledMultiInstanceApprovalMode(loop)
     } else {
       propertyState.multiInstanceType = loop.isSequential ? 'sequential' : 'parallel'
@@ -901,7 +790,6 @@ function typeLabel(type) {
     'bpmn:EndEvent': '结束节点',
     'bpmn:UserTask': '用户任务',
     'bpmn:ServiceTask': '服务任务',
-    'bpmn:ManualTask': '手工任务',
     'bpmn:ReceiveTask': '接收任务',
     'bpmn:SendTask': '发送任务',
     'bpmn:BusinessRuleTask': '业务规则任务',
@@ -1318,7 +1206,7 @@ async function exportDiagram(format) {
       Download.saveAs(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }), `${name}.svg`)
       return
     }
-    const xml = await emitPersistedXml()
+    const xml = await emitXmlChange(false)
     const extension = format === 'xml' ? 'xml' : 'bpmn20.xml'
     Download.saveAs(new Blob([xml], { type: 'application/xml;charset=utf-8' }), `${name}.${extension}`)
   } catch (error) {
@@ -1354,7 +1242,7 @@ function xmlElementToJson(element) {
 async function openPreview(format) {
   if (designerLocked.value) return
   try {
-    const xml = await emitPersistedXml()
+    const xml = await emitXmlChange(false)
     previewTitle.value = format === 'json' ? 'JSON 预览' : 'XML 预览'
     if (format === 'json') {
       const documentNode = new DOMParser().parseFromString(xml, 'application/xml')
@@ -1393,7 +1281,7 @@ async function runServerValidation(showResult, sourceXml = '') {
   if (props.saving) return false
   validating.value = true
   try {
-    const xml = sourceXml || await emitPersistedXml()
+    const xml = sourceXml || await emitXmlChange(false)
     const response = await validateModelBpmn(xml)
     const report = response.data || {}
     const issues = Array.isArray(report.issues) ? [...report.issues] : []
@@ -1654,7 +1542,7 @@ async function requestSave() {
     const error = validateDiagram()
     if (error) throw new Error(error)
     // 保存窗口只序列化一次，服务端校验与正式保存必须使用同一内容快照。
-    const persistedXml = await emitPersistedXml()
+    const persistedXml = await emitXmlChange(false)
     const serverValid = await runServerValidation(false, persistedXml)
     if (!serverValid) {
       validationVisible.value = true
@@ -1870,7 +1758,6 @@ const extensionEventSlaDomain = createExtensionEventSlaDomain({
 })
 
 const {
-  assignmentOptions,
   multiInstanceOptions,
   multiInstanceApprovalOptions,
   controlledLoopFieldOptions,
@@ -1884,16 +1771,12 @@ const {
   controlledMultiInstanceApprovalMode,
   isStartMultiInstanceLoop,
   isConfiguredMultiInstanceLoop,
-  isFixedMultiInstanceLoop,
-  readFixedMultiInstanceUserIds,
   readConfiguredMultiInstanceIdentity,
-  splitValues,
   loadFormPermissionState,
   updateFormSource,
   updateFormKey,
   updateEmbeddedForm,
   updateFormPermissions,
-  updateAssignment,
   updateParticipantRule,
   updateUserTaskProperties,
   updateMultiInstance,
@@ -1961,7 +1844,7 @@ watch(() => props.modelValue, value => {
   if (value && value !== lastExportedXml.value && modeler) importXml(value)
 })
 /**
- * 在服务端偏好回写后同步设计器插件与布局尺寸。
+ * 在偏好属性更新后同步设计器插件与布局尺寸。
  * @returns {void} 关闭设置抽屉并安排一次画布视口重算。
  */
 watch(() => props.preference, () => {
@@ -1972,7 +1855,6 @@ watch(() => props.preference, () => {
 watch(designerLocked, handleDesignerLock)
 onActivated(() => {
   bindDesignerLifecycleListeners()
-  repairCachedSequenceFlowReferences()
 })
 onDeactivated(unbindDesignerLifecycleListeners)
 

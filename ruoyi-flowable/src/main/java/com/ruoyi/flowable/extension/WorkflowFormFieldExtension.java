@@ -70,20 +70,19 @@ public final class WorkflowFormFieldExtension
      * 把固定多行文本渲染配置和精确扩展版本写入部署表单组件。
      * @param property FormProperty，已通过变量、读写和表达式校验的 BPMN 字段
      * @param component ObjectNode，当前正式表单协议组件
-     * @param config ObjectNode，组件 __config__ 配置
      * @param option WorkflowExtensionOptionView，已校验的精确扩展版本
      * @return void，直接补齐传入组件的安全渲染与版本元数据
      */
-    public static void configure(FormProperty property, ObjectNode component, ObjectNode config,
+    public static void configure(FormProperty property, ObjectNode component,
             WorkflowExtensionOptionView option)
     {
         WorkflowExtensionOptionView installed = requireInstalled(option);
         // 渲染组件由服务端代码固定，数据库目录只能选择版本，不能注入任意前端组件。
-        config.put("tag", "el-input");
-        config.put(EXTENSION_KEY_FIELD, installed.extensionKey());
-        config.put(VERSION_FIELD, installed.versionNo());
-        config.put(IMPLEMENTATION_FIELD, installed.implementationKey());
-        config.put(CHECKSUM_FIELD, installed.checksum());
+        component.put("tag", "el-input");
+        component.put(EXTENSION_KEY_FIELD, installed.extensionKey());
+        component.put(VERSION_FIELD, installed.versionNo());
+        component.put(IMPLEMENTATION_FIELD, installed.implementationKey());
+        component.put(CHECKSUM_FIELD, installed.checksum());
         component.put("type", "textarea");
         component.put("rows", 4);
         component.put("maxlength", 4096);

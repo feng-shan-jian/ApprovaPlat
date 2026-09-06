@@ -58,7 +58,7 @@ await submitProcessDraft(created.data.draftId, {
 
 - 渲染面固定为服务端白名单中的组件和静态属性；模板 URL、事件和脚本在规范化阶段过滤。
 - `workflowHidden` 字段从页面模型中排除，`workflowWritable=false` 字段只回显；服务端授权继续作为最终字段门禁。
-- 同时读取嵌套 `__config__/__vModel__` 快照和 Vue 3 生成器平面字段，两种正式模板格式均可编辑并规范化。
+- 只读取唯一平面表单 Schema；`layout`、`tag`、`vModel`、`children` 和字段权限直接属于组件对象，旧嵌套格式由后端明确拒绝。
 - 附件上传后仅保存 UUID 和安全元数据；绑定、过期、所有者和字段一致性由后端事务强制校验。
 - 草稿保存调用 `ensureAttachmentsIdle()` 检查附件状态，正式提交调用 `validate()` 执行完整必填校验；两种动作都等待附件写请求完成后读取稳定值。
 - 行容器中的附件字段会逐层透传真实字段名和忙碌状态，上传或删除完成后立即解除提交门禁。

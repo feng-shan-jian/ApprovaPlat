@@ -25,8 +25,10 @@ export function createDesignerFormFieldCatalog(context = {}) {
    */
   function resolveTemplateForm(source) {
     const formKey = typeof source === 'string' ? source : source?.get?.('flowable:formKey') || ''
-    const formId = Number(String(formKey).replace(/^key_/, ''))
-    return readCatalogSource(forms).find(item => Number(item.formId) === formId)
+    const match = /^key_([1-9]\d{0,18})$/.exec(String(formKey).trim())
+    if (!match) return undefined
+    const formId = match[1]
+    return readCatalogSource(forms).find(item => String(item.formId) === formId)
   }
 
   /**
@@ -54,13 +56,12 @@ export function createDesignerFormFieldCatalog(context = {}) {
 
   /**
    * 递归读取正式模板字段，不施加任何消费者类型或权限规则。
-   * @param {string|object} content 正式 wf_form 模板内容。
-   * @param {boolean} allowObject 是否兼容权限编辑器使用的已解析模板对象。
+   * @param {string} content 正式 wf_form 模板字符串内容。
    * @returns {Array<{source:string,variable:string,field:object}>} 保持模板顺序且保留重名业务字段的中性描述。
    */
-  function readTemplateFieldDescriptors(content, allowObject = false) {
+  function readTemplateFieldDescriptors(content) {
     try {
-      const root = allowObject && content && typeof content === 'object' ? content : JSON.parse(content)
+      const root = JSON.parse(content)
       const descriptors = []
 
       /**
@@ -70,9 +71,9 @@ export function createDesignerFormFieldCatalog(context = {}) {
        */
       const visit = fields => {
         for (const field of Array.isArray(fields) ? fields : []) {
-          const variable = String(field?.__vModel__ || '').trim()
+          const variable = String(field?.vModel || '').trim()
           if (variable) descriptors.push({ source: 'TEMPLATE', variable, field })
-          visit(field?.__config__?.children)
+          visit(field?.children)
         }
       }
       visit(root?.fields)
@@ -99,14 +100,13 @@ export function createDesignerFormFieldCatalog(context = {}) {
   /**
    * 复用正式用户字段资格规则生成指定元素的用户主键字段目录。
    * @param {object|string|Array<object>|undefined} source BPMN 业务对象、formKey 或已编辑内嵌字段。
-   * @param {{configured?:boolean,defaultMode?:string,permissions?:Map<string,string>}|undefined} permissionPolicy 消费者解析的节点字段权限。
+   * @param {{defaultMode?:string,permissions?:Map<string,string>}|undefined} permissionPolicy 消费者解析的强制节点字段权限。
    * @returns {Array<{value:string,label:string,eligible:boolean,signature:string}>} 保持字段顺序的完整资格目录。
    */
   function resolveUserIdFieldCatalog(source, permissionPolicy) {
     const embedded = Array.isArray(source) ? source : readEmbeddedFormFields(source)
     if (Array.isArray(source) || embedded.length) {
       const customTypes = new Set(readCatalogSource(formFieldOptions)
-        .filter(option => option?.implementationKey === 'FORM_FIELD_TEXTAREA_V1')
         .map(option => `custom:${option.extensionKey}`))
       return createEmbeddedUserIdFieldCatalog(embedded, customTypes)
     }

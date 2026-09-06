@@ -93,50 +93,6 @@ public class WorkflowMultiInstanceHandler
     }
 
     /**
-     * 从 BPMN 固定集合参数解析成员并在进入节点时重新核验正式审批资格。
-     *
-     * @param execution DelegateExecution，Flowable 正在创建固定多实例根的执行上下文。
-     * @param fixedUserIdsText String，设计器按受控 BPMN 集合表达式传入的逗号分隔用户主键。
-     * @return List<String> 保持配置顺序、全部有效且具备审批资格的用户主键。
-     */
-    public List<String> getFixedUserIds(DelegateExecution execution, String fixedUserIdsText)
-    {
-        if (execution == null || fixedUserIdsText == null || fixedUserIdsText.isBlank())
-        {
-            throw invalidArgument();
-        }
-        String activityId;
-        WorkflowMultiInstanceMode mode;
-        try
-        {
-            activityId = WorkflowMultiInstanceVariables.requireActivityId(
-                    execution.getCurrentActivityId());
-            mode = WorkflowMultiInstanceModelContract.requireMode(
-                    execution.getCurrentFlowElement());
-        }
-        catch (IllegalArgumentException exception)
-        {
-            throw invalidArgument();
-        }
-        WorkflowMultiInstanceTransitionMembers transition =
-                resolveTransitionInstruction(execution,
-                activityId, mode);
-        if (transition != null && !transition.refreshAuthoritative())
-        {
-            return transition.overrideMembers();
-        }
-        List<Long> requestedUserIds = requireFixedUserIds(fixedUserIdsText);
-        List<String> activeUserIds = userSelectionValidator.requireApprovalEligibleUserIds(
-                requestedUserIds);
-        if (activeUserIds.isEmpty())
-        {
-            throw invalidArgument();
-        }
-        return initializeMemberState(execution, activityId, mode, activeUserIds,
-                transition != null);
-    }
-
-    /**
      * 从发起服务写入的活动专属保留变量解析正式成员并初始化统一多实例状态。
      *
      * @param execution DelegateExecution，Flowable 正在创建多实例根的执行上下文。
@@ -427,55 +383,6 @@ public class WorkflowMultiInstanceHandler
             throw invalidArgument();
         }
         return new ArrayList<>(orderedUserIds);
-    }
-
-    /**
-     * 严格解析固定集合表达式传入的逗号分隔用户主键，拒绝空值、前导零和重复成员。
-     *
-     * @param fixedUserIdsText String，BPMN 固定集合表达式中的原始成员主键文本。
-     * @return List<Long> 1 至 100 名保持作者顺序的规范正整数用户主键。
-     */
-    private List<Long> requireFixedUserIds(String fixedUserIdsText)
-    {
-        String[] rawUserIds = fixedUserIdsText.split(",", -1);
-        if (rawUserIds.length == 0
-                || rawUserIds.length > WorkflowUserSelectionValidator.MAX_SELECTED_USERS)
-        {
-            throw invalidArgument();
-        }
-        LinkedHashSet<Long> orderedUserIds = new LinkedHashSet<>();
-        for (String rawUserId : rawUserIds)
-        {
-            long userId = requirePositiveUserId(rawUserId);
-            if (!orderedUserIds.add(userId))
-            {
-                throw invalidArgument();
-            }
-        }
-        return new ArrayList<>(orderedUserIds);
-    }
-
-    /**
-     * 解析单个固定成员主键，确保运行时输入保持与部署时完全一致的规范格式。
-     *
-     * @param rawUserId String，固定集合中的单个用户主键文本。
-     * @return long 规范正整数用户主键。
-     */
-    private long requirePositiveUserId(String rawUserId)
-    {
-        try
-        {
-            long userId = Long.parseLong(rawUserId);
-            if (userId <= 0 || !Long.toString(userId).equals(rawUserId))
-            {
-                throw invalidArgument();
-            }
-            return userId;
-        }
-        catch (NumberFormatException exception)
-        {
-            throw invalidArgument();
-        }
     }
 
     /**

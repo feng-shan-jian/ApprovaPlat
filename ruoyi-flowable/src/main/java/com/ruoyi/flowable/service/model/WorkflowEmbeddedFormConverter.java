@@ -145,36 +145,35 @@ public final class WorkflowEmbeddedFormConverter
         String type = rawType.toLowerCase(Locale.ROOT);
 
         ObjectNode component = JsonNodeFactory.instance.objectNode();
-        ObjectNode config = component.putObject("__config__");
-        config.put("label", label);
-        config.put("layout", "colFormItem");
-        config.put("span", 24);
-        config.put("required", property.isRequired() && property.isWriteable());
-        config.put("workflowReadable", property.isReadable());
-        config.put("workflowWritable", property.isWriteable());
+        component.put("label", label);
+        component.put("layout", "colFormItem");
+        component.put("span", 24);
+        component.put("required", property.isRequired() && property.isWriteable());
+        component.put("workflowReadable", property.isReadable());
+        component.put("workflowWritable", property.isWriteable());
         // 不可读且不可写是节点隐藏语义；写入权限仍由 workflowWritable 在服务端强制执行。
-        config.put("workflowHidden", !property.isReadable() && !property.isWriteable());
-        component.put("__vModel__", variable);
+        component.put("workflowHidden", !property.isReadable() && !property.isWriteable());
+        component.put("vModel", variable);
         component.put("disabled", !property.isWriteable());
 
         switch (type)
         {
             case "string" ->
             {
-                config.put("tag", "el-input");
+                component.put("tag", "el-input");
                 component.put("maxlength", 4096);
                 component.put("clearable", true);
             }
             case "long", "integer" ->
             {
-                config.put("tag", "el-input-number");
+                component.put("tag", "el-input-number");
                 // 将 Flowable FormData 的整数类型冻结到部署表单协议，服务端据此拒绝小数和越界值。
-                config.put("workflowNumberType", type);
+                component.put("workflowNumberType", type);
             }
-            case "boolean" -> config.put("tag", "el-switch");
-            case "date" -> configureDate(property, component, config);
-            case "enum" -> configureEnum(property, component, config);
-            default -> configureCustomField(property, component, config, rawType,
+            case "boolean" -> component.put("tag", "el-switch");
+            case "date" -> configureDate(property, component);
+            case "enum" -> configureEnum(property, component);
+            default -> configureCustomField(property, component, rawType,
                     customFieldResolver);
         }
         return component;
@@ -184,13 +183,12 @@ public final class WorkflowEmbeddedFormConverter
      * 解析 custom: 扩展类型并应用服务端固定渲染实现。
      * @param property FormProperty，当前 BPMN 内嵌字段
      * @param component ObjectNode，待补齐的正式表单组件
-     * @param config ObjectNode，组件 __config__ 配置
      * @param type String，已规范为小写的 BPMN 字段类型
      * @param customFieldResolver Function&lt;String, WorkflowExtensionOptionView&gt;，正式目录解析器
      * @return void，不受控类型或目录异常时抛出稳定业务异常
      */
     private static void configureCustomField(FormProperty property, ObjectNode component,
-            ObjectNode config, String type,
+            String type,
             Function<String, WorkflowExtensionOptionView> customFieldResolver)
     {
         if (!type.regionMatches(true, 0, WorkflowFormFieldExtension.TYPE_PREFIX, 0,
@@ -205,7 +203,7 @@ public final class WorkflowEmbeddedFormConverter
             throw invalid("BPMN 内嵌表单自定义字段标识不合法");
         }
         WorkflowExtensionOptionView option = customFieldResolver.apply(extensionKey);
-        WorkflowFormFieldExtension.configure(property, component, config, option);
+        WorkflowFormFieldExtension.configure(property, component, option);
     }
 
     /**
@@ -213,13 +211,11 @@ public final class WorkflowEmbeddedFormConverter
      *
      * @param property FormProperty，包含可选 datePattern 的 BPMN 字段
      * @param component ObjectNode，待补充的组件节点
-     * @param config ObjectNode，组件 __config__ 节点
      * @return void，格式非法时抛出 400 业务异常
      */
-    private static void configureDate(FormProperty property, ObjectNode component,
-            ObjectNode config)
+    private static void configureDate(FormProperty property, ObjectNode component)
     {
-        config.put("tag", "el-date-picker");
+        component.put("tag", "el-date-picker");
         component.put("type", "date");
         component.put("clearable", true);
         String datePattern = hasText(property.getDatePattern())
@@ -238,22 +234,19 @@ public final class WorkflowEmbeddedFormConverter
      *
      * @param property FormProperty，包含静态 FormValue 的 BPMN 字段
      * @param component ObjectNode，待补充的组件节点
-     * @param config ObjectNode，组件 __config__ 节点
      * @return void，选项为空、重复或超限时抛出 400 业务异常
      */
-    private static void configureEnum(FormProperty property, ObjectNode component,
-            ObjectNode config)
+    private static void configureEnum(FormProperty property, ObjectNode component)
     {
         List<FormValue> values = property.getFormValues();
         if (values == null || values.isEmpty() || values.size() > MAX_ENUM_VALUES)
         {
             throw invalid("BPMN 内嵌枚举字段必须配置受限静态选项");
         }
-        config.put("tag", "el-select");
-        config.put("workflowEnum", true);
+        component.put("tag", "el-select");
+        component.put("workflowEnum", true);
         component.put("clearable", true);
-        ObjectNode slot = component.putObject("__slot__");
-        ArrayNode options = slot.putArray("options");
+        ArrayNode options = component.putArray("options");
         Set<String> optionIds = new HashSet<>();
         for (FormValue value : values)
         {

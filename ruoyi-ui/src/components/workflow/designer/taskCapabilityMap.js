@@ -3,8 +3,7 @@ export const TASK_PANEL_TYPES = Object.freeze({
   SERVICE: 'SERVICE_TASK',
   SEND: 'SEND_TASK',
   RECEIVE: 'RECEIVE_TASK',
-  BUSINESS_RULE: 'BUSINESS_RULE_TASK',
-  MANUAL_WARNING: 'MANUAL_TASK_WARNING'
+  BUSINESS_RULE: 'BUSINESS_RULE_TASK'
 })
 
 /**
@@ -47,10 +46,6 @@ export const taskCapabilityMap = Object.freeze({
   'bpmn:BusinessRuleTask': taskCapability(
     'bpmn:BusinessRuleTask', true, true, TASK_PANEL_TYPES.BUSINESS_RULE,
     '执行作者选择的精确 DMN 来源版本；部署时生成同部署冻结副本，不跟随目录最新版漂移。'
-  ),
-  'bpmn:ManualTask': taskCapability(
-    'bpmn:ManualTask', false, false, TASK_PANEL_TYPES.MANUAL_WARNING,
-    '仅为历史 BPMN 兼容保留；该元素不会生成平台待办，也没有平台内办理闭环。'
   )
 })
 

@@ -27,7 +27,6 @@ import org.flowable.bpmn.model.StartEvent;
 import org.flowable.common.engine.api.FlowableException;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.ProcessDefinition;
-import org.flowable.identitylink.api.IdentityLink;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -45,6 +44,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfFormMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 
 /**
  * 管理调用活动的授权目录、作者配置校验、精确版本编译和部署依赖快照。
@@ -76,6 +76,7 @@ public class WorkflowCallActivityReferenceService
     private final RepositoryService repositoryService;
     private final WorkflowEngineOperations engineOperations;
     private final WorkflowIdentityResolver identityResolver;
+    private final WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WfFormMapper formMapper;
     private final WorkflowFormTemplateValidator formTemplateValidator;
@@ -87,6 +88,7 @@ public class WorkflowCallActivityReferenceService
      * @param repositoryService RepositoryService，Flowable 定义与 BPMN 公共 API
      * @param engineOperations WorkflowEngineOperations，统一事务和异常边界
      * @param identityResolver WorkflowIdentityResolver，当前用户及候选组解析器
+     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，正式发起范围快照判定器
      * @param artifactRepository WorkflowDeploymentArtifactRepository，部署业务资源仓库
      * @param formMapper WfFormMapper，父模型作者表单 Mapper
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单结构安全校验器
@@ -94,12 +96,14 @@ public class WorkflowCallActivityReferenceService
      */
     public WorkflowCallActivityReferenceService(RepositoryService repositoryService,
             WorkflowEngineOperations engineOperations, WorkflowIdentityResolver identityResolver,
+            WorkflowParticipantRuleRuntimeService participantRuleRuntimeService,
             WorkflowDeploymentArtifactRepository artifactRepository, WfFormMapper formMapper,
             WorkflowFormTemplateValidator formTemplateValidator)
     {
         this.repositoryService = repositoryService;
         this.engineOperations = engineOperations;
         this.identityResolver = identityResolver;
+        this.participantRuleRuntimeService = participantRuleRuntimeService;
         this.artifactRepository = artifactRepository;
         this.formMapper = formMapper;
         this.formTemplateValidator = formTemplateValidator;
@@ -496,31 +500,15 @@ public class WorkflowCallActivityReferenceService
     }
 
     /**
-     * 判断流程定义对当前设计者是否公开或存在匹配的用户、角色、部门发起权限。
+     * 使用正式部署发起范围快照判断当前设计者是否有权引用子流程定义。
      * @param definition ProcessDefinition，待判定子流程定义
      * @param actor WorkflowCurrentIdentity，当前用户及候选组
-     * @return boolean，无 starter 限制或身份命中时返回 true
+     * @return boolean，正式发起范围命中时返回 true；快照缺失直接失败
      */
     private boolean isReferenceAllowed(ProcessDefinition definition, WorkflowCurrentIdentity actor)
     {
-        List<IdentityLink> links = repositoryService.getIdentityLinksForProcessDefinition(definition.getId());
-        if (links == null)
-        {
-            throw dataError("子流程引用权限数据异常");
-        }
-        if (links.isEmpty())
-        {
-            return true;
-        }
-        for (IdentityLink link : links)
-        {
-            if (link != null && (actor.userId().equals(link.getUserId())
-                    || actor.candidateGroups().contains(link.getGroupId())))
-            {
-                return true;
-            }
-        }
-        return false;
+        return Boolean.TRUE.equals(participantRuleRuntimeService
+                .canStartIfManaged(actor, definition));
     }
 
     /**
@@ -632,16 +620,15 @@ public class WorkflowCallActivityReferenceService
         }
         for (JsonNode field : nodes)
         {
-            JsonNode config = field.get("__config__");
-            String name = text(field, "__vModel__");
-            String tag = text(config, "tag");
+            String name = text(field, "vModel");
+            String tag = text(field, "tag");
             String type = fieldType(tag, field);
             if (hasText(name) && VARIABLE_PATTERN.matcher(name).matches() && type != null)
             {
-                String label = firstText(text(config, "label"), name);
-                boolean required = booleanValue(config, "required", false);
-                boolean readable = booleanValue(config, "workflowReadable", true);
-                boolean writable = booleanValue(config, "workflowWritable", true)
+                String label = firstText(text(field, "label"), name);
+                boolean required = booleanValue(field, "required", false);
+                boolean readable = booleanValue(field, "workflowReadable", false);
+                boolean writable = booleanValue(field, "workflowWritable", false)
                         && !booleanValue(field, "disabled", false);
                 FieldSpec candidate = new FieldSpec(name, label, type, required, readable, writable);
                 FieldSpec previous = fields.putIfAbsent(name, candidate);
@@ -650,7 +637,7 @@ public class WorkflowCallActivityReferenceService
                     throw dataError("流程表单包含同名异构字段");
                 }
             }
-            collectFieldSpecs(config == null ? null : config.get("children"), fields);
+            collectFieldSpecs(field.get("children"), fields);
         }
     }
 

@@ -103,7 +103,7 @@ class WorkflowTaskRevokeApplicationServiceIntegrationTest
         assertThat(taskService.createTaskQuery().taskId(
                 scenario.successorTaskId()).singleResult()).isNull();
         assertThat(taskService.getProcessInstanceComments(
-                scenario.processInstanceId(), "7"))
+                scenario.processInstanceId(), "REVOKE"))
                 .singleElement().satisfies(comment ->
                 {
                     assertThat(comment.getTaskId()).isEqualTo(

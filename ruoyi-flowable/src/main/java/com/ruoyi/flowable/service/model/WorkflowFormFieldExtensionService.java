@@ -129,7 +129,7 @@ public class WorkflowFormFieldExtensionService
             }
             ObjectNode object = (ObjectNode) node;
             String fieldId = current.fieldId();
-            JsonNode modelNode = object.get("__vModel__");
+            JsonNode modelNode = object.get("vModel");
             if (modelNode != null)
             {
                 if (!modelNode.isTextual() || modelNode.textValue().isBlank())
@@ -245,7 +245,7 @@ public class WorkflowFormFieldExtensionService
     /**
      * JSON 遍历节点及其所属表单字段变量上下文。
      * @param node JsonNode，当前待处理节点
-     * @param fieldId String，最近外层组件的 {@code __vModel__}，未知时为空
+     * @param fieldId String，最近外层组件的 {@code vModel}，未知时为空
      */
     private record FormJsonNode(JsonNode node, String fieldId)
     {

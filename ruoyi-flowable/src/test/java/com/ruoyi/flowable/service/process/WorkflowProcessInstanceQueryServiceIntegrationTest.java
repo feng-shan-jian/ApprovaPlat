@@ -82,11 +82,9 @@ class WorkflowProcessInstanceQueryServiceIntegrationTest
         processEngine.getIdentityService().setAuthenticatedUserId(CURRENT_USER_ID);
         try
         {
-            firstFinanceInstance = runtimeService.startProcessInstanceByKey(
-                    "financeProcess", "FINANCE-1");
-            secondFinanceInstance = runtimeService.startProcessInstanceByKey(
-                    "financeProcess", "FINANCE-2");
-            hrInstance = runtimeService.startProcessInstanceByKey("hrProcess", "HR-1");
+            firstFinanceInstance = start("financeProcess", "FINANCE-1");
+            secondFinanceInstance = start("financeProcess", "FINANCE-2");
+            hrInstance = start("hrProcess", "HR-1");
         }
         finally
         {
@@ -180,6 +178,55 @@ class WorkflowProcessInstanceQueryServiceIntegrationTest
     }
 
     /**
+     * 验证本人和管理员列表对活动、挂起及终态实例投影相反方向的正式动作能力。
+     *
+     * @return void，前端需要根据 status 补算取消、终止、状态动作或历史删除资格时测试失败
+     */
+    @Test
+    void projectsProcessActionCapabilitiesInBothDirections()
+    {
+        runtimeService.suspendProcessInstanceById(firstFinanceInstance.getId());
+        taskService.createTaskQuery().processInstanceId(hrInstance.getId()).list()
+                .forEach(task -> taskService.complete(task.getId()));
+
+        PageResult<WorkflowOwnedProcessView> owned = service.listOwned(null, 1, 20);
+        WorkflowOwnedProcessView runningOwned = owned.rows().stream()
+                .filter(row -> secondFinanceInstance.getId().equals(row.processInstanceId()))
+                .findFirst().orElseThrow();
+        WorkflowOwnedProcessView completedOwned = owned.rows().stream()
+                .filter(row -> hrInstance.getId().equals(row.processInstanceId()))
+                .findFirst().orElseThrow();
+        assertThat(runningOwned.cancelAllowed()).isTrue();
+        assertThat(runningOwned.terminateAllowed()).isFalse();
+        assertThat(runningOwned.stateAction()).isNull();
+        assertThat(runningOwned.historyDeleteAllowed()).isFalse();
+        assertThat(completedOwned.cancelAllowed()).isFalse();
+        assertThat(completedOwned.terminateAllowed()).isFalse();
+        assertThat(completedOwned.stateAction()).isNull();
+        assertThat(completedOwned.historyDeleteAllowed()).isFalse();
+
+        PageResult<WorkflowManagedProcessView> managed = service.listManaged(null, 1, 20);
+        WorkflowManagedProcessView suspendedManaged = managed.rows().stream()
+                .filter(row -> firstFinanceInstance.getId().equals(row.processInstanceId()))
+                .findFirst().orElseThrow();
+        WorkflowManagedProcessView runningManaged = managed.rows().stream()
+                .filter(row -> secondFinanceInstance.getId().equals(row.processInstanceId()))
+                .findFirst().orElseThrow();
+        WorkflowManagedProcessView completedManaged = managed.rows().stream()
+                .filter(row -> hrInstance.getId().equals(row.processInstanceId()))
+                .findFirst().orElseThrow();
+        assertThat(suspendedManaged.cancelAllowed()).isFalse();
+        assertThat(suspendedManaged.terminateAllowed()).isTrue();
+        assertThat(suspendedManaged.stateAction()).isEqualTo("ACTIVATE");
+        assertThat(suspendedManaged.historyDeleteAllowed()).isFalse();
+        assertThat(runningManaged.terminateAllowed()).isTrue();
+        assertThat(runningManaged.stateAction()).isEqualTo("SUSPEND");
+        assertThat(completedManaged.terminateAllowed()).isFalse();
+        assertThat(completedManaged.stateAction()).isNull();
+        assertThat(completedManaged.historyDeleteAllowed()).isTrue();
+    }
+
+    /**
      * 验证不存在的正式部署分类返回真实空页，且不会退化成全量实例或触发任务查询。
      *
      * @return void，空部署集合未短路时测试失败
@@ -251,6 +298,22 @@ class WorkflowProcessInstanceQueryServiceIntegrationTest
                 .listPage(0, 10).stream()
                 .map(Task::getName)
                 .toList();
+    }
+
+    /**
+     * 使用正式 businessStatus 启动真实测试实例，避免空状态夹具掩盖迁移门禁。
+     *
+     * @param processKey String，已部署流程定义 key
+     * @param businessKey String，当前测试业务主键
+     * @return ProcessInstance，带 running businessStatus 的活动实例
+     */
+    private ProcessInstance start(String processKey, String businessKey)
+    {
+        return runtimeService.createProcessInstanceBuilder()
+                .processDefinitionKey(processKey)
+                .businessKey(businessKey)
+                .businessStatus("running")
+                .start();
     }
 
     /**

@@ -28,9 +28,9 @@
 
 ## 表单值白名单
 
-详情以 Flowable 业务制品 `approvaplat/forms-v1.json` 中的 `content` 作为唯一表单来源。每个快照先通过 `WorkflowFormTemplateValidator` 的完整结构与组件白名单校验，再从组件 `__vModel__` 提取允许回显的字段名。
+详情以 Flowable 业务制品 `approvaplat/forms-v1.json` 中的 `content` 作为唯一表单来源。每个快照先通过 `WorkflowFormTemplateValidator` 的完整结构与组件白名单校验，再从平面组件字段 `vModel` 提取允许回显的字段名。
 
-已经提交的开始表单和历史任务表单直接读取提交时写入的固定内部字符串变量 `__ruoyi_workflow_form_submission_v1`。发起服务和任务完成服务把当时的安全字段投影编码到该变量：开始快照随流程发起原子写入，退回后重新提交保留同一开始表单的审计版本并以最后一次提交覆盖业务回显；任务快照始终以 task-local 变量写入并与真实 task ID 强关联。快照正文同时固化 deployment、form、node、task、业务字段作用域和值，读取时与 BPMN、部署表单及 Flowable 历史元数据逐项一致；身份冲突返回数据异常。
+已经提交的开始表单和历史任务表单直接读取提交时写入的固定内部字符串变量 `__ruoyi_workflow_form_submission_v2`。发起服务和任务完成服务使用显式 `sourceType` 把当时的安全字段投影编码到该变量：开始快照随流程发起原子写入，退回后重新提交保留同一开始表单的审计版本并以最后一次提交覆盖业务回显；任务快照始终以 task-local 变量写入并与真实 task ID 强关联。快照正文同时固化 deployment、form、node、task、业务字段作用域和值，读取时与 BPMN、部署表单及 Flowable 历史元数据逐项一致；身份冲突返回数据异常。
 
 参数化 MyBatis 两阶段查询直接替换 `HistoricDetailQuery` 的全历史扫描。第一阶段在数据库层限定流程实例和固定内部变量名，完整读取 `VariableUpdate`、`VAR_TYPE_`、`BYTEARRAY_ID_`、正文存在性及物理字节统计，并以 10001 行探针识别超限；全部元数据和累计容量通过后，第二阶段按已验证主键读取正文。真实历史更新中的 `string` 允许 `TEXT_` 或序列化 Blob 两种互斥存储，`longString` 只允许序列化 Blob；Blob 使用仅恢复单个 `String` 的 `ObjectInputFilter`。
 
@@ -38,15 +38,15 @@
 
 通过上述数据库门禁取得的快照继续执行严格重复字段检测、固定结构、受限 JSON 类型、深度/节点/容器/文本/总字节门禁；损坏、重复或关联矛盾会使整个详情失败。`snapshotTime` 直接取对应 `ACT_HI_DETAIL.TIME_`，作为提交时间的唯一来源。
 
-因此，后续节点覆盖同名全局字段时，前序节点已经提交的历史值保持不变；多个 `localScope` 任务的同名字段按 task ID 隔离。存在正式内部提交快照的表单进入历史详情；缺少快照的记录由页面标记缺失并默认展示流程图。
+因此，后续节点覆盖同名全局字段时，前序节点已经提交的历史值保持不变；多个 `localScope` 任务的同名字段按 task ID 隔离。强制开始或任务提交快照缺失时，详情按数据一致性异常失败关闭。
 
 `formDetail.applicationForm` 直接表达唯一正式开始提交：普通态保持 `taskId=null`，退回申请态绑定
-当前活动任务；不存在时返回 null 并令 `applicationMissing=true`。`nodeTaskForm` 只表达本次请求
+当前活动任务；缺失时拒绝详情。`nodeTaskForm` 只表达本次请求
 UserTask，退回申请态固定为空。`historyForms` 只含正式历史 UserTask 提交，并排除本次请求的
 `currentTask.taskId`，避免历史任务详情重复显示。
 
 `formDetail` 是流程详情唯一的表单协议。`WorkflowProcessFormDetailProjection` 只向详情编排器返回
-该对象，不再暴露顶层表单别名；前端直接消费五个正式字段，服务端继续在同一次投影中维护部署制品、
+该对象，不再暴露顶层表单别名；前端直接消费四个正式字段，服务端继续在同一次投影中维护部署制品、
 Mapper、Flowable 历史和当前变量的一致性。
 
 请求明确指向活动任务且该 BPMN 节点具有部署表单时，服务按部署 schema 查询当前变量并固定返回 `snapshotTime=null`：普通节点读取流程根变量，BPMN 节点声明 `localScope=true` 或 `localScope=1` 时读取当前 task ID 的局部变量。历史详情直接使用正式提交快照。响应字段白名单排除 `initiator`、`processStatus`、多实例计数、Flowable 跳过标志和所有 `__ruoyi_workflow_` 保留变量。

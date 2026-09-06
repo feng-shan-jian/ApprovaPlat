@@ -91,8 +91,11 @@ export function getProcessForm(query) {
  */
 export function deleteProcessInstances(processInstanceIds) {
   const ids = Array.isArray(processInstanceIds) ? processInstanceIds : [processInstanceIds]
-  const pathIds = ids.map(id => encodeURIComponent(id)).join(',')
-  return request({ url: `/workflow/process/instance/${pathIds}`, method: 'delete' })
+  return request({
+    url: '/workflow/process/instances/delete',
+    method: 'post',
+    data: { instanceIds: ids }
+  })
 }
 
 /**

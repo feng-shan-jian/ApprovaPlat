@@ -23,6 +23,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -45,7 +46,7 @@ import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 public class WorkflowAttachmentService
 {
     /** 单次表单提交允许引用的附件总数，防止跨字段放大查询和变量正文。 */
-    static final int MAX_FORM_ATTACHMENTS = 100;
+    public static final int MAX_FORM_ATTACHMENTS = 100;
 
     /** 表单字段名与流程变量白名单使用同一稳定 ASCII 标识约束。 */
     private static final Pattern FIELD_NAME_PATTERN = Pattern.compile(
@@ -1374,6 +1375,64 @@ public class WorkflowAttachmentService
     {
         return new ServiceException("工作流附件状态已变化或已过期", HttpStatus.CONFLICT)
                 .setSubCode(STATE_CONFLICT_SUB_CODE);
+    }
+
+    /**
+     * 一次查询并校验流程详情中全部附件引用，返回不含内部存储键的正式元数据。
+     *
+     * @param processInstanceId String，已进入详情投影的流程实例主键
+     * @param fieldByAttachmentId Map&lt;String,String&gt;，附件 UUID 到正式表单字段名的唯一映射
+     * @return Map&lt;String,JsonNode&gt;，附件 UUID 到六项安全元数据的不可变映射
+     */
+    @Transactional(readOnly = true)
+    public Map<String, JsonNode> projectReadableBoundMetadata(String processInstanceId,
+            Map<String, String> fieldByAttachmentId)
+    {
+        if (!StringUtils.hasText(processInstanceId))
+        {
+            throw new ServiceException("流程实例主键不能为空", HttpStatus.BAD_REQUEST);
+        }
+        processAccessService.requireReadableInstance(processInstanceId.trim());
+        if (fieldByAttachmentId == null || fieldByAttachmentId.isEmpty())
+        {
+            return Map.of();
+        }
+        LinkedHashMap<String, String> expected = new LinkedHashMap<>();
+        fieldByAttachmentId.forEach((attachmentId, fieldName) -> expected.put(
+                requireAttachmentId(attachmentId), requireFieldName(fieldName)));
+        LinkedHashMap<String, JsonNode> projected = new LinkedHashMap<>();
+        List<String> attachmentIds = List.copyOf(expected.keySet());
+        for (int offset = 0; offset < attachmentIds.size(); offset += MAX_FORM_ATTACHMENTS)
+        {
+            // 详情可聚合多个合法历史提交，因此按单次最多 100 条分块查询并逐批校验。
+            List<String> batch = attachmentIds.subList(offset,
+                    Math.min(offset + MAX_FORM_ATTACHMENTS, attachmentIds.size()));
+            Set<String> batchIds = Set.copyOf(batch);
+            List<WfAttachment> rows = attachmentMapper.selectByIds(batch);
+            if (rows == null || rows.size() != batch.size())
+            {
+                throw new ServiceException("流程附件引用数据异常", HttpStatus.ERROR);
+            }
+            for (WfAttachment attachment : rows)
+            {
+                String expectedField = expected.get(attachment.attachmentId());
+                if (!batchIds.contains(attachment.attachmentId()) || expectedField == null
+                        || attachment.status() != WorkflowAttachmentStatus.BOUND
+                        || !processInstanceId.trim().equals(attachment.processInstanceId())
+                        || !expectedField.equals(attachment.fieldName())
+                        || attachment.boundTime() == null || attachment.storageDeletedTime() != null
+                        || projected.putIfAbsent(attachment.attachmentId(),
+                                toSafeVariableProjection(attachment)) != null)
+                {
+                    throw new ServiceException("流程附件对象、字段或状态不一致", HttpStatus.ERROR);
+                }
+            }
+        }
+        if (projected.size() != expected.size())
+        {
+            throw new ServiceException("流程附件引用数据异常", HttpStatus.ERROR);
+        }
+        return Collections.unmodifiableMap(projected);
     }
 
 }

@@ -33,8 +33,8 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 @Service
 public class WorkflowTaskRevokeApplicationService
 {
-    /** 撤回意见类型，与旧系统 FlowComment.REVOKE 保持兼容。 */
-    private static final String REVOKE_COMMENT_TYPE = "7";
+    /** 撤回任务的正式审计类型。 */
+    private static final String REVOKE_COMMENT_TYPE = "REVOKE";
 
     /** 撤回时允许一次冻结并原子合并的最大直接后继任务数量。 */
     private static final int MAX_ACTIVE_TASKS_FOR_REVOKE = 100;
@@ -212,7 +212,7 @@ public class WorkflowTaskRevokeApplicationService
     }
 
     /**
-     * 校验撤回来源由当前用户真实完成，并兼容旧历史缺少 completedBy。
+     * 校验撤回来源由当前用户通过正式 completedBy 字段真实完成。
      *
      * @param completedTask HistoricTaskInstance，已完成来源任务
      * @param actor WorkflowCurrentIdentity，事务内正式身份
@@ -222,10 +222,11 @@ public class WorkflowTaskRevokeApplicationService
             WorkflowCurrentIdentity actor)
     {
         String completedBy = completedTask.getCompletedBy();
-        boolean ownedByActor = actor.userId().equals(completedBy)
-                || (!StringUtils.hasText(completedBy)
-                        && actor.userId().equals(completedTask.getAssignee()));
-        if (!ownedByActor)
+        if (!StringUtils.hasText(completedBy))
+        {
+            throw dataError();
+        }
+        if (!actor.userId().equals(completedBy))
         {
             throw forbidden();
         }

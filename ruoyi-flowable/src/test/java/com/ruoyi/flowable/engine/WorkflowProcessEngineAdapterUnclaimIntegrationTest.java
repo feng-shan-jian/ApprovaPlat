@@ -110,10 +110,10 @@ class WorkflowProcessEngineAdapterUnclaimIntegrationTest
         assertThat(unclaimedTask.getAssignee()).isNull();
         assertThat(unclaimedTask.getClaimedBy()).isNull();
         assertThat(unclaimedTask.getClaimTime()).isNull();
-        List<Comment> comments = taskService.getTaskComments(task.getId(), "1");
+        List<Comment> comments = taskService.getTaskComments(task.getId(), "UNCLAIM");
         assertThat(comments).singleElement().satisfies(comment ->
         {
-            assertThat(comment.getType()).isEqualTo("1");
+            assertThat(comment.getType()).isEqualTo("UNCLAIM");
             assertThat(comment.getFullMessage()).contains("\"action\":\"UNCLAIM\"")
                     .contains("\"actorUserId\":\"100\"")
                     .contains("用户取消认领任务");

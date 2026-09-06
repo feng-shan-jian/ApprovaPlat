@@ -128,7 +128,6 @@
 </template>
 
 <script setup name="WorkflowProcessStart">
-import { getWorkflowAttachment } from '@/api/workflow/attachment'
 import {
   createProcessDraft,
   deleteProcessDraft,
@@ -140,7 +139,6 @@ import { getProcessBpmnXml, getProcessForm } from '@/api/workflow/process'
 import { listApprovalUserOptions } from '@/api/workflow/identity'
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
-import { flattenFormFields, normalizeFormTemplate } from '@/components/workflow/form/formTemplate'
 
 const route = useRoute()
 const router = useRouter()
@@ -266,29 +264,6 @@ async function loadNewContext() {
 }
 
 /**
- * 按不可变表单快照识别附件字段，并把服务端 UUID 水合为授权安全元数据。
- * @param {object} snapshot 草稿绑定的不可变部署表单快照。
- * @param {object} variables 草稿持久化字段值，附件字段为 UUID 数组。
- * @returns {Promise<object>} 可供表单组件回显的字段值副本。
- */
-async function hydrateDraftAttachments(snapshot, variables) {
-  const values = JSON.parse(JSON.stringify(variables || {}))
-  const fields = flattenFormFields(normalizeFormTemplate(snapshot.content).fields)
-  const attachmentFields = fields.filter(field => field.tag === 'el-upload')
-  for (const field of attachmentFields) {
-    const items = Array.isArray(values[field.variable]) ? values[field.variable] : []
-    values[field.variable] = await Promise.all(items.map(async item => {
-      if (item && typeof item === 'object' && item.attachmentId) return item
-      const attachmentId = String(item || '').trim()
-      if (!attachmentId) throw new Error(`${field.label || field.variable}包含无效附件标识`)
-      const response = await getWorkflowAttachment(attachmentId)
-      return response.data
-    }))
-  }
-  return values
-}
-
-/**
  * 使用草稿详情响应更新本页身份、状态、版本和不可变快照。
  * @param {object} draft 服务端草稿详情。
  * @param {boolean} replaceValues 是否同时替换页面业务字段和附件回显。
@@ -314,7 +289,7 @@ async function applyDraft(draft, replaceValues) {
   replaceFormSnapshot(snapshot)
   if (replaceValues) {
     businessKey.value = draft.businessKey || ''
-    formValues.value = await hydrateDraftAttachments(formSnapshot, draft.variables || {})
+    formValues.value = JSON.parse(JSON.stringify(draft.variables || {}))
     replaceMultiInstanceSelections(draft.multiInstanceUserIds)
     if (startAssignments.value.length) await searchApprovalUsers('')
   }

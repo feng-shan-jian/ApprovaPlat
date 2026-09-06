@@ -4,7 +4,7 @@
 
 `WorkflowProcessDefinitionQueryService` 负责可发起流程定义、部署表单快照和安全 BPMN 预览查询，并为草稿校验与正式发起提供同一套发起授权和部署制品读取边界。待办与历史任务由 `WorkflowProcessTaskQueryService` 查询，流程实例与抄送记录由 `WorkflowProcessInstanceQueryService` 查询。
 
-流程分类使用发布时冻结的 `Deployment.category`。受管发起范围以部署快照判定为权威结果：`true` 表示授权命中，`false` 表示授权范围未命中，决定缺席时使用 Flowable starter identity link 授权。
+流程分类使用发布时冻结的 `Deployment.category`。发起范围以部署快照判定为唯一权威结果：`true` 表示授权命中，`false` 表示授权范围未命中；决定或快照缺失时拒绝整个查询，不读取原生 starter identity link。
 
 ## 入口说明
 
@@ -28,13 +28,13 @@ HTTP 权限仍由 `WfProcessController` 的 `@PreAuthorize` 控制；服务内�
 | `WorkflowProcessAccessService` | 在实例预览场景执行对象级读取授权 |
 | `WorkflowDeploymentService` | 读取并校验 BPMN XML 的大小、编码、安全性和 Flowable 合法性 |
 | `WorkflowDeploymentArtifactRepository` | 读取不可变部署表单资源 `approvaplat/forms-v1.json` |
-| `WorkflowParticipantRuleRuntimeService` | 批量解析冻结的受管发起范围决定 |
+| `WorkflowParticipantRuleRuntimeService` | 批量解析覆盖全部定义的冻结发起范围决定 |
 
 包内 `WorkflowProcessQuerySupport` 集中提供分页、文本、时间、分类与稳定异常等无状态规则，并由各查询服务作为包内实现细节复用。
 
 ## 关键设计
 
-- 可发起列表先查询最新激活定义，再按固定 200 条分块装载并批量执行发起范围判定，确保公开定义与受管定义使用同一授权口径。
+- 可发起列表先查询最新激活定义，再按固定 200 条分块装载并批量执行发起范围判定，确保全部定义使用同一快照授权口径。
 - `getProcessForm` 以正式部署制品作为表单、字段权限和 BPMN 的唯一来源。
 - 正式发起通过 `loadStartFormInCurrentTransaction` 复用同一次 BPMN 读取结果，并以该结果生成表单和多实例配置。
 - 定义、部署、实例关系缺失或漂移时返回稳定错误，完整关系验证通过后才返回快照。

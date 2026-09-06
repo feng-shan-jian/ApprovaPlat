@@ -131,8 +131,8 @@ class WorkflowProcessInstanceTerminationIntegrationTest
             assertThat(activeTasks).hasSize(2);
             for (Task task : activeTasks)
             {
-                taskService.addComment(task.getId(), task.getProcessInstanceId(), "6",
-                        "{\"action\":\"CANCEL\"}");
+                taskService.addComment(task.getId(), task.getProcessInstanceId(), "CANCEL",
+                        "{\"action\":\"CANCEL\",\"actorUserId\":\"100\",\"opinion\":\"测试取消\"}");
             }
             return new WorkflowProcessInstanceService.RootTerminationInstruction(
                     "canceled: integration-test", null);
@@ -158,10 +158,14 @@ class WorkflowProcessInstanceTerminationIntegrationTest
                     .singleResult();
             assertThat(historicInstance).isNotNull();
             assertThat(historicInstance.getEndTime()).isNotNull();
+            assertThat(historicInstance.getBusinessStatus()).isEqualTo("canceled");
+            assertThat(historyService.createHistoricVariableInstanceQuery()
+                    .processInstanceId(instance.getId()).variableName("processStatus")
+                    .singleResult().getValue()).isEqualTo("canceled");
         }
         for (Task task : tasksBeforeSuspend)
         {
-            assertThat(taskService.getProcessInstanceComments(task.getProcessInstanceId(), "6"))
+            assertThat(taskService.getProcessInstanceComments(task.getProcessInstanceId(), "CANCEL"))
                     .anyMatch(comment -> task.getId().equals(comment.getTaskId()));
         }
     }

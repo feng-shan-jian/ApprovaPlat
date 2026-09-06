@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -19,6 +20,8 @@ import org.flowable.task.api.history.HistoricTaskInstance;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.JsonNodeFactory;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
@@ -26,6 +29,7 @@ import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
+import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec.SnapshotKind;
@@ -58,22 +62,28 @@ public class WorkflowProcessFormDetailProjection
 
     private final WorkflowProcessVariableProjection variableProjection;
 
+    /** 附件对象、字段和状态的单次批量校验与安全元数据投影服务。 */
+    private final WorkflowAttachmentService attachmentService;
+
     /**
      * 创建流程详情表单投影组件。
      *
      * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署表单资源仓库
      * @param formTemplateValidator WorkflowFormTemplateValidator，表单 schema 安全解析器
      * @param variableProjection WorkflowProcessVariableProjection，变量存储解码与安全投影组件
+     * @param attachmentService WorkflowAttachmentService，附件批量读取和对象门禁服务
      * @return 无返回值，构造后由 Spring 管理该组件
      */
     public WorkflowProcessFormDetailProjection(
             WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowFormTemplateValidator formTemplateValidator,
-            WorkflowProcessVariableProjection variableProjection)
+            WorkflowProcessVariableProjection variableProjection,
+            WorkflowAttachmentService attachmentService)
     {
         this.artifactRepository = artifactRepository;
         this.formTemplateValidator = formTemplateValidator;
         this.variableProjection = variableProjection;
+        this.attachmentService = attachmentService;
     }
 
     /**
@@ -103,9 +113,12 @@ public class WorkflowProcessFormDetailProjection
             Set<String> variableNames = formTemplateValidator.extractVariableNames(row.getContent());
             Set<String> readableVariableNames =
                     formTemplateValidator.extractReadableVariableNames(row.getContent());
+            Set<String> attachmentVariableNames =
+                    formTemplateValidator.extractAttachmentVariableNames(row.getContent());
             NodeFormKey key = new NodeFormKey(row.getNodeKey(), row.getFormKey());
             if (indexed.putIfAbsent(key,
-                    new SnapshotSchema(row, variableNames, readableVariableNames)) != null)
+                    new SnapshotSchema(row, variableNames, readableVariableNames,
+                            attachmentVariableNames)) != null)
             {
                 throw dataError("部署表单快照节点关系不唯一");
             }
@@ -127,17 +140,20 @@ public class WorkflowProcessFormDetailProjection
                 request.schemas().schemas(), request.variables(), request.deploymentId(), budget);
         WorkflowProcessFormSnapshotView submittedApplicationForm =
                 findApplicationForm(processForms);
-        boolean applicationMissing = request.variables().startSubmission() == null;
-        if (applicationMissing != (submittedApplicationForm == null))
+        if (request.variables().startSubmission() == null || submittedApplicationForm == null)
         {
-            // 缺失语义只来自正式开始提交快照事实；历史/BPMN 无法投影该事实时按数据损坏失败。
-            throw dataError("流程申请表单提交快照投影不一致");
+            throw dataError("流程缺少正式申请表单提交快照");
         }
         WorkflowProcessFormSnapshotView requestedTaskForm = request.requestedTask() == null ? null
                 : buildCurrentTaskForm(request.requestedTask(), request.history().tasksById(),
                         request.process(), request.schemas().schemas(), request.variables(),
                         request.deploymentId(), request.currentTaskControlledLoop(),
                         request.returnedApplication() ? processForms : null, budget);
+        AttachmentProjection attachmentProjection = projectAttachmentMetadata(
+                request.processInstanceId(), request.schemas().schemas(), processForms,
+                requestedTaskForm);
+        processForms = attachmentProjection.processForms();
+        requestedTaskForm = attachmentProjection.requestedTaskForm();
         String requestedTaskId = request.requestedTask() == null
                 ? null : request.requestedTask().taskId();
         List<WorkflowProcessFormSnapshotView> historyForms = processForms.stream()
@@ -150,7 +166,7 @@ public class WorkflowProcessFormDetailProjection
                 ? null : requestedTaskForm;
         WorkflowProcessFormDetailView formDetail = new WorkflowProcessFormDetailView(
                 applicationForm, nodeTaskForm, historyForms,
-                applicationMissing, request.returnedApplication());
+                request.returnedApplication());
         return new FormProjection(formDetail);
     }
 
@@ -198,8 +214,7 @@ public class WorkflowProcessFormDetailProjection
                 submission = variables.startSubmission();
                 if (submission == null)
                 {
-                    // 旧实例没有正式开始提交快照时不返回伪造的最终变量历史值。
-                    continue;
+                    throw dataError("流程缺少正式开始提交快照");
                 }
                 if (!activity.getActivityId().equals(submission.snapshot().nodeKey()))
                 {
@@ -231,8 +246,7 @@ public class WorkflowProcessFormDetailProjection
                 submission = variables.taskSubmissions().get(activity.getTaskId());
                 if (submission == null)
                 {
-                    // 兼容升级前实例：没有正式提交快照就不声称拥有历史表单值。
-                    continue;
+                    throw dataError("历史任务缺少正式表单提交快照");
                 }
             }
             if (!usedSubmissionIds.add(submission.detailId()))
@@ -244,6 +258,131 @@ public class WorkflowProcessFormDetailProjection
                     deploymentId, budget));
         }
         return List.copyOf(forms);
+    }
+
+    /**
+     * 聚合详情内全部上传字段，按固定批次查询附件对象并完成字段和状态校验后重建表单值。
+     *
+     * @param processInstanceId String，已授权流程实例主键
+     * @param schemas Map&lt;NodeFormKey,SnapshotSchema&gt;，部署表单 Schema 索引
+     * @param processForms List&lt;WorkflowProcessFormSnapshotView&gt;，开始与历史提交表单
+     * @param requestedTaskForm WorkflowProcessFormSnapshotView，当前任务表单，允许为空
+     * @return AttachmentProjection，附件值已经替换为后端安全元数据的表单集合
+     */
+    private AttachmentProjection projectAttachmentMetadata(String processInstanceId,
+            Map<NodeFormKey, SnapshotSchema> schemas,
+            List<WorkflowProcessFormSnapshotView> processForms,
+            WorkflowProcessFormSnapshotView requestedTaskForm)
+    {
+        LinkedHashMap<String, String> fieldByAttachmentId = new LinkedHashMap<>();
+        List<WorkflowProcessFormSnapshotView> allForms = new ArrayList<>(processForms);
+        if (requestedTaskForm != null)
+        {
+            allForms.add(requestedTaskForm);
+        }
+        for (WorkflowProcessFormSnapshotView form : allForms)
+        {
+            SnapshotSchema schema = schemas.get(new NodeFormKey(form.nodeKey(), form.formKey()));
+            if (schema == null)
+            {
+                throw dataError("流程附件缺少部署表单 Schema");
+            }
+            LinkedHashSet<String> submissionAttachmentIds = new LinkedHashSet<>();
+            for (String fieldName : schema.attachmentVariableNames())
+            {
+                for (String attachmentId : attachmentIds(form.values().get(fieldName)))
+                {
+                    if (!submissionAttachmentIds.add(attachmentId))
+                    {
+                        throw dataError("同一次表单提交重复引用附件");
+                    }
+                    if (submissionAttachmentIds.size()
+                            > WorkflowAttachmentService.MAX_FORM_ATTACHMENTS)
+                    {
+                        throw dataError("单次表单提交附件数量超过安全上限");
+                    }
+                    String previousField = fieldByAttachmentId.putIfAbsent(attachmentId, fieldName);
+                    if (previousField != null && !previousField.equals(fieldName))
+                    {
+                        throw dataError("同一流程附件被不同表单字段引用");
+                    }
+                }
+            }
+        }
+        Map<String, JsonNode> metadataById = attachmentService.projectReadableBoundMetadata(
+                processInstanceId, fieldByAttachmentId);
+        List<WorkflowProcessFormSnapshotView> projectedProcessForms = processForms.stream()
+                .map(form -> projectFormAttachmentValues(form, schemas, metadataById)).toList();
+        WorkflowProcessFormSnapshotView projectedTaskForm = requestedTaskForm == null ? null
+                : projectFormAttachmentValues(requestedTaskForm, schemas, metadataById);
+        return new AttachmentProjection(projectedProcessForms, projectedTaskForm);
+    }
+
+    /**
+     * 从上传字段值严格提取附件 UUID。
+     *
+     * @param value JsonNode，正式提交快照中的上传字段值
+     * @return List&lt;String&gt;，保持字段内附件顺序的 UUID 集合
+     */
+    private List<String> attachmentIds(JsonNode value)
+    {
+        if (value == null || value.isNull())
+        {
+            return List.of();
+        }
+        if (!value.isArray())
+        {
+            throw dataError("流程附件字段值不是数组");
+        }
+        List<String> ids = new ArrayList<>();
+        for (JsonNode item : value)
+        {
+            JsonNode id = item == null ? null : item.get("attachmentId");
+            if (id == null || !id.isTextual() || !StringUtils.hasText(id.textValue()))
+            {
+                throw dataError("流程附件字段缺少正式 attachmentId");
+            }
+            ids.add(id.textValue().trim());
+        }
+        return List.copyOf(ids);
+    }
+
+    /**
+     * 使用批量查询得到的安全元数据替换单个表单上传字段值。
+     *
+     * @param form WorkflowProcessFormSnapshotView，待重建的表单视图
+     * @param schemas Map&lt;NodeFormKey,SnapshotSchema&gt;，部署表单 Schema 索引
+     * @param metadataById Map&lt;String,JsonNode&gt;，批量校验后的安全附件元数据
+     * @return WorkflowProcessFormSnapshotView，保持表单身份且附件值安全的视图
+     */
+    private WorkflowProcessFormSnapshotView projectFormAttachmentValues(
+            WorkflowProcessFormSnapshotView form, Map<NodeFormKey, SnapshotSchema> schemas,
+            Map<String, JsonNode> metadataById)
+    {
+        SnapshotSchema schema = schemas.get(new NodeFormKey(form.nodeKey(), form.formKey()));
+        LinkedHashMap<String, JsonNode> values = new LinkedHashMap<>(form.values());
+        for (String fieldName : schema.attachmentVariableNames())
+        {
+            JsonNode original = values.get(fieldName);
+            if (original == null || original.isNull())
+            {
+                continue;
+            }
+            ArrayNode projected = JsonNodeFactory.instance.arrayNode();
+            for (String attachmentId : attachmentIds(original))
+            {
+                JsonNode metadata = metadataById.get(attachmentId);
+                if (metadata == null)
+                {
+                    throw dataError("流程附件批量投影结果不完整");
+                }
+                projected.add(metadata.deepCopy());
+            }
+            values.put(fieldName, projected);
+        }
+        return new WorkflowProcessFormSnapshotView(form.activityId(), form.taskId(),
+                form.sourceType(), form.formId(), form.formKey(), form.nodeKey(), form.formName(),
+                form.nodeName(), form.content(), form.taskLocal(), values, form.snapshotTime());
     }
 
     /**
@@ -280,7 +419,7 @@ public class WorkflowProcessFormDetailProjection
      * @param controlledLoop boolean，活动任务是否为部署快照确认的受控循环节点
      * @param returnedProcessForms List&lt;WorkflowProcessFormSnapshotView&gt;，退回态使用的历史表单；普通任务为空
      * @param budget DetailResponseBudget，详情累计正文大小预算
-     * @return WorkflowProcessFormSnapshotView，合法任务表单；无表单或旧实例无提交快照时返回 null
+     * @return WorkflowProcessFormSnapshotView，合法任务表单；节点未绑定表单时返回 null，强制快照缺失时抛出数据异常
      */
     private WorkflowProcessFormSnapshotView buildCurrentTaskForm(
             WorkflowTaskAccessSnapshot task,
@@ -646,7 +785,8 @@ public class WorkflowProcessFormDetailProjection
     record FormProjectionRequest(FormSchemas schemas,
             WorkflowProcessHistoryProjection.HistoryData history,
             org.flowable.bpmn.model.Process process, VariableStore variables,
-            String deploymentId, WorkflowTaskAccessSnapshot requestedTask,
+            String processInstanceId, String deploymentId,
+            WorkflowTaskAccessSnapshot requestedTask,
             boolean currentTaskControlledLoop, boolean returnedApplication)
     {
     }
@@ -663,7 +803,13 @@ public class WorkflowProcessFormDetailProjection
 
     /** 不可变部署快照及从 schema 提取的字段白名单。 */
     private record SnapshotSchema(WfDeployForm snapshot, Set<String> variableNames,
-            Set<String> readableVariableNames)
+            Set<String> readableVariableNames, Set<String> attachmentVariableNames)
+    {
+    }
+
+    /** 批量附件投影后的开始/历史表单与当前任务表单。 */
+    private record AttachmentProjection(List<WorkflowProcessFormSnapshotView> processForms,
+            WorkflowProcessFormSnapshotView requestedTaskForm)
     {
     }
 

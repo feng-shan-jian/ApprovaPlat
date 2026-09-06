@@ -32,7 +32,7 @@
 ## 关键设计
 
 - ServiceTask、SendTask、ReceiveTask 和 BusinessRuleTask 使用明确创建入口，并通过唯一不可变 `taskCapabilityMap` 判断是否允许创建；泳道命令作用于当前选中的池或泳道。
-- 高级面板与 bpmn-js“更改元素”目标统一提供 ServiceTask、SendTask、ReceiveTask 和 BusinessRuleTask；导入 BPMN 中的 ManualTask 由 Modeler 正常渲染和导出。
+- 高级面板与 bpmn-js“更改元素”目标统一提供 ServiceTask、SendTask、ReceiveTask 和 BusinessRuleTask；ManualTask 创建/转换入口固定隐藏，含该元素的作者模型由正式后端门禁拒绝。
 - Popover 的 reference 使用稳定原生元素承载 Tooltip 和触发器，确保运行时指令、焦点与点击入口都绑定到真实 DOM。
 - 边界事件携带 `eventDefinitionType` 和中断提示，最终能否附着由 bpmn-js 规则服务决定。
 - “协作消息流 / 关联”进入 Modeler 的全局连接工具；只有连接不同池中 SendTask/消息抛出事件与 ReceiveTask/消息捕获事件，且消息名称与消息定义完整时，后端才允许部署。

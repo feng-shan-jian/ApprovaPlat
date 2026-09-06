@@ -11,6 +11,7 @@ import org.springframework.web.bind.MissingPathVariableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.text.Convert;
@@ -50,6 +51,22 @@ public class GlobalExceptionHandler
         String requestURI = request.getRequestURI();
         log.error("请求地址'{}',不支持'{}'请求", requestURI, e.getMethod());
         return AjaxResult.error(e.getMessage());
+    }
+
+    /**
+     * 将未命中控制器或静态资源的请求明确投影为 404，避免删除旧路由后被通用异常包装成系统错误。
+     *
+     * @param e NoResourceFoundException，Spring 对不存在请求资源抛出的异常
+     * @param request HttpServletRequest，当前 HTTP 请求
+     * @return AjaxResult，code 为 404 且不暴露服务端资源路径细节
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public AjaxResult handleNoResourceFoundException(NoResourceFoundException e,
+            HttpServletRequest request)
+    {
+        String requestURI = request.getRequestURI();
+        log.warn("请求地址'{}'不存在", requestURI);
+        return AjaxResult.error(HttpStatus.NOT_FOUND, "请求地址不存在");
     }
 
     /**

@@ -20,8 +20,8 @@ import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
 @Service
 public class WorkflowProcessCancelApplicationService
 {
-    /** 取消流程意见类型，与旧系统 FlowComment.STOP 保持兼容。 */
-    private static final String CANCEL_COMMENT_TYPE = "6";
+    /** 取消流程的正式审计类型。 */
+    private static final String CANCEL_COMMENT_TYPE = "CANCEL";
 
     /** 整实例取消时允许原子写入意见的最大活动任务数量。 */
     private static final int MAX_ACTIVE_TASKS_FOR_CANCEL = 2_000;

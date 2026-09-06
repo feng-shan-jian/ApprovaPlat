@@ -97,6 +97,24 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         where attachment_id = #{attachmentId}
     </select>
 
+    <select id="selectByIds" resultMap="WfAttachmentResult">
+        select <include refid="attachmentColumns"/>
+        from wf_attachment
+        <choose>
+            <when test="attachmentIds != null and attachmentIds.size() > 0">
+                where attachment_id in
+                <foreach collection="attachmentIds" item="attachmentId"
+                        open="(" separator="," close=")">
+                    #{attachmentId}
+                </foreach>
+            </when>
+            <otherwise>
+                where 1 = 0
+            </otherwise>
+        </choose>
+        order by attachment_id
+    </select>
+
     <select id="selectByIdsForUpdate" resultMap="WfAttachmentResult">
         select <include refid="attachmentColumns"/>
         from wf_attachment

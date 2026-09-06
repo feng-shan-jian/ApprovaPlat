@@ -23,6 +23,7 @@ import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
+import org.flowable.task.service.delegate.DelegateTask;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -70,7 +71,7 @@ class WorkflowStartableProcessQueryIntegrationTest
     private final Map<String, Deployment> deployments = new LinkedHashMap<>();
 
     /**
-     * 创建真实内存引擎并部署新版与历史定义，只有登录身份和外部组织目录使用模拟。
+     * 创建真实内存引擎并部署正式定义，只有登录身份和外部组织目录使用模拟。
      *
      * @return void，无返回值；每个测试获得独立 H2 引擎和真实业务资源子部署
      */
@@ -97,7 +98,7 @@ class WorkflowStartableProcessQueryIntegrationTest
                 identityResolver,
                 new WorkflowParticipantResolutionMetrics(new SimpleMeterRegistry())));
 
-        // 新版定义均持久化真实业务资源子部署；允许和拒绝规则同时存在以验证 false 不回退。
+        // 每个定义均持久化真实业务资源子部署；允许和拒绝规则同时存在以验证 false 不回退。
         deployManaged("a_public", "公开流程", "finance", "PUBLIC", null);
         deployManaged("b_users_allow", "用户允许流程", "hr", "USERS", "100,101");
         deployManaged("c_users_deny", "用户拒绝流程", "finance", "USERS", "999");
@@ -107,13 +108,6 @@ class WorkflowStartableProcessQueryIntegrationTest
         deployManaged("g_depts_deny", "部门拒绝流程", "hr", "DEPTS", "99");
         deployManaged("h_depts_allow_second", "第二部门允许流程", "finance", "DEPTS", "31");
 
-        // 历史定义故意不创建业务资源子部署，只使用真实 Flowable starter identity link。
-        deployHistorical("i_history_public", "历史公开流程", "archive", null, null);
-        deployHistorical("j_history_user_allow", "历史用户允许流程", "finance", "100", null);
-        deployHistorical("k_history_user_deny", "历史用户拒绝流程", "hr", "999", null);
-        deployHistorical("l_history_group_allow", "历史组允许流程", "hr", null, "ROLE20");
-        deployHistorical("m_history_group_deny", "历史组拒绝流程", "archive", null, "ROLE99");
-
         WorkflowEngineOperations engineOperations = mock(WorkflowEngineOperations.class);
         when(engineOperations.read(any(Supplier.class))).thenAnswer(invocation ->
                 ((Supplier<?>) invocation.getArgument(0)).get());
@@ -122,7 +116,7 @@ class WorkflowStartableProcessQueryIntegrationTest
                 mock(WorkflowDeploymentService.class), artifactRepository,
                 participantRuntimeService);
 
-        // 夹具创建阶段的真实部署和 starter link 写入不属于待验证的查询次数。
+        // 夹具创建阶段的真实部署写入不属于待验证的查询次数。
         clearInvocations(repositoryService, identityMapper, identityResolver,
                 participantRuntimeService);
     }
@@ -150,7 +144,6 @@ class WorkflowStartableProcessQueryIntegrationTest
     void resolvesAllManagedRuleTypesAndLoadsDepartmentScopeOnce()
     {
         List<ProcessDefinition> managedDefinitions = definitions.entrySet().stream()
-                .filter(entry -> entry.getKey().compareTo("i_history_public") < 0)
                 .map(Map.Entry::getValue)
                 .toList();
 
@@ -177,48 +170,40 @@ class WorkflowStartableProcessQueryIntegrationTest
     }
 
     /**
-     * 验证混合新版与历史定义的真实分页、总数、稳定顺序和部署元数据投影。
+     * 验证正式定义的真实分页、总数、稳定顺序和部署元数据投影。
      *
-     * @return void，任一新版定义触发历史兜底、分页边界漂移或投影变化时测试失败
+     * @return void，任一定义缺少正式决定、分页边界漂移或投影变化时测试失败
      */
     @Test
-    void listsMixedDefinitionsWithStablePagesAndHistoricalFallbackOnly()
+    void listsManagedDefinitionsWithStablePages()
     {
         PageResult<WorkflowStartableDefinitionView> firstPage =
                 queryService.listStartable(null, 1, 3);
 
         // 首次无分类查询固定为一次业务资源子部署批量查询和一次当前页父部署投影查询，禁止退化为逐定义查询。
         verify(repositoryService, times(2)).createDeploymentQuery();
-        assertThat(firstPage.total()).isEqualTo(8);
+        assertThat(firstPage.total()).isEqualTo(5);
         assertThat(keys(firstPage.rows())).containsExactly(
                 "a_public", "b_users_allow", "d_roles_allow");
         assertProjection(firstPage.rows().get(0), "a_public");
         assertProjection(firstPage.rows().get(1), "b_users_allow");
         assertProjection(firstPage.rows().get(2), "d_roles_allow");
-        assertHistoricalIdentityLinkCalls(1);
-        assertManagedIdentityLinksWereNeverRead();
+        verify(repositoryService, never()).getIdentityLinksForProcessDefinition(any());
 
         clearInvocations(repositoryService, participantRuntimeService, identityMapper);
         PageResult<WorkflowStartableDefinitionView> secondPage =
                 queryService.listStartable(null, 2, 3);
-        PageResult<WorkflowStartableDefinitionView> thirdPage =
-                queryService.listStartable(null, 3, 3);
-
-        assertThat(secondPage.total()).isEqualTo(8);
+        assertThat(secondPage.total()).isEqualTo(5);
         assertThat(keys(secondPage.rows())).containsExactly(
-                "f_depts_allow", "h_depts_allow_second", "i_history_public");
-        assertThat(thirdPage.total()).isEqualTo(8);
-        assertThat(keys(thirdPage.rows())).containsExactly(
-                "j_history_user_allow", "l_history_group_allow");
-        assertHistoricalIdentityLinkCalls(2);
-        assertManagedIdentityLinksWereNeverRead();
+                "f_depts_allow", "h_depts_allow_second");
+        verify(repositoryService, never()).getIdentityLinksForProcessDefinition(any());
 
         PageResult<WorkflowStartableDefinitionView> finance = queryService.listStartable(
                 new WorkflowStartableProcessQueryDto(null, null, "finance"), 1, 20);
-        assertThat(finance.total()).isEqualTo(5);
+        assertThat(finance.total()).isEqualTo(4);
         assertThat(keys(finance.rows())).containsExactly(
                 "a_public", "d_roles_allow", "f_depts_allow",
-                "h_depts_allow_second", "j_history_user_allow");
+                "h_depts_allow_second");
         assertThat(finance.rows()).extracting(WorkflowStartableDefinitionView::category)
                 .containsOnly("finance");
     }
@@ -232,7 +217,7 @@ class WorkflowStartableProcessQueryIntegrationTest
     void exportsSameVisibleSetWithOneAuthorizationScan()
     {
         List<WorkflowStartableDefinitionView> pagedRows = new ArrayList<>();
-        for (int pageNum = 1; pageNum <= 3; pageNum++)
+        for (int pageNum = 1; pageNum <= 2; pageNum++)
         {
             pagedRows.addAll(queryService.listStartable(null, pageNum, 3).rows());
         }
@@ -245,20 +230,18 @@ class WorkflowStartableProcessQueryIntegrationTest
         assertThat(exported).containsExactlyElementsOf(pagedRows);
         assertThat(keys(exported)).containsExactly(
                 "a_public", "b_users_allow", "d_roles_allow", "f_depts_allow",
-                "h_depts_allow_second", "i_history_public",
-                "j_history_user_allow", "l_history_group_allow");
+                "h_depts_allow_second");
         verify(identityResolver, times(1)).resolveCurrentIdentity();
         verify(participantRuntimeService, times(1))
                 .resolveManagedStartDecisions(any(), any());
         verify(identityMapper, times(1)).selectActiveScopeDeptIdsByUserId(100L);
-        assertHistoricalIdentityLinkCalls(1);
-        assertManagedIdentityLinksWereNeverRead();
+        verify(repositoryService, never()).getIdentityLinksForProcessDefinition(any());
     }
 
     /**
      * 验证列表、单定义只读判定和真实发起前 assertCanStart 对同一新版定义保持一致。
      *
-     * @return void，允许、拒绝或历史未托管语义在三个入口间不一致时测试失败
+     * @return void，允许或拒绝语义在三个入口间不一致时测试失败
      */
     @Test
     void keepsListSingleDefinitionAndStartAssertionConsistent()
@@ -270,13 +253,6 @@ class WorkflowStartableProcessQueryIntegrationTest
             String processKey = entry.getKey();
             ProcessDefinition definition = entry.getValue();
             Boolean managed = participantRuntimeService.canStartIfManaged(ACTOR, definition);
-            if (processKey.compareTo("i_history_public") >= 0)
-            {
-                assertThat(managed).isNull();
-                assertThat(participantRuntimeService.assertCanStart(ACTOR, definition)).isNull();
-                continue;
-            }
-
             boolean listed = visibleKeys.contains(processKey);
             assertThat(managed).isEqualTo(listed);
             if (listed)
@@ -297,6 +273,77 @@ class WorkflowStartableProcessQueryIntegrationTest
                         });
             }
         }
+    }
+
+    /**
+     * 验证没有正式部署快照的旧定义在列表、只读判定和写前授权三个入口都明确拒绝。
+     *
+     * @return void，任一入口回读 starter identity link 或把缺失快照当作公开流程时测试失败
+     */
+    @Test
+    void rejectsDefinitionWithoutFormalParticipantSnapshot()
+    {
+        Deployment deployment = deploy("i_unmanaged_rejected", "旧未托管流程", "archive");
+        ProcessDefinition definition = requireDefinition(deployment);
+        repositoryService.addCandidateStarterUser(definition.getId(), CURRENT_USER_ID);
+        clearInvocations(repositoryService);
+
+        assertSnapshotMissing(() -> participantRuntimeService
+                .canStartIfManaged(ACTOR, definition));
+        assertSnapshotMissing(() -> participantRuntimeService
+                .assertCanStart(ACTOR, definition));
+        assertSnapshotMissing(() -> queryService.listStartable(
+                new WorkflowStartableProcessQueryDto("i_unmanaged_rejected", null, null),
+                1, 20));
+        verify(repositoryService, never())
+                .getIdentityLinksForProcessDefinition(definition.getId());
+    }
+
+    /**
+     * 验证任务创建事件缺少正式办理人规则时不会保留 BPMN 原生静态办理字段继续运行。
+     *
+     * @return void，缺失任务快照被静默接受时测试失败
+     */
+    @Test
+    void rejectsCreatedTaskWithoutFormalParticipantSnapshot()
+    {
+        Deployment deployment = repositoryService.createDeployment()
+                .addString("ordinary-unmanaged-task.bpmn20.xml", ordinaryTaskBpmn())
+                .deploy();
+        ProcessDefinition definition = requireDefinition(deployment);
+        DelegateTask task = mock(DelegateTask.class);
+        when(task.getProcessDefinitionId()).thenReturn(definition.getId());
+        when(task.getTaskDefinitionKey()).thenReturn("unmanaged_task");
+
+        assertThatThrownBy(() -> participantRuntimeService.resolveCreatedTask(task))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(exception.getSubCode())
+                            .isEqualTo("TASK_PARTICIPANT_SNAPSHOT_MISSING");
+                });
+    }
+
+    /**
+     * 验证 SLA 编译器生成的升级任务由冻结 assignee 负责，不要求普通任务参与者快照。
+     *
+     * @return void，升级任务仍访问普通参与者制品或因快照缺失失败时测试失败
+     */
+    @Test
+    void acceptsGeneratedSlaEscalationTaskWithoutParticipantSnapshot()
+    {
+        Deployment deployment = repositoryService.createDeployment()
+                .addString("sla-generated.bpmn20.xml", generatedSlaBpmn())
+                .deploy();
+        ProcessDefinition definition = requireDefinition(deployment);
+        DelegateTask task = mock(DelegateTask.class);
+        when(task.getProcessDefinitionId()).thenReturn(definition.getId());
+        when(task.getTaskDefinitionKey()).thenReturn("slaEscalation");
+        clearInvocations(repositoryService);
+
+        participantRuntimeService.resolveCreatedTask(task);
+
+        verify(repositoryService, never()).createDeploymentQuery();
     }
 
     /**
@@ -345,33 +392,6 @@ class WorkflowStartableProcessQueryIntegrationTest
         ProcessDefinition definition = requireDefinition(deployment);
         artifactRepository.persist(deployment.getId(), artifacts(
                 startRule(processKey, ruleType, targetIds)));
-        deployments.put(processKey, deployment);
-        definitions.put(processKey, definition);
-    }
-
-    /**
-     * 部署一个真实历史流程并按需写入 Flowable starter user 或 group identity link。
-     *
-     * @param processKey String，保证字典序稳定的流程标识
-     * @param processName String，流程显示名称
-     * @param category String，父部署正式业务分类
-     * @param starterUserId String，可空历史候选发起用户
-     * @param starterGroupId String，可空历史候选发起组
-     * @return void，定义和父部署写入当前测试夹具映射
-     */
-    private void deployHistorical(String processKey, String processName, String category,
-            String starterUserId, String starterGroupId)
-    {
-        Deployment deployment = deploy(processKey, processName, category);
-        ProcessDefinition definition = requireDefinition(deployment);
-        if (starterUserId != null)
-        {
-            repositoryService.addCandidateStarterUser(definition.getId(), starterUserId);
-        }
-        if (starterGroupId != null)
-        {
-            repositoryService.addCandidateStarterGroup(definition.getId(), starterGroupId);
-        }
         deployments.put(processKey, deployment);
         definitions.put(processKey, definition);
     }
@@ -477,35 +497,20 @@ class WorkflowStartableProcessQueryIntegrationTest
     }
 
     /**
-     * 断言一次扫描只为五个历史未托管定义读取 starter identity link。
+     * 断言未托管定义稳定返回部署快照缺失冲突。
      *
-     * @param scanCount int，期望完整扫描次数
-     * @return void，历史定义调用次数不一致时测试失败
+     * @param invocation Runnable，待执行的列表、预览或写前授权入口
+     * @return void，状态码或 subCode 变化时测试失败
      */
-    private void assertHistoricalIdentityLinkCalls(int scanCount)
+    private void assertSnapshotMissing(Runnable invocation)
     {
-        for (String processKey : List.of("i_history_public", "j_history_user_allow",
-                "k_history_user_deny", "l_history_group_allow", "m_history_group_deny"))
-        {
-            verify(repositoryService, times(scanCount))
-                    .getIdentityLinksForProcessDefinition(definitions.get(processKey).getId());
-        }
-    }
-
-    /**
-     * 断言所有新版受管定义都没有错误进入历史 starter identity link 兜底。
-     *
-     * @return void，任一新版允许或拒绝定义触发历史 API 时测试失败
-     */
-    private void assertManagedIdentityLinksWereNeverRead()
-    {
-        for (String processKey : List.of("a_public", "b_users_allow", "c_users_deny",
-                "d_roles_allow", "e_roles_deny", "f_depts_allow", "g_depts_deny",
-                "h_depts_allow_second"))
-        {
-            verify(repositoryService, never())
-                    .getIdentityLinksForProcessDefinition(definitions.get(processKey).getId());
-        }
+        assertThatThrownBy(invocation::run)
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(exception.getSubCode())
+                            .isEqualTo("PROCESS_START_SCOPE_SNAPSHOT_MISSING");
+                });
     }
 
     /**
@@ -539,5 +544,58 @@ class WorkflowStartableProcessQueryIntegrationTest
                   </process>
                 </definitions>
                 """.formatted(processKey, processName);
+    }
+
+    /**
+     * 生成带正式 SLA 来源属性和冻结办理人的升级任务 BPMN。
+     *
+     * @return String，可由真实 Flowable 8 解析的 SLA 升级任务定义
+     */
+    private String generatedSlaBpmn()
+    {
+        return """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:flowable="http://flowable.org/bpmn"
+                  targetNamespace="urn:startable-query:sla-test">
+                  <process id="slaGenerated" name="SLA Generated" isExecutable="true">
+                    <startEvent id="start"/>
+                    <userTask id="slaEscalation" flowable:assignee="200">
+                      <extensionElements>
+                        <flowable:properties>
+                          <flowable:property name="approva.sla.sourceTaskDefinitionKey"
+                            value="sourceTask"/>
+                        </flowable:properties>
+                      </extensionElements>
+                    </userTask>
+                    <endEvent id="end"/>
+                    <sequenceFlow id="toSla" sourceRef="start" targetRef="slaEscalation"/>
+                    <sequenceFlow id="toEnd" sourceRef="slaEscalation" targetRef="end"/>
+                  </process>
+                </definitions>
+                """;
+    }
+
+    /**
+     * 生成未持久化任务参与者快照的普通单实例任务 BPMN。
+     *
+     * @return String，可验证普通任务继续失败关闭的真实 Flowable 8 定义
+     */
+    private String ordinaryTaskBpmn()
+    {
+        return """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  targetNamespace="urn:startable-query:ordinary-task-test">
+                  <process id="ordinaryUnmanagedTask" name="Ordinary Unmanaged Task"
+                    isExecutable="true">
+                    <startEvent id="start"/>
+                    <userTask id="unmanaged_task"/>
+                    <endEvent id="end"/>
+                    <sequenceFlow id="toTask" sourceRef="start" targetRef="unmanaged_task"/>
+                    <sequenceFlow id="toEnd" sourceRef="unmanaged_task" targetRef="end"/>
+                  </process>
+                </definitions>
+                """;
     }
 }

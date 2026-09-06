@@ -125,6 +125,8 @@ final class WorkflowMultiInstanceBusinessDriver
                 WorkflowMultiInstanceVariables.userCollectionName(activityId),
                 members.stream().map(Long::valueOf).toList()));
         variables.put("requestTitle", "原始申请");
+        // 真实发起服务会冻结根流程发起人；普通任务参与者规则只能从该服务端变量解析申请人。
+        variables.put(WorkflowProcessStartService.INITIATOR_VARIABLE, APPLICANT_ID);
         variables.put(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
                 WorkflowProcessStartService.RUNNING_STATUS);
         variables.put(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
@@ -136,10 +138,11 @@ final class WorkflowMultiInstanceBusinessDriver
         {
             return transactionTemplate.execute(status ->
             {
-                ProcessInstance instance = runtimeService.startProcessInstanceByKey(
-                        processKey, variables);
-                runtimeService.updateBusinessStatus(instance.getId(),
-                        WorkflowProcessStartService.RUNNING_STATUS);
+                ProcessInstance instance = runtimeService.createProcessInstanceBuilder()
+                        .processDefinitionKey(processKey)
+                        .businessStatus(WorkflowProcessStartService.RUNNING_STATUS)
+                        .variables(variables)
+                        .start();
                 return runtimeService.createProcessInstanceQuery()
                         .processInstanceId(instance.getId()).singleResult();
             });

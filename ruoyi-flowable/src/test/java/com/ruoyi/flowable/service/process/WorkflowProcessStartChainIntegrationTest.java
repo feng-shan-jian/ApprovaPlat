@@ -96,8 +96,8 @@ class WorkflowProcessStartChainIntegrationTest
     private static final Map<String, Object> VALID_VARIABLES = Map.of("requester", "Alice");
     private static final String FORM_CONTENT = """
             {"fields":[
-              {"__vModel__":"requester","__config__":{"layout":"colFormItem","tag":"el-input","required":true}},
-              {"__vModel__":"evidence","limit":3,"__config__":{"layout":"colFormItem","tag":"el-upload"}}
+              {"vModel":"requester","layout":"colFormItem","tag":"el-input","required":true,"workflowHidden":false,"workflowReadable":true,"workflowWritable":true},
+              {"vModel":"evidence","layout":"colFormItem","tag":"el-upload","limit":3,"workflowHidden":false,"workflowReadable":true,"workflowWritable":true}
             ]}
             """;
 
@@ -127,6 +127,8 @@ class WorkflowProcessStartChainIntegrationTest
     private WorkflowProcessDefinitionQueryService queryService;
     private WorkflowProcessStartService startService;
     private WorkflowProcessDraftService draftService;
+    /** 当前真实部署制品仓库，用于为测试内新增定义写入不可变表单和发起规则。 */
+    private WorkflowDeploymentArtifactRepository artifactRepository;
     private ProcessDefinition definition;
     private AtomicReference<WorkflowCurrentIdentity> currentIdentity;
 
@@ -163,8 +165,7 @@ class WorkflowProcessStartChainIntegrationTest
                 .deploy();
         definition = repositoryService.createProcessDefinitionQuery()
                 .deploymentId(deployment.getId()).singleResult();
-        WorkflowDeploymentArtifactRepository artifactRepository =
-                new WorkflowDeploymentArtifactRepository(repositoryService);
+        artifactRepository = new WorkflowDeploymentArtifactRepository(repositoryService);
         artifactRepository.persist(deployment.getId(), deploymentArtifacts(deployment.getId()));
 
         currentIdentity = new AtomicReference<>(new WorkflowCurrentIdentity(USER_ID, Set.of()));
@@ -446,6 +447,36 @@ class WorkflowProcessStartChainIntegrationTest
         WfAttachment attachment = attachmentMapper.selectById(attachmentId);
         assertThat(attachment.status()).isEqualTo(WorkflowAttachmentStatus.DRAFT);
         assertThat(attachment.processInstanceId()).isNull();
+    }
+
+    /**
+     * 验证 start 到 end 的同步流程在引擎执行前已原子写入 businessStatus。
+     *
+     * @return void，瞬时流程启动失败、残留活动实例或历史状态不是 running 时失败
+     */
+    @Test
+    void startsSynchronousEndProcessWithBusinessStatusAlreadyPersisted()
+    {
+        Deployment deployment = repositoryService.createDeployment()
+                .addString("instant-start-chain.bpmn20.xml", INSTANT_BPMN)
+                .deploy();
+        definition = repositoryService.createProcessDefinitionQuery()
+                .deploymentId(deployment.getId()).singleResult();
+        artifactRepository.persist(deployment.getId(), deploymentArtifacts(deployment.getId()));
+        when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(
+                definition.getKey())).thenReturn(new WorkflowProcessDefinitionLockRow(
+                        definition.getId(), deployment.getId(), 1));
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
+
+        WorkflowProcessDraftSubmitView submitted = draftService.submit(draft.draftId(),
+                new WorkflowProcessDraftSubmitRequest(draft.revisionNo(), "INSTANT-1",
+                        VALID_VARIABLES, Map.of()));
+
+        assertThat(runtimeService.createProcessInstanceQuery()
+                .processInstanceId(submitted.processInstanceId()).count()).isZero();
+        assertThat(processEngine.getHistoryService().createHistoricProcessInstanceQuery()
+                .processInstanceId(submitted.processInstanceId()).singleResult()
+                .getBusinessStatus()).isEqualTo(WorkflowProcessStartService.RUNNING_STATUS);
     }
 
     /**
@@ -974,7 +1005,7 @@ class WorkflowProcessStartChainIntegrationTest
         form.setCreateTime(new Date());
 
         WfDeployParticipantRule rule = new WfDeployParticipantRule();
-        rule.setProcessKey("startChain");
+        rule.setProcessKey(definition.getKey());
         rule.setRuleScope("START");
         rule.setAssignmentMode("START");
         rule.setRuleType("USERS");
@@ -1020,6 +1051,19 @@ class WorkflowProcessStartChainIntegrationTest
                 <startEvent id="start" flowable:formKey="startForm"/>
                 <userTask id="hold" name="Hold" flowable:assignee="100"/>
                 <sequenceFlow sourceRef="start" targetRef="hold"/>
+              </process>
+            </definitions>
+            """;
+
+    /** 同一表单契约下在 start 命令内同步结束的真实流程定义。 */
+    private static final String INSTANT_BPMN = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+              xmlns:flowable="http://flowable.org/bpmn" targetNamespace="instant-start-chain-it">
+              <process id="instantStartChain" name="Instant Start Chain" isExecutable="true">
+                <startEvent id="start" flowable:formKey="startForm"/>
+                <endEvent id="end"/>
+                <sequenceFlow id="flow_start_end" sourceRef="start" targetRef="end"/>
               </process>
             </definitions>
             """;

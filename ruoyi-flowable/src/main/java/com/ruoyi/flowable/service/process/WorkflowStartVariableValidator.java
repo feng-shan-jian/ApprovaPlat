@@ -67,9 +67,8 @@ public class WorkflowStartVariableValidator
     /** Flowable long 的有符号 64 位边界。 */
     private static final BigDecimal LONG_MAXIMUM = BigDecimal.valueOf(Long.MAX_VALUE);
 
-    private static final String CONFIG_FIELD = "__config__";
     private static final String CHILDREN_FIELD = "children";
-    private static final String MODEL_FIELD = "__vModel__";
+    private static final String MODEL_FIELD = "vModel";
     private static final String TAG_FIELD = "tag";
     private static final String REQUIRED_FIELD = "required";
 
@@ -130,7 +129,30 @@ public class WorkflowStartVariableValidator
     public WorkflowValidatedStartVariables validateForStart(String snapshotContent,
             Map<String, Object> variables)
     {
-        return validateSubmission(snapshotContent, variables, Map.of(), true);
+        return validateSubmission(snapshotContent, variables, Map.of(), true, true);
+    }
+
+    /**
+     * 从 CallActivity 已建立的子流程变量作用域提取并规范化自己的开始表单提交值。
+     *
+     * @param snapshotContent String，子流程定义所属部署的不可变开始表单 JSON
+     * @param runtimeVariables Map&lt;String,Object&gt;，Flowable 已按调用映射建立的子流程变量
+     * @return Map&lt;String,Object&gt;，只包含表单声明字段且通过类型、必填和资源门禁的不可变值
+     */
+    public Map<String, Object> normalizeCallActivityStartValues(String snapshotContent,
+            Map<String, Object> runtimeVariables)
+    {
+        Map<String, Object> source = runtimeVariables == null ? Map.of() : runtimeVariables;
+        LinkedHashMap<String, Object> submitted = new LinkedHashMap<>();
+        // 调用映射属于服务端部署协议，可写权限只约束客户端；这里仍只接受正式 schema 声明字段。
+        for (String fieldName : templateValidator.extractVariableNames(snapshotContent))
+        {
+            if (source.containsKey(fieldName))
+            {
+                submitted.put(fieldName, source.get(fieldName));
+            }
+        }
+        return validateSubmission(snapshotContent, submitted, Map.of(), true, false).variables();
     }
 
     /**
@@ -144,7 +166,7 @@ public class WorkflowStartVariableValidator
             Map<String, Object> variables)
     {
         // 草稿只放宽必填完整性，隐藏/只读防篡改、类型和资源边界必须与正式提交保持同源。
-        return validateSubmission(snapshotContent, variables, Map.of(), false);
+        return validateSubmission(snapshotContent, variables, Map.of(), false, true);
     }
 
     /**
@@ -159,7 +181,7 @@ public class WorkflowStartVariableValidator
             Map<String, Object> variables, Map<String, JsonNode> existingValues)
     {
         return validateSubmission(snapshotContent, variables,
-                existingValues == null ? Map.of() : existingValues, true);
+                existingValues == null ? Map.of() : existingValues, true, true);
     }
 
     /**
@@ -180,11 +202,12 @@ public class WorkflowStartVariableValidator
      * @param variables Map&lt;String,Object&gt;，客户端本次提交的字段集合
      * @param existingValues Map&lt;String,JsonNode&gt;，局部更新可继承的正式旧值；首次发起或草稿为空
      * @param enforceRequired boolean，true 表示正式动作必须满足当前节点必填完整性
+     * @param enforceWritable boolean，true 表示输入来自客户端并必须满足字段可写权限
      * @return WorkflowValidatedStartVariables，规范化字段补丁和附件引用
      */
     private WorkflowValidatedStartVariables validateSubmission(String snapshotContent,
             Map<String, Object> variables, Map<String, JsonNode> existingValues,
-            boolean enforceRequired)
+            boolean enforceRequired, boolean enforceWritable)
     {
         JsonNode snapshotRoot = parseTrustedSnapshot(snapshotContent);
         LinkedHashMap<String, FieldSpec> fieldSpecs = new LinkedHashMap<>();
@@ -219,7 +242,7 @@ public class WorkflowStartVariableValidator
             {
                 throw invalidVariable("流程变量字段不在开始表单中: " + fieldName);
             }
-            if (!fieldSpec.writable())
+            if (enforceWritable && !fieldSpec.writable())
             {
                 throw invalidVariable("流程变量字段为只读字段: " + fieldName);
             }
@@ -341,7 +364,7 @@ public class WorkflowStartVariableValidator
     }
 
     /**
-     * 递归提取有 __vModel__ 的受控输入组件，并拒绝重复、保留或异常字段定义。
+     * 递归提取有 vModel 的受控输入组件，并拒绝重复、保留或异常字段定义。
      *
      * @param components JsonNode，当前层 fields 或 children 数组
      * @param fieldSpecs Map&lt;String, FieldSpec&gt;，按表单顺序累积的字段 schema
@@ -351,7 +374,6 @@ public class WorkflowStartVariableValidator
     {
         for (JsonNode component : components)
         {
-            JsonNode config = component.path(CONFIG_FIELD);
             JsonNode modelNode = component.get(MODEL_FIELD);
             if (modelNode != null && !modelNode.isNull())
             {
@@ -366,7 +388,7 @@ public class WorkflowStartVariableValidator
                 {
                     throw invalidSnapshot(null);
                 }
-                FieldSpec fieldSpec = createFieldSpec(fieldName, component, config);
+                FieldSpec fieldSpec = createFieldSpec(fieldName, component);
                 if (fieldSpecs.putIfAbsent(fieldName, fieldSpec) != null)
                 {
                     throw invalidSnapshot(null);
@@ -377,7 +399,7 @@ public class WorkflowStartVariableValidator
                 }
             }
 
-            JsonNode children = config.get(CHILDREN_FIELD);
+            JsonNode children = component.get(CHILDREN_FIELD);
             if (children != null && children.isArray() && !children.isEmpty())
             {
                 collectFieldSpecs(children, fieldSpecs);
@@ -404,19 +426,18 @@ public class WorkflowStartVariableValidator
      *
      * @param fieldName String，已校验的变量字段名
      * @param component JsonNode，完整表单组件节点
-     * @param config JsonNode，组件 __config__ 对象
      * @return FieldSpec，字段类型、必填和长度/数量约束
      */
-    private FieldSpec createFieldSpec(String fieldName, JsonNode component, JsonNode config)
+    private FieldSpec createFieldSpec(String fieldName, JsonNode component)
     {
-        JsonNode tagNode = config.get(TAG_FIELD);
+        JsonNode tagNode = component.get(TAG_FIELD);
         if (tagNode == null || !tagNode.isTextual())
         {
             throw invalidSnapshot(null);
         }
         String tag = tagNode.textValue();
-        boolean required = optionalBoolean(config, REQUIRED_FIELD, false);
-        boolean writable = optionalBoolean(config, "workflowWritable", true);
+        boolean required = optionalBoolean(component, REQUIRED_FIELD, false);
+        boolean writable = optionalBoolean(component, "workflowWritable", true);
         FieldType fieldType;
         int defaultMaxLength = DEFAULT_TEXT_LENGTH;
         int minItems = 0;
@@ -443,7 +464,7 @@ public class WorkflowStartVariableValidator
                 fieldType = FieldType.NUMBER;
                 minimum = optionalDecimal(component, "min");
                 maximum = optionalDecimal(component, "max");
-                numericType = requireNumericType(config);
+                numericType = requireNumericType(component);
             }
             case "el-slider" ->
             {
@@ -508,7 +529,7 @@ public class WorkflowStartVariableValidator
         {
             throw invalidSnapshot(null);
         }
-        Set<String> enumValues = optionalBoolean(config, "workflowEnum", false)
+        Set<String> enumValues = optionalBoolean(component, "workflowEnum", false)
                 ? requireStaticEnumValues(component) : Set.of();
         return new FieldSpec(fieldName, fieldType, required, writable, minLength, maxLength,
                 minItems, maxItems, minimum, maximum, numericType, enumValues);
@@ -517,12 +538,12 @@ public class WorkflowStartVariableValidator
     /**
      * 读取内嵌 FormData 冻结的数值类型；正式表单未声明时保持通用小数语义。
      *
-     * @param config JsonNode，组件 __config__ 配置节点
+     * @param component JsonNode，平面组件配置节点
      * @return NumericType，通用数值、32 位整数或 64 位整数语义
      */
-    private NumericType requireNumericType(JsonNode config)
+    private NumericType requireNumericType(JsonNode component)
     {
-        JsonNode typeNode = config.get("workflowNumberType");
+        JsonNode typeNode = component.get("workflowNumberType");
         if (typeNode == null || typeNode.isNull())
         {
             return NumericType.DECIMAL;
@@ -734,14 +755,14 @@ public class WorkflowStartVariableValidator
     }
 
     /**
-     * 提取内嵌 enum 转换器生成的静态字符串选项，并拒绝空值、重复和动态结构。
+     * 提取正式平面表单 Schema 的静态字符串选项，并拒绝空值、重复和动态结构。
      *
      * @param component JsonNode，当前 el-select 组件
      * @return Set&lt;String&gt;，按声明顺序保存的不可变允许值
      */
     private Set<String> requireStaticEnumValues(JsonNode component)
     {
-        JsonNode options = component.path("__slot__").get("options");
+        JsonNode options = component.get("options");
         if (options == null || !options.isArray() || options.isEmpty()
                 || options.size() > MAX_VARIABLE_FIELDS)
         {

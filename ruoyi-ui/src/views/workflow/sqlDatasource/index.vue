@@ -165,7 +165,7 @@ function openEdit(row) {
 async function submit() {
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
-  const allowedTables = [...new Set(form.allowedTablesText.split(/[\n,]/).map(item => item.trim()).filter(Boolean))]
+  const allowedTables = form.allowedTablesText.split(/[\n,]/).map(item => item.trim()).filter(Boolean)
   if (!allowedTables.length) {
     proxy.$modal.msgWarning('至少配置一张授权表')
     return

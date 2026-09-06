@@ -25,7 +25,9 @@ templateValidator.validate(formContent);
 
 ## 模板结构
 
-根节点必须是对象并包含 `fields` 数组。`fields` 及 `__config__.children` 中的每个元素必须是组件对象，并包含 `__config__` 对象。
+根节点必须是对象并包含 `fields` 数组。`fields` 及行容器 `children` 中的每个元素必须是平面组件对象；`layout`、`tag`、`vModel` 和字段权限均直接属于该对象。
+
+每个字段都必须显式包含布尔值 `workflowHidden`、`workflowReadable`、`workflowWritable`。正式表单生成器在组件进入画布及保存序列化时统一补齐默认值 `false/true/true`；后端不再把缺失权限解释为默认状态，避免不可读数据进入部署快照。
 
 ```json
 {
@@ -33,10 +35,12 @@ templateValidator.validate(formContent);
   "formModel": "formData",
   "fields": [
     {
-      "__config__": {
-        "layout": "colFormItem",
-        "tag": "el-input"
-      },
+      "layout": "colFormItem",
+      "tag": "el-input",
+      "vModel": "reason",
+      "workflowHidden": false,
+      "workflowReadable": true,
+      "workflowWritable": true,
       "placeholder": "请输入"
     }
   ]
@@ -52,7 +56,7 @@ templateValidator.validate(formContent);
 ## 安全与资源限制
 
 - UTF-8 内容最大 `1 MiB`。
-- 组件节点最多 `500` 个，`__config__.children` 最大嵌套深度为 `20`。
+- 组件节点最多 `500` 个，行容器 `children` 最大嵌套深度为 `20`。
 - JSON 最大解析深度为 `100`，字段名保持唯一且正文只包含一个 JSON 根节点。
 - 任意层级字段名使用安全键白名单，`__proto__`、`prototype`、`constructor` 返回模板错误。
 - 任意文本 URL 使用受控协议白名单，协议识别覆盖大小写及控制空白规范化。

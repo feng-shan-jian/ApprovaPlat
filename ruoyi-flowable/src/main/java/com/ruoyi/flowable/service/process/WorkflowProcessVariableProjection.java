@@ -169,7 +169,7 @@ public class WorkflowProcessVariableProjection
      * 以两阶段方式读取 FULL 历史中的固定内部提交快照。
      *
      * 第一阶段必须看见固定变量名的全部行并完成类型、存储列、Blob 关联和累计容量校验；
-     * 只有结果总行数为零时才按升级前旧实例处理。全部元数据合法后才允许第二阶段读取正文。
+     * 强制开始提交快照必须存在。全部元数据合法后才允许第二阶段读取正文。
      *
      * @param instanceId String，快照必须所属的已授权流程实例主键
      * @param deploymentId String，当前实例流程定义所属部署主键
@@ -189,7 +189,7 @@ public class WorkflowProcessVariableProjection
         }
         if (rows.isEmpty())
         {
-            return new VariableStore(null, Map.of());
+            throw dataError("流程缺少正式表单提交快照");
         }
 
         Map<String, WorkflowHistoricSubmissionRow> metadataById = new LinkedHashMap<>();

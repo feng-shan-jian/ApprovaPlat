@@ -16,10 +16,7 @@ import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 public final class WorkflowNodeFormPermissionSnapshot
 {
     /** 表单组件业务变量字段名。 */
-    private static final String VARIABLE_FIELD = "__vModel__";
-
-    /** 表单组件配置字段名。 */
-    private static final String CONFIG_FIELD = "__config__";
+    private static final String VARIABLE_FIELD = "vModel";
 
     /** 嵌套布局子字段名。 */
     private static final String CHILDREN_FIELD = "children";
@@ -43,12 +40,9 @@ public final class WorkflowNodeFormPermissionSnapshot
         {
             throw dataError("节点表单权限快照参数不完整", null);
         }
-        boolean explicitPolicy = reference.defaultPermission() != null
-                || !reference.fieldPermissions().isEmpty();
-        if (!explicitPolicy)
+        if (reference.defaultPermission() == null)
         {
-            // 调用方已在同一部署事务校验正式模板；旧模型无权限描述时直接保留原语义。
-            return content;
+            throw invalid("绑定正式模板的节点必须配置批量默认字段权限");
         }
         try
         {
@@ -67,14 +61,15 @@ public final class WorkflowNodeFormPermissionSnapshot
                 throw invalid("节点字段权限引用了当前正式表单不存在的字段: "
                         + staleFields.iterator().next());
             }
+            Set<String> missingFields = new java.util.LinkedHashSet<>(fields.keySet());
+            missingFields.removeAll(reference.fieldPermissions().keySet());
+            if (!missingFields.isEmpty())
+            {
+                throw invalid("节点字段权限配置不完整: " + missingFields.iterator().next());
+            }
             for (Map.Entry<String, ObjectNode> entry : fields.entrySet())
             {
-                WorkflowFormFieldPermissionMode mode = reference.fieldPermissions()
-                        .getOrDefault(entry.getKey(), reference.defaultPermission());
-                if (mode == null)
-                {
-                    throw invalid("节点字段权限配置不完整: " + entry.getKey());
-                }
+                WorkflowFormFieldPermissionMode mode = reference.fieldPermissions().get(entry.getKey());
                 applyMode(entry.getValue(), mode);
             }
             String frozen = JsonMapper.shared().writeValueAsString(root);
@@ -102,8 +97,7 @@ public final class WorkflowNodeFormPermissionSnapshot
     {
         for (JsonNode componentNode : components)
         {
-            if (!(componentNode instanceof ObjectNode component)
-                    || !(component.path(CONFIG_FIELD) instanceof ObjectNode config))
+            if (!(componentNode instanceof ObjectNode component))
             {
                 throw dataError("节点表单字段结构异常", null);
             }
@@ -116,7 +110,7 @@ public final class WorkflowNodeFormPermissionSnapshot
                     throw dataError("节点表单字段重复", null);
                 }
             }
-            JsonNode children = config.get(CHILDREN_FIELD);
+            JsonNode children = component.get(CHILDREN_FIELD);
             if (children != null && children.isArray() && !children.isEmpty())
             {
                 collectFields(children, fields);
@@ -133,15 +127,14 @@ public final class WorkflowNodeFormPermissionSnapshot
      */
     private static void applyMode(ObjectNode component, WorkflowFormFieldPermissionMode mode)
     {
-        ObjectNode config = (ObjectNode) component.path(CONFIG_FIELD);
         boolean readable = mode != WorkflowFormFieldPermissionMode.HIDDEN;
         boolean writable = mode == WorkflowFormFieldPermissionMode.EDITABLE
                 || mode == WorkflowFormFieldPermissionMode.REQUIRED;
         boolean required = mode == WorkflowFormFieldPermissionMode.REQUIRED;
-        config.put("workflowHidden", mode == WorkflowFormFieldPermissionMode.HIDDEN);
-        config.put("workflowReadable", readable);
-        config.put("workflowWritable", writable);
-        config.put("required", required);
+        component.put("workflowHidden", mode == WorkflowFormFieldPermissionMode.HIDDEN);
+        component.put("workflowReadable", readable);
+        component.put("workflowWritable", writable);
+        component.put("required", required);
         // disabled 只承担页面表现；真正的写权限仍由 workflowWritable 在服务端强制执行。
         component.put("disabled", !writable);
     }

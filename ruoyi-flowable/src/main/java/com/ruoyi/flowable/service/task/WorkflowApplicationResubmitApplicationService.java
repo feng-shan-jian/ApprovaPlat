@@ -32,8 +32,6 @@ import com.ruoyi.flowable.service.process.WorkflowValidatedStartVariables;
 @Service
 public class WorkflowApplicationResubmitApplicationService
 {
-    /** 重提意见类型继续复用普通完成 FlowComment.NORMAL。 */
-    private static final String COMPLETE_COMMENT_TYPE = "1";
     /** 重新提交由系统生成的稳定审计说明。 */
     private static final String RESUBMIT_AUDIT_OPINION =
             "申请人修改原表单后重新提交";
@@ -210,7 +208,7 @@ public class WorkflowApplicationResubmitApplicationService
             MultiInstanceGroupReopenPlan groupPlan, ResubmitFormPlan formPlan)
     {
         bindFormAndAttachments(task, instance, applicantUserId, formPlan);
-        auditWriter.write(task, COMPLETE_COMMENT_TYPE, "RESUBMIT",
+        auditWriter.write(task, "RESUBMIT",
                 applicantUserId, RESUBMIT_AUDIT_OPINION,
                 task.getTaskDefinitionKey(), null);
         returnedTaskStateService.markTransition(instance.getId(),

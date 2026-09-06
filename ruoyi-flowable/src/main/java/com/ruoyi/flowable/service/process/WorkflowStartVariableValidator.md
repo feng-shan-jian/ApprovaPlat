@@ -15,7 +15,7 @@ Map<String, Object> variables = variableValidator.validateAndNormalize(
 
 ## 字段 schema
 
-变量名来自组件 `__vModel__`，格式为 ASCII 字母或下划线开头，后续使用字母、数字和下划线，最长 128 个字符。字段保持唯一、避开服务端保留字并使用输入类型白名单，全部通过后生成部署快照。
+变量名来自平面组件字段 `vModel`，格式为 ASCII 字母或下划线开头，后续使用字母、数字和下划线，最长 128 个字符。字段保持唯一、避开服务端保留字并使用输入类型白名单，全部通过后生成部署快照。
 
 支持的数据形态：
 
@@ -30,7 +30,7 @@ Map<String, Object> variables = variableValidator.validateAndNormalize(
 - `el-upload`：流程变量固定接收 `null` 或空数组；附件通过正式附件表、字段绑定和独立 `attachmentId` 请求链提交。
 - `el-table`：对象数组，仍执行对象字段、集合规模、嵌套深度和总负载限制。
 
-`__config__.required=true` 时，字段必须存在并包含有效非空值。组件的 `minlength/maxlength`、`min/max`、`limit` 和 `multiple-limit` 在服务端硬上限内进一步收紧。
+`required=true` 时，字段必须存在并包含有效非空值。组件的 `minlength/maxlength`、`min/max`、`limit` 和 `multiple-limit` 在服务端硬上限内进一步收紧。
 
 ## 保留变量
 

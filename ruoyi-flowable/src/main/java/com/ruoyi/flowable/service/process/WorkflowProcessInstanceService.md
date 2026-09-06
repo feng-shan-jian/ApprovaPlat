@@ -9,7 +9,7 @@
 | 方法 | 权限与对象约束 | 持久化结果 |
 | --- | --- | --- |
 | `updateState(request)` | 必须拥有 `workflow:process:state`；实例必须存在且仍在运行 | 使用 Flowable 公共 API 激活或挂起；相同状态返回 `changed=false` |
-| `terminate(request)` | `workflow:process:terminate` 按管理员终止，写 `terminated`；`workflow:process:cancel` 仅允许根实例真实发起人取消本人业务树，写 `canceled` | 授权后调用统一根终止写入口；子实例请求提升到根实例，更新双状态、写类型 `6` 的结构化 comment、级联删除完整运行树并保留结束历史 |
+| `terminate(request)` | `workflow:process:terminate` 按管理员终止，写 `terminated`；`workflow:process:cancel` 仅允许根实例真实发起人取消本人业务树，写 `canceled` | 授权后调用统一根终止写入口；子实例请求提升到根实例，为完整运行树写入双状态和稳定动作类型的结构化 comment，级联删除并保留结束历史 |
 | `terminateRootProcessInstance(...)` | 仅供当前 Flowable 写事务内的取消、驳回和管理员终止调用 | 一次确认根/执行树，必要时按根优先顺序临时激活完整挂起执行树；先预检双状态，取得引擎写锁后严格对账并删除根，随后锁定完全相同的 `ACTIVE/RETURNED` 集合、关闭为 `TERMINATED` 并执行后置对账 |
 | `deleteCompletedHistory(ids)` | 必须拥有 `workflow:process:remove`；整批实例及子流程必须全部结束，且不存在 `BOUND` 附件 | 先预检 `wf_copy`、`wf_controlled_loop_execution`、`wf_multi_instance_round` 数量，再同事务精确删除业务记录与 Flowable 历史，随后复核全部链路零残留 |
 
@@ -39,7 +39,7 @@
 - 具备 `workflow:process:terminate` 的流程管理员执行终止，结果固定为 `processStatus=terminated`；发起人身份保持独立审计属性。
 - CallActivity 子实例 ID 作为定位信息；服务端校验 `rootProcessInstanceId`、`superExecutionId` 和完整执行树后，始终以根实例执行对象授权、状态写入和级联删除。
 - 结构化 comment 固定包含 `action`、`actorUserId`、`processStatus`、`reason`、`wasSuspended`、`requestedInstanceId`、`rootInstanceId` 和 `processTreeInstanceCount`，字段结构由服务端生成。
-- 挂起根及 CallActivity 子流程会按根优先顺序在同一事务内临时激活，以便根和子流程任务都能写入变量及 comment，随后立即终止；SLA 保持挂起时的关闭状态，任何一步失败都会整体回滚。
+- 挂起根及 CallActivity 子流程会按根优先顺序在同一事务内临时激活，以便根和子流程都写入正式状态变量及结构化 comment，随后立即终止；SLA 保持挂起时的关闭状态，任何一步失败都会整体回滚。
 - 运行实例异常结束固定遵循 `Flowable→wf_multi_instance_round` 锁序：先冻结并校验完整树主键，完成 comment 和双状态写入取得 Flowable 写锁；执行树仍存在时用普通 SELECT 冻结开放轮次，并从 execution 图识别全部活动受控多实例根，逐项核对部署、定义、实例、节点、根、模式、有序成员、revision 和 `ACTIVE`。通知及根删除返回后才 `FOR UPDATE` 锁定业务行，锁定集合、`sourceStatus` 和全部冻结事实必须完全一致，再批量写 `TERMINATED + terminate_time`。最后使用 locking/current-read 复核 `ACTIVE/RETURNED` 数量为零，消除 RR 先前 read-view 和预检后 phantom 的影响。该顺序与加签、减签、完成链保持相同的引擎优先锁序；任一 Mapper 或后置校验失败仍回滚 Flowable 删除。
 - `TERMINATED` 是轮次专用异常终态，与 ALL/ANY 正常完成的 `COMPLETED` 分开记录。从 `ACTIVE` 关闭时退回字段保持全空；从 `RETURNED` 关闭时完整保留退回任务、操作人、申请人任务和 `return_time`，并新增数据库时钟产生的 `terminate_time`。
 - 写后门禁使用 `processInstanceIds` 批量核对冻结的根/子实例，另行核对根 execution 树和所有活动 task 均无残留，并复核根历史双状态、历史变量和可选审计 comment；任一漂移触发事务回滚。

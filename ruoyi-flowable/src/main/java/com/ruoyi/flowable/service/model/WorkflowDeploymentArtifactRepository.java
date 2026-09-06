@@ -158,7 +158,7 @@ public class WorkflowDeploymentArtifactRepository
      * 删除父流程部署拥有的唯一业务资源子部署。
      *
      * @param deploymentId String，父流程部署主键
-     * @return int，实际删除的业务资源子部署数量，历史未托管部署返回 0
+     * @return int，实际删除的业务资源子部署数量，不存在时返回 0
      */
     public int delete(String deploymentId)
     {
@@ -176,7 +176,7 @@ public class WorkflowDeploymentArtifactRepository
      * 查询父流程部署的全部表单快照。
      *
      * @param deploymentId String，父流程部署主键
-     * @return List&lt;WfDeployForm&gt;，历史未托管部署返回空列表
+     * @return List&lt;WfDeployForm&gt;，业务资源子部署不存在时返回空列表并由正式调用方决定是否拒绝
      */
     public List<WfDeployForm> selectForms(String deploymentId)
     {
@@ -282,8 +282,8 @@ public class WorkflowDeploymentArtifactRepository
     /**
      * 批量读取父流程部署中的流程级发起范围规则。
      *
-     * 外层只包含已经存在业务资源子部署的父部署；因此外层缺失表示历史未托管部署，
-     * 外层存在但内层缺少流程 key 则保留为受管快照缺失，交由运行服务按数据错误处理。
+     * 外层只包含已经存在业务资源子部署的父部署；外层或流程 key 缺失都由运行服务
+     * 按迁移后的数据一致性错误处理。
      *
      * @param deploymentIds Collection&lt;String&gt;，待查询的父流程部署主键集合
      * @return Map&lt;String, Map&lt;String, WfDeployParticipantRule&gt;&gt;，父部署主键到流程 key 发起规则的不可变映射
@@ -533,6 +533,24 @@ public class WorkflowDeploymentArtifactRepository
     }
 
     /**
+     * 一次扫描全部正式部署制品，返回仍被引用的扩展稳定键。
+     *
+     * @return Set&lt;String&gt;，部署扩展快照中出现过的稳定键不可变集合
+     */
+    public Set<String> referencedExtensionKeys()
+    {
+        Set<String> referencedKeys = new java.util.LinkedHashSet<>();
+        for (Deployment artifact : listArtifactDeployments())
+        {
+            readListFromArtifact(artifact, EXTENSIONS_RESOURCE, EXTENSION_LIST).stream()
+                    .map(WfDeployExtensionSnapshot::getExtensionKey)
+                    .filter(key -> key != null && !key.isBlank())
+                    .forEach(referencedKeys::add);
+        }
+        return Set.copyOf(referencedKeys);
+    }
+
+    /**
      * 统计已发布流程对指定来源 DMN 部署的冻结引用。
      *
      * @param sourceDeploymentId String，用户创建的 DMN 来源部署主键
@@ -596,7 +614,7 @@ public class WorkflowDeploymentArtifactRepository
      * 查找父部署唯一的业务资源子部署。
      *
      * @param parentDeploymentId String，父流程部署主键
-     * @return Deployment，业务资源子部署；历史未托管部署返回 null
+     * @return Deployment，业务资源子部署；不存在时返回 null
      */
     private Deployment findArtifactDeployment(String parentDeploymentId)
     {

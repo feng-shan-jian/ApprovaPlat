@@ -32,6 +32,7 @@ import org.flowable.bpmn.model.FlowNode;
 import org.flowable.bpmn.model.FlowableListener;
 import org.flowable.bpmn.model.FormProperty;
 import org.flowable.bpmn.model.ImplementationType;
+import org.flowable.bpmn.model.ManualTask;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.ScriptTask;
@@ -88,12 +89,13 @@ public class WorkflowBpmnService
     private static final String FLOWABLE_SEND_TASK_IMPLEMENTATION_PROBLEM =
             "flowable-sendtask-invalid-implementation";
 
-    /** 任务监听器只允许引用生产兼容入口，不接受任意 Spring Bean。 */
-    private static final String USER_TASK_LISTENER_EXPRESSION = "${userTaskListener}";
+    /** 服务端最终编译结果只允许引用固定内部任务监听器，不接受任意 Spring Bean。 */
+    private static final String USER_TASK_LISTENER_EXPRESSION =
+            WorkflowRuntimeTaskListenerCompiler.SYSTEM_LISTENER_EXPRESSION;
 
-    /** 生产兼容入口允许处理的任务生命周期事件。 */
+    /** 服务端最终编译结果必须具有的完整任务生命周期事件。 */
     private static final Set<String> USER_TASK_LISTENER_EVENTS =
-            Set.of("create", "assignment", "complete");
+            WorkflowRuntimeTaskListenerCompiler.SYSTEM_LISTENER_EVENTS;
 
     /** 普通表达式仅允许变量、属性、索引、字面量和运算符，禁止方法调用。 */
     private static final Pattern SAFE_EXPRESSION_PATTERN = Pattern.compile(
@@ -638,6 +640,11 @@ public class WorkflowBpmnService
             {
                 throw invalidBpmn("用户任务办理规则不能配置在流程级", null);
             }
+            if (validationContext == ValidationContext.AUTHOR
+                    && !WorkflowParticipantRuleBpmnContract.hasStartProperties(process))
+            {
+                throw invalidBpmn("每个可执行流程必须配置完整发起范围", null);
+            }
             if (WorkflowParticipantRuleBpmnContract.hasStartProperties(process))
             {
                 if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
@@ -697,11 +704,15 @@ public class WorkflowBpmnService
             {
                 throw invalidBpmn("流程不允许使用脚本任务", null);
             }
+            if (!process.findFlowElementsOfType(ManualTask.class, true).isEmpty())
+            {
+                throw invalidBpmn("流程作者模型不允许使用 ManualTask", null);
+            }
 
             validateBpmnBusinessEvents(bpmnModel, process);
 
             // 多实例结构和动态成员初始化拓扑必须先于顺序流表达式校验，确保不可执行拓扑返回准确诊断。
-            validateMultiInstanceActivities(process);
+            validateMultiInstanceActivities(process, validationContext);
 
             validateListeners(process.getExecutionListeners(), validationContext);
             for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
@@ -895,7 +906,24 @@ public class WorkflowBpmnService
         }
         if (element instanceof UserTask userTask)
         {
-            if (WorkflowParticipantRuleBpmnContract.hasTaskProperties(userTask))
+            boolean multiInstance = userTask.getLoopCharacteristics() != null;
+            boolean hasTaskRule = WorkflowParticipantRuleBpmnContract.hasTaskProperties(userTask);
+            if (validationContext == ValidationContext.AUTHOR && !multiInstance && !hasTaskRule)
+            {
+                throw invalidBpmn("普通用户任务必须配置完整平台办理人规则", null);
+            }
+            if (validationContext == ValidationContext.AUTHOR
+                    && (hasText(userTask.getAssignee()) || hasText(userTask.getOwner())
+                    || (userTask.getCandidateUsers() != null && !userTask.getCandidateUsers().isEmpty())
+                    || (userTask.getCandidateGroups() != null && !userTask.getCandidateGroups().isEmpty())))
+            {
+                throw invalidBpmn("作者模型不允许提交 Flowable 原生办理人字段", null);
+            }
+            if (multiInstance && hasTaskRule)
+            {
+                throw invalidBpmn("多实例任务不能同时配置普通办理人规则", null);
+            }
+            if (hasTaskRule)
             {
                 if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
                 {
@@ -934,14 +962,15 @@ public class WorkflowBpmnService
      * @param process Process，待校验的可执行流程
      * @return void，任一多实例结构、来源或初始化拓扑不合法时抛出 HTTP 400
      */
-    private void validateMultiInstanceActivities(Process process)
+    private void validateMultiInstanceActivities(Process process,
+            ValidationContext validationContext)
     {
         for (Activity activity : process.findFlowElementsOfType(Activity.class, true))
         {
             MultiInstanceLoopCharacteristics loop = activity.getLoopCharacteristics();
             if (loop != null)
             {
-                validateMultiInstance(process, activity, loop);
+                validateMultiInstance(process, activity, loop, validationContext);
             }
         }
     }
@@ -1036,7 +1065,7 @@ public class WorkflowBpmnService
      * @return 无返回值
      */
     private void validateMultiInstance(Process process, Activity activity,
-            MultiInstanceLoopCharacteristics loop)
+            MultiInstanceLoopCharacteristics loop, ValidationContext validationContext)
     {
         if (activity instanceof UserTask userTask)
         {
@@ -1048,22 +1077,20 @@ public class WorkflowBpmnService
 
         if (!usesControlledHandler)
         {
-            // 静态集合继续保持兼容，但仍走普通表达式白名单并拒绝可实例化的 collectionHandler。
-            validateExpression(loop.getInputDataItem());
-            validateExpression(loop.getCollectionString());
-            validateExpression(loop.getLoopCardinality());
-            validateExpression(loop.getCompletionCondition());
-            if (loop.getHandler() != null)
-            {
-                throw invalidBpmn("多实例集合处理器未列入安全白名单", null);
-            }
-            return;
+            throw invalidBpmn("多实例任务必须使用平台受控成员来源", null);
         }
 
         try
         {
             // 保存门禁与运行时调整服务复用同一结构契约，不能各自维护近似白名单。
-            WorkflowMultiInstanceModelContract.requireMode(activity);
+            if (validationContext == ValidationContext.AUTHOR)
+            {
+                WorkflowMultiInstanceModelContract.requireAuthorMode(activity);
+            }
+            else
+            {
+                WorkflowMultiInstanceModelContract.requireMode(activity);
+            }
         }
         catch (IllegalArgumentException exception)
         {
@@ -1071,7 +1098,7 @@ public class WorkflowBpmnService
         }
         if (WorkflowMultiInstanceModelContract.usesDynamicHandler(loop))
         {
-            // 仅办理时来源需要前驱任务在完成事务中写入 nextUserIds；发起、旧固定和指定身份
+            // 仅办理时来源需要前驱任务在完成事务中写入 nextUserIds；发起和指定身份
             // 均能在进入节点时自行取得正式成员，不能复用动态初始化拓扑门禁。
             validateControlledMultiInstanceTopology(process, (UserTask) activity);
         }
@@ -1449,18 +1476,22 @@ public class WorkflowBpmnService
     }
 
     /**
-     * 校验用户任务监听器只能使用固定兼容 Bean 和批准事件，并拒绝字段注入、脚本、
-     * 事务回调及自定义属性解析器，保证模型无法借监听器执行任意代码。
+     * 区分作者业务监听器与服务端编译生成的身份审计监听器，并拒绝内部协议进入作者 XML。
      *
-     * @param listeners List&lt;FlowableListener&gt;，用户任务监听器集合，必须完整包含三个固定事件
-     * @return 无返回值；监听器缺失、重复或实现漂移时拒绝模型
+     * @param listeners List&lt;FlowableListener&gt;，用户任务监听器集合，作者阶段允许为空
+     * @param validationContext ValidationContext，决定内部监听器必须缺失或完整存在
+     * @return 无返回值；监听器越权、重复或编译结果不完整时拒绝模型
      */
     private void validateTaskListeners(List<FlowableListener> listeners,
             ValidationContext validationContext)
     {
-        if (listeners == null)
+        if (listeners == null || listeners.isEmpty())
         {
-            throw invalidBpmn("用户任务必须配置固定身份审计任务监听器", null);
+            if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
+            {
+                throw invalidBpmn("编译执行资源缺少固定身份审计任务监听器", null);
+            }
+            return;
         }
         Set<String> seenEvents = new HashSet<>();
         Set<String> businessEvents = new HashSet<>();
@@ -1476,6 +1507,10 @@ public class WorkflowBpmnService
                 }
                 validateBusinessListener(listener, validationContext, "任务");
                 continue;
+            }
+            if (validationContext == ValidationContext.AUTHOR)
+            {
+                throw invalidBpmn("作者 BPMN 不允许携带内部任务监听器", null);
             }
             boolean hasFields = listener.getFieldExtensions() != null
                     && !listener.getFieldExtensions().isEmpty();
@@ -1495,9 +1530,10 @@ public class WorkflowBpmnService
                 throw invalidBpmn("任务监听器未列入安全白名单", null);
             }
         }
-        if (!seenEvents.equals(USER_TASK_LISTENER_EVENTS))
+        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT
+                && !seenEvents.equals(USER_TASK_LISTENER_EVENTS))
         {
-            throw invalidBpmn("用户任务必须配置固定身份审计任务监听器", null);
+            throw invalidBpmn("编译执行资源缺少固定身份审计任务监听器", null);
         }
     }
 
@@ -1741,14 +1777,11 @@ public class WorkflowBpmnService
      * 判断原始 XML 表达式是否为模型层已经受控识别的多实例集合表达式。
      *
      * @param expression String，原始 XML 扫描得到的完整 EL 表达式。
-     * @return boolean，办理时、发起时、指定身份或严格格式固定集合表达式时返回 true。
+     * @return boolean，办理时、发起时或指定身份集合表达式时返回 true。
      */
     private boolean isControlledMultiInstanceCollectionExpression(String expression)
     {
-        // BPMN 序列化会把固定成员表达式参数中的单引号转义为 &#39; 或 &apos;；模型层读取时已还原，
-        // 原始 XML 扫描必须使用同一文本才能完成一一对应，不能把合法设计器输出误判为任意 EL。
-        String normalizedExpression = expression.replace("&#39;", "'")
-                .replace("&apos;", "'");
+        String normalizedExpression = expression;
         if (WorkflowMultiInstanceModelContract.COLLECTION_EXPRESSION.equals(normalizedExpression)
                 || WorkflowMultiInstanceModelContract.START_COLLECTION_EXPRESSION.equals(
                         normalizedExpression)
@@ -1757,9 +1790,7 @@ public class WorkflowBpmnService
         {
             return true;
         }
-        MultiInstanceLoopCharacteristics loop = new MultiInstanceLoopCharacteristics();
-        loop.setInputDataItem(normalizedExpression);
-        return WorkflowMultiInstanceModelContract.usesFixedHandler(loop);
+        return false;
     }
 
     /**
@@ -1880,13 +1911,13 @@ public class WorkflowBpmnService
      * 解析正式模板节点上的批量默认策略和逐字段权限，并拒绝普通 FormData 混入双重来源。
      *
      * @param properties List&lt;FormProperty&gt;，设计器生成的权限描述字段
-     * @return NodeFormPermissionPolicy，旧模型无描述时返回空策略
+     * @return NodeFormPermissionPolicy，字段完整的节点权限策略
      */
     private NodeFormPermissionPolicy parseTemplateFormPermissions(List<FormProperty> properties)
     {
         if (properties == null || properties.isEmpty())
         {
-            return new NodeFormPermissionPolicy(null, Map.of());
+            throw invalidBpmn("绑定正式模板的节点必须配置完整字段权限", null);
         }
         WorkflowFormFieldPermissionMode defaultPermission = null;
         Map<String, WorkflowFormFieldPermissionMode> fieldPermissions = new LinkedHashMap<>();

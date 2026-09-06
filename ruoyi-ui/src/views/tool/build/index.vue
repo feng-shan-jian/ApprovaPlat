@@ -171,7 +171,7 @@ import CodeTypeDialog from './CodeTypeDialog'
 import { onMounted, watch } from 'vue'
 import { createForm as createWorkflowForm, getForm as getWorkflowForm, updateForm as updateWorkflowForm } from '@/api/workflow/form'
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
-import { builderTemplateToLegacy, legacyTemplateToBuilder } from '@/components/workflow/form/formTemplate'
+import { completeWorkflowFieldPermissions } from '@/components/workflow/form/formTemplate.js'
 
 initDrawingDefaultValue()
 
@@ -237,8 +237,13 @@ function addComponent(item) {
   activeFormItem(clone)
 }
 
+/**
+ * 克隆生成器组件并补齐流程字段的正式可见、可读和可写权限。
+ * @param {object} origin 组件面板中的原始字段定义。
+ * @returns {object} 带唯一标识和完整工作流权限的画布字段。
+ */
 function cloneComponent(origin) {
-  const clone = JSON.parse(JSON.stringify(origin))
+  const clone = completeWorkflowFieldPermissions(JSON.parse(JSON.stringify(origin)))
   clone.formId = ++idGlobal.value
   clone.span = formConf.value.span
   clone.renderKey = +new Date() // 改变renderKey后可以实现强制更新组件
@@ -365,13 +370,15 @@ function generateCode() {
 }
 
 /**
- * 将当前生成器状态转换为后端正式旧版表单 JSON。
- * @returns {string} 使用 __config__/__vModel__ 的 JSON 正文。
+ * 将当前拖拽编辑状态序列化为唯一正式平面表单 Schema。
+ * @returns {string} 使用 tag、vModel、layout 和 children 的正式 JSON 正文。
  */
 function serializeWorkflowTemplate() {
   AssembleFormData()
   validateWorkflowFields(drawingList.value)
-  return JSON.stringify(builderTemplateToLegacy(formData.value))
+  const template = JSON.parse(JSON.stringify(formData.value))
+  template.fields = completeWorkflowFieldPermissions(template.fields)
+  return JSON.stringify(template)
 }
 
 /**
@@ -395,7 +402,7 @@ function validateWorkflowFields(fields, variables = new Set()) {
 }
 
 /**
- * 加载正式流程表单并转换为当前拖拽生成器结构。
+ * 加载唯一正式平面表单 Schema；拖拽编辑模型与该 Schema 使用同一字段结构。
  * @param {string|number} formId 流程表单主键；为空时初始化空设计。
  * @returns {Promise<void>} 加载完成后更新表单元数据和画布。
  */
@@ -405,8 +412,11 @@ async function loadWorkflowForm(formId) {
   activeId.value = undefined
   if (!formId) return
   const response = await getWorkflowForm(formId)
-  const builderTemplate = legacyTemplateToBuilder(response.data.content)
-  const { fields, ...settings } = builderTemplate
+  const formalTemplate = JSON.parse(response.data.content)
+  if (!formalTemplate || typeof formalTemplate !== 'object' || !Array.isArray(formalTemplate.fields)) {
+    throw new Error('流程表单模板格式不合法')
+  }
+  const { fields, ...settings } = formalTemplate
   formConf.value = { ...formConfData, ...settings }
   drawingList.value = fields
   Object.assign(workflowForm, {

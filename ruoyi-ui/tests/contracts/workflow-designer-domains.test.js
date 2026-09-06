@@ -14,6 +14,7 @@ import {
   createUserTaskSlaDomain,
   isUserTaskSlaProperty
 } from '../../src/components/workflow/designer/userTaskSlaDomain.js'
+import { completeWorkflowFieldPermissions } from '../../src/components/workflow/form/formTemplate.js'
 
 /**
  * 创建三个设计器领域测试共用的只读上下文。
@@ -72,21 +73,22 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   const templateContent = JSON.stringify({
     fields: [
       {
-        __vModel__: 'amount',
-        __config__: { tag: 'el-input-number', label: '申请金额' }
+        vModel: 'amount', tag: 'el-input-number', label: '申请金额', layout: 'colFormItem',
+        workflowHidden: false, workflowReadable: true, workflowWritable: true
       },
       {
-        __vModel__: 'decision',
-        __config__: { tag: 'el-radio-group', label: '审批结论', workflowEnum: true },
-        __slot__: { options: [{ value: 'PASS', label: '通过' }, { value: 'REJECT', label: '驳回' }] }
+        vModel: 'decision', tag: 'el-radio-group', label: '审批结论',
+        layout: 'colFormItem', workflowEnum: true,
+        workflowHidden: false, workflowReadable: true, workflowWritable: true,
+        options: [{ value: 'PASS', label: '通过' }, { value: 'REJECT', label: '驳回' }]
       },
       {
-        __config__: {
-          children: [{
-            __vModel__: 'readonlyNote',
-            __config__: { tag: 'el-input', label: '只读说明', workflowWritable: false }
-          }]
-        }
+        layout: 'rowFormItem',
+        children: [{
+          vModel: 'readonlyNote', tag: 'el-input', label: '只读说明',
+          layout: 'colFormItem', workflowHidden: false,
+          workflowReadable: true, workflowWritable: false
+        }]
       }
     ]
   })
@@ -100,7 +102,7 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
       formPermissionFields: []
     }
   })
-  const legacyFacade = createFormParticipantDomain(context)
+  const formParticipantDomain = createFormParticipantDomain(context)
   const controlledLoopDomain = createControlledLoopDomain({
     buildPropertiesExtensionElements: context.buildPropertiesExtensionElements,
     formFieldCatalog: context.formFieldCatalog,
@@ -109,19 +111,27 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
     selectedBusinessObject: context.selectedBusinessObject
   })
   const participantRuleDomain = createParticipantRuleDomain({
-    readParticipantFormFieldOptions: () => legacyFacade.participantFormFieldOptions.value,
+    readParticipantFormFieldOptions: () => formParticipantDomain.participantFormFieldOptions.value,
     readAllFlowableProperties: context.readAllFlowableProperties
   })
   const templateBusinessObject = {
     get(name) { return name === 'flowable:formKey' ? 'key_7' : '' },
     extensionElements: {
-      values: [{
-        $type: 'flowable:FormProperty',
-        id: 'approva_permission_field_1',
-        variable: 'decision',
-        readable: false,
-        writable: false
-      }]
+      values: [
+        {
+          $type: 'flowable:FormProperty',
+          id: 'approva_permission_default',
+          readable: true,
+          writable: true
+        },
+        {
+          $type: 'flowable:FormProperty',
+          id: 'approva_permission_field_1',
+          variable: 'decision',
+          readable: false,
+          writable: false
+        }
+      ]
     }
   }
   const embeddedBusinessObject = {
@@ -245,19 +255,18 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   assert.equal(controlledLoopError.message, '再次进入和退出条件不能相同')
   assert.equal(controlledLoopWriteCount, 1)
   assert.equal(controlledLoopRestoreCount, 1)
-  assert.deepEqual(legacyFacade.resolveFormPermissionSourceFields(), [
+  assert.deepEqual(formParticipantDomain.resolveFormPermissionSourceFields(), [
     { variable: 'amount', label: '申请金额', mode: 'EDITABLE' },
     { variable: 'decision', label: '审批结论', mode: 'EDITABLE' },
     { variable: 'readonlyNote', label: '只读说明', mode: 'READONLY' }
   ])
-  assert.deepEqual(legacyFacade.readTemplatePermissionPolicy(templateBusinessObject), {
-    configured: true,
+  assert.deepEqual(formParticipantDomain.readTemplatePermissionPolicy(templateBusinessObject), {
     defaultMode: 'EDITABLE',
     permissions: new Map([['decision', 'HIDDEN']])
   })
   assert.deepEqual(context.formFieldCatalog.resolveUserIdFieldCatalog(
     templateBusinessObject,
-    legacyFacade.readTemplatePermissionPolicy(templateBusinessObject)
+    formParticipantDomain.readTemplatePermissionPolicy(templateBusinessObject)
   ), [
     { value: 'amount', label: '申请金额（amount）', eligible: true, signature: 'el-input-number' },
     { value: 'decision', label: '审批结论（decision）', eligible: false, signature: '' },
@@ -265,7 +274,7 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   ])
   assert.deepEqual(context.formFieldCatalog.resolveUserIdFieldCatalog(
     embeddedBusinessObject,
-    legacyFacade.readTemplatePermissionPolicy(embeddedBusinessObject)
+    formParticipantDomain.readTemplatePermissionPolicy(embeddedBusinessObject)
   ), [
     { value: 'approved', label: '是否通过（approved）', eligible: false, signature: '' },
     { value: 'result', label: '处理结果（result）', eligible: true, signature: 'el-select' },
@@ -316,9 +325,9 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   assert.throws(() => participantRuleDomain.normalizeParticipantRule(
     { type: 'ROLES', targetIds: ['12'], formField: '' }, true),
     { message: '角色目录选项不合法' })
-  assert.deepEqual(legacyFacade.readParticipantRule({
+  assert.deepEqual(formParticipantDomain.readParticipantRule({
     get(name) { return name === 'flowable:assignee' ? '12' : '' }
-  }), { type: 'FIXED_USER', targetIds: ['12'], formField: '' })
+  }), { type: '', targetIds: [], formField: '' })
 
   let participantWriteCount = 0
   let persistedParticipantProperties
@@ -383,6 +392,47 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
     ],
     conflicts: ['amount']
   })
+})
+
+/**
+ * 验证真实生成器字段在保存前递归补齐正式节点权限，同时保留明确的只读配置。
+ * @returns {void} 缺失权限仍会被渲染为隐藏或显式权限被覆盖时测试失败。
+ */
+test('表单生成器输出补齐正式节点权限', () => {
+  const fields = completeWorkflowFieldPermissions([{
+    vModel: 'title', tag: 'el-input', layout: 'colFormItem'
+  }, {
+    layout: 'rowFormItem',
+    children: [{
+      vModel: 'readonlyNote', tag: 'el-input', layout: 'colFormItem',
+      workflowHidden: false, workflowReadable: true, workflowWritable: false
+    }]
+  }])
+
+  assert.deepEqual(
+    [fields[0].workflowHidden, fields[0].workflowReadable, fields[0].workflowWritable],
+    [false, true, true])
+  assert.deepEqual([
+    fields[1].children[0].workflowHidden,
+    fields[1].children[0].workflowReadable,
+    fields[1].children[0].workflowWritable
+  ], [false, true, false])
+})
+
+/**
+ * 验证表单键只接受后端精确协议，并以十进制文本匹配完整 Long 主键。
+ * @returns {void} 裸数字键被接受或超出安全整数的主键发生 Number 精度丢失时测试失败。
+ */
+test('表单键使用精确 key_正Long 文本协议', () => {
+  const unsafeLong = '9007199254740993'
+  const catalog = createDesignerFormFieldCatalog({
+    forms: [{ formId: unsafeLong, content: '{"fields":[]}' }]
+  })
+
+  assert.equal(catalog.resolveTemplateForm(`key_${unsafeLong}`)?.formId, unsafeLong)
+  assert.equal(catalog.resolveTemplateForm(unsafeLong), undefined)
+  assert.equal(catalog.resolveTemplateForm(`key_0`), undefined)
+  assert.equal(catalog.resolveTemplateForm(`key_${unsafeLong}x`), undefined)
 })
 
 /**
@@ -460,13 +510,7 @@ test('表单与参与者领域独立校验指定多实例身份', () => {
   propertyState.configuredMultiInstanceIdentityIds = []
   assert.match(domain.validatePendingMultiInstanceSelection(), /必须选择 1 至 100 个有效用户、角色或部门/)
 
-  propertyState.multiInstanceType = 'none'
-  domain.updateAssignment()
-  assert.deepEqual(assignmentChange, {
-    'flowable:assignee': '12',
-    'flowable:candidateUsers': undefined,
-    'flowable:candidateGroups': undefined
-  })
+  assert.equal(assignmentChange, undefined)
 })
 
 /**

@@ -22,10 +22,10 @@
         >加签</el-button>
         <el-button v-if="canUnclaim" :loading="actionBusy" @click="confirmUnclaim">取消认领</el-button>
         <el-button v-if="canResolve" type="primary" :loading="actionBusy" @click="openActionDialog('resolve')">完成委派</el-button>
-        <el-button v-if="canManageTask" @click="openUserAction('delegate')">委派</el-button>
-        <el-button v-if="canManageTask" @click="openUserAction('transfer')">转办</el-button>
+        <el-button v-if="canDelegate" @click="openUserAction('delegate')">委派</el-button>
+        <el-button v-if="canTransfer" @click="openUserAction('transfer')">转办</el-button>
         <el-button v-if="canReturnTask" type="danger" plain @click="openReturnDialog">退回</el-button>
-        <el-button v-if="canMoveTask" type="danger" plain @click="openActionDialog('reject')">驳回</el-button>
+        <el-button v-if="canReject" type="danger" plain @click="openActionDialog('reject')">驳回</el-button>
         <el-button v-if="canResubmit" type="primary" :loading="actionBusy" @click="confirmResubmit">重新提交</el-button>
         <el-button v-if="canComplete" type="primary" @click="openActionDialog('complete')">通过</el-button>
       </div>
@@ -197,15 +197,6 @@
         </el-table-column>
       </el-table>
     </section>
-
-    <el-alert
-      v-if="ready && applicationFormMissing"
-      class="workflow-detail__application-missing"
-      type="warning"
-      title="申请表单快照缺失，无法证明原申请值；当前仅展示流程图和可用审计信息。"
-      show-icon
-      :closable="false"
-    />
 
     <el-tabs v-if="ready" v-model="activeTab" class="workflow-detail__tabs">
       <el-tab-pane v-if="applicationForm" :label="applicationFormTabLabel" name="applicationForm">
@@ -526,12 +517,10 @@ import {
   transferTask,
   unclaimTask
 } from '@/api/workflow/task'
-import { getWorkflowAttachment } from '@/api/workflow/attachment'
 import { urgeWorkflow } from '@/api/workflow/notification'
 import { listApprovalUserOptions, listIdentityOptions } from '@/api/workflow/identity'
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
-import { flattenFormFields, normalizeFormTemplate } from '@/components/workflow/form/formTemplate'
 import useUserStore from '@/store/modules/user'
 import { useWindowSize } from '@vueuse/core'
 
@@ -552,7 +541,6 @@ const taskFormValues = ref({})
 const applicationForm = ref(null)
 const applicationFormValues = ref({})
 const nodeTaskForm = ref(null)
-const applicationFormMissing = ref(false)
 const historyForms = ref([])
 const taskFormRef = ref(null)
 const actionFormRef = ref(null)
@@ -578,11 +566,9 @@ let detailPageInitialized = false
 // 加签身份检索与成员快照各自使用递增序号，禁止旧结果覆盖当前任务 revision。
 let multiInstanceUserSearchSequence = 0
 let multiInstanceRefreshSequence = 0
-// 审批对象和抄送对象分别缓存服务端已验证选项，远程结果切换后仍能稳定显示已选标签。
+// 审批对象和抄送对象缓存只负责显示名称，不能作为后端资格授权依据。
 const approvalUserOptionCache = new Map()
-const verifiedApprovalUserIds = new Set()
 const copyUserOptionCache = new Map()
-const verifiedCopyUserIds = new Set()
 // 动态加签使用独立的身份目录缓存，仅负责远程检索后的稳定标签展示。
 const multiInstanceUserOptionCache = new Map()
 // 只有该机器子码表示 expectedRevision 失配；其他 409 可能是任务、权限或执行树变化。
@@ -672,7 +658,6 @@ function processRelationStatus(status) {
   }[status] || { label: status || '未知', type: 'info' }
 }
 const diagramFileName = computed(() => `workflow_${safeFileName(detail.processKey || processInstanceId() || 'process')}`)
-const currentUserId = computed(() => String(userStore.id || ''))
 // 动态多实例状态完全来自详情 API 的正式快照；revision、成员状态和计数不在浏览器自行推演。
 const multiInstanceState = computed(() => detail.multiInstanceState || null)
 const multiInstanceMembers = computed(() => Array.isArray(multiInstanceState.value?.members)
@@ -699,48 +684,36 @@ const nextUserSelectionLabel = computed(() => ({
 const nextUserSelectionPlaceholder = computed(() => isNextUserSelectionRequired.value
   ? `请选择${nextUserSelectionLabel.value}`
   : '选择下一办理人（可选）')
-// 任务操作必须同时满足活动任务存在、当前登录用户就是 assignee，不能仅凭页面路由推断所有权。
-const currentTaskOwned = computed(() => Boolean(
-  detail.currentTask?.active
-  && currentUserId.value
-  && String(detail.currentTask.assignee || '') === currentUserId.value
-))
-// Flowable 委派状态与 owner 共同组成委派上下文；PENDING 只能办理委派办结，不能执行普通完成或节点移动。
-const delegationState = computed(() => String(detail.currentTask?.delegationState || '').trim().toUpperCase())
-const hasDelegationContext = computed(() => Boolean(delegationState.value || detail.currentTask?.owner))
-const pendingDelegation = computed(() => delegationState.value === 'PENDING')
-// 普通办理能力同时受对象所有权、流程运行态和后端同名权限约束。
-const canOperateTask = computed(() => currentTaskOwned.value
-  && detail.processStatus === 'running'
+// 任务动作只消费详情 API 的正式 capability；前端仅保留对应页面入口权限。
+const canComplete = computed(() => detail.completeAllowed === true
   && hasPermission('workflow:process:approval'))
-// 完成、节点移动和管理动作根据委派上下文进一步收窄，页面门禁与后端状态校验保持一致。
-const canComplete = computed(() => canOperateTask.value && !pendingDelegation.value)
+const canReject = computed(() => detail.rejectAllowed === true
+  && hasPermission('workflow:process:approval'))
 // 重提业务能力只消费详情 API 的服务端快照，前端仅叠加入口权限。
 const canResubmit = computed(() => detail.resubmitAllowed === true
   && hasPermission('workflow:process:start'))
 const applicationFormTabLabel = computed(() => canResubmit.value
   ? '修改申请表单'
   : '申请表单')
-const canMoveTask = computed(() => canOperateTask.value && !hasDelegationContext.value)
-// 退回能力由后端复用正式动作准备链投影，前端不再把缺少动态多实例状态误判为普通安全任务。
-const canReturnTask = computed(() => canMoveTask.value && detail.returnAllowed === true)
-// 受控动态多实例的 assignee 必须与服务端成员快照一致，禁止页面开放委派或转办改写办理人。
-const canManageTask = computed(() => canMoveTask.value && !multiInstanceState.value)
+const canReturnTask = computed(() => detail.returnAllowed === true
+  && hasPermission('workflow:process:approval'))
+const canDelegate = computed(() => detail.delegateAllowed === true
+  && hasPermission('workflow:process:approval'))
+const canTransfer = computed(() => detail.transferAllowed === true
+  && hasPermission('workflow:process:approval'))
 // 动态成员调整只消费服务端正式能力，前端仅叠加审批入口权限。
 const canAdjustMultiInstance = computed(() => multiInstanceState.value?.adjustmentAllowed === true
   && hasPermission('workflow:process:approval'))
 // 取消认领业务能力只消费详情 API 的服务端快照，前端仅叠加入口权限。
 const canUnclaim = computed(() => detail.currentTask?.unclaimAllowed === true
   && hasPermission('workflow:process:claim'))
-// 委派办结只对当前受托人持有的 PENDING 任务开放。
-const canResolve = computed(() => currentTaskOwned.value
-  && detail.processStatus === 'running'
-  && pendingDelegation.value
+const canResolve = computed(() => detail.resolveAllowed === true
   && hasPermission('workflow:process:approval'))
 // 人工催办业务能力只消费详情 API 的服务端快照，前端仅叠加基础入口权限。
 const canUrge = computed(() => detail.urgeAllowed === true
   && hasPermission('workflow:notification:urge'))
-const hasAnyTaskAction = computed(() => canComplete.value || canResubmit.value || canMoveTask.value || canManageTask.value || canUnclaim.value || canResolve.value)
+const hasAnyTaskAction = computed(() => canComplete.value || canReject.value || canResubmit.value
+  || canReturnTask.value || canDelegate.value || canTransfer.value || canUnclaim.value || canResolve.value)
 // 用户选择与抄送字段按动作白名单显示，未列入的动作不会向后端发送额外身份参数。
 const isUserAction = computed(() => ['delegate', 'transfer'].includes(actionDialog.type))
 const supportsCopyAction = computed(() => ['complete', 'reject', 'return', 'delegate', 'resolve', 'transfer'].includes(actionDialog.type))
@@ -861,7 +834,6 @@ function clearDetailState(preserveMultiInstanceDraft = false) {
   applicationForm.value = null
   applicationFormValues.value = {}
   nodeTaskForm.value = null
-  applicationFormMissing.value = false
   historyForms.value = []
   activeTab.value = 'applicationForm'
   actionDialog.visible = false
@@ -899,28 +871,22 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
       throw new Error('流程详情实例关系不一致')
     }
     const formDetail = payload.formDetail
-    const attachmentCache = new Map()
-    const hydratedApplicationValues = formDetail.applicationForm
-      ? await hydrateFormValues(formDetail.applicationForm, attachmentCache, expectedProcessInstanceId)
-      : {}
+    const hydratedApplicationValues = cloneJson(formDetail.applicationForm?.values || {})
     const currentValues = formDetail.nodeTaskForm
-      ? await hydrateFormValues(formDetail.nodeTaskForm, attachmentCache, expectedProcessInstanceId)
+      ? cloneJson(formDetail.nodeTaskForm.values || {})
       : formDetail.returnedApplication ? hydratedApplicationValues : {}
-    const hydratedHistory = await Promise.all(formDetail.historyForms.map(async form => ({
+    const hydratedHistory = formDetail.historyForms.map(form => ({
       ...form,
-      hydratedValues: await hydrateFormValues(form, attachmentCache, expectedProcessInstanceId)
-    })))
+      hydratedValues: cloneJson(form.values || {})
+    }))
     if (requestSequence !== detailLoadSequence || processInstanceId() !== expectedProcessInstanceId) return
     Object.assign(detail, payload)
     taskFormValues.value = currentValues
     applicationForm.value = formDetail.applicationForm
     applicationFormValues.value = hydratedApplicationValues
     nodeTaskForm.value = formDetail.nodeTaskForm
-    applicationFormMissing.value = formDetail.applicationMissing
     historyForms.value = hydratedHistory
-    activeTab.value = formDetail.applicationMissing
-      ? 'diagram'
-      : formDetail.nodeTaskForm ? 'nodeTaskForm' : 'applicationForm'
+    activeTab.value = formDetail.nodeTaskForm ? 'nodeTaskForm' : 'applicationForm'
     ready.value = true
     if (preserveMultiInstanceDraft) reconcileMultiInstanceDraft()
   } catch (error) {
@@ -931,67 +897,6 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
   } finally {
     if (requestSequence === detailLoadSequence) loading.value = false
   }
-}
-
-/**
- * 按部署表单 schema 识别上传字段，并把 UUID 数组替换为授权接口返回的安全元数据。
- * @param {object} form 后端返回的不可变表单快照及白名单字段值。
- * @param {Map<string, Promise<object>>} attachmentCache 本次详情内附件元数据请求缓存。
- * @param {string} expectedProcessInstanceId 当前路由和详情共同核验后的流程实例主键。
- * @returns {Promise<object>} 可交给表单渲染器回显的深复制字段值。
- */
-async function hydrateFormValues(form, attachmentCache, expectedProcessInstanceId) {
-  const values = cloneJson(form?.values || {})
-  const template = normalizeFormTemplate(form?.content)
-  const uploadFields = flattenFormFields(template.fields).filter(field => field.tag === 'el-upload')
-  for (const field of uploadFields) {
-    const sourceItems = Array.isArray(values[field.variable]) ? values[field.variable] : []
-    values[field.variable] = await Promise.all(sourceItems.map(item => hydrateAttachment(
-      item, attachmentCache, field.variable, expectedProcessInstanceId
-    )))
-  }
-  return values
-}
-
-/**
- * 通过真实附件元数据接口水合单个 UUID，禁止拼接静态地址或暴露存储路径。
- * @param {string|object} item 表单值中的附件 UUID 或已水合安全元数据。
- * @param {Map<string, Promise<object>>} attachmentCache 本次详情内附件元数据请求缓存。
- * @param {string} fieldName 部署表单中的附件字段变量名。
- * @param {string} expectedProcessInstanceId 当前详情可信的流程实例主键。
- * @returns {Promise<object>} 后端对象授权后返回的附件安全元数据。
- */
-async function hydrateAttachment(item, attachmentCache, fieldName, expectedProcessInstanceId) {
-  const attachmentId = typeof item === 'string' ? item.trim() : String(item?.attachmentId || '').trim()
-  if (!validAttachmentId(attachmentId)) throw new Error('流程附件标识不合法')
-  if (!attachmentCache.has(attachmentId)) {
-    attachmentCache.set(attachmentId, getWorkflowAttachment(attachmentId).then(response => {
-      const metadata = response.data
-      if (!metadata || metadata.attachmentId !== attachmentId) {
-        throw new Error('流程附件元数据关系不一致')
-      }
-      return metadata
-    }))
-  }
-  const metadata = await attachmentCache.get(attachmentId)
-  const metadataProcessInstanceId = String(metadata.processInstanceId || '').trim()
-  if (!metadataProcessInstanceId || metadataProcessInstanceId !== expectedProcessInstanceId) {
-    throw new Error('流程附件与流程实例关系不一致')
-  }
-  if (metadata.fieldName !== fieldName || metadata.status !== 'BOUND') {
-    throw new Error('流程附件与表单字段关系不一致')
-  }
-  return metadata
-}
-
-/**
- * 校验附件主键必须为标准 UUID，避免对明显异常标识发起元数据请求。
- * @param {unknown} value 待校验的附件主键。
- * @returns {boolean} 值为标准 UUID 字符串时返回 true。
- */
-function validAttachmentId(value) {
-  return typeof value === 'string'
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
 /**
@@ -1108,11 +1013,10 @@ async function searchApprovalUsers(keyword) {
     })
     if (sequence === approvalUserSearchSequence) {
       const safeOptions = (Array.isArray(response.rows) ? response.rows : [])
-        .map(normalizeUserOption)
-        .filter(Boolean)
+        .filter(option => option?.type === 'user')
+        .map(option => ({ ...option, value: String(option.value), label: String(option.label || '') }))
       safeOptions.forEach(option => {
         approvalUserOptionCache.set(option.value, option)
-        verifiedApprovalUserIds.add(option.value)
       })
       refreshApprovalUserOptions(safeOptions)
     }
@@ -1138,11 +1042,10 @@ async function searchCopyUsers(keyword) {
     })
     if (sequence === copyUserSearchSequence) {
       const safeOptions = (Array.isArray(response.rows) ? response.rows : [])
-        .map(normalizeUserOption)
-        .filter(Boolean)
+        .filter(option => option?.type === 'user')
+        .map(option => ({ ...option, value: String(option.value), label: String(option.label || '') }))
       safeOptions.forEach(option => {
         copyUserOptionCache.set(option.value, option)
-        verifiedCopyUserIds.add(option.value)
       })
       refreshCopyUserOptions(safeOptions)
     }
@@ -1185,8 +1088,8 @@ async function searchMultiInstanceUsers(keyword) {
     })
     if (sequence !== multiInstanceUserSearchSequence) return
     const safeOptions = (Array.isArray(response.rows) ? response.rows : [])
-      .map(normalizeUserOption)
-      .filter(Boolean)
+      .filter(option => option?.type === 'user')
+      .map(option => ({ ...option, value: String(option.value), label: String(option.label || '') }))
     safeOptions.forEach(option => {
       multiInstanceUserOptionCache.set(option.value, option)
     })
@@ -1368,12 +1271,12 @@ function assertMultiInstanceAdjustmentAllowed(action, member = null, validateInp
 }
 
 /**
- * 判断请求失败是否为服务端 revision 或执行树变化导致的 HTTP 409。
+ * 判断统一请求错误的数字业务码是否为 409 状态冲突。
  * @param {unknown} error 统一请求拦截器返回值。
- * @returns {boolean} 业务状态为 409 时返回 true。
+ * @returns {boolean} error.code 严格等于数字 409 时返回 true。
  */
 function isConflictResponse(error) {
-  return Number(error?.code) === 409
+  return error?.code === 409
 }
 
 /**
@@ -1382,8 +1285,7 @@ function isConflictResponse(error) {
  * @returns {boolean} 业务码为 409 且 subCode 精确匹配冻结值时返回 true。
  */
 function isMultiInstanceRevisionConflict(error) {
-  const subCode = String(error?.subCode || '').trim()
-  return isConflictResponse(error) && subCode === MULTI_INSTANCE_REVISION_CONFLICT_SUBCODE
+  return isConflictResponse(error) && error?.subCode === MULTI_INSTANCE_REVISION_CONFLICT_SUBCODE
 }
 
 /**
@@ -1392,8 +1294,7 @@ function isMultiInstanceRevisionConflict(error) {
  * @returns {boolean} 403/404/409 表示对象权限、存在性或活动状态已经变化。
  */
 function isTaskUnavailableResponse(error) {
-  const code = Number(error?.code)
-  return [403, 404, 409].includes(code)
+  return [403, 404, 409].includes(error?.code)
 }
 
 /**
@@ -1442,19 +1343,6 @@ function reconcileMultiInstanceDraft() {
   if (target?.removable !== true) {
     multiInstanceDialog.error = '减签目标状态已变化，请选择最新可移除成员'
   }
-}
-
-/**
- * 将身份目录选项规范为页面可用的最小安全结构，拒绝非用户、非法主键和空标签。
- * @param {unknown} option 身份目录返回的原始选项。
- * @returns {{value: string, label: string, type: 'user'}|null} 安全用户选项或 null。
- */
-function normalizeUserOption(option) {
-  if (option?.type !== 'user' || !positiveUserId(option.value)) return null
-  const value = String(option.value)
-  const label = String(option.label || '').trim()
-  if (!label || label.length > 200) return null
-  return { value, label, type: 'user' }
 }
 
 /**
@@ -1627,21 +1515,16 @@ function assertActionAllowed(type, validateInput = false) {
   if (!ready.value || loading.value) return denyAction('流程详情尚未就绪')
   if (!hasPermission('workflow:process:approval')) return denyAction('没有执行该操作的权限')
   if (actionBusy.value || multiInstanceBusy.value) return denyAction('任务正在处理中，请勿重复提交')
-  if (detail.processStatus !== 'running' || !detail.currentTask?.active) return denyAction('当前任务已不处于可办理状态')
   if (!detail.currentTask.taskId || String(detail.currentTask.taskId).length > 64) return denyAction('当前任务主键不合法')
-  if (!currentTaskOwned.value) return denyAction('当前任务不属于登录用户')
-  if (type === 'complete' && pendingDelegation.value) {
-    return denyAction('待处理委派任务不能直接完成')
-  }
-  if (type === 'resolve' && !canResolve.value) {
-    return denyAction('当前任务不允许完成委派')
-  }
-  if (['reject', 'return', 'delegate', 'transfer'].includes(type) && hasDelegationContext.value) {
-    return denyAction('委派状态下不能执行该操作')
-  }
-  if (type === 'return' && detail.returnAllowed !== true) {
-    return denyAction('当前任务结构或状态不支持退回，请使用驳回或继续办理')
-  }
+  const capabilityAllowed = ({
+    complete: canComplete.value,
+    reject: canReject.value,
+    return: canReturnTask.value,
+    delegate: canDelegate.value,
+    transfer: canTransfer.value,
+    resolve: canResolve.value
+  })[type] === true
+  if (!capabilityAllowed) return denyAction('当前任务不允许执行该操作')
   if (!validateInput) return true
   const comment = actionDialog.comment.trim()
   if (!comment || comment.length > 500) return denyAction('办理意见不能为空且不能超过500个字符')
@@ -1654,13 +1537,9 @@ function assertActionAllowed(type, validateInput = false) {
   }
   if (['delegate', 'transfer'].includes(type)) {
     if (!positiveUserId(actionDialog.userId)) return denyAction('请选择有效的目标用户')
-    if (String(actionDialog.userId) === currentUserId.value) return denyAction('目标用户不能是当前办理人')
-    if (!verifiedApprovalUserIds.has(String(actionDialog.userId))) {
-      return denyAction('目标用户不在当前审批资格检索结果中')
-    }
   }
   if (supportsCopyAction.value
-    && !validSelectedUsers(actionDialog.copyUserIds, '抄送人', verifiedCopyUserIds)) return false
+    && !validSelectedUsers(actionDialog.copyUserIds, '抄送人')) return false
   if (type === 'complete' && isNextUserSelectionRequired.value && actionDialog.nextUserIds.length === 0) {
     return denyAction(`${nextUserSelectionLabel.value}不能为空`)
   }
@@ -1668,26 +1547,22 @@ function assertActionAllowed(type, validateInput = false) {
     return denyAction('当前任务不允许指定下一办理人')
   }
   if (type === 'complete' && nextUserSelectionEnabled.value
-    && !validSelectedUsers(actionDialog.nextUserIds, nextUserSelectionLabel.value, verifiedApprovalUserIds)) return false
+    && !validSelectedUsers(actionDialog.nextUserIds, nextUserSelectionLabel.value)) return false
   return true
 }
 
 /**
- * 校验多选用户数量、唯一性、主键格式及指定服务端目录来源，阻止篡改值进入真实动作 API。
+ * 校验多选用户数量、唯一性和主键格式；最终业务资格由后端重新解析。
  * @param {unknown} values 多选组件当前用户主键集合。
  * @param {string} fieldLabel 用于稳定错误提示的字段名称。
- * @param {Set<string>} verifiedIds 当前字段对应目录已确认的用户主键集合。
  * @returns {boolean} 集合可安全转换并提交时返回 true。
  */
-function validSelectedUsers(values, fieldLabel, verifiedIds) {
+function validSelectedUsers(values, fieldLabel) {
   if (!Array.isArray(values)) return denyAction(`${fieldLabel}选择不合法`)
   if (values.length > 100) return denyAction(`${fieldLabel}不能超过100人`)
   const normalizedIds = values.map(String)
   if (new Set(normalizedIds).size !== normalizedIds.length) return denyAction(`${fieldLabel}不能重复选择`)
   if (values.some(value => !positiveUserId(value))) return denyAction(`${fieldLabel}包含非法用户主键`)
-  if (normalizedIds.some(value => !verifiedIds.has(value))) {
-    return denyAction(`${fieldLabel}包含未经有效检索确认的用户`)
-  }
   return true
 }
 
@@ -1748,12 +1623,10 @@ function resetActionDialog() {
   actionDialog.error = ''
   approvalUserOptions.value = []
   approvalUserOptionCache.clear()
-  verifiedApprovalUserIds.clear()
   approvalUserSearchSequence++
   approvalUserLoading.value = false
   copyUserOptions.value = []
   copyUserOptionCache.clear()
-  verifiedCopyUserIds.clear()
   copyUserSearchSequence++
   copyUserLoading.value = false
   actionFormRef.value?.clearValidate()
@@ -1908,8 +1781,8 @@ function timelineTimestamp(node) {
  * @returns {string} Element Plus 支持的时间线类型。
  */
 function timelineType(node) {
-  if (node.comments?.some(comment => comment.type === '3')) return 'danger'
-  if (node.comments?.some(comment => comment.type === '2')) return 'warning'
+  if (node.comments?.some(comment => ['REJECT', 'TERMINATE'].includes(comment.type))) return 'danger'
+  if (node.comments?.some(comment => comment.type === 'RETURN')) return 'warning'
   return node.endTime ? 'success' : 'primary'
 }
 
@@ -1939,9 +1812,9 @@ function candidateText(node) {
  * @returns {string} Element Plus 标签类型。
  */
 function commentType(type) {
-  if (type === '1') return 'success'
-  if (type === '2') return 'warning'
-  if (['3', '6'].includes(type)) return 'danger'
+  if (['COMPLETE', 'RESUBMIT', 'RESOLVE'].includes(type)) return 'success'
+  if (type === 'RETURN') return 'warning'
+  if (['REJECT', 'TERMINATE'].includes(type)) return 'danger'
   return 'info'
 }
 

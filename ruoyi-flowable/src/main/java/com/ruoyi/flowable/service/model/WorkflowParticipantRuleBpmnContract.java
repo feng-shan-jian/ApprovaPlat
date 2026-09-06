@@ -159,7 +159,7 @@ public final class WorkflowParticipantRuleBpmnContract
     }
 
     /**
-     * 读取流程级发起范围；旧模型缺失配置时按公开 v1 形成正式部署快照。
+     * 读取流程级发起范围；缺失或不完整配置一律拒绝。
      * @param process Process，可执行流程
      * @return StartRule，字段完整的规范发起规则
      */
@@ -169,11 +169,6 @@ public final class WorkflowParticipantRuleBpmnContract
         Map<String, String> values = readPropertyValues(process);
         Set<String> present = present(values, Set.of(START_VERSION, START_TYPE,
                 START_TARGET_IDS, START_NO_MATCH));
-        if (present.isEmpty())
-        {
-            return new StartRule(processKey, "PUBLIC", List.of(), RULE_VERSION,
-                    NO_MATCH_FAIL, checksum("START", processKey, "PUBLIC", ""));
-        }
         requireComplete(present, Set.of(START_VERSION, START_TYPE,
                 START_TARGET_IDS, START_NO_MATCH), "流程发起范围配置不完整");
         requireVersion(values.get(START_VERSION));
@@ -190,10 +185,10 @@ public final class WorkflowParticipantRuleBpmnContract
     }
 
     /**
-     * 读取用户任务规则；受控动态规则来自扩展属性，原有静态配置转换为同版本快照。
+     * 读取普通用户任务规则；受控规则必须完整来自平台扩展属性。
      * @param processKey String，任务所属流程标识
      * @param task UserTask，单实例用户任务
-     * @return Optional&lt;TaskRule&gt;，动态或静态规则存在时返回；兼容表达式和多实例任务为空
+     * @return Optional&lt;TaskRule&gt;，普通任务返回完整规则，多实例任务为空
      */
     public static Optional<TaskRule> readTaskRule(String processKey, UserTask task)
     {
@@ -229,47 +224,7 @@ public final class WorkflowParticipantRuleBpmnContract
                     : requireEmpty(values.get(TASK_FORM_FIELD), "非表单规则不能携带表单字段");
             return Optional.of(taskRule(processKey, task, type, targets, formField));
         }
-        return readLegacyStaticRule(processKey, task);
-    }
-
-    /**
-     * 将原有静态 assignee、candidateUsers 或 candidateGroups 纳入 v1 部署快照。
-     * @param processKey String，任务所属流程标识
-     * @param task UserTask，原有单实例任务
-     * @return Optional&lt;TaskRule&gt;，静态配置可规范化时返回，表达式配置继续走兼容链
-     */
-    private static Optional<TaskRule> readLegacyStaticRule(String processKey, UserTask task)
-    {
-        String assignee = trim(task.getAssignee());
-        if (!assignee.isEmpty() && !isExpression(assignee))
-        {
-            return Optional.of(taskRule(processKey, task, "FIXED_USER",
-                    List.of(parseId(assignee, "固定办理人主键不合法")), ""));
-        }
-        List<String> users = nonBlank(task.getCandidateUsers());
-        if (!users.isEmpty() && users.stream().noneMatch(WorkflowParticipantRuleBpmnContract::isExpression))
-        {
-            return Optional.of(taskRule(processKey, task, "CANDIDATE_USERS",
-                    users.stream().map(value -> parseId(value, "候选用户主键不合法")).toList(), ""));
-        }
-        List<String> groups = nonBlank(task.getCandidateGroups());
-        if (!groups.isEmpty() && groups.stream().noneMatch(WorkflowParticipantRuleBpmnContract::isExpression))
-        {
-            List<Long> encoded = groups.stream().map(value ->
-            {
-                if (value.startsWith("ROLE"))
-                {
-                    return parseId(value.substring(4), "候选角色主键不合法");
-                }
-                if (value.startsWith("DEPT"))
-                {
-                    return -parseId(value.substring(4), "候选部门主键不合法");
-                }
-                throw new IllegalArgumentException("候选组必须来自正式角色或部门目录");
-            }).toList();
-            return Optional.of(taskRule(processKey, task, "CANDIDATE_GROUPS", encoded, ""));
-        }
-        return Optional.empty();
+        throw new IllegalArgumentException("普通用户任务必须配置完整平台办理人规则");
     }
 
     /**
@@ -473,18 +428,6 @@ public final class WorkflowParticipantRuleBpmnContract
         String normalized = trim(value);
         if (normalized.isEmpty()) throw new IllegalArgumentException(message);
         return normalized;
-    }
-
-    private static List<String> nonBlank(List<String> values)
-    {
-        return values == null ? List.of() : values.stream().map(WorkflowParticipantRuleBpmnContract::trim)
-                .filter(value -> !value.isEmpty()).toList();
-    }
-
-    private static boolean isExpression(String value)
-    {
-        String normalized = trim(value);
-        return normalized.startsWith("${") || normalized.startsWith("#{");
     }
 
     private static String trim(String value) { return value == null ? "" : value.trim(); }

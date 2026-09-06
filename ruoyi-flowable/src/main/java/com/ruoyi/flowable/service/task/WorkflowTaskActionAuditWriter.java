@@ -65,7 +65,6 @@ public class WorkflowTaskActionAuditWriter
      * 为真实任务写入服务端结构化动作 comment。
      *
      * @param task Task，动作前真实活动任务
-     * @param commentType String，兼容旧系统的 comment 类型
      * @param action String，服务端固定动作编码
      * @param actorUserId String，事务内正式用户主键
      * @param opinion String，已校验业务意见
@@ -73,11 +72,11 @@ public class WorkflowTaskActionAuditWriter
      * @param sourceTaskId String，可为空的撤回来源历史任务
      * @return 无返回值，写入失败由外层事务整体回滚
      */
-    public void write(Task task, String commentType, String action,
+    public void write(Task task, String action,
             String actorUserId, String opinion, String targetNodeKey,
             String sourceTaskId)
     {
-        taskService.addComment(task.getId(), task.getProcessInstanceId(), commentType,
+        taskService.addComment(task.getId(), task.getProcessInstanceId(), action,
                 build(action, actorUserId, opinion, targetNodeKey, sourceTaskId));
     }
 
@@ -100,7 +99,7 @@ public class WorkflowTaskActionAuditWriter
             audit.put("beforeRevision", completionRevision.beforeRevision());
             audit.put("afterRevision", completionRevision.afterRevision());
         }
-        taskService.addComment(task.getId(), task.getProcessInstanceId(), "1",
+        taskService.addComment(task.getId(), task.getProcessInstanceId(), "COMPLETE",
                 audit.toString());
     }
 

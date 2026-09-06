@@ -19,11 +19,11 @@
 - 递归出现的 `ScriptTask` 统一返回受控元素验证错误。
 - 服务任务和监听器 class 仅允许 `com.ruoyi.flowable.delegate.*`、`com.ruoyi.flowable.listener.*`。
 - 服务任务和执行监听器的 delegateExpression 仅允许 `${workflowBeanName}` 或 `#{workflowBeanName}` 形式的受控 Bean 引用。
-- 每个用户任务各配置一次 `delegateExpression="${userTaskListener}"` 的 `create`、`assignment`、`complete` 三个事件；完整且唯一的固定监听器集合通过验证。静态、表达式、委派、转办及动态多实例产生的 assignee 都在同一引擎事务内实时核验办理资格。
+- 作者 BPMN 不得携带平台内部任务监听器。所有任务生成阶段结束后，最终运行时任务监听器编译器为每个用户任务注入固定的创建、分配和完成身份审计监听器；服务端对编译结果校验其集合完整且唯一。普通和受控多实例产生的 assignee 都在同一引擎事务内实时核验办理资格。
 - 动态多实例使用同步、跳过关闭的并行用户任务和 `${multiInstanceHandler.getUserIds(execution)}`，并同时固定 `assignee` 元素变量、`${assignee}` 办理人以及 ALL/ANY 完成条件；目标节点保持排他、同步、无边界事件和无补偿语义。
 - 动态多实例必须由主流程中的同步普通用户任务直接初始化；该前驱必须恰有一条入边和一条无条件出边，阻止开始节点、网关、服务任务或并行 token 产生无法提交 `nextUserIds` 的执行树。
 - 原始 XML 中受控 handler 方法表达式的出现次数与完整受控节点一一对应，且只位于映射后的多实例字段。
-- 串行或并行静态集合多实例继续使用标准 collection 配置；可实例化 `collectionHandler` 返回校验错误。动态多实例配置固定为受控 collection、completion condition 和 handler，loop cardinality、索引变量、聚合及异步离开配置返回校验错误。
+- 串行或并行静态集合多实例以及可实例化 `collectionHandler` 均返回校验错误。受控多实例固定使用平台 collection、completion condition 和 handler；loop cardinality、索引变量、聚合及异步离开配置返回校验错误。
 - 普通表达式语法白名单包含变量、属性、索引、字面量和运算符。
 - 最后调用 `RepositoryService.validateProcess`，结果只含 warning 或为空时进入保存或部署。
 

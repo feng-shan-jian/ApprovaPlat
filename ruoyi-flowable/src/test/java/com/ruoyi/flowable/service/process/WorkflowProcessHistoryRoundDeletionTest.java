@@ -143,6 +143,23 @@ class WorkflowProcessHistoryRoundDeletionTest
     }
 
     /**
+     * 验证请求体数组中的逗号拼接旧协议在任何历史查询前被明确拒绝。
+     *
+     * @return void，旧 URL 载荷仍被拆分执行时测试失败
+     */
+    @Test
+    void rejectsCommaJoinedInstanceIds()
+    {
+        assertThatThrownBy(() -> service.deleteCompletedHistory(List.of("root-1,root-2")))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(exception.getMessage()).contains("不再支持逗号拼接");
+                });
+        verify(historyService, never()).createHistoricProcessInstanceQuery();
+    }
+
+    /**
      * 验证轮次预检数量与实际删除数量漂移时返回 409，且不会开始删除 Flowable 历史。
      * @return void，数量漂移被忽略或引擎历史已写入时测试失败
      */

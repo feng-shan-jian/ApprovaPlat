@@ -54,6 +54,14 @@ public interface WfAttachmentMapper
     WfAttachment selectById(@Param("attachmentId") String attachmentId);
 
     /**
+     * 按一批 UUID 一次读取附件元数据，不获取写锁。
+     *
+     * @param attachmentIds Collection&lt;String&gt;，已去重且非空的附件 UUID
+     * @return List&lt;WfAttachment&gt;，按附件 UUID 排序的元数据行
+     */
+    List<WfAttachment> selectByIds(@Param("attachmentIds") Collection<String> attachmentIds);
+
+    /**
      * 以稳定顺序锁定待绑定附件，保证校验、引擎发起和绑定处于同一事务视图。
      *
      * @param attachmentIds Collection&lt;String&gt;，已去重且非空的附件 UUID

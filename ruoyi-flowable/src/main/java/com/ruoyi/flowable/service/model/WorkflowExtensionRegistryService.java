@@ -137,7 +137,18 @@ public class WorkflowExtensionRegistryService
      */
     public List<WorkflowExtensionManagementView> listManagement()
     {
-        return engineOperations.read(() -> List.copyOf(extensionMapper.selectManagementList()));
+        return engineOperations.read(() ->
+        {
+            var referencedKeys = artifactRepository.referencedExtensionKeys();
+            return extensionMapper.selectManagementList().stream()
+                    .map(row -> new WorkflowExtensionManagementView(row.extensionId(),
+                            row.extensionKey(), row.extensionName(), row.extensionType(),
+                            row.status(), row.description(), row.versionId(), row.versionNo(),
+                            JAVA_TYPE.equals(row.extensionType()) ? row.implementationKey() : null,
+                            row.checksum(), row.updateTime(),
+                            row.deleteAllowed() && !referencedKeys.contains(row.extensionKey())))
+                    .toList();
+        });
     }
 
     /**
@@ -190,7 +201,7 @@ public class WorkflowExtensionRegistryService
      */
     public Long createVersion(Long extensionId, WorkflowExtensionVersionCreateRequest request)
     {
-        if (extensionId == null || extensionId <= 0)
+        if (extensionId == null || extensionId <= 0 || request == null)
         {
             throw new ServiceException("扩展主键不合法", HttpStatus.BAD_REQUEST);
         }
@@ -215,44 +226,48 @@ public class WorkflowExtensionRegistryService
             String configSchema;
             if (JAVA_TYPE.equals(extension.getExtensionType()))
             {
+                if (request.implementationKey() == null || request.implementationKey().isBlank())
+                {
+                    throw new ServiceException("JAVA 扩展必须选择服务端已安装处理器",
+                            HttpStatus.BAD_REQUEST);
+                }
                 WorkflowJavaExtensionHandler handler = handlerRegistry.require(request.implementationKey());
                 implementationKey = handler.implementationKey();
                 configSchema = WorkflowExtensionJsonCanonicalizer.canonicalize(handler.configSchema());
             }
             else if (CEL_TYPE.equals(extension.getExtensionType()))
             {
-                if (!CEL_IMPLEMENTATION_KEY.equals(request.implementationKey()))
+                if (request.implementationKey() != null)
                 {
-                    throw new ServiceException("CEL 只能使用服务端固定表达式实现", HttpStatus.CONFLICT);
+                    throw new ServiceException("非 JAVA 扩展不得提交服务端实现键", HttpStatus.BAD_REQUEST);
                 }
                 implementationKey = CEL_IMPLEMENTATION_KEY;
                 configSchema = celSandbox.configSchema();
             }
             else if (HTTP_TYPE.equals(extension.getExtensionType()))
             {
-                if (!WorkflowHttpConnector.IMPLEMENTATION_KEY.equals(request.implementationKey()))
+                if (request.implementationKey() != null)
                 {
-                    throw new ServiceException("HTTP 只能使用服务端固定连接器实现", HttpStatus.CONFLICT);
+                    throw new ServiceException("非 JAVA 扩展不得提交服务端实现键", HttpStatus.BAD_REQUEST);
                 }
                 implementationKey = WorkflowHttpConnector.IMPLEMENTATION_KEY;
                 configSchema = httpConnector.configSchema();
             }
             else if (SQL_TYPE.equals(extension.getExtensionType()))
             {
-                if (!WorkflowSqlConnector.IMPLEMENTATION_KEY.equals(request.implementationKey()))
+                if (request.implementationKey() != null)
                 {
-                    throw new ServiceException("SQL 只能使用服务端固定连接器实现", HttpStatus.CONFLICT);
+                    throw new ServiceException("非 JAVA 扩展不得提交服务端实现键", HttpStatus.BAD_REQUEST);
                 }
                 implementationKey = WorkflowSqlConnector.IMPLEMENTATION_KEY;
                 configSchema = sqlConnector.configSchema();
             }
             else
             {
-                if (!WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY
-                        .equals(request.implementationKey()))
+                if (request.implementationKey() != null)
                 {
-                    throw new ServiceException("自定义表单字段只能使用服务端固定实现",
-                            HttpStatus.CONFLICT);
+                    throw new ServiceException("非 JAVA 扩展不得提交服务端实现键",
+                            HttpStatus.BAD_REQUEST);
                 }
                 implementationKey = WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY;
                 configSchema = WorkflowFormFieldExtension.configSchema();

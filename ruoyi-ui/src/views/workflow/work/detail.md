@@ -31,7 +31,7 @@ router.push({
 ## 关键设计
 
 - 页面能力直接消费详情 API 的正式字段：动态成员调整只认 `multiInstanceState.adjustmentAllowed === true`，加签只认 `addAllowed === true`，剩余容量只取 `remainingCapacity`，减签只认成员的 `removable === true`；前端仅叠加 `workflow:process:approval` 入口权限，后端在每个写命令中执行权威权限、状态和 revision 校验。
-- `formDetail` 是详情表单的唯一协议：`applicationForm`、`nodeTaskForm`、`historyForms`、`applicationMissing` 和 `returnedApplication` 分别表达申请表单、本节点办理表单、历史节点表单、申请快照缺失和退回申请态，页面不再根据流程、任务或表单来源关系推导这些语义。
+- `formDetail` 是详情表单的唯一协议：`applicationForm`、`nodeTaskForm`、`historyForms` 和 `returnedApplication` 分别表达申请表单、本节点办理表单、历史节点表单和退回申请态；强制申请快照缺失时后端直接按数据一致性错误拒绝详情，不再向页面暴露兼容状态。
 - 默认页签只处理展示优先级：申请快照缺失时显示流程图；存在本节点表单时优先显示本节点页签；否则显示申请表单页签。
 - 退回入口在 `returnAllowed=true` 时显示和提交。服务端使用可信历史中的首审批节点作为退回目标；受控会签/或签一次撤销来源同根全部活动任务并生成一个待修改任务。
 - 重提入口只消费详情 API 返回的 `resubmitAllowed === true` 业务能力，前端仅叠加 `workflow:process:start` 入口权限，不再根据 `currentTaskOwned`、`processStatus` 或 `startUserId` 推断。点击前与用户确认后分别复核能力，期间冻结并校验任务上下文；普通首审批重提在当前任务上恢复退回时冻结的办理配置，来源轮次完成 `RETURNED→REOPENED` 审计关闭，首审批为受控多实例时按该节点的开始选择、部署配置或正式目录来源重新建组。后续 ALL/ANY 节点在自然重新进入时从各自权威来源建立新轮。静态多实例、CallActivity、跨作用域、边界事件、循环和含副作用路径返回稳定冲突，最终写入仍由后端事务门禁决定。
@@ -39,8 +39,8 @@ router.push({
 - 动态加签、减签和完成共享服务端 revision 契约。完成弹窗打开时冻结 `multiInstanceState.revision`，`expectedRevision` 仅随受控动态多实例任务发送。
 - 动态调整成功后不使用写响应临时回填成员状态，继续由现有详情重载取得服务端权威 `multiInstanceState`；详情重载关闭弹窗并保留 `ADD`/`REMOVE` 动作、成员目标和目录缓存，直至 `closed` 事件清理草稿并解锁。从 `close` 到 `closed` 的完整区间由关闭期锁管理加签、减签入口；连续操作使用各自独立的弹窗身份和提交参数。
 - 下一办理人字段使用详情 API 的 `nextUserAssignmentPolicy`：`DISABLED` 隐藏、`OPTIONAL` 可选、`REQUIRED_ALL` 会签必填、`REQUIRED_ANY` 或签必填。该字段直接替换历史字段、BPMN 客户端解析和 409 试错推断，历史字段已从前后端协议删除。
-- 动态完成或成员调整在业务码为 `409` 且机器子码精确等于 `WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT` 时，调用 `getMultiInstanceState` 或重载详情获取最新 revision。刷新成功替换成员快照，保留办理意见、抄送人、下一办理人、表单值和附件草稿，并要求用户明确再次提交；其他 409 按原始状态冲突展示。
-- 强制刷新确认原任务已失效时，页面关闭办理弹窗并完整重载详情，新任务快照成为下一次操作的唯一依据。
+- 动态完成或成员调整在统一请求错误的 `error.code === 409` 且 `error.subCode` 精确等于 `WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT` 时，调用 `getMultiInstanceState` 或重载详情获取最新 revision。刷新成功替换成员快照，保留办理意见、抄送人、下一办理人、表单值和附件草稿，并要求用户明确再次提交；其他 409 按原始状态冲突展示。
+- 强制刷新返回的统一请求错误在 `error.code` 为数字 `403/404/409` 时表示原任务已失效；此时页面关闭办理弹窗并完整重载详情，新任务快照成为下一次操作的唯一依据。
 - 普通完成、退回、驳回、委派和转办在异步表单校验前占用动作锁；请求期间弹窗保持锁定，失败时保留意见、表单和身份选择并展示稳定错误。动作锁串行化提交，输入草稿随当前弹窗生命周期保存。
 - 普通动作弹窗打开时冻结流程实例、任务主键和详情加载序号。退回节点查询、表单异步校验和最终写请求都会复核该上下文；路由切换后的晚到响应按冻结上下文丢弃，新任务由新一代详情上下文处理。
 - 委派办结复用正式办理弹窗，要求受托人填写真实意见并可选择抄送人；当前任务表单保持只读，owner 的审批任务和任务变量继续保留。成功后返回来源列表，`403/404/409` 表示对象已失效时同样退出过期详情。

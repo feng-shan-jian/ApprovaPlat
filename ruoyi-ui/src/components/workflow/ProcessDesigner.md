@@ -196,32 +196,30 @@ onMounted(async () => {
 - 重开模型时，当前远程分页外的已选身份通过 `/workflow/identity/options/resolve` 回显正式名称和实时可用状态；已删除对象使用稳定不可用文案，页面始终展示业务名称。
 - 会签/或签提供“办理时选择”“发起时选择”“指定用户”“指定角色”“指定部门”五种受控来源。前两类分别固定写入 `${multiInstanceHandler.getUserIds(execution)}`、`${multiInstanceHandler.getStartUserIds(execution)}`；三类指定来源统一写入 `${multiInstanceHandler.getConfiguredUserIds(execution)}`，并在 UserTask 的 `flowable:properties` 中保存 `approva.multiInstance.identityType=USER|ROLE|DEPT` 与逗号分隔的 `approva.multiInstance.identityIds`。角色和部门只持久化正式主键，每次进入节点时由后端按实时 RBAC 展开为 1 至 100 名具备审批资格的真实用户。
 - 五种来源均固定使用并行循环、`assignee` 元素变量和 `${assignee}` 办理人。会签完成条件固定为 `${nrOfCompletedInstances == nrOfInstances}`；或签固定为 `${nrOfCompletedInstances > 0}`，首名办理人完成后由 Flowable 取消其余实例。保存、部署和节点进入都会复核属性完整性、身份状态、重复值、展开人数与审批资格，生成的运行时任务仅携带真实 `assignee`。
-- 指定用户统一写入 `identityType=USER` 和正式身份属性；模型回读后首次修改会把已有指定用户配置迁移到该协议。
+- 指定用户统一写入 `identityType=USER` 和正式身份属性；缺少该正式协议的模型在保存和部署时失败关闭，不执行浏览器迁移。
 - Process 和 UserTask 可分别配置流程完成、节点到达和节点完成自动抄送。固定用户、角色和部门仅来自 `capability=copy` 正式目录，发起人与正式表单标量字段为受控动态来源；流程级表单目录汇总顶层申请开始节点及任意层级用户任务，子流程开始事件保持作用域内部语义。规则显式应用后以 `approva.autoCopyRules` JSON 写入 BPMN，并在修改循环、SLA 或通用属性时稳定保留。
 - 自动抄送属性最多 8192 个字符、10 条规则，每条最多 20 个来源、每个来源最多 100 个值。设计器保存前复核触发位置与表单字段，后端保存、部署冻结和运行时继续复核身份有效性、对象可见性及幂等触发。
 - 受控整改循环面向 UserTask，判断字段目录包含该节点正式模板或内嵌 FormData 的可写标量字段。设计器固定写入 `approva.controlledLoop.*` 五项属性，达到最大轮次时由后端返回稳定业务冲突。
 - 受控整改循环在画布节点上显示最大轮次徽标。面板采用“填写草稿后显式应用”，完整属性才进入 BPMN 命令栈；布尔和静态枚举值从正式目录选择。部署门禁只接受受控整改循环，标准 `standardLoopCharacteristics` 保持 XML 往返能力。
-- 从动态模式切换为串行或普通并行时会同时清理固定 handler、元素变量、完成条件和办理人，确保静态模式按自身属性回读。
-- 串行和普通并行多实例保留静态集合、元素变量和完成条件编辑能力，并使用后端表达式白名单校验。
-- 更新已导入的静态多实例时修改面板负责的核心字段，并保留原循环对象中的标准数据引用、索引变量和 `loopCardinality`，使这些字段稳定往返。
-- 用户任务的“创建、分配、完成”审计监听器由后端运行时身份审计使用。保存、下载会重建每个用户任务固定的 `delegateExpression="${userTaskListener}"` 三项监听器，并以允许的命名空间、属性和事件生成持久化结果；属性面板只展示业务字段，其他业务扩展保持不变。
+- 多实例只能由平台受控成员来源生成；静态多实例在保存和部署校验中失败关闭，设计器不再保留或修复该类历史配置。
+- 用户任务的身份审计监听器属于服务端执行协议。作者 XML 不包含内部 Spring Bean 表达式；所有任务生成完成后由最终运行时监听器编译器统一注入，服务端校验固定的创建、分配和完成监听器，属性面板只展示业务字段。
 - 切换办理方式时会立即清理上一身份来源属性；在新身份完成选择前，属性面板持续显示用户刚选择的模式，保持交互上下文稳定。
 - 身份选择器使用封闭目录选择并对远程检索做 250ms 防抖；保存和部署后端再次校验用户审批资格与身份真伪。
 - 新建流程以显式 `model.formId` 作为预绑定发起表单的唯一依据。
 - 服务任务只提供受控扩展注册表入口，作者 XML 保存稳定扩展键和 JSON 配置，最终版本、实现和校验和由后端部署时冻结。
 - 简单不可变 `taskCapabilityMap` 直接替换 `serviceTaskLike` 合并类型和布尔能力推断，统一提供任务创建、转换目标、属性面板类型与运行语义。ServiceTask、SendTask、ReceiveTask、BusinessRuleTask 各自使用明确面板类型。
-- 高级元素面板提供 ServiceTask、SendTask、ReceiveTask 和 BusinessRuleTask。ManualTask 作为导入、渲染、基础信息编辑、保存与导出元素保留，属性面板明确提示其 Flowable 自动通过语义。
+- 高级元素面板仅提供 ServiceTask、SendTask、ReceiveTask 和 BusinessRuleTask。默认转换菜单中的 ManualTask 入口被固定过滤；导入、保存、校验和部署含 ManualTask 的作者模型均由后端明确拒绝。
 - ReceiveTask 面板展示真实 `/workflow/runtime-event/receive` 契约；调用方使用 `X-Integration-Token`、当前 activityId、互斥实例关联条件和凭据变量白名单触发，正式状态全部由后端保存。
 - 选择 HTTP 或 SQL 扩展时设计器自动开启 `flowable:async`；运行失败由 Flowable Job 按引擎/BPMN 重试配置处理，最终死信保留在 Flowable 原生表中。
 - 业务规则任务独立于通用服务任务，只能选择后端 DMN 来源目录中的精确 `decisionId`；作者 XML 写入 `flowable:rules`，流程部署时创建同部署冻结 DMN 副本。
-- 通过 bpmn-js“更改元素”把 UserTask 转换为业务规则任务或其他任务时，转换命令会在同一撤销单元内清理任务监听器、表单、办理规则、SLA、自动抄送、受控整改循环和受控多实例状态；普通 BPMN 循环、通用执行监听器及普通扩展属性继续保留，撤销和重做会原子恢复或再次清理。
+- 通过 bpmn-js“更改元素”把 UserTask 转换为业务规则任务或其他任务时，转换命令会在同一撤销单元内清理业务任务监听器、表单、办理规则、SLA、自动抄送、受控整改循环和受控多实例状态；普通 BPMN 循环、通用执行监听器及普通扩展属性继续保留，撤销和重做会原子恢复或再次清理。
 - CallActivity 从 `/workflow/call-activity/catalog` 返回的授权已发布目录选择。作者可选择“发布时最新版”或“固定所选版本”，部署时两种策略都会冻结为不可变定义 ID，并写入 Flowable 业务制品 `approvaplat/call-activities-v1.json`。
 - CallActivity 输入和输出只允许在父子流程正式表单字段间映射，分别保存为 Flowable 原生 `flowable:in` 与 `flowable:out`。保存前即时检查半成品、重复目标、64 项上限、可读写权限和标量类型，后端保存及部署再次按正式表单快照校验。
 - 模型重开和复制直接回读 BPMN 的版本策略、业务键继承、变量继承、输出作用域、实例名称和原生映射；页面目录用于解析与展示，BPMN 始终是正式配置来源。
 - 保存事件向页面交付 XML，由页面权限入口调用正式保存接口。
 - 显式校验调用无副作用 `/workflow/model/validate`；保存时只序列化一次 XML，同一冻结快照依次通过本地结构门禁、服务端 BPMN/身份/表单门禁和真实保存。页面在服务端明确返回 `valid=true` 且 ERROR 集合为空时显示通过。
-- BPMN/XML 导入设置 2 MiB 上限，导入异常时保留当前画布；BPMN/XML 导出自动重建内部审计监听器，SVG 使用 Modeler 图形输出。
-- 导入时根据全部 `sequenceFlow.sourceRef/targetRef` 重建流程节点的 `incoming/outgoing` 反向引用；画布命令栈和下一次正式保存统一使用规范化后的图关系。被 `keep-alive` 缓存的设计页重新激活时检查当前画布快照，引用缺失时保留待保存编辑并重建内存图。
+- BPMN/XML 导入设置 2 MiB 上限，导入异常时保留当前画布；BPMN/XML 导出保持作者 XML，不生成服务端内部监听器，SVG 使用 Modeler 图形输出。
+- 新模型的初始 BPMN 由后端模型服务生成并校验。设计器只导入接口返回的正式 XML；空资源或损坏资源由后端作为数据异常拒绝，不在浏览器生成回退流程。导入和 `keep-alive` 恢复只读取正式 XML/画布状态，不修复旧模型关系。
 - JSON 预览通过 DOM 结构递归转换，XML、属性和文本保持明确层级。
 - 网格显示与 `gridSnapping` 同步；小地图和 Token 模拟使用真实扩展服务。小地图切换按钮使用 `+ / ×` 紧凑符号，原生 `title` 提供打开或关闭提示并保持画布空间完整。
 - 设计器使用容器响应式尺寸。属性检查器默认宽度为 368px，可通过分隔条拖拽、左右方向键调整，双击或按 `Home` 恢复默认宽度；每次尺寸变化通过 `canvas.resized()` 同步 bpmn-js 命中区域、小地图与连线视口。

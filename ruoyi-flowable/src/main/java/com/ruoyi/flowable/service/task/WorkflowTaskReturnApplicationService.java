@@ -20,8 +20,6 @@ import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 @Service
 public class WorkflowTaskReturnApplicationService
 {
-    /** 退回意见类型，与旧系统 FlowComment.REBACK 保持兼容。 */
-    private static final String RETURN_COMMENT_TYPE = "2";
     /** 能力投影可安全归一为 false 的既有业务状态码。 */
     private static final Set<Integer> RETURN_INELIGIBLE_STATUS_CODES = Set.of(
             HttpStatus.BAD_REQUEST, HttpStatus.FORBIDDEN,
@@ -167,7 +165,7 @@ public class WorkflowTaskReturnApplicationService
     {
         Task task = preparation.task();
         String processInstanceId = task.getProcessInstanceId();
-        auditWriter.write(task, RETURN_COMMENT_TYPE, "RETURN", actorUserId,
+        auditWriter.write(task, "RETURN", actorUserId,
                 opinion, preparation.targetNodeKey(), null);
         returnedTaskStateService.markTransition(processInstanceId,
                 WorkflowReturnedApplicationProtocol.RETURN_TRANSITION_MARKER);
@@ -200,7 +198,7 @@ public class WorkflowTaskReturnApplicationService
                 preparation.groupExecutionPlan();
         MultiInstanceGroupReturnPlan plan = executionPlan.source();
         String processInstanceId = plan.round().processInstanceId();
-        auditWriter.write(preparation.task(), RETURN_COMMENT_TYPE, "RETURN",
+        auditWriter.write(preparation.task(), "RETURN",
                 actorUserId, opinion, preparation.targetNodeKey(), null);
         returnedTaskStateService.markTransition(processInstanceId,
                 WorkflowReturnedApplicationProtocol.RETURN_TRANSITION_MARKER);

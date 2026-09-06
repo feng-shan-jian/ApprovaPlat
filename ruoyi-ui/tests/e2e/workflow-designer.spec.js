@@ -35,7 +35,7 @@ async function callWorkflowApi(page, path, options = {}) {
 }
 
 /**
- * 生成包含正式起草字段、受控发起范围、参与者规则和固定监听器的可保存 BPMN。
+ * 生成包含正式起草字段、受控发起范围和参与者规则的可保存作者 BPMN。
  * @param {string} modelKey 本次隔离模型的稳定流程标识。
  * @param {string} processName 导入后应在画布和属性面板显示的流程名称。
  * @returns {string} 可由 bpmn-js 导入并通过服务端保存门禁的 BPMN 2.0 XML。
@@ -73,9 +73,6 @@ function createImportXml(modelKey, processName) {
           <flowable:property name="approva.assignment.formField" value=""/>
           <flowable:property name="approva.assignment.noMatchPolicy" value="FAIL"/>
         </flowable:properties>
-        <flowable:taskListener event="create" delegateExpression="\${userTaskListener}"/>
-        <flowable:taskListener event="assignment" delegateExpression="\${userTaskListener}"/>
-        <flowable:taskListener event="complete" delegateExpression="\${userTaskListener}"/>
       </extensionElements>
     </userTask>
     <sequenceFlow id="flow_review_end" sourceRef="review" targetRef="end"/>
@@ -94,13 +91,13 @@ function createImportXml(modelKey, processName) {
 }
 
 /**
- * 生成包含 BS-008 六类任务的历史兼容 BPMN，受控扩展和 DMN 由真实页面目录配置。
+ * 生成包含五类正式任务的 BPMN，受控扩展和 DMN 由真实页面目录配置。
  * @param {string} modelKey 本次隔离模型的稳定流程标识。
  * @param {string} processName 模型保存与重载后应保留的流程名称。
- * @returns {string} 包含 Service、Send、Receive、BusinessRule、Manual 和 UserTask 的 BPMN XML。
+ * @returns {string} 包含 Service、Send、Receive、BusinessRule 和 UserTask 的 BPMN XML。
  */
 function createTaskCapabilityXml(modelKey, processName) {
-  const taskIds = ['service_task', 'send_task', 'receive_task', 'business_rule_task', 'manual_task', 'user_task']
+  const taskIds = ['service_task', 'send_task', 'receive_task', 'business_rule_task', 'user_task']
   const elementIds = ['start', ...taskIds, 'end']
   const flows = elementIds.slice(0, -1).map((source, index) => (
     `<sequenceFlow id="flow_${index + 1}" sourceRef="${source}" targetRef="${elementIds[index + 1]}"/>`
@@ -146,7 +143,6 @@ function createTaskCapabilityXml(modelKey, processName) {
     <sendTask id="send_task" name="受控发送"/>
     <receiveTask id="receive_task" name="外部回调"/>
     <businessRuleTask id="business_rule_task" name="精确决策"/>
-    <manualTask id="manual_task" name="历史手工记录"/>
     <userTask id="user_task" name="人工审批">
       <extensionElements>
         <flowable:properties>
@@ -156,9 +152,6 @@ function createTaskCapabilityXml(modelKey, processName) {
           <flowable:property name="approva.assignment.formField" value=""/>
           <flowable:property name="approva.assignment.noMatchPolicy" value="FAIL"/>
         </flowable:properties>
-        <flowable:taskListener event="create" delegateExpression="\${userTaskListener}"/>
-        <flowable:taskListener event="assignment" delegateExpression="\${userTaskListener}"/>
-        <flowable:taskListener event="complete" delegateExpression="\${userTaskListener}"/>
       </extensionElements>
     </userTask>
     ${flows}
@@ -171,6 +164,19 @@ function createTaskCapabilityXml(modelKey, processName) {
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
 </definitions>`
+}
+
+/**
+ * 在正式作者 BPMN 中注入一个断链 ManualTask，用于验证服务端保存门禁明确拒绝旧元素。
+ * @param {string} modelKey 本次隔离模型的稳定流程标识。
+ * @param {string} processName 模型名称。
+ * @returns {string} 只能用于负向验收、不得保存的旧 ManualTask BPMN XML。
+ */
+function createRejectedManualTaskXml(modelKey, processName) {
+  return createTaskCapabilityXml(modelKey, processName).replace(
+    '    <userTask id="user_task"',
+    '    <manualTask id="rejected_manual_task" name="旧手工任务"/>\n    <userTask id="user_task"'
+  )
 }
 
 /**
@@ -261,6 +267,25 @@ test('真实导入、编辑、撤销、保存并重载 BPMN 模型', async ({ pa
   ])
 
   try {
+    // 旧逗号 PathVariable 路由必须从真实 HTTP 边界消失，不能只在新客户端中停止调用。
+    const legacyDeleteResponse = await page.evaluate(async () => {
+      const tokenCookie = document.cookie
+        .split('; ')
+        .find(item => item.startsWith('Admin-Token='))
+      const token = tokenCookie ? decodeURIComponent(tokenCookie.slice('Admin-Token='.length)) : ''
+      const response = await fetch('/dev-api/workflow/process/instance/legacy-one,legacy-two', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      return {
+        httpStatus: response.status,
+        body: await response.json()
+      }
+    })
+    // 项目全局异常协议用 HTTP 200 承载业务错误码；code=404 证明请求未命中任何旧 workflow handler。
+    expect(legacyDeleteResponse.httpStatus).toBe(200)
+    expect(legacyDeleteResponse.body?.code).toBe(404)
+
     const categoryResult = await callWorkflowApi(page, '/workflow/category/listAll')
     const category = String(categoryResult.data?.[0]?.code || '').trim()
     expect(category, '真实环境至少需要一个启用的流程分类').not.toBe('')
@@ -276,6 +301,16 @@ test('真实导入、编辑、撤销、保存并重载 BPMN 模型', async ({ pa
     })
     modelId = String(createResult.data?.modelId || '').trim()
     expect(modelId, '真实创建接口必须返回模型主键').not.toBe('')
+
+    const rejectedManualResult = await callWorkflowApi(page, '/workflow/model/validate', {
+      method: 'POST',
+      body: { bpmnXml: createRejectedManualTaskXml(modelKey, importName) }
+    })
+    expect(rejectedManualResult.data?.valid).toBe(false)
+    expect(rejectedManualResult.data?.issues || []).toEqual(expect.arrayContaining([
+      expect.objectContaining({ severity: 'ERROR' })
+    ]))
+    expect(JSON.stringify(rejectedManualResult.data?.issues || [])).toMatch(/ManualTask|手工任务/)
 
     await page.goto(`/workflow/model-design/${encodeURIComponent(modelId)}`)
     const nameInput = page.getByRole('textbox', { name: '元素名称' })
@@ -326,7 +361,7 @@ test('真实导入、编辑、撤销、保存并重载 BPMN 模型', async ({ pa
  * 使用真实账号、正式扩展和 DMN 目录、后端保存及数据库模型资源验收 BS-008 任务能力闭环。
  * @returns {Promise<void>} 入口隐藏、面板映射、命令栈、服务端校验、保存重载或清理任一失败时测试失败。
  */
-test('BS-008 六类任务能力、历史兼容和四类业务面板真实闭环', async ({ page }) => {
+test('BS-008 六类正式任务能力、ManualTask 拒绝和四类业务面板真实闭环', async ({ page }) => {
   test.setTimeout(120_000)
   const username = String(process.env.WORKFLOW_E2E_USERNAME || '').trim()
   const password = String(process.env.WORKFLOW_E2E_PASSWORD || '')
@@ -415,9 +450,6 @@ test('BS-008 六类任务能力、历史兼容和四类业务面板真实闭环'
     await advancedPaletteButton.click()
     await expect(page.locator('.advanced-element-palette__popover')).toBeHidden()
 
-    await selectDiagramElement(page, 'manual_task')
-    await expect(page.getByText('仅为历史 BPMN 兼容保留；该元素不会生成平台待办')).toBeVisible()
-
     await selectDiagramElement(page, 'service_task')
     await expect(page.getByText('进入节点时执行服务端正式扩展目录中的受控处理器')).toBeVisible()
     await chooseTaskOption(page, '受控处理器', celLabel)
@@ -481,19 +513,16 @@ test('BS-008 六类任务能力、历史兼容和四类业务面板真实闭环'
 
     await page.reload()
     await expect(page.getByRole('heading', { name: processName })).toBeVisible()
-    await selectDiagramElement(page, 'manual_task')
-    await expect(page.getByText('不会生成平台待办')).toBeVisible()
     await selectDiagramElement(page, 'receive_task')
     await expect(page.getByText('POST /workflow/runtime-event/receive')).toBeVisible()
 
-    // 从后端重新读取模型资源，证明配置与历史 ManualTask 已进入真实持久化并可重载。
+    // 从后端重新读取模型资源，证明正式配置已进入真实持久化并可重载，且旧 ManualTask 没有落库。
     const storedResult = await callWorkflowApi(page, `/workflow/model/bpmnXml/${encodeURIComponent(modelId)}`)
     const storedXml = String(storedResult.data || '')
-    expect(storedXml).toContain('<manualTask id="manual_task"')
+    expect(storedXml).not.toContain('<manualTask')
     expect(storedXml).toContain('<receiveTask id="receive_task"')
     expect(storedXml).toContain(`flowable:rules="${dmnOption.decisionId}"`)
     expect(storedXml.match(/name="approvaExtensionKey"/g) || []).toHaveLength(2)
-    expect(storedXml.match(/delegateExpression="\${userTaskListener}"/g) || []).toHaveLength(3)
     expect(pageErrors).toEqual([])
   } finally {
     if (modelId) {

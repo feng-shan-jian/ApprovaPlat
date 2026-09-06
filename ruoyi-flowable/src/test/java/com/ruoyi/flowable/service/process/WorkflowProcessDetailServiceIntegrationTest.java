@@ -24,6 +24,7 @@ import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 import javax.sql.DataSource;
 import org.apache.ibatis.builder.xml.XMLMapperBuilder;
@@ -48,6 +49,7 @@ import org.flowable.task.api.history.HistoricTaskInstance;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
@@ -60,11 +62,17 @@ import com.ruoyi.flowable.domain.vo.WorkflowProcessCommentView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
+import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
+import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
 import com.ruoyi.flowable.service.notification.WorkflowManualUrgeService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService;
+import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
+import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
+import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 import com.ruoyi.flowable.service.task.WorkflowControlledLoopService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
 import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
@@ -103,11 +111,31 @@ class WorkflowProcessDetailServiceIntegrationTest
     @SuppressWarnings({ "rawtypes", "unchecked" })
     void setUp()
     {
-        processEngine = ProcessEngineConfiguration
+        ObjectProvider<WorkflowAutomaticCopyService> copyProvider = mock(ObjectProvider.class);
+        ObjectProvider<WorkflowNotificationService> notificationProvider = mock(ObjectProvider.class);
+        ObjectProvider<WorkflowNotificationOutboxService> outboxProvider = mock(ObjectProvider.class);
+        ObjectProvider<WorkflowProcessDefinitionQueryService> definitionProvider = mock(ObjectProvider.class);
+        ObjectProvider<WorkflowStartVariableValidator> variableValidatorProvider = mock(ObjectProvider.class);
+        when(copyProvider.getObject()).thenReturn(mock(WorkflowAutomaticCopyService.class));
+        when(notificationProvider.getObject()).thenReturn(mock(WorkflowNotificationService.class));
+        when(outboxProvider.getObject()).thenReturn(mock(WorkflowNotificationOutboxService.class));
+        WorkflowStartVariableValidator startVariableValidator =
+                new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
+        when(variableValidatorProvider.getObject()).thenReturn(startVariableValidator);
+        WorkflowCallActivityStartListener callActivityStartListener =
+                new WorkflowCallActivityStartListener(
+                        definitionProvider, variableValidatorProvider);
+        WorkflowProcessCompletionStatusListener completionStatusListener =
+                new WorkflowProcessCompletionStatusListener(
+                        copyProvider, notificationProvider, outboxProvider);
+
+        ProcessEngineConfiguration engineConfiguration = ProcessEngineConfiguration
                 .createStandaloneInMemProcessEngineConfiguration()
                 .setDatabaseSchemaUpdate(ProcessEngineConfiguration.DB_SCHEMA_UPDATE_TRUE)
-                .setHistory("full")
-                .buildProcessEngine();
+                .setHistory("full");
+        engineConfiguration.setEventListeners(
+                List.of(callActivityStartListener, completionStatusListener));
+        processEngine = engineConfiguration.buildProcessEngine();
         repositoryService = processEngine.getRepositoryService();
         runtimeService = processEngine.getRuntimeService();
         taskService = processEngine.getTaskService();
@@ -128,6 +156,15 @@ class WorkflowProcessDetailServiceIntegrationTest
         when(artifactRepository.selectForms(deploymentId)).thenReturn(formSnapshots());
         WorkflowDeploymentService deploymentService = mock(WorkflowDeploymentService.class);
         when(deploymentService.getBpmnXml(anyString())).thenReturn(BPMN);
+        WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
+        when(identityResolver.resolveCurrentIdentity())
+                .thenReturn(new com.ruoyi.flowable.identity.WorkflowCurrentIdentity(
+                        "approver", Set.of()));
+        WorkflowProcessDefinitionQueryService definitionQueryService =
+                new WorkflowProcessDefinitionQueryService(engineOperations, repositoryService,
+                        identityResolver, processAccessService, deploymentService,
+                        artifactRepository, mock(WorkflowParticipantRuleRuntimeService.class));
+        when(definitionProvider.getObject()).thenReturn(definitionQueryService);
         multiInstanceService = mock(WorkflowMultiInstanceService.class);
         taskLifecycleService = mock(WorkflowTaskLifecycleService.class);
         when(taskLifecycleService.isTaskReturnAllowed(anyString())).thenReturn(false);
@@ -141,7 +178,8 @@ class WorkflowProcessDetailServiceIntegrationTest
                 new WorkflowProcessVariableProjection(historyService, historicVariableMapper);
         WorkflowProcessFormDetailProjection formProjection =
                 new WorkflowProcessFormDetailProjection(artifactRepository,
-                        new WorkflowFormTemplateValidator(), variableProjection);
+                        new WorkflowFormTemplateValidator(), variableProjection,
+                        mock(WorkflowAttachmentService.class));
         WorkflowProcessHistoryProjection historyProjection =
                 new WorkflowProcessHistoryProjection(historyService, taskService,
                         repositoryService, mock(ISysUserService.class));
@@ -149,7 +187,8 @@ class WorkflowProcessDetailServiceIntegrationTest
         service = new WorkflowProcessDetailService(engineOperations, processAccessService,
                 repositoryService, taskService, deploymentService, variableProjection,
                 formProjection, historyProjection, multiInstanceService,
-                taskLifecycleService, manualUrgeService, controlledLoopService);
+                taskLifecycleService, identityResolver, manualUrgeService,
+                controlledLoopService);
     }
 
     /**
@@ -190,7 +229,6 @@ class WorkflowProcessDetailServiceIntegrationTest
                 .isEqualTo("root-current");
         assertThat(detail.formDetail().applicationForm().nodeKey()).isEqualTo("mainStart");
         assertThat(detail.formDetail().historyForms()).isEmpty();
-        assertThat(detail.formDetail().applicationMissing()).isFalse();
         assertThat(detail.formDetail().returnedApplication()).isFalse();
         assertThat(detail.currentTask().unclaimAllowed()).isFalse();
         assertThat(detail.resubmitAllowed()).isFalse();
@@ -219,6 +257,52 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.currentTask().claimedBy()).isEqualTo("approver");
         assertThat(detail.currentTask().claimTime()).isNotNull();
         assertThat(detail.currentTask().unclaimAllowed()).isTrue();
+    }
+
+    /**
+     * 验证普通本人待办、委派待办和非本人待办分别投影完整动作能力的 true/false 双向事实。
+     *
+     * @return void，页面仍需根据 assignee、owner 或 delegation 重建任一能力时测试失败
+     */
+    @Test
+    void projectsAllTaskActionCapabilitiesFromAuthoritativeFacts()
+    {
+        ProcessInstance ownedInstance = startMainProcess();
+        Task ownedTask = activeTask(ownedInstance.getId(), "globalTask");
+        when(taskLifecycleService.isTaskReturnAllowed(ownedTask.getId())).thenReturn(true);
+
+        WorkflowProcessDetailView owned = readDetail(
+                ownedInstance.getId(), ownedTask.getId(), "running");
+        assertThat(owned.completeAllowed()).isTrue();
+        assertThat(owned.rejectAllowed()).isTrue();
+        assertThat(owned.returnAllowed()).isTrue();
+        assertThat(owned.delegateAllowed()).isTrue();
+        assertThat(owned.transferAllowed()).isTrue();
+        assertThat(owned.resolveAllowed()).isFalse();
+
+        ProcessInstance delegatedInstance = startMainProcess();
+        Task delegatedTask = activeTask(delegatedInstance.getId(), "globalTask");
+        taskService.delegateTask(delegatedTask.getId(), "approver");
+        WorkflowProcessDetailView delegated = readDetail(
+                delegatedInstance.getId(), delegatedTask.getId(), "running");
+        assertThat(delegated.completeAllowed()).isFalse();
+        assertThat(delegated.rejectAllowed()).isFalse();
+        assertThat(delegated.returnAllowed()).isFalse();
+        assertThat(delegated.delegateAllowed()).isFalse();
+        assertThat(delegated.transferAllowed()).isFalse();
+        assertThat(delegated.resolveAllowed()).isTrue();
+
+        ProcessInstance foreignInstance = startMainProcess();
+        Task foreignTask = activeTask(foreignInstance.getId(), "globalTask");
+        taskService.setAssignee(foreignTask.getId(), "other-user");
+        WorkflowProcessDetailView foreign = readDetail(
+                foreignInstance.getId(), foreignTask.getId(), "running");
+        assertThat(foreign.completeAllowed()).isFalse();
+        assertThat(foreign.rejectAllowed()).isFalse();
+        assertThat(foreign.returnAllowed()).isFalse();
+        assertThat(foreign.delegateAllowed()).isFalse();
+        assertThat(foreign.transferAllowed()).isFalse();
+        assertThat(foreign.resolveAllowed()).isFalse();
     }
 
     /**
@@ -251,7 +335,14 @@ class WorkflowProcessDetailServiceIntegrationTest
         WorkflowProcessDetailView suspendedDetail = readDetail(
                 suspended.getId(), null, "running");
 
-        ProcessInstance completed = runtimeService.startProcessInstanceByKey("detailTerminal");
+        String terminalSnapshot = WorkflowFormSubmissionSnapshotCodec.encodeStart(
+                deploymentId, "TEMPLATE", 7L, "terminal-start-form", "terminalStart", Map.of());
+        ProcessInstance completed = runtimeService.createProcessInstanceBuilder()
+                .processDefinitionKey("detailTerminal")
+                .businessStatus("running")
+                .variables(Map.of(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running",
+                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, terminalSnapshot))
+                .start();
         WorkflowProcessDetailView completedDetail = readDetail(
                 completed.getId(), null, "completed");
 
@@ -270,15 +361,72 @@ class WorkflowProcessDetailServiceIntegrationTest
     @Test
     void keepsCallActivityChildUrgeCapabilityFalse()
     {
-        ProcessInstance root = runtimeService.startProcessInstanceByKey("detailParent");
+        ProcessInstance root = startCallActivityParent();
         ProcessInstance child = runtimeService.createProcessInstanceQuery()
                 .superProcessInstanceId(root.getId()).singleResult();
         assertThat(child).isNotNull();
+        assertThat(child.getBusinessStatus()).isEqualTo("running");
+        assertThat(runtimeService.getVariable(child.getId(),
+                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)).isEqualTo("running");
+        WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot childSnapshot =
+                WorkflowFormSubmissionSnapshotCodec.decode((String) runtimeService.getVariable(
+                        child.getId(), WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
+        assertThat(childSnapshot.nodeKey()).isEqualTo("childStart");
+        assertThat(childSnapshot.values().get("childRequest").textValue())
+                .isEqualTo("采购申请-2026");
 
         WorkflowProcessDetailView detail = readDetail(child.getId(), null, "running");
 
         assertThat(detail.urgeAllowed()).isFalse();
         verify(manualUrgeService, never()).isUrgeAllowed(anyString());
+    }
+
+    /**
+     * 验证 CallActivity 子流程自然完成时自身双状态收敛为 completed，父流程完成不替代子事实。
+     *
+     * @return void，子流程历史仍为 running、缺少状态变量或开始快照时测试失败
+     */
+    @Test
+    void completesCallActivityChildWithItsOwnFormalLifecycle()
+    {
+        ProcessInstance root = startCallActivityParent();
+        ProcessInstance child = runtimeService.createProcessInstanceQuery()
+                .superProcessInstanceId(root.getId()).singleResult();
+        assertThat(child).isNotNull();
+
+        taskService.complete(activeTask(child.getId(), "childTask").getId());
+
+        HistoricProcessInstance completedChild = historyService
+                .createHistoricProcessInstanceQuery().processInstanceId(child.getId()).singleResult();
+        assertThat(completedChild.getEndTime()).isNotNull();
+        assertThat(completedChild.getBusinessStatus()).isEqualTo("completed");
+        assertThat(historyService.createHistoricVariableInstanceQuery()
+                .processInstanceId(child.getId())
+                .variableName(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)
+                .singleResult().getValue()).isEqualTo("completed");
+        assertThat(historyService.createHistoricVariableInstanceQuery()
+                .processInstanceId(child.getId())
+                .variableName(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME)
+                .singleResult()).isNotNull();
+    }
+
+    /**
+     * 验证 CallActivity 缺失或类型非法的必填输入映射会回滚父子创建命令且不留下任务与历史。
+     *
+     * @return void，任一失败启动留下运行实例、子任务、历史实例或历史任务时测试失败
+     */
+    @Test
+    void rollsBackCallActivityWhenRequiredInputMappingIsMissingOrInvalid()
+    {
+        assertThatThrownBy(() -> startRejectedCallActivityParent(
+                "detailMissingParent", Map.of()))
+                .hasStackTraceContaining("开始表单必填字段不能为空: childRequest");
+        assertNoCallActivityStartSideEffects("detailMissingParent");
+
+        assertThatThrownBy(() -> startRejectedCallActivityParent(
+                "detailInvalidParent", Map.of("invalidParentRequest", 42)))
+                .hasStackTraceContaining("流程变量类型不合法: childRequest");
+        assertNoCallActivityStartSideEffects("detailInvalidParent");
     }
 
     /**
@@ -378,7 +526,6 @@ class WorkflowProcessDetailServiceIntegrationTest
                 .isEqualTo("start-submitted");
         assertThat(detail.formDetail().nodeTaskForm()).isNull();
         assertThat(detail.formDetail().historyForms()).isEmpty();
-        assertThat(detail.formDetail().applicationMissing()).isFalse();
         assertThat(detail.formDetail().returnedApplication()).isTrue();
         assertThat(detail.resubmitAllowed()).isFalse();
         // 没有申请人局部标记的 returned 任务仍按原路径解析正式多实例 capability。
@@ -427,25 +574,21 @@ class WorkflowProcessDetailServiceIntegrationTest
     }
 
     /**
-     * 验证没有正式开始提交快照时明确返回缺失语义，但当前节点表单仍按真实变量投影。
+     * 验证没有正式开始提交快照时按数据一致性异常拒绝详情。
      *
-     * @return void，申请表单被伪造、缺失标记错误或节点表单丢失时测试失败
+     * @return void，缺失强制快照被伪装为正常详情时测试失败
      */
     @Test
-    void reportsMissingApplicationSnapshotWithoutFabricatingApplicationForm()
+    void rejectsMissingApplicationSnapshot()
     {
         ProcessInstance instance = startMainProcessWithoutApplicationSnapshot();
         Task active = activeTask(instance.getId(), "globalTask");
         runtimeService.setVariable(instance.getId(), "value", "current-without-start");
 
-        WorkflowProcessDetailView detail = readDetail(
-                instance.getId(), active.getId(), "running");
-
-        assertThat(detail.formDetail().applicationForm()).isNull();
-        assertThat(detail.formDetail().applicationMissing()).isTrue();
-        assertThat(detail.formDetail().returnedApplication()).isFalse();
-        assertThat(detail.formDetail().nodeTaskForm()).isNotNull();
-        assertThat(detail.formDetail().historyForms()).isEmpty();
+        assertThatThrownBy(() -> readDetail(
+                instance.getId(), active.getId(), "running"))
+                .isInstanceOf(ServiceException.class)
+                .hasMessageContaining("提交快照");
     }
 
     /**
@@ -459,7 +602,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         ProcessInstance instance = startMainProcess();
         Task active = activeTask(instance.getId(), "globalTask");
         String contradictory = WorkflowFormSubmissionSnapshotCodec.encodeStart(
-                deploymentId, 1L, "start-form", "differentStart",
+                deploymentId, "TEMPLATE", 1L, "start-form", "differentStart",
                 Map.of("startValue", "second-start"));
         runtimeService.setVariable(instance.getId(),
                 WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, contradictory);
@@ -490,7 +633,7 @@ class WorkflowProcessDetailServiceIntegrationTest
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
                 {
                     assertThat(exception.getCode()).isEqualTo(500);
-                    assertThat(exception.getMessage()).isEqualTo("退回开始表单快照异常");
+                    assertThat(exception.getMessage()).isEqualTo("流程缺少正式表单提交快照");
                 });
     }
 
@@ -641,25 +784,16 @@ class WorkflowProcessDetailServiceIntegrationTest
                 + "\"beforeRevision\":7,\"afterRevision\":8,"
                 + "\"opinion\":\"  结构化意见\\n  \"}";
         Comment structured = taskService.addComment(task.getId(), instance.getId(),
-                "1", structuredAudit);
-
-        processEngine.getProcessEngineConfiguration().getClock()
-                .setCurrentTime(Date.from(baseTime.plusSeconds(10)));
-        Comment legacy = taskService.addComment(task.getId(), instance.getId(),
-                "comment", "  旧版纯文本意见 \\n  第二行  ");
+                "COMPLETE", structuredAudit);
 
         processEngine.getProcessEngineConfiguration().getClock()
                 .setCurrentTime(Date.from(baseTime.plusSeconds(30)));
         String actionWithoutOpinion = "{\"action\":\"RETURN\","
                 + "\"actorUserId\":\"hidden-returner\","
-                + "\"targetNodeKey\":\"hidden-target\",\"revision\":9}";
+                + "\"targetNodeKey\":\"hidden-target\",\"revision\":9,"
+                + "\"opinion\":null}";
         Comment systemAudit = taskService.addComment(task.getId(), instance.getId(),
-                "2", actionWithoutOpinion);
-
-        processEngine.getProcessEngineConfiguration().getClock()
-                .setCurrentTime(Date.from(baseTime.plusSeconds(20)));
-        Comment malformed = taskService.addComment(task.getId(), instance.getId(),
-                "4", "  {旧版花括号意见  ");
+                "RETURN", actionWithoutOpinion);
 
         processEngine.getProcessEngineConfiguration().getClock()
                 .setCurrentTime(Date.from(baseTime.plusSeconds(50)));
@@ -675,16 +809,11 @@ class WorkflowProcessDetailServiceIntegrationTest
         List<WorkflowProcessCommentView> comments = taskActivity.comments();
 
         assertThat(comments).extracting(WorkflowProcessCommentView::commentId)
-                .containsExactly(legacy.getId(), malformed.getId(), systemAudit.getId(),
-                        structured.getId());
+                .containsExactly(systemAudit.getId(), structured.getId());
         Map<String, WorkflowProcessCommentView> commentsById = new LinkedHashMap<>();
         comments.forEach(comment -> commentsById.put(comment.commentId(), comment));
         assertThat(commentsById.get(structured.getId()).opinion()).isEqualTo("结构化意见");
         assertThat(commentsById.get(systemAudit.getId()).opinion()).isNull();
-        assertThat(commentsById.get(legacy.getId()).opinion())
-                .isEqualTo("旧版纯文本意见 \\n  第二行");
-        assertThat(commentsById.get(malformed.getId()).opinion())
-                .isEqualTo("{旧版花括号意见");
         assertThat(commentsById).doesNotContainKey(filtered.getId());
         assertThat(detail.flowViewer().returnedActivityIds()).contains("globalTask");
 
@@ -705,6 +834,67 @@ class WorkflowProcessDetailServiceIntegrationTest
     }
 
     /**
+     * 验证旧数字 comment 类型在迁移后被明确识别为数据一致性错误。
+     *
+     * @return void，数字类型被映射为正式动作或从时间线静默忽略时测试失败
+     */
+    @Test
+    void rejectsNumericLegacyCommentType()
+    {
+        ProcessInstance instance = startMainProcess();
+        Task task = activeTask(instance.getId(), "globalTask");
+        taskService.addComment(task.getId(), instance.getId(), "2",
+                "{\"action\":\"RETURN\",\"actorUserId\":\"100\",\"opinion\":\"旧类型\"}");
+
+        assertThatThrownBy(() -> readDetail(instance.getId(), task.getId(), "running"))
+                .isInstanceOf(ServiceException.class)
+                .hasMessage("流程存在旧数字意见类型，请先完成数据迁移");
+    }
+
+    /**
+     * 验证正式动作类型也必须携带完整结构化审计正文，不接受纯文本意见。
+     *
+     * @return void，纯文本正文被当作 opinion 返回时测试失败
+     */
+    @Test
+    void rejectsPlainTextLegacyCommentBody()
+    {
+        ProcessInstance instance = startMainProcess();
+        Task task = activeTask(instance.getId(), "globalTask");
+        taskService.addComment(task.getId(), instance.getId(), "COMPLETE", "旧纯文本意见");
+
+        assertThatThrownBy(() -> readDetail(instance.getId(), task.getId(), "running"))
+                .isInstanceOf(ServiceException.class)
+                .hasMessage("流程审批意见不是合法结构化审计");
+    }
+
+    /**
+     * 验证旧数字类型、纯文本正文和畸形 JSON 均不能进入正式历史投影。
+     *
+     * @return void，任一旧 comment 协议仍被容错展示时测试失败
+     */
+    @Test
+    void rejectsLegacyAndMalformedComments()
+    {
+        List<List<String>> invalidComments = List.of(
+                List.of("1", "{\"action\":\"COMPLETE\",\"actorUserId\":\"100\"}"),
+                List.of("COMPLETE", "旧版纯文本意见"),
+                List.of("RETURN", "{畸形正文"));
+        for (List<String> invalid : invalidComments)
+        {
+            ProcessInstance instance = startMainProcess();
+            Task task = activeTask(instance.getId(), "globalTask");
+            taskService.addComment(task.getId(), instance.getId(),
+                    invalid.get(0), invalid.get(1));
+            assertThatThrownBy(() -> readDetail(
+                    instance.getId(), task.getId(), "running"))
+                    .isInstanceOf(ServiceException.class)
+                    .isInstanceOfSatisfying(ServiceException.class,
+                            exception -> assertThat(exception.getCode()).isEqualTo(500));
+        }
+    }
+
+    /**
      * 验证详情仍按 Flowable 原始正文执行单条 8 KiB 与累计 512 KiB 精确门禁。
      *
      * @return void，超大单条被放行、累计边界变化或门禁改为只计算 opinion 时测试失败
@@ -714,7 +904,7 @@ class WorkflowProcessDetailServiceIntegrationTest
     {
         ProcessInstance oversizedInstance = startMainProcess();
         Task oversizedTask = activeTask(oversizedInstance.getId(), "globalTask");
-        taskService.addComment(oversizedTask.getId(), oversizedInstance.getId(), "1",
+        taskService.addComment(oversizedTask.getId(), oversizedInstance.getId(), "COMPLETE",
                 structuredCommentBody(WorkflowProcessHistoryProjection.MAX_COMMENT_BYTES + 1));
 
         assertThatThrownBy(() -> readDetail(oversizedInstance.getId(),
@@ -731,7 +921,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         for (int index = 0; index < exactLimitCount; index++)
         {
             taskService.addComment(cumulativeTask.getId(), cumulativeInstance.getId(),
-                    "1", fullSizeBody);
+                    "COMPLETE", fullSizeBody);
         }
 
         WorkflowProcessDetailView exactLimitDetail = readDetail(cumulativeInstance.getId(),
@@ -741,7 +931,8 @@ class WorkflowProcessDetailServiceIntegrationTest
                 .findFirst().orElseThrow();
         assertThat(cumulativeActivity.comments()).hasSize(exactLimitCount);
 
-        taskService.addComment(cumulativeTask.getId(), cumulativeInstance.getId(), "1", "z");
+        taskService.addComment(cumulativeTask.getId(), cumulativeInstance.getId(),
+                "COMPLETE", "z");
         assertThatThrownBy(() -> readDetail(cumulativeInstance.getId(),
                 cumulativeTask.getId(), "running"))
                 .isInstanceOf(ServiceException.class)
@@ -805,7 +996,8 @@ class WorkflowProcessDetailServiceIntegrationTest
      */
     private String structuredCommentBody(int totalBytes)
     {
-        String prefix = "{\"action\":\"COMPLETE\",\"opinion\":\"ok\",\"padding\":\"";
+        String prefix = "{\"action\":\"COMPLETE\",\"actorUserId\":\"100\","
+                + "\"opinion\":\"ok\",\"padding\":\"";
         String suffix = "\"}";
         int paddingBytes = totalBytes - prefix.getBytes(StandardCharsets.UTF_8).length
                 - suffix.getBytes(StandardCharsets.UTF_8).length;
@@ -824,11 +1016,15 @@ class WorkflowProcessDetailServiceIntegrationTest
     private ProcessInstance startMainProcess()
     {
         String snapshot = WorkflowFormSubmissionSnapshotCodec.encodeStart(
-                deploymentId, 1L, "start-form", "mainStart",
+                deploymentId, "TEMPLATE", 1L, "start-form", "mainStart",
                 Map.of("startValue", "start-submitted"));
-        return runtimeService.startProcessInstanceByKey("detailMain", Map.of(
-                "startValue", "start-current",
-                WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot));
+        return runtimeService.createProcessInstanceBuilder()
+                .processDefinitionKey("detailMain")
+                .businessStatus("running")
+                .variables(Map.of("startValue", "start-current",
+                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running",
+                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot))
+                .start();
     }
 
     /**
@@ -838,8 +1034,12 @@ class WorkflowProcessDetailServiceIntegrationTest
      */
     private ProcessInstance startMainProcessWithoutApplicationSnapshot()
     {
-        return runtimeService.startProcessInstanceByKey("detailMain",
-                Map.of("startValue", "legacy-current"));
+        return runtimeService.createProcessInstanceBuilder()
+                .processDefinitionKey("detailMain")
+                .businessStatus("running")
+                .variables(Map.of("startValue", "snapshot-missing-current",
+                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running"))
+                .start();
     }
 
     /**
@@ -850,10 +1050,75 @@ class WorkflowProcessDetailServiceIntegrationTest
     private ProcessInstance startLoopProcess()
     {
         String snapshot = WorkflowFormSubmissionSnapshotCodec.encodeStart(
-                deploymentId, 4L, "loop-start-form", "loopStart",
+                deploymentId, "TEMPLATE", 4L, "loop-start-form", "loopStart",
                 Map.of("startValue", "loop-start-submitted"));
-        return runtimeService.startProcessInstanceByKey("detailLoop", Map.of(
-                WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot));
+        return runtimeService.createProcessInstanceBuilder()
+                .processDefinitionKey("detailLoop")
+                .businessStatus("running")
+                .variables(Map.of(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running",
+                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot))
+                .start();
+    }
+
+    /**
+     * 通过真实 CallActivity 启动父子流程，根实例只携带自己的正式状态和开始提交快照。
+     *
+     * @return ProcessInstance，停留在 childTask 且已由全局生命周期监听器初始化子流程的根实例
+     */
+    private ProcessInstance startCallActivityParent()
+    {
+        String parentValue = "采购申请-2026";
+        String parentSnapshot = WorkflowFormSubmissionSnapshotCodec.encodeStart(
+                deploymentId, "TEMPLATE", 8L, "parent-start-form", "parentStart",
+                Map.of("parentRequest", parentValue));
+        return runtimeService.createProcessInstanceBuilder()
+                .processDefinitionKey("detailParent")
+                .businessStatus("running")
+                .variables(Map.of(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running",
+                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, parentSnapshot,
+                        "parentRequest", parentValue))
+                .start();
+    }
+
+    /**
+     * 启动预期被子流程正式开始表单门禁拒绝的 CallActivity 父流程。
+     *
+     * @param processDefinitionKey String，缺失值或非法值测试父流程标识
+     * @param parentVariables Map&lt;String,Object&gt;，Flowable 输入映射读取的父流程变量
+     * @return ProcessInstance，只有门禁错误未回滚时才可能返回的父实例
+     */
+    private ProcessInstance startRejectedCallActivityParent(String processDefinitionKey,
+            Map<String, Object> parentVariables)
+    {
+        Map<String, Object> variables = new LinkedHashMap<>(parentVariables);
+        variables.put(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running");
+        return runtimeService.createProcessInstanceBuilder()
+                .processDefinitionKey(processDefinitionKey)
+                .businessStatus("running")
+                .variables(variables)
+                .start();
+    }
+
+    /**
+     * 核对失败的 CallActivity 启动没有提交父子运行态、任务或历史半成品。
+     *
+     * @param parentProcessKey String，本次预期失败的父流程定义 key
+     * @return void，任一父子副作用存在时断言失败
+     */
+    private void assertNoCallActivityStartSideEffects(String parentProcessKey)
+    {
+        assertThat(runtimeService.createProcessInstanceQuery()
+                .processDefinitionKey(parentProcessKey).count()).isZero();
+        assertThat(runtimeService.createProcessInstanceQuery()
+                .processDefinitionKey("detailChild").count()).isZero();
+        assertThat(taskService.createTaskQuery()
+                .processDefinitionKey("detailChild").count()).isZero();
+        assertThat(historyService.createHistoricProcessInstanceQuery()
+                .processDefinitionKey(parentProcessKey).count()).isZero();
+        assertThat(historyService.createHistoricProcessInstanceQuery()
+                .processDefinitionKey("detailChild").count()).isZero();
+        assertThat(historyService.createHistoricTaskInstanceQuery()
+                .processDefinitionKey("detailChild").count()).isZero();
     }
 
     /**
@@ -886,7 +1151,8 @@ class WorkflowProcessDetailServiceIntegrationTest
             String nodeKey, boolean taskLocal, Map<String, Object> values)
     {
         String snapshot = WorkflowFormSubmissionSnapshotCodec.encodeTask(
-                deploymentId, formId, formKey, nodeKey, task.getId(), taskLocal, values);
+                deploymentId, "TEMPLATE", formId, formKey, nodeKey, task.getId(), taskLocal,
+                values);
         taskService.setVariableLocal(task.getId(),
                 WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot);
         taskService.complete(task.getId());
@@ -1013,10 +1279,11 @@ class WorkflowProcessDetailServiceIntegrationTest
      * @param formKey String，BPMN 表单键
      * @param nodeKey String，BPMN 节点主键
      * @param fieldName String，唯一可读业务字段名
+     * @param required boolean，字段是否属于开始表单必填输入
      * @return WfDeployForm，供详情服务执行正式 schema 白名单投影
      */
     private WfDeployForm formSnapshot(Long formId, String formKey, String nodeKey,
-            String fieldName)
+            String fieldName, boolean required)
     {
         WfDeployForm snapshot = new WfDeployForm();
         snapshot.setDeployId(deploymentId);
@@ -1026,9 +1293,12 @@ class WorkflowProcessDetailServiceIntegrationTest
         snapshot.setNodeKey(nodeKey);
         snapshot.setFormName(nodeKey + "表单");
         snapshot.setNodeName(nodeKey);
-        snapshot.setContent("{\"fields\":[{\"__vModel__\":\"" + fieldName
-                + "\",\"__config__\":{\"layout\":\"colFormItem\","
-                + "\"tag\":\"el-input\"}}]}");
+        snapshot.setContent(fieldName == null ? "{\"fields\":[]}" :
+                "{\"fields\":[{\"vModel\":\"" + fieldName
+                        + "\",\"layout\":\"colFormItem\","
+                        + "\"tag\":\"el-input\",\"workflowHidden\":false,"
+                        + "\"workflowReadable\":true,\"workflowWritable\":true,"
+                        + "\"required\":" + required + "}]}");
         snapshot.setCreateTime(Date.from(Instant.parse("2026-08-21T00:00:00Z")));
         return snapshot;
     }
@@ -1041,11 +1311,14 @@ class WorkflowProcessDetailServiceIntegrationTest
     private List<WfDeployForm> formSnapshots()
     {
         return List.of(
-                formSnapshot(1L, "start-form", "mainStart", "startValue"),
-                formSnapshot(2L, "global-form", "globalTask", "value"),
-                formSnapshot(3L, "local-form", "localTask", "value"),
-                formSnapshot(4L, "loop-start-form", "loopStart", "startValue"),
-                formSnapshot(5L, "loop-form", "loopTask", "decision"));
+                formSnapshot(1L, "start-form", "mainStart", "startValue", false),
+                formSnapshot(2L, "global-form", "globalTask", "value", false),
+                formSnapshot(3L, "local-form", "localTask", "value", false),
+                formSnapshot(4L, "loop-start-form", "loopStart", "startValue", false),
+                formSnapshot(5L, "loop-form", "loopTask", "decision", false),
+                formSnapshot(6L, "child-start-form", "childStart", "childRequest", true),
+                formSnapshot(7L, "terminal-start-form", "terminalStart", null, false),
+                formSnapshot(8L, "parent-start-form", "parentStart", "parentRequest", true));
     }
 
     /** 真实 Flowable 测试流程：主链覆盖全局、task-local、无表单，循环链覆盖同节点新一轮继承。 */
@@ -1081,21 +1354,47 @@ class WorkflowProcessDetailServiceIntegrationTest
                 <sequenceFlow id="loopExit" sourceRef="loopGateway" targetRef="loopEnd"/>
               </process>
               <process id="detailParent" name="详情父流程" isExecutable="true">
-                <startEvent id="parentStart"/>
-                <callActivity id="callChild" name="调用子流程" calledElement="detailChild"/>
+                <startEvent id="parentStart" flowable:formKey="parent-start-form"/>
+                <callActivity id="callChild" name="调用子流程" calledElement="detailChild">
+                  <extensionElements>
+                    <flowable:in source="parentRequest" target="childRequest"/>
+                  </extensionElements>
+                </callActivity>
                 <endEvent id="parentEnd"/>
                 <sequenceFlow id="parentFlow1" sourceRef="parentStart" targetRef="callChild"/>
                 <sequenceFlow id="parentFlow2" sourceRef="callChild" targetRef="parentEnd"/>
               </process>
               <process id="detailChild" name="详情子流程" isExecutable="true">
-                <startEvent id="childStart"/>
+                <startEvent id="childStart" flowable:formKey="child-start-form"/>
                 <userTask id="childTask" name="子流程审批" flowable:assignee="approver"/>
                 <endEvent id="childEnd"/>
                 <sequenceFlow id="childFlow1" sourceRef="childStart" targetRef="childTask"/>
                 <sequenceFlow id="childFlow2" sourceRef="childTask" targetRef="childEnd"/>
               </process>
+              <process id="detailMissingParent" name="缺失映射值父流程" isExecutable="true">
+                <startEvent id="missingParentStart"/>
+                <callActivity id="callMissingChild" calledElement="detailChild">
+                  <extensionElements>
+                    <flowable:in source="missingParentRequest" target="childRequest"/>
+                  </extensionElements>
+                </callActivity>
+                <endEvent id="missingParentEnd"/>
+                <sequenceFlow id="missingParentFlow1" sourceRef="missingParentStart" targetRef="callMissingChild"/>
+                <sequenceFlow id="missingParentFlow2" sourceRef="callMissingChild" targetRef="missingParentEnd"/>
+              </process>
+              <process id="detailInvalidParent" name="非法映射值父流程" isExecutable="true">
+                <startEvent id="invalidParentStart"/>
+                <callActivity id="callInvalidChild" calledElement="detailChild">
+                  <extensionElements>
+                    <flowable:in source="invalidParentRequest" target="childRequest"/>
+                  </extensionElements>
+                </callActivity>
+                <endEvent id="invalidParentEnd"/>
+                <sequenceFlow id="invalidParentFlow1" sourceRef="invalidParentStart" targetRef="callInvalidChild"/>
+                <sequenceFlow id="invalidParentFlow2" sourceRef="callInvalidChild" targetRef="invalidParentEnd"/>
+              </process>
               <process id="detailTerminal" name="详情终态流程" isExecutable="true">
-                <startEvent id="terminalStart"/>
+                <startEvent id="terminalStart" flowable:formKey="terminal-start-form"/>
                 <endEvent id="terminalEnd"/>
                 <sequenceFlow id="terminalFlow" sourceRef="terminalStart" targetRef="terminalEnd"/>
               </process>

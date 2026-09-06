@@ -18,6 +18,7 @@ import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.service.model.WorkflowParticipantRuleBpmnContract.StartRule;
 import com.ruoyi.flowable.service.model.WorkflowParticipantRuleBpmnContract.TaskRule;
+import com.ruoyi.flowable.service.task.WorkflowMultiInstanceModelContract;
 
 /**
  * 编译流程发起范围和单实例用户任务参与者规则并生成不可变快照。
@@ -65,6 +66,15 @@ public class WorkflowParticipantRuleDeploymentService
             for (UserTask task : process.findFlowElementsOfType(UserTask.class, true))
             {
                 WorkflowParticipantRuleBpmnContract.removeAuthorProperties(task);
+                if (WorkflowMultiInstanceModelContract.usesControlledHandler(
+                        task.getLoopCharacteristics()))
+                {
+                    // 作者模型不暴露 Flowable 原生办理人字段；只在不可变执行资源中绑定元素变量。
+                    task.setAssignee(WorkflowMultiInstanceModelContract.ASSIGNEE_EXPRESSION);
+                    task.setOwner(null);
+                    task.setCandidateUsers(List.of());
+                    task.setCandidateGroups(List.of());
+                }
             }
         }
         byte[] compiledBytes = converter.convertToXML(compiled);
@@ -145,7 +155,7 @@ public class WorkflowParticipantRuleDeploymentService
     }
 
     /**
-     * 读取单实例用户任务规则；未配置规则时返回空，由历史兼容链处理。
+     * 读取单实例用户任务规则；缺失或不完整配置由正式契约拒绝。
      * @param process Process，任务所属可执行流程
      * @param task UserTask，待读取作者属性的用户任务
      * @return TaskRule，规范任务规则或 null

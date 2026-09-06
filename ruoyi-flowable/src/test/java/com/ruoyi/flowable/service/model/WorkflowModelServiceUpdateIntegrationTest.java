@@ -2,6 +2,7 @@ package com.ruoyi.flowable.service.model;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -19,8 +20,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.flowable.common.engine.api.FlowableOptimisticLockingException;
@@ -29,7 +33,6 @@ import org.flowable.engine.RepositoryService;
 import org.flowable.engine.impl.persistence.entity.ModelEntity;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.Model;
-import org.flowable.engine.repository.ModelQuery;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,6 +43,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCategory;
 import com.ruoyi.flowable.domain.WfForm;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
+import com.ruoyi.flowable.domain.vo.WorkflowModelView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
@@ -76,9 +80,9 @@ class WorkflowModelServiceUpdateIntegrationTest
     /** 更新请求引用的真实有效表单主键。 */
     private static final Long UPDATED_FORM_ID = 200L;
 
-    /** 初始 metaInfo，保留未知字段以同时验证结构化合并语义。 */
+    /** 初始 metaInfo，只包含正式白名单字段。 */
     private static final String ORIGINAL_META_INFO = """
-            {"createUser":"100","description":"原描述","formType":2,"legacy":"保留"}
+            {"createUser":"100","description":"原描述","formType":2}
             """.trim();
 
     /** 模型编辑器源码；元数据更新成功或失败均不得修改。 */
@@ -152,7 +156,109 @@ class WorkflowModelServiceUpdateIntegrationTest
                 mock(WorkflowDmnDecisionService.class),
                 mock(WorkflowFormFieldExtensionService.class),
                 mock(WorkflowCallActivityReferenceService.class),
-                mock(WorkflowTaskSlaDeploymentService.class));
+                mock(WorkflowTaskSlaDeploymentService.class),
+                mock(WorkflowRuntimeTaskListenerCompiler.class));
+    }
+
+    /**
+     * 验证模型创建服务持久化可直接导入的正式作者 BPMN，且不把服务端内部监听器暴露给设计器。
+     *
+     * @return void，初始源码缺失完整主链或包含内部 Spring Bean 表达式时测试失败
+     */
+    @Test
+    void createsFormalInitialAuthorBpmnWithoutRuntimeListenerProtocol()
+    {
+        WorkflowModelDto request = new WorkflowModelDto();
+        request.setModelName("正式初始模型");
+        request.setModelKey("formal-initial-model");
+        request.setCategory(UPDATED_CATEGORY);
+        request.setFormType(2);
+
+        String modelId = service.createModel(request);
+        String source = new String(actualRepositoryService.getModelEditorSource(modelId),
+                StandardCharsets.UTF_8);
+
+        assertTrue(source.contains("sourceRef=\"start\""));
+        assertTrue(source.contains("targetRef=\"review\""));
+        assertTrue(source.contains("targetRef=\"end\""));
+        assertFalse(source.contains("userTaskListener"));
+    }
+
+    /**
+     * 验证列表对已部署和未部署模型同时投影三项正式能力的 true/false 双向事实。
+     *
+     * @return void，任一能力仍需前端根据 deployed 推断时测试失败
+     */
+    @Test
+    void projectsModelCapabilitiesInBothDirections()
+    {
+        String editableModelId = createModel("capability-editable", null);
+        Deployment deployment = createRealDeployment("capability-deployed");
+        String deployedModelId = createModel("capability-locked", deployment.getId());
+        clearInvocations(repositoryService);
+
+        Map<String, WorkflowModelView> rows = service.list(
+                new WorkflowModelDto(), 1, 20).rows().stream()
+                .collect(Collectors.toMap(WorkflowModelView::modelId, Function.identity()));
+
+        WorkflowModelView editable = rows.get(editableModelId);
+        assertNotNull(editable);
+        assertFalse(editable.deployed());
+        assertTrue(editable.metadataEditAllowed());
+        assertTrue(editable.deployAllowed());
+        assertTrue(editable.deleteAllowed());
+
+        WorkflowModelView locked = rows.get(deployedModelId);
+        assertNotNull(locked);
+        assertTrue(locked.deployed());
+        assertFalse(locked.metadataEditAllowed());
+        assertFalse(locked.deployAllowed());
+        assertFalse(locked.deleteAllowed());
+        // 列表只执行自身一次 ModelQuery，不得按行追加 deployed 查询形成 N+1。
+        verify(repositoryService, times(1)).createModelQuery();
+    }
+
+    /**
+     * 验证未知 metaInfo 字段在迁移完成后被明确拒绝，不能继续透传。
+     *
+     * @return void，未知字段仍进入列表响应时测试失败
+     */
+    @Test
+    void rejectsUnknownMetadataFields()
+    {
+        String modelId = createModel("unknown-metadata", null);
+        Model model = actualRepositoryService.getModel(modelId);
+        model.setMetaInfo("{\"createUser\":\"100\",\"legacyFlag\":true}");
+        actualRepositoryService.saveModel(model);
+
+        ServiceException failure = assertThrows(ServiceException.class,
+                () -> service.list(new WorkflowModelDto(), 1, 20));
+
+        assertEquals(HttpStatus.ERROR, failure.getCode());
+        assertEquals("流程模型元数据损坏", failure.getMessage());
+    }
+
+    /**
+     * 验证已有模型缺少编辑器资源时按服务端数据异常拒绝，不返回空串让前端补图。
+     *
+     * @return void，空模型资源仍被兼容读取时测试失败
+     */
+    @Test
+    void rejectsMissingModelResource()
+    {
+        Model model = actualRepositoryService.newModel();
+        model.setName("缺失资源模型");
+        model.setKey("missing-resource");
+        model.setCategory(ORIGINAL_CATEGORY);
+        model.setVersion(1);
+        model.setMetaInfo(ORIGINAL_META_INFO);
+        actualRepositoryService.saveModel(model);
+
+        ServiceException failure = assertThrows(ServiceException.class,
+                () -> service.getBpmnXml(model.getId()));
+
+        assertEquals(HttpStatus.ERROR, failure.getCode());
+        assertEquals("流程模型资源缺失", failure.getMessage());
     }
 
     /**
@@ -198,40 +304,37 @@ class WorkflowModelServiceUpdateIntegrationTest
     }
 
     /**
-     * 验证字段为空时完整复用 deployed 查询结果，不允许仅依赖 Model.deploymentId。
+     * 验证空白 deploymentId 被识别为损坏正式字段，而不是回退查询另一套部署事实。
      *
-     * @return void，无返回值；真实 H2 查询命中部署关系后必须返回固定 409 且不保存
+     * @return void，无返回值；损坏关系必须返回 500 且不保存
      */
     @Test
-    void rejectsModelWhenDeployedQueryFindsRelationWithEmptyLoadedField()
+    void rejectsBlankDeploymentIdAsCorruptedFormalState()
     {
-        Deployment deployment = createRealDeployment("query-fallback");
-        String modelId = createModel("query-fallback-model", deployment.getId());
+        String modelId = createModel("corrupted-deployment-field", null);
         ModelSnapshot before = snapshot(modelId);
-        assertEquals(1L, actualRepositoryService.createModelQuery()
-                .modelId(modelId).deployed().count());
 
-        // 模拟字段投影暂未携带部署 ID；兜底判断仍必须由真实 H2 deployed 查询裁决。
-        Model modelWithoutDeploymentField = mock(Model.class);
-        when(modelWithoutDeploymentField.getId()).thenReturn(modelId);
-        when(modelWithoutDeploymentField.getDeploymentId()).thenReturn(null);
+        Model modelWithBlankDeploymentField = mock(Model.class);
+        when(modelWithBlankDeploymentField.getId()).thenReturn(modelId);
+        when(modelWithBlankDeploymentField.getDeploymentId()).thenReturn(" ");
         clearInvocations(repositoryService);
-        doReturn(modelWithoutDeploymentField).when(repositoryService).getModel(modelId);
+        doReturn(modelWithBlankDeploymentField).when(repositoryService).getModel(modelId);
 
         ServiceException failure = assertThrows(ServiceException.class,
                 () -> service.updateModel(updateRequest(modelId)));
 
-        assertDeployedEditConflict(failure);
+        assertEquals(HttpStatus.ERROR, failure.getCode());
+        assertEquals("流程模型部署关系数据异常", failure.getMessage());
         assertSnapshotEquals(before, snapshot(modelId));
-        verify(repositoryService, times(1)).createModelQuery();
+        verify(repositoryService, never()).createModelQuery();
         verify(repositoryService, never()).saveModel(any(Model.class));
         verify(categoryMapper, never()).selectByCode(anyString());
     }
 
     /**
-     * 验证真实 deployed 查询返回零时，名称、分类、描述和表单元数据仍可一次性更新。
+     * 验证正式 deploymentId 为 null 时，名称、分类、描述和表单元数据仍可一次性更新。
      *
-     * @return void，无返回值；断言 saveModel 恰好一次并保留未知 metaInfo 字段
+     * @return void，无返回值；断言 saveModel 恰好一次且 metaInfo 仅保留正式字段
      */
     @Test
     void updatesAllSupportedMetadataForUndeployedModelExactlyOnce() throws Exception
@@ -254,10 +357,10 @@ class WorkflowModelServiceUpdateIntegrationTest
         assertEquals(0, metadata.path("formType").intValue());
         assertEquals(UPDATED_FORM_ID.longValue(), metadata.path("formId").longValue());
         assertEquals(ACTOR_ID, metadata.path("createUser").textValue());
-        assertEquals("保留", metadata.path("legacy").textValue());
+        assertFalse(metadata.has("legacy"));
         assertArrayEquals(MODEL_SOURCE,
                 actualRepositoryService.getModelEditorSource(modelId));
-        verify(repositoryService, times(1)).createModelQuery();
+        verify(repositoryService, never()).createModelQuery();
         verify(repositoryService, times(1)).saveModel(any(Model.class));
         verify(categoryMapper, times(1)).selectByCode(UPDATED_CATEGORY);
         verify(formMapper, times(1)).selectById(UPDATED_FORM_ID);
@@ -278,15 +381,10 @@ class WorkflowModelServiceUpdateIntegrationTest
         AtomicBoolean winnerCommitted = new AtomicBoolean(false);
         AtomicReference<String> winnerDeploymentId = new AtomicReference<>();
         TransactionTemplate winnerTransaction = requiresNewTransaction();
-        ModelQuery undeployedQuery = mock(ModelQuery.class);
-        when(undeployedQuery.modelId(modelId)).thenReturn(undeployedQuery);
-        when(undeployedQuery.deployed()).thenReturn(undeployedQuery);
-        when(undeployedQuery.count()).thenReturn(0L);
         clearInvocations(repositoryService);
-        // 避免 H2 REPEATABLE_READ 把陈旧写转换为序列化死锁；检查结果已由前两类用例覆盖，
+        // 避免 H2 REPEATABLE_READ 把陈旧写转换为序列化死锁；字段门禁已由前两类用例覆盖，
         // 本用例保留真实陈旧 Model、真实赢家事务和真实 saveModel，精确验证 Flowable revision 异常。
         doReturn(staleModel).when(repositoryService).getModel(modelId);
-        doReturn(undeployedQuery).when(repositoryService).createModelQuery();
 
         doAnswer(invocation ->
         {
@@ -327,7 +425,7 @@ class WorkflowModelServiceUpdateIntegrationTest
                 actualRepositoryService.getModelEditorSource(modelId));
         assertEquals(deploymentCountBefore + 1,
                 actualRepositoryService.createDeploymentQuery().count());
-        verify(repositoryService, times(1)).createModelQuery();
+        verify(repositoryService, never()).createModelQuery();
         verify(repositoryService, times(1)).saveModel(any(Model.class));
     }
 

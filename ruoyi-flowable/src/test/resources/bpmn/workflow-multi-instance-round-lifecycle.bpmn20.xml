@@ -46,12 +46,16 @@
     <startEvent id="fixedStart"/>
     <userTask id="fixedReview" name="固定成员会签" flowable:assignee="${assignee}">
       <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.multiInstance.identityType" value="USER"/>
+          <flowable:property name="approva.multiInstance.identityIds" value="201,202"/>
+        </flowable:properties>
         <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
       </extensionElements>
       <multiInstanceLoopCharacteristics isSequential="false"
-        flowable:collection="${multiInstanceHandler.getFixedUserIds(execution, '201,202')}"
+        flowable:collection="${multiInstanceHandler.getConfiguredUserIds(execution)}"
         flowable:elementVariable="assignee">
         <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances == nrOfInstances}]]></completionCondition>
       </multiInstanceLoopCharacteristics>
@@ -169,6 +173,13 @@
     <startEvent id="laterAllReturnStart" flowable:formKey="startForm"/>
     <userTask id="laterInitialApproval" name="普通首审批" flowable:assignee="150">
       <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.assignment.ruleVersion" value="1"/>
+          <flowable:property name="approva.assignment.type" value="FIXED_USER"/>
+          <flowable:property name="approva.assignment.targetIds" value="150"/>
+          <flowable:property name="approva.assignment.formField" value=""/>
+          <flowable:property name="approva.assignment.noMatchPolicy" value="FAIL"/>
+        </flowable:properties>
         <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>
@@ -196,6 +207,13 @@
     <startEvent id="allAllAnyReturnStart" flowable:formKey="startForm"/>
     <userTask id="allAllAnyInitialApproval" name="普通首审批" flowable:assignee="150">
       <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.assignment.ruleVersion" value="1"/>
+          <flowable:property name="approva.assignment.type" value="FIXED_USER"/>
+          <flowable:property name="approva.assignment.targetIds" value="150"/>
+          <flowable:property name="approva.assignment.formField" value=""/>
+          <flowable:property name="approva.assignment.noMatchPolicy" value="FAIL"/>
+        </flowable:properties>
         <flowable:taskListener event="create" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="assignment" delegateExpression="${userTaskListener}"/>
         <flowable:taskListener event="complete" delegateExpression="${userTaskListener}"/>

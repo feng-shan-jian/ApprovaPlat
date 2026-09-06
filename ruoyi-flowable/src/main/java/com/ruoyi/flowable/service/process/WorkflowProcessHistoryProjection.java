@@ -75,16 +75,22 @@ public class WorkflowProcessHistoryProjection
     /** 引擎身份字段的最大字符数。 */
     private static final int MAX_ID_LENGTH = 255;
 
-    /** 旧系统正式使用且允许进入详情的审批意见类型及显示名称。 */
-    private static final Map<String, String> COMMENT_TYPE_NAMES = Map.of(
-            "1", "通过",
-            "2", "退回",
-            "3", "驳回",
-            "4", "委派",
-            "5", "转办",
-            "6", "终止",
-            "7", "撤回",
-            "comment", "意见");
+    /** 正式结构化审计动作及用户可见名称。 */
+    private static final Map<String, String> ACTION_NAMES = Map.ofEntries(
+            Map.entry("COMPLETE", "通过"),
+            Map.entry("RESUBMIT", "重新提交"),
+            Map.entry("RETURN", "退回"),
+            Map.entry("REJECT", "驳回"),
+            Map.entry("CLAIM", "认领"),
+            Map.entry("UNCLAIM", "取消认领"),
+            Map.entry("DELEGATE", "委派"),
+            Map.entry("RESOLVE", "委派办结"),
+            Map.entry("TRANSFER", "转办"),
+            Map.entry("CANCEL", "取消"),
+            Map.entry("TERMINATE", "终止"),
+            Map.entry("REVOKE", "撤回"),
+            Map.entry("MULTI_INSTANCE_ADD", "加签"),
+            Map.entry("MULTI_INSTANCE_REMOVE", "减签"));
 
     private final HistoryService historyService;
 
@@ -396,10 +402,14 @@ public class WorkflowProcessHistoryProjection
             {
                 throw dataError("流程审批意见关联数据异常");
             }
-            if (!knownTaskIds.contains(comment.getTaskId())
-                    || !COMMENT_TYPE_NAMES.containsKey(comment.getType()))
+            if (StringUtils.hasText(comment.getType())
+                    && comment.getType().chars().allMatch(Character::isDigit))
             {
-                // 引擎事件和未知扩展类型不进入用户可见审批意见，任务关系也不能由意见反向扩展。
+                throw dataError("流程存在旧数字意见类型，请先完成数据迁移");
+            }
+            if (!ACTION_NAMES.containsKey(comment.getType()))
+            {
+                // 监听器和受控循环拥有各自投影；未知扩展类型不能进入用户可见审批意见。
                 continue;
             }
             String rawMessage = comment.getFullMessage();
@@ -415,9 +425,14 @@ public class WorkflowProcessHistoryProjection
                 throw dataError("流程审批意见正文总量超过安全上限");
             }
             // 原始正文只在当前读取栈内参与完整大小门禁和安全解析，禁止进入详情 VO。
-            String opinion = extractCommentOpinion(rawMessage);
+            String opinion = extractCommentOpinion(rawMessage, comment.getType());
+            if (!knownTaskIds.contains(comment.getTaskId()))
+            {
+                // 流程级取消、终止审计已经完成结构校验，但不挂到某个用户任务时间线。
+                continue;
+            }
             WorkflowProcessCommentView view = new WorkflowProcessCommentView(comment.getId(),
-                    comment.getTaskId(), comment.getType(), COMMENT_TYPE_NAMES.get(comment.getType()),
+                    comment.getTaskId(), comment.getType(), ACTION_NAMES.get(comment.getType()),
                     opinion, comment.getUserId(), toInstant(comment.getTime()));
             indexed.computeIfAbsent(comment.getTaskId(), ignored -> new ArrayList<>()).add(view);
         }
@@ -436,45 +451,43 @@ public class WorkflowProcessHistoryProjection
     }
 
     /**
-     * 从服务端结构化审计中提取纯文本业务意见，并兼容既有纯文本 comment。
+     * 从唯一正式结构化审计中提取纯文本业务意见。
      *
      * @param rawMessage String，已经过单条及累计 UTF-8 大小门禁的原始 comment 正文
-     * @return String，可直接展示的纯文本意见；结构化系统事件没有 opinion 时返回 null
+     * @param expectedAction String，comment type 声明的正式动作编码
+     * @return String，可直接展示的纯文本意见；无业务意见时返回 null
      */
-    private String extractCommentOpinion(String rawMessage)
+    private String extractCommentOpinion(String rawMessage, String expectedAction)
     {
-        if (rawMessage == null)
+        if (!StringUtils.hasText(rawMessage))
         {
-            return null;
+            throw dataError("流程审批意见缺少结构化审计正文");
         }
         String normalized = rawMessage.trim();
-        if (normalized.isEmpty() || !normalized.startsWith("{"))
-        {
-            return normalized;
-        }
         try
         {
             JsonNode audit = safeJsonMapper.readTree(normalized);
-            if (audit != null && audit.isObject())
+            if (audit == null || !audit.isObject())
             {
-                JsonNode opinion = audit.get("opinion");
-                if (opinion != null && opinion.isTextual())
-                {
-                    return opinion.textValue().trim();
-                }
-                JsonNode action = audit.get("action");
-                if (action != null && action.isTextual())
-                {
-                    // 文本 action 已足以识别结构化审计，不依赖可选 schemaVersion。
-                    return null;
-                }
+                throw dataError("流程审批意见不是正式结构化审计");
             }
+            JsonNode action = audit.get("action");
+            JsonNode actorUserId = audit.get("actorUserId");
+            JsonNode opinion = audit.get("opinion");
+            if (action == null || !action.isTextual()
+                    || !expectedAction.equals(action.textValue())
+                    || actorUserId == null || !actorUserId.isTextual()
+                    || !StringUtils.hasText(actorUserId.textValue())
+                    || opinion == null || (!opinion.isNull() && !opinion.isTextual()))
+            {
+                throw dataError("流程审批意见结构化审计字段不完整");
+            }
+            return opinion.isNull() ? null : opinion.textValue().trim();
         }
         catch (JacksonException exception)
         {
-            // 历史纯文本可能以左花括号开头；解析失败仍按原始业务意见兼容展示。
+            throw dataError("流程审批意见不是合法结构化审计");
         }
-        return normalized;
     }
 
     /**
@@ -625,12 +638,12 @@ public class WorkflowProcessHistoryProjection
         {
             List<WorkflowProcessCommentView> taskComments =
                     commentsByTask.getOrDefault(task.getId(), List.of());
-            if (taskComments.stream().anyMatch(comment -> "2".equals(comment.type()))
+            if (taskComments.stream().anyMatch(comment -> "RETURN".equals(comment.type()))
                     || containsAction(task.getDeleteReason(), "return", "退回"))
             {
                 returnedActivities.add(task.getTaskDefinitionKey());
             }
-            if (taskComments.stream().anyMatch(comment -> "3".equals(comment.type()))
+            if (taskComments.stream().anyMatch(comment -> "REJECT".equals(comment.type()))
                     || containsAction(task.getDeleteReason(), "reject", "驳回"))
             {
                 rejectedActivities.add(task.getTaskDefinitionKey());

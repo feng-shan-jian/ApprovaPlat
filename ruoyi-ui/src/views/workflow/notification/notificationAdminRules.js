@@ -5,8 +5,6 @@ export const WORKFLOW_NOTIFICATION_PERMISSIONS = Object.freeze({
   mailManage: 'workflow:notification:mailManage'
 })
 
-const SUPPORTED_ENCRYPTION_MODES = Object.freeze(['NONE', 'STARTTLS', 'SSL'])
-
 /**
  * 创建不含任何正式凭据的 SMTP 表单初始值。
  * @returns {object} 可编辑的未保存 SMTP 草稿。
@@ -20,77 +18,6 @@ export function createEmptyMailConfigForm() {
     credential: '',
     fromAddress: '',
     senderName: 'ApprovaPlat 审批通知'
-  }
-}
-
-/**
- * 创建不含凭据的 SMTP 认证身份基线。
- * @returns {{smtpHost:string,smtpPort:number|null,encryptionMode:string,username:string}} 空认证身份。
- */
-export function createEmptyMailAuthenticationIdentity() {
-  return { smtpHost: '', smtpPort: null, encryptionMode: '', username: '' }
-}
-
-/**
- * 规范化决定授权码归属的 SMTP 认证身份，From 地址和发件人名称不参与比较。
- * @param {object} source 当前表单或最近一次后端回读表单。
- * @returns {{smtpHost:string,smtpPort:number|null,encryptionMode:string,username:string}} 可比较的公开认证身份。
- */
-export function normalizeMailAuthenticationIdentity(source) {
-  const parsedPort = Number(source?.smtpPort)
-  return {
-    smtpHost: String(source?.smtpHost || '').trim().toLowerCase(),
-    smtpPort: Number.isInteger(parsedPort) ? parsedPort : null,
-    encryptionMode: String(source?.encryptionMode || '').trim().toUpperCase(),
-    // SMTP 登录账号可能区分大小写，只去除输入两端空白，不擅自折叠大小写。
-    username: String(source?.username || '').trim()
-  }
-}
-
-/**
- * 比较当前 SMTP 认证身份与后端回读基线，决定是否必须重新输入授权码。
- * @param {object} loadedIdentity 最近一次后端回读并规范化的认证身份。
- * @param {object} currentSource 当前可编辑 SMTP 表单。
- * @returns {boolean} 主机、端口、加密方式或登录账号任一变化时为 true。
- */
-export function hasMailAuthenticationIdentityChanged(loadedIdentity, currentSource) {
-  const currentIdentity = normalizeMailAuthenticationIdentity(currentSource)
-  const baseline = normalizeMailAuthenticationIdentity(loadedIdentity)
-  return Object.keys(baseline).some(key => currentIdentity[key] !== baseline[key])
-}
-
-/**
- * 只从查询响应提取前端允许展示的 SMTP 字段，主动丢弃所有未知和敏感字段。
- * @param {object|null|undefined} data 后端 mail-config 脱敏响应。
- * @returns {{form:object,meta:object}} 白名单 SMTP 表单和配置状态。
- */
-export function normalizeMailConfigResponse(data) {
-  const source = data && typeof data === 'object' ? data : {}
-  const configured = source.configured === true
-  const responsePort = Number(source.smtpPort)
-  return {
-    form: {
-      smtpHost: typeof source.smtpHost === 'string' ? source.smtpHost : '',
-      smtpPort: Number.isInteger(responsePort) && responsePort >= 1 && responsePort <= 65535
-        ? responsePort
-        : (configured ? null : 587),
-      encryptionMode: SUPPORTED_ENCRYPTION_MODES.includes(source.encryptionMode)
-        ? source.encryptionMode
-        : (configured ? '' : 'STARTTLS'),
-      username: typeof source.username === 'string' ? source.username : '',
-      credential: '',
-      fromAddress: typeof source.fromAddress === 'string' ? source.fromAddress : '',
-      senderName: typeof source.senderName === 'string'
-        ? source.senderName
-        : (configured ? '' : 'ApprovaPlat 审批通知')
-    },
-    meta: {
-      configured,
-      credentialConfigured: source.credentialConfigured === true,
-      revision: Number.isInteger(Number(source.revision)) && Number(source.revision) >= 0
-        ? Number(source.revision)
-        : 0
-    }
   }
 }
 

@@ -18,8 +18,8 @@ import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
 @Service
 public class WorkflowTaskRejectionApplicationService
 {
-    /** 驳回意见类型，与旧系统 FlowComment.REJECT 保持兼容。 */
-    private static final String REJECT_COMMENT_TYPE = "3";
+    /** 驳回流程的正式审计类型。 */
+    private static final String REJECT_COMMENT_TYPE = "REJECT";
 
     /** 驳回时允许原子写入意见的最大活动任务数量。 */
     private static final int MAX_ACTIVE_TASKS_FOR_REJECT = 2_000;
