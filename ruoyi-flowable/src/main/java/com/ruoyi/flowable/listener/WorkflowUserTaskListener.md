@@ -27,6 +27,8 @@
 
 监听器接收 Flowable 已解析的事件事实。参与者服务读取部署快照、`initiator` 和规则明确选择的表单用户字段，访问正式 `sys_user/sys_role/sys_dept`；业务终态由对应 ApplicationService 写入，外部网络调用由通知投递边界承担。
 
+通用事件快照允许携带尚未认领的候选任务事实，此时 `assignee` 可以为空。普通任务由既有多实例运行时读取器判断后跳过轮次处理，继续执行后续创建审计和完整监听链。候选任务仍经过参与者解析及审计服务的候选资格校验；受控多实例仍由既有 `requireTaskMember()` 和运行时活动成员检查拒绝缺失或不属于正式成员的办理人。
+
 整组退回和重提期间，监听链只通过窄化的 `WorkflowMultiInstanceTransitionObserver` 观察 `WorkflowMultiInstanceTransitionCoordinator` 在当前 Flowable 命令内绑定的轮次、根 execution、activity、来源任务、操作人、完整有序成员、ALL/ANY 模式和 revision。通知变量中的 `RETURN`/`RESUBMIT` 仅用于通知抑制，不是创建或中断轮次的授权依据。首审批节点本身就是受控多实例节点时，退回产生的单成员申请人根必须携带与协议一致的局部标记且跳过 `ACTIVE` 轮次登记；重提创建的新根必须具有新 root execution，并按冻结快照登记 `round_no + 1` 的 `ACTIVE` 轮次。
 
 ## 失败边界

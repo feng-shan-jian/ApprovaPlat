@@ -10,7 +10,7 @@ import org.springframework.util.StringUtils;
  * @param processDefinitionId String，流程定义主键
  * @param activityId String，任务节点主键
  * @param executionId String，任务 child execution 主键
- * @param assignee String，事件发生时真实办理人
+ * @param assignee String，事件发生时的真实办理人；普通候选任务未认领时允许为空
  * @param completionRevision Integer，complete 事件的任务局部预留 revision；create 时为空
  */
 public record WorkflowTaskEventSnapshot(String taskId, String processInstanceId,
@@ -28,7 +28,6 @@ public record WorkflowTaskEventSnapshot(String taskId, String processInstanceId,
                 || !StringUtils.hasText(processDefinitionId)
                 || !StringUtils.hasText(activityId)
                 || !StringUtils.hasText(executionId)
-                || !StringUtils.hasText(assignee)
                 || (completionRevision != null && completionRevision < 0))
         {
             throw new IllegalArgumentException("用户任务监听事件快照不完整");
