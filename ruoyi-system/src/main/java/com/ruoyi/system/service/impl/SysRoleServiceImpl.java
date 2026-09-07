@@ -115,18 +115,6 @@ public class SysRoleServiceImpl implements ISysRoleService
     }
 
     /**
-     * 根据用户ID获取角色选择框列表
-     * 
-     * @param userId 用户ID
-     * @return 选中角色ID列表
-     */
-    @Override
-    public List<Long> selectRoleListByUserId(Long userId)
-    {
-        return roleMapper.selectRoleListByUserId(userId);
-    }
-
-    /**
      * 通过角色ID查询角色
      * 
      * @param roleId 角色ID
@@ -331,23 +319,6 @@ public class SysRoleServiceImpl implements ISysRoleService
             rows = roleDeptMapper.batchRoleDept(list);
         }
         return rows;
-    }
-
-    /**
-     * 通过角色ID删除角色
-     * 
-     * @param roleId 角色ID
-     * @return 结果
-     */
-    @Override
-    @Transactional
-    public int deleteRoleById(Long roleId)
-    {
-        // 删除角色与菜单关联
-        roleMenuMapper.deleteRoleMenuByRoleId(roleId);
-        // 删除角色与部门关联
-        roleDeptMapper.deleteRoleDeptByRoleId(roleId);
-        return roleMapper.deleteRoleById(roleId);
     }
 
     /**

@@ -15,8 +15,6 @@ import java.util.Map;
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
-import org.flowable.engine.delegate.ExecutionListener;
-import org.flowable.engine.delegate.TaskListener;
 import org.flowable.engine.runtime.Execution;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
@@ -86,13 +84,8 @@ class WorkflowMultiInstanceEngineContractIntegrationTest
         WorkflowMultiInstanceHandler handler = new WorkflowMultiInstanceHandler(
                 new WorkflowUserSelectionValidator(identityResolver),
                 new WorkflowMultiInstanceTransitionCoordinator());
-        ExecutionListener noOpExecutionListener = execution -> { };
-        TaskListener noOpTaskListener = task -> { };
         engineHarness = WorkflowFlowableEngineTestSupport.start("mi-contract",
-                Map.of("multiInstanceHandler", handler,
-                        "firstNodeMigrationFailureGuard", noOpExecutionListener,
-                        "lateAssignmentFailureGuard", noOpTaskListener,
-                        "crossActivityMigrationFailureGuard", noOpExecutionListener));
+                Map.of("multiInstanceHandler", handler));
         processEngine = engineHarness.processEngine();
         runtimeService = processEngine.getRuntimeService();
         taskService = processEngine.getTaskService();

@@ -38,11 +38,6 @@ public class FileUploadUtils
      */
     private static String defaultBaseDir = RuoYiConfig.getProfile();
 
-    public static void setDefaultBaseDir(String defaultBaseDir)
-    {
-        FileUploadUtils.defaultBaseDir = defaultBaseDir;
-    }
-
     public static String getDefaultBaseDir()
     {
         return defaultBaseDir;

@@ -65,14 +65,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
 		<include refid="selectRoleVo"/>
 	</select>
 	
-	<select id="selectRoleListByUserId" parameterType="Long" resultType="Long">
-		select r.role_id
-        from sys_role r
-	        left join sys_user_role ur on ur.role_id = r.role_id
-	        left join sys_user u on u.user_id = ur.user_id
-	    where u.user_id = #{userId}
-	</select>
-	
 	<select id="selectRoleById" parameterType="Long" resultMap="SysRoleResult">
 		<include refid="selectRoleVo"/>
 		where r.role_id = #{roleId}
@@ -138,10 +130,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
  		where role_id = #{roleId}
 	</update>
 	
-	<delete id="deleteRoleById" parameterType="Long">
- 		update sys_role set del_flag = '2' where role_id = #{roleId}
- 	</delete>
- 	
  	<delete id="deleteRoleByIds" parameterType="Long">
  	    update sys_role set del_flag = '2' where role_id in
  		<foreach collection="array" item="roleId" open="(" separator="," close=")">

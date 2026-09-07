@@ -33,15 +33,6 @@ public class SysNoticeReadServiceImpl implements ISysNoticeReadService
     }
 
     /**
-     * 查询某用户未读公告数量
-     */
-    @Override
-    public int selectUnreadCount(Long userId)
-    {
-        return noticeReadMapper.selectUnreadCount(userId);
-    }
-
-    /**
      * 查询公告列表并标记当前用户已读状态
      */
     @Override

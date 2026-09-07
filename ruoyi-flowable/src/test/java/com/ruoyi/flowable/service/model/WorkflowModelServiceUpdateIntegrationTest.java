@@ -20,7 +20,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,7 +37,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.TransactionDefinition;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.ruoyi.common.constant.HttpStatus;
@@ -46,6 +44,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCategory;
 import com.ruoyi.flowable.domain.WfForm;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
+import com.ruoyi.flowable.domain.vo.WorkflowModelSaveResult;
 import com.ruoyi.flowable.domain.vo.WorkflowModelView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
@@ -58,7 +57,6 @@ import com.ruoyi.flowable.mapper.WfFormMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -67,48 +65,93 @@ import tools.jackson.databind.json.JsonMapper;
 class WorkflowModelServiceUpdateIntegrationTest
 {
     /**
-     * 直接执行真实作者目录构建，验证每个来源只校验解析一次且两种提取消费同一根节点。
-     * @return void，字段目录、节点身份或实际解析次数不符时测试失败
-     * @throws Exception 私有来源记录反射构造失败时报告
+     * 经正式保存入口构建权限化字段目录，并验证真实仓储写入和每个来源的校验预算。
+     * @return void，目录可读边界、附件排除、保存结果或校验次数漂移时失败
      */
     @Test
-    void buildsAuthorCatalogFromOneValidatedRootPerSource() throws Exception
+    void savesModelWithValidatedAuthorFieldCatalog()
     {
-        WorkflowFormTemplateValidator template = spy(new WorkflowFormTemplateValidator());
-        ObjectMapper parser = spy((ObjectMapper) ReflectionTestUtils.getField(template, "objectMapper"));
-        ReflectionTestUtils.setField(template, "objectMapper", parser);
-        ReflectionTestUtils.setField(service, "formTemplateValidator", template);
-        String content = """
-                {"fields":[{"layout":"colFormItem","tag":"el-input","vModel":"owner",
-                "workflowHidden":false,"workflowReadable":true,"workflowWritable":true}]}
+        String modelId = createModel("catalog", null);
+        when(categoryMapper.selectByCode(ORIGINAL_CATEGORY)).thenReturn(activeCategory());
+        WfForm form = activeForm();
+        form.setContent("""
+                {"fields":[
+                  {"layout":"colFormItem","tag":"el-input","vModel":"owner",
+                   "workflowHidden":false,"workflowReadable":true,"workflowWritable":true},
+                  {"layout":"colFormItem","tag":"el-upload","vModel":"files",
+                   "workflowHidden":false,"workflowReadable":true,"workflowWritable":true},
+                  {"layout":"colFormItem","tag":"el-input","vModel":"hidden",
+                   "workflowHidden":true,"workflowReadable":false,"workflowWritable":false}]}
+                """);
+        when(formMapper.selectById(UPDATED_FORM_ID)).thenReturn(form);
+        String permissions = """
+                <flowable:formProperty id="approva_permission_default" type="string"
+                    readable="true" writable="true"/>
+                <flowable:formProperty id="approva_permission_field_owner" variable="owner"
+                    type="string" readable="true" writable="true"/>
+                <flowable:formProperty id="approva_permission_field_files" variable="files"
+                    type="string" readable="true" writable="true"/>
+                <flowable:formProperty id="approva_permission_field_hidden" variable="hidden"
+                    type="string" readable="false" writable="false"/>
                 """;
-        var constructor = Class.forName(WorkflowModelService.class.getName() + "$FormSnapshotSource")
-                .getDeclaredConstructors()[0];
-        constructor.setAccessible(true);
-        List<Object> sources = new ArrayList<>();
+        String bpmn = """
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:flowable="http://flowable.org/bpmn" targetNamespace="catalog-test">
+                  <process id="catalog" name="字段目录" isExecutable="true">
+                    <extensionElements><flowable:properties>
+                      <flowable:property name="approva.startScope.ruleVersion" value="1"/>
+                      <flowable:property name="approva.startScope.type" value="PUBLIC"/>
+                      <flowable:property name="approva.startScope.targetIds" value=""/>
+                      <flowable:property name="approva.startScope.noMatchPolicy" value="FAIL"/>
+                    </flowable:properties></extensionElements>
+                    <startEvent id="start" flowable:formKey="key_200">
+                      <extensionElements>%s</extensionElements>
+                    </startEvent>
+                    <userTask id="review" name="审批" flowable:formKey="key_200">
+                      <extensionElements>%s<flowable:properties>
+                        <flowable:property name="approva.assignment.ruleVersion" value="1"/>
+                        <flowable:property name="approva.assignment.type" value="STARTER"/>
+                        <flowable:property name="approva.assignment.targetIds" value=""/>
+                        <flowable:property name="approva.assignment.formField" value=""/>
+                        <flowable:property name="approva.assignment.noMatchPolicy" value="FAIL"/>
+                      </flowable:properties></extensionElements>
+                    </userTask>
+                    <endEvent id="end"/>
+                    <sequenceFlow id="toReview" sourceRef="start" targetRef="review"/>
+                    <sequenceFlow id="toEnd" sourceRef="review" targetRef="end"/>
+                  </process>
+                </definitions>
+                """.formatted(permissions, permissions);
+        actualRepositoryService.addModelEditorSource(modelId,
+                bpmn.replace("字段目录", "初始目录").getBytes(StandardCharsets.UTF_8));
+        WorkflowModelDto request = new WorkflowModelDto();
+        request.setModelId(modelId);
+        request.setExpectedRevision(snapshot(modelId).revision());
+        request.setBpmnXml(bpmn);
+
+        WorkflowModelSaveResult saved = service.saveModel(request);
+
+        assertEquals(modelId, saved.modelId());
+        assertArrayEquals(bpmn.trim().getBytes(StandardCharsets.UTF_8),
+                actualRepositoryService.getModelEditorSource(modelId));
+        ArgumentCaptor<WorkflowAuthorFormFieldCatalog> catalogs = ArgumentCaptor.forClass(
+                WorkflowAuthorFormFieldCatalog.class);
+        verify(participantRules).validateAuthorRules(any(), catalogs.capture());
+        WorkflowAuthorFormFieldCatalog catalog = catalogs.getValue();
         for (String node : List.of("start", "review"))
         {
-            var reference = new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE,
-                    200L, "key_200", node, node, null, "catalog", null, Map.of());
-            sources.add(constructor.newInstance(reference, "目录表单", content, List.of()));
+            assertTrue(catalog.containsTaskField("catalog", node, "owner"));
+            assertFalse(catalog.containsTaskField("catalog", node, "files"));
+            assertFalse(catalog.containsTaskField("catalog", node, "hidden"));
         }
-        WorkflowAuthorFormFieldCatalog catalog = ReflectionTestUtils.invokeMethod(
-                service, "buildAuthorFormFieldCatalog", sources);
-        assertNotNull(catalog);
-        assertTrue(catalog.containsTaskField("catalog", "start", "owner"));
-        assertTrue(catalog.containsTaskField("catalog", "review", "owner"));
         assertTrue(catalog.containsProcessField("catalog", "owner"));
-        verify(template, times(2)).validate(content);
-        verify(parser, times(2)).readTree(content);
-        ArgumentCaptor<JsonNode> signatures = ArgumentCaptor.forClass(JsonNode.class);
-        ArgumentCaptor<JsonNode> variables = ArgumentCaptor.forClass(JsonNode.class);
-        verify(template, times(2)).extractUserIdSourceFieldSignatures(signatures.capture());
-        verify(template, times(2)).extractVariableNames(variables.capture());
-        for (int index = 0; index < sources.size(); index++)
-        {
-            org.junit.jupiter.api.Assertions.assertSame(signatures.getAllValues().get(index),
-                    variables.getAllValues().get(index));
-        }
+        assertFalse(catalog.containsProcessField("catalog", "files"));
+        assertFalse(catalog.containsProcessField("catalog", "hidden"));
+        verify(formMapper, times(1)).selectById(UPDATED_FORM_ID);
+        // 模板读取一次；两个来源各做权限快照、循环字段和作者目录校验各一次。
+        verify(templateValidator, times(7)).validate(anyString());
+        verify(templateValidator, times(2)).extractUserIdSourceFieldSignatures(any(JsonNode.class));
+        verify(templateValidator, times(2)).extractVariableNames(any(JsonNode.class));
     }
 
     /** 测试事务内使用的规范操作人。 */
@@ -165,6 +208,10 @@ class WorkflowModelServiceUpdateIntegrationTest
     /** 本测试直接调用的生产模型服务。 */
     private WorkflowModelService service;
 
+    private WorkflowFormTemplateValidator templateValidator;
+
+    private WorkflowParticipantRuleDeploymentService participantRules;
+
     /**
      * 为每个用例启动独立真实 Flowable H2，并装配生产事务和身份边界。
      *
@@ -193,15 +240,19 @@ class WorkflowModelServiceUpdateIntegrationTest
                                 new WorkflowIdentityCodec()),
                         new WorkflowExceptionTranslator(), identityResolver));
 
+        templateValidator = spy(new WorkflowFormTemplateValidator());
+        participantRules = mock(WorkflowParticipantRuleDeploymentService.class);
         service = new WorkflowModelService(engineOperations, repositoryService,
-                mock(WorkflowBpmnService.class),
+                new WorkflowBpmnService(repositoryService,
+                        mock(WorkflowFormFieldExtensionService.class),
+                        mock(WorkflowBpmnEventCodeService.class)),
                 mock(WorkflowBpmnIdentityValidator.class), categoryMapper, formMapper,
                 mock(WorkflowDeploymentArtifactRepository.class),
-                mock(WorkflowFormTemplateValidator.class),
+                templateValidator,
                 mock(WorkflowExtensionDeploymentService.class),
                 mock(WorkflowControlledLoopDeploymentService.class),
                 mock(WorkflowConditionDeploymentService.class),
-                mock(WorkflowParticipantRuleDeploymentService.class),
+                participantRules,
                 mock(WorkflowDmnDecisionService.class),
                 mock(WorkflowFormFieldExtensionService.class),
                 mock(WorkflowCallActivityReferenceService.class),

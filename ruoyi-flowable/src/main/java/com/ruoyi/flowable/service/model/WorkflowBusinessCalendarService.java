@@ -254,7 +254,7 @@ public class WorkflowBusinessCalendarService
         }
         TreeSet<Integer> workingDays = new TreeSet<>(request.workingDays());
         if (workingDays.size() != request.workingDays().size()
-                || workingDays.stream().anyMatch(day -> day == null || day < 1 || day > 7))
+                || workingDays.stream().anyMatch(day -> day < 1 || day > 7))
         {
             throw new ServiceException("业务日历工作周配置不合法", HttpStatus.BAD_REQUEST);
         }

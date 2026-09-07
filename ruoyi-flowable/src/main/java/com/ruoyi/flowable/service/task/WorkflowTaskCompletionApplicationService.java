@@ -105,17 +105,13 @@ public class WorkflowTaskCompletionApplicationService
     /**
      * 由当前办理人使用不可变部署表单 schema 校验变量后完成活动任务。
      *
-     * @param request WorkflowTaskCompleteRequest，任务、审批意见和表单变量
+     * @param request WorkflowTaskCompleteRequest，已通过 DTO Bean Validation 的任务、审批意见和表单变量
      * @return 无返回值，全部任务、副作用和写后对账在同一事务提交
      */
     public void completeTask(WorkflowTaskCompleteRequest request)
     {
-        if (request == null)
-        {
-            throw requestValidator.invalidArgument();
-        }
-        String taskId = requestValidator.requireId(request.taskId());
-        String opinion = requestValidator.requireOpinion(request.comment());
+        String taskId = request.taskId().trim();
+        String opinion = request.comment().trim();
         try
         {
             engineOperations.writeAsCurrentUser(actor ->

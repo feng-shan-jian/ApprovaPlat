@@ -69,7 +69,12 @@ public class WorkflowExceptionTranslator
 
         int code;
         String message;
-        if (isDatabaseConcurrencyConflict(exception))
+        Throwable current = exception;
+        while (current != null && !isDatabaseConcurrencyConflict(current))
+        {
+            current = current.getCause();
+        }
+        if (current != null)
         {
             code = HttpStatus.CONFLICT;
             message = CONFLICT_MESSAGE;
@@ -128,26 +133,6 @@ public class WorkflowExceptionTranslator
     }
 
     /**
-     * 尝试把 Flowable 公共 API 外泄的数据库并发异常翻译为稳定 409。
-     *
-     * @param exception RuntimeException，MyBatis 或 JDBC 包装的运行时持久化异常
-     * @return Optional&lt;ServiceException&gt;，仅死锁、锁等待超时或事务回滚冲突有值
-     */
-    public Optional<ServiceException> translateDatabaseConcurrencyConflict(
-            RuntimeException exception)
-    {
-        Objects.requireNonNull(exception, "数据库并发异常不能为空");
-        if (!isDatabaseConcurrencyConflict(exception))
-        {
-            return Optional.empty();
-        }
-        ServiceException translated = new ServiceException(CONFLICT_MESSAGE, HttpStatus.CONFLICT);
-        // 只保留原异常供服务端诊断，响应不得泄露 SQL、表名、锁信息或参数。
-        translated.initCause(exception);
-        return Optional.of(translated);
-    }
-
-    /**
      * 尝试把原始或被事务代理包装的可重试并发异常翻译为稳定 409。
      *
      * @param exception RuntimeException，Flowable、Spring 事务或 MyBatis 暴露的运行时异常
@@ -191,30 +176,21 @@ public class WorkflowExceptionTranslator
     }
 
     /**
-     * 遍历完整异常链识别数据库死锁、锁等待超时和 JDBC 事务回滚类并发冲突。
-     *
-     * @param exception Throwable，Flowable、MyBatis 或 JDBC 抛出的完整异常链
-     * @return boolean，仅可安全重试的数据库并发冲突返回 true
+     * 仅检查当前 cause 节点的 JDBC 并发事实，遍历由各正式入口负责。
+     * @param exception Throwable，当前异常节点
+     * @return boolean，仅 JDBC 事务回滚、死锁或锁等待超时返回 true
      */
     private boolean isDatabaseConcurrencyConflict(Throwable exception)
     {
-        Throwable current = exception;
-        while (current != null)
+        if (!(exception instanceof SQLException sqlException))
         {
-            if (current instanceof SQLException sqlException)
-            {
-                String sqlState = sqlException.getSQLState();
-                if (sqlException instanceof SQLTransactionRollbackException
-                        || sqlException.getErrorCode() == MYSQL_DEADLOCK_ERROR
-                        || sqlException.getErrorCode() == MYSQL_LOCK_WAIT_TIMEOUT_ERROR
-                        || (sqlState != null
-                                && sqlState.startsWith(TRANSACTION_ROLLBACK_SQL_STATE_PREFIX)))
-                {
-                    return true;
-                }
-            }
-            current = current.getCause();
+            return false;
         }
-        return false;
+        String sqlState = sqlException.getSQLState();
+        return sqlException instanceof SQLTransactionRollbackException
+                || sqlException.getErrorCode() == MYSQL_DEADLOCK_ERROR
+                || sqlException.getErrorCode() == MYSQL_LOCK_WAIT_TIMEOUT_ERROR
+                || (sqlState != null
+                        && sqlState.startsWith(TRANSACTION_ROLLBACK_SQL_STATE_PREFIX));
     }
 }

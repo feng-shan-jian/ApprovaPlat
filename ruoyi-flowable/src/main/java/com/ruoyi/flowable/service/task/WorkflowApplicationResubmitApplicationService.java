@@ -99,16 +99,12 @@ public class WorkflowApplicationResubmitApplicationService
 
     /**
      * 保存修改后的原申请表并恢复普通办理配置或重建完整多实例审批组。
-     * @param request WorkflowApplicationResubmitRequest，退回任务和开始表单补丁
+     * @param request WorkflowApplicationResubmitRequest，已通过 DTO Bean Validation 的退回任务和开始表单补丁
      * @return 无返回值，表单、附件、状态、审计和重建在同一事务提交
      */
     public void resubmitApplication(WorkflowApplicationResubmitRequest request)
     {
-        if (request == null)
-        {
-            throw requestValidator.invalidArgument();
-        }
-        String taskId = requestValidator.requireId(request.taskId());
+        String taskId = request.taskId().trim();
         engineOperations.writeAsCurrentUser(actor ->
         {
             ResubmitPreparation preparation = requireResubmitPreparation(taskId, actor);
@@ -173,7 +169,7 @@ public class WorkflowApplicationResubmitApplicationService
 
     /**
      * 校验开始表单快照、补丁和附件引用并冻结完整写计划。
-     * @param request WorkflowApplicationResubmitRequest，重提请求
+     * @param request WorkflowApplicationResubmitRequest，已通过 DTO Bean Validation 的重提请求
      * @param preparation ResubmitPreparation，无副作用正式准备结果
      * @param applicantUserId String，流程正式发起人主键
      * @return ResubmitFormPlan，部署表单、补丁、附件和完整提交快照

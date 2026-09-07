@@ -2,12 +2,12 @@
 
 ## 作用
 
-`WorkflowStartVariableValidator` 将部署时固化的开始表单 JSON 转换为服务端变量 schema，并对客户端变量执行字段白名单、必填、类型和资源边界校验。返回值是深度复制后的不可修改 JSON 数据，与客户端可变集合完全隔离。
+`WorkflowStartVariableValidator` 将部署时固化的开始表单 JSON 转换为服务端变量 schema，并对客户端变量执行字段白名单、必填、类型和资源边界校验。返回值包含规范化变量与按字段分组的附件 UUID；变量是深度复制后的不可修改 JSON 数据，与客户端可变集合完全隔离。
 
 ## 使用方式
 
 ```java
-Map<String, Object> variables = variableValidator.validateAndNormalize(
+WorkflowValidatedStartVariables validated = variableValidator.validateForStart(
         deployFormSnapshot.getContent(), request.variables());
 ```
 

@@ -213,10 +213,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
  		update sys_user set pwd_update_date = sysdate(), password = #{password}, update_time = sysdate() where user_id = #{userId}
 	</update>
 
-	<delete id="deleteUserById" parameterType="Long">
- 		update sys_user set del_flag = '2' where user_id = #{userId}
- 	</delete>
- 	
  	<delete id="deleteUserByIds" parameterType="Long">
  		update sys_user set del_flag = '2' where user_id in
  		<foreach collection="array" item="userId" open="(" separator="," close=")">

@@ -876,41 +876,6 @@ class WorkflowProcessDetailServiceIntegrationTest
     }
 
     /**
-     * 验证旧数字 comment 类型在迁移后被明确识别为数据一致性错误。
-     *
-     * @return void，数字类型被映射为正式动作或从时间线静默忽略时测试失败
-     */
-    @Test
-    void rejectsNumericLegacyCommentType()
-    {
-        ProcessInstance instance = startMainProcess();
-        Task task = activeTask(instance.getId(), "globalTask");
-        taskService.addComment(task.getId(), instance.getId(), "2",
-                "{\"action\":\"RETURN\",\"actorUserId\":\"100\",\"opinion\":\"旧类型\"}");
-
-        assertThatThrownBy(() -> readDetail(instance.getId(), task.getId(), "running"))
-                .isInstanceOf(ServiceException.class)
-                .hasMessage("流程存在旧数字意见类型，请先完成数据迁移");
-    }
-
-    /**
-     * 验证正式动作类型也必须携带完整结构化审计正文，不接受纯文本意见。
-     *
-     * @return void，纯文本正文被当作 opinion 返回时测试失败
-     */
-    @Test
-    void rejectsPlainTextLegacyCommentBody()
-    {
-        ProcessInstance instance = startMainProcess();
-        Task task = activeTask(instance.getId(), "globalTask");
-        taskService.addComment(task.getId(), instance.getId(), "COMPLETE", "旧纯文本意见");
-
-        assertThatThrownBy(() -> readDetail(instance.getId(), task.getId(), "running"))
-                .isInstanceOf(ServiceException.class)
-                .hasMessage("流程审批意见不是合法结构化审计");
-    }
-
-    /**
      * 验证旧数字类型、纯文本正文和畸形 JSON 均不能进入正式历史投影。
      *
      * @return void，任一旧 comment 协议仍被容错展示时测试失败
@@ -919,9 +884,12 @@ class WorkflowProcessDetailServiceIntegrationTest
     void rejectsLegacyAndMalformedComments()
     {
         List<List<String>> invalidComments = List.of(
-                List.of("1", "{\"action\":\"COMPLETE\",\"actorUserId\":\"100\"}"),
-                List.of("COMPLETE", "旧版纯文本意见"),
-                List.of("RETURN", "{畸形正文"));
+                List.of("1", "{\"action\":\"COMPLETE\",\"actorUserId\":\"100\"}",
+                        "流程存在旧数字意见类型，请先完成数据迁移"),
+                List.of("2", "{\"action\":\"RETURN\",\"actorUserId\":\"100\",\"opinion\":\"旧类型\"}",
+                        "流程存在旧数字意见类型，请先完成数据迁移"),
+                List.of("COMPLETE", "旧版纯文本意见", "流程审批意见不是合法结构化审计"),
+                List.of("RETURN", "{畸形正文", "流程审批意见不是合法结构化审计"));
         for (List<String> invalid : invalidComments)
         {
             ProcessInstance instance = startMainProcess();
@@ -930,7 +898,7 @@ class WorkflowProcessDetailServiceIntegrationTest
                     invalid.get(0), invalid.get(1));
             assertThatThrownBy(() -> readDetail(
                     instance.getId(), task.getId(), "running"))
-                    .isInstanceOf(ServiceException.class)
+                    .hasMessage(invalid.get(2))
                     .isInstanceOfSatisfying(ServiceException.class,
                             exception -> assertThat(exception.getCode()).isEqualTo(500));
         }

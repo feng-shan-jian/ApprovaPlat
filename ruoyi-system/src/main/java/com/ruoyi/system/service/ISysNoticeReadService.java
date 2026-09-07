@@ -20,14 +20,6 @@ public interface ISysNoticeReadService
     public void markRead(Long noticeId, Long userId);
 
     /**
-     * 查询某用户未读公告数量
-     *
-     * @param userId 用户ID
-     * @return 未读数量
-     */
-    public int selectUnreadCount(Long userId);
-
-    /**
      * 查询公告列表并标记当前用户已读状态（用于首页展示）
      *
      * @param userId 用户ID

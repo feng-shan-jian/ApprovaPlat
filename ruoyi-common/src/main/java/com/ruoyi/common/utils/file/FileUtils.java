@@ -12,9 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import jakarta.servlet.http.HttpServletRequest;
+import java.util.Locale;
 import jakarta.servlet.http.HttpServletResponse;
-import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.springframework.web.util.UriUtils;
@@ -31,8 +30,6 @@ import com.ruoyi.common.utils.uuid.IdUtils;
  */
 public class FileUtils
 {
-    public static String FILENAME_PATTERN = "[a-zA-Z0-9_\\-\\|\\.\\u4e00-\\u9fa5]+";
-
     /** 防止通过多层百分号编码绕过 profile 私有目录检查的最大解码次数。 */
     private static final int MAX_PROTECTED_PATH_DECODE_PASSES = 3;
 
@@ -101,7 +98,7 @@ public class FileUtils
         String pathName = "";
         try
         {
-            String extension = getFileExtendName(data);
+            String extension = FileTypeUtils.getFileExtendName(data).toLowerCase(Locale.ROOT);
             pathName = DateUtils.datePath() + "/" + IdUtils.fastUUID() + "." + extension;
             File file = FileUploadUtils.getAbsoluteFile(uploadDir, pathName);
             fos = new FileOutputStream(file);
@@ -141,17 +138,6 @@ public class FileUtils
             flag = file.delete();
         }
         return flag;
-    }
-
-    /**
-     * 文件名称验证
-     * 
-     * @param filename 文件名称
-     * @return true 正常 false 非法
-     */
-    public static boolean isValidFilename(String filename)
-    {
-        return filename.matches(FILENAME_PATTERN);
     }
 
     /**
@@ -323,41 +309,6 @@ public class FileUtils
 
     /**
      * 下载文件名重新编码
-     * 
-     * @param request 请求对象
-     * @param fileName 文件名
-     * @return 编码后的文件名
-     */
-    public static String setFileDownloadHeader(HttpServletRequest request, String fileName) throws UnsupportedEncodingException
-    {
-        final String agent = request.getHeader("USER-AGENT");
-        String filename = fileName;
-        if (agent.contains("MSIE"))
-        {
-            // IE浏览器
-            filename = URLEncoder.encode(filename, "utf-8");
-            filename = filename.replace("+", " ");
-        }
-        else if (agent.contains("Firefox"))
-        {
-            // 火狐浏览器
-            filename = new String(fileName.getBytes(), "ISO8859-1");
-        }
-        else if (agent.contains("Chrome"))
-        {
-            // google浏览器
-            filename = URLEncoder.encode(filename, "utf-8");
-        }
-        else
-        {
-            // 其它浏览器
-            filename = URLEncoder.encode(filename, "utf-8");
-        }
-        return filename;
-    }
-
-    /**
-     * 下载文件名重新编码
      *
      * @param response 响应对象
      * @param realFileName 真实文件名
@@ -392,35 +343,6 @@ public class FileUtils
     }
 
     /**
-     * 获取图像后缀
-     * 
-     * @param photoByte 图像数据
-     * @return 后缀名
-     */
-    public static String getFileExtendName(byte[] photoByte)
-    {
-        String strFileExtendName = "jpg";
-        if ((photoByte[0] == 71) && (photoByte[1] == 73) && (photoByte[2] == 70) && (photoByte[3] == 56)
-                && ((photoByte[4] == 55) || (photoByte[4] == 57)) && (photoByte[5] == 97))
-        {
-            strFileExtendName = "gif";
-        }
-        else if ((photoByte[6] == 74) && (photoByte[7] == 70) && (photoByte[8] == 73) && (photoByte[9] == 70))
-        {
-            strFileExtendName = "jpg";
-        }
-        else if ((photoByte[0] == 66) && (photoByte[1] == 77))
-        {
-            strFileExtendName = "bmp";
-        }
-        else if ((photoByte[1] == 80) && (photoByte[2] == 78) && (photoByte[3] == 71))
-        {
-            strFileExtendName = "png";
-        }
-        return strFileExtendName;
-    }
-
-    /**
      * 获取文件名称 /profile/upload/2022/04/16/ruoyi.png -- ruoyi.png
      * 
      * @param fileName 路径名称
@@ -438,19 +360,4 @@ public class FileUtils
         return fileName.substring(index + 1);
     }
 
-    /**
-     * 获取不带后缀文件名称 /profile/upload/2022/04/16/ruoyi.png -- ruoyi
-     * 
-     * @param fileName 路径名称
-     * @return 没有文件路径和后缀的名称
-     */
-    public static String getNameNotSuffix(String fileName)
-    {
-        if (fileName == null)
-        {
-            return null;
-        }
-        String baseName = FilenameUtils.getBaseName(fileName);
-        return baseName;
-    }
 }

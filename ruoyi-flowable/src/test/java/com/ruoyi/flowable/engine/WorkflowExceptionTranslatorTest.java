@@ -111,7 +111,7 @@ class WorkflowExceptionTranslatorTest
                 "Deadlock found for internal-secret-table", "40001", 1213);
         RuntimeException deadlock = new RuntimeException("persistence wrapper", databaseCause);
 
-        assertThat(translator.translateDatabaseConcurrencyConflict(deadlock))
+        assertThat(translator.translateRetryableConcurrencyConflict(deadlock))
                 .hasValueSatisfying(translated ->
                 {
                     assertThat(translated.getCode()).isEqualTo(409);
@@ -120,7 +120,7 @@ class WorkflowExceptionTranslatorTest
                             .doesNotContain("internal-secret", "Deadlock");
                     assertThat(translated.getCause()).isSameAs(deadlock);
                 });
-        assertThat(translator.translateDatabaseConcurrencyConflict(
+        assertThat(translator.translateRetryableConcurrencyConflict(
                 new IllegalStateException("programming failure"))).isEmpty();
     }
 

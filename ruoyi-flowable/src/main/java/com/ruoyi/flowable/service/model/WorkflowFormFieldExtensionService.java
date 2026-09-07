@@ -68,16 +68,6 @@ public class WorkflowFormFieldExtensionService
     }
 
     /**
-     * 把内嵌表单中的自定义字段重新锁定到部署时精确版本。
-     * @param content String，保存阶段生成且已通过表单验证的 JSON
-     * @return String，包含精确版本、实现键和校验和的不可变部署内容
-     */
-    public String freezeEmbeddedContent(String content)
-    {
-        return freeze(content, null, null, false).content();
-    }
-
-    /**
      * 冻结内嵌表单正文并生成统一的字段级部署扩展快照。
      * @param content String，保存阶段生成且已通过表单验证的 JSON
      * @param processKey String，表单节点所属可执行流程标识
@@ -89,19 +79,18 @@ public class WorkflowFormFieldExtensionService
     {
         String normalizedProcessKey = requireText(processKey, "自定义表单字段所属流程标识不能为空");
         String normalizedNodeKey = requireText(nodeKey, "自定义表单字段所属节点标识不能为空");
-        return freeze(content, normalizedProcessKey, normalizedNodeKey, true);
+        return freeze(content, normalizedProcessKey, normalizedNodeKey);
     }
 
     /**
-     * 遍历表单协议，覆盖作者版本元数据，并按需生成字段级部署快照。
+     * 遍历表单协议，覆盖作者版本元数据，并生成字段级部署快照。
      * @param content String，待冻结的正式表单 JSON
-     * @param processKey String，流程标识；仅冻结正文时允许为空
-     * @param nodeKey String，表单节点标识；仅冻结正文时允许为空
-     * @param collectSnapshots boolean，是否生成统一扩展部署快照
+     * @param processKey String，已经规范化的流程标识
+     * @param nodeKey String，已经规范化的表单节点标识
      * @return WorkflowFrozenFormContent，冻结正文与字段级快照
      */
     private WorkflowFrozenFormContent freeze(String content, String processKey,
-            String nodeKey, boolean collectSnapshots)
+            String nodeKey)
     {
         ObjectNode root = parseObject(content);
         Deque<FormJsonNode> pending = new ArrayDeque<>();
@@ -151,18 +140,15 @@ public class WorkflowFormFieldExtensionService
                 object.put(WorkflowFormFieldExtension.VERSION_FIELD, option.versionNo());
                 object.put(WorkflowFormFieldExtension.IMPLEMENTATION_FIELD, option.implementationKey());
                 object.put(WorkflowFormFieldExtension.CHECKSUM_FIELD, option.checksum());
-                if (collectSnapshots)
+                String normalizedFieldId = requireText(fieldId,
+                        "自定义表单字段缺少变量标识");
+                WfDeployExtensionSnapshot snapshot = formFieldSnapshot(processKey,
+                        nodeKey, normalizedFieldId, option);
+                if (!elementIds.add(snapshot.getElementId()))
                 {
-                    String normalizedFieldId = requireText(fieldId,
-                            "自定义表单字段缺少变量标识");
-                    WfDeployExtensionSnapshot snapshot = formFieldSnapshot(processKey,
-                            nodeKey, normalizedFieldId, option);
-                    if (!elementIds.add(snapshot.getElementId()))
-                    {
-                        throw new ServiceException("自定义表单字段部署标识重复", HttpStatus.CONFLICT);
-                    }
-                    snapshots.add(snapshot);
+                    throw new ServiceException("自定义表单字段部署标识重复", HttpStatus.CONFLICT);
                 }
+                snapshots.add(snapshot);
             }
             String inheritedFieldId = fieldId;
             object.properties().forEach(entry -> pending.push(

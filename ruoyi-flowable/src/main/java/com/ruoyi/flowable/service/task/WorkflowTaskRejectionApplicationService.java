@@ -28,7 +28,6 @@ public class WorkflowTaskRejectionApplicationService
     private static final String REJECTED_STATUS = "rejected";
 
     private final WorkflowEngineOperations engineOperations;
-    private final WorkflowTaskRequestValidator requestValidator;
     private final WorkflowTaskRuntimeReader runtimeReader;
     private final WorkflowProcessInstanceService processInstanceService;
     private final WorkflowTaskCopyService taskCopyService;
@@ -39,7 +38,6 @@ public class WorkflowTaskRejectionApplicationService
      * 创建任务驳回应用服务。
      *
      * @param engineOperations WorkflowEngineOperations，正式事务和身份入口
-     * @param requestValidator WorkflowTaskRequestValidator，请求字段门禁
      * @param runtimeReader WorkflowTaskRuntimeReader，活动任务和实例事实
      * @param processInstanceService WorkflowProcessInstanceService，完整执行树终止写链
      * @param taskCopyService WorkflowTaskCopyService，驳回抄送计划和持久化服务
@@ -49,7 +47,6 @@ public class WorkflowTaskRejectionApplicationService
      */
     public WorkflowTaskRejectionApplicationService(
             WorkflowEngineOperations engineOperations,
-            WorkflowTaskRequestValidator requestValidator,
             WorkflowTaskRuntimeReader runtimeReader,
             WorkflowProcessInstanceService processInstanceService,
             WorkflowTaskCopyService taskCopyService,
@@ -57,7 +54,6 @@ public class WorkflowTaskRejectionApplicationService
             TaskService taskService)
     {
         this.engineOperations = engineOperations;
-        this.requestValidator = requestValidator;
         this.runtimeReader = runtimeReader;
         this.processInstanceService = processInstanceService;
         this.taskCopyService = taskCopyService;
@@ -68,17 +64,13 @@ public class WorkflowTaskRejectionApplicationService
     /**
      * 由当前办理人将普通、并行或多实例流程原子驳回为 rejected 终态。
      *
-     * @param request WorkflowTaskRejectRequest，任务、驳回原因和可选抄送人
+     * @param request WorkflowTaskRejectRequest，已通过 DTO Bean Validation 的任务、驳回原因和可选抄送人
      * @return 无返回值，整树状态、意见、通知和抄送在同一事务提交
      */
     public void rejectTask(WorkflowTaskRejectRequest request)
     {
-        if (request == null)
-        {
-            throw requestValidator.invalidArgument();
-        }
-        String taskId = requestValidator.requireId(request.taskId());
-        String opinion = requestValidator.requireOpinion(request.comment());
+        String taskId = request.taskId().trim();
+        String opinion = request.comment().trim();
         engineOperations.writeAsCurrentUser(actor ->
         {
             Task task = runtimeReader.requireActiveTask(taskId);

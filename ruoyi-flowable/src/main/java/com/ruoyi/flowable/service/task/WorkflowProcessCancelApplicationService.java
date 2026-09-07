@@ -30,7 +30,6 @@ public class WorkflowProcessCancelApplicationService
     private static final String CANCELED_STATUS = "canceled";
 
     private final WorkflowEngineOperations engineOperations;
-    private final WorkflowTaskRequestValidator requestValidator;
     private final WorkflowTaskRuntimeReader runtimeReader;
     private final WorkflowProcessInstanceService processInstanceService;
     private final TaskService taskService;
@@ -40,7 +39,6 @@ public class WorkflowProcessCancelApplicationService
      * 创建流程取消应用服务。
      *
      * @param engineOperations WorkflowEngineOperations，正式事务、认证和异常翻译入口
-     * @param requestValidator WorkflowTaskRequestValidator，请求 ID 和意见门禁
      * @param runtimeReader WorkflowTaskRuntimeReader，运行实例只读事实
      * @param processInstanceService WorkflowProcessInstanceService，完整流程树终止写链
      * @param taskService TaskService，活动任务意见写入服务
@@ -49,13 +47,11 @@ public class WorkflowProcessCancelApplicationService
      */
     public WorkflowProcessCancelApplicationService(
             WorkflowEngineOperations engineOperations,
-            WorkflowTaskRequestValidator requestValidator,
             WorkflowTaskRuntimeReader runtimeReader,
             WorkflowProcessInstanceService processInstanceService,
             TaskService taskService, WorkflowTaskActionAuditWriter auditWriter)
     {
         this.engineOperations = engineOperations;
-        this.requestValidator = requestValidator;
         this.runtimeReader = runtimeReader;
         this.processInstanceService = processInstanceService;
         this.taskService = taskService;
@@ -65,17 +61,13 @@ public class WorkflowProcessCancelApplicationService
     /**
      * 由流程发起人或受控超级管理员取消 active 或 suspended 的完整业务执行树。
      *
-     * @param request WorkflowProcessCancelRequest，流程实例和取消原因
+     * @param request WorkflowProcessCancelRequest，已通过 DTO Bean Validation 的流程实例和取消原因
      * @return 无返回值，挂起实例会在同一事务内激活后完成审计、状态和整树终止
      */
     public void cancelProcess(WorkflowProcessCancelRequest request)
     {
-        if (request == null)
-        {
-            throw requestValidator.invalidArgument();
-        }
-        String processInstanceId = requestValidator.requireId(request.processInstanceId());
-        String opinion = requestValidator.requireOpinion(request.comment());
+        String processInstanceId = request.processInstanceId().trim();
+        String opinion = request.comment().trim();
         engineOperations.writeAsCurrentUser(actor ->
         {
             ProcessInstance requested = runtimeReader

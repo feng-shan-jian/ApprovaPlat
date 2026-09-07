@@ -107,19 +107,6 @@ public class WorkflowStartVariableValidator
     }
 
     /**
-     * 按部署时固化的开始表单 schema 校验字段、必填、类型和资源边界。
-     *
-     * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变 JSON 快照
-     * @param variables Map&lt;String, Object&gt;，客户端提交的开始表单变量，允许为空
-     * @return Map&lt;String, Object&gt;，深度复制且不可修改的受控变量映射
-     */
-    public Map<String, Object> validateAndNormalize(String snapshotContent,
-            Map<String, Object> variables)
-    {
-        return validateForStart(snapshotContent, variables).variables();
-    }
-
-    /**
      * 解析并校验部署表单后校验变量及附件 UUID；模板损坏仍转换为 500。
      *
      * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变 JSON 快照

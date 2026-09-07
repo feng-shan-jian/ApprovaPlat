@@ -1,7 +1,6 @@
 package com.ruoyi.flowable.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -36,7 +35,6 @@ class WorkflowFormTemplateValidatorTest
                 "layout":"colFormItem","workflowHidden":false,
                 "workflowReadable":true,"workflowWritable":true}]}
                 """;
-        assertThatCode(() -> validator.validate(content)).doesNotThrowAnyException();
         JsonNode root = validator.validate(content);
         assertThat(validator.extractVariableNames(root)).containsExactly("files");
         assertThat(validator.extractReadableVariableNames(root)).containsExactly("files");

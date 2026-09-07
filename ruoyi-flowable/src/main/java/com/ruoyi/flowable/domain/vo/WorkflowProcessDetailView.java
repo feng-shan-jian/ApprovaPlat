@@ -146,10 +146,7 @@ public record WorkflowProcessDetailView(
                 throw new IllegalArgumentException("退回申请表单与当前任务主键不一致");
             }
         }
-        if (resubmitAllowed && (currentTask == null || !currentTask.active()
-                || !"returned".equals(processStatus)
-                || !formDetail.returnedApplication()
-                || formDetail.applicationForm() == null))
+        if (resubmitAllowed && !returnedActivity)
         {
             throw new IllegalArgumentException("重提能力必须绑定退回申请表单");
         }

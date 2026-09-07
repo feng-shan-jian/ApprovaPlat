@@ -21,7 +21,6 @@ processEngineAdapter.claimTaskForCurrentUser(taskId);
 | 方法 | 入参 | 返回值 |
 | --- | --- | --- |
 | `translate(FlowableException exception)` | 非空的 Flowable 公共 API 异常 | `ServiceException`，包含稳定状态码、稳定提示和原异常 `cause` |
-| `translateDatabaseConcurrencyConflict(RuntimeException exception)` | MyBatis/JDBC 包装的运行时异常 | `Optional<ServiceException>`，仅死锁、锁等待超时和事务回滚类并发冲突有值 |
 | `translateRetryableConcurrencyConflict(RuntimeException exception)` | Flowable、Spring 事务或 MyBatis 包装的运行时异常 | `Optional<ServiceException>`，仅真实可重试并发失败有值，并保留最外层异常为 `cause` |
 | `isRetryableConcurrencyConflict(Throwable exception)` | 原始异常或已经翻译并保留 `cause` 的业务异常 | `boolean`，完整异常链命中 Flowable 乐观锁、Spring 并发异常或数据库事务冲突时为 `true` |
 

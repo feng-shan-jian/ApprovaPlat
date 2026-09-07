@@ -121,18 +121,6 @@ public class SysPostServiceImpl implements ISysPostService
     }
 
     /**
-     * 删除岗位信息
-     * 
-     * @param postId 岗位ID
-     * @return 结果
-     */
-    @Override
-    public int deletePostById(Long postId)
-    {
-        return postMapper.deletePostById(postId);
-    }
-
-    /**
      * 批量删除岗位信息
      * 
      * @param postIds 需要删除的岗位ID

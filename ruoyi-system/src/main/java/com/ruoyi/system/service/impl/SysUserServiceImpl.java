@@ -450,23 +450,6 @@ public class SysUserServiceImpl implements ISysUserService
     }
 
     /**
-     * 通过用户ID删除用户
-     * 
-     * @param userId 用户ID
-     * @return 结果
-     */
-    @Override
-    @Transactional
-    public int deleteUserById(Long userId)
-    {
-        // 删除用户与角色关联
-        userRoleMapper.deleteUserRoleByUserId(userId);
-        // 删除用户与岗位表
-        userPostMapper.deleteUserPostByUserId(userId);
-        return userMapper.deleteUserById(userId);
-    }
-
-    /**
      * 批量删除用户信息
      * 
      * @param userIds 需要删除的用户ID

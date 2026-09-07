@@ -126,18 +126,14 @@ public class WorkflowTaskRevokeApplicationService
     /**
      * 将当前用户最近完成且后继尚未处理的任务撤回为新的活动任务。
      *
-     * @param request WorkflowProcessRevokeRequest，实例、本人历史任务和撤回原因
+     * @param request WorkflowProcessRevokeRequest，已通过 DTO Bean Validation 的实例、本人历史任务和撤回原因
      * @return 无返回值，后继关闭、来源重建、审计和验证在同一事务提交
      */
     public void revokeProcess(WorkflowProcessRevokeRequest request)
     {
-        if (request == null)
-        {
-            throw requestValidator.invalidArgument();
-        }
-        String processInstanceId = requestValidator.requireId(request.processInstanceId());
-        String historicTaskId = requestValidator.requireId(request.taskId());
-        String opinion = requestValidator.requireOpinion(request.comment());
+        String processInstanceId = request.processInstanceId().trim();
+        String historicTaskId = request.taskId().trim();
+        String opinion = request.comment().trim();
         engineOperations.writeAsCurrentUser(actor ->
         {
             RevokePreparation preparation = requireRevokePreparation(

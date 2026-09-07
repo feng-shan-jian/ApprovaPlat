@@ -47,19 +47,11 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
 		order by create_time desc
 	</select>
 	
-	<select id="selectJobLogAll" resultMap="SysJobLogResult">
-		<include refid="selectJobLogVo"/>
-	</select>
-	
 	<select id="selectJobLogById" parameterType="Long" resultMap="SysJobLogResult">
 		<include refid="selectJobLogVo"/>
 		where job_log_id = #{jobLogId}
 	</select>
 	
-	<delete id="deleteJobLogById" parameterType="Long">
- 		delete from sys_job_log where job_log_id = #{jobLogId}
- 	</delete>
- 	
  	<delete id="deleteJobLogByIds" parameterType="Long">
  		delete from sys_job_log where job_log_id in
  		<foreach collection="array" item="jobLogId" open="(" separator="," close=")">

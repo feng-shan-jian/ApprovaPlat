@@ -17,17 +17,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         values (#{noticeId}, #{userId}, sysdate())
     </insert>
 
-    <!-- 查询未读数量：正常状态公告 减去 当前用户已读数 -->
-    <select id="selectUnreadCount" resultType="int">
-        select count(*) from sys_notice n
-        where n.status = '0' and not exists (select 1 from sys_notice_read r where r.notice_id = n.notice_id and r.user_id = #{userId})
-    </select>
-
-    <!-- 查询是否已读 -->
-    <select id="selectIsRead" resultType="int">
-        select count(*) from sys_notice_read where notice_id = #{noticeId} and user_id = #{userId}
-    </select>
-
     <!-- 查询带已读状态的公告列表（直接在SQL中限制条数） -->
     <select id="selectNoticeListWithReadStatus" resultType="SysNotice">
         select

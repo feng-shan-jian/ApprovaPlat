@@ -142,9 +142,9 @@ public class WfMultiInstanceRound
     /**
      * 校验当前对象是否满足数据库持久化和生命周期组合约束。
      *
-     * @return void，字段缺失、漂移或时间倒置时抛出 IllegalStateException
+     * @return List&lt;String&gt;，校验后的有序不可变成员；字段缺失、漂移或时间倒置时抛出 IllegalStateException
      */
-    public void requireValidLifecycle()
+    public List<String> requireValidLifecycle()
     {
         if (roundId != null && roundId <= 0)
         {
@@ -163,9 +163,10 @@ public class WfMultiInstanceRound
         {
             throw invalid("多实例轮次模式只允许 ALL 或 ANY");
         }
+        final List<String> members;
         try
         {
-            decodeMembers(membersJson);
+            members = decodeMembers(membersJson);
         }
         catch (IllegalArgumentException exception)
         {
@@ -189,6 +190,7 @@ public class WfMultiInstanceRound
         }
         requireLifecycleFields();
         requireTimeOrder();
+        return members;
     }
 
     /**

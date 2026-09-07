@@ -60,17 +60,6 @@ public class PermissionService
     }
 
     /**
-     * 验证用户是否不具备某权限，与 hasPermi逻辑相反
-     *
-     * @param permission 权限字符串
-     * @return 用户是否不具备某权限
-     */
-    public boolean lacksPermi(String permission)
-    {
-        return hasPermi(permission) != true;
-    }
-
-    /**
      * 验证用户是否具有以下任意一个权限
      *
      * @param permissions String，以 PERMISSION_DELIMITER 为分隔符的权限列表
@@ -121,44 +110,6 @@ public class PermissionService
         {
             String roleKey = sysRole.getRoleKey();
             if (Constants.SUPER_ADMIN.equals(roleKey) || roleKey.equals(StringUtils.trim(role)))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * 验证用户是否不具备某角色，与 isRole逻辑相反。
-     *
-     * @param role 角色名称
-     * @return 用户是否不具备某角色
-     */
-    public boolean lacksRole(String role)
-    {
-        return hasRole(role) != true;
-    }
-
-    /**
-     * 验证用户是否具有以下任意一个角色
-     *
-     * @param roles 以 ROLE_DELIMITER 为分隔符的角色列表
-     * @return 用户是否具有以下任意一个角色
-     */
-    public boolean hasAnyRoles(String roles)
-    {
-        if (StringUtils.isEmpty(roles))
-        {
-            return false;
-        }
-        LoginUser loginUser = SecurityUtils.getLoginUser();
-        if (StringUtils.isNull(loginUser) || CollectionUtils.isEmpty(loginUser.getUser().getRoles()))
-        {
-            return false;
-        }
-        for (String role : roles.split(Constants.ROLE_DELIMITER))
-        {
-            if (hasRole(role))
             {
                 return true;
             }

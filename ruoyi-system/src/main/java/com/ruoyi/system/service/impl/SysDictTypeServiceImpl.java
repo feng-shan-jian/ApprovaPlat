@@ -100,18 +100,6 @@ public class SysDictTypeServiceImpl implements ISysDictTypeService
     }
 
     /**
-     * 根据字典类型查询信息
-     * 
-     * @param dictType 字典类型
-     * @return 字典类型
-     */
-    @Override
-    public SysDictType selectDictTypeByType(String dictType)
-    {
-        return dictTypeMapper.selectDictTypeByType(dictType);
-    }
-
-    /**
      * 批量删除字典类型信息
      * 
      * @param dictIds 需要删除的字典ID

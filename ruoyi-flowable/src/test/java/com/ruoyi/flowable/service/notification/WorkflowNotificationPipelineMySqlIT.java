@@ -299,6 +299,10 @@ class WorkflowNotificationPipelineMySqlIT
 
         OutboxState compensatable = loadOutbox(deliveredSourceId);
         OutboxState exhausted = loadOutbox(deadLetterSourceId);
+        assertThat(compensatable.status()).isEqualTo("PENDING");
+        assertThat(compensatable.deliveryCycle()).isLessThan(65_535);
+        assertThat(loadAdminOutbox(deliveredSourceId).get("canCompensate"))
+                .isEqualTo(Boolean.FALSE).isInstanceOf(Boolean.class);
         forceDeadLetter(compensatable.outboxId(), deliveredSourceId, 65_534);
         forceDeadLetter(exhausted.outboxId(), deadLetterSourceId, 65_535);
 

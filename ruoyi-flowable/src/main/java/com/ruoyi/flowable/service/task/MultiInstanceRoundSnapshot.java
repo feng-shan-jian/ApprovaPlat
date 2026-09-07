@@ -67,13 +67,13 @@ public record MultiInstanceRoundSnapshot(long roundId, String deployId,
     public static MultiInstanceRoundSnapshot from(WfMultiInstanceRound round)
     {
         Objects.requireNonNull(round, "round");
-        round.requireValidLifecycle();
+        List<String> members = round.requireValidLifecycle();
         WorkflowMultiInstanceMode parsedMode = WorkflowMultiInstanceMode.valueOf(
                 round.getMode());
         return new MultiInstanceRoundSnapshot(round.getRoundId(), round.getDeployId(),
                 round.getProcessDefinitionId(), round.getProcessInstanceId(),
                 round.getActivityId(), round.getRootExecutionId(), round.getRoundNo(),
-                parsedMode, WfMultiInstanceRound.decodeMembers(round.getMembersJson()),
+                parsedMode, members,
                 round.getRevisionNo(), round.getRoundStatus(),
                 round.getReturnSourceTaskId(), round.getReturnActorUserId(),
                 round.getApplicantTaskId(), round.getCreateTime(), round.getReturnTime(),
@@ -99,18 +99,4 @@ public record MultiInstanceRoundSnapshot(long roundId, String deployId,
                 && Objects.equals(createTime, other.createTime);
     }
 
-    /**
-     * 比较旧轮与下一 ACTIVE 轮必须继承的部署、节点、成员、模式和 revision。
-     *
-     * @param other MultiInstanceRoundSnapshot，新创建的下一审批轮次
-     * @return boolean，可继承事实完全一致时返回 true
-     */
-    public boolean sameReopenFacts(MultiInstanceRoundSnapshot other)
-    {
-        return other != null && Objects.equals(deployId, other.deployId)
-                && Objects.equals(processDefinitionId, other.processDefinitionId)
-                && Objects.equals(processInstanceId, other.processInstanceId)
-                && Objects.equals(activityId, other.activityId) && mode == other.mode
-                && members.equals(other.members) && revision == other.revision;
-    }
 }

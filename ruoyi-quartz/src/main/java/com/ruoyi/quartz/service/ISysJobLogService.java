@@ -42,14 +42,6 @@ public interface ISysJobLogService
     public int deleteJobLogByIds(Long[] logIds);
 
     /**
-     * 删除任务日志
-     * 
-     * @param jobId 调度日志ID
-     * @return 结果
-     */
-    public int deleteJobLogById(Long jobId);
-
-    /**
      * 清空任务日志
      */
     public void cleanJobLog();

@@ -10,6 +10,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowTaskReturnRequest;
 
 /**
  * 保持既有 Controller 契约并委派五个任务生命周期应用用例的稳定门面。
+ * 六个写入口只接收已通过 DTO Bean Validation 的请求，并由应用服务保留 trim 规范化。
  */
 @Service
 public class WorkflowTaskLifecycleService

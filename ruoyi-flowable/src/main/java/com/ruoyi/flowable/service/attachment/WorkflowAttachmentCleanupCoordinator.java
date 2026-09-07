@@ -41,21 +41,8 @@ public class WorkflowAttachmentCleanupCoordinator
             WorkflowAttachmentService attachmentService,
             PlatformTransactionManager transactionManager)
     {
-        this(attachmentService, createShortTransaction(transactionManager));
-    }
-
-    /**
-     * 使用显式事务操作器创建协调器，供事务边界单元测试复用。
-     *
-     * @param attachmentService WorkflowAttachmentService，正式附件清理服务
-     * @param shortTransaction TransactionOperations，每次调用返回前已提交或回滚的短事务
-     * @return 无返回值，参数会固定为协调器依赖
-     */
-    WorkflowAttachmentCleanupCoordinator(WorkflowAttachmentService attachmentService,
-            TransactionOperations shortTransaction)
-    {
         this.attachmentService = attachmentService;
-        this.shortTransaction = shortTransaction;
+        this.shortTransaction = createShortTransaction(transactionManager);
     }
 
     /**

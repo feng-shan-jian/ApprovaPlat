@@ -17,6 +17,7 @@ import com.ruoyi.flowable.mapper.WfSqlDataSourceMapper;
 
 /**
  * SQL 连接器数据源逻辑目录、表白名单和不可回退修订服务。
+ * 新增和修订入口接收已经通过 DTO Bean Validation 的请求，超时范围由 DTO 约束。
  */
 @Service
 public class WorkflowSqlDataSourceService
@@ -210,12 +211,6 @@ public class WorkflowSqlDataSourceService
         }
         validateConnectionReferences(connectionType, jdbcUrlRef, usernameRef, passwordRef);
         String allowedTables = normalizeTables(request.allowedTables());
-        if (request.connectTimeoutMs() == null || request.connectTimeoutMs() < 100
-                || request.connectTimeoutMs() > 10000 || request.queryTimeoutSeconds() == null
-                || request.queryTimeoutSeconds() < 1 || request.queryTimeoutSeconds() > 300)
-        {
-            throw new ServiceException("SQL 数据源超时配置不合法", HttpStatus.BAD_REQUEST);
-        }
         WfSqlDataSource dataSource = new WfSqlDataSource();
         dataSource.setDataSourceKey(key);
         dataSource.setDataSourceName(name);

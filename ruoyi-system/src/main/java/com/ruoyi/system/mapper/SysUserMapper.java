@@ -106,14 +106,6 @@ public interface SysUserMapper
     public int resetUserPwd(@Param("userId") Long userId, @Param("password") String password);
 
     /**
-     * 通过用户ID删除用户
-     * 
-     * @param userId 用户ID
-     * @return 结果
-     */
-    public int deleteUserById(Long userId);
-
-    /**
      * 批量删除用户信息
      * 
      * @param userIds 需要删除的用户ID

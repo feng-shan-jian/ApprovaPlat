@@ -54,18 +54,6 @@ public class SysOperLogServiceImpl implements ISysOperLogService
     }
 
     /**
-     * 查询操作日志详细
-     * 
-     * @param operId 操作ID
-     * @return 操作日志对象
-     */
-    @Override
-    public SysOperLog selectOperLogById(Long operId)
-    {
-        return operLogMapper.selectOperLogById(operId);
-    }
-
-    /**
      * 清空操作日志
      */
     @Override

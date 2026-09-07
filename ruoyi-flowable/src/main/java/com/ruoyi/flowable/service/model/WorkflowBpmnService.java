@@ -1620,24 +1620,6 @@ public class WorkflowBpmnService
     }
 
     /**
-     * 校验实现对象中的字段表达式。
-     *
-     * @param fields List&lt;FieldExtension&gt;，服务任务或监听器字段集合，允许为空
-     * @return 无返回值
-     */
-    private void validateFieldExtensions(List<FieldExtension> fields)
-    {
-        if (fields == null)
-        {
-            return;
-        }
-        for (FieldExtension field : fields)
-        {
-            validateExpression(field.getExpression());
-        }
-    }
-
-    /**
      * 校验字符串集合中可能存在的表达式。
      *
      * @param values List&lt;String&gt;，用户或候选组表达式集合，允许为空

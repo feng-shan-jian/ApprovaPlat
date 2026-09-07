@@ -47,8 +47,7 @@ public record WorkflowProcessFormDetailView(
         {
             throw new IllegalArgumentException("普通申请表单不能绑定任务主键");
         }
-        if (historyForms.stream().anyMatch(form -> form == null
-                || !StringUtils.hasText(form.taskId())))
+        if (historyForms.stream().anyMatch(form -> !StringUtils.hasText(form.taskId())))
         {
             throw new IllegalArgumentException("历史表单必须绑定正式任务主键");
         }

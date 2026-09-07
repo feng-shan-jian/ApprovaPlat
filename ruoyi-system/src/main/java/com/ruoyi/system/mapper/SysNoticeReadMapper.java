@@ -22,23 +22,6 @@ public interface SysNoticeReadMapper
     public int insertNoticeRead(SysNoticeRead noticeRead);
 
     /**
-     * 查询某用户未读公告数量
-     *
-     * @param userId 用户ID
-     * @return 未读数量
-     */
-    public int selectUnreadCount(@Param("userId") Long userId);
-
-    /**
-     * 查询某用户是否已读某公告
-     *
-     * @param noticeId 公告ID
-     * @param userId   用户ID
-     * @return 已读记录数（0未读 1已读）
-     */
-    public int selectIsRead(@Param("noticeId") Long noticeId, @Param("userId") Long userId);
-
-    /**
      * 批量标记已读
      *
      * @param userId    用户ID

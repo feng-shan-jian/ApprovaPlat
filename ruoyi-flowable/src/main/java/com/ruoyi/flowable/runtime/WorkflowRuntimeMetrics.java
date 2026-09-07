@@ -62,26 +62,10 @@ public class WorkflowRuntimeMetrics implements MeterBinder
             SpringProcessEngineConfiguration engineConfiguration,
             WorkflowAttachmentStorage attachmentStorage)
     {
-        this(metricsMapper, engineConfiguration, attachmentStorage, Clock.systemUTC());
-    }
-
-    /**
-     * 使用可控时钟创建指标组件，供快照年龄和失败保留测试复用。
-     *
-     * @param metricsMapper WorkflowRuntimeMetricsMapper，合并指标查询
-     * @param engineConfiguration SpringProcessEngineConfiguration，executor 实际状态
-     * @param attachmentStorage WorkflowAttachmentStorage，附件挂载点边界
-     * @param clock Clock，快照完成时间来源
-     * @return 无返回值，依赖会固定到当前组件
-     */
-    WorkflowRuntimeMetrics(WorkflowRuntimeMetricsMapper metricsMapper,
-            SpringProcessEngineConfiguration engineConfiguration,
-            WorkflowAttachmentStorage attachmentStorage, Clock clock)
-    {
         this.metricsMapper = metricsMapper;
         this.engineConfiguration = engineConfiguration;
         this.attachmentStorage = attachmentStorage;
-        this.clock = clock;
+        this.clock = Clock.systemUTC();
     }
 
     /**

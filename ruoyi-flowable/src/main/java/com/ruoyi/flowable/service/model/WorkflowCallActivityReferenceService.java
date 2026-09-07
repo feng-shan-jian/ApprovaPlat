@@ -250,17 +250,6 @@ public class WorkflowCallActivityReferenceService
     }
 
     /**
-     * 查询指定父部署的全部调用活动快照。
-     * @param deploymentId String，父流程部署主键
-     * @return List&lt;WfDeployCallActivitySnapshot&gt;，不可为空的快照集合
-     */
-    public List<WfDeployCallActivitySnapshot> snapshotsByDeploymentId(String deploymentId)
-    {
-        return artifactRepository.selectCallActivitySnapshots(
-                requireText(deploymentId, "调用活动父部署主键不能为空"));
-    }
-
-    /**
      * 返回全部已发布 BPMN 中通过精确定义 ID 冻结的调用目标。
      * @return Set&lt;String&gt;，仍需保持可调用状态的流程定义主键集合
      */

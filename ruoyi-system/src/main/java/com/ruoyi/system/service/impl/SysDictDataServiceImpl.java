@@ -32,19 +32,6 @@ public class SysDictDataServiceImpl implements ISysDictDataService
     }
 
     /**
-     * 根据字典类型和字典键值查询字典数据信息
-     * 
-     * @param dictType 字典类型
-     * @param dictValue 字典键值
-     * @return 字典标签
-     */
-    @Override
-    public String selectDictLabel(String dictType, String dictValue)
-    {
-        return dictDataMapper.selectDictLabel(dictType, dictValue);
-    }
-
-    /**
      * 根据字典数据ID查询信息
      * 
      * @param dictCode 字典数据ID

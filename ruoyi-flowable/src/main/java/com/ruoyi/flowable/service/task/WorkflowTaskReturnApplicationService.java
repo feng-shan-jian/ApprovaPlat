@@ -84,17 +84,13 @@ public class WorkflowTaskReturnApplicationService
 
     /**
      * 将普通串行任务或受控多实例整组退回服务端确定的首审批节点。
-     * @param request WorkflowTaskReturnRequest，任务、退回原因和可选抄送人
+     * @param request WorkflowTaskReturnRequest，已通过 DTO Bean Validation 的任务、退回原因和可选抄送人
      * @return 无返回值，迁移、状态、副作用和对账在同一事务提交
      */
     public void returnTask(WorkflowTaskReturnRequest request)
     {
-        if (request == null)
-        {
-            throw requestValidator.invalidArgument();
-        }
-        String taskId = requestValidator.requireId(request.taskId());
-        String opinion = requestValidator.requireOpinion(request.comment());
+        String taskId = request.taskId().trim();
+        String opinion = request.comment().trim();
         engineOperations.writeAsCurrentUser(actor ->
         {
             ReturnPreparation preparation = requireReturnPreparation(taskId, actor);

@@ -166,64 +166,6 @@ public class WorkflowTaskMovementPolicy
     }
 
     /**
-     * 为驳回操作解析唯一且可从当前节点沿安全串行路径到达的主流程结束节点。
-     *
-     * @param process Process，当前流程定义中的主流程
-     * @param currentTask UserTask，当前活动用户任务节点
-     * @return EndEvent，唯一且结构安全的驳回结束节点
-     */
-    public EndEvent requireRejectEndEvent(org.flowable.bpmn.model.Process process,
-            UserTask currentTask)
-    {
-        requireSafeEndpoint(process, currentTask);
-        List<EndEvent> endEvents = process.findFlowElementsOfType(EndEvent.class, false);
-        if (endEvents.size() != 1)
-        {
-            // 接口没有接收结束节点参数，多结束节点模型不能由服务端擅自选择业务终点。
-            throw unsupportedMovement();
-        }
-        EndEvent endEvent = endEvents.get(0);
-        requireSafeEndpoint(process, endEvent);
-        if (!isSafeSerialReachable(process, currentTask, endEvent))
-        {
-            throw unsupportedMovement();
-        }
-        return endEvent;
-    }
-
-    /**
-     * 校验状态迁移端点属于同一主流程且不是多实例、子流程或并行网关节点。
-     *
-     * @param process Process，当前流程定义中的主流程
-     * @param endpoint FlowNode，迁移来源或目标节点
-     * @return 无返回值，端点不安全时抛出 HTTP 409 业务异常
-     */
-    private void requireSafeEndpoint(org.flowable.bpmn.model.Process process, FlowNode endpoint)
-    {
-        if (!isSafeNode(process, endpoint))
-        {
-            throw unsupportedMovement();
-        }
-    }
-
-    /**
-     * 判断两个节点之间所有可达路径均不穿越并行、多实例或跨作用域边界。
-     *
-     * @param process Process，当前流程定义中的主流程
-     * @param source FlowNode，路径来源节点
-     * @param target FlowNode，路径目标节点
-     * @return boolean，至少存在一条路径且所有能到达目标的路径均安全时返回 true
-     */
-    private boolean isSafeSerialReachable(org.flowable.bpmn.model.Process process,
-            FlowNode source, FlowNode target)
-    {
-        TraversalBudget budget = new TraversalBudget();
-        PathEvaluation evaluation = evaluatePaths(process, source, target,
-                new HashSet<>(), budget);
-        return evaluation.reachable() && evaluation.safe();
-    }
-
-    /**
      * 判断历史普通用户任务到当前退回来源之间的路径是否安全；仅最终来源可为受控动态多实例节点。
      *
      * @param process Process，当前流程定义中的主流程
@@ -428,22 +370,6 @@ public class WorkflowTaskMovementPolicy
     {
         return evaluatePaths(process, source, target, new HashSet<>(),
                 new TraversalBudget(), allowControlledNodes);
-    }
-
-    /**
-     * 深度优先评估从当前节点到目标的全部无环路径，并传播路径安全性。
-     *
-     * @param process Process，当前流程定义中的主流程
-     * @param current FlowNode，本次递归正在访问的节点
-     * @param target FlowNode，路径目标节点
-     * @param path Set&lt;String&gt;，当前递归栈已经访问的节点 key
-     * @param budget TraversalBudget，单次图遍历共享的节点计数器
-     * @return PathEvaluation，是否可达及所有可达路径是否安全
-     */
-    private PathEvaluation evaluatePaths(org.flowable.bpmn.model.Process process,
-            FlowNode current, FlowNode target, Set<String> path, TraversalBudget budget)
-    {
-        return evaluatePaths(process, current, target, path, budget, false);
     }
 
     /**

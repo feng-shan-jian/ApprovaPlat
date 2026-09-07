@@ -19,6 +19,7 @@ import com.ruoyi.flowable.mapper.WfConnectorEndpointMapper;
 
 /**
  * HTTP 连接器端点白名单、修订和部署锁定服务。
+ * 新增和修订入口接收已经通过 DTO Bean Validation 的请求，超时范围由 DTO 约束。
  */
 @Service
 public class WorkflowConnectorEndpointService
@@ -209,12 +210,6 @@ public class WorkflowConnectorEndpointService
         if (!Set.of("PUBLIC", "PRIVATE").contains(networkScope))
         {
             throw new ServiceException("连接器端点网络范围不合法", HttpStatus.BAD_REQUEST);
-        }
-        if (request.connectTimeoutMs() == null || request.connectTimeoutMs() < 100
-                || request.connectTimeoutMs() > 10000 || request.requestTimeoutMs() == null
-                || request.requestTimeoutMs() < 500 || request.requestTimeoutMs() > 120000)
-        {
-            throw new ServiceException("连接器端点超时配置不合法", HttpStatus.BAD_REQUEST);
         }
         validateAuthentication(authType, secretRef, apiKeyHeader);
 

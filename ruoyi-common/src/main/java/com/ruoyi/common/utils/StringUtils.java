@@ -2,7 +2,6 @@ package com.ruoyi.common.utils;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -147,17 +146,6 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
     public static boolean isNotNull(Object object)
     {
         return !isNull(object);
-    }
-
-    /**
-     * * 判断一个对象是否是数组类型（Java基本型别的数组）
-     * 
-     * @param object 对象
-     * @return true：是数组 false：不是数组
-     */
-    public static boolean isArray(Object object)
-    {
-        return isNotNull(object) && object.getClass().isArray();
     }
 
     /**
@@ -369,18 +357,6 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
     public static boolean ishttp(String link)
     {
         return StringUtils.startsWithAny(link, Constants.HTTP, Constants.HTTPS);
-    }
-
-    /**
-     * 字符串转set
-     * 
-     * @param str 字符串
-     * @param sep 分隔符
-     * @return set集合
-     */
-    public static final Set<String> str2Set(String str, String sep)
-    {
-        return new HashSet<String>(str2List(str, sep, true, false));
     }
 
     /**
@@ -616,18 +592,6 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
     }
 
     /**
-     * 检查一个字符串是否以任意提供的区分大小写的后缀结尾。
-     *
-     * @param sequence 要检查的字符串
-     * @param searchStrings 要查找的区分大小写的字符串数组
-     * @return 如果输入参数{@code sequence}为null且未提供任何{@code searchStrings}，或者输入{@code sequence}以任意提供的区分大小写的{@code searchStrings}结尾，则返回{@code true}。
-     */
-    public static boolean endsWithAny(final CharSequence sequence, final CharSequence... searchStrings)
-    {
-        return Strings.CS.endsWithAny(sequence, searchStrings);
-    }
-
-    /**
      * 不区分大小写地检查字符序列是否以指定的后缀结尾
      *
      * @param str 要检查的字符序列
@@ -733,22 +697,6 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
             }
         }
         return false;
-    }
-
-    /**
-     * 删除最后一个字符串
-     *
-     * @param str 输入字符串
-     * @param spit 以什么类型结尾的
-     * @return 截取后的字符串
-     */
-    public static String lastStringDel(String str, String spit)
-    {
-        if (!StringUtils.isEmpty(str) && str.endsWith(spit))
-        {
-            return str.subSequence(0, str.length() - 1).toString();
-        }
-        return str;
     }
 
     /**
@@ -862,12 +810,6 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
     {
         AntPathMatcher matcher = new AntPathMatcher();
         return matcher.match(pattern, url);
-    }
-
-    @SuppressWarnings("unchecked")
-    public static <T> T cast(Object obj)
-    {
-        return (T) obj;
     }
 
     /**

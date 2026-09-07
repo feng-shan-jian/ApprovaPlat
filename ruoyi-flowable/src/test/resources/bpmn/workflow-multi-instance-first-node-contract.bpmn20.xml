@@ -6,10 +6,6 @@
   <process id="firstAllReturn" name="首节点会签退回契约" isExecutable="true">
     <startEvent id="firstAllStart"/>
     <userTask id="firstAllGroup" name="首节点会签" flowable:assignee="${assignee}">
-      <extensionElements>
-        <flowable:executionListener event="start" delegateExpression="${firstNodeMigrationFailureGuard}"/>
-        <flowable:taskListener event="assignment" delegateExpression="${lateAssignmentFailureGuard}"/>
-      </extensionElements>
       <multiInstanceLoopCharacteristics isSequential="false"
         flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
         flowable:elementVariable="assignee">
@@ -23,19 +19,4 @@
     <sequenceFlow sourceRef="firstAllAfter" targetRef="firstAllEnd"/>
   </process>
 
-  <process id="firstAnyReturn" name="首节点或签退回契约" isExecutable="true">
-    <startEvent id="firstAnyStart"/>
-    <userTask id="firstAnyGroup" name="首节点或签" flowable:assignee="${assignee}">
-      <multiInstanceLoopCharacteristics isSequential="false"
-        flowable:collection="${multiInstanceHandler.getUserIds(execution)}"
-        flowable:elementVariable="assignee">
-        <completionCondition xsi:type="tFormalExpression"><![CDATA[${nrOfCompletedInstances > 0}]]></completionCondition>
-      </multiInstanceLoopCharacteristics>
-    </userTask>
-    <userTask id="firstAnyAfter" name="后续审批" flowable:assignee="301"/>
-    <endEvent id="firstAnyEnd"/>
-    <sequenceFlow sourceRef="firstAnyStart" targetRef="firstAnyGroup"/>
-    <sequenceFlow sourceRef="firstAnyGroup" targetRef="firstAnyAfter"/>
-    <sequenceFlow sourceRef="firstAnyAfter" targetRef="firstAnyEnd"/>
-  </process>
 </definitions>

@@ -43,14 +43,6 @@ public interface ISysDictTypeService
     public SysDictType selectDictTypeById(Long dictId);
 
     /**
-     * 根据字典类型查询信息
-     * 
-     * @param dictType 字典类型
-     * @return 字典类型
-     */
-    public SysDictType selectDictTypeByType(String dictType);
-
-    /**
      * 批量删除字典信息
      * 
      * @param dictIds 需要删除的字典ID

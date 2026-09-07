@@ -387,18 +387,6 @@ public class TokenService
     }
 
     /**
-     * 从令牌中获取用户名
-     *
-     * @param token 令牌
-     * @return 用户名
-     */
-    public String getUsernameFromToken(String token)
-    {
-        Claims claims = parseToken(token);
-        return claims.getSubject();
-    }
-
-    /**
      * 获取请求token
      *
      * @param request

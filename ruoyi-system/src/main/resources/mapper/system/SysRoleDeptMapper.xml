@@ -13,10 +13,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
 		delete from sys_role_dept where role_id=#{roleId}
 	</delete>
 	
-	<select id="selectCountRoleDeptByDeptId" resultType="Integer">
-	    select count(1) from sys_role_dept where dept_id=#{deptId}
-	</select>
-	
 	<delete id="deleteRoleDept" parameterType="Long">
  		delete from sys_role_dept where role_id in
  		<foreach collection="array" item="roleId" open="(" separator="," close=")">
