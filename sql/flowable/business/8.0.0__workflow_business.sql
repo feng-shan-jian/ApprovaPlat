@@ -637,6 +637,7 @@ CREATE TABLE IF NOT EXISTS `wf_runtime_event_request`
 CREATE TABLE IF NOT EXISTS `wf_collaboration_channel`
 (
     `channel_id`                    CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '目标流程与关联值组成的稳定 SHA-256 通道键',
+    `delivery_mode`                 VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'COLLABORATION' COMMENT '服务端冻结的消息协议',
     `target_process_definition_key` VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '接收方流程定义 key',
     `correlation_type`              VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'BUSINESS_KEY 或 PROCESS_INSTANCE',
     `correlation_value`             VARCHAR(255) NOT NULL COMMENT '业务关联键或目标实例主键',
@@ -646,7 +647,7 @@ CREATE TABLE IF NOT EXISTS `wf_collaboration_channel`
     `create_time`                   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '通道创建时间',
     `update_time`                   DATETIME(3)           DEFAULT NULL COMMENT '最后序号推进时间',
     PRIMARY KEY (`channel_id`),
-    UNIQUE KEY `uk_wf_collab_channel_target` (`target_process_definition_key`, `correlation_type`, `correlation_value`),
+    UNIQUE KEY `uk_wf_collab_channel_target` (`delivery_mode`, `target_process_definition_key`, `correlation_type`, `correlation_value`),
     CONSTRAINT `chk_wf_collab_channel_id` CHECK (`channel_id` REGEXP '^[0-9a-f]{64}$'),
     CONSTRAINT `chk_wf_collab_channel_type` CHECK (`correlation_type` IN ('BUSINESS_KEY', 'PROCESS_INSTANCE')),
     CONSTRAINT `chk_wf_collab_channel_sequence` CHECK (`outbound_sequence` >= 0 AND `inbound_sequence` >= 0),
@@ -657,6 +658,7 @@ CREATE TABLE IF NOT EXISTS `wf_collaboration_channel`
 CREATE TABLE IF NOT EXISTS `wf_collaboration_message`
 (
     `message_id`                    CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '调用方生成的协作消息幂等键',
+    `delivery_mode`                 VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'COLLABORATION' COMMENT 'COLLABORATION 或 POINT_TO_POINT，由服务端入口冻结',
     `credential_id`                 BIGINT       NOT NULL COMMENT '认证集成凭据主键',
     `actor_user_id`                 VARCHAR(64)  NOT NULL COMMENT '凭据绑定的可信系统操作人',
     `channel_id`                    CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '严格顺序通道主键',

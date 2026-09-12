@@ -30,6 +30,7 @@ export function createRoutingCallActivityDomain(context) {
     propertyFlags,
     propertyState,
     readAllFlowableProperties,
+    readTemplatePermissionPolicy,
     selectedBusinessObject,
     selectedElement,
     updateProperties
@@ -39,6 +40,7 @@ export function createRoutingCallActivityDomain(context) {
   const dmnLoading = ref(false)
   const callActivityOptions = ref([])
   const callActivityLoading = ref(false)
+  const callActivityLoadError = ref('')
   const conditionFieldCatalog = computed(() => resolveConditionFieldCatalog())
   const conditionFieldOptions = computed(() => conditionFieldCatalog.value.fields)
   const conditionContext = computed(() => resolveConditionContext(conditionFieldCatalog.value.conflicts, {
@@ -261,7 +263,7 @@ export function createRoutingCallActivityDomain(context) {
       for (const element of Array.isArray(flowElements) ? flowElements : []) {
         if (['bpmn:StartEvent', 'bpmn:UserTask'].includes(element?.$type)) {
           const embedded = formFieldCatalog.readEmbeddedFormFields(element).map(field => ({
-            name: String(field.variable || '').trim(),
+            name: String(field.variable || field.id || '').trim(),
             label: field.name || field.variable,
             type: embeddedCallFieldType(field.type),
             required: field.required === true,
@@ -270,13 +272,16 @@ export function createRoutingCallActivityDomain(context) {
           }))
           mergeCallVariableFields(fields, embedded)
           const form = formFieldCatalog.resolveTemplateForm(element)
-          if (form?.content) mergeCallVariableFields(fields, extractTemplateCallFields(form.content))
+          if (form?.content) {
+            mergeCallVariableFields(fields, extractTemplateCallFields(
+              form.content, readTemplatePermissionPolicy(element)))
+          }
         }
         visit(element?.flowElements)
       }
     }
     visit(process.flowElements)
-    return [...fields.values()].sort((left, right) => left.name.localeCompare(right.name))
+    return [...fields.values()].filter(field => field.type).sort((left, right) => left.name.localeCompare(right.name))
   }
 
   /**
@@ -284,13 +289,15 @@ export function createRoutingCallActivityDomain(context) {
    * @param {string} content 已由页面从正式表单接口回读的 JSON。
    * @returns {Array<object>} 不包含集合、附件、表格和范围字段的字段目录。
    */
-  function extractTemplateCallFields(content) {
+  function extractTemplateCallFields(content, policy) {
     return formFieldCatalog.readTemplateFieldDescriptors(content)
       .map(({ field, variable: name }) => {
         const type = templateCallFieldType(field?.tag, field)
+        const mode = policy.permissions.get(name)
+        if (!policy.defaultMode || !mode) return null
         return name && type ? { name, label: field?.label || name, type,
-          required: field?.required === true, readable: field?.workflowReadable === true,
-          writable: field?.workflowWritable === true && field.disabled !== true } : null
+          required: mode === 'REQUIRED', readable: mode !== 'HIDDEN',
+          writable: ['EDITABLE', 'REQUIRED'].includes(mode) } : null
       }).filter(Boolean)
   }
 
@@ -337,10 +344,14 @@ export function createRoutingCallActivityDomain(context) {
       if (!field?.name || !field.type) continue
       const previous = target.get(field.name)
       if (previous && previous.type !== field.type) {
-        target.delete(field.name)
+        target.set(field.name, { ...previous, type: null, readable: false, writable: false })
         continue
       }
       if (!previous) target.set(field.name, field)
+      else target.set(field.name, { ...previous,
+        required: previous.required || field.required,
+        readable: previous.readable && field.readable,
+        writable: previous.writable && field.writable })
     }
   }
 
@@ -350,9 +361,11 @@ export function createRoutingCallActivityDomain(context) {
    */
   async function loadCallActivityOptions() {
     callActivityLoading.value = true
+    callActivityLoadError.value = ''
     try {
       const response = await listCallActivityOptions()
-      callActivityOptions.value = Array.isArray(response?.data) ? response.data : []
+      if (!Array.isArray(response?.data)) throw new Error('调用活动目录响应格式不正确')
+      callActivityOptions.value = response.data
       if (propertyFlags.value.callActivity) {
         propertyState.callDefinitionId = resolveCallDefinitionId(
           propertyState.calledElement,
@@ -361,6 +374,7 @@ export function createRoutingCallActivityDomain(context) {
       }
     } catch (error) {
       callActivityOptions.value = []
+      callActivityLoadError.value = '子流程目录加载失败，请刷新重试'
       emit('error', error)
     } finally {
       callActivityLoading.value = false
@@ -603,6 +617,7 @@ export function createRoutingCallActivityDomain(context) {
     dmnLoading,
     callActivityOptions,
     callActivityLoading,
+    callActivityLoadError,
     conditionFieldOptions,
     conditionContext,
     callActivityParentFields,

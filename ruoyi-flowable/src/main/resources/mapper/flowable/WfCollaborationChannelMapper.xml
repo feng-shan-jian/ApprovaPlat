@@ -3,6 +3,7 @@
 <mapper namespace="com.ruoyi.flowable.mapper.WfCollaborationChannelMapper">
   <resultMap id="ChannelResult" type="com.ruoyi.flowable.domain.WfCollaborationChannel">
     <id property="channelId" column="channel_id"/>
+    <result property="deliveryMode" column="delivery_mode"/>
     <result property="targetProcessDefinitionKey" column="target_process_definition_key"/>
     <result property="correlationType" column="correlation_type"/>
     <result property="correlationValue" column="correlation_value"/>
@@ -12,12 +13,12 @@
   </resultMap>
   <insert id="insertIfAbsent">
     insert ignore into wf_collaboration_channel
-      (channel_id,target_process_definition_key,correlation_type,correlation_value)
+      (channel_id,delivery_mode,target_process_definition_key,correlation_type,correlation_value)
     values
-      (#{channelId},#{targetProcessDefinitionKey},#{correlationType},#{correlationValue})
+      (#{channelId},#{deliveryMode},#{targetProcessDefinitionKey},#{correlationType},#{correlationValue})
   </insert>
   <select id="selectForUpdate" resultMap="ChannelResult">
-    select channel_id,target_process_definition_key,correlation_type,correlation_value,
+    select channel_id,delivery_mode,target_process_definition_key,correlation_type,correlation_value,
            outbound_sequence,inbound_sequence,revision_no
     from wf_collaboration_channel where channel_id=#{channelId} for update
   </select>

@@ -40,9 +40,29 @@
             <el-form-item v-if="flags.process" label="可执行流程">
               <el-switch v-model="state.executable" @change="emit('process-change')" />
             </el-form-item>
-            <el-form-item v-if="flags.participant" label="绑定流程定义 key" required>
-              <el-input v-model="state.processRef" maxlength="255" placeholder="必须是已存在且可执行的流程定义" @change="emit('participant-change')" />
+            <el-form-item v-if="flags.participant" label="本地流程标识">
+              <el-input v-model="state.processRef" maxlength="255" placeholder="当前文档中此泳池所属的流程标识" @change="emit('participant-change')" />
             </el-form-item>
+            <el-button v-if="flags.participant && state.processRef" @click="emit('edit-participant-process')">编辑所属流程</el-button>
+            <template v-if="flags.participantProcess">
+              <el-button @click="emit('back-to-participant')">返回泳池属性</el-button>
+              <el-button @click="emit('edit-process-start')">配置开始表单</el-button>
+            </template>
+            <template v-if="flags.dataObject">
+              <el-form-item label="数据变量名" required>
+                <el-input v-model="state.dataVariable" aria-label="数据变量名" placeholder="例如 applicationAmount" maxlength="128" @change="emit('data-object-change')" />
+              </el-form-item>
+              <el-form-item label="数据类型">
+                <el-select v-model="state.dataType" @change="emit('data-object-change')">
+                  <el-option v-for="option in dataObjectTypes" :key="option.value" v-bind="option" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="默认值">
+                <el-input v-model="state.dataDefault" placeholder="留空则不设置" maxlength="4096" @change="emit('data-object-change')" />
+              </el-form-item>
+              <el-alert title="数据变量名用于流程运行；元素名称用于画布显示。数据关联图元本身不执行存储读写。" type="info" :closable="false" />
+            </template>
+            <el-alert v-if="state.formProtocolIssue" :title="state.formProtocolIssue" type="error" :closable="false" />
             <el-form-item label="说明">
               <el-input v-model="state.documentation" type="textarea" :rows="3" maxlength="1000" @change="emit('documentation-change')" />
             </el-form-item>
@@ -55,7 +75,11 @@
               </el-form-item>
               <el-form-item v-if="state.formSource === 'TEMPLATE'" :label="flags.startEvent ? '发起表单' : '节点表单'" :required="flags.startEvent">
                 <el-select v-model="state.formKey" filterable clearable @change="emit('form-change')">
-                  <el-option v-for="form in forms" :key="form.formId" :label="form.formName" :value="`key_${form.formId}`" />
+                  <el-option v-for="form in templateOptions" :key="form.formId" :label="form.formName"
+                    :value="`key_${form.formId}`" :disabled="Boolean(form.issue)" :title="form.issue" :aria-label="form.formName">
+                    <span>{{ form.formName }}</span>
+                    <span v-if="form.issue"> · 不可用：{{ form.issue }}</span>
+                  </el-option>
                 </el-select>
               </el-form-item>
               <EmbeddedFormFieldEditor
@@ -212,7 +236,21 @@
               />
             </el-form-item>
 
-            <template v-if="taskPanelType === TASK_PANEL_TYPES.SERVICE">
+            <template v-if="flags.messageThrow">
+              <el-alert type="info" show-icon :closable="false" title="按目标流程和业务键发送可靠消息。发送记录随当前事务提交，投递结果可在协作消息中查看。消息名称须与事件引用一致。" />
+              <ControlledTaskHandlerEditor
+                :state="state"
+                :options="extensionOptions.filter(option => option.extensionKey === 'approva.collaboration-outbox')"
+                message-throw
+                :connector-endpoints="connectorEndpoints"
+                :loading="extensionLoading"
+                @selection-change="emit('extension-selection-change', $event)"
+                @config-update="emit('controlled-task-config-update', $event)"
+                @change="emit('controlled-task-change')"
+              />
+            </template>
+
+            <template v-else-if="taskPanelType === TASK_PANEL_TYPES.SERVICE">
               <el-alert type="info" show-icon :closable="false" :title="taskCapability.runtimeSemantics" />
               <ControlledTaskHandlerEditor
                 :state="state"
@@ -287,6 +325,9 @@
             </template>
 
             <template v-if="flags.callActivity">
+              <el-alert v-if="callActivityLoadError" :title="callActivityLoadError" type="error" :closable="false" />
+              <el-alert v-else-if="!callActivityLoading && !callActivityOptions.length" title="当前没有已授权的子流程版本" type="info" :closable="false" />
+              <el-alert v-else-if="callActivityOptions.some(option => option.status !== 'ACTIVE')" title="部分版本不可用，请查看对应原因并选择可用版本" type="warning" :closable="false" />
               <el-form-item label="已发布子流程" required>
                 <el-select
                   v-model="state.callDefinitionId"
@@ -307,7 +348,7 @@
                       <code>{{ option.processKey }}</code>
                       <el-tag size="small" :type="option.status === 'ACTIVE' ? 'success' : 'info'">
                         v{{ option.version }} ·
-                        {{ option.status === 'ACTIVE' ? '启用' : '停用' }}
+                        {{ option.status === 'ACTIVE' ? '启用' : option.unavailableReason }}
                       </el-tag>
                     </div>
                   </el-option>
@@ -556,6 +597,7 @@
 
 <script setup name="DesignerPropertiesPanel">
 import EmbeddedFormFieldEditor from './EmbeddedFormFieldEditor.vue'
+import { templatePermissionIssues } from '../form/formTemplate.js'
 import FormFieldPermissionEditor from './FormFieldPermissionEditor.vue'
 import BusinessListenerEditor from './BusinessListenerEditor.vue'
 import ExtensionPropertyEditor from './ExtensionPropertyEditor.vue'
@@ -608,6 +650,7 @@ const props = defineProps({
   dmnLoading: { type: Boolean, default: false },
   callActivityOptions: { type: Array, default: () => [] },
   callActivityLoading: { type: Boolean, default: false },
+  callActivityLoadError: { type: String, default: '' },
   callActivityParentFields: { type: Array, default: () => [] },
   listenerOptions: { type: Array, default: () => [] },
   listenerLoading: { type: Boolean, default: false },
@@ -640,6 +683,10 @@ const emit = defineEmits([
   'activity-change',
   'call-activity-change',
   'event-change',
+  'data-object-change',
+  'edit-participant-process',
+  'edit-process-start',
+  'back-to-participant',
   'dmn-change',
   'identity-search',
   'identity-resolve',
@@ -656,6 +703,10 @@ const formSourceOptions = Object.freeze([
   { label: '正式模板', value: 'TEMPLATE' },
   { label: '内嵌表单', value: 'EMBEDDED' }
 ])
+const dataObjectTypes = [
+  { label: '文本', value: 'string' }, { label: '整数', value: 'int' },
+  { label: '长整数', value: 'long' }, { label: '小数', value: 'double' }, { label: '布尔值', value: 'boolean' }
+]
 // 会签和或签共用多实例语义，指定身份只引用正式目录，角色和部门由后端在节点进入时实时展开。
 const multiInstanceMemberSourceOptions = Object.freeze([
   { label: '办理时选择', value: 'dynamic' },
@@ -682,6 +733,9 @@ const callOutputScopeOptions = Object.freeze([
 ])
 
 // 任务业务分区由唯一能力表决定；非任务元素只列出模板中确实有业务控件的明确能力。
+const templateOptions = computed(() => props.forms.map(form => ({
+  ...form, issue: form.protocolValid === false ? form.protocolIssue : templatePermissionIssues(form.content)[0]
+})))
 const taskPanelType = computed(() => props.taskCapability?.panelType || '')
 const isUserTaskPanel = computed(() => taskPanelType.value === TASK_PANEL_TYPES.USER)
 const hasTaskBusinessSection = computed(() => Boolean(taskPanelType.value))
@@ -916,7 +970,7 @@ function searchSlaAssignees(keyword) {
  * @returns {string} 名称、key、版本和状态组成的可检索标签。
  */
 function callActivityOptionLabel(option) {
-  return `${option.processName || option.processKey} · ${option.processKey} · v${option.version} · ${option.status === 'ACTIVE' ? '启用' : '停用'}`
+  return `${option.processName || option.processKey} · ${option.processKey} · v${option.version} · ${option.status === 'ACTIVE' ? '启用' : option.unavailableReason}`
 }
 
 /**

@@ -146,11 +146,30 @@ public class WorkflowCallActivityReferenceService
                 {
                     continue;
                 }
-                TargetFieldCatalog fields = targetFieldCatalog(definition);
+                TargetFieldCatalog fields;
+                String status = definition.isSuspended() ? "SUSPENDED" : "ACTIVE";
+                String unavailableReason = definition.isSuspended() ? "流程已停用" : null;
+                try
+                {
+                    fields = targetFieldCatalog(definition);
+                }
+                catch (ServiceException exception)
+                {
+                    // 仅隔离本定义快照的业务数据校验错误；连接、SQL、引擎异常仍向外传播。
+                    if (!Objects.equals(exception.getCode(), HttpStatus.BAD_REQUEST)
+                            && !Objects.equals(exception.getCode(), HttpStatus.CONFLICT)
+                            && !"CALL_ACTIVITY_CATALOG_DATA_INVALID".equals(exception.getSubCode()))
+                    {
+                        throw exception;
+                    }
+                    status = "UNAVAILABLE";
+                    unavailableReason = exception.getMessage();
+                    fields = new TargetFieldCatalog(Map.of(), Map.of(), List.of(), List.of());
+                }
                 result.add(new WorkflowCallActivityOptionView(definition.getId(), definition.getKey(),
                         definition.getName(), definition.getVersion(), definition.getCategory(),
-                        definition.getDeploymentId(), definition.isSuspended() ? "SUSPENDED" : "ACTIVE",
-                        fields.inputFields(), fields.outputFields()));
+                        definition.getDeploymentId(), status,
+                        fields.inputFields(), fields.outputFields(), unavailableReason));
             }
             return List.copyOf(result);
         });
@@ -170,6 +189,20 @@ public class WorkflowCallActivityReferenceService
         Objects.requireNonNull(actor, "调用活动校验身份不能为空");
         Set<String> localProcessKeys = executableProcessKeys(document.bpmnModel());
         Map<String, Map<String, FieldSpec>> parentFields = parentFieldCatalogs(document);
+        validateAuthorReferences(document, actor, parentFields, localProcessKeys);
+    }
+
+    /** 保存和部署消费同一事务中已经验证、应用节点权限的表单内容。 */
+    public void validateAuthorReferences(WorkflowBpmnDocument document,
+            WorkflowCurrentIdentity actor, Map<String, String> nodeFormContents)
+    {
+        validateAuthorReferences(document, actor, parentFieldCatalogs(document, nodeFormContents),
+                executableProcessKeys(document.bpmnModel()));
+    }
+
+    private void validateAuthorReferences(WorkflowBpmnDocument document, WorkflowCurrentIdentity actor,
+            Map<String, Map<String, FieldSpec>> parentFields, Set<String> localProcessKeys)
+    {
         for (Process process : document.bpmnModel().getProcesses())
         {
             for (CallActivity callActivity : process.findFlowElementsOfType(CallActivity.class, true))
@@ -190,6 +223,11 @@ public class WorkflowCallActivityReferenceService
         validateAuthorReferences(document, identityResolver.resolveCurrentIdentity());
     }
 
+    public void validateAuthorReferences(WorkflowBpmnDocument document, Map<String, String> nodeFormContents)
+    {
+        validateAuthorReferences(document, identityResolver.resolveCurrentIdentity(), nodeFormContents);
+    }
+
     /**
      * 把已完成其他编译阶段的 BPMN 冻结为精确定义 ID，并生成正式依赖快照。
      *
@@ -201,10 +239,25 @@ public class WorkflowCallActivityReferenceService
     public WorkflowPreparedCallActivityDeployment prepare(byte[] compiledBpmn,
             WorkflowBpmnDocument authorDocument, WorkflowCurrentIdentity actor)
     {
-        validateAuthorReferences(authorDocument, actor);
+        return prepareWithCatalog(compiledBpmn, authorDocument, actor, parentFieldCatalogs(authorDocument));
+    }
+
+    /** 使用模型服务本次冻结的节点表单，避免在编译调用时重读可编辑模板。 */
+    public WorkflowPreparedCallActivityDeployment prepare(byte[] compiledBpmn,
+            WorkflowBpmnDocument authorDocument, WorkflowCurrentIdentity actor,
+            Map<String, String> nodeFormContents)
+    {
+        return prepareWithCatalog(compiledBpmn, authorDocument, actor,
+                parentFieldCatalogs(authorDocument, nodeFormContents));
+    }
+
+    private WorkflowPreparedCallActivityDeployment prepareWithCatalog(byte[] compiledBpmn,
+            WorkflowBpmnDocument authorDocument, WorkflowCurrentIdentity actor,
+            Map<String, Map<String, FieldSpec>> parentFields)
+    {
         org.flowable.bpmn.model.BpmnModel compiledModel = parse(compiledBpmn);
         Set<String> localProcessKeys = executableProcessKeys(authorDocument.bpmnModel());
-        Map<String, Map<String, FieldSpec>> parentFields = parentFieldCatalogs(authorDocument);
+        validateAuthorReferences(authorDocument, actor, parentFields, localProcessKeys);
         List<WfDeployCallActivitySnapshot> snapshots = new ArrayList<>();
 
         for (Process process : compiledModel.getProcesses())
@@ -222,7 +275,7 @@ public class WorkflowCallActivityReferenceService
             }
         }
         return new WorkflowPreparedCallActivityDeployment(
-                new BpmnXMLConverter().convertToXML(compiledModel), snapshots);
+                WorkflowBpmnXmlPreserver.restore(new BpmnXMLConverter().convertToXML(compiledModel), compiledBpmn), snapshots);
     }
 
     /**
@@ -507,25 +560,45 @@ public class WorkflowCallActivityReferenceService
      */
     private Map<String, Map<String, FieldSpec>> parentFieldCatalogs(WorkflowBpmnDocument document)
     {
-        Map<String, Map<String, FieldSpec>> catalogs = new LinkedHashMap<>();
+        Map<String, String> nodeFormContents = new LinkedHashMap<>();
+        Map<Long, WfForm> templates = new LinkedHashMap<>();
         for (WorkflowBpmnFormReference reference : document.formReferences())
         {
             String content;
             if (reference.sourceType() == WorkflowFormSourceType.TEMPLATE)
             {
-                WfForm form = formMapper.selectById(reference.formId());
+                WfForm form = templates.computeIfAbsent(reference.formId(), formMapper::selectById);
                 if (form == null || !hasText(form.getContent()))
                 {
                     throw new ServiceException("调用活动父流程表单不存在或已停用", HttpStatus.CONFLICT);
                 }
-                content = form.getContent();
+                formTemplateValidator.validate(form.getContent());
+                content = WorkflowNodeFormPermissionSnapshot.apply(
+                        form.getContent(), reference, formTemplateValidator);
             }
             else
             {
                 content = reference.embeddedContent();
             }
+            nodeFormContents.put(reference.nodeKey(), content);
+        }
+        return parentFieldCatalogs(document, nodeFormContents);
+    }
+
+    private Map<String, Map<String, FieldSpec>> parentFieldCatalogs(WorkflowBpmnDocument document,
+            Map<String, String> nodeFormContents)
+    {
+        Map<String, Map<String, FieldSpec>> catalogs = new LinkedHashMap<>();
+        for (WorkflowBpmnFormReference reference : document.formReferences())
+        {
+            Process process = document.bpmnModel().getProcessById(reference.processKey());
+            if (process == null || process.getFlowElement(reference.nodeKey(), true) == null
+                    || !nodeFormContents.containsKey(reference.nodeKey()))
+            {
+                throw dataError("调用活动父表单不属于当前流程节点");
+            }
             mergeFields(catalogs.computeIfAbsent(reference.processKey(), key -> new LinkedHashMap<>()),
-                    extractFieldSpecs(content), "父流程表单字段类型冲突");
+                    extractFieldSpecs(nodeFormContents.get(reference.nodeKey())), "父流程表单字段类型冲突");
         }
         return catalogs.entrySet().stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
                 Map.Entry::getKey, entry -> Map.copyOf(entry.getValue())));
@@ -553,10 +626,18 @@ public class WorkflowCallActivityReferenceService
             throw dataError("子流程开始节点结构异常");
         }
         String startNodeId = starts.get(0).getId();
+        if (snapshots.stream().noneMatch(snapshot -> snapshot != null && startNodeId.equals(snapshot.getNodeKey())))
+        {
+            throw dataError("子流程缺少正式开始表单快照");
+        }
         Map<String, FieldSpec> inputs = new LinkedHashMap<>();
         Map<String, FieldSpec> outputs = new LinkedHashMap<>();
         for (WfDeployForm snapshot : snapshots)
         {
+            if (snapshot != null && process.getFlowElement(snapshot.getNodeKey(), true) == null)
+            {
+                continue;
+            }
             if (snapshot == null || !hasText(snapshot.getContent()))
             {
                 throw dataError("子流程部署表单快照结构异常");
@@ -807,6 +888,14 @@ public class WorkflowCallActivityReferenceService
             {
                 throw new ServiceException(conflictMessage, HttpStatus.CONFLICT);
             }
+            if (previous != null)
+            {
+                // 一个流程变量贯穿多个表单节点；权限取交集，必填约束取并集。
+                target.put(name, new FieldSpec(name, previous.label(), previous.type(),
+                        previous.required() || field.required(),
+                        previous.readable() && field.readable(),
+                        previous.writable() && field.writable()));
+            }
         });
     }
 
@@ -878,7 +967,7 @@ public class WorkflowCallActivityReferenceService
     /** @param message String，稳定数据错误提示。@return ServiceException，HTTP 500 数据异常。 */
     private ServiceException dataError(String message)
     {
-        return new ServiceException(message, HttpStatus.ERROR);
+        return new ServiceException(message, HttpStatus.ERROR).setSubCode("CALL_ACTIVITY_CATALOG_DATA_INVALID");
     }
 
     /** @param node JsonNode，可空对象。@param field String，字段名。@return String，文本值或空串。 */

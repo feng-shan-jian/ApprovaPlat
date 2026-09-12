@@ -66,12 +66,25 @@ public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
     public static WorkflowFlowableEngineTestSupport start(String databaseNamePrefix,
             Map<Object, Object> beans)
     {
+        return start(databaseNamePrefix, beans, false);
+    }
+
+    /** 多引擎共享数据库时使用 H2 标准表名大小写，供官方 schema 元数据检查识别已有 common 表。 */
+    public static WorkflowFlowableEngineTestSupport startUsingStandardTableCase(String prefix, Map<Object, Object> beans)
+    {
+        return start(prefix, beans, true);
+    }
+
+    private static WorkflowFlowableEngineTestSupport start(String databaseNamePrefix,
+            Map<Object, Object> beans, boolean standardTableCase)
+    {
         if (databaseNamePrefix == null || databaseNamePrefix.isBlank() || beans == null)
         {
             throw new IllegalArgumentException("Flowable 测试引擎参数不合法");
         }
         JdbcDataSource dataSource = WorkflowH2SchemaMapperSupport.createDataSource(
                 databaseNamePrefix + "-" + UUID.randomUUID(), false, 10000);
+        if (standardTableCase) dataSource.setURL(dataSource.getURL().replace(";DATABASE_TO_LOWER=TRUE", ""));
         DataSourceTransactionManager transactionManager =
                 new DataSourceTransactionManager(dataSource);
         JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
@@ -88,6 +101,7 @@ public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
             configuration.setDatabaseSchemaUpdate("true");
             configuration.setHistory("full");
             configuration.setBeans(Map.copyOf(beans));
+            com.ruoyi.flowable.engine.WorkflowCompensationLifecycle.configure(configuration);
             processEngine = configuration.buildProcessEngine();
             return new WorkflowFlowableEngineTestSupport(dataSource,
                     transactionManager, jdbcTemplate, transactionTemplate, processEngine);

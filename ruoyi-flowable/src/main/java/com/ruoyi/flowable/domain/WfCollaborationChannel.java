@@ -4,6 +4,7 @@ package com.ruoyi.flowable.domain;
 public class WfCollaborationChannel
 {
     private String channelId;
+    private String deliveryMode = "COLLABORATION";
     private String targetProcessDefinitionKey;
     private String correlationType;
     private String correlationValue;
@@ -13,6 +14,8 @@ public class WfCollaborationChannel
 
     public String getChannelId() { return channelId; }
     public void setChannelId(String value) { channelId = value; }
+    public String getDeliveryMode() { return deliveryMode; }
+    public void setDeliveryMode(String value) { deliveryMode = value; }
     public String getTargetProcessDefinitionKey() { return targetProcessDefinitionKey; }
     public void setTargetProcessDefinitionKey(String value) { targetProcessDefinitionKey = value; }
     public String getCorrelationType() { return correlationType; }

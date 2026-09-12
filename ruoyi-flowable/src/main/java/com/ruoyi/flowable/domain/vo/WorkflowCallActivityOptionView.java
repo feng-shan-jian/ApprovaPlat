@@ -12,14 +12,15 @@ import java.util.Objects;
  * @param version int，流程定义版本
  * @param category String，流程分类编码
  * @param deploymentId String，流程部署主键
- * @param status String，ACTIVE 或 SUSPENDED
+ * @param status String，ACTIVE、SUSPENDED 或 UNAVAILABLE
  * @param inputFields List&lt;WorkflowCallActivityVariableView&gt;，子流程开始表单可写字段
  * @param outputFields List&lt;WorkflowCallActivityVariableView&gt;，子流程全部表单可读字段
+ * @param unavailableReason String，停用或单定义快照失效时可展示的业务原因
  */
 public record WorkflowCallActivityOptionView(String definitionId, String processKey,
         String processName, int version, String category, String deploymentId, String status,
         List<WorkflowCallActivityVariableView> inputFields,
-        List<WorkflowCallActivityVariableView> outputFields)
+        List<WorkflowCallActivityVariableView> outputFields, String unavailableReason)
 {
     /**
      * 创建不可变目录项并复制变量字段集合。
@@ -30,9 +31,10 @@ public record WorkflowCallActivityOptionView(String definitionId, String process
      * @param version int，流程定义版本
      * @param category String，流程分类编码
      * @param deploymentId String，流程部署主键
-     * @param status String，ACTIVE 或 SUSPENDED
+     * @param status String，ACTIVE、SUSPENDED 或 UNAVAILABLE
      * @param inputFields List&lt;WorkflowCallActivityVariableView&gt;，输入字段
      * @param outputFields List&lt;WorkflowCallActivityVariableView&gt;，输出字段
+     * @param unavailableReason String，可为空的不可用原因
      * @return 无返回值，构造后列表不可变
      */
     public WorkflowCallActivityOptionView

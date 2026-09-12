@@ -96,4 +96,14 @@ public class WfRuntimeEventController extends BaseController
         return success(collaborationMessageService.publish(token, request));
     }
 
+    /** 独立流程之间的可靠消息；复用 Token、唯一关联、持久化幂等、顺序及有界重试。 */
+    @Anonymous
+    @PostMapping("/message/reliable")
+    public AjaxResult reliableMessage(
+            @RequestHeader(value = "X-Integration-Token", required = false) String token,
+            @Valid @RequestBody WorkflowCollaborationMessageRequest request)
+    {
+        return success(collaborationMessageService.publishPointToPoint(token, request));
+    }
+
 }

@@ -77,6 +77,13 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
             String problem = healthProblem(snapshot.available(),
                     snapshotFresh, asyncExecutorMatches, asyncHistoryMatches,
                     storageAboveLowWatermark);
+            boolean timerExecutionReady = snapshotFresh && snapshot.asyncExecutorActive();
+            boolean asyncExecutorRequired = environment.getProperty(
+                    "flowable.runtime.require-async-executor", Boolean.class, false);
+            if (problem == null && asyncExecutorRequired && !timerExecutionReady)
+            {
+                problem = "async_executor_required_but_unavailable";
+            }
             Health.Builder builder;
             if (problem == null)
             {
@@ -93,6 +100,10 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
                     .withDetail("metricsSnapshotAgeMillis", snapshot.ageMillis())
                     .withDetail("asyncExecutorExpected", asyncExecutorExpected)
                     .withDetail("asyncHistoryExpected", asyncHistoryExpected);
+            builder.withDetail("timerExecutionReady", timerExecutionReady)
+                    .withDetail("asyncExecutionReady", timerExecutionReady)
+                    .withDetail("asyncExecutorRequired", asyncExecutorRequired);
+            if (problem != null) builder.withDetail("reason", problem);
             if (snapshot.available())
             {
                 // 只有真实成功快照才回显采集值，避免首次启动零值被误认为真实运行状态。

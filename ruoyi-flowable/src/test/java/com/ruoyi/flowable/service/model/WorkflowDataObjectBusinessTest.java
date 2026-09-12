@@ -1,0 +1,138 @@
+package com.ruoyi.flowable.service.model;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class WorkflowDataObjectBusinessTest
+{
+    private WorkflowFlowableEngineTestSupport support;
+    private WorkflowBpmnService service;
+
+    @BeforeEach void open()
+    {
+        support = WorkflowFlowableEngineTestSupport.start("data-object-contract", Map.of());
+        service = new WorkflowBpmnService(support.processEngine().getRepositoryService(),
+                new WorkflowFormFieldExtensionService(null), null);
+    }
+    @AfterEach void close() { support.close(); }
+
+    @ParameterizedTest
+    @CsvSource({ "string,hello,java.lang.String", "int,17,java.lang.Integer", "long,2147483648,java.lang.Long",
+        "double,2.5,java.lang.Double", "boolean,true,java.lang.Boolean" })
+    void typedDataObjectInitializesActualProcessVariable(String type, String value, String className)
+    {
+        String xml = model("<dataObject id=\"data\" name=\"payload\" itemSubjectRef=\"xsd:" + type
+                + "\"><extensionElements><flowable:value>" + value + "</flowable:value></extensionElements></dataObject>");
+        service.validate(xml.getBytes(StandardCharsets.UTF_8));
+        var engine = support.processEngine();
+        var deployment = engine.getRepositoryService().createDeployment().addString("data.bpmn20.xml", xml).deploy();
+        try
+        {
+            var instance = engine.getRuntimeService().startProcessInstanceByKey("dataContract");
+            Object actual = engine.getRuntimeService().getVariable(instance.getId(), "payload");
+            assertThat(actual.getClass().getName()).isEqualTo(className);
+            assertThat(actual.toString()).isEqualTo(value);
+            engine.getRuntimeService().trigger(engine.getRuntimeService().createExecutionQuery()
+                    .processInstanceId(instance.getId()).activityId("wait").singleResult().getId());
+            assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery()
+                    .processInstanceId(instance.getId()).finished().count()).isOne();
+        }
+        finally { engine.getRepositoryService().deleteDeployment(deployment.getId(), true); }
+    }
+
+    @ParameterizedTest
+    @CsvSource({ "initiator,string,hello,NAME", "payload,int,NaN,VALUE", "payload,double,Infinity,VALUE",
+        "payload,boolean,yes,VALUE", "payload,unknown,hello,TYPE" })
+    void rejectsReservedNamesAndInvalidTypesBeforeConverterCanDropData(String name, String type, String value, String code)
+    {
+        String xml = model("<dataObject id=\"data\" name=\"" + name + "\" itemSubjectRef=\"xsd:" + type
+                + "\"><extensionElements><flowable:value>" + value + "</flowable:value></extensionElements></dataObject>"
+                + "<dataObjectReference id=\"visibleData\" dataObjectRef=\"data\"/>");
+        assertThatThrownBy(() -> service.validateForSave(xml.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class, exception -> {
+                    assertThat(exception.getSubCode()).isEqualTo("BPMN_DATA_OBJECT_" + code);
+                    assertThat(((WorkflowBpmnValidationException) exception.getCause()).issues().get(0).elementId()).isEqualTo("visibleData");
+                    assertThat(((WorkflowBpmnValidationException) exception.getCause()).issues().get(0).processId()).isEqualTo("dataContract");
+                });
+    }
+
+    @Test void rejectsSameScopeDuplicateButPermitsSharedReferences()
+    {
+        String object = "<dataObject id=\"data\" name=\"payload\"/>";
+        service.validate(model(object + "<dataObjectReference id=\"ref1\" dataObjectRef=\"data\"/>"
+                + "<dataObjectReference id=\"ref2\" dataObjectRef=\"data\"/>").getBytes(StandardCharsets.UTF_8));
+        assertThatThrownBy(() -> service.validateForSave(model(object + "<dataObject id=\"other\" name=\"payload\"/>")
+                .getBytes(StandardCharsets.UTF_8))).isInstanceOf(ServiceException.class);
+    }
+
+    @Test void messageThrowHasLocatedAuthorWarningAndDeploymentRemainsBlocked()
+    {
+        String xml = model("").replace("<receiveTask id=\"wait\"/>",
+                "<intermediateThrowEvent id=\"wait\"><messageEventDefinition messageRef=\"notice\"/></intermediateThrowEvent>")
+                .replace("<process id=", "<message id=\"notice\" name=\"notice\"/><process id=");
+        var document = service.validateForSave(xml.getBytes(StandardCharsets.UTF_8));
+        assertThat(service.authorValidationIssues(document)).anySatisfy(issue -> {
+            assertThat(issue.code()).isEqualTo("BPMN_MESSAGE_THROW_NOT_EXECUTABLE");
+            assertThat(issue.elementId()).isEqualTo("wait");
+            assertThat(issue.processId()).isEqualTo("dataContract");
+        });
+        assertThatThrownBy(() -> service.validateDeployable(document)).isInstanceOf(ServiceException.class);
+    }
+
+    @Test void compilerPipelinePreservesReferencedDataObjectsAndTheirRuntimeValues()
+    {
+        String xml = model("<dataObject id=\"data\" name=\"payload\" itemSubjectRef=\"xsd:string\"><extensionElements><flowable:value>kept</flowable:value></extensionElements></dataObject>"
+                + "<dataObjectReference id=\"visibleData\" dataObjectRef=\"data\"/>"
+                + "<dataStoreReference id=\"archive\"/>"
+                + "<textAnnotation id=\"note\"><text>业务说明</text></textAnnotation>"
+                + "<association id=\"link\" sourceRef=\"note\" targetRef=\"visibleData\"/>")
+                .replace("<receiveTask id=\"wait\"/>", "<receiveTask id=\"wait\"><property id=\"inputProperty\" name=\"input\"/>"
+                    + "<dataInputAssociation><sourceRef>visibleData</sourceRef><targetRef>inputProperty</targetRef></dataInputAssociation></receiveTask>");
+        xml = xml.replace("<process id=", "<collaboration id=\"collaboration\"><participant id=\"pool\" processRef=\"dataContract\"/>"
+                + "<textAnnotation id=\"poolNote\"><text>池说明</text></textAnnotation></collaboration><process id=");
+        var document = service.validateForSave(xml.getBytes(StandardCharsets.UTF_8));
+        var extension = new WorkflowExtensionDeploymentService(null, null, null, null);
+        byte[] compiled = extension.prepare(document, "1").compiledBpmn();
+        compiled = new WorkflowParticipantRuleDeploymentService(null).prepare(document, compiled,
+                WorkflowAuthorFormFieldCatalog.builder().build(), "1").compiledBpmn();
+        compiled = new WorkflowTaskSlaDeploymentService(null, null, null).prepare(compiled, "1").compiledBpmn();
+        compiled = new WorkflowRuntimeTaskListenerCompiler().compile(compiled);
+        service.validateCompiledDeployment(compiled);
+        assertThat(new String(compiled, StandardCharsets.UTF_8)).contains("dataObjectReference", "visibleData", "archive", "业务说明");
+        assertThat(document.bpmnXml()).isEqualTo(xml);
+        var engine = support.processEngine();
+        engine.getRepositoryService().createDeployment().addBytes("preserved.bpmn20.xml", compiled).deploy();
+        var instance = engine.getRuntimeService().startProcessInstanceByKey("dataContract");
+        assertThat(engine.getRuntimeService().getVariable(instance.getId(), "payload")).isEqualTo("kept");
+        engine.getRuntimeService().trigger(engine.getRuntimeService().createExecutionQuery()
+                .processInstanceId(instance.getId()).activityId("wait").singleResult().getId());
+        assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(instance.getId()).finished().count()).isOne();
+    }
+
+    private String model(String elements)
+    {
+        return """
+            <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn"
+              xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:test:data">
+              <process id="dataContract" isExecutable="true"><extensionElements><flowable:properties>
+                <flowable:property name="approva.startScope.ruleVersion" value="1"/>
+                <flowable:property name="approva.startScope.type" value="PUBLIC"/>
+                <flowable:property name="approva.startScope.targetIds" value=""/>
+                <flowable:property name="approva.startScope.noMatchPolicy" value="FAIL"/>
+              </flowable:properties></extensionElements>
+              <startEvent id="start"><extensionElements><flowable:formProperty id="reason" name="事由" type="string" readable="true" writable="true"/></extensionElements></startEvent>
+              <receiveTask id="wait"/><endEvent id="end"/>
+              <sequenceFlow id="f1" sourceRef="start" targetRef="wait"/><sequenceFlow id="f2" sourceRef="wait" targetRef="end"/>
+              %s</process></definitions>
+            """.formatted(elements);
+    }
+}

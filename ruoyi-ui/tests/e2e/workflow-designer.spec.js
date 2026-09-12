@@ -247,7 +247,7 @@ async function chooseTaskOption(page, fieldLabel, optionLabel) {
 test('真实导入、编辑、撤销、保存并重载 BPMN 模型', async ({ page }) => {
   const username = String(process.env.WORKFLOW_E2E_USERNAME || '').trim()
   const password = String(process.env.WORKFLOW_E2E_PASSWORD || '')
-  test.skip(!username || !password, '需要 WORKFLOW_E2E_USERNAME 和 WORKFLOW_E2E_PASSWORD')
+  expect(Boolean(username && password), '缺少登录测试条件：需要 WORKFLOW_E2E_USERNAME 和 WORKFLOW_E2E_PASSWORD，不能按跳过判为验收通过').toBe(true)
 
   const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   const modelKey = `bs003_designer_e2e_${unique}`
@@ -365,7 +365,7 @@ test('BS-008 六类正式任务能力、ManualTask 拒绝和四类业务面板�
   test.setTimeout(120_000)
   const username = String(process.env.WORKFLOW_E2E_USERNAME || '').trim()
   const password = String(process.env.WORKFLOW_E2E_PASSWORD || '')
-  test.skip(!username || !password, '需要 WORKFLOW_E2E_USERNAME 和 WORKFLOW_E2E_PASSWORD')
+  expect(Boolean(username && password), '缺少登录测试条件：需要 WORKFLOW_E2E_USERNAME 和 WORKFLOW_E2E_PASSWORD，不能按跳过判为验收通过').toBe(true)
 
   const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   const modelKey = `bs008_task_capability_${unique}`

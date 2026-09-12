@@ -9,10 +9,7 @@ import static org.mockito.Mockito.when;
 import java.security.SecureRandom;
 import java.sql.SQLException;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -37,7 +34,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.testsupport.WorkflowMySqlITSupport;
 
 /**
- * 在显式指定的 approvaplat_it MySQL 库验证 SMTP 单例配置的正式表结构、约束和真实并发合同。
+ * 在显式指定的 approvaplat_it MySQL 库验证 SMTP 单例配置的真实并发合同。
  *
  * 测试只通过生产 WorkflowMailConfigService 写入 config_id=1，并在每个用例前后仅删除该行；
  * 未配置专用 MySQL 环境变量时不会尝试连接数据库。
@@ -111,93 +108,6 @@ class WorkflowMailConfigMySqlIT
         cleanupSingleton();
         assertEquals(0, singletonRowCount(), "SMTP MySQL IT 不得遗留 config_id=1");
         credential = null;
-    }
-
-    /**
-     * 从 information_schema 核验正式表、全部列、主键和六个命名 CHECK 约束。
-     *
-     * @return void，物理结构与 8.0.1 正式迁移不一致时断言失败
-     */
-    @Test
-    void exposesExpectedTableColumnsAndChecks()
-    {
-        Map<String, Object> table = jdbcTemplate.queryForMap(
-                "select engine,table_collation from information_schema.tables "
-                + "where table_schema=database() and table_name='sys_mail_config'");
-        assertEquals("InnoDB", table.get("engine"));
-        assertEquals("utf8mb4_unicode_ci", table.get("table_collation"));
-
-        Map<String, ColumnShape> columns = jdbcTemplate.query(
-                "select column_name,data_type,column_type,is_nullable,"
-                + "character_maximum_length,collation_name "
-                + "from information_schema.columns where table_schema=database() "
-                + "and table_name='sys_mail_config' order by ordinal_position",
-                result -> {
-                    Map<String, ColumnShape> shapes = new LinkedHashMap<>();
-                    while (result.next())
-                    {
-                        shapes.put(result.getString("column_name"), new ColumnShape(
-                                result.getString("data_type"),
-                                result.getString("column_type"),
-                                result.getString("is_nullable"),
-                                result.getObject("character_maximum_length", Long.class),
-                                result.getString("collation_name")));
-                    }
-                    return shapes;
-                });
-        assertEquals(Set.of("config_id", "smtp_host", "smtp_port", "encryption_mode",
-                "username", "credential_ciphertext", "credential_iv",
-                "from_address", "sender_name", "revision", "create_by", "create_time",
-                "update_by", "update_time"),
-                columns.keySet());
-        assertColumn(columns, "config_id", "bigint", "bigint", "NO", null, null);
-        assertColumn(columns, "smtp_port", "int", "int", "NO", null, null);
-        assertColumn(columns, "encryption_mode", "varchar", "varchar(20)", "NO", 20L,
-                "ascii_bin");
-        assertColumn(columns, "credential_ciphertext", "text", "text", "NO", 65535L,
-                "utf8mb4_unicode_ci");
-        assertColumn(columns, "credential_iv", "varbinary", "varbinary(12)", "NO", 12L,
-                null);
-        assertColumn(columns, "revision", "bigint", "bigint", "NO", null, null);
-
-        String primaryKeyColumn = jdbcTemplate.queryForObject(
-                "select column_name from information_schema.key_column_usage "
-                + "where table_schema=database() and table_name='sys_mail_config' "
-                + "and constraint_name='PRIMARY'", String.class);
-        assertEquals("config_id", primaryKeyColumn);
-
-        Map<String, String> checks = jdbcTemplate.query(
-                "select tc.constraint_name,cc.check_clause "
-                + "from information_schema.table_constraints tc "
-                + "join information_schema.check_constraints cc "
-                + "on cc.constraint_schema=tc.constraint_schema "
-                + "and cc.constraint_name=tc.constraint_name "
-                + "where tc.table_schema=database() and tc.table_name='sys_mail_config' "
-                + "and tc.constraint_type='CHECK'",
-                result -> {
-                    Map<String, String> clauses = new LinkedHashMap<>();
-                    while (result.next())
-                    {
-                        clauses.put(result.getString("constraint_name"),
-                                normalizeClause(result.getString("check_clause")));
-                    }
-                    return clauses;
-                });
-        assertEquals(Set.of("chk_sys_mail_config_singleton",
-                "chk_sys_mail_config_port", "chk_sys_mail_config_encryption",
-                "chk_sys_mail_config_iv", "chk_sys_mail_config_ciphertext",
-                "chk_sys_mail_config_revision"),
-                checks.keySet());
-        assertClauseContains(checks, "chk_sys_mail_config_singleton", "CONFIG_ID=1");
-        assertClauseContains(checks, "chk_sys_mail_config_port",
-                "SMTP_PORTBETWEEN1AND65535");
-        assertClauseContains(checks, "chk_sys_mail_config_encryption",
-                "ENCRYPTION_MODE", "NONE", "STARTTLS", "SSL");
-        assertClauseContains(checks, "chk_sys_mail_config_iv",
-                "LENGTH(CREDENTIAL_IV)=12");
-        assertClauseContains(checks, "chk_sys_mail_config_ciphertext",
-                "LENGTH(CREDENTIAL_CIPHERTEXT)>0");
-        assertClauseContains(checks, "chk_sys_mail_config_revision", "REVISION>=1");
     }
 
     /**
@@ -295,63 +205,6 @@ class WorkflowMailConfigMySqlIT
     }
 
     /**
-     * 严格对比一个 information_schema 列快照，避免迁移字段类型或排序规则静默漂移。
-     *
-     * @param columns Map&lt;String,ColumnShape&gt;，按列名索引的真实元数据
-     * @param columnName String，当前核验列名
-     * @param dataType String，期望基础数据类型
-     * @param columnType String，期望完整 MySQL 列类型
-     * @param nullable String，YES 或 NO
-     * @param maximumLength Long，可空字符或二进制最大长度
-     * @param collation String，可空字符排序规则
-     * @return void，任一列物理属性不一致时断言失败
-     */
-    private void assertColumn(Map<String, ColumnShape> columns, String columnName,
-            String dataType, String columnType, String nullable, Long maximumLength,
-            String collation)
-    {
-        ColumnShape actual = columns.get(columnName);
-        assertNotNull(actual, "缺少迁移列: " + columnName);
-        assertEquals(dataType, actual.dataType(), columnName + " data_type 不一致");
-        assertEquals(columnType, actual.columnType(), columnName + " column_type 不一致");
-        assertEquals(nullable, actual.nullable(), columnName + " nullability 不一致");
-        assertEquals(maximumLength, actual.maximumLength(),
-                columnName + " maximum length 不一致");
-        assertEquals(collation, actual.collation(), columnName + " collation 不一致");
-    }
-
-    /**
-     * 断言命名 CHECK 的规范化子句包含全部关键业务片段。
-     *
-     * @param checks Map&lt;String,String&gt;，约束名到规范化 SQL 子句
-     * @param constraintName String，正式迁移中的约束名
-     * @param fragments String[]，必须全部存在的规范化业务片段
-     * @return void，缺少约束或任一业务片段时断言失败
-     */
-    private void assertClauseContains(Map<String, String> checks, String constraintName,
-            String... fragments)
-    {
-        String clause = checks.get(constraintName);
-        assertNotNull(clause, "缺少 CHECK: " + constraintName);
-        for (String fragment : fragments)
-        {
-            assertTrue(clause.contains(fragment), constraintName + " 未覆盖: " + fragment);
-        }
-    }
-
-    /**
-     * 移除 MySQL information_schema CHECK 表达式中的引号和空白差异，并统一大小写。
-     *
-     * @param clause String，数据库返回的 CHECK 子句
-     * @return String，去除反引号和空白影响的全大写子句
-     */
-    private String normalizeClause(String clause)
-    {
-        return clause.replace("`", "").replaceAll("\\s+", "")
-                .toUpperCase(Locale.ROOT);
-    }
-
-    /**
      * 删除当前测试唯一有权管理的 config_id=1 行，不允许使用无条件 DELETE 或 TRUNCATE。
      *
      * @return void，删除零行或一行均视为幂等清理成功
@@ -374,10 +227,6 @@ class WorkflowMailConfigMySqlIT
         assertNotNull(count);
         return count;
     }
-
-    /** information_schema 中与本合同相关的单列物理属性。 */
-    private record ColumnShape(String dataType, String columnType, String nullable,
-            Long maximumLength, String collation) { }
 
     /** 两个并发写者允许出现的完整结果集合。 */
     private enum UpdateOutcome

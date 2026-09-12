@@ -47,6 +47,8 @@
       <right-toolbar :show-search="false" @queryTable="loadRegistry" />
     </el-row>
 
+    <el-alert v-if="registryError" :title="registryError" type="error" :closable="false" />
+    <el-alert v-if="handlerError" :title="handlerError" type="error" :closable="false" />
     <el-table v-loading="loading" :data="filteredRows" row-key="extensionId">
       <el-table-column label="扩展目录" min-width="240">
         <template #default="scope">
@@ -182,6 +184,7 @@
     </el-dialog>
 
     <el-dialog v-model="handlerDialogOpen" title="服务端已安装处理器" width="720px" append-to-body>
+      <el-alert v-if="handlerError" :title="handlerError" type="error" :closable="false" />
       <el-table :data="handlers" max-height="420">
         <el-table-column label="处理器名称" prop="name" min-width="160" />
         <el-table-column label="稳定键" prop="implementationKey" min-width="160">
@@ -211,6 +214,8 @@ const saving = ref(false)
 const rows = ref([])
 const filteredRows = ref([])
 const handlers = ref([])
+const registryError = ref('')
+const handlerError = ref('')
 const createDialogOpen = ref(false)
 const versionDialogOpen = ref(false)
 const handlerDialogOpen = ref(false)
@@ -258,14 +263,18 @@ function createEmptyExtension() {
  */
 async function loadRegistry() {
   loading.value = true
+  registryError.value = ''
+  handlerError.value = ''
   try {
-    const [registryResponse, handlerResponse] = await Promise.all([
-      listWorkflowExtensions(),
-      listInstalledJavaHandlers()
+    await Promise.allSettled([
+      listWorkflowExtensions().then(response => {
+        rows.value = response.data || []
+        applyFilters()
+      }).catch(() => { registryError.value = '扩展目录加载失败，请刷新重试' }),
+      listInstalledJavaHandlers().then(response => {
+        handlers.value = response.data || []
+      }).catch(() => { handlerError.value = '已安装处理器加载失败，请刷新重试' })
     ])
-    rows.value = registryResponse.data || []
-    handlers.value = handlerResponse.data || []
-    applyFilters()
   } finally {
     loading.value = false
   }

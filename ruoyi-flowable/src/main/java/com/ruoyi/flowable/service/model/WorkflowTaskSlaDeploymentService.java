@@ -129,7 +129,7 @@ public class WorkflowTaskSlaDeploymentService
         {
             throw new ServiceException("审批 SLA 执行资源编译失败", HttpStatus.ERROR);
         }
-        return new WorkflowPreparedSlaDeployment(compiled, snapshots);
+        return new WorkflowPreparedSlaDeployment(WorkflowBpmnXmlPreserver.restore(compiled, sourceBpmn), snapshots);
     }
 
     /**

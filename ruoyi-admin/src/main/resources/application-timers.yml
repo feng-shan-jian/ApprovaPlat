@@ -1,0 +1,7 @@
+# 仅在完成当前数据库作业盘点后显式启用：--spring.profiles.include=timers
+# 本配置用于一个普通执行器节点；异步历史和业务 Spring 调度保留原独立配置。
+flowable:
+  async-executor-activate: true
+  runtime:
+    require-async-executor: true
+    executor-topology: SINGLE_NODE

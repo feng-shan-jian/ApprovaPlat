@@ -12,7 +12,6 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.lang.reflect.RecordComponent;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Base64;
@@ -298,12 +297,10 @@ class WorkflowMailConfigServiceTest
         WorkflowMailConfigView configured = service.save(validRequest(CREDENTIAL, 0L));
         String ciphertext = credentialCiphertext();
         String encodedIv = Base64.getEncoder().encodeToString(credentialIv());
-        List<String> componentNames = Arrays.stream(
-                WorkflowMailConfigView.class.getRecordComponents())
-                .map(RecordComponent::getName).toList();
         String json = JsonMapper.shared().writeValueAsString(configured);
 
-        assertThat(componentNames).containsExactly("configured", "smtpHost", "smtpPort",
+        assertThat(JsonMapper.shared().readTree(json).propertyNames()).containsExactlyInAnyOrder(
+                "configured", "smtpHost", "smtpPort",
                 "encryptionMode", "username", "credentialConfigured", "fromAddress",
                 "senderName", "revision");
         assertThat(json).doesNotContain(CREDENTIAL, ciphertext, encodedIv,

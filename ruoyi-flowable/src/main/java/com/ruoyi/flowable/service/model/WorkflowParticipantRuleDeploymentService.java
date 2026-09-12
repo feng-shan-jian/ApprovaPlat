@@ -77,7 +77,7 @@ public class WorkflowParticipantRuleDeploymentService
                 }
             }
         }
-        byte[] compiledBytes = converter.convertToXML(compiled);
+        byte[] compiledBytes = WorkflowBpmnXmlPreserver.restore(converter.convertToXML(compiled), inputBpmn);
         if (compiledBytes == null || compiledBytes.length == 0)
         {
             throw new ServiceException("参与者规则执行资源编译失败", HttpStatus.ERROR);

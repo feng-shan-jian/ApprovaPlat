@@ -461,11 +461,13 @@ public class WorkflowFormTemplateValidator
         JsonNode hiddenNode = component.get("workflowHidden");
         JsonNode readableNode = component.get("workflowReadable");
         JsonNode writableNode = component.get("workflowWritable");
-        for (JsonNode flag : new JsonNode[] { hiddenNode, readableNode, writableNode })
+        for (String flagName : new String[] { "workflowHidden", "workflowReadable", "workflowWritable" })
         {
+            JsonNode flag = component.get(flagName);
             if (flag == null || !flag.isBoolean())
             {
-                throw invalid("表单组件必须声明完整节点权限标志");
+                throw invalid("表单组件必须声明完整节点权限标志: "
+                        + component.path("vModel").asText("布局组件") + "." + flagName);
             }
         }
         boolean hidden = hiddenNode.booleanValue();

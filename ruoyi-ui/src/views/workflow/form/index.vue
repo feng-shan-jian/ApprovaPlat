@@ -14,6 +14,12 @@
     <el-table v-loading="loading" :data="rows" @selection-change="selection => selectedIds = selection.map(item => item.formId)">
       <el-table-column type="selection" width="52" align="center" />
       <el-table-column label="表单名称" prop="formName" min-width="220" show-overflow-tooltip />
+      <el-table-column label="模板状态" min-width="260">
+        <template #default="{ row }">
+          <el-tag v-if="row.protocolValid === true" type="success">可用</el-tag>
+          <span v-else-if="row.protocolValid === false">需修复：{{ row.protocolIssue }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="备注" prop="remark" min-width="260" show-overflow-tooltip />
       <el-table-column label="更新时间" prop="updateTime" width="170"><template #default="scope">{{ parseTime(scope.row.updateTime || scope.row.createTime) }}</template></el-table-column>
       <el-table-column label="操作" width="150" align="center" fixed="right">

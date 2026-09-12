@@ -59,7 +59,7 @@ public class WorkflowRuntimeTaskListenerCompiler
         {
             throw new ServiceException("运行时任务监听器编译失败", HttpStatus.ERROR);
         }
-        return compiled;
+        return WorkflowBpmnXmlPreserver.restore(compiled, sourceBpmn);
     }
 
     /**

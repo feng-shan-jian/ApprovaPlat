@@ -84,6 +84,7 @@
         :dmn-options="dmnOptions"
         :dmn-loading="dmnLoading"
         :call-activity-options="callActivityOptions"
+        :call-activity-load-error="callActivityLoadError"
         :call-activity-loading="callActivityLoading"
         :call-activity-parent-fields="callActivityParentFields"
         :listener-options="businessListenerOptions"
@@ -113,6 +114,10 @@
         @activity-change="updateActivityProperties"
         @call-activity-change="updateCallActivityProperties"
         @event-change="updateEventProperties"
+        @data-object-change="updateDataObjectProperties"
+        @edit-participant-process="editParticipantProcess"
+        @edit-process-start="editProcessStart"
+        @back-to-participant="backToParticipant"
         @dmn-change="updateDmnDecision"
         @business-execution-listener-change="updateBusinessExecutionListeners"
         @business-task-listener-change="updateBusinessTaskListeners"
@@ -141,7 +146,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="validationVisible" title="流程校验" width="min(720px, 82vw)" append-to-body>
+    <el-dialog v-model="validationVisible" title="流程校验" width="min(900px, 82vw)" append-to-body>
       <el-result v-if="validationPassed && !validationIssues.length" icon="success" title="校验通过" />
       <el-table v-else-if="validationIssues.length" :data="validationIssues" max-height="460">
         <el-table-column label="级别" width="88">
@@ -150,7 +155,17 @@
           </template>
         </el-table-column>
         <el-table-column prop="code" label="编码" width="190" />
-        <el-table-column prop="elementId" label="元素" width="150" show-overflow-tooltip />
+        <el-table-column label="元素" width="220">
+          <template #default="scope">
+            <el-button v-if="scope.row.elementId" link type="primary" class="validation-element-link"
+              :aria-label="`定位元素 ${scope.row.elementId}`"
+              :disabled="!canLocateValidationIssue(scope.row)"
+              @click="locateValidationIssue(scope.row)"
+            >{{ scope.row.elementId }}</el-button>
+            <span v-else>—</span>
+            <div v-if="scope.row.processId"><el-text size="small" type="info">所属流程：{{ scope.row.processId }}</el-text></div>
+          </template>
+        </el-table-column>
         <el-table-column prop="message" label="问题" min-width="260" show-overflow-tooltip />
       </el-table>
     </el-dialog>
@@ -159,6 +174,7 @@
 
 <script setup name="ProcessDesigner">
 import Modeler from 'bpmn-js/lib/Modeler'
+import atomicPropertiesModule from './bpmn/atomicPropertiesModule.js'
 import minimapModule from 'diagram-js-minimap'
 import gridSnappingModule from 'bpmn-js/lib/features/grid-snapping'
 import tokenSimulationModule from 'bpmn-js-token-simulation'
@@ -264,6 +280,7 @@ const validating = ref(false)
 const simulationActive = ref(false)
 const systemDark = ref(false)
 const selectedElement = shallowRef(null)
+const editingParticipantProcess = ref(false)
 const lastExportedXml = ref('')
 const propertyState = reactive(createEmptyPropertyState())
 const designerStyle = computed(() => ({ height: props.height }))
@@ -314,7 +331,8 @@ const designerClasses = computed(() => ({
     || (appliedPreference.value.theme === 'SYSTEM' && systemDark.value),
   'process-designer--grid': appliedPreference.value.gridEnabled
 }))
-const selectedBusinessObject = computed(() => selectedElement.value?.businessObject)
+const selectedBusinessObject = computed(() => editingParticipantProcess.value
+  ? selectedElement.value?.businessObject?.processRef : selectedElement.value?.businessObject)
 const isProcess = computed(() => isType('bpmn:Process'))
 const isStartEvent = computed(() => isType('bpmn:StartEvent'))
 const isUserTask = computed(() => isType('bpmn:UserTask'))
@@ -327,6 +345,8 @@ const propertyFlags = computed(() => {
   return Object.freeze({
     process: isProcess.value,
     participant: isParticipant.value,
+    participantProcess: editingParticipantProcess.value,
+    dataObject: isType('bpmn:DataObjectReference') || isType('bpmn:DataObject'),
     startEvent: isStartEvent.value,
     formSupported: isStartEvent.value || isUserTask.value,
     sequenceFlow: isSequenceFlow.value,
@@ -334,6 +354,7 @@ const propertyFlags = computed(() => {
     callActivity: isType('bpmn:CallActivity'),
     activity: isType('bpmn:Activity'),
     event: isType('bpmn:Event'),
+    messageThrow: isType('bpmn:IntermediateThrowEvent') && eventDefinitionType === 'bpmn:MessageEventDefinition',
     referenceEvent: [
       'bpmn:MessageEventDefinition',
       'bpmn:SignalEventDefinition',
@@ -388,6 +409,10 @@ function createEmptyPropertyState() {
     id: '',
     name: '',
     processRef: '',
+    dataVariable: '',
+    dataType: 'string',
+    dataDefault: '',
+    formProtocolIssue: '',
     executable: true,
     versionTag: '',
     formSource: 'TEMPLATE',
@@ -472,6 +497,7 @@ function createModeler() {
     container: canvasRef.value,
     gridSnapping: { active: appliedPreference.value.gridEnabled },
     additionalModules: [
+      atomicPropertiesModule,
       minimapModule,
       gridSnappingModule,
       tokenSimulationModule,
@@ -624,6 +650,7 @@ async function emitXmlChange(notifyChange) {
  * @returns {void} 无返回值。
  */
 function selectElement(element) {
+  editingParticipantProcess.value = false
   selectedElement.value = element || null
   loadPropertyState(element)
 }
@@ -635,10 +662,17 @@ function selectElement(element) {
  */
 function loadPropertyState(element) {
   Object.assign(propertyState, createEmptyPropertyState())
-  const businessObject = element?.businessObject
+  const businessObject = editingParticipantProcess.value ? element?.businessObject?.processRef : element?.businessObject
   if (!businessObject) return
   propertyState.id = businessObject.id || ''
   propertyState.name = businessObject.name || ''
+  const dataObject = businessObject.$type === 'bpmn:DataObjectReference' ? businessObject.dataObjectRef
+    : businessObject.$type === 'bpmn:DataObject' ? businessObject : null
+  if (dataObject) {
+    propertyState.dataVariable = dataObject.name || ''
+    propertyState.dataType = String(dataObject.itemSubjectRef || 'xsd:string').replace(/^xsd:/, '')
+    propertyState.dataDefault = dataObject.extensionElements?.values?.find(value => value.$type === 'flowable:Value')?.body || ''
+  }
   propertyState.executable = businessObject.isExecutable !== false
   propertyState.versionTag = businessObject.get('flowable:versionTag') || ''
   propertyState.formKey = businessObject.get('flowable:formKey') || ''
@@ -816,6 +850,10 @@ function typeLabel(type) {
  */
 function updateProperties(changes) {
   if (designerLocked.value || !modeler || !selectedElement.value) return
+  if (editingParticipantProcess.value) {
+    modeler.get('modeling').updateModdleProperties(selectedElement.value, selectedBusinessObject.value, changes)
+    return
+  }
   modeler.get('modeling').updateProperties(selectedElement.value, changes)
 }
 
@@ -827,6 +865,51 @@ function updateCommonProperties() {
   updateProperties({ name: propertyState.name.trim() || undefined })
 }
 
+function updateDataObjectProperties() {
+  if (designerLocked.value || !modeler || !selectedElement.value) return
+  const object = selectedBusinessObject.value
+  const dataObject = object.$type === 'bpmn:DataObjectReference' ? object.dataObjectRef : object
+  if (!dataObject) { emit('error', new Error('数据对象引用不存在')); return }
+  const name = propertyState.dataVariable.trim()
+  const type = propertyState.dataType
+  const value = propertyState.dataDefault
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name)
+    || !['string', 'int', 'long', 'double', 'boolean'].includes(type)) {
+    emit('error', new Error('请配置有效的数据变量名和数据类型'))
+    return
+  }
+  const moddle = modeler.get('moddle')
+  const values = (dataObject.extensionElements?.values || []).filter(item => item.$type !== 'flowable:Value')
+  if (value !== '') values.push(moddle.create('flowable:Value', { body: value }))
+  const definitions = findDefinitions(dataObject)
+  modeler.get('commandStack').execute('workflow.atomicProperties', {
+    element: selectedElement.value,
+    updates: [
+      { moddleElement: definitions, properties: { 'xmlns:xsd': 'http://www.w3.org/2001/XMLSchema' } },
+      { moddleElement: dataObject, properties: { name, itemSubjectRef: `xsd:${type}`,
+        extensionElements: values.length ? moddle.create('bpmn:ExtensionElements', { values }) : undefined } }
+    ]
+  })
+}
+
+function editParticipantProcess() {
+  if (!selectedElement.value?.businessObject?.processRef) return
+  editingParticipantProcess.value = true
+  loadPropertyState(selectedElement.value)
+}
+
+function backToParticipant() {
+  editingParticipantProcess.value = false
+  loadPropertyState(selectedElement.value)
+}
+
+function editProcessStart() {
+  const start = selectedBusinessObject.value?.flowElements?.find(element => element.$type === 'bpmn:StartEvent')
+  const shape = start && modeler.get('elementRegistry').get(start.id)
+  if (shape) modeler.get('selection').select(shape)
+  else emit('error', new Error('请先在此泳池中创建开始节点'))
+}
+
 /**
  * 校验并更新 BPMN 元素标识。
  * @returns {void} 非法标识会回滚为业务对象原值并报告错误。
@@ -836,6 +919,11 @@ function updateElementId() {
   if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/.test(id)) {
     propertyState.id = selectedBusinessObject.value?.id || ''
     emit('error', new Error('元素标识格式不合法'))
+    return
+  }
+  if (id !== selectedBusinessObject.value?.id && modeler?.get('moddle').ids.assigned(id)) {
+    propertyState.id = selectedBusinessObject.value?.id || ''
+    emit('error', new Error('元素标识已存在'))
     return
   }
   updateProperties({ id })
@@ -1304,6 +1392,23 @@ async function runServerValidation(showResult, sourceXml = '') {
   }
 }
 
+/** 校验结果只定位当前画布中真实存在的图元，不修改作者内容。 */
+function canLocateValidationIssue(issue) {
+  return Boolean(issue.elementId && modeler?.get('elementRegistry').get(issue.elementId))
+}
+
+/** 关闭诊断弹窗并选中、滚动到对应图元，使其业务属性可以立即修复。 */
+function locateValidationIssue(issue) {
+  const element = modeler?.get('elementRegistry').get(issue.elementId)
+  if (!element) return
+  validationVisible.value = false
+  if (appliedPreference.value.propertiesCollapsed) toggleProperties()
+  modeler.get('selection').select(element)
+  if (Number.isFinite(element.x) && Number.isFinite(element.y)) {
+    modeler.get('canvas').scrollToElement(element, 80)
+  }
+}
+
 /**
  * 同步系统深色主题媒体查询，仅在偏好为 SYSTEM 时影响设计器外观。
  * @param {MediaQueryListEvent|MediaQueryList} event 系统颜色方案媒体查询结果。
@@ -1578,10 +1683,10 @@ function validateDiagram() {
   const definitions = modeler.getDefinitions()
   const processes = (definitions?.rootElements || [])
     .filter(element => element.$type === 'bpmn:Process')
-  if (!processes.some(process => process.isExecutable)) return '至少需要一个可执行流程'
+  if (!processes.some(process => process.isExecutable !== false)) return '至少需要一个可执行流程'
   for (const process of processes) {
     // 协作图允许存在仅表达参与者边界的非执行池；只有正式可执行流程需要申请入口和发起范围。
-    if (!process.isExecutable) continue
+    if (process.isExecutable === false) continue
     const flowElements = process.flowElements || []
     const startEvents = flowElements.filter(item => item.$type === 'bpmn:StartEvent')
     if (startEvents.length !== 1) return '每个流程必须且只能包含一个开始节点'
@@ -1710,6 +1815,7 @@ const formParticipantDomain = createFormParticipantDomain({
   updateProperties
 })
 const routingCallActivityDomain = createRoutingCallActivityDomain({
+  readTemplatePermissionPolicy: businessObject => formParticipantDomain.readTemplatePermissionPolicy(businessObject),
   buildPropertiesExtensionElements,
   designerLocked,
   emit,
@@ -1790,6 +1896,7 @@ const {
   dmnOptions,
   dmnLoading,
   callActivityOptions,
+  callActivityLoadError,
   callActivityLoading,
   conditionFieldOptions,
   conditionContext,
@@ -1884,6 +1991,20 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
+.validation-element-link {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+
+  :deep(span) {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
 .process-designer {
   display: grid;
   grid-template-rows: 54px minmax(0, 1fr);

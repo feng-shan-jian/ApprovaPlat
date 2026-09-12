@@ -25,6 +25,7 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
     /** 目标 ApprovaPlat 实例的正式协作消息入口。 */
     private static final String COLLABORATION_MESSAGE_PATH =
             "/workflow/runtime-event/collaboration/message";
+    public static final String POINT_TO_POINT_PATH = "/workflow/runtime-event/message/reliable";
     public static final String IMPLEMENTATION_KEY = "COLLABORATION_OUTBOX_V1";
     public static final String EXTENSION_KEY = "approva.collaboration-outbox";
     private static final Pattern KEY = Pattern.compile("[A-Za-z][A-Za-z0-9_.-]{0,254}");
@@ -144,7 +145,12 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
      * @param frozen boolean，是否要求 httpEndpoint 冻结字段
      * @return CollaborationConfig，规范业务配置
      */
-    private CollaborationConfig parse(JsonNode config, boolean frozen)
+    public static void validateAuthorConfig(JsonNode config)
+    {
+        parse(config, false);
+    }
+
+    private static CollaborationConfig parse(JsonNode config, boolean frozen)
     {
         if (config == null || !config.isObject())
         {
@@ -166,9 +172,9 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
         {
             throw invalid("协作消息端点、路径、消息名或目标流程 key 不合法");
         }
-        if (!COLLABORATION_MESSAGE_PATH.equals(path))
+        if (!COLLABORATION_MESSAGE_PATH.equals(path) && !POINT_TO_POINT_PATH.equals(path))
         {
-            throw invalid("协作消息必须投递到正式 collaboration/message 入口");
+            throw invalid("可靠消息必须选择独立消息或跨池协作的正式接收入口");
         }
         if (correlationVariable != null && !VARIABLE.matcher(correlationVariable).matches())
         {
@@ -191,7 +197,7 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
         }
         variableNames.sort(String::compareTo);
         JsonNode attemptsNode = config.get("maxAttempts");
-        int maxAttempts = attemptsNode != null && attemptsNode.canConvertToInt()
+        int maxAttempts = attemptsNode != null && attemptsNode.isIntegralNumber() && attemptsNode.canConvertToInt()
                 ? attemptsNode.intValue() : 0;
         if (maxAttempts < 1 || maxAttempts > 20)
         {
@@ -235,7 +241,7 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
      * @param max int，最大长度
      * @return String，规范非空文本
      */
-    private String text(JsonNode config, String name, int max)
+    private static String text(JsonNode config, String name, int max)
     {
         String value = optionalText(config, name, max);
         if (value == null) throw invalid("协作消息配置字段缺失: " + name);
@@ -249,7 +255,7 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
      * @param max int，最大长度
      * @return String，规范文本或 null
      */
-    private String optionalText(JsonNode config, String name, int max)
+    private static String optionalText(JsonNode config, String name, int max)
     {
         JsonNode node = config.get(name);
         if (node == null || node.isNull()) return null;
@@ -268,7 +274,7 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
      * @param message String，具体约束
      * @return ServiceException，HTTP 400
      */
-    private ServiceException invalid(String message)
+    private static ServiceException invalid(String message)
     {
         return new ServiceException(message, HttpStatus.BAD_REQUEST)
                 .setSubCode("COLLAB_OUTBOX_CONFIG_INVALID");

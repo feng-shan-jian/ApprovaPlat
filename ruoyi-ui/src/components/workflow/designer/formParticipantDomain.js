@@ -1,4 +1,5 @@
 import { computed } from 'vue'
+import { templatePermissionIssues } from '../form/formTemplate.js'
 import { createControlledLoopDomain, isControlledLoopProperty } from './controlledLoopDomain.js'
 import { participantUserIdFieldOptions } from './formUserFieldCatalog.js'
 import { createParticipantRuleDomain, isParticipantRuleProperty } from './participantRuleDomain.js'
@@ -340,7 +341,7 @@ export function createFormParticipantDomain(context) {
     const config = field || {}
     if (!embedded && [config.workflowHidden, config.workflowReadable,
       config.workflowWritable].some(flag => typeof flag !== 'boolean')) {
-      throw new Error('正式表单字段缺少完整节点权限标志')
+      throw new Error(`正式表单字段 ${config.label || config.vModel || '(未命名)'} 缺少完整节点权限标志`)
     }
     const readable = embedded ? field?.readable !== false : config.workflowReadable === true
     const writable = embedded
@@ -361,7 +362,12 @@ export function createFormParticipantDomain(context) {
   function resolveFormPermissionSourceFields() {
     if (propertyState.formSource !== 'TEMPLATE') return []
     const form = formFieldCatalog.resolveTemplateForm(propertyState.formKey)
-    if (!form?.content) return []
+    if (!propertyState.formKey) return []
+    if (!form?.content) throw new Error('正式表单模板不存在或未加载')
+    const issues = templatePermissionIssues(form.content)
+    if (form.protocolValid === false || issues.length) {
+      throw new Error(form.protocolIssue || issues[0])
+    }
     const fields = []
     const seen = new Set()
     for (const { variable, field } of formFieldCatalog.readTemplateFieldDescriptors(form.content)) {
@@ -439,7 +445,13 @@ export function createFormParticipantDomain(context) {
     const policy = propertyState.formSource === 'TEMPLATE'
       ? readTemplatePermissionPolicy(businessObject)
       : undefined
-    rebuildFormPermissionFields(policy)
+    propertyState.formProtocolIssue = ''
+    try {
+      rebuildFormPermissionFields(policy)
+    } catch (error) {
+      propertyState.formPermissionFields = []
+      propertyState.formProtocolIssue = error.message
+    }
   }
 
   /**
@@ -447,6 +459,7 @@ export function createFormParticipantDomain(context) {
    * @returns {void} 来源非法或当前元素不支持表单时恢复 BPMN 原值。
    */
   function updateFormSource() {
+    try {
     if (!['TEMPLATE', 'EMBEDDED'].includes(propertyState.formSource) || !propertyFlags.value.formSupported) {
       loadPropertyState(selectedElement.value)
       return
@@ -460,6 +473,10 @@ export function createFormParticipantDomain(context) {
     }
     rebuildFormPermissionFields()
     syncFormDefinition()
+    } catch (error) {
+      loadPropertyState(selectedElement.value)
+      emit('error', error)
+    }
   }
 
   /**
@@ -468,8 +485,14 @@ export function createFormParticipantDomain(context) {
    */
   function updateFormKey() {
     if (propertyState.formSource !== 'TEMPLATE') return
-    rebuildFormPermissionFields()
-    syncFormDefinition()
+    try {
+      rebuildFormPermissionFields()
+      syncFormDefinition()
+    } catch (error) {
+      const form = formFieldCatalog.resolveTemplateForm(propertyState.formKey)
+      loadPropertyState(selectedElement.value)
+      emit('error', new Error(`${form?.formName || '正式模板'}：${error.message}`))
+    }
   }
 
   /**

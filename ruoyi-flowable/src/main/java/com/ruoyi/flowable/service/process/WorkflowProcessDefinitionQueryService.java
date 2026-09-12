@@ -614,7 +614,8 @@ public class WorkflowProcessDefinitionQueryService
         {
             throw dataError("流程定义与 BPMN 流程关系不一致");
         }
-        List<StartEvent> startEvents = process.findFlowElementsOfType(StartEvent.class, true);
+        // 发起表单属于主流程；展开子流程内部的开始节点不参与主流程唯一性校验。
+        List<StartEvent> startEvents = process.findFlowElementsOfType(StartEvent.class, false);
         if (startEvents == null || startEvents.size() != 1)
         {
             throw dataError("流程开始节点数据异常");

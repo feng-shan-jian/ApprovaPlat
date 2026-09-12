@@ -36,6 +36,8 @@ import org.flowable.engine.repository.Model;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.transaction.TransactionDefinition;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -54,6 +56,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCategoryMapper;
 import com.ruoyi.flowable.mapper.WfFormMapper;
+import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
 import tools.jackson.databind.JsonNode;
@@ -212,6 +215,8 @@ class WorkflowModelServiceUpdateIntegrationTest
 
     private WorkflowParticipantRuleDeploymentService participantRules;
 
+    private WorkflowIdentityMapper identityMapper;
+
     /**
      * 为每个用例启动独立真实 Flowable H2，并装配生产事务和身份边界。
      *
@@ -242,11 +247,12 @@ class WorkflowModelServiceUpdateIntegrationTest
 
         templateValidator = spy(new WorkflowFormTemplateValidator());
         participantRules = mock(WorkflowParticipantRuleDeploymentService.class);
+        identityMapper = mock(WorkflowIdentityMapper.class);
         service = new WorkflowModelService(engineOperations, repositoryService,
                 new WorkflowBpmnService(repositoryService,
                         mock(WorkflowFormFieldExtensionService.class),
                         mock(WorkflowBpmnEventCodeService.class)),
-                mock(WorkflowBpmnIdentityValidator.class), categoryMapper, formMapper,
+                new WorkflowBpmnIdentityValidator(identityMapper), categoryMapper, formMapper,
                 mock(WorkflowDeploymentArtifactRepository.class),
                 templateValidator,
                 mock(WorkflowExtensionDeploymentService.class),
@@ -254,10 +260,145 @@ class WorkflowModelServiceUpdateIntegrationTest
                 mock(WorkflowConditionDeploymentService.class),
                 participantRules,
                 mock(WorkflowDmnDecisionService.class),
-                mock(WorkflowFormFieldExtensionService.class),
+                new WorkflowFormFieldExtensionService(mock(WorkflowExtensionRegistryService.class)),
                 mock(WorkflowCallActivityReferenceService.class),
                 mock(WorkflowTaskSlaDeploymentService.class),
                 mock(WorkflowRuntimeTaskListenerCompiler.class));
+    }
+
+    /** 指定用户、角色和部门的会签/或签作者模型无需普通办理字段即可保存。 */
+    @ParameterizedTest
+    @CsvSource({ "USER,ALL", "USER,ANY", "ROLE,ALL", "ROLE,ANY", "DEPT,ALL", "DEPT,ANY" })
+    void savesConfiguredMultiInstanceWithoutNativeAssignment(String type, String mode)
+    {
+        allowConfiguredIdentity();
+        String modelId = createModel("multiIdentity", null);
+        when(categoryMapper.selectByCode(ORIGINAL_CATEGORY)).thenReturn(activeCategory());
+        String xml = configuredMultiInstanceBpmn(type, mode);
+        actualRepositoryService.addModelEditorSource(modelId,
+                xml.replace("多实例身份", "初始多实例").getBytes(StandardCharsets.UTF_8));
+        WorkflowModelDto request = new WorkflowModelDto();
+        request.setModelId(modelId);
+        request.setExpectedRevision(snapshot(modelId).revision());
+        request.setBpmnXml(xml);
+
+        WorkflowModelSaveResult saved = service.saveModel(request);
+
+        assertEquals(modelId, saved.modelId());
+        assertArrayEquals(xml.trim().getBytes(StandardCharsets.UTF_8),
+                actualRepositoryService.getModelEditorSource(modelId));
+        assertFalse(xml.contains("flowable:assignee"));
+        assertFalse(xml.contains("approva.assignment."));
+    }
+
+    /** 身份门禁仍核验已选身份的有效性和真实审批资格，失败不改变仓储。 */
+    @ParameterizedTest
+    @CsvSource({ "USER,false", "USER,true", "ROLE,false", "ROLE,true", "DEPT,false", "DEPT,true" })
+    void rejectsInvalidConfiguredIdentityWithoutSaving(String type, boolean active)
+    {
+        when(identityMapper.selectApprovalEligibleUserIdsByRoleIds(any())).thenReturn(List.of(200L));
+        when(identityMapper.selectApprovalEligibleUserIdsByDeptIds(any())).thenReturn(List.of(200L));
+        if (active)
+        {
+            when(identityMapper.selectActiveUserIdsByUserIds(any())).thenReturn(List.of(200L));
+            when(identityMapper.selectActiveRoleIdsByRoleIds(any())).thenReturn(List.of(200L));
+            when(identityMapper.selectActiveDeptIdsByDeptIds(any())).thenReturn(List.of(200L));
+        }
+        String modelId = createModel("multiIdentity", null);
+        when(categoryMapper.selectByCode(ORIGINAL_CATEGORY)).thenReturn(activeCategory());
+        actualRepositoryService.addModelEditorSource(modelId,
+                configuredMultiInstanceBpmn(type, "ALL").getBytes(StandardCharsets.UTF_8));
+        ModelSnapshot before = snapshot(modelId);
+        byte[] beforeXml = actualRepositoryService.getModelEditorSource(modelId);
+        WorkflowModelDto request = new WorkflowModelDto();
+        request.setModelId(modelId);
+        request.setExpectedRevision(before.revision());
+        request.setBpmnXml(configuredMultiInstanceBpmn(type, "ALL"));
+
+        ServiceException failure = assertThrows(ServiceException.class,
+                () -> service.saveModel(request));
+
+        assertEquals(HttpStatus.CONFLICT, failure.getCode());
+        assertNull(failure.getSubCode());
+        assertFalse(failure.getMessage().contains("必须配置办理人"));
+        assertEquals(before, snapshot(modelId));
+        assertArrayEquals(beforeXml, actualRepositoryService.getModelEditorSource(modelId));
+    }
+
+    @Test
+    void repairsInvalidLegacyAuthorIntoNewVersionWithoutRewritingPublishedSource()
+    {
+        allowConfiguredIdentity();
+        String id = createModel("legacy-author-repair", createRealDeployment("legacy-author-deployment").getId());
+        Model fixtureModel = actualRepositoryService.getModel(id);
+        fixtureModel.setCategory(UPDATED_CATEGORY);
+        actualRepositoryService.saveModel(fixtureModel);
+        String legal = configuredMultiInstanceBpmn("USER", "ALL");
+        String legacy = legal.replace("<userTask id=\"review\" name=\"多实例审批\">",
+                "<userTask id=\"review\" name=\"多实例审批\"><extensionElements><flowable:taskListener event=\"create\" delegateExpression=\"${userTaskListener}\"/></extensionElements>");
+        actualRepositoryService.addModelEditorSource(id, legacy.getBytes(StandardCharsets.UTF_8));
+        Model original = actualRepositoryService.getModel(id);
+        WorkflowModelDto request = new WorkflowModelDto();
+        request.setModelId(id);
+        request.setExpectedRevision(((org.flowable.engine.impl.persistence.entity.ModelEntity) original).getRevision());
+        request.setBpmnXml(legacy);
+        assertThrows(ServiceException.class, () -> service.saveModel(request));
+        request.setBpmnXml(legal);
+        WorkflowModelSaveResult saved = service.saveModel(request);
+        assertFalse(id.equals(saved.modelId()));
+        assertEquals(legacy, new String(actualRepositoryService.getModelEditorSource(id), StandardCharsets.UTF_8));
+        assertEquals(legal.trim(), new String(actualRepositoryService.getModelEditorSource(saved.modelId()), StandardCharsets.UTF_8));
+        assertEquals(original.getDeploymentId(), actualRepositoryService.getModel(id).getDeploymentId());
+    }
+
+    /** 测试目录返回有效的已选身份和展开后的直接审批用户。 */
+    private void allowConfiguredIdentity()
+    {
+        when(identityMapper.selectActiveUserIdsByUserIds(any())).thenReturn(List.of(200L));
+        when(identityMapper.selectActiveRoleIdsByRoleIds(any())).thenReturn(List.of(200L));
+        when(identityMapper.selectActiveDeptIdsByDeptIds(any())).thenReturn(List.of(200L));
+        when(identityMapper.selectApprovalEligibleUserIdsByUserIds(any())).thenReturn(List.of(200L));
+        when(identityMapper.selectApprovalEligibleRoleIdsByRoleIds(any())).thenReturn(List.of(200L));
+        when(identityMapper.selectApprovalEligibleDeptIdsByDeptIds(any())).thenReturn(List.of(200L));
+        when(identityMapper.selectApprovalEligibleUserIdsByRoleIds(any())).thenReturn(List.of(200L));
+        when(identityMapper.selectApprovalEligibleUserIdsByDeptIds(any())).thenReturn(List.of(200L));
+    }
+
+    /** 与设计器相同的受控身份属性、并行循环和 ALL/ANY 条件。 */
+    private String configuredMultiInstanceBpmn(String type, String mode)
+    {
+        return """
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                    xmlns:flowable="http://flowable.org/bpmn" targetNamespace="multi-identity-test">
+                  <process id="multiIdentity" name="多实例身份" isExecutable="true">
+                    <extensionElements><flowable:properties>
+                      <flowable:property name="approva.startScope.ruleVersion" value="1"/>
+                      <flowable:property name="approva.startScope.type" value="PUBLIC"/>
+                      <flowable:property name="approva.startScope.targetIds" value=""/>
+                      <flowable:property name="approva.startScope.noMatchPolicy" value="FAIL"/>
+                    </flowable:properties></extensionElements>
+                    <startEvent id="start"><extensionElements>
+                      <flowable:formProperty id="reason" name="事由" type="string"
+                        readable="true" writable="true"/>
+                    </extensionElements></startEvent>
+                    <userTask id="review" name="多实例审批">
+                      <extensionElements><flowable:properties>
+                        <flowable:property name="approva.multiInstance.identityType" value="%s"/>
+                        <flowable:property name="approva.multiInstance.identityIds" value="200"/>
+                      </flowable:properties></extensionElements>
+                      <multiInstanceLoopCharacteristics isSequential="false"
+                        flowable:collection="${multiInstanceHandler.getConfiguredUserIds(execution)}"
+                        flowable:elementVariable="assignee">
+                        <completionCondition>%s</completionCondition>
+                      </multiInstanceLoopCharacteristics>
+                    </userTask>
+                    <endEvent id="end"/>
+                    <sequenceFlow id="toReview" sourceRef="start" targetRef="review"/>
+                    <sequenceFlow id="toEnd" sourceRef="review" targetRef="end"/>
+                  </process>
+                </definitions>
+                """.formatted(type, "ALL".equals(mode)
+                        ? "${nrOfCompletedInstances == nrOfInstances}" : "${nrOfCompletedInstances > 0}");
     }
 
     /**

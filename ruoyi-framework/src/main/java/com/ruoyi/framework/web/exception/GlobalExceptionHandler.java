@@ -123,9 +123,7 @@ public class GlobalExceptionHandler
     @ExceptionHandler(RuntimeException.class)
     public AjaxResult handleRuntimeException(RuntimeException e, HttpServletRequest request)
     {
-        String requestURI = request.getRequestURI();
-        log.error("请求地址'{}',发生未知异常.", requestURI, e);
-        return AjaxResult.error(e.getMessage());
+        return unexpectedFailure(e, request);
     }
 
     /**
@@ -134,9 +132,16 @@ public class GlobalExceptionHandler
     @ExceptionHandler(Exception.class)
     public AjaxResult handleException(Exception e, HttpServletRequest request)
     {
-        String requestURI = request.getRequestURI();
-        log.error("请求地址'{}',发生系统异常.", requestURI, e);
-        return AjaxResult.error(e.getMessage());
+        return unexpectedFailure(e, request);
+    }
+
+    private AjaxResult unexpectedFailure(Exception exception, HttpServletRequest request)
+    {
+        String errorId = java.util.UUID.randomUUID().toString();
+        log.error("请求地址'{}',发生系统异常，定位编号 {}", request.getRequestURI(), errorId, exception);
+        AjaxResult result = AjaxResult.error("系统暂时无法处理请求，请联系管理员，定位编号：" + errorId);
+        result.put("errorId", errorId);
+        return result;
     }
 
     /**

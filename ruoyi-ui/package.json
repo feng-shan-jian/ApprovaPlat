@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "lint": "eslint src tests plugins vite.config.js",
     "test:contracts": "node --test tests/contracts/*.test.js",
-    "test:e2e:designer": "playwright test tests/e2e/workflow-designer.spec.js"
+    "test:e2e:designer": "playwright test tests/e2e/workflow-designer"
   },
   "repository": {
     "type": "git",

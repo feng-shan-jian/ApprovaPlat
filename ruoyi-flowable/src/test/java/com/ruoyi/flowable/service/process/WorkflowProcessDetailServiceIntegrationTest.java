@@ -875,6 +875,30 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(commentBodies(instance.getId())).isEqualTo(storedBefore);
     }
 
+    @Test
+    void acceptsFormalProcessTerminationAuditWithoutTreatingReasonAsTaskOpinion()
+    {
+        for (String action : List.of("CANCEL", "TERMINATE"))
+        {
+            ProcessInstance instance = startMainProcess();
+            Task task = activeTask(instance.getId(), "globalTask");
+            String audit = JsonMapper.shared().createObjectNode().put("action", action)
+                    .put("actorUserId", "100").put("processStatus", "CANCEL".equals(action) ? "canceled" : "terminated")
+                    .put("reason", "正式流程结束原因").put("wasSuspended", false)
+                    .put("requestedInstanceId", instance.getId()).put("rootInstanceId", instance.getId())
+                    .put("processTreeInstanceCount", 1).toString();
+            taskService.addComment(null, instance.getId(), action, audit);
+            Map<String, String> before = commentBodies(instance.getId());
+            var detail = readDetail(instance.getId(), task.getId(), "running");
+            assertThat(detail.historyProcNodeList()).allSatisfy(node -> assertThat(node.comments()).isEmpty());
+            assertThat(commentBodies(instance.getId())).isEqualTo(before);
+            // 相同 JSON 冒充任务审批意见时仍拒绝，不放宽 task opinion 正式协议。
+            taskService.addComment(task.getId(), instance.getId(), action, audit);
+            assertThatThrownBy(() -> readDetail(instance.getId(), task.getId(), "running"))
+                    .hasMessage("流程审批意见结构化审计字段不完整");
+        }
+    }
+
     /**
      * 验证旧数字类型、纯文本正文和畸形 JSON 均不能进入正式历史投影。
      *

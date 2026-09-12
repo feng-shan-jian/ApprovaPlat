@@ -1,5 +1,13 @@
 import request from '@/utils/request'
 
+export function publishDecisionTable(data) {
+  return request({ url: '/workflow/dmn/table', method: 'post', data })
+}
+
+export function evaluateDecisionTable(data) {
+  return request({ url: '/workflow/dmn/table/evaluate', method: 'post', data })
+}
+
 /**
  * 查询全部 Flowable 官方 DMN 来源版本。
  * @returns {Promise<object>} AjaxResult.data 为按 key 和版本排序的决策版本数组。

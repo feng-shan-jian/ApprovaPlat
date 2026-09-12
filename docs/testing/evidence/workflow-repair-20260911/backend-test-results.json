@@ -1,0 +1,347 @@
+[
+  {
+    "name": "com.ruoyi.flowable.mapper.WfBpmnExtensionManagementMySqlIT",
+    "tests": 4,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:11:06.0031970+08:00",
+    "cases": [
+      "readsManagementRowsAndLatestVersion(String, String, boolean, boolean)[1]",
+      "readsManagementRowsAndLatestVersion(String, String, boolean, boolean)[2]",
+      "readsManagementRowsAndLatestVersion(String, String, boolean, boolean)[3]",
+      "readsManagementRowsAndLatestVersion(String, String, boolean, boolean)[4]"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.runtime.WorkflowTimerReadinessTest",
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:13:26.5568861+08:00",
+    "cases": [
+      "matchingDisabledFlagsDoNotReportTimersReadyAndRequiredEnvironmentFailsClosed"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.model.WorkflowCallActivityBusinessRegressionTest",
+    "tests": 10,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:13:33.4587298+08:00",
+    "cases": [
+      "healthyTargetIsVisibleAndLegalMappingPasses(WorkflowFormFieldPermissionMode, boolean)[1]",
+      "healthyTargetIsVisibleAndLegalMappingPasses(WorkflowFormFieldPermissionMode, boolean)[2]",
+      "healthyTargetIsVisibleAndLegalMappingPasses(WorkflowFormFieldPermissionMode, boolean)[3]",
+      "outputCatalogMustExcludeOtherProcessesInSameDeployment",
+      "invalidTargetMustStillFailFinalReferenceValidation",
+      "outputMappingMustRespectParentNodeWritePermission(WorkflowFormFieldPermissionMode)[1]",
+      "outputMappingMustRespectParentNodeWritePermission(WorkflowFormFieldPermissionMode)[2]",
+      "hiddenParentFieldCannotBeMappedIntoChild",
+      "oneInvalidSnapshotMustNotHideHealthyAuthorizedTargets",
+      "unauthorizedCorruptTargetIsAbsentWhileSuspendedAuthorizedTargetHasExplicitStatus"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.model.WorkflowDataObjectBusinessTest",
+    "tests": 13,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:37:35.1525705+08:00",
+    "cases": [
+      "rejectsSameScopeDuplicateButPermitsSharedReferences",
+      "compilerPipelinePreservesReferencedDataObjectsAndTheirRuntimeValues",
+      "messageThrowHasLocatedAuthorWarningAndDeploymentRemainsBlocked",
+      "typedDataObjectInitializesActualProcessVariable(String, String, String)[1]",
+      "typedDataObjectInitializesActualProcessVariable(String, String, String)[2]",
+      "typedDataObjectInitializesActualProcessVariable(String, String, String)[3]",
+      "typedDataObjectInitializesActualProcessVariable(String, String, String)[4]",
+      "typedDataObjectInitializesActualProcessVariable(String, String, String)[5]",
+      "rejectsReservedNamesAndInvalidTypesBeforeConverterCanDropData(String, String, String, String)[1]",
+      "rejectsReservedNamesAndInvalidTypesBeforeConverterCanDropData(String, String, String, String)[2]",
+      "rejectsReservedNamesAndInvalidTypesBeforeConverterCanDropData(String, String, String, String)[3]",
+      "rejectsReservedNamesAndInvalidTypesBeforeConverterCanDropData(String, String, String, String)[4]",
+      "rejectsReservedNamesAndInvalidTypesBeforeConverterCanDropData(String, String, String, String)[5]"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.model.WorkflowDecisionTableBusinessTest",
+    "tests": 4,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:13:38.6235125+08:00",
+    "cases": [
+      "transactionalTrialCleansResourcesAndFrozenVersionSurvivesSourceV2",
+      "actualEngineAppliesDefaultAndCompilerRejectsAmbiguousUniqueRules",
+      "rejectsExpressionsAndMismatchedColumnTypes",
+      "actualDmnEngineEvaluatesBothAmountBranches"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.model.WorkflowMessageThrowBusinessTest",
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:37:38.9927409+08:00",
+    "cases": [
+      "refusesMessageDriftAndInvalidConfigWithOriginalNodeLocation",
+      "preservesAuthorEventAndEnqueuesOnceUsingOriginalNodeInRealTransaction",
+      "senderFailureRollsBackOutboxSequenceAuditAndFlowableInstance"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.model.WorkflowModelServiceUpdateIntegrationTest",
+    "tests": 22,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:37:46.0929631+08:00",
+    "cases": [
+      "updatesAllSupportedMetadataForUndeployedModelExactlyOnce",
+      "deploymentWinnerForcesOptimisticLockConflictWithoutOverwritingWinner",
+      "rejectsInvalidConfiguredIdentityWithoutSaving(String, boolean)[1]",
+      "rejectsInvalidConfiguredIdentityWithoutSaving(String, boolean)[2]",
+      "rejectsInvalidConfiguredIdentityWithoutSaving(String, boolean)[3]",
+      "rejectsInvalidConfiguredIdentityWithoutSaving(String, boolean)[4]",
+      "rejectsInvalidConfiguredIdentityWithoutSaving(String, boolean)[5]",
+      "rejectsInvalidConfiguredIdentityWithoutSaving(String, boolean)[6]",
+      "savesModelWithValidatedAuthorFieldCatalog",
+      "repairsInvalidLegacyAuthorIntoNewVersionWithoutRewritingPublishedSource",
+      "projectsModelCapabilitiesInBothDirections",
+      "rejectsUnknownMetadataFields",
+      "createsFormalInitialAuthorBpmnWithoutRuntimeListenerProtocol",
+      "rejectsBlankDeploymentIdAsCorruptedFormalState",
+      "savesConfiguredMultiInstanceWithoutNativeAssignment(String, String)[1]",
+      "savesConfiguredMultiInstanceWithoutNativeAssignment(String, String)[2]",
+      "savesConfiguredMultiInstanceWithoutNativeAssignment(String, String)[3]",
+      "savesConfiguredMultiInstanceWithoutNativeAssignment(String, String)[4]",
+      "savesConfiguredMultiInstanceWithoutNativeAssignment(String, String)[5]",
+      "savesConfiguredMultiInstanceWithoutNativeAssignment(String, String)[6]",
+      "rejectsModelWithDeploymentIdBeforeAnyMetadataMutation",
+      "rejectsMissingModelResource"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.model.WorkflowTransactionCompensationBusinessTest",
+    "tests": 2,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:13:45.4789579+08:00",
+    "cases": [
+      "cancelWaitsForEveryCompensationAndRetainsFailedJob(boolean)[1]",
+      "cancelWaitsForEveryCompensationAndRetainsFailedJob(boolean)[2]"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.process.WorkflowCollaborationCapabilityProjectionTest",
+    "tests": 6,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:13:45.9957058+08:00",
+    "cases": [
+      "rejectsInboundStatesWhoseProjectedRetryCapabilityIsFalse",
+      "keepsInboundStateAndSideEffectsUnchangedWhenDeadLetterCasFails",
+      "allowsInboundRetryingAndDeadLetterThroughTheSameGate",
+      "consumesOutboundRetryProjectionBeforeCasAndReturnsFormalState",
+      "consumesOutboundCancelProjectionBeforeCasAndReturnsFormalState",
+      "projectsCompleteOutboundAndInboundCapabilityMatrices"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.process.WorkflowProcessDetailServiceIntegrationTest",
+    "tests": 25,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:22:20.1226059+08:00",
+    "cases": [
+      "completedTaskUsesSubmissionSnapshotWithoutCurrentVariableQuery",
+      "readsOnlyCurrentTaskVariablesForActiveLocalForm",
+      "noTaskAndNoFormDetailsDoNotQueryCurrentVariables",
+      "projectsSafeOpinionsWithoutChangingStoredAuditComments",
+      "projectsManualUrgeCapabilityForAuthorizedRunningRoot",
+      "keepsCallActivityChildUrgeCapabilityFalse",
+      "rejectsLegacyAndMalformedComments",
+      "rejectsReturnedApplicationWithoutApplicationSnapshot",
+      "returnedStartFormKeepsSubmissionSnapshotWithoutCurrentVariableQuery",
+      "rollsBackCallActivityWhenRequiredInputMappingIsMissingOrInvalid",
+      "projectsAllTaskActionCapabilitiesFromAuthoritativeFacts",
+      "controlledLoopKeepsPreviousSubmissionInheritance",
+      "retainsRawCommentBodyCapacityGates",
+      "completesCallActivityChildWithItsOwnFormalLifecycle",
+      "returnsUnclaimCapabilityOnCurrentTaskSnapshot",
+      "rejectsMissingApplicationSnapshot",
+      "authorizesProcessBeforeCalculatingManualUrgeCapability",
+      "loadsSchemasFromOneValidatedRootPerSnapshot",
+      "acceptsFormalProcessTerminationAuditWithoutTreatingReasonAsTaskOpinion",
+      "returnedApplicantTaskSkipsFormalMultiInstanceProjection",
+      "rejectsMultipleContradictoryApplicationSnapshots",
+      "keepsSuspendedAndCompletedProcessUrgeCapabilityFalse",
+      "returnedApplicantTaskDisallowsCandidateIdentityDrift",
+      "reusesExistingProjectionWithoutAdditionalFormOrVariableQueries",
+      "readsOnlyRootVariablesForActiveGlobalForm"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.process.WorkflowProcessInstanceTerminationIntegrationTest",
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:22:20.6130521+08:00",
+    "cases": [
+      "terminatesSuspendedCallActivityTreeAndAuditsEveryActiveTask"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.process.WorkflowProcessStartChainIntegrationTest",
+    "tests": 28,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:13:53.0634547+08:00",
+    "cases": [
+      "rejectsDraftCreateAgainstDeletedDefinitionWithStableSubCode",
+      "preservesExistingBusinessSubCodeAcrossDraftConcurrencyClassification",
+      "rejectsDraftSnapshotDriftWithoutSideEffects",
+      "preservesAttachmentStateConflictAndRollsBackStartedInstance",
+      "rejectsDefinitionDeploymentRelationDriftWithStableSubCode",
+      "rejectsDraftSubmitDeploymentDriftWithoutSideEffects",
+      "projectsDeletedDefinitionAsUnavailableWithNotFoundStatus",
+      "rejectsDraftSubmitAgainstSuspendedDefinitionWithoutSideEffects",
+      "rejectsDraftSubmitAgainstDeletedDefinitionWithoutSideEffects",
+      "startsSynchronousEndProcessWithBusinessStatusAlreadyPersisted",
+      "classifiesCreateConcurrencyFailureSeparatelyFromExistingDraftVersionConflict",
+      "projectsSuspendedDefinitionAsUnavailableWithoutMessageClassification",
+      "submitsDraftOncePersistsSameNormalizedFieldsAndReturnsOriginalOnRetry",
+      "rejectsInvalidDraftVariablesWithoutCreatingInstance",
+      "rejectsMissingOrDuplicateRootStart(int)[1]",
+      "rejectsMissingOrDuplicateRootStart(int)[2]",
+      "rejectsStaleRevisionForSaveDeleteAndSubmitWithDraftVersionConflict",
+      "classifiesCreateConcurrencyFailureRaisedDuringTransactionCommit",
+      "projectsDefinitionVersionExpiryFromStatusAndStableSubCode",
+      "rejectsDraftSubmitAgainstNewerDefinitionWithoutSideEffects",
+      "readOnlyPreviewDenialKeepsGenericContractWithoutWriteFailureMetric",
+      "submitsTemporaryAttachmentFirstReferencedAfterDraftCreation",
+      "reusesValidatedSnapshotAndPreservesEntryErrorSemantics",
+      "attachmentFailureLeavesNoInstanceAndKeepsDraftActive",
+      "rollsBackInstanceAndAttachmentWhenDraftStateUpdateFails",
+      "startsAndCompletesEmbeddedSubprocessUsingRootForm(int)[1]",
+      "startsAndCompletesEmbeddedSubprocessUsingRootForm(int)[2]",
+      "rejectsAttachmentQuotaExceededWithStableSubCode"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.process.WorkflowProcessWaitingBusinessTest",
+    "tests": 2,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:13:58.8490232+08:00",
+    "cases": [
+      "readsActualSubscriptionsReceivesAndTimerJobsThenReflectsConsumption",
+      "fiveSecondTimerSurvivesExecutorDowntimeAndResumesWithoutManualTrigger"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.process.WorkflowReliableMessageBusinessTest",
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:13:59.4443368+08:00",
+    "cases": [
+      "rejectsAmbiguitySuspensionAndNonWhitelistedVariablesWithoutConsuming",
+      "consumesOnlyExactTargetAndReplaysWithoutDuplicateTasks",
+      "persistsFailureThenCompensatesAfterTargetArrivesWithoutBypassingCollaborationGate"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.task.WorkflowMultiInstanceContinuousReturnIntegrationTest",
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:14:02.7428327+08:00",
+    "cases": [
+      "returnsThirdAnyWithSiblingsAndDoesNotReopenItDirectly",
+      "rebuildsControlledFirstApprovalWhenReturnSourceIsLaterAny",
+      "returnsFromSecondAllAndReplaysFromOrdinaryFirstApproval"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.task.WorkflowMultiInstanceGroupReturnIntegrationTest",
+    "tests": 2,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:14:03.3229236+08:00",
+    "cases": [
+      "returnsWholeLaterAllRoundAfterOneMemberCompleted",
+      "returnsFirstAnyRoundWithoutRegisteringApplicantAsApprovalRound"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.task.WorkflowMultiInstanceReturnedTerminationIntegrationTest",
+    "tests": 2,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:14:03.9300115+08:00",
+    "cases": [
+      "terminatesReturnedFirstMultiInstanceApplicantRoot",
+      "terminatesActiveMultiInstanceRound"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.task.WorkflowTaskReturnChainIntegrationTest",
+    "tests": 18,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:14:07.2039245+08:00",
+    "cases": [
+      "acceptsExplicitRunningBusinessStatus",
+      "rejectsMissingProcessStatus",
+      "returnsSecondApprovalToApplicantWithHistoricSourceComment",
+      "normalizesExpectedResubmitIneligibilityAcrossLifecycle",
+      "rejectsConflictingBusinessStatus(String)[1]",
+      "rejectsConflictingBusinessStatus(String)[2]",
+      "rejectsConflictingBusinessStatus(String)[3]",
+      "rejectsConflictingBusinessStatus(String)[4]",
+      "resubmitsApplicationAndRestoresOriginalAssignment",
+      "rejectsParallelReturnWithoutPartialSideEffects",
+      "rejectsConflictingProcessStatus",
+      "projectsApplicationResubmitCapabilityWithoutSideEffects",
+      "propagatesDamagedSubmissionSnapshotFromResubmitCapability",
+      "rejectsResubmitProtocolDriftWithoutWeakeningWriteGate(String)[1]",
+      "rejectsResubmitProtocolDriftWithoutWeakeningWriteGate(String)[2]",
+      "rejectsResubmitProtocolDriftWithoutWeakeningWriteGate(String)[3]",
+      "rejectsResubmitProtocolDriftWithoutWeakeningWriteGate(String)[4]",
+      "rejectsResubmitProtocolDriftWithoutWeakeningWriteGate(String)[5]"
+    ]
+  },
+  {
+    "name": "com.ruoyi.flowable.service.task.WorkflowTaskRevokeApplicationServiceIntegrationTest",
+    "tests": 6,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reportWriteTime": "2026-09-11T09:33:23.5740933+08:00",
+    "cases": [
+      "capabilityUsesSameRulesWithoutWrites",
+      "rejectsWhenSuccessorHasAlreadyCompleted",
+      "revokesUntouchedSuccessorWithConsistentAuditAndState",
+      "rejectsUserWhoDidNotCompleteSourceTask",
+      "rollsBackWhenSuccessorChangesDuringLockRevalidation",
+      "rejectsUnsafeBpmnStructure"
+    ]
+  }
+]

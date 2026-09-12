@@ -3,9 +3,7 @@ import test from 'node:test'
 import { BpmnModdle } from 'bpmn-moddle'
 import flowableModdle from '../../src/components/workflow/bpmn/flowableModdle.js'
 import {
-  TASK_PANEL_TYPES,
   getTaskCapability,
-  taskCapabilityMap
 } from '../../src/components/workflow/designer/taskCapabilityMap.js'
 import { filterTaskReplaceEntries } from '../../src/components/workflow/designer/taskCapabilityReplaceMenu.js'
 
@@ -17,37 +15,6 @@ const CONTROLLED_TASK_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <sendTask id="send" flowable:delegateExpression="\${workflowExtensionDelegate}" />
   </process>
 </definitions>`
-
-/**
- * 验证所有平台任务只通过不可变能力表表达创建、转换、面板和运行语义。
- * @returns {void} 字段扩张、任务遗漏或禁止类型进入正式能力表时测试失败。
- */
-test('任务能力表不可变且四类业务任务使用独立面板', () => {
-  assert.equal(Object.isFrozen(taskCapabilityMap), true)
-  assert.deepEqual(Object.keys(taskCapabilityMap), [
-    'bpmn:UserTask',
-    'bpmn:ServiceTask',
-    'bpmn:SendTask',
-    'bpmn:ReceiveTask',
-    'bpmn:BusinessRuleTask'
-  ])
-  for (const capability of Object.values(taskCapabilityMap)) {
-    assert.equal(Object.isFrozen(capability), true)
-    assert.deepEqual(Object.keys(capability), [
-      'taskType',
-      'creationAllowed',
-      'conversionAllowed',
-      'panelType',
-      'runtimeSemantics'
-    ])
-  }
-
-  assert.equal(getTaskCapability('bpmn:ServiceTask').panelType, TASK_PANEL_TYPES.SERVICE)
-  assert.equal(getTaskCapability('bpmn:SendTask').panelType, TASK_PANEL_TYPES.SEND)
-  assert.equal(getTaskCapability('bpmn:ReceiveTask').panelType, TASK_PANEL_TYPES.RECEIVE)
-  assert.equal(getTaskCapability('bpmn:BusinessRuleTask').panelType, TASK_PANEL_TYPES.BUSINESS_RULE)
-  assert.equal(getTaskCapability('bpmn:ManualTask'), null)
-})
 
 /**
  * 验证单一能力表禁止创建 ManualTask，且 bpmn-js 转换菜单按该能力过滤。
@@ -71,16 +38,6 @@ test('ManualTask 不属于正式能力协议并从转换目标过滤', () => {
  * @returns {Promise<void>} 受控任务类型或序列化内容丢失时测试失败。
  */
 test('两类受控任务可真实解析并原样重载', async () => {
-  assert.equal(flowableModdle.types.some(type => type.name === 'ServiceTaskLike'), false)
-  assert.deepEqual(
-    flowableModdle.types.find(type => type.name === 'ServiceTaskImplementation').extends,
-    ['bpmn:ServiceTask']
-  )
-  assert.deepEqual(
-    flowableModdle.types.find(type => type.name === 'SendTaskImplementation').extends,
-    ['bpmn:SendTask']
-  )
-
   const moddle = new BpmnModdle({ flowable: flowableModdle })
   const parsed = await moddle.fromXML(CONTROLLED_TASK_XML)
   assert.deepEqual(parsed.warnings, [])

@@ -12,6 +12,7 @@
     </header>
 
     <el-row :gutter="10" class="mb8">
+      <el-col :span="1.5"><el-button type="primary" icon="Plus" v-hasPermi="['workflow:dmn:add']" @click="tableDialogOpen = true">创建决策表</el-button></el-col>
       <el-col :span="1.5">
         <el-button type="primary" plain icon="Upload" v-hasPermi="['workflow:dmn:add']" @click="openDeploy">部署 DMN</el-button>
       </el-col>
@@ -63,17 +64,27 @@
         <el-button type="primary" :loading="saving" @click="submit">部署</el-button>
       </template>
     </el-dialog>
+    <el-dialog v-model="tableDialogOpen" title="创建业务决策表" width="min(1240px, 94vw)" destroy-on-close :close-on-click-modal="false" append-to-body>
+      <DecisionTableEditor @published="handleTablePublished" />
+    </el-dialog>
   </div>
 </template>
 
 <script setup name="WorkflowDmn">
 import { deployDmnDecision, listDmnDecisions, removeDmnDeployment } from '@/api/workflow/dmn'
+import DecisionTableEditor from '@/components/workflow/DecisionTableEditor.vue'
 
 const { proxy } = getCurrentInstance()
 const loading = ref(false)
 const saving = ref(false)
 const rows = ref([])
 const dialogOpen = ref(false)
+const tableDialogOpen = ref(false)
+async function handleTablePublished() {
+  tableDialogOpen.value = false
+  proxy.$modal.msgSuccess('决策表已发布')
+  await loadRows()
+}
 const formRef = ref(null)
 const uploadRef = ref(null)
 const form = reactive(emptyForm())

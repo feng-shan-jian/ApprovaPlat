@@ -111,7 +111,7 @@ public class WorkflowConditionDeploymentService
         {
             throw new ServiceException("条件分支执行资源编译失败", HttpStatus.ERROR);
         }
-        return new WorkflowPreparedConditionDeployment(compiled, snapshots);
+        return new WorkflowPreparedConditionDeployment(WorkflowBpmnXmlPreserver.restore(compiled, inputBpmn), snapshots);
     }
 
     /**

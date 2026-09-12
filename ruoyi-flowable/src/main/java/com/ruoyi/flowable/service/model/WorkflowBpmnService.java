@@ -246,6 +246,7 @@ public class WorkflowBpmnService
         {
             validateRawExtensionProperties(bpmnXml, validationContext);
             validateRawBusinessBoundarySemantics(bpmnXml);
+            validateDataObjects(bpmnXml);
             org.flowable.bpmn.model.BpmnModel bpmnModel = parseSecurely(bpmnXml);
             List<WorkflowBpmnFormReference> references = validateModel(
                     bpmnModel, requireStartForm, validationContext);
@@ -300,6 +301,12 @@ public class WorkflowBpmnService
                                 reader.getAttributeValue(null, "id"),
                                 "ComplexGateway 可编辑和导出，但 Flowable 8 不支持部署执行"));
                     }
+                    else if ("participant".equals(localName)
+                            && !hasText(reader.getAttributeValue(null, "processRef")))
+                    {
+                        issues.add(new WorkflowBpmnValidationIssue("BPMN_EXTERNAL_POOL", "WARNING",
+                                currentElementId, "外部池仅用于作者表达，当前协作部署需要每个参与者绑定本地可执行流程"));
+                    }
                     else if ("standardLoopCharacteristics".equals(localName))
                     {
                         issues.add(new WorkflowBpmnValidationIssue(
@@ -317,6 +324,26 @@ public class WorkflowBpmnService
                 reader.next();
             }
             issues.addAll(scanForeignPrivateExtensions(document.bpmnXml()));
+            for (org.flowable.bpmn.model.Process process : document.bpmnModel().getProcesses())
+            {
+                if (!process.isExecutable())
+                {
+                    issues.add(new WorkflowBpmnValidationIssue("BPMN_NON_EXECUTABLE_POOL", "WARNING",
+                            diagnosticElementId(document.bpmnXml(), process.getId()), "非执行池仅支持作者保存和往返，当前版本不能部署执行此协作文档"));
+                }
+                for (org.flowable.bpmn.model.ThrowEvent event : process.findFlowElementsOfType(
+                        org.flowable.bpmn.model.ThrowEvent.class, true))
+                {
+                    if (event.getEventDefinitions().stream().anyMatch(
+                            org.flowable.bpmn.model.MessageEventDefinition.class::isInstance)
+                            && WorkflowMessageThrowContract.readConfig(event) == null)
+                    {
+                        issues.add(new WorkflowBpmnValidationIssue("BPMN_MESSAGE_THROW_NOT_EXECUTABLE",
+                                "WARNING", event.getId(),
+                                "消息抛出尚未配置可靠消息发送参数，请选择接收端点、目标流程及关联条件后部署"));
+                    }
+                }
+            }
         }
         catch (XMLStreamException exception)
         {
@@ -425,6 +452,7 @@ public class WorkflowBpmnService
                 || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name)
                 || generatedSlaProperty
                 || conditionRuleProperty
+                || WorkflowMessageThrowContract.CONFIG_PROPERTY.equals(name)
                 || WorkflowAutoCopyRuleContract.isReservedProperty(name)
                 || WorkflowMultiInstanceModelContract.isReservedProperty(name);
         if (!EXTENSION_PROPERTY_NAME_PATTERN.matcher(name).matches()
@@ -436,7 +464,8 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("同一元素的通用扩展属性名不能重复", null);
         }
-        int maximumValueLength = conditionRuleProperty
+        int maximumValueLength = WorkflowMessageThrowContract.CONFIG_PROPERTY.equals(name)
+                ? WorkflowMessageThrowContract.MAX_CONFIG_LENGTH : conditionRuleProperty
                 ? WorkflowConditionRuleBpmnContract.MAX_CONFIG_LENGTH
                 : WorkflowAutoCopyRuleContract.isReservedProperty(name)
                         ? WorkflowAutoCopyRuleContract.MAX_PROPERTY_LENGTH
@@ -516,14 +545,122 @@ public class WorkflowBpmnService
      */
     public void validateDeployable(WorkflowBpmnDocument document)
     {
-        List<WorkflowBpmnValidationIssue> issues = deploymentCompatibilityIssues(document);
+        List<WorkflowBpmnValidationIssue> issues = authorValidationIssues(document);
         if (!issues.isEmpty())
         {
-            WorkflowBpmnValidationIssue issue = issues.get(0);
-            throw new ServiceException(issue.message(), HttpStatus.BAD_REQUEST)
-                    .setSubCode(issue.code());
+            throw new WorkflowBpmnValidationException(issues.stream()
+                    .map(issue -> new WorkflowBpmnValidationIssue(issue.code(), "ERROR",
+                            issue.elementId(), issue.message(), issue.processId())).toList()).asServiceException();
         }
-        validateWithFlowable(document.bpmnModel());
+    }
+
+    private void validateDataObjects(String xml)
+    {
+        XMLStreamReader reader = null;
+        try
+        {
+            reader = createSecureXmlInputFactory().createXMLStreamReader(new java.io.StringReader(xml));
+            WorkflowDataObjectContract.validate(reader);
+        }
+        catch (XMLStreamException exception) { throw invalidBpmn("数据对象 XML 解析失败", exception); }
+        finally { closeXmlReader(reader); }
+    }
+
+    /** 作者能力警告与引擎致命错误同时返回，不能因一个不可部署图元跳过其他错误。 */
+    public List<WorkflowBpmnValidationIssue> authorValidationIssues(WorkflowBpmnDocument document)
+    {
+        List<WorkflowBpmnValidationIssue> issues = new ArrayList<>(deploymentCompatibilityIssues(document));
+        // 官方验证器检查实际执行结构。仅在副本中编译已受控的消息事件，所有引擎错误仍照常返回。
+        var validationModel = parseSecurely(document.bpmnXml());
+        for (Process process : validationModel.getProcesses())
+            for (org.flowable.bpmn.model.ThrowEvent event : new ArrayList<>(process.findFlowElementsOfType(
+                    org.flowable.bpmn.model.ThrowEvent.class, true)))
+                if (WorkflowMessageThrowContract.readConfig(event) != null)
+                    WorkflowMessageThrowContract.compile(validationModel, process, event);
+        List<ValidationError> errors = repositoryService.validateProcess(validationModel);
+        if (errors == null) throw invalidBpmn("流程规则校验服务未返回结果", null);
+        for (ValidationError error : errors)
+        {
+            if (error.isWarning() || isControlledAuthorSendTaskValidationError(document.bpmnModel(), error)) continue;
+            boolean messageThrowCapability = "flowable-throw-event-invalid-eventdefinition".equals(error.getProblem())
+                    && issues.stream().anyMatch(issue -> "BPMN_MESSAGE_THROW_NOT_EXECUTABLE".equals(issue.code())
+                            && java.util.Objects.equals(issue.elementId(), error.getActivityId()));
+            if (messageThrowCapability) continue;
+            String problem = error.getProblem();
+            String code = problem != null && problem.matches("[a-zA-Z0-9_-]{1,128}")
+                    ? "BPMN_" + problem.toUpperCase(Locale.ROOT).replace('-', '_') : "BPMN_ENGINE_VALIDATION_ERROR";
+            String message = switch (problem == null ? "" : problem)
+            {
+                case "flowable-data-object-missing-name" -> "数据对象缺少数据变量名称，请在数据对象属性中配置";
+                case "flowable-throw-event-invalid-eventdefinition" -> "当前抛出事件类型没有受支持的执行实现";
+                case "flowable-sequenceflow-source-invalid" -> "顺序流的来源元素不存在或不合法";
+                case "flowable-sequenceflow-target-invalid" -> "顺序流的目标元素不存在或不合法";
+                default -> "该元素未通过流程执行规则校验，请检查节点配置及连线";
+            };
+            issues.add(new WorkflowBpmnValidationIssue(code, "ERROR",
+                    diagnosticElementId(document.bpmnXml(), error.getActivityId()), message, error.getProcessDefinitionId()));
+        }
+        Map<String, String> processIds = diagnosticProcessIds(document.bpmnXml());
+        return issues.stream().map(issue -> new WorkflowBpmnValidationIssue(issue.code(), issue.severity(),
+                issue.elementId(), issue.message(), issue.processId() != null ? issue.processId()
+                        : processIds.get(issue.elementId()))).toList();
+    }
+
+    /** 保留原 XML 中的数据引用和 Participant 归属，不依赖转换器是否保留装饰元素。 */
+    private Map<String, String> diagnosticProcessIds(String xml)
+    {
+        Map<String, String> result = new java.util.HashMap<>();
+        XMLStreamReader reader = null;
+        try
+        {
+            reader = createSecureXmlInputFactory().createXMLStreamReader(new java.io.StringReader(xml));
+            String processId = null;
+            while (reader.hasNext())
+            {
+                if (reader.isStartElement()
+                        && "http://www.omg.org/spec/BPMN/20100524/MODEL".equals(reader.getNamespaceURI()))
+                {
+                    String id = reader.getAttributeValue(null, "id");
+                    if ("process".equals(reader.getLocalName())) processId = id;
+                    if (id != null && processId != null) result.put(id, processId);
+                    if (id != null && "participant".equals(reader.getLocalName()))
+                        result.put(id, reader.getAttributeValue(null, "processRef"));
+                }
+                else if (reader.isEndElement() && "process".equals(reader.getLocalName())
+                        && "http://www.omg.org/spec/BPMN/20100524/MODEL".equals(reader.getNamespaceURI())) processId = null;
+                reader.next();
+            }
+            return result;
+        }
+        catch (XMLStreamException exception) { throw invalidBpmn("BPMN XML 流程归属解析失败", exception); }
+        finally { closeXmlReader(reader); }
+    }
+
+    private String diagnosticElementId(String xml, String activityId)
+    {
+        if (!hasText(activityId)) return null;
+        XMLStreamReader reader = null;
+        try
+        {
+            reader = createSecureXmlInputFactory().createXMLStreamReader(new java.io.StringReader(xml));
+            while (reader.hasNext())
+            {
+                if (reader.isStartElement() && (("dataObjectReference".equals(reader.getLocalName())
+                        && activityId.equals(reader.getAttributeValue(null, "dataObjectRef")))
+                        || ("participant".equals(reader.getLocalName())
+                        && activityId.equals(reader.getAttributeValue(null, "processRef")))))
+                {
+                    return reader.getAttributeValue(null, "id");
+                }
+                reader.next();
+            }
+            return activityId;
+        }
+        catch (XMLStreamException exception)
+        {
+            throw invalidBpmn("BPMN XML 诊断定位失败", exception);
+        }
+        finally { closeXmlReader(reader); }
     }
 
     /**
@@ -640,7 +777,7 @@ public class WorkflowBpmnService
             {
                 throw invalidBpmn("用户任务办理规则不能配置在流程级", null);
             }
-            if (validationContext == ValidationContext.AUTHOR
+            if (process.isExecutable() && validationContext == ValidationContext.AUTHOR
                     && !WorkflowParticipantRuleBpmnContract.hasStartProperties(process))
             {
                 throw invalidBpmn("每个可执行流程必须配置完整发起范围", null);
@@ -668,10 +805,12 @@ public class WorkflowBpmnService
                     .filter(StartEvent.class::isInstance)
                     .map(StartEvent.class::cast)
                     .toList();
-            if (startEvents.size() != 1)
+            if (process.isExecutable() && startEvents.size() != 1)
             {
                 throw invalidBpmn("每个流程必须且只能包含一个开始节点", null);
             }
+            if (process.isExecutable())
+            {
             StartEvent startEvent = startEvents.get(0);
             boolean startHasTemplate = hasText(startEvent.getFormKey());
             boolean startHasEmbedded = hasEmbeddedFormProperties(
@@ -688,12 +827,13 @@ public class WorkflowBpmnService
                 addNodeFormReference(process.getId(), startEvent.getFormKey(), startEvent.getFormProperties(),
                         startEvent.getId(), startEvent.getName(), references, uniqueReferences);
             }
+            }
 
             for (UserTask userTask : process.findFlowElementsOfType(UserTask.class, true))
             {
-                if (hasText(userTask.getFormKey())
+                if (process.isExecutable() && (hasText(userTask.getFormKey())
                         || hasEmbeddedFormProperties(userTask.getFormKey(),
-                                userTask.getFormProperties()))
+                                userTask.getFormProperties())))
                 {
                     addNodeFormReference(process.getId(), userTask.getFormKey(), userTask.getFormProperties(),
                             userTask.getId(), userTask.getName(), references, uniqueReferences);
@@ -710,6 +850,15 @@ public class WorkflowBpmnService
             }
 
             validateBpmnBusinessEvents(bpmnModel, process);
+            if (WorkflowMessageThrowContract.readConfig(process) != null)
+                throw invalidBpmn("可靠消息配置不能放置在流程上", null);
+            for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
+            {
+                if (WorkflowMessageThrowContract.readConfig(element) == null) continue;
+                if (validationContext != ValidationContext.AUTHOR)
+                    throw invalidBpmn("执行资源不能保留消息抛出作者配置", null);
+                WorkflowMessageThrowContract.validate(bpmnModel, (org.flowable.bpmn.model.ThrowEvent) element);
+            }
 
             // 多实例结构和动态成员初始化拓扑必须先于顺序流表达式校验，确保不可执行拓扑返回准确诊断。
             validateMultiInstanceActivities(process, validationContext);
@@ -1992,17 +2141,6 @@ public class WorkflowBpmnService
      * @param bpmnModel org.flowable.bpmn.model.BpmnModel，已通过模块安全规则的模型
      * @return 无返回值
      */
-    private void validateWithFlowable(org.flowable.bpmn.model.BpmnModel bpmnModel)
-    {
-        List<ValidationError> errors = repositoryService.validateProcess(bpmnModel);
-        if (errors != null && errors.stream()
-                .anyMatch(error -> !error.isWarning()
-                        && !isControlledAuthorSendTaskValidationError(bpmnModel, error)))
-        {
-            throw invalidBpmn("BPMN 流程规则校验失败", null);
-        }
-    }
-
     /**
      * 判断官方错误是否仅来自已通过平台约束的作者 SendTask 缺少原生实现类型。
      *

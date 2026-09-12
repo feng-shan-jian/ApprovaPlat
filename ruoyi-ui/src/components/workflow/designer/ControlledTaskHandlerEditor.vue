@@ -18,6 +18,7 @@
     v-if="selectedImplementation === 'COLLABORATION_OUTBOX_V1'"
     :model-value="state.extensionConfig"
     :endpoints="connectorEndpoints"
+    :allow-point-to-point="messageThrow"
     @update:model-value="updateConfig"
     @change="emit('change')"
   />
@@ -71,6 +72,7 @@ import SqlConnectorEditor from './SqlConnectorEditor.vue'
 const props = defineProps({
   /** 父面板持有的受控扩展键与 JSON 配置状态。 */
   state: { type: Object, required: true },
+  messageThrow: { type: Boolean, default: false },
   /** 服务端正式扩展目录的已启用精确版本。 */
   options: { type: Array, default: () => [] },
   /** 服务端正式 HTTP 端点目录，不包含密钥正文。 */

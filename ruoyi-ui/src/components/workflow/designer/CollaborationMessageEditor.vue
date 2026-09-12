@@ -5,7 +5,13 @@
         <el-option v-for="endpoint in endpoints" :key="endpoint.endpointId" :label="endpoint.endpointName" :value="endpoint.endpointKey" />
       </el-select>
     </el-form-item>
-    <el-form-item label="接收路径" required>
+    <el-form-item v-if="allowPointToPoint" label="投递方式" required>
+      <el-select v-model="draft.path" @change="emitChange">
+        <el-option label="独立流程消息" value="/workflow/runtime-event/message/reliable" />
+        <el-option label="跨池协作（需消息流声明）" value="/workflow/runtime-event/collaboration/message" />
+      </el-select>
+    </el-form-item>
+    <el-form-item v-else label="接收路径" required>
       <el-input v-model="draft.path" maxlength="512" @change="emitChange" />
     </el-form-item>
     <el-form-item label="消息名称" required>
@@ -29,6 +35,7 @@
 <script setup name="CollaborationMessageEditor">
 const props = defineProps({
   modelValue: { type: String, default: '{}' },
+  allowPointToPoint: { type: Boolean, default: false },
   endpoints: { type: Array, default: () => [] }
 })
 const emit = defineEmits(['update:modelValue', 'change'])
@@ -38,7 +45,7 @@ const draft = reactive(emptyConfig())
 function emptyConfig() {
   return {
     endpointKey: props.endpoints[0]?.endpointKey || '',
-    path: '/workflow/runtime-event/collaboration/message',
+    path: props.allowPointToPoint ? '/workflow/runtime-event/message/reliable' : '/workflow/runtime-event/collaboration/message',
     messageName: '',
     targetProcessDefinitionKey: '',
     correlationVariable: '',

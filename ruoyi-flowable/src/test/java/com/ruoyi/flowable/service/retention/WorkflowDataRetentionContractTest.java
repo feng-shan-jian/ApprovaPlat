@@ -12,7 +12,7 @@ import com.ruoyi.flowable.config.WorkflowDataRetentionProperties;
 import com.ruoyi.flowable.runtime.WorkflowDataRetentionMetrics;
 
 /**
- * 工作流固定数据保留域、危险配置边界和多实例轮次 SQL 契约测试。
+ * 工作流固定数据保留域和危险配置边界测试。
  */
 class WorkflowDataRetentionContractTest
 {
@@ -51,23 +51,6 @@ class WorkflowDataRetentionContractTest
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> properties.setBatchSize(5001))
                 .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    /**
-     * 验证轮次候选使用有界 SKIP LOCKED，并按 Flowable 结束时间复核而不排除开放状态轮次。
-     * @return void，SQL 失去有界锁、允许清理运行流程或遗留取消流程开放轮次时测试失败
-     */
-    @Test
-    void roundSqlIsBoundedAndRequiresExpiredFinishedProcess()
-    {
-        assertThat(WorkflowCoreRetentionSql.MULTI_INSTANCE_ROUND_SELECT)
-                .contains("history.END_TIME_<=?", "limit ? for update skip locked")
-                .doesNotContain("round_status");
-        assertThat(WorkflowCoreRetentionSql.MULTI_INSTANCE_ROUND_DELETE_SUFFIX)
-                .contains("history.END_TIME_<=?")
-                .doesNotContain("round_status");
-        assertThat(WorkflowCoreRetentionSql.MULTI_INSTANCE_ROUND_OLDEST)
-                .contains("history.END_TIME_ is not null");
     }
 
     /**

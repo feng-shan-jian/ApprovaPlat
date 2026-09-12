@@ -403,7 +403,7 @@ public class WorkflowStartVariableValidator
      * @param fieldName String，客户端变量或部署表单 schema 字段名
      * @return boolean，客户端不得声明或覆盖时返回 true
      */
-    private boolean isReservedVariable(String fieldName)
+    public static boolean isReservedVariable(String fieldName)
     {
         return RESERVED_VARIABLES.contains(fieldName)
                 || WorkflowControlledLoopBpmnContract.isReservedRuntimeVariable(fieldName)

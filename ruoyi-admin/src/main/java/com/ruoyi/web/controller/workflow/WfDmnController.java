@@ -18,6 +18,8 @@ import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.flowable.domain.dto.WorkflowDmnDeploymentRequest;
 import com.ruoyi.flowable.service.model.WorkflowDmnDecisionService;
+import com.ruoyi.flowable.service.model.WorkflowDecisionTableService;
+import com.ruoyi.flowable.domain.dto.WorkflowDecisionTableRequest;
 
 /**
  * Flowable 官方 DMN 决策版本管理接口。
@@ -28,15 +30,17 @@ import com.ruoyi.flowable.service.model.WorkflowDmnDecisionService;
 public class WfDmnController extends BaseController
 {
     private final WorkflowDmnDecisionService decisionService;
+    private final WorkflowDecisionTableService tableService;
 
     /**
      * 创建 DMN 管理 Controller。
      * @param decisionService WorkflowDmnDecisionService，官方 DMN 目录与冻结服务
      * @return void，构造后由 Spring 管理
      */
-    public WfDmnController(WorkflowDmnDecisionService decisionService)
+    public WfDmnController(WorkflowDmnDecisionService decisionService, WorkflowDecisionTableService tableService)
     {
         this.decisionService = decisionService;
+        this.tableService = tableService;
     }
 
     /**
@@ -73,6 +77,22 @@ public class WfDmnController extends BaseController
     public AjaxResult deploy(@Valid @RequestBody WorkflowDmnDeploymentRequest request)
     {
         return success(Map.of("deploymentId", decisionService.deploy(request)));
+    }
+
+    @PreAuthorize("@ss.hasPermi('workflow:dmn:add')")
+    @Log(title = "决策表发布", businessType = BusinessType.INSERT)
+    @RepeatSubmit
+    @PostMapping("/table")
+    public AjaxResult publishTable(@RequestBody WorkflowDecisionTableRequest request)
+    {
+        return success(Map.of("deploymentId", tableService.publish(request)));
+    }
+
+    @PreAuthorize("@ss.hasPermi('workflow:dmn:add')")
+    @PostMapping("/table/evaluate")
+    public AjaxResult evaluateTable(@RequestBody WorkflowDecisionTableRequest request)
+    {
+        return success(tableService.evaluate(request));
     }
 
     /**

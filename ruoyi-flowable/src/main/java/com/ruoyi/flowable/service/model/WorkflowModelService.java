@@ -411,11 +411,14 @@ public class WorkflowModelService
             {
                 Model source = requireModel(modelId);
                 byte[] currentBpmnBytes = requireModelSource(modelId);
-                String currentBpmnXml = bpmnService.validateDraft(currentBpmnBytes).bpmnXml();
+                // 旧源码可能来自历史协议。比较内容不需要执行作者校验，否则合法修复也无法另存版本。
+                String currentBpmnXml = new String(currentBpmnBytes, StandardCharsets.UTF_8);
 
                 // 相同内容无需写库，也无需为重复点击或响应丢失建立额外幂等持久化。
                 if (normalizeBpmnXml(bpmnXml).equals(normalizeBpmnXml(currentBpmnXml)))
                 {
+                    // 同内容仍维持原有作者门禁，不能以幂等返回掩盖非法提交。
+                    bpmnService.validateDraft(bpmnBytes);
                     return toSaveResult(source);
                 }
                 if (modelRevision(source) != expectedRevision)
@@ -424,9 +427,10 @@ public class WorkflowModelService
                 }
 
                 WorkflowBpmnDocument document = bpmnService.validateForSave(bpmnBytes);
-                validateDeploymentReferences(document);
+                AuthorValidationContext authorValidation = validateDeploymentReferences(document);
                 // 保存阶段使用服务端当前身份和正式目录重新核验，客户端 XML 不能夹带越权定义 ID。
-                callActivityReferenceService.validateAuthorReferences(document, identity);
+                callActivityReferenceService.validateAuthorReferences(document, identity,
+                        callActivityFormContents(authorValidation));
 
                 requireActiveCategory(source.getCategory());
                 Model latest = latestModel(source.getKey());
@@ -510,19 +514,19 @@ public class WorkflowModelService
             {
                 WorkflowBpmnDocument document = bpmnService.validateForSave(
                         source.getBytes(StandardCharsets.UTF_8));
-                validateDeploymentReferences(document);
-                callActivityReferenceService.validateAuthorReferences(document);
-                List<WorkflowBpmnValidationIssue> compatibilityIssues =
-                        bpmnService.deploymentCompatibilityIssues(document);
-                if (compatibilityIssues.isEmpty())
-                {
-                    bpmnService.validateDeployable(document);
-                }
-                return new WorkflowBpmnValidationReport(true, compatibilityIssues);
+                AuthorValidationContext authorValidation = validateDeploymentReferences(document);
+                callActivityReferenceService.validateAuthorReferences(document, callActivityFormContents(authorValidation));
+                List<WorkflowBpmnValidationIssue> issues = bpmnService.authorValidationIssues(document);
+                return new WorkflowBpmnValidationReport(
+                        issues.stream().noneMatch(issue -> "ERROR".equals(issue.severity())), issues);
             });
         }
         catch (ServiceException exception)
         {
+            if (exception.getCause() instanceof WorkflowBpmnValidationException validation)
+            {
+                return new WorkflowBpmnValidationReport(false, validation.issues());
+            }
             WorkflowBpmnValidationIssue issue = new WorkflowBpmnValidationIssue(
                     validationCode(exception), "ERROR", null,
                     requireText(exception.getMessage(), "BPMN 校验失败"));
@@ -692,7 +696,8 @@ public class WorkflowModelService
                     dmnDecisionService.prepare(participantDeployment.compiledBpmn());
             WorkflowPreparedCallActivityDeployment callActivityDeployment =
                     callActivityReferenceService.prepare(
-                            dmnDeployment.compiledBpmn(), document, identity);
+                            dmnDeployment.compiledBpmn(), document, identity,
+                            callActivityFormContents(authorValidation));
             byte[] executableBpmn = callActivityDeployment.compiledBpmn();
             WorkflowPreparedSlaDeployment slaDeployment =
                     taskSlaDeploymentService.prepare(executableBpmn, identity.userId());
@@ -1040,6 +1045,12 @@ public class WorkflowModelService
                 document.bpmnModel(), formFieldCatalog);
         participantRuleDeploymentService.validateAuthorRules(document, formFieldCatalog);
         return new AuthorValidationContext(sources, formFieldCatalog);
+    }
+
+    private Map<String, String> callActivityFormContents(AuthorValidationContext context)
+    {
+        return context.snapshotSources().stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
+                source -> source.reference().nodeKey(), FormSnapshotSource::content));
     }
 
     /**

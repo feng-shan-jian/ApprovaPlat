@@ -21,6 +21,15 @@ public class WfForm extends BaseEntity
     /** 逻辑删除标志：0 表示有效，2 表示已删除。 */
     private String delFlag;
 
+    /** 当前模板协议检查结果，仅用于查询展示，不持久化。 */
+    private Boolean protocolValid;
+    private String protocolIssue;
+
+    public Boolean getProtocolValid() { return protocolValid; }
+    public void setProtocolValid(Boolean protocolValid) { this.protocolValid = protocolValid; }
+    public String getProtocolIssue() { return protocolIssue; }
+    public void setProtocolIssue(String protocolIssue) { this.protocolIssue = protocolIssue; }
+
     /**
      * 获取表单主键。
      * @return Long，表单主键

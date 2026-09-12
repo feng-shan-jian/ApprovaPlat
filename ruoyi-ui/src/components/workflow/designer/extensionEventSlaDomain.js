@@ -7,6 +7,8 @@ const BUSINESS_LISTENER_DELEGATE_EXPRESSION = '${workflowBusinessListener}'
 const EXTENSION_DELEGATE_EXPRESSION = '${workflowExtensionDelegate}'
 const EXTENSION_KEY_FIELD = 'approvaExtensionKey'
 const EXTENSION_CONFIG_FIELD = 'approvaExtensionConfig'
+const MESSAGE_THROW_CONFIG = 'approva.messageThrow.config'
+const OUTBOX_EXTENSION_KEY = 'approva.collaboration-outbox'
 const EXTENSION_PROPERTY_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/
 const CEL_DEFAULT_CONFIG = Object.freeze({
   expression: 'true',
@@ -29,7 +31,7 @@ const AUTO_COPY_VARIABLE_PATTERN = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/
  * @returns {boolean} SLA 或自动抄送协议字段返回 true。
  */
 export function isExtensionEventSlaProperty(name) {
-  return isUserTaskSlaProperty(name) || name === AUTO_COPY_PROPERTY_NAME
+  return isUserTaskSlaProperty(name) || name === AUTO_COPY_PROPERTY_NAME || name === MESSAGE_THROW_CONFIG
 }
 
 /**
@@ -162,6 +164,11 @@ export function createExtensionEventSlaDomain(context) {
    */
   function readControlledTaskExtension(businessObject) {
     const result = { extensionKey: '', extensionConfig: '{}' }
+    if (businessObject?.$type === 'bpmn:IntermediateThrowEvent') {
+      const config = readAllFlowableProperties(businessObject).find(item => item.name === MESSAGE_THROW_CONFIG)
+      if (config) return { extensionKey: OUTBOX_EXTENSION_KEY, extensionConfig: config.value }
+      return result
+    }
     for (const value of businessObject?.extensionElements?.values || []) {
       if (value?.$type !== 'flowable:Field') continue
       if (value.name === EXTENSION_KEY_FIELD) result.extensionKey = value.stringValue || ''
@@ -205,6 +212,14 @@ export function createExtensionEventSlaDomain(context) {
         throw new Error('处理器配置必须是 JSON 对象')
       }
       const businessObject = selectedBusinessObject.value
+      if (propertyFlags.value.messageThrow) {
+        if (extensionKey && extensionKey !== OUTBOX_EXTENSION_KEY) throw new Error('消息抛出只能使用可靠消息处理器')
+        const properties = readAllFlowableProperties(businessObject).filter(item => item.name !== MESSAGE_THROW_CONFIG)
+        if (extensionKey) properties.push({ name: MESSAGE_THROW_CONFIG, value: JSON.stringify(config) })
+        const extensionElements = buildPropertiesExtensionElements(businessObject, [], properties)
+        getModeler().get('modeling').updateModdleProperties(selectedElement.value, businessObject, { extensionElements })
+        return
+      }
       const preservedValues = (businessObject.extensionElements?.values || []).filter(value => (
         value?.$type !== 'flowable:Field'
         || ![EXTENSION_KEY_FIELD, EXTENSION_CONFIG_FIELD].includes(value.name)
@@ -259,8 +274,8 @@ export function createExtensionEventSlaDomain(context) {
       const endpoint = connectorEndpoints.value[0]
       propertyState.extensionConfig = JSON.stringify({
         endpointKey: endpoint?.endpointKey || '',
-        path: '/workflow/runtime-event/collaboration/message',
-        messageName: '',
+        path: propertyFlags.value.messageThrow ? '/workflow/runtime-event/message/reliable' : '/workflow/runtime-event/collaboration/message',
+        messageName: propertyFlags.value.messageThrow ? String(selectedBusinessObject.value?.eventDefinitions?.[0]?.messageRef?.name || '') : '',
         targetProcessDefinitionKey: '',
         variableNames: [],
         maxAttempts: 5
@@ -612,22 +627,26 @@ export function createExtensionEventSlaDomain(context) {
    * @param {string} key 用户维护的稳定业务键。
    * @returns {object|undefined} 可写入事件定义的根元素；空键返回 undefined。
    */
-  function resolveEventRootReference(eventDefinition, config, key) {
+  function resolveEventRootReference(eventDefinition, config, key, updates) {
     if (!key) return undefined
     const definitions = findDefinitions(eventDefinition)
-    if (!definitions) return undefined
+    if (!definitions) throw new Error('事件所属流程文档不存在')
     const roots = Array.isArray(definitions.rootElements) ? definitions.rootElements : []
     const existing = roots.find(root => root.$type === config.rootType
-      && (root[config.keyProperty] === key || root.name === key || root.id === key))
+      && root[config.keyProperty] === key)
     if (existing) return existing
-    const reference = getModeler().get('moddle').create(config.rootType, {
-      id: `${config.idPrefix}_${eventReferenceIdPart(key)}`,
+    const moddle = getModeler().get('moddle')
+    const baseId = `${config.idPrefix}_${eventReferenceIdPart(key)}`
+    let id = baseId
+    let suffix = 2
+    while (moddle.ids.assigned(id) || roots.some(root => root.id === id)) id = `${baseId}_${suffix++}`
+    const reference = moddle.create(config.rootType, {
+      id,
       [config.keyProperty]: key,
       ...(config.keyProperty === 'name' ? {} : { name: key })
     })
-    getModeler().get('modeling').updateModdleProperties(selectedElement.value, definitions, {
-      rootElements: [...roots, reference]
-    })
+    reference.$parent = definitions
+    updates.push({ moddleElement: definitions, properties: { rootElements: [...roots, reference] } })
     return reference
   }
 
@@ -637,35 +656,36 @@ export function createExtensionEventSlaDomain(context) {
    */
   function updateEventProperties() {
     if (designerLocked.value || !getModeler() || !selectedElement.value) return
+    const element = selectedElement.value
     const businessObject = selectedBusinessObject.value
     const eventDefinition = businessObject?.eventDefinitions?.[0]
-    if (isType('bpmn:BoundaryEvent')) {
-      updateProperties({ cancelActivity: Boolean(propertyState.cancelActivity) })
-    }
     if (!eventDefinition) return
-    const modeling = getModeler().get('modeling')
+    // 所有待写入值在命令执行前捕获；element.changed 会同步重建面板。
+    const key = propertyState.eventReference.trim()
+    const timerType = ['timeDate', 'timeDuration', 'timeCycle'].includes(propertyState.timerDefinitionType)
+      ? propertyState.timerDefinitionType : 'timeDuration'
+    const expression = propertyState.timerDefinition.trim()
+    const updates = []
+    if (isType('bpmn:BoundaryEvent')) {
+      updates.push({ moddleElement: businessObject, properties: {
+        cancelActivity: eventDefinition.$type === 'bpmn:ErrorEventDefinition'
+          || Boolean(propertyState.cancelActivity)
+      } })
+    }
     const config = eventReferenceConfig(eventDefinition.$type)
     if (config) {
-      const key = propertyState.eventReference.trim()
-      const reference = resolveEventRootReference(eventDefinition, config, key)
-      modeling.updateModdleProperties(selectedElement.value, eventDefinition, {
-        [config.referenceProperty]: reference
-      })
-      return
+      const reference = resolveEventRootReference(eventDefinition, config, key, updates)
+      updates.push({ moddleElement: eventDefinition, properties: { [config.referenceProperty]: reference } })
+    } else if (eventDefinition.$type === 'bpmn:TimerEventDefinition') {
+      const formalExpression = expression
+        ? getModeler().get('moddle').create('bpmn:FormalExpression', { body: expression }) : undefined
+      updates.push({ moddleElement: eventDefinition, properties: {
+        timeDate: timerType === 'timeDate' ? formalExpression : undefined,
+        timeDuration: timerType === 'timeDuration' ? formalExpression : undefined,
+        timeCycle: timerType === 'timeCycle' ? formalExpression : undefined
+      } })
     }
-    if (eventDefinition.$type !== 'bpmn:TimerEventDefinition') return
-    const timerType = ['timeDate', 'timeDuration', 'timeCycle'].includes(propertyState.timerDefinitionType)
-      ? propertyState.timerDefinitionType
-      : 'timeDuration'
-    const expression = propertyState.timerDefinition.trim()
-    const formalExpression = expression
-      ? getModeler().get('moddle').create('bpmn:FormalExpression', { body: expression })
-      : undefined
-    modeling.updateModdleProperties(selectedElement.value, eventDefinition, {
-      timeDate: timerType === 'timeDate' ? formalExpression : undefined,
-      timeDuration: timerType === 'timeDuration' ? formalExpression : undefined,
-      timeCycle: timerType === 'timeCycle' ? formalExpression : undefined
-    })
+    if (updates.length) getModeler().get('commandStack').execute('workflow.atomicProperties', { element, updates })
   }
 
   /**

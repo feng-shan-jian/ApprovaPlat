@@ -35,6 +35,30 @@ export function completeWorkflowFieldPermissions(source) {
   }
 }
 
+/** 只检查存量模板权限协议，不修改读取内容或填入默认权限。 */
+export function templatePermissionIssues(content) {
+  try {
+    const root = typeof content === 'string' ? JSON.parse(content) : content
+    if (!root || !Array.isArray(root.fields)) return ['表单 fields 必须是数组']
+    const issues = []
+    const visit = (fields, path) => fields.forEach((field, index) => {
+      const position = `${path}[${index}]${field?.vModel ? ` (${field.vModel})` : ''}`
+      const flags = ['workflowHidden', 'workflowReadable', 'workflowWritable']
+      const missing = flags.filter(flag => typeof field?.[flag] !== 'boolean')
+      if (missing.length) issues.push(`${position} 缺少 ${missing.join('、')}`)
+      else if ((field.workflowHidden && (field.workflowReadable || field.workflowWritable || field.required))
+        || (field.required && (!field.workflowReadable || !field.workflowWritable))) {
+        issues.push(`${position} 节点权限组合不合法`)
+      }
+      if (Array.isArray(field?.children)) visit(field.children, `${path}[${index}].children`)
+    })
+    visit(root.fields, 'fields')
+    return issues
+  } catch {
+    return ['表单 JSON 格式不合法']
+  }
+}
+
 /**
  * 解析后端表单快照并规范为无执行逻辑的安全渲染描述。
  * @param {string|object} content 表单 JSON 文本或已解析对象。

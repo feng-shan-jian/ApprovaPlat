@@ -58,18 +58,14 @@ public final class WorkflowCollaborationValidator
             for (Pool pool : model.getPools())
             {
                 requireText(pool.getId(), "Participant id 不能为空");
-                requireText(pool.getProcessRef(), "Participant 必须绑定可执行流程定义");
                 if (!participantIds.add(pool.getId()))
                 {
                     throw invalid("Participant id 不能重复");
                 }
+                if (pool.getProcessRef() == null || pool.getProcessRef().isBlank()) continue;
                 if (model.getProcessById(pool.getProcessRef()) == null)
                 {
                     throw invalid("Participant 绑定的流程定义不存在: " + pool.getProcessRef());
-                }
-                if (!model.getProcessById(pool.getProcessRef()).isExecutable())
-                {
-                    throw invalid("Participant 只能绑定可执行流程定义: " + pool.getProcessRef());
                 }
             }
         }
@@ -99,9 +95,9 @@ public final class WorkflowCollaborationValidator
             {
                 throw invalid("MessageFlow 必须连接不同 Participant 的流程节点");
             }
-            if (!(source instanceof SendTask))
+            if (!(source instanceof SendTask) && !(source instanceof ThrowEvent event && isMessageEvent(event)))
             {
-                throw invalid("可执行 MessageFlow 起点必须是绑定可靠 outbox 的 SendTask");
+                throw invalid("可执行 MessageFlow 起点必须是绑定可靠消息的发送任务或消息抛出事件");
             }
             if (!(target instanceof ReceiveTask || target instanceof IntermediateCatchEvent)
                     || target instanceof Event event && !isMessageEvent(event))
@@ -112,7 +108,16 @@ public final class WorkflowCollaborationValidator
             {
                 throw invalid("MessageFlow 引用的消息定义不存在: " + flow.getMessageRef());
             }
-            validateOutboxBinding((SendTask) source, flow.getName().trim(), targetProcess);
+            if (source instanceof SendTask task)
+                validateOutboxBinding(task, flow.getName().trim(), targetProcess);
+            else
+            {
+                JsonNode config = WorkflowMessageThrowContract.validate(model, (ThrowEvent) source);
+                if (config == null || !flow.getName().trim().equals(config.path("messageName").asText())
+                        || !"/workflow/runtime-event/collaboration/message".equals(config.path("path").asText())
+                        || !targetProcess.equals(config.path("targetProcessDefinitionKey").asText()))
+                    throw invalid("MessageFlow 消息名和目标流程必须与消息抛出配置一致");
+            }
         }
     }
 
@@ -151,6 +156,7 @@ public final class WorkflowCollaborationValidator
         {
             JsonNode config = JsonMapper.shared().readTree(configJson);
             if (config == null || !config.isObject()
+                    || !"/workflow/runtime-event/collaboration/message".equals(config.path("path").asText())
                     || !messageName.equals(config.path("messageName").asText())
                     || !targetProcess.equals(config.path("targetProcessDefinitionKey").asText()))
             {

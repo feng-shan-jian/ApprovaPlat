@@ -6,6 +6,7 @@ import java.util.Date;
 public class WfCollaborationMessage
 {
     private String messageId;
+    private String deliveryMode = "COLLABORATION";
     private Long credentialId;
     private String actorUserId;
     private String channelId;
@@ -31,6 +32,8 @@ public class WfCollaborationMessage
     private Date completeTime;
 
     public String getMessageId() { return messageId; }
+    public String getDeliveryMode() { return deliveryMode; }
+    public void setDeliveryMode(String value) { deliveryMode = value; }
     public void setMessageId(String value) { messageId = value; }
     public Long getCredentialId() { return credentialId; }
     public void setCredentialId(Long value) { credentialId = value; }

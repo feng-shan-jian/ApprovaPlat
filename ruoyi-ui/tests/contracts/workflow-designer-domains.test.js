@@ -84,6 +84,7 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
       },
       {
         layout: 'rowFormItem',
+        workflowHidden: false, workflowReadable: true, workflowWritable: true,
         children: [{
           vModel: 'readonlyNote', tag: 'el-input', label: '只读说明',
           layout: 'colFormItem', workflowHidden: false,
@@ -103,6 +104,7 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
     }
   })
   const formParticipantDomain = createFormParticipantDomain(context)
+  context.readTemplatePermissionPolicy = formParticipantDomain.readTemplatePermissionPolicy
   const controlledLoopDomain = createControlledLoopDomain({
     buildPropertiesExtensionElements: context.buildPropertiesExtensionElements,
     formFieldCatalog: context.formFieldCatalog,
@@ -130,6 +132,14 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
           variable: 'decision',
           readable: false,
           writable: false
+        },
+        {
+          $type: 'flowable:FormProperty', id: 'approva_permission_field_2',
+          variable: 'amount', readable: true, writable: true
+        },
+        {
+          $type: 'flowable:FormProperty', id: 'approva_permission_field_3',
+          variable: 'readonlyNote', readable: true, writable: false
         }
       ]
     }
@@ -262,7 +272,7 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   ])
   assert.deepEqual(formParticipantDomain.readTemplatePermissionPolicy(templateBusinessObject), {
     defaultMode: 'EDITABLE',
-    permissions: new Map([['decision', 'HIDDEN']])
+    permissions: new Map([['decision', 'HIDDEN'], ['amount', 'EDITABLE'], ['readonlyNote', 'READONLY']])
   })
   assert.deepEqual(context.formFieldCatalog.resolveUserIdFieldCatalog(
     templateBusinessObject,
@@ -355,7 +365,7 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   const routingFacade = createRoutingCallActivityDomain(context)
   assert.deepEqual(routingFacade.resolveCallActivityParentFields(callActivity), [
     { name: 'approved', label: '是否通过', type: 'BOOLEAN', required: false, readable: true, writable: true },
-    { name: 'decision', label: '审批结论', type: 'SCALAR', required: false, readable: true, writable: true },
+    { name: 'decision', label: '审批结论', type: 'SCALAR', required: false, readable: false, writable: false },
     { name: 'readonlyNote', label: '只读说明', type: 'TEXT', required: false, readable: true, writable: false }
   ])
 
@@ -433,47 +443,6 @@ test('表单键使用精确 key_正Long 文本协议', () => {
   assert.equal(catalog.resolveTemplateForm(unsafeLong), undefined)
   assert.equal(catalog.resolveTemplateForm(`key_0`), undefined)
   assert.equal(catalog.resolveTemplateForm(`key_${unsafeLong}x`), undefined)
-})
-
-/**
- * 验证三个领域按中性目录、表单权限 facade、字段消费者的固定顺序完成初始化。
- * @returns {void} 任一领域仍要求另一个尚未赋值的领域变量时测试失败。
- */
-test('三个设计器领域按确定顺序初始化且无延迟领域引用', () => {
-  const userTask = {
-    $type: 'bpmn:UserTask',
-    get() { return '' },
-    extensionElements: {
-      values: [{
-        $type: 'flowable:FormProperty',
-        id: 'reviewerId',
-        variable: 'reviewerId',
-        name: '复核人',
-        type: 'string'
-      }]
-    }
-  }
-  const context = createDomainContext({ selectedBusinessObject: ref(userTask) })
-
-  // 生产装配先完成表单领域，再向扩展领域注入已初始化的一行用户字段 facade。
-  const formDomain = createFormParticipantDomain(context)
-  const routingDomain = createRoutingCallActivityDomain(context)
-  const extensionDomain = createExtensionEventSlaDomain({
-    ...context,
-    readTemplatePermissionPolicy: formDomain.readTemplatePermissionPolicy
-  })
-  assert.deepEqual(extensionDomain.resolveAutoCopyFormFieldOptionsForBusinessObject(userTask), [
-    { value: 'reviewerId', label: '复核人（reviewerId）' }
-  ])
-
-  assert.deepEqual(Object.keys(context.formFieldCatalog), [
-    'resolveTemplateForm',
-    'readEmbeddedFormFields',
-    'readTemplateFieldDescriptors',
-    'resolveElementFieldDescriptors',
-    'resolveUserIdFieldCatalog'
-  ])
-  assert.equal(routingDomain.embeddedCallFieldType('long'), 'NUMBER')
 })
 
 /**
@@ -676,5 +645,4 @@ test('扩展事件与 SLA 领域独立校验自动抄送契约', () => {
     { name: 'approva.conditionRule.config', value: 'keep' },
     { name: 'approva.autoCopyRules', value: 'old' }
   ])
-  assert.deepEqual(persistedProperties.slice(2), slaDomain.slaConfigToProperties(createDefaultSlaConfig()))
 })

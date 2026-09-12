@@ -88,16 +88,30 @@ public class WorkflowCollaborationMessageService
     public WorkflowCollaborationMessageView publish(String plaintextToken,
             WorkflowCollaborationMessageRequest request)
     {
+        return publish(plaintextToken, request, "COLLABORATION");
+    }
+
+    /** 独立可靠消息入口；模式由服务端路由决定，客户端不能覆写跨池协议的声明门禁。 */
+    public WorkflowCollaborationMessageView publishPointToPoint(String plaintextToken,
+            WorkflowCollaborationMessageRequest request)
+    {
+        return publish(plaintextToken, request, "POINT_TO_POINT");
+    }
+
+    private WorkflowCollaborationMessageView publish(String plaintextToken,
+            WorkflowCollaborationMessageRequest request, String deliveryMode)
+    {
         AuthenticatedCredential credential = credentialService.authenticateAndConsume(
                 plaintextToken, "MESSAGE");
         Normalized normalized = normalize(request, credential.allowedVariables());
         WfCollaborationMessage row = new WfCollaborationMessage();
         row.setMessageId(normalized.messageId());
+        row.setDeliveryMode(deliveryMode);
         row.setCredentialId(credential.credentialId());
         row.setActorUserId(credential.actorUserId());
         row.setChannelId(WorkflowCollaborationChannelService.channelId(
                 normalized.targetProcessDefinitionKey(), normalized.correlationType(),
-                normalized.correlationValue()));
+                normalized.correlationValue(), deliveryMode));
         row.setSequenceNo(normalized.sequenceNo());
         row.setMessageName(normalized.messageName());
         row.setSourceProcessDefinitionKey(normalized.sourceProcessDefinitionKey());
@@ -208,7 +222,7 @@ public class WorkflowCollaborationMessageService
         {
             // 先创建并锁定通道，唯一序号和消息登记从第一笔写入起就在同一事务内受约束。
             channelService.lockInbound(row.getTargetProcessDefinitionKey(),
-                    correlationType(row), correlationValue(row));
+                    correlationType(row), correlationValue(row), row.getDeliveryMode());
             if (mapper.insertReceived(row) != 1)
             {
                 throw conflict("协作消息登记不完整", "COLLAB_MESSAGE_AUDIT_INSERT_FAILED");
@@ -219,7 +233,7 @@ public class WorkflowCollaborationMessageService
             metrics.record("inbound_received");
         }
         var channel = channelService.lockInbound(row.getTargetProcessDefinitionKey(),
-                correlationType(row), correlationValue(row));
+                correlationType(row), correlationValue(row), row.getDeliveryMode());
         long expectedSequence = Math.addExact(channel.getInboundSequence(), 1L);
         if (row.getSequenceNo() > expectedSequence)
         {
@@ -238,7 +252,10 @@ public class WorkflowCollaborationMessageService
         try
         {
             ProcessInstance instance = resolveInstance(row);
-            DeclaredTarget target = requireDeclaredMessageFlow(row, instance);
+            DeclaredTarget target;
+            if ("POINT_TO_POINT".equals(row.getDeliveryMode())) target = new DeclaredTarget(null, false);
+            else if ("COLLABORATION".equals(row.getDeliveryMode())) target = requireDeclaredMessageFlow(row, instance);
+            else throw conflict("消息投递方式不合法", "MESSAGE_DELIVERY_MODE_INVALID");
             String executionId = consume(instance, target, row.getMessageName(), variables);
             row.setMatchedProcessInstanceId(instance.getId());
             row.setTargetExecutionId(executionId);
@@ -337,7 +354,8 @@ public class WorkflowCollaborationMessageService
         List<EventSubscription> subscriptions = runtimeService.createEventSubscriptionQuery()
                 .eventType("message").eventName(messageName)
                 .processInstanceId(instance.getId()).list();
-        if (subscriptions.size() != 1 || subscriptions.get(0).getExecutionId() == null)
+        if (subscriptions.size() != 1 || subscriptions.get(0).getExecutionId() == null
+                || (target.elementId() != null && !target.elementId().equals(subscriptions.get(0).getActivityId())))
         {
             throw conflict("接收流程没有唯一匹配的消息等待节点", "COLLAB_MESSAGE_SUBSCRIPTION_INVALID");
         }
@@ -426,6 +444,8 @@ public class WorkflowCollaborationMessageService
     private boolean samePayload(WfCollaborationMessage a, WfCollaborationMessage b)
     {
         return a.getPayloadSha256().equals(b.getPayloadSha256())
+                && a.getDeliveryMode().equals(b.getDeliveryMode())
+                && a.getCredentialId().equals(b.getCredentialId())
                 && a.getSequenceNo().equals(b.getSequenceNo())
                 && a.getMessageName().equals(b.getMessageName())
                 && a.getTargetProcessDefinitionKey().equals(b.getTargetProcessDefinitionKey())

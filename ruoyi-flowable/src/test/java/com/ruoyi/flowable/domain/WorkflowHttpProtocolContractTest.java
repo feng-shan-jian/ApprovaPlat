@@ -11,8 +11,6 @@ import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
-import com.ruoyi.flowable.domain.dto.WorkflowCopyQueryDto;
-import com.ruoyi.flowable.domain.vo.WorkflowManualUrgeView;
 import com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceMemberView;
 import com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceStateView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessCommentView;
@@ -29,30 +27,6 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class WorkflowHttpProtocolContractTest
 {
-    /**
-     * 验证抄送查询只接收页面真实发送的五个条件。
-     *
-     * @return void，记录组件新增或缺失时测试失败
-     */
-    @Test
-    void copyQueryContainsOnlyPageFilters()
-    {
-        assertThat(componentNames(WorkflowCopyQueryDto.class)).containsExactlyInAnyOrder(
-                "title", "processName", "originatorName", "categoryId", "readStatus");
-    }
-
-    /**
-     * 验证人工催办 HTTP 响应只暴露页面读取的真实收件人数。
-     *
-     * @return void，响应记录重新暴露内部事件键或通道数时测试失败
-     */
-    @Test
-    void manualUrgeResponseContainsOnlyRecipientCount()
-    {
-        assertThat(componentNames(WorkflowManualUrgeView.class))
-                .containsExactlyInAnyOrder("recipientCount");
-    }
-
     /**
      * 验证流程意见 HTTP 投影只包含可展示 opinion，不暴露原始正文或审计字段。
      *

@@ -59,7 +59,9 @@ public class WfFormServiceImpl implements IWfFormService
     public WfForm queryById(Long formId)
     {
         validatePositiveId(formId);
-        return formMapper.selectById(formId);
+        WfForm form = formMapper.selectById(formId);
+        inspectProtocol(form);
+        return form;
     }
 
     /**
@@ -72,7 +74,26 @@ public class WfFormServiceImpl implements IWfFormService
     public List<WfForm> queryList(WfForm filter)
     {
         List<WfForm> forms = formMapper.selectList(filter);
+        if (forms != null) forms.forEach(this::inspectProtocol);
         return forms == null ? Collections.emptyList() : forms;
+    }
+
+    /** 展示存量模板的不兼容原因，绝不在读取时修改模板正文。 */
+    private void inspectProtocol(WfForm form)
+    {
+        if (form == null) return;
+        try
+        {
+            templateValidator.validate(form.getContent());
+            form.setProtocolValid(true);
+            form.setProtocolIssue(null);
+        }
+        catch (ServiceException exception)
+        {
+            if (!Integer.valueOf(HttpStatus.BAD_REQUEST).equals(exception.getCode())) throw exception;
+            form.setProtocolValid(false);
+            form.setProtocolIssue(exception.getMessage());
+        }
     }
 
     /**

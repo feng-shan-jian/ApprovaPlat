@@ -40,6 +40,8 @@
       <el-descriptions-item label="流程耗时">{{ formatDuration(detail.durationMillis) }}</el-descriptions-item>
     </el-descriptions>
 
+    <ProcessWaitingEvents v-if="ready" :process-instance-id="detail.processInstanceId" />
+
     <section v-if="processRelations.length > 1" class="workflow-detail__relations" aria-labelledby="process-relations-title">
       <div class="workflow-detail__relations-heading">
         <div>
@@ -521,6 +523,7 @@ import { urgeWorkflow } from '@/api/workflow/notification'
 import { listApprovalUserOptions, listIdentityOptions } from '@/api/workflow/identity'
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
+import ProcessWaitingEvents from '@/components/workflow/ProcessWaitingEvents.vue'
 import useUserStore from '@/store/modules/user'
 import { useWindowSize } from '@vueuse/core'
 

@@ -9,6 +9,12 @@ export default {
   xml: { tagAlias: 'lowerCase' },
   types: [
     {
+      name: 'DataObjectType',
+      extends: ['bpmn:DataObject'],
+      properties: [{ name: 'bpmn:itemSubjectRef', type: 'String', isAttr: true,
+        redefines: 'bpmn:ItemAwareElement#itemSubjectRef' }]
+    },
+    {
       name: 'FormSupported',
       isAbstract: true,
       extends: ['bpmn:StartEvent', 'bpmn:UserTask'],
@@ -165,6 +171,7 @@ export default {
       name: 'Value',
       superClass: ['Element'],
       properties: [
+        { name: 'body', isBody: true, type: 'String' },
         { name: 'id', isAttr: true, type: 'String' },
         { name: 'name', isAttr: true, type: 'String' }
       ]

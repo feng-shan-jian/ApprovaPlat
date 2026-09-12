@@ -425,7 +425,8 @@ public class WorkflowProcessHistoryProjection
                 throw dataError("流程审批意见正文总量超过安全上限");
             }
             // 原始正文只在当前读取栈内参与完整大小门禁和安全解析，禁止进入详情 VO。
-            String opinion = extractCommentOpinion(rawMessage, comment.getType());
+            String opinion = extractCommentOpinion(rawMessage, comment.getType(),
+                    !StringUtils.hasText(comment.getTaskId()), instanceId);
             if (!knownTaskIds.contains(comment.getTaskId()))
             {
                 // 流程级取消、终止审计已经完成结构校验，但不挂到某个用户任务时间线。
@@ -455,9 +456,12 @@ public class WorkflowProcessHistoryProjection
      *
      * @param rawMessage String，已经过单条及累计 UTF-8 大小门禁的原始 comment 正文
      * @param expectedAction String，comment type 声明的正式动作编码
+     * @param processLevel boolean，原始审计是否为没有 taskId 的流程级动作
+     * @param instanceId String，当前已授权的流程实例，用于核对结束审计归属
      * @return String，可直接展示的纯文本意见；无业务意见时返回 null
      */
-    private String extractCommentOpinion(String rawMessage, String expectedAction)
+    private String extractCommentOpinion(String rawMessage, String expectedAction,
+            boolean processLevel, String instanceId)
     {
         if (!StringUtils.hasText(rawMessage))
         {
@@ -477,8 +481,29 @@ public class WorkflowProcessHistoryProjection
             if (action == null || !action.isTextual()
                     || !expectedAction.equals(action.textValue())
                     || actorUserId == null || !actorUserId.isTextual()
-                    || !StringUtils.hasText(actorUserId.textValue())
-                    || opinion == null || (!opinion.isNull() && !opinion.isTextual()))
+                    || !StringUtils.hasText(actorUserId.textValue()))
+            {
+                throw dataError("流程审批意见结构化审计字段不完整");
+            }
+            if (processLevel && Set.of("CANCEL", "TERMINATE").contains(expectedAction))
+            {
+                // 实例服务的正式审计使用 reason；任务动作使用 opinion，按审计作用域识别两种协议。
+                // 这里验证原始流程审计后跳过任务意见投影，不改写存量历史或添加字段别名。
+                String status = "CANCEL".equals(expectedAction) ? "canceled" : "terminated";
+                if (!status.equals(audit.path("processStatus").asText())
+                        || !audit.path("reason").isTextual() || !StringUtils.hasText(audit.path("reason").textValue())
+                        || !audit.path("wasSuspended").isBoolean()
+                        || !audit.path("rootInstanceId").isTextual() || !instanceId.equals(audit.path("rootInstanceId").textValue())
+                        || !audit.path("requestedInstanceId").isTextual() || !StringUtils.hasText(audit.path("requestedInstanceId").textValue())
+                        || !audit.path("processTreeInstanceCount").isIntegralNumber()
+                        || !audit.path("processTreeInstanceCount").canConvertToInt()
+                        || audit.path("processTreeInstanceCount").intValue() < 1)
+                {
+                    throw dataError("流程结束审计字段不完整");
+                }
+                return null;
+            }
+            if (opinion == null || (!opinion.isNull() && !opinion.isTextual()))
             {
                 throw dataError("流程审批意见结构化审计字段不完整");
             }

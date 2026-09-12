@@ -5,6 +5,7 @@
     <id property="messageId" column="message_id"/><result property="credentialId" column="credential_id"/>
     <result property="actorUserId" column="actor_user_id"/><result property="channelId" column="channel_id"/>
     <result property="sequenceNo" column="sequence_no"/>
+    <result property="deliveryMode" column="delivery_mode"/>
     <result property="messageName" column="message_name"/><result property="sourceProcessDefinitionKey" column="source_process_definition_key"/>
     <result property="targetProcessDefinitionKey" column="target_process_definition_key"/><result property="correlationKey" column="correlation_key"/>
     <result property="targetProcessInstanceId" column="target_process_instance_id"/><result property="matchedProcessInstanceId" column="matched_process_instance_id"/><result property="targetExecutionId" column="target_execution_id"/>
@@ -14,7 +15,7 @@
     <result property="lastErrorCode" column="last_error_code"/><result property="lastErrorSummary" column="last_error_summary"/>
     <result property="createTime" column="create_time"/><result property="nextAttemptTime" column="next_attempt_time"/><result property="completeTime" column="complete_time"/>
   </resultMap>
-  <sql id="Columns">message_id,credential_id,actor_user_id,channel_id,sequence_no,message_name,source_process_definition_key,target_process_definition_key,correlation_key,target_process_instance_id,matched_process_instance_id,target_execution_id,variables_json,payload_sha256,status,attempt_count,max_attempts,compensation_count,revision_no,last_error_code,last_error_summary,create_time,next_attempt_time,complete_time</sql>
+  <sql id="Columns">message_id,delivery_mode,credential_id,actor_user_id,channel_id,sequence_no,message_name,source_process_definition_key,target_process_definition_key,correlation_key,target_process_instance_id,matched_process_instance_id,target_execution_id,variables_json,payload_sha256,status,attempt_count,max_attempts,compensation_count,revision_no,last_error_code,last_error_summary,create_time,next_attempt_time,complete_time</sql>
   <sql id="ListFilters">
     <where>
       <if test="query.status != null and query.status != ''">and status=#{query.status}</if>
@@ -44,7 +45,7 @@
           from wf_collaboration_channel channel where channel.channel_id=current_message.channel_id)
     order by current_message.next_attempt_time,current_message.create_time,current_message.message_id limit 1 for update skip locked
   </select>
-  <insert id="insertReceived">insert into wf_collaboration_message(message_id,credential_id,actor_user_id,channel_id,sequence_no,message_name,source_process_definition_key,target_process_definition_key,correlation_key,target_process_instance_id,variables_json,payload_sha256,status,attempt_count,max_attempts,create_time) values(#{messageId},#{credentialId},#{actorUserId},#{channelId},#{sequenceNo},#{messageName},#{sourceProcessDefinitionKey},#{targetProcessDefinitionKey},#{correlationKey},#{targetProcessInstanceId},#{variablesJson},#{payloadSha256},'RECEIVED',0,#{maxAttempts},current_timestamp(3))</insert>
+  <insert id="insertReceived">insert into wf_collaboration_message(message_id,delivery_mode,credential_id,actor_user_id,channel_id,sequence_no,message_name,source_process_definition_key,target_process_definition_key,correlation_key,target_process_instance_id,variables_json,payload_sha256,status,attempt_count,max_attempts,create_time) values(#{messageId},#{deliveryMode},#{credentialId},#{actorUserId},#{channelId},#{sequenceNo},#{messageName},#{sourceProcessDefinitionKey},#{targetProcessDefinitionKey},#{correlationKey},#{targetProcessInstanceId},#{variablesJson},#{payloadSha256},'RECEIVED',0,#{maxAttempts},current_timestamp(3))</insert>
   <update id="markProcessed">update wf_collaboration_message set matched_process_instance_id=#{matchedProcessInstanceId},target_execution_id=#{targetExecutionId},status='PROCESSED',attempt_count=#{attemptCount},complete_time=current_timestamp(3),next_attempt_time=null,last_error_code=null,last_error_summary=null,revision_no=revision_no+1 where message_id=#{messageId} and status in ('RECEIVED','RETRYING')</update>
   <update id="markFailed">update wf_collaboration_message set status='RETRYING',attempt_count=#{attemptCount},last_error_code=#{lastErrorCode},last_error_summary=#{lastErrorSummary},next_attempt_time=date_add(current_timestamp(3), interval least(300,power(2,least(#{attemptCount},8))) second),revision_no=revision_no+1 where message_id=#{messageId} and status in ('RECEIVED','RETRYING')</update>
   <update id="markDeadLetter">update wf_collaboration_message set status='DEAD_LETTER',attempt_count=#{attemptCount},last_error_code=#{lastErrorCode},last_error_summary=#{lastErrorSummary},complete_time=current_timestamp(3),next_attempt_time=null,revision_no=revision_no+1 where message_id=#{messageId} and status in ('RECEIVED','RETRYING')</update>

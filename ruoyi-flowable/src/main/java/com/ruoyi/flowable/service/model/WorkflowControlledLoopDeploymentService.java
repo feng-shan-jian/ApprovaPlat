@@ -69,7 +69,7 @@ public class WorkflowControlledLoopDeploymentService
         {
             throw new ServiceException("受控循环执行资源编译失败", HttpStatus.ERROR);
         }
-        return new WorkflowPreparedControlledLoopDeployment(compiled, snapshots);
+        return new WorkflowPreparedControlledLoopDeployment(WorkflowBpmnXmlPreserver.restore(compiled, inputBpmn), snapshots);
     }
 
     /**

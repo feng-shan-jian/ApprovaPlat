@@ -83,7 +83,7 @@ public class WorkflowExtensionDeploymentService
             String actorUserId)
     {
         BpmnXMLConverter converter = new BpmnXMLConverter();
-        byte[] validatedModelBytes = converter.convertToXML(document.bpmnModel());
+        byte[] validatedModelBytes = document.bpmnXml().getBytes(StandardCharsets.UTF_8);
         BpmnModel compiledModel = converter.convertToBpmnModel(
                 () -> new ByteArrayInputStream(validatedModelBytes), true, true);
         List<WfDeployExtensionSnapshot> snapshots = new ArrayList<>();
@@ -96,6 +96,13 @@ public class WorkflowExtensionDeploymentService
             }
             compileExecutionListenerList(process, process.getId(), process.getExecutionListeners(),
                     actorUserId, snapshots);
+            // 消息事件在作者资源中保留；执行副本先编译，再统一冻结可靠 outbox 处理器。
+            for (org.flowable.bpmn.model.ThrowEvent event : new ArrayList<>(
+                    process.findFlowElementsOfType(org.flowable.bpmn.model.ThrowEvent.class, true)))
+            {
+                if (WorkflowMessageThrowContract.readConfig(event) != null)
+                    WorkflowMessageThrowContract.compile(compiledModel, process, event);
+            }
             for (ServiceTask task : process.findFlowElementsOfType(ServiceTask.class, true))
             {
                 requireUniqueActivity(process, task.getId(), uniqueActivities);
@@ -122,7 +129,7 @@ public class WorkflowExtensionDeploymentService
         {
             throw new ServiceException("BPMN 执行资源编译失败", HttpStatus.ERROR);
         }
-        return new WorkflowPreparedExtensionDeployment(compiled, snapshots);
+        return new WorkflowPreparedExtensionDeployment(WorkflowBpmnXmlPreserver.restore(compiled, validatedModelBytes), snapshots);
     }
 
     /**

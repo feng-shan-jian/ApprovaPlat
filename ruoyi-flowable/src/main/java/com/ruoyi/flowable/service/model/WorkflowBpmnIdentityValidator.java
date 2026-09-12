@@ -166,14 +166,16 @@ public class WorkflowBpmnIdentityValidator
      * 判断用户任务是否至少配置一种能被当前任务查询和认领链路消费的办理身份。
      *
      * @param task UserTask，待部署的用户任务
-     * @return boolean，存在办理人、候选用户或候选组时返回 true
+     * @return boolean，存在普通办理身份、平台办理规则或已通过结构门禁的受控多实例来源时返回 true
      */
     private boolean hasAssignment(UserTask task)
     {
         return hasText(task.getAssignee())
                 || hasAnyText(task.getCandidateUsers())
                 || hasAnyText(task.getCandidateGroups())
-                || WorkflowParticipantRuleBpmnContract.hasTaskProperties(task);
+                || WorkflowParticipantRuleBpmnContract.hasTaskProperties(task)
+                // 作者多实例只保存受控成员来源，assignee 由部署编译器绑定；指定身份仍在后续核验有效性及审批资格。
+                || WorkflowMultiInstanceModelContract.usesControlledHandler(task.getLoopCharacteristics());
     }
 
     /**

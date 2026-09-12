@@ -33,8 +33,13 @@ public class WorkflowCollaborationChannelService
      */
     public Allocation allocateOutbound(String targetProcessDefinitionKey, String correlationKey)
     {
+        return allocateOutbound(targetProcessDefinitionKey, correlationKey, "COLLABORATION");
+    }
+
+    public Allocation allocateOutbound(String targetProcessDefinitionKey, String correlationKey, String deliveryMode)
+    {
         WfCollaborationChannel channel = lockOrCreate(targetProcessDefinitionKey,
-                "BUSINESS_KEY", correlationKey);
+                "BUSINESS_KEY", correlationKey, deliveryMode);
         long next = Math.addExact(channel.getOutboundSequence(), 1L);
         if (mapper.advanceOutbound(channel.getChannelId(), channel.getRevisionNo(), next) != 1)
         {
@@ -54,7 +59,13 @@ public class WorkflowCollaborationChannelService
     public WfCollaborationChannel lockInbound(String targetProcessDefinitionKey,
             String correlationType, String correlationValue)
     {
-        return lockOrCreate(targetProcessDefinitionKey, correlationType, correlationValue);
+        return lockInbound(targetProcessDefinitionKey, correlationType, correlationValue, "COLLABORATION");
+    }
+
+    public WfCollaborationChannel lockInbound(String targetProcessDefinitionKey,
+            String correlationType, String correlationValue, String deliveryMode)
+    {
+        return lockOrCreate(targetProcessDefinitionKey, correlationType, correlationValue, deliveryMode);
     }
 
     /**
@@ -81,17 +92,19 @@ public class WorkflowCollaborationChannelService
      * @return WfCollaborationChannel，当前事务内锁定的通道
      */
     private WfCollaborationChannel lockOrCreate(String targetProcessDefinitionKey,
-            String correlationType, String correlationValue)
+            String correlationType, String correlationValue, String deliveryMode)
     {
-        String channelId = channelId(targetProcessDefinitionKey, correlationType, correlationValue);
+        String channelId = channelId(targetProcessDefinitionKey, correlationType, correlationValue, deliveryMode);
         WfCollaborationChannel candidate = new WfCollaborationChannel();
         candidate.setChannelId(channelId);
+        candidate.setDeliveryMode(deliveryMode);
         candidate.setTargetProcessDefinitionKey(targetProcessDefinitionKey);
         candidate.setCorrelationType(correlationType);
         candidate.setCorrelationValue(correlationValue);
         mapper.insertIfAbsent(candidate);
         WfCollaborationChannel channel = mapper.selectForUpdate(channelId);
-        if (channel == null || !targetProcessDefinitionKey.equals(channel.getTargetProcessDefinitionKey())
+        if (channel == null || !deliveryMode.equals(channel.getDeliveryMode())
+                || !targetProcessDefinitionKey.equals(channel.getTargetProcessDefinitionKey())
                 || !correlationType.equals(channel.getCorrelationType())
                 || !correlationValue.equals(channel.getCorrelationValue()))
         {
@@ -111,6 +124,13 @@ public class WorkflowCollaborationChannelService
     public static String channelId(String targetProcessDefinitionKey,
             String correlationType, String correlationValue)
     {
+        return channelId(targetProcessDefinitionKey, correlationType, correlationValue, "COLLABORATION");
+    }
+
+    /** 独立消息和跨池协作使用各自顺序通道，历史跨池摘要保持不变。 */
+    public static String channelId(String targetProcessDefinitionKey,
+            String correlationType, String correlationValue, String deliveryMode)
+    {
         if (targetProcessDefinitionKey == null || targetProcessDefinitionKey.isBlank()
                 || correlationValue == null || correlationValue.isBlank()
                 || !("BUSINESS_KEY".equals(correlationType)
@@ -118,8 +138,12 @@ public class WorkflowCollaborationChannelService
         {
             throw new ServiceException("协作消息关联通道参数不完整", HttpStatus.BAD_REQUEST);
         }
-        return WorkflowExtensionChecksum.sha256(targetProcessDefinitionKey.trim(),
-                correlationType, correlationValue.trim());
+        if ("POINT_TO_POINT".equals(deliveryMode))
+            return WorkflowExtensionChecksum.sha256(deliveryMode, targetProcessDefinitionKey.trim(),
+                    correlationType, correlationValue.trim());
+        if (!"COLLABORATION".equals(deliveryMode))
+            throw new ServiceException("可靠消息投递方式不合法", HttpStatus.BAD_REQUEST);
+        return WorkflowExtensionChecksum.sha256(targetProcessDefinitionKey.trim(), correlationType, correlationValue.trim());
     }
 
     /**

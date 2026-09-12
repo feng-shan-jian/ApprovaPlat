@@ -59,6 +59,11 @@ public class WorkflowRuntimeReadinessValidator implements InitializingBean
     @Override
     public void afterPropertiesSet()
     {
+        if (environment.getProperty("flowable.runtime.require-async-executor", Boolean.class, false)
+                && !environment.getProperty("flowable.async-executor-activate", Boolean.class, false))
+        {
+            throw invalid("当前环境要求执行定时与异步业务，必须配置普通 async executor");
+        }
         if (!runtimeProperties.isProductionGateEnabled())
         {
             return;

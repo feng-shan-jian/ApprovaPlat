@@ -1,0 +1,13 @@
+- generic [ref=f1e3]:
+  - generic [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - generic [aria-hidden] [ref=f1e6]: AP
+      - heading "ApprovaPlat" [level=1] [ref=f1e7]
+    - textbox "账号" [ref=f1e15]
+    - textbox "密码" [ref=f1e23]
+    - generic [ref=f1e24] [cursor=pointer]:
+      - generic [ref=f1e25]:
+        - checkbox "记住密码"
+      - generic [ref=f1e27]: 记住密码
+    - button "登录" [ref=f1e30] [cursor=pointer]
+  - generic [ref=f1e33]: Copyright © 2026 ApprovaPlat. All Rights Reserved.

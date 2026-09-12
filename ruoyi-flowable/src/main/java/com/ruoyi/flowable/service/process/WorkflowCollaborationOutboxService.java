@@ -122,7 +122,9 @@ public class WorkflowCollaborationOutboxService
             return;
         }
         WorkflowCollaborationChannelService.Allocation allocation =
-                channelService.allocateOutbound(targetKey, correlationKey);
+                channelService.allocateOutbound(targetKey, correlationKey,
+                        com.ruoyi.flowable.extension.WorkflowCollaborationOutboxHandler.POINT_TO_POINT_PATH
+                                .equals(requiredText(config, "path")) ? "POINT_TO_POINT" : "COLLABORATION");
         JsonNode httpEndpoint = config.get("httpEndpoint");
         JsonNode endpointSnapshot = httpEndpoint == null ? null : httpEndpoint.get("endpointSnapshot");
         if (endpointSnapshot == null || !endpointSnapshot.isObject())

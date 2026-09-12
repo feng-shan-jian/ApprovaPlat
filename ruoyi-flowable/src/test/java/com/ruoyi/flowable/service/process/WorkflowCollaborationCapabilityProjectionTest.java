@@ -362,6 +362,7 @@ class WorkflowCollaborationCapabilityProjectionTest
     {
         WfCollaborationMessage row = new WfCollaborationMessage();
         row.setMessageId(messageId);
+        row.setCredentialId(1L);
         row.setMessageName("CapabilityMessage");
         row.setSourceProcessDefinitionKey("source");
         row.setTargetProcessDefinitionKey("target");

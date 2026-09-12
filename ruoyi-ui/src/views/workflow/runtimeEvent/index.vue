@@ -8,6 +8,11 @@
       <div class="summary"><strong>{{ total }}</strong><span>符合条件</span></div>
     </header>
 
+    <el-button v-hasPermi="['workflow:integrationCredential:list']" type="primary" class="mb16" @click="consoleOpen = true">受控事件联调</el-button>
+    <el-dialog v-model="consoleOpen" title="受控事件联调" width="min(760px, 94vw)" destroy-on-close :close-on-click-modal="false">
+      <RuntimeEventConsole v-if="consoleOpen" @processed="loadRows" />
+    </el-dialog>
+
     <el-form inline class="page-filter">
       <el-form-item label="检索"><el-input v-model="queryParams.keyword" clearable prefix-icon="Search" placeholder="requestId、事件或关联值" @keyup.enter="handleQuery" /></el-form-item>
       <el-form-item label="类型">
@@ -48,6 +53,9 @@
 
 <script setup name="WorkflowRuntimeEvent">
 import { listRuntimeEvents } from '@/api/workflow/runtimeEvent'
+import RuntimeEventConsole from '@/components/workflow/RuntimeEventConsole.vue'
+
+const consoleOpen = ref(false)
 
 const loading = ref(false)
 const rows = ref([])

@@ -35,6 +35,8 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -533,6 +535,97 @@ class WorkflowProcessStartChainIntegrationTest
         assertThat(processEngine.getHistoryService().createHistoricProcessInstanceQuery()
                 .processInstanceId(submitted.processInstanceId()).singleResult()
                 .getBusinessStatus()).isEqualTo(WorkflowProcessStartService.RUNNING_STATUS);
+    }
+
+    /** 主流程表单不受展开子流程内部开始节点影响，提交后实际进入内部审批并正常汇出。 */
+    @ParameterizedTest
+    @ValueSource(ints = { 1, 2 })
+    void startsAndCompletesEmbeddedSubprocessUsingRootForm(int depth)
+    {
+        String nested = "<userTask id=\"hold\" name=\"内部审批\" flowable:assignee=\"100\"/>";
+        String target = "hold";
+        for (int level = 1; level <= depth; level++)
+        {
+            nested = """
+                    <subProcess id="sub%s">
+                      <startEvent id="innerStart%s"/>
+                      %s
+                      <endEvent id="innerEnd%s"/>
+                      <sequenceFlow id="innerIn%s" sourceRef="innerStart%s" targetRef="%s"/>
+                      <sequenceFlow id="innerOut%s" sourceRef="%s" targetRef="innerEnd%s"/>
+                    </subProcess>
+                    """.formatted(level, level, nested, level, level, level, target,
+                            level, target, level);
+            target = "sub" + level;
+        }
+        String xml = BPMN.replace(
+                "<userTask id=\"hold\" name=\"Hold\" flowable:assignee=\"100\"/>", nested)
+                .replace("sourceRef=\"start\" targetRef=\"hold\"",
+                        "sourceRef=\"start\" targetRef=\"" + target + "\"")
+                .replace("</process>", "<endEvent id=\"end\"/><sequenceFlow id=\"toEnd\" sourceRef=\""
+                        + target + "\" targetRef=\"end\"/></process>");
+        Deployment deployment = repositoryService.createDeployment()
+                .addString("embedded-start-chain.bpmn20.xml", xml).deploy();
+        definition = repositoryService.createProcessDefinitionQuery()
+                .deploymentId(deployment.getId()).singleResult();
+        artifactRepository.persist(deployment.getId(), deploymentArtifacts(deployment.getId()));
+        when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(definition.getKey()))
+                .thenReturn(new WorkflowProcessDefinitionLockRow(
+                        definition.getId(), deployment.getId(), 1));
+
+        var form = queryService.getProcessForm(new WorkflowProcessFormQueryDto(
+                definition.getId(), deployment.getId(), null));
+        assertThat(form.nodeKey()).isEqualTo("start");
+        assertThat(form.formKey()).isEqualTo("startForm");
+        assertThat(form.content()).isEqualTo(FORM_CONTENT);
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
+        var submitted = draftService.submit(draft.draftId(), new WorkflowProcessDraftSubmitRequest(
+                draft.revisionNo(), "EMBEDDED-" + depth, VALID_VARIABLES, Map.of()));
+        String instanceId = submitted.processInstanceId();
+        var submissionSnapshot = WorkflowFormSubmissionSnapshotCodec.decode(
+                (String) runtimeService.getVariable(instanceId,
+                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
+        assertThat(submissionSnapshot.nodeKey()).isEqualTo("start");
+        var task = processEngine.getTaskService().createTaskQuery()
+                .processInstanceId(instanceId).singleResult();
+        assertThat(task.getTaskDefinitionKey()).isEqualTo("hold");
+        assertThat(task.getAssignee()).isEqualTo(USER_ID);
+        processEngine.getTaskService().complete(task.getId());
+        assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(instanceId).count())
+                .isZero();
+        assertThat(processEngine.getHistoryService().createHistoricActivityInstanceQuery()
+                .processInstanceId(instanceId).activityId("end").finished().count()).isOne();
+    }
+
+    /** 主流程仍须恰好有一个开始节点，不能借用内部开始节点掩盖部署数据损坏。 */
+    @ParameterizedTest
+    @ValueSource(ints = { 0, 2 })
+    void rejectsMissingOrDuplicateRootStart(int rootStartCount)
+    {
+        var model = repositoryService.getBpmnModel(definition.getId());
+        var process = model.getProcessById(definition.getKey());
+        process.removeFlowElement("start");
+        for (int index = 0; index < rootStartCount; index++)
+        {
+            var start = new org.flowable.bpmn.model.StartEvent();
+            start.setId("rootStart" + index);
+            process.addFlowElement(start);
+        }
+        var sub = new org.flowable.bpmn.model.SubProcess();
+        sub.setId("sub");
+        var innerStart = new org.flowable.bpmn.model.StartEvent();
+        innerStart.setId("innerStart");
+        sub.addFlowElement(innerStart);
+        process.addFlowElement(sub);
+
+        assertThatThrownBy(() -> queryService.getProcessForm(new WorkflowProcessFormQueryDto(
+                definition.getId(), definition.getDeploymentId(), null)))
+                .isInstanceOfSatisfying(ServiceException.class, exception ->
+                {
+                    assertThat(exception.getCode()).isEqualTo(HttpStatus.ERROR);
+                    assertThat(exception.getMessage()).isEqualTo("流程开始节点数据异常");
+                });
+        assertThat(runtimeService.createProcessInstanceQuery().count()).isZero();
     }
 
     /**

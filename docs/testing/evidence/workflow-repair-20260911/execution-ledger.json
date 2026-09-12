@@ -1,0 +1,3872 @@
+{
+  "models": [
+    {
+      "key": "repair0911_dmn",
+      "modelId": "062ac416-ad79-11f1-93ff-005056c00001",
+      "version": 2,
+      "revision": 2,
+      "definitionId": "repair0911_dmn:2:0641f59b-ad79-11f1-93ff-005056c00001",
+      "deploymentId": "06380a88-ad79-11f1-93ff-005056c00001",
+      "modelName": "修复验收：金额决策路由",
+      "modelKey": "repair0911_dmn",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:37:53",
+      "lastUpdateTime": "2026-09-11 08:37:53",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true
+    },
+    {
+      "key": "repair0911_throws",
+      "modelId": "560ed066-ad7b-11f1-ac0a-005056c00001",
+      "version": 3,
+      "revision": 2,
+      "deploymentId": "561a6928-ad7b-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_throws:3:5622cd9b-ad7b-11f1-ac0a-005056c00001",
+      "modelName": "修复验收：原消息抛出节点",
+      "modelKey": "repair0911_throws",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:54:26",
+      "lastUpdateTime": "2026-09-11 08:54:26",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true
+    },
+    {
+      "key": "repair0911_receiver",
+      "modelId": "6cb0bebb-ad74-11f1-bad1-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "deploymentId": "6cc271fd-ad74-11f1-bad1-005056c00001",
+      "definitionId": "repair0911_receiver:1:6cd20260-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "key": "repair0911_graphics",
+      "modelId": "a5c72057-ad77-11f1-93ff-005056c00001",
+      "version": 1,
+      "revision": 4,
+      "modelName": "修复验收：原绘图与补偿节点",
+      "modelKey": "repair0911_graphics",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:28:01",
+      "lastUpdateTime": "2026-09-11 08:31:26",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "da631342-ad79-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_graphics:1:da9769b5-ad79-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_error",
+      "modelId": "a5f33969-ad77-11f1-93ff-005056c00001",
+      "version": 1,
+      "revision": 4,
+      "modelName": "修复验收：原错误边界节点",
+      "modelKey": "repair0911_error",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:28:02",
+      "lastUpdateTime": "2026-09-11 08:36:16",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "43e009b5-ad79-11f1-bc18-005056c00001",
+      "definitionId": "repair0911_error:1:43e93178-ad79-11f1-bc18-005056c00001"
+    },
+    {
+      "key": "repair0911_full",
+      "modelId": "284ef5a9-ad78-11f1-93ff-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：原完整流程多人验证",
+      "modelKey": "repair0911_full",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:31:40",
+      "lastUpdateTime": "2026-09-11 08:31:40",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "288a50fb-ad78-11f1-93ff-005056c00001",
+      "definitionId": "repair0911_full:1:28b6b82e-ad78-11f1-93ff-005056c00001"
+    },
+    {
+      "key": "eqwe1",
+      "modelId": "42d74c23-ad79-11f1-bc18-005056c00001",
+      "version": 3,
+      "revision": 2,
+      "modelName": "qweqw",
+      "modelKey": "eqwe1",
+      "category": "qweqw",
+      "formType": 0,
+      "formId": 1,
+      "description": null,
+      "createTime": "2026-09-11 08:39:34",
+      "lastUpdateTime": "2026-09-11 08:39:34",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "43040175-ad79-11f1-bc18-005056c00001",
+      "definitionId": "eqwe1:3:4331a128-ad79-11f1-bc18-005056c00001"
+    },
+    {
+      "key": "qweqwe12123",
+      "modelId": "43786e43-ad79-11f1-bc18-005056c00001",
+      "version": 2,
+      "revision": 2,
+      "definitionId": "qweqwe12123:2:7146cf92-ad79-11f1-bc18-005056c00001",
+      "deploymentId": "713c483f-ad79-11f1-bc18-005056c00001"
+    },
+    {
+      "key": "qweqwe12123",
+      "modelId": "43786e43-ad79-11f1-bc18-005056c00001",
+      "version": 2,
+      "revision": 2,
+      "modelName": "123123",
+      "modelKey": "qweqwe12123",
+      "category": "qweqw",
+      "formType": 0,
+      "formId": 1,
+      "description": "123123",
+      "createTime": "2026-09-11 08:39:35",
+      "lastUpdateTime": "2026-09-11 08:39:35",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "713c483f-ad79-11f1-bc18-005056c00001"
+    },
+    {
+      "key": "repair0911_pools",
+      "modelId": "ae9e8b63-ad79-11f1-bc18-005056c00001",
+      "version": 1,
+      "revision": 4,
+      "modelName": "修复验收：原双池协作",
+      "modelKey": "repair0911_pools",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:42:35",
+      "lastUpdateTime": "2026-09-11 08:44:47",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "0655fde0-ad7a-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_pools:1:0673e624-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_gateway",
+      "modelId": "66437c55-ad7a-11f1-ac0a-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：消息信号竞争",
+      "modelKey": "repair0911_gateway",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:47:43",
+      "lastUpdateTime": "2026-09-11 08:47:43",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "6654e177-ad7a-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_gateway:1:665ea57a-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_gateway_alias",
+      "modelId": "6a263431-ad7a-11f1-ac0a-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：同业务键隔离",
+      "modelKey": "repair0911_gateway_alias",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:47:50",
+      "lastUpdateTime": "2026-09-11 08:47:50",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "6a343df3-ad7a-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_gateway_alias:1:6a3cf086-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_child",
+      "modelId": "8ac3b3b4-ad7b-11f1-ac0a-005056c00001",
+      "version": 2,
+      "revision": 2,
+      "modelName": "修复验收：调用子流程",
+      "modelKey": "repair0911_child",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:55:54",
+      "lastUpdateTime": "2026-09-11 08:55:54",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "8de7fe26-ad7b-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_child:2:8dee66c9-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_parent_fixed",
+      "modelId": "5f3cd241-ad7b-11f1-ac0a-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：调用父流程",
+      "modelKey": "repair0911_parent_fixed",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:54:41",
+      "lastUpdateTime": "2026-09-11 08:54:41",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "5f4bc663-ad7b-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_parent_latest",
+      "modelId": "8e531c70-ad7b-11f1-ac0a-005056c00001",
+      "version": 2,
+      "revision": 2,
+      "modelName": "修复验收：调用父流程",
+      "modelKey": "repair0911_parent_latest",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:56:00",
+      "lastUpdateTime": "2026-09-11 08:56:00",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "91773fd2-ad7b-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_parent_latest:2:917ee0f5-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_http_retry",
+      "modelId": "c0b70b79-ad7b-11f1-ac0a-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：异步外部业务重试",
+      "modelKey": "repair0911_http_retry",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:57:25",
+      "lastUpdateTime": "2026-09-11 08:57:25",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "c0c4ee2b-ad7b-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_http_retry:1:c0cb56ce-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_transaction",
+      "modelId": "c3f56dba-ad7b-11f1-ac0a-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：事务取消补偿外部业务",
+      "modelKey": "repair0911_transaction",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:57:30",
+      "lastUpdateTime": "2026-09-11 08:57:30",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "c40217ec-ad7b-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_transaction:1:c403506e-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_event_sub_true",
+      "modelId": "e9b4d144-ad7b-11f1-ac0a-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：中断事件子流程",
+      "modelKey": "repair0911_event_sub_true",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:58:33",
+      "lastUpdateTime": "2026-09-11 08:58:33",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "e9c217b6-ad7b-11f1-ac0a-005056c00001",
+      "definitionId": "repair0911_event_sub_true:1:e9c2db08-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_event_sub_false",
+      "modelId": "ed03ae53-ad7b-11f1-ac0a-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：非中断事件子流程",
+      "modelKey": "repair0911_event_sub_false",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 08:58:39",
+      "lastUpdateTime": "2026-09-11 08:58:39",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "ed0e0e95-ad7b-11f1-ac0a-005056c00001",
+      "definitionId": "ed0ef8f7-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_escalation",
+      "modelId": "05c4b242-ad7d-11f1-a718-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：精确升级边界",
+      "modelKey": "repair0911_escalation",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 09:06:30",
+      "lastUpdateTime": "2026-09-11 09:06:30",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "05f36364-ad7d-11f1-a718-005056c00001",
+      "definitionId": "repair0911_escalation:1:062b1537-ad7d-11f1-a718-005056c00001"
+    },
+    {
+      "key": "repair0911_child_min",
+      "modelId": "4e0dcb2c-ad7d-11f1-a718-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：子流程开始校验回滚",
+      "modelKey": "repair0911_child_min",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 09:08:31",
+      "lastUpdateTime": "2026-09-11 09:08:31",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "4e2300de-ad7d-11f1-a718-005056c00001",
+      "definitionId": "repair0911_child_min:1:4e2d3a11-ad7d-11f1-a718-005056c00001"
+    },
+    {
+      "key": "repair0911_parent_rollback",
+      "modelId": "5152bd0c-ad7d-11f1-a718-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：调用父流程",
+      "modelKey": "repair0911_parent_rollback",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 09:08:37",
+      "lastUpdateTime": "2026-09-11 09:08:37",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "5169524e-ad7d-11f1-a718-005056c00001",
+      "definitionId": "51714191-ad7d-11f1-a718-005056c00001"
+    },
+    {
+      "key": "repair0911_parent_drift",
+      "modelId": "51ae98cf-ad7d-11f1-a718-005056c00001",
+      "version": 1,
+      "revision": 3,
+      "modelName": "修复验收：调用父流程",
+      "modelKey": "repair0911_parent_drift",
+      "category": "qweqw",
+      "formType": 2,
+      "formId": null,
+      "description": null,
+      "createTime": "2026-09-11 09:08:37",
+      "lastUpdateTime": "2026-09-11 09:08:37",
+      "bpmnXml": null,
+      "content": null,
+      "deployed": false,
+      "metadataEditAllowed": true,
+      "deployAllowed": true,
+      "deleteAllowed": true,
+      "deploymentId": "6e0bcc14-ad7d-11f1-a718-005056c00001",
+      "definitionId": "repair0911_parent_drift:1:6e131f17-ad7d-11f1-a718-005056c00001"
+    }
+  ],
+  "instances": [
+    {
+      "key": "repair0911_dmn",
+      "businessKey": "REPAIR0911-DMN-V1-500",
+      "definitionId": "repair0911_dmn:1:4deb3ddd-ad74-11f1-bad1-005056c00001",
+      "draftId": "48d5506e-5777-496e-9d52-42bb6fc0d7c0",
+      "revisionNo": 2,
+      "processInstanceId": "57123a9b-ad74-11f1-bad1-005056c00001",
+      "processDefinitionId": "repair0911_dmn:1:4deb3ddd-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "key": "repair0911_dmn",
+      "businessKey": "REPAIR0911-DMN-V1-2000",
+      "definitionId": "repair0911_dmn:1:4deb3ddd-ad74-11f1-bad1-005056c00001",
+      "draftId": "b97463f8-c08a-4f87-9f20-d3fb2989d5d0",
+      "revisionNo": 2,
+      "processInstanceId": "57502e12-ad74-11f1-bad1-005056c00001",
+      "processDefinitionId": "repair0911_dmn:1:4deb3ddd-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "key": "repair0911_receiver",
+      "businessKey": "REPAIR0911-TARGET",
+      "definitionId": "repair0911_receiver:1:6cd20260-ad74-11f1-bad1-005056c00001",
+      "draftId": "38e2df9a-8046-4f3a-bc65-eb9a7fcdbe7b",
+      "revisionNo": 2,
+      "processInstanceId": "6cf2349b-ad74-11f1-bad1-005056c00001",
+      "processDefinitionId": "repair0911_receiver:1:6cd20260-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "key": "repair0911_receiver",
+      "businessKey": "REPAIR0911-OTHER",
+      "definitionId": "repair0911_receiver:1:6cd20260-ad74-11f1-bad1-005056c00001",
+      "draftId": "b894faf5-4317-43b6-b418-ba5b469d7e90",
+      "revisionNo": 2,
+      "processInstanceId": "6d0f599a-ad74-11f1-bad1-005056c00001",
+      "processDefinitionId": "repair0911_receiver:1:6cd20260-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "key": "repair0911_throws",
+      "businessKey": "REPAIR0911-ORIGINAL-THROW",
+      "definitionId": "repair0911_throws:1:999c130c-ad74-11f1-bad1-005056c00001",
+      "draftId": "2d58cab5-c455-4de5-b308-5dafc91bc91a",
+      "revisionNo": 2,
+      "processInstanceId": "99cce717-ad74-11f1-bad1-005056c00001",
+      "processDefinitionId": "repair0911_throws:1:999c130c-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "key": "repair0911_throws",
+      "businessKey": "REPAIR0911-ORIGINAL-THROW-V2",
+      "definitionId": "repair0911_throws:2:9c552d3a-ad76-11f1-8874-005056c00001",
+      "draftId": "b4b02ede-0e7d-4a80-8adf-95bae86c3bc8",
+      "revisionNo": 2,
+      "processInstanceId": "02a8dbc6-ad77-11f1-93ff-005056c00001",
+      "processDefinitionId": "repair0911_throws:2:9c552d3a-ad76-11f1-8874-005056c00001"
+    },
+    {
+      "key": "repair0911_full",
+      "businessKey": "REPAIR0911-FULL-500",
+      "definitionId": "repair0911_full:1:28b6b82e-ad78-11f1-93ff-005056c00001",
+      "draftId": "4e6a528f-d130-4ccc-a3d4-5bb034f38242",
+      "revisionNo": 2,
+      "processInstanceId": "28ca4039-ad78-11f1-93ff-005056c00001",
+      "processDefinitionId": "repair0911_full:1:28b6b82e-ad78-11f1-93ff-005056c00001"
+    },
+    {
+      "key": "repair0911_dmn",
+      "businessKey": "REPAIR0911-DMN-FROZEN-V1",
+      "definitionId": "repair0911_dmn:1:4deb3ddd-ad74-11f1-bad1-005056c00001",
+      "draftId": "6e609957-5254-4eeb-aae3-051c6d1a99cd",
+      "revisionNo": 2,
+      "processInstanceId": "fd30a3af-ad78-11f1-93ff-005056c00001",
+      "processDefinitionId": "repair0911_dmn:1:4deb3ddd-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "key": "repair0911_dmn",
+      "businessKey": "REPAIR0911-DMN-FRESH-V2",
+      "definitionId": "repair0911_dmn:2:0641f59b-ad79-11f1-93ff-005056c00001",
+      "draftId": "79013b78-1a7b-41e2-a840-3a8ea996d4e8",
+      "revisionNo": 2,
+      "processInstanceId": "06549349-ad79-11f1-93ff-005056c00001",
+      "processDefinitionId": "repair0911_dmn:2:0641f59b-ad79-11f1-93ff-005056c00001"
+    },
+    {
+      "key": "eqwe1",
+      "businessKey": "REPAIR0911-TEMPLATE-eqwe1",
+      "definitionId": "eqwe1:3:4331a128-ad79-11f1-bc18-005056c00001",
+      "draftId": "6586dfd3-bedf-45ef-b83d-0ac8b11a11bb",
+      "revisionNo": 2,
+      "processInstanceId": "436c3933-ad79-11f1-bc18-005056c00001",
+      "processDefinitionId": "eqwe1:3:4331a128-ad79-11f1-bc18-005056c00001"
+    },
+    {
+      "key": "repair0911_error",
+      "businessKey": "REPAIR0911-ORIGINAL-ERROR",
+      "definitionId": "repair0911_error:1:43e93178-ad79-11f1-bc18-005056c00001",
+      "draftId": "ae93995b-18f6-43d5-ae82-70208e00302d",
+      "revisionNo": 2,
+      "processInstanceId": "69e6d723-ad79-11f1-bc18-005056c00001",
+      "processDefinitionId": "repair0911_error:1:43e93178-ad79-11f1-bc18-005056c00001"
+    },
+    {
+      "key": "qweqwe12123",
+      "businessKey": "REPAIR0911-TEMPLATE-qweqwe12123",
+      "definitionId": "qweqwe12123:2:7146cf92-ad79-11f1-bc18-005056c00001",
+      "draftId": "c57090c8-f3fe-4bfa-bc88-62446e586b20",
+      "revisionNo": 2,
+      "processInstanceId": "715b901d-ad79-11f1-bc18-005056c00001",
+      "processDefinitionId": "qweqwe12123:2:7146cf92-ad79-11f1-bc18-005056c00001"
+    },
+    {
+      "key": "repair0911_graphics",
+      "businessKey": "REPAIR0911-ORIGINAL-GRAPHICS",
+      "definitionId": "repair0911_graphics:1:da9769b5-ad79-11f1-ac0a-005056c00001",
+      "draftId": "649d6ca1-6693-43c9-9ccc-b52d82f7ad1a",
+      "revisionNo": 2,
+      "processInstanceId": "e1a28b50-ad79-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_graphics:1:da9769b5-ad79-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_partner",
+      "businessKey": "REPAIR0911-POOLS",
+      "definitionId": "repair0911_partner:1:06740d35-ad7a-11f1-ac0a-005056c00001",
+      "draftId": "783fafcf-c28b-482d-acd8-a6d45b764161",
+      "revisionNo": 2,
+      "processInstanceId": "0ed60b40-ad7a-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_partner:1:06740d35-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_pools",
+      "businessKey": "REPAIR0911-POOLS",
+      "definitionId": "repair0911_pools:1:0673e624-ad7a-11f1-ac0a-005056c00001",
+      "draftId": "13a39da1-033f-4501-8e7f-0ffde42ba4eb",
+      "revisionNo": 2,
+      "processInstanceId": "0ee41510-ad7a-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_pools:1:0673e624-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_gateway",
+      "businessKey": "REPAIR0911-GATEWAY-message",
+      "definitionId": "repair0911_gateway:1:665ea57a-ad7a-11f1-ac0a-005056c00001",
+      "draftId": "d4e2fa47-2d58-468a-86d8-f632d21b07a6",
+      "revisionNo": 2,
+      "processInstanceId": "667058c5-ad7a-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_gateway:1:665ea57a-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_gateway",
+      "businessKey": "REPAIR0911-GATEWAY-signal",
+      "definitionId": "repair0911_gateway:1:665ea57a-ad7a-11f1-ac0a-005056c00001",
+      "draftId": "6e203076-dcee-44aa-9bfa-1acb88d15385",
+      "revisionNo": 2,
+      "processInstanceId": "66ab17f4-ad7a-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_gateway:1:665ea57a-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_gateway",
+      "businessKey": "REPAIR0911-EVENT-SUSPEND",
+      "definitionId": "repair0911_gateway:1:665ea57a-ad7a-11f1-ac0a-005056c00001",
+      "draftId": "6ecba341-cdb7-44f4-9e54-cad8a6641640",
+      "revisionNo": 2,
+      "processInstanceId": "66da6573-ad7a-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_gateway:1:665ea57a-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_gateway",
+      "businessKey": "REPAIR0911-AMBIGUOUS",
+      "definitionId": "repair0911_gateway:1:665ea57a-ad7a-11f1-ac0a-005056c00001",
+      "draftId": "651f9b5e-6775-41de-95d6-35a5eb9f7092",
+      "revisionNo": 2,
+      "processInstanceId": "6a4b4871-ad7a-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_gateway:1:665ea57a-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_gateway_alias",
+      "businessKey": "REPAIR0911-AMBIGUOUS",
+      "definitionId": "repair0911_gateway_alias:1:6a3cf086-ad7a-11f1-ac0a-005056c00001",
+      "draftId": "e0c0486f-2a14-4b47-932d-80795f4d274c",
+      "revisionNo": 2,
+      "processInstanceId": "6a56ba36-ad7a-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_gateway_alias:1:6a3cf086-ad7a-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_receiver",
+      "businessKey": "REPAIR0911-LATE-INBOUND",
+      "definitionId": "repair0911_receiver:1:6cd20260-ad74-11f1-bad1-005056c00001",
+      "draftId": "6bd2e099-7b69-46a1-b060-128796d34a84",
+      "revisionNo": 2,
+      "processInstanceId": "1bca206d-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_receiver:1:6cd20260-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "key": "repair0911_throws",
+      "businessKey": "REPAIR0911-LATE-SENDER",
+      "definitionId": "repair0911_throws:3:5622cd9b-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "9cdf2a07-5191-4f67-97d7-4c333fe07790",
+      "revisionNo": 2,
+      "processInstanceId": "5631e8d6-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_throws:3:5622cd9b-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_receiver",
+      "businessKey": "REPAIR0911-LATE-OUTBOX",
+      "definitionId": "repair0911_receiver:1:6cd20260-ad74-11f1-bad1-005056c00001",
+      "draftId": "db6fa1fd-d345-4d11-92dd-e4650229d3ed",
+      "revisionNo": 2,
+      "processInstanceId": "566e55ae-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_receiver:1:6cd20260-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "key": "repair0911_parent_fixed",
+      "businessKey": "REPAIR0911-CALL-FIXED",
+      "definitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "fe90f9ea-1179-4e24-834b-784b8bc7d691",
+      "revisionNo": 2,
+      "processInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_parent_fixed",
+      "businessKey": "REPAIR0911-CALL-FROZEN-repair0911_parent_fixed",
+      "definitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "8bc29029-d260-42d2-9d15-1fedde06f696",
+      "revisionNo": 2,
+      "processInstanceId": "8dfc97a4-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_parent_latest",
+      "businessKey": "REPAIR0911-CALL-FROZEN-repair0911_parent_latest",
+      "definitionId": "repair0911_parent_latest:1:8abc1289-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "a774f3cd-202d-498f-90f8-e68cd02db734",
+      "revisionNo": 2,
+      "processInstanceId": "8e2b9712-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_parent_latest:1:8abc1289-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_parent_latest",
+      "businessKey": "REPAIR0911-CALL-NEW-LATEST",
+      "definitionId": "repair0911_parent_latest:2:917ee0f5-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "5c5e606e-427d-4650-a2c9-a26cdbbd13f3",
+      "revisionNo": 2,
+      "processInstanceId": "918b1600-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_parent_latest:2:917ee0f5-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_http_retry",
+      "businessKey": "REPAIR0911-HTTP-RETRY",
+      "definitionId": "repair0911_http_retry:1:c0cb56ce-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "bc786c11-df41-41e9-a6ba-77f70da9c29e",
+      "revisionNo": 2,
+      "processInstanceId": "c0d78bd9-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_http_retry:1:c0cb56ce-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_transaction",
+      "businessKey": "REPAIR0911-TX-CANCEL",
+      "definitionId": "repair0911_transaction:1:c403506e-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "06c99208-6c77-44d3-956a-4d073dcacafa",
+      "revisionNo": 2,
+      "processInstanceId": "c40f5e69-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_transaction:1:c403506e-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_event_sub_true",
+      "businessKey": "REPAIR0911-EVENT-SUB-true",
+      "definitionId": "repair0911_event_sub_true:1:e9c2db08-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "ba43eed8-33ec-49a9-b055-8c18958365e4",
+      "revisionNo": 2,
+      "processInstanceId": "e9cee903-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "repair0911_event_sub_true:1:e9c2db08-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_event_sub_false",
+      "businessKey": "REPAIR0911-EVENT-SUB-false",
+      "definitionId": "ed0ef8f7-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "444c6b42-ef45-4acc-9372-5fe9e5534764",
+      "revisionNo": 2,
+      "processInstanceId": "ed1b06f2-ad7b-11f1-ac0a-005056c00001",
+      "processDefinitionId": "ed0ef8f7-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_transaction",
+      "businessKey": "REPAIR0911-TX-CANCEL-FIXED",
+      "definitionId": "repair0911_transaction:1:c403506e-ad7b-11f1-ac0a-005056c00001",
+      "draftId": "e6d4b87b-4f0e-45ca-becc-93ef47470645",
+      "revisionNo": 2,
+      "processInstanceId": "04b6c57e-ad7d-11f1-a718-005056c00001",
+      "processDefinitionId": "repair0911_transaction:1:c403506e-ad7b-11f1-ac0a-005056c00001"
+    },
+    {
+      "key": "repair0911_escalation",
+      "businessKey": "REPAIR0911-ESCALATION",
+      "definitionId": "repair0911_escalation:1:062b1537-ad7d-11f1-a718-005056c00001",
+      "draftId": "d1546500-cbbd-4188-be63-51499f0ede5e",
+      "revisionNo": 2,
+      "processInstanceId": "0677d5b2-ad7d-11f1-a718-005056c00001",
+      "processDefinitionId": "repair0911_escalation:1:062b1537-ad7d-11f1-a718-005056c00001"
+    },
+    {
+      "key": "repair0911_parent_rollback",
+      "businessKey": "REPAIR0911-CALL-ROLLBACK",
+      "definitionId": "51714191-ad7d-11f1-a718-005056c00001",
+      "draftId": "2510c963-a2f3-4992-9e8e-246b364ee79c",
+      "revisionNo": 1
+    }
+  ],
+  "dmnV1": {
+    "decisionId": "03e4173c-ad73-11f1-96d9-005056c00001",
+    "decisionKey": "repair0911_amount",
+    "decisionName": "修复验收金额决策",
+    "version": 1,
+    "category": null,
+    "decisionType": "decision_table",
+    "deploymentId": "03e1f45a-ad73-11f1-96d9-005056c00001",
+    "resourceName": "repair0911_amount.dmn",
+    "deploymentTime": "2026-09-11 07:54:52"
+  },
+  "outboxCredentialId": 1,
+  "outboxEndpointId": 1,
+  "backendProcessId": 95688,
+  "originalWaiting": [
+    {
+      "processInstanceId": "54cefe9d-ac62-11f1-8ac1-005056c00001",
+      "definitionId": "cu0909_elements:4:4b5d8b62-ac62-11f1-8ac1-005056c00001",
+      "processKey": "cu0909_elements",
+      "processName": "CU0909R节点覆盖补测",
+      "version": 4,
+      "category": "qweqw",
+      "deploymentId": "4b50ba1f-ac62-11f1-8ac1-005056c00001",
+      "businessKey": "CU0909R-MESSAGE-V4",
+      "startUserId": "1",
+      "startUserName": "管理员",
+      "startTime": "2026-09-09T15:22:55.482Z",
+      "endTime": null,
+      "durationMillis": null,
+      "processStatus": "running",
+      "currentTaskNames": [],
+      "cancelAllowed": false,
+      "terminateAllowed": true,
+      "stateAction": "SUSPEND",
+      "historyDeleteAllowed": false,
+      "waiting": {
+        "processInstanceId": "54cefe9d-ac62-11f1-8ac1-005056c00001",
+        "localTimerExecutionReady": true,
+        "truncated": false,
+        "waits": [
+          {
+            "type": "MESSAGE",
+            "nodeId": "Event_0jhrj1w",
+            "eventName": "cu0909_message",
+            "executionId": "54cf25b7-ac62-11f1-8ac1-005056c00001",
+            "jobId": null,
+            "dueTime": null,
+            "retries": null,
+            "state": "running"
+          }
+        ]
+      }
+    },
+    {
+      "processInstanceId": "5019d008-ac61-11f1-8ac1-005056c00001",
+      "definitionId": "cu0909_elements:1:43be0e1d-ac61-11f1-8ac1-005056c00001",
+      "processKey": "cu0909_elements",
+      "processName": "CU0909R节点覆盖补测",
+      "version": 1,
+      "category": "qweqw",
+      "deploymentId": "43b0a09a-ac61-11f1-8ac1-005056c00001",
+      "businessKey": "CU0909R-RECEIVE-1",
+      "startUserId": "1",
+      "startUserName": "管理员",
+      "startTime": "2026-09-09T15:15:38.087Z",
+      "endTime": null,
+      "durationMillis": null,
+      "processStatus": "running",
+      "currentTaskNames": [],
+      "cancelAllowed": false,
+      "terminateAllowed": true,
+      "stateAction": "SUSPEND",
+      "historyDeleteAllowed": false,
+      "waiting": {
+        "processInstanceId": "5019d008-ac61-11f1-8ac1-005056c00001",
+        "localTimerExecutionReady": true,
+        "truncated": false,
+        "waits": [
+          {
+            "type": "RECEIVE",
+            "nodeId": "Activity_0k93idv",
+            "eventName": "Activity_0k93idv",
+            "executionId": "5019f722-ac61-11f1-8ac1-005056c00001",
+            "jobId": null,
+            "dueTime": null,
+            "retries": null,
+            "state": "running"
+          }
+        ]
+      }
+    }
+  ],
+  "acceptance": [
+    {
+      "scenario": "三人会签进入等待",
+      "time": "2026-09-11T00:32:19.113Z",
+      "instanceId": "28ca4039-ad78-11f1-93ff-005056c00001",
+      "tasks": [
+        {
+          "id": "3f050465-ad78-11f1-93ff-005056c00001",
+          "assignee": "1"
+        },
+        {
+          "id": "3f07756c-ad78-11f1-93ff-005056c00001",
+          "assignee": "104"
+        },
+        {
+          "id": "3f0886e4-ad78-11f1-93ff-005056c00001",
+          "assignee": "105"
+        }
+      ]
+    },
+    {
+      "scenario": "两人或签竞争只完成一次",
+      "time": "2026-09-11T00:32:19.855Z",
+      "instanceId": "28ca4039-ad78-11f1-93ff-005056c00001",
+      "outcomes": [
+        "rejected",
+        "fulfilled"
+      ],
+      "downstream": [
+        "Activity_1yghjjn",
+        "Activity_039k030"
+      ]
+    },
+    {
+      "scenario": "并行汇聚与小额路由",
+      "time": "2026-09-11T00:32:20.043Z",
+      "instanceId": "28ca4039-ad78-11f1-93ff-005056c00001",
+      "node": "Activity_18fvzdv"
+    },
+    {
+      "scenario": "发布新决策版本",
+      "time": "2026-09-11T00:37:37.998Z",
+      "deploymentId": "fd22c0fc-ad78-11f1-93ff-005056c00001",
+      "originalScenarioLabel": "发布决策V2",
+      "note": "Formal decision version is 3; V2 was an earlier publication in the same acceptance run."
+    },
+    {
+      "scenario": "发布新决策版本",
+      "time": "2026-09-11T00:37:53.099Z",
+      "decisionId": "fd24208e-ad78-11f1-93ff-005056c00001",
+      "decisionKey": "repair0911_amount",
+      "decisionName": "修复验收金额决策",
+      "version": 3,
+      "category": null,
+      "decisionType": "decision_table",
+      "deploymentId": "fd22c0fc-ad78-11f1-93ff-005056c00001",
+      "resourceName": "repair0911_amount.dmn",
+      "deploymentTime": "2026-09-11 08:37:37",
+      "originalScenarioLabel": "发布决策V2",
+      "note": "Formal decision version is 3; V2 was an earlier publication in the same acceptance run."
+    },
+    {
+      "scenario": "已引用决策部署删除拒绝",
+      "time": "2026-09-11T00:37:53.485Z",
+      "message": "/workflow/dmn/03e1f45a-ad73-11f1-96d9-005056c00001: {\"code\":409,\"msg\":\"DMN 部署已被流程版本冻结引用\"}"
+    },
+    {
+      "scenario": "DMN冻结版本及无权限发布拒绝",
+      "time": "2026-09-11T00:37:53.841Z",
+      "oldInstance": "fd30a3af-ad78-11f1-93ff-005056c00001",
+      "newInstance": "06549349-ad79-11f1-93ff-005056c00001"
+    },
+    {
+      "scenario": "完整原流程PT5S已进入正式定时等待",
+      "time": "2026-09-11T00:38:31.25Z",
+      "instanceId": "28ca4039-ad78-11f1-93ff-005056c00001",
+      "waiting": {
+        "processInstanceId": "28ca4039-ad78-11f1-93ff-005056c00001",
+        "localTimerExecutionReady": true,
+        "truncated": false,
+        "waits": [
+          {
+            "type": "TIMER",
+            "nodeId": "Event_0uankmj",
+            "eventName": null,
+            "executionId": "3f7ccbd0-ad78-11f1-93ff-005056c00001",
+            "jobId": "1ce03678-ad79-11f1-93ff-005056c00001",
+            "dueTime": "2026-09-11T00:38:36.23Z",
+            "retries": 3,
+            "state": "WAITING"
+          }
+        ]
+      }
+    },
+    {
+      "scenario": "重启后定时推进与包容汇聚至终态",
+      "time": "2026-09-11T00:39:34.643Z",
+      "id": "28ca4039-ad78-11f1-93ff-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "review",
+          "task": "28ca6757-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:31:41.844Z"
+        },
+        {
+          "node": "start",
+          "task": null,
+          "end": "2026-09-11T00:31:41.723Z"
+        },
+        {
+          "node": "Activity_0sniylb",
+          "task": "28dcddee-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:32:19.01Z"
+        },
+        {
+          "node": "Activity_060h5cm",
+          "task": "3f050465-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:32:19.248Z"
+        },
+        {
+          "node": "Activity_060h5cm",
+          "task": "3f07756c-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:32:19.421Z"
+        },
+        {
+          "node": "Activity_060h5cm",
+          "task": "3f0886e4-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:32:19.593Z"
+        },
+        {
+          "node": "Activity_12tp10q",
+          "task": "3f5e6e4c-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:32:19.799Z"
+        },
+        {
+          "node": "Activity_12tp10q",
+          "task": "3f610663-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:32:19.796Z"
+        },
+        {
+          "node": "Activity_039k030",
+          "task": "3f7ccbd7-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:32:19.999Z"
+        },
+        {
+          "node": "Activity_1yghjjn",
+          "task": "3f7db63a-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:32:19.916Z"
+        },
+        {
+          "node": "Activity_18fvzdv",
+          "task": "3f9b777a-ad78-11f1-93ff-005056c00001",
+          "end": "2026-09-11T00:38:31.224Z"
+        },
+        {
+          "node": "Activity_1du8eke",
+          "task": "2c20ef73-ad79-11f1-bc18-005056c00001",
+          "end": "2026-09-11T00:39:34.139Z"
+        },
+        {
+          "node": "Activity_0vxantf",
+          "task": "2c2a6556-ad79-11f1-bc18-005056c00001",
+          "end": "2026-09-11T00:39:33.822Z"
+        },
+        {
+          "node": "Activity_0mxcwra",
+          "task": "425ff939-ad79-11f1-bc18-005056c00001",
+          "end": "2026-09-11T00:39:34.453Z"
+        },
+        {
+          "node": "Event_0d7etir",
+          "task": null,
+          "end": "2026-09-11T00:39:34.143Z"
+        },
+        {
+          "node": "Event_1p20d0b",
+          "task": null,
+          "end": "2026-09-11T00:39:34.457Z"
+        },
+        {
+          "node": "Event_0cedvst",
+          "task": null,
+          "end": "2026-09-11T00:39:34.46Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "28ca4039-ad78-11f1-93ff-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "28ca4039-ad78-11f1-93ff-005056c00001",
+          "definitionId": "repair0911_full:1:28b6b82e-ad78-11f1-93ff-005056c00001",
+          "processKey": "repair0911_full",
+          "processName": "修复验收：原完整流程多人验证",
+          "version": 1,
+          "businessKey": "REPAIR0911-FULL-500",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:31:41.722Z",
+          "endTime": "2026-09-11T00:39:34.505Z",
+          "current": true
+        }
+      ]
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T00:40:54.347Z",
+      "id": "436c3933-ad79-11f1-bc18-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "review",
+          "task": "436cae71-ad79-11f1-bc18-005056c00001",
+          "end": "2026-09-11T00:40:53.675Z"
+        },
+        {
+          "node": "start",
+          "task": null,
+          "end": "2026-09-11T00:39:35.903Z"
+        },
+        {
+          "node": "Activity_047tra2",
+          "task": "71c8a9f7-ad79-11f1-bc18-005056c00001",
+          "end": "2026-09-11T00:40:53.856Z"
+        },
+        {
+          "node": "Activity_0vbtjxd",
+          "task": "71e4486b-ad79-11f1-bc18-005056c00001",
+          "end": "2026-09-11T00:40:54.062Z"
+        },
+        {
+          "node": "Activity_1eugq98",
+          "task": "7203684f-ad79-11f1-bc18-005056c00001",
+          "end": "2026-09-11T00:40:54.268Z"
+        },
+        {
+          "node": "end",
+          "task": null,
+          "end": "2026-09-11T00:40:54.271Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "436c3933-ad79-11f1-bc18-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "436c3933-ad79-11f1-bc18-005056c00001",
+          "definitionId": "eqwe1:3:4331a128-ad79-11f1-bc18-005056c00001",
+          "processKey": "eqwe1",
+          "processName": "qweqw",
+          "version": 3,
+          "businessKey": "REPAIR0911-TEMPLATE-eqwe1",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:39:35.901Z",
+          "endTime": "2026-09-11T00:40:54.28Z",
+          "current": true
+        }
+      ]
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T00:40:54.514Z",
+      "id": "69e6d723-ad79-11f1-bc18-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "start",
+          "task": null,
+          "end": "2026-09-11T00:40:40.458Z"
+        },
+        {
+          "node": "review",
+          "task": "69eaf5ed-ad79-11f1-bc18-005056c00001",
+          "end": "2026-09-11T00:40:54.442Z"
+        },
+        {
+          "node": "end",
+          "task": null,
+          "end": "2026-09-11T00:40:54.443Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "69e6d723-ad79-11f1-bc18-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "69e6d723-ad79-11f1-bc18-005056c00001",
+          "definitionId": "repair0911_error:1:43e93178-ad79-11f1-bc18-005056c00001",
+          "processKey": "repair0911_error",
+          "processName": "修复验收：原错误边界节点",
+          "version": 1,
+          "businessKey": "REPAIR0911-ORIGINAL-ERROR",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:40:40.458Z",
+          "endTime": "2026-09-11T00:40:54.451Z",
+          "current": true
+        }
+      ]
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T00:45:28.215Z",
+      "id": "e1a28b50-ad79-11f1-ac0a-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "start",
+          "task": null,
+          "end": "2026-09-11T00:44:01.355Z"
+        },
+        {
+          "node": "Event_10b0iql",
+          "task": null,
+          "end": "2026-09-11T00:44:01.358Z"
+        },
+        {
+          "node": "Event_1fiy93f",
+          "task": null,
+          "end": "2026-09-11T00:44:01.367Z"
+        },
+        {
+          "node": "Event_06p19a9",
+          "task": null,
+          "end": "2026-09-11T00:44:01.373Z"
+        },
+        {
+          "node": "Event_0i0omr6",
+          "task": null,
+          "end": "2026-09-11T00:44:01.373Z"
+        },
+        {
+          "node": "review",
+          "task": "e1a87eee-ad79-11f1-ac0a-005056c00001",
+          "end": "2026-09-11T00:45:28.092Z"
+        },
+        {
+          "node": "Event_10b0iql",
+          "task": null,
+          "end": "2026-09-11T00:45:17.267Z"
+        },
+        {
+          "node": "Event_1fiy93f",
+          "task": null,
+          "end": "2026-09-11T00:45:17.285Z"
+        },
+        {
+          "node": "end",
+          "task": null,
+          "end": "2026-09-11T00:45:28.093Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "e1a28b50-ad79-11f1-ac0a-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "e1a28b50-ad79-11f1-ac0a-005056c00001",
+          "definitionId": "repair0911_graphics:1:da9769b5-ad79-11f1-ac0a-005056c00001",
+          "processKey": "repair0911_graphics",
+          "processName": "修复验收：原绘图与补偿节点",
+          "version": 1,
+          "businessKey": "REPAIR0911-ORIGINAL-GRAPHICS",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:44:01.337Z",
+          "endTime": "2026-09-11T00:45:28.103Z",
+          "current": true
+        }
+      ]
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T00:45:28.284Z",
+      "id": "0ed60b40-ad7a-11f1-ac0a-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "Event_1iw2nl6",
+          "task": null,
+          "end": "2026-09-11T00:45:17.172Z"
+        },
+        {
+          "node": "Event_1rs57n5",
+          "task": null,
+          "end": "2026-09-11T00:45:18.373Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "0ed60b40-ad7a-11f1-ac0a-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "0ed60b40-ad7a-11f1-ac0a-005056c00001",
+          "definitionId": "repair0911_partner:1:06740d35-ad7a-11f1-ac0a-005056c00001",
+          "processKey": "repair0911_partner",
+          "processName": "修复验收：协作接收池",
+          "version": 1,
+          "businessKey": "REPAIR0911-POOLS",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:45:17.172Z",
+          "endTime": "2026-09-11T00:45:18.4Z",
+          "current": true
+        }
+      ]
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T00:45:28.498Z",
+      "id": "0ee41510-ad7a-11f1-ac0a-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "start",
+          "task": null,
+          "end": "2026-09-11T00:45:17.264Z"
+        },
+        {
+          "node": "Event_10b0iql",
+          "task": null,
+          "end": "2026-09-11T00:45:17.267Z"
+        },
+        {
+          "node": "Event_1fiy93f",
+          "task": null,
+          "end": "2026-09-11T00:45:17.285Z"
+        },
+        {
+          "node": "Event_0q4x0wt",
+          "task": null,
+          "end": "2026-09-11T00:45:17.285Z"
+        },
+        {
+          "node": "Event_1umio85",
+          "task": null,
+          "end": "2026-09-11T00:45:17.286Z"
+        },
+        {
+          "node": "Event_06p19a9",
+          "task": null,
+          "end": "2026-09-11T00:45:17.288Z"
+        },
+        {
+          "node": "Event_0i0omr6",
+          "task": null,
+          "end": "2026-09-11T00:45:17.289Z"
+        },
+        {
+          "node": "review",
+          "task": "0ee80cea-ad7a-11f1-ac0a-005056c00001",
+          "end": "2026-09-11T00:45:28.402Z"
+        },
+        {
+          "node": "end",
+          "task": null,
+          "end": "2026-09-11T00:45:28.402Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "0ee41510-ad7a-11f1-ac0a-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "0ee41510-ad7a-11f1-ac0a-005056c00001",
+          "definitionId": "repair0911_pools:1:0673e624-ad7a-11f1-ac0a-005056c00001",
+          "processKey": "repair0911_pools",
+          "processName": "修复验收：原双池协作",
+          "version": 1,
+          "businessKey": "REPAIR0911-POOLS",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:45:17.264Z",
+          "endTime": "2026-09-11T00:45:28.412Z",
+          "current": true
+        }
+      ]
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T00:45:29.175Z",
+      "id": "715b901d-ad79-11f1-bc18-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "review",
+          "task": "715b902b-ad79-11f1-bc18-005056c00001",
+          "end": "2026-09-11T00:45:28.596Z"
+        },
+        {
+          "node": "start",
+          "task": null,
+          "end": "2026-09-11T00:40:52.967Z"
+        },
+        {
+          "node": "Activity_1u1bapd",
+          "task": "15a9c992-ad7a-11f1-ac0a-005056c00001",
+          "end": "2026-09-11T00:45:28.843Z"
+        },
+        {
+          "node": "Activity_04o05uz",
+          "task": "15cce216-ad7a-11f1-ac0a-005056c00001",
+          "end": "2026-09-11T00:45:29.069Z"
+        },
+        {
+          "node": "end",
+          "task": null,
+          "end": "2026-09-11T00:45:29.072Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "715b901d-ad79-11f1-bc18-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "715b901d-ad79-11f1-bc18-005056c00001",
+          "definitionId": "qweqwe12123:2:7146cf92-ad79-11f1-bc18-005056c00001",
+          "processKey": "qweqwe12123",
+          "processName": "123123",
+          "version": 2,
+          "businessKey": "REPAIR0911-TEMPLATE-qweqwe12123",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:40:52.967Z",
+          "endTime": "2026-09-11T00:45:29.081Z",
+          "current": true
+        }
+      ]
+    },
+    {
+      "scenario": "事件网关胜出、另一分支取消及幂等拒绝",
+      "time": "2026-09-11T00:47:44.307Z",
+      "winner": "message",
+      "instanceId": "667058c5-ad7a-11f1-ac0a-005056c00001",
+      "accepted": {
+        "requestId": "0db49356-80b0-4a42-a50f-6b41e1386ddc",
+        "credentialId": 4,
+        "eventType": "MESSAGE",
+        "eventName": "repair0911_gateway_msg",
+        "correlationType": "PROCESS_INSTANCE",
+        "correlationValue": "667058c5-ad7a-11f1-ac0a-005056c00001",
+        "matchedProcessInstanceId": "667058c5-ad7a-11f1-ac0a-005056c00001",
+        "matchedExecutionId": "667058cf-ad7a-11f1-ac0a-005056c00001",
+        "status": "PROCESSED",
+        "resultCode": "EVENT_PROCESSED",
+        "resultSummary": "运行事件已由唯一等待执行消费",
+        "createTime": "2026-09-11 08:47:44",
+        "completeTime": "2026-09-11 08:47:44"
+      },
+      "wrongToken": 401,
+      "wrongVariable": 403,
+      "conflict": 409,
+      "canceledBranch": 409
+    },
+    {
+      "scenario": "事件网关胜出、另一分支取消及幂等拒绝",
+      "time": "2026-09-11T00:47:44.669Z",
+      "winner": "signal",
+      "instanceId": "66ab17f4-ad7a-11f1-ac0a-005056c00001",
+      "accepted": {
+        "requestId": "3510afcf-0eda-42d3-9c77-1bdb0aa4ea1a",
+        "credentialId": 4,
+        "eventType": "SIGNAL",
+        "eventName": "repair0911_gateway_signal",
+        "correlationType": "PROCESS_INSTANCE",
+        "correlationValue": "66ab17f4-ad7a-11f1-ac0a-005056c00001",
+        "matchedProcessInstanceId": "66ab17f4-ad7a-11f1-ac0a-005056c00001",
+        "matchedExecutionId": "66ab3f12-ad7a-11f1-ac0a-005056c00001",
+        "status": "PROCESSED",
+        "resultCode": "EVENT_PROCESSED",
+        "resultSummary": "运行事件已由唯一等待执行消费",
+        "createTime": "2026-09-11 08:47:44",
+        "completeTime": "2026-09-11 08:47:44"
+      },
+      "wrongToken": 401,
+      "wrongVariable": 403,
+      "conflict": 409,
+      "canceledBranch": 409
+    },
+    {
+      "scenario": "挂起、错误事件范围及业务键歧义拒绝",
+      "time": "2026-09-11T00:47:51.055Z",
+      "suspended": 409,
+      "wrongScope": 403,
+      "ambiguous": 409
+    },
+    {
+      "scenario": "可靠消息暂不可消费后自动重试、重复投递与同名隔离",
+      "time": "2026-09-11T00:52:50.515Z",
+      "pending": {
+        "messageId": "116a18e5-6d73-4bb1-bf97-ff635830a7db",
+        "messageName": "cu0909_message",
+        "sourceProcessDefinitionKey": "repair0911_throws",
+        "targetProcessDefinitionKey": "repair0911_receiver",
+        "correlationKey": "REPAIR0911-LATE-INBOUND",
+        "targetProcessInstanceId": null,
+        "matchedProcessInstanceId": null,
+        "targetExecutionId": null,
+        "sequenceNo": 1,
+        "status": "RETRYING",
+        "retryAllowed": true,
+        "attemptCount": 1,
+        "maxAttempts": 5,
+        "compensationCount": 0,
+        "lastErrorCode": "COLLAB_MESSAGE_INSTANCE_NOT_FOUND",
+        "lastErrorSummary": "协作消息未唯一关联接收流程实例",
+        "createTime": "2026-09-11 08:52:48",
+        "nextAttemptTime": "2026-09-11 08:52:50",
+        "completeTime": null
+      },
+      "result": {
+        "messageId": "116a18e5-6d73-4bb1-bf97-ff635830a7db",
+        "messageName": "cu0909_message",
+        "sourceProcessDefinitionKey": "repair0911_throws",
+        "targetProcessDefinitionKey": "repair0911_receiver",
+        "correlationKey": "REPAIR0911-LATE-INBOUND",
+        "targetProcessInstanceId": null,
+        "matchedProcessInstanceId": "1bca206d-ad7b-11f1-ac0a-005056c00001",
+        "targetExecutionId": "1bca2077-ad7b-11f1-ac0a-005056c00001",
+        "sequenceNo": 1,
+        "status": "PROCESSED",
+        "retryAllowed": false,
+        "attemptCount": 2,
+        "maxAttempts": 5,
+        "compensationCount": 0,
+        "lastErrorCode": null,
+        "lastErrorSummary": null,
+        "createTime": "2026-09-11 08:52:48",
+        "nextAttemptTime": null,
+        "completeTime": "2026-09-11 08:52:50"
+      },
+      "unconsumedOther": "6d0f599a-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "scenario": "正式模板调用映射越权提交拒绝且作者版本不变",
+      "time": "2026-09-11T00:54:41.791Z",
+      "permission": "HIDDEN",
+      "direction": "in",
+      "rejection": "/workflow/model/save: {\"code\":400,\"msg\":\"调用活动输入变量不在可映射字段目录中\"}",
+      "modelId": "5f3cd241-ad7b-11f1-ac0a-005056c00001",
+      "revision": 4
+    },
+    {
+      "scenario": "正式模板调用映射越权提交拒绝且作者版本不变",
+      "time": "2026-09-11T00:54:41.82Z",
+      "permission": "READONLY",
+      "direction": "out",
+      "rejection": "/workflow/model/save: {\"code\":400,\"msg\":\"调用活动输出变量不在可映射字段目录中\"}",
+      "modelId": "5f3cd241-ad7b-11f1-ac0a-005056c00001",
+      "revision": 4
+    },
+    {
+      "scenario": "真实PROCESS_STARTED父子调用等待",
+      "time": "2026-09-11T00:54:41.936Z",
+      "instance": {
+        "key": "repair0911_parent_fixed",
+        "businessKey": "REPAIR0911-CALL-FIXED",
+        "definitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001",
+        "draftId": "fe90f9ea-1179-4e24-834b-784b8bc7d691",
+        "revisionNo": 2,
+        "processInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+        "processDefinitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001"
+      },
+      "relations": [
+        {
+          "processInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+          "definitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001",
+          "processKey": "repair0911_parent_fixed",
+          "processName": "修复验收：调用父流程",
+          "version": 1,
+          "businessKey": "REPAIR0911-CALL-FIXED",
+          "processStatus": "running",
+          "startTime": "2026-09-11T00:54:41.883Z",
+          "endTime": null,
+          "current": true
+        },
+        {
+          "processInstanceId": "5f6e69af-ad7b-11f1-ac0a-005056c00001",
+          "parentProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+          "rootProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+          "definitionId": "repair0911_child:1:5c1af8c6-ad7b-11f1-ac0a-005056c00001",
+          "processKey": "repair0911_child",
+          "processName": "修复验收：调用子流程",
+          "version": 1,
+          "businessKey": null,
+          "processStatus": "running",
+          "startTime": "2026-09-11T00:54:41.884Z",
+          "endTime": null,
+          "current": false
+        }
+      ],
+      "detail": {
+        "processInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+        "definitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001",
+        "processKey": "repair0911_parent_fixed",
+        "processName": "修复验收：调用父流程",
+        "version": 1,
+        "category": "urn:repair0911",
+        "deploymentId": "5f4bc663-ad7b-11f1-ac0a-005056c00001",
+        "businessKey": "REPAIR0911-CALL-FIXED",
+        "startUserId": "1",
+        "startUserName": "管理员",
+        "startTime": "2026-09-11T00:54:41.883Z",
+        "endTime": null,
+        "durationMillis": null,
+        "processStatus": "running",
+        "currentTask": null,
+        "nextUserAssignmentPolicy": "DISABLED",
+        "multiInstanceState": null,
+        "completeAllowed": false,
+        "rejectAllowed": false,
+        "returnAllowed": false,
+        "delegateAllowed": false,
+        "transferAllowed": false,
+        "resolveAllowed": false,
+        "resubmitAllowed": false,
+        "urgeAllowed": true,
+        "controlledLoopStates": [],
+        "formDetail": {
+          "applicationForm": {
+            "activityId": "parentStart",
+            "taskId": null,
+            "sourceType": "TEMPLATE",
+            "formId": 1,
+            "formKey": "key_1",
+            "nodeKey": "parentStart",
+            "formName": "qweqw",
+            "nodeName": "parentStart",
+            "content": "{\"size\":\"default\",\"span\":24,\"fields\":[{\"tag\":\"el-input-number\",\"span\":24,\"label\":\"计数器\",\"formId\":102,\"layout\":\"colFormItem\",\"vModel\":\"field102\",\"regList\":[],\"tagIcon\":\"number\",\"disabled\":false,\"document\":\"https://element-plus.org/zh-CN/component/input-number\",\"required\":true,\"changeTag\":true,\"renderKey\":1787460771377,\"labelWidth\":null,\"placeholder\":\"计数器\",\"step-strictly\":false,\"workflowHidden\":false,\"workflowReadable\":true,\"workflowWritable\":true,\"controls-position\":\"\"}],\"gutter\":15,\"formRef\":\"formRef\",\"disabled\":false,\"formBtns\":true,\"formModel\":\"formData\",\"formRules\":\"rules\",\"labelWidth\":100,\"labelPosition\":\"right\"}",
+            "taskLocal": false,
+            "values": {
+              "field102": 7
+            },
+            "snapshotTime": "2026-09-11T00:54:41.883Z"
+          },
+          "nodeTaskForm": null,
+          "historyForms": [],
+          "returnedApplication": false
+        },
+        "historyProcNodeList": [
+          {
+            "activityId": "parentStart",
+            "activityName": "parentStart",
+            "activityType": "startEvent",
+            "taskId": null,
+            "assigneeId": "1",
+            "assigneeName": "管理员",
+            "completedById": null,
+            "completedByName": null,
+            "candidates": [],
+            "comments": [],
+            "startTime": "2026-09-11T00:54:41.883Z",
+            "endTime": "2026-09-11T00:54:41.883Z",
+            "durationMillis": 0,
+            "deleteReason": null
+          }
+        ],
+        "processRelations": [
+          {
+            "processInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+            "parentProcessInstanceId": null,
+            "rootProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+            "definitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001",
+            "processKey": "repair0911_parent_fixed",
+            "processName": "修复验收：调用父流程",
+            "version": 1,
+            "businessKey": "REPAIR0911-CALL-FIXED",
+            "processStatus": "running",
+            "startTime": "2026-09-11T00:54:41.883Z",
+            "endTime": null,
+            "current": true
+          },
+          {
+            "processInstanceId": "5f6e69af-ad7b-11f1-ac0a-005056c00001",
+            "parentProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+            "rootProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+            "definitionId": "repair0911_child:1:5c1af8c6-ad7b-11f1-ac0a-005056c00001",
+            "processKey": "repair0911_child",
+            "processName": "修复验收：调用子流程",
+            "version": 1,
+            "businessKey": null,
+            "processStatus": "running",
+            "startTime": "2026-09-11T00:54:41.884Z",
+            "endTime": null,
+            "current": false
+          }
+        ],
+        "bpmnXml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" xmlns:flowable=\"http://flowable.org/bpmn\" xmlns:bpmndi=\"http://www.omg.org/spec/BPMN/20100524/DI\" xmlns:omgdc=\"http://www.omg.org/spec/DD/20100524/DC\" xmlns:omgdi=\"http://www.omg.org/spec/DD/20100524/DI\" xmlns:dc=\"http://www.omg.org/spec/DD/20100524/DC\" xmlns:di=\"http://www.omg.org/spec/DD/20100524/DI\" typeLanguage=\"http://www.w3.org/2001/XMLSchema\" expressionLanguage=\"http://www.w3.org/1999/XPath\" targetNamespace=\"urn:repair0911\">\n  <process id=\"repair0911_parent_fixed\" name=\"修复验收：调用父流程\" isExecutable=\"true\">\n    <startEvent id=\"parentStart\" name=\"parentStart\" flowable:formKey=\"key_1\">\n      <extensionElements>\n        <flowable:formProperty id=\"approva_permission_default\" name=\"默认权限\" type=\"string\"></flowable:formProperty>\n        <flowable:formProperty id=\"approva_permission_field_1\" name=\"计数器\" type=\"string\" variable=\"field102\" required=\"true\"></flowable:formProperty>\n      </extensionElements>\n    </startEvent>\n    <callActivity id=\"call\" name=\"调用子流程\" calledElement=\"repair0911_child:1:5c1af8c6-ad7b-11f1-ac0a-005056c00001\" flowable:calledElementType=\"id\">\n      <extensionElements>\n        <flowable:in source=\"field102\" target=\"amount\"></flowable:in>\n        <flowable:out source=\"amount\" target=\"field102\"></flowable:out>\n      </extensionElements>\n    </callActivity>\n    <userTask id=\"parentReview\" name=\"父流程回写后审批\">\n      <extensionElements>\n        <flowable:taskListener event=\"create\" delegateExpression=\"${userTaskListener}\"></flowable:taskListener>\n        <flowable:taskListener event=\"assignment\" delegateExpression=\"${userTaskListener}\"></flowable:taskListener>\n        <flowable:taskListener event=\"complete\" delegateExpression=\"${userTaskListener}\"></flowable:taskListener>\n      </extensionElements>\n    </userTask>\n    <endEvent id=\"parentEnd\" name=\"parentEnd\"></endEvent>\n    <sequenceFlow id=\"pf1\" name=\"pf1\" sourceRef=\"parentStart\" targetRef=\"call\"></sequenceFlow>\n    <sequenceFlow id=\"pf2\" name=\"pf2\" sourceRef=\"call\" targetRef=\"parentReview\"></sequenceFlow>\n    <sequenceFlow id=\"pf3\" name=\"pf3\" sourceRef=\"parentReview\" targetRef=\"parentEnd\"></sequenceFlow>\n  </process>\n  <bpmndi:BPMNDiagram id=\"BPMNDiagram_repair0911_parent_fixed\">\n    <bpmndi:BPMNPlane bpmnElement=\"repair0911_parent_fixed\" id=\"BPMNPlane_repair0911_parent_fixed\">\n      <bpmndi:BPMNShape bpmnElement=\"parentStart\" id=\"BPMNShape_parentStart\">\n        <omgdc:Bounds height=\"40.0\" width=\"40.0\" x=\"120.0\" y=\"180.0\"></omgdc:Bounds>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape bpmnElement=\"call\" id=\"BPMNShape_call\">\n        <omgdc:Bounds height=\"40.0\" width=\"40.0\" x=\"300.0\" y=\"180.0\"></omgdc:Bounds>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape bpmnElement=\"parentReview\" id=\"BPMNShape_parentReview\">\n        <omgdc:Bounds height=\"80.0\" width=\"110.0\" x=\"480.0\" y=\"180.0\"></omgdc:Bounds>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape bpmnElement=\"parentEnd\" id=\"BPMNShape_parentEnd\">\n        <omgdc:Bounds height=\"40.0\" width=\"40.0\" x=\"660.0\" y=\"180.0\"></omgdc:Bounds>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNEdge bpmnElement=\"pf1\" id=\"BPMNEdge_pf1\">\n        <omgdi:waypoint x=\"160.0\" y=\"200.0\"></omgdi:waypoint>\n        <omgdi:waypoint x=\"300.0\" y=\"200.0\"></omgdi:waypoint>\n      </bpmndi:BPMNEdge>\n      <bpmndi:BPMNEdge bpmnElement=\"pf2\" id=\"BPMNEdge_pf2\">\n        <omgdi:waypoint x=\"340.0\" y=\"200.0\"></omgdi:waypoint>\n        <omgdi:waypoint x=\"480.0\" y=\"220.0\"></omgdi:waypoint>\n      </bpmndi:BPMNEdge>\n      <bpmndi:BPMNEdge bpmnElement=\"pf3\" id=\"BPMNEdge_pf3\">\n        <omgdi:waypoint x=\"590.0\" y=\"220.0\"></omgdi:waypoint>\n        <omgdi:waypoint x=\"660.0\" y=\"200.0\"></omgdi:waypoint>\n      </bpmndi:BPMNEdge>\n    </bpmndi:BPMNPlane>\n  </bpmndi:BPMNDiagram>\n</definitions>",
+        "flowViewer": {
+          "finishedActivityIds": [
+            "parentStart"
+          ],
+          "finishedSequenceFlowIds": [
+            "pf1"
+          ],
+          "unfinishedActivityIds": [
+            "call"
+          ],
+          "rejectedActivityIds": [],
+          "returnedActivityIds": []
+        }
+      }
+    },
+    {
+      "scenario": "原消息抛出节点经outbox和自动重试消费",
+      "time": "2026-09-11T00:55:53.69Z",
+      "inbound": {
+        "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+        "messageName": "cu0909_message",
+        "sourceProcessDefinitionKey": "repair0911_throws",
+        "targetProcessDefinitionKey": "repair0911_receiver",
+        "correlationKey": "REPAIR0911-LATE-OUTBOX",
+        "targetProcessInstanceId": null,
+        "matchedProcessInstanceId": "566e55ae-ad7b-11f1-ac0a-005056c00001",
+        "targetExecutionId": "566e55b8-ad7b-11f1-ac0a-005056c00001",
+        "sequenceNo": 1,
+        "status": "PROCESSED",
+        "retryAllowed": false,
+        "attemptCount": 2,
+        "maxAttempts": 5,
+        "compensationCount": 0,
+        "lastErrorCode": null,
+        "lastErrorSummary": null,
+        "createTime": "2026-09-11 08:54:26",
+        "nextAttemptTime": null,
+        "completeTime": "2026-09-11 08:54:28"
+      },
+      "outbound": {
+        "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+        "messageName": "cu0909_message",
+        "sourceProcessDefinitionKey": "repair0911_throws",
+        "sourceProcessInstanceId": "5631e8d6-ad7b-11f1-ac0a-005056c00001",
+        "targetProcessDefinitionKey": "repair0911_receiver",
+        "correlationKey": "REPAIR0911-LATE-OUTBOX",
+        "sequenceNo": 1,
+        "status": "PROCESSED",
+        "retryAllowed": false,
+        "cancelAllowed": false,
+        "attemptCount": 1,
+        "maxAttempts": 5,
+        "compensationCount": 0,
+        "lastHttpStatus": 200,
+        "lastErrorCode": null,
+        "lastErrorSummary": null,
+        "createTime": "2026-09-11 08:54:26",
+        "nextAttemptTime": "2026-09-11 08:54:26",
+        "completeTime": "2026-09-11 08:54:26"
+      },
+      "audits": [
+        {
+          "action": "ENQUEUE",
+          "actorId": "flowable",
+          "actorType": "SYSTEM",
+          "attemptNo": 0,
+          "auditId": 23,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "事务 outbox 已登记",
+          "toStatus": "PENDING"
+        },
+        {
+          "action": "CLAIM",
+          "actorId": "22ee1230-14df-482b-a26f-29ab8b8a86f3",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 24,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "PENDING",
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "后台 worker 已领取",
+          "toStatus": "DELIVERING"
+        },
+        {
+          "action": "RECEIVE",
+          "actorId": "1",
+          "actorType": "INTEGRATION",
+          "attemptNo": 0,
+          "auditId": 25,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "INBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "接收端已持久化消息",
+          "toStatus": "RECEIVED"
+        },
+        {
+          "action": "RETRY",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 26,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "INBOUND",
+          "errorCode": "COLLAB_MESSAGE_INSTANCE_NOT_FOUND",
+          "fromStatus": "RECEIVED",
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "等待指数退避重试",
+          "toStatus": "RETRYING"
+        },
+        {
+          "action": "DELIVER",
+          "actorId": "22ee1230-14df-482b-a26f-29ab8b8a86f3",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 27,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "DELIVERING",
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "接收端已持久化确认",
+          "toStatus": "PROCESSED"
+        },
+        {
+          "action": "DELIVER",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 2,
+          "auditId": 28,
+          "createTime": "2026-09-11 08:54:28",
+          "direction": "INBOUND",
+          "errorCode": null,
+          "fromStatus": "RETRYING",
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "Flowable 等待节点已唯一消费",
+          "toStatus": "PROCESSED"
+        }
+      ]
+    },
+    {
+      "scenario": "固定版本父子真实表单快照及回写后父审批",
+      "time": "2026-09-11T00:55:54.358Z",
+      "parentInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+      "child": {
+        "processInstanceId": "5f6e69af-ad7b-11f1-ac0a-005056c00001",
+        "parentProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+        "rootProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+        "definitionId": "repair0911_child:1:5c1af8c6-ad7b-11f1-ac0a-005056c00001",
+        "processKey": "repair0911_child",
+        "processName": "修复验收：调用子流程",
+        "version": 1,
+        "businessKey": null,
+        "processStatus": "running",
+        "startTime": "2026-09-11T00:54:41.884Z",
+        "endTime": null,
+        "current": false
+      },
+      "childInput": {
+        "amount": 7
+      }
+    },
+    {
+      "scenario": "新子版本发布后既有父部署仍调用冻结V1",
+      "time": "2026-09-11T00:56:00.247Z",
+      "parent": {
+        "key": "repair0911_parent_fixed",
+        "businessKey": "REPAIR0911-CALL-FROZEN-repair0911_parent_fixed",
+        "definitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001",
+        "draftId": "8bc29029-d260-42d2-9d15-1fedde06f696",
+        "revisionNo": 2,
+        "processInstanceId": "8dfc97a4-ad7b-11f1-ac0a-005056c00001",
+        "processDefinitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001"
+      },
+      "child": {
+        "processInstanceId": "8dfcbec2-ad7b-11f1-ac0a-005056c00001",
+        "parentProcessInstanceId": "8dfc97a4-ad7b-11f1-ac0a-005056c00001",
+        "rootProcessInstanceId": "8dfc97a4-ad7b-11f1-ac0a-005056c00001",
+        "definitionId": "repair0911_child:1:5c1af8c6-ad7b-11f1-ac0a-005056c00001",
+        "processKey": "repair0911_child",
+        "processName": "修复验收：调用子流程",
+        "version": 1,
+        "businessKey": null,
+        "processStatus": "running",
+        "startTime": "2026-09-11T00:55:59.993Z",
+        "endTime": null,
+        "current": false
+      }
+    },
+    {
+      "scenario": "新子版本发布后既有父部署仍调用冻结V1",
+      "time": "2026-09-11T00:56:00.54Z",
+      "parent": {
+        "key": "repair0911_parent_latest",
+        "businessKey": "REPAIR0911-CALL-FROZEN-repair0911_parent_latest",
+        "definitionId": "repair0911_parent_latest:1:8abc1289-ad7b-11f1-ac0a-005056c00001",
+        "draftId": "a774f3cd-202d-498f-90f8-e68cd02db734",
+        "revisionNo": 2,
+        "processInstanceId": "8e2b9712-ad7b-11f1-ac0a-005056c00001",
+        "processDefinitionId": "repair0911_parent_latest:1:8abc1289-ad7b-11f1-ac0a-005056c00001"
+      },
+      "child": {
+        "processInstanceId": "8e2b9720-ad7b-11f1-ac0a-005056c00001",
+        "parentProcessInstanceId": "8e2b9712-ad7b-11f1-ac0a-005056c00001",
+        "rootProcessInstanceId": "8e2b9712-ad7b-11f1-ac0a-005056c00001",
+        "definitionId": "repair0911_child:1:5c1af8c6-ad7b-11f1-ac0a-005056c00001",
+        "processKey": "repair0911_child",
+        "processName": "修复验收：调用子流程",
+        "version": 1,
+        "businessKey": null,
+        "processStatus": "running",
+        "startTime": "2026-09-11T00:56:00.3Z",
+        "endTime": null,
+        "current": false
+      }
+    },
+    {
+      "scenario": "重新部署最新策略才冻结子V2且父子均完成",
+      "time": "2026-09-11T00:56:06.102Z",
+      "parent": {
+        "key": "repair0911_parent_latest",
+        "businessKey": "REPAIR0911-CALL-NEW-LATEST",
+        "definitionId": "repair0911_parent_latest:2:917ee0f5-ad7b-11f1-ac0a-005056c00001",
+        "draftId": "5c5e606e-427d-4650-a2c9-a26cdbbd13f3",
+        "revisionNo": 2,
+        "processInstanceId": "918b1600-ad7b-11f1-ac0a-005056c00001",
+        "processDefinitionId": "repair0911_parent_latest:2:917ee0f5-ad7b-11f1-ac0a-005056c00001"
+      },
+      "child": {
+        "processInstanceId": "918b3d1e-ad7b-11f1-ac0a-005056c00001",
+        "parentProcessInstanceId": "918b1600-ad7b-11f1-ac0a-005056c00001",
+        "rootProcessInstanceId": "918b1600-ad7b-11f1-ac0a-005056c00001",
+        "definitionId": "repair0911_child:2:8dee66c9-ad7b-11f1-ac0a-005056c00001",
+        "processKey": "repair0911_child",
+        "processName": "修复验收：调用子流程",
+        "version": 2,
+        "businessKey": null,
+        "processStatus": "running",
+        "startTime": "2026-09-11T00:56:05.96Z",
+        "endTime": null,
+        "current": false
+      }
+    },
+    {
+      "scenario": "正式异步作业首次503等待自动重试",
+      "time": "2026-09-11T00:57:25.33Z",
+      "instance": {
+        "key": "repair0911_http_retry",
+        "businessKey": "REPAIR0911-HTTP-RETRY",
+        "definitionId": "repair0911_http_retry:1:c0cb56ce-ad7b-11f1-ac0a-005056c00001",
+        "draftId": "bc786c11-df41-41e9-a6ba-77f70da9c29e",
+        "revisionNo": 2,
+        "processInstanceId": "c0d78bd9-ad7b-11f1-ac0a-005056c00001",
+        "processDefinitionId": "repair0911_http_retry:1:c0cb56ce-ad7b-11f1-ac0a-005056c00001"
+      }
+    },
+    {
+      "scenario": "普通执行器503自动重试与外部幂等键稳定",
+      "time": "2026-09-11T00:57:50.403Z",
+      "instance": {
+        "key": "repair0911_http_retry",
+        "businessKey": "REPAIR0911-HTTP-RETRY",
+        "definitionId": "repair0911_http_retry:1:c0cb56ce-ad7b-11f1-ac0a-005056c00001",
+        "draftId": "bc786c11-df41-41e9-a6ba-77f70da9c29e",
+        "revisionNo": 2,
+        "processInstanceId": "c0d78bd9-ad7b-11f1-ac0a-005056c00001",
+        "processDefinitionId": "repair0911_http_retry:1:c0cb56ce-ad7b-11f1-ac0a-005056c00001"
+      },
+      "state": {
+        "records": [
+          [
+            "REPAIR0911-TX-CANCEL",
+            {
+              "status": "RESERVED",
+              "appliedAt": "2026-09-11T00:57:30.735Z"
+            }
+          ],
+          [
+            "REPAIR0911-HTTP-RETRY",
+            {
+              "status": "RESERVED",
+              "appliedAt": "2026-09-11T00:57:43.711Z"
+            }
+          ]
+        ],
+        "attempts": [
+          {
+            "path": "/business/retry",
+            "businessKey": "REPAIR0911-HTTP-RETRY",
+            "idempotencyKey": "34ab96e39e796d9a1b4ba159cfd997bda75ab39a4180fbb77a12c19a1087be1b",
+            "time": "2026-09-11T00:57:25.345Z"
+          },
+          {
+            "path": "/business/reserve",
+            "businessKey": "REPAIR0911-TX-CANCEL",
+            "idempotencyKey": "68e5371b1549c7e0cfb0f2dd188685775de0f6fdac52a70a117e55569ca8e3e7",
+            "time": "2026-09-11T00:57:30.735Z"
+          },
+          {
+            "path": "/business/retry",
+            "businessKey": "REPAIR0911-HTTP-RETRY",
+            "idempotencyKey": "34ab96e39e796d9a1b4ba159cfd997bda75ab39a4180fbb77a12c19a1087be1b",
+            "time": "2026-09-11T00:57:43.711Z"
+          },
+          {
+            "path": "/business/reserve",
+            "businessKey": "REPAIR0911-TX-CANCEL",
+            "idempotencyKey": "68e5371b1549c7e0cfb0f2dd188685775de0f6fdac52a70a117e55569ca8e3e7",
+            "time": "2026-09-11T00:57:43.711Z"
+          }
+        ]
+      }
+    },
+    {
+      "scenario": "正式事件触发子流程且主任务中断行为正确",
+      "time": "2026-09-11T00:58:34.111Z",
+      "interrupt": true,
+      "instance": {
+        "key": "repair0911_event_sub_true",
+        "businessKey": "REPAIR0911-EVENT-SUB-true",
+        "definitionId": "repair0911_event_sub_true:1:e9c2db08-ad7b-11f1-ac0a-005056c00001",
+        "draftId": "ba43eed8-33ec-49a9-b055-8c18958365e4",
+        "revisionNo": 2,
+        "processInstanceId": "e9cee903-ad7b-11f1-ac0a-005056c00001",
+        "processDefinitionId": "repair0911_event_sub_true:1:e9c2db08-ad7b-11f1-ac0a-005056c00001"
+      },
+      "request": {
+        "requestId": "4bc4466b-f3b0-446d-a546-7648e3cb7b2f",
+        "eventName": "repair0911_event_sub_true_signal",
+        "processInstanceId": "e9cee903-ad7b-11f1-ac0a-005056c00001",
+        "variables": {}
+      },
+      "response": {
+        "requestId": "4bc4466b-f3b0-446d-a546-7648e3cb7b2f",
+        "credentialId": 7,
+        "eventType": "SIGNAL",
+        "eventName": "repair0911_event_sub_true_signal",
+        "correlationType": "PROCESS_INSTANCE",
+        "correlationValue": "e9cee903-ad7b-11f1-ac0a-005056c00001",
+        "matchedProcessInstanceId": "e9cee903-ad7b-11f1-ac0a-005056c00001",
+        "matchedExecutionId": "e9cee90f-ad7b-11f1-ac0a-005056c00001",
+        "status": "PROCESSED",
+        "resultCode": "EVENT_PROCESSED",
+        "resultSummary": "运行事件已由唯一等待执行消费",
+        "createTime": "2026-09-11 08:58:34",
+        "completeTime": "2026-09-11 08:58:34"
+      },
+      "tasks": [
+        {
+          "task": "e9d52aab-ad7b-11f1-ac0a-005056c00001",
+          "node": "eventReview"
+        }
+      ]
+    },
+    {
+      "scenario": "正式事件触发子流程且主任务中断行为正确",
+      "time": "2026-09-11T00:58:39.634Z",
+      "interrupt": false,
+      "instance": {
+        "key": "repair0911_event_sub_false",
+        "businessKey": "REPAIR0911-EVENT-SUB-false",
+        "definitionId": "ed0ef8f7-ad7b-11f1-ac0a-005056c00001",
+        "draftId": "444c6b42-ef45-4acc-9372-5fe9e5534764",
+        "revisionNo": 2,
+        "processInstanceId": "ed1b06f2-ad7b-11f1-ac0a-005056c00001",
+        "processDefinitionId": "ed0ef8f7-ad7b-11f1-ac0a-005056c00001"
+      },
+      "request": {
+        "requestId": "af1cb867-7b97-4b20-9d16-06e38fea984e",
+        "eventName": "repair0911_event_sub_false_signal",
+        "processInstanceId": "ed1b06f2-ad7b-11f1-ac0a-005056c00001",
+        "variables": {}
+      },
+      "response": {
+        "requestId": "af1cb867-7b97-4b20-9d16-06e38fea984e",
+        "credentialId": 7,
+        "eventType": "SIGNAL",
+        "eventName": "repair0911_event_sub_false_signal",
+        "correlationType": "PROCESS_INSTANCE",
+        "correlationValue": "ed1b06f2-ad7b-11f1-ac0a-005056c00001",
+        "matchedProcessInstanceId": "ed1b06f2-ad7b-11f1-ac0a-005056c00001",
+        "matchedExecutionId": "ed1b06fe-ad7b-11f1-ac0a-005056c00001",
+        "status": "PROCESSED",
+        "resultCode": "EVENT_PROCESSED",
+        "resultSummary": "运行事件已由唯一等待执行消费",
+        "createTime": "2026-09-11 08:58:39",
+        "completeTime": "2026-09-11 08:58:39"
+      },
+      "tasks": [
+        {
+          "task": "ed20ac5a-ad7b-11f1-ac0a-005056c00001",
+          "node": "eventReview"
+        },
+        {
+          "task": "ed1b0702-ad7b-11f1-ac0a-005056c00001",
+          "node": "mainReview"
+        }
+      ]
+    },
+    {
+      "scenario": "修复后事务取消等待原生异步补偿及HTTP业务副作用完成",
+      "time": "2026-09-11T01:06:29.748Z",
+      "instance": {
+        "key": "repair0911_transaction",
+        "businessKey": "REPAIR0911-TX-CANCEL-FIXED",
+        "definitionId": "repair0911_transaction:1:c403506e-ad7b-11f1-ac0a-005056c00001",
+        "draftId": "e6d4b87b-4f0e-45ca-becc-93ef47470645",
+        "revisionNo": 2,
+        "processInstanceId": "04b6c57e-ad7d-11f1-a718-005056c00001",
+        "processDefinitionId": "repair0911_transaction:1:c403506e-ad7b-11f1-ac0a-005056c00001"
+      },
+      "state": {
+        "records": [
+          [
+            "REPAIR0911-TX-CANCEL",
+            {
+              "status": "RESERVED",
+              "appliedAt": "2026-09-11T00:57:30.735Z"
+            }
+          ],
+          [
+            "REPAIR0911-HTTP-RETRY",
+            {
+              "status": "RESERVED",
+              "appliedAt": "2026-09-11T00:57:43.711Z"
+            }
+          ],
+          [
+            "REPAIR0911-TX-CANCEL-FIXED",
+            {
+              "status": "COMPENSATED",
+              "appliedAt": "2026-09-11T01:06:28.891Z"
+            }
+          ]
+        ],
+        "attempts": [
+          {
+            "path": "/business/retry",
+            "businessKey": "REPAIR0911-HTTP-RETRY",
+            "idempotencyKey": "34ab96e39e796d9a1b4ba159cfd997bda75ab39a4180fbb77a12c19a1087be1b",
+            "time": "2026-09-11T00:57:25.345Z"
+          },
+          {
+            "path": "/business/reserve",
+            "businessKey": "REPAIR0911-TX-CANCEL",
+            "idempotencyKey": "68e5371b1549c7e0cfb0f2dd188685775de0f6fdac52a70a117e55569ca8e3e7",
+            "time": "2026-09-11T00:57:30.735Z"
+          },
+          {
+            "path": "/business/retry",
+            "businessKey": "REPAIR0911-HTTP-RETRY",
+            "idempotencyKey": "34ab96e39e796d9a1b4ba159cfd997bda75ab39a4180fbb77a12c19a1087be1b",
+            "time": "2026-09-11T00:57:43.711Z"
+          },
+          {
+            "path": "/business/reserve",
+            "businessKey": "REPAIR0911-TX-CANCEL",
+            "idempotencyKey": "68e5371b1549c7e0cfb0f2dd188685775de0f6fdac52a70a117e55569ca8e3e7",
+            "time": "2026-09-11T00:57:43.711Z"
+          },
+          {
+            "path": "/business/reserve",
+            "businessKey": "REPAIR0911-TX-CANCEL",
+            "idempotencyKey": "68e5371b1549c7e0cfb0f2dd188685775de0f6fdac52a70a117e55569ca8e3e7",
+            "time": "2026-09-11T00:58:03.711Z"
+          },
+          {
+            "path": "/business/reserve",
+            "businessKey": "REPAIR0911-TX-CANCEL-FIXED",
+            "idempotencyKey": "f79a156097c4d0532c48e5b02e115953fbd0b63284df264bba73e44a61bed249",
+            "time": "2026-09-11T01:06:28.831Z"
+          },
+          {
+            "path": "/business/compensate",
+            "businessKey": "REPAIR0911-TX-CANCEL-FIXED",
+            "idempotencyKey": "7216be5b59261dc8ae40ad37798b51386a08f73330ea21a2038f6b7b90cd7c91",
+            "time": "2026-09-11T01:06:28.891Z"
+          }
+        ]
+      }
+    },
+    {
+      "scenario": "DMN零命中、重叠拒绝、FIRST首条及非法类型，试算无残留",
+      "time": "2026-09-11T01:06:30.195Z",
+      "empty": [],
+      "first": [
+        {
+          "route": "first"
+        }
+      ],
+      "rejected": [
+        {
+          "label": "UNIQUE重叠",
+          "failure": "/workflow/dmn/table/evaluate: {\"code\":400,\"msg\":\"唯一命中策略下第 1 与第 2 条规则的条件重叠\"}"
+        },
+        {
+          "label": "输入类型非法",
+          "failure": "/workflow/dmn/table/evaluate: {\"code\":400,\"msg\":\"金额必须为数值\"}"
+        },
+        {
+          "label": "结果类型非法",
+          "failure": "/workflow/dmn/table/evaluate: {\"code\":400,\"msg\":\"路由必须为 512 字以内的普通文本\"}"
+        }
+      ],
+      "before": 2
+    },
+    {
+      "scenario": "唯一精确升级捕获且主路与升级路分别完成",
+      "time": "2026-09-11T01:06:32.053Z",
+      "instance": {
+        "key": "repair0911_escalation",
+        "businessKey": "REPAIR0911-ESCALATION",
+        "definitionId": "repair0911_escalation:1:062b1537-ad7d-11f1-a718-005056c00001",
+        "draftId": "d1546500-cbbd-4188-be63-51499f0ede5e",
+        "revisionNo": 2,
+        "processInstanceId": "0677d5b2-ad7d-11f1-a718-005056c00001",
+        "processDefinitionId": "repair0911_escalation:1:062b1537-ad7d-11f1-a718-005056c00001"
+      },
+      "audit": [
+        {
+          "auditId": 2,
+          "processInstanceId": "0677d5b2-ad7d-11f1-a718-005056c00001",
+          "processDefinitionId": "repair0911_escalation:1:062b1537-ad7d-11f1-a718-005056c00001",
+          "sourceElementId": "raise",
+          "sourceType": "SERVICE_TASK",
+          "eventType": "ESCALATION",
+          "eventCode": "APPROVAL_ESCALATION",
+          "eventName": "审批升级处理",
+          "matchStatus": "CAPTURED",
+          "boundaryEventId": "caught",
+          "interrupting": false,
+          "messageSummary": null,
+          "createTime": "2026-09-11T09:06:31.632"
+        }
+      ]
+    },
+    {
+      "scenario": "真实子PROCESS_STARTED校验失败，父子创建和草稿提交整笔回滚",
+      "time": "2026-09-11T01:09:19.773Z",
+      "rejection": "/workflow/process/draft/2510c963-a2f3-4992-9e8e-246b364ee79c/submit: {\"code\":400,\"msg\":\"流程变量数值范围不合法: amount\"}",
+      "draft": {
+        "draftId": "2510c963-a2f3-4992-9e8e-246b364ee79c",
+        "processDefinitionId": "51714191-ad7d-11f1-a718-005056c00001",
+        "processDefinitionKey": "repair0911_parent_rollback",
+        "processDefinitionVersion": 1,
+        "deploymentId": "5169524e-ad7d-11f1-a718-005056c00001",
+        "processName": "修复验收：调用父流程",
+        "sourceType": "TEMPLATE",
+        "formId": 1,
+        "formKey": "key_1",
+        "startNodeKey": "parentStart",
+        "formName": "qweqw",
+        "nodeName": "parentStart",
+        "snapshotCreateTime": "2026-09-11T01:08:37Z",
+        "formSnapshot": {
+          "definitionId": "51714191-ad7d-11f1-a718-005056c00001",
+          "deploymentId": "5169524e-ad7d-11f1-a718-005056c00001",
+          "processInstanceId": null,
+          "sourceType": "TEMPLATE",
+          "formId": 1,
+          "formKey": "key_1",
+          "nodeKey": "parentStart",
+          "formName": "qweqw",
+          "nodeName": "parentStart",
+          "content": "{\"size\":\"default\",\"span\":24,\"fields\":[{\"tag\":\"el-input-number\",\"span\":24,\"label\":\"计数器\",\"formId\":102,\"layout\":\"colFormItem\",\"vModel\":\"field102\",\"regList\":[],\"tagIcon\":\"number\",\"disabled\":false,\"document\":\"https://element-plus.org/zh-CN/component/input-number\",\"required\":true,\"changeTag\":true,\"renderKey\":1787460771377,\"labelWidth\":null,\"placeholder\":\"计数器\",\"step-strictly\":false,\"workflowHidden\":false,\"workflowReadable\":true,\"workflowWritable\":true,\"controls-position\":\"\"}],\"gutter\":15,\"formRef\":\"formRef\",\"disabled\":false,\"formBtns\":true,\"formModel\":\"formData\",\"formRules\":\"rules\",\"labelWidth\":100,\"labelPosition\":\"right\"}",
+          "snapshotTime": "2026-09-11T01:08:37Z",
+          "startMultiInstanceAssignments": []
+        },
+        "variables": {
+          "field102": 7
+        },
+        "multiInstanceUserIds": {},
+        "businessKey": "REPAIR0911-CALL-ROLLBACK",
+        "status": "ACTIVE",
+        "revisionNo": 1,
+        "processInstanceId": null,
+        "createTime": "2026-09-11T01:08:37.498Z",
+        "updateTime": "2026-09-11T01:08:37.498Z",
+        "editable": true,
+        "submittable": true,
+        "statusReason": null
+      },
+      "keys": [
+        "repair0911_child_min",
+        "repair0911_parent_rollback"
+      ]
+    },
+    {
+      "scenario": "保存后模板类型变化在部署阶段拒绝且无半份调用部署",
+      "time": "2026-09-11T01:09:20.112Z",
+      "modelId": "51ae98cf-ad7d-11f1-a718-005056c00001",
+      "processKey": "repair0911_parent_drift",
+      "rejection": "/workflow/model/deploy?modelId=51ae98cf-ad7d-11f1-a718-005056c00001: {\"code\":400,\"msg\":\"调用活动输入变量字段类型不兼容\"}"
+    },
+    {
+      "scenario": "模板恢复后相同作者版本可部署",
+      "time": "2026-09-11T01:09:25.491Z",
+      "modelId": "51ae98cf-ad7d-11f1-a718-005056c00001",
+      "definitionId": "repair0911_parent_drift:1:6e131f17-ad7d-11f1-a718-005056c00001"
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T01:15:13.738Z",
+      "id": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "parentStart",
+          "task": null,
+          "end": "2026-09-11T00:54:41.883Z"
+        },
+        {
+          "node": "parentReview",
+          "task": "8a9613f2-ad7b-11f1-ac0a-005056c00001",
+          "end": "2026-09-11T01:15:13.646Z"
+        },
+        {
+          "node": "parentEnd",
+          "task": null,
+          "end": "2026-09-11T01:15:13.646Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+          "definitionId": "repair0911_parent_fixed:1:5f5451e6-ad7b-11f1-ac0a-005056c00001",
+          "processKey": "repair0911_parent_fixed",
+          "processName": "修复验收：调用父流程",
+          "version": 1,
+          "businessKey": "REPAIR0911-CALL-FIXED",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:54:41.883Z",
+          "endTime": "2026-09-11T01:15:13.66Z",
+          "current": true
+        },
+        {
+          "processInstanceId": "5f6e69af-ad7b-11f1-ac0a-005056c00001",
+          "parentProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+          "rootProcessInstanceId": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+          "definitionId": "repair0911_child:1:5c1af8c6-ad7b-11f1-ac0a-005056c00001",
+          "processKey": "repair0911_child",
+          "processName": "修复验收：调用子流程",
+          "version": 1,
+          "businessKey": null,
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:54:41.884Z",
+          "endTime": "2026-09-11T00:55:54.286Z",
+          "current": false
+        }
+      ]
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T01:15:13.973Z",
+      "id": "918b1600-ad7b-11f1-ac0a-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "parentStart",
+          "task": null,
+          "end": "2026-09-11T00:56:05.96Z"
+        },
+        {
+          "node": "parentReview",
+          "task": "9199e337-ad7b-11f1-ac0a-005056c00001",
+          "end": "2026-09-11T01:15:13.852Z"
+        },
+        {
+          "node": "parentEnd",
+          "task": null,
+          "end": "2026-09-11T01:15:13.853Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "918b1600-ad7b-11f1-ac0a-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "918b1600-ad7b-11f1-ac0a-005056c00001",
+          "definitionId": "repair0911_parent_latest:2:917ee0f5-ad7b-11f1-ac0a-005056c00001",
+          "processKey": "repair0911_parent_latest",
+          "processName": "修复验收：调用父流程",
+          "version": 2,
+          "businessKey": "REPAIR0911-CALL-NEW-LATEST",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:56:05.959Z",
+          "endTime": "2026-09-11T01:15:13.884Z",
+          "current": true
+        },
+        {
+          "processInstanceId": "918b3d1e-ad7b-11f1-ac0a-005056c00001",
+          "parentProcessInstanceId": "918b1600-ad7b-11f1-ac0a-005056c00001",
+          "rootProcessInstanceId": "918b1600-ad7b-11f1-ac0a-005056c00001",
+          "definitionId": "repair0911_child:2:8dee66c9-ad7b-11f1-ac0a-005056c00001",
+          "processKey": "repair0911_child",
+          "processName": "修复验收：调用子流程",
+          "version": 2,
+          "businessKey": null,
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:56:05.96Z",
+          "endTime": "2026-09-11T00:56:06.056Z",
+          "current": false
+        }
+      ]
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T01:15:14.183Z",
+      "id": "99cce717-ad74-11f1-bad1-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "start",
+          "task": null,
+          "end": "2026-09-11T00:06:13.335Z"
+        },
+        {
+          "node": "review",
+          "task": "99d0428d-ad74-11f1-bad1-005056c00001",
+          "end": "2026-09-11T01:15:14.098Z"
+        },
+        {
+          "node": "end",
+          "task": null,
+          "end": "2026-09-11T01:15:14.099Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "99cce717-ad74-11f1-bad1-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "99cce717-ad74-11f1-bad1-005056c00001",
+          "definitionId": "repair0911_throws:1:999c130c-ad74-11f1-bad1-005056c00001",
+          "processKey": "repair0911_throws",
+          "processName": "修复验收：原消息抛出节点",
+          "version": 1,
+          "businessKey": "REPAIR0911-ORIGINAL-THROW",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:06:13.335Z",
+          "endTime": "2026-09-11T01:15:14.109Z",
+          "current": true
+        }
+      ]
+    },
+    {
+      "scenario": "正式审批完成",
+      "time": "2026-09-11T01:15:14.355Z",
+      "id": "02a8dbc6-ad77-11f1-93ff-005056c00001",
+      "status": "completed",
+      "nodes": [
+        {
+          "node": "start",
+          "task": null,
+          "end": "2026-09-11T00:23:28.264Z"
+        },
+        {
+          "node": "review",
+          "task": "02b18d6c-ad77-11f1-93ff-005056c00001",
+          "end": "2026-09-11T01:15:14.272Z"
+        },
+        {
+          "node": "end",
+          "task": null,
+          "end": "2026-09-11T01:15:14.273Z"
+        }
+      ],
+      "relations": [
+        {
+          "processInstanceId": "02a8dbc6-ad77-11f1-93ff-005056c00001",
+          "parentProcessInstanceId": null,
+          "rootProcessInstanceId": "02a8dbc6-ad77-11f1-93ff-005056c00001",
+          "definitionId": "repair0911_throws:2:9c552d3a-ad76-11f1-8874-005056c00001",
+          "processKey": "repair0911_throws",
+          "processName": "修复验收：原消息抛出节点",
+          "version": 2,
+          "businessKey": "REPAIR0911-ORIGINAL-THROW-V2",
+          "processStatus": "completed",
+          "startTime": "2026-09-11T00:23:28.253Z",
+          "endTime": "2026-09-11T01:15:14.281Z",
+          "current": true
+        }
+      ]
+    },
+    {
+      "scenario": "验收流程收尾完成",
+      "time": "2026-09-11T01:19:07.835Z",
+      "instanceId": "06549349-ad79-11f1-93ff-005056c00001"
+    },
+    {
+      "scenario": "验收流程收尾完成",
+      "time": "2026-09-11T01:19:07.974Z",
+      "instanceId": "57502e12-ad74-11f1-bad1-005056c00001"
+    },
+    {
+      "scenario": "终止本轮自建等待/故障测试实例",
+      "time": "2026-09-11T01:19:08.136Z",
+      "instanceId": "6cf2349b-ad74-11f1-bad1-005056c00001",
+      "result": {
+        "instanceId": "6cf2349b-ad74-11f1-bad1-005056c00001",
+        "processStatus": "terminated",
+        "actorUserId": "1",
+        "wasSuspended": false
+      }
+    },
+    {
+      "scenario": "终止本轮自建等待/故障测试实例",
+      "time": "2026-09-11T01:19:08.258Z",
+      "instanceId": "6d0f599a-ad74-11f1-bad1-005056c00001",
+      "result": {
+        "instanceId": "6d0f599a-ad74-11f1-bad1-005056c00001",
+        "processStatus": "terminated",
+        "actorUserId": "1",
+        "wasSuspended": false
+      }
+    },
+    {
+      "scenario": "验收流程收尾完成",
+      "time": "2026-09-11T01:19:08.483Z",
+      "instanceId": "c0237a7b-ad77-11f1-93ff-005056c00001"
+    },
+    {
+      "scenario": "验收流程收尾完成",
+      "time": "2026-09-11T01:19:08.635Z",
+      "instanceId": "c0ad1cf2-ad77-11f1-93ff-005056c00001"
+    },
+    {
+      "scenario": "终止本轮自建等待/故障测试实例",
+      "time": "2026-09-11T01:19:08.744Z",
+      "instanceId": "c40f5e69-ad7b-11f1-ac0a-005056c00001",
+      "result": {
+        "instanceId": "c40f5e69-ad7b-11f1-ac0a-005056c00001",
+        "processStatus": "terminated",
+        "actorUserId": "1",
+        "wasSuspended": false
+      }
+    },
+    {
+      "scenario": "验收流程收尾完成",
+      "time": "2026-09-11T01:19:08.908Z",
+      "instanceId": "fd30a3af-ad78-11f1-93ff-005056c00001"
+    },
+    {
+      "scenario": "修复前故障夹具的外部占用已执行清理补偿",
+      "time": "2026-09-11T01:19:08.912Z",
+      "businessKey": "REPAIR0911-TX-CANCEL",
+      "result": {
+        "status": "COMPENSATED",
+        "appliedAt": "2026-09-11T01:19:08.911Z"
+      }
+    },
+    {
+      "scenario": "修复后正式终止实例详情可读取",
+      "time": "2026-09-11T01:30:06.974Z",
+      "instanceId": "6cf2349b-ad74-11f1-bad1-005056c00001",
+      "status": "terminated"
+    },
+    {
+      "scenario": "修复后正式终止实例详情可读取",
+      "time": "2026-09-11T01:30:07.015Z",
+      "instanceId": "6d0f599a-ad74-11f1-bad1-005056c00001",
+      "status": "terminated"
+    },
+    {
+      "scenario": "修复后正式终止实例详情可读取",
+      "time": "2026-09-11T01:30:07.094Z",
+      "instanceId": "c40f5e69-ad7b-11f1-ac0a-005056c00001",
+      "status": "terminated"
+    },
+    {
+      "scenario": "正式批量删除本轮已结束流程历史及父子关系",
+      "time": "2026-09-11T01:30:07.909Z",
+      "result": {
+        "requestedCount": 37,
+        "deletedHistoryCount": 37,
+        "deletedCopyCount": 0
+      },
+      "instanceIds": [
+        "02a8dbc6-ad77-11f1-93ff-005056c00001",
+        "04b6c57e-ad7d-11f1-a718-005056c00001",
+        "06549349-ad79-11f1-93ff-005056c00001",
+        "0677d5b2-ad7d-11f1-a718-005056c00001",
+        "0ed60b40-ad7a-11f1-ac0a-005056c00001",
+        "0ee41510-ad7a-11f1-ac0a-005056c00001",
+        "1bca206d-ad7b-11f1-ac0a-005056c00001",
+        "28ca4039-ad78-11f1-93ff-005056c00001",
+        "5631e8d6-ad7b-11f1-ac0a-005056c00001",
+        "566e55ae-ad7b-11f1-ac0a-005056c00001",
+        "57123a9b-ad74-11f1-bad1-005056c00001",
+        "57502e12-ad74-11f1-bad1-005056c00001",
+        "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+        "5f6e69af-ad7b-11f1-ac0a-005056c00001",
+        "667058c5-ad7a-11f1-ac0a-005056c00001",
+        "66ab17f4-ad7a-11f1-ac0a-005056c00001",
+        "66da6573-ad7a-11f1-ac0a-005056c00001",
+        "69e6d723-ad79-11f1-bc18-005056c00001",
+        "6a4b4871-ad7a-11f1-ac0a-005056c00001",
+        "6a56ba36-ad7a-11f1-ac0a-005056c00001",
+        "6cf2349b-ad74-11f1-bad1-005056c00001",
+        "6d0f599a-ad74-11f1-bad1-005056c00001",
+        "8dfc97a4-ad7b-11f1-ac0a-005056c00001",
+        "8dfcbec2-ad7b-11f1-ac0a-005056c00001",
+        "8e2b9712-ad7b-11f1-ac0a-005056c00001",
+        "8e2b9720-ad7b-11f1-ac0a-005056c00001",
+        "918b1600-ad7b-11f1-ac0a-005056c00001",
+        "918b3d1e-ad7b-11f1-ac0a-005056c00001",
+        "99cce717-ad74-11f1-bad1-005056c00001",
+        "c0237a7b-ad77-11f1-93ff-005056c00001",
+        "c0ad1cf2-ad77-11f1-93ff-005056c00001",
+        "c0d78bd9-ad7b-11f1-ac0a-005056c00001",
+        "c40f5e69-ad7b-11f1-ac0a-005056c00001",
+        "e1a28b50-ad79-11f1-ac0a-005056c00001",
+        "e9cee903-ad7b-11f1-ac0a-005056c00001",
+        "ed1b06f2-ad7b-11f1-ac0a-005056c00001",
+        "fd30a3af-ad78-11f1-93ff-005056c00001"
+      ]
+    },
+    {
+      "scenario": "本轮临时部署、作者版本、模板、决策和验收账号清理完成",
+      "time": "2026-09-11T01:32:15.607Z",
+      "deploymentIds": [
+        "5169524e-ad7d-11f1-a718-005056c00001",
+        "ed0e0e95-ad7b-11f1-ac0a-005056c00001",
+        "5c121f23-ad7b-11f1-ac0a-005056c00001",
+        "8de7fe26-ad7b-11f1-ac0a-005056c00001",
+        "4e2300de-ad7d-11f1-a718-005056c00001",
+        "4daab26a-ad74-11f1-bad1-005056c00001",
+        "06380a88-ad79-11f1-93ff-005056c00001",
+        "43e009b5-ad79-11f1-bc18-005056c00001",
+        "05f36364-ad7d-11f1-a718-005056c00001",
+        "e9c217b6-ad7b-11f1-ac0a-005056c00001",
+        "288a50fb-ad78-11f1-93ff-005056c00001",
+        "6654e177-ad7a-11f1-ac0a-005056c00001",
+        "6a343df3-ad7a-11f1-ac0a-005056c00001",
+        "da631342-ad79-11f1-ac0a-005056c00001",
+        "c0c4ee2b-ad7b-11f1-ac0a-005056c00001",
+        "6e0bcc14-ad7d-11f1-a718-005056c00001",
+        "5f4bc663-ad7b-11f1-ac0a-005056c00001",
+        "8ab27596-ad7b-11f1-ac0a-005056c00001",
+        "91773fd2-ad7b-11f1-ac0a-005056c00001",
+        "0655fde0-ad7a-11f1-ac0a-005056c00001",
+        "6cc271fd-ad74-11f1-bad1-005056c00001",
+        "99927619-ad74-11f1-bad1-005056c00001",
+        "9c20d6c7-ad76-11f1-8874-005056c00001",
+        "561a6928-ad7b-11f1-ac0a-005056c00001",
+        "c40217ec-ad7b-11f1-ac0a-005056c00001"
+      ],
+      "forms": [
+        2,
+        3
+      ],
+      "users": [
+        104,
+        105
+      ]
+    }
+  ],
+  "testUsers": [
+    {
+      "userId": 104,
+      "userName": "repair0911_a"
+    },
+    {
+      "userId": 105,
+      "userName": "repair0911_b"
+    }
+  ],
+  "restartTimerInstance": "28ca4039-ad78-11f1-93ff-005056c00001",
+  "restartTimerBeforeTask": "3f9b777a-ad78-11f1-93ff-005056c00001",
+  "legacyGovernance": [
+    {
+      "key": "eqwe1",
+      "originalModelId": "cc482891-9f7f-11f1-b97d-005056c00001",
+      "originalVersion": 2,
+      "sourceSha256": "52022fc76f15f70bcc76bb2d14acb9dcbcea6626b4a8c008eaa1aa91c2eb6e8b",
+      "removedCompilerListeners": 12,
+      "definitionId": "eqwe1:3:4331a128-ad79-11f1-bc18-005056c00001",
+      "processKey": "eqwe1",
+      "processName": "qweqw",
+      "category": "qweqw",
+      "version": 3,
+      "deploymentId": "43040175-ad79-11f1-bc18-005056c00001",
+      "deploymentTime": "2026-09-11T00:39:35.218Z",
+      "completed": true
+    },
+    {
+      "key": "qweqwe12123",
+      "originalModelId": "8d4e5ce0-9fa1-11f1-83e1-005056c00001",
+      "originalVersion": 1,
+      "sourceSha256": "2a1b1b58b63e85124b10b9fabf757efdbd53415c4197c094a136953ccc22ac2a",
+      "removedCompilerListeners": 9,
+      "definitionId": "qweqwe12123:2:7146cf92-ad79-11f1-bc18-005056c00001",
+      "processKey": "qweqwe12123",
+      "processName": "123123",
+      "category": "qweqw",
+      "version": 2,
+      "deploymentId": "713c483f-ad79-11f1-bc18-005056c00001",
+      "deploymentTime": "2026-09-11T00:40:52.762Z",
+      "completed": true
+    }
+  ],
+  "catalogVerification": [
+    {
+      "definitionId": "eqwe1:3:4331a128-ad79-11f1-bc18-005056c00001",
+      "processKey": "eqwe1",
+      "processName": "qweqw",
+      "version": 3,
+      "category": "qweqw",
+      "deploymentId": "43040175-ad79-11f1-bc18-005056c00001",
+      "status": "ACTIVE",
+      "inputFields": [
+        {
+          "name": "field102",
+          "label": "计数器",
+          "type": "NUMBER",
+          "required": true,
+          "readable": true,
+          "writable": true
+        }
+      ],
+      "outputFields": [
+        {
+          "name": "field102",
+          "label": "计数器",
+          "type": "NUMBER",
+          "required": true,
+          "readable": true,
+          "writable": true
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "definitionId": "eqwe1:2:f1e118f6-9f7f-11f1-b97d-005056c00001",
+      "processKey": "eqwe1",
+      "processName": "qweqw",
+      "version": 2,
+      "category": "qweqw",
+      "deploymentId": "f1be4eb3-9f7f-11f1-b97d-005056c00001",
+      "status": "UNAVAILABLE",
+      "inputFields": [],
+      "outputFields": [],
+      "unavailableReason": "表单组件必须声明完整节点权限标志: field102.workflowHidden"
+    },
+    {
+      "definitionId": "eqwe1:1:e2370327-9eae-11f1-9e14-005056c00001",
+      "processKey": "eqwe1",
+      "processName": "qweqw",
+      "version": 1,
+      "category": "qweqw",
+      "deploymentId": "e20ac304-9eae-11f1-9e14-005056c00001",
+      "status": "UNAVAILABLE",
+      "inputFields": [],
+      "outputFields": [],
+      "unavailableReason": "表单组件必须声明完整节点权限标志: field102.workflowHidden"
+    },
+    {
+      "definitionId": "qweqwe12123:2:7146cf92-ad79-11f1-bc18-005056c00001",
+      "processKey": "qweqwe12123",
+      "processName": "123123",
+      "version": 2,
+      "category": "qweqw",
+      "deploymentId": "713c483f-ad79-11f1-bc18-005056c00001",
+      "status": "ACTIVE",
+      "inputFields": [
+        {
+          "name": "field102",
+          "label": "计数器",
+          "type": "NUMBER",
+          "required": true,
+          "readable": true,
+          "writable": true
+        }
+      ],
+      "outputFields": [
+        {
+          "name": "field102",
+          "label": "计数器",
+          "type": "NUMBER",
+          "required": true,
+          "readable": true,
+          "writable": true
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "definitionId": "qweqwe12123:1:c6320e75-9fa7-11f1-83e1-005056c00001",
+      "processKey": "qweqwe12123",
+      "processName": "123123",
+      "version": 1,
+      "category": "qweqw",
+      "deploymentId": "c5fe7b52-9fa7-11f1-83e1-005056c00001",
+      "status": "UNAVAILABLE",
+      "inputFields": [],
+      "outputFields": [],
+      "unavailableReason": "表单组件必须声明完整节点权限标志: field102.workflowHidden"
+    },
+    {
+      "definitionId": "repair0911_partner:1:06740d35-ad7a-11f1-ac0a-005056c00001",
+      "processKey": "repair0911_partner",
+      "processName": "修复验收：协作接收池",
+      "version": 1,
+      "category": "qweqw",
+      "deploymentId": "0655fde0-ad7a-11f1-ac0a-005056c00001",
+      "status": "ACTIVE",
+      "inputFields": [
+        {
+          "name": "bOnly",
+          "label": "接收池业务数值",
+          "type": "NUMBER",
+          "required": false,
+          "readable": true,
+          "writable": true
+        },
+        {
+          "name": "sharedName",
+          "label": "接收方布尔",
+          "type": "BOOLEAN",
+          "required": false,
+          "readable": true,
+          "writable": true
+        }
+      ],
+      "outputFields": [
+        {
+          "name": "bOnly",
+          "label": "接收池业务数值",
+          "type": "NUMBER",
+          "required": false,
+          "readable": true,
+          "writable": true
+        },
+        {
+          "name": "sharedName",
+          "label": "接收方布尔",
+          "type": "BOOLEAN",
+          "required": false,
+          "readable": true,
+          "writable": true
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "definitionId": "repair0911_pools:1:0673e624-ad7a-11f1-ac0a-005056c00001",
+      "processKey": "repair0911_pools",
+      "processName": "修复验收：原双池协作",
+      "version": 1,
+      "category": "qweqw",
+      "deploymentId": "0655fde0-ad7a-11f1-ac0a-005056c00001",
+      "status": "ACTIVE",
+      "inputFields": [
+        {
+          "name": "probe_input",
+          "label": "测试说明",
+          "type": "TEXT",
+          "required": false,
+          "readable": true,
+          "writable": true
+        },
+        {
+          "name": "sharedName",
+          "label": "发送方文本",
+          "type": "TEXT",
+          "required": false,
+          "readable": true,
+          "writable": true
+        }
+      ],
+      "outputFields": [
+        {
+          "name": "probe_input",
+          "label": "测试说明",
+          "type": "TEXT",
+          "required": false,
+          "readable": true,
+          "writable": true
+        },
+        {
+          "name": "sharedName",
+          "label": "发送方文本",
+          "type": "TEXT",
+          "required": false,
+          "readable": true,
+          "writable": true
+        }
+      ],
+      "unavailableReason": null
+    }
+  ],
+  "ephemeralCredentials": [
+    4,
+    5,
+    6,
+    7
+  ],
+  "callChildV1": {
+    "key": "repair0911_child",
+    "modelId": "5c0240a1-ad7b-11f1-ac0a-005056c00001",
+    "version": 1,
+    "revision": 3,
+    "modelName": "修复验收：调用子流程",
+    "modelKey": "repair0911_child",
+    "category": "qweqw",
+    "formType": 2,
+    "formId": null,
+    "description": null,
+    "createTime": "2026-09-11 08:54:36",
+    "lastUpdateTime": "2026-09-11 08:54:36",
+    "bpmnXml": null,
+    "content": null,
+    "deployed": false,
+    "metadataEditAllowed": true,
+    "deployAllowed": true,
+    "deleteAllowed": true,
+    "deploymentId": "5c121f23-ad7b-11f1-ac0a-005056c00001",
+    "definitionId": "repair0911_child:1:5c1af8c6-ad7b-11f1-ac0a-005056c00001"
+  },
+  "callParentAtReview": "5f6e1b81-ad7b-11f1-ac0a-005056c00001",
+  "callChildV2": {
+    "key": "repair0911_child",
+    "modelId": "8ac3b3b4-ad7b-11f1-ac0a-005056c00001",
+    "version": 2,
+    "revision": 2,
+    "modelName": "修复验收：调用子流程",
+    "modelKey": "repair0911_child",
+    "category": "qweqw",
+    "formType": 2,
+    "formId": null,
+    "description": null,
+    "createTime": "2026-09-11 08:55:54",
+    "lastUpdateTime": "2026-09-11 08:55:54",
+    "bpmnXml": null,
+    "content": null,
+    "deployed": false,
+    "metadataEditAllowed": true,
+    "deployAllowed": true,
+    "deleteAllowed": true,
+    "deploymentId": "8de7fe26-ad7b-11f1-ac0a-005056c00001",
+    "definitionId": "repair0911_child:2:8dee66c9-ad7b-11f1-ac0a-005056c00001"
+  },
+  "callNewParentAtReview": "918b1600-ad7b-11f1-ac0a-005056c00001",
+  "businessEndpoint": {
+    "endpointId": 2
+  },
+  "testForms": [
+    2,
+    3
+  ],
+  "finalMessageAudit": [
+    {
+      "outbox": {
+        "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+        "messageName": "cu0909_message",
+        "sourceProcessDefinitionKey": "repair0911_throws",
+        "sourceProcessInstanceId": "5631e8d6-ad7b-11f1-ac0a-005056c00001",
+        "targetProcessDefinitionKey": "repair0911_receiver",
+        "correlationKey": "REPAIR0911-LATE-OUTBOX",
+        "sequenceNo": 1,
+        "status": "PROCESSED",
+        "retryAllowed": false,
+        "cancelAllowed": false,
+        "attemptCount": 1,
+        "maxAttempts": 5,
+        "compensationCount": 0,
+        "lastHttpStatus": 200,
+        "lastErrorCode": null,
+        "lastErrorSummary": null,
+        "createTime": "2026-09-11 08:54:26",
+        "nextAttemptTime": "2026-09-11 08:54:26",
+        "completeTime": "2026-09-11 08:54:26"
+      },
+      "audit": [
+        {
+          "action": "ENQUEUE",
+          "actorId": "flowable",
+          "actorType": "SYSTEM",
+          "attemptNo": 0,
+          "auditId": 23,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "事务 outbox 已登记",
+          "toStatus": "PENDING"
+        },
+        {
+          "action": "CLAIM",
+          "actorId": "22ee1230-14df-482b-a26f-29ab8b8a86f3",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 24,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "PENDING",
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "后台 worker 已领取",
+          "toStatus": "DELIVERING"
+        },
+        {
+          "action": "RECEIVE",
+          "actorId": "1",
+          "actorType": "INTEGRATION",
+          "attemptNo": 0,
+          "auditId": 25,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "INBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "接收端已持久化消息",
+          "toStatus": "RECEIVED"
+        },
+        {
+          "action": "RETRY",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 26,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "INBOUND",
+          "errorCode": "COLLAB_MESSAGE_INSTANCE_NOT_FOUND",
+          "fromStatus": "RECEIVED",
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "等待指数退避重试",
+          "toStatus": "RETRYING"
+        },
+        {
+          "action": "DELIVER",
+          "actorId": "22ee1230-14df-482b-a26f-29ab8b8a86f3",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 27,
+          "createTime": "2026-09-11 08:54:26",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "DELIVERING",
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "接收端已持久化确认",
+          "toStatus": "PROCESSED"
+        },
+        {
+          "action": "DELIVER",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 2,
+          "auditId": 28,
+          "createTime": "2026-09-11 08:54:28",
+          "direction": "INBOUND",
+          "errorCode": null,
+          "fromStatus": "RETRYING",
+          "messageId": "50b7dc2d-251a-39df-b533-cacf2caa2d55",
+          "summary": "Flowable 等待节点已唯一消费",
+          "toStatus": "PROCESSED"
+        }
+      ]
+    },
+    {
+      "outbox": {
+        "messageId": "85d08eb0-8507-3a4b-bff4-db7d37157012",
+        "messageName": "cu0909_collaboration",
+        "sourceProcessDefinitionKey": "repair0911_pools",
+        "sourceProcessInstanceId": "0ee41510-ad7a-11f1-ac0a-005056c00001",
+        "targetProcessDefinitionKey": "repair0911_partner",
+        "correlationKey": "REPAIR0911-POOLS",
+        "sequenceNo": 1,
+        "status": "PROCESSED",
+        "retryAllowed": false,
+        "cancelAllowed": false,
+        "attemptCount": 1,
+        "maxAttempts": 5,
+        "compensationCount": 0,
+        "lastHttpStatus": 200,
+        "lastErrorCode": null,
+        "lastErrorSummary": null,
+        "createTime": "2026-09-11 08:45:17",
+        "nextAttemptTime": "2026-09-11 08:45:17",
+        "completeTime": "2026-09-11 08:45:18"
+      },
+      "audit": [
+        {
+          "action": "ENQUEUE",
+          "actorId": "flowable",
+          "actorType": "SYSTEM",
+          "attemptNo": 0,
+          "auditId": 15,
+          "createTime": "2026-09-11 08:45:17",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "85d08eb0-8507-3a4b-bff4-db7d37157012",
+          "summary": "事务 outbox 已登记",
+          "toStatus": "PENDING"
+        },
+        {
+          "action": "CLAIM",
+          "actorId": "22ee1230-14df-482b-a26f-29ab8b8a86f3",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 16,
+          "createTime": "2026-09-11 08:45:18",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "PENDING",
+          "messageId": "85d08eb0-8507-3a4b-bff4-db7d37157012",
+          "summary": "后台 worker 已领取",
+          "toStatus": "DELIVERING"
+        },
+        {
+          "action": "RECEIVE",
+          "actorId": "1",
+          "actorType": "INTEGRATION",
+          "attemptNo": 0,
+          "auditId": 17,
+          "createTime": "2026-09-11 08:45:18",
+          "direction": "INBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "85d08eb0-8507-3a4b-bff4-db7d37157012",
+          "summary": "接收端已持久化消息",
+          "toStatus": "RECEIVED"
+        },
+        {
+          "action": "DELIVER",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 18,
+          "createTime": "2026-09-11 08:45:18",
+          "direction": "INBOUND",
+          "errorCode": null,
+          "fromStatus": "RETRYING",
+          "messageId": "85d08eb0-8507-3a4b-bff4-db7d37157012",
+          "summary": "Flowable 等待节点已唯一消费",
+          "toStatus": "PROCESSED"
+        },
+        {
+          "action": "DELIVER",
+          "actorId": "22ee1230-14df-482b-a26f-29ab8b8a86f3",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 19,
+          "createTime": "2026-09-11 08:45:18",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "DELIVERING",
+          "messageId": "85d08eb0-8507-3a4b-bff4-db7d37157012",
+          "summary": "接收端已持久化确认",
+          "toStatus": "PROCESSED"
+        }
+      ]
+    },
+    {
+      "outbox": {
+        "messageId": "4969ea71-9c4e-3fb8-8945-aabc9c219b87",
+        "messageName": "cu0909_message",
+        "sourceProcessDefinitionKey": "repair0911_throws",
+        "sourceProcessInstanceId": "02a8dbc6-ad77-11f1-93ff-005056c00001",
+        "targetProcessDefinitionKey": "cu0909_elements",
+        "correlationKey": "CU0909R-MESSAGE-V4",
+        "sequenceNo": 1,
+        "status": "PROCESSED",
+        "retryAllowed": false,
+        "cancelAllowed": false,
+        "attemptCount": 1,
+        "maxAttempts": 5,
+        "compensationCount": 0,
+        "lastHttpStatus": 200,
+        "lastErrorCode": null,
+        "lastErrorSummary": null,
+        "createTime": "2026-09-11 08:23:28",
+        "nextAttemptTime": "2026-09-11 08:23:28",
+        "completeTime": "2026-09-11 08:23:28"
+      },
+      "audit": [
+        {
+          "action": "ENQUEUE",
+          "actorId": "flowable",
+          "actorType": "SYSTEM",
+          "attemptNo": 0,
+          "auditId": 10,
+          "createTime": "2026-09-11 08:23:28",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "4969ea71-9c4e-3fb8-8945-aabc9c219b87",
+          "summary": "事务 outbox 已登记",
+          "toStatus": "PENDING"
+        },
+        {
+          "action": "CLAIM",
+          "actorId": "0189e2a5-0a8a-4f5b-8f9b-3aab94f0ccbd",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 11,
+          "createTime": "2026-09-11 08:23:28",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "PENDING",
+          "messageId": "4969ea71-9c4e-3fb8-8945-aabc9c219b87",
+          "summary": "后台 worker 已领取",
+          "toStatus": "DELIVERING"
+        },
+        {
+          "action": "RECEIVE",
+          "actorId": "1",
+          "actorType": "INTEGRATION",
+          "attemptNo": 0,
+          "auditId": 12,
+          "createTime": "2026-09-11 08:23:28",
+          "direction": "INBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "4969ea71-9c4e-3fb8-8945-aabc9c219b87",
+          "summary": "接收端已持久化消息",
+          "toStatus": "RECEIVED"
+        },
+        {
+          "action": "DELIVER",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 13,
+          "createTime": "2026-09-11 08:23:28",
+          "direction": "INBOUND",
+          "errorCode": null,
+          "fromStatus": "RETRYING",
+          "messageId": "4969ea71-9c4e-3fb8-8945-aabc9c219b87",
+          "summary": "Flowable 等待节点已唯一消费",
+          "toStatus": "PROCESSED"
+        },
+        {
+          "action": "DELIVER",
+          "actorId": "0189e2a5-0a8a-4f5b-8f9b-3aab94f0ccbd",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 14,
+          "createTime": "2026-09-11 08:23:28",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "DELIVERING",
+          "messageId": "4969ea71-9c4e-3fb8-8945-aabc9c219b87",
+          "summary": "接收端已持久化确认",
+          "toStatus": "PROCESSED"
+        }
+      ]
+    },
+    {
+      "outbox": {
+        "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+        "messageName": "cu0909_message",
+        "sourceProcessDefinitionKey": "repair0911_throws",
+        "sourceProcessInstanceId": "99cce717-ad74-11f1-bad1-005056c00001",
+        "targetProcessDefinitionKey": "cu0909_elements",
+        "correlationKey": "CU0909R-MESSAGE-V4",
+        "sequenceNo": 1,
+        "status": "PROCESSED",
+        "retryAllowed": false,
+        "cancelAllowed": false,
+        "attemptCount": 1,
+        "maxAttempts": 5,
+        "compensationCount": 0,
+        "lastHttpStatus": 200,
+        "lastErrorCode": null,
+        "lastErrorSummary": null,
+        "createTime": "2026-09-11 08:06:13",
+        "nextAttemptTime": "2026-09-11 08:06:13",
+        "completeTime": "2026-09-11 08:06:13"
+      },
+      "audit": [
+        {
+          "action": "ENQUEUE",
+          "actorId": "flowable",
+          "actorType": "SYSTEM",
+          "attemptNo": 0,
+          "auditId": 1,
+          "createTime": "2026-09-11 08:06:13",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+          "summary": "事务 outbox 已登记",
+          "toStatus": "PENDING"
+        },
+        {
+          "action": "CLAIM",
+          "actorId": "9173385a-9436-4645-b03b-8033e8d34c34",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 2,
+          "createTime": "2026-09-11 08:06:13",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "PENDING",
+          "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+          "summary": "后台 worker 已领取",
+          "toStatus": "DELIVERING"
+        },
+        {
+          "action": "RECEIVE",
+          "actorId": "1",
+          "actorType": "INTEGRATION",
+          "attemptNo": 0,
+          "auditId": 3,
+          "createTime": "2026-09-11 08:06:13",
+          "direction": "INBOUND",
+          "errorCode": null,
+          "fromStatus": null,
+          "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+          "summary": "接收端已持久化消息",
+          "toStatus": "RECEIVED"
+        },
+        {
+          "action": "RETRY",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 4,
+          "createTime": "2026-09-11 08:06:13",
+          "direction": "INBOUND",
+          "errorCode": "COLLAB_MESSAGE_FLOW_NOT_DECLARED",
+          "fromStatus": "RECEIVED",
+          "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+          "summary": "等待指数退避重试",
+          "toStatus": "RETRYING"
+        },
+        {
+          "action": "DELIVER",
+          "actorId": "9173385a-9436-4645-b03b-8033e8d34c34",
+          "actorType": "SYSTEM",
+          "attemptNo": 1,
+          "auditId": 5,
+          "createTime": "2026-09-11 08:06:13",
+          "direction": "OUTBOUND",
+          "errorCode": null,
+          "fromStatus": "DELIVERING",
+          "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+          "summary": "接收端已持久化确认",
+          "toStatus": "PROCESSED"
+        },
+        {
+          "action": "RETRY",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 2,
+          "auditId": 6,
+          "createTime": "2026-09-11 08:06:15",
+          "direction": "INBOUND",
+          "errorCode": "COLLAB_MESSAGE_FLOW_NOT_DECLARED",
+          "fromStatus": "RECEIVED",
+          "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+          "summary": "等待指数退避重试",
+          "toStatus": "RETRYING"
+        },
+        {
+          "action": "RETRY",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 3,
+          "auditId": 7,
+          "createTime": "2026-09-11 08:06:19",
+          "direction": "INBOUND",
+          "errorCode": "COLLAB_MESSAGE_FLOW_NOT_DECLARED",
+          "fromStatus": "RECEIVED",
+          "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+          "summary": "等待指数退避重试",
+          "toStatus": "RETRYING"
+        },
+        {
+          "action": "RETRY",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 4,
+          "auditId": 8,
+          "createTime": "2026-09-11 08:06:27",
+          "direction": "INBOUND",
+          "errorCode": "COLLAB_MESSAGE_FLOW_NOT_DECLARED",
+          "fromStatus": "RECEIVED",
+          "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+          "summary": "等待指数退避重试",
+          "toStatus": "RETRYING"
+        },
+        {
+          "action": "DEAD_LETTER",
+          "actorId": "worker",
+          "actorType": "SYSTEM",
+          "attemptNo": 5,
+          "auditId": 9,
+          "createTime": "2026-09-11 08:06:43",
+          "direction": "INBOUND",
+          "errorCode": "COLLAB_MESSAGE_FLOW_NOT_DECLARED",
+          "fromStatus": "RETRYING",
+          "messageId": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+          "summary": "有界消费重试已耗尽",
+          "toStatus": "DEAD_LETTER"
+        }
+      ]
+    }
+  ],
+  "finalBpmnAudit": [
+    {
+      "auditId": 2,
+      "processInstanceId": "0677d5b2-ad7d-11f1-a718-005056c00001",
+      "processDefinitionId": "repair0911_escalation:1:062b1537-ad7d-11f1-a718-005056c00001",
+      "sourceElementId": "raise",
+      "sourceType": "SERVICE_TASK",
+      "eventType": "ESCALATION",
+      "eventCode": "APPROVAL_ESCALATION",
+      "eventName": "审批升级处理",
+      "matchStatus": "CAPTURED",
+      "boundaryEventId": "caught",
+      "interrupting": false,
+      "messageSummary": null,
+      "createTime": "2026-09-11T09:06:31.632"
+    },
+    {
+      "auditId": 1,
+      "processInstanceId": "69e6d723-ad79-11f1-bc18-005056c00001",
+      "processDefinitionId": "repair0911_error:1:43e93178-ad79-11f1-bc18-005056c00001",
+      "sourceElementId": "Activity_10q0xm0",
+      "sourceType": "SERVICE_TASK",
+      "eventType": "ERROR",
+      "eventCode": "APPROVAL_BUSINESS_ERROR",
+      "eventName": "审批业务校验失败",
+      "matchStatus": "CAPTURED",
+      "boundaryEventId": "Event_0osw4tp",
+      "interrupting": true,
+      "messageSummary": null,
+      "createTime": "2026-09-11T08:40:40.471"
+    }
+  ],
+  "externalBusinessFinal": {
+    "records": [
+      [
+        "REPAIR0911-TX-CANCEL",
+        {
+          "status": "COMPENSATED",
+          "appliedAt": "2026-09-11T01:19:08.911Z"
+        }
+      ],
+      [
+        "REPAIR0911-HTTP-RETRY",
+        {
+          "status": "RESERVED",
+          "appliedAt": "2026-09-11T00:57:43.711Z"
+        }
+      ],
+      [
+        "REPAIR0911-TX-CANCEL-FIXED",
+        {
+          "status": "COMPENSATED",
+          "appliedAt": "2026-09-11T01:06:28.891Z"
+        }
+      ]
+    ],
+    "attempts": [
+      {
+        "path": "/business/retry",
+        "businessKey": "REPAIR0911-HTTP-RETRY",
+        "idempotencyKey": "34ab96e39e796d9a1b4ba159cfd997bda75ab39a4180fbb77a12c19a1087be1b",
+        "time": "2026-09-11T00:57:25.345Z"
+      },
+      {
+        "path": "/business/reserve",
+        "businessKey": "REPAIR0911-TX-CANCEL",
+        "idempotencyKey": "68e5371b1549c7e0cfb0f2dd188685775de0f6fdac52a70a117e55569ca8e3e7",
+        "time": "2026-09-11T00:57:30.735Z"
+      },
+      {
+        "path": "/business/retry",
+        "businessKey": "REPAIR0911-HTTP-RETRY",
+        "idempotencyKey": "34ab96e39e796d9a1b4ba159cfd997bda75ab39a4180fbb77a12c19a1087be1b",
+        "time": "2026-09-11T00:57:43.711Z"
+      },
+      {
+        "path": "/business/reserve",
+        "businessKey": "REPAIR0911-TX-CANCEL",
+        "idempotencyKey": "68e5371b1549c7e0cfb0f2dd188685775de0f6fdac52a70a117e55569ca8e3e7",
+        "time": "2026-09-11T00:57:43.711Z"
+      },
+      {
+        "path": "/business/reserve",
+        "businessKey": "REPAIR0911-TX-CANCEL",
+        "idempotencyKey": "68e5371b1549c7e0cfb0f2dd188685775de0f6fdac52a70a117e55569ca8e3e7",
+        "time": "2026-09-11T00:58:03.711Z"
+      },
+      {
+        "path": "/business/reserve",
+        "businessKey": "REPAIR0911-TX-CANCEL-FIXED",
+        "idempotencyKey": "f79a156097c4d0532c48e5b02e115953fbd0b63284df264bba73e44a61bed249",
+        "time": "2026-09-11T01:06:28.831Z"
+      },
+      {
+        "path": "/business/compensate",
+        "businessKey": "REPAIR0911-TX-CANCEL-FIXED",
+        "idempotencyKey": "7216be5b59261dc8ae40ad37798b51386a08f73330ea21a2038f6b7b90cd7c91",
+        "time": "2026-09-11T01:06:28.891Z"
+      },
+      {
+        "path": "/business/compensate",
+        "businessKey": "REPAIR0911-TX-CANCEL",
+        "idempotencyKey": "repair0911-owned-failed-fixture-cleanup",
+        "time": "2026-09-11T01:19:08.911Z"
+      }
+    ]
+  },
+  "legacySourceVerification": [
+    {
+      "modelId": "8d4e5ce0-9fa1-11f1-83e1-005056c00001",
+      "processKey": "qweqwe12123",
+      "version": 1,
+      "normalizedSha256": "64a7884e6e6299a4226be1ef3e92f0ae27d4380905ba059e2c1376e4a7bbfb90",
+      "matchesBeforeRepair": true,
+      "normalization": "CRLF to LF and trim CLI trailing newline"
+    },
+    {
+      "modelId": "cc482891-9f7f-11f1-b97d-005056c00001",
+      "processKey": "eqwe1",
+      "version": 2,
+      "normalizedSha256": "e43425c06575faa15082cfd955d16624708386c7b72772efe5e40ec75f860100",
+      "matchesBeforeRepair": true,
+      "normalization": "CRLF to LF and trim CLI trailing newline"
+    }
+  ],
+  "legacyFinal": [
+    {
+      "key": "eqwe1",
+      "kind": "legacySnapshot",
+      "version": 1,
+      "definition": "eqwe1:1:e2370327-9eae-11f1-9e14-005056c00001",
+      "activeInstances": 1,
+      "historyInstances": 2
+    },
+    {
+      "key": "eqwe1",
+      "kind": "legacySnapshot",
+      "version": 2,
+      "definition": "eqwe1:2:f1e118f6-9f7f-11f1-b97d-005056c00001",
+      "activeInstances": 1,
+      "historyInstances": 1
+    },
+    {
+      "key": "qweqwe12123",
+      "kind": "legacySnapshot",
+      "version": 1,
+      "definition": "qweqwe12123:1:c6320e75-9fa7-11f1-83e1-005056c00001",
+      "activeInstances": 1,
+      "historyInstances": 2
+    },
+    {
+      "id": 2,
+      "kind": "form",
+      "deleted": "2"
+    },
+    {
+      "id": 3,
+      "kind": "form",
+      "deleted": "2"
+    },
+    {
+      "id": 104,
+      "kind": "user",
+      "name": "repair0911_a",
+      "deleted": "2"
+    },
+    {
+      "id": 105,
+      "kind": "user",
+      "name": "repair0911_b",
+      "deleted": "2"
+    }
+  ],
+  "cleanupFinal": [
+    {
+      "kind": "runtime",
+      "count": 0
+    },
+    {
+      "kind": "history",
+      "count": 0
+    },
+    {
+      "kind": "definitions",
+      "count": 0
+    },
+    {
+      "kind": "models",
+      "count": 0
+    },
+    {
+      "kind": "dmn",
+      "count": 0
+    },
+    {
+      "kind": "draft",
+      "count": 0
+    },
+    {
+      "kind": "attachments",
+      "count": 0
+    },
+    {
+      "kind": "inbox",
+      "count": 0
+    },
+    {
+      "kind": "notificationOutbox",
+      "count": 0
+    },
+    {
+      "kind": "sla",
+      "count": 0
+    },
+    {
+      "kind": "copy",
+      "count": 0
+    },
+    {
+      "kind": "rounds",
+      "count": 0
+    },
+    {
+      "kind": "loops",
+      "count": 0
+    },
+    {
+      "kind": "bpmnAudit",
+      "count": 0
+    },
+    {
+      "id": 2,
+      "kind": "credential",
+      "name": "repair0911原接收节点联调",
+      "revokedAt": "2026-09-11 08:23:29.618000"
+    },
+    {
+      "id": 3,
+      "kind": "credential",
+      "name": "repair0911原消息后续信号",
+      "revokedAt": "2026-09-11 08:24:28.640000"
+    },
+    {
+      "id": 1,
+      "kind": "credential",
+      "name": "repair0911可靠消息",
+      "revokedAt": "2026-09-11 09:19:08.921000"
+    },
+    {
+      "id": 1,
+      "key": "repair0911_receiver",
+      "kind": "endpoint",
+      "status": "DISABLED"
+    },
+    {
+      "id": "4969ea71-9c4e-3fb8-8945-aabc9c219b87",
+      "key": "cu0909_elements",
+      "kind": "message",
+      "status": "PROCESSED",
+      "channel": "85ded0b82f3d5748d86af9564485b9152ec4380bbdc958904a065ddf24eb8767",
+      "matched": "54cefe9d-ac62-11f1-8ac1-005056c00001",
+      "credential": 1
+    },
+    {
+      "id": "afab3d1d-91c4-303c-83c4-cda3ea00e3b3",
+      "key": "cu0909_elements",
+      "kind": "message",
+      "status": "DEAD_LETTER",
+      "channel": "9bfc925e6bdb096d4f2ecedf1e8c8b5eac140ecb2fb42b2bafb5a92a971fd3fb",
+      "matched": null,
+      "credential": 1
+    },
+    {
+      "id": "865c2672-9eae-11f1-9e14-005056c00001",
+      "key": "eqwe1",
+      "kind": "legacyAuthor",
+      "sha256": "a9387606215e49e97f97d501496ee3d281a48b9f5e1e3b40554a2286c3e6356e",
+      "version": 1
+    },
+    {
+      "id": "cc482891-9f7f-11f1-b97d-005056c00001",
+      "key": "eqwe1",
+      "kind": "legacyAuthor",
+      "sha256": "e43425c06575faa15082cfd955d16624708386c7b72772efe5e40ec75f860100",
+      "version": 2
+    },
+    {
+      "id": "42d74c23-ad79-11f1-bc18-005056c00001",
+      "key": "eqwe1",
+      "kind": "legacyAuthor",
+      "sha256": "58113456dbed03129c6dc3180fa191af6dd87f6e6223dd8d4132fa2300ea5986",
+      "version": 3
+    },
+    {
+      "id": "8d4e5ce0-9fa1-11f1-83e1-005056c00001",
+      "key": "qweqwe12123",
+      "kind": "legacyAuthor",
+      "sha256": "64a7884e6e6299a4226be1ef3e92f0ae27d4380905ba059e2c1376e4a7bbfb90",
+      "version": 1
+    },
+    {
+      "id": "43786e43-ad79-11f1-bc18-005056c00001",
+      "key": "qweqwe12123",
+      "kind": "legacyAuthor",
+      "sha256": "aa185fca3770a34332bf469fed14d5bd37d2c2340c76511c11a31e0c1d9c94ae",
+      "version": 2
+    },
+    {
+      "id": "00ad967d-abe6-11f1-9cc9-005056c00001",
+      "end": "2026-09-11 08:24:46.113000",
+      "kind": "legacyInstance",
+      "reason": null
+    },
+    {
+      "id": "436c3933-ad79-11f1-bc18-005056c00001",
+      "end": "2026-09-11 08:40:54.280000",
+      "kind": "legacyInstance",
+      "reason": null
+    },
+    {
+      "id": "5019d008-ac61-11f1-8ac1-005056c00001",
+      "end": "2026-09-11 08:24:31.165000",
+      "kind": "legacyInstance",
+      "reason": null
+    },
+    {
+      "id": "54cefe9d-ac62-11f1-8ac1-005056c00001",
+      "end": "2026-09-11 08:24:45.648000",
+      "kind": "legacyInstance",
+      "reason": null
+    },
+    {
+      "id": "715b901d-ad79-11f1-bc18-005056c00001",
+      "end": "2026-09-11 08:45:29.081000",
+      "kind": "legacyInstance",
+      "reason": null
+    },
+    {
+      "id": "859fbc04-ac5d-11f1-8ac1-005056c00001",
+      "end": "2026-09-11 08:24:31.940000",
+      "kind": "legacyInstance",
+      "reason": null
+    }
+  ],
+  "cleanupResidualDeletes": [
+    {
+      "table": "wf_notification_inbox",
+      "deleted": 130
+    },
+    {
+      "table": "wf_bpmn_event_audit",
+      "deleted": 2
+    },
+    {
+      "table": "wf_process_draft",
+      "deleted": 34
+    },
+    {
+      "table": "wf_runtime_event_request",
+      "deleted": 13
+    },
+    {
+      "table": "wf_collaboration_message_audit",
+      "deleted": 14
+    },
+    {
+      "table": "wf_collaboration_outbox",
+      "deleted": 2
+    },
+    {
+      "table": "wf_collaboration_message",
+      "deleted": 3
+    },
+    {
+      "table": "wf_collaboration_channel",
+      "deleted": 3
+    },
+    {
+      "table": "wf_integration_credential",
+      "deleted": 4
+    },
+    {
+      "table": "wf_connector_endpoint",
+      "deleted": 1
+    }
+  ],
+  "evidenceNote": "acceptance.time uses UTC ISO timestamps; DB timestamps use Asia/Shanghai. models are observations taken at different save/deploy stages; final lifecycle is in database-before-cleanup.jsonl and cleanup-final.jsonl. No test counts imply logged-in UI coverage.",
+  "dmnNewVersion": {
+    "decisionId": "fd24208e-ad78-11f1-93ff-005056c00001",
+    "decisionKey": "repair0911_amount",
+    "decisionName": "修复验收金额决策",
+    "version": 3,
+    "category": null,
+    "decisionType": "decision_table",
+    "deploymentId": "fd22c0fc-ad78-11f1-93ff-005056c00001",
+    "resourceName": "repair0911_amount.dmn",
+    "deploymentTime": "2026-09-11 08:37:37"
+  },
+  "legacyActiveDisposition": [
+    {
+      "kind": "legacyActive",
+      "instance": "2159c822-9fa8-11f1-83e1-005056c00001",
+      "suspended": 1,
+      "activities": [
+        "Activity_1u1bapd",
+        "Activity_1u1bapd"
+      ],
+      "definition": "qweqwe12123:1:c6320e75-9fa7-11f1-83e1-005056c00001",
+      "businessKey": null,
+      "callSnapshotReferences": 0
+    },
+    {
+      "kind": "legacyActive",
+      "instance": "61604356-9eaf-11f1-9e14-005056c00001",
+      "suspended": 1,
+      "activities": [
+        "Activity_047tra2",
+        "Activity_047tra2"
+      ],
+      "definition": "eqwe1:1:e2370327-9eae-11f1-9e14-005056c00001",
+      "businessKey": null,
+      "callSnapshotReferences": 0
+    },
+    {
+      "kind": "legacyActive",
+      "instance": "f9ff5841-9f7f-11f1-b97d-005056c00001",
+      "suspended": 1,
+      "activities": [
+        "Activity_1eugq98",
+        "Activity_1eugq98"
+      ],
+      "definition": "eqwe1:2:f1e118f6-9f7f-11f1-b97d-005056c00001",
+      "businessKey": null,
+      "callSnapshotReferences": 0
+    },
+    {
+      "kind": "jobs",
+      "timer": 0,
+      "suspended": 0,
+      "deadLetter": 0,
+      "executable": 0
+    }
+  ],
+  "finalLiveDiagnostics": [
+    {
+      "file": "ui-graphics-failed.bpmn",
+      "selected": "DataObjectReference_0aevb5m",
+      "validation": {
+        "valid": false,
+        "issues": [
+          {
+            "code": "BPMN_DATA_OBJECT_NAME",
+            "severity": "ERROR",
+            "elementId": "DataObjectReference_0aevb5m",
+            "message": "数据对象缺少数据变量名称",
+            "processId": "cu0909_advanced"
+          }
+        ]
+      }
+    },
+    {
+      "file": "ui-throws-failed.bpmn",
+      "selected": "Event_13trwmt",
+      "validation": {
+        "valid": true,
+        "issues": [
+          {
+            "code": "BPMN_MESSAGE_THROW_NOT_EXECUTABLE",
+            "severity": "WARNING",
+            "elementId": "Event_13trwmt",
+            "message": "消息抛出尚未配置可靠消息发送参数，请选择接收端点、目标流程及关联条件后部署",
+            "processId": "cu0909_elements"
+          }
+        ]
+      }
+    }
+  ],
+  "modelCreationAudit": [
+    {
+      "url": "/workflow/model",
+      "time": "2026-09-11 07:59:09.000000",
+      "response": {
+        "modelId": "9ce985ad-ad73-11f1-96d9-005056c00001"
+      },
+      "requestModelId": null,
+      "requestModelKey": "repair0911_dmn"
+    },
+    {
+      "url": "/workflow/model",
+      "time": "2026-09-11 08:04:57.000000",
+      "response": {
+        "modelId": "6c7dc7d9-ad74-11f1-bad1-005056c00001"
+      },
+      "requestModelId": null,
+      "requestModelKey": "repair0911_throws"
+    },
+    {
+      "url": "/workflow/model/save",
+      "time": "2026-09-11 08:20:20.000000",
+      "response": {
+        "modelId": "92eba945-ad76-11f1-8874-005056c00001",
+        "version": 2,
+        "revision": 2
+      }
+    }
+  ]
+}
