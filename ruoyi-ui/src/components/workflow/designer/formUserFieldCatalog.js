@@ -62,37 +62,28 @@ function templateUserIdSignature(field, permissionMode) {
 }
 
 /**
- * 从正式模板 JSON 构建用户主键字段目录，保留不合格声明供流程级冲突失败关闭。
- * @param {string} content 已由正式表单接口返回的模板 JSON。
+ * 从共享目录的模板字段描述构建用户主键字段目录，保留不合格声明供流程级冲突失败关闭。
+ * @param {Array<{variable:string,field:object}>} descriptors 按模板顺序展开的完整字段描述。
  * @param {{defaultMode?:string,permissions?:Map<string,string>}|undefined} permissionPolicy BPMN 节点的强制权限策略。
  * @returns {Array<{value:string,label:string,eligible:boolean,signature:string}>} 去重后的全部字段声明、资格和值形态。
  */
-export function createTemplateUserIdFieldCatalog(content, permissionPolicy) {
+export function createTemplateUserIdFieldCatalog(descriptors, permissionPolicy) {
   try {
-    const root = JSON.parse(content)
-    const declarations = []
-    const visit = fields => {
-      for (const field of Array.isArray(fields) ? fields : []) {
-        const value = String(field?.vModel || '').trim()
-        if (value) {
-          const label = String(field?.label || '').trim()
-          const permissionMode = permissionPolicy?.permissions?.get(value)
-            || permissionPolicy?.defaultMode || ''
-          const signature = templateUserIdSignature(field, permissionMode)
-          declarations.push({
-            value,
-            label: label ? `${label}（${value}）` : value,
-            eligible: Boolean(signature),
-            signature
-          })
-        }
-        visit(field?.children)
+    const declarations = descriptors.map(({ variable: value, field }) => {
+      const label = String(field?.label || '').trim()
+      const permissionMode = permissionPolicy?.permissions?.get(value)
+        || permissionPolicy?.defaultMode || ''
+      const signature = templateUserIdSignature(field, permissionMode)
+      return {
+        value,
+        label: label ? `${label}（${value}）` : value,
+        eligible: Boolean(signature),
+        signature
       }
-    }
-    visit(root?.fields)
+    })
     return mergeFieldDeclarations(declarations)
   } catch {
-    // 页面目录对异常模板失败关闭，正式保存仍由后端返回精确校验错误。
+    // 权限目录损坏时不提供可选字段；正式保存由后端校验。
     return []
   }
 }

@@ -112,7 +112,9 @@ export function createDesignerFormFieldCatalog(context = {}) {
       return createEmbeddedUserIdFieldCatalog(embedded, customTypes)
     }
     const form = resolveTemplateForm(source)
-    return form?.content ? createTemplateUserIdFieldCatalog(form.content, permissionPolicy) : []
+    return form?.content
+      ? createTemplateUserIdFieldCatalog(readTemplateFieldDescriptors(form.content), permissionPolicy)
+      : []
   }
 
   return { resolveTemplateForm, readEmbeddedFormFields, readTemplateFieldDescriptors,

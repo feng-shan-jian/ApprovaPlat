@@ -171,7 +171,7 @@ public class WorkflowTaskReturnApplicationService
                         preparation.targetNodeKey()).changeState();
         Task returnedTask = runtimeReader.requireSingleActiveTask(
                 processInstanceId, preparation.targetNodeKey());
-        returnedTaskStateService.enterOrdinaryReturned(returnedTask.getId(),
+        returnedTaskStateService.enterReturned(returnedTask.getId(),
                 processInstanceId, preparation.applicantUserId());
         taskCopyService.persist(copyPlan);
         notificationService.onStableTaskEvent("TASK_RETURNED", returnedTask);

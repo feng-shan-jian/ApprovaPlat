@@ -55,17 +55,7 @@ public class WorkflowReturnedTaskStateService
      */
     public void requireRunning(String processInstanceId)
     {
-        ProcessInstance instance = runtimeService.createProcessInstanceQuery()
-                .processInstanceId(processInstanceId).singleResult();
-        Object processStatus = runtimeService.getVariable(processInstanceId,
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE);
-        String businessStatus = instance == null ? null : instance.getBusinessStatus();
-        if (instance == null || instance.isSuspended()
-                || !WorkflowProcessStartService.RUNNING_STATUS.equals(processStatus)
-                || !WorkflowProcessStartService.RUNNING_STATUS.equals(businessStatus))
-        {
-            throw conflict();
-        }
+        requireProcessStatus(processInstanceId, WorkflowProcessStartService.RUNNING_STATUS);
     }
 
     /**
@@ -98,42 +88,21 @@ public class WorkflowReturnedTaskStateService
     }
 
     /**
-     * 冻结普通首审批任务办理配置并切换为发起人独占的 returned 状态。
+     * 冻结迁移后首审批任务的办理配置并切换为发起人独占的 returned 状态。
      *
      * @param taskId String，Flowable 迁移后新建的首审批任务主键
      * @param processInstanceId String，流程实例主键
      * @param applicantUserId String，流程正式发起人主键
-     * @return ReturnedAssignmentSnapshot，可供普通重提精确恢复的办理配置
+     * @return ReturnedAssignmentSnapshot，普通或整组重提所需的原办理配置
      */
-    public ReturnedAssignmentSnapshot enterOrdinaryReturned(String taskId,
+    public ReturnedAssignmentSnapshot enterReturned(String taskId,
             String processInstanceId, String applicantUserId)
     {
         Task task = requireTask(taskId, processInstanceId);
         ReturnedAssignmentSnapshot assignment = captureAssignment(task);
         taskService.setVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE,
                 assignmentCodec.encode(assignment));
-        enterReturned(task, applicantUserId);
-        return assignment;
-    }
-
-    /**
-     * 冻结整组迁移生成的首审批任务办理配置，再切换为发起人独占 returned 状态。
-     *
-     * @param taskId String，整组迁移后唯一申请人任务主键
-     * @param processInstanceId String，流程实例主键
-     * @param applicantUserId String，流程正式发起人主键
-     * @return ReturnedAssignmentSnapshot，重提从普通首审批继续时需要恢复的完整办理配置
-     */
-    public ReturnedAssignmentSnapshot enterGroupReturned(String taskId,
-            String processInstanceId,
-            String applicantUserId)
-    {
-        Task task = requireTask(taskId, processInstanceId);
-        // 无论退回来源是否为多实例，迁移目标都是真实首审批任务；必须先冻结该节点配置。
-        ReturnedAssignmentSnapshot assignment = captureAssignment(task);
-        taskService.setVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE,
-                assignmentCodec.encode(assignment));
-        enterReturned(task, applicantUserId);
+        assignReturnedApplicant(task, applicantUserId);
         return assignment;
     }
 
@@ -162,7 +131,7 @@ public class WorkflowReturnedTaskStateService
         {
             throw conflict();
         }
-        verifyProcessStatus(processInstanceId, RETURNED_STATUS, true);
+        requireProcessStatus(processInstanceId, RETURNED_STATUS);
     }
 
     /**
@@ -270,7 +239,7 @@ public class WorkflowReturnedTaskStateService
      * @param applicantUserId String，流程正式发起人主键
      * @return 无返回值，任一同步写操作失败时由外层事务回滚
      */
-    private void enterReturned(Task task, String applicantUserId)
+    private void assignReturnedApplicant(Task task, String applicantUserId)
     {
         ProcessInstance instance = requireProcess(task.getProcessInstanceId());
         if (!Objects.equals(applicantUserId, instance.getStartUserId()))
@@ -357,15 +326,13 @@ public class WorkflowReturnedTaskStateService
     }
 
     /**
-     * 核验流程实例和双状态；调用方可选择冲突或数据错误分类。
+     * 核验活动流程的双状态，缺失、挂起或状态漂移统一返回冲突。
      *
      * @param processInstanceId String，流程实例主键
      * @param expectedStatus String，期望状态
-     * @param conflictOnMismatch boolean，true 返回 409，false 返回 500
-     * @return 无返回值，状态漂移时按调用阶段分类
+     * @return 无返回值，不满足期望状态时抛出 HTTP 409
      */
-    private void verifyProcessStatus(String processInstanceId,
-            String expectedStatus, boolean conflictOnMismatch)
+    private void requireProcessStatus(String processInstanceId, String expectedStatus)
     {
         ProcessInstance instance = runtimeService.createProcessInstanceQuery()
                 .processInstanceId(processInstanceId).singleResult();
@@ -375,7 +342,7 @@ public class WorkflowReturnedTaskStateService
                 || !expectedStatus.equals(processStatus)
                 || !expectedStatus.equals(instance.getBusinessStatus()))
         {
-            throw conflictOnMismatch ? conflict() : dataError();
+            throw conflict();
         }
     }
 

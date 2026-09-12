@@ -8,8 +8,9 @@
 
 ## 使用方式
 
-- 普通退回：`markTransition` → Flowable 迁移 → `enterOrdinaryReturned` → 外部副作用 → `clearTransition`。
-- 整组退回：`markTransition` → Flowable 整组迁移 → `enterGroupReturned`（冻结迁移后首审批任务办理配置）→ 轮次 CAS → `clearTransition`。
+- 普通退回：`markTransition` → Flowable 迁移 → `enterReturned` → 外部副作用 → `clearTransition`。
+- 整组退回：`markTransition` → Flowable 整组迁移 → `enterReturned` → 轮次 CAS → `clearTransition`。
+- 两条退回链共用办理配置冻结与申请人指派；执行树迁移和轮次 CAS 仍由各自用例编排。
 - 普通重提：`requireReturnedApplicant` → `requireOrdinaryAssignment` → `restoreOrdinary`。
 - 整组重提：`requireReturnedApplicant` → 轮次计划核验 → `prepareGroupRunning` → Flowable 重建。
 
@@ -19,8 +20,7 @@
 | --- | --- | --- |
 | `requireRunning` | 流程实例 ID | 同时要求 `processStatus=running` 与 `businessStatus=running`；任一缺失或不一致均冲突 |
 | `markTransition` / `clearTransition` | 流程实例 ID、稳定标记 | 建立或清除单命令迁移标记 |
-| `enterOrdinaryReturned` | 任务、实例、申请人 ID | 返回不可变原办理配置快照 |
-| `enterGroupReturned` | 任务、实例、申请人 ID | 冻结迁移后首审批任务办理配置并建立整组退回态 |
+| `enterReturned` | 任务、实例、申请人 ID | 冻结迁移后首审批任务的原办理配置，建立退回态并返回不可变快照 |
 | `requireReturnedApplicant` | 任务、实例、申请人 ID | 核验独占指派、无候选关系、无 owner/委派及 `returned` 双状态 |
 | `requireOrdinaryAssignment` | 任务 ID | 解码普通退回办理配置 |
 | `restoreOrdinary` | 任务、实例、办理配置 | 恢复原办理配置并切换 `running` |
@@ -43,7 +43,7 @@ runtimeService.createChangeActivityStateBuilder()
         .processInstanceId(processInstanceId)
         .moveExecutionToActivityId(executionId, targetActivityId)
         .changeState();
-returnedTaskStateService.enterOrdinaryReturned(
+returnedTaskStateService.enterReturned(
         returnedTaskId, processInstanceId, applicantUserId);
 returnedTaskStateService.clearTransition(processInstanceId);
 ```

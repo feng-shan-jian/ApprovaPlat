@@ -179,7 +179,7 @@ public class WorkflowMultiInstanceGroupTransitionService
         }
 
         // Flowable 迁移完成后再写申请人状态和轮次；任何一步失败都由外层事务整体回滚。
-        returnedTaskStateService.enterGroupReturned(applicantTaskId,
+        returnedTaskStateService.enterReturned(applicantTaskId,
                 plan.round().processInstanceId(), plan.applicantUserId());
         String sourceTaskId = plan.runtime().sourceTaskId();
         roundRepository.compareAndSetReturned(plan.round(), sourceTaskId,

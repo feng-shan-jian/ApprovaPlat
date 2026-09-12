@@ -26,8 +26,80 @@ flowchart LR
 - `ruoyi-admin`：HTTP 协议、参数校验、登录用户权限、下载响应和操作日志入口。
 - `ruoyi-flowable`：对象授权、状态校验、事务、Flowable 命令、业务表写入、附件和集成能力。
 - `ruoyi-system`：用户、角色、部门、菜单和系统操作日志主数据。
+- `ruoyi-framework`：认证、安全过滤器、实时权限查询和 Web 基础设施。
+- `ruoyi-common`：基础类型、通用协议和跨业务工具，不反向引用具体业务模块。
+- `ruoyi-quartz` / `ruoyi-generator`：定时任务管理与代码生成，作为独立功能由 `ruoyi-admin` 装配。
 - `ruoyi-ui`：真实 API 调用、管理页面、工作台、BPMN 设计/查看和表单运行时。
 - `sql/flowable`：Flowable 官方表、工作流业务表和菜单权限。
+
+后端是一个 Maven 多模块应用，业务代码通过直接依赖协作。当前主要依赖方向为：
+
+```mermaid
+flowchart TD
+    Admin[ruoyi-admin] --> Workflow[ruoyi-flowable]
+    Admin --> Framework[ruoyi-framework]
+    Admin --> Quartz[ruoyi-quartz]
+    Admin --> Generator[ruoyi-generator]
+    Workflow --> Framework
+    Workflow --> System[ruoyi-system]
+    Framework --> System
+    System --> Common[ruoyi-common]
+    Quartz --> Common
+    Generator --> Common
+```
+
+工作流对 `ruoyi-framework` 的依赖用于复用实时权限源。移动包或增加接口时必须保留这一安全语义，不能替换成登录时的权限快照。
+
+## 前端代码边界
+
+| 位置 | 拥有的职责 | 协作方式 |
+| --- | --- | --- |
+| `src/views` | 路由参数、页面请求、加载与提交状态、导航 | 调用 `src/api`，通过 props 和事件组合组件 |
+| `src/api` | URL、HTTP 方法、参数和请求配置 | 统一使用 `utils/request`，不决定流程状态或办理资格 |
+| `src/components/workflow` | 设计器、查看器、表单和列表等工作流交互 | 展示后端视图；编辑模型由所在组件管理 |
+| `workflow/designer/*Domain.js` | 当前 BPMN 的属性编辑规则与字段选项 | 通过明确传入的目录和命令栈操作协作 |
+| `workflow/designer/designerFormFieldCatalog.js` | 模板查找、JSON 字段展开和内嵌表单读取 | 提供按原顺序排列的中性字段描述，保留重名声明 |
+| `workflow/designer/formUserFieldCatalog.js` | 用户主键字段资格、重名冲突和可选项 | 消费字段描述，不再独立解析模板 JSON |
+| `workflow/form` | 安全渲染描述、字段组件和表单输入 | 使用部署或提交快照，不读取设计器内部状态 |
+| `src/store` / `src/utils` | 应用级状态 / 无页面归属的复用能力 | 页面局部状态留在页面，工作流规则留在工作流目录 |
+
+前端可以整理数据以满足展示和编辑：字段标签、选项、格式、空态、重复提交锁和过期响应丢弃都属于交互职责。流程状态、对象关系、可办理动作、下一办理人要求和多实例 revision 由服务端决定；前端直接消费正式视图，写入时由服务端再次核验。
+
+设计器的作者态与已部署运行态具有不同生命周期。作者态写入必须经过 `bpmn-js` 命令栈以支持撤销/重做；运行表单消费冻结快照。两者不能用一份共享可变对象连接，也不能用浏览器存储代替模型或申请持久化。
+
+## 工作流后端代码边界
+
+| 位置 | 职责与约束 |
+| --- | --- |
+| `controller/workflow` | HTTP 参数、入口权限、响应和导出；把业务命令交给服务 |
+| `flowable/authorization`、`identity` | 当前有效身份和实例、任务、附件等对象授权 |
+| `flowable/service/model` | 作者模型、版本、部署编译、资源引用与不可变部署制品 |
+| `flowable/service/process` | 发起与申请草稿、实例查询与详情、实例生命周期和运行事件 |
+| `flowable/service/task` | 审批用例、退回/重提、办理人、多实例轮次与任务状态不变量 |
+| `flowable/service/notification`、`retention` | 通知投递与保留期清理，各自拥有重试和批处理边界 |
+| `flowable/engine` | 引擎命令的事务、认证上下文与异常翻译 |
+| `flowable/mapper`、`domain` | 正式持久化查询、实体和请求/响应契约 |
+
+用例服务负责安排步骤，状态服务负责维护不变量。普通退回和整组退回在迁移完成后都调用 `WorkflowReturnedTaskStateService.enterReturned`：先冻结原办理配置，再建立申请人独占任务和 `returned` 双状态；执行树迁移、轮次 CAS、审计与通知仍按各用例的事务顺序执行。
+
+模型部署和预检共用 `WorkflowModelService.prepareDeployment` 的编译顺序。正式部署在版本组锁内重新读取和核验模型，冻结制品后更新部署关系。预检结果不能替代发布时的重验，也不能因去重而删除锁内校验。
+
+## 关键调用链
+
+| 场景 | 代码入口与业务边界 |
+| --- | --- |
+| 设计与发布 | `model/design.vue` → `ProcessDesigner` → `api/workflow/model` → `WfModelController` → `WorkflowModelService` → 编译服务、Flowable 和部署制品 |
+| 申请提交 | `work/start.vue` → 草稿 API → `WfProcessDraftController` → `WorkflowProcessDraftService` → `WorkflowProcessStartService`；提交时重验表单、附件和版本 |
+| 详情与办理 | `work/detail.vue` → process/task API → 对应 Controller → 详情投影或任务用例；读入口投影 capability，写入口核验实时状态 |
+
+## 精简与重构约束
+
+- 同一业务规则只有一个实现所有者。重复的状态变更、解析和查询准备优先收敛到现有模块；消费者保留自身的业务决策。
+- 仅当代码有独立状态、生命周期或变化原因时拆分文件。简单委托不再增加 facade、factory、registry 或单实现接口。
+- 删除前检查生产调用、Spring 注册、MyBatis XML、路由、模板、权限配置和正式测试；文本搜索无直接调用不足以证明无用。
+- 相似的校验先比较授权场景、事务顺序、错误码和数据范围。工作台分页上限为 200，运维查询上限为 100，不能为统一工具而改变各自协议。
+- 每次收敛同步调用方和组件/服务手册，不保留已被替代的内部兼容入口。HTTP、DTO、数据库和 BPMN 协议变化必须单独明确迁移方案。
+- 以维护成本和行为验证衡量结果：同时记录生产代码净变化、调用跳转、公共入口与测试证据。纯编译、源码断言或文件变短不等于业务链路通过。
 
 ## 接口边界
 

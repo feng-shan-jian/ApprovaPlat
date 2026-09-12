@@ -416,6 +416,33 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   })
 })
 
+test('共享模板目录保留重名声明，用户字段资格拒绝类型冲突与损坏权限', () => {
+  const form = { formId: 7, content: JSON.stringify({ fields: [
+    { vModel: ' applicant ', tag: 'el-input', label: '申请人' },
+    { children: [
+      { vModel: 'reviewer', tag: 'el-input-number', label: '审核人' },
+      { vModel: 'applicant', tag: 'el-select', multiple: true },
+      { vModel: 'hiddenUser', tag: 'el-input' }
+    ] }
+  ] }) }
+  const catalog = createDesignerFormFieldCatalog({ forms: [form] })
+  const policy = { defaultMode: 'EDITABLE', permissions: new Map([['hiddenUser', 'HIDDEN']]) }
+
+  assert.deepEqual(catalog.readTemplateFieldDescriptors(form.content).map(item => item.variable),
+    ['applicant', 'reviewer', 'applicant', 'hiddenUser'])
+  assert.deepEqual(catalog.resolveUserIdFieldCatalog('key_7', policy), [
+    { value: 'applicant', label: '申请人（applicant）', eligible: false, signature: 'el-input' },
+    { value: 'reviewer', label: '审核人（reviewer）', eligible: true, signature: 'el-input-number' },
+    { value: 'hiddenUser', label: 'hiddenUser', eligible: false, signature: '' }
+  ])
+  assert.deepEqual(catalog.resolveUserIdFieldCatalog('key_7', { permissions: {} }), [])
+  for (const content of ['{', 'null', '{}']) {
+    form.content = content
+    assert.deepEqual(catalog.readTemplateFieldDescriptors(content), [])
+    assert.deepEqual(catalog.resolveUserIdFieldCatalog('key_7', policy), [])
+  }
+})
+
 /**
  * 验证真实生成器字段在保存前递归补齐正式节点权限，同时保留明确的只读配置。
  * @returns {void} 缺失权限仍会被渲染为隐藏或显式权限被覆盖时测试失败。
