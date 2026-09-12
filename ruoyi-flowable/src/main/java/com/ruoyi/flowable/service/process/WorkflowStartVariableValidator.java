@@ -144,6 +144,32 @@ public class WorkflowStartVariableValidator
         return validateSubmission(snapshotRoot, submitted, Map.of(), true, false).variables();
     }
 
+    public Set<String> systemOutputFieldNames(String snapshotContent)
+    {
+        Set<String> names = new java.util.LinkedHashSet<>();
+        collectSystemOutputFields(templateValidator.validate(snapshotContent).path("fields"), names);
+        return Set.copyOf(names);
+    }
+
+    private void collectSystemOutputFields(JsonNode fields, Set<String> names)
+    {
+        for (JsonNode field : fields)
+        {
+            if (field.path("workflowSystemWritable").asBoolean(false)
+                    && field.path("workflowReadable").asBoolean(false)
+                    && !field.path("workflowHidden").asBoolean(false)
+                    && !field.path("workflowWritable").asBoolean(true)) names.add(field.path("vModel").asText());
+            collectSystemOutputFields(field.path("children"), names);
+        }
+    }
+
+    public void validateSystemOutputPatch(String content, Map<String, Object> patch)
+    {
+        if (!systemOutputFieldNames(content).containsAll(patch.keySet()))
+            throw invalidVariable("输出目标没有系统回填资格");
+        validateSubmission(templateValidator.validate(content), patch, Map.of(), false, false);
+    }
+
     /**
      * 按部署表单快照校验草稿字段，但允许正式必填字段暂时缺失或为空。
      * 复用正式模板校验返回的根节点，模板损坏仍转换为 500。

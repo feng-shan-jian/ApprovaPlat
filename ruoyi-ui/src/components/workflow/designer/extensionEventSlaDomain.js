@@ -261,7 +261,7 @@ export function createExtensionEventSlaDomain(context) {
     if (selectedOption?.extensionType === 'CEL') {
       propertyState.extensionConfig = JSON.stringify(CEL_DEFAULT_CONFIG)
     } else if (selectedOption?.extensionType === 'HTTP') {
-      const endpoint = connectorEndpoints.value[0]
+      const endpoint = connectorEndpoints.value.find(item => item.available === true)
       // HTTP 外部副作用必须交给 Flowable Job 重试；该技术约束由系统自动维护。
       propertyState.asyncBefore = true
       updateProperties({ 'flowable:async': true })
@@ -271,7 +271,7 @@ export function createExtensionEventSlaDomain(context) {
         path: endpoint?.pathPrefix || '/'
       })
     } else if (selectedOption?.implementationKey === 'COLLABORATION_OUTBOX_V1') {
-      const endpoint = connectorEndpoints.value[0]
+      const endpoint = connectorEndpoints.value.find(item => item.available === true)
       propertyState.extensionConfig = JSON.stringify({
         endpointKey: endpoint?.endpointKey || '',
         path: propertyFlags.value.messageThrow ? '/workflow/runtime-event/message/reliable' : '/workflow/runtime-event/collaboration/message',

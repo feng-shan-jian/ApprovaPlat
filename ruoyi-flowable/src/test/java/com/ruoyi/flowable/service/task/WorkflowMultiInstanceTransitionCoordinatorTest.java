@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.service.task;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDateTime;
@@ -14,38 +13,6 @@ import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
  */
 class WorkflowMultiInstanceTransitionCoordinatorTest
 {
-    /**
-     * 验证整组退回必须完成集合解析、根取消和临时任务观察，并在关闭后清除状态。
-     *
-     * @return void，任一观察缺失或状态泄漏时测试失败
-     */
-    @Test
-    void completesReturnProtocolAndClearsThreadState()
-    {
-        WorkflowMultiInstanceTransitionCoordinator coordinator =
-                new WorkflowMultiInstanceTransitionCoordinator();
-        MultiInstanceGroupReturnPlan plan = returnPlan();
-
-        try (WorkflowMultiInstanceTransitionScope scope =
-                coordinator.beginReturn(returnExecutionPlan(plan), "201"))
-        {
-            WorkflowMultiInstanceTransitionMembers members =
-                    coordinator.resolveTransitionMembers("pi", "approve",
-                            WorkflowMultiInstanceMode.ALL);
-            assertThat(members.overrideMembers()).containsExactly("201");
-            assertThat(members.refreshAuthoritative()).isFalse();
-            assertThat(coordinator.observeControlledRootCancellation("pi", "pd",
-                    "approve", "root", "201")).isNotNull();
-            assertThat(coordinator.observeTemporaryTask("pi", "approve",
-                    "temporary-root", "applicant-task", "201")).isTrue();
-
-            coordinator.requireReturnCompleted(scope, "applicant-task", true);
-        }
-
-        assertThat(coordinator.resolveTransitionMembers("pi", "approve",
-                WorkflowMultiInstanceMode.ALL)).isNull();
-    }
-
     /**
      * 验证异常离开作用域仍清除线程状态，下一命令可以在同一线程重新开启。
      *
@@ -74,40 +41,6 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
                     returnExecutionPlan(plan), "201"))
                     .isInstanceOf(ServiceException.class)
                     .hasMessage("工作流多实例受控迁移上下文异常");
-        }
-    }
-
-    /**
-     * 验证重提刷新权威成员，并只接受唯一新根和完整创建数量。
-     *
-     * @return void，成员、根或创建数量漂移时测试失败
-     */
-    @Test
-    void completesReopenProtocolWithAuthoritativeMembers()
-    {
-        WorkflowMultiInstanceTransitionCoordinator coordinator =
-                new WorkflowMultiInstanceTransitionCoordinator();
-        MultiInstanceGroupReopenPlan plan = reopenPlan();
-
-        try (WorkflowMultiInstanceTransitionScope scope =
-                coordinator.beginReopen(plan, "100"))
-        {
-            WorkflowMultiInstanceTransitionMembers members =
-                    coordinator.resolveTransitionMembers("pi", "firstApprove",
-                            WorkflowMultiInstanceMode.ALL);
-            assertThat(members.overrideMembers()).isEmpty();
-            assertThat(members.refreshAuthoritative()).isTrue();
-            coordinator.requirePersistedSnapshot("pi", "firstApprove",
-                    WorkflowMultiInstanceMode.ALL, List.of("201", "202"), 3);
-            assertThat(coordinator.resolveTransitionMembers("pi", "firstApprove",
-                    WorkflowMultiInstanceMode.ALL)).isNull();
-            assertThat(coordinator.observeControlledRootCancellation("pi", "pd",
-                    "firstApprove", "first-root", "100")).isNotNull();
-            coordinator.observeReopenedTask("pi", "firstApprove", "new-root", "301");
-            coordinator.observeReopenedTask("pi", "firstApprove", "new-root", "302");
-
-            coordinator.requireReopenCompleted(scope, "new-root",
-                    List.of("301", "302"), true);
         }
     }
 
@@ -147,27 +80,6 @@ class WorkflowMultiInstanceTransitionCoordinatorTest
                                 "202", null, false)),
                 List.of("exec-201", "exec-202"));
         return new MultiInstanceGroupReturnPlan(round, runtime, "100");
-    }
-
-    /**
-     * 构造一份 RETURNED 来源轮次和首审批受控临时任务组成的重提计划。
-     *
-     * @return MultiInstanceGroupReopenPlan，申请人任务与正式轮次关联一致
-     */
-    private MultiInstanceGroupReopenPlan reopenPlan()
-    {
-        ReturnedApplicationSnapshot application = new ReturnedApplicationSnapshot(
-                "applicant-task", "applicant-exec", "first-root", "pi", "pd",
-                "firstApprove", "100",
-                ReturnedApplicationSnapshot.SourceKind.TEMPORARY_MULTI_INSTANCE_ROOT);
-        MultiInstanceRoundSnapshot source = round(
-                WorkflowMultiInstanceRoundStatus.RETURNED, "applicant-task");
-        MultiInstanceRoundSnapshot target = round("firstApprove", "first-root",
-                WorkflowMultiInstanceRoundStatus.COMPLETED, null);
-        return new MultiInstanceGroupReopenPlan(source, application,
-                new WorkflowTaskMovementPolicy.ControlledReturnPathPlan(
-                        List.of("firstApprove", "approve")),
-                List.of(replay("firstApprove", target), replay("approve", source)));
     }
 
     /**

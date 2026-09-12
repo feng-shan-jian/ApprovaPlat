@@ -127,6 +127,11 @@ public final class WorkflowNodeFormPermissionSnapshot
      */
     private static void applyMode(ObjectNode component, WorkflowFormFieldPermissionMode mode)
     {
+        if (component.path("workflowSystemWritable").asBoolean(false)
+                && mode != WorkflowFormFieldPermissionMode.READONLY && mode != WorkflowFormFieldPermissionMode.HIDDEN)
+            throw dataError("系统结果字段的节点权限必须为只读或隐藏: " + component.path("vModel").asText(""), null);
+        if (mode == WorkflowFormFieldPermissionMode.HIDDEN && component.has("workflowSystemWritable"))
+            component.put("workflowSystemWritable", false);
         boolean readable = mode != WorkflowFormFieldPermissionMode.HIDDEN;
         boolean writable = mode == WorkflowFormFieldPermissionMode.EDITABLE
                 || mode == WorkflowFormFieldPermissionMode.REQUIRED;

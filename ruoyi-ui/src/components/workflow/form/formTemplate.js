@@ -46,6 +46,10 @@ export function templatePermissionIssues(content) {
       const flags = ['workflowHidden', 'workflowReadable', 'workflowWritable']
       const missing = flags.filter(flag => typeof field?.[flag] !== 'boolean')
       if (missing.length) issues.push(`${position} 缺少 ${missing.join('、')}`)
+      else if (field.workflowSystemWritable !== undefined && (typeof field.workflowSystemWritable !== 'boolean'
+        || (field.workflowSystemWritable && (field.workflowHidden || !field.workflowReadable || field.workflowWritable)))) {
+        issues.push(`${position} 系统结果字段必须可读且用户只读`)
+      }
       else if ((field.workflowHidden && (field.workflowReadable || field.workflowWritable || field.required))
         || (field.required && (!field.workflowReadable || !field.workflowWritable))) {
         issues.push(`${position} 节点权限组合不合法`)

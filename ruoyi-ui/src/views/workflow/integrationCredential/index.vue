@@ -85,6 +85,12 @@
         <el-form-item label="到期时间">
           <el-date-picker v-model="form.expiresAt" type="datetime" placeholder="留空表示长期有效" :disabled-date="disablePastDate" />
         </el-form-item>
+        <el-form-item label="绑定连接端点" v-if="canBindConnector">
+          <el-select v-model="bindEndpointId" clearable filterable placeholder="可选：新令牌直接绑定到端点">
+            <el-option v-for="endpoint in endpoints" :key="endpoint.endpointId" :value="endpoint.endpointId" :label="endpoint.endpointName" :disabled="endpoint.status !== 'ENABLED'" />
+          </el-select>
+          <p v-if="bindEndpointId">创建与绑定同时完成；令牌由服务器保管，绑定失败不会创建账号。</p>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createOpen = false">取消</el-button>
@@ -112,6 +118,7 @@ import {
   revokeIntegrationCredential,
   rotateIntegrationCredential
 } from '@/api/workflow/integrationCredential'
+import { listConnectorEndpoints, createAndBindIntegrationCredential, getConnectorCredential } from '@/api/workflow/connector'
 
 const { proxy } = getCurrentInstance()
 const loading = ref(false)
@@ -122,6 +129,9 @@ const statusFilter = ref('')
 const createOpen = ref(false)
 const secretOpen = ref(false)
 const oneTimeToken = ref('')
+const endpoints = ref([])
+const bindEndpointId = ref(null)
+const canBindConnector = computed(() => proxy.$auth.hasPermi('workflow:connector:edit') && proxy.$auth.hasPermi('workflow:connector:list'))
 const formRef = ref(null)
 const availableScopes = Object.freeze(['MESSAGE', 'SIGNAL', 'RECEIVE'])
 const form = reactive(emptyForm())
@@ -177,8 +187,11 @@ function statusMeta(status) {
  * 打开创建窗口并清除上一轮敏感状态。
  * @returns {void} 表单和校验恢复默认值。
  */
-function openCreate() {
+async function openCreate() {
   Object.assign(form, emptyForm())
+  bindEndpointId.value = null
+  endpoints.value = []
+  if (canBindConnector.value) endpoints.value = (await listConnectorEndpoints()).data || []
   createOpen.value = true
   nextTick(() => formRef.value?.clearValidate())
 }
@@ -217,16 +230,25 @@ async function submitCreate() {
   if (!valid) return
   saving.value = true
   try {
-    const response = await createIntegrationCredential({
+    const credential = {
       credentialName: form.credentialName.trim(),
       scopes: [...form.scopes],
       allowedVariables: parseVariables(form.allowedVariablesText),
       rateLimitPerMinute: form.rateLimitPerMinute,
       expiresAt: form.expiresAt ? form.expiresAt.toISOString() : null
-    })
-    oneTimeToken.value = response.data.token
+    }
+    if (bindEndpointId.value) {
+      const state = (await getConnectorCredential(bindEndpointId.value)).data
+      await createAndBindIntegrationCredential(bindEndpointId.value, {
+        endpointRevision: state.endpointRevision, credentialRevision: state.credential.revision, credential
+      })
+      proxy.$modal.msgSuccess('集成账号已创建，令牌已绑定到连接端点')
+    } else {
+      const response = await createIntegrationCredential(credential)
+      oneTimeToken.value = response.data.token
+      secretOpen.value = true
+    }
     createOpen.value = false
-    secretOpen.value = true
     await loadRows()
   } finally {
     saving.value = false

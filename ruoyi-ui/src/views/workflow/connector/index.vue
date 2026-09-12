@@ -1,6 +1,7 @@
 <template>
   <div class="app-container connector-endpoints">
     <header class="connector-heading">
+      <el-button v-if="returnTo" icon="ArrowLeft" @click="router.push({ path: returnTo, query: { focusElement: String(route.query.returnElementId || '') } })">返回流程设计</el-button>
       <div>
         <h2>连接端点</h2>
         <p>HTTP 白名单与不可回退修订</p>
@@ -44,8 +45,10 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="116" fixed="right" align="center">
+      <el-table-column label="操作" width="232" fixed="right" align="center">
         <template #default="scope">
+          <el-button link type="primary" v-hasPermi="['workflow:connector:edit']" :loading="checkingId === scope.row.endpointId" @click="checkAuthentication(scope.row)">消息认证检查</el-button>
+          <el-button link type="primary" v-hasPermi="['workflow:connector:edit']" @click="openCredential(scope.row)">凭据</el-button>
           <el-tooltip content="发布新修订">
             <el-button link type="primary" icon="Edit" aria-label="发布新修订" v-hasPermi="['workflow:connector:edit']" @click="openEdit(scope.row)" />
           </el-tooltip>
@@ -62,6 +65,21 @@
         </template>
       </el-table-column>
     </el-table>
+    <el-dialog v-model="credentialOpen" title="受管连接凭据" width="560px" @closed="credential.secret = ''">
+      <el-alert :closable="false" :type="credential.providerReady ? 'info' : 'warning'"
+        :title="credential.providerReady ? '凭据加密保存，保存后不回显正文。配置检查不等于接收方已消费业务消息。' : '受管密钥存储的服务身份尚未就绪，请按部署说明配置主密钥。'" />
+      <p>当前状态：{{ credential.status }} · 凭据修订 {{ credential.credentialRevision }}</p>
+      <el-form label-width="110px">
+        <el-form-item label="认证方式"><el-select v-model="credential.authType"><el-option label="Bearer 令牌" value="BEARER" /><el-option label="API Key" value="API_KEY" /></el-select></el-form-item>
+        <el-form-item v-if="credential.authType === 'API_KEY'" label="认证请求头"><el-input v-model="credential.apiKeyHeader" maxlength="128" /></el-form-item>
+        <el-form-item label="新凭据"><el-input v-model="credential.secret" type="password" show-password autocomplete="new-password" maxlength="8192" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="credential.status !== 'ACTIVE'" :loading="credentialSaving" type="danger" plain @click="revokeCredential">撤销凭据</el-button>
+        <el-button @click="credentialOpen = false">关闭</el-button>
+        <el-button type="primary" :disabled="!credential.providerReady || !credential.secret" :loading="credentialSaving" @click="saveCredential">绑定 / 轮换</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="dialogOpen" :title="editingId ? '发布端点新修订' : '新增连接端点'" width="680px" append-to-body>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
@@ -93,7 +111,7 @@
           </el-select>
         </el-form-item>
         <el-form-item v-if="form.authType !== 'NONE'" label="密钥引用" prop="secretRef">
-          <el-input v-model="form.secretRef" maxlength="128" placeholder="WORKFLOW_CONNECTOR_SECRET_FINANCE" />
+          <el-input v-model="form.secretRef" maxlength="128" placeholder="ENV 引用或通过列表的凭据入口绑定" />
         </el-form-item>
         <el-form-item v-if="form.authType === 'API_KEY'" label="认证请求头" prop="apiKeyHeader">
           <el-input v-model="form.apiKeyHeader" maxlength="128" placeholder="X-API-Key" />
@@ -120,15 +138,63 @@
 </template>
 
 <script setup name="WorkflowConnector">
+import { getConnectorCredential, bindConnectorCredential, revokeConnectorCredential } from '@/api/workflow/connector'
+const credentialOpen = ref(false)
+const credentialSaving = ref(false)
+const credential = reactive({ endpointId: null, endpointRevision: 0, credentialRevision: 0, secret: '', authType: 'BEARER', apiKeyHeader: '', status: '', providerReady: false })
+
+async function openCredential(row) {
+  const response = await getConnectorCredential(row.endpointId)
+  Object.assign(credential, { endpointId: row.endpointId, endpointRevision: response.data.endpointRevision,
+    credentialRevision: response.data.credential.revision, status: response.data.credential.status,
+    providerReady: response.data.credential.providerReady, secret: '',
+    authType: row.authType === 'API_KEY' ? 'API_KEY' : 'BEARER', apiKeyHeader: row.apiKeyHeader || '' })
+  credentialOpen.value = true
+}
+
+async function saveCredential() {
+  credentialSaving.value = true
+  try {
+    await bindConnectorCredential(credential.endpointId, { endpointRevision: credential.endpointRevision,
+      credentialRevision: credential.credentialRevision, secret: credential.secret,
+      authType: credential.authType, apiKeyHeader: credential.apiKeyHeader || undefined })
+    credential.secret = ''
+    credentialOpen.value = false
+    await loadEndpoints()
+  } finally { credentialSaving.value = false }
+}
+
+async function revokeCredential() {
+  credentialSaving.value = true
+  try {
+    await revokeConnectorCredential(credential.endpointId, { endpointRevision: credential.endpointRevision, credentialRevision: credential.credentialRevision })
+    credential.secret = ''
+    credentialOpen.value = false
+    await loadEndpoints()
+  } finally { credentialSaving.value = false }
+}
 import {
   changeConnectorEndpointStatus,
+  checkConnectorAuthentication,
   createConnectorEndpoint,
   listConnectorEndpoints,
   updateConnectorEndpoint
 } from '@/api/workflow/connector'
 
 const { proxy } = getCurrentInstance()
+const route = useRoute()
+const router = useRouter()
+const returnTo = computed(() => /^\/workflow\/model-design\/[^/?#]+$/.test(String(route.query.returnTo || '')) ? String(route.query.returnTo) : '')
 const loading = ref(false)
+const checkingId = ref(null)
+async function checkAuthentication(row) {
+  if (checkingId.value) return
+  checkingId.value = row.endpointId
+  try {
+    const result = (await checkConnectorAuthentication(row.endpointId)).data
+    if (result.configurationReady === true && result.networkAuthenticated === true) proxy.$modal.msgSuccess(result.message)
+  } finally { checkingId.value = null }
+}
 const saving = ref(false)
 const rows = ref([])
 const keyword = ref('')
@@ -150,7 +216,7 @@ const rules = {
   baseUrl: [{ required: true, message: '基础 URL 不能为空', trigger: 'blur' }],
   allowedMethods: [{ type: 'array', required: true, min: 1, message: '至少选择一个方法', trigger: 'change' }],
   pathPrefix: [{ required: true, pattern: /^\//, message: '路径前缀必须以 / 开头', trigger: 'blur' }],
-  secretRef: [{ pattern: /^WORKFLOW_CONNECTOR_SECRET_[A-Z0-9_]{1,96}$/, message: '密钥引用格式不合法', trigger: 'blur' }]
+  secretRef: [{ pattern: /^(?:WORKFLOW_CONNECTOR_SECRET_[A-Z0-9_]{1,96}|MANAGED_V1_[0-9a-f]{32})$/, message: '密钥引用格式不合法', trigger: 'blur' }]
 }
 const filteredRows = computed(() => {
   const query = keyword.value.trim().toLowerCase()

@@ -26,6 +26,16 @@ public record WorkflowConnectorEndpointView(Long endpointId, String endpointKey,
         String endpointName, String baseUrl, String allowedMethods, String pathPrefix,
         String authType, String secretRef, String apiKeyHeader, Integer connectTimeoutMs,
         Integer requestTimeoutMs, String networkScope, Integer revisionNo, String status,
-        String checksum, Date updateTime)
+        String checksum, Date updateTime, boolean available, String unavailableReason)
 {
+    public WorkflowConnectorEndpointView(Long endpointId, String endpointKey, String endpointName, String baseUrl,
+            String allowedMethods, String pathPrefix, String authType, String secretRef, String apiKeyHeader,
+            Integer connectTimeoutMs, Integer requestTimeoutMs, String networkScope, Integer revisionNo,
+            String status, String checksum, Date updateTime)
+    { this(endpointId, endpointKey, endpointName, baseUrl, allowedMethods, pathPrefix, authType, secretRef,
+            apiKeyHeader, connectTimeoutMs, requestTimeoutMs, networkScope, revisionNo, status, checksum, updateTime, false, "尚未检查"); }
+
+    public WorkflowConnectorEndpointView withReadiness(boolean ready, String reason)
+    { return new WorkflowConnectorEndpointView(endpointId, endpointKey, endpointName, baseUrl, allowedMethods, pathPrefix,
+            authType, secretRef, apiKeyHeader, connectTimeoutMs, requestTimeoutMs, networkScope, revisionNo, status, checksum, updateTime, ready, reason); }
 }

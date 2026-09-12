@@ -16,7 +16,7 @@ const useDictStore = defineStore(
               return this.dict[i].value
             }
           }
-        } catch (e) {
+        } catch {
           return null
         }
       },
@@ -39,7 +39,7 @@ const useDictStore = defineStore(
               return true
             }
           }
-        } catch (e) {
+        } catch {
           bln = false
         }
         return bln

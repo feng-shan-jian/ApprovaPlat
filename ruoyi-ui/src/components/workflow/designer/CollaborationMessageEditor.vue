@@ -2,7 +2,7 @@
   <div class="collaboration-editor">
     <el-form-item label="接收端点" required>
       <el-select v-model="draft.endpointKey" filterable @change="emitChange">
-        <el-option v-for="endpoint in endpoints" :key="endpoint.endpointId" :label="endpoint.endpointName" :value="endpoint.endpointKey" />
+        <el-option v-for="endpoint in endpoints" :key="endpoint.endpointId" :label="endpoint.available === true ? endpoint.endpointName : `${endpoint.endpointName}（${endpoint.unavailableReason || '尚未就绪'}）`" :value="endpoint.endpointKey" :disabled="endpoint.available !== true" />
       </el-select>
     </el-form-item>
     <el-form-item v-if="allowPointToPoint" label="投递方式" required>
@@ -13,6 +13,9 @@
     </el-form-item>
     <el-form-item v-else label="接收路径" required>
       <el-input v-model="draft.path" maxlength="512" @change="emitChange" />
+    </el-form-item>
+    <el-form-item>
+      <router-link v-hasPermi="['workflow:connector:list']" :to="{ path: '/workflow/extensions/connector', query: { returnTo: route.path, returnElementId } }">配置连接端点与凭据</router-link>
     </el-form-item>
     <el-form-item label="消息名称" required>
       <el-input v-model="draft.messageName" maxlength="255" @change="emitChange" />
@@ -36,15 +39,17 @@
 const props = defineProps({
   modelValue: { type: String, default: '{}' },
   allowPointToPoint: { type: Boolean, default: false },
+  returnElementId: { type: String, default: '' },
   endpoints: { type: Array, default: () => [] }
 })
 const emit = defineEmits(['update:modelValue', 'change'])
+const route = useRoute()
 const draft = reactive(emptyConfig())
 
 /** @returns {object} 与后端作者配置 Schema 一致的默认值。 */
 function emptyConfig() {
   return {
-    endpointKey: props.endpoints[0]?.endpointKey || '',
+    endpointKey: props.endpoints.find(endpoint => endpoint.available === true)?.endpointKey || '',
     path: props.allowPointToPoint ? '/workflow/runtime-event/message/reliable' : '/workflow/runtime-event/collaboration/message',
     messageName: '',
     targetProcessDefinitionKey: '',

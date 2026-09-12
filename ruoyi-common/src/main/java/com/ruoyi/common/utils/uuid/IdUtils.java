@@ -1,5 +1,8 @@
 package com.ruoyi.common.utils.uuid;
 
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+
 /**
  * ID生成器工具类
  * 
@@ -24,7 +27,7 @@ public class IdUtils
      */
     public static String simpleUUID()
     {
-        return UUID.randomUUID().toString(true);
+        return randomUUID().replace("-", "");
     }
 
     /**
@@ -34,7 +37,10 @@ public class IdUtils
      */
     public static String fastUUID()
     {
-        return UUID.fastUUID().toString();
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        // 保留 UUID v4 的版本位和 RFC 4122 变体位，其余 122 位来自快速随机源。
+        return new UUID((random.nextLong() & 0xffffffffffff0fffL) | 0x4000L,
+                (random.nextLong() & 0x3fffffffffffffffL) | Long.MIN_VALUE).toString();
     }
 
     /**
@@ -44,6 +50,6 @@ public class IdUtils
      */
     public static String fastSimpleUUID()
     {
-        return UUID.fastUUID().toString(true);
+        return fastUUID().replace("-", "");
     }
 }

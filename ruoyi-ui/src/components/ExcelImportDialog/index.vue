@@ -104,12 +104,12 @@ function handleProgress() {
 }
 
 /** 文件选择处理 */
-const handleFileChange = (file, fileList) => {
+const handleFileChange = (file) => {
   selectedFile.value = file
 }
 
 /** 文件删除处理 */
-const handleFileRemove = (file, fileList) => {
+const handleFileRemove = () => {
   selectedFile.value = null
 }
 

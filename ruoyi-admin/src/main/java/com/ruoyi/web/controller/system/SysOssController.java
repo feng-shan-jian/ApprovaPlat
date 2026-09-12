@@ -30,7 +30,6 @@ import com.ruoyi.common.utils.file.FileUtils;
 import com.ruoyi.system.domain.integration.OssConfigRequest;
 import com.ruoyi.system.service.integration.SysOssService;
 import com.ruoyi.system.service.integration.SysOssService.OpenedOssObject;
-import com.ruoyi.system.service.integration.SysOssService.StoredOssObject;
 
 /**
  * S3 兼容 OSS 配置、对象上传下载和生命周期管理接口。

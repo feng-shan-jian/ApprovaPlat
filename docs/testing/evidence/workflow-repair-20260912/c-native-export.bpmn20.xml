@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:r12:acceptance">
+  <process id="r12_c_parent" name="R12C双关联父子系统回填" isExecutable="true">
+    <extensionElements>
+      <flowable:properties>
+        <flowable:property name="approva.startScope.ruleVersion" value="1" />
+        <flowable:property name="approva.startScope.type" value="PUBLIC" />
+        <flowable:property name="approva.startScope.targetIds" value="" />
+        <flowable:property name="approva.startScope.noMatchPolicy" value="FAIL" />
+      </flowable:properties>
+    </extensionElements>
+    <startEvent id="start" name="申请金额及计数">
+      <extensionElements>
+        <flowable:formProperty id="amount" name="金额" type="long" required="true" />
+        <flowable:formProperty id="field102" name="传入计数" type="long" required="true" />
+      </extensionElements>
+    </startEvent>
+    <businessRuleTask id="decide" name="C01金额决策" flowable:rules="8a2744ea-ae72-11f1-8d6c-005056c00001">
+      <property id="decisionProperty" name="__targetRef_placeholder" />
+      <dataInputAssociation id="dataIn" name="申请数据关联">
+        <sourceRef>amountRef</sourceRef>
+        <targetRef>decisionProperty</targetRef>
+      </dataInputAssociation>
+    </businessRuleTask>
+    <callActivity id="call" name="C02调用模板子流程" calledElement="r12_c_child" flowable:calledElementType="key" flowable:inheritBusinessKey="true">
+      <extensionElements>
+        <flowable:in source="field102" target="field102" />
+        <flowable:out source="field102" target="childCount" />
+      </extensionElements>
+      <dataOutputAssociation id="dataOut" name="归档结果关联">
+        <targetRef>archive</targetRef>
+      </dataOutputAssociation>
+    </callActivity>
+    <userTask id="review" name="C03父流程只读结果确认">
+      <extensionElements>
+        <flowable:properties>
+          <flowable:property name="approva.assignment.ruleVersion" value="1" />
+          <flowable:property name="approva.assignment.type" value="STARTER" />
+          <flowable:property name="approva.assignment.targetIds" value="" />
+          <flowable:property name="approva.assignment.formField" value="" />
+          <flowable:property name="approva.assignment.noMatchPolicy" value="FAIL" />
+        </flowable:properties>
+        <flowable:formProperty id="approvalLevel" name="金额决策" type="string" writable="false" />
+        <flowable:formProperty id="amount" name="金额" type="long" writable="false" required="true" />
+        <flowable:formProperty id="childCount" name="子流程回填计数" type="long" writable="false" systemWritable="true" />
+      </extensionElements>
+    </userTask>
+    <endEvent id="end" name="父子完成" />
+    <dataObject id="amountData" name="amount" itemSubjectRef="xsd:int">
+      <extensionElements>
+        <flowable:value>500</flowable:value>
+      </extensionElements>
+    </dataObject>
+    <dataObjectReference id="amountRef" name="金额默认500" dataObjectRef="amountData" />
+    <dataStoreReference id="archive" name="结果归档说明" />
+    <sequenceFlow id="f1" sourceRef="start" targetRef="decide" />
+    <sequenceFlow id="f2" sourceRef="decide" targetRef="call" />
+    <sequenceFlow id="f3" sourceRef="call" targetRef="review" />
+    <sequenceFlow id="f4" sourceRef="review" targetRef="end" />
+  </process>
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="r12_c_parent">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="100" y="200" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_decide" bpmnElement="decide">
+        <dc:Bounds x="210" y="178" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_call" bpmnElement="call">
+        <dc:Bounds x="410" y="178" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_review" bpmnElement="review">
+        <dc:Bounds x="610" y="178" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end" bpmnElement="end">
+        <dc:Bounds x="830" y="200" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_data" bpmnElement="amountRef">
+        <dc:Bounds x="252" y="40" width="36" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_store" bpmnElement="archive">
+        <dc:Bounds x="445" y="360" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="ei" bpmnElement="dataIn">
+        <di:waypoint x="270" y="90" />
+        <di:waypoint x="270" y="178" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="eo" bpmnElement="dataOut">
+        <di:waypoint x="470" y="258" />
+        <di:waypoint x="470" y="360" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e1" bpmnElement="f1">
+        <di:waypoint x="136" y="218" />
+        <di:waypoint x="210" y="218" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e2" bpmnElement="f2">
+        <di:waypoint x="330" y="218" />
+        <di:waypoint x="410" y="218" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e3" bpmnElement="f3">
+        <di:waypoint x="530" y="218" />
+        <di:waypoint x="610" y="218" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="e4" bpmnElement="f4">
+        <di:waypoint x="750" y="218" />
+        <di:waypoint x="830" y="218" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>

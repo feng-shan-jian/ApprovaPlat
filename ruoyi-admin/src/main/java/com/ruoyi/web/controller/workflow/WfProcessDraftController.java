@@ -26,7 +26,6 @@ import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftCreateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
-import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSummaryView;
 import com.ruoyi.flowable.service.process.WorkflowProcessDraftService;
 
 /**

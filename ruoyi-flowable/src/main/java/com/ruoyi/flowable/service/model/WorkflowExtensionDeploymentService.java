@@ -83,7 +83,8 @@ public class WorkflowExtensionDeploymentService
             String actorUserId)
     {
         BpmnXMLConverter converter = new BpmnXMLConverter();
-        byte[] validatedModelBytes = document.bpmnXml().getBytes(StandardCharsets.UTF_8);
+        byte[] validatedModelBytes = WorkflowBpmnXmlPreserver.executableSource(
+                document.bpmnXml().getBytes(StandardCharsets.UTF_8));
         BpmnModel compiledModel = converter.convertToBpmnModel(
                 () -> new ByteArrayInputStream(validatedModelBytes), true, true);
         List<WfDeployExtensionSnapshot> snapshots = new ArrayList<>();
@@ -401,6 +402,27 @@ public class WorkflowExtensionDeploymentService
      * @return WfDeployExtensionSnapshot，尚未绑定 deploymentId 的冻结快照
      */
     private WfDeployExtensionSnapshot compileServiceTask(BpmnModel compiledModel,
+            BpmnModel sourceModel, Process process, ServiceTask task, String actorUserId)
+    {
+        try
+        {
+            return compileServiceTaskConfiguration(compiledModel, sourceModel, process, task, actorUserId);
+        }
+        catch (ServiceException exception)
+        {
+            if (!Set.of(HttpStatus.BAD_REQUEST, HttpStatus.FORBIDDEN, HttpStatus.CONFLICT)
+                    .contains(exception.getCode() == null ? 0 : exception.getCode())) throw exception;
+            var issue = new com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue(
+                    "BPMN_EXTENSION_CONFIG_INVALID", "ERROR", task.getId(), exception.getMessage(),
+                    process.getId(), "extension.config", "检查该节点的业务扩展、端点状态及凭据；资源恢复后重新预检");
+            ServiceException located = new ServiceException(exception.getMessage(), exception.getCode())
+                    .setSubCode(exception.getSubCode());
+            located.initCause(new WorkflowBpmnValidationException(List.of(issue)));
+            throw located;
+        }
+    }
+
+    private WfDeployExtensionSnapshot compileServiceTaskConfiguration(BpmnModel compiledModel,
             BpmnModel sourceModel, Process process, ServiceTask task, String actorUserId)
     {
         if (org.springframework.util.StringUtils.hasText(task.getImplementation())

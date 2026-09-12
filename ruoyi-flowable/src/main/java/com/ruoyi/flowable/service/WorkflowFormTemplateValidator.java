@@ -473,6 +473,10 @@ public class WorkflowFormTemplateValidator
         boolean hidden = hiddenNode.booleanValue();
         boolean readable = readableNode.booleanValue();
         boolean writable = writableNode.booleanValue();
+        JsonNode systemWritable = component.get("workflowSystemWritable");
+        if (systemWritable != null && (!systemWritable.isBoolean()
+                || (systemWritable.booleanValue() && (hidden || !readable || writable))))
+            throw invalid("系统结果字段必须可读且用户只读: " + component.path("vModel").asText(""));
         JsonNode requiredNode = component.get("required");
         if (requiredNode != null && !requiredNode.isNull() && !requiredNode.isBoolean())
         {

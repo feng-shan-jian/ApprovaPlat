@@ -324,20 +324,6 @@ function handleStatusChange(row) {
   })
 }
 
-/** 更多操作 */
-function handleCommand(command, row) {
-  switch (command) {
-    case "handleResetPwd":
-      handleResetPwd(row)
-      break
-    case "handleAuthRole":
-      handleAuthRole(row)
-      break
-    default:
-      break
-  }
-}
-
 /** 跳转角色分配 */
 function handleAuthRole(row) {
   const userId = row.userId

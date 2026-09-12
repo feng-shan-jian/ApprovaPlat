@@ -366,17 +366,6 @@ public class WorkflowNotificationService
     }
 
     /**
-     * 规范化可选文本。
-     * @param value String，可空文本
-     * @param max int，最大字符长度
-     * @return String，规范值；无内容时为 null
-     */
-    private String optional(String value, int max)
-    {
-        return StringUtils.hasText(value) ? normalized(value, max, "通知上下文字段不合法") : null;
-    }
-
-    /**
      * 规范化普通审批事件的稳定来源键并限制为可见 ASCII。
      * @param value String，业务事件来源键
      * @return String，可写入通知来源字段的规范键

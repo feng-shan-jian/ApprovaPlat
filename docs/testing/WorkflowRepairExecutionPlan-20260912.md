@@ -1,6 +1,6 @@
 # 工作流完整修复执行计划（2026-09-12）
 
-状态：待执行。本次交付为计划，不表示已修复、已重测或已发布。
+状态：已实施并完成本地分层回归及 A—G 原生关键路径验收，留待 Review。实际修复、测试层次、清理和未执行边界见[本轮执行报告](WorkflowRepairExecutionReport-20260912.md)；未提交、未推送、未生产发布。
 
 主要依据：[2026-09-11 原生前端复测报告](/D:/ruoyiflowable/docs/testing/ComputerUseWorkflowRetestReport-20260911.md)。配套交付：[用户体验与优化执行计划](/D:/ruoyiflowable/docs/testing/WorkflowUXOptimizationExecutionPlan-20260912.md)。
 
@@ -14,7 +14,6 @@
 4. 输出映射提供明确的字段限制及受控“系统回填、用户只读”能力。
 5. 发布错误能定位、能解释、能指导处理；运行状态能够区分完成、等待和竞争取消。
 
-此前[修复执行报告](/D:/ruoyiflowable/docs/testing/WorkflowRepairExecutionReport-20260910.md)已有可靠消息、事务等能力的专项记录，应复用现有实现和有价值的正式测试。本轮原生前端复测暴露的路径问题仍须修复；旧报告的通过结果不能替代本次验收。不得重新实现一套平行流程引擎。
 
 这是一份针对已发现问题及其相邻回归边界的完整计划，不是整个产品所有 BPMN 变体、HTTP/SQL/CEL 集成和生产拓扑的穷举认证。
 
@@ -235,7 +234,7 @@
 
 优先扩展以下正式用例：[数据对象](/D:/ruoyiflowable/ruoyi-flowable/src/test/java/com/ruoyi/flowable/service/model/WorkflowDataObjectBusinessTest.java)、[调用活动](/D:/ruoyiflowable/ruoyi-flowable/src/test/java/com/ruoyi/flowable/service/model/WorkflowCallActivityBusinessRegressionTest.java)、[消息抛出](/D:/ruoyiflowable/ruoyi-flowable/src/test/java/com/ruoyi/flowable/service/model/WorkflowMessageThrowBusinessTest.java)、[可靠消息](/D:/ruoyiflowable/ruoyi-flowable/src/test/java/com/ruoyi/flowable/service/process/WorkflowReliableMessageBusinessTest.java)、[等待事件](/D:/ruoyiflowable/ruoyi-flowable/src/test/java/com/ruoyi/flowable/service/process/WorkflowProcessWaitingBusinessTest.java)、[详情集成](/D:/ruoyiflowable/ruoyi-flowable/src/test/java/com/ruoyi/flowable/service/process/WorkflowProcessDetailServiceIntegrationTest.java)。新增草稿/受管凭据用例须进入正式测试体系；新增真实 MySQL 用例采用现有 *IT.java/profile，不把 H2 结果改名为 MySQL。
 
-以下命令本次未执行，实施时按顺序运行并单独记录结果：
+以下为原计划建议命令；本次实际命令、结果及环境范围以执行报告为准：
 
 ```powershell
 Set-Location -LiteralPath 'D:\ruoyiflowable'
@@ -277,4 +276,4 @@ npm run build:prod
 - 旧报告遗留临时文件不自动纳入本轮批量清理；若明确纳入，先辨明所有权与目标边界。遇审批拦截保留阻塞事实，不绕过。
 - 核查继承修改仍完整，diff 中没有无关改动；变更留待 Review，未经单独授权不提交/推送。
 
-推荐首先执行 R00 和 R01 的离开保护，再以 R02/R03 建立小范围回归闭环，随后解决 R04 的真实部署根因。
+实施结果已记录于执行报告，后续 Review 应以最终 diff 和本轮分层证据为准。

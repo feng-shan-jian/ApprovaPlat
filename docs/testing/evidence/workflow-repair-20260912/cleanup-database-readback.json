@@ -1,0 +1,34 @@
+[
+  {
+    "name": "owned_runtime_instances",
+    "remaining": 0
+  },
+  {
+    "name": "owned_history_instances",
+    "remaining": 0
+  },
+  {
+    "name": "owned_models",
+    "remaining": 0
+  },
+  {
+    "name": "owned_deployments",
+    "remaining": 0
+  },
+  {
+    "name": "owned_design_drafts",
+    "remaining": 0
+  },
+  {
+    "name": "owned_active_users",
+    "remaining": 0
+  },
+  {
+    "name": "owned_active_role",
+    "remaining": 0
+  },
+  {
+    "name": "owned_secret_remaining_ciphertext",
+    "remaining": 0
+  }
+]

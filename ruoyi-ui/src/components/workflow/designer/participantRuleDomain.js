@@ -67,12 +67,25 @@ export function createParticipantRuleDomain({
   function readParticipantRule(businessObject) {
     const values = readParticipantPropertyMap(businessObject, readAllFlowableProperties)
     if (businessObject?.$instanceOf?.('bpmn:Process')) {
-      const type = values.get(PARTICIPANT_RULE_PROPERTIES.startType) || 'PUBLIC'
-      return {
+      const type = values.get(PARTICIPANT_RULE_PROPERTIES.startType) || ''
+      const rule = {
         type,
         targetIds: decorateParticipantTargets(type,
           splitParticipantValues(values.get(PARTICIPANT_RULE_PROPERTIES.startTargetIds))),
         formField: ''
+      }
+      // 导入模型的缺省值不能扩大正式发起权限；缺项或坏协议统一要求重新配置。
+      if (values.get(PARTICIPANT_RULE_PROPERTIES.startVersion) !== '1'
+        || values.get(PARTICIPANT_RULE_PROPERTIES.startNoMatch) !== 'FAIL'
+        || !values.has(PARTICIPANT_RULE_PROPERTIES.startTargetIds)) {
+        return { type: '', targetIds: [], formField: '' }
+      }
+      try {
+        // 分步配置先选择类型、再选择对象；回读不能在两步之间清空显式类型。
+        // 正式保存仍使用严格校验，空目标不会获得发起权限。
+        return normalizeParticipantRule(rule, true, true)
+      } catch {
+        return { type: '', targetIds: [], formField: '' }
       }
     }
     const configuredType = values.get(PARTICIPANT_RULE_PROPERTIES.taskType) || ''

@@ -79,8 +79,6 @@ public class WorkflowDeploymentArtifactRepository
             new TypeReference<>() { };
     private static final TypeReference<List<WfDeployDmnSnapshot>> DMN_LIST =
             new TypeReference<>() { };
-    private static final TypeReference<List<WfDeployCallActivitySnapshot>> CALL_ACTIVITY_LIST =
-            new TypeReference<>() { };
     private static final TypeReference<List<WfDeployTaskSla>> SLA_LIST =
             new TypeReference<>() { };
 
@@ -436,19 +434,6 @@ public class WorkflowDeploymentArtifactRepository
         return sorted(readList(deploymentId, DMN_RESOURCE, DMN_LIST),
                 Comparator.comparing(WfDeployDmnSnapshot::getProcessKey)
                         .thenComparing(WfDeployDmnSnapshot::getElementId));
-    }
-
-    /**
-     * 查询父流程部署的全部调用活动快照。
-     *
-     * @param deploymentId String，父流程部署主键
-     * @return List&lt;WfDeployCallActivitySnapshot&gt;，不可变调用活动快照
-     */
-    public List<WfDeployCallActivitySnapshot> selectCallActivitySnapshots(String deploymentId)
-    {
-        return sorted(readList(deploymentId, CALL_ACTIVITIES_RESOURCE, CALL_ACTIVITY_LIST),
-                Comparator.comparing(WfDeployCallActivitySnapshot::getProcessKey)
-                        .thenComparing(WfDeployCallActivitySnapshot::getElementId));
     }
 
     /**

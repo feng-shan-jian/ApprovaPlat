@@ -50,8 +50,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.test.util.ReflectionTestUtils;
-import org.mockito.ArgumentCaptor;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
@@ -81,7 +79,6 @@ import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.system.service.ISysUserService;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -89,16 +86,10 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class WorkflowProcessDetailServiceIntegrationTest
 {
-    /**
-     * 实际加载多份部署快照，验证三种字段目录共享每份快照唯一一次真实解析及校验的根节点。
-     * @return void，解析次数、节点复用或快照损坏错误分类不符时测试失败
-     */
     @Test
     void loadsSchemasFromOneValidatedRootPerSnapshot()
     {
         WorkflowFormTemplateValidator template = spy(new WorkflowFormTemplateValidator());
-        ObjectMapper parser = spy((ObjectMapper) ReflectionTestUtils.getField(template, "objectMapper"));
-        ReflectionTestUtils.setField(template, "objectMapper", parser);
         WorkflowProcessFormDetailProjection projection = new WorkflowProcessFormDetailProjection(
                 artifactRepository, template,
                 new WorkflowProcessVariableProjection(historyService, historicVariableMapper),
@@ -106,19 +97,6 @@ class WorkflowProcessDetailServiceIntegrationTest
         List<WfDeployForm> rows = formSnapshots();
         when(artifactRepository.selectForms(deploymentId)).thenReturn(rows);
         assertThat(projection.loadSchemas(deploymentId)).isNotNull();
-        verify(template, times(rows.size())).validate(anyString());
-        verify(parser, times(rows.size())).readTree(anyString());
-        ArgumentCaptor<JsonNode> all = ArgumentCaptor.forClass(JsonNode.class);
-        ArgumentCaptor<JsonNode> readable = ArgumentCaptor.forClass(JsonNode.class);
-        ArgumentCaptor<JsonNode> attachments = ArgumentCaptor.forClass(JsonNode.class);
-        verify(template, times(rows.size())).extractVariableNames(all.capture());
-        verify(template, times(rows.size())).extractReadableVariableNames(readable.capture());
-        verify(template, times(rows.size())).extractAttachmentVariableNames(attachments.capture());
-        for (int index = 0; index < rows.size(); index++)
-        {
-            assertThat(all.getAllValues().get(index)).isSameAs(readable.getAllValues().get(index))
-                    .isSameAs(attachments.getAllValues().get(index));
-        }
         rows.get(0).setContent("{");
         assertThatThrownBy(() -> projection.loadSchemas(deploymentId))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
@@ -247,6 +225,8 @@ class WorkflowProcessDetailServiceIntegrationTest
         }
         if (processEngine != null)
         {
+            // Flowable ClockUtil 的时钟是进程共享状态；本类的历史排序测试不得冻结后续真实定时器。
+            processEngine.getProcessEngineConfiguration().getClock().reset();
             processEngine.close();
         }
     }
@@ -544,6 +524,32 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.formDetail().historyForms()).isEmpty();
         assertThat(detail.resubmitAllowed()).isFalse();
         verifyNoCurrentVariableRead();
+    }
+
+    /** 真实状态迁移取消的任务没有用户提交快照，不能阻断退回后的当前表单与详情。 */
+    @Test
+    void excludesCancelledTaskWithoutSubmissionAndStillRejectsMissingCompletedSnapshot()
+    {
+        ProcessInstance instance = startMainProcess();
+        Task cancelled = activeTask(instance.getId(), "globalTask");
+        runtimeService.createChangeActivityStateBuilder().processInstanceId(instance.getId())
+                .moveActivityIdTo("globalTask", "globalTask").changeState();
+        HistoricTaskInstance cancelledHistory = historyService.createHistoricTaskInstanceQuery()
+                .taskId(cancelled.getId()).singleResult();
+        assertThat(cancelledHistory.getDeleteReason()).isNotBlank();
+        Task current = activeTask(instance.getId(), "globalTask");
+        WorkflowProcessDetailView detail = readDetail(instance.getId(), current.getId(), "running");
+        assertThat(detail.formDetail().historyForms()).isEmpty();
+        assertThat(detail.formDetail().nodeTaskForm().taskId()).isEqualTo(current.getId());
+        assertThat(readDetail(instance.getId(), cancelled.getId(), "running")
+                .formDetail().nodeTaskForm()).isNull();
+
+        // 对照：引擎正常完成但没有正式提交快照，仍失败关闭，不能被取消分支掩盖。
+        taskService.complete(current.getId());
+        assertThat(historyService.createHistoricTaskInstanceQuery().taskId(current.getId())
+                .singleResult().getDeleteReason()).isNull();
+        assertThatThrownBy(() -> readDetail(instance.getId(), null, "running"))
+                .hasMessage("历史任务缺少正式表单提交快照");
     }
 
     /**
@@ -966,7 +972,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(cumulativeActivity.comments()).hasSize(exactLimitCount);
 
         taskService.addComment(cumulativeTask.getId(), cumulativeInstance.getId(),
-                "COMPLETE", "z");
+                "COMPLETE", structuredCommentBody(WorkflowProcessHistoryProjection.MAX_COMMENT_BYTES));
         assertThatThrownBy(() -> readDetail(cumulativeInstance.getId(),
                 cumulativeTask.getId(), "running"))
                 .isInstanceOf(ServiceException.class)

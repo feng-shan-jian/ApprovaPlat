@@ -214,6 +214,8 @@ function createAcceptanceDmnXml(decisionKey) {
  * @returns {Promise<void>} 元素不存在或面板没有同步时测试失败。
  */
 async function selectDiagramElement(page, elementId) {
+  // 导入保留用户视口；宽图先通过正式工具栏适配，避免点到画布外的属性面板。
+  await page.getByRole('button', { name: '适应窗口', exact: true }).click()
   // 小比例全图下 context pad 可能覆盖相邻节点；先点空白画布关闭上一节点的浮层。
   await page.locator('.process-designer__canvas').click({ position: { x: 10, y: 10 } })
   await expect(page.locator('.djs-context-pad.open')).toHaveCount(0)
@@ -244,6 +246,115 @@ async function chooseTaskOption(page, fieldLabel, optionLabel) {
  * 通过真实登录、后端模型、文件导入和 bpmn-js 命令栈验证设计器完整保存回归路径。
  * @returns {Promise<void>} 导入、撤销、服务端校验、保存、重载或清理任一失败时测试失败。
  */
+test('R01 服务端草稿恢复与双标签冲突保留各自内容，自动保存不抢焦点', async ({ page, context }) => {
+  test.setTimeout(90_000)
+  const username = String(process.env.WORKFLOW_E2E_USERNAME || '').trim()
+  const password = String(process.env.WORKFLOW_E2E_PASSWORD || '')
+  expect(Boolean(username && password), '必须提供真实登录账号').toBe(true)
+  await page.goto('/login?redirect=/workflow/model')
+  await page.getByRole('textbox', { name: '账号' }).fill(username)
+  await page.getByRole('textbox', { name: '密码' }).fill(password)
+  await Promise.all([page.waitForURL(url => url.pathname === '/workflow/model'), page.getByRole('button', { name: '登录' }).click()])
+  const category = (await callWorkflowApi(page, '/workflow/category/listAll')).data[0].code
+  const modelKey = `r12_draft_${Date.now()}`
+  const modelId = (await callWorkflowApi(page, '/workflow/model', { method: 'POST', body: {
+    modelName: 'R12正式基线', modelKey, category, formType: 2
+  } })).data.modelId
+  const token = (await context.cookies()).find(cookie => cookie.name === 'Admin-Token').value
+  let other
+  try {
+    await page.goto(`/workflow/model-design/${modelId}`)
+    const name = page.getByRole('textbox', { name: '元素名称', exact: true })
+    await name.fill('R12草稿一')
+    await name.press('Tab')
+    await name.focus()
+    await expect.poll(async () => (await callWorkflowApi(page, `/workflow/model/${modelId}/design-draft`)).data.bpmnXml).toContain('R12草稿一')
+    await expect(name).toBeFocused()
+    other = await context.newPage()
+    await other.goto(`/workflow/model-design/${modelId}`)
+    await expect(other.getByRole('dialog', { name: '设计草稿恢复与冲突处理' })).toBeVisible()
+    await other.getByRole('button', { name: '恢复服务端草稿', exact: true }).click()
+    const otherName = other.getByRole('textbox', { name: '元素名称', exact: true })
+    await expect(otherName).toHaveValue('R12草稿一')
+    await name.fill('R12远端胜出')
+    await name.press('Tab')
+    await expect.poll(async () => (await callWorkflowApi(page, `/workflow/model/${modelId}/design-draft`)).data.bpmnXml).toContain('R12远端胜出')
+    await otherName.fill('R12本页冲突仍保留')
+    await otherName.press('Tab')
+    await expect(other.getByRole('button', { name: '比较远端草稿', exact: true })).toBeVisible()
+    await expect(otherName).toHaveValue('R12本页冲突仍保留')
+    const remote = (await callWorkflowApi(page, `/workflow/model/${modelId}/design-draft`)).data
+    expect(remote.bpmnXml).toContain('R12远端胜出')
+    expect(remote.bpmnXml).not.toContain('R12本页冲突仍保留')
+    expect((await callWorkflowApi(page, `/workflow/model/bpmnXml/${modelId}`)).data).toContain('R12正式基线')
+    await other.getByRole('button', { name: '比较远端草稿', exact: true }).click()
+    const comparison = other.getByRole('dialog', { name: '设计草稿恢复与冲突处理' })
+    await expect(comparison.getByRole('textbox').nth(0)).toHaveValue(/R12本页冲突仍保留/)
+    await expect(comparison.getByRole('textbox').nth(1)).toHaveValue(/R12远端胜出/)
+  } finally {
+    await other?.close()
+    const headers = { Authorization: `Bearer ${decodeURIComponent(token)}` }
+    const draftResponse = await context.request.get(`/dev-api/workflow/model/${modelId}/design-draft`, { headers })
+    const draft = (await draftResponse.json()).data
+    if (draft?.revision > 0) await context.request.delete(`/dev-api/workflow/model/${modelId}/design-draft?expectedRevision=${draft.revision}`, { headers })
+    const deleted = await context.request.delete(`/dev-api/workflow/model/${modelId}`, { headers })
+    expect((await deleted.json()).code).toBe(200)
+  }
+})
+
+test('R01 会话失效保留当前画布，重新登录后恢复服务端草稿', async ({ page, context }) => {
+  test.setTimeout(90_000)
+  const username = String(process.env.WORKFLOW_E2E_USERNAME || '').trim()
+  const password = String(process.env.WORKFLOW_E2E_PASSWORD || '')
+  expect(Boolean(username && password), '必须提供真实登录账号').toBe(true)
+  async function login() {
+    await page.getByRole('textbox', { name: '账号' }).fill(username)
+    await page.getByRole('textbox', { name: '密码' }).fill(password)
+    await Promise.all([page.waitForURL(url => url.pathname !== '/login'), page.getByRole('button', { name: '登录' }).click()])
+  }
+  await page.goto('/login?redirect=/workflow/model')
+  await login()
+  const category = (await callWorkflowApi(page, '/workflow/category/listAll')).data[0].code
+  const modelId = (await callWorkflowApi(page, '/workflow/model', { method: 'POST', body: {
+    modelName: 'R12会话正式基线', modelKey: `r12_session_${Date.now()}`, category, formType: 2
+  } })).data.modelId
+  try {
+    await page.goto(`/workflow/model-design/${modelId}`)
+    const name = page.getByRole('textbox', { name: '元素名称', exact: true })
+    await name.fill('R12过期前服务端草稿')
+    await name.press('Tab')
+    await expect.poll(async () => (await callWorkflowApi(page, `/workflow/model/${modelId}/design-draft`)).data.bpmnXml).toContain('R12过期前服务端草稿')
+    const token = decodeURIComponent((await context.cookies()).find(cookie => cookie.name === 'Admin-Token').value)
+    const expired = await context.request.post('/dev-api/logout', { headers: { Authorization: `Bearer ${token}` } })
+    expect((await expired.json()).code).toBe(200)
+    await name.fill('R12失效后的本页修改')
+    await name.press('Tab')
+    await expect(page.getByRole('button', { name: '重新登录', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(name).toHaveValue('R12失效后的本页修改')
+    await expect(page.getByText('有未正式保存的修改', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '保留设计草稿', exact: true }).click()
+    const unload = page.waitForEvent('dialog')
+    await page.getByRole('button', { name: '重新登录', exact: true }).click()
+    const warning = await unload
+    expect(warning.type()).toBe('beforeunload')
+    // 明确接受浏览器离开警告；只承诺恢复已由服务器确认的草稿。
+    await warning.accept()
+    await page.waitForURL(url => url.pathname === '/login')
+    await login()
+    await page.goto(`/workflow/model-design/${modelId}`)
+    await expect(page.getByRole('dialog', { name: '设计草稿恢复与冲突处理' })).toBeVisible()
+    await page.getByRole('button', { name: '恢复服务端草稿', exact: true }).click()
+    await expect(name).toHaveValue('R12过期前服务端草稿')
+    expect((await callWorkflowApi(page, `/workflow/model/bpmnXml/${modelId}`)).data).toContain('R12会话正式基线')
+  } finally {
+    const session = await context.request.post('/dev-api/login', { data: { username, password, code: '', uuid: '' } })
+    const token = (await session.json()).token
+    const deleted = await context.request.delete(`/dev-api/workflow/model/${modelId}`, { headers: { Authorization: `Bearer ${token}` } })
+    expect((await deleted.json()).code).toBe(200)
+  }
+})
+
 test('真实导入、编辑、撤销、保存并重载 BPMN 模型', async ({ page }) => {
   const username = String(process.env.WORKFLOW_E2E_USERNAME || '').trim()
   const password = String(process.env.WORKFLOW_E2E_PASSWORD || '')
@@ -346,7 +457,12 @@ test('真实导入、编辑、撤销、保存并重载 BPMN 模型', async ({ pa
     expect((await saved.json()).code).toBe(200)
     await expect(page.getByRole('heading', { name: savedName })).toBeVisible()
 
+    // 正式保存发生在两秒自动草稿计时器之前时，迟到计时器不能重新生成已保存草稿。
+    await page.waitForTimeout(2300)
+    const afterSaveDraft = (await callWorkflowApi(page, `/workflow/model/${modelId}/design-draft`)).data
+    expect(afterSaveDraft?.bpmnXml || '').toBe('')
     await page.reload()
+    await expect(page.getByRole('dialog', { name: '设计草稿恢复与冲突处理' })).toHaveCount(0)
     await expect(page.getByRole('heading', { name: savedName })).toBeVisible()
     await expect(page.getByRole('textbox', { name: '元素名称' })).toHaveValue(savedName)
     expect(pageErrors).toEqual([])

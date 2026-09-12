@@ -118,6 +118,64 @@ class WorkflowDataObjectBusinessTest
         assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(instance.getId()).finished().count()).isOne();
     }
 
+    @ParameterizedTest
+    @CsvSource({ "true,true", "true,false", "false,true" })
+    void callActivityDataAssociationsSurviveCompilationAndActualChildCompletion(boolean input, boolean output)
+    {
+        String associations = "<property id=\"callProperty\" name=\"__targetRef_placeholder\"/>"
+                + (input ? "<dataInputAssociation id=\"dataIn\"><sourceRef>visibleData</sourceRef><targetRef>callProperty</targetRef></dataInputAssociation>" : "")
+                + (output ? "<dataOutputAssociation id=\"dataOut\" name=\"归档结果\"><targetRef>archive</targetRef></dataOutputAssociation>" : "");
+        String xml = model("<dataObject id=\"data\" name=\"amount\"/><dataObjectReference id=\"visibleData\" dataObjectRef=\"data\"/>"
+                + "<dataStoreReference id=\"archive\"/>")
+                .replace("<receiveTask id=\"wait\"/>", "<callActivity id=\"wait\" calledElement=\"childData\"><extensionElements>"
+                        + "<flowable:in source=\"parentValue\" target=\"childValue\"/><flowable:out source=\"childValue\" target=\"parentValue\"/>"
+                        + "</extensionElements>" + associations + "</callActivity>");
+        var document = service.validateForSave(xml.getBytes(StandardCharsets.UTF_8));
+        byte[] compiled = new WorkflowExtensionDeploymentService(null, null, null, null).prepare(document, "1").compiledBpmn();
+        compiled = new WorkflowParticipantRuleDeploymentService(null).prepare(document, compiled,
+                WorkflowAuthorFormFieldCatalog.builder().build(), "1").compiledBpmn();
+        compiled = new WorkflowTaskSlaDeploymentService(null, null, null).prepare(compiled, "1").compiledBpmn();
+        compiled = new WorkflowRuntimeTaskListenerCompiler().compile(compiled);
+        service.validateCompiledDeployment(compiled);
+        var engine = support.processEngine();
+        engine.getRepositoryService().createDeployment().addString("child.bpmn20.xml", """
+            <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" targetNamespace="urn:test:data">
+              <process id="childData" isExecutable="true"><startEvent id="childStart"/><receiveTask id="childWait"/>
+                <endEvent id="childEnd"/><sequenceFlow id="c1" sourceRef="childStart" targetRef="childWait"/>
+                <sequenceFlow id="c2" sourceRef="childWait" targetRef="childEnd"/></process></definitions>
+            """).addBytes("parent.bpmn20.xml", compiled).deploy();
+        var parent = engine.getRuntimeService().startProcessInstanceByKey("dataContract", Map.of("parentValue", 7));
+        var child = engine.getRuntimeService().createProcessInstanceQuery().superProcessInstanceId(parent.getId()).singleResult();
+        assertThat(engine.getRuntimeService().getVariable(child.getId(), "childValue")).isEqualTo(7);
+        engine.getRuntimeService().setVariable(child.getId(), "childValue", 8);
+        engine.getRuntimeService().trigger(engine.getRuntimeService().createExecutionQuery()
+                .processInstanceId(child.getId()).activityId("childWait").singleResult().getId());
+        assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(parent.getId()).finished().count()).isOne();
+        assertThat(engine.getHistoryService().createHistoricVariableInstanceQuery().processInstanceId(parent.getId())
+                .variableName("parentValue").singleResult().getValue()).isEqualTo(8);
+        assertThat(document.bpmnXml()).isEqualTo(xml);
+        if (input) assertThat(document.bpmnXml()).contains("dataIn");
+        if (output) assertThat(document.bpmnXml()).contains("dataOut");
+    }
+
+    @ParameterizedTest
+    @CsvSource({ "missing", "privateData", "start" })
+    void invalidOrSiblingScopeReferenceIsRejectedBeforeDeployment(String target)
+    {
+        String xml = model("<subProcess id=\"otherScope\"><dataObject id=\"privateData\" name=\"privateValue\" itemSubjectRef=\"xsd:string\"/></subProcess>")
+                .replace("<receiveTask id=\"wait\"/>", "<receiveTask id=\"wait\"><dataOutputAssociation id=\"badAssociation\">"
+                    + "<targetRef>" + target + "</targetRef></dataOutputAssociation></receiveTask>");
+        assertThatThrownBy(() -> service.validateForSave(xml.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOfSatisfying(ServiceException.class, error -> {
+                    assertThat(error.getSubCode()).isEqualTo("BPMN_DATA_REFERENCE_INVALID");
+                    var issue = ((WorkflowBpmnValidationException) error.getCause()).issues().get(0);
+                    assertThat(issue.elementId()).isEqualTo("badAssociation");
+                    assertThat(issue.processId()).isEqualTo("dataContract");
+                    assertThat(issue.fieldPath()).isEqualTo("targetRef");
+                });
+        assertThat(support.processEngine().getRepositoryService().createDeploymentQuery().count()).isZero();
+    }
+
     private String model(String elements)
     {
         return """

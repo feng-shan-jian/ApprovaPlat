@@ -272,6 +272,17 @@ public class WorkflowCallActivityReferenceService
                 callActivity.setCalledElement(requireText(target.getId(), "调用活动目标定义状态异常"));
                 callActivity.setCalledElementType(CALLED_ELEMENT_TYPE_ID);
                 callActivity.setSameDeployment(false);
+                if (callActivity.getOutParameters().stream().anyMatch(mapping -> {
+                    FieldSpec targetField = parentFields.getOrDefault(process.getId(), Map.of()).get(mapping.getTarget());
+                    return targetField != null && targetField.systemWritable();
+                }))
+                {
+                    var listener = new org.flowable.bpmn.model.FlowableListener();
+                    listener.setEvent("end");
+                    listener.setImplementationType(org.flowable.bpmn.model.ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION);
+                    listener.setImplementation(com.ruoyi.flowable.listener.WorkflowSystemOutputListener.EXPRESSION);
+                    callActivity.getExecutionListeners().add(listener);
+                }
             }
         }
         return new WorkflowPreparedCallActivityDeployment(
@@ -368,6 +379,22 @@ public class WorkflowCallActivityReferenceService
      * @return ProcessDefinition，存在、激活、授权且无循环的目标定义
      */
     private ProcessDefinition validateCallActivity(String processKey, CallActivity callActivity,
+            Set<String> localProcessKeys, Map<String, FieldSpec> parentFields,
+            WorkflowCurrentIdentity actor)
+    {
+        try { return validateCallActivityContract(processKey, callActivity, localProcessKeys, parentFields, actor); }
+        catch (ServiceException exception)
+        {
+            if (!Integer.valueOf(HttpStatus.BAD_REQUEST).equals(exception.getCode())) throw exception;
+            String code = hasText(exception.getSubCode()) ? exception.getSubCode() : "BPMN_CALL_ACTIVITY_INVALID";
+            throw new WorkflowBpmnValidationException(List.of(new com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue(
+                    code, "ERROR", callActivity.getId(), exception.getMessage(), processKey,
+                    code.startsWith("CALL_MAPPING_") ? "callActivity.mappings" : "callActivity.reference",
+                    "在该调用活动核对被调用版本及输入/输出字段目录；系统结果须在正式表单明确声明"))).asServiceException();
+        }
+    }
+
+    private ProcessDefinition validateCallActivityContract(String processKey, CallActivity callActivity,
             Set<String> localProcessKeys, Map<String, FieldSpec> parentFields,
             WorkflowCurrentIdentity actor)
     {
@@ -485,17 +512,20 @@ public class WorkflowCallActivityReferenceService
             }
             if (!targetNames.add(targetName))
             {
-                throw new ServiceException("调用活动" + direction + "变量目标不能重复", HttpStatus.BAD_REQUEST);
+                throw new ServiceException("调用活动" + direction + "变量目标不能重复: " + targetName, HttpStatus.BAD_REQUEST)
+                        .setSubCode("CALL_MAPPING_TARGET_DUPLICATE");
             }
             FieldSpec source = sources.get(sourceName);
             FieldSpec target = targets.get(targetName);
-            if (source == null || !source.readable() || target == null || !target.writable())
-            {
-                throw new ServiceException("调用活动" + direction + "变量不在可映射字段目录中", HttpStatus.BAD_REQUEST);
-            }
+            if (source == null || target == null)
+                throw new ServiceException("调用活动" + direction + "字段不存在: " + sourceName + " → " + targetName, 400).setSubCode("CALL_MAPPING_FIELD_MISSING");
+            if (!source.readable())
+                throw new ServiceException("调用活动来源字段不可读: " + sourceName, 400).setSubCode("CALL_MAPPING_SOURCE_UNREADABLE");
+            if (!target.writable() && !("输出".equals(direction) && target.systemWritable() && target.readable()))
+                throw new ServiceException("调用活动目标字段不可写，且未声明系统回填资格: " + targetName, 400).setSubCode("CALL_MAPPING_TARGET_UNWRITABLE");
             if (!compatibleTypes(source.type(), target.type()))
             {
-                throw new ServiceException("调用活动" + direction + "变量字段类型不兼容", HttpStatus.BAD_REQUEST);
+                throw new ServiceException("调用活动" + direction + "字段类型不兼容: " + sourceName + " (" + source.type() + ") → " + targetName + " (" + target.type() + ")", HttpStatus.BAD_REQUEST).setSubCode("CALL_MAPPING_TYPE_CONFLICT");
             }
         }
     }
@@ -660,20 +690,10 @@ public class WorkflowCallActivityReferenceService
      */
     private Map<String, FieldSpec> extractFieldSpecs(String content)
     {
-        formTemplateValidator.validate(content);
-        try
-        {
-            JsonNode root = objectMapper.readTree(content);
-            Map<String, FieldSpec> fields = new LinkedHashMap<>();
-            collectFieldSpecs(root == null ? null : root.get("fields"), fields);
-            return Map.copyOf(fields);
-        }
-        catch (JacksonException exception)
-        {
-            ServiceException failure = dataError("流程表单字段目录解析失败");
-            failure.initCause(exception);
-            throw failure;
-        }
+        JsonNode root = formTemplateValidator.validate(content);
+        Map<String, FieldSpec> fields = new LinkedHashMap<>();
+        collectFieldSpecs(root.get("fields"), fields);
+        return Map.copyOf(fields);
     }
 
     /**
@@ -700,7 +720,9 @@ public class WorkflowCallActivityReferenceService
                 boolean readable = booleanValue(field, "workflowReadable", false);
                 boolean writable = booleanValue(field, "workflowWritable", false)
                         && !booleanValue(field, "disabled", false);
-                FieldSpec candidate = new FieldSpec(name, label, type, required, readable, writable);
+                boolean systemWritable = booleanValue(field, "workflowSystemWritable", false)
+                        && readable && !booleanValue(field, "workflowHidden", false) && !writable;
+                FieldSpec candidate = new FieldSpec(name, label, type, required, readable, writable, systemWritable);
                 FieldSpec previous = fields.putIfAbsent(name, candidate);
                 if (previous != null && !previous.type().equals(candidate.type()))
                 {
@@ -886,7 +908,7 @@ public class WorkflowCallActivityReferenceService
             FieldSpec previous = target.putIfAbsent(name, field);
             if (previous != null && !previous.type().equals(field.type()))
             {
-                throw new ServiceException(conflictMessage, HttpStatus.CONFLICT);
+                throw new ServiceException(conflictMessage + ": " + name + " (" + previous.type() + " / " + field.type() + ")", HttpStatus.CONFLICT);
             }
             if (previous != null)
             {
@@ -894,7 +916,7 @@ public class WorkflowCallActivityReferenceService
                 target.put(name, new FieldSpec(name, previous.label(), previous.type(),
                         previous.required() || field.required(),
                         previous.readable() && field.readable(),
-                        previous.writable() && field.writable()));
+                        previous.writable() && field.writable(), previous.systemWritable() && field.systemWritable()));
             }
         });
     }
@@ -908,7 +930,7 @@ public class WorkflowCallActivityReferenceService
     {
         return fields.values().stream().sorted(Comparator.comparing(FieldSpec::name))
                 .map(field -> new WorkflowCallActivityVariableView(field.name(), field.label(),
-                        field.type(), field.required(), field.readable(), field.writable()))
+                        field.type(), field.required(), field.readable(), field.writable(), field.systemWritable()))
                 .toList();
     }
 
@@ -1004,7 +1026,7 @@ public class WorkflowCallActivityReferenceService
 
     /** 调用活动映射可使用的表单字段规则。 */
     private record FieldSpec(String name, String label, String type, boolean required,
-            boolean readable, boolean writable) { }
+            boolean readable, boolean writable, boolean systemWritable) { }
 
     /** 子流程输入和输出字段的内部目录与对外视图。 */
     private record TargetFieldCatalog(Map<String, FieldSpec> inputFieldMap,

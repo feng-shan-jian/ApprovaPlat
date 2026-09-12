@@ -3,7 +3,6 @@ package com.ruoyi.flowable.service.model;
 import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -160,7 +159,9 @@ public class WorkflowConditionDeploymentService
                 WorkflowControlledLoopFormField existing = fields.putIfAbsent(field.name(), field);
                 if (existing != null && !existing.equals(field))
                 {
-                    throw invalid("同一流程的正式表单包含同名但类型或约束不同的条件字段", null);
+                    throw new WorkflowBpmnValidationException(List.of(new com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue(
+                            "CONDITION_FIELD_CONFLICT", "ERROR", schema.activityId(),
+                            "字段 " + field.name() + " 与同流程其他表单的类型或约束不一致，请核对正式模板及内嵌表单", schema.processKey()))).asServiceException();
                 }
             }
         }

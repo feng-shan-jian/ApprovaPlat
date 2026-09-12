@@ -49,14 +49,19 @@ class WorkflowCallActivityBusinessRegressionTest
     private RepositoryService repository;
     private WorkflowDeploymentArtifactRepository artifacts;
     private WorkflowCallActivityReferenceService service;
+    private WfFormMapper templates;
+    private final java.util.concurrent.atomic.AtomicReference<org.flowable.engine.delegate.ExecutionListener> outputListener = new java.util.concurrent.atomic.AtomicReference<>();
     private final List<String> deployments = new ArrayList<>();
 
     @BeforeEach
     void open()
     {
-        support = WorkflowFlowableEngineTestSupport.start("call-business-regression", Map.of());
+        support = WorkflowFlowableEngineTestSupport.start("call-business-regression", Map.of(
+                "workflowSystemOutputListener", (org.flowable.engine.delegate.ExecutionListener) execution -> outputListener.get().notify(execution)));
         repository = support.processEngine().getRepositoryService();
         artifacts = new WorkflowDeploymentArtifactRepository(repository);
+        outputListener.set(new com.ruoyi.flowable.listener.WorkflowSystemOutputListener(repository, artifacts,
+                new com.ruoyi.flowable.service.process.WorkflowStartVariableValidator(new WorkflowFormTemplateValidator())));
         var identity = mock(WorkflowIdentityResolver.class);
         when(identity.resolveCurrentIdentity()).thenReturn(ACTOR);
         var operations = support.transactionalProxy(new WorkflowEngineOperations(
@@ -65,7 +70,7 @@ class WorkflowCallActivityBusinessRegressionTest
         var participant = new WorkflowParticipantRuleRuntimeService(repository,
                 support.processEngine().getRuntimeService(), artifacts, mock(WorkflowIdentityMapper.class),
                 identity, mock(WorkflowParticipantResolutionMetrics.class));
-        var templates = mock(WfFormMapper.class);
+        templates = mock(WfFormMapper.class);
         WfForm template = new WfForm();
         template.setFormId(7L);
         template.setContent(form("parentValue"));
@@ -167,6 +172,52 @@ class WorkflowCallActivityBusinessRegressionTest
                 .isInstanceOf(ServiceException.class);
     }
 
+    @ParameterizedTest @CsvSource({"8,true", "-1,false"})
+    void explicitSystemOutputUsesFrozenParentSchemaAndRejectsClientForgery(int value, boolean allowed)
+    {
+        String content = form("parentValue").replace("el-input", "el-input-number")
+                .replace("\"workflowWritable\":true", "\"workflowWritable\":false,\"workflowSystemWritable\":true,\"min\":0");
+        WfForm template = new WfForm(); template.setFormId(7L); template.setContent(content);
+        when(templates.selectById(7L)).thenReturn(template);
+        deploy(Map.of("child", form("childValue").replace("el-input", "el-input-number")));
+        var document = parent(WorkflowFormFieldPermissionMode.READONLY, true);
+        CallActivity call = (CallActivity) document.bpmnModel().getMainProcess().getFlowElement("call");
+        var input = new IOParameter(); input.setSource("parentValue"); input.setTarget("childValue"); call.getInParameters().add(input);
+        byte[] bytes = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(document.bpmnModel());
+        var prepared = service.prepare(bytes, document, ACTOR);
+        String deployment = repository.createDeployment().addBytes("system-parent.bpmn20.xml", prepared.compiledBpmn()).deploy().getId();
+        deployments.add(deployment);
+        WfDeployForm snapshot = new WfDeployForm(); snapshot.setDeployId(deployment); snapshot.setNodeKey("parentStart");
+        snapshot.setNodeName("系统结果"); snapshot.setSourceType("TEMPLATE"); snapshot.setFormKey("key_7");
+        snapshot.setFormName("系统结果"); snapshot.setContent(content);
+        artifacts.persist(deployment, new WorkflowDeploymentArtifacts(List.of(snapshot), List.of(), List.of(), List.of(), List.of(), List.of(),
+                service.snapshotsForDeployment(deployment, prepared, "100"), List.of()));
+        var runtime = support.processEngine().getRuntimeService();
+        var parent = runtime.startProcessInstanceByKey("parent", Map.of("parentValue", 7));
+        var child = runtime.createProcessInstanceQuery().superProcessInstanceId(parent.getId()).singleResult();
+        assertThat(runtime.getVariable(child.getId(), "childValue")).isEqualTo(7);
+        runtime.setVariable(child.getId(), "childValue", value);
+        var childWait = runtime.createExecutionQuery().processInstanceId(child.getId()).activityId("child_wait").singleResult();
+        if (allowed)
+        {
+            runtime.trigger(childWait.getId());
+            assertThat(support.processEngine().getHistoryService().createHistoricVariableInstanceQuery().processInstanceId(parent.getId())
+                    .variableName("parentValue").singleResult().getValue()).isEqualTo(8);
+            assertThat(runtime.createProcessInstanceQuery().processInstanceId(parent.getId()).count()).isZero();
+        }
+        else
+        {
+            assertThatThrownBy(() -> runtime.trigger(childWait.getId())).isInstanceOf(RuntimeException.class);
+            assertThat(runtime.getVariable(parent.getId(), "parentValue")).isEqualTo(7);
+            assertThat(runtime.createExecutionQuery().executionId(childWait.getId()).count()).isOne();
+        }
+        var validator = new com.ruoyi.flowable.service.process.WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
+        assertThatThrownBy(() -> validator.validateForStart(content, Map.of("parentValue", 999))).isInstanceOf(ServiceException.class);
+        // 模板后续改成可写不能放宽当前部署的不可变权限。
+        template.setContent(form("parentValue"));
+        assertThat(artifacts.selectForms(deployment).get(0).getContent()).isEqualTo(content);
+    }
+
     private WorkflowBpmnDocument parent(WorkflowFormFieldPermissionMode mode, boolean output)
     {
         BpmnModel model = new BpmnModel();
@@ -207,9 +258,10 @@ class WorkflowCallActivityBusinessRegressionTest
         StringBuilder xml = new StringBuilder("<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test:catalog\">");
         forms.keySet().forEach(key -> xml.append("<process id=\"").append(key)
                 .append("\" isExecutable=\"true\"><startEvent id=\"").append(key)
-                .append("_start\"/><endEvent id=\"").append(key)
+                .append("_start\"/><receiveTask id=\"").append(key).append("_wait\"/><endEvent id=\"").append(key)
                 .append("_end\"/><sequenceFlow id=\"").append(key).append("_flow\" sourceRef=\"")
-                .append(key).append("_start\" targetRef=\"").append(key).append("_end\"/></process>"));
+                .append(key).append("_start\" targetRef=\"").append(key).append("_wait\"/><sequenceFlow id=\"").append(key)
+                .append("_last\" sourceRef=\"").append(key).append("_wait\" targetRef=\"").append(key).append("_end\"/></process>"));
         String deployment = repository.createDeployment().addString("catalog.bpmn20.xml",
                 xml.append("</definitions>").toString()).deploy().getId();
         deployments.add(deployment);

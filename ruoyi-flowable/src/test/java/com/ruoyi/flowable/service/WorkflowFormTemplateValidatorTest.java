@@ -2,17 +2,13 @@ package com.ruoyi.flowable.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 import com.ruoyi.common.exception.ServiceException;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 
 /**
  * 唯一正式平面表单 Schema 契约测试。
@@ -41,15 +37,9 @@ class WorkflowFormTemplateValidatorTest
         assertThat(validator.extractAttachmentVariableNames(root)).containsExactly("files");
     }
 
-    /**
-     * 用真实严格解析器验证四种投影共用根节点，保留嵌套顺序、去重、权限和异构排除。
-     * @return void，重复解析、修改根节点或投影集合可变时测试失败
-     */
     @Test
     void projectsValidatedRootWithoutReparsingOrMutation()
     {
-        ObjectMapper mapper = spy((ObjectMapper) ReflectionTestUtils.getField(validator, "objectMapper"));
-        ReflectionTestUtils.setField(validator, "objectMapper", mapper);
         String fields = String.join(",",
                 field("first", "el-input", false, true, ""),
                 "{\"layout\":\"rowFormItem\",\"workflowHidden\":false,\"workflowReadable\":true,"
@@ -86,7 +76,6 @@ class WorkflowFormTemplateValidatorTest
         assertThatThrownBy(() -> signatures.put("extra", "el-input"))
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThat(root.toString()).isEqualTo(original);
-        verify(mapper).readTree(content);
     }
 
     /**

@@ -199,7 +199,6 @@ const dialogVisible = computed({
   set: (val) => emit('update:visible', val)
 })
 
-const { proxy } = getCurrentInstance()
 const { sys_job_group } = useDict('sys_job_group')
 
 const form = computed(() => props.row || {})

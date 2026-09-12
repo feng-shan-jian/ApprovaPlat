@@ -59,8 +59,9 @@
         />
       </el-form-item>
       <div class="embedded-form-editor__switches">
-        <el-checkbox :model-value="field.readable" @change="updateField(fieldIndex, { readable: $event })">可读</el-checkbox>
-        <el-checkbox :model-value="field.writable" @change="changeWritable(fieldIndex, $event)">可写</el-checkbox>
+        <el-checkbox :model-value="field.systemWritable === true" @change="updateField(fieldIndex, { systemWritable: $event, ...($event ? { readable: true, writable: false, required: false } : {}) })">系统回填、用户只读</el-checkbox>
+        <el-checkbox :model-value="field.readable" :disabled="field.systemWritable" @change="updateField(fieldIndex, { readable: $event })">可读</el-checkbox>
+        <el-checkbox :model-value="field.writable" :disabled="field.systemWritable" @change="changeWritable(fieldIndex, $event)">可写</el-checkbox>
         <el-checkbox
           :model-value="field.required"
           :disabled="!field.writable"

@@ -24,5 +24,3 @@ CI 浏览器固定为 Playwright Chromium，`PLAYWRIGHT_CHANNEL` 保持空值，
 $env:PLAYWRIGHT_CHANNEL = 'msedge'
 npx playwright test tests/e2e/workflow-designer-regressions.spec.js
 ```
-
-2026-09-10 添加的回归按正确业务行为断言，当前产品仍存在对应缺陷，预期会报红；不使用 `test.fail`、跳过或反向断言让缺陷变绿。详见 [测试质量审查报告](../../../docs/testing/WorkflowTestQualityReview-20260910.md)。

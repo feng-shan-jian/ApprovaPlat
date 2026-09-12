@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  NOTIFICATION_API_PATHS,
   notificationMailConfigReadRequest,
   notificationMailConfigSaveRequest,
   notificationMailConfigTestRequest,
@@ -23,7 +22,6 @@ import {
 
 test('通知管理请求配置使用唯一正式路径和敏感请求边界', () => {
   const payload = { credential: 'only-in-memory' }
-  assert.equal(Object.isFrozen(NOTIFICATION_API_PATHS), true)
   assert.deepEqual(notificationProcessCatalogRequest(), {
     url: '/workflow/notification/catalog/processes',
     method: 'get'

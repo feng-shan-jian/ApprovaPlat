@@ -150,7 +150,7 @@ function handleBeforeUpload(file) {
 }
 
 // 上传成功处理
-function handleUploadSuccess(res, file) {
+function handleUploadSuccess(res) {
   // 如果上传成功
   if (res.code == 200) {
     // 获取富文本实例

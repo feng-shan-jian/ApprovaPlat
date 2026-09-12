@@ -80,7 +80,7 @@ const props = defineProps({
   row: { type: Object, default: () => ({}) }
 })
 
-const emit = defineEmits(['update:visible'])
+defineEmits(['update:visible'])
 
 const loading = ref(false)
 const dataList = ref([])

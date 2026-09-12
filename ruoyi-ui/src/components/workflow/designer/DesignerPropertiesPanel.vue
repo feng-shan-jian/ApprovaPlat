@@ -760,7 +760,7 @@ const selectedCallActivityOption = computed(() => props.callActivityOptions.find
 const selectedCallActivityInputFields = computed(() => (selectedCallActivityOption.value?.inputFields || []).filter(field => field.writable))
 const selectedCallActivityOutputFields = computed(() => (selectedCallActivityOption.value?.outputFields || []).filter(field => field.readable))
 const callActivityParentReadableFields = computed(() => props.callActivityParentFields.filter(field => field.readable))
-const callActivityParentWritableFields = computed(() => props.callActivityParentFields.filter(field => field.writable))
+const callActivityParentWritableFields = computed(() => props.callActivityParentFields.filter(field => field.writable || field.systemWritable === true))
 /**
  * 生成当前指定身份来源对应的正式目录池和安全回显选项。
  * @returns {{label:string,pool:string,placeholder:string,options:object[]}|null} 当前来源的选择器配置；动态来源返回 null。

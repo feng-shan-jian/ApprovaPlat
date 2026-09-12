@@ -27,7 +27,7 @@ public class WorkflowConnectorEndpointService
     /** 端点稳定键格式。 */
     private static final Pattern ENDPOINT_KEY = Pattern.compile("[A-Za-z][A-Za-z0-9_.-]{0,127}");
     /** Secret 只允许引用受控环境变量命名空间。 */
-    private static final Pattern SECRET_REF = Pattern.compile("WORKFLOW_CONNECTOR_SECRET_[A-Z0-9_]{1,96}");
+    private static final Pattern SECRET_REF = Pattern.compile("(?:WORKFLOW_CONNECTOR_SECRET_[A-Z0-9_]{1,96}|" + com.ruoyi.flowable.extension.WorkflowManagedConnectorSecrets.REF_PATTERN + ")");
     /** API Key 请求头必须是标准 HTTP token。 */
     private static final Pattern HEADER_NAME = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}");
     /** 当前允许的出站 HTTP 方法。 */
@@ -38,6 +38,7 @@ public class WorkflowConnectorEndpointService
 
     private final WorkflowEngineOperations engineOperations;
     private final WfConnectorEndpointMapper endpointMapper;
+    private final com.ruoyi.flowable.extension.WorkflowConnectorSecretResolver secrets;
 
     /**
      * 创建端点领域服务。
@@ -46,10 +47,11 @@ public class WorkflowConnectorEndpointService
      * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowConnectorEndpointService(WorkflowEngineOperations engineOperations,
-            WfConnectorEndpointMapper endpointMapper)
+            WfConnectorEndpointMapper endpointMapper, com.ruoyi.flowable.extension.WorkflowConnectorSecretResolver secrets)
     {
         this.engineOperations = engineOperations;
         this.endpointMapper = endpointMapper;
+        this.secrets = secrets;
     }
 
     /**
@@ -67,7 +69,24 @@ public class WorkflowConnectorEndpointService
      */
     public List<WorkflowConnectorEndpointView> listOptions()
     {
-        return engineOperations.read(() -> List.copyOf(endpointMapper.selectEnabledOptions()));
+        return engineOperations.read(() -> endpointMapper.selectList().stream().map(endpoint -> {
+            if (!ENABLED.equals(endpoint.status())) return endpoint.withReadiness(false, "端点已停用，请由集成管理员启用");
+            try
+            {
+                if (!"NONE".equals(endpoint.authType())) secrets.requireSecret(endpoint.secretRef());
+                return endpoint.withReadiness(true, null);
+            }
+            catch (ServiceException exception) { return endpoint.withReadiness(false, "认证未就绪，请由集成管理员检查凭据和服务身份配置"); }
+        }).toList());
+    }
+
+    /** 新受管 provider 每次投递核对当前端点状态；旧 ENV 冻结行为保持原合同。 */
+    public void requireManagedRuntimeEndpoint(long endpointId, String reference)
+    {
+        if (reference == null || !reference.matches(com.ruoyi.flowable.extension.WorkflowManagedConnectorSecrets.REF_PATTERN)) return;
+        var endpoint = endpointMapper.selectByIdForUpdate(endpointId);
+        if (endpoint == null || !ENABLED.equals(endpoint.getStatus()) || !reference.equals(endpoint.getSecretRef()))
+            throw new ServiceException("受管凭据端点已停用或绑定已变更", 409);
     }
 
     /**

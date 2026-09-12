@@ -397,13 +397,13 @@ function submitForm() {
   proxy.$refs["jobRef"].validate(valid => {
     if (valid) {
       if (form.value.jobId != undefined) {
-        updateJob(form.value).then(response => {
+        updateJob(form.value).then(() => {
           proxy.$modal.msgSuccess("修改成功")
           open.value = false
           getList()
         })
       } else {
-        addJob(form.value).then(response => {
+        addJob(form.value).then(() => {
           proxy.$modal.msgSuccess("新增成功")
           open.value = false
           getList()

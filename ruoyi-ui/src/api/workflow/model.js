@@ -1,5 +1,18 @@
 import request from '@/utils/request'
 
+export function getModelDesignDraft(modelId) {
+  return request({ url: `/workflow/model/${encodeURIComponent(modelId)}/design-draft`, method: 'get' })
+}
+
+export function saveModelDesignDraft(modelId, data) {
+  return request({ url: `/workflow/model/${encodeURIComponent(modelId)}/design-draft`, method: 'put', data,
+    headers: { repeatSubmit: false } })
+}
+
+export function discardModelDesignDraft(modelId, expectedRevision) {
+  return request({ url: `/workflow/model/${encodeURIComponent(modelId)}/design-draft`, method: 'delete', params: { expectedRevision } })
+}
+
 /**
  * 查询每个模型标识的最新版本。
  * @param {object} query 模型名称、标识、分类和分页参数。
@@ -81,6 +94,10 @@ export function validateModelBpmn(bpmnXml) {
     data: { bpmnXml },
     headers: { repeatSubmit: false }
   })
+}
+
+export function preflightModel(data) {
+  return request({ url: '/workflow/model/preflight', method: 'post', data, headers: { repeatSubmit: false } })
 }
 
 /**

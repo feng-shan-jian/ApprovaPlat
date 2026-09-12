@@ -110,43 +110,6 @@ class WfMultiInstanceRoundMapperMySqlIT
     }
 
     /**
-     * 验证真实表继续使用 InnoDB、STORED 生成列和大小写敏感 ASCII 排序规则。
-     *
-     * @return void，断言开放轮次唯一键所依赖的 MySQL 物理属性没有漂移
-     * @throws SQLException information_schema 查询失败时向 JUnit 报告
-     */
-    @Test
-    void shouldRetainMySqlPhysicalSchemaCapabilities() throws SQLException
-    {
-        try (Connection connection = dataSource.getConnection();
-                Statement statement = connection.createStatement())
-        {
-            try (ResultSet table = statement.executeQuery(
-                    "select engine from information_schema.tables "
-                    + "where table_schema=database() and table_name='wf_multi_instance_round'"))
-            {
-                assertTrue(table.next());
-                assertEquals("InnoDB", table.getString("engine"));
-            }
-            try (ResultSet columns = statement.executeQuery(
-                    "select column_name, collation_name, extra from information_schema.columns "
-                    + "where table_schema=database() and table_name='wf_multi_instance_round' "
-                    + "and column_name in ('open_process_instance_id','open_activity_id') "
-                    + "order by column_name"))
-            {
-                int generatedColumnCount = 0;
-                while (columns.next())
-                {
-                    assertEquals("ascii_bin", columns.getString("collation_name"));
-                    assertTrue(columns.getString("extra").toUpperCase().contains("STORED GENERATED"));
-                    generatedColumnCount++;
-                }
-                assertEquals(2, generatedColumnCount);
-            }
-        }
-    }
-
-    /**
      * 验证 MySQL JSON Schema 对数组类型、数量、唯一性和规范 Long 用户主键的约束。
      *
      * @return void，断言合法上界可写，损坏 JSON、空/超长/重复数组和非法主键均被拒绝

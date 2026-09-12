@@ -271,13 +271,13 @@ function submitForm() {
   proxy.$refs["configRef"].validate(valid => {
     if (valid) {
       if (form.value.configId != undefined) {
-        updateConfig(form.value).then(response => {
+        updateConfig(form.value).then(() => {
           proxy.$modal.msgSuccess("修改成功")
           open.value = false
           getList()
         })
       } else {
-        addConfig(form.value).then(response => {
+        addConfig(form.value).then(() => {
           proxy.$modal.msgSuccess("新增成功")
           open.value = false
           getList()

@@ -1,5 +1,5 @@
 <template>
-  <div class="process-designer" :class="designerClasses" :style="designerStyle">
+  <div class="process-designer" :class="designerClasses" :style="designerStyle" @input.capture="emit('editing')">
     <DesignerToolbar
       :locked="designerLocked"
       :can-undo="canUndo"
@@ -26,6 +26,9 @@
       @save="requestSave"
     />
     <input ref="importInputRef" class="process-designer__file-input" type="file" accept=".bpmn,.xml,.bpmn20.xml,application/xml,text/xml" @change="handleImportFile" />
+    <el-alert v-if="hasIncompatibleMessageConfig" class="process-designer__configuration-warning" title="当前事件仍携带消息专用配置，不能保存或部署。" type="warning" :closable="false">
+      <el-button text @click="repairSelectedEventConfig">移除不兼容配置（可撤销）</el-button>
+    </el-alert>
 
     <div
       ref="bodyRef"
@@ -146,7 +149,8 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="validationVisible" title="流程校验" width="min(900px, 82vw)" append-to-body>
+    <el-dialog v-model="validationVisible" :title="validationKind === 'preflight' ? '发布预检' : '正式保存校验'" width="min(900px, 82vw)" append-to-body>
+      <el-alert v-if="validationKind === 'preflight'" title="预检没有发布流程。结果对应本次作者内容、模型修订及引用资源；正式部署时会重新核验。" type="info" :closable="false" />
       <el-result v-if="validationPassed && !validationIssues.length" icon="success" title="校验通过" />
       <el-table v-else-if="validationIssues.length" :data="validationIssues" max-height="460">
         <el-table-column label="级别" width="88">
@@ -167,7 +171,13 @@
           </template>
         </el-table-column>
         <el-table-column prop="message" label="问题" min-width="260" show-overflow-tooltip />
+        <el-table-column label="处理建议" min-width="220"><template #default="{ row }"><div>{{ row.suggestion || '定位元素后修正配置，再重新校验。' }}</div><el-text v-if="row.fieldPath" size="small">字段：{{ row.fieldPath }}</el-text></template></el-table-column>
       </el-table>
+      <template #footer>
+        <el-button :loading="extensionLoading" @click="loadExtensionOptions">刷新引用资源</el-button>
+        <el-button v-if="props.model.modelId" v-hasPermi="['workflow:model:deploy']" :loading="validating" @click="runServerValidation(true, '', true)">运行发布预检</el-button>
+        <el-button @click="validationVisible = false">关闭</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -184,7 +194,7 @@ import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css'
 import 'diagram-js-minimap/assets/diagram-js-minimap.css'
 import 'bpmn-js-token-simulation/assets/css/bpmn-js-token-simulation.css'
 import Download from '@/plugins/download'
-import { listCallActivityOptions, validateModelBpmn } from '@/api/workflow/model'
+import { listCallActivityOptions, validateModelBpmn, preflightModel } from '@/api/workflow/model'
 import {
   listCelExtensionOptions,
   listFormFieldExtensionOptions,
@@ -252,11 +262,12 @@ const props = defineProps({
     })
   },
   /** 设计器偏好是否正在写入当前用户浏览器存储。 */
-  preferenceSaving: { type: Boolean, default: false }
+  preferenceSaving: { type: Boolean, default: false },
+  focusElementId: { type: String, default: '' }
 })
 
 const emit = defineEmits([
-  'update:modelValue', 'change', 'save', 'error', 'identity-search', 'identity-resolve',
+  'update:modelValue', 'change', 'editing', 'loaded', 'save', 'error', 'identity-search', 'identity-resolve',
   'preference-save', 'preference-reset'
 ])
 const canvasRef = ref(null)
@@ -276,6 +287,8 @@ const validationVisible = ref(false)
 const validationIssues = ref([])
 // validationPassed 表示最近一次真实服务端报告是否明确允许保存，不能由空问题列表推断。
 const validationPassed = ref(false)
+const validationKind = ref('save')
+let authorRevision = 0
 const validating = ref(false)
 const simulationActive = ref(false)
 const systemDark = ref(false)
@@ -283,6 +296,21 @@ const selectedElement = shallowRef(null)
 const editingParticipantProcess = ref(false)
 const lastExportedXml = ref('')
 const propertyState = reactive(createEmptyPropertyState())
+const hasIncompatibleMessageConfig = computed(() => {
+  // 属性读取会在每次命令后生成新数组，从而使诊断随撤销和重做更新。
+  void propertyState.extensionProperties
+  const object = selectedElement.value?.businessObject
+  return object?.$instanceOf?.('bpmn:Event')
+    && !(object.$type === 'bpmn:IntermediateThrowEvent' && object.eventDefinitions?.[0]?.$type === 'bpmn:MessageEventDefinition')
+    && readAllFlowableProperties(object).some(property => property.name === 'approva.messageThrow.config')
+})
+
+function repairSelectedEventConfig() {
+  if (!designerLocked.value && hasIncompatibleMessageConfig.value) {
+    handleShapeReplace({ context: { newShape: selectedElement.value } })
+    loadPropertyState(selectedElement.value)
+  }
+}
 const designerStyle = computed(() => ({ height: props.height }))
 // propertiesPanelWidth 表示当前会话中属性检查器的可视宽度，不使用浏览器本地状态冒充正式偏好。
 const propertiesPanelWidth = ref(368)
@@ -529,6 +557,30 @@ function handleShapeReplace(event) {
   const oldBusinessObject = event?.context?.oldShape?.businessObject
   const newShape = event?.context?.newShape
   const newBusinessObject = newShape?.businessObject
+  if (newBusinessObject?.$instanceOf?.('bpmn:Event')) {
+    const modeling = modeler.get('modeling')
+    const messageThrow = newBusinessObject.$type === 'bpmn:IntermediateThrowEvent'
+      && newBusinessObject.eventDefinitions?.[0]?.$type === 'bpmn:MessageEventDefinition'
+    if (!messageThrow) {
+      const values = newBusinessObject.extensionElements?.values || []
+      if (values.some(value => value.$type === 'flowable:Properties'
+        && value.values?.some(property => property.name === 'approva.messageThrow.config'))) {
+        const moddle = modeler.get('moddle')
+        const retained = values.flatMap(value => {
+          if (value.$type !== 'flowable:Properties') return [value]
+          const properties = (value.values || []).filter(property => property.name !== 'approva.messageThrow.config')
+          return properties.length ? [moddle.create('flowable:Properties', { values: properties })] : []
+        })
+        modeling.updateProperties(newShape, {
+          extensionElements: retained.length ? moddle.create('bpmn:ExtensionElements', { values: retained }) : undefined
+        })
+      }
+    }
+    if (newBusinessObject.$type === 'bpmn:BoundaryEvent'
+      && newBusinessObject.eventDefinitions?.[0]?.$type === 'bpmn:ErrorEventDefinition') {
+      modeling.updateProperties(newShape, { cancelActivity: true })
+    }
+  }
   if (!oldBusinessObject?.$instanceOf?.('bpmn:UserTask')
     || newBusinessObject?.$instanceOf?.('bpmn:UserTask')) return
 
@@ -577,25 +629,48 @@ function isUserTaskOnlyProperty(name) {
 }
 
 /**
- * 导入外部 XML；失败时清空旧图并向页面报告错误。
+ * 导入外部 XML；解析阶段失败不触动画布，渲染阶段失败恢复先前作者内容和视口。
  * @param {string} xml 后端模型服务返回的正式 BPMN XML。
  * @returns {Promise<void>} 导入完成后更新撤销状态和 v-model。
  */
 async function importXml(xml) {
   createModeler()
   if (!modeler) return
+  const previousXml = lastExportedXml.value ? await flushXml() : ''
   importing = true
   loading.value = true
+  const previousViewbox = previousXml ? modeler.get('canvas').viewbox() : null
+  const previousSelection = selectedElement.value?.id
+  let renderStarted = false
   try {
+    await modeler.get('moddle').fromXML(xml)
+    renderStarted = true
     await modeler.importXML(xml)
     applyDesignerPreference()
     refreshControlledLoopOverlays()
-    fitViewport()
+    if (previousViewbox) modeler.get('canvas').viewbox(previousViewbox)
+    else fitViewport()
     const processElement = modeler.get('elementRegistry').getAll().find(element => element.type === 'bpmn:Process')
-    selectElement(processElement)
-    await emitXmlChange(false)
+    const focused = props.focusElementId && modeler.get('elementRegistry').get(props.focusElementId)
+    const selected = focused || (previousSelection && modeler.get('elementRegistry').get(previousSelection))
+    if (selected) modeler.get('selection').select(selected)
+    else selectElement(processElement)
+    if (focused) modeler.get('canvas').scrollToElement(focused, 80)
+    authorRevision += 1
+    validationIssues.value = []
+    validationPassed.value = false
+    const exported = await emitXmlChange(false)
+    if (previousXml) emit('editing')
+    else emit('loaded', exported)
   } catch (error) {
-    modeler.clear()
+    if (previousXml && renderStarted) {
+      await modeler.importXML(previousXml)
+      if (previousViewbox) modeler.get('canvas').viewbox(previousViewbox)
+      const restored = modeler.get('elementRegistry').get(previousSelection)
+      if (restored) modeler.get('selection').select(restored)
+      await emitXmlChange(false)
+    }
+    if (previousXml && !renderStarted) emit('update:modelValue', previousXml)
     emit('error', error)
   } finally {
     importing = false
@@ -612,6 +687,8 @@ function handleCommandStackChanged() {
   updateCommandState()
   window.requestAnimationFrame(refreshControlledLoopOverlays)
   if (importing) return
+  authorRevision += 1
+  emit('editing')
   // 任何建模变更都会使上一次服务端诊断失效，禁止显示过期的“已通过”结果。
   validationIssues.value = []
   validationPassed.value = false
@@ -864,6 +941,16 @@ function updateProperties(changes) {
 function updateCommonProperties() {
   updateProperties({ name: propertyState.name.trim() || undefined })
 }
+
+async function flushXml(commitActive = true) {
+  // 离开/保存必须先提交当前控件，再读取真实命令栈；不能等待 180ms 导出节流。
+  if (commitActive) document.activeElement?.blur?.()
+  await nextTick()
+  window.clearTimeout(changeTimer)
+  return emitXmlChange(false)
+}
+
+defineExpose({ flushXml })
 
 function updateDataObjectProperties() {
   if (designerLocked.value || !modeler || !selectedElement.value) return
@@ -1365,12 +1452,17 @@ async function copyPreview() {
  * @param {string} sourceXml 可选的已冻结保存快照；为空时从当前画布序列化。
  * @returns {Promise<boolean>} true 表示通过保存和部署共同门禁。
  */
-async function runServerValidation(showResult, sourceXml = '') {
+async function runServerValidation(showResult, sourceXml = '', preflight = false) {
   if (props.saving) return false
   validating.value = true
   try {
-    const xml = sourceXml || await emitXmlChange(false)
-    const response = await validateModelBpmn(xml)
+    const xml = sourceXml || await flushXml()
+    const revision = authorRevision
+    const response = preflight
+      ? await preflightModel({ modelId: props.model.modelId, expectedRevision: props.model.revision, bpmnXml: xml })
+      : await validateModelBpmn(xml)
+    if (revision !== authorRevision) return false
+    validationKind.value = preflight ? 'preflight' : 'save'
     const report = response.data || {}
     const issues = Array.isArray(report.issues) ? [...report.issues] : []
     const hasError = issues.some(issue => issue.severity === 'ERROR')
@@ -1394,16 +1486,23 @@ async function runServerValidation(showResult, sourceXml = '') {
 
 /** 校验结果只定位当前画布中真实存在的图元，不修改作者内容。 */
 function canLocateValidationIssue(issue) {
-  return Boolean(issue.elementId && modeler?.get('elementRegistry').get(issue.elementId))
+  return Boolean(validationIssueElement(issue))
+}
+
+function validationIssueElement(issue) {
+  if (!modeler || !issue.elementId) return null
+  const registry = modeler.get('elementRegistry')
+  return registry.get(issue.elementId) || registry.getAll().find(element => element.businessObject?.processRef?.id === issue.elementId)
 }
 
 /** 关闭诊断弹窗并选中、滚动到对应图元，使其业务属性可以立即修复。 */
 function locateValidationIssue(issue) {
-  const element = modeler?.get('elementRegistry').get(issue.elementId)
+  const element = validationIssueElement(issue)
   if (!element) return
   validationVisible.value = false
   if (appliedPreference.value.propertiesCollapsed) toggleProperties()
   modeler.get('selection').select(element)
+  if (element.businessObject?.processRef?.id === issue.elementId) editParticipantProcess()
   if (Number.isFinite(element.x) && Number.isFinite(element.y)) {
     modeler.get('canvas').scrollToElement(element, 80)
   }
@@ -1962,6 +2061,7 @@ watch(() => props.preference, () => {
 watch(designerLocked, handleDesignerLock)
 onActivated(() => {
   bindDesignerLifecycleListeners()
+  if (modeler) loadExtensionOptions()
 })
 onDeactivated(unbindDesignerLifecycleListeners)
 
@@ -1991,6 +2091,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
+.process-designer__configuration-warning { flex: none; position: relative; z-index: 1; }
 .validation-element-link {
   max-width: 100%;
   height: auto;

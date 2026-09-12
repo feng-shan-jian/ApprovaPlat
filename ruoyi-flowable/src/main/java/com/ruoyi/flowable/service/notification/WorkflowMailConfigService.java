@@ -36,7 +36,6 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 @Service
 public class WorkflowMailConfigService
 {
-    private static final long CONFIG_ID = 1L;
     private static final Set<String> ENCRYPTION_MODES = Set.of("NONE", "STARTTLS", "SSL");
     private static final int CONNECT_TIMEOUT_MILLIS = 5_000;
     private static final int READ_TIMEOUT_MILLIS = 10_000;

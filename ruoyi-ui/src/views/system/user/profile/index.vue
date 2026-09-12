@@ -115,7 +115,7 @@ async function getUser() {
     state.user = response.data || {}
     state.roleGroup = response.roleGroup || ""
     state.postGroup = response.postGroup || ""
-  } catch (error) {
+  } catch {
     // 请求层负责输出后端错误详情，这里补充页面级提示并保留可恢复的空状态。
     proxy.$modal.msgError("个人资料加载失败，请稍后重试")
   } finally {

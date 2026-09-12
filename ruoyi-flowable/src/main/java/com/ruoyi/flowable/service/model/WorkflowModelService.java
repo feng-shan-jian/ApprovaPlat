@@ -33,7 +33,6 @@ import org.flowable.engine.repository.DeploymentBuilder;
 import org.flowable.engine.repository.Model;
 import org.flowable.engine.repository.ModelQuery;
 import org.flowable.engine.repository.ProcessDefinition;
-import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
@@ -673,38 +672,17 @@ public class WorkflowModelService
                     : validateAuthorDeploymentCompatibility(bpmnBytes);
             // 作者资源允许受控 SendTask 等待部署编译；先走作者门禁，再由扩展编译器生成可执行 BPMN，
             // 最终资源仍必须经过 validateCompiledDeployment 的 Flowable 官方规则校验。
-            AuthorValidationContext authorValidation = validateDeploymentReferences(document);
+            PreparedDeployment prepared = prepareDeployment(document, identity);
+            AuthorValidationContext authorValidation = prepared.authorValidation();
             List<FormSnapshotSource> snapshotSources = authorValidation.snapshotSources();
-            WorkflowPreparedExtensionDeployment extensionDeployment =
-                    extensionDeploymentService.prepare(document, identity.userId());
-            List<WorkflowControlledLoopFormSchema> formSchemas =
-                    buildControlledLoopFormSchemas(snapshotSources);
-            WorkflowPreparedConditionDeployment conditionDeployment =
-                    conditionDeploymentService.prepare(document,
-                            extensionDeployment.compiledBpmn(), formSchemas,
-                            identity.userId());
-            WorkflowPreparedControlledLoopDeployment controlledLoopDeployment =
-                    controlledLoopDeploymentService.prepare(document,
-                            conditionDeployment.compiledBpmn(),
-                            formSchemas, identity.userId());
-            WorkflowPreparedParticipantRuleDeployment participantDeployment =
-                    participantRuleDeploymentService.prepare(document,
-                            controlledLoopDeployment.compiledBpmn(),
-                            authorValidation.formFieldCatalog(),
-                            identity.userId());
-            WorkflowPreparedDmnDeployment dmnDeployment =
-                    dmnDecisionService.prepare(participantDeployment.compiledBpmn());
-            WorkflowPreparedCallActivityDeployment callActivityDeployment =
-                    callActivityReferenceService.prepare(
-                            dmnDeployment.compiledBpmn(), document, identity,
-                            callActivityFormContents(authorValidation));
-            byte[] executableBpmn = callActivityDeployment.compiledBpmn();
-            WorkflowPreparedSlaDeployment slaDeployment =
-                    taskSlaDeploymentService.prepare(executableBpmn, identity.userId());
-            // 所有可能生成 UserTask 的阶段完成后，统一注入身份核验与审计运行合同。
-            executableBpmn = runtimeTaskListenerCompiler.compile(slaDeployment.compiledBpmn());
-            // 最终执行资源必须再次通过编译阶段门禁，确保作者属性已剥离、固定监听器完整且生成结构满足 Flowable 校验。
-            bpmnService.validateCompiledDeployment(executableBpmn);
+            WorkflowPreparedExtensionDeployment extensionDeployment = prepared.extensions();
+            WorkflowPreparedConditionDeployment conditionDeployment = prepared.conditions();
+            WorkflowPreparedControlledLoopDeployment controlledLoopDeployment = prepared.loops();
+            WorkflowPreparedParticipantRuleDeployment participantDeployment = prepared.participants();
+            WorkflowPreparedDmnDeployment dmnDeployment = prepared.dmn();
+            WorkflowPreparedCallActivityDeployment callActivityDeployment = prepared.calls();
+            WorkflowPreparedSlaDeployment slaDeployment = prepared.sla();
+            byte[] executableBpmn = prepared.executableBpmn();
             Map<String, List<ProcessDefinition>> activeHistoryByKey =
                     loadActiveDefinitionsByProcessKey(document);
 
@@ -787,9 +765,7 @@ public class WorkflowModelService
                 bpmnService.deploymentCompatibilityIssues(document);
         if (!compatibilityIssues.isEmpty())
         {
-            WorkflowBpmnValidationIssue issue = compatibilityIssues.get(0);
-            throw new ServiceException(issue.message(), HttpStatus.BAD_REQUEST)
-                    .setSubCode(issue.code());
+            throw new WorkflowBpmnValidationException(compatibilityIssues).asServiceException();
         }
         return document;
     }
@@ -800,6 +776,64 @@ public class WorkflowModelService
      * @param modelId String，待部署 Flowable 模型主键
      * @return Model，事务内读取且尚未部署的模型
      */
+    private PreparedDeployment prepareDeployment(WorkflowBpmnDocument document, WorkflowCurrentIdentity identity)
+    {
+        AuthorValidationContext author = validateDeploymentReferences(document);
+        var schemas = author.controlledLoopSchemas();
+        var extensions = extensionDeploymentService.prepare(document, identity.userId());
+        var conditions = conditionDeploymentService.prepare(document, extensions.compiledBpmn(), schemas, identity.userId());
+        var loops = controlledLoopDeploymentService.prepare(document, conditions.compiledBpmn(), schemas, identity.userId());
+        var participants = participantRuleDeploymentService.prepare(document, loops.compiledBpmn(), author.formFieldCatalog(), identity.userId());
+        var dmn = dmnDecisionService.prepare(participants.compiledBpmn());
+        var calls = callActivityReferenceService.prepare(dmn.compiledBpmn(), document, identity, callActivityFormContents(author));
+        var sla = taskSlaDeploymentService.prepare(calls.compiledBpmn(), identity.userId());
+        byte[] executable = runtimeTaskListenerCompiler.compile(sla.compiledBpmn());
+        bpmnService.validateCompiledDeployment(executable);
+        return new PreparedDeployment(author, extensions, conditions, loops, participants, dmn, calls, sla, executable);
+    }
+
+    private record PreparedDeployment(AuthorValidationContext authorValidation,
+            WorkflowPreparedExtensionDeployment extensions, WorkflowPreparedConditionDeployment conditions,
+            WorkflowPreparedControlledLoopDeployment loops, WorkflowPreparedParticipantRuleDeployment participants,
+            WorkflowPreparedDmnDeployment dmn, WorkflowPreparedCallActivityDeployment calls,
+            WorkflowPreparedSlaDeployment sla, byte[] executableBpmn) { }
+
+    /** 完整执行编译但不部署、不冻结资源、不修改模型。资源行锁随事务释放，报告不能替代正式部署重验。 */
+    public com.ruoyi.flowable.domain.vo.WorkflowModelPreflightView preflight(String modelId, int expectedRevision, String xml)
+    {
+        String source = requireText(xml, "BPMN XML 不能为空");
+        String digest = sha256(source.getBytes(StandardCharsets.UTF_8));
+        try
+        {
+            return engineOperations.writeAsCurrentUser(identity -> {
+                Model model = requireModel(modelId);
+                if (modelRevision(model) != expectedRevision)
+                    throw new ServiceException("模型修订已变化，请重新加载后预检", HttpStatus.CONFLICT);
+                requireActiveCategory(model.getCategory());
+                var document = validateAuthorDeploymentCompatibility(source.getBytes(StandardCharsets.UTF_8));
+                if (document.bpmnModel().getProcessById(model.getKey()) == null)
+                    throw new ServiceException("作者内容不属于当前模型", HttpStatus.BAD_REQUEST);
+                var prepared = prepareDeployment(document, identity);
+                return new com.ruoyi.flowable.domain.vo.WorkflowModelPreflightView(digest, expectedRevision,
+                        sha256((sha256(prepared.executableBpmn()) + prepared.authorValidation().snapshotSources().stream()
+                                .map(form -> sha256(form.content().getBytes(StandardCharsets.UTF_8))).sorted().collect(java.util.stream.Collectors.joining()))
+                                .getBytes(StandardCharsets.UTF_8)), true, bpmnService.authorValidationIssues(document));
+            });
+        }
+        catch (ServiceException exception)
+        {
+            List<WorkflowBpmnValidationIssue> issues = exception.getCause() instanceof WorkflowBpmnValidationException validation
+                    ? validation.issues() : List.of(new WorkflowBpmnValidationIssue(validationCode(exception), "ERROR", null, exception.getMessage()));
+            return new com.ruoyi.flowable.domain.vo.WorkflowModelPreflightView(digest, expectedRevision, null, false, issues);
+        }
+    }
+
+    private String sha256(byte[] bytes)
+    {
+        try { return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)); }
+        catch (java.security.NoSuchAlgorithmException exception) { throw new IllegalStateException(exception); }
+    }
+
     private Model lockDeployableModel(String modelId)
     {
         Model current = requireModel(modelId);
@@ -1035,16 +1069,16 @@ public class WorkflowModelService
         bpmnIdentityValidator.validate(document);
         dmnDecisionService.validateReferences(document);
         List<FormSnapshotSource> sources = loadSnapshotSources(document.formReferences());
+        List<WorkflowControlledLoopFormSchema> schemas = buildControlledLoopFormSchemas(sources);
         // 保存、校验和部署共用冻结表单字段门禁，不能只在最终 deploy 才发现非法规则。
-        conditionDeploymentService.validate(document,
-                buildControlledLoopFormSchemas(sources));
+        conditionDeploymentService.validate(document, schemas);
         WorkflowAuthorFormFieldCatalog formFieldCatalog =
                 buildAuthorFormFieldCatalog(sources);
         // 自动抄送和动态参与者必须消费同一次冻结的权限化表单目录，避免三个入口语义漂移。
         WorkflowAutoCopyRuleContract.validateFormUserFields(
                 document.bpmnModel(), formFieldCatalog);
         participantRuleDeploymentService.validateAuthorRules(document, formFieldCatalog);
-        return new AuthorValidationContext(sources, formFieldCatalog);
+        return new AuthorValidationContext(sources, formFieldCatalog, schemas);
     }
 
     private Map<String, String> callActivityFormContents(AuthorValidationContext context)
@@ -1751,20 +1785,24 @@ public class WorkflowModelService
      * 作者引用校验产生的同一事务一致性视图。
      * @param snapshotSources List&lt;FormSnapshotSource&gt;，权限化且已冻结的节点表单来源
      * @param formFieldCatalog WorkflowAuthorFormFieldCatalog，自动抄送与参与者共用字段目录
+     * @param controlledLoopSchemas List&lt;WorkflowControlledLoopFormSchema&gt;，条件与循环编译共用的冻结字段目录
      */
     private record AuthorValidationContext(List<FormSnapshotSource> snapshotSources,
-            WorkflowAuthorFormFieldCatalog formFieldCatalog)
+            WorkflowAuthorFormFieldCatalog formFieldCatalog,
+            List<WorkflowControlledLoopFormSchema> controlledLoopSchemas)
     {
         /**
          * 深度边界复制作者校验结果，禁止后续编译器修改来源列表。
          * @param snapshotSources List&lt;FormSnapshotSource&gt;，已验证表单来源
          * @param formFieldCatalog WorkflowAuthorFormFieldCatalog，不可变正式字段目录
+         * @param controlledLoopSchemas List&lt;WorkflowControlledLoopFormSchema&gt;，已校验的循环字段目录
          * @return 无返回值，构造后列表不可修改
          */
         private AuthorValidationContext
         {
             snapshotSources = List.copyOf(snapshotSources);
             Objects.requireNonNull(formFieldCatalog, "正式表单字段目录不能为空");
+            controlledLoopSchemas = List.copyOf(controlledLoopSchemas);
         }
     }
 

@@ -248,6 +248,12 @@ public class WorkflowProcessFormDetailProjection
                 submission = variables.taskSubmissions().get(activity.getTaskId());
                 if (submission == null)
                 {
+                    // Flowable 的退回、撤回、终止和或签取消都会结束任务，但不代表用户提交了表单。
+                    // 只依据引擎正式删除原因排除取消记录；正常完成缺快照仍作为数据损坏拒绝。
+                    if (StringUtils.hasText(historicTask.getDeleteReason()))
+                    {
+                        continue;
+                    }
                     throw dataError("历史任务缺少正式表单提交快照");
                 }
             }

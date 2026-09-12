@@ -365,6 +365,10 @@
           <el-form-item v-if="activeData['auto-upload'] !== undefined" label="自动上传">
             <el-switch v-model="activeData['auto-upload']" />
           </el-form-item>
+          <el-form-item v-if="activeData.vModel" label="系统回填">
+            <el-switch :model-value="activeData.workflowSystemWritable === true" @change="value => { activeData.workflowSystemWritable = value; if (value) { activeData.workflowReadable = true; activeData.workflowWritable = false; activeData.workflowHidden = false; activeData.required = false; activeData.disabled = true } }" />
+            <span v-if="activeData.workflowSystemWritable">由已授权调用输出回填，用户只读</span>
+          </el-form-item>
           <el-form-item v-if="activeData.readonly !== undefined" label="是否只读">
             <el-switch v-model="activeData.readonly" />
           </el-form-item>
@@ -576,7 +580,7 @@ const data = reactive({
     }
   ],
   layoutTreeProps: {
-    label(data, node) {
+    label(data) {
       return data.componentName || `${data.label}: ${data.vModel}`
     }
   }
@@ -628,7 +632,7 @@ function addTreeItem() {
   currentNode.value = props.activeData.options
 }
 
-function renderContent(h, { node, data, store }) {
+function renderContent(h, { node, data }) {
   return h('div', {
     class: "custom-tree-node"
   }, [

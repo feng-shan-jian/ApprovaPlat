@@ -154,7 +154,7 @@ function handleExceed() {
 }
 
 // 上传失败
-function handleUploadError(err) {
+function handleUploadError() {
   proxy.$modal.msgError("上传文件失败")
   proxy.$modal.closeLoading()
 }

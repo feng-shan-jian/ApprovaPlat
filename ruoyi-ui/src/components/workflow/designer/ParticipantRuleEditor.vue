@@ -1,7 +1,7 @@
 <template>
   <section class="participant-rule-editor">
     <el-form-item :label="mode === 'start' ? '发起范围' : '办理人规则'" required>
-      <el-select :model-value="modelValue.type" @change="changeType">
+      <el-select :model-value="modelValue.type" placeholder="未配置，请选择" @change="changeType">
         <el-option
           v-for="option in ruleOptions"
           :key="option.value"

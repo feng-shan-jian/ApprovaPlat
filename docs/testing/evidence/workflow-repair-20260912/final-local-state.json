@@ -1,0 +1,16 @@
+{
+  "verifiedAt": "2026-09-12T15:55:05.6213035+08:00",
+  "backendPid": 105016,
+  "backendJarSha256": "3DA09289B0C286EBADD8917EB04A62177F2659194D54170EE5D08898148485C4",
+  "captchaHealthy": true,
+  "profiles": [
+    "druid",
+    "timers"
+  ],
+  "temporaryMasterKeyRemovedFromService": true,
+  "ownedManagedCredential": "REVOKED",
+  "ownedEndpoint": "DISABLED",
+  "browserZoomRestored": "90%",
+  "ownedBrowserWindowsClosed": 2,
+  "ownedNormalBrowserTabsClosed": 1
+}

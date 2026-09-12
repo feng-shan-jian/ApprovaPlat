@@ -224,7 +224,7 @@ function empty() {
   )
 }
 
-function onEnd(obj, a) {
+function onEnd(obj) {
   if (obj.from !== obj.to) {
     activeData.value = tempActiveData
     activeId.value = idGlobal.value
@@ -327,7 +327,7 @@ function generate(data) {
   nextTick(() => {
     switch (operationType.value) {
       case 'copy':
-        execCopy(data)
+        execCopy()
         break
       case 'download':
         execDownload(data)
@@ -344,7 +344,7 @@ function execDownload(data) {
   Download.saveAs(blob, data.fileName)
 }
 
-function execCopy(data) {
+function execCopy() {
   document.getElementById('copyNode').click()
 }
 function AssembleFormData() {
@@ -521,13 +521,13 @@ watch(activeId, (val) => {
 let clipboard = null
 onMounted(() => {
   clipboard = new ClipboardJS('#copyNode', {
-    text: trigger => {
+    text: () => {
       const codeStr = generateCode()
       ElNotification({ title: '成功', message: '代码已复制到剪切板，可粘贴。', type: 'success' })
       return codeStr
     }
   })
-  clipboard.on('error', e => {
+  clipboard.on('error', () => {
     proxy.$modal.msgError('代码复制失败')
   })
   if (workflowMode.value) {

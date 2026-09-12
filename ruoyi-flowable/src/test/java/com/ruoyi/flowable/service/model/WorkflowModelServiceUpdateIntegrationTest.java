@@ -67,6 +67,97 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class WorkflowModelServiceUpdateIntegrationTest
 {
+    @ParameterizedTest
+    @CsvSource({"serviceTask,400", "sendTask,400", "serviceTask,403", "sendTask,409"})
+    void extensionResourceFailuresKeepStatusAndLocateOriginalAuthorNode(String taskType, int code)
+    {
+        String xml = """
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="urn:diagnostic">
+                  <process id="sender" isExecutable="true"><startEvent id="start"/>
+                  <%s id="send" name="业务发送"><extensionElements>
+                    <flowable:field name="approvaExtensionKey" stringValue="approva.http"/>
+                  </extensionElements></%s><endEvent id="end"/>
+                  <sequenceFlow id="a" sourceRef="start" targetRef="send"/>
+                  <sequenceFlow id="b" sourceRef="send" targetRef="end"/></process>
+                </definitions>
+                """.formatted(taskType, taskType);
+        var converter = new org.flowable.bpmn.converter.BpmnXMLConverter();
+        var author = converter.convertToBpmnModel(() -> new java.io.ByteArrayInputStream(
+                xml.getBytes(StandardCharsets.UTF_8)), true, true);
+        var registry = mock(WorkflowExtensionRegistryService.class);
+        when(registry.lockLatestForDeployment("approva.http"))
+                .thenThrow(new ServiceException("业务资源不可用", code));
+        var compiler = new WorkflowExtensionDeploymentService(registry, null, null, null);
+        var exception = assertThrows(ServiceException.class,
+                () -> compiler.prepare(new WorkflowBpmnDocument(author, xml, List.of()), ACTOR_ID));
+        assertEquals(code, exception.getCode());
+        var issue = ((WorkflowBpmnValidationException) exception.getCause()).issues().get(0);
+        assertEquals("send", issue.elementId());
+        assertEquals("sender", issue.processId());
+        assertEquals("extension.config", issue.fieldPath());
+        assertNotNull(issue.suggestion());
+        assertEquals(taskType, author.getFlowElement("send").getClass().getSimpleName()
+                .replaceFirst("^S", "s"));
+        assertEquals(0, actualRepositoryService.createDeploymentQuery().count());
+    }
+
+    @Test
+    void fullPreflightUsesRealCompilersWithoutPersistingAndDeployRevalidatesResources()
+    {
+        var engine = engineSupport.processEngine();
+        var identities = mock(WorkflowIdentityResolver.class);
+        when(identities.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity(ACTOR_ID, Set.of()));
+        var operations = engineSupport.transactionalProxy(new WorkflowEngineOperations(
+                new WorkflowAuthenticationContext(engine.getIdentityService(), new WorkflowIdentityCodec()),
+                new WorkflowExceptionTranslator(), identities));
+        var artifacts = new WorkflowDeploymentArtifactRepository(repositoryService);
+        var extensionFields = new WorkflowFormFieldExtensionService(null);
+        var real = new WorkflowModelService(operations, repositoryService,
+                new WorkflowBpmnService(repositoryService, extensionFields, null),
+                new WorkflowBpmnIdentityValidator(identityMapper), categoryMapper, formMapper, artifacts, templateValidator,
+                new WorkflowExtensionDeploymentService(null, null, null, null), new WorkflowControlledLoopDeploymentService(),
+                new WorkflowConditionDeploymentService(), new WorkflowParticipantRuleDeploymentService(identityMapper),
+                new WorkflowDmnDecisionService(operations, null, artifacts), extensionFields,
+                new WorkflowCallActivityReferenceService(repositoryService, operations, identities, null, artifacts, formMapper, templateValidator),
+                new WorkflowTaskSlaDeploymentService(null, null, null), new WorkflowRuntimeTaskListenerCompiler());
+        String xml = """
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="urn:preflight">
+                  <process id="preflight" isExecutable="true"><extensionElements><flowable:properties>
+                    <flowable:property name="approva.startScope.ruleVersion" value="1"/>
+                    <flowable:property name="approva.startScope.type" value="PUBLIC"/>
+                    <flowable:property name="approva.startScope.targetIds" value=""/>
+                    <flowable:property name="approva.startScope.noMatchPolicy" value="FAIL"/>
+                  </flowable:properties></extensionElements>
+                  <startEvent id="start"><extensionElements><flowable:formProperty id="reason" type="string" readable="true" writable="true"/></extensionElements></startEvent>
+                  <receiveTask id="wait"><dataOutputAssociation id="dataOut" name="数据输出"><targetRef>archive</targetRef></dataOutputAssociation></receiveTask>
+                  <dataStoreReference id="archive"/><endEvent id="end"/>
+                  <sequenceFlow id="f1" sourceRef="start" targetRef="wait"/><sequenceFlow id="f2" sourceRef="wait" targetRef="end"/>
+                  </process></definitions>
+                """;
+        String modelId = createModel("preflight", null);
+        when(categoryMapper.selectByCode(ORIGINAL_CATEGORY)).thenReturn(activeCategory());
+        actualRepositoryService.addModelEditorSource(modelId, xml.getBytes(StandardCharsets.UTF_8));
+        int revision = snapshot(modelId).revision();
+        var report = real.preflight(modelId, revision, xml);
+        assertTrue(report.valid(), report.issues().toString());
+        assertNotNull(report.compiledResourceChecksum());
+        assertEquals(0, actualRepositoryService.createDeploymentQuery().count());
+        assertEquals(revision, snapshot(modelId).revision());
+        assertArrayEquals(xml.getBytes(StandardCharsets.UTF_8), actualRepositoryService.getModelEditorSource(modelId));
+        var bad = real.preflight(modelId, revision, xml.replace("<targetRef>archive</targetRef>", "<targetRef>missing</targetRef>"));
+        assertFalse(bad.valid());
+        assertEquals("dataOut", bad.issues().get(0).elementId());
+        assertFalse(real.preflight(modelId, revision + 1, xml).valid());
+        when(categoryMapper.selectByCode(ORIGINAL_CATEGORY)).thenReturn(null);
+        assertThrows(ServiceException.class, () -> real.deployModel(modelId));
+        assertEquals(0, actualRepositoryService.createDeploymentQuery().count());
+        when(categoryMapper.selectByCode(ORIGINAL_CATEGORY)).thenReturn(activeCategory());
+        String deployment = real.deployModel(modelId);
+        assertNotNull(deployment);
+        assertEquals(1, actualRepositoryService.createProcessDefinitionQuery().deploymentId(deployment).count());
+        assertArrayEquals(xml.getBytes(StandardCharsets.UTF_8), actualRepositoryService.getModelEditorSource(modelId));
+    }
+
     /**
      * 经正式保存入口构建权限化字段目录，并验证真实仓储写入和每个来源的校验预算。
      * @return void，目录可读边界、附件排除、保存结果或校验次数漂移时失败

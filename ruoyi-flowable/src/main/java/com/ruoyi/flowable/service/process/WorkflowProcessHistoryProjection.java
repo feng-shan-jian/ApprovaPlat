@@ -643,22 +643,35 @@ public class WorkflowProcessHistoryProjection
         Set<String> unfinishedActivities = new LinkedHashSet<>();
         Set<String> rejectedActivities = new LinkedHashSet<>();
         Set<String> returnedActivities = new LinkedHashSet<>();
+        Set<String> cancelledActivities = new LinkedHashSet<>();
+        Set<String> unknownActivities = new LinkedHashSet<>();
+        List<WorkflowProcessViewerView.ActivityState> activityInstances = new ArrayList<>();
+        Map<String, String> latestStates = new LinkedHashMap<>();
         for (HistoricActivityInstance activity : activities)
         {
-            if (activity.getEndTime() == null)
-            {
-                unfinishedActivities.add(activity.getActivityId());
-            }
-            else if (SequenceFlow.class.getSimpleName().equalsIgnoreCase(activity.getActivityType())
+            String state = activityState(activity);
+            activityInstances.add(new WorkflowProcessViewerView.ActivityState(activity.getId(), activity.getActivityId(),
+                    activity.getActivityName(), state, toInstant(activity.getStartTime()), toInstant(activity.getEndTime())));
+            if (SequenceFlow.class.getSimpleName().equalsIgnoreCase(activity.getActivityType())
                     || "sequenceFlow".equals(activity.getActivityType()))
             {
-                finishedSequenceFlows.add(activity.getActivityId());
+                if ("COMPLETED".equals(state)) finishedSequenceFlows.add(activity.getActivityId());
             }
-            else
+            else if (!"WAITING".equals(latestStates.get(activity.getActivityId())))
             {
-                finishedActivities.add(activity.getActivityId());
+                // 活动查询按开始时间排序。重复进入保留每次活动实例，任何仍在执行的轮次优先展示。
+                latestStates.put(activity.getActivityId(), state);
             }
         }
+        latestStates.forEach((id, state) -> {
+            switch (state)
+            {
+                case "WAITING" -> unfinishedActivities.add(id);
+                case "COMPLETED" -> finishedActivities.add(id);
+                case "RACE_CANCELLED", "CANCELLED", "TERMINATED" -> cancelledActivities.add(id);
+                default -> unknownActivities.add(id);
+            }
+        });
         tasksById.values().forEach(task ->
         {
             List<WorkflowProcessCommentView> taskComments =
@@ -682,7 +695,21 @@ public class WorkflowProcessHistoryProjection
             returnedActivities.removeAll(unfinishedActivities);
         }
         return new WorkflowProcessViewerView(finishedActivities, finishedSequenceFlows,
-                unfinishedActivities, rejectedActivities, returnedActivities);
+                unfinishedActivities, rejectedActivities, returnedActivities,
+                cancelledActivities, unknownActivities, activityInstances);
+    }
+
+    private String activityState(HistoricActivityInstance activity)
+    {
+        String reason = activity.getDeleteReason();
+        if (org.flowable.engine.history.DeleteReason.EVENT_BASED_GATEWAY_CANCEL.equals(reason)) return "RACE_CANCELLED";
+        if (org.flowable.engine.history.DeleteReason.TERMINATE_END_EVENT.equals(reason)) return "TERMINATED";
+        if (Set.of(org.flowable.engine.history.DeleteReason.PROCESS_INSTANCE_DELETED,
+                org.flowable.engine.history.DeleteReason.BOUNDARY_EVENT_INTERRUPTING,
+                org.flowable.engine.history.DeleteReason.EVENT_SUBPROCESS_INTERRUPTING,
+                org.flowable.engine.history.DeleteReason.TRANSACTION_CANCELED).contains(reason == null ? "" : reason)) return "CANCELLED";
+        if (StringUtils.hasText(reason)) return "UNKNOWN";
+        return activity.getEndTime() == null ? "WAITING" : "COMPLETED";
     }
 
     /**

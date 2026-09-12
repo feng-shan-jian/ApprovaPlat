@@ -15,6 +15,12 @@
       </el-tooltip>
     </div>
     <div ref="canvasRef" class="workflow-viewer__canvas" v-loading="loading" />
+    <div v-if="state.cancelledActivityIds?.length || state.unknownActivityIds?.length" class="workflow-viewer__legend">
+      <span>灰色虚线：已取消；灰色节点：历史状态未知。</span>
+      <span v-for="activity in (state.activityInstances || []).filter(item => item.state === 'RACE_CANCELLED')" :key="activity.activityInstanceId">
+        {{ activity.activityName || activity.activityId }}：另一事件已先到达，竞争等待取消。
+      </span>
+    </div>
     <el-empty v-if="errorMessage && !loading" class="workflow-viewer__empty" :description="errorMessage" :image-size="72" />
   </div>
 </template>
@@ -119,7 +125,12 @@ function applyMarkers() {
     finishedSequenceFlowIds: 'workflow-finished-flow',
     unfinishedActivityIds: 'workflow-current',
     rejectedActivityIds: 'workflow-rejected',
-    returnedActivityIds: 'workflow-returned'
+    returnedActivityIds: 'workflow-returned',
+    cancelledActivityIds: 'workflow-cancelled',
+    unknownActivityIds: 'workflow-unknown'
+  }
+  for (const element of registry.getAll()) {
+    for (const marker of Object.values(markerMap)) canvas.removeMarker(element.id, marker)
   }
   Object.entries(markerMap).forEach(([key, marker]) => {
     Array.from(props.state?.[key] || []).forEach(elementId => {
@@ -204,7 +215,7 @@ async function downloadSvg() {
 }
 
 watch(() => props.xml, importXml)
-watch(() => props.state, () => importXml(props.xml), { deep: true })
+watch(() => props.state, applyMarkers, { deep: true })
 
 onMounted(() => {
   observeCanvasSize()
@@ -221,7 +232,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
+.workflow-viewer__legend { display: flex; flex: none; flex-wrap: wrap; gap: 12px; max-height: 35%; overflow: auto; padding: 8px; font-size: 12px; }
+:deep(.djs-element.workflow-cancelled .djs-visual > :first-child) { stroke: #909399 !important; stroke-dasharray: 5 4 !important; fill: #f4f4f5 !important; }
+:deep(.djs-element.workflow-unknown .djs-visual > :first-child) { stroke: #909399 !important; fill: #f4f4f5 !important; }
 .workflow-viewer {
+  display: flex;
+  flex-direction: column;
   position: relative;
   min-height: 320px;
   overflow: hidden;
@@ -244,8 +260,9 @@ onBeforeUnmount(() => {
 }
 
 .workflow-viewer__canvas {
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: 100%;
 }
 
 .workflow-viewer__empty {

@@ -13,6 +13,8 @@ import com.ruoyi.common.exception.ServiceException;
 @Component
 public class WorkflowConnectorSecretResolver
 {
+    private final WorkflowManagedConnectorSecrets managed;
+    public WorkflowConnectorSecretResolver(WorkflowManagedConnectorSecrets managed) { this.managed = managed; }
     /** 连接器密钥环境变量命名空间。 */
     private static final Pattern SECRET_REF = Pattern.compile("WORKFLOW_CONNECTOR_SECRET_[A-Z0-9_]{1,96}");
 
@@ -23,6 +25,8 @@ public class WorkflowConnectorSecretResolver
      */
     public String requireSecret(String secretRef)
     {
+        if (secretRef != null && secretRef.matches(WorkflowManagedConnectorSecrets.REF_PATTERN))
+            return managed.requireSecret(secretRef);
         if (secretRef == null || !SECRET_REF.matcher(secretRef).matches())
         {
             throw new ServiceException("连接器密钥引用不合法", HttpStatus.ERROR);

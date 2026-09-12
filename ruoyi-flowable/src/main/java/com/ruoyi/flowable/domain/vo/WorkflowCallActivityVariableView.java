@@ -11,6 +11,9 @@ package com.ruoyi.flowable.domain.vo;
  * @param writable boolean，字段是否允许作为输入目标
  */
 public record WorkflowCallActivityVariableView(String name, String label, String type,
-        boolean required, boolean readable, boolean writable)
+        boolean required, boolean readable, boolean writable, boolean systemWritable)
 {
+    public WorkflowCallActivityVariableView(String name, String label, String type,
+            boolean required, boolean readable, boolean writable)
+    { this(name, label, type, required, readable, writable, false); }
 }

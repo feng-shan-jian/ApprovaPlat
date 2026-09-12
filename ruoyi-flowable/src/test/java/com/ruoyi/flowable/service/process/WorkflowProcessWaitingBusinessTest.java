@@ -47,7 +47,10 @@ class WorkflowProcessWaitingBusinessTest
                 while (engine.getTaskService().createTaskQuery().processInstanceId(instance.getId()).count() == 0 && System.nanoTime() < deadline)
                     Thread.sleep(100);
                 var task = engine.getTaskService().createTaskQuery().processInstanceId(instance.getId()).singleResult();
-                assertThat(task).isNotNull();
+                assertThat(task).withFailMessage("executor=%s, timers=%s, jobs=%s, deadLetters=%s, clock=%s, due=%s",
+                        configuration.getAsyncExecutor().isActive(), engine.getManagementService().createTimerJobQuery().count(),
+                        engine.getManagementService().createJobQuery().count(), engine.getManagementService().createDeadLetterJobQuery().count(),
+                        configuration.getClock().getCurrentTime(), job.getDuedate()).isNotNull();
                 assertThat(task.getTaskDefinitionKey()).isEqualTo("downstream");
                 assertThat(engine.getManagementService().createTimerJobQuery().jobId(job.getId()).count()).isZero();
                 assertThat(engine.getHistoryService().createHistoricActivityInstanceQuery().processInstanceId(instance.getId())

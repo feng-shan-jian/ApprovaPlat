@@ -62,7 +62,7 @@ async function mount(page, type, xml = boundaryXml(type)) {
       extensionKey: 'approva.collaboration-outbox', extensionName: '跨参与方可靠消息',
       extensionType: 'JAVA', implementationKey: 'COLLABORATION_OUTBOX_V1', versionId: 1, versionNo: 1
     }] : route.request().url().includes('/connector/options') ? [{
-      endpointId: 1, endpointKey: 'receiver', endpointName: '验收接收端'
+      endpointId: 1, endpointKey: 'receiver', endpointName: '验收接收端', available: true
     }] : []
     return route.fulfill({ json: { code: 200, data } })
   })
@@ -85,9 +85,55 @@ test('R06/R09 服务端诊断可定位画布元素，未知元素不可点击', 
   await expect(page.getByText('所属流程：designerRegression', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '定位元素 missingElement', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: '定位元素 dataRef', exact: true }).click()
-  await expect(page.getByRole('dialog', { name: '流程校验' })).not.toBeVisible()
+  await expect(page.getByRole('dialog', { name: '正式保存校验' })).not.toBeVisible()
   await expect(page.locator('.djs-element.selected[data-element-id="dataRef"]')).toBeVisible()
   expect(await page.evaluate(() => window.designerRegression.xml)).toBe(before)
+})
+
+test('R01 损坏文件导入保留当前画布、选中节点和撤销栈', async ({ page }) => {
+  await mount(page, 'timerEventDefinition')
+  await page.locator('[data-element-id="review"] .djs-hit').click()
+  const name = page.locator('.el-form-item').filter({ hasText: '元素名称' }).locator('input')
+  await name.fill('保留最后编辑')
+  await name.press('Tab')
+  await expect.poll(() => page.evaluate(() => window.designerRegression.xml)).toContain('保留最后编辑')
+  await page.locator('input[type=file]').setInputFiles({ name: 'broken.bpmn', mimeType: 'application/xml', buffer: Buffer.from('<definitions><broken') })
+  await expect.poll(() => page.evaluate(() => window.designerRegression.errors.length)).toBe(1)
+  await expect(page.locator('.djs-element.selected[data-element-id="review"]')).toBeVisible()
+  expect(await page.evaluate(() => window.designerRegression.xml)).toContain('保留最后编辑')
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => window.designerRegression.xml)).not.toContain('保留最后编辑')
+})
+
+test('R02 导入存量不兼容消息配置明确诊断，修复可撤销', async ({ page }) => {
+  const xml = boundaryXml('signalEventDefinition').replace('<signalEventDefinition/>',
+    '<extensionElements><flowable:properties><flowable:property name="approva.messageThrow.config" value="{}"/><flowable:property name="business.note" value="keep"/></flowable:properties></extensionElements><signalEventDefinition/>')
+  await mount(page, 'signalEventDefinition', xml)
+  await page.locator('[data-element-id="boundary"] .djs-hit').click()
+  await expect(page.getByText('当前事件仍携带消息专用配置，不能保存或部署。')).toBeVisible()
+  await page.getByRole('button', { name: '移除不兼容配置（可撤销）' }).click()
+  await expect.poll(() => page.evaluate(() => window.designerRegression.xml)).not.toContain('approva.messageThrow.config')
+  expect(await page.evaluate(() => window.designerRegression.xml)).toContain('business.note')
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => window.designerRegression.xml)).toContain('approva.messageThrow.config')
+  await expect(page.getByText('当前事件仍携带消息专用配置，不能保存或部署。')).toBeVisible()
+})
+
+test('R06 内嵌系统结果显式授权并禁止用户可写，撤销恢复原权限', async ({ page }) => {
+  const xml = boundaryXml('timerEventDefinition').replace('<startEvent id="start" flowable:formKey="key_7"/>',
+    '<startEvent id="start"><extensionElements><flowable:formProperty id="result" name="结果" type="long" readable="true" writable="true"/></extensionElements></startEvent>')
+  await mount(page, 'timerEventDefinition', xml)
+  await page.locator('[data-element-id="start"] .djs-hit').click()
+  await page.getByRole('button', { name: '展开全部属性分区' }).click()
+  const checkbox = page.getByRole('checkbox', { name: '系统回填、用户只读' })
+  await page.getByText('系统回填、用户只读', { exact: true }).click()
+  await expect(page.getByRole('checkbox', { name: '可写', exact: true })).toBeDisabled()
+  await expect.poll(() => page.evaluate(() => window.designerRegression.xml)).toContain('systemWritable="true"')
+  const exported = await page.evaluate(() => window.designerRegression.xml)
+  expect(exported).toContain('writable="false"')
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(checkbox).not.toBeChecked()
+  await expect(page.getByRole('checkbox', { name: '可写', exact: true })).toBeEnabled()
 })
 
 test('R06 消息抛出保持原图元，业务配置可回读和撤销', async ({ page }) => {
@@ -119,6 +165,31 @@ test('R06 消息抛出保持原图元，业务配置可回读和撤销', async (
   await page.locator('[data-element-id="boundary"] .djs-hit').click()
   await expect(target).toHaveValue('receiverProcess')
   expect(await page.evaluate(() => window.designerRegression.errors)).toEqual([])
+})
+
+test('R02 消息转信号清理专有配置，同一次撤销恢复且共享消息定义保留', async ({ page }) => {
+  const xml = boundaryXml('messageEventDefinition')
+    .replace('<process id=', '<message id="notice" name="notice"/><process id=')
+    .replace('<boundaryEvent id="boundary" attachedToRef="review" cancelActivity="true"><messageEventDefinition/></boundaryEvent>',
+      '<intermediateThrowEvent id="boundary" name="通知"><extensionElements><flowable:properties>' +
+      '<flowable:property name="approva.messageThrow.config" value="{}"/>' +
+      '<flowable:property name="business.note" value="keep"/></flowable:properties></extensionElements>' +
+      '<messageEventDefinition messageRef="notice"/></intermediateThrowEvent>')
+  await mount(page, 'messageEventDefinition', xml)
+  await page.locator('[data-element-id="boundary"] .djs-hit').click()
+  await page.locator('.djs-context-pad [data-action="replace"]').click()
+  await page.locator('[data-id="replace-with-signal-intermediate-throw"]').click()
+  const current = () => page.evaluate(() => window.designerRegression.xml)
+  await expect.poll(current).not.toContain('approva.messageThrow.config')
+  expect(await current()).toContain('signalEventDefinition')
+  expect(await current()).toContain('business.note')
+  expect(await current()).toContain('id="notice"')
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect.poll(current).toContain('approva.messageThrow.config')
+  expect(await current()).toContain('messageEventDefinition')
+  await page.getByRole('button', { name: '重做', exact: true }).click()
+  await expect.poll(current).not.toContain('approva.messageThrow.config')
+  expect(await current()).toContain('signalEventDefinition')
 })
 
 async function readBoundary(page) {
@@ -250,6 +321,16 @@ test('R10 从第二池编辑本地流程，独立配置执行标志及开始表�
   await page.getByRole('button', { name: '编辑所属流程', exact: true }).click()
   await page.getByRole('button', { name: '展开全部属性分区' }).click()
   const executable = page.getByRole('switch', { name: '可执行流程' })
+  const scopeEditor = page.locator('.participant-rule-editor').first()
+  const scope = scopeEditor.locator('.el-form-item').first().locator('.el-select')
+  await expect(scope).toContainText('未配置，请选择')
+  await scope.click()
+  await page.getByRole('option', { name: '指定用户', exact: true }).click()
+  // 选择类型触发真实 element.changed 回读，尚未选对象时必须保留第二步入口。
+  await expect(scopeEditor.locator('.el-form-item').nth(1).locator('.el-select')).toBeVisible()
+  await expect(scope).toContainText('指定用户')
+  await scope.click()
+  await page.getByRole('option', { name: '公开', exact: true }).click()
   await expect(executable).toBeChecked()
   await page.locator('.el-switch').filter({ has: executable }).click()
   await page.getByRole('textbox', { name: '版本标签', exact: true }).fill('second-pool-v1')

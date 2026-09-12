@@ -10,7 +10,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -122,6 +121,7 @@ public class WorkflowHttpConnector
         }
         ParsedConfig parsed = parseAuthor(config, AUTHOR_FIELDS);
         WfConnectorEndpoint endpoint = endpointService.lockEnabledForDeployment(parsed.endpointKey());
+        if (!"NONE".equals(endpoint.getAuthType())) secretResolver.requireSecret(endpoint.getSecretRef());
         if (!Set.of(endpoint.getAllowedMethods().split(",")).contains(parsed.method()))
         {
             throw new ServiceException("HTTP 方法不在端点白名单中", HttpStatus.BAD_REQUEST);
@@ -573,6 +573,7 @@ public class WorkflowHttpConnector
     private void applyAuthentication(HttpRequest.Builder builder, EndpointSnapshot endpoint)
     {
         if ("NONE".equals(endpoint.authType())) return;
+        endpointService.requireManagedRuntimeEndpoint(endpoint.endpointId(), endpoint.secretRef());
         String secret = secretResolver.requireSecret(endpoint.secretRef());
         if ("BEARER".equals(endpoint.authType()))
             builder.header("Authorization", "Bearer " + secret);

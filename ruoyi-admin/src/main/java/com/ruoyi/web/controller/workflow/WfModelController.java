@@ -60,6 +60,7 @@ public class WfModelController extends BaseController
     private static final int MAX_EXPORT_ROWS = 5000;
 
     private final WorkflowModelService modelService;
+    private final com.ruoyi.flowable.service.model.WorkflowModelDesignDraftService designDraftService;
 
     private final IWfCategoryService categoryService;
 
@@ -71,10 +72,12 @@ public class WfModelController extends BaseController
      * @return 无返回值，构造后由 Spring 管理该 Controller
      */
     public WfModelController(WorkflowModelService modelService,
-            IWfCategoryService categoryService)
+            IWfCategoryService categoryService,
+            com.ruoyi.flowable.service.model.WorkflowModelDesignDraftService designDraftService)
     {
         this.modelService = modelService;
         this.categoryService = categoryService;
+        this.designDraftService = designDraftService;
     }
 
     /**
@@ -190,6 +193,13 @@ public class WfModelController extends BaseController
         return success(result);
     }
 
+    @PreAuthorize("@ss.hasPermi('workflow:model:designer') and @ss.hasPermi('workflow:model:deploy')")
+    @PostMapping("/preflight")
+    public AjaxResult preflight(@Valid @RequestBody WorkflowModelSaveRequest request)
+    {
+        return success(modelService.preflight(request.modelId(), request.expectedRevision(), request.bpmnXml()));
+    }
+
     /**
      * 使用保存和部署共同服务端门禁编译校验 BPMN，不产生模型或部署写副作用。
      *
@@ -232,7 +242,7 @@ public class WfModelController extends BaseController
             @PathVariable @NotEmpty(message = "模型主键不能为空")
             @Size(max = 100, message = "单次最多删除100个模型") String[] modelIds)
     {
-        modelService.deleteModels(Arrays.asList(modelIds));
+        designDraftService.deleteModelsAndDrafts(Arrays.asList(modelIds));
         return success();
     }
 

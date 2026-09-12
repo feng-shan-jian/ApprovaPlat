@@ -19,16 +19,23 @@
         </div>
       </div>
       <div class="model-design-page__format" aria-label="建模格式 BPMN 2.0，执行引擎 Flowable">
+        <el-tag :type="dirty ? 'warning' : 'success'">{{ dirty ? '有未正式保存的修改' : '已保存' }}</el-tag>
+        <el-button :loading="draftSaving" :disabled="!ready || saving" @click="saveDraft()">保留设计草稿</el-button>
         <span>BPMN 2.0</span>
         <i />
         <span>Flowable</span>
       </div>
     </div>
 
+    <el-alert v-if="draftError" :title="draftError" type="warning" show-icon :closable="false">
+      <el-button text @click="inspectRemoteDraft">比较远端草稿</el-button>
+    </el-alert>
     <ProcessDesigner
       v-if="ready"
+      ref="designerRef"
       v-model="bpmnXml"
       :model="model"
+      :focus-element-id="String(route.query.focusElement || '')"
       :forms="formOptions"
       :identity-options="identityOptions"
       :identity-loading="identityLoading"
@@ -41,15 +48,40 @@
       @preference-save="savePreference"
       @preference-reset="restoreDefaultPreference"
       @save="saveDesign"
+      @editing="markEditing"
+      @loaded="designerLoaded"
       @error="showDesignerError"
     />
+    <el-dialog v-model="leaveVisible" title="保留当前设计" width="480px" :close-on-click-modal="false" @closed="resolveLeave(false)">
+      <p>当前设计尚未正式保存。可以保留服务端草稿后离开，返回后继续配置。</p>
+      <template #footer>
+        <el-button @click="resolveLeave(false)">继续编辑</el-button>
+        <el-button type="danger" plain @click="abandonAndLeave">放弃本次修改</el-button>
+        <el-button type="primary" :loading="draftSaving" @click="saveAndLeave">保留草稿后离开</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="compareVisible" title="设计草稿恢复与冲突处理" width="80%" :close-on-click-modal="false">
+      <el-alert :title="remoteDraft?.baseModelRevision === model.revision ? '比较草稿与当前画布，再选择要继续编辑的内容。' : '正式模型已更新。草稿基于旧修订，恢复后仍须重新校验并保存为新版本。'" type="warning" :closable="false" />
+      <div class="model-design-page__comparison">
+        <div><p>当前画布（保留在本页）</p><el-input :model-value="comparisonXml" type="textarea" :rows="12" readonly /></div>
+        <div><p>本人服务端草稿 · 修订 {{ remoteDraft?.revision }}</p><el-input :model-value="remoteDraft?.bpmnXml || '无草稿内容'" type="textarea" :rows="12" readonly /></div>
+        <div v-if="remoteModel && remoteModel.revision !== model.revision"><p>远端正式模型 · 修订 {{ remoteModel.revision }}</p><el-input :model-value="remoteFormalXml" type="textarea" :rows="12" readonly /></div>
+      </div>
+      <template #footer>
+        <el-button @click="compareVisible = false">稍后处理</el-button>
+        <el-button @click="chooseCurrentDraft">保留当前画布继续编辑</el-button>
+        <el-button :disabled="!remoteDraft?.bpmnXml" type="primary" @click="restoreRemoteDraft">恢复服务端草稿</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup name="WorkflowModelDesign">
 import { listForms } from '@/api/workflow/form'
 import { listApprovalUserOptions, listClaimableIdentityOptions, listIdentityOptions, resolveIdentityOptions } from '@/api/workflow/identity'
-import { getModel, getModelBpmnXml, saveModel } from '@/api/workflow/model'
+import { getModel, getModelBpmnXml, saveModel, getModelDesignDraft, saveModelDesignDraft, discardModelDesignDraft } from '@/api/workflow/model'
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
+import { registerPageLeaveGuard } from '@/utils/pageLeaveGuards'
 import ProcessDesigner from '@/components/workflow/ProcessDesigner.vue'
 import useUserStore from '@/store/modules/user'
 import {
@@ -67,6 +99,27 @@ const loading = ref(false)
 const saving = ref(false)
 const preferenceSaving = ref(false)
 const ready = ref(false)
+const designerRef = ref(null)
+const dirty = ref(false)
+const draftSaving = ref(false)
+const draftError = ref('')
+const leaveVisible = ref(false)
+const compareVisible = ref(false)
+const remoteDraft = ref(null)
+const comparisonXml = ref('')
+const remoteModel = ref(null)
+const remoteFormalXml = ref('')
+let draftRevision = 0
+let editSequence = 0
+let draftTimer
+let leaveApproved = false
+let resolvePendingLeave
+let pendingLeave
+let draftLoaded = false
+let lastDraftXml = ''
+let lastSavedXml = ''
+const pagePath = route.path
+const pageModelId = String(route.params.modelId || '').trim()
 const bpmnXml = ref('')
 const model = reactive({})
 const formOptions = ref([])
@@ -87,8 +140,128 @@ const identityRequestVersion = {
  * @returns {string} 去除首尾空白的模型主键。
  */
 function currentModelId() {
-  return String(route.params.modelId || '').trim()
+  return pageModelId
 }
+
+function markEditing() {
+  dirty.value = true
+  leaveApproved = false
+  editSequence += 1
+  window.clearTimeout(draftTimer)
+  draftTimer = window.setTimeout(() => {
+    if (dirty.value && draftLoaded && !draftError.value && !compareVisible.value && !saving.value) saveDraft(true)
+  }, 2000)
+}
+
+function designerLoaded(xml) {
+  lastSavedXml = xml
+  if (remoteDraft.value?.bpmnXml) inspectRemoteDraft(false)
+}
+
+async function saveDraft(quiet = false) {
+  if (quiet && !dirty.value) return true
+  if (draftSaving.value || !draftLoaded) return false
+  draftSaving.value = true
+  try {
+    const xml = await designerRef.value.flushXml(!quiet)
+    if (xml === lastDraftXml && !draftError.value) return true
+    const response = await saveModelDesignDraft(currentModelId(), {
+      baseModelRevision: model.revision, expectedRevision: draftRevision, bpmnXml: xml
+    })
+    draftRevision = response.data.revision
+    lastDraftXml = xml
+    draftError.value = ''
+    if (!quiet) proxy.$modal.msgSuccess('设计草稿已保留到服务器')
+    return true
+  } catch (error) {
+    draftError.value = error?.message || '设计草稿保存失败，当前画布已保留，请重试'
+    return false
+  } finally { draftSaving.value = false }
+}
+
+async function inspectRemoteDraft(refresh = true) {
+  if (refresh) {
+    const [draft, current, formal] = await Promise.all([getModelDesignDraft(currentModelId()), getModel(currentModelId()), getModelBpmnXml(currentModelId())])
+    remoteDraft.value = draft.data
+    remoteModel.value = current.data
+    remoteFormalXml.value = formal.data
+  }
+  comparisonXml.value = await designerRef.value.flushXml()
+  compareVisible.value = true
+}
+
+function chooseCurrentDraft() {
+  if (remoteModel.value) Object.assign(model, remoteModel.value)
+  draftRevision = remoteDraft.value?.revision || 0
+  draftLoaded = true
+  lastDraftXml = ''
+  draftError.value = ''
+  compareVisible.value = false
+  markEditing()
+}
+
+function restoreRemoteDraft() {
+  if (remoteModel.value) Object.assign(model, remoteModel.value)
+  draftRevision = remoteDraft.value.revision
+  draftLoaded = true
+  lastDraftXml = remoteDraft.value.bpmnXml
+  bpmnXml.value = remoteDraft.value.bpmnXml
+  draftError.value = ''
+  compareVisible.value = false
+  markEditing()
+}
+
+async function confirmLeave() {
+  if (!ready.value || leaveApproved) return true
+  if (saving.value || draftSaving.value) return false
+  const currentXml = await designerRef.value.flushXml()
+  if (currentXml === lastSavedXml) dirty.value = false
+  if (!dirty.value) return true
+  if (!pendingLeave) {
+    pendingLeave = new Promise(resolve => { resolvePendingLeave = resolve })
+    leaveVisible.value = true
+  }
+  return pendingLeave
+}
+
+function resolveLeave(approved) {
+  if (!resolvePendingLeave) return
+  leaveApproved = approved
+  const resolve = resolvePendingLeave
+  resolvePendingLeave = null
+  pendingLeave = null
+  leaveVisible.value = false
+  resolve(approved)
+}
+
+async function saveAndLeave() {
+  if (await saveDraft()) resolveLeave(true)
+}
+
+async function abandonAndLeave() {
+  if (draftRevision > 0) {
+    try { draftRevision = (await discardModelDesignDraft(currentModelId(), draftRevision)).data.revision }
+    catch { return }
+  }
+  window.clearTimeout(draftTimer)
+  resolveLeave(true)
+}
+
+function protectBrowserClose(event) {
+  if (dirty.value && !leaveApproved) { event.preventDefault(); event.returnValue = '' }
+}
+
+const unregisterLeave = registerPageLeaveGuard(pagePath, confirmLeave)
+onBeforeRouteLeave(confirmLeave)
+onBeforeRouteUpdate(confirmLeave)
+onActivated(() => { leaveApproved = false })
+window.addEventListener('beforeunload', protectBrowserClose)
+onBeforeUnmount(() => {
+  unregisterLeave()
+  window.clearTimeout(draftTimer)
+  window.removeEventListener('beforeunload', protectBrowserClose)
+  resolveLeave(false)
+})
 
 /**
  * 分页加载全部有效表单，确保 BPMN 节点可以引用任一正式模板。
@@ -274,9 +447,10 @@ async function loadDesigner() {
   loading.value = true
   ready.value = false
   try {
-    const [modelResponse, xmlResponse] = await Promise.all([
+    const [modelResponse, xmlResponse, draftResponse] = await Promise.all([
       getModel(modelId),
       getModelBpmnXml(modelId),
+      getModelDesignDraft(modelId),
       loadAllForms(),
       searchIdentityDirectory({ target: 'assignees', type: 'user', capability: 'approval', keyword: '' }),
       searchIdentityDirectory({ target: 'candidateUsers', type: 'user', capability: 'claim', keyword: '' }),
@@ -292,6 +466,9 @@ async function loadDesigner() {
     Object.assign(model, modelResponse.data || {})
     Object.assign(designerPreference, loadDesignerPreference(userStore.id))
     bpmnXml.value = xmlResponse.data || ''
+    remoteDraft.value = draftResponse.data
+    draftRevision = remoteDraft.value?.revision || 0
+    draftLoaded = true
     ready.value = true
   } finally {
     loading.value = false
@@ -328,6 +505,8 @@ function restoreDefaultPreference() {
  * @returns {Promise<void>} 保存成功后同步实际模型版本主键和元数据。
  */
 async function saveDesign(xml) {
+  if (saving.value || draftSaving.value) return
+  const savingSequence = editSequence
   saving.value = true
   try {
     const sourceModelId = currentModelId()
@@ -351,11 +530,34 @@ async function saveDesign(xml) {
       version: savedVersion,
       revision: savedRevision
     })
-    proxy.$modal.msgSuccess('流程设计保存成功')
+    lastSavedXml = xml
+    if (savingSequence === editSequence) {
+      dirty.value = false
+      window.clearTimeout(draftTimer)
+    }
+    // 只回读正式元数据，不重导画布；保存期间产生的新编辑及撤销栈继续保留。
+    try {
+      const savedMetadata = (await getModel(savedModelId)).data
+      if (Number(savedMetadata?.revision) === savedRevision) Object.assign(model, savedMetadata)
+      else draftError.value = '模型已被其他页面更新，请比较正式版本后继续保存'
+    } catch {
+      draftError.value = '模型已保存，版本信息回读失败，请刷新后核对'
+    }
     if (savedModelId !== currentModelId()) {
+      // 新版本会重新挂载页面，先将保存期间的后续编辑写入该版本专属草稿。
+      if (dirty.value) {
+        const currentXml = await designerRef.value.flushXml()
+        await saveModelDesignDraft(savedModelId, { baseModelRevision: savedRevision, expectedRevision: 0, bpmnXml: currentXml })
+      }
+      leaveApproved = true
       await router.replace({ name: 'WorkflowModelDesign', params: { modelId: savedModelId } })
     }
-    await loadDesigner()
+    if (draftRevision > 0 && savingSequence === editSequence) {
+      try { draftRevision = (await discardModelDesignDraft(sourceModelId, draftRevision)).data.revision }
+      catch { draftError.value = '正式模型已保存，但远端草稿已变化，请比较后处理' }
+    }
+    // 不重新加载画布：晚到响应只能确认它保存的修订，不能覆盖新编辑与命令栈。
+    proxy.$modal.msgSuccess('流程设计保存成功')
   } finally {
     saving.value = false
   }
@@ -395,6 +597,17 @@ loadDesigner()
   min-height: 0;
   padding-top: 12px;
   overflow: hidden;
+}
+
+.model-design-page__comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.model-design-page > .el-alert {
+  flex: none;
 }
 
 .model-design-page__header {

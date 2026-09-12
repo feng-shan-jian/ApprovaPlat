@@ -67,8 +67,8 @@ export default [
       }
     },
     rules: {
-      // 历史页面仍有待逐步清理的未使用回调参数；保留 warning 可见性，不掩盖运行时错误。
-      'no-unused-vars': ['warn', {
+      // 拒绝未使用的状态、依赖和回调参数，避免死代码重新进入生产路径。
+      'no-unused-vars': ['error', {
         argsIgnorePattern: '^_',
         caughtErrorsIgnorePattern: '^_',
         varsIgnorePattern: '^_'

@@ -1,0 +1,17 @@
+{
+  "authorChecksum": "11098bd016710fcfb6885625fe54c01f2730fa92e741c29c6d72a0512d71477d",
+  "modelRevision": 4,
+  "compiledResourceChecksum": null,
+  "valid": false,
+  "issues": [
+    {
+      "code": "BPMN_EXTENSION_CONFIG_INVALID",
+      "severity": "ERROR",
+      "elementId": "Activity_10q0xm0",
+      "message": "HTTP 连接器端点不存在或已停用",
+      "processId": "r12_native_design",
+      "fieldPath": "extension.config",
+      "suggestion": "检查该节点的业务扩展、端点状态及凭据；资源恢复后重新预检"
+    }
+  ]
+}

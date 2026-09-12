@@ -36,11 +36,12 @@
       <el-descriptions-item label="发起人">{{ detail.startUserName || detail.startUserId || '-' }}</el-descriptions-item>
       <el-descriptions-item label="发起时间">{{ formatDate(detail.startTime) }}</el-descriptions-item>
       <el-descriptions-item label="结束时间">{{ formatDate(detail.endTime) }}</el-descriptions-item>
-      <el-descriptions-item label="当前任务">{{ detail.currentTask?.taskName || '-' }}</el-descriptions-item>
+      <el-descriptions-item label="当前任务">{{ detail.currentTask?.active ? detail.currentTask.taskName : currentActivityNames || '-' }}</el-descriptions-item>
       <el-descriptions-item label="流程耗时">{{ formatDuration(detail.durationMillis) }}</el-descriptions-item>
     </el-descriptions>
 
-    <ProcessWaitingEvents v-if="ready" :process-instance-id="detail.processInstanceId" />
+    <el-alert v-if="observationError" :title="observationError" type="warning" :closable="false" />
+    <ProcessWaitingEvents v-if="ready" :process-instance-id="detail.processInstanceId" :snapshot="waitingSnapshot" :activity-instances="detail.flowViewer?.activityInstances || []" :loading="observationBusy" @refresh="refreshObservation" />
 
     <section v-if="processRelations.length > 1" class="workflow-detail__relations" aria-labelledby="process-relations-title">
       <div class="workflow-detail__relations-heading">
@@ -506,7 +507,7 @@
 </template>
 
 <script setup name="WorkflowProcessDetail">
-import { getProcessDetail } from '@/api/workflow/process'
+import { getProcessObservation } from '@/api/workflow/process'
 import {
   adjustMultiInstance,
   completeTask,
@@ -539,6 +540,12 @@ const actionBusy = ref(false)
 const urgeBusy = ref(false)
 const activeTab = ref('applicationForm')
 const detail = reactive({})
+const waitingSnapshot = ref(null)
+const observationError = ref('')
+const observationBusy = ref(false)
+const currentActivityNames = computed(() => [...new Set((detail.flowViewer?.activityInstances || [])
+  .filter(activity => activity.state === 'WAITING').map(activity => activity.activityName || activity.activityId))].join('、'))
+let observationSequence = 0, observationTimer, observationFailures = 0, observationActive = true
 const taskFormValues = ref({})
 // 申请表单和本节点表单必须保持独立语义；开始快照绝不进入历史节点列表。
 const applicationForm = ref(null)
@@ -854,6 +861,7 @@ function clearDetailState(preserveMultiInstanceDraft = false) {
  * @returns {Promise<void>} 详情及附件元数据均加载成功后将页面置为可用状态。
  */
 async function loadDetail(preserveMultiInstanceDraft = false) {
+  observationSequence += 1
   // 序号用于淘汰路由快速切换时晚到的旧响应，防止旧权限快照重新写回页面。
   const requestSequence = ++detailLoadSequence
   if (!validateRouteParams()) {
@@ -867,9 +875,9 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
   ready.value = false
   clearDetailState(preserveMultiInstanceDraft)
   try {
-    const response = await getProcessDetail(expectedProcessInstanceId, routeTaskId() || undefined)
+    const response = await getProcessObservation(expectedProcessInstanceId, routeTaskId() || undefined)
     if (requestSequence !== detailLoadSequence || processInstanceId() !== expectedProcessInstanceId) return
-    const payload = response.data || {}
+    const payload = response.data?.detail || {}
     if (String(payload.processInstanceId || '').trim() !== expectedProcessInstanceId) {
       throw new Error('流程详情实例关系不一致')
     }
@@ -884,6 +892,8 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
     }))
     if (requestSequence !== detailLoadSequence || processInstanceId() !== expectedProcessInstanceId) return
     Object.assign(detail, payload)
+    waitingSnapshot.value = response.data.waiting
+    observationError.value = ''
     taskFormValues.value = currentValues
     applicationForm.value = formDetail.applicationForm
     applicationFormValues.value = hydratedApplicationValues
@@ -899,8 +909,63 @@ async function loadDetail(preserveMultiInstanceDraft = false) {
     }
   } finally {
     if (requestSequence === detailLoadSequence) loading.value = false
+    scheduleObservation()
   }
 }
+
+function scheduleObservation() {
+  window.clearTimeout(observationTimer)
+  if (observationActive && !document.hidden) {
+    observationTimer = window.setTimeout(refreshObservation, Math.min(3000 * (2 ** observationFailures), 30000))
+  }
+}
+
+async function refreshObservation() {
+  if (!observationActive || document.hidden) return
+  // 对话框的 CAS 修订取自开始填写时的状态；后台刷新不得重绑正在提交的动作。
+  if (!ready.value || loading.value || observationBusy.value || actionBusy.value || multiInstanceBusy.value
+    || urgeBusy.value || actionDialog.visible || multiInstanceDialog.visible || urgeDialog.visible) {
+    scheduleObservation(); return
+  }
+  const sequence = ++observationSequence
+  const detailSequence = detailLoadSequence
+  const expectedId = processInstanceId()
+  observationBusy.value = true
+  try {
+    const response = await getProcessObservation(expectedId, routeTaskId() || undefined, true)
+    if (sequence !== observationSequence || detailSequence !== detailLoadSequence || expectedId !== processInstanceId()) return
+    const payload = response.data?.detail
+    if (payload?.processInstanceId !== expectedId || response.data?.waiting?.processInstanceId !== expectedId) throw new Error('运行状态响应不完整')
+    // 同一任务的输入值属于用户。更新服务端能力、轨迹和等待事实，保留表单输入及当前标签。
+    Object.assign(detail, payload)
+    waitingSnapshot.value = response.data.waiting
+    historyForms.value = payload.formDetail.historyForms.map(form => ({ ...form, hydratedValues: cloneJson(form.values || {}) }))
+    observationError.value = ''
+    observationFailures = 0
+  } catch (error) {
+    if (sequence === observationSequence) {
+      observationFailures += 1
+      observationError.value = error.message || '状态刷新失败，当前显示上次成功查询的结果，稍后重试'
+    }
+  } finally {
+    observationBusy.value = false
+    scheduleObservation()
+  }
+}
+
+function observationVisibilityChanged() {
+  if (document.hidden) { observationSequence += 1; window.clearTimeout(observationTimer) }
+  else refreshObservation()
+}
+
+document.addEventListener('visibilitychange', observationVisibilityChanged)
+onDeactivated(() => { observationActive = false; observationSequence += 1; window.clearTimeout(observationTimer) })
+onBeforeUnmount(() => {
+  observationActive = false
+  observationSequence += 1
+  window.clearTimeout(observationTimer)
+  document.removeEventListener('visibilitychange', observationVisibilityChanged)
+})
 
 /**
  * 打开通过、驳回或委派办结对话框，并按字段用途加载审批资格或通用抄送目录。
@@ -1876,8 +1941,9 @@ const initialDetailLoad = loadDetail().finally(() => {
  * @returns {Promise<void>} 首次加载后从真实详情接口刷新页面状态。
  */
 onActivated(async () => {
+  observationActive = true
   if (!detailPageInitialized) return initialDetailLoad
-  await loadDetail()
+  await refreshObservation()
 })
 </script>
 

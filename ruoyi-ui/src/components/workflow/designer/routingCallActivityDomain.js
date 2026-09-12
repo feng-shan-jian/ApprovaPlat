@@ -268,7 +268,8 @@ export function createRoutingCallActivityDomain(context) {
             type: embeddedCallFieldType(field.type),
             required: field.required === true,
             readable: field.readable !== false,
-            writable: field.writable !== false
+            writable: field.writable !== false,
+            systemWritable: field.systemWritable === true && field.readable !== false && field.writable === false
           }))
           mergeCallVariableFields(fields, embedded)
           const form = formFieldCatalog.resolveTemplateForm(element)
@@ -297,7 +298,8 @@ export function createRoutingCallActivityDomain(context) {
         if (!policy.defaultMode || !mode) return null
         return name && type ? { name, label: field?.label || name, type,
           required: mode === 'REQUIRED', readable: mode !== 'HIDDEN',
-          writable: ['EDITABLE', 'REQUIRED'].includes(mode) } : null
+          writable: ['EDITABLE', 'REQUIRED'].includes(mode),
+          systemWritable: field.workflowSystemWritable === true && mode === 'READONLY' } : null
       }).filter(Boolean)
   }
 
@@ -351,7 +353,8 @@ export function createRoutingCallActivityDomain(context) {
       else target.set(field.name, { ...previous,
         required: previous.required || field.required,
         readable: previous.readable && field.readable,
-        writable: previous.writable && field.writable })
+        writable: previous.writable && field.writable,
+        systemWritable: previous.systemWritable === true && field.systemWritable === true })
     }
   }
 
@@ -568,7 +571,8 @@ export function createRoutingCallActivityDomain(context) {
       readCallMappings(callActivity, 'flowable:Out'),
       target.outputFields || [],
       parentFields,
-      `${nodeName}输出`
+      `${nodeName}输出`,
+      true
     )
   }
 
@@ -578,9 +582,10 @@ export function createRoutingCallActivityDomain(context) {
    * @param {Array<object>} sourceFields 来源变量字段目录。
    * @param {Array<object>} targetFields 目标变量字段目录。
    * @param {string} direction 包含节点名称的输入或输出方向。
+   * @param {boolean} allowSystemOutput 仅调用输出方向允许显式授权的系统结果。
    * @returns {string} 空串表示通过，否则返回稳定业务错误。
    */
-  function validateCallMappings(mappings, sourceFields, targetFields, direction) {
+  function validateCallMappings(mappings, sourceFields, targetFields, direction, allowSystemOutput = false) {
     if (mappings.length > 64) return `${direction}变量映射不能超过64项`
     const sources = new Map(sourceFields.map(field => [field.name, field]))
     const targets = new Map(targetFields.map(field => [field.name, field]))
@@ -593,7 +598,10 @@ export function createRoutingCallActivityDomain(context) {
       usedTargets.add(targetName)
       const source = sources.get(sourceName)
       const target = targets.get(targetName)
-      if (!source?.readable || !target?.writable) return `${direction}变量不在可映射字段目录中`
+      if (!source) return `${direction}来源字段不存在：${mapping.source}`
+      if (!target) return `${direction}目标字段不存在：${mapping.target}`
+      if (!source.readable) return `${direction}来源字段不可读：${mapping.source}`
+      if (!target.writable && !(allowSystemOutput && target.systemWritable === true && target.readable)) return `${direction}目标字段不可写且未授权系统回填：${mapping.target}`
       if (!callVariableTypesCompatible(source.type, target.type)) return `${direction}变量字段类型不兼容`
     }
     return ''

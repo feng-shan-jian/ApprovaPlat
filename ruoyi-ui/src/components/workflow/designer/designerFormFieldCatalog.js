@@ -49,6 +49,7 @@ export function createDesignerFormFieldCatalog(context = {}) {
         required: property.required === true,
         readable: property.readable !== false,
         writable: property.writable !== false,
+        ...(property.systemWritable === true ? { systemWritable: true } : {}),
         datePattern: property.datePattern || '',
         values: (property.values || []).map(value => ({ id: value.id || '', name: value.name || value.id || '' }))
       }))

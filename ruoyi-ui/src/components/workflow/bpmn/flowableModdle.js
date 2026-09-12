@@ -164,6 +164,7 @@ export default {
         { name: 'readable', isAttr: true, type: 'Boolean', default: true },
         { name: 'writable', isAttr: true, type: 'Boolean', default: true },
         { name: 'required', isAttr: true, type: 'Boolean', default: false },
+        { name: 'systemWritable', isAttr: true, type: 'Boolean', default: false },
         { name: 'values', type: 'Value', isMany: true }
       ]
     },

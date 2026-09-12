@@ -8,7 +8,6 @@ import java.util.Objects;
 import java.util.Set;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.RuntimeService;
-import org.flowable.engine.runtime.Execution;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.springframework.stereotype.Service;

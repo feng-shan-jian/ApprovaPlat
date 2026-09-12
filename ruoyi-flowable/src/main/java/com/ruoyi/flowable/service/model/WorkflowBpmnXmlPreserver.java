@@ -23,6 +23,40 @@ final class WorkflowBpmnXmlPreserver
             "dataStore", "property", "error", "escalation", "group", "textAnnotation", "association");
     private WorkflowBpmnXmlPreserver() { }
 
+    /**
+     * 旧设计器允许给数据关联填写显示名称，但 BPMN DataAssociation 不允许无命名空间 name。
+     * 仅执行副本移除这项显示元数据，关联、引用及作者资源保持不变；数据传递仍由正式映射负责。
+     */
+    static byte[] executableSource(byte[] source)
+    {
+        try
+        {
+            Document document = parse(source);
+            boolean changed = false;
+            for (String type : Set.of("dataInputAssociation", "dataOutputAssociation"))
+            {
+                var associations = document.getElementsByTagNameNS(BPMN, type);
+                for (int i = 0; i < associations.getLength(); i++)
+                {
+                    Element association = (Element) associations.item(i);
+                    if (association.hasAttribute("name"))
+                    {
+                        association.removeAttribute("name");
+                        changed = true;
+                    }
+                }
+            }
+            return changed ? serialize(document) : source;
+        }
+        catch (Exception exception)
+        {
+            ServiceException failure = new ServiceException("BPMN 数据关联编译失败", HttpStatus.ERROR)
+                    .setSubCode("BPMN_DATA_ASSOCIATION_COMPILATION_FAILED");
+            failure.initCause(exception);
+            throw failure;
+        }
+    }
+
     static byte[] restore(byte[] converted, byte[] source)
     {
         try
@@ -67,13 +101,7 @@ final class WorkflowBpmnXmlPreserver
                 changed = true;
             }
             if (!changed) return converted;
-            TransformerFactory factory = TransformerFactory.newInstance();
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "");
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            factory.newTransformer().transform(new DOMSource(target), new StreamResult(output));
-            return output.toByteArray();
+            return serialize(target);
         }
         catch (Exception exception)
         {
@@ -82,6 +110,17 @@ final class WorkflowBpmnXmlPreserver
             failure.initCause(exception);
             throw failure;
         }
+    }
+
+    private static byte[] serialize(Document document) throws Exception
+    {
+        TransformerFactory factory = TransformerFactory.newInstance();
+        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "");
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        factory.newTransformer().transform(new DOMSource(document), new StreamResult(output));
+        return output.toByteArray();
     }
 
     /** Flowable 会生成新的 collaboration ID；按已保留的 participant 身份恢复原容器。 */
@@ -131,7 +170,7 @@ final class WorkflowBpmnXmlPreserver
         return changed;
     }
 
-    private static Document parse(byte[] bytes) throws Exception
+    static Document parse(byte[] bytes) throws Exception
     {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setNamespaceAware(true);

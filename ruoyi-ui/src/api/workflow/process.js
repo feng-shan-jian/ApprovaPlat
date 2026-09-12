@@ -1,5 +1,9 @@
 import request from '@/utils/request'
 
+export function getProcessObservation(processInstanceId, taskId, quiet = false) {
+  return request({ url: '/workflow/process/observation', params: { processInstanceId, taskId }, suppressErrorMessage: quiet })
+}
+
 /**
  * 查询当前用户可发起的最新激活流程定义。
  * @param {object} query 定义过滤和分页参数。
@@ -109,19 +113,5 @@ export function getProcessBpmnXml(processDefinitionId, processInstanceId) {
     url: `/workflow/process/bpmnXml/${encodeURIComponent(processDefinitionId)}`,
     method: 'get',
     params: processInstanceId ? { processInstanceId } : undefined
-  })
-}
-
-/**
- * 查询对象授权后的完整流程详情。
- * @param {string} processInstanceId 流程实例主键。
- * @param {string|undefined} taskId 可选活动或历史任务主键。
- * @returns {Promise<object>} data 为表单、变量、轨迹、意见和 Viewer 状态。
- */
-export function getProcessDetail(processInstanceId, taskId) {
-  return request({
-    url: '/workflow/process/detail',
-    method: 'get',
-    params: { processInstanceId, taskId }
   })
 }

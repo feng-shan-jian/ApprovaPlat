@@ -1,5 +1,25 @@
 import request from '@/utils/request'
 
+/** 专用消息认证探测不会推进流程，不能替代隔离业务投递验收。 */
+export function checkConnectorAuthentication(endpointId) {
+  return request({ url: `/workflow/connector/${endpointId}/check`, method: 'post' })
+}
+
+/** 新令牌在服务端生成并原子绑定，响应仅包含账号和端点元数据。 */
+export function createAndBindIntegrationCredential(endpointId, data) {
+  return request({ url: `/workflow/connector/${endpointId}/integration-credential`, method: 'post', data })
+}
+
+export function getConnectorCredential(endpointId) {
+  return request({ url: `/workflow/connector/${endpointId}/credential`, method: 'get' })
+}
+export function bindConnectorCredential(endpointId, data) {
+  return request({ url: `/workflow/connector/${endpointId}/credential`, method: 'put', data, headers: { repeatSubmit: false } })
+}
+export function revokeConnectorCredential(endpointId, params) {
+  return request({ url: `/workflow/connector/${endpointId}/credential`, method: 'delete', params })
+}
+
 /**
  * 查询连接器端点管理清单。
  * @returns {Promise<object>} AjaxResult.data 为真实端点修订数组。

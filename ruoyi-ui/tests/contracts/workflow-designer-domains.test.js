@@ -316,6 +316,9 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   process.flowElements = [embeddedStart, templateTask, callActivity]
   const rolesRule = participantRuleDomain.normalizeParticipantRule(
     { type: 'ROLES', targetIds: ['ROLE12', 'ROLE35'], formField: '' }, true)
+  const emptyProcess = { $instanceOf(type) { return type === 'bpmn:Process' } }
+  assert.deepEqual(participantRuleDomain.readParticipantRule(emptyProcess),
+    { type: '', targetIds: [], formField: '' })
   assert.deepEqual(participantRuleDomain.participantRulePropertyItems(rolesRule, true), [
     { name: 'approva.startScope.ruleVersion', value: '1' },
     { name: 'approva.startScope.type', value: 'ROLES' },
@@ -363,10 +366,19 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
     { name: 'business.property', value: 'keep' }, ...formUserProperties
   ])
   const routingFacade = createRoutingCallActivityDomain(context)
+  const resultMapping = [{ source: 'value', target: 'result' }]
+  const resultSource = [{ name: 'value', type: 'NUMBER', readable: true }]
+  const systemResult = [{ name: 'result', type: 'NUMBER', readable: true, writable: false, systemWritable: true }]
+  assert.equal(routingFacade.validateCallMappings(resultMapping, resultSource, systemResult, 'C02调用模板子流程输出', true), '')
+  assert.match(routingFacade.validateCallMappings(resultMapping, resultSource, systemResult, 'C02调用模板子流程输入'), /目标字段不可写/)
+  assert.match(routingFacade.validateCallMappings(resultMapping, resultSource,
+    [{ ...systemResult[0], systemWritable: false }], 'C02调用模板子流程输出', true), /目标字段不可写/)
+  assert.match(routingFacade.validateCallMappings(resultMapping, resultSource,
+    [{ ...systemResult[0], readable: false }], 'C02调用模板子流程输出', true), /目标字段不可写/)
   assert.deepEqual(routingFacade.resolveCallActivityParentFields(callActivity), [
-    { name: 'approved', label: '是否通过', type: 'BOOLEAN', required: false, readable: true, writable: true },
-    { name: 'decision', label: '审批结论', type: 'SCALAR', required: false, readable: false, writable: false },
-    { name: 'readonlyNote', label: '只读说明', type: 'TEXT', required: false, readable: true, writable: false }
+    { name: 'approved', label: '是否通过', type: 'BOOLEAN', required: false, readable: true, writable: true, systemWritable: false },
+    { name: 'decision', label: '审批结论', type: 'SCALAR', required: false, readable: false, writable: false, systemWritable: false },
+    { name: 'readonlyNote', label: '只读说明', type: 'TEXT', required: false, readable: true, writable: false, systemWritable: false }
   ])
 
   const gateway = { $type: 'bpmn:ExclusiveGateway', outgoing: [{ id: 'Flow_1' }, { id: 'Flow_2' }] }

@@ -632,6 +632,7 @@ export function createFormParticipantDomain(context) {
       required: Boolean(field.required && field.writable),
       readable: Boolean(field.readable),
       writable: Boolean(field.writable),
+      systemWritable: field.systemWritable === true,
       datePattern: field.type === 'date' ? field.datePattern.trim() : undefined,
       values
     })

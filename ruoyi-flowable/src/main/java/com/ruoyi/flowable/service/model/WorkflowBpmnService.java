@@ -201,6 +201,21 @@ public class WorkflowBpmnService
         return validateDocument(bpmnBytes, false, ValidationContext.AUTHOR);
     }
 
+    /** 仅供不可部署的个人设计草稿使用，允许端点、表单及业务规则尚未配置。 */
+    public String validateDesignDraft(byte[] bytes, String modelKey)
+    {
+        if (bytes == null || bytes.length == 0 || bytes.length > MAX_BPMN_BYTES)
+            throw invalidBpmn("设计草稿为空或超过 2 MB", null);
+        String xml = decodeUtf8(bytes);
+        String lower = xml.toLowerCase(Locale.ROOT);
+        if (lower.contains("<!doctype") || lower.contains("<!entity"))
+            throw invalidBpmn("设计草稿不允许 DTD 或实体声明", null);
+        var parsed = parseSecurely(xml);
+        if (parsed.getProcesses().stream().noneMatch(process -> modelKey.equals(process.getId())))
+            throw invalidBpmn("设计草稿必须包含当前模型所属流程", null);
+        return xml;
+    }
+
     /**
      * 校验部署编译器生成的可执行 BPMN；固定调度器必须保留，作者扩展字段必须已经剥离。
      *
@@ -248,6 +263,8 @@ public class WorkflowBpmnService
             validateRawBusinessBoundarySemantics(bpmnXml);
             validateDataObjects(bpmnXml);
             org.flowable.bpmn.model.BpmnModel bpmnModel = parseSecurely(bpmnXml);
+            WorkflowSystemOutputContract.apply(bpmnXml, bpmnModel);
+            WorkflowDataAssociationContract.validate(bpmnBytes);
             List<WorkflowBpmnFormReference> references = validateModel(
                     bpmnModel, requireStartForm, validationContext);
             validateRawExpressions(bpmnXml,
@@ -863,10 +880,10 @@ public class WorkflowBpmnService
             // 多实例结构和动态成员初始化拓扑必须先于顺序流表达式校验，确保不可执行拓扑返回准确诊断。
             validateMultiInstanceActivities(process, validationContext);
 
-            validateListeners(process.getExecutionListeners(), validationContext);
+            validateListeners(process.getExecutionListeners(), validationContext, false);
             for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
             {
-                validateListeners(element.getExecutionListeners(), validationContext);
+                validateListeners(element.getExecutionListeners(), validationContext, element instanceof CallActivity);
                 validateFlowElement(process, element, validationContext);
                 if (element instanceof UserTask userTask)
                 {
@@ -1607,19 +1624,30 @@ public class WorkflowBpmnService
      * @return 无返回值
      */
     private void validateListeners(List<FlowableListener> listeners,
-            ValidationContext validationContext)
+            ValidationContext validationContext, boolean callActivity)
     {
         if (listeners == null)
         {
             return;
         }
         Set<String> businessEvents = new HashSet<>();
+        boolean systemOutputSeen = false;
         for (FlowableListener listener : listeners)
         {
-            if (!businessEvents.add(trimToEmpty(listener.getEvent())))
+            if (com.ruoyi.flowable.listener.WorkflowSystemOutputListener.EXPRESSION.equals(listener.getImplementation()))
             {
-                throw invalidBpmn("同一元素的执行业务监听器事件不能重复", null);
+                if (systemOutputSeen || !callActivity || validationContext != ValidationContext.COMPILED_DEPLOYMENT
+                        || !"end".equals(listener.getEvent())
+                        || !ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(listener.getImplementationType())
+                        || listener.getScriptInfo() != null || listener.getInstance() != null
+                        || hasText(listener.getOnTransaction()) || hasText(listener.getCustomPropertiesResolverImplementation())
+                        || (listener.getFieldExtensions() != null && !listener.getFieldExtensions().isEmpty()))
+                    throw invalidBpmn("系统结果监听器只能由调用活动编译器注入", null);
+                systemOutputSeen = true;
+                continue;
             }
+            if (!businessEvents.add(trimToEmpty(listener.getEvent())))
+                throw invalidBpmn("同一元素的执行业务监听器事件不能重复", null);
             validateBusinessListener(listener, validationContext, "执行");
         }
     }

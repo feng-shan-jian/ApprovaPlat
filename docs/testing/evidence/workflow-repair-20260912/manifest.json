@@ -1,0 +1,287 @@
+[
+  {
+    "file": "a-evidence.jsonl",
+    "bytes": 173777,
+    "sha256": "ACFCA3D8A51D8222C9D7267B18FEADD6E388FADE86435A697E80C0405438F3EE"
+  },
+  {
+    "file": "author-structure.json",
+    "bytes": 7274,
+    "sha256": "AB27B3052CCC07280195621DC388CA27463968D495FF64F5BB5163DB91653B5E"
+  },
+  {
+    "file": "c-native-export.bpmn20.xml",
+    "bytes": 5800,
+    "sha256": "487768A073C8781D06153A27A5233B4C11A84C6C3C48F88518475C6A91053339"
+  },
+  {
+    "file": "cleanup-database-readback.json",
+    "bytes": 551,
+    "sha256": "02933CEAE3DC4B76758C4998AF1A9E39E5AB3E17F0E75B9A404FBE231400AA6C"
+  },
+  {
+    "file": "cleanup.jsonl",
+    "bytes": 2811,
+    "sha256": "B9A320CE60B8DF429D940758C56704787491FC08035213544079FDFDFEC35C60"
+  },
+  {
+    "file": "endpoint-disabled-preflight.json",
+    "bytes": 576,
+    "sha256": "35B18B88AF57E56A389CF547AD1E1DB89A0E21B61A306B92F0542965F6D986AC"
+  },
+  {
+    "file": "f-delivery-evidence.jsonl",
+    "bytes": 15225,
+    "sha256": "232AAC73CF59BE26917A3DDCDC45DA46F7EF860891748706ADB5E0B3567B4DEB"
+  },
+  {
+    "file": "final-boundaries.jsonl",
+    "bytes": 32066,
+    "sha256": "839B8237F4128DF16D6989C4FE930F22888CE39A44F235446BB6F483C871F022"
+  },
+  {
+    "file": "final-local-state.json",
+    "bytes": 480,
+    "sha256": "CCB9CA13288BDA0964E4A0B403096787661E19B4DEFEE051472D8FBF73B90EBD"
+  },
+  {
+    "file": "lifecycle-evidence.jsonl",
+    "bytes": 11120,
+    "sha256": "4C7253E44A5B7B7167A779BBCA720C931D043F769A19E3B0B15866D4342E5AEF"
+  },
+  {
+    "file": "matrix-events.jsonl",
+    "bytes": 4109,
+    "sha256": "010110962B192044228C53720EDB8432B59816F47C7685E0BBC7E4FB559C128E"
+  },
+  {
+    "file": "native-a-3000-completed-graph.png",
+    "bytes": 275017,
+    "sha256": "C45A317F090981B8CD3EA95B616B167B589D48C15A600A08CC1569C24C85C9C3"
+  },
+  {
+    "file": "native-a-500-completed-graph.png",
+    "bytes": 283918,
+    "sha256": "7FBBB85115B2E77F568884506E1FB150C992F0D5E688FC9DF501D52A8EED258C"
+  },
+  {
+    "file": "native-a-all-waits-third.png",
+    "bytes": 234469,
+    "sha256": "F6120D9C05BE141B7C1312DFF6D4BDF9416A2A3CE4F1AC27BECFFA2F9F81EC0D"
+  },
+  {
+    "file": "native-a-timer-auto-advanced.png",
+    "bytes": 264964,
+    "sha256": "82725BD90121D424AC5D62F5263C0591DD6B0AE30C55DE66D353CA2F82E32FD5"
+  },
+  {
+    "file": "native-a-timer-waiting.png",
+    "bytes": 261811,
+    "sha256": "7A6139CB11B9827463685A9EC9058C799964D95532447A08AAD06B09A7EE7975"
+  },
+  {
+    "file": "native-auth-check.png",
+    "bytes": 282882,
+    "sha256": "57BC35FC98E06E31EC84A88F4D75F1341F1B5E0B355AA548BDD11F79773744ED"
+  },
+  {
+    "file": "native-b-error-route.png",
+    "bytes": 241844,
+    "sha256": "2B4EF38B20468F224287C8200E3DB5FF56D99D53C9ADB1040EF38C5E40309C24"
+  },
+  {
+    "file": "native-b-escalation-completed.png",
+    "bytes": 240095,
+    "sha256": "4445A50ED18040788E76B90BFCE716759E746D2B19859635346FC803A69EC9D1"
+  },
+  {
+    "file": "native-b-escalation-dual.png",
+    "bytes": 225885,
+    "sha256": "D2E1227FE445DA6502BED3154B904230640033E257EAEA0C4446DC76242172FD"
+  },
+  {
+    "file": "native-b-escalation-first-remains.png",
+    "bytes": 240332,
+    "sha256": "E58FEC5AD7E80739EA1C50269F14D1183A331DB6FE98942255D32C0AADE06E95"
+  },
+  {
+    "file": "native-c-3000-completed-graph.png",
+    "bytes": 282471,
+    "sha256": "20A09EDA561AA3B04A8743548FB5BB7341714F7E0006DE77D1B9CD3500CB1BF3"
+  },
+  {
+    "file": "native-c-child-received7.png",
+    "bytes": 222067,
+    "sha256": "9B3FA0047466B22D30673FC72D4D16326F9541C33DA1C951DECA17163FB3BB03"
+  },
+  {
+    "file": "native-c-deployed.png",
+    "bytes": 286395,
+    "sha256": "F7F00BE958DA0C3186407310720555AF387ECAC8DF22E7CFE194D5A76980A6D9"
+  },
+  {
+    "file": "native-c-export-completed.png",
+    "bytes": 364111,
+    "sha256": "CAC030C47B01A3B7B73FB8AA2F8152A7408DFF39C9796D58833EA28D48F40E93"
+  },
+  {
+    "file": "native-c-export-open.png",
+    "bytes": 370194,
+    "sha256": "B6BA81CEA760D6AEC74E060BAAC167E04F3477C7A68EFEC5F0F049F12B829462"
+  },
+  {
+    "file": "native-c-parent-3000-readonly9.png",
+    "bytes": 257468,
+    "sha256": "3D7EEE9B4D6F64190D7672F82E1EEAA017311DF4086CFF611EB11EAD14E9367C"
+  },
+  {
+    "file": "native-c-parent-500-readonly8.png",
+    "bytes": 262929,
+    "sha256": "D59F50B71807E98D790F4FDB5418595DBD50E487C07E74A544174DBA03FA5C73"
+  },
+  {
+    "file": "native-d-cancel-explanation-visible.png",
+    "bytes": 183167,
+    "sha256": "B8C4FFCEED6394C9870E8C763BEED0BFB8968A886C66BBCE9EE504C67208C2B5"
+  },
+  {
+    "file": "native-d-deployed.png",
+    "bytes": 217542,
+    "sha256": "C3F04ADDBBDAF5B37EEB39BFF08D0FF0FE86A6D82280177F6A5D30A985D1EA3D"
+  },
+  {
+    "file": "native-d-signal-race-cancelled.png",
+    "bytes": 183861,
+    "sha256": "A2281F52E0282501E1B39443158D5DEA6945A292DBF590B004A0297B11007B56"
+  },
+  {
+    "file": "native-d-two-waits.png",
+    "bytes": 209583,
+    "sha256": "C1C8102212DD942BB5CD8868B4BE295A1C1E3BF42E101C994402E3289BF8C50A"
+  },
+  {
+    "file": "native-draft-compare.png",
+    "bytes": 606712,
+    "sha256": "2F0E6C2B86E28E7403AC5CC3DB01EED620BCC67FAD18A9D48BFDE930F6EA5BBD"
+  },
+  {
+    "file": "native-e-normal-completed.png",
+    "bytes": 240124,
+    "sha256": "3E03F81AE02449A0B56E6458AC56BA7A7B632021824D43A434161F3CA30291A6"
+  },
+  {
+    "file": "native-f-deployed.png",
+    "bytes": 364865,
+    "sha256": "5E756119197A814CC32D3B2767160623076AC3F3AD9B8F3056F8F9E39F26305C"
+  },
+  {
+    "file": "native-f-receiver-consumed.png",
+    "bytes": 231089,
+    "sha256": "476D0F050D32B71087552F8AB87E06EEE15D55B0EEA651E02CA82019606A4D2D"
+  },
+  {
+    "file": "native-f-restored-complex.png",
+    "bytes": 397142,
+    "sha256": "0E7D2F93955061011EB59A4680D5DFDDFC9B322DCBB087DEF99F19E0B2694CD4"
+  },
+  {
+    "file": "native-f-scope-complete.png",
+    "bytes": 496882,
+    "sha256": "27BDBC9F253356F2A01EF038BE3424537A6CBCC08DAA78D05A281FDDC9C66BB0"
+  },
+  {
+    "file": "native-f-sender-completed.png",
+    "bytes": 218613,
+    "sha256": "72750DC92F74DA48062C041613DF9D5B9C930501E7BBC47083E28962FB36C47E"
+  },
+  {
+    "file": "native-g-convert-completed.png",
+    "bytes": 238700,
+    "sha256": "A4A2445BEB17D291DC00225CCD2C9E5B4777D9C4DD27E665446379813401193C"
+  },
+  {
+    "file": "native-g-convert-deployed.png",
+    "bytes": 247196,
+    "sha256": "878F8319524FC09CF81B0675A66897757FC32BBCD3D4646A1DA72C66529498EE"
+  },
+  {
+    "file": "native-g-converted-signal.png",
+    "bytes": 418082,
+    "sha256": "064FAB2F3AB4A58CC24BD4719C4C2771BC741D78ACEDB5ED8AA6FE1885407BA8"
+  },
+  {
+    "file": "native-g-formal-refresh-retained.png",
+    "bytes": 375117,
+    "sha256": "2C2C229836A06D4563B41220960200570C0872B672741CB33F60216AB7C20DD1"
+  },
+  {
+    "file": "native-g-message-completed.png",
+    "bytes": 237174,
+    "sha256": "478567B9584D6DB9AB212FA56C9C3B0B375D92F366E5F86685F29A112316EAAE"
+  },
+  {
+    "file": "native-g-message-receiver-completed.png",
+    "bytes": 240902,
+    "sha256": "2BBE7224BD7238D20F7E79C2592216A9859B42870CDF898B53EBE83337C96276"
+  },
+  {
+    "file": "native-g-original-message.png",
+    "bytes": 419936,
+    "sha256": "B19C83942CF920FE8DCEBB3524D00679B2E8A27B982EE94FE817643DA64619F0"
+  },
+  {
+    "file": "native-g-redo-signal.png",
+    "bytes": 417290,
+    "sha256": "12AD5932C016603C87DA945147157CE0119F1D49CF8A361EE0CFB05FB5879CC0"
+  },
+  {
+    "file": "native-g-undo-config-restored.png",
+    "bytes": 475897,
+    "sha256": "534F406CD4CB52EEBA6DA116D27526749184DED9A49C4C21D7F00C1DF105AC76"
+  },
+  {
+    "file": "native-lifecycle-returned-fixed.png",
+    "bytes": 215390,
+    "sha256": "3296997F87DD1313B0BB03D887EBE7BF069DB384E9F7C8CFC061593412014C09"
+  },
+  {
+    "file": "native-r12_a_long-deployed.png",
+    "bytes": 221257,
+    "sha256": "80BA83EB9D8AC6B63FDACC14A5EA8B096E15C93188C03AE63AECE54A3869789A"
+  },
+  {
+    "file": "native-r12_a_long-saved.png",
+    "bytes": 421522,
+    "sha256": "FD38C1B6FE5F283C8EFB04D0AD983D77F365710E1CE25AC31FA611366870E06C"
+  },
+  {
+    "file": "native-r12_b_error-deployed.png",
+    "bytes": 240796,
+    "sha256": "C7149B644935402417F95132F1D7EE62D48A0C26C12D418926873A5F5219D526"
+  },
+  {
+    "file": "native-r12_e_compensation-deployed.png",
+    "bytes": 218516,
+    "sha256": "47C571E2A71E301AD69DA446C787C514E57072FA544279225A61280BDCFB7849"
+  },
+  {
+    "file": "native-r12_g_message-deployed.png",
+    "bytes": 213282,
+    "sha256": "0D78D9130244F57A0B0507B7CE2FDE6835DCE5723DF44A8A12957E3E5D1BBEF4"
+  },
+  {
+    "file": "runtime-facts.json",
+    "bytes": 167804,
+    "sha256": "47ABBA317944766908F1605ED13C8014FD3CD610217C11971D71695804097F09"
+  },
+  {
+    "file": "scope-denied.json",
+    "bytes": 68,
+    "sha256": "762B4E9FFBD0701AE8A767A2E2DADC250FC2FB994DC8AA78B0BCAB5ABD0682D8"
+  },
+  {
+    "file": "verification.json",
+    "bytes": 550,
+    "sha256": "8EC27BB3AE405BD1272CE9E053ED2E7EA695BC60AA9B89D480296B4D73C2B3FD"
+  }
+]

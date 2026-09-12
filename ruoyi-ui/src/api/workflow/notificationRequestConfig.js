@@ -1,4 +1,4 @@
-export const NOTIFICATION_API_PATHS = Object.freeze({
+const NOTIFICATION_API_PATHS = Object.freeze({
   policies: '/workflow/notification/policies',
   processCatalog: '/workflow/notification/catalog/processes',
   mailConfig: '/workflow/notification/mail-config',

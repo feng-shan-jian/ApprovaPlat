@@ -441,13 +441,13 @@ function submitForm() {
   proxy.$refs["menuRef"].validate(valid => {
     if (valid) {
       if (form.value.menuId != undefined) {
-        updateMenu(form.value).then(response => {
+        updateMenu(form.value).then(() => {
           proxy.$modal.msgSuccess("修改成功")
           open.value = false
           getList()
         })
       } else {
-        addMenu(form.value).then(response => {
+        addMenu(form.value).then(() => {
           proxy.$modal.msgSuccess("新增成功")
           open.value = false
           getList()

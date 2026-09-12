@@ -13,7 +13,7 @@
 - `persist(deploymentId, artifacts)`：在当前发布事务内创建唯一业务资源子部署。
 - `selectForms`、`selectConditionRules`、`selectControlledLoops`、`selectParticipantRules`：读取单个父部署的运行时规则。
 - `selectStartParticipantRulesByDeploymentIds(deploymentIds)`：按最多 200 个父部署分块读取发起规则；外层按父部署 ID、内层按流程 key 返回。
-- `selectExtensionSnapshots`、`selectDmnSnapshots`、`selectCallActivitySnapshots`、`selectTaskSlaSnapshots`：读取扩展和依赖资源。
+- `selectExtensionSnapshots`、`selectDmnSnapshots`、`selectTaskSlaSnapshots`：读取扩展和依赖资源。
 - `hasFormReference`、`countExtensionVersionReferences`、`countDmnSourceReferences`：执行低频删除保护。
 - `delete(deploymentId)`：删除父部署拥有的业务资源子部署。
 

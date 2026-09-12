@@ -147,7 +147,6 @@
 
 <script setup name="Gen">
 import { listTable, previewTable, delTable, genCode, synchDb } from "@/api/tool/gen"
-import router from "@/router"
 import importTable from "./importTable"
 import createTable from "./createTable"
 
@@ -225,7 +224,7 @@ function handleGenTable(row) {
     return
   }
   if (row.genType === "1") {
-    genCode(row.tableName).then(response => {
+    genCode(row.tableName).then(() => {
       proxy.$modal.msgSuccess("成功生成到自定义路径：" + row.genPath)
     })
   } else {
@@ -286,7 +285,7 @@ function handleSelectionChange(selection) {
 }
 
 /** 排序触发事件 */
-function handleSortChange(column, prop, order) {
+function handleSortChange(column) {
   queryParams.value.orderByColumn = column.prop
   queryParams.value.isAsc = column.order
   getList()

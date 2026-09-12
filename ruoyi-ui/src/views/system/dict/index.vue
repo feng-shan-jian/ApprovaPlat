@@ -300,13 +300,13 @@ function submitForm() {
   proxy.$refs["dictRef"].validate(valid => {
     if (valid) {
       if (form.value.dictId != undefined) {
-        updateType(form.value).then(response => {
+        updateType(form.value).then(() => {
           proxy.$modal.msgSuccess("修改成功")
           open.value = false
           getList()
         })
       } else {
-        addType(form.value).then(response => {
+        addType(form.value).then(() => {
           proxy.$modal.msgSuccess("新增成功")
           open.value = false
           getList()

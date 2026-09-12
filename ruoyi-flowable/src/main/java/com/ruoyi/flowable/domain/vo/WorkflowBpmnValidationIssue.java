@@ -10,8 +10,12 @@ package com.ruoyi.flowable.domain.vo;
  * @param processId String，所属 BPMN Process 标识；文档级或无法归属时为空
  */
 public record WorkflowBpmnValidationIssue(String code, String severity,
-        String elementId, String message, String processId)
+        String elementId, String message, String processId, String fieldPath, String suggestion)
 {
+    public WorkflowBpmnValidationIssue(String code, String severity, String elementId, String message, String processId)
+    {
+        this(code, severity, elementId, message, processId, null, null);
+    }
     /** 保持既有文档级诊断调用方的构造方式。 */
     public WorkflowBpmnValidationIssue(String code, String severity, String elementId, String message)
     {

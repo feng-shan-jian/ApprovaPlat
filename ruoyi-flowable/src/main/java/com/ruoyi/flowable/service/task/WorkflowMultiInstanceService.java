@@ -1,9 +1,7 @@
 package com.ruoyi.flowable.service.task;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -17,7 +15,6 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.common.engine.api.FlowableException;
-import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
@@ -873,54 +870,6 @@ public class WorkflowMultiInstanceService
         }
         taskService.addComment(currentTask.getId(), currentTask.getProcessInstanceId(),
                 action, audit.toString());
-    }
-
-    /**
-     * 将持久化用户主键规范为无前导零的正整数文本。
-     *
-     * @param value String，服务端成员变量中的用户主键
-     * @return String，规范数字用户主键
-     */
-    private String requireCanonicalUserId(String value)
-    {
-        if (!StringUtils.hasText(value))
-        {
-            throw dataError();
-        }
-        try
-        {
-            long userId = Long.parseLong(value);
-            if (userId <= 0 || !String.valueOf(userId).equals(value))
-            {
-                throw dataError();
-            }
-            return value;
-        }
-        catch (NumberFormatException exception)
-        {
-            throw dataError();
-        }
-    }
-
-    /**
-     * 把 Flowable 数值变量精确读取为非负 int，拒绝浮点、溢出和类型漂移。
-     *
-     * @param value Object，revision 或 nrOf* 引擎变量值
-     * @return int，未发生截断的非负整数
-     */
-    private int requireNonNegativeInteger(Object value)
-    {
-        if (!(value instanceof Byte || value instanceof Short
-                || value instanceof Integer || value instanceof Long))
-        {
-            throw dataError();
-        }
-        long numericValue = ((Number) value).longValue();
-        if (numericValue < 0 || numericValue > Integer.MAX_VALUE)
-        {
-            throw dataError();
-        }
-        return (int) numericValue;
     }
 
     /**

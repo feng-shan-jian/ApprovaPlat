@@ -20,12 +20,6 @@ const isNotProps = makeMap(
   'layout,prepend,regList,tag,document,changeTag,defaultValue'
 )
 
-function useVModel(props, emit) {
-  return {
-    modelValue: props.defaultValue,
-    'onUpdate:modelValue': (val) => emit('update:modelValue', val),
-  }
-}
 const componentChild = {
   'el-button': {
     default(h, conf, key) {
@@ -33,7 +27,7 @@ const componentChild = {
     },
   },
   'el-select': {
-    options(h, conf, key) {
+    options(h, conf) {
       return conf.options.map(item => h(resolveComponent('el-option'), {
         label: item.label,
         value: item.value,
@@ -41,7 +35,7 @@ const componentChild = {
     }
   },
   'el-radio-group': {
-    options(h, conf, key) {
+    options(h, conf) {
       return conf.optionType === 'button' ? conf.options.map(item => h(resolveComponent('el-checkbox-button'), {
         label: item.value,
       }, () => item.label)) : conf.options.map(item => h(resolveComponent('el-radio'), {
@@ -51,7 +45,7 @@ const componentChild = {
     }
   },
   'el-checkbox-group': {
-    options(h, conf, key) {
+    options(h, conf) {
       return conf.optionType === 'button' ? conf.options.map(item => h(resolveComponent('el-checkbox-button'), {
         label: item.value,
       }, () => item.label)) : conf.options.map(item => h(resolveComponent('el-checkbox'), {
@@ -61,17 +55,11 @@ const componentChild = {
     }
   },
   'el-upload': {
-    'list-type': (h, conf, key) => {
+    'list-type': (h, conf) => {
       const option = {}
-      // if (conf.showTip) {
-      //   tip = h('div', {
-      //     class: "el-upload__tip"
-      //   }, () => '只能上传不超过' + conf.fileSize + conf.sizeUnit + '的' + conf.accept + '文件')
-      // }
       if (conf['list-type'] === 'picture-card') {
         return h(resolveComponent('el-icon'), option, () => h(resolveComponent('Plus')))
       } else {
-        // option.size = "small"
         option.type = "primary"
         option.icon = "Upload"
         return h(resolveComponent('el-button'), option, () => conf.buttonText)
@@ -82,7 +70,7 @@ const componentChild = {
 }
 const componentSlot = {
   'el-upload': {
-    'tip': (h, conf, key) => {
+    'tip': (h, conf) => {
       if (conf.showTip) {
         return () => h('div', {
           class: "el-upload__tip"
@@ -145,7 +133,7 @@ export default defineComponent({
           ...dataObject.style
         },
       }
-      , slot ?? null)
+      , slot)
   },
   props: {
     conf: {

@@ -104,7 +104,7 @@ function removeListener(index) {
  * @returns {void} 同时发出 v-model 更新和 change 事件。
  */
 function emitChange() {
-  const value = draft.value.map(({ clientId, ...listener }) => ({ ...listener }))
+  const value = draft.value.map(({ clientId: _clientId, ...listener }) => listener)
   emit('update:modelValue', value)
   emit('change', value)
 }

@@ -1,5 +1,6 @@
 import { createApp, h, reactive } from 'vue'
 import { createPinia } from 'pinia'
+import { createRouter, createMemoryHistory } from 'vue-router'
 import ElementPlus from 'element-plus'
 import * as icons from '@element-plus/icons-vue'
 import 'element-plus/dist/index.css'
@@ -19,6 +20,7 @@ window.mountDesignerRegression = ({ xml, forms = [] }) => {
     })
   })
   app.use(createPinia())
+  app.use(createRouter({ history: createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { render: () => null } }] }))
   app.use(ElementPlus)
   Object.entries(icons).forEach(([name, component]) => app.component(name, component))
   app.mount('#app')

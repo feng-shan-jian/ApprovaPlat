@@ -19,6 +19,7 @@
     :model-value="state.extensionConfig"
     :endpoints="connectorEndpoints"
     :allow-point-to-point="messageThrow"
+    :return-element-id="state.id"
     @update:model-value="updateConfig"
     @change="emit('change')"
   />

@@ -1,9 +1,18 @@
 import useTagsViewStore from '@/store/modules/tagsView'
 import router from '@/router'
+import { confirmPageLeave } from '@/utils/pageLeaveGuards'
+
+async function protectViews(views) {
+  return confirmPageLeave(views.map(view => view.path))
+}
+
+function cancelledClose() {
+  return { cancelled: true, visitedViews: [...useTagsViewStore().visitedViews] }
+}
 
 export default {
   // 刷新当前tab页签
-  refreshPage(obj) {
+  async refreshPage(obj) {
     const { path, query, matched } = router.currentRoute.value
     // 防止在重定向过程中重复刷新
     if (path.startsWith('/redirect/')) {
@@ -18,6 +27,7 @@ export default {
         }
       })
     }
+    if (!await protectViews([obj])) return cancelledClose()
     return useTagsViewStore().delCachedView(obj).then(() => {
       const { path, query } = obj
       router.replace({
@@ -27,14 +37,18 @@ export default {
     })
   },
   // 关闭当前tab页签，打开新页签
-  closeOpenPage(obj) {
-    useTagsViewStore().delView(router.currentRoute.value)
+  async closeOpenPage(obj) {
+    const current = router.currentRoute.value
+    if (!await protectViews([current])) return cancelledClose()
     if (obj !== undefined) {
-      return router.push(obj)
+      const failure = await router.push(obj)
+      if (failure) return cancelledClose()
     }
+    return useTagsViewStore().delView(current)
   },
   // 关闭指定tab页签
-  closePage(obj) {
+  async closePage(obj) {
+    if (!await protectViews([obj || router.currentRoute.value])) return cancelledClose()
     if (obj === undefined) {
       return useTagsViewStore().delView(router.currentRoute.value).then(({ visitedViews }) => {
         const latestView = visitedViews.slice(-1)[0]
@@ -47,19 +61,28 @@ export default {
     return useTagsViewStore().delView(obj)
   },
   // 关闭所有tab页签
-  closeAllPage() {
+  async closeAllPage() {
+    if (!await protectViews(useTagsViewStore().visitedViews.filter(view => !view.meta?.affix))) return cancelledClose()
     return useTagsViewStore().delAllViews()
   },
   // 关闭左侧tab页签
-  closeLeftPage(obj) {
+  async closeLeftPage(obj) {
+    const views = useTagsViewStore().visitedViews
+    const index = views.findIndex(view => view.path === (obj || router.currentRoute.value).path)
+    if (!await protectViews(views.slice(0, Math.max(0, index)).filter(view => !view.meta?.affix))) return [...views]
     return useTagsViewStore().delLeftTags(obj || router.currentRoute.value)
   },
   // 关闭右侧tab页签
-  closeRightPage(obj) {
+  async closeRightPage(obj) {
+    const views = useTagsViewStore().visitedViews
+    const index = views.findIndex(view => view.path === (obj || router.currentRoute.value).path)
+    if (index >= 0 && !await protectViews(views.slice(index + 1).filter(view => !view.meta?.affix))) return [...views]
     return useTagsViewStore().delRightTags(obj || router.currentRoute.value)
   },
   // 关闭其他tab页签
-  closeOtherPage(obj) {
+  async closeOtherPage(obj) {
+    const retained = obj || router.currentRoute.value
+    if (!await protectViews(useTagsViewStore().visitedViews.filter(view => view.path !== retained.path && !view.meta?.affix))) return cancelledClose()
     return useTagsViewStore().delOthersViews(obj || router.currentRoute.value)
   },
   // 打开tab页签

@@ -268,13 +268,13 @@ function submitForm() {
   proxy.$refs["deptRef"].validate(valid => {
     if (valid) {
       if (form.value.deptId != undefined) {
-        updateDept(form.value).then(response => {
+        updateDept(form.value).then(() => {
           proxy.$modal.msgSuccess("修改成功")
           open.value = false
           getList()
         })
       } else {
-        addDept(form.value).then(response => {
+        addDept(form.value).then(() => {
           proxy.$modal.msgSuccess("新增成功")
           open.value = false
           getList()

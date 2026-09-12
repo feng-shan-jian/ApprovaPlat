@@ -2,6 +2,8 @@ package com.ruoyi.flowable.domain.vo;
 
 import java.util.Objects;
 import java.util.Set;
+import java.util.List;
+import java.time.Instant;
 
 /**
  * BPMN Viewer 所需的活动状态集合。
@@ -17,8 +19,20 @@ public record WorkflowProcessViewerView(
         Set<String> finishedSequenceFlowIds,
         Set<String> unfinishedActivityIds,
         Set<String> rejectedActivityIds,
-        Set<String> returnedActivityIds)
+        Set<String> returnedActivityIds,
+        Set<String> cancelledActivityIds,
+        Set<String> unknownActivityIds,
+        List<ActivityState> activityInstances)
 {
+    public record ActivityState(String activityInstanceId, String activityId, String activityName,
+            String state, Instant startTime, Instant endTime) { }
+
+    public WorkflowProcessViewerView(Set<String> finishedActivityIds, Set<String> finishedSequenceFlowIds,
+            Set<String> unfinishedActivityIds, Set<String> rejectedActivityIds, Set<String> returnedActivityIds)
+    {
+        this(finishedActivityIds, finishedSequenceFlowIds, unfinishedActivityIds, rejectedActivityIds,
+                returnedActivityIds, Set.of(), Set.of(), List.of());
+    }
     /**
      * 创建 Viewer 状态并复制全部集合。
      *
@@ -41,5 +55,8 @@ public record WorkflowProcessViewerView(
                 rejectedActivityIds, "驳回活动不能为空"));
         returnedActivityIds = Set.copyOf(Objects.requireNonNull(
                 returnedActivityIds, "退回活动不能为空"));
+        cancelledActivityIds = Set.copyOf(cancelledActivityIds);
+        unknownActivityIds = Set.copyOf(unknownActivityIds);
+        activityInstances = List.copyOf(activityInstances);
     }
 }
