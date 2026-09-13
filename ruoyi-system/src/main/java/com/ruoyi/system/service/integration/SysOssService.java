@@ -165,7 +165,7 @@ public class SysOssService
     }
 
     /**
-     * 修改 OSS 配置；空 SecretKey 在 SQL 层保留原值。
+     * 修改 OSS 配置；有对象台账时固定存储位置，空 SecretKey 在 SQL 层保留原值。
      *
      * @param request OssConfigRequest，包含正式主键的配置请求
      * @param actor String，当前管理员账号
@@ -175,6 +175,14 @@ public class SysOssService
     public void updateConfig(OssConfigRequest request, String actor)
     {
         ValidatedOssConfig config = validateConfig(request, true);
+        ActiveOssConfig current = lockedConfigById(request.configId());
+        if (!current.location().equals(config.location()) && !jdbcTemplate.queryForList(
+                "select object_id from sys_oss_object where config_id=? limit 1 for update",
+                Long.class, request.configId()).isEmpty())
+        {
+            throw new ServiceException("已有对象台账的 OSS 配置不能修改端点、地域、存储桶或寻址模式；请新增配置",
+                    HttpStatus.CONFLICT);
+        }
         int updated;
         try
         {
@@ -349,8 +357,8 @@ public class SysOssService
             remoteWritten = true;
             String publicUrl = "PUBLIC".equals(config.accessPolicy())
                     ? publicUrl(config, objectKey) : null;
-            long objectId = insertObject(config, objectKey, originalName, suffix(originalName),
-                    contentType, actualSize, sha256, publicUrl, actor(actor));
+            long objectId = transactionTemplate.execute(status -> insertObject(config, objectKey,
+                    originalName, suffix(originalName), contentType, actualSize, sha256, publicUrl, actor(actor)));
             return new StoredOssObject(objectId, originalName, contentType, actualSize,
                     sha256, config.accessPolicy(), publicUrl);
         }
@@ -522,7 +530,7 @@ public class SysOssService
     }
 
     /**
-     * 持久化已经成功写入远端的对象元数据。
+     * 在短事务中锁定配置、复核上传位置并持久化对象元数据，禁止网络调用持有配置锁。
      *
      * @param config ActiveOssConfig，当前启用配置
      * @param objectKey String，服务端生成对象键
@@ -539,6 +547,10 @@ public class SysOssService
             String suffix, String contentType, long fileSize, String sha256, String publicUrl,
             String actor)
     {
+        if (!config.location().equals(lockedConfigById(config.configId()).location()))
+        {
+            throw new ServiceException("OSS 存储位置已变化，请重新上传", HttpStatus.CONFLICT);
+        }
         KeyHolder holder = new GeneratedKeyHolder();
         jdbcTemplate.update(connection ->
         {
@@ -713,7 +725,18 @@ public class SysOssService
      */
     private ActiveOssConfig configById(long configId)
     {
-        List<ActiveOssConfig> rows = queryConfigs("where config_id=" + configId);
+        return requireConfig(queryConfigs("where config_id=" + configId));
+    }
+
+    /** 在调用方事务内读取并锁定配置，与对象入账共用同一并发边界。 */
+    private ActiveOssConfig lockedConfigById(long configId)
+    {
+        return requireConfig(queryConfigs("where config_id=" + configId + " for update"));
+    }
+
+    /** 配置缺失时保持统一的 404 语义。 */
+    private ActiveOssConfig requireConfig(List<ActiveOssConfig> rows)
+    {
         if (rows.size() != 1)
         {
             throw new ServiceException("OSS 配置不存在", HttpStatus.NOT_FOUND);
@@ -1137,12 +1160,25 @@ public class SysOssService
             String bucketName, String accessKey, String secretKey, String domain, String prefix,
             String pathStyle, String accessPolicy, String remark)
     {
+        StorageLocation location()
+        {
+            return new StorageLocation(endpoint, region, bucketName, pathStyle);
+        }
     }
 
     /** 内部 OSS 配置，密钥不得离开服务边界。 */
     private record ActiveOssConfig(long configId, URI endpoint, String region,
             String bucketName, String accessKey, String secretKey, String domain, String prefix,
             String pathStyle, String accessPolicy)
+    {
+        StorageLocation location()
+        {
+            return new StorageLocation(endpoint, region, bucketName, pathStyle);
+        }
+    }
+
+    /** 对象键之外必须稳定的存储定位，不包含可轮换凭据或上传时快照字段。 */
+    private record StorageLocation(URI endpoint, String region, String bucketName, String pathStyle)
     {
     }
 

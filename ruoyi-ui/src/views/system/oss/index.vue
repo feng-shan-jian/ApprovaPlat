@@ -61,6 +61,7 @@
     </el-tabs>
 
     <el-dialog v-model="dialog.visible" :title="dialog.form.configId ? '编辑 OSS 配置' : '新增 OSS 配置'" width="720px" append-to-body>
+      <el-alert v-if="dialog.form.configId" title="已有对象台账的配置需保留 Endpoint、地域、Bucket 和寻址模式；密钥仍可更新。切换存储位置请新增配置。" type="info" :closable="false" show-icon />
       <el-form ref="formRef" :model="dialog.form" :rules="rules" label-width="112px">
         <div class="storage-page__form-grid">
           <el-form-item label="配置名称" prop="configName"><el-input v-model="dialog.form.configName" maxlength="64" /></el-form-item>
