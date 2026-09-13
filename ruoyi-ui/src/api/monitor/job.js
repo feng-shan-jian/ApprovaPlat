@@ -1,5 +1,14 @@
 import request from '@/utils/request'
 
+// 由正式调度引擎计算未来五次计划时间
+export function previewCron(cronExpression) {
+  return request({
+    url: '/monitor/job/cron/preview',
+    method: 'get',
+    params: { cronExpression }
+  })
+}
+
 // 查询定时任务调度列表
 export function listJob(query) {
   return request({

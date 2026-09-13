@@ -1,70 +1,69 @@
 <template>
     <el-form>
         <el-form-item>
-            <el-radio v-model='radioValue' :value="1">
+            <el-radio v-model='radioValue' :value="1" @change="onRadioChange">
                 周，允许的通配符[, - * ? / L #]
             </el-radio>
         </el-form-item>
 
         <el-form-item>
-            <el-radio v-model='radioValue' :value="2">
+            <el-radio v-model='radioValue' :value="2" @change="onRadioChange">
                 不指定
             </el-radio>
         </el-form-item>
 
         <el-form-item>
-            <el-radio v-model='radioValue' :value="3">
+            <el-radio v-model='radioValue' :value="3" @change="onRadioChange">
                 周期从
-                <el-select clearable v-model="cycle01">
+                <el-select v-model="cycle01" @change="onRadioChange">
                     <el-option
                         v-for="(item,index) of weekList"
                         :key="index"
                         :label="item.value"
                         :value="item.key"
-                        :disabled="item.key === 7"
                     >{{item.value}}</el-option>
                 </el-select>
                 -
-                <el-select clearable v-model="cycle02">
+                <el-select v-model="cycle02" @change="onRadioChange">
                     <el-option
                         v-for="(item,index) of weekList"
                         :key="index"
                         :label="item.value"
                         :value="item.key"
-                        :disabled="item.key <= cycle01"
                     >{{item.value}}</el-option>
                 </el-select>
             </el-radio>
         </el-form-item>
 
         <el-form-item>
-            <el-radio v-model='radioValue' :value="4">
+            <el-radio v-model='radioValue' :value="4" @change="onRadioChange">
                 第
-                <el-input-number v-model='average01' :min="1" :max="4" /> 周的
-                <el-select clearable v-model="average02">
+                <el-input-number v-model='average01' :min="1" :max="5" @change="onRadioChange" /> 周的
+                <el-select v-model="average02" @change="onRadioChange">
                     <el-option v-for="item in weekList" :key="item.key" :label="item.value" :value="item.key" />
                 </el-select>
             </el-radio>
         </el-form-item>
 
         <el-form-item>
-            <el-radio v-model='radioValue' :value="5">
+            <el-radio v-model='radioValue' :value="5" @change="onRadioChange">
                 本月最后一个
-                <el-select clearable v-model="weekday">
+                <el-select v-model="weekday" @change="onRadioChange">
                     <el-option v-for="item in weekList" :key="item.key" :label="item.value" :value="item.key" />
                 </el-select>
             </el-radio>
         </el-form-item>
 
         <el-form-item>
-            <el-radio v-model='radioValue' :value="6">
+            <el-radio v-model='radioValue' :value="6" @change="onRadioChange">
                 指定
-                <el-select class="multiselect" clearable v-model="checkboxList" placeholder="可多选" multiple :multiple-limit="6">
+                <el-select class="multiselect" clearable v-model="checkboxList" placeholder="可多选" multiple @change="onRadioChange">
                     <el-option v-for="item in weekList" :key="item.key" :label="item.value" :value="item.key" />
                 </el-select>
             </el-radio>
         </el-form-item>
 
+        <p v-if="radioValue === 0">当前星期表达式：{{ cron.week }}。选择上方选项后才会替换，可通过预览检查是否有效。</p>
     </el-form>
 </template>
 
@@ -106,50 +105,48 @@ const weekList = ref([
     {key: 6, value: '星期五'},
     {key: 7, value: '星期六'}
 ])
-const cycleTotal = computed(() => {
-    cycle01.value = props.check(cycle01.value, 1, 6)
-    cycle02.value = props.check(cycle02.value, cycle01.value + 1, 7)
-    return cycle01.value + '-' + cycle02.value
-})
-const averageTotal = computed(() => {
-    average01.value = props.check(average01.value, 1, 4)
-    average02.value = props.check(average02.value, 1, 7)
-    return average02.value + '#' + average01.value
-})
-const weekdayTotal = computed(() => {
-    weekday.value = props.check(weekday.value, 1, 7)
-    return weekday.value + 'L'
-})
-const checkboxString = computed(() => {
-    return checkboxList.value.join(',')
-})
-watch(() => props.cron.week, value => changeRadioValue(value))
-watch([radioValue, cycleTotal, averageTotal, weekdayTotal, checkboxString], () => onRadioChange())
+const weekNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+watch(() => props.cron.week, value => changeRadioValue(value), { immediate: true })
+
+function weekNumber(value) {
+    const named = weekNames.indexOf(value)
+    return named >= 0 ? named + 1 : /^[1-7]$/.test(value) ? Number(value) : NaN
+}
+
+// 这里只回填控件，不验证或改写原式；未覆盖的 Quartz 语法仍可原样提交。
 function changeRadioValue(value) {
+    const rule = value.toUpperCase()
+    const range = rule.split('-').map(weekNumber)
+    const nth = rule.split('#')
+    const last = rule.endsWith('L') ? weekNumber(rule.slice(0, -1)) : NaN
+    const days = rule === 'L' ? [7] : rule.split(',').map(weekNumber)
     if (value === "*") {
         radioValue.value = 1
     } else if (value === "?") {
         radioValue.value = 2
-    } else if (value.indexOf("-") > -1) {
-        const indexArr = value.split('-')
-        cycle01.value = Number(indexArr[0])
-        cycle02.value = Number(indexArr[1])
+    } else if (range.length === 2 && range.every(Number.isFinite)) {
+        cycle01.value = range[0]
+        cycle02.value = range[1]
         radioValue.value = 3
-    } else if (value.indexOf("#") > -1) {
-        const indexArr = value.split('#')
-        average01.value = Number(indexArr[1])
-        average02.value = Number(indexArr[0])
+    } else if (nth.length === 2 && Number.isFinite(weekNumber(nth[0])) && /^[1-5]$/.test(nth[1])) {
+        average01.value = Number(nth[1])
+        average02.value = weekNumber(nth[0])
         radioValue.value = 4
-    } else if (value.indexOf("L") > -1) {
-        const indexArr = value.split("L")
-        weekday.value = Number(indexArr[0])
+    } else if (Number.isFinite(last)) {
+        weekday.value = last
         radioValue.value = 5
-    } else {
-        checkboxList.value = [...new Set(value.split(',').map(item => Number(item)))]
+    } else if (days.every(Number.isFinite)) {
+        checkboxList.value = [...new Set(days)]
+        checkCopy.value = [...checkboxList.value]
         radioValue.value = 6
+    } else {
+        radioValue.value = 0
     }
 }
+
+// 只有控件 change 事件可以发布更新，导入和重新打开不会触发日周联动。
 function onRadioChange() {
+    if (radioValue.value === 0) return
     if (radioValue.value === 2 && props.cron.day === '?') {
         emit('update', 'day', '*', 'week')
     }
@@ -164,21 +161,26 @@ function onRadioChange() {
             emit('update', 'week', '?', 'week')
             break
         case 3:
-            emit('update', 'week', cycleTotal.value, 'week')
+            cycle01.value = props.check(cycle01.value, 1, 7)
+            cycle02.value = props.check(cycle02.value, 1, 7)
+            emit('update', 'week', cycle01.value + '-' + cycle02.value, 'week')
             break
         case 4:
-            emit('update', 'week', averageTotal.value, 'week')
+            average01.value = props.check(average01.value || 1, 1, 5)
+            average02.value = props.check(average02.value, 1, 7)
+            emit('update', 'week', average02.value + '#' + average01.value, 'week')
             break
         case 5:
-            emit('update', 'week', weekdayTotal.value, 'week')
+            weekday.value = props.check(weekday.value, 1, 7)
+            emit('update', 'week', weekday.value + 'L', 'week')
             break
         case 6:
             if (checkboxList.value.length === 0) {
                 checkboxList.value.push(checkCopy.value[0])
             } else {
-                checkCopy.value = checkboxList.value
+                checkCopy.value = [...checkboxList.value]
             }
-            emit('update', 'week', checkboxString.value, 'week')
+            emit('update', 'week', checkboxList.value.join(','), 'week')
             break
     }
 }

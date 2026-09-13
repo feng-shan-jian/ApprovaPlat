@@ -146,7 +146,9 @@ const props = defineProps({
 })
 const tabTitles = ref(["秒", "分钟", "小时", "日", "月", "周", "年"])
 const hiddenComponents = ref([])
-const currentExpression = ref('')
+const importedExpression = ref(null)
+let importing = false
+let importRevision = 0
 const crontabValueObj = ref({
     second: "*",
     min: "*",
@@ -157,6 +159,7 @@ const crontabValueObj = ref({
     year: "",
 })
 const crontabValueString = computed(() => {
+    if (importedExpression.value !== null) return importedExpression.value
     const obj = crontabValueObj.value
     return obj.second
         + " "
@@ -171,16 +174,16 @@ const crontabValueString = computed(() => {
         + obj.week
         + (obj.year === "" ? "" : " " + obj.year)
 })
-watch(currentExpression, () => resolveExp())
+watch(() => props.expression, expression => resolveExp(expression))
 function shouldHide(key) {
     return !(hiddenComponents.value && hiddenComponents.value.includes(key))
 }
-function resolveExp() {
+function resolveExp(expression) {
     // 反解析 表达式
-    if (currentExpression.value) {
-        const arr = currentExpression.value.split(/\s+/)
-        if (arr.length >= 6) {
-            //6 位以上是合法表达式
+    if (expression) {
+        const arr = expression.trim().split(/\s+/)
+        if (arr.length === 6 || arr.length === 7) {
+            // 这里只按字段回填；合法性由后端 Quartz 判断。
             let obj = {
                 second: arr[0],
                 min: arr[1],
@@ -190,17 +193,27 @@ function resolveExp() {
                 week: arr[5],
                 year: arr[6] ? arr[6] : ""
             }
-            crontabValueObj.value = {
-                ...obj,
-            }
+            replaceCron(obj, expression)
+        } else {
+            replaceCron(crontabValueObj.value, expression)
         }
     } else {
         // 没有传入的表达式 则还原
         clearCron()
     }
 }
+// 旧字段控件会在回填时发布 update；导入和重置只替换状态，不接受这些回声。
+function replaceCron(value, expression = null) {
+    const current = ++importRevision
+    importing = true
+    importedExpression.value = expression
+    crontabValueObj.value = value
+    nextTick(() => { if (current === importRevision) importing = false })
+}
 // 由子组件触发，更改表达式组成的字段值
 function updateCrontabValue(name, value, _from) {
+    if (importing) return
+    importedExpression.value = null
     crontabValueObj.value[name] = value
 }
 // 表单选项的子组件校验数字格式（通过-props传递）
@@ -225,7 +238,7 @@ function submitFill() {
 }
 function clearCron() {
     // 还原选择项
-    crontabValueObj.value = {
+    replaceCron({
         second: "*",
         min: "*",
         hour: "*",
@@ -233,10 +246,10 @@ function clearCron() {
         month: "*",
         week: "?",
         year: "",
-    }
+    })
 }
 onMounted(() => {
-    currentExpression.value = props.expression
+    resolveExp(props.expression)
     hiddenComponents.value = props.hideComponent
 })
 </script>

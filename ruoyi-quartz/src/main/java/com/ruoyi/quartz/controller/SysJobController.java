@@ -1,5 +1,6 @@
 package com.ruoyi.quartz.controller;
 
+import java.util.Date;
 import java.util.List;
 import jakarta.servlet.http.HttpServletResponse;
 import org.quartz.SchedulerException;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.constant.Constants;
@@ -38,6 +40,21 @@ public class SysJobController extends BaseController
 {
     @Autowired
     private ISysJobService jobService;
+
+    /** 仅计算计划时间，使用与创建任务一致的服务器 Quartz 时区。 */
+    @PreAuthorize("@ss.hasAnyPermi('monitor:job:add,monitor:job:edit')")
+    @GetMapping("/cron/preview")
+    public AjaxResult previewCron(@RequestParam(value = "cronExpression", required = false) String cronExpression)
+    {
+        try
+        {
+            return success(CronUtils.preview(cronExpression, new Date()));
+        }
+        catch (IllegalArgumentException e)
+        {
+            return error(e.getMessage());
+        }
+    }
 
     /**
      * 查询定时任务列表
