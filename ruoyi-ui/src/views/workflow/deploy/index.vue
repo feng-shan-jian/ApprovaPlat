@@ -117,6 +117,16 @@ const versionTotal = ref(0)
 const versionProcessName = ref('')
 const queryParams = reactive({ pageNum: 1, pageSize: 10, processName: '', processKey: '', category: '', state: '' })
 const versionQuery = reactive({ pageNum: 1, pageSize: 10, processKey: '' })
+let versionRequestId = 0
+watch(versionsOpen, open => {
+  if (open) return
+  versionRequestId += 1
+  versionRows.value = []
+  versionTotal.value = 0
+  versionsLoading.value = false
+}, { flush: 'sync' })
+onDeactivated(() => { versionsOpen.value = false })
+onBeforeUnmount(() => { versionsOpen.value = false })
 // 部署页会被页签缓存；首次请求结束后，重新进入页面必须读取最新发布状态。
 let pageInitialized = false
 
@@ -202,6 +212,7 @@ async function openVersions(row) {
   versionQuery.processKey = row.processKey
   versionQuery.pageNum = 1
   versionProcessName.value = row.processName
+  versionTotal.value = 0
   versionsOpen.value = true
   await loadVersions()
 }
@@ -211,13 +222,18 @@ async function openVersions(row) {
  * @returns {Promise<void>} 更新版本列表和总数。
  */
 async function loadVersions() {
+  if (!versionsOpen.value) return
+  const requestId = ++versionRequestId
+  const query = { ...versionQuery }
+  versionRows.value = []
   versionsLoading.value = true
   try {
-    const response = await listPublishedVersions(versionQuery)
+    const response = await listPublishedVersions(query)
+    if (requestId !== versionRequestId) return
     versionRows.value = response.rows || []
     versionTotal.value = response.total || 0
   } finally {
-    versionsLoading.value = false
+    if (requestId === versionRequestId) versionsLoading.value = false
   }
 }
 
@@ -241,12 +257,18 @@ async function toggleState(row) {
  * @returns {Promise<void>} 成功后同步刷新版本和最新定义列表。
  */
 async function toggleVersionState(row) {
+  if (!versionsOpen.value || !versionRows.value.includes(row)) return
+  const requestId = versionRequestId
+  const definitionId = row.definitionId
   const nextState = row.suspended ? 'active' : 'suspended'
   const action = row.suspended ? '激活' : '挂起'
-  await proxy.$modal.confirm(`确认${action} V${row.version} 及其运行实例吗？`)
-  await changeDeploymentState(row.definitionId, nextState)
+  await proxy.$modal.confirm(`确认${action}流程“${row.processName}”V${row.version}及其运行实例吗？`)
+  if (!versionsOpen.value || requestId !== versionRequestId) return
+  await changeDeploymentState(definitionId, nextState)
   proxy.$modal.msgSuccess(`流程定义已${action}`)
-  await Promise.all([loadVersions(), loadList()])
+  const requests = [loadList()]
+  if (versionsOpen.value && requestId === versionRequestId) requests.push(loadVersions())
+  await Promise.all(requests)
 }
 
 /**

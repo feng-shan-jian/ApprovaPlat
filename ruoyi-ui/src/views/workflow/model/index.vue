@@ -166,6 +166,16 @@ const historyTotal = ref(0)
 const historyModelName = ref('')
 const queryParams = reactive({ pageNum: 1, pageSize: 10, modelName: '', modelKey: '', category: '' })
 const historyQuery = reactive({ pageNum: 1, pageSize: 10, modelKey: '' })
+let historyRequestId = 0
+watch(historyOpen, open => {
+  if (open) return
+  historyRequestId += 1
+  historyRows.value = []
+  historyTotal.value = 0
+  historyLoading.value = false
+}, { flush: 'sync' })
+onDeactivated(() => { historyOpen.value = false })
+onBeforeUnmount(() => { historyOpen.value = false })
 const form = reactive(createEmptyForm())
 const formRef = ref(null)
 // 页面由页签 keep-alive 缓存；首次请求完成后，每次重新进入都必须查询服务端最新模型状态。
@@ -355,6 +365,7 @@ async function openHistory(row) {
   historyQuery.modelKey = row.modelKey
   historyQuery.pageNum = 1
   historyModelName.value = row.modelName
+  historyTotal.value = 0
   historyOpen.value = true
   await loadHistory()
 }
@@ -364,13 +375,18 @@ async function openHistory(row) {
  * @returns {Promise<void>} 更新历史列表和总数。
  */
 async function loadHistory() {
+  if (!historyOpen.value) return
+  const requestId = ++historyRequestId
+  const query = { ...historyQuery }
+  historyRows.value = []
   historyLoading.value = true
   try {
-    const response = await listModelHistory(historyQuery)
+    const response = await listModelHistory(query)
+    if (requestId !== historyRequestId) return
     historyRows.value = response.rows || []
     historyTotal.value = response.total || 0
   } finally {
-    historyLoading.value = false
+    if (requestId === historyRequestId) historyLoading.value = false
   }
 }
 
@@ -380,10 +396,16 @@ async function loadHistory() {
  * @returns {Promise<void>} 成功后刷新历史和主列表。
  */
 async function promote(row) {
-  await proxy.$modal.confirm(`确认将 V${row.version} 复制为新的最新版本吗？`)
-  await promoteModel(row.modelId)
+  if (!historyOpen.value || !historyRows.value.includes(row)) return
+  const requestId = historyRequestId
+  const modelId = row.modelId
+  await proxy.$modal.confirm(`确认将模型“${row.modelName}”V${row.version}复制为新的最新版本吗？`)
+  if (!historyOpen.value || requestId !== historyRequestId) return
+  await promoteModel(modelId)
   proxy.$modal.msgSuccess('已创建新的最新版本')
-  await Promise.all([loadHistory(), loadList()])
+  const requests = [loadList()]
+  if (historyOpen.value && requestId === historyRequestId) requests.push(loadHistory())
+  await Promise.all(requests)
 }
 
 /**
