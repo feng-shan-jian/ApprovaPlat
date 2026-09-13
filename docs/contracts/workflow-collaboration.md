@@ -13,7 +13,7 @@ ApprovaPlat 将协作图作为跨流程编排声明，并通过 Participant、Me
 
 SendTask 在 Flowable 当前事务内登记 `wf_collaboration_outbox` 后完成。后台 worker 使用冻结的 HTTP 端点、网络范围和外部环境密钥投递到 `POST /workflow/runtime-event/collaboration/message`；接收端凭据需要 `MESSAGE` 范围，变量同时受发送节点和接收凭据两层标量白名单限制。
 
-- `messageId` 是发送部署、实例、execution 和活动确定的小写 UUID，也是两端幂等主键；相同载荷重放返回首次结果，不同载荷返回冲突。
+- `messageId` 是发送部署、流程实例、execution、节点和当前 Flowable 活动实例确定的小写 UUID，也是两端幂等主键。同一次活动内相同载荷重放返回首次结果，不同载荷返回冲突；流程回到同一节点时，新的活动实例登记新的消息并分配下一序号。当前活动实例缺失时拒绝登记。活动实例、outbox、通道序号和审计同事务回滚，重试不会留下重复消息或序号空洞；已登记消息的投递与补偿始终沿用原 `messageId`，无需迁移已有台账。
 - `targetProcessDefinitionKey` 加 `correlationKey`（业务键）或 `targetProcessInstanceId`（实例键）唯一确定接收流程实例；匹配数量等于一时进入消费事务，其余数量返回稳定冲突。
 - 服务在同一 Flowable 事务登记 `wf_collaboration_message`，唯一消费消息订阅并写入目标实例/执行主键。消息消费和台账更新原子提交或整体回滚。
 - 出站和入站失败都按 `maxAttempts`（1～20，默认 5）进行自动有界指数退避；worker 使用数据库租约支持多节点接管，超过上限进入 `DEAD_LETTER`，后续只能由具备权限的管理员重新开启有界周期。

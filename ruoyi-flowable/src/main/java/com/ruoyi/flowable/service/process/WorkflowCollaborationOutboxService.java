@@ -7,6 +7,8 @@ import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.engine.history.HistoricProcessInstance;
+import org.flowable.engine.impl.persistence.entity.ExecutionEntity;
+import org.flowable.engine.impl.util.CommandContextUtil;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -102,7 +104,8 @@ public class WorkflowCollaborationOutboxService
         String targetKey = requiredText(config, "targetProcessDefinitionKey");
         String correlationKey = resolveCorrelation(execution, optionalText(config, "correlationVariable"));
         String messageId = UUID.nameUUIDFromBytes(String.join("\u0000", definition.getDeploymentId(),
-                execution.getProcessInstanceId(), execution.getId(), execution.getCurrentActivityId())
+                execution.getProcessInstanceId(), execution.getId(), execution.getCurrentActivityId(),
+                requireActivityInstanceId(execution))
                 .getBytes(StandardCharsets.UTF_8)).toString();
         String variablesJson = variablesJson(execution, config.get("variableNames"));
         WfCollaborationOutbox existing = mapper.selectByIdForUpdate(messageId);
@@ -157,6 +160,20 @@ public class WorkflowCollaborationOutboxService
         auditService.record(messageId, "OUTBOUND", "ENQUEUE", "SYSTEM", "flowable",
                 null, "PENDING", 0, null, "事务 outbox 已登记");
         metrics.record("enqueued");
+    }
+
+    private String requireActivityInstanceId(DelegateExecution execution)
+    {
+        // 节点重入复用 execution；当前活动实例才代表一次发送，且能读取同一命令尚未刷盘的发生次。
+        var activity = execution instanceof ExecutionEntity entity && CommandContextUtil.getCommandContext() != null
+                ? CommandContextUtil.getActivityInstanceEntityManager().findUnfinishedActivityInstance(entity)
+                : null;
+        if (activity == null || activity.getId() == null || activity.getId().isBlank())
+        {
+            throw new ServiceException("协作消息发送活动实例不存在", HttpStatus.ERROR)
+                    .setSubCode("COLLAB_OUTBOX_ACTIVITY_MISSING");
+        }
+        return activity.getId();
     }
 
     /**
