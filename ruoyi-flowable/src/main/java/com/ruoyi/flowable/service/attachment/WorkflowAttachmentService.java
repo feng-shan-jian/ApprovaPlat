@@ -1,7 +1,6 @@
 package com.ruoyi.flowable.service.attachment;
 
 import java.io.InputStream;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -12,14 +11,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 import tools.jackson.databind.ObjectMapper;
@@ -68,10 +65,10 @@ public class WorkflowAttachmentService
     private static final String STATE_CONFLICT_SUB_CODE =
             "WORKFLOW_ATTACHMENT_STATE_CONFLICT";
 
-    private static final Logger log = LoggerFactory.getLogger(WorkflowAttachmentService.class);
-
     private final WfAttachmentMapper attachmentMapper;
     private final WorkflowAttachmentStorage storage;
+    private final WorkflowAttachmentUploadJournal uploadJournal;
+    private final TransactionTemplate uploadTransaction;
     private final WorkflowAttachmentProperties properties;
     private final WorkflowIdentityResolver identityResolver;
     private final WorkflowProcessAccessService processAccessService;
@@ -90,10 +87,15 @@ public class WorkflowAttachmentService
     public WorkflowAttachmentService(WfAttachmentMapper attachmentMapper,
             WorkflowAttachmentStorage storage, WorkflowAttachmentProperties properties,
             WorkflowIdentityResolver identityResolver,
-            WorkflowProcessAccessService processAccessService)
+            WorkflowProcessAccessService processAccessService,
+            WorkflowAttachmentUploadJournal uploadJournal,
+            PlatformTransactionManager transactionManager)
     {
         this.attachmentMapper = attachmentMapper;
         this.storage = storage;
+        this.uploadJournal = uploadJournal;
+        this.uploadTransaction = new TransactionTemplate(transactionManager);
+        this.uploadTransaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         this.properties = properties;
         // 配置绑定在依赖 Bean 创建前完成，此处拒绝跨字段关系非法的退避参数。
         this.properties.validateCleanupRetryBackoff();
@@ -103,50 +105,50 @@ public class WorkflowAttachmentService
     }
 
     /**
-     * 为当前认证用户写入临时附件，数据库失败或事务回滚时补偿删除私有文件。
+     * 为当前认证用户写入临时附件，失败上传的文件由持久账本保证可恢复清理。
      *
      * @param fieldName String，当前 el-upload 组件的表单字段名
      * @param file MultipartFile，客户端上传文件；客户端 URL 和路径不会参与存储
      * @return WorkflowAttachmentView，不包含内部存储键的安全附件元数据
      */
-    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public WorkflowAttachmentView uploadTemporary(String fieldName, MultipartFile file)
     {
         String normalizedFieldName = requireFieldName(fieldName);
-        Long ownerUserId = currentUserId();
         long declaredFileSize = requireDeclaredFileSize(file);
+        // Controller 无外层事务：预登记提交并归还连接后，才开始上传写事务。
+        // 已有外层事务调用仍由 REQUIRED 加入，正式附件从不独立提交。
+        String storageKey = uploadJournal.reserve(file);
+        return uploadTransaction.execute(status -> uploadTemporary(
+                normalizedFieldName, file, declaredFileSize, storageKey));
+    }
+
+    private WorkflowAttachmentView uploadTemporary(String normalizedFieldName,
+            MultipartFile file, long declaredFileSize, String storageKey)
+    {
+        Long ownerUserId = currentUserId();
 
         // 身份解析会在锁前查询用户主数据；READ_COMMITTED 保证等待同用户 guard 后读取已提交占用。
         WorkflowAttachmentQuotaUsage quotaUsage = lockAndLoadQuotaUsage(ownerUserId);
         requireTemporaryQuota(quotaUsage, declaredFileSize);
         requireDiskReservation(declaredFileSize);
-        StoredAttachmentFile stored = storage.store(file);
-        registerRollbackFileCompensation(stored.storageKey());
-        try
-        {
-            // 以服务端实际读取值复核数据库容量，并确认落盘后仍满足磁盘低水位。
-            // 任一步失败都进入同一补偿分支，避免无事务代理的直接调用遗留孤儿文件。
-            requireTemporaryQuota(quotaUsage, stored.fileSize());
-            requireDiskLowWatermark();
+        uploadJournal.lock(storageKey);
+        StoredAttachmentFile stored = storage.store(file, storageKey);
+        requireTemporaryQuota(quotaUsage, stored.fileSize());
+        requireDiskLowWatermark();
 
-            LocalDateTime now = LocalDateTime.now();
-            WfAttachment attachment = new WfAttachment(
-                    UUID.randomUUID().toString(), ownerUserId, normalizedFieldName,
-                    stored.originalName(), stored.storageKey(), stored.contentType(),
-                    stored.fileSize(), stored.sha256(), WorkflowAttachmentStatus.TEMP,
-                    now.plus(properties.getTemporaryTtl()), null, null, null, null, null, null,
-                    0, null, null, null, null, now, null);
-            if (attachmentMapper.insert(attachment) != 1)
-            {
-                throw new ServiceException("工作流附件元数据写入失败", HttpStatus.ERROR);
-            }
-            return toView(attachment);
-        }
-        catch (RuntimeException failure)
+        LocalDateTime now = LocalDateTime.now();
+        WfAttachment attachment = new WfAttachment(
+                UUID.randomUUID().toString(), ownerUserId, normalizedFieldName,
+                stored.originalName(), stored.storageKey(), stored.contentType(),
+                stored.fileSize(), stored.sha256(), WorkflowAttachmentStatus.TEMP,
+                now.plus(properties.getTemporaryTtl()), null, null, null, null, null, null,
+                0, null, null, null, null, now, null);
+        if (attachmentMapper.insert(attachment) != 1)
         {
-            deleteCompensationFile(stored.storageKey(), failure);
-            throw failure;
+            throw new ServiceException("工作流附件元数据写入失败", HttpStatus.ERROR);
         }
+        uploadJournal.consume(storageKey);
+        return toView(attachment);
     }
 
     /**
@@ -687,7 +689,7 @@ public class WorkflowAttachmentService
             throw new ServiceException("工作流附件清理重试状态数据异常", HttpStatus.ERROR);
         }
         LocalDateTime nextRetryTime = LocalDateTime.now().plus(
-                cleanupRetryDelay(expectedRetryCount));
+                properties.cleanupRetryDelay(expectedRetryCount));
         if (attachmentMapper.scheduleCleanupRetry(attachment.attachmentId(),
                 attachment.cleanupClaimToken(), expectedRetryCount, nextRetryTime,
                 CLEANUP_FAILURE_ERROR_CODE) == 1)
@@ -709,26 +711,6 @@ public class WorkflowAttachmentService
             return false;
         }
         throw new ServiceException("工作流附件清理重试状态写入失败", HttpStatus.ERROR);
-    }
-
-    /**
-     * 按已失败次数计算有上限的二倍指数退避，避免整数溢出和异常配置突破最大值。
-     *
-     * @param completedRetryCount int，候选行已经持久化的失败重试次数
-     * @return Duration，本次失败到下一次候选扫描的等待时长
-     */
-    private Duration cleanupRetryDelay(int completedRetryCount)
-    {
-        Duration delay = properties.getCleanupRetryInitialDelay();
-        Duration maxDelay = properties.getCleanupRetryMaxDelay();
-        for (int doubling = 0; doubling < completedRetryCount
-                && delay.compareTo(maxDelay) < 0; doubling++)
-        {
-            // 两个配置均不超过七天；达到上限后立即终止，循环次数不会受异常大计数放大。
-            Duration doubled = delay.multipliedBy(2L);
-            delay = doubled.compareTo(maxDelay) >= 0 ? maxDelay : doubled;
-        }
-        return delay;
     }
 
     /**
@@ -1287,63 +1269,6 @@ public class WorkflowAttachmentService
             throw new ServiceException("工作流附件节点关联异常", HttpStatus.ERROR);
         }
         return nodeKey.trim();
-    }
-
-    /**
-     * 在上传事务最终未提交时补偿删除已落盘文件。
-     *
-     * @param storageKey String，刚写入的私有对象键
-     * @return void，无返回值
-     */
-    private void registerRollbackFileCompensation(String storageKey)
-    {
-        if (!TransactionSynchronizationManager.isSynchronizationActive())
-        {
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization()
-        {
-            /**
-             * 在数据库事务完成后仅对非提交结果执行文件补偿。
-             *
-             * @param status int，Spring 事务完成状态
-             * @return void，无返回值
-             */
-            @Override
-            public void afterCompletion(int status)
-            {
-                if (status != TransactionSynchronization.STATUS_COMMITTED)
-                {
-                    try
-                    {
-                        storage.delete(storageKey);
-                    }
-                    catch (RuntimeException cleanupFailure)
-                    {
-                        log.error("工作流附件事务回滚补偿删除失败", cleanupFailure);
-                    }
-                }
-            }
-        });
-    }
-
-    /**
-     * 在数据库登记立即失败时同步删除文件，并把清理异常挂到原失败上。
-     *
-     * @param storageKey String，刚写入的私有对象键
-     * @param originalFailure RuntimeException，必须继续抛出的数据库失败
-     * @return void，无返回值
-     */
-    private void deleteCompensationFile(String storageKey, RuntimeException originalFailure)
-    {
-        try
-        {
-            storage.delete(storageKey);
-        }
-        catch (RuntimeException cleanupFailure)
-        {
-            originalFailure.addSuppressed(cleanupFailure);
-        }
     }
 
     /**

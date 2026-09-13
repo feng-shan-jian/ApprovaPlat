@@ -41,7 +41,9 @@ class WorkflowAttachmentBatchProjectionTest
         WorkflowProcessAccessService accessService = mock(WorkflowProcessAccessService.class);
         WorkflowAttachmentService service = new WorkflowAttachmentService(mapper,
                 mock(WorkflowAttachmentStorage.class), new WorkflowAttachmentProperties(),
-                mock(WorkflowIdentityResolver.class), accessService);
+                mock(WorkflowIdentityResolver.class), accessService,
+                mock(WorkflowAttachmentUploadJournal.class),
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
         when(mapper.selectByIds(anyCollection())).thenReturn(List.of(
                 boundAttachment(firstId, "contracts", processInstanceId),
                 boundAttachment(secondId, "evidence", processInstanceId)));
@@ -74,7 +76,9 @@ class WorkflowAttachmentBatchProjectionTest
         WorkflowProcessAccessService accessService = mock(WorkflowProcessAccessService.class);
         WorkflowAttachmentService service = new WorkflowAttachmentService(mapper,
                 mock(WorkflowAttachmentStorage.class), new WorkflowAttachmentProperties(),
-                mock(WorkflowIdentityResolver.class), accessService);
+                mock(WorkflowIdentityResolver.class), accessService,
+                mock(WorkflowAttachmentUploadJournal.class),
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
         Map<String, String> expectedFields = new LinkedHashMap<>();
         List<WfAttachment> firstBatch = new ArrayList<>();
         List<WfAttachment> secondBatch = new ArrayList<>();

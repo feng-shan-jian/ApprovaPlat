@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.List;
 import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WfAttachment;
+import com.ruoyi.flowable.domain.WfAttachmentUpload;
 import com.ruoyi.flowable.domain.WorkflowAttachmentQuotaUsage;
 
 /**
@@ -12,6 +13,26 @@ import com.ruoyi.flowable.domain.WorkflowAttachmentQuotaUsage;
  */
 public interface WfAttachmentMapper
 {
+    int insertUpload(@Param("storageKey") String storageKey);
+
+    Integer selectUploadClaimCountForUpdate(@Param("storageKey") String storageKey);
+
+    int consumeUpload(@Param("storageKey") String storageKey);
+
+    List<WfAttachmentUpload> selectUploadsForUpdate(@Param("limit") int limit);
+
+    int claimUpload(@Param("storageKey") String storageKey,
+            @Param("claimToken") String claimToken, @Param("leaseSeconds") long leaseSeconds);
+
+    boolean existsByStorageKey(@Param("storageKey") String storageKey);
+
+    int completeUploadCleanup(@Param("storageKey") String storageKey,
+            @Param("claimToken") String claimToken);
+
+    int retryUploadCleanup(@Param("storageKey") String storageKey,
+            @Param("claimToken") String claimToken,
+            @Param("nextRetryTime") LocalDateTime nextRetryTime);
+
     /**
      * 幂等创建用户附件配额互斥行；不同用户使用不同主键，不形成跨用户串行锁。
      *

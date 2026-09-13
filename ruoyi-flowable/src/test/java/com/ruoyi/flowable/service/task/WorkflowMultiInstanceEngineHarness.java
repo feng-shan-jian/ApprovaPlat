@@ -64,6 +64,7 @@ import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
+import com.ruoyi.flowable.service.attachment.WorkflowAttachmentUploadJournal;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService;
@@ -390,13 +391,17 @@ class WorkflowMultiInstanceEngineHarness
     /** @return WorkflowAttachmentService，使用正式 Mapper 与私有临时存储。 */
     @Bean
     WorkflowAttachmentService attachmentService(WfAttachmentMapper mapper,
-            WorkflowIdentityResolver resolver, Path attachmentRoot)
+            WorkflowIdentityResolver resolver, Path attachmentRoot,
+            DataSourceTransactionManager transactionManager)
     {
         WorkflowAttachmentProperties properties = new WorkflowAttachmentProperties();
         properties.setMinFreeBytes(0L);
-        return new WorkflowAttachmentService(mapper,
-                new WorkflowAttachmentStorage(attachmentRoot, properties.getMaxSize()),
-                properties, resolver, mock(WorkflowProcessAccessService.class));
+        WorkflowAttachmentStorage storage = new WorkflowAttachmentStorage(
+                attachmentRoot, properties.getMaxSize());
+        return new WorkflowAttachmentService(mapper, storage,
+                properties, resolver, mock(WorkflowProcessAccessService.class),
+                new WorkflowAttachmentUploadJournal(mapper, storage, properties, transactionManager),
+                transactionManager);
     }
 
     /** @return Path，当前 Spring 测试上下文独占附件目录。 */

@@ -228,6 +228,22 @@ public class WorkflowAttachmentProperties
         return cleanupRetryInitialDelay;
     }
 
+    /** 两类附件清理共享有上限的指数退避；达到上限后不再随重试计数循环。 */
+    public Duration cleanupRetryDelay(int completedAttempts)
+    {
+        if (completedAttempts < 0)
+        {
+            throw new IllegalArgumentException("附件清理重试次数不能为负数");
+        }
+        Duration delay = cleanupRetryInitialDelay;
+        for (int attempt = 0; attempt < completedAttempts && delay.compareTo(cleanupRetryMaxDelay) < 0; attempt++)
+        {
+            Duration doubled = delay.multipliedBy(2L);
+            delay = doubled.compareTo(cleanupRetryMaxDelay) >= 0 ? cleanupRetryMaxDelay : doubled;
+        }
+        return delay;
+    }
+
     /**
      * 设置首次附件物理清理失败后的重试延迟。
      *

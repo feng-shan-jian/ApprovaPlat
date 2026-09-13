@@ -15,6 +15,7 @@ readonly -a BASELINE_FILES=(
   "flowable/business/8.0.0__workflow_model_version_guard.sql"
   "flowable/business/8.0.0__workflow_business.sql"
   "flowable/business/8.0.1__workflow_mail_config.sql"
+  "flowable/business/8.0.4__workflow_attachment_upload.sql"
   "flowable/menu/8.0.0__workflow_menu.sql"
 )
 

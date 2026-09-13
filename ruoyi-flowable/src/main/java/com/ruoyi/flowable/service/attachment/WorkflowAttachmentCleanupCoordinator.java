@@ -27,6 +27,7 @@ public class WorkflowAttachmentCleanupCoordinator
             "attachment_storage_cleanup_failed";
 
     private final WorkflowAttachmentService attachmentService;
+    private final WorkflowAttachmentUploadJournal uploadJournal;
     private final TransactionOperations shortTransaction;
 
     /**
@@ -39,9 +40,11 @@ public class WorkflowAttachmentCleanupCoordinator
     @Autowired
     public WorkflowAttachmentCleanupCoordinator(
             WorkflowAttachmentService attachmentService,
+            WorkflowAttachmentUploadJournal uploadJournal,
             PlatformTransactionManager transactionManager)
     {
         this.attachmentService = attachmentService;
+        this.uploadJournal = uploadJournal;
         this.shortTransaction = createShortTransaction(transactionManager);
     }
 
@@ -101,7 +104,9 @@ public class WorkflowAttachmentCleanupCoordinator
                         storageFailure.getClass().getSimpleName());
             }
         }
-        return new WorkflowAttachmentCleanupResult(cleaned, failures, leaseLost);
+        WorkflowAttachmentCleanupResult uploads = uploadJournal.cleanupBatch();
+        return new WorkflowAttachmentCleanupResult(cleaned + uploads.cleaned(),
+                failures + uploads.failures(), leaseLost + uploads.leaseLost());
     }
 
     /**

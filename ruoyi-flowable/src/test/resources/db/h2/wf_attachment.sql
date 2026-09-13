@@ -1,4 +1,14 @@
 -- 需要真实附件绑定链的 H2 集成测试共享表结构。
+create table wf_attachment_upload (
+    storage_key varchar(160) primary key,
+    claim_count int not null default 0,
+    claim_token varchar(36),
+    lease_until timestamp(3),
+    next_retry_time timestamp(3) not null default current_timestamp(3)
+);
+create index idx_wf_attachment_upload_cleanup
+    on wf_attachment_upload(next_retry_time, storage_key);
+
 create table wf_attachment_quota_guard (
     owner_user_id bigint primary key
 );

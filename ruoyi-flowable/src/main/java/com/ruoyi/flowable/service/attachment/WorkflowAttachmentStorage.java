@@ -125,15 +125,24 @@ public class WorkflowAttachmentStorage
      */
     public StoredAttachmentFile store(MultipartFile file)
     {
+        return store(file, reserveKey(file));
+    }
+
+    String reserveKey(MultipartFile file)
+    {
         if (file == null)
         {
             throw invalidUpload("上传附件不能为空");
         }
+        return createStorageKey(normalizeOriginalName(file.getOriginalFilename()));
+    }
+
+    StoredAttachmentFile store(MultipartFile file, String storageKey)
+    {
         String originalName = normalizeOriginalName(file.getOriginalFilename());
-        String storageKey = createStorageKey(originalName);
         Path destination = resolveStorageKey(storageKey);
-        Path temporary = storageRoot.resolve(".tmp").resolve("upload-"
-                + UUID.randomUUID().toString().replace("-", "") + ".part").normalize();
+        Path temporary = temporaryPath(storageKey);
+        boolean temporaryCreated = false;
         boolean published = false;
         try
         {
@@ -146,6 +155,7 @@ public class WorkflowAttachmentStorage
                     StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
                     LinkOption.NOFOLLOW_LINKS))
             {
+                temporaryCreated = true;
                 digest = copyAndDigest(file, output);
             }
             applyFilePermissions(temporary);
@@ -165,18 +175,18 @@ public class WorkflowAttachmentStorage
         }
         catch (ServiceException failure)
         {
-            cleanupUploadFiles(temporary, destination, published, failure);
+            cleanupUploadFiles(temporaryCreated ? temporary : null, destination, published, failure);
             throw failure;
         }
         catch (IOException failure)
         {
             ServiceException storageFailure = storageFailure("工作流附件写入失败", failure);
-            cleanupUploadFiles(temporary, destination, published, storageFailure);
+            cleanupUploadFiles(temporaryCreated ? temporary : null, destination, published, storageFailure);
             throw storageFailure;
         }
         catch (RuntimeException failure)
         {
-            cleanupUploadFiles(temporary, destination, published, failure);
+            cleanupUploadFiles(temporaryCreated ? temporary : null, destination, published, failure);
             throw failure;
         }
     }
@@ -263,14 +273,51 @@ public class WorkflowAttachmentStorage
      */
     public boolean delete(String storageKey)
     {
-        Path path = resolveStorageKey(storageKey);
+        return deleteFile(resolveStorageKey(storageKey));
+    }
+
+    void deleteUncommittedUpload(String storageKey)
+    {
+        delete(storageKey);
+        deleteFile(temporaryPath(storageKey));
+    }
+
+    private Path temporaryPath(String storageKey)
+    {
+        return storageRoot.resolve(".tmp").resolve(
+                resolveStorageKey(storageKey).getFileName().toString() + ".part");
+    }
+
+    private boolean deleteFile(Path path)
+    {
         try
         {
+            verifyStorageRoot();
+            for (Path directory = path.getParent(); directory.startsWith(storageRoot);
+                    directory = directory.getParent())
+            {
+                requireDirectory(directory);
+            }
             requireOrdinaryFile(path);
-            return Files.deleteIfExists(path);
+            boolean deleted = Files.deleteIfExists(path);
+            if (!deleted)
+            {
+                verifyStorageRoot();
+            }
+            return deleted;
         }
         catch (NoSuchFileException ignored)
         {
+            // 根失联不能证明对象不存在，必须保留持久清理登记等待存储恢复。
+            try
+            {
+                verifyStorageRoot();
+            }
+            catch (IOException rootFailure)
+            {
+                throw new WorkflowAttachmentStorageOperationException(
+                        "工作流附件私有存储不可用", rootFailure);
+            }
             return false;
         }
         catch (ServiceException failure)
@@ -691,9 +738,12 @@ public class WorkflowAttachmentStorage
     {
         try
         {
-            Files.deleteIfExists(temporary);
+            if (temporary != null)
+            {
+                deleteFile(temporary);
+            }
         }
-        catch (IOException | RuntimeException cleanupFailure)
+        catch (RuntimeException cleanupFailure)
         {
             originalFailure.addSuppressed(cleanupFailure);
         }
@@ -701,9 +751,9 @@ public class WorkflowAttachmentStorage
         {
             try
             {
-                Files.deleteIfExists(destination);
+                deleteFile(destination);
             }
-            catch (IOException | RuntimeException cleanupFailure)
+            catch (RuntimeException cleanupFailure)
             {
                 originalFailure.addSuppressed(cleanupFailure);
             }

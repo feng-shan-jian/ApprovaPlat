@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-当前仓库定义首个正式数据库基线。空库直接安装 28 张 `wf_*` 表和平台单例 `sys_mail_config`；已经完成 8.0.0 基线的数据库按本文“现有基线升级”执行 8.0.1 前向迁移；开发库按完整基线重建。以上三条路径直接替换开发期回填、双写和影子表方案。
+本文列出的空库基线安装 29 张 `wf_*` 表和平台单例 `sys_mail_config`；已经完成 8.0.0 基线的数据库按本文“现有基线升级”执行前向迁移；开发库按完整基线重建。以上三条路径直接替换开发期回填、双写和影子表方案。
 
 ## 空库初始化顺序
 
@@ -11,7 +11,7 @@
 1. `sql/ry_20260417.sql`
 2. `sql/quartz.sql`
 
-然后严格执行以下八个工作流基线文件：
+然后严格执行以下九个工作流基线文件：
 
 1. `sql/flowable/mysql/8.0.0/create/flowable.mysql.create.common.sql`
 2. `sql/flowable/mysql/8.0.0/create/flowable.mysql.create.engine.sql`
@@ -20,13 +20,14 @@
 5. `sql/flowable/business/8.0.0__workflow_model_version_guard.sql`
 6. `sql/flowable/business/8.0.0__workflow_business.sql`
 7. `sql/flowable/business/8.0.1__workflow_mail_config.sql`
-8. `sql/flowable/menu/8.0.0__workflow_menu.sql`
+8. `sql/flowable/business/8.0.4__workflow_attachment_upload.sql`
+9. `sql/flowable/menu/8.0.0__workflow_menu.sql`
 
 所有 MySQL 客户端执行显式使用 `--default-character-set=utf8mb4`。Flowable 官方基础脚本包含破坏性初始化语句，执行目标固定为已经验证为空的 schema。
 
 ## 本地 Docker 开发环境
 
-在仓库根目录执行 `docker compose up -d` 会启动仅绑定 `127.0.0.1` 的 MySQL 和 Redis。MySQL 首次创建 `approvaplat-mysql-data` Volume 时，通过官方 `/docker-entrypoint-initdb.d/` 机制调用 `docker/mysql/init.sh`；该脚本按上述顺序直接读取并执行 `sql/` 中的十个正式基线文件，不复制、不合并 SQL。
+在仓库根目录执行 `docker compose up -d` 会启动仅绑定 `127.0.0.1` 的 MySQL 和 Redis。MySQL 首次创建 `approvaplat-mysql-data` Volume 时，通过官方 `/docker-entrypoint-initdb.d/` 机制调用 `docker/mysql/init.sh`；该脚本按上述顺序直接读取并执行 `sql/` 中的十一个正式基线文件，不复制、不合并 SQL。
 
 Docker 自动初始化只改变本地空库的执行入口，不改变 SQL 基线规则。
 
@@ -44,9 +45,13 @@ Flowable 继续保持 `database-schema-update: "false"`，应用启动不得创�
 
 升级完成后，管理员通过受控业务入口重新配置 SMTP 账号和授权码；SQL 和部署示例只保存公开结构与字段说明。
 
+启用附件上传持久恢复前，额外执行 `sql/flowable/business/8.0.4__workflow_attachment_upload.sql`，核验空的 `wf_attachment_upload`、`storage_key` 的 160 字符 ASCII 二进制主键，以及 `(next_retry_time, storage_key)` 清理索引。无需改写现有附件元数据或文件。已部署的其他功能迁移继续按其各自契约执行，本项只新增上传清理表。
+
+回退应用版本时保留 `wf_attachment_upload`，不要删除待回收记录。停用旧上传入口后，先由支持该账本的版本处理积压并确认没有活动上传、登记行数为零，再决定是否移除空表。历史无元数据、无上传登记的孤儿不在自动迁移回收范围内。
+
 ## 开发库重建
 
-开发库以可重建数据为准。结构变化时直接删除目标 schema，按上述十个初始化文件重建，然后执行 `mysqlcheck`；仓库只保留正式基线 SQL。
+开发库以可重建数据为准。结构变化时直接删除目标 schema，按上述十一个初始化文件重建，然后执行 `mysqlcheck`；仓库只保留正式基线 SQL。
 
 ## 表基线
 
@@ -55,11 +60,11 @@ Flowable 继续保持 `database-schema-update: "false"`，应用启动不得创�
 | 若依 | 20 |
 | Quartz | 11 |
 | Flowable Common/Process/History/DMN | 36 |
-| 工作流 `wf_*` | 28 |
+| 工作流 `wf_*` | 29 |
 | 平台邮件配置 `sys_mail_config` | 1 |
-| 合计 | 96 |
+| 合计 | 97 |
 
-28 张业务表：
+29 张业务表：
 
 - `wf_category`
 - `wf_form`
@@ -83,6 +88,7 @@ Flowable 继续保持 `database-schema-update: "false"`，应用启动不得创�
 - `wf_process_draft`
 - `wf_attachment_quota_guard`
 - `wf_attachment`
+- `wf_attachment_upload`
 - `wf_bpmn_event_code`
 - `wf_bpmn_event_audit`
 - `wf_notification_policy`

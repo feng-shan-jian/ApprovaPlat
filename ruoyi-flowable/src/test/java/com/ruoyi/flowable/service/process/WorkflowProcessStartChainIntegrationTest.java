@@ -77,6 +77,7 @@ import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.attachment.StoredAttachmentFile;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
+import com.ruoyi.flowable.service.attachment.WorkflowAttachmentUploadJournal;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
@@ -283,7 +284,10 @@ class WorkflowProcessStartChainIntegrationTest
                 attachmentProperties.getMaxSize());
         WorkflowAttachmentService attachmentTarget = new WorkflowAttachmentService(
                 attachmentMapper, attachmentStorage, attachmentProperties, identityResolver,
-                mock(WorkflowProcessAccessService.class));
+                mock(WorkflowProcessAccessService.class),
+                new WorkflowAttachmentUploadJournal(attachmentMapper, attachmentStorage,
+                        attachmentProperties, engineInfrastructure.transactionManager()),
+                engineInfrastructure.transactionManager());
         attachmentService =
                 engineInfrastructure.transactionalProxy(attachmentTarget);
         variableValidator = spy(new WorkflowStartVariableValidator(

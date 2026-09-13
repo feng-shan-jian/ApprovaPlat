@@ -3,6 +3,51 @@
 PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
 "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.ruoyi.flowable.mapper.WfAttachmentMapper">
+    <insert id="insertUpload">
+        insert into wf_attachment_upload(storage_key) values (#{storageKey})
+    </insert>
+    <select id="selectUploadClaimCountForUpdate" resultType="int" timeout="10">
+        select claim_count from wf_attachment_upload
+        where storage_key = #{storageKey} for update
+    </select>
+    <delete id="consumeUpload">
+        delete from wf_attachment_upload
+        where storage_key = #{storageKey} and claim_count = 0
+    </delete>
+    <resultMap id="UploadResult" type="com.ruoyi.flowable.domain.WfAttachmentUpload">
+        <constructor>
+            <arg column="storage_key" javaType="java.lang.String"/>
+            <arg column="claim_count" javaType="_int"/>
+        </constructor>
+    </resultMap>
+    <select id="selectUploadsForUpdate" resultMap="UploadResult" timeout="10">
+        select storage_key, claim_count from wf_attachment_upload
+        where next_retry_time &lt;= current_timestamp(3)
+          and (claim_token is null or lease_until &lt;= current_timestamp(3))
+        order by next_retry_time, storage_key
+        limit #{limit} for update skip locked
+    </select>
+    <update id="claimUpload">
+        update wf_attachment_upload
+        set claim_count = case when claim_count &lt; 2147483647 then claim_count + 1
+                               else claim_count end,
+            claim_token = #{claimToken},
+            lease_until = timestampadd(second, #{leaseSeconds}, current_timestamp(3))
+        where storage_key = #{storageKey}
+          and (claim_token is null or lease_until &lt;= current_timestamp(3))
+    </update>
+    <select id="existsByStorageKey" resultType="boolean">
+        select exists(select 1 from wf_attachment where storage_key = #{storageKey})
+    </select>
+    <delete id="completeUploadCleanup">
+        delete from wf_attachment_upload
+        where storage_key = #{storageKey} and claim_token = #{claimToken}
+    </delete>
+    <update id="retryUploadCleanup">
+        update wf_attachment_upload
+        set next_retry_time = #{nextRetryTime}, claim_token = null, lease_until = null
+        where storage_key = #{storageKey} and claim_token = #{claimToken}
+    </update>
 
     <resultMap id="WfAttachmentResult" type="com.ruoyi.flowable.domain.WfAttachment">
         <constructor>

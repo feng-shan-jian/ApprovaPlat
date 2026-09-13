@@ -31,6 +31,51 @@ class WorkflowAttachmentStorageContractTest
     @TempDir
     Path profile;
 
+    @Test
+    void reservedUploadDoesNotRemoveExistingPartialOrPublishedFile() throws Exception
+    {
+        WorkflowAttachmentStorage storage = new WorkflowAttachmentStorage(profile, 1024);
+        MockMultipartFile upload = file("memo.txt", "new-content".getBytes(StandardCharsets.UTF_8));
+        String key = storage.reserveKey(upload);
+        Path root = profile.resolve(WorkflowAttachmentStorage.PRIVATE_DIRECTORY_NAME);
+        Path partial = root.resolve(".tmp").resolve(Path.of(key).getFileName() + ".part");
+        Files.createDirectories(partial.getParent());
+        Files.writeString(partial, "previous-writer");
+        assertThrows(ServiceException.class, () -> storage.store(upload, key));
+        assertEquals("previous-writer", Files.readString(partial));
+        Files.delete(partial);
+        StoredAttachmentFile stored = storage.store(upload, key);
+        assertThrows(ServiceException.class, () -> storage.store(upload, key));
+        storage.verify(key, stored.fileSize(), stored.sha256());
+        assertFalse(Files.exists(partial));
+    }
+
+    @Test
+    void unfinishedUploadCleanupRejectsTraversalAndLinkedTemporaryDirectory() throws Exception
+    {
+        WorkflowAttachmentStorage storage = new WorkflowAttachmentStorage(profile, 1024);
+        assertThrows(ServiceException.class, () -> storage.deleteUncommittedUpload("../outside"));
+        String key = storage.reserveKey(file("memo.txt", new byte[] { 1 }));
+        Path root = profile.resolve(WorkflowAttachmentStorage.PRIVATE_DIRECTORY_NAME);
+        Path outside = profile.resolve("outside");
+        Files.createDirectories(outside);
+        Path target = outside.resolve(Path.of(key).getFileName() + ".part");
+        Files.writeString(target, "outside-content");
+        Path temporary = root.resolve(".tmp");
+        Files.deleteIfExists(temporary);
+        try
+        {
+            Files.createSymbolicLink(temporary, outside);
+        }
+        catch (IOException | UnsupportedOperationException failure)
+        {
+            Assumptions.abort("当前文件系统不支持创建符号链接: " + failure.getClass().getSimpleName());
+        }
+        assertThrows(WorkflowAttachmentStorageOperationException.class,
+                () -> storage.deleteUncommittedUpload(key));
+        assertEquals("outside-content", Files.readString(target));
+    }
+
     /**
      * 验证正常上传、同通道读取校验、摘要复核和幂等删除。
      * @return void，无返回值
