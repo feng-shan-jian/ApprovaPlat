@@ -493,46 +493,43 @@ public class WorkflowDeploymentArtifactRepository
         return false;
     }
 
-    /**
-     * 统计已发布部署资源对指定扩展版本的引用数。
-     *
-     * @param versionIds Collection&lt;Long&gt;，一个扩展目录拥有的版本主键
-     * @return int，扩展执行快照引用数量
-     */
-    public int countExtensionVersionReferences(Collection<Long> versionIds)
+    /** 只在单条删除核验中分批读取正式资源；未知或损坏资源必须阻止删除。 */
+    public boolean hasExtensionReference(String extensionKey, Collection<Long> versionIds)
     {
         Set<Long> targets = versionIds == null ? Set.of() : versionIds.stream()
                 .filter(id -> id != null && id > 0).collect(java.util.stream.Collectors.toSet());
         if (targets.isEmpty())
         {
-            return 0;
+            return false;
         }
-        int count = 0;
-        for (Deployment artifact : listArtifactDeployments())
+        final int pageSize = 100;
+        for (int offset = 0; ; offset = Math.addExact(offset, pageSize))
         {
-            count += (int) readListFromArtifact(artifact, EXTENSIONS_RESOURCE, EXTENSION_LIST)
-                    .stream().map(WfDeployExtensionSnapshot::getExtensionVersionId)
-                    .filter(targets::contains).count();
+            List<Deployment> page = repositoryService.createDeploymentQuery()
+                    .deploymentCategory(ARTIFACT_CATEGORY)
+                    .orderByDeploymentTime().asc().orderByDeploymentId().asc()
+                    .listPage(offset, pageSize);
+            for (Deployment artifact : page)
+            {
+                List<WfDeployExtensionSnapshot> snapshots = readListFromArtifact(
+                        artifact, EXTENSIONS_RESOURCE, EXTENSION_LIST);
+                if (snapshots.stream().anyMatch(snapshot -> snapshot.getExtensionVersionId() == null
+                        || snapshot.getExtensionVersionId() <= 0
+                        || !StringUtils.hasText(snapshot.getExtensionKey())))
+                {
+                    throw new ServiceException("流程部署扩展版本引用不完整，不能确认删除条件", HttpStatus.ERROR);
+                }
+                if (snapshots.stream().anyMatch(snapshot -> targets.contains(snapshot.getExtensionVersionId())
+                        || extensionKey.equals(snapshot.getExtensionKey())))
+                {
+                    return true;
+                }
+            }
+            if (page.size() < pageSize)
+            {
+                return false;
+            }
         }
-        return count;
-    }
-
-    /**
-     * 一次扫描全部正式部署制品，返回仍被引用的扩展稳定键。
-     *
-     * @return Set&lt;String&gt;，部署扩展快照中出现过的稳定键不可变集合
-     */
-    public Set<String> referencedExtensionKeys()
-    {
-        Set<String> referencedKeys = new java.util.LinkedHashSet<>();
-        for (Deployment artifact : listArtifactDeployments())
-        {
-            readListFromArtifact(artifact, EXTENSIONS_RESOURCE, EXTENSION_LIST).stream()
-                    .map(WfDeployExtensionSnapshot::getExtensionKey)
-                    .filter(key -> key != null && !key.isBlank())
-                    .forEach(referencedKeys::add);
-        }
-        return Set.copyOf(referencedKeys);
     }
 
     /**
@@ -585,7 +582,11 @@ public class WorkflowDeploymentArtifactRepository
         try
         {
             List<T> values = objectMapper.readValue(bytes, type);
-            return values == null ? List.of() : List.copyOf(values);
+            if (values == null)
+            {
+                throw new ServiceException("流程部署业务资源列表缺失", HttpStatus.ERROR);
+            }
+            return List.copyOf(values);
         }
         catch (JacksonException exception)
         {

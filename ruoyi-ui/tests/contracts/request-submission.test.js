@@ -93,6 +93,24 @@ async function rejected(operation, expected = duplicateMessage) {
   return error
 }
 
+test('扩展检查和删除的业务、HTTP、网络错误仅交给所属页面提示', async t => {
+  const state = client(t)
+  const api = state.api('../../src/api/workflow/extension.js', ['checkWorkflowExtensionDeletion', 'removeWorkflowExtension'])
+  for (const operation of Object.values(api)) {
+    for (const failure of ['business', 'http', 'network']) {
+      const result = operation(7).then(() => null, error => error)
+      await setImmediate()
+      const call = state.calls.at(-1)
+      assert.equal(call.config.suppressErrorMessage, true)
+      if (failure === 'business') call.resolve({ code: 409, msg: '目录已被引用' })
+      else call.reject(new axios.AxiosError('Network Error', undefined, call.config, null,
+        failure === 'http' ? { status: 500, data: { code: 500, msg: '资源损坏' } } : undefined))
+      assert.ok(await result instanceof Error)
+      assert.deepEqual(state.messages, [])
+    }
+  }
+})
+
 test('启动立即清除旧请求缓存，真实密码、注册、解锁和密钥 API 不写任何 Storage', async t => {
   const state = client(t, { sessionObj: JSON.stringify({ data: secret }), preference: 'keep-session' })
   assert.equal(state.sessionStorage.getItem('sessionObj'), null)

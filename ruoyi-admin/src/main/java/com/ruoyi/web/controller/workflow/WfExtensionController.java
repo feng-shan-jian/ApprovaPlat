@@ -168,6 +168,15 @@ public class WfExtensionController extends BaseController
         return success();
     }
 
+    @PreAuthorize("@ss.hasPermi('workflow:extension:remove')")
+    @GetMapping("/{extensionId}/deletion-check")
+    public AjaxResult checkDeletion(
+            @PathVariable @Positive(message = "扩展主键必须为正数") Long extensionId)
+    {
+        extensionService.checkDeletion(extensionId);
+        return success(Map.of("deleteAllowed", true));
+    }
+
     /**
      * 删除已停用且未被部署快照引用的非内置扩展目录。
      * @param extensionId Long，扩展目录主键

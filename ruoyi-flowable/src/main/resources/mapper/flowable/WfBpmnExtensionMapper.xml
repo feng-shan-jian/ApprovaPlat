@@ -45,15 +45,19 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             <arg column="checksum" javaType="java.lang.String"/>
             <arg column="effective_update_time" javaType="java.util.Date"/>
             <arg column="delete_allowed" javaType="_boolean"/>
+            <arg column="delete_check_allowed" javaType="_boolean"/>
         </constructor>
     </resultMap>
 
     <select id="selectManagementList" resultMap="ManagementResult">
         select e.extension_id, e.extension_key, e.extension_name, e.extension_type,
                e.status, e.description, v.version_id, v.version_no,
-               v.implementation_key, v.checksum,
+               case when e.extension_type = 'JAVA' then v.implementation_key end as implementation_key,
+               v.checksum,
                coalesce(e.update_time, e.create_time) as effective_update_time,
-               (e.status = 'DISABLED' and e.create_by &lt;&gt; 'system') as delete_allowed
+               (e.status = 'DISABLED' and e.create_by &lt;&gt; 'system'
+                 and v.version_id is null) as delete_allowed,
+               (e.status = 'DISABLED' and e.create_by &lt;&gt; 'system') as delete_check_allowed
         from wf_bpmn_extension e
         left join wf_bpmn_extension_version v
           on v.extension_id = e.extension_id
@@ -99,11 +103,19 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         for update
     </select>
 
-    <select id="selectByIdForUpdate" resultMap="ExtensionResult">
+    <sql id="extensionByIdSql">
         select extension_id, extension_key, extension_name, extension_type, status,
                description, create_by, create_time, update_by, update_time
         from wf_bpmn_extension
         where extension_id = #{extensionId}
+    </sql>
+
+    <select id="selectById" resultMap="ExtensionResult">
+        <include refid="extensionByIdSql"/>
+    </select>
+
+    <select id="selectByIdForUpdate" resultMap="ExtensionResult">
+        <include refid="extensionByIdSql"/>
         for update
     </select>
 

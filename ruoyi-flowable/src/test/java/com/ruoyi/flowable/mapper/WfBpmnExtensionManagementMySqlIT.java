@@ -35,11 +35,12 @@ class WfBpmnExtensionManagementMySqlIT
         jdbc = new JdbcTemplate(dataSource);
     }
 
-    @ParameterizedTest(name = "status={0}, creator={1}, version={2}, deleteAllowed={3}")
-    @CsvSource({ "ENABLED,qa,true,false", "DISABLED,qa,true,true",
-        "DISABLED,system,true,false", "DISABLED,qa,false,true" })
+    @ParameterizedTest(name = "status={0}, creator={1}, version={2}, deleteAllowed={3}, deleteCheckAllowed={4}")
+    @CsvSource({ "ENABLED,qa,true,false,false", "DISABLED,qa,true,false,true",
+        "DISABLED,system,true,false,false", "DISABLED,qa,false,true,true",
+        "ENABLED,qa,false,false,false", "DISABLED,system,false,false,false" })
     void readsManagementRowsAndLatestVersion(String status, String creator,
-            boolean hasVersion, boolean deleteAllowed)
+            boolean hasVersion, boolean deleteAllowed, boolean deleteCheckAllowed)
     {
         String key = "qa_registry_" + UUID.randomUUID().toString().replace("-", "");
         try
@@ -75,6 +76,7 @@ class WfBpmnExtensionManagementMySqlIT
                         {
                             assertThat(row.status()).isEqualTo(status);
                             assertThat(row.deleteAllowed()).isEqualTo(deleteAllowed);
+                            assertThat(row.deleteCheckAllowed()).isEqualTo(deleteCheckAllowed);
                             assertThat(row.updateTime()).isNotNull();
                             if (hasVersion)
                             {
@@ -93,6 +95,42 @@ class WfBpmnExtensionManagementMySqlIT
         {
             assertThat(jdbc.queryForObject(
                     "select count(*) from wf_bpmn_extension where extension_key=?", Long.class, key)).isZero();
+        }
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = { "CEL", "HTTP", "SQL", "FORM_FIELD" })
+    void nonJavaManagementProjectionHidesImplementationWithoutChangingVersion(String type)
+    {
+        String key = "qa_projection_" + UUID.randomUUID().toString().replace("-", "");
+        try
+        {
+            transaction.executeWithoutResult(tx ->
+            {
+                tx.setRollbackOnly();
+                WfBpmnExtension extension = new WfBpmnExtension();
+                extension.setExtensionKey(key);
+                extension.setExtensionName("固定实现投影回归");
+                extension.setExtensionType(type);
+                extension.setStatus("ENABLED");
+                extension.setCreateBy("qa");
+                mapper.insertExtension(extension);
+                WfBpmnExtensionVersion version = new WfBpmnExtensionVersion();
+                version.setExtensionId(extension.getExtensionId());
+                version.setVersionNo(1);
+                version.setImplementationKey("QA_FIXED_IMPLEMENTATION");
+                version.setConfigSchema("{}");
+                version.setChecksum("a".repeat(64));
+                version.setCreateBy("qa");
+                mapper.insertVersion(version);
+                assertThat(mapper.selectManagementList()).filteredOn(row -> key.equals(row.extensionKey()))
+                        .singleElement().satisfies(row -> assertThat(row.implementationKey()).isNull());
+                assertThat(mapper.selectLatestEnabledByKey(key).implementationKey()).isEqualTo("QA_FIXED_IMPLEMENTATION");
+            });
+        }
+        finally
+        {
+            assertThat(jdbc.queryForObject("select count(*) from wf_bpmn_extension where extension_key=?", Long.class, key)).isZero();
         }
     }
 }

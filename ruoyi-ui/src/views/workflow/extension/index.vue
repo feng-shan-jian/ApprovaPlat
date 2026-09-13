@@ -105,12 +105,13 @@
               @click="toggleStatus(scope.row)"
             />
           </el-tooltip>
-          <el-tooltip :content="scope.row.deleteAllowed === true ? '删除目录' : '当前目录不可删除'" placement="top">
+          <el-tooltip :content="scope.row.deleteCheckAllowed === true ? '检查引用并删除目录' : '当前目录不可删除'" placement="top">
             <el-button
               link
               type="danger"
               icon="Delete"
-              :disabled="scope.row.deleteAllowed !== true"
+              :disabled="scope.row.deleteCheckAllowed !== true"
+              :loading="deletionTargetId === scope.row.extensionId"
               aria-label="删除目录"
               v-hasPermi="['workflow:extension:remove']"
               @click="removeExtension(scope.row)"
@@ -201,6 +202,7 @@
 <script setup name="WorkflowExtension">
 import {
   changeWorkflowExtensionStatus,
+  checkWorkflowExtensionDeletion,
   createWorkflowExtension,
   createWorkflowExtensionVersion,
   listInstalledJavaHandlers,
@@ -248,6 +250,16 @@ const fixedImplementationLabel = computed(() => ({
   FORM_FIELD: '多行文本字段 V1'
 })[versionTarget.value?.extensionType] || '-')
 let pageInitialized = false
+let deletionRevision = 0
+const deletionTargetId = ref(null)
+
+function invalidateDeletion() {
+  deletionRevision += 1
+  deletionTargetId.value = null
+}
+
+onDeactivated(invalidateDeletion)
+onBeforeUnmount(invalidateDeletion)
 
 /**
  * 创建新增目录的稳定初始模型。
@@ -262,6 +274,7 @@ function createEmptyExtension() {
  * @returns {Promise<void>} 两个真实接口完成后更新页面状态。
  */
 async function loadRegistry() {
+  invalidateDeletion()
   loading.value = true
   registryError.value = ''
   handlerError.value = ''
@@ -285,6 +298,7 @@ async function loadRegistry() {
  * @returns {void} 更新当前表格行，不修改正式目录数据。
  */
 function applyFilters() {
+  invalidateDeletion()
   const keyword = filters.keyword.trim().toLowerCase()
   filteredRows.value = rows.value.filter(row => {
     const statusMatched = filters.status === 'ALL' || row.status === filters.status
@@ -393,14 +407,35 @@ async function toggleStatus(row) {
  * @returns {Promise<void>} 后端完成受约束删除后刷新页面。
  */
 async function removeExtension(row) {
-  if (row.deleteAllowed !== true) {
+  if (row.deleteCheckAllowed !== true || !filteredRows.value.includes(row)) {
     proxy.$modal.msgWarning('当前扩展目录不允许删除')
     return
   }
-  await proxy.$modal.confirm(`确认删除扩展目录“${row.extensionName}”及其未部署版本吗？`)
-  await removeWorkflowExtension(row.extensionId)
-  proxy.$modal.msgSuccess('扩展目录已删除')
-  await loadRegistry()
+  if (deletionTargetId.value === row.extensionId) return
+  const revision = ++deletionRevision
+  const extensionId = row.extensionId
+  deletionTargetId.value = extensionId
+  try {
+    const { data } = await checkWorkflowExtensionDeletion(extensionId)
+    if (revision !== deletionRevision) return
+    if (data?.deleteAllowed !== true) {
+      proxy.$modal.msgWarning('删除检查未通过，目录已保留')
+      return
+    }
+    const confirmed = await proxy.$modal.confirm(`确认删除扩展目录“${row.extensionName}”及其未部署版本吗？`)
+      .then(() => true, () => false)
+    if (!confirmed || revision !== deletionRevision) return
+    await removeWorkflowExtension(extensionId)
+    if (revision !== deletionRevision) return
+    proxy.$modal.msgSuccess('扩展目录已删除')
+    await loadRegistry()
+  } catch (failure) {
+    if (revision === deletionRevision) {
+      proxy.$modal.msgError(failure?.message || '删除检查或操作失败，目录已保留，请刷新重试')
+    }
+  } finally {
+    if (revision === deletionRevision) deletionTargetId.value = null
+  }
 }
 
 onMounted(async () => {

@@ -47,6 +47,8 @@ public interface WfBpmnExtensionMapper
      */
     WfBpmnExtension selectByIdForUpdate(@Param("extensionId") Long extensionId);
 
+    WfBpmnExtension selectById(@Param("extensionId") Long extensionId);
+
     /**
      * 按稳定键读取已启用扩展最新版；调用方必须先锁定目录行。
      * @param extensionKey String，扩展稳定键

@@ -16,11 +16,12 @@ import java.util.Date;
  * @param implementationKey String，最新版已安装处理器键；尚未发布时为空
  * @param checksum String，最新版定义摘要；尚未发布时为空
  * @param updateTime Date，目录最近状态变更时间；从未变更时取创建时间
- * @param deleteAllowed boolean，当前状态、内置属性及全部部署引用是否允许删除
+ * @param deleteAllowed boolean，目录读取时已能证明无版本且允许删除
+ * @param deleteCheckAllowed boolean，是否允许发起单条删除核验；不代表核验已通过
  */
 public record WorkflowExtensionManagementView(Long extensionId, String extensionKey,
         String extensionName, String extensionType, String status, String description,
         Long versionId, Integer versionNo, String implementationKey, String checksum,
-        Date updateTime, boolean deleteAllowed)
+        Date updateTime, boolean deleteAllowed, boolean deleteCheckAllowed)
 {
 }

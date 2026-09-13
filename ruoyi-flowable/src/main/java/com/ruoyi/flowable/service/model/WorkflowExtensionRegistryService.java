@@ -137,18 +137,7 @@ public class WorkflowExtensionRegistryService
      */
     public List<WorkflowExtensionManagementView> listManagement()
     {
-        return engineOperations.read(() ->
-        {
-            var referencedKeys = artifactRepository.referencedExtensionKeys();
-            return extensionMapper.selectManagementList().stream()
-                    .map(row -> new WorkflowExtensionManagementView(row.extensionId(),
-                            row.extensionKey(), row.extensionName(), row.extensionType(),
-                            row.status(), row.description(), row.versionId(), row.versionNo(),
-                            JAVA_TYPE.equals(row.extensionType()) ? row.implementationKey() : null,
-                            row.checksum(), row.updateTime(),
-                            row.deleteAllowed() && !referencedKeys.contains(row.extensionKey())))
-                    .toList();
-        });
+        return engineOperations.read(extensionMapper::selectManagementList);
     }
 
     /**
@@ -337,25 +326,7 @@ public class WorkflowExtensionRegistryService
         {
             // 锁定目录后再检查状态和部署引用，防止删除与发布、启停或部署并发穿透。
             WfBpmnExtension extension = extensionMapper.selectByIdForUpdate(extensionId);
-            if (extension == null)
-            {
-                throw new ServiceException("扩展目录不存在", HttpStatus.NOT_FOUND);
-            }
-            if ("system".equals(extension.getCreateBy()))
-            {
-                throw new ServiceException("系统内置扩展目录不能删除", HttpStatus.CONFLICT);
-            }
-            if (!DISABLED_STATUS.equals(extension.getStatus()))
-            {
-                throw new ServiceException("请先停用扩展目录再删除", HttpStatus.CONFLICT);
-            }
-            List<Long> versionIds = extensionMapper.selectVersionIds(extensionId);
-            int deploymentSnapshotCount = artifactRepository
-                    .countExtensionVersionReferences(versionIds);
-            if (deploymentSnapshotCount > 0)
-            {
-                throw new ServiceException("扩展目录已被部署快照引用，不能删除", HttpStatus.CONFLICT);
-            }
+            requireDeletable(extension);
 
             // 无部署引用时才允许按外键顺序删除版本与目录，事务失败会整体回滚。
             extensionMapper.deleteVersions(extensionId);
@@ -365,6 +336,36 @@ public class WorkflowExtensionRegistryService
             }
             return null;
         });
+    }
+
+    public void checkDeletion(Long extensionId)
+    {
+        if (extensionId == null || extensionId <= 0)
+        {
+            throw new ServiceException("扩展主键不合法", HttpStatus.BAD_REQUEST);
+        }
+        engineOperations.read(() -> requireDeletable(extensionMapper.selectById(extensionId)));
+    }
+
+    private void requireDeletable(WfBpmnExtension extension)
+    {
+        if (extension == null)
+        {
+            throw new ServiceException("扩展目录不存在", HttpStatus.NOT_FOUND);
+        }
+        if ("system".equals(extension.getCreateBy()))
+        {
+            throw new ServiceException("系统内置扩展目录不能删除", HttpStatus.CONFLICT);
+        }
+        if (!DISABLED_STATUS.equals(extension.getStatus()))
+        {
+            throw new ServiceException("请先停用扩展目录再删除", HttpStatus.CONFLICT);
+        }
+        if (artifactRepository.hasExtensionReference(extension.getExtensionKey(),
+                extensionMapper.selectVersionIds(extension.getExtensionId())))
+        {
+            throw new ServiceException("扩展目录已被部署快照引用，不能删除", HttpStatus.CONFLICT);
+        }
     }
 
     /**

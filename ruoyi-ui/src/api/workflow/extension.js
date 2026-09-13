@@ -90,13 +90,19 @@ export function changeWorkflowExtensionStatus(extensionId, enabled) {
 }
 
 /**
- * 删除已停用且未被部署快照引用的扩展目录。
+ * 核验目录状态及历史部署引用，成功后才允许显示删除确认。
  * @param {number|string} extensionId 扩展目录主键。
  * @returns {Promise<object>} 操作结果。
  */
+export function checkWorkflowExtensionDeletion(extensionId) {
+  return request({ url: `/workflow/extension/${extensionId}/deletion-check`, method: 'get', suppressErrorMessage: true })
+}
+
+/** 删除已通过用户确认的目录；服务端在锁内重新核验所有条件。 */
 export function removeWorkflowExtension(extensionId) {
   return request({
     url: `/workflow/extension/${extensionId}`,
-    method: 'delete'
+    method: 'delete',
+    suppressErrorMessage: true
   })
 }

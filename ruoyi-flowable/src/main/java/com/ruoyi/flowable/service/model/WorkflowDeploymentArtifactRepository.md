@@ -14,7 +14,7 @@
 - `selectForms`、`selectConditionRules`、`selectControlledLoops`、`selectParticipantRules`：读取单个父部署的运行时规则。
 - `selectStartParticipantRulesByDeploymentIds(deploymentIds)`：按最多 200 个父部署分块读取发起规则；外层按父部署 ID、内层按流程 key 返回。
 - `selectExtensionSnapshots`、`selectDmnSnapshots`、`selectTaskSlaSnapshots`：读取扩展和依赖资源。
-- `hasFormReference`、`countExtensionVersionReferences`、`countDmnSourceReferences`：执行低频删除保护。
+- `hasFormReference`、`hasExtensionReference`、`countDmnSourceReferences`：执行低频删除保护。扩展引用核验每批读取最多 100 个子部署，发现稳定键或版本引用即停止；管理目录读取不扫描部署资源，协议见 `docs/contracts/workflow-extension-deletion.md`。
 - `delete(deploymentId)`：删除父部署拥有的业务资源子部署。
 
 ## 关键设计
