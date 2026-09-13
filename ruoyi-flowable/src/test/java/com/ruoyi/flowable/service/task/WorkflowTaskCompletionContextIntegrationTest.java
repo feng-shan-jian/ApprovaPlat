@@ -1,6 +1,7 @@
 package com.ruoyi.flowable.service.task;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -34,6 +35,8 @@ import org.flowable.variable.api.history.HistoricVariableInstance;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import com.ruoyi.flowable.domain.WfControlledLoopExecution;
 import com.ruoyi.flowable.domain.WfDeployControlledLoop;
@@ -66,6 +69,40 @@ import com.ruoyi.system.mapper.SysUserMapper;
  */
 class WorkflowTaskCompletionContextIntegrationTest
 {
+    @ParameterizedTest
+    @ValueSource(booleans = { true, false })
+    void nestedTaskPermissionsRejectForgedWritesAndCompleteWithoutInaccessibleRequiredValues(boolean hidden)
+    {
+        Deployment deployment = repositoryService.createDeployment()
+                .addString("nested-completion.bpmn20.xml", BPMN).deploy();
+        WorkflowDeploymentArtifacts artifacts = deploymentArtifacts(deployment.getId());
+        var mapper = tools.jackson.databind.json.JsonMapper.shared();
+        var root = mapper.createObjectNode();
+        var row = root.putArray("fields").addObject();
+        row.put("layout", "rowFormItem").put("workflowHidden", hidden)
+                .put("workflowReadable", !hidden).put("workflowWritable", false);
+        row.set("children", mapper.readTree(APPROVAL_FORM).get("fields"));
+        artifacts.forms().get(0).setContent(root.toString());
+        new WorkflowDeploymentArtifactRepository(repositoryService).persist(deployment.getId(), artifacts);
+        ProcessInstance instance = runtimeService.startProcessInstanceByKey("completionForm");
+        Task task = requireSingleTask(instance.getId(), "formReview");
+
+        assertThatThrownBy(() -> nestedCompletionService.completeTask(new WorkflowTaskCompleteRequest(task.getId(),
+                "forged", Map.of("approvalResult", "forged"), List.of(), List.of(), null))).hasMessageContaining("只读");
+        assertThat(taskService.createTaskQuery().taskId(task.getId()).count()).isOne();
+        assertThat(runtimeService.hasVariable(instance.getId(), "approvalResult")).isFalse();
+        assertThat(taskService.getTaskComments(task.getId())).isEmpty();
+
+        nestedCompletionService.completeTask(new WorkflowTaskCompleteRequest(task.getId(),
+                "完成只读表单", Map.of(), List.of(), List.of(), null));
+        assertThat(historyService.createHistoricTaskInstanceQuery().taskId(task.getId()).finished().singleResult().getCompletedBy())
+                .isEqualTo(CURRENT_USER_ID);
+        HistoricVariableInstance stored = historyService.createHistoricVariableInstanceQuery().taskId(task.getId())
+                .variableName(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME).singleResult();
+        assertThat(WorkflowFormSubmissionSnapshotCodec.decode((String) stored.getValue()).values()).isEmpty();
+        assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(instance.getId()).count()).isZero();
+    }
+
     /** 当前真实完成人，同时是普通任务和多实例成员。 */
     private static final String CURRENT_USER_ID = "100";
 
@@ -94,6 +131,7 @@ class WorkflowTaskCompletionContextIntegrationTest
     private WorkflowTaskLifecycleService lifecycleService;
     private WfControlledLoopExecutionMapper loopExecutionMapper;
     private Map<String, ProcessDefinition> definitions;
+    private WorkflowTaskCompletionApplicationService nestedCompletionService;
 
     /**
      * 创建共享 H2 数据源上的真实引擎、部署制品、循环审计表和生产任务完成服务图。
@@ -195,6 +233,7 @@ class WorkflowTaskCompletionContextIntegrationTest
                 mock(WorkflowTaskRejectionApplicationService.class),
                 mock(WorkflowTaskReturnApplicationService.class),
                 mock(WorkflowApplicationResubmitApplicationService.class));
+        nestedCompletionService = completionApplicationService;
         clearInvocations(repositoryService);
     }
 

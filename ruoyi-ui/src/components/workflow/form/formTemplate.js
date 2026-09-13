@@ -81,7 +81,7 @@ export function normalizeFormTemplate(content) {
       disabled: Boolean(root.disabled),
       gutter: boundedNumber(root.gutter, 16, 0, 40)
     },
-    fields: root.fields.map(normalizeField)
+    fields: root.fields.map(field => normalizeField(field))
   }
 }
 
@@ -90,7 +90,7 @@ export function normalizeFormTemplate(content) {
  * @param {object} source 原始组件配置。
  * @returns {object} 只包含白名单属性的渲染描述。
  */
-function normalizeField(source) {
+function normalizeField(source, parent = { hidden: false, readable: true, writable: true }) {
   if (!source || typeof source !== 'object') throw new Error('流程表单字段格式不合法')
   if (Object.keys(source).some(key => key.startsWith('__'))) {
     throw new Error('流程表单包含已废止的内部生成器字段')
@@ -103,8 +103,11 @@ function normalizeField(source) {
   if (layout !== 'rowFormItem' && !ALLOWED_TAGS.has(tag)) {
     throw new Error('流程表单组件不受支持')
   }
+  const hidden = parent.hidden || source.workflowHidden === true
+  const readable = parent.readable && !hidden && source.workflowReadable === true
+  const writable = parent.writable && readable && source.workflowWritable === true
   const children = Array.isArray(source.children)
-    ? source.children.map(normalizeField)
+    ? source.children.map(child => normalizeField(child, { hidden, readable, writable }))
     : []
   const props = {}
   Object.entries(source).forEach(([key, value]) => {
@@ -118,10 +121,10 @@ function normalizeField(source) {
     label: stringValue(source.label, ''),
     span: boundedNumber(source.span, 24, 1, 24),
     labelWidth: boundedNumber(source.labelWidth, 0, 0, 240),
-    required: source.required === true,
-    hidden: source.workflowHidden === true,
-    readable: source.workflowReadable === true,
-    writable: source.workflowWritable === true,
+    required: writable && source.required === true,
+    hidden,
+    readable,
+    writable,
     defaultValue: cloneJsonValue(source.defaultValue),
     props,
     options: normalizeOptions(options),

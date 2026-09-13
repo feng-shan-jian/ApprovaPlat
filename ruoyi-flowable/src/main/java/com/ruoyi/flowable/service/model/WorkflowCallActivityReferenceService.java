@@ -521,7 +521,7 @@ public class WorkflowCallActivityReferenceService
                 throw new ServiceException("调用活动" + direction + "字段不存在: " + sourceName + " → " + targetName, 400).setSubCode("CALL_MAPPING_FIELD_MISSING");
             if (!source.readable())
                 throw new ServiceException("调用活动来源字段不可读: " + sourceName, 400).setSubCode("CALL_MAPPING_SOURCE_UNREADABLE");
-            if (!target.writable() && !("输出".equals(direction) && target.systemWritable() && target.readable()))
+            if (!target.writable() && !("输出".equals(direction) && target.systemWritable()))
                 throw new ServiceException("调用活动目标字段不可写，且未声明系统回填资格: " + targetName, 400).setSubCode("CALL_MAPPING_TARGET_UNWRITABLE");
             if (!compatibleTypes(source.type(), target.type()))
             {
@@ -692,23 +692,19 @@ public class WorkflowCallActivityReferenceService
     {
         JsonNode root = formTemplateValidator.validate(content);
         Map<String, FieldSpec> fields = new LinkedHashMap<>();
-        collectFieldSpecs(root.get("fields"), fields);
+        collectFieldSpecs(root, fields);
         return Map.copyOf(fields);
     }
 
     /**
      * 递归收集表单字段，只开放单值文本、数值、布尔和受控标量。
-     * @param nodes JsonNode，当前 fields 或 children 数组
+     * @param root JsonNode，已经验证的完整表单
      * @param fields Map&lt;String, FieldSpec&gt;，调用方维护的字段目录
      * @return void，集合、附件、表格和范围字段不会进入映射目录
      */
-    private void collectFieldSpecs(JsonNode nodes, Map<String, FieldSpec> fields)
+    private void collectFieldSpecs(JsonNode root, Map<String, FieldSpec> fields)
     {
-        if (nodes == null || !nodes.isArray())
-        {
-            return;
-        }
-        for (JsonNode field : nodes)
+        formTemplateValidator.visitFields(root, (field, permission) ->
         {
             String name = text(field, "vModel");
             String tag = text(field, "tag");
@@ -716,12 +712,11 @@ public class WorkflowCallActivityReferenceService
             if (hasText(name) && VARIABLE_PATTERN.matcher(name).matches() && type != null)
             {
                 String label = firstText(text(field, "label"), name);
-                boolean required = booleanValue(field, "required", false);
-                boolean readable = booleanValue(field, "workflowReadable", false);
-                boolean writable = booleanValue(field, "workflowWritable", false)
+                boolean required = booleanValue(field, "required", false) && permission.writable();
+                boolean readable = permission.readable();
+                boolean writable = permission.writable()
                         && !booleanValue(field, "disabled", false);
-                boolean systemWritable = booleanValue(field, "workflowSystemWritable", false)
-                        && readable && !booleanValue(field, "workflowHidden", false) && !writable;
+                boolean systemWritable = booleanValue(field, "workflowSystemWritable", false);
                 FieldSpec candidate = new FieldSpec(name, label, type, required, readable, writable, systemWritable);
                 FieldSpec previous = fields.putIfAbsent(name, candidate);
                 if (previous != null && !previous.type().equals(candidate.type()))
@@ -729,8 +724,7 @@ public class WorkflowCallActivityReferenceService
                     throw dataError("流程表单包含同名异构字段");
                 }
             }
-            collectFieldSpecs(field.get("children"), fields);
-        }
+        });
     }
 
     /**

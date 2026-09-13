@@ -172,17 +172,21 @@ class WorkflowCallActivityBusinessRegressionTest
                 .isInstanceOf(ServiceException.class);
     }
 
-    @ParameterizedTest @CsvSource({"8,true", "-1,false"})
-    void explicitSystemOutputUsesFrozenParentSchemaAndRejectsClientForgery(int value, boolean allowed)
+    @ParameterizedTest @CsvSource({"8,true,false", "-1,false,false", "8,true,true", "-1,false,true"})
+    void explicitSystemOutputUsesFrozenParentSchemaAndRejectsClientForgery(int value, boolean allowed, boolean hiddenContainer)
     {
         String content = form("parentValue").replace("el-input", "el-input-number")
                 .replace("\"workflowWritable\":true", "\"workflowWritable\":false,\"workflowSystemWritable\":true,\"min\":0");
+        if (hiddenContainer) content = nested(content, true);
         WfForm template = new WfForm(); template.setFormId(7L); template.setContent(content);
         when(templates.selectById(7L)).thenReturn(template);
         deploy(Map.of("child", form("childValue").replace("el-input", "el-input-number")));
         var document = parent(WorkflowFormFieldPermissionMode.READONLY, true);
         CallActivity call = (CallActivity) document.bpmnModel().getMainProcess().getFlowElement("call");
-        var input = new IOParameter(); input.setSource("parentValue"); input.setTarget("childValue"); call.getInParameters().add(input);
+        if (!hiddenContainer)
+        {
+            var input = new IOParameter(); input.setSource("parentValue"); input.setTarget("childValue"); call.getInParameters().add(input);
+        }
         byte[] bytes = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(document.bpmnModel());
         var prepared = service.prepare(bytes, document, ACTOR);
         String deployment = repository.createDeployment().addBytes("system-parent.bpmn20.xml", prepared.compiledBpmn()).deploy().getId();
@@ -195,7 +199,7 @@ class WorkflowCallActivityBusinessRegressionTest
         var runtime = support.processEngine().getRuntimeService();
         var parent = runtime.startProcessInstanceByKey("parent", Map.of("parentValue", 7));
         var child = runtime.createProcessInstanceQuery().superProcessInstanceId(parent.getId()).singleResult();
-        assertThat(runtime.getVariable(child.getId(), "childValue")).isEqualTo(7);
+        assertThat(runtime.getVariable(child.getId(), "childValue")).isEqualTo(hiddenContainer ? null : 7);
         runtime.setVariable(child.getId(), "childValue", value);
         var childWait = runtime.createExecutionQuery().processInstanceId(child.getId()).activityId("child_wait").singleResult();
         if (allowed)
@@ -212,10 +216,41 @@ class WorkflowCallActivityBusinessRegressionTest
             assertThat(runtime.createExecutionQuery().executionId(childWait.getId()).count()).isOne();
         }
         var validator = new com.ruoyi.flowable.service.process.WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
-        assertThatThrownBy(() -> validator.validateForStart(content, Map.of("parentValue", 999))).isInstanceOf(ServiceException.class);
+        String frozenContent = content;
+        assertThatThrownBy(() -> validator.validateForStart(frozenContent, Map.of("parentValue", 999))).isInstanceOf(ServiceException.class);
+        assertThat(validator.readableFieldNames(content).contains("parentValue")).isEqualTo(!hiddenContainer);
         // 模板后续改成可写不能放宽当前部署的不可变权限。
         template.setContent(form("parentValue"));
         assertThat(artifacts.selectForms(deployment).get(0).getContent()).isEqualTo(content);
+    }
+
+    @Test
+    void hiddenAncestorPreventsMappingAUserInputIntoTheChild()
+    {
+        WfForm template = new WfForm(); template.setFormId(7L); template.setContent(nested(form("parentValue"), true));
+        when(templates.selectById(7L)).thenReturn(template);
+        deploy(Map.of("child", form("childValue")));
+        assertThatThrownBy(() -> service.validateAuthorReferences(parent(WorkflowFormFieldPermissionMode.EDITABLE, false), ACTOR))
+                .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getSubCode()).isEqualTo("CALL_MAPPING_SOURCE_UNREADABLE"));
+    }
+
+    @Test
+    void readonlyChildContainerPreventsMappingUserInputIntoItsFields()
+    {
+        deploy(Map.of("child", nested(form("childValue"), false)));
+        assertThatThrownBy(() -> service.validateAuthorReferences(parent(WorkflowFormFieldPermissionMode.EDITABLE, false), ACTOR))
+                .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getSubCode()).isEqualTo("CALL_MAPPING_TARGET_UNWRITABLE"));
+    }
+
+    private String nested(String content, boolean hidden)
+    {
+        var mapper = tools.jackson.databind.json.JsonMapper.shared();
+        var root = mapper.createObjectNode();
+        var row = root.putArray("fields").addObject();
+        row.put("layout", "rowFormItem").put("workflowHidden", hidden)
+                .put("workflowReadable", !hidden).put("workflowWritable", false);
+        row.set("children", mapper.readTree(content).get("fields"));
+        return root.toString();
     }
 
     private WorkflowBpmnDocument parent(WorkflowFormFieldPermissionMode mode, boolean output)

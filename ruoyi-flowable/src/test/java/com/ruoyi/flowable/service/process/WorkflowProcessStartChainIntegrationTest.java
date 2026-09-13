@@ -94,6 +94,44 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class WorkflowProcessStartChainIntegrationTest
 {
+    @ParameterizedTest
+    @ValueSource(booleans = { true, false })
+    void nestedPermissionsSurviveFreezeDeploymentDraftAndRealStart(boolean hidden)
+    {
+        Deployment deployment = repositoryService.createDeployment()
+                .addString("nested-start.bpmn20.xml", BPMN).deploy();
+        definition = repositoryService.createProcessDefinitionQuery().deploymentId(deployment.getId()).singleResult();
+        WorkflowDeploymentArtifacts artifacts = deploymentArtifacts(deployment.getId());
+        var mapper = JsonMapper.shared();
+        var source = mapper.readTree(FORM_CONTENT);
+        var root = mapper.createObjectNode();
+        var row = root.putArray("fields").addObject();
+        row.put("layout", "rowFormItem").put("workflowHidden", hidden)
+                .put("workflowReadable", !hidden).put("workflowWritable", false);
+        row.set("children", source.get("fields"));
+        var reference = new com.ruoyi.flowable.service.model.WorkflowBpmnFormReference(
+                com.ruoyi.flowable.service.model.WorkflowFormSourceType.TEMPLATE, 1L,
+                "startForm", "start", "开始", null, definition.getKey(),
+                com.ruoyi.flowable.service.model.WorkflowFormFieldPermissionMode.REQUIRED,
+                Map.of("requester", com.ruoyi.flowable.service.model.WorkflowFormFieldPermissionMode.REQUIRED,
+                        "evidence", com.ruoyi.flowable.service.model.WorkflowFormFieldPermissionMode.EDITABLE));
+        String frozen = com.ruoyi.flowable.service.model.WorkflowNodeFormPermissionSnapshot.apply(
+                root.toString(), reference, new WorkflowFormTemplateValidator());
+        artifacts.forms().get(0).setContent(frozen);
+        artifactRepository.persist(deployment.getId(), artifacts);
+        when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(definition.getKey()))
+                .thenReturn(new WorkflowProcessDefinitionLockRow(definition.getId(), deployment.getId(), 1));
+
+        assertThatThrownBy(() -> createDraft(Map.of("requester", "forged"))).hasMessageContaining("只读");
+        WorkflowProcessDraftView draft = createDraft(Map.of());
+        assertThat(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID).formSnapshot()).isEqualTo(frozen);
+        WorkflowProcessDraftSubmitView submitted = submitDraft(draft, Map.of());
+        assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(submitted.processInstanceId()).count()).isOne();
+        assertThat(runtimeService.getVariables(submitted.processInstanceId())).doesNotContainKeys("requester", "evidence");
+        assertThat(artifactRepository.selectForms(deployment.getId()).get(0).getContent()).isEqualTo(frozen);
+        assertThat(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID).draftStatus()).isEqualTo(WorkflowProcessDraftStatus.SUBMITTED);
+    }
+
     @Test
     void reusesValidatedSnapshotAndPreservesEntryErrorSemantics()
     {

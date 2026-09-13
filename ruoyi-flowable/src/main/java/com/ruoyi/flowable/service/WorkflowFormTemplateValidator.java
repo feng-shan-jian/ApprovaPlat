@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.StreamReadConstraints;
@@ -116,7 +117,7 @@ public class WorkflowFormTemplateValidator
     public Set<String> extractVariableNames(JsonNode root)
     {
         LinkedHashSet<String> variableNames = new LinkedHashSet<>();
-        collectVariableNames(root.get(FIELDS_FIELD), variableNames);
+        visitFields(root, (field, permission) -> variableNames.add(variableName(field)));
         return Collections.unmodifiableSet(variableNames);
     }
 
@@ -131,8 +132,37 @@ public class WorkflowFormTemplateValidator
     public Set<String> extractReadableVariableNames(JsonNode root)
     {
         LinkedHashSet<String> variableNames = new LinkedHashSet<>();
-        collectReadableVariableNames(root.get(FIELDS_FIELD), variableNames);
+        visitFields(root, (field, permission) ->
+        {
+            if (permission.readable()) variableNames.add(variableName(field));
+        });
         return Collections.unmodifiableSet(variableNames);
+    }
+
+    /** 用户字段权限只能被祖先收紧；系统回填资格仍由字段自身的显式声明决定。 */
+    public record FieldPermissions(boolean readable, boolean writable)
+    {
+    }
+
+    /** 只读遍历已验证的完整树，按原顺序访问业务字段，不改写模板或部署快照。 */
+    public void visitFields(JsonNode root, BiConsumer<JsonNode, FieldPermissions> visitor)
+    {
+        visitFields(root.get(FIELDS_FIELD), new FieldPermissions(true, true), visitor);
+    }
+
+    private void visitFields(JsonNode components, FieldPermissions parent,
+            BiConsumer<JsonNode, FieldPermissions> visitor)
+    {
+        for (JsonNode component : components)
+        {
+            boolean readable = parent.readable() && !component.path("workflowHidden").booleanValue()
+                    && component.path("workflowReadable").booleanValue();
+            FieldPermissions permission = new FieldPermissions(readable,
+                    parent.writable() && readable && component.path("workflowWritable").booleanValue());
+            if (component.hasNonNull(VARIABLE_FIELD)) visitor.accept(component, permission);
+            JsonNode children = component.get(CHILDREN_FIELD);
+            if (children != null && children.isArray()) visitFields(children, permission, visitor);
+        }
     }
 
     /**
@@ -144,7 +174,12 @@ public class WorkflowFormTemplateValidator
     public Set<String> extractAttachmentVariableNames(JsonNode root)
     {
         LinkedHashSet<String> variableNames = new LinkedHashSet<>();
-        collectAttachmentVariableNames(root.get(FIELDS_FIELD), variableNames);
+        visitFields(root, (field, permission) ->
+        {
+            JsonNode variable = field.get(VARIABLE_FIELD);
+            if ("el-upload".equals(field.path(TAG_FIELD).asText()) && variable.isTextual()
+                    && !variable.textValue().isBlank()) variableNames.add(variable.textValue().trim());
+        });
         return Collections.unmodifiableSet(variableNames);
     }
 
@@ -162,150 +197,49 @@ public class WorkflowFormTemplateValidator
         // signatureByName 保存首次合格声明的值形态，disqualifiedNames 负责单向失败关闭。
         LinkedHashMap<String, String> signatureByName = new LinkedHashMap<>();
         LinkedHashSet<String> disqualifiedNames = new LinkedHashSet<>();
-        collectUserIdSourceVariables(root.get(FIELDS_FIELD), signatureByName,
+        collectUserIdSourceVariables(root, signatureByName,
                 disqualifiedNames);
         disqualifiedNames.forEach(signatureByName::remove);
         return Collections.unmodifiableMap(signatureByName);
     }
 
-    /**
-     * 按表单组件顺序递归提取 vModel，不把布局容器当作业务变量。
-     *
-     * @param components JsonNode，当前层 fields 或 children 数组
-     * @param variableNames Set&lt;String&gt;，全表单共享的有序字段名集合
-     * @return 无返回值，字段名异常时抛出稳定 400
-     */
-    private void collectVariableNames(JsonNode components, Set<String> variableNames)
+    private String variableName(JsonNode component)
     {
-        for (JsonNode component : components)
-        {
-            JsonNode variableNode = component.get(VARIABLE_FIELD);
-            if (variableNode != null && !variableNode.isNull())
-            {
-                if (!variableNode.isTextual() || variableNode.textValue().isBlank()
-                        || variableNode.textValue().length() > MAX_VARIABLE_NAME_LENGTH)
-                {
-                    throw invalid("表单组件变量名不合法");
-                }
-                variableNames.add(variableNode.textValue().trim());
-            }
-            JsonNode children = component.get(CHILDREN_FIELD);
-            if (children != null && children.isArray() && !children.isEmpty())
-            {
-                collectVariableNames(children, variableNames);
-            }
-        }
-    }
-
-    /**
-     * 递归收集 el-upload 的正式 vModel 字段。
-     *
-     * @param components JsonNode，当前层字段数组
-     * @param variableNames Set&lt;String&gt;，全表单共享的有序附件字段集合
-     * @return 无返回值，变量格式异常由前置 Schema 校验统一拒绝
-     */
-    private void collectAttachmentVariableNames(JsonNode components,
-            Set<String> variableNames)
-    {
-        for (JsonNode component : components)
-        {
-            if ("el-upload".equals(component.path(TAG_FIELD).asText()))
-            {
-                JsonNode variable = component.get(VARIABLE_FIELD);
-                if (variable != null && variable.isTextual()
-                        && !variable.textValue().isBlank())
-                {
-                    variableNames.add(variable.textValue().trim());
-                }
-            }
-            JsonNode children = component.get(CHILDREN_FIELD);
-            if (children != null && children.isArray() && !children.isEmpty())
-            {
-                collectAttachmentVariableNames(children, variableNames);
-            }
-        }
-    }
-
-    /**
-     * 递归提取可读字段，并严格校验内嵌表单的 workflowReadable 标志。
-     *
-     * @param components JsonNode，当前层组件数组
-     * @param variableNames Set&lt;String&gt;，全表单共享的有序可读字段集合
-     * @return 无返回值，标志类型错误时抛出稳定 400
-     */
-    private void collectReadableVariableNames(JsonNode components, Set<String> variableNames)
-    {
-        for (JsonNode component : components)
-        {
-            JsonNode variableNode = component.get(VARIABLE_FIELD);
-            JsonNode readableNode = component.get("workflowReadable");
-            if (readableNode == null || !readableNode.isBoolean())
-            {
-                throw invalid("部署表单组件必须声明可读标志");
-            }
-            boolean readable = readableNode.booleanValue();
-            if (readable && variableNode != null && !variableNode.isNull())
-            {
-                if (!variableNode.isTextual() || variableNode.textValue().isBlank()
-                        || variableNode.textValue().length() > MAX_VARIABLE_NAME_LENGTH)
-                {
-                    throw invalid("表单组件变量名不合法");
-                }
-                variableNames.add(variableNode.textValue().trim());
-            }
-            JsonNode children = component.get(CHILDREN_FIELD);
-            if (children != null && children.isArray() && !children.isEmpty())
-            {
-                collectReadableVariableNames(children, variableNames);
-            }
-        }
+        JsonNode variable = component.get(VARIABLE_FIELD);
+        if (!variable.isTextual() || variable.textValue().isBlank()
+                || variable.textValue().length() > MAX_VARIABLE_NAME_LENGTH)
+            throw invalid("表单组件变量名不合法");
+        return variable.textValue().trim();
     }
 
     /**
      * 递归收集可见、可读且可承载单一用户主键的字段，并拒绝同名异构声明被并集放宽。
-     * @param components JsonNode，当前层 fields 或 children 数组
+     * @param root JsonNode，已经验证的完整表单
      * @param signatureByName Map&lt;String,String&gt;，字段名到首次合格值形态签名的有序映射
      * @param disqualifiedNames Set&lt;String&gt;，包含任一不合格或异构声明的字段名
      * @return void，直接更新调用方目录
      */
-    private void collectUserIdSourceVariables(JsonNode components,
+    private void collectUserIdSourceVariables(JsonNode root,
             Map<String, String> signatureByName, Set<String> disqualifiedNames)
     {
-        for (JsonNode component : components)
+        visitFields(root, (component, permission) ->
         {
-            JsonNode variableNode = component.get(VARIABLE_FIELD);
-            if (variableNode != null && !variableNode.isNull())
+            String variableName = variableName(component);
+            String signature = permission.readable() ? singleUserIdValueSignature(component) : null;
+            if (signature == null)
             {
-                if (!variableNode.isTextual() || variableNode.textValue().isBlank()
-                        || variableNode.textValue().length() > MAX_VARIABLE_NAME_LENGTH)
+                disqualifiedNames.add(variableName);
+            }
+            else
+            {
+                String existing = signatureByName.putIfAbsent(variableName, signature);
+                if (existing != null && !existing.equals(signature))
                 {
-                    throw invalid("表单组件变量名不合法");
-                }
-                String variableName = variableNode.textValue().trim();
-                boolean hidden = component.path("workflowHidden").asBoolean(false);
-                boolean readable = component.path("workflowReadable").asBoolean(false);
-                String signature = !hidden && readable
-                        ? singleUserIdValueSignature(component) : null;
-                if (signature == null)
-                {
+                    // 同名文本、数值或选择字段可能在运行时形成不同值类型，必须失败关闭。
                     disqualifiedNames.add(variableName);
                 }
-                else
-                {
-                    String existing = signatureByName.putIfAbsent(variableName, signature);
-                    if (existing != null && !existing.equals(signature))
-                    {
-                        // 同名文本、数值或选择字段可能在运行时形成不同值类型，必须失败关闭。
-                        disqualifiedNames.add(variableName);
-                    }
-                }
             }
-            JsonNode children = component.get(CHILDREN_FIELD);
-            if (children != null && children.isArray() && !children.isEmpty())
-            {
-                collectUserIdSourceVariables(children, signatureByName, disqualifiedNames);
-            }
-        }
+        });
     }
 
     /**

@@ -67,7 +67,6 @@ public class WorkflowStartVariableValidator
     /** Flowable long 的有符号 64 位边界。 */
     private static final BigDecimal LONG_MAXIMUM = BigDecimal.valueOf(Long.MAX_VALUE);
 
-    private static final String CHILDREN_FIELD = "children";
     private static final String MODEL_FIELD = "vModel";
     private static final String TAG_FIELD = "tag";
     private static final String REQUIRED_FIELD = "required";
@@ -228,7 +227,7 @@ public class WorkflowStartVariableValidator
             boolean enforceRequired, boolean enforceWritable)
     {
         LinkedHashMap<String, FieldSpec> fieldSpecs = new LinkedHashMap<>();
-        collectFieldSpecs(snapshotRoot.path("fields"), fieldSpecs);
+        collectFieldSpecs(snapshotRoot, fieldSpecs);
 
         Map<String, Object> source = variables == null ? Map.of() : variables;
         if (source.size() > MAX_VARIABLE_FIELDS)
@@ -330,7 +329,7 @@ public class WorkflowStartVariableValidator
     {
         JsonNode snapshotRoot = parseTrustedSnapshot(snapshotContent);
         LinkedHashMap<String, FieldSpec> fieldSpecs = new LinkedHashMap<>();
-        collectFieldSpecs(snapshotRoot.path("fields"), fieldSpecs);
+        collectFieldSpecs(snapshotRoot, fieldSpecs);
         LinkedHashMap<String, WorkflowControlledLoopFormField> result = new LinkedHashMap<>();
         for (FieldSpec fieldSpec : fieldSpecs.values())
         {
@@ -382,45 +381,36 @@ public class WorkflowStartVariableValidator
     /**
      * 递归提取有 vModel 的受控输入组件，并拒绝重复、保留或异常字段定义。
      *
-     * @param components JsonNode，当前层 fields 或 children 数组
+     * @param root JsonNode，已经验证的完整表单
      * @param fieldSpecs Map&lt;String, FieldSpec&gt;，按表单顺序累积的字段 schema
      * @return void，快照字段 schema 异常时抛出服务端数据异常
      */
-    private void collectFieldSpecs(JsonNode components, Map<String, FieldSpec> fieldSpecs)
+    private void collectFieldSpecs(JsonNode root, Map<String, FieldSpec> fieldSpecs)
     {
-        for (JsonNode component : components)
+        templateValidator.visitFields(root, (component, permission) ->
         {
             JsonNode modelNode = component.get(MODEL_FIELD);
-            if (modelNode != null && !modelNode.isNull())
+            if (!modelNode.isTextual())
             {
-                if (!modelNode.isTextual())
-                {
-                    throw invalidSnapshot(null);
-                }
-                String fieldName = modelNode.textValue();
-                if (!FIELD_NAME_PATTERN.matcher(fieldName).matches()
-                        || PROTOTYPE_POLLUTION_KEYS.contains(fieldName.toLowerCase(Locale.ROOT))
-                        || isReservedVariable(fieldName))
-                {
-                    throw invalidSnapshot(null);
-                }
-                FieldSpec fieldSpec = createFieldSpec(fieldName, component);
-                if (fieldSpecs.putIfAbsent(fieldName, fieldSpec) != null)
-                {
-                    throw invalidSnapshot(null);
-                }
-                if (fieldSpecs.size() > MAX_VARIABLE_FIELDS)
-                {
-                    throw invalidSnapshot(null);
-                }
+                throw invalidSnapshot(null);
             }
-
-            JsonNode children = component.get(CHILDREN_FIELD);
-            if (children != null && children.isArray() && !children.isEmpty())
+            String fieldName = modelNode.textValue();
+            if (!FIELD_NAME_PATTERN.matcher(fieldName).matches()
+                    || PROTOTYPE_POLLUTION_KEYS.contains(fieldName.toLowerCase(Locale.ROOT))
+                    || isReservedVariable(fieldName))
             {
-                collectFieldSpecs(children, fieldSpecs);
+                throw invalidSnapshot(null);
             }
-        }
+            FieldSpec fieldSpec = createFieldSpec(fieldName, component, permission.writable());
+            if (fieldSpecs.putIfAbsent(fieldName, fieldSpec) != null)
+            {
+                throw invalidSnapshot(null);
+            }
+            if (fieldSpecs.size() > MAX_VARIABLE_FIELDS)
+            {
+                throw invalidSnapshot(null);
+            }
+        });
     }
 
     /**
@@ -442,9 +432,10 @@ public class WorkflowStartVariableValidator
      *
      * @param fieldName String，已校验的变量字段名
      * @param component JsonNode，完整表单组件节点
+     * @param writable boolean，组件及其全部祖先共同允许用户写入
      * @return FieldSpec，字段类型、必填和长度/数量约束
      */
-    private FieldSpec createFieldSpec(String fieldName, JsonNode component)
+    private FieldSpec createFieldSpec(String fieldName, JsonNode component, boolean writable)
     {
         JsonNode tagNode = component.get(TAG_FIELD);
         if (tagNode == null || !tagNode.isTextual())
@@ -452,8 +443,7 @@ public class WorkflowStartVariableValidator
             throw invalidSnapshot(null);
         }
         String tag = tagNode.textValue();
-        boolean required = optionalBoolean(component, REQUIRED_FIELD, false);
-        boolean writable = optionalBoolean(component, "workflowWritable", true);
+        boolean required = optionalBoolean(component, REQUIRED_FIELD, false) && writable;
         FieldType fieldType;
         int defaultMaxLength = DEFAULT_TEXT_LENGTH;
         int minItems = 0;

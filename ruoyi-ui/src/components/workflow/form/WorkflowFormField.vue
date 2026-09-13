@@ -6,7 +6,7 @@
       :field="child"
       :value="formModel[child.variable]"
       :form-model="formModel"
-      :readonly="readonly"
+      :readonly="effectiveReadonly"
       :gutter="gutter"
       @update:value="value => updateChild(child.variable, value)"
       @busy-change="forwardBusyState"
