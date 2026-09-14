@@ -12,10 +12,7 @@ public record WorkflowAttachmentCleanupResult(int cleaned, int failures, int lea
     /**
      * 校验清理计数不能为负，避免错误指标掩盖清理实现异常。
      *
-     * @param cleaned int，本轮清理完成数
-     * @param failures int，本轮单条失败数
-     * @param leaseLost int，本轮租约所有权丢失数
-     * @return 无返回值，参数非法时拒绝创建结果
+     * 参数非法时拒绝创建结果
      */
     public WorkflowAttachmentCleanupResult
     {

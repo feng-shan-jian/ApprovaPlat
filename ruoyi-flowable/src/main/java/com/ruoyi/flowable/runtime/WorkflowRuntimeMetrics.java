@@ -52,10 +52,7 @@ public class WorkflowRuntimeMetrics implements MeterBinder
     /**
      * 创建生产工作流指标组件并使用 UTC 系统时钟计算快照年龄。
      *
-     * @param metricsMapper WorkflowRuntimeMetricsMapper，单次数据库往返的合并只读查询
-     * @param engineConfiguration SpringProcessEngineConfiguration，两个 executor 实际状态
-     * @param attachmentStorage WorkflowAttachmentStorage，当前挂载点可用空间
-     * @return 无返回值，构造后由 Spring 调度并绑定到 Micrometer
+     * 构造后由 Spring 调度并绑定到 Micrometer
      */
     @Autowired
     public WorkflowRuntimeMetrics(WorkflowRuntimeMetricsMapper metricsMapper,
@@ -141,7 +138,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * 累计一次采集失败并按连续异常类型抑制重复日志，不记录 SQL、路径或异常正文。
      *
      * @param failure RuntimeException，指标采集阶段异常
-     * @return void，无返回值
      */
     private void recordRefreshFailure(RuntimeException failure)
     {
@@ -157,7 +153,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * 绑定固定名称和低基数标签 Gauge；所有数值函数只读取原子快照或本地原子状态。
      *
      * @param registry MeterRegistry，Actuator 管理的应用指标注册表
-     * @return void，无返回值
      */
     @Override
     public void bindTo(MeterRegistry registry)
@@ -235,7 +230,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param name String，固定指标名
      * @param extractor ToDoubleFunction&lt;WorkflowRuntimeMetricValues&gt;，固定字段读取器
      * @param description String，指标含义
-     * @return void，无返回值
      */
     private void registerSnapshotGauge(MeterRegistry registry, String name,
             ToDoubleFunction<WorkflowRuntimeMetricValues> extractor, String description)
@@ -255,7 +249,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param description String，指标含义
      * @param tagKey String，低基数标签名
      * @param tagValue String，固定标签值
-     * @return void，无返回值
      */
     private void registerSnapshotGauge(MeterRegistry registry, String name,
             ToDoubleFunction<WorkflowRuntimeMetricValues> extractor, String description,
@@ -274,7 +267,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param registry MeterRegistry，应用统一注册表
      * @param type String，六类固定 job 标签之一
      * @param extractor ToDoubleFunction&lt;WorkflowRuntimeMetricValues&gt;，对应字段读取器
-     * @return void，无返回值
      */
     private void registerJobGauge(MeterRegistry registry, String type,
             ToDoubleFunction<WorkflowRuntimeMetricValues> extractor)
@@ -289,7 +281,6 @@ public class WorkflowRuntimeMetrics implements MeterBinder
      * @param registry MeterRegistry，应用统一注册表
      * @param status String，四类固定附件状态标签之一
      * @param extractor ToDoubleFunction&lt;WorkflowRuntimeMetricValues&gt;，对应字段读取器
-     * @return void，无返回值
      */
     private void registerAttachmentGauge(MeterRegistry registry, String status,
             ToDoubleFunction<WorkflowRuntimeMetricValues> extractor)

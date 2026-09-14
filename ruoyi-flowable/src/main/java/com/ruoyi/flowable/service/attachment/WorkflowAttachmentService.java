@@ -77,12 +77,7 @@ public class WorkflowAttachmentService
     /**
      * 创建工作流附件领域服务。
      *
-     * @param attachmentMapper WfAttachmentMapper，正式附件元数据 Mapper
-     * @param storage WorkflowAttachmentStorage，私有文件存储边界
-     * @param properties WorkflowAttachmentProperties，单文件、用户临时配额、有效期和清理批次配置
-     * @param identityResolver WorkflowIdentityResolver，当前有效登录用户解析器
-     * @param processAccessService WorkflowProcessAccessService，绑定附件的实例级读取授权
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowAttachmentService(WfAttachmentMapper attachmentMapper,
             WorkflowAttachmentStorage storage, WorkflowAttachmentProperties properties,

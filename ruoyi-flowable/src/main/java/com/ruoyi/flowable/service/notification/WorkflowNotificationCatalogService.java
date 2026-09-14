@@ -37,10 +37,7 @@ public class WorkflowNotificationCatalogService
     /**
      * 创建审批通知流程与节点目录服务。
      *
-     * @param repositoryService RepositoryService，真实部署定义和 BPMN 模型查询入口
-     * @param engineOperations WorkflowEngineOperations，Flowable 只读事务和异常翻译边界
-     * @param permissionService PermissionService，工作流权限实时主数据复核入口
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowNotificationCatalogService(RepositoryService repositoryService,
             WorkflowEngineOperations engineOperations, PermissionService permissionService)

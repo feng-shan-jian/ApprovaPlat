@@ -20,8 +20,7 @@ public class WorkflowSlaTimerDelegate implements JavaDelegate
 
     /**
      * 创建固定 SLA 定时 delegate。
-     * @param slaRuntimeService WorkflowTaskSlaRuntimeService，事务内运行状态服务
-     * @return 无返回值，由 Spring 以固定 Bean 名管理
+     * 由 Spring 以固定 Bean 名管理
      */
     public WorkflowSlaTimerDelegate(WorkflowTaskSlaRuntimeService slaRuntimeService)
     {

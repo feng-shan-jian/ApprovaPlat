@@ -32,11 +32,7 @@ public record WorkflowTaskDelegateRequest(
     /**
      * 创建委派任务请求并复制抄送用户集合，确保事务钩子使用不可变请求快照。
      *
-     * @param taskId String，待委派的活动任务主键
-     * @param userId Long，目标受托用户主键
-     * @param comment String，委派业务意见
-     * @param copyUserIds List&lt;Long&gt;，可选抄送接收用户主键
-     * @return 无返回值，构造后 copyUserIds 为不可修改集合
+     * 构造后 copyUserIds 为不可修改集合
      */
     public WorkflowTaskDelegateRequest
     {

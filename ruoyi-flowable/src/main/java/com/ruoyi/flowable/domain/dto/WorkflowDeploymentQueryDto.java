@@ -31,7 +31,6 @@ public class WorkflowDeploymentQueryDto
      * 设置流程定义标识。
      *
      * @param processKey String，流程定义标识
-     * @return 无返回值
      */
     public void setProcessKey(String processKey)
     {
@@ -52,7 +51,6 @@ public class WorkflowDeploymentQueryDto
      * 设置流程定义名称。
      *
      * @param processName String，流程定义名称
-     * @return 无返回值
      */
     public void setProcessName(String processName)
     {
@@ -73,7 +71,6 @@ public class WorkflowDeploymentQueryDto
      * 设置工作流分类编码。
      *
      * @param category String，工作流分类编码
-     * @return 无返回值
      */
     public void setCategory(String category)
     {
@@ -94,7 +91,6 @@ public class WorkflowDeploymentQueryDto
      * 设置定义状态编码。
      *
      * @param state String，active、suspended 或空值
-     * @return 无返回值
      */
     public void setState(String state)
     {

@@ -35,7 +35,7 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
-import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowTaskRevokeApplicationService;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.framework.web.service.PermissionService;
 import com.ruoyi.system.service.ISysUserService;
@@ -56,9 +56,10 @@ class WorkflowProcessTaskContextIntegrationTest
     private HistoryService historyService;
     private RuntimeService runtimeService;
     private TaskService taskService;
-    private WorkflowTaskLifecycleService taskLifecycleService;
+    private WorkflowTaskRevokeApplicationService revokeApplicationService;
     private WorkflowProcessAccessService processAccessService;
     private WorkflowProcessTaskQueryService service;
+    private ISysUserService userService;
 
     /**
      * 创建启用完整历史的真实内存引擎，并装配只对外部依赖使用 mock 的查询服务。
@@ -89,17 +90,17 @@ class WorkflowProcessTaskContextIntegrationTest
         when(identityResolver.resolveClaimEligibleUserIds(any()))
                 .thenReturn(Set.of(CURRENT_USER_ID));
 
-        ISysUserService userService = mock(ISysUserService.class);
+        userService = mock(ISysUserService.class);
         SysUser currentUser = new SysUser();
         currentUser.setUserId(Long.valueOf(CURRENT_USER_ID));
         currentUser.setNickName("当前用户");
         when(userService.selectUserById(Long.valueOf(CURRENT_USER_ID))).thenReturn(currentUser);
-        taskLifecycleService = mock(WorkflowTaskLifecycleService.class);
+        revokeApplicationService = mock(WorkflowTaskRevokeApplicationService.class);
         WorkflowTaskUnclaimPolicy unclaimPolicy = new WorkflowTaskUnclaimPolicy();
 
         service = new WorkflowProcessTaskQueryService(engineOperations, repositoryService,
                 historyService, taskService, identityResolver, userService,
-                taskLifecycleService, unclaimPolicy);
+                revokeApplicationService, unclaimPolicy);
         processAccessService = new WorkflowProcessAccessService(historyService,
                 runtimeService, taskService, engineOperations, identityResolver,
                 mock(WfCopyMapper.class), mock(PermissionService.class), unclaimPolicy);
@@ -145,6 +146,13 @@ class WorkflowProcessTaskContextIntegrationTest
         assertAssignedRow(page, hrInstance, hrDefinition,
                 hrDeployment, "hr", "HR-1001");
         verifyOneAssociationQueryPerType();
+        verify(userService).selectUserById(100L);
+        when(userService.selectUserById(100L)).thenReturn(null);
+        var refreshed = service.listAssigned(null, 1, 200);
+        assertThat(refreshed.rows()).extracting(WorkflowAssignedTaskView::startUserName).containsOnly("100");
+        assertThat(refreshed.rows()).extracting(WorkflowAssignedTaskView::taskId)
+                .containsExactlyElementsOf(page.rows().stream().map(WorkflowAssignedTaskView::taskId).toList());
+        verify(userService, times(2)).selectUserById(100L);
     }
 
     /**
@@ -228,9 +236,9 @@ class WorkflowProcessTaskContextIntegrationTest
                 .processInstanceId(expenseInstance.getId()).singleResult();
         taskService.complete(travelTask.getId(), CURRENT_USER_ID);
         taskService.complete(expenseTask.getId(), CURRENT_USER_ID);
-        when(taskLifecycleService.isProcessRevocable(
+        when(revokeApplicationService.isProcessRevocable(
                 travelInstance.getId(), travelTask.getId())).thenReturn(true);
-        when(taskLifecycleService.isProcessRevocable(
+        when(revokeApplicationService.isProcessRevocable(
                 expenseInstance.getId(), expenseTask.getId())).thenReturn(false);
 
         clearAssociationQueryInvocations();
@@ -241,9 +249,9 @@ class WorkflowProcessTaskContextIntegrationTest
                 travelDeployment, "travel", "TRAVEL-1001", true);
         assertCompletedRow(page, expenseTask, expenseInstance, expenseDefinition,
                 expenseDeployment, "expense", "EXPENSE-1001", false);
-        verify(taskLifecycleService, times(1)).isProcessRevocable(
+        verify(revokeApplicationService, times(1)).isProcessRevocable(
                 travelInstance.getId(), travelTask.getId());
-        verify(taskLifecycleService, times(1)).isProcessRevocable(
+        verify(revokeApplicationService, times(1)).isProcessRevocable(
                 expenseInstance.getId(), expenseTask.getId());
         verifyOneAssociationQueryPerType();
     }

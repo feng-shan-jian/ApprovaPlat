@@ -23,17 +23,7 @@ public record WorkflowDeploymentView(String definitionId, String processName, St
     /**
      * 创建部署视图并复制可变时间对象。
      *
-     * @param definitionId String，流程定义主键
-     * @param processName String，流程定义名称
-     * @param processKey String，流程定义标识
-     * @param category String，工作流分类编码
-     * @param version Integer，流程定义版本
-     * @param formId Long，部署快照中的流程表单主键
-     * @param formName String，部署快照中的流程表单名称
-     * @param deploymentId String，流程部署主键
-     * @param suspended Boolean，流程定义是否挂起
-     * @param deploymentTime Date，流程部署时间
-     * @return 无返回值，构造后得到不可变部署视图
+     * 构造后得到不可变部署视图
      */
     public WorkflowDeploymentView
     {

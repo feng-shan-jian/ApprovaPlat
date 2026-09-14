@@ -12,9 +12,7 @@ public record WorkflowPreparedDmnDeployment(byte[] compiledBpmn, List<DecisionSo
 {
     /**
      * 防御性复制编译资源和来源集合。
-     * @param compiledBpmn byte[]，编译后的 BPMN
-     * @param sources List&lt;DecisionSource&gt;，精确决策来源
-     * @return void，构造后得到不可变准备结果
+     * 构造后得到不可变准备结果
      */
     public WorkflowPreparedDmnDeployment
     {
@@ -45,16 +43,7 @@ public record WorkflowPreparedDmnDeployment(byte[] compiledBpmn, List<DecisionSo
     {
         /**
          * 防御性复制 DMN XML。
-         * @param processKey String，流程 key
-         * @param elementId String，元素 id
-         * @param sourceDecisionId String，来源 decision id
-         * @param decisionKey String，决策 key
-         * @param decisionVersion int，来源版本
-         * @param sourceDeploymentId String，来源部署
-         * @param resourceName String，资源名
-         * @param resourceChecksum String，资源摘要
-         * @param resourceBytes byte[]，来源 XML
-         * @return void，构造后保存独立副本
+         * 构造后保存独立副本
          */
         public DecisionSource
         {

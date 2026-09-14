@@ -34,7 +34,6 @@ public class ResourcesConfig implements WebMvcConfigurer
      * 注册公开 profile 资源，并从公开资源解析链排除工作流私有附件目录。
      *
      * @param registry ResourceHandlerRegistry，Spring MVC 静态资源注册器
-     * @return void，无返回值
      */
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry)

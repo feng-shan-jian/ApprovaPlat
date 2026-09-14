@@ -20,8 +20,7 @@ public class WorkflowJavaExtensionHandlerRegistry
 
     /**
      * 收集 Spring 中显式实现处理器契约的组件，并在重复键时阻止应用启动。
-     * @param installedHandlers List&lt;WorkflowJavaExtensionHandler&gt;，服务端代码安装的处理器集合
-     * @return 无返回值，构造后形成不可变注册表
+     * 构造后形成不可变注册表
      */
     public WorkflowJavaExtensionHandlerRegistry(List<WorkflowJavaExtensionHandler> installedHandlers)
     {

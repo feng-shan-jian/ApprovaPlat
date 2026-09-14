@@ -36,9 +36,6 @@ public class WfFormServiceImpl implements IWfFormService
 
     /**
      * 创建表单模板业务服务。
-     * @param formMapper WfFormMapper，表单模板数据访问层
-     * @param referenceChecker WorkflowReferenceChecker，真实业务及引擎引用检查器
-     * @param templateValidator WorkflowFormTemplateValidator，表单结构和安全白名单验证器
      * @return 构造函数，无返回值
      */
     public WfFormServiceImpl(WfFormMapper formMapper, WorkflowReferenceChecker referenceChecker,

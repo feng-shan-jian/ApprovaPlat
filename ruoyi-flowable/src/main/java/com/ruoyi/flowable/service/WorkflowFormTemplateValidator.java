@@ -501,7 +501,6 @@ public class WorkflowFormTemplateValidator
 
         /**
          * 将已遍历组件节点数量加一。
-         * @return void，无返回值
          */
         private void increment()
         {

@@ -71,17 +71,7 @@ public class WorkflowDeploymentService
     /**
      * 创建流程部署服务。
      *
-     * @param engineOperations WorkflowEngineOperations，统一事务、身份和异常边界
-     * @param repositoryService RepositoryService，Flowable 8 仓储公共 API
-     * @param runtimeService RuntimeService，运行实例公共 API
-     * @param historyService HistoryService，历史实例公共 API
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，Flowable 部署业务资源仓库
-     * @param processDraftMapper WfProcessDraftMapper，申请草稿正式数据访问层
-     * @param processDefinitionLockMapper WorkflowProcessDefinitionLockMapper，部署生命周期行锁 Mapper
-     * @param dmnDecisionService WorkflowDmnDecisionService，冻结 DMN 子部署清理服务
-     * @param bpmnService WorkflowBpmnService，BPMN 安全解析和校验组件
-     * @param callActivityReferenceService WorkflowCallActivityReferenceService，调用活动目标删除保护服务
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowDeploymentService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, RuntimeService runtimeService,
@@ -171,7 +161,6 @@ public class WorkflowDeploymentService
      *
      * @param definitionId String，Flowable 流程定义主键
      * @param stateCode String，active 或 suspended
-     * @return 无返回值
      */
     public void changeState(String definitionId, String stateCode)
     {
@@ -183,7 +172,6 @@ public class WorkflowDeploymentService
      *
      * @param definitionId String，Flowable 流程定义主键
      * @param targetState WorkflowDefinitionState，受控目标状态
-     * @return 无返回值
      */
     public void changeState(String definitionId, WorkflowDefinitionState targetState)
     {
@@ -249,7 +237,6 @@ public class WorkflowDeploymentService
      * 非级联删除没有运行或历史实例的部署，并同步清理其自有表单快照和模型关联。
      *
      * @param deploymentIds Collection&lt;String&gt;，待删除 Flowable 部署主键集合
-     * @return 无返回值
      */
     public void deleteDeployments(Collection<String> deploymentIds)
     {
@@ -411,7 +398,6 @@ public class WorkflowDeploymentService
      * 拒绝仍被运行实例或任意历史实例引用的部署。
      *
      * @param deploymentId String，Flowable 部署主键
-     * @return 无返回值
      */
     private void assertNoInstanceReferences(String deploymentId)
     {
@@ -592,10 +578,7 @@ public class WorkflowDeploymentService
         /**
          * 创建不可变删除计划，防止预检结果在服务代码中被修改。
          *
-         * @param deployment Deployment，待删除 Flowable 部署
-         * @param dmnSnapshots List&lt;WfDeployDmnSnapshot&gt;，部署当前拥有的 DMN 冻结快照
-         * @param linkedModels List&lt;Model&gt;，当前关联该部署的模型
-         * @return 无返回值，构造后得到不可变删除计划
+         * 构造后得到不可变删除计划
          */
         private DeploymentDeletionPlan
         {

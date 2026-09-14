@@ -55,13 +55,7 @@ public class WorkflowParticipantRuleRuntimeService
 
     /**
      * 创建参与者规则运行服务。
-     * @param repositoryService RepositoryService，流程定义与部署关系查询 API
-     * @param runtimeService RuntimeService，根流程执行树与服务端发起人变量查询 API
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署规则仓库
-     * @param identityMapper WorkflowIdentityMapper，实时组织关系查询 Mapper
-     * @param identityResolver WorkflowIdentityResolver，审批与认领资格解析器
-     * @param metrics WorkflowParticipantResolutionMetrics，固定错误码失败指标
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowParticipantRuleRuntimeService(RepositoryService repositoryService,
             RuntimeService runtimeService,

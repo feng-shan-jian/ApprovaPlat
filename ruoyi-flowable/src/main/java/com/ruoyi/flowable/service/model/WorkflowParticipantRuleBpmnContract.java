@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
@@ -251,45 +250,10 @@ public final class WorkflowParticipantRuleBpmnContract
     /**
      * 从编译执行资源中移除作者可编辑规则属性，运行时只读取部署快照。
      * @param element BaseElement，流程或用户任务
-     * @return void，无返回值
      */
     public static void removeAuthorProperties(BaseElement element)
     {
-        if (element == null || element.getExtensionElements() == null)
-        {
-            return;
-        }
-        Map<String, List<ExtensionElement>> extensions = element.getExtensionElements();
-        List<ExtensionElement> containers = extensions.get("properties");
-        if (containers == null)
-        {
-            return;
-        }
-        List<ExtensionElement> remainingContainers = new ArrayList<>();
-        for (ExtensionElement container : containers)
-        {
-            Map<String, List<ExtensionElement>> children = container.getChildElements();
-            List<ExtensionElement> properties = children == null ? null : children.get("property");
-            if (properties == null)
-            {
-                remainingContainers.add(container);
-                continue;
-            }
-            List<ExtensionElement> remaining = properties.stream()
-                    .filter(property -> !isReservedProperty(
-                            property.getAttributeValue(null, "name"))).toList();
-            if (!remaining.isEmpty())
-            {
-                Map<String, List<ExtensionElement>> copied = new HashMap<>(children);
-                copied.put("property", new ArrayList<>(remaining));
-                container.setChildElements(copied);
-                remainingContainers.add(container);
-            }
-        }
-        Map<String, List<ExtensionElement>> copied = new HashMap<>(extensions);
-        if (remainingContainers.isEmpty()) copied.remove("properties");
-        else copied.put("properties", remainingContainers);
-        element.setExtensionElements(copied);
+        WorkflowBpmnProperties.remove(element, WorkflowParticipantRuleBpmnContract::isReservedProperty);
     }
 
     /**
@@ -299,24 +263,8 @@ public final class WorkflowParticipantRuleBpmnContract
      */
     private static Map<String, String> readPropertyValues(BaseElement element)
     {
-        if (element == null || element.getExtensionElements() == null) return Map.of();
-        Map<String, String> values = new HashMap<>();
-        for (ExtensionElement container : element.getExtensionElements()
-                .getOrDefault("properties", List.of()))
-        {
-            if (container == null || container.getChildElements() == null) continue;
-            for (ExtensionElement property : container.getChildElements()
-                    .getOrDefault("property", List.of()))
-            {
-                String name = property.getAttributeValue(null, "name");
-                if (!isReservedProperty(name)) continue;
-                if (values.put(name, property.getAttributeValue(null, "value")) != null)
-                {
-                    throw new IllegalArgumentException("参与者规则属性不能重复");
-                }
-            }
-        }
-        return Map.copyOf(values);
+        return WorkflowBpmnProperties.read(element, WorkflowParticipantRuleBpmnContract::isReservedProperty,
+                "参与者规则属性不能重复");
     }
 
     private static Set<String> present(Map<String, String> values, Set<String> names)

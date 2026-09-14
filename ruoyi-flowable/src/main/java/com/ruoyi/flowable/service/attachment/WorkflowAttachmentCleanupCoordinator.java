@@ -33,9 +33,7 @@ public class WorkflowAttachmentCleanupCoordinator
     /**
      * 创建附件清理协调器。
      *
-     * @param attachmentService WorkflowAttachmentService，领取、对象删除和状态回写边界
-     * @param transactionManager PlatformTransactionManager，执行短 REQUIRES_NEW 事务
-     * @return 无返回值，构造后由 Spring 调度器复用
+     * 构造后由 Spring 调度器复用
      */
     @Autowired
     public WorkflowAttachmentCleanupCoordinator(

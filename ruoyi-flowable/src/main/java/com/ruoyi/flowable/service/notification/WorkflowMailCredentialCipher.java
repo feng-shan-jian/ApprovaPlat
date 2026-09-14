@@ -35,8 +35,7 @@ public class WorkflowMailCredentialCipher
     /**
      * 使用 RuoYi 既有 Token 密钥体系创建正式授权码加密服务。
      *
-     * @param tokenService TokenService，持有既有根密钥并只暴露用途隔离派生能力
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     @Autowired
     public WorkflowMailCredentialCipher(TokenService tokenService)
@@ -48,9 +47,7 @@ public class WorkflowMailCredentialCipher
     /**
      * 创建可注入派生子密钥和安全随机源的授权码加密服务，供基础设施测试复用。
      *
-     * @param credentialKey SecretKey，固定 32 字节 AES 用途子密钥
-     * @param secureRandom SecureRandom，每次加密生成独立随机 IV 的来源
-     * @return void，完成依赖保存
+     * 完成依赖保存
      */
     WorkflowMailCredentialCipher(SecretKey credentialKey,
             SecureRandom secureRandom)
@@ -155,9 +152,6 @@ public class WorkflowMailCredentialCipher
     {
         /**
          * 复制可变 IV 并校验加密结果结构。
-         *
-         * @param ciphertext String，非空 Base64 密文
-         * @param iv byte[]，固定 12 字节 IV
          */
         public EncryptedCredential
         {

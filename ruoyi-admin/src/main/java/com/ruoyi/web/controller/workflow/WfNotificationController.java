@@ -57,14 +57,7 @@ public class WfNotificationController extends BaseController
 
     /**
      * 创建审批通知 Controller。
-     * @param notificationInboxService WorkflowNotificationInboxService，当前用户收件箱服务
-     * @param notificationPolicyService WorkflowNotificationPolicyService，通知偏好与策略服务
-     * @param manualUrgeService WorkflowManualUrgeService，人工催办业务服务
-     * @param notificationOutboxService WorkflowNotificationOutboxService，死信补偿状态服务
-     * @param notificationAdminService WorkflowNotificationAdminService，通知运维分页查询服务
-     * @param mailConfigService WorkflowMailConfigService，SMTP 单例配置和测试发送服务
-     * @param notificationCatalogService WorkflowNotificationCatalogService，真实部署流程和节点目录
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfNotificationController(WorkflowNotificationInboxService notificationInboxService,
             WorkflowNotificationPolicyService notificationPolicyService,

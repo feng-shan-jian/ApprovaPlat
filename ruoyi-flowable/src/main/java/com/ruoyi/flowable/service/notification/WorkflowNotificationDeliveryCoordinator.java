@@ -19,9 +19,7 @@ public class WorkflowNotificationDeliveryCoordinator
 
     /**
      * 创建通知投递协调器。
-     * @param outboxService WorkflowNotificationOutboxService，outbox 状态唯一所有者
-     * @param channelStrategies List&lt;WorkflowNotificationChannel&gt;，EMAIL 和 SMS 两个外部通道
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowNotificationDeliveryCoordinator(WorkflowNotificationOutboxService outboxService,
             List<WorkflowNotificationChannel> channelStrategies)

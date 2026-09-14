@@ -60,17 +60,7 @@ public class WorkflowTaskRevokeApplicationService
     /**
      * 创建已办撤回应用服务。
      *
-     * @param engineOperations WorkflowEngineOperations，正式事务、认证和异常翻译入口
-     * @param identityResolver WorkflowIdentityResolver，只读能力的正式身份解析器
-     * @param requestValidator WorkflowTaskRequestValidator，请求字段门禁
-     * @param runtimeReader WorkflowTaskRuntimeReader，活动实例只读事实
-     * @param bpmnReader WorkflowTaskBpmnReader，部署 BPMN 只读事实
-     * @param movementPolicy WorkflowTaskMovementPolicy，主流程用户任务身份门禁
-     * @param auditWriter WorkflowTaskActionAuditWriter，结构化撤回审计构造器
-     * @param concurrencyExecutor WorkflowTaskConcurrencyExecutor，并发对象消失翻译器
-     * @param runtimeService RuntimeService，执行树读取和原子状态迁移服务
-     * @param taskService TaskService，任务锁、comment 和任务事实服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowTaskRevokeApplicationService(
             WorkflowEngineOperations engineOperations,

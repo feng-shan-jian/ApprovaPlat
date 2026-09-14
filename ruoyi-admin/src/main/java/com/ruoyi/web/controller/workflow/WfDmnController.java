@@ -34,8 +34,7 @@ public class WfDmnController extends BaseController
 
     /**
      * 创建 DMN 管理 Controller。
-     * @param decisionService WorkflowDmnDecisionService，官方 DMN 目录与冻结服务
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfDmnController(WorkflowDmnDecisionService decisionService, WorkflowDecisionTableService tableService)
     {

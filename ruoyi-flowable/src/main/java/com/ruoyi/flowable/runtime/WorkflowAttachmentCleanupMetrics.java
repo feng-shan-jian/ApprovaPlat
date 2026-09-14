@@ -25,8 +25,7 @@ public class WorkflowAttachmentCleanupMetrics
     /**
      * 创建并注册附件清理 Counter，标签集合固定以避免高基数指标。
      *
-     * @param meterRegistry MeterRegistry，应用统一 Micrometer 指标注册表
-     * @return 无返回值，构造后指标立即可由 Prometheus 采集
+     * 构造后指标立即可由 Prometheus 采集
      */
     public WorkflowAttachmentCleanupMetrics(MeterRegistry meterRegistry)
     {
@@ -56,7 +55,6 @@ public class WorkflowAttachmentCleanupMetrics
      * 记录已完成的一轮真实清理及其单条结果。
      *
      * @param result WorkflowAttachmentCleanupResult，领域服务返回的完成数和失败数
-     * @return void，无返回值
      */
     public void recordCompleted(WorkflowAttachmentCleanupResult result)
     {
@@ -77,8 +75,6 @@ public class WorkflowAttachmentCleanupMetrics
 
     /**
      * 记录批次领取、状态回写或事务级异常导致的调度失败。
-     *
-     * @return void，无返回值
      */
     public void recordSchedulerFailure()
     {

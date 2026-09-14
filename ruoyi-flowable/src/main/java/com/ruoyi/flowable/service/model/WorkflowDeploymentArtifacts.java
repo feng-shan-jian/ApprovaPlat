@@ -35,7 +35,7 @@ public record WorkflowDeploymentArtifacts(
     /**
      * 规范化全部集合，避免调用方在资源持久化过程中修改列表结构。
      *
-     * @return 无返回值，构造完成后全部集合均为不可变副本
+     * 构造完成后全部集合均为不可变副本
      */
     public WorkflowDeploymentArtifacts
     {

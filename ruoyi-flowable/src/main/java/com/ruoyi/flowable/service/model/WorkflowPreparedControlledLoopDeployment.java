@@ -15,7 +15,7 @@ public record WorkflowPreparedControlledLoopDeployment(byte[] compiledBpmn,
 {
     /**
      * 防御复制可变字节数组和快照集合。
-     * @return 无返回值，构造后结果不可修改
+     * 构造后结果不可修改
      */
     public WorkflowPreparedControlledLoopDeployment
     {

@@ -128,7 +128,7 @@ class WorkflowTaskCompletionContextIntegrationTest
     private TaskService taskService;
     private HistoryService historyService;
     private JdbcTemplate jdbcTemplate;
-    private WorkflowTaskLifecycleService lifecycleService;
+    private WorkflowTaskCompletionApplicationService completionApplicationService;
     private WfControlledLoopExecutionMapper loopExecutionMapper;
     private Map<String, ProcessDefinition> definitions;
     private WorkflowTaskCompletionApplicationService nestedCompletionService;
@@ -211,8 +211,7 @@ class WorkflowTaskCompletionContextIntegrationTest
                 new WorkflowControlledLoopService(runtimeService, taskService,
                         artifactRepository, loopExecutionMapper);
 
-        WorkflowTaskCompletionApplicationService completionApplicationService =
-                new WorkflowTaskCompletionApplicationService(engineOperations,
+        completionApplicationService = new WorkflowTaskCompletionApplicationService(engineOperations,
                         new WorkflowTaskRequestValidator(),
                         new WorkflowTaskRuntimeReader(runtimeService, taskService,
                                 historyService),
@@ -226,13 +225,6 @@ class WorkflowTaskCompletionContextIntegrationTest
                         new WorkflowTaskActionAuditWriter(taskService),
                         new WorkflowTaskConcurrencyExecutor(),
                         runtimeService, taskService);
-        lifecycleService = new WorkflowTaskLifecycleService(
-                mock(WorkflowProcessCancelApplicationService.class),
-                mock(WorkflowTaskRevokeApplicationService.class),
-                completionApplicationService,
-                mock(WorkflowTaskRejectionApplicationService.class),
-                mock(WorkflowTaskReturnApplicationService.class),
-                mock(WorkflowApplicationResubmitApplicationService.class));
         nestedCompletionService = completionApplicationService;
         clearInvocations(repositoryService);
     }
@@ -265,7 +257,7 @@ class WorkflowTaskCompletionContextIntegrationTest
         Task task = requireSingleTask(instance.getId(), "formReview");
         clearInvocations(repositoryService);
 
-        lifecycleService.completeTask(new WorkflowTaskCompleteRequest(task.getId(),
+        completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(task.getId(),
                 "表单审批通过", Map.of("approvalResult", "approved"),
                 List.of(), List.of(), null));
 
@@ -316,7 +308,7 @@ class WorkflowTaskCompletionContextIntegrationTest
         ProcessInstance instance = runtimeService.startProcessInstanceByKey("completionNext");
         Task source = requireSingleTask(instance.getId(), "selectSource");
 
-        lifecycleService.completeTask(new WorkflowTaskCompleteRequest(source.getId(),
+        completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(source.getId(),
                 "指定下一办理人", Map.of(), List.of(), List.of(200L), null));
 
         Task target = requireSingleTask(instance.getId(), "selectedTarget");
@@ -339,7 +331,7 @@ class WorkflowTaskCompletionContextIntegrationTest
         ProcessInstance instance = runtimeService.startProcessInstanceByKey("completionLoop");
         Task firstRound = requireSingleTask(instance.getId(), "loopReview");
 
-        lifecycleService.completeTask(new WorkflowTaskCompleteRequest(firstRound.getId(),
+        completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(firstRound.getId(),
                 "再次整改", Map.of("loopDecision", "repeat"),
                 List.of(), List.of(), null));
 
@@ -357,7 +349,7 @@ class WorkflowTaskCompletionContextIntegrationTest
             assertThat(round.getOutcome()).isEqualTo("REPEAT");
         });
 
-        lifecycleService.completeTask(new WorkflowTaskCompleteRequest(secondRound.getId(),
+        completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(secondRound.getId(),
                 "退出循环", Map.of("loopDecision", "exit"),
                 List.of(), List.of(), null));
 

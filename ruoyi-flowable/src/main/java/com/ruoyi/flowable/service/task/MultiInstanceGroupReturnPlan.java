@@ -17,7 +17,7 @@ public record MultiInstanceGroupReturnPlan(MultiInstanceRoundSnapshot round,
     /**
      * 校验 ACTIVE 轮次、实时根和流程发起人属于同一业务事实。
      *
-     * @return 无返回值，不一致计划拒绝构造
+     * 不一致计划拒绝构造
      */
     public MultiInstanceGroupReturnPlan
     {

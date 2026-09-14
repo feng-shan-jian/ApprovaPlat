@@ -23,7 +23,7 @@ public record ControlledMultiInstanceRootSnapshot(String deployId,
     /**
      * 校验根身份、模式、成员和 revision 并复制集合。
      *
-     * @return 无返回值，非法根快照拒绝构造
+     * 非法根快照拒绝构造
      */
     public ControlledMultiInstanceRootSnapshot
     {

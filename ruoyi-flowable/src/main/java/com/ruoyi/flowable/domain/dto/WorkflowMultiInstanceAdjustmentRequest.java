@@ -39,13 +39,7 @@ public record WorkflowMultiInstanceAdjustmentRequest(
     /**
      * 创建调整请求并复制用户集合，防止事务执行期间请求内容被调用方修改。
      *
-     * @param taskId String，当前活动任务主键
-     * @param action WorkflowMultiInstanceAdjustmentAction，ADD 或 REMOVE
-     * @param expectedRevision Long，预期服务端 revision
-     * @param comment String，受控业务意见
-     * @param userIds List&lt;Long&gt;，ADD 目标用户集合
-     * @param targetTaskId String，REMOVE 目标任务主键
-     * @return 无返回值，构造后 userIds 为不可修改集合
+     * 构造后 userIds 为不可修改集合
      */
     public WorkflowMultiInstanceAdjustmentRequest
     {

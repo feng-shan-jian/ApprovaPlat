@@ -18,7 +18,7 @@ public record ActiveControlledMultiInstanceRootSnapshot(
     /**
      * 冻结集合并校验任务和 child execution 与根计数闭合。
      *
-     * @return 无返回值，非法活动根拒绝构造
+     * 非法活动根拒绝构造
      */
     public ActiveControlledMultiInstanceRootSnapshot
     {

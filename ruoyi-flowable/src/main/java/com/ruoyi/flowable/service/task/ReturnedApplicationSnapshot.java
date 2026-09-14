@@ -22,7 +22,7 @@ public record ReturnedApplicationSnapshot(String taskId, String executionId,
     /**
      * 校验申请人任务和迁移来源包含全部稳定身份。
      *
-     * @return 无返回值，缺失字段拒绝构造
+     * 缺失字段拒绝构造
      */
     public ReturnedApplicationSnapshot
     {

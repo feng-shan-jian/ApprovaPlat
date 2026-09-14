@@ -42,9 +42,7 @@ public class WorkflowSqlDataSourceService
 
     /**
      * 创建 SQL 数据源目录服务。
-     * @param engineOperations WorkflowEngineOperations，统一身份和事务边界
-     * @param dataSourceMapper WfSqlDataSourceMapper，正式目录 Mapper
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowSqlDataSourceService(WorkflowEngineOperations engineOperations,
             WfSqlDataSourceMapper dataSourceMapper)
@@ -125,7 +123,6 @@ public class WorkflowSqlDataSourceService
      * 启用或停用 SQL 数据源，只影响后续设计与部署。
      * @param dataSourceId Long，目录主键
      * @param enabled boolean，目标启用状态
-     * @return void，无返回值
      */
     public void changeStatus(Long dataSourceId, boolean enabled)
     {

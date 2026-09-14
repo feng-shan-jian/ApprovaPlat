@@ -19,8 +19,7 @@ public class WorkflowTaskBpmnReader
     /**
      * 创建 BPMN 部署事实读取器。
      *
-     * @param repositoryService RepositoryService，部署定义和模型查询服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowTaskBpmnReader(RepositoryService repositoryService)
     {

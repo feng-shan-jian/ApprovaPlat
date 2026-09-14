@@ -19,7 +19,6 @@ public class WorkflowCollaborationProperties
     /**
      * 设置单轮有界批次。
      * @param value int，1 至 500
-     * @return void，无返回值
      */
     public void setBatchSize(int value)
     {
@@ -33,7 +32,6 @@ public class WorkflowCollaborationProperties
     /**
      * 设置领取租约，必须覆盖正式 HTTP 请求上限。
      * @param value Duration，10 秒至 10 分钟
-     * @return void，无返回值
      */
     public void setLeaseDuration(Duration value)
     {
@@ -51,7 +49,6 @@ public class WorkflowCollaborationProperties
     /**
      * 设置最大退避时间。
      * @param value Duration，1 秒至 1 小时
-     * @return void，无返回值
      */
     public void setMaxRetryDelay(Duration value)
     {

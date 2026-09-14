@@ -34,10 +34,7 @@ public class WorkflowEngineOperations
     /**
      * 创建 Flowable 公共 API 执行器。
      *
-     * @param authenticationContext WorkflowAuthenticationContext，引擎写操作认证上下文
-     * @param exceptionTranslator WorkflowExceptionTranslator，引擎异常翻译器
-     * @param identityResolver WorkflowIdentityResolver，当前用户正式身份解析器
-     * @return 无返回值，构造后由 Spring 管理该组件
+     * 构造后由 Spring 管理该组件
      */
     public WorkflowEngineOperations(WorkflowAuthenticationContext authenticationContext,
             WorkflowExceptionTranslator exceptionTranslator, WorkflowIdentityResolver identityResolver)
@@ -112,7 +109,6 @@ public class WorkflowEngineOperations
      * 在只读事务中执行无返回值的 Flowable 公共 API 操作。
      *
      * @param action Runnable，只读引擎操作
-     * @return 无返回值
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public void read(Runnable action)
@@ -162,7 +158,6 @@ public class WorkflowEngineOperations
      * 使用当前登录用户在事务中执行无返回值的 Flowable 公共 API 写操作。
      *
      * @param action Runnable，需要记录操作人的引擎写操作
-     * @return 无返回值
      */
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public void writeAsCurrentUser(Runnable action)
@@ -196,7 +191,6 @@ public class WorkflowEngineOperations
      *
      * @param actorUserId String，数字格式的若依操作人 ID
      * @param action Runnable，需要记录操作人的引擎写操作
-     * @return 无返回值
      */
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
     public void writeAsUser(String actorUserId, Runnable action)

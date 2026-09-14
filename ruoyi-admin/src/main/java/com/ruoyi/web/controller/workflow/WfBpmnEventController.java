@@ -42,8 +42,7 @@ public class WfBpmnEventController extends BaseController
 
     /**
      * 创建 BPMN 事件 Controller。
-     * @param eventService WorkflowBpmnEventCodeService，目录、审计和通知领域服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfBpmnEventController(WorkflowBpmnEventCodeService eventService)
     {

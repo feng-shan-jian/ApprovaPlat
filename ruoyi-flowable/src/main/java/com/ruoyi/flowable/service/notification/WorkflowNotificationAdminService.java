@@ -30,8 +30,7 @@ public class WorkflowNotificationAdminService
 
     /**
      * 创建通知运维查询服务。
-     * @param jdbcTemplate JdbcTemplate，通知 outbox 正式数据访问入口
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowNotificationAdminService(JdbcTemplate jdbcTemplate)
     {

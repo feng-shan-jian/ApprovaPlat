@@ -35,8 +35,7 @@ public class WfExtensionController extends BaseController
 
     /**
      * 创建扩展目录 Controller。
-     * @param extensionService WorkflowExtensionRegistryService，扩展注册表领域服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfExtensionController(WorkflowExtensionRegistryService extensionService)
     {

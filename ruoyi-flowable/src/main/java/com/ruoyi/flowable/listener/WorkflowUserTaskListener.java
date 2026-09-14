@@ -41,13 +41,7 @@ public class WorkflowUserTaskListener implements TaskListener
     /**
      * 创建受控用户任务监听器。
      *
-     * @param auditService WorkflowUserTaskAuditService，身份校验和结构化 comment 领域服务
-     * @param slaRuntimeService WorkflowTaskSlaRuntimeService，任务 SLA 正式状态服务
-     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，实时组织解析服务
-     * @param automaticCopyService WorkflowAutomaticCopyService，自动抄送运行时服务
-     * @param notificationService WorkflowNotificationService，事务通知服务
-     * @param roundLifecycleService WorkflowMultiInstanceRoundLifecycleService，ACTIVE 轮次生命周期服务
-     * @return 无返回值，构造后由 Spring 以 userTaskListener 名称管理
+     * 构造后由 Spring 以 userTaskListener 名称管理
      */
     public WorkflowUserTaskListener(WorkflowUserTaskAuditService auditService,
             WorkflowTaskSlaRuntimeService slaRuntimeService,

@@ -19,9 +19,7 @@ public final class WorkflowAuthorFormFieldCatalog
 
     /**
      * 创建深度不可变的正式字段目录。
-     * @param fieldsByNode Map&lt;String,Map&lt;String,Set&lt;String&gt;&gt;&gt;，流程、节点和字段三级目录
-     * @param disqualifiedProcessFields Map&lt;String,Set&lt;String&gt;&gt;，流程级同名不合格字段
-     * @return 无返回值，构造后目录不可修改
+     * 构造后目录不可修改
      */
     private WorkflowAuthorFormFieldCatalog(
             Map<String, Map<String, Set<String>>> fieldsByNode,

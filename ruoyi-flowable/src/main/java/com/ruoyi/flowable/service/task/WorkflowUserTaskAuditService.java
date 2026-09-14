@@ -45,10 +45,7 @@ public class WorkflowUserTaskAuditService
     /**
      * 创建用户任务监听审计领域服务。
      *
-     * @param taskService TaskService，写入 Flowable 正式 comment 的公共 API
-     * @param identityResolver WorkflowIdentityResolver，正式启用用户解析器
-     * @param identityCodec WorkflowIdentityCodec，用户主键格式规范器
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowUserTaskAuditService(TaskService taskService,
             WorkflowIdentityResolver identityResolver, WorkflowIdentityCodec identityCodec)

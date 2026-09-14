@@ -33,17 +33,7 @@ public class WorkflowMultiInstanceGroupTransitionService
 
     /**
      * 创建整组迁移服务。
-     * @param roundRepository WorkflowMultiInstanceRoundRepository，轮次持久化边界
-     * @param snapshotReader WorkflowMultiInstanceRuntimeSnapshotReader，实时快照读取器
-     * @param roundLifecycleService WorkflowMultiInstanceRoundLifecycleService，ACTIVE 轮次读取服务
-     * @param transitionCoordinator WorkflowMultiInstanceTransitionCoordinator，单命令迁移协议协调器
-     * @param returnedTaskStateService WorkflowReturnedTaskStateService，退回和重提双状态写入边界
-     * @param runtimeReader WorkflowTaskRuntimeReader，任务和实例公共事实读取器
-     * @param runtimeService RuntimeService，Flowable 执行树迁移和结构查询服务
-     * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，撤销任务 SLA 收口服务
-     * @param bpmnReader WorkflowTaskBpmnReader，重提时重新核验首审批至来源的部署路径
-     * @param movementPolicy WorkflowTaskMovementPolicy，连续受控多实例安全路径策略
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowMultiInstanceGroupTransitionService(
             WorkflowMultiInstanceRoundRepository roundRepository,
@@ -605,7 +595,6 @@ public class WorkflowMultiInstanceGroupTransitionService
     /**
      * 按轮次数据错误契约执行无返回值快照核验 lambda。
      * @param action Runnable，快照核验动作
-     * @return 无返回值
      */
     private void roundData(Runnable action)
     {

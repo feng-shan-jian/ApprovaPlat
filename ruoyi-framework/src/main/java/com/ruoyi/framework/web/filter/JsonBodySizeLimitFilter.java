@@ -37,8 +37,7 @@ public final class JsonBodySizeLimitFilter implements Filter
     /**
      * 创建 JSON 请求体硬大小过滤器。
      *
-     * @param maxBodyBytes int，允许进入后续过滤器和 MVC 反序列化的最大原始字节数
-     * @return 无返回值，非法上限会在应用启动创建 Bean 时立即失败
+     * 非法上限会在应用启动创建 Bean 时立即失败
      */
     public JsonBodySizeLimitFilter(int maxBodyBytes)
     {
@@ -209,9 +208,7 @@ public final class JsonBodySizeLimitFilter implements Filter
         /**
          * 创建缓存正文请求包装器。
          *
-         * @param request HttpServletRequest，保留请求头、路径和认证信息的原始请求
-         * @param body byte[]，已通过上限校验的完整 JSON 字节
-         * @return 无返回值，后续过滤器每次读取都会获得独立输入流
+         * 后续过滤器每次读取都会获得独立输入流
          */
         private CachedBodyRequest(HttpServletRequest request, byte[] body)
         {
@@ -279,8 +276,7 @@ public final class JsonBodySizeLimitFilter implements Filter
         /**
          * 创建独立缓存输入流。
          *
-         * @param body byte[]，已通过上限校验的 JSON 正文
-         * @return 无返回值，新输入流游标从正文开头开始
+         * 新输入流游标从正文开头开始
          */
         private CachedBodyInputStream(byte[] body)
         {

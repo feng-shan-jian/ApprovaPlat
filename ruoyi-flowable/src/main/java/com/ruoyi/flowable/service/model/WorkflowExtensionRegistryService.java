@@ -63,13 +63,7 @@ public class WorkflowExtensionRegistryService
 
     /**
      * 创建扩展注册表服务。
-     * @param engineOperations WorkflowEngineOperations，正式事务和身份边界
-     * @param extensionMapper WfBpmnExtensionMapper，扩展目录与版本数据访问层
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署扩展资源引用仓库
-     * @param handlerRegistry WorkflowJavaExtensionHandlerRegistry，代码安装处理器注册表
-     * @param httpConnector WorkflowHttpConnector，固定 HTTP 实现与配置 Schema
-     * @param sqlConnector WorkflowSqlConnector，固定 SQL 实现与配置 Schema
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowExtensionRegistryService(WorkflowEngineOperations engineOperations,
             WfBpmnExtensionMapper extensionMapper,
@@ -283,7 +277,6 @@ public class WorkflowExtensionRegistryService
      * 启用或停用扩展目录，只影响后续设计和部署，不修改历史快照。
      * @param extensionId Long，扩展目录主键
      * @param enabled boolean，是否允许后续选择和部署
-     * @return void，无返回值
      */
     public void changeStatus(Long extensionId, boolean enabled)
     {
@@ -314,7 +307,6 @@ public class WorkflowExtensionRegistryService
     /**
      * 删除已停用且从未固化到部署快照的非内置目录及其不可变版本。
      * @param extensionId Long，扩展目录主键
-     * @return void，无返回值
      */
     public void removeExtension(Long extensionId)
     {

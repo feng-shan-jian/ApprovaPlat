@@ -33,12 +33,7 @@ public class WorkflowExtensionDelegate implements JavaDelegate
 
     /**
      * 创建固定扩展调度器。
-     * @param repositoryService RepositoryService，流程定义到部署主键的官方查询 API
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，运行快照资源仓库
-     * @param handlerRegistry WorkflowJavaExtensionHandlerRegistry，服务端安装处理器注册表
-     * @param httpConnector WorkflowHttpConnector，固定 HTTP 连接器执行器
-     * @param sqlConnector WorkflowSqlConnector，固定 SQL 连接器执行器
-     * @return 无返回值，构造后由 Spring 以固定 Bean 名注册
+     * 构造后由 Spring 以固定 Bean 名注册
      */
     public WorkflowExtensionDelegate(RepositoryService repositoryService,
             WorkflowDeploymentArtifactRepository artifactRepository,

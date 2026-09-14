@@ -52,22 +52,7 @@ public class WorkflowTaskCompletionApplicationService
     /**
      * 创建任务完成应用服务。
      *
-     * @param engineOperations WorkflowEngineOperations，正式事务和异常翻译入口
-     * @param requestValidator WorkflowTaskRequestValidator，请求字段门禁
-     * @param runtimeReader WorkflowTaskRuntimeReader，活动任务和实例事实
-     * @param bpmnReader WorkflowTaskBpmnReader，部署 BPMN 事实
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署表单快照仓库
-     * @param variableValidator WorkflowStartVariableValidator，部署 schema 变量门禁
-     * @param attachmentService WorkflowAttachmentService，附件投影和绑定服务
-     * @param taskCopyService WorkflowTaskCopyService，完成抄送计划和持久化服务
-     * @param nextTaskAssignmentService WorkflowNextTaskAssignmentService，后继办理人计划服务
-     * @param multiInstanceService WorkflowMultiInstanceService，多实例 revision 和写后对账服务
-     * @param controlledLoopService WorkflowControlledLoopService，受控循环完成决策服务
-     * @param auditWriter WorkflowTaskActionAuditWriter，结构化完成审计写入器
-     * @param concurrencyExecutor WorkflowTaskConcurrencyExecutor，并发对象消失翻译器
-     * @param runtimeService RuntimeService，流程变量读写服务
-     * @param taskService TaskService，任务变量、完成和历史归档服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowTaskCompletionApplicationService(
             WorkflowEngineOperations engineOperations,
@@ -345,13 +330,7 @@ public class WorkflowTaskCompletionApplicationService
         /**
          * 复制变量和两层附件集合，禁止后续步骤替换已校验事实。
          *
-         * @param bpmnContext WorkflowTaskBpmnSnapshot，部署 BPMN 事实
-         * @param currentUserTask UserTask，当前 BPMN 节点
-         * @param values Map&lt;String,Object&gt;，schema 校验后的变量
-         * @param attachmentIdsByField Map&lt;String,List&lt;String&gt;&gt;，字段附件引用
-         * @param localScope boolean，任务变量是否使用局部作用域
-         * @param formSnapshot WfDeployForm，部署表单快照；无表单时为空
-         * @return 无返回值，构造后集合不可修改
+         * 构造后集合不可修改
          */
         private CompletionPreparation
         {

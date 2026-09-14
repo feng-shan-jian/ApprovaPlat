@@ -39,7 +39,7 @@ public record WorkflowRuntimeMetricValues(
     /**
      * 拒绝任何负数数据库结果，避免异常映射或溢出被发布为正常容量指标。
      *
-     * @return 无返回值，任一字段为负时拒绝创建快照值
+     * 任一字段为负时拒绝创建快照值
      */
     public WorkflowRuntimeMetricValues
     {

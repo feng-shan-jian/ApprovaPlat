@@ -68,11 +68,7 @@ public class WorkflowProcessFormDetailProjection
     /**
      * 创建流程详情表单投影组件。
      *
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署表单资源仓库
-     * @param formTemplateValidator WorkflowFormTemplateValidator，表单 schema 安全解析器
-     * @param variableProjection WorkflowProcessVariableProjection，变量存储解码与安全投影组件
-     * @param attachmentService WorkflowAttachmentService，附件批量读取和对象门禁服务
-     * @return 无返回值，构造后由 Spring 管理该组件
+     * 构造后由 Spring 管理该组件
      */
     public WorkflowProcessFormDetailProjection(
             WorkflowDeploymentArtifactRepository artifactRepository,

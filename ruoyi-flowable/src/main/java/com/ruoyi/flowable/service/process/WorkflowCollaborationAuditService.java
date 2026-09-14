@@ -15,8 +15,7 @@ public class WorkflowCollaborationAuditService
 
     /**
      * 创建协作消息审计服务。
-     * @param mapper WfCollaborationMessageAuditMapper，正式审计数据访问层
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowCollaborationAuditService(WfCollaborationMessageAuditMapper mapper)
     {

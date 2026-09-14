@@ -32,7 +32,7 @@ public final class WorkflowReturnedApplicationProtocol
     /**
      * 禁止实例化纯协议类。
      *
-     * @return 无返回值，该构造函数始终不可访问
+     * 该构造函数始终不可访问
      */
     private WorkflowReturnedApplicationProtocol()
     {

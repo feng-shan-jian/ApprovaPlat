@@ -60,12 +60,7 @@ public class WorkflowSqlConnector
 
     /**
      * 创建 SQL 连接器。
-     * @param primaryDataSource DataSource，Flowable 与业务表共用的主库连接池
-     * @param dataSourceService WorkflowSqlDataSourceService，受控数据源目录
-     * @param templateValidator WorkflowSqlTemplateValidator，SQL AST 门禁
-     * @param secretResolver WorkflowSqlSecretResolver，外库环境引用解析器
-     * @param connectorMetrics WorkflowConnectorMetrics，单次 Flowable Job 尝试指标
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowSqlConnector(DataSource primaryDataSource,
             WorkflowSqlDataSourceService dataSourceService,

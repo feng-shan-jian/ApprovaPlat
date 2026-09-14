@@ -35,7 +35,7 @@ public record MultiInstanceTransitionCancellation(MultiInstanceTransitionAction 
     /**
      * 冻结成员并校验取消授权包含全部稳定业务事实。
      *
-     * @return 无返回值，非法授权拒绝构造
+     * 非法授权拒绝构造
      */
     public MultiInstanceTransitionCancellation
     {

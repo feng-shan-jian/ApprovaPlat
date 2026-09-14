@@ -17,11 +17,7 @@ public record ReturnedAssignmentSnapshot(String assignee, String owner,
     /**
      * 校验并冻结候选身份集合。
      *
-     * @param assignee String，原直接办理人
-     * @param owner String，原任务所有者
-     * @param candidateUserIds List&lt;String&gt;，原候选用户
-     * @param candidateGroupIds List&lt;String&gt;，原候选组
-     * @return 无返回值，构造后集合不可修改
+     * 构造后集合不可修改
      */
     public ReturnedAssignmentSnapshot
     {

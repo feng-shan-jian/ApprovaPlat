@@ -492,9 +492,7 @@ public class WorkflowMultiInstanceTransitionCoordinator
         /**
          * 创建仅供迁移协调器返回的命令作用域。
          *
-         * @param owner WorkflowMultiInstanceTransitionCoordinator，作用域所有者
-         * @param state TransitionState，本次命令内部状态
-         * @return 无返回值，调用方只能通过 begin 获得实例
+         * 调用方只能通过 begin 获得实例
          */
         private Scope(WorkflowMultiInstanceTransitionCoordinator owner,
                 TransitionState state)
@@ -545,8 +543,7 @@ public class WorkflowMultiInstanceTransitionCoordinator
         /**
          * 创建一次命令观察状态。
          *
-         * @param context TransitionContext，已经规范化的不可变迁移事实
-         * @return 无返回值，所有观察字段从未触发状态开始
+         * 所有观察字段从未触发状态开始
          */
         private TransitionState(TransitionContext context)
         {

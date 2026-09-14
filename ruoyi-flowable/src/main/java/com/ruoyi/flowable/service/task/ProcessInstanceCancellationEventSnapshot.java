@@ -21,7 +21,7 @@ public record ProcessInstanceCancellationEventSnapshot(String processInstanceId,
     /**
      * 校验流程取消事件包含完整引擎身份。
      *
-     * @return 无返回值，缺失事实拒绝构造
+     * 缺失事实拒绝构造
      */
     public ProcessInstanceCancellationEventSnapshot
     {

@@ -41,15 +41,7 @@ public class WorkflowNotificationService
 
     /**
      * 创建工作流通知业务服务。
-     * @param jdbcTemplate JdbcTemplate，读取 Flowable 监听审计序号和任务 revision
-     * @param repositoryService RepositoryService，流程定义上下文查询入口
-     * @param runtimeService RuntimeService，受控迁移标记查询入口
-     * @param taskService TaskService，活动任务上下文查询入口
-     * @param planner WorkflowNotificationPlanner，策略和身份规划入口
-     * @param writer WorkflowNotificationWriter，通知事务写入入口
-     * @param outboxService WorkflowNotificationOutboxService，催办外部记录取消入口
-     * @param copyMapper WfCopyMapper，按抄送自然键批量读取 active 正式事实
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowNotificationService(JdbcTemplate jdbcTemplate,
             RepositoryService repositoryService, RuntimeService runtimeService,

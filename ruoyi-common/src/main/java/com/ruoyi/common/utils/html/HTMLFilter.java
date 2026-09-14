@@ -136,8 +136,6 @@ public final class HTMLFilter
 
     /**
      * Map-parameter configurable constructor.
-     *
-     * @param conf map containing configuration. keys match field names.
      */
     @SuppressWarnings("unchecked")
     public HTMLFilter(final Map<String, Object> conf)

@@ -57,11 +57,7 @@ public class WorkflowMailConfigService
     /**
      * 创建 SMTP 配置领域服务。
      *
-     * @param jdbcTemplate JdbcTemplate，sys_mail_config 唯一正式数据源
-     * @param credentialCipher WorkflowMailCredentialCipher，AES-256-GCM 授权码边界
-     * @param failureClassifier WorkflowMailFailureClassifier，SMTP 异常脱敏分类器
-     * @param identityResolver WorkflowIdentityResolver，配置修改人和测试人身份来源
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowMailConfigService(JdbcTemplate jdbcTemplate,
             WorkflowMailCredentialCipher credentialCipher,

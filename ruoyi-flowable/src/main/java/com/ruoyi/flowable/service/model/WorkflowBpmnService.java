@@ -151,10 +151,7 @@ public class WorkflowBpmnService
 
     /**
      * 创建接入正式表单字段和 BPMN 事件编码目录的安全校验组件。
-     * @param repositoryService RepositoryService，Flowable 官方模型校验公共 API
-     * @param formFieldExtensionService WorkflowFormFieldExtensionService，自定义字段目录解析器
-     * @param bpmnEventCodeService WorkflowBpmnEventCodeService，错误与升级正式编码目录
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowBpmnService(RepositoryService repositoryService,
             WorkflowFormFieldExtensionService formFieldExtensionService,
@@ -1018,7 +1015,6 @@ public class WorkflowBpmnService
      * @param process Process，元素所属的可执行流程，用于核验动态多实例初始化拓扑
      * @param element FlowElement，待校验流程元素
      * @param validationContext ValidationContext，作者资源或部署编译资源的字段契约
-     * @return 无返回值
      */
     private void validateFlowElement(Process process, FlowElement element,
             ValidationContext validationContext)
@@ -1228,7 +1224,6 @@ public class WorkflowBpmnService
      * @param process Process，多实例活动所属的可执行流程
      * @param activity Activity，持有多实例循环配置的流程活动
      * @param loop MultiInstanceLoopCharacteristics，待校验的多实例配置
-     * @return 无返回值
      */
     private void validateMultiInstance(Process process, Activity activity,
             MultiInstanceLoopCharacteristics loop, ValidationContext validationContext)
@@ -1457,7 +1452,6 @@ public class WorkflowBpmnService
      *
      * @param task ServiceTask，待校验服务任务
      * @param validationContext ValidationContext，作者资源要求受控字段，编译资源要求字段已剥离
-     * @return 无返回值
      */
     private void validateServiceTask(ServiceTask task, ValidationContext validationContext)
     {
@@ -1621,7 +1615,6 @@ public class WorkflowBpmnService
      * 校验执行监听器和任务监听器的实现及字段表达式。
      *
      * @param listeners List&lt;FlowableListener&gt;，监听器集合，允许为空
-     * @return 无返回值
      */
     private void validateListeners(List<FlowableListener> listeners,
             ValidationContext validationContext, boolean callActivity)
@@ -1800,7 +1793,6 @@ public class WorkflowBpmnService
      * 校验字符串集合中可能存在的表达式。
      *
      * @param values List&lt;String&gt;，用户或候选组表达式集合，允许为空
-     * @return 无返回值
      */
     private void validateExpressions(List<String> values)
     {
@@ -1818,7 +1810,6 @@ public class WorkflowBpmnService
      * 校验单个可选表达式，不含表达式标记的普通常量直接放行。
      *
      * @param value String，可能包含 ${...} 或 #{...} 的配置值
-     * @return 无返回值
      */
     private void validateExpression(String value)
     {
@@ -1843,7 +1834,6 @@ public class WorkflowBpmnService
      * @param bpmnXml String，严格 UTF-8 解码后的原始 BPMN XML
      * @param controlledCollectionCount int，模型级完整校验通过的受控集合表达式数量
      * @param validationContext ValidationContext，作者资源或编译执行资源阶段
-     * @return 无返回值
      */
     private void validateRawExpressions(String bpmnXml, int controlledCollectionCount,
             ValidationContext validationContext)
@@ -1961,7 +1951,6 @@ public class WorkflowBpmnService
      * @param nodeName String，BPMN 节点名称，允许为空
      * @param references List&lt;WorkflowBpmnFormReference&gt;，待写入引用集合
      * @param uniqueReferences Set&lt;String&gt;，部署快照业务唯一键集合
-     * @return 无返回值
      */
     private void addFormReference(String processKey, String formKey, String nodeKey, String nodeName,
             NodeFormPermissionPolicy permissionPolicy,
@@ -2167,7 +2156,6 @@ public class WorkflowBpmnService
      * 节点必须仍存在且再次通过平台字段约束，避免错误编码或 activityId 被伪造后放宽其他模型。
      *
      * @param bpmnModel org.flowable.bpmn.model.BpmnModel，已通过模块安全规则的模型
-     * @return 无返回值
      */
     /**
      * 判断官方错误是否仅来自已通过平台约束的作者 SendTask 缺少原生实现类型。

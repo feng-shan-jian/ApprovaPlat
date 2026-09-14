@@ -29,9 +29,7 @@ public class WorkflowBpmnEventRuntimeService
 
     /**
      * 创建受控运行产生器。
-     * @param repositoryService RepositoryService，流程定义和 BPMN 模型公共 API
-     * @param auditService WorkflowBpmnEventAuditService，独立事务审计和通知服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowBpmnEventRuntimeService(RepositoryService repositoryService,
             WorkflowBpmnEventAuditService auditService)

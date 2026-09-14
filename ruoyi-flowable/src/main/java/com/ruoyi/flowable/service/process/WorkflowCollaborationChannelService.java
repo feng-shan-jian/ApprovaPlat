@@ -17,8 +17,7 @@ public class WorkflowCollaborationChannelService
 
     /**
      * 创建协作通道服务。
-     * @param mapper WfCollaborationChannelMapper，通道游标数据访问层
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowCollaborationChannelService(WfCollaborationChannelMapper mapper)
     {

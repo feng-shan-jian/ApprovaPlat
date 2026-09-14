@@ -2,29 +2,26 @@
     <div>
         <el-tabs type="border-card">
             <el-tab-pane label="秒" v-if="shouldHide('second')">
-                <CrontabSecond
+                <NumericField field="second"
                     @update="updateCrontabValue"
                     :check="checkNumber"
                     :cron="crontabValueObj"
-                    ref="cronsecond"
                 />
             </el-tab-pane>
 
             <el-tab-pane label="分钟" v-if="shouldHide('min')">
-                <CrontabMin
+                <NumericField field="min"
                     @update="updateCrontabValue"
                     :check="checkNumber"
                     :cron="crontabValueObj"
-                    ref="cronmin"
                 />
             </el-tab-pane>
 
             <el-tab-pane label="小时" v-if="shouldHide('hour')">
-                <CrontabHour
+                <NumericField field="hour"
                     @update="updateCrontabValue"
                     :check="checkNumber"
                     :cron="crontabValueObj"
-                    ref="cronhour"
                 />
             </el-tab-pane>
 
@@ -38,11 +35,10 @@
             </el-tab-pane>
 
             <el-tab-pane label="月" v-if="shouldHide('month')">
-                <CrontabMonth
+                <NumericField field="month"
                     @update="updateCrontabValue"
                     :check="checkNumber"
                     :cron="crontabValueObj"
-                    ref="cronmonth"
                 />
             </el-tab-pane>
 
@@ -77,33 +73,9 @@
                     </thead>
                     <tbody>
                         <tr>
-                            <td>
-                                <span v-if="crontabValueObj.second.length < 10">{{crontabValueObj.second}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.second" placement="top"><span>{{crontabValueObj.second}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.min.length < 10">{{crontabValueObj.min}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.min" placement="top"><span>{{crontabValueObj.min}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.hour.length < 10">{{crontabValueObj.hour}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.hour" placement="top"><span>{{crontabValueObj.hour}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.day.length < 10">{{crontabValueObj.day}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.day" placement="top"><span>{{crontabValueObj.day}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.month.length < 10">{{crontabValueObj.month}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.month" placement="top"><span>{{crontabValueObj.month}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.week.length < 10">{{crontabValueObj.week}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.week" placement="top"><span>{{crontabValueObj.week}}</span></el-tooltip>
-                            </td>
-                            <td>
-                                <span v-if="crontabValueObj.year.length < 10">{{crontabValueObj.year}}</span>
-                                <el-tooltip v-else :content="crontabValueObj.year" placement="top"><span>{{crontabValueObj.year}}</span></el-tooltip>
+                            <td v-for="(value, field) in crontabValueObj" :key="field">
+                                <span v-if="value.length < 10">{{ value }}</span>
+                                <el-tooltip v-else :content="value" placement="top"><span>{{ value }}</span></el-tooltip>
                             </td>
                             <td class="result">
                                 <span v-if="crontabValueString.length < 90">{{crontabValueString}}</span>
@@ -125,11 +97,8 @@
 </template>
 
 <script setup>
-import CrontabSecond from "./second.vue"
-import CrontabMin from "./min.vue"
-import CrontabHour from "./hour.vue"
+import NumericField from "./NumericField.vue"
 import CrontabDay from "./day.vue"
-import CrontabMonth from "./month.vue"
 import CrontabWeek from "./week.vue"
 import CrontabYear from "./year.vue"
 import CrontabResult from "./result.vue"

@@ -39,9 +39,7 @@ public class WorkflowConditionRouter
 
     /**
      * 创建固定条件路由器。
-     * @param repositoryService RepositoryService，定义到部署主键的可信查询 API
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，运行时不可变部署资源仓库
-     * @return 无返回值，构造后以固定 Bean 名注册
+     * 构造后以固定 Bean 名注册
      */
     public WorkflowConditionRouter(RepositoryService repositoryService,
             WorkflowDeploymentArtifactRepository artifactRepository)

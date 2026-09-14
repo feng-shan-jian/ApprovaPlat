@@ -33,8 +33,7 @@ public class WorkflowBpmnIdentityValidator
     /**
      * 创建 BPMN 静态身份校验器。
      *
-     * @param identityMapper WorkflowIdentityMapper，若依正式用户、角色和部门数据访问层
-     * @return 无返回值，构造后由 Spring 管理该校验器
+     * 构造后由 Spring 管理该校验器
      */
     public WorkflowBpmnIdentityValidator(WorkflowIdentityMapper identityMapper)
     {

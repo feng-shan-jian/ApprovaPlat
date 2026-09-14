@@ -51,14 +51,7 @@ public class WorkflowTaskCopyService
     /**
      * 创建任务抄送服务。
      *
-     * @param userSelectionValidator WorkflowUserSelectionValidator，正式有效用户严格校验器
-     * @param copyMapper WfCopyMapper，正式抄送记录数据访问层
-     * @param runtimeTaskMapper WorkflowRuntimeTaskMapper，Flowable 活动任务 revision 只读访问层
-     * @param repositoryService RepositoryService，流程定义元数据查询服务
-     * @param runtimeService RuntimeService，活动流程实例查询服务
-     * @param sysUserMapper SysUserMapper，流程发起人名称快照查询 Mapper
-     * @param notificationService WorkflowNotificationService，正式通知服务
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowTaskCopyService(WorkflowUserSelectionValidator userSelectionValidator,
             WfCopyMapper copyMapper, WorkflowRuntimeTaskMapper runtimeTaskMapper,
@@ -329,8 +322,8 @@ public class WorkflowTaskCopyService
         /**
          * 创建抄送计划并复制记录集合，防止动作执行期间增删接收记录。
          *
+         * 构造后 copies 为不可修改集合
          * @param copies List&lt;WfCopy&gt;，待写入抄送记录，不允许为 null
-         * @return 无返回值，构造后 copies 为不可修改集合
          */
         public CopyPlan
         {

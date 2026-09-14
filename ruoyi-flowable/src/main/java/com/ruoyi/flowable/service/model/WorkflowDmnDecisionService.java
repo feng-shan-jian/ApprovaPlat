@@ -53,10 +53,7 @@ public class WorkflowDmnDecisionService
 
     /**
      * 创建 DMN 决策领域服务。
-     * @param engineOperations WorkflowEngineOperations，统一事务和可信身份边界
-     * @param dmnRepositoryService DmnRepositoryService，Flowable 官方 DMN 仓储服务
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署业务资源仓库
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowDmnDecisionService(WorkflowEngineOperations engineOperations,
             DmnRepositoryService dmnRepositoryService,

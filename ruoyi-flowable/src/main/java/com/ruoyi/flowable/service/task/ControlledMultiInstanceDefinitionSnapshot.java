@@ -16,7 +16,7 @@ public record ControlledMultiInstanceDefinitionSnapshot(String deployId,
     /**
      * 校验定义身份和固定模式。
      *
-     * @return 无返回值，非法定义事实拒绝构造
+     * 非法定义事实拒绝构造
      */
     public ControlledMultiInstanceDefinitionSnapshot
     {

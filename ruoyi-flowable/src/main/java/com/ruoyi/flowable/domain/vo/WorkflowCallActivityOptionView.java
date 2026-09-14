@@ -25,17 +25,7 @@ public record WorkflowCallActivityOptionView(String definitionId, String process
     /**
      * 创建不可变目录项并复制变量字段集合。
      *
-     * @param definitionId String，Flowable 流程定义主键
-     * @param processKey String，流程定义 key
-     * @param processName String，流程定义名称
-     * @param version int，流程定义版本
-     * @param category String，流程分类编码
-     * @param deploymentId String，流程部署主键
-     * @param status String，ACTIVE、SUSPENDED 或 UNAVAILABLE
-     * @param inputFields List&lt;WorkflowCallActivityVariableView&gt;，输入字段
-     * @param outputFields List&lt;WorkflowCallActivityVariableView&gt;，输出字段
-     * @param unavailableReason String，可为空的不可用原因
-     * @return 无返回值，构造后列表不可变
+     * 构造后列表不可变
      */
     public WorkflowCallActivityOptionView
     {

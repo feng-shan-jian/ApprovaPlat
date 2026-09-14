@@ -79,7 +79,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置抄送记录主键。
      * @param copyId Long，抄送记录主键
-     * @return void，无返回值
      */
     public void setCopyId(Long copyId)
     {
@@ -98,7 +97,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置抄送业务事件幂等键。
      * @param copyEventId String，抄送业务事件幂等键
-     * @return void，无返回值
      */
     public void setCopyEventId(String copyEventId)
     {
@@ -117,7 +115,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置抄送标题。
      * @param title String，抄送标题
-     * @return void，无返回值
      */
     public void setTitle(String title)
     {
@@ -136,7 +133,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置流程定义主键。
      * @param processId String，流程定义主键
-     * @return void，无返回值
      */
     public void setProcessId(String processId)
     {
@@ -155,7 +151,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置流程名称。
      * @param processName String，流程名称
-     * @return void，无返回值
      */
     public void setProcessName(String processName)
     {
@@ -174,7 +169,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置流程分类编码。
      * @param categoryId String，流程分类编码
-     * @return void，无返回值
      */
     public void setCategoryId(String categoryId)
     {
@@ -193,7 +187,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置部署主键。
      * @param deploymentId String，Flowable 部署主键
-     * @return void，无返回值
      */
     public void setDeploymentId(String deploymentId)
     {
@@ -212,7 +205,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置流程实例主键。
      * @param instanceId String，流程实例主键
-     * @return void，无返回值
      */
     public void setInstanceId(String instanceId)
     {
@@ -231,7 +223,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置任务主键。
      * @param taskId String，产生抄送的任务主键
-     * @return void，无返回值
      */
     public void setTaskId(String taskId)
     {
@@ -250,7 +241,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置抄送接收用户主键。
      * @param userId Long，抄送接收用户主键
-     * @return void，无返回值
      */
     public void setUserId(Long userId)
     {
@@ -269,7 +259,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置流程发起用户主键。
      * @param originatorId Long，流程发起用户主键
-     * @return void，无返回值
      */
     public void setOriginatorId(Long originatorId)
     {
@@ -288,7 +277,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置流程发起用户名称快照。
      * @param originatorName String，流程发起用户名称快照
-     * @return void，无返回值
      */
     public void setOriginatorName(String originatorName)
     {
@@ -379,7 +367,6 @@ public class WfCopy extends BaseEntity
     /**
      * 设置逻辑删除标志。
      * @param delFlag String，逻辑删除标志
-     * @return void，无返回值
      */
     public void setDelFlag(String delFlag)
     {

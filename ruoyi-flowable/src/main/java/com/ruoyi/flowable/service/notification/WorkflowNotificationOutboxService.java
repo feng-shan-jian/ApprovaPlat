@@ -35,11 +35,7 @@ public class WorkflowNotificationOutboxService
 
     /**
      * 创建 notification outbox 状态所有者。
-     * @param jdbcTemplate JdbcTemplate，outbox、Flowable 历史树和租约数据访问入口
-     * @param properties WorkflowNotificationProperties，批次、租约和退避配置
-     * @param metrics WorkflowNotificationMetrics，固定状态动作指标
-     * @param identityResolver WorkflowIdentityResolver，人工补偿操作者身份解析
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowNotificationOutboxService(JdbcTemplate jdbcTemplate,
             WorkflowNotificationProperties properties, WorkflowNotificationMetrics metrics,

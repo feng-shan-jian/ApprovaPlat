@@ -109,11 +109,7 @@ public class WorkflowProcessHistoryProjection
     /**
      * 创建流程详情历史投影组件。
      *
-     * @param historyService HistoryService，历史实例、活动、任务和候选身份公共 API
-     * @param taskService TaskService，流程意见公共 API
-     * @param repositoryService RepositoryService，父子实例引用定义查询 API
-     * @param userService ISysUserService，历史用户显示名称查询服务
-     * @return 无返回值，构造后由 Spring 管理该组件
+     * 构造后由 Spring 管理该组件
      */
     public WorkflowProcessHistoryProjection(HistoryService historyService,
             TaskService taskService, RepositoryService repositoryService,

@@ -52,7 +52,6 @@ public class WorkflowDataRetentionProperties
     /**
      * 设置单域单轮领取上限。
      * @param batchSize int，必须处于 1 至 5000 范围
-     * @return void，无返回值
      */
     public void setBatchSize(int batchSize)
     {

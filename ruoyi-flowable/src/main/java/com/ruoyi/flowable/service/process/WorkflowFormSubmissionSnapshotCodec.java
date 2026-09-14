@@ -93,8 +93,6 @@ public final class WorkflowFormSubmissionSnapshotCodec
 
     /**
      * 禁止实例化纯静态编解码器。
-     *
-     * @return 无返回值
      */
     private WorkflowFormSubmissionSnapshotCodec()
     {
@@ -792,16 +790,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
         /**
          * 深复制提交值，阻止调用方修改历史快照。
          *
-         * @param kind SnapshotKind，提交类型
-         * @param deploymentId String，部署主键
-         * @param sourceType String，表单来源类型
-         * @param formId Long，模板表单主键；内嵌表单为空
-         * @param formKey String，表单键
-         * @param nodeKey String，节点主键
-         * @param taskId String，任务主键；开始提交为空
-         * @param taskLocal boolean，业务字段是否使用任务局部作用域
-         * @param values Map&lt;String, JsonNode&gt;，已校验字段值
-         * @return 无返回值，构造完成后 values 不可修改
+         * 构造完成后 values 不可修改
          */
         public SubmissionSnapshot
         {
@@ -836,8 +825,6 @@ public final class WorkflowFormSubmissionSnapshotCodec
 
         /**
          * 累加一个已进入节点。
-         *
-         * @return 无返回值
          */
         private void increment()
         {

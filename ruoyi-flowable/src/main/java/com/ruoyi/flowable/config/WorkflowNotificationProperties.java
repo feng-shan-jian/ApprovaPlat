@@ -22,7 +22,6 @@ public class WorkflowNotificationProperties
     /**
      * 设置单轮批次。
      * @param batchSize int，1 至 500
-     * @return void，无返回值
      */
     public void setBatchSize(int batchSize)
     {
@@ -36,7 +35,6 @@ public class WorkflowNotificationProperties
     /**
      * 设置 worker 租约。
      * @param leaseDuration Duration，10 秒至 10 分钟
-     * @return void，无返回值
      */
     public void setLeaseDuration(Duration leaseDuration)
     {
@@ -54,7 +52,6 @@ public class WorkflowNotificationProperties
     /**
      * 设置重试最大退避。
      * @param maxRetryDelay Duration，1 秒至 24 小时
-     * @return void，无返回值
      */
     public void setMaxRetryDelay(Duration maxRetryDelay)
     {
@@ -72,7 +69,6 @@ public class WorkflowNotificationProperties
     /**
      * 设置人工催办间隔。
      * @param urgeInterval Duration，1 分钟至 24 小时
-     * @return void，无返回值
      */
     public void setUrgeInterval(Duration urgeInterval)
     {

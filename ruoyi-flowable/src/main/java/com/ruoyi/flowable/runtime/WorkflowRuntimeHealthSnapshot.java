@@ -19,7 +19,7 @@ public record WorkflowRuntimeHealthSnapshot(
     /**
      * 校验健康快照内部一致性，防止不可用状态伪装成刚采集或发布负容量。
      *
-     * @return 无返回值，非法组合会拒绝创建快照
+     * 非法组合会拒绝创建快照
      */
     public WorkflowRuntimeHealthSnapshot
     {

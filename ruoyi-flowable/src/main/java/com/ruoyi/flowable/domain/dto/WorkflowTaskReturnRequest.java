@@ -28,10 +28,7 @@ public record WorkflowTaskReturnRequest(
     /**
      * 创建退回任务请求并复制抄送用户集合，防止状态校验期间集合内容被修改。
      *
-     * @param taskId String，待退回的活动任务主键
-     * @param comment String，退回原因
-     * @param copyUserIds List&lt;Long&gt;，可选抄送接收用户主键
-     * @return 无返回值，构造后 copyUserIds 为不可修改集合
+     * 构造后 copyUserIds 为不可修改集合
      */
     public WorkflowTaskReturnRequest
     {

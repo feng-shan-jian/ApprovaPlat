@@ -28,8 +28,7 @@ public class PermissionService
     /**
      * 创建权限校验服务。
      *
-     * @param menuService ISysMenuService，用于实时查询当前用户的正式菜单权限
-     * @return 无返回值，构造后由 Spring 以 ss 名称管理
+     * 构造后由 Spring 以 ss 名称管理
      */
     public PermissionService(ISysMenuService menuService)
     {

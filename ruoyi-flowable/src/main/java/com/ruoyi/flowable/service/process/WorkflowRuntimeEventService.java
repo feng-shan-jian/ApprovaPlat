@@ -48,13 +48,7 @@ public class WorkflowRuntimeEventService
 
     /**
      * 创建运行事件领域服务。
-     * @param engineOperations WorkflowEngineOperations，Flowable 事务和可信操作人边界
-     * @param credentialService WorkflowIntegrationCredentialService，Token、范围和限流认证
-     * @param auditService WorkflowRuntimeEventAuditService，主事务失败后的独立审计
-     * @param requestMapper WfRuntimeEventRequestMapper，正式幂等台账 Mapper
-     * @param runtimeService RuntimeService，Flowable 8 运行时公共 API
-     * @param repositoryService RepositoryService，ReceiveTask 模型类型复核
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowRuntimeEventService(WorkflowEngineOperations engineOperations,
             WorkflowIntegrationCredentialService credentialService,

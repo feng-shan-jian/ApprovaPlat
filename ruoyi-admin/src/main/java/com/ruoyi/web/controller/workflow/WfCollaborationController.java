@@ -37,10 +37,7 @@ public class WfCollaborationController extends BaseController
 
     /**
      * 创建多池协作管理 Controller。
-     * @param messageService WorkflowCollaborationMessageService，入站可靠消费服务
-     * @param outboxService WorkflowCollaborationOutboxService，出站可靠投递服务
-     * @param auditService WorkflowCollaborationAuditService，逐次状态审计
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfCollaborationController(WorkflowCollaborationMessageService messageService,
             WorkflowCollaborationOutboxService outboxService,

@@ -33,7 +33,6 @@ public class WfCategory extends BaseEntity
     /**
      * 设置分类主键。
      * @param categoryId Long，分类主键
-     * @return void，无返回值
      */
     public void setCategoryId(Long categoryId)
     {
@@ -52,7 +51,6 @@ public class WfCategory extends BaseEntity
     /**
      * 设置分类名称。
      * @param categoryName String，分类名称
-     * @return void，无返回值
      */
     public void setCategoryName(String categoryName)
     {
@@ -71,7 +69,6 @@ public class WfCategory extends BaseEntity
     /**
      * 设置分类编码。
      * @param code String，分类编码
-     * @return void，无返回值
      */
     public void setCode(String code)
     {
@@ -90,7 +87,6 @@ public class WfCategory extends BaseEntity
     /**
      * 设置逻辑删除标志。
      * @param delFlag String，逻辑删除标志
-     * @return void，无返回值
      */
     public void setDelFlag(String delFlag)
     {

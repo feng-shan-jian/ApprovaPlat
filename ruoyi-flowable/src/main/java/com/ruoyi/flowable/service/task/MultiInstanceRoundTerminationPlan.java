@@ -15,7 +15,7 @@ public record MultiInstanceRoundTerminationPlan(Set<String> processInstanceIds,
     /**
      * 复制终止集合并校验每条轮次都属于本次流程树且主键索引一致。
      *
-     * @return 无返回值，非法计划拒绝构造
+     * 非法计划拒绝构造
      */
     public MultiInstanceRoundTerminationPlan
     {

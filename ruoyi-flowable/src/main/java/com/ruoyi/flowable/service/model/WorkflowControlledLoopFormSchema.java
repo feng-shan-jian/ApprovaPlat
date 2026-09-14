@@ -14,7 +14,7 @@ public record WorkflowControlledLoopFormSchema(String processKey, String activit
 {
     /**
      * 创建不可变字段白名单并拒绝空集合引用。
-     * @return 无返回值，字段集合会被复制为不可修改集合
+     * 字段集合会被复制为不可修改集合
      */
     public WorkflowControlledLoopFormSchema
     {

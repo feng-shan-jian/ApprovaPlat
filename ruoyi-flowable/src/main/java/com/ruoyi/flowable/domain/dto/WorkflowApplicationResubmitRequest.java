@@ -21,9 +21,7 @@ public record WorkflowApplicationResubmitRequest(
     /**
      * 创建重新提交请求并复制顶层变量，避免校验期间被调用方修改。
      *
-     * @param taskId String，退回修改任务主键
-     * @param variables Map&lt;String, Object&gt;，原开始表单业务变量
-     * @return 无返回值，构造后 variables 为不可修改副本
+     * 构造后 variables 为不可修改副本
      */
     public WorkflowApplicationResubmitRequest
     {

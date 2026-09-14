@@ -23,14 +23,7 @@ public record WorkflowMultiInstanceStateView(String mode, String activityId,
     /**
      * 创建多实例状态并复制成员集合，避免 Controller 序列化期间状态被修改。
      *
-     * @param mode String，ALL 或 ANY
-     * @param activityId String，BPMN 活动 ID
-     * @param revision long，当前调整版本
-     * @param adjustmentAllowed boolean，是否允许至少一种动态调整动作
-     * @param addAllowed boolean，是否允许加签
-     * @param remainingCapacity int，服务端正式成员剩余容量
-     * @param members List&lt;WorkflowMultiInstanceMemberView&gt;，有序成员状态
-     * @return 无返回值，构造后 members 为不可修改集合
+     * 构造后 members 为不可修改集合
      */
     public WorkflowMultiInstanceStateView
     {

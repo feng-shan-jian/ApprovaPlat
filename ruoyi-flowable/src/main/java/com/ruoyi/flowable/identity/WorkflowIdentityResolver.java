@@ -39,9 +39,7 @@ public class WorkflowIdentityResolver
     /**
      * 创建工作流身份解析器。
      *
-     * @param identityMapper WorkflowIdentityMapper，工作流专用身份查询 Mapper
-     * @param identityCodec WorkflowIdentityCodec，身份标识格式解析器
-     * @return 无返回值，构造后由 Spring 管理该组件
+     * 构造后由 Spring 管理该组件
      */
     public WorkflowIdentityResolver(WorkflowIdentityMapper identityMapper, WorkflowIdentityCodec identityCodec)
     {

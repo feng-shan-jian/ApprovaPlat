@@ -37,13 +37,7 @@ public class WorkflowTaskRejectionApplicationService
     /**
      * 创建任务驳回应用服务。
      *
-     * @param engineOperations WorkflowEngineOperations，正式事务和身份入口
-     * @param runtimeReader WorkflowTaskRuntimeReader，活动任务和实例事实
-     * @param processInstanceService WorkflowProcessInstanceService，完整执行树终止写链
-     * @param taskCopyService WorkflowTaskCopyService，驳回抄送计划和持久化服务
-     * @param auditWriter WorkflowTaskActionAuditWriter，结构化驳回审计构造器
-     * @param taskService TaskService，活动任务查询和 comment 写入服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowTaskRejectionApplicationService(
             WorkflowEngineOperations engineOperations,

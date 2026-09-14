@@ -17,9 +17,7 @@ public class MailNotificationChannel implements WorkflowNotificationChannel
 
     /**
      * 创建邮件通知通道。
-     * @param mailConfigService WorkflowMailConfigService，按当前 revision 获取动态发送器
-     * @param failureClassifier WorkflowMailFailureClassifier，SMTP 失败脱敏分类器
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public MailNotificationChannel(WorkflowMailConfigService mailConfigService,
             WorkflowMailFailureClassifier failureClassifier)

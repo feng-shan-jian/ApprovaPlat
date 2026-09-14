@@ -48,9 +48,7 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
 
     /**
      * 创建协作 outbox 处理器。
-     * @param httpConnector WorkflowHttpConnector，复用正式端点冻结和跨系统认证
-     * @param outboxService WorkflowCollaborationOutboxService，事务 outbox 领域服务
-     * @return void，构造后由 Spring 注册到固定 Java 处理器目录
+     * 构造后由 Spring 注册到固定 Java 处理器目录
      */
     public WorkflowCollaborationOutboxHandler(WorkflowHttpConnector httpConnector,
             WorkflowCollaborationOutboxService outboxService)

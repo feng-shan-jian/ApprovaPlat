@@ -2,6 +2,8 @@ package com.ruoyi.flowable.service.process;
 
 import java.time.Instant;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -10,11 +12,13 @@ import org.flowable.engine.repository.Deployment;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.common.core.domain.entity.SysUser;
+import com.ruoyi.system.service.ISysUserService;
 
 /**
- * 流程工作台三个查询边界共享的分页、参数和部署分类契约。
+ * 流程工作台查询共用的分页、参数、部署分类和页内姓名解析规则。
  *
- * 该类只保存无状态技术规则，不承接任何列表编排、身份授权或视图转换职责。
+ * 不承接列表编排或身份授权，姓名缓存由每次列表查询独立创建。
  */
 final class WorkflowProcessQuerySupport
 {
@@ -27,7 +31,7 @@ final class WorkflowProcessQuerySupport
     /**
      * 禁止实例化无状态查询支持类。
      *
-     * @return 无返回值，该类型仅通过静态方法复用稳定查询契约
+     * 该类型仅通过静态方法复用稳定查询契约
      */
     private WorkflowProcessQuerySupport()
     {
@@ -256,5 +260,44 @@ final class WorkflowProcessQuerySupport
      */
     static record PageWindow(int offset, int pageSize)
     {
+    }
+
+    /** 当前页共享姓名查询；缺失或非数字历史身份保留原 ID，不跨请求缓存。 */
+    static final class UserNameCache
+    {
+        private final ISysUserService userService;
+        private final Map<String, String> userNames = new HashMap<>();
+
+        UserNameCache(ISysUserService userService)
+        {
+            this.userService = userService;
+        }
+
+        String resolve(String userId)
+        {
+            if (!StringUtils.hasText(userId))
+            {
+                return null;
+            }
+            if (userNames.containsKey(userId))
+            {
+                return userNames.get(userId);
+            }
+            String displayName = userId;
+            try
+            {
+                SysUser user = userService.selectUserById(Long.valueOf(userId));
+                if (user != null && StringUtils.hasText(user.getNickName()))
+                {
+                    displayName = user.getNickName();
+                }
+            }
+            catch (NumberFormatException ignored)
+            {
+                // 存量异常身份不做名称猜测，保留原值便于迁移对账和问题追踪。
+            }
+            userNames.put(userId, displayName);
+            return displayName;
+        }
     }
 }

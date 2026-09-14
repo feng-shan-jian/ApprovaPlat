@@ -36,12 +36,7 @@ public record WorkflowProcessViewerView(
     /**
      * 创建 Viewer 状态并复制全部集合。
      *
-     * @param finishedActivityIds Set&lt;String&gt;，已完成的非连线活动主键
-     * @param finishedSequenceFlowIds Set&lt;String&gt;，已走过的顺序流主键
-     * @param unfinishedActivityIds Set&lt;String&gt;，当前未完成活动主键
-     * @param rejectedActivityIds Set&lt;String&gt;，存在驳回的任务节点主键
-     * @param returnedActivityIds Set&lt;String&gt;，存在退回的任务节点主键
-     * @return 无返回值，构造后状态集合不可变
+     * 构造后状态集合不可变
      */
     public WorkflowProcessViewerView
     {

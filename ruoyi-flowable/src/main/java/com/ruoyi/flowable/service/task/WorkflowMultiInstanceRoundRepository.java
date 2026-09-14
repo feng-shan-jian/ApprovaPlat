@@ -21,8 +21,7 @@ public class WorkflowMultiInstanceRoundRepository
     /**
      * 创建轮次持久化边界。
      *
-     * @param roundMapper WfMultiInstanceRoundMapper，正式轮次 Mapper
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowMultiInstanceRoundRepository(WfMultiInstanceRoundMapper roundMapper)
     {

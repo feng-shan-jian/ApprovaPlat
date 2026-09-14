@@ -53,12 +53,7 @@ public class WorkflowNotificationPlanner
 
     /**
      * 创建通知规划器。
-     * @param jdbcTemplate JdbcTemplate，通知策略、用户状态和偏好批量查询入口
-     * @param runtimeService RuntimeService，运行实例发起人查询入口
-     * @param historyService HistoryService，历史实例发起人查询入口
-     * @param taskService TaskService，候选用户和候选组查询入口
-     * @param identityResolver WorkflowIdentityResolver，正式身份目录解析入口
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowNotificationPlanner(JdbcTemplate jdbcTemplate,
             RuntimeService runtimeService, HistoryService historyService,
@@ -663,22 +658,7 @@ public class WorkflowNotificationPlanner
 
         /**
          * 构造已确定身份来源的不可变规划请求；仅允许有名工厂和 Planner 校验流程调用。
-         * @param eventType String，通知事件类型
-         * @param sourceId String，稳定业务来源键
-         * @param processDefinitionKey String，流程定义 key
-         * @param processName String，流程名称快照
-         * @param processInstanceId String，流程实例主键
-         * @param taskId String，可空任务主键
-         * @param taskDefinitionKey String，可空任务节点 key
-         * @param taskName String，可空任务名称
-         * @param task Task，可空真实任务
-         * @param taskRecipientUserIds Set&lt;String&gt;，无 Task 时的冻结任务接收人
-         * @param actorUserId String，可空显式操作者
-         * @param initiatorUserId String，可空显式发起人
-         * @param identityContext IdentityContext，工厂固定的身份解析语义
-         * @param routePath String，业务详情相对路由
-         * @param contentSuffix String，可空正文后缀
-         * @return void，构造结果仅在当前规划协议内部使用
+         * 构造结果仅在当前规划协议内部使用
          */
         private NotificationRequest(String eventType, String sourceId,
                 String processDefinitionKey, String processName, String processInstanceId,

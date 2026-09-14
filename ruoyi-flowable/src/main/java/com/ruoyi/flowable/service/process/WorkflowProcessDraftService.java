@@ -80,16 +80,7 @@ public class WorkflowProcessDraftService
     /**
      * 创建流程申请草稿领域服务。
      *
-     * @param engineOperations WorkflowEngineOperations，统一身份和事务边界
-     * @param identityResolver WorkflowIdentityResolver，当前有效用户解析器
-     * @param repositoryService RepositoryService，真实流程定义查询 API
-     * @param definitionQueryService WorkflowProcessDefinitionQueryService，starter 和部署表单快照门禁
-     * @param processStartService WorkflowProcessStartService，真实 Flowable 发起服务
-     * @param variableValidator WorkflowStartVariableValidator，草稿和正式字段校验器
-     * @param attachmentService WorkflowAttachmentService，草稿附件对账和迁移服务
-     * @param draftMapper WfProcessDraftMapper，草稿正式持久化 Mapper
-     * @param processDefinitionLockMapper WorkflowProcessDefinitionLockMapper，Flowable 部署行锁 Mapper
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowProcessDraftService(WorkflowEngineOperations engineOperations,
             WorkflowIdentityResolver identityResolver, RepositoryService repositoryService,

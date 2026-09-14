@@ -39,9 +39,7 @@ public class WorkflowBusinessCalendarService
 
     /**
      * 创建业务日历服务。
-     * @param engineOperations WorkflowEngineOperations，统一事务和当前身份边界
-     * @param slaMapper WfTaskSlaMapper，业务日历正式数据访问层
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowBusinessCalendarService(WorkflowEngineOperations engineOperations,
             WfTaskSlaMapper slaMapper)

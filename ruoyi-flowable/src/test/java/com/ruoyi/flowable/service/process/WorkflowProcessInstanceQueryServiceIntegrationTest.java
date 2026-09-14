@@ -49,6 +49,7 @@ class WorkflowProcessInstanceQueryServiceIntegrationTest
     private RuntimeService runtimeService;
     private TaskService taskService;
     private WorkflowProcessInstanceQueryService service;
+    private ISysUserService userService;
     private ProcessInstance firstFinanceInstance;
     private ProcessInstance secondFinanceInstance;
     private ProcessInstance hrInstance;
@@ -97,9 +98,10 @@ class WorkflowProcessInstanceQueryServiceIntegrationTest
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity()).thenReturn(
                 new WorkflowCurrentIdentity(CURRENT_USER_ID, Set.of()));
+        userService = mock(ISysUserService.class);
         service = new WorkflowProcessInstanceQueryService(engineOperations,
                 repositoryService, historyService, runtimeService, taskService,
-                identityResolver, mock(WfCopyMapper.class), mock(ISysUserService.class));
+                identityResolver, mock(WfCopyMapper.class), userService);
     }
 
     /**
@@ -226,11 +228,30 @@ class WorkflowProcessInstanceQueryServiceIntegrationTest
         assertThat(completedManaged.historyDeleteAllowed()).isTrue();
     }
 
-    /**
-     * 验证不存在的正式部署分类返回真实空页，且不会退化成全量实例或触发任务查询。
-     *
-     * @return void，空部署集合未短路时测试失败
-     */
+    /** 导出复用分页查询；同页只解析一次身份，跨页刷新且保持行序。 */
+    @Test
+    void managedPagesPreserveIdentityLabelsOrderAndPageScopedLookup()
+    {
+        com.ruoyi.common.core.domain.entity.SysUser user = new com.ruoyi.common.core.domain.entity.SysUser();
+        user.setNickName("历史申请人");
+        when(userService.selectUserById(100L)).thenReturn(user);
+        var full = service.listManaged(null, 1, 200);
+        assertThat(full.rows()).extracting(WorkflowManagedProcessView::startUserName)
+                .containsOnly("历史申请人");
+        verify(userService).selectUserById(100L);
+        clearInvocations(userService);
+        var first = service.listManaged(null, 1, 2);
+        var second = service.listManaged(null, 2, 2);
+        assertThat(java.util.stream.Stream.concat(first.rows().stream(), second.rows().stream())
+                .map(WorkflowManagedProcessView::processInstanceId).toList())
+                .containsExactlyElementsOf(full.rows().stream().map(WorkflowManagedProcessView::processInstanceId).toList());
+        verify(userService, times(2)).selectUserById(100L);
+        when(userService.selectUserById(100L)).thenReturn(null);
+        assertThat(service.listManaged(null, 1, 200).rows())
+                .extracting(WorkflowManagedProcessView::startUserName).containsOnly("100");
+    }
+
+    /** 不存在的部署分类返回空页，不触发全量实例或任务查询。 */
     @Test
     void returnsEmptyPagesForUnknownDeploymentCategory()
     {

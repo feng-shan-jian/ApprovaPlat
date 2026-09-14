@@ -29,8 +29,7 @@ public class WorkflowParticipantRuleDeploymentService
 
     /**
      * 创建参与者规则部署服务。
-     * @param identityMapper WorkflowIdentityMapper，正式组织和审批资格 Mapper
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowParticipantRuleDeploymentService(WorkflowIdentityMapper identityMapper)
     {

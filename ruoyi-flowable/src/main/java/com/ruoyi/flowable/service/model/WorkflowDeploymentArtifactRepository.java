@@ -88,8 +88,7 @@ public class WorkflowDeploymentArtifactRepository
     /**
      * 创建部署业务资源仓库。
      *
-     * @param repositoryService RepositoryService，Flowable 官方部署与资源访问 API
-     * @return 无返回值，构造完成后由 Spring 管理
+     * 构造完成后由 Spring 管理
      */
     public WorkflowDeploymentArtifactRepository(RepositoryService repositoryService)
     {

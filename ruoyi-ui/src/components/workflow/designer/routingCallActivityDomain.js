@@ -3,6 +3,24 @@ import { computed, ref } from 'vue'
 // 条件分支作者 XML 只保存版本化受控 JSON，服务端部署时生成固定表达式。
 const CONDITION_RULE_PROPERTY = 'approva.conditionRule.config'
 
+export function createRoutingCallActivityState() {
+  return {
+    dmnDecisionId: '',
+    calledElement: '',
+    callDefinitionId: '',
+    callVersionPolicy: 'LATEST_ACTIVE',
+    callBusinessKeyPolicy: 'INHERIT',
+    callInheritVariables: false,
+    callInMappings: [],
+    callOutMappings: [],
+    callOutputScope: 'PARENT',
+    processInstanceName: '',
+    conditionExpression: '',
+    conditionRule: null,
+    conditionDefault: false
+  }
+}
+
 /**
  * 判断属性是否由路由与调用活动模块独占维护。
  * @param {unknown} name Flowable Property 名称。
@@ -620,7 +638,29 @@ export function createRoutingCallActivityDomain(context) {
       || (targetType === 'SCALAR' && scalarTypes.has(sourceType))
   }
 
+  function loadRoutingState(element, businessObject) {
+    propertyState.conditionExpression = businessObject.conditionExpression?.body || ''
+    propertyState.conditionRule = readConditionRule(businessObject)
+    propertyState.conditionDefault = isDefaultConditionFlow(element)
+  }
+
+  function loadCallActivityState(businessObject) {
+    propertyState.dmnDecisionId = businessObject.get('flowable:rules') || ''
+    propertyState.calledElement = businessObject.calledElement || ''
+    const calledElementType = businessObject.get('flowable:calledElementType') || 'key'
+    propertyState.callVersionPolicy = calledElementType === 'id' ? 'FIXED' : 'LATEST_ACTIVE'
+    propertyState.callDefinitionId = resolveCallDefinitionId(propertyState.calledElement, calledElementType)
+    propertyState.callBusinessKeyPolicy = businessObject.get('flowable:inheritBusinessKey') === true ? 'INHERIT' : 'NONE'
+    propertyState.callInheritVariables = businessObject.get('flowable:inheritVariables') === true
+    propertyState.callOutputScope = businessObject.get('flowable:useLocalScopeForOutParameters') === true ? 'LOCAL' : 'PARENT'
+    propertyState.callInMappings = readCallMappings(businessObject, 'flowable:In')
+    propertyState.callOutMappings = readCallMappings(businessObject, 'flowable:Out')
+    propertyState.processInstanceName = businessObject.get('flowable:processInstanceName') || ''
+  }
+
   return {
+    loadRoutingState,
+    loadCallActivityState,
     dmnOptions,
     dmnLoading,
     callActivityOptions,
@@ -629,17 +669,12 @@ export function createRoutingCallActivityDomain(context) {
     conditionFieldOptions,
     conditionContext,
     callActivityParentFields,
-    readConditionRule,
-    isDefaultConditionFlow,
     resolveConditionFieldCatalog,
     isConditionGatewayFlow,
     updateDmnDecision,
     loadDmnOptions,
     resolveCallActivityParentFields,
-    embeddedCallFieldType,
     loadCallActivityOptions,
-    resolveCallDefinitionId,
-    readCallMappings,
     updateCallActivityProperties,
     updateConditionRule,
     makeConditionDefault,

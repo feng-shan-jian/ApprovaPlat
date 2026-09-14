@@ -92,14 +92,7 @@ public class WorkflowProcessDefinitionQueryService
     /**
      * 创建可发起定义与预览查询服务。
      *
-     * @param engineOperations WorkflowEngineOperations，统一只读事务和异常翻译边界
-     * @param repositoryService RepositoryService，Flowable 流程定义、部署和 BPMN 公共 API
-     * @param identityResolver WorkflowIdentityResolver，当前有效用户及候选组解析器
-     * @param processAccessService WorkflowProcessAccessService，实例对象级读取授权服务
-     * @param deploymentService WorkflowDeploymentService，安全 BPMN 读取服务
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变部署表单资源仓库
-     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，发起范围运行服务
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowProcessDefinitionQueryService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, WorkflowIdentityResolver identityResolver,

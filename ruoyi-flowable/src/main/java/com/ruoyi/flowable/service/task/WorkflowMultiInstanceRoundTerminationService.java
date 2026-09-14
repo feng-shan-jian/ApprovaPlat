@@ -42,12 +42,9 @@ public class WorkflowMultiInstanceRoundTerminationService
     /**
      * 创建轮次异常终止服务。
      *
-     * @param roundRepository WorkflowMultiInstanceRoundRepository，轮次持久化边界
-     * @param snapshotReader WorkflowMultiInstanceRuntimeSnapshotReader，唯一实时快照读取器
-     * @param transitionObserver WorkflowMultiInstanceTransitionObserver，受控迁移取消观察器
+     * 构造后由 Spring 管理
      * @param runtimeService RuntimeService，仅查询流程发起人和运行实例身份
      * @param taskService TaskService，仅查询申请人局部标记和 candidate 关系
-     * @return 无返回值，构造后由 Spring 管理
      */
     public WorkflowMultiInstanceRoundTerminationService(
             WorkflowMultiInstanceRoundRepository roundRepository,

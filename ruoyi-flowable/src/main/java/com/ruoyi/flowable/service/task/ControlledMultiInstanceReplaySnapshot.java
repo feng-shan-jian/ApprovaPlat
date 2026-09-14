@@ -13,7 +13,7 @@ public record ControlledMultiInstanceReplaySnapshot(
     /**
      * 校验部署、定义、实例节点和模式在两个正式来源中完全一致。
      *
-     * @return 无返回值，构造时拒绝损坏的重放快照
+     * 构造时拒绝损坏的重放快照
      */
     public ControlledMultiInstanceReplaySnapshot
     {

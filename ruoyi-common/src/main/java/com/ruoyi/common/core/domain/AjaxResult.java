@@ -32,9 +32,6 @@ public class AjaxResult extends HashMap<String, Object>
 
     /**
      * 初始化一个新创建的 AjaxResult 对象
-     * 
-     * @param code 状态码
-     * @param msg 返回内容
      */
     public AjaxResult(int code, String msg)
     {
@@ -44,10 +41,6 @@ public class AjaxResult extends HashMap<String, Object>
 
     /**
      * 初始化一个新创建的 AjaxResult 对象
-     * 
-     * @param code 状态码
-     * @param msg 返回内容
-     * @param data 数据对象
      */
     public AjaxResult(int code, String msg, Object data)
     {

@@ -217,15 +217,17 @@ import { getTaskCapability } from './designer/taskCapabilityMap.js'
 import { createDesignerFormFieldCatalog } from './designer/designerFormFieldCatalog.js'
 import {
   createExtensionEventSlaDomain,
-  createDefaultSlaConfig,
+  createExtensionEventSlaState,
   isExtensionEventSlaProperty
 } from './designer/extensionEventSlaDomain'
 import {
   createFormParticipantDomain,
+  createFormParticipantState,
   isFormParticipantProperty
 } from './designer/formParticipantDomain'
 import {
   createRoutingCallActivityDomain,
+  createRoutingCallActivityState,
   isRoutingCallActivityProperty
 } from './designer/routingCallActivityDomain'
 
@@ -440,64 +442,16 @@ function createEmptyPropertyState() {
     dataVariable: '',
     dataType: 'string',
     dataDefault: '',
-    formProtocolIssue: '',
     executable: true,
     versionTag: '',
-    formSource: 'TEMPLATE',
-    formKey: '',
-    embeddedFields: [],
-    formPermissionDefault: 'EDITABLE',
-    formPermissionFields: [],
-    participantRule: { type: '', targetIds: [], formField: '' },
-    dueDate: '',
-    priority: '',
-    taskCategory: '',
-    skipExpression: '',
-    localScope: false,
-    sla: createDefaultSlaConfig(),
-    extensionKey: '',
-    extensionConfig: '{}',
-    dmnDecisionId: '',
-    calledElement: '',
-    callDefinitionId: '',
-    callVersionPolicy: 'LATEST_ACTIVE',
-    callBusinessKeyPolicy: 'INHERIT',
-    callInheritVariables: false,
-    callInMappings: [],
-    callOutMappings: [],
-    callOutputScope: 'PARENT',
-    processInstanceName: '',
-    conditionExpression: '',
-    conditionRule: null,
-    conditionDefault: false,
     documentation: '',
     asyncBefore: false,
     asyncAfter: false,
     exclusive: true,
     forCompensation: false,
-    eventDefinitionType: '',
-    eventReference: '',
-    timerDefinitionType: 'timeDuration',
-    timerDefinition: '',
-    cancelActivity: true,
-    multiInstanceType: 'none',
-    multiInstanceApprovalMode: 'all',
-    multiInstanceMemberSource: 'dynamic',
-    configuredMultiInstanceIdentityIds: [],
-    collection: '',
-    elementVariable: '',
-    completionCondition: '',
-    loopMaximum: '',
-    loopCondition: '',
-    testBefore: false,
-    controlledLoopMaxIterations: 3,
-    controlledLoopDecisionVariable: '',
-    controlledLoopRepeatValue: '',
-    controlledLoopExitValue: '',
-    businessExecutionListeners: [],
-    businessTaskListeners: [],
-    autoCopyRules: [],
-    extensionProperties: []
+    ...createFormParticipantState(),
+    ...createRoutingCallActivityState(),
+    ...createExtensionEventSlaState()
   }
 }
 
@@ -752,84 +706,20 @@ function loadPropertyState(element) {
   }
   propertyState.executable = businessObject.isExecutable !== false
   propertyState.versionTag = businessObject.get('flowable:versionTag') || ''
-  propertyState.formKey = businessObject.get('flowable:formKey') || ''
-  propertyState.embeddedFields = readEmbeddedFormFields(businessObject)
-  propertyState.formSource = propertyState.embeddedFields.length ? 'EMBEDDED' : 'TEMPLATE'
-  loadFormPermissionState(businessObject)
-  propertyState.dueDate = businessObject.get('flowable:dueDate') || ''
-  propertyState.priority = businessObject.get('flowable:priority') || ''
-  propertyState.taskCategory = businessObject.get('flowable:category') || ''
-  propertyState.skipExpression = businessObject.get('flowable:skipExpression') || ''
-  propertyState.localScope = businessObject.get('flowable:localScope') === true
   propertyState.documentation = businessObject.documentation?.[0]?.text || ''
   // Participant.processRef 是 bpmn:Process 引用，属性面板只展示其稳定 id，禁止把 moddle 对象写入输入框。
   propertyState.processRef = businessObject.processRef?.id || ''
-  propertyState.conditionExpression = businessObject.conditionExpression?.body || ''
-  propertyState.conditionRule = readConditionRule(businessObject)
-  propertyState.conditionDefault = isDefaultConditionFlow(element)
-  const controlledTaskExtension = readControlledTaskExtension(businessObject)
-  propertyState.extensionKey = controlledTaskExtension.extensionKey
-  propertyState.extensionConfig = controlledTaskExtension.extensionConfig
-  propertyState.businessExecutionListeners = readBusinessListeners(businessObject, 'flowable:ExecutionListener')
-  propertyState.businessTaskListeners = readBusinessListeners(businessObject, 'flowable:TaskListener')
-  const extensionProperties = readExtensionProperties(businessObject)
-  propertyState.participantRule = readParticipantRule(businessObject)
-  propertyState.sla = readSlaConfig(extensionProperties)
-  propertyState.autoCopyRules = readAutoCopyRules(extensionProperties)
-  // 三个领域的协议属性由各自结构化编辑器维护，通用属性面板只能展示普通扩展字段。
-  propertyState.extensionProperties = extensionProperties.filter(item => (
-    !isExtensionEventSlaProperty(item.name)
-  ))
-  const controlledLoop = readControlledLoop(businessObject)
-  if (controlledLoop) {
-    propertyState.multiInstanceType = 'approvalLoop'
-    propertyState.controlledLoopMaxIterations = controlledLoop.maxIterations
-    propertyState.controlledLoopDecisionVariable = controlledLoop.decisionVariable
-    propertyState.controlledLoopRepeatValue = controlledLoop.repeatValue
-    propertyState.controlledLoopExitValue = controlledLoop.exitValue
-    return
-  }
-  propertyState.dmnDecisionId = businessObject.get('flowable:rules') || ''
-  propertyState.calledElement = businessObject.calledElement || ''
-  const calledElementType = businessObject.get('flowable:calledElementType') || 'key'
-  propertyState.callVersionPolicy = calledElementType === 'id' ? 'FIXED' : 'LATEST_ACTIVE'
-  propertyState.callDefinitionId = resolveCallDefinitionId(propertyState.calledElement, calledElementType)
-  propertyState.callBusinessKeyPolicy = businessObject.get('flowable:inheritBusinessKey') === true ? 'INHERIT' : 'NONE'
-  propertyState.callInheritVariables = businessObject.get('flowable:inheritVariables') === true
-  propertyState.callOutputScope = businessObject.get('flowable:useLocalScopeForOutParameters') === true ? 'LOCAL' : 'PARENT'
-  propertyState.callInMappings = readCallMappings(businessObject, 'flowable:In')
-  propertyState.callOutMappings = readCallMappings(businessObject, 'flowable:Out')
-  propertyState.processInstanceName = businessObject.get('flowable:processInstanceName') || ''
+  formParticipantDomain.loadFormParticipantState(businessObject)
+  routingCallActivityDomain.loadRoutingState(element, businessObject)
+  extensionEventSlaDomain.loadExtensionState(businessObject)
+  if (propertyState.multiInstanceType === 'approvalLoop') return
+  routingCallActivityDomain.loadCallActivityState(businessObject)
   propertyState.asyncBefore = businessObject.get('flowable:async') === true
   propertyState.asyncAfter = businessObject.get('flowable:asyncLeave') === true
   propertyState.exclusive = businessObject.get('flowable:exclusive') !== false
   propertyState.forCompensation = businessObject.isForCompensation === true
-  propertyState.cancelActivity = businessObject.cancelActivity !== false
   loadEventPropertyState(businessObject)
-  const loop = businessObject.loopCharacteristics
-  if (loop) {
-    if (loop.$type === 'bpmn:StandardLoopCharacteristics') {
-      propertyState.multiInstanceType = 'standard'
-      propertyState.loopMaximum = loop.loopMaximum == null ? '' : String(loop.loopMaximum)
-      propertyState.loopCondition = loop.loopCondition?.body || ''
-      propertyState.testBefore = loop.testBefore === true
-      return
-    }
-    propertyState.collection = loop.get('flowable:collection') || ''
-    propertyState.elementVariable = loop.get('flowable:elementVariable') || ''
-    propertyState.completionCondition = loop.completionCondition?.body || ''
-    if (isControlledMultiInstanceLoop(loop)) {
-      propertyState.multiInstanceType = 'controlled'
-      const configuredIdentity = readConfiguredMultiInstanceIdentity(businessObject)
-      propertyState.multiInstanceMemberSource = isConfiguredMultiInstanceLoop(loop)
-        ? (configuredIdentity?.source || '')
-        : isStartMultiInstanceLoop(loop) ? 'start' : 'dynamic'
-      propertyState.configuredMultiInstanceIdentityIds = configuredIdentity?.selectionValues || []
-      propertyState.multiInstanceApprovalMode = controlledMultiInstanceApprovalMode(loop)
-    } else {
-      propertyState.multiInstanceType = loop.isSequential ? 'sequential' : 'parallel'
-    }
-  }
+  formParticipantDomain.loadMultiInstanceState(businessObject)
 }
 
 /**
@@ -1808,19 +1698,8 @@ function validateDiagram() {
     if (loopError) return loopError
     const participantError = validateParticipantProperties(task, false)
     if (participantError) return participantError
-    const slaConfig = readSlaConfig(readExtensionProperties(task))
-    if (slaConfig.enabled) {
-      try {
-        normalizeAndValidateSlaConfig(slaConfig)
-      } catch (error) {
-        return error.message
-      }
-    }
-    try {
-      validateAutoCopyRulesForElement(task, ['NODE_ARRIVED', 'NODE_COMPLETED'])
-    } catch (error) {
-      return error.message
-    }
+    const extensionError = validateUserTaskExtensions(task)
+    if (extensionError) return extensionError
   }
   const callActivities = flowElements.filter(element => element.$type === 'bpmn:CallActivity')
   for (const callActivity of callActivities) {
@@ -1829,16 +1708,8 @@ function validateDiagram() {
   }
   const businessBoundaries = flowElements.filter(element => element.$type === 'bpmn:BoundaryEvent')
   for (const boundary of businessBoundaries) {
-    const definition = boundary.eventDefinitions?.[0]
-    const businessType = definition?.$type
-    if (!['bpmn:ErrorEventDefinition', 'bpmn:EscalationEventDefinition'].includes(businessType)) continue
-    const allowed = businessType === 'bpmn:ErrorEventDefinition' ? errorEventOptions.value : escalationEventOptions.value
-    if (!allowed.some(option => option.eventCode === readEventReference(definition))) {
-      return '错误或升级边界必须选择已启用的正式业务编码'
-    }
-    if (businessType === 'bpmn:ErrorEventDefinition' && boundary.cancelActivity === false) {
-      return '错误边界必须使用中断语义'
-    }
+    const boundaryError = validateBusinessBoundary(boundary)
+    if (boundaryError) return boundaryError
   }
   return ''
 }
@@ -1969,15 +1840,8 @@ const {
   participantFormFieldOptions,
   handlePanelIdentitySearch,
   handlePanelIdentityResolve,
-  readParticipantRule,
   readControlledLoop,
-  readEmbeddedFormFields,
   isControlledMultiInstanceLoop,
-  controlledMultiInstanceApprovalMode,
-  isStartMultiInstanceLoop,
-  isConfiguredMultiInstanceLoop,
-  readConfiguredMultiInstanceIdentity,
-  loadFormPermissionState,
   updateFormSource,
   updateFormKey,
   updateEmbeddedForm,
@@ -2000,14 +1864,10 @@ const {
   conditionFieldOptions,
   conditionContext,
   callActivityParentFields,
-  readConditionRule,
-  isDefaultConditionFlow,
   isConditionGatewayFlow,
   updateDmnDecision,
   loadDmnOptions,
   loadCallActivityOptions,
-  resolveCallDefinitionId,
-  readCallMappings,
   updateCallActivityProperties,
   updateConditionRule,
   makeConditionDefault,
@@ -2026,9 +1886,6 @@ const {
   slaLoading,
   autoCopyTriggerOptions,
   autoCopyFormFieldOptions,
-  readAutoCopyRules,
-  readControlledTaskExtension,
-  readBusinessListeners,
   updateControlledTask,
   updateControlledTaskSelection,
   loadExtensionOptions,
@@ -2040,10 +1897,9 @@ const {
   findDefinitions,
   updateEventProperties,
   loadEventPropertyState,
-  readSlaConfig,
   updateSlaProperties,
-  normalizeAndValidateSlaConfig,
-  readEventReference
+  validateUserTaskExtensions,
+  validateBusinessBoundary
 } = extensionEventSlaDomain
 
 watch(() => props.modelValue, value => {

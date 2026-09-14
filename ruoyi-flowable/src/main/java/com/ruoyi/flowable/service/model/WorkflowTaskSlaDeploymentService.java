@@ -67,10 +67,7 @@ public class WorkflowTaskSlaDeploymentService
 
     /**
      * 创建 SLA 部署编译服务。
-     * @param calendarService WorkflowBusinessCalendarService，启用日历锁定服务
-     * @param eventCodeService WorkflowBpmnEventCodeService，受控升级编码锁定服务
-     * @param identityResolver WorkflowIdentityResolver，正式审批资格身份解析器
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowTaskSlaDeploymentService(WorkflowBusinessCalendarService calendarService,
             WorkflowBpmnEventCodeService eventCodeService,

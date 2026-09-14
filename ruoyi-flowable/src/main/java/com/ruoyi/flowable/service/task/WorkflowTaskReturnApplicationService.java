@@ -40,19 +40,7 @@ public class WorkflowTaskReturnApplicationService
 
     /**
      * 创建独立退回应用服务。
-     * @param engineOperations WorkflowEngineOperations，正式事务、身份和异常翻译入口
-     * @param requestValidator WorkflowTaskRequestValidator，请求字段门禁
-     * @param runtimeReader WorkflowTaskRuntimeReader，活动任务、实例和历史事实读取器
-     * @param bpmnReader WorkflowTaskBpmnReader，部署 BPMN 事实读取器
-     * @param movementPolicy WorkflowTaskMovementPolicy，普通与受控返回路径策略
-     * @param returnedTaskStateService WorkflowReturnedTaskStateService，退回任务状态边界
-     * @param auditWriter WorkflowTaskActionAuditWriter，结构化动作审计写入器
-     * @param concurrencyExecutor WorkflowTaskConcurrencyExecutor，并发对象消失翻译器
-     * @param groupTransitionService WorkflowMultiInstanceGroupTransitionService，整组迁移边界
-     * @param taskCopyService WorkflowTaskCopyService，退回抄送服务
-     * @param notificationService WorkflowNotificationService，任务通知服务
-     * @param runtimeService RuntimeService，普通任务 Flowable 状态迁移服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowTaskReturnApplicationService(
             WorkflowEngineOperations engineOperations,

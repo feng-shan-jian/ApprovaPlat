@@ -16,8 +16,7 @@ public class WorkflowParticipantResolutionMetrics
     /**
      * 注册人员解析固定失败码指标。
      *
-     * @param registry MeterRegistry，应用统一 Micrometer 指标注册表
-     * @return 无返回值，构造后可直接累计失败次数
+     * 构造后可直接累计失败次数
      */
     public WorkflowParticipantResolutionMetrics(MeterRegistry registry)
     {

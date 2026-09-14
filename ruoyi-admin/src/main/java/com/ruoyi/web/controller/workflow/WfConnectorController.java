@@ -33,8 +33,7 @@ public class WfConnectorController extends BaseController
 
     /**
      * 创建连接器端点 Controller。
-     * @param endpointService WorkflowConnectorEndpointService，端点领域服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfConnectorController(WorkflowConnectorEndpointService endpointService)
     {

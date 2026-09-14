@@ -13,9 +13,7 @@ public record WorkflowBpmnValidationReport(boolean valid,
 {
     /**
      * 固化诊断列表，避免 Controller 返回后被调用方修改。
-     * @param valid boolean，校验是否通过
-     * @param issues List&lt;WorkflowBpmnValidationIssue&gt;，诊断列表
-     * @return 无返回值，构造后得到不可变报告
+     * 构造后得到不可变报告
      */
     public WorkflowBpmnValidationReport
     {

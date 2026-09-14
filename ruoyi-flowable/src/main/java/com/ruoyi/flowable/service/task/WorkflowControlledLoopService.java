@@ -43,11 +43,7 @@ public class WorkflowControlledLoopService
 
     /**
      * 创建受控循环运行服务。
-     * @param runtimeService RuntimeService，写入编译网关保留变量的公共 API
-     * @param taskService TaskService，写入同事务结构化循环 comment 的公共 API
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，循环部署资源仓库
-     * @param executionMapper WfControlledLoopExecutionMapper，逐轮运行审计 Mapper
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowControlledLoopService(RuntimeService runtimeService, TaskService taskService,
             WorkflowDeploymentArtifactRepository artifactRepository,

@@ -34,7 +34,7 @@ import org.flowable.task.api.TaskQuery;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.common.core.domain.entity.SysUser;
+import com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.UserNameCache;
 import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCopy;
@@ -71,15 +71,7 @@ public class WorkflowProcessInstanceQueryService
     /**
      * 创建流程实例与抄送查询服务。
      *
-     * @param engineOperations WorkflowEngineOperations，统一只读和写事务及异常翻译边界
-     * @param repositoryService RepositoryService，Flowable 部署公共 API
-     * @param historyService HistoryService，Flowable 历史实例公共 API
-     * @param runtimeService RuntimeService，Flowable 实例实时挂起状态公共 API
-     * @param taskService TaskService，Flowable 当前任务公共 API
-     * @param identityResolver WorkflowIdentityResolver，当前有效用户解析器
-     * @param copyMapper WfCopyMapper，正式抄送记录 Mapper
-     * @param userService ISysUserService，历史发起人显示名称查询服务
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowProcessInstanceQueryService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, HistoryService historyService,
@@ -175,7 +167,7 @@ public class WorkflowProcessInstanceQueryService
             List<HistoricProcessInstance> instances = checkedRows(
                     query.listPage(page.offset(), page.pageSize()), page.pageSize());
             InstancePageFacts facts = loadInstancePageFacts(instances);
-            UserNameCache userNameCache = new UserNameCache();
+            UserNameCache userNameCache = new UserNameCache(userService);
             List<WorkflowManagedProcessView> rows = instances.stream()
                     .map(instance -> toManagedView(instance, userNameCache, facts))
                     .toList();
@@ -422,7 +414,7 @@ public class WorkflowProcessInstanceQueryService
         String category = facts.deploymentCategories().get(instance.getDeploymentId());
         List<String> taskNames = facts.runtimeTaskNames().getOrDefault(instance.getId(), List.of());
         Boolean runtimeSuspended = facts.runtimeSuspensionStates().get(instance.getId());
-        String startUserName = resolveUserName(instance.getStartUserId(), userNameCache);
+        String startUserName = userNameCache.resolve(instance.getStartUserId());
         String processStatus = normalizeProcessState(instance, runtimeSuspended);
         boolean active = Set.of("running", "returned", "suspended").contains(processStatus);
         String stateAction = "running".equals(processStatus) ? "SUSPEND"
@@ -621,40 +613,6 @@ public class WorkflowProcessInstanceQueryService
     }
 
     /**
-     * 查询历史发起人的当前显示名称，缺失用户以原始主键回显而不篡改历史关联。
-     *
-     * @param userId String，Flowable 历史发起人主键，允许为空
-     * @param userNameCache UserNameCache，当前页用户名缓存
-     * @return String，用户昵称、原始主键或 null
-     */
-    private String resolveUserName(String userId, UserNameCache userNameCache)
-    {
-        if (!StringUtils.hasText(userId))
-        {
-            return null;
-        }
-        if (userNameCache.userNames.containsKey(userId))
-        {
-            return userNameCache.userNames.get(userId);
-        }
-        String displayName = userId;
-        try
-        {
-            SysUser user = userService.selectUserById(Long.valueOf(userId));
-            if (user != null && StringUtils.hasText(user.getNickName()))
-            {
-                displayName = user.getNickName();
-            }
-        }
-        catch (NumberFormatException ignored)
-        {
-            // 存量异常身份不做名称猜测，保留原值便于迁移对账和问题追踪。
-        }
-        userNameCache.userNames.put(userId, displayName);
-        return displayName;
-    }
-
-    /**
      * 将 Flowable 历史状态和服务端业务状态规范为统一的小写状态。
      *
      * @param instance HistoricProcessInstance，历史流程实例
@@ -712,10 +670,4 @@ public class WorkflowProcessInstanceQueryService
     {
     }
 
-    /** 当前页用户名缓存，保持历史用户逐对象查询和原始主键回显规则不变。 */
-    private static final class UserNameCache
-    {
-        /** 历史用户主键到显示名称的当前页映射。 */
-        private final Map<String, String> userNames = new HashMap<>();
-    }
 }

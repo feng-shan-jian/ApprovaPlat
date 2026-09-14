@@ -64,11 +64,7 @@ public class WorkflowIntegrationCredentialService
 
     /**
      * 创建正式集成账号服务。
-     * @param engineOperations WorkflowEngineOperations，管理操作身份和事务边界
-     * @param credentialMapper WfIntegrationCredentialMapper，正式凭据表 Mapper
-     * @param redisOperations WorkflowRedisAtomicOperations，共享 Redis 原子执行组件
-     * @param rateLimitMetrics WorkflowCredentialRateLimitMetrics，固定低基数限流指标
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     @Autowired
     public WorkflowIntegrationCredentialService(WorkflowEngineOperations engineOperations,
@@ -82,13 +78,7 @@ public class WorkflowIntegrationCredentialService
 
     /**
      * 创建可注入随机源和时钟的服务实例，供边界测试稳定控制时间。
-     * @param engineOperations WorkflowEngineOperations，管理操作身份和事务边界
-     * @param credentialMapper WfIntegrationCredentialMapper，正式凭据表 Mapper
-     * @param redisOperations WorkflowRedisAtomicOperations，共享 Redis 原子执行组件
-     * @param rateLimitMetrics WorkflowCredentialRateLimitMetrics，固定低基数限流指标
-     * @param secureRandom SecureRandom，至少 256 位 Token 随机源
-     * @param clock Clock，到期和限流时钟
-     * @return void，构造完成后可执行业务方法
+     * 构造完成后可执行业务方法
      */
     WorkflowIntegrationCredentialService(WorkflowEngineOperations engineOperations,
             WfIntegrationCredentialMapper credentialMapper,

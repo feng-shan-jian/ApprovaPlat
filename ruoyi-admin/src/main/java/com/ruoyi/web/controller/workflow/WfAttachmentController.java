@@ -42,8 +42,7 @@ public class WfAttachmentController extends BaseController
     /**
      * 创建工作流附件 Controller。
      *
-     * @param attachmentService WorkflowAttachmentService，附件归属、存储和授权领域服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfAttachmentController(WorkflowAttachmentService attachmentService)
     {

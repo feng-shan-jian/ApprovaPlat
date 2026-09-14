@@ -26,11 +26,7 @@ public class WfCategoryExportView
     /**
      * 创建分类导出视图。
      *
-     * @param categoryId Long，分类主键
-     * @param categoryName String，分类名称
-     * @param code String，分类编码
-     * @param remark String，分类备注
-     * @return 无返回值，构造后得到只读导出对象
+     * 构造后得到只读导出对象
      */
     public WfCategoryExportView(Long categoryId, String categoryName, String code, String remark)
     {

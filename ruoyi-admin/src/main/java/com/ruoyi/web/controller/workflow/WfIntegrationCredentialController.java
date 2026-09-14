@@ -33,8 +33,7 @@ public class WfIntegrationCredentialController extends BaseController
 
     /**
      * 创建集成账号管理 Controller。
-     * @param credentialService WorkflowIntegrationCredentialService，正式凭据领域服务
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfIntegrationCredentialController(
             WorkflowIntegrationCredentialService credentialService)

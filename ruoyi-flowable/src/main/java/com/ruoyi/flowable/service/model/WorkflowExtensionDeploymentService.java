@@ -56,11 +56,7 @@ public class WorkflowExtensionDeploymentService
 
     /**
      * 创建扩展部署服务。
-     * @param registryService WorkflowExtensionRegistryService，扩展版本锁定服务
-     * @param handlerRegistry WorkflowJavaExtensionHandlerRegistry，代码安装处理器注册表
-     * @param httpConnector WorkflowHttpConnector，HTTP 端点冻结与配置校验器
-     * @param sqlConnector WorkflowSqlConnector，SQL 数据源冻结与模板校验器
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowExtensionDeploymentService(WorkflowExtensionRegistryService registryService,
             WorkflowJavaExtensionHandlerRegistry handlerRegistry,

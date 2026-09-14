@@ -39,8 +39,6 @@ public class WfCategoryServiceImpl implements IWfCategoryService
 
     /**
      * 创建分类业务服务。
-     * @param categoryMapper WfCategoryMapper，分类数据访问层
-     * @param referenceChecker WorkflowReferenceChecker，真实引擎引用检查器
      * @return 构造函数，无返回值
      */
     public WfCategoryServiceImpl(WfCategoryMapper categoryMapper,

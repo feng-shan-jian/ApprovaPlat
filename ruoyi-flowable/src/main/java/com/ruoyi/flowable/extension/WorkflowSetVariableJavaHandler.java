@@ -115,7 +115,6 @@ public class WorkflowSetVariableJavaHandler implements WorkflowJavaExtensionHand
      * 把规范配置中的标量值写入当前流程实例变量。
      * @param execution DelegateExecution，当前 Flowable 活动执行上下文
      * @param config JsonNode，已经重新校验的快照配置
-     * @return void，无返回值
      */
     @Override
     public void execute(DelegateExecution execution, JsonNode config)
@@ -138,7 +137,6 @@ public class WorkflowSetVariableJavaHandler implements WorkflowJavaExtensionHand
      * 在任务生命周期事件中把受控标量写入流程变量。
      * @param task DelegateTask，当前 Flowable 用户任务上下文
      * @param config JsonNode，已经重新校验的不可变快照配置
-     * @return void，无返回值
      */
     @Override
     public void executeTask(DelegateTask task, JsonNode config)

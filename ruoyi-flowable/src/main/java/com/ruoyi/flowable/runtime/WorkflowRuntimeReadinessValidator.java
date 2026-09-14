@@ -34,11 +34,7 @@ public class WorkflowRuntimeReadinessValidator implements InitializingBean
     /**
      * 创建工作流生产启动门禁。
      *
-     * @param environment Environment，读取 Flowable 引擎最终生效开关
-     * @param runtimeProperties WorkflowRuntimeProperties，部署拓扑与运维批准配置
-     * @param attachmentProperties WorkflowAttachmentProperties，附件磁盘低水位配置
-     * @param attachmentStorage WorkflowAttachmentStorage，私有附件文件系统边界
-     * @return 无返回值，构造后由 Spring 在单例初始化阶段执行
+     * 构造后由 Spring 在单例初始化阶段执行
      */
     public WorkflowRuntimeReadinessValidator(Environment environment,
             WorkflowRuntimeProperties runtimeProperties,

@@ -17,8 +17,7 @@ public class WorkflowNotificationMetrics
     /**
      * 注册通知投递和催办固定结果计数器。
      *
-     * @param registry MeterRegistry，应用统一 Micrometer 指标注册表
-     * @return 无返回值，构造后可记录通知业务结果
+     * 构造后可记录通知业务结果
      */
     public WorkflowNotificationMetrics(MeterRegistry registry)
     {

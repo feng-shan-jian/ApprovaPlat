@@ -43,15 +43,7 @@ public class WorkflowModelExportView
     /**
      * 创建流程模型导出视图并复制可变时间对象。
      *
-     * @param modelId String，Flowable 模型主键
-     * @param modelKey String，模型标识
-     * @param modelName String，模型名称
-     * @param category String，分类编码
-     * @param categoryName String，分类名称
-     * @param version Integer，模型版本
-     * @param description String，模型描述
-     * @param createTime Date，模型创建时间
-     * @return 无返回值，构造后得到只读导出对象
+     * 构造后得到只读导出对象
      */
     public WorkflowModelExportView(String modelId, String modelKey, String modelName,
             String category, String categoryName, Integer version, String description,

@@ -24,9 +24,7 @@ public class WorkflowSlaBusinessCalendarManager implements BusinessCalendarManag
 
     /**
      * 创建延迟日历管理器。
-     * @param clockSupplier Supplier&lt;ClockReader&gt;，运行时读取已初始化引擎时钟
-     * @param calendarService WorkflowBusinessCalendarService，正式业务日历服务
-     * @return 无返回值，由引擎配置器注册
+     * 由引擎配置器注册
      */
     public WorkflowSlaBusinessCalendarManager(Supplier<ClockReader> clockSupplier,
             WorkflowBusinessCalendarService calendarService)

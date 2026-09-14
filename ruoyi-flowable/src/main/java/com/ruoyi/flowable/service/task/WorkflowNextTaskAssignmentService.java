@@ -36,11 +36,7 @@ public class WorkflowNextTaskAssignmentService
     /**
      * 创建动态下一办理人服务。
      *
-     * @param userSelectionValidator WorkflowUserSelectionValidator，正式审批资格用户严格校验器
-     * @param taskService TaskService，活动任务和候选身份公共服务
-     * @param runtimeService RuntimeService，多实例集合变量和状态迁移公共服务
-     * @param snapshotReader WorkflowMultiInstanceRuntimeSnapshotReader，受控多实例唯一运行时快照读取器
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowNextTaskAssignmentService(
             WorkflowUserSelectionValidator userSelectionValidator,
@@ -423,13 +419,7 @@ public class WorkflowNextTaskAssignmentService
         /**
          * 创建动态分配计划并复制用户集合，防止完成命令期间请求内容变化。
          *
-         * @param processInstanceId String，来源任务所属流程实例主键；空计划允许为 null
-         * @param sourceTaskId String，完成前来源任务主键；空计划允许为 null
-         * @param expectedTaskDefinitionKey String，预期后继节点主键；空计划允许为 null
-         * @param userIds List&lt;String&gt;，有效用户主键集合
-         * @param multiInstance boolean，是否为受控动态多实例计划
-         * @param multiInstanceMode WorkflowMultiInstanceMode，多实例完成模式
-         * @return 无返回值，构造后 userIds 为不可修改集合
+         * 构造后 userIds 为不可修改集合
          */
         public AssignmentPlan
         {

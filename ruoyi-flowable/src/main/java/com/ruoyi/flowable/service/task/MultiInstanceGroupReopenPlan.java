@@ -21,7 +21,7 @@ public record MultiInstanceGroupReopenPlan(MultiInstanceRoundSnapshot round,
     /**
      * 校验旧轮和申请人任务严格属于同一流程及正式关联。
      *
-     * @return 无返回值，不一致计划拒绝构造
+     * 不一致计划拒绝构造
      */
     public MultiInstanceGroupReopenPlan
     {

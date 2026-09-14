@@ -33,8 +33,7 @@ public class WfSqlDataSourceController extends BaseController
 
     /**
      * 创建 SQL 数据源 Controller。
-     * @param dataSourceService WorkflowSqlDataSourceService，数据源目录领域服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfSqlDataSourceController(WorkflowSqlDataSourceService dataSourceService)
     {

@@ -15,7 +15,7 @@ public final class WorkflowNextTaskAssignmentContract
     /**
      * 禁止实例化纯模型契约工具类。
      *
-     * @return 无返回值，调用时始终抛出 AssertionError
+     * 调用时始终抛出 AssertionError
      */
     private WorkflowNextTaskAssignmentContract()
     {
@@ -198,9 +198,7 @@ public final class WorkflowNextTaskAssignmentContract
         /**
          * 核验目标节点和模式，防止不完整能力投影进入完成动作。
          *
-         * @param taskDefinitionKey String，受控动态多实例用户任务节点主键
-         * @param mode WorkflowMultiInstanceMode，固定 ALL 或 ANY 完成模式
-         * @return 无返回值，字段不完整时抛出 IllegalArgumentException
+         * 字段不完整时抛出 IllegalArgumentException
          */
         public RequiredMultiInstanceTarget
         {

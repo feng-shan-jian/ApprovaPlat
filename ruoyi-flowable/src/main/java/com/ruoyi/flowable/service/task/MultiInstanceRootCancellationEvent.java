@@ -27,7 +27,7 @@ public record MultiInstanceRootCancellationEvent(String processInstanceId,
     /**
      * 校验根取消事件具备完整引擎身份。
      *
-     * @return 无返回值，缺失事实拒绝构造
+     * 缺失事实拒绝构造
      */
     public MultiInstanceRootCancellationEvent
     {

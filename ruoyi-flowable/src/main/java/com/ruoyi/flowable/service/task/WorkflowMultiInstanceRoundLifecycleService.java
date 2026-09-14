@@ -21,10 +21,7 @@ public class WorkflowMultiInstanceRoundLifecycleService
     /**
      * 创建 ACTIVE 轮次生命周期服务。
      *
-     * @param roundRepository WorkflowMultiInstanceRoundRepository，轮次持久化边界
-     * @param snapshotReader WorkflowMultiInstanceRuntimeSnapshotReader，唯一实时快照读取器
-     * @param transitionObserver WorkflowMultiInstanceTransitionObserver，命令内创建事件观察器
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowMultiInstanceRoundLifecycleService(
             WorkflowMultiInstanceRoundRepository roundRepository,

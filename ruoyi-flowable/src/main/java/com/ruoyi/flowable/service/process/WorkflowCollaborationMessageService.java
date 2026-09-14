@@ -52,13 +52,6 @@ public class WorkflowCollaborationMessageService
 
     /**
      * 创建协作消息服务。
-     * @param engineOperations WorkflowEngineOperations，统一事务与可信操作人边界
-     * @param credentialService WorkflowIntegrationCredentialService，MESSAGE 范围认证
-     * @param mapper WfCollaborationMessageMapper，正式协作消息台账
-     * @param runtimeService RuntimeService，Flowable 消息消费 API
-     * @param repositoryService RepositoryService，部署 BPMN 快照查询 API
-     * @param channelService WorkflowCollaborationChannelService，入站顺序游标
-     * @param auditService WorkflowCollaborationAuditService，逐次状态审计
      */
     public WorkflowCollaborationMessageService(WorkflowEngineOperations engineOperations,
             WorkflowIntegrationCredentialService credentialService,

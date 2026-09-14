@@ -33,7 +33,7 @@ public final class WorkflowMultiInstanceVariables
     /**
      * 禁止实例化纯变量命名工具类。
      *
-     * @return 无返回值，调用时始终抛出 AssertionError
+     * 调用时始终抛出 AssertionError
      */
     private WorkflowMultiInstanceVariables()
     {

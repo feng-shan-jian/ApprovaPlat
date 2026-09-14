@@ -37,7 +37,8 @@ import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract.NextUserAssignmentPolicy;
 import com.ruoyi.flowable.service.task.WorkflowReturnedApplicationProtocol;
-import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowTaskReturnApplicationService;
+import com.ruoyi.flowable.service.task.WorkflowApplicationResubmitApplicationService;
 
 /**
  * 流程实例完整只读详情编排服务。
@@ -72,7 +73,9 @@ public class WorkflowProcessDetailService
 
     private final WorkflowMultiInstanceService multiInstanceService;
 
-    private final WorkflowTaskLifecycleService taskLifecycleService;
+    private final WorkflowTaskReturnApplicationService returnApplicationService;
+
+    private final WorkflowApplicationResubmitApplicationService resubmitApplicationService;
 
     /** 当前用户正式身份解析器，用于生成任务动作能力快照。 */
     private final WorkflowIdentityResolver identityResolver;
@@ -86,19 +89,7 @@ public class WorkflowProcessDetailService
     /**
      * 创建流程实例详情编排服务。
      *
-     * @param engineOperations WorkflowEngineOperations，只读事务和异常翻译边界
-     * @param processAccessService WorkflowProcessAccessService，实例与任务对象授权服务
-     * @param repositoryService RepositoryService，流程定义和 BPMN 模型公共 API
-     * @param taskService TaskService，退回任务识别和 capability 实时查询 API
-     * @param deploymentService WorkflowDeploymentService，安全 BPMN XML 读取服务
-     * @param variableProjection WorkflowProcessVariableProjection，变量存储解码与安全投影组件
-     * @param formProjection WorkflowProcessFormDetailProjection，部署与流程表单投影组件
-     * @param historyProjection WorkflowProcessHistoryProjection，历史展示与父子关系投影组件
-     * @param multiInstanceService WorkflowMultiInstanceService，动态多实例 capability 服务
-     * @param taskLifecycleService WorkflowTaskLifecycleService，正式退回能力与执行树校验服务
-     * @param manualUrgeService WorkflowManualUrgeService，人工催办正式能力查询服务
-     * @param controlledLoopService WorkflowControlledLoopService，受控循环状态与审计投影服务
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowProcessDetailService(WorkflowEngineOperations engineOperations,
             WorkflowProcessAccessService processAccessService,
@@ -108,7 +99,8 @@ public class WorkflowProcessDetailService
             WorkflowProcessFormDetailProjection formProjection,
             WorkflowProcessHistoryProjection historyProjection,
             WorkflowMultiInstanceService multiInstanceService,
-            WorkflowTaskLifecycleService taskLifecycleService,
+            WorkflowTaskReturnApplicationService returnApplicationService,
+            WorkflowApplicationResubmitApplicationService resubmitApplicationService,
             WorkflowIdentityResolver identityResolver,
             WorkflowManualUrgeService manualUrgeService,
             WorkflowControlledLoopService controlledLoopService)
@@ -122,7 +114,8 @@ public class WorkflowProcessDetailService
         this.formProjection = formProjection;
         this.historyProjection = historyProjection;
         this.multiInstanceService = multiInstanceService;
-        this.taskLifecycleService = taskLifecycleService;
+        this.returnApplicationService = returnApplicationService;
+        this.resubmitApplicationService = resubmitApplicationService;
         this.identityResolver = identityResolver;
         this.manualUrgeService = manualUrgeService;
         this.controlledLoopService = controlledLoopService;
@@ -237,13 +230,13 @@ public class WorkflowProcessDetailService
                         : multiInstanceService.getOptionalState(requestedTask.taskId());
         // 退回入口必须由正式动作准备链投影；静态多实例、子流程和复杂执行树统一失败关闭。
         boolean returnAllowed = requestedTask != null && requestedTask.active()
-                && taskLifecycleService.isTaskReturnAllowed(requestedTask.taskId());
+                && returnApplicationService.isTaskReturnAllowed(requestedTask.taskId());
         WorkflowTaskCapabilities taskCapabilities = projectTaskCapabilities(
                 identityResolver.resolveCurrentIdentity(), requestedTask, processStatus,
                 multiInstanceState, returnAllowed);
         // 先用详情已识别的申请人待修改任务收窄调用，再由正式重提准备链完成全部权威重验。
         boolean resubmitAllowed = returnedApplicantTask
-                && taskLifecycleService.isApplicationResubmitAllowed(
+                && resubmitApplicationService.isApplicationResubmitAllowed(
                         requestedTask.taskId());
         // 终态、挂起态和 CallActivity 子流程固定失败关闭；只有已授权的活动根流程进入正式准备链。
         boolean urgeAllowed = isUrgeProjectionCandidate(

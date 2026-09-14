@@ -46,8 +46,7 @@ public class WorkflowIdentityDirectoryService
     /**
      * 创建工作流身份目录服务。
      *
-     * @param identityMapper WorkflowIdentityMapper，若依正式身份主数据查询 Mapper
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowIdentityDirectoryService(WorkflowIdentityMapper identityMapper)
     {

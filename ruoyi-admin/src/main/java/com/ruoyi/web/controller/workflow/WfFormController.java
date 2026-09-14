@@ -56,8 +56,7 @@ public class WfFormController extends BaseController
     /**
      * 创建工作流表单 Controller。
      *
-     * @param formService IWfFormService，表单模板领域服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfFormController(IWfFormService formService)
     {

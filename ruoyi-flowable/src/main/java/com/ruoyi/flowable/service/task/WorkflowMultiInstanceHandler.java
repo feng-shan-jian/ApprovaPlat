@@ -32,9 +32,7 @@ public class WorkflowMultiInstanceHandler
     /**
      * 创建动态多实例集合处理器。
      *
-     * @param userSelectionValidator WorkflowUserSelectionValidator，正式启用用户严格校验器
-     * @param transitionObserver WorkflowMultiInstanceTransitionObserver，整组退回与重提命令内观察协议
-     * @return 无返回值，构造后以 multiInstanceHandler 名称注册到 Spring
+     * 构造后以 multiInstanceHandler 名称注册到 Spring
      */
     public WorkflowMultiInstanceHandler(WorkflowUserSelectionValidator userSelectionValidator,
             WorkflowMultiInstanceTransitionObserver transitionObserver)

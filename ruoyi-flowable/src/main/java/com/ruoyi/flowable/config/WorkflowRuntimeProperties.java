@@ -81,7 +81,6 @@ public class WorkflowRuntimeProperties
      * 设置生产启动门禁开关。
      *
      * @param productionGateEnabled boolean，生产部署必须设置为 true
-     * @return void，无返回值
      */
     public void setProductionGateEnabled(boolean productionGateEnabled)
     {
@@ -102,7 +101,6 @@ public class WorkflowRuntimeProperties
      * 设置应用部署拓扑。
      *
      * @param deploymentTopology DeploymentTopology，不能为空
-     * @return void，无返回值
      */
     public void setDeploymentTopology(DeploymentTopology deploymentTopology)
     {
@@ -123,7 +121,6 @@ public class WorkflowRuntimeProperties
      * 设置 executor 拓扑声明。
      *
      * @param executorTopology ExecutorTopology，不能为空
-     * @return void，无返回值
      */
     public void setExecutorTopology(ExecutorTopology executorTopology)
     {
@@ -144,7 +141,6 @@ public class WorkflowRuntimeProperties
      * 设置当前运维节点标识。
      *
      * @param nodeId String，非敏感稳定节点标识
-     * @return void，无返回值
      */
     public void setNodeId(String nodeId)
     {
@@ -165,7 +161,6 @@ public class WorkflowRuntimeProperties
      * 设置拓扑审批引用。
      *
      * @param approvalReference String，非敏感审批引用
-     * @return void，无返回值
      */
     public void setApprovalReference(String approvalReference)
     {
@@ -186,7 +181,6 @@ public class WorkflowRuntimeProperties
      * 设置生产容量评审引用。
      *
      * @param capacityApprovalReference String，非敏感容量审批或评审编号
-     * @return void，无返回值
      */
     public void setCapacityApprovalReference(String capacityApprovalReference)
     {
@@ -207,7 +201,6 @@ public class WorkflowRuntimeProperties
      * 设置附件存储模式。
      *
      * @param attachmentStorageMode AttachmentStorageMode，不能为空
-     * @return void，无返回值
      */
     public void setAttachmentStorageMode(AttachmentStorageMode attachmentStorageMode)
     {
@@ -228,7 +221,6 @@ public class WorkflowRuntimeProperties
      * 设置共享附件卷标识。
      *
      * @param attachmentStorageId String，非敏感稳定存储标识
-     * @return void，无返回值
      */
     public void setAttachmentStorageId(String attachmentStorageId)
     {
@@ -249,7 +241,6 @@ public class WorkflowRuntimeProperties
      * 设置启动后首次刷新工作流运行指标的等待时间。
      *
      * @param metricsRefreshInitialDelay Duration，必须非负且不超过十分钟
-     * @return void，无返回值
      */
     public void setMetricsRefreshInitialDelay(Duration metricsRefreshInitialDelay)
     {
@@ -275,7 +266,6 @@ public class WorkflowRuntimeProperties
      * 设置工作流数据库合并指标的固定刷新间隔。
      *
      * @param metricsRefreshInterval Duration，必须处于30秒至10分钟范围
-     * @return void，无返回值
      */
     public void setMetricsRefreshInterval(Duration metricsRefreshInterval)
     {
@@ -302,7 +292,6 @@ public class WorkflowRuntimeProperties
      * 设置 readiness 接受的工作流运行快照最大年龄。
      *
      * @param metricsSnapshotMaxAge Duration，必须处于30秒至1小时范围
-     * @return void，无返回值
      */
     public void setMetricsSnapshotMaxAge(Duration metricsSnapshotMaxAge)
     {

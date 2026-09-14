@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { createProcessUserIdFieldCatalog, eligibleUserIdFieldOptions } from './formUserFieldCatalog.js'
-import { createUserTaskSlaDomain, isUserTaskSlaProperty } from './userTaskSlaDomain.js'
+import { createDefaultSlaConfig, createUserTaskSlaDomain, isUserTaskSlaProperty } from './userTaskSlaDomain.js'
 export { createDefaultSlaConfig } from './userTaskSlaDomain.js'
 
 const BUSINESS_LISTENER_DELEGATE_EXPRESSION = '${workflowBusinessListener}'
@@ -25,6 +25,23 @@ const AUTO_COPY_RULE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/
 const AUTO_COPY_USER_ID_PATTERN = /^[1-9]\d{0,18}$/
 const AUTO_COPY_GROUP_ID_PATTERN = /^(?:ROLE|DEPT)[1-9]\d{0,18}$/
 const AUTO_COPY_VARIABLE_PATTERN = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/
+export function createExtensionEventSlaState() {
+  return {
+    sla: createDefaultSlaConfig(),
+    extensionKey: '',
+    extensionConfig: '{}',
+    eventDefinitionType: '',
+    eventReference: '',
+    timerDefinitionType: 'timeDuration',
+    timerDefinition: '',
+    cancelActivity: true,
+    businessExecutionListeners: [],
+    businessTaskListeners: [],
+    autoCopyRules: [],
+    extensionProperties: []
+  }
+}
+
 /**
  * 判断属性是否由扩展事件或 SLA 模块独占维护。
  * @param {unknown} name Flowable Property 名称。
@@ -694,6 +711,7 @@ export function createExtensionEventSlaDomain(context) {
    * @returns {void} 非事件或无事件定义时保留空状态。
    */
   function loadEventPropertyState(businessObject) {
+    propertyState.cancelActivity = businessObject.cancelActivity !== false
     const eventDefinition = businessObject.eventDefinitions?.[0]
     if (!eventDefinition) return
     propertyState.eventDefinitionType = eventDefinition.$type || ''
@@ -747,7 +765,50 @@ export function createExtensionEventSlaDomain(context) {
     return String(reference?.[config?.keyProperty] || reference?.name || '').trim()
   }
 
+  function validateUserTaskExtensions(task) {
+    const slaConfig = readSlaConfig(readExtensionProperties(task))
+    try {
+      if (slaConfig.enabled) normalizeAndValidateSlaConfig(slaConfig)
+      validateAutoCopyRulesForElement(task, ['NODE_ARRIVED', 'NODE_COMPLETED'])
+    } catch (error) {
+      return error.message
+    }
+    return ''
+  }
+
+  function validateBusinessBoundary(boundary) {
+    const definition = boundary.eventDefinitions?.[0]
+    const businessType = definition?.$type
+    if (!['bpmn:ErrorEventDefinition', 'bpmn:EscalationEventDefinition'].includes(businessType)) return ''
+    const allowed = businessType === 'bpmn:ErrorEventDefinition' ? errorEventOptions.value : escalationEventOptions.value
+    if (!allowed.some(option => option.eventCode === readEventReference(definition))) {
+      return '错误或升级边界必须选择已启用的正式业务编码'
+    }
+    if (businessType === 'bpmn:ErrorEventDefinition' && boundary.cancelActivity === false) {
+      return '错误边界必须使用中断语义'
+    }
+    return ''
+  }
+
+  function loadExtensionState(businessObject) {
+    const controlledTaskExtension = readControlledTaskExtension(businessObject)
+    propertyState.extensionKey = controlledTaskExtension.extensionKey
+    propertyState.extensionConfig = controlledTaskExtension.extensionConfig
+    propertyState.businessExecutionListeners = readBusinessListeners(businessObject, 'flowable:ExecutionListener')
+    propertyState.businessTaskListeners = readBusinessListeners(businessObject, 'flowable:TaskListener')
+    const extensionProperties = readExtensionProperties(businessObject)
+    propertyState.sla = readSlaConfig(extensionProperties)
+    propertyState.autoCopyRules = readAutoCopyRules(extensionProperties)
+    // 三个领域的协议属性由各自结构化编辑器维护，通用属性面板只能展示普通扩展字段。
+    propertyState.extensionProperties = extensionProperties.filter(item => (
+      !isExtensionEventSlaProperty(item.name)
+    ))
+  }
+
   return {
+    loadExtensionState,
+    validateUserTaskExtensions,
+    validateBusinessBoundary,
     extensionOptions,
     businessListenerOptions,
     connectorEndpoints,
@@ -760,10 +821,6 @@ export function createExtensionEventSlaDomain(context) {
     slaLoading,
     autoCopyTriggerOptions,
     autoCopyFormFieldOptions,
-    readAutoCopyRules,
-    resolveAutoCopyFormFieldOptionsForBusinessObject,
-    readControlledTaskExtension,
-    readBusinessListeners,
     updateControlledTask,
     updateControlledTaskSelection,
     loadExtensionOptions,
@@ -779,6 +836,5 @@ export function createExtensionEventSlaDomain(context) {
     readSlaConfig,
     updateSlaProperties,
     normalizeAndValidateSlaConfig,
-    readEventReference
   }
 }

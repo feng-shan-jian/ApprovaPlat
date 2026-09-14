@@ -51,8 +51,6 @@ public final class WorkflowEmbeddedFormConverter
 
     /**
      * 禁止实例化纯静态转换器。
-     *
-     * @return 无返回值
      */
     private WorkflowEmbeddedFormConverter()
     {

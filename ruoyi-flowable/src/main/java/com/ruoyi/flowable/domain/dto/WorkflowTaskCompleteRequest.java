@@ -41,13 +41,7 @@ public record WorkflowTaskCompleteRequest(
     /**
      * 创建完成任务请求并复制顶层变量映射，防止校验期间被调用方增删字段。
      *
-     * @param taskId String，待完成的活动任务主键
-     * @param comment String，审批意见
-     * @param variables Map&lt;String, Object&gt;，当前任务表单变量，允许为空
-     * @param copyUserIds List&lt;Long&gt;，可选抄送用户主键
-     * @param nextUserIds List&lt;Long&gt;，可选动态下一办理人主键
-     * @param expectedRevision Long，动态多实例当前服务端 revision；普通任务为空
-     * @return 无返回值，构造后变量和用户集合均为不可修改副本
+     * 构造后变量和用户集合均为不可修改副本
      */
     public WorkflowTaskCompleteRequest
     {

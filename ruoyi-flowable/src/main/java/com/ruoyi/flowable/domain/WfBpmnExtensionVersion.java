@@ -40,7 +40,6 @@ public class WfBpmnExtensionVersion
     /**
      * 设置版本主键。
      * @param versionId Long，版本主键
-     * @return void，无返回值
      */
     public void setVersionId(Long versionId) { this.versionId = versionId; }
 
@@ -53,7 +52,6 @@ public class WfBpmnExtensionVersion
     /**
      * 设置扩展主键。
      * @param extensionId Long，扩展目录主键
-     * @return void，无返回值
      */
     public void setExtensionId(Long extensionId) { this.extensionId = extensionId; }
 
@@ -66,7 +64,6 @@ public class WfBpmnExtensionVersion
     /**
      * 设置版本号。
      * @param versionNo Integer，版本号
-     * @return void，无返回值
      */
     public void setVersionNo(Integer versionNo) { this.versionNo = versionNo; }
 
@@ -79,7 +76,6 @@ public class WfBpmnExtensionVersion
     /**
      * 设置处理器稳定键。
      * @param implementationKey String，已安装处理器稳定键
-     * @return void，无返回值
      */
     public void setImplementationKey(String implementationKey) { this.implementationKey = implementationKey; }
 
@@ -92,7 +88,6 @@ public class WfBpmnExtensionVersion
     /**
      * 设置配置 Schema。
      * @param configSchema String，JSON Schema 文本
-     * @return void，无返回值
      */
     public void setConfigSchema(String configSchema) { this.configSchema = configSchema; }
 
@@ -105,7 +100,6 @@ public class WfBpmnExtensionVersion
     /**
      * 设置版本校验和。
      * @param checksum String，SHA-256 小写十六进制
-     * @return void，无返回值
      */
     public void setChecksum(String checksum) { this.checksum = checksum; }
 
@@ -118,7 +112,6 @@ public class WfBpmnExtensionVersion
     /**
      * 设置创建人。
      * @param createBy String，正式用户主键字符串
-     * @return void，无返回值
      */
     public void setCreateBy(String createBy) { this.createBy = createBy; }
 
@@ -131,7 +124,6 @@ public class WfBpmnExtensionVersion
     /**
      * 设置创建时间。
      * @param createTime Date，创建时间
-     * @return void，无返回值
      */
     public void setCreateTime(Date createTime) { this.createTime = createTime; }
 }

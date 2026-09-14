@@ -44,8 +44,7 @@ public class SysOssController extends BaseController
     /**
      * 创建 OSS 管理控制器。
      *
-     * @param ossService SysOssService，正式对象存储服务
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public SysOssController(SysOssService ossService)
     {

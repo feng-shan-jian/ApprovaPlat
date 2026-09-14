@@ -69,9 +69,7 @@ public class SysOssService
     /**
      * 创建对象存储服务并固定禁止 HTTP 跳转，防止签名凭据跨主机发送。
      *
-     * @param jdbcTemplate JdbcTemplate，正式配置和对象台账数据源
-     * @param transactionManager PlatformTransactionManager，对象删除状态转换事务管理器
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     @Autowired
     public SysOssService(JdbcTemplate jdbcTemplate, PlatformTransactionManager transactionManager)
@@ -84,10 +82,7 @@ public class SysOssService
     /**
      * 使用显式 HTTP 客户端创建服务，供受控测试替换网络边界。
      *
-     * @param jdbcTemplate JdbcTemplate，正式配置和对象台账数据源
-     * @param httpClient HttpClient，S3 传输客户端
-     * @param transactionTemplate TransactionTemplate，删除状态转换事务模板
-     * @return void，参数不完整时拒绝创建
+     * 参数不完整时拒绝创建
      */
     SysOssService(JdbcTemplate jdbcTemplate, HttpClient httpClient,
             TransactionTemplate transactionTemplate)

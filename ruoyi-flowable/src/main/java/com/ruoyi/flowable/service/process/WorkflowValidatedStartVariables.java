@@ -18,9 +18,7 @@ public record WorkflowValidatedStartVariables(
     /**
      * 创建变量校验结果并复制两层附件引用集合。
      *
-     * @param variables Map&lt;String, Object&gt;，已经由校验器深度规范化的变量
-     * @param attachmentIdsByField Map&lt;String, List&lt;String&gt;&gt;，上传字段附件 UUID 映射
-     * @return 无返回值，构造后两个顶层映射和附件列表均不可修改
+     * 构造后两个顶层映射和附件列表均不可修改
      */
     public WorkflowValidatedStartVariables
     {

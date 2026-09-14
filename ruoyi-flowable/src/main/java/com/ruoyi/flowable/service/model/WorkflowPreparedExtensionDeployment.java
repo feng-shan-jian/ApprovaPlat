@@ -15,9 +15,7 @@ public record WorkflowPreparedExtensionDeployment(byte[] compiledBpmn,
 {
     /**
      * 防御性复制部署资源和快照集合，避免部署前被调用方修改。
-     * @param compiledBpmn byte[]，已编译 BPMN 资源
-     * @param snapshots List&lt;WfDeployExtensionSnapshot&gt;，未绑定部署主键的快照
-     * @return 无返回值，构造后保存副本
+     * 构造后保存副本
      */
     public WorkflowPreparedExtensionDeployment
     {

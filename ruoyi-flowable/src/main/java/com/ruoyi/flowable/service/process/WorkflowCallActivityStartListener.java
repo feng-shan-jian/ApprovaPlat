@@ -30,9 +30,7 @@ public final class WorkflowCallActivityStartListener
     /**
      * 创建只处理 CallActivity 子流程开始事件的监听器。
      *
-     * @param definitionQueryServiceProvider ObjectProvider&lt;WorkflowProcessDefinitionQueryService&gt;，读取子定义开始表单
-     * @param variableValidatorProvider ObjectProvider&lt;WorkflowStartVariableValidator&gt;，校验调用映射值
-     * @return 无返回值，构造后由 Flowable 全局事件配置注册
+     * 构造后由 Flowable 全局事件配置注册
      */
     public WorkflowCallActivityStartListener(
             ObjectProvider<WorkflowProcessDefinitionQueryService> definitionQueryServiceProvider,

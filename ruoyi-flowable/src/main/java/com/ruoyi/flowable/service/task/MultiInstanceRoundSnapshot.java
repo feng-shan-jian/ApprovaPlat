@@ -41,7 +41,7 @@ public record MultiInstanceRoundSnapshot(long roundId, String deployId,
     /**
      * 校验正式轮次的稳定身份与快照字段，并冻结成员顺序。
      *
-     * @return 无返回值，非法持久化事实拒绝进入服务间调用
+     * 非法持久化事实拒绝进入服务间调用
      */
     public MultiInstanceRoundSnapshot
     {

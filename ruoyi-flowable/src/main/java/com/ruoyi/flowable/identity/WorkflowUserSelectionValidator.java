@@ -37,8 +37,7 @@ public class WorkflowUserSelectionValidator
     /**
      * 创建工作流用户选择校验器。
      *
-     * @param identityResolver WorkflowIdentityResolver，正式身份主数据解析器
-     * @return 无返回值，构造后由 Spring 管理该组件
+     * 构造后由 Spring 管理该组件
      */
     public WorkflowUserSelectionValidator(WorkflowIdentityResolver identityResolver)
     {

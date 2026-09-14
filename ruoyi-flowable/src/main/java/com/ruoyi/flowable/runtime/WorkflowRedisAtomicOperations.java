@@ -25,8 +25,7 @@ public class WorkflowRedisAtomicOperations
     /**
      * 创建工作流 Redis 原子操作组件。
      *
-     * @param redisTemplate StringRedisTemplate，应用统一 Lettuce 连接与序列化配置
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowRedisAtomicOperations(StringRedisTemplate redisTemplate)
     {

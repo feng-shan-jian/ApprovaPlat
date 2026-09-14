@@ -15,8 +15,7 @@ public class WorkflowCredentialRateLimitMetrics
 
     /**
      * 注册允许、超限和 Redis 不可用三类固定结果，禁止凭据主键进入指标标签。
-     * @param registry MeterRegistry，应用统一 Micrometer 注册表
-     * @return void，构造后可直接累计认证限流结果
+     * 构造后可直接累计认证限流结果
      */
     public WorkflowCredentialRateLimitMetrics(MeterRegistry registry)
     {

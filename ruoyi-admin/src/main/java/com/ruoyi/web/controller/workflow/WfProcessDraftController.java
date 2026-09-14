@@ -44,8 +44,7 @@ public class WfProcessDraftController extends BaseController
     /**
      * 创建流程申请草稿 Controller。
      *
-     * @param draftService WorkflowProcessDraftService，草稿真实业务闭环服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfProcessDraftController(WorkflowProcessDraftService draftService)
     {

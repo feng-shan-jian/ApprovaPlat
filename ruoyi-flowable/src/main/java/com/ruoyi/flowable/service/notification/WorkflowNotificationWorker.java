@@ -22,8 +22,7 @@ public class WorkflowNotificationWorker
 
     /**
      * 创建通知 worker。
-     * @param coordinator WorkflowNotificationDeliveryCoordinator，事务外投递协调入口
-     * @return void，构造后由 Spring 调度
+     * 构造后由 Spring 调度
      */
     public WorkflowNotificationWorker(WorkflowNotificationDeliveryCoordinator coordinator)
     {

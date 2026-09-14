@@ -62,14 +62,7 @@ public class WorkflowAutomaticCopyService
     /**
      * 创建自动抄送运行时服务。
      *
-     * @param repositoryService RepositoryService，读取已部署 BPMN 不可变资源
-     * @param runtimeService RuntimeService，读取活动实例发起人
-     * @param historyService HistoryService，读取自然完成实例及历史变量
-     * @param identityResolver WorkflowIdentityResolver，正式用户、角色和部门解析器
-     * @param copyMapper WfCopyMapper，正式抄送记录 Mapper
-     * @param userMapper SysUserMapper，发起人名称快照 Mapper
-     * @param notificationService WorkflowNotificationService，正式通知服务
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowAutomaticCopyService(RepositoryService repositoryService,
             RuntimeService runtimeService, HistoryService historyService,

@@ -46,7 +46,6 @@ public class WorkflowModelDto
      * 设置 Flowable 模型主键。
      *
      * @param modelId String，Flowable 模型主键
-     * @return 无返回值
      */
     public void setModelId(String modelId)
     {
@@ -67,7 +66,6 @@ public class WorkflowModelDto
      * 设置模型显示名称。
      *
      * @param modelName String，模型显示名称
-     * @return 无返回值
      */
     public void setModelName(String modelName)
     {
@@ -88,7 +86,6 @@ public class WorkflowModelDto
      * 设置模型版本分组标识。
      *
      * @param modelKey String，模型版本分组标识
-     * @return 无返回值
      */
     public void setModelKey(String modelKey)
     {
@@ -109,7 +106,6 @@ public class WorkflowModelDto
      * 设置工作流分类编码。
      *
      * @param category String，工作流分类编码
-     * @return 无返回值
      */
     public void setCategory(String category)
     {
@@ -130,7 +126,6 @@ public class WorkflowModelDto
      * 设置模型业务描述。
      *
      * @param description String，模型业务描述
-     * @return 无返回值
      */
     public void setDescription(String description)
     {
@@ -151,7 +146,6 @@ public class WorkflowModelDto
      * 设置表单模式。
      *
      * @param formType Integer，表单模式编码
-     * @return 无返回值
      */
     public void setFormType(Integer formType)
     {
@@ -172,7 +166,6 @@ public class WorkflowModelDto
      * 设置模型级流程表单主键。
      *
      * @param formId Long，模型级流程表单主键
-     * @return 无返回值
      */
     public void setFormId(Long formId)
     {
@@ -193,7 +186,6 @@ public class WorkflowModelDto
      * 设置 BPMN 2.0 XML 正文。
      *
      * @param bpmnXml String，BPMN 2.0 XML 正文
-     * @return 无返回值
      */
     public void setBpmnXml(String bpmnXml)
     {
@@ -214,7 +206,6 @@ public class WorkflowModelDto
      * 设置设计页加载时的 Flowable 模型修订号。
      *
      * @param expectedRevision Integer，Flowable REV_ 乐观锁修订号
-     * @return 无返回值
      */
     public void setExpectedRevision(Integer expectedRevision)
     {

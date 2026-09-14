@@ -15,9 +15,7 @@ public record WorkflowPreparedSlaDeployment(byte[] compiledBpmn,
 {
     /**
      * 创建不可变部署准备结果。
-     * @param compiledBpmn byte[]，可执行 BPMN 字节
-     * @param snapshots List&lt;WfDeployTaskSla&gt;，SLA 快照
-     * @return 无返回值，数组和集合均复制后保存
+     * 数组和集合均复制后保存
      */
     public WorkflowPreparedSlaDeployment
     {

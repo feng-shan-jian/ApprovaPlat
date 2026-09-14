@@ -27,9 +27,7 @@ public final class WorkflowMultiInstanceRoundInterruptionListener
     /**
      * 创建仅处理多实例根取消事件的全局引擎监听器。
      *
-     * @param terminationServiceProvider ObjectProvider&lt;WorkflowMultiInstanceRoundTerminationService&gt;，
-     *        引擎启动完成后再解析的正式轮次服务
-     * @return 无返回值，构造后的监听器由 Flowable 全局事件分发器同步调用
+     * 构造后的监听器由 Flowable 全局事件分发器同步调用
      */
     public WorkflowMultiInstanceRoundInterruptionListener(
             ObjectProvider<WorkflowMultiInstanceRoundTerminationService>

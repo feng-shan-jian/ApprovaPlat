@@ -21,9 +21,7 @@ public class WorkflowBpmnEventAuditService
 
     /**
      * 创建运行审计服务。
-     * @param eventMapper WfBpmnEventMapper，审计和通知数据访问层
-     * @param notificationWriter WorkflowNotificationWriter，当前事务内直接写必达站内通知
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowBpmnEventAuditService(WfBpmnEventMapper eventMapper,
             WorkflowNotificationWriter notificationWriter)

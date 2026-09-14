@@ -24,9 +24,7 @@ public class WorkflowDataRetentionCoordinator
 
     /**
      * 创建统一数据保留协调器并校验每个固定数据域恰有一个消费者。
-     * @param cleaners List&lt;WorkflowDataRetentionCleaner&gt;，各领域独立批处理 Bean
-     * @param metrics WorkflowDataRetentionMetrics，固定低基数运行指标
-     * @return 无返回值，缺失或重复数据域时拒绝应用启动
+     * 缺失或重复数据域时拒绝应用启动
      */
     @Autowired
     public WorkflowDataRetentionCoordinator(List<WorkflowDataRetentionCleaner> cleaners,
@@ -37,10 +35,7 @@ public class WorkflowDataRetentionCoordinator
 
     /**
      * 创建可注入时钟的协调器，供确定性单元测试使用。
-     * @param cleaners List&lt;WorkflowDataRetentionCleaner&gt;，各领域独立批处理 Bean
-     * @param metrics WorkflowDataRetentionMetrics，固定低基数运行指标
-     * @param clock Clock，统一生成每轮业务时间的时钟
-     * @return 无返回值，构造时完成领域所有权校验
+     * 构造时完成领域所有权校验
      */
     WorkflowDataRetentionCoordinator(List<WorkflowDataRetentionCleaner> cleaners,
             WorkflowDataRetentionMetrics metrics, Clock clock)

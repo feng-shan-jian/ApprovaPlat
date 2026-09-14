@@ -42,9 +42,7 @@ public class WorkflowConnectorEndpointService
 
     /**
      * 创建端点领域服务。
-     * @param engineOperations WorkflowEngineOperations，统一身份与事务边界
-     * @param endpointMapper WfConnectorEndpointMapper，端点数据访问层
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowConnectorEndpointService(WorkflowEngineOperations engineOperations,
             WfConnectorEndpointMapper endpointMapper, com.ruoyi.flowable.extension.WorkflowConnectorSecretResolver secrets)
@@ -141,7 +139,6 @@ public class WorkflowConnectorEndpointService
      * 启用或停用端点，只影响后续设计和部署。
      * @param endpointId Long，端点主键
      * @param enabled boolean，目标启用状态
-     * @return void，无返回值
      */
     public void changeStatus(Long endpointId, boolean enabled)
     {

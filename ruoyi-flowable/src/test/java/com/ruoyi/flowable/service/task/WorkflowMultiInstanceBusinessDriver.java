@@ -37,7 +37,9 @@ final class WorkflowMultiInstanceBusinessDriver
     private final TransactionTemplate transactionTemplate;
     private final ThreadLocal<String> currentUserId;
     private final String deploymentId;
-    private final WorkflowTaskLifecycleService lifecycleService;
+    private final WorkflowTaskCompletionApplicationService completionApplicationService;
+    private final WorkflowTaskReturnApplicationService returnApplicationService;
+    private final WorkflowApplicationResubmitApplicationService resubmitApplicationService;
     private final WorkflowMultiInstanceService multiInstanceService;
     private final WorkflowAttachmentService attachmentService;
     private final WorkflowProcessInstanceService processInstanceService;
@@ -50,7 +52,6 @@ final class WorkflowMultiInstanceBusinessDriver
      * @param transactionTemplate TransactionTemplate，准备动作事务
      * @param currentUserId ThreadLocal&lt;String&gt;，并发隔离的当前用户
      * @param deploymentId String，当前测试部署主键
-     * @param lifecycleService WorkflowTaskLifecycleService，正式任务业务入口
      * @param multiInstanceService WorkflowMultiInstanceService，正式调整入口
      * @param attachmentService WorkflowAttachmentService，正式附件入口
      * @param processInstanceService WorkflowProcessInstanceService，正式终止入口
@@ -59,7 +60,9 @@ final class WorkflowMultiInstanceBusinessDriver
     WorkflowMultiInstanceBusinessDriver(ProcessEngine processEngine,
             RuntimeService runtimeService, TransactionTemplate transactionTemplate,
             ThreadLocal<String> currentUserId, String deploymentId,
-            WorkflowTaskLifecycleService lifecycleService,
+            WorkflowTaskCompletionApplicationService completionApplicationService,
+            WorkflowTaskReturnApplicationService returnApplicationService,
+            WorkflowApplicationResubmitApplicationService resubmitApplicationService,
             WorkflowMultiInstanceService multiInstanceService,
             WorkflowAttachmentService attachmentService,
             WorkflowProcessInstanceService processInstanceService)
@@ -69,7 +72,9 @@ final class WorkflowMultiInstanceBusinessDriver
         this.transactionTemplate = transactionTemplate;
         this.currentUserId = currentUserId;
         this.deploymentId = deploymentId;
-        this.lifecycleService = lifecycleService;
+        this.completionApplicationService = completionApplicationService;
+        this.returnApplicationService = returnApplicationService;
+        this.resubmitApplicationService = resubmitApplicationService;
         this.multiInstanceService = multiInstanceService;
         this.attachmentService = attachmentService;
         this.processInstanceService = processInstanceService;
@@ -186,7 +191,7 @@ final class WorkflowMultiInstanceBusinessDriver
     void completeLifecycle(Task task, Long revision)
     {
         asUser(task.getAssignee());
-        lifecycleService.completeTask(new WorkflowTaskCompleteRequest(task.getId(),
+        completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(task.getId(),
                 "测试完成", Map.of(), List.of(), List.of(), revision));
     }
 
@@ -245,7 +250,7 @@ final class WorkflowMultiInstanceBusinessDriver
     void returnGroup(Task task, String actor)
     {
         asUser(actor);
-        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+        returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
                 task.getId(), "整组退回", List.of()));
     }
 
@@ -259,7 +264,7 @@ final class WorkflowMultiInstanceBusinessDriver
     boolean returnAllowed(Task task, String actor)
     {
         asUser(actor);
-        return lifecycleService.isTaskReturnAllowed(task.getId());
+        return returnApplicationService.isTaskReturnAllowed(task.getId());
     }
 
     /**
@@ -272,7 +277,7 @@ final class WorkflowMultiInstanceBusinessDriver
     void resubmit(Task applicantTask, Map<String, Object> variables)
     {
         asUser(APPLICANT_ID);
-        lifecycleService.resubmitApplication(new WorkflowApplicationResubmitRequest(
+        resubmitApplicationService.resubmitApplication(new WorkflowApplicationResubmitRequest(
                 applicantTask.getId(), variables));
     }
 

@@ -54,10 +54,7 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
     /**
      * 创建唯一只读运行时快照读取器。
      *
-     * @param repositoryService RepositoryService，部署定义和 BPMN 模型查询服务
-     * @param runtimeService RuntimeService，流程实例、execution 和变量查询服务
-     * @param taskService TaskService，活动成员任务查询服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowMultiInstanceRuntimeSnapshotReader(
             RepositoryService repositoryService, RuntimeService runtimeService,

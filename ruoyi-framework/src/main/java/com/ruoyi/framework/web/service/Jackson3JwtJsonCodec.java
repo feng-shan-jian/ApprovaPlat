@@ -62,8 +62,6 @@ final class Jackson3JwtJsonCodec
 
     /**
      * 禁止实例化仅承载 JJWT Jackson 3 适配器的工具类。
-     *
-     * @return 无返回值
      */
     private Jackson3JwtJsonCodec()
     {
@@ -190,7 +188,7 @@ final class Jackson3JwtJsonCodec
         /**
          * 创建 JJWT Supplier 序列化器。
          *
-         * @return 无返回值，新实例绑定 JJWT Supplier 接口
+         * 新实例绑定 JJWT Supplier 接口
          */
         private JwtSupplierSerializer()
         {

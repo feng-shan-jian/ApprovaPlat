@@ -16,9 +16,7 @@ public record WorkflowCurrentIdentity(String userId, Set<String> candidateGroups
     /**
      * 创建不可变的当前工作流身份，防止调用方修改候选组后绕过权限判断。
      *
-     * @param userId String，规范化后的若依用户 ID
-     * @param candidateGroups Set&lt;String&gt;，当前用户有效的候选组
-     * @return 无返回值，构造后 record 保存不可变候选组副本
+     * 构造后 record 保存不可变候选组副本
      */
     public WorkflowCurrentIdentity
     {

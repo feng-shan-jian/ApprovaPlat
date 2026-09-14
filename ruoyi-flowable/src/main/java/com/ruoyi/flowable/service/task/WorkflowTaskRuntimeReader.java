@@ -29,10 +29,7 @@ public class WorkflowTaskRuntimeReader
     /**
      * 创建任务运行时事实读取器。
      *
-     * @param runtimeService RuntimeService，流程实例只读查询服务
-     * @param taskService TaskService，活动任务只读查询服务
-     * @param historyService HistoryService，重复动作历史判定服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowTaskRuntimeReader(RuntimeService runtimeService,
             TaskService taskService, HistoryService historyService)

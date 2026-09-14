@@ -10,7 +10,7 @@ final class WorkflowMultiInstanceSnapshotDriftException extends RuntimeException
     /**
      * 创建不暴露内部字段的快照漂移异常。
      *
-     * @return 无返回值，调用服务负责翻译为原有稳定外部错误
+     * 调用服务负责翻译为原有稳定外部错误
      */
     WorkflowMultiInstanceSnapshotDriftException()
     {
@@ -20,8 +20,7 @@ final class WorkflowMultiInstanceSnapshotDriftException extends RuntimeException
     /**
      * 创建保留底层解析原因的快照漂移异常。
      *
-     * @param cause Throwable，Flowable 定义或变量解析原始原因
-     * @return 无返回值，调用服务负责稳定错误翻译
+     * 调用服务负责稳定错误翻译
      */
     WorkflowMultiInstanceSnapshotDriftException(Throwable cause)
     {

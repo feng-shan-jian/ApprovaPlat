@@ -33,10 +33,7 @@ public class WorkflowReturnedTaskStateService
     /**
      * 创建退回任务状态服务。
      *
-     * @param assignmentCodec WorkflowReturnedAssignmentCodec，办理配置快照编解码器
-     * @param runtimeService RuntimeService，流程变量与 business status 写入服务
-     * @param taskService TaskService，任务局部变量、身份链和指派写入服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowReturnedTaskStateService(
             WorkflowReturnedAssignmentCodec assignmentCodec,

@@ -48,14 +48,7 @@ public class WorkflowManualUrgeService
 
     /**
      * 创建人工催办业务服务。
-     * @param jdbcTemplate JdbcTemplate，Flowable 运行树、任务和候选关系只读/锁定查询入口
-     * @param engineOperations WorkflowEngineOperations，当前用户只读与写事务入口
-     * @param permissionService PermissionService，基础及跨实例催办权限实时复核入口
-     * @param notificationService WorkflowNotificationService，策略解析和通知登记入口
-     * @param redisAtomicOperations WorkflowRedisAtomicOperations，Redis 原子冷却操作
-     * @param properties WorkflowNotificationProperties，催办冷却时长配置
-     * @param metrics WorkflowNotificationMetrics，催办固定结果指标
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowManualUrgeService(JdbcTemplate jdbcTemplate,
             WorkflowEngineOperations engineOperations, PermissionService permissionService,

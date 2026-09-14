@@ -77,38 +77,8 @@ public record WorkflowProcessDetailView(
     /**
      * 创建流程详情并复制表单和时间线集合。
      *
-     * @param processInstanceId String，流程实例主键
-     * @param definitionId String，流程定义主键
-     * @param processKey String，流程定义标识
-     * @param processName String，流程定义名称
-     * @param version int，流程定义版本
-     * @param category String，流程分类编码
-     * @param deploymentId String，部署主键
-     * @param businessKey String，业务主键，允许为空
-     * @param startUserId String，流程发起人主键，允许为空
-     * @param startUserName String，流程发起人显示名称，允许为空
-     * @param startTime Instant，流程开始时间
-     * @param endTime Instant，流程结束时间，运行中为空
-     * @param durationMillis Long，流程耗时毫秒，运行中为空
-     * @param processStatus String，稳定流程状态
-     * @param currentTask WorkflowTaskAccessSnapshot，通过对象关系核验的任务，允许为空
-     * @param nextUserAssignmentPolicy String，动态下一办理人正式策略
-     * @param multiInstanceState WorkflowMultiInstanceStateView，动态多实例能力和状态，允许为空
-     * @param completeAllowed boolean，正式任务完成能力
-     * @param rejectAllowed boolean，正式任务驳回能力
-     * @param returnAllowed boolean，当前用户和执行树是否满足正式退回前置条件
-     * @param delegateAllowed boolean，正式任务委派能力
-     * @param transferAllowed boolean，正式任务转办能力
-     * @param resolveAllowed boolean，正式委派办结能力
-     * @param resubmitAllowed boolean，当前用户和完整准备链是否满足正式重提前置条件
-     * @param urgeAllowed boolean，当前用户和完整运行树是否满足正式人工催办前置条件
-     * @param controlledLoopStates List&lt;WorkflowControlledLoopStateView&gt;，受控循环状态列表
+     * 构造后领域结果不可变
      * @param formDetail WorkflowProcessFormDetailView，语义明确且不可为空的表单详情
-     * @param historyProcNodeList List&lt;WorkflowProcessActivityView&gt;，流程历史时间线
-     * @param processRelations List&lt;WorkflowProcessRelationView&gt;，父子流程实例关系
-     * @param bpmnXml String，经过安全校验的 BPMN XML
-     * @param flowViewer WorkflowProcessViewerView，Viewer 活动状态
-     * @return 无返回值，构造后领域结果不可变
      */
     public WorkflowProcessDetailView
     {

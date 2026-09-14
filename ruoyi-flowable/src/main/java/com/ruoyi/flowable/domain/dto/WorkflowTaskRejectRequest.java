@@ -28,10 +28,7 @@ public record WorkflowTaskRejectRequest(
     /**
      * 创建驳回任务请求并复制抄送用户集合，防止校验及执行期间被调用方修改。
      *
-     * @param taskId String，待驳回的活动任务主键
-     * @param comment String，驳回原因
-     * @param copyUserIds List&lt;Long&gt;，可选抄送接收用户主键
-     * @return 无返回值，构造后 copyUserIds 为不可修改集合
+     * 构造后 copyUserIds 为不可修改集合
      */
     public WorkflowTaskRejectRequest
     {

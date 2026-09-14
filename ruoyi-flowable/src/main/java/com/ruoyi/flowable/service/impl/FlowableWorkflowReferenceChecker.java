@@ -46,8 +46,6 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
 
     /**
      * 创建引用检查器。
-     * @param repositoryService RepositoryService，Flowable 公共仓库服务
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署表单资源仓库
      * @return 构造函数，无返回值
      */
     public FlowableWorkflowReferenceChecker(RepositoryService repositoryService,

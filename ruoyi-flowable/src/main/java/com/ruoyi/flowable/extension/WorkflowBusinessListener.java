@@ -36,10 +36,7 @@ public class WorkflowBusinessListener implements ExecutionListener, TaskListener
 
     /**
      * 创建固定业务监听器调度入口。
-     * @param repositoryService RepositoryService，流程定义和部署定位服务
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，不可变扩展资源仓库
-     * @param handlerRegistry WorkflowJavaExtensionHandlerRegistry，已安装 Java 处理器注册表
-     * @return 无返回值，构造后由 Spring 以固定 Bean 名管理
+     * 构造后由 Spring 以固定 Bean 名管理
      */
     public WorkflowBusinessListener(RepositoryService repositoryService,
             WorkflowDeploymentArtifactRepository artifactRepository,

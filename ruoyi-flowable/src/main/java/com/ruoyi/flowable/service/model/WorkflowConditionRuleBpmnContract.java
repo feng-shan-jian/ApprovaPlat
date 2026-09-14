@@ -1,7 +1,5 @@
 package com.ruoyi.flowable.service.model;
 
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -60,47 +58,10 @@ public final class WorkflowConditionRuleBpmnContract
      */
     public static void removeAuthorConfig(SequenceFlow sequenceFlow)
     {
-        if (sequenceFlow == null || sequenceFlow.getExtensionElements() == null)
-        {
-            return;
-        }
-        Map<String, List<ExtensionElement>> extensions = sequenceFlow.getExtensionElements();
-        List<ExtensionElement> containers = extensions.get("properties");
-        if (containers == null || containers.isEmpty())
-        {
-            return;
-        }
-        List<ExtensionElement> remainingContainers = new ArrayList<>();
-        for (ExtensionElement container : containers)
-        {
-            Map<String, List<ExtensionElement>> children = container.getChildElements();
-            if (children == null || children.get("property") == null)
-            {
-                remainingContainers.add(container);
-                continue;
-            }
-            List<ExtensionElement> properties = children.get("property").stream()
-                    .filter(property -> !CONFIG_PROPERTY.equals(
-                            property.getAttributeValue(null, "name")))
-                    .toList();
-            if (!properties.isEmpty())
-            {
-                Map<String, List<ExtensionElement>> copiedChildren = new HashMap<>(children);
-                copiedChildren.put("property", new ArrayList<>(properties));
-                container.setChildElements(copiedChildren);
-                remainingContainers.add(container);
-            }
-        }
-        Map<String, List<ExtensionElement>> copiedExtensions = new HashMap<>(extensions);
-        if (remainingContainers.isEmpty())
-        {
-            copiedExtensions.remove("properties");
-        }
-        else
-        {
-            copiedExtensions.put("properties", remainingContainers);
-        }
-        sequenceFlow.setExtensionElements(copiedExtensions);
+        if (sequenceFlow == null || sequenceFlow.getExtensionElements() == null) return;
+        List<ExtensionElement> containers = sequenceFlow.getExtensionElements().get("properties");
+        if (containers == null || containers.isEmpty()) return;
+        WorkflowBpmnProperties.remove(sequenceFlow, CONFIG_PROPERTY::equals);
     }
 
     /**
@@ -110,32 +71,7 @@ public final class WorkflowConditionRuleBpmnContract
      */
     private static Map<String, String> readPropertyValues(BaseElement element)
     {
-        if (element == null || element.getExtensionElements() == null)
-        {
-            return Map.of();
-        }
-        Map<String, String> values = new HashMap<>();
-        for (ExtensionElement container : element.getExtensionElements()
-                .getOrDefault("properties", List.of()))
-        {
-            if (container == null || container.getChildElements() == null)
-            {
-                continue;
-            }
-            for (ExtensionElement property : container.getChildElements()
-                    .getOrDefault("property", List.of()))
-            {
-                String name = property.getAttributeValue(null, "name");
-                if (!CONFIG_PROPERTY.equals(name))
-                {
-                    continue;
-                }
-                if (values.put(name, property.getAttributeValue(null, "value")) != null)
-                {
-                    throw new IllegalArgumentException("条件分支受控属性不能重复");
-                }
-            }
-        }
-        return Map.copyOf(values);
+        return WorkflowBpmnProperties.read(element, CONFIG_PROPERTY::equals,
+                "条件分支受控属性不能重复");
     }
 }

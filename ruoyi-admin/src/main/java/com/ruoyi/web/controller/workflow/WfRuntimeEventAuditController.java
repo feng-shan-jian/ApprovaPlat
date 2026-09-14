@@ -29,8 +29,7 @@ public class WfRuntimeEventAuditController extends BaseController
 
     /**
      * 创建运行事件审计 Controller。
-     * @param runtimeEventService WorkflowRuntimeEventService，运行事件领域服务
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfRuntimeEventAuditController(WorkflowRuntimeEventService runtimeEventService)
     {

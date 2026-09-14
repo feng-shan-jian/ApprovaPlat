@@ -67,9 +67,7 @@ public class WfModelController extends BaseController
     /**
      * 创建流程模型 Controller。
      *
-     * @param modelService WorkflowModelService，模型版本和部署业务服务
-     * @param categoryService IWfCategoryService，导出时解析分类名称的业务服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfModelController(WorkflowModelService modelService,
             IWfCategoryService categoryService,

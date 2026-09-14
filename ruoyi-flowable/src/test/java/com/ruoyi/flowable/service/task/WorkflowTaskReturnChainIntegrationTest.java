@@ -88,7 +88,8 @@ class WorkflowTaskReturnChainIntegrationTest
     private RuntimeService runtimeService;
     private TaskService taskService;
     private HistoryService historyService;
-    private WorkflowTaskLifecycleService lifecycleService;
+    private WorkflowTaskReturnApplicationService returnApplicationService;
+    private WorkflowApplicationResubmitApplicationService resubmitApplicationService;
     private WorkflowTaskCopyService taskCopyService;
     private WorkflowNotificationService notificationService;
     private WorkflowAttachmentService attachmentService;
@@ -144,8 +145,7 @@ class WorkflowTaskReturnChainIntegrationTest
         WorkflowMultiInstanceGroupTransitionService groupTransitionService =
                 mock(WorkflowMultiInstanceGroupTransitionService.class);
 
-        WorkflowTaskReturnApplicationService returnApplicationService =
-                new WorkflowTaskReturnApplicationService(engineOperations,
+        returnApplicationService = new WorkflowTaskReturnApplicationService(engineOperations,
                         new WorkflowTaskRequestValidator(),
                         new WorkflowTaskRuntimeReader(runtimeService, taskService,
                                 historyService),
@@ -158,8 +158,7 @@ class WorkflowTaskReturnChainIntegrationTest
                         new WorkflowTaskConcurrencyExecutor(),
                         groupTransitionService, taskCopyService,
                         notificationService, runtimeService);
-        WorkflowApplicationResubmitApplicationService resubmitApplicationService =
-                new WorkflowApplicationResubmitApplicationService(engineOperations,
+        resubmitApplicationService = new WorkflowApplicationResubmitApplicationService(engineOperations,
                         new WorkflowTaskRequestValidator(),
                         new WorkflowTaskRuntimeReader(runtimeService, taskService,
                                 historyService),
@@ -172,12 +171,6 @@ class WorkflowTaskReturnChainIntegrationTest
                         new WorkflowStartVariableValidator(
                                 new WorkflowFormTemplateValidator()),
                         attachmentService, notificationService, runtimeService);
-        lifecycleService = new WorkflowTaskLifecycleService(
-                mock(WorkflowProcessCancelApplicationService.class),
-                mock(WorkflowTaskRevokeApplicationService.class),
-                mock(WorkflowTaskCompletionApplicationService.class),
-                mock(WorkflowTaskRejectionApplicationService.class),
-                returnApplicationService, resubmitApplicationService);
     }
 
     /**
@@ -206,7 +199,7 @@ class WorkflowTaskReturnChainIntegrationTest
     {
         ReturnScenario scenario = startAtSecondApproval();
 
-        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+        returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
                 scenario.secondTask().getId(), "资料需要修改", List.of()));
 
         HistoricTaskInstance historicSource = historyService.createHistoricTaskInstanceQuery()
@@ -240,12 +233,12 @@ class WorkflowTaskReturnChainIntegrationTest
     void resubmitsApplicationAndRestoresOriginalAssignment()
     {
         ReturnScenario scenario = startAtSecondApproval();
-        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+        returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
                 scenario.secondTask().getId(), "请更新申请标题", List.of()));
         Task returnedTask = requireSingleTask(scenario.instance().getId(), "firstApproval");
 
         currentUserId.set(APPLICANT_ID);
-        lifecycleService.resubmitApplication(new WorkflowApplicationResubmitRequest(
+        resubmitApplicationService.resubmitApplication(new WorkflowApplicationResubmitRequest(
                 returnedTask.getId(), Map.of("requestTitle", "修改后申请")));
 
         Task resubmittedTask = requireSingleTask(
@@ -287,7 +280,7 @@ class WorkflowTaskReturnChainIntegrationTest
     void projectsApplicationResubmitCapabilityWithoutSideEffects()
     {
         ReturnScenario scenario = startAtSecondApproval();
-        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+        returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
                 scenario.secondTask().getId(), "请补充申请信息", List.of()));
         Task returnedTask = requireSingleTask(scenario.instance().getId(), "firstApproval");
         currentUserId.set(APPLICANT_ID);
@@ -309,7 +302,7 @@ class WorkflowTaskReturnChainIntegrationTest
         assertThat(taskService.getTaskAttachments(returnedTask.getId())).isEmpty();
         clearInvocations(attachmentService, notificationService);
 
-        assertThat(lifecycleService.isApplicationResubmitAllowed(
+        assertThat(resubmitApplicationService.isApplicationResubmitAllowed(
                 returnedTask.getId())).isTrue();
 
         Task unchangedTask = requireSingleTask(
@@ -345,27 +338,27 @@ class WorkflowTaskReturnChainIntegrationTest
     @Test
     void normalizesExpectedResubmitIneligibilityAcrossLifecycle()
     {
-        assertThat(lifecycleService.isApplicationResubmitAllowed(" ")).isFalse();
-        assertThat(lifecycleService.isApplicationResubmitAllowed("missing-task")).isFalse();
+        assertThat(resubmitApplicationService.isApplicationResubmitAllowed(" ")).isFalse();
+        assertThat(resubmitApplicationService.isApplicationResubmitAllowed("missing-task")).isFalse();
 
         ReturnScenario scenario = startAtSecondApproval();
-        assertThat(lifecycleService.isApplicationResubmitAllowed(
+        assertThat(resubmitApplicationService.isApplicationResubmitAllowed(
                 scenario.secondTask().getId())).isFalse();
-        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+        returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
                 scenario.secondTask().getId(), "请修改申请", List.of()));
         Task returnedTask = requireSingleTask(scenario.instance().getId(), "firstApproval");
 
-        assertThat(lifecycleService.isApplicationResubmitAllowed(
+        assertThat(resubmitApplicationService.isApplicationResubmitAllowed(
                 scenario.secondTask().getId())).isFalse();
-        assertThat(lifecycleService.isApplicationResubmitAllowed(
+        assertThat(resubmitApplicationService.isApplicationResubmitAllowed(
                 returnedTask.getId())).isFalse();
         currentUserId.set(APPLICANT_ID);
-        assertThat(lifecycleService.isApplicationResubmitAllowed(
+        assertThat(resubmitApplicationService.isApplicationResubmitAllowed(
                 returnedTask.getId())).isTrue();
 
-        lifecycleService.resubmitApplication(new WorkflowApplicationResubmitRequest(
+        resubmitApplicationService.resubmitApplication(new WorkflowApplicationResubmitRequest(
                 returnedTask.getId(), Map.of("requestTitle", "再次提交")));
-        assertThat(lifecycleService.isApplicationResubmitAllowed(
+        assertThat(resubmitApplicationService.isApplicationResubmitAllowed(
                 returnedTask.getId())).isFalse();
     }
 
@@ -381,7 +374,7 @@ class WorkflowTaskReturnChainIntegrationTest
     void rejectsResubmitProtocolDriftWithoutWeakeningWriteGate(String driftKind)
     {
         ReturnScenario scenario = startAtSecondApproval();
-        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+        returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
                 scenario.secondTask().getId(), "请修正材料", List.of()));
         Task returnedTask = requireSingleTask(scenario.instance().getId(), "firstApproval");
         currentUserId.set(APPLICANT_ID);
@@ -402,9 +395,9 @@ class WorkflowTaskReturnChainIntegrationTest
         }
         clearInvocations(attachmentService, notificationService);
 
-        assertThat(lifecycleService.isApplicationResubmitAllowed(
+        assertThat(resubmitApplicationService.isApplicationResubmitAllowed(
                 returnedTask.getId())).isFalse();
-        assertThatThrownBy(() -> lifecycleService.resubmitApplication(
+        assertThatThrownBy(() -> resubmitApplicationService.resubmitApplication(
                 new WorkflowApplicationResubmitRequest(returnedTask.getId(),
                         Map.of("requestTitle", "不应提交"))))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
@@ -426,7 +419,7 @@ class WorkflowTaskReturnChainIntegrationTest
     void propagatesDamagedSubmissionSnapshotFromResubmitCapability()
     {
         ReturnScenario scenario = startAtSecondApproval();
-        lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+        returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
                 scenario.secondTask().getId(), "请更新申请", List.of()));
         Task returnedTask = requireSingleTask(scenario.instance().getId(), "firstApproval");
         currentUserId.set(APPLICANT_ID);
@@ -434,7 +427,7 @@ class WorkflowTaskReturnChainIntegrationTest
                 WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, "{");
         clearInvocations(attachmentService, notificationService);
 
-        assertThatThrownBy(() -> lifecycleService.isApplicationResubmitAllowed(
+        assertThatThrownBy(() -> resubmitApplicationService.isApplicationResubmitAllowed(
                 returnedTask.getId()))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
                         assertThat(exception.getCode()).isEqualTo(HttpStatus.ERROR));
@@ -466,8 +459,8 @@ class WorkflowTaskReturnChainIntegrationTest
                 .filter(task -> firstHistoricNode.equals(task.getTaskDefinitionKey()))
                 .findFirst().orElseThrow();
 
-        assertThat(lifecycleService.isTaskReturnAllowed(sourceTask.getId())).isFalse();
-        assertThatThrownBy(() -> lifecycleService.returnTask(new WorkflowTaskReturnRequest(
+        assertThat(returnApplicationService.isTaskReturnAllowed(sourceTask.getId())).isFalse();
+        assertThatThrownBy(() -> returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
                 sourceTask.getId(), "并行结构不允许退回", List.of())))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
                         assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
@@ -500,7 +493,7 @@ class WorkflowTaskReturnChainIntegrationTest
         runtimeService.updateBusinessStatus(scenario.instance().getId(),
                 WorkflowProcessStartService.RUNNING_STATUS);
 
-        assertThat(lifecycleService.isTaskReturnAllowed(
+        assertThat(returnApplicationService.isTaskReturnAllowed(
                 scenario.secondTask().getId())).isTrue();
         assertThat(taskService.getProcessInstanceComments(
                 scenario.instance().getId(), "RETURN")).isEmpty();
@@ -519,9 +512,9 @@ class WorkflowTaskReturnChainIntegrationTest
         ReturnScenario scenario = startAtSecondApproval();
         runtimeService.updateBusinessStatus(scenario.instance().getId(), businessStatus);
 
-        assertThat(lifecycleService.isTaskReturnAllowed(
+        assertThat(returnApplicationService.isTaskReturnAllowed(
                 scenario.secondTask().getId())).isFalse();
-        assertThatThrownBy(() -> lifecycleService.returnTask(
+        assertThatThrownBy(() -> returnApplicationService.returnTask(
                 new WorkflowTaskReturnRequest(scenario.secondTask().getId(),
                         "冲突状态不得退回", List.of())))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
@@ -544,9 +537,9 @@ class WorkflowTaskReturnChainIntegrationTest
         runtimeService.removeVariable(scenario.instance().getId(),
                 WorkflowProcessStartService.PROCESS_STATUS_VARIABLE);
 
-        assertThat(lifecycleService.isTaskReturnAllowed(
+        assertThat(returnApplicationService.isTaskReturnAllowed(
                 scenario.secondTask().getId())).isFalse();
-        assertThatThrownBy(() -> lifecycleService.returnTask(
+        assertThatThrownBy(() -> returnApplicationService.returnTask(
                 new WorkflowTaskReturnRequest(scenario.secondTask().getId(),
                         "缺失运行态不得退回", List.of())))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
@@ -565,9 +558,9 @@ class WorkflowTaskReturnChainIntegrationTest
                 WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
 
-        assertThat(lifecycleService.isTaskReturnAllowed(
+        assertThat(returnApplicationService.isTaskReturnAllowed(
                 scenario.secondTask().getId())).isFalse();
-        assertThatThrownBy(() -> lifecycleService.returnTask(
+        assertThatThrownBy(() -> returnApplicationService.returnTask(
                 new WorkflowTaskReturnRequest(scenario.secondTask().getId(),
                         "非运行态不得退回", List.of())))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->

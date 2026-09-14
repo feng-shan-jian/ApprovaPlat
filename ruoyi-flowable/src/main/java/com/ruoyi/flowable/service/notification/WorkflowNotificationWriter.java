@@ -50,9 +50,7 @@ public class WorkflowNotificationWriter
 
     /**
      * 创建通知写入器。
-     * @param jdbcTemplate JdbcTemplate，inbox 和外部 Outbox 批量写入入口
-     * @param outboxService WorkflowNotificationOutboxService，新增外部投递审计入口
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowNotificationWriter(JdbcTemplate jdbcTemplate,
             WorkflowNotificationOutboxService outboxService)
@@ -324,8 +322,7 @@ public class WorkflowNotificationWriter
     {
         /**
          * 冻结实际接收人集合。
-         * @param recipientUserIds Set&lt;String&gt;，实际可登记接收人
-         * @return void，构造后的集合不可修改
+         * 构造后的集合不可修改
          */
         public WriteResult
         {

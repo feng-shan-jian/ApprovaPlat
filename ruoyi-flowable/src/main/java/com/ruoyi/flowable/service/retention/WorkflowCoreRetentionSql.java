@@ -69,7 +69,7 @@ final class WorkflowCoreRetentionSql
 
     /**
      * 禁止实例化固定 SQL 容器。
-     * @return 无返回值，仅由 JVM 执行私有构造
+     * 仅由 JVM 执行私有构造
      */
     private WorkflowCoreRetentionSql()
     {

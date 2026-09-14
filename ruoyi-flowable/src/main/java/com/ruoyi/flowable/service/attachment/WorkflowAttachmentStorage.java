@@ -70,8 +70,6 @@ public class WorkflowAttachmentStorage
 
     /**
      * 创建生产附件存储。
-     * @param profile String，若依 profile 根目录
-     * @param properties WorkflowAttachmentProperties，附件限制配置
      */
     @Autowired
     public WorkflowAttachmentStorage(@Value("${ruoyi.profile}") String profile,
@@ -82,8 +80,6 @@ public class WorkflowAttachmentStorage
 
     /**
      * 创建指定根目录的附件存储。
-     * @param profileRoot Path，profile 根目录
-     * @param maxSize long，单文件大小上限
      */
     public WorkflowAttachmentStorage(Path profileRoot, long maxSize)
     {
@@ -251,7 +247,6 @@ public class WorkflowAttachmentStorage
      * @param storageKey String，对象键
      * @param expectedSize long，期望大小
      * @param expectedSha256 String，期望摘要
-     * @return void，无返回值
      * @throws ServiceException 物理文件与数据库摘要不一致
      */
     public void verify(String storageKey, long expectedSize, String expectedSha256)
@@ -600,7 +595,6 @@ public class WorkflowAttachmentStorage
     /**
      * 使用拒绝符号链接的通道回读固定探针正文。
      * @param target Path，日期目录中的探针文件
-     * @return void，无返回值
      * @throws IOException 探针类型、大小或正文不一致
      * @throws ServiceException 探针不是私有根内的普通文件
      */
@@ -651,7 +645,6 @@ public class WorkflowAttachmentStorage
 
     /**
      * 校验私有根未被替换。
-     * @return void，无返回值
      * @throws IOException 根目录不存在、链接或真实路径变化
      */
     private void verifyStorageRoot() throws IOException
@@ -666,7 +659,6 @@ public class WorkflowAttachmentStorage
     /**
      * 校验普通目录。
      * @param directory Path，目录路径
-     * @return void，无返回值
      * @throws IOException 目录为链接、特殊文件或不存在
      */
     private void requireDirectory(Path directory) throws IOException
@@ -682,7 +674,6 @@ public class WorkflowAttachmentStorage
     /**
      * 校验普通文件并确认真实路径仍在固定根内。
      * @param file Path，文件路径
-     * @return void，无返回值
      * @throws IOException 文件不存在、链接或越界
      * @throws ServiceException 文件不是私有根内的普通文件
      */
@@ -706,7 +697,6 @@ public class WorkflowAttachmentStorage
      * 优先使用 ATOMIC_MOVE 发布且不覆盖已有对象；不支持时回退同卷普通移动。
      * @param source Path，临时文件
      * @param destination Path，最终文件
-     * @return void，无返回值
      * @throws IOException 原子移动不支持且普通同卷移动失败，或目标已存在
      */
     private void moveWithoutReplace(Path source, Path destination) throws IOException
@@ -885,7 +875,6 @@ public class WorkflowAttachmentStorage
     /**
      * 应用私有目录的 POSIX 权限；非 POSIX 文件系统保持部署 ACL。
      * @param directory Path，已校验的私有目录
-     * @return void，无返回值
      * @throws IOException 权限设置失败
      */
     private void applyDirectoryPermissions(Path directory) throws IOException
@@ -902,7 +891,6 @@ public class WorkflowAttachmentStorage
     /**
      * 应用私有文件的 POSIX 权限；非 POSIX 文件系统保持部署 ACL。
      * @param file Path，已创建的私有文件
-     * @return void，无返回值
      * @throws IOException 权限设置失败
      */
     private void applyFilePermissions(Path file) throws IOException

@@ -577,7 +577,7 @@ public class WorkflowTaskMovementPolicy
         /**
          * 冻结节点列表并拒绝空或重复计划。
          *
-         * @return 无返回值，构造时完成不可变约束
+         * 构造时完成不可变约束
          */
         public RevokeMovementPlan
         {
@@ -605,7 +605,7 @@ public class WorkflowTaskMovementPolicy
         /**
          * 冻结并校验节点集合，后续轮次准备不得接受空白或重复节点。
          *
-         * @return 无返回值，构造时完成不可变约束
+         * 构造时完成不可变约束
          */
         public ControlledReturnPathPlan
         {
@@ -642,7 +642,7 @@ public class WorkflowTaskMovementPolicy
         /**
          * 冻结图遍历结果中的受控节点集合。
          *
-         * @return 无返回值，构造时完成不可变复制
+         * 构造时完成不可变复制
          */
         private PathEvaluation
         {

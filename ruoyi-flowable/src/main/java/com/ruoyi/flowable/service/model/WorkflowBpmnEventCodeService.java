@@ -29,9 +29,7 @@ public class WorkflowBpmnEventCodeService
 
     /**
      * 创建 BPMN 事件目录服务。
-     * @param engineOperations WorkflowEngineOperations，正式事务和当前身份边界
-     * @param eventMapper WfBpmnEventMapper，目录、审计和通知数据访问层
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowBpmnEventCodeService(WorkflowEngineOperations engineOperations,
             WfBpmnEventMapper eventMapper)

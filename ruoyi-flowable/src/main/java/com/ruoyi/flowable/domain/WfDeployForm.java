@@ -49,7 +49,6 @@ public class WfDeployForm extends BaseEntity
     /**
      * 设置部署主键。
      * @param deployId String，Flowable 部署主键
-     * @return void，无返回值
      */
     public void setDeployId(String deployId)
     {
@@ -68,7 +67,6 @@ public class WfDeployForm extends BaseEntity
     /**
      * 设置快照来源类型。
      * @param sourceType String，TEMPLATE 或 EMBEDDED
-     * @return void，无返回值
      */
     public void setSourceType(String sourceType)
     {
@@ -87,7 +85,6 @@ public class WfDeployForm extends BaseEntity
     /**
      * 设置来源表单主键。
      * @param formId Long，来源表单主键
-     * @return void，无返回值
      */
     public void setFormId(Long formId)
     {
@@ -106,7 +103,6 @@ public class WfDeployForm extends BaseEntity
     /**
      * 设置表单键。
      * @param formKey String，BPMN 表单键
-     * @return void，无返回值
      */
     public void setFormKey(String formKey)
     {
@@ -125,7 +121,6 @@ public class WfDeployForm extends BaseEntity
     /**
      * 设置节点键。
      * @param nodeKey String，BPMN 节点键
-     * @return void，无返回值
      */
     public void setNodeKey(String nodeKey)
     {
@@ -144,7 +139,6 @@ public class WfDeployForm extends BaseEntity
     /**
      * 设置快照表单名称。
      * @param formName String，部署时表单名称
-     * @return void，无返回值
      */
     public void setFormName(String formName)
     {
@@ -163,7 +157,6 @@ public class WfDeployForm extends BaseEntity
     /**
      * 设置快照节点名称。
      * @param nodeName String，部署时节点名称
-     * @return void，无返回值
      */
     public void setNodeName(String nodeName)
     {
@@ -182,7 +175,6 @@ public class WfDeployForm extends BaseEntity
     /**
      * 设置不可变表单快照。
      * @param content String，部署时固化的表单 JSON
-     * @return void，无返回值
      */
     public void setContent(String content)
     {
@@ -201,7 +193,6 @@ public class WfDeployForm extends BaseEntity
     /**
      * 设置逻辑删除标志。
      * @param delFlag String，逻辑删除标志
-     * @return void，无返回值
      */
     public void setDelFlag(String delFlag)
     {

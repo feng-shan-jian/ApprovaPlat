@@ -65,7 +65,7 @@ public final class WorkflowMultiInstanceModelContract
     /**
      * 禁止实例化纯模型契约工具类。
      *
-     * @return 无返回值，调用时始终抛出 AssertionError
+     * 调用时始终抛出 AssertionError
      */
     private WorkflowMultiInstanceModelContract()
     {
@@ -91,8 +91,6 @@ public final class WorkflowMultiInstanceModelContract
         /**
          * 创建并冻结已经通过严格解析的指定身份配置。
          *
-         * @param type ConfiguredIdentityType，USER、ROLE 或 DEPT
-         * @param targetIds List&lt;Long&gt;，保持设计顺序且唯一的正式身份主键
          * @return 无返回值；类型或主键集合为空时拒绝构造
          */
         public ConfiguredIdentity

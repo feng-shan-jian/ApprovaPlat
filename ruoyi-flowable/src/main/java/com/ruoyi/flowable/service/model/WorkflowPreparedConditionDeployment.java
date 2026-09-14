@@ -14,7 +14,7 @@ public record WorkflowPreparedConditionDeployment(byte[] compiledBpmn,
 {
     /**
      * 防御复制编译资源和快照集合。
-     * @return 无返回值，构造结果不可被调用方原地修改
+     * 构造结果不可被调用方原地修改
      */
     public WorkflowPreparedConditionDeployment
     {

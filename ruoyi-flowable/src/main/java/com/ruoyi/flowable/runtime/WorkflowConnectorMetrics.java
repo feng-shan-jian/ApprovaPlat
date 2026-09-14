@@ -23,8 +23,7 @@ public class WorkflowConnectorMetrics
 
     /**
      * 注册固定连接器类型和结果标签，禁止实例、端点、SQL 或错误正文形成高基数标签。
-     * @param registry MeterRegistry，应用统一 Micrometer 注册表
-     * @return void，构造后可直接记录连接器尝试
+     * 构造后可直接记录连接器尝试
      */
     public WorkflowConnectorMetrics(MeterRegistry registry)
     {

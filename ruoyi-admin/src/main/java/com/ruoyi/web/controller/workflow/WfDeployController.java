@@ -40,8 +40,7 @@ public class WfDeployController extends BaseController
     /**
      * 创建流程部署 Controller。
      *
-     * @param deploymentService WorkflowDeploymentService，流程定义与部署业务服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfDeployController(WorkflowDeploymentService deploymentService)
     {

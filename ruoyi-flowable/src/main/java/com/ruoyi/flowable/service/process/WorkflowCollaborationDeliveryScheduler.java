@@ -24,11 +24,7 @@ public class WorkflowCollaborationDeliveryScheduler
 
     /**
      * 创建协作消息后台 worker。
-     * @param outboxService WorkflowCollaborationOutboxService，出站领取和投递服务
-     * @param messageService WorkflowCollaborationMessageService，入站自动重试服务
-     * @param properties WorkflowCollaborationProperties，单轮批次上限
-     * @param metrics WorkflowCollaborationMetrics，固定低基数失败指标
-     * @return void，构造后由 Spring 调度
+     * 构造后由 Spring 调度
      */
     public WorkflowCollaborationDeliveryScheduler(WorkflowCollaborationOutboxService outboxService,
             WorkflowCollaborationMessageService messageService,

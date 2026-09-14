@@ -55,19 +55,7 @@ public class WorkflowApplicationResubmitApplicationService
 
     /**
      * 创建独立申请重提应用服务。
-     * @param engineOperations WorkflowEngineOperations，正式事务、身份和异常翻译入口
-     * @param requestValidator WorkflowTaskRequestValidator，请求字段门禁
-     * @param runtimeReader WorkflowTaskRuntimeReader，任务、实例和历史事实读取器
-     * @param returnedTaskStateService WorkflowReturnedTaskStateService，退回状态唯一边界
-     * @param auditWriter WorkflowTaskActionAuditWriter，结构化动作审计写入器
-     * @param concurrencyExecutor WorkflowTaskConcurrencyExecutor，并发对象消失翻译器
-     * @param groupTransitionService WorkflowMultiInstanceGroupTransitionService，整组重建边界
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署开始表单仓库
-     * @param variableValidator WorkflowStartVariableValidator，开始表单补丁校验器
-     * @param attachmentService WorkflowAttachmentService，重提附件投影和绑定服务
-     * @param notificationService WorkflowNotificationService，任务通知服务
-     * @param runtimeService RuntimeService，表单变量和普通迁移状态写入服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowApplicationResubmitApplicationService(
             WorkflowEngineOperations engineOperations,

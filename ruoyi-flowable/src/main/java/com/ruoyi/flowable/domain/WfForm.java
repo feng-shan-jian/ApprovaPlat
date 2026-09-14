@@ -42,7 +42,6 @@ public class WfForm extends BaseEntity
     /**
      * 设置表单主键。
      * @param formId Long，表单主键
-     * @return void，无返回值
      */
     public void setFormId(Long formId)
     {
@@ -61,7 +60,6 @@ public class WfForm extends BaseEntity
     /**
      * 设置表单名称。
      * @param formName String，表单名称
-     * @return void，无返回值
      */
     public void setFormName(String formName)
     {
@@ -80,7 +78,6 @@ public class WfForm extends BaseEntity
     /**
      * 设置表单 JSON 内容。
      * @param content String，表单 JSON 内容
-     * @return void，无返回值
      */
     public void setContent(String content)
     {
@@ -99,7 +96,6 @@ public class WfForm extends BaseEntity
     /**
      * 设置逻辑删除标志。
      * @param delFlag String，逻辑删除标志
-     * @return void，无返回值
      */
     public void setDelFlag(String delFlag)
     {

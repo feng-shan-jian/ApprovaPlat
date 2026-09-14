@@ -28,9 +28,7 @@ public class WfRuntimeEventController extends BaseController
 
     /**
      * 创建同时支持单实例运行事件和跨 Participant 协作消息的入口。
-     * @param runtimeEventService WorkflowRuntimeEventService，既有消息/信号/ReceiveTask 入口
-     * @param collaborationMessageService WorkflowCollaborationMessageService，协作消息可靠投递服务
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfRuntimeEventController(WorkflowRuntimeEventService runtimeEventService,
             WorkflowCollaborationMessageService collaborationMessageService)

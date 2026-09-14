@@ -96,8 +96,7 @@ public class WorkflowStartVariableValidator
     /**
      * 创建开始表单变量验证器。
      *
-     * @param templateValidator WorkflowFormTemplateValidator，部署表单快照结构与安全验证器
-     * @return 无返回值，构造后由 Spring 管理该组件
+     * 构造后由 Spring 管理该组件
      */
     public WorkflowStartVariableValidator(WorkflowFormTemplateValidator templateValidator)
     {
@@ -1265,8 +1264,6 @@ public class WorkflowStartVariableValidator
 
         /**
          * 记录一个变量值节点。
-         *
-         * @return void，无返回值
          */
         private void increment()
         {

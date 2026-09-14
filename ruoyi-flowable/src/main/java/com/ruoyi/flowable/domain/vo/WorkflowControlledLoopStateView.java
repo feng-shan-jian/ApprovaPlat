@@ -24,7 +24,7 @@ public record WorkflowControlledLoopStateView(String activityId, String activity
 {
     /**
      * 复制循环轮次集合并核验计数边界。
-     * @return 无返回值，构造后集合不可修改
+     * 构造后集合不可修改
      */
     public WorkflowControlledLoopStateView
     {

@@ -3,8 +3,6 @@ package com.ruoyi.flowable.service.model;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -176,52 +174,10 @@ public final class WorkflowControlledLoopBpmnContract
      */
     public static void removeAuthorProperties(UserTask task)
     {
-        if (task == null || task.getExtensionElements() == null)
-        {
-            return;
-        }
-        Map<String, List<ExtensionElement>> extensionElements = task.getExtensionElements();
-        List<ExtensionElement> containers = extensionElements.get("properties");
-        if (containers == null || containers.isEmpty())
-        {
-            return;
-        }
-        List<ExtensionElement> remainingContainers = new ArrayList<>();
-        for (ExtensionElement container : containers)
-        {
-            Map<String, List<ExtensionElement>> children = container.getChildElements();
-            if (children == null)
-            {
-                remainingContainers.add(container);
-                continue;
-            }
-            List<ExtensionElement> properties = children.get("property");
-            if (properties == null)
-            {
-                remainingContainers.add(container);
-                continue;
-            }
-            List<ExtensionElement> remainingProperties = properties.stream()
-                    .filter(property -> !isReservedProperty(property.getAttributeValue(null, "name")))
-                    .toList();
-            if (!remainingProperties.isEmpty())
-            {
-                Map<String, List<ExtensionElement>> copiedChildren = new HashMap<>(children);
-                copiedChildren.put("property", new ArrayList<>(remainingProperties));
-                container.setChildElements(copiedChildren);
-                remainingContainers.add(container);
-            }
-        }
-        Map<String, List<ExtensionElement>> copiedExtensions = new HashMap<>(extensionElements);
-        if (remainingContainers.isEmpty())
-        {
-            copiedExtensions.remove("properties");
-        }
-        else
-        {
-            copiedExtensions.put("properties", remainingContainers);
-        }
-        task.setExtensionElements(copiedExtensions);
+        if (task == null || task.getExtensionElements() == null) return;
+        List<ExtensionElement> containers = task.getExtensionElements().get("properties");
+        if (containers == null || containers.isEmpty()) return;
+        WorkflowBpmnProperties.remove(task, WorkflowControlledLoopBpmnContract::isReservedProperty);
     }
 
     /**
@@ -232,35 +188,8 @@ public final class WorkflowControlledLoopBpmnContract
      */
     private static Map<String, String> readPropertyValues(UserTask task)
     {
-        if (task == null || task.getExtensionElements() == null)
-        {
-            return Map.of();
-        }
-        Map<String, String> values = new HashMap<>();
-        List<ExtensionElement> containers = task.getExtensionElements()
-                .getOrDefault("properties", List.of());
-        for (ExtensionElement container : containers)
-        {
-            if (container == null || container.getChildElements() == null)
-            {
-                continue;
-            }
-            for (ExtensionElement property : container.getChildElements()
-                    .getOrDefault("property", List.of()))
-            {
-                String name = property.getAttributeValue(null, "name");
-                if (!isReservedProperty(name))
-                {
-                    continue;
-                }
-                String old = values.put(name, property.getAttributeValue(null, "value"));
-                if (old != null)
-                {
-                    throw new IllegalArgumentException("受控循环属性不能重复");
-                }
-            }
-        }
-        return Map.copyOf(values);
+        return WorkflowBpmnProperties.read(task, WorkflowControlledLoopBpmnContract::isReservedProperty,
+                "受控循环属性不能重复");
     }
 
     /**

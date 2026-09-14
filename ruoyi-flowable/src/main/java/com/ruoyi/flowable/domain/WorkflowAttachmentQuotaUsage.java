@@ -11,9 +11,7 @@ public record WorkflowAttachmentQuotaUsage(long temporaryCount, long temporaryBy
     /**
      * 校验数据库聚合值不能为负数。
      *
-     * @param temporaryCount long，数据库聚合的附件数量
-     * @param temporaryBytes long，数据库聚合的文件总字节数
-     * @return 无返回值，非法聚合值会拒绝构造
+     * 非法聚合值会拒绝构造
      */
     public WorkflowAttachmentQuotaUsage
     {

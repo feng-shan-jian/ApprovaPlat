@@ -28,8 +28,7 @@ public class WfInstanceController extends BaseController
     /**
      * 创建流程实例管理 Controller。
      *
-     * @param processInstanceService WorkflowProcessInstanceService，受控实例写操作服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfInstanceController(WorkflowProcessInstanceService processInstanceService)
     {

@@ -33,8 +33,7 @@ public class WfIdentityController extends BaseController
     /**
      * 创建工作流身份目录 Controller。
      *
-     * @param identityDirectoryService WorkflowIdentityDirectoryService，正式身份主数据只读服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfIdentityController(WorkflowIdentityDirectoryService identityDirectoryService)
     {

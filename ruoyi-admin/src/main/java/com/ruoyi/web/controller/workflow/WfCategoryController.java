@@ -60,8 +60,7 @@ public class WfCategoryController extends BaseController
     /**
      * 创建工作流分类 Controller。
      *
-     * @param categoryService IWfCategoryService，分类领域服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfCategoryController(IWfCategoryService categoryService)
     {

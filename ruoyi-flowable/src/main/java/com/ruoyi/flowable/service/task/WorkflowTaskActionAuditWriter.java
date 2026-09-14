@@ -20,8 +20,7 @@ public class WorkflowTaskActionAuditWriter
     /**
      * 创建任务动作审计写入器。
      *
-     * @param taskService TaskService，Flowable comment 写入服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowTaskActionAuditWriter(TaskService taskService)
     {

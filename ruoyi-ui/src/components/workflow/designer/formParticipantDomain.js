@@ -53,6 +53,37 @@ const IDENTITY_SEARCH_CONTRACTS = Object.freeze({
   autoCopyGroups: Object.freeze({ type: 'group', capability: 'copy' })
 })
 
+export function createFormParticipantState() {
+  return {
+    formProtocolIssue: '',
+    formSource: 'TEMPLATE',
+    formKey: '',
+    embeddedFields: [],
+    formPermissionDefault: 'EDITABLE',
+    formPermissionFields: [],
+    participantRule: { type: '', targetIds: [], formField: '' },
+    dueDate: '',
+    priority: '',
+    taskCategory: '',
+    skipExpression: '',
+    localScope: false,
+    multiInstanceType: 'none',
+    multiInstanceApprovalMode: 'all',
+    multiInstanceMemberSource: 'dynamic',
+    configuredMultiInstanceIdentityIds: [],
+    collection: '',
+    elementVariable: '',
+    completionCondition: '',
+    loopMaximum: '',
+    loopCondition: '',
+    testBefore: false,
+    controlledLoopMaxIterations: 3,
+    controlledLoopDecisionVariable: '',
+    controlledLoopRepeatValue: '',
+    controlledLoopExitValue: ''
+  }
+}
+
 /**
  * 判断属性是否由表单、参与者或受控多实例模块独占维护。
  * @param {unknown} name Flowable Property 名称。
@@ -310,15 +341,6 @@ export function createFormParticipantDomain(context) {
       { name: MULTI_INSTANCE_IDENTITY_PROPERTIES.type, value: identity.type },
       { name: MULTI_INSTANCE_IDENTITY_PROPERTIES.ids, value: identity.ids.join(',') }
     ]
-  }
-
-  /**
-   * 将 Flowable 逗号分隔身份列表转换为去重数组。
-   * @param {unknown} value Flowable 属性值。
-   * @returns {string[]} 去除空值后的身份数组。
-   */
-  function splitValues(value) {
-    return [...new Set(String(value || '').split(',').map(item => item.trim()).filter(Boolean))]
   }
 
   /**
@@ -1023,7 +1045,57 @@ export function createFormParticipantDomain(context) {
     return ''
   }
 
+  function loadFormParticipantState(businessObject) {
+    propertyState.formKey = businessObject.get('flowable:formKey') || ''
+    propertyState.embeddedFields = readEmbeddedFormFields(businessObject)
+    propertyState.formSource = propertyState.embeddedFields.length ? 'EMBEDDED' : 'TEMPLATE'
+    loadFormPermissionState(businessObject)
+    propertyState.dueDate = businessObject.get('flowable:dueDate') || ''
+    propertyState.priority = businessObject.get('flowable:priority') || ''
+    propertyState.taskCategory = businessObject.get('flowable:category') || ''
+    propertyState.skipExpression = businessObject.get('flowable:skipExpression') || ''
+    propertyState.localScope = businessObject.get('flowable:localScope') === true
+    propertyState.participantRule = readParticipantRule(businessObject)
+    const controlledLoop = readControlledLoop(businessObject)
+    if (controlledLoop) {
+      propertyState.multiInstanceType = 'approvalLoop'
+      propertyState.controlledLoopMaxIterations = controlledLoop.maxIterations
+      propertyState.controlledLoopDecisionVariable = controlledLoop.decisionVariable
+      propertyState.controlledLoopRepeatValue = controlledLoop.repeatValue
+      propertyState.controlledLoopExitValue = controlledLoop.exitValue
+    }
+  }
+
+  function loadMultiInstanceState(businessObject) {
+    const loop = businessObject.loopCharacteristics
+    if (loop) {
+      if (loop.$type === 'bpmn:StandardLoopCharacteristics') {
+        propertyState.multiInstanceType = 'standard'
+        propertyState.loopMaximum = loop.loopMaximum == null ? '' : String(loop.loopMaximum)
+        propertyState.loopCondition = loop.loopCondition?.body || ''
+        propertyState.testBefore = loop.testBefore === true
+        return
+      }
+      propertyState.collection = loop.get('flowable:collection') || ''
+      propertyState.elementVariable = loop.get('flowable:elementVariable') || ''
+      propertyState.completionCondition = loop.completionCondition?.body || ''
+      if (isControlledMultiInstanceLoop(loop)) {
+        propertyState.multiInstanceType = 'controlled'
+        const configuredIdentity = readConfiguredMultiInstanceIdentity(businessObject)
+        propertyState.multiInstanceMemberSource = isConfiguredMultiInstanceLoop(loop)
+          ? (configuredIdentity?.source || '')
+          : isStartMultiInstanceLoop(loop) ? 'start' : 'dynamic'
+        propertyState.configuredMultiInstanceIdentityIds = configuredIdentity?.selectionValues || []
+        propertyState.multiInstanceApprovalMode = controlledMultiInstanceApprovalMode(loop)
+      } else {
+        propertyState.multiInstanceType = loop.isSequential ? 'sequential' : 'parallel'
+      }
+    }
+  }
+
   return {
+    loadFormParticipantState,
+    loadMultiInstanceState,
     multiInstanceOptions,
     multiInstanceApprovalOptions,
     controlledLoopFieldOptions,
@@ -1032,17 +1104,10 @@ export function createFormParticipantDomain(context) {
     handlePanelIdentityResolve,
     readParticipantRule,
     readControlledLoop,
-    readEmbeddedFormFields,
     isControlledMultiInstanceLoop,
-    controlledMultiInstanceApprovalMode,
-    isStartMultiInstanceLoop,
-    isConfiguredMultiInstanceLoop,
     normalizeConfiguredMultiInstanceIdentity,
-    readConfiguredMultiInstanceIdentity,
-    splitValues,
     resolveFormPermissionSourceFields,
     readTemplatePermissionPolicy,
-    loadFormPermissionState,
     updateFormSource,
     updateFormKey,
     updateEmbeddedForm,

@@ -40,7 +40,6 @@ public interface WorkflowJavaExtensionHandler
      * 使用已校验快照配置执行真实 Flowable 业务动作。
      * @param execution DelegateExecution，当前 Flowable 活动执行上下文
      * @param config JsonNode，运行前重新校验通过的不可变配置
-     * @return void，无返回值
      */
     void execute(DelegateExecution execution, JsonNode config);
 

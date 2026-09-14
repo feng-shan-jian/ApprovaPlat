@@ -15,9 +15,7 @@ public record PageResult<T>(List<T> rows, long total)
     /**
      * 创建分页结果并复制当前页集合，避免调用方修改服务层返回数据。
      *
-     * @param rows List&lt;T&gt;，当前页业务数据
-     * @param total long，符合查询条件的总记录数
-     * @return 无返回值，构造后得到不可变分页结果
+     * 构造后得到不可变分页结果
      */
     public PageResult
     {

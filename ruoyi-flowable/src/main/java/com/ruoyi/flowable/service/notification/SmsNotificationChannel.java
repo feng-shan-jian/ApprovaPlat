@@ -18,8 +18,7 @@ public class SmsNotificationChannel implements WorkflowNotificationChannel
 
     /**
      * 创建短信通知通道。
-     * @param smsService SysSmsService，短信供应商发送出口
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public SmsNotificationChannel(SysSmsService smsService)
     {

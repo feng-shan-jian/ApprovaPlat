@@ -52,16 +52,7 @@ public class WorkflowCollaborationOutboxService
 
     /**
      * 创建协作 outbox 服务。
-     * @param mapper WfCollaborationOutboxMapper，正式出站台账
-     * @param channelService WorkflowCollaborationChannelService，通道顺序游标
-     * @param auditService WorkflowCollaborationAuditService，逐次状态审计
-     * @param httpConnector WorkflowHttpConnector，冻结端点和认证 HTTP 出口
-     * @param repositoryService RepositoryService，流程定义到部署快照查询
-     * @param historyService HistoryService，发送方自然完成与取消终态判定
-     * @param engineOperations WorkflowEngineOperations，当前用户事务边界
-     * @param properties WorkflowCollaborationProperties，批次、租约和退避上限
-     * @param metrics WorkflowCollaborationMetrics，低基数运行指标
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowCollaborationOutboxService(WfCollaborationOutboxMapper mapper,
             WorkflowCollaborationChannelService channelService,

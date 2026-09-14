@@ -25,15 +25,7 @@ public class WorkflowJdbcDataRetentionCleaner implements WorkflowDataRetentionCl
 
     /**
      * 创建 JdbcTemplate 数据域清理器。
-     * @param domain WorkflowDataRetentionDomain，清理器唯一负责的固定数据域
-     * @param jdbcTemplate JdbcTemplate，正式 MySQL 数据访问入口
-     * @param retentionSupplier Supplier&lt;Duration&gt;，动态读取保留期
-     * @param batchSizeSupplier Supplier&lt;Integer&gt;，动态读取批次上限
-     * @param selectSql String，带行锁和稳定排序的主键领取 SQL
-     * @param deletePrefix String，主键 IN 条件前缀
-     * @param deleteSuffix String，重复终态和截止时间条件后缀
-     * @param oldestSql String，查询最早剩余终态时间的 SQL
-     * @return 无返回值，构造后由 Spring 事务代理调用
+     * 构造后由 Spring 事务代理调用
      */
     public WorkflowJdbcDataRetentionCleaner(WorkflowDataRetentionDomain domain,
             JdbcTemplate jdbcTemplate, Supplier<Duration> retentionSupplier,

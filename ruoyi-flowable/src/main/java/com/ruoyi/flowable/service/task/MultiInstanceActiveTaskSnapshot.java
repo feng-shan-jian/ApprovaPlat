@@ -17,12 +17,7 @@ public record MultiInstanceActiveTaskSnapshot(String taskId, String executionId,
     /**
      * 校验跨服务传递的任务事实包含稳定主键和办理人。
      *
-     * @param taskId String，任务主键
-     * @param executionId String，child execution 主键
-     * @param assignee String，办理人主键
-     * @param owner String，可为空的委派 owner
-     * @param delegated boolean，是否处于委派状态
-     * @return 无返回值，非法事实拒绝构造
+     * 非法事实拒绝构造
      */
     public MultiInstanceActiveTaskSnapshot
     {

@@ -17,10 +17,7 @@ public record WorkflowBpmnDocument(BpmnModel bpmnModel, String bpmnXml,
     /**
      * 创建已校验 BPMN 文档并复制表单引用集合。
      *
-     * @param bpmnModel BpmnModel，Flowable 8 公共 BPMN 模型
-     * @param bpmnXml String，严格 UTF-8 解码后的 BPMN XML
-     * @param formReferences List&lt;WorkflowBpmnFormReference&gt;，节点表单引用
-     * @return 无返回值，构造后得到受控 BPMN 文档
+     * 构造后得到受控 BPMN 文档
      */
     public WorkflowBpmnDocument
     {

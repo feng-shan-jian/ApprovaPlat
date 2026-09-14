@@ -14,7 +14,7 @@ public record WorkflowMultiInstanceTransitionMembers(
     /**
      * 冻结迁移成员指令并保证覆盖与刷新两种模式互斥。
      *
-     * @return 无返回值，构造时拒绝空覆盖、重复成员或模式冲突
+     * 构造时拒绝空覆盖、重复成员或模式冲突
      */
     public WorkflowMultiInstanceTransitionMembers
     {

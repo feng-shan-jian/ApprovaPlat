@@ -28,7 +28,12 @@ import com.ruoyi.flowable.domain.dto.WorkflowApplicationResubmitRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskTransferRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskUnclaimRequest;
 import com.ruoyi.flowable.service.task.WorkflowTaskActionService;
-import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowProcessCancelApplicationService;
+import com.ruoyi.flowable.service.task.WorkflowTaskRevokeApplicationService;
+import com.ruoyi.flowable.service.task.WorkflowTaskCompletionApplicationService;
+import com.ruoyi.flowable.service.task.WorkflowTaskRejectionApplicationService;
+import com.ruoyi.flowable.service.task.WorkflowTaskReturnApplicationService;
+import com.ruoyi.flowable.service.task.WorkflowApplicationResubmitApplicationService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
 
 /**
@@ -41,24 +46,41 @@ public class WfTaskController extends BaseController
 {
     private final WorkflowTaskActionService taskActionService;
 
-    private final WorkflowTaskLifecycleService taskLifecycleService;
+    private final WorkflowProcessCancelApplicationService cancelApplicationService;
+
+    private final WorkflowTaskRevokeApplicationService revokeApplicationService;
+
+    private final WorkflowTaskCompletionApplicationService completionApplicationService;
+
+    private final WorkflowTaskRejectionApplicationService rejectionApplicationService;
+
+    private final WorkflowTaskReturnApplicationService returnApplicationService;
+
+    private final WorkflowApplicationResubmitApplicationService resubmitApplicationService;
 
     private final WorkflowMultiInstanceService multiInstanceService;
 
     /**
      * 创建任务动作 Controller。
      *
-     * @param taskActionService WorkflowTaskActionService，认领、取消认领、完成委派、委派和转办服务
-     * @param taskLifecycleService WorkflowTaskLifecycleService，完成、驳回、退回、取消和撤回服务
-     * @param multiInstanceService WorkflowMultiInstanceService，动态并行多实例状态和调整服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfTaskController(WorkflowTaskActionService taskActionService,
-            WorkflowTaskLifecycleService taskLifecycleService,
+            WorkflowProcessCancelApplicationService cancelApplicationService,
+            WorkflowTaskRevokeApplicationService revokeApplicationService,
+            WorkflowTaskCompletionApplicationService completionApplicationService,
+            WorkflowTaskRejectionApplicationService rejectionApplicationService,
+            WorkflowTaskReturnApplicationService returnApplicationService,
+            WorkflowApplicationResubmitApplicationService resubmitApplicationService,
             WorkflowMultiInstanceService multiInstanceService)
     {
         this.taskActionService = taskActionService;
-        this.taskLifecycleService = taskLifecycleService;
+        this.cancelApplicationService = cancelApplicationService;
+        this.revokeApplicationService = revokeApplicationService;
+        this.completionApplicationService = completionApplicationService;
+        this.rejectionApplicationService = rejectionApplicationService;
+        this.returnApplicationService = returnApplicationService;
+        this.resubmitApplicationService = resubmitApplicationService;
         this.multiInstanceService = multiInstanceService;
     }
 
@@ -73,7 +95,7 @@ public class WfTaskController extends BaseController
     @PostMapping("/stopProcess")
     public AjaxResult stopProcess(@Valid @RequestBody WorkflowProcessCancelRequest request)
     {
-        taskLifecycleService.cancelProcess(request);
+        cancelApplicationService.cancelProcess(request);
         return success();
     }
 
@@ -88,7 +110,7 @@ public class WfTaskController extends BaseController
     @PostMapping("/revokeProcess")
     public AjaxResult revokeProcess(@Valid @RequestBody WorkflowProcessRevokeRequest request)
     {
-        taskLifecycleService.revokeProcess(request);
+        revokeApplicationService.revokeProcess(request);
         return success();
     }
 
@@ -136,7 +158,7 @@ public class WfTaskController extends BaseController
     @PostMapping("/complete")
     public AjaxResult complete(@Valid @RequestBody WorkflowTaskCompleteRequest request)
     {
-        taskLifecycleService.completeTask(request);
+        completionApplicationService.completeTask(request);
         return success();
     }
 
@@ -151,7 +173,7 @@ public class WfTaskController extends BaseController
     @PostMapping("/reject")
     public AjaxResult reject(@Valid @RequestBody WorkflowTaskRejectRequest request)
     {
-        taskLifecycleService.rejectTask(request);
+        rejectionApplicationService.rejectTask(request);
         return success();
     }
 
@@ -166,7 +188,7 @@ public class WfTaskController extends BaseController
     @PostMapping("/return")
     public AjaxResult returnTask(@Valid @RequestBody WorkflowTaskReturnRequest request)
     {
-        taskLifecycleService.returnTask(request);
+        returnApplicationService.returnTask(request);
         return success();
     }
 
@@ -181,7 +203,7 @@ public class WfTaskController extends BaseController
     @PostMapping("/resubmit")
     public AjaxResult resubmit(@Valid @RequestBody WorkflowApplicationResubmitRequest request)
     {
-        taskLifecycleService.resubmitApplication(request);
+        resubmitApplicationService.resubmitApplication(request);
         return success();
     }
 

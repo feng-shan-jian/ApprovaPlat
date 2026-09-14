@@ -20,7 +20,6 @@ import com.ruoyi.common.utils.html.EscapeUtil;
 public class XssHttpServletRequestWrapper extends HttpServletRequestWrapper
 {
     /**
-     * @param request
      */
     public XssHttpServletRequestWrapper(HttpServletRequest request)
     {

@@ -50,11 +50,7 @@ public class WorkflowNotificationPolicyService
 
     /**
      * 创建通知策略与偏好服务。
-     * @param jdbcTemplate JdbcTemplate，策略和偏好正式数据访问入口
-     * @param identityResolver WorkflowIdentityResolver，当前用户身份解析入口
-     * @param notificationCatalogService WorkflowNotificationCatalogService，真实流程和节点复核入口
-     * @param mailConfigService WorkflowMailConfigService，启用邮件策略前的 SMTP 可用性门禁
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowNotificationPolicyService(JdbcTemplate jdbcTemplate,
             WorkflowIdentityResolver identityResolver,

@@ -19,7 +19,6 @@ public final class WorkflowUserIdValueParser
 
     /**
      * 工具类不允许实例化。
-     * @return 无返回值
      */
     private WorkflowUserIdValueParser()
     {

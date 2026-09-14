@@ -24,9 +24,7 @@ public class WorkflowSlaBusinessCalendar implements BusinessCalendar
 
     /**
      * 创建 Flowable 业务日历实现。
-     * @param clock ClockReader，Flowable 可测试引擎时钟
-     * @param calendarService WorkflowBusinessCalendarService，正式业务日历计算服务
-     * @return 无返回值，由引擎配置器注册
+     * 由引擎配置器注册
      */
     public WorkflowSlaBusinessCalendar(ClockReader clock,
             WorkflowBusinessCalendarService calendarService)

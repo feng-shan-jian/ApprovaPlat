@@ -38,12 +38,7 @@ public class WorkflowProcessCancelApplicationService
     /**
      * 创建流程取消应用服务。
      *
-     * @param engineOperations WorkflowEngineOperations，正式事务、认证和异常翻译入口
-     * @param runtimeReader WorkflowTaskRuntimeReader，运行实例只读事实
-     * @param processInstanceService WorkflowProcessInstanceService，完整流程树终止写链
-     * @param taskService TaskService，活动任务意见写入服务
-     * @param auditWriter WorkflowTaskActionAuditWriter，结构化动作审计构造器
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowProcessCancelApplicationService(
             WorkflowEngineOperations engineOperations,

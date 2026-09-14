@@ -15,9 +15,7 @@ public record WorkflowPreparedCallActivityDeployment(byte[] compiledBpmn,
 {
     /**
      * 创建不可变部署准备结果。
-     * @param compiledBpmn byte[]，可执行 BPMN 字节
-     * @param snapshots List&lt;WfDeployCallActivitySnapshot&gt;，依赖快照
-     * @return 无返回值，构造后复制字节和列表
+     * 构造后复制字节和列表
      */
     public WorkflowPreparedCallActivityDeployment
     {

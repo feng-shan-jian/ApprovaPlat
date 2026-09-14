@@ -92,12 +92,7 @@ public class WfProcessController extends BaseController
     /**
      * 创建流程工作台 Controller。
      *
-     * @param definitionQueryService WorkflowProcessDefinitionQueryService，可发起定义、表单和 BPMN 查询服务
-     * @param instanceQueryService WorkflowProcessInstanceQueryService，我的流程、管理员实例和抄送查询服务
-     * @param taskQueryService WorkflowProcessTaskQueryService，待办、可认领和已办任务查询服务
-     * @param processDetailService WorkflowProcessDetailService，完整对象授权详情服务
-     * @param processInstanceService WorkflowProcessInstanceService，已结束历史删除服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfProcessController(WorkflowProcessDefinitionQueryService definitionQueryService,
             WorkflowProcessInstanceQueryService instanceQueryService,

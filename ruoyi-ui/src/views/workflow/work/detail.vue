@@ -15,16 +15,16 @@
       <div v-if="ready && !loading && (hasAnyTaskAction || canUrge)" class="workflow-detail__actions">
         <el-button v-if="canUrge" icon="Bell" :loading="urgeBusy" @click="openUrgeDialog">催办</el-button>
         <el-button
-          v-if="multiInstanceState?.addAllowed === true && hasPermission('workflow:process:approval')"
+          v-if="multiInstanceState?.addAllowed === true && proxy.$auth.hasPermi('workflow:process:approval')"
           icon="Plus"
           :disabled="multiInstanceBusy || multiInstanceDialogClosing || actionBusy"
           @click="openMultiInstanceDialog('ADD')"
         >加签</el-button>
         <el-button v-if="canUnclaim" :loading="actionBusy" @click="confirmUnclaim">取消认领</el-button>
         <el-button v-if="canResolve" type="primary" :loading="actionBusy" @click="openActionDialog('resolve')">完成委派</el-button>
-        <el-button v-if="canDelegate" @click="openUserAction('delegate')">委派</el-button>
-        <el-button v-if="canTransfer" @click="openUserAction('transfer')">转办</el-button>
-        <el-button v-if="canReturnTask" type="danger" plain @click="openReturnDialog">退回</el-button>
+        <el-button v-if="canDelegate" @click="openActionDialog('delegate')">委派</el-button>
+        <el-button v-if="canTransfer" @click="openActionDialog('transfer')">转办</el-button>
+        <el-button v-if="canReturnTask" type="danger" plain @click="openActionDialog('return')">退回</el-button>
         <el-button v-if="canReject" type="danger" plain @click="openActionDialog('reject')">驳回</el-button>
         <el-button v-if="canResubmit" type="primary" :loading="actionBusy" @click="confirmResubmit">重新提交</el-button>
         <el-button v-if="canComplete" type="primary" @click="openActionDialog('complete')">通过</el-button>
@@ -147,7 +147,7 @@
             />
           </el-tooltip>
           <el-button
-            v-if="multiInstanceState?.addAllowed === true && hasPermission('workflow:process:approval')"
+            v-if="multiInstanceState?.addAllowed === true && proxy.$auth.hasPermi('workflow:process:approval')"
             type="primary"
             icon="Plus"
             :disabled="multiInstanceBusy || multiInstanceDialogClosing || actionBusy"
@@ -525,12 +525,11 @@ import { listApprovalUserOptions, listIdentityOptions } from '@/api/workflow/ide
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
 import ProcessWaitingEvents from '@/components/workflow/ProcessWaitingEvents.vue'
-import useUserStore from '@/store/modules/user'
+import { useWorkflowUserOptions } from '@/components/workflow/useWorkflowUserOptions.js'
 import { useWindowSize } from '@vueuse/core'
 
 const route = useRoute()
 const router = useRouter()
-const userStore = useUserStore()
 const { proxy } = getCurrentInstance()
 const { width: viewportWidth } = useWindowSize()
 const loading = ref(false)
@@ -555,32 +554,16 @@ const historyForms = ref([])
 const taskFormRef = ref(null)
 const actionFormRef = ref(null)
 // 审批办理对象与普通抄送对象使用独立目录状态，禁止通用启用用户混入任务分配请求。
-const approvalUserOptions = ref([])
-const approvalUserLoading = ref(false)
-const copyUserOptions = ref([])
-const copyUserLoading = ref(false)
 // 动态多实例动作锁、状态刷新锁和稳定错误分别约束重复提交、快照覆盖及页面失败回显。
 const multiInstanceBusy = ref(false)
 const multiInstanceRefreshing = ref(false)
 const multiInstanceError = ref('')
 // 关闭期锁覆盖 Element Plus leave 至 closed 的完整区间，禁止旧弹窗回调清空下一轮真实业务草稿。
 const multiInstanceDialogClosing = ref(false)
-// 动态加签身份检索使用独立加载态和候选列表，不与普通办理人的远程检索状态串扰。
-const multiInstanceUserLoading = ref(false)
-const multiInstanceUserOptions = ref([])
-let approvalUserSearchSequence = 0
-let copyUserSearchSequence = 0
 let detailLoadSequence = 0
 // 详情页由页签缓存；首次请求完成后，重新进入同一路由也必须重新读取运行时轨迹。
 let detailPageInitialized = false
-// 加签身份检索与成员快照各自使用递增序号，禁止旧结果覆盖当前任务 revision。
-let multiInstanceUserSearchSequence = 0
 let multiInstanceRefreshSequence = 0
-// 审批对象和抄送对象缓存只负责显示名称，不能作为后端资格授权依据。
-const approvalUserOptionCache = new Map()
-const copyUserOptionCache = new Map()
-// 动态加签使用独立的身份目录缓存，仅负责远程检索后的稳定标签展示。
-const multiInstanceUserOptionCache = new Map()
 // 只有该机器子码表示 expectedRevision 失配；其他 409 可能是任务、权限或执行树变化。
 const MULTI_INSTANCE_REVISION_CONFLICT_SUBCODE = 'WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT'
 
@@ -614,6 +597,17 @@ const multiInstanceDialog = reactive({
 
 // 催办弹窗只持有原因；流程主键始终在提交时从当前授权详情重新读取。
 const urgeDialog = reactive({ visible: false, reason: '' })
+
+const { options: approvalUserOptions, loading: approvalUserLoading,
+  search: searchApprovalUsers, reset: resetApprovalUsers } = useWorkflowUserOptions(
+  listApprovalUserOptions, selectedApprovalUserValues)
+const { options: copyUserOptions, loading: copyUserLoading,
+  search: searchCopyUsers, reset: resetCopyUsers } = useWorkflowUserOptions(
+  query => listIdentityOptions({ type: 'user', ...query }), () => actionDialog.copyUserIds)
+const { options: multiInstanceUserOptions, loading: multiInstanceUserLoading,
+  search: searchMultiInstanceUsers, reset: resetMultiInstanceUsers } = useWorkflowUserOptions(
+  listApprovalUserOptions, () => multiInstanceDialog.userIds)
+
 
 // 将服务端稳定流程状态映射为用户可见标签和 Element Plus 语义色。
 const statusMeta = computed(() => ({
@@ -696,32 +690,32 @@ const nextUserSelectionPlaceholder = computed(() => isNextUserSelectionRequired.
   : '选择下一办理人（可选）')
 // 任务动作只消费详情 API 的正式 capability；前端仅保留对应页面入口权限。
 const canComplete = computed(() => detail.completeAllowed === true
-  && hasPermission('workflow:process:approval'))
+  && proxy.$auth.hasPermi('workflow:process:approval'))
 const canReject = computed(() => detail.rejectAllowed === true
-  && hasPermission('workflow:process:approval'))
+  && proxy.$auth.hasPermi('workflow:process:approval'))
 // 重提业务能力只消费详情 API 的服务端快照，前端仅叠加入口权限。
 const canResubmit = computed(() => detail.resubmitAllowed === true
-  && hasPermission('workflow:process:start'))
+  && proxy.$auth.hasPermi('workflow:process:start'))
 const applicationFormTabLabel = computed(() => canResubmit.value
   ? '修改申请表单'
   : '申请表单')
 const canReturnTask = computed(() => detail.returnAllowed === true
-  && hasPermission('workflow:process:approval'))
+  && proxy.$auth.hasPermi('workflow:process:approval'))
 const canDelegate = computed(() => detail.delegateAllowed === true
-  && hasPermission('workflow:process:approval'))
+  && proxy.$auth.hasPermi('workflow:process:approval'))
 const canTransfer = computed(() => detail.transferAllowed === true
-  && hasPermission('workflow:process:approval'))
+  && proxy.$auth.hasPermi('workflow:process:approval'))
 // 动态成员调整只消费服务端正式能力，前端仅叠加审批入口权限。
 const canAdjustMultiInstance = computed(() => multiInstanceState.value?.adjustmentAllowed === true
-  && hasPermission('workflow:process:approval'))
+  && proxy.$auth.hasPermi('workflow:process:approval'))
 // 取消认领业务能力只消费详情 API 的服务端快照，前端仅叠加入口权限。
 const canUnclaim = computed(() => detail.currentTask?.unclaimAllowed === true
-  && hasPermission('workflow:process:claim'))
+  && proxy.$auth.hasPermi('workflow:process:claim'))
 const canResolve = computed(() => detail.resolveAllowed === true
-  && hasPermission('workflow:process:approval'))
+  && proxy.$auth.hasPermi('workflow:process:approval'))
 // 人工催办业务能力只消费详情 API 的服务端快照，前端仅叠加基础入口权限。
 const canUrge = computed(() => detail.urgeAllowed === true
-  && hasPermission('workflow:notification:urge'))
+  && proxy.$auth.hasPermi('workflow:notification:urge'))
 const hasAnyTaskAction = computed(() => canComplete.value || canReject.value || canResubmit.value
   || canReturnTask.value || canDelegate.value || canTransfer.value || canUnclaim.value || canResolve.value)
 // 用户选择与抄送字段按动作白名单显示，未列入的动作不会向后端发送额外身份参数。
@@ -987,19 +981,6 @@ async function openActionDialog(type) {
   await loadActionIdentityOptions(type)
 }
 
-/**
- * 打开直接退回发起人的确认对话框，目标由后端根据流程发起人和真实首审批历史确定。
- * @returns {Promise<void>} 当前任务上下文有效时显示退回对话框。
- */
-async function openReturnDialog() {
-  if (!assertActionAllowed('return')) return
-  const returnContext = freezeCurrentTaskContext()
-  if (!isCurrentTaskContext(returnContext)) return denyAction('当前任务状态已变化，请刷新后重试')
-  actionDialog.type = 'return'
-  bindActionDialogTaskContext(returnContext)
-  actionDialog.visible = true
-  await loadActionIdentityOptions('return')
-}
 
 /**
  * 校验并覆盖保存当前原申请表单，不要求申请人填写任何审批意见。
@@ -1034,20 +1015,6 @@ async function confirmResubmit() {
   }
 }
 
-/**
- * 打开委派或转办对话框并加载首批审批资格用户和通用抄送用户。
- * @param {'delegate'|'transfer'} type 用户任务动作类型。
- * @returns {Promise<void>} 门禁通过后展示远程用户选择器。
- */
-async function openUserAction(type) {
-  if (!assertActionAllowed(type)) return
-  const taskContext = freezeCurrentTaskContext()
-  if (!isCurrentTaskContext(taskContext)) return denyAction('当前任务状态已变化，请刷新后重试')
-  actionDialog.type = type
-  bindActionDialogTaskContext(taskContext)
-  actionDialog.visible = true
-  await loadActionIdentityOptions(type)
-}
 
 /**
  * 按动作字段用途并行加载审批办理对象和普通抄送对象，避免两类资格互相污染。
@@ -1066,63 +1033,6 @@ async function loadActionIdentityOptions(type) {
 }
 
 /**
- * 远程检索后端 RBAC 确认具备审批办理资格的启用用户。
- * @param {string} keyword 用户输入的姓名或账号关键词。
- * @returns {Promise<void>} 最新请求完成后合并审批选项和已选标签，过期响应被丢弃。
- */
-async function searchApprovalUsers(keyword) {
-  const sequence = ++approvalUserSearchSequence
-  approvalUserLoading.value = true
-  try {
-    const response = await listApprovalUserOptions({
-      keyword: String(keyword || '').trim().slice(0, 64),
-      pageNum: 1,
-      pageSize: 30
-    })
-    if (sequence === approvalUserSearchSequence) {
-      const safeOptions = (Array.isArray(response.rows) ? response.rows : [])
-        .filter(option => option?.type === 'user')
-        .map(option => ({ ...option, value: String(option.value), label: String(option.label || '') }))
-      safeOptions.forEach(option => {
-        approvalUserOptionCache.set(option.value, option)
-      })
-      refreshApprovalUserOptions(safeOptions)
-    }
-  } finally {
-    if (sequence === approvalUserSearchSequence) approvalUserLoading.value = false
-  }
-}
-
-/**
- * 远程检索普通启用用户作为抄送接收人，不把该结果用于任何任务分配字段。
- * @param {string} keyword 用户输入的姓名或账号关键词。
- * @returns {Promise<void>} 最新请求完成后合并抄送选项和已选标签，过期响应被丢弃。
- */
-async function searchCopyUsers(keyword) {
-  const sequence = ++copyUserSearchSequence
-  copyUserLoading.value = true
-  try {
-    const response = await listIdentityOptions({
-      type: 'user',
-      keyword: String(keyword || '').trim().slice(0, 64),
-      pageNum: 1,
-      pageSize: 30
-    })
-    if (sequence === copyUserSearchSequence) {
-      const safeOptions = (Array.isArray(response.rows) ? response.rows : [])
-        .filter(option => option?.type === 'user')
-        .map(option => ({ ...option, value: String(option.value), label: String(option.label || '') }))
-      safeOptions.forEach(option => {
-        copyUserOptionCache.set(option.value, option)
-      })
-      refreshCopyUserOptions(safeOptions)
-    }
-  } finally {
-    if (sequence === copyUserSearchSequence) copyUserLoading.value = false
-  }
-}
-
-/**
  * 打开动态加签或减签弹窗，并冻结当前服务端成员目标。
  * @param {'ADD'|'REMOVE'} action 动态成员调整动作。
  * @param {object|null} member REMOVE 时由服务端状态投影返回的目标成员。
@@ -1138,48 +1048,6 @@ async function openMultiInstanceDialog(action, member = null) {
   }
   multiInstanceDialog.visible = true
   if (action === 'ADD') await searchMultiInstanceUsers('')
-}
-
-/**
- * 从正式审批资格目录远程检索加签用户，并隔离淘汰晚到响应。
- * @param {string} keyword 用户输入的姓名或账号关键词。
- * @returns {Promise<void>} 最新请求完成后更新加签选择器选项。
- */
-async function searchMultiInstanceUsers(keyword) {
-  const sequence = ++multiInstanceUserSearchSequence
-  multiInstanceUserLoading.value = true
-  try {
-    const response = await listApprovalUserOptions({
-      keyword: String(keyword || '').trim().slice(0, 64),
-      pageNum: 1,
-      pageSize: 30
-    })
-    if (sequence !== multiInstanceUserSearchSequence) return
-    const safeOptions = (Array.isArray(response.rows) ? response.rows : [])
-      .filter(option => option?.type === 'user')
-      .map(option => ({ ...option, value: String(option.value), label: String(option.label || '') }))
-    safeOptions.forEach(option => {
-      multiInstanceUserOptionCache.set(option.value, option)
-    })
-    refreshMultiInstanceUserOptions(safeOptions)
-  } finally {
-    if (sequence === multiInstanceUserSearchSequence) multiInstanceUserLoading.value = false
-  }
-}
-
-/**
- * 合并最新身份目录结果与当前已选加签用户，保证远程检索切换后标签稳定。
- * @param {Array<{value: string, label: string, type: 'user'}>} searchResults 最新安全用户选项。
- * @returns {void} 加签选项更新为去重后的稳定集合。
- */
-function refreshMultiInstanceUserOptions(searchResults) {
-  const mergedOptions = new Map()
-  multiInstanceDialog.userIds.map(String).forEach(value => {
-    const cachedOption = multiInstanceUserOptionCache.get(value)
-    if (cachedOption) mergedOptions.set(value, cachedOption)
-  })
-  searchResults.forEach(option => mergedOptions.set(option.value, option))
-  multiInstanceUserOptions.value = Array.from(mergedOptions.values())
 }
 
 /**
@@ -1400,7 +1268,7 @@ function reconcileMultiInstanceDraft() {
       .filter(userId => positiveUserId(userId) && !multiInstanceMemberIds.value.has(userId))
       .slice(0, remainingMultiInstanceCapacity.value)
     multiInstanceDialog.userIds = retainedIds
-    refreshMultiInstanceUserOptions([])
+    resetMultiInstanceUsers({ keepSelected: true })
     if (retainedIds.length !== originalIds.length) {
       multiInstanceDialog.error = '部分成员已被其他操作加入或达到人数上限，请重新核对'
     }
@@ -1414,21 +1282,6 @@ function reconcileMultiInstanceDraft() {
 }
 
 /**
- * 合并审批资格检索结果与当前目标/下一办理人，避免关键词变化导致标签退化为裸 ID。
- * @param {Array<{value: string, label: string, type: 'user'}>} searchResults 最新审批资格检索结果。
- * @returns {void} approvalUserOptions 更新为去重后的稳定展示集合。
- */
-function refreshApprovalUserOptions(searchResults) {
-  const mergedOptions = new Map()
-  selectedApprovalUserValues().forEach(value => {
-    const cachedOption = approvalUserOptionCache.get(value)
-    if (cachedOption) mergedOptions.set(value, cachedOption)
-  })
-  searchResults.forEach(option => mergedOptions.set(option.value, option))
-  approvalUserOptions.value = Array.from(mergedOptions.values())
-}
-
-/**
  * 汇总目标用户和下一办理人的当前选择值，供审批资格标签缓存按需保留。
  * @returns {string[]} 去重后的规范字符串用户主键。
  */
@@ -1437,21 +1290,6 @@ function selectedApprovalUserValues() {
     .filter(positiveUserId)
     .map(String)
   return Array.from(new Set(values))
-}
-
-/**
- * 合并普通用户检索结果与当前抄送选择，远程搜索切换时保留稳定标签。
- * @param {Array<{value: string, label: string, type: 'user'}>} searchResults 最新通用用户检索结果。
- * @returns {void} copyUserOptions 更新为去重后的稳定展示集合。
- */
-function refreshCopyUserOptions(searchResults) {
-  const mergedOptions = new Map()
-  actionDialog.copyUserIds.map(String).forEach(value => {
-    const cachedOption = copyUserOptionCache.get(value)
-    if (cachedOption) mergedOptions.set(value, cachedOption)
-  })
-  searchResults.forEach(option => mergedOptions.set(option.value, option))
-  copyUserOptions.value = Array.from(mergedOptions.values())
 }
 
 /**
@@ -1581,7 +1419,7 @@ function assertActionAllowed(type, validateInput = false) {
     return denyAction('任务动作不合法')
   }
   if (!ready.value || loading.value) return denyAction('流程详情尚未就绪')
-  if (!hasPermission('workflow:process:approval')) return denyAction('没有执行该操作的权限')
+  if (!proxy.$auth.hasPermi('workflow:process:approval')) return denyAction('没有执行该操作的权限')
   if (actionBusy.value || multiInstanceBusy.value) return denyAction('任务正在处理中，请勿重复提交')
   if (!detail.currentTask.taskId || String(detail.currentTask.taskId).length > 64) return denyAction('当前任务主键不合法')
   const capabilityAllowed = ({
@@ -1654,15 +1492,6 @@ function denyAction(message) {
 }
 
 /**
- * 判断当前登录用户是否拥有指定操作权限，兼容超级权限标识。
- * @param {string} permission 若依权限字符。
- * @returns {boolean} 权限集合包含目标或超级权限时返回 true。
- */
-function hasPermission(permission) {
-  return (userStore.permissions || []).some(item => item === '*:*:*' || item === permission)
-}
-
-/**
  * 判断身份目录值能否安全转换为后端要求的正整数用户主键。
  * @param {unknown} value 身份目录返回值或选择器当前值。
  * @returns {boolean} 值为 JavaScript 安全正整数时返回 true。
@@ -1689,14 +1518,8 @@ function resetActionDialog() {
   actionDialog.boundTaskId = ''
   actionDialog.boundDetailSequence = -1
   actionDialog.error = ''
-  approvalUserOptions.value = []
-  approvalUserOptionCache.clear()
-  approvalUserSearchSequence++
-  approvalUserLoading.value = false
-  copyUserOptions.value = []
-  copyUserOptionCache.clear()
-  copyUserSearchSequence++
-  copyUserLoading.value = false
+  resetApprovalUsers()
+  resetCopyUsers()
   actionFormRef.value?.clearValidate()
 }
 
@@ -1738,10 +1561,7 @@ function resetMultiInstanceDialog() {
   multiInstanceDialog.targetTaskId = ''
   multiInstanceDialog.targetName = ''
   multiInstanceDialog.error = ''
-  multiInstanceUserOptions.value = []
-  multiInstanceUserOptionCache.clear()
-  multiInstanceUserSearchSequence++
-  multiInstanceUserLoading.value = false
+  resetMultiInstanceUsers()
 }
 
 /**

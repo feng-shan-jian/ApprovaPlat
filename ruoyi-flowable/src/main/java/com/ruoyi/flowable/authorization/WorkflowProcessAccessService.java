@@ -66,15 +66,7 @@ public class WorkflowProcessAccessService
     /**
      * 创建工作流对象级授权服务。
      *
-     * @param historyService HistoryService，Flowable 历史查询公共服务
-     * @param runtimeService RuntimeService，Flowable 实例实时状态公共服务
-     * @param taskService TaskService，Flowable 运行时任务公共服务
-     * @param engineOperations WorkflowEngineOperations，统一只读事务和异常翻译边界
-     * @param identityResolver WorkflowIdentityResolver，当前有效用户及候选组解析器
-     * @param copyMapper WfCopyMapper，正式抄送记录查询 Mapper
-     * @param permissionService PermissionService，Token 权限与当前正式主数据的统一复核服务
-     * @param unclaimPolicy WorkflowTaskUnclaimPolicy，取消认领能力纯规则组件
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowProcessAccessService(HistoryService historyService,
             RuntimeService runtimeService, TaskService taskService,

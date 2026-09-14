@@ -21,7 +21,7 @@ public record WorkflowControlledLoopFormField(String name, Kind kind,
 {
     /**
      * 创建不可变的循环判断字段契约。
-     * @return 无返回值，静态枚举集合会被复制为不可修改集合
+     * 静态枚举集合会被复制为不可修改集合
      */
     public WorkflowControlledLoopFormField
     {

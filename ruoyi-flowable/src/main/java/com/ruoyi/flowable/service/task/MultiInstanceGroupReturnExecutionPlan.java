@@ -20,7 +20,7 @@ public record MultiInstanceGroupReturnExecutionPlan(
     /**
      * 冻结执行计划并确保路径节点与正式轮次快照一一对应。
      *
-     * @return 无返回值，构造时拒绝目标、路径或来源轮次缺失
+     * 构造时拒绝目标、路径或来源轮次缺失
      */
     public MultiInstanceGroupReturnExecutionPlan
     {

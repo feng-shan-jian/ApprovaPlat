@@ -125,19 +125,7 @@ public class WorkflowProcessInstanceService
     /**
      * 创建流程实例写操作服务。
      *
-     * @param engineOperations WorkflowEngineOperations，当前身份、事务和引擎异常边界
-     * @param historyService HistoryService，历史实例、变量和删除公共 API
-     * @param runtimeService RuntimeService，运行实例状态和终止公共 API
-     * @param taskService TaskService，流程级结构化审计 comment 公共 API
-     * @param attachmentMapper WfAttachmentMapper，已绑定审计附件引用检查 Mapper
-     * @param copyMapper WfCopyMapper，正式抄送记录引用检查和逻辑删除 Mapper
-     * @param controlledLoopExecutionMapper WfControlledLoopExecutionMapper，受控循环逐轮审计 Mapper
-     * @param multiInstanceRoundMapper WfMultiInstanceRoundMapper，多实例轮次快照审计 Mapper
-     * @param multiInstanceRoundTerminationService WorkflowMultiInstanceRoundTerminationService，轮次终止严格预检与关闭服务
-     * @param permissionService PermissionService，Token 权限与当前正式主数据的统一复核服务
-     * @param taskSlaRuntimeService WorkflowTaskSlaRuntimeService，SLA 暂停恢复服务
-     * @param notificationService WorkflowNotificationService，显式取消或终止通知服务
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowProcessInstanceService(WorkflowEngineOperations engineOperations,
             HistoryService historyService, RuntimeService runtimeService,
@@ -1062,11 +1050,6 @@ public class WorkflowProcessInstanceService
     {
         /**
          * 复制冻结的执行树主键，避免任务特有回调修改统一终止快照。
-         *
-         * @param requestedInstanceId String，客户端直接提交的实例主键
-         * @param rootInstance ProcessInstance，根流程实例
-         * @param processTreeInstanceIds List&lt;String&gt;，冻结的执行树实例主键
-         * @param wasSuspended boolean，根实例原始挂起状态
          */
         public RootTerminationContext
         {

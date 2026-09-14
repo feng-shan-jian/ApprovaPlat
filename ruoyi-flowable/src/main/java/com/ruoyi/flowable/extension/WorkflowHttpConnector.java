@@ -84,10 +84,7 @@ public class WorkflowHttpConnector
 
     /**
      * 创建受控 HTTP 连接器。
-     * @param endpointService WorkflowConnectorEndpointService，端点锁定服务
-     * @param secretResolver WorkflowConnectorSecretResolver，外部密钥解析器
-     * @param connectorMetrics WorkflowConnectorMetrics，单次 Flowable Job 尝试指标
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowHttpConnector(WorkflowConnectorEndpointService endpointService,
             WorkflowConnectorSecretResolver secretResolver,
@@ -896,8 +893,7 @@ public class WorkflowHttpConnector
 
         /**
          * 创建响应正文超限异常。
-         * @param message String，对外稳定错误消息
-         * @return 无返回值，构造后由执行分支抛出
+         * 构造后由执行分支抛出
          */
         private ResponseTooLargeException(String message)
         {

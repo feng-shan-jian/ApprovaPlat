@@ -31,7 +31,6 @@ public final class WorkflowFormFieldExtension
 
     /**
      * 禁止实例化仅包含固定协议的工具类。
-     * @return 无返回值
      */
     private WorkflowFormFieldExtension()
     {

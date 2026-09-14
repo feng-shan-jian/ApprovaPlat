@@ -17,10 +17,7 @@ public record WorkflowTaskBpmnSnapshot(ProcessDefinition definition,
     /**
      * 校验 BPMN 快照三项事实均存在。
      *
-     * @param definition ProcessDefinition，真实流程定义
-     * @param model BpmnModel，已部署 BPMN 模型
-     * @param process Process，同 key 主流程
-     * @return 无返回值，构造后引用不可替换
+     * 构造后引用不可替换
      */
     public WorkflowTaskBpmnSnapshot
     {

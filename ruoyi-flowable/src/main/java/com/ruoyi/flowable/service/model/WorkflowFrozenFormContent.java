@@ -16,9 +16,7 @@ public record WorkflowFrozenFormContent(String content,
 {
     /**
      * 创建防御性部署结果，禁止调用方替换快照集合。
-     * @param content String，已经冻结版本元数据的正式表单 JSON
-     * @param extensionSnapshots List&lt;WfDeployExtensionSnapshot&gt;，字段级扩展快照
-     * @return 无返回值，构造后保存不可变集合
+     * 构造后保存不可变集合
      */
     public WorkflowFrozenFormContent
     {

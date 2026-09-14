@@ -14,9 +14,6 @@ public record WorkflowNotificationInboxResult(List<WorkflowNotificationItem> ite
 {
     /**
      * 创建不可变收件箱结果，避免页面或 Controller 修改服务层集合。
-     * @param items List&lt;WorkflowNotificationItem&gt;，当前页通知
-     * @param total long，筛选后的总数
-     * @param unreadCount long，全局未读数
      */
     public WorkflowNotificationInboxResult
     {

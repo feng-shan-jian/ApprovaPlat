@@ -102,7 +102,6 @@ import com.ruoyi.framework.web.service.PermissionService;
         WorkflowTaskCompletionApplicationService.class,
         WorkflowTaskReturnApplicationService.class,
         WorkflowApplicationResubmitApplicationService.class,
-        WorkflowTaskLifecycleService.class,
         WorkflowDeploymentArtifactRepository.class,
         WorkflowStartVariableValidator.class,
         WorkflowFormTemplateValidator.class,
@@ -632,14 +631,17 @@ class WorkflowMultiInstanceEngineHarness
             RuntimeService runtimeService, TransactionTemplate transactionTemplate,
             ThreadLocal<String> currentUserId,
             @Qualifier("workflowDeploymentId") String deploymentId,
-            WorkflowTaskLifecycleService lifecycleService,
+            WorkflowTaskCompletionApplicationService completionApplicationService,
+            WorkflowTaskReturnApplicationService returnApplicationService,
+            WorkflowApplicationResubmitApplicationService resubmitApplicationService,
             WorkflowMultiInstanceService multiInstanceService,
             WorkflowAttachmentService attachmentService,
             WorkflowProcessInstanceService processInstanceService)
     {
         return new WorkflowMultiInstanceBusinessDriver(engine, runtimeService,
                 transactionTemplate, currentUserId,
-                deploymentId, lifecycleService, multiInstanceService,
+                deploymentId, completionApplicationService, returnApplicationService,
+                resubmitApplicationService, multiInstanceService,
                 attachmentService, processInstanceService);
     }
 

@@ -19,8 +19,7 @@ public class WorkflowRuntimeEventAuditService
 
     /**
      * 创建运行事件失败审计服务。
-     * @param requestMapper WfRuntimeEventRequestMapper，正式运行事件台账 Mapper
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowRuntimeEventAuditService(WfRuntimeEventRequestMapper requestMapper)
     {

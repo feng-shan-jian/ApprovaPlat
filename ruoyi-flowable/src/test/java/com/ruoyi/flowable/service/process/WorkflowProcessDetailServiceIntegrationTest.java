@@ -75,7 +75,8 @@ import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService
 import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 import com.ruoyi.flowable.service.task.WorkflowControlledLoopService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
-import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowTaskReturnApplicationService;
+import com.ruoyi.flowable.service.task.WorkflowApplicationResubmitApplicationService;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.system.service.ISysUserService;
 import tools.jackson.databind.JsonNode;
@@ -117,7 +118,8 @@ class WorkflowProcessDetailServiceIntegrationTest
     private WorkflowDeploymentArtifactRepository artifactRepository;
     private WorkflowControlledLoopService controlledLoopService;
     private WorkflowMultiInstanceService multiInstanceService;
-    private WorkflowTaskLifecycleService taskLifecycleService;
+    private WorkflowTaskReturnApplicationService returnApplicationService;
+    private WorkflowApplicationResubmitApplicationService resubmitApplicationService;
     private WorkflowManualUrgeService manualUrgeService;
     private WorkflowProcessDetailService service;
     private String deploymentId;
@@ -186,9 +188,10 @@ class WorkflowProcessDetailServiceIntegrationTest
                         artifactRepository, mock(WorkflowParticipantRuleRuntimeService.class));
         when(definitionProvider.getObject()).thenReturn(definitionQueryService);
         multiInstanceService = mock(WorkflowMultiInstanceService.class);
-        taskLifecycleService = mock(WorkflowTaskLifecycleService.class);
-        when(taskLifecycleService.isTaskReturnAllowed(anyString())).thenReturn(false);
-        when(taskLifecycleService.isApplicationResubmitAllowed(anyString())).thenReturn(false);
+        returnApplicationService = mock(WorkflowTaskReturnApplicationService.class);
+        resubmitApplicationService = mock(WorkflowApplicationResubmitApplicationService.class);
+        when(returnApplicationService.isTaskReturnAllowed(anyString())).thenReturn(false);
+        when(resubmitApplicationService.isApplicationResubmitAllowed(anyString())).thenReturn(false);
         manualUrgeService = mock(WorkflowManualUrgeService.class);
         controlledLoopService = mock(WorkflowControlledLoopService.class);
         when(controlledLoopService.buildStates(anyString(), anyString(), anyString(), any()))
@@ -207,7 +210,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         service = new WorkflowProcessDetailService(engineOperations, processAccessService,
                 repositoryService, taskService, deploymentService, variableProjection,
                 formProjection, historyProjection, multiInstanceService,
-                taskLifecycleService, identityResolver, manualUrgeService,
+                returnApplicationService, resubmitApplicationService, identityResolver, manualUrgeService,
                 controlledLoopService);
     }
 
@@ -291,7 +294,7 @@ class WorkflowProcessDetailServiceIntegrationTest
     {
         ProcessInstance ownedInstance = startMainProcess();
         Task ownedTask = activeTask(ownedInstance.getId(), "globalTask");
-        when(taskLifecycleService.isTaskReturnAllowed(ownedTask.getId())).thenReturn(true);
+        when(returnApplicationService.isTaskReturnAllowed(ownedTask.getId())).thenReturn(true);
 
         WorkflowProcessDetailView owned = readDetail(
                 ownedInstance.getId(), ownedTask.getId(), "running");
@@ -578,7 +581,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.resubmitAllowed()).isFalse();
         // 没有申请人局部标记的 returned 任务仍按原路径解析正式多实例 capability。
         verify(multiInstanceService).getOptionalState(active.getId());
-        verify(taskLifecycleService, never())
+        verify(resubmitApplicationService, never())
                 .isApplicationResubmitAllowed(anyString());
         verifyNoCurrentVariableRead();
     }
@@ -606,7 +609,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         taskService.setAssignee(active.getId(), applicantUserId);
         taskService.setVariableLocal(active.getId(),
                 "__ruoyi_workflow_return_applicant", applicantUserId);
-        when(taskLifecycleService.isApplicationResubmitAllowed(active.getId()))
+        when(resubmitApplicationService.isApplicationResubmitAllowed(active.getId()))
                 .thenReturn(true);
 
         WorkflowProcessDetailView detail = readDetail(
@@ -618,7 +621,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.formDetail().applicationForm().taskId()).isEqualTo(active.getId());
         assertThat(detail.formDetail().nodeTaskForm()).isNull();
         verify(multiInstanceService, never()).getOptionalState(anyString());
-        verify(taskLifecycleService).isApplicationResubmitAllowed(active.getId());
+        verify(resubmitApplicationService).isApplicationResubmitAllowed(active.getId());
     }
 
     /**
@@ -747,7 +750,7 @@ class WorkflowProcessDetailServiceIntegrationTest
                 instance.getId(), active.getId(), "returned");
 
         assertThat(detail.resubmitAllowed()).isFalse();
-        verify(taskLifecycleService, never())
+        verify(resubmitApplicationService, never())
                 .isApplicationResubmitAllowed(anyString());
     }
 

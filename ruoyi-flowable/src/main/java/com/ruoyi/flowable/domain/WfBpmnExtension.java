@@ -36,7 +36,6 @@ public class WfBpmnExtension extends BaseEntity
     /**
      * 设置扩展主键。
      * @param extensionId Long，扩展目录主键
-     * @return void，无返回值
      */
     public void setExtensionId(Long extensionId)
     {
@@ -55,7 +54,6 @@ public class WfBpmnExtension extends BaseEntity
     /**
      * 设置稳定扩展键。
      * @param extensionKey String，扩展业务键
-     * @return void，无返回值
      */
     public void setExtensionKey(String extensionKey)
     {
@@ -74,7 +72,6 @@ public class WfBpmnExtension extends BaseEntity
     /**
      * 设置扩展名称。
      * @param extensionName String，用户可见名称
-     * @return void，无返回值
      */
     public void setExtensionName(String extensionName)
     {
@@ -93,7 +90,6 @@ public class WfBpmnExtension extends BaseEntity
     /**
      * 设置扩展类型。
      * @param extensionType String，扩展类型编码
-     * @return void，无返回值
      */
     public void setExtensionType(String extensionType)
     {
@@ -112,7 +108,6 @@ public class WfBpmnExtension extends BaseEntity
     /**
      * 设置目录状态。
      * @param status String，ENABLED 或 DISABLED
-     * @return void，无返回值
      */
     public void setStatus(String status)
     {

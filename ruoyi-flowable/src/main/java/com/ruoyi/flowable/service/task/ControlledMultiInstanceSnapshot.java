@@ -32,7 +32,7 @@ public record ControlledMultiInstanceSnapshot(String deployId,
     /**
      * 复制所有集合并校验身份、成员、计数、任务和 execution 之间严格闭合。
      *
-     * @return 无返回值，漂移或不完整快照拒绝构造
+     * 漂移或不完整快照拒绝构造
      */
     public ControlledMultiInstanceSnapshot
     {

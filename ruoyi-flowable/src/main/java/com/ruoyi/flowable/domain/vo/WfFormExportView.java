@@ -22,10 +22,7 @@ public class WfFormExportView
     /**
      * 创建不含模板正文的表单导出视图。
      *
-     * @param formId Long，表单主键
-     * @param formName String，表单名称
-     * @param remark String，表单备注
-     * @return 无返回值，构造后得到只读导出对象
+     * 构造后得到只读导出对象
      */
     public WfFormExportView(Long formId, String formName, String remark)
     {

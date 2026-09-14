@@ -66,14 +66,7 @@ public class WorkflowProcessStartService
     /**
      * 创建草稿提交的真实引擎启动协作服务。
      *
-     * @param repositoryService RepositoryService，流程定义和状态公共 API
-     * @param runtimeService RuntimeService，真实发起流程实例公共 API
-     * @param definitionQueryService WorkflowProcessDefinitionQueryService，starter 授权与部署开始表单快照门禁
-     * @param variableValidator WorkflowStartVariableValidator，开始表单变量 schema 验证器
-     * @param attachmentService WorkflowAttachmentService，草稿附件校验、投影和事务绑定服务
-     * @param definitionLockMapper WorkflowProcessDefinitionLockMapper，草稿提交最新版定义当前读和部署生命周期行锁
-     * @param userSelectionValidator WorkflowUserSelectionValidator，发起时会签或或签成员审批资格校验器
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowProcessStartService(RepositoryService repositoryService,
             RuntimeService runtimeService,

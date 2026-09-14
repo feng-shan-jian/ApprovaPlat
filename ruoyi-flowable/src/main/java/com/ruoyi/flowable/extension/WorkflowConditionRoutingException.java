@@ -11,9 +11,7 @@ public class WorkflowConditionRoutingException extends RuntimeException
 
     /**
      * 创建只含稳定业务提示和 HTTP 业务码的条件路由失败。
-     * @param message String，不包含表单实际值或引擎表达式的稳定提示
-     * @param code int，允许统一异常边界对外返回的业务码
-     * @return 无返回值，异常实例由调用方抛出
+     * 异常实例由调用方抛出
      */
     public WorkflowConditionRoutingException(String message, int code)
     {

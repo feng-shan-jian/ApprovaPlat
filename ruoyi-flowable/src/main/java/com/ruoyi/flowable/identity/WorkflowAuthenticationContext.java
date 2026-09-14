@@ -25,9 +25,7 @@ public class WorkflowAuthenticationContext
     /**
      * 创建工作流认证上下文。
      *
-     * @param identityService IdentityService，Flowable 对外提供的身份上下文服务
-     * @param identityCodec WorkflowIdentityCodec，数字用户 ID 校验和规范化组件
-     * @return 无返回值，构造完成后由 Spring 管理该组件
+     * 构造完成后由 Spring 管理该组件
      */
     public WorkflowAuthenticationContext(IdentityService identityService, WorkflowIdentityCodec identityCodec)
     {
@@ -50,7 +48,6 @@ public class WorkflowAuthenticationContext
      * 使用当前登录用户执行无返回值的引擎操作。
      *
      * @param action Runnable，需要在当前用户身份下执行的操作
-     * @return 无返回值
      */
     public void runAsCurrentUser(Runnable action)
     {
@@ -96,7 +93,6 @@ public class WorkflowAuthenticationContext
      *
      * @param actorUserId String，若依用户主键的字符串形式
      * @param action Runnable，需要在指定用户身份下执行的操作
-     * @return 无返回值
      */
     public void runAs(String actorUserId, Runnable action)
     {

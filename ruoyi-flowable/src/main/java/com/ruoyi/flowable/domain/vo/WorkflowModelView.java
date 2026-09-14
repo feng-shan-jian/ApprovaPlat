@@ -31,24 +31,7 @@ public record WorkflowModelView(String modelId, String modelName, String modelKe
     /**
      * 创建模型视图并复制可变时间对象。
      *
-     * @param modelId String，Flowable 模型主键
-     * @param modelName String，模型显示名称
-     * @param modelKey String，模型版本分组标识
-     * @param category String，工作流分类编码
-     * @param version Integer，模型版本号
-     * @param revision Integer，Flowable 模型乐观锁修订号
-     * @param formType Integer，表单模式编码
-     * @param formId Long，模型级流程表单主键
-     * @param description String，模型业务描述
-     * @param createTime Date，模型创建时间
-     * @param lastUpdateTime Date，模型最后更新时间
-     * @param bpmnXml String，详情场景返回的 BPMN XML
-     * @param content String，详情场景返回的模型级表单内容
-     * @param deployed boolean，模型是否已关联部署
-     * @param metadataEditAllowed boolean，模型元数据编辑能力
-     * @param deployAllowed boolean，模型部署能力
-     * @param deleteAllowed boolean，模型删除能力
-     * @return 无返回值，构造后得到不可变模型视图
+     * 构造后得到不可变模型视图
      */
     public WorkflowModelView
     {

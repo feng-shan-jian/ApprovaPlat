@@ -24,8 +24,7 @@ public class WfCallActivityController extends BaseController
     /**
      * 创建调用活动目录 Controller。
      *
-     * @param referenceService WorkflowCallActivityReferenceService，服务端授权目录与字段契约服务
-     * @return 无返回值，构造后由 Spring 管理该 Controller
+     * 构造后由 Spring 管理该 Controller
      */
     public WfCallActivityController(WorkflowCallActivityReferenceService referenceService)
     {

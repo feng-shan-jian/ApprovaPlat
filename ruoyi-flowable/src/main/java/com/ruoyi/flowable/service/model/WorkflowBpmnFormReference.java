@@ -26,16 +26,7 @@ public record WorkflowBpmnFormReference(WorkflowFormSourceType sourceType, Long 
     /**
      * 创建已经校验的 BPMN 表单引用。
      *
-     * @param sourceType WorkflowFormSourceType，表单来源类型
-     * @param formId Long，模板来源主键；内嵌表单为空
-     * @param formKey String，BPMN 原始表单键或内嵌稳定键
-     * @param nodeKey String，BPMN 节点主键
-     * @param nodeName String，BPMN 节点名称，允许为空
-     * @param embeddedContent String，内嵌表单正式 JSON；模板来源为空
-     * @param processKey String，表单节点所属可执行流程标识
-     * @param defaultPermission WorkflowFormFieldPermissionMode，节点批量默认策略
-     * @param fieldPermissions Map&lt;String,WorkflowFormFieldPermissionMode&gt;，字段显式策略
-     * @return 无返回值，构造后得到不可变表单引用
+     * 构造后得到不可变表单引用
      */
     public WorkflowBpmnFormReference
     {

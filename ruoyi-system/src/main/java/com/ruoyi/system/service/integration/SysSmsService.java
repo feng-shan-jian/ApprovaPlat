@@ -63,9 +63,7 @@ public class SysSmsService
     /**
      * 创建短信服务并固定使用不跟随跳转的 JDK HTTPS 客户端。
      *
-     * @param jdbcTemplate JdbcTemplate，正式短信配置与发送日志数据源
-     * @param objectMapper ObjectMapper，项目统一 Jackson 3 编解码器
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     @Autowired
     public SysSmsService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper)
@@ -79,10 +77,7 @@ public class SysSmsService
     /**
      * 使用显式 HTTP 客户端创建服务，供受控测试替换网络边界。
      *
-     * @param jdbcTemplate JdbcTemplate，正式短信配置与发送日志数据源
-     * @param objectMapper ObjectMapper，JSON 编解码器
-     * @param httpClient HttpClient，禁止为空的供应商传输客户端
-     * @return void，参数不完整时拒绝创建
+     * 参数不完整时拒绝创建
      */
     SysSmsService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper, HttpClient httpClient)
     {

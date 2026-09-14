@@ -20,7 +20,7 @@ public record WorkflowTaskEventSnapshot(String taskId, String processInstanceId,
     /**
      * 校验监听事件包含定位部署、实例、节点和 execution 所需的稳定字段。
      *
-     * @return 无返回值，非法事件拒绝构造
+     * 非法事件拒绝构造
      */
     public WorkflowTaskEventSnapshot
     {

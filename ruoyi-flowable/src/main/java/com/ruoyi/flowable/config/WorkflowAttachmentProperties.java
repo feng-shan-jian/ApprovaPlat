@@ -52,7 +52,6 @@ public class WorkflowAttachmentProperties
      * 设置单个附件允许的最大实际字节数。
      *
      * @param maxSize long，必须处于 1 字节至 2 GiB 范围
-     * @return void，无返回值
      */
     public void setMaxSize(long maxSize)
     {
@@ -77,7 +76,6 @@ public class WorkflowAttachmentProperties
      * 设置单个用户允许同时占用的临时附件数量。
      *
      * @param maxTemporaryCount int，必须处于 1 至 10000 范围
-     * @return void，无返回值
      */
     public void setMaxTemporaryCount(int maxTemporaryCount)
     {
@@ -102,7 +100,6 @@ public class WorkflowAttachmentProperties
      * 设置单个用户允许占用的临时附件总字节数。
      *
      * @param maxTemporaryBytes long，必须处于 1 字节至 1 TiB 范围
-     * @return void，无返回值
      */
     public void setMaxTemporaryBytes(long maxTemporaryBytes)
     {
@@ -128,7 +125,6 @@ public class WorkflowAttachmentProperties
      * 设置附件文件系统必须保留的最小可用字节数。
      *
      * @param minFreeBytes long，必须处于 0 至 16 TiB 范围
-     * @return void，无返回值
      */
     public void setMinFreeBytes(long minFreeBytes)
     {
@@ -154,7 +150,6 @@ public class WorkflowAttachmentProperties
      * 设置未绑定附件的有效时长。
      *
      * @param temporaryTtl Duration，必须大于零且不超过七天
-     * @return void，无返回值
      */
     public void setTemporaryTtl(Duration temporaryTtl)
     {
@@ -180,7 +175,6 @@ public class WorkflowAttachmentProperties
      * 设置单轮清理的最大记录数。
      *
      * @param cleanupBatchSize int，必须处于 1 至 1000 范围
-     * @return void，无返回值
      */
     public void setCleanupBatchSize(int cleanupBatchSize)
     {
@@ -205,7 +199,6 @@ public class WorkflowAttachmentProperties
      * 设置附件清理领取租约时长。
      *
      * @param cleanupLeaseDuration Duration，必须大于零且不超过一天
-     * @return void，无返回值
      */
     public void setCleanupLeaseDuration(Duration cleanupLeaseDuration)
     {
@@ -248,7 +241,6 @@ public class WorkflowAttachmentProperties
      * 设置首次附件物理清理失败后的重试延迟。
      *
      * @param cleanupRetryInitialDelay Duration，必须大于零且不超过一天
-     * @return void，无返回值
      */
     public void setCleanupRetryInitialDelay(Duration cleanupRetryInitialDelay)
     {
@@ -275,7 +267,6 @@ public class WorkflowAttachmentProperties
      * 设置连续附件物理清理失败的最大退避时间。
      *
      * @param cleanupRetryMaxDelay Duration，必须大于零且不超过七天
-     * @return void，无返回值
      */
     public void setCleanupRetryMaxDelay(Duration cleanupRetryMaxDelay)
     {

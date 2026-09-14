@@ -46,9 +46,7 @@ public class WorkflowRaiseBpmnEventHandler implements WorkflowJavaExtensionHandl
 
     /**
      * 创建受控事件处理器。
-     * @param codeService WorkflowBpmnEventCodeService，部署时解析启用目录
-     * @param runtimeService WorkflowBpmnEventRuntimeService，运行时审计并产生标准事件
-     * @return 无返回值，构造后自动进入处理器注册表
+     * 构造后自动进入处理器注册表
      */
     public WorkflowRaiseBpmnEventHandler(WorkflowBpmnEventCodeService codeService,
             WorkflowBpmnEventRuntimeService runtimeService)

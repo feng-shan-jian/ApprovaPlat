@@ -85,14 +85,7 @@ public class WorkflowCallActivityReferenceService
     /**
      * 创建生产调用活动服务。
      *
-     * @param repositoryService RepositoryService，Flowable 定义与 BPMN 公共 API
-     * @param engineOperations WorkflowEngineOperations，统一事务和异常边界
-     * @param identityResolver WorkflowIdentityResolver，当前用户及候选组解析器
-     * @param participantRuleRuntimeService WorkflowParticipantRuleRuntimeService，正式发起范围快照判定器
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，部署业务资源仓库
-     * @param formMapper WfFormMapper，父模型作者表单 Mapper
-     * @param formTemplateValidator WorkflowFormTemplateValidator，表单结构安全校验器
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowCallActivityReferenceService(RepositoryService repositoryService,
             WorkflowEngineOperations engineOperations, WorkflowIdentityResolver identityResolver,

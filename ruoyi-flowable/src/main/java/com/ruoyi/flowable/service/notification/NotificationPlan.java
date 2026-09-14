@@ -14,8 +14,7 @@ public record NotificationPlan(List<Notification> notifications)
 {
     /**
      * 冻结通知记录集合，防止规划完成后被调用方修改。
-     * @param notifications List&lt;Notification&gt;，待写入通知记录
-     * @return void，构造后的集合不可修改
+     * 构造后的集合不可修改
      */
     public NotificationPlan
     {
@@ -67,8 +66,7 @@ public record NotificationPlan(List<Notification> notifications)
     {
         /**
          * 冻结通道集合，保证 Writer 看到的计划不会发生事后变化。
-         * @param channels Set&lt;String&gt;，已经过偏好过滤的通道集合
-         * @return void，构造后的通道集合不可修改
+         * 构造后的通道集合不可修改
          */
         public Notification
         {

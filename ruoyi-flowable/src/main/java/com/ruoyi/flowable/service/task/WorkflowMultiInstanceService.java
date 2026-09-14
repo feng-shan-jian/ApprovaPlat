@@ -82,16 +82,7 @@ public class WorkflowMultiInstanceService
     /**
      * 创建动态多实例领域服务。
      *
-     * @param engineOperations WorkflowEngineOperations，统一事务、认证和 Flowable 异常翻译边界
-     * @param identityResolver WorkflowIdentityResolver，只读状态接口的正式当前用户解析器
-     * @param userSelectionValidator WorkflowUserSelectionValidator，加签用户正式主数据校验器
-     * @param userMapper WorkflowMultiInstanceUserMapper，成员名称批量查询 Mapper
-     * @param runtimeService RuntimeService，execution、变量和动态多实例公共写服务
-     * @param taskService TaskService，活动任务和 Flowable comment 公共服务
-     * @param historyService HistoryService，区分过期任务和不存在对象的历史查询服务
-     * @param snapshotReader WorkflowMultiInstanceRuntimeSnapshotReader，唯一实时快照读取器
-     * @param roundLifecycleService WorkflowMultiInstanceRoundLifecycleService，ACTIVE 轮次 CAS 服务
-     * @return 无返回值，构造后由 Spring 管理该领域服务
+     * 构造后由 Spring 管理该领域服务
      */
     public WorkflowMultiInstanceService(WorkflowEngineOperations engineOperations,
             WorkflowIdentityResolver identityResolver,
@@ -1078,17 +1069,7 @@ public class WorkflowMultiInstanceService
         /**
          * 校验普通任务空计划或动态任务完整 revision 区间，禁止部分字段进入审计链。
          *
-         * @param activityId String，动态多实例活动 ID；普通任务为空
-         * @param rootExecutionId String，多实例根主键；普通任务为空
-         * @param beforeRevision Integer，完成前 revision；普通任务为空
-         * @param afterRevision Integer，完成占用后的 revision；普通任务为空
-         * @param instancesBefore Integer，完成前总实例数；普通任务为空
-         * @param activeBefore Integer，完成前活动实例数；普通任务为空
-         * @param completedBefore Integer，完成前已完成实例数；普通任务为空
-         * @param mode WorkflowMultiInstanceMode，完成前冻结模式；普通任务为空
-         * @param members List&lt;String&gt;，完成前冻结成员；普通任务为空
-         * @param groupCompleted boolean，本次完成是否结束整组
-         * @return 无返回值，字段不完整或 revision 非严格递增一时拒绝构造
+         * 字段不完整或 revision 非严格递增一时拒绝构造
          */
         CompletionRevision
         {

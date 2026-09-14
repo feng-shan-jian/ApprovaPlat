@@ -21,11 +21,7 @@ public record WorkflowProcessFormDetailView(
     /**
      * 创建语义明确的表单详情并拒绝普通态、退回态与正式快照事实之间的矛盾组合。
      *
-     * @param applicationForm WorkflowProcessFormSnapshotView，开始提交或退回申请表单
-     * @param nodeTaskForm WorkflowProcessFormSnapshotView，请求任务节点表单，允许为空
-     * @param historyForms List&lt;WorkflowProcessFormSnapshotView&gt;，正式历史 UserTask 表单
-     * @param returnedApplication boolean，当前是否为退回申请态
-     * @return 无返回值，构造后 historyForms 为不可修改集合
+     * 构造后 historyForms 为不可修改集合
      */
     public WorkflowProcessFormDetailView
     {

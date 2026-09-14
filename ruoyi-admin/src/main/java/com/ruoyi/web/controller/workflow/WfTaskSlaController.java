@@ -43,9 +43,7 @@ public class WfTaskSlaController extends BaseController
 
     /**
      * 创建审批 SLA Controller。
-     * @param calendarService WorkflowBusinessCalendarService，正式日历管理服务
-     * @param slaRuntimeService WorkflowTaskSlaRuntimeService，运行状态、审计和通知服务
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WfTaskSlaController(WorkflowBusinessCalendarService calendarService,
             WorkflowTaskSlaRuntimeService slaRuntimeService)

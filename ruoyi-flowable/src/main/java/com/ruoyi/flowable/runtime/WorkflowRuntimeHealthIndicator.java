@@ -31,11 +31,7 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
     /**
      * 创建工作流运行健康检查。
      *
-     * @param environment Environment，读取两个 executor 最终配置开关
-     * @param runtimeMetrics WorkflowRuntimeMetrics，读取一次性原子运行快照
-     * @param runtimeProperties WorkflowRuntimeProperties，读取快照最大允许年龄
-     * @param attachmentProperties WorkflowAttachmentProperties，附件磁盘低水位
-     * @return 无返回值，构造后作为 workflowRuntime 健康贡献者
+     * 构造后作为 workflowRuntime 健康贡献者
      */
     public WorkflowRuntimeHealthIndicator(Environment environment,
             WorkflowRuntimeMetrics runtimeMetrics,
@@ -168,7 +164,6 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
      *
      * @param problem String，固定低基数失败类型
      * @param failure RuntimeException，可选依赖异常，仅记录 Java 类型
-     * @return void，无返回值
      */
     private void logProblemOnce(String problem, RuntimeException failure)
     {
@@ -190,8 +185,6 @@ public class WorkflowRuntimeHealthIndicator implements HealthIndicator
 
     /**
      * 健康恢复时只记录一次恢复事件，并清除上一失败指纹。
-     *
-     * @return void，无返回值
      */
     private void logRecoveryIfNeeded()
     {

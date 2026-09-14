@@ -31,8 +31,7 @@ public class WorkflowDataRetentionMetrics
 
     /**
      * 预注册固定数据域和结果标签的 Micrometer 指标，禁止业务主键进入标签。
-     * @param registry MeterRegistry，应用统一指标注册表
-     * @return 无返回值，构造后指标可直接采集
+     * 构造后指标可直接采集
      */
     public WorkflowDataRetentionMetrics(MeterRegistry registry)
     {
@@ -60,7 +59,6 @@ public class WorkflowDataRetentionMetrics
      * @param result WorkflowDataRetentionBatchResult，领域返回的真实数量
      * @param elapsedNanos long，协调器测得的单域耗时纳秒
      * @param executionTime LocalDateTime，本轮统一业务时间
-     * @return void，无返回值
      */
     public void recordCompleted(WorkflowDataRetentionBatchResult result,
             long elapsedNanos, LocalDateTime executionTime)
@@ -77,7 +75,6 @@ public class WorkflowDataRetentionMetrics
      * 记录单域事务级失败，失败批次回滚后不虚报扫描、领取或删除成功数。
      * @param domain WorkflowDataRetentionDomain，发生失败的固定数据域
      * @param elapsedNanos long，失败前实际耗时纳秒
-     * @return void，无返回值
      */
     public void recordDomainFailure(WorkflowDataRetentionDomain domain, long elapsedNanos)
     {

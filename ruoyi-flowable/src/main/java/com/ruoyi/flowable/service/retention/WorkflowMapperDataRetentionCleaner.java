@@ -19,11 +19,7 @@ public class WorkflowMapperDataRetentionCleaner<T> implements WorkflowDataRetent
 
     /**
      * 创建 Mapper 数据域清理器。
-     * @param domain WorkflowDataRetentionDomain，清理器唯一负责的数据域
-     * @param retentionSupplier Supplier&lt;Duration&gt;，动态读取领域保留期
-     * @param batchSizeSupplier Supplier&lt;Integer&gt;，动态读取有界批次上限
-     * @param operations WorkflowRetentionBatchOperations&lt;T&gt;，领域 Mapper 操作适配器
-     * @return 无返回值，构造完成后由 Spring 事务代理调用
+     * 构造完成后由 Spring 事务代理调用
      */
     public WorkflowMapperDataRetentionCleaner(WorkflowDataRetentionDomain domain,
             Supplier<Duration> retentionSupplier, Supplier<Integer> batchSizeSupplier,

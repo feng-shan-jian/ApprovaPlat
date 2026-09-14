@@ -34,7 +34,7 @@ import org.flowable.task.api.history.HistoricTaskInstanceQuery;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.common.core.domain.entity.SysUser;
+import com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.UserNameCache;
 import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowAssignedTaskQueryDto;
@@ -47,7 +47,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.service.task.WorkflowTaskLifecycleService;
+import com.ruoyi.flowable.service.task.WorkflowTaskRevokeApplicationService;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.system.service.ISysUserService;
 
@@ -63,7 +63,7 @@ public class WorkflowProcessTaskQueryService
     private final TaskService taskService;
     private final WorkflowIdentityResolver identityResolver;
     private final ISysUserService userService;
-    private final WorkflowTaskLifecycleService taskLifecycleService;
+    private final WorkflowTaskRevokeApplicationService revokeApplicationService;
 
     /** 待办能力、详情快照与写入门禁共享的取消认领纯规则组件。 */
     private final WorkflowTaskUnclaimPolicy unclaimPolicy;
@@ -71,20 +71,12 @@ public class WorkflowProcessTaskQueryService
     /**
      * 创建流程任务查询服务。
      *
-     * @param engineOperations WorkflowEngineOperations，统一只读事务和异常翻译边界
-     * @param repositoryService RepositoryService，Flowable 流程定义和部署公共 API
-     * @param historyService HistoryService，Flowable 历史实例与历史任务公共 API
-     * @param taskService TaskService，Flowable 活动任务公共 API
-     * @param identityResolver WorkflowIdentityResolver，当前有效用户及候选组解析器
-     * @param userService ISysUserService，历史发起人显示名称查询服务
-     * @param taskLifecycleService WorkflowTaskLifecycleService，复用正式撤回校验计算已办能力
-     * @param unclaimPolicy WorkflowTaskUnclaimPolicy，取消认领能力纯规则组件
-     * @return 无返回值，构造后由 Spring 管理该服务
+     * 构造后由 Spring 管理该服务
      */
     public WorkflowProcessTaskQueryService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, HistoryService historyService,
             TaskService taskService, WorkflowIdentityResolver identityResolver,
-            ISysUserService userService, WorkflowTaskLifecycleService taskLifecycleService,
+            ISysUserService userService, WorkflowTaskRevokeApplicationService revokeApplicationService,
             WorkflowTaskUnclaimPolicy unclaimPolicy)
     {
         this.engineOperations = engineOperations;
@@ -93,7 +85,7 @@ public class WorkflowProcessTaskQueryService
         this.taskService = taskService;
         this.identityResolver = identityResolver;
         this.userService = userService;
-        this.taskLifecycleService = taskLifecycleService;
+        this.revokeApplicationService = revokeApplicationService;
         this.unclaimPolicy = unclaimPolicy;
     }
 
@@ -130,7 +122,7 @@ public class WorkflowProcessTaskQueryService
                 return new PageResult<>(List.of(), total);
             }
             List<Task> tasks = checkedRows(query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            UserNameCache userNameCache = new UserNameCache();
+            UserNameCache userNameCache = new UserNameCache(userService);
             Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
             List<WorkflowAssignedTaskView> rows = tasks.stream()
                     .map(task -> toAssignedView(task, contexts.get(task.getId()), actor.userId()))
@@ -181,7 +173,7 @@ public class WorkflowProcessTaskQueryService
                 return new PageResult<>(List.of(), total);
             }
             List<Task> tasks = checkedRows(query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            UserNameCache userNameCache = new UserNameCache();
+            UserNameCache userNameCache = new UserNameCache(userService);
             Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
             List<WorkflowClaimableTaskView> rows = tasks.stream()
                     .map(task -> toClaimableView(task, contexts.get(task.getId())))
@@ -412,7 +404,7 @@ public class WorkflowProcessTaskQueryService
         }
         List<HistoricTaskInstance> tasks = checkedRows(
                 query.listPage(page.offset(), page.pageSize()), page.pageSize());
-        UserNameCache userNameCache = new UserNameCache();
+        UserNameCache userNameCache = new UserNameCache(userService);
         Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
         return new CompletedTaskPage(tasks, contexts, total);
     }
@@ -479,7 +471,7 @@ public class WorkflowProcessTaskQueryService
             TaskContext context)
     {
         // 能力字段调用正式撤回准备路径；页面快照只用于隐藏入口，提交时仍会再次加锁校验。
-        boolean revocable = taskLifecycleService.isProcessRevocable(
+        boolean revocable = revokeApplicationService.isProcessRevocable(
                 task.getProcessInstanceId(), task.getId());
         return new WorkflowCompletedTaskView(task.getId(), task.getName(), task.getTaskDefinitionKey(),
                 task.getAssignee(), task.getCompletedBy(), context.definition().getId(),
@@ -639,45 +631,11 @@ public class WorkflowProcessTaskQueryService
             Deployment deployment = deploymentsById.get(definition.getDeploymentId());
             // 展示和筛选共享 Deployment.category 口径，禁止回退出一个无法筛选的旧分类。
             String category = resolveDeploymentCategory(deployment.getCategory());
-            String startUserName = resolveUserName(instance.getStartUserId(), userNameCache);
+            String startUserName = userNameCache.resolve(instance.getStartUserId());
             contexts.put(task.getId(), new TaskContext(definition, instance,
                     category, startUserName));
         }
         return Map.copyOf(contexts);
-    }
-
-    /**
-     * 查询历史发起人的当前显示名称，缺失用户以原始主键回显而不篡改历史关联。
-     *
-     * @param userId String，Flowable 历史发起人主键，允许为空
-     * @param userNameCache UserNameCache，当前页用户名缓存
-     * @return String，用户昵称、原始主键或 null
-     */
-    private String resolveUserName(String userId, UserNameCache userNameCache)
-    {
-        if (!StringUtils.hasText(userId))
-        {
-            return null;
-        }
-        if (userNameCache.userNames.containsKey(userId))
-        {
-            return userNameCache.userNames.get(userId);
-        }
-        String displayName = userId;
-        try
-        {
-            SysUser user = userService.selectUserById(Long.valueOf(userId));
-            if (user != null && StringUtils.hasText(user.getNickName()))
-            {
-                displayName = user.getNickName();
-            }
-        }
-        catch (NumberFormatException ignored)
-        {
-            // 存量异常身份不做名称猜测，保留原值便于迁移对账和问题追踪。
-        }
-        userNameCache.userNames.put(userId, displayName);
-        return displayName;
     }
 
     /**
@@ -695,10 +653,7 @@ public class WorkflowProcessTaskQueryService
         /**
          * 冻结已办分页事实，防止列表和导出转换阶段改写共享结果。
          *
-         * @param tasks List&lt;HistoricTaskInstance&gt;，当前页历史任务
-         * @param contextsByTaskId Map&lt;String, TaskContext&gt;，任务上下文映射
-         * @param total long，真实总量
-         * @return 无返回值，构造时复制任务和上下文集合
+         * 构造时复制任务和上下文集合
          */
         private CompletedTaskPage
         {
@@ -720,10 +675,4 @@ public class WorkflowProcessTaskQueryService
     {
     }
 
-    /** 当前页用户名缓存，保持历史用户逐对象查询和原始主键回显规则不变。 */
-    private static final class UserNameCache
-    {
-        /** 历史用户主键到显示名称的当前页映射。 */
-        private final Map<String, String> userNames = new HashMap<>();
-    }
 }

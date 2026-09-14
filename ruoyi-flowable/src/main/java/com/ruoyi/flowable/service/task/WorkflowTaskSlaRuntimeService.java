@@ -81,15 +81,7 @@ public class WorkflowTaskSlaRuntimeService
 
     /**
      * 创建 SLA 运行服务。
-     * @param repositoryService RepositoryService，定义和部署关系公共 API
-     * @param managementService ManagementService，Flowable timer job 重排公共 API
-     * @param processEngineConfiguration ProcessEngineConfiguration，真实引擎时钟
-     * @param calendarService WorkflowBusinessCalendarService，业务日历到期计算
-     * @param engineOperations WorkflowEngineOperations，查询和当前身份事务边界
-     * @param slaMapper WfTaskSlaMapper，运行状态、审计和通知数据访问层
-     * @param artifactRepository WorkflowDeploymentArtifactRepository，SLA 部署资源仓库
-     * @param notificationWriter WorkflowNotificationWriter，当前事务内直接写必达站内通知
-     * @return 无返回值，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public WorkflowTaskSlaRuntimeService(RepositoryService repositoryService,
             ManagementService managementService,

@@ -13,8 +13,7 @@ public class WorkflowCollaborationMetrics
 
     /**
      * 注册固定 action 集合，禁止消息名、实例或关联键成为指标标签。
-     * @param registry MeterRegistry，应用统一指标注册表
-     * @return void，构造后可直接累计
+     * 构造后可直接累计
      */
     public WorkflowCollaborationMetrics(MeterRegistry registry)
     {

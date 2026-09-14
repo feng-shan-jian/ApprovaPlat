@@ -55,10 +55,7 @@ public final class WorkflowProcessCompletionStatusListener
 
     /**
      * 创建延迟解析自动抄送与普通审批通知服务的监听器，供 Flowable 引擎初始化配置使用。
-     * @param automaticCopyServiceProvider ObjectProvider，流程完成后获取自动抄送服务
-     * @param notificationServiceProvider ObjectProvider，流程完成后获取通知服务
-     * @param notificationOutboxServiceProvider ObjectProvider，子流程结束后获取催办状态服务
-     * @return void，配置后只处理 PROCESS_COMPLETED
+     * 配置后只处理 PROCESS_COMPLETED
      */
     public WorkflowProcessCompletionStatusListener(
             ObjectProvider<WorkflowAutomaticCopyService> automaticCopyServiceProvider,

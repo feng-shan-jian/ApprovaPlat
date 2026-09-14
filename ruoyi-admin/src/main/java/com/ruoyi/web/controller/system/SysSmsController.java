@@ -38,8 +38,7 @@ public class SysSmsController extends BaseController
     /**
      * 创建短信管理控制器。
      *
-     * @param smsService SysSmsService，正式短信领域服务
-     * @return void，构造后由 Spring 管理
+     * 构造后由 Spring 管理
      */
     public SysSmsController(SysSmsService smsService)
     {

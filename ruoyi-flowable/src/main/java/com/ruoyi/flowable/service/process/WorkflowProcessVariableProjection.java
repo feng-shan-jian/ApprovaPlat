@@ -154,9 +154,8 @@ public class WorkflowProcessVariableProjection
     /**
      * 创建流程详情变量安全投影组件。
      *
+     * 构造后由 Spring 管理该组件
      * @param historyService HistoryService，禁止初始化正文的历史变量公共查询入口
-     * @param historicVariableMapper WorkflowHistoricVariableMapper，物理元数据和正文两阶段读取入口
-     * @return 无返回值，构造后由 Spring 管理该组件
      */
     public WorkflowProcessVariableProjection(HistoryService historyService,
             WorkflowHistoricVariableMapper historicVariableMapper)
@@ -1272,9 +1271,7 @@ public class WorkflowProcessVariableProjection
         /**
          * 防御复制变量投影，避免详情编排层修改安全值或字节计量。
          *
-         * @param values Map&lt;String, JsonNode&gt;，完成安全门禁的有序字段值
-         * @param serializedBytesByName Map&lt;String, Integer&gt;，逐字段真实 JSON 字节数
-         * @return 无返回值，构造后两个映射均不可变
+         * 构造后两个映射均不可变
          */
         ProjectedValues
         {
