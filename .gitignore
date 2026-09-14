@@ -5,7 +5,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 **/*.log
-output/
+/output/
 /mysql-root.txt
 /mysql-password.txt
 /mysql-app.txt
@@ -13,6 +13,7 @@ output/
 /logs/
 /.playwright-cli/
 /.playwright-mcp/
+/docs/testing/evidence/
 tests/**/coverage/
 ruoyi-ui/test-results/
 ruoyi-ui/playwright-report/
@@ -26,10 +27,18 @@ selenium-debug.log
 *.njsproj
 *.sln
 *.local
+.env
+/.local/
 
 # Java and Maven build outputs
 **/target/
-**/build/
+/build/
+*.class
+*.jar
+*.war
+*.ear
+!.mvn/wrapper/maven-wrapper.jar
+hs_err_pid*
 .gradle/
 *.xml.versionsBackup
 *.swp

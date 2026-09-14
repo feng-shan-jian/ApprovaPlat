@@ -170,7 +170,7 @@ npm run test:contracts
 npm run build:prod
 ```
 
-真实 MySQL `*IT` 使用独立的 opt-in Failsafe profile。CI 先准备专用 `approvaplat_it` schema，再显式提供以下三个环境变量；profile 在变量完整时连接该隔离 MySQL，变量缺失时直接失败。普通 `mvn test` / `mvn verify` 运行单元和本地集成测试：
+真实 MySQL `*IT` 使用独立的 opt-in Failsafe profile。运行前先准备专用 `approvaplat_it` schema，再显式提供以下三个环境变量；profile 在变量完整时连接该隔离 MySQL，变量缺失时直接失败。普通 `mvn test` / `mvn verify` 运行单元和本地集成测试：
 
 ```powershell
 $env:WORKFLOW_MYSQL_TEST_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat_it?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia%2FShanghai'
@@ -219,6 +219,8 @@ ApprovaPlat/
 
 欢迎提交 Issue 和 Pull Request，也欢迎把真实审批场景、迁移问题和踩过的坑带进来。
 
+开发约定、验证入口与提交要求见[贡献指南](CONTRIBUTING.md)。
+
 如果准备增加新的 BPMN 元素或审批动作，请同时说明它如何编辑、如何执行、谁能操作、数据写到哪里、失败以后会留下什么，以及准备怎样验证。
 
 ## 上游项目与许可证
@@ -226,5 +228,3 @@ ApprovaPlat/
 ApprovaPlat 建立在 [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue)、[Flowable](https://github.com/flowable/flowable-engine) 和 [bpmn.io](https://github.com/bpmn-io/bpmn-js) 等开源项目之上。
 
 这是一个独立开源项目，代码使用 [MIT License](LICENSE)，并独立维护自身发布与支持边界。
-
-> 愿我们都能在 AI 时代找到自己的方向，做成想做的事，事业有成，一路顺遂。

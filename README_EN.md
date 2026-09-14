@@ -171,7 +171,7 @@ npm run test:contracts
 npm run build:prod
 ```
 
-Real MySQL `*IT` tests use an opt-in Failsafe profile. CI first prepares a dedicated `approvaplat_it` schema and then supplies these environment variables. The profile connects to that isolated MySQL when all values are present and fails immediately when configuration is incomplete. Regular `mvn test` and `mvn verify` run unit and local integration tests.
+Real MySQL `*IT` tests use an opt-in Failsafe profile. Before running them, prepare a dedicated `approvaplat_it` schema and supply these environment variables. The profile connects to that isolated MySQL when all values are present and fails immediately when configuration is incomplete. Regular `mvn test` and `mvn verify` run unit and local integration tests.
 
 ```powershell
 $env:WORKFLOW_MYSQL_TEST_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat_it?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia%2FShanghai'
@@ -220,6 +220,8 @@ ApprovaPlat/
 
 Issues and pull requests are welcome, especially when they bring a real approval scenario, migration problem, or hard-earned lesson into the project.
 
+See the [contribution guide (Chinese)](CONTRIBUTING.md) for development conventions, verification commands, and pull request requirements.
+
 For a new BPMN element or approval action, explain how it is edited, how it runs, who may use it, where its data is stored, what remains after failure, and how it will be tested.
 
 ## Upstream projects and license
@@ -227,5 +229,3 @@ For a new BPMN element or approval action, explain how it is edited, how it runs
 ApprovaPlat builds on open-source projects including [RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue), [Flowable](https://github.com/flowable/flowable-engine), and [bpmn.io](https://github.com/bpmn-io/bpmn-js).
 
 This is an independent open-source project with its own release and support boundaries. The code is available under the [MIT License](LICENSE).
-
-> May we all find our direction in the age of AI, build what we set out to build, and enjoy success and a smooth road ahead.

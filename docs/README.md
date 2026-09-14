@@ -1,6 +1,6 @@
 # ApprovaPlat 项目文档
 
-本目录按长期职责保存约束项目实现和上线质量的正式文档。任务系统和独立证据归档分别保存阶段计划、执行过程、日期化进度与验收摘要。
+本目录说明项目架构、业务契约和数据库安装升级。开发环境、验证命令与贡献方式见[贡献指南](../CONTRIBUTING.md)。
 
 ## 文档入口
 
@@ -11,19 +11,14 @@
 | 协作契约 | [contracts/workflow-collaboration.md](contracts/workflow-collaboration.md) | 定义 Participant、MessageFlow 与多池消息运行语义 |
 | 扩展管理 | [contracts/workflow-extension-deletion.md](contracts/workflow-extension-deletion.md) | 定义扩展目录读取、删除核验和最终删除边界 |
 | 数据库 | [database/workflow-baseline.md](database/workflow-baseline.md) | 定义首个正式数据库基线、安装顺序和未来迁移规则 |
-| 手工回归 | [testing/WorkflowCoreBlackBoxCases.md](testing/WorkflowCoreBlackBoxCases.md) | 提供长流程 UI 黑盒场景与测试环境要求 |
 | 浏览器回归 | [工作流浏览器回归](../ruoyi-ui/tests/e2e/README.md) | 说明组件回归、登录集成回归及运行命令 |
-
-## 待完成工作与验收依据
-
-- [用户体验优化计划](testing/WorkflowUXOptimizationExecutionPlan-20260912.md)：仍待实施与体验验收，不能按历史材料删除。
-- [最近一次工作流修复验收](testing/WorkflowRepairExecutionReport-20260912.md)：保留必要证据和未执行边界；其中的测试结果仅对应报告当时的版本与环境。
 
 ## 维护规则
 
 - 每份文档承担一种长期职责，文件名直接表达稳定主题。
 - 文档描述当前正式实现；替代提交同时删除被替代方案和本地开发迁移历史。
-- 代码、SQL 和自动测试提供可执行证据，文档说明其业务目的和使用边界。
+- 代码、SQL 和自动测试提供可执行验证入口，文档说明其业务目的和使用边界。
 - 文档、代码和测试出现冲突时，以项目负责人确认的目标语义为准，并在同一变更中同步全部受影响资产。
-- 真实测试报告、环境身份、账号、密码、Token、备份文件和发布签字保存在受控证据系统；Git 只保存可公开复现的验证入口。
-- 高复用前端组件的接入说明与组件源码同目录维护，并作为该组件的唯一手册。
+- Git 跟踪源码、构建配置、正式测试及夹具、数据库脚本、许可证、产品说明图片和面向使用者与贡献者的文档。
+- 任务安排和问题进展通过 Issue、Pull Request 及提交记录维护。测试运行产物写入已忽略的输出目录；本机凭据和环境配置保存在本地。
+- 方法、参数和内部实现约束由代码类型与必要注释维护；跨模块协议在本目录集中说明，相关变更同步更新。
