@@ -87,7 +87,6 @@ The view below shows a dynamic multi-instance approval completed in a real front
 
 ## Production acceptance boundary
 
-- The first production database baseline installs into an empty schema. Environments already on the formal 8.0.0 baseline move forward with `8.0.1__workflow_mail_config.sql`.
 - Production fixes `flowable.database-schema-update=false`; maintained repository SQL and runtime validation provide the schema update path.
 - Formal gateway entry points cover exclusive, parallel, inclusive, and event gateways. Controlled loops execute business repetition, while standard loops retain XML round-trip support.
 - Async executors are enabled after database, topology, capacity, monitoring, and single-executor coordination acceptance, then run timers, SLAs, and background work.

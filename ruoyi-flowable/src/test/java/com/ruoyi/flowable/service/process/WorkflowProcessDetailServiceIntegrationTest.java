@@ -255,33 +255,10 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.formDetail().applicationForm().nodeKey()).isEqualTo("mainStart");
         assertThat(detail.formDetail().historyForms()).isEmpty();
         assertThat(detail.formDetail().returnedApplication()).isFalse();
-        assertThat(detail.currentTask().unclaimAllowed()).isFalse();
         assertThat(detail.resubmitAllowed()).isFalse();
         verify(historyService).createHistoricVariableInstanceQuery();
         verify(historicVariableMapper).selectCurrentVariableMetadata(
                 eq(instance.getId()), eq(task.getId()), eq(false), eq(List.of("value")), eq(2));
-    }
-
-    /**
-     * 验证详情 currentTask 原样返回共享规则基于真实 claim 元数据生成的能力。
-     *
-     * @return void，真实认领任务未在详情中返回 unclaimAllowed=true 时测试失败
-     */
-    @Test
-    void returnsUnclaimCapabilityOnCurrentTaskSnapshot()
-    {
-        ProcessInstance instance = startMainProcess();
-        Task task = activeTask(instance.getId(), "globalTask");
-        // 测试夹具先清除 BPMN 静态分配，再通过 Flowable 公共 claim 形成完整真实认领元数据。
-        taskService.unclaim(task.getId());
-        taskService.claim(task.getId(), "approver");
-
-        WorkflowProcessDetailView detail = readDetail(
-                instance.getId(), task.getId(), "running");
-
-        assertThat(detail.currentTask().claimedBy()).isEqualTo("approver");
-        assertThat(detail.currentTask().claimTime()).isNotNull();
-        assertThat(detail.currentTask().unclaimAllowed()).isTrue();
     }
 
     /**

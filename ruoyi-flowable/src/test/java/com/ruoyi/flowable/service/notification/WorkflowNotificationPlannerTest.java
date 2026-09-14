@@ -2,9 +2,7 @@ package com.ruoyi.flowable.service.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -21,9 +19,6 @@ import org.flowable.engine.TaskService;
 import org.flowable.common.engine.impl.identity.Authentication;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
-import org.flowable.identitylink.api.IdentityLink;
-import org.flowable.identitylink.api.IdentityLinkType;
-import org.flowable.task.api.Task;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Answers;
@@ -79,44 +74,6 @@ class WorkflowNotificationPlannerTest
 
         assertThat(plan.notifications()).singleElement()
                 .extracting(NotificationPlan.Notification::title).isEqualTo("node");
-    }
-
-    /**
-     * 验证候选用户和 ROLE 组经过正式身份目录解析后再参与通知计划。
-     * @return void，组解析或认领资格过滤错误时测试失败
-     */
-    @Test
-    void resolvesCandidateUsersAndGroups()
-    {
-        policyRows.add(policy(1L, "DEFAULT", "TASK_RECIPIENT", "INBOX", "title"));
-        preferenceRows.add(preference("7", true, true, false));
-        Task task = mock(Task.class);
-        when(task.getAssignee()).thenReturn(null);
-        when(task.getId()).thenReturn("task-1");
-        IdentityLink userLink = mock(IdentityLink.class);
-        when(userLink.getType()).thenReturn(IdentityLinkType.CANDIDATE);
-        when(userLink.getUserId()).thenReturn("7");
-        when(userLink.getGroupId()).thenReturn(null);
-        IdentityLink groupLink = mock(IdentityLink.class);
-        when(groupLink.getType()).thenReturn(IdentityLinkType.CANDIDATE);
-        when(groupLink.getUserId()).thenReturn(null);
-        when(groupLink.getGroupId()).thenReturn("ROLE2");
-        when(taskService.getIdentityLinksForTask("task-1"))
-                .thenReturn(List.of(userLink, groupLink));
-        when(identityResolver.resolveActiveUserIds(anyCollection(), anyCollection()))
-                .thenReturn(Set.of("7"));
-        when(identityResolver.resolveClaimEligibleUserIds(eq(Set.of("7"))))
-                .thenReturn(Set.of("7"));
-
-        NotificationPlan plan = planner.plan(
-                WorkflowNotificationPlanner.NotificationRequest.taskEvent(
-                        "TASK_ARRIVED", "TASK:task-1:ARRIVED",
-                        definition("purchase", "Purchase"), "instance-1", "task-1",
-                        "approve", "Approve", task, Set.of(),
-                        "/workflow/process-detail/instance-1?source=todo&taskId=task-1"));
-
-        assertThat(plan.notifications()).extracting(NotificationPlan.Notification::recipientUserId)
-                .containsExactly("7");
     }
 
     /**

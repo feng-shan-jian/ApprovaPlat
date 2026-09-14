@@ -35,16 +35,6 @@ Flowable 继续保持 `database-schema-update: "false"`，应用启动不得创�
 
 ## 现有基线升级
 
-已经完成 8.0.0 九文件基线的数据库按以下顺序升级；Flowable create 脚本仅用于空 schema 初始化：
-
-1. 完成整库备份并核对当前 schema 为 95 张正式基线表。
-2. 执行 `sql/flowable/business/8.0.1__workflow_mail_config.sql`；该脚本创建空的 `sys_mail_config`，SMTP 账号和授权码随后通过正式业务入口保存。
-3. 重新执行幂等的 `sql/flowable/menu/8.0.0__workflow_menu.sql`，写入 `workflow:notification:mailManage` 并按正式角色种子重建工作流菜单授权。
-4. 核验 `sys_mail_config` 行数为零、`config_id=1` 单例约束存在，且邮件服务管理权限只授予 `workflow_admin`。
-5. 执行 `mysqlcheck`，再由具备权限的管理员通过真实页面首次保存 SMTP 配置。
-
-升级完成后，管理员通过受控业务入口重新配置 SMTP 账号和授权码；SQL 和部署示例只保存公开结构与字段说明。
-
 启用附件上传持久恢复前，额外执行 `sql/flowable/business/8.0.4__workflow_attachment_upload.sql`，核验空的 `wf_attachment_upload`、`storage_key` 的 160 字符 ASCII 二进制主键，以及 `(next_retry_time, storage_key)` 清理索引。无需改写现有附件元数据或文件。已部署的其他功能迁移继续按其各自契约执行，本项只新增上传清理表。
 
 回退应用版本时保留 `wf_attachment_upload`，不要删除待回收记录。停用旧上传入口后，先由支持该账本的版本处理积压并确认没有活动上传、登记行数为零，再决定是否移除空表。历史无元数据、无上传登记的孤儿不在自动迁移回收范围内。
@@ -52,53 +42,6 @@ Flowable 继续保持 `database-schema-update: "false"`，应用启动不得创�
 ## 开发库重建
 
 开发库以可重建数据为准。结构变化时直接删除目标 schema，按上述十一个初始化文件重建，然后执行 `mysqlcheck`；仓库只保留正式基线 SQL。
-
-## 表基线
-
-| 模块 | 表数 |
-| --- | ---: |
-| 若依 | 20 |
-| Quartz | 11 |
-| Flowable Common/Process/History/DMN | 36 |
-| 工作流 `wf_*` | 29 |
-| 平台邮件配置 `sys_mail_config` | 1 |
-| 合计 | 97 |
-
-29 张业务表：
-
-- `wf_category`
-- `wf_form`
-- `wf_controlled_loop_execution`
-- `wf_multi_instance_round`
-- `wf_bpmn_extension`
-- `wf_bpmn_extension_version`
-- `wf_business_calendar`
-- `wf_business_calendar_day`
-- `wf_task_sla_execution`
-- `wf_task_sla_audit`
-- `wf_connector_endpoint`
-- `wf_sql_datasource`
-- `wf_integration_credential`
-- `wf_runtime_event_request`
-- `wf_collaboration_channel`
-- `wf_collaboration_message`
-- `wf_collaboration_outbox`
-- `wf_collaboration_message_audit`
-- `wf_copy`
-- `wf_process_draft`
-- `wf_attachment_quota_guard`
-- `wf_attachment`
-- `wf_attachment_upload`
-- `wf_bpmn_event_code`
-- `wf_bpmn_event_audit`
-- `wf_notification_policy`
-- `wf_notification_preference`
-- `wf_notification_outbox`
-- `wf_notification_inbox`
-
-平台邮件配置表：
-
-- `sys_mail_config`
 
 ## 关键结构约束
 

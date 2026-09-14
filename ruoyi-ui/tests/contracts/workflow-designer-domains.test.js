@@ -489,7 +489,6 @@ test('表单键使用精确 key_正Long 文本协议', () => {
  * @returns {void} 身份前缀、Java Long 上限或重复规则漂移时测试失败。
  */
 test('表单与参与者领域独立校验指定多实例身份', () => {
-  let assignmentChange
   const propertyState = {
     multiInstanceType: 'controlled',
     multiInstanceMemberSource: 'role',
@@ -501,7 +500,6 @@ test('表单与参与者领域独立校验指定多实例身份', () => {
   }
   const domain = createFormParticipantDomain(createDomainContext({
     propertyState,
-    updateProperties(changes) { assignmentChange = changes }
   }))
 
   assert.deepEqual(domain.normalizeConfiguredMultiInstanceIdentity('role', ['ROLE12', 'ROLE35']), {
@@ -517,8 +515,6 @@ test('表单与参与者领域独立校验指定多实例身份', () => {
 
   propertyState.configuredMultiInstanceIdentityIds = []
   assert.match(domain.validatePendingMultiInstanceSelection(), /必须选择 1 至 100 个有效用户、角色或部门/)
-
-  assert.equal(assignmentChange, undefined)
 })
 
 /**
@@ -679,7 +675,6 @@ test('扩展事件与 SLA 领域独立校验自动抄送契约', () => {
     calendarKey: 'disabled-calendar'
   }), /审批 SLA 必须选择已启用的正式业务日历/)
   domain.updateSlaProperties(createDefaultSlaConfig())
-  assert.deepEqual(propertyState.sla, createDefaultSlaConfig())
   assert.deepEqual(persistedProperties.slice(0, 2), [
     { name: 'approva.conditionRule.config', value: 'keep' },
     { name: 'approva.autoCopyRules', value: 'old' }

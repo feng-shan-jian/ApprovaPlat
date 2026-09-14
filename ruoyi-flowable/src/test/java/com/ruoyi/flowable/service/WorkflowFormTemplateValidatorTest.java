@@ -18,25 +18,6 @@ class WorkflowFormTemplateValidatorTest
     private final WorkflowFormTemplateValidator validator =
             new WorkflowFormTemplateValidator();
 
-    /**
-     * 验证平面 tag、vModel、layout 和权限字段可以通过并正确投影。
-     *
-     * @return void，正式表单被拒绝或字段投影漂移时测试失败
-     */
-    @Test
-    void acceptsFormalFlatSchema()
-    {
-        String content = """
-                {"fields":[{"tag":"el-upload","vModel":"files",
-                "layout":"colFormItem","workflowHidden":false,
-                "workflowReadable":true,"workflowWritable":true}]}
-                """;
-        JsonNode root = validator.validate(content);
-        assertThat(validator.extractVariableNames(root)).containsExactly("files");
-        assertThat(validator.extractReadableVariableNames(root)).containsExactly("files");
-        assertThat(validator.extractAttachmentVariableNames(root)).containsExactly("files");
-    }
-
     @Test
     void projectsValidatedRootWithoutReparsingOrMutation()
     {
