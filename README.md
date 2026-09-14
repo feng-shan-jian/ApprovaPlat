@@ -113,7 +113,7 @@ docker compose up -d
 docker compose ps
 ```
 
-首次创建 `approvaplat-mysql-data` Volume 时，MySQL 会严格按照[数据库基线](docs/database/workflow-baseline.md)自动执行仓库现有的十个 SQL 文件。等待 `docker compose ps` 中 MySQL 和 Redis 均显示 `healthy` 后再启动应用；已有 Volume 不会重复初始化。
+首次创建 `approvaplat-mysql-data` Volume 时，MySQL 会严格按照[数据库基线](docs/database/workflow-baseline.md)自动执行正式基线 SQL。等待 `docker compose ps` 中 MySQL 和 Redis 均显示 `healthy` 后再启动应用；已有 Volume 不会重复初始化。
 
 安装前端依赖：
 

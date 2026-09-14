@@ -9,7 +9,15 @@
 | 架构 | [architecture/workflow-platform.md](architecture/workflow-platform.md) | 定义审批平台定位、模块边界、数据流和安全边界 |
 | 业务契约 | [contracts/workflow-behavior.md](contracts/workflow-behavior.md) | 定义审批动作、复杂 BPMN、附件、连接器和运行事件行为 |
 | 协作契约 | [contracts/workflow-collaboration.md](contracts/workflow-collaboration.md) | 定义 Participant、MessageFlow 与多池消息运行语义 |
+| 扩展管理 | [contracts/workflow-extension-deletion.md](contracts/workflow-extension-deletion.md) | 定义扩展目录读取、删除核验和最终删除边界 |
 | 数据库 | [database/workflow-baseline.md](database/workflow-baseline.md) | 定义首个正式数据库基线、安装顺序和未来迁移规则 |
+| 手工回归 | [testing/WorkflowCoreBlackBoxCases.md](testing/WorkflowCoreBlackBoxCases.md) | 提供长流程 UI 黑盒场景与测试环境要求 |
+| 浏览器回归 | [工作流浏览器回归](../ruoyi-ui/tests/e2e/README.md) | 说明组件回归、登录集成回归及运行命令 |
+
+## 待完成工作与验收依据
+
+- [用户体验优化计划](testing/WorkflowUXOptimizationExecutionPlan-20260912.md)：仍待实施与体验验收，不能按历史材料删除。
+- [最近一次工作流修复验收](testing/WorkflowRepairExecutionReport-20260912.md)：保留必要证据和未执行边界；其中的测试结果仅对应报告当时的版本与环境。
 
 ## 维护规则
 

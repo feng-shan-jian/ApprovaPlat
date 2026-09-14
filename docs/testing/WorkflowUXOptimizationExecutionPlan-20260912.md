@@ -2,7 +2,7 @@
 
 状态：待执行。本文件定义可实现的页面行为、依赖和验收，不代表新界面或用户测试已经完成。
 
-依据：[原生前端复测报告](/D:/ruoyiflowable/docs/testing/ComputerUseWorkflowRetestReport-20260911.md)及其截图。技术前置见[完整修复执行计划](/D:/ruoyiflowable/docs/testing/WorkflowRepairExecutionPlan-20260912.md)。本轮已查看原报告关键画面，未新增现场交互测试。
+技术前置与 A—G 场景见[工作流修复执行报告](WorkflowRepairExecutionReport-20260912.md)：R01–R08 已有实现和本地验收记录，R09 的未执行边界仍需保留。实施本计划前应重新核对当前代码、页面和测试环境；本文未新增现场交互或用户测试。
 
 ## 1. 目标与实施原则
 
@@ -10,7 +10,7 @@
 
 - 沿用现有 Element Plus、品牌颜色、属性面板、工具栏和任务页结构；先解决任务完成率和状态准确性，再做视觉细化。
 - 复用已经存在的错误定位、面板宽度调整、小地图、等待事件和正式目录，避免新建重复入口。
-- 实施前为受影响页面保留当前截图与交互基线；原报告红/粉色歌词属于桌面悬浮层，不作为产品缺陷。
+- 实施前为受影响页面记录当前截图与交互基线，仅以产品界面作为体验判断依据。
 - 原生操作证据、浏览器自动化证据、源码判断和设计提案分开记录；截图本身不证明键盘或无障碍行为通过。
 - 后端能力由 R 任务实施一次；下列 U 任务负责相应用户入口、表达和体验验收，不能重复开发一套协议。
 
@@ -39,7 +39,7 @@
 | U08 | P2/P3 | 布局、文字、键盘和可读性 | U01–U07 | 大图易找节点，关键信息可读可操作 | 1–2 |
 | U09 | 完成门禁 | 可用性测试与联合验收 | U01–U08、R09 | 任务成功和异常恢复达标 | 1–2 |
 
-估计是每项实施和体验验证工作量；与修复计划存在共享前端工作，排期必须去重，不能直接把两张表相加。
+估计包含每项实施和体验验证工作量；排期时先核对现有实现，扣除已随技术修复交付的共享前端工作。
 
 ## 4. 页面行为与验收
 
@@ -56,7 +56,7 @@
 
 ### U01：让用户始终知道设计是否安全保存
 
-页面入口：[设计页面](/D:/ruoyiflowable/ruoyi-ui/src/views/workflow/model/design.vue)、[工具栏](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/designer/DesignerToolbar.vue)、[标签栏](/D:/ruoyiflowable/ruoyi-ui/src/layout/components/TagsView/index.vue)。
+页面入口：[设计页面](../../ruoyi-ui/src/views/workflow/model/design.vue)、[工具栏](../../ruoyi-ui/src/components/workflow/designer/DesignerToolbar.vue)、[标签栏](../../ruoyi-ui/src/layout/components/TagsView/index.vue)。
 
 设计行为：
 
@@ -71,7 +71,7 @@
 
 ### U02：把“图能画出来”转为“配置知道怎么补齐”
 
-页面入口：[设计器](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/ProcessDesigner.vue)、[属性面板](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/designer/DesignerPropertiesPanel.vue)、[参与者规则](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/designer/ParticipantRuleEditor.vue)。
+页面入口：[设计器](../../ruoyi-ui/src/components/workflow/ProcessDesigner.vue)、[属性面板](../../ruoyi-ui/src/components/workflow/designer/DesignerPropertiesPanel.vue)、[参与者规则](../../ruoyi-ui/src/components/workflow/designer/ParticipantRuleEditor.vue)。
 
 设计行为：
 
@@ -86,7 +86,7 @@
 
 ### U03：字段映射呈现业务关系和权限
 
-页面入口：[调用领域](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/designer/routingCallActivityDomain.js)、[属性面板](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/designer/DesignerPropertiesPanel.vue)、[表单权限领域](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/designer/formParticipantDomain.js)。
+页面入口：[调用领域](../../ruoyi-ui/src/components/workflow/designer/routingCallActivityDomain.js)、[属性面板](../../ruoyi-ui/src/components/workflow/designer/DesignerPropertiesPanel.vue)、[表单权限领域](../../ruoyi-ui/src/components/workflow/designer/formParticipantDomain.js)。
 
 设计行为：
 
@@ -101,7 +101,7 @@
 
 ### U04：空目录必须给出下一步
 
-页面入口：[端点管理](/D:/ruoyiflowable/ruoyi-ui/src/views/workflow/connector/index.vue)、[消息配置编辑器](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/designer/CollaborationMessageEditor.vue)、[扩展目录加载](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/designer/extensionEventSlaDomain.js)。
+页面入口：[端点管理](../../ruoyi-ui/src/views/workflow/connector/index.vue)、[消息配置编辑器](../../ruoyi-ui/src/components/workflow/designer/CollaborationMessageEditor.vue)、[扩展目录加载](../../ruoyi-ui/src/components/workflow/designer/extensionEventSlaDomain.js)。
 
 | 服务端状态 | 用户文案示例 | 允许的动作 |
 | --- | --- | --- |
@@ -126,7 +126,7 @@
 
 ### U05：把错误列表做成可执行的问题清单
 
-页面入口：[现有校验弹窗](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/ProcessDesigner.vue:149)。
+页面入口：[现有校验弹窗](../../ruoyi-ui/src/components/workflow/ProcessDesigner.vue)。
 
 设计行为：
 
@@ -147,7 +147,7 @@
 
 ### U06：保存、发布和试运行各有清楚含义
 
-页面入口：[设计页面](/D:/ruoyiflowable/ruoyi-ui/src/views/workflow/model/design.vue)、[模型列表](/D:/ruoyiflowable/ruoyi-ui/src/views/workflow/model/index.vue)、[工具栏](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/designer/DesignerToolbar.vue)。
+页面入口：[设计页面](../../ruoyi-ui/src/views/workflow/model/design.vue)、[模型列表](../../ruoyi-ui/src/views/workflow/model/index.vue)、[工具栏](../../ruoyi-ui/src/components/workflow/designer/DesignerToolbar.vue)。
 
 | 状态 | 页面含义 | 可执行动作 |
 | --- | --- | --- |
@@ -169,7 +169,7 @@
 
 ### U07：用业务语言表达当前状态
 
-页面入口：[流程详情](/D:/ruoyiflowable/ruoyi-ui/src/views/workflow/work/detail.vue)、[等待事件](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/ProcessWaitingEvents.vue)、[流程图](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/ProcessViewer.vue)、[联调面板](/D:/ruoyiflowable/ruoyi-ui/src/components/workflow/RuntimeEventConsole.vue)。
+页面入口：[流程详情](../../ruoyi-ui/src/views/workflow/work/detail.vue)、[等待事件](../../ruoyi-ui/src/components/workflow/ProcessWaitingEvents.vue)、[流程图](../../ruoyi-ui/src/components/workflow/ProcessViewer.vue)、[联调面板](../../ruoyi-ui/src/components/workflow/RuntimeEventConsole.vue)。
 
 设计行为：
 
@@ -225,11 +225,13 @@
 - 典型状态理解目标 30 秒内；未达到时优化表达并重测，不由开发人员代答。
 - 不声称已达到特定无障碍等级；发布前记录工具检测、人工键盘及辅助技术验证的实际范围。
 
-## 6. 联合交付及排期
+## 6. 体验交付与技术前置核验
+
+R01–R08 已有实现，执行时核验并复用现有能力；以下批次安排剩余体验工作，不重新实施已完成的技术修复。R09 尚未执行的环境验收按报告边界补齐。
 
 | 批次 | 修复与体验一起交付 | 退出条件 |
 | --- | --- | --- |
-| 第一批：避免损失和卡死 | R01 离开保护、R02/R03；U01/U02/U05 的对应部分 | 不丢未保存图、不需删节点重建、缺范围可定位；服务端草稿未完时明确阶段限制 |
+| 第一批：避免损失和卡死 | 核验 R01/R02/R03，完成 U01/U02/U05 的对应部分 | 不丢未保存图、不需删节点重建、缺范围可定位；服务端草稿保存与恢复符合现有协议 |
 | 第二批：原组合能完整使用 | R01 草稿、R04/R05/R06/R07；U03/U04/U05/U06 | C/F/G 原组合保留并完成配置、发布和真实运行；受管凭据与只读回填正式生效 |
 | 第三批：运行看得懂 | R08；U07/U08 | 状态真实、自动更新、长图可操作、关键键盘路径通过 |
 | 第四批：联合验收 | R09/U09 | 场景矩阵、用户任务、迁移回退及清理证据齐全 |
@@ -244,4 +246,4 @@
 4. U00 与 U09 的实测对比；没有实测的指标保留待测。
 5. 本轮新增临时测试资源精确清理；原始令牌画面不归档，正式证据脱敏。
 
-推荐把 U01/U02 与首批缺陷修复一起实施，先让复杂流程设计稳定可完成，再推进资源配置向导与运行状态优化。
+先在现有修复基础上验收 U01/U02，再推进资源配置向导与运行状态优化。

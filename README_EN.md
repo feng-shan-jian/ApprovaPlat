@@ -114,7 +114,7 @@ docker compose up -d
 docker compose ps
 ```
 
-When the `approvaplat-mysql-data` volume is first created, MySQL runs the ten existing SQL files in the exact order defined by the [database baseline](docs/database/workflow-baseline.md). Wait until both MySQL and Redis report `healthy` in `docker compose ps` before starting the application. An existing volume is not initialized again.
+When the `approvaplat-mysql-data` volume is first created, MySQL runs the baseline SQL files in the exact order defined by the [database baseline](docs/database/workflow-baseline.md). Wait until both MySQL and Redis report `healthy` in `docker compose ps` before starting the application. An existing volume is not initialized again.
 
 Install the frontend dependencies:
 

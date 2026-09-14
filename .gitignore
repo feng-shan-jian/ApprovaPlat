@@ -11,6 +11,8 @@ output/
 /mysql-app.txt
 # Local runtime logs and generated evidence
 /logs/
+/.playwright-cli/
+/.playwright-mcp/
 tests/**/coverage/
 ruoyi-ui/test-results/
 ruoyi-ui/playwright-report/
