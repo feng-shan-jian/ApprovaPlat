@@ -86,7 +86,7 @@
 - SQL 连接器使用登记数据源和 AST 校验模板。外库查询允许至少一次重试；外库写接受绑定系统 `idempotencyKey`、由真实业务唯一键保护且重复键分支为空操作的幂等 INSERT。
 - HTTP/SQL 失败保留在 Flowable 原生 Job、Timer Job 和 Dead Letter Job；逐次结果进入脱敏结构化日志与 Micrometer 指标，Flowable Job 表作为唯一调用状态台账。
 - DMN 部署必须通过 XML 安全校验，并在流程部署时将引用快照固化到 `approvaplat/dmn-v1.json`。
-- Message、Signal 和 ReceiveTask 运行事件使用独立集成 Token；数据库保存前缀、哈希、限流状态和完整调用审计，Token 正文只在签发时交付。
+- Message、Signal 和 ReceiveTask 运行事件使用独立集成 Token；数据库保存前缀、哈希和完整调用审计，Token 正文只在签发时交付。
 
 ## 边界定时器、审批 SLA 与升级
 

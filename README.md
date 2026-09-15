@@ -112,7 +112,7 @@ docker compose up -d
 docker compose ps
 ```
 
-首次创建 `approvaplat-mysql-data` Volume 时，MySQL 会严格按照[数据库基线](docs/database/workflow-baseline.md)自动执行正式基线 SQL。等待 `docker compose ps` 中 MySQL 和 Redis 均显示 `healthy` 后再启动应用；已有 Volume 不会重复初始化。
+首次创建 `approvaplat-mysql-data` Volume 时，MySQL 会执行[初始化脚本](docker/mysql/init.sh)。等待 `docker compose ps` 中 MySQL 和 Redis 均显示 `healthy` 后再启动应用；已有 Volume 不会重复初始化。
 
 安装前端依赖：
 
@@ -212,7 +212,7 @@ ApprovaPlat/
 | 系统边界和数据流           | [审批平台架构](docs/architecture/workflow-platform.md)                                               |
 | 每个审批动作的约束         | [审批业务行为契约](docs/contracts/workflow-behavior.md)                                              |
 | Participant 与 MessageFlow | [多池协作运行契约](docs/contracts/workflow-collaboration.md)                                         |
-| 空库安装和正式迁移         | [工作流数据库基线](docs/database/workflow-baseline.md)                                               |
+| 数据库约束与附件上传升级   | [工作流数据库基线](docs/database/workflow-baseline.md)                                               |
 
 ## 参与项目
 

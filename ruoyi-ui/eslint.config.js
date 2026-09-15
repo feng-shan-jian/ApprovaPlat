@@ -48,7 +48,6 @@ export default [
     ignores: [
       'dist/**',
       'node_modules/**',
-      'html/**',
       'output/**',
       'tests/**/output/**'
     ]
@@ -103,7 +102,7 @@ export default [
     }
   },
   {
-    // 这些组件接收的是父层拥有的响应式编辑模型，原地更新是现有公开契约，不能在本任务中改为复制状态。
+    // 这些组件接收的是父层拥有的响应式编辑模型，原地更新是现有公开契约。
     files: [
       'src/components/RightToolbar/index.vue',
       'src/components/workflow/designer/DesignerPropertiesPanel.vue',

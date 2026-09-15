@@ -4,7 +4,7 @@ set -Eeuo pipefail
 # SQL_ROOT 表示容器内只读挂载的正式数据库基线根目录。
 readonly SQL_ROOT="/opt/approvaplat/sql"
 
-# BASELINE_FILES 表示空库必须依次执行的正式基线文件；顺序与数据库文档保持一致。
+# BASELINE_FILES 表示空库必须依次执行的正式基线文件。
 readonly -a BASELINE_FILES=(
   "ry_20260417.sql"
   "quartz.sql"

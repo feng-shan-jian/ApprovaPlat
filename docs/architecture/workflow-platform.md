@@ -109,7 +109,6 @@ flowchart TD
 ## 接口边界
 
 - `com.ruoyi.web.controller.workflow` 下的工作流 Controller 提供正式登录用户入口，并由五角色 RBAC 矩阵冻结方法、路径和权限表达式。
-- 运行事件由独立 Controller 提供 3 个机器调用入口，并通过专用集成 Token、限流、幂等和审计校验。
 - 每个流程实例、任务、附件、部署和审计查询同时执行 URL 权限与对象授权，验证当前用户和目标对象的业务关系。
 
 ## 数据与事务
