@@ -4,6 +4,18 @@
 
 Flowable 继续保持 `database-schema-update: "false"`，应用启动不得创建或修复数据库结构。
 
+## 安装与升级入口
+
+空库由 [Docker 初始化脚本](../../docker/mysql/init.sh) 按 `BASELINE_FILES` 的声明顺序安装。该入口包含模型设计草稿、受管连接凭据、附件上传账本以及短信与 OSS 的表、约束和菜单。已有 MySQL 数据卷不会重新执行初始化脚本。
+
+已有数据库按缺失功能执行对应迁移：
+
+- 模型设计草稿：`sql/flowable/business/8.0.2__workflow_model_design_draft.sql`。
+- 受管连接凭据：`sql/flowable/business/8.0.3__workflow_managed_connector_secret.sql`。
+- 附件上传账本：`sql/flowable/business/8.0.4__workflow_attachment_upload.sql`，回退要求见下文。
+- 独立可靠消息：`sql/flowable/repairs/20260911__reliable_message_mode.sql`，在升级应用前执行；空库业务基线已包含对应字段和索引。
+- 短信与 OSS：`sql/integration/8.0.0__sms_oss.sql`，要求已完成通知模型迁移，工作流 outbox 中没有旧 `INBOX` 行。
+
 ## 附件上传升级
 
 启用附件上传持久恢复前，额外执行 `sql/flowable/business/8.0.4__workflow_attachment_upload.sql`，核验空的 `wf_attachment_upload`、`storage_key` 的 160 字符 ASCII 二进制主键，以及 `(next_retry_time, storage_key)` 清理索引。无需改写现有附件元数据或文件。已部署的其他功能迁移继续按其各自契约执行，本项只新增上传清理表。
