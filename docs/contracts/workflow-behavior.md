@@ -82,8 +82,11 @@
 - 内嵌 BPMN 表单与正式模板使用统一快照结构，并保存明确 `source_type`。
 - 发起和办理都按部署快照校验字段、类型、必填、长度、选项和附件引用。
 - CallActivity 输入/输出映射只接受 `TEXT`、`NUMBER`、`BOOLEAN`、`SCALAR` 四类标量，并复用正式表单变量校验的值形态分类。日期/时间的 `is-range: true` 或 `type` 含 `range`、范围滑块、多选与其他集合不进入映射目录；手写此类映射在保存和部署门禁均拒绝。单值日期/时间仍为 `TEXT`，范围字段本身仍可作为普通表单数组提交。已发布快照不改写，后续保存或部署会重新检查映射。
+- multipart 附件上传不使用通用 `@RepeatSubmit` 时间窗；同用户、同字段连续上传不同文件，以及业务失败后的合法重试，均独立进入上传业务。组件保留具体在途上传状态；服务端继续执行权限、内容/大小、配额锁、磁盘空间、持久上传账本与失败恢复、临时所有者和后续绑定约束。
 - 临时附件只有所有者可以删除；绑定后按流程对象授权读取。容量检查先锁全局配额行，再锁用户配额行。
 - 业务删除先留下正式生命周期记录，物理清理失败进入持久化重试并保持可观察状态。
+
+附件 multipart 回归入口为 `WfAttachmentMultipartMySqlIT`：配置 `WORKFLOW_MYSQL_TEST_*` 指向具备附件表、配额表及上传账本的隔离 `approvaplat_it` 后，运行 `mvn -pl ruoyi-admin -am -Pworkflow-mysql-it -Dit.test=WfAttachmentMultipartMySqlIT,WorkflowAttachmentUploadRecoveryMySqlIT verify`。admin 允许定向 IT 仅匹配 flowable 模块，既有 flowable-only 命令无需增加绕过开关；flowable 原有零测试门禁保持启用。测试通过 loopback Tomcat 使用生产 Controller、权限/防重链、附件服务、Mapper、InnoDB 事务和临时文件；Token/Redis、身份/菜单主数据使用替身，绑定检查直接调用附件领域入口，不代表完整登录、审计或 Flowable 任务验收。常规存储与恢复契约仍由 `WorkflowAttachmentStorageContractTest`、`WorkflowAttachmentUploadRecoveryTest` 覆盖。
 
 ## 扩展、连接器、DMN 与运行事件
 

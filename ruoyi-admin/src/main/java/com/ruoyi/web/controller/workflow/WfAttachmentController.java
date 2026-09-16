@@ -21,7 +21,6 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import com.ruoyi.common.annotation.Log;
-import com.ruoyi.common.annotation.RepeatSubmit;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.enums.BusinessType;
@@ -58,7 +57,6 @@ public class WfAttachmentController extends BaseController
      */
     @PreAuthorize("@ss.hasPermi('workflow:attachment:upload')")
     @Log(title = "工作流附件", businessType = BusinessType.INSERT)
-    @RepeatSubmit
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public AjaxResult upload(
             @RequestParam @NotBlank(message = "工作流附件表单字段不能为空") String fieldName,

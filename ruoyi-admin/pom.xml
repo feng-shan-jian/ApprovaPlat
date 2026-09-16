@@ -79,6 +79,36 @@
 
     </dependencies>
 
+    <profiles>
+        <!-- 与 flowable 模块共用显式隔离库环境；普通 test 不连接 MySQL。 -->
+        <profile>
+            <id>workflow-mysql-it</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.5.4</version>
+                        <configuration>
+                            <!-- 定向 IT 可以仅位于 flowable 模块；该模块保留原有零测试门禁。 -->
+                            <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                            <!-- Spring 扫描使用展开的类目录，避免读取 Boot 重打包后的 BOOT-INF。 -->
+                            <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
     <build>
         <plugins>
             <plugin>

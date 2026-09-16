@@ -8,8 +8,8 @@
 | --- | --- | --- | --- |
 | 1 | C13 参数／字典批量删除 | BS-041 | 已提交 `e17b5e04e1191a5703f0054f5a27d557c656abff` |
 | 2 | C07 组织主数据与部门移动 | BS-034、045 | 已提交 `551c7a35940787fbb62a8fa4df27fb2c90c6ea86` |
-| 3 | C12 唯一写入 | BS-044 | review 与主工作区验证通过；对应唯一写入提交 |
-| 4 | L01 附件上传门禁 | BS-030 | 待实施 |
+| 3 | C12 唯一写入 | BS-044 | 已提交 `9dd6aeecadc1fcee3af9d920e30a44ea53ec42c8` |
+| 4 | L01 附件上传门禁 | BS-030 | 二次 review 与主工作区验证通过；对应附件上传门禁提交 |
 | 5 | L04 前端异步返回 | BS-040 | 待实施 |
 | 6 | L02 定时任务调用 | BS-038 | 待实施 |
 | 7 | C14 登录认证 | BS-037 | 待实施 |
@@ -55,6 +55,17 @@
 - 实现任务只读核实常驻 MySQL 8.4.9 的业务库为 `ry-vue`（默认配置名称 `approvaplat` 不存在），有效账号 1、配置 9，两个冲突清单均为空，两表当时只有主键。业务库和共享测试库均未执行本单元 DDL；部署前仍须按契约停写、备份、重新清点、迁移和切换全部代码。
 - leader 已独立审查完整 22 文件，按 SHA256 核对冻结交付与主工作区内容。主工作区在自建临时 MySQL 8.4.9 实例执行 `mvn -pl ruoyi-admin -am -Pworkflow-mysql-it '-Dit.test=SystemUniqueWriteMySqlIT,SystemUniqueKeysMigrationMySqlIT,SysOrganizationScopeMySqlIT,SysConfigDictDeletionMySqlIT' verify -B -ntp`，512 项默认测试及 75 项 MySQL 测试全部通过，0 失败／错误／跳过，admin 打包成功。MySQL 分别为 C12 写入 13、迁移 11、C07 回归 31、C13 回归 20 项。BS-044 代码与迁移交付已完成，业务库部署未执行。
 - 临时实例测试行与迁移 schema 已清零并正常关闭；临时脚本、数据和日志清理。Redis 为内存替身，注册审计仅验证成功任务安排；真实 Redis、审计异步落库、浏览器和生产部署未验证。接下来进入第 4 项 L01。
+
+## L01
+
+- 实现任务：`01a0aa61-c4a1-7980-87fd-860dfb7a2ed4`；worktree：`C:/Users/18221/.codex/worktrees/50ae/ruoyiflowable`。
+- 起始基线为 C12 提交 `9dd6aeecadc1fcee3af9d920e30a44ea53ec42c8`，任务已确认运行。删除 multipart 上传入口错误通用时间窗门禁与独占死引用，保留权限、文件约束、配额、账本、所有权与绑定语义。
+- 要求以真实 HTTP multipart 或完整 MVC 拦截链证明同字段连续上传不同文件及失败重试，再回归真实上传账本、配额和归属约束。完成后冻结 diff 并发送交付消息，继续 leader review、主工作区验证与精确提交。
+- 首轮交付仅删除生产 Controller 的注解及 import 两行，新增真实 loopback multipart／MySQL 正式测试、admin Failsafe 配置及契约说明。实现任务报告 HTTP 4、既有存储／H2 恢复 19、MySQL 恢复 12 项通过；恢复旧注解后两个核心 HTTP 场景均按预期失败。leader 已审查四文件，尚未集成到主工作区。
+- 首轮 R1 已修复：新增 admin Failsafe 允许所选 IT 仅位于 flowable，flowable 原有零匹配门禁保留。实现任务先复现旧命令在 admin 阶段失败，再以同一命令证明修复通过；显式 HTTP 4 项全部执行，不存在测试名仍按预期在 flowable 失败。生产修复仍为纯删除两行，没有新生产类型或运行机制。
+- leader 已二次 review 四文件并按 SHA256 核对集成内容。在主工作区的自建临时 MySQL 8.4.9 执行 `mvn -pl ruoyi-admin -am -Pworkflow-mysql-it '-Dit.test=WorkflowAttachmentUploadRecoveryMySqlIT,WfAttachmentMultipartMySqlIT' verify -B -ntp`，512 项默认测试及 16 项 MySQL 测试（恢复 12、HTTP 4）全部通过，0 失败／错误／跳过，admin 打包成功。默认测试中包含存储 9、H2 恢复 10 项，不重复相加。BS-030 已完成。
+- HTTP 使用生产过滤器、防重与方法权限链、附件领域服务、Mapper、事务和真实文件，验证同字段五秒内不同文件及失败重试、权限／大小／配额拒绝和归属限制；绑定场景直接调用领域入口。Token／Redis、身份／菜单主数据及未调用的流程授权为替身，未验证真实登录、审计 AOP、Flowable 任务或浏览器。前端无改动。
+- 仅在专用实例使用正式 SQL 的四张 InnoDB 附件相关表；验证后附件、账本、配额 guard、草稿行均为 0，实例正常关闭。临时脚本、数据库、日志和本项报告已清理，常驻业务库与共享测试库无修改。接下来进入第 5 项 L04。
 
 ## 基线验证
 
