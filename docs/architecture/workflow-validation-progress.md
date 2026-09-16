@@ -9,8 +9,8 @@
 | 1 | C13 参数／字典批量删除 | BS-041 | 已提交 `e17b5e04e1191a5703f0054f5a27d557c656abff` |
 | 2 | C07 组织主数据与部门移动 | BS-034、045 | 已提交 `551c7a35940787fbb62a8fa4df27fb2c90c6ea86` |
 | 3 | C12 唯一写入 | BS-044 | 已提交 `9dd6aeecadc1fcee3af9d920e30a44ea53ec42c8` |
-| 4 | L01 附件上传门禁 | BS-030 | 二次 review 与主工作区验证通过；对应附件上传门禁提交 |
-| 5 | L04 前端异步返回 | BS-040 | 待实施 |
+| 4 | L01 附件上传门禁 | BS-030 | 已提交 `6181f0fe319266ce794ff4a4b67dc126a1bc2205` |
+| 5 | L04 前端异步返回 | BS-040 | review 与主工作区验证通过；对应路由与标签异步提交 |
 | 6 | L02 定时任务调用 | BS-038 | 待实施 |
 | 7 | C14 登录认证 | BS-037 | 待实施 |
 | 8 | C01 作者输入与部署编译 | BS-016、017、018、019、025 | 待实施 |
@@ -66,6 +66,16 @@
 - leader 已二次 review 四文件并按 SHA256 核对集成内容。在主工作区的自建临时 MySQL 8.4.9 执行 `mvn -pl ruoyi-admin -am -Pworkflow-mysql-it '-Dit.test=WorkflowAttachmentUploadRecoveryMySqlIT,WfAttachmentMultipartMySqlIT' verify -B -ntp`，512 项默认测试及 16 项 MySQL 测试（恢复 12、HTTP 4）全部通过，0 失败／错误／跳过，admin 打包成功。默认测试中包含存储 9、H2 恢复 10 项，不重复相加。BS-030 已完成。
 - HTTP 使用生产过滤器、防重与方法权限链、附件领域服务、Mapper、事务和真实文件，验证同字段五秒内不同文件及失败重试、权限／大小／配额拒绝和归属限制；绑定场景直接调用领域入口。Token／Redis、身份／菜单主数据及未调用的流程授权为替身，未验证真实登录、审计 AOP、Flowable 任务或浏览器。前端无改动。
 - 仅在专用实例使用正式 SQL 的四张 InnoDB 附件相关表；验证后附件、账本、配额 guard、草稿行均为 0，实例正常关闭。临时脚本、数据库、日志和本项报告已清理，常驻业务库与共享测试库无修改。接下来进入第 5 项 L04。
+
+## L04
+
+- 实现任务：`01a0aa7e-4991-7351-b388-84d80e608d8b`；worktree：`C:/Users/18221/.codex/worktrees/3af1/ruoyiflowable`。
+- 起始基线为 L01 提交 `6181f0fe319266ce794ff4a4b67dc126a1bc2205`，任务已确认运行。范围为路由 action 返回实际异步链，以及标签同步操作保留 Promise 契约并覆盖存在／不存在的结束路径。
+- 要求保留路由结果、标签／缓存／持久化与既有登录恢复策略，以生产模块行为测试反证挂起并验证修复，再执行 contracts、lint、生产构建。交付后继续 leader review、主工作区验证与提交。
+- 路由返回网络、转换、注册和状态写入的同一 Promise 链；标签使用 async 返回原有浅副本／字段形态，左右缺失目标返回当前视图，组合动作等待子动作并传播异常。删除 13 处手写 Promise 包装，两处生产文件净删 26 行；没有新生产类型或包装框架。路由守卫、user store、tab 插件、TagsView 与页面离开策略无修改。
+- 实现任务先运行 23 项正式行为测试：原代码 11 通过、12 失败，复现缺失标签挂起及错误脱离返回链；修复后全部通过。独立探针也确认原路由 action 外层 pending 且原错误发生未处理 rejection，探针已删除。
+- leader 已审查完整五文件与直接调用方，并按 SHA256 核对主工作区集成。主工作区执行 `node --test tests/contracts/router-tags-async.test.js` 23 项通过、`npm run test:contracts` 124 项通过（包含前述 23 项）、`npm run lint` 和 `npm run build:prod` 均成功，构建转换 3159 模块。生产构建使用任务临时输出目录，保留原有 dist；验证日志与临时构建产物已清理。BS-040 已完成。
+- 行为测试使用真实 Pinia、Vue Router 内存导航和生产 store／API／守卫／tab／cache；网络、登录会话、消息 UI 和 Storage 边界为替身。未运行浏览器、真实登录后端或浏览器真实配额故障；本项无后端和数据库改动。Storage 失败会传播，已完成的内存修改不回滚，详见 [路由与标签契约](../contracts/frontend-route-tags-async.md)。接下来进入第 6 项 L02。
 
 ## 基线验证
 
