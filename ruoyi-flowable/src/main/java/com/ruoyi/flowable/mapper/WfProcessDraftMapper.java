@@ -69,13 +69,25 @@ public interface WfProcessDraftMapper
      * @param updatedBefore LocalDateTime，更新时间上界
      * @param offset int，分页偏移
      * @param limit int，单页上限
-     * @return List&lt;WfProcessDraft&gt;，更新时间倒序的本人草稿
+     * @return List&lt;DraftListRow&gt;，更新时间倒序的本人草稿摘要与定义关系
      */
-    List<WfProcessDraft> selectOwnedActivePage(@Param("ownerUserId") Long ownerUserId,
+    List<DraftListRow> selectOwnedActivePage(@Param("ownerUserId") Long ownerUserId,
             @Param("processName") String processName,
             @Param("updatedAfter") LocalDateTime updatedAfter,
             @Param("updatedBefore") LocalDateTime updatedBefore,
             @Param("offset") int offset, @Param("limit") int limit);
+
+    /** 仅读取本次写入后由数据库产生的版本与时间，不重新读取正文。 */
+    WriteStamp selectWriteStamp(@Param("draftId") String draftId);
+
+    /** 草稿列表实际使用的列；定义关系用于逐草稿判断当前可用性。 */
+    record DraftListRow(String draftId, String processDefinitionId,
+            String processDefinitionKey, int processDefinitionVersion, String deploymentId,
+            String processName, long revisionNo, String businessKey,
+            LocalDateTime createTime, LocalDateTime updateTime) { }
+
+    /** 同一写事务的数据库生成结果。 */
+    record WriteStamp(long revisionNo, LocalDateTime createTime, LocalDateTime updateTime) { }
 
     /**
      * 使用状态和版本双条件保存字段值。

@@ -18,7 +18,7 @@
         :form-model="formModel"
         :readonly="readonly"
         :gutter="template.config.gutter"
-        @update:value="value => updateValue(field.variable, value)"
+        @update:value="(value, variable) => updateValue(variable || field.variable, value)"
         @busy-change="updateBusyState"
         @error="error => $emit('error', error)"
       />
@@ -41,7 +41,6 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'change', 'error'])
 const formRef = ref(null)
-const formModel = reactive({})
 const busyFields = reactive(new Set())
 const template = computed(() => normalizeFormTemplate(props.content))
 const flatFields = computed(() => flattenFormFields(template.value.fields))
@@ -50,24 +49,12 @@ const writableFields = computed(() => visibleFields.value.filter(field => field.
 const rules = computed(() => Object.fromEntries(writableFields.value
   .filter(field => field.required)
   .map(field => [field.variable, [{ required: true, message: `${field.label || field.variable}不能为空`, trigger: 'change' }]])))
-let syncing = false
-
-/**
- * 使用父级值和模板默认值重建当前表单模型。
- * @returns {void} 无返回值。
- */
-function rebuildModel() {
-  syncing = true
-  const next = {}
-  visibleFields.value.forEach(field => {
-    next[field.variable] = Object.prototype.hasOwnProperty.call(props.modelValue, field.variable)
+// 父级持有值；展示仅投影可读字段及默认值，外部重置不产生编辑事件。
+const formModel = computed(() => Object.fromEntries(visibleFields.value.map(field => [
+  field.variable, Object.prototype.hasOwnProperty.call(props.modelValue, field.variable)
       ? cloneValue(props.modelValue[field.variable])
       : cloneValue(field.defaultValue)
-  })
-  Object.keys(formModel).forEach(key => delete formModel[key])
-  Object.assign(formModel, next)
-  nextTick(() => { syncing = false })
-}
+])))
 
 /**
  * 复制 JSON 表单值，避免父子组件共享可变数组或对象。
@@ -86,19 +73,9 @@ function cloneValue(value) {
  */
 function updateValue(variable, value) {
   if (!variable || props.readonly) return
-  formModel[variable] = value
-  emitModelChange()
-}
-
-/**
- * 将内部模型同步给父级；上传字段保留安全元数据供页面回显。
- * @returns {void} 无返回值。
- */
-function emitModelChange() {
-  if (syncing) return
-  const value = cloneValue(formModel)
-  emit('update:modelValue', value)
-  emit('change', value)
+  const next = cloneValue({ ...formModel.value, [variable]: value })
+  emit('update:modelValue', next)
+  emit('change', next)
 }
 
 /**
@@ -138,20 +115,15 @@ async function validate() {
 function getValues() {
   const values = {}
   writableFields.value.forEach(field => {
-    values[field.variable] = cloneValue(formModel[field.variable])
+    values[field.variable] = cloneValue(formModel.value[field.variable])
   })
   writableFields.value.filter(field => field.tag === 'el-upload').forEach(field => {
-    values[field.variable] = (Array.isArray(formModel[field.variable]) ? formModel[field.variable] : [])
+    values[field.variable] = (Array.isArray(formModel.value[field.variable]) ? formModel.value[field.variable] : [])
       .map(item => typeof item === 'string' ? item : item?.attachmentId)
       .filter(Boolean)
   })
   return values
 }
-
-watch(() => props.content, rebuildModel)
-watch(() => props.modelValue, rebuildModel, { deep: true })
-watch(formModel, emitModelChange, { deep: true })
-onMounted(rebuildModel)
 
 defineExpose({ ensureAttachmentsIdle, validate, getValues })
 </script>

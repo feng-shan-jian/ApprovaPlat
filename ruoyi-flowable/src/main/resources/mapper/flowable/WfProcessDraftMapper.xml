@@ -72,10 +72,15 @@
     <select id="countOwnedActive" resultType="long">
         select count(*) from wf_process_draft where <include refid="activeFilter"/>
     </select>
-    <select id="selectOwnedActivePage" resultMap="DraftResult">
-        select <include refid="columns"/> from wf_process_draft
+    <select id="selectOwnedActivePage" resultType="com.ruoyi.flowable.mapper.WfProcessDraftMapper$DraftListRow">
+        select draft_id, process_definition_id, process_definition_key,
+            process_definition_version, deployment_id, process_name, revision_no,
+            business_key, create_time, update_time from wf_process_draft
         where <include refid="activeFilter"/>
         order by update_time desc, draft_id desc limit #{offset}, #{limit}
+    </select>
+    <select id="selectWriteStamp" resultType="com.ruoyi.flowable.mapper.WfProcessDraftMapper$WriteStamp">
+        select revision_no, create_time, update_time from wf_process_draft where draft_id=#{draftId}
     </select>
     <update id="updateActive">
         update wf_process_draft set form_values=#{formValues},

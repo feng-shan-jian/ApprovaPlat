@@ -8,7 +8,7 @@
       :form-model="formModel"
       :readonly="effectiveReadonly"
       :gutter="gutter"
-      @update:value="value => updateChild(child.variable, value)"
+      @update:value="(value, variable) => updateChild(variable || child.variable, value)"
       @busy-change="forwardBusyState"
       @error="error => $emit('error', error)"
     />
@@ -122,13 +122,13 @@ function updateValue(value) {
 }
 
 /**
- * 更新行容器中子字段的共享表单模型。
+ * 透传行容器中的实际字段名和值，由父表单产生一次更新。
  * @param {string} variable 子字段变量名。
  * @param {unknown} value 子字段新值。
  * @returns {void} 无返回值。
  */
 function updateChild(variable, value) {
-  if (variable && !effectiveReadonly.value) props.formModel[variable] = value
+  if (variable && !effectiveReadonly.value) emit('update:value', value, variable)
 }
 
 /**

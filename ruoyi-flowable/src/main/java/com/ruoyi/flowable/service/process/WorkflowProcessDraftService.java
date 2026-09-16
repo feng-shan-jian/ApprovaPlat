@@ -7,7 +7,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.LinkedHashSet;
 import org.flowable.common.engine.api.FlowableObjectNotFoundException;
@@ -28,7 +27,6 @@ import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftCreateRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSaveRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
-import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSubmitView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftSummaryView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessDraftView;
@@ -36,6 +34,9 @@ import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
 import com.ruoyi.flowable.domain.vo.WorkflowStartMultiInstanceAssignmentView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
+import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
+import com.ruoyi.flowable.mapper.WfProcessDraftMapper.DraftListRow;
+import com.ruoyi.flowable.mapper.WfProcessDraftMapper.WriteStamp;
 import com.ruoyi.flowable.mapper.WfProcessDraftMapper;
 import com.ruoyi.flowable.mapper.WorkflowProcessDefinitionLockMapper;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
@@ -113,9 +114,10 @@ public class WorkflowProcessDraftService
             WorkflowProcessDraftQueryDto filter, int pageNum, int pageSize)
     {
         requirePage(pageNum, pageSize);
-        PageResult<WfProcessDraft> draftPage = engineOperations.read(() ->
+        return engineOperations.read(() ->
         {
-            long ownerUserId = Long.parseLong(identityResolver.resolveCurrentIdentity().userId());
+            WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
+            long ownerUserId = Long.parseLong(actor.userId());
             String processName = escapeLike(optionalText(filter == null ? null : filter.processName(), 255));
             LocalDateTime updatedAfter = toLocal(filter == null ? null : filter.updatedAfter());
             LocalDateTime updatedBefore = toLocal(filter == null ? null : filter.updatedBefore());
@@ -127,14 +129,12 @@ public class WorkflowProcessDraftService
                 return new PageResult<>(List.of(), 0);
             }
             int offset = Math.multiplyExact(pageNum - 1, pageSize);
-            List<WfProcessDraft> rows = draftMapper.selectOwnedActivePage(ownerUserId,
+            List<DraftListRow> rows = draftMapper.selectOwnedActivePage(ownerUserId,
                     processName, updatedAfter, updatedBefore, offset, pageSize);
-            return new PageResult<>(rows, total);
+            Map<String, String> reasons = definitionQueryService.draftUnavailableReasons(actor, rows);
+            return new PageResult<>(rows.stream().map(draft -> toSummary(draft,
+                    reasons.get(draft.draftId()))).toList(), total);
         });
-        // 实时可用性查询可能稳定返回定义删除、停用或过期；必须在本人数据事务提交后投影，
-        // 避免内层预期业务异常把草稿列表的共享只读事务标记为 rollback-only。
-        return new PageResult<>(draftPage.rows().stream().map(this::toSummary).toList(),
-                draftPage.total());
     }
 
     /**
@@ -146,19 +146,18 @@ public class WorkflowProcessDraftService
     public WorkflowProcessDraftView get(String draftId)
     {
         String normalizedId = requireDraftId(draftId);
-        WfProcessDraft draft = engineOperations.read(() ->
+        return engineOperations.read(() ->
         {
-            long ownerUserId = Long.parseLong(identityResolver.resolveCurrentIdentity().userId());
+            WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
+            long ownerUserId = Long.parseLong(actor.userId());
             WfProcessDraft ownedDraft = requireOwned(draftMapper.selectOwnedById(
                     normalizedId, ownerUserId));
             if (ownedDraft.draftStatus() == WorkflowProcessDraftStatus.DELETED)
             {
                 throw notFound();
             }
-            return ownedDraft;
+            return toView(ownedDraft, availability(actor, ownedDraft));
         });
-        // 详情与列表保持同一事务语义：本人授权查询完成后再计算实时定义可用性。
-        return toView(draft);
     }
 
     /**
@@ -183,11 +182,10 @@ public class WorkflowProcessDraftService
                 ProcessDefinition definition = requireDefinition(definitionId);
                 // 与部署删除统一先锁 ACT_RE_DEPLOYMENT，再读取部署快照并写入 wf_process_draft。
                 String deploymentId = lockDraftDeployment(definition);
-                WorkflowProcessFormView form = definitionQueryService.getProcessForm(
-                        new WorkflowProcessFormQueryDto(definitionId,
-                                deploymentId, null));
+                var loaded = definitionQueryService.loadStartFormForPreviewInCurrentTransaction(actor, definition);
+                WorkflowProcessFormView form = loaded.form();
                 WorkflowValidatedStartVariables validated = variableValidator.validateForDraft(
-                        form.content(), request.variables());
+                        loaded.parseFormRoot(), request.variables());
                 Map<String, List<Long>> memberSelections = normalizeDraftSelections(
                         form.startMultiInstanceAssignments(), request.multiInstanceUserIds());
                 String draftId = UUID.randomUUID().toString();
@@ -206,8 +204,8 @@ public class WorkflowProcessDraftService
                 // 先落草稿主行满足附件外键，再绑定首次保存前已经上传的 TEMP 附件；失败时同事务回滚。
                 attachmentService.reconcileDraftAttachments(actor.userId(), draftId,
                         validated.attachmentIdsByField());
-                return toView(requireOwned(draftMapper.selectOwnedById(draftId,
-                        Long.valueOf(actor.userId()))));
+                return toView(draft, form.startMultiInstanceAssignments(), validated.variables(), memberSelections, businessKey,
+                        draftMapper.selectWriteStamp(draftId), new Availability(true, true, null));
             });
         }
         catch (RuntimeException exception)
@@ -236,18 +234,21 @@ public class WorkflowProcessDraftService
                 WfProcessDraft current = requireOwned(draftMapper.selectOwnedByIdForUpdate(
                         normalizedId, ownerUserId));
                 requireActiveRevision(current, request.expectedVersion());
-                WorkflowProcessFormView liveForm = requireLiveSnapshot(current);
+                var loaded = definitionQueryService.loadDraftFormInCurrentTransaction(actor, current);
+                WorkflowProcessFormView liveForm = loaded.form();
                 WorkflowValidatedStartVariables validated = variableValidator.validateForDraft(
-                        liveForm.content(), request.variables());
+                        loaded.parseFormRoot(), request.variables());
                 Map<String, List<Long>> memberSelections = normalizeDraftSelections(
                         liveForm.startMultiInstanceAssignments(), request.multiInstanceUserIds());
                 attachmentService.reconcileDraftAttachments(actor.userId(), normalizedId,
                         validated.attachmentIdsByField());
+                String businessKey = optionalText(request.businessKey(), 255);
                 requireCas(draftMapper.updateActive(normalizedId, ownerUserId,
                         request.expectedVersion(), writeJson(validated.variables()),
                         writeJson(memberSelections),
-                        optionalText(request.businessKey(), 255)));
-                return toView(requireOwned(draftMapper.selectOwnedById(normalizedId, ownerUserId)));
+                        businessKey));
+                return toView(current, liveForm.startMultiInstanceAssignments(), validated.variables(), memberSelections, businessKey,
+                        draftMapper.selectWriteStamp(normalizedId), new Availability(true, true, null));
             });
         }
         catch (RuntimeException exception)
@@ -325,7 +326,6 @@ public class WorkflowProcessDraftService
                 lockDraftDeployment(deploymentId);
                 WfProcessDraft current = requireOwned(draftMapper.selectOwnedByIdForUpdate(
                         normalizedId, ownerUserId));
-                assertLocatedDraftRelation(located, current, ownerUserId);
                 if (current.draftStatus() == WorkflowProcessDraftStatus.SUBMITTED)
                 {
                     return submittedView(current);
@@ -359,40 +359,48 @@ public class WorkflowProcessDraftService
      * @param draft WfProcessDraft，已通过所有者校验的正式草稿记录
      * @return WorkflowProcessDraftView，可供页面回显且包含实时编辑、提交能力的详情
      */
-    private WorkflowProcessDraftView toView(WfProcessDraft draft)
+    private WorkflowProcessDraftView toView(WfProcessDraft draft, Availability availability)
     {
-        Availability availability = availability(draft);
+        return toView(draft, readAssignments(draft.startMultiInstanceAssignments()),
+                readMap(draft.formValues()), readMemberMap(draft.multiInstanceUserIds()),
+                draft.businessKey(), new WriteStamp(draft.revisionNo(), draft.createTime(), draft.updateTime()),
+                availability);
+    }
+
+    /** 将本次已有表单和值与数据库生成的版本/时间直接投影为响应。 */
+    private WorkflowProcessDraftView toView(WfProcessDraft draft, List<WorkflowStartMultiInstanceAssignmentView> assignments,
+            Map<String, Object> variables, Map<String, List<Long>> members, String businessKey,
+            WriteStamp stamp, Availability availability)
+    {
         WorkflowProcessFormView form = new WorkflowProcessFormView(
                 draft.processDefinitionId(), draft.deploymentId(), null, draft.sourceType(),
                 draft.formId(), draft.formKey(), draft.startNodeKey(), draft.formName(),
-                draft.nodeName(), draft.formSnapshot(), toInstant(draft.snapshotCreateTime()),
-                readAssignments(draft.startMultiInstanceAssignments()));
+                draft.nodeName(), draft.formSnapshot(), toInstant(draft.snapshotCreateTime()), assignments);
         return new WorkflowProcessDraftView(draft.draftId(), draft.processDefinitionId(),
                 draft.processDefinitionKey(), draft.processDefinitionVersion(),
                 draft.deploymentId(), draft.processName(), draft.sourceType(), draft.formId(),
                 draft.formKey(), draft.startNodeKey(), draft.formName(), draft.nodeName(),
-                toInstant(draft.snapshotCreateTime()), form, readMap(draft.formValues()),
-                readMemberMap(draft.multiInstanceUserIds()), draft.businessKey(),
-                draft.draftStatus().name(), draft.revisionNo(),
-                draft.submittedProcessInstanceId(), toInstant(draft.createTime()),
-                toInstant(draft.updateTime()), availability.editable(),
+                toInstant(draft.snapshotCreateTime()), form, variables,
+                members, businessKey, draft.draftStatus().name(), stamp.revisionNo(),
+                draft.submittedProcessInstanceId(), toInstant(stamp.createTime()),
+                toInstant(stamp.updateTime()), availability.editable(),
                 availability.submittable(), availability.reason());
     }
 
     /**
      * 将本人持久化草稿转换为不包含表单正文的列表摘要。
      *
-     * @param draft WfProcessDraft，已通过所有者校验的正式草稿记录
+     * @param draft DraftListRow，SQL 本人过滤的摘要和定义关系
+     * @param reason String，本页定义与权限事实得出的不可用原因，可用时为空
      * @return WorkflowProcessDraftSummaryView，包含实时可用性和版本信息的列表项
      */
-    private WorkflowProcessDraftSummaryView toSummary(WfProcessDraft draft)
+    private WorkflowProcessDraftSummaryView toSummary(DraftListRow draft, String reason)
     {
-        Availability availability = availability(draft);
         return new WorkflowProcessDraftSummaryView(draft.draftId(), draft.processName(),
                 draft.processDefinitionKey(), draft.processDefinitionVersion(),
-                draft.draftStatus().name(), draft.revisionNo(), draft.businessKey(),
+                WorkflowProcessDraftStatus.ACTIVE.name(), draft.revisionNo(), draft.businessKey(),
                 toInstant(draft.createTime()), toInstant(draft.updateTime()),
-                availability.editable(), availability.submittable(), availability.reason());
+                reason == null, reason == null, reason);
     }
 
     /**
@@ -401,7 +409,7 @@ public class WorkflowProcessDraftService
      * @param draft WfProcessDraft，需要判断是否仍可编辑和提交的本人草稿
      * @return Availability，页面能力开关及不可用原因的稳定投影
      */
-    private Availability availability(WfProcessDraft draft)
+    private Availability availability(WorkflowCurrentIdentity actor, WfProcessDraft draft)
     {
         if (draft.draftStatus() != WorkflowProcessDraftStatus.ACTIVE)
         {
@@ -411,12 +419,13 @@ public class WorkflowProcessDraftService
         }
         try
         {
-            requireLiveSnapshot(draft);
+            definitionQueryService.loadDraftFormInCurrentTransaction(actor, draft);
             return new Availability(true, true, null);
         }
         catch (ServiceException exception)
         {
             int status = exception.getCode() == null ? HttpStatus.ERROR : exception.getCode();
+            if (status >= HttpStatus.ERROR) throw exception;
             String subCode = exception.getSubCode();
             if (status == HttpStatus.FORBIDDEN)
             {
@@ -441,34 +450,8 @@ public class WorkflowProcessDraftService
             {
                 return new Availability(false, false, "草稿表单快照已失效");
             }
-            return new Availability(false, false, "流程定义当前不可用");
+            throw exception;
         }
-    }
-
-    /**
-     * 读取当前仍可发起的同一部署表单，并逐项复核草稿冻结关系没有漂移。
-     *
-     * @param draft WfProcessDraft，保存了定义、部署和表单校验和的正式草稿
-     * @return WorkflowProcessFormView，通过权限、状态和快照一致性校验的实时表单
-     */
-    private WorkflowProcessFormView requireLiveSnapshot(WfProcessDraft draft)
-    {
-        WorkflowProcessFormView form = definitionQueryService.getProcessForm(
-                new WorkflowProcessFormQueryDto(draft.processDefinitionId(),
-                        draft.deploymentId(), null));
-        if (!draft.deploymentId().equals(form.deploymentId())
-                || !draft.sourceType().equals(form.sourceType())
-                || !Objects.equals(draft.formId(), form.formId())
-                || !draft.formKey().equals(form.formKey())
-                || !draft.startNodeKey().equals(form.nodeKey())
-                || !draft.formSnapshot().equals(form.content())
-                || !readAssignments(draft.startMultiInstanceAssignments()).equals(
-                    form.startMultiInstanceAssignments())
-                || !draft.formSnapshotSha256().equals(WorkflowProcessDraftChecksum.sha256(form)))
-        {
-            throw conflict("草稿绑定的部署表单快照已失效", "DRAFT_SNAPSHOT_MISMATCH");
-        }
-        return form;
     }
 
     /**
@@ -548,28 +531,6 @@ public class WorkflowProcessDraftService
             throw dataError("流程定义部署信息异常");
         }
         return deploymentId;
-    }
-
-    /**
-     * 复核普通定位读与锁定当前读仍指向同一所有者、定义版本和部署。
-     *
-     * @param located WfProcessDraft，取得部署锁前读取的本人草稿定位快照
-     * @param current WfProcessDraft，取得部署锁后锁定的当前草稿
-     * @param ownerUserId long，事务内重新核验的正式用户主键
-     * @return void，关系未发生非法变化时正常返回
-     */
-    private void assertLocatedDraftRelation(WfProcessDraft located,
-            WfProcessDraft current, long ownerUserId)
-    {
-        if (!Long.valueOf(ownerUserId).equals(current.ownerUserId())
-                || !located.draftId().equals(current.draftId())
-                || !located.processDefinitionId().equals(current.processDefinitionId())
-                || !located.processDefinitionKey().equals(current.processDefinitionKey())
-                || located.processDefinitionVersion() != current.processDefinitionVersion()
-                || !located.deploymentId().equals(current.deploymentId()))
-        {
-            throw dataError("流程申请草稿定义关系已损坏");
-        }
     }
 
     /**

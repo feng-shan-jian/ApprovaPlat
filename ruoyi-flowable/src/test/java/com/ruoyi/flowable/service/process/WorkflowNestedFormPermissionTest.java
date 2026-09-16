@@ -32,7 +32,7 @@ class WorkflowNestedFormPermissionTest
         assertThat(templates.extractVariableNames(root)).containsExactly("secret");
         assertThatThrownBy(() -> variables.validateForStart(content, Map.of("secret", "forged")))
                 .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getCode()).isEqualTo(400));
-        assertThatThrownBy(() -> variables.validateForDraft(content, Map.of("secret", "forged")))
+        assertThatThrownBy(() -> variables.validateForDraft(templates.validate(content), Map.of("secret", "forged")))
                 .hasMessageContaining("只读");
         assertThatThrownBy(() -> variables.validatePatch(content, Map.of("secret", "forged"), Map.of()))
                 .hasMessageContaining("只读");

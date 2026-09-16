@@ -166,17 +166,17 @@ public class WorkflowStartVariableValidator
 
     /**
      * 按部署表单快照校验草稿字段，但允许正式必填字段暂时缺失或为空。
-     * 复用正式模板校验返回的根节点，模板损坏仍转换为 500。
+     * 直接消费已装载的部署根节点，不重新审计整个模板。
      *
      * @param snapshotRoot JsonNode，本次已装载的不可变节点表单根节点
      * @param variables Map&lt;String,Object&gt;，客户端本次保存的草稿字段补丁
      * @return WorkflowValidatedStartVariables，已执行字段白名单、类型、写权限和附件格式校验的草稿补丁
      */
-    public WorkflowValidatedStartVariables validateForDraft(String snapshotContent,
+    public WorkflowValidatedStartVariables validateForDraft(JsonNode snapshotRoot,
             Map<String, Object> variables)
     {
         // 草稿只放宽必填完整性，隐藏/只读防篡改、类型和资源边界必须与正式提交保持同源。
-        return validateSubmission(parseTrustedSnapshot(snapshotContent), variables, Map.of(), false, true);
+        return validateSubmission(snapshotRoot, variables, Map.of(), false, true);
     }
 
     /**
@@ -387,30 +387,38 @@ public class WorkflowStartVariableValidator
      */
     private void collectFieldSpecs(JsonNode root, Map<String, FieldSpec> fieldSpecs)
     {
-        templateValidator.visitFields(root, (component, permission) ->
+        try
         {
-            JsonNode modelNode = component.get(MODEL_FIELD);
-            if (!modelNode.isTextual())
+            templateValidator.visitFields(root, (component, permission) ->
             {
-                throw invalidSnapshot(null);
-            }
-            String fieldName = modelNode.textValue();
-            if (!FIELD_NAME_PATTERN.matcher(fieldName).matches()
-                    || PROTOTYPE_POLLUTION_KEYS.contains(fieldName.toLowerCase(Locale.ROOT))
-                    || isReservedVariable(fieldName))
-            {
-                throw invalidSnapshot(null);
-            }
-            FieldSpec fieldSpec = createFieldSpec(fieldName, component, permission.writable());
-            if (fieldSpecs.putIfAbsent(fieldName, fieldSpec) != null)
-            {
-                throw invalidSnapshot(null);
-            }
-            if (fieldSpecs.size() > MAX_VARIABLE_FIELDS)
-            {
-                throw invalidSnapshot(null);
-            }
-        });
+                JsonNode modelNode = component.get(MODEL_FIELD);
+                if (!modelNode.isTextual())
+                {
+                    throw invalidSnapshot(null);
+                }
+                String fieldName = modelNode.textValue();
+                if (!FIELD_NAME_PATTERN.matcher(fieldName).matches()
+                        || PROTOTYPE_POLLUTION_KEYS.contains(fieldName.toLowerCase(Locale.ROOT))
+                        || isReservedVariable(fieldName))
+                {
+                    throw invalidSnapshot(null);
+                }
+                FieldSpec fieldSpec = createFieldSpec(fieldName, component, permission.writable());
+                if (fieldSpecs.putIfAbsent(fieldName, fieldSpec) != null)
+                {
+                    throw invalidSnapshot(null);
+                }
+                if (fieldSpecs.size() > MAX_VARIABLE_FIELDS)
+                {
+                    throw invalidSnapshot(null);
+                }
+            });
+        }
+        catch (ServiceException exception)
+        {
+            if (Integer.valueOf(HttpStatus.ERROR).equals(exception.getCode())) throw exception;
+            throw invalidSnapshot(exception);
+        }
     }
 
     /**

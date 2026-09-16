@@ -19,6 +19,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
+import tools.jackson.databind.JsonNode;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.common.engine.api.FlowableObjectNotFoundException;
@@ -31,9 +33,12 @@ import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
+import com.ruoyi.flowable.domain.WfProcessDraft;
+import com.ruoyi.flowable.mapper.WfProcessDraftMapper.DraftListRow;
 import com.ruoyi.flowable.domain.dto.WorkflowBpmnXmlQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessFormQueryDto;
 import com.ruoyi.flowable.domain.dto.WorkflowStartableProcessQueryDto;
@@ -170,9 +175,7 @@ public class WorkflowProcessDefinitionQueryService
             if (instanceId == null)
             {
                 WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-                assertLatestActiveDefinition(definition);
-                assertPreviewStartPermission(definition, actor);
-                return loadStartForm(definition).form();
+                return loadStartFormForPreviewInCurrentTransaction(actor, definition).form();
             }
             WorkflowProcessAccessSnapshot instance = processAccessService.requireReadableInstance(instanceId);
             requireInstanceRelation(instance, definition);
@@ -205,6 +208,85 @@ public class WorkflowProcessDefinitionQueryService
         assertLatestActiveDefinition(definition);
         assertStartPermissionForWrite(definition, actor);
         return loadStartForm(definition);
+    }
+
+    /** 草稿创建/保存和独立预览共用当前身份，不重入公开查询或重新取得 actor。 */
+    StartFormLoad loadStartFormForPreviewInCurrentTransaction(WorkflowCurrentIdentity actor,
+            ProcessDefinition definition)
+    {
+        assertLatestActiveDefinition(definition);
+        assertPreviewStartPermission(definition, actor);
+        return loadStartForm(definition);
+    }
+
+    /** 从草稿的权威定义关系加载本次实际需要的表单，并确认显示过的正文没有损坏。 */
+    StartFormLoad loadDraftFormInCurrentTransaction(WorkflowCurrentIdentity actor, WfProcessDraft draft)
+    {
+        ProcessDefinition definition = requireDefinition(draft.processDefinitionId());
+        requireDraftDefinitionRelation(draft, definition);
+        StartFormLoad loaded = loadStartFormForPreviewInCurrentTransaction(actor, definition);
+        requireDraftSnapshot(draft, loaded.form());
+        return loaded;
+    }
+
+    /** 持久化草稿与真实定义是两个独立来源，只在这个绑定边界判断版本和部署。 */
+    static void requireDraftDefinitionRelation(WfProcessDraft draft, ProcessDefinition definition)
+    {
+        if (!draft.processDefinitionKey().equals(definition.getKey())
+                || draft.processDefinitionVersion() != definition.getVersion())
+        {
+            throw new ServiceException("草稿绑定的流程定义版本已失效", HttpStatus.CONFLICT)
+                    .setSubCode("DRAFT_DEFINITION_VERSION_EXPIRED");
+        }
+        if (!draft.deploymentId().equals(definition.getDeploymentId()))
+        {
+            throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT)
+                    .setSubCode(DEFINITION_RELATION_CONFLICT_SUB_CODE);
+        }
+    }
+
+    /** 正文决定用户所填写的字段契约；其余冻结元数据不再与唯一部署生产者逐字段对账。 */
+    static void requireDraftSnapshot(WfProcessDraft draft, WorkflowProcessFormView form)
+    {
+        if (!form.content().equals(draft.formSnapshot()))
+        {
+            throw new ServiceException("草稿绑定的部署表单快照已失效", HttpStatus.CONFLICT)
+                    .setSubCode("DRAFT_SNAPSHOT_MISMATCH");
+        }
+    }
+
+    /** 当前页一次读取不同定义、对应最新版本与发起范围；不为摘要装载表单正文。 */
+    Map<String, String> draftUnavailableReasons(WorkflowCurrentIdentity actor, List<DraftListRow> drafts)
+    {
+        if (drafts.isEmpty()) return Map.of();
+        Set<String> ids = drafts.stream().map(DraftListRow::processDefinitionId).collect(Collectors.toSet());
+        List<ProcessDefinition> definitions = repositoryService.createProcessDefinitionQuery()
+                .processDefinitionIds(ids).list();
+        Map<String, ProcessDefinition> byId = definitions.stream().collect(
+                Collectors.toMap(ProcessDefinition::getId, definition -> definition));
+        Set<String> latestIds = repositoryService.createProcessDefinitionQuery()
+                .processDefinitionIds(ids).processDefinitionWithoutTenantId().latestVersion().list()
+                .stream().map(ProcessDefinition::getId).collect(Collectors.toSet());
+        List<ProcessDefinition> active = definitions.stream()
+                .filter(definition -> latestIds.contains(definition.getId()) && !definition.isSuspended()).toList();
+        Map<String, Boolean> permissions = active.isEmpty() ? Map.of()
+                : participantRuleRuntimeService.resolveManagedStartDecisions(actor, active);
+        Map<String, String> reasons = new LinkedHashMap<>();
+        for (DraftListRow draft : drafts)
+        {
+            ProcessDefinition definition = byId.get(draft.processDefinitionId());
+            String reason = null;
+            if (definition == null) reason = "流程定义已删除";
+            else if (!draft.processDefinitionKey().equals(definition.getKey())
+                    || draft.processDefinitionVersion() != definition.getVersion()
+                    || !latestIds.contains(definition.getId())) reason = "流程定义版本已过期";
+            else if (!draft.deploymentId().equals(definition.getDeploymentId())) reason = "流程定义部署关系已变化";
+            else if (definition.isSuspended()) reason = "流程定义当前不可用";
+            else if (permissions.get(definition.getId()) == null) throw dataError("流程发起范围批量判定结果异常");
+            else if (!permissions.get(definition.getId())) reason = "当前用户已无权发起该流程";
+            if (reason != null) reasons.put(draft.draftId(), reason);
+        }
+        return reasons;
     }
 
     /**
@@ -649,7 +731,23 @@ public class WorkflowProcessDefinitionQueryService
      * @param bpmnModel BpmnModel，本次准备唯一读取的流程模型
      * @param form WorkflowProcessFormView，基于同一模型和部署制品生成的开始表单
      */
-    record StartFormLoad(BpmnModel bpmnModel, WorkflowProcessFormView form) { }
+    record StartFormLoad(BpmnModel bpmnModel, WorkflowProcessFormView form)
+    {
+        /** 草稿/提交需要处理字段时才解析一次；纯预览和 CallActivity 保持各自的原读取契约。 */
+        JsonNode parseFormRoot()
+        {
+            try
+            {
+                return WorkflowFormTemplateValidator.decode(form.content());
+            }
+            catch (ServiceException exception)
+            {
+                ServiceException failure = dataError("流程部署表单快照结构异常");
+                failure.initCause(exception);
+                throw failure;
+            }
+        }
+    }
 
     /**
      * 解析开始节点实际使用的部署表单键，并区分正式模板权限元数据与内嵌 FormData。

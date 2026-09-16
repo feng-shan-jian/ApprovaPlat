@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -15,6 +16,10 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import com.mysql.cj.jdbc.MysqlDataSource;
 import org.flowable.engine.IdentityService;
 import org.flowable.engine.RepositoryService;
@@ -28,6 +33,10 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftCreateRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSaveRequest;
+import com.ruoyi.flowable.domain.dto.WorkflowProcessDraftSubmitRequest;
+import com.ruoyi.flowable.domain.vo.WorkflowProcessFormView;
+import com.ruoyi.flowable.engine.WorkflowProcessInstanceSnapshot;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
@@ -68,6 +77,7 @@ class WorkflowProcessDraftStartMySqlIT
     private static WorkflowProcessDefinitionLockMapper definitionLockMapper;
     private WorkflowAttachmentService attachmentService;
     private WorkflowProcessDraftService draftService;
+    private WorkflowProcessStartService processStartService;
 
     /**
      * 连接显式隔离 MySQL，核验正式表并装配参与 Spring 事务的生产 Mapper。
@@ -140,8 +150,13 @@ class WorkflowProcessDraftStartMySqlIT
 
         WorkflowProcessDefinitionQueryService definitionQueryService =
                 mock(WorkflowProcessDefinitionQueryService.class);
-        WorkflowProcessStartService processStartService =
-                mock(WorkflowProcessStartService.class);
+        processStartService = mock(WorkflowProcessStartService.class);
+        WorkflowProcessFormView form = new WorkflowProcessFormView(DEFINITION_ID, DEPLOYMENT_ID,
+                null, "TEMPLATE", 1L, "startForm", "start", "Draft form", "Start",
+                "{\"fields\":[]}", Instant.now(), List.of());
+        var loaded = new WorkflowProcessDefinitionQueryService.StartFormLoad(null, form);
+        when(definitionQueryService.loadStartFormForPreviewInCurrentTransaction(any(), any())).thenReturn(loaded);
+        when(definitionQueryService.loadDraftFormInCurrentTransaction(any(), any())).thenReturn(loaded);
         WorkflowStartVariableValidator variableValidator =
                 new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
         attachmentService = mock(WorkflowAttachmentService.class);
@@ -160,6 +175,83 @@ class WorkflowProcessDraftStartMySqlIT
     void tearDown() throws SQLException
     {
         clearTestRows();
+    }
+
+    /** 真正的 InnoDB 草稿/部署锁串行化两个提交，启动边界为可计数夹具；引擎与附件由整链测试覆盖。 */
+    @Test
+    void concurrentSubmitWaitsForCommitAndReturnsOneStoredInstance() throws Exception
+    {
+        var draft = draftService.create(new WorkflowProcessDraftCreateRequest(DEFINITION_ID, null, Map.of(), Map.of()));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(processStartService.startDraft(any(), any(), any(), any(), any())).thenAnswer(invocation ->
+        {
+            started.countDown();
+            assertThat(release.await(10, TimeUnit.SECONDS)).isTrue();
+            return new WorkflowProcessStartService.DraftStartResult(
+                    new WorkflowProcessInstanceSnapshot("draft-concurrent-instance", DEFINITION_ID, null, false), Map.of());
+        });
+        var executor = Executors.newFixedThreadPool(2);
+        try
+        {
+            var request = new WorkflowProcessDraftSubmitRequest(draft.revisionNo(), null, Map.of(), Map.of());
+            var first = executor.submit(() -> draftService.submit(draft.draftId(), request));
+            assertThat(started.await(10, TimeUnit.SECONDS)).isTrue();
+            CountDownLatch competing = new CountDownLatch(1);
+            var second = executor.submit(() -> { competing.countDown(); return draftService.submit(draft.draftId(), request); });
+            assertThat(competing.await(10, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> second.get(250, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(java.util.concurrent.TimeoutException.class);
+            release.countDown();
+            assertThat(first.get(10, TimeUnit.SECONDS)).isEqualTo(second.get(10, TimeUnit.SECONDS));
+            verify(processStartService, times(1)).startDraft(any(), any(), any(), any(), any());
+            var stored = draftMapper.selectOwnedById(draft.draftId(), OWNER_ID);
+            assertThat(stored.revisionNo()).isEqualTo(2);
+            assertThat(stored.submittedProcessInstanceId()).isEqualTo("draft-concurrent-instance");
+        }
+        finally
+        {
+            release.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    void competingSavesKeepOneRevisionAndRejectTheStaleRequest() throws Exception
+    {
+        var draft = draftService.create(new WorkflowProcessDraftCreateRequest(DEFINITION_ID, null, Map.of(), Map.of()));
+        var executor = Executors.newFixedThreadPool(2);
+        CountDownLatch go = new CountDownLatch(1);
+        try
+        {
+            java.util.concurrent.Callable<String> save = () ->
+            {
+                assertThat(go.await(10, TimeUnit.SECONDS)).isTrue();
+                try
+                {
+                    return "saved-" + draftService.save(draft.draftId(), new WorkflowProcessDraftSaveRequest(
+                            draft.revisionNo(), "race", Map.of(), Map.of())).revisionNo();
+                }
+                catch (ServiceException error)
+                {
+                    assertThat(error.getCode()).isEqualTo(HttpStatus.CONFLICT);
+                    return error.getSubCode();
+                }
+            };
+            var first = executor.submit(save);
+            var second = executor.submit(save);
+            go.countDown();
+            assertThat(List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder("saved-2", "DRAFT_VERSION_CONFLICT");
+            assertThat(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID).revisionNo()).isEqualTo(2);
+        }
+        finally
+        {
+            go.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
     }
 
     /**

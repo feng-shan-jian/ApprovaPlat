@@ -41,7 +41,13 @@ function component(path, modules) {
 }
 
 const Field = component('../../src/components/workflow/form/WorkflowFormField.vue', {
-  Editor: { render: () => null }, WorkflowAttachmentUpload: { render: () => null }
+  Editor: { render: () => null }, WorkflowAttachmentUpload: {
+    props: ['modelValue'], emits: ['update:modelValue', 'busy-change'],
+    setup: (props, { emit }) => () => h('attachment', {
+      value: props.modelValue, change: value => emit('update:modelValue', value),
+      busy: value => emit('busy-change', value)
+    })
+  }
 })
 const Form = component('../../src/components/workflow/ProcessFormRenderer.vue', {
   WorkflowFormField: Field, flattenFormFields, normalizeFormTemplate
@@ -58,7 +64,15 @@ const row = (children, extra = {}) => ({
 async function mount(t, content, values, readonly = false) {
   let rules
   const container = element()
-  const app = renderer.createApp(Form, { content, modelValue: values, readonly })
+  const state = Vue.reactive({ content, values, readonly })
+  const updates = []
+  const changes = []
+  const formRef = Vue.ref()
+  const app = renderer.createApp({ render: () => h(Form, {
+    ref: formRef, content: state.content, modelValue: state.values, readonly: state.readonly,
+    'onUpdate:modelValue': value => { updates.push(value); state.values = value },
+    onChange: value => changes.push(value)
+  }) })
   app.component('WorkflowFormField', Field)
   for (const name of ['el-row', 'el-col', 'el-form-item', 'el-option', 'el-select', 'el-cascader',
     'el-radio', 'el-radio-group', 'el-checkbox', 'el-checkbox-group', 'el-table', 'el-table-column', 'el-button']) app.component(name, {
@@ -80,16 +94,19 @@ async function mount(t, content, values, readonly = false) {
       ...props, change: value => emit('update:modelValue', value)
     })
   })
-  const exposed = app.mount(container)
+  app.mount(container)
   t.after(() => app.unmount())
   await nextTick()
-  const inputs = []
-  function visit(node) {
-    if (node.tag === 'input') inputs.push(node)
-    node.children.forEach(visit)
+  function find(tag) {
+    const found = []
+    function visit(node) {
+      if (node.tag === tag) found.push(node)
+      node.children.forEach(visit)
+    }
+    visit(container)
+    return found
   }
-  visit(container)
-  return { exposed, inputs, rules: () => rules }
+  return { exposed: formRef.value, inputs: find('input'), find, state, updates, changes, rules: () => rules }
 }
 
 test('嵌套隐藏字段不进入真实表单提交和必填校验，原始快照不变', async t => {
@@ -132,4 +149,48 @@ test('附件提交过滤沿用有效权限，仍把可写附件元数据转换�
   const content = { fields: [attachment('files'), row([attachment('lockedFiles')], { workflowWritable: false })] }
   const form = await mount(t, content, { files: [{ attachmentId: 'uuid' }], lockedFiles: [{ attachmentId: 'private' }] })
   assert.deepEqual(form.exposed.getValues(), { files: ['uuid'] })
+})
+
+test('一次顶层或嵌套编辑只发送一对事件，父级回写与外部重置保持静默', async t => {
+  const form = await mount(t, { fields: [field('title'), row([row([field('nested')])])] }, { title: 'Before' })
+  assert.equal(form.updates.length, 0)
+  for (const [index, value] of [[0, 'After'], [1, 'Nested']]) {
+    form.inputs[index].props.change(value)
+    await nextTick()
+    await nextTick()
+  }
+  assert.equal(form.updates.length, 2)
+  assert.equal(form.changes.length, 2)
+  assert.deepEqual(form.exposed.getValues(), { title: 'After', nested: 'Nested' })
+  form.state.values = { title: 'Loaded', nested: 'Recovered' }
+  await nextTick()
+  assert.equal(form.inputs[0].props.modelValue, 'Loaded')
+  form.state.values.nested = 'Reset in place'
+  await nextTick()
+  assert.equal(form.inputs[1].props.modelValue, 'Reset in place')
+  form.state.content = { fields: [field('other', { defaultValue: 'Default' })] }
+  form.state.values = {}
+  await nextTick()
+  assert.deepEqual(form.exposed.getValues(), { other: 'Default' })
+  assert.equal(form.updates.length, 2)
+  assert.equal(form.changes.length, 2)
+})
+
+test('数组编辑不修改父值旧引用，嵌套附件在途门禁和 UUID 投影保留', async t => {
+  const before = { items: ['old'], files: [] }
+  const form = await mount(t, { fields: [field('items'), row([row([field('files', { tag: 'el-upload' })])])] }, before)
+  form.inputs[0].props.change(['one', 'two'])
+  await nextTick()
+  const upload = form.find('attachment')[0]
+  upload.props.busy(true)
+  await assert.rejects(form.exposed.ensureAttachmentsIdle(), /附件仍在上传中/)
+  upload.props.change([{ attachmentId: 'new-uuid', originalName: 'proof.pdf' }])
+  upload.props.busy(false)
+  await nextTick()
+  assert.equal(await form.exposed.ensureAttachmentsIdle(), true)
+  assert.deepEqual(before, { items: ['old'], files: [] })
+  assert.deepEqual(form.exposed.getValues(), { items: ['one', 'two'], files: ['new-uuid'] })
+  assert.equal(form.state.values.files[0].originalName, 'proof.pdf')
+  assert.equal(form.updates.length, 2)
+  assert.equal(form.changes.length, 2)
 })

@@ -62,16 +62,7 @@ public class WorkflowFormTemplateValidator
     private static final Set<String> PROTOTYPE_POLLUTION_KEYS = Set.of(
             "__proto__", "prototype", "constructor");
 
-    private final ObjectMapper objectMapper;
-
-    /**
-     * 创建表单模板验证器并启用重复键、尾随内容和解析深度门禁。
-     * @return 构造函数，无返回值
-     */
-    public WorkflowFormTemplateValidator()
-    {
-        this.objectMapper = createObjectMapper();
-    }
+    private static final ObjectMapper OBJECT_MAPPER = createObjectMapper();
 
     /**
      * 校验表单 JSON 的全部安全约束并返回根节点，供本次调用只读提取字段。
@@ -79,6 +70,17 @@ public class WorkflowFormTemplateValidator
      * @return JsonNode，通过全部门禁的根节点；任何门禁失败时抛出 400 业务异常
      */
     public JsonNode validate(String content)
+    {
+        JsonNode root = decode(content);
+        // 作者输入仍需完整安全与组件校验；持久化读取只复用解码边界。
+        validateStaticContent(root);
+        ComponentCounter counter = new ComponentCounter();
+        validateComponents(root.get(FIELDS_FIELD), 1, counter);
+        return root;
+    }
+
+    /** 单次解码表单正文，保留字节、深度、重复键和单一根约束，不重新审计部署模板。 */
+    public static JsonNode decode(String content)
     {
         if (content == null || content.isBlank())
         {
@@ -101,10 +103,6 @@ public class WorkflowFormTemplateValidator
             throw invalid("表单模板必须包含 fields 数组");
         }
 
-        // 先扫描整棵 JSON，避免危险键或协议藏在插槽、选项、样式等非组件字段中。
-        validateStaticContent(root);
-        ComponentCounter counter = new ComponentCounter();
-        validateComponents(fields, 1, counter);
         return root;
     }
 
@@ -201,12 +199,17 @@ public class WorkflowFormTemplateValidator
     {
         for (JsonNode component : components)
         {
+            if (!component.isObject()) throw invalid("fields 和 children 中的组件必须是对象");
+            // 字段消费必须读取明确权限，不能把损坏的权限值强制转换为默认布尔值。
+            validatePermissionMetadata(component);
             boolean readable = parent.readable() && !component.path("workflowHidden").booleanValue()
                     && component.path("workflowReadable").booleanValue();
             FieldPermissions permission = new FieldPermissions(readable,
                     parent.writable() && readable && component.path("workflowWritable").booleanValue());
             if (component.hasNonNull(VARIABLE_FIELD)) visitor.accept(component, permission);
             JsonNode children = component.get(CHILDREN_FIELD);
+            if (children != null && !children.isNull() && !children.isArray())
+                throw invalid("children 必须是数组");
             if (children != null && children.isArray()) visitFields(children, permission, visitor);
         }
     }
@@ -309,11 +312,11 @@ public class WorkflowFormTemplateValidator
      * @param content String，待解析 JSON 文本
      * @return JsonNode，解析后的根节点
      */
-    private JsonNode parse(String content)
+    private static JsonNode parse(String content)
     {
         try
         {
-            JsonNode root = objectMapper.readTree(content);
+            JsonNode root = OBJECT_MAPPER.readTree(content);
             if (root == null || root.isNull())
             {
                 throw invalid("表单内容必须是合法 JSON 对象");
@@ -512,7 +515,7 @@ public class WorkflowFormTemplateValidator
      * 创建启用重复键检测、尾随 token 检测和解析深度限制的 Jackson mapper。
      * @return ObjectMapper，表单模板专用严格 JSON mapper
      */
-    private ObjectMapper createObjectMapper()
+    private static ObjectMapper createObjectMapper()
     {
         StreamReadConstraints constraints = StreamReadConstraints.builder()
                 .maxNestingDepth(MAX_JSON_DEPTH)
@@ -532,7 +535,7 @@ public class WorkflowFormTemplateValidator
      * @param message String，对外可读且不包含模板原文的错误提示
      * @return ServiceException，HTTP 语义为 400 的业务异常
      */
-    private ServiceException invalid(String message)
+    private static ServiceException invalid(String message)
     {
         return new ServiceException(message, HttpStatus.BAD_REQUEST);
     }

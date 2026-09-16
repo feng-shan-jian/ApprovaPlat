@@ -96,6 +96,230 @@ import tools.jackson.databind.json.JsonMapper;
 class WorkflowProcessStartChainIntegrationTest
 {
     @ParameterizedTest
+    @ValueSource(strings = { "create", "save", "submit" })
+    void rejectsDuplicatePermissionKeysFromStoredFormsBeforeAnyWrite(String operation)
+    {
+        String attachmentId = insertTemporaryAttachment();
+        Map<String, Object> variables = variablesWithAttachment("Alice", attachmentId);
+        WorkflowProcessDraftView draft = operation.equals("create") ? null : createDraft(variables);
+        String damaged = FORM_CONTENT.replace("\"workflowWritable\":true",
+                "\"workflowWritable\":false,\"workflowWritable\":true");
+        replaceStoredForm(damaged);
+        if (draft != null)
+        {
+            // 同时损坏持久化副本，确保命中真实解码而不是正文漂移门禁。
+            jdbcTemplate.update("update wf_process_draft set form_snapshot=? where draft_id=?",
+                    damaged, draft.draftId());
+        }
+        WfProcessDraft storedBefore = draft == null ? null
+                : draftMapper.selectOwnedById(draft.draftId(), OWNER_ID);
+        WfAttachment attachmentBefore = attachmentMapper.selectById(attachmentId);
+        long draftCount = jdbcTemplate.queryForObject("select count(*) from wf_process_draft", Long.class);
+        ThrowingCallable write = switch (operation)
+        {
+            case "create" -> () -> createDraft(variables);
+            case "save" -> () -> draftService.save(draft.draftId(),
+                    new WorkflowProcessDraftSaveRequest(draft.revisionNo(), "unsaved", variables, Map.of()));
+            case "submit" -> () -> submitDraft(draft, variables);
+            default -> throw new IllegalArgumentException(operation);
+        };
+        assertThatThrownBy(write).isInstanceOfSatisfying(ServiceException.class, failure ->
+        {
+            assertThat(failure.getCode()).isEqualTo(HttpStatus.ERROR);
+            assertThat(failure.getMessage()).isEqualTo("流程部署表单快照结构异常");
+            assertThat(failure.getCause()).isInstanceOf(ServiceException.class)
+                    .hasMessage("表单内容必须是合法且无重复键的 JSON 对象");
+        });
+        assertThat(jdbcTemplate.queryForObject("select count(*) from wf_process_draft", Long.class))
+                .isEqualTo(draftCount);
+        if (draft != null)
+        {
+            assertThat(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID)).isEqualTo(storedBefore);
+        }
+        assertThat(attachmentMapper.selectById(attachmentId)).isEqualTo(attachmentBefore);
+        assertThat(runtimeService.createProcessInstanceQuery().count()).isZero();
+        assertThat(processEngine.getHistoryService().createHistoricProcessInstanceQuery().count()).isZero();
+
+        // 修复实际存储后，同一草稿/附件可继续编辑并通过真实引擎提交。
+        replaceStoredForm(FORM_CONTENT);
+        WorkflowProcessDraftView recovered;
+        if (draft == null)
+        {
+            recovered = createDraft(variables);
+        }
+        else
+        {
+            jdbcTemplate.update("update wf_process_draft set form_snapshot=? where draft_id=?",
+                    FORM_CONTENT, draft.draftId());
+            recovered = draft;
+        }
+        WorkflowProcessDraftView saved = draftService.save(recovered.draftId(),
+                new WorkflowProcessDraftSaveRequest(recovered.revisionNo(), null,
+                        variablesWithAttachment("Edited", attachmentId), Map.of()));
+        WorkflowProcessDraftSubmitView submitted = submitDraft(saved, saved.variables());
+        assertThat(runtimeService.getVariable(submitted.processInstanceId(), "requester")).isEqualTo("Edited");
+        assertThat(runtimeService.createProcessInstanceQuery().count()).isOne();
+        assertThat(attachmentMapper.selectById(attachmentId).processInstanceId())
+                .isEqualTo(submitted.processInstanceId());
+        assertThat(draftMapper.selectOwnedById(saved.draftId(), OWNER_ID).draftStatus())
+                .isEqualTo(WorkflowProcessDraftStatus.SUBMITTED);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "trailingRoot", "byteLimit", "nestingDepth", "nonObjectRoot",
+            "missingFields", "nonObjectField", "nonArrayChildren", "missingPermission",
+            "typedPermission", "permissionCombination" })
+    void persistedFormDecodingAndFieldConsumptionRejectInvalidDataWithoutSideEffects(String damage)
+    {
+        String damaged = switch (damage)
+        {
+            case "trailingRoot" -> FORM_CONTENT + " {}";
+            case "byteLimit" -> "{\"fields\":[],\"padding\":\""
+                    + "中".repeat(WorkflowFormTemplateValidator.MAX_CONTENT_BYTES / 3 + 1) + "\"}";
+            case "nestingDepth" -> "{\"fields\":[],\"padding\":" + "[".repeat(101)
+                    + "0" + "]".repeat(101) + "}";
+            case "nonObjectRoot" -> "[]";
+            case "missingFields" -> "{}";
+            case "nonObjectField" -> "{\"fields\":[true]}";
+            case "nonArrayChildren" -> FORM_CONTENT.replace("\"layout\":", "\"children\":{},\"layout\":");
+            case "missingPermission" -> FORM_CONTENT.replace("\"workflowHidden\":false,", "");
+            case "typedPermission" -> FORM_CONTENT.replace("\"workflowHidden\":false", "\"workflowHidden\":\"true\"");
+            case "permissionCombination" -> FORM_CONTENT.replace("\"workflowHidden\":false", "\"workflowHidden\":true");
+            default -> throw new IllegalArgumentException(damage);
+        };
+        replaceStoredForm(damaged);
+        String attachmentId = insertTemporaryAttachment();
+        WfAttachment attachmentBefore = attachmentMapper.selectById(attachmentId);
+        assertThatThrownBy(() -> createDraft(variablesWithAttachment("Alice", attachmentId)))
+                .isInstanceOfSatisfying(ServiceException.class, failure ->
+                {
+                    assertThat(failure.getCode()).isEqualTo(HttpStatus.ERROR);
+                    assertThat(failure.getMessage()).isEqualTo("流程部署表单快照结构异常");
+                    assertThat(failure.getCause()).isInstanceOf(ServiceException.class);
+                });
+        assertThat(jdbcTemplate.queryForObject("select count(*) from wf_process_draft", Long.class)).isZero();
+        assertThat(attachmentMapper.selectById(attachmentId)).isEqualTo(attachmentBefore);
+        assertThat(runtimeService.createProcessInstanceQuery().count()).isZero();
+        assertThat(processEngine.getHistoryService().createHistoricProcessInstanceQuery().count()).isZero();
+    }
+
+    /** 通过真实 Flowable 业务资源存储建立损坏/恢复样本，不替换加载器或解析器。 */
+    private void replaceStoredForm(String content)
+    {
+        WorkflowDeploymentArtifacts artifacts = deploymentArtifacts(definition.getDeploymentId());
+        artifacts.forms().get(0).setContent(content);
+        artifactRepository.delete(definition.getDeploymentId());
+        artifactRepository.persist(definition.getDeploymentId(), artifacts);
+        assertThat(artifactRepository.selectForms(definition.getDeploymentId()).get(0).getContent())
+                .isEqualTo(content);
+    }
+
+    @Test
+    void draftWritesReturnCompleteStoredResponseWithoutReenteringFormQuery()
+    {
+        WorkflowProcessDraftView created = createDraft(Map.of());
+        assertThat(created.variables()).isEmpty();
+        assertThat(created.editable()).isTrue();
+        assertThat(created.submittable()).isTrue();
+        verify(repositoryService, times(1)).getBpmnModel(definition.getId());
+        verify(identityResolver, times(1)).resolveCurrentIdentity();
+        verify(draftMapper, never()).selectOwnedById(anyString(), any());
+        var mapper = JsonMapper.shared();
+        assertThat(mapper.readTree(mapper.writeValueAsString(created)))
+                .isEqualTo(mapper.readTree(mapper.writeValueAsString(draftService.get(created.draftId()))));
+
+        String attachment = insertTemporaryAttachment();
+        clearObservedCalls();
+        WorkflowProcessDraftView saved = draftService.save(created.draftId(),
+                new WorkflowProcessDraftSaveRequest(created.revisionNo(), "saved-key",
+                        Map.of("evidence", List.of(attachment)), Map.of()));
+        assertThat(saved.variables()).containsExactlyEntriesOf(Map.of("evidence", List.of(attachment)));
+        assertThat(saved.revisionNo()).isEqualTo(2);
+        assertThat(saved.createTime()).isEqualTo(created.createTime());
+        assertThat(saved.updateTime()).isAfterOrEqualTo(created.updateTime());
+        verify(repositoryService, times(1)).getBpmnModel(definition.getId());
+        verify(identityResolver, times(1)).resolveCurrentIdentity();
+        verify(draftMapper, never()).selectOwnedById(anyString(), any());
+        assertThat(mapper.readTree(mapper.writeValueAsString(saved)))
+                .isEqualTo(mapper.readTree(mapper.writeValueAsString(draftService.get(saved.draftId()))));
+        assertThat(attachmentMapper.selectById(attachment).status()).isEqualTo(WorkflowAttachmentStatus.DRAFT);
+        assertThatThrownBy(() -> submitDraft(saved, saved.variables())).hasMessageContaining("必填");
+        assertThat(draftMapper.selectOwnedById(saved.draftId(), OWNER_ID).revisionNo()).isEqualTo(2);
+    }
+
+    @Test
+    void draftPageUsesEachBindingAndActualLatestVersionWithoutReadingForms()
+    {
+        WorkflowProcessDraftView first = createDraft(VALID_VARIABLES);
+        WorkflowProcessDraftView broken = createDraft(VALID_VARIABLES);
+        jdbcTemplate.update("update wf_process_draft set deployment_id=? where draft_id=?",
+                "wrong-deployment", broken.draftId());
+        clearObservedCalls();
+        var rows = draftService.list(null, 1, 20).rows();
+        assertThat(rows).filteredOn(row -> row.draftId().equals(first.draftId()))
+                .allSatisfy(row -> assertThat(row.submittable()).isTrue());
+        assertThat(rows).filteredOn(row -> row.draftId().equals(broken.draftId()))
+                .allSatisfy(row -> assertThat(row.statusReason()).isEqualTo("流程定义部署关系已变化"));
+        verify(repositoryService, never()).getBpmnModel(anyString());
+        verify(participantRuntimeService, times(1)).resolveManagedStartDecisions(any(), any());
+
+        Deployment newer = repositoryService.createDeployment().addString("newer.bpmn20.xml", BPMN).deploy();
+        definition = repositoryService.createProcessDefinitionQuery().deploymentId(newer.getId()).singleResult();
+        artifactRepository.persist(newer.getId(), deploymentArtifacts(newer.getId()));
+        WorkflowProcessDraftView latest = createDraft(VALID_VARIABLES);
+        var versions = draftService.list(null, 1, 20).rows();
+        assertThat(versions).hasSize(3);
+        assertThat(versions).filteredOn(row -> !row.draftId().equals(latest.draftId()))
+                .allSatisfy(row -> assertThat(row.statusReason()).isEqualTo("流程定义版本已过期"));
+        assertThat(versions).filteredOn(row -> row.draftId().equals(latest.draftId()))
+                .allSatisfy(row -> assertThat(row.submittable()).isTrue());
+    }
+
+    @Test
+    void draftReadAndWritePropagateSystemFailuresAndKeepStoredValues()
+    {
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
+        ServiceException failure = new ServiceException("storage offline", HttpStatus.ERROR)
+                .setSubCode("PROCESS_DEFINITION_UNAVAILABLE");
+        doThrow(failure).when(participantRuntimeService).resolveManagedStartDecisions(any(), any());
+        assertThatThrownBy(() -> draftService.get(draft.draftId())).isSameAs(failure);
+        assertThatThrownBy(() -> draftService.list(null, 1, 20)).isSameAs(failure);
+        assertThatThrownBy(() -> draftService.save(draft.draftId(), new WorkflowProcessDraftSaveRequest(
+                draft.revisionNo(), null, Map.of("requester", "unsaved"), Map.of()))).isSameAs(failure);
+        assertThat(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID).revisionNo()).isEqualTo(1);
+        assertThat(readJsonMap(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID).formValues()))
+                .isEqualTo(VALID_VARIABLES);
+    }
+
+    @Test
+    void draftPageDistinguishesDeniedFromMissingPermissionDecision()
+    {
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
+        doReturn(Map.of(definition.getId(), false)).when(participantRuntimeService)
+                .resolveManagedStartDecisions(any(), any());
+        assertThat(draftService.get(draft.draftId()).statusReason()).isEqualTo("当前用户已无权发起该流程");
+        assertThat(draftService.list(null, 1, 20).rows()).singleElement()
+                .satisfies(row -> { assertThat(row.submittable()).isFalse();
+                    assertThat(row.statusReason()).isEqualTo("当前用户已无权发起该流程"); });
+        doReturn(Map.of()).when(participantRuntimeService).resolveManagedStartDecisions(any(), any());
+        assertThatThrownBy(() -> draftService.list(null, 1, 20)).isInstanceOfSatisfying(ServiceException.class,
+                error -> assertThat(error.getCode()).isEqualTo(HttpStatus.ERROR));
+    }
+
+    @Test
+    void draftSnapshotDamageBlocksRecoveryAndSaveWhileDigestIsNotASecondAuthority()
+    {
+        WorkflowProcessDraftView draft = createDraft(VALID_VARIABLES);
+        jdbcTemplate.update("update wf_process_draft set form_snapshot_sha256=? where draft_id=?", "0".repeat(64), draft.draftId());
+        assertThat(draftService.get(draft.draftId()).submittable()).isTrue();
+        jdbcTemplate.update("update wf_process_draft set form_snapshot=? where draft_id=?", "{}", draft.draftId());
+        assertThat(draftService.get(draft.draftId()).statusReason()).isEqualTo("草稿表单快照已失效");
+        assertServiceError(() -> draftService.save(draft.draftId(), new WorkflowProcessDraftSaveRequest(
+                draft.revisionNo(), null, VALID_VARIABLES, Map.of())), HttpStatus.CONFLICT, "DRAFT_SNAPSHOT_MISMATCH");
+        assertThat(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID).revisionNo()).isEqualTo(1);
+    }
+
+    @ParameterizedTest
     @ValueSource(booleans = { true, false })
     void nestedPermissionsSurviveFreezeDeploymentDraftAndRealStart(boolean hidden)
     {
@@ -140,7 +364,7 @@ class WorkflowProcessStartChainIntegrationTest
         WorkflowStartVariableValidator validator = new WorkflowStartVariableValidator(template);
         List<Runnable> entries = List.of(
                 () -> assertThat(validator.validateForStart(FORM_CONTENT, VALID_VARIABLES).variables()).isEqualTo(VALID_VARIABLES),
-                () -> assertThat(validator.validateForDraft(FORM_CONTENT, VALID_VARIABLES).variables()).isEqualTo(VALID_VARIABLES),
+                () -> assertThat(validator.validateForDraft(JsonMapper.shared().readTree(FORM_CONTENT), VALID_VARIABLES).variables()).isEqualTo(VALID_VARIABLES),
                 () -> assertThat(validator.validatePatch(FORM_CONTENT, VALID_VARIABLES, Map.of()).variables()).isEqualTo(VALID_VARIABLES),
                 () -> assertThat(validator.normalizeCallActivityStartValues(FORM_CONTENT,
                         Map.of("requester", "Alice", "initiator", "100"))).isEqualTo(VALID_VARIABLES));
@@ -150,7 +374,6 @@ class WorkflowProcessStartChainIntegrationTest
         }
         List<ThrowingCallable> trustedEntries = List.of(
                 () -> validator.validateForStart("{", Map.of()),
-                () -> validator.validateForDraft("{", Map.of()),
                 () -> validator.validatePatch("{", Map.of(), Map.of()),
                 () -> validator.parseTrustedSnapshot("{"));
         for (ThrowingCallable entry : trustedEntries)
@@ -781,6 +1004,8 @@ class WorkflowProcessStartChainIntegrationTest
         assertThat(projected.editable()).isFalse();
         assertThat(projected.submittable()).isFalse();
         assertThat(projected.statusReason()).isEqualTo("流程定义版本已过期");
+        assertThat(draftService.list(null, 1, 20).rows()).singleElement()
+                .satisfies(row -> assertThat(row.statusReason()).isEqualTo(projected.statusReason()));
     }
 
     /**
@@ -802,6 +1027,8 @@ class WorkflowProcessStartChainIntegrationTest
         assertThat(projected.editable()).isFalse();
         assertThat(projected.submittable()).isFalse();
         assertThat(projected.statusReason()).isEqualTo("流程定义当前不可用");
+        assertThat(draftService.list(null, 1, 20).rows()).singleElement()
+                .satisfies(row -> assertThat(row.statusReason()).isEqualTo(projected.statusReason()));
     }
 
     /**
@@ -823,6 +1050,8 @@ class WorkflowProcessStartChainIntegrationTest
         assertThat(projected.editable()).isFalse();
         assertThat(projected.submittable()).isFalse();
         assertThat(projected.statusReason()).isEqualTo("流程定义已删除");
+        assertThat(draftService.list(null, 1, 20).rows()).singleElement()
+                .satisfies(row -> assertThat(row.statusReason()).isEqualTo(projected.statusReason()));
     }
 
     /**

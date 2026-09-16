@@ -39,9 +39,6 @@ public class WorkflowProcessStartService
     /** 草稿提交创建实例时明确写入的运行中状态值。 */
     public static final String RUNNING_STATUS = "running";
 
-    /** Flowable 流程定义和部署主键对应数据库列的安全字符上限。 */
-    private static final int MAX_ENGINE_ID_LENGTH = 255;
-
     /** 草稿绑定定义不再是最新版时返回的稳定机器子码。 */
     private static final String DRAFT_DEFINITION_VERSION_EXPIRED_SUB_CODE =
             "DRAFT_DEFINITION_VERSION_EXPIRED";
@@ -99,28 +96,8 @@ public class WorkflowProcessStartService
             String businessKey, Map<String, Object> variables,
             Map<String, java.util.List<Long>> multiInstanceUserIds)
     {
-        if (actor == null || draft == null)
-        {
-            throw new ServiceException("流程申请草稿不能为空", HttpStatus.BAD_REQUEST);
-        }
-        if (!String.valueOf(draft.ownerUserId()).equals(actor.userId()))
-        {
-            throw new ServiceException("当前用户无权提交该流程申请草稿", HttpStatus.FORBIDDEN);
-        }
-        String deploymentId = requireText(draft.deploymentId(),
-                "草稿绑定的流程部署关系异常", MAX_ENGINE_ID_LENGTH, HttpStatus.ERROR);
         ProcessDefinition definition = requireExistingDefinition(draft.processDefinitionId());
-        if (!draft.processDefinitionKey().equals(definition.getKey())
-                || draft.processDefinitionVersion() != definition.getVersion())
-        {
-            throw new ServiceException("草稿绑定的流程定义版本已失效", HttpStatus.CONFLICT)
-                    .setSubCode(DRAFT_DEFINITION_VERSION_EXPIRED_SUB_CODE);
-        }
-        if (!deploymentId.equals(definition.getDeploymentId()))
-        {
-            throw new ServiceException("流程定义部署关系已发生变化", HttpStatus.CONFLICT)
-                    .setSubCode(DEFINITION_RELATION_CONFLICT_SUB_CODE);
-        }
+        WorkflowProcessDefinitionQueryService.requireDraftDefinitionRelation(draft, definition);
         if (StringUtils.hasText(definition.getTenantId()))
         {
             throw new ServiceException("草稿绑定的流程租户关系异常", HttpStatus.ERROR);
@@ -131,20 +108,9 @@ public class WorkflowProcessStartService
         WorkflowProcessDefinitionQueryService.StartFormLoad formLoad = definitionQueryService
                 .loadStartFormInCurrentTransaction(actor, definition);
         WorkflowProcessFormView startForm = formLoad.form();
-        assertSnapshotRelation(startForm, draft.processDefinitionId(), draft.deploymentId());
-        String currentChecksum = WorkflowProcessDraftChecksum.sha256(startForm);
-        if (!draft.sourceType().equals(startForm.sourceType())
-                || !java.util.Objects.equals(draft.formId(), startForm.formId())
-                || !draft.formKey().equals(startForm.formKey())
-                || !draft.startNodeKey().equals(startForm.nodeKey())
-                || !draft.formSnapshotSha256().equals(currentChecksum)
-                || !draft.formSnapshot().equals(startForm.content()))
-        {
-            throw new ServiceException("草稿绑定的部署表单快照已失效", HttpStatus.CONFLICT)
-                    .setSubCode("DRAFT_SNAPSHOT_MISMATCH");
-        }
+        WorkflowProcessDefinitionQueryService.requireDraftSnapshot(draft, startForm);
         WorkflowValidatedStartVariables validated = variableValidator.validateForStart(
-                startForm.content(), variables);
+                formLoad.parseFormRoot(), variables);
         // 同一批锁定结果完成 TEMP->DRAFT、移除项处理、完整性校验和安全变量投影。
         Map<String, Object> clientVariables = attachmentService.prepareDraftSubmissionVariables(
                 actor.userId(), draft.draftId(), validated.variables(),
@@ -323,27 +289,6 @@ public class WorkflowProcessStartService
     }
 
     /**
-     * 复核查询服务返回的快照确实属于当前定义和服务端解析的部署。
-     *
-     * @param startForm WorkflowProcessFormView，查询服务返回的开始表单快照
-     * @param definitionId String，当前流程定义主键
-     * @param deploymentId String，定义所属服务端部署主键
-     * @return void，关联或正文异常时抛出服务端数据异常
-     */
-    private void assertSnapshotRelation(WorkflowProcessFormView startForm,
-            String definitionId, String deploymentId)
-    {
-        if (startForm == null
-                || !definitionId.equals(startForm.definitionId())
-                || !deploymentId.equals(startForm.deploymentId())
-                || startForm.processInstanceId() != null
-                || !StringUtils.hasText(startForm.content()))
-        {
-            throw new ServiceException("流程部署表单快照关联异常", HttpStatus.ERROR);
-        }
-    }
-
-    /**
      * 将 Flowable 可变运行实例转换为模块稳定快照，并拒绝异常返回或并发挂起。
      *
      * @param processInstance ProcessInstance，RuntimeService 返回的新实例
@@ -367,29 +312,6 @@ public class WorkflowProcessStartService
         }
         return new WorkflowProcessInstanceSnapshot(processInstance.getId(), definitionId,
                 businessKey, false);
-    }
-
-    /**
-     * 使用指定错误码校验持久化关联中的必填文本。
-     *
-     * @param value String，待校验文本
-     * @param message String，空值或过长时的稳定提示
-     * @param maxLength int，允许的最大字符数
-     * @param status int，校验失败时的 HTTP 语义
-     * @return String，去除首尾空白后的文本
-     */
-    private String requireText(String value, String message, int maxLength, int status)
-    {
-        if (!StringUtils.hasText(value))
-        {
-            throw new ServiceException(message, status);
-        }
-        String normalized = value.trim();
-        if (normalized.length() > maxLength)
-        {
-            throw new ServiceException(message, status);
-        }
-        return normalized;
     }
 
     /**
