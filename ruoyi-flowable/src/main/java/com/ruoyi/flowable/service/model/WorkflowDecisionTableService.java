@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.model;
 
+import static com.ruoyi.flowable.service.model.WorkflowDecisionTableDecimal.read;
 import java.io.StringWriter;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -65,7 +66,7 @@ public class WorkflowDecisionTableService
             JsonNode value = table.testValues().get(input.key());
             literal(input, value);
             values.put(input.key(), switch (input.type()) {
-                case "number" -> value.decimalValue();
+                case "number" -> read(value);
                 case "boolean" -> value.booleanValue();
                 default -> value.textValue();
             });
@@ -110,7 +111,9 @@ public class WorkflowDecisionTableService
             xml.writeDefaultNamespace(org.flowable.dmn.xml.constants.DmnXMLConstants.DMN_NAMESPACE);
             xml.writeAttribute("id", "definitions_" + decisionKey);
             xml.writeAttribute("name", table.name());
-            xml.writeAttribute("namespace", "urn:approvaplat:decision-table:v1");
+            xml.writeAttribute("namespace", "urn:approvaplat:decision-table");
+            xml.writeAttribute("exporter", WorkflowDecisionTableExecutor.EXPORTER);
+            xml.writeAttribute("exporterVersion", "2");
             xml.writeStartElement("decision");
             xml.writeAttribute("id", decisionKey);
             xml.writeAttribute("name", table.name());
@@ -214,8 +217,8 @@ public class WorkflowDecisionTableService
             return true; // ANY/NE 的有限排除仍有共同文本值。
         }
         List<BigDecimal> bounds = new ArrayList<>();
-        if (!"ANY".equals(a.operator())) bounds.add(a.value().decimalValue());
-        if (!"ANY".equals(b.operator())) bounds.add(b.value().decimalValue());
+        if (!"ANY".equals(a.operator())) bounds.add(read(a.value()));
+        if (!"ANY".equals(b.operator())) bounds.add(read(b.value()));
         if (bounds.isEmpty()) return true;
         bounds.sort(BigDecimal::compareTo);
         List<BigDecimal> probes = new ArrayList<>(bounds);
@@ -228,7 +231,7 @@ public class WorkflowDecisionTableService
     private boolean matches(Condition condition, Object value)
     {
         if ("ANY".equals(condition.operator())) return true;
-        int comparison = value instanceof BigDecimal number ? number.compareTo(condition.value().decimalValue())
+        int comparison = value instanceof BigDecimal number ? number.compareTo(read(condition.value()))
                 : value instanceof Boolean flag ? Boolean.compare(flag, condition.value().booleanValue())
                 : ((String) value).compareTo(condition.value().textValue());
         return switch (condition.operator()) {
@@ -255,10 +258,7 @@ public class WorkflowDecisionTableService
         switch (column.type())
         {
             case "number" -> {
-                if (!value.isNumber()) throw invalid(column.label() + "必须为数值");
-                BigDecimal number = value.decimalValue();
-                if (number.precision() > 18 || Math.abs(number.scale()) > 8) throw invalid("数值精度或范围超过支持上限");
-                return number.toPlainString();
+                return read(value).toString();
             }
             case "boolean" -> {
                 if (!value.isBoolean()) throw invalid(column.label() + "必须为布尔值");

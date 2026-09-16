@@ -86,6 +86,9 @@
 - SQL 连接器使用登记数据源和 AST 校验模板。外库查询允许至少一次重试；外库写接受绑定系统 `idempotencyKey`、由真实业务唯一键保护且重复键分支为空操作的幂等 INSERT。
 - HTTP/SQL 失败保留在 Flowable 原生 Job、Timer Job 和 Dead Letter Job；逐次结果进入脱敏结构化日志与 Micrometer 指标，Flowable Job 表作为唯一调用状态台账。
 - DMN 部署必须通过 XML 安全校验，并在流程部署时将引用快照固化到 `approvaplat/dmn-v1.json`。
+- 决策表作者接口 `/workflow/dmn/table` 与 `/workflow/dmn/table/evaluate` 的 `number` 列接受十进制文本或原有 JSON number；浏览器对条件、结果、默认值及试算输入统一发送文本，后端统一以 `BigDecimal` 校验，最多 18 位有效数字且 scale 的绝对值不超过 8。禁止 NaN、Infinity、十六进制及表达式；精确小数调用方应发送文本，已被客户端或 JSON 浮点解析舍入的数值无法恢复。
+- 新决策表以 DMN `exporter="ApprovaPlat Decision Table"`、`exporterVersion="2"` 声明受控十进制协议。Flowable 保持原生命中策略、审计和事务，仅该标记下的数字单值比较与常量输出使用 `BigDecimal`，动态数字表达式明确拒绝。无该标记的导入资源、既有版本和冻结快照继续原生语义，不自动迁移；修复既有决策需发布新版本并重新部署引用流程。
+- 试算增加可选查询参数 `numberFormat=decimal-string`，仅将声明为 `number` 的输出列序列化为精确十进制文本，布尔、文本和行顺序不变；浏览器显式使用该格式。省略参数或使用 `number` 保持原 JSON 数值响应，其他格式拒绝。运行流程仍接收并持久化数值结果，试算不会留下部署或运行历史。
 - Message、Signal 和 ReceiveTask 运行事件使用独立集成 Token；数据库保存前缀、哈希和完整调用审计，Token 正文只在签发时交付。
 
 ## 边界定时器、审批 SLA 与升级

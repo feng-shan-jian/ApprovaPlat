@@ -5,7 +5,7 @@ export function publishDecisionTable(data) {
 }
 
 export function evaluateDecisionTable(data) {
-  return request({ url: '/workflow/dmn/table/evaluate', method: 'post', data })
+  return request({ url: '/workflow/dmn/table/evaluate', method: 'post', params: { numberFormat: 'decimal-string' }, data })
 }
 
 /**

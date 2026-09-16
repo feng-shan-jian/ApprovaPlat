@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import tools.jackson.databind.JsonNode;
 
-/** 决策表业务作者协议 V1；所有列、运算符和字面量由后端独立验证。 */
+/** 决策表作者协议；number 列接受十进制文本或 JSON number，由后端独立验证并精确编译。 */
 public record WorkflowDecisionTableRequest(String key, String name, String category, String hitPolicy,
         List<Column> inputs, List<Column> outputs, List<Rule> rules,
         List<JsonNode> defaultResult, Map<String, JsonNode> testValues)

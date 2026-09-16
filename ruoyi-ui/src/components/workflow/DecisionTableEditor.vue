@@ -110,8 +110,9 @@ function addRule() { form.rules.push({ conditions: form.inputs.map(() => ({ oper
 function moveRule(index, offset) { const [rule] = form.rules.splice(index, 1); form.rules.splice(index + offset, 0, rule) }
 function typedValue(column, value) {
   if (column.type === 'number') {
-    if (!String(value).trim() || !Number.isFinite(Number(value))) throw new Error(`${column.label}请填写有效数值`)
-    return Number(value)
+    const decimal = String(value ?? '').trim()
+    if (!decimal) throw new Error(`${column.label}请填写有效数值`)
+    return decimal
   }
   if (column.type === 'boolean') {
     if (!['true', 'false'].includes(String(value))) throw new Error(`${column.label}请填写 true 或 false`)
