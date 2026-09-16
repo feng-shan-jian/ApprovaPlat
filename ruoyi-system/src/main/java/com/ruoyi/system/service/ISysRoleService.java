@@ -74,20 +74,8 @@ public interface ISysRoleService
      */
     public void checkRoleAllowed(SysRole role);
 
-    /**
-     * 校验角色是否有数据权限
-     * 
-     * @param roleIds 角色id
-     */
-    public void checkRoleDataScope(Long... roleIds);
-
-    /**
-     * 通过角色ID查询角色使用数量
-     * 
-     * @param roleId 角色ID
-     * @return 结果
-     */
-    public int countUserRoleByRoleId(Long roleId);
+    /** 取得本次操作有权访问的完整角色集合，任一目标越权即拒绝。 */
+    List<SysRole> selectRolesInScope(SysRole query, Long[] ids);
 
     /**
      * 新增保存角色信息

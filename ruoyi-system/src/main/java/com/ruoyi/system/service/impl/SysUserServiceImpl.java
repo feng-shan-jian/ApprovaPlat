@@ -1,8 +1,14 @@
 package com.ruoyi.system.service.impl;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import jakarta.validation.Validator;
 import org.slf4j.Logger;
@@ -13,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 import com.ruoyi.common.annotation.DataScope;
 import com.ruoyi.common.constant.UserConstants;
+import com.ruoyi.common.core.domain.entity.SysDept;
 import com.ruoyi.common.core.domain.entity.SysRole;
 import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.exception.ServiceException;
@@ -129,6 +136,12 @@ public class SysUserServiceImpl implements ISysUserService
         return userMapper.selectUserById(userId);
     }
 
+    @Override
+    public SysUser selectUserByIdInScope(Long userId)
+    {
+        return SpringUtils.getAopProxy(this).selectUsersInScope(new SysUser(), new Long[] { userId }).get(0);
+    }
+
     /**
      * 查询用户所属角色组
      * 
@@ -231,24 +244,27 @@ public class SysUserServiceImpl implements ISysUserService
         }
     }
 
-    /**
-     * 校验用户是否有数据权限
-     * 
-     * @param userId 用户id
-     */
+    /** 直接装载目标集合；详情字段和范围条件在同一 SQL 中取得。 */
     @Override
-    public void checkUserDataScope(Long userId)
+    @DataScope(deptAlias = "d", userAlias = "u")
+    public List<SysUser> selectUsersInScope(SysUser query, Long[] ids)
     {
-        if (!SecurityUtils.isAdmin())
+        if (ids == null || ids.length == 0)
         {
-            SysUser user = new SysUser();
-            user.setUserId(userId);
-            List<SysUser> users = SpringUtils.getAopProxy(this).selectUserList(user);
-            if (StringUtils.isEmpty(users))
-            {
-                throw new ServiceException("没有权限访问用户数据！");
-            }
+            return List.of();
         }
+        List<SysUser> targets = userMapper.selectUsersInScope(query, ids);
+        if (targets.size() != Arrays.stream(ids).distinct().count())
+        {
+            throw new ServiceException("没有权限访问用户数据！");
+        }
+        return targets;
+    }
+
+    @DataScope(deptAlias = "d", userAlias = "u")
+    public List<SysUser> selectImportUsersInScope(SysUser query, String[] names)
+    {
+        return userMapper.selectImportUsersInScope(query, names);
     }
 
     /**
@@ -459,11 +475,13 @@ public class SysUserServiceImpl implements ISysUserService
     @Transactional
     public int deleteUserByIds(Long[] userIds)
     {
-        for (Long userId : userIds)
+        List<SysUser> targets = SpringUtils.getAopProxy(this).selectUsersInScope(new SysUser(), userIds);
+        if (targets.isEmpty())
         {
-            checkUserAllowed(new SysUser(userId));
-            checkUserDataScope(userId);
+            return 0;
         }
+        targets.forEach(this::checkUserAllowed);
+        userIds = targets.stream().map(SysUser::getUserId).toArray(Long[]::new);
         // 删除用户与角色关联
         userRoleMapper.deleteUserRole(userIds);
         // 删除用户与岗位关联
@@ -486,6 +504,17 @@ public class SysUserServiceImpl implements ISysUserService
         {
             throw new ServiceException("导入用户数据不能为空！");
         }
+        Map<Long, SysUser> accessible = new HashMap<>();
+        if (Boolean.TRUE.equals(isUpdateSupport))
+        {
+            SpringUtils.getAopProxy(this).selectImportUsersInScope(new SysUser(),
+                    userList.stream().map(SysUser::getUserName).distinct().toArray(String[]::new))
+                    .forEach(user -> accessible.put(user.getUserId(), user));
+        }
+        Map<Long, SysDept> departments = deptService.selectDeptsInScope(new SysDept(), userList.stream()
+                .map(SysUser::getDeptId).filter(Objects::nonNull).distinct().toArray(Long[]::new))
+                .stream().collect(Collectors.toMap(SysDept::getDeptId, dept -> dept));
+        Set<Long> createdUserIds = new HashSet<>();
         int successNum = 0;
         int failureNum = 0;
         StringBuilder successMsg = new StringBuilder();
@@ -495,24 +524,47 @@ public class SysUserServiceImpl implements ISysUserService
             try
             {
                 // 验证是否存在这个用户
-                SysUser u = userMapper.selectUserByUserName(user.getUserName());
-                if (StringUtils.isNull(u))
+                SysUser identity = userMapper.checkUserNameUnique(user.getUserName());
+                SysUser u = identity == null ? null : accessible.get(identity.getUserId());
+                if (StringUtils.isNull(identity))
                 {
                     BeanValidators.validateWithException(validator, user);
-                    deptService.checkDeptDataScope(user.getDeptId());
+                    if (user.getDeptId() != null)
+                    {
+                        SysDept department = departments.get(user.getDeptId());
+                        if (department == null)
+                        {
+                            throw new ServiceException("没有权限访问部门数据！");
+                        }
+                        user.setDeptId(department.getDeptId());
+                    }
                     String password = configService.selectConfigByKey("sys.user.initPassword");
                     user.setPassword(SecurityUtils.encryptPassword(password));
                     user.setCreateBy(operName);
                     userMapper.insertUser(user);
+                    createdUserIds.add(user.getUserId());
                     successNum++;
                     successMsg.append("<br/>" + successNum + "、账号 " + user.getUserName() + " 导入成功");
                 }
                 else if (isUpdateSupport)
                 {
                     BeanValidators.validateWithException(validator, user);
+                    // 本批新建事实不代表更新资格；仅在后续重复行真正需要更新时取得有权对象。
+                    if (u == null && createdUserIds.remove(identity.getUserId()))
+                    {
+                        u = SpringUtils.getAopProxy(this).selectUsersInScope(new SysUser(),
+                                new Long[] { identity.getUserId() }).get(0);
+                        accessible.put(u.getUserId(), u);
+                    }
+                    if (u == null)
+                    {
+                        throw new ServiceException("没有权限访问用户数据！");
+                    }
                     checkUserAllowed(u);
-                    checkUserDataScope(u.getUserId());
-                    deptService.checkDeptDataScope(user.getDeptId());
+                    if (user.getDeptId() != null && !departments.containsKey(user.getDeptId()))
+                    {
+                        throw new ServiceException("没有权限访问部门数据！");
+                    }
                     user.setUserId(u.getUserId());
                     user.setDeptId(u.getDeptId());
                     user.setUpdateBy(operName);

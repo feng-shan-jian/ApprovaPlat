@@ -12,7 +12,6 @@ import com.ruoyi.common.annotation.DataScope;
 import com.ruoyi.common.constant.UserConstants;
 import com.ruoyi.common.core.domain.entity.SysRole;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.common.utils.spring.SpringUtils;
 import com.ruoyi.system.domain.SysRoleDept;
@@ -123,7 +122,7 @@ public class SysRoleServiceImpl implements ISysRoleService
     @Override
     public SysRole selectRoleById(Long roleId)
     {
-        return roleMapper.selectRoleById(roleId);
+        return SpringUtils.getAopProxy(this).selectRolesInScope(new SysRole(), new Long[] { roleId }).get(0);
     }
 
     /**
@@ -176,39 +175,21 @@ public class SysRoleServiceImpl implements ISysRoleService
         }
     }
 
-    /**
-     * 校验角色是否有数据权限
-     * 
-     * @param roleIds 角色id
-     */
+    /** 直接装载目标集合；详情字段和范围条件在同一 SQL 中取得。 */
     @Override
-    public void checkRoleDataScope(Long... roleIds)
+    @DataScope(deptAlias = "d")
+    public List<SysRole> selectRolesInScope(SysRole query, Long[] ids)
     {
-        if (!SecurityUtils.isAdmin())
+        if (ids == null || ids.length == 0)
         {
-            for (Long roleId : roleIds)
-            {
-                SysRole role = new SysRole();
-                role.setRoleId(roleId);
-                List<SysRole> roles = SpringUtils.getAopProxy(this).selectRoleList(role);
-                if (StringUtils.isEmpty(roles))
-                {
-                    throw new ServiceException("没有权限访问角色数据！");
-                }
-            }
+            return List.of();
         }
-    }
-
-    /**
-     * 通过角色ID查询角色使用数量
-     * 
-     * @param roleId 角色ID
-     * @return 结果
-     */
-    @Override
-    public int countUserRoleByRoleId(Long roleId)
-    {
-        return userRoleMapper.countUserRoleByRoleId(roleId);
+        List<SysRole> targets = roleMapper.selectRolesInScope(query, ids);
+        if (targets.size() != Arrays.stream(ids).distinct().count())
+        {
+            throw new ServiceException("没有权限访问角色数据！");
+        }
+        return targets;
     }
 
     /**
@@ -331,16 +312,21 @@ public class SysRoleServiceImpl implements ISysRoleService
     @Transactional
     public int deleteRoleByIds(Long[] roleIds)
     {
-        for (Long roleId : roleIds)
+        List<SysRole> targets = SpringUtils.getAopProxy(this).selectRolesInScope(new SysRole(), roleIds);
+        if (targets.isEmpty())
         {
-            checkRoleAllowed(new SysRole(roleId));
-            checkRoleDataScope(roleId);
-            SysRole role = selectRoleById(roleId);
-            if (countUserRoleByRoleId(roleId) > 0)
+            return 0;
+        }
+        Set<Long> assigned = new HashSet<>(userRoleMapper.selectAssignedRoleIds(roleIds));
+        for (SysRole role : targets)
+        {
+            checkRoleAllowed(role);
+            if (assigned.contains(role.getRoleId()))
             {
                 throw new ServiceException(String.format("%1$s已分配,不能删除", role.getRoleName()));
             }
         }
+        roleIds = targets.stream().map(SysRole::getRoleId).toArray(Long[]::new);
         // 删除角色与菜单关联
         roleMenuMapper.deleteRoleMenu(roleIds);
         // 删除角色与部门关联

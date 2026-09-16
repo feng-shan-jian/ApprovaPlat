@@ -11,6 +11,14 @@ import com.ruoyi.common.core.domain.entity.SysDept;
  */
 public interface SysDeptMapper
 {
+    /** 所有部门关系写入先锁定最小主键记录（软删除不会移除该记录）。 */
+    Long lockDeptRelations();
+
+    List<SysDept> selectDeptsForUpdate(@Param("query") SysDept query, @Param("ids") Long[] ids);
+
+    /** 按目标集合取得完整详情，范围 SQL 由服务切面写入。 */
+    List<SysDept> selectDeptsInScope(@Param("query") SysDept query, @Param("ids") Long[] ids);
+
     /**
      * 查询部门管理数据
      * 
@@ -29,14 +37,6 @@ public interface SysDeptMapper
     public List<Long> selectDeptListByRoleId(@Param("roleId") Long roleId, @Param("deptCheckStrictly") boolean deptCheckStrictly);
 
     /**
-     * 根据部门ID查询信息
-     * 
-     * @param deptId 部门ID
-     * @return 部门信息
-     */
-    public SysDept selectDeptById(Long deptId);
-
-    /**
      * 根据ID查询所有子部门
      * 
      * @param deptId 部门ID
@@ -45,28 +45,20 @@ public interface SysDeptMapper
     public List<SysDept> selectChildrenDeptById(Long deptId);
 
     /**
-     * 根据ID查询所有子部门（正常状态）
+     * 当前读取得一个直接子部门，删除事务不能使用外层旧快照判断引用。
      * 
      * @param deptId 部门ID
-     * @return 子部门数
+     * @return 子部门 ID，无引用时为空
      */
-    public int selectNormalChildrenDeptById(Long deptId);
+    public Long selectChildDeptIdForUpdate(Long deptId);
 
     /**
-     * 是否存在子节点
+     * 当前读取得部门的一个用户引用。
      * 
      * @param deptId 部门ID
-     * @return 结果
+     * @return 用户 ID，无引用时为空
      */
-    public int hasChildByDeptId(Long deptId);
-
-    /**
-     * 查询部门是否存在用户
-     * 
-     * @param deptId 部门ID
-     * @return 结果
-     */
-    public int checkDeptExistUser(Long deptId);
+    public Long selectDeptUserIdForUpdate(Long deptId);
 
     /**
      * 校验部门名称是否唯一

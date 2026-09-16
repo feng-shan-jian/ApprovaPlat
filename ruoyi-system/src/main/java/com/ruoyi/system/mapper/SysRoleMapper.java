@@ -1,6 +1,7 @@
 package com.ruoyi.system.mapper;
 
 import java.util.List;
+import org.apache.ibatis.annotations.Param;
 import com.ruoyi.common.core.domain.entity.SysRole;
 
 /**
@@ -10,6 +11,9 @@ import com.ruoyi.common.core.domain.entity.SysRole;
  */
 public interface SysRoleMapper
 {
+    /** 按目标集合取得完整详情，范围 SQL 由服务切面写入。 */
+    List<SysRole> selectRolesInScope(@Param("query") SysRole query, @Param("ids") Long[] ids);
+
     /**
      * 根据条件分页查询角色数据
      * 

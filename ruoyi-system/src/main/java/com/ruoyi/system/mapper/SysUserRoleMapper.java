@@ -11,6 +11,9 @@ import com.ruoyi.system.domain.SysUserRole;
  */
 public interface SysUserRoleMapper
 {
+    /** 一次取得集合中已分配的角色。 */
+    List<Long> selectAssignedRoleIds(Long[] roleIds);
+
     /**
      * 通过用户ID删除用户和角色关联
      * 
@@ -26,14 +29,6 @@ public interface SysUserRoleMapper
      * @return 结果
      */
     public int deleteUserRole(Long[] ids);
-
-    /**
-     * 通过角色ID查询角色使用数量
-     * 
-     * @param roleId 角色ID
-     * @return 结果
-     */
-    public int countUserRoleByRoleId(Long roleId);
 
     /**
      * 批量新增用户角色信息

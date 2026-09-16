@@ -6,8 +6,8 @@
 
 | 顺序 | 单元 | 覆盖证据 | 当前状态 |
 | --- | --- | --- | --- |
-| 1 | C13 参数／字典批量删除 | BS-041 | Review 与主工作区验证通过；本文件首次加入的提交 |
-| 2 | C07 组织主数据与部门移动 | BS-034、045 | 待实施 |
+| 1 | C13 参数／字典批量删除 | BS-041 | 已提交 `e17b5e04e1191a5703f0054f5a27d557c656abff` |
+| 2 | C07 组织主数据与部门移动 | BS-034、045 | 二次 review 与主工作区验证通过；对应组织数据重构提交 |
 | 3 | C12 唯一写入 | BS-044 | 待实施 |
 | 4 | L01 附件上传门禁 | BS-030 | 待实施 |
 | 5 | L04 前端异步返回 | BS-040 | 待实施 |
@@ -36,6 +36,15 @@
 - 实现任务已通过 admin 全依赖构建及真实 MySQL 8.4.9 的 20 项正式测试，0 失败／错误／跳过。覆盖后项拒绝、真实写失败回滚、外层回滚、双方引用竞争、改名、旧 RR 快照和提交后缓存异常。
 - Redis 使用受控替身；真实 Redis 故障恢复和浏览器交互未执行。恢复方式见 [参数和字典删除契约](../contracts/system-config-dict-deletion.md)。
 - leader 已完整审查 13 文件差异，并用交付文件摘要核对集成内容；在主工作区执行 `mvn -pl ruoyi-admin -am -Pworkflow-mysql-it verify '-Dit.test=SysConfigDictDeletionMySqlIT' -B -ntp`，509 项默认测试及 20 项 MySQL 测试全部通过，0 失败／错误／跳过，admin 打包成功。BS-041 已完成；对应本文件首次加入的代码提交。
+
+## C07
+
+- 实现任务：`01a0aa1e-5780-7da0-8689-fb2a42b9babf`；worktree：`C:/Users/18221/.codex/worktrees/fc90/ruoyiflowable`。
+- 起始基线为 C13 提交 `e17b5e04e1191a5703f0054f5a27d557c656abff`；任务已启动并要求完成后向主审任务发送交付消息，触发后续 review、集成验证与提交。
+- 二次 review 已通过：有权完整对象直接参与详情与集合命令，部门关系写入在原服务事务中按固定锁顺序执行，删除旧的探测后重读、逐 ID 资格入口和分散关系写入。新增生产类型 0，无表结构或存储格式迁移。
+- 首轮 review 发现的 R1／R2／R3 已经正式回归测试先复现再修复：9 个新增场景修订前有 7 个失败；修订后，同父级编辑使用锁定旧关系，本批新增账号的首次更新经真实数据范围查询，删除引用使用当前读。31 项 MySQL 测试覆盖三项修订及原有范围、移动、并发、回滚场景。
+- leader 已审查完整 19 文件差异并逐文件核对集成内容；在主工作区执行 `mvn -pl ruoyi-admin -am -Pworkflow-mysql-it verify '-Dit.test=SysOrganizationScopeMySqlIT,SysConfigDictDeletionMySqlIT' -B -ntp`，509 项默认测试及 51 项 MySQL 测试全部通过，0 失败／错误／跳过，admin 打包成功。BS-034／045 已完成。
+- 部门关系写入采用已有最小主键记录锁，串行化低频关系写入；浏览器和部署后的 HTTP 全链路未执行。业务与恢复边界见 [组织主数据契约](organization-data-scope-and-department-moves.md)。接下来进入第 3 项 C12。
 
 ## 基线验证
 

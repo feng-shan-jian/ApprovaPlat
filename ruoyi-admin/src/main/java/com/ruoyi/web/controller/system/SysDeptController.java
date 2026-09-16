@@ -15,7 +15,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
-import com.ruoyi.common.constant.UserConstants;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.domain.entity.SysDept;
@@ -65,7 +64,6 @@ public class SysDeptController extends BaseController
     @GetMapping(value = "/{deptId}")
     public AjaxResult getInfo(@PathVariable Long deptId)
     {
-        deptService.checkDeptDataScope(deptId);
         return success(deptService.selectDeptById(deptId));
     }
 
@@ -93,19 +91,9 @@ public class SysDeptController extends BaseController
     @PutMapping
     public AjaxResult edit(@Validated @RequestBody SysDept dept)
     {
-        Long deptId = dept.getDeptId();
-        deptService.checkDeptDataScope(deptId);
         if (!deptService.checkDeptNameUnique(dept))
         {
             return error("修改部门'" + dept.getDeptName() + "'失败，部门名称已存在");
-        }
-        else if (dept.getParentId().equals(deptId))
-        {
-            return error("修改部门'" + dept.getDeptName() + "'失败，上级部门不能是自己");
-        }
-        else if (StringUtils.equals(UserConstants.DEPT_DISABLE, dept.getStatus()) && deptService.selectNormalChildrenDeptById(deptId) > 0)
-        {
-            return error("该部门包含未停用的子部门！");
         }
         dept.setUpdateBy(getUsername());
         return toAjax(deptService.updateDept(dept));
@@ -133,15 +121,6 @@ public class SysDeptController extends BaseController
     @DeleteMapping("/{deptId}")
     public AjaxResult remove(@PathVariable Long deptId)
     {
-        if (deptService.hasChildByDeptId(deptId))
-        {
-            return warn("存在下级部门,不允许删除");
-        }
-        if (deptService.checkDeptExistUser(deptId))
-        {
-            return warn("部门存在用户,不允许删除");
-        }
-        deptService.checkDeptDataScope(deptId);
         return toAjax(deptService.deleteDeptById(deptId));
     }
 }

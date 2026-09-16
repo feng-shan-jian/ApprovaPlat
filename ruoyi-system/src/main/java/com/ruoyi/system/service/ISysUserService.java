@@ -51,6 +51,9 @@ public interface ISysUserService
      */
     public SysUser selectUserById(Long userId);
 
+    /** 管理入口使用的数据范围内完整详情。 */
+    SysUser selectUserByIdInScope(Long userId);
+
     /**
      * 根据用户ID查询用户所属角色组
      * 
@@ -98,12 +101,8 @@ public interface ISysUserService
      */
     public void checkUserAllowed(SysUser user);
 
-    /**
-     * 校验用户是否有数据权限
-     * 
-     * @param userId 用户id
-     */
-    public void checkUserDataScope(Long userId);
+    /** 取得本次操作有权访问的完整用户集合，任一目标越权即拒绝。 */
+    List<SysUser> selectUsersInScope(SysUser query, Long[] ids);
 
     /**
      * 新增用户信息

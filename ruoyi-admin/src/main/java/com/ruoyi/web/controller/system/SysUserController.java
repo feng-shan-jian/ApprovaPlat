@@ -104,8 +104,7 @@ public class SysUserController extends BaseController
         AjaxResult ajax = AjaxResult.success();
         if (StringUtils.isNotNull(userId))
         {
-            userService.checkUserDataScope(userId);
-            SysUser sysUser = userService.selectUserById(userId);
+            SysUser sysUser = userService.selectUserByIdInScope(userId);
             ajax.put(AjaxResult.DATA_TAG, sysUser);
             ajax.put("postIds", postService.selectPostListByUserId(userId));
             ajax.put("roleIds", sysUser.getRoles().stream().map(SysRole::getRoleId).collect(Collectors.toList()));
@@ -124,8 +123,12 @@ public class SysUserController extends BaseController
     @PostMapping
     public AjaxResult add(@Validated @RequestBody SysUser user)
     {
-        deptService.checkDeptDataScope(user.getDeptId());
-        roleService.checkRoleDataScope(user.getRoleIds());
+        if (user.getDeptId() != null)
+        {
+            user.setDeptId(deptService.selectDeptById(user.getDeptId()).getDeptId());
+        }
+        user.setRoleIds(roleService.selectRolesInScope(new SysRole(), user.getRoleIds()).stream()
+                .map(SysRole::getRoleId).toArray(Long[]::new));
         if (!userService.checkUserNameUnique(user))
         {
             return error("新增用户'" + user.getUserName() + "'失败，登录账号已存在");
@@ -151,10 +154,13 @@ public class SysUserController extends BaseController
     @PutMapping
     public AjaxResult edit(@Validated @RequestBody SysUser user)
     {
-        userService.checkUserAllowed(user);
-        userService.checkUserDataScope(user.getUserId());
-        deptService.checkDeptDataScope(user.getDeptId());
-        roleService.checkRoleDataScope(user.getRoleIds());
+        userService.checkUserAllowed(userService.selectUserByIdInScope(user.getUserId()));
+        if (user.getDeptId() != null)
+        {
+            user.setDeptId(deptService.selectDeptById(user.getDeptId()).getDeptId());
+        }
+        user.setRoleIds(roleService.selectRolesInScope(new SysRole(), user.getRoleIds()).stream()
+                .map(SysRole::getRoleId).toArray(Long[]::new));
         if (!userService.checkUserNameUnique(user))
         {
             return error("修改用户'" + user.getUserName() + "'失败，登录账号已存在");
@@ -194,8 +200,7 @@ public class SysUserController extends BaseController
     @PutMapping("/resetPwd")
     public AjaxResult resetPwd(@RequestBody SysUser user)
     {
-        userService.checkUserAllowed(user);
-        userService.checkUserDataScope(user.getUserId());
+        userService.checkUserAllowed(userService.selectUserByIdInScope(user.getUserId()));
         user.setPassword(SecurityUtils.encryptPassword(user.getPassword()));
         user.setUpdateBy(getUsername());
         return toAjax(userService.resetPwd(user));
@@ -209,8 +214,7 @@ public class SysUserController extends BaseController
     @PutMapping("/changeStatus")
     public AjaxResult changeStatus(@RequestBody SysUser user)
     {
-        userService.checkUserAllowed(user);
-        userService.checkUserDataScope(user.getUserId());
+        userService.checkUserAllowed(userService.selectUserByIdInScope(user.getUserId()));
         user.setUpdateBy(getUsername());
         return toAjax(userService.updateUserStatus(user));
     }
@@ -223,7 +227,7 @@ public class SysUserController extends BaseController
     public AjaxResult authRole(@PathVariable("userId") Long userId)
     {
         AjaxResult ajax = AjaxResult.success();
-        SysUser user = userService.selectUserById(userId);
+        SysUser user = userService.selectUserByIdInScope(userId);
         List<SysRole> roles = roleService.selectRolesByUserId(userId);
         ajax.put("user", user);
         ajax.put("roles", SecurityUtils.isAdmin(userId) ? roles : roles.stream().filter(r -> !r.isAdmin()).collect(Collectors.toList()));
@@ -238,9 +242,11 @@ public class SysUserController extends BaseController
     @PutMapping("/authRole")
     public AjaxResult insertAuthRole(Long userId, Long[] roleIds)
     {
-        userService.checkUserDataScope(userId);
-        roleService.checkRoleDataScope(roleIds);
-        userService.insertUserAuth(userId, roleIds);
+        SysUser user = userService.selectUserByIdInScope(userId);
+        userService.checkUserAllowed(user);
+        Long[] assignedRoleIds = roleService.selectRolesInScope(new SysRole(), roleIds).stream()
+                .map(SysRole::getRoleId).toArray(Long[]::new);
+        userService.insertUserAuth(user.getUserId(), assignedRoleIds);
         return success();
     }
 

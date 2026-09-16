@@ -58,28 +58,40 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
 		order by d.parent_id, d.order_num
 	</select>
     
-    <select id="selectDeptById" parameterType="Long" resultMap="SysDeptResult">
-		select d.dept_id, d.parent_id, d.ancestors, d.dept_name, d.order_num, d.leader, d.phone, d.email, d.status,
-			(select dept_name from sys_dept where dept_id = d.parent_id) parent_name
-		from sys_dept d
-		where d.dept_id = #{deptId}
-	</select>
+    <!-- 最小主键记录作为关系写入互斥点；只锁一条记录，不装载或巡检全树。 -->
+    <select id="lockDeptRelations" resultType="Long" useCache="false" flushCache="true">
+        select dept_id from sys_dept order by dept_id limit 1 for update
+    </select>
+
+    <sql id="scopedDeptDetails">
+        select d.*,
+            (select dept_name from sys_dept where dept_id = d.parent_id) parent_name
+        from sys_dept d
+        where d.del_flag = '0' and d.dept_id in
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ${query.params.dataScope}
+        order by d.dept_id
+    </sql>
+
+    <select id="selectDeptsInScope" resultMap="SysDeptResult">
+        <include refid="scopedDeptDetails"/>
+    </select>
+
+    <select id="selectDeptsForUpdate" resultMap="SysDeptResult" useCache="false" flushCache="true">
+        <include refid="scopedDeptDetails"/> for update
+    </select>
     
-    <select id="checkDeptExistUser" parameterType="Long" resultType="int">
-		select count(1) from sys_user where dept_id = #{deptId} and del_flag = '0'
+    <select id="selectDeptUserIdForUpdate" parameterType="Long" resultType="Long" useCache="false" flushCache="true">
+		select user_id from sys_user where dept_id = #{deptId} and del_flag = '0' limit 1 for update
 	</select>
 	
-	<select id="hasChildByDeptId" parameterType="Long" resultType="int">
-		select count(1) from sys_dept
-		where del_flag = '0' and parent_id = #{deptId} limit 1
+	<select id="selectChildDeptIdForUpdate" parameterType="Long" resultType="Long" useCache="false" flushCache="true">
+		select dept_id from sys_dept
+		where del_flag = '0' and parent_id = #{deptId} limit 1 for update
 	</select>
 	
-	<select id="selectChildrenDeptById" parameterType="Long" resultMap="SysDeptResult">
-		select * from sys_dept where find_in_set(#{deptId}, ancestors)
-	</select>
-	
-	<select id="selectNormalChildrenDeptById" parameterType="Long" resultType="int">
-		select count(*) from sys_dept where status = 0 and del_flag = '0' and find_in_set(#{deptId}, ancestors)
+	<select id="selectChildrenDeptById" parameterType="Long" resultMap="SysDeptResult" useCache="false" flushCache="true">
+		select * from sys_dept where find_in_set(#{deptId}, ancestors) order by dept_id for update
 	</select>
 	
 	<select id="checkDeptNameUnique" resultMap="SysDeptResult">

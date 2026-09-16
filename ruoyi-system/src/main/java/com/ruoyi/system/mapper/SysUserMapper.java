@@ -12,6 +12,11 @@ import com.ruoyi.common.core.domain.entity.SysUser;
  */
 public interface SysUserMapper
 {
+    List<SysUser> selectImportUsersInScope(@Param("query") SysUser query, @Param("names") String[] names);
+
+    /** 按目标集合取得完整详情，范围 SQL 由服务切面写入。 */
+    List<SysUser> selectUsersInScope(@Param("query") SysUser query, @Param("ids") Long[] ids);
+
     /**
      * 根据条件分页查询用户列表
      * 

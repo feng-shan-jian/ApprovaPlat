@@ -79,7 +79,6 @@ public class SysRoleController extends BaseController
     @GetMapping(value = "/{roleId}")
     public AjaxResult getInfo(@PathVariable Long roleId)
     {
-        roleService.checkRoleDataScope(roleId);
         return success(roleService.selectRoleById(roleId));
     }
 
@@ -112,8 +111,7 @@ public class SysRoleController extends BaseController
     @PutMapping
     public AjaxResult edit(@Validated @RequestBody SysRole role)
     {
-        roleService.checkRoleAllowed(role);
-        roleService.checkRoleDataScope(role.getRoleId());
+        roleService.checkRoleAllowed(roleService.selectRoleById(role.getRoleId()));
         if (!roleService.checkRoleNameUnique(role))
         {
             return error("修改角色'" + role.getRoleName() + "'失败，角色名称已存在");
@@ -141,8 +139,7 @@ public class SysRoleController extends BaseController
     @PutMapping("/dataScope")
     public AjaxResult dataScope(@RequestBody SysRole role)
     {
-        roleService.checkRoleAllowed(role);
-        roleService.checkRoleDataScope(role.getRoleId());
+        roleService.checkRoleAllowed(roleService.selectRoleById(role.getRoleId()));
         return toAjax(roleService.authDataScope(role));
     }
 
@@ -154,8 +151,7 @@ public class SysRoleController extends BaseController
     @PutMapping("/changeStatus")
     public AjaxResult changeStatus(@RequestBody SysRole role)
     {
-        roleService.checkRoleAllowed(role);
-        roleService.checkRoleDataScope(role.getRoleId());
+        roleService.checkRoleAllowed(roleService.selectRoleById(role.getRoleId()));
         role.setUpdateBy(getUsername());
         return toAjax(roleService.updateRoleStatus(role));
     }
@@ -235,8 +231,8 @@ public class SysRoleController extends BaseController
     @PutMapping("/authUser/selectAll")
     public AjaxResult selectAuthUserAll(Long roleId, Long[] userIds)
     {
-        roleService.checkRoleDataScope(roleId);
-        return toAjax(roleService.insertAuthUsers(roleId, userIds));
+        SysRole role = roleService.selectRoleById(roleId);
+        return toAjax(roleService.insertAuthUsers(role.getRoleId(), userIds));
     }
 
     /**
