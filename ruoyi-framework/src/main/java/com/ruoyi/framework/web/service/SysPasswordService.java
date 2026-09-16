@@ -1,34 +1,53 @@
 package com.ruoyi.framework.web.service;
 
-import java.util.concurrent.TimeUnit;
-import org.springframework.beans.factory.annotation.Autowired;
+import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.InternalAuthenticationServiceException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.CacheConstants;
-import com.ruoyi.common.core.domain.entity.SysUser;
-import com.ruoyi.common.core.redis.RedisCache;
 import com.ruoyi.common.exception.user.UserPasswordNotMatchException;
 import com.ruoyi.common.exception.user.UserPasswordRetryLimitExceedException;
-import com.ruoyi.common.utils.SecurityUtils;
-import com.ruoyi.framework.security.context.AuthenticationContextHolder;
 
 /**
- * 登录密码方法
+ * 在 Spring Security 的密码认证生命周期中维护登录重试记录。
  * 
  * @author ruoyi
  */
 @Component
-public class SysPasswordService
+public class SysPasswordService extends DaoAuthenticationProvider
 {
-    @Autowired
-    private RedisCache redisCache;
+    // 旧 Integer 序列化为十进制数字；INCR 保持相同键值格式。
+    // 每次失败原子累加并刷新有效期，避免并发 GET/SET 丢失已完成的失败。
+    private static final DefaultRedisScript<Long> RECORD_FAILURE = new DefaultRedisScript<>("""
+            local count = redis.call('INCR', KEYS[1])
+            redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]) * 60)
+            return count
+            """, Long.class);
+
+    private final RedisTemplate<Object, Object> redisTemplate;
 
     @Value(value = "${user.password.maxRetryCount}")
     private int maxRetryCount;
 
     @Value(value = "${user.password.lockTime}")
     private int lockTime;
+
+    public SysPasswordService(UserDetailsService userDetailsService, BCryptPasswordEncoder passwordEncoder,
+            RedisTemplate<Object, Object> redisTemplate)
+    {
+        super(userDetailsService);
+        setPasswordEncoder(passwordEncoder);
+        this.redisTemplate = redisTemplate;
+    }
 
     /**
      * 登录账户密码错误次数缓存键名
@@ -41,46 +60,40 @@ public class SysPasswordService
         return CacheConstants.PWD_ERR_CNT_KEY + username;
     }
 
-    public void validate(SysUser user)
+    @Override
+    protected void additionalAuthenticationChecks(UserDetails user, UsernamePasswordAuthenticationToken authentication)
     {
-        Authentication usernamePasswordAuthenticationToken = AuthenticationContextHolder.getContext();
-        String username = usernamePasswordAuthenticationToken.getName();
-        String password = usernamePasswordAuthenticationToken.getCredentials().toString();
-
-        Integer retryCount = redisCache.getCacheObject(getCacheKey(username));
-
-        if (retryCount == null)
+        String key = getCacheKey(authentication.getName());
+        Integer retryCount = (Integer) redisTemplate.opsForValue().get(key);
+        if ((retryCount == null ? 0 : retryCount) >= maxRetryCount)
         {
-            retryCount = 0;
+            var failure = new UserPasswordRetryLimitExceedException(maxRetryCount, lockTime);
+            throw new InternalAuthenticationServiceException(failure.getMessage(), failure);
         }
-
-        if (retryCount >= Integer.valueOf(maxRetryCount).intValue())
+        try
         {
-            throw new UserPasswordRetryLimitExceedException(maxRetryCount, lockTime);
+            // 唯一的真实密码裁决，沿用 DaoAuthenticationProvider 与生产 BCrypt。
+            super.additionalAuthenticationChecks(user, authentication);
         }
-
-        if (!matches(user, password))
+        catch (BadCredentialsException ex)
         {
-            retryCount = retryCount + 1;
-            redisCache.setCacheObject(getCacheKey(username), retryCount, lockTime, TimeUnit.MINUTES);
-            throw new UserPasswordNotMatchException();
-        }
-        else
-        {
-            clearLoginRecordCache(username);
+            redisTemplate.execute(RECORD_FAILURE, List.of(key), lockTime);
+            // 保留原装载阶段异常经 DaoAuthenticationProvider 包装后的登录错误映射。
+            var failure = new UserPasswordNotMatchException();
+            throw new InternalAuthenticationServiceException(failure.getMessage(), failure);
         }
     }
 
-    public boolean matches(SysUser user, String rawPassword)
+    @Override
+    protected Authentication createSuccessAuthentication(Object principal, Authentication authentication, UserDetails user)
     {
-        return SecurityUtils.matchesPassword(rawPassword, user.getPassword());
+        Authentication result = super.createSuccessAuthentication(principal, authentication, user);
+        clearLoginRecordCache(authentication.getName());
+        return result;
     }
 
     public void clearLoginRecordCache(String loginName)
     {
-        if (redisCache.hasKey(getCacheKey(loginName)))
-        {
-            redisCache.deleteObject(getCacheKey(loginName));
-        }
+        redisTemplate.delete(getCacheKey(loginName));
     }
 }

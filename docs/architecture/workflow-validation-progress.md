@@ -11,8 +11,8 @@
 | 3 | C12 唯一写入 | BS-044 | 已提交 `9dd6aeecadc1fcee3af9d920e30a44ea53ec42c8` |
 | 4 | L01 附件上传门禁 | BS-030 | 已提交 `6181f0fe319266ce794ff4a4b67dc126a1bc2205` |
 | 5 | L04 前端异步返回 | BS-040 | 已提交 `8ab3e1ef1e13ef6753573f205a473210e95e0a62` |
-| 6 | L02 定时任务调用 | BS-038 | review 与主工作区验证通过；对应本次提交 |
-| 7 | C14 登录认证 | BS-037 | 待实施 |
+| 6 | L02 定时任务调用 | BS-038 | 已提交 `aafd662baa344f645fdda0dbb7f055f9ae5a4801` |
+| 7 | C14 登录认证 | BS-037 | 二次 review 与主工作区验证通过；对应本次提交 |
 | 8 | C01 作者输入与部署编译 | BS-016、017、018、019、025 | 待实施 |
 | 9 | C02 编辑、草稿与发起 | BS-021、031、036 | 待实施 |
 | 10 | C04 分配与审计 | BS-033、035；BS-022 身份部分 | 待实施 |
@@ -91,6 +91,19 @@
 - 统一既有 JobInvokeUtil 的解析与执行，删除 Controller 全文黑名单、ScheduleUtils 旧白名单及独占常量／工具函数；新增生产类型仅为 JobInvokeUtil 私有 Invocation record，持有当次已解析实际目标、方法和参数，不是通用校验框架。外部字段、五种字面量类型、Bean／类调用规则、Cron 和调度流程保留，无存储格式或数据库迁移。
 - leader 已审查完整 14 文件并按冻结 SHA256 核对主工作区集成，在主工作区执行 `mvn -pl ruoyi-admin -am verify -B -ntp`，527 项默认测试全部通过，0 失败／错误／跳过，8 个 reactor 模块成功；包含新增 JobInvocationTest 15 项与原 CronPreviewTest 4 项。验证完成于 2026-09-16 23:02:59 +08:00。BS-038 已完成。
 - 测试使用真实 Spring 方法权限、生产 Controller／事务服务／XML Mapper、H2 任务与日志数据、Quartz RAMJobStore 及实际触发线程，覆盖保存、修改、自动／立即运行、权限拒绝、代理和运行失败日志。菜单服务与记录参数的任务夹具为受控边界；未执行 MySQL、Quartz JDBCJobStore／集群／重启恢复、完整应用 JWT／审计切面或浏览器。临时验证脚本、日志及本项报告清理，已有目标目录和用户文件保留。详见 [定时任务调用契约](../contracts/quartz-invocation.md)。接下来进入第 7 项 C14。
+
+## C14
+
+- 实现任务：`01a0aac0-610f-7280-bb84-0c703f851e5f`；worktree：`C:/Users/18221/.codex/worktrees/a482/ruoyiflowable`。
+- 起始基线为 L02 提交 `aafd662baa344f645fdda0dbb7f055f9ae5a4801`，已确认任务运行。范围为同一次认证生命周期的一次真实 BCrypt 比对、实际锁定与重试结果维护，以及用户详情装载与原始凭据上下文清理。
+- 要求保留登录异常策略、账号状态、原重试键值及 TTL、管理员解锁和独立请求隔离；正式验证使用生产认证链及真实 Redis 兼容服务证明并发与有效期。交付后冻结并发送消息，继续 leader 独立 review、主工作区验证及精确提交。
+- 首轮交付为 8 项：既有 SysPasswordService 承担 DaoAuthenticationProvider 的重试与成功清理扩展点，用户装载移除密码检查，删除无其他用途的 AuthenticationContextHolder，Redis 失败写入用同一 Lua 累加并续期。实现任务报告原链的两项正式反证均失败（成功两次 BCrypt、4 个并发失败仅累计 1）；修复后真实 Memurai／生产序列化与认证链 17 项、默认 527 项通过。leader 已完整读审生产改动、正式测试及实际 Spring Security 7.0.5 来源，暂未发现认证实现阻塞问题；主工作区未集成。
+- R1：新增 LoginAuthenticationRedisIT 会被既有 MySQL profile 的默认 `**/*IT.java` 扫描，意外要求 Redis 环境；两个 profile 的无 ID execution 合并，插件级 includes 又将组合运行限定为 Redis 测试，漏掉 admin 的既有 MySQL 附件测试。leader 用本地 Failsafe 字节码确认默认选择，并实际生成两个 profile 的有效 POM，确认仅剩一个执行及 Redis include。已要求隔离选择与执行、保留原定向和零匹配行为，证明各自单独及组合执行均正确后重新冻结。本项尚未提交。
+- 二次 review 已关闭 R1：两个 profile 使用独立 execution，选择参数、Redis 报告及 summary 独立；Redis 标签由该组选择、由 MySQL 组排除，包含宽泛 `it.test=*IT`。实现任务先真实复现 MySQL-only 意外依赖 Redis、组合运行漏掉附件测试，再证明两组分别运行及组合 22 个场景恰为两组并集、无重复；缺少 Redis 时组合仍失败、两个零匹配门禁仍失败，原 flowable-only 定向恢复 12 项仍通过。
+- 更正首轮证据：原独立请求夹具的新密码长 21 位，超过现有 20 位限制；前置 BaseException 在 Spring 关闭后延迟取消息，导致报告器漏记该失败，首轮报告的 17 项不能证明该场景。实现任务先固化异常消息，使原输入明确报 1 项失败，再改为合法长度；生产长度限制未改。最终 Redis 正式场景为 18 项，包含独立请求密码变更的旧密码拒绝、新密码成功及计数清理，主工作区也核实该测试身份实际存在。
+- 认证由既有 SysPasswordService 的 DaoAuthenticationProvider 扩展点承担；删除用户装载中的密码比对、旧独立 matches、原 Redis 读后写计数、清理前 hasKey 和无其他用途的 AuthenticationContextHolder。新增生产类型 0。当前认证只执行一次真实 BCrypt，锁定前置检查、输入账号键、Integer 格式、TTL、错误提示与管理员解锁接口保留。失败 INCR／EXPIRE 原子执行，在途成功与失败按 Redis 写入先后生效，无跨请求复用结论或全局认证锁，无数据迁移。
+- leader 已审查完整 8 项并按最终 SHA256 核对集成，主工作区在自建 MySQL 8.4.9 与 Memurai／Redis 兼容实例执行 `mvn -pl ruoyi-admin -am '-Pworkflow-mysql-it,login-redis-it' '-Dit.test=WorkflowAttachmentUploadRecoveryMySqlIT,WfAttachmentMultipartMySqlIT' verify -B -ntp`，527 项默认、18 项 Redis 认证、16 项 MySQL（恢复 12、HTTP 4）全部通过，0 失败／错误／跳过，8 个模块成功。逐项核对三个 IT 的 XML 测试身份与独立 summary，实际各执行一次；完成于 2026-09-17 00:03:08 +08:00。BS-037 已完成。
+- C14 使用生产 SecurityConfig／Manager／Provider、用户详情及登录服务、BCrypt、RedisConfig／Fastjson 和真实 Redis 命令；身份／权限／配置查询、Token 输出及审计调度为替身。未执行完整 HTTP 登录、真实 JWT、异步审计落库、浏览器、Redis 集群／网络响应丢失。MySQL／HTTP 沿用正式附件测试的既有替身边界，不表示真实登录已验收。四张临时附件表与 Redis 键均清零，自建服务已关闭；临时脚本、数据、日志及本项报告清理，用户文件与常驻数据保留。契约见 [登录密码认证](../contracts/login-password-authentication.md)。接下来进入第 8 项 C01。
 
 ## 基线验证
 
