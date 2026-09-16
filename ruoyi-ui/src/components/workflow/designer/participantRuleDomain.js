@@ -177,37 +177,8 @@ export function createParticipantRuleDomain({
       { name: PARTICIPANT_RULE_PROPERTIES.taskNoMatch, value: 'FAIL' }
     ]
   }
-  /**
-   * 对流程和单实例任务执行参与者规则的即时结构校验。
-   * @param {object} businessObject BPMN Process 或 UserTask 业务对象。
-   * @param {boolean} processRule 是否校验流程发起范围。
-   * @returns {string} 空串表示通过，否则返回稳定错误提示。
-   */
-  function validateParticipantProperties(businessObject, processRule) {
-    if (!processRule && businessObject?.loopCharacteristics) return ''
-    const properties = readParticipantPropertyMap(businessObject, readAllFlowableProperties)
-    const names = processRule
-      ? [PARTICIPANT_RULE_PROPERTIES.startVersion, PARTICIPANT_RULE_PROPERTIES.startType,
-          PARTICIPANT_RULE_PROPERTIES.startTargetIds, PARTICIPANT_RULE_PROPERTIES.startNoMatch]
-      : [PARTICIPANT_RULE_PROPERTIES.taskVersion, PARTICIPANT_RULE_PROPERTIES.taskType,
-          PARTICIPANT_RULE_PROPERTIES.taskTargetIds, PARTICIPANT_RULE_PROPERTIES.taskFormField,
-          PARTICIPANT_RULE_PROPERTIES.taskNoMatch]
-    if (!properties.size) {
-      return processRule
-        ? '流程必须配置完整发起范围'
-        : `用户任务 ${businessObject?.name || businessObject?.id || ''} 必须配置办理人规则`
-    }
-    if (names.some(name => !properties.has(name))) return processRule ? '流程发起范围配置不完整' : '用户任务办理人规则配置不完整'
-    const version = properties.get(processRule
-      ? PARTICIPANT_RULE_PROPERTIES.startVersion : PARTICIPANT_RULE_PROPERTIES.taskVersion)
-    const policy = properties.get(processRule
-      ? PARTICIPANT_RULE_PROPERTIES.startNoMatch : PARTICIPANT_RULE_PROPERTIES.taskNoMatch)
-    if (version !== '1' || policy !== 'FAIL') return '参与者规则版本或无匹配策略不受支持'
-    return ''
-  }
-
   return {
     readParticipantRule, decorateParticipantTargets, normalizeParticipantRule,
-    participantRulePropertyItems, validateParticipantProperties
+    participantRulePropertyItems
   }
 }

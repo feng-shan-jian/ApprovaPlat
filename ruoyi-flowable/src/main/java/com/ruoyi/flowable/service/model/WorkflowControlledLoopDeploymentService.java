@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -8,7 +7,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.ExclusiveGateway;
 import org.flowable.bpmn.model.FlowElement;
@@ -34,42 +32,26 @@ public class WorkflowControlledLoopDeploymentService
      * 校验作者配置与节点表单字段，并把单出口用户任务转换为固定 ExclusiveGateway 回路。
      *
      * @param authorDocument WorkflowBpmnDocument，已通过作者安全门禁的 BPMN 文档
-     * @param inputBpmn byte[]，前序扩展编译生成的执行 BPMN
+     * @param compiledModel BpmnModel，本次部署独占的执行模型
      * @param formSchemas List&lt;WorkflowControlledLoopFormSchema&gt;，节点表单变量白名单
      * @param actorUserId String，当前部署操作人正式用户主键
-     * @return WorkflowPreparedControlledLoopDeployment，可继续交给 DMN 和 CallActivity 编译的结果
+     * @return List&lt;WfDeployControlledLoop&gt;，当次待冻结的规则
      */
-    public WorkflowPreparedControlledLoopDeployment prepare(WorkflowBpmnDocument authorDocument,
-            byte[] inputBpmn, List<WorkflowControlledLoopFormSchema> formSchemas,
+    public List<WfDeployControlledLoop> prepare(WorkflowBpmnDocument authorDocument,
+            BpmnModel compiledModel, List<WorkflowControlledLoopFormSchema> formSchemas,
             String actorUserId)
     {
-        if (authorDocument == null || inputBpmn == null || inputBpmn.length == 0)
-        {
-            throw new ServiceException("受控循环部署输入不完整", HttpStatus.ERROR);
-        }
         Map<NodeKey, Map<String, WorkflowControlledLoopFormField>> fieldsByNode =
                 buildFormIndex(formSchemas);
         List<AuthorConfig> configs = collectConfigs(authorDocument.bpmnModel(), fieldsByNode);
-        if (configs.isEmpty())
-        {
-            return new WorkflowPreparedControlledLoopDeployment(inputBpmn, List.of());
-        }
 
-        BpmnXMLConverter converter = new BpmnXMLConverter();
-        BpmnModel compiledModel = converter.convertToBpmnModel(
-                () -> new ByteArrayInputStream(inputBpmn), true, true);
         List<WfDeployControlledLoop> snapshots = new ArrayList<>(configs.size());
         for (AuthorConfig config : configs)
         {
             compileLoop(compiledModel, config);
             snapshots.add(toSnapshot(config, actorUserId));
         }
-        byte[] compiled = converter.convertToXML(compiledModel);
-        if (compiled == null || compiled.length == 0)
-        {
-            throw new ServiceException("受控循环执行资源编译失败", HttpStatus.ERROR);
-        }
-        return new WorkflowPreparedControlledLoopDeployment(WorkflowBpmnXmlPreserver.restore(compiled, inputBpmn), snapshots);
+        return List.copyOf(snapshots);
     }
 
     /**

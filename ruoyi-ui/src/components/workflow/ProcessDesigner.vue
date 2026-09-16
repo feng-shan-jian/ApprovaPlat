@@ -26,11 +26,17 @@
       @save="requestSave"
     />
     <input ref="importInputRef" class="process-designer__file-input" type="file" accept=".bpmn,.xml,.bpmn20.xml,application/xml,text/xml" @change="handleImportFile" />
-    <el-alert v-if="hasIncompatibleMessageConfig" class="process-designer__configuration-warning" title="当前事件仍携带消息专用配置，不能保存或部署。" type="warning" :closable="false">
-      <el-button text @click="repairSelectedEventConfig">移除不兼容配置（可撤销）</el-button>
-    </el-alert>
-    <el-alert v-if="authorFieldCatalogIssue" :title="authorFieldCatalogIssue" type="warning" :closable="false" />
+    <div class="process-designer__warnings">
+      <el-alert v-if="hasIncompatibleMessageConfig" class="process-designer__configuration-warning" title="当前事件仍携带消息专用配置，不能保存或部署。" type="warning" :closable="false">
+        <el-button text @click="repairSelectedEventConfig">移除不兼容配置（可撤销）</el-button>
+      </el-alert>
+      <el-alert v-if="authorFieldCatalogIssue" class="process-designer__configuration-warning" :title="authorFieldCatalogIssue" type="warning" :closable="false" />
 
+      <el-alert v-for="(message, resource) in resourceLoadErrors" :key="resource" class="process-designer__configuration-warning" :title="message" type="warning" :closable="false">
+        <el-button text :loading="extensionLoading" @click="loadExtensionOptions">刷新引用资源</el-button>
+      </el-alert>
+
+    </div>
     <div
       ref="bodyRef"
       v-loading="designerLocked"
@@ -648,6 +654,7 @@ function handleCommandStackChanged() {
   window.requestAnimationFrame(refreshControlledLoopOverlays)
   if (importing) return
   authorRevision += 1
+
   formFieldCatalog.invalidate()
   emit('editing')
   // 任何建模变更都会使上一次服务端诊断失效，禁止显示过期的“已通过”结果。
@@ -1635,7 +1642,7 @@ function applyDesignerPreference() {
 }
 
 /**
- * 对同一份冻结 XML 依次执行本地结构门禁、服务端门禁并交给页面真实保存。
+ * 检查尚未落入 XML 的编辑，序列化本次作者内容并交给页面正式保存。
  * @returns {Promise<void>} 校验失败时仅触发 error，不触发 save。
  */
 async function requestSave() {
@@ -1646,15 +1653,12 @@ async function requestSave() {
   try {
     const pendingMultiInstanceError = validatePendingMultiInstanceSelection()
     if (pendingMultiInstanceError) throw new Error(pendingMultiInstanceError)
-    const error = validateDiagram()
-    if (error) throw new Error(error)
-    // 保存窗口只序列化一次，服务端校验与正式保存必须使用同一内容快照。
-    const persistedXml = await emitXmlChange(false)
-    const serverValid = await runServerValidation(false, persistedXml)
-    if (!serverValid) {
-      validationVisible.value = true
-      return
+    if (isType('bpmn:CallActivity')) {
+      const pendingMappingError = validateCallActivityConfiguration(selectedBusinessObject.value)
+      if (pendingMappingError) throw new Error(pendingMappingError)
     }
+    // 保存窗口只序列化一次；正式保存响应负责报告业务错误。
+    const persistedXml = await emitXmlChange(false)
     emit('save', persistedXml)
   } catch (error) {
     emit('error', error)
@@ -1673,76 +1677,6 @@ function handleDesignerLock(locked) {
   if (locked && activeElement instanceof HTMLElement && bodyRef.value?.contains(activeElement)) {
     activeElement.blur()
   }
-}
-
-/**
- * 执行与后端关键规则一致的即时结构校验。
- * @returns {string} 空串表示通过，否则返回首个业务错误。
- */
-function validateDiagram() {
-  if (!modeler) return '流程设计器尚未初始化'
-  // Definitions 是 BPMN 语义模型的权威来源；Collaboration 画布不会把 Process 注册为可见根图形。
-  const definitions = modeler.getDefinitions()
-  const processes = (definitions?.rootElements || [])
-    .filter(element => element.$type === 'bpmn:Process')
-  if (!processes.some(process => process.isExecutable !== false)) return '至少需要一个可执行流程'
-  for (const process of processes) {
-    // 协作图允许存在仅表达参与者边界的非执行池；只有正式可执行流程需要申请入口和发起范围。
-    if (process.isExecutable === false) continue
-    const flowElements = process.flowElements || []
-    const startEvents = flowElements.filter(item => item.$type === 'bpmn:StartEvent')
-    if (startEvents.length !== 1) return '每个流程必须且只能包含一个开始节点'
-    const startEvent = startEvents[0]
-    if (!startEvent.get('flowable:formKey') && !hasEmbeddedFormFields(startEvent)) {
-      return '开始节点必须配置发起表单'
-    }
-    const startScopeError = validateParticipantProperties(process, true)
-    if (startScopeError) return startScopeError
-    try {
-      validateAutoCopyRulesForElement(process, ['PROCESS_COMPLETED'])
-    } catch (error) {
-      return error.message
-    }
-  }
-  const flowElements = processes.flatMap(collectProcessFlowElements)
-  const userTasks = flowElements.filter(element => element.$type === 'bpmn:UserTask')
-  for (const task of userTasks) {
-    const loopError = validateUserTaskMultiInstance(task)
-    if (loopError) return loopError
-    const participantError = validateParticipantProperties(task, false)
-    if (participantError) return participantError
-    const extensionError = validateUserTaskExtensions(task)
-    if (extensionError) return extensionError
-  }
-  const callActivities = flowElements.filter(element => element.$type === 'bpmn:CallActivity')
-  for (const callActivity of callActivities) {
-    const callError = validateCallActivityConfiguration(callActivity)
-    if (callError) return callError
-  }
-  const businessBoundaries = flowElements.filter(element => element.$type === 'bpmn:BoundaryEvent')
-  for (const boundary of businessBoundaries) {
-    const boundaryError = validateBusinessBoundary(boundary)
-    if (boundaryError) return boundaryError
-  }
-  return ''
-}
-
-/**
- * 递归读取一个 Process 的全部流程元素，确保子流程中的任务和边界事件也进入保存门禁。
- *
- * @param {object} process BPMN Process 业务对象。
- * @returns {object[]} 按模型顺序展开的全部顶层及嵌套流程元素。
- */
-function collectProcessFlowElements(process) {
-  const result = []
-  const visit = elements => {
-    for (const element of elements || []) {
-      result.push(element)
-      if (Array.isArray(element.flowElements)) visit(element.flowElements)
-    }
-  }
-  visit(process?.flowElements)
-  return result
 }
 
 /**
@@ -1861,9 +1795,6 @@ const {
   updateParticipantRule,
   updateUserTaskProperties,
   updateMultiInstance,
-  validateParticipantProperties,
-  hasEmbeddedFormFields,
-  validateUserTaskMultiInstance,
   disposeIdentitySearchTimers,
   validatePendingMultiInstanceSelection
 } = formParticipantDomain
@@ -1891,6 +1822,7 @@ const {
   connectorEndpoints,
   sqlDataSources,
   extensionLoading,
+  resourceLoadErrors,
   errorEventOptions,
   escalationEventOptions,
   eventCodeLoading,
@@ -1904,14 +1836,11 @@ const {
   updateBusinessExecutionListeners,
   updateBusinessTaskListeners,
   updateExtensionProperties,
-  validateAutoCopyRulesForElement,
   updateAutoCopyRules,
   findDefinitions,
   updateEventProperties,
   loadEventPropertyState,
   updateSlaProperties,
-  validateUserTaskExtensions,
-  validateBusinessBoundary
 } = extensionEventSlaDomain
 
 watch(() => props.modelValue, value => {
@@ -1959,6 +1888,7 @@ onMounted(() => {
  */
 onBeforeUnmount(() => {
   authorRevision += 1
+  extensionEventSlaDomain.invalidateResourceRequests()
   formFieldCatalog.invalidate()
   window.clearTimeout(changeTimer)
   unbindDesignerLifecycleListeners()
@@ -1969,7 +1899,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
-.process-designer__configuration-warning { flex: none; position: relative; z-index: 1; }
+.process-designer__warnings { max-height: 160px; overflow-y: auto; }
+.process-designer__configuration-warning { position: relative; }
 .validation-element-link {
   max-width: 100%;
   height: auto;
@@ -1986,7 +1917,7 @@ onBeforeUnmount(() => {
 
 .process-designer {
   display: grid;
-  grid-template-rows: 54px minmax(0, 1fr);
+  grid-template-rows: 54px auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;

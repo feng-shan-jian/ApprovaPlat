@@ -53,8 +53,10 @@ const forms = [
   }] }) }
 ]
 
-async function mount(page, type, xml = boundaryXml(type)) {
+async function mount(page, type, xml = boundaryXml(type), failures = new Set()) {
   await page.route('**/dev-api/**', route => {
+    if (failures.has('SQL') && route.request().url().includes('/extension/options/sql')) return route.fulfill({ json: { code: 500, msg: 'SQL catalog unavailable' } })
+    if (route.request().url().includes('/workflow/model/author-field-catalog')) return route.fulfill({ json: { code: 200, data: { nodes: [], processes: [], issues: [] } } })
     const data = route.request().url().includes('/bpmn-event/') ? [
       { eventCodeId: 1, eventType: 'ERROR', eventCode: 'QA_ERROR', eventName: '测试错误' },
       { eventCodeId: 2, eventType: 'ESCALATION', eventCode: 'QA_ESCALATION', eventName: '测试升级' }
@@ -367,4 +369,33 @@ test('R11 拒绝非法模板时恢复原选择，保留原 BPMN 与字段', asyn
   await expect.soft(select).toContainText('原有效模板')
   expect(await page.evaluate(() => window.designerRegression.xml)).toBe(before)
   await expect(fields.locator('code')).toHaveText(['reason'])
+})
+
+
+test('C01 无关目录失败保留错误编码配置，普通保存单次提交且不自动预检，刷新恢复', async ({ page }) => {
+  const failures = new Set(['SQL'])
+  await mount(page, 'errorEventDefinition', boundaryXml('errorEventDefinition'), failures)
+  await page.locator('[data-element-id="boundary"] .djs-hit').click()
+  await page.getByRole('button', { name: '展开全部属性分区' }).click()
+  const selector = page.getByLabel('业务编码', { exact: true })
+  await selector.click()
+  await page.getByRole('option', { name: /QA_ERROR/ }).click()
+  await expect.poll(() => page.evaluate(() => window.designerRegression.xml)).toContain('QA_ERROR')
+  const validationRequests = []
+  page.on('request', request => { if (/workflow\/model\/(?:validate|preflight)/.test(request.url())) validationRequests.push(request.url()) })
+  await page.getByRole('button', { name: '刷新引用资源', exact: true }).click()
+  await expect(page.getByText('SQL 扩展目录加载失败，已保留已有配置，请刷新引用资源重试', { exact: true })).toBeVisible()
+  await selector.click()
+  await expect(page.getByRole('option', { name: /QA_ERROR/ })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => window.designerRegression.saves.length)).toBe(1)
+  expect(await page.evaluate(() => window.designerRegression.saves[0])).toContain('QA_ERROR')
+  expect(validationRequests).toEqual([])
+  await expect(page.getByRole('button', { name: '保存', exact: true })).toHaveClass(/is-loading/)
+  await page.evaluate(() => { window.designerRegression.saving = false })
+  failures.delete('SQL')
+  await page.getByRole('button', { name: '刷新引用资源', exact: true }).click()
+  await expect(page.getByText('SQL 扩展目录加载失败，已保留已有配置，请刷新引用资源重试', { exact: true })).not.toBeVisible()
+  expect(await page.evaluate(() => window.designerRegression.xml)).toContain('QA_ERROR')
 })

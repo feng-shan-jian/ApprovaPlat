@@ -37,11 +37,10 @@ export function isUserTaskSlaProperty(name) {
 }
 
 /**
- * 创建只依赖正式日历与升级事件目录的 UserTask SLA 领域。
- * @param {object} context SLA 校验所需的两个只读目录函数。
+ * 处理 UserTask SLA 的未完成输入与属性写入，资源有效性由正式保存裁决。
  * @returns {object} SLA 回读、校验、分钟边界和属性投影入口。
  */
-export function createUserTaskSlaDomain({ readSlaCalendarOptions, readEscalationEventOptions }) {
+export function createUserTaskSlaDomain() {
   /**
    * 从 Flowable 通用属性集合解析 UserTask SLA 作者配置。
    * @param {Array<{name:string,value:string}>} properties 当前元素全部扩展属性。
@@ -81,7 +80,7 @@ export function createUserTaskSlaDomain({ readSlaCalendarOptions, readEscalation
       escalationEventCode: String(config?.escalationEventCode || '').trim()
     }
     if (!normalized.enabled) return { ...createDefaultSlaConfig(), ...normalized }
-    if (!readSlaCalendarOptions().some(item => item.calendarKey === normalized.calendarKey)) {
+    if (!normalized.calendarKey) {
       throw new Error('审批 SLA 必须选择已启用的正式业务日历')
     }
     if (!isBoundedSlaMinute(normalized.reminderMinutes)
@@ -99,10 +98,6 @@ export function createUserTaskSlaDomain({ readSlaCalendarOptions, readEscalation
     }
     if (!normalized.escalationUserId && !normalized.escalationEventCode) {
       throw new Error('SLA 必须配置升级办理人或受控升级事件')
-    }
-    if (normalized.escalationEventCode && !readEscalationEventOptions()
-      .some(item => item.eventCode === normalized.escalationEventCode)) {
-      throw new Error('SLA 超时升级只能引用已启用的正式升级编码')
     }
     return normalized
   }

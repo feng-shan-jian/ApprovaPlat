@@ -46,6 +46,16 @@ class WorkflowBpmnLegacyRejectionTest
         assertThatCode(() -> validate(process("", ""))).doesNotThrowAnyException();
     }
 
+    @Test
+    void embeddedAuthorFieldsRetainStaticContentAndPermissionGuards()
+    {
+        assertRejected(process("", "").replace("申请标题", "java script:alert(1)"), "危险协议");
+        assertRejected(process("", "").replace("readable=\"true\"", "readable=\"false\""), "权限组合不合法");
+        String enumField = "<flowable:formProperty id=\"requestTitle\" type=\"enum\" readable=\"true\" writable=\"true\">"
+                + "<flowable:value id=\"safe\" name=\"data:text/html\"/></flowable:formProperty>";
+        assertRejected(process("", "").replaceAll("(?s)<flowable:formProperty id=\"requestTitle\".*?/>", enumField), "危险协议");
+    }
+
     /**
      * 验证作者 XML 不再暴露服务端内部 Spring Bean 监听器协议。
      *
@@ -83,17 +93,19 @@ class WorkflowBpmnLegacyRejectionTest
                 .thenReturn(Set.of("200"));
         WorkflowTaskSlaDeploymentService slaCompiler = new WorkflowTaskSlaDeploymentService(
                 calendarService, mock(WorkflowBpmnEventCodeService.class), identityResolver);
-        WorkflowPreparedSlaDeployment slaCompiled = slaCompiler.prepare(
-                preSlaCompiledProcess().getBytes(StandardCharsets.UTF_8), "100");
+        var executable = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToBpmnModel(
+                () -> new java.io.ByteArrayInputStream(preSlaCompiledProcess().getBytes(StandardCharsets.UTF_8)), true, true);
+        slaCompiler.prepare(executable, "100");
+        byte[] slaCompiled = WorkflowBpmnXmlPreserver.write(executable, preSlaCompiledProcess());
         String slaCompiledXml = new String(
-                slaCompiled.compiledBpmn(), StandardCharsets.UTF_8);
+                slaCompiled, StandardCharsets.UTF_8);
         assertThat(slaCompiledXml).doesNotContain("${userTaskListener}");
-        assertThatThrownBy(() -> service.validateCompiledDeployment(slaCompiled.compiledBpmn()))
+        assertThatThrownBy(() -> service.validateCompiledDeployment(slaCompiled))
                 .isInstanceOf(ServiceException.class)
                 .hasMessageContaining("缺少固定身份审计任务监听器");
 
-        byte[] compiled = new WorkflowRuntimeTaskListenerCompiler()
-                .compile(slaCompiled.compiledBpmn());
+        new WorkflowRuntimeTaskListenerCompiler().compile(executable);
+        byte[] compiled = WorkflowBpmnXmlPreserver.write(executable, preSlaCompiledProcess());
         // 原任务和 SLA 新生成的升级 UserTask 均由最后阶段获得三项固定事件。
         assertThat(occurrences(new String(compiled, StandardCharsets.UTF_8),
                 "${userTaskListener}")).isEqualTo(6);

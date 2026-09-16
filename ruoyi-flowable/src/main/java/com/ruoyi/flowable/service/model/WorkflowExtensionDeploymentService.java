@@ -1,12 +1,10 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.FieldExtension;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.BoundaryEvent;
@@ -73,16 +71,11 @@ public class WorkflowExtensionDeploymentService
      * 解析作者 BPMN 中的受控 ServiceTask 和 SendTask，冻结最新版并生成不含可变作者字段的执行资源。
      * @param document WorkflowBpmnDocument，已通过保存和部署安全门禁的作者文档
      * @param actorUserId String，当前部署操作人正式用户主键
-     * @return WorkflowPreparedExtensionDeployment，编译资源和待持久化快照
+     * @return List<WfDeployExtensionSnapshot>，编译资源和待持久化快照
      */
-    public WorkflowPreparedExtensionDeployment prepare(WorkflowBpmnDocument document,
-            String actorUserId)
+    public List<WfDeployExtensionSnapshot> prepare(WorkflowBpmnDocument document,
+            BpmnModel compiledModel, String actorUserId)
     {
-        BpmnXMLConverter converter = new BpmnXMLConverter();
-        byte[] validatedModelBytes = WorkflowBpmnXmlPreserver.executableSource(
-                document.bpmnXml().getBytes(StandardCharsets.UTF_8));
-        BpmnModel compiledModel = converter.convertToBpmnModel(
-                () -> new ByteArrayInputStream(validatedModelBytes), true, true);
         List<WfDeployExtensionSnapshot> snapshots = new ArrayList<>();
         Set<String> uniqueActivities = new HashSet<>();
         for (Process process : compiledModel.getProcesses())
@@ -120,75 +113,7 @@ public class WorkflowExtensionDeploymentService
                 compileBusinessListeners(process, element, actorUserId, snapshots);
             }
         }
-        byte[] compiled = preserveBusinessEventDefinitions(converter.convertToXML(compiledModel),
-                document.bpmnModel());
-        if (compiled == null || compiled.length == 0)
-        {
-            throw new ServiceException("BPMN 执行资源编译失败", HttpStatus.ERROR);
-        }
-        return new WorkflowPreparedExtensionDeployment(WorkflowBpmnXmlPreserver.restore(compiled, validatedModelBytes), snapshots);
-    }
-
-    /**
-     * 保留 Flowable 8 XML 转换器未写回的 definitions 级 Error/Escalation 根元素。
-     * @param converted byte[]，受控任务已编译的 BPMN XML
-     * @param sourceModel BpmnModel，作者模型中已通过目录校验的根事件定义
-     * @return byte[]，包含根事件定义的可部署 BPMN XML
-     */
-    private byte[] preserveBusinessEventDefinitions(byte[] converted, BpmnModel sourceModel)
-    {
-        if (converted == null || converted.length == 0 || sourceModel == null)
-        {
-            return converted;
-        }
-        String xml = new String(converted, StandardCharsets.UTF_8);
-        StringBuilder definitions = new StringBuilder();
-        sourceModel.getErrors().forEach((id, code) -> {
-            if (!xml.contains("id=\"" + escapeXml(id) + "\""))
-            {
-                appendErrorDefinition(definitions, id, code);
-            }
-        });
-        sourceModel.getEscalations().forEach(escalation -> {
-            if (!xml.contains("id=\"" + escapeXml(escalation.getId()) + "\""))
-            {
-                appendEscalationDefinition(definitions, escalation.getId(), escalation.getName(),
-                        escalation.getEscalationCode());
-            }
-        });
-        if (definitions.isEmpty())
-        {
-            return converted;
-        }
-        int processIndex = xml.indexOf("<process ");
-        if (processIndex < 0)
-        {
-            throw new ServiceException("BPMN 根事件定义插入位置不存在", HttpStatus.ERROR);
-        }
-        String compiledXml = xml.substring(0, processIndex) + definitions + xml.substring(processIndex);
-        return compiledXml.getBytes(StandardCharsets.UTF_8);
-    }
-
-    /** @param target StringBuilder，根定义输出缓冲；@param id String，定义 ID；@param code String，业务编码；@return void。 */
-    private void appendErrorDefinition(StringBuilder target, String id, String code)
-    {
-        target.append("<error id=\"").append(escapeXml(id)).append("\" errorCode=\"")
-                .append(escapeXml(code)).append("\"></error>");
-    }
-
-    /** @param target StringBuilder，根定义输出缓冲；@param id String，定义 ID；@param name String，显示名称；@param code String，业务编码；@return void。 */
-    private void appendEscalationDefinition(StringBuilder target, String id, String name, String code)
-    {
-        target.append("<escalation id=\"").append(escapeXml(id)).append("\" name=\"")
-                .append(escapeXml(name)).append("\" escalationCode=\"")
-                .append(escapeXml(code)).append("\"></escalation>");
-    }
-
-    /** @param value String，可空 XML 文本；@return String，已转义的 XML 属性值。 */
-    private String escapeXml(String value)
-    {
-        return value == null ? "" : value.replace("&", "&amp;").replace("\"", "&quot;")
-                .replace("<", "&lt;").replace(">", "&gt;");
+        return List.copyOf(snapshots);
     }
 
     /**
@@ -345,11 +270,11 @@ public class WorkflowExtensionDeploymentService
     /**
      * 在 Flowable 部署成功后绑定 deploymentId、计算最终摘要并批量持久化快照。
      * @param deploymentId String，Flowable 新部署主键
-     * @param prepared WorkflowPreparedExtensionDeployment，部署前编译结果
+     * @param prepared List<WfDeployExtensionSnapshot>，部署前编译结果
      * @return void，无返回值；行数不一致时由外层事务整体回滚
      */
     public List<WfDeployExtensionSnapshot> snapshotsForDeployment(String deploymentId,
-            WorkflowPreparedExtensionDeployment prepared)
+            List<WfDeployExtensionSnapshot> prepared)
     {
         return snapshotsForDeployment(deploymentId, prepared, List.of());
     }
@@ -357,19 +282,19 @@ public class WorkflowExtensionDeploymentService
     /**
      * 在同一部署事务中合并服务任务和表单字段扩展快照并完成最终复核。
      * @param deploymentId String，Flowable 新部署主键
-     * @param prepared WorkflowPreparedExtensionDeployment，服务任务部署前编译结果
+     * @param prepared List<WfDeployExtensionSnapshot>，服务任务部署前编译结果
      * @param additionalSnapshots List&lt;WfDeployExtensionSnapshot&gt;，表单字段等非 ServiceTask 扩展快照
      * @return List&lt;WfDeployExtensionSnapshot&gt;，已绑定部署主键和摘要的不可变快照
      */
     public List<WfDeployExtensionSnapshot> snapshotsForDeployment(String deploymentId,
-            WorkflowPreparedExtensionDeployment prepared,
+            List<WfDeployExtensionSnapshot> prepared,
             List<WfDeployExtensionSnapshot> additionalSnapshots)
     {
         if (!org.springframework.util.StringUtils.hasText(deploymentId) || prepared == null)
         {
             throw new ServiceException("部署扩展快照参数不完整", HttpStatus.ERROR);
         }
-        List<WfDeployExtensionSnapshot> snapshots = new ArrayList<>(prepared.snapshots());
+        List<WfDeployExtensionSnapshot> snapshots = new ArrayList<>(prepared);
         if (additionalSnapshots != null)
         {
             snapshots.addAll(additionalSnapshots);
@@ -548,6 +473,8 @@ public class WorkflowExtensionDeploymentService
         ServiceTask compiledTask = new ServiceTask();
         // Activity.setValues 复制 ID、连线、异步、多实例、补偿、边界事件和扩展属性等公共运行语义。
         compiledTask.setValues(task);
+        compiledTask.setIncomingFlows(task.getIncomingFlows());
+        compiledTask.setOutgoingFlows(task.getOutgoingFlows());
         compiledTask.setFieldExtensions(new ArrayList<>(task.getFieldExtensions()));
         WfDeployExtensionSnapshot snapshot = compileServiceTask(
                 compiledModel, sourceModel, process, compiledTask, actorUserId);
@@ -555,6 +482,9 @@ public class WorkflowExtensionDeploymentService
         // 只替换深拷贝后的执行模型；作者模型中的 sendTask 类型和原始字段保持不变并可回显。
         container.removeFlowElement(task.getId());
         container.addFlowElement(compiledTask);
+        compiledTask.getIncomingFlows().forEach(flow -> flow.setTargetFlowElement(compiledTask));
+        compiledTask.getOutgoingFlows().forEach(flow -> flow.setSourceFlowElement(compiledTask));
+        compiledTask.getBoundaryEvents().forEach(boundary -> boundary.setAttachedToRef(compiledTask));
         return snapshot;
     }
 

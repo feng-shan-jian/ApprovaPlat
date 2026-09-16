@@ -1,11 +1,9 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.Process;
@@ -39,26 +37,19 @@ public class WorkflowParticipantRuleDeploymentService
     /**
      * 解析作者规则、核验正式目录与表单字段，并从执行 BPMN 剥离作者属性。
      * @param authorDocument WorkflowBpmnDocument，已通过作者安全校验的 BPMN
-     * @param inputBpmn byte[]，前序编译器生成的 BPMN
+     * @param compiledModel BpmnModel，本次部署独占的执行模型
      * @param formFieldCatalog WorkflowAuthorFormFieldCatalog，本次事务冻结的正式用户主键字段目录
      * @param actorUserId String，部署设计者正式用户主键
-     * @return WorkflowPreparedParticipantRuleDeployment，执行资源和待落库快照
+     * @return List&lt;WfDeployParticipantRule&gt;，当次待冻结的规则
      */
-    public WorkflowPreparedParticipantRuleDeployment prepare(WorkflowBpmnDocument authorDocument,
-            byte[] inputBpmn, WorkflowAuthorFormFieldCatalog formFieldCatalog,
+    public List<WfDeployParticipantRule> prepare(WorkflowBpmnDocument authorDocument,
+            BpmnModel compiledModel, WorkflowAuthorFormFieldCatalog formFieldCatalog,
             String actorUserId)
     {
-        if (authorDocument == null || inputBpmn == null || inputBpmn.length == 0)
-        {
-            throw new ServiceException("参与者规则部署输入不完整", HttpStatus.ERROR);
-        }
         List<WfDeployParticipantRule> snapshots = collectAndValidate(
                 authorDocument.bpmnModel(), formFieldCatalog, actorUserId);
 
-        BpmnXMLConverter converter = new BpmnXMLConverter();
-        BpmnModel compiled = converter.convertToBpmnModel(
-                () -> new ByteArrayInputStream(inputBpmn), true, true);
-        for (Process process : compiled.getProcesses())
+        for (Process process : compiledModel.getProcesses())
         {
             WorkflowParticipantRuleBpmnContract.removeAuthorProperties(process);
             for (UserTask task : process.findFlowElementsOfType(UserTask.class, true))
@@ -75,12 +66,7 @@ public class WorkflowParticipantRuleDeploymentService
                 }
             }
         }
-        byte[] compiledBytes = WorkflowBpmnXmlPreserver.restore(converter.convertToXML(compiled), inputBpmn);
-        if (compiledBytes == null || compiledBytes.length == 0)
-        {
-            throw new ServiceException("参与者规则执行资源编译失败", HttpStatus.ERROR);
-        }
-        return new WorkflowPreparedParticipantRuleDeployment(compiledBytes, snapshots);
+        return List.copyOf(snapshots);
     }
 
     /**

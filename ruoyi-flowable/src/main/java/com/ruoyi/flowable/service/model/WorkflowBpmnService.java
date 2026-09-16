@@ -280,6 +280,25 @@ public class WorkflowBpmnService
     public record AuthorForms(WorkflowBpmnDocument document,
             List<com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView.Issue> issues) { }
 
+    /** 只在作者与执行资源边界创建独占模型；各编译器在此模型上直接工作。 */
+    public org.flowable.bpmn.model.BpmnModel executionModel(WorkflowBpmnDocument author)
+    {
+        return parseSecurely(author.bpmnXml());
+    }
+
+    /** 完整预检在真实引擎输出边界执行相同的 XSD 与官方结构规则，不持久化。 */
+    public List<WorkflowBpmnValidationIssue> executionValidationIssues(byte[] bytes)
+    {
+        org.flowable.bpmn.model.BpmnModel model;
+        try
+        {
+            model = new BpmnXMLConverter().convertToBpmnModel(
+                    () -> new java.io.ByteArrayInputStream(bytes), true, true);
+        }
+        catch (RuntimeException exception) { throw invalidBpmn("BPMN 执行资源不符合引擎结构规则", exception); }
+        return engineValidationIssues(model, new String(bytes, StandardCharsets.UTF_8), List.of());
+    }
+
     /**
      * 校验部署编译器生成的可执行 BPMN；固定调度器必须保留，作者扩展字段必须已经剥离。
      *
@@ -453,6 +472,7 @@ public class WorkflowBpmnService
                     new java.io.StringReader(bpmnXml));
             int depth = 0;
             int propertiesDepth = -1;
+            int businessRuleDepth = -1;
             int propertyCount = 0;
             Set<String> propertyNames = new HashSet<>();
             while (reader.hasNext())
@@ -460,6 +480,12 @@ public class WorkflowBpmnService
                 if (reader.isStartElement())
                 {
                     depth++;
+                    if ("businessRuleTask".equals(reader.getLocalName())
+                            && "http://www.omg.org/spec/BPMN/20100524/MODEL".equals(reader.getNamespaceURI()))
+                        businessRuleDepth = depth;
+                    if (businessRuleDepth >= 0 && "field".equals(reader.getLocalName())
+                            && FLOWABLE_NAMESPACE.equals(reader.getNamespaceURI()))
+                        throw invalidBpmn("业务规则任务不允许作者字段注入", null);
                     if (FLOWABLE_NAMESPACE.equals(reader.getNamespaceURI())
                             && "properties".equals(reader.getLocalName()))
                     {
@@ -485,6 +511,7 @@ public class WorkflowBpmnService
                 }
                 else if (reader.isEndElement())
                 {
+                    if (depth == businessRuleDepth) businessRuleDepth = -1;
                     if (depth == propertiesDepth)
                     {
                         propertiesDepth = -1;
@@ -658,11 +685,19 @@ public class WorkflowBpmnService
                     org.flowable.bpmn.model.ThrowEvent.class, true)))
                 if (WorkflowMessageThrowContract.readConfig(event) != null)
                     WorkflowMessageThrowContract.compile(validationModel, process, event);
+        return engineValidationIssues(validationModel, document.bpmnXml(), issues);
+    }
+
+    private List<WorkflowBpmnValidationIssue> engineValidationIssues(
+            org.flowable.bpmn.model.BpmnModel validationModel, String xml,
+            List<WorkflowBpmnValidationIssue> existing)
+    {
+        List<WorkflowBpmnValidationIssue> issues = new ArrayList<>(existing);
         List<ValidationError> errors = repositoryService.validateProcess(validationModel);
         if (errors == null) throw invalidBpmn("流程规则校验服务未返回结果", null);
         for (ValidationError error : errors)
         {
-            if (error.isWarning() || isControlledAuthorSendTaskValidationError(document.bpmnModel(), error)) continue;
+            if (error.isWarning() || isControlledAuthorSendTaskValidationError(validationModel, error)) continue;
             boolean messageThrowCapability = "flowable-throw-event-invalid-eventdefinition".equals(error.getProblem())
                     && issues.stream().anyMatch(issue -> "BPMN_MESSAGE_THROW_NOT_EXECUTABLE".equals(issue.code())
                             && java.util.Objects.equals(issue.elementId(), error.getActivityId()));
@@ -679,9 +714,9 @@ public class WorkflowBpmnService
                 default -> "该元素未通过流程执行规则校验，请检查节点配置及连线";
             };
             issues.add(new WorkflowBpmnValidationIssue(code, "ERROR",
-                    diagnosticElementId(document.bpmnXml(), error.getActivityId()), message, error.getProcessDefinitionId()));
+                    diagnosticElementId(xml, error.getActivityId()), message, error.getProcessDefinitionId()));
         }
-        Map<String, String> processIds = diagnosticProcessIds(document.bpmnXml());
+        Map<String, String> processIds = diagnosticProcessIds(xml);
         return issues.stream().map(issue -> new WorkflowBpmnValidationIssue(issue.code(), issue.severity(),
                 issue.elementId(), issue.message(), issue.processId() != null ? issue.processId()
                         : processIds.get(issue.elementId()))).toList();
@@ -2091,7 +2126,7 @@ public class WorkflowBpmnService
         {
             throw invalidBpmn("流程包含重复的节点表单引用", null);
         }
-        String embeddedContent = WorkflowEmbeddedFormConverter.convert(properties,
+        var embeddedContent = WorkflowEmbeddedFormConverter.convert(properties,
                 formFieldExtensionService::resolveForAuthor);
         references.add(new WorkflowBpmnFormReference(WorkflowFormSourceType.EMBEDDED,
                 null, formKeyForSnapshot, normalizedNodeKey,

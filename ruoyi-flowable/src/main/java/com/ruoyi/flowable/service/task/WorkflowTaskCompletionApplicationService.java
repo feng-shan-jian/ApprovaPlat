@@ -189,7 +189,7 @@ public class WorkflowTaskCompletionApplicationService
             Map<String, Object> projectedVariables)
     {
         Set<String> readableNames = variableValidator.readableFieldNames(
-                preparation.formSnapshot().getContent());
+                preparation.formRoot());
         Map<String, Object> currentValues = preparation.localScope()
                 ? taskService.getVariablesLocal(task.getId(), readableNames)
                 : runtimeService.getVariables(task.getProcessInstanceId(), readableNames);
@@ -237,7 +237,7 @@ public class WorkflowTaskCompletionApplicationService
                 throw requestValidator.invalidArgument();
             }
             return new CompletionPreparation(context, userTask, Map.of(), Map.of(),
-                    isTaskLocal(userTask), null);
+                    isTaskLocal(userTask), null, null);
         }
         List<WfDeployForm> snapshots = artifactRepository.selectForms(
                 context.definition().getDeploymentId());
@@ -256,10 +256,10 @@ public class WorkflowTaskCompletionApplicationService
         {
             throw dataError();
         }
-        WorkflowValidatedStartVariables validated = variableValidator.validateForStart(
-                matched.get(0).getContent(), variables);
+        var root = variableValidator.parseTrustedSnapshot(matched.get(0).getContent());
+        WorkflowValidatedStartVariables validated = variableValidator.validateForStart(root, variables);
         return new CompletionPreparation(context, userTask, validated.variables(),
-                validated.attachmentIdsByField(), isTaskLocal(userTask), matched.get(0));
+                validated.attachmentIdsByField(), isTaskLocal(userTask), matched.get(0), root);
     }
 
     /**
@@ -325,7 +325,7 @@ public class WorkflowTaskCompletionApplicationService
     private record CompletionPreparation(WorkflowTaskBpmnSnapshot bpmnContext,
             UserTask currentUserTask, Map<String, Object> values,
             Map<String, List<String>> attachmentIdsByField,
-            boolean localScope, WfDeployForm formSnapshot)
+            boolean localScope, WfDeployForm formSnapshot, tools.jackson.databind.JsonNode formRoot)
     {
         /**
          * 复制变量和两层附件集合，禁止后续步骤替换已校验事实。

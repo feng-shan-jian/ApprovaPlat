@@ -86,6 +86,9 @@ export function createExtensionEventSlaDomain(context) {
   } = context
   // 正式目录和加载状态归扩展领域持有，主组件只负责展示和生命周期触发。
   const extensionOptions = ref([])
+  const extensionKinds = new Map()
+  const resourceLoadErrors = ref({})
+  let resourceRequest = 0
   const businessListenerOptions = computed(() => (
     extensionOptions.value.filter(option => option.extensionType === 'JAVA')
   ))
@@ -99,10 +102,7 @@ export function createExtensionEventSlaDomain(context) {
   const slaLoading = ref(false)
   const {
     readSlaConfig, normalizeAndValidateSlaConfig, slaConfigToProperties
-  } = createUserTaskSlaDomain({
-    readSlaCalendarOptions: () => slaCalendarOptions.value,
-    readEscalationEventOptions: () => escalationEventOptions.value
-  })
+  } = createUserTaskSlaDomain()
   const autoCopyTriggerOptions = computed(() => {
     if (propertyFlags.value.process) return [{ label: '流程完成', value: 'PROCESS_COMPLETED' }]
     if (isType('bpmn:UserTask')) {
@@ -317,48 +317,35 @@ export function createExtensionEventSlaDomain(context) {
    * @returns {Promise<void>} 请求完成后更新扩展选项；失败时不提供本地伪造回退。
    */
   async function loadExtensionOptions() {
-    extensionLoading.value = true
-    eventCodeLoading.value = true
-    slaLoading.value = true
-    try {
-      const [javaResponse, celResponse, httpResponse, sqlResponse, formFieldResponse, endpointResponse, sqlSourceResponse, errorCodeResponse, escalationCodeResponse, calendarResponse] = await Promise.all([
-        listJavaExtensionOptions(),
-        listCelExtensionOptions(),
-        listHttpExtensionOptions(),
-        listSqlExtensionOptions(),
-        listFormFieldExtensionOptions(),
-        listConnectorEndpointOptions(),
-        listSqlDataSourceOptions(),
-        listBpmnEventCodeOptions('ERROR'),
-        listBpmnEventCodeOptions('ESCALATION'),
-        listEnabledSlaCalendars()
-      ])
-      extensionOptions.value = [
-        ...(Array.isArray(javaResponse?.data) ? javaResponse.data : []),
-        ...(Array.isArray(celResponse?.data) ? celResponse.data : []),
-        ...(Array.isArray(httpResponse?.data) ? httpResponse.data : []),
-        ...(Array.isArray(sqlResponse?.data) ? sqlResponse.data : [])
-      ]
-      formFieldOptions.value = Array.isArray(formFieldResponse?.data) ? formFieldResponse.data : []
-      connectorEndpoints.value = Array.isArray(endpointResponse?.data) ? endpointResponse.data : []
-      sqlDataSources.value = Array.isArray(sqlSourceResponse?.data) ? sqlSourceResponse.data : []
-      errorEventOptions.value = Array.isArray(errorCodeResponse?.data) ? errorCodeResponse.data : []
-      escalationEventOptions.value = Array.isArray(escalationCodeResponse?.data) ? escalationCodeResponse.data : []
-      slaCalendarOptions.value = Array.isArray(calendarResponse?.data) ? calendarResponse.data : []
-    } catch (error) {
-      extensionOptions.value = []
-      formFieldOptions.value = []
-      connectorEndpoints.value = []
-      sqlDataSources.value = []
-      errorEventOptions.value = []
-      escalationEventOptions.value = []
-      slaCalendarOptions.value = []
-      emit('error', error)
-    } finally {
-      extensionLoading.value = false
-      eventCodeLoading.value = false
-      slaLoading.value = false
-    }
+    const request = ++resourceRequest
+    extensionLoading.value = eventCodeLoading.value = slaLoading.value = true
+    const resources = [
+      ['Java 扩展', listJavaExtensionOptions, value => extensionKinds.set('JAVA', value)],
+      ['CEL 扩展', listCelExtensionOptions, value => extensionKinds.set('CEL', value)],
+      ['HTTP 扩展', listHttpExtensionOptions, value => extensionKinds.set('HTTP', value)],
+      ['SQL 扩展', listSqlExtensionOptions, value => extensionKinds.set('SQL', value)],
+      ['表单字段', listFormFieldExtensionOptions, value => { formFieldOptions.value = value }],
+      ['HTTP 端点', listConnectorEndpointOptions, value => { connectorEndpoints.value = value }],
+      ['SQL 数据源', listSqlDataSourceOptions, value => { sqlDataSources.value = value }],
+      ['错误编码', () => listBpmnEventCodeOptions('ERROR'), value => { errorEventOptions.value = value }],
+      ['升级编码', () => listBpmnEventCodeOptions('ESCALATION'), value => { escalationEventOptions.value = value }],
+      ['SLA 日历', listEnabledSlaCalendars, value => { slaCalendarOptions.value = value }]
+    ]
+    await Promise.all(resources.map(async ([name, load, apply]) => {
+      try {
+        const response = await load()
+        if (request !== resourceRequest) return
+        if (!Array.isArray(response?.data)) throw new Error(`${name}目录响应格式不正确`)
+        apply(response.data)
+        delete resourceLoadErrors.value[name]
+        extensionOptions.value = [...extensionKinds.values()].flat()
+      } catch (error) {
+        if (request !== resourceRequest) return
+        resourceLoadErrors.value[name] = `${name}目录加载失败，已保留已有配置，请刷新引用资源重试`
+        emit('error', error)
+      }
+    }))
+    if (request === resourceRequest) extensionLoading.value = eventCodeLoading.value = slaLoading.value = false
   }
 
   /**
@@ -482,22 +469,6 @@ export function createExtensionEventSlaDomain(context) {
         return { type, values }
       })
       return { id, trigger, recipients }
-    })
-  }
-
-  /**
-   * 对指定 Process/UserTask 的已保存自动抄送属性执行完整本地部署前门禁。
-   * @param {object} businessObject 当前待校验的 BPMN 业务对象。
-   * @param {Array<string>} allowedTriggers 该元素生命周期允许的触发时机。
-   * @returns {void} 未配置时直接返回，非法 JSON、位置或表单字段引用会抛出稳定错误。
-   */
-  function validateAutoCopyRulesForElement(businessObject, allowedTriggers) {
-    const properties = readExtensionProperties(businessObject)
-    if (!properties.some(item => item.name === AUTO_COPY_PROPERTY_NAME)) return
-    const rules = readAutoCopyRules(properties, true)
-    normalizeAndValidateAutoCopyRules(rules, {
-      allowedTriggers,
-      validateFormFields: false
     })
   }
 
@@ -745,42 +716,6 @@ export function createExtensionEventSlaDomain(context) {
     }
   }
 
-  /**
-   * 从错误或升级事件定义读取最终作者编码。
-   * @param {object} eventDefinition bpmn-js 事件定义对象。
-   * @returns {string} 根引用中的稳定业务编码。
-   */
-  function readEventReference(eventDefinition) {
-    const config = eventReferenceConfig(eventDefinition?.$type)
-    const reference = config ? eventDefinition?.[config.referenceProperty] : undefined
-    return String(reference?.[config?.keyProperty] || reference?.name || '').trim()
-  }
-
-  function validateUserTaskExtensions(task) {
-    const slaConfig = readSlaConfig(readExtensionProperties(task))
-    try {
-      if (slaConfig.enabled) normalizeAndValidateSlaConfig(slaConfig)
-      validateAutoCopyRulesForElement(task, ['NODE_ARRIVED', 'NODE_COMPLETED'])
-    } catch (error) {
-      return error.message
-    }
-    return ''
-  }
-
-  function validateBusinessBoundary(boundary) {
-    const definition = boundary.eventDefinitions?.[0]
-    const businessType = definition?.$type
-    if (!['bpmn:ErrorEventDefinition', 'bpmn:EscalationEventDefinition'].includes(businessType)) return ''
-    const allowed = businessType === 'bpmn:ErrorEventDefinition' ? errorEventOptions.value : escalationEventOptions.value
-    if (!allowed.some(option => option.eventCode === readEventReference(definition))) {
-      return '错误或升级边界必须选择已启用的正式业务编码'
-    }
-    if (businessType === 'bpmn:ErrorEventDefinition' && boundary.cancelActivity === false) {
-      return '错误边界必须使用中断语义'
-    }
-    return ''
-  }
-
   function loadExtensionState(businessObject) {
     const controlledTaskExtension = readControlledTaskExtension(businessObject)
     propertyState.extensionKey = controlledTaskExtension.extensionKey
@@ -798,13 +733,12 @@ export function createExtensionEventSlaDomain(context) {
 
   return {
     loadExtensionState,
-    validateUserTaskExtensions,
-    validateBusinessBoundary,
     extensionOptions,
     businessListenerOptions,
     connectorEndpoints,
     sqlDataSources,
     extensionLoading,
+    resourceLoadErrors,
     errorEventOptions,
     escalationEventOptions,
     eventCodeLoading,
@@ -815,11 +749,11 @@ export function createExtensionEventSlaDomain(context) {
     updateControlledTask,
     updateControlledTaskSelection,
     loadExtensionOptions,
+    invalidateResourceRequests: () => { resourceRequest += 1 },
     updateBusinessExecutionListeners,
     updateBusinessTaskListeners,
     updateExtensionProperties,
     normalizeAndValidateAutoCopyRules,
-    validateAutoCopyRulesForElement,
     updateAutoCopyRules,
     findDefinitions,
     updateEventProperties,

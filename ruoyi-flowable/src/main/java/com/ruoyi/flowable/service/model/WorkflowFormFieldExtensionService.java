@@ -7,10 +7,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.springframework.stereotype.Service;
-import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -29,7 +26,6 @@ public class WorkflowFormFieldExtensionService
     private static final int MAX_JSON_NODES = 10000;
 
     private final WorkflowExtensionRegistryService registryService;
-    private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
      * 创建自定义表单字段服务。
@@ -68,30 +64,14 @@ public class WorkflowFormFieldExtensionService
 
     /**
      * 冻结内嵌表单正文并生成统一的字段级部署扩展快照。
-     * @param content String，保存阶段生成且已通过表单验证的 JSON
+     * @param root JsonNode，本次请求已经解释的内嵌表单
      * @param processKey String，表单节点所属可执行流程标识
      * @param nodeKey String，表单所在开始事件或用户任务标识
-     * @return WorkflowFrozenFormContent，冻结正文及可写入统一部署台账的精确版本快照
+     * @return List&lt;WfDeployExtensionSnapshot&gt;，精确版本快照；元数据直接写入节点表单
      */
-    public WorkflowFrozenFormContent freezeEmbeddedContentWithSnapshots(String content,
+    public List<WfDeployExtensionSnapshot> freezeEmbeddedContentWithSnapshots(JsonNode root,
             String processKey, String nodeKey)
     {
-        String normalizedProcessKey = requireText(processKey, "自定义表单字段所属流程标识不能为空");
-        String normalizedNodeKey = requireText(nodeKey, "自定义表单字段所属节点标识不能为空");
-        return freeze(content, normalizedProcessKey, normalizedNodeKey);
-    }
-
-    /**
-     * 遍历表单协议，覆盖作者版本元数据，并生成字段级部署快照。
-     * @param content String，待冻结的正式表单 JSON
-     * @param processKey String，已经规范化的流程标识
-     * @param nodeKey String，已经规范化的表单节点标识
-     * @return WorkflowFrozenFormContent，冻结正文与字段级快照
-     */
-    private WorkflowFrozenFormContent freeze(String content, String processKey,
-            String nodeKey)
-    {
-        ObjectNode root = parseObject(content);
         Deque<FormJsonNode> pending = new ArrayDeque<>();
         pending.push(new FormJsonNode(root, null));
         List<WfDeployExtensionSnapshot> snapshots = new ArrayList<>();
@@ -153,14 +133,7 @@ public class WorkflowFormFieldExtensionService
             object.properties().forEach(entry -> pending.push(
                     new FormJsonNode(entry.getValue(), inheritedFieldId)));
         }
-        try
-        {
-            return new WorkflowFrozenFormContent(objectMapper.writeValueAsString(root), snapshots);
-        }
-        catch (JacksonException exception)
-        {
-            throw new ServiceException("自定义表单字段部署快照序列化失败", HttpStatus.ERROR);
-        }
+        return List.copyOf(snapshots);
     }
 
     /**
@@ -203,28 +176,6 @@ public class WorkflowFormFieldExtensionService
             throw new ServiceException(message, HttpStatus.BAD_REQUEST);
         }
         return value.trim();
-    }
-
-    /**
-     * 严格解析表单 JSON 根对象。
-     * @param content String，待冻结的内嵌表单 JSON
-     * @return ObjectNode，可安全更新版本元数据的根对象
-     */
-    private ObjectNode parseObject(String content)
-    {
-        try
-        {
-            JsonNode root = objectMapper.readTree(content);
-            if (root == null || !root.isObject())
-            {
-                throw new ServiceException("内嵌表单内容必须是 JSON 对象", HttpStatus.BAD_REQUEST);
-            }
-            return (ObjectNode) root;
-        }
-        catch (JacksonException exception)
-        {
-            throw new ServiceException("内嵌表单内容不是合法 JSON", HttpStatus.BAD_REQUEST);
-        }
     }
 
     /**

@@ -1,10 +1,8 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowableListener;
 import org.flowable.bpmn.model.ImplementationType;
@@ -28,20 +26,13 @@ public class WorkflowRuntimeTaskListenerCompiler
             Set.of("create", "assignment", "complete");
 
     /**
-     * 复制所有任务生成阶段的输出，并为每个可执行 UserTask 追加唯一固定监听器集合。
+     * 为前序阶段生成的每个可执行 UserTask 追加唯一固定监听器集合。
      *
-     * @param sourceBpmn byte[]，已经完成扩展、循环、条件、参与者、DMN、CallActivity 和 SLA 编译的 BPMN
-     * @return byte[]，只在最终部署资源中包含内部监听器的 UTF-8 BPMN
+     * @param model BpmnModel，全部任务生成完成后的执行模型
+     * @return void，修改本次执行模型
      */
-    public byte[] compile(byte[] sourceBpmn)
+    public void compile(BpmnModel model)
     {
-        if (sourceBpmn == null || sourceBpmn.length == 0)
-        {
-            throw new ServiceException("运行时任务监听器编译源不能为空", HttpStatus.BAD_REQUEST);
-        }
-        BpmnXMLConverter converter = new BpmnXMLConverter();
-        BpmnModel model = converter.convertToBpmnModel(
-                () -> new ByteArrayInputStream(sourceBpmn), true, true);
         for (Process process : model.getProcesses())
         {
             if (!process.isExecutable())
@@ -54,12 +45,6 @@ public class WorkflowRuntimeTaskListenerCompiler
                 injectSystemListeners(task);
             }
         }
-        byte[] compiled = converter.convertToXML(model);
-        if (compiled == null || compiled.length == 0)
-        {
-            throw new ServiceException("运行时任务监听器编译失败", HttpStatus.ERROR);
-        }
-        return WorkflowBpmnXmlPreserver.restore(compiled, sourceBpmn);
     }
 
     /**

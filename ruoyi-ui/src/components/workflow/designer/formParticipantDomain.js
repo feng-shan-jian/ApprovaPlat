@@ -140,7 +140,7 @@ export function createFormParticipantDomain(context) {
   const participantFormFieldOptions = computed(() => resolveParticipantFormFieldOptions())
   const {
     readParticipantRule, normalizeParticipantRule,
-    participantRulePropertyItems, validateParticipantProperties
+    participantRulePropertyItems
   } = createParticipantRuleDomain({
     readParticipantFormFieldOptions: () => participantFormFieldOptions.value,
     readAllFlowableProperties
@@ -949,64 +949,6 @@ export function createFormParticipantDomain(context) {
   }
 
   /**
-   * 判断 BPMN 元素是否包含至少一个 Flowable 内嵌表单字段。
-   * @param {object} businessObject StartEvent 或 UserTask 的 moddle 业务对象。
-   * @returns {boolean} extensionElements 中存在 FormProperty 时返回 true。
-   */
-  function hasEmbeddedFormFields(businessObject) {
-    return (businessObject?.extensionElements?.values || [])
-      .some(value => value?.$type === 'flowable:FormProperty')
-  }
-
-  /**
-   * 校验用户任务的受控 handler 只以固定并行会签/或签组合出现，并阻断近似方法名。
-   * @param {object} task bpmn-js 用户任务业务对象。
-   * @returns {string} 空串表示通过，否则返回稳定业务错误。
-   */
-  function validateUserTaskMultiInstance(task) {
-    const configuredProperties = readAllFlowableProperties(task)
-      .filter(item => MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.has(item.name))
-    const loop = task.loopCharacteristics
-    if (!loop) return configuredProperties.length ? '指定多实例身份属性缺少会签或或签循环' : ''
-    const collection = String(loop.get?.('flowable:collection') || '').trim()
-    const configuredCollection = collection === CONFIGURED_MULTI_INSTANCE_COLLECTION
-    const controlledCollection = collection === CONTROLLED_MULTI_INSTANCE_COLLECTION
-      || collection === START_MULTI_INSTANCE_COLLECTION
-      || configuredCollection
-    if (!controlledCollection) {
-      return configuredProperties.length ? '指定多实例身份属性与集合表达式不一致' : ''
-    }
-    const condition = String(loop.completionCondition?.body || '').trim()
-    const approvedCondition = [
-      CONTROLLED_MULTI_INSTANCE_ALL_CONDITION,
-      CONTROLLED_MULTI_INSTANCE_ANY_CONDITION
-    ].includes(condition)
-    const parentIsMainProcess = task.$parent?.$type === 'bpmn:Process'
-    const hasBoundaryEvents = Array.isArray(task.boundaryEventRefs) && task.boundaryEventRefs.length > 0
-    if (loop.isSequential
-      || loop.get('flowable:elementVariable') !== CONTROLLED_MULTI_INSTANCE_ELEMENT_VARIABLE
-      || task.get('flowable:assignee')
-      || task.get('flowable:candidateUsers')
-      || task.get('flowable:candidateGroups')
-      || loop.loopCardinality
-      || !approvedCondition
-      || task.isForCompensation
-      || hasBoundaryEvents
-      || !parentIsMainProcess) {
-      return '受控多实例配置不符合会签或或签契约'
-    }
-    if (configuredCollection) {
-      if (configuredProperties.length !== MULTI_INSTANCE_IDENTITY_PROPERTY_NAMES.size
-        || !readConfiguredMultiInstanceIdentity(task)) {
-        return '指定会签或或签身份配置不完整或不合法'
-      }
-    } else if (configuredProperties.length) {
-      return '指定多实例身份属性与集合表达式不一致'
-    }
-    return ''
-  }
-
-  /**
    * 释放身份远程检索防抖计时器。
    * @returns {void} 组件卸载后不再向页面发出目录请求。
    */
@@ -1103,9 +1045,6 @@ export function createFormParticipantDomain(context) {
     updateParticipantRule,
     updateUserTaskProperties,
     updateMultiInstance,
-    validateParticipantProperties,
-    hasEmbeddedFormFields,
-    validateUserTaskMultiInstance,
     disposeIdentitySearchTimers,
     validatePendingMultiInstanceSelection
   }

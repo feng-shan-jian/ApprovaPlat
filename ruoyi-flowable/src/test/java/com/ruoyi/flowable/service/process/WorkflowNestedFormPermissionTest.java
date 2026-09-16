@@ -37,7 +37,7 @@ class WorkflowNestedFormPermissionTest
         assertThatThrownBy(() -> variables.validatePatch(content, Map.of("secret", "forged"), Map.of()))
                 .hasMessageContaining("只读");
         assertThat(root.toString()).isEqualTo(original);
-        assertThat(variables.describeControlledLoopFields(content)).isEmpty();
+        assertThat(variables.describeControlledLoopFields(templates.validate(content))).isEmpty();
     }
 
     @Test
@@ -45,7 +45,7 @@ class WorkflowNestedFormPermissionTest
     {
         String content = form(row(false, true, false, row(false, true, true, field("locked", true, true, ""))));
         assertThat(variables.validateForStart(content, Map.of()).variables()).isEmpty();
-        assertThat(variables.readableFieldNames(content)).containsExactly("locked");
+        assertThat(variables.readableFieldNames(new WorkflowFormTemplateValidator().validate(content))).containsExactly("locked");
         Map<String, JsonNode> previous = Map.of("locked", StringNode.valueOf("previous"));
         assertThat(variables.validatePatch(content, Map.of(), previous).variables()).isEmpty();
         assertThat(previous.get("locked").stringValue()).isEqualTo("previous");
@@ -57,11 +57,11 @@ class WorkflowNestedFormPermissionTest
     void invisibleSystemResultsRetainServerWriteEligibilityAndTypeChecks()
     {
         String content = form(row(true, false, false, field("result", false, false, ",\"workflowSystemWritable\":true")));
-        assertThat(variables.systemOutputFieldNames(content)).containsExactly("result");
-        variables.validateSystemOutputPatch(content, Map.of("result", "server result"));
-        assertThatThrownBy(() -> variables.validateSystemOutputPatch(content, Map.of("result", 42)))
+        assertThat(variables.systemOutputFields(templates.validate(content)).keySet()).containsExactly("result");
+        variables.validateSystemOutputPatch(variables.systemOutputFields(templates.validate(content)), Map.of("result", "server result"));
+        assertThatThrownBy(() -> variables.validateSystemOutputPatch(variables.systemOutputFields(templates.validate(content)), Map.of("result", 42)))
                 .isInstanceOf(ServiceException.class);
-        assertThat(variables.readableFieldNames(content)).isEmpty();
+        assertThat(variables.readableFieldNames(new WorkflowFormTemplateValidator().validate(content))).isEmpty();
         assertThatThrownBy(() -> variables.validateForStart(content, Map.of("result", "forged")))
                 .hasMessageContaining("只读");
     }
@@ -73,9 +73,9 @@ class WorkflowNestedFormPermissionTest
         WorkflowBpmnFormReference reference = new WorkflowBpmnFormReference(WorkflowFormSourceType.TEMPLATE,
                 1L, "form:1", "task", "Task", null, "nested", WorkflowFormFieldPermissionMode.REQUIRED,
                 Map.of("locked", WorkflowFormFieldPermissionMode.REQUIRED));
-        String frozen = WorkflowNodeFormPermissionSnapshot.apply(content, reference, templates);
+        String frozen = WorkflowNodeFormPermissionSnapshot.apply(templates.validate(content), reference).toString();
         assertThat(variables.validateForStart(frozen, Map.of()).variables()).isEmpty();
-        assertThat(variables.readableFieldNames(frozen)).containsExactly("locked");
+        assertThat(variables.readableFieldNames(new WorkflowFormTemplateValidator().validate(frozen))).containsExactly("locked");
         assertThat(templates.validate(frozen).path("fields").get(0).path("workflowWritable").booleanValue()).isFalse();
         assertThat(templates.validate(content).path("fields").get(0).path("children").get(0).path("required").booleanValue()).isFalse();
     }
@@ -91,6 +91,19 @@ class WorkflowNestedFormPermissionTest
         assertThatThrownBy(() -> templates.validate(form(row(true, false, false,
                 field("bad", false, true, "").replace("\"workflowWritable\":true,", "")))))
                 .hasMessageContaining("完整节点权限");
+    }
+
+    @Test
+    void systemOutputProjectionRejectsDuplicateAndReservedSnapshotFields()
+    {
+        String output = field("result", false, false, ",\"workflowSystemWritable\":true");
+        for (String fields : java.util.List.of(output + "," + output,
+                output.replace("result", "initiator"), output.replace("result", "constructor")))
+        {
+            var root = templates.validate(form(fields));
+            assertThatThrownBy(() -> variables.systemOutputFields(root))
+                    .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getCode()).isEqualTo(500));
+        }
     }
 
     private String form(String fields) { return "{\"fields\":[" + fields + "]}"; }

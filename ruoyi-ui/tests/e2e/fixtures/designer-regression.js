@@ -9,12 +9,14 @@ import ProcessDesigner from '../../../src/components/workflow/ProcessDesigner.vu
 // Only the host and directory data are fixtures. The component, controls, Modeler,
 // command stack, element.changed reload and XML export are the production code.
 window.mountDesignerRegression = ({ xml, forms = [] }) => {
-  const state = reactive({ xml, errors: [] })
+  const state = reactive({ xml, errors: [], saves: [], saving: false })
   const app = createApp({
     render: () => h(ProcessDesigner, {
       modelValue: state.xml,
       model: { modelKey: 'designerRegression', modelName: '业务配置回归' },
       forms,
+      saving: state.saving,
+      onSave: value => { state.saves.push(value); state.saving = true },
       'onUpdate:modelValue': value => { state.xml = value },
       onError: error => { state.errors.push(error.message) }
     })

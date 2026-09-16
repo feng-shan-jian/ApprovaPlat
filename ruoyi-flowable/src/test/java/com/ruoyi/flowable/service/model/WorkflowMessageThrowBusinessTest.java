@@ -217,25 +217,29 @@ class WorkflowMessageThrowBusinessTest
             });
     }
 
-    private WorkflowPreparedExtensionDeployment prepare(String config)
+    private CompiledMessage prepare(String config)
     {
         return prepare(config, model(config));
     }
 
-    private WorkflowPreparedExtensionDeployment prepare(String config, String xml)
+    private CompiledMessage prepare(String config, String xml)
     {
         var document = bpmn.validateForSave(xml.getBytes(StandardCharsets.UTF_8));
         assertThat(bpmn.authorValidationIssues(document)).isEmpty();
-        var prepared = compiler.prepare(document, "1");
+        var executable = bpmn.executionModel(document);
+        var snapshots = compiler.prepare(document, executable, "1");
         assertThat(document.bpmnXml()).isEqualTo(xml);
         assertThat(document.bpmnModel().getFlowElement("originalThrow")).isInstanceOf(org.flowable.bpmn.model.ThrowEvent.class);
         assertThat(WorkflowMessageThrowContract.readConfig(document.bpmnModel().getFlowElement("originalThrow"))).isEqualTo(config);
-        frozen = JsonMapper.shared().readTree(prepared.snapshots().get(0).getConfigJson());
-        var participants = new WorkflowParticipantRuleDeploymentService(null)
-                .prepare(document, prepared.compiledBpmn(), null, "1");
-        bpmn.validateCompiledDeployment(participants.compiledBpmn());
-        return new WorkflowPreparedExtensionDeployment(participants.compiledBpmn(), prepared.snapshots());
+        frozen = JsonMapper.shared().readTree(snapshots.get(0).getConfigJson());
+        new WorkflowParticipantRuleDeploymentService(null).prepare(document, executable, null, "1");
+        byte[] compiled = WorkflowBpmnXmlPreserver.write(executable, document.bpmnXml());
+        assertThat(bpmn.executionValidationIssues(compiled)).isEmpty();
+        return new CompiledMessage(compiled, snapshots);
     }
+
+    private record CompiledMessage(byte[] compiledBpmn,
+            List<com.ruoyi.flowable.domain.WfDeployExtensionSnapshot> snapshots) { }
 
     private <T> T mapper(Class<T> type)
     {

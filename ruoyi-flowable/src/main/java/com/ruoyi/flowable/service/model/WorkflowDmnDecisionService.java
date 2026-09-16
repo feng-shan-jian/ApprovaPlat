@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -11,22 +10,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import javax.xml.XMLConstants;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.transform.OutputKeys;
-import javax.xml.transform.TransformerFactory;
-import javax.xml.transform.dom.DOMSource;
-import javax.xml.transform.stream.StreamResult;
 import org.flowable.bpmn.model.BusinessRuleTask;
 import org.flowable.bpmn.model.Process;
 import org.flowable.dmn.api.DmnDecision;
 import org.flowable.dmn.api.DmnDeployment;
 import org.flowable.dmn.api.DmnRepositoryService;
 import org.springframework.stereotype.Service;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
@@ -34,7 +23,6 @@ import com.ruoyi.flowable.domain.dto.WorkflowDmnDeploymentRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowDmnDecisionView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
-import com.ruoyi.flowable.service.model.WorkflowPreparedDmnDeployment.DecisionSource;
 
 /**
  * Flowable DMN 决策目录、BusinessRuleTask 编译、版本冻结和删除保护服务。
@@ -42,9 +30,6 @@ import com.ruoyi.flowable.service.model.WorkflowPreparedDmnDeployment.DecisionSo
 @Service
 public class WorkflowDmnDecisionService
 {
-    private static final String BPMN_NS = "http://www.omg.org/spec/BPMN/20100524/MODEL";
-    private static final String FLOWABLE_NS = "http://flowable.org/bpmn";
-    private static final String XMLNS_NS = "http://www.w3.org/2000/xmlns/";
     private static final int MAX_DMN_BYTES = 2 * 1024 * 1024;
 
     private final WorkflowEngineOperations engineOperations;
@@ -170,26 +155,18 @@ public class WorkflowDmnDecisionService
 
     /**
      * 把 BusinessRuleTask 编译为 Flowable 原生 DMN ServiceTask，并固定所有来源资源。
-     * @param compiledBpmn byte[]，扩展注册表已编译的 BPMN 资源
-     * @return WorkflowPreparedDmnDeployment，最终 BPMN 与精确决策来源
+     * @param model BpmnModel，本次部署独占的执行模型
+     * @return List&lt;DecisionSource&gt;，精确决策来源
      */
-    public WorkflowPreparedDmnDeployment prepare(byte[] compiledBpmn)
+    public List<DecisionSource> prepare(org.flowable.bpmn.model.BpmnModel model)
     {
         try
         {
-            Document document = parseSecure(compiledBpmn);
-            NodeList tasks = document.getElementsByTagNameNS(BPMN_NS, "businessRuleTask");
-            List<Element> taskElements = new ArrayList<>(tasks.getLength());
-            for (int index = 0; index < tasks.getLength(); index++)
-            {
-                taskElements.add((Element) tasks.item(index));
-            }
             List<DecisionSource> sources = new ArrayList<>();
-            for (Element task : taskElements)
-            {
-                sources.add(compileTask(document, task));
-            }
-            return new WorkflowPreparedDmnDeployment(writeXml(document), sources);
+            for (Process process : model.getProcesses())
+                for (BusinessRuleTask task : List.copyOf(process.findFlowElementsOfType(BusinessRuleTask.class, true)))
+                    sources.add(compileTask(process, task));
+            return List.copyOf(sources);
         }
         catch (ServiceException exception)
         {
@@ -206,17 +183,17 @@ public class WorkflowDmnDecisionService
     /**
      * 创建绑定流程 deploymentId 的 DMN 子部署并返回不可变快照。
      * @param processDeploymentId String，新流程部署主键
-     * @param prepared WorkflowPreparedDmnDeployment，部署前固定的决策来源
+     * @param sources List&lt;DecisionSource&gt;，部署前固定的决策来源
      * @param actorUserId String，可信部署操作人正式用户主键
      * @return List&lt;WfDeployDmnSnapshot&gt;，已绑定父部署和冻结决策的快照
      */
     public List<WfDeployDmnSnapshot> freezeSnapshots(String processDeploymentId,
-            WorkflowPreparedDmnDeployment prepared,
+            List<DecisionSource> sources,
             String actorUserId)
     {
         Map<String, DmnDeployment> frozenByResource = new LinkedHashMap<>();
         List<WfDeployDmnSnapshot> snapshots = new ArrayList<>();
-        for (DecisionSource source : prepared.sources())
+        for (DecisionSource source : sources)
         {
             DmnDeployment frozen = frozenByResource.computeIfAbsent(source.resourceGroupKey(), key ->
                     dmnRepositoryService.createDeployment()
@@ -307,85 +284,46 @@ public class WorkflowDmnDecisionService
     }
 
     /**
-     * 编译单个 DOM BusinessRuleTask 并读取其精确 DMN 来源。
-     * @param document Document，待修改的 BPMN DOM
-     * @param task Element，业务规则任务元素
+     * 替换执行模型中的 BusinessRuleTask 并读取其精确 DMN 来源。
+     * @param process Process，执行任务所属流程
+     * @param task BusinessRuleTask，执行模型中的业务规则任务
      * @return DecisionSource，任务与精确决策资源的绑定
      * @throws IOException DMN 资源读取失败
      */
-    private DecisionSource compileTask(Document document, Element task) throws IOException
+    private DecisionSource compileTask(Process process, BusinessRuleTask task) throws IOException
     {
-        String decisionId = task.getAttributeNS(FLOWABLE_NS, "rules").trim();
-        if (decisionId.isEmpty() || decisionId.contains(",")
-                || task.hasAttributeNS(FLOWABLE_NS, "class")
-                || task.hasAttributeNS(FLOWABLE_NS, "ruleVariablesInput")
-                || task.hasAttributeNS(FLOWABLE_NS, "exclude"))
-        {
-            throw new ServiceException("业务规则任务只允许一个精确 DMN 决策引用", HttpStatus.BAD_REQUEST);
-        }
-        DmnDecision decision = dmnRepositoryService.getDecision(decisionId);
-        if (decision == null)
-        {
-            throw new ServiceException("业务规则任务引用的 DMN 决策不存在", HttpStatus.CONFLICT);
-        }
-        requireSourceDecision(decision);
+        DmnDecision decision = requireSelectedDecision(task);
         byte[] resource;
-        try (InputStream stream = dmnRepositoryService.getDmnResource(decisionId))
+        try (InputStream stream = dmnRepositoryService.getDmnResource(decision.getId()))
         {
             resource = readBounded(stream);
         }
-        String processKey = findProcessKey(task);
-        String elementId = requireText(task.getAttribute("id"), "业务规则任务标识不能为空");
-        rejectAuthorFields(task);
-        Element compiled = (Element) document.renameNode(task, BPMN_NS, "serviceTask");
-        compiled.removeAttributeNS(FLOWABLE_NS, "rules");
-        compiled.removeAttributeNS(FLOWABLE_NS, "class");
-        compiled.removeAttributeNS(FLOWABLE_NS, "ruleVariablesInput");
-        compiled.removeAttributeNS(FLOWABLE_NS, "exclude");
-        compiled.setAttributeNS(FLOWABLE_NS, "flowable:type", "dmn");
-        ensureFlowableNamespace(document);
-        Element extensionElements = directChild(compiled, "extensionElements");
-        if (extensionElements == null)
-        {
-            extensionElements = document.createElementNS(BPMN_NS, "extensionElements");
-            compiled.insertBefore(extensionElements, compiled.getFirstChild());
-        }
-        appendField(document, extensionElements, "decisionTableReferenceKey", decision.getKey());
-        appendField(document, extensionElements, "sameDeployment", "true");
-        return new DecisionSource(processKey, elementId, decision.getId(), decision.getKey(),
+        var compiled = new org.flowable.bpmn.model.ServiceTask();
+        compiled.setValues(task);
+        compiled.setIncomingFlows(task.getIncomingFlows());
+        compiled.setOutgoingFlows(task.getOutgoingFlows());
+        compiled.setResultVariableName(task.getResultVariableName());
+        compiled.setType("dmn");
+        compiled.getFieldExtensions().add(dmnField("decisionTableReferenceKey", decision.getKey()));
+        compiled.getFieldExtensions().add(dmnField("sameDeployment", "true"));
+        var container = process.findParent(task);
+        container.removeFlowElement(task.getId());
+        container.addFlowElement(compiled);
+        // 对象引用需同步，后续编译器直接遍历本模型，不再依靠 XML 重读重建拓扑。
+        compiled.getIncomingFlows().forEach(flow -> flow.setTargetFlowElement(compiled));
+        compiled.getOutgoingFlows().forEach(flow -> flow.setSourceFlowElement(compiled));
+        compiled.getBoundaryEvents().forEach(boundary -> boundary.setAttachedToRef(compiled));
+        return new DecisionSource(process.getId(), task.getId(), decision.getId(), decision.getKey(),
                 decision.getVersion(), decision.getDeploymentId(), decision.getResourceName(),
                 WorkflowExtensionChecksum.sha256(new String(resource, StandardCharsets.UTF_8)), resource);
     }
 
-    /**
-     * 拒绝作者在 BusinessRuleTask 中预置 Flowable Field 覆盖编译器字段。
-     * @param task Element，作者业务规则任务
-     * @return void，存在任意 Flowable Field 时拒绝
-     */
-    private void rejectAuthorFields(Element task)
+    private org.flowable.bpmn.model.FieldExtension dmnField(String name, String value)
     {
-        NodeList fields = task.getElementsByTagNameNS(FLOWABLE_NS, "field");
-        if (fields.getLength() > 0)
-        {
-            throw new ServiceException("业务规则任务不允许作者字段注入", HttpStatus.BAD_REQUEST);
-        }
-    }
-
-    /**
-     * 向编译后的 DMN ServiceTask 写入固定字符串字段。
-     * @param document Document，BPMN DOM
-     * @param extensionElements Element，扩展元素容器
-     * @param name String，Flowable DmnActivityBehavior 字段名
-     * @param value String，固定字符串值
-     * @return void，字段追加到容器尾部
-     */
-    private void appendField(Document document, Element extensionElements,
-            String name, String value)
-    {
-        Element field = document.createElementNS(FLOWABLE_NS, "flowable:field");
-        field.setAttribute("name", name);
-        field.setAttribute("stringValue", value);
-        extensionElements.appendChild(field);
+        var field = new org.flowable.bpmn.model.FieldExtension();
+        field.setFieldName(name);
+        field.setStringValue(value);
+        return field;
     }
 
     /**
@@ -456,97 +394,6 @@ public class WorkflowDmnDecisionService
         {
             throw new ServiceException("业务规则任务不能引用流程内部冻结的 DMN 决策",
                     HttpStatus.CONFLICT);
-        }
-    }
-
-    /**
-     * 使用禁用外部实体的 DOM 工厂解析 BPMN。
-     * @param bytes byte[]，扩展编译器输出的 BPMN
-     * @return Document，命名空间感知 DOM
-     * @throws Exception XML 配置或解析失败
-     */
-    private Document parseSecure(byte[] bytes) throws Exception
-    {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(true);
-        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-        return factory.newDocumentBuilder().parse(new ByteArrayInputStream(bytes));
-    }
-
-    /**
-     * 将编译 DOM 序列化为 UTF-8 BPMN。
-     * @param document Document，已转换任务的 DOM
-     * @return byte[]，不带缩进漂移的可执行 BPMN
-     * @throws Exception Transformer 初始化或输出失败
-     */
-    private byte[] writeXml(Document document) throws Exception
-    {
-        TransformerFactory factory = TransformerFactory.newInstance();
-        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "");
-        var transformer = factory.newTransformer();
-        transformer.setOutputProperty(OutputKeys.ENCODING, StandardCharsets.UTF_8.name());
-        transformer.setOutputProperty(OutputKeys.INDENT, "no");
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        transformer.transform(new DOMSource(document), new StreamResult(output));
-        return output.toByteArray();
-    }
-
-    /**
-     * 查找任务所属可执行流程 key。
-     * @param task Element，BPMN 任务元素
-     * @return String，最近 process 祖先的 id
-     */
-    private String findProcessKey(Element task)
-    {
-        Node current = task.getParentNode();
-        while (current instanceof Element element)
-        {
-            if (BPMN_NS.equals(element.getNamespaceURI()) && "process".equals(element.getLocalName()))
-            {
-                return requireText(element.getAttribute("id"), "DMN 任务所属流程标识不能为空");
-            }
-            current = current.getParentNode();
-        }
-        throw new ServiceException("DMN 任务不属于任何流程", HttpStatus.BAD_REQUEST);
-    }
-
-    /**
-     * 查找指定名称的直接 BPMN 子元素。
-     * @param parent Element，父元素
-     * @param localName String，BPMN 局部名称
-     * @return Element，找不到时返回 null
-     */
-    private Element directChild(Element parent, String localName)
-    {
-        for (Node child = parent.getFirstChild(); child != null; child = child.getNextSibling())
-        {
-            if (child instanceof Element element && BPMN_NS.equals(element.getNamespaceURI())
-                    && localName.equals(element.getLocalName()))
-            {
-                return element;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * 确保编译文档声明 Flowable 命名空间。
-     * @param document Document，BPMN 文档
-     * @return void，缺失时在根元素补充声明
-     */
-    private void ensureFlowableNamespace(Document document)
-    {
-        Element root = document.getDocumentElement();
-        if (!root.hasAttributeNS(XMLNS_NS, "flowable"))
-        {
-            root.setAttributeNS(XMLNS_NS, "xmlns:flowable", FLOWABLE_NS);
         }
     }
 
@@ -622,5 +469,38 @@ public class WorkflowDmnDecisionService
     private boolean hasText(String value)
     {
         return value != null && !value.isBlank();
+    }
+    /**
+     * 一个 BusinessRuleTask 的冻结输入。
+     * @param processKey String，流程 key
+     * @param elementId String，元素 id
+     * @param sourceDecisionId String，设计选择的精确 decision id
+     * @param decisionKey String，稳定决策 key
+     * @param decisionVersion int，来源版本
+     * @param sourceDeploymentId String，来源 DMN 部署
+     * @param resourceName String，来源资源名
+     * @param resourceChecksum String，来源 XML 摘要
+     * @param resourceBytes byte[]，来源 XML 字节
+     */
+    public record DecisionSource(String processKey, String elementId,
+            String sourceDecisionId, String decisionKey, int decisionVersion,
+            String sourceDeploymentId, String resourceName, String resourceChecksum,
+            byte[] resourceBytes)
+    {
+        /**
+         * 防御性复制 DMN XML。
+         * 构造后保存独立副本
+         */
+        public DecisionSource
+        {
+            resourceBytes = java.util.Objects.requireNonNull(resourceBytes, "DMN XML 不能为空").clone();
+        }
+
+        /** @return byte[]，DMN XML 的独立副本。 */
+        @Override
+        public byte[] resourceBytes() { return resourceBytes.clone(); }
+
+        /** @return String，跨元素复用同一来源资源的稳定分组键。 */
+        public String resourceGroupKey() { return sourceDeploymentId + "\u0000" + resourceName; }
     }
 }

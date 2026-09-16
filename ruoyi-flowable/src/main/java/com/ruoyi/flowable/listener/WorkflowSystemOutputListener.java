@@ -37,12 +37,14 @@ public class WorkflowSystemOutputListener implements ExecutionListener
         for (var form : artifacts.selectForms(definition.getDeploymentId()))
         {
             if (process.getFlowElement(form.getNodeKey(), true) == null) continue;
+            var root = variables.parseTrustedSnapshot(form.getContent());
+            var fields = variables.systemOutputFields(root);
             Map<String, Object> patch = new LinkedHashMap<>();
-            for (String name : variables.systemOutputFieldNames(form.getContent()))
+            for (String name : fields.keySet())
                 if (targets.contains(name)) patch.put(name, execution.getVariable(name));
             if (!patch.isEmpty())
             {
-                variables.validateSystemOutputPatch(form.getContent(), patch);
+                variables.validateSystemOutputPatch(fields, patch);
                 checked = true;
             }
         }

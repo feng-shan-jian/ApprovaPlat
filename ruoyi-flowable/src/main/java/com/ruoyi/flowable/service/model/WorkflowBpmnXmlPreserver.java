@@ -15,7 +15,7 @@ import org.w3c.dom.Element;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.constant.HttpStatus;
 
-/** 保留 Flowable 转换器不写回的标准引用和根定义；不恢复任何可执行节点或作者扩展配置。 */
+/** 保留转换器不写回的标准引用、根定义和表单权限标志，不恢复作者执行配置。 */
 final class WorkflowBpmnXmlPreserver
 {
     private static final String BPMN = "http://www.omg.org/spec/BPMN/20100524/MODEL";
@@ -23,41 +23,13 @@ final class WorkflowBpmnXmlPreserver
             "dataStore", "property", "error", "escalation", "group", "textAnnotation", "association");
     private WorkflowBpmnXmlPreserver() { }
 
-    /**
-     * 旧设计器允许给数据关联填写显示名称，但 BPMN DataAssociation 不允许无命名空间 name。
-     * 仅执行副本移除这项显示元数据，关联、引用及作者资源保持不变；数据传递仍由正式映射负责。
-     */
-    static byte[] executableSource(byte[] source)
+    static byte[] write(org.flowable.bpmn.model.BpmnModel model, String authorXml)
     {
-        try
-        {
-            Document document = parse(source);
-            boolean changed = false;
-            for (String type : Set.of("dataInputAssociation", "dataOutputAssociation"))
-            {
-                var associations = document.getElementsByTagNameNS(BPMN, type);
-                for (int i = 0; i < associations.getLength(); i++)
-                {
-                    Element association = (Element) associations.item(i);
-                    if (association.hasAttribute("name"))
-                    {
-                        association.removeAttribute("name");
-                        changed = true;
-                    }
-                }
-            }
-            return changed ? serialize(document) : source;
-        }
-        catch (Exception exception)
-        {
-            ServiceException failure = new ServiceException("BPMN 数据关联编译失败", HttpStatus.ERROR)
-                    .setSubCode("BPMN_DATA_ASSOCIATION_COMPILATION_FAILED");
-            failure.initCause(exception);
-            throw failure;
-        }
+        byte[] converted = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(model);
+        return restore(converted, authorXml.getBytes(java.nio.charset.StandardCharsets.UTF_8), model);
     }
 
-    static byte[] restore(byte[] converted, byte[] source)
+    private static byte[] restore(byte[] converted, byte[] source, org.flowable.bpmn.model.BpmnModel model)
     {
         try
         {
@@ -73,7 +45,9 @@ final class WorkflowBpmnXmlPreserver
                 Element parent = (Element) node.getParentNode();
                 Element targetParent = parent == original.getDocumentElement() ? target.getDocumentElement()
                         : targets.get(parent.getAttribute("id"));
-                if (targetParent == null || !parent.getLocalName().equals(targetParent.getLocalName()))
+                if (targetParent == null || (!parent.getLocalName().equals(targetParent.getLocalName())
+                        && !("serviceTask".equals(targetParent.getLocalName())
+                                && Set.of("sendTask", "businessRuleTask", "intermediateThrowEvent", "endEvent").contains(parent.getLocalName()))))
                     throw new IllegalStateException("BPMN preserved element scope missing: " + parent.getLocalName() + "/" + parent.getAttribute("id"));
                 Element copy = (Element) target.importNode(node, true);
                 // definitions 的 rootElement 必须位于 BPMNDiagram 前，继续满足官方 XSD 顺序。
@@ -99,6 +73,39 @@ final class WorkflowBpmnXmlPreserver
                 else targetParent.appendChild(copy);
                 targets.put(copy.getAttribute("id"), copy);
                 changed = true;
+            }
+            // Flowable 8 不输出 escalation 根定义；包含 SLA 本次生成的新引用。
+            for (var escalation : model.getEscalations())
+            {
+                if (targets.containsKey(escalation.getId())) continue;
+                Element root = target.createElementNS(BPMN, "escalation");
+                root.setAttribute("id", escalation.getId());
+                if (escalation.getName() != null) root.setAttribute("name", escalation.getName());
+                root.setAttribute("escalationCode", escalation.getEscalationCode());
+                target.getDocumentElement().insertBefore(root, target.getDocumentElement().getFirstChild());
+                changed = true;
+            }
+            // Flowable FormProperty 不写回平台的系统输出权限；按节点和字段双重身份保留。
+            var formProperties = original.getElementsByTagNameNS("http://flowable.org/bpmn", "formProperty");
+            for (int i = 0; i < formProperties.getLength(); i++)
+            {
+                Element property = (Element) formProperties.item(i);
+                if (!property.hasAttribute(WorkflowSystemOutputContract.ATTRIBUTE)) continue;
+                Element owner = (Element) property.getParentNode().getParentNode();
+                Element targetOwner = targets.get(owner.getAttribute("id"));
+                if (targetOwner == null) throw new IllegalStateException("Form owner lost during compilation");
+                var targetProperties = targetOwner.getElementsByTagNameNS("http://flowable.org/bpmn", "formProperty");
+                boolean found = false;
+                for (int j = 0; j < targetProperties.getLength(); j++)
+                {
+                    Element field = (Element) targetProperties.item(j);
+                    if (!property.getAttribute("id").equals(field.getAttribute("id"))) continue;
+                    field.setAttribute(WorkflowSystemOutputContract.ATTRIBUTE,
+                            property.getAttribute(WorkflowSystemOutputContract.ATTRIBUTE));
+                    found = changed = true;
+                    break;
+                }
+                if (!found) throw new IllegalStateException("Form field lost during compilation");
             }
             if (!changed) return converted;
             return serialize(target);

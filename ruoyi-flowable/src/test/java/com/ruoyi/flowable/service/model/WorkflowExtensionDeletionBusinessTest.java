@@ -167,7 +167,11 @@ class WorkflowExtensionDeletionBusinessTest
     void referencedVersionIsRejectedImmediatelyWithoutReadingLaterCorruptResource()
     {
         long id = create(true);
+        var clock = support.processEngine().getProcessEngineConfiguration().getClock();
+        clock.setCurrentTime(new java.util.Date(1000));
         persist(mapper.selectVersionIds(id).get(0));
+        // “较晚”由真实部署时间确定，避免同毫秒时随机部署 ID 改变资源顺序。
+        clock.setCurrentTime(new java.util.Date(2000));
         corrupt("{broken", "[]");
         clearReads();
         assertThatThrownBy(() -> registry.checkDeletion(id)).isInstanceOf(ServiceException.class)

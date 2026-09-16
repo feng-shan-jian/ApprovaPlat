@@ -8,9 +8,6 @@ import java.util.regex.Pattern;
 import java.util.function.Function;
 import org.flowable.bpmn.model.FormProperty;
 import org.flowable.bpmn.model.FormValue;
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
@@ -46,8 +43,8 @@ public final class WorkflowEmbeddedFormConverter
             "assignee", "nrOfInstances", "nrOfActiveInstances",
             "nrOfCompletedInstances", "loopCounter", "_FLOWABLE_SKIP_EXPRESSION_ENABLED");
 
-    /** 仅序列化静态 JSON 节点，不启用类型信息或动态代码能力。 */
-    private static final ObjectMapper MAPPER = JsonMapper.shared();
+    private static final com.ruoyi.flowable.service.WorkflowFormTemplateValidator TEMPLATE_VALIDATOR =
+            new com.ruoyi.flowable.service.WorkflowFormTemplateValidator();
 
     /**
      * 禁止实例化纯静态转换器。
@@ -60,9 +57,9 @@ public final class WorkflowEmbeddedFormConverter
      * 将 BPMN FormProperty 列表转换为当前正式表单 JSON。
      *
      * @param properties List&lt;FormProperty&gt;，Flowable 安全解析后的内嵌表单字段
-     * @return String，可通过 WorkflowFormTemplateValidator 的确定性表单 JSON
+     * @return ObjectNode，已解释的内嵌作者表单根节点
      */
-    public static String convert(List<FormProperty> properties)
+    public static ObjectNode convert(List<FormProperty> properties)
     {
         return convert(properties, extensionKey ->
         {
@@ -74,9 +71,9 @@ public final class WorkflowEmbeddedFormConverter
      * 将 BPMN FormProperty 列表转换为正式表单 JSON，并解析受控自定义字段版本。
      * @param properties List&lt;FormProperty&gt;，Flowable 安全解析后的内嵌表单字段
      * @param customFieldResolver Function&lt;String, WorkflowExtensionOptionView&gt;，按稳定键查询正式字段版本
-     * @return String，可通过 WorkflowFormTemplateValidator 的确定性表单 JSON
+     * @return ObjectNode，已解释的内嵌作者表单根节点
      */
-    public static String convert(List<FormProperty> properties,
+    public static ObjectNode convert(List<FormProperty> properties,
             Function<String, WorkflowExtensionOptionView> customFieldResolver)
     {
         if (properties == null || properties.isEmpty() || properties.size() > MAX_FIELDS)
@@ -95,16 +92,13 @@ public final class WorkflowEmbeddedFormConverter
         {
             fields.add(convertProperty(property, variables, customFieldResolver));
         }
-        try
-        {
-            return MAPPER.writeValueAsString(root);
-        }
-        catch (JacksonException exception)
-        {
-            ServiceException failure = invalid("BPMN 内嵌表单转换失败");
-            failure.initCause(exception);
-            throw failure;
-        }
+        // 大小约束属于即将冻结的 JSON 协议；只计量输出，不再把文本交给其他消费者重读。
+        if (root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                > com.ruoyi.flowable.service.WorkflowFormTemplateValidator.MAX_CONTENT_BYTES)
+            throw invalid("表单内容不能超过1 MiB");
+        // 标签和枚举文本仍来自作者；只检查这些静态内容，不重验代码生成的组件协议。
+        TEMPLATE_VALIDATOR.validateStaticContent(root);
+        return root;
     }
 
     /**
@@ -135,6 +129,8 @@ public final class WorkflowEmbeddedFormConverter
             throw invalid("BPMN 内嵌表单变量名非法、重复或属于保留变量");
         }
         String label = firstText(property.getName(), variable);
+        if (property.isRequired() && property.isWriteable() && !property.isReadable())
+            throw invalid("表单组件节点权限组合不合法");
         if (label.length() > 255)
         {
             throw invalid("BPMN 内嵌表单字段名称过长");

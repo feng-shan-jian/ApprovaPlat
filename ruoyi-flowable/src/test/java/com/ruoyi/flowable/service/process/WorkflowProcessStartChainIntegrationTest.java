@@ -117,7 +117,7 @@ class WorkflowProcessStartChainIntegrationTest
                 Map.of("requester", com.ruoyi.flowable.service.model.WorkflowFormFieldPermissionMode.REQUIRED,
                         "evidence", com.ruoyi.flowable.service.model.WorkflowFormFieldPermissionMode.EDITABLE));
         String frozen = com.ruoyi.flowable.service.model.WorkflowNodeFormPermissionSnapshot.apply(
-                root.toString(), reference, new WorkflowFormTemplateValidator());
+                new WorkflowFormTemplateValidator().validate(root.toString()), reference).toString();
         artifacts.forms().get(0).setContent(frozen);
         artifactRepository.persist(deployment.getId(), artifacts);
         when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(definition.getKey()))
@@ -152,7 +152,7 @@ class WorkflowProcessStartChainIntegrationTest
                 () -> validator.validateForStart("{", Map.of()),
                 () -> validator.validateForDraft("{", Map.of()),
                 () -> validator.validatePatch("{", Map.of(), Map.of()),
-                () -> validator.describeControlledLoopFields("{"));
+                () -> validator.parseTrustedSnapshot("{"));
         for (ThrowingCallable entry : trustedEntries)
         {
             assertThatThrownBy(entry).isInstanceOfSatisfying(ServiceException.class, exception ->
@@ -163,7 +163,7 @@ class WorkflowProcessStartChainIntegrationTest
             });
         }
         for (ThrowingCallable entry : List.<ThrowingCallable>of(
-                () -> validator.readableFieldNames("{"),
+                () -> validator.readableFieldNames(new WorkflowFormTemplateValidator().validate("{")),
                 () -> validator.normalizeCallActivityStartValues("{", Map.of())))
         {
             assertThatThrownBy(entry).isInstanceOfSatisfying(ServiceException.class, exception ->

@@ -65,6 +65,26 @@ function createDomainContext(overrides = {}) {
   }
 }
 
+test('SQL 目录失败保留错误编码、SLA 与合法编辑，相关目录刷新可恢复', async () => {
+  let failed = true
+  const errors = []
+  const domain = createExtensionEventSlaDomain(createDomainContext({
+    listSqlDataSourceOptions: async () => { if (failed) throw new Error('SQL 目录离线'); return { data: [{ dataSourceKey: 'ledger' }] } },
+    listBpmnEventCodeOptions: async type => ({ data: [{ eventCode: type === 'ERROR' ? 'BUSINESS_ERROR' : 'OVERDUE' }] }),
+    listEnabledSlaCalendars: async () => ({ data: [{ calendarKey: 'workday' }] }),
+    emit: (event, error) => errors.push(error.message)
+  }))
+  await domain.loadExtensionOptions()
+  assert.deepEqual(domain.errorEventOptions.value, [{ eventCode: 'BUSINESS_ERROR' }])
+  assert.deepEqual(domain.slaCalendarOptions.value, [{ calendarKey: 'workday' }])
+  assert.equal(domain.normalizeAndValidateSlaConfig({ ...createDefaultSlaConfig(), enabled: true,
+    calendarKey: 'workday', escalationEventCode: 'OVERDUE' }).calendarKey, 'workday')
+  assert.equal(errors.length, 1)
+  failed = false
+  await domain.loadExtensionOptions()
+  assert.deepEqual(domain.sqlDataSources.value, [{ dataSourceKey: 'ledger' }])
+})
+
 test('各业务目录只消费同一次后端投影，选择节点不重新推演原始模板', async () => {
   const process = { $type: 'bpmn:Process', id: 'main' }
   const task = { $type: 'bpmn:UserTask', id: 'task', $parent: process }
@@ -414,10 +434,7 @@ test('扩展事件与 SLA 领域独立校验自动抄送契约', () => {
     escalationUserId: '',
     escalationEventCode: ''
   })
-  const slaDomain = createUserTaskSlaDomain({
-    readSlaCalendarOptions: () => [{ calendarKey: 'workday' }],
-    readEscalationEventOptions: () => [{ eventCode: 'ESCALATE' }]
-  })
+  const slaDomain = createUserTaskSlaDomain()
   const normalizedSla = slaDomain.normalizeAndValidateSlaConfig({
     enabled: true,
     calendarKey: ' workday ',
@@ -435,11 +452,50 @@ test('扩展事件与 SLA 领域独立校验自动抄送契约', () => {
   assert.equal(slaDomain.isBoundedSlaMinute(525600), true)
   assert.throws(() => slaDomain.normalizeAndValidateSlaConfig({
     ...normalizedSla,
-    calendarKey: 'disabled-calendar'
+    calendarKey: ''
   }), /审批 SLA 必须选择已启用的正式业务日历/)
   domain.updateSlaProperties(createDefaultSlaConfig())
   assert.deepEqual(persistedProperties.slice(0, 2), [
     { name: 'approva.conditionRule.config', value: 'keep' },
     { name: 'approva.autoCopyRules', value: 'old' }
   ])
+})
+
+test('目录刷新丢弃旧响应，卸载后的失败不覆盖成功选项或上报错误', async () => {
+  const pending = []
+  const errors = []
+  const domain = createExtensionEventSlaDomain(createDomainContext({
+    listJavaExtensionOptions: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    emit: (event, error) => errors.push(error.message)
+  }))
+  const oldLoad = domain.loadExtensionOptions()
+  const currentLoad = domain.loadExtensionOptions()
+  pending[1].resolve({ data: [{ extensionKey: 'current', extensionType: 'JAVA' }] })
+  await currentLoad
+  pending[0].resolve({ data: [{ extensionKey: 'obsolete', extensionType: 'JAVA' }] })
+  await oldLoad
+  assert.deepEqual(domain.extensionOptions.value, [{ extensionKey: 'current', extensionType: 'JAVA' }])
+  const unmountedLoad = domain.loadExtensionOptions()
+  domain.invalidateResourceRequests()
+  pending[2].reject(new Error('obsolete failure'))
+  await unmountedLoad
+  assert.deepEqual(errors, [])
+  assert.deepEqual(domain.resourceLoadErrors.value, {})
+  assert.deepEqual(domain.extensionOptions.value, [{ extensionKey: 'current', extensionType: 'JAVA' }])
+})
+
+test('未知目录响应不能清空已有成功目录，诊断刷新后恢复', async () => {
+  let data = [{ eventCode: 'EXISTING' }]
+  const domain = createExtensionEventSlaDomain(createDomainContext({
+    listBpmnEventCodeOptions: async () => ({ data })
+  }))
+  await domain.loadExtensionOptions()
+  data = null
+  await domain.loadExtensionOptions()
+  assert.deepEqual(domain.errorEventOptions.value, [{ eventCode: 'EXISTING' }])
+  assert.ok(domain.resourceLoadErrors.value['错误编码'])
+  data = [{ eventCode: 'REFRESHED' }]
+  await domain.loadExtensionOptions()
+  assert.deepEqual(domain.errorEventOptions.value, data)
+  assert.deepEqual(domain.resourceLoadErrors.value, {})
 })

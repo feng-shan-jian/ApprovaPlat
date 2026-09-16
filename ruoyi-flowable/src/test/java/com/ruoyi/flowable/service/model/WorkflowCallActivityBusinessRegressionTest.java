@@ -84,7 +84,7 @@ class WorkflowCallActivityBusinessRegressionTest
         template.setContent(form("parentValue"));
         when(templates.selectById(7L)).thenReturn(template);
         service = new WorkflowCallActivityReferenceService(repository, operations, identity,
-                participant, artifacts, templates, new WorkflowFormTemplateValidator());
+                participant, artifacts, new WorkflowFormTemplateValidator());
         var providers = new org.springframework.beans.factory.support.StaticListableBeanFactory();
         providers.addBean("definitions", new WorkflowProcessDefinitionQueryService(operations, repository, identity,
                 mock(com.ruoyi.flowable.authorization.WorkflowProcessAccessService.class),
@@ -121,7 +121,7 @@ class WorkflowCallActivityBusinessRegressionTest
         assertThat(options).singleElement().satisfies(option ->
                 assertThat(option.inputFields()).extracting(WorkflowCallActivityVariableView::name)
                         .containsExactly("childValue"));
-        assertThatCode(() -> service.validateAuthorReferences(
+        assertThatCode(() -> validateReferences(
                 parent(mode, output), ACTOR))
                 .doesNotThrowAnyException();
     }
@@ -175,7 +175,7 @@ class WorkflowCallActivityBusinessRegressionTest
         var variables = new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
         assertThat(variables.normalizeCallActivityStartValues(content, values)).containsExactlyInAnyOrderEntriesOf(values);
         Map<String, String> loopTypes = new LinkedHashMap<>();
-        variables.describeControlledLoopFields(content).forEach((name, field) -> loopTypes.put(name, field.kind().name()));
+        variables.describeControlledLoopFields(new WorkflowFormTemplateValidator().validate(content)).forEach((name, field) -> loopTypes.put(name, field.kind().name()));
         assertThat(loopTypes).containsExactlyInAnyOrderEntriesOf(scalarTypes);
         for (FieldExample example : examples)
         {
@@ -210,13 +210,15 @@ class WorkflowCallActivityBusinessRegressionTest
                 var call = (CallActivity) document.bpmnModel().getMainProcess().getFlowElement("call");
                 if (collectionInParent) call.setCalledElement("scalarChild");
                 byte[] bytes = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(document.bpmnModel());
-                assertThatThrownBy(() -> service.validateAuthorReferences(document, ACTOR))
+                var executable = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToBpmnModel(
+                        () -> new java.io.ByteArrayInputStream(bytes), true, true);
+                assertThatThrownBy(() -> validateReferences(document, ACTOR))
                         .isInstanceOfSatisfying(ServiceException.class, error ->
                         {
                             assertThat(error.getCode()).isEqualTo(400);
                             assertThat(error.getSubCode()).isEqualTo("CALL_MAPPING_FIELD_MISSING");
                         });
-                assertThatThrownBy(() -> service.prepare(bytes, document, ACTOR))
+                assertThatThrownBy(() -> service.prepare(executable, document, ACTOR, parentForms(document)))
                         .isInstanceOfSatisfying(ServiceException.class,
                                 error -> assertThat(error.getSubCode()).isEqualTo("CALL_MAPPING_FIELD_MISSING"));
                 assertThat(new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(document.bpmnModel())).isEqualTo(bytes);
@@ -242,7 +244,7 @@ class WorkflowCallActivityBusinessRegressionTest
             assertThat(option.status()).isEqualTo("UNAVAILABLE");
             assertThat(option.inputFields()).isEmpty();
         });
-        assertThatThrownBy(() -> service.validateAuthorReferences(parent(WorkflowFormFieldPermissionMode.EDITABLE, false), ACTOR))
+        assertThatThrownBy(() -> validateReferences(parent(WorkflowFormFieldPermissionMode.EDITABLE, false), ACTOR))
                 .isInstanceOfSatisfying(ServiceException.class, error ->
                         assertThat(error.getSubCode()).isEqualTo("CALL_ACTIVITY_CATALOG_DATA_INVALID"));
     }
@@ -275,10 +277,12 @@ class WorkflowCallActivityBusinessRegressionTest
         when(templates.selectById(7L)).thenReturn(template);
         deploy(Map.of("child", form("childValue", tag, Map.of("is-range", false))));
         var document = parent(WorkflowFormFieldPermissionMode.EDITABLE, false);
-        service.validateAuthorReferences(document, ACTOR);
+        validateReferences(document, ACTOR);
         byte[] bytes = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(document.bpmnModel());
-        var prepared = service.prepare(bytes, document, ACTOR);
-        String deployment = repository.createDeployment().addBytes("temporal-parent.bpmn20.xml", prepared.compiledBpmn()).deploy().getId();
+        var executable = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToBpmnModel(
+                () -> new java.io.ByteArrayInputStream(bytes), true, true);
+        var prepared = service.prepare(executable, document, ACTOR, parentForms(document));
+        String deployment = repository.createDeployment().addBytes("temporal-parent.bpmn20.xml", new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(executable)).deploy().getId();
         deployments.add(deployment);
         WfDeployForm snapshot = new WfDeployForm(); snapshot.setDeployId(deployment);
         snapshot.setNodeKey("parentStart"); snapshot.setNodeName("申请");
@@ -342,7 +346,7 @@ class WorkflowCallActivityBusinessRegressionTest
         // Isolated from the catalog assertion so a directory failure cannot hide this safety check.
         var document = parent(WorkflowFormFieldPermissionMode.EDITABLE, false);
         ((CallActivity) document.bpmnModel().getMainProcess().getFlowElement("call")).setCalledElement("broken");
-        assertThatThrownBy(() -> service.validateAuthorReferences(document, ACTOR))
+        assertThatThrownBy(() -> validateReferences(document, ACTOR))
                 .isInstanceOf(ServiceException.class);
     }
 
@@ -360,7 +364,7 @@ class WorkflowCallActivityBusinessRegressionTest
     void outputMappingMustRespectParentNodeWritePermission(WorkflowFormFieldPermissionMode mode)
     {
         deploy(Map.of("child", form("childValue")));
-        assertThatThrownBy(() -> service.validateAuthorReferences(parent(mode, true), ACTOR))
+        assertThatThrownBy(() -> validateReferences(parent(mode, true), ACTOR))
                 .isInstanceOf(ServiceException.class);
     }
 
@@ -368,7 +372,7 @@ class WorkflowCallActivityBusinessRegressionTest
     void hiddenParentFieldCannotBeMappedIntoChild()
     {
         deploy(Map.of("child", form("childValue")));
-        assertThatThrownBy(() -> service.validateAuthorReferences(
+        assertThatThrownBy(() -> validateReferences(
                 parent(WorkflowFormFieldPermissionMode.HIDDEN, false), ACTOR))
                 .isInstanceOf(ServiceException.class);
     }
@@ -389,8 +393,10 @@ class WorkflowCallActivityBusinessRegressionTest
             var input = new IOParameter(); input.setSource("parentValue"); input.setTarget("childValue"); call.getInParameters().add(input);
         }
         byte[] bytes = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(document.bpmnModel());
-        var prepared = service.prepare(bytes, document, ACTOR);
-        String deployment = repository.createDeployment().addBytes("system-parent.bpmn20.xml", prepared.compiledBpmn()).deploy().getId();
+        var executable = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToBpmnModel(
+                () -> new java.io.ByteArrayInputStream(bytes), true, true);
+        var prepared = service.prepare(executable, document, ACTOR, parentForms(document));
+        String deployment = repository.createDeployment().addBytes("system-parent.bpmn20.xml", new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(executable)).deploy().getId();
         deployments.add(deployment);
         WfDeployForm snapshot = new WfDeployForm(); snapshot.setDeployId(deployment); snapshot.setNodeKey("parentStart");
         snapshot.setNodeName("系统结果"); snapshot.setSourceType("TEMPLATE"); snapshot.setFormKey("key_7");
@@ -419,7 +425,7 @@ class WorkflowCallActivityBusinessRegressionTest
         var validator = new com.ruoyi.flowable.service.process.WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
         String frozenContent = content;
         assertThatThrownBy(() -> validator.validateForStart(frozenContent, Map.of("parentValue", 999))).isInstanceOf(ServiceException.class);
-        assertThat(validator.readableFieldNames(content).contains("parentValue")).isEqualTo(!hiddenContainer);
+        assertThat(validator.readableFieldNames(new WorkflowFormTemplateValidator().validate(content)).contains("parentValue")).isEqualTo(!hiddenContainer);
         // 模板后续改成可写不能放宽当前部署的不可变权限。
         template.setContent(form("parentValue"));
         assertThat(artifacts.selectForms(deployment).get(0).getContent()).isEqualTo(content);
@@ -431,7 +437,7 @@ class WorkflowCallActivityBusinessRegressionTest
         WfForm template = new WfForm(); template.setFormId(7L); template.setContent(nested(form("parentValue"), true));
         when(templates.selectById(7L)).thenReturn(template);
         deploy(Map.of("child", form("childValue")));
-        assertThatThrownBy(() -> service.validateAuthorReferences(parent(WorkflowFormFieldPermissionMode.EDITABLE, false), ACTOR))
+        assertThatThrownBy(() -> validateReferences(parent(WorkflowFormFieldPermissionMode.EDITABLE, false), ACTOR))
                 .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getSubCode()).isEqualTo("CALL_MAPPING_SOURCE_UNREADABLE"));
     }
 
@@ -439,7 +445,7 @@ class WorkflowCallActivityBusinessRegressionTest
     void readonlyChildContainerPreventsMappingUserInputIntoItsFields()
     {
         deploy(Map.of("child", nested(form("childValue"), false)));
-        assertThatThrownBy(() -> service.validateAuthorReferences(parent(WorkflowFormFieldPermissionMode.EDITABLE, false), ACTOR))
+        assertThatThrownBy(() -> validateReferences(parent(WorkflowFormFieldPermissionMode.EDITABLE, false), ACTOR))
                 .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getSubCode()).isEqualTo("CALL_MAPPING_TARGET_UNWRITABLE"));
     }
 
@@ -452,6 +458,21 @@ class WorkflowCallActivityBusinessRegressionTest
                 .put("workflowReadable", !hidden).put("workflowWritable", false);
         row.set("children", mapper.readTree(content).get("fields"));
         return root.toString();
+    }
+
+    private Map<String, tools.jackson.databind.JsonNode> parentForms(WorkflowBpmnDocument document)
+    {
+        Map<String, tools.jackson.databind.JsonNode> roots = new LinkedHashMap<>();
+        var validator = new WorkflowFormTemplateValidator();
+        for (var ref : document.formReferences())
+            roots.put(ref.nodeKey(), WorkflowNodeFormPermissionSnapshot.apply(
+                    validator.validate(templates.selectById(ref.formId()).getContent()), ref));
+        return roots;
+    }
+
+    private void validateReferences(WorkflowBpmnDocument document, WorkflowCurrentIdentity actor)
+    {
+        service.validateAuthorReferences(document, actor, parentForms(document));
     }
 
     private WorkflowBpmnDocument parent(WorkflowFormFieldPermissionMode mode, boolean output)

@@ -102,7 +102,7 @@ public class WorkflowFormTemplateValidator
         }
 
         // 先扫描整棵 JSON，避免危险键或协议藏在插槽、选项、样式等非组件字段中。
-        validateEntireJsonTree(root);
+        validateStaticContent(root);
         ComponentCounter counter = new ComponentCounter();
         validateComponents(fields, 1, counter);
         return root;
@@ -327,11 +327,11 @@ public class WorkflowFormTemplateValidator
     }
 
     /**
-     * 迭代扫描全部 JSON 节点，拒绝原型污染键、危险协议和异常节点规模。
-     * @param root JsonNode，表单 JSON 根节点
+     * 检查不可信静态内容的危险协议、键和规模；不重复判断转换器固定生成的组件结构。
+     * @param root JsonNode，模板或内嵌作者字段生成的静态内容
      * @return void，发现危险内容时抛出业务异常
      */
-    private void validateEntireJsonTree(JsonNode root)
+    public void validateStaticContent(JsonNode root)
     {
         Deque<JsonNode> pending = new ArrayDeque<>();
         pending.push(root);

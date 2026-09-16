@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -8,7 +7,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.ExclusiveGateway;
 import org.flowable.bpmn.model.FlowElement;
@@ -77,40 +75,24 @@ public class WorkflowConditionDeploymentService
     /**
      * 把受控作者规则编译为固定 Flowable 表达式并生成不可变数据库快照。
      * @param authorDocument WorkflowBpmnDocument，已通过作者门禁的 BPMN
-     * @param inputBpmn byte[]，前序编译阶段输出
+     * @param compiledModel BpmnModel，本次部署独占的执行模型
      * @param formSchemas List&lt;WorkflowControlledLoopFormSchema&gt;，冻结表单字段集合
      * @param actorUserId String，真实部署操作人用户主键
-     * @return WorkflowPreparedConditionDeployment，执行 BPMN 与待写快照
+     * @return List&lt;WfDeployConditionRule&gt;，当次待冻结的规则
      */
-    public WorkflowPreparedConditionDeployment prepare(WorkflowBpmnDocument authorDocument,
-            byte[] inputBpmn, List<WorkflowControlledLoopFormSchema> formSchemas,
+    public List<WfDeployConditionRule> prepare(WorkflowBpmnDocument authorDocument,
+            BpmnModel compiledModel, List<WorkflowControlledLoopFormSchema> formSchemas,
             String actorUserId)
     {
-        if (authorDocument == null || inputBpmn == null || inputBpmn.length == 0)
-        {
-            throw new ServiceException("条件分支部署输入不完整", HttpStatus.ERROR);
-        }
         List<CompiledBranch> branches = collectBranches(authorDocument.bpmnModel(),
                 buildProcessFieldIndex(formSchemas));
-        if (branches.isEmpty())
-        {
-            return new WorkflowPreparedConditionDeployment(inputBpmn, List.of());
-        }
-        BpmnXMLConverter converter = new BpmnXMLConverter();
-        BpmnModel compiledModel = converter.convertToBpmnModel(
-                () -> new ByteArrayInputStream(inputBpmn), true, true);
         List<WfDeployConditionRule> snapshots = new ArrayList<>(branches.size());
         for (CompiledBranch branch : branches)
         {
             compileBranch(compiledModel, branch);
             snapshots.add(toSnapshot(branch, actorUserId));
         }
-        byte[] compiled = converter.convertToXML(compiledModel);
-        if (compiled == null || compiled.length == 0)
-        {
-            throw new ServiceException("条件分支执行资源编译失败", HttpStatus.ERROR);
-        }
-        return new WorkflowPreparedConditionDeployment(WorkflowBpmnXmlPreserver.restore(compiled, inputBpmn), snapshots);
+        return List.copyOf(snapshots);
     }
 
     /**

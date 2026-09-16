@@ -252,7 +252,9 @@ class WorkflowDecisionTableBusinessTest
                       </process>
                     </definitions>
                     """.formatted(decision.getId());
-                var prepared = decisions.prepare(bpmn.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                var executable = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToBpmnModel(
+                        () -> new java.io.ByteArrayInputStream(bpmn.getBytes(java.nio.charset.StandardCharsets.UTF_8)), true, true);
+                var prepared = decisions.prepare(executable);
                 // 正式流程仓库的父部署和正式资源仓库引用用于验证删除保护。
                 var parent = support.processEngine().getRepositoryService().createDeployment()
                         .addString("metadata.txt", "decision freeze parent").deploy();

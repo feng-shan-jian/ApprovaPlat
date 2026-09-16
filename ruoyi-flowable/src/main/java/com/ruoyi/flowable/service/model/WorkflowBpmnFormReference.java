@@ -13,20 +13,20 @@ import java.util.Objects;
  * @param formKey String，BPMN 原始表单键或内嵌表单稳定键
  * @param nodeKey String，BPMN 节点主键
  * @param nodeName String，BPMN 节点名称，未配置时为空字符串
- * @param embeddedContent String，内嵌表单转换后的正式 JSON；模板来源为空
+ * @param embeddedContent JsonNode，本次请求解释的内嵌表单；模板来源为空
  * @param processKey String，表单节点所属可执行流程标识
  * @param defaultPermission WorkflowFormFieldPermissionMode，模板后续新增字段使用的节点默认策略；未配置策略时为空
  * @param fieldPermissions Map&lt;String,WorkflowFormFieldPermissionMode&gt;，正式模板字段的显式节点策略
  */
 public record WorkflowBpmnFormReference(WorkflowFormSourceType sourceType, Long formId,
-        String formKey, String nodeKey, String nodeName, String embeddedContent,
+        String formKey, String nodeKey, String nodeName, tools.jackson.databind.JsonNode embeddedContent,
         String processKey, WorkflowFormFieldPermissionMode defaultPermission,
         Map<String, WorkflowFormFieldPermissionMode> fieldPermissions)
 {
     /**
      * 创建已经校验的 BPMN 表单引用。
      *
-     * 构造后得到不可变表单引用
+     * 字段权限映射不可变；表单根节点只属于本次请求
      */
     public WorkflowBpmnFormReference
     {

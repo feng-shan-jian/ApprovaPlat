@@ -89,7 +89,8 @@ class WorkflowModelServiceUpdateIntegrationTest
                 .thenThrow(new ServiceException("业务资源不可用", code));
         var compiler = new WorkflowExtensionDeploymentService(registry, null, null, null);
         var exception = assertThrows(ServiceException.class,
-                () -> compiler.prepare(new WorkflowBpmnDocument(author, xml, List.of()), ACTOR_ID));
+                () -> compiler.prepare(new WorkflowBpmnDocument(author, xml, List.of()),
+                        new WorkflowBpmnService(null, null, null).executionModel(new WorkflowBpmnDocument(author, xml, List.of())), ACTOR_ID));
         assertEquals(code, exception.getCode());
         var issue = ((WorkflowBpmnValidationException) exception.getCause()).issues().get(0);
         assertEquals("send", issue.elementId());
@@ -118,7 +119,7 @@ class WorkflowModelServiceUpdateIntegrationTest
                 new WorkflowExtensionDeploymentService(null, null, null, null), new WorkflowControlledLoopDeploymentService(),
                 new WorkflowConditionDeploymentService(), new WorkflowParticipantRuleDeploymentService(identityMapper),
                 new WorkflowDmnDecisionService(operations, null, artifacts), extensionFields,
-                new WorkflowCallActivityReferenceService(repositoryService, operations, identities, null, artifacts, formMapper, templateValidator),
+                new WorkflowCallActivityReferenceService(repositoryService, operations, identities, null, artifacts, templateValidator),
                 new WorkflowTaskSlaDeploymentService(null, null, null), new WorkflowRuntimeTaskListenerCompiler());
         String xml = """
                 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="urn:preflight">
@@ -242,8 +243,8 @@ class WorkflowModelServiceUpdateIntegrationTest
         assertFalse(catalog.containsProcessField("catalog", "files"));
         assertFalse(catalog.containsProcessField("catalog", "hidden"));
         verify(formMapper, times(1)).selectById(UPDATED_FORM_ID);
-        // 模板读取一次；两个来源各做权限快照、循环字段和作者目录校验各一次。
-        verify(templateValidator, times(7)).validate(anyString());
+        // 同一正式模板仅解释一次；每个节点的权限投影直接供循环与目录读取。
+        verify(templateValidator, times(1)).validate(anyString());
         verify(templateValidator, times(2)).extractUserIdSourceFieldSignatures(any(JsonNode.class));
         verify(templateValidator, times(2)).extractVariableNames(any(JsonNode.class));
     }

@@ -4,11 +4,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 
 /**
  * 将 BPMN 节点字段权限编译进不可变部署表单快照。
@@ -28,29 +26,19 @@ public final class WorkflowNodeFormPermissionSnapshot
     /**
      * 把作者模型中的节点权限应用到本次部署读取的正式表单正文。
      *
-     * @param content String，当前部署事务读取并已校验的正式表单 JSON
+     * @param template JsonNode，本次请求已解释的正式模板根节点
      * @param reference WorkflowBpmnFormReference，包含节点默认策略和字段覆盖策略的 BPMN 引用
-     * @param templateValidator WorkflowFormTemplateValidator，正式表单结构与安全验证器
-     * @return String，只属于当前部署和当前节点的不可变权限表单 JSON
+     * @return JsonNode，只属于当前节点的权限投影
      */
-    public static String apply(String content, WorkflowBpmnFormReference reference,
-            WorkflowFormTemplateValidator templateValidator)
+    public static JsonNode apply(JsonNode template, WorkflowBpmnFormReference reference)
     {
-        if (reference == null || templateValidator == null)
-        {
-            throw dataError("节点表单权限快照参数不完整", null);
-        }
         if (reference.defaultPermission() == null)
         {
             throw invalid("绑定正式模板的节点必须配置批量默认字段权限");
         }
         try
         {
-            JsonNode parsed = JsonMapper.shared().readTree(content);
-            if (!(parsed instanceof ObjectNode root))
-            {
-                throw dataError("节点表单权限快照根结构异常", null);
-            }
+            ObjectNode root = (ObjectNode) template.deepCopy();
             LinkedHashMap<String, ObjectNode> fields = new LinkedHashMap<>();
             collectFields(root.path("fields"), fields);
             Set<String> staleFields = new java.util.LinkedHashSet<>(
@@ -72,9 +60,7 @@ public final class WorkflowNodeFormPermissionSnapshot
                 WorkflowFormFieldPermissionMode mode = reference.fieldPermissions().get(entry.getKey());
                 applyMode(entry.getValue(), mode);
             }
-            String frozen = JsonMapper.shared().writeValueAsString(root);
-            templateValidator.validate(frozen);
-            return frozen;
+            return root;
         }
         catch (ServiceException exception)
         {

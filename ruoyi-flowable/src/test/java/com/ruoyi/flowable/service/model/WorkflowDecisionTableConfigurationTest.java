@@ -65,9 +65,11 @@ class WorkflowDecisionTableConfigurationTest
                           </process>
                         </definitions>
                         """.formatted(decision.getId());
-                    var prepared = decisions.prepare(bpmn.getBytes(StandardCharsets.UTF_8));
+                    var executable = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToBpmnModel(
+                            () -> new java.io.ByteArrayInputStream(bpmn.getBytes(java.nio.charset.StandardCharsets.UTF_8)), true, true);
+                    var prepared = decisions.prepare(executable);
                     var deployment = new TransactionTemplate(tx).execute(status -> {
-                        var parent = process.getRepositoryService().createDeployment().addBytes("precision.bpmn20.xml", prepared.compiledBpmn()).deploy();
+                        var parent = process.getRepositoryService().createDeployment().addBytes("precision.bpmn20.xml", WorkflowBpmnXmlPreserver.write(executable, bpmn)).deploy();
                         var snapshots = decisions.freezeSnapshots(parent.getId(), prepared, "100");
                         artifacts.persist(parent.getId(), new WorkflowDeploymentArtifacts(List.of(), List.of(), List.of(), List.of(),
                                 List.of(), snapshots, List.of(), List.of()));

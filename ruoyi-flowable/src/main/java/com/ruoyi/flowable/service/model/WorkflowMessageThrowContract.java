@@ -81,6 +81,8 @@ public final class WorkflowMessageThrowContract
         if (container == null) throw invalid(event, "消息抛出缺少所属流程容器");
         ServiceTask task = new ServiceTask();
         task.setValues((FlowNode) event);
+        task.setIncomingFlows(event.getIncomingFlows());
+        task.setOutgoingFlows(event.getOutgoingFlows());
         for (ExtensionElement properties : task.getExtensionElements().getOrDefault("properties", List.of()))
         {
             var remaining = new ArrayList<>(properties.getChildElements().getOrDefault("property", List.of()));

@@ -1,14 +1,11 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayInputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
-import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.BoundaryEvent;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.EndEvent;
@@ -79,22 +76,14 @@ public class WorkflowTaskSlaDeploymentService
     }
 
     /**
-     * 复制上一阶段执行 BPMN，并把启用的 SLA 编译为真实边界定时器与动作拓扑。
-     * @param sourceBpmn byte[]，已经完成受控扩展、DMN 和调用活动编译的 BPMN
+     * 把启用的 SLA 编译为执行模型中的真实边界定时器与动作拓扑。
+     * @param model BpmnModel，本次部署独占的执行模型
      * @param actorUserId String，部署操作人正式用户主键
-     * @return WorkflowPreparedSlaDeployment，真实定时器资源和待持久化快照
+     * @return List&lt;WfDeployTaskSla&gt;，待持久化快照
      */
-    public WorkflowPreparedSlaDeployment prepare(byte[] sourceBpmn, String actorUserId)
+    public List<WfDeployTaskSla> prepare(BpmnModel model, String actorUserId)
     {
-        if (sourceBpmn == null || sourceBpmn.length == 0)
-        {
-            throw new ServiceException("审批 SLA 编译源不能为空", HttpStatus.BAD_REQUEST);
-        }
-        BpmnXMLConverter converter = new BpmnXMLConverter();
-        BpmnModel model = converter.convertToBpmnModel(
-                () -> new ByteArrayInputStream(sourceBpmn), true, true);
         List<WfDeployTaskSla> snapshots = new ArrayList<>();
-        List<Escalation> generatedEscalations = new ArrayList<>();
         for (Process process : model.getProcesses())
         {
             if (!process.isExecutable())
@@ -104,7 +93,8 @@ public class WorkflowTaskSlaDeploymentService
             // 先复制集合，编译过程中会向同一流程增加边界、服务任务、升级任务和顺序流。
             for (UserTask task : List.copyOf(process.findFlowElementsOfType(UserTask.class, true)))
             {
-                Map<String, String> values = readAndStripSlaProperties(task);
+                Map<String, String> values = readSlaProperties(task);
+                WorkflowBpmnProperties.remove(task, AUTHOR_PROPERTY_NAMES::contains);
                 if (!"true".equals(values.get("enabled")))
                 {
                     continue;
@@ -116,24 +106,35 @@ public class WorkflowTaskSlaDeploymentService
                 WfDeployTaskSla snapshot = createSnapshot(process, task, config, calendar,
                         actorUserId);
                 snapshots.add(snapshot);
-                compileTask(model, process, task, config, escalationCode, generatedEscalations);
+                compileTask(model, process, task, config, escalationCode);
             }
         }
-        byte[] compiled = converter.convertToXML(model);
-        compiled = preserveGeneratedEscalations(compiled, generatedEscalations);
-        if (compiled == null || compiled.length == 0)
-        {
-            throw new ServiceException("审批 SLA 执行资源编译失败", HttpStatus.ERROR);
-        }
-        return new WorkflowPreparedSlaDeployment(WorkflowBpmnXmlPreserver.restore(compiled, sourceBpmn), snapshots);
+        return List.copyOf(snapshots);
     }
 
     /**
-     * 读取并从执行副本剥离 SLA 保留属性，防止运行时依赖可变作者配置。
-     * @param task UserTask，待编译审批任务
-     * @return Map&lt;String,String&gt;，按逻辑字段名索引的作者值
+     * 保存时仅校验 SLA 作者配置和资源引用，不生成执行拓扑。
+     * @param model BpmnModel，本次作者模型
+     * @return void，引用失效或配置不合法时抛出业务异常
      */
-    private Map<String, String> readAndStripSlaProperties(UserTask task)
+    public void validateAuthorRules(BpmnModel model)
+    {
+        for (Process process : model.getProcesses())
+        {
+            if (!process.isExecutable()) continue;
+            for (UserTask task : process.findFlowElementsOfType(UserTask.class, true))
+            {
+                Map<String, String> values = readSlaProperties(task);
+                if (!"true".equals(values.get("enabled"))) continue;
+                SlaConfig config = validateConfig(values);
+                calendarService.requireEnabled(config.calendarKey());
+                if (config.escalationEventCode() != null)
+                    eventCodeService.requireEnabled("ESCALATION", config.escalationEventCode());
+            }
+        }
+    }
+
+    private Map<String, String> readSlaProperties(UserTask task)
     {
         Map<String, String> values = new HashMap<>();
         Map<String, List<ExtensionElement>> extensions = task.getExtensionElements();
@@ -151,37 +152,18 @@ public class WorkflowTaskSlaDeploymentService
             {
                 continue;
             }
-            List<ExtensionElement> retained = new ArrayList<>();
             for (ExtensionElement property : properties)
             {
                 String propertyName = property.getAttributeValue(null, "name");
                 String logicalName = PROPERTIES.entrySet().stream()
                         .filter(entry -> entry.getValue().equals(propertyName))
                         .map(Map.Entry::getKey).findFirst().orElse(null);
-                if (logicalName == null)
-                {
-                    retained.add(property);
-                }
-                else if (values.put(logicalName,
+                if (logicalName != null && values.put(logicalName,
                         trimToNull(property.getAttributeValue(null, "value"))) != null)
                 {
                     throw invalid("审批 SLA 作者属性不能重复");
                 }
             }
-            if (retained.isEmpty())
-            {
-                container.getChildElements().remove("property");
-            }
-            else
-            {
-                container.getChildElements().put("property", retained);
-            }
-        }
-        propertyContainers.removeIf(container -> container.getChildElements() == null
-                || container.getChildElements().isEmpty());
-        if (propertyContainers.isEmpty())
-        {
-            extensions.remove("properties");
         }
         return values;
     }
@@ -274,12 +256,10 @@ public class WorkflowTaskSlaDeploymentService
      * @param task UserTask，原审批任务
      * @param config SlaConfig，规范配置
      * @param escalationCode WfBpmnEventCode，可空受控升级目录
-     * @param generatedEscalations List&lt;Escalation&gt;，需要保留到 XML 根的生成定义
      * @return void，生成元素直接加入执行模型
      */
     private void compileTask(BpmnModel model, Process process, UserTask task,
-            SlaConfig config, WfBpmnEventCode escalationCode,
-            List<Escalation> generatedEscalations)
+            SlaConfig config, WfBpmnEventCode escalationCode)
     {
         for (int ordinal = 1; ordinal <= config.maxReminders(); ordinal++)
         {
@@ -324,7 +304,6 @@ public class WorkflowTaskSlaDeploymentService
             Escalation escalation = new Escalation(escalationId,
                     escalationCode.getEventName(), escalationCode.getEventCode());
             model.addEscalation(escalation);
-            generatedEscalations.add(escalation);
             EscalationEventDefinition definition = new EscalationEventDefinition();
             definition.setEscalationCode(escalationId);
             ThrowEvent throwEvent = new ThrowEvent();
@@ -445,51 +424,6 @@ public class WorkflowTaskSlaDeploymentService
             safeTaskId = safeTaskId.substring(0, 80);
         }
         return TIMER_ELEMENT_PREFIX + safeTaskId + "_" + suffix;
-    }
-
-    /**
-     * 补回 Flowable 8 XML 转换器未稳定写出的 definitions 级生成升级定义。
-     * @param converted byte[]，模型转换结果
-     * @param escalations List&lt;Escalation&gt;，本次生成定义
-     * @return byte[]，可部署且包含根升级定义的 XML
-     */
-    private byte[] preserveGeneratedEscalations(byte[] converted, List<Escalation> escalations)
-    {
-        if (escalations.isEmpty())
-        {
-            return converted;
-        }
-        String xml = new String(converted, StandardCharsets.UTF_8);
-        StringBuilder definitions = new StringBuilder();
-        for (Escalation escalation : escalations)
-        {
-            if (!xml.contains("id=\"" + escapeXml(escalation.getId()) + "\""))
-            {
-                definitions.append("<escalation id=\"").append(escapeXml(escalation.getId()))
-                        .append("\" name=\"").append(escapeXml(escalation.getName()))
-                        .append("\" escalationCode=\"")
-                        .append(escapeXml(escalation.getEscalationCode()))
-                        .append("\"></escalation>");
-            }
-        }
-        if (definitions.isEmpty())
-        {
-            return converted;
-        }
-        int processIndex = xml.indexOf("<process ");
-        if (processIndex < 0)
-        {
-            throw new ServiceException("审批 SLA 升级定义插入位置不存在", HttpStatus.ERROR);
-        }
-        return (xml.substring(0, processIndex) + definitions + xml.substring(processIndex))
-                .getBytes(StandardCharsets.UTF_8);
-    }
-
-    /** @param value String，可空 XML 文本；@return String，属性安全文本。 */
-    private String escapeXml(String value)
-    {
-        return value == null ? "" : value.replace("&", "&amp;").replace("\"", "&quot;")
-                .replace("<", "&lt;").replace(">", "&gt;");
     }
 
     /** @param raw String，分钟文本；@return int，1 至 525600 的分钟。 */

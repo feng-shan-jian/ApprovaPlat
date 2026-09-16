@@ -101,11 +101,13 @@ class WorkflowDataObjectBusinessTest
                 + "<textAnnotation id=\"poolNote\"><text>池说明</text></textAnnotation></collaboration><process id=");
         var document = service.validateForSave(xml.getBytes(StandardCharsets.UTF_8));
         var extension = new WorkflowExtensionDeploymentService(null, null, null, null);
-        byte[] compiled = extension.prepare(document, "1").compiledBpmn();
-        compiled = new WorkflowParticipantRuleDeploymentService(null).prepare(document, compiled,
-                WorkflowAuthorFormFieldCatalog.builder().build(), "1").compiledBpmn();
-        compiled = new WorkflowTaskSlaDeploymentService(null, null, null).prepare(compiled, "1").compiledBpmn();
-        compiled = new WorkflowRuntimeTaskListenerCompiler().compile(compiled);
+        var executable = service.executionModel(document);
+        extension.prepare(document, executable, "1");
+        new WorkflowParticipantRuleDeploymentService(null).prepare(document, executable,
+                WorkflowAuthorFormFieldCatalog.builder().build(), "1");
+        new WorkflowTaskSlaDeploymentService(null, null, null).prepare(executable, "1");
+        new WorkflowRuntimeTaskListenerCompiler().compile(executable);
+        byte[] compiled = WorkflowBpmnXmlPreserver.write(executable, document.bpmnXml());
         service.validateCompiledDeployment(compiled);
         assertThat(new String(compiled, StandardCharsets.UTF_8)).contains("dataObjectReference", "visibleData", "archive", "业务说明");
         assertThat(document.bpmnXml()).isEqualTo(xml);
@@ -131,11 +133,13 @@ class WorkflowDataObjectBusinessTest
                         + "<flowable:in source=\"parentValue\" target=\"childValue\"/><flowable:out source=\"childValue\" target=\"parentValue\"/>"
                         + "</extensionElements>" + associations + "</callActivity>");
         var document = service.validateForSave(xml.getBytes(StandardCharsets.UTF_8));
-        byte[] compiled = new WorkflowExtensionDeploymentService(null, null, null, null).prepare(document, "1").compiledBpmn();
-        compiled = new WorkflowParticipantRuleDeploymentService(null).prepare(document, compiled,
-                WorkflowAuthorFormFieldCatalog.builder().build(), "1").compiledBpmn();
-        compiled = new WorkflowTaskSlaDeploymentService(null, null, null).prepare(compiled, "1").compiledBpmn();
-        compiled = new WorkflowRuntimeTaskListenerCompiler().compile(compiled);
+        var executable = service.executionModel(document);
+        new WorkflowExtensionDeploymentService(null, null, null, null).prepare(document, executable, "1");
+        new WorkflowParticipantRuleDeploymentService(null).prepare(document, executable,
+                WorkflowAuthorFormFieldCatalog.builder().build(), "1");
+        new WorkflowTaskSlaDeploymentService(null, null, null).prepare(executable, "1");
+        new WorkflowRuntimeTaskListenerCompiler().compile(executable);
+        byte[] compiled = WorkflowBpmnXmlPreserver.write(executable, document.bpmnXml());
         service.validateCompiledDeployment(compiled);
         var engine = support.processEngine();
         engine.getRepositoryService().createDeployment().addString("child.bpmn20.xml", """

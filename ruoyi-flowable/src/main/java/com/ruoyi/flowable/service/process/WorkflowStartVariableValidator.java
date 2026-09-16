@@ -115,7 +115,12 @@ public class WorkflowStartVariableValidator
     public WorkflowValidatedStartVariables validateForStart(String snapshotContent,
             Map<String, Object> variables)
     {
-        return validateSubmission(parseTrustedSnapshot(snapshotContent), variables, Map.of(), true, true);
+        return validateForStart(parseTrustedSnapshot(snapshotContent), variables);
+    }
+
+    public WorkflowValidatedStartVariables validateForStart(JsonNode root, Map<String, Object> variables)
+    {
+        return validateSubmission(root, variables, Map.of(), true, true);
     }
 
     /**
@@ -143,37 +148,27 @@ public class WorkflowStartVariableValidator
         return validateSubmission(snapshotRoot, submitted, Map.of(), true, false).variables();
     }
 
-    public Set<String> systemOutputFieldNames(String snapshotContent)
+    /** 从本次根节点生成字段规则一次，返回具备系统回填资格的实际规则。 */
+    public Map<String, FieldSpec> systemOutputFields(JsonNode snapshotRoot)
     {
-        Set<String> names = new java.util.LinkedHashSet<>();
-        collectSystemOutputFields(templateValidator.validate(snapshotContent).path("fields"), names);
-        return Set.copyOf(names);
+        Map<String, FieldSpec> fields = new LinkedHashMap<>();
+        collectFieldSpecs(snapshotRoot, fields);
+        fields.values().removeIf(field -> !field.systemWritable());
+        return Collections.unmodifiableMap(fields);
     }
 
-    private void collectSystemOutputFields(JsonNode fields, Set<String> names)
+    public void validateSystemOutputPatch(Map<String, FieldSpec> outputFields, Map<String, Object> patch)
     {
-        for (JsonNode field : fields)
-        {
-            if (field.path("workflowSystemWritable").asBoolean(false)
-                    && field.path("workflowReadable").asBoolean(false)
-                    && !field.path("workflowHidden").asBoolean(false)
-                    && !field.path("workflowWritable").asBoolean(true)) names.add(field.path("vModel").asText());
-            collectSystemOutputFields(field.path("children"), names);
-        }
-    }
-
-    public void validateSystemOutputPatch(String content, Map<String, Object> patch)
-    {
-        if (!systemOutputFieldNames(content).containsAll(patch.keySet()))
+        if (!outputFields.keySet().containsAll(patch.keySet()))
             throw invalidVariable("输出目标没有系统回填资格");
-        validateSubmission(templateValidator.validate(content), patch, Map.of(), false, false);
+        validateSubmission(outputFields, patch, Map.of(), false, false);
     }
 
     /**
      * 按部署表单快照校验草稿字段，但允许正式必填字段暂时缺失或为空。
      * 复用正式模板校验返回的根节点，模板损坏仍转换为 500。
      *
-     * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变节点表单 JSON
+     * @param snapshotRoot JsonNode，本次已装载的不可变节点表单根节点
      * @param variables Map&lt;String,Object&gt;，客户端本次保存的草稿字段补丁
      * @return WorkflowValidatedStartVariables，已执行字段白名单、类型、写权限和附件格式校验的草稿补丁
      */
@@ -188,7 +183,7 @@ public class WorkflowStartVariableValidator
      * 按部署表单校验局部更新，并允许未提交的必填字段沿用上一份正式提交快照。
      * 复用正式模板校验返回的根节点，模板损坏仍转换为 500。
      *
-     * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变节点表单 JSON
+     * @param snapshotRoot JsonNode，本次已装载的不可变节点表单根节点
      * @param variables Map&lt;String,Object&gt;，客户端本次明确提交的字段补丁
      * @param existingValues Map&lt;String,JsonNode&gt;，上一份服务端正式提交快照字段值
      * @return WorkflowValidatedStartVariables，仅包含本次合法补丁及其附件 UUID
@@ -202,14 +197,14 @@ public class WorkflowStartVariableValidator
 
     /**
      * 从不可变节点表单快照提取允许写入历史提交快照的可读字段目录。
-     * 只读提取正式模板校验返回的根节点，模板错误保持 400。
+     * 只读提取本次装载的根节点；持久化内容错误由装载边界报告。
      *
-     * @param snapshotContent String，来自 Flowable 业务制品 forms-v1.json 的不可变节点表单 JSON
+     * @param snapshotRoot JsonNode，本次已装载的不可变节点表单根节点
      * @return Set&lt;String&gt;，保持表单字段顺序且不包含隐藏字段的不可修改字段名集合
      */
-    public Set<String> readableFieldNames(String snapshotContent)
+    public Set<String> readableFieldNames(JsonNode snapshotRoot)
     {
-        return templateValidator.extractReadableVariableNames(templateValidator.validate(snapshotContent));
+        return templateValidator.extractReadableVariableNames(snapshotRoot);
     }
 
     /**
@@ -228,7 +223,13 @@ public class WorkflowStartVariableValidator
     {
         LinkedHashMap<String, FieldSpec> fieldSpecs = new LinkedHashMap<>();
         collectFieldSpecs(snapshotRoot, fieldSpecs);
+        return validateSubmission(fieldSpecs, variables, existingValues, enforceRequired, enforceWritable);
+    }
 
+    private WorkflowValidatedStartVariables validateSubmission(Map<String, FieldSpec> fieldSpecs,
+            Map<String, Object> variables, Map<String, JsonNode> existingValues,
+            boolean enforceRequired, boolean enforceWritable)
+    {
         Map<String, Object> source = variables == null ? Map.of() : variables;
         if (source.size() > MAX_VARIABLE_FIELDS)
         {
@@ -321,13 +322,12 @@ public class WorkflowStartVariableValidator
     /**
      * 从正式部署表单解析受控循环可使用的标量字段契约。
      *
-     * @param snapshotContent String，部署事务内冻结且已通过模板门禁的表单 JSON
+     * @param snapshotRoot JsonNode，部署事务内冻结且已通过模板门禁的表单根节点
      * @return Map&lt;String,WorkflowControlledLoopFormField&gt;，按表单顺序返回的字段契约；集合字段不会进入结果
      */
     public Map<String, WorkflowControlledLoopFormField> describeControlledLoopFields(
-            String snapshotContent)
+            JsonNode snapshotRoot)
     {
-        JsonNode snapshotRoot = parseTrustedSnapshot(snapshotContent);
         LinkedHashMap<String, FieldSpec> fieldSpecs = new LinkedHashMap<>();
         collectFieldSpecs(snapshotRoot, fieldSpecs);
         LinkedHashMap<String, WorkflowControlledLoopFormField> result = new LinkedHashMap<>();
@@ -366,7 +366,7 @@ public class WorkflowStartVariableValidator
      * @param snapshotContent String，数据库读取的部署表单 JSON
      * @return JsonNode，已经通过模板门禁的表单根对象
      */
-    private JsonNode parseTrustedSnapshot(String snapshotContent)
+    public JsonNode parseTrustedSnapshot(String snapshotContent)
     {
         try
         {
@@ -518,7 +518,11 @@ public class WorkflowStartVariableValidator
         }
         Set<String> enumValues = optionalBoolean(component, "workflowEnum", false)
                 ? requireStaticEnumValues(component) : Set.of();
-        return new FieldSpec(fieldName, fieldType, required, writable, minLength, maxLength,
+        boolean systemWritable = component.path("workflowSystemWritable").asBoolean(false)
+                && component.path("workflowReadable").asBoolean(false)
+                && !component.path("workflowHidden").asBoolean(false)
+                && !component.path("workflowWritable").asBoolean(true);
+        return new FieldSpec(fieldName, fieldType, required, writable, systemWritable, minLength, maxLength,
                 minItems, maxItems, minimum, maximum, numericType, enumValues);
     }
 
@@ -1169,6 +1173,7 @@ public class WorkflowStartVariableValidator
      * @param type FieldType，服务端允许的字段类型
      * @param required boolean，是否必填
      * @param writable boolean，客户端是否允许提交该字段
+     * @param systemWritable boolean，字段自身是否明确授权系统回填
      * @param minLength int，文本最小字符数
      * @param maxLength int，文本最大字符数
      * @param minItems int，集合最小元素数
@@ -1178,7 +1183,7 @@ public class WorkflowStartVariableValidator
      * @param numericType NumericType，通用数值或 Flowable 整数类型约束
      * @param enumValues Set&lt;String&gt;，内嵌 enum 的静态允许值；其他字段为空
      */
-    private record FieldSpec(String name, FieldType type, boolean required, boolean writable,
+    public record FieldSpec(String name, FieldType type, boolean required, boolean writable, boolean systemWritable,
             int minLength, int maxLength, int minItems, int maxItems,
             BigDecimal minimum, BigDecimal maximum, NumericType numericType,
             Set<String> enumValues)
@@ -1186,7 +1191,7 @@ public class WorkflowStartVariableValidator
     }
 
     /** 部署表单数值字段的服务端执行语义。 */
-    private enum NumericType
+    public enum NumericType
     {
         /** 正式表单的通用有限数值，允许小数。 */
         DECIMAL,

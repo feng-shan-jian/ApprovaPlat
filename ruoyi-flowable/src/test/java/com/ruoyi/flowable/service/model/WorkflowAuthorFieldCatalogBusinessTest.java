@@ -58,7 +58,7 @@ class WorkflowAuthorFieldCatalogBusinessTest
                 new WorkflowExtensionDeploymentService(null, null, null, null), new WorkflowControlledLoopDeploymentService(),
                 new WorkflowConditionDeploymentService(), new WorkflowParticipantRuleDeploymentService(identityMapper),
                 new WorkflowDmnDecisionService(operations, null, artifacts), extensions,
-                new WorkflowCallActivityReferenceService(repository, operations, identities, null, artifacts, forms, templates),
+                new WorkflowCallActivityReferenceService(repository, operations, identities, null, artifacts, templates),
                 new WorkflowTaskSlaDeploymentService(null, null, null), new WorkflowRuntimeTaskListenerCompiler());
     }
 
