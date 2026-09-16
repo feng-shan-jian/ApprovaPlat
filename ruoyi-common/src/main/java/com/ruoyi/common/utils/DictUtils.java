@@ -165,13 +165,13 @@ public class DictUtils
     }
 
     /**
-     * 删除指定字典缓存
+     * 删除本次已提交操作涉及的字典缓存
      * 
-     * @param key 字典键
+     * @param keys 字典键集合
      */
-    public static void removeDictCache(String key)
+    public static void removeDictCache(Collection<String> keys)
     {
-        SpringUtils.getBean(RedisCache.class).deleteObject(getCacheKey(key));
+        SpringUtils.getBean(RedisCache.class).deleteObject(keys.stream().map(DictUtils::getCacheKey).distinct().toList());
     }
 
     /**

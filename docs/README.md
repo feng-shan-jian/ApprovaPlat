@@ -10,6 +10,7 @@
 | 业务契约 | [contracts/workflow-behavior.md](contracts/workflow-behavior.md) | 定义审批动作、复杂 BPMN、附件、连接器和运行事件行为 |
 | 协作契约 | [contracts/workflow-collaboration.md](contracts/workflow-collaboration.md) | 定义 Participant、MessageFlow 与多池消息运行语义 |
 | 扩展管理 | [contracts/workflow-extension-deletion.md](contracts/workflow-extension-deletion.md) | 定义扩展目录读取、删除核验和最终删除边界 |
+| 参数与字典 | [contracts/system-config-dict-deletion.md](contracts/system-config-dict-deletion.md) | 定义集合删除、并发引用和提交后缓存恢复 |
 | 数据库 | [database/workflow-baseline.md](database/workflow-baseline.md) | 说明数据库结构约束和附件上传升级规则 |
 | 浏览器回归 | [工作流浏览器回归](../ruoyi-ui/tests/e2e/README.md) | 说明组件回归、登录集成回归及运行命令 |
 

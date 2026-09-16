@@ -55,9 +55,19 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
 		where dict_type = #{dictType} limit 1
 	</select>
 	
-	<delete id="deleteDictTypeById" parameterType="Long">
- 		delete from sys_dict_type where dict_id = #{dictId}
- 	</delete>
+    <select id="selectDictTypesByIdsForUpdate" resultMap="SysDictTypeResult" useCache="false" flushCache="true">
+        <include refid="selectDictTypeVo"/>
+        where dict_id in
+        <foreach collection="array" item="dictId" open="(" separator="," close=")">
+            #{dictId}
+        </foreach>
+        order by dict_id for update
+    </select>
+
+    <select id="selectDictTypeForUpdate" resultMap="SysDictTypeResult" useCache="false" flushCache="true">
+        <include refid="selectDictTypeVo"/>
+        where dict_type = #{dictType} for update
+    </select>
  	
  	<delete id="deleteDictTypeByIds" parameterType="Long">
  		delete from sys_dict_type where dict_id in
@@ -97,4 +107,4 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
  		)
 	</insert>
 	
-</mapper> 
+</mapper>

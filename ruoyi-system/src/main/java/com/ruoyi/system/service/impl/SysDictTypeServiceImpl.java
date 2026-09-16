@@ -1,13 +1,18 @@
 package com.ruoyi.system.service.impl;
 
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.ruoyi.common.constant.UserConstants;
 import com.ruoyi.common.core.domain.entity.SysDictData;
 import com.ruoyi.common.core.domain.entity.SysDictType;
@@ -105,18 +110,32 @@ public class SysDictTypeServiceImpl implements ISysDictTypeService
      * @param dictIds 需要删除的字典ID
      */
     @Override
+    @Transactional
     public void deleteDictTypeByIds(Long[] dictIds)
     {
+        if (dictIds.length == 0)
+        {
+            return;
+        }
+        List<SysDictType> dictTypes = dictTypeMapper.selectDictTypesByIdsForUpdate(dictIds);
+        Map<Long, SysDictType> typesById = dictTypes.stream()
+                .collect(Collectors.toMap(SysDictType::getDictId, Function.identity()));
+        // 数据新增、转入和类型改名先持有相同类型锁；引用使用当前读，避免旧 RR 快照漏项。
+        Set<Long> referencedIds = new HashSet<>(dictDataMapper.selectReferencedDictTypeIdsForUpdate(dictIds));
         for (Long dictId : dictIds)
         {
-            SysDictType dictType = selectDictTypeById(dictId);
-            if (dictDataMapper.countDictDataByType(dictType.getDictType()) > 0)
+            SysDictType dictType = typesById.get(dictId);
+            if (dictType == null)
+            {
+                throw new ServiceException("字典类型不存在或已删除");
+            }
+            if (referencedIds.contains(dictId))
             {
                 throw new ServiceException(String.format("%1$s已分配,不能删除", dictType.getDictName()));
             }
-            dictTypeMapper.deleteDictTypeById(dictId);
-            DictUtils.removeDictCache(dictType.getDictType());
         }
+        dictTypeMapper.deleteDictTypeByIds(dictIds);
+        removeDictCacheAfterCommit(dictTypes.stream().map(SysDictType::getDictType).toList());
     }
 
     /**
@@ -180,15 +199,28 @@ public class SysDictTypeServiceImpl implements ISysDictTypeService
     @Transactional
     public int updateDictType(SysDictType dict)
     {
-        SysDictType oldDict = dictTypeMapper.selectDictTypeById(dict.getDictId());
+        SysDictType oldDict = dictTypeMapper.selectDictTypesByIdsForUpdate(new Long[] { dict.getDictId() })
+                .stream().findFirst().orElseThrow(() -> new ServiceException("字典类型不存在或已删除"));
         dictDataMapper.updateDictDataType(oldDict.getDictType(), dict.getDictType());
         int row = dictTypeMapper.updateDictType(dict);
         if (row > 0)
         {
-            List<SysDictData> dictDatas = dictDataMapper.selectDictDataByType(dict.getDictType());
-            DictUtils.setDictCache(dict.getDictType(), dictDatas);
+            removeDictCacheAfterCommit(List.of(oldDict.getDictType(), dict.getDictType()));
         }
         return row;
+    }
+
+    private void removeDictCacheAfterCommit(List<String> dictTypes)
+    {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization()
+        {
+            @Override
+            public void afterCommit()
+            {
+                // 提交后的缓存故障保留原始异常，不冒充数据库回滚。
+                DictUtils.removeDictCache(dictTypes);
+            }
+        });
     }
 
     /**

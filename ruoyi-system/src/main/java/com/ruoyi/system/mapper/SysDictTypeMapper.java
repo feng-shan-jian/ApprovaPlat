@@ -33,13 +33,11 @@ public interface SysDictTypeMapper
      */
     public SysDictType selectDictTypeById(Long dictId);
 
-    /**
-     * 通过字典ID删除字典信息
-     * 
-     * @param dictId 字典ID
-     * @return 结果
-     */
-    public int deleteDictTypeById(Long dictId);
+    /** 删除和改名先锁定字典类型，再处理其数据引用。 */
+    public List<SysDictType> selectDictTypesByIdsForUpdate(Long[] dictIds);
+
+    /** 数据写入锁定目标类型，与类型删除、改名串行。 */
+    public SysDictType selectDictTypeForUpdate(String dictType);
 
     /**
      * 批量删除字典类型信息

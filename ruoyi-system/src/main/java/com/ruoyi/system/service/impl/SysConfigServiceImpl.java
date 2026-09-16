@@ -2,9 +2,15 @@ package com.ruoyi.system.service.impl;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.ruoyi.common.constant.CacheConstants;
 import com.ruoyi.common.constant.UserConstants;
 import com.ruoyi.common.core.redis.RedisCache;
@@ -151,18 +157,40 @@ public class SysConfigServiceImpl implements ISysConfigService
      * @param configIds 需要删除的参数ID
      */
     @Override
+    @Transactional
     public void deleteConfigByIds(Long[] configIds)
     {
+        if (configIds.length == 0)
+        {
+            return;
+        }
+        List<SysConfig> configs = configMapper.selectConfigsByIdsForUpdate(configIds);
+        Map<Long, SysConfig> configsById = configs.stream()
+                .collect(Collectors.toMap(SysConfig::getConfigId, Function.identity()));
+        // 按请求顺序报告首个不可删项，检查完成前不产生写入或缓存副作用。
         for (Long configId : configIds)
         {
-            SysConfig config = selectConfigById(configId);
+            SysConfig config = configsById.get(configId);
+            if (config == null)
+            {
+                throw new ServiceException("参数配置不存在或已删除");
+            }
             if (StringUtils.equals(UserConstants.YES, config.getConfigType()))
             {
                 throw new ServiceException(String.format("内置参数【%1$s】不能删除 ", config.getConfigKey()));
             }
-            configMapper.deleteConfigById(configId);
-            redisCache.deleteObject(getCacheKey(config.getConfigKey()));
         }
+        configMapper.deleteConfigByIds(configIds);
+        List<String> cacheKeys = configs.stream().map(config -> getCacheKey(config.getConfigKey())).toList();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization()
+        {
+            @Override
+            public void afterCommit()
+            {
+                // 此时数据库已经提交；缓存异常原样上抛，由既有刷新入口恢复。
+                redisCache.deleteObject(cacheKeys);
+            }
+        });
     }
 
     /**

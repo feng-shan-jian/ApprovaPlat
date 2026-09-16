@@ -58,13 +58,8 @@ public interface SysConfigMapper
      */
     public int updateConfig(SysConfig config);
 
-    /**
-     * 删除参数配置
-     * 
-     * @param configId 参数ID
-     * @return 结果
-     */
-    public int deleteConfigById(Long configId);
+    /** 在删除事务中锁定目标参数，保持内置标志和缓存键稳定。 */
+    public List<SysConfig> selectConfigsByIdsForUpdate(Long[] configIds);
 
     /**
      * 批量删除参数信息

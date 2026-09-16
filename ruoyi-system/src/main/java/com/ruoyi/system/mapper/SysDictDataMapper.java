@@ -35,13 +35,11 @@ public interface SysDictDataMapper
      */
     public SysDictData selectDictDataById(Long dictCode);
 
-    /**
-     * 查询字典数据
-     * 
-     * @param dictType 字典类型
-     * @return 字典数据
-     */
-    public int countDictDataByType(String dictType);
+    /** 转移数据时读取并锁定原所属类型，供提交后失效原缓存。 */
+    public SysDictData selectDictDataByIdForUpdate(Long dictCode);
+
+    /** 在类型锁内当前读引用；返回类型 ID，沿用数据库字符串比较规则。 */
+    public List<Long> selectReferencedDictTypeIdsForUpdate(Long[] dictIds);
 
     /**
      * 通过字典ID删除字典数据信息
