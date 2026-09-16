@@ -10,12 +10,10 @@ import org.quartz.Scheduler;
 import org.quartz.SchedulerException;
 import org.quartz.TriggerBuilder;
 import org.quartz.TriggerKey;
-import com.ruoyi.common.constant.Constants;
 import com.ruoyi.common.constant.ScheduleConstants;
 import com.ruoyi.common.exception.job.TaskException;
 import com.ruoyi.common.exception.job.TaskException.Code;
 import com.ruoyi.common.utils.StringUtils;
-import com.ruoyi.common.utils.spring.SpringUtils;
 import com.ruoyi.quartz.domain.SysJob;
 
 /**
@@ -118,23 +116,4 @@ public class ScheduleUtils
         }
     }
 
-    /**
-     * 检查包名是否为白名单配置
-     * 
-     * @param invokeTarget 目标字符串
-     * @return 结果
-     */
-    public static boolean whiteList(String invokeTarget)
-    {
-        String packageName = StringUtils.substringBefore(invokeTarget, "(");
-        int count = StringUtils.countMatches(packageName, ".");
-        if (count > 1)
-        {
-            return StringUtils.startsWithAny(invokeTarget, Constants.JOB_WHITELIST_STR);
-        }
-        Object obj = SpringUtils.getBean(StringUtils.split(invokeTarget, ".")[0]);
-        String beanPackageName = obj.getClass().getPackage().getName();
-        return StringUtils.startsWithAny(beanPackageName, Constants.JOB_WHITELIST_STR)
-                && !StringUtils.startsWithAny(beanPackageName, Constants.JOB_ERROR_STR);
-    }
 }

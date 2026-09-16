@@ -277,32 +277,6 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
     }
 
     /**
-     * 在字符串中查找第一个出现的 `open` 和最后一个出现的 `close` 之间的子字符串
-     * 
-     * @param str 要截取的字符串
-     * @param open 起始字符串
-     * @param close 结束字符串
-     * @return 截取结果
-     */
-    public static String substringBetweenLast(final String str, final String open, final String close)
-    {
-        if (isEmpty(str) || isEmpty(open) || isEmpty(close))
-        {
-            return NULLSTR;
-        }
-        final int start = str.indexOf(open);
-        if (start != INDEX_NOT_FOUND)
-        {
-            final int end = str.lastIndexOf(close);
-            if (end != INDEX_NOT_FOUND)
-            {
-                return str.substring(start + open.length(), end);
-            }
-        }
-        return NULLSTR;
-    }
-
-    /**
      * 判断是否为空，并且不是空白字符
      * 
      * @param str 要判断的value
@@ -458,41 +432,6 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
     public static boolean containsAny(final CharSequence cs, final CharSequence... searchCharSequences)
     {
         return Strings.CS.containsAny(cs, searchCharSequences);
-    }
-
-    /**
-     * 查找指定字符串是否包含指定字符串列表中的任意一个字符串同时串忽略大小写
-     *
-     * @param cs 指定字符串
-     * @param searchCharSequences 需要检查的字符串数组
-     * @return 是否包含任意一个字符串
-     */
-    public static boolean containsAnyIgnoreCase(CharSequence cs, CharSequence... searchCharSequences)
-    {
-        if (isEmpty(cs) || isEmpty(searchCharSequences))
-        {
-            return false;
-        }
-        for (CharSequence testStr : searchCharSequences)
-        {
-            if (containsIgnoreCase(cs, testStr))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * 检查是否包含要搜索的字符串，忽略大小写
-     *
-     * @param str 要检查的字符串
-     * @param searchStr 要查找的字符串
-     * @return 如果包含要搜索的字符串（忽略大小写）则返回true，如果不包含或返回false
-     */
-    public static boolean containsIgnoreCase(final CharSequence str, final CharSequence searchStr)
-    {
-        return Strings.CI.contains(str, searchStr);
     }
 
     /**

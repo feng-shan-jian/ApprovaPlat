@@ -12,6 +12,7 @@
 | 扩展管理 | [contracts/workflow-extension-deletion.md](contracts/workflow-extension-deletion.md) | 定义扩展目录读取、删除核验和最终删除边界 |
 | 参数与字典 | [contracts/system-config-dict-deletion.md](contracts/system-config-dict-deletion.md) | 定义集合删除、并发引用和提交后缓存恢复 |
 | 路由与标签 | [contracts/frontend-route-tags-async.md](contracts/frontend-route-tags-async.md) | 定义路由错误传播、标签 Promise 返回和持久化失败边界 |
+| 定时任务 | [contracts/quartz-invocation.md](contracts/quartz-invocation.md) | 定义任务目标授权、字面量参数和调度执行边界 |
 | 组织数据 | [architecture/organization-data-scope-and-department-moves.md](architecture/organization-data-scope-and-department-moves.md) | 定义数据范围查询、部门关系事务及恢复边界 |
 | 数据库 | [database/workflow-baseline.md](database/workflow-baseline.md) | 说明数据库结构约束和附件上传升级规则 |
 | 浏览器回归 | [工作流浏览器回归](../ruoyi-ui/tests/e2e/README.md) | 说明组件回归、登录集成回归及运行命令 |

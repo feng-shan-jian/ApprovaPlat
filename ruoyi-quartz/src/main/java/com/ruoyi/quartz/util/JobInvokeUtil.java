@@ -1,182 +1,154 @@
 package com.ruoyi.quartz.util;
 
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.LinkedList;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import com.ruoyi.common.utils.StringUtils;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.springframework.aop.framework.AopProxyUtils;
+import org.springframework.aop.support.AopUtils;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import com.ruoyi.common.constant.Constants;
 import com.ruoyi.common.utils.spring.SpringUtils;
 import com.ruoyi.quartz.domain.SysJob;
 
-/**
- * 任务执行工具
- *
- * @author ruoyi
- */
+/** 解析并调用允许的任务方法；参数只作为字面量。 */
 public class JobInvokeUtil
 {
-    /**
-     * 执行方法
-     *
-     * @param sysJob 系统任务
-     */
+    private static final String IDENTIFIER = "[\\p{javaJavaIdentifierStart}][\\p{javaJavaIdentifierPart}]*";
+    private static final Pattern INVOCATION = Pattern.compile(
+            "([^(]+)\\.(" + IDENTIFIER + ")\\((.*)\\)", Pattern.DOTALL);
+    private static final Pattern PARAMETER_SEPARATOR = Pattern.compile(
+            ",(?=([^\"']*[\"'][^\"']*[\"'])*[^\"']*$)");
+
+    /** 保存时解析目标和方法，但不构造类实例或执行任务。 */
+    public static boolean isValidInvokeTarget(String invokeTarget)
+    {
+        try
+        {
+            resolve(invokeTarget);
+            return true;
+        }
+        catch (ReflectiveOperationException | IllegalArgumentException | IllegalStateException e)
+        {
+            return false;
+        }
+    }
+
+    /** 每次执行均重新授权，覆盖已存作业及直接调度入口。 */
     public static void invokeMethod(SysJob sysJob) throws Exception
     {
-        String invokeTarget = sysJob.getInvokeTarget();
-        String beanName = getBeanName(invokeTarget);
-        String methodName = getMethodName(invokeTarget);
-        List<Object[]> methodParams = getMethodParams(invokeTarget);
+        Invocation invocation = resolve(sysJob.getInvokeTarget());
+        Object target = invocation.bean() != null ? invocation.bean()
+                : invocation.targetType().getConstructor().newInstance();
+        invocation.method().invoke(target, invocation.arguments());
+    }
 
-        if (!isValidClassName(beanName))
+    private static Invocation resolve(String invokeTarget) throws ReflectiveOperationException
+    {
+        Matcher matcher = INVOCATION.matcher(invokeTarget == null ? "" : invokeTarget);
+        if (!matcher.matches())
         {
-            Object bean = SpringUtils.getBean(beanName);
-            invokeMethod(bean, methodName, methodParams);
+            throw new IllegalArgumentException("任务调用格式不正确");
+        }
+        String targetName = matcher.group(1);
+        Object[] arguments = parseArguments(matcher.group(3));
+        Object bean = null;
+        Class<?> targetType;
+        if (targetName.chars().filter(character -> character == '.').count() > 1)
+        {
+            // 加载时不初始化类；授权及方法检查通过后才允许构造实例。
+            targetType = Class.forName(targetName, false, JobInvokeUtil.class.getClassLoader());
         }
         else
         {
-            Object bean = Class.forName(beanName).getDeclaredConstructor().newInstance();
-            invokeMethod(bean, methodName, methodParams);
+            try
+            {
+                bean = SpringUtils.getBean(targetName);
+            }
+            catch (NoSuchBeanDefinitionException e)
+            {
+                if (!targetName.equals(e.getBeanName())) throw e;
+                throw new IllegalArgumentException("任务 Bean 不存在", e);
+            }
+            targetType = AopProxyUtils.ultimateTargetClass(bean);
         }
-    }
-
-    /**
-     * 调用任务方法
-     *
-     * @param bean 目标对象
-     * @param methodName 方法名称
-     * @param methodParams 方法参数
-     */
-    private static void invokeMethod(Object bean, String methodName, List<Object[]> methodParams)
-            throws NoSuchMethodException, SecurityException, IllegalAccessException, IllegalArgumentException,
-            InvocationTargetException
-    {
-        if (StringUtils.isNotNull(methodParams) && methodParams.size() > 0)
+        requireTaskType(targetType);
+        Method method = targetType.getMethod(matcher.group(2),
+                Arrays.stream(arguments).map(Object::getClass).toArray(Class<?>[]::new));
+        // 允许任务包中的继承方法，不开放 Object 或外部父类的方法。
+        requireTaskType(method.getDeclaringClass());
+        if (bean == null)
         {
-            Method method = bean.getClass().getMethod(methodName, getMethodParamsType(methodParams));
-            method.invoke(bean, getMethodParamsValue(methodParams));
+            if (Modifier.isAbstract(targetType.getModifiers()))
+            {
+                throw new IllegalArgumentException("任务类不能为抽象类");
+            }
+            targetType.getConstructor();
         }
         else
         {
-            Method method = bean.getClass().getMethod(methodName);
-            method.invoke(bean);
+            // 授权真实类型，调用仍经过原代理，保留事务及其他切面。
+            method = AopUtils.selectInvocableMethod(method, bean.getClass());
         }
+        return new Invocation(targetType, bean, method, arguments);
     }
 
-    /**
-     * 校验是否为为class包名
-     * 
-     * @param invokeTarget 名称
-     * @return true是 false否
-     */
-    public static boolean isValidClassName(String invokeTarget)
+    private static void requireTaskType(Class<?> type)
     {
-        return StringUtils.countMatches(invokeTarget, ".") > 1;
-    }
-
-    /**
-     * 获取bean名称
-     * 
-     * @param invokeTarget 目标字符串
-     * @return bean名称
-     */
-    public static String getBeanName(String invokeTarget)
-    {
-        String beanName = StringUtils.substringBefore(invokeTarget, "(");
-        return StringUtils.substringBeforeLast(beanName, ".");
-    }
-
-    /**
-     * 获取bean方法
-     * 
-     * @param invokeTarget 目标字符串
-     * @return method方法
-     */
-    public static String getMethodName(String invokeTarget)
-    {
-        String methodName = StringUtils.substringBefore(invokeTarget, "(");
-        return StringUtils.substringAfterLast(methodName, ".");
-    }
-
-    /**
-     * 获取method方法参数相关列表
-     * 
-     * @param invokeTarget 目标字符串
-     * @return method方法相关参数列表
-     */
-    public static List<Object[]> getMethodParams(String invokeTarget)
-    {
-        String methodStr = StringUtils.substringBetweenLast(invokeTarget, "(", ")");
-        if (StringUtils.isEmpty(methodStr))
+        String packageName = type.getPackageName();
+        for (String allowedPackage : Constants.JOB_WHITELIST_STR)
         {
-            return null;
-        }
-        String[] methodParams = methodStr.split(",(?=([^\"']*[\"'][^\"']*[\"'])*[^\"']*$)");
-        List<Object[]> classs = new LinkedList<>();
-        for (int i = 0; i < methodParams.length; i++)
-        {
-            String str = StringUtils.trimToEmpty(methodParams[i]);
-            // String字符串类型，以'或"开头
-            if (StringUtils.startsWithAny(str, "'", "\""))
+            if (packageName.equals(allowedPackage) || packageName.startsWith(allowedPackage + "."))
             {
-                classs.add(new Object[] { StringUtils.substring(str, 1, str.length() - 1), String.class });
-            }
-            // boolean布尔类型，等于true或者false
-            else if ("true".equalsIgnoreCase(str) || "false".equalsIgnoreCase(str))
-            {
-                classs.add(new Object[] { Boolean.valueOf(str), Boolean.class });
-            }
-            // long长整形，以L结尾
-            else if (StringUtils.endsWith(str, "L"))
-            {
-                classs.add(new Object[] { Long.valueOf(StringUtils.substring(str, 0, str.length() - 1)), Long.class });
-            }
-            // double浮点类型，以D结尾
-            else if (StringUtils.endsWith(str, "D"))
-            {
-                classs.add(new Object[] { Double.valueOf(StringUtils.substring(str, 0, str.length() - 1)), Double.class });
-            }
-            // 其他类型归类为整形
-            else
-            {
-                classs.add(new Object[] { Integer.valueOf(str), Integer.class });
+                return;
             }
         }
-        return classs;
+        throw new IllegalArgumentException("任务目标不在允许的包内");
     }
 
-    /**
-     * 获取参数类型
-     * 
-     * @param methodParams 参数相关列表
-     * @return 参数类型列表
-     */
-    public static Class<?>[] getMethodParamsType(List<Object[]> methodParams)
+    private static Object[] parseArguments(String source)
     {
-        Class<?>[] classs = new Class<?>[methodParams.size()];
-        int index = 0;
-        for (Object[] os : methodParams)
+        if (source.isEmpty())
         {
-            classs[index] = (Class<?>) os[1];
-            index++;
+            return new Object[0];
         }
-        return classs;
+        List<Object> arguments = new ArrayList<>();
+        // 沿用原有逗号分隔规则；不把 O'Brien 等内容中的引号改成新的转义语法。
+        for (String parameter : PARAMETER_SEPARATOR.split(source, -1))
+        {
+            arguments.add(parseLiteral(parameter.trim()));
+        }
+        return arguments.toArray();
     }
 
-    /**
-     * 获取参数值
-     * 
-     * @param methodParams 参数相关列表
-     * @return 参数值列表
-     */
-    public static Object[] getMethodParamsValue(List<Object[]> methodParams)
+    private static Object parseLiteral(String value)
     {
-        Object[] classs = new Object[methodParams.size()];
-        int index = 0;
-        for (Object[] os : methodParams)
+        if (value.startsWith("'") || value.startsWith("\""))
         {
-            classs[index] = (Object) os[0];
-            index++;
+            char quote = value.charAt(0);
+            if (value.length() < 2 || value.charAt(value.length() - 1) != quote)
+            {
+                throw new IllegalArgumentException("任务字符串参数格式不正确");
+            }
+            return value.substring(1, value.length() - 1);
         }
-        return classs;
+        if ("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value))
+        {
+            return Boolean.valueOf(value);
+        }
+        if (value.endsWith("L"))
+        {
+            return Long.valueOf(value.substring(0, value.length() - 1));
+        }
+        if (value.endsWith("D"))
+        {
+            return Double.valueOf(value.substring(0, value.length() - 1));
+        }
+        return Integer.valueOf(value);
     }
+
+    private record Invocation(Class<?> targetType, Object bean, Method method, Object[] arguments) { }
 }
