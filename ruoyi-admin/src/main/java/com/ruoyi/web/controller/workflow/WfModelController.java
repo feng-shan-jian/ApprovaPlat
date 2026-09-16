@@ -211,6 +211,14 @@ public class WfModelController extends BaseController
         return success(modelService.validateBpmn(request.bpmnXml()));
     }
 
+    /** 只读投影尚未完成设计的有效表单字段，最终保存、部署仍重新验证正式来源。 */
+    @PreAuthorize("@ss.hasPermi('workflow:model:designer')")
+    @PostMapping("/author-field-catalog")
+    public AjaxResult authorFieldCatalog(@Valid @RequestBody WorkflowBpmnValidationRequest request)
+    {
+        return success(modelService.authorFieldCatalog(request.bpmnXml()));
+    }
+
     /**
      * 将历史模型复制为新的最高版本。
      *

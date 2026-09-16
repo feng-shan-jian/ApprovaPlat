@@ -1,5 +1,4 @@
 import { computed, ref } from 'vue'
-import { createProcessUserIdFieldCatalog, eligibleUserIdFieldOptions } from './formUserFieldCatalog.js'
 import { createDefaultSlaConfig, createUserTaskSlaDomain, isUserTaskSlaProperty } from './userTaskSlaDomain.js'
 export { createDefaultSlaConfig } from './userTaskSlaDomain.js'
 
@@ -81,7 +80,6 @@ export function createExtensionEventSlaDomain(context) {
     propertyState,
     readAllFlowableProperties,
     readExtensionProperties,
-    readTemplatePermissionPolicy,
     selectedBusinessObject,
     selectedElement,
     updateProperties
@@ -161,17 +159,10 @@ export function createExtensionEventSlaDomain(context) {
    * @returns {Array<{value:string,label:string}>} 按变量名去重后的受控字段目录。
    */
   function resolveAutoCopyFormFieldOptionsForBusinessObject(businessObject) {
-    // 自动抄送只消费中性目录；模板权限仍由表单领域按原协议解释。
-    const resolveCatalog = element => formFieldCatalog.resolveUserIdFieldCatalog(
-      element, readTemplatePermissionPolicy(element))
-    if (businessObject?.$type === 'bpmn:UserTask') {
-      return eligibleUserIdFieldOptions(resolveCatalog(businessObject))
-        .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
-    }
-    if (businessObject?.$type !== 'bpmn:Process') return []
-    return eligibleUserIdFieldOptions(createProcessUserIdFieldCatalog(
-      businessObject, resolveCatalog))
-      .filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
+    const fields = businessObject?.$type === 'bpmn:UserTask'
+      ? formFieldCatalog.nodeFields(businessObject)?.userIdFields
+      : businessObject?.$type === 'bpmn:Process' ? formFieldCatalog.processFields(businessObject)?.userIdFields : []
+    return (fields || []).filter(item => AUTO_COPY_VARIABLE_PATTERN.test(item.value))
   }
 
   /**
@@ -506,7 +497,7 @@ export function createExtensionEventSlaDomain(context) {
     const rules = readAutoCopyRules(properties, true)
     normalizeAndValidateAutoCopyRules(rules, {
       allowedTriggers,
-      allowedFormFields: resolveAutoCopyFormFieldOptionsForBusinessObject(businessObject).map(item => item.value)
+      validateFormFields: false
     })
   }
 

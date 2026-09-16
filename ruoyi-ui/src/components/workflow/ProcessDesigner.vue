@@ -29,6 +29,7 @@
     <el-alert v-if="hasIncompatibleMessageConfig" class="process-designer__configuration-warning" title="当前事件仍携带消息专用配置，不能保存或部署。" type="warning" :closable="false">
       <el-button text @click="repairSelectedEventConfig">移除不兼容配置（可撤销）</el-button>
     </el-alert>
+    <el-alert v-if="authorFieldCatalogIssue" :title="authorFieldCatalogIssue" type="warning" :closable="false" />
 
     <div
       ref="bodyRef"
@@ -194,7 +195,7 @@ import 'bpmn-js/dist/assets/bpmn-font/css/bpmn.css'
 import 'diagram-js-minimap/assets/diagram-js-minimap.css'
 import 'bpmn-js-token-simulation/assets/css/bpmn-js-token-simulation.css'
 import Download from '@/plugins/download'
-import { listCallActivityOptions, validateModelBpmn, preflightModel } from '@/api/workflow/model'
+import { getAuthorFieldCatalog, listCallActivityOptions, validateModelBpmn, preflightModel } from '@/api/workflow/model'
 import {
   listCelExtensionOptions,
   listFormFieldExtensionOptions,
@@ -592,6 +593,8 @@ async function importXml(xml) {
   if (!modeler) return
   const previousXml = lastExportedXml.value ? await flushXml() : ''
   importing = true
+  formFieldCatalog.invalidate()
+  authorRevision += 1
   loading.value = true
   const previousViewbox = previousXml ? modeler.get('canvas').viewbox() : null
   const previousSelection = selectedElement.value?.id
@@ -624,7 +627,10 @@ async function importXml(xml) {
       if (restored) modeler.get('selection').select(restored)
       await emitXmlChange(false)
     }
-    if (previousXml && !renderStarted) emit('update:modelValue', previousXml)
+    if (previousXml && !renderStarted) {
+      emit('update:modelValue', previousXml)
+      void formFieldCatalog.refresh(previousXml)
+    }
     emit('error', error)
   } finally {
     importing = false
@@ -642,6 +648,7 @@ function handleCommandStackChanged() {
   window.requestAnimationFrame(refreshControlledLoopOverlays)
   if (importing) return
   authorRevision += 1
+  formFieldCatalog.invalidate()
   emit('editing')
   // 任何建模变更都会使上一次服务端诊断失效，禁止显示过期的“已通过”结果。
   validationIssues.value = []
@@ -668,8 +675,12 @@ function updateCommandState() {
  */
 async function emitXmlChange(notifyChange) {
   if (!modeler) return ''
-  const { xml } = await modeler.saveXML({ format: true })
+  const exportingModeler = modeler
+  const exportingRevision = authorRevision
+  const { xml } = await exportingModeler.saveXML({ format: true })
+  if (modeler !== exportingModeler || authorRevision !== exportingRevision) return ''
   lastExportedXml.value = xml
+  void formFieldCatalog.refresh(xml)
   emit('update:modelValue', xml)
   if (notifyChange) emit('change', xml)
   return xml
@@ -1348,6 +1359,8 @@ async function runServerValidation(showResult, sourceXml = '', preflight = false
   try {
     const xml = sourceXml || await flushXml()
     const revision = authorRevision
+    formFieldCatalog.invalidate()
+    void formFieldCatalog.refresh(xml)
     const response = preflight
       ? await preflightModel({ modelId: props.model.modelId, expectedRevision: props.model.revision, bpmnXml: xml })
       : await validateModelBpmn(xml)
@@ -1762,8 +1775,9 @@ function persistExtensionProperties(properties) {
 const formFieldOptions = ref([])
 const formFieldCatalog = createDesignerFormFieldCatalog({
   forms: () => props.forms,
-  formFieldOptions: () => formFieldOptions.value
+  loadAuthorFields: getAuthorFieldCatalog
 })
+const authorFieldCatalogIssue = computed(() => formFieldCatalog.issueFor(selectedBusinessObject.value))
 
 // 先完成中性目录和表单领域装配，再按确定顺序提供消费者依赖；所有写操作仍走 bpmn-js 命令栈。
 const formParticipantDomain = createFormParticipantDomain({
@@ -1785,7 +1799,6 @@ const formParticipantDomain = createFormParticipantDomain({
   updateProperties
 })
 const routingCallActivityDomain = createRoutingCallActivityDomain({
-  readTemplatePermissionPolicy: businessObject => formParticipantDomain.readTemplatePermissionPolicy(businessObject),
   buildPropertiesExtensionElements,
   designerLocked,
   emit,
@@ -1827,7 +1840,6 @@ const extensionEventSlaDomain = createExtensionEventSlaDomain({
   propertyState,
   readAllFlowableProperties,
   readExtensionProperties,
-  readTemplatePermissionPolicy: formParticipantDomain.readTemplatePermissionPolicy,
   selectedBusinessObject,
   selectedElement,
   updateProperties
@@ -1915,9 +1927,17 @@ watch(() => props.preference, () => {
   scheduleCanvasResize()
 }, { deep: true })
 watch(designerLocked, handleDesignerLock)
+watch(() => props.forms, () => {
+  formFieldCatalog.invalidate()
+  if (modeler && !importing) void emitXmlChange(false)
+})
 onActivated(() => {
   bindDesignerLifecycleListeners()
-  if (modeler) loadExtensionOptions()
+  if (modeler) {
+    loadExtensionOptions()
+    formFieldCatalog.invalidate()
+    void emitXmlChange(false)
+  }
 })
 onDeactivated(unbindDesignerLifecycleListeners)
 
@@ -1938,6 +1958,8 @@ onMounted(() => {
  * @returns {void} 组件卸载前恢复全局页面状态并移除全部本组件监听。
  */
 onBeforeUnmount(() => {
+  authorRevision += 1
+  formFieldCatalog.invalidate()
   window.clearTimeout(changeTimer)
   unbindDesignerLifecycleListeners()
   disposeIdentitySearchTimers()

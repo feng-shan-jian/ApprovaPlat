@@ -1,5 +1,4 @@
 import { computed, ref } from 'vue'
-import { templateScalarFieldType } from './designerFormFieldCatalog.js'
 
 // 条件分支作者 XML 只保存版本化受控 JSON，服务端部署时生成固定表达式。
 const CONDITION_RULE_PROPERTY = 'approva.conditionRule.config'
@@ -49,7 +48,6 @@ export function createRoutingCallActivityDomain(context) {
     propertyFlags,
     propertyState,
     readAllFlowableProperties,
-    readTemplatePermissionPolicy,
     selectedBusinessObject,
     selectedElement,
     updateProperties
@@ -112,65 +110,7 @@ export function createRoutingCallActivityDomain(context) {
     // 顺序流自身的 moddle 父链是导入、撤销和重建后的稳定归属，不依赖图形 source 短暂引用。
     const sourceProcess = owningProcess(selected.businessObject)
     if (!sourceProcess) return { fields: [], conflicts: [] }
-    const fieldsByName = new Map()
-    const conflicts = new Set()
-    const visited = new Set()
-    for (const element of getModeler().get('elementRegistry').getAll()) {
-      const businessObject = element?.businessObject
-      if (!businessObject?.id || visited.has(businessObject.id) || owningProcess(businessObject) !== sourceProcess) continue
-      if (!businessObject.$instanceOf?.('bpmn:StartEvent') && !businessObject.$instanceOf?.('bpmn:UserTask')) continue
-      visited.add(businessObject.id)
-      for (const field of describeConditionFormFields(businessObject)) {
-        const signature = JSON.stringify({ type: field.type, values: field.values, valueRestricted: field.valueRestricted })
-        const existing = fieldsByName.get(field.value)
-        if (existing && existing.signature !== signature) {
-          conflicts.add(field.value)
-          fieldsByName.delete(field.value)
-        } else if (!existing && !conflicts.has(field.value)) {
-          fieldsByName.set(field.value, { ...field, signature })
-        }
-      }
-    }
-    return {
-      fields: [...fieldsByName.values()].map(({ signature: _signature, ...field }) => field),
-      conflicts: [...conflicts].sort()
-    }
-  }
-
-  /**
-   * 将元素中性字段描述投影为条件路由允许读取的可写标量目录。
-   * @param {object|undefined} businessObject StartEvent 或 UserTask 业务对象。
-   * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 保持来源顺序的条件字段。
-   */
-  function describeConditionFormFields(businessObject) {
-    const result = []
-    const seen = new Set()
-    for (const { source, variable, field } of formFieldCatalog.resolveElementFieldDescriptors(businessObject)) {
-      const embedded = source === 'EMBEDDED'
-      const type = embedded
-        ? ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
-        : templateScalarFieldType(field)
-      if (!variable || !type || (embedded ? field.writable === false
-        : field?.workflowWritable !== true || seen.has(variable))) continue
-      if (!embedded) seen.add(variable)
-      const options = embedded ? field.values : field?.options
-      result.push({
-        value: variable,
-        label: (embedded ? field.name : field?.label)
-          ? `${embedded ? field.name : field.label}（${variable}）` : variable,
-        type,
-        values: type === 'BOOLEAN'
-          ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
-          : embedded
-            ? (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id }))
-            : (Array.isArray(options) ? options : []).map(item => ({
-                value: String(item?.value ?? item?.label ?? ''),
-                label: String(item?.label ?? item?.value ?? '')
-              })).filter(item => item.value),
-        valueRestricted: type === 'BOOLEAN' || (embedded ? field.type === 'enum' : field?.workflowEnum === true)
-      })
-    }
-    return result
+    return { fields: formFieldCatalog.processFields(sourceProcess)?.conditionFields || [], conflicts: [] }
   }
 
   /**
@@ -272,88 +212,7 @@ export function createRoutingCallActivityDomain(context) {
    */
   function resolveCallActivityParentFields(callActivity = selectedBusinessObject.value) {
     if (!callActivity || callActivity.$type !== 'bpmn:CallActivity') return []
-    let process = callActivity
-    while (process && process.$type !== 'bpmn:Process') process = process.$parent
-    if (!process) return []
-    const fields = new Map()
-    const visit = flowElements => {
-      for (const element of Array.isArray(flowElements) ? flowElements : []) {
-        if (['bpmn:StartEvent', 'bpmn:UserTask'].includes(element?.$type)) {
-          const embedded = formFieldCatalog.readEmbeddedFormFields(element).map(field => ({
-            name: String(field.variable || field.id || '').trim(),
-            label: field.name || field.variable,
-            type: embeddedCallFieldType(field.type),
-            required: field.required === true,
-            readable: field.readable !== false,
-            writable: field.writable !== false,
-            systemWritable: field.systemWritable === true && field.readable !== false && field.writable === false
-          }))
-          mergeCallVariableFields(fields, embedded)
-          const form = formFieldCatalog.resolveTemplateForm(element)
-          if (form?.content) {
-            mergeCallVariableFields(fields, extractTemplateCallFields(
-              form.content, readTemplatePermissionPolicy(element)))
-          }
-        }
-        visit(element?.flowElements)
-      }
-    }
-    visit(process.flowElements)
-    return [...fields.values()].filter(field => field.type).sort((left, right) => left.name.localeCompare(right.name))
-  }
-
-  /**
-   * 从正式表单 JSON 提取 CallActivity 允许映射的单值字段。
-   * @param {string} content 已由页面从正式表单接口回读的 JSON。
-   * @returns {Array<object>} 不包含集合、附件、表格和范围字段的字段目录。
-   */
-  function extractTemplateCallFields(content, policy) {
-    return formFieldCatalog.readTemplateFieldDescriptors(content)
-      .map(({ field, variable: name }) => {
-        const type = templateScalarFieldType(field)
-        const mode = policy.permissions.get(name)
-        if (!policy.defaultMode || !mode) return null
-        return name && type ? { name, label: field?.label || name, type,
-          required: mode === 'REQUIRED', readable: mode !== 'HIDDEN',
-          writable: ['EDITABLE', 'REQUIRED'].includes(mode),
-          systemWritable: field.workflowSystemWritable === true && mode === 'READONLY' } : null
-      }).filter(Boolean)
-  }
-
-  /**
-   * 将 Flowable 内嵌 FormData 类型归一为服务端调用映射类型。
-   * @param {string} type 内嵌表单字段类型。
-   * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 可映射类型或空。
-   */
-  function embeddedCallFieldType(type) {
-    if (['long', 'integer'].includes(type)) return 'NUMBER'
-    if (type === 'boolean') return 'BOOLEAN'
-    if (type === 'enum') return 'SCALAR'
-    if (['string', 'date'].includes(type)) return 'TEXT'
-    return null
-  }
-
-  /**
-   * 合并父流程字段并移除同名异构字段，避免页面提供必然被服务端拒绝的映射。
-   * @param {Map<string, object>} target 当前字段目录。
-   * @param {Array<object>} source 待合并字段。
-   * @returns {void} 同名同型保留首次名称，同名异型从目录移除。
-   */
-  function mergeCallVariableFields(target, source) {
-    for (const field of source) {
-      if (!field?.name || !field.type) continue
-      const previous = target.get(field.name)
-      if (previous && previous.type !== field.type) {
-        target.set(field.name, { ...previous, type: null, readable: false, writable: false })
-        continue
-      }
-      if (!previous) target.set(field.name, field)
-      else target.set(field.name, { ...previous,
-        required: previous.required || field.required,
-        readable: previous.readable && field.readable,
-        writable: previous.writable && field.writable,
-        systemWritable: previous.systemWritable === true && field.systemWritable === true })
-    }
+    return formFieldCatalog.processFields(callActivity)?.callFields || []
   }
 
   /**
@@ -536,86 +395,10 @@ export function createRoutingCallActivityDomain(context) {
    * @returns {string} 空串表示通过，否则返回带节点名称的首个业务错误。
    */
   function validateCallActivityConfiguration(callActivity) {
-    const nodeName = String(callActivity?.name || callActivity?.id || '调用活动')
-    const reference = String(callActivity?.calledElement || '').trim()
-    const referenceType = String(callActivity?.get?.('flowable:calledElementType') || 'key').trim()
-    if (!reference || !['key', 'id'].includes(referenceType) || reference.includes('${') || reference.includes('#{')) {
-      return `${nodeName}必须从已发布子流程目录选择目标和版本策略`
-    }
-    const target = referenceType === 'id'
-      ? callActivityOptions.value.find(option => option.definitionId === reference)
-      : callActivityOptions.value
-        .filter(option => option.processKey === reference && option.status === 'ACTIVE')
-        .sort((left, right) => Number(right.version) - Number(left.version))[0]
-    if (!target) return `${nodeName}引用的子流程不存在或当前用户无权引用`
-    if (target.status !== 'ACTIVE') return `${nodeName}引用的子流程已停用`
-
-    // 当前选中节点可能保留尚未写入 XML 的半行草稿，保存前必须显式阻止丢失。
-    if (selectedBusinessObject.value === callActivity) {
-      const drafts = [...propertyState.callInMappings, ...propertyState.callOutMappings]
-      if (drafts.some(mapping => !String(mapping?.source || '').trim() || !String(mapping?.target || '').trim())) {
-        return `${nodeName}存在未完成的变量映射`
-      }
-    }
-    const parentFields = resolveCallActivityParentFields(callActivity)
-    const inputError = validateCallMappings(
-      readCallMappings(callActivity, 'flowable:In'),
-      parentFields,
-      target.inputFields || [],
-      `${nodeName}输入`
-    )
-    if (inputError) return inputError
-    return validateCallMappings(
-      readCallMappings(callActivity, 'flowable:Out'),
-      target.outputFields || [],
-      parentFields,
-      `${nodeName}输出`,
-      true
-    )
-  }
-
-  /**
-   * 校验一组调用变量映射的数量、目录权限、重复目标和标量类型兼容性。
-   * @param {Array<{source:string,target:string}>} mappings Flowable 原生 in 或 out 映射。
-   * @param {Array<object>} sourceFields 来源变量字段目录。
-   * @param {Array<object>} targetFields 目标变量字段目录。
-   * @param {string} direction 包含节点名称的输入或输出方向。
-   * @param {boolean} allowSystemOutput 仅调用输出方向允许显式授权的系统结果。
-   * @returns {string} 空串表示通过，否则返回稳定业务错误。
-   */
-  function validateCallMappings(mappings, sourceFields, targetFields, direction, allowSystemOutput = false) {
-    if (mappings.length > 64) return `${direction}变量映射不能超过64项`
-    const sources = new Map(sourceFields.map(field => [field.name, field]))
-    const targets = new Map(targetFields.map(field => [field.name, field]))
-    const usedTargets = new Set()
-    for (const mapping of mappings) {
-      const sourceName = String(mapping?.source || '').trim()
-      const targetName = String(mapping?.target || '').trim()
-      if (!sourceName || !targetName) return `${direction}存在未完成的变量映射`
-      if (usedTargets.has(targetName)) return `${direction}变量目标不能重复`
-      usedTargets.add(targetName)
-      const source = sources.get(sourceName)
-      const target = targets.get(targetName)
-      if (!source) return `${direction}来源字段不存在：${mapping.source}`
-      if (!target) return `${direction}目标字段不存在：${mapping.target}`
-      if (!source.readable) return `${direction}来源字段不可读：${mapping.source}`
-      if (!target.writable && !(allowSystemOutput && target.systemWritable === true && target.readable)) return `${direction}目标字段不可写且未授权系统回填：${mapping.target}`
-      if (!callVariableTypesCompatible(source.type, target.type)) return `${direction}变量字段类型不兼容`
-    }
-    return ''
-  }
-
-  /**
-   * 判断两个受控标量字段类型是否可安全映射。
-   * @param {string} sourceType 来源字段的 TEXT、NUMBER、BOOLEAN 或 SCALAR 类型。
-   * @param {string} targetType 目标字段的 TEXT、NUMBER、BOOLEAN 或 SCALAR 类型。
-   * @returns {boolean} 同型或一端为受控 SCALAR 时返回 true。
-   */
-  function callVariableTypesCompatible(sourceType, targetType) {
-    if (sourceType === targetType) return true
-    const scalarTypes = new Set(['TEXT', 'NUMBER', 'BOOLEAN'])
-    return (sourceType === 'SCALAR' && scalarTypes.has(targetType))
-      || (targetType === 'SCALAR' && scalarTypes.has(sourceType))
+    if (selectedBusinessObject.value !== callActivity) return ''
+    const drafts = [...propertyState.callInMappings, ...propertyState.callOutMappings]
+    return drafts.some(mapping => !String(mapping?.source || '').trim() || !String(mapping?.target || '').trim())
+      ? `${callActivity.name || callActivity.id || ''}存在未完成的变量映射` : ''
   }
 
   function loadRoutingState(element, businessObject) {
@@ -659,8 +442,6 @@ export function createRoutingCallActivityDomain(context) {
     updateConditionRule,
     makeConditionDefault,
     persistConditionConfig,
-    validateCallActivityConfiguration,
-    validateCallMappings,
-    callVariableTypesCompatible
+    validateCallActivityConfiguration
   }
 }

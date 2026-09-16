@@ -201,17 +201,84 @@ public class WorkflowBpmnService
     /** 仅供不可部署的个人设计草稿使用，允许端点、表单及业务规则尚未配置。 */
     public String validateDesignDraft(byte[] bytes, String modelKey)
     {
+        String xml = readDesignXml(bytes);
+        var parsed = parseSecurely(xml);
+        if (parsed.getProcesses().stream().noneMatch(process -> modelKey.equals(process.getId())))
+            throw invalidBpmn("设计草稿必须包含当前模型所属流程", null);
+        return xml;
+    }
+
+    private String readDesignXml(byte[] bytes)
+    {
         if (bytes == null || bytes.length == 0 || bytes.length > MAX_BPMN_BYTES)
             throw invalidBpmn("设计草稿为空或超过 2 MB", null);
         String xml = decodeUtf8(bytes);
         String lower = xml.toLowerCase(Locale.ROOT);
         if (lower.contains("<!doctype") || lower.contains("<!entity"))
             throw invalidBpmn("设计草稿不允许 DTD 或实体声明", null);
-        var parsed = parseSecurely(xml);
-        if (parsed.getProcesses().stream().noneMatch(process -> modelKey.equals(process.getId())))
-            throw invalidBpmn("设计草稿必须包含当前模型所属流程", null);
         return xml;
     }
+
+    /** 仅解析作者表单，不要求连线、参与者或条件规则已经配置完整。 */
+    public AuthorForms readAuthorForms(byte[] bytes)
+    {
+        String xml = readDesignXml(bytes);
+        org.flowable.bpmn.model.BpmnModel model;
+        try
+        {
+            // Flowable 的按 ID 索引可能覆盖重复元素，必须在转换前核验原始作者标识。
+            var raw = WorkflowBpmnXmlPreserver.parse(bytes).getElementsByTagNameNS(
+                    "http://www.omg.org/spec/BPMN/20100524/MODEL", "*");
+            Set<String> rawIds = new HashSet<>();
+            for (int index = 0; index < raw.getLength(); index++)
+            {
+                var element = (org.w3c.dom.Element) raw.item(index);
+                if (element.hasAttribute("id") && !rawIds.add(element.getAttribute("id")))
+                    throw invalidBpmn("流程元素标识不能重复", null);
+            }
+            model = parseSecurely(xml);
+        }
+        catch (ServiceException exception) { throw exception; }
+        catch (Exception exception) { throw invalidBpmn("BPMN XML 解析失败", exception); }
+        WorkflowSystemOutputContract.apply(xml, model);
+        List<WorkflowBpmnFormReference> references = new ArrayList<>();
+        List<com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView.Issue> issues = new ArrayList<>();
+        Set<String> uniqueReferences = new HashSet<>();
+        Set<String> ids = new HashSet<>();
+        for (org.flowable.bpmn.model.Process process : model.getProcesses())
+        {
+            if (!ids.add(requireElementId(process.getId(), "流程标识不能为空")))
+                throw invalidBpmn("流程元素标识不能重复", null);
+            for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
+                if (!ids.add(requireElementId(element.getId(), "流程元素标识不能为空")))
+                    throw invalidBpmn("流程元素标识不能重复", null);
+            if (!process.isExecutable()) continue;
+            List<FlowElement> nodes = new ArrayList<>();
+            process.getFlowElements().stream().filter(StartEvent.class::isInstance).forEach(nodes::add);
+            nodes.addAll(process.findFlowElementsOfType(UserTask.class, true));
+            for (FlowElement node : nodes)
+            {
+                String key = node instanceof StartEvent start ? start.getFormKey() : ((UserTask) node).getFormKey();
+                List<FormProperty> properties = node instanceof StartEvent start
+                        ? start.getFormProperties() : ((UserTask) node).getFormProperties();
+                if (!hasText(key) && !hasEmbeddedFormProperties(key, properties)) continue;
+                try
+                {
+                    addNodeFormReference(process.getId(), key, properties, node.getId(), node.getName(),
+                            references, uniqueReferences);
+                }
+                catch (ServiceException exception)
+                {
+                    issues.add(new com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView.Issue(
+                            process.getId(), node.getId(), exception.getMessage()));
+                }
+            }
+        }
+        return new AuthorForms(new WorkflowBpmnDocument(model, xml, references), List.copyOf(issues));
+    }
+
+    public record AuthorForms(WorkflowBpmnDocument document,
+            List<com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView.Issue> issues) { }
 
     /**
      * 校验部署编译器生成的可执行 BPMN；固定调度器必须保留，作者扩展字段必须已经剥离。

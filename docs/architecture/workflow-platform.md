@@ -58,8 +58,8 @@ flowchart TD
 | `src/api` | URL、HTTP 方法、参数和请求配置 | 统一使用 `utils/request`，不决定流程状态或办理资格 |
 | `src/components/workflow` | 设计器、查看器、表单和列表等工作流交互 | 展示后端视图；编辑模型由所在组件管理 |
 | `workflow/designer/*Domain.js` | 当前 BPMN 的属性编辑规则与字段选项 | 通过明确传入的目录和命令栈操作协作 |
-| `workflow/designer/designerFormFieldCatalog.js` | 模板查找、JSON 字段展开和内嵌表单读取 | 提供按原顺序排列的中性字段描述，保留重名声明 |
-| `workflow/designer/formUserFieldCatalog.js` | 用户主键字段资格、重名冲突和可选项 | 消费字段描述，不再独立解析模板 JSON |
+| `workflow/designer/designerFormFieldCatalog.js` | 表单/权限编辑所需的中性描述，以及当前 XML 的有效字段请求状态 | 按节点与流程读取服务端投影，失效并丢弃旧响应；不推演业务资格 |
+| `WorkflowModelService.authorFieldCatalog` | 用户主键、循环、条件与调用映射字段投影 | 复用权限化表单、正式字段类型与冲突规则；前端只消费有效选项，保存/部署重新校验 |
 | `workflow/form` | 安全渲染描述、字段组件和表单输入 | 使用部署或提交快照，不读取设计器内部状态 |
 | `src/components/Crontab` | Cron 输入与预览 | 秒、分、时、月共用 `NumericField`；日、周、年的特殊语法各自维护 |
 | `src/store` / `src/utils` | 应用级状态 / 无页面归属的复用能力 | 页面局部状态留在页面，工作流规则留在工作流目录 |

@@ -1,6 +1,10 @@
 package com.ruoyi.flowable.service.model;
 
 import java.nio.charset.StandardCharsets;
+import org.springframework.transaction.annotation.Transactional;
+import com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView;
+import com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView.Option;
+import com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView.Scalar;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -1007,7 +1011,12 @@ public class WorkflowModelService
      */
     private List<FormSnapshotSource> loadSnapshotSources(List<WorkflowBpmnFormReference> references)
     {
-        Map<Long, WfForm> formsById = new LinkedHashMap<>();
+        return loadSnapshotSources(references, new LinkedHashMap<>());
+    }
+
+    private List<FormSnapshotSource> loadSnapshotSources(List<WorkflowBpmnFormReference> references,
+            Map<Long, WfForm> formsById)
+    {
         List<FormSnapshotSource> sources = new ArrayList<>(references.size());
         for (WorkflowBpmnFormReference reference : references)
         {
@@ -1036,6 +1045,117 @@ public class WorkflowModelService
             }
         }
         return List.copyOf(sources);
+    }
+
+    /** 为尚未完成的作者图投影有效字段，不写模型、不校验无关业务配置。 */
+    @Transactional(readOnly = true)
+    public WorkflowAuthorFieldCatalogView authorFieldCatalog(String bpmnXml)
+    {
+        var author = bpmnService.readAuthorForms(bpmnXml.getBytes(StandardCharsets.UTF_8));
+        var document = author.document();
+        var issues = new ArrayList<>(author.issues());
+        Map<Long, WfForm> forms = new LinkedHashMap<>();
+        List<FormSnapshotSource> sources = new ArrayList<>();
+        var userBuilder = WorkflowAuthorFormFieldCatalog.builder();
+        List<WorkflowControlledLoopFormSchema> schemas = new ArrayList<>();
+        List<WorkflowAuthorFieldCatalogView.Node> nodes = new ArrayList<>();
+        Map<String, Map<String, String>> labelsByProcess = new LinkedHashMap<>();
+        Map<String, Map<String, Map<String, String>>> valuesByProcess = new LinkedHashMap<>();
+        for (var reference : document.formReferences())
+        {
+            try
+            {
+                // 内嵌自定义类型已由作者解析使用 resolveForAuthor 固定元数据；目录读取不抢部署锁。
+                var source = reference.sourceType() == WorkflowFormSourceType.EMBEDDED
+                        ? new FormSnapshotSource(reference, reference.nodeName(), reference.embeddedContent(), List.of())
+                        : loadSnapshotSources(List.of(reference), forms).get(0);
+                JsonNode root = formTemplateValidator.validate(source.content());
+                Map<String, String> labels = new LinkedHashMap<>();
+                Map<String, Map<String, String>> values = new LinkedHashMap<>();
+                formTemplateValidator.visitFields(root, (field, permission) -> {
+                    String name = field.path("vModel").asText("");
+                    if (!name.isEmpty())
+                    {
+                        labels.put(name, field.path("label").asText(name));
+                        Map<String, String> optionLabels = new LinkedHashMap<>();
+                        field.path("options").forEach(option -> {
+                            String value = option.path("value").asText("");
+                            optionLabels.put(value, option.path("label").asText(value));
+                        });
+                        values.put(name, optionLabels);
+                    }
+                });
+                var userFields = formTemplateValidator.extractUserIdSourceFieldSignatures(root);
+                var loopFields = startVariableValidator.describeControlledLoopFields(source.content());
+                userBuilder.add(reference.processKey(), reference.nodeKey(), userFields,
+                        formTemplateValidator.extractVariableNames(root));
+                schemas.add(new WorkflowControlledLoopFormSchema(reference.processKey(), reference.nodeKey(), loopFields));
+                nodes.add(new WorkflowAuthorFieldCatalogView.Node(reference.processKey(), reference.nodeKey(),
+                        fieldOptions(userFields.keySet(), labels), scalarOptions(loopFields, labels, values)));
+                labelsByProcess.computeIfAbsent(reference.processKey(), key -> new LinkedHashMap<>()).putAll(labels);
+                valuesByProcess.computeIfAbsent(reference.processKey(), key -> new LinkedHashMap<>()).putAll(values);
+                sources.add(source);
+            }
+            catch (ServiceException exception)
+            {
+                issues.add(new WorkflowAuthorFieldCatalogView.Issue(reference.processKey(), reference.nodeKey(),
+                        exception.getMessage()));
+            }
+        }
+        var users = userBuilder.build();
+        List<WorkflowAuthorFieldCatalogView.Process> processes = new ArrayList<>();
+        for (var process : document.bpmnModel().getProcesses())
+        {
+            if (!process.isExecutable() || issues.stream().anyMatch(issue -> process.getId().equals(issue.processKey())))
+                continue;
+            var processSources = sources.stream().filter(source -> source.reference().processKey().equals(process.getId())).toList();
+            Map<String, String> labels = labelsByProcess.getOrDefault(process.getId(), Map.of());
+            try
+            {
+                var processDocument = new WorkflowBpmnDocument(document.bpmnModel(), document.bpmnXml(),
+                        processSources.stream().map(FormSnapshotSource::reference).toList());
+                var contents = processSources.stream().collect(java.util.stream.Collectors.toMap(
+                        source -> source.reference().nodeKey(), FormSnapshotSource::content));
+                var conditions = conditionDeploymentService.buildProcessFieldIndex(schemas.stream()
+                        .filter(schema -> schema.processKey().equals(process.getId())).toList());
+                var calls = callActivityReferenceService.describeParentFields(processDocument, contents);
+                processes.add(new WorkflowAuthorFieldCatalogView.Process(process.getId(),
+                        fieldOptions(labels.keySet().stream().filter(name -> users.containsProcessField(process.getId(), name)).toList(), labels),
+                        scalarOptions(conditions.getOrDefault(process.getId(), Map.of()), labels,
+                                valuesByProcess.getOrDefault(process.getId(), Map.of())),
+                        calls.getOrDefault(process.getId(), List.of())));
+            }
+            catch (ServiceException exception)
+            {
+                issues.add(new WorkflowAuthorFieldCatalogView.Issue(process.getId(), "", exception.getMessage()));
+            }
+        }
+        return new WorkflowAuthorFieldCatalogView(List.copyOf(nodes), List.copyOf(processes), List.copyOf(issues));
+    }
+
+    private List<Option> fieldOptions(java.util.Collection<String> fields, Map<String, String> labels)
+    {
+        return fields.stream().sorted().map(name -> new Option(name, fieldLabel(name, labels))).toList();
+    }
+
+    private String fieldLabel(String name, Map<String, String> labels)
+    {
+        String label = labels.getOrDefault(name, name);
+        return name.equals(label) || !hasText(label) ? name : label + "（" + name + "）";
+    }
+
+    private List<Scalar> scalarOptions(Map<String, WorkflowControlledLoopFormField> fields,
+            Map<String, String> labels, Map<String, Map<String, String>> optionLabels)
+    {
+        return fields.values().stream().sorted(java.util.Comparator.comparing(WorkflowControlledLoopFormField::name))
+                .map(field -> new Scalar(field.name(), fieldLabel(field.name(), labels), field.kind().name(),
+                        field.kind() == WorkflowControlledLoopFormField.Kind.BOOLEAN
+                                ? List.of(new Option("true", "是"), new Option("false", "否"))
+                                : (field.enumValues().isEmpty() ? optionLabels.getOrDefault(field.name(), Map.of()).keySet()
+                                        : field.enumValues()).stream().sorted().map(value -> new Option(value,
+                                        optionLabels.getOrDefault(field.name(), Map.of()).getOrDefault(value, value))).toList(),
+                        field.kind() == WorkflowControlledLoopFormField.Kind.BOOLEAN || !field.enumValues().isEmpty()))
+                .toList();
     }
 
     /**

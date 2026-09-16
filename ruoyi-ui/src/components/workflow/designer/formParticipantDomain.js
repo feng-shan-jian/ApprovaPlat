@@ -1,7 +1,6 @@
 import { computed } from 'vue'
 import { templatePermissionIssues } from '../form/formTemplate.js'
 import { createControlledLoopDomain, isControlledLoopProperty } from './controlledLoopDomain.js'
-import { participantUserIdFieldOptions } from './formUserFieldCatalog.js'
 import { createParticipantRuleDomain, isParticipantRuleProperty } from './participantRuleDomain.js'
 
 // 受控多实例的技术表达式属于发布协议，设计器只能在结构化业务选项间切换。
@@ -206,19 +205,8 @@ export function createFormParticipantDomain(context) {
    */
   function resolveParticipantFormFieldOptions() {
     if (!isUserTask.value) return []
-    if (propertyState.formSource === 'EMBEDDED') {
-      return participantUserIdFieldOptions(
-        formFieldCatalog.resolveUserIdFieldCatalog(propertyState.embeddedFields))
-    }
-    const form = formFieldCatalog.resolveTemplateForm(propertyState.formKey)
-    const permissionPolicy = {
-      defaultMode: propertyState.formPermissionDefault,
-      permissions: new Map(propertyState.formPermissionFields
-        .map(field => [field.variable, field.mode]))
-    }
-    return form?.content
-      ? participantUserIdFieldOptions(formFieldCatalog.resolveUserIdFieldCatalog(propertyState.formKey, permissionPolicy))
-      : []
+    return (formFieldCatalog.nodeFields(selectedBusinessObject.value)?.userIdFields || [])
+      .filter(field => /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(field.value))
   }
 
   /**

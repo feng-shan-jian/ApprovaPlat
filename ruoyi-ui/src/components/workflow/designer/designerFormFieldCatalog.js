@@ -1,23 +1,4 @@
-import { createEmbeddedUserIdFieldCatalog, createTemplateUserIdFieldCatalog, normalizeEmbeddedFormType } from './formUserFieldCatalog.js'
-
-/**
- * 将正式模板组件收窄为条件与调用映射使用的四类标量。
- * @param {object} field 正式表单字段。
- * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 集合、附件、表格和范围字段返回空。
- */
-export function templateScalarFieldType(field) {
-  const tag = String(field?.tag || '')
-  if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
-  if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
-  if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'
-  if (tag === 'el-switch') return 'BOOLEAN'
-  if (tag === 'el-radio-group') return 'SCALAR'
-  if (tag === 'el-select') return field?.multiple === true ? null : 'SCALAR'
-  if (['el-time-picker', 'el-date-picker'].includes(tag)) {
-    return field?.['is-range'] === true || String(field?.type || '').toLowerCase().includes('range') ? null : 'TEXT'
-  }
-  return null
-}
+import { ref } from 'vue'
 
 /**
  * 读取调用方传入的最新目录快照，不依赖 Vue 或其他响应式框架。
@@ -31,11 +12,17 @@ function readCatalogSource(source) {
 
 /**
  * 创建流程设计器共享表单字段目录。
- * @param {{forms:Array<object>|(()=>Array<object>),formFieldOptions:Array<object>|(()=>Array<object>)}} context 正式表单和字段扩展目录来源。
- * @returns {object} 五个不依赖 Vue、DOM、API 或 Modeler 的字段读取入口。
+ * @param {{forms:Array<object>|(()=>Array<object>),loadAuthorFields:Function}} context 模板显示内容与服务端有效字段接口。
+ * @returns {object} 原始字段编辑描述及按 XML 版本维护的后端字段投影。
  */
 export function createDesignerFormFieldCatalog(context = {}) {
-  const { forms = [], formFieldOptions = [] } = context
+  const { forms = [], loadAuthorFields } = context
+  const snapshot = ref(null)
+  const loading = ref(false)
+  const error = ref('')
+  let version = 0
+  let requestedXml = ''
+  let pending = null
 
   /**
    * 按 BPMN 业务对象或 formKey 查找正式模板。
@@ -103,39 +90,72 @@ export function createDesignerFormFieldCatalog(context = {}) {
     }
   }
 
-  /**
-   * 解析元素当前绑定的内嵌字段或正式模板字段。
-   * @param {object|undefined} businessObject StartEvent 或 UserTask 业务对象。
-   * @returns {Array<{source:string,variable:string,field:object}>} 保持来源字段顺序的中性描述。
-   */
-  function resolveElementFieldDescriptors(businessObject) {
-    const embedded = readEmbeddedFormFields(businessObject)
-    if (embedded.length) {
-      return embedded.map(field => ({ source: 'EMBEDDED', variable: field.variable || '', field }))
-    }
-    const form = resolveTemplateForm(businessObject)
-    return form?.content ? readTemplateFieldDescriptors(form.content) : []
+  // 目录只接受后端按同次 XML 冻结的投影，缺失和加载中均不回退到原始模板推算。
+  function owningProcess(source) {
+    while (source && source.$type !== 'bpmn:Process') source = source.$parent
+    return source
   }
 
-  /**
-   * 复用正式用户字段资格规则生成指定元素的用户主键字段目录。
-   * @param {object|string|Array<object>|undefined} source BPMN 业务对象、formKey 或已编辑内嵌字段。
-   * @param {{defaultMode?:string,permissions?:Map<string,string>}|undefined} permissionPolicy 消费者解析的强制节点字段权限。
-   * @returns {Array<{value:string,label:string,eligible:boolean,signature:string}>} 保持字段顺序的完整资格目录。
-   */
-  function resolveUserIdFieldCatalog(source, permissionPolicy) {
-    const embedded = Array.isArray(source) ? source : readEmbeddedFormFields(source)
-    if (Array.isArray(source) || embedded.length) {
-      const customTypes = new Set(readCatalogSource(formFieldOptions)
-        .map(option => `custom:${option.extensionKey}`))
-      return createEmbeddedUserIdFieldCatalog(embedded, customTypes)
-    }
-    const form = resolveTemplateForm(source)
-    return form?.content
-      ? createTemplateUserIdFieldCatalog(readTemplateFieldDescriptors(form.content), permissionPolicy)
-      : []
+  function nodeFields(source) {
+    const processKey = owningProcess(source)?.id
+    return snapshot.value?.nodes.find(node => node.processKey === processKey && node.nodeKey === source?.id)
+  }
+
+  function processFields(source) {
+    const processKey = owningProcess(source)?.id
+    return snapshot.value?.processes.find(process => process.processKey === processKey)
+  }
+
+  function invalidate() {
+    version += 1
+    requestedXml = ''
+    snapshot.value = null
+    error.value = ''
+    loading.value = false
+  }
+
+  async function refresh(xml) {
+    if (xml === requestedXml) return pending
+    invalidate()
+    requestedXml = xml
+    const requestVersion = version
+    loading.value = true
+    pending = (async () => {
+      try {
+        const { data } = await loadAuthorFields(xml)
+        if (requestVersion !== version) return
+        if (!Array.isArray(data?.nodes) || !Array.isArray(data?.processes) || !Array.isArray(data?.issues)) {
+          throw new Error('字段目录响应格式不正确')
+        }
+        snapshot.value = data
+      } catch (failure) {
+        if (requestVersion !== version) return
+        error.value = failure?.message || '字段目录加载失败，请重新校验或编辑后重试'
+        requestedXml = ''
+      } finally {
+        if (requestVersion === version) loading.value = false
+      }
+    })()
+    return pending
+  }
+
+  function issueFor(source) {
+    if (error.value) return error.value
+    const processKey = owningProcess(source)?.id
+    const nodeScope = ['bpmn:UserTask', 'bpmn:StartEvent'].includes(source?.$type)
+    const issue = snapshot.value?.issues.find(item => item.processKey === processKey
+      && (!nodeScope || !item.nodeKey || item.nodeKey === source?.id))
+    return issue ? `${issue.nodeKey ? issue.nodeKey + '：' : ''}${issue.message}` : ''
   }
 
   return { resolveTemplateForm, readEmbeddedFormFields, readTemplateFieldDescriptors,
-    resolveElementFieldDescriptors, resolveUserIdFieldCatalog }
+    nodeFields, processFields, refresh, invalidate, loading, issueFor }
+}
+
+/** 内嵌字段编辑保留受控类型拼写，不参与业务资格判断。 */
+function normalizeEmbeddedFormType(type) {
+  const value = String(type || 'string').trim()
+  const separator = value.indexOf(':')
+  return separator >= 0 && value.slice(0, separator).toLowerCase() === 'custom'
+    ? `custom:${value.slice(separator + 1)}` : value.toLowerCase()
 }

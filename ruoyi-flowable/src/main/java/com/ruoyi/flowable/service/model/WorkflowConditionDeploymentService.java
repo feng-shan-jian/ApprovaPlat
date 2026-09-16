@@ -145,7 +145,7 @@ public class WorkflowConditionDeploymentService
      * @param formSchemas List&lt;WorkflowControlledLoopFormSchema&gt;，节点表单字段集合
      * @return Map&lt;String,Map&lt;String,WorkflowControlledLoopFormField&gt;&gt;，流程字段索引
      */
-    private Map<String, Map<String, WorkflowControlledLoopFormField>> buildProcessFieldIndex(
+    Map<String, Map<String, WorkflowControlledLoopFormField>> buildProcessFieldIndex(
             List<WorkflowControlledLoopFormSchema> formSchemas)
     {
         Map<String, Map<String, WorkflowControlledLoopFormField>> mutable = new LinkedHashMap<>();

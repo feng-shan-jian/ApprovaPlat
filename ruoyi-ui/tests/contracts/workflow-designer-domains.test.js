@@ -65,444 +65,161 @@ function createDomainContext(overrides = {}) {
   }
 }
 
-/**
- * 验证共享字段目录保持正式模板与内嵌 FormProperty 的既有字段顺序和投影结果。
- * @returns {void} 新目录或旧 facade 的字段类型、枚举值、标签和顺序漂移时测试失败。
- */
-test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
-  const templateContent = JSON.stringify({
-    fields: [
-      {
-        vModel: 'amount', tag: 'el-input-number', label: '申请金额', layout: 'colFormItem',
-        workflowHidden: false, workflowReadable: true, workflowWritable: true
-      },
-      {
-        vModel: 'decision', tag: 'el-radio-group', label: '审批结论',
-        layout: 'colFormItem', workflowEnum: true,
-        workflowHidden: false, workflowReadable: true, workflowWritable: true,
-        options: [{ value: 'PASS', label: '通过' }, { value: 'REJECT', label: '驳回' }]
-      },
-      {
-        layout: 'rowFormItem',
-        workflowHidden: false, workflowReadable: true, workflowWritable: true,
-        children: [{
-          vModel: 'readonlyNote', tag: 'el-input', label: '只读说明',
-          layout: 'colFormItem', workflowHidden: false,
-          workflowReadable: true, workflowWritable: false
-        }]
-      }
-    ]
+test('各业务目录只消费同一次后端投影，选择节点不重新推演原始模板', async () => {
+  const process = { $type: 'bpmn:Process', id: 'main' }
+  const task = { $type: 'bpmn:UserTask', id: 'task', $parent: process }
+  const call = { $type: 'bpmn:CallActivity', id: 'call', $parent: process }
+  const owner = { value: 'owner', label: '负责人（owner）' }
+  const decision = { value: 'decision', label: '结论', type: 'SCALAR',
+    values: [{ value: 'PASS', label: '通过' }], valueRestricted: true }
+  const system = { name: 'result', type: 'NUMBER', readable: false, writable: false, systemWritable: true }
+  const data = { nodes: [{ processKey: 'main', nodeKey: 'task', userIdFields: [owner], loopFields: [decision] }],
+    processes: [{ processKey: 'main', userIdFields: [], conditionFields: [decision], callFields: [system] }], issues: [] }
+  const catalog = createDesignerFormFieldCatalog({
+    forms: [{ formId: 7, content: JSON.stringify({ fields: [{ vModel: 'forged', tag: 'el-input', workflowWritable: true }] }) }],
+    loadAuthorFields: async () => ({ data })
   })
-  const props = { forms: [{ formId: 7, content: templateContent }], identityOptions: {} }
-  const context = createDomainContext({
-    props,
-    propertyState: {
-      formSource: 'TEMPLATE',
-      formKey: 'key_7',
-      formPermissionDefault: 'EDITABLE',
-      formPermissionFields: []
-    }
-  })
-  const formParticipantDomain = createFormParticipantDomain(context)
-  context.readTemplatePermissionPolicy = formParticipantDomain.readTemplatePermissionPolicy
-  const controlledLoopDomain = createControlledLoopDomain({
-    buildPropertiesExtensionElements: context.buildPropertiesExtensionElements,
-    formFieldCatalog: context.formFieldCatalog,
-    isUserTask: context.isUserTask,
-    propertyState: context.propertyState,
-    selectedBusinessObject: context.selectedBusinessObject
-  })
-  const participantRuleDomain = createParticipantRuleDomain({
-    readParticipantFormFieldOptions: () => formParticipantDomain.participantFormFieldOptions.value,
-    readAllFlowableProperties: context.readAllFlowableProperties
-  })
-  const templateBusinessObject = {
-    get(name) { return name === 'flowable:formKey' ? 'key_7' : '' },
-    extensionElements: {
-      values: [
-        {
-          $type: 'flowable:FormProperty',
-          id: 'approva_permission_default',
-          readable: true,
-          writable: true
-        },
-        {
-          $type: 'flowable:FormProperty',
-          id: 'approva_permission_field_1',
-          variable: 'decision',
-          readable: false,
-          writable: false
-        },
-        {
-          $type: 'flowable:FormProperty', id: 'approva_permission_field_2',
-          variable: 'amount', readable: true, writable: true
-        },
-        {
-          $type: 'flowable:FormProperty', id: 'approva_permission_field_3',
-          variable: 'readonlyNote', readable: true, writable: false
-        }
-      ]
-    }
-  }
-  const embeddedBusinessObject = {
-    get() { return '' },
-    extensionElements: {
-      values: [
-        {
-          $type: 'flowable:FormProperty',
-          id: 'approved',
-          variable: 'approved',
-          name: '是否通过',
-          type: 'BOOLEAN'
-        },
-        {
-          $type: 'flowable:FormProperty',
-          id: 'result',
-          variable: 'result',
-          name: '处理结果',
-          type: 'enum',
-          values: [{ id: 'DONE', name: '完成' }]
-        },
-        {
-          $type: 'flowable:FormProperty',
-          id: 'readonlyDate',
-          variable: 'readonlyDate',
-          name: '只读日期',
-          type: 'date',
-          writable: false
-        }
-      ]
-    }
-  }
-  const expectedTemplate = [
-    {
-      value: 'amount',
-      label: '申请金额（amount）',
-      type: 'NUMBER',
-      values: [],
-      valueRestricted: false
-    },
-    {
-      value: 'decision',
-      label: '审批结论（decision）',
-      type: 'SCALAR',
-      values: [{ value: 'PASS', label: '通过' }, { value: 'REJECT', label: '驳回' }],
-      valueRestricted: true
-    }
-  ]
-  const expectedEmbedded = [
-    {
-      value: 'approved',
-      label: '是否通过（approved）',
-      type: 'BOOLEAN',
-      values: [{ value: 'true', label: '是' }, { value: 'false', label: '否' }],
-      valueRestricted: true
-    },
-    {
-      value: 'result',
-      label: '处理结果（result）',
-      type: 'SCALAR',
-      values: [{ value: 'DONE', label: '完成' }],
-      valueRestricted: true
-    }
-  ]
+  const context = createDomainContext({ formFieldCatalog: catalog, selectedBusinessObject: ref(task),
+    selectedElement: ref({ businessObject: task }), propertyState: { formKey: 'key_7', formSource: 'TEMPLATE' } })
+  const participants = createFormParticipantDomain(context)
+  const loops = createControlledLoopDomain(context)
+  const extensions = createExtensionEventSlaDomain(context)
+  const routing = createRoutingCallActivityDomain(context)
+  assert.deepEqual(participants.participantFormFieldOptions.value, [])
+  await catalog.refresh('current XML')
+  assert.deepEqual(participants.participantFormFieldOptions.value, [owner])
+  assert.deepEqual(loops.resolveControlledLoopFieldOptions(), [decision])
+  assert.deepEqual(extensions.autoCopyFormFieldOptions.value, [owner])
+  assert.deepEqual(routing.resolveCallActivityParentFields(call), [system])
+  context.selectedBusinessObject.value = process
+  assert.deepEqual(extensions.autoCopyFormFieldOptions.value, [])
+  context.selectedBusinessObject.value = { ...task, id: 'other' }
+  assert.deepEqual(participants.participantFormFieldOptions.value, [])
+  const foreign = { $type: 'bpmn:Process', id: 'foreign' }
+  assert.equal(catalog.nodeFields({ ...task, $parent: foreign }), undefined)
+  assert.equal(catalog.processFields(foreign), undefined)
+  catalog.invalidate()
+  context.selectedBusinessObject.value = task
+  assert.deepEqual(participants.participantFormFieldOptions.value, [])
+  assert.deepEqual(routing.resolveCallActivityParentFields(call), [])
+})
 
-  assert.deepEqual(context.formFieldCatalog.readTemplateFieldDescriptors(templateContent)
-    .map(field => field.variable), ['amount', 'decision', 'readonlyNote'])
-  assert.deepEqual(context.formFieldCatalog.resolveElementFieldDescriptors(templateBusinessObject)
-    .map(field => field.source), ['TEMPLATE', 'TEMPLATE', 'TEMPLATE'])
-  assert.deepEqual(context.formFieldCatalog.resolveElementFieldDescriptors(embeddedBusinessObject)
-    .map(field => field.variable), ['approved', 'result', 'readonlyDate'])
-  assert.deepEqual(controlledLoopDomain.describeFormalFormFields(templateBusinessObject), expectedTemplate)
-  assert.deepEqual(controlledLoopDomain.describeFormalFormFields(embeddedBusinessObject), expectedEmbedded)
+test('作者字段目录拒绝乱序、撤销及卸载后的响应，失败不回退，坏节点不屏蔽健康节点', async () => {
+  const requests = []
+  const catalog = createDesignerFormFieldCatalog({ loadAuthorFields: xml => new Promise((resolve, reject) => requests.push({ xml, resolve, reject })) })
+  const process = { id: 'main', $type: 'bpmn:Process' }
+  const task = { id: 'task', $type: 'bpmn:UserTask', $parent: process }
+  const data = value => ({ nodes: [{ processKey: 'main', nodeKey: 'task', userIdFields: [{ value }], loopFields: [] }],
+    processes: [], issues: [{ processKey: 'main', nodeKey: 'broken', message: '请配置完整字段权限' }] })
+  const first = catalog.refresh('before permission change')
+  catalog.invalidate()
+  const second = catalog.refresh('after permission change')
+  requests[1].resolve({ data: data('newOwner') })
+  await second
+  requests[0].resolve({ data: data('oldOwner') })
+  await first
+  assert.equal(catalog.nodeFields(task).userIdFields[0].value, 'newOwner')
+  assert.equal(catalog.issueFor(task), '')
+  assert.match(catalog.issueFor(process), /broken：请配置/)
+  assert.match(catalog.issueFor({ id: 'call', $type: 'bpmn:CallActivity', $parent: process }), /broken/)
+  await catalog.refresh('after permission change')
+  assert.equal(requests.length, 2)
+  const third = catalog.refresh('changed again')
+  assert.equal(catalog.nodeFields(task), undefined)
+  requests[2].reject(new Error('offline'))
+  await third
+  assert.equal(catalog.nodeFields(task), undefined)
+  assert.equal(catalog.issueFor(task), 'offline')
+  const fourth = catalog.refresh('changed again')
+  catalog.invalidate()
+  requests[3].resolve({ data: data('stale after unmount') })
+  await fourth
+  assert.equal(catalog.nodeFields(task), undefined)
+})
 
-  const controlledLoopState = {
-    multiInstanceType: 'approvalLoop',
-    controlledLoopDecisionVariable: 'decision',
-    controlledLoopRepeatValue: 'REJECT',
-    controlledLoopExitValue: 'PASS',
-    controlledLoopMaxIterations: 3
-  }
-  let controlledLoopBuild
-  let controlledLoopWrite
-  let controlledLoopWriteCount = 0
-  let controlledLoopError
-  let controlledLoopRestoreCount = 0
-  const controlledLoopFacade = createFormParticipantDomain(createDomainContext({
-    props,
-    propertyState: controlledLoopState,
-    selectedBusinessObject: ref(templateBusinessObject),
-    selectedElement: ref({ businessObject: templateBusinessObject }),
+test('原始模板展开仅服务权限编辑，保留重名与内嵌字段结构', () => {
+  const catalog = createDesignerFormFieldCatalog()
+  assert.deepEqual(catalog.readTemplateFieldDescriptors(JSON.stringify({ fields: [
+    { children: [{ vModel: 'owner' }, { vModel: 'owner' }] }
+  ] })).map(field => field.variable), ['owner', 'owner'])
+  assert.deepEqual(catalog.readTemplateFieldDescriptors('{'), [])
+  assert.deepEqual(catalog.readEmbeddedFormFields({ extensionElements: { values: [
+    { $type: 'flowable:FormProperty', id: 'owner', variable: 'owner', type: 'CUSTOM:Employee', readable: true, writable: false }
+  ] } }), [{ id: 'owner', variable: 'owner', name: 'owner', type: 'custom:Employee', required: false,
+    readable: true, writable: false, datePattern: '', values: [] }])
+})
+
+test('服务端字段投影供整改循环与 FORM_USER 原子写入，错误恢复且保留普通属性', async () => {
+  const process = { id: 'main', $type: 'bpmn:Process' }
+  const task = { id: 'task', $type: 'bpmn:UserTask', $parent: process, extensionElements: { values: [] } }
+  const catalog = createDesignerFormFieldCatalog({ loadAuthorFields: async () => ({ data: {
+    nodes: [{ processKey: 'main', nodeKey: 'task', userIdFields: [{ value: 'owner', label: '负责人' }],
+      loopFields: [{ value: 'decision', type: 'SCALAR', values: [], valueRestricted: false }] }], processes: [], issues: []
+  } }) })
+  await catalog.refresh('current')
+  const state = { multiInstanceType: 'approvalLoop', controlledLoopDecisionVariable: 'decision',
+    controlledLoopRepeatValue: 'REJECT', controlledLoopExitValue: 'PASS', controlledLoopMaxIterations: 3 }
+  const writes = []
+  const builds = []
+  const errors = []
+  let restored = 0
+  let properties
+  const domain = createFormParticipantDomain(createDomainContext({
+    formFieldCatalog: catalog, propertyState: state, getModeler() { return {} },
+    selectedBusinessObject: ref(task), selectedElement: ref({ businessObject: task }),
+    readAllFlowableProperties() { return [{ name: 'business.property', value: 'keep' }] },
     buildPropertiesExtensionElements(businessObject, editable, controlled) {
-      controlledLoopBuild = { businessObject, editable, controlled }
-      return { id: 'controlled-loop-extension-elements' }
+      builds.push({ businessObject, editable, controlled }); return { id: 'atomic' }
     },
-    updateProperties(changes) {
-      controlledLoopWrite = changes
-      controlledLoopWriteCount += 1
-    },
-    loadPropertyState() { controlledLoopRestoreCount += 1 },
-    emit(name, error) {
-      assert.equal(name, 'error')
-      controlledLoopError = error
-    }
+    updateProperties(changes) { writes.push(changes) },
+    persistExtensionProperties(value) { properties = value },
+    loadPropertyState() { restored += 1 }, emit(name, error) { errors.push(error) }
   }))
-  controlledLoopFacade.updateMultiInstance()
-  assert.deepEqual(controlledLoopBuild.controlled, [
+  domain.updateMultiInstance()
+  assert.equal(writes.length, 1)
+  assert.deepEqual(writes[0], { loopCharacteristics: undefined, extensionElements: { id: 'atomic' } })
+  assert.deepEqual(builds[0].editable, [{ name: 'business.property', value: 'keep' }])
+  assert.deepEqual(builds.at(-1).controlled, [
     { name: 'approva.controlledLoop.enabled', value: 'true' },
     { name: 'approva.controlledLoop.decisionVariable', value: 'decision' },
     { name: 'approva.controlledLoop.repeatValue', value: 'REJECT' },
     { name: 'approva.controlledLoop.exitValue', value: 'PASS' },
     { name: 'approva.controlledLoop.maxIterations', value: '3' }
   ])
-  assert.deepEqual(controlledLoopWrite, {
-    loopCharacteristics: undefined,
-    extensionElements: { id: 'controlled-loop-extension-elements' }
-  })
-
-  controlledLoopState.controlledLoopRepeatValue = 'PASS'
-  controlledLoopFacade.updateMultiInstance()
-  assert.equal(controlledLoopError.message, '再次进入和退出条件不能相同')
-  assert.equal(controlledLoopWriteCount, 1)
-  assert.equal(controlledLoopRestoreCount, 1)
-  assert.deepEqual(formParticipantDomain.resolveFormPermissionSourceFields(), [
-    { variable: 'amount', label: '申请金额', mode: 'EDITABLE' },
-    { variable: 'decision', label: '审批结论', mode: 'EDITABLE' },
-    { variable: 'readonlyNote', label: '只读说明', mode: 'READONLY' }
-  ])
-  assert.deepEqual(formParticipantDomain.readTemplatePermissionPolicy(templateBusinessObject), {
-    defaultMode: 'EDITABLE',
-    permissions: new Map([['decision', 'HIDDEN'], ['amount', 'EDITABLE'], ['readonlyNote', 'READONLY']])
-  })
-  assert.deepEqual(context.formFieldCatalog.resolveUserIdFieldCatalog(
-    templateBusinessObject,
-    formParticipantDomain.readTemplatePermissionPolicy(templateBusinessObject)
-  ), [
-    { value: 'amount', label: '申请金额（amount）', eligible: true, signature: 'el-input-number' },
-    { value: 'decision', label: '审批结论（decision）', eligible: false, signature: '' },
-    { value: 'readonlyNote', label: '只读说明（readonlyNote）', eligible: true, signature: 'el-input' }
-  ])
-  assert.deepEqual(context.formFieldCatalog.resolveUserIdFieldCatalog(
-    embeddedBusinessObject,
-    formParticipantDomain.readTemplatePermissionPolicy(embeddedBusinessObject)
-  ), [
-    { value: 'approved', label: '是否通过（approved）', eligible: false, signature: '' },
-    { value: 'result', label: '处理结果（result）', eligible: true, signature: 'el-select' },
-    { value: 'readonlyDate', label: '只读日期（readonlyDate）', eligible: false, signature: '' }
-  ])
-
-  const process = { $type: 'bpmn:Process', flowElements: [] }
-  const embeddedStart = {
-    id: 'Start_1',
-    $type: 'bpmn:StartEvent',
-    $parent: process,
-    $instanceOf(type) { return type === 'bpmn:StartEvent' },
-    get() { return '' },
-    extensionElements: {
-      values: [
-        { $type: 'flowable:FormProperty', variable: 'amount', name: '文本金额', type: 'string' },
-        { $type: 'flowable:FormProperty', variable: 'approved', name: '是否通过', type: 'boolean' }
-      ]
-    }
-  }
-  const templateTask = {
-    ...templateBusinessObject,
-    id: 'Task_1',
-    $type: 'bpmn:UserTask',
-    $parent: process,
-    $instanceOf(type) { return type === 'bpmn:UserTask' }
-  }
-  const callActivity = { $type: 'bpmn:CallActivity', $parent: process }
-  process.flowElements = [embeddedStart, templateTask, callActivity]
-  const rolesRule = participantRuleDomain.normalizeParticipantRule(
-    { type: 'ROLES', targetIds: ['ROLE12', 'ROLE35'], formField: '' }, true)
-  const emptyProcess = { $instanceOf(type) { return type === 'bpmn:Process' } }
-  assert.deepEqual(participantRuleDomain.readParticipantRule(emptyProcess),
-    { type: '', targetIds: [], formField: '' })
-  assert.deepEqual(participantRuleDomain.participantRulePropertyItems(rolesRule, true), [
-    { name: 'approva.startScope.ruleVersion', value: '1' },
-    { name: 'approva.startScope.type', value: 'ROLES' },
-    { name: 'approva.startScope.targetIds', value: '12,35' },
-    { name: 'approva.startScope.noMatchPolicy', value: 'FAIL' }
-  ])
-  const formUserRule = participantRuleDomain.normalizeParticipantRule(
-    { type: 'FORM_USER', targetIds: [], formField: 'amount' }, false)
-  const formUserProperties = participantRuleDomain.participantRulePropertyItems(formUserRule, false)
-  assert.deepEqual(formUserProperties, [
+  state.controlledLoopRepeatValue = 'PASS'
+  domain.updateMultiInstance()
+  assert.equal(writes.length, 1)
+  assert.equal(restored, 1)
+  assert.match(errors[0].message, /不能相同/)
+  state.multiInstanceType = 'none'
+  domain.updateParticipantRule({ type: 'FORM_USER', targetIds: [], formField: 'owner' })
+  assert.deepEqual(properties, [
+    { name: 'business.property', value: 'keep' },
     { name: 'approva.assignment.ruleVersion', value: '1' },
     { name: 'approva.assignment.type', value: 'FORM_USER' },
     { name: 'approva.assignment.targetIds', value: '' },
-    { name: 'approva.assignment.formField', value: 'amount' },
+    { name: 'approva.assignment.formField', value: 'owner' },
     { name: 'approva.assignment.noMatchPolicy', value: 'FAIL' }
   ])
-  assert.throws(() => participantRuleDomain.normalizeParticipantRule(
-    { type: 'ROLES', targetIds: ['12'], formField: '' }, true),
-    { message: '角色目录选项不合法' })
-  assert.deepEqual(formParticipantDomain.readParticipantRule({
-    get(name) { return name === 'flowable:assignee' ? '12' : '' }
-  }), { type: '', targetIds: [], formField: '' })
-
-  let participantWriteCount = 0
-  let persistedParticipantProperties
-  const participantState = {
-    formSource: 'TEMPLATE', formKey: 'key_7', formPermissionDefault: 'EDITABLE',
-    formPermissionFields: [], multiInstanceType: 'none'
-  }
-  const participantFacade = createFormParticipantDomain(createDomainContext({
-    props,
-    getModeler() { return {} },
-    propertyState: participantState,
-    readAllFlowableProperties() { return [{ name: 'business.property', value: 'keep' }] },
-    selectedBusinessObject: ref(templateTask),
-    selectedElement: ref({ businessObject: templateTask }),
-    persistExtensionProperties(properties) {
-      persistedParticipantProperties = properties
-      participantWriteCount += 1
-    }
-  }))
-  participantFacade.updateParticipantRule(formUserRule)
-  assert.equal(participantWriteCount, 1)
-  assert.deepEqual(persistedParticipantProperties, [
-    { name: 'business.property', value: 'keep' }, ...formUserProperties
-  ])
-  const routingFacade = createRoutingCallActivityDomain(context)
-  const resultMapping = [{ source: 'value', target: 'result' }]
-  const resultSource = [{ name: 'value', type: 'NUMBER', readable: true }]
-  const systemResult = [{ name: 'result', type: 'NUMBER', readable: true, writable: false, systemWritable: true }]
-  assert.equal(routingFacade.validateCallMappings(resultMapping, resultSource, systemResult, 'C02调用模板子流程输出', true), '')
-  assert.match(routingFacade.validateCallMappings(resultMapping, resultSource, systemResult, 'C02调用模板子流程输入'), /目标字段不可写/)
-  assert.match(routingFacade.validateCallMappings(resultMapping, resultSource,
-    [{ ...systemResult[0], systemWritable: false }], 'C02调用模板子流程输出', true), /目标字段不可写/)
-  assert.match(routingFacade.validateCallMappings(resultMapping, resultSource,
-    [{ ...systemResult[0], readable: false }], 'C02调用模板子流程输出', true), /目标字段不可写/)
-  assert.deepEqual(routingFacade.resolveCallActivityParentFields(callActivity), [
-    { name: 'approved', label: '是否通过', type: 'BOOLEAN', required: false, readable: true, writable: true, systemWritable: false },
-    { name: 'decision', label: '审批结论', type: 'SCALAR', required: false, readable: false, writable: false, systemWritable: false },
-    { name: 'readonlyNote', label: '只读说明', type: 'TEXT', required: false, readable: true, writable: false, systemWritable: false }
-  ])
-
-  const gateway = { $type: 'bpmn:ExclusiveGateway', outgoing: [{ id: 'Flow_1' }, { id: 'Flow_2' }] }
-  const selectedFlow = { businessObject: { $parent: process }, source: { businessObject: gateway } }
-  const conditionDomain = createRoutingCallActivityDomain(createDomainContext({
-    props,
-    selectedElement: { value: selectedFlow },
-    getModeler() {
-      return {
-        get(service) {
-          assert.equal(service, 'elementRegistry')
-          return { getAll: () => [{ businessObject: embeddedStart }, { businessObject: templateTask }] }
-        }
-      }
-    }
-  }))
-  assert.deepEqual(conditionDomain.resolveConditionFieldCatalog(), {
-    fields: [
-      {
-        value: 'approved',
-        label: '是否通过（approved）',
-        type: 'BOOLEAN',
-        values: [{ value: 'true', label: '是' }, { value: 'false', label: '否' }],
-        valueRestricted: true
-      },
-      {
-        value: 'decision',
-        label: '审批结论（decision）',
-        type: 'SCALAR',
-        values: [{ value: 'PASS', label: '通过' }, { value: 'REJECT', label: '驳回' }],
-        valueRestricted: true
-      }
-    ],
-    conflicts: ['amount']
-  })
+  const rules = createParticipantRuleDomain({ readParticipantFormFieldOptions: () => [{ value: 'owner' }], readAllFlowableProperties: () => [] })
+  assert.throws(() => rules.normalizeParticipantRule({ type: 'ROLES', targetIds: ['12'], formField: '' }, true), /角色目录/)
 })
 
-test('调用映射、条件和循环目录共同排除集合与时间范围，保留普通标量', () => {
-  const examples = [
-    ['text', 'el-input', {}, 'TEXT'],
-    ['richText', 'tinymce', {}, 'TEXT'],
-    ['color', 'el-color-picker', {}, 'TEXT'],
-    ['number', 'el-input-number', {}, 'NUMBER'],
-    ['rating', 'el-rate', {}, 'NUMBER'],
-    ['slider', 'el-slider', {}, 'NUMBER'],
-    ['switchValue', 'el-switch', {}, 'BOOLEAN'],
-    ['radio', 'el-radio-group', {}, 'SCALAR'],
-    ['select', 'el-select', {}, 'SCALAR'],
-    ['time', 'el-time-picker', { 'is-range': false }, 'TEXT'],
-    ['date', 'el-date-picker', { type: 'date' }, 'TEXT'],
-    ['timeRange', 'el-time-picker', { 'is-range': true }, null],
-    ['timeTypeRange', 'el-time-picker', { type: 'TIMERANGE' }, null],
-    ['dateRange', 'el-date-picker', { type: 'daterange' }, null],
-    ['dateFlagRange', 'el-date-picker', { 'is-range': true }, null],
-    ['sliderRange', 'el-slider', { range: true }, null],
-    ['multiSelect', 'el-select', { multiple: true }, null],
-    ['checkbox', 'el-checkbox-group', {}, null],
-    ['cascader', 'el-cascader', {}, null],
-    ['files', 'el-upload', {}, null],
-    ['table', 'el-table', {}, null],
-    ['button', 'el-button', {}, null]
-  ]
-  const fields = examples.map(([vModel, tag, options]) => ({
-    vModel, tag, layout: 'colFormItem', workflowHidden: false,
-    workflowReadable: true, workflowWritable: true, ...options
-  }))
-  const content = JSON.stringify({ fields })
-  const process = { $type: 'bpmn:Process', flowElements: [] }
-  const task = { id: 'task', $type: 'bpmn:UserTask', $parent: process,
-    $instanceOf: type => type === 'bpmn:UserTask',
-    get: name => name === 'flowable:formKey' ? 'key_7' : '' }
-  const call = { $type: 'bpmn:CallActivity', $parent: process }
-  process.flowElements = [task, call]
-  const context = createDomainContext({
-    props: { forms: [{ formId: 7, content }] },
-    readTemplatePermissionPolicy: () => ({ defaultMode: 'EDITABLE',
-      permissions: new Map(fields.map(field => [field.vModel, 'EDITABLE'])) }),
-    selectedElement: { value: { businessObject: { $parent: process }, source: {
-      businessObject: { $type: 'bpmn:ExclusiveGateway', outgoing: [{ id: 'a' }, { id: 'b' }] }
-    } } },
-    getModeler: () => ({ get: () => ({ getAll: () => [{ businessObject: task }] }) })
-  })
-  const routing = createRoutingCallActivityDomain(context)
-  const loops = createControlledLoopDomain(context)
-  const expected = Object.fromEntries(examples.filter(([, , , type]) => type).map(([name, , , type]) => [name, type]))
-  const mappingFields = routing.resolveCallActivityParentFields(call)
-  assert.deepEqual(Object.fromEntries(mappingFields.map(field => [field.name, field.type])), expected)
-  assert.deepEqual(Object.fromEntries(loops.describeFormalFormFields(task).map(field => [field.value, field.type])), expected)
-  assert.deepEqual(Object.fromEntries(routing.resolveConditionFieldCatalog().fields.map(field => [field.value, field.type])), expected)
-  assert.equal(routing.validateCallMappings([{ source: 'time', target: 'time' }], mappingFields, mappingFields, '输入'), '')
-  assert.match(routing.validateCallMappings([{ source: 'timeRange', target: 'time' }], mappingFields, mappingFields, '输入'), /字段不存在/)
+test('节点权限编辑读取原始模板与 XML 四态，不把显示元数据当作业务目录', () => {
+  const content = JSON.stringify({ fields: [{ vModel: 'owner', label: '负责人', tag: 'el-input',
+    workflowHidden: false, workflowReadable: true, workflowWritable: false }] })
+  const context = createDomainContext({ props: { forms: [{ formId: 7, content }] },
+    propertyState: { formSource: 'TEMPLATE', formKey: 'key_7', formPermissionDefault: 'EDITABLE', formPermissionFields: [] } })
+  const domain = createFormParticipantDomain(context)
+  assert.deepEqual(domain.resolveFormPermissionSourceFields(), [{ variable: 'owner', label: '负责人', mode: 'READONLY' }])
+  const policy = domain.readTemplatePermissionPolicy({ extensionElements: { values: [
+    { $type: 'flowable:FormProperty', id: 'approva_permission_default', readable: true, writable: true },
+    { $type: 'flowable:FormProperty', id: 'approva_permission_field_1', variable: 'owner', readable: false, writable: false }
+  ] } })
+  assert.deepEqual(policy, { defaultMode: 'EDITABLE', permissions: new Map([['owner', 'HIDDEN']]) })
+  assert.deepEqual(domain.participantFormFieldOptions.value, [])
 })
 
-test('共享模板目录保留重名声明，用户字段资格拒绝类型冲突与损坏权限', () => {
-  const form = { formId: 7, content: JSON.stringify({ fields: [
-    { vModel: ' applicant ', tag: 'el-input', label: '申请人' },
-    { children: [
-      { vModel: 'reviewer', tag: 'el-input-number', label: '审核人' },
-      { vModel: 'applicant', tag: 'el-select', multiple: true },
-      { vModel: 'hiddenUser', tag: 'el-input' }
-    ] }
-  ] }) }
-  const catalog = createDesignerFormFieldCatalog({ forms: [form] })
-  const policy = { defaultMode: 'EDITABLE', permissions: new Map([['hiddenUser', 'HIDDEN']]) }
-
-  assert.deepEqual(catalog.readTemplateFieldDescriptors(form.content).map(item => item.variable),
-    ['applicant', 'reviewer', 'applicant', 'hiddenUser'])
-  assert.deepEqual(catalog.resolveUserIdFieldCatalog('key_7', policy), [
-    { value: 'applicant', label: '申请人（applicant）', eligible: false, signature: 'el-input' },
-    { value: 'reviewer', label: '审核人（reviewer）', eligible: true, signature: 'el-input-number' },
-    { value: 'hiddenUser', label: 'hiddenUser', eligible: false, signature: '' }
-  ])
-  assert.deepEqual(catalog.resolveUserIdFieldCatalog('key_7', { permissions: {} }), [])
-  for (const content of ['{', 'null', '{}']) {
-    form.content = content
-    assert.deepEqual(catalog.readTemplateFieldDescriptors(content), [])
-    assert.deepEqual(catalog.resolveUserIdFieldCatalog('key_7', policy), [])
-  }
-})
-
-/**
- * 验证真实生成器字段在保存前递归补齐正式节点权限，同时保留明确的只读配置。
- * @returns {void} 缺失权限仍会被渲染为隐藏或显式权限被覆盖时测试失败。
- */
 test('表单生成器输出补齐正式节点权限', () => {
   const fields = completeWorkflowFieldPermissions([{
     vModel: 'title', tag: 'el-input', layout: 'colFormItem'
@@ -577,7 +294,17 @@ test('表单与参与者领域独立校验指定多实例身份', () => {
  * 验证路由与调用活动模块独立执行变量目录、重复目标和类型兼容约束。
  * @returns {void} 非目录字段、重复目标或不兼容类型被放行时测试失败。
  */
-test('路由与调用活动领域独立校验调用变量映射', () => {
+test('保存映射只拦截未写入 XML 的半行，目录加载中由服务端裁决已有规则', () => {
+  const call = { id: 'call', $type: 'bpmn:CallActivity' }
+  const state = { callInMappings: [{ source: 'unknown', target: 'target' }], callOutMappings: [] }
+  const context = createDomainContext({ selectedBusinessObject: ref(call), propertyState: state })
+  const domain = createRoutingCallActivityDomain(context)
+  assert.equal(domain.validateCallActivityConfiguration(context.selectedBusinessObject.value), '')
+  state.callOutMappings.push({ source: 'result', target: '' })
+  assert.match(domain.validateCallActivityConfiguration(context.selectedBusinessObject.value), /未完成/)
+})
+
+test('路由领域把条件编辑原子写入命令栈', () => {
   let extensionBuild
   let command
   const extensionElements = { id: 'condition-extension-elements' }
@@ -603,26 +330,6 @@ test('路由与调用活动领域独立校验调用变量映射', () => {
       ]
     }
   }))
-  const sourceFields = [
-    { name: 'amount', type: 'NUMBER', readable: true, writable: false },
-    { name: 'approved', type: 'BOOLEAN', readable: true, writable: false }
-  ]
-  const targetFields = [
-    { name: 'requestAmount', type: 'NUMBER', readable: true, writable: true },
-    { name: 'comment', type: 'TEXT', readable: true, writable: true }
-  ]
-
-  assert.equal(domain.validateCallMappings(
-    [{ source: 'amount', target: 'requestAmount' }], sourceFields, targetFields, '调用活动输入'), '')
-  assert.match(domain.validateCallMappings(
-    [{ source: 'approved', target: 'comment' }], sourceFields, targetFields, '调用活动输入'), /类型不兼容/)
-  assert.match(domain.validateCallMappings([
-    { source: 'amount', target: 'requestAmount' },
-    { source: 'approved', target: 'requestAmount' }
-  ], sourceFields, targetFields, '调用活动输入'), /目标不能重复/)
-  assert.equal(domain.callVariableTypesCompatible('SCALAR', 'BOOLEAN'), true)
-  assert.equal(domain.callVariableTypesCompatible('NUMBER', 'TEXT'), false)
-
   const flowElement = { businessObject: { id: 'Flow_Approved' } }
   const condition = { version: 1, default: false, clauses: [] }
   domain.persistConditionConfig(flowElement, '批准', condition)

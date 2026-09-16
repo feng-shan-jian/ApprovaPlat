@@ -96,6 +96,11 @@ export function validateModelBpmn(bpmnXml) {
   })
 }
 
+export function getAuthorFieldCatalog(bpmnXml) {
+  return request({ url: '/workflow/model/author-field-catalog', method: 'post',
+    data: { bpmnXml }, headers: { repeatSubmit: false } })
+}
+
 export function preflightModel(data) {
   return request({ url: '/workflow/model/preflight', method: 'post', data, headers: { repeatSubmit: false } })
 }

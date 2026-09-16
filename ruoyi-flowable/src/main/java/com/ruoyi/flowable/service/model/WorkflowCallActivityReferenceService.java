@@ -608,6 +608,15 @@ public class WorkflowCallActivityReferenceService
         return parentFieldCatalogs(document, nodeFormContents);
     }
 
+    /** 作者目录与最终映射门禁复用同一合并、权限交集和类型冲突规则。 */
+    Map<String, List<WorkflowCallActivityVariableView>> describeParentFields(WorkflowBpmnDocument document,
+            Map<String, String> nodeFormContents)
+    {
+        Map<String, List<WorkflowCallActivityVariableView>> result = new LinkedHashMap<>();
+        parentFieldCatalogs(document, nodeFormContents).forEach((key, fields) -> result.put(key, toVariableViews(fields)));
+        return Map.copyOf(result);
+    }
+
     private Map<String, Map<String, FieldSpec>> parentFieldCatalogs(WorkflowBpmnDocument document,
             Map<String, String> nodeFormContents)
     {

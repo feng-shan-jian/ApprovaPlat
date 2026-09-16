@@ -1,5 +1,3 @@
-import { templateScalarFieldType } from './designerFormFieldCatalog.js'
-
 const CONTROLLED_LOOP_PROPERTY_PREFIX = 'approva.controlledLoop.'
 const CONTROLLED_LOOP_PROPERTIES = Object.freeze({
   enabled: `${CONTROLLED_LOOP_PROPERTY_PREFIX}enabled`,
@@ -73,57 +71,8 @@ export function createControlledLoopDomain(context) {
     return describeFormalFormFields(selectedBusinessObject.value)
   }
 
-  /**
-   * 从正式模板或 BPMN 内嵌 FormData 提取后端允许参与条件判断的可写标量字段。
-   * @param {object|undefined} businessObject 开始节点或用户任务业务对象。
-   * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
-   */
   function describeFormalFormFields(businessObject) {
-    return describeControlledLoopFields(formFieldCatalog.resolveElementFieldDescriptors(businessObject))
-  }
-
-  /**
-   * 解析正式表单 JSON，并收窄为条件字段目录。
-   * @param {string} content 正式 wf_form 模板 JSON。
-   * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 字段目录。
-   */
-  function describeTemplateFormFields(content) {
-    return describeControlledLoopFields(formFieldCatalog.readTemplateFieldDescriptors(content))
-  }
-
-  /**
-   * 将中性字段描述投影为整改循环可选的可写标量目录。
-   * @param {Array<{source:string,variable:string,field:object}>} descriptors 正式模板或内嵌字段描述。
-   * @returns {Array<{value:string,label:string,type:string,values:Array,valueRestricted:boolean}>} 保持来源顺序的循环字段。
-   */
-  function describeControlledLoopFields(descriptors) {
-    const result = []
-    const seen = new Set()
-    for (const { source, variable, field } of descriptors) {
-      const embedded = source === 'EMBEDDED'
-      const type = embedded
-        ? ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
-        : templateScalarFieldType(field)
-      if (!variable || !type || (embedded ? field.writable === false
-        : field?.workflowWritable !== true || seen.has(variable))) continue
-      if (!embedded) seen.add(variable)
-      result.push({
-        value: variable,
-        label: (embedded ? field.name : field?.label)
-          ? `${embedded ? field.name : field.label}（${variable}）` : variable,
-        type,
-        values: type === 'BOOLEAN'
-          ? [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]
-          : embedded
-            ? (field.values || []).map(item => ({ value: String(item.id), label: item.name || item.id }))
-            : (Array.isArray(field?.options) ? field.options : []).map(item => ({
-                value: String(item?.value ?? item?.label ?? ''),
-                label: String(item?.label ?? item?.value ?? '')
-              })).filter(item => item.value),
-        valueRestricted: type === 'BOOLEAN' || (embedded ? field.type === 'enum' : field?.workflowEnum === true)
-      })
-    }
-    return result
+    return formFieldCatalog.nodeFields(businessObject)?.loopFields || []
   }
 
   /**
@@ -153,5 +102,5 @@ export function createControlledLoopDomain(context) {
   }
 
   return { readControlledLoop, controlledLoopPropertyItems, resolveControlledLoopFieldOptions,
-    describeFormalFormFields, describeTemplateFormFields, buildChanges }
+    describeFormalFormFields, buildChanges }
 }
