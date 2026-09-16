@@ -10,6 +10,7 @@ Flowable 继续保持 `database-schema-update: "false"`，应用启动不得创�
 
 已有数据库按缺失功能执行对应迁移：
 
+- 有效账号与参数键唯一写入：先执行 `sql/system/20260916__unique_keys_audit.sql` 只读清点，再按[系统唯一写入契约](system-unique-writes.md)停写、升级及核验；回退顺序和数据条件见同文档。空库基础 SQL 已包含约束。
 - 模型设计草稿：`sql/flowable/business/8.0.2__workflow_model_design_draft.sql`。
 - 受管连接凭据：`sql/flowable/business/8.0.3__workflow_managed_connector_secret.sql`。
 - 附件上传账本：`sql/flowable/business/8.0.4__workflow_attachment_upload.sql`，回退要求见下文。

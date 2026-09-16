@@ -3,6 +3,7 @@ package com.ruoyi.web.controller.system;
 import java.util.List;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.ruoyi.system.exception.ConfigKeyConflictException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -83,12 +84,15 @@ public class SysConfigController extends BaseController
     @PostMapping
     public AjaxResult add(@Validated @RequestBody SysConfig config)
     {
-        if (!configService.checkConfigKeyUnique(config))
+        config.setCreateBy(getUsername());
+        try
+        {
+            return toAjax(configService.insertConfig(config));
+        }
+        catch (ConfigKeyConflictException error)
         {
             return error("新增参数'" + config.getConfigName() + "'失败，参数键名已存在");
         }
-        config.setCreateBy(getUsername());
-        return toAjax(configService.insertConfig(config));
     }
 
     /**
@@ -99,12 +103,15 @@ public class SysConfigController extends BaseController
     @PutMapping
     public AjaxResult edit(@Validated @RequestBody SysConfig config)
     {
-        if (!configService.checkConfigKeyUnique(config))
+        config.setUpdateBy(getUsername());
+        try
+        {
+            return toAjax(configService.updateConfig(config));
+        }
+        catch (ConfigKeyConflictException error)
         {
             return error("修改参数'" + config.getConfigName() + "'失败，参数键名已存在");
         }
-        config.setUpdateBy(getUsername());
-        return toAjax(configService.updateConfig(config));
     }
 
     /**

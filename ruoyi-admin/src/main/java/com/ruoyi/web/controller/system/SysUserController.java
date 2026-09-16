@@ -5,6 +5,7 @@ import java.util.stream.Collectors;
 import jakarta.servlet.http.HttpServletResponse;
 import org.apache.commons.lang3.ArrayUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.ruoyi.system.exception.UserNameConflictException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -129,11 +130,7 @@ public class SysUserController extends BaseController
         }
         user.setRoleIds(roleService.selectRolesInScope(new SysRole(), user.getRoleIds()).stream()
                 .map(SysRole::getRoleId).toArray(Long[]::new));
-        if (!userService.checkUserNameUnique(user))
-        {
-            return error("新增用户'" + user.getUserName() + "'失败，登录账号已存在");
-        }
-        else if (StringUtils.isNotEmpty(user.getPhonenumber()) && !userService.checkPhoneUnique(user))
+        if (StringUtils.isNotEmpty(user.getPhonenumber()) && !userService.checkPhoneUnique(user))
         {
             return error("新增用户'" + user.getUserName() + "'失败，手机号码已存在");
         }
@@ -143,7 +140,14 @@ public class SysUserController extends BaseController
         }
         user.setCreateBy(getUsername());
         user.setPassword(SecurityUtils.encryptPassword(user.getPassword()));
-        return toAjax(userService.insertUser(user));
+        try
+        {
+            return toAjax(userService.insertUser(user));
+        }
+        catch (UserNameConflictException error)
+        {
+            return error("新增用户'" + user.getUserName() + "'失败，登录账号已存在");
+        }
     }
 
     /**
@@ -161,11 +165,7 @@ public class SysUserController extends BaseController
         }
         user.setRoleIds(roleService.selectRolesInScope(new SysRole(), user.getRoleIds()).stream()
                 .map(SysRole::getRoleId).toArray(Long[]::new));
-        if (!userService.checkUserNameUnique(user))
-        {
-            return error("修改用户'" + user.getUserName() + "'失败，登录账号已存在");
-        }
-        else if (StringUtils.isNotEmpty(user.getPhonenumber()) && !userService.checkPhoneUnique(user))
+        if (StringUtils.isNotEmpty(user.getPhonenumber()) && !userService.checkPhoneUnique(user))
         {
             return error("修改用户'" + user.getUserName() + "'失败，手机号码已存在");
         }

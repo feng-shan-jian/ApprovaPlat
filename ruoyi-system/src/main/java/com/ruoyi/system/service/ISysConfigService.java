@@ -79,11 +79,4 @@ public interface ISysConfigService
      */
     public void resetConfigCache();
 
-    /**
-     * 校验参数键名是否唯一
-     * 
-     * @param config 参数信息
-     * @return 结果
-     */
-    public boolean checkConfigKeyUnique(SysConfig config);
 }

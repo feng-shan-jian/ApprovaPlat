@@ -15,6 +15,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DuplicateKeyException;
+import com.ruoyi.system.exception.UserNameConflictException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 import com.ruoyi.common.annotation.DataScope;
@@ -177,24 +179,6 @@ public class SysUserServiceImpl implements ISysUserService
     }
 
     /**
-     * 校验用户名称是否唯一
-     * 
-     * @param user 用户信息
-     * @return 结果
-     */
-    @Override
-    public boolean checkUserNameUnique(SysUser user)
-    {
-        Long userId = StringUtils.isNull(user.getUserId()) ? -1L : user.getUserId();
-        SysUser info = userMapper.checkUserNameUnique(user.getUserName());
-        if (StringUtils.isNotNull(info) && info.getUserId().longValue() != userId.longValue())
-        {
-            return UserConstants.NOT_UNIQUE;
-        }
-        return UserConstants.UNIQUE;
-    }
-
-    /**
      * 校验手机号码是否唯一
      *
      * @param user 用户信息
@@ -278,7 +262,7 @@ public class SysUserServiceImpl implements ISysUserService
     public int insertUser(SysUser user)
     {
         // 新增用户信息
-        int rows = userMapper.insertUser(user);
+        int rows = insertUserRecord(user);
         // 新增用户岗位关联
         insertUserPost(user);
         // 新增用户与角色管理
@@ -295,7 +279,20 @@ public class SysUserServiceImpl implements ISysUserService
     @Override
     public boolean registerUser(SysUser user)
     {
-        return userMapper.insertUser(user) > 0;
+        return insertUserRecord(user) > 0;
+    }
+
+    /** 所有新账号写入共享唯一的 INSERT 边界，不把关联表的其他冲突误报为账号重名。 */
+    private int insertUserRecord(SysUser user)
+    {
+        try
+        {
+            return userMapper.insertUser(user);
+        }
+        catch (DuplicateKeyException error)
+        {
+            throw UserNameConflictException.translate(error);
+        }
     }
 
     /**
@@ -523,8 +520,8 @@ public class SysUserServiceImpl implements ISysUserService
         {
             try
             {
-                // 验证是否存在这个用户
-                SysUser identity = userMapper.checkUserNameUnique(user.getUserName());
+                // 仅用于区分创建与有权限的更新；创建是否冲突由实际 INSERT 决定。
+                SysUser identity = userMapper.selectActiveUserIdentityByName(user.getUserName());
                 SysUser u = identity == null ? null : accessible.get(identity.getUserId());
                 if (StringUtils.isNull(identity))
                 {
@@ -541,7 +538,7 @@ public class SysUserServiceImpl implements ISysUserService
                     String password = configService.selectConfigByKey("sys.user.initPassword");
                     user.setPassword(SecurityUtils.encryptPassword(password));
                     user.setCreateBy(operName);
-                    userMapper.insertUser(user);
+                    insertUserRecord(user);
                     createdUserIds.add(user.getUserId());
                     successNum++;
                     successMsg.append("<br/>" + successNum + "、账号 " + user.getUserName() + " 导入成功");
@@ -577,6 +574,11 @@ public class SysUserServiceImpl implements ISysUserService
                     failureNum++;
                     failureMsg.append("<br/>" + failureNum + "、账号 " + user.getUserName() + " 已存在");
                 }
+            }
+            catch (UserNameConflictException e)
+            {
+                failureNum++;
+                failureMsg.append("<br/>" + failureNum + "、账号 " + user.getUserName() + " 已存在");
             }
             catch (Exception e)
             {

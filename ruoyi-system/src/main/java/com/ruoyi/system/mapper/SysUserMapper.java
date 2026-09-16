@@ -119,12 +119,12 @@ public interface SysUserMapper
     public int deleteUserByIds(Long[] userIds);
 
     /**
-     * 校验用户名称是否唯一
+     * 按有效账号名读取导入分支所需的最小身份
      * 
      * @param userName 用户名称
      * @return 结果
      */
-    public SysUser checkUserNameUnique(String userName);
+    public SysUser selectActiveUserIdentityByName(String userName);
 
     /**
      * 校验手机号码是否唯一

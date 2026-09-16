@@ -8,6 +8,8 @@ import java.util.stream.Collectors;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DuplicateKeyException;
+import com.ruoyi.system.exception.ConfigKeyConflictException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -118,37 +120,61 @@ public class SysConfigServiceImpl implements ISysConfigService
      * @return 结果
      */
     @Override
+    @Transactional
     public int insertConfig(SysConfig config)
     {
-        int row = configMapper.insertConfig(config);
+        int row;
+        try
+        {
+            row = configMapper.insertConfig(config);
+        }
+        catch (DuplicateKeyException error)
+        {
+            throw ConfigKeyConflictException.translate(error);
+        }
         if (row > 0)
         {
-            redisCache.setCacheObject(getCacheKey(config.getConfigKey()), config.getConfigValue());
+            cacheConfigAfterCommit(null, config.getConfigKey(), config.getConfigValue());
         }
         return row;
     }
 
-    /**
-     * 修改参数配置
-     * 
-     * @param config 参数配置信息
-     * @return 结果
-     */
+    /** 修改参数；读取原键只用于提交后失效缓存，不作为唯一性证明。 */
     @Override
+    @Transactional
     public int updateConfig(SysConfig config)
     {
-        SysConfig temp = configMapper.selectConfigById(config.getConfigId());
-        if (!StringUtils.equals(temp.getConfigKey(), config.getConfigKey()))
+        SysConfig previous = configMapper.selectConfigById(config.getConfigId());
+        int row;
+        try
         {
-            redisCache.deleteObject(getCacheKey(temp.getConfigKey()));
+            row = configMapper.updateConfig(config);
         }
-
-        int row = configMapper.updateConfig(config);
+        catch (DuplicateKeyException error)
+        {
+            throw ConfigKeyConflictException.translate(error);
+        }
         if (row > 0)
         {
-            redisCache.setCacheObject(getCacheKey(config.getConfigKey()), config.getConfigValue());
+            cacheConfigAfterCommit(previous.getConfigKey(), config.getConfigKey(), config.getConfigValue());
         }
         return row;
+    }
+
+    private void cacheConfigAfterCommit(String previousKey, String key, String value)
+    {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization()
+        {
+            @Override
+            public void afterCommit()
+            {
+                if (previousKey != null && !StringUtils.equals(previousKey, key))
+                {
+                    redisCache.deleteObject(getCacheKey(previousKey));
+                }
+                redisCache.setCacheObject(getCacheKey(key), value);
+            }
+        });
     }
 
     /**
@@ -224,24 +250,6 @@ public class SysConfigServiceImpl implements ISysConfigService
     {
         clearConfigCache();
         loadingConfigCache();
-    }
-
-    /**
-     * 校验参数键名是否唯一
-     * 
-     * @param config 参数配置信息
-     * @return 结果
-     */
-    @Override
-    public boolean checkConfigKeyUnique(SysConfig config)
-    {
-        Long configId = StringUtils.isNull(config.getConfigId()) ? -1L : config.getConfigId();
-        SysConfig info = configMapper.checkConfigKeyUnique(config.getConfigKey());
-        if (StringUtils.isNotNull(info) && info.getConfigId().longValue() != configId.longValue())
-        {
-            return UserConstants.NOT_UNIQUE;
-        }
-        return UserConstants.UNIQUE;
     }
 
     /**

@@ -35,14 +35,6 @@ public interface SysConfigMapper
     public List<SysConfig> selectConfigList(SysConfig config);
 
     /**
-     * 根据键名查询参数配置信息
-     * 
-     * @param configKey 参数键名
-     * @return 参数配置信息
-     */
-    public SysConfig checkConfigKeyUnique(String configKey);
-
-    /**
      * 新增参数配置
      * 
      * @param config 参数配置信息
