@@ -1,3 +1,5 @@
+import { templateScalarFieldType } from './designerFormFieldCatalog.js'
+
 const CONTROLLED_LOOP_PROPERTY_PREFIX = 'approva.controlledLoop.'
 const CONTROLLED_LOOP_PROPERTIES = Object.freeze({
   enabled: `${CONTROLLED_LOOP_PROPERTY_PREFIX}enabled`,
@@ -101,7 +103,7 @@ export function createControlledLoopDomain(context) {
       const embedded = source === 'EMBEDDED'
       const type = embedded
         ? ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
-        : resolveTemplateControlledLoopKind(field)
+        : templateScalarFieldType(field)
       if (!variable || !type || (embedded ? field.writable === false
         : field?.workflowWritable !== true || seen.has(variable))) continue
       if (!embedded) seen.add(variable)
@@ -122,26 +124,6 @@ export function createControlledLoopDomain(context) {
       })
     }
     return result
-  }
-
-  /**
-   * 将正式模板组件收窄为后端循环条件允许的可写标量种类。
-   * @param {object} field 使用平面正式 Schema 的模板字段。
-   * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 标量种类；集合、附件、表格和范围字段返回空。
-   */
-  function resolveTemplateControlledLoopKind(field) {
-    const tag = String(field?.tag || '')
-    if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
-    if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
-    if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'
-    if (tag === 'el-switch') return 'BOOLEAN'
-    if (tag === 'el-radio-group') return 'SCALAR'
-    if (tag === 'el-select') return field?.multiple === true ? null : 'SCALAR'
-    if (['el-time-picker', 'el-date-picker'].includes(tag)) {
-      const temporalType = String(field?.type || '').toLowerCase()
-      return field?.['is-range'] === true || temporalType.includes('range') ? null : 'TEXT'
-    }
-    return null
   }
 
   /**
@@ -171,5 +153,5 @@ export function createControlledLoopDomain(context) {
   }
 
   return { readControlledLoop, controlledLoopPropertyItems, resolveControlledLoopFieldOptions,
-    describeFormalFormFields, describeTemplateFormFields, resolveTemplateControlledLoopKind, buildChanges }
+    describeFormalFormFields, describeTemplateFormFields, buildChanges }
 }

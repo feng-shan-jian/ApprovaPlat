@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -36,7 +37,13 @@ import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
+import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
+import com.ruoyi.flowable.service.process.WorkflowCallActivityStartListener;
+import com.ruoyi.flowable.service.process.WorkflowProcessDefinitionQueryService;
+import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
 import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * R02 与相邻字段权限缺陷：公开目录/校验入口、真实 Flowable 仓库及真实部署制品。
@@ -50,6 +57,7 @@ class WorkflowCallActivityBusinessRegressionTest
     private WorkflowDeploymentArtifactRepository artifacts;
     private WorkflowCallActivityReferenceService service;
     private WfFormMapper templates;
+    private WorkflowCallActivityStartListener startListener;
     private final java.util.concurrent.atomic.AtomicReference<org.flowable.engine.delegate.ExecutionListener> outputListener = new java.util.concurrent.atomic.AtomicReference<>();
     private final List<String> deployments = new ArrayList<>();
 
@@ -77,6 +85,13 @@ class WorkflowCallActivityBusinessRegressionTest
         when(templates.selectById(7L)).thenReturn(template);
         service = new WorkflowCallActivityReferenceService(repository, operations, identity,
                 participant, artifacts, templates, new WorkflowFormTemplateValidator());
+        var providers = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        providers.addBean("definitions", new WorkflowProcessDefinitionQueryService(operations, repository, identity,
+                mock(com.ruoyi.flowable.authorization.WorkflowProcessAccessService.class),
+                mock(WorkflowDeploymentService.class), artifacts, participant));
+        providers.addBean("variables", new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator()));
+        startListener = new WorkflowCallActivityStartListener(providers.getBeanProvider(WorkflowProcessDefinitionQueryService.class),
+                providers.getBeanProvider(WorkflowStartVariableValidator.class));
     }
 
     @AfterEach
@@ -109,6 +124,192 @@ class WorkflowCallActivityBusinessRegressionTest
         assertThatCode(() -> service.validateAuthorReferences(
                 parent(mode, output), ACTOR))
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    void mappingCatalogAndLoopCatalogAgreeWithRuntimeValueShapes()
+    {
+        var mapper = JsonMapper.shared();
+        var root = mapper.createObjectNode();
+        var fields = root.putArray("fields");
+        Map<String, String> scalarTypes = new LinkedHashMap<>();
+        Map<String, Object> values = new LinkedHashMap<>();
+        List<FieldExample> examples = List.of(
+                new FieldExample("text", "el-input", Map.of(), "TEXT", "text"),
+                new FieldExample("richText", "tinymce", Map.of(), "TEXT", "text"),
+                new FieldExample("color", "el-color-picker", Map.of(), "TEXT", "#112233"),
+                new FieldExample("number", "el-input-number", Map.of(), "NUMBER", 3),
+                new FieldExample("rating", "el-rate", Map.of(), "NUMBER", 3),
+                new FieldExample("slider", "el-slider", Map.of(), "NUMBER", 3),
+                new FieldExample("switchValue", "el-switch", Map.of(), "BOOLEAN", true),
+                new FieldExample("radio", "el-radio-group", Map.of(), "SCALAR", "a"),
+                new FieldExample("select", "el-select", Map.of(), "SCALAR", "a"),
+                new FieldExample("time", "el-time-picker", Map.of("is-range", false), "TEXT", "09:00:00"),
+                new FieldExample("date", "el-date-picker", Map.of("type", "date"), "TEXT", "2026-09-16"),
+                new FieldExample("timeRange", "el-time-picker", Map.of("is-range", true), null, List.of("09:00:00", "10:00:00")),
+                new FieldExample("dateRange", "el-date-picker", Map.of("type", "daterange"), null, List.of("2026-09-16", "2026-09-17")),
+                new FieldExample("timeTypeRange", "el-time-picker", Map.of("type", "TIMERANGE"), null, List.of("09:00:00", "10:00:00")),
+                new FieldExample("dateFlagRange", "el-date-picker", Map.of("is-range", true), null, List.of("2026-09-16", "2026-09-17")),
+                new FieldExample("sliderRange", "el-slider", Map.of("range", true), null, List.of(1, 2)),
+                new FieldExample("multiSelect", "el-select", Map.of("multiple", true), null, List.of("a", "b")),
+                new FieldExample("checkbox", "el-checkbox-group", Map.of(), null, List.of("a")),
+                new FieldExample("cascader", "el-cascader", Map.of(), null, List.of("a", "b")),
+                new FieldExample("files", "el-upload", Map.of(), null, List.of("123e4567-e89b-42d3-a456-426614174000")),
+                new FieldExample("table", "el-table", Map.of(), null, List.of(Map.of("cell", "text"))));
+        for (FieldExample example : examples)
+        {
+            fields.add(mapper.readTree(form(example.name(), example.tag(), example.options())).path("fields").get(0));
+            values.put(example.name(), example.value());
+            if (example.scalarType() != null) scalarTypes.put(example.name(), example.scalarType());
+        }
+        String content = root.toString();
+        deploy(Map.of("child", content));
+        var option = service.listReferenceOptions("child").get(0);
+        assertThat(option.status()).isEqualTo("ACTIVE");
+        for (var catalog : List.of(option.inputFields(), option.outputFields()))
+        {
+            Map<String, String> actual = new LinkedHashMap<>();
+            catalog.forEach(field -> actual.put(field.name(), field.type()));
+            assertThat(actual).containsExactlyInAnyOrderEntriesOf(scalarTypes);
+        }
+        var variables = new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
+        assertThat(variables.normalizeCallActivityStartValues(content, values)).containsExactlyInAnyOrderEntriesOf(values);
+        Map<String, String> loopTypes = new LinkedHashMap<>();
+        variables.describeControlledLoopFields(content).forEach((name, field) -> loopTypes.put(name, field.kind().name()));
+        assertThat(loopTypes).containsExactlyInAnyOrderEntriesOf(scalarTypes);
+        for (FieldExample example : examples)
+        {
+            if (example.scalarType() != null) continue;
+            assertThatThrownBy(() -> variables.normalizeCallActivityStartValues(content, Map.of(example.name(), "scalar")))
+                    .as(example.name()).isInstanceOfSatisfying(ServiceException.class,
+                            error -> assertThat(error.getCode()).isEqualTo(400));
+        }
+        assertThat(artifacts.selectForms(deployments.get(0)).get(0).getContent()).isEqualTo(content);
+    }
+
+    @ParameterizedTest
+    @CsvSource({ "el-time-picker,is-range,true", "el-time-picker,type,timerange",
+            "el-date-picker,is-range,true", "el-date-picker,type,daterange",
+            "el-slider,range,true", "el-select,multiple,true" })
+    void collectionMappingsFailBothSaveAndDeploymentGates(String tag, String flag, String value)
+    {
+        Map<String, Object> options = Map.of(flag, "true".equals(value) ? true : value);
+        deploy(Map.of("child", form("childValue", tag, options), "scalarChild", form("childValue")));
+        long originalDeployments = repository.createDeploymentQuery().count();
+        for (boolean collectionInParent : List.of(false, true))
+        {
+            if (collectionInParent)
+            {
+                WfForm template = new WfForm(); template.setFormId(7L);
+                template.setContent(form("parentValue", tag, options));
+                when(templates.selectById(7L)).thenReturn(template);
+            }
+            for (boolean output : List.of(false, true))
+            {
+                var document = parent(WorkflowFormFieldPermissionMode.EDITABLE, output);
+                var call = (CallActivity) document.bpmnModel().getMainProcess().getFlowElement("call");
+                if (collectionInParent) call.setCalledElement("scalarChild");
+                byte[] bytes = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(document.bpmnModel());
+                assertThatThrownBy(() -> service.validateAuthorReferences(document, ACTOR))
+                        .isInstanceOfSatisfying(ServiceException.class, error ->
+                        {
+                            assertThat(error.getCode()).isEqualTo(400);
+                            assertThat(error.getSubCode()).isEqualTo("CALL_MAPPING_FIELD_MISSING");
+                        });
+                assertThatThrownBy(() -> service.prepare(bytes, document, ACTOR))
+                        .isInstanceOfSatisfying(ServiceException.class,
+                                error -> assertThat(error.getSubCode()).isEqualTo("CALL_MAPPING_FIELD_MISSING"));
+                assertThat(new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(document.bpmnModel())).isEqualTo(bytes);
+            }
+        }
+        assertThat(repository.createDeploymentQuery().count()).isEqualTo(originalDeployments);
+        assertThat(repository.createProcessDefinitionQuery().processDefinitionKey("parent").count()).isZero();
+    }
+
+    @ParameterizedTest
+    @CsvSource({ "el-time-picker,is-range", "el-slider,range", "el-select,multiple" })
+    void malformedShapeFlagsRemainSnapshotErrors(String tag, String flag)
+    {
+        String content = form("childValue", tag, Map.of(flag, "true"));
+        var variables = new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
+        assertThatThrownBy(() -> variables.validateForStart(content, Map.of()))
+                .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getCode()).isEqualTo(500));
+        assertThatThrownBy(() -> variables.normalizeCallActivityStartValues(content, Map.of()))
+                .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getCode()).isEqualTo(500));
+        deploy(Map.of("child", content));
+        assertThat(service.listReferenceOptions("child")).singleElement().satisfies(option ->
+        {
+            assertThat(option.status()).isEqualTo("UNAVAILABLE");
+            assertThat(option.inputFields()).isEmpty();
+        });
+        assertThatThrownBy(() -> service.validateAuthorReferences(parent(WorkflowFormFieldPermissionMode.EDITABLE, false), ACTOR))
+                .isInstanceOfSatisfying(ServiceException.class, error ->
+                        assertThat(error.getSubCode()).isEqualTo("CALL_ACTIVITY_CATALOG_DATA_INVALID"));
+    }
+
+    @Test
+    void nonInputComponentsDoNotDisableAnOtherwiseHealthyCatalog()
+    {
+        String content = nested(form("childValue"), false);
+        var mapper = JsonMapper.shared();
+        var root = (ObjectNode) mapper.readTree(content);
+        var fields = (tools.jackson.databind.node.ArrayNode) root.path("fields");
+        fields.add(mapper.readTree(form("button", "el-button", Map.of())).path("fields").get(0));
+        fields.add(mapper.readTree(form("column", "el-table-column", Map.of())).path("fields").get(0));
+        deploy(Map.of("child", root.toString()));
+        assertThat(service.listReferenceOptions("child")).singleElement().satisfies(option ->
+        {
+            assertThat(option.status()).isEqualTo("ACTIVE");
+            assertThat(option.inputFields()).extracting(WorkflowCallActivityVariableView::name).containsExactly("childValue");
+        });
+    }
+
+    private record FieldExample(String name, String tag, Map<String, Object> options, String scalarType, Object value) { }
+
+    @ParameterizedTest
+    @CsvSource({ "el-time-picker,09:00:00", "el-date-picker,2026-09-16" })
+    void scalarTemporalMappingDeploysAndCreatesAValidatedChildStartSnapshot(String tag, String value)
+    {
+        String parentContent = form("parentValue", tag, Map.of("is-range", false));
+        WfForm template = new WfForm(); template.setFormId(7L); template.setContent(parentContent);
+        when(templates.selectById(7L)).thenReturn(template);
+        deploy(Map.of("child", form("childValue", tag, Map.of("is-range", false))));
+        var document = parent(WorkflowFormFieldPermissionMode.EDITABLE, false);
+        service.validateAuthorReferences(document, ACTOR);
+        byte[] bytes = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(document.bpmnModel());
+        var prepared = service.prepare(bytes, document, ACTOR);
+        String deployment = repository.createDeployment().addBytes("temporal-parent.bpmn20.xml", prepared.compiledBpmn()).deploy().getId();
+        deployments.add(deployment);
+        WfDeployForm snapshot = new WfDeployForm(); snapshot.setDeployId(deployment);
+        snapshot.setNodeKey("parentStart"); snapshot.setNodeName("申请");
+        snapshot.setSourceType("TEMPLATE"); snapshot.setFormId(7L); snapshot.setFormKey("key_7");
+        snapshot.setFormName("日期时间申请"); snapshot.setContent(parentContent);
+        artifacts.persist(deployment, new WorkflowDeploymentArtifacts(List.of(snapshot), List.of(), List.of(), List.of(), List.of(), List.of(),
+                service.snapshotsForDeployment(deployment, prepared, "100"), List.of()));
+
+        var runtime = support.processEngine().getRuntimeService();
+        runtime.addEventListener(startListener);
+        var parent = runtime.startProcessInstanceByKey("parent", Map.of("parentValue", value));
+        var child = runtime.createProcessInstanceQuery().superProcessInstanceId(parent.getId()).singleResult();
+        assertThat(child.getBusinessStatus()).isEqualTo("running");
+        assertThat(runtime.getVariable(child.getId(), "childValue")).isEqualTo(value);
+        var submission = WorkflowFormSubmissionSnapshotCodec.decode((String) runtime.getVariable(
+                child.getId(), WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
+        assertThat(submission.values()).containsOnlyKeys("childValue");
+        assertThat(submission.values().get("childValue").asText()).isEqualTo(value);
+        var wait = runtime.createExecutionQuery().processInstanceId(child.getId()).activityId("child_wait").singleResult();
+        runtime.trigger(wait.getId());
+        assertThat(runtime.createProcessInstanceQuery().count()).isZero();
+    }
+
+    private static String form(String variable, String tag, Map<String, Object> options)
+    {
+        var mapper = JsonMapper.shared();
+        var root = mapper.readTree(form(variable));
+        var field = (ObjectNode) root.path("fields").get(0);
+        field.put("tag", tag);
+        options.forEach((key, value) -> field.set(key, mapper.valueToTree(value)));
+        return root.toString();
     }
 
     @Test
@@ -290,10 +491,10 @@ class WorkflowCallActivityBusinessRegressionTest
 
     private void deploy(Map<String, String> forms)
     {
-        StringBuilder xml = new StringBuilder("<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" targetNamespace=\"urn:test:catalog\">");
+        StringBuilder xml = new StringBuilder("<definitions xmlns=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" xmlns:flowable=\"http://flowable.org/bpmn\" targetNamespace=\"urn:test:catalog\">");
         forms.keySet().forEach(key -> xml.append("<process id=\"").append(key)
                 .append("\" isExecutable=\"true\"><startEvent id=\"").append(key)
-                .append("_start\"/><receiveTask id=\"").append(key).append("_wait\"/><endEvent id=\"").append(key)
+                .append("_start\" flowable:formKey=\"key_7\"/><receiveTask id=\"").append(key).append("_wait\"/><endEvent id=\"").append(key)
                 .append("_end\"/><sequenceFlow id=\"").append(key).append("_flow\" sourceRef=\"")
                 .append(key).append("_start\" targetRef=\"").append(key).append("_wait\"/><sequenceFlow id=\"").append(key)
                 .append("_last\" sourceRef=\"").append(key).append("_wait\" targetRef=\"").append(key).append("_end\"/></process>"));
@@ -308,8 +509,9 @@ class WorkflowCallActivityBusinessRegressionTest
             snapshot.setDeployId(deployment);
             snapshot.setNodeKey(key + "_start");
             snapshot.setNodeName("申请");
-            snapshot.setSourceType("EMBEDDED");
-            snapshot.setFormKey(key + "_form");
+            snapshot.setSourceType("TEMPLATE");
+            snapshot.setFormId(7L);
+            snapshot.setFormKey("key_7");
             snapshot.setFormName("申请表单");
             snapshot.setContent(content);
             snapshots.add(snapshot);

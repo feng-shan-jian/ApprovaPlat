@@ -1,6 +1,25 @@
 import { createEmbeddedUserIdFieldCatalog, createTemplateUserIdFieldCatalog, normalizeEmbeddedFormType } from './formUserFieldCatalog.js'
 
 /**
+ * 将正式模板组件收窄为条件与调用映射使用的四类标量。
+ * @param {object} field 正式表单字段。
+ * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 集合、附件、表格和范围字段返回空。
+ */
+export function templateScalarFieldType(field) {
+  const tag = String(field?.tag || '')
+  if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
+  if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
+  if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'
+  if (tag === 'el-switch') return 'BOOLEAN'
+  if (tag === 'el-radio-group') return 'SCALAR'
+  if (tag === 'el-select') return field?.multiple === true ? null : 'SCALAR'
+  if (['el-time-picker', 'el-date-picker'].includes(tag)) {
+    return field?.['is-range'] === true || String(field?.type || '').toLowerCase().includes('range') ? null : 'TEXT'
+  }
+  return null
+}
+
+/**
  * 读取调用方传入的最新目录快照，不依赖 Vue 或其他响应式框架。
  * @param {Array<object>|(()=>Array<object>)} source 固定数组或只读访问函数。
  * @returns {Array<object>} 当前目录；非法输入返回空数组。

@@ -416,6 +416,62 @@ test('共享字段目录保持正式模板和内嵌表单字段投影', () => {
   })
 })
 
+test('调用映射、条件和循环目录共同排除集合与时间范围，保留普通标量', () => {
+  const examples = [
+    ['text', 'el-input', {}, 'TEXT'],
+    ['richText', 'tinymce', {}, 'TEXT'],
+    ['color', 'el-color-picker', {}, 'TEXT'],
+    ['number', 'el-input-number', {}, 'NUMBER'],
+    ['rating', 'el-rate', {}, 'NUMBER'],
+    ['slider', 'el-slider', {}, 'NUMBER'],
+    ['switchValue', 'el-switch', {}, 'BOOLEAN'],
+    ['radio', 'el-radio-group', {}, 'SCALAR'],
+    ['select', 'el-select', {}, 'SCALAR'],
+    ['time', 'el-time-picker', { 'is-range': false }, 'TEXT'],
+    ['date', 'el-date-picker', { type: 'date' }, 'TEXT'],
+    ['timeRange', 'el-time-picker', { 'is-range': true }, null],
+    ['timeTypeRange', 'el-time-picker', { type: 'TIMERANGE' }, null],
+    ['dateRange', 'el-date-picker', { type: 'daterange' }, null],
+    ['dateFlagRange', 'el-date-picker', { 'is-range': true }, null],
+    ['sliderRange', 'el-slider', { range: true }, null],
+    ['multiSelect', 'el-select', { multiple: true }, null],
+    ['checkbox', 'el-checkbox-group', {}, null],
+    ['cascader', 'el-cascader', {}, null],
+    ['files', 'el-upload', {}, null],
+    ['table', 'el-table', {}, null],
+    ['button', 'el-button', {}, null]
+  ]
+  const fields = examples.map(([vModel, tag, options]) => ({
+    vModel, tag, layout: 'colFormItem', workflowHidden: false,
+    workflowReadable: true, workflowWritable: true, ...options
+  }))
+  const content = JSON.stringify({ fields })
+  const process = { $type: 'bpmn:Process', flowElements: [] }
+  const task = { id: 'task', $type: 'bpmn:UserTask', $parent: process,
+    $instanceOf: type => type === 'bpmn:UserTask',
+    get: name => name === 'flowable:formKey' ? 'key_7' : '' }
+  const call = { $type: 'bpmn:CallActivity', $parent: process }
+  process.flowElements = [task, call]
+  const context = createDomainContext({
+    props: { forms: [{ formId: 7, content }] },
+    readTemplatePermissionPolicy: () => ({ defaultMode: 'EDITABLE',
+      permissions: new Map(fields.map(field => [field.vModel, 'EDITABLE'])) }),
+    selectedElement: { value: { businessObject: { $parent: process }, source: {
+      businessObject: { $type: 'bpmn:ExclusiveGateway', outgoing: [{ id: 'a' }, { id: 'b' }] }
+    } } },
+    getModeler: () => ({ get: () => ({ getAll: () => [{ businessObject: task }] }) })
+  })
+  const routing = createRoutingCallActivityDomain(context)
+  const loops = createControlledLoopDomain(context)
+  const expected = Object.fromEntries(examples.filter(([, , , type]) => type).map(([name, , , type]) => [name, type]))
+  const mappingFields = routing.resolveCallActivityParentFields(call)
+  assert.deepEqual(Object.fromEntries(mappingFields.map(field => [field.name, field.type])), expected)
+  assert.deepEqual(Object.fromEntries(loops.describeFormalFormFields(task).map(field => [field.value, field.type])), expected)
+  assert.deepEqual(Object.fromEntries(routing.resolveConditionFieldCatalog().fields.map(field => [field.value, field.type])), expected)
+  assert.equal(routing.validateCallMappings([{ source: 'time', target: 'time' }], mappingFields, mappingFields, '输入'), '')
+  assert.match(routing.validateCallMappings([{ source: 'timeRange', target: 'time' }], mappingFields, mappingFields, '输入'), /字段不存在/)
+})
+
 test('共享模板目录保留重名声明，用户字段资格拒绝类型冲突与损坏权限', () => {
   const form = { formId: 7, content: JSON.stringify({ fields: [
     { vModel: ' applicant ', tag: 'el-input', label: '申请人' },

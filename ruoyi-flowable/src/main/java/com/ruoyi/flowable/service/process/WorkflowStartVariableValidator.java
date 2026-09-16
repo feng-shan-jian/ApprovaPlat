@@ -20,6 +20,7 @@ import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
+import com.ruoyi.flowable.service.WorkflowFormTemplateValidator.FieldType;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceVariables;
 import com.ruoyi.flowable.service.model.WorkflowControlledLoopBpmnContract;
 import com.ruoyi.flowable.service.model.WorkflowControlledLoopFormField;
@@ -444,6 +445,15 @@ public class WorkflowStartVariableValidator
         String tag = tagNode.textValue();
         boolean required = optionalBoolean(component, REQUIRED_FIELD, false) && writable;
         FieldType fieldType;
+        try
+        {
+            fieldType = templateValidator.resolveFieldType(component);
+        }
+        catch (ServiceException exception)
+        {
+            throw invalidSnapshot(exception);
+        }
+        if (fieldType == null) throw invalidSnapshot(null);
         int defaultMaxLength = DEFAULT_TEXT_LENGTH;
         int minItems = 0;
         int maxItems = MAX_COLLECTION_SIZE;
@@ -453,28 +463,16 @@ public class WorkflowStartVariableValidator
 
         switch (tag)
         {
-            case "el-input" -> fieldType = FieldType.TEXT;
-            case "tinymce" ->
-            {
-                fieldType = FieldType.TEXT;
-                defaultMaxLength = MAX_STRING_LENGTH;
-            }
-            case "el-color-picker" ->
-            {
-                fieldType = FieldType.TEXT;
-                defaultMaxLength = DEFAULT_TEMPORAL_LENGTH;
-            }
+            case "tinymce" -> defaultMaxLength = MAX_STRING_LENGTH;
+            case "el-color-picker" -> defaultMaxLength = DEFAULT_TEMPORAL_LENGTH;
             case "el-input-number", "el-rate" ->
             {
-                fieldType = FieldType.NUMBER;
                 minimum = optionalDecimal(component, "min");
                 maximum = optionalDecimal(component, "max");
                 numericType = requireNumericType(component);
             }
             case "el-slider" ->
             {
-                fieldType = optionalBoolean(component, "range", false)
-                        ? FieldType.NUMBER_RANGE : FieldType.NUMBER;
                 minimum = optionalDecimal(component, "min");
                 maximum = optionalDecimal(component, "max");
                 if (fieldType == FieldType.NUMBER_RANGE)
@@ -483,48 +481,32 @@ public class WorkflowStartVariableValidator
                     maxItems = 2;
                 }
             }
-            case "el-switch" -> fieldType = FieldType.BOOLEAN;
-            case "el-radio-group" -> fieldType = FieldType.SCALAR;
             case "el-select" ->
             {
-                if (optionalBoolean(component, "multiple", false))
+                if (fieldType == FieldType.SCALAR_LIST)
                 {
-                    fieldType = FieldType.SCALAR_LIST;
                     maxItems = configuredCollectionLimit(component, "multiple-limit");
-                }
-                else
-                {
-                    fieldType = FieldType.SCALAR;
                 }
             }
             case "el-checkbox-group" ->
             {
-                fieldType = FieldType.SCALAR_LIST;
                 minItems = configuredMinimum(component, "min");
                 maxItems = configuredCollectionLimit(component, "max");
             }
-            case "el-cascader" -> fieldType = FieldType.CASCADER;
             case "el-time-picker", "el-date-picker" ->
             {
-                if (isTemporalRange(component))
+                if (fieldType == FieldType.TEMPORAL_RANGE)
                 {
-                    fieldType = FieldType.TEMPORAL_RANGE;
                     minItems = 2;
                     maxItems = 2;
-                }
-                else
-                {
-                    fieldType = FieldType.TEXT;
                 }
                 defaultMaxLength = DEFAULT_TEMPORAL_LENGTH;
             }
             case "el-upload" ->
             {
-                fieldType = FieldType.UPLOAD_LIST;
                 maxItems = configuredCollectionLimit(component, "limit");
             }
-            case "el-table" -> fieldType = FieldType.OBJECT_LIST;
-            default -> throw invalidSnapshot(null);
+            default -> { /* 其余已识别组件使用默认长度和集合容量。 */ }
         }
 
         int minLength = configuredStringLength(component, "minlength", 0);
@@ -994,23 +976,6 @@ public class WorkflowStartVariableValidator
     }
 
     /**
-     * 判断日期/时间组件是否配置为范围值。
-     *
-     * @param component JsonNode，日期或时间组件
-     * @return boolean，type 包含 range 或 is-range 为 true 时返回 true
-     */
-    private boolean isTemporalRange(JsonNode component)
-    {
-        if (optionalBoolean(component, "is-range", false))
-        {
-            return true;
-        }
-        JsonNode typeNode = component.get("type");
-        return typeNode != null && typeNode.isTextual()
-                && typeNode.textValue().toLowerCase(Locale.ROOT).contains("range");
-    }
-
-    /**
      * 读取可选布尔 schema 字段，存在但类型错误时拒绝持久化快照。
      *
      * @param node JsonNode，字段所属对象
@@ -1229,31 +1194,6 @@ public class WorkflowStartVariableValidator
         INTEGER,
         /** Flowable FormData long，要求有符号 64 位整数。 */
         LONG
-    }
-
-    /** 开始表单字段在服务端允许的顶层数据形态。 */
-    private enum FieldType
-    {
-        /** 普通文本、富文本、颜色或单值日期时间。 */
-        TEXT,
-        /** 单个有限数值。 */
-        NUMBER,
-        /** 布尔开关。 */
-        BOOLEAN,
-        /** 字符串、数值或布尔单选值。 */
-        SCALAR,
-        /** 多选标量数组。 */
-        SCALAR_LIST,
-        /** 可包含受限嵌套路径的级联数组。 */
-        CASCADER,
-        /** 两个有限数值组成的滑块范围。 */
-        NUMBER_RANGE,
-        /** 两个字符串组成的日期时间范围。 */
-        TEMPORAL_RANGE,
-        /** 上传字段；只允许服务端生成的临时附件 UUID 数组。 */
-        UPLOAD_LIST,
-        /** 表格行对象数组。 */
-        OBJECT_LIST
     }
 
     /** 单次请求共享的可变节点计数器。 */

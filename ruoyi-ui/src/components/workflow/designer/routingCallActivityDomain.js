@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { templateScalarFieldType } from './designerFormFieldCatalog.js'
 
 // 条件分支作者 XML 只保存版本化受控 JSON，服务端部署时生成固定表达式。
 const CONDITION_RULE_PROPERTY = 'approva.conditionRule.config'
@@ -146,11 +147,9 @@ export function createRoutingCallActivityDomain(context) {
     const seen = new Set()
     for (const { source, variable, field } of formFieldCatalog.resolveElementFieldDescriptors(businessObject)) {
       const embedded = source === 'EMBEDDED'
-      const tag = String(field?.tag || '')
       const type = embedded
         ? ({ string: 'TEXT', date: 'TEXT', long: 'NUMBER', integer: 'NUMBER', boolean: 'BOOLEAN', enum: 'SCALAR' })[field.type]
-        : (['el-time-picker', 'el-date-picker'].includes(tag) && field?.['is-range'] === true
-            ? null : templateCallFieldType(tag, field))
+        : templateScalarFieldType(field)
       if (!variable || !type || (embedded ? field.writable === false
         : field?.workflowWritable !== true || seen.has(variable))) continue
       if (!embedded) seen.add(variable)
@@ -311,7 +310,7 @@ export function createRoutingCallActivityDomain(context) {
   function extractTemplateCallFields(content, policy) {
     return formFieldCatalog.readTemplateFieldDescriptors(content)
       .map(({ field, variable: name }) => {
-        const type = templateCallFieldType(field?.tag, field)
+        const type = templateScalarFieldType(field)
         const mode = policy.permissions.get(name)
         if (!policy.defaultMode || !mode) return null
         return name && type ? { name, label: field?.label || name, type,
@@ -319,25 +318,6 @@ export function createRoutingCallActivityDomain(context) {
           writable: ['EDITABLE', 'REQUIRED'].includes(mode),
           systemWritable: field.workflowSystemWritable === true && mode === 'READONLY' } : null
       }).filter(Boolean)
-  }
-
-  /**
-   * 将正式表单组件类型归一为服务端调用映射的四类标量。
-   * @param {string} tag Element Plus 组件 tag。
-   * @param {object} field 完整字段配置。
-   * @returns {'TEXT'|'NUMBER'|'BOOLEAN'|'SCALAR'|null} 可映射类型或空。
-   */
-  function templateCallFieldType(tag, field) {
-    if (['el-input', 'tinymce', 'el-color-picker'].includes(tag)) return 'TEXT'
-    if (['el-date-picker', 'el-time-picker'].includes(tag)) {
-      return String(field?.type || '').toLowerCase().includes('range') ? null : 'TEXT'
-    }
-    if (['el-input-number', 'el-rate'].includes(tag)) return 'NUMBER'
-    if (tag === 'el-slider') return field?.range === true ? null : 'NUMBER'
-    if (tag === 'el-switch') return 'BOOLEAN'
-    if (tag === 'el-radio-group') return 'SCALAR'
-    if (tag === 'el-select') return field?.multiple === true ? null : 'SCALAR'
-    return null
   }
 
   /**

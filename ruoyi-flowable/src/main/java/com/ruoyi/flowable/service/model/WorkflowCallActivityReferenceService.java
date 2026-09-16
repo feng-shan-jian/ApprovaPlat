@@ -700,8 +700,16 @@ public class WorkflowCallActivityReferenceService
         formTemplateValidator.visitFields(root, (field, permission) ->
         {
             String name = text(field, "vModel");
-            String tag = text(field, "tag");
-            String type = fieldType(tag, field);
+            WorkflowFormTemplateValidator.FieldType fieldType;
+            try
+            {
+                fieldType = formTemplateValidator.resolveFieldType(field);
+            }
+            catch (ServiceException exception)
+            {
+                throw dataError(exception.getMessage());
+            }
+            String type = fieldType == null ? null : fieldType.scalarType();
             if (hasText(name) && VARIABLE_PATTERN.matcher(name).matches() && type != null)
             {
                 String label = firstText(text(field, "label"), name);
@@ -718,27 +726,6 @@ public class WorkflowCallActivityReferenceService
                 }
             }
         });
-    }
-
-    /**
-     * 将表单组件类型归一为调用活动允许的四类标量。
-     * @param tag String，表单组件 tag
-     * @param field JsonNode，完整字段节点
-     * @return String，TEXT、NUMBER、BOOLEAN、SCALAR 或 null
-     */
-    private String fieldType(String tag, JsonNode field)
-    {
-        return switch (safeText(tag))
-        {
-            case "el-input", "tinymce", "el-color-picker", "el-date-picker", "el-time-picker" ->
-                    text(field, "type").toLowerCase().contains("range") ? null : "TEXT";
-            case "el-input-number", "el-rate" -> "NUMBER";
-            case "el-slider" -> booleanValue(field, "range", false) ? null : "NUMBER";
-            case "el-switch" -> "BOOLEAN";
-            case "el-radio-group" -> "SCALAR";
-            case "el-select" -> booleanValue(field, "multiple", false) ? null : "SCALAR";
-            default -> null;
-        };
     }
 
     /**

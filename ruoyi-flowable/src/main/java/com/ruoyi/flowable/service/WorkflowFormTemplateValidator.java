@@ -144,6 +144,52 @@ public class WorkflowFormTemplateValidator
     {
     }
 
+    /** 正式表单字段的顶层值形态；调用映射只允许前四类标量。 */
+    public enum FieldType
+    {
+        TEXT, NUMBER, BOOLEAN, SCALAR, SCALAR_LIST, CASCADER,
+        NUMBER_RANGE, TEMPORAL_RANGE, UPLOAD_LIST, OBJECT_LIST;
+
+        public String scalarType()
+        {
+            return switch (this)
+            {
+                case TEXT, NUMBER, BOOLEAN, SCALAR -> name();
+                default -> null;
+            };
+        }
+    }
+
+    /** 统一解释组件值形态；布局和非输入组件返回 null，不涉及节点权限或字段值约束。 */
+    public FieldType resolveFieldType(JsonNode component)
+    {
+        return switch (component.path(TAG_FIELD).asText(""))
+        {
+            case "el-input", "tinymce", "el-color-picker" -> FieldType.TEXT;
+            case "el-input-number", "el-rate" -> FieldType.NUMBER;
+            case "el-slider" -> shapeFlag(component, "range") ? FieldType.NUMBER_RANGE : FieldType.NUMBER;
+            case "el-switch" -> FieldType.BOOLEAN;
+            case "el-radio-group" -> FieldType.SCALAR;
+            case "el-select" -> shapeFlag(component, "multiple") ? FieldType.SCALAR_LIST : FieldType.SCALAR;
+            case "el-checkbox-group" -> FieldType.SCALAR_LIST;
+            case "el-cascader" -> FieldType.CASCADER;
+            case "el-time-picker", "el-date-picker" -> shapeFlag(component, "is-range")
+                    || component.path("type").asText("").toLowerCase(Locale.ROOT).contains("range")
+                            ? FieldType.TEMPORAL_RANGE : FieldType.TEXT;
+            case "el-upload" -> FieldType.UPLOAD_LIST;
+            case "el-table" -> FieldType.OBJECT_LIST;
+            default -> null;
+        };
+    }
+
+    private boolean shapeFlag(JsonNode component, String name)
+    {
+        JsonNode value = component.get(name);
+        if (value == null || value.isNull()) return false;
+        if (!value.isBoolean()) throw invalid("表单字段 " + name + " 必须为布尔值");
+        return value.booleanValue();
+    }
+
     /** 只读遍历已验证的完整树，按原顺序访问业务字段，不改写模板或部署快照。 */
     public void visitFields(JsonNode root, BiConsumer<JsonNode, FieldPermissions> visitor)
     {
