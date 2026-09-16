@@ -8,6 +8,8 @@ import static com.ruoyi.flowable.service.task.WorkflowReturnedApplicationProtoco
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import org.flowable.common.engine.impl.identity.Authentication;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.runtime.ProcessInstance;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 
 /**
@@ -29,6 +32,7 @@ public class WorkflowReturnedTaskStateService
     private final WorkflowReturnedAssignmentCodec assignmentCodec;
     private final RuntimeService runtimeService;
     private final TaskService taskService;
+    private final WorkflowIdentityResolver identityResolver;
 
     /**
      * 创建退回任务状态服务。
@@ -37,11 +41,13 @@ public class WorkflowReturnedTaskStateService
      */
     public WorkflowReturnedTaskStateService(
             WorkflowReturnedAssignmentCodec assignmentCodec,
-            RuntimeService runtimeService, TaskService taskService)
+            RuntimeService runtimeService, TaskService taskService,
+            WorkflowIdentityResolver identityResolver)
     {
         this.assignmentCodec = assignmentCodec;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
+        this.identityResolver = identityResolver;
     }
 
     /**
@@ -96,6 +102,18 @@ public class WorkflowReturnedTaskStateService
             String processInstanceId, String applicantUserId)
     {
         Task task = requireTask(taskId, processInstanceId);
+        String actor = Authentication.getAuthenticatedUserId();
+        if (!StringUtils.hasText(actor))
+        {
+            throw new ServiceException("用户任务监听数据异常", HttpStatus.ERROR);
+        }
+        // 退回操作者需要审批资格；接管待修改任务的发起人只需处于活动状态。
+        if (!Set.of(actor).equals(identityResolver.resolveApprovalEligibleUserIds(List.of(actor)))
+                || !Set.of(applicantUserId).equals(identityResolver.resolveActiveUserIds(
+                        List.of(applicantUserId), List.of())))
+        {
+            throw invalidTaskIdentity();
+        }
         ReturnedAssignmentSnapshot assignment = captureAssignment(task);
         taskService.setVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE,
                 assignmentCodec.encode(assignment));
@@ -162,6 +180,23 @@ public class WorkflowReturnedTaskStateService
     {
         Objects.requireNonNull(assignment, "退回办理配置不能为空");
         requireTask(taskId, processInstanceId);
+        // 快照来自上一次退回请求；重提是新的分配时刻，恢复前重新取得实际需要的资格。
+        LinkedHashSet<String> directUsers = new LinkedHashSet<>();
+        if (assignment.assignee() != null) directUsers.add(assignment.assignee());
+        if (assignment.owner() != null) directUsers.add(assignment.owner());
+        if (!directUsers.isEmpty() && !directUsers.equals(
+                identityResolver.resolveApprovalEligibleUserIds(directUsers)))
+        {
+            throw invalidTaskIdentity();
+        }
+        if (assignment.assignee() == null
+                && (!new LinkedHashSet<>(assignment.candidateUserIds()).equals(
+                        identityResolver.resolveClaimEligibleUserIds(assignment.candidateUserIds()))
+                    || !new LinkedHashSet<>(assignment.candidateGroupIds()).equals(
+                        identityResolver.resolveClaimEligibleCandidateGroups(assignment.candidateGroupIds()))))
+        {
+            throw invalidTaskIdentity();
+        }
         taskService.removeVariableLocal(taskId, RETURN_APPLICANT_VARIABLE);
         taskService.removeVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE);
         taskService.setOwner(taskId, assignment.owner());
@@ -395,5 +430,10 @@ public class WorkflowReturnedTaskStateService
     private ServiceException dataError()
     {
         return new ServiceException("工作流对象关联数据异常", HttpStatus.ERROR);
+    }
+
+    private ServiceException invalidTaskIdentity()
+    {
+        return new ServiceException("用户任务办理身份无效", HttpStatus.BAD_REQUEST);
     }
 }

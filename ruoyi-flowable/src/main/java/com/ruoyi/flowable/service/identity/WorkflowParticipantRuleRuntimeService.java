@@ -179,9 +179,19 @@ public class WorkflowParticipantRuleRuntimeService
     {
         DefinitionContext context = definitionContext(task.getProcessDefinitionId());
         UserTask taskModel = requireCreatedTaskModel(task, context);
-        if (isControlledMultiInstanceTask(taskModel) || isGeneratedSlaEscalationTask(taskModel))
+        if (isControlledMultiInstanceTask(taskModel))
         {
-            // 多实例成员和 SLA 升级办理人均由各自部署编译协议确定，不能再套用普通任务参与者快照。
+            // 多实例 handler 或加签命令已经确定本轮成员资格，嵌套 assignment 只记录事实。
+            return;
+        }
+        if (isGeneratedSlaEscalationTask(taskModel))
+        {
+            // 升级任务可能在部署很久后才由边界计时器创建，此刻必须重新取得被冻结用户的办理资格。
+            if (!Set.of(task.getAssignee()).equals(identityResolver.resolveApprovalEligibleUserIds(
+                    List.of(task.getAssignee()))))
+            {
+                throw new ServiceException("用户任务办理身份无效", HttpStatus.BAD_REQUEST);
+            }
             return;
         }
         WfDeployParticipantRule rule = artifactRepository.selectTaskParticipantRule(
@@ -196,13 +206,19 @@ public class WorkflowParticipantRuleRuntimeService
         Resolution resolution;
         try
         {
-            // 目录查询、表单用户字段解析和身份资格过滤属于同一次实时解析，失败统一记录脱敏诊断。
+            // 目录查询、表单字段和资格属于本次解析；业务失败保留子码，系统故障保留原始原因。
             resolution = resolveRule(rule, task, initiator);
         }
         catch (RuntimeException exception)
         {
-            rejectResolutionFailure(rule, task, exception);
-            return;
+            if (exception instanceof ServiceException businessFailure
+                    && businessFailure.getCode() != null && businessFailure.getCode() < HttpStatus.ERROR)
+            {
+                rejectResolutionFailure(rule, task, businessFailure);
+            }
+            recordFailure(rule, "TASK", task.getProcessDefinitionId(), task.getProcessInstanceId(),
+                    task.getTaskDefinitionKey(), "TASK_PARTICIPANT_RESOLUTION_FAILED", exception);
+            throw exception;
         }
         // 编译 BPMN 不携带作者身份字段；仍先清空引擎候选链接，确保只保留本次实时解析结果。
         clearCandidateLinks(task);
@@ -399,7 +415,7 @@ public class WorkflowParticipantRuleRuntimeService
     }
 
     /**
-     * 将表单值非法、实时目录异常或资格解析失败统一转换为可审计的稳定任务失败。
+     * 将非法表单值或规则身份等业务解析失败转换为稳定任务失败；系统查询故障不进入此映射。
      * @param rule WfDeployParticipantRule，当前任务命中的不可变规则快照
      * @param task DelegateTask，正在创建且会被主事务回滚的任务
      * @param cause RuntimeException，原始解析异常，仅作为服务端异常链保留

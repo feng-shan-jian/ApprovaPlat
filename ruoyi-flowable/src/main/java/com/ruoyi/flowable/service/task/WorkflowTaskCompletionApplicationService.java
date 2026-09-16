@@ -2,6 +2,7 @@ package com.ruoyi.flowable.service.task;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -20,6 +21,7 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.dto.WorkflowTaskCompleteRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
+import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
@@ -48,6 +50,7 @@ public class WorkflowTaskCompletionApplicationService
     private final WorkflowTaskConcurrencyExecutor concurrencyExecutor;
     private final RuntimeService runtimeService;
     private final TaskService taskService;
+    private final WorkflowIdentityResolver identityResolver;
 
     /**
      * 创建任务完成应用服务。
@@ -68,7 +71,8 @@ public class WorkflowTaskCompletionApplicationService
             WorkflowControlledLoopService controlledLoopService,
             WorkflowTaskActionAuditWriter auditWriter,
             WorkflowTaskConcurrencyExecutor concurrencyExecutor,
-            RuntimeService runtimeService, TaskService taskService)
+            RuntimeService runtimeService, TaskService taskService,
+            WorkflowIdentityResolver identityResolver)
     {
         this.engineOperations = engineOperations;
         this.requestValidator = requestValidator;
@@ -85,6 +89,7 @@ public class WorkflowTaskCompletionApplicationService
         this.concurrencyExecutor = concurrencyExecutor;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
+        this.identityResolver = identityResolver;
     }
 
     /**
@@ -107,6 +112,14 @@ public class WorkflowTaskCompletionApplicationService
                 if (task.getDelegationState() == DelegationState.PENDING)
                 {
                     throw conflict();
+                }
+                // 完成是新的独立请求。办理人即当前操作者，已解决委派的 owner 也必须仍可办理。
+                Set<String> completionUsers = new LinkedHashSet<>();
+                completionUsers.add(actor.userId());
+                if (task.getOwner() != null) completionUsers.add(task.getOwner());
+                if (!completionUsers.equals(identityResolver.resolveApprovalEligibleUserIds(completionUsers)))
+                {
+                    throw new ServiceException("用户任务办理身份无效", HttpStatus.BAD_REQUEST);
                 }
                 CompletionPreparation preparation = requireCompletionPreparation(
                         task, request.variables());

@@ -105,6 +105,10 @@ class WorkflowTaskReturnChainIntegrationTest
     void setUp()
     {
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
+        when(identityResolver.resolveApprovalEligibleUserIds(org.mockito.ArgumentMatchers.anyCollection()))
+                .thenAnswer(invocation -> new java.util.LinkedHashSet<>((java.util.Collection<String>) invocation.getArgument(0)));
+        when(identityResolver.resolveActiveUserIds(org.mockito.ArgumentMatchers.anyCollection(), org.mockito.ArgumentMatchers.anyCollection()))
+                .thenAnswer(invocation -> new java.util.LinkedHashSet<>((java.util.Collection<String>) invocation.getArgument(0)));
         when(identityResolver.resolveCurrentIdentity()).thenAnswer(invocation ->
                 new WorkflowCurrentIdentity(currentUserId.get(), Set.of()));
 
@@ -153,7 +157,7 @@ class WorkflowTaskReturnChainIntegrationTest
                         new WorkflowTaskMovementPolicy(),
                         new WorkflowReturnedTaskStateService(
                                 new WorkflowReturnedAssignmentCodec(),
-                                runtimeService, taskService),
+                                runtimeService, taskService, identityResolver),
                         new WorkflowTaskActionAuditWriter(taskService),
                         new WorkflowTaskConcurrencyExecutor(),
                         groupTransitionService, taskCopyService,
@@ -164,7 +168,7 @@ class WorkflowTaskReturnChainIntegrationTest
                                 historyService),
                         new WorkflowReturnedTaskStateService(
                                 new WorkflowReturnedAssignmentCodec(),
-                                runtimeService, taskService),
+                                runtimeService, taskService, identityResolver),
                         new WorkflowTaskActionAuditWriter(taskService),
                         new WorkflowTaskConcurrencyExecutor(),
                         groupTransitionService, artifactRepository,

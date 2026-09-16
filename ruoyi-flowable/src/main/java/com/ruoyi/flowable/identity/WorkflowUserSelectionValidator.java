@@ -58,16 +58,7 @@ public class WorkflowUserSelectionValidator
         {
             return List.of();
         }
-        Set<String> activeIds;
-        try
-        {
-            activeIds = identityResolver.resolveActiveUserIds(canonicalIds, List.of());
-        }
-        catch (RuntimeException exception)
-        {
-            // 身份解析细节不向客户端暴露，所有非法选择统一映射为参数错误。
-            throw invalidSelection();
-        }
+        Set<String> activeIds = identityResolver.resolveActiveUserIds(canonicalIds, List.of());
         if (activeIds.size() != canonicalIds.size()
                 || !activeIds.equals(new LinkedHashSet<>(canonicalIds)))
         {
@@ -91,16 +82,7 @@ public class WorkflowUserSelectionValidator
             return List.of();
         }
 
-        Set<String> eligibleIds;
-        try
-        {
-            eligibleIds = identityResolver.resolveApprovalEligibleUserIds(canonicalIds);
-        }
-        catch (RuntimeException exception)
-        {
-            // 权限主数据查询失败按整批不可选处理，不得让部分用户进入后续 Flowable 写命令。
-            throw approvalIneligible();
-        }
+        Set<String> eligibleIds = identityResolver.resolveApprovalEligibleUserIds(canonicalIds);
         if (eligibleIds.size() != canonicalIds.size()
                 || !eligibleIds.equals(new LinkedHashSet<>(canonicalIds)))
         {
@@ -148,16 +130,7 @@ public class WorkflowUserSelectionValidator
             return List.of();
         }
 
-        Set<String> eligibleIds;
-        try
-        {
-            eligibleIds = identityResolver.resolveClaimEligibleUserIds(canonicalIds);
-        }
-        catch (RuntimeException exception)
-        {
-            // 认领权限主数据异常必须整批失败，不能把部分 candidateUser 写入正式任务。
-            throw claimIneligible();
-        }
+        Set<String> eligibleIds = identityResolver.resolveClaimEligibleUserIds(canonicalIds);
         if (eligibleIds.size() != canonicalIds.size()
                 || !eligibleIds.equals(new LinkedHashSet<>(canonicalIds)))
         {
@@ -220,10 +193,14 @@ public class WorkflowUserSelectionValidator
                     : identityResolver.resolveApprovalEligibleUserIdsByDeptIds(
                             normalizedGroupIds);
         }
-        catch (RuntimeException exception)
+        catch (ServiceException exception)
         {
-            // 组织和 RBAC 任一查询失败都必须阻止 Flowable 创建部分成员任务。
-            throw groupApprovalIneligible();
+            // Resolver 对组织无有效成员返回正式 400；仅保留该业务映射，系统查询故障原样传播。
+            if (Integer.valueOf(HttpStatus.BAD_REQUEST).equals(exception.getCode()))
+            {
+                throw groupApprovalIneligible();
+            }
+            throw exception;
         }
         if (eligibleUserIds == null || eligibleUserIds.isEmpty()
                 || eligibleUserIds.size() > MAX_SELECTED_USERS)

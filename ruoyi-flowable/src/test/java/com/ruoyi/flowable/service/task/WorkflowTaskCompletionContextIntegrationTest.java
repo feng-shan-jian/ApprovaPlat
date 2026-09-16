@@ -145,9 +145,9 @@ class WorkflowTaskCompletionContextIntegrationTest
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity()).thenReturn(
                 new WorkflowCurrentIdentity(CURRENT_USER_ID, Set.of()));
-        when(identityResolver.resolveApprovalEligibleUserIds(anyList()))
+        when(identityResolver.resolveApprovalEligibleUserIds(org.mockito.ArgumentMatchers.anyCollection()))
                 .thenAnswer(invocation -> new LinkedHashSet<>(
-                        (List<String>) invocation.getArgument(0)));
+                        (java.util.Collection<String>) invocation.getArgument(0)));
         when(identityResolver.resolveClaimEligibleUserIds(anyList()))
                 .thenAnswer(invocation -> new LinkedHashSet<>(
                         (List<String>) invocation.getArgument(0)));
@@ -224,7 +224,7 @@ class WorkflowTaskCompletionContextIntegrationTest
                         controlledLoopService,
                         new WorkflowTaskActionAuditWriter(taskService),
                         new WorkflowTaskConcurrencyExecutor(),
-                        runtimeService, taskService);
+                        runtimeService, taskService, identityResolver);
         nestedCompletionService = completionApplicationService;
         clearInvocations(repositoryService);
     }

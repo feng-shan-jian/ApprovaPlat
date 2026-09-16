@@ -288,7 +288,7 @@ class WorkflowTaskActionServiceIntegrationTest
     void rejectsRevokedTargetOrOwnerBeforeMutatingTask()
     {
         Task task = startTask("revokedAssignment", "flowable:assignee=\"100\"");
-        when(identityResolver.resolveApprovalEligibleUserIds(anyCollection())).thenReturn(Set.of());
+        when(identityResolver.resolveApprovalEligibleUserIds(List.of("200"))).thenReturn(Set.of());
         assertStatus(HttpStatus.BAD_REQUEST,
                 () -> service.delegate(new WorkflowTaskDelegateRequest(task.getId(), 200L, "委派", List.of())));
         assertStatus(HttpStatus.BAD_REQUEST,
@@ -296,6 +296,8 @@ class WorkflowTaskActionServiceIntegrationTest
         assertThat(reload(task).getAssignee()).isEqualTo("100");
         taskService.delegateTask(task.getId(), "200");
         currentIdentity.set(new WorkflowCurrentIdentity("200", Set.of()));
+        when(identityResolver.resolveApprovalEligibleUserIds(List.of("200"))).thenReturn(Set.of("200"));
+        when(identityResolver.resolveApprovalEligibleUserIds(List.of("100"))).thenReturn(Set.of());
         assertStatus(HttpStatus.CONFLICT,
                 () -> service.resolve(new WorkflowTaskResolveRequest(task.getId(), "已办", List.of())));
         assertThat(reload(task).getDelegationState()).isEqualTo(DelegationState.PENDING);

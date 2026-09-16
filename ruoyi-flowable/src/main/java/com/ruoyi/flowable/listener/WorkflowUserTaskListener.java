@@ -79,7 +79,7 @@ public class WorkflowUserTaskListener implements TaskListener
             {
                 if (EVENTNAME_CREATE.equals(eventName))
                 {
-                    // create 事务内先按部署快照和实时组织解析，使后续身份审计看到最终 assignee/candidate。
+                    // 创建分配方先确定资格并更新 DelegateTask，create 审计随后记录最终事实。
                     participantRuleRuntimeService.resolveCreatedTask(delegateTask);
                     // 参与者解析完成后再创建或核对正式轮次，确保成员快照与最终办理人属于同一事务事实。
                     roundLifecycleService.onTaskCreated(toEventSnapshot(delegateTask,
@@ -91,7 +91,7 @@ public class WorkflowUserTaskListener implements TaskListener
                     roundLifecycleService.onTaskCompleted(toEventSnapshot(delegateTask,
                             true));
                 }
-                // 固定监听入口只负责编排，规则解析和任务审计分别由独立领域服务维护。
+                // assignment（包括嵌套事件）不重新裁决分配方已确定的资格，审计只消费实际任务参数。
                 auditService.recordAudit(eventName, delegateTask.getId(),
                         delegateTask.getProcessInstanceId(),
                         delegateTask.getProcessDefinitionId(),

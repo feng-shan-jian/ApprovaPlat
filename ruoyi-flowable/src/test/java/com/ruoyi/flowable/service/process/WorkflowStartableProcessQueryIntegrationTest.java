@@ -339,6 +339,8 @@ class WorkflowStartableProcessQueryIntegrationTest
         DelegateTask task = mock(DelegateTask.class);
         when(task.getProcessDefinitionId()).thenReturn(definition.getId());
         when(task.getTaskDefinitionKey()).thenReturn("slaEscalation");
+        when(task.getAssignee()).thenReturn("200");
+        when(identityResolver.resolveApprovalEligibleUserIds(List.of("200"))).thenReturn(Set.of("200"));
         clearInvocations(repositoryService);
 
         participantRuntimeService.resolveCreatedTask(task);

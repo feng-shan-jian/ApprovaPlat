@@ -143,6 +143,8 @@ class WorkflowMultiInstanceEngineHarness
         when(resolver.resolveApprovalEligibleUserIds(anyCollection()))
                 .thenAnswer(invocation -> new LinkedHashSet<>(
                         (Collection<String>) invocation.getArgument(0)));
+        when(resolver.resolveActiveUserIds(anyCollection(), anyCollection()))
+                .thenAnswer(invocation -> new LinkedHashSet<>((Collection<String>) invocation.getArgument(0)));
         when(resolver.resolveCurrentIdentity()).thenAnswer(invocation ->
                 new WorkflowCurrentIdentity(currentUserId.get(), Set.of()));
         return resolver;
@@ -495,11 +497,12 @@ class WorkflowMultiInstanceEngineHarness
             WorkflowTaskSlaRuntimeService slaRuntimeService,
             WorkflowNotificationService notificationService,
             WorkflowMultiInstanceRoundLifecycleService lifecycleService,
-            RepositoryService repositoryService, RuntimeService runtimeService,
+            RepositoryService repositoryService, RuntimeService runtimeService, TaskService taskService,
             WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowIdentityResolver identityResolver)
     {
-        WorkflowUserTaskAuditService audit = mock(WorkflowUserTaskAuditService.class);
+        WorkflowUserTaskAuditService audit = org.mockito.Mockito.spy(
+                new WorkflowUserTaskAuditService(taskService, new WorkflowIdentityCodec()));
         doAnswer(invocation ->
         {
             String event = invocation.getArgument(0);
@@ -509,7 +512,7 @@ class WorkflowMultiInstanceEngineHarness
                 throw new org.flowable.common.engine.api.FlowableException(
                         "injected task create audit failure");
             }
-            return null;
+            return invocation.callRealMethod();
         }).when(audit).recordAudit(anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(),
                 org.mockito.ArgumentMatchers.nullable(String.class));

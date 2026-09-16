@@ -410,6 +410,12 @@ public class WorkflowTaskActionService
         {
             throw forbidden();
         }
+        // 委派、解决委派及转办会记录该操作者的审批决定，旧会话不能绕过实时撤权。
+        if (!Set.of(actor.userId()).equals(identityResolver.resolveApprovalEligibleUserIds(
+                List.of(actor.userId()))))
+        {
+            throw new ServiceException("用户任务办理身份无效", HttpStatus.BAD_REQUEST);
+        }
     }
 
     /** 从正式主数据校验并规范化客户端指定的目标用户。 */

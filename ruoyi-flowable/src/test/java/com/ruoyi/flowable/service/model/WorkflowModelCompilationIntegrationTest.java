@@ -107,7 +107,7 @@ class WorkflowModelCompilationIntegrationTest
                     context.getBeanFactory().registerSingleton("workflowConditionRouter", new WorkflowConditionRouter(repository, artifacts));
                     context.getBeanFactory().registerSingleton("workflowSystemOutputListener", new WorkflowSystemOutputListener(repository, artifacts, variables));
                     context.getBeanFactory().registerSingleton("userTaskListener", new WorkflowUserTaskListener(
-                            new WorkflowUserTaskAuditService(tasks, identities, new WorkflowIdentityCodec()), mock(WorkflowTaskSlaRuntimeService.class),
+                            new WorkflowUserTaskAuditService(tasks, new WorkflowIdentityCodec()), mock(WorkflowTaskSlaRuntimeService.class),
                             participants, mock(WorkflowAutomaticCopyService.class), mock(WorkflowNotificationService.class),
                             mock(WorkflowMultiInstanceRoundLifecycleService.class)));
                     String child = save(service, repository, "compiledChild", childXml());

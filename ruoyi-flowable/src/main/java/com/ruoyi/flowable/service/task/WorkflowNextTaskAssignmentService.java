@@ -3,7 +3,6 @@ package com.ruoyi.flowable.service.task;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.UserTask;
@@ -61,10 +60,7 @@ public class WorkflowNextTaskAssignmentService
     public AssignmentPlan prepare(Task sourceTask, org.flowable.bpmn.model.Process process,
             UserTask sourceNode, List<Long> requestedUserIds)
     {
-        // 先冻结直接办理资格用户和顺序；多人候选计划在识别目标拓扑后追加完整认领权限门禁。
-        List<String> approvalUserIds = userSelectionValidator
-                .requireApprovalEligibleUserIds(requestedUserIds);
-        if (approvalUserIds.isEmpty())
+        if (requestedUserIds == null || requestedUserIds.isEmpty())
         {
             return prepareWithoutRequestedUsers(sourceTask, process, sourceNode);
         }
@@ -135,6 +131,8 @@ public class WorkflowNextTaskAssignmentService
             {
                 throw conflict();
             }
+            List<String> approvalUserIds = userSelectionValidator
+                    .requireApprovalEligibleUserIds(requestedUserIds);
             List<Long> numericUserIds = approvalUserIds.stream().map(Long::valueOf).toList();
             // 集合变量必须先于 TaskService.complete 写入，同一外层事务保证创建失败时变量也回滚。
             runtimeService.setVariable(sourceTask.getProcessInstanceId(),
@@ -143,8 +141,8 @@ public class WorkflowNextTaskAssignmentService
             return new AssignmentPlan(sourceTask.getProcessInstanceId(), sourceTask.getId(),
                     targetNode.getId(), approvalUserIds, true, multiInstanceMode);
         }
-        List<String> assignmentUserIds = approvalUserIds.size() == 1
-                ? approvalUserIds
+        List<String> assignmentUserIds = requestedUserIds.size() == 1
+                ? userSelectionValidator.requireApprovalEligibleUserIds(requestedUserIds)
                 : userSelectionValidator.requireClaimEligibleUserIds(requestedUserIds);
         return new AssignmentPlan(sourceTask.getProcessInstanceId(), sourceTask.getId(),
                 targetNode.getId(), assignmentUserIds, false, null);
@@ -239,7 +237,6 @@ public class WorkflowNextTaskAssignmentService
                 taskService.addCandidateUser(nextTask.getId(), userId);
             }
         }
-        verifyAppliedAssignment(nextTask.getId(), plan.userIds());
     }
 
     /**
@@ -317,59 +314,6 @@ public class WorkflowNextTaskAssignmentService
     }
 
     /**
-     * 重新读取后继任务及候选关系，验证单人 assignee 或多人 candidate users 已真实持久化。
-     *
-     * @param taskId String，动态分配后的后继任务主键
-     * @param expectedUserIds List&lt;String&gt;，按请求顺序保存的预期有效用户主键
-     * @return 无返回值，实际状态与计划不一致时抛错回滚
-     */
-    private void verifyAppliedAssignment(String taskId, List<String> expectedUserIds)
-    {
-        Task refreshedTask = taskService.createTaskQuery().taskId(taskId).active().singleResult();
-        if (refreshedTask == null || refreshedTask.isSuspended())
-        {
-            throw conflict();
-        }
-
-        List<IdentityLink> identityLinks = taskService.getIdentityLinksForTask(taskId);
-        if (identityLinks == null)
-        {
-            throw dataError();
-        }
-        Set<String> candidateUsers = new LinkedHashSet<>();
-        Set<String> candidateGroups = new LinkedHashSet<>();
-        for (IdentityLink identityLink : identityLinks)
-        {
-            if (identityLink != null && IdentityLinkType.CANDIDATE.equals(identityLink.getType()))
-            {
-                if (StringUtils.hasText(identityLink.getUserId()))
-                {
-                    candidateUsers.add(identityLink.getUserId());
-                }
-                if (StringUtils.hasText(identityLink.getGroupId()))
-                {
-                    candidateGroups.add(identityLink.getGroupId());
-                }
-            }
-        }
-
-        if (expectedUserIds.size() == 1)
-        {
-            if (!expectedUserIds.get(0).equals(refreshedTask.getAssignee())
-                    || !candidateUsers.isEmpty() || !candidateGroups.isEmpty())
-            {
-                throw conflict();
-            }
-            return;
-        }
-        if (StringUtils.hasText(refreshedTask.getAssignee()) || !candidateGroups.isEmpty()
-                || !candidateUsers.equals(new LinkedHashSet<>(expectedUserIds)))
-        {
-            throw conflict();
-        }
-    }
-
-    /**
      * 创建稳定的动态分配结构或并发冲突异常。
      *
      * @return ServiceException，HTTP 409 状态异常
@@ -377,19 +321,6 @@ public class WorkflowNextTaskAssignmentService
     private ServiceException conflict()
     {
         return new ServiceException("当前流程结构不支持动态指定下一办理人", HttpStatus.CONFLICT);
-    }
-
-    /**
-     * 创建保留运行时快照漂移原因的稳定冲突。
-     *
-     * @param cause Throwable，唯一快照读取器发现的真实漂移原因
-     * @return ServiceException，HTTP 409 且对外错误信息保持不变
-     */
-    private ServiceException conflict(Throwable cause)
-    {
-        ServiceException failure = conflict();
-        failure.initCause(cause);
-        return failure;
     }
 
     /**
