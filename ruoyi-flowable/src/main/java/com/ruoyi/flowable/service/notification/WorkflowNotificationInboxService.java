@@ -62,6 +62,10 @@ public class WorkflowNotificationInboxService
         long unreadCount = unreadValue == null ? 0L : unreadValue;
         var page = WorkflowPageSupport.query(pageNum, pageSize,
                 () -> {
+                    if ("UNREAD".equals(status))
+                    {
+                        return unreadCount;
+                    }
                     Long value = jdbcTemplate.queryForObject(countSql, Long.class, filterArgs.toArray());
                     return value == null ? 0L : value;
                 },
