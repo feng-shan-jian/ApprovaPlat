@@ -27,8 +27,8 @@
 | 17 | C11 SLA 时钟 | BS-048 | 已提交 `b7a40ac6eabcd3b296a71a1b4f2f188107a9d1f3` |
 | 18 | L03 代码生成详情 | BS-039 | 已提交 `5b2719fc67223b93dad95c63f077afbddd2b1175` |
 | 19 | L05 部门／菜单树 | BS-042 | 已提交 `950c3957c87ab7002bde52e162a1c1c99dcd88c9` |
-| 20 | L06 未读通知分页 | BS-047 | review 和主审验证通过，本提交完成 |
-| 21 | L07 图标格式 | A-001 | 待实施 |
+| 20 | L06 未读通知分页 | BS-047 | 已提交 `5ef2fe237800e4936e109c896945b71a07173e30` |
+| 21 | L07 图标格式 | A-001 | review 和主审验证通过，本提交完成 |
 
 ## C13
 
@@ -317,6 +317,26 @@
 
 - 主审独占 MySQL 8.4.9 位于 33350/approvaplat_it，正式 14 份基线；最终额外 schema、收件箱记录及本项自有用户均为 0。监听 PID 77580 与启动器 34960 正常退出，端口释放；本轮临时数据库、脚本、日志及报告共 499 文件（226585315 字节）已删除，临时根目录不存在，没有新增待删迁移，主工作区原有构建目录和依赖保持。
 - leader 已复核实现任务 7 个 target、ruoyi-admin/logs 及独占临时根目录不存在、33349 端口释放；实现任务报告删除 1908 文件且没有待删迁移。最终两项交付在源工作区和主工作区与冻结 SHA256 一致，两份用户原有未跟踪文档摘要保持。review 无阻断项，最终主审验证通过，精确提交仅含两项交付及本台账；BS-047 完成，下一项为 L07。无数据迁移，撤销生产 4 行与对应测试即可恢复。
+
+## L07
+
+- 实现任务：`01a0b088-d530-7591-ab64-794316621466`；worktree：`C:/Users/18221/.codex/worktrees/e06d/ruoyiflowable`。
+- 起始 HEAD 已核对为 L06 提交 `5ef2fe237800e4936e109c896945b71a07173e30`，初始工作区干净，任务已确认运行。限定 button.svg 精确删除一个多余的闭合标签，保留路径、属性、名称和引用；不改资源加载系统或新增永久测试文件。
+- 要求严格标准 XML 前失败／后成功证据、恰好删除 7 字节、生成器图标消费链及生产构建符号核对，并执行正式前端 contracts／lint／build:prod。本项无 Java 修改，不重复 Maven／MySQL；未执行浏览器不冒充可见故障或 UI 验收。冻结唯一文件后由 leader 独立 review、主审验证并精确提交，任务临时资源按既有删除／集中迁移规则处理。
+
+- leader 已独立核对唯一 SVG 交付、生成器 tagIcon、构建页／属性面板、SvgIcon、生产插件与注册入口。原文件 2370 字节，最终 2363 字节；仅删除零基偏移 2357 的 7 字节 `</path>`，所有其余字节及无末尾换行状态保持。源路径仍为 1 条、1971 字符，SHA256 为 `2011c95c9914edb22ff6ec997306fef9b00d237a771f82b4cee7ced2d0cf5b37`。没有新增生产逻辑、职责迁移、正式测试或说明文件。
+- leader 使用严格 .NET XmlReader／XmlDocument，忽略外部 DTD 且 XmlResolver=null，独立复现原文件标签不匹配（第 1 行位置 2360），修复后严格 XML 解析成功；不是 HTML 容错解析。按原始 HEAD blob 和冻结 SHA256 集成唯一文件，源工作区与主工作区最终摘要均为 `d974d982784004d732aa6e7ecc006ba48d12640f03ba4ca593bdf34504aa7ada`。
+- 实现任务前端 contracts 129 项、lint、build:prod 全部通过。leader 主工作区再次运行 `npm run test:contracts`、`npm run lint`、`npm run build:prod -- --outDir C:/Users/18221/.codex/tmp/l07-leader-review-20260918/dist --emptyOutDir`，均退出 0：contracts 129 项通过，0 失败／取消／跳过／todo；lint 无诊断；Vite 6.4.3 转换 3159 模块，构建 21.31 秒，未见 warning/error。产物输出到独占临时目录，原有 dist 420 文件逐一 SHA256 核对保持。
+- leader 扫描新产物 195 个 JS，唯一 icon-button 位于 index.html 直接引用的 `/static/js/index-Dtzyp8kk.js`；symbol 严格 XML 解析通过，viewBox 和单条非空路径保持。逐 token 核对路径的 38 个命令、311 个数值、349 个 token 全部与源文件一致；入口包 SHA256 为 `0f25868fadeda4b2151a0a07c41b6f351841f9f1888a28a6ff700c5b02b3055c`。本项没有 Java 变更，不重复 Maven／MySQL；浏览器与业务端到端未执行，不据构建成功推断此前发生可见图标故障。
+- 实现任务自有 node_modules、dist 和 .l07-validation 均不存在，报告删除 29162 文件且无需集中迁移。leader 已删除独占脚本、日志、核验记录及产物 430 文件（9238291 字节），临时根目录不存在；主工作区原有 node_modules／dist 保留。两份用户原有未跟踪文档摘要保持；review 与主审验证通过，精确提交仅含 SVG 和本台账，A-001 完成。
+
+## 收尾
+
+21 个实施单元已依次完成实现任务交付、leader 独立 review、相应验证和精确本地提交，覆盖 BS-016～BS-049 共 34 项及 A-001；没有推送。当前最终后端源码最近一次完整默认验证为 690 项通过，L06 定向 MySQL 5 项通过；各其他单元的 MySQL／Redis／前端证据及边界分别保留在对应章节，不把不同轮次结果累计为一次全量验收。最后前端 contracts 129 项、lint、生产构建及按钮图标 XML／产物验证通过。
+
+正式业务数据库迁移和生产部署未执行。C12 唯一约束及 C05 状态迁移仍按各自迁移说明处理；C10 新版制品部署后的恢复限制保持，不能把代码回退当作已部署 v2 制品的数据恢复。各项未执行的真实 HTTP／浏览器等层级以对应章节为准。
+
+集中待删目录 `D:/ruoyiflowable-pending-delete-20260917` 最终保留 5 个任务分目录：C03-admin-logs、C05-admin-logs、C05-build-outputs、C05-temporary-resources、C09-admin-logs，共 1860 文件、401387851 字节，未纳入 Git；现场未发现引用该目录的 mysqld 进程。按用户要求保留这些已迁出的临时内容，交由用户最后统一删除。本轮后续单元没有新增迁移；用户原有两份未跟踪文档保持原样。
 
 ## 基线验证
 
