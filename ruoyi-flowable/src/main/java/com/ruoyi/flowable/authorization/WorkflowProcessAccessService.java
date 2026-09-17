@@ -94,25 +94,29 @@ public class WorkflowProcessAccessService
     public WorkflowProcessAccessSnapshot requireReadableInstance(String processInstanceId)
     {
         requireText(processInstanceId);
-        WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-        return engineOperations.read(() ->
+        return engineOperations.read(() -> requireReadableInstance(processInstanceId,
+                identityResolver.resolveCurrentIdentity()));
+    }
+
+    /** 详情/观察在同次读取事务中复用当前身份；独立入口仍自行解析身份。 */
+    public WorkflowProcessAccessSnapshot requireReadableInstance(String processInstanceId,
+        WorkflowCurrentIdentity actor)
+    {
+        HistoricProcessInstance processInstance = historyService.createHistoricProcessInstanceQuery()
+                .processInstanceId(processInstanceId)
+                .singleResult();
+        if (processInstance == null)
         {
-            HistoricProcessInstance processInstance = historyService.createHistoricProcessInstanceQuery()
-                    .processInstanceId(processInstanceId)
-                    .singleResult();
-            if (processInstance == null)
-            {
-                throw notFound();
-            }
-            if (!canReadInstance(processInstance, actor))
-            {
-                throw forbidden();
-            }
-            ProcessInstance runtimeInstance = runtimeService.createProcessInstanceQuery()
-                    .processInstanceId(processInstanceId)
-                    .singleResult();
-            return toProcessSnapshot(processInstance, runtimeInstance);
-        });
+            throw notFound();
+        }
+        if (!canReadInstance(processInstance, actor))
+        {
+            throw forbidden();
+        }
+        ProcessInstance runtimeInstance = runtimeService.createProcessInstanceQuery()
+                .processInstanceId(processInstanceId)
+                .singleResult();
+        return toProcessSnapshot(processInstance, runtimeInstance);
     }
 
     /**
@@ -160,6 +164,58 @@ public class WorkflowProcessAccessService
             }
             return toTaskSnapshot(historicTask);
         });
+    }
+
+    /** 同次详情事务按任务主键读取一次，复用已授权实例和身份。 */
+    public WorkflowTaskAccessSnapshot requireReadableTask(String taskId,
+            WorkflowProcessAccessSnapshot instance, WorkflowCurrentIdentity actor)
+    {
+        Task task = taskService.createTaskQuery().taskId(taskId).singleResult();
+        if (task != null)
+        {
+            return requireReadableTask(task, instance, actor);
+        }
+        HistoricTaskInstance historic = historyService.createHistoricTaskInstanceQuery()
+                .taskId(taskId).singleResult();
+        if (historic == null)
+        {
+            throw notFound();
+        }
+        if (!instance.processInstanceId().equals(historic.getProcessInstanceId())
+                && !canReadInstance(requireHistoricInstance(historic.getProcessInstanceId()), actor))
+        {
+            throw forbidden();
+        }
+        requireTaskRelation(historic.getProcessInstanceId(), historic.getProcessDefinitionId(), instance);
+        // 历史任务沿用本次实例参与授权，不再重新查询同一实例。
+        return toTaskSnapshot(historic);
+    }
+
+    /** 退回申请定位已取得 Task；关系和任务读取权限仍在这里决定。 */
+    public WorkflowTaskAccessSnapshot requireReadableTask(Task task,
+            WorkflowProcessAccessSnapshot instance, WorkflowCurrentIdentity actor)
+    {
+        if (!canReadActiveTask(task, actor))
+        {
+            throw forbidden();
+        }
+        requireTaskRelation(task.getProcessInstanceId(), task.getProcessDefinitionId(), instance);
+        boolean processActive = instance.runtimeInstance() != null
+                && !instance.runtimeInstance().isSuspended();
+        return toTaskSnapshot(task, actor.userId(), processActive);
+    }
+
+    private void requireTaskRelation(String instanceId, String definitionId,
+            WorkflowProcessAccessSnapshot instance)
+    {
+        if (!instance.processInstanceId().equals(instanceId))
+        {
+            throw new ServiceException("任务与流程实例关系不一致", HttpStatus.ERROR);
+        }
+        if (!instance.processDefinitionId().equals(definitionId))
+        {
+            throw new ServiceException("任务与流程定义关系不一致", HttpStatus.ERROR);
+        }
     }
 
     /**
@@ -356,7 +412,7 @@ public class WorkflowProcessAccessService
     }
 
     /**
-     * 将 Flowable 历史实例转换为不暴露引擎运行时对象的不可变快照。
+     * 保留历史展示字段和同次运行实例；运行对象不会进入 HTTP JSON。
      *
      * @param processInstance HistoricProcessInstance，已完成授权校验的实例
      * @param runtimeInstance ProcessInstance，当前运行时实例；实例已结束时为空
@@ -385,7 +441,7 @@ public class WorkflowProcessAccessService
                 toInstant(processInstance.getEndTime()),
                 processInstance.getDeleteReason(),
                 processInstance.getBusinessStatus(),
-                engineState);
+                engineState, runtimeInstance);
     }
 
     /**
@@ -418,7 +474,7 @@ public class WorkflowProcessAccessService
                 null,
                 task.getClaimedBy(),
                 toInstant(task.getClaimTime()),
-                unclaimAllowed);
+                unclaimAllowed, task);
     }
 
     /**
@@ -443,7 +499,7 @@ public class WorkflowProcessAccessService
                 toInstant(task.getEndTime()),
                 task.getClaimedBy(),
                 toInstant(task.getClaimTime()),
-                false);
+                false, null);
     }
 
     /**

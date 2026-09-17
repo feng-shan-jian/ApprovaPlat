@@ -43,7 +43,8 @@ import com.ruoyi.flowable.service.task.WorkflowApplicationResubmitApplicationSer
 /**
  * 流程实例完整只读详情编排服务。
  *
- * 该服务独占对象授权、只读事务、定义关系、当前 capability 和最终 VO 组装顺序；表单、变量和
+ * 详情入口建立对象授权与只读事务，观察入口在同次事务复用身份和实例；定义关系、能力与最终 VO
+ * 在此组装。表单、变量和
  * 历史展示算法委托给直接投影组件，避免编排层重新理解其存储与展示细节。
  */
 @Service
@@ -129,35 +130,50 @@ public class WorkflowProcessDetailService
      */
     public WorkflowProcessDetailView getDetail(WorkflowProcessDetailQueryDto request)
     {
+        String instanceId = requireInstanceId(request);
+        String taskId = requireTaskId(request);
+        return engineOperations.read(() -> {
+            WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
+            return buildDetail(processAccessService.requireReadableInstance(instanceId, actor),
+                    taskId, actor);
+        });
+    }
+
+    String requireInstanceId(WorkflowProcessDetailQueryDto request)
+    {
         if (request == null)
         {
             throw invalidArgument("流程详情查询参数不能为空");
         }
-        String instanceId = requireText(request.processInstanceId(), "流程实例主键不能为空");
-        String taskId = optionalText(request.taskId(), "任务主键过长");
-        return engineOperations.read(() -> buildDetail(instanceId, taskId));
+        return requireText(request.processInstanceId(), "流程实例主键不能为空");
+    }
+
+    String requireTaskId(WorkflowProcessDetailQueryDto request)
+    {
+        return optionalText(request.taskId(), "任务主键过长");
     }
 
     /**
      * 在同一只读事务内按固定顺序完成授权、关系核验和全部详情投影。
      *
-     * @param instanceId String，已经过格式校验的流程实例主键
+     * @param instance WorkflowProcessAccessSnapshot，本次读取已授权的流程实例
+     * @param actor WorkflowCurrentIdentity，本次入口取得的当前身份
      * @param taskId String，可选的任务主键
      * @return WorkflowProcessDetailView，完成全部数据门禁的详情视图
      */
-    private WorkflowProcessDetailView buildDetail(String instanceId, String taskId)
+    WorkflowProcessDetailView buildDetail(WorkflowProcessAccessSnapshot instance,
+            String taskId, WorkflowCurrentIdentity actor)
     {
-        // 授权必须先于表单、变量、意见和 BPMN 正文读取，拒绝请求不得产生敏感数据查询。
-        WorkflowProcessAccessSnapshot instance =
-                processAccessService.requireReadableInstance(instanceId);
+        String instanceId = instance.processInstanceId();
+        // 入口实例授权先于表单、变量、意见和 BPMN 正文；任务按本次身份单独检查读取权限。
         WorkflowTaskAccessSnapshot requestedTask = taskId == null ? null
-                : processAccessService.requireReadableTask(taskId);
+                : processAccessService.requireReadableTask(taskId, instance, actor);
         if (requestedTask == null
                 && WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
                         instance.businessStatus())
                 && StringUtils.hasText(instance.startUserId()))
         {
-            // “我的流程”详情不携带 taskId；退回态由服务端定位发起人独占任务并再次走对象授权。
+            // “我的流程”详情不携带 taskId；退回态由服务端定位发起人独占任务并直接检查任务对象权限。
             List<Task> returnedTasks = taskService.createTaskQuery()
                     .processInstanceId(instance.processInstanceId()).active()
                     .taskAssignee(instance.startUserId()).list();
@@ -165,14 +181,7 @@ public class WorkflowProcessDetailService
             {
                 throw dataError("退回任务状态异常");
             }
-            requestedTask = processAccessService.requireReadableTask(returnedTasks.get(0).getId());
-        }
-        if (requestedTask != null)
-        {
-            requireSame(instance.processInstanceId(), requestedTask.processInstanceId(),
-                    "任务与流程实例关系不一致");
-            requireSame(instance.processDefinitionId(), requestedTask.processDefinitionId(),
-                    "任务与流程定义关系不一致");
+            requestedTask = processAccessService.requireReadableTask(returnedTasks.get(0), instance, actor);
         }
 
         ProcessDefinition definition = requireDefinition(instance.processDefinitionId());
@@ -227,21 +236,23 @@ public class WorkflowProcessDetailService
         // capability 由服务端对象所有权和部署模型共同计算，普通任务返回 null，页面无需用 409 探测。
         com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceStateView multiInstanceState =
                 requestedTask == null || returnedApplicantTask ? null
-                        : multiInstanceService.getOptionalState(requestedTask.taskId());
+                        : multiInstanceService.getOptionalState(requestedTask.runtimeTask(),
+                                instance.runtimeInstance(), actor);
         // 退回入口必须由正式动作准备链投影；静态多实例、子流程和复杂执行树统一失败关闭。
         boolean returnAllowed = requestedTask != null && requestedTask.active()
-                && returnApplicationService.isTaskReturnAllowed(requestedTask.taskId());
+                && returnApplicationService.isTaskReturnAllowed(requestedTask.runtimeTask(),
+                        instance.runtimeInstance(), actor);
         WorkflowTaskCapabilities taskCapabilities = projectTaskCapabilities(
-                identityResolver.resolveCurrentIdentity(), requestedTask, processStatus,
+                actor, requestedTask, processStatus,
                 multiInstanceState, returnAllowed);
         // 先用详情已识别的申请人待修改任务收窄调用，再由正式重提准备链完成全部权威重验。
         boolean resubmitAllowed = returnedApplicantTask
-                && resubmitApplicationService.isApplicationResubmitAllowed(
-                        requestedTask.taskId());
+                && resubmitApplicationService.isApplicationResubmitAllowed(requestedTask.runtimeTask(),
+                        instance.runtimeInstance(), actor);
         // 终态、挂起态和 CallActivity 子流程固定失败关闭；只有已授权的活动根流程进入正式准备链。
         boolean urgeAllowed = isUrgeProjectionCandidate(
                 instance, processStatus, processRelations)
-                && manualUrgeService.isUrgeAllowed(instance.processInstanceId());
+                && manualUrgeService.isUrgeAllowed(instance.runtimeInstance(), actor);
         NextUserAssignmentPolicy nextUserAssignmentPolicy = resolveNextUserAssignmentPolicy(
                 instance, requestedTask, bpmn.process());
         return new WorkflowProcessDetailView(instance.processInstanceId(), definition.getId(),
@@ -249,7 +260,7 @@ public class WorkflowProcessDetailService
                 definition.getCategory(), definition.getDeploymentId(), instance.businessKey(),
                 instance.startUserId(), historyPresentation.startUserName(), startTime,
                 instance.endTime(), durationMillis, processStatus, requestedTask,
-                nextUserAssignmentPolicy.name(), multiInstanceState,
+                nextUserAssignmentPolicy, multiInstanceState,
                 taskCapabilities.completeAllowed(), taskCapabilities.rejectAllowed(),
                 taskCapabilities.returnAllowed(), taskCapabilities.delegateAllowed(),
                 taskCapabilities.transferAllowed(), taskCapabilities.resolveAllowed(),

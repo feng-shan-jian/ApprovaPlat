@@ -66,18 +66,19 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
     }
 
     /**
-     * 通过活动任务主键读取完整受控多实例快照。
+     * 使用当前操作已读取的活动任务生成完整受控多实例快照。
      *
-     * @param taskId String，活动任务主键
+     * @param task Task，当前操作已读取的活动任务
      * @return ControlledMultiInstanceSnapshot，受控任务完整快照；普通任务返回 null
      */
-    public ControlledMultiInstanceSnapshot readTask(String taskId)
+    public ControlledMultiInstanceSnapshot readTask(Task task)
     {
-        if (!StringUtils.hasText(taskId))
-        {
-            throw drift();
-        }
-        Task task = taskService.createTaskQuery().taskId(taskId).active().singleResult();
+        return readTask(task, null);
+    }
+
+    /** 详情读取可同时复用已取得的实例；事件和写后读取仍按当前操作获取实例。 */
+    public ControlledMultiInstanceSnapshot readTask(Task task, ProcessInstance instance)
+    {
         if (task == null || task.isSuspended())
         {
             throw drift();
@@ -85,7 +86,7 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
         return readEvent(new WorkflowTaskEventSnapshot(task.getId(),
                 task.getProcessInstanceId(), task.getProcessDefinitionId(),
                 task.getTaskDefinitionKey(), task.getExecutionId(),
-                task.getAssignee(), null));
+                task.getAssignee(), null), instance);
     }
 
     /**
@@ -96,11 +97,17 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
      */
     public ControlledMultiInstanceSnapshot readEvent(WorkflowTaskEventSnapshot event)
     {
+        return readEvent(event, null);
+    }
+
+    private ControlledMultiInstanceSnapshot readEvent(WorkflowTaskEventSnapshot event,
+            ProcessInstance instance)
+    {
         if (event == null)
         {
             throw drift();
         }
-        ControlledMultiInstanceRootSnapshot rootSnapshot = readEventRoot(event);
+        ControlledMultiInstanceRootSnapshot rootSnapshot = readEventRoot(event, instance);
         if (rootSnapshot == null)
         {
             return null;
@@ -127,6 +134,12 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
     public ControlledMultiInstanceRootSnapshot readEventRoot(
             WorkflowTaskEventSnapshot event)
     {
+        return readEventRoot(event, null);
+    }
+
+    private ControlledMultiInstanceRootSnapshot readEventRoot(
+            WorkflowTaskEventSnapshot event, ProcessInstance instance)
+    {
         if (event == null)
         {
             throw drift();
@@ -137,8 +150,11 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
         {
             return null;
         }
-        ProcessInstance instance = runtimeService.createProcessInstanceQuery()
-                .processInstanceId(event.processInstanceId()).singleResult();
+        if (instance == null)
+        {
+            instance = runtimeService.createProcessInstanceQuery()
+                    .processInstanceId(event.processInstanceId()).singleResult();
+        }
         Execution taskExecution = runtimeService.createExecutionQuery()
                 .executionId(event.executionId()).singleResult();
         if (instance == null || instance.isSuspended()

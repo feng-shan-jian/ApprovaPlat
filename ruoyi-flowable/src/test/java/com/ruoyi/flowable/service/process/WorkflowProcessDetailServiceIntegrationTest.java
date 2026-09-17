@@ -14,6 +14,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
@@ -93,7 +94,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         WorkflowFormTemplateValidator template = spy(new WorkflowFormTemplateValidator());
         WorkflowProcessFormDetailProjection projection = new WorkflowProcessFormDetailProjection(
                 artifactRepository, template,
-                new WorkflowProcessVariableProjection(historyService, historicVariableMapper),
+                new WorkflowProcessVariableProjection(historicVariableMapper),
                 mock(WorkflowAttachmentService.class));
         List<WfDeployForm> rows = formSnapshots();
         when(artifactRepository.selectForms(deploymentId)).thenReturn(rows);
@@ -122,6 +123,12 @@ class WorkflowProcessDetailServiceIntegrationTest
     private WorkflowApplicationResubmitApplicationService resubmitApplicationService;
     private WorkflowManualUrgeService manualUrgeService;
     private WorkflowProcessDetailService service;
+    private WorkflowProcessDetailService authorizedService;
+    private WorkflowProcessObservationService observation;
+    private WorkflowProcessWaitingService waiting;
+    private WorkflowIdentityResolver identityResolver;
+    private com.ruoyi.flowable.mapper.WfCopyMapper accessCopies;
+    private com.ruoyi.flowable.authorization.WorkflowProcessAccessService realAccess;
     private WorkflowAutomaticCopyService completionCopies;
     private WorkflowNotificationService completionNotifications;
     private WorkflowNotificationOutboxService childOutbox;
@@ -184,7 +191,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         when(artifactRepository.selectForms(deploymentId)).thenReturn(formSnapshots());
         WorkflowDeploymentService deploymentService = mock(WorkflowDeploymentService.class);
         when(deploymentService.getBpmnXml(anyString())).thenReturn(BPMN);
-        WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
+        identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new com.ruoyi.flowable.identity.WorkflowCurrentIdentity(
                         "approver", Set.of()));
@@ -196,15 +203,15 @@ class WorkflowProcessDetailServiceIntegrationTest
         multiInstanceService = mock(WorkflowMultiInstanceService.class);
         returnApplicationService = mock(WorkflowTaskReturnApplicationService.class);
         resubmitApplicationService = mock(WorkflowApplicationResubmitApplicationService.class);
-        when(returnApplicationService.isTaskReturnAllowed(anyString())).thenReturn(false);
-        when(resubmitApplicationService.isApplicationResubmitAllowed(anyString())).thenReturn(false);
+        when(returnApplicationService.isTaskReturnAllowed(any(), any(), any())).thenReturn(false);
+        when(resubmitApplicationService.isApplicationResubmitAllowed(any(), any(), any())).thenReturn(false);
         manualUrgeService = mock(WorkflowManualUrgeService.class);
         controlledLoopService = mock(WorkflowControlledLoopService.class);
         when(controlledLoopService.buildStates(anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of());
         // 变量存储解码使用独立直接协作者，仍共享同一个真实 Flowable 引擎与生产 Mapper。
         WorkflowProcessVariableProjection variableProjection =
-                new WorkflowProcessVariableProjection(historyService, historicVariableMapper);
+                new WorkflowProcessVariableProjection(historicVariableMapper);
         WorkflowProcessFormDetailProjection formProjection =
                 new WorkflowProcessFormDetailProjection(artifactRepository,
                         new WorkflowFormTemplateValidator(), variableProjection,
@@ -218,6 +225,101 @@ class WorkflowProcessDetailServiceIntegrationTest
                 formProjection, historyProjection, multiInstanceService,
                 returnApplicationService, resubmitApplicationService, identityResolver, manualUrgeService,
                 controlledLoopService);
+        accessCopies = mock(com.ruoyi.flowable.mapper.WfCopyMapper.class);
+        realAccess = spy(new WorkflowProcessAccessService(historyService, runtimeService,
+                taskService, engineOperations, identityResolver, accessCopies,
+                mock(com.ruoyi.framework.web.service.PermissionService.class), new WorkflowTaskUnclaimPolicy()));
+        authorizedService = new WorkflowProcessDetailService(engineOperations, realAccess,
+                repositoryService, taskService, deploymentService, variableProjection,
+                formProjection, historyProjection, multiInstanceService, returnApplicationService,
+                resubmitApplicationService, identityResolver, manualUrgeService, controlledLoopService);
+        var metrics = mock(com.ruoyi.flowable.runtime.WorkflowRuntimeMetrics.class);
+        when(metrics.readHealthSnapshot()).thenReturn(
+                new com.ruoyi.flowable.runtime.WorkflowRuntimeHealthSnapshot(true, 0, 0, false, false));
+        waiting = new WorkflowProcessWaitingService(realAccess, engineOperations, runtimeService,
+                repositoryService, processEngine.getManagementService(), metrics,
+                new com.ruoyi.flowable.config.WorkflowRuntimeProperties());
+        observation = new WorkflowProcessObservationService(engineOperations, authorizedService,
+                waiting, realAccess, identityResolver);
+    }
+
+    @Test
+    void authorizesObservationOnceAndRechecksTransferCandidateRevocationAndSuspension()
+    {
+        ProcessInstance instance = startMainProcess();
+        Task task = activeTask(instance.getId(), "globalTask");
+        taskService.setAssignee(task.getId(), "201");
+        when(identityResolver.resolveCurrentIdentity()).thenReturn(
+                new com.ruoyi.flowable.identity.WorkflowCurrentIdentity("201", Set.of()));
+        var query = new WorkflowProcessDetailQueryDto(instance.getId(), task.getId());
+        clearInvocations(realAccess, identityResolver, historicVariableMapper);
+        var observed = observation.query(query);
+        assertThat(observed.detail().currentTask().taskId()).isEqualTo(task.getId());
+        assertThat(observed.waiting().processInstanceId()).isEqualTo(instance.getId());
+        assertThat(observed.detail().completeAllowed()).isTrue();
+        verify(identityResolver).resolveCurrentIdentity();
+        verify(realAccess).requireReadableInstance(eq(instance.getId()), any());
+        verify(realAccess, never()).requireReadableInstance(anyString());
+        verify(realAccess).requireReadableTask(eq(task.getId()), any(), any());
+        assertThat(JsonMapper.shared().valueToTree(observed).path("detail").path("currentTask")
+                .has("runtimeTask")).isFalse();
+
+        taskService.setAssignee(task.getId(), "202");
+        assertForbidden(() -> authorizedService.getDetail(query));
+        assertForbidden(() -> observation.query(query));
+        when(identityResolver.resolveCurrentIdentity()).thenReturn(
+                new com.ruoyi.flowable.identity.WorkflowCurrentIdentity("999", Set.of()));
+        assertForbidden(() -> waiting.query(instance.getId()));
+        clearInvocations(historicVariableMapper);
+        assertForbidden(() -> observation.query(query));
+        verifyNoInteractions(historicVariableMapper);
+
+        taskService.setAssignee(task.getId(), null);
+        taskService.addCandidateUser(task.getId(), "999");
+        assertThat(observation.query(query).detail().completeAllowed()).isFalse();
+        assertThat(waiting.query(instance.getId()).processInstanceId()).isEqualTo(instance.getId());
+        taskService.deleteCandidateUser(task.getId(), "999");
+        // Flowable 保留候选参与历史；实例仍可审计，正在办理的任务表单资格必须立即失效。
+        assertThat(waiting.query(instance.getId()).processInstanceId()).isEqualTo(instance.getId());
+        assertForbidden(() -> observation.query(query));
+
+        taskService.setAssignee(task.getId(), "999");
+        runtimeService.suspendProcessInstanceById(instance.getId());
+        var suspended = observation.query(query).detail();
+        assertThat(suspended.processStatus()).isEqualTo("suspended");
+        assertThat(suspended.completeAllowed()).isFalse();
+        assertThat(suspended.currentTask().unclaimAllowed()).isFalse();
+        runtimeService.activateProcessInstanceById(instance.getId());
+        completeWithSnapshot(task, 2L, "global-form", "globalTask", false, Map.of("value", "submitted"));
+        var historical = observation.query(query).detail();
+        assertThat(historical.currentTask().active()).isFalse();
+        assertThat(historical.completeAllowed()).isFalse();
+        assertThat(historical.multiInstanceState()).isNull();
+    }
+
+    @Test
+    void waitingAndDetailRecheckCopyRevocationAndRejectUnrelatedTask()
+    {
+        ProcessInstance instance = startMainProcess();
+        ProcessInstance other = startMainProcess();
+        when(identityResolver.resolveCurrentIdentity()).thenReturn(
+                new com.ruoyi.flowable.identity.WorkflowCurrentIdentity("999", Set.of()));
+        when(accessCopies.countActiveByInstanceAndUser(instance.getId(), 999L)).thenReturn(1L);
+        assertThat(waiting.query(instance.getId()).processInstanceId()).isEqualTo(instance.getId());
+        assertThat(authorizedService.getDetail(new WorkflowProcessDetailQueryDto(instance.getId(), null)).currentTask()).isNull();
+        Task unrelated = activeTask(other.getId(), "globalTask");
+        taskService.setAssignee(unrelated.getId(), "999");
+        assertThatThrownBy(() -> observation.query(new WorkflowProcessDetailQueryDto(instance.getId(), unrelated.getId())))
+                .isInstanceOf(ServiceException.class).satisfies(error -> assertThat(((ServiceException) error).getCode()).isEqualTo(500));
+        when(accessCopies.countActiveByInstanceAndUser(instance.getId(), 999L)).thenReturn(0L);
+        assertForbidden(() -> waiting.query(instance.getId()));
+        assertForbidden(() -> observation.query(new WorkflowProcessDetailQueryDto(instance.getId(), null)));
+    }
+
+    private void assertForbidden(Runnable read)
+    {
+        assertThatThrownBy(read::run).isInstanceOf(ServiceException.class)
+                .satisfies(error -> assertThat(((ServiceException) error).getCode()).isEqualTo(403));
     }
 
     /**
@@ -262,7 +364,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.formDetail().historyForms()).isEmpty();
         assertThat(detail.formDetail().returnedApplication()).isFalse();
         assertThat(detail.resubmitAllowed()).isFalse();
-        verify(historyService).createHistoricVariableInstanceQuery();
+        verify(historyService, never()).createHistoricVariableInstanceQuery();
         verify(historicVariableMapper).selectCurrentVariableMetadata(
                 eq(instance.getId()), eq(task.getId()), eq(false), eq(List.of("value")), eq(2));
     }
@@ -277,7 +379,7 @@ class WorkflowProcessDetailServiceIntegrationTest
     {
         ProcessInstance ownedInstance = startMainProcess();
         Task ownedTask = activeTask(ownedInstance.getId(), "globalTask");
-        when(returnApplicationService.isTaskReturnAllowed(ownedTask.getId())).thenReturn(true);
+        when(returnApplicationService.isTaskReturnAllowed(any(), any(), any())).thenReturn(true);
 
         WorkflowProcessDetailView owned = readDetail(
                 ownedInstance.getId(), ownedTask.getId(), "running");
@@ -322,12 +424,12 @@ class WorkflowProcessDetailServiceIntegrationTest
     void projectsManualUrgeCapabilityForAuthorizedRunningRoot()
     {
         ProcessInstance instance = startMainProcess();
-        when(manualUrgeService.isUrgeAllowed(instance.getId())).thenReturn(true);
+        when(manualUrgeService.isUrgeAllowed(any(), any())).thenReturn(true);
 
         WorkflowProcessDetailView detail = readDetail(instance.getId(), null, "running");
 
         assertThat(detail.urgeAllowed()).isTrue();
-        verify(manualUrgeService).isUrgeAllowed(instance.getId());
+        verify(manualUrgeService).isUrgeAllowed(any(), any());
     }
 
     /**
@@ -357,7 +459,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(suspendedDetail.urgeAllowed()).isFalse();
         assertThat(completedDetail.processStatus()).isEqualTo("completed");
         assertThat(completedDetail.urgeAllowed()).isFalse();
-        verify(manualUrgeService, never()).isUrgeAllowed(anyString());
+        verify(manualUrgeService, never()).isUrgeAllowed(any(), any());
     }
 
     /**
@@ -385,7 +487,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         WorkflowProcessDetailView detail = readDetail(child.getId(), null, "running");
 
         assertThat(detail.urgeAllowed()).isFalse();
-        verify(manualUrgeService, never()).isUrgeAllowed(anyString());
+        verify(manualUrgeService, never()).isUrgeAllowed(any(), any());
     }
 
     /**
@@ -453,13 +555,13 @@ class WorkflowProcessDetailServiceIntegrationTest
     void authorizesProcessBeforeCalculatingManualUrgeCapability()
     {
         ServiceException forbidden = new ServiceException("无权查看流程", 403);
-        when(processAccessService.requireReadableInstance("forbidden-instance"))
+        when(processAccessService.requireReadableInstance(eq("forbidden-instance"), any()))
                 .thenThrow(forbidden);
 
         assertThatThrownBy(() -> service.getDetail(
                 new WorkflowProcessDetailQueryDto("forbidden-instance", null)))
                 .isSameAs(forbidden);
-        verify(manualUrgeService, never()).isUrgeAllowed(anyString());
+        verify(manualUrgeService, never()).isUrgeAllowed(any(), any());
     }
 
     /**
@@ -488,7 +590,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.formDetail().historyForms())
                 .extracting(WorkflowProcessFormSnapshotView::taskId)
                 .containsExactly(completed.getId());
-        verify(historyService).createHistoricVariableInstanceQuery();
+        verify(historyService, never()).createHistoricVariableInstanceQuery();
         verify(historicVariableMapper).selectCurrentVariableMetadata(
                 eq(instance.getId()), eq(active.getId()), eq(true), eq(List.of("value")), eq(2));
     }
@@ -570,9 +672,9 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.formDetail().returnedApplication()).isTrue();
         assertThat(detail.resubmitAllowed()).isFalse();
         // 没有申请人局部标记的 returned 任务仍按原路径解析正式多实例 capability。
-        verify(multiInstanceService).getOptionalState(active.getId());
+        verify(multiInstanceService).getOptionalState(any(), any(), any());
         verify(resubmitApplicationService, never())
-                .isApplicationResubmitAllowed(anyString());
+                .isApplicationResubmitAllowed(any(), any(), any());
         verifyNoCurrentVariableRead();
     }
 
@@ -599,7 +701,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         taskService.setAssignee(active.getId(), applicantUserId);
         taskService.setVariableLocal(active.getId(),
                 "__ruoyi_workflow_return_applicant", applicantUserId);
-        when(resubmitApplicationService.isApplicationResubmitAllowed(active.getId()))
+        when(resubmitApplicationService.isApplicationResubmitAllowed(any(), any(), any()))
                 .thenReturn(true);
 
         WorkflowProcessDetailView detail = readDetail(
@@ -610,8 +712,8 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.formDetail().returnedApplication()).isTrue();
         assertThat(detail.formDetail().applicationForm().taskId()).isEqualTo(active.getId());
         assertThat(detail.formDetail().nodeTaskForm()).isNull();
-        verify(multiInstanceService, never()).getOptionalState(anyString());
-        verify(resubmitApplicationService).isApplicationResubmitAllowed(active.getId());
+        verify(multiInstanceService, never()).getOptionalState(any(), any(), any());
+        verify(resubmitApplicationService).isApplicationResubmitAllowed(any(), any(), any());
     }
 
     /**
@@ -697,7 +799,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         verify(artifactRepository, times(1)).selectForms(deploymentId);
         verify(historyService, times(1)).createHistoricActivityInstanceQuery();
         verify(historyService, times(1)).createHistoricTaskInstanceQuery();
-        verify(historyService, times(1)).createHistoricVariableInstanceQuery();
+        verify(historyService, never()).createHistoricVariableInstanceQuery();
         verify(historicVariableMapper, times(1)).selectSubmissionMetadata(
                 eq(instance.getId()), eq(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME),
                 eq(WorkflowProcessVariableProjection.MAX_VARIABLE_UPDATE_ROWS + 1));
@@ -741,7 +843,7 @@ class WorkflowProcessDetailServiceIntegrationTest
 
         assertThat(detail.resubmitAllowed()).isFalse();
         verify(resubmitApplicationService, never())
-                .isApplicationResubmitAllowed(anyString());
+                .isApplicationResubmitAllowed(any(), any(), any());
     }
 
     /**
@@ -769,8 +871,8 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(detail.formDetail().nodeTaskForm().taskLocal()).isTrue();
         assertThat(detail.formDetail().nodeTaskForm().values().get("decision").textValue())
                 .isEqualTo("redo");
-        verify(historyService).createHistoricVariableInstanceQuery();
-        verify(historicVariableMapper, never()).selectCurrentVariableMetadata(
+        verify(historyService, never()).createHistoricVariableInstanceQuery();
+        verify(historicVariableMapper).selectCurrentVariableMetadata(
                 anyString(), anyString(), eq(true), anyList(), anyInt());
     }
 
@@ -984,6 +1086,7 @@ class WorkflowProcessDetailServiceIntegrationTest
                 new JdbcTransactionFactory(), dataSource);
         org.apache.ibatis.session.Configuration configuration =
                 new org.apache.ibatis.session.Configuration(environment);
+        configuration.setLocalCacheScope(org.apache.ibatis.session.LocalCacheScope.STATEMENT);
         configuration.addMapper(WorkflowHistoricVariableMapper.class);
         String resource = "mapper/flowable/WorkflowHistoricVariableMapper.xml";
         try (InputStream input = WorkflowProcessDetailServiceIntegrationTest.class
@@ -1217,13 +1320,14 @@ class WorkflowProcessDetailServiceIntegrationTest
                 .singleResult();
         ProcessDefinition definition = repositoryService.getProcessDefinition(
                 instance.getProcessDefinitionId());
-        when(processAccessService.requireReadableInstance(processInstanceId)).thenReturn(
+        when(processAccessService.requireReadableInstance(eq(processInstanceId), any())).thenReturn(
                 new WorkflowProcessAccessSnapshot(processInstanceId, definition.getId(),
                         definition.getDeploymentId(), instance.getBusinessKey(),
                         instance.getStartUserId(), instance.getStartTime().toInstant(),
                         instance.getEndTime() == null ? null : instance.getEndTime().toInstant(),
                         instance.getDeleteReason(), businessStatus,
-                        processState(processInstanceId, instance)));
+                        processState(processInstanceId, instance), runtimeService.createProcessInstanceQuery()
+                                .processInstanceId(processInstanceId).singleResult()));
         if (taskId != null)
         {
             HistoricTaskInstance historicTask = processEngine.getHistoryService()
@@ -1245,7 +1349,7 @@ class WorkflowProcessDetailServiceIntegrationTest
                     && new WorkflowTaskUnclaimPolicy().isUnclaimAllowed(
                             processActive, true, activeTask.isSuspended(), "approver",
                             assignee, owner, delegationState, claimedBy, claimTime != null);
-            when(processAccessService.requireReadableTask(taskId)).thenReturn(
+            when(processAccessService.requireReadableTask(eq(taskId), any(), any())).thenReturn(
                     new WorkflowTaskAccessSnapshot(taskId, processInstanceId,
                              definition.getId(), historicTask.getTaskDefinitionKey(),
                              historicTask.getName(), assignee,
@@ -1254,7 +1358,7 @@ class WorkflowProcessDetailServiceIntegrationTest
                              historicTask.getEndTime() == null ? null
                                      : historicTask.getEndTime().toInstant(),
                              claimedBy, claimTime == null ? null : claimTime.toInstant(),
-                             unclaimAllowed));
+                             unclaimAllowed, activeTask));
         }
         return service.getDetail(new WorkflowProcessDetailQueryDto(processInstanceId, taskId));
     }

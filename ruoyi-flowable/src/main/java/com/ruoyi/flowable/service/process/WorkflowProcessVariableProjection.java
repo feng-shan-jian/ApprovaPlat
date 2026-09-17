@@ -24,9 +24,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import org.flowable.engine.HistoryService;
-import org.flowable.variable.api.history.HistoricVariableInstance;
-import org.flowable.variable.api.history.HistoricVariableInstanceQuery;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import tools.jackson.core.JacksonException;
@@ -112,7 +109,7 @@ public class WorkflowProcessVariableProjection
             "initiator", "processStatus", "nrOfInstances", "nrOfActiveInstances",
             "nrOfCompletedInstances", "loopCounter", "_FLOWABLE_SKIP_EXPRESSION_ENABLED");
 
-    /** 可以安全读取 getValue 的 Flowable 标量或 JSON 变量类型。 */
+    /** 允许受控投影的 Flowable 标量或 JSON 变量类型。 */
     private static final Set<String> SAFE_VARIABLE_TYPES = Set.of(
             "null", "string", "integer", "long", "short", "double", "boolean",
             "date", "instant", "json", "longjson", "longstring", "uuid",
@@ -141,8 +138,6 @@ public class WorkflowProcessVariableProjection
                 : ObjectInputFilter.Status.REJECTED;
     };
 
-    private final HistoryService historyService;
-
     private final WorkflowHistoricVariableMapper historicVariableMapper;
 
     /** 严格拒绝重复字段和根节点后尾随内容的变量 JSON 解析器。 */
@@ -155,12 +150,9 @@ public class WorkflowProcessVariableProjection
      * 创建流程详情变量安全投影组件。
      *
      * 构造后由 Spring 管理该组件
-     * @param historyService HistoryService，禁止初始化正文的历史变量公共查询入口
      */
-    public WorkflowProcessVariableProjection(HistoryService historyService,
-            WorkflowHistoricVariableMapper historicVariableMapper)
+    public WorkflowProcessVariableProjection(WorkflowHistoricVariableMapper historicVariableMapper)
     {
-        this.historyService = historyService;
         this.historicVariableMapper = historicVariableMapper;
     }
 
@@ -274,9 +266,7 @@ public class WorkflowProcessVariableProjection
     ProjectedValues projectCurrentValues(String instanceId, String taskId,
             boolean taskLocal, Set<String> readableNames)
     {
-        Map<String, HistoricVariableInstance> source = loadCurrentVariables(
-                instanceId, taskId, taskLocal);
-        return buildSafeValues(instanceId, taskId, taskLocal, readableNames, source);
+        return buildSafeValues(instanceId, taskId, taskLocal, readableNames);
     }
 
     /**
@@ -509,127 +499,34 @@ public class WorkflowProcessVariableProjection
         return "string".equals(normalized) || "longstring".equals(normalized);
     }
 
-    /**
-     * 按活动表单真实作用域有界加载当前变量元数据，禁止跨任务或子执行读取。
-     *
-     * @param instanceId String，已经完成对象授权的流程实例主键
-     * @param taskId String，真实活动任务主键
-     * @param taskLocal boolean，true 只查询当前任务局部变量，false 只查询流程根变量
-     * @return Map&lt;String, HistoricVariableInstance&gt;，按变量名唯一索引的当前作用域元数据
-     */
-    private Map<String, HistoricVariableInstance> loadCurrentVariables(String instanceId,
-            String taskId, boolean taskLocal)
-    {
-        HistoricVariableInstanceQuery query = historyService
-                .createHistoricVariableInstanceQuery();
-        if (taskLocal)
-        {
-            // 单元素任务集合是查询边界，历史任务以及其他并行活动任务均不得进入当前表单。
-            query.processInstanceId(instanceId).taskIds(Set.of(taskId));
-        }
-        else
-        {
-            // 非局部表单只允许根执行变量，排除任务局部和子执行 local 变量。
-            query.processInstanceId(instanceId).excludeTaskVariables().excludeLocalVariables();
-        }
-        List<HistoricVariableInstance> rows = query.excludeVariableInitialization()
-                .orderByVariableName().asc()
-                .listPage(0, MAX_VARIABLE_ROWS + 1);
-        if (rows == null || rows.size() > MAX_VARIABLE_ROWS)
-        {
-            throw dataError(taskLocal ? "任务局部变量数量超过安全上限" : "流程变量数量超过安全上限");
-        }
-        return Collections.unmodifiableMap(indexVariables(rows, instanceId,
-                taskLocal ? taskId : null));
-    }
-
-    /**
-     * 校验流程变量元数据并按变量名建立唯一索引。
-     *
-     * @param rows List&lt;HistoricVariableInstance&gt;，Flowable 历史变量结果
-     * @param instanceId String，变量必须所属的流程实例主键
-     * @param taskId String，期望任务主键；流程变量场景为空
-     * @return Map&lt;String, HistoricVariableInstance&gt;，变量名唯一索引
-     */
-    private Map<String, HistoricVariableInstance> indexVariables(
-            List<HistoricVariableInstance> rows, String instanceId, String taskId)
-    {
-        Map<String, HistoricVariableInstance> indexed = new LinkedHashMap<>();
-        for (HistoricVariableInstance variable : rows)
-        {
-            if (variable == null || !instanceId.equals(variable.getProcessInstanceId())
-                    || !Objects.equals(taskId, variable.getTaskId())
-                    || !StringUtils.hasText(variable.getVariableName()))
-            {
-                throw dataError("流程变量关联数据异常");
-            }
-            if (indexed.putIfAbsent(variable.getVariableName(), variable) != null)
-            {
-                throw dataError("流程变量名称不唯一");
-            }
-        }
-        return indexed;
-    }
-
-    /**
-     * 按授权作用域和部署 schema 白名单两阶段读取活动表单当前值。
-     *
-     * longString、JSON 及实际使用 Blob 的 string 永不调用 Flowable getValue；普通标量也必须先
-     * 与 ACT_HI_VARINST 元数据核对并确认没有字节数组关联，才允许由 Flowable 初始化值。
-     *
-     * @param instanceId String，已经完成对象授权的流程实例主键
-     * @param taskId String，真实活动任务主键
-     * @param taskLocal boolean，true 使用任务局部作用域，false 使用流程根作用域
-     * @param allowedNames Set&lt;String&gt;，部署表单快照允许回显的字段名
-     * @param source Map&lt;String, HistoricVariableInstance&gt;，对应变量作用域的 Flowable 元数据
-     * @return ProjectedValues，按 schema 顺序返回的安全字段值和逐字段真实 JSON 字节数
-     */
+    /** 只从授权作用域和实际可读字段取得一份元数据，正文在所有存储限额通过后读取。 */
     private ProjectedValues buildSafeValues(String instanceId, String taskId,
-            boolean taskLocal, Set<String> allowedNames,
-            Map<String, HistoricVariableInstance> source)
+            boolean taskLocal, Set<String> allowedNames)
     {
-        Map<String, HistoricVariableInstance> safeVariables = new LinkedHashMap<>();
-        for (String variableName : allowedNames)
-        {
-            if (isInternalVariableName(variableName))
-            {
-                continue;
-            }
-            requireSafeJsonKey(variableName);
-            HistoricVariableInstance variable = source.get(variableName);
-            if (variable == null || !isSafeVariableType(variable.getVariableTypeName()))
-            {
-                // 不支持的类型只保留元数据且永不初始化，避免 serializable 或自定义类型执行反序列化。
-                continue;
-            }
-            if (!StringUtils.hasText(variable.getId()) || variable.getId().length() > MAX_ID_LENGTH)
-            {
-                throw dataError("活动表单变量主键异常");
-            }
-            safeVariables.put(variableName, variable);
-        }
-        if (safeVariables.isEmpty())
+        List<String> safeNames = allowedNames.stream()
+                .filter(name -> !isInternalVariableName(name)).toList();
+        safeNames.forEach(this::requireSafeJsonKey);
+        if (safeNames.isEmpty())
         {
             return new ProjectedValues(Map.of(), Map.of());
         }
-
-        List<String> safeNames = List.copyOf(safeVariables.keySet());
-        List<WorkflowCurrentVariableMetadataRow> metadataRows = historicVariableMapper
+        List<WorkflowCurrentVariableMetadataRow> rows = historicVariableMapper
                 .selectCurrentVariableMetadata(instanceId, taskId, taskLocal, safeNames,
-                        safeNames.size() + 1);
-        if (metadataRows == null || metadataRows.size() > safeNames.size())
+                        Math.min(safeNames.size(), MAX_VARIABLE_ROWS) + 1);
+        if (rows.size() > Math.min(safeNames.size(), MAX_VARIABLE_ROWS))
         {
             throw dataError("活动表单变量元数据数量异常");
         }
-
         Map<String, WorkflowCurrentVariableMetadataRow> metadataByName = new LinkedHashMap<>();
         List<String> rawBodyIds = new ArrayList<>();
         long totalStoredBytes = 0L;
-        for (WorkflowCurrentVariableMetadataRow metadata : metadataRows)
+        for (WorkflowCurrentVariableMetadataRow metadata : rows)
         {
-            HistoricVariableInstance variable = metadata == null
-                    ? null : safeVariables.get(metadata.variableName());
-            validateCurrentVariableMetadata(metadata, variable, instanceId, taskId, taskLocal);
+            if (!isSafeVariableType(metadata.variableTypeName()))
+            {
+                // serializable 和自定义类型永不读取或反序列化正文。
+                continue;
+            }
             String normalizedType = normalizeVariableType(metadata.variableTypeName());
             if (requiresControlledRawBody(metadata, normalizedType))
             {
@@ -648,81 +545,58 @@ public class WorkflowProcessVariableProjection
                 throw dataError("活动表单变量名称不唯一");
             }
         }
-        if (metadataByName.size() != safeVariables.size())
-        {
-            throw dataError("活动表单变量元数据不完整");
-        }
-
         Map<String, WorkflowHistoricVariableBodyRow> rawBodies = rawBodyIds.isEmpty()
                 ? Map.of() : loadCurrentVariableBodies(instanceId, taskId, taskLocal,
                         safeNames, rawBodyIds);
         Map<String, JsonNode> values = new LinkedHashMap<>();
         Map<String, Integer> serializedBytesByName = new LinkedHashMap<>();
-        for (String variableName : allowedNames)
+        for (String variableName : safeNames)
         {
-            HistoricVariableInstance variable = safeVariables.get(variableName);
-            if (variable == null)
+            WorkflowCurrentVariableMetadataRow metadata = metadataByName.get(variableName);
+            if (metadata == null)
             {
                 continue;
             }
-            WorkflowCurrentVariableMetadataRow metadata = metadataByName.get(variableName);
             String normalizedType = normalizeVariableType(metadata.variableTypeName());
-            JsonNode safeValue = requiresControlledRawBody(metadata, normalizedType)
-                    ? decodeCurrentRawValue(metadata, rawBodies.get(metadata.variableId()),
-                            normalizedType)
-                    : toSafeJson(variable.getValue(), 0, new SafeJsonCounter());
-            if (safeValue != null)
+            JsonNode value = requiresControlledRawBody(metadata, normalizedType)
+                    ? decodeCurrentRawValue(metadata, rawBodies.get(metadata.variableId()), normalizedType)
+                    : toSafeJson(readScalar(metadata, normalizedType), 0, new SafeJsonCounter());
+            if (value != null)
             {
-                values.put(variableName, safeValue);
-                serializedBytesByName.put(variableName, serializedSize(safeValue));
+                values.put(variableName, value);
+                serializedBytesByName.put(variableName, serializedSize(value));
             }
         }
         return new ProjectedValues(values, serializedBytesByName);
     }
 
-    /**
-     * 核对数据库元数据与 Flowable 禁止初始化查询返回的变量身份和作用域。
-     *
-     * @param metadata WorkflowCurrentVariableMetadataRow，数据库第一阶段元数据
-     * @param variable HistoricVariableInstance，同名 Flowable 变量元数据
-     * @param instanceId String，已经完成对象授权的流程实例主键
-     * @param taskId String，真实活动任务主键
-     * @param taskLocal boolean，期望的变量作用域
-     * @return 无返回值，身份、类型或作用域不一致时抛出 HTTP 500
-     */
-    private void validateCurrentVariableMetadata(WorkflowCurrentVariableMetadataRow metadata,
-            HistoricVariableInstance variable, String instanceId, String taskId,
-            boolean taskLocal)
+    /** Flowable 8 内置标量类型的物理列解释；不调用可能反序列化任意对象的 getValue。 */
+    private Object readScalar(WorkflowCurrentVariableMetadataRow row, String type)
     {
-        if (metadata == null || variable == null
-                || !StringUtils.hasText(metadata.variableId())
-                || metadata.variableId().length() > MAX_ID_LENGTH
-                || !metadata.variableId().equals(variable.getId())
-                || !instanceId.equals(metadata.processInstanceId())
-                || !Objects.equals(metadata.variableName(), variable.getVariableName())
-                || !normalizeVariableType(metadata.variableTypeName()).equals(
-                        normalizeVariableType(variable.getVariableTypeName())))
+        Long number = row.longValue();
+        String text = row.textValue();
+        return switch (type)
         {
-            throw dataError("活动表单变量元数据关联异常");
-        }
-        if (taskLocal)
-        {
-            if (!taskId.equals(metadata.taskId()))
-            {
-                throw dataError("活动表单任务局部变量作用域异常");
-            }
-        }
-        else if (metadata.taskId() != null || !instanceId.equals(metadata.executionId())
-                || metadata.subScopeId() != null)
-        {
-            throw dataError("活动表单流程变量作用域异常");
-        }
+            case "null" -> null;
+            case "string" -> text;
+            case "integer" -> number == null ? null : number.intValue();
+            case "short" -> number == null ? null : number.shortValue();
+            case "long" -> number;
+            case "double" -> row.doubleValue();
+            case "boolean" -> number == null ? null : number == 1L;
+            case "date" -> number == null ? null : new Date(number);
+            case "instant" -> number == null ? null : Instant.ofEpochMilli(number);
+            case "uuid" -> text == null ? null : UUID.fromString(text);
+            case "bigdecimal" -> text == null || text.isEmpty() ? null : new BigDecimal(text);
+            case "biginteger" -> text == null || text.isEmpty() ? null : new BigInteger(text);
+            default -> throw dataError("活动表单标量类型异常");
+        };
     }
 
     /**
      * 判断活动变量是否必须绕开 Flowable getValue 并读取受控物理正文。
      *
-     * string 正常行内存储可安全由 StringType 返回；一旦出现 BYTEARRAY_ID_ 或任一 Blob
+     * string 正常行内存储直接使用有界 TEXT_；一旦出现 BYTEARRAY_ID_ 或任一 Blob
      * 统计字段，就必须按 Flowable 8 的字符串 Blob 形态处理，不能让类型名掩盖物理存储。
      *
      * @param metadata WorkflowCurrentVariableMetadataRow，数据库第一阶段存储元数据
@@ -744,7 +618,7 @@ public class WorkflowProcessVariableProjection
     }
 
     /**
-     * 校验普通标量变量没有 Blob 关联或异常辅助正文后，才允许调用 Flowable getValue。
+     * 校验普通标量变量没有 Blob 关联或异常辅助正文后，解释有界标量列。
      *
      * @param metadata WorkflowCurrentVariableMetadataRow，活动变量存储元数据
      * @return 无返回值，检测到字节正文、超限文本或列状态矛盾时抛出 HTTP 500

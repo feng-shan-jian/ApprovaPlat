@@ -36,7 +36,7 @@ class WorkflowProcessViewerBusinessTest
             var projection = new WorkflowProcessHistoryProjection(engine.getHistoryService(), engine.getTaskService(),
                     engine.getRepositoryService(), mock(ISysUserService.class));
             var access = new WorkflowProcessAccessSnapshot(instance.getId(), instance.getProcessDefinitionId(), deployment.getId(),
-                    null, "100", Instant.now(), Instant.now(), null, "COMPLETED", "completed");
+                    null, "100", Instant.now(), Instant.now(), null, "COMPLETED", "completed", null);
             var viewer = projection.projectPresentation(projection.loadHistory(access), access, false).viewer();
             assertThat(viewer.finishedActivityIds()).contains(messageWins ? "message" : "signal")
                     .doesNotContain(messageWins ? "signal" : "message");

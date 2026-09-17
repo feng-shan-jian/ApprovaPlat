@@ -142,7 +142,7 @@ class WorkflowCandidateTaskCreationIntegrationTest
         if ("multi".equals(mode))
         {
             assertThat(tasks).extracting(Task::getAssignee).containsExactlyInAnyOrderElementsOf(ids);
-            assertThat(snapshotReader.readTask(tasks.get(0).getId()).members()).containsExactlyElementsOf(ids);
+            assertThat(snapshotReader.readTask(tasks.get(0)).members()).containsExactlyElementsOf(ids);
         }
         else
         {
@@ -364,7 +364,7 @@ class WorkflowCandidateTaskCreationIntegrationTest
                     assertThat(link.getUserId()).isEqualTo(group ? null : "201");
                     assertThat(link.getGroupId()).isEqualTo(group ? "ROLE2" : null);
                 });
-        assertThat(snapshotReader.readTask(task.getId())).isNull();
+        assertThat(snapshotReader.readTask(task)).isNull();
         assertThat(harness.jdbcTemplate().queryForObject(
                 "select count(*) from wf_multi_instance_round", Long.class)).isZero();
         assertThat(taskService.getTaskComments(task.getId(), WorkflowUserTaskAuditService.COMMENT_TYPE))

@@ -127,6 +127,28 @@ public class WorkflowApplicationResubmitApplicationService
         });
     }
 
+    /** 同次详情事务复用已读取对象，正式写入入口仍自行获取当前任务和实例。 */
+    public boolean isApplicationResubmitAllowed(Task task, ProcessInstance instance,
+            WorkflowCurrentIdentity actor)
+    {
+        if (task == null || instance == null || task.isSuspended() || instance.isSuspended())
+        {
+            return false;
+        }
+        return engineOperations.readWithServiceExceptionHandler(() ->
+        {
+            requireResubmitPreparation(task, instance, actor);
+            return true;
+        }, exception ->
+        {
+            if (RESUBMIT_INELIGIBLE_STATUS_CODES.contains(exception.getCode()))
+            {
+                return false;
+            }
+            throw exception;
+        });
+    }
+
     /**
      * 在当前事务快照内冻结写命令与能力查询共用的唯一无副作用重提准备结果。
      * @param taskId String，已经过格式校验的申请人待修改任务主键
@@ -139,12 +161,17 @@ public class WorkflowApplicationResubmitApplicationService
         Task task = runtimeReader.requireActiveTask(taskId);
         ProcessInstance instance = runtimeReader.requireActiveProcessInstance(
                 task.getProcessInstanceId());
+        return requireResubmitPreparation(task, instance, actor);
+    }
+
+    private ResubmitPreparation requireResubmitPreparation(Task task, ProcessInstance instance,
+            WorkflowCurrentIdentity actor)
+    {
+        String taskId = task.getId();
         runtimeReader.requireCurrentAssignee(task, actor);
-        returnedTaskStateService.requireReturnedApplicant(taskId,
-                instance.getId(), actor.userId());
+        returnedTaskStateService.requireReturnedApplicant(task, instance, actor.userId());
         MultiInstanceGroupReopenPlan groupPlan =
-                groupTransitionService.prepareGroupReopen(
-                        task.getId(), actor.userId());
+                groupTransitionService.prepareGroupReopen(task, instance, actor.userId());
         // 普通退回和整组退回都会冻结迁移后首审批任务配置；重提前必须先验证该快照存在。
         ReturnedAssignmentSnapshot assignment =
                 returnedTaskStateService.requireOrdinaryAssignment(taskId);

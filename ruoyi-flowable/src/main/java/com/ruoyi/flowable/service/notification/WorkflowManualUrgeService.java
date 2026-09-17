@@ -11,6 +11,7 @@ import org.slf4j.MDC;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.flowable.engine.runtime.ProcessInstance;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -134,6 +135,31 @@ public class WorkflowManualUrgeService
         });
     }
 
+    /** 详情已取得根实例和当前身份，继续查询催办需要的执行树、任务和接收人。 */
+    public boolean isUrgeAllowed(ProcessInstance instance, WorkflowCurrentIdentity actor)
+    {
+        if (instance == null)
+        {
+            return false;
+        }
+        return engineOperations.readWithServiceExceptionHandler(() ->
+        {
+            RuntimeProcessSnapshot root = new RuntimeProcessSnapshot(instance.getProcessDefinitionId(),
+                    instance.getRootProcessInstanceId(), instance.isSuspended() ? 2 : 1,
+                    instance.getStartUserId(), List.of());
+            RuntimeProcessSnapshot process = readRuntimeProcessTree(instance.getId(), root, QueryMode.READ_ONLY);
+            requireUrgePreparation(process, actor, QueryMode.READ_ONLY);
+            return true;
+        }, exception ->
+        {
+            if (URGE_INELIGIBLE_STATUS_CODES.contains(exception.getCode()))
+            {
+                return false;
+            }
+            throw exception;
+        });
+    }
+
     /**
      * 使用同一套无副作用规则冻结正式催办和详情能力查询需要的完整事实。
      * @param processInstanceId String，已经过格式校验的根流程实例主键
@@ -144,7 +170,12 @@ public class WorkflowManualUrgeService
     private UrgePreparation requireUrgePreparation(String processInstanceId,
             WorkflowCurrentIdentity actor, QueryMode queryMode)
     {
-        RuntimeProcessSnapshot process = readRuntimeProcessTree(processInstanceId, queryMode);
+        return requireUrgePreparation(readRuntimeProcessTree(processInstanceId, queryMode), actor, queryMode);
+    }
+
+    private UrgePreparation requireUrgePreparation(RuntimeProcessSnapshot process,
+            WorkflowCurrentIdentity actor, QueryMode queryMode)
+    {
         List<RuntimeTaskSnapshot> tasks = readRuntimeTasks(
                 process.processInstanceIds(), queryMode);
         if (!permissionService.hasPermi(URGE_PERMISSION)
@@ -235,7 +266,12 @@ public class WorkflowManualUrgeService
         {
             throw new ServiceException("流程状态已变化，不能催办", HttpStatus.CONFLICT);
         }
-        RuntimeProcessSnapshot root = snapshots.get(0);
+        return readRuntimeProcessTree(processInstanceId, snapshots.get(0), queryMode);
+    }
+
+    private RuntimeProcessSnapshot readRuntimeProcessTree(String processInstanceId,
+            RuntimeProcessSnapshot root, QueryMode queryMode)
+    {
         if (StringUtils.hasText(root.rootProcessInstanceId())
                 && !processInstanceId.equals(root.rootProcessInstanceId()))
         {

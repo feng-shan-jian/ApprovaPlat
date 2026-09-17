@@ -255,57 +255,15 @@ class WorkflowHttpProtocolContractTest
                 .isInstanceOf(NullPointerException.class);
     }
 
-    /**
-     * 验证流程详情拒绝退回表单与稳定状态、活动任务、任务主键及重提能力的跨字段矛盾。
-     *
-     * @return void，任一跨字段矛盾能够进入 HTTP 响应时测试失败
-     */
     @Test
-    void processDetailRejectsContradictoryReturnedFormBindings()
+    void detailSerializesTypedPolicyAndDoesNotExposeRuntimeTask()
     {
-        WorkflowProcessFormDetailView returned = new WorkflowProcessFormDetailView(
-                formSnapshot("task"), null, List.of(), true);
-        WorkflowProcessFormDetailView mismatched = new WorkflowProcessFormDetailView(
-                formSnapshot("other-task"), null, List.of(), true);
-        WorkflowProcessFormDetailView ordinary = new WorkflowProcessFormDetailView(
-                formSnapshot(null), null, List.of(), false);
-
-        assertThatThrownBy(() -> processDetail(
-                "running", taskSnapshot(true), false, false, returned))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> processDetail(
-                "returned", taskSnapshot(false), false, false, returned))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> processDetail(
-                "returned", taskSnapshot(true), false, false, mismatched))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> processDetail(
-                "returned", taskSnapshot(true), false, false, ordinary))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> processDetail(
-                "returned", taskSnapshot(true), true, false, ordinary))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> processDetail(
-                "running", null, false, false, null))
-                .isInstanceOf(NullPointerException.class);
-    }
-
-    /**
-     * 验证详情构造器拒绝把 true 绑定到无任务、历史任务或非 returned 流程。
-     *
-     * @return void，任一矛盾 capability 快照能够构造时测试失败
-     */
-    @Test
-    void processDetailRejectsContradictoryResubmitCapability()
-    {
-        assertThatThrownBy(() -> processDetail("returned", null, true, false))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> processDetail(
-                "returned", taskSnapshot(false), true, false))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> processDetail(
-                "running", taskSnapshot(true), true, false))
-                .isInstanceOf(IllegalArgumentException.class);
+        JsonNode json = JsonMapper.shared().valueToTree(processDetail("running", taskSnapshot(true), false, false));
+        assertThat(json.path("nextUserAssignmentPolicy").asString()).isEqualTo("DISABLED");
+        assertThat(json.path("currentTask").propertyNames()).containsExactlyInAnyOrder(
+                "taskId", "processInstanceId", "processDefinitionId", "taskDefinitionKey", "taskName",
+                "assignee", "owner", "delegationState", "active", "createTime", "endTime",
+                "claimedBy", "claimTime", "unclaimAllowed");
     }
 
     /**
@@ -349,7 +307,7 @@ class WorkflowHttpProtocolContractTest
         return new WorkflowProcessDetailView("instance", "definition", "process",
                 "流程", 1, "category", "deployment", null, "applicant",
                 "申请人", Instant.EPOCH, null, null, processStatus, currentTask,
-                "DISABLED", null, false, false, false, false, false, false,
+                com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract.NextUserAssignmentPolicy.DISABLED, null, false, false, false, false, false, false,
                 resubmitAllowed, urgeAllowed, List.of(),
                 formDetail, List.of(), List.of(), "<definitions/>",
                 new WorkflowProcessViewerView(Set.of(), Set.of(), Set.of(),
@@ -393,7 +351,7 @@ class WorkflowHttpProtocolContractTest
     {
         return new WorkflowTaskAccessSnapshot("task", "instance", "definition",
                 "approval", "审批", "applicant", null, null, active,
-                Instant.EPOCH, active ? null : Instant.EPOCH, null, null, false);
+                Instant.EPOCH, active ? null : Instant.EPOCH, null, null, false, null);
     }
 
     /**

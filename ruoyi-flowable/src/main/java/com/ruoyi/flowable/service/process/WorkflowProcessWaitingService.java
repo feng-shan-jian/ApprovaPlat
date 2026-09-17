@@ -10,6 +10,7 @@ import org.flowable.engine.RuntimeService;
 import org.flowable.job.api.Job;
 import org.springframework.stereotype.Service;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
+import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
 import com.ruoyi.flowable.config.WorkflowRuntimeProperties;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.runtime.WorkflowRuntimeMetrics;
@@ -40,35 +41,39 @@ public class WorkflowProcessWaitingService
 
     public View query(String instanceId)
     {
-        return operations.read(() -> {
-            var authorized = access.requireReadableInstance(instanceId);
-            List<Waiting> rows = new ArrayList<>();
-            boolean truncated = false;
-            if (authorized.endTime() == null)
-            {
-                var process = repository.getBpmnModel(authorized.processDefinitionId());
-                var subscriptions = runtime.createEventSubscriptionQuery().processInstanceId(instanceId).listPage(0, 201);
-                for (var subscription : subscriptions)
-                    rows.add(new Waiting(subscription.getEventType().toUpperCase(java.util.Locale.ROOT),
-                            subscription.getActivityId(), subscription.getEventName(), subscription.getExecutionId(),
-                            null, null, null, authorized.state()));
-                var executions = runtime.createExecutionQuery().processInstanceId(instanceId).listPage(0, 201);
-                truncated = executions.size() > 200;
-                for (var execution : executions)
-                    if (execution.getActivityId() != null && process.getFlowElement(execution.getActivityId()) instanceof ReceiveTask)
-                        rows.add(new Waiting("RECEIVE", execution.getActivityId(), execution.getActivityId(),
-                                execution.getId(), null, null, null, authorized.state()));
-                addJobs(rows, management.createTimerJobQuery().processInstanceId(instanceId).listPage(0, 201), "TIMER", "WAITING");
-                addJobs(rows, management.createJobQuery().processInstanceId(instanceId).listPage(0, 201), "JOB", "EXECUTABLE");
-                addJobs(rows, management.createSuspendedJobQuery().processInstanceId(instanceId).listPage(0, 201), "JOB", "SUSPENDED");
-                addJobs(rows, management.createDeadLetterJobQuery().processInstanceId(instanceId).listPage(0, 201), "JOB", "DEAD_LETTER");
-            }
-            var snapshot = metrics.readHealthSnapshot();
-            boolean ready = snapshot.available() && snapshot.ageMillis() <= properties.getMetricsSnapshotMaxAge().toMillis()
-                    && snapshot.asyncExecutorActive();
-            return new View(instanceId, ready, truncated || rows.size() > 200,
-                    List.copyOf(rows.subList(0, Math.min(rows.size(), 200))));
-        });
+        return operations.read(() -> project(access.requireReadableInstance(instanceId)));
+    }
+
+    /** 本次观察事务已经完成实例授权，继续查询新的等待事实。 */
+    View project(WorkflowProcessAccessSnapshot authorized)
+    {
+        String instanceId = authorized.processInstanceId();
+        List<Waiting> rows = new ArrayList<>();
+        boolean truncated = false;
+        if (authorized.endTime() == null)
+        {
+            var process = repository.getBpmnModel(authorized.processDefinitionId());
+            var subscriptions = runtime.createEventSubscriptionQuery().processInstanceId(instanceId).listPage(0, 201);
+            for (var subscription : subscriptions)
+                rows.add(new Waiting(subscription.getEventType().toUpperCase(java.util.Locale.ROOT),
+                        subscription.getActivityId(), subscription.getEventName(), subscription.getExecutionId(),
+                        null, null, null, authorized.state()));
+            var executions = runtime.createExecutionQuery().processInstanceId(instanceId).listPage(0, 201);
+            truncated = executions.size() > 200;
+            for (var execution : executions)
+                if (execution.getActivityId() != null && process.getFlowElement(execution.getActivityId()) instanceof ReceiveTask)
+                    rows.add(new Waiting("RECEIVE", execution.getActivityId(), execution.getActivityId(),
+                            execution.getId(), null, null, null, authorized.state()));
+            addJobs(rows, management.createTimerJobQuery().processInstanceId(instanceId).listPage(0, 201), "TIMER", "WAITING");
+            addJobs(rows, management.createJobQuery().processInstanceId(instanceId).listPage(0, 201), "JOB", "EXECUTABLE");
+            addJobs(rows, management.createSuspendedJobQuery().processInstanceId(instanceId).listPage(0, 201), "JOB", "SUSPENDED");
+            addJobs(rows, management.createDeadLetterJobQuery().processInstanceId(instanceId).listPage(0, 201), "JOB", "DEAD_LETTER");
+        }
+        var snapshot = metrics.readHealthSnapshot();
+        boolean ready = snapshot.available() && snapshot.ageMillis() <= properties.getMetricsSnapshotMaxAge().toMillis()
+                && snapshot.asyncExecutorActive();
+        return new View(instanceId, ready, truncated || rows.size() > 200,
+                List.copyOf(rows.subList(0, Math.min(rows.size(), 200))));
     }
 
     private void addJobs(List<Waiting> rows, List<Job> jobs, String type, String state)

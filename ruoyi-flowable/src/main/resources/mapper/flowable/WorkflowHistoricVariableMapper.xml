@@ -30,10 +30,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
                type="com.ruoyi.flowable.domain.WorkflowCurrentVariableMetadataRow">
         <constructor>
             <arg column="variable_id" javaType="java.lang.String"/>
-            <arg column="process_instance_id" javaType="java.lang.String"/>
-            <arg column="execution_id" javaType="java.lang.String"/>
-            <arg column="task_id" javaType="java.lang.String"/>
-            <arg column="sub_scope_id" javaType="java.lang.String"/>
             <arg column="variable_name" javaType="java.lang.String"/>
             <arg column="variable_type_name" javaType="java.lang.String"/>
             <arg column="byte_array_id" javaType="java.lang.String"/>
@@ -43,6 +39,9 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             <arg column="byte_array_present" javaType="java.lang.Integer"/>
             <arg column="byte_array_body_present" javaType="java.lang.Integer"/>
             <arg column="stored_bytes" javaType="java.lang.Long"/>
+            <arg column="long_value" javaType="java.lang.Long"/>
+            <arg column="double_value" javaType="java.lang.Double"/>
+            <arg column="text_value" javaType="java.lang.String"/>
         </constructor>
     </resultMap>
 
@@ -100,10 +99,6 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
     <!-- 活动表单只查询已授权作用域且命中部署 schema 白名单的变量元数据。 -->
     <select id="selectCurrentVariableMetadata" resultMap="WorkflowCurrentVariableMetadataResult">
         select v.ID_ as variable_id,
-               v.PROC_INST_ID_ as process_instance_id,
-               v.EXECUTION_ID_ as execution_id,
-               v.TASK_ID_ as task_id,
-               v.SUB_SCOPE_ID_ as sub_scope_id,
                v.NAME_ as variable_name,
                v.VAR_TYPE_ as variable_type_name,
                v.BYTEARRAY_ID_ as byte_array_id,
@@ -112,7 +107,12 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
                octet_length(v.TEXT_) as text_bytes,
                case when b.ID_ is null then 0 else 1 end as byte_array_present,
                case when b.BYTES_ is null then 0 else 1 end as byte_array_body_present,
-               octet_length(b.BYTES_) as stored_bytes
+               octet_length(b.BYTES_) as stored_bytes,
+               v.LONG_ as long_value,
+               v.DOUBLE_ as double_value,
+               case when v.VAR_TYPE_ in ('string', 'uuid', 'bigdecimal', 'biginteger')
+                          and octet_length(v.TEXT_) &lt;= 65536
+                    then v.TEXT_ else null end as text_value
         from ACT_HI_VARINST v
         left join ACT_GE_BYTEARRAY b on b.ID_ = v.BYTEARRAY_ID_
         where v.PROC_INST_ID_ = #{processInstanceId}

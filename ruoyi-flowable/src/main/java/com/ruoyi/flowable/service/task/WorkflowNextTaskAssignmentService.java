@@ -257,7 +257,7 @@ public class WorkflowNextTaskAssignmentService
         // 新审批组稳定创建后，只通过共享读取器解释 execution、变量和根计数。
         ControlledMultiInstanceSnapshot runtime =
                 WorkflowMultiInstanceSnapshotExceptionTranslator.asTransitionConflict(
-                        () -> snapshotReader.readTask(tasks.get(0).getId()));
+                        () -> snapshotReader.readTask(tasks.get(0)));
         if (runtime == null
                 || !plan.processInstanceId().equals(runtime.processInstanceId())
                 || !plan.expectedTaskDefinitionKey().equals(runtime.activityId())

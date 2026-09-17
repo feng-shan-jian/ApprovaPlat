@@ -50,15 +50,13 @@ public class WorkflowReturnedTaskStateService
         this.identityResolver = identityResolver;
     }
 
-    /**
-     * 核验真实活动实例的 businessStatus 处于普通运行态。
-     *
-     * @param processInstanceId String，活动流程实例主键
-     * @return 无返回值，businessStatus 非 running时抛出 HTTP 409
-     */
-    public void requireRunning(String processInstanceId)
+    /** 使用当前操作取得的实例读取唯一 businessStatus。 */
+    public void requireRunning(ProcessInstance instance)
     {
-        requireProcessStatus(processInstanceId, WorkflowProcessStartService.RUNNING_STATUS);
+        if (!WorkflowProcessStartService.RUNNING_STATUS.equals(instance.getBusinessStatus()))
+        {
+            throw conflict();
+        }
     }
 
     /**
@@ -121,23 +119,14 @@ public class WorkflowReturnedTaskStateService
         return assignment;
     }
 
-    /**
-     * 核验重提操作人就是流程发起人且当前任务保持独占 returned 状态。
-     *
-     * @param taskId String，申请人待修改任务主键
-     * @param processInstanceId String，流程实例主键
-     * @param applicantUserId String，事务内已核验操作人主键
-     * @return 无返回值，权限不匹配返回 403，状态漂移返回 409
-     */
-    public void requireReturnedApplicant(String taskId, String processInstanceId,
-            String applicantUserId)
+    /** 同一准备链已取得任务和实例，继续读取申请人局部标记与候选链接。 */
+    public void requireReturnedApplicant(Task task, ProcessInstance instance, String applicantUserId)
     {
-        ProcessInstance instance = requireProcess(processInstanceId);
+        String taskId = task.getId();
         if (!applicantUserId.equals(instance.getStartUserId()))
         {
             throw forbidden();
         }
-        Task task = requireTask(taskId, processInstanceId);
         if (!applicantUserId.equals(task.getAssignee())
                 || task.getOwner() != null || task.getDelegationState() != null
                 || hasCandidateIdentityLinks(taskId)
@@ -146,7 +135,10 @@ public class WorkflowReturnedTaskStateService
         {
             throw conflict();
         }
-        requireProcessStatus(processInstanceId, RETURNED_STATUS);
+        if (!RETURNED_STATUS.equals(instance.getBusinessStatus()))
+        {
+            throw conflict();
+        }
     }
 
     /**
@@ -353,24 +345,6 @@ public class WorkflowReturnedTaskStateService
     private void setBusinessStatus(String processInstanceId, String status)
     {
         runtimeService.updateBusinessStatus(processInstanceId, status);
-    }
-
-    /**
-     * 核验活动流程的业务状态，缺失、挂起或状态漂移统一返回冲突。
-     *
-     * @param processInstanceId String，流程实例主键
-     * @param expectedStatus String，期望状态
-     * @return 无返回值，不满足期望状态时抛出 HTTP 409
-     */
-    private void requireProcessStatus(String processInstanceId, String expectedStatus)
-    {
-        ProcessInstance instance = runtimeService.createProcessInstanceQuery()
-                .processInstanceId(processInstanceId).singleResult();
-        if (instance == null || instance.isSuspended()
-                || !expectedStatus.equals(instance.getBusinessStatus()))
-        {
-            throw conflict();
-        }
     }
 
     /**

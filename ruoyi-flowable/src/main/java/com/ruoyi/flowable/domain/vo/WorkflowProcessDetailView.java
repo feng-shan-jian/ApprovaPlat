@@ -3,7 +3,7 @@ package com.ruoyi.flowable.domain.vo;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
+import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract.NextUserAssignmentPolicy;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
 
 /**
@@ -24,7 +24,7 @@ import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
  * @param durationMillis Long，流程耗时毫秒，运行中为空
  * @param processStatus String，running、returned、suspended、completed、canceled、rejected 或 terminated
  * @param currentTask WorkflowTaskAccessSnapshot，请求指定并通过关系核验的任务，允许为空
- * @param nextUserAssignmentPolicy String，DISABLED、OPTIONAL、REQUIRED_ALL 或 REQUIRED_ANY
+ * @param nextUserAssignmentPolicy NextUserAssignmentPolicy，DISABLED、OPTIONAL、REQUIRED_ALL 或 REQUIRED_ANY
  * @param multiInstanceState WorkflowMultiInstanceStateView，当前办理人可调整的动态多实例状态，非 MI 为 null
  * @param completeAllowed boolean，当前用户能否完成请求任务
  * @param rejectAllowed boolean，当前用户能否驳回请求任务
@@ -57,7 +57,7 @@ public record WorkflowProcessDetailView(
         Long durationMillis,
         String processStatus,
         WorkflowTaskAccessSnapshot currentTask,
-        String nextUserAssignmentPolicy,
+        NextUserAssignmentPolicy nextUserAssignmentPolicy,
         WorkflowMultiInstanceStateView multiInstanceState,
         boolean completeAllowed,
         boolean rejectAllowed,
@@ -90,35 +90,5 @@ public record WorkflowProcessDetailView(
         processRelations = List.copyOf(Objects.requireNonNull(
                 processRelations, "流程实例关系不能为空"));
         Objects.requireNonNull(flowViewer, "Viewer 状态不能为空");
-        if (!Set.of("DISABLED", "OPTIONAL", "REQUIRED_ALL", "REQUIRED_ANY")
-                .contains(nextUserAssignmentPolicy))
-        {
-            throw new IllegalArgumentException("动态下一办理人策略不合法");
-        }
-        if ((completeAllowed || rejectAllowed || returnAllowed || delegateAllowed
-                || transferAllowed || resolveAllowed)
-                && (currentTask == null || !currentTask.active()))
-        {
-            throw new IllegalArgumentException("任务动作能力必须绑定活动任务");
-        }
-        // 退回申请标记必须与稳定流程状态及当前活动任务事实双向一致，避免普通表单伪装退回任务。
-        boolean returnedActivity = "returned".equals(processStatus)
-                && currentTask != null && currentTask.active();
-        if (formDetail.returnedApplication() != returnedActivity)
-        {
-            throw new IllegalArgumentException("退回申请标记与 returned 活动任务矛盾");
-        }
-        if (returnedActivity)
-        {
-            if (!Objects.equals(currentTask.taskId(),
-                    formDetail.applicationForm().taskId()))
-            {
-                throw new IllegalArgumentException("退回申请表单与当前任务主键不一致");
-            }
-        }
-        if (resubmitAllowed && !returnedActivity)
-        {
-            throw new IllegalArgumentException("重提能力必须绑定退回申请表单");
-        }
     }
 }

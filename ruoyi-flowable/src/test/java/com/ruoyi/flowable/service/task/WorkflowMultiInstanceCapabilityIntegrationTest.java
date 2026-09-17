@@ -57,6 +57,31 @@ class WorkflowMultiInstanceCapabilityIntegrationTest
     @Autowired
     private TransactionTemplate transactionTemplate;
 
+    @Test
+    void sameRequestProjectionMatchesAllAndAnyAndIndependentRequestsReauthorize()
+    {
+        for (String key : List.of("roundDynamicAll", "roundGroupFirstAny"))
+        {
+            String activity = key.equals("roundDynamicAll") ? "dynamicReview" : "firstAnyReview";
+            ProcessInstance instance = driver.start(key, activity, List.of("201", "202"), java.util.Map.of());
+            Task task = probe.task(instance.getId(), activity, "201");
+            driver.asUser("201");
+            var actor = new com.ruoyi.flowable.identity.WorkflowCurrentIdentity("201", java.util.Set.of());
+            WorkflowMultiInstanceStateView projected = transactionTemplate.execute(status -> multiInstanceService.getOptionalState(task,
+                    runtimeService.createProcessInstanceQuery().processInstanceId(instance.getId()).singleResult(), actor));
+            assertThat(projected).isEqualTo(multiInstanceService.getState(task.getId()));
+            taskService.setAssignee(task.getId(), "203");
+            assertThat(catchThrowable(() -> multiInstanceService.getState(task.getId())))
+                    .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getCode()).isEqualTo(403));
+            taskService.setAssignee(task.getId(), "201");
+            runtimeService.suspendProcessInstanceById(instance.getId());
+            assertStableConflict(() -> multiInstanceService.getState(task.getId()));
+            runtimeService.activateProcessInstanceById(instance.getId());
+            driver.complete(task, 0);
+            assertStableConflict(() -> multiInstanceService.getState(task.getId()));
+        }
+    }
+
     /**
      * 验证九十九名正式成员仍有一个加签容量，且整体调整能力开启。
      *

@@ -47,14 +47,12 @@ public class WorkflowTaskRuntimeReader
      */
     public Task requireActiveTask(String taskId)
     {
-        Task activeTask = taskService.createTaskQuery().taskId(taskId).active().singleResult();
+        Task activeTask = taskService.createTaskQuery().taskId(taskId).singleResult();
         if (activeTask != null && !activeTask.isSuspended())
         {
             return activeTask;
         }
-        Task existingTask = activeTask != null ? activeTask
-                : taskService.createTaskQuery().taskId(taskId).singleResult();
-        if (existingTask != null)
+        if (activeTask != null)
         {
             throw conflict();
         }
@@ -80,15 +78,12 @@ public class WorkflowTaskRuntimeReader
             throw conflict();
         }
         ProcessInstance activeInstance = runtimeService.createProcessInstanceQuery()
-                .processInstanceId(processInstanceId).active().singleResult();
+                .processInstanceId(processInstanceId).singleResult();
         if (activeInstance != null && !activeInstance.isSuspended())
         {
             return activeInstance;
         }
-        ProcessInstance existingInstance = activeInstance != null ? activeInstance
-                : runtimeService.createProcessInstanceQuery()
-                        .processInstanceId(processInstanceId).singleResult();
-        if (existingInstance != null)
+        if (activeInstance != null)
         {
             throw conflict();
         }

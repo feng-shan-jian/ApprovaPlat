@@ -99,7 +99,7 @@ class WorkflowProcessWaitingBusinessTest
             {
                 var instance = engine.getRuntimeService().startProcessInstanceByKey("waiting");
                 when(access.requireReadableInstance(instance.getId())).thenReturn(new WorkflowProcessAccessSnapshot(instance.getId(),
-                        instance.getProcessDefinitionId(), deploy.getId(), null, "100", Instant.now(), null, null, "RUNNING", "running"));
+                        instance.getProcessDefinitionId(), deploy.getId(), null, "100", Instant.now(), null, null, "RUNNING", "running", instance));
                 var before = service.query(instance.getId());
                 assertThat(before.localTimerExecutionReady()).isFalse();
                 assertThat(before.waits()).extracting(WorkflowProcessWaitingService.Waiting::type).containsExactly("MESSAGE", "RECEIVE", "TIMER");

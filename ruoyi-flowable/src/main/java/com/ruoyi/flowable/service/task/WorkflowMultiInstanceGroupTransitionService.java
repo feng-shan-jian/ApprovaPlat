@@ -60,15 +60,16 @@ public class WorkflowMultiInstanceGroupTransitionService
 
     /**
      * 为整组退回冻结实时根、活动任务、成员、模式、revision 和唯一 ACTIVE 轮次。
-     * @param sourceTaskId String，已通过应用服务活动态校验的任务主键
+     * @param sourceTask Task，已通过应用服务活动态校验的任务
+     * @param instance ProcessInstance，同次操作取得的活动实例
      * @param actorUserId String，已通过应用服务核验的正式办理人主键
      * @return MultiInstanceGroupReturnPlan，受控多实例计划；普通任务返回 null
      */
-    public MultiInstanceGroupReturnPlan prepareGroupReturn(String sourceTaskId,
-            String actorUserId)
+    public MultiInstanceGroupReturnPlan prepareGroupReturn(Task sourceTask,
+            ProcessInstance instance, String actorUserId)
     {
         ControlledMultiInstanceSnapshot runtime = roundData(() ->
-                snapshotReader.readTask(sourceTaskId));
+                snapshotReader.readTask(sourceTask, instance));
         if (runtime == null)
         {
             return null;
@@ -79,8 +80,6 @@ public class WorkflowMultiInstanceGroupTransitionService
         {
             throw transitionConflict("多实例活动任务已经发生变化，请刷新后重试");
         }
-        ProcessInstance instance = runtimeReader.requireActiveProcessInstance(
-                runtime.processInstanceId());
         if (!StringUtils.hasText(instance.getStartUserId())
                 || StringUtils.hasText(instance.getSuperExecutionId())
                 || (StringUtils.hasText(instance.getRootProcessInstanceId())
@@ -179,13 +178,15 @@ public class WorkflowMultiInstanceGroupTransitionService
 
     /**
      * 从唯一 RETURNED 轮次和申请人任务构建重建计划。
-     * @param applicantTaskId String，发起人待修改任务主键
+     * @param applicantTask Task，发起人待修改任务
+     * @param instance ProcessInstance，同次操作取得的活动实例
      * @param applicantUserId String，已核验流程发起人主键
      * @return MultiInstanceGroupReopenPlan，多实例计划；普通退回返回 null
      */
-    public MultiInstanceGroupReopenPlan prepareGroupReopen(String applicantTaskId,
-            String applicantUserId)
+    public MultiInstanceGroupReopenPlan prepareGroupReopen(Task applicantTask,
+            ProcessInstance instance, String applicantUserId)
     {
+        String applicantTaskId = applicantTask.getId();
         List<MultiInstanceRoundSnapshot> returnedRows =
                 roundRepository.findReturned(applicantTaskId);
         if (returnedRows.isEmpty())
@@ -197,7 +198,6 @@ public class WorkflowMultiInstanceGroupTransitionService
             throw dataError();
         }
         MultiInstanceRoundSnapshot round = returnedRows.get(0);
-        Task applicantTask = runtimeReader.requireActiveTask(applicantTaskId);
         if (round.status() != WorkflowMultiInstanceRoundStatus.RETURNED
                 || !Objects.equals(round.applicantTaskId(), applicantTaskId)
                 || !round.processInstanceId().equals(applicantTask.getProcessInstanceId())
@@ -207,8 +207,6 @@ public class WorkflowMultiInstanceGroupTransitionService
         {
             throw transitionConflict("待修改任务对应的多实例轮次已经发生变化");
         }
-        ProcessInstance instance = runtimeReader.requireActiveProcessInstance(
-                round.processInstanceId());
         ControlledMultiInstanceDefinitionSnapshot sourceDefinition = roundData(() ->
                 snapshotReader.readDefinition(round.processDefinitionId(),
                         round.activityId()));

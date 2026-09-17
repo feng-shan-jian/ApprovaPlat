@@ -109,6 +109,28 @@ public class WorkflowTaskReturnApplicationService
         });
     }
 
+    /** 同次详情事务复用已读取对象，正式写入入口仍自行获取当前任务和实例。 */
+    public boolean isTaskReturnAllowed(Task task, ProcessInstance instance,
+            WorkflowCurrentIdentity actor)
+    {
+        if (task == null || instance == null || task.isSuspended() || instance.isSuspended())
+        {
+            return false;
+        }
+        return engineOperations.readWithServiceExceptionHandler(() ->
+        {
+            requireReturnPreparation(task, instance, actor);
+            return true;
+        }, exception ->
+        {
+            if (RETURN_INELIGIBLE_STATUS_CODES.contains(exception.getCode()))
+            {
+                return false;
+            }
+            throw exception;
+        });
+    }
+
     /**
      * 按冻结类型执行普通退回或受控整组退回。
      * @param preparation ReturnPreparation，事务内已核验退回计划
@@ -209,15 +231,22 @@ public class WorkflowTaskReturnApplicationService
         Task task = runtimeReader.requireActiveTask(taskId);
         ProcessInstance instance = runtimeReader.requireActiveProcessInstance(
                 task.getProcessInstanceId());
+        return requireReturnPreparation(task, instance, actor);
+    }
+
+    private ReturnPreparation requireReturnPreparation(Task task, ProcessInstance instance,
+            WorkflowCurrentIdentity actor)
+    {
+        String taskId = task.getId();
         runtimeReader.requireCurrentAssignee(task, actor);
         runtimeReader.requireUnownedTask(task);
-        returnedTaskStateService.requireRunning(instance.getId());
+        returnedTaskStateService.requireRunning(instance);
         if (!StringUtils.hasText(instance.getStartUserId()))
         {
             throw dataError();
         }
         MultiInstanceGroupReturnPlan groupPlan =
-                groupTransitionService.prepareGroupReturn(task.getId(), actor.userId());
+                groupTransitionService.prepareGroupReturn(task, instance, actor.userId());
         WorkflowTaskBpmnSnapshot context = bpmnReader.require(
                 task.getProcessDefinitionId());
         UserTask currentNode = groupPlan == null

@@ -122,35 +122,18 @@ public class WorkflowMultiInstanceService
         });
     }
 
-    /**
-     * 为流程详情返回无探测式动态多实例能力；普通任务、历史任务或非当前办理人均返回 null。
-     *
-     * @param taskId String，详情已经完成对象授权的可选任务主键
-     * @return WorkflowMultiInstanceStateView，当前用户可调整的动态多实例状态；不适用时为 null
-     */
-    public WorkflowMultiInstanceStateView getOptionalState(String taskId)
+    /** 详情已完成对象读取授权；直接使用同次任务、实例和身份判断能力。 */
+    public WorkflowMultiInstanceStateView getOptionalState(Task task,
+            ProcessInstance instance, WorkflowCurrentIdentity actor)
     {
-        if (!StringUtils.hasText(taskId))
+        if (task == null || task.isSuspended()
+                || !Objects.equals(actor.userId(), task.getAssignee()))
         {
             return null;
         }
-        String normalizedTaskId = requireId(taskId);
-        return engineOperations.read(() ->
-        {
-            WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
-            Task task = taskService.createTaskQuery().taskId(normalizedTaskId)
-                    .active().singleResult();
-            if (task == null || task.isSuspended()
-                    || !Objects.equals(actor.userId(), task.getAssignee())
-                    )
-            {
-                return null;
-            }
-            // 保留详情投影原有的正式任务、实例和 BPMN 复核，再进入统一的实时状态装载。
-            Task currentTask = requireActiveTask(normalizedTaskId, actor);
-            MultiInstanceContext context = loadOptionalContext(currentTask);
-            return context == null ? null : buildState(context);
-        });
+        requireTaskInstance(task, instance);
+        MultiInstanceContext context = loadOptionalContext(task, instance);
+        return context == null ? null : buildState(context);
     }
 
     /**
@@ -321,7 +304,7 @@ public class WorkflowMultiInstanceService
                 .processInstanceId(processInstanceId)
                 .taskDefinitionKey(completion.activityId()).active()
                 .listPage(0, 1).stream().findFirst().orElseThrow(this::dataError);
-        ControlledMultiInstanceSnapshot runtime = readTaskSnapshot(remaining.getId());
+        ControlledMultiInstanceSnapshot runtime = readTaskSnapshot(remaining);
         if (runtime == null
                 || !completion.rootExecutionId().equals(runtime.rootExecutionId())
                 || runtime.counts().instances() != completion.instancesBefore()
@@ -553,15 +536,17 @@ public class WorkflowMultiInstanceService
     }
 
     /**
-     * 使用已经过入口校验的任务和 UserTask，统一装载多实例根、变量、任务和 execution 实时状态。
+     * 使用已授权任务读取实例一次，统一装载多实例根、变量、任务和 execution 实时状态。
      *
      * @param currentTask Task，独立入口重新校验或完成链正式校验后的当前活动任务
-     * @param userTask UserTask，独立入口重新解析或完成链从唯一 BPMN 上下文定位的当前节点
      * @return MultiInstanceContext，可用于一次读或写决策的完整不可变状态
      */
     private MultiInstanceContext loadContext(Task currentTask)
     {
-        MultiInstanceContext context = loadOptionalContext(currentTask);
+        ProcessInstance instance = runtimeService.createProcessInstanceQuery()
+                .processInstanceId(currentTask.getProcessInstanceId()).singleResult();
+        requireTaskInstance(currentTask, instance);
+        MultiInstanceContext context = loadOptionalContext(currentTask, instance);
         if (context == null)
         {
             throw conflict();
@@ -575,9 +560,10 @@ public class WorkflowMultiInstanceService
      * @param currentTask Task，已经完成活动态和对象授权校验的任务
      * @return MultiInstanceContext，受控任务完整上下文；普通任务返回 null
      */
-    private MultiInstanceContext loadOptionalContext(Task currentTask)
+    private MultiInstanceContext loadOptionalContext(Task currentTask, ProcessInstance instance)
     {
-        ControlledMultiInstanceSnapshot runtime = readTaskSnapshot(currentTask.getId());
+        ControlledMultiInstanceSnapshot runtime = WorkflowMultiInstanceSnapshotExceptionTranslator
+                .asMultiInstanceDataError(() -> snapshotReader.readTask(currentTask, instance));
         if (runtime == null)
         {
             return null;
@@ -595,32 +581,27 @@ public class WorkflowMultiInstanceService
     /**
      * 调用唯一运行时读取器并把内部漂移翻译为动态多实例既有稳定错误。
      *
-     * @param taskId String，活动任务主键
+     * @param task Task，当前操作取得的活动任务
      * @return ControlledMultiInstanceSnapshot，受控任务快照；普通任务返回 null
      */
-    private ControlledMultiInstanceSnapshot readTaskSnapshot(String taskId)
+    private ControlledMultiInstanceSnapshot readTaskSnapshot(Task task)
     {
         return WorkflowMultiInstanceSnapshotExceptionTranslator.asMultiInstanceDataError(
-                () -> snapshotReader.readTask(taskId));
+                () -> snapshotReader.readTask(task));
     }
 
     /**
-     * 查询活动任务并校验流程运行态与当前正式 assignee，对跨用户对象访问返回稳定 403。
+     * 查询活动任务并校验当前正式 assignee；实例运行态由随后装载路径判断。
      *
      * @param taskId String，已规范化的任务主键
      * @param actor WorkflowCurrentIdentity，事务内重新核验的当前用户
-     * @return Task，当前用户真实办理且所属实例活动的任务
+     * @return Task，当前用户真实办理且未挂起的任务
      */
     private Task requireActiveTask(String taskId, WorkflowCurrentIdentity actor)
     {
-        Task task = taskService.createTaskQuery().taskId(taskId).active().singleResult();
+        Task task = taskService.createTaskQuery().taskId(taskId).singleResult();
         if (task == null)
         {
-            Task runtimeTask = taskService.createTaskQuery().taskId(taskId).singleResult();
-            if (runtimeTask != null)
-            {
-                throw conflict();
-            }
             HistoricTaskInstance historicTask = historyService
                     .createHistoricTaskInstanceQuery().taskId(taskId).singleResult();
             if (historicTask != null && Objects.equals(actor.userId(),
@@ -638,6 +619,11 @@ public class WorkflowMultiInstanceService
         {
             throw forbidden();
         }
+        return task;
+    }
+
+    private void requireTaskInstance(Task task, ProcessInstance instance)
+    {
         if (!StringUtils.hasText(task.getProcessInstanceId())
                 || !StringUtils.hasText(task.getProcessDefinitionId())
                 || !StringUtils.hasText(task.getTaskDefinitionKey())
@@ -645,15 +631,11 @@ public class WorkflowMultiInstanceService
         {
             throw dataError();
         }
-        ProcessInstance instance = runtimeService.createProcessInstanceQuery()
-                .processInstanceId(task.getProcessInstanceId()).active().singleResult();
         if (instance == null || instance.isSuspended()
-                || !Objects.equals(task.getProcessDefinitionId(),
-                    instance.getProcessDefinitionId()))
+                || !Objects.equals(task.getProcessDefinitionId(), instance.getProcessDefinitionId()))
         {
             throw conflict();
         }
-        return task;
     }
 
     /**
