@@ -25,4 +25,13 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         order by u.user_id
     </select>
 
+    <select id="selectRawNickNamesByIds" resultMap="WorkflowMultiInstanceUserRowResult">
+        select user_id, nick_name as display_name
+        from sys_user
+        where user_id in
+        <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+            #{userId}
+        </foreach>
+    </select>
+
 </mapper>

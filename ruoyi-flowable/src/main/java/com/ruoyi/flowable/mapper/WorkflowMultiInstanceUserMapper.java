@@ -5,7 +5,7 @@ import org.apache.ibatis.annotations.Param;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceUserRow;
 
 /**
- * 动态多实例成员名称批量查询 Mapper，不返回密码、联系方式等敏感字段。
+ * 工作流用户名称批量投影，不返回密码、联系方式等敏感字段。
  */
 public interface WorkflowMultiInstanceUserMapper
 {
@@ -16,5 +16,9 @@ public interface WorkflowMultiInstanceUserMapper
      * @return List&lt;WorkflowMultiInstanceUserRow&gt;，数据库存在的用户名称投影
      */
     List<WorkflowMultiInstanceUserRow> selectUserNamesByIds(
+            @Param("userIds") List<Long> userIds);
+
+    /** 工作台使用原始昵称；不得修剪昵称或回退账号名，也不排除历史停用、删除用户。 */
+    List<WorkflowMultiInstanceUserRow> selectRawNickNamesByIds(
             @Param("userIds") List<Long> userIds);
 }

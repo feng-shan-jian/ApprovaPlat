@@ -12,13 +12,12 @@ import org.flowable.engine.repository.Deployment;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.common.core.domain.entity.SysUser;
-import com.ruoyi.system.service.ISysUserService;
+import com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper;
 
 /**
  * 流程工作台查询共用的分页、参数、部署分类和页内姓名解析规则。
  *
- * 不承接列表编排或身份授权，姓名缓存由每次列表查询独立创建。
+ * 不承接列表编排或身份授权，姓名投影只读取当前页需要的 ID，不跨请求保存。
  */
 final class WorkflowProcessQuerySupport
 {
@@ -54,20 +53,10 @@ final class WorkflowProcessQuerySupport
         List<Deployment> deployments = repositoryService.createDeploymentQuery()
                 .deploymentCategory(normalizedCategory)
                 .list();
-        if (deployments == null)
-        {
-            throw dataError("流程分类部署查询结果异常");
-        }
-        // deploymentIds 是分类筛选最终写入定义/任务原生查询的正式部署范围。
         Set<String> deploymentIds = new LinkedHashSet<>();
         for (Deployment deployment : deployments)
         {
-            if (deployment == null || !StringUtils.hasText(deployment.getId())
-                    || !normalizedCategory.equals(deployment.getCategory())
-                    || !deploymentIds.add(deployment.getId()))
-            {
-                throw dataError("流程分类部署数据异常");
-            }
+            deploymentIds.add(deployment.getId());
         }
         return Set.copyOf(deploymentIds);
     }
@@ -110,36 +99,6 @@ final class WorkflowProcessQuerySupport
             throw invalidArgument("分页偏移量过大");
         }
         return new PageWindow((int) offset, pageSize);
-    }
-    /**
-     * 校验查询返回的总数非负。
-     *
-     * @param count long，Flowable 或 Mapper 返回的计数
-     * @return long，原始非负计数
-     */
-    static long checkedCount(long count)
-    {
-        if (count < 0)
-        {
-            throw dataError("工作流分页总数异常");
-        }
-        return count;
-    }
-    /**
-     * 校验分页查询结果非空引用且未超过请求上限。
-     *
-     * @param rows List&lt;T&gt;，Flowable 或 Mapper 返回的当前页
-     * @param limit int，本次请求最大记录数
-     * @param <T> 当前页数据类型
-     * @return List&lt;T&gt;，原始合法结果集合
-     */
-    static <T> List<T> checkedRows(List<T> rows, int limit)
-    {
-        if (rows == null || rows.size() > limit)
-        {
-            throw dataError("工作流分页结果异常");
-        }
-        return rows;
     }
     /**
      * 校验时间范围下界不得晚于上界。
@@ -262,42 +221,47 @@ final class WorkflowProcessQuerySupport
     {
     }
 
-    /** 当前页共享姓名查询；缺失或非数字历史身份保留原 ID，不跨请求缓存。 */
-    static final class UserNameCache
+    /**
+     * 当前页原始身份到显示名的批量投影。Long.valueOf 保留旧格式身份解析语义，
+     * 只有非空白昵称替代原 ID；数据库错误由调用方原样接收。
+     */
+    static Map<String, String> loadUserNames(WorkflowMultiInstanceUserMapper userMapper,
+            Set<String> userIds)
     {
-        private final ISysUserService userService;
-        private final Map<String, String> userNames = new HashMap<>();
-
-        UserNameCache(ISysUserService userService)
-        {
-            this.userService = userService;
-        }
-
-        String resolve(String userId)
+        Map<String, String> names = new HashMap<>();
+        Map<String, Long> numericIds = new HashMap<>();
+        Set<Long> ids = new LinkedHashSet<>();
+        for (String userId : userIds)
         {
             if (!StringUtils.hasText(userId))
             {
-                return null;
+                continue;
             }
-            if (userNames.containsKey(userId))
-            {
-                return userNames.get(userId);
-            }
-            String displayName = userId;
+            names.put(userId, userId);
             try
             {
-                SysUser user = userService.selectUserById(Long.valueOf(userId));
-                if (user != null && StringUtils.hasText(user.getNickName()))
-                {
-                    displayName = user.getNickName();
-                }
+                Long id = Long.valueOf(userId);
+                numericIds.put(userId, id);
+                ids.add(id);
             }
             catch (NumberFormatException ignored)
             {
-                // 存量异常身份不做名称猜测，保留原值便于迁移对账和问题追踪。
+                // 非数字或溢出的存量身份仍显示原输入，不 trim、不猜测。
             }
-            userNames.put(userId, displayName);
-            return displayName;
         }
+        if (!ids.isEmpty())
+        {
+            Map<Long, String> nickNames = new HashMap<>();
+            for (var user : userMapper.selectRawNickNamesByIds(List.copyOf(ids)))
+            {
+                if (StringUtils.hasText(user.name()))
+                {
+                    nickNames.put(user.userId(), user.name());
+                }
+            }
+            numericIds.forEach((rawId, id) -> names.put(rawId,
+                    nickNames.getOrDefault(id, rawId)));
+        }
+        return names;
     }
 }

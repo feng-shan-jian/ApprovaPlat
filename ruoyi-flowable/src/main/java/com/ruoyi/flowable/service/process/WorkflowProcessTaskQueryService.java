@@ -1,9 +1,8 @@
 package com.ruoyi.flowable.service.process;
 
 import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.PageWindow;
-import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.checkedCount;
-import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.checkedRows;
 import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.dataError;
+import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.loadUserNames;
 import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.optionalText;
 import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.requirePage;
 import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.resolveCategoryDeploymentIds;
@@ -34,7 +33,6 @@ import org.flowable.task.api.history.HistoricTaskInstanceQuery;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.UserNameCache;
 import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.dto.WorkflowAssignedTaskQueryDto;
@@ -49,7 +47,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.task.WorkflowTaskRevokeApplicationService;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
-import com.ruoyi.system.service.ISysUserService;
+import com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper;
 
 /**
  * 待办、可认领和已办任务查询服务。
@@ -62,7 +60,7 @@ public class WorkflowProcessTaskQueryService
     private final HistoryService historyService;
     private final TaskService taskService;
     private final WorkflowIdentityResolver identityResolver;
-    private final ISysUserService userService;
+    private final WorkflowMultiInstanceUserMapper userMapper;
     private final WorkflowTaskRevokeApplicationService revokeApplicationService;
 
     /** 待办能力、详情快照与写入门禁共享的取消认领纯规则组件。 */
@@ -76,7 +74,7 @@ public class WorkflowProcessTaskQueryService
     public WorkflowProcessTaskQueryService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, HistoryService historyService,
             TaskService taskService, WorkflowIdentityResolver identityResolver,
-            ISysUserService userService, WorkflowTaskRevokeApplicationService revokeApplicationService,
+            WorkflowMultiInstanceUserMapper userMapper, WorkflowTaskRevokeApplicationService revokeApplicationService,
             WorkflowTaskUnclaimPolicy unclaimPolicy)
     {
         this.engineOperations = engineOperations;
@@ -84,7 +82,7 @@ public class WorkflowProcessTaskQueryService
         this.historyService = historyService;
         this.taskService = taskService;
         this.identityResolver = identityResolver;
-        this.userService = userService;
+        this.userMapper = userMapper;
         this.revokeApplicationService = revokeApplicationService;
         this.unclaimPolicy = unclaimPolicy;
     }
@@ -116,14 +114,13 @@ public class WorkflowProcessTaskQueryService
                 // TaskInfoQuery 的 processCategoryIn 仍连接定义分类，必须按正式部署主键限定。
                 query.deploymentIdIn(categoryDeploymentIds);
             }
-            long total = checkedCount(query.count());
+            long total = query.count();
             if (total == 0 || page.offset() >= total)
             {
                 return new PageResult<>(List.of(), total);
             }
-            List<Task> tasks = checkedRows(query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            UserNameCache userNameCache = new UserNameCache(userService);
-            Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
+            List<Task> tasks = query.listPage(page.offset(), page.pageSize());
+            Map<String, TaskContext> contexts = loadTaskContexts(tasks);
             List<WorkflowAssignedTaskView> rows = tasks.stream()
                     .map(task -> toAssignedView(task, contexts.get(task.getId()), actor.userId()))
                     .toList();
@@ -167,14 +164,13 @@ public class WorkflowProcessTaskQueryService
                 // 待签与待办使用同一部署分类口径，候选身份条件仍由原生查询固定。
                 query.deploymentIdIn(categoryDeploymentIds);
             }
-            long total = checkedCount(query.count());
+            long total = query.count();
             if (total == 0 || page.offset() >= total)
             {
                 return new PageResult<>(List.of(), total);
             }
-            List<Task> tasks = checkedRows(query.listPage(page.offset(), page.pageSize()), page.pageSize());
-            UserNameCache userNameCache = new UserNameCache(userService);
-            Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
+            List<Task> tasks = query.listPage(page.offset(), page.pageSize());
+            Map<String, TaskContext> contexts = loadTaskContexts(tasks);
             List<WorkflowClaimableTaskView> rows = tasks.stream()
                     .map(task -> toClaimableView(task, contexts.get(task.getId())))
                     .toList();
@@ -397,15 +393,13 @@ public class WorkflowProcessTaskQueryService
             // 历史任务与活动任务使用同一发布分类口径，避免列表和导出出现筛选漂移。
             query.deploymentIdIn(categoryDeploymentIds);
         }
-        long total = checkedCount(query.count());
+        long total = query.count();
         if (total == 0 || page.offset() >= total)
         {
             return new CompletedTaskPage(List.of(), Map.of(), total);
         }
-        List<HistoricTaskInstance> tasks = checkedRows(
-                query.listPage(page.offset(), page.pageSize()), page.pageSize());
-        UserNameCache userNameCache = new UserNameCache(userService);
-        Map<String, TaskContext> contexts = loadTaskContexts(tasks, userNameCache);
+        List<HistoricTaskInstance> tasks = query.listPage(page.offset(), page.pageSize());
+        Map<String, TaskContext> contexts = loadTaskContexts(tasks);
         return new CompletedTaskPage(tasks, contexts, total);
     }
 
@@ -448,10 +442,6 @@ public class WorkflowProcessTaskQueryService
      */
     private WorkflowClaimableTaskView toClaimableView(Task task, TaskContext context)
     {
-        if (StringUtils.hasText(task.getAssignee()))
-        {
-            throw dataError("待签任务已经存在办理人");
-        }
         return new WorkflowClaimableTaskView(task.getId(), task.getName(), task.getTaskDefinitionKey(),
                 context.definition().getId(), context.definition().getKey(),
                 context.definition().getName(), context.definition().getVersion(), context.category(),
@@ -503,51 +493,36 @@ public class WorkflowProcessTaskQueryService
      * 一次性批量查询当前任务页的定义、历史实例和部署，并完成全部关联核验。
      *
      * @param tasks List&lt;? extends TaskInfo&gt;，当前页活动或历史任务
-     * @param userNameCache UserNameCache，保持既有逐用户显示名称解析规则的页内缓存
      * @return Map&lt;String, TaskContext&gt;，任务主键到已核验上下文的不可变映射
      */
-    private Map<String, TaskContext> loadTaskContexts(List<? extends TaskInfo> tasks,
-            UserNameCache userNameCache)
+    private Map<String, TaskContext> loadTaskContexts(List<? extends TaskInfo> tasks)
     {
-        // tasksById 同时保留当前页顺序并检测重复任务主键，避免覆盖后返回错误上下文。
-        Map<String, TaskInfo> tasksById = new LinkedHashMap<>();
         Set<String> definitionIds = new LinkedHashSet<>();
         Set<String> instanceIds = new LinkedHashSet<>();
         for (TaskInfo task : tasks)
         {
-            if (task == null || !StringUtils.hasText(task.getId())
-                    || !StringUtils.hasText(task.getProcessDefinitionId())
-                    || !StringUtils.hasText(task.getProcessInstanceId())
-                    || tasksById.put(task.getId(), task) != null)
+            if (!StringUtils.hasText(task.getProcessDefinitionId())
+                    || !StringUtils.hasText(task.getProcessInstanceId()))
             {
                 throw dataError("任务关联数据异常");
             }
             definitionIds.add(task.getProcessDefinitionId());
             instanceIds.add(task.getProcessInstanceId());
         }
-        if (tasksById.isEmpty())
+        if (tasks.isEmpty())
         {
             return Map.of();
         }
 
-        // definitionsById 只接受本页请求范围内、主键唯一且部署关系可继续核验的定义。
+        // 按当前页定义主键批量读取；缺失关联仍是业务错误。
         List<ProcessDefinition> definitions = repositoryService.createProcessDefinitionQuery()
                 .processDefinitionIds(definitionIds)
                 .list();
-        if (definitions == null || definitions.size() > definitionIds.size())
-        {
-            throw dataError("流程定义批量查询结果异常");
-        }
         Map<String, ProcessDefinition> definitionsById = new HashMap<>();
         Set<String> deploymentIds = new LinkedHashSet<>();
         for (ProcessDefinition definition : definitions)
         {
-            if (definition == null || !StringUtils.hasText(definition.getId())
-                    || !definitionIds.contains(definition.getId())
-                    || definitionsById.put(definition.getId(), definition) != null)
-            {
-                throw dataError("流程定义批量查询结果异常");
-            }
+            definitionsById.put(definition.getId(), definition);
             if (!StringUtils.hasText(definition.getDeploymentId()))
             {
                 throw dataError("流程部署关联主键为空");
@@ -567,19 +542,12 @@ public class WorkflowProcessTaskQueryService
                 .createHistoricProcessInstanceQuery()
                 .processInstanceIds(instanceIds)
                 .list();
-        if (instances == null || instances.size() > instanceIds.size())
-        {
-            throw dataError("历史流程实例批量查询结果异常");
-        }
         Map<String, HistoricProcessInstance> instancesById = new HashMap<>();
+        Set<String> startUserIds = new LinkedHashSet<>();
         for (HistoricProcessInstance instance : instances)
         {
-            if (instance == null || !StringUtils.hasText(instance.getId())
-                    || !instanceIds.contains(instance.getId())
-                    || instancesById.put(instance.getId(), instance) != null)
-            {
-                throw dataError("历史流程实例批量查询结果异常");
-            }
+            instancesById.put(instance.getId(), instance);
+            startUserIds.add(instance.getStartUserId());
         }
         for (String instanceId : instanceIds)
         {
@@ -593,19 +561,10 @@ public class WorkflowProcessTaskQueryService
         List<Deployment> deployments = repositoryService.createDeploymentQuery()
                 .deploymentIds(new ArrayList<>(deploymentIds))
                 .list();
-        if (deployments == null || deployments.size() > deploymentIds.size())
-        {
-            throw dataError("流程部署批量查询结果异常");
-        }
         Map<String, Deployment> deploymentsById = new HashMap<>();
         for (Deployment deployment : deployments)
         {
-            if (deployment == null || !StringUtils.hasText(deployment.getId())
-                    || !deploymentIds.contains(deployment.getId())
-                    || deploymentsById.put(deployment.getId(), deployment) != null)
-            {
-                throw dataError("流程部署批量查询结果异常");
-            }
+            deploymentsById.put(deployment.getId(), deployment);
         }
         for (String deploymentId : deploymentIds)
         {
@@ -615,8 +574,9 @@ public class WorkflowProcessTaskQueryService
             }
         }
 
+        Map<String, String> userNames = loadUserNames(userMapper, startUserIds);
         Map<String, TaskContext> contexts = new LinkedHashMap<>();
-        for (TaskInfo task : tasksById.values())
+        for (TaskInfo task : tasks)
         {
             ProcessDefinition definition = definitionsById.get(task.getProcessDefinitionId());
             HistoricProcessInstance instance = instancesById.get(task.getProcessInstanceId());
@@ -624,14 +584,11 @@ public class WorkflowProcessTaskQueryService
             {
                 throw dataError("任务与流程实例定义关系不一致");
             }
-            if (!definition.getDeploymentId().equals(instance.getDeploymentId()))
-            {
-                throw dataError("任务与流程实例部署关系不一致");
-            }
+            // 历史实例 deploymentId 由同一个 ACT_RE_PROCDEF 关联产生，不再重复核验。
             Deployment deployment = deploymentsById.get(definition.getDeploymentId());
             // 展示和筛选共享 Deployment.category 口径，禁止回退出一个无法筛选的旧分类。
             String category = resolveDeploymentCategory(deployment.getCategory());
-            String startUserName = userNameCache.resolve(instance.getStartUserId());
+            String startUserName = userNames.get(instance.getStartUserId());
             contexts.put(task.getId(), new TaskContext(definition, instance,
                     category, startUserName));
         }

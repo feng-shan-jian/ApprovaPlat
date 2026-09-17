@@ -1,8 +1,6 @@
 package com.ruoyi.flowable.service.process;
 
 import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.PageWindow;
-import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.checkedCount;
-import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.checkedRows;
 import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.dataError;
 import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.invalidArgument;
 import static com.ruoyi.flowable.service.process.WorkflowProcessQuerySupport.optionalText;
@@ -390,7 +388,7 @@ public class WorkflowProcessDefinitionQueryService
             // 业务分类属于部署元数据，不能用可能保存 targetNamespace 的定义分类筛选。
             query.deploymentIds(categoryDeploymentIds);
         }
-        long baseTotal = checkedCount(query.count());
+        long baseTotal = query.count();
         if (baseTotal == 0)
         {
             return new StartableDefinitionSelection(List.of(), 0);
@@ -433,7 +431,7 @@ public class WorkflowProcessDefinitionQueryService
      *
      * @param query ProcessDefinitionQuery，已限定最新、激活、分类和文本筛选的稳定查询
      * @param baseTotal long，执行扫描前取得的真实基础定义总数
-     * @return List&lt;ProcessDefinition&gt;，按流程 key、定义 ID 排序且数量与 count 一致的不可变定义集合
+     * @return List&lt;ProcessDefinition&gt;，按流程 key、定义 ID 排序的有界定义集合
      */
     private List<ProcessDefinition> loadStartableDefinitions(
             ProcessDefinitionQuery query, long baseTotal)
@@ -443,18 +441,13 @@ public class WorkflowProcessDefinitionQueryService
         while (baseOffset < baseTotal)
         {
             int batchLimit = (int) Math.min(STARTABLE_SCAN_CHUNK, baseTotal - baseOffset);
-            List<ProcessDefinition> batch = checkedRows(
-                    query.listPage(baseOffset, batchLimit), batchLimit);
+            List<ProcessDefinition> batch = query.listPage(baseOffset, batchLimit);
             if (batch.isEmpty())
             {
-                throw dataError("流程定义分页计数与结果不一致");
+                break;
             }
             definitions.addAll(batch);
             baseOffset += batch.size();
-        }
-        if (definitions.size() != baseTotal)
-        {
-            throw dataError("流程定义分页计数与结果不一致");
         }
         return List.copyOf(definitions);
     }
@@ -470,10 +463,6 @@ public class WorkflowProcessDefinitionQueryService
     private boolean isDefinitionStartable(ProcessDefinition definition, WorkflowCurrentIdentity actor,
             Map<String, Boolean> managedDecisions)
     {
-        if (definition == null || !StringUtils.hasText(definition.getId()))
-        {
-            throw dataError("流程定义数据异常");
-        }
         if (!managedDecisions.containsKey(definition.getId()))
         {
             throw dataError("流程发起范围批量判定结果缺失");
@@ -530,7 +519,7 @@ public class WorkflowProcessDefinitionQueryService
         LinkedHashSet<String> deploymentIds = new LinkedHashSet<>();
         for (ProcessDefinition definition : definitions)
         {
-            if (definition == null || !StringUtils.hasText(definition.getDeploymentId()))
+            if (!StringUtils.hasText(definition.getDeploymentId()))
             {
                 throw dataError("流程定义部署关系异常");
             }
@@ -546,19 +535,9 @@ public class WorkflowProcessDefinitionQueryService
             List<Deployment> batch = repositoryService.createDeploymentQuery()
                     .deploymentIds(new ArrayList<>(batchIds))
                     .list();
-            if (batch == null || batch.size() > batchIds.size())
-            {
-                throw dataError("流程部署批量查询结果异常");
-            }
-            Set<String> requestedBatchIds = Set.copyOf(batchIds);
             for (Deployment deployment : batch)
             {
-                if (deployment == null || !StringUtils.hasText(deployment.getId())
-                        || !requestedBatchIds.contains(deployment.getId())
-                        || deployments.put(deployment.getId(), deployment) != null)
-                {
-                    throw dataError("流程部署批量查询结果异常");
-                }
+                deployments.put(deployment.getId(), deployment);
             }
         }
         if (deployments.size() != deploymentIds.size())
@@ -824,7 +803,6 @@ public class WorkflowProcessDefinitionQueryService
             ProcessDefinition definition)
     {
         requireSame(definition.getId(), instance.processDefinitionId(), "流程实例与定义关系不一致");
-        requireSame(definition.getDeploymentId(), instance.deploymentId(), "流程实例与部署关系不一致");
     }
 
     /**

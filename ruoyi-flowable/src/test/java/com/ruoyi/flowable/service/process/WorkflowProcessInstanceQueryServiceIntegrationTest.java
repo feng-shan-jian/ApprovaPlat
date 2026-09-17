@@ -35,7 +35,8 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
-import com.ruoyi.system.service.ISysUserService;
+import com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper;
+import com.ruoyi.flowable.domain.WorkflowMultiInstanceUserRow;
 
 /**
  * 使用真实 Flowable 8 和 H2 验证实例列表的部署分类及当前任务批量查询边界。
@@ -49,7 +50,7 @@ class WorkflowProcessInstanceQueryServiceIntegrationTest
     private RuntimeService runtimeService;
     private TaskService taskService;
     private WorkflowProcessInstanceQueryService service;
-    private ISysUserService userService;
+    private WorkflowMultiInstanceUserMapper userMapper;
     private ProcessInstance firstFinanceInstance;
     private ProcessInstance secondFinanceInstance;
     private ProcessInstance hrInstance;
@@ -98,10 +99,10 @@ class WorkflowProcessInstanceQueryServiceIntegrationTest
         WorkflowIdentityResolver identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity()).thenReturn(
                 new WorkflowCurrentIdentity(CURRENT_USER_ID, Set.of()));
-        userService = mock(ISysUserService.class);
+        userMapper = mock(WorkflowMultiInstanceUserMapper.class);
         service = new WorkflowProcessInstanceQueryService(engineOperations,
                 repositoryService, historyService, runtimeService, taskService,
-                identityResolver, mock(WfCopyMapper.class), userService);
+                identityResolver, mock(WfCopyMapper.class), userMapper);
     }
 
     /**
@@ -232,21 +233,20 @@ class WorkflowProcessInstanceQueryServiceIntegrationTest
     @Test
     void managedPagesPreserveIdentityLabelsOrderAndPageScopedLookup()
     {
-        com.ruoyi.common.core.domain.entity.SysUser user = new com.ruoyi.common.core.domain.entity.SysUser();
-        user.setNickName("历史申请人");
-        when(userService.selectUserById(100L)).thenReturn(user);
+        when(userMapper.selectRawNickNamesByIds(List.of(100L)))
+                .thenReturn(List.of(new WorkflowMultiInstanceUserRow(100L, "历史申请人")));
         var full = service.listManaged(null, 1, 200);
         assertThat(full.rows()).extracting(WorkflowManagedProcessView::startUserName)
                 .containsOnly("历史申请人");
-        verify(userService).selectUserById(100L);
-        clearInvocations(userService);
+        verify(userMapper).selectRawNickNamesByIds(List.of(100L));
+        clearInvocations(userMapper);
         var first = service.listManaged(null, 1, 2);
         var second = service.listManaged(null, 2, 2);
         assertThat(java.util.stream.Stream.concat(first.rows().stream(), second.rows().stream())
                 .map(WorkflowManagedProcessView::processInstanceId).toList())
                 .containsExactlyElementsOf(full.rows().stream().map(WorkflowManagedProcessView::processInstanceId).toList());
-        verify(userService, times(2)).selectUserById(100L);
-        when(userService.selectUserById(100L)).thenReturn(null);
+        verify(userMapper, times(2)).selectRawNickNamesByIds(List.of(100L));
+        when(userMapper.selectRawNickNamesByIds(List.of(100L))).thenReturn(List.of());
         assertThat(service.listManaged(null, 1, 200).rows())
                 .extracting(WorkflowManagedProcessView::startUserName).containsOnly("100");
     }

@@ -24,7 +24,7 @@ import org.flowable.task.api.Task;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import com.ruoyi.common.core.domain.entity.SysUser;
+import java.util.List;
 import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
@@ -38,7 +38,8 @@ import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.task.WorkflowTaskRevokeApplicationService;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.framework.web.service.PermissionService;
-import com.ruoyi.system.service.ISysUserService;
+import com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper;
+import com.ruoyi.flowable.domain.WorkflowMultiInstanceUserRow;
 
 /**
  * 使用真实 Flowable 8 和 H2 验证任务列表当前页关联上下文的批量查询边界。
@@ -59,7 +60,7 @@ class WorkflowProcessTaskContextIntegrationTest
     private WorkflowTaskRevokeApplicationService revokeApplicationService;
     private WorkflowProcessAccessService processAccessService;
     private WorkflowProcessTaskQueryService service;
-    private ISysUserService userService;
+    private WorkflowMultiInstanceUserMapper userMapper;
 
     /**
      * 创建启用完整历史的真实内存引擎，并装配只对外部依赖使用 mock 的查询服务。
@@ -90,16 +91,14 @@ class WorkflowProcessTaskContextIntegrationTest
         when(identityResolver.resolveClaimEligibleUserIds(any()))
                 .thenReturn(Set.of(CURRENT_USER_ID));
 
-        userService = mock(ISysUserService.class);
-        SysUser currentUser = new SysUser();
-        currentUser.setUserId(Long.valueOf(CURRENT_USER_ID));
-        currentUser.setNickName("当前用户");
-        when(userService.selectUserById(Long.valueOf(CURRENT_USER_ID))).thenReturn(currentUser);
+        userMapper = mock(WorkflowMultiInstanceUserMapper.class);
+        when(userMapper.selectRawNickNamesByIds(List.of(100L)))
+                .thenReturn(List.of(new WorkflowMultiInstanceUserRow(100L, "当前用户")));
         revokeApplicationService = mock(WorkflowTaskRevokeApplicationService.class);
         WorkflowTaskUnclaimPolicy unclaimPolicy = new WorkflowTaskUnclaimPolicy();
 
         service = new WorkflowProcessTaskQueryService(engineOperations, repositoryService,
-                historyService, taskService, identityResolver, userService,
+                historyService, taskService, identityResolver, userMapper,
                 revokeApplicationService, unclaimPolicy);
         processAccessService = new WorkflowProcessAccessService(historyService,
                 runtimeService, taskService, engineOperations, identityResolver,
@@ -146,13 +145,13 @@ class WorkflowProcessTaskContextIntegrationTest
         assertAssignedRow(page, hrInstance, hrDefinition,
                 hrDeployment, "hr", "HR-1001");
         verifyOneAssociationQueryPerType();
-        verify(userService).selectUserById(100L);
-        when(userService.selectUserById(100L)).thenReturn(null);
+        verify(userMapper).selectRawNickNamesByIds(List.of(100L));
+        when(userMapper.selectRawNickNamesByIds(List.of(100L))).thenReturn(List.of());
         var refreshed = service.listAssigned(null, 1, 200);
         assertThat(refreshed.rows()).extracting(WorkflowAssignedTaskView::startUserName).containsOnly("100");
         assertThat(refreshed.rows()).extracting(WorkflowAssignedTaskView::taskId)
                 .containsExactlyElementsOf(page.rows().stream().map(WorkflowAssignedTaskView::taskId).toList());
-        verify(userService, times(2)).selectUserById(100L);
+        verify(userMapper, times(2)).selectRawNickNamesByIds(List.of(100L));
     }
 
     /**
