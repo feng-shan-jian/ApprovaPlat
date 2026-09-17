@@ -66,9 +66,9 @@ public interface WorkflowMultiInstanceTransitionObserver
      * @param activityId String，被取消节点
      * @param rootExecutionId String，被取消根主键
      * @param authenticatedUserId String，Flowable 当前认证用户
-     * @return MultiInstanceTransitionCancellation，受控迁移授权；普通异常取消返回 null
+     * @return MultiInstanceTransitionPlan，回调匹配的原始正式计划；普通异常取消返回 null
      */
-    MultiInstanceTransitionCancellation observeControlledRootCancellation(
+    MultiInstanceTransitionPlan observeControlledRootCancellation(
             String processInstanceId, String processDefinitionId, String activityId,
             String rootExecutionId, String authenticatedUserId);
 }

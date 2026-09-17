@@ -194,7 +194,7 @@ class WorkflowTaskReturnChainIntegrationTest
     }
 
     /**
-     * 验证第二审批节点退回后原任务结束、首审批任务重建并形成 returned 双状态和来源 comment。
+     * 验证第二审批节点退回后原任务结束、首审批任务重建并形成 returned 业务状态和来源 comment。
      *
      * @return void，任一真实引擎事实不符合退回状态机时失败
      */
@@ -215,7 +215,7 @@ class WorkflowTaskReturnChainIntegrationTest
         assertThat(returnedTask.getOwner()).isNull();
         assertThat(taskService.getIdentityLinksForTask(returnedTask.getId()))
                 .noneMatch(link -> IdentityLinkType.CANDIDATE.equals(link.getType()));
-        assertDoubleStatus(scenario.instance().getId(),
+        assertBusinessStatus(scenario.instance().getId(),
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
 
         Comment returnComment = taskService.getProcessInstanceComments(
@@ -229,7 +229,7 @@ class WorkflowTaskReturnChainIntegrationTest
     }
 
     /**
-     * 验证发起人重新提交更新开始表单及快照，完整恢复首审办理配置和 running 双状态。
+     * 验证发起人重新提交更新开始表单及快照，完整恢复首审办理配置和 running 业务状态。
      *
      * @return void，任一表单、身份、状态或局部变量事实不一致时失败
      */
@@ -263,7 +263,7 @@ class WorkflowTaskReturnChainIntegrationTest
                         WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
         assertThat(snapshot.values().get("requestTitle").stringValue())
                 .isEqualTo("修改后申请");
-        assertDoubleStatus(scenario.instance().getId(),
+        assertBusinessStatus(scenario.instance().getId(),
                 WorkflowProcessStartService.RUNNING_STATUS);
         assertThat(taskService.getVariableLocal(resubmittedTask.getId(),
                 WorkflowReturnedApplicationProtocol.RETURN_ASSIGNMENT_VARIABLE)).isNull();
@@ -329,7 +329,7 @@ class WorkflowTaskReturnChainIntegrationTest
                         + "|" + link.getGroupId()).toList())
                 .isEqualTo(identityLinksBefore);
         assertThat(taskService.getTaskAttachments(returnedTask.getId())).isEmpty();
-        assertDoubleStatus(scenario.instance().getId(),
+        assertBusinessStatus(scenario.instance().getId(),
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
         verifyNoInteractions(attachmentService, notificationService);
     }
@@ -476,8 +476,7 @@ class WorkflowTaskReturnChainIntegrationTest
                         beforeTasks.stream().map(Task::getId).toList());
         assertThat(taskService.getProcessInstanceComments(instance.getId(), "RETURN")).isEmpty();
         assertThat(runtimeService.getVariable(instance.getId(),
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE))
-                .isEqualTo(WorkflowProcessStartService.RUNNING_STATUS);
+                "processStatus")).isNull();
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(instance.getId()).singleResult()
                 .getBusinessStatus()).isEqualTo(WorkflowProcessStartService.RUNNING_STATUS);
@@ -486,89 +485,21 @@ class WorkflowTaskReturnChainIntegrationTest
         verifyNoInteractions(taskCopyService, notificationService, attachmentService);
     }
 
-    /**
-     * 验证普通运行实例只接受显式 running businessStatus。
-     * @return void，能力读取必须保持可退且不得产生写副作用
-     */
+    /** 挂起是真实引擎状态变化，恢复后同一个业务实例仍可以正式退回。 */
     @Test
-    void acceptsExplicitRunningBusinessStatus()
+    void suspendedReturnIsRejectedAndActivationRestoresEligibility()
     {
         ReturnScenario scenario = startAtSecondApproval();
-        runtimeService.updateBusinessStatus(scenario.instance().getId(),
-                WorkflowProcessStartService.RUNNING_STATUS);
-
-        assertThat(returnApplicationService.isTaskReturnAllowed(
-                scenario.secondTask().getId())).isTrue();
-        assertThat(taskService.getProcessInstanceComments(
-                scenario.instance().getId(), "RETURN")).isEmpty();
-        verifyNoInteractions(taskCopyService, notificationService, attachmentService);
-    }
-
-    /**
-     * 验证明确业务终态不能借兼容规则进入普通退回链路。
-     * @param businessStatus String，returned/canceled/rejected/terminated 冲突状态
-     * @return void，能力为 false、正式命令为 409 且没有部分副作用
-     */
-    @ParameterizedTest
-    @ValueSource(strings = { "returned", "canceled", "rejected", "terminated" })
-    void rejectsConflictingBusinessStatus(String businessStatus)
-    {
-        ReturnScenario scenario = startAtSecondApproval();
-        runtimeService.updateBusinessStatus(scenario.instance().getId(), businessStatus);
-
-        assertThat(returnApplicationService.isTaskReturnAllowed(
-                scenario.secondTask().getId())).isFalse();
-        assertThatThrownBy(() -> returnApplicationService.returnTask(
-                new WorkflowTaskReturnRequest(scenario.secondTask().getId(),
-                        "冲突状态不得退回", List.of())))
-                .isInstanceOfSatisfying(ServiceException.class, exception ->
-                        assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
-        assertThat(requireSingleTask(scenario.instance().getId(), "secondApproval")
-                .getId()).isEqualTo(scenario.secondTask().getId());
-        assertThat(taskService.getProcessInstanceComments(
-                scenario.instance().getId(), "2")).isEmpty();
-        verifyNoInteractions(taskCopyService, notificationService, attachmentService);
-    }
-
-    /**
-     * 验证 processStatus 缺失时即使 businessStatus 为空也不能退回。
-     * @return void，能力为 false且正式命令稳定返回 409
-     */
-    @Test
-    void rejectsMissingProcessStatus()
-    {
-        ReturnScenario scenario = startAtSecondApproval();
-        runtimeService.removeVariable(scenario.instance().getId(),
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE);
-
-        assertThat(returnApplicationService.isTaskReturnAllowed(
-                scenario.secondTask().getId())).isFalse();
-        assertThatThrownBy(() -> returnApplicationService.returnTask(
-                new WorkflowTaskReturnRequest(scenario.secondTask().getId(),
-                        "缺失运行态不得退回", List.of())))
-                .isInstanceOfSatisfying(ServiceException.class, exception ->
-                        assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
-    }
-
-    /**
-     * 验证 processStatus 已进入非运行态时不能依赖空 businessStatus 绕过失败关闭。
-     * @return void，能力为 false且正式命令稳定返回 409
-     */
-    @Test
-    void rejectsConflictingProcessStatus()
-    {
-        ReturnScenario scenario = startAtSecondApproval();
-        runtimeService.setVariable(scenario.instance().getId(),
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
-                WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
-
-        assertThat(returnApplicationService.isTaskReturnAllowed(
-                scenario.secondTask().getId())).isFalse();
-        assertThatThrownBy(() -> returnApplicationService.returnTask(
-                new WorkflowTaskReturnRequest(scenario.secondTask().getId(),
-                        "非运行态不得退回", List.of())))
-                .isInstanceOfSatisfying(ServiceException.class, exception ->
-                        assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT));
+        runtimeService.suspendProcessInstanceById(scenario.instance().getId());
+        assertThat(returnApplicationService.isTaskReturnAllowed(scenario.secondTask().getId())).isFalse();
+        assertThatThrownBy(() -> returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
+                scenario.secondTask().getId(), "挂起时拒绝", List.of())))
+                .isInstanceOf(ServiceException.class);
+        runtimeService.activateProcessInstanceById(scenario.instance().getId());
+        assertThat(returnApplicationService.isTaskReturnAllowed(scenario.secondTask().getId())).isTrue();
+        returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
+                scenario.secondTask().getId(), "恢复后退回", List.of()));
+        assertBusinessStatus(scenario.instance().getId(), "returned");
     }
 
     /**
@@ -586,7 +517,7 @@ class WorkflowTaskReturnChainIntegrationTest
     }
 
     /**
-     * 以真实 Flowable 认证发起人启动流程，并只写正式 processStatus 运行态。
+     * 以真实 Flowable 认证发起人和 businessStatus 启动流程。
      *
      * @param processKey String，待启动的流程定义 key
      * @return ProcessInstance，真实活动流程实例
@@ -599,13 +530,10 @@ class WorkflowTaskReturnChainIntegrationTest
         processEngine.getIdentityService().setAuthenticatedUserId(APPLICANT_ID);
         try
         {
-            ProcessInstance instance = runtimeService.startProcessInstanceByKey(processKey,
-                    Map.of("requestTitle", "原始申请",
+            ProcessInstance instance = runtimeService.createProcessInstanceBuilder()
+                    .processDefinitionKey(processKey).businessStatus("running").variables(Map.of("requestTitle", "原始申请",
                             WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot,
-                            WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
-                            WorkflowProcessStartService.RUNNING_STATUS));
-            runtimeService.updateBusinessStatus(instance.getId(),
-                    WorkflowProcessStartService.RUNNING_STATUS);
+                            "initiator", APPLICANT_ID)).start();
             return runtimeService.createProcessInstanceQuery()
                     .processInstanceId(instance.getId()).singleResult();
         }
@@ -632,17 +560,16 @@ class WorkflowTaskReturnChainIntegrationTest
     }
 
     /**
-     * 同时核对流程变量状态与 Flowable businessStatus。
+     * 核对唯一 businessStatus，并确认旧变量未被重新建立。
      *
      * @param processInstanceId String，真实流程实例主键
      * @param expectedStatus String，预期业务状态
      * @return void，任一状态不一致时失败
      */
-    private void assertDoubleStatus(String processInstanceId, String expectedStatus)
+    private void assertBusinessStatus(String processInstanceId, String expectedStatus)
     {
         assertThat(runtimeService.getVariable(processInstanceId,
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE))
-                .isEqualTo(expectedStatus);
+                "processStatus")).isNull();
         assertThat(runtimeService.createProcessInstanceQuery()
                 .processInstanceId(processInstanceId).singleResult().getBusinessStatus())
                 .isEqualTo(expectedStatus);

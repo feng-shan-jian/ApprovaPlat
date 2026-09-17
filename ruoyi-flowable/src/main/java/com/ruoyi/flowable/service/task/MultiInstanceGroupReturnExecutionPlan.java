@@ -15,8 +15,14 @@ import org.springframework.util.StringUtils;
 public record MultiInstanceGroupReturnExecutionPlan(
         MultiInstanceGroupReturnPlan source, String targetActivityId,
         WorkflowTaskMovementPolicy.ControlledReturnPathPlan controlledPath,
-        List<ControlledMultiInstanceReplaySnapshot> replaySnapshots)
+        List<ControlledMultiInstanceReplaySnapshot> replaySnapshots) implements MultiInstanceTransitionPlan
 {
+    @Override
+    public MultiInstanceRoundSnapshot round()
+    {
+        return source.round();
+    }
+
     /**
      * 冻结执行计划并确保路径节点与正式轮次快照一一对应。
      *

@@ -122,6 +122,9 @@ class WorkflowProcessDetailServiceIntegrationTest
     private WorkflowApplicationResubmitApplicationService resubmitApplicationService;
     private WorkflowManualUrgeService manualUrgeService;
     private WorkflowProcessDetailService service;
+    private WorkflowAutomaticCopyService completionCopies;
+    private WorkflowNotificationService completionNotifications;
+    private WorkflowNotificationOutboxService childOutbox;
     private String deploymentId;
 
     /**
@@ -138,9 +141,12 @@ class WorkflowProcessDetailServiceIntegrationTest
         ObjectProvider<WorkflowNotificationOutboxService> outboxProvider = mock(ObjectProvider.class);
         ObjectProvider<WorkflowProcessDefinitionQueryService> definitionProvider = mock(ObjectProvider.class);
         ObjectProvider<WorkflowStartVariableValidator> variableValidatorProvider = mock(ObjectProvider.class);
-        when(copyProvider.getObject()).thenReturn(mock(WorkflowAutomaticCopyService.class));
-        when(notificationProvider.getObject()).thenReturn(mock(WorkflowNotificationService.class));
-        when(outboxProvider.getObject()).thenReturn(mock(WorkflowNotificationOutboxService.class));
+        completionCopies = mock(WorkflowAutomaticCopyService.class);
+        completionNotifications = mock(WorkflowNotificationService.class);
+        childOutbox = mock(WorkflowNotificationOutboxService.class);
+        when(copyProvider.getObject()).thenReturn(completionCopies);
+        when(notificationProvider.getObject()).thenReturn(completionNotifications);
+        when(outboxProvider.getObject()).thenReturn(childOutbox);
         WorkflowStartVariableValidator startVariableValidator =
                 new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
         when(variableValidatorProvider.getObject()).thenReturn(startVariableValidator);
@@ -342,8 +348,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         ProcessInstance completed = runtimeService.createProcessInstanceBuilder()
                 .processDefinitionKey("detailTerminal")
                 .businessStatus("running")
-                .variables(Map.of(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running",
-                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, terminalSnapshot))
+                .variables(Map.of(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, terminalSnapshot))
                 .start();
         WorkflowProcessDetailView completedDetail = readDetail(
                 completed.getId(), null, "completed");
@@ -369,7 +374,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(child).isNotNull();
         assertThat(child.getBusinessStatus()).isEqualTo("running");
         assertThat(runtimeService.getVariable(child.getId(),
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)).isEqualTo("running");
+                "processStatus")).isNull();
         WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot childSnapshot =
                 WorkflowFormSubmissionSnapshotCodec.decode((String) runtimeService.getVariable(
                         child.getId(), WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
@@ -384,9 +389,9 @@ class WorkflowProcessDetailServiceIntegrationTest
     }
 
     /**
-     * 验证 CallActivity 子流程自然完成时自身双状态收敛为 completed，父流程完成不替代子事实。
+     * 验证 CallActivity 子流程自然完成时自身业务状态收敛为 completed，父流程完成不替代子事实。
      *
-     * @return void，子流程历史仍为 running、缺少状态变量或开始快照时测试失败
+     * @return void，子流程历史仍为 running、重新产生旧状态变量或缺少开始快照时测试失败
      */
     @Test
     void completesCallActivityChildWithItsOwnFormalLifecycle()
@@ -404,12 +409,20 @@ class WorkflowProcessDetailServiceIntegrationTest
         assertThat(completedChild.getBusinessStatus()).isEqualTo("completed");
         assertThat(historyService.createHistoricVariableInstanceQuery()
                 .processInstanceId(child.getId())
-                .variableName(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE)
-                .singleResult().getValue()).isEqualTo("completed");
+                .variableName("processStatus")
+                .singleResult()).isNull();
         assertThat(historyService.createHistoricVariableInstanceQuery()
                 .processInstanceId(child.getId())
                 .variableName(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME)
                 .singleResult()).isNotNull();
+        assertThat(historyService.createHistoricProcessInstanceQuery().processInstanceId(root.getId())
+                .singleResult().getBusinessStatus()).isEqualTo("completed");
+        assertThat(historyService.createHistoricVariableInstanceQuery().processInstanceId(root.getId())
+                .variableName("childResult").singleResult().getValue()).isEqualTo("采购申请-2026");
+        verify(completionCopies).onProcessCompleted(root.getId(), root.getProcessDefinitionId());
+        verify(completionNotifications).onProcessResult("PROCESS_COMPLETED", root.getProcessDefinitionId(), root.getId());
+        verify(completionCopies, never()).onProcessCompleted(child.getId(), child.getProcessDefinitionId());
+        verify(childOutbox).schedulePendingUrgeCancellation(child.getId(), null, "子流程已结束，取消未投递催办");
     }
 
     /**
@@ -1042,7 +1055,6 @@ class WorkflowProcessDetailServiceIntegrationTest
                 .processDefinitionKey("detailMain")
                 .businessStatus("running")
                 .variables(Map.of("startValue", "start-current",
-                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running",
                         WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot))
                 .start();
     }
@@ -1057,8 +1069,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         return runtimeService.createProcessInstanceBuilder()
                 .processDefinitionKey("detailMain")
                 .businessStatus("running")
-                .variables(Map.of("startValue", "snapshot-missing-current",
-                        WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running"))
+                .variables(Map.of("startValue", "snapshot-missing-current"))
                 .start();
     }
 
@@ -1075,8 +1086,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         return runtimeService.createProcessInstanceBuilder()
                 .processDefinitionKey("detailLoop")
                 .businessStatus("running")
-                .variables(Map.of(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running",
-                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot))
+                .variables(Map.of(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, snapshot))
                 .start();
     }
 
@@ -1094,8 +1104,7 @@ class WorkflowProcessDetailServiceIntegrationTest
         return runtimeService.createProcessInstanceBuilder()
                 .processDefinitionKey("detailParent")
                 .businessStatus("running")
-                .variables(Map.of(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running",
-                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, parentSnapshot,
+                .variables(Map.of(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME, parentSnapshot,
                         "parentRequest", parentValue))
                 .start();
     }
@@ -1111,7 +1120,6 @@ class WorkflowProcessDetailServiceIntegrationTest
             Map<String, Object> parentVariables)
     {
         Map<String, Object> variables = new LinkedHashMap<>(parentVariables);
-        variables.put(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, "running");
         return runtimeService.createProcessInstanceBuilder()
                 .processDefinitionKey(processDefinitionKey)
                 .businessStatus("running")
@@ -1378,6 +1386,7 @@ class WorkflowProcessDetailServiceIntegrationTest
                 <callActivity id="callChild" name="调用子流程" calledElement="detailChild">
                   <extensionElements>
                     <flowable:in source="parentRequest" target="childRequest"/>
+                    <flowable:out source="childRequest" target="childResult"/>
                   </extensionElements>
                 </callActivity>
                 <endEvent id="parentEnd"/>

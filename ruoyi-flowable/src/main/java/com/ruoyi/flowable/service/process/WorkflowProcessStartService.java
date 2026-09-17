@@ -33,9 +33,6 @@ public class WorkflowProcessStartService
     /** BPMN initiator 与历史详情统一使用的服务端发起人变量名。 */
     public static final String INITIATOR_VARIABLE = "initiator";
 
-    /** 由服务端维护并与 Flowable businessStatus 原子同步的流程状态变量名。 */
-    public static final String PROCESS_STATUS_VARIABLE = "processStatus";
-
     /** 草稿提交创建实例时明确写入的运行中状态值。 */
     public static final String RUNNING_STATUS = "running";
 
@@ -151,7 +148,6 @@ public class WorkflowProcessStartService
         engineVariables.putAll(WorkflowStartMultiInstanceContract.prepareVariables(
                 bpmnModel, definition.getKey(), multiInstanceUserIds, userSelectionValidator));
         engineVariables.put(INITIATOR_VARIABLE, actor.userId());
-        engineVariables.put(PROCESS_STATUS_VARIABLE, RUNNING_STATUS);
         engineVariables.put(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
                 WorkflowFormSubmissionSnapshotCodec.encodeStart(definition.getDeploymentId(),
                         startForm.sourceType(), startForm.formId(), startForm.formKey(),
@@ -166,7 +162,7 @@ public class WorkflowProcessStartService
         {
             throw new ServiceException("流程实例启动结果不完整", HttpStatus.ERROR);
         }
-        // processStatus 变量与 businessStatus 在 start 命令执行同步节点前一起落库，瞬时流程也不会二次更新已结束实例。
+        // businessStatus 在执行同步节点前建立；同步完成由完成监听器在同一命令内收敛。
         return toSnapshot(instance, definition.getId(), businessKey);
     }
 

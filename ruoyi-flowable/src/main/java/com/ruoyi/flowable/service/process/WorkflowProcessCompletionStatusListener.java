@@ -1,21 +1,15 @@
 package com.ruoyi.flowable.service.process;
 
-import java.util.Date;
-import java.util.List;
 import java.util.Set;
 import org.springframework.beans.factory.ObjectProvider;
 import org.flowable.common.engine.api.FlowableException;
 import org.flowable.common.engine.api.delegate.event.FlowableEngineEntityEvent;
 import org.flowable.common.engine.api.delegate.event.FlowableEngineEventType;
 import org.flowable.engine.delegate.event.AbstractFlowableEngineEventListener;
-import org.flowable.engine.impl.cfg.ProcessEngineConfigurationImpl;
 import org.flowable.engine.impl.persistence.entity.HistoricProcessInstanceEntity;
 import org.flowable.engine.impl.persistence.entity.HistoricProcessInstanceEntityManager;
 import org.flowable.engine.impl.persistence.entity.ExecutionEntity;
 import org.flowable.engine.impl.util.CommandContextUtil;
-import org.flowable.variable.service.VariableServiceConfiguration;
-import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntity;
-import org.flowable.variable.service.impl.persistence.entity.HistoricVariableInstanceEntityManager;
 import org.springframework.util.StringUtils;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService;
@@ -24,11 +18,9 @@ import com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService;
 /**
  * 在 Flowable 确认流程结束时，将自然运行状态收敛为 completed，并保留显式业务终态。
  *
- * <p>PROCESS_COMPLETED 事件发生在运行时变量清理之后、同一引擎命令提交之前，因此这里使用
- * Flowable 自身的历史变量实体管理器更新最终值。这样不会在任务流转前把 processStatus
- * 暂时改成 completed，也不会影响网关表达式、并行分支或后继任务的路由判断。
- * 驳回等动作也可能通过移动到结束节点触发该事件，因此 canceled/terminated 的业务终态
- * 必须优先于引擎 completed 语义，不能被监听器覆盖。</p>
+ * <p>PROCESS_COMPLETED 发生在运行时清理后、同一引擎命令提交前，因此直接更新
+ * Flowable 历史实例的 businessStatus。取消、驳回、终止优先，重复完成事件无副作用；
+ * 完成通知和自动抄送与状态变更处于同一事务。</p>
  */
 public final class WorkflowProcessCompletionStatusListener
         extends AbstractFlowableEngineEventListener
@@ -50,9 +42,6 @@ public final class WorkflowProcessCompletionStatusListener
     private static final Set<String> BUSINESS_TERMINAL_STATUSES = Set.of(
             "canceled", "rejected", "terminated");
 
-    /** Flowable 字符串变量的稳定类型名。 */
-    private static final String STRING_VARIABLE_TYPE = "string";
-
     /**
      * 创建延迟解析自动抄送与普通审批通知服务的监听器，供 Flowable 引擎初始化配置使用。
      * 配置后只处理 PROCESS_COMPLETED
@@ -69,7 +58,7 @@ public final class WorkflowProcessCompletionStatusListener
     }
 
     /**
-     * 处理流程完成事件并在当前引擎事务内更新历史状态变量。
+     * 处理流程完成事件并在当前引擎事务内更新历史业务状态。
      *
      * @param event FlowableEngineEntityEvent，携带已自然结束的流程实例实体
      * @return void，无返回值；仅将 running 更新为 completed，保留显式业务终态，损坏状态会回滚事务
@@ -88,7 +77,7 @@ public final class WorkflowProcessCompletionStatusListener
         boolean naturallyCompleted = updateHistoricProcessStatus(processInstance.getId());
         if (!rootBusinessProcess)
         {
-            // 子流程维护自己的 completed 双状态，但不得触发根业务流程级抄送或结果通知。
+            // 子流程维护自己的 completed 业务状态，但不得触发根业务流程级抄送或结果通知。
             if (!naturallyCompleted)
             {
                 return;
@@ -145,80 +134,29 @@ public final class WorkflowProcessCompletionStatusListener
     }
 
     /**
-     * 使用当前 Flowable CommandContext 按终态优先级原子更新历史 processStatus 与 businessStatus。
-     *
-     * @param processInstanceId String，已自然完成的 Flowable 流程实例主键
-     * @return boolean，running 成功收敛时返回 true，既有业务终态返回 false
+     * 完成时运行实体已被清理，历史实例持有该命令最终的业务状态。
+     * 只允许 running 自然完成；明确终态与重复事件不产生通知。
      */
     private boolean updateHistoricProcessStatus(String processInstanceId)
     {
-        ProcessEngineConfigurationImpl engineConfiguration =
-                CommandContextUtil.getProcessEngineConfiguration();
-        if (engineConfiguration == null)
-        {
-            throw new FlowableException("流程自然完成事件缺少 Flowable 引擎上下文");
-        }
-
-        VariableServiceConfiguration variableConfiguration =
-                engineConfiguration.getVariableServiceConfiguration();
-        HistoricVariableInstanceEntityManager historicVariableManager =
-                variableConfiguration.getHistoricVariableInstanceEntityManager();
-        List<HistoricVariableInstanceEntity> statusVariables = historicVariableManager
-                .findHistoricalVariableInstancesByProcessInstanceId(processInstanceId,
-                        Set.of(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE));
-
-        if (statusVariables == null || statusVariables.isEmpty())
-        {
-            throw new FlowableException("流程历史状态变量缺失: " + processInstanceId);
-        }
-        if (statusVariables.size() != 1)
-        {
-            throw new FlowableException("流程历史状态变量存在重复记录: " + processInstanceId);
-        }
-
-        HistoricVariableInstanceEntity statusVariable = statusVariables.get(0);
-        if (statusVariable == null
-                || !STRING_VARIABLE_TYPE.equals(statusVariable.getVariableTypeName()))
-        {
-            throw new FlowableException("流程历史状态变量类型异常: " + processInstanceId);
-        }
-        // 当前历史值决定终态优先级：业务显式终态和已完成值均不得被二次覆盖。
-        String currentStatus = statusVariable.getTextValue();
-        HistoricProcessInstanceEntityManager historicProcessManager =
+        HistoricProcessInstanceEntityManager manager =
                 CommandContextUtil.getHistoricProcessInstanceEntityManager();
-        HistoricProcessInstanceEntity historicProcess = historicProcessManager.findById(
-                processInstanceId);
+        HistoricProcessInstanceEntity historicProcess = manager.findById(processInstanceId);
         if (historicProcess == null)
         {
             throw new FlowableException("流程历史实例缺失: " + processInstanceId);
         }
-        String currentBusinessStatus = historicProcess.getBusinessStatus();
-        if (COMPLETED_STATUS.equals(currentStatus)
-                || BUSINESS_TERMINAL_STATUSES.contains(currentStatus))
+        String status = historicProcess.getBusinessStatus();
+        if (COMPLETED_STATUS.equals(status) || (status != null && BUSINESS_TERMINAL_STATUSES.contains(status)))
         {
-            if (!currentStatus.equals(currentBusinessStatus))
-            {
-                throw new FlowableException("流程历史双状态不一致: " + processInstanceId);
-            }
             return false;
         }
-        if (!RUNNING_STATUS.equals(currentStatus)
-                || !RUNNING_STATUS.equals(currentBusinessStatus))
+        if (!RUNNING_STATUS.equals(status))
         {
-            throw new FlowableException("流程历史双状态值异常: " + processInstanceId);
+            throw new FlowableException("流程历史业务状态异常: " + processInstanceId);
         }
-
-        // 只有自然运行状态可收敛为 completed，并同步清理存储槽和缓存，避免最终记录不一致。
-        statusVariable.setTextValue(COMPLETED_STATUS);
-        statusVariable.setTextValue2(null);
-        statusVariable.setLongValue(null);
-        statusVariable.setDoubleValue(null);
-        statusVariable.setCachedValue(COMPLETED_STATUS);
-        Date completedTime = engineConfiguration.getClock().getCurrentTime();
-        statusVariable.setLastUpdatedTime(completedTime);
-        historicVariableManager.update(statusVariable, false);
         historicProcess.setBusinessStatus(COMPLETED_STATUS);
-        historicProcessManager.update(historicProcess, false);
+        manager.update(historicProcess, false);
         return true;
     }
 }

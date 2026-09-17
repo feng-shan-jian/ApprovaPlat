@@ -28,6 +28,31 @@ class WorkflowMultiInstanceContinuousReturnIntegrationTest
     @Autowired
     private WorkflowMultiInstanceStateProbe probe;
 
+    /** 同一实例连续两次退回/重提，各历史轮次保持原时刻；最后通过真实审批自然完成。 */
+    @Test
+    void repeatedReturnsKeepHistoricalRoundsAndFinishTheCurrentRound()
+    {
+        ProcessInstance instance = driver.startLifecycle("roundGroupFirstAll", "firstAllReturnStart",
+                "firstAllReview", List.of("201", "202"));
+        for (int cycle = 1; cycle <= 2; cycle++)
+        {
+            driver.returnGroup(probe.task(instance.getId(), "firstAllReview", "201"), "201");
+            probe.assertBusinessStatus(instance.getId(), "returned");
+            assertThat(probe.rounds(instance.getId()).get(cycle - 1).getRoundStatus())
+                    .isEqualTo(WorkflowMultiInstanceRoundStatus.RETURNED);
+            driver.resubmit(probe.returnedTask(instance.getId()), Map.of("requestTitle", "第" + cycle + "次重提"));
+            probe.assertBusinessStatus(instance.getId(), "running");
+            assertThat(probe.rounds(instance.getId()).subList(0, cycle))
+                    .allSatisfy(round -> assertThat(round.getRoundStatus()).isEqualTo(WorkflowMultiInstanceRoundStatus.REOPENED));
+            assertThat(probe.activeRound(instance.getId(), "firstAllReview").getRoundNo()).isEqualTo(cycle + 1);
+        }
+        completeAll(instance.getId(), "firstAllReview");
+        probe.assertBusinessStatus(instance.getId(), "completed");
+        assertThat(probe.rounds(instance.getId())).extracting(WfMultiInstanceRound::getRoundStatus)
+                .containsExactly(WorkflowMultiInstanceRoundStatus.REOPENED,
+                        WorkflowMultiInstanceRoundStatus.REOPENED, WorkflowMultiInstanceRoundStatus.COMPLETED);
+    }
+
     /**
      * 验证从第二个 ALL 部分完成组退回后，重提只恢复普通首审批并再次依次进入全部节点。
      *

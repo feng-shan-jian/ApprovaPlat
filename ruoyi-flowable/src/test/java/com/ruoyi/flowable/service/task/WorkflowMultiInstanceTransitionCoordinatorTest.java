@@ -1,6 +1,7 @@
 package com.ruoyi.flowable.service.task;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -13,6 +14,69 @@ import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
  */
 class WorkflowMultiInstanceTransitionCoordinatorTest
 {
+    /** 外来回调的定义、实例、节点、execution、操作者和重复取消仍是实际边界。 */
+    @Test
+    void returnRejectsMismatchedCallbacksAndObservesTheRealTarget()
+    {
+        var coordinator = new WorkflowMultiInstanceTransitionCoordinator();
+        var plan = returnExecutionPlan(returnPlan());
+        assertThatThrownBy(() -> coordinator.beginReturn(plan, "100")).isInstanceOf(ServiceException.class);
+        try (var scope = coordinator.beginReturn(plan, "201"))
+        {
+            String[] expected = { "pi", "pd", "approve", "root", "201" };
+            for (int field = 0; field < expected.length; field++)
+            {
+                String[] wrong = expected.clone(); wrong[field] = "other";
+                assertThatThrownBy(() -> coordinator.observeControlledRootCancellation(
+                        wrong[0], wrong[1], wrong[2], wrong[3], wrong[4])).isInstanceOf(ServiceException.class);
+            }
+            var cancellation = coordinator.observeControlledRootCancellation("pi", "pd", "approve", "root", "201");
+            assertThat(cancellation).isSameAs(plan);
+            assertThatThrownBy(() -> coordinator.observeControlledRootCancellation("pi", "pd", "approve", "root", "201"))
+                    .isInstanceOf(ServiceException.class);
+            assertThatThrownBy(() -> coordinator.resolveTransitionMembers("pi", "other", WorkflowMultiInstanceMode.ALL))
+                    .isInstanceOf(ServiceException.class);
+            coordinator.resolveTransitionMembers("pi", "approve", WorkflowMultiInstanceMode.ALL);
+            assertThatThrownBy(() -> coordinator.requirePersistedSnapshot("pi", "approve", WorkflowMultiInstanceMode.ALL,
+                    List.of("201", "202"), 4)).isInstanceOf(ServiceException.class);
+            coordinator.requirePersistedSnapshot("pi", "approve", WorkflowMultiInstanceMode.ALL, List.of("201", "202"), 3);
+            assertThatThrownBy(() -> coordinator.observeTemporaryTask("pi", "approve", "new-root", "new-task", "100"))
+                    .isInstanceOf(ServiceException.class);
+            assertThat(coordinator.observeTemporaryTask("pi", "approve", "new-root", "new-task", "201")).isTrue();
+            coordinator.requireReturnCompleted(scope, "new-task", true);
+        }
+        assertThat(coordinator.resolveTransitionMembers("pi", "approve", WorkflowMultiInstanceMode.ALL)).isNull();
+    }
+
+    @Test
+    void reopenUsesReturnedPlanAndRequiresOneCompleteNewRoot()
+    {
+        var coordinator = new WorkflowMultiInstanceTransitionCoordinator();
+        var returnedRound = round(WorkflowMultiInstanceRoundStatus.RETURNED, "applicant-task");
+        var plan = new MultiInstanceGroupReopenPlan(returnedRound,
+                new ReturnedApplicationSnapshot("applicant-task", "applicant-exec", "temporary-root", "pi", "pd", "approve", "100",
+                        ReturnedApplicationSnapshot.SourceKind.TEMPORARY_MULTI_INSTANCE_ROOT),
+                new WorkflowTaskMovementPolicy.ControlledReturnPathPlan(List.of("approve")),
+                List.of(replay("approve", returnedRound)));
+        assertThatThrownBy(() -> coordinator.beginReopen(plan, "201")).isInstanceOf(ServiceException.class);
+        try (var scope = coordinator.beginReopen(plan, "100"))
+        {
+            assertThatThrownBy(() -> coordinator.observeControlledRootCancellation("pi", "pd", "approve", "root", "100"))
+                    .isInstanceOf(ServiceException.class);
+            coordinator.observeControlledRootCancellation("pi", "pd", "approve", "temporary-root", "100");
+            assertThat(coordinator.resolveTransitionMembers("pi", "approve", WorkflowMultiInstanceMode.ALL)).isNotNull();
+            assertThat(coordinator.resolveTransitionMembers("pi", "approve", WorkflowMultiInstanceMode.ALL)).isNull();
+            coordinator.observeReopenedTask("pi", "approve", "reopened-root", "201");
+            assertThatThrownBy(() -> coordinator.observeReopenedTask("pi", "approve", "other-root", "202"))
+                    .isInstanceOf(ServiceException.class);
+            assertThatThrownBy(() -> coordinator.observeReopenedTask("pi", "approve", "reopened-root", "201"))
+                    .isInstanceOf(ServiceException.class);
+            assertThatThrownBy(() -> coordinator.requireReopenCompleted(scope, "reopened-root", List.of("201", "202"), true))
+                    .isInstanceOf(ServiceException.class);
+            coordinator.observeReopenedTask("pi", "approve", "reopened-root", "202");
+            coordinator.requireReopenCompleted(scope, "reopened-root", List.of("201", "202"), true);
+        }
+    }
     /**
      * 验证异常离开作用域仍清除线程状态，下一命令可以在同一线程重新开启。
      *

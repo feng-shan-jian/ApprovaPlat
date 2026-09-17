@@ -547,13 +547,28 @@ class WorkflowMultiInstanceEngineHarness
         return new Object();
     }
 
+    @Bean
+    Object completionListenerRegistration(ProcessEngine engine,
+            WorkflowNotificationService notifications)
+    {
+        var beans = new DefaultListableBeanFactory();
+        beans.registerSingleton("notifications", notifications);
+        beans.registerSingleton("copies", mock(WorkflowAutomaticCopyService.class));
+        beans.registerSingleton("outbox", mock(com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService.class));
+        engine.getRuntimeService().addEventListener(new com.ruoyi.flowable.service.process.WorkflowProcessCompletionStatusListener(
+                beans.getBeanProvider(WorkflowAutomaticCopyService.class),
+                beans.getBeanProvider(WorkflowNotificationService.class),
+                beans.getBeanProvider(com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService.class)));
+        return new Object();
+    }
+
     /**
      * 部署真实轮次与组退回 BPMN，并持久化开始表单快照。
      *
      * @return String，部署主键
      */
     @Bean("workflowDeploymentId")
-    @DependsOn({ "userTaskListener", "interruptionListenerRegistration" })
+    @DependsOn({ "userTaskListener", "interruptionListenerRegistration", "completionListenerRegistration" })
     String workflowDeploymentId(RepositoryService repositoryService,
             WorkflowDeploymentArtifactRepository artifactRepository)
     {

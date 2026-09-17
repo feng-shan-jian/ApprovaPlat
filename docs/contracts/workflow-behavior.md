@@ -13,6 +13,8 @@
 
 ## 流程状态与动作
 
+当前业务状态只写 Flowable `businessStatus`，API `processStatus` 仍结合真实引擎活动、挂起、结束事实投影。流程变量 `processStatus` 不再持久化；历史轮次、动作评论和表单快照保持原时刻语义。已有库必须按[状态切换与恢复说明](../database/workflow-business-status-cutover.md)完成离线迁移，不能新旧应用混跑。
+
 | 动作 | 核心约束 |
 | --- | --- |
 | 发起 | 使用最新激活定义或明确版本，校验部署表单快照、身份、变量和附件绑定 |
@@ -77,9 +79,9 @@ Flowable 8 的 `DelegateTask.setAssignee` 在创建中更新任务对象；公�
 | `resubmitApplication` | 仅原发起人可重提；统一从可信历史首审批继续，来源轮次只承担审计关闭作用，后续 ALL/ANY 自然重放 |
 | `isTaskReturnAllowed` | 对满足正式退回全部前置条件的当前任务返回 `true`，并在只读事务中完成计算 |
 
-普通串行退回的冻结写入顺序为：审计 comment → 迁移标记 → Flowable 状态迁移 → 冻结办理配置 → 写入申请人局部变量 → 清除候选人/候选组/owner → 同步流程变量与 business status 为 `returned` → 独占指派发起人 → 持久化抄送 → 写后核验 → 稳定任务通知 → 清除迁移标记。普通重提的冻结写入顺序为：附件绑定 → 表单变量和提交快照 → 审计 comment → 迁移标记 → 清除退回局部变量 → 恢复办理配置 → 同步双状态为 `running` → 写后核验 → 稳定任务通知 → 清除迁移标记。
+普通串行退回的冻结写入顺序为：审计 comment → 迁移标记 → Flowable 状态迁移 → 冻结办理配置 → 写入申请人局部变量 → 清除候选人/候选组/owner → 写入 businessStatus 为 `returned` → 独占指派发起人 → 持久化抄送 → 写后核验 → 稳定任务通知 → 清除迁移标记。普通重提的冻结写入顺序为：附件绑定 → 表单变量和提交快照 → 审计 comment → 迁移标记 → 清除退回局部变量 → 恢复办理配置 → 写入 businessStatus 为 `running` → 写后核验 → 稳定任务通知 → 清除迁移标记。
 
-受控 ALL/ANY 整组退回的冻结写入顺序为：冻结抄送计划 → 审计 comment → 迁移标记/Coordinator 协议 → 撤销来源任务通知 → Flowable 整组迁移 → 关闭来源任务 SLA → 冻结首审批任务办理配置并建立唯一发起人退回态 → `ACTIVE→RETURNED` 来源轮次 CAS → 持久化抄送 → 轮次、执行树、双状态及 Coordinator 写后对账 → 稳定任务通知 → 清除迁移标记。受控来源重提的冻结写入顺序为：附件绑定 → 表单变量和提交快照 → 审计 comment → 迁移标记 → 撤销待修改任务通知 → `RETURNED→REOPENED` 来源轮次 CAS → 同步双状态为 `running`。普通首审批保持当前 task/execution 并恢复冻结办理配置；受控首审批再开启 Coordinator、取消临时根、按该节点权威来源建新根和 revision 0 正式轮次。两类路径均清除后续受控节点的先前运行状态，使其自然进入时各自重新初始化。最后完成 SLA、轮次/成员/计数对账、稳定通知并清除迁移标记。
+受控 ALL/ANY 整组退回的冻结写入顺序为：冻结抄送计划 → 审计 comment → 迁移标记/Coordinator 协议 → 撤销来源任务通知 → Flowable 整组迁移 → 关闭来源任务 SLA → 冻结首审批任务办理配置并建立唯一发起人退回态 → `ACTIVE→RETURNED` 来源轮次 CAS → 持久化抄送 → 轮次、执行树、业务状态及 Coordinator 真实回调观测 → 稳定任务通知 → 清除迁移标记。受控来源重提的冻结写入顺序为：附件绑定 → 表单变量和提交快照 → 审计 comment → 迁移标记 → 撤销待修改任务通知 → `RETURNED→REOPENED` 来源轮次 CAS → 写入 businessStatus 为 `running`。普通首审批保持当前 task/execution 并恢复冻结办理配置；受控首审批再开启 Coordinator、取消临时根、按该节点权威来源建新根和 revision 0 正式轮次。两类路径均清除后续受控节点的先前运行状态，使其自然进入时各自重新初始化。最后完成 SLA、轮次/成员/计数对账、稳定通知并清除迁移标记。
 
 任一步失败都由同一事务回滚 Flowable、轮次 CAS、附件、SLA、抄送、通知和审计。成员顺序、ALL/ANY 模式、目标多实例节点和 revision 来自服务端实时事实与冻结轮次快照；缺失、重复、漂移、成员不一致或 CAS 冲突返回稳定冲突。Flowable 引擎独占维护 `nrOfInstances`、`nrOfActiveInstances`、`nrOfCompletedInstances` 三个计数。
 

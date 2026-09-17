@@ -229,7 +229,7 @@ class WorkflowReturnedApplicantListenerContractTest
         {
             String id = harness.processEngine().getRuntimeService().createProcessInstanceBuilder()
                     .processDefinitionKey("candidateTaskCreation").businessStatus("running")
-                    .variables(Map.of("initiator", "100", "processStatus", "running")).start().getId();
+                    .variables(Map.of("initiator", "100")).start().getId();
             return tasks.createTaskQuery().processInstanceId(id).singleResult();
         }
         finally { Authentication.setAuthenticatedUserId(null); }

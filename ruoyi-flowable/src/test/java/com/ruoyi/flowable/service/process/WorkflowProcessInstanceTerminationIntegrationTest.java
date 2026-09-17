@@ -150,7 +150,7 @@ class WorkflowProcessInstanceTerminationIntegrationTest
         assertThat(historicRoot.getBusinessStatus()).isEqualTo("canceled");
         assertThat(historyService.createHistoricVariableInstanceQuery()
                 .processInstanceId(root.getId()).variableName("processStatus")
-                .singleResult().getValue()).isEqualTo("canceled");
+                .singleResult()).isNull();
         for (ProcessInstance instance : tree)
         {
             HistoricProcessInstance historicInstance = historyService
@@ -161,7 +161,7 @@ class WorkflowProcessInstanceTerminationIntegrationTest
             assertThat(historicInstance.getBusinessStatus()).isEqualTo("canceled");
             assertThat(historyService.createHistoricVariableInstanceQuery()
                     .processInstanceId(instance.getId()).variableName("processStatus")
-                    .singleResult().getValue()).isEqualTo("canceled");
+                    .singleResult()).isNull();
         }
         for (Task task : tasksBeforeSuspend)
         {

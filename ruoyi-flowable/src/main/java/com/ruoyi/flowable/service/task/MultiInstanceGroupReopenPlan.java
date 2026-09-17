@@ -16,7 +16,7 @@ import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
 public record MultiInstanceGroupReopenPlan(MultiInstanceRoundSnapshot round,
         ReturnedApplicationSnapshot application,
         WorkflowTaskMovementPolicy.ControlledReturnPathPlan controlledPath,
-        List<ControlledMultiInstanceReplaySnapshot> replaySnapshots)
+        List<ControlledMultiInstanceReplaySnapshot> replaySnapshots) implements MultiInstanceTransitionPlan
 {
     /**
      * 校验旧轮和申请人任务严格属于同一流程及正式关联。

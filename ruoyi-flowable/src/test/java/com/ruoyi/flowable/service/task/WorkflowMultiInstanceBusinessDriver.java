@@ -95,7 +95,8 @@ final class WorkflowMultiInstanceBusinessDriver
         Map<String, Object> all = new LinkedHashMap<>(variables);
         all.put(WorkflowMultiInstanceVariables.userCollectionName(activityId),
                 members.stream().map(Long::valueOf).toList());
-        return runtimeService.startProcessInstanceByKey(processKey, all);
+        return runtimeService.createProcessInstanceBuilder().processDefinitionKey(processKey)
+                .businessStatus("running").variables(all).start();
     }
 
     /**
@@ -105,7 +106,7 @@ final class WorkflowMultiInstanceBusinessDriver
      * @param startNodeId String，开始节点 ID
      * @param activityId String，受控节点 ID
      * @param members List&lt;String&gt;，有序成员
-     * @return ProcessInstance，带运行双状态的真实实例
+     * @return ProcessInstance，带运行业务状态的真实实例
      */
     ProcessInstance startLifecycle(String processKey, String startNodeId,
             String activityId, List<String> members)
@@ -120,7 +121,7 @@ final class WorkflowMultiInstanceBusinessDriver
      * @param processKey String，流程定义 key
      * @param startNodeId String，开始节点 ID
      * @param membersByActivity Map&lt;String,List&lt;String&gt;&gt;，各节点服务端成员来源变量
-     * @return ProcessInstance，带运行双状态的真实实例
+     * @return ProcessInstance，带运行业务状态的真实实例
      */
     ProcessInstance startLifecycle(String processKey, String startNodeId,
             Map<String, List<String>> membersByActivity)
@@ -132,8 +133,6 @@ final class WorkflowMultiInstanceBusinessDriver
         variables.put("requestTitle", "原始申请");
         // 真实发起服务会冻结根流程发起人；普通任务参与者规则只能从该服务端变量解析申请人。
         variables.put(WorkflowProcessStartService.INITIATOR_VARIABLE, APPLICANT_ID);
-        variables.put(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
-                WorkflowProcessStartService.RUNNING_STATUS);
         variables.put(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
                 WorkflowFormSubmissionSnapshotCodec.encodeStart(deploymentId,
                         "TEMPLATE", 1L, "startForm", startNodeId,

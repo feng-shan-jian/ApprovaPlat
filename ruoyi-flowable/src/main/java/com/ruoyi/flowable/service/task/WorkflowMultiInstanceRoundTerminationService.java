@@ -85,7 +85,7 @@ public class WorkflowMultiInstanceRoundTerminationService
         {
             return;
         }
-        MultiInstanceTransitionCancellation controlled =
+        MultiInstanceTransitionPlan controlled =
                 transitionObserver.observeControlledRootCancellation(
                         root.processInstanceId(), root.processDefinitionId(),
                         root.activityId(), root.rootExecutionId(),
@@ -259,58 +259,50 @@ public class WorkflowMultiInstanceRoundTerminationService
      * 核对受控迁移取消授权与实时根及旧轮次完全一致。
      *
      * @param root ControlledMultiInstanceRootSnapshot，取消事件实时根事实
-     * @param controlled MultiInstanceTransitionCancellation，Coordinator 授权事实
+     * @param controlled MultiInstanceTransitionPlan，Coordinator 授权事实
      * @return void，任一字段漂移时中止当前迁移
      */
     private void requireControlledCancellation(ControlledMultiInstanceRootSnapshot root,
-            MultiInstanceTransitionCancellation controlled)
+            MultiInstanceTransitionPlan controlled)
     {
-        List<MultiInstanceRoundSnapshot> selected = roundRepository.findByRoundIds(
-                Set.of(controlled.roundId()));
-        if (selected.size() != 1)
+        MultiInstanceRoundSnapshot planned = controlled.round();
+        List<MultiInstanceRoundSnapshot> selected = roundRepository.findByRoundIds(Set.of(planned.roundId()));
+        if (selected.size() != 1) throw dataError();
+        MultiInstanceRoundSnapshot round = selected.get(0);
+        // 轮次在计划建立后经过当前迁移命令：RETURN 尚为 ACTIVE，REOPEN 已执行旧轮 CAS。
+        if (!round.deployId().equals(planned.deployId())
+                || !round.processDefinitionId().equals(planned.processDefinitionId())
+                || !round.processInstanceId().equals(planned.processInstanceId())
+                || !round.activityId().equals(planned.activityId())
+                || !round.rootExecutionId().equals(planned.rootExecutionId())
+                || round.mode() != planned.mode() || round.revision() != planned.revision()
+                || !round.members().equals(planned.members()))
         {
             throw dataError();
         }
-        MultiInstanceRoundSnapshot round = selected.get(0);
-        WorkflowMultiInstanceRoundStatus expectedStatus =
-                controlled.action() == MultiInstanceTransitionAction.RETURN
-                        ? WorkflowMultiInstanceRoundStatus.ACTIVE
-                        : WorkflowMultiInstanceRoundStatus.REOPENED;
-        if (round.roundId() != controlled.roundId()
-                || !round.deployId().equals(controlled.deployId())
-                || !round.processDefinitionId().equals(
-                        controlled.processDefinitionId())
-                || !round.processInstanceId().equals(
-                        controlled.processInstanceId())
-                || !round.activityId().equals(controlled.activityId())
-                || !round.rootExecutionId().equals(
-                        controlled.roundRootExecutionId())
-                || round.mode() != controlled.mode()
-                || round.revision() != controlled.revision()
-                || !round.members().equals(controlled.members())
-                || !root.deployId().equals(controlled.deployId())
-                || !root.processDefinitionId().equals(
-                        controlled.processDefinitionId())
-                || !root.processInstanceId().equals(
-                        controlled.processInstanceId())
-                || !root.activityId().equals(
-                        controlled.cancelledActivityId())
-                || !root.rootExecutionId().equals(
-                        controlled.cancelledRootExecutionId())
-                || root.mode() != controlled.cancelledMode()
-                || root.revision() != controlled.cancelledRevision()
-                || !root.members().equals(controlled.cancelledMembers())
-                || round.status() != expectedStatus
-                || (controlled.action() == MultiInstanceTransitionAction.RETURN
-                        && (!controlled.activityId().equals(
-                                controlled.cancelledActivityId())
-                                || !round.rootExecutionId().equals(
-                                        root.rootExecutionId())))
-                || (controlled.action() == MultiInstanceTransitionAction.REOPEN
-                        && (!Objects.equals(round.returnSourceTaskId(),
-                                controlled.sourceTaskId())
-                                || !Objects.equals(round.applicantTaskId(),
-                                        controlled.applicantTaskId()))))
+        MultiInstanceRoundSnapshot cancelledRound;
+        if (controlled instanceof MultiInstanceGroupReturnExecutionPlan)
+        {
+            if (round.status() != WorkflowMultiInstanceRoundStatus.ACTIVE) throw dataError();
+            cancelledRound = planned;
+        }
+        else
+        {
+            MultiInstanceGroupReopenPlan reopen = (MultiInstanceGroupReopenPlan) controlled;
+            if (round.status() != WorkflowMultiInstanceRoundStatus.REOPENED
+                    || !Objects.equals(round.returnSourceTaskId(), planned.returnSourceTaskId())
+                    || !Objects.equals(round.applicantTaskId(), reopen.application().taskId()))
+            {
+                throw dataError();
+            }
+            cancelledRound = reopen.targetReplay().round();
+        }
+        // 实例、节点、execution 和操作者已由 Coordinator 对同一个 root 回调匹配；
+        // 这里核对实际引擎变量与被取消节点的冻结成员事实，不能删除这一时间边界。
+        if (!root.deployId().equals(planned.deployId())
+                || root.mode() != cancelledRound.mode()
+                || root.revision() != cancelledRound.revision()
+                || !root.members().equals(cancelledRound.members()))
         {
             throw dataError();
         }

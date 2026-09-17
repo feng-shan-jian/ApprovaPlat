@@ -20,7 +20,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
 {
     /** 当前场景独占且在 close 中显式关闭的 H2 数据源。 */
-    private final JdbcDataSource dataSource;
+    private final DataSource dataSource;
 
     /** Flowable 与测试业务对象共用的数据源事务管理器。 */
     private final DataSourceTransactionManager transactionManager;
@@ -44,7 +44,7 @@ public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
      * @param processEngine ProcessEngine，真实 Flowable 引擎
      * @return 无返回值，实例只能由 start 创建
      */
-    private WorkflowFlowableEngineTestSupport(JdbcDataSource dataSource,
+    private WorkflowFlowableEngineTestSupport(DataSource dataSource,
             DataSourceTransactionManager transactionManager,
             JdbcTemplate jdbcTemplate, TransactionTemplate transactionTemplate,
             ProcessEngine processEngine)
@@ -111,6 +111,27 @@ public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
             closeAfterStartupFailure(processEngine, dataSource, exception);
             throw exception;
         }
+    }
+
+    /** 使用调用方已经核验并负责清理的 MySQL 正式基线，不创建或迁移数据库表。 */
+    public static WorkflowFlowableEngineTestSupport startOnExistingDatabase(
+            DataSource dataSource, Map<Object, Object> beans)
+    {
+        DataSourceTransactionManager manager = new DataSourceTransactionManager(dataSource);
+        TransactionTemplate transaction = new TransactionTemplate(manager);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        SpringProcessEngineConfiguration configuration = new SpringProcessEngineConfiguration();
+        configuration.setDataSource(dataSource);
+        configuration.setTransactionManager(manager);
+        configuration.setDatabaseSchemaUpdate("false");
+        configuration.setDisableIdmEngine(true);
+        configuration.setDisableEventRegistry(true);
+        configuration.setAsyncExecutorActivate(false);
+        configuration.setHistory("full");
+        configuration.setBeans(Map.copyOf(beans));
+        com.ruoyi.flowable.engine.WorkflowCompensationLifecycle.configure(configuration);
+        return new WorkflowFlowableEngineTestSupport(dataSource, manager,
+                new JdbcTemplate(dataSource), transaction, configuration.buildProcessEngine());
     }
 
     /**
@@ -199,7 +220,7 @@ public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
         }
         try
         {
-            WorkflowH2SchemaMapperSupport.shutdown(dataSource);
+            if (dataSource instanceof JdbcDataSource) WorkflowH2SchemaMapperSupport.shutdown(dataSource);
         }
         catch (RuntimeException exception)
         {
@@ -242,7 +263,7 @@ public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
         }
         try
         {
-            WorkflowH2SchemaMapperSupport.shutdown(dataSource);
+            if (dataSource instanceof JdbcDataSource) WorkflowH2SchemaMapperSupport.shutdown(dataSource);
         }
         catch (RuntimeException closeException)
         {

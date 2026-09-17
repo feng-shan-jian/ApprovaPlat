@@ -59,6 +59,8 @@ class WorkflowMultiInstanceGroupRollbackIntegrationTest
         assertThat(probe.captureGroup(instance.getId())).isEqualTo(before);
         assertThat(probe.activeRound(instance.getId(), "firstAllReview")
                 .getRoundStatus()).isEqualTo(WorkflowMultiInstanceRoundStatus.ACTIVE);
+        driver.returnGroup(source, "201");
+        probe.assertBusinessStatus(instance.getId(), "returned");
     }
 
     /**
@@ -92,7 +94,11 @@ class WorkflowMultiInstanceGroupRollbackIntegrationTest
         assertThat(rolledBack.nodeKey()).isNull();
         assertThat(rolledBack.boundTime()).isNull();
         assertThat(probe.captureGroup(instance.getId())).isEqualTo(before);
-        probe.assertDoubleStatus(instance.getId(),
+        probe.assertBusinessStatus(instance.getId(),
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
+        // 同线程实际重试重新进入 Coordinator，证明异常命令没有留下作用域或部分绑定。
+        driver.resubmit(applicantTask, Map.of("requestTitle", "回滚后重提", "evidence", List.of(attachmentId)));
+        probe.assertBusinessStatus(instance.getId(), "running");
+        assertThat(probe.attachment(attachmentId).status()).isEqualTo(WorkflowAttachmentStatus.BOUND);
     }
 }

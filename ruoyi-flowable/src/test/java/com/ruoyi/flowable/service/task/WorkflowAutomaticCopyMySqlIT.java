@@ -58,6 +58,8 @@ class WorkflowAutomaticCopyMySqlIT
     private final List<String> deployments = new ArrayList<>();
     private String processKey;
     private long base;
+    private WorkflowProcessCompletionStatusListener completionListener;
+    private final List<org.flowable.common.engine.api.delegate.event.FlowableEngineEntityEvent> completionEvents = new ArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception
@@ -81,9 +83,16 @@ class WorkflowAutomaticCopyMySqlIT
         configuration.setDatabaseSchemaUpdate("false"); configuration.setHistory("full");
         configuration.setDisableIdmEngine(true); configuration.setDisableEventRegistry(true);
         configuration.setAsyncExecutorActivate(false); configuration.setBeans(Map.of("userTaskListener", binding));
-        configuration.setEventListeners(List.of(new WorkflowProcessCompletionStatusListener(
+        completionListener = new WorkflowProcessCompletionStatusListener(
                 beans.getBeanProvider(WorkflowAutomaticCopyService.class), beans.getBeanProvider(WorkflowNotificationService.class),
-                beans.getBeanProvider(WorkflowNotificationOutboxService.class))));
+                beans.getBeanProvider(WorkflowNotificationOutboxService.class));
+        configuration.setEventListeners(List.of(completionListener,
+                new org.flowable.engine.delegate.event.AbstractFlowableEngineEventListener(
+                        Set.of(org.flowable.common.engine.api.delegate.event.FlowableEngineEventType.PROCESS_COMPLETED))
+                {
+                    @Override protected void processCompleted(org.flowable.common.engine.api.delegate.event.FlowableEngineEntityEvent event)
+                    { completionEvents.add(event); }
+                }));
         engine = configuration.buildProcessEngine();
         identityMapper = spy(WorkflowH2SchemaMapperSupport.createSpringMapper(dataSource, "copy-identities",
                 WorkflowIdentityMapper.class, "mapper/flowable/WorkflowIdentityMapper.xml"));
@@ -253,6 +262,51 @@ class WorkflowAutomaticCopyMySqlIT
                 Long.class, base, base + 3)).isEqualTo(3);
         assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(review.getProcessInstanceId()).singleResult().getBusinessStatus()).isEqualTo("completed");
         verify(copyHistory, times(1)).createHistoricVariableInstanceQuery();
+        assertThat(engine.getHistoryService().createHistoricVariableInstanceQuery()
+                .processInstanceId(review.getProcessInstanceId()).variableName("processStatus").count()).isZero();
+        assertThat(completionEvents).hasSize(1);
+        engine.getManagementService().executeCommand(context -> { completionListener.onEvent(completionEvents.get(0)); return null; });
+        assertThat(copyCount()).isEqualTo(9);
+        assertThat(notificationCount("wf_notification_inbox")).isEqualTo(6);
+        assertThat(notificationCount("wf_notification_outbox")).isEqualTo(6);
+    }
+
+    /** 完成事件已经改写业务状态并写入抄送/通知后，真实 SQL 故障仍回滚整条完成命令。 */
+    @Test
+    void completionFailureRollsBackBusinessStatusCopiesAndNotificationsThenRetries()
+    {
+        deploy("", "", rule("PROCESS_COMPLETED", false)); policy("ENABLED", "completion rollback");
+        Task first = start();
+        engine.getTaskService().complete(first.getId());
+        Task last = currentTask(first.getProcessInstanceId());
+        doAnswer(invocation ->
+        {
+            Object result = invocation.callRealMethod();
+            if (!((NotificationPlan) invocation.getArgument(0)).isEmpty())
+            {
+                assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery()
+                        .processInstanceId(first.getProcessInstanceId()).singleResult().getBusinessStatus()).isEqualTo("completed");
+                assertThat(copyCount()).isEqualTo(3);
+                jdbc.queryForList("select id from c05_missing_completion_table");
+            }
+            return result;
+        }).when(writer).write(any());
+        assertThatThrownBy(() -> engine.getTaskService().complete(last.getId()))
+                .isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(engine.getTaskService().createTaskQuery().taskId(last.getId()).count()).isOne();
+        assertThat(engine.getRuntimeService().createProcessInstanceQuery().processInstanceId(first.getProcessInstanceId())
+                .singleResult().getBusinessStatus()).isEqualTo("running");
+        assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(first.getProcessInstanceId())
+                .singleResult().getBusinessStatus()).isEqualTo("running");
+        assertThat(copyCount()).isZero();
+        assertThat(notificationCount("wf_notification_inbox")).isZero();
+        assertThat(notificationCount("wf_notification_outbox")).isZero();
+        doCallRealMethod().when(writer).write(any());
+        engine.getTaskService().complete(last.getId());
+        assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(first.getProcessInstanceId())
+                .singleResult().getBusinessStatus()).isEqualTo("completed");
+        assertThat(copyCount()).isEqualTo(3);
+        assertThat(notificationCount("wf_notification_inbox")).isEqualTo(3);
     }
 
     @Test
@@ -408,7 +462,7 @@ class WorkflowAutomaticCopyMySqlIT
     {
         Authentication.setAuthenticatedUserId(Long.toString(base));
         String id = engine.getRuntimeService().createProcessInstanceBuilder().processDefinitionKey(processKey).businessStatus("running")
-                .variables(Map.of("initiator", Long.toString(base), "processStatus", "running", "copyUsers", List.of(base + 1, base + 1, base + 2, base + 3),
+                .variables(Map.of("initiator", Long.toString(base), "copyUsers", List.of(base + 1, base + 1, base + 2, base + 3),
                         "unrelated", "must not be loaded for copy")).start().getId();
         return currentTask(id);
     }

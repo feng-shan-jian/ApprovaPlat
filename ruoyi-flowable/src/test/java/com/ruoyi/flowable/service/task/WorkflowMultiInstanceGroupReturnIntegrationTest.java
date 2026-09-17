@@ -12,7 +12,6 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import com.ruoyi.flowable.domain.WfMultiInstanceRound;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceRoundStatus;
-import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 
 /**
  * 通过生产生命周期服务、真实 Flowable 及正式 H2 Mapper 验证阶段三整组退回事务。
@@ -32,7 +31,7 @@ class WorkflowMultiInstanceGroupReturnIntegrationTest
     /**
      * 验证后续 ALL 三人组已有一人完成时，另一成员仍能撤销整个活动根并生成唯一申请人任务。
      *
-     * @return void，成员快照、计数、退回关联、双状态或任务隔离任一漂移时失败
+     * @return void，成员快照、计数、退回关联、业务状态或任务隔离任一漂移时失败
      */
     @Test
     void returnsWholeLaterAllRoundAfterOneMemberCompleted()
@@ -70,7 +69,7 @@ class WorkflowMultiInstanceGroupReturnIntegrationTest
                 WorkflowReturnedApplicationProtocol.RETURN_ASSIGNMENT_VARIABLE))
                 .isInstanceOf(String.class);
         assertThat(probe.tasks(instance.getId(), "laterAllReview")).isEmpty();
-        probe.assertDoubleStatus(instance.getId(),
+        probe.assertBusinessStatus(instance.getId(),
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
 
         assertThat(probe.rounds(instance.getId())).singleElement().satisfies(round ->
@@ -128,10 +127,7 @@ class WorkflowMultiInstanceGroupReturnIntegrationTest
             assertThat(round.getReturnTime()).isNotNull();
             assertThat(round.getTerminateTime()).isNull();
         });
-        probe.assertDoubleStatus(instance.getId(),
+        probe.assertBusinessStatus(instance.getId(),
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
-        assertThat(probe.variable(instance.getId(),
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE))
-                .isEqualTo(WorkflowReturnedApplicationProtocol.RETURNED_STATUS);
     }
 }

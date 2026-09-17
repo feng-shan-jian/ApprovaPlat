@@ -255,19 +255,24 @@ final class WorkflowMultiInstanceStateProbe
     }
 
     /**
-     * 核对流程变量状态和 Flowable businessStatus。
+     * 核对运行/结束后的唯一业务状态和旧变量不存在。
      *
      * @param processInstanceId String，流程实例主键
      * @param expected String，预期状态
      * @return void，无返回值
      */
-    void assertDoubleStatus(String processInstanceId, String expected)
+    void assertBusinessStatus(String processInstanceId, String expected)
     {
-        assertThat(variable(processInstanceId,
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE))
-                .isEqualTo(expected);
-        assertThat(processInstance(processInstanceId).getBusinessStatus())
-                .isEqualTo(expected);
+        var running = processInstance(processInstanceId);
+        if (running != null)
+        {
+            assertThat(running.getBusinessStatus()).isEqualTo(expected);
+            assertThat(variable(processInstanceId, "processStatus")).isNull();
+        }
+        assertThat(historyService.createHistoricProcessInstanceQuery().processInstanceId(processInstanceId)
+                .singleResult().getBusinessStatus()).isEqualTo(expected);
+        assertThat(historyService.createHistoricVariableInstanceQuery().processInstanceId(processInstanceId)
+                .variableName("processStatus").count()).isZero();
     }
 
     /**
@@ -294,7 +299,10 @@ final class WorkflowMultiInstanceStateProbe
             locals.put(execution.id(), new TreeMap<>(
                     runtimeService.getVariablesLocal(execution.id())));
         }
+        ProcessInstance instance = processInstance(processInstanceId);
         return new CoreSnapshot(tasks, executions,
+                instance == null ? null : instance.getBusinessStatus(),
+                historicBusinessStatus(processInstanceId),
                 processInstance(processInstanceId) == null ? Map.of()
                         : new TreeMap<>(runtimeService.getVariables(processInstanceId)),
                 locals, rounds(processInstanceId).stream()
@@ -368,6 +376,7 @@ final class WorkflowMultiInstanceStateProbe
     }
 
     record CoreSnapshot(List<TaskFact> tasks, List<ExecutionFact> executions,
+            String businessStatus, String historicBusinessStatus,
             Map<String, Object> processVariables,
             Map<String, Map<String, Object>> executionVariables,
             List<RoundFact> rounds)

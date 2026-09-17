@@ -22,7 +22,6 @@ import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.runtime.Execution;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.engine.task.Comment;
-import org.flowable.variable.api.history.HistoricVariableInstance;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
@@ -77,9 +76,6 @@ public class WorkflowProcessInstanceService
 
     /** 发起人取消本人实例权限。 */
     private static final String CANCEL_PERMISSION = "workflow:process:cancel";
-
-    /** 服务端维护的流程状态变量名。 */
-    private static final String PROCESS_STATUS_VARIABLE = "processStatus";
 
     /** 发起人取消流程后的持久化状态。 */
     private static final String CANCELED_STATUS = "canceled";
@@ -423,11 +419,9 @@ public class WorkflowProcessInstanceService
                 throw dataError("流程终止审计写入参数不完整");
             }
 
-            // 每个 CallActivity 实例都是可独立查询的正式对象，级联删除前必须各自收敛双状态。
+            // 每个 CallActivity 实例都是可独立查询的正式对象，级联删除前必须各自收敛业务状态。
             for (String processTreeInstanceId : context.processTreeInstanceIds())
             {
-                runtimeService.setVariable(processTreeInstanceId, PROCESS_STATUS_VARIABLE,
-                        processStatus);
                 runtimeService.updateBusinessStatus(processTreeInstanceId, processStatus);
             }
             // 上述引擎写入已经取得 Flowable 写锁；此时执行树仍完整，使用普通 SELECT 冻结
@@ -700,7 +694,7 @@ public class WorkflowProcessInstanceService
     }
 
     /**
-     * 统一复核根终止后的运行树、双状态、历史变量和可选流程审计 comment。
+     * 统一复核根终止后的运行树、业务状态和可选流程审计 comment。
      *
      * @param context RootTerminationContext，终止前冻结的根和完整执行树
      * @param processStatus String，本次动作预期持久化的业务终态
@@ -742,15 +736,8 @@ public class WorkflowProcessInstanceService
         for (String processTreeInstanceId : processTreeInstanceIds)
         {
             HistoricProcessInstance historic = findHistoricInstance(processTreeInstanceId);
-            HistoricVariableInstance statusVariable = historyService
-                    .createHistoricVariableInstanceQuery()
-                    .processInstanceId(processTreeInstanceId)
-                    .variableName(PROCESS_STATUS_VARIABLE)
-                    .singleResult();
             if (historic == null || historic.getEndTime() == null
-                    || !processStatus.equals(historic.getBusinessStatus())
-                    || statusVariable == null
-                    || !processStatus.equals(statusVariable.getValue()))
+                    || !processStatus.equals(historic.getBusinessStatus()))
             {
                 throw new ServiceException("流程实例终止状态记录异常", HttpStatus.ERROR);
             }
@@ -1082,7 +1069,7 @@ public class WorkflowProcessInstanceService
      * 终止授权结果。
      *
      * @param action String，结构化审计动作 CANCEL 或 TERMINATE
-     * @param processStatus String，历史流程变量 canceled 或 terminated
+     * @param processStatus String，历史业务状态 canceled 或 terminated
      */
     private record TerminationDecision(String action, String processStatus)
     {

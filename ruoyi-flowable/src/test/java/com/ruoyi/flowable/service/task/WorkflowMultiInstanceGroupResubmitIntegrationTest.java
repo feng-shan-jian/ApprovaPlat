@@ -76,7 +76,7 @@ class WorkflowMultiInstanceGroupResubmitIntegrationTest
         assertThat(probe.variable(instance.getId(),
                 WorkflowMultiInstanceVariables.revisionName("laterAllReview")))
                 .isNull();
-        probe.assertDoubleStatus(instance.getId(), WorkflowProcessStartService.RUNNING_STATUS);
+        probe.assertBusinessStatus(instance.getId(), WorkflowProcessStartService.RUNNING_STATUS);
         WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot snapshot =
                 WorkflowFormSubmissionSnapshotCodec.decode((String) probe.variable(
                         instance.getId(), WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME));
@@ -132,6 +132,7 @@ class WorkflowMultiInstanceGroupResubmitIntegrationTest
         driver.complete(probe.task(instance.getId(), "firstAnyReview", "203"), 0);
 
         assertThat(probe.processInstance(instance.getId())).isNull();
+        probe.assertBusinessStatus(instance.getId(), "completed");
         assertThat(probe.tasks(instance.getId(), "firstAnyReview")).isEmpty();
         assertThat(probe.rounds(instance.getId()))
                 .extracting(WfMultiInstanceRound::getRoundStatus)

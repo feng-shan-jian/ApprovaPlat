@@ -431,6 +431,8 @@ class WorkflowProcessStartChainIntegrationTest
     /** 加入 Spring 事务代理的统一 Flowable 写边界。 */
     private WorkflowEngineOperations engineOperations;
     private WorkflowProcessDefinitionQueryService queryService;
+    private com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService automaticCopies;
+    private com.ruoyi.flowable.service.notification.WorkflowNotificationService notifications;
     private WorkflowProcessStartService startService;
     private WorkflowProcessDraftService draftService;
     /** 当前真实部署制品仓库，用于为测试内新增定义写入不可变表单和发起规则。 */
@@ -451,6 +453,16 @@ class WorkflowProcessStartChainIntegrationTest
                 "start-chain", Map.of());
         DataSource dataSource = engineInfrastructure.dataSource();
         processEngine = engineInfrastructure.processEngine();
+        var listenerBeans = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+        automaticCopies = mock(com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService.class);
+        notifications = mock(com.ruoyi.flowable.service.notification.WorkflowNotificationService.class);
+        listenerBeans.registerSingleton("copies", automaticCopies);
+        listenerBeans.registerSingleton("notifications", notifications);
+        listenerBeans.registerSingleton("outbox", mock(com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService.class));
+        processEngine.getRuntimeService().addEventListener(new WorkflowProcessCompletionStatusListener(
+                listenerBeans.getBeanProvider(com.ruoyi.flowable.service.task.WorkflowAutomaticCopyService.class),
+                listenerBeans.getBeanProvider(com.ruoyi.flowable.service.notification.WorkflowNotificationService.class),
+                listenerBeans.getBeanProvider(com.ruoyi.flowable.service.notification.WorkflowNotificationOutboxService.class)));
         repositoryService = spy(processEngine.getRepositoryService());
         runtimeService = spy(processEngine.getRuntimeService());
 
@@ -583,7 +595,7 @@ class WorkflowProcessStartChainIntegrationTest
         Map<String, Object> engineVariables = runtimeService.getVariables(
                 first.processInstanceId());
         assertThat(engineVariables).containsEntry("initiator", USER_ID)
-                .containsEntry("processStatus", "running")
+                .doesNotContainKey("processStatus")
                 .containsEntry("requester", persisted.get("requester"));
         WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot submissionSnapshot =
                 WorkflowFormSubmissionSnapshotCodec.decode((String) engineVariables.get(
@@ -761,7 +773,7 @@ class WorkflowProcessStartChainIntegrationTest
     /**
      * 验证 start 到 end 的同步流程在引擎执行前已原子写入 businessStatus。
      *
-     * @return void，瞬时流程启动失败、残留活动实例或历史状态不是 running 时失败
+     * @return void，瞬时流程启动失败、残留活动实例或历史状态不是 completed 时失败
      */
     @Test
     void startsSynchronousEndProcessWithBusinessStatusAlreadyPersisted()
@@ -785,7 +797,11 @@ class WorkflowProcessStartChainIntegrationTest
                 .processInstanceId(submitted.processInstanceId()).count()).isZero();
         assertThat(processEngine.getHistoryService().createHistoricProcessInstanceQuery()
                 .processInstanceId(submitted.processInstanceId()).singleResult()
-                .getBusinessStatus()).isEqualTo(WorkflowProcessStartService.RUNNING_STATUS);
+                .getBusinessStatus()).isEqualTo("completed");
+        assertThat(processEngine.getHistoryService().createHistoricVariableInstanceQuery()
+                .processInstanceId(submitted.processInstanceId()).variableName("processStatus").count()).isZero();
+        verify(automaticCopies).onProcessCompleted(submitted.processInstanceId(), definition.getId());
+        verify(notifications).onProcessResult("PROCESS_COMPLETED", definition.getId(), submitted.processInstanceId());
     }
 
     /** 主流程表单不受展开子流程内部开始节点影响，提交后实际进入内部审批并正常汇出。 */

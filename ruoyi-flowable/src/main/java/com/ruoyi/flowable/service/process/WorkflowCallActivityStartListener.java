@@ -42,7 +42,7 @@ public final class WorkflowCallActivityStartListener
     }
 
     /**
-     * 校验子流程执行树关系，并从已建立的输入映射初始化双状态与 v2 开始提交快照。
+     * 校验子流程执行树关系，并从已建立的输入映射初始化业务状态与 v2 开始提交快照。
      *
      * @param event FlowableProcessStartedEvent，携带新实例及 Flowable 已完成的输入映射变量
      * @return void，根流程由人工发起服务处理；子流程映射或表单事实非法时回滚整个创建命令
@@ -79,11 +79,9 @@ public final class WorkflowCallActivityStartListener
                 startForm.deploymentId(), startForm.sourceType(), startForm.formId(),
                 startForm.formKey(), startForm.nodeKey(), submittedValues);
 
-        // 三项事实必须在同一引擎命令中原子写入，任一失败不能留下可见子流程或子任务。
+        // 子流程业务状态和开始快照必须在同一引擎命令中原子写入，任一失败不能留下可见子流程或子任务。
         CommandContextUtil.getExecutionEntityManager()
                 .updateProcessInstanceBusinessStatus(processInstance, RUNNING_STATUS);
-        processInstance.setVariableLocal(WorkflowProcessStartService.PROCESS_STATUS_VARIABLE,
-                RUNNING_STATUS);
         processInstance.setVariableLocal(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
                 submissionSnapshot);
     }

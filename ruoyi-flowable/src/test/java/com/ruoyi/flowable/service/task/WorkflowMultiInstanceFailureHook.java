@@ -6,7 +6,6 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.doReturn;
 
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
@@ -123,7 +122,12 @@ final class WorkflowMultiInstanceFailureHook
     void loseReturnedCas()
     {
         requireBound();
-        doReturn(0).when(roundMapper).compareAndSetReturnedStatus(
+        AtomicBoolean first = new AtomicBoolean(true);
+        doAnswer(invocation -> first.compareAndSet(true, false) ? 0
+                : roundMapperDelegate.compareAndSetReturnedStatus(invocation.getArgument(0),
+                        invocation.getArgument(1), invocation.getArgument(2),
+                        invocation.getArgument(3), invocation.getArgument(4)))
+                .when(roundMapper).compareAndSetReturnedStatus(
                 anyLong(), anyInt(), anyString(), anyString(), anyString());
     }
 

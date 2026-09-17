@@ -24,7 +24,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.process.WorkflowProcessStartService;
 
 /**
- * 申请退回态、原办理配置、独占申请人指派和 running/returned 双状态的唯一边界。
+ * 申请退回态、原办理配置、独占申请人指派和 running/returned 业务状态的唯一边界。
  */
 @Service
 public class WorkflowReturnedTaskStateService
@@ -51,10 +51,10 @@ public class WorkflowReturnedTaskStateService
     }
 
     /**
-     * 核验流程变量和 businessStatus 均处于普通运行态。
+     * 核验真实活动实例的 businessStatus 处于普通运行态。
      *
      * @param processInstanceId String，活动流程实例主键
-     * @return 无返回值，processStatus 非 running 或 businessStatus 为冲突终态时抛出 HTTP 409
+     * @return 无返回值，businessStatus 非 running时抛出 HTTP 409
      */
     public void requireRunning(String processInstanceId)
     {
@@ -168,7 +168,7 @@ public class WorkflowReturnedTaskStateService
     }
 
     /**
-     * 清除普通退回协议变量、恢复原办理配置并切换为 running 双状态。
+     * 清除普通退回协议变量、恢复原办理配置并切换为 running 业务状态。
      *
      * @param taskId String，重新开放的首审批任务主键
      * @param processInstanceId String，流程实例主键
@@ -205,12 +205,12 @@ public class WorkflowReturnedTaskStateService
                 taskService.addCandidateUser(taskId, userId));
         assignment.candidateGroupIds().forEach(groupId ->
                 taskService.addCandidateGroup(taskId, groupId));
-        setProcessStatus(processInstanceId,
+        setBusinessStatus(processInstanceId,
                 WorkflowProcessStartService.RUNNING_STATUS);
     }
 
     /**
-     * 清除整组待修改任务协议变量并在重建前切换为 running 双状态。
+     * 清除整组待修改任务协议变量并在重建前切换为 running 业务状态。
      *
      * @param taskId String，待撤销的申请人任务主键
      * @param processInstanceId String，流程实例主键
@@ -221,7 +221,7 @@ public class WorkflowReturnedTaskStateService
         requireTask(taskId, processInstanceId);
         taskService.removeVariableLocal(taskId, RETURN_APPLICANT_VARIABLE);
         taskService.removeVariableLocal(taskId, RETURN_ASSIGNMENT_VARIABLE);
-        setProcessStatus(processInstanceId,
+        setBusinessStatus(processInstanceId,
                 WorkflowProcessStartService.RUNNING_STATUS);
     }
 
@@ -265,7 +265,7 @@ public class WorkflowReturnedTaskStateService
     }
 
     /**
-     * 将任务设置为只允许发起人办理并同步 returned 双状态。
+     * 将任务设置为只允许发起人办理并同步 returned 业务状态。
      *
      * @param task Task，待修改真实活动任务
      * @param applicantUserId String，流程正式发起人主键
@@ -282,7 +282,7 @@ public class WorkflowReturnedTaskStateService
                 applicantUserId);
         removeCandidateLinks(task.getId());
         taskService.setOwner(task.getId(), null);
-        setProcessStatus(task.getProcessInstanceId(), RETURNED_STATUS);
+        setBusinessStatus(task.getProcessInstanceId(), RETURNED_STATUS);
         taskService.setAssignee(task.getId(), applicantUserId);
     }
 
@@ -344,21 +344,19 @@ public class WorkflowReturnedTaskStateService
     }
 
     /**
-     * 同步流程变量和 Flowable business status。
+     * 写入唯一 Flowable businessStatus。
      *
      * @param processInstanceId String，流程实例主键
      * @param status String，returned 或 running 状态
-     * @return 无返回值，两个写操作处于调用方同一事务
+     * @return 无返回值，状态写入处于调用方同一事务
      */
-    private void setProcessStatus(String processInstanceId, String status)
+    private void setBusinessStatus(String processInstanceId, String status)
     {
-        runtimeService.setVariable(processInstanceId,
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE, status);
         runtimeService.updateBusinessStatus(processInstanceId, status);
     }
 
     /**
-     * 核验活动流程的双状态，缺失、挂起或状态漂移统一返回冲突。
+     * 核验活动流程的业务状态，缺失、挂起或状态漂移统一返回冲突。
      *
      * @param processInstanceId String，流程实例主键
      * @param expectedStatus String，期望状态
@@ -368,10 +366,7 @@ public class WorkflowReturnedTaskStateService
     {
         ProcessInstance instance = runtimeService.createProcessInstanceQuery()
                 .processInstanceId(processInstanceId).singleResult();
-        Object processStatus = runtimeService.getVariable(processInstanceId,
-                WorkflowProcessStartService.PROCESS_STATUS_VARIABLE);
         if (instance == null || instance.isSuspended()
-                || !expectedStatus.equals(processStatus)
                 || !expectedStatus.equals(instance.getBusinessStatus()))
         {
             throw conflict();
