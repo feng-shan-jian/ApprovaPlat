@@ -97,7 +97,11 @@ public class WorkflowNotificationPlanner
             NotificationRequest request = validateRequest(original);
             PolicyKey policyKey = new PolicyKey(request.eventType,
                     request.processDefinitionKey, request.taskDefinitionKey);
-            Policy policy = policies.computeIfAbsent(policyKey, this::loadPolicy);
+            if (!policies.containsKey(policyKey))
+            {
+                policies.put(policyKey, loadPolicy(policyKey));
+            }
+            Policy policy = policies.get(policyKey);
             if (policy == null) continue;
 
             Set<String> recipients = resolveRecipients(policy, request);

@@ -10,7 +10,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -105,9 +104,11 @@ public class WorkflowNotificationPolicyService
                         "values (?,?,?,?,1,current_timestamp(3))", userId,
                         request.inboxEnabled(), request.emailEnabled(), request.smsEnabled());
             }
-            catch (DataAccessException exception)
+            catch (DuplicateKeyException exception)
             {
-                throw new ServiceException("通知偏好已变化，请刷新后重试", HttpStatus.CONFLICT);
+                ServiceException conflict = new ServiceException("通知偏好已变化，请刷新后重试", HttpStatus.CONFLICT);
+                conflict.initCause(exception);
+                throw conflict;
             }
         }
         if (updated != 1)
@@ -172,12 +173,10 @@ public class WorkflowNotificationPolicyService
             }
             catch (DuplicateKeyException exception)
             {
-                throw new ServiceException("相同作用域和事件的通知策略已存在",
+                ServiceException conflict = new ServiceException("相同作用域和事件的通知策略已存在",
                         HttpStatus.CONFLICT).setSubCode("NOTIFICATION_POLICY_DUPLICATE");
-            }
-            catch (DataAccessException exception)
-            {
-                throw new ServiceException("通知策略保存失败", HttpStatus.ERROR);
+                conflict.initCause(exception);
+                throw conflict;
             }
             if (updated != 1)
             {
@@ -221,12 +220,10 @@ public class WorkflowNotificationPolicyService
         }
         catch (DuplicateKeyException exception)
         {
-            throw new ServiceException("相同作用域和事件的通知策略已存在", HttpStatus.CONFLICT)
+            ServiceException conflict = new ServiceException("相同作用域和事件的通知策略已存在", HttpStatus.CONFLICT)
                     .setSubCode("NOTIFICATION_POLICY_DUPLICATE");
-        }
-        catch (DataAccessException exception)
-        {
-            throw new ServiceException("通知策略保存失败", HttpStatus.ERROR);
+            conflict.initCause(exception);
+            throw conflict;
         }
         if (holder.getKey() == null)
         {
@@ -385,14 +382,7 @@ public class WorkflowNotificationPolicyService
     /** @return long，当前正式用户主键。 */
     private long currentUserId()
     {
-        try
-        {
-            return Long.parseLong(identityResolver.resolveCurrentIdentity().userId());
-        }
-        catch (RuntimeException exception)
-        {
-            throw new ServiceException("当前用户身份无效", HttpStatus.UNAUTHORIZED);
-        }
+        return Long.parseLong(identityResolver.resolveCurrentIdentity().userId());
     }
 
     /** @param message String，稳定错误提示；@return ServiceException，HTTP 400 参数异常。 */

@@ -98,11 +98,7 @@ public class WorkflowUserTaskListener implements TaskListener
                         delegateTask.getTaskDefinitionKey(),
                         delegateTask.getAssignee(), delegateTask.getOwner());
                 // 自动抄送失败必须抛回 Flowable 命令，不能提交仅完成任务的半状态。
-                automaticCopyService.onTaskEvent(eventName, delegateTask.getId(),
-                        delegateTask.getProcessInstanceId(),
-                        delegateTask.getProcessDefinitionId(),
-                        delegateTask.getTaskDefinitionKey(), delegateTask.getName(),
-                        delegateTask.getVariables());
+                automaticCopyService.onTaskEvent(delegateTask);
                 // SLA 与固定任务审计共享当前 Flowable 命令事务，任一失败都会回滚任务状态。
                 slaRuntimeService.onTaskEvent(eventName, delegateTask.getId(),
                         delegateTask.getProcessInstanceId(),

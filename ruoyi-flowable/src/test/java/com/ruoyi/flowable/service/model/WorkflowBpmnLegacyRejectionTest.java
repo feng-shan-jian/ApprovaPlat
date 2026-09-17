@@ -47,6 +47,18 @@ class WorkflowBpmnLegacyRejectionTest
     }
 
     @Test
+    void savingAndDeployingRejectCorruptCopyRulesOnAnyTask()
+    {
+        String copyRule = "<flowable:property name=\"approva.autoCopyRules\" value=\"{&quot;version&quot;:99,&quot;rules&quot;:[]}\"/>";
+        String author = process("", userTask("", taskRule())
+                + userTask("", taskRule() + copyRule).replace("id=\"review\"", "id=\"other\""));
+        assertThatThrownBy(() -> service.validateForSave(author.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(ServiceException.class).hasMessageContaining("自动抄送规则版本不受支持");
+        assertThatThrownBy(() -> service.validate(author.getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(ServiceException.class).hasMessageContaining("自动抄送规则版本不受支持");
+    }
+
+    @Test
     void embeddedAuthorFieldsRetainStaticContentAndPermissionGuards()
     {
         assertRejected(process("", "").replace("申请标题", "java script:alert(1)"), "危险协议");

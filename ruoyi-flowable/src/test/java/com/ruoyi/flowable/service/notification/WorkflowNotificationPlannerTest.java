@@ -28,6 +28,25 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 
 class WorkflowNotificationPlannerTest
 {
+    @Test
+    void remembersAbsentPolicyWithinBatchButReloadsNextBatch()
+    {
+        var first = request("COPY_CREATED", "COPY:a:8", "purchase", null, Set.of("8"));
+        var second = request("COPY_CREATED", "COPY:a:7", "purchase", null, Set.of("7"));
+        assertThat(planner.plan(List.of(first, second)).isEmpty()).isTrue();
+        org.mockito.Mockito.verify(jdbcTemplate, org.mockito.Mockito.times(1))
+                .queryForList(org.mockito.ArgumentMatchers.contains("from wf_notification_policy"), any(Object[].class));
+        org.mockito.Mockito.verify(jdbcTemplate, org.mockito.Mockito.never())
+                .queryForList(org.mockito.ArgumentMatchers.contains("from sys_user"), any(Object[].class));
+        policyRows.add(policy(1L, "PROCESS", "TASK_RECIPIENT", "INBOX", "new policy"));
+        preferenceRows.add(preference("7", true, true, false));
+        preferenceRows.add(preference("8", true, true, false));
+        assertThat(planner.plan(List.of(first, second)).notifications())
+                .extracting(NotificationPlan.Notification::recipientUserId).containsExactly("8", "7");
+        org.mockito.Mockito.verify(jdbcTemplate, org.mockito.Mockito.times(2))
+                .queryForList(org.mockito.ArgumentMatchers.contains("from wf_notification_policy"), any(Object[].class));
+    }
+
     private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     private final RuntimeService runtimeService = mock(RuntimeService.class, Answers.RETURNS_DEEP_STUBS);
     private final HistoryService historyService = mock(HistoryService.class, Answers.RETURNS_DEEP_STUBS);

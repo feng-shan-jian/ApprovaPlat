@@ -9,7 +9,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.flowable.bpmn.model.BaseElement;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.Process;
@@ -22,6 +21,7 @@ import org.flowable.common.engine.impl.identity.Authentication;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.variable.api.history.HistoricVariableInstance;
+import org.flowable.task.service.delegate.DelegateTask;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
@@ -82,32 +82,20 @@ public class WorkflowAutomaticCopyService
     /**
      * 处理用户任务到达或完成事件；assignment 事件不产生抄送。
      *
-     * @param eventName String，create 或 complete
-     * @param taskId String，当前 Flowable 任务主键
-     * @param processInstanceId String，流程实例主键
-     * @param processDefinitionId String，流程定义主键
-     * @param taskDefinitionKey String，BPMN 用户任务主键
-     * @param taskName String，任务名称快照
-     * @param variables Map&lt;String,Object&gt;，当前流程变量快照
+     * @param task DelegateTask，当前真实任务；匹配规则后才读取所需表单变量
      * @return void，解析或写库失败时抛错回滚当前引擎命令
      */
-    public void onTaskEvent(String eventName, String taskId, String processInstanceId,
-            String processDefinitionId, String taskDefinitionKey, String taskName,
-            Map<String, Object> variables)
+    public void onTaskEvent(DelegateTask task)
     {
+        String eventName = task.getEventName();
         Trigger trigger = "create".equals(eventName) ? Trigger.NODE_ARRIVED
                 : "complete".equals(eventName) ? Trigger.NODE_COMPLETED : null;
         if (trigger == null)
         {
             return;
         }
-        Process process = requireProcessModel(processDefinitionId);
-        if (!hasTaskAutoCopyRules(process))
-        {
-            // 普通用户任务没有冻结自动抄送规则时，生命周期监听必须保持合法无副作用。
-            return;
-        }
-        String normalizedTaskKey = requireId(taskDefinitionKey);
+        Process process = requireProcessModel(task.getProcessDefinitionId());
+        String normalizedTaskKey = requireId(task.getTaskDefinitionKey());
         FlowElement node = process.getFlowElement(normalizedTaskKey, true);
         if (node == null)
         {
@@ -117,11 +105,16 @@ public class WorkflowAutomaticCopyService
         {
             throw dataError("自动抄送触发节点不是用户任务");
         }
-        String normalizedTaskId = requireId(taskId);
-        RuntimeContext context = requireActiveContext(processInstanceId,
-                processDefinitionId, variables);
-        persistMatchingRules(userTask, trigger, normalizedTaskId, context,
-                normalizedTaskKey, snapshot(taskName, normalizedTaskKey));
+        List<Rule> matched = WorkflowAutoCopyRuleContract.readRules(userTask).stream()
+                .filter(rule -> rule.trigger() == trigger).toList();
+        if (matched.isEmpty()) return;
+        Set<String> variableNames = formVariableNames(matched);
+        Map<String, Object> variables = variableNames.isEmpty() ? Map.of()
+                : task.getVariables(variableNames, false);
+        RuntimeContext context = requireActiveContext(task.getProcessInstanceId(),
+                task.getProcessDefinitionId(), variables);
+        persistMatchingRules(matched, trigger, requireId(task.getId()), context,
+                normalizedTaskKey, snapshot(task.getName(), normalizedTaskKey));
     }
 
     /**
@@ -133,6 +126,10 @@ public class WorkflowAutomaticCopyService
      */
     public void onProcessCompleted(String processInstanceId, String processDefinitionId)
     {
+        Process process = requireProcessModel(processDefinitionId);
+        List<Rule> matched = WorkflowAutoCopyRuleContract.readRules(process).stream()
+                .filter(rule -> rule.trigger() == Trigger.PROCESS_COMPLETED).toList();
+        if (matched.isEmpty()) return;
         HistoricProcessInstance instance = historyService.createHistoricProcessInstanceQuery()
                 .processInstanceId(requireId(processInstanceId)).singleResult();
         if (instance == null || !requireId(processDefinitionId)
@@ -141,47 +138,37 @@ public class WorkflowAutomaticCopyService
             throw dataError("自动抄送流程历史关联异常");
         }
         Map<String, Object> variables = new LinkedHashMap<>();
-        List<HistoricVariableInstance> rows = historyService
-                .createHistoricVariableInstanceQuery()
-                .processInstanceId(processInstanceId).list();
-        if (rows == null)
+        for (String variableName : formVariableNames(matched))
         {
-            throw dataError("自动抄送历史变量查询异常");
-        }
-        for (HistoricVariableInstance row : rows)
-        {
-            if (row != null && StringUtils.hasText(row.getVariableName()))
+            List<HistoricVariableInstance> rows = historyService
+                    .createHistoricVariableInstanceQuery()
+                    .processInstanceId(processInstanceId).variableName(variableName).list();
+            if (rows == null) throw dataError("自动抄送历史变量查询异常");
+            for (HistoricVariableInstance row : rows)
             {
-                variables.put(row.getVariableName(), row.getValue());
+                if (row != null) variables.put(row.getVariableName(), row.getValue());
             }
         }
         RuntimeContext context = requireContext(processDefinitionId,
                 processInstanceId, instance.getStartUserId(), variables);
-        Process process = requireProcessModel(processDefinitionId);
-        persistMatchingRules(process, Trigger.PROCESS_COMPLETED,
+        persistMatchingRules(matched, Trigger.PROCESS_COMPLETED,
                 "PROCESS_COMPLETED:" + processInstanceId, context, null, null);
     }
 
     /**
      * 解析匹配规则的全部来源，去重后按事件和用户唯一键幂等写库。
      *
-     * @param element BaseElement，规则所属流程或任务
+     * @param matched List&lt;Rule&gt;，当前元素已解析且匹配当前事件的规则
      * @param trigger Trigger，当前生命周期
      * @param eventSubjectId String，任务主键或稳定流程事件键
      * @param context RuntimeContext，已核验流程快照
      * @param nodeId String，可空触发节点主键
      * @param nodeName String，可空触发节点名称
-     * @return void，无匹配规则或无有效组成员时不写库
+     * @return void，无有效组成员时不写库
      */
-    private void persistMatchingRules(BaseElement element, Trigger trigger,
+    private void persistMatchingRules(List<Rule> matched, Trigger trigger,
             String eventSubjectId, RuntimeContext context, String nodeId, String nodeName)
     {
-        List<Rule> matched = WorkflowAutoCopyRuleContract.readRules(element).stream()
-                .filter(rule -> rule.trigger() == trigger).toList();
-        if (matched.isEmpty())
-        {
-            return;
-        }
         LinkedHashSet<String> directUsers = new LinkedHashSet<>();
         LinkedHashSet<String> groups = new LinkedHashSet<>();
         for (Rule rule : matched)
@@ -412,23 +399,22 @@ public class WorkflowAutomaticCopyService
     }
 
     /**
-     * 全量解析当前流程的用户任务自动抄送规则，确认任务事件是否需要进入运行时校验。
+     * 只收集本次匹配规则实际引用的表单变量，固定用户等来源不触发变量读取。
      *
-     * @param process Process，已与流程定义 key 精确关联的部署冻结流程
-     * @return boolean，任一用户任务存在规则时返回 true；所有任务无规则时返回 false
+     * @param rules List&lt;Rule&gt;，当前事件匹配的规则
+     * @return Set&lt;String&gt;，按声明顺序去重的变量名
      */
-    private boolean hasTaskAutoCopyRules(Process process)
+    private Set<String> formVariableNames(List<Rule> rules)
     {
-        // hasRules 表示当前流程至少配置过一条任务级规则；不能提前结束，以免漏过后续非法规则。
-        boolean hasRules = false;
-        for (UserTask task : process.findFlowElementsOfType(UserTask.class, true))
+        Set<String> names = new LinkedHashSet<>();
+        for (Rule rule : rules)
         {
-            if (!WorkflowAutoCopyRuleContract.readRules(task).isEmpty())
+            for (RecipientSource source : rule.recipients())
             {
-                hasRules = true;
+                if (source.type() == RecipientType.FORM_USER_FIELD) names.addAll(source.values());
             }
         }
-        return hasRules;
+        return names;
     }
 
     /** @param value String，Flowable 关系主键；@return String，非空且长度受控的主键。 */

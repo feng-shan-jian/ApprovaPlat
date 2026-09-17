@@ -292,11 +292,15 @@ public class WorkflowMailConfigService
         }
         catch (DuplicateKeyException exception)
         {
-            throw conflict();
+            ServiceException conflict = conflict();
+            conflict.initCause(exception);
+            throw conflict;
         }
         catch (DataAccessException exception)
         {
-            throw persistenceFailure();
+            ServiceException failure = persistenceFailure();
+            failure.initCause(exception);
+            throw failure;
         }
     }
 
@@ -325,17 +329,11 @@ public class WorkflowMailConfigService
                     settings.senderName(), actor, expectedRevision);
             if (updated != 1) throw conflict();
         }
-        catch (ServiceException exception)
-        {
-            throw exception;
-        }
-        catch (DuplicateKeyException exception)
-        {
-            throw conflict();
-        }
         catch (DataAccessException exception)
         {
-            throw persistenceFailure();
+            ServiceException failure = persistenceFailure();
+            failure.initCause(exception);
+            throw failure;
         }
     }
 
@@ -362,7 +360,9 @@ public class WorkflowMailConfigService
         }
         catch (DataAccessException exception)
         {
-            throw persistenceFailure();
+            ServiceException failure = persistenceFailure();
+            failure.initCause(exception);
+            throw failure;
         }
         if (rows.size() > 1)
         {
@@ -598,14 +598,7 @@ public class WorkflowMailConfigService
     /** @return String，当前真实登录用户主键。 */
     private String currentUserId()
     {
-        try
-        {
-            return identityResolver.resolveCurrentIdentity().userId();
-        }
-        catch (RuntimeException exception)
-        {
-            throw new ServiceException("当前用户身份无效", HttpStatus.UNAUTHORIZED);
-        }
+        return identityResolver.resolveCurrentIdentity().userId();
     }
 
     /** @param row MailConfigRow，正式配置；@return WorkflowMailConfigView，安全白名单视图。 */
