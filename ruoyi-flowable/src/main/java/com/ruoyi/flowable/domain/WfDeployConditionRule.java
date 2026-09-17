@@ -4,7 +4,7 @@ import java.util.Date;
 
 /**
  * 排他或包容网关条件分支的不可变部署快照，保存在 Flowable 业务制品资源
- * {@code approvaplat/conditions-v1.json}。
+ * {@code approvaplat/conditions-v2.json}；旧资源由制品仓库校验后读取。
  */
 public class WfDeployConditionRule
 {
@@ -19,7 +19,6 @@ public class WfDeployConditionRule
     private String flowToken;
     private Boolean defaultFlow;
     private String ruleJson;
-    private String celConfigJson;
     private String snapshotChecksum;
     private String createBy;
     private Date createTime;
@@ -68,10 +67,6 @@ public class WfDeployConditionRule
     public String getRuleJson() { return ruleJson; }
     /** @param value String，规范化规则 JSON。 @return void，无返回值。 */
     public void setRuleJson(String value) { ruleJson = value; }
-    /** @return String，规范化 CEL 配置；默认分支为空。 */
-    public String getCelConfigJson() { return celConfigJson; }
-    /** @param value String，规范化 CEL 配置。 @return void，无返回值。 */
-    public void setCelConfigJson(String value) { celConfigJson = value; }
     /** @return String，快照完整性 SHA-256。 */
     public String getSnapshotChecksum() { return snapshotChecksum; }
     /** @param value String，快照完整性 SHA-256。 @return void，无返回值。 */

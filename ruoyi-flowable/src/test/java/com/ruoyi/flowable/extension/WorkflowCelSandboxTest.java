@@ -140,29 +140,6 @@ class WorkflowCelSandboxTest
     }
 
     /**
-     * 验证条件路由只返回布尔结果，并拒绝快照白名单之外的运行变量。
-     * @return void，结果错误或额外变量进入 CEL 时测试失败
-     */
-    @Test
-    void evaluatesBooleanWithoutWritingAndRejectsExtraActivationVariables()
-    {
-        String config = "{\"expression\":\"rule1 && !rule2\","
-                + "\"resultVariable\":\"conditionMatched\",\"resultType\":\"BOOL\","
-                + "\"variables\":[{\"name\":\"rule1\",\"type\":\"BOOL\"},"
-                + "{\"name\":\"rule2\",\"type\":\"BOOL\"}]}";
-        assertThat(sandbox.evaluateBoolean(Map.of("rule1", true, "rule2", false), config))
-                .isTrue();
-
-        Map<String, Object> unexpected = new LinkedHashMap<>();
-        unexpected.put("rule1", true);
-        unexpected.put("rule2", false);
-        unexpected.put("initiator", "7");
-        assertThatThrownBy(() -> sandbox.evaluateBoolean(unexpected, config))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("部署白名单不一致");
-    }
-
-    /**
      * 创建两个字符串变量固定的 Flowable 执行模拟。
      * @param prefix String，前缀变量值
      * @param code String，编码变量值

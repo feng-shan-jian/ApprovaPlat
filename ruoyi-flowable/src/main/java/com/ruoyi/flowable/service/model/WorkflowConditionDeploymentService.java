@@ -18,7 +18,6 @@ import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployConditionRule;
-import com.ruoyi.flowable.extension.WorkflowCelSandbox;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
 import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
 import tools.jackson.core.JacksonException;
@@ -29,7 +28,7 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * 条件分支作者规则、正式表单字段、CEL 逻辑和 Flowable 执行表达式的部署编译服务。
+ * 条件分支作者规则、正式表单字段和 Flowable 执行表达式的部署编译服务。
  */
 @Service
 public class WorkflowConditionDeploymentService
@@ -57,8 +56,6 @@ public class WorkflowConditionDeploymentService
             Set.of("EQ", "NE", "CONTAINS", "STARTS_WITH", "ENDS_WITH");
 
     private final ObjectMapper objectMapper = JsonMapper.shared();
-    /** CEL 只组合后端已经精确计算出的布尔原子结果，不接触任意 Java 对象。 */
-    private final WorkflowCelSandbox celSandbox = new WorkflowCelSandbox();
 
     /**
      * 保存或预校验阶段使用正式表单字段校验全部网关出线，不产生写副作用。
@@ -104,17 +101,16 @@ public class WorkflowConditionDeploymentService
     {
         // MySQL JSON 会调整对象键顺序和空白，摘要必须基于结构而非 JDBC 原始文本。
         String canonicalRuleJson = canonicalSnapshotJson(snapshot.getRuleJson());
-        String canonicalCelJson = canonicalSnapshotJson(snapshot.getCelConfigJson());
         return WorkflowExtensionChecksum.sha256(snapshot.getProcessKey(), snapshot.getGatewayId(),
                 snapshot.getGatewayType(), snapshot.getGatewayToken(), snapshot.getFlowId(),
                 snapshot.getFlowName(), snapshot.getFlowToken(),
                 Boolean.TRUE.equals(snapshot.getDefaultFlow()) ? "1" : "0",
-                canonicalRuleJson, canonicalCelJson);
+                canonicalRuleJson);
     }
 
     /**
-     * 将快照 JSON 规范为数据库写入前后都一致的结构文本，并保留可空 CEL 语义。
-     * @param json String，规则 JSON 或默认分支允许为空的 CEL JSON
+     * 将快照 JSON 规范为数据库写入前后都一致的结构文本。
+     * @param json String，规则 JSON
      * @return String，递归排序后的稳定 JSON；入参为空时返回 null
      */
     private static String canonicalSnapshotJson(String json)
@@ -204,8 +200,7 @@ public class WorkflowConditionDeploymentService
                     throw invalid("分流网关必须配置唯一默认分支，确保无命中时可继续办理", null);
                 }
                 String gatewayToken = stableToken(process.getId(), gateway.getId());
-            // 重复判定必须包含字段、运算符和值；CEL 配置只描述布尔拓扑，不能作为规则身份。
-            Set<String> normalizedRules = new HashSet<>();
+                Set<String> normalizedRules = new HashSet<>();
                 int defaultCount = 0;
                 for (SequenceFlow flow : gateway.getOutgoingFlows())
                 {
@@ -231,15 +226,15 @@ public class WorkflowConditionDeploymentService
                     {
                         throw invalid(exception.getMessage(), exception);
                     }
-                    NormalizedRule normalized = normalizeRule(rawConfig, defaultFlow, fields);
-                if (!defaultFlow && !normalizedRules.add(normalized.ruleJson()))
+                    String normalized = normalizeRule(rawConfig, defaultFlow, fields);
+                    if (!defaultFlow && !normalizedRules.add(normalized))
                     {
                         throw invalid("同一网关存在完全相同的条件分支，请合并或调整规则", null);
                     }
                     result.add(new CompiledBranch(process.getId(), gateway.getId(), gatewayType,
                             gatewayToken, flow.getId(), flow.getName().trim(),
                             stableToken(process.getId(), gateway.getId(), flow.getId()),
-                            defaultFlow, normalized.ruleJson(), normalized.celConfigJson()));
+                            defaultFlow, normalized));
                 }
                 if (defaultCount != 1)
                 {
@@ -251,13 +246,13 @@ public class WorkflowConditionDeploymentService
     }
 
     /**
-     * 严格解析单条作者规则，按正式字段类型规范值并生成 CEL 布尔组合配置。
+     * 严格解析单条作者规则，按正式字段类型规范值并保留 AND/OR 结构。
      * @param rawConfig String，作者扩展属性中的 JSON
      * @param expectedDefault boolean，BPMN 网关声明的真实默认分支标志
      * @param fields Map&lt;String,WorkflowControlledLoopFormField&gt;，当前流程字段目录
-     * @return NormalizedRule，规范规则 JSON 和 CEL 配置
+     * @return String，规范规则 JSON
      */
-    private NormalizedRule normalizeRule(String rawConfig, boolean expectedDefault,
+    private String normalizeRule(String rawConfig, boolean expectedDefault,
             Map<String, WorkflowControlledLoopFormField> fields)
     {
         try
@@ -280,7 +275,7 @@ public class WorkflowConditionDeploymentService
             normalized.put("default", expectedDefault);
             if (expectedDefault)
             {
-                return new NormalizedRule(canonical(normalized), null);
+                return canonical(normalized);
             }
 
             String topCombinator = requireCombinator(root.get("combinator"));
@@ -292,8 +287,6 @@ public class WorkflowConditionDeploymentService
             }
             normalized.put("combinator", topCombinator);
             ArrayNode normalizedGroups = normalized.putArray("groups");
-            List<String> groupExpressions = new ArrayList<>();
-            ArrayNode celVariables = objectMapper.createArrayNode();
             int ruleIndex = 0;
             for (JsonNode group : groupsNode)
             {
@@ -308,31 +301,16 @@ public class WorkflowConditionDeploymentService
                 ObjectNode normalizedGroup = normalizedGroups.addObject();
                 normalizedGroup.put("combinator", groupCombinator);
                 ArrayNode normalizedRules = normalizedGroup.putArray("rules");
-                List<String> ruleVariables = new ArrayList<>();
                 for (JsonNode rule : rulesNode)
                 {
                     if (++ruleIndex > MAX_RULES)
                     {
                         throw invalid("单条分支最多允许32条原子规则", null);
                     }
-                    String variableName = "rule" + ruleIndex;
                     normalizedRules.add(normalizeAtomicRule(rule, fields));
-                    ObjectNode celVariable = celVariables.addObject();
-                    celVariable.put("name", variableName);
-                    celVariable.put("type", "BOOL");
-                    ruleVariables.add(variableName);
                 }
-                groupExpressions.add("(" + String.join(
-                        "AND".equals(groupCombinator) ? " && " : " || ", ruleVariables) + ")");
             }
-            ObjectNode celConfig = objectMapper.createObjectNode();
-            celConfig.put("expression", String.join(
-                    "AND".equals(topCombinator) ? " && " : " || ", groupExpressions));
-            celConfig.put("resultVariable", "conditionMatched");
-            celConfig.put("resultType", "BOOL");
-            celConfig.set("variables", celVariables);
-            String normalizedCel = celSandbox.validateAndNormalizeConfig(celConfig);
-            return new NormalizedRule(canonical(normalized), normalizedCel);
+            return canonical(normalized);
         }
         catch (JacksonException exception)
         {
@@ -483,7 +461,6 @@ public class WorkflowConditionDeploymentService
         snapshot.setFlowToken(branch.flowToken());
         snapshot.setDefaultFlow(branch.defaultFlow());
         snapshot.setRuleJson(branch.ruleJson());
-        snapshot.setCelConfigJson(branch.celConfigJson());
         snapshot.setCreateBy(actorUserId);
         snapshot.setSnapshotChecksum(snapshotChecksum(snapshot));
         return snapshot;
@@ -591,11 +568,8 @@ public class WorkflowConditionDeploymentService
         return exception;
     }
 
-    /** 规范作者规则与 CEL 配置。 */
-    private record NormalizedRule(String ruleJson, String celConfigJson) { }
-
     /** 条件编译和快照持久化共用的不可变分支配置。 */
     private record CompiledBranch(String processKey, String gatewayId, String gatewayType,
             String gatewayToken, String flowId, String flowName, String flowToken,
-            boolean defaultFlow, String ruleJson, String celConfigJson) { }
+            boolean defaultFlow, String ruleJson) { }
 }

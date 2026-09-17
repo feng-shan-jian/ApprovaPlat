@@ -1,0 +1,3 @@
+# Preserve the bytes captured from the pre-C10 Flowable deployment.
+*.json -text
+*.bpmn20.xml -text

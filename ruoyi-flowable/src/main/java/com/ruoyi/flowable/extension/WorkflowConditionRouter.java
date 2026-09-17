@@ -2,10 +2,8 @@ package com.ruoyi.flowable.extension;
 
 import java.math.BigDecimal;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.flowable.engine.RepositoryService;
@@ -14,7 +12,6 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.flowable.domain.WfDeployConditionRule;
-import com.ruoyi.flowable.service.model.WorkflowConditionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -34,7 +31,6 @@ public class WorkflowConditionRouter
 
     private final RepositoryService repositoryService;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
-    private final WorkflowCelSandbox celSandbox = new WorkflowCelSandbox();
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
@@ -108,11 +104,6 @@ public class WorkflowConditionRouter
         Set<String> matched = new LinkedHashSet<>();
         for (WfDeployConditionRule snapshot : snapshots)
         {
-            if (!WorkflowConditionDeploymentService.snapshotChecksum(snapshot)
-                    .equals(snapshot.getSnapshotChecksum()))
-            {
-                throw new WorkflowConditionRoutingException("条件路由部署快照校验和不一致", HttpStatus.ERROR);
-            }
             if (!gatewayToken.equals(snapshot.getGatewayToken())
                     || !flowTokens.add(snapshot.getFlowToken()))
             {
@@ -148,7 +139,7 @@ public class WorkflowConditionRouter
     }
 
     /**
-     * 精确执行单条分支的原子类型比较，再由 CEL 组合 AND/OR 结果。
+     * 按冻结的根/组 AND/OR 短路求值；只有实际参与比较的字段才读取运行变量。
      * @param execution DelegateExecution，真实流程变量来源
      * @param snapshot WfDeployConditionRule，已复核完整性的分支快照
      * @return boolean，分支规则命中结果
@@ -159,23 +150,13 @@ public class WorkflowConditionRouter
         try
         {
             JsonNode root = objectMapper.readTree(snapshot.getRuleJson());
-            Map<String, Object> activation = new LinkedHashMap<>();
-            int ruleIndex = 0;
+            boolean allGroups = isAnd(root);
             for (JsonNode group : root.path("groups"))
             {
-                for (JsonNode rule : group.path("rules"))
-                {
-                    String fieldName = rule.path("field").asText();
-                    if (!execution.hasVariable(fieldName))
-                    {
-                        throw new WorkflowConditionRoutingException("条件字段在当前流程实例中不存在: " + fieldName,
-                                HttpStatus.CONFLICT);
-                    }
-                    Object actual = execution.getVariable(fieldName);
-                    activation.put("rule" + (++ruleIndex), evaluateAtomic(actual, rule, fieldName));
-                }
+                boolean matched = evaluateGroup(execution, group);
+                if (matched != allGroups) return matched;
             }
-            return celSandbox.evaluateBoolean(activation, snapshot.getCelConfigJson());
+            return allGroups;
         }
         catch (JacksonException exception)
         {
@@ -184,6 +165,34 @@ public class WorkflowConditionRouter
             failure.initCause(exception);
             throw failure;
         }
+    }
+
+    private boolean evaluateGroup(DelegateExecution execution, JsonNode group)
+    {
+        boolean allRules = isAnd(group);
+        for (JsonNode rule : group.path("rules"))
+        {
+            String fieldName = rule.path("field").asText();
+            if (!execution.hasVariable(fieldName))
+            {
+                throw new WorkflowConditionRoutingException("条件字段在当前流程实例中不存在: " + fieldName,
+                        HttpStatus.CONFLICT);
+            }
+            boolean matched = evaluateAtomic(execution.getVariable(fieldName), rule, fieldName);
+            if (matched != allRules) return matched;
+        }
+        return allRules;
+    }
+
+    /** 未知组合不能默认为另一种逻辑。结构完整性由资源摘要保护。 */
+    private boolean isAnd(JsonNode node)
+    {
+        return switch (node.path("combinator").asText())
+        {
+            case "AND" -> true;
+            case "OR" -> false;
+            default -> throw new WorkflowConditionRoutingException("条件组合快照不受支持", HttpStatus.ERROR);
+        };
     }
 
     /**

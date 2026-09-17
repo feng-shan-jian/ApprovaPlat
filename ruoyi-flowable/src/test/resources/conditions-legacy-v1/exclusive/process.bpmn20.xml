@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:flowable="http://flowable.org/bpmn" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" typeLanguage="http://www.w3.org/2001/XMLSchema" expressionLanguage="http://www.w3.org/1999/XPath" targetNamespace="urn:legacy">
+  <process id="legacyexclusive" isExecutable="true">
+    <startEvent id="start"></startEvent>
+    <exclusiveGateway id="choice" default="fallback"></exclusiveGateway>
+    <userTask id="accepted"></userTask>
+    <userTask id="other"></userTask>
+    <userTask id="defaultTask"></userTask>
+    <sequenceFlow id="enter" sourceRef="start" targetRef="choice"></sequenceFlow>
+    <sequenceFlow id="a" name="a" sourceRef="choice" targetRef="accepted">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${workflowConditionRouter.matches(execution,'6b7110fa988073a7ebbfdc45','be1c275d1befdfe580659fc2')}]]></conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="b" name="b" sourceRef="choice" targetRef="other">
+      <conditionExpression xsi:type="tFormalExpression"><![CDATA[${workflowConditionRouter.matches(execution,'6b7110fa988073a7ebbfdc45','4246a53aedfba959136c8236')}]]></conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="fallback" name="fallback" sourceRef="choice" targetRef="defaultTask"></sequenceFlow>
+  </process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_legacyexclusive">
+    <bpmndi:BPMNPlane bpmnElement="legacyexclusive" id="BPMNPlane_legacyexclusive"></bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>

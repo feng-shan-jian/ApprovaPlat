@@ -16,6 +16,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.DeploymentBuilder;
@@ -25,6 +26,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployCallActivitySnapshot;
@@ -35,6 +37,9 @@ import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.domain.WfDeployTaskSla;
+import com.ruoyi.flowable.extension.WorkflowConditionRoutingException;
+import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
+import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
 
 /**
  * 使用 Flowable 子部署资源持久化和读取不可变业务部署快照。
@@ -45,8 +50,8 @@ import com.ruoyi.flowable.domain.WfDeployTaskSla;
 @Repository
 public class WorkflowDeploymentArtifactRepository
 {
-    /** 部署资源协议版本；协议变化必须新增资源名并提供正式迁移。 */
-    private static final int SCHEMA_VERSION = 1;
+    /** v2 条件直接保存规则；v1 只在读取边界校验旧摘要并移除派生 CEL。 */
+    private static final int SCHEMA_VERSION = 2;
     /** 业务资源子部署分类，用于与可执行流程部署隔离。 */
     private static final String ARTIFACT_CATEGORY = "APPROVAPLAT_WORKFLOW_ARTIFACTS";
     /** 业务资源子部署稳定 key 前缀。 */
@@ -60,7 +65,8 @@ public class WorkflowDeploymentArtifactRepository
 
     private static final String MANIFEST_RESOURCE = "approvaplat/manifest-v1.json";
     private static final String FORMS_RESOURCE = "approvaplat/forms-v1.json";
-    private static final String CONDITIONS_RESOURCE = "approvaplat/conditions-v1.json";
+    private static final String CONDITIONS_RESOURCE = "approvaplat/conditions-v2.json";
+    private static final String LEGACY_CONDITIONS_RESOURCE = "approvaplat/conditions-v1.json";
     private static final String LOOPS_RESOURCE = "approvaplat/controlled-loops-v1.json";
     private static final String PARTICIPANTS_RESOURCE = "approvaplat/participants-v1.json";
     private static final String EXTENSIONS_RESOURCE = "approvaplat/extensions-v1.json";
@@ -190,10 +196,73 @@ public class WorkflowDeploymentArtifactRepository
      */
     public List<WfDeployConditionRule> selectConditionRules(String deploymentId)
     {
-        return sorted(readList(deploymentId, CONDITIONS_RESOURCE, CONDITION_LIST),
+        return readConditionRules(deploymentId, snapshot -> true);
+    }
+
+    /** 在资源读取边界校验本次实际读取的分支，运行时不巡检其他流程/网关。 */
+    private List<WfDeployConditionRule> readConditionRules(String deploymentId,
+            Predicate<WfDeployConditionRule> selection)
+    {
+        Deployment artifact = findArtifactDeployment(requireText(deploymentId, "流程部署主键不能为空"));
+        if (artifact == null) return List.of();
+        int version = verifyManifest(artifact);
+        byte[] bytes = readResource(artifact.getId(), version == 1
+                ? LEGACY_CONDITIONS_RESOURCE : CONDITIONS_RESOURCE, true);
+        List<WfDeployConditionRule> snapshots;
+        try
+        {
+            if (version == 1)
+            {
+                // v1 的 CEL 只重复 ruleJson 中的布尔拓扑。仍校验其原始摘要，
+                // 不重新生成旧数据、不编译或执行旧 CEL，也不回写部署资源。
+                List<ObjectNode> legacy = objectMapper.readValue(bytes, new TypeReference<>() { });
+                if (legacy == null) throw new ServiceException("流程部署业务资源列表缺失", HttpStatus.ERROR);
+                snapshots = new ArrayList<>();
+                for (ObjectNode node : legacy)
+                {
+                    var cel = node.remove("celConfigJson");
+                    WfDeployConditionRule snapshot = objectMapper.treeToValue(node, WfDeployConditionRule.class);
+                    if (!selection.test(snapshot)) continue;
+                    String checksum = WorkflowExtensionChecksum.sha256(snapshot.getProcessKey(), snapshot.getGatewayId(),
+                            snapshot.getGatewayType(), snapshot.getGatewayToken(), snapshot.getFlowId(),
+                            snapshot.getFlowName(), snapshot.getFlowToken(),
+                            Boolean.TRUE.equals(snapshot.getDefaultFlow()) ? "1" : "0",
+                            canonicalConditionJson(snapshot.getRuleJson()),
+                            cel == null || cel.isNull() ? null : canonicalConditionJson(cel.asText()));
+                    requireConditionChecksum(snapshot, checksum);
+                    snapshots.add(snapshot);
+                }
+            }
+            else
+            {
+                snapshots = objectMapper.readValue(bytes, CONDITION_LIST);
+                if (snapshots == null) throw new ServiceException("流程部署业务资源列表缺失", HttpStatus.ERROR);
+                snapshots = snapshots.stream().filter(selection).toList();
+                for (WfDeployConditionRule snapshot : snapshots)
+                    requireConditionChecksum(snapshot, WorkflowConditionDeploymentService.snapshotChecksum(snapshot));
+            }
+        }
+        catch (JacksonException exception)
+        {
+            ServiceException failure = new ServiceException("流程部署业务资源无法解析", HttpStatus.ERROR);
+            failure.initCause(exception);
+            throw failure;
+        }
+        return sorted(snapshots,
                 Comparator.comparing(WfDeployConditionRule::getProcessKey)
                         .thenComparing(WfDeployConditionRule::getGatewayId)
                         .thenComparing(WfDeployConditionRule::getFlowId));
+    }
+
+    private static String canonicalConditionJson(String json)
+    {
+        return json == null ? null : WorkflowExtensionJsonCanonicalizer.canonicalize(json);
+    }
+
+    private static void requireConditionChecksum(WfDeployConditionRule snapshot, String checksum)
+    {
+        if (!checksum.equals(snapshot.getSnapshotChecksum()))
+            throw new WorkflowConditionRoutingException("条件路由部署快照校验和不一致", HttpStatus.ERROR);
     }
 
     /**
@@ -209,11 +278,9 @@ public class WorkflowDeploymentArtifactRepository
     {
         String normalizedProcessKey = requireText(processKey, "流程标识不能为空");
         String normalizedGatewayToken = requireText(gatewayToken, "条件网关令牌不能为空");
-        return selectConditionRules(deploymentId).stream()
-                .filter(snapshot -> normalizedProcessKey.equals(snapshot.getProcessKey())
-                        && normalizedGatewayToken.equals(snapshot.getGatewayToken()))
-                .sorted(Comparator.comparing(WfDeployConditionRule::getFlowId))
-                .toList();
+        return readConditionRules(deploymentId,
+                snapshot -> normalizedProcessKey.equals(snapshot.getProcessKey())
+                        && normalizedGatewayToken.equals(snapshot.getGatewayToken()));
     }
 
     /**
@@ -635,18 +702,19 @@ public class WorkflowDeploymentArtifactRepository
      * 校验资源协议清单，禁止未知版本被当前运行代码静默解释。
      *
      * @param artifact Deployment，业务资源子部署
-     * @return void，清单缺失或版本不匹配时抛出数据错误
+     * @return int，受支持的资源版本；清单缺失或未知版本抛出数据错误
      */
-    private void verifyManifest(Deployment artifact)
+    private int verifyManifest(Deployment artifact)
     {
         byte[] bytes = readResource(artifact.getId(), MANIFEST_RESOURCE, true);
         try
         {
             ArtifactManifest manifest = objectMapper.readValue(bytes, ArtifactManifest.class);
-            if (manifest == null || manifest.schemaVersion() != SCHEMA_VERSION)
+            if (manifest == null || (manifest.schemaVersion() != 1 && manifest.schemaVersion() != SCHEMA_VERSION))
             {
                 throw new ServiceException("流程部署业务资源协议版本不受支持", HttpStatus.ERROR);
             }
+            return manifest.schemaVersion();
         }
         catch (JacksonException exception)
         {
