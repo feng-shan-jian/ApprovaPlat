@@ -2,10 +2,11 @@ package com.ruoyi.system.service.impl;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -231,14 +232,14 @@ public class SysMenuServiceImpl implements ISysMenuService
     public List<SysMenu> buildMenuTree(List<SysMenu> menus)
     {
         List<SysMenu> returnList = new ArrayList<SysMenu>();
-        List<Long> tempList = menus.stream().map(SysMenu::getMenuId).collect(Collectors.toList());
-        for (Iterator<SysMenu> iterator = menus.iterator(); iterator.hasNext();)
+        Map<Long, List<SysMenu>> childrenByParent = groupChildrenByParent(menus);
+        Set<Long> menuIds = menus.stream().map(SysMenu::getMenuId).collect(Collectors.toSet());
+        for (SysMenu menu : menus)
         {
-            SysMenu menu = (SysMenu) iterator.next();
             // 如果是顶级节点, 遍历该父节点的所有子节点
-            if (!tempList.contains(menu.getParentId()))
+            if (!menuIds.contains(menu.getParentId()))
             {
-                recursionFn(menus, menu);
+                recursionFn(childrenByParent, menu);
                 returnList.add(menu);
             }
         }
@@ -541,68 +542,47 @@ public class SysMenuServiceImpl implements ISysMenuService
      * 
      * @param list 分类表
      * @param parentId 传入的父节点ID
-     * @return String
+     * @return 指定父节点下的菜单树
      */
     public List<SysMenu> getChildPerms(List<SysMenu> list, long parentId)
     {
-        List<SysMenu> returnList = new ArrayList<SysMenu>();
-        for (Iterator<SysMenu> iterator = list.iterator(); iterator.hasNext();)
+        Map<Long, List<SysMenu>> childrenByParent = groupChildrenByParent(list);
+        List<SysMenu> returnList = childrenByParent.getOrDefault(parentId, new ArrayList<>());
+        for (SysMenu menu : returnList)
         {
-            SysMenu t = (SysMenu) iterator.next();
-            // 一、根据传入的某个父节点ID,遍历该父节点的所有子节点
-            if (t.getParentId() == parentId)
-            {
-                recursionFn(list, t);
-                returnList.add(t);
-            }
+            recursionFn(childrenByParent, menu);
         }
         return returnList;
     }
 
     /**
-     * 递归列表
-     * 
-     * @param list 分类表
-     * @param t 子节点
+     * 按本次输入分组并清空旧子项，避免复用对象时带入已被裁剪的菜单。
      */
-    private void recursionFn(List<SysMenu> list, SysMenu t)
+    private Map<Long, List<SysMenu>> groupChildrenByParent(List<SysMenu> menus)
     {
-        // 得到子节点列表
-        List<SysMenu> childList = getChildList(list, t);
-        t.setChildren(childList);
-        for (SysMenu tChild : childList)
+        Map<Long, List<SysMenu>> childrenByParent = new HashMap<>();
+        for (SysMenu menu : menus)
         {
-            if (hasChild(list, tChild))
-            {
-                recursionFn(list, tChild);
-            }
+            childrenByParent.computeIfAbsent(menu.getParentId(), key -> new ArrayList<>()).add(menu);
+            menu.setChildren(new ArrayList<>());
         }
+        return childrenByParent;
     }
 
     /**
-     * 得到子节点列表
+     * 仅从根展开本次输入中的子项，未到达的节点不连接。
      */
-    private List<SysMenu> getChildList(List<SysMenu> list, SysMenu t)
+    private void recursionFn(Map<Long, List<SysMenu>> childrenByParent, SysMenu menu)
     {
-        List<SysMenu> tlist = new ArrayList<SysMenu>();
-        Iterator<SysMenu> it = list.iterator();
-        while (it.hasNext())
+        List<SysMenu> children = childrenByParent.get(menu.getMenuId());
+        if (children != null)
         {
-            SysMenu n = (SysMenu) it.next();
-            if (n.getParentId().longValue() == t.getMenuId().longValue())
+            menu.setChildren(children);
+            for (SysMenu child : children)
             {
-                tlist.add(n);
+                recursionFn(childrenByParent, child);
             }
         }
-        return tlist;
-    }
-
-    /**
-     * 判断是否有子节点
-     */
-    private boolean hasChild(List<SysMenu> list, SysMenu t)
-    {
-        return getChildList(list, t).size() > 0;
     }
 
     /**

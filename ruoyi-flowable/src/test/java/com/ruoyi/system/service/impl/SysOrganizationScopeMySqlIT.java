@@ -42,6 +42,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import com.ruoyi.common.core.domain.entity.*;
+import com.ruoyi.common.core.domain.TreeSelect;
 import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.testsupport.WorkflowMySqlITSupport;
@@ -63,6 +64,7 @@ class SysOrganizationScopeMySqlIT
     private SysUserServiceImpl users;
     private SysRoleServiceImpl roles;
     private SysDeptServiceImpl depts;
+    private SysMenuServiceImpl menus;
     private ValidatorFactory validators;
     private long a, child, leaf, b, actor, inside, outside, ra, rc, rb;
 
@@ -71,15 +73,15 @@ class SysOrganizationScopeMySqlIT
     {
         source = WorkflowMySqlITSupport.createDataSource();
         WorkflowMySqlITSupport.verifyIsolatedBaseline(source, "组织范围与部门移动 IT", "approvaplat_it",
-                List.of("sys_user", "sys_dept", "sys_role", "sys_user_role", "sys_user_post", "sys_role_menu", "sys_role_dept"));
+                List.of("sys_user", "sys_dept", "sys_role", "sys_user_role", "sys_user_post", "sys_role_menu", "sys_role_dept", "sys_menu"));
     }
 
     @BeforeEach
     void setUp() throws Exception
     {
         jdbc = new JdbcTemplate(source);
-        assertEquals(7, jdbc.queryForObject("select count(*) from information_schema.tables where table_schema=database() "
-                + "and table_name in ('sys_user','sys_dept','sys_role','sys_user_role','sys_user_post','sys_role_menu','sys_role_dept') "
+        assertEquals(8, jdbc.queryForObject("select count(*) from information_schema.tables where table_schema=database() "
+                + "and table_name in ('sys_user','sys_dept','sys_role','sys_user_role','sys_user_post','sys_role_menu','sys_role_dept','sys_menu') "
                 + "and engine='InnoDB'", Integer.class));
         manager = new DataSourceTransactionManager(source);
         transactions = new TransactionTemplate(manager);
@@ -87,11 +89,13 @@ class SysOrganizationScopeMySqlIT
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setTypeAliases(SysUser.class, SysRole.class, SysDept.class, SysUserRole.class, SysUserPost.class,
-                SysRoleMenu.class, SysRoleDept.class);
-        factory.setMapperLocations(List.of("SysUser", "SysRole", "SysDept", "SysUserRole", "SysUserPost", "SysRoleMenu", "SysRoleDept")
+                SysRoleMenu.class, SysRoleDept.class, SysMenu.class);
+        factory.setMapperLocations(List.of("SysUser", "SysRole", "SysDept", "SysUserRole", "SysUserPost", "SysRoleMenu", "SysRoleDept", "SysMenu")
                 .stream().map(n -> new ClassPathResource("mapper/system/" + n + "Mapper.xml")).toArray(ClassPathResource[]::new));
         factory.setPlugins(boundary);
         var session = new SqlSessionTemplate(factory.getObject());
+        menus = new SysMenuServiceImpl();
+        ReflectionTestUtils.setField(menus, "menuMapper", session.getMapper(SysMenuMapper.class));
         depts = new SysDeptServiceImpl();
         ReflectionTestUtils.setField(depts, "deptMapper", session.getMapper(SysDeptMapper.class));
         ReflectionTestUtils.setField(depts, "roleMapper", session.getMapper(SysRoleMapper.class));
@@ -141,6 +145,7 @@ class SysOrganizationScopeMySqlIT
         jdbc.update("delete from sys_user where create_by=?", owner);
         jdbc.update("delete from sys_role where create_by=?", owner);
         jdbc.update("delete from sys_dept where create_by=?", owner);
+        jdbc.update("delete from sys_menu where create_by=?", owner);
     }
 
     @SuppressWarnings("unchecked")
@@ -173,6 +178,60 @@ class SysOrganizationScopeMySqlIT
         assertEquals(0, boundary.count("selectUserList"));
         assertEquals(0, boundary.count("selectRoleList"));
         assertEquals(0, boundary.count("selectDeptList"));
+    }
+
+    @Test
+    void departmentTreeUsesRealDataScopeAndPromotesOnlyVisibleOrphans()
+    {
+        jdbc.update("insert into sys_role_dept values (?,?),(?,?)", ra, child, ra, b);
+        signIn(actor, a, List.of(scopeRole(ra, "2", "0", "manage")), "manage");
+        var custom = depts.selectDeptTreeList(new SysDept());
+        assertEquals(List.of(b, child), custom.stream().map(TreeSelect::getId).toList());
+        assertTrue(custom.stream().allMatch(node -> node.getChildren().isEmpty()));
+        signIn(inside, child, List.of(scopeRole(rc, "4", "0", "manage")), "manage");
+        var subtree = depts.selectDeptTreeList(new SysDept());
+        assertEquals(List.of(child), subtree.stream().map(TreeSelect::getId).toList());
+        assertEquals(List.of(leaf), subtree.get(0).getChildren().stream().map(TreeSelect::getId).toList());
+        signIn(inside, child, List.of(scopeRole(rc, "3", "0", "manage")), "manage");
+        var onlyOwn = depts.selectDeptTreeList(new SysDept());
+        assertEquals(List.of(child), onlyOwn.stream().map(TreeSelect::getId).toList());
+        assertTrue(onlyOwn.get(0).getChildren().isEmpty());
+        signIn(actor, a, List.of(scopeRole(ra, "5", "0", "manage")), "manage");
+        assertTrue(depts.selectDeptTreeList(new SysDept()).isEmpty());
+        signIn(actor, a, List.of(scopeRole(ra, "1", "1", "manage")), "manage");
+        assertTrue(depts.selectDeptTreeList(new SysDept()).isEmpty());
+    }
+
+    @Test
+    void menuSqlPermissionsKeepEditorOrphansSeparateFromAuthorizedRoutes()
+    {
+        long root = menu("root", 0, "M", "0", 0);
+        long second = menu("second", root, "C", "0", 20);
+        long first = menu("first", root, "C", "0", 10);
+        long button = menu("button", first, "F", "0", 0);
+        long disabled = menu("disabled", root, "C", "1", 30);
+        long denied = menu("denied", root, "C", "0", 40);
+        for (long id : List.of(second, first, button, disabled))
+            jdbc.update("insert into sys_role_menu values (?,?)", ra, id);
+
+        var editor = menus.buildMenuTreeSelect(menus.selectMenuList(actor));
+        assertEquals(List.of(first, second, disabled), editor.stream().map(TreeSelect::getId).toList());
+        assertEquals(List.of(button), editor.get(0).getChildren().stream().map(TreeSelect::getId).toList());
+        assertTrue(menus.selectMenuTreeByUserId(actor).isEmpty(), "未授权父目录不能提升为路由根");
+        jdbc.update("insert into sys_role_menu values (?,?)", ra, root);
+        var tree = menus.selectMenuTreeByUserId(actor);
+        assertEquals(List.of(root), tree.stream().map(SysMenu::getMenuId).toList());
+        assertEquals(List.of(first, second), tree.get(0).getChildren().stream().map(SysMenu::getMenuId).toList());
+        assertTrue(tree.get(0).getChildren().stream().allMatch(node -> node.getChildren().isEmpty()));
+        var routes = menus.buildMenus(tree);
+        assertEquals("/l05-root", routes.get(0).getPath());
+        assertEquals(List.of("l05-first", "l05-second"),
+                routes.get(0).getChildren().stream().map(route -> route.getPath()).toList());
+        var adminRoot = menus.selectMenuTreeByUserId(1L).stream().filter(node -> node.getMenuId() == root).findFirst().orElseThrow();
+        assertEquals(List.of(first, second, denied), adminRoot.getChildren().stream().map(SysMenu::getMenuId).toList());
+        jdbc.update("update sys_role set status='1' where role_id=?", ra);
+        assertTrue(menus.selectMenuList(actor).isEmpty());
+        assertTrue(menus.selectMenuTreeByUserId(actor).isEmpty());
     }
 
     @Test
@@ -532,6 +591,15 @@ class SysOrganizationScopeMySqlIT
     {
         try { assertTrue(latch.await(10, TimeUnit.SECONDS)); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new AssertionError(e); }
+    }
+
+    private long menu(String name, long parent, String type, String status, int order)
+    {
+        SysMenu menu = new SysMenu();
+        menu.setMenuName(name); menu.setParentId(parent); menu.setMenuType(type); menu.setStatus(status);
+        menu.setOrderNum(order); menu.setPath("l05-" + name); menu.setIsFrame("1"); menu.setCreateBy(owner);
+        menus.insertMenu(menu);
+        return jdbc.queryForObject("select menu_id from sys_menu where create_by=? and menu_name=?", Long.class, owner, name);
     }
 
     private long department(String name, long parent, String ancestors)
