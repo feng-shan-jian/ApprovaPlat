@@ -155,7 +155,7 @@ public class WorkflowBusinessCalendarService
         {
             throw new ServiceException("审批 SLA 业务日历未启用或不存在", HttpStatus.CONFLICT);
         }
-        validateStoredCalendar(calendar);
+        parseCalendar(calendar);
         return calendar;
     }
 
@@ -168,47 +168,71 @@ public class WorkflowBusinessCalendarService
      */
     public Instant resolveDueAt(String calendarKey, Instant start, int workingMinutes)
     {
+        requireWorkingMinutes(start, workingMinutes);
+        return calculate(readCalendar(calendarKey), start, workingMinutes);
+    }
+
+    /** 一次 SLA 建立操作的两个绝对到期点，不保存日历或跨请求状态。 */
+    public record SlaDueDates(Instant reminderDueAt, Instant escalationDueAt) { }
+
+    /**
+     * 一次读取和解析当前日历，以同一起点计算提醒及升级时间。
+     * @param calendarKey String，日历稳定编码
+     * @param start Instant，任务创建时的引擎绝对时刻
+     * @param reminderMinutes int，提醒工作分钟
+     * @param escalationMinutes int，升级工作分钟
+     * @return SlaDueDates，本次操作实际消费的两个到期点
+     */
+    public SlaDueDates resolveSlaDueDates(String calendarKey, Instant start,
+            int reminderMinutes, int escalationMinutes)
+    {
+        requireWorkingMinutes(start, reminderMinutes);
+        requireWorkingMinutes(start, escalationMinutes);
+        CalendarSchedule calendar = readCalendar(calendarKey);
+        return new SlaDueDates(calculate(calendar, start, reminderMinutes),
+                calculate(calendar, start, escalationMinutes));
+    }
+
+    private void requireWorkingMinutes(Instant start, int workingMinutes)
+    {
         if (start == null || workingMinutes <= 0 || workingMinutes > MAX_WORKING_MINUTES)
         {
             throw new ServiceException("审批 SLA 工作分钟不合法", HttpStatus.BAD_REQUEST);
         }
+    }
+
+    private CalendarSchedule readCalendar(String calendarKey)
+    {
         WfBusinessCalendar calendar = slaMapper.selectCalendarByKey(calendarKey);
         if (calendar == null)
         {
             throw dataError("审批 SLA 运行日历不存在");
         }
-        validateStoredCalendar(calendar);
-        return calculate(calendar, start, workingMinutes);
+        return parseCalendar(calendar);
     }
+
+    /** 仅在当前调用内使用的工作窗口及日期索引，两个到期点共用这份解析结果。 */
+    private record CalendarSchedule(ZoneId zone, LocalTime workStart, LocalTime workEnd,
+            Set<Integer> weekdays, Map<LocalDate, Boolean> overrides) { }
 
     /**
      * 使用单日工作窗口和日期覆盖计算确定到期时间。
-     * @param calendar WfBusinessCalendar，已经校验的日历
+     * @param calendar CalendarSchedule，本次读取并解析的日历
      * @param start Instant，开始绝对时刻
      * @param workingMinutes int，正工作分钟
      * @return Instant，确定的绝对到期时间
      */
-    private Instant calculate(WfBusinessCalendar calendar, Instant start, int workingMinutes)
+    private Instant calculate(CalendarSchedule calendar, Instant start, int workingMinutes)
     {
-        ZoneId zone = ZoneId.of(calendar.getTimezone());
-        LocalTime workStart = LocalTime.parse(calendar.getWorkStart());
-        LocalTime workEnd = LocalTime.parse(calendar.getWorkEnd());
-        Set<Integer> weekdays = parseWorkingDays(calendar.getWorkingDays());
-        Map<LocalDate, Boolean> overrides = new HashMap<>();
-        for (WfBusinessCalendar.CalendarDay day : calendar.getDays())
-        {
-            overrides.put(day.calendarDate(), day.workingDay());
-        }
-
-        ZonedDateTime cursor = start.atZone(zone);
+        ZonedDateTime cursor = start.atZone(calendar.zone());
         long remainingSeconds = Math.multiplyExact((long) workingMinutes, 60L);
         for (int scannedDays = 0; scannedDays <= MAX_SCAN_DAYS; scannedDays++)
         {
             LocalDate date = cursor.toLocalDate();
-            boolean workingDay = overrides.getOrDefault(date,
-                    weekdays.contains(date.getDayOfWeek().getValue()));
-            ZonedDateTime dayStart = date.atTime(workStart).atZone(zone);
-            ZonedDateTime dayEnd = date.atTime(workEnd).atZone(zone);
+            boolean workingDay = calendar.overrides().getOrDefault(date,
+                    calendar.weekdays().contains(date.getDayOfWeek().getValue()));
+            ZonedDateTime dayStart = date.atTime(calendar.workStart()).atZone(calendar.zone());
+            ZonedDateTime dayEnd = date.atTime(calendar.workEnd()).atZone(calendar.zone());
             if (workingDay && cursor.isBefore(dayEnd))
             {
                 ZonedDateTime effectiveStart = cursor.isAfter(dayStart) ? cursor : dayStart;
@@ -220,7 +244,7 @@ public class WorkflowBusinessCalendarService
                 remainingSeconds -= availableSeconds;
             }
             // 每次只跨到下一自然日零点，避免夏令时日使用固定 24 小时造成偏移。
-            cursor = date.plusDays(1).atStartOfDay(zone);
+            cursor = date.plusDays(1).atStartOfDay(calendar.zone());
         }
         throw dataError("审批 SLA 业务日历无法解析到期时间");
     }
@@ -284,21 +308,28 @@ public class WorkflowBusinessCalendarService
     }
 
     /**
-     * 复核数据库日历结构，防止损坏主数据生成错误定时作业。
+     * 解析数据库日历，防止损坏主数据生成错误定时作业，解析结果直接供计算使用。
      * @param calendar WfBusinessCalendar，数据库读取日历
-     * @return void，字段损坏时抛出稳定 500
+     * @return CalendarSchedule，当前日历工作窗口及日期索引；字段损坏时抛出稳定 500
      */
-    private void validateStoredCalendar(WfBusinessCalendar calendar)
+    private CalendarSchedule parseCalendar(WfBusinessCalendar calendar)
     {
         try
         {
-            ZoneId.of(calendar.getTimezone());
+            ZoneId zone = ZoneId.of(calendar.getTimezone());
             LocalTime start = LocalTime.parse(calendar.getWorkStart());
             LocalTime end = LocalTime.parse(calendar.getWorkEnd());
-            if (!start.isBefore(end) || parseWorkingDays(calendar.getWorkingDays()).isEmpty())
+            Set<Integer> weekdays = parseWorkingDays(calendar.getWorkingDays());
+            if (!start.isBefore(end) || weekdays.isEmpty())
             {
                 throw new IllegalArgumentException();
             }
+            Map<LocalDate, Boolean> overrides = new HashMap<>();
+            for (WfBusinessCalendar.CalendarDay day : calendar.getDays())
+            {
+                overrides.put(day.calendarDate(), day.workingDay());
+            }
+            return new CalendarSchedule(zone, start, end, weekdays, overrides);
         }
         catch (RuntimeException exception)
         {

@@ -247,13 +247,13 @@ class WorkflowCandidateTaskCreationIntegrationTest
                     properties.addChildElement(property);
                 });
         review.addExtensionElement(properties);
-        var calendars = mock(com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService.class);
+        var calendarMapper = mock(com.ruoyi.flowable.mapper.WfTaskSlaMapper.class);
+        var calendars = new com.ruoyi.flowable.service.model.WorkflowBusinessCalendarService(null, calendarMapper);
         var calendar = new com.ruoyi.flowable.domain.WfBusinessCalendar();
         calendar.setCalendarKey("WORKDAY"); calendar.setTimezone("Asia/Shanghai"); calendar.setWorkingDays("1,2,3,4,5");
         calendar.setWorkStart("09:00"); calendar.setWorkEnd("18:00"); calendar.setDays(List.of());
-        when(calendars.requireEnabled("WORKDAY")).thenReturn(calendar);
-        when(calendars.resolveDueAt(eq("WORKDAY"), org.mockito.ArgumentMatchers.any(java.time.Instant.class), org.mockito.ArgumentMatchers.anyInt()))
-                .thenAnswer(i -> ((java.time.Instant) i.getArgument(1)).plusSeconds(((Integer) i.getArgument(2)) * 60L));
+        calendar.setStatus("ENABLED");
+        when(calendarMapper.selectCalendarByKey("WORKDAY")).thenReturn(calendar);
         when(identityResolver.resolveApprovalEligibleUserIds(Set.of("301"))).thenReturn(Set.of("301"));
         new com.ruoyi.flowable.service.model.WorkflowTaskSlaDeploymentService(calendars,
                 mock(com.ruoyi.flowable.service.model.WorkflowBpmnEventCodeService.class), identityResolver).prepare(model, "201");

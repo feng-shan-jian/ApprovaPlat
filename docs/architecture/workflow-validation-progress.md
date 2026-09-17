@@ -23,8 +23,8 @@
 | 13 | C03 详情、等待与变量 | BS-027、028、049 | 已提交 `644f1e4566dc0ddf47137e57865a4b7fadd17041` |
 | 14 | C06 工作台列表 | BS-043、046 | 已提交 `9b5c60e397d96f1211469e32bcc035079e0dadef` |
 | 15 | C08 扩展执行 | BS-020 | 已提交 `0fc302303e524bf658e0272bd66459ad9a8a25f3` |
-| 16 | C10 条件路由 | BS-024 | review 和完整验证通过，本提交完成 |
-| 17 | C11 SLA 时钟 | BS-048 | 待实施 |
+| 16 | C10 条件路由 | BS-024 | 已提交 `22d6777021a27c4fe4741f2e42a7a53f7a51829b` |
+| 17 | C11 SLA 时钟 | BS-048 | review 和主审验证通过，本提交完成 |
 | 18 | L03 代码生成详情 | BS-039 | 待实施 |
 | 19 | L05 部门／菜单树 | BS-042 | 待实施 |
 | 20 | L06 未读通知分页 | BS-047 | 待实施 |
@@ -243,6 +243,26 @@
 
 - 主审独占 MySQL 8.4.9 位于 33342/approvaplat_it，加载正式 14 份基线。最终随机及其他额外 schema、部署、运行任务／execution、历史实例、抄送、通知 inbox/outbox、SLA 执行及协作 channel/message/outbox/audit 均为 0；监听 PID 68056 与启动器 79248 正常退出，端口释放。主审临时数据库、脚本、日志及本轮报告共 555 文件（283236028 字节）已删除，临时根目录不存在，没有新增待删迁移；主工作区原有依赖、构建目录和较早日志保持。
 - leader 已复核实现任务 7 个 target、ruoyi-admin/logs、.c10-temp 均不存在，33341 端口已释放。最终 31 项交付在源工作区和主工作区的 SHA256 全部与冻结版本一致，两份用户原有未跟踪文档摘要保持。review 和完整主审验证通过，精确提交仅含 31 项交付及本台账；BS-024 完成，下一项为 C11。
+
+## C11
+
+- 实现任务：`01a0affa-eedf-7800-9d93-1d053f705bc1`；worktree：`C:/Users/18221/.codex/worktrees/aff0/ruoyiflowable`。
+- 起始 HEAD 已核对为 C10 提交 `22d6777021a27c4fe4741f2e42a7a53f7a51829b`，初始工作区干净，任务已确认运行。一个 SLA 建立操作取得并解析一份日历，直接计算同一起点的提醒和升级时间，删除重复查询、丢弃解析结果及日期索引；独立单到期点入口与部署校验同步追溯，不新增通用日历框架或跨请求缓存。
+- 保留停用日历只阻止新部署、旧部署建立后续时钟仍可使用当前日历的语义；已有时钟不因更新回写，后续任务读取新配置。要求真实 H2／MySQL、Flowable 任务和定时作业覆盖假日／补班、时区及夏令时、两个分钟数、故障和事务回滚，区分目录替身与真实执行，不修改 C10 新旧制品协议或提前实施其他单元。
+- 完成后冻结精确白名单及 SHA256，通知 leader 继续独立 review、主工作区验证和精确本地提交。临时资源正常清理，无法删除的本任务自有内容按用户授权迁入集中待删目录；不得推送或触及常驻／共享服务。
+
+- leader 已审查全部 7 个文件及日历 Mapper、单点 Flowable 业务日历、部署校验与 SLA 创建／定时器直接调用方。生产 2 文件 +61/-30，正式测试及夹具 +471/-4，文档 +1；没有独立生产类或框架。服务内 private CalendarSchedule 保存实际解析结果，SlaDueDates 只返回本次被消费的两个 Instant；运行服务按同一起点、同一结果写入 UTC 到期点，删除第二次日历装载以及 calculate 内的重复解析和日期索引构建。
+- 保留原分钟上限 2635200、扫描上限 3660 及原秒级／自然日推进算法，未改变快照、接口、数据库格式、停用处理、重复提醒或升级协议。CalendarSchedule 不逃出服务，集合只用于当前计算；独立 resolveDueAt 和部署 requireEnabled 保持。Mapper 的一次完整日历装载包含既有主记录和日期覆盖查询，不能把一次服务装载夸大为整个引擎命令只有一条 SQL。两个提醒加一个升级的场景实际为 SLA 执行记录读取 1 次、三个独立 Flowable 定时入口各读取 1 次，无跨入口缓存。
+- 新增 H2／MySQL 各 22 项复用相同业务判据：通过真实模型保存／预检／部署、认证上下文及 Spring 事务中的 Flowable 发起、正式任务监听器、SLA Mapper／runtime／timer delegate 和通知 Writer，覆盖窗口／跨周、补班／假日、上海时区、纽约春秋夏令时、两个分钟数、停用与更新后续任务、既有时钟和冻结快照不变。时间预期为硬编码 UTC 判据；getter 和 Mapper 计数仅辅助证明解析／装载不重复。
+- 定时器测试使用受控引擎时钟及真实 ManagementService 作业执行，证明首次／重复提醒、幂等调用、生成升级任务并完成、审计和必达站内信一致；无效接收人及真实通知表故障分别使提醒／升级回滚，并验证原生失败重试 timer retries=2 和恢复后成功。创建审计故障、后续任务日历损坏也证明任务／执行记录／历史／审计回滚。运行查询在解析 catch 之外，真实 SQL 故障保留 SQLException 原因；生产 Mapper 未启用惰性日期集合装载。
+- 身份／类别／表单目录及无关普通通知、抄送、多实例轮次协作者为受控替身，SLA 通知接收人有效性与写入使用真实 SQL。H2 夹具保留必要关系和唯一约束，仅提供相应方言函数／表结构；MySQL 使用正式 14 份基线及原约束。没有声明完整登录、运行中 HTTP／浏览器、外部邮件或自动异步线程持续调度验收，未另跑独立 Redis profile。本项无前端或数据格式迁移，回退本单元代码不回写已存在时钟；C10 制品兼容和恢复限制保持。
+- 实现任务最终 clean verify 的默认 672 项和受影响 MySQL 64 项通过，0 失败／错误／跳过；此前按多实例源文件名筛选漏掉实际测试类，已改为真实类名重新完整执行这次最终命令，未将前后结果拼接。leader 已按原始 HEAD blob 和最终磁盘 SHA256 集成全部 7 文件，正在主工作区重新执行全部默认测试及相同受影响 MySQL 套件；没有修改构建门禁。本项选择定向 MySQL 验证，不宣称完整 profile 或 admin HTTP IT。
+
+- leader 主工作区执行 `mvn -pl ruoyi-admin -am verify -Pworkflow-mysql-it '-Dit.test=WorkflowTaskSlaCalendarMySqlIT,WorkflowAssignmentMySqlIT,WorkflowNotificationPipelineMySqlIT,WorkflowAutomaticCopyMySqlIT,WorkflowMultiInstanceGroup*MySqlIT,WorkflowMultiInstanceReturnedTerminationMySqlIT,WorkflowMultiInstanceContinuousReturnMySqlIT,WorkflowProcessTerminalStateMySqlIT' -B -ntp`，于 2026-09-18 00:19:13 +08:00 成功（11 分 41 秒）。核对本轮新生成的 107 份 XML 及实际 testcase：默认 672 项（flowable 621、admin 51），受影响 MySQL 64 项，全部 0 失败／错误／跳过；admin 本次没有匹配的 IT，未将其计入 HTTP 验收，没有修改原有门禁。这是完整默认及定向 MySQL 验证，不是完整 MySQL profile。
+- 本项 SLA 日历 H2 22／MySQL 22 项均通过；既有候选任务创建 21、条件路由及旧 v1 兼容 26、独立 CEL 5 项默认测试同步通过。MySQL 同时通过分配 5、通知管线 3、自动抄送 14、连续退回 4、并发／重提／退回／回滚各 2、退回后终止 2、流程终态 6 项。真实作业执行和事务判据通过，浏览器／运行中 HTTP、实际外部邮件及自动异步线程持续运行未执行；没有增加这些层级的通过声明。
+
+- 主审独占 MySQL 8.4.9 位于 33344/approvaplat_it，使用正式 14 份基线。最终额外 schema、模型／部署、运行任务／execution、timer／job／deadletter、历史实例／comment、SLA execution／audit、通知 inbox／outbox 和抄送均为 0；监听 PID 81560 与启动器 77684 正常退出，端口释放。本轮主审临时数据库、脚本、日志及报告共 515 文件（250880802 字节）已删除，临时根目录不存在，无新增待删迁移，原有主工作区依赖及构建目录保持。
+- leader 复核实现任务 7 个 target、ruoyi-admin/logs 和 .c11-temp 均不存在，33343 端口已释放；实现任务报告删除 1889 文件且没有待删迁移。最终 7 个文件在源工作区和主工作区的 SHA256 均与冻结交付一致，两份用户原有未跟踪文档摘要保持。review 和主审验证通过，精确提交限于 7 项交付和本台账；BS-048 完成，下一项为 L03。
 
 ## 基线验证
 

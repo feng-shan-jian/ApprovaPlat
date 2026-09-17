@@ -477,6 +477,8 @@ public class WorkflowTaskSlaRuntimeService
             return;
         }
         Instant start = currentInstant();
+        WorkflowBusinessCalendarService.SlaDueDates dueDates = calendarService.resolveSlaDueDates(
+                snapshot.getCalendarKey(), start, snapshot.getReminderMinutes(), snapshot.getEscalationMinutes());
         WfTaskSlaExecution execution = new WfTaskSlaExecution();
         execution.setDeploymentId(definition.getDeploymentId());
         execution.setProcessInstanceId(processInstanceId);
@@ -485,10 +487,8 @@ public class WorkflowTaskSlaRuntimeService
         execution.setTaskDefinitionKey(taskDefinitionKey);
         execution.setAssigneeUserId(assignee);
         execution.setStartedAt(LocalDateTime.ofInstant(start, ZoneOffset.UTC));
-        execution.setReminderDueAt(LocalDateTime.ofInstant(calendarService.resolveDueAt(
-                snapshot.getCalendarKey(), start, snapshot.getReminderMinutes()), ZoneOffset.UTC));
-        execution.setEscalationDueAt(LocalDateTime.ofInstant(calendarService.resolveDueAt(
-                snapshot.getCalendarKey(), start, snapshot.getEscalationMinutes()), ZoneOffset.UTC));
+        execution.setReminderDueAt(LocalDateTime.ofInstant(dueDates.reminderDueAt(), ZoneOffset.UTC));
+        execution.setEscalationDueAt(LocalDateTime.ofInstant(dueDates.escalationDueAt(), ZoneOffset.UTC));
         int inserted = slaMapper.insertExecution(execution);
         WfTaskSlaExecution stored = slaMapper.selectExecutionByTaskForUpdate(taskId);
         if (stored == null)
