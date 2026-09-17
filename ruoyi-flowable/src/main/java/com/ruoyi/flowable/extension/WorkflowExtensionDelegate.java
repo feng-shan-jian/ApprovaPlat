@@ -76,8 +76,6 @@ public class WorkflowExtensionDelegate implements JavaDelegate
         try
         {
             JsonNode config = objectMapper.readTree(snapshot.getConfigJson());
-            String storedConfig = WorkflowExtensionJsonCanonicalizer
-                    .canonicalize(snapshot.getConfigJson());
             if (WorkflowExtensionRegistryService.JAVA_TYPE.equals(snapshot.getExtensionType()))
             {
                 WorkflowJavaExtensionHandler handler = handlerRegistry.require(snapshot.getImplementationKey());
@@ -85,7 +83,8 @@ public class WorkflowExtensionDelegate implements JavaDelegate
                         .canonicalize(handler.configSchema()));
                 String normalized = WorkflowExtensionJsonCanonicalizer.canonicalize(
                         handler.validateAndNormalizeConfig(config));
-                requireStableConfig(normalized, storedConfig);
+                requireStableConfig(normalized, WorkflowExtensionJsonCanonicalizer
+                        .canonicalize(snapshot.getConfigJson()));
                 handler.execute(execution, config);
                 return;
             }
@@ -94,7 +93,6 @@ public class WorkflowExtensionDelegate implements JavaDelegate
                             .equals(snapshot.getImplementationKey()))
             {
                 requireStableVersion(snapshot, celSandbox.configSchema());
-                requireStableConfig(celSandbox.validateAndNormalizeConfig(config), storedConfig);
                 celSandbox.execute(execution, config);
                 return;
             }
@@ -102,7 +100,6 @@ public class WorkflowExtensionDelegate implements JavaDelegate
                     && WorkflowHttpConnector.IMPLEMENTATION_KEY.equals(snapshot.getImplementationKey()))
             {
                 requireStableVersion(snapshot, httpConnector.configSchema());
-                requireStableConfig(httpConnector.validateFrozenConfig(config), storedConfig);
                 httpConnector.execute(execution, snapshot, config);
                 return;
             }
@@ -110,7 +107,6 @@ public class WorkflowExtensionDelegate implements JavaDelegate
                     && WorkflowSqlConnector.IMPLEMENTATION_KEY.equals(snapshot.getImplementationKey()))
             {
                 requireStableVersion(snapshot, sqlConnector.configSchema());
-                requireStableConfig(sqlConnector.validateFrozenConfig(config), storedConfig);
                 sqlConnector.execute(execution, snapshot, config);
                 return;
             }

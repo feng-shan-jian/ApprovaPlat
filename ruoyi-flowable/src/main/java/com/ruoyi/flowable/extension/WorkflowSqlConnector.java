@@ -101,15 +101,11 @@ public class WorkflowSqlConnector
         WfSqlDataSource dataSource = dataSourceService.lockEnabledForDeployment(
                 author.dataSourceKey());
         WorkflowSqlTemplate template = templateValidator.validate(author.sql(),
-                Set.of(dataSource.getAllowedTables().split(",")));
+                Set.of(dataSource.getAllowedTables().split(",")),
+                "EXTERNAL".equals(dataSource.getConnectionType()), author.idempotencyColumn());
         requireParameterMapping(author, template);
         boolean externalWrite = "EXTERNAL".equals(dataSource.getConnectionType())
                 && !"SELECT".equals(template.operation());
-        if (externalWrite)
-        {
-            templateValidator.requireIdempotentExternalWrite(template,
-                    author.idempotencyColumn());
-        }
         if (externalWrite && author.resultVariable() != null)
         {
             throw new ServiceException("SQL 外库写入不允许依赖不可重放的影响行数",
@@ -182,17 +178,6 @@ public class WorkflowSqlConnector
             recordAttempt(execution, started, false, "SQL_EXECUTION_ERROR");
             throw exception;
         }
-    }
-
-    /**
-     * 重新规范化冻结配置，供运行调度器执行版本和配置漂移校验。
-     * @param config JsonNode，冻结配置
-     * @return String，规范冻结配置
-     */
-    public String validateFrozenConfig(JsonNode config)
-    {
-        FrozenConfig frozen = parseFrozen(config);
-        return WorkflowExtensionJsonCanonicalizer.canonicalize(config.toString());
     }
 
     /**
@@ -319,14 +304,9 @@ public class WorkflowSqlConnector
             throw new ServiceException("SQL 数据源部署快照校验和不一致", HttpStatus.ERROR);
         }
         WorkflowSqlTemplate template = templateValidator.validate(author.sql(),
-                Set.of(dataSource.allowedTables().split(",")));
+                Set.of(dataSource.allowedTables().split(",")),
+                "EXTERNAL".equals(dataSource.connectionType()), author.idempotencyColumn());
         requireParameterMapping(author, template);
-        if ("EXTERNAL".equals(dataSource.connectionType())
-                && !"SELECT".equals(template.operation()))
-        {
-            templateValidator.requireIdempotentExternalWrite(template,
-                    author.idempotencyColumn());
-        }
         String operation = requiredText(config, "operation", 16);
         if (!operation.equals(template.operation()) || !config.path("tables").isArray()
                 || !config.path("tables").equals(objectMapper.valueToTree(template.tables())))

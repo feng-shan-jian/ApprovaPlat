@@ -186,15 +186,8 @@ public class WorkflowCelSandbox
      */
     public void execute(DelegateExecution execution, JsonNode config)
     {
-        CelCompiledConfig compiled;
-        try
-        {
-            compiled = compile(config);
-        }
-        catch (ServiceException exception)
-        {
-            throw new ServiceException("CEL 执行配置无法通过部署时门禁", HttpStatus.ERROR);
-        }
+        // 保留原 Delegate 前置编译的具体配置异常；同一次编译产物直接用于求值。
+        CelCompiledConfig compiled = compile(config);
 
         Map<String, Object> activation = new LinkedHashMap<>();
         for (CelVariable variable : compiled.variables())

@@ -42,9 +42,12 @@ public class WorkflowSqlTemplateValidator
      * 解析并校验一条受控 SQL 模板。
      * @param sql String，作者配置中的命名参数 SQL
      * @param allowedTables Set&lt;String&gt;，当前数据源允许访问的表名，大小写不敏感
+     * @param external boolean，是否为需要幂等写入约束的外部数据源
+     * @param idempotencyColumn String，外库写入的唯一键列
      * @return WorkflowSqlTemplate，规范 SQL、类型、参数和访问表
      */
-    public WorkflowSqlTemplate validate(String sql, Set<String> allowedTables)
+    public WorkflowSqlTemplate validate(String sql, Set<String> allowedTables,
+            boolean external, String idempotencyColumn)
     {
         String source = sql == null ? "" : sql.trim();
         if (source.isEmpty() || source.length() > MAX_SQL_LENGTH)
@@ -76,6 +79,10 @@ public class WorkflowSqlTemplateValidator
                 throw invalid("SQL 模板至少需要一个命名参数");
             }
             List<String> normalizedTables = normalizeTables(tables, allowedTables);
+            if (external && !"SELECT".equals(operation))
+            {
+                requireIdempotentExternalWrite(statement, parameters, idempotencyColumn);
+            }
             return new WorkflowSqlTemplate(statement.toString(), operation,
                     List.copyOf(parameters), List.copyOf(normalizedTables));
         }
@@ -87,11 +94,12 @@ public class WorkflowSqlTemplateValidator
 
     /**
      * 校验外库写模板具有可重放的业务唯一键契约。
-     * @param template WorkflowSqlTemplate，已经通过单语句与表白名单校验的模板
+     * @param statement Statement，本次已经解析并通过操作和表约束的 AST
+     * @param parameters List&lt;String&gt;，同一 AST 中的命名参数
      * @param idempotencyColumn String，目标表由唯一约束保护的幂等键列
      * @return void，仅接受写入系统 idempotencyKey 且重复键分支为空操作的 INSERT
      */
-    public void requireIdempotentExternalWrite(WorkflowSqlTemplate template,
+    private void requireIdempotentExternalWrite(Statement statement, List<String> parameters,
             String idempotencyColumn)
     {
         String columnName = idempotencyColumn == null ? "" : idempotencyColumn.trim();
@@ -99,25 +107,12 @@ public class WorkflowSqlTemplateValidator
         {
             throw invalid("SQL 外库幂等唯一列格式不合法");
         }
-        if (template == null || !"INSERT".equals(template.operation())
-                || !template.parameterNames().contains("idempotencyKey"))
+        if (!(statement instanceof Insert insert) || !parameters.contains("idempotencyKey"))
         {
             throw invalid("SQL 外库写入只允许使用 idempotencyKey 的幂等 INSERT 模板");
         }
-        try
-        {
-            Statement statement = CCJSqlParserUtil.parse(template.sql());
-            if (!(statement instanceof Insert insert))
-            {
-                throw invalid("SQL 外库写入只允许幂等 INSERT 模板");
-            }
-            requireIdempotencyValue(insert, columnName);
-            requireNoOpDuplicateUpdate(insert, columnName);
-        }
-        catch (JSQLParserException exception)
-        {
-            throw invalid("SQL 外库幂等模板无法解析");
-        }
+        requireIdempotencyValue(insert, columnName);
+        requireNoOpDuplicateUpdate(insert, columnName);
     }
 
     /**

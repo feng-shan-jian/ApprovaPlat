@@ -328,9 +328,10 @@ public class WorkflowHttpConnector
     }
 
     /**
-     * 复算冻结配置并返回规范文本，供 Delegate 进行三层漂移校验。
-     * @param config JsonNode，部署快照配置
-     * @return String，规范冻结配置
+     * 为已登记的协作 Java Handler 复核并规范化嵌套端点配置。
+     * 登记 outbox 与后台投递是不同事务；投递时仍须重新检查当次实际配置。
+     * @param config JsonNode，协作 Handler 中的冻结端点配置
+     * @return String，供 Java Handler 配置协议比较的规范冻结配置
      */
     public String validateFrozenConfig(JsonNode config)
     {

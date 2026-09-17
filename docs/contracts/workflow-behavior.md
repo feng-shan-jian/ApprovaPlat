@@ -117,6 +117,7 @@ Flowable 8 的 `DelegateTask.setAssignee` 在创建中更新任务对象；公�
 - 建模用户从目录选择登记的固定 Delegate；发布门禁只接受目录 Java 实现、已登记 `delegateExpression` 和结构化字段配置。
 - HTTP 连接器访问登记端点；请求通过 Flowable async Job 执行，并发送由 `processInstanceId + executionId + elementId + payloadSha256` 生成的稳定 `Idempotency-Key`。
 - SQL 连接器使用登记数据源和 AST 校验模板。外库查询允许至少一次重试；外库写接受绑定系统 `idempotencyKey`、由真实业务唯一键保护且重复键分支为空操作的幂等 INSERT。
+- 内置 CEL、HTTP、SQL 由固定 Delegate 核验部署快照及实现版本／Schema 后直接执行；执行器在每次尝试内准备一次配置并消费该结果，SQL 外库幂等约束使用同一 AST。作者编译与运行检查属于不同生命周期，运行时仍保留参数、端点、凭据、资源限制和沙箱约束。已登记 Java Handler 的规范化协议保持；协作 Handler 登记 outbox 与 worker 后续投递分别复核各自读取的配置，不将部署或登记校验视为永久安全凭据。
 - HTTP/SQL 失败保留在 Flowable 原生 Job、Timer Job 和 Dead Letter Job；逐次结果进入脱敏结构化日志与 Micrometer 指标，Flowable Job 表作为唯一调用状态台账。
 - DMN 部署必须通过 XML 安全校验，并在流程部署时将引用快照固化到 `approvaplat/dmn-v1.json`。
 - 决策表作者接口 `/workflow/dmn/table` 与 `/workflow/dmn/table/evaluate` 的 `number` 列接受十进制文本或原有 JSON number；浏览器对条件、结果、默认值及试算输入统一发送文本，后端统一以 `BigDecimal` 校验，最多 18 位有效数字且 scale 的绝对值不超过 8。禁止 NaN、Infinity、十六进制及表达式；精确小数调用方应发送文本，已被客户端或 JSON 浮点解析舍入的数值无法恢复。
