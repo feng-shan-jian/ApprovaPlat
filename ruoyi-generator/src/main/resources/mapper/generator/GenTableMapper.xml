@@ -106,31 +106,42 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         </foreach> 
 	</select>
 	
-	<select id="selectTableByName" parameterType="String" resultMap="GenTableResult">
-		select table_name, table_comment, create_time, update_time from information_schema.tables
-		where table_comment <![CDATA[ <> ]]> '' and table_schema = (select database())
-		and table_name = #{tableName}
-	</select>
-	
-	<select id="selectGenTableById" parameterType="Long" resultMap="GenTableResult">
+    <!-- 仅联表使用列前缀；列表与数据库目录保留原有映射。LEFT JOIN 无列时不创建列对象。 -->
+    <resultMap type="GenTable" id="GenTableWithColumnsResult" extends="GenTableResult">
+        <collection property="columns" javaType="java.util.List" resultMap="GenTableColumnResult"
+                    columnPrefix="c_" notNullColumn="column_id" />
+    </resultMap>
+
+    <sql id="joinedColumns">
+        c.column_id as c_column_id, c.table_id as c_table_id,
+        c.column_name as c_column_name, c.column_comment as c_column_comment,
+        c.column_type as c_column_type, c.java_type as c_java_type, c.java_field as c_java_field,
+        c.is_pk as c_is_pk, c.is_increment as c_is_increment, c.is_required as c_is_required,
+        c.is_insert as c_is_insert, c.is_edit as c_is_edit, c.is_list as c_is_list, c.is_query as c_is_query,
+        c.query_type as c_query_type, c.html_type as c_html_type, c.dict_type as c_dict_type, c.sort as c_sort,
+        c.create_by as c_create_by, c.create_time as c_create_time,
+        c.update_by as c_update_by, c.update_time as c_update_time
+    </sql>
+
+	<select id="selectGenTableById" parameterType="Long" resultMap="GenTableWithColumnsResult">
 	    SELECT t.table_id, t.table_name, t.table_comment, t.sub_table_name, t.sub_table_fk_name, t.class_name, t.tpl_category, t.tpl_web_type, t.package_name, t.module_name, t.business_name, t.function_name, t.function_author, t.form_col_num, t.gen_type, t.gen_path, t.options, t.remark,
-			   c.column_id, c.column_name, c.column_comment, c.column_type, c.java_type, c.java_field, c.is_pk, c.is_increment, c.is_required, c.is_insert, c.is_edit, c.is_list, c.is_query, c.query_type, c.html_type, c.dict_type, c.sort
+			   <include refid="joinedColumns"/>
 		FROM gen_table t
 			 LEFT JOIN gen_table_column c ON t.table_id = c.table_id
 		where t.table_id = #{tableId} order by c.sort
 	</select>
 	
-	<select id="selectGenTableByName" parameterType="String" resultMap="GenTableResult">
+	<select id="selectGenTableByName" parameterType="String" resultMap="GenTableWithColumnsResult">
 	    SELECT t.table_id, t.table_name, t.table_comment, t.sub_table_name, t.sub_table_fk_name, t.class_name, t.tpl_category, t.tpl_web_type, t.package_name, t.module_name, t.business_name, t.function_name, t.function_author, t.form_col_num, t.gen_type, t.gen_path, t.options, t.remark,
-			   c.column_id, c.column_name, c.column_comment, c.column_type, c.java_type, c.java_field, c.is_pk, c.is_increment, c.is_required, c.is_insert, c.is_edit, c.is_list, c.is_query, c.query_type, c.html_type, c.dict_type, c.sort
+			   <include refid="joinedColumns"/>
 		FROM gen_table t
 			 LEFT JOIN gen_table_column c ON t.table_id = c.table_id
 		where t.table_name = #{tableName} order by c.sort
 	</select>
 	
-	<select id="selectGenTableAll" parameterType="String" resultMap="GenTableResult">
+	<select id="selectGenTableAll" parameterType="String" resultMap="GenTableWithColumnsResult">
 	    SELECT t.table_id, t.table_name, t.table_comment, t.sub_table_name, t.sub_table_fk_name, t.class_name, t.tpl_category, t.tpl_web_type, t.package_name, t.module_name, t.business_name, t.function_name, t.function_author, t.form_col_num, t.options, t.remark,
-			   c.column_id, c.column_name, c.column_comment, c.column_type, c.java_type, c.java_field, c.is_pk, c.is_increment, c.is_required, c.is_insert, c.is_edit, c.is_list, c.is_query, c.query_type, c.html_type, c.dict_type, c.sort
+			   <include refid="joinedColumns"/>
 		FROM gen_table t
 			 LEFT JOIN gen_table_column c ON t.table_id = c.table_id
 		order by c.sort
