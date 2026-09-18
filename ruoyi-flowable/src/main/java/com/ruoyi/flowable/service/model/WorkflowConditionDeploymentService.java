@@ -93,29 +93,18 @@ public class WorkflowConditionDeploymentService
     }
 
     /**
-     * 计算运行时复核使用的完整快照摘要。
+     * 写入既有存储协议的快照摘要，保持写入兼容；运行求值不复算。
      * @param snapshot WfDeployConditionRule，条件分支快照
      * @return String，64 位小写 SHA-256
      */
-    public static String snapshotChecksum(WfDeployConditionRule snapshot)
+    private static String snapshotChecksum(WfDeployConditionRule snapshot)
     {
-        // MySQL JSON 会调整对象键顺序和空白，摘要必须基于结构而非 JDBC 原始文本。
-        String canonicalRuleJson = canonicalSnapshotJson(snapshot.getRuleJson());
+        // toSnapshot 的唯一输入已由作者规则编译生成规范正文，无需再次解释。
         return WorkflowExtensionChecksum.sha256(snapshot.getProcessKey(), snapshot.getGatewayId(),
                 snapshot.getGatewayType(), snapshot.getGatewayToken(), snapshot.getFlowId(),
                 snapshot.getFlowName(), snapshot.getFlowToken(),
                 Boolean.TRUE.equals(snapshot.getDefaultFlow()) ? "1" : "0",
-                canonicalRuleJson);
-    }
-
-    /**
-     * 将快照 JSON 规范为数据库写入前后都一致的结构文本。
-     * @param json String，规则 JSON
-     * @return String，递归排序后的稳定 JSON；入参为空时返回 null
-     */
-    private static String canonicalSnapshotJson(String json)
-    {
-        return json == null ? null : WorkflowExtensionJsonCanonicalizer.canonicalize(json);
+                snapshot.getRuleJson());
     }
 
     /**

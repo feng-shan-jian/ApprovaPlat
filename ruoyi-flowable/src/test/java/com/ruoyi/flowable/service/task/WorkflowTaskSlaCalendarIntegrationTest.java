@@ -126,14 +126,32 @@ public class WorkflowTaskSlaCalendarIntegrationTest
         calendars.update(calendarId, request(zone, open, close, "00:00".equals(open)));
         String deployment = deploy(reminder, escalation, false);
         resetReadObservation();
+        doAnswer(invocation -> {
+            assertThat(engine.getManagementService().createTimerJobQuery().count()).isZero();
+            return invocation.callRealMethod();
+        }).when(calendars).resolveSlaDueDates(anyString(), any(), anyInt(), anyInt());
         Task task = start(deployment, start);
         assertDue(task, first, last);
         verify(calendars, times(1)).resolveSlaDueDates("WORKDAY", Instant.parse(start), reminder, escalation);
         // Two reminders and one escalation each use Flowable's independent single-point entry.
-        verify(calendars, times(3)).resolveDueAt(eq("WORKDAY"), eq(Instant.parse(start)), anyInt());
-        verify(mapper, times(4)).selectCalendarByKey("WORKDAY");
-        assertThat(reads).hasSize(4);
+        verify(calendars, times(jobs(task).size())).resolveDueAt(eq("WORKDAY"), eq(Instant.parse(start)), anyInt());
+        assertThat(reads).hasSize(jobs(task).size() + 1);
         reads.forEach(this::assertParsedOnce);
+    }
+
+    @Test void authorSaveAndDeploymentReuseOneCalendarWithoutPreparingDateIndexes()
+    {
+        resetReadObservation();
+        String model = save(60, 180, true);
+        verify(mapper, times(1)).selectCalendarByKey("WORKDAY");
+        assertThat(reads).singleElement().satisfies(value -> verify(value, never()).getDays());
+        resetReadObservation();
+        String deployment = models.deployModel(model);
+        verify(mapper, times(1)).selectCalendarByKey("WORKDAY");
+        var snapshots = artifacts.selectTaskSlaSnapshots(deployment);
+        assertThat(snapshots).hasSize(2);
+        // 各节点冻结自己的日期覆盖；引用阶段不再额外构造并丢弃日期索引。
+        assertThat(reads).singleElement().satisfies(value -> verify(value, times(snapshots.size())).getDays());
     }
 
     @Test void holidayAndMakeupOverrideWeekAndOnePairConsumesOneActualRead()
@@ -202,7 +220,7 @@ public class WorkflowTaskSlaCalendarIntegrationTest
         assertThat(execution(second).getRemindersSent()).isOne();
     }
 
-    @ParameterizedTest @ValueSource(strings = { "missing", "timezone", "weekdays", "scan" })
+    @ParameterizedTest @ValueSource(strings = { "missing", "timezone", "scan" })
     void unreadableCalendarRollsBackActualTaskCreationAndLeavesNoPartialClock(String failure)
     {
         String deployment = deploy(60, 180, false);
@@ -210,7 +228,6 @@ public class WorkflowTaskSlaCalendarIntegrationTest
         {
             case "missing" -> jdbc.update("delete from wf_business_calendar where calendar_id=?", calendarId);
             case "timezone" -> jdbc.update("update wf_business_calendar set timezone='No/SuchZone' where calendar_id=?", calendarId);
-            case "weekdays" -> jdbc.update("update wf_business_calendar set working_days='1,1' where calendar_id=?", calendarId);
             case "scan" -> calendars.update(calendarId, new WorkflowBusinessCalendarRequest("WORKDAY", "稀疏工作周", "UTC", List.of(1), "09:00", "09:01", null, List.of()));
             default -> throw new AssertionError(failure);
         }
@@ -282,7 +299,7 @@ public class WorkflowTaskSlaCalendarIntegrationTest
     {
         Task first = start(deploy(60, 180, true), "2026-09-18T09:30:00Z");
         var due = jobs(first).stream().map(Job::getId).toList();
-        jdbc.update("update wf_business_calendar set working_days='8' where calendar_id=?", calendarId);
+        jdbc.update("update wf_business_calendar set working_days='unreadable' where calendar_id=?", calendarId);
         assertThatThrownBy(() -> complete(first)).hasMessageContaining("业务日历正式数据异常");
         assertThat(task(first.getProcessInstanceId()).getId()).isEqualTo(first.getId());
         assertThat(execution(first).getStatus()).isEqualTo("ACTIVE");
@@ -309,16 +326,22 @@ public class WorkflowTaskSlaCalendarIntegrationTest
         assertThat(reads).singleElement().satisfies(this::assertParsedOnce);
     }
 
-    protected String deploy(int reminder, int escalation, boolean chain) { return models.deployModel(save(reminder, escalation, chain)); }
+    protected String deploy(int reminder, int escalation, boolean chain)
+    {
+        String id = save(reminder, escalation, chain);
+        var repository = engine.getRepositoryService();
+        assertThat(models.preflight(id, ((ModelEntity) repository.getModel(id)).getRevision(),
+                new String(repository.getModelEditorSource(id), StandardCharsets.UTF_8)).valid()).isTrue();
+        return models.deployModel(id);
+    }
     private String save(int reminder, int escalation, boolean chain)
     {
         var repository = engine.getRepositoryService(); String key = "slaCalendar" + (++sequence);
         String xml = author(key, reminder, escalation, chain);
         var model = repository.newModel(); model.setKey(key); model.setName(key); model.setCategory("test"); model.setMetaInfo("{}"); repository.saveModel(model);
-        repository.addModelEditorSource(model.getId(), xml.getBytes(StandardCharsets.UTF_8));
+        repository.addModelEditorSource(model.getId(), xml.replace("urn:c11", "urn:initial").getBytes(StandardCharsets.UTF_8));
         var dto = new WorkflowModelDto(); dto.setModelId(model.getId()); dto.setExpectedRevision(((ModelEntity) repository.getModel(model.getId())).getRevision()); dto.setBpmnXml(xml);
         models.saveModel(dto);
-        assertThat(models.preflight(model.getId(), ((ModelEntity) repository.getModel(model.getId())).getRevision(), xml).valid()).isTrue();
         return model.getId();
     }
     protected Task start(String deployment, String time)

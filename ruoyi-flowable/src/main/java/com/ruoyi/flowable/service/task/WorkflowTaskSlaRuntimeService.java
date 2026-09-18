@@ -476,6 +476,8 @@ public class WorkflowTaskSlaRuntimeService
         {
             return;
         }
+        // Flowable 的 create 任务监听器先于边界 timer 行为执行，此时尚无可复用的 timer 到期事实。
+        // 台账的两个到期点共用一次日历解释；随后各 timer 由引擎独立创建。
         Instant start = currentInstant();
         WorkflowBusinessCalendarService.SlaDueDates dueDates = calendarService.resolveSlaDueDates(
                 snapshot.getCalendarKey(), start, snapshot.getReminderMinutes(), snapshot.getEscalationMinutes());

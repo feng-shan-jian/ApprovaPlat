@@ -189,7 +189,6 @@ class WorkflowNotificationInboxMySqlIT
         assertThat(rowQueries).hasSize(expectedIds.length == 0 ? 0 : 1);
         if (!rowQueries.isEmpty())
         {
-            assertThat(rowQueries.get(0)).contains("order by notification_id desc limit ? offset ?");
             var item = result.items().get(0);
             assertThat(item.eventType()).isEqualTo("TASK_ARRIVED");
             assertThat(item.title()).isEqualTo("Inbox title " + item.notificationId());

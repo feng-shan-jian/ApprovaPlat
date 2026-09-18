@@ -495,6 +495,7 @@ class SysConfigDictDeletionMySqlIT
         assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
     }
 
+    /** 参数/字典及组织 IT 共用的 Mapper 边界；竞争时序仍由各测试自己的回调指定。 */
     @Intercepts({
         @Signature(type = Executor.class, method = "query", args = { MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class }),
         @Signature(type = Executor.class, method = "update", args = { MappedStatement.class, Object.class })

@@ -84,7 +84,7 @@ class WorkflowBpmnLegacyRejectionTest
     }
 
     /**
-     * 验证服务端最后部署编译阶段为全部 UserTask 注入并校验固定身份审计监听器。
+     * 验证服务端最后部署编译阶段为全部 UserTask 注入固定身份审计监听器。
      *
      * @return void，作者无内部监听器时不能生成可执行部署资源则测试失败
      */
@@ -112,17 +112,13 @@ class WorkflowBpmnLegacyRejectionTest
         String slaCompiledXml = new String(
                 slaCompiled, StandardCharsets.UTF_8);
         assertThat(slaCompiledXml).doesNotContain("${userTaskListener}");
-        assertThatThrownBy(() -> service.validateCompiledDeployment(slaCompiled))
-                .isInstanceOf(ServiceException.class)
-                .hasMessageContaining("缺少固定身份审计任务监听器");
 
         new WorkflowRuntimeTaskListenerCompiler().compile(executable);
         byte[] compiled = WorkflowBpmnXmlPreserver.write(executable, preSlaCompiledProcess());
         // 原任务和 SLA 新生成的升级 UserTask 均由最后阶段获得三项固定事件。
         assertThat(occurrences(new String(compiled, StandardCharsets.UTF_8),
                 "${userTaskListener}")).isEqualTo(6);
-        assertThatCode(() -> service.validateCompiledDeployment(compiled))
-                .doesNotThrowAnyException();
+        assertThat(service.executionValidationIssues(compiled)).isEmpty();
     }
 
     /**

@@ -89,39 +89,13 @@ public class WorkflowBpmnService
     private static final String FLOWABLE_SEND_TASK_IMPLEMENTATION_PROBLEM =
             "flowable-sendtask-invalid-implementation";
 
-    /** 服务端最终编译结果只允许引用固定内部任务监听器，不接受任意 Spring Bean。 */
+    /** 作者输入不得携带服务端生成的内部任务监听器。 */
     private static final String USER_TASK_LISTENER_EXPRESSION =
             WorkflowRuntimeTaskListenerCompiler.SYSTEM_LISTENER_EXPRESSION;
-
-    /** 服务端最终编译结果必须具有的完整任务生命周期事件。 */
-    private static final Set<String> USER_TASK_LISTENER_EVENTS =
-            WorkflowRuntimeTaskListenerCompiler.SYSTEM_LISTENER_EVENTS;
 
     /** 普通表达式仅允许变量、属性、索引、字面量和运算符，禁止方法调用。 */
     private static final Pattern SAFE_EXPRESSION_PATTERN = Pattern.compile(
             "[$#]\\{[A-Za-z0-9_.$#{}\\[\\]'\"\\s=!<>+\\-*/%?:,&|;]+}");
-
-    /**
-     * SLA 编译阶段唯一允许生成的服务任务表达式；参数均来自已校验并冻结的部署快照。
-     * 该白名单拒绝任意 Bean、方法链和用户输入拼接，避免作者借编译阶段绕过受控扩展边界。
-     */
-    private static final Pattern SLA_TIMER_DELEGATE_EXPRESSION = Pattern.compile(
-            "\\$\\{workflowSlaTimerDelegate\\.executeTimer\\(execution,'[A-Za-z0-9_.:-]+',"
-                    + "'(REMINDER|ESCALATE)',[0-9]{1,3},(null|'[1-9][0-9]{0,18}')\\)\\}");
-
-    /** DMN 编译器写入 Flowable 原生 ServiceTask 的固定决策键字段。 */
-    private static final String DMN_DECISION_KEY_FIELD = "decisionTableReferenceKey";
-
-    /** DMN 编译器要求决策与流程部署使用同一冻结部署的固定字段。 */
-    private static final String DMN_SAME_DEPLOYMENT_FIELD = "sameDeployment";
-
-    /** 冻结后的 DMN 决策键最大长度，避免异常编译资源携带无界运行参数。 */
-    private static final int MAX_DMN_DECISION_KEY_LENGTH = 255;
-
-    /** 条件分支编译后唯一允许的固定路由表达式，参数只能是服务端 SHA-256 摘要令牌。 */
-    private static final Pattern CONDITION_ROUTER_EXPRESSION = Pattern.compile(
-            "\\$\\{workflowConditionRouter\\.matches\\(execution,'[0-9a-f]{24}',"
-                    + "'[0-9a-f]{24}'\\)\\}");
 
     /** 原始 XML 中显式声明的非中断 Error 边界；模型转换会丢失该作者意图，必须先行拦截。 */
     private static final Pattern NON_INTERRUPTING_ERROR_BOUNDARY_PATTERN = Pattern.compile(
@@ -133,13 +107,6 @@ public class WorkflowBpmnService
             "java.", "javax.", "jakarta.", "runtime", "processbuilder", "system.",
             "getclass", "classloader", "forname", "applicationcontext", "beanfactory",
             "scriptengine", "jndi", "reflection", ".class", "exec", "new ");
-
-    /** BPMN 资源所处阶段，用于区分作者字段与部署编译结果的互斥契约。 */
-    private enum ValidationContext
-    {
-        AUTHOR,
-        COMPILED_DEPLOYMENT
-    }
 
     private final RepositoryService repositoryService;
 
@@ -171,7 +138,7 @@ public class WorkflowBpmnService
     public WorkflowBpmnDocument validate(byte[] bpmnBytes)
     {
         WorkflowBpmnDocument document = validateDocument(
-                bpmnBytes, true, ValidationContext.AUTHOR);
+                bpmnBytes, true);
         validateDeployable(document);
         return document;
     }
@@ -184,7 +151,7 @@ public class WorkflowBpmnService
      */
     public WorkflowBpmnDocument validateForSave(byte[] bpmnBytes)
     {
-        return validateDocument(bpmnBytes, true, ValidationContext.AUTHOR);
+        return validateDocument(bpmnBytes, true);
     }
 
     /**
@@ -195,7 +162,7 @@ public class WorkflowBpmnService
      */
     public WorkflowBpmnDocument validateDraft(byte[] bpmnBytes)
     {
-        return validateDocument(bpmnBytes, false, ValidationContext.AUTHOR);
+        return validateDocument(bpmnBytes, false);
     }
 
     /** 仅供不可部署的个人设计草稿使用，允许端点、表单及业务规则尚未配置。 */
@@ -300,29 +267,13 @@ public class WorkflowBpmnService
     }
 
     /**
-     * 校验部署编译器生成的可执行 BPMN；固定调度器必须保留，作者扩展字段必须已经剥离。
-     *
-     * @param bpmnBytes byte[]，Flowable 部署仓储中读取的已编译 BPMN UTF-8 字节
-     * @return WorkflowBpmnDocument，通过安全、编译契约、兼容性和 Flowable 官方校验的部署文档
-     */
-    public WorkflowBpmnDocument validateCompiledDeployment(byte[] bpmnBytes)
-    {
-        WorkflowBpmnDocument document = validateDocument(
-                bpmnBytes, true, ValidationContext.COMPILED_DEPLOYMENT);
-        validateDeployable(document);
-        return document;
-    }
-
-    /**
      * 执行统一的 BPMN 解码、解析和安全扫描；部署层另行执行执行兼容性与官方校验。
      *
      * @param bpmnBytes byte[]，待校验的 BPMN UTF-8 原始字节
      * @param requireStartForm boolean，true 表示保存或部署场景必须配置开始表单
-     * @param validationContext ValidationContext，作者资源或部署编译资源的字段契约
      * @return WorkflowBpmnDocument，通过指定校验强度的 BPMN 文档和表单引用
      */
-    private WorkflowBpmnDocument validateDocument(byte[] bpmnBytes, boolean requireStartForm,
-            ValidationContext validationContext)
+    private WorkflowBpmnDocument validateDocument(byte[] bpmnBytes, boolean requireStartForm)
     {
         if (bpmnBytes == null || bpmnBytes.length == 0)
         {
@@ -342,16 +293,16 @@ public class WorkflowBpmnService
         }
         try
         {
-            validateRawExtensionProperties(bpmnXml, validationContext);
+            validateRawExtensionProperties(bpmnXml);
             validateRawBusinessBoundarySemantics(bpmnXml);
             validateDataObjects(bpmnXml);
             org.flowable.bpmn.model.BpmnModel bpmnModel = parseSecurely(bpmnXml);
             WorkflowSystemOutputContract.apply(bpmnXml, bpmnModel);
             WorkflowDataAssociationContract.validate(bpmnBytes);
             List<WorkflowBpmnFormReference> references = validateModel(
-                    bpmnModel, requireStartForm, validationContext);
+                    bpmnModel, requireStartForm);
             validateRawExpressions(bpmnXml,
-                    countControlledMultiInstanceCollections(bpmnModel), validationContext);
+                    countControlledMultiInstanceCollections(bpmnModel));
             return new WorkflowBpmnDocument(bpmnModel, bpmnXml, references);
         }
         catch (ServiceException exception)
@@ -459,11 +410,9 @@ public class WorkflowBpmnService
     /**
      * 校验 flowable:properties 仅包含有界、唯一、非保留的普通名值元数据。
      * @param bpmnXml String，已经通过严格 UTF-8 解码的 BPMN XML
-     * @param validationContext ValidationContext，作者资源或部署编译资源阶段
      * @return void，结构、数量、名称或值越界时抛出稳定 400
      */
-    private void validateRawExtensionProperties(String bpmnXml,
-            ValidationContext validationContext)
+    private void validateRawExtensionProperties(String bpmnXml)
     {
         XMLStreamReader reader = null;
         try
@@ -505,8 +454,7 @@ public class WorkflowBpmnService
                         {
                             throw invalidBpmn("通用扩展属性只允许 property 名值项", null);
                         }
-                        validateRawExtensionProperty(reader, ++propertyCount, propertyNames,
-                                validationContext);
+                        validateRawExtensionProperty(reader, ++propertyCount, propertyNames);
                     }
                 }
                 else if (reader.isEndElement())
@@ -537,11 +485,10 @@ public class WorkflowBpmnService
      * @param reader XMLStreamReader，当前定位在 property 开始标签
      * @param propertyCount int，当前容器内从 1 开始的属性数量
      * @param propertyNames Set&lt;String&gt;，当前容器已出现的属性名
-     * @param validationContext ValidationContext，作者资源或部署编译资源阶段
      * @return void，任一约束不满足时抛出稳定 400
      */
     private void validateRawExtensionProperty(XMLStreamReader reader, int propertyCount,
-            Set<String> propertyNames, ValidationContext validationContext)
+            Set<String> propertyNames)
     {
         if (propertyCount > MAX_EXTENSION_PROPERTIES)
         {
@@ -551,14 +498,10 @@ public class WorkflowBpmnService
         String value = reader.getAttributeValue(null, "value");
         // 条件规则是设计器生成的结构化 JSON，仅该保留属性允许使用专用的大字段上限。
         boolean conditionRuleProperty = WorkflowConditionRuleBpmnContract.CONFIG_PROPERTY.equals(name);
-        // SLA 来源任务键只由部署编译器写入升级任务，作者模型不得伪造运行时关联。
-        boolean generatedSlaProperty = validationContext == ValidationContext.COMPILED_DEPLOYMENT
-                && WorkflowTaskSlaDeploymentService.SOURCE_TASK_DEFINITION_KEY_PROPERTY.equals(name);
         boolean allowedPlatformProperty =
                 WorkflowControlledLoopBpmnContract.isReservedProperty(name)
                 || WorkflowParticipantRuleBpmnContract.isReservedProperty(name)
                 || WorkflowTaskSlaDeploymentService.AUTHOR_PROPERTY_NAMES.contains(name)
-                || generatedSlaProperty
                 || conditionRuleProperty
                 || WorkflowMessageThrowContract.CONFIG_PROPERTY.equals(name)
                 || WorkflowAutoCopyRuleContract.isReservedProperty(name)
@@ -871,12 +814,10 @@ public class WorkflowBpmnService
      *
      * @param bpmnModel org.flowable.bpmn.model.BpmnModel，安全 XML Reader 解析后的模型
      * @param requireStartForm boolean，是否要求每个流程的开始节点已经配置表单
-     * @param validationContext ValidationContext，作者资源或部署编译资源的字段契约
      * @return List&lt;WorkflowBpmnFormReference&gt;，按流程和节点顺序提取的表单引用
      */
     private List<WorkflowBpmnFormReference> validateModel(
-            org.flowable.bpmn.model.BpmnModel bpmnModel, boolean requireStartForm,
-            ValidationContext validationContext)
+            org.flowable.bpmn.model.BpmnModel bpmnModel, boolean requireStartForm)
     {
         List<Process> processes = bpmnModel.getProcesses();
         if (processes == null || processes.isEmpty()
@@ -893,17 +834,12 @@ public class WorkflowBpmnService
             {
                 throw invalidBpmn("用户任务办理规则不能配置在流程级", null);
             }
-            if (process.isExecutable() && validationContext == ValidationContext.AUTHOR
-                    && !WorkflowParticipantRuleBpmnContract.hasStartProperties(process))
+            if (process.isExecutable() && !WorkflowParticipantRuleBpmnContract.hasStartProperties(process))
             {
                 throw invalidBpmn("每个可执行流程必须配置完整发起范围", null);
             }
             if (WorkflowParticipantRuleBpmnContract.hasStartProperties(process))
             {
-                if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
-                {
-                    throw invalidBpmn("已编译执行资源不允许保留流程发起范围作者配置", null);
-                }
                 try
                 {
                     WorkflowParticipantRuleBpmnContract.readStartRule(process);
@@ -954,7 +890,7 @@ public class WorkflowBpmnService
                     addNodeFormReference(process.getId(), userTask.getFormKey(), userTask.getFormProperties(),
                             userTask.getId(), userTask.getName(), references, uniqueReferences);
                 }
-                validateTaskListeners(userTask.getTaskListeners(), validationContext);
+                validateTaskListeners(userTask.getTaskListeners());
             }
             if (!process.findFlowElementsOfType(ScriptTask.class, true).isEmpty())
             {
@@ -971,19 +907,17 @@ public class WorkflowBpmnService
             for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
             {
                 if (WorkflowMessageThrowContract.readConfig(element) == null) continue;
-                if (validationContext != ValidationContext.AUTHOR)
-                    throw invalidBpmn("执行资源不能保留消息抛出作者配置", null);
                 WorkflowMessageThrowContract.validate(bpmnModel, (org.flowable.bpmn.model.ThrowEvent) element);
             }
 
             // 多实例结构和动态成员初始化拓扑必须先于顺序流表达式校验，确保不可执行拓扑返回准确诊断。
-            validateMultiInstanceActivities(process, validationContext);
+            validateMultiInstanceActivities(process);
 
-            validateListeners(process.getExecutionListeners(), validationContext, false);
+            validateListeners(process.getExecutionListeners());
             for (FlowElement element : process.findFlowElementsOfType(FlowElement.class, true))
             {
-                validateListeners(element.getExecutionListeners(), validationContext, element instanceof CallActivity);
-                validateFlowElement(process, element, validationContext);
+                validateListeners(element.getExecutionListeners());
+                validateFlowElement(process, element);
                 if (element instanceof UserTask userTask)
                 {
                     WorkflowAutoCopyRuleContract.validatePlacement(userTask, Set.of(
@@ -996,11 +930,7 @@ public class WorkflowBpmnService
                 }
             }
         }
-        if (validationContext == ValidationContext.AUTHOR)
-        {
-            // 作者资源必须把 MessageFlow 绑定到可靠 outbox；编译资源的 SendTask 已转换为固定调度器。
-            WorkflowCollaborationValidator.validate(bpmnModel);
-        }
+        WorkflowCollaborationValidator.validate(bpmnModel);
         return List.copyOf(references);
     }
 
@@ -1116,10 +1046,8 @@ public class WorkflowBpmnService
      *
      * @param process Process，元素所属的可执行流程，用于核验动态多实例初始化拓扑
      * @param element FlowElement，待校验流程元素
-     * @param validationContext ValidationContext，作者资源或部署编译资源的字段契约
      */
-    private void validateFlowElement(Process process, FlowElement element,
-            ValidationContext validationContext)
+    private void validateFlowElement(Process process, FlowElement element)
     {
         if (WorkflowParticipantRuleBpmnContract.hasStartProperties(element))
         {
@@ -1147,24 +1075,17 @@ public class WorkflowBpmnService
         }
         if (element instanceof ServiceTask serviceTask)
         {
-            validateServiceTask(serviceTask, validationContext);
+            validateServiceTask(serviceTask);
         }
         if (element instanceof SendTask sendTask)
         {
-            validateSendTask(sendTask, validationContext);
+            validateSendTask(sendTask);
         }
         if (element instanceof SequenceFlow sequenceFlow)
         {
-            if (validationContext == ValidationContext.AUTHOR
-                    && hasText(sequenceFlow.getConditionExpression()))
+            if (hasText(sequenceFlow.getConditionExpression()))
             {
                 throw invalidBpmn("普通流程模型不允许手写顺序流表达式，请使用受控条件规则", null);
-            }
-            if (!(validationContext == ValidationContext.COMPILED_DEPLOYMENT
-                    && CONDITION_ROUTER_EXPRESSION.matcher(
-                            trimToEmpty(sequenceFlow.getConditionExpression())).matches()))
-            {
-                validateExpression(sequenceFlow.getConditionExpression());
             }
             validateExpression(sequenceFlow.getSkipExpression());
         }
@@ -1172,14 +1093,13 @@ public class WorkflowBpmnService
         {
             boolean multiInstance = userTask.getLoopCharacteristics() != null;
             boolean hasTaskRule = WorkflowParticipantRuleBpmnContract.hasTaskProperties(userTask);
-            if (validationContext == ValidationContext.AUTHOR && !multiInstance && !hasTaskRule)
+            if (!multiInstance && !hasTaskRule)
             {
                 throw invalidBpmn("普通用户任务必须配置完整平台办理人规则", null);
             }
-            if (validationContext == ValidationContext.AUTHOR
-                    && (hasText(userTask.getAssignee()) || hasText(userTask.getOwner())
+            if (hasText(userTask.getAssignee()) || hasText(userTask.getOwner())
                     || (userTask.getCandidateUsers() != null && !userTask.getCandidateUsers().isEmpty())
-                    || (userTask.getCandidateGroups() != null && !userTask.getCandidateGroups().isEmpty())))
+                    || (userTask.getCandidateGroups() != null && !userTask.getCandidateGroups().isEmpty()))
             {
                 throw invalidBpmn("作者模型不允许提交 Flowable 原生办理人字段", null);
             }
@@ -1189,10 +1109,6 @@ public class WorkflowBpmnService
             }
             if (hasTaskRule)
             {
-                if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
-                {
-                    throw invalidBpmn("已编译执行资源不允许保留办理人作者配置", null);
-                }
                 try
                 {
                     WorkflowParticipantRuleBpmnContract.readTaskRule(process.getId(), userTask);
@@ -1210,7 +1126,7 @@ public class WorkflowBpmnService
             validateExpression(userTask.getSkipExpression());
             validateExpressions(userTask.getCandidateUsers());
             validateExpressions(userTask.getCandidateGroups());
-            validateControlledLoop(process, userTask, validationContext);
+            validateControlledLoop(process, userTask);
             validateConfiguredMultiInstanceIdentity(userTask);
         }
         if (element instanceof CallActivity callActivity)
@@ -1226,37 +1142,30 @@ public class WorkflowBpmnService
      * @param process Process，待校验的可执行流程
      * @return void，任一多实例结构、来源或初始化拓扑不合法时抛出 HTTP 400
      */
-    private void validateMultiInstanceActivities(Process process,
-            ValidationContext validationContext)
+    private void validateMultiInstanceActivities(Process process)
     {
         for (Activity activity : process.findFlowElementsOfType(Activity.class, true))
         {
             MultiInstanceLoopCharacteristics loop = activity.getLoopCharacteristics();
             if (loop != null)
             {
-                validateMultiInstance(process, activity, loop, validationContext);
+                validateMultiInstance(process, activity, loop);
             }
         }
     }
 
     /**
-     * 校验用户任务受控循环作者属性的完整性，并禁止编译执行资源继续携带可编辑配置。
+     * 校验用户任务受控循环作者属性的完整性。
      *
      * @param process Process，用户任务所属可执行流程
      * @param task UserTask，待校验用户任务
-     * @param validationContext ValidationContext，作者资源或编译执行资源阶段
-     * @return void，无返回值；配置残缺、位置越权或编译资源残留作者字段时抛出 400
+     * @return void，无返回值；配置残缺或位置越权时抛出 400
      */
-    private void validateControlledLoop(Process process, UserTask task,
-            ValidationContext validationContext)
+    private void validateControlledLoop(Process process, UserTask task)
     {
         if (!WorkflowControlledLoopBpmnContract.hasReservedProperties(task))
         {
             return;
-        }
-        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
-        {
-            throw invalidBpmn("已编译执行资源不允许保留受控循环作者配置", null);
         }
         try
         {
@@ -1301,15 +1210,10 @@ public class WorkflowBpmnService
     /**
      * 校验作者 SendTask 只能携带受控扩展字段，禁止 WebService、任意实现类型和操作引用。
      * @param task SendTask，待校验发送任务
-     * @param validationContext ValidationContext，作者资源或部署编译资源字段契约
-     * @return void，发现不受控实现或部署副本仍含 SendTask 时抛出 HTTP 400
+     * @return void，发现不受控实现时抛出 HTTP 400
      */
-    private void validateSendTask(SendTask task, ValidationContext validationContext)
+    private void validateSendTask(SendTask task)
     {
-        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
-        {
-            throw invalidBpmn("已编译执行资源不允许保留发送任务", null);
-        }
         if (hasText(task.getType()) || hasText(task.getImplementationType())
                 || hasText(task.getOperationRef()))
         {
@@ -1328,7 +1232,7 @@ public class WorkflowBpmnService
      * @param loop MultiInstanceLoopCharacteristics，待校验的多实例配置
      */
     private void validateMultiInstance(Process process, Activity activity,
-            MultiInstanceLoopCharacteristics loop, ValidationContext validationContext)
+            MultiInstanceLoopCharacteristics loop)
     {
         if (activity instanceof UserTask userTask)
         {
@@ -1346,14 +1250,7 @@ public class WorkflowBpmnService
         try
         {
             // 保存门禁与运行时调整服务复用同一结构契约，不能各自维护近似白名单。
-            if (validationContext == ValidationContext.AUTHOR)
-            {
-                WorkflowMultiInstanceModelContract.requireAuthorMode(activity);
-            }
-            else
-            {
-                WorkflowMultiInstanceModelContract.requireMode(activity);
-            }
+            WorkflowMultiInstanceModelContract.requireAuthorMode(activity);
         }
         catch (IllegalArgumentException exception)
         {
@@ -1550,46 +1447,16 @@ public class WorkflowBpmnService
     }
 
     /**
-     * 校验服务任务只能使用固定扩展调度器，并按资源阶段执行互斥字段契约。
+     * 校验作者服务任务的固定扩展调度器和受控字段。
      *
      * @param task ServiceTask，待校验服务任务
-     * @param validationContext ValidationContext，作者资源要求受控字段，编译资源要求字段已剥离
      */
-    private void validateServiceTask(ServiceTask task, ValidationContext validationContext)
+    private void validateServiceTask(ServiceTask task)
     {
         String taskType = trimToEmpty(task.getType());
         if (hasText(taskType))
         {
-            // 作者资源不能直接声明引擎原生类型；仅部署编译器生成的固定 DMN 任务可进入窄白名单。
-            if (validationContext == ValidationContext.COMPILED_DEPLOYMENT
-                    && ServiceTask.DMN_TASK.equals(taskType))
-            {
-                validateCompiledDmnTask(task);
-                return;
-            }
             throw invalidBpmn("服务任务类型未列入安全白名单", null);
-        }
-        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
-        {
-            // 部署快照已经固化精确参数，执行 XML 不得再次携带可篡改的作者字段。
-            if (task.getFieldExtensions() != null && !task.getFieldExtensions().isEmpty())
-            {
-                throw invalidBpmn("已编译服务任务不允许保留作者扩展字段", null);
-            }
-            String implementation = trimToEmpty(task.getImplementation());
-            boolean fixedExtensionDelegate = ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION
-                    .equals(task.getImplementationType())
-                    && WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION.equals(implementation);
-            boolean fixedSlaDelegate = ImplementationType.IMPLEMENTATION_TYPE_EXPRESSION
-                    .equals(task.getImplementationType())
-                    && SLA_TIMER_DELEGATE_EXPRESSION.matcher(implementation).matches();
-            // 编译资源只允许平台扩展固定入口或 SLA 编译器生成的固定定时入口；作者任意服务任务已在前置阶段拒绝。
-            if (!fixedExtensionDelegate && !fixedSlaDelegate)
-            {
-                throw invalidBpmn("服务任务必须从受控扩展注册表选择", null);
-            }
-            validateExpression(task.getSkipExpression());
-            return;
         }
         if (!ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(
                 task.getImplementationType())
@@ -1602,70 +1469,6 @@ public class WorkflowBpmnService
         validateExpression(task.getSkipExpression());
         List<FieldExtension> fields = task.getFieldExtensions();
         validateExtensionFields(fields);
-    }
-
-    /**
-     * 校验 DMN 编译器生成的 Flowable 原生 ServiceTask 只能携带冻结执行所需的两个固定字符串字段。
-     *
-     * @param task ServiceTask，`type=dmn` 的部署编译结果
-     * @return 无返回值；任意实现、表达式、额外字段或非同部署执行配置会被拒绝
-     */
-    private void validateCompiledDmnTask(ServiceTask task)
-    {
-        if (hasText(task.getImplementation()) || hasText(task.getImplementationType())
-                || hasText(task.getResultVariableName()) || hasText(task.getOperationRef())
-                || hasText(task.getExtensionId()) || task.isTriggerable()
-                || task.isUseLocalScopeForResultVariable()
-                || task.isStoreResultVariableAsTransient()
-                || task.getCustomProperties() != null && !task.getCustomProperties().isEmpty())
-        {
-            throw invalidBpmn("已编译 DMN 任务不允许自定义执行实现", null);
-        }
-        validateExpression(task.getSkipExpression());
-
-        String decisionKey = null;
-        boolean sameDeployment = false;
-        List<FieldExtension> fields = task.getFieldExtensions();
-        if (fields != null)
-        {
-            for (FieldExtension field : fields)
-            {
-                if (hasText(field.getExpression()))
-                {
-                    throw invalidBpmn("已编译 DMN 任务字段不允许表达式", null);
-                }
-                if (DMN_DECISION_KEY_FIELD.equals(field.getFieldName()))
-                {
-                    if (decisionKey != null || !hasText(field.getStringValue()))
-                    {
-                        throw invalidBpmn("已编译 DMN 任务决策键缺失或重复", null);
-                    }
-                    decisionKey = field.getStringValue().trim();
-                    if (!decisionKey.equals(field.getStringValue())
-                            || decisionKey.length() > MAX_DMN_DECISION_KEY_LENGTH)
-                    {
-                        throw invalidBpmn("已编译 DMN 任务决策键不合法", null);
-                    }
-                }
-                else if (DMN_SAME_DEPLOYMENT_FIELD.equals(field.getFieldName()))
-                {
-                    if (sameDeployment || !"true".equals(field.getStringValue()))
-                    {
-                        throw invalidBpmn("已编译 DMN 任务必须固定同部署执行", null);
-                    }
-                    sameDeployment = true;
-                }
-                else
-                {
-                    throw invalidBpmn("已编译 DMN 任务包含未注册的字段注入", null);
-                }
-            }
-        }
-        int fieldCount = fields == null ? 0 : fields.size();
-        if (decisionKey == null || !sameDeployment || fieldCount != 2)
-        {
-            throw invalidBpmn("已编译 DMN 任务配置不完整", null);
-        }
     }
 
     /**
@@ -1718,54 +1521,37 @@ public class WorkflowBpmnService
      *
      * @param listeners List&lt;FlowableListener&gt;，监听器集合，允许为空
      */
-    private void validateListeners(List<FlowableListener> listeners,
-            ValidationContext validationContext, boolean callActivity)
+    private void validateListeners(List<FlowableListener> listeners)
     {
         if (listeners == null)
         {
             return;
         }
         Set<String> businessEvents = new HashSet<>();
-        boolean systemOutputSeen = false;
         for (FlowableListener listener : listeners)
         {
             if (com.ruoyi.flowable.listener.WorkflowSystemOutputListener.EXPRESSION.equals(listener.getImplementation()))
             {
-                if (systemOutputSeen || !callActivity || validationContext != ValidationContext.COMPILED_DEPLOYMENT
-                        || !"end".equals(listener.getEvent())
-                        || !ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(listener.getImplementationType())
-                        || listener.getScriptInfo() != null || listener.getInstance() != null
-                        || hasText(listener.getOnTransaction()) || hasText(listener.getCustomPropertiesResolverImplementation())
-                        || (listener.getFieldExtensions() != null && !listener.getFieldExtensions().isEmpty()))
-                    throw invalidBpmn("系统结果监听器只能由调用活动编译器注入", null);
-                systemOutputSeen = true;
-                continue;
+                throw invalidBpmn("系统结果监听器只能由调用活动编译器注入", null);
             }
             if (!businessEvents.add(trimToEmpty(listener.getEvent())))
                 throw invalidBpmn("同一元素的执行业务监听器事件不能重复", null);
-            validateBusinessListener(listener, validationContext, "执行");
+            validateBusinessListener(listener, "执行");
         }
     }
 
     /**
-     * 区分作者业务监听器与服务端编译生成的身份审计监听器，并拒绝内部协议进入作者 XML。
+     * 校验作者业务监听器，并拒绝内部身份审计协议进入作者 XML。
      *
      * @param listeners List&lt;FlowableListener&gt;，用户任务监听器集合，作者阶段允许为空
-     * @param validationContext ValidationContext，决定内部监听器必须缺失或完整存在
-     * @return 无返回值；监听器越权、重复或编译结果不完整时拒绝模型
+     * @return 无返回值；监听器越权或重复时拒绝模型
      */
-    private void validateTaskListeners(List<FlowableListener> listeners,
-            ValidationContext validationContext)
+    private void validateTaskListeners(List<FlowableListener> listeners)
     {
         if (listeners == null || listeners.isEmpty())
         {
-            if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
-            {
-                throw invalidBpmn("编译执行资源缺少固定身份审计任务监听器", null);
-            }
             return;
         }
-        Set<String> seenEvents = new HashSet<>();
         Set<String> businessEvents = new HashSet<>();
         for (FlowableListener listener : listeners)
         {
@@ -1777,47 +1563,20 @@ public class WorkflowBpmnService
                 {
                     throw invalidBpmn("同一用户任务的业务监听器事件不能重复", null);
                 }
-                validateBusinessListener(listener, validationContext, "任务");
+                validateBusinessListener(listener, "任务");
                 continue;
             }
-            if (validationContext == ValidationContext.AUTHOR)
-            {
-                throw invalidBpmn("作者 BPMN 不允许携带内部任务监听器", null);
-            }
-            boolean hasFields = listener.getFieldExtensions() != null
-                    && !listener.getFieldExtensions().isEmpty();
-            boolean hasCustomResolver = hasText(listener.getCustomPropertiesResolverImplementationType())
-                    || hasText(listener.getCustomPropertiesResolverImplementation());
-            if (!USER_TASK_LISTENER_EVENTS.contains(event)
-                    || !seenEvents.add(event)
-                    || !ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(
-                            listener.getImplementationType())
-                    || !USER_TASK_LISTENER_EXPRESSION.equals(implementation)
-                    || hasFields
-                    || listener.getScriptInfo() != null
-                    || hasCustomResolver
-                    || hasText(listener.getOnTransaction())
-                    || listener.getInstance() != null)
-            {
-                throw invalidBpmn("任务监听器未列入安全白名单", null);
-            }
-        }
-        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT
-                && !seenEvents.equals(USER_TASK_LISTENER_EVENTS))
-        {
-            throw invalidBpmn("编译执行资源缺少固定身份审计任务监听器", null);
+            throw invalidBpmn("作者 BPMN 不允许携带内部任务监听器", null);
         }
     }
 
     /**
-     * 校验单个受控业务监听器，区分作者字段形态和编译后固定 Bean 形态。
+     * 校验单个作者受控业务监听器的固定 Bean 和扩展字段。
      * @param listener FlowableListener，待校验的执行或任务监听器
-     * @param validationContext ValidationContext，作者或编译执行资源阶段
      * @param listenerLabel String，异常提示中的监听器种类
      * @return 无返回值，发现任意实现、脚本、字段或生命周期回调越权时抛出
      */
-    private void validateBusinessListener(FlowableListener listener,
-            ValidationContext validationContext, String listenerLabel)
+    private void validateBusinessListener(FlowableListener listener, String listenerLabel)
     {
         boolean fixedDelegate = ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION.equals(
                 listener.getImplementationType())
@@ -1833,14 +1592,6 @@ public class WorkflowBpmnService
                 || listener.getInstance() != null)
         {
             throw invalidBpmn(listenerLabel + "监听器不允许脚本、事务回调或实例注入", null);
-        }
-        if (validationContext == ValidationContext.COMPILED_DEPLOYMENT)
-        {
-            if (listener.getFieldExtensions() != null && !listener.getFieldExtensions().isEmpty())
-            {
-                throw invalidBpmn("已编译业务监听器不允许保留作者扩展字段", null);
-            }
-            return;
         }
         validateListenerExtensionFields(listener.getFieldExtensions(), listenerLabel);
     }
@@ -1935,10 +1686,8 @@ public class WorkflowBpmnService
      *
      * @param bpmnXml String，严格 UTF-8 解码后的原始 BPMN XML
      * @param controlledCollectionCount int，模型级完整校验通过的受控集合表达式数量
-     * @param validationContext ValidationContext，作者资源或编译执行资源阶段
      */
-    private void validateRawExpressions(String bpmnXml, int controlledCollectionCount,
-            ValidationContext validationContext)
+    private void validateRawExpressions(String bpmnXml, int controlledCollectionCount)
     {
         int remainingControlledCollections = controlledCollectionCount;
         int cursor = 0;
@@ -1981,12 +1730,8 @@ public class WorkflowBpmnService
                 }
                 remainingControlledCollections--;
             }
-            else if (!(validationContext == ValidationContext.COMPILED_DEPLOYMENT
-                    && (SLA_TIMER_DELEGATE_EXPRESSION.matcher(expression).matches()
-                    || CONDITION_ROUTER_EXPRESSION.matcher(expression).matches()
-                    || WorkflowExtensionBpmnContract.DELEGATE_EXPRESSION.equals(expression))))
+            else
             {
-                // 编译资源仅放行平台固定扩展入口与 SLA 固定定时入口；作者 XML 和其他表达式继续走通用安全语法。
                 validateExpression(expression);
             }
             cursor = end + 1;
@@ -2283,7 +2028,7 @@ public class WorkflowBpmnService
         try
         {
             // 再次核验字段与实现边界，确保只豁免平台确实能够编译的作者节点。
-            validateSendTask(sendTask, ValidationContext.AUTHOR);
+            validateSendTask(sendTask);
             return true;
         }
         catch (ServiceException exception)

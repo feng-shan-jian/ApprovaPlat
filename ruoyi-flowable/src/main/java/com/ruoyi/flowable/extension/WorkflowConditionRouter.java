@@ -1,11 +1,9 @@
 package com.ruoyi.flowable.extension;
 
 import java.math.BigDecimal;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Pattern;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.engine.repository.ProcessDefinition;
@@ -24,8 +22,6 @@ import tools.jackson.databind.json.JsonMapper;
 @Component("workflowConditionRouter")
 public class WorkflowConditionRouter
 {
-    /** 编译表达式只允许传递固定长度小写十六进制令牌。 */
-    private static final Pattern TOKEN_PATTERN = Pattern.compile("[0-9a-f]{24}");
     /** 同一执行内的 transient 缓存前缀，不持久化为业务流程变量。 */
     private static final String CACHE_PREFIX = "__ruoyi_workflow_condition_";
 
@@ -53,26 +49,13 @@ public class WorkflowConditionRouter
      */
     public boolean matches(DelegateExecution execution, String gatewayToken, String flowToken)
     {
-        requireToken(gatewayToken, "条件网关令牌不合法");
-        requireToken(flowToken, "条件分支令牌不合法");
         String cacheKey = CACHE_PREFIX + gatewayToken;
-        Object cached = execution.getTransientVariable(cacheKey);
-        Set<String> matchedTokens;
-        if (cached == null)
+        Set<?> matchedTokens = (Set<?>) execution.getTransientVariable(cacheKey);
+        if (matchedTokens == null)
         {
             matchedTokens = evaluateGateway(execution, gatewayToken);
             // transient 结果只覆盖本次引擎命令，不污染正式业务变量和历史详情。
             execution.setTransientVariable(cacheKey, matchedTokens);
-        }
-        else if (cached instanceof Set<?> cachedSet
-                && cachedSet.stream().allMatch(String.class::isInstance))
-        {
-            matchedTokens = cachedSet.stream().map(String.class::cast)
-                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        }
-        else
-        {
-            throw new WorkflowConditionRoutingException("条件路由运行缓存类型异常", HttpStatus.ERROR);
         }
         return matchedTokens.contains(flowToken);
     }
@@ -94,40 +77,22 @@ public class WorkflowConditionRouter
         }
         List<WfDeployConditionRule> snapshots = artifactRepository.selectRuntimeConditionRules(
                 definition.getDeploymentId(), definition.getKey(), gatewayToken);
-        if (snapshots == null || snapshots.size() < 2)
+        if (snapshots.isEmpty())
         {
-            throw new WorkflowConditionRoutingException("条件路由部署快照不存在或不完整", HttpStatus.ERROR);
+            throw new WorkflowConditionRoutingException("条件路由部署快照不存在", HttpStatus.ERROR);
         }
-        int defaultCount = 0;
-        String gatewayType = null;
-        Set<String> flowTokens = new HashSet<>();
+        String gatewayType = snapshots.get(0).getGatewayType();
         Set<String> matched = new LinkedHashSet<>();
         for (WfDeployConditionRule snapshot : snapshots)
         {
-            if (!gatewayToken.equals(snapshot.getGatewayToken())
-                    || !flowTokens.add(snapshot.getFlowToken()))
-            {
-                throw new WorkflowConditionRoutingException("条件路由部署快照关联异常", HttpStatus.ERROR);
-            }
-            gatewayType = gatewayType == null ? snapshot.getGatewayType() : gatewayType;
-            if (!gatewayType.equals(snapshot.getGatewayType()))
-            {
-                throw new WorkflowConditionRoutingException("条件网关类型快照不一致", HttpStatus.ERROR);
-            }
             if (Boolean.TRUE.equals(snapshot.getDefaultFlow()))
             {
-                defaultCount++;
                 continue;
             }
             if (evaluateBranch(execution, snapshot))
             {
                 matched.add(snapshot.getFlowToken());
             }
-        }
-        if (defaultCount != 1 || !("EXCLUSIVE".equals(gatewayType)
-                || "INCLUSIVE".equals(gatewayType)))
-        {
-            throw new WorkflowConditionRoutingException("条件网关默认策略快照异常", HttpStatus.ERROR);
         }
         if ("EXCLUSIVE".equals(gatewayType) && matched.size() > 1)
         {
@@ -141,7 +106,7 @@ public class WorkflowConditionRouter
     /**
      * 按冻结的根/组 AND/OR 短路求值；只有实际参与比较的字段才读取运行变量。
      * @param execution DelegateExecution，真实流程变量来源
-     * @param snapshot WfDeployConditionRule，已复核完整性的分支快照
+     * @param snapshot WfDeployConditionRule，部署时冻结的分支规则
      * @return boolean，分支规则命中结果
      */
     private boolean evaluateBranch(DelegateExecution execution,
@@ -184,7 +149,7 @@ public class WorkflowConditionRouter
         return allRules;
     }
 
-    /** 未知组合不能默认为另一种逻辑。结构完整性由资源摘要保护。 */
+    /** 直接消费实际组合逻辑，未知组合不能默认为另一种逻辑。 */
     private boolean isAnd(JsonNode node)
     {
         return switch (node.path("combinator").asText())
@@ -330,20 +295,6 @@ public class WorkflowConditionRouter
             }
         }
         throw invalidRuntimeType(fieldName);
-    }
-
-    /**
-     * 校验编译摘要令牌格式。
-     * @param token String，表达式传入令牌
-     * @param message String，失败提示
-     * @return void，格式非法时抛出服务端错误
-     */
-    private void requireToken(String token, String message)
-    {
-        if (token == null || !TOKEN_PATTERN.matcher(token).matches())
-        {
-            throw new WorkflowConditionRoutingException(message, HttpStatus.ERROR);
-        }
     }
 
     /** @return boolean，此函数始终抛出未知运算符异常。 */

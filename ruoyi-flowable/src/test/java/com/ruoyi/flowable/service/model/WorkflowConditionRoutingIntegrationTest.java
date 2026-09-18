@@ -25,7 +25,6 @@ import com.ruoyi.flowable.mapper.*;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
 import tools.jackson.databind.json.JsonMapper;
-import tools.jackson.databind.node.ArrayNode;
 
 /** 作者保存/预检/部署到真实任务路径；只隔离目录和与路由无关的任务通知外设。 */
 class WorkflowConditionRoutingIntegrationTest
@@ -191,7 +190,8 @@ class WorkflowConditionRoutingIntegrationTest
             long count = repository.createDeploymentQuery().count();
             String key = "invalid" + (++sequence);
             String xml = author(key, "exclusive", invalid, null, false).trim();
-            String model = saveAuthor(key, xml);
+            assertThatThrownBy(() -> saveAuthor(key, xml)).isInstanceOf(ServiceException.class);
+            String model = repository.createModelQuery().modelKey(key).singleResult().getId();
             assertThat(models.preflight(model, ((ModelEntity) repository.getModel(model)).getRevision(), xml).valid()).isFalse();
             assertThatThrownBy(() -> models.deployModel(model)).isInstanceOf(ServiceException.class);
             assertThat(repository.createDeploymentQuery().count()).isEqualTo(count);
@@ -219,24 +219,6 @@ class WorkflowConditionRoutingIntegrationTest
         });
     }
 
-    @Test void resourceJsonWhitespaceAndRuleKeyOrderDoNotInvalidateFrozenChecksum()
-    {
-        String id = deploy("exclusive", single("amount", "GTE", "9007199254740993"), null, false);
-        replaceResource(id, "approvaplat/conditions-v2.json", json -> {
-            ArrayNode nodes = (ArrayNode) JsonMapper.shared().readTree(json);
-            for (var node : nodes)
-            {
-                var rule = JsonMapper.shared().readTree(node.get("ruleJson").asText());
-                var reordered = JsonMapper.shared().createObjectNode();
-                var keys = new ArrayList<>(rule.propertyNames()); Collections.reverse(keys);
-                keys.forEach(key -> reordered.set(key, rule.get(key)));
-                ((tools.jackson.databind.node.ObjectNode) node).put("ruleJson", reordered.toPrettyString());
-            }
-            return nodes.toPrettyString();
-        });
-        assertTasks(start(id, Map.of("amount", new BigDecimal("9007199254740993"))), "accepted");
-    }
-
     @ParameterizedTest @CsvSource({"exclusive", "inclusive"})
     void executesUnmodifiedBaselineV1Resources(String type) throws Exception
     {
@@ -249,30 +231,38 @@ class WorkflowConditionRoutingIntegrationTest
         assertThat(resource(child(id), "approvaplat/conditions-v1.json")).contains("celConfigJson", "rule1");
     }
 
-    @Test void corruptedLegacyCelStillFailsItsOriginalChecksum() throws Exception
-    {
-        String id = installLegacy("exclusive");
-        replaceResource(id, "approvaplat/conditions-v1.json", json -> json.replace("rule1", "false"));
-        assertStartRollback(id, Map.of("amount", 0), 500, "校验和不一致");
-    }
-
-    @Test void damagedNewRulesAndUnknownManifestFailClosed()
+    @Test void undecodableResourcesAndUnknownManifestFailClosed()
     {
         String id = deploy("exclusive", single("amount", "GT", "0"), null, false);
-        replaceResource(id, "approvaplat/conditions-v2.json", json -> json.replace("GT", "LT"));
-        assertStartRollback(id, Map.of("amount", 1), 500, "校验和不一致");
+        replaceResource(id, "approvaplat/conditions-v2.json", json -> "[");
+        assertThatThrownBy(() -> artifacts.selectConditionRules(id)).hasMessage("流程部署业务资源无法解析");
+        assertStartRollback(id, Map.of("amount", 1), 500, "工作流引擎执行失败");
         String unknown = deploy("exclusive", single("amount", "GT", "0"), null, false);
         replaceResource(unknown, "approvaplat/manifest-v1.json", json -> "{\"schemaVersion\":999}");
         assertThatThrownBy(() -> start(unknown, Map.of("amount", 1))).isInstanceOf(ServiceException.class);
     }
 
-    @Test void missingBranchAssociationFailsClosed()
+    @Test void deployedXmlReadsStoredResourceWithBoundedIoAndUtf8() throws Exception
     {
         String id = deploy("exclusive", single("amount", "GT", "0"), null, false);
-        replaceResource(id, "approvaplat/conditions-v2.json", json -> {
-            ArrayNode nodes = (ArrayNode) JsonMapper.shared().readTree(json); nodes.remove(0); return nodes.toString();
-        });
-        assertStartRollback(id, Map.of("amount", 1), 500, "不存在或不完整");
+        var definition = repository.createProcessDefinitionQuery().deploymentId(id).singleResult();
+        var reader = spy(repository);
+        var deployments = new WorkflowDeploymentService(operations, reader, engine.getRuntimeService(),
+                engine.getHistoryService(), artifacts, null, null, null, null);
+        String xml = deployments.getBpmnXml(definition.getId());
+        assertThat(xml).isEqualTo(resource(repository.createDeploymentQuery().deploymentId(id).singleResult(), definition.getResourceName()));
+        assertThat(xml).contains("workflowConditionRouter.matches", "userTaskListener");
+        assertThatThrownBy(() -> deployments.getBpmnXml("absent")).isInstanceOf(ServiceException.class);
+        doReturn(null).when(reader).getProcessModel(definition.getId());
+        assertThatThrownBy(() -> deployments.getBpmnXml(definition.getId())).hasMessage("流程定义 BPMN 不存在");
+        doReturn(new java.io.ByteArrayInputStream(new byte[2 * 1024 * 1024 + 1])).when(reader).getProcessModel(definition.getId());
+        assertThatThrownBy(() -> deployments.getBpmnXml(definition.getId())).hasMessageContaining("大小限制");
+        doReturn(new java.io.ByteArrayInputStream(new byte[] {(byte) 0xc3, 0x28})).when(reader).getProcessModel(definition.getId());
+        assertThatThrownBy(() -> deployments.getBpmnXml(definition.getId())).hasMessage("流程定义 BPMN 读取失败");
+        var broken = mock(java.io.InputStream.class);
+        when(broken.read(any(byte[].class))).thenThrow(new java.io.IOException("read failure"));
+        doReturn(broken).when(reader).getProcessModel(definition.getId());
+        assertThatThrownBy(() -> deployments.getBpmnXml(definition.getId())).hasMessage("流程定义 BPMN 读取失败");
     }
 
     protected String deploy(String type, String first, String second, boolean repeat)
@@ -290,7 +280,7 @@ class WorkflowConditionRoutingIntegrationTest
     private String saveAuthor(String key, String xml)
     {
         var model = repository.newModel(); model.setKey(key); model.setName(key); model.setCategory("test"); model.setMetaInfo("{}"); repository.saveModel(model);
-        repository.addModelEditorSource(model.getId(), xml.getBytes(StandardCharsets.UTF_8));
+        repository.addModelEditorSource(model.getId(), xml.replace("urn:c10", "urn:initial").getBytes(StandardCharsets.UTF_8));
         var request = new WorkflowModelDto(); request.setModelId(model.getId()); request.setExpectedRevision(((ModelEntity) repository.getModel(model.getId())).getRevision()); request.setBpmnXml(xml);
         models.saveModel(request);
         return model.getId();

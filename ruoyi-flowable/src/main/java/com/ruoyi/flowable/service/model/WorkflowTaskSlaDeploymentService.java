@@ -84,6 +84,7 @@ public class WorkflowTaskSlaDeploymentService
     public List<WfDeployTaskSla> prepare(BpmnModel model, String actorUserId)
     {
         List<WfDeployTaskSla> snapshots = new ArrayList<>();
+        Map<String, WfBusinessCalendar> calendars = new HashMap<>();
         for (Process process : model.getProcesses())
         {
             if (!process.isExecutable())
@@ -100,7 +101,7 @@ public class WorkflowTaskSlaDeploymentService
                     continue;
                 }
                 SlaConfig config = validateConfig(values);
-                WfBusinessCalendar calendar = calendarService.requireEnabled(config.calendarKey());
+                WfBusinessCalendar calendar = calendars.computeIfAbsent(config.calendarKey(), calendarService::requireEnabled);
                 WfBpmnEventCode escalationCode = config.escalationEventCode() == null ? null
                         : eventCodeService.requireEnabled("ESCALATION", config.escalationEventCode());
                 WfDeployTaskSla snapshot = createSnapshot(process, task, config, calendar,
@@ -119,6 +120,7 @@ public class WorkflowTaskSlaDeploymentService
      */
     public void validateAuthorRules(BpmnModel model)
     {
+        Map<String, WfBusinessCalendar> calendars = new HashMap<>();
         for (Process process : model.getProcesses())
         {
             if (!process.isExecutable()) continue;
@@ -127,7 +129,7 @@ public class WorkflowTaskSlaDeploymentService
                 Map<String, String> values = readSlaProperties(task);
                 if (!"true".equals(values.get("enabled"))) continue;
                 SlaConfig config = validateConfig(values);
-                calendarService.requireEnabled(config.calendarKey());
+                calendars.computeIfAbsent(config.calendarKey(), calendarService::requireEnabled);
                 if (config.escalationEventCode() != null)
                     eventCodeService.requireEnabled("ESCALATION", config.escalationEventCode());
             }

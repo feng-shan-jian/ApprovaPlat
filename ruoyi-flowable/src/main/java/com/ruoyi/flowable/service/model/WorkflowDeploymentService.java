@@ -3,6 +3,9 @@ package com.ruoyi.flowable.service.model;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -63,8 +66,6 @@ public class WorkflowDeploymentService
 
     private final WorkflowDmnDecisionService dmnDecisionService;
 
-    private final WorkflowBpmnService bpmnService;
-
     /** 删除部署前保护被调用活动精确引用的流程定义。 */
     private final WorkflowCallActivityReferenceService callActivityReferenceService;
 
@@ -80,7 +81,6 @@ public class WorkflowDeploymentService
             WfProcessDraftMapper processDraftMapper,
             WorkflowProcessDefinitionLockMapper processDefinitionLockMapper,
             WorkflowDmnDecisionService dmnDecisionService,
-            WorkflowBpmnService bpmnService,
             WorkflowCallActivityReferenceService callActivityReferenceService)
     {
         this.engineOperations = engineOperations;
@@ -91,7 +91,6 @@ public class WorkflowDeploymentService
         this.processDraftMapper = processDraftMapper;
         this.processDefinitionLockMapper = processDefinitionLockMapper;
         this.dmnDecisionService = dmnDecisionService;
-        this.bpmnService = bpmnService;
         this.callActivityReferenceService = callActivityReferenceService;
     }
 
@@ -204,7 +203,7 @@ public class WorkflowDeploymentService
     }
 
     /**
-     * 读取并重新安全校验已部署流程定义的 BPMN XML。
+     * 有界读取已部署流程定义的 BPMN XML，不重新执行作者或部署校验。
      *
      * @param definitionId String，Flowable 流程定义主键
      * @return String，UTF-8 BPMN XML
@@ -222,7 +221,10 @@ public class WorkflowDeploymentService
                     throw new ServiceException("流程定义 BPMN 不存在", HttpStatus.NOT_FOUND);
                 }
                 byte[] bytes = readBounded(stream);
-                return bpmnService.validateCompiledDeployment(bytes).bpmnXml();
+                return StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(bytes)).toString();
             }
             catch (IOException exception)
             {

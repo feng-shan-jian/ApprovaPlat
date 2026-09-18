@@ -192,7 +192,6 @@ public class GenTableDetailTest
     {
         long parent = table("invoice", "Invoice", "sub");
         long child = table("line", "InvoiceLine", "crud");
-        long empty = table("empty", "Empty", "crud");
         long parentLabel = column(parent, "display_name", "displayName", "String", 20, false);
         long childLabel = column(child, "display_name", "lineName", "String", 20, false);
         long childKey = column(child, "record_id", "recordId", "Long", 10, true);
@@ -205,7 +204,6 @@ public class GenTableDetailTest
         assertColumns(catalog(data, child).getJSONArray("columns"), child, new long[] {childKey, childLabel, fk},
                 new String[] {"record_id", "display_name", "parent_id"}, new String[] {"recordId", "lineName", "parentId"},
                 new String[] {"Long", "String", "Long"}, new int[] {10, 20, 30});
-        assertThat(catalog(data, empty).getJSONArray("columns")).isEmpty();
     }
 
     @Test

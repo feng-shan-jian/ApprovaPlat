@@ -305,7 +305,7 @@ public class WorkflowProcessDefinitionQueryService
      * 在发起场景执行可发起校验，或在详情场景执行实例对象授权后安全读取 BPMN XML。
      *
      * @param request WorkflowBpmnXmlQueryDto，定义主键及可选实例主键
-     * @return String，经过 WorkflowDeploymentService 安全校验的 UTF-8 BPMN XML
+     * @return String，有界读取并严格解码的已部署 UTF-8 BPMN XML
      */
     public String getBpmnXml(WorkflowBpmnXmlQueryDto request)
     {
@@ -329,7 +329,7 @@ public class WorkflowProcessDefinitionQueryService
                 WorkflowProcessAccessSnapshot instance = processAccessService.requireReadableInstance(instanceId);
                 requireInstanceRelation(instance, definition);
             }
-            // XML 正文只经已有限流、安全解析和 Flowable 校验的部署服务输出。
+            // 本次授权完成后读取既有资源，展示不重复执行作者或部署校验。
             return deploymentService.getBpmnXml(definitionId);
         });
     }

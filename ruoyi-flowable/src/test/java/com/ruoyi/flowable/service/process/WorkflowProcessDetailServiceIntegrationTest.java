@@ -189,8 +189,8 @@ class WorkflowProcessDetailServiceIntegrationTest
         processAccessService = mock(WorkflowProcessAccessService.class);
         artifactRepository = mock(WorkflowDeploymentArtifactRepository.class);
         when(artifactRepository.selectForms(deploymentId)).thenReturn(formSnapshots());
-        WorkflowDeploymentService deploymentService = mock(WorkflowDeploymentService.class);
-        when(deploymentService.getBpmnXml(anyString())).thenReturn(BPMN);
+        WorkflowDeploymentService deploymentService = new WorkflowDeploymentService(engineOperations,
+                repositoryService, runtimeService, historyService, artifactRepository, null, null, null, null);
         identityResolver = mock(WorkflowIdentityResolver.class);
         when(identityResolver.resolveCurrentIdentity())
                 .thenReturn(new com.ruoyi.flowable.identity.WorkflowCurrentIdentity(

@@ -37,9 +37,6 @@ import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfDeployParticipantRule;
 import com.ruoyi.flowable.domain.WfDeployTaskSla;
-import com.ruoyi.flowable.extension.WorkflowConditionRoutingException;
-import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
-import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
 
 /**
  * 使用 Flowable 子部署资源持久化和读取不可变业务部署快照。
@@ -199,7 +196,7 @@ public class WorkflowDeploymentArtifactRepository
         return readConditionRules(deploymentId, snapshot -> true);
     }
 
-    /** 在资源读取边界校验本次实际读取的分支，运行时不巡检其他流程/网关。 */
+    /** 按既有版本解码本次需要的分支；规则正文仅在实际路由时解释。 */
     private List<WfDeployConditionRule> readConditionRules(String deploymentId,
             Predicate<WfDeployConditionRule> selection)
     {
@@ -213,23 +210,15 @@ public class WorkflowDeploymentArtifactRepository
         {
             if (version == 1)
             {
-                // v1 的 CEL 只重复 ruleJson 中的布尔拓扑。仍校验其原始摘要，
-                // 不重新生成旧数据、不编译或执行旧 CEL，也不回写部署资源。
+                // v1 仅在内存中移除已停止求值的 CEL 字段，原始资源保持不变。
                 List<ObjectNode> legacy = objectMapper.readValue(bytes, new TypeReference<>() { });
                 if (legacy == null) throw new ServiceException("流程部署业务资源列表缺失", HttpStatus.ERROR);
                 snapshots = new ArrayList<>();
                 for (ObjectNode node : legacy)
                 {
-                    var cel = node.remove("celConfigJson");
+                    node.remove("celConfigJson");
                     WfDeployConditionRule snapshot = objectMapper.treeToValue(node, WfDeployConditionRule.class);
                     if (!selection.test(snapshot)) continue;
-                    String checksum = WorkflowExtensionChecksum.sha256(snapshot.getProcessKey(), snapshot.getGatewayId(),
-                            snapshot.getGatewayType(), snapshot.getGatewayToken(), snapshot.getFlowId(),
-                            snapshot.getFlowName(), snapshot.getFlowToken(),
-                            Boolean.TRUE.equals(snapshot.getDefaultFlow()) ? "1" : "0",
-                            canonicalConditionJson(snapshot.getRuleJson()),
-                            cel == null || cel.isNull() ? null : canonicalConditionJson(cel.asText()));
-                    requireConditionChecksum(snapshot, checksum);
                     snapshots.add(snapshot);
                 }
             }
@@ -238,8 +227,6 @@ public class WorkflowDeploymentArtifactRepository
                 snapshots = objectMapper.readValue(bytes, CONDITION_LIST);
                 if (snapshots == null) throw new ServiceException("流程部署业务资源列表缺失", HttpStatus.ERROR);
                 snapshots = snapshots.stream().filter(selection).toList();
-                for (WfDeployConditionRule snapshot : snapshots)
-                    requireConditionChecksum(snapshot, WorkflowConditionDeploymentService.snapshotChecksum(snapshot));
             }
         }
         catch (JacksonException exception)
@@ -252,17 +239,6 @@ public class WorkflowDeploymentArtifactRepository
                 Comparator.comparing(WfDeployConditionRule::getProcessKey)
                         .thenComparing(WfDeployConditionRule::getGatewayId)
                         .thenComparing(WfDeployConditionRule::getFlowId));
-    }
-
-    private static String canonicalConditionJson(String json)
-    {
-        return json == null ? null : WorkflowExtensionJsonCanonicalizer.canonicalize(json);
-    }
-
-    private static void requireConditionChecksum(WfDeployConditionRule snapshot, String checksum)
-    {
-        if (!checksum.equals(snapshot.getSnapshotChecksum()))
-            throw new WorkflowConditionRoutingException("条件路由部署快照校验和不一致", HttpStatus.ERROR);
     }
 
     /**

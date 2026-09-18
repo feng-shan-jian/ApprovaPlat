@@ -108,7 +108,6 @@ class WorkflowDataObjectBusinessTest
         new WorkflowTaskSlaDeploymentService(null, null, null).prepare(executable, "1");
         new WorkflowRuntimeTaskListenerCompiler().compile(executable);
         byte[] compiled = WorkflowBpmnXmlPreserver.write(executable, document.bpmnXml());
-        service.validateCompiledDeployment(compiled);
         assertThat(new String(compiled, StandardCharsets.UTF_8)).contains("dataObjectReference", "visibleData", "archive", "业务说明");
         assertThat(document.bpmnXml()).isEqualTo(xml);
         var engine = support.processEngine();
@@ -140,7 +139,6 @@ class WorkflowDataObjectBusinessTest
         new WorkflowTaskSlaDeploymentService(null, null, null).prepare(executable, "1");
         new WorkflowRuntimeTaskListenerCompiler().compile(executable);
         byte[] compiled = WorkflowBpmnXmlPreserver.write(executable, document.bpmnXml());
-        service.validateCompiledDeployment(compiled);
         var engine = support.processEngine();
         engine.getRepositoryService().createDeployment().addString("child.bpmn20.xml", """
             <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" targetNamespace="urn:test:data">

@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.service.model;
 
-import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -143,7 +142,7 @@ public class WorkflowBusinessCalendarService
     }
 
     /**
-     * 部署时锁定一个已启用业务日历引用。
+     * 取得作者保存或部署引用的已启用日历；配置关系由主数据保存入口建立。
      * @param calendarKey String，作者配置中的稳定日历编码
      * @return WfBusinessCalendar，当前启用且字段完整的正式日历
      */
@@ -155,7 +154,6 @@ public class WorkflowBusinessCalendarService
         {
             throw new ServiceException("审批 SLA 业务日历未启用或不存在", HttpStatus.CONFLICT);
         }
-        parseCalendar(calendar);
         return calendar;
     }
 
@@ -308,7 +306,7 @@ public class WorkflowBusinessCalendarService
     }
 
     /**
-     * 解析数据库日历，防止损坏主数据生成错误定时作业，解析结果直接供计算使用。
+     * 将实际计算需要的时区、工作窗口、周规则与日期覆盖解析为索引。
      * @param calendar WfBusinessCalendar，数据库读取日历
      * @return CalendarSchedule，当前日历工作窗口及日期索引；字段损坏时抛出稳定 500
      */
@@ -319,11 +317,8 @@ public class WorkflowBusinessCalendarService
             ZoneId zone = ZoneId.of(calendar.getTimezone());
             LocalTime start = LocalTime.parse(calendar.getWorkStart());
             LocalTime end = LocalTime.parse(calendar.getWorkEnd());
-            Set<Integer> weekdays = parseWorkingDays(calendar.getWorkingDays());
-            if (!start.isBefore(end) || weekdays.isEmpty())
-            {
-                throw new IllegalArgumentException();
-            }
+            Set<Integer> weekdays = java.util.Arrays.stream(calendar.getWorkingDays().split(","))
+                    .map(Integer::valueOf).collect(java.util.stream.Collectors.toSet());
             Map<LocalDate, Boolean> overrides = new HashMap<>();
             for (WfBusinessCalendar.CalendarDay day : calendar.getDays())
             {
@@ -335,26 +330,6 @@ public class WorkflowBusinessCalendarService
         {
             throw dataError("业务日历正式数据异常");
         }
-    }
-
-    /** @param raw String，逗号分隔 ISO 周序号；@return Set&lt;Integer&gt;，去重工作周集合。 */
-    private Set<Integer> parseWorkingDays(String raw)
-    {
-        if (raw == null || raw.isBlank())
-        {
-            return Set.of();
-        }
-        Set<Integer> result = new LinkedHashSet<>();
-        for (String item : raw.split(","))
-        {
-            int day = Integer.parseInt(item);
-            DayOfWeek.of(day);
-            if (!result.add(day))
-            {
-                throw new IllegalArgumentException("重复工作周");
-            }
-        }
-        return result;
     }
 
     /** @param calendar WfBusinessCalendar，包含主键和日期覆盖；@return void，批量数量不一致时回滚。 */

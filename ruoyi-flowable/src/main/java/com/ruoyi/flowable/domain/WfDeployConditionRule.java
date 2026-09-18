@@ -4,7 +4,7 @@ import java.util.Date;
 
 /**
  * 排他或包容网关条件分支的不可变部署快照，保存在 Flowable 业务制品资源
- * {@code approvaplat/conditions-v2.json}；旧资源由制品仓库校验后读取。
+ * {@code approvaplat/conditions-v2.json}；制品仓库兼容解码旧版本，运行直接消费规则正文。
  */
 public class WfDeployConditionRule
 {
@@ -67,7 +67,7 @@ public class WfDeployConditionRule
     public String getRuleJson() { return ruleJson; }
     /** @param value String，规范化规则 JSON。 @return void，无返回值。 */
     public void setRuleJson(String value) { ruleJson = value; }
-    /** @return String，快照完整性 SHA-256。 */
+    /** @return String，既有存储协议 SHA-256，运行求值不复算。 */
     public String getSnapshotChecksum() { return snapshotChecksum; }
     /** @param value String，快照完整性 SHA-256。 @return void，无返回值。 */
     public void setSnapshotChecksum(String value) { snapshotChecksum = value; }

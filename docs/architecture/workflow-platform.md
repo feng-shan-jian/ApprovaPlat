@@ -115,6 +115,14 @@ flowchart TD
 - `com.ruoyi.web.controller.workflow` 下的工作流 Controller 提供正式登录用户入口，并由五角色 RBAC 矩阵冻结方法、路径和权限表达式。
 - 每个流程实例、任务、附件、部署和审计查询同时执行 URL 权限与对象授权，验证当前用户和目标对象的业务关系。
 
+## 部署展示与授权读取
+
+管理 XML、发起预览和实例详情先完成各入口当前请求的身份/权限与对象定位，再有界读取已部署 BPMN（2 MiB）并严格 UTF-8 解码。显示既有版本不重新检查作者字段、表单、监听器或可部署性；资源缺失、读取/解码失败和大小限制仍报告。作者保存、完整预检与正式 Flowable 部署分别保留输入、编译和执行结构约束。
+
+详情、观察和等待在同一 REPEATABLE_READ 事务内复用已授权的真实任务/实例；独立请求和写入仍重新授权。AccessSnapshot 内部对象不进入 JSON。变量投影只查询授权根/任务局部作用域的可读字段元数据，空字段不查询；大正文在类型及单项/累计限额通过后按同一作用域读取，保留受控 JSON、String ObjectInputFilter 和响应容量限制。元数据不读取 Blob 正文，也不遍历不可读全域变量。同一读事务观察一致快照，下一事务读取新提交值；引擎写入回滚后投影不变。正式判据见 WorkflowProcessDetailServiceIntegrationTest 和 WorkflowProcessVariableProjectionIntegrationTest/MySqlIT。
+
+Flowable 8 标量按实际存储列解释：LONG_ 对应 short/integer/long、boolean 和毫秒 date/instant，DOUBLE_ 对应 double，TEXT_ 对应 string、uuid、bigdecimal/biginteger；保持原 JSON 值形态。行内/Blob JSON、longJson 及旧 string 标签的长字符串通过受控解码兼容；serializable 不作为业务投影输出，禁止任意对象反序列化。当前变量正文保留单项 1 MiB、累计 2 MiB 读取上限及单文本 64 KiB 输出限制，提交快照使用其独立限额。
+
 ## 数据与事务
 
 - Flowable `ACT_*` 与项目 `wf_*` 共用主数据源和 Spring 事务管理器。

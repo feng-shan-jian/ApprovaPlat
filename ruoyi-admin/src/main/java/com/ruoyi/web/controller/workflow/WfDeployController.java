@@ -104,7 +104,7 @@ public class WfDeployController extends BaseController
     }
 
     /**
-     * 读取并重新安全校验已部署 BPMN XML。
+     * 在本次管理权限校验后有界读取已部署 BPMN XML。
      *
      * @param definitionId String，Flowable 流程定义主键
      * @return AjaxResult，UTF-8 BPMN XML

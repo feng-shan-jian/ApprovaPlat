@@ -37,3 +37,9 @@ npm run build:prod
 ```
 
 真实 MySQL 测试使用隔离数据库和 `workflow-mysql-it` profile，配置示例见 [README](README.md#开发与测试)。浏览器测试的账号、环境与命令见[工作流浏览器回归](ruoyi-ui/tests/e2e/README.md)。根据改动选择对应验证层，并在 Pull Request 中记录实际执行的命令、结果及未执行项。
+
+### 生成器详情回归
+
+`GenTableDetailTest` 使用正式 DDL/MyBatis、服务事务、MockMvc JSON 与 Velocity，检查详情 `info/rows/tables`、按名称读取、目录归属、排序、空 LEFT JOIN、列审计、编辑保存及 crud/tree/sub 模板。详情 rows 复用已读取的 columns；联表列审计不填入父表，独立列接口保持。`GenTableDetailMySqlIT` 继承相同判据并覆盖真实 information_schema 目录/导入查询，二者不是重复测试实现。
+
+默认构建执行 H2 测试；MySQL 预先按 `docker/mysql/init.sh` 初始化 14 份基线，仅向测试子进程注入 `WORKFLOW_MYSQL_TEST_URL/USERNAME/PASSWORD`，执行 `mvn -pl ruoyi-admin -am -Pworkflow-mysql-it '-Dit.test=GenTableDetailMySqlIT,WfMultiInstanceRoundMapperMySqlIT' verify -B -ntp`。此测试不包含登录权限过滤器、浏览器、自定义路径文件生成或生成项目编译；无数据格式迁移。

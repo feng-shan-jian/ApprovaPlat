@@ -6,21 +6,14 @@ import static org.mockito.Mockito.*;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Consumer;
 import jakarta.validation.Validation;
 import jakarta.validation.ValidatorFactory;
 import com.mysql.cj.jdbc.MysqlDataSource;
-import org.apache.ibatis.executor.Executor;
-import org.apache.ibatis.mapping.MappedStatement;
-import org.apache.ibatis.plugin.*;
-import org.apache.ibatis.session.ResultHandler;
-import org.apache.ibatis.session.RowBounds;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -51,6 +44,7 @@ import com.ruoyi.framework.security.context.PermissionContextHolder;
 import com.ruoyi.system.domain.*;
 import com.ruoyi.system.mapper.*;
 import com.ruoyi.system.service.ISysConfigService;
+import com.ruoyi.system.service.impl.SysConfigDictDeletionMySqlIT.SqlBoundary;
 
 /** 真实 DataScope 切面、Spring 事务代理和生产 XML；仅创建、清理本测试自己的行。 */
 class SysOrganizationScopeMySqlIT
@@ -670,20 +664,4 @@ class SysOrganizationScopeMySqlIT
         PermissionContextHolder.setContext(permission);
     }
 
-    @Intercepts({
-        @Signature(type = Executor.class, method = "query", args = { MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class }),
-        @Signature(type = Executor.class, method = "update", args = { MappedStatement.class, Object.class })
-    })
-    static class SqlBoundary implements Interceptor
-    {
-        final List<String> statements = new CopyOnWriteArrayList<>();
-        volatile Consumer<String> before = id -> { };
-        volatile Consumer<String> after = id -> { };
-        public Object intercept(Invocation invocation) throws Throwable
-        {
-            String id = ((MappedStatement) invocation.getArgs()[0]).getId(); statements.add(id); before.accept(id);
-            Object result = invocation.proceed(); after.accept(id); return result;
-        }
-        long count(String method) { return statements.stream().filter(id -> id.endsWith("." + method)).count(); }
-    }
 }
