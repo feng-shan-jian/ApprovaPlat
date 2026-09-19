@@ -20,15 +20,3 @@
 - `DELETE /system/dict/type/refreshCache`
 
 刷新入口清空相应缓存，再从已提交数据库重新加载。部署无需数据迁移；代码回退不恢复已经成功删除的数据，也会撤销本契约的并发保护。
-
-## 正式验证入口
-
-设置现有 `WORKFLOW_MYSQL_TEST_URL`、`WORKFLOW_MYSQL_TEST_USERNAME`、`WORKFLOW_MYSQL_TEST_PASSWORD`，指向含三张正式表的 `approvaplat_it` 隔离库。运行：
-
-```powershell
-mvn -pl ruoyi-flowable -am -Pworkflow-mysql-it verify '-Dit.test=SysConfigDictDeletionMySqlIT'
-```
-
-测试使用生产 XML Mapper、真实 MySQL 与 Spring 事务代理，覆盖后项保护、集合删除、数据库写失败回滚、外层事务回滚、双方引用竞争、类型改名、旧事务快照和提交后缓存异常。数据库失败通过批量删除之后、同一事务内执行一条 MySQL 拒绝的真实写入触发，不需要创建触发器或修改表结构；该场景验证实际删除的事务回滚。
-
-Redis 边界使用受控内存替身，验证失效时序、原始异常传播和刷新行为，不代表已经验证真实 Redis 断网恢复或浏览器交互。测试仅创建并清理自身 `create_by` 标识的数据，不迁移或修改业务库。

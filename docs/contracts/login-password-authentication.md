@@ -25,42 +25,6 @@
 
 管理员接口仍是 `GET /monitor/logininfor/unlock/{userName}`，权限仍为 `monitor:logininfor:unlock`，成功响应形状不变。
 
-## 正式验证入口
-
-Windows 安装 Memurai 后，在仓库运行：
-
-```powershell
-pwsh -File ruoyi-admin/src/test/scripts/verify-login-redis.ps1
-```
-
-脚本分配回环临时端口，启动隐藏的独立 Memurai 进程，关闭持久化，运行 `mvn -pl ruoyi-admin -am -Plogin-redis-it verify -B -ntp`，最终停止自己的进程、删除临时目录并恢复环境变量。可通过 `-MemuraiExecutable` 指定可执行文件。不使用常驻服务、部署数据库或共享业务键。
-
-已有自行创建的隔离 Redis 兼容实例时，也可设置 `LOGIN_REDIS_PORT` 后直接运行上述 Maven 命令。该 profile 缺少端口、连接失败或测试选择零匹配均失败，不按跳过通过。普通 `mvn -pl ruoyi-admin -am verify -B -ntp` 不启动此集成测试。
-
-两个集成 profile 使用独立 Failsafe execution，Redis 使用独立报告目录和 summary，避免配置合并覆盖测试选择或验证结果。Redis 测试标记 `login-redis`：Redis execution 只接受该标签，MySQL execution 排除该标签，包括宽泛的 `-Dit.test=*IT`。MySQL 原有默认扫描范围和 flowable 零匹配门禁不变；没有通过跳过测试解除环境要求。
-
-| 启用方式 | 选择与环境 |
-| --- | --- |
-| `-Pworkflow-mysql-it` | 原 MySQL 测试；不要求 Redis。`-Dit.test` 保留原 MySQL 定向语义，admin 允许所选 IT 仅位于 flowable。 |
-| `-Plogin-redis-it` | Redis 认证测试；要求 `LOGIN_REDIS_PORT`。可用 `-Dlogin.redis.it.test=LoginAuthenticationRedisIT#方法名` 定向；零匹配失败。 |
-| `-Pworkflow-mysql-it,login-redis-it` | 两个 execution 分别执行各组，每组一次，各自验证报告。需同时提供两组环境。`-Dit.test` 选择 MySQL，`-Dlogin.redis.it.test` 选择 Redis，互不覆盖。 |
-
-已有隔离 MySQL 附件四表及 Redis 实例时，可以定向复跑组合链：
-
-```powershell
-mvn -pl ruoyi-admin -am '-Pworkflow-mysql-it,login-redis-it' '-Dit.test=WorkflowAttachmentUploadRecoveryMySqlIT,WfAttachmentMultipartMySqlIT' verify -B -ntp
-```
-
-组合命令中即使 `-Dit.test` 只选择 flowable 的测试，启用的 Redis profile 仍执行其自身选择；只需 MySQL 时不启用 Redis profile。Redis 报告位于 admin 的 `target/failsafe-reports/login-redis`，MySQL 沿用原报告位置。复跑脚本只启动 Redis；组合命令的 MySQL 实例与正式 schema 需按现有隔离库入口准备。
-
-`LoginAuthenticationRedisIT` 覆盖单次真实 BCrypt、成功清理、错误与锁定提示、锁定不续期、不存在/删除/停用、4/8 个同时获准比较的失败、旧 Integer 双向兼容、TTL 刷新与到期、不同请求密码变化、成功/失败两种先后顺序、管理员授权/拒绝/重复解锁、输入名语义与损坏计数拒绝。
-
-基线反证用正式测试驱动原生产链：成功登录观察到两次真实 `BCrypt.checkpw`；4 个已通过锁定检查的失败完成后计数只有 1，期望为 4。比对观测始终调用真实 BCrypt，只增加计数或在真实结果返回前设置并发屏障，不伪造匹配结果。修复后的同类断言证明成功/失败结果及 Redis 业务状态。
-
-认证夹具使用符合现有长度限制的密码。若输入意外被登录前置校验拒绝，夹具在 Spring 上下文关闭前将延迟获取消息的 `BaseException` 转成有固定消息的断言失败，避免 JUnit 报告器在上下文关闭后读取消息而漏记失败。独立请求场景逐次验证旧密码成功、密码变更后旧密码拒绝、新密码成功及计数清理。
-
-测试真实部分包括 Spring `SecurityConfig`、Manager/Provider、用户详情与登录服务、生产 RedisConfig/Fastjson/重试代码、真实 Redis 兼容进程，以及管理员 Controller 的真实方法权限校验。用户/权限/配置查询、Token 输出和审计调度是受控替身；没有数据库写入。未验证完整 HTTP 登录、JWT 签发/校验、异步审计落库、浏览器、Redis 集群/故障切换/网络响应丢失。
-
 ## 切换与恢复
 
 同次发布这些生产修改即可切换，无缓存格式迁移。回退整组代码后旧键仍可读取，但旧版双重比较及并发计数丢失会恢复；混合部署期间旧实例仍可能覆盖新实例的累计值，应完成全部实例切换再认定并发修复生效。Redis 故障或错误键需按既有运维入口恢复服务/解锁；不在应用中旁路重试状态，也不以清空全部 Redis 恢复。

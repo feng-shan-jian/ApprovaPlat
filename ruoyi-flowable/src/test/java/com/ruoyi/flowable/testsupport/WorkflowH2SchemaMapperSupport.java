@@ -23,15 +23,8 @@ import org.springframework.jdbc.datasource.init.ScriptUtils;
  */
 public final class WorkflowH2SchemaMapperSupport
 {
-    /** 多实例轮次 H2 正式测试资源。 */
-    public static final String MULTI_INSTANCE_ROUND_SCHEMA =
-            "db/h2/wf_multi_instance_round.sql";
-
     /** 附件真实绑定链共用的 H2 表资源。 */
     public static final String ATTACHMENT_SCHEMA = "db/h2/wf_attachment.sql";
-
-    /** 任务 SLA 运行态与不可变审计 H2 表资源。 */
-    public static final String TASK_SLA_SCHEMA = "db/h2/wf_task_sla.sql";
 
     /** 受控重复审批执行记录 H2 表资源。 */
     public static final String CONTROLLED_LOOP_EXECUTION_SCHEMA =
@@ -39,10 +32,6 @@ public final class WorkflowH2SchemaMapperSupport
 
     /** 流程申请草稿 H2 表资源。 */
     public static final String PROCESS_DRAFT_SCHEMA = "db/h2/wf_process_draft.sql";
-
-    /** 邮件配置业务测试共用的 H2 表资源。 */
-    public static final String MAIL_CONFIG_SCHEMA =
-            "com/ruoyi/flowable/service/notification/workflow-mail-config-h2.sql";
 
     /**
      * 禁止实例化无状态测试基础设施。

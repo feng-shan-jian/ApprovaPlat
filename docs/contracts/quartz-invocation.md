@@ -25,16 +25,3 @@ Spring Bean 使用真实目标类型选择方法，实际调用仍经过原代�
 历史规则解析为一个 `String` 的内容始终是数据，不根据内容猜测表达式边界。例如 `ryTask.ryParams('count('x')')` 传入 `count('x')`；`ryTask.ryParams('a');ryTask.ryParams('b')` 传入单个字符串 `a');ryTask.ryParams('b`。每次只执行解析和授权得到的一个方法，既不求值参数，也不追加执行其中看起来像调用的文字。外侧调用结构、方法与参数签名、首尾引号及外侧尾随非参数文本仍检查。
 
 Cron 校验、方法权限、事务、初始暂停状态、恢复／暂停、并发策略、misfire 和立即执行流程保持原有实现。绕过 HTTP 存入的作业或直接建立的 Quartz 作业仍须通过执行时授权；失败继续由 `AbstractQuartzJob` 写入状态为 `1` 的运行日志及异常信息，成功状态为 `0`。无持久格式或数据库迁移；回退代码会恢复旧的全文误拦截和缺少运行时授权问题。
-
-## 验证入口和边界
-
-```powershell
-mvn -pl ruoyi-admin -am '-Dtest=JobInvocationTest,CronPreviewTest' '-Dsurefire.failIfNoSpecifiedTests=false' test
-mvn -pl ruoyi-admin -am verify
-```
-
-`JobInvocationTest` 使用生产 Controller、方法权限、带事务的服务、未经替换的 MyBatis XML Mapper、`ScheduleUtils` 和两种生产 Quartz Job。每个测试有专属 RAMJobStore、线程池、Spring 上下文和 H2 内存库；任务和执行日志实际写入 H2，并从 Mapper 读回。H2 表结构来自正式系统 SQL，使用 MySQL 模式和测试专属 `sysdate()` 函数适配。测试结束关闭调度器与数据库，恢复 Spring 静态上下文。
-
-记录任务夹具继承 `RyTask`，仅记录收到的参数。菜单服务是 mock；任务 Mapper、事务和调度器不是 mock。测试覆盖新增、修改、HTTP 请求／响应与权限、自动 Cron 触发、立即执行、代理切面、参数类型、Bean 名称及 alias、内部引号兼容、非法输入运行时阻断、真实懒加载任务创建／依赖失败及运行日志、调度配置失败时的数据库回滚。`CronPreviewTest` 继续覆盖原有 Cron 预览与权限行为。
-
-这些证据不代表完整应用／浏览器／JWT／审计切面、MySQL、Quartz JDBC JobStore、集群或进程重启持久恢复已经验证。H2 数据在测试结束销毁，RAMJobStore 不提供调度元数据持久化。测试不访问参数中的 URL，不执行外部命令。

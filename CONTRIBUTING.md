@@ -21,14 +21,18 @@ Windows 示例使用 PowerShell 7。Windows 与 WSL 分别安装依赖，避免�
 
 ## 验证
 
-在仓库根目录运行后端验证：
+测试仅保留六个入口：模型编译部署、流程发起、任务完成、退回重提、前端请求防重，以及申请草稿浏览器回归。后端使用真实 Flowable/H2 和 Spring 事务，保留幂等、revision 冲突、权限与回滚断言。
+
+测试通过仅证明保留场景，不代表全部功能或真实 MySQL/Redis 环境已经验证。修改其他功能时，按具体风险验证。
+
+在仓库根目录运行：
 
 ```powershell
 mvn clean verify
 git diff --check
 ```
 
-在 `ruoyi-ui` 目录运行前端验证：
+在 `ruoyi-ui` 目录运行：
 
 ```powershell
 npm run lint
@@ -36,10 +40,18 @@ npm run test:contracts
 npm run build:prod
 ```
 
-真实 MySQL 测试使用隔离数据库和 `workflow-mysql-it` profile，配置示例见 [README](README.md#开发与测试)。浏览器测试的账号、环境与命令见[工作流浏览器回归](ruoyi-ui/tests/e2e/README.md)。根据改动选择对应验证层，并在 Pull Request 中记录实际执行的命令、结果及未执行项。
+### 浏览器回归
 
-### 生成器详情回归
+启动隔离的前后端，关闭该测试环境验证码，提供模型/部署/草稿/实例管理权限及至少一个启用分类。在 `ruoyi-ui` 下执行：
 
-`GenTableDetailTest` 使用正式 DDL/MyBatis、服务事务、MockMvc JSON 与 Velocity，检查详情 `info/rows/tables`、按名称读取、目录归属、排序、空 LEFT JOIN、列审计、编辑保存及 crud/tree/sub 模板。详情 rows 复用已读取的 columns；联表列审计不填入父表，独立列接口保持。`GenTableDetailMySqlIT` 继承相同判据并覆盖真实 information_schema 目录/导入查询，二者不是重复测试实现。
+```powershell
+$env:WORKFLOW_E2E_BASE_URL = 'http://127.0.0.1:1024'
+$env:WORKFLOW_E2E_USERNAME = '<测试账号>'
+$env:WORKFLOW_E2E_PASSWORD = '<测试密码>'
+$env:PLAYWRIGHT_CHANNEL = 'msedge'
+npm run test:e2e
+```
 
-默认构建执行 H2 测试；MySQL 预先按 `docker/mysql/init.sh` 初始化 14 份基线，仅向测试子进程注入 `WORKFLOW_MYSQL_TEST_URL/USERNAME/PASSWORD`，执行 `mvn -pl ruoyi-admin -am -Pworkflow-mysql-it '-Dit.test=GenTableDetailMySqlIT,WfMultiInstanceRoundMapperMySqlIT' verify -B -ntp`。此测试不包含登录权限过滤器、浏览器、自定义路径文件生成或生成项目编译；无数据格式迁移。
+默认浏览器为已安装的 Playwright Chromium；Windows 可使用上述 Edge channel。申请草稿回归验证页面恢复、revision 冲突及两次 HTTP 提交只创建一个实例。测试精确删除自己的模型、部署和实例；草稿终态按正常保留策略处理，运行环境必须可销毁。
+
+缺少账号会失败；`test:contracts` 和 `playwright test --list` 不代表浏览器已通过。提交说明记录实际执行结果和未执行项，运行产物及临时数据在完成后清理。

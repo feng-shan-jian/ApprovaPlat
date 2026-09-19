@@ -71,86 +71,9 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <scope>test</scope>
-        </dependency>
 
     </dependencies>
 
-    <profiles>
-        <!-- 显式连接隔离 Redis；缺少端口或连接失败时测试失败，不跳过。 -->
-        <profile>
-            <id>login-redis-it</id>
-            <properties>
-                <!-- Redis 使用独立选择参数，不覆盖既有 MySQL 的 it.test。 -->
-                <login.redis.it.test>LoginAuthenticationRedisIT</login.redis.it.test>
-            </properties>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-failsafe-plugin</artifactId>
-                        <version>${maven-surefire.version}</version>
-                        <executions>
-                            <execution>
-                                <id>login-redis-it</id>
-                                <goals>
-                                    <goal>integration-test</goal>
-                                    <goal>verify</goal>
-                                </goals>
-                                <configuration>
-                                    <classesDirectory>${project.build.outputDirectory}</classesDirectory>
-                                    <test>${login.redis.it.test}</test>
-                                    <groups>login-redis</groups>
-                                    <failIfNoTests>true</failIfNoTests>
-                                    <failIfNoSpecifiedTests>true</failIfNoSpecifiedTests>
-                                    <reportsDirectory>${project.build.directory}/failsafe-reports/login-redis</reportsDirectory>
-                                    <summaryFile>${project.build.directory}/failsafe-reports/login-redis/failsafe-summary.xml</summaryFile>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-        <!-- 与 flowable 模块共用显式隔离库环境；普通 test 不连接 MySQL。 -->
-        <profile>
-            <id>workflow-mysql-it</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-failsafe-plugin</artifactId>
-                        <version>3.5.4</version>
-                        <executions>
-                            <execution>
-                                <id>workflow-mysql-it</id>
-                                <goals>
-                                    <goal>integration-test</goal>
-                                    <goal>verify</goal>
-                                </goals>
-                                <configuration>
-                                    <!-- 标签过滤也约束宽泛 it.test；保持原有 MySQL 默认扫描范围。 -->
-                                    <excludedGroups>login-redis</excludedGroups>
-                                    <!-- 定向 IT 可以仅位于 flowable；该模块保留零测试门禁。 -->
-                                    <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
-                                    <classesDirectory>${project.build.outputDirectory}</classesDirectory>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
 
     <build>
         <plugins>

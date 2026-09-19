@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "lint": "eslint src tests plugins vite.config.js",
     "test:contracts": "node --test tests/contracts/*.test.js",
-    "test:e2e:designer": "playwright test tests/e2e/workflow-designer"
+    "test:e2e": "playwright test"
   },
   "repository": {
     "type": "git",
@@ -45,12 +45,9 @@
     "@eslint/js": "9.39.1",
     "@playwright/test": "1.62.1",
     "@vitejs/plugin-vue": "5.2.4",
-    "@xmldom/xmldom": "0.9.10",
-    "bpmn-moddle": "10.0.0",
     "eslint": "9.39.1",
     "eslint-plugin-vue": "10.6.2",
     "fast-glob": "3.3.3",
-    "fflate": "0.8.3",
     "globals": "16.5.0",
     "sass-embedded": "1.97.2",
     "unplugin-auto-import": "20.3.0",

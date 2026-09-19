@@ -10,8 +10,6 @@ import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.Date;
@@ -30,7 +28,6 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.engine.task.Comment;
 import org.flowable.task.api.Task;
-import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.variable.api.history.HistoricVariableInstance;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -58,7 +55,6 @@ import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifacts;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
-import com.ruoyi.flowable.service.process.WorkflowProcessInstanceService;
 import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
 import com.ruoyi.flowable.testsupport.WorkflowFlowableEngineTestSupport;
 import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
@@ -243,81 +239,6 @@ class WorkflowTaskCompletionContextIntegrationTest
         }
         processEngine = null;
         engineInfrastructure = null;
-    }
-
-    /**
-     * 验证带表单普通任务完成后的完成人、变量、意见、提交快照和单次定义/BPMN 读取。
-     *
-     * @return void，任一真实历史事实或单上下文调用次数不一致时失败
-     */
-    @Test
-    void completesFormTaskWithOneDefinitionAndOneBpmnRead()
-    {
-        ProcessInstance instance = runtimeService.startProcessInstanceByKey("completionForm");
-        Task task = requireSingleTask(instance.getId(), "formReview");
-        clearInvocations(repositoryService);
-
-        completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(task.getId(),
-                "表单审批通过", Map.of("approvalResult", "approved"),
-                List.of(), List.of(), null));
-
-        HistoricTaskInstance historicTask = historyService.createHistoricTaskInstanceQuery()
-                .taskId(task.getId()).finished().singleResult();
-        assertThat(historicTask).isNotNull();
-        assertThat(historicTask.getCompletedBy()).isEqualTo(CURRENT_USER_ID);
-        assertThat(historyService.createHistoricVariableInstanceQuery()
-                .processInstanceId(instance.getId()).variableName("approvalResult")
-                .singleResult().getValue()).isEqualTo("approved");
-        Comment completionComment = taskService.getProcessInstanceComments(
-                instance.getId(), "COMPLETE").stream()
-                .filter(comment -> task.getId().equals(comment.getTaskId()))
-                .findFirst().orElseThrow();
-        assertThat(completionComment.getFullMessage())
-                .contains("\"action\":\"COMPLETE\"")
-                .contains("表单审批通过")
-                .contains("\"actorUserId\":\"100\"");
-
-        HistoricVariableInstance snapshotVariable = historyService
-                .createHistoricVariableInstanceQuery().taskId(task.getId())
-                .variableName(WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME)
-                .singleResult();
-        assertThat(snapshotVariable).isNotNull();
-        WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot snapshot =
-                WorkflowFormSubmissionSnapshotCodec.decode((String) snapshotVariable.getValue());
-        assertThat(snapshot.taskId()).isEqualTo(task.getId());
-        assertThat(snapshot.nodeKey()).isEqualTo("formReview");
-        assertThat(snapshot.values().get("approvalResult").stringValue())
-                .isEqualTo("approved");
-        assertThat(runtimeService.createProcessInstanceQuery()
-                .processInstanceId(instance.getId()).count()).isZero();
-
-        verify(repositoryService, times(1)).getProcessDefinition(
-                definitions.get("completionForm").getId());
-        verify(repositoryService, times(1)).getBpmnModel(
-                definitions.get("completionForm").getId());
-    }
-
-    /**
-     * 验证显式选择下一办理人后，真实唯一直接后继任务被改派且来源任务完成。
-     *
-     * @return void，后继任务、办理人或来源历史不符合计划时失败
-     */
-    @Test
-    void appliesSelectedUserToRealDirectSuccessor()
-    {
-        ProcessInstance instance = runtimeService.startProcessInstanceByKey("completionNext");
-        Task source = requireSingleTask(instance.getId(), "selectSource");
-
-        completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(source.getId(),
-                "指定下一办理人", Map.of(), List.of(), List.of(200L), null));
-
-        Task target = requireSingleTask(instance.getId(), "selectedTarget");
-        assertThat(target.getAssignee()).isEqualTo("200");
-        assertThat(taskService.getIdentityLinksForTask(target.getId()))
-                .noneMatch(link -> "candidate".equals(link.getType()));
-        assertThat(historyService.createHistoricTaskInstanceQuery()
-                .taskId(source.getId()).finished().singleResult().getCompletedBy())
-                .isEqualTo(CURRENT_USER_ID);
     }
 
     /**

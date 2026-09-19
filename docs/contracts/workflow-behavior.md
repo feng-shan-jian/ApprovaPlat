@@ -51,8 +51,6 @@ Flowable 8 的 `DelegateTask.setAssignee` 在创建中更新任务对象；公�
 
 身份目录正常返回但不合格时维持原业务错误和参与者子码。活动用户、办理、认领、角色或部门展开查询发生系统故障时，保留原异常及原因并阻止后续分配写入；由既有全局异常处理返回安全错误与定位编号，响应不包含 SQL 或连接信息。此调整没有持久化格式或数据库迁移。
 
-正式验证入口包括 `WorkflowCandidateTaskCreationIntegrationTest`、`WorkflowReturnedApplicantListenerContractTest`、多实例/任务动作测试、`WorkflowUserSelectionFailureTest` 和 `WfTaskIdentityFailureControllerTest`。MySQL 层使用 `workflow-mysql-it` profile 下的 `WorkflowAssignmentMySqlIT`，要求已安装正式基线的隔离库；该测试不创建或迁移表结构，使用随机身份与部署夹具并精确清理。
-
 ## 模型历史与发布版本弹窗
 
 - 每次打开、切换对象、分页和刷新均以独立查询快照加载；关闭弹窗、离开缓存页签或卸载页面使未完成查询失效。旧响应及其结束回调不得覆盖当前对象的版本、总数或加载状态。
@@ -109,17 +107,15 @@ Flowable 8 的 `DelegateTask.setAssignee` 在创建中更新任务对象；公�
 - 临时附件只有所有者可以删除；绑定后按流程对象授权读取。容量检查先锁全局配额行，再锁用户配额行。
 - 业务删除先留下正式生命周期记录，物理清理失败进入持久化重试并保持可观察状态。
 
-附件 multipart 回归入口为 `WfAttachmentMultipartMySqlIT`：配置 `WORKFLOW_MYSQL_TEST_*` 指向具备附件表、配额表及上传账本的隔离 `approvaplat_it` 后，运行 `mvn -pl ruoyi-admin -am -Pworkflow-mysql-it -Dit.test=WfAttachmentMultipartMySqlIT,WorkflowAttachmentUploadRecoveryMySqlIT verify`。admin 允许定向 IT 仅匹配 flowable 模块，既有 flowable-only 命令无需增加绕过开关；flowable 原有零测试门禁保持启用。测试通过 loopback Tomcat 使用生产 Controller、权限/防重链、附件服务、Mapper、InnoDB 事务和临时文件；Token/Redis、身份/菜单主数据使用替身，绑定检查直接调用附件领域入口，不代表完整登录、审计或 Flowable 任务验收。常规存储与恢复契约仍由 `WorkflowAttachmentStorageContractTest`、`WorkflowAttachmentUploadRecoveryTest` 覆盖。
-
 ## 结构化条件路由与部署资源兼容
 
 - 条件作者协议仍为 `version: 1`：根 `combinator` 组合 `groups`，每组 `combinator` 组合原子 `rules`，只接受既有 `AND`/`OR`。根下最多 8 组、组内最多 8 条、分支最多 32 条；不新增递归组或表达式语法。保存、预检和部署均通过现有条件编译器，编译 BPMN 继续使用固定 `workflowConditionRouter.matches` 及原有网关/分支令牌。
 - 路由直接按冻结结构求值。组内、组间按顺序短路：未求值的字段可以不存在；实际求值的字段不存在、为 null 或运行类型不符合冻结类型，仍分别返回原有受控 409 提示并回滚引擎命令。不新增存在性或空值运算符。文本/单值日期仍按文本比较，BOOLEAN 保持严格布尔类型，SCALAR 保持既有文本/布尔/有限数值规范化；NUMBER 比较冻结十进制文本与运行 Number 时使用 `BigDecimal`，不转换成 CEL DOUBLE。作者 JSON 数值输入及规范化协议保持不变。
 - 各非默认分支仍全部参与网关命中判定。排他网关多分支同时命中返回 409 并回滚，不依赖分支顺序；包容网关执行全部命中分支；均无命中时选择唯一默认流。transient 命中集仅在当前引擎命令内复用，不写入业务变量或历史，不跨请求缓存；后续任务完成再次经过同网关时重新求值。
 - 新资源子部署的 `approvaplat/manifest-v1.json` 内容为 `schemaVersion: 2`，条件资源改为 `approvaplat/conditions-v2.json`；其他领域资源名称和结构保持原协议。条件快照删除 `celConfigJson`，摘要仅包含原有身份字段、默认标志和规范 `ruleJson`。独立 CEL 扩展与 DMN 仍使用各自原有执行器和冻结资源。
-- manifest 1 的已有部署继续读取 `conditions-v1.json`，仅在内存中移除停止求值的 `celConfigJson`，随后与 v2 共用结构化路由器。规则由正式部署编译入口封闭生成；运行时不复算同源摘要、不重建 CEL、不巡检编译器生成的网关/分支关系。摘要字段及原写入算法保留以维持存储兼容，不作为运行完整性校验；人工改写合法内部规则或旧 CEL/摘要不再承诺被检测。未知 manifest、缺失资源和不可解码 JSON 仍在读取处报告；实际使用的规则按类型/运算符求值。旧资源不回写，原始兼容夹具保留；只有所有需要保留的 v1 部署均已退役并完成保留/恢复安排，才可删除读取分支。
+- manifest 1 的已有部署继续读取 `conditions-v1.json`，仅在内存中移除停止求值的 `celConfigJson`，随后与 v2 共用结构化路由器。规则由正式部署编译入口封闭生成；运行时不复算同源摘要、不重建 CEL、不巡检编译器生成的网关/分支关系。摘要字段及原写入算法保留以维持存储兼容，不作为运行完整性校验；人工改写合法内部规则或旧 CEL/摘要不再承诺被检测。未知 manifest、缺失资源和不可解码 JSON 仍在读取处报告；实际使用的规则按类型/运算符求值。旧资源不回写；只有所有需要保留的 v1 部署均已退役并完成保留/恢复安排，才可删除读取分支。
 
-恢复前提：仅在尚未产生 manifest 2 部署时可以单纯回退到 C10 前代码。存在新部署（包括没有条件的新模型部署）时，旧代码会拒绝 manifest 2；必须保留具备 v2 读取能力的版本修复前进，或在停止写入后整体恢复发布前的一致数据库备份及对应应用版本。不要只降 manifest、伪造旧 CEL、改活动实例指向或局部覆盖条件资源。C10 不执行常驻库或 C05 旧状态迁移。正式回归入口为 `WorkflowConditionRoutingIntegrationTest`、`WorkflowConditionRoutingMySqlIT`，兼容 fixture 记录见 [基线资源说明](../../ruoyi-flowable/src/test/resources/conditions-legacy-v1/README.md)。
+恢复前提：仅在尚未产生 manifest 2 部署时可以单纯回退到 C10 前代码。存在新部署（包括没有条件的新模型部署）时，旧代码会拒绝 manifest 2；必须保留具备 v2 读取能力的版本修复前进，或在停止写入后整体恢复发布前的一致数据库备份及对应应用版本。不要只降 manifest、伪造旧 CEL、改活动实例指向或局部覆盖条件资源。C10 不执行常驻库或 C05 旧状态迁移。
 
 ## 扩展、连接器、DMN 与运行事件
 

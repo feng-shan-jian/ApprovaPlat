@@ -12,27 +12,9 @@ API `processStatus` 继续由原规范器从 businessStatus 和真实引擎活�
 
 迁移命令的 RETURN/REOPEN Scope 分别直接持有原正式计划和该动作的真实运行观测；取消回调通过 `MultiInstanceTransitionPlan` 这一封闭的两类型接口交还同一个计划对象。旧17字段 TransitionContext、拆散重建、Cancellation 副本及重复动作枚举删除。新接口只让既有两份计划可以作为取消回调结果，不新增字段、生命周期状态或构造自证。ThreadLocal 只绑定本次命令 Scope；禁止嵌套、同线程关闭、异常释放、实际来源/操作者匹配、成员与 revision、轮次 CAS 和数据库事务保持。
 
-## 已核实消费者与范围
+## 迁移前的依赖清点
 
-2026-09-17，只读连接本机 MySQL 8.4.9：
-
-| 范围 | 数量与结果 |
-| --- | --- |
-| 常驻业务库 `127.0.0.1:3306/ry-vue` | 31 个定义、31 个模型 |
-| 部署字节资源 | 341 份，旧变量名称命中 0 |
-| 模型源字节资源 | 31 份，命中 0 |
-| 工作流表及模型元信息文本字段 | 281 列（含设计草稿、部署制品和配置），命中 0 |
-| 数据库视图、过程、触发器定义 | 可见定义中命中 0 |
-| 活动实例/旧运行变量 | 4/4，均 running，根作用域字符串 |
-| 历史实例/旧历史变量 | 35/35：28 completed、4 running、2 canceled、1 rejected；两份值一致 |
-| 旧变量变更明细 | 46 条，仍需随旧协议退役 |
-| 环境变量指向的共享 `approvaplat_it` | 0 定义/模型/实例/旧变量；279 个文本字段命中 0；只读核实，未执行迁移或测试写入 |
-
-仓库全文检索覆盖 Java、Mapper、SQL、BPMN、模型属性、CEL、前后端及公开 API 引用。旧写入集中在根发起、子实例启动、退回重提、终止、完成监听；均已切换。详情/列表/能力原本使用 businessStatus，保留原投影。CEL、开始变量门禁、表单字段、可见变量投影及前端设计器的 processStatus 保留名限制继续保留，防止用户字段重新占用已退役名称。未增加旧变量派生出口，因为本次可见运行消费者不需要它。
-
-把正式迁移脚本的五组阻断谓词转为只读 SELECT（候选状态使用派生查询，不创建临时表）后，在上述两个库的依赖、存储形状、基数/归属、状态冲突和引擎关系阻断计数均为0。本任务未在它们创建迁移过程或修改业务行；该检查也不替代停写前的再次清点。
-
-以上仅证明本次仓库和可连接数据库的可见范围。未检查其他服务器、未连接租户、外部脚本/报表、第三方 Flowable REST/数据库直连客户端、加密或程序动态拼接表达式。无本应用运行中 HTTP 服务可供本次外部访问观察。源码和数据库文本零命中不能证明所有外部系统不存在依赖。上线负责人必须核对集成清单；若仍有旧变量消费者，停留在旧版本直至完成下面的依赖处理，不能让新旧版本同时写入。
+上线前重新清点部署资源、模型、设计草稿、数据库对象及外部集成是否仍消费旧 `processStatus` 变量。历史本机检查结果不代表目标环境；存在旧消费者时先完成依赖处理，不允许新旧应用同时写入。
 
 ## 数据选择与失败处理
 
@@ -79,13 +61,3 @@ if ($LASTEXITCODE -ne 0) { throw 'C05 migration failed; keep writers stopped' }
 & 'C:/Program Files/MySQL/MySQL Server 8.4/bin/mysql.exe' --defaults-extra-file=C:/secure/c05-client.cnf --execute='source C:/backup/c05-before.sql'
 if ($LASTEXITCODE -ne 0) { throw 'C05 restore failed; keep writers stopped' }
 ```
-
-## 验证证据
-
-- 2026-09-17 从不可变 C09 提交提取原始 StartService、CallActivityStartListener、CompletionStatusListener、InstanceService，单独编译并优先装入隔离 H2 类路径。通过正式草稿创建/提交/真实人工完成及同步 start→end：原发起实际生成 running/running；原完成实际生成 completed/completed；历史旧变量是根作用域 string，其他存储槽为空。新契约“旧变量不存在”的判据在旧实现为红。这校验迁移夹具所依据的旧存储形状，并非把手工写状态视为旧生命周期。
-- `WorkflowBusinessStatusMigrationMySqlIT` 明确区分旧存储夹具与生命周期：真实 Flowable 创建旧字符串存储，正式迁移补齐权威、移除变量；精确恢复修改列/旧行后与备份一致，再迁移并由新完成监听完成实际任务。冲突、来源缺失、类型/作用域/重复/引擎关系异常和部署/模型/草稿依赖全部证明零数据修改。生产恢复仍要求完整离线备份。
-- 同日另在任务专用 MySQL 8.4.9 的随机 schema 实际执行完整 mysqldump→正式迁移→mysql source 恢复。旧运行变量计数 1→0→1，全部27条数据 INSERT 语句逐字一致；全库逻辑 SQL 仅相差 MySQL 恢复后补出的冗余列级 CHARACTER SET 声明，去掉这些声明后完全一致。不把逻辑一致表述为原始 dump 字节一致，也不据此证明未连接生产库已完成恢复演练。
-- `WorkflowMultiInstanceGroup*MySqlIT` 复用同一正式服务链和正式 Mapper，在随机专用库重放整组退回、重提、连续退回、回滚及真实竞争；不改变 profile、Enforcer、Failsafe 门禁。每个私有库按正式14个 SQL 初始化并销毁。
-- 新的私有 schema 测试遵循既有 C12 的 `WORKFLOW_MYSQL_TEST_ALLOW_SCHEMA_DDL=true` 显式门禁；只能配合经核实的专用实例和三个 `WORKFLOW_MYSQL_TEST_*` 连接环境变量运行。它不修改所连接基线库的结构，迁移只在随机专用 schema 执行。
-- 完成抄送/通知 MySQL 回归在实际持久化后注入 SQL 故障，验证 businessStatus、引擎、抄送、通知同事务回滚和合法重试；重复实际完成事件不重复写入。
-- 精确命令、最终数量与未执行层随本次冻结交付报告提供。H2 和 MySQL 服务链不等于运行中 HTTP 或浏览器验收。

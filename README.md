@@ -169,17 +169,7 @@ npm run test:contracts
 npm run build:prod
 ```
 
-真实 MySQL `*IT` 使用独立的 opt-in Failsafe profile。运行前先准备专用 `approvaplat_it` schema，再显式提供以下三个环境变量；profile 在变量完整时连接该隔离 MySQL，变量缺失时直接失败。普通 `mvn test` / `mvn verify` 运行单元和本地集成测试：
-
-```powershell
-$env:WORKFLOW_MYSQL_TEST_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat_it?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia%2FShanghai'
-$env:WORKFLOW_MYSQL_TEST_USERNAME = '<隔离验收库账号>'
-$env:WORKFLOW_MYSQL_TEST_PASSWORD = '<隔离验收库密码>'
-
-mvn -pl ruoyi-flowable -am -Pworkflow-mysql-it verify
-```
-
-真实 MySQL、Redis、角色和 API 验证需要准备对应的运行环境与隔离数据。
+测试仅保留核心流程链、前端请求防重和申请草稿浏览器回归，运行方式及验证边界见[贡献指南](CONTRIBUTING.md#验证)。
 
 ## 技术栈
 

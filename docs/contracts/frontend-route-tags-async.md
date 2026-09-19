@@ -9,21 +9,3 @@
 左右关闭以目标标签的 path 定位，保持标签顺序、固定标签、缓存和 iframe 的既有处理。目标已经不存在（包括空列表）时，返回当前 `visitedViews` 的浅副本，不删除任何标签、不写持久化。持久化键 `tags-view-visited`、保存字段、固定标签排除、恢复逻辑和清空方式不变。
 
 Storage 写入或移除失败会拒绝当前动作及其组合动作；这不提供事务回滚，失败前已经完成的内存修改仍可能存在，组合动作不会继续执行后续子动作。此处没有增加缓存协调、重试或超时机制。无数据格式变化，也无需迁移；回退代码会恢复旧的 Promise 断链问题。
-
-## 正式验证入口与边界
-
-在 `ruoyi-ui` 下运行：
-
-```powershell
-node --test tests/contracts/router-tags-async.test.js
-npm run test:contracts
-npm run lint
-npm run build:prod
-```
-
-正式测试复用仓库已有的源码加载方式，只处理 import/export、Vite glob 和自动导入绑定，执行生产 store、菜单 API、auth、cache、tab 插件与完整路由守卫；Pinia 和 Vue Router 的内存历史使用真实依赖，不复制 action 逻辑。
-
-- 菜单请求在 request 边界用可控 Promise 替代，覆盖成功、空树、原错误拒绝和非法响应导致的转换错误。真实 Pinia 同步订阅者抛错验证写入异常传播；没有篡改 store 的内部数据不变量。
-- 守卫通过真实 router 导航运行，用户信息／登出、token、进度条与消息 UI 是替身，因此可证明既有 catch、登出调用、错误对象和后续导航，不能宣称真实后端登录或浏览器 UI 已验收。
-- Storage 使用内存替身，故障在 `setItem`／`removeItem` 边界抛出 `QuotaExceededError`／`SecurityError`，生产 cache 和子 action 全程执行；这证明存储故障可达调用方，不代表已触发浏览器的真实配额或权限限制。
-- 测试覆盖左右关闭存在／缺失／空列表、固定标签、缓存、iframe、持久化及恢复、组合返回值、`.then` 调用和页面离开取消。有限等待只用于判定测试中的 pending，不存在生产超时兜底。

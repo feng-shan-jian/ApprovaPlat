@@ -170,17 +170,7 @@ npm run test:contracts
 npm run build:prod
 ```
 
-Real MySQL `*IT` tests use an opt-in Failsafe profile. Before running them, prepare a dedicated `approvaplat_it` schema and supply these environment variables. The profile connects to that isolated MySQL when all values are present and fails immediately when configuration is incomplete. Regular `mvn test` and `mvn verify` run unit and local integration tests.
-
-```powershell
-$env:WORKFLOW_MYSQL_TEST_URL = 'jdbc:mysql://127.0.0.1:3306/approvaplat_it?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia%2FShanghai'
-$env:WORKFLOW_MYSQL_TEST_USERNAME = '<isolated-acceptance-user>'
-$env:WORKFLOW_MYSQL_TEST_PASSWORD = '<isolated-acceptance-password>'
-
-mvn -pl ruoyi-flowable -am -Pworkflow-mysql-it verify
-```
-
-Verification against real MySQL and Redis instances, real roles, and APIs uses the corresponding runtime environment and isolated data.
+Tests retain core workflow chains, request deduplication, and browser coverage for application drafts. See [CONTRIBUTING](CONTRIBUTING.md#验证) for commands and coverage limits.
 
 ## Technology
 

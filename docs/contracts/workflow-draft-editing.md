@@ -12,4 +12,4 @@
 
 没有表结构、存储格式或对外 API 迁移，回滚采用同一发布单元的代码回退。数据库摘要、冻结元数据和终态审计保留原格式。
 
-验证入口：`WorkflowProcessStartChainIntegrationTest` 使用真实 Flowable/H2、Spring 事务、Mapper 和私有附件存储；定义锁夹具不证明 MySQL 锁。`WorkflowProcessDraftStartMySqlIT` 使用真实隔离 InnoDB，验证部署锁超时、revision 竞争和提交串行化，启动结果为夹具。前端 Node contracts 使用轻量控件宿主；真实 Element Plus 与登录 HTTP 的边界及执行方式见 [浏览器回归说明](../../ruoyi-ui/tests/e2e/README.md)。
+`WorkflowProcessStartChainIntegrationTest` 验证草稿幂等提交、revision 冲突、嵌套权限及失败回滚，使用真实 Flowable/H2、Spring 事务和 Mapper，不证明 MySQL 锁行为。申请草稿浏览器回归见[贡献指南](../../CONTRIBUTING.md#浏览器回归)。

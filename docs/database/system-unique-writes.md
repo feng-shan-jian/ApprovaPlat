@@ -47,16 +47,3 @@ MySQL DDL 会隐式提交，两张表的升级不是同一原子事务。第二�
 2. 确需恢复旧数据库结构时，确认没有新版本应用依赖唯一性，也没有外部视图、生成列、SQL 消费者或后来新增的索引依赖 `active_user_name`。确认当前业务行均可由旧版本读取；原业务列没有格式迁移，不要求清除删除历史。本次迁移本身没有改写业务数据，无需还原业务行。不要用空库安装 SQL 覆盖现有数据库。
 3. 执行 [回退脚本](../../sql/system/20260916__unique_keys_rollback.sql)：先核对全部已存在的本单元结构及额外索引依赖，再删除配置唯一索引，最后单次 ALTER 删除账号唯一索引和派生列。错误定义或额外索引依赖会在删除前阻断。退出码 0 且输出 `C12 ROLLED_BACK` / `C12 ALREADY_ROLLED_BACK_VERIFIED` 才算完成。部分回退失败时继续停写，排除原因后可重复执行。
 4. 回退成功后刷新配置缓存、恢复旧应用及写入。旧应用仍有先查后写竞态；数据库回退期间不得宣称唯一性受保护。再次升级必须重新清点，回退期间新增的任何有效账号/配置键冲突都会阻断重新建索引。不可通过简单回滚二进制版本绕过这一数据条件。
-
-## 正式验证入口
-
-`SystemUniqueWriteMySqlIT` 使用仓库 `workflow-mysql-it`、生产 XML Mapper、生产服务和真实 Spring 事务，要求 `WORKFLOW_MYSQL_TEST_*` 显式指向已迁移的 `approvaplat_it`；测试账号可保持 DML 权限。Redis 是内存边界替身，注册审计验证成功任务是否被安排，不声称验证了 Redis 服务或异步日志实际落库。
-
-`SystemUniqueKeysMigrationMySqlIT` 会创建/删除自己随机命名的 schema，只能运行在任务专用实例。需额外显式设置 `WORKFLOW_MYSQL_TEST_ALLOW_SCHEMA_DDL=true` 并使用该实例的 DDL 账号；不得将此开关与常驻业务实例连接组合。测试覆盖完整空库种子、历史冲突阻断、重复执行、错误结构、真实第二次 DDL 失败、部分状态继续升级/回退、多份删除历史保留，以及与表默认值不同的列字符集/排序规则。迁移测试不修改共享 `approvaplat_it` 表。
-
-```powershell
-mvn -pl ruoyi-admin -am -Pworkflow-mysql-it `
-  '-Dit.test=SystemUniqueWriteMySqlIT,SystemUniqueKeysMigrationMySqlIT' verify
-```
-
-普通默认测试中的 `SystemUniqueWriteControllerTest` 只证明 Controller 提示和异常分流，数据库证据来自上述 MySQL 测试。C07 `SysOrganizationScopeMySqlIT`、C13 `SysConfigDictDeletionMySqlIT` 可加入 `-Dit.test` 检查导入权限和删除缓存回归。测试数据、专用实例及临时日志由执行者在交付前清理；业务数据库迁移须另经部署审查。

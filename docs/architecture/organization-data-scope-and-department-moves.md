@@ -30,17 +30,7 @@
 
 关系锁把低频部门关系写入串行化。以后增加直接写 `parent_id`、`ancestors`、状态或删除部门的入口时，必须进入相同服务事务和锁顺序；不能绕过它直接调用 Mapper。离线物理清理部门表需要停写，不能与在线关系写入并行。
 
-## 验证与恢复
-
-`SysOrganizationScopeMySqlIT` 使用 `WorkflowMySqlITSupport`，先核验 MySQL 8+、`approvaplat_it` 和所需 InnoDB 表，再通过真实 `DataScopeAspect`、Spring 事务代理及生产 XML 执行测试。只创建、清理以当前测试唯一 `create_by` 标记的行。并发测试用未提交事务和锁等待证明竞争顺序；失败注入执行真实非法 SQL，检查路径、自身及父级状态回滚。
-
-运行命令（PowerShell，需事先配置 `WORKFLOW_MYSQL_TEST_*`）：
-
-```powershell
-mvn -pl ruoyi-admin -am -Pworkflow-mysql-it '-Dit.test=SysOrganizationScopeMySqlIT' '-Dtest=NoSuchC07UnitTest' '-Dsurefire.failIfNoSpecifiedTests=false' verify
-```
-
-范围包括五类数据范围、权限字符筛选、完整嵌套详情、混合越权集合、系统账号保护、导入逐行语义和本批新增账号重复行的实际更新资格、原父级不可见时的普通编辑、合法移动、自身／子孙拒绝、停启父级、写入失败回滚、交叉移动、新增与移动／删除竞争、旧 RR 快照下的子部门／用户引用及排序。该验证不替代浏览器端验收或生产部署观察。
+## 恢复
 
 本次没有表结构、存储格式或外部 HTTP 参数迁移。服务、接口、Mapper、Controller 必须一同发布或回退；不支持混合新旧关系写入版本同时运行。回退代码不需要数据还原，成功移动仍是合法原格式祖先路径；失败事务没有残留部分写入。回退旧实现会同时失去本次服务端循环与并发防护。
 
@@ -48,4 +38,4 @@ mvn -pl ruoyi-admin -am -Pworkflow-mysql-it '-Dit.test=SysOrganizationScopeMySql
 
 正式查询先完成数据范围、权限过滤和排序；组装按 parentId 分组，保持输入对象、根和同层顺序，不改接口字段。编辑树把父 ID 不在本次输入的节点作为根，无根时返回原平面列表；授权路由只从明确父 ID（通常为 0）展开，不提升孤立节点。每次组装先清空 children，防止对象复用后的权限裁剪泄漏旧子项；不可达闭环不连接为循环对象。
 
-TreeSelect 保留 id/label/disabled/children；菜单路由保留目录/页面/按钮过滤、隐藏、缓存、参数、内链和组件转换。部门管理仍返回平面列表，关系合法性由上述事务写入口维护。SysTreeAssemblyTest 覆盖组装和 JSON，SysOrganizationScopeMySqlIT 覆盖真实 DataScope/SQL 后的部门与菜单授权树。无表结构或接口迁移。
+TreeSelect 保留 id/label/disabled/children；菜单路由保留目录/页面/按钮过滤、隐藏、缓存、参数、内链和组件转换。部门管理仍返回平面列表，关系合法性由上述事务写入口维护。无表结构或接口迁移。

@@ -8,6 +8,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import javax.sql.DataSource;
+import org.h2.jdbcx.JdbcDataSource;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.ImportSelector;
+import org.springframework.core.type.AnnotationMetadata;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import tools.jackson.databind.json.JsonMapper;
+import com.ruoyi.flowable.domain.dto.WorkflowDecisionTableRequest;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.flowable.dmn.engine.DmnEngine;
 import org.flowable.engine.ProcessEngine;
@@ -40,7 +51,7 @@ class WorkflowModelCompilationIntegrationTest
     void compilesOnceAndRunsFrozenPermissionsDecisionRoutingAndChildWithoutPollutingAuthor()
     {
         new ApplicationContextRunner().withUserConfiguration(
-                WorkflowDecisionTableConfigurationTest.Database.class, WorkflowDecisionTableConfiguration.class)
+                Database.class, WorkflowDecisionTableConfiguration.class)
                 .withPropertyValues("flowable.database-schema-update=true", "flowable.async-executor-activate=false",
                         "flowable.idm.enabled=false", "flowable.eventregistry.enabled=false")
                 .run(context -> {
@@ -79,7 +90,7 @@ class WorkflowModelCompilationIntegrationTest
                     var dmn = context.getBean(DmnEngine.class);
                     var decisions = spy(new WorkflowDmnDecisionService(operations, dmn.getDmnRepositoryService(), artifacts));
                     var tables = new WorkflowDecisionTableService(decisions, dmn.getDmnDecisionService(), dmn.getDmnRepositoryService(), operations);
-                    String sourceId = tables.publish(WorkflowDecisionTableBusinessTest.decimalTable());
+                    String sourceId = tables.publish(decimalTable());
                     String decisionId = dmn.getDmnRepositoryService().createDecisionQuery().deploymentId(sourceId).singleResult().getId();
                     var fieldExtensions = new WorkflowFormFieldExtensionService(null);
                     var eventCodes = mock(WorkflowBpmnEventCodeService.class);
@@ -253,4 +264,41 @@ class WorkflowModelCompilationIntegrationTest
               {"layout":"colFormItem","tag":"el-input-number","vModel":"result","workflowHidden":false,"workflowReadable":true,"workflowWritable":false,"workflowSystemWritable":true},
               {"layout":"colFormItem","tag":"el-input","vModel":"note","workflowHidden":false,"workflowReadable":true,"workflowWritable":true}]}
             """;
+
+    static WorkflowDecisionTableRequest decimalTable()
+    {
+        return JsonMapper.shared().readValue("""
+            {"key":"preciseDecision","name":"精确数值","category":"","hitPolicy":"FIRST",
+             "inputs":[{"key":"amount","label":"金额","type":"number"}],
+             "outputs":[{"key":"result","label":"结果","type":"number"}],
+             "rules":[{"conditions":[{"operator":"EQ","value":"9999999999.12345678"}],"results":["9007199254740993"]}],
+             "defaultResult":["-9999999999.12345678"],"testValues":{"amount":"9999999999.12345678"}}
+            """, WorkflowDecisionTableRequest.class);
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @Import(EngineAutoConfigurations.class)
+    static class Database
+    {
+        @Bean DataSource dataSource()
+        {
+            var source = new JdbcDataSource();
+            source.setURL("jdbc:h2:mem:decimal-config-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+            source.setUser("sa");
+            return source;
+        }
+        @Bean PlatformTransactionManager transactionManager(DataSource source) { return new DataSourceTransactionManager(source); }
+    }
+
+    // 与 Boot 自动配置一样按类名读取元数据，避免反射不存在的可选 App Engine 类型。
+    static class EngineAutoConfigurations implements ImportSelector
+    {
+        @Override public String[] selectImports(AnnotationMetadata metadata)
+        {
+            return new String[] { "org.flowable.spring.boot.ProcessEngineAutoConfiguration",
+                    "org.flowable.spring.boot.dmn.DmnEngineAutoConfiguration",
+                    "org.flowable.spring.boot.ProcessEngineServicesAutoConfiguration",
+                    "org.flowable.spring.boot.dmn.DmnEngineServicesAutoConfiguration" };
+        }
+    }
 }
