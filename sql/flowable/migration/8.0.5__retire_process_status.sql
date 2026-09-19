@@ -1,7 +1,9 @@
--- C05: offline one-way retirement of the processStatus process variable.
--- Read docs/database/workflow-business-status-cutover.md before execution.
--- Requires all engine writers stopped, verified backup, and reviewed external consumers.
--- No application table, lifecycle table, or persistent replacement variable is created.
+-- C05: offline, one-way, lossy retirement of the processStatus process variable.
+-- Stop all writers and verify the target database before execution.
+-- Requires a verified full backup and an inventory of legacy consumers.
+-- Abort on failure; do not force continuation.
+-- Reverting application code cannot restore deleted historical variables;
+-- recovery requires matching versions and the backup.
 DELIMITER $$
 DROP PROCEDURE IF EXISTS c05_retire_process_status$$
 CREATE PROCEDURE c05_retire_process_status()

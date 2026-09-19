@@ -4,7 +4,7 @@
 
 ## 开发环境
 
-使用 Java 17、Maven 和 Node.js。前后端启动步骤见 [README](README.md)，数据库约束与附件上传升级见[数据库基线](docs/database/workflow-baseline.md)。前端在 `ruoyi-ui` 下执行 `npm ci`，使用仓库中的锁文件安装依赖。
+使用 Java 17、Maven 和 Node.js。前后端启动步骤见 [README](README.md)。前端在 `ruoyi-ui` 下执行 `npm ci`，使用仓库中的锁文件安装依赖。
 
 Windows 示例使用 PowerShell 7。Windows 与 WSL 分别安装依赖，避免共用 `node_modules`。
 
