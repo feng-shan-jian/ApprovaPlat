@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.model;
 
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -13,8 +14,6 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceVariables;
 import com.ruoyi.flowable.domain.vo.WorkflowExtensionOptionView;
 import com.ruoyi.flowable.extension.WorkflowFormFieldExtension;
 
@@ -29,19 +28,8 @@ public final class WorkflowEmbeddedFormConverter
     /** 单个枚举字段允许的最大静态选项数。 */
     private static final int MAX_ENUM_VALUES = 500;
 
-    /** BPMN 字段和变量使用稳定 ASCII 标识，避免表达式路径歧义。 */
-    private static final Pattern VARIABLE_PATTERN = Pattern.compile(
-            "[A-Za-z_][A-Za-z0-9_]{0,127}");
-
     /** 日期格式只允许确定性的显示字符，不接受表达式或代码片段。 */
     private static final Pattern DATE_PATTERN = Pattern.compile("[A-Za-z0-9 /:._-]{1,64}");
-
-    /** 引擎和业务层固定变量，内嵌表单不得覆盖。 */
-    private static final Set<String> RESERVED_VARIABLES = Set.of(
-            "initiator", "processStatus", "processInstanceId", "processDefinitionId",
-            "deploymentId", "startUserId", "authenticatedUserId", "businessKey",
-            "assignee", "nrOfInstances", "nrOfActiveInstances",
-            "nrOfCompletedInstances", "loopCounter", "_FLOWABLE_SKIP_EXPRESSION_ENABLED");
 
     private static final com.ruoyi.flowable.service.WorkflowFormTemplateValidator TEMPLATE_VALIDATOR =
             new com.ruoyi.flowable.service.WorkflowFormTemplateValidator();
@@ -119,11 +107,7 @@ public final class WorkflowEmbeddedFormConverter
         }
         String variable = firstText(property.getVariable(), property.getId());
         if (!hasText(variable) || !variable.equals(variable.trim())
-                || !VARIABLE_PATTERN.matcher(variable).matches()
-                || RESERVED_VARIABLES.contains(variable)
-                || WorkflowControlledLoopBpmnContract.isReservedRuntimeVariable(variable)
-                || WorkflowMultiInstanceVariables.isReservedVariableName(variable)
-                || WorkflowFormSubmissionSnapshotCodec.isReservedVariableName(variable)
+                || !WorkflowVariableNames.isBusinessVariable(variable)
                 || !variables.add(variable))
         {
             throw invalid("BPMN 内嵌表单变量名非法、重复或属于保留变量");

@@ -293,7 +293,7 @@ public class WorkflowNotificationService
                 "流程实例主键不合法");
         String taskId = normalized(registration.taskId(), 64, "任务主键不合法");
         String reason = normalized(registration.reason(), 500, "催办原因不合法");
-        String sourceId = normalizedSourceId(registration.sourceId());
+        String sourceId = WorkflowNotificationSourceId.normalize(registration.sourceId());
         ProcessDefinition definition = requireProcessDefinition(processDefinitionId);
         WorkflowNotificationPlanner.NotificationRequest request =
                 WorkflowNotificationPlanner.NotificationRequest.manualUrge(sourceId,
@@ -355,19 +355,6 @@ public class WorkflowNotificationService
         if (normalized.length() > max || normalized.chars().anyMatch(Character::isISOControl))
             throw invalid(message);
         return normalized;
-    }
-
-    /**
-     * 规范化普通审批事件的稳定来源键并限制为可见 ASCII。
-     * @param value String，业务事件来源键
-     * @return String，可写入通知来源字段的规范键
-     */
-    private String normalizedSourceId(String value)
-    {
-        String sourceId = normalized(value, 191, "通知来源标识不合法");
-        if (sourceId.chars().anyMatch(character -> character < 0x21 || character > 0x7e))
-            throw invalid("通知来源标识不合法");
-        return sourceId;
     }
 
     /**

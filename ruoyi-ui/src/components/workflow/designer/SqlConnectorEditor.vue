@@ -31,7 +31,7 @@
         </el-tooltip>
       </div>
     </div>
-    <el-form-item label="结果变量">
+    <el-form-item label="结果变量" :error="outputVariableError">
       <el-input v-model="draft.resultVariable" maxlength="128" @change="emitChange" />
     </el-form-item>
     <el-form-item label="查询最大行数">
@@ -48,12 +48,17 @@
 </template>
 
 <script setup name="SqlConnectorEditor">
+import { isBusinessVariable } from './workflowVariableNames.js'
 const props = defineProps({
   modelValue: { type: String, default: '{}' },
   dataSources: { type: Array, default: () => [] }
 })
 const emit = defineEmits(['update:modelValue', 'change'])
 const draft = reactive(createEmptyConfig())
+const outputVariableError = computed(() => {
+  const name = draft.resultVariable.trim()
+  return name && !isBusinessVariable(name) ? '结果变量名称不合法或属于保留变量' : ''
+})
 let parameterSequence = 0
 const selectedSource = computed(() => props.dataSources.find(source => source.dataSourceKey === draft.dataSourceKey))
 // 外库写必须显式声明由目标表唯一约束保护的幂等列，查询和主库事务写无需该字段。

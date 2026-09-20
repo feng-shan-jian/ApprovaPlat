@@ -27,9 +27,9 @@ public class WorkflowRuntimeEventAuditService
     }
 
     /**
-     * 使用新事务记录失败；已有同 requestId 时只允许同载荷失败重放。
+     * 使用新事务记录首次失败；已有同 requestId 时，无论载荷是否相同都保留首次证据。
      * @param failure WfRuntimeEventRequest，完整失败请求摘要和稳定结果
-     * @return void，首次失败落库，重复同载荷保持原记录
+     * @return void，首次失败落库，重复请求保持原记录
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class,
             isolation = Isolation.REPEATABLE_READ)
@@ -44,26 +44,5 @@ public class WorkflowRuntimeEventAuditService
             }
             return;
         }
-        if (!sameRequest(existing, failure))
-        {
-            // 冲突 requestId 必须保留首次请求，不允许失败审计覆盖既有证据。
-            return;
-        }
-    }
-
-    /**
-     * 比较幂等键之外的完整规范请求签名。
-     * @param left WfRuntimeEventRequest，已落库请求
-     * @param right WfRuntimeEventRequest，本次失败请求
-     * @return boolean，凭据、事件、关联条件和摘要全部一致时返回 true
-     */
-    private boolean sameRequest(WfRuntimeEventRequest left, WfRuntimeEventRequest right)
-    {
-        return java.util.Objects.equals(left.getCredentialId(), right.getCredentialId())
-                && java.util.Objects.equals(left.getEventType(), right.getEventType())
-                && java.util.Objects.equals(left.getEventName(), right.getEventName())
-                && java.util.Objects.equals(left.getCorrelationType(), right.getCorrelationType())
-                && java.util.Objects.equals(left.getCorrelationValue(), right.getCorrelationValue())
-                && java.util.Objects.equals(left.getVariablesSha256(), right.getVariablesSha256());
     }
 }

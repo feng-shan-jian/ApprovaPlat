@@ -1,7 +1,6 @@
 package com.ruoyi.flowable.extension;
 
-import java.util.Set;
-import java.util.regex.Pattern;
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.task.service.delegate.DelegateTask;
 import org.springframework.stereotype.Component;
@@ -21,12 +20,6 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class WorkflowSetVariableJavaHandler implements WorkflowJavaExtensionHandler
 {
-    /** 流程变量名必须是稳定英文标识，禁止覆盖 Flowable 内部变量。 */
-    private static final Pattern VARIABLE_PATTERN = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,127}");
-
-    /** 禁止扩展处理器覆盖的引擎及系统变量前缀。 */
-    private static final Set<String> RESERVED_PREFIXES = Set.of("ACT_", "FLOWABLE_", "__", "WF_");
-
     /** 配置 Schema 由服务端安装包固定，目录版本只能引用，不能由客户端改写。 */
     private static final String CONFIG_SCHEMA = "{\"type\":\"object\",\"additionalProperties\":false,"
             + "\"required\":[\"targetVariable\",\"value\"],\"properties\":{"
@@ -83,12 +76,11 @@ public class WorkflowSetVariableJavaHandler implements WorkflowJavaExtensionHand
         JsonNode valueNode = config.get("value");
         String targetVariable = variableNode == null || !variableNode.isTextual()
                 ? "" : variableNode.textValue().trim();
-        if (!VARIABLE_PATTERN.matcher(targetVariable).matches())
+        if (!WorkflowVariableNames.isIdentifier(targetVariable))
         {
             throw invalidConfig("设置变量扩展的目标变量名不合法");
         }
-        String upperVariable = targetVariable.toUpperCase(java.util.Locale.ROOT);
-        if (RESERVED_PREFIXES.stream().anyMatch(upperVariable::startsWith))
+        if (!WorkflowVariableNames.isJavaOutputVariable(targetVariable))
         {
             throw invalidConfig("设置变量扩展不能写入系统保留变量");
         }

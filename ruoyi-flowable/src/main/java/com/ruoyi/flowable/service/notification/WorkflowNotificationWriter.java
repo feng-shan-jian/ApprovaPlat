@@ -207,7 +207,7 @@ public class WorkflowNotificationWriter
         if (!recipientUserId.matches("[1-9][0-9]{0,18}"))
             throw invalid("必达站内通知接收人不合法");
         return new WorkflowInboxNotification(sourceType,
-                normalizedSourceId(notification.sourceId()), eventType, recipientUserId,
+                WorkflowNotificationSourceId.normalize(notification.sourceId()), eventType, recipientUserId,
                 normalized(notification.processInstanceId(), 64,
                         "必达站内通知流程实例主键不合法"),
                 optional(notification.taskId(), 64),
@@ -254,19 +254,6 @@ public class WorkflowNotificationWriter
     private String optional(String value, int max)
     {
         return StringUtils.hasText(value) ? normalized(value, max, "通知字段不合法") : null;
-    }
-
-    /**
-     * 校验稳定来源键为可见 ASCII。
-     * @param value String，业务来源键
-     * @return String，可持久化来源键
-     */
-    private String normalizedSourceId(String value)
-    {
-        String sourceId = normalized(value, 191, "通知来源标识不合法");
-        if (sourceId.chars().anyMatch(character -> character < 0x21 || character > 0x7e))
-            throw invalid("通知来源标识不合法");
-        return sourceId;
     }
 
     /**

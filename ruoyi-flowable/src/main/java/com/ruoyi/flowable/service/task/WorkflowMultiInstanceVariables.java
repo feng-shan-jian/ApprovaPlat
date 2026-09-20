@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.task;
 
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 import java.util.regex.Pattern;
 
 /**
@@ -8,20 +9,20 @@ import java.util.regex.Pattern;
 public final class WorkflowMultiInstanceVariables
 {
     /** 客户端不可直接提交、仅由受控领域服务写入的多实例用户集合前缀。 */
-    public static final String USER_COLLECTION_PREFIX = "wfMiUsers_";
+    public static final String USER_COLLECTION_PREFIX = WorkflowVariableNames.MI_USERS_PREFIX;
 
     /** 服务端当前正式成员快照变量前缀。 */
-    public static final String MEMBER_SNAPSHOT_PREFIX = "_wfMiMembers_";
+    public static final String MEMBER_SNAPSHOT_PREFIX = WorkflowVariableNames.MI_MEMBERS_PREFIX;
 
     /** 服务端并发修订号变量前缀。 */
-    public static final String REVISION_PREFIX = "_wfMiRevision_";
+    public static final String REVISION_PREFIX = WorkflowVariableNames.MI_REVISION_PREFIX;
 
     /** 服务端完成模式变量前缀。 */
-    public static final String MODE_PREFIX = "_wfMiMode_";
+    public static final String MODE_PREFIX = WorkflowVariableNames.MI_MODE_PREFIX;
 
     /** 正式完成链写入当前任务本地作用域的 revision 预留标记。 */
     public static final String COMPLETION_REVISION_VARIABLE =
-            "_wfMiCompletionRevision";
+            WorkflowVariableNames.MI_COMPLETION_REVISION;
 
     /** 受控 BPMN 活动 ID 的最大字符数。 */
     public static final int MAX_ACTIVITY_ID_LENGTH = 64;
@@ -82,21 +83,6 @@ public final class WorkflowMultiInstanceVariables
     public static String modeName(String activityId)
     {
         return MODE_PREFIX + requireActivityId(activityId);
-    }
-
-    /**
-     * 判断变量名是否属于动态多实例协议，供表单和普通变量接口阻断客户端覆盖。
-     *
-     * @param variableName String，待检查的变量名，可为 null
-     * @return boolean，命中集合变量或任一服务端保留变量前缀时返回 true
-     */
-    public static boolean isReservedVariableName(String variableName)
-    {
-        return variableName != null && (variableName.startsWith(USER_COLLECTION_PREFIX)
-                || variableName.startsWith(MEMBER_SNAPSHOT_PREFIX)
-                || variableName.startsWith(REVISION_PREFIX)
-                || variableName.startsWith(MODE_PREFIX)
-                || COMPLETION_REVISION_VARIABLE.equals(variableName));
     }
 
     /**

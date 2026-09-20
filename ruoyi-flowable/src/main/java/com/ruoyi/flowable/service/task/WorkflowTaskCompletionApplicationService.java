@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import org.flowable.bpmn.model.ExtensionAttribute;
+import com.ruoyi.flowable.service.model.WorkflowUserTaskForm;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.RuntimeService;
@@ -245,7 +245,7 @@ public class WorkflowTaskCompletionApplicationService
         }
         Map<String, Object> variables = requestedVariables == null
                 ? Map.of() : requestedVariables;
-        String formKey = resolveFormKey(userTask);
+        String formKey = WorkflowUserTaskForm.formKey(userTask);
         var deploymentRead = artifactRepository.openRead(context.definition().getDeploymentId());
         if (formKey == null)
         {
@@ -254,7 +254,7 @@ public class WorkflowTaskCompletionApplicationService
                 throw requestValidator.invalidArgument();
             }
             return new CompletionPreparation(context, deploymentRead, userTask, Map.of(), Map.of(),
-                    isTaskLocal(userTask), null, null);
+                    WorkflowUserTaskForm.isTaskLocal(userTask), null, null);
         }
         List<WfDeployForm> snapshots = deploymentRead.forms();
         if (snapshots == null)
@@ -275,46 +275,7 @@ public class WorkflowTaskCompletionApplicationService
         var root = variableValidator.parseTrustedSnapshot(matched.get(0).getContent());
         WorkflowValidatedStartVariables validated = variableValidator.validateForStart(root, variables);
         return new CompletionPreparation(context, deploymentRead, userTask, validated.variables(),
-                validated.attachmentIdsByField(), isTaskLocal(userTask), matched.get(0), root);
-    }
-
-    /**
-     * 解析用户任务正式模板或 BPMN 内嵌表单键。
-     *
-     * @param userTask UserTask，当前 BPMN 用户任务
-     * @return String，正式 formKey、内嵌稳定键或无表单时的 null
-     */
-    private String resolveFormKey(UserTask userTask)
-    {
-        if (StringUtils.hasText(userTask.getFormKey()))
-        {
-            return userTask.getFormKey();
-        }
-        boolean hasEmbedded = userTask.getFormProperties() != null
-                && !userTask.getFormProperties().isEmpty();
-        return hasEmbedded ? WorkflowFormSourceType.EMBEDDED_FORM_KEY : null;
-    }
-
-    /**
-     * 读取用户任务 Flowable localScope 扩展属性。
-     *
-     * @param userTask UserTask，当前 BPMN 用户任务
-     * @return boolean，属性值为 true 或 1 时返回 true
-     */
-    private boolean isTaskLocal(UserTask userTask)
-    {
-        Map<String, List<ExtensionAttribute>> attributes = userTask.getAttributes();
-        if (attributes == null)
-        {
-            return false;
-        }
-        List<ExtensionAttribute> localScope = attributes.get("localScope");
-        if (localScope == null || localScope.isEmpty() || localScope.get(0) == null)
-        {
-            return false;
-        }
-        String value = localScope.get(0).getValue();
-        return "true".equalsIgnoreCase(value) || "1".equals(value);
+                validated.attachmentIdsByField(), WorkflowUserTaskForm.isTaskLocal(userTask), matched.get(0), root);
     }
 
     /**

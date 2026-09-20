@@ -91,7 +91,7 @@
         <template #default="scope">{{ (scope.row.currentTaskNames || []).join('、') || '-' }}</template>
       </el-table-column>
       <el-table-column v-if="mode === 'own' || mode === 'manage'" label="状态" width="98" align="center">
-        <template #default="scope"><el-tag :type="statusType(scope.row.processStatus)">{{ statusLabel(scope.row.processStatus) }}</el-tag></template>
+        <template #default="scope"><el-tag :type="processStatusMeta(scope.row.processStatus).type">{{ processStatusMeta(scope.row.processStatus, '-').label }}</el-tag></template>
       </el-table-column>
       <el-table-column v-if="mode === 'manage' || mode === 'todo' || mode === 'claim' || mode === 'finished'" label="发起人" prop="startUserName" min-width="120" show-overflow-tooltip />
       <el-table-column v-if="isCopy" label="流程发起人" prop="originatorName" min-width="120" show-overflow-tooltip />
@@ -213,6 +213,7 @@ import {
   listStartableProcesses
 } from '@/api/workflow/process'
 import { cancelProcess, claimTask, revokeTask, unclaimTask } from '@/api/workflow/task'
+import { processStatusMeta } from './workflowProcessStatus'
 
 const props = defineProps({
   /** 列表业务模式，决定真实查询、字段、权限和动作。 */
@@ -679,24 +680,6 @@ async function removeHistory(row) {
  */
 function exportRows() {
   proxy.download(config.value.exportUrl, buildQuery(), `${config.value.file}_${Date.now()}.xlsx`)
-}
-
-/**
- * 获取后端流程状态的中文标签。
- * @param {string} status 稳定流程状态编码。
- * @returns {string} 中文状态名称或原状态。
- */
-function statusLabel(status) {
-  return ({ running: '运行中', returned: '待修改', suspended: '已挂起', completed: '已完成', rejected: '已驳回', terminated: '已终止', canceled: '已取消' })[status] || status || '-'
-}
-
-/**
- * 获取流程状态对应的 Element Plus 标签类型。
- * @param {string} status 稳定流程状态编码。
- * @returns {string} 标签视觉类型。
- */
-function statusType(status) {
-  return ({ running: 'primary', returned: 'warning', suspended: 'warning', completed: 'success', rejected: 'danger', terminated: 'danger', canceled: 'info' })[status] || 'info'
 }
 
 /**

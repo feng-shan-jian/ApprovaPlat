@@ -92,6 +92,7 @@
 
 <script setup name="CelExpressionEditor">
 import { Delete, Plus } from '@element-plus/icons-vue'
+import { isBusinessVariable } from './workflowVariableNames.js'
 
 const props = defineProps({
   /** 作者 BPMN 中 approvaExtensionConfig 字段保存的 CEL 配置 JSON。 */
@@ -110,17 +111,6 @@ const typeOptions = Object.freeze([
   { label: '文本', value: 'STRING' }
 ])
 const allowedTypes = new Set(typeOptions.map(option => option.value))
-const variableNamePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
-const reservedVariables = new Set([
-  'initiator', 'processStatus', 'processInstanceId', 'processDefinitionId',
-  'deploymentId', 'startUserId', 'authenticatedUserId', 'businessKey',
-  'assignee', 'nrOfInstances', 'nrOfActiveInstances', 'nrOfCompletedInstances',
-  'loopCounter', '_FLOWABLE_SKIP_EXPRESSION_ENABLED'
-])
-const reservedPrefixes = Object.freeze([
-  'wfMiUsers_', '_wfMiMembers_', '_wfMiRevision_', '_wfMiMode_', '__ruoyi_workflow_'
-])
-
 const validationMessage = computed(() => validateDraft(draft))
 
 /**
@@ -137,23 +127,13 @@ function createDefaultConfig() {
 }
 
 /**
- * 判断变量名是否占用 Flowable 或平台内部命名空间。
- * @param {string} variableName 待检查的输入或结果变量名。
- * @returns {boolean} 属于保留变量或保留前缀时返回 true。
- */
-function isReservedVariable(variableName) {
-  return reservedVariables.has(variableName)
-    || reservedPrefixes.some(prefix => variableName.startsWith(prefix))
-}
-
-/**
  * 校验当前草稿的客户端结构约束，服务端仍会执行 CEL 编译和同一安全门禁。
  * @param {object} config 当前响应式 CEL 配置草稿。
  * @returns {string} 第一条可展示的错误信息；通过时返回空字符串。
  */
 function validateDraft(config) {
   if (!config.expression.trim()) return '表达式不能为空'
-  if (!variableNamePattern.test(config.resultVariable) || isReservedVariable(config.resultVariable)) {
+  if (!isBusinessVariable(config.resultVariable)) {
     return '结果变量名称不合法或属于保留变量'
   }
   if (!allowedTypes.has(config.resultType)) return '结果类型不受支持'
@@ -161,7 +141,7 @@ function validateDraft(config) {
 
   const names = new Set()
   for (const variable of config.variables) {
-    if (!variableNamePattern.test(variable.name) || isReservedVariable(variable.name)) {
+    if (!isBusinessVariable(variable.name)) {
       return '输入变量名称不合法或属于保留变量'
     }
     if (!allowedTypes.has(variable.type)) return '输入变量类型不受支持'

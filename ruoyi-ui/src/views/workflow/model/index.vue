@@ -136,7 +136,7 @@
 
 <script setup name="WorkflowModel">
 import { listAllCategories } from '@/api/workflow/category'
-import { listForms } from '@/api/workflow/form'
+import { loadModelFormOptions } from './modelFormOptions'
 import {
   createModel,
   deleteModels,
@@ -231,18 +231,12 @@ async function loadList() {
  * @returns {Promise<void>} 基础选项加载完成后写入页面状态。
  */
 async function loadOptions() {
-  const [categoryResponse, firstFormPage] = await Promise.all([
+  const [categoryResponse, forms] = await Promise.all([
     listAllCategories(),
-    listForms({ pageNum: 1, pageSize: 50 })
+    loadModelFormOptions()
   ])
   categoryOptions.value = categoryResponse.data || []
-  const allForms = [...(firstFormPage.rows || [])]
-  const pageCount = Math.ceil((firstFormPage.total || 0) / 50)
-  for (let pageNum = 2; pageNum <= pageCount; pageNum += 1) {
-    const page = await listForms({ pageNum, pageSize: 50 })
-    allForms.push(...(page.rows || []))
-  }
-  formOptions.value = allForms
+  formOptions.value = forms
 }
 
 /**

@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.extension;
 
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -8,7 +9,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 import org.flowable.engine.delegate.DelegateExecution;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -46,21 +46,6 @@ public class WorkflowCelSandbox
 
     /** CEL comprehension 最大迭代次数，阻止无界列表计算。 */
     private static final int MAX_COMPREHENSION_ITERATIONS = 1000;
-
-    /** 流程变量和结果变量统一使用安全标识符。 */
-    private static final Pattern VARIABLE_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,127}");
-
-    /** 引擎内部变量不能由 CEL 读取或覆盖。 */
-    private static final Set<String> RESERVED_VARIABLES = Set.of(
-            "initiator", "processStatus", "processInstanceId", "processDefinitionId",
-            "deploymentId", "startUserId", "authenticatedUserId", "businessKey",
-            "assignee", "nrOfInstances", "nrOfActiveInstances", "nrOfCompletedInstances",
-            "loopCounter", "_FLOWABLE_SKIP_EXPRESSION_ENABLED");
-
-    /** 引擎内部前缀不能由 CEL 读取或覆盖。 */
-    private static final List<String> RESERVED_PREFIXES = List.of(
-            "wfMiUsers_", "_wfMiMembers_", "_wfMiRevision_", "_wfMiMode_",
-            "__ruoyi_workflow_");
 
     /** 当前允许进入 CEL 激活和输出的确定性标量类型。 */
     private static final Map<String, CelType> ALLOWED_TYPES = Map.of(
@@ -290,9 +275,7 @@ public class WorkflowCelSandbox
      */
     private String requireVariableName(String variableName, String label)
     {
-        boolean reserved = RESERVED_VARIABLES.contains(variableName)
-                || RESERVED_PREFIXES.stream().anyMatch(variableName::startsWith);
-        if (!VARIABLE_NAME.matcher(variableName).matches() || reserved)
+        if (!WorkflowVariableNames.isBusinessVariable(variableName))
         {
             throw new ServiceException("CEL " + label + "名称不合法或属于保留变量",
                     HttpStatus.BAD_REQUEST);

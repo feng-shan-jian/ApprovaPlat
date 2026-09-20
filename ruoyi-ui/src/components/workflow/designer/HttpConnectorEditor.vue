@@ -26,7 +26,7 @@
     <el-form-item v-if="supportsBody" label="正文变量">
       <el-input v-model="draft.bodyVariable" maxlength="128" @change="emitChange" />
     </el-form-item>
-    <el-form-item label="状态变量">
+    <el-form-item label="状态变量" :error="outputVariableError">
       <el-input v-model="draft.statusVariable" maxlength="128" @change="emitChange" />
     </el-form-item>
     <el-alert
@@ -40,6 +40,7 @@
 </template>
 
 <script setup name="HttpConnectorEditor">
+import { isBusinessVariable } from './workflowVariableNames.js'
 const props = defineProps({
   modelValue: { type: String, default: '{}' },
   endpoints: { type: Array, default: () => [] }
@@ -47,6 +48,10 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'change'])
 
 const draft = reactive(createEmptyConfig())
+const outputVariableError = computed(() => {
+  const name = draft.statusVariable.trim()
+  return name && !isBusinessVariable(name) ? '状态变量名称不合法或属于保留变量' : ''
+})
 const selectedEndpoint = computed(() => props.endpoints.find(endpoint => endpoint.endpointKey === draft.endpointKey))
 const allowedMethods = computed(() => String(selectedEndpoint.value?.allowedMethods || '')
   .split(',').map(item => item.trim()).filter(Boolean))

@@ -34,6 +34,7 @@ import com.ruoyi.flowable.domain.*;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
 import com.ruoyi.flowable.engine.*;
 import com.ruoyi.flowable.extension.WorkflowConditionRouter;
+import com.ruoyi.flowable.extension.*;
 import com.ruoyi.flowable.identity.*;
 import com.ruoyi.flowable.listener.*;
 import com.ruoyi.flowable.mapper.*;
@@ -47,6 +48,115 @@ import com.ruoyi.flowable.service.task.*;
 /** 正式保存、预检、部署与真实 Flowable/DMN 运行的组合模型；目录及无关通知外设隔离。 */
 class WorkflowModelCompilationIntegrationTest
 {
+    @Test
+    void rejectsProtectedOutputsBeforeHttpAndSqlSideEffectsAndPreservesInputReads() throws Exception
+    {
+        var json = JsonMapper.shared();
+        var java = new WorkflowSetVariableJavaHandler();
+        var cel = new WorkflowCelSandbox();
+        var execution = mock(org.flowable.engine.delegate.DelegateExecution.class);
+        var task = mock(org.flowable.task.service.delegate.DelegateTask.class);
+        var values = new java.util.LinkedHashMap<String, Object>();
+        when(execution.getVariable(anyString())).thenAnswer(call -> values.get(call.getArgument(0)));
+        when(execution.hasVariable(anyString())).thenAnswer(call -> values.containsKey(call.getArgument(0)));
+        doAnswer(call -> { values.put(call.getArgument(0), call.getArgument(1)); return null; })
+                .when(execution).setVariable(anyString(), any());
+        when(execution.getProcessInstanceId()).thenReturn("instance");
+        when(execution.getId()).thenReturn("execution");
+        when(execution.getCurrentActivityId()).thenReturn("connector");
+        values.put("initiator", "100");
+
+        var requests = new java.util.concurrent.atomic.AtomicInteger();
+        var server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/effect", exchange -> {
+            requests.incrementAndGet(); exchange.getRequestBody().readAllBytes();
+            exchange.sendResponseHeaders(204, -1); exchange.close();
+        });
+        server.start();
+        var dataSource = new JdbcDataSource();
+        dataSource.setURL("jdbc:h2:mem:output-contract-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(dataSource);
+        try
+        {
+            jdbc.execute("create table effects (owner varchar(40))");
+            var endpointService = mock(WorkflowConnectorEndpointService.class);
+            var endpoint = new WfConnectorEndpoint();
+            endpoint.setEndpointId(1L); endpoint.setEndpointKey("local"); endpoint.setEndpointName("local");
+            endpoint.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
+            endpoint.setAllowedMethods("POST"); endpoint.setPathPrefix("/effect"); endpoint.setAuthType("NONE");
+            endpoint.setNetworkScope("PRIVATE"); endpoint.setConnectTimeoutMs(1000); endpoint.setRequestTimeoutMs(1000);
+            endpoint.setRevisionNo(1); endpoint.setChecksum(WorkflowConnectorEndpointService.endpointChecksum(endpoint));
+            when(endpointService.lockEnabledForDeployment("local")).thenReturn(endpoint);
+            var metrics = mock(com.ruoyi.flowable.runtime.WorkflowConnectorMetrics.class);
+            var http = new WorkflowHttpConnector(endpointService, mock(WorkflowConnectorSecretResolver.class), metrics);
+            var httpAuthor = (tools.jackson.databind.node.ObjectNode) json.readTree("""
+                    {"endpointKey":"local","method":"POST","path":"/effect","bodyVariable":"initiator","statusVariable":"httpResult"}
+                    """);
+            var httpFrozen = (tools.jackson.databind.node.ObjectNode) json.readTree(http.freezeConfig(httpAuthor, true));
+            var dataSources = mock(WorkflowSqlDataSourceService.class);
+            var source = new WfSqlDataSource();
+            source.setDataSourceId(1L); source.setDataSourceKey("local"); source.setDataSourceName("local");
+            source.setConnectionType("PRIMARY"); source.setAllowedTables("effects");
+            source.setConnectTimeoutMs(1000); source.setQueryTimeoutSeconds(2); source.setRevisionNo(1);
+            source.setChecksum(WorkflowSqlDataSourceService.dataSourceChecksum(source));
+            when(dataSources.lockEnabledForDeployment("local")).thenReturn(source);
+            var sql = new WorkflowSqlConnector(dataSource, dataSources, new WorkflowSqlTemplateValidator(),
+                    mock(WorkflowSqlSecretResolver.class), metrics);
+            var sqlAuthor = (tools.jackson.databind.node.ObjectNode) json.readTree("""
+                    {"dataSourceKey":"local","sql":"insert into effects (owner) values (:owner)","parameters":{"owner":"initiator"},"resultVariable":"sqlResult"}
+                    """);
+            var sqlFrozen = (tools.jackson.databind.node.ObjectNode) json.readTree(sql.freezeConfig(sqlAuthor, true));
+            var validator = new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
+            for (String name : List.of("nrOfInstances", "initiator", "wfMiUsers_review", "_wfMiMembers_review",
+                    "_wfMiRevision_review", "_wfMiMode_review", "_wfMiCompletionRevision", "__approva_loop_route_review",
+                    "__approva_loop_iteration_review", "__ruoyi_workflow_form_submission_v2", "__proto__", "Constructor"))
+            {
+                var javaConfig = json.createObjectNode().put("targetVariable", name).put("value", 999);
+                var celConfig = json.createObjectNode().put("expression", "1").put("resultVariable", name).put("resultType", "INT");
+                celConfig.putArray("variables");
+                assertThatThrownBy(() -> java.validateAndNormalizeConfig(javaConfig)).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> java.execute(execution, javaConfig)).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> java.executeTask(task, javaConfig)).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> cel.validateAndNormalizeConfig(celConfig)).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> cel.execute(execution, celConfig)).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> http.freezeConfig(httpAuthor.deepCopy().put("statusVariable", name), true)).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> http.execute(execution, null, httpFrozen.deepCopy().put("statusVariable", name))).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> sql.freezeConfig(sqlAuthor.deepCopy().put("resultVariable", name), true)).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> sql.execute(execution, null, sqlFrozen.deepCopy().put("resultVariable", name))).as(name).hasMessageContaining("保留变量");
+                var property = new org.flowable.bpmn.model.FormProperty(); property.setId(name); property.setType("string");
+                assertThatThrownBy(() -> WorkflowEmbeddedFormConverter.convert(List.of(property))).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> validator.validateForStart(FORM.replace("amount", name), Map.of())).as(name).isInstanceOf(com.ruoyi.common.exception.ServiceException.class);
+            }
+            assertThat(requests).hasValue(0);
+            assertThat(jdbc.queryForObject("select count(*) from effects", Integer.class)).isZero();
+            assertThat(values).containsExactly(Map.entry("initiator", "100"));
+            verify(task, never()).setVariable(anyString(), any());
+            http.execute(execution, null, httpFrozen);
+            sql.execute(execution, null, sqlFrozen);
+            assertThat(requests).hasValue(1);
+            assertThat(values).containsEntry("httpResult", 204L).containsEntry("sqlResult", 1).containsEntry("initiator", "100");
+            assertThat(jdbc.queryForObject("select owner from effects", String.class)).isEqualTo("100");
+            for (String name : List.of("wfSignalName", "wfEscalationCode", "wfErrorCode", "Initiator", "ordinaryResult"))
+            {
+                java.execute(execution, json.createObjectNode().put("targetVariable", name).put("value", true));
+                assertThat(values).containsEntry(name, true);
+            }
+        }
+        finally
+        {
+            server.stop(0); jdbc.execute("SHUTDOWN");
+        }
+    }
+
+    private static com.ruoyi.flowable.domain.vo.WorkflowExtensionOptionView extensionOption(
+            String key, String type, String implementation, String schema)
+    {
+        String canonical = WorkflowExtensionJsonCanonicalizer.canonicalize(schema);
+        return new com.ruoyi.flowable.domain.vo.WorkflowExtensionOptionView(1L, key, key, type,
+                1L, 1, implementation, canonical,
+                WorkflowExtensionChecksum.sha256(key, type, "1", implementation, canonical));
+    }
+
     @Test
     void compilesOnceAndRunsFrozenPermissionsDecisionRoutingAndChildWithoutPollutingAuthor()
     {
@@ -107,7 +217,15 @@ class WorkflowModelCompilationIntegrationTest
                     var bpmn = new WorkflowBpmnService(repository, fieldExtensions, eventCodes);
                     var conditions = spy(new WorkflowConditionDeploymentService());
                     var calls = spy(new WorkflowCallActivityReferenceService(repository, operations, identities, participants, artifacts, templates));
-                    var extensions = spy(new WorkflowExtensionDeploymentService(null, null, null, null));
+                    var handler = new WorkflowSetVariableJavaHandler();
+                    var handlers = new WorkflowJavaExtensionHandlerRegistry(List.of(handler));
+                    var extensionRegistry = mock(WorkflowExtensionRegistryService.class);
+                    when(extensionRegistry.lockLatestForDeployment("test-set")).thenReturn(
+                            extensionOption("test-set", "JAVA", "SET_VARIABLE", handler.configSchema()));
+                    var cel = new WorkflowCelSandbox();
+                    when(extensionRegistry.lockLatestForDeployment("test-cel")).thenReturn(
+                            extensionOption("test-cel", "CEL", WorkflowExtensionRegistryService.CEL_IMPLEMENTATION_KEY, cel.configSchema()));
+                    var extensions = spy(new WorkflowExtensionDeploymentService(extensionRegistry, handlers, null, null));
                     var loops = spy(new WorkflowControlledLoopDeploymentService());
                     var participantRules = spy(new WorkflowParticipantRuleDeploymentService(identityMapper));
                     var sla = spy(new WorkflowTaskSlaDeploymentService(calendars, eventCodes, identities));
@@ -116,6 +234,10 @@ class WorkflowModelCompilationIntegrationTest
                             new WorkflowBpmnIdentityValidator(identityMapper), categories, forms, artifacts, templates,
                             extensions, loops, conditions, participantRules, decisions, fieldExtensions, calls, sla, listeners);
                     context.getBeanFactory().registerSingleton("workflowConditionRouter", new WorkflowConditionRouter(repository, artifacts));
+                    context.getBeanFactory().registerSingleton("workflowExtensionDelegate",
+                            new WorkflowExtensionDelegate(repository, artifacts, handlers, null, null));
+                    context.getBeanFactory().registerSingleton("workflowBusinessListener",
+                            new WorkflowBusinessListener(repository, artifacts, handlers));
                     context.getBeanFactory().registerSingleton("workflowSystemOutputListener", new WorkflowSystemOutputListener(repository, artifacts, variables));
                     context.getBeanFactory().registerSingleton("userTaskListener", new WorkflowUserTaskListener(
                             new WorkflowUserTaskAuditService(tasks, new WorkflowIdentityCodec()), mock(WorkflowTaskSlaRuntimeService.class),
@@ -124,6 +246,10 @@ class WorkflowModelCompilationIntegrationTest
                     String child = save(service, repository, "compiledChild", childXml());
                     service.deployModel(child);
                     String author = parentXml(decisionId).trim();
+                    String forbidden = save(service, repository, "unsafeParent",
+                            author.replace("compiledParent", "unsafeParent").replace("javaResult", "initiator"));
+                    assertThatThrownBy(() -> service.deployModel(forbidden)).hasMessageContaining("保留变量");
+                    assertThat(repository.getModel(forbidden).getDeploymentId()).isNull();
                     clearInvocations(templates, forms, decisions, conditions, calls, extensions, loops, participantRules, sla, listeners);
                     String model = save(service, repository, "compiledParent", author);
                     verify(forms, times(1)).selectById(7L);
@@ -182,6 +308,10 @@ class WorkflowModelCompilationIntegrationTest
                     var instance = operations.writeAsCurrentUser(actor -> runtime.startProcessInstanceByKey("compiledParent",
                             Map.of("amount", BigDecimal.TEN, "initiator", actor.userId())));
                     assertThat(runtime.getVariable(instance.getId(), "result")).isEqualTo(new BigDecimal("-9999999999.12345678"));
+                    assertThat(runtime.getVariable(instance.getId(), "javaResult")).isEqualTo(7L);
+                    assertThat(runtime.getVariable(instance.getId(), "celResult")).isEqualTo(8L);
+                    assertThat(runtime.getVariable(instance.getId(), "listenerResult")).isEqualTo(true);
+                    assertThat(runtime.getVariable(instance.getId(), "initiator")).isEqualTo("100");
                     assertThat(engine.getManagementService().createTimerJobQuery().processInstanceId(instance.getId()).count()).isEqualTo(2);
                     var task = tasks.createTaskQuery().processInstanceId(instance.getId()).singleResult();
                     assertThat(task.getTaskDefinitionKey()).isEqualTo("review"); assertThat(task.getAssignee()).isEqualTo("100");
@@ -379,13 +509,26 @@ class WorkflowModelCompilationIntegrationTest
         return HEADER + """
                 <process id="compiledParent" isExecutable="true"><extensionElements>%s</extensionElements>
                   <startEvent id="start" flowable:formKey="key_7"><extensionElements>%s</extensionElements></startEvent>
+                  <serviceTask id="seed" flowable:delegateExpression="${workflowExtensionDelegate}"><extensionElements>
+                    <flowable:field name="approvaExtensionKey"><flowable:string>test-set</flowable:string></flowable:field>
+                    <flowable:field name="approvaExtensionConfig"><flowable:string><![CDATA[{"targetVariable":"javaResult","value":7}]]></flowable:string></flowable:field>
+                  </extensionElements></serviceTask>
+                  <serviceTask id="calculate" flowable:delegateExpression="${workflowExtensionDelegate}"><extensionElements>
+                    <flowable:field name="approvaExtensionKey"><flowable:string>test-cel</flowable:string></flowable:field>
+                    <flowable:field name="approvaExtensionConfig"><flowable:string><![CDATA[{"expression":"javaResult + 1","resultVariable":"celResult","resultType":"INT","variables":[{"name":"javaResult","type":"INT"}]}]]></flowable:string></flowable:field>
+                  </extensionElements></serviceTask>
                   <businessRuleTask id="decide" flowable:rules="%s"><property id="decisionProperty"/><dataInputAssociation id="decisionInput"><sourceRef>visibleData</sourceRef><targetRef>decisionProperty</targetRef></dataInputAssociation></businessRuleTask>
                   <exclusiveGateway id="choice" default="fallback"/>
-                  <userTask id="review" name="审批" flowable:formKey="key_7"><extensionElements>%s%s</extensionElements></userTask>
+                  <userTask id="review" name="审批" flowable:formKey="key_7"><extensionElements>%s%s
+                    <flowable:taskListener event="create" delegateExpression="${workflowBusinessListener}">
+                      <flowable:field name="approvaExtensionKey"><flowable:string>test-set</flowable:string></flowable:field>
+                      <flowable:field name="approvaExtensionConfig"><flowable:string><![CDATA[{"targetVariable":"listenerResult","value":true}]]></flowable:string></flowable:field>
+                    </flowable:taskListener>
+                  </extensionElements></userTask>
                   <callActivity id="call" calledElement="compiledChild"><extensionElements><flowable:in source="amount" target="amount"/><flowable:out source="amount" target="result"/></extensionElements><dataOutputAssociation id="output"><targetRef>archive</targetRef></dataOutputAssociation></callActivity>
                   <endEvent id="end"/>
                   <dataObject id="data" name="payload"/><dataObjectReference id="visibleData" dataObjectRef="data"/><dataStoreReference id="archive"/>
-                  <sequenceFlow id="f1" sourceRef="start" targetRef="decide"/><sequenceFlow id="f2" sourceRef="decide" targetRef="choice"/>
+                  <sequenceFlow id="f1" sourceRef="start" targetRef="seed"/><sequenceFlow id="seedNext" sourceRef="seed" targetRef="calculate"/><sequenceFlow id="calculated" sourceRef="calculate" targetRef="decide"/><sequenceFlow id="f2" sourceRef="decide" targetRef="choice"/>
                   <sequenceFlow id="accepted" name="有效金额" sourceRef="choice" targetRef="review"><extensionElements><flowable:properties><flowable:property name="approva.conditionRule.config" value='%s'/></flowable:properties></extensionElements></sequenceFlow>
                   <sequenceFlow id="fallback" name="无需审批" sourceRef="choice" targetRef="end"><extensionElements><flowable:properties><flowable:property name="approva.conditionRule.config" value='{"version":1,"default":true}'/></flowable:properties></extensionElements></sequenceFlow>
                   <sequenceFlow id="f3" sourceRef="review" targetRef="call"/><sequenceFlow id="f4" sourceRef="call" targetRef="end"/>

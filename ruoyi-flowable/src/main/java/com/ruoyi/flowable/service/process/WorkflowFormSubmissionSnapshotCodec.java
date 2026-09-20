@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.process;
 
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -17,7 +18,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
@@ -46,7 +46,7 @@ import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 public final class WorkflowFormSubmissionSnapshotCodec
 {
     /** 服务端内部变量统一前缀，客户端变量和表单字段不得使用。 */
-    public static final String RESERVED_VARIABLE_PREFIX = "__ruoyi_workflow_";
+    public static final String RESERVED_VARIABLE_PREFIX = WorkflowVariableNames.FORM_SNAPSHOT_PREFIX;
 
     /** 表单提交快照变量名；开始表单重新提交会产生同实例的新版本，任务表单仍只写入一次。 */
     public static final String VARIABLE_NAME = RESERVED_VARIABLE_PREFIX + "form_submission_v2";
@@ -76,14 +76,6 @@ public final class WorkflowFormSubmissionSnapshotCodec
     private static final Set<String> ROOT_FIELDS = Set.of(
             "version", "kind", "deploymentId", "sourceType", "formId", "formKey",
             "nodeKey", "taskId", "taskLocal", "values");
-
-    /** 表单字段名使用与变量校验器一致的稳定 ASCII 标识。 */
-    private static final Pattern FIELD_NAME_PATTERN = Pattern.compile(
-            "[A-Za-z_][A-Za-z0-9_]{0,127}");
-
-    /** 拒绝可改变前端对象原型语义的 JSON 键。 */
-    private static final Set<String> FORBIDDEN_JSON_KEYS = Set.of(
-            "__proto__", "prototype", "constructor");
 
     /** 严格拒绝重复 JSON 字段和合法根节点后尾随内容的专用解析器。 */
     private static final ObjectMapper MAPPER = JsonMapper.builder()
@@ -682,8 +674,8 @@ public final class WorkflowFormSubmissionSnapshotCodec
      */
     private static String requireFieldName(String fieldName)
     {
-        if (fieldName == null || !FIELD_NAME_PATTERN.matcher(fieldName).matches()
-                || FORBIDDEN_JSON_KEYS.contains(fieldName.toLowerCase(java.util.Locale.ROOT))
+        if (!WorkflowVariableNames.isIdentifier(fieldName)
+                || WorkflowVariableNames.isUnsafeObjectKey(fieldName)
                 || isReservedVariableName(fieldName))
         {
             throw dataError("工作流表单提交快照字段名异常");
@@ -700,7 +692,7 @@ public final class WorkflowFormSubmissionSnapshotCodec
     private static void requireJsonKey(String key)
     {
         if (key == null || key.isBlank() || key.length() > 128
-                || FORBIDDEN_JSON_KEYS.contains(key.toLowerCase(java.util.Locale.ROOT)))
+                || WorkflowVariableNames.isUnsafeObjectKey(key))
         {
             throw dataError("工作流表单提交快照对象字段名异常");
         }

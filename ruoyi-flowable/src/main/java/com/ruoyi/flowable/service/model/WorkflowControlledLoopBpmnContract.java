@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.model;
 
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
@@ -45,8 +46,8 @@ public final class WorkflowControlledLoopBpmnContract
     /** 单个条件值只允许可理解且有界的标量文本。 */
     private static final int MAX_VALUE_LENGTH = 128;
     /** 运行变量使用独立保留前缀，客户端表单字段无法覆盖。 */
-    private static final String ROUTE_VARIABLE_PREFIX = "__approva_loop_route_";
-    private static final String ITERATION_VARIABLE_PREFIX = "__approva_loop_iteration_";
+    private static final String ROUTE_VARIABLE_PREFIX = WorkflowVariableNames.LOOP_ROUTE_PREFIX;
+    private static final String ITERATION_VARIABLE_PREFIX = WorkflowVariableNames.LOOP_ITERATION_PREFIX;
     private static final String GENERATED_ID_PREFIX = "__approva_loop_";
 
     private WorkflowControlledLoopBpmnContract()
@@ -62,17 +63,6 @@ public final class WorkflowControlledLoopBpmnContract
     public static boolean isReservedProperty(String propertyName)
     {
         return RESERVED_PROPERTIES.contains(propertyName);
-    }
-
-    /**
-     * 判断业务表单变量是否试图覆盖受控循环运行时保留状态。
-     * @param variableName String，待检查的表单或流程变量名
-     * @return boolean，命中循环运行变量前缀时返回 true
-     */
-    public static boolean isReservedRuntimeVariable(String variableName)
-    {
-        return variableName != null && (variableName.startsWith(ROUTE_VARIABLE_PREFIX)
-                || variableName.startsWith(ITERATION_VARIABLE_PREFIX));
     }
 
     /**

@@ -10,7 +10,7 @@ import java.util.Set;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue;
-import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 
 /** 在 Flowable 转换器之前校验原始数据对象，避免未知类型被转换器静默丢弃。 */
 final class WorkflowDataObjectContract
@@ -53,9 +53,7 @@ final class WorkflowDataObjectContract
                     if (++count > 500) fail(issues, objectId, "LIMIT", "数据对象数量不能超过 500");
                     if (scopes.isEmpty()) fail(issues, objectId, "SCOPE", "数据对象必须属于流程或子流程");
                     if (name == null || name.isBlank()) fail(issues, objectId, "NAME", "数据对象缺少数据变量名称");
-                    else if (!name.matches("[A-Za-z_][A-Za-z0-9_]{0,127}")
-                            || WorkflowStartVariableValidator.isReservedVariable(name)
-                            || Set.of("__proto__", "constructor", "prototype").contains(name))
+                    else if (!WorkflowVariableNames.isBusinessVariable(name))
                     {
                         fail(issues, objectId, "NAME", "数据变量名不合法或属于系统保留变量");
                     }

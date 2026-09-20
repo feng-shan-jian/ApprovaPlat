@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.extension;
 
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
@@ -51,8 +52,6 @@ public class WorkflowHttpConnector
     public static final String IMPLEMENTATION_KEY = "HTTP_CONNECTOR_V1";
     /** 单次请求或响应正文上限。 */
     private static final int MAX_BODY_BYTES = 64 * 1024;
-    /** 流程变量名格式。 */
-    private static final Pattern VARIABLE_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,127}");
     /** 相对请求路径格式；不允许查询、片段和目录穿越。 */
     private static final Pattern REQUEST_PATH = Pattern.compile("/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,511}");
     /** 作者配置允许字段。 */
@@ -506,6 +505,8 @@ public class WorkflowHttpConnector
             throw new ServiceException("HTTP 请求路径不合法", HttpStatus.BAD_REQUEST);
         String bodyVariable = optionalVariable(config, "bodyVariable");
         String statusVariable = optionalVariable(config, "statusVariable");
+        if (statusVariable != null && !WorkflowVariableNames.isBusinessVariable(statusVariable))
+            throw new ServiceException("HTTP 状态变量属于系统保留变量", HttpStatus.BAD_REQUEST);
         if (bodyVariable != null && ("GET".equals(method) || "DELETE".equals(method)))
             throw new ServiceException("GET 或 DELETE 连接器不能配置请求正文", HttpStatus.BAD_REQUEST);
         if (bodyVariable != null && bodyVariable.equals(statusVariable))
@@ -751,7 +752,7 @@ public class WorkflowHttpConnector
     private String optionalVariable(JsonNode object, String name)
     {
         String value = optionalText(object, name, 128);
-        if (value != null && !VARIABLE_NAME.matcher(value).matches())
+        if (value != null && !WorkflowVariableNames.isIdentifier(value))
             throw new ServiceException("HTTP 流程变量名不合法", HttpStatus.BAD_REQUEST);
         return value;
     }

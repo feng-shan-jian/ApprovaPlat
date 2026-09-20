@@ -440,7 +440,7 @@ public class WorkflowNotificationPlanner
         {
             throw invalid("通知事件类型不受支持");
         }
-        return new NotificationRequest(eventType, normalizedSourceId(request.sourceId),
+        return new NotificationRequest(eventType, WorkflowNotificationSourceId.normalize(request.sourceId),
                 normalized(request.processDefinitionKey, 255, "流程定义标识不合法"),
                 optional(request.processName, 255),
                 normalized(request.processInstanceId, 64, "流程实例主键不合法"),
@@ -565,19 +565,6 @@ public class WorkflowNotificationPlanner
     private static String optional(String value, int max)
     {
         return StringUtils.hasText(value) ? normalized(value, max, "通知上下文字段不合法") : null;
-    }
-
-    /**
-     * 校验稳定来源键为可见 ASCII。
-     * @param value String，业务来源键
-     * @return String，可写入 ascii_bin 字段的来源键
-     */
-    private static String normalizedSourceId(String value)
-    {
-        String sourceId = normalized(value, 191, "通知来源标识不合法");
-        if (sourceId.chars().anyMatch(character -> character < 0x21 || character > 0x7e))
-            throw invalid("通知来源标识不合法");
-        return sourceId;
     }
 
     /**
@@ -769,7 +756,7 @@ public class WorkflowNotificationPlanner
             String routePath = "/workflow/process-detail/" + processInstanceId + "?source=copy"
                     + (taskId == null ? "" : "&taskId=" + taskId);
             return new NotificationRequest("COPY_CREATED",
-                    normalizedSourceId("COPY:" + copyEventId + ":" + copy.getUserId()),
+                    WorkflowNotificationSourceId.normalize("COPY:" + copyEventId + ":" + copy.getUserId()),
                     normalized(definition.getKey(), 255, "抄送流程定义标识不合法"),
                     normalized(copy.getProcessName(), 255, "抄送流程名称不合法"),
                     processInstanceId, taskId, null,

@@ -77,9 +77,9 @@
 </template>
 
 <script setup name="WorkflowModelDesign">
-import { listForms } from '@/api/workflow/form'
+import { loadModelFormOptions } from './modelFormOptions'
 import { listApprovalUserOptions, listClaimableIdentityOptions, listIdentityOptions, resolveIdentityOptions } from '@/api/workflow/identity'
-import { getModel, getModelBpmnXml, saveModel, getModelDesignDraft, saveModelDesignDraft, discardModelDesignDraft } from '@/api/workflow/model'
+import { getModel, saveModel, getModelDesignDraft, saveModelDesignDraft, discardModelDesignDraft } from '@/api/workflow/model'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { registerPageLeaveGuard } from '@/utils/pageLeaveGuards'
 import ProcessDesigner from '@/components/workflow/ProcessDesigner.vue'
@@ -181,10 +181,10 @@ async function saveDraft(quiet = false) {
 
 async function inspectRemoteDraft(refresh = true) {
   if (refresh) {
-    const [draft, current, formal] = await Promise.all([getModelDesignDraft(currentModelId()), getModel(currentModelId()), getModelBpmnXml(currentModelId())])
+    const [draft, current] = await Promise.all([getModelDesignDraft(currentModelId()), getModel(currentModelId())])
     remoteDraft.value = draft.data
     remoteModel.value = current.data
-    remoteFormalXml.value = formal.data
+    remoteFormalXml.value = current.data.bpmnXml || ''
   }
   comparisonXml.value = await designerRef.value.flushXml()
   compareVisible.value = true
@@ -262,21 +262,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', protectBrowserClose)
   resolveLeave(false)
 })
-
-/**
- * 分页加载全部有效表单，确保 BPMN 节点可以引用任一正式模板。
- * @returns {Promise<void>} 所有分页完成后一次性更新表单选项。
- */
-async function loadAllForms() {
-  const firstPage = await listForms({ pageNum: 1, pageSize: 50 })
-  const forms = [...(firstPage.rows || [])]
-  const pageCount = Math.ceil((firstPage.total || 0) / 50)
-  for (let pageNum = 2; pageNum <= pageCount; pageNum += 1) {
-    const page = await listForms({ pageNum, pageSize: 50 })
-    forms.push(...(page.rows || []))
-  }
-  formOptions.value = forms
-}
 
 /**
  * 将设计器身份请求映射到隔离的选项池，非法能力组合必须失败关闭。
@@ -447,11 +432,10 @@ async function loadDesigner() {
   loading.value = true
   ready.value = false
   try {
-    const [modelResponse, xmlResponse, draftResponse] = await Promise.all([
+    const [modelResponse, draftResponse, forms] = await Promise.all([
       getModel(modelId),
-      getModelBpmnXml(modelId),
       getModelDesignDraft(modelId),
-      loadAllForms(),
+      loadModelFormOptions(),
       searchIdentityDirectory({ target: 'assignees', type: 'user', capability: 'approval', keyword: '' }),
       searchIdentityDirectory({ target: 'candidateUsers', type: 'user', capability: 'claim', keyword: '' }),
       searchIdentityDirectory({ target: 'candidateGroups', type: 'group', capability: 'claim', keyword: '' }),
@@ -465,7 +449,8 @@ async function loadDesigner() {
     Object.keys(model).forEach(key => delete model[key])
     Object.assign(model, modelResponse.data || {})
     Object.assign(designerPreference, loadDesignerPreference(userStore.id))
-    bpmnXml.value = xmlResponse.data || ''
+    bpmnXml.value = model.bpmnXml || ''
+    formOptions.value = forms
     remoteDraft.value = draftResponse.data
     draftRevision = remoteDraft.value?.revision || 0
     draftLoaded = true

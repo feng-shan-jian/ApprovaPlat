@@ -12,10 +12,11 @@
       :on-error="handleUploadError"
       :on-exceed="handleExceed"
       ref="imageUpload"
-      :before-remove="handleDelete"
+      :on-remove="removed"
       :show-file-list="true"
       :headers="headers"
       :file-list="fileList"
+      :on-change="changed"
       :on-preview="handlePictureCardPreview"
       :class="{ hide: fileList.length >= limit }"
     >
@@ -50,6 +51,7 @@
 <script setup>
 import { getToken } from "@/utils/auth"
 import { isExternal } from "@/utils/validate"
+import { useUploadSettlement } from '../useUploadSettlement'
 import Sortable from 'sortablejs'
 
 const props = defineProps({
@@ -97,19 +99,22 @@ const props = defineProps({
 
 const { proxy } = getCurrentInstance()
 const emit = defineEmits(['update:modelValue'])
-const number = ref(0)
-const uploadList = ref([])
 const dialogImageUrl = ref("")
 const dialogVisible = ref(false)
 const baseUrl = import.meta.env.VITE_APP_BASE_API
 const uploadImgUrl = ref(import.meta.env.VITE_APP_BASE_API + props.action) // 上传的图片服务器地址
 const headers = ref({ Authorization: "Bearer " + getToken() })
 const fileList = ref([])
+const imageUpload = ref()
+const { begin, settle, removed, changed, completedFiles } = useUploadSettlement(
+  fileList, files => emit('update:modelValue', listToString(files)), proxy.$modal, imageUpload
+)
 const showTip = computed(
   () => props.isShowTip && (props.fileType || props.fileSize)
 )
 
 watch(() => props.modelValue, val => {
+  if (fileList.value.some(file => file.raw) && val === listToString(completedFiles.value)) return
   if (val) {
     // 首先将值转为数组
     const list = Array.isArray(val) ? val : props.modelValue.split(",")
@@ -161,8 +166,7 @@ function handleBeforeUpload(file) {
       return false
     }
   }
-  proxy.$modal.loading("正在上传图片，请稍候...")
-  number.value++
+  begin("正在上传图片，请稍候...")
 }
 
 // 文件个数超出
@@ -171,44 +175,20 @@ function handleExceed() {
 }
 
 // 上传成功回调
-function handleUploadSuccess(res, file) {
+function handleUploadSuccess(res, file, files) {
   if (res.code === 200) {
-    uploadList.value.push({ name: res.fileName, url: res.fileName })
-    uploadedSuccessfully()
+    settle(files)
   } else {
-    number.value--
-    proxy.$modal.closeLoading()
+    file.status = 'fail'
     proxy.$modal.msgError(res.msg)
-    proxy.$refs.imageUpload.handleRemove(file)
-    uploadedSuccessfully()
-  }
-}
-
-// 删除图片
-function handleDelete(file) {
-  const findex = fileList.value.map(f => f.name).indexOf(file.name)
-  if (findex > -1 && uploadList.value.length === number.value) {
-    fileList.value.splice(findex, 1)
-    emit("update:modelValue", listToString(fileList.value))
-    return false
-  }
-}
-
-// 上传结束处理
-function uploadedSuccessfully() {
-  if (number.value > 0 && uploadList.value.length === number.value) {
-    fileList.value = fileList.value.filter(f => f.url !== undefined).concat(uploadList.value)
-    uploadList.value = []
-    number.value = 0
-    emit("update:modelValue", listToString(fileList.value))
-    proxy.$modal.closeLoading()
+    imageUpload.value.handleRemove(file)
   }
 }
 
 // 上传失败
-function handleUploadError() {
+function handleUploadError(_error, _file, files) {
   proxy.$modal.msgError("上传图片失败")
-  proxy.$modal.closeLoading()
+  settle(files)
 }
 
 // 预览

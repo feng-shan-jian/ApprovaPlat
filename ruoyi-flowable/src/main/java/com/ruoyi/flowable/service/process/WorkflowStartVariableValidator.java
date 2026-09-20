@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.process;
 
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -21,8 +22,6 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator.FieldType;
-import com.ruoyi.flowable.service.task.WorkflowMultiInstanceVariables;
-import com.ruoyi.flowable.service.model.WorkflowControlledLoopBpmnContract;
 import com.ruoyi.flowable.service.model.WorkflowControlledLoopFormField;
 
 /**
@@ -71,21 +70,6 @@ public class WorkflowStartVariableValidator
     private static final String MODEL_FIELD = "vModel";
     private static final String TAG_FIELD = "tag";
     private static final String REQUIRED_FIELD = "required";
-
-    /** 流程引擎和服务端状态维护使用的变量，客户端及表单 schema 均不得声明。 */
-    private static final Set<String> RESERVED_VARIABLES = Set.of(
-            "initiator", "processStatus", "processInstanceId", "processDefinitionId",
-            "deploymentId", "startUserId", "authenticatedUserId", "businessKey",
-            "assignee", "nrOfInstances", "nrOfActiveInstances",
-            "nrOfCompletedInstances", "loopCounter", "_FLOWABLE_SKIP_EXPRESSION_ENABLED");
-
-    /** 顶层变量和嵌套 JSON 对象都拒绝可能影响前端对象原型的键。 */
-    private static final Set<String> PROTOTYPE_POLLUTION_KEYS = Set.of(
-            "__proto__", "prototype", "constructor");
-
-    /** Flowable 变量名使用稳定 ASCII 标识，避免表达式路径和日志字段产生歧义。 */
-    private static final Pattern FIELD_NAME_PATTERN = Pattern.compile(
-            "[A-Za-z_][A-Za-z0-9_]{0," + (MAX_FIELD_NAME_LENGTH - 1) + "}");
 
     /** 上传字段只接受服务端生成的规范 UUID，路径、URL 和文件对象均不能进入白名单。 */
     private static final Pattern ATTACHMENT_ID_PATTERN = Pattern.compile(
@@ -242,15 +226,15 @@ public class WorkflowStartVariableValidator
         for (Map.Entry<String, Object> entry : source.entrySet())
         {
             String fieldName = entry.getKey();
-            if (fieldName == null || !FIELD_NAME_PATTERN.matcher(fieldName).matches())
+            if (!WorkflowVariableNames.isIdentifier(fieldName))
             {
                 throw invalidVariable("流程变量字段名不合法");
             }
-            if (PROTOTYPE_POLLUTION_KEYS.contains(fieldName.toLowerCase(Locale.ROOT)))
+            if (WorkflowVariableNames.isUnsafeObjectKey(fieldName))
             {
                 throw invalidVariable("流程变量字段名不合法");
             }
-            if (isReservedVariable(fieldName))
+            if (WorkflowVariableNames.isReserved(fieldName))
             {
                 throw invalidVariable("客户端不能覆盖服务端保留流程变量");
             }
@@ -280,7 +264,7 @@ public class WorkflowStartVariableValidator
 
         for (String existingName : existingValues.keySet())
         {
-            if (!fieldSpecs.containsKey(existingName) || isReservedVariable(existingName))
+            if (!fieldSpecs.containsKey(existingName) || WorkflowVariableNames.isReserved(existingName))
             {
                 throw invalidSnapshot(null);
             }
@@ -397,9 +381,9 @@ public class WorkflowStartVariableValidator
                     throw invalidSnapshot(null);
                 }
                 String fieldName = modelNode.textValue();
-                if (!FIELD_NAME_PATTERN.matcher(fieldName).matches()
-                        || PROTOTYPE_POLLUTION_KEYS.contains(fieldName.toLowerCase(Locale.ROOT))
-                        || isReservedVariable(fieldName))
+                if (!WorkflowVariableNames.isIdentifier(fieldName)
+                        || WorkflowVariableNames.isUnsafeObjectKey(fieldName)
+                        || WorkflowVariableNames.isReserved(fieldName))
                 {
                     throw invalidSnapshot(null);
                 }
@@ -419,20 +403,6 @@ public class WorkflowStartVariableValidator
             if (Integer.valueOf(HttpStatus.ERROR).equals(exception.getCode())) throw exception;
             throw invalidSnapshot(exception);
         }
-    }
-
-    /**
-     * 判断字段名是否属于引擎固定变量或工作流内部快照命名空间。
-     *
-     * @param fieldName String，客户端变量或部署表单 schema 字段名
-     * @return boolean，客户端不得声明或覆盖时返回 true
-     */
-    public static boolean isReservedVariable(String fieldName)
-    {
-        return RESERVED_VARIABLES.contains(fieldName)
-                || WorkflowControlledLoopBpmnContract.isReservedRuntimeVariable(fieldName)
-                || WorkflowMultiInstanceVariables.isReservedVariableName(fieldName)
-                || WorkflowFormSubmissionSnapshotCodec.isReservedVariableName(fieldName);
     }
 
     /**
@@ -619,7 +589,7 @@ public class WorkflowStartVariableValidator
             {
                 if (!(entry.getKey() instanceof String key)
                         || key.isBlank() || key.length() > MAX_FIELD_NAME_LENGTH
-                        || PROTOTYPE_POLLUTION_KEYS.contains(key.toLowerCase(Locale.ROOT)))
+                        || WorkflowVariableNames.isUnsafeObjectKey(key))
                 {
                     throw invalidVariable("流程变量对象字段名不合法");
                 }

@@ -1,3 +1,4 @@
+import { isJavaOutputVariable } from './workflowVariableNames.js'
 import { computed, ref } from 'vue'
 import { createDefaultSlaConfig, createUserTaskSlaDomain, isUserTaskSlaProperty } from './userTaskSlaDomain.js'
 export { createDefaultSlaConfig } from './userTaskSlaDomain.js'
@@ -219,6 +220,8 @@ export function createExtensionEventSlaDomain(context) {
       if (!config || Array.isArray(config) || typeof config !== 'object') {
         throw new Error('处理器配置必须是 JSON 对象')
       }
+      const option = extensionOptions.value.find(item => item.extensionKey === extensionKey)
+      validateJavaOutput(option, config)
       const businessObject = selectedBusinessObject.value
       if (propertyFlags.value.messageThrow) {
         if (extensionKey && extensionKey !== OUTBOX_EXTENSION_KEY) throw new Error('消息抛出只能使用可靠消息处理器')
@@ -528,6 +531,7 @@ export function createExtensionEventSlaDomain(context) {
         if (!config || Array.isArray(config) || typeof config !== 'object') {
           throw new Error('业务监听器配置必须是 JSON 对象')
         }
+        validateJavaOutput(option, config)
         return moddle.create(kind === 'TASK' ? 'flowable:TaskListener' : 'flowable:ExecutionListener', {
           event,
           delegateExpression: BUSINESS_LISTENER_DELEGATE_EXPRESSION,
@@ -761,5 +765,12 @@ export function createExtensionEventSlaDomain(context) {
     readSlaConfig,
     updateSlaProperties,
     normalizeAndValidateSlaConfig,
+  }
+}
+
+function validateJavaOutput(option, config) {
+  if (option?.implementationKey === 'SET_VARIABLE'
+    && !isJavaOutputVariable(String(config.targetVariable || '').trim())) {
+    throw new Error('目标变量名称不合法或属于保留变量')
   }
 }

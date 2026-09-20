@@ -73,8 +73,8 @@
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
-            <el-tag size="small" :type="processRelationStatus(row.processStatus).type">
-              {{ processRelationStatus(row.processStatus).label }}
+            <el-tag size="small" :type="processStatusMeta(row.processStatus).type">
+              {{ processStatusMeta(row.processStatus).label }}
             </el-tag>
           </template>
         </el-table-column>
@@ -526,6 +526,7 @@ import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
 import ProcessWaitingEvents from '@/components/workflow/ProcessWaitingEvents.vue'
 import { useWorkflowUserOptions } from '@/components/workflow/useWorkflowUserOptions.js'
+import { processStatusMeta } from '@/components/workflow/workflowProcessStatus'
 import { useWindowSize } from '@vueuse/core'
 
 const route = useRoute()
@@ -611,15 +612,7 @@ const { options: multiInstanceUserOptions, loading: multiInstanceUserLoading,
 
 
 // 将服务端稳定流程状态映射为用户可见标签和 Element Plus 语义色。
-const statusMeta = computed(() => ({
-  running: { label: '进行中', type: 'primary' },
-  returned: { label: '待修改', type: 'warning' },
-  suspended: { label: '已挂起', type: 'warning' },
-  completed: { label: '已完成', type: 'success' },
-  rejected: { label: '已驳回', type: 'danger' },
-  terminated: { label: '已终止', type: 'danger' },
-  canceled: { label: '已取消', type: 'info' }
-}[detail.processStatus] || { label: detail.processStatus || '未知', type: 'info' }))
+const statusMeta = computed(() => processStatusMeta(detail.processStatus))
 const summaryColumns = computed(() => viewportWidth.value < 768 ? 1 : 3)
 const timeline = computed(() => Array.isArray(detail.historyProcNodeList) ? detail.historyProcNodeList : [])
 // 父子关系仅信任详情 API 从 Flowable 历史执行树投影的结果，页面不从任务或 BPMN 猜测关系。
@@ -646,22 +639,6 @@ function processRelationLabel(relation) {
   return '子流程'
 }
 
-/**
- * 将关系节点的稳定流程状态映射为页面标签。
- * @param {string} status 后端返回的稳定流程状态。
- * @returns {{label:string,type:string}} Element Plus 标签文案和语义色。
- */
-function processRelationStatus(status) {
-  return {
-    running: { label: '进行中', type: 'primary' },
-    returned: { label: '待修改', type: 'warning' },
-    suspended: { label: '已挂起', type: 'warning' },
-    completed: { label: '已完成', type: 'success' },
-    rejected: { label: '已驳回', type: 'danger' },
-    terminated: { label: '已终止', type: 'danger' },
-    canceled: { label: '已取消', type: 'info' }
-  }[status] || { label: status || '未知', type: 'info' }
-}
 const diagramFileName = computed(() => `workflow_${safeFileName(detail.processKey || processInstanceId() || 'process')}`)
 // 动态多实例状态完全来自详情 API 的正式快照；revision、成员状态和计数不在浏览器自行推演。
 const multiInstanceState = computed(() => detail.multiInstanceState || null)

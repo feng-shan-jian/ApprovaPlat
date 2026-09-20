@@ -25,7 +25,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowDecisionTableRequest.Condition;
 import com.ruoyi.flowable.domain.dto.WorkflowDecisionTableRequest.Rule;
 import com.ruoyi.flowable.domain.dto.WorkflowDmnDeploymentRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
-import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 
 /** 有界结构化决策表编译、真实引擎试算和正式版本发布。 */
 @Service
@@ -247,9 +247,7 @@ public class WorkflowDecisionTableService
 
     private void requireKey(String key)
     {
-        if (key == null || !key.matches("[A-Za-z_][A-Za-z0-9_]{0,127}")
-                || WorkflowStartVariableValidator.isReservedVariable(key)
-                || Set.of("__proto__", "prototype", "constructor").contains(key)) throw invalid("决策或列变量标识不合法");
+        if (!WorkflowVariableNames.isBusinessVariable(key)) throw invalid("决策或列变量标识不合法");
     }
 
     private String literal(Column column, JsonNode value)

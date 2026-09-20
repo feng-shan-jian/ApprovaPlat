@@ -1,7 +1,7 @@
 import { computed, onScopeDispose, ref } from 'vue'
 
 // 每个选择器独占请求和标签缓存；资格范围由调用方选择的正式接口决定。
-export function useWorkflowUserOptions(fetchOptions, selectedValues) {
+export function useWorkflowUserOptions(fetchOptions, selectedValues, { pageSize = 30 } = {}) {
   const loading = ref(false)
   const results = ref([])
   const cache = new Map()
@@ -21,7 +21,7 @@ export function useWorkflowUserOptions(fetchOptions, selectedValues) {
     loading.value = true
     try {
       const response = await fetchOptions({
-        keyword: String(keyword || '').trim().slice(0, 64), pageNum: 1, pageSize: 30
+        keyword: String(keyword || '').trim().slice(0, 64), pageNum: 1, pageSize
       })
       if (current !== sequence) return
       const rows = (Array.isArray(response.rows) ? response.rows : [])

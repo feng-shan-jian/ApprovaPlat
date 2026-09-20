@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.extension;
 
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -256,7 +257,7 @@ public class WorkflowSqlConnector
         mappings.propertyStream().forEach(entry ->
         {
             if (!entry.getValue().isTextual()
-                    || !entry.getValue().asText().matches("[A-Za-z_][A-Za-z0-9_]{0,127}"))
+                    || !WorkflowVariableNames.isIdentifier(entry.getValue().asText()))
             {
                 throw new ServiceException("SQL 参数只能映射到受控流程变量", HttpStatus.BAD_REQUEST);
             }
@@ -438,9 +439,9 @@ public class WorkflowSqlConnector
     private String optionalVariable(JsonNode node, String field)
     {
         String value = optionalText(node, field);
-        if (value != null && !value.matches("[A-Za-z_][A-Za-z0-9_]{0,127}"))
+        if (value != null && !WorkflowVariableNames.isBusinessVariable(value))
         {
-            throw new ServiceException("SQL 结果变量名不合法", HttpStatus.BAD_REQUEST);
+            throw new ServiceException("SQL 结果变量名不合法或属于保留变量", HttpStatus.BAD_REQUEST);
         }
         return value;
     }

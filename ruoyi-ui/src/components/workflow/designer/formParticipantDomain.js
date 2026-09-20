@@ -1,3 +1,4 @@
+import { isBusinessVariable } from './workflowVariableNames.js'
 import { computed } from 'vue'
 import { templatePermissionIssues } from '../form/formTemplate.js'
 import { createControlledLoopDomain, isControlledLoopProperty } from './controlledLoopDomain.js'
@@ -28,15 +29,6 @@ const JAVA_LONG_MAX_TEXT = '9223372036854775807'
 const EMBEDDED_FORM_TYPES = Object.freeze(['string', 'long', 'integer', 'boolean', 'date', 'enum'])
 const EMBEDDED_FORM_VARIABLE_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const EMBEDDED_FORM_DATE_PATTERN = /^[A-Za-z0-9 /:._-]{1,64}$/
-const EMBEDDED_FORM_RESERVED_VARIABLES = new Set([
-  'initiator', 'processStatus', 'processInstanceId', 'processDefinitionId',
-  'deploymentId', 'startUserId', 'authenticatedUserId', 'businessKey',
-  'assignee', 'nrOfInstances', 'nrOfActiveInstances', 'nrOfCompletedInstances',
-  'loopCounter', '_FLOWABLE_SKIP_EXPRESSION_ENABLED'
-])
-const EMBEDDED_FORM_RESERVED_PREFIXES = Object.freeze([
-  'wfMiUsers_', '_wfMiMembers_', '_wfMiRevision_', '_wfMiMode_', '__ruoyi_workflow_'
-])
 const FORM_PERMISSION_DEFAULT_ID = 'approva_permission_default'
 const FORM_PERMISSION_FIELD_ID_PREFIX = 'approva_permission_field_'
 const FORM_PERMISSION_MODES = new Set(['HIDDEN', 'READONLY', 'EDITABLE', 'REQUIRED'])
@@ -588,10 +580,8 @@ export function createFormParticipantDomain(context) {
       fieldIds.add(fieldId)
       const configuredVariable = String(field?.variable || '')
       const variable = configuredVariable || fieldId
-      const reserved = EMBEDDED_FORM_RESERVED_VARIABLES.has(variable)
-        || EMBEDDED_FORM_RESERVED_PREFIXES.some(prefix => variable.startsWith(prefix))
       if ((configuredVariable && configuredVariable !== configuredVariable.trim())
-        || !EMBEDDED_FORM_VARIABLE_PATTERN.test(variable) || reserved || variables.has(variable)) {
+        || !isBusinessVariable(variable) || variables.has(variable)) {
         throw new Error('内嵌表单变量名非法、重复或属于保留变量')
       }
       variables.add(variable)

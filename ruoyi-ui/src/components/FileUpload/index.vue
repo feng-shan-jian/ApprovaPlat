@@ -5,11 +5,13 @@
       :action="uploadFileUrl"
       :before-upload="handleBeforeUpload"
       :file-list="fileList"
+      :on-change="changed"
       :data="data"
       :limit="limit"
       :on-error="handleUploadError"
       :on-exceed="handleExceed"
       :on-success="handleUploadSuccess"
+      :on-remove="removed"
       :show-file-list="false"
       :headers="headers"
       class="upload-file-uploader"
@@ -28,12 +30,12 @@
     </div>
     <!-- 文件列表 -->
     <transition-group ref="uploadFileList" class="upload-file-list el-upload-list el-upload-list--text" name="el-fade-in-linear" tag="ul">
-      <li :key="file.uid" class="el-upload-list__item ele-upload-list__item-content" v-for="(file, index) in fileList">
+      <li :key="file.uid" class="el-upload-list__item ele-upload-list__item-content" v-for="file in completedFiles">
         <el-link :href="`${baseUrl}${file.url}`" underline="never" target="_blank">
           <span class="el-icon-document"> {{ getFileName(file.name) }} </span>
         </el-link>
         <div class="ele-upload-list__item-content-action">
-          <el-link underline="never" @click="handleDelete(index)" type="danger" v-if="!disabled">&nbsp;删除</el-link>
+          <el-link underline="never" @click="fileUpload.handleRemove(file)" type="danger" v-if="!disabled">&nbsp;删除</el-link>
         </div>
       </li>
     </transition-group>
@@ -42,6 +44,7 @@
 
 <script setup>
 import { getToken } from "@/utils/auth"
+import { useUploadSettlement } from '../useUploadSettlement'
 import Sortable from 'sortablejs'
 
 const props = defineProps({
@@ -89,17 +92,20 @@ const props = defineProps({
 
 const { proxy } = getCurrentInstance()
 const emit = defineEmits(['update:modelValue'])
-const number = ref(0)
-const uploadList = ref([])
 const baseUrl = import.meta.env.VITE_APP_BASE_API
 const uploadFileUrl = ref(import.meta.env.VITE_APP_BASE_API + props.action) // 上传文件服务器地址
 const headers = ref({ Authorization: "Bearer " + getToken() })
 const fileList = ref([])
+const fileUpload = ref()
+const { begin, settle, removed, changed, completedFiles } = useUploadSettlement(
+  fileList, files => emit('update:modelValue', listToString(files)), proxy.$modal, fileUpload
+)
 const showTip = computed(
   () => props.isShowTip && (props.fileType || props.fileSize)
 )
 
 watch(() => props.modelValue, val => {
+  if (fileList.value.some(file => file.raw) && val === listToString(completedFiles.value)) return
   if (val) {
     let temp = 1
     // 首先将值转为数组
@@ -143,8 +149,7 @@ function handleBeforeUpload(file) {
       return false
     }
   }
-  proxy.$modal.loading("正在上传文件，请稍候...")
-  number.value++
+  begin("正在上传文件，请稍候...")
   return true
 }
 
@@ -154,39 +159,19 @@ function handleExceed() {
 }
 
 // 上传失败
-function handleUploadError() {
+function handleUploadError(_error, _file, files) {
   proxy.$modal.msgError("上传文件失败")
-  proxy.$modal.closeLoading()
+  settle(files)
 }
 
 // 上传成功回调
-function handleUploadSuccess(res, file) {
+function handleUploadSuccess(res, file, files) {
   if (res.code === 200) {
-    uploadList.value.push({ name: res.fileName, url: res.fileName })
-    uploadedSuccessfully()
+    settle(files)
   } else {
-    number.value--
-    proxy.$modal.closeLoading()
+    file.status = 'fail'
     proxy.$modal.msgError(res.msg)
-    proxy.$refs.fileUpload.handleRemove(file)
-    uploadedSuccessfully()
-  }
-}
-
-// 删除文件
-function handleDelete(index) {
-  fileList.value.splice(index, 1)
-  emit("update:modelValue", listToString(fileList.value))
-}
-
-// 上传结束处理
-function uploadedSuccessfully() {
-  if (number.value > 0 && uploadList.value.length === number.value) {
-    fileList.value = fileList.value.filter(f => f.url !== undefined).concat(uploadList.value)
-    uploadList.value = []
-    number.value = 0
-    emit("update:modelValue", listToString(fileList.value))
-    proxy.$modal.closeLoading()
+    fileUpload.value.handleRemove(file)
   }
 }
 

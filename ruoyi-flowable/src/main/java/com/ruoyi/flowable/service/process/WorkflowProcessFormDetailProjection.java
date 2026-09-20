@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import org.flowable.bpmn.model.ExtensionAttribute;
+import com.ruoyi.flowable.service.model.WorkflowUserTaskForm;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
@@ -498,7 +498,7 @@ public class WorkflowProcessFormDetailProjection
             String deploymentId, boolean controlledLoop, DetailResponseBudget budget)
     {
         SnapshotSchema schema = requireSnapshotSchema(element, formKey, snapshots);
-        boolean taskLocal = isTaskLocal(element);
+        boolean taskLocal = element instanceof UserTask userTask && WorkflowUserTaskForm.isTaskLocal(userTask);
         // 只有授权后的活动有表单任务会进入变量投影；局部与根作用域由直接协作者分别失败关闭。
         ProjectedValues currentProjection = variableProjection.projectCurrentValues(
                 instanceId, taskId, taskLocal, schema.readableVariableNames());
@@ -628,7 +628,7 @@ public class WorkflowProcessFormDetailProjection
     {
         SnapshotSchema schema = requireSnapshotSchema(element, formKey, snapshots);
         SubmissionSnapshot submitted = submission.snapshot();
-        boolean taskLocal = element instanceof UserTask && isTaskLocal(element);
+        boolean taskLocal = element instanceof UserTask userTask && WorkflowUserTaskForm.isTaskLocal(userTask);
         SnapshotKind expectedKind = element instanceof StartEvent
                 ? SnapshotKind.START : SnapshotKind.TASK;
         if (submitted.kind() != expectedKind
@@ -711,7 +711,7 @@ public class WorkflowProcessFormDetailProjection
         }
         if (element instanceof UserTask userTask)
         {
-            return resolveFormKey(userTask.getFormKey(), userTask.getFormProperties());
+            return WorkflowUserTaskForm.formKey(userTask);
         }
         return null;
     }
@@ -734,28 +734,6 @@ public class WorkflowProcessFormDetailProjection
             return configuredFormKey;
         }
         return hasEmbedded ? WorkflowFormSourceType.EMBEDDED_FORM_KEY : null;
-    }
-
-    /**
-     * 判断用户任务是否要求从任务局部变量回显表单值。
-     *
-     * @param element FlowElement，BPMN 用户任务元素
-     * @return boolean，localScope 属性为 true 或 1 时返回 true
-     */
-    private boolean isTaskLocal(FlowElement element)
-    {
-        Map<String, List<ExtensionAttribute>> attributes = element.getAttributes();
-        if (attributes == null)
-        {
-            return false;
-        }
-        List<ExtensionAttribute> localScope = attributes.get("localScope");
-        if (localScope == null || localScope.isEmpty() || localScope.get(0) == null)
-        {
-            return false;
-        }
-        String value = localScope.get(0).getValue();
-        return "true".equalsIgnoreCase(value) || "1".equals(value);
     }
 
     /**

@@ -137,6 +137,7 @@ import {
 } from '@/api/workflow/draft'
 import { getProcessBpmnXml, getProcessForm } from '@/api/workflow/process'
 import { listApprovalUserOptions } from '@/api/workflow/identity'
+import { useWorkflowUserOptions } from '@/components/workflow/useWorkflowUserOptions.js'
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
 
@@ -153,9 +154,11 @@ const bpmnXml = ref('')
 const formRendererRef = ref(null)
 // multiInstanceUserIds 只承载后端投影的发起成员字段，不能写入普通表单变量或平台保留变量。
 const multiInstanceUserIds = reactive({})
-const approvalUserOptions = ref([])
-const identityLoading = ref(false)
-let identityRequestVersion = 0
+const { options: approvalUserOptions, loading: identityLoading,
+  search: searchApprovalUsers, reset: resetApprovalUsers } = useWorkflowUserOptions(
+  listApprovalUserOptions,
+  () => Object.values(multiInstanceUserIds).flatMap(userIds => Array.isArray(userIds) ? userIds : []),
+  { pageSize: 50 })
 const startAssignments = computed(() => Array.isArray(formSnapshot.startMultiInstanceAssignments)
   ? formSnapshot.startMultiInstanceAssignments
   : [])
@@ -342,6 +345,7 @@ async function loadDraftContext() {
  * @returns {Promise<void>} 页面上下文稳定后开放交互。
  */
 async function loadPage() {
+  resetApprovalUsers({ keepSelected: true })
   loading.value = true
   ready.value = false
   syncingContext.value = true
@@ -464,41 +468,6 @@ async function submitDraft() {
  */
 function assignmentLabel(assignment) {
   return `${assignment.activityName}（${assignment.mode === 'ALL' ? '会签' : '或签'}）`
-}
-
-/**
- * 从正式审批用户目录检索发起时可选成员，过期响应不会覆盖最新关键字结果。
- * @param {string} keyword 用户输入的姓名或账号关键字。
- * @returns {Promise<void>} 成功后更新正式可办理用户选项。
- */
-async function searchApprovalUsers(keyword) {
-  const requestVersion = ++identityRequestVersion
-  identityLoading.value = true
-  try {
-    const response = await listApprovalUserOptions({
-      keyword: String(keyword || '').trim(), pageNum: 1, pageSize: 50
-    })
-    if (requestVersion === identityRequestVersion) mergeApprovalUserOptions(response.rows || [])
-  } finally {
-    if (requestVersion === identityRequestVersion) identityLoading.value = false
-  }
-}
-
-/**
- * 合并目录结果并保留当前已选成员，避免远程检索后选择值丢失。
- * @param {Array<{value: string|number, label: string}>} rows 正式审批用户目录结果。
- * @returns {void} 更新后的选项以本次查询顺序为主。
- */
-function mergeApprovalUserOptions(rows) {
-  const selectedUserIds = new Set(Object.values(multiInstanceUserIds)
-    .flatMap(userIds => Array.isArray(userIds) ? userIds : [])
-    .map(userId => String(userId)))
-  const mergedOptions = new Map(rows.map(option => [String(option.value), option]))
-  approvalUserOptions.value.forEach(option => {
-    const userId = String(option.value)
-    if (selectedUserIds.has(userId) && !mergedOptions.has(userId)) mergedOptions.set(userId, option)
-  })
-  approvalUserOptions.value = [...mergedOptions.values()]
 }
 
 /**

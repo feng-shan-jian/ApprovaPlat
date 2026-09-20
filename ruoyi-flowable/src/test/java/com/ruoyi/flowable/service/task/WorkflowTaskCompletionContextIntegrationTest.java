@@ -68,6 +68,77 @@ import com.ruoyi.system.mapper.SysUserMapper;
  */
 class WorkflowTaskCompletionContextIntegrationTest
 {
+    @Test
+    void taskFormSourceAndScopeAgreeAcrossSubmissionAndActualDetailProjection()
+    {
+        for (String source : List.of("TEMPLATE", "EMBEDDED", "NONE"))
+        {
+            for (String scope : List.of("", "false", "true", "1"))
+            {
+                boolean local = "true".equals(scope) || "1".equals(scope);
+                String scopeAttribute = scope.isEmpty() ? "" : " flowable:localScope=\"" + scope + "\"";
+                String userTask = "<userTask id=\"formReview\" name=\"表单审批\" flowable:assignee=\"100\""
+                        + scopeAttribute + ("TEMPLATE".equals(source) ? " flowable:formKey=\"approvalForm\"" : "")
+                        + ">" + ("EMBEDDED".equals(source)
+                        ? "<extensionElements><flowable:formProperty id=\"approvalResult\" name=\"结果\" type=\"string\"/></extensionElements>" : "")
+                        + "</userTask>";
+                String xml = BPMN.replace("<startEvent id=\"formStart\"/>",
+                        "<startEvent id=\"formStart\" flowable:formKey=\"startForm\"/>")
+                        .replace("<userTask id=\"formReview\" name=\"普通表单审批\" flowable:assignee=\"100\" flowable:formKey=\"approvalForm\"/>", userTask)
+                        .replace("<endEvent id=\"formEnd\"/>", "<userTask id=\"formEnd\" flowable:assignee=\"100\"/>");
+                Deployment deployment = repositoryService.createDeployment().addString("scopes.bpmn20.xml", xml).deploy();
+                var forms = new java.util.ArrayList<WfDeployForm>();
+                forms.add(form(deployment.getId(), 10L, "startForm", "formStart", "申请", APPROVAL_FORM));
+                if (!"NONE".equals(source))
+                {
+                    WfDeployForm taskForm = form(deployment.getId(), "EMBEDDED".equals(source) ? null : 1L,
+                            "EMBEDDED".equals(source) ? "embedded" : "approvalForm", "formReview", "审批", APPROVAL_FORM);
+                    taskForm.setSourceType(source);
+                    forms.add(taskForm);
+                }
+                new WorkflowDeploymentArtifactRepository(repositoryService).persist(deployment.getId(),
+                        new WorkflowDeploymentArtifacts(forms, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of()));
+                ProcessInstance instance = runtimeService.startProcessInstanceByKey("completionForm", Map.of(
+                        "approvalResult", "process-original", WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME,
+                        WorkflowFormSubmissionSnapshotCodec.encodeStart(deployment.getId(), "TEMPLATE", 10L,
+                                "startForm", "formStart", Map.of("approvalResult", "process-original"))));
+                Task task = requireSingleTask(instance.getId(), "formReview");
+                taskService.setVariableLocal(task.getId(), "approvalResult", "local-original");
+                var active = com.ruoyi.flowable.service.process.WorkflowTaskFormProjectionTestSupport.project(
+                        processEngine, engineInfrastructure.dataSource(), instance.getId(), task.getId());
+                if ("NONE".equals(source))
+                {
+                    assertThat(active.nodeTaskForm()).isNull();
+                    assertThatThrownBy(() -> completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(
+                            task.getId(), "不可提交", Map.of("approvalResult", "forged"), List.of(), List.of(), null)))
+                            .isInstanceOf(com.ruoyi.common.exception.ServiceException.class);
+                }
+                else
+                {
+                    assertThat(active.nodeTaskForm().taskLocal()).as(source + "/" + scope).isEqualTo(local);
+                    assertThat(active.nodeTaskForm().values().get("approvalResult").asText())
+                            .isEqualTo(local ? "local-original" : "process-original");
+                }
+                completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(task.getId(), "提交",
+                        "NONE".equals(source) ? Map.of() : Map.of("approvalResult", "submitted"), List.of(), List.of(), null));
+                var historic = com.ruoyi.flowable.service.process.WorkflowTaskFormProjectionTestSupport.project(
+                        processEngine, engineInfrastructure.dataSource(), instance.getId(), task.getId());
+                if ("NONE".equals(source))
+                {
+                    assertThat(historic.nodeTaskForm()).isNull();
+                }
+                else
+                {
+                    assertThat(historic.nodeTaskForm().taskLocal()).isEqualTo(local);
+                    assertThat(historic.nodeTaskForm().values().get("approvalResult").asText()).isEqualTo("submitted");
+                }
+                assertThat(runtimeService.getVariable(instance.getId(), "approvalResult"))
+                        .isEqualTo(local || "NONE".equals(source) ? "process-original" : "submitted");
+                taskService.complete(requireSingleTask(instance.getId(), "formEnd").getId());
+            }
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = { true, false })
     void nestedTaskPermissionsRejectForgedWritesAndCompleteWithoutInaccessibleRequiredValues(boolean hidden)
