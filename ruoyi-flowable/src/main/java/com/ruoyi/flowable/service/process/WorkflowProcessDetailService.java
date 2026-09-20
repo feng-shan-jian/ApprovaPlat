@@ -213,8 +213,8 @@ public class WorkflowProcessDetailService
         boolean returnedApplication = WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
                 processStatus) && requestedTask != null && requestedTask.active();
         FormProjection forms = formProjection.project(new FormProjectionRequest(
-                schemas, history, bpmn.process(), variables, instance.processInstanceId(),
-                instance.deploymentId(), requestedTask, currentTaskControlledLoop,
+                schemas, history, bpmn.process(), variables, instance,
+                requestedTask, currentTaskControlledLoop,
                 returnedApplication));
 
         HistoryPresentation historyPresentation = historyProjection.projectPresentation(

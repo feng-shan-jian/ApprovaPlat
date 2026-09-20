@@ -32,7 +32,6 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.common.constant.HttpStatus;
-import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
 import com.ruoyi.flowable.domain.vo.WorkflowCandidateIdentityView;
@@ -40,7 +39,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowProcessActivityView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessCommentView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessRelationView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessViewerView;
-import com.ruoyi.system.service.ISysUserService;
+import com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper;
 
 /**
  * 已授权流程详情的历史活动、任务、意见、时间线、Viewer 和父子关系投影组件。
@@ -98,7 +97,7 @@ public class WorkflowProcessHistoryProjection
 
     private final RepositoryService repositoryService;
 
-    private final ISysUserService userService;
+    private final WorkflowMultiInstanceUserMapper userMapper;
 
     /** 严格拒绝重复字段和根节点后尾随内容的意见审计 JSON 解析器。 */
     private final ObjectMapper safeJsonMapper = JsonMapper.builder()
@@ -113,12 +112,12 @@ public class WorkflowProcessHistoryProjection
      */
     public WorkflowProcessHistoryProjection(HistoryService historyService,
             TaskService taskService, RepositoryService repositoryService,
-            ISysUserService userService)
+            WorkflowMultiInstanceUserMapper userMapper)
     {
         this.historyService = historyService;
         this.taskService = taskService;
         this.repositoryService = repositoryService;
-        this.userService = userService;
+        this.userMapper = userMapper;
     }
 
     /**
@@ -148,11 +147,24 @@ public class WorkflowProcessHistoryProjection
     HistoryPresentation projectPresentation(HistoryData history,
             WorkflowProcessAccessSnapshot instance, boolean applicationReturned)
     {
-        Map<String, String> userNames = new HashMap<>();
-        String startUserName = resolveUserName(instance.startUserId(), userNames);
+        Set<String> userIds = new LinkedHashSet<>();
+        userIds.add(instance.startUserId());
+        for (HistoricActivityInstance activity : history.activities())
+        {
+            String type = activity.getActivityType();
+            if (!"startEvent".equals(type) && !"userTask".equals(type) && !"endEvent".equals(type)) continue;
+            HistoricTaskInstance task = StringUtils.hasText(activity.getTaskId())
+                    ? history.tasksById().get(activity.getTaskId()) : null;
+            if (!"startEvent".equals(type))
+            {
+                userIds.add(firstText(task == null ? null : task.getAssignee(), activity.getAssignee()));
+            }
+            userIds.add(firstText(task == null ? null : task.getCompletedBy(), activity.getCompletedBy()));
+        }
+        Map<String, String> userNames = WorkflowProcessQuerySupport.loadUserNames(userMapper, userIds);
+        String startUserName = userNames.get(instance.startUserId());
         List<WorkflowProcessActivityView> timeline = buildTimeline(history.activities(),
-                history.tasksById(), history.commentsByTask(), instance,
-                startUserName, userNames);
+                history.tasksById(), history.commentsByTask(), instance, startUserName, userNames);
         WorkflowProcessViewerView viewer = buildViewer(history.activities(),
                 history.tasksById(), history.commentsByTask(), applicationReturned);
         return new HistoryPresentation(startUserName, timeline, viewer);
@@ -519,7 +531,7 @@ public class WorkflowProcessHistoryProjection
      * @param commentsByTask Map&lt;String, List&lt;WorkflowProcessCommentView&gt;&gt;，受控意见索引
      * @param instance WorkflowProcessAccessSnapshot，实例授权快照
      * @param startUserName String，发起人显示名称
-     * @param userNames Map&lt;String, String&gt;，详情内用户名缓存
+     * @param userNames Map&lt;String, String&gt;，本次批量取得的原始身份显示名
      * @return List&lt;WorkflowProcessActivityView&gt;，按执行时间排序的业务时间线
      */
     private List<WorkflowProcessActivityView> buildTimeline(
@@ -548,9 +560,8 @@ public class WorkflowProcessHistoryProjection
                     : firstText(task == null ? null : task.getAssignee(), activity.getAssignee());
             String completedById = firstText(task == null ? null : task.getCompletedBy(),
                     activity.getCompletedBy());
-            String assigneeName = "startEvent".equals(type) ? startUserName
-                    : resolveUserName(assigneeId, userNames);
-            String completedByName = resolveUserName(completedById, userNames);
+            String assigneeName = "startEvent".equals(type) ? startUserName : userNames.get(assigneeId);
+            String completedByName = userNames.get(completedById);
             List<WorkflowCandidateIdentityView> candidates = task == null
                     ? List.of() : extractCandidates(task);
             List<WorkflowProcessCommentView> comments = task == null ? List.of()
@@ -721,40 +732,6 @@ public class WorkflowProcessHistoryProjection
         return StringUtils.hasText(value)
                 && (value.toLowerCase(Locale.ROOT).contains(englishToken)
                         || value.contains(chineseToken));
-    }
-
-    /**
-     * 查询历史用户当前显示名称，用户已删除或主键异常时保留原始主键。
-     *
-     * @param userId String，Flowable 历史用户主键，允许为空
-     * @param cache Map&lt;String, String&gt;，单次详情用户名缓存
-     * @return String，用户昵称、原始主键或 null
-     */
-    private String resolveUserName(String userId, Map<String, String> cache)
-    {
-        if (!StringUtils.hasText(userId))
-        {
-            return null;
-        }
-        if (cache.containsKey(userId))
-        {
-            return cache.get(userId);
-        }
-        String displayName = userId;
-        try
-        {
-            SysUser user = userService.selectUserById(Long.valueOf(userId));
-            if (user != null && StringUtils.hasText(user.getNickName()))
-            {
-                displayName = user.getNickName();
-            }
-        }
-        catch (NumberFormatException ignored)
-        {
-            // 存量异常身份保留原值，避免猜测名称并便于迁移问题追踪。
-        }
-        cache.put(userId, displayName);
-        return displayName;
     }
 
     /**

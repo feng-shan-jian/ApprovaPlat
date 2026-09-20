@@ -228,7 +228,9 @@ public class SysUserController extends BaseController
     {
         AjaxResult ajax = AjaxResult.success();
         SysUser user = userService.selectUserByIdInScope(userId);
-        List<SysRole> roles = roleService.selectRolesByUserId(userId);
+        var assignedRoleIds = user.getRoles().stream().map(SysRole::getRoleId).collect(Collectors.toSet());
+        List<SysRole> roles = roleService.selectRoleAll();
+        roles.forEach(role -> role.setFlag(assignedRoleIds.contains(role.getRoleId())));
         ajax.put("user", user);
         ajax.put("roles", SecurityUtils.isAdmin(userId) ? roles : roles.stream().filter(r -> !r.isAdmin()).collect(Collectors.toList()));
         return ajax;

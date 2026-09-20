@@ -11,6 +11,9 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -152,6 +155,8 @@ class WorkflowProcessStartChainIntegrationTest
     private WorkflowAttachmentProperties attachmentProperties;
     /** 加入 Spring 事务代理的真实附件领域服务。 */
     private WorkflowAttachmentService attachmentService;
+    private WorkflowAttachmentService attachmentTarget;
+    private WorkflowProcessAccessService processAccess;
     /** 加入 Spring 事务代理的统一 Flowable 写边界。 */
     private WorkflowEngineOperations engineOperations;
     private WorkflowProcessDefinitionQueryService queryService;
@@ -241,12 +246,17 @@ class WorkflowProcessStartChainIntegrationTest
         attachmentProperties.setMinFreeBytes(0);
         attachmentStorage = new WorkflowAttachmentStorage(profileRoot,
                 attachmentProperties.getMaxSize());
-        WorkflowAttachmentService attachmentTarget = new WorkflowAttachmentService(
+        processAccess = spy(new WorkflowProcessAccessService(
+                processEngine.getHistoryService(), runtimeService, processEngine.getTaskService(), engineOperations,
+                identityResolver, mock(com.ruoyi.flowable.mapper.WfCopyMapper.class),
+                mock(com.ruoyi.framework.web.service.PermissionService.class),
+                new com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy()));
+        attachmentTarget = spy(new WorkflowAttachmentService(
                 attachmentMapper, attachmentStorage, attachmentProperties, identityResolver,
-                mock(WorkflowProcessAccessService.class),
+                processAccess,
                 new WorkflowAttachmentUploadJournal(attachmentMapper, attachmentStorage,
                         attachmentProperties, engineInfrastructure.transactionManager()),
-                engineInfrastructure.transactionManager());
+                engineInfrastructure.transactionManager()));
         attachmentService =
                 engineInfrastructure.transactionalProxy(attachmentTarget);
         variableValidator = spy(new WorkflowStartVariableValidator(
@@ -346,6 +356,100 @@ class WorkflowProcessStartChainIntegrationTest
         assertThat(repeated.processInstanceId()).isEqualTo(first.processInstanceId());
         assertThat(runtimeService.createProcessInstanceQuery().count())
                 .isEqualTo(instanceCountBefore + 1);
+    }
+
+    @Test
+    void detailReusesAuthorizedInstanceAndStillRejectsInvalidAttachmentRelations()
+    {
+        String attachmentId = insertTemporaryAttachment();
+        Map<String, Object> values = Map.of("requester", "Alice", "evidence", List.of(attachmentId));
+        var submitted = submitDraft(createDraft(values), values);
+        var access = processAccess.requireReadableInstance(submitted.processInstanceId());
+        clearInvocations(processAccess, attachmentMapper);
+        assertThat(attachmentService.projectReadableBoundMetadata(access, Map.of())).isEmpty();
+        verifyNoInteractions(processAccess, attachmentMapper);
+        var metadata = attachmentService.projectReadableBoundMetadata(access, Map.of(attachmentId, "evidence"));
+        assertThat(metadata.get(attachmentId).get("attachmentId").asText()).isEqualTo(attachmentId);
+        verify(attachmentMapper, times(1)).selectByIds(List.of(attachmentId));
+        verifyNoInteractions(processAccess);
+        assertThatThrownBy(() -> attachmentService.projectReadableBoundMetadata(access, Map.of(attachmentId, "wrongField")))
+                .hasMessageContaining("字段或状态不一致");
+        var other = submitDraft(createDraft(VALID_VARIABLES), VALID_VARIABLES);
+        var otherAccess = processAccess.requireReadableInstance(other.processInstanceId());
+        assertThatThrownBy(() -> attachmentService.projectReadableBoundMetadata(otherAccess, Map.of(attachmentId, "evidence")))
+                .hasMessageContaining("字段或状态不一致");
+        String temporaryId = insertTemporaryAttachment();
+        assertThatThrownBy(() -> attachmentService.projectReadableBoundMetadata(access, Map.of(temporaryId, "evidence")))
+                .hasMessageContaining("字段或状态不一致");
+        assertThatThrownBy(() -> attachmentService.projectReadableBoundMetadata(access, Map.of(UUID.randomUUID().toString(), "evidence")))
+                .hasMessageContaining("引用数据异常");
+
+        var userMapper = mock(com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper.class);
+        var history = new WorkflowProcessHistoryProjection(processEngine.getHistoryService(),
+                processEngine.getTaskService(), repositoryService, userMapper);
+        var variableProjection = new WorkflowProcessVariableProjection(WorkflowH2SchemaMapperSupport.createSpringMapper(
+                engineInfrastructure.dataSource(), "detail-variables", com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper.class,
+                "mapper/flowable/WorkflowHistoricVariableMapper.xml"));
+        var projection = new WorkflowProcessFormDetailProjection(artifactRepository, new WorkflowFormTemplateValidator(),
+                variableProjection, attachmentService);
+        clearInvocations(processAccess, attachmentTarget, attachmentMapper);
+        var projected = projection.project(new WorkflowProcessFormDetailProjection.FormProjectionRequest(
+                projection.loadSchemas(otherAccess.deploymentId()), history.loadHistory(otherAccess),
+                repositoryService.getBpmnModel(definition.getId()).getProcessById(definition.getKey()),
+                variableProjection.loadSubmissionSnapshots(other.processInstanceId(), otherAccess.deploymentId(), Set.of()),
+                otherAccess, null, false, false));
+        assertThat(projected.formDetail().applicationForm().values().get("requester").asText()).isEqualTo("Alice");
+        verifyNoInteractions(processAccess, attachmentTarget, attachmentMapper);
+
+        clearInvocations(processAccess);
+        assertThat(attachmentService.getReadableMetadata(attachmentId).attachmentId()).isEqualTo(attachmentId);
+        verify(processAccess, times(1)).requireReadableInstance(submitted.processInstanceId());
+        currentIdentity.set(new WorkflowCurrentIdentity("200", Set.of()));
+        assertServiceError(() -> attachmentService.getReadableMetadata(attachmentId), HttpStatus.FORBIDDEN, null);
+    }
+
+    @Test
+    void historyBatchesRawNicknamesAndPreservesLegacyIdentityFallbacks()
+    {
+        jdbcTemplate.execute("create table sys_user (user_id bigint primary key, nick_name varchar(100), user_name varchar(100), del_flag char(1))");
+        jdbcTemplate.update("insert into sys_user values (100, '  发起人  ', 'login100', '0'), (200, '已删除用户', 'login200', '2'), (300, '   ', 'login300', '0'), (400, null, 'login400', '0')");
+        var mapper = spy(WorkflowH2SchemaMapperSupport.createSpringMapper(engineInfrastructure.dataSource(),
+                "history-names", com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper.class,
+                "mapper/flowable/WorkflowMultiInstanceUserMapper.xml"));
+        List<String> assignees = List.of("100", "200", "300", "400", "500", "+0100", " 100", "bad", "9223372036854775808");
+        StringBuilder nodes = new StringBuilder("<startEvent id=\"s\"/>");
+        for (int i = 0; i < assignees.size(); i++)
+        {
+            nodes.append("<userTask id=\"t").append(i).append("\" flowable:assignee=\"").append(assignees.get(i)).append("\"/>")
+                    .append("<sequenceFlow sourceRef=\"").append(i == 0 ? "s" : "t" + (i - 1)).append("\" targetRef=\"t").append(i).append("\"/>");
+        }
+        nodes.append("<endEvent id=\"e\"/><sequenceFlow sourceRef=\"t8\" targetRef=\"e\"/>");
+        repositoryService.createDeployment().addString("history.bpmn20.xml", """
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="names">
+                <process id="names" isExecutable="true">%s</process></definitions>
+                """.formatted(nodes)).deploy();
+        var instance = engineOperations.writeAsCurrentUser(actor -> runtimeService.createProcessInstanceBuilder()
+                .processDefinitionKey("names").businessStatus("running").start());
+        var tasks = processEngine.getTaskService();
+        for (int i = 0; i < assignees.size(); i++)
+        {
+            var task = tasks.createTaskQuery().processInstanceId(instance.getId()).singleResult();
+            tasks.setAssignee(task.getId(), assignees.get(i));
+            tasks.complete(task.getId(), "200", Map.of(), Map.of());
+        }
+        var access = processAccess.requireReadableInstance(instance.getId());
+        var history = new WorkflowProcessHistoryProjection(processEngine.getHistoryService(), tasks, repositoryService, mapper);
+        var presentation = history.projectPresentation(history.loadHistory(access), access, false);
+        assertThat(presentation.startUserName()).isEqualTo("  发起人  ");
+        assertThat(presentation.timeline().stream().filter(row -> "userTask".equals(row.activityType())).toList())
+                .extracting(com.ruoyi.flowable.domain.vo.WorkflowProcessActivityView::assigneeName)
+                .containsExactly("  发起人  ", "已删除用户", "300", "400", "500", "  发起人  ", " 100", "bad", "9223372036854775808");
+        assertThat(presentation.timeline().stream().filter(row -> "userTask".equals(row.activityType())).toList())
+                .extracting(com.ruoyi.flowable.domain.vo.WorkflowProcessActivityView::completedByName)
+                .containsOnly("已删除用户");
+        verify(mapper, times(1)).selectRawNickNamesByIds(org.mockito.ArgumentMatchers.argThat(ids ->
+                ids.size() == 5 && Set.copyOf(ids).equals(Set.of(100L, 200L, 300L, 400L, 500L))));
+        org.mockito.Mockito.verifyNoMoreInteractions(mapper);
     }
 
     /**

@@ -57,7 +57,7 @@ class WorkflowModelCompilationIntegrationTest
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     var engine = context.getBean(ProcessEngine.class);
-                    var repository = engine.getRepositoryService();
+                    var repository = spy(engine.getRepositoryService());
                     var runtime = engine.getRuntimeService();
                     var tasks = engine.getTaskService();
                     var identities = mock(WorkflowIdentityResolver.class);
@@ -131,7 +131,12 @@ class WorkflowModelCompilationIntegrationTest
                     verify(decisions, never()).prepare(any());
                     verify(sla, never()).prepare(any(), anyString());
                     verify(listeners, never()).compile(any());
+                    var modelForm = new WorkflowModelDto();
+                    modelForm.setModelId(model); modelForm.setFormType(0); modelForm.setFormId(7L);
+                    service.updateModel(modelForm);
                     int revision = ((ModelEntity) repository.getModel(model)).getRevision();
+                    verifyDesignDraftIsolation(context.getBean(DataSource.class), service, bpmn,
+                            operations, identities, repository, forms, model, revision, author);
                     long deploymentCount = repository.createDeploymentQuery().count();
                     long dmnCount = dmn.getDmnRepositoryService().createDeploymentQuery().count();
                     var preflight = service.preflight(model, revision, author);
@@ -192,7 +197,7 @@ class WorkflowModelCompilationIntegrationTest
                     verify(templates, times(2)).validate(anyString());
                     var fallback = operations.writeAsCurrentUser(actor -> runtime.startProcessInstanceByKey("compiledParent", Map.of("amount", BigDecimal.ZERO, "initiator", actor.userId())));
                     assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(fallback.getId()).finished().count()).isOne();
-                    assertResourceReadBoundaries(operations, repository, dmn.getDmnRepositoryService(),
+                    assertResourceReadBoundaries(operations, engine.getRepositoryService(), dmn.getDmnRepositoryService(),
                             deployment, definition.getId(), decisionId, compiled);
                 });
     }
@@ -361,6 +366,64 @@ class WorkflowModelCompilationIntegrationTest
              "rules":[{"conditions":[{"operator":"EQ","value":"9999999999.12345678"}],"results":["9007199254740993"]}],
              "defaultResult":["-9999999999.12345678"],"testValues":{"amount":"9999999999.12345678"}}
             """, WorkflowDecisionTableRequest.class);
+    }
+
+    private void verifyDesignDraftIsolation(DataSource dataSource, WorkflowModelService models,
+            WorkflowBpmnService bpmn, WorkflowEngineOperations operations, WorkflowIdentityResolver identities,
+            org.flowable.engine.RepositoryService repository, WfFormMapper forms,
+            String modelId, int revision, String xml)
+    {
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(dataSource);
+        jdbc.execute("""
+                create table wf_model_design_draft (model_id varchar(64), owner_user_id varchar(64),
+                    base_model_revision int not null, revision int not null, bpmn_xml clob,
+                    updated_at timestamp default current_timestamp, primary key (model_id, owner_user_id))
+                """);
+        var drafts = new WorkflowModelDesignDraftService(dataSource, models, bpmn, operations, identities);
+        clearInvocations(repository, forms);
+        assertThat(drafts.read(modelId).revision()).isZero();
+        verify(repository, times(1)).getModel(modelId);
+        verify(repository, never()).getModelEditorSource(anyString());
+        verifyNoInteractions(forms);
+        var saved = drafts.save(modelId, new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 0, xml));
+        assertThat(saved.revision()).isEqualTo(1);
+        assertThat(drafts.read(modelId).bpmnXml()).isEqualTo(xml);
+        when(identities.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity("200", Set.of()));
+        assertThat(drafts.read(modelId).bpmnXml()).isNull();
+        assertThatThrownBy(() -> drafts.discard(modelId, 1)).hasMessageContaining("已被更新");
+        drafts.save(modelId, new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 0, xml));
+        when(identities.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity("100", Set.of()));
+        assertThatThrownBy(() -> drafts.save(modelId,
+                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 0, xml)))
+                .hasMessageContaining("已被更新");
+        assertThatThrownBy(() -> drafts.save(modelId,
+                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision + 1, 1, xml)))
+                .hasMessageContaining("已被更新");
+        assertThatThrownBy(() -> drafts.save(modelId,
+                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 1, xml.replace("compiledParent", "wrongKey"))))
+                .hasMessageContaining("当前模型所属流程");
+        assertThatThrownBy(() -> drafts.save(modelId,
+                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 1, "<!DOCTYPE x>" + xml)))
+                .hasMessageContaining("DTD");
+        assertThat(drafts.save(modelId,
+                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 1, xml)).revision()).isEqualTo(2);
+        assertThatThrownBy(() -> drafts.discard(modelId, 1)).hasMessageContaining("已被更新");
+        assertThat(drafts.discard(modelId, 2).revision()).isEqualTo(3);
+        assertThat(drafts.read(modelId).bpmnXml()).isNull();
+        assertThatThrownBy(() -> drafts.save(modelId,
+                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 0, xml)))
+                .hasMessageContaining("已被更新");
+        assertThat(drafts.save(modelId,
+                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 3, xml)).revision()).isEqualTo(4);
+        assertThatThrownBy(() -> drafts.read("missing-model")).hasMessageContaining("不存在");
+        verify(repository, never()).getModelEditorSource(anyString());
+        verifyNoInteractions(forms);
+        assertThat(repository.getModelEditorSource(modelId)).isEqualTo(xml.getBytes(StandardCharsets.UTF_8));
+        assertThat(models.getModel(modelId).bpmnXml()).isEqualTo(xml);
+        verify(forms, times(1)).selectById(7L);
+        when(identities.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity("200", Set.of()));
+        assertThat(drafts.read(modelId).revision()).isEqualTo(1);
+        when(identities.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity("100", Set.of()));
     }
 
     @Configuration(proxyBeanMethods = false)

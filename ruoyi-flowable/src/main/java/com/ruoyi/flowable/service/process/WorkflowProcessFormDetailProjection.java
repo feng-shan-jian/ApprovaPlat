@@ -24,6 +24,7 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
 import com.ruoyi.flowable.authorization.WorkflowTaskAccessSnapshot;
 import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormDetailView;
@@ -135,7 +136,7 @@ public class WorkflowProcessFormDetailProjection
         DetailResponseBudget budget = new DetailResponseBudget();
         List<WorkflowProcessFormSnapshotView> processForms = buildExecutedForms(
                 request.history().activities(), request.history().tasksById(), request.process(),
-                request.schemas().schemas(), request.variables(), request.deploymentId(), budget);
+                request.schemas().schemas(), request.variables(), request.instance().deploymentId(), budget);
         WorkflowProcessFormSnapshotView submittedApplicationForm =
                 findApplicationForm(processForms);
         if (request.variables().startSubmission() == null || submittedApplicationForm == null)
@@ -145,10 +146,10 @@ public class WorkflowProcessFormDetailProjection
         WorkflowProcessFormSnapshotView requestedTaskForm = request.requestedTask() == null ? null
                 : buildCurrentTaskForm(request.requestedTask(), request.history().tasksById(),
                         request.process(), request.schemas().schemas(), request.variables(),
-                        request.deploymentId(), request.currentTaskControlledLoop(),
+                        request.instance().deploymentId(), request.currentTaskControlledLoop(),
                         request.returnedApplication() ? processForms : null, budget);
         AttachmentProjection attachmentProjection = projectAttachmentMetadata(
-                request.processInstanceId(), request.schemas().schemas(), processForms,
+                request.instance(), request.schemas().schemas(), processForms,
                 requestedTaskForm);
         processForms = attachmentProjection.processForms();
         requestedTaskForm = attachmentProjection.requestedTaskForm();
@@ -267,13 +268,13 @@ public class WorkflowProcessFormDetailProjection
     /**
      * 聚合详情内全部上传字段，按固定批次查询附件对象并完成字段和状态校验后重建表单值。
      *
-     * @param processInstanceId String，已授权流程实例主键
+     * @param instance WorkflowProcessAccessSnapshot，已授权实例事实
      * @param schemas Map&lt;NodeFormKey,SnapshotSchema&gt;，部署表单 Schema 索引
      * @param processForms List&lt;WorkflowProcessFormSnapshotView&gt;，开始与历史提交表单
      * @param requestedTaskForm WorkflowProcessFormSnapshotView，当前任务表单，允许为空
      * @return AttachmentProjection，附件值已经替换为后端安全元数据的表单集合
      */
-    private AttachmentProjection projectAttachmentMetadata(String processInstanceId,
+    private AttachmentProjection projectAttachmentMetadata(WorkflowProcessAccessSnapshot instance,
             Map<NodeFormKey, SnapshotSchema> schemas,
             List<WorkflowProcessFormSnapshotView> processForms,
             WorkflowProcessFormSnapshotView requestedTaskForm)
@@ -313,8 +314,12 @@ public class WorkflowProcessFormDetailProjection
                 }
             }
         }
+        if (fieldByAttachmentId.isEmpty())
+        {
+            return new AttachmentProjection(processForms, requestedTaskForm);
+        }
         Map<String, JsonNode> metadataById = attachmentService.projectReadableBoundMetadata(
-                processInstanceId, fieldByAttachmentId);
+                instance, fieldByAttachmentId);
         List<WorkflowProcessFormSnapshotView> projectedProcessForms = processForms.stream()
                 .map(form -> projectFormAttachmentValues(form, schemas, metadataById)).toList();
         WorkflowProcessFormSnapshotView projectedTaskForm = requestedTaskForm == null ? null
@@ -781,7 +786,7 @@ public class WorkflowProcessFormDetailProjection
      * @param history WorkflowProcessHistoryProjection.HistoryData，有界历史活动和任务索引
      * @param process org.flowable.bpmn.model.Process，正式部署 BPMN 流程
      * @param variables VariableStore，完成存储安全门禁的正式提交快照
-     * @param deploymentId String，流程实例所属部署主键
+     * @param instance WorkflowProcessAccessSnapshot，已授权实例及所属部署事实
      * @param requestedTask WorkflowTaskAccessSnapshot，可选的已授权请求任务
      * @param currentTaskControlledLoop boolean，请求任务是否为当前受控循环节点
      * @param returnedApplication boolean，是否处于申请人退回修改阶段
@@ -789,7 +794,7 @@ public class WorkflowProcessFormDetailProjection
     record FormProjectionRequest(FormSchemas schemas,
             WorkflowProcessHistoryProjection.HistoryData history,
             org.flowable.bpmn.model.Process process, VariableStore variables,
-            String processInstanceId, String deploymentId,
+            WorkflowProcessAccessSnapshot instance,
             WorkflowTaskAccessSnapshot requestedTask,
             boolean currentTaskControlledLoop, boolean returnedApplication)
     {

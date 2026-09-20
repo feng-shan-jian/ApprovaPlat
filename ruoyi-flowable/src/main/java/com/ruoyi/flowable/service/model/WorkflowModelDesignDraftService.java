@@ -34,7 +34,7 @@ public class WorkflowModelDesignDraftService
     public WorkflowModelDesignDraftView read(String modelId)
     {
         return operations.read(() -> {
-            var model = models.getModel(modelId);
+            var model = models.getModelMetadata(modelId);
             return readOwned(modelId, identities.resolveCurrentIdentity().userId(), model.revision());
         });
     }
@@ -52,7 +52,7 @@ public class WorkflowModelDesignDraftService
     public WorkflowModelDesignDraftView save(String modelId, WorkflowModelDesignDraftRequest request)
     {
         return operations.writeAsCurrentUser(actor -> {
-            var model = models.getModel(modelId);
+            var model = models.getModelMetadata(modelId);
             if (!model.revision().equals(request.baseModelRevision())) throw conflict();
             String xml = bpmn.validateDesignDraft(request.bpmnXml().getBytes(StandardCharsets.UTF_8), model.modelKey());
             int expected = request.expectedRevision();
@@ -75,7 +75,7 @@ public class WorkflowModelDesignDraftService
     public WorkflowModelDesignDraftView discard(String modelId, int expectedRevision)
     {
         return operations.writeAsCurrentUser(actor -> {
-            var model = models.getModel(modelId);
+            var model = models.getModelMetadata(modelId);
             if (expectedRevision <= 0 || expectedRevision == Integer.MAX_VALUE || jdbc.update("UPDATE wf_model_design_draft SET bpmn_xml=NULL,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE model_id=? AND owner_user_id=? AND revision=?",
                     modelId, actor.userId(), expectedRevision) != 1) throw conflict();
             return new WorkflowModelDesignDraftView(modelId, model.revision(), expectedRevision + 1, null, model.revision());

@@ -275,6 +275,15 @@ public class WorkflowModelService
         });
     }
 
+    /** 草稿在调用方事务内只读取当前模型标识和修订，不加载正式正文或关联表单。 */
+    ModelMetadata getModelMetadata(String modelId)
+    {
+        Model model = requireModel(requireText(modelId, "模型主键不能为空"));
+        return new ModelMetadata(model.getKey(), modelRevision(model));
+    }
+
+    record ModelMetadata(String modelKey, Integer revision) { }
+
     /**
      * 查询模型编辑器保存的 BPMN XML。
      *

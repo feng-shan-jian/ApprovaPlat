@@ -27,6 +27,7 @@ import tools.jackson.databind.node.ObjectNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.authorization.WorkflowProcessAccessService;
+import com.ruoyi.flowable.authorization.WorkflowProcessAccessSnapshot;
 import com.ruoyi.flowable.config.WorkflowAttachmentProperties;
 import com.ruoyi.flowable.domain.WfAttachment;
 import com.ruoyi.flowable.domain.WorkflowAttachmentQuotaUsage;
@@ -1300,23 +1301,15 @@ public class WorkflowAttachmentService
     /**
      * 一次查询并校验流程详情中全部附件引用，返回不含内部存储键的正式元数据。
      *
-     * @param processInstanceId String，已进入详情投影的流程实例主键
+     * @param instance WorkflowProcessAccessSnapshot，本次详情入口已经完成授权的实例事实
      * @param fieldByAttachmentId Map&lt;String,String&gt;，附件 UUID 到正式表单字段名的唯一映射
      * @return Map&lt;String,JsonNode&gt;，附件 UUID 到六项安全元数据的不可变映射
      */
     @Transactional(readOnly = true)
-    public Map<String, JsonNode> projectReadableBoundMetadata(String processInstanceId,
+    public Map<String, JsonNode> projectReadableBoundMetadata(
+            WorkflowProcessAccessSnapshot instance,
             Map<String, String> fieldByAttachmentId)
     {
-        if (!StringUtils.hasText(processInstanceId))
-        {
-            throw new ServiceException("流程实例主键不能为空", HttpStatus.BAD_REQUEST);
-        }
-        processAccessService.requireReadableInstance(processInstanceId.trim());
-        if (fieldByAttachmentId == null || fieldByAttachmentId.isEmpty())
-        {
-            return Map.of();
-        }
         LinkedHashMap<String, String> expected = new LinkedHashMap<>();
         fieldByAttachmentId.forEach((attachmentId, fieldName) -> expected.put(
                 requireAttachmentId(attachmentId), requireFieldName(fieldName)));
@@ -1338,7 +1331,7 @@ public class WorkflowAttachmentService
                 String expectedField = expected.get(attachment.attachmentId());
                 if (!batchIds.contains(attachment.attachmentId()) || expectedField == null
                         || attachment.status() != WorkflowAttachmentStatus.BOUND
-                        || !processInstanceId.trim().equals(attachment.processInstanceId())
+                        || !instance.processInstanceId().equals(attachment.processInstanceId())
                         || !expectedField.equals(attachment.fieldName())
                         || attachment.boundTime() == null || attachment.storageDeletedTime() != null
                         || projected.putIfAbsent(attachment.attachmentId(),
