@@ -192,12 +192,14 @@ public class WorkflowMultiInstanceService
      * 在完成动态多实例任务前校验客户端 revision，并把服务端 revision 原子推进一位。
      *
      * @param task Task，生命周期服务已完成活动态和办理人校验的当前任务
+     * @param instance ProcessInstance，本次完成请求已校验的活动实例
+     * @param bpmn WorkflowTaskBpmnSnapshot，本次完成请求已读取的不可变部署事实
      * @param currentUserTask UserTask，生命周期服务已从唯一 BPMN 上下文定位的当前节点
      * @param expectedRevision Long，客户端从详情读取的动态多实例 revision；普通任务为空
      * @return CompletionRevision，动态多实例返回活动及前后 revision；普通任务返回空计划
      */
-    CompletionRevision reserveCompletionRevision(Task task, UserTask currentUserTask,
-            Long expectedRevision)
+    CompletionRevision reserveCompletionRevision(Task task, ProcessInstance instance,
+            WorkflowTaskBpmnSnapshot bpmn, UserTask currentUserTask, Long expectedRevision)
     {
         if (task == null || currentUserTask == null
                 || !Objects.equals(task.getTaskDefinitionKey(), currentUserTask.getId()))
@@ -219,7 +221,7 @@ public class WorkflowMultiInstanceService
             throw completionRevisionInvalid();
         }
 
-        MultiInstanceContext context = loadContext(task);
+        MultiInstanceContext context = loadContext(task, instance, bpmn);
         if (context.revision() != expectedRevision.intValue())
         {
             throw revisionConflict();
@@ -546,26 +548,29 @@ public class WorkflowMultiInstanceService
     {
         ProcessInstance instance = runtimeService.createProcessInstanceQuery()
                 .processInstanceId(currentTask.getProcessInstanceId()).singleResult();
+        return loadContext(currentTask, instance, null);
+    }
+
+    /**
+     * 复用本次请求已有实例及可选部署事实，统一校验并装载受控任务上下文。
+     *
+     * @param currentTask Task，已经完成活动态和对象授权校验的任务
+     * @param instance ProcessInstance，本次请求取得的实例
+     * @param bpmn WorkflowTaskBpmnSnapshot，完成准备已取得的部署事实；独立及写后读取传 null
+     * @return MultiInstanceContext，受控任务完整上下文；普通任务抛出既有冲突
+     */
+    private MultiInstanceContext loadContext(Task currentTask, ProcessInstance instance,
+            WorkflowTaskBpmnSnapshot bpmn)
+    {
         requireTaskInstance(currentTask, instance);
-        MultiInstanceContext context = loadOptionalContext(currentTask, instance);
+        ControlledMultiInstanceSnapshot runtime = WorkflowMultiInstanceSnapshotExceptionTranslator
+                .asMultiInstanceDataError(() -> snapshotReader.readTask(currentTask, instance, bpmn, null));
+        MultiInstanceContext context = contextFromSnapshot(currentTask, runtime);
         if (context == null)
         {
             throw conflict();
         }
         return context;
-    }
-
-    /**
-     * 复用唯一运行时读取器装载受控任务上下文，普通任务返回 null。
-     *
-     * @param currentTask Task，已经完成活动态和对象授权校验的任务
-     * @return MultiInstanceContext，受控任务完整上下文；普通任务返回 null
-     */
-    private MultiInstanceContext loadOptionalContext(Task currentTask, ProcessInstance instance)
-    {
-        ControlledMultiInstanceSnapshot runtime = WorkflowMultiInstanceSnapshotExceptionTranslator
-                .asMultiInstanceDataError(() -> snapshotReader.readTask(currentTask, instance));
-        return contextFromSnapshot(currentTask, runtime);
     }
 
     private MultiInstanceContext contextFromSnapshot(Task currentTask,

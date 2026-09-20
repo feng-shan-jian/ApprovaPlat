@@ -56,8 +56,12 @@ class WorkflowRuntimeFactReuseIntegrationTest
         TaskListener created = task -> lifecycleRef.get().onTaskCreated(new WorkflowTaskEventSnapshot(
                 task.getId(), task.getProcessInstanceId(), task.getProcessDefinitionId(),
                 task.getTaskDefinitionKey(), task.getExecutionId(), task.getAssignee(), null));
+        TaskListener completed = task -> lifecycleRef.get().onTaskCompleted(new WorkflowTaskEventSnapshot(
+                task.getId(), task.getProcessInstanceId(), task.getProcessDefinitionId(),
+                task.getTaskDefinitionKey(), task.getExecutionId(), task.getAssignee(),
+                (Integer) task.getVariableLocal(WorkflowMultiInstanceVariables.COMPLETION_REVISION_VARIABLE)));
         Map<Object, Object> beans = Map.of("multiInstanceHandler", new WorkflowMultiInstanceHandler(selection, coordinator),
-                "roundCreated", created);
+                "roundCreated", created, "roundCompleted", completed);
         try (var infra = start(database, beans))
         {
             if (database.equals("h2")) infra.jdbcTemplate().execute(ROUND_SCHEMA);
@@ -76,9 +80,10 @@ class WorkflowRuntimeFactReuseIntegrationTest
                     new WorkflowAuthenticationContext(engine.getIdentityService(), new WorkflowIdentityCodec()),
                     new WorkflowExceptionTranslator(), identities));
             var snapshotReader = spy(new WorkflowMultiInstanceRuntimeSnapshotReader(repository, runtime, tasks));
-            var rounds = new WorkflowMultiInstanceRoundRepository(WorkflowH2SchemaMapperSupport.createSpringMapper(
-                    infra.dataSource(), "runtime-facts", WfMultiInstanceRoundMapper.class,
-                    "mapper/flowable/WfMultiInstanceRoundMapper.xml"));
+            var roundSession = new org.mybatis.spring.SqlSessionTemplate(WorkflowH2SchemaMapperSupport.createSessionFactory(
+                    infra.dataSource(), new org.mybatis.spring.transaction.SpringManagedTransactionFactory(),
+                    "runtime-facts", WfMultiInstanceRoundMapper.class, "mapper/flowable/WfMultiInstanceRoundMapper.xml"));
+            var rounds = new WorkflowMultiInstanceRoundRepository(roundSession.getMapper(WfMultiInstanceRoundMapper.class));
             var lifecycle = spy(new WorkflowMultiInstanceRoundLifecycleService(rounds, snapshotReader, coordinator));
             lifecycleRef.set(lifecycle);
             var termination = new WorkflowMultiInstanceRoundTerminationService(rounds, snapshotReader, coordinator, runtime, tasks);
@@ -106,6 +111,11 @@ class WorkflowRuntimeFactReuseIntegrationTest
             var attachments = mock(WorkflowAttachmentService.class);
             when(attachments.prepareTaskVariables(anyString(), anyString(), anyMap(), anyMap()))
                     .thenAnswer(invocation -> invocation.getArgument(2));
+            var completions = new WorkflowTaskCompletionApplicationService(operations, new WorkflowTaskRequestValidator(),
+                    reader, bpmnReader, artifacts, new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator()),
+                    attachments, copies, new WorkflowNextTaskAssignmentService(selection, tasks, runtime, snapshotReader), mi,
+                    new WorkflowControlledLoopService(runtime, tasks, mock(com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper.class)),
+                    new WorkflowTaskActionAuditWriter(tasks), new WorkflowTaskConcurrencyExecutor(), runtime, tasks, identities);
             var resubmits = new WorkflowApplicationResubmitApplicationService(operations, new WorkflowTaskRequestValidator(),
                     reader, returnedState, new WorkflowTaskActionAuditWriter(tasks), new WorkflowTaskConcurrencyExecutor(),
                     groups, artifacts, new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator()),
@@ -136,6 +146,8 @@ class WorkflowRuntimeFactReuseIntegrationTest
             // 全部 fixture 与写动作处于独立事务；MySQL 使用已有结构并在测试后回滚全部部署、轮次和引擎数据。
             String key = "facts_" + UUID.randomUUID().toString().replace("-", "");
             var fixtureDeployment = new AtomicReference<String>();
+            var nested = new org.springframework.transaction.support.TransactionTemplate(infra.transactionManager());
+            nested.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_NESTED);
             infra.transactionTemplate().executeWithoutResult(status -> {
                 status.setRollbackOnly();
                 var deployment = repository.createDeployment().name(key)
@@ -145,7 +157,11 @@ class WorkflowRuntimeFactReuseIntegrationTest
                 startForm.setDeployId(deployment.getId()); startForm.setNodeKey("start");
                 startForm.setSourceType("TEMPLATE"); startForm.setFormId(1L); startForm.setFormKey("startForm");
                 startForm.setFormName("申请"); startForm.setNodeName("开始"); startForm.setContent(FORM);
-                artifacts.persist(deployment.getId(), new WorkflowDeploymentArtifacts(List.of(startForm), List.of(), List.of(),
+                WfDeployForm reviewForm = new WfDeployForm();
+                reviewForm.setDeployId(deployment.getId()); reviewForm.setNodeKey("review");
+                reviewForm.setSourceType("TEMPLATE"); reviewForm.setFormId(2L); reviewForm.setFormKey("reviewForm");
+                reviewForm.setFormName("审批"); reviewForm.setNodeName("Review"); reviewForm.setContent(FORM);
+                artifacts.persist(deployment.getId(), new WorkflowDeploymentArtifacts(List.of(startForm, reviewForm), List.of(), List.of(),
                         List.of(), List.of(), List.of(), List.of(), List.of()));
                 String submission = WorkflowFormSubmissionSnapshotCodec.encodeStart(deployment.getId(), "TEMPLATE", 1L,
                         "startForm", "start", Map.of("title", "original"));
@@ -201,7 +217,8 @@ class WorkflowRuntimeFactReuseIntegrationTest
 
                 // 旧 capability 不是写授权；挂起后正式写必须重查并拒绝。
                 runtime.suspendProcessInstanceById(instance.getId());
-                assertThatThrownBy(() -> returns.returnTask(new WorkflowTaskReturnRequest(source.getId(), "suspended", List.of())))
+                assertThatThrownBy(() -> nested.executeWithoutResult(inner ->
+                        returns.returnTask(new WorkflowTaskReturnRequest(source.getId(), "suspended", List.of()))))
                         .isInstanceOf(ServiceException.class);
                 var suspended = instanceSnapshot(runtime.createProcessInstanceQuery().processInstanceId(instance.getId()).singleResult(), repository, history);
                 clearInvocations(history, artifacts);
@@ -213,7 +230,8 @@ class WorkflowRuntimeFactReuseIntegrationTest
                 verifyNoInteractions(artifacts);
                 runtime.activateProcessInstanceById(instance.getId());
                 returns.returnTask(new WorkflowTaskReturnRequest(source.getId(), "return", List.of()));
-                assertThatThrownBy(() -> returns.returnTask(new WorkflowTaskReturnRequest(source.getId(), "stale", List.of())))
+                assertThatThrownBy(() -> nested.executeWithoutResult(inner ->
+                        returns.returnTask(new WorkflowTaskReturnRequest(source.getId(), "stale", List.of()))))
                         .isInstanceOf(ServiceException.class);
                 currentUser.set("100");
                 ProcessInstance returned = runtime.createProcessInstanceQuery().processInstanceId(instance.getId()).singleResult();
@@ -251,8 +269,8 @@ class WorkflowRuntimeFactReuseIntegrationTest
                 var before = mi.getState(reopened.getId());
                 mi.adjust(new WorkflowMultiInstanceAdjustmentRequest(reopened.getId(), WorkflowMultiInstanceAdjustmentAction.ADD,
                         (long) before.revision(), "add", List.of(400L), null));
-                assertThatThrownBy(() -> mi.adjust(new WorkflowMultiInstanceAdjustmentRequest(reopened.getId(),
-                        WorkflowMultiInstanceAdjustmentAction.ADD, (long) before.revision(), "stale", List.of(500L), null)))
+                assertThatThrownBy(() -> nested.executeWithoutResult(inner -> mi.adjust(new WorkflowMultiInstanceAdjustmentRequest(reopened.getId(),
+                        WorkflowMultiInstanceAdjustmentAction.ADD, (long) before.revision(), "stale", List.of(500L), null))))
                         .isInstanceOfSatisfying(ServiceException.class, failure ->
                                 assertThat(failure.getSubCode()).isEqualTo(WorkflowMultiInstanceService.REVISION_CONFLICT_SUB_CODE));
                 assertThat(mi.getState(reopened.getId()).members()).hasSize(3);
@@ -261,6 +279,84 @@ class WorkflowRuntimeFactReuseIntegrationTest
                         reopened.getId(), identities.resolveCurrentIdentity()));
                 assertThat(revised.multiInstanceState().revision()).isGreaterThan(before.revision());
                 assertThat(revised.multiInstanceState().members()).hasSize(3);
+
+                var completionState = mi.getState(reopened.getId());
+                var variablesBefore = runtime.getVariables(instance.getId());
+                var roundsBefore = rounds.findByProcessInstanceId(instance.getId());
+                clearInvocations(attachments, copies);
+                assertThatThrownBy(() -> nested.executeWithoutResult(inner -> completions.completeTask(new WorkflowTaskCompleteRequest(reopened.getId(),
+                        "stale complete", Map.of("title", "stale"), List.of(), List.of(), (long) before.revision()))))
+                        .isInstanceOfSatisfying(ServiceException.class, failure ->
+                                assertThat(failure.getSubCode()).isEqualTo(WorkflowMultiInstanceService.REVISION_CONFLICT_SUB_CODE));
+                assertThat(runtime.getVariables(instance.getId())).isEqualTo(variablesBefore);
+                assertThat(rounds.findByProcessInstanceId(instance.getId())).isEqualTo(roundsBefore);
+                assertThat(tasks.getTaskComments(reopened.getId())).isEmpty();
+                assertThat(tasks.getVariableLocal(reopened.getId(), WorkflowMultiInstanceVariables.COMPLETION_REVISION_VARIABLE)).isNull();
+                verify(attachments, never()).bindTaskAttachments(any(), any(), any(), any(), any());
+                verify(copies, never()).persist(any());
+
+                // 完成、监听器、写后对账都已发生才注入失败；共享事务保存点必须撤销引擎和正式轮次写入。
+                var completeRequest = new WorkflowTaskCompleteRequest(reopened.getId(), "complete", Map.of("title", "approved"),
+                        List.of(), List.of(), (long) completionState.revision());
+                doAnswer(invocation -> {
+                    assertThat(history.createHistoricTaskInstanceQuery().taskId(reopened.getId()).finished().count()).isOne();
+                    assertThat(rounds.findByProcessInstanceId(instance.getId()).get(1).revision())
+                            .isEqualTo(completionState.revision() + 1);
+                    throw new ServiceException("completion persistence failure", 500);
+                }).when(copies).persist(any());
+                assertThatThrownBy(() -> nested.executeWithoutResult(inner -> completions.completeTask(completeRequest)))
+                        .isInstanceOf(ServiceException.class).hasMessage("completion persistence failure");
+                doNothing().when(copies).persist(any());
+                // 保存点不会关闭外层 MyBatis 会话；清除查询缓存后验证实际回滚，并模拟下次请求的新会话。
+                roundSession.clearCache();
+                assertThat(runtime.getVariables(instance.getId())).isEqualTo(variablesBefore);
+                assertThat(rounds.findByProcessInstanceId(instance.getId())).isEqualTo(roundsBefore);
+                assertThat(tasks.createTaskQuery().processInstanceId(instance.getId()).count()).isEqualTo(3);
+                assertThat(history.createHistoricTaskInstanceQuery().taskId(reopened.getId()).finished().count()).isZero();
+                assertThat(tasks.getTaskComments(reopened.getId())).isEmpty();
+                assertThat(tasks.getVariablesLocal(reopened.getId())).doesNotContainKeys(
+                        WorkflowMultiInstanceVariables.COMPLETION_REVISION_VARIABLE,
+                        WorkflowFormSubmissionSnapshotCodec.VARIABLE_NAME);
+
+                // 仅统计 complete 命令之前的准备读取；监听器及写后读取不得算作可删除冗余。
+                clearInvocations(repository, runtime, snapshotReader, artifacts);
+                doAnswer(invocation -> {
+                    verify(repository, times(1)).getProcessDefinition(instance.getProcessDefinitionId());
+                    verify(repository, times(1)).getBpmnModel(instance.getProcessDefinitionId());
+                    verify(runtime, times(1)).createProcessInstanceQuery();
+                    verify(artifacts, times(1)).openRead(deployment.getId());
+                    verify(repository, times(1)).createDeploymentQuery();
+                    verify(repository, times(1)).getResourceAsStream(anyString(), eq("approvaplat/manifest-v1.json"));
+                    verify(repository, times(1)).getResourceAsStream(anyString(), eq("approvaplat/forms-v1.json"));
+                    verify(repository, times(1)).getResourceAsStream(anyString(), eq("approvaplat/controlled-loops-v1.json"));
+                    verify(snapshotReader, times(1)).readTask(any(Task.class), any(ProcessInstance.class),
+                            any(WorkflowTaskBpmnSnapshot.class), isNull());
+                    return null;
+                }).when(attachments).bindTaskAttachments(any(), any(), any(), any(), any());
+                completions.completeTask(completeRequest);
+                doNothing().when(attachments).bindTaskAttachments(any(), any(), any(), any(), any());
+                assertThat(history.createHistoricTaskInstanceQuery().taskId(reopened.getId()).finished().singleResult().getCompletedBy())
+                        .isEqualTo("200");
+                assertThat(tasks.getTaskComments(reopened.getId(), "COMPLETE")).hasSize(1);
+                if (mode.equals("ALL"))
+                {
+                    verify(snapshotReader, times(1)).readTask(any(Task.class)); // 写后重新装载当前事实。
+                    assertThat(tasks.createTaskQuery().processInstanceId(instance.getId()).count()).isEqualTo(2);
+                    assertThat(rounds.findByProcessInstanceId(instance.getId()).get(1).status().name()).isEqualTo("ACTIVE");
+                    for (String member : List.of("300", "400"))
+                    {
+                        currentUser.set(member);
+                        Task remaining = tasks.createTaskQuery().processInstanceId(instance.getId()).taskAssignee(member).singleResult();
+                        var live = mi.getState(remaining.getId());
+                        completions.completeTask(new WorkflowTaskCompleteRequest(remaining.getId(), "complete remaining",
+                                Map.of("title", "approved"), List.of(), List.of(), (long) live.revision()));
+                    }
+                }
+                assertThat(runtime.createProcessInstanceQuery().processInstanceId(instance.getId()).count()).isZero();
+                assertThat(tasks.createTaskQuery().processInstanceId(instance.getId()).count()).isZero();
+                assertThat(history.createHistoricProcessInstanceQuery().processInstanceId(instance.getId()).finished().count()).isOne();
+                assertThat(rounds.findByProcessInstanceId(instance.getId()).get(1).status().name()).isEqualTo("COMPLETED");
+                currentUser.set("200");
                 if (database.equals("mysql")) verifyUrgeTree(infra, operations, repository, runtime, tasks, identities, key);
             });
             assertThat(repository.createDeploymentQuery().deploymentName(key).count()).isZero();
@@ -369,8 +465,9 @@ class WorkflowRuntimeFactReuseIntegrationTest
                 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="facts">
                   <process id="%s" isExecutable="true">
                     <startEvent id="start"/><sequenceFlow id="begin" sourceRef="start" targetRef="review"/>
-                    <userTask id="review" name="Review" flowable:assignee="${assignee}">
-                      <extensionElements><flowable:taskListener event="create" delegateExpression="${roundCreated}"/></extensionElements>
+                    <userTask id="review" name="Review" flowable:assignee="${assignee}" flowable:formKey="reviewForm">
+                      <extensionElements><flowable:taskListener event="create" delegateExpression="${roundCreated}"/>
+                        <flowable:taskListener event="complete" delegateExpression="${roundCompleted}"/></extensionElements>
                       <multiInstanceLoopCharacteristics isSequential="false" flowable:collection="${multiInstanceHandler.getUserIds(execution)}" flowable:elementVariable="assignee">
                         <completionCondition>%s</completionCondition>
                       </multiInstanceLoopCharacteristics>

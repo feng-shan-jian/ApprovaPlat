@@ -223,7 +223,7 @@ class WorkflowModelCompilationIntegrationTest
         verify(observed, times(1)).getResourceAsStream(artifactId, "approvaplat/controlled-loops-v1.json");
         verifyNoMoreInteractions(observed);
         clearInvocations(observed);
-        assertResourceFailure(() -> artifacts.selectControlledLoop("", "", "activity"), "流程标识不能为空", 400);
+        assertResourceFailure(() -> artifacts.openRead("").controlledLoop("", "activity"), "流程标识不能为空", 400);
         verifyNoInteractions(observed);
 
         String legacyParent = repository.createDeployment().addString("fixture.txt", "legacy").deploy().getId();

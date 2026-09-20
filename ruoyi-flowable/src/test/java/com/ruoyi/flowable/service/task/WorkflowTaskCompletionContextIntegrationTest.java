@@ -6,10 +6,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.Date;
@@ -198,14 +201,14 @@ class WorkflowTaskCompletionContextIntegrationTest
         WorkflowNextTaskAssignmentService nextTaskAssignmentService =
                 new WorkflowNextTaskAssignmentService(userSelectionValidator,
                         taskService, runtimeService, snapshotReader);
-        WorkflowMultiInstanceService multiInstanceService =
-                mock(WorkflowMultiInstanceService.class);
-        when(multiInstanceService.reserveCompletionRevision(any(Task.class),
-                any(org.flowable.bpmn.model.UserTask.class), nullable(Long.class)))
-                .thenReturn(WorkflowMultiInstanceService.CompletionRevision.none());
+        WorkflowMultiInstanceService multiInstanceService = new WorkflowMultiInstanceService(
+                engineOperations, identityResolver, userSelectionValidator,
+                mock(com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper.class),
+                runtimeService, taskService, historyService, snapshotReader,
+                mock(WorkflowMultiInstanceRoundLifecycleService.class));
         WorkflowControlledLoopService controlledLoopService =
                 new WorkflowControlledLoopService(runtimeService, taskService,
-                        artifactRepository, loopExecutionMapper);
+                        loopExecutionMapper);
 
         completionApplicationService = new WorkflowTaskCompletionApplicationService(engineOperations,
                         new WorkflowTaskRequestValidator(),
@@ -251,10 +254,13 @@ class WorkflowTaskCompletionContextIntegrationTest
     {
         ProcessInstance instance = runtimeService.startProcessInstanceByKey("completionLoop");
         Task firstRound = requireSingleTask(instance.getId(), "loopReview");
+        clearInvocations(repositoryService);
 
         completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(firstRound.getId(),
                 "再次整改", Map.of("loopDecision", "repeat"),
                 List.of(), List.of(), null));
+
+        verify(repositoryService, times(1)).getResourceAsStream(anyString(), eq("approvaplat/manifest-v1.json"));
 
         Task secondRound = requireSingleTask(instance.getId(), "loopReview");
         assertThat(secondRound.getId()).isNotEqualTo(firstRound.getId());
@@ -288,6 +294,23 @@ class WorkflowTaskCompletionContextIntegrationTest
                 WorkflowControlledLoopService.COMMENT_TYPE))
                 .extracting(Comment::getTaskId)
                 .containsExactlyInAnyOrder(firstRound.getId(), secondRound.getId());
+    }
+
+    @Test
+    void completesOrdinaryTaskWithoutReadingUnusedForms()
+    {
+        ProcessInstance instance = runtimeService.startProcessInstanceByKey("completionNext");
+        Task task = requireSingleTask(instance.getId(), "selectSource");
+        clearInvocations(repositoryService);
+
+        completionApplicationService.completeTask(new WorkflowTaskCompleteRequest(task.getId(),
+                "完成", Map.of(), List.of(), List.of(), null));
+
+        assertThat(requireSingleTask(instance.getId(), "selectedTarget").getAssignee()).isEqualTo("999");
+        assertThat(historyService.createHistoricTaskInstanceQuery().taskId(task.getId()).finished().singleResult().getCompletedBy())
+                .isEqualTo(CURRENT_USER_ID);
+        verify(repositoryService, never()).getResourceAsStream(anyString(), eq("approvaplat/forms-v1.json"));
+        verify(repositoryService, times(1)).getResourceAsStream(anyString(), eq("approvaplat/manifest-v1.json"));
     }
 
     /**

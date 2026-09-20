@@ -233,6 +233,15 @@ public class WorkflowDeploymentArtifactRepository
                     .filter(snapshot -> normalizedProcessKey.equals(snapshot.getProcessKey())).toList();
         }
 
+        /** 精确查询当前部署的唯一循环快照；普通节点返回 null，校验次序与独立读取一致。 */
+        public WfDeployControlledLoop controlledLoop(String processKey, String activityId)
+        {
+            String normalizedActivityId = requireText(activityId, "循环活动标识不能为空");
+            return uniqueOrNull(controlledLoops(processKey).stream()
+                    .filter(snapshot -> normalizedActivityId.equals(snapshot.getActivityId()))
+                    .toList(), "受控循环部署快照关系不唯一");
+        }
+
         private <T> List<T> readList(String resourceName, TypeReference<List<T>> type)
         {
             initialize();
@@ -318,23 +327,6 @@ public class WorkflowDeploymentArtifactRepository
         return readConditionRules(deploymentId,
                 snapshot -> normalizedProcessKey.equals(snapshot.getProcessKey())
                         && normalizedGatewayToken.equals(snapshot.getGatewayToken()));
-    }
-
-    /**
-     * 精确查询一个审批节点的受控循环快照。
-     *
-     * @param deploymentId String，父流程部署主键
-     * @param processKey String，BPMN 可执行流程标识
-     * @param activityId String，用户任务节点标识
-     * @return WfDeployControlledLoop，唯一快照；普通节点返回 null
-     */
-    public WfDeployControlledLoop selectControlledLoop(String deploymentId, String processKey,
-            String activityId)
-    {
-        String normalizedActivityId = requireText(activityId, "循环活动标识不能为空");
-        return uniqueOrNull(openRead(deploymentId).controlledLoops(processKey).stream()
-                .filter(snapshot -> normalizedActivityId.equals(snapshot.getActivityId()))
-                .toList(), "受控循环部署快照关系不唯一");
     }
 
     /**

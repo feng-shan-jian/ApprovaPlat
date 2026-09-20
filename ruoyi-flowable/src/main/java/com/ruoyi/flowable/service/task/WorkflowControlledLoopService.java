@@ -21,7 +21,7 @@ import com.ruoyi.flowable.domain.WfDeployControlledLoop;
 import com.ruoyi.flowable.domain.vo.WorkflowControlledLoopRoundView;
 import com.ruoyi.flowable.domain.vo.WorkflowControlledLoopStateView;
 import com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper;
-import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository.DeploymentRead;
 
 /**
  * 受控重复审批循环的完成判断、最大轮次、运行变量、审计落库和详情投影服务。
@@ -38,7 +38,6 @@ public class WorkflowControlledLoopService
 
     private final RuntimeService runtimeService;
     private final TaskService taskService;
-    private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WfControlledLoopExecutionMapper executionMapper;
 
     /**
@@ -46,12 +45,10 @@ public class WorkflowControlledLoopService
      * 构造后由 Spring 管理
      */
     public WorkflowControlledLoopService(RuntimeService runtimeService, TaskService taskService,
-            WorkflowDeploymentArtifactRepository artifactRepository,
             WfControlledLoopExecutionMapper executionMapper)
     {
         this.runtimeService = runtimeService;
         this.taskService = taskService;
-        this.artifactRepository = artifactRepository;
         this.executionMapper = executionMapper;
     }
 
@@ -61,20 +58,20 @@ public class WorkflowControlledLoopService
      * @param task Task，已完成活动、办理人、权限和委派状态校验的真实任务
      * @param processKey String，生命周期服务已从唯一流程定义上下文解析的流程 key
      * @param deploymentId String，任务定义所属 Flowable 部署主键
+     * @param deploymentRead DeploymentRead，本次完成请求共享的惰性部署制品读取
      * @param variables Map&lt;String,Object&gt;，已经过节点部署表单 schema 校验的业务变量
      * @param actorUserId String，当前真实完成人主键
      * @return void，普通任务不产生任何写入；循环任务失败时抛出稳定 400、409 或 500
      */
     public void prepareCompletion(Task task, String processKey, String deploymentId,
-            Map<String, Object> variables, String actorUserId)
+            DeploymentRead deploymentRead, Map<String, Object> variables, String actorUserId)
     {
         if (task == null || !StringUtils.hasText(processKey)
                 || !StringUtils.hasText(deploymentId))
         {
             throw dataError("循环任务流程定义关系异常");
         }
-        WfDeployControlledLoop config = artifactRepository.selectControlledLoop(
-                deploymentId, processKey, task.getTaskDefinitionKey());
+        WfDeployControlledLoop config = deploymentRead.controlledLoop(processKey, task.getTaskDefinitionKey());
         if (config == null)
         {
             return;

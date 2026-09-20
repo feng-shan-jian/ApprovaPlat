@@ -12,6 +12,7 @@ import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
+import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.DelegationState;
 import org.flowable.task.api.Task;
 import org.springframework.stereotype.Service;
@@ -107,7 +108,7 @@ public class WorkflowTaskCompletionApplicationService
             engineOperations.writeAsCurrentUser(actor ->
             {
                 Task task = runtimeReader.requireActiveTask(taskId);
-                runtimeReader.requireActiveProcessInstance(task.getProcessInstanceId());
+                ProcessInstance instance = runtimeReader.requireActiveProcessInstance(task.getProcessInstanceId());
                 runtimeReader.requireCurrentAssignee(task, actor);
                 if (task.getDelegationState() == DelegationState.PENDING)
                 {
@@ -138,12 +139,14 @@ public class WorkflowTaskCompletionApplicationService
                 {
                     // Flowable 根 revision 必须先占用，随后才执行审计、附件和 task complete。
                     WorkflowMultiInstanceService.CompletionRevision completionRevision =
-                            multiInstanceService.reserveCompletionRevision(task,
+                            multiInstanceService.reserveCompletionRevision(task, instance,
+                                    preparation.bpmnContext(),
                                     preparation.currentUserTask(),
                                     request.expectedRevision());
                     controlledLoopService.prepareCompletion(task,
                             preparation.bpmnContext().definition().getKey(),
                             preparation.bpmnContext().definition().getDeploymentId(),
+                            preparation.deploymentRead(),
                             projectedVariables, actor.userId());
                     auditWriter.writeCompletion(task, actor.userId(), opinion,
                             completionRevision);
@@ -243,17 +246,17 @@ public class WorkflowTaskCompletionApplicationService
         Map<String, Object> variables = requestedVariables == null
                 ? Map.of() : requestedVariables;
         String formKey = resolveFormKey(userTask);
+        var deploymentRead = artifactRepository.openRead(context.definition().getDeploymentId());
         if (formKey == null)
         {
             if (!variables.isEmpty())
             {
                 throw requestValidator.invalidArgument();
             }
-            return new CompletionPreparation(context, userTask, Map.of(), Map.of(),
+            return new CompletionPreparation(context, deploymentRead, userTask, Map.of(), Map.of(),
                     isTaskLocal(userTask), null, null);
         }
-        List<WfDeployForm> snapshots = artifactRepository.openRead(
-                context.definition().getDeploymentId()).forms();
+        List<WfDeployForm> snapshots = deploymentRead.forms();
         if (snapshots == null)
         {
             throw dataError();
@@ -271,7 +274,7 @@ public class WorkflowTaskCompletionApplicationService
         }
         var root = variableValidator.parseTrustedSnapshot(matched.get(0).getContent());
         WorkflowValidatedStartVariables validated = variableValidator.validateForStart(root, variables);
-        return new CompletionPreparation(context, userTask, validated.variables(),
+        return new CompletionPreparation(context, deploymentRead, userTask, validated.variables(),
                 validated.attachmentIdsByField(), isTaskLocal(userTask), matched.get(0), root);
     }
 
@@ -336,6 +339,7 @@ public class WorkflowTaskCompletionApplicationService
 
     /** 完成写链一次装载并冻结的部署、表单和变量事实。 */
     private record CompletionPreparation(WorkflowTaskBpmnSnapshot bpmnContext,
+            WorkflowDeploymentArtifactRepository.DeploymentRead deploymentRead,
             UserTask currentUserTask, Map<String, Object> values,
             Map<String, List<String>> attachmentIdsByField,
             boolean localScope, WfDeployForm formSnapshot, tools.jackson.databind.JsonNode formRoot)
