@@ -7,7 +7,7 @@
 
 **中文** | [English](README_EN.md)
 
-[快速开始](#快速开始) · [当前能力](#现在能做什么) · [生产验收边界](#生产验收边界) · [项目文档](docs/README.md)
+[快速开始](#快速开始) · [当前能力](#现在能做什么) · [生产验收边界](#生产验收边界)
 
 [![Flowable 8.0.0](https://img.shields.io/badge/Flowable-8.0.0-2f855a?style=flat-square)](https://github.com/flowable/flowable-engine) [![Spring Boot 4.0.6](https://img.shields.io/badge/Spring%20Boot-4.0.6-6db33f?style=flat-square)](https://spring.io/projects/spring-boot) [![Vue 3.5.26](https://img.shields.io/badge/Vue-3.5.26-42b883?style=flat-square)](https://vuejs.org/) [![Project status](https://img.shields.io/badge/Status-Early%20Stage-f59e0b?style=flat-square)](#项目现在是什么状态) [![MIT License](https://img.shields.io/badge/License-MIT-1f2937?style=flat-square)](LICENSE)
 
@@ -90,8 +90,6 @@ ApprovaPlat 当前处于早期阶段。下面列出仓库里已经实现的能�
 - 正式网关入口覆盖排他、并行、包容和事件网关；业务重复审批使用受控整改循环，标准循环保留 XML 往返能力。
 - 异步执行器在数据库、拓扑、容量、监控和唯一执行协调全部验收通过后启用，用于定时器、SLA 和后台任务。
 - 多节点、共享附件存储、真实外部副作用、备份恢复与长时间稳定性在目标环境完成验收后进入生产发布。
-
-精确业务边界见[审批业务行为契约](docs/contracts/workflow-behavior.md)和[多池协作运行契约](docs/contracts/workflow-collaboration.md)。
 
 ## 快速开始
 
@@ -202,17 +200,8 @@ ApprovaPlat/
 |- ruoyi-*/      Spring Boot 后端模块与 Flowable 领域模块
 |- ruoyi-ui/     Vue 3 前端、工作流设计器与契约测试
 |- sql/          数据库基线、业务结构与菜单权限
-`- docs/         架构、业务契约与数据库文档
+`- docs/         README 截图资源
 ```
-
-## 文档
-
-| 想了解什么                 | 从这里开始                                                                                           |
-| -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| 系统边界和数据流           | [审批平台架构](docs/architecture/workflow-platform.md)                                               |
-| 每个审批动作的约束         | [审批业务行为契约](docs/contracts/workflow-behavior.md)                                              |
-| Participant 与 MessageFlow | [多池协作运行契约](docs/contracts/workflow-collaboration.md)                                         |
-| 数据库约束与附件上传升级   | [工作流数据库基线](docs/database/workflow-baseline.md)                                               |
 
 ## 参与项目
 

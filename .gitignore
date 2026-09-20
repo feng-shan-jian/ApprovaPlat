@@ -1,4 +1,6 @@
 .DS_Store
+Thumbs.db
+Desktop.ini
 node_modules/
 dist/
 npm-debug.log*
@@ -6,18 +8,30 @@ yarn-debug.log*
 yarn-error.log*
 **/*.log
 /output/
+/ruoyi-ui/output/
 /mysql-root.txt
 /mysql-password.txt
 /mysql-app.txt
 # Local runtime logs and generated evidence
-/logs/
+logs/
+/.task/
 /.playwright-cli/
 /.playwright-mcp/
 /docs/testing/evidence/
-tests/**/coverage/
+coverage/
 ruoyi-ui/test-results/
 ruoyi-ui/playwright-report/
-selenium-debug.log
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+
+# Temporary edits and patch leftovers
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*~
 
 # Editor directories and files
 .idea

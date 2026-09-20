@@ -8,7 +8,7 @@ An open-source approval platform built on RuoYi, Flowable 8, Spring Boot 4, and 
 
 [中文](README.md) | **English**
 
-[Quick start](#quick-start) · [Current capabilities](#what-works-today) · [Production acceptance boundary](#production-acceptance-boundary) · [Documentation (Chinese)](docs/README.md)
+[Quick start](#quick-start) · [Current capabilities](#what-works-today) · [Production acceptance boundary](#production-acceptance-boundary)
 
 [![Flowable 8.0.0](https://img.shields.io/badge/Flowable-8.0.0-2f855a?style=flat-square)](https://github.com/flowable/flowable-engine) [![Spring Boot 4.0.6](https://img.shields.io/badge/Spring%20Boot-4.0.6-6db33f?style=flat-square)](https://spring.io/projects/spring-boot) [![Vue 3.5.26](https://img.shields.io/badge/Vue-3.5.26-42b883?style=flat-square)](https://vuejs.org/) [![Project status](https://img.shields.io/badge/Status-Early%20Stage-f59e0b?style=flat-square)](#where-the-project-stands) [![MIT License](https://img.shields.io/badge/License-MIT-1f2937?style=flat-square)](LICENSE)
 
@@ -91,8 +91,6 @@ The view below shows a dynamic multi-instance approval completed in a real front
 - Formal gateway entry points cover exclusive, parallel, inclusive, and event gateways. Controlled loops execute business repetition, while standard loops retain XML round-trip support.
 - Async executors are enabled after database, topology, capacity, monitoring, and single-executor coordination acceptance, then run timers, SLAs, and background work.
 - Multi-node operation, shared attachment storage, real external side effects, backup recovery, and long-duration stability enter production after acceptance in the target environment.
-
-See the [approval behavior contract](docs/contracts/workflow-behavior.md) and [multi-pool collaboration contract](docs/contracts/workflow-collaboration.md) for precise boundaries.
 
 ## Quick start
 
@@ -203,17 +201,8 @@ ApprovaPlat/
 |- ruoyi-*/      Spring Boot backend modules and Flowable domain module
 |- ruoyi-ui/     Vue 3 frontend, workflow designer, and contract tests
 |- sql/          Database baseline, business schema, and menu permissions
-`- docs/         Architecture, behavior, and database docs
+`- docs/         README image assets
 ```
-
-## Documentation
-
-| Topic                                          | Start here                                                                                            |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| System boundaries and data flow                | [Platform architecture](docs/architecture/workflow-platform.md)                                       |
-| Constraints for every approval action          | [Approval behavior contract](docs/contracts/workflow-behavior.md)                                     |
-| Participant and MessageFlow                    | [Multi-pool collaboration contract](docs/contracts/workflow-collaboration.md)                         |
-| Database constraints and attachment upload upgrades | [Workflow database baseline](docs/database/workflow-baseline.md)                                 |
 
 ## Contributing
 
