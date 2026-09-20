@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -721,24 +720,12 @@ public class WorkflowDeploymentArtifactRepository
                 }
                 return new byte[0];
             }
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int total = 0;
-            int read;
-            while ((read = stream.read(buffer)) != -1)
+            byte[] bytes = stream.readNBytes(MAX_RESOURCE_BYTES + 1);
+            if (bytes.length > MAX_RESOURCE_BYTES)
             {
-                if (read == 0)
-                {
-                    continue;
-                }
-                total += read;
-                if (total > MAX_RESOURCE_BYTES)
-                {
-                    throw new ServiceException("流程部署业务资源大小超过限制", HttpStatus.ERROR);
-                }
-                output.write(buffer, 0, read);
+                throw new ServiceException("流程部署业务资源大小超过限制", HttpStatus.ERROR);
             }
-            return output.toByteArray();
+            return bytes;
         }
         catch (IOException exception)
         {

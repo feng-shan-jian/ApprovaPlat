@@ -15,8 +15,6 @@
 </template>
 
 <script setup>
-import { scrollTo } from '@/utils/scroll-to'
-
 const props = defineProps({
   total: {
     required: true,
@@ -82,15 +80,19 @@ function handleSizeChange(val) {
     currentPage.value = 1
   }
   emit('pagination', { page: currentPage.value, limit: val })
-  if (props.autoScroll) {
-    scrollTo(0, 800)
-  }
+  scrollToTop()
 }
 
 function handleCurrentChange(val) {
   emit('pagination', { page: val, limit: pageSize.value })
+  scrollToTop()
+}
+
+async function scrollToTop() {
   if (props.autoScroll) {
-    scrollTo(0, 800)
+    await nextTick()
+    const container = document.querySelector('.fixed-header + .app-main') || window
+    container.scrollTo({ top: 0, behavior: 'smooth' })
   }
 }
 </script>

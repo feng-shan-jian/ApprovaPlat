@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -409,20 +408,12 @@ public class WorkflowDmnDecisionService
         {
             throw new ServiceException("DMN 决策资源不存在", HttpStatus.CONFLICT);
         }
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int total = 0;
-        int read;
-        while ((read = stream.read(buffer)) != -1)
+        byte[] bytes = stream.readNBytes(MAX_DMN_BYTES + 1);
+        if (bytes.length > MAX_DMN_BYTES)
         {
-            total += read;
-            if (total > MAX_DMN_BYTES)
-            {
-                throw new ServiceException("DMN XML 超过大小限制", HttpStatus.BAD_REQUEST);
-            }
-            output.write(buffer, 0, read);
+            throw new ServiceException("DMN XML 超过大小限制", HttpStatus.BAD_REQUEST);
         }
-        return output.toByteArray();
+        return bytes;
     }
 
     /**

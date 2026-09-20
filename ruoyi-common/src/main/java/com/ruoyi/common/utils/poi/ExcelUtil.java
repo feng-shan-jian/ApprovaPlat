@@ -1162,7 +1162,19 @@ public class ExcelUtil<T>
                 for (String imagePath : imagePaths)
                 {
                     byte[] data = ImageUtils.getImage(imagePath);
-                    getDrawingPatriarch(cell.getSheet()).createPicture(anchor, cell.getSheet().getWorkbook().addPicture(data, getImageType(data)));
+                    String type = FileTypeUtils.getFileExtendName(data);
+                    int pictureType = switch (type)
+                    {
+                        case "JPG" -> Workbook.PICTURE_TYPE_JPEG;
+                        case "PNG" -> Workbook.PICTURE_TYPE_PNG;
+                        case "GIF" -> XSSFWorkbook.PICTURE_TYPE_GIF;
+                        case "BMP" -> XSSFWorkbook.PICTURE_TYPE_BMP;
+                        case "TIFF" -> XSSFWorkbook.PICTURE_TYPE_TIFF;
+                        case "WMF" -> Workbook.PICTURE_TYPE_WMF;
+                        case "EMF" -> Workbook.PICTURE_TYPE_EMF;
+                        default -> throw new IllegalArgumentException("不支持的 Excel 图片类型: " + type);
+                    };
+                    getDrawingPatriarch(cell.getSheet()).createPicture(anchor, cell.getSheet().getWorkbook().addPicture(data, pictureType));
                 }
             }
         }
@@ -1178,23 +1190,6 @@ public class ExcelUtil<T>
             sheet.createDrawingPatriarch();
         }
         return sheet.getDrawingPatriarch();
-    }
-
-    /**
-     * 获取图片类型,设置图片插入类型
-     */
-    public int getImageType(byte[] value)
-    {
-        String type = FileTypeUtils.getFileExtendName(value);
-        if ("JPG".equalsIgnoreCase(type))
-        {
-            return Workbook.PICTURE_TYPE_JPEG;
-        }
-        else if ("PNG".equalsIgnoreCase(type))
-        {
-            return Workbook.PICTURE_TYPE_PNG;
-        }
-        return Workbook.PICTURE_TYPE_JPEG;
     }
 
     /**

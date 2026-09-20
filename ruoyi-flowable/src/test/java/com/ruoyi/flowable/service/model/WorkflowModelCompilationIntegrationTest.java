@@ -157,6 +157,8 @@ class WorkflowModelCompilationIntegrationTest
                     verify(participantRules, times(1)).prepare(any(), any(), any(), eq("100"));
                     verify(sla, times(1)).prepare(any(), eq("100"));
                     verify(listeners, times(1)).compile(any());
+                    assertThat(artifacts.selectParticipantRules(deployment)).extracting(WfDeployParticipantRule::getChecksum)
+                            .contains("e2e6244c69c1748ebbc98e010b838efbbe624a5733ed866a5d9e8abb583a012a");
                     var frozen = artifacts.selectForms(deployment).stream().collect(java.util.stream.Collectors.toMap(WfDeployForm::getNodeKey, WfDeployForm::getContent));
                     assertThat(variables.validateForStart(frozen.get("start"), Map.of("amount", BigDecimal.TEN)).variables()).containsKey("amount");
                     assertThatThrownBy(() -> variables.validateForStart(frozen.get("review"), Map.of("amount", BigDecimal.TEN)))
@@ -190,7 +192,92 @@ class WorkflowModelCompilationIntegrationTest
                     verify(templates, times(2)).validate(anyString());
                     var fallback = operations.writeAsCurrentUser(actor -> runtime.startProcessInstanceByKey("compiledParent", Map.of("amount", BigDecimal.ZERO, "initiator", actor.userId())));
                     assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(fallback.getId()).finished().count()).isOne();
+                    assertResourceReadBoundaries(operations, repository, dmn.getDmnRepositoryService(),
+                            deployment, definition.getId(), decisionId, compiled);
                 });
+    }
+
+    /** 在真实部署、DMN 来源和制品定位之后注入资源流故障，覆盖公开读取/编译入口的契约。 */
+    private static void assertResourceReadBoundaries(WorkflowEngineOperations operations,
+            org.flowable.engine.RepositoryService repository,
+            org.flowable.dmn.api.DmnRepositoryService dmnRepository,
+            String deploymentId, String definitionId, String decisionId, String compiled)
+    {
+        var resources = spy(repository);
+        var decisions = spy(dmnRepository);
+        var artifacts = new WorkflowDeploymentArtifactRepository(resources);
+        var deployments = new WorkflowDeploymentService(operations, resources, null, null,
+                artifacts, null, null, null, null);
+        var dmn = new WorkflowDmnDecisionService(operations, decisions, artifacts);
+        assertThat(deployments.getBpmnXml(definitionId)).isEqualTo(compiled);
+        java.util.function.Supplier<WorkflowDmnDecisionService.DecisionSource> compile = () -> {
+            var model = new org.flowable.bpmn.model.BpmnModel();
+            var process = new org.flowable.bpmn.model.Process(); process.setId("readBoundary");
+            var task = new org.flowable.bpmn.model.BusinessRuleTask();
+            task.setId("decision"); task.setRuleNames(List.of(decisionId));
+            process.addFlowElement(task); model.addProcess(process);
+            return dmn.prepare(model).get(0);
+        };
+        int xmlLimit = 2 * 1024 * 1024;
+        for (int size : new int[] {0, xmlLimit, xmlLimit + 1})
+        {
+            byte[] bytes = new byte[size]; java.util.Arrays.fill(bytes, (byte) ' ');
+            var bpmnStream = spy(new java.io.ByteArrayInputStream(bytes));
+            var dmnStream = spy(new java.io.ByteArrayInputStream(bytes));
+            doReturn(bpmnStream).when(resources).getProcessModel(definitionId);
+            doReturn(dmnStream).when(decisions).getDmnResource(decisionId);
+            if (size <= xmlLimit)
+            {
+                assertThat(deployments.getBpmnXml(definitionId)).isEqualTo(new String(bytes, StandardCharsets.UTF_8));
+                assertThat(compile.get().resourceBytes()).containsExactly(bytes);
+            }
+            else
+            {
+                assertResourceFailure(() -> deployments.getBpmnXml(definitionId), "BPMN XML 超过大小限制", 400);
+                assertResourceFailure(compile::get, "DMN XML 超过大小限制", 400);
+            }
+            try { verify(bpmnStream).close(); verify(dmnStream).close(); }
+            catch (java.io.IOException exception) { throw new AssertionError(exception); }
+        }
+        doReturn(null).when(resources).getProcessModel(definitionId);
+        doReturn(null).when(decisions).getDmnResource(decisionId);
+        assertResourceFailure(() -> deployments.getBpmnXml(definitionId), "流程定义 BPMN 不存在", 404);
+        assertResourceFailure(compile::get, "DMN 决策资源不存在", 409);
+        doReturn(failingResourceStream()).when(resources).getProcessModel(definitionId);
+        doReturn(failingResourceStream()).when(decisions).getDmnResource(decisionId);
+        assertResourceFailure(() -> deployments.getBpmnXml(definitionId), "流程定义 BPMN 读取失败", 500);
+        assertResourceFailure(compile::get, "DMN 业务规则任务编译失败", 400);
+
+        String artifactId = repository.createDeploymentQuery().parentDeploymentId(deploymentId)
+                .deploymentCategory("APPROVAPLAT_WORKFLOW_ARTIFACTS").singleResult().getId();
+        int artifactLimit = 32 * 1024 * 1024;
+        for (int size : new int[] {0, artifactLimit, artifactLimit + 1})
+        {
+            byte[] bytes = new byte[size]; java.util.Arrays.fill(bytes, (byte) ' ');
+            if (size > 0) { bytes[0] = '['; bytes[1] = ']'; }
+            doReturn(new java.io.ByteArrayInputStream(bytes)).when(resources)
+                    .getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
+            if (size == artifactLimit) assertThat(artifacts.selectForms(deploymentId)).isEmpty();
+            else assertResourceFailure(() -> artifacts.selectForms(deploymentId), size == 0
+                    ? "流程部署业务资源无法解析" : "流程部署业务资源大小超过限制", 500);
+        }
+        doReturn(null).when(resources).getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
+        assertResourceFailure(() -> artifacts.selectForms(deploymentId), "流程部署业务资源缺失", 500);
+        doReturn(failingResourceStream()).when(resources).getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
+        assertResourceFailure(() -> artifacts.selectForms(deploymentId), "流程部署业务资源读取失败", 500);
+    }
+
+    private static java.io.InputStream failingResourceStream()
+    {
+        return new java.io.InputStream() {
+            @Override public int read() throws java.io.IOException { throw new java.io.IOException("resource fault"); }
+        };
+    }
+
+    private static void assertResourceFailure(Runnable action, String message, int code)
+    {
+        assertThatThrownBy(action::run).isInstanceOfSatisfying(com.ruoyi.common.exception.ServiceException.class,
+                failure -> { assertThat(failure.getMessage()).isEqualTo(message); assertThat(failure.getCode()).isEqualTo(code); });
     }
 
     private static String save(WorkflowModelService service, org.flowable.engine.RepositoryService repository, String key, String xml)

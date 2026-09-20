@@ -1,7 +1,11 @@
 package com.ruoyi.common.utils.file;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
+import javax.imageio.ImageIO;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.poi.poifs.filesystem.FileMagic;
 
 /**
  * 文件类型工具类
@@ -50,27 +54,44 @@ public class FileTypeUtils
      * 
      * @param photoByte 文件字节码
      * @return 后缀（不含".")
+     * @throws IllegalArgumentException 数据为空、图片不完整或无法识别
      */
     public static String getFileExtendName(byte[] photoByte)
     {
-        String strFileExtendName = "JPG";
-        if ((photoByte[0] == 71) && (photoByte[1] == 73) && (photoByte[2] == 70) && (photoByte[3] == 56)
-                && ((photoByte[4] == 55) || (photoByte[4] == 57)) && (photoByte[5] == 97))
+        if (photoByte == null || photoByte.length == 0)
         {
-            strFileExtendName = "GIF";
+            throw new IllegalArgumentException("图片数据为空或不完整");
         }
-        else if ((photoByte[6] == 74) && (photoByte[7] == 70) && (photoByte[8] == 73) && (photoByte[9] == 70))
+        FileMagic type = FileMagic.valueOf(photoByte);
+        String extension = switch (type)
         {
-            strFileExtendName = "JPG";
-        }
-        else if ((photoByte[0] == 66) && (photoByte[1] == 77))
+            case JPEG -> "JPG";
+            case PNG, GIF, BMP, TIFF, WMF, EMF -> type.name();
+            default -> throw new IllegalArgumentException("无法识别图片类型");
+        };
+        // ImageIO 解码栅格图片一次，避免把只有魔数的截断数据写入导入文件或 Excel。
+        if (type == FileMagic.EMF || type == FileMagic.WMF)
         {
-            strFileExtendName = "BMP";
+            // 矢量格式由 POI 原样嵌入；仅要求完整的 EMF/可放置 WMF 文件头。
+            if (photoByte.length < (type == FileMagic.EMF ? 88 : 40))
+            {
+                throw new IllegalArgumentException("图片数据不完整");
+            }
         }
-        else if ((photoByte[1] == 80) && (photoByte[2] == 78) && (photoByte[3] == 71))
+        else
         {
-            strFileExtendName = "PNG";
+            try (ByteArrayInputStream input = new ByteArrayInputStream(photoByte))
+            {
+                if (ImageIO.read(input) == null)
+                {
+                    throw new IllegalArgumentException("无法读取图片数据");
+                }
+            }
+            catch (IOException exception)
+            {
+                throw new IllegalArgumentException("图片数据不完整或损坏", exception);
+            }
         }
-        return strFileExtendName;
+        return extension;
     }
 }

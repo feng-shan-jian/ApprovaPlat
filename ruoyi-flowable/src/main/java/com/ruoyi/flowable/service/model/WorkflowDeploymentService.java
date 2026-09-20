@@ -1,6 +1,5 @@
 package com.ruoyi.flowable.service.model;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -472,20 +471,12 @@ public class WorkflowDeploymentService
      */
     private byte[] readBounded(InputStream stream) throws IOException
     {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int total = 0;
-        int read;
-        while ((read = stream.read(buffer)) != -1)
+        byte[] bytes = stream.readNBytes(MAX_BPMN_BYTES + 1);
+        if (bytes.length > MAX_BPMN_BYTES)
         {
-            total += read;
-            if (total > MAX_BPMN_BYTES)
-            {
-                throw new ServiceException("BPMN XML 超过大小限制", HttpStatus.BAD_REQUEST);
-            }
-            output.write(buffer, 0, read);
+            throw new ServiceException("BPMN XML 超过大小限制", HttpStatus.BAD_REQUEST);
         }
-        return output.toByteArray();
+        return bytes;
     }
 
     /**

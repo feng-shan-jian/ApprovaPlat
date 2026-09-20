@@ -208,26 +208,7 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
      */
     public static String substring(final String str, int start)
     {
-        if (str == null)
-        {
-            return NULLSTR;
-        }
-
-        if (start < 0)
-        {
-            start = str.length() + start;
-        }
-
-        if (start < 0)
-        {
-            start = 0;
-        }
-        if (start > str.length())
-        {
-            return NULLSTR;
-        }
-
-        return str.substring(start);
+        return org.apache.commons.lang3.StringUtils.substring(defaultString(str), start);
     }
 
     /**
@@ -240,40 +221,7 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
      */
     public static String substring(final String str, int start, int end)
     {
-        if (str == null)
-        {
-            return NULLSTR;
-        }
-
-        if (end < 0)
-        {
-            end = str.length() + end;
-        }
-        if (start < 0)
-        {
-            start = str.length() + start;
-        }
-
-        if (end > str.length())
-        {
-            end = str.length();
-        }
-
-        if (start > end)
-        {
-            return NULLSTR;
-        }
-
-        if (start < 0)
-        {
-            start = 0;
-        }
-        if (end < 0)
-        {
-            end = 0;
-        }
-
-        return str.substring(start, end);
+        return org.apache.commons.lang3.StringUtils.substring(defaultString(str), start, end);
     }
 
     /**
@@ -284,20 +232,7 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
      */
     public static boolean hasText(String str)
     {
-        return (str != null && !str.isEmpty() && containsText(str));
-    }
-
-    private static boolean containsText(CharSequence str)
-    {
-        int strLen = str.length();
-        for (int i = 0; i < strLen; i++)
-        {
-            if (!Character.isWhitespace(str.charAt(i)))
-            {
-                return true;
-            }
-        }
-        return false;
+        return org.springframework.util.StringUtils.hasText(str);
     }
 
     /**
@@ -751,30 +686,10 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils
      */
     public static final String padl(final String s, final int size, final char c)
     {
-        final StringBuilder sb = new StringBuilder(size);
-        if (s != null)
+        if (size < 0)
         {
-            final int len = s.length();
-            if (s.length() <= size)
-            {
-                for (int i = size - len; i > 0; i--)
-                {
-                    sb.append(c);
-                }
-                sb.append(s);
-            }
-            else
-            {
-                return s.substring(len - size, len);
-            }
+            throw new NegativeArraySizeException(Integer.toString(size));
         }
-        else
-        {
-            for (int i = size; i > 0; i--)
-            {
-                sb.append(c);
-            }
-        }
-        return sb.toString();
+        return leftPad(right(defaultString(s), size), size, c);
     }
 }

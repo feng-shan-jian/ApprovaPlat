@@ -54,16 +54,7 @@ public class FileUtils
                 throw new FileNotFoundException(filePath);
             }
             fis = new FileInputStream(file);
-            byte[] b = new byte[1024];
-            int length;
-            while ((length = fis.read(b)) > 0)
-            {
-                os.write(b, 0, length);
-            }
-        }
-        catch (IOException e)
-        {
-            throw e;
+            fis.transferTo(os);
         }
         finally
         {

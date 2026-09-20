@@ -2,6 +2,7 @@ package com.ruoyi.flowable.service.model;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
 import java.util.List;
@@ -239,13 +240,7 @@ public final class WorkflowControlledLoopBpmnContract
         {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest((processKey + "\u0000" + activityId).getBytes(StandardCharsets.UTF_8));
-            StringBuilder result = new StringBuilder(24);
-            for (int index = 0; index < 12; index++)
-            {
-                result.append(Character.forDigit((digest[index] >>> 4) & 0x0f, 16));
-                result.append(Character.forDigit(digest[index] & 0x0f, 16));
-            }
-            return result.toString();
+            return HexFormat.of().formatHex(digest, 0, 12);
         }
         catch (NoSuchAlgorithmException exception)
         {
