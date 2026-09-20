@@ -6,8 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 import tools.jackson.databind.JsonNode;
-import org.flowable.bpmn.model.StartEvent;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.history.HistoricActivityInstance;
 import org.flowable.engine.runtime.ProcessInstance;
@@ -128,16 +128,23 @@ public class WorkflowApplicationResubmitApplicationService
     }
 
     /** 同次详情事务复用已读取对象，正式写入入口仍自行获取当前任务和实例。 */
-    public boolean isApplicationResubmitAllowed(Task task, ProcessInstance instance,
-            WorkflowCurrentIdentity actor)
+    public boolean isApplicationResubmitAllowed(
+            WorkflowReturnedTaskStateService.ReturnedApplicant applicant,
+            WorkflowCurrentIdentity actor, WorkflowTaskBpmnSnapshot bpmn, List<Task> activeTasks,
+            List<WfDeployForm> forms, List<HistoricActivityInstance> activities)
     {
-        if (task == null || instance == null || task.isSuspended() || instance.isSuspended())
+        if (applicant == null || applicant.task().isSuspended() || applicant.instance().isSuspended())
         {
             return false;
         }
         return engineOperations.readWithServiceExceptionHandler(() ->
         {
-            requireResubmitPreparation(task, instance, actor);
+            Task task = applicant.task();
+            ProcessInstance instance = applicant.instance();
+            runtimeReader.requireCurrentAssignee(task, actor);
+            prepareResubmit(task, instance,
+                    groupTransitionService.prepareGroupReopen(task, instance, actor.userId(), bpmn, activeTasks),
+                    () -> requireStartFormSnapshot(runtimeReader.requireStartActivity(activities), forms));
             return true;
         }, exception ->
         {
@@ -161,21 +168,21 @@ public class WorkflowApplicationResubmitApplicationService
         Task task = runtimeReader.requireActiveTask(taskId);
         ProcessInstance instance = runtimeReader.requireActiveProcessInstance(
                 task.getProcessInstanceId());
-        return requireResubmitPreparation(task, instance, actor);
-    }
-
-    private ResubmitPreparation requireResubmitPreparation(Task task, ProcessInstance instance,
-            WorkflowCurrentIdentity actor)
-    {
-        String taskId = task.getId();
         runtimeReader.requireCurrentAssignee(task, actor);
         returnedTaskStateService.requireReturnedApplicant(task, instance, actor.userId());
-        MultiInstanceGroupReopenPlan groupPlan =
-                groupTransitionService.prepareGroupReopen(task, instance, actor.userId());
+        return prepareResubmit(task, instance,
+                groupTransitionService.prepareGroupReopen(task, instance, actor.userId()),
+                () -> requireStartFormSnapshot(runtimeReader.requireStartActivity(task.getProcessInstanceId()),
+                        artifactRepository.openRead(instance.getDeploymentId()).forms()));
+    }
+
+    private ResubmitPreparation prepareResubmit(Task task, ProcessInstance instance,
+            MultiInstanceGroupReopenPlan groupPlan, Supplier<WfDeployForm> form)
+    {
         // 普通退回和整组退回都会冻结迁移后首审批任务配置；重提前必须先验证该快照存在。
         ReturnedAssignmentSnapshot assignment =
-                returnedTaskStateService.requireOrdinaryAssignment(taskId);
-        WfDeployForm startForm = requireStartFormSnapshot(task, instance);
+                returnedTaskStateService.requireOrdinaryAssignment(task.getId());
+        WfDeployForm startForm = form.get();
         WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot previous =
                 requireStartSubmissionSnapshot(instance, startForm);
         return new ResubmitPreparation(task, instance, assignment, groupPlan,
@@ -295,21 +302,12 @@ public class WorkflowApplicationResubmitApplicationService
 
     /**
      * 查询实例真实执行的开始节点对应部署表单快照。
-     * @param task Task，退回修改任务
-     * @param instance ProcessInstance，真实活动实例
+     * @param start HistoricActivityInstance，真实开始活动
+     * @param snapshots List&lt;WfDeployForm&gt;，本次部署表单
      * @return WfDeployForm，原部署开始表单快照
      */
-    private WfDeployForm requireStartFormSnapshot(Task task, ProcessInstance instance)
+    private WfDeployForm requireStartFormSnapshot(HistoricActivityInstance start, List<WfDeployForm> snapshots)
     {
-        HistoricActivityInstance start = runtimeReader.requireStartActivity(
-                task.getProcessInstanceId());
-        if (!StartEvent.class.getSimpleName().equals(start.getActivityType())
-                && !"startEvent".equals(start.getActivityType()))
-        {
-            throw dataError();
-        }
-        List<WfDeployForm> snapshots = artifactRepository.openRead(
-                instance.getDeploymentId()).forms();
         if (snapshots == null)
         {
             throw dataError();

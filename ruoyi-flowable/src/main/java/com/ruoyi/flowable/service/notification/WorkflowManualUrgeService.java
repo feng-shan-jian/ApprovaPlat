@@ -1,8 +1,10 @@
 package com.ruoyi.flowable.service.notification;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -191,9 +193,10 @@ public class WorkflowManualUrgeService
 
         List<PreparedTask> preparedTasks = new ArrayList<>();
         LinkedHashSet<String> allRecipients = new LinkedHashSet<>();
+        Map<Long, Set<String>> assignedRecipients = new HashMap<>();
         for (RuntimeTaskSnapshot task : tasks)
         {
-            Set<String> recipients = resolveTaskRecipients(task, queryMode);
+            Set<String> recipients = resolveTaskRecipients(task, queryMode, assignedRecipients);
             if (!recipients.isEmpty())
             {
                 preparedTasks.add(new PreparedTask(task, recipients));
@@ -388,15 +391,15 @@ public class WorkflowManualUrgeService
      * @return Set&lt;String&gt;，有效办理人或具备认领权限的候选用户
      */
     private Set<String> resolveTaskRecipients(RuntimeTaskSnapshot task,
-            QueryMode queryMode)
+            QueryMode queryMode, Map<Long, Set<String>> assignedRecipients)
     {
         if (StringUtils.hasText(task.assignee()))
         {
-            List<String> assigned = jdbcTemplate.queryForList(
+            return assignedRecipients.computeIfAbsent(Long.valueOf(task.assignee()), userId ->
+                    Set.copyOf(jdbcTemplate.queryForList(
                     "select cast(user_id as char) from sys_user where user_id=? " +
                     "and status='0' and del_flag='0'" + queryMode.sharedLockClause(), String.class,
-                    Long.valueOf(task.assignee()));
-            return Set.copyOf(assigned);
+                    userId)));
         }
         List<String> candidates = jdbcTemplate.queryForList(
                 "select cast(u.user_id as char) from sys_user u where u.status='0' and u.del_flag='0' " +

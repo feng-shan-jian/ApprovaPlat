@@ -1,7 +1,9 @@
 package com.ruoyi.flowable.service.task;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.runtime.ProcessInstance;
@@ -111,7 +113,9 @@ public class WorkflowTaskReturnApplicationService
 
     /** 同次详情事务复用已读取对象，正式写入入口仍自行获取当前任务和实例。 */
     public boolean isTaskReturnAllowed(Task task, ProcessInstance instance,
-            WorkflowCurrentIdentity actor)
+            WorkflowCurrentIdentity actor, WorkflowTaskBpmnSnapshot bpmn,
+            WorkflowMultiInstanceService.MultiInstanceContext multiInstance,
+            Collection<HistoricTaskInstance> historicTasks, List<Task> activeTasks)
     {
         if (task == null || instance == null || task.isSuspended() || instance.isSuspended())
         {
@@ -119,7 +123,11 @@ public class WorkflowTaskReturnApplicationService
         }
         return engineOperations.readWithServiceExceptionHandler(() ->
         {
-            requireReturnPreparation(task, instance, actor);
+            requireReturnIdentity(task, instance, actor);
+            prepareReturn(task, instance,
+                    groupTransitionService.prepareGroupReturn(multiInstance, instance, actor.userId()),
+                    bpmn, () -> historicTasks,
+                    () -> runtimeReader.requireOnlyActiveExecution(task, activeTasks));
             return true;
         }, exception ->
         {
@@ -231,13 +239,18 @@ public class WorkflowTaskReturnApplicationService
         Task task = runtimeReader.requireActiveTask(taskId);
         ProcessInstance instance = runtimeReader.requireActiveProcessInstance(
                 task.getProcessInstanceId());
-        return requireReturnPreparation(task, instance, actor);
+        requireReturnIdentity(task, instance, actor);
+        MultiInstanceGroupReturnPlan groupPlan =
+                groupTransitionService.prepareGroupReturn(task, instance, actor.userId());
+        WorkflowTaskBpmnSnapshot context = bpmnReader.require(task.getProcessDefinitionId());
+        return prepareReturn(task, instance, groupPlan, context,
+                () -> runtimeReader.readHistoricTasksAscending(task.getProcessInstanceId(), 501),
+                () -> runtimeReader.requireOnlyActiveExecution(task));
     }
 
-    private ReturnPreparation requireReturnPreparation(Task task, ProcessInstance instance,
+    private void requireReturnIdentity(Task task, ProcessInstance instance,
             WorkflowCurrentIdentity actor)
     {
-        String taskId = task.getId();
         runtimeReader.requireCurrentAssignee(task, actor);
         runtimeReader.requireUnownedTask(task);
         returnedTaskStateService.requireRunning(instance);
@@ -245,43 +258,43 @@ public class WorkflowTaskReturnApplicationService
         {
             throw dataError();
         }
-        MultiInstanceGroupReturnPlan groupPlan =
-                groupTransitionService.prepareGroupReturn(task, instance, actor.userId());
-        WorkflowTaskBpmnSnapshot context = bpmnReader.require(
-                task.getProcessDefinitionId());
+    }
+
+    private ReturnPreparation prepareReturn(Task task, ProcessInstance instance,
+            MultiInstanceGroupReturnPlan groupPlan, WorkflowTaskBpmnSnapshot context,
+            Supplier<Collection<HistoricTaskInstance>> historicTasks, Supplier<String> executionId)
+    {
         UserTask currentNode = groupPlan == null
                 ? movementPolicy.requireMainProcessReturnSource(context.model(),
                         context.definition().getKey(), task.getTaskDefinitionKey())
                 : movementPolicy.requireMainProcessControlledReturnSource(context.model(),
                         context.definition().getKey(), task.getTaskDefinitionKey());
-        FirstApprovalTarget target = requireFirstApprovalNode(task, context,
+        FirstApprovalTarget target = requireFirstApprovalNode(historicTasks.get(), context,
                 currentNode, groupPlan != null);
         if (groupPlan != null)
         {
             MultiInstanceGroupReturnExecutionPlan executionPlan =
                     groupTransitionService.prepareGroupReturnExecution(
-                            groupPlan, target.nodeKey(), target.controlledPath());
+                            groupPlan, target.nodeKey(), target.controlledPath(), context);
             return new GroupReturnPreparation(task, instance.getStartUserId(),
                     target.nodeKey(), executionPlan);
         }
         return new OrdinaryReturnPreparation(task, instance.getStartUserId(),
-                target.nodeKey(), runtimeReader.requireOnlyActiveExecution(task));
+                target.nodeKey(), executionId.get());
     }
 
     /**
      * 从真实历史确定首个审批节点并验证当前返回路径安全。
-     * @param task Task，当前活动任务
+     * @param historicTasks Collection&lt;HistoricTaskInstance&gt;，按开始时间和任务 ID 排序的历史任务
      * @param context WorkflowTaskBpmnSnapshot，部署 BPMN 事实
      * @param currentNode UserTask，当前普通或受控多实例来源节点
      * @param controlledGroupReturn boolean，是否按受控端点规则验证
      * @return FirstApprovalTarget，首审批节点 key 和受控路径计划
      */
-    private FirstApprovalTarget requireFirstApprovalNode(Task task,
+    private FirstApprovalTarget requireFirstApprovalNode(Collection<HistoricTaskInstance> historicTasks,
             WorkflowTaskBpmnSnapshot context, UserTask currentNode,
             boolean controlledGroupReturn)
     {
-        List<HistoricTaskInstance> historicTasks = runtimeReader
-                .readHistoricTasksAscending(task.getProcessInstanceId(), 501);
         if (historicTasks.isEmpty() || historicTasks.size() > 500)
         {
             throw conflict();

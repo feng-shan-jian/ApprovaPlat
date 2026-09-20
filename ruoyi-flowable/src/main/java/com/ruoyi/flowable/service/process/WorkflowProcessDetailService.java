@@ -8,7 +8,6 @@ import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.repository.ProcessDefinition;
-import org.flowable.identitylink.api.IdentityLinkType;
 import org.flowable.task.api.Task;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -35,6 +34,8 @@ import com.ruoyi.flowable.service.process.WorkflowProcessHistoryProjection.Histo
 import com.ruoyi.flowable.service.process.WorkflowProcessVariableProjection.VariableStore;
 import com.ruoyi.flowable.service.task.WorkflowControlledLoopService;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceService;
+import com.ruoyi.flowable.service.task.WorkflowTaskBpmnSnapshot;
+import com.ruoyi.flowable.service.task.WorkflowReturnedTaskStateService;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract.NextUserAssignmentPolicy;
 import com.ruoyi.flowable.service.task.WorkflowReturnedApplicationProtocol;
@@ -80,6 +81,7 @@ public class WorkflowProcessDetailService
     private final WorkflowTaskReturnApplicationService returnApplicationService;
 
     private final WorkflowApplicationResubmitApplicationService resubmitApplicationService;
+    private final WorkflowReturnedTaskStateService returnedTaskStateService;
 
     /** 当前用户正式身份解析器，用于生成任务动作能力快照。 */
     private final WorkflowIdentityResolver identityResolver;
@@ -106,6 +108,7 @@ public class WorkflowProcessDetailService
             WorkflowMultiInstanceService multiInstanceService,
             WorkflowTaskReturnApplicationService returnApplicationService,
             WorkflowApplicationResubmitApplicationService resubmitApplicationService,
+            WorkflowReturnedTaskStateService returnedTaskStateService,
             WorkflowIdentityResolver identityResolver,
             WorkflowManualUrgeService manualUrgeService,
             WorkflowControlledLoopService controlledLoopService)
@@ -122,6 +125,7 @@ public class WorkflowProcessDetailService
         this.multiInstanceService = multiInstanceService;
         this.returnApplicationService = returnApplicationService;
         this.resubmitApplicationService = resubmitApplicationService;
+        this.returnedTaskStateService = returnedTaskStateService;
         this.identityResolver = identityResolver;
         this.manualUrgeService = manualUrgeService;
         this.controlledLoopService = controlledLoopService;
@@ -140,7 +144,7 @@ public class WorkflowProcessDetailService
         return engineOperations.read(() -> {
             WorkflowCurrentIdentity actor = identityResolver.resolveCurrentIdentity();
             return buildDetail(processAccessService.requireReadableInstance(instanceId, actor),
-                    taskId, actor);
+                    taskId, actor).detail();
         });
     }
 
@@ -164,24 +168,27 @@ public class WorkflowProcessDetailService
      * @param instance WorkflowProcessAccessSnapshot，本次读取已授权的流程实例
      * @param actor WorkflowCurrentIdentity，本次入口取得的当前身份
      * @param taskId String，可选的任务主键
-     * @return WorkflowProcessDetailView，完成全部数据门禁的详情视图
+     * @return DetailRead，完成全部数据门禁的详情及等待投影可复用的模型
      */
-    WorkflowProcessDetailView buildDetail(WorkflowProcessAccessSnapshot instance,
+    DetailRead buildDetail(WorkflowProcessAccessSnapshot instance,
             String taskId, WorkflowCurrentIdentity actor)
     {
         String instanceId = instance.processInstanceId();
         // 入口实例授权先于表单、变量、意见和 BPMN 正文；任务按本次身份单独检查读取权限。
         WorkflowTaskAccessSnapshot requestedTask = taskId == null ? null
                 : processAccessService.requireReadableTask(taskId, instance, actor);
+        List<Task> activeTasks = (requestedTask != null && requestedTask.active())
+                || (WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(instance.businessStatus())
+                        && StringUtils.hasText(instance.startUserId()))
+                ? taskService.createTaskQuery().processInstanceId(instanceId).active().list() : List.of();
         if (requestedTask == null
                 && WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
                         instance.businessStatus())
                 && StringUtils.hasText(instance.startUserId()))
         {
             // “我的流程”详情不携带 taskId；退回态由服务端定位发起人独占任务并直接检查任务对象权限。
-            List<Task> returnedTasks = taskService.createTaskQuery()
-                    .processInstanceId(instance.processInstanceId()).active()
-                    .taskAssignee(instance.startUserId()).list();
+            List<Task> returnedTasks = activeTasks == null ? null : activeTasks.stream()
+                    .filter(task -> instance.startUserId().equals(task.getAssignee())).toList();
             if (returnedTasks == null || returnedTasks.size() != 1)
             {
                 throw dataError("退回任务状态异常");
@@ -192,7 +199,7 @@ public class WorkflowProcessDetailService
         ProcessDefinition definition = requireDefinition(instance.processDefinitionId());
         requireSame(definition.getDeploymentId(), instance.deploymentId(),
                 "流程实例与部署关系不一致");
-        BpmnProcessContext bpmn = requireBpmnProcess(definition);
+        WorkflowTaskBpmnSnapshot bpmn = requireBpmnProcess(definition);
 
         // 表单与循环共享本次部署定位；关系一次核验同时提供祖先快照识别和最终展示。
         var artifacts = artifactRepository.openRead(instance.deploymentId());
@@ -225,7 +232,7 @@ public class WorkflowProcessDetailService
         HistoryPresentation historyPresentation = historyProjection.projectPresentation(
                 history, instance,
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(processStatus));
-        String bpmnXml = deploymentService.getBpmnXml(definition.getId());
+        String bpmnXml = deploymentService.getBpmnXml(definition);
         List<com.ruoyi.flowable.domain.vo.WorkflowProcessRelationView> processRelations =
                 relations.views();
 
@@ -237,30 +244,32 @@ public class WorkflowProcessDetailService
         Long durationMillis = instance.endTime() == null ? null
                 : safeDurationMillis(startTime, instance.endTime());
         // 临时申请人任务只承载表单修改，不属于正式 ACTIVE 审批轮次，不能交给多实例服务解析。
-        boolean returnedApplicantTask = isReturnedApplicantTask(instance, requestedTask);
+        var returnedApplicant = returnedTaskStateService.readReturnedApplicant(
+                requestedTask == null ? null : requestedTask.runtimeTask(), instance.runtimeInstance(), activeTasks);
         // capability 由服务端对象所有权和部署模型共同计算，普通任务返回 null，页面无需用 409 探测。
-        com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceStateView multiInstanceState =
-                requestedTask == null || returnedApplicantTask ? null
-                        : multiInstanceService.getOptionalState(requestedTask.runtimeTask(),
-                                instance.runtimeInstance(), actor);
+        var multiInstance = requestedTask == null || returnedApplicant != null ? null
+                : multiInstanceService.readOptionalContext(requestedTask.runtimeTask(),
+                        instance.runtimeInstance(), actor, bpmn, activeTasks);
+        var multiInstanceState = multiInstanceService.buildState(multiInstance);
         // 退回入口必须由正式动作准备链投影；静态多实例、子流程和复杂执行树统一失败关闭。
         boolean returnAllowed = requestedTask != null && requestedTask.active()
                 && returnApplicationService.isTaskReturnAllowed(requestedTask.runtimeTask(),
-                        instance.runtimeInstance(), actor);
+                        instance.runtimeInstance(), actor, bpmn, multiInstance,
+                        history.tasksById().values(), activeTasks);
         WorkflowTaskCapabilities taskCapabilities = projectTaskCapabilities(
                 actor, requestedTask, processStatus,
                 multiInstanceState, returnAllowed);
         // 先用详情已识别的申请人待修改任务收窄调用，再由正式重提准备链完成全部权威重验。
-        boolean resubmitAllowed = returnedApplicantTask
-                && resubmitApplicationService.isApplicationResubmitAllowed(requestedTask.runtimeTask(),
-                        instance.runtimeInstance(), actor);
+        boolean resubmitAllowed = returnedApplicant != null
+                && resubmitApplicationService.isApplicationResubmitAllowed(returnedApplicant,
+                        actor, bpmn, activeTasks, artifacts.forms(), history.activities());
         // 终态、挂起态和 CallActivity 子流程固定失败关闭；只有已授权的活动根流程进入正式准备链。
         boolean urgeAllowed = isUrgeProjectionCandidate(
                 instance, processStatus, processRelations)
                 && manualUrgeService.isUrgeAllowed(instance.runtimeInstance(), actor);
         NextUserAssignmentPolicy nextUserAssignmentPolicy = resolveNextUserAssignmentPolicy(
-                instance, requestedTask, bpmn.process());
-        return new WorkflowProcessDetailView(instance.processInstanceId(), definition.getId(),
+                instance, requestedTask, bpmn.process(), activeTasks);
+        return new DetailRead(new WorkflowProcessDetailView(instance.processInstanceId(), definition.getId(),
                 definition.getKey(), definition.getName(), definition.getVersion(),
                 definition.getCategory(), definition.getDeploymentId(), instance.businessKey(),
                 instance.startUserId(), historyPresentation.startUserName(), startTime,
@@ -271,7 +280,7 @@ public class WorkflowProcessDetailService
                 taskCapabilities.transferAllowed(), taskCapabilities.resolveAllowed(),
                 resubmitAllowed, urgeAllowed, controlledLoopStates, forms.formDetail(),
                 historyPresentation.timeline(),
-                processRelations, bpmnXml, historyPresentation.viewer());
+                processRelations, bpmnXml, historyPresentation.viewer()), bpmn.model());
     }
 
     /**
@@ -335,60 +344,6 @@ public class WorkflowProcessDetailService
     }
 
     /**
-     * 严格识别退回阶段唯一的申请人待修改任务，避免把临时多实例根投影成正式审批轮次。
-     *
-     * @param instance WorkflowProcessAccessSnapshot，已经通过对象授权的流程实例快照
-     * @param task WorkflowTaskAccessSnapshot，可选的请求任务快照
-     * @return boolean，流程为 returned、局部标记和发起人一致且该任务是唯一活动任务时返回 true
-     */
-    private boolean isReturnedApplicantTask(WorkflowProcessAccessSnapshot instance,
-            WorkflowTaskAccessSnapshot task)
-    {
-        if (task == null || !task.active()
-                || !WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(
-                        instance.businessStatus())
-                || !StringUtils.hasText(instance.startUserId())
-                || !Objects.equals(instance.processInstanceId(), task.processInstanceId())
-                || !Objects.equals(instance.startUserId(), task.assignee())
-                || task.owner() != null || StringUtils.hasText(task.delegationState()))
-        {
-            return false;
-        }
-        Object applicantMarker = taskService.getVariableLocal(
-                task.taskId(), WorkflowReturnedApplicationProtocol.RETURN_APPLICANT_VARIABLE);
-        if (!Objects.equals(instance.startUserId(), applicantMarker))
-        {
-            return false;
-        }
-
-        // 只有整个流程唯一的活动任务才可能是申请人待修改任务，组内或组外并行都继续走正式投影校验。
-        List<Task> activeTasks = taskService.createTaskQuery()
-                .processInstanceId(instance.processInstanceId()).active().list();
-        if (activeTasks == null || activeTasks.size() != 1)
-        {
-            return false;
-        }
-        Task activeTask = activeTasks.get(0);
-        boolean exactApplicantTask = activeTask != null
-                && Objects.equals(task.taskId(), activeTask.getId())
-                && Objects.equals(instance.startUserId(), activeTask.getAssignee())
-                && activeTask.getOwner() == null
-                && activeTask.getDelegationState() == null;
-        if (!exactApplicantTask)
-        {
-            return false;
-        }
-        // 临时待修改任务必须是申请人独占任务；残留候选关系只收窄为非重提任务，再由写门禁完整重验。
-        var identityLinks = taskService.getIdentityLinksForTask(activeTask.getId());
-        if (identityLinks == null)
-        {
-            throw dataError("退回申请人任务候选关系异常");
-        }
-        return identityLinks.stream().noneMatch(link -> link != null
-                && IdentityLinkType.CANDIDATE.equals(link.getType()));
-    }
-
-    /**
      * 按写命令相同的唯一活动任务边界投影动态下一办理人策略。
      *
      * @param instance WorkflowProcessAccessSnapshot，已经通过对象授权的流程实例快照
@@ -398,7 +353,7 @@ public class WorkflowProcessDetailService
      */
     private NextUserAssignmentPolicy resolveNextUserAssignmentPolicy(
             WorkflowProcessAccessSnapshot instance, WorkflowTaskAccessSnapshot requestedTask,
-            org.flowable.bpmn.model.Process process)
+            org.flowable.bpmn.model.Process process, List<Task> activeTasks)
     {
         if (requestedTask == null || !requestedTask.active() || instance.endTime() != null)
         {
@@ -406,10 +361,6 @@ public class WorkflowProcessDetailService
         }
 
         // 详情能力必须与 prepare() 的写入前检查一致，不能让并行或复杂执行树展示实际不可执行的入口。
-        List<Task> activeTasks = taskService.createTaskQuery()
-                .processInstanceId(instance.processInstanceId())
-                .active()
-                .list();
         if (activeTasks == null || activeTasks.size() != 1)
         {
             return NextUserAssignmentPolicy.DISABLED;
@@ -461,9 +412,9 @@ public class WorkflowProcessDetailService
      * 查询定义对应 BPMN 模型和同 key 的可执行流程。
      *
      * @param definition ProcessDefinition，已经过关系核验的流程定义
-     * @return BpmnProcessContext，BPMN 模型和目标流程
+     * @return WorkflowTaskBpmnSnapshot，定义、BPMN 模型和目标流程
      */
-    private BpmnProcessContext requireBpmnProcess(ProcessDefinition definition)
+    private WorkflowTaskBpmnSnapshot requireBpmnProcess(ProcessDefinition definition)
     {
         BpmnModel model = repositoryService.getBpmnModel(definition.getId());
         if (model == null)
@@ -475,7 +426,7 @@ public class WorkflowProcessDetailService
         {
             throw dataError("流程定义与 BPMN 流程关系不一致");
         }
-        return new BpmnProcessContext(model, process);
+        return new WorkflowTaskBpmnSnapshot(definition, model, process);
     }
 
     /**
@@ -589,13 +540,6 @@ public class WorkflowProcessDetailService
         return new ServiceException(message, HttpStatus.ERROR);
     }
 
-    /**
-     * BPMN 模型及目标流程上下文。
-     *
-     * @param model BpmnModel，目标定义模型
-     * @param process org.flowable.bpmn.model.Process，与定义 key 一致的流程
-     */
-    private record BpmnProcessContext(BpmnModel model, org.flowable.bpmn.model.Process process)
-    {
-    }
+    /** 等待投影继续消费详情已加载的模型，不再次取数。 */
+    record DetailRead(WorkflowProcessDetailView detail, BpmnModel model) { }
 }

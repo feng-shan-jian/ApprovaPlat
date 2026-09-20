@@ -123,8 +123,9 @@ public class WorkflowMultiInstanceService
     }
 
     /** 详情已完成对象读取授权；直接使用同次任务、实例和身份判断能力。 */
-    public WorkflowMultiInstanceStateView getOptionalState(Task task,
-            ProcessInstance instance, WorkflowCurrentIdentity actor)
+    public MultiInstanceContext readOptionalContext(Task task,
+            ProcessInstance instance, WorkflowCurrentIdentity actor,
+            WorkflowTaskBpmnSnapshot bpmn, List<Task> activeTasks)
     {
         if (task == null || task.isSuspended()
                 || !Objects.equals(actor.userId(), task.getAssignee()))
@@ -132,8 +133,8 @@ public class WorkflowMultiInstanceService
             return null;
         }
         requireTaskInstance(task, instance);
-        MultiInstanceContext context = loadOptionalContext(task, instance);
-        return context == null ? null : buildState(context);
+        return contextFromSnapshot(task, WorkflowMultiInstanceSnapshotExceptionTranslator
+                .asMultiInstanceDataError(() -> snapshotReader.readTask(task, instance, bpmn, activeTasks)));
     }
 
     /**
@@ -564,6 +565,12 @@ public class WorkflowMultiInstanceService
     {
         ControlledMultiInstanceSnapshot runtime = WorkflowMultiInstanceSnapshotExceptionTranslator
                 .asMultiInstanceDataError(() -> snapshotReader.readTask(currentTask, instance));
+        return contextFromSnapshot(currentTask, runtime);
+    }
+
+    private MultiInstanceContext contextFromSnapshot(Task currentTask,
+            ControlledMultiInstanceSnapshot runtime)
+    {
         if (runtime == null)
         {
             return null;
@@ -671,8 +678,12 @@ public class WorkflowMultiInstanceService
      * @param context MultiInstanceContext，已通过全部一致性校验的当前状态
      * @return WorkflowMultiInstanceStateView，按成员快照顺序生成的不可变页面视图
      */
-    private WorkflowMultiInstanceStateView buildState(MultiInstanceContext context)
+    public WorkflowMultiInstanceStateView buildState(MultiInstanceContext context)
     {
+        if (context == null)
+        {
+            return null;
+        }
         AdjustmentCapability capability = resolveAdjustmentCapability(context);
         Map<String, MultiInstanceActiveTaskSnapshot> activeTasksByUser =
                 context.activeTasks().stream().collect(Collectors.toMap(
@@ -1117,7 +1128,7 @@ public class WorkflowMultiInstanceService
      * @param round WfMultiInstanceRound，与实时引擎状态完整对账的当前 ACTIVE 轮次
      * @param counts EngineCounts，Flowable 根计数快照
      */
-    private record MultiInstanceContext(Task currentTask,
+    public record MultiInstanceContext(Task currentTask,
             ControlledMultiInstanceSnapshot runtime,
             MultiInstanceRoundSnapshot round)
     {

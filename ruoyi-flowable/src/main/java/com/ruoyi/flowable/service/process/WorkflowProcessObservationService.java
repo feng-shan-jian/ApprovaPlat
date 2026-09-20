@@ -39,7 +39,7 @@ public class WorkflowProcessObservationService
             var actor = identities.resolveCurrentIdentity();
             var instance = access.requireReadableInstance(instanceId, actor);
             var detail = details.buildDetail(instance, taskId, actor);
-            return new View(Instant.now(), detail, waiting.project(instance));
+            return new View(Instant.now(), detail.detail(), waiting.project(instance, detail.model()));
         });
     }
 }

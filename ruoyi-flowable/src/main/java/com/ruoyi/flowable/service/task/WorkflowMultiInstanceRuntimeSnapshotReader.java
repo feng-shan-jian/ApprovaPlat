@@ -73,11 +73,18 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
      */
     public ControlledMultiInstanceSnapshot readTask(Task task)
     {
-        return readTask(task, null);
+        return readTask(task, null, null, null);
     }
 
     /** 详情读取可同时复用已取得的实例；事件和写后读取仍按当前操作获取实例。 */
     public ControlledMultiInstanceSnapshot readTask(Task task, ProcessInstance instance)
+    {
+        return readTask(task, instance, null, null);
+    }
+
+    /** 同次详情复用部署事实和该实例的完整活动任务集合。 */
+    public ControlledMultiInstanceSnapshot readTask(Task task, ProcessInstance instance,
+            WorkflowTaskBpmnSnapshot bpmn, List<Task> activeTasks)
     {
         if (task == null || task.isSuspended())
         {
@@ -86,7 +93,7 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
         return readEvent(new WorkflowTaskEventSnapshot(task.getId(),
                 task.getProcessInstanceId(), task.getProcessDefinitionId(),
                 task.getTaskDefinitionKey(), task.getExecutionId(),
-                task.getAssignee(), null), instance);
+                task.getAssignee(), null), instance, bpmn, activeTasks);
     }
 
     /**
@@ -97,17 +104,17 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
      */
     public ControlledMultiInstanceSnapshot readEvent(WorkflowTaskEventSnapshot event)
     {
-        return readEvent(event, null);
+        return readEvent(event, null, null, null);
     }
 
     private ControlledMultiInstanceSnapshot readEvent(WorkflowTaskEventSnapshot event,
-            ProcessInstance instance)
+            ProcessInstance instance, WorkflowTaskBpmnSnapshot bpmn, List<Task> loadedTasks)
     {
         if (event == null)
         {
             throw drift();
         }
-        ControlledMultiInstanceRootSnapshot rootSnapshot = readEventRoot(event, instance);
+        ControlledMultiInstanceRootSnapshot rootSnapshot = readEventRoot(event, instance, bpmn);
         if (rootSnapshot == null)
         {
             return null;
@@ -116,7 +123,9 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
         List<Execution> children = requireChildExecutions(rootSnapshot, counts, null);
         List<MultiInstanceActiveTaskSnapshot> activeTasks = requireActiveTasks(
                 event, rootSnapshot, counts, children,
-                ActiveTaskMembershipRule.REQUIRE_FROZEN_MEMBER, null);
+                ActiveTaskMembershipRule.REQUIRE_FROZEN_MEMBER, loadedTasks == null ? null
+                        : loadedTasks.stream().filter(task -> task == null
+                                || rootSnapshot.activityId().equals(task.getTaskDefinitionKey())).toList());
         return new ControlledMultiInstanceSnapshot(rootSnapshot.deployId(),
                 rootSnapshot.processDefinitionId(), rootSnapshot.processInstanceId(),
                 rootSnapshot.activityId(), rootSnapshot.rootExecutionId(),
@@ -134,18 +143,19 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
     public ControlledMultiInstanceRootSnapshot readEventRoot(
             WorkflowTaskEventSnapshot event)
     {
-        return readEventRoot(event, null);
+        return readEventRoot(event, null, null);
     }
 
     private ControlledMultiInstanceRootSnapshot readEventRoot(
-            WorkflowTaskEventSnapshot event, ProcessInstance instance)
+            WorkflowTaskEventSnapshot event, ProcessInstance instance, WorkflowTaskBpmnSnapshot bpmn)
     {
         if (event == null)
         {
             throw drift();
         }
-        ControlledNodeDefinition node = resolveControlledNode(
-                event.processDefinitionId(), event.activityId());
+        ControlledNodeDefinition node = bpmn == null ? resolveControlledNode(
+                event.processDefinitionId(), event.activityId())
+                : resolveControlledNode(bpmn.definition(), bpmn.model(), event.activityId());
         if (node == null)
         {
             return null;
@@ -222,6 +232,19 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
     public Map<String, ActiveControlledMultiInstanceRootSnapshot> readActiveRoots(
             Set<String> processInstanceIds)
     {
+        return readActiveRoots(processInstanceIds, null, null, null);
+    }
+
+    public Map<String, ActiveControlledMultiInstanceRootSnapshot> readActiveRoots(
+            ProcessInstance instance, WorkflowTaskBpmnSnapshot bpmn, List<Task> activeTasks)
+    {
+        return readActiveRoots(Set.of(instance.getId()), instance, bpmn, activeTasks);
+    }
+
+    private Map<String, ActiveControlledMultiInstanceRootSnapshot> readActiveRoots(
+            Set<String> processInstanceIds, ProcessInstance loadedInstance,
+            WorkflowTaskBpmnSnapshot bpmn, List<Task> loadedTasks)
+    {
         if (processInstanceIds == null || processInstanceIds.isEmpty()
                 || processInstanceIds.size() > MAX_RUNTIME_SNAPSHOT_SIZE)
         {
@@ -231,9 +254,14 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
                 new LinkedHashMap<>();
         Map<String, ProcessDefinition> definitions = new LinkedHashMap<>();
         Map<String, BpmnModel> models = new LinkedHashMap<>();
+        if (bpmn != null)
+        {
+            definitions.put(bpmn.definition().getId(), bpmn.definition());
+            models.put(bpmn.definition().getId(), bpmn.model());
+        }
         for (String processInstanceId : processInstanceIds)
         {
-            ProcessInstance instance = runtimeService.createProcessInstanceQuery()
+            ProcessInstance instance = loadedInstance != null ? loadedInstance : runtimeService.createProcessInstanceQuery()
                     .processInstanceId(processInstanceId).singleResult();
             if (instance == null || instance.isSuspended()
                     || !StringUtils.hasText(instance.getProcessDefinitionId()))
@@ -283,9 +311,11 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
                 {
                     throw drift();
                 }
-                List<Task> tasks = taskService.createTaskQuery()
+                List<Task> tasks = loadedTasks == null ? taskService.createTaskQuery()
                         .processInstanceId(processInstanceId)
-                        .taskDefinitionKey(entry.getKey()).active().list();
+                        .taskDefinitionKey(entry.getKey()).active().list()
+                        : loadedTasks.stream().filter(task -> task == null
+                                || entry.getKey().equals(task.getTaskDefinitionKey())).toList();
                 Task representative = requireRepresentativeTask(root.getId(),
                         entry.getValue(), tasks);
                 WorkflowTaskEventSnapshot taskEvent = new WorkflowTaskEventSnapshot(
@@ -317,28 +347,22 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
     /**
      * 核对 RETURNED 期间流程变量仍与冻结轮次一致。
      *
-     * @param processDefinitionId String，流程定义主键
+     * @param definition ControlledMultiInstanceDefinitionSnapshot，本次已识别的部署节点
      * @param processInstanceId String，流程实例主键
-     * @param activityId String，原受控节点
      * @param rootExecutionId String，仅用于构造稳定身份的原轮次根主键
      * @param expectedMode WorkflowMultiInstanceMode，冻结模式
      * @param expectedMembers List&lt;String&gt;，冻结有序成员
      * @param expectedRevision int，冻结 revision
      * @return void，定义或流程变量漂移时抛出内部快照异常
      */
-    public void requirePersistedSnapshot(String processDefinitionId,
-            String processInstanceId, String activityId, String rootExecutionId,
+    public void requirePersistedSnapshot(ControlledMultiInstanceDefinitionSnapshot definition,
+            String processInstanceId, String rootExecutionId,
             WorkflowMultiInstanceMode expectedMode, List<String> expectedMembers,
             int expectedRevision)
     {
-        ControlledNodeDefinition node = resolveControlledNode(processDefinitionId,
-                activityId);
-        if (node == null)
-        {
-            throw drift();
-        }
+        ControlledNodeDefinition node = new ControlledNodeDefinition(definition.deployId(), definition.mode());
         ControlledMultiInstanceRootSnapshot persisted = readRootVariables(node,
-                processDefinitionId, processInstanceId, activityId, rootExecutionId);
+                definition.processDefinitionId(), processInstanceId, definition.activityId(), rootExecutionId);
         if (persisted.mode() != expectedMode
                 || persisted.revision() != expectedRevision
                 || !persisted.members().equals(expectedMembers))
@@ -361,6 +385,15 @@ public class WorkflowMultiInstanceRuntimeSnapshotReader
                 activityId);
         return node == null ? null : new ControlledMultiInstanceDefinitionSnapshot(
                 node.deployId(), processDefinitionId, activityId, node.mode());
+    }
+
+    /** 退回路径中各节点共用已核验部署模型。 */
+    public ControlledMultiInstanceDefinitionSnapshot readDefinition(
+            WorkflowTaskBpmnSnapshot bpmn, String activityId)
+    {
+        ControlledNodeDefinition node = resolveControlledNode(bpmn.definition(), bpmn.model(), activityId);
+        return node == null ? null : new ControlledMultiInstanceDefinitionSnapshot(
+                node.deployId(), bpmn.definition().getId(), activityId, node.mode());
     }
 
     /**

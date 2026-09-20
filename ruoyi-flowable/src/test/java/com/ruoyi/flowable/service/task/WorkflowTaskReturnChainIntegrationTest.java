@@ -369,6 +369,37 @@ class WorkflowTaskReturnChainIntegrationTest
                 List.of(), List.of(), List.of(), List.of(), List.of());
     }
 
+    @Test
+    void tiedHistoryStartTimesUseTheSameFirstNodeForCapabilityAndWrite()
+    {
+        processEngine.getProcessEngineConfiguration().getClock().setCurrentTime(new Date(1_800_000_000_000L));
+        try
+        {
+            ReturnScenario scenario = startAtSecondApproval();
+            var projectedHistory = historyService.createHistoricTaskInstanceQuery()
+                    .processInstanceId(scenario.instance().getId()).includeIdentityLinks()
+                    .orderByHistoricTaskInstanceStartTime().asc().orderByTaskId().asc().listPage(0, 501);
+            assertThat(projectedHistory).hasSize(2);
+            assertThat(projectedHistory.get(0).getStartTime()).isEqualTo(projectedHistory.get(1).getStartTime());
+            var reader = new WorkflowTaskRuntimeReader(runtimeService, taskService, historyService);
+            assertThat(reader.readHistoricTasksAscending(scenario.instance().getId(), 501))
+                    .extracting(org.flowable.task.api.history.HistoricTaskInstance::getId)
+                    .containsExactlyElementsOf(projectedHistory.stream().map(org.flowable.task.api.history.HistoricTaskInstance::getId).toList());
+            assertThat(returnApplicationService.isTaskReturnAllowed(scenario.secondTask(), scenario.instance(),
+                    new WorkflowCurrentIdentity(SECOND_APPROVER_ID, Set.of()),
+                    new WorkflowTaskBpmnReader(repositoryService).require(scenario.instance().getProcessDefinitionId()),
+                    null, projectedHistory, taskService.createTaskQuery().processInstanceId(scenario.instance().getId()).active().list()))
+                    .isTrue();
+            returnApplicationService.returnTask(new WorkflowTaskReturnRequest(scenario.secondTask().getId(), "同毫秒退回", List.of()));
+            assertThat(taskService.createTaskQuery().processInstanceId(scenario.instance().getId()).singleResult().getTaskDefinitionKey())
+                    .isEqualTo(projectedHistory.get(0).getTaskDefinitionKey());
+        }
+        finally
+        {
+            processEngine.getProcessEngineConfiguration().getClock().reset();
+        }
+    }
+
     /**
      * 串行退回夹具中的真实实例和前后任务。
      *

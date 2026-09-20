@@ -127,11 +127,9 @@ public class WorkflowReturnedTaskStateService
         {
             throw forbidden();
         }
-        if (!applicantUserId.equals(task.getAssignee())
-                || task.getOwner() != null || task.getDelegationState() != null
+        if (!isApplicantAssignment(task, applicantUserId)
                 || hasCandidateIdentityLinks(taskId)
-                || !applicantUserId.equals(taskService.getVariableLocal(
-                        taskId, RETURN_APPLICANT_VARIABLE)))
+                || !hasApplicantMarker(taskId, applicantUserId))
         {
             throw conflict();
         }
@@ -139,6 +137,48 @@ public class WorkflowReturnedTaskStateService
         {
             throw conflict();
         }
+    }
+
+    /** 识别临时申请人任务，独立于后续重提表单、轮次和办理配置是否仍然有效。 */
+    public ReturnedApplicant readReturnedApplicant(Task task, ProcessInstance instance,
+            List<Task> activeTasks)
+    {
+        if (task == null || instance == null || task.isSuspended()
+                || !RETURNED_STATUS.equals(instance.getBusinessStatus())
+                || !StringUtils.hasText(instance.getStartUserId())
+                || !Objects.equals(instance.getId(), task.getProcessInstanceId())
+                || !isApplicantAssignment(task, instance.getStartUserId())
+                || !hasApplicantMarker(task.getId(), instance.getStartUserId())
+                || activeTasks == null || activeTasks.size() != 1)
+        {
+            return null;
+        }
+        Task activeTask = activeTasks.get(0);
+        if (activeTask == null || !task.getId().equals(activeTask.getId())
+                || !isApplicantAssignment(activeTask, instance.getStartUserId()))
+        {
+            return null;
+        }
+        List<IdentityLink> links = taskService.getIdentityLinksForTask(task.getId());
+        if (links == null)
+        {
+            throw new ServiceException("退回申请人任务候选关系异常", HttpStatus.ERROR);
+        }
+        return hasCandidateIdentityLinks(links) ? null : new ReturnedApplicant(task, instance);
+    }
+
+    /** 同次详情已确认的申请人独占任务；正式写入口仍重新核验。 */
+    public record ReturnedApplicant(Task task, ProcessInstance instance) { }
+
+    private boolean isApplicantAssignment(Task task, String applicantUserId)
+    {
+        return applicantUserId.equals(task.getAssignee())
+                && task.getOwner() == null && task.getDelegationState() == null;
+    }
+
+    private boolean hasApplicantMarker(String taskId, String applicantUserId)
+    {
+        return applicantUserId.equals(taskService.getVariableLocal(taskId, RETURN_APPLICANT_VARIABLE));
     }
 
     /**
@@ -331,7 +371,12 @@ public class WorkflowReturnedTaskStateService
      */
     private boolean hasCandidateIdentityLinks(String taskId)
     {
-        return requireIdentityLinks(taskId).stream().anyMatch(link -> link != null
+        return hasCandidateIdentityLinks(requireIdentityLinks(taskId));
+    }
+
+    private boolean hasCandidateIdentityLinks(List<IdentityLink> links)
+    {
+        return links.stream().anyMatch(link -> link != null
                 && IdentityLinkType.CANDIDATE.equals(link.getType()));
     }
 

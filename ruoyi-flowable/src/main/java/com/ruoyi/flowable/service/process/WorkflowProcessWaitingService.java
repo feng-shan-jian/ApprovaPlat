@@ -3,6 +3,7 @@ package com.ruoyi.flowable.service.process;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.ReceiveTask;
 import org.flowable.engine.ManagementService;
 import org.flowable.engine.RepositoryService;
@@ -41,18 +42,21 @@ public class WorkflowProcessWaitingService
 
     public View query(String instanceId)
     {
-        return operations.read(() -> project(access.requireReadableInstance(instanceId)));
+        return operations.read(() -> {
+            var instance = access.requireReadableInstance(instanceId);
+            return project(instance, instance.endTime() == null
+                    ? repository.getBpmnModel(instance.processDefinitionId()) : null);
+        });
     }
 
     /** 本次观察事务已经完成实例授权，继续查询新的等待事实。 */
-    View project(WorkflowProcessAccessSnapshot authorized)
+    View project(WorkflowProcessAccessSnapshot authorized, BpmnModel process)
     {
         String instanceId = authorized.processInstanceId();
         List<Waiting> rows = new ArrayList<>();
         boolean truncated = false;
         if (authorized.endTime() == null)
         {
-            var process = repository.getBpmnModel(authorized.processDefinitionId());
             var subscriptions = runtime.createEventSubscriptionQuery().processInstanceId(instanceId).listPage(0, 201);
             for (var subscription : subscriptions)
                 rows.add(new Waiting(subscription.getEventType().toUpperCase(java.util.Locale.ROOT),

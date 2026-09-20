@@ -72,6 +72,18 @@ public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
         }
         JdbcDataSource dataSource = WorkflowH2SchemaMapperSupport.createDataSource(
                 databaseNamePrefix + "-" + UUID.randomUUID(), false, 10000);
+        return start(dataSource, beans, "true");
+    }
+
+    /** 使用既有隔离库，禁止测试创建或迁移数据库结构。 */
+    public static WorkflowFlowableEngineTestSupport start(DataSource dataSource, Map<Object, Object> beans)
+    {
+        return start(dataSource, beans, "false");
+    }
+
+    private static WorkflowFlowableEngineTestSupport start(DataSource dataSource,
+            Map<Object, Object> beans, String schemaUpdate)
+    {
         DataSourceTransactionManager transactionManager =
                 new DataSourceTransactionManager(dataSource);
         JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
@@ -85,8 +97,15 @@ public final class WorkflowFlowableEngineTestSupport implements AutoCloseable
                     new SpringProcessEngineConfiguration();
             configuration.setDataSource(dataSource);
             configuration.setTransactionManager(transactionManager);
-            configuration.setDatabaseSchemaUpdate("true");
+            configuration.setDatabaseSchemaUpdate(schemaUpdate);
             configuration.setHistory("full");
+            if ("false".equals(schemaUpdate))
+            {
+                configuration.setDisableIdmEngine(true);
+                configuration.setDisableEventRegistry(true);
+                configuration.setAsyncExecutorActivate(false);
+                configuration.setIdGenerator(new org.flowable.common.engine.impl.persistence.StrongUuidGenerator());
+            }
             configuration.setBeans(Map.copyOf(beans));
             com.ruoyi.flowable.engine.WorkflowCompensationLifecycle.configure(configuration);
             processEngine = configuration.buildProcessEngine();

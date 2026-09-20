@@ -210,28 +210,30 @@ public class WorkflowDeploymentService
     public String getBpmnXml(String definitionId)
     {
         String normalizedId = requireText(definitionId, "流程定义主键不能为空");
-        return engineOperations.read(() ->
+        return engineOperations.read(() -> getBpmnXml(requireDefinition(normalizedId)));
+    }
+
+    /** 同次详情已核验定义，仍读取正式部署的原始 XML。 */
+    public String getBpmnXml(ProcessDefinition definition)
+    {
+        try (InputStream stream = repositoryService.getProcessModel(definition.getId()))
         {
-            requireDefinition(normalizedId);
-            try (InputStream stream = repositoryService.getProcessModel(normalizedId))
+            if (stream == null)
             {
-                if (stream == null)
-                {
-                    throw new ServiceException("流程定义 BPMN 不存在", HttpStatus.NOT_FOUND);
-                }
-                byte[] bytes = readBounded(stream);
-                return StandardCharsets.UTF_8.newDecoder()
-                        .onMalformedInput(CodingErrorAction.REPORT)
-                        .onUnmappableCharacter(CodingErrorAction.REPORT)
-                        .decode(ByteBuffer.wrap(bytes)).toString();
+                throw new ServiceException("流程定义 BPMN 不存在", HttpStatus.NOT_FOUND);
             }
-            catch (IOException exception)
-            {
-                ServiceException failure = new ServiceException("流程定义 BPMN 读取失败", HttpStatus.ERROR);
-                failure.initCause(exception);
-                throw failure;
-            }
-        });
+            byte[] bytes = readBounded(stream);
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString();
+        }
+        catch (IOException exception)
+        {
+            ServiceException failure = new ServiceException("流程定义 BPMN 读取失败", HttpStatus.ERROR);
+            failure.initCause(exception);
+            throw failure;
+        }
     }
 
     /**

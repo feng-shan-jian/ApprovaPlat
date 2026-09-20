@@ -70,6 +70,21 @@ public class WorkflowMultiInstanceGroupTransitionService
     {
         ControlledMultiInstanceSnapshot runtime = roundData(() ->
                 snapshotReader.readTask(sourceTask, instance));
+        return prepareGroupReturn(runtime, instance, actorUserId, null);
+    }
+
+    /** 展示与退回能力消费同次校验的运行快照和 ACTIVE 轮次。 */
+    public MultiInstanceGroupReturnPlan prepareGroupReturn(
+            WorkflowMultiInstanceService.MultiInstanceContext context,
+            ProcessInstance instance, String actorUserId)
+    {
+        return context == null ? null : prepareGroupReturn(context.runtime(), instance,
+                actorUserId, context.round());
+    }
+
+    private MultiInstanceGroupReturnPlan prepareGroupReturn(ControlledMultiInstanceSnapshot runtime,
+            ProcessInstance instance, String actorUserId, MultiInstanceRoundSnapshot round)
+    {
         if (runtime == null)
         {
             return null;
@@ -104,7 +119,7 @@ public class WorkflowMultiInstanceGroupTransitionService
             throw transitionConflict("当前存在组外并行活动，不能执行多实例整组退回");
         }
         return new MultiInstanceGroupReturnPlan(
-                roundLifecycleService.requireActiveRound(runtime), runtime,
+                round == null ? roundLifecycleService.requireActiveRound(runtime) : round, runtime,
                 instance.getStartUserId());
     }
 
@@ -118,7 +133,8 @@ public class WorkflowMultiInstanceGroupTransitionService
      */
     public MultiInstanceGroupReturnExecutionPlan prepareGroupReturnExecution(
             MultiInstanceGroupReturnPlan source, String targetActivityId,
-            WorkflowTaskMovementPolicy.ControlledReturnPathPlan controlledPath)
+            WorkflowTaskMovementPolicy.ControlledReturnPathPlan controlledPath,
+            WorkflowTaskBpmnSnapshot bpmn)
     {
         if (source == null || !StringUtils.hasText(targetActivityId)
                 || controlledPath == null)
@@ -127,7 +143,7 @@ public class WorkflowMultiInstanceGroupTransitionService
         }
         List<ControlledMultiInstanceReplaySnapshot> replaySnapshots =
                 loadReplaySnapshots(source.round(), controlledPath,
-                        WorkflowMultiInstanceRoundStatus.ACTIVE);
+                        WorkflowMultiInstanceRoundStatus.ACTIVE, bpmn);
         return new MultiInstanceGroupReturnExecutionPlan(source,
                 targetActivityId, controlledPath, replaySnapshots);
     }
@@ -186,6 +202,13 @@ public class WorkflowMultiInstanceGroupTransitionService
     public MultiInstanceGroupReopenPlan prepareGroupReopen(Task applicantTask,
             ProcessInstance instance, String applicantUserId)
     {
+        return prepareGroupReopen(applicantTask, instance, applicantUserId, null, null);
+    }
+
+    public MultiInstanceGroupReopenPlan prepareGroupReopen(Task applicantTask,
+            ProcessInstance instance, String applicantUserId,
+            WorkflowTaskBpmnSnapshot loadedBpmn, List<Task> activeTasks)
+    {
         String applicantTaskId = applicantTask.getId();
         List<MultiInstanceRoundSnapshot> returnedRows =
                 roundRepository.findReturned(applicantTaskId);
@@ -208,11 +231,11 @@ public class WorkflowMultiInstanceGroupTransitionService
             throw transitionConflict("待修改任务对应的多实例轮次已经发生变化");
         }
         ControlledMultiInstanceDefinitionSnapshot sourceDefinition = roundData(() ->
-                snapshotReader.readDefinition(round.processDefinitionId(),
-                        round.activityId()));
+                loadedBpmn == null ? snapshotReader.readDefinition(round.processDefinitionId(), round.activityId())
+                        : snapshotReader.readDefinition(loadedBpmn, round.activityId()));
         ControlledMultiInstanceDefinitionSnapshot targetDefinition = roundData(() ->
-                snapshotReader.readDefinition(round.processDefinitionId(),
-                        applicantTask.getTaskDefinitionKey()));
+                loadedBpmn == null ? snapshotReader.readDefinition(round.processDefinitionId(), applicantTask.getTaskDefinitionKey())
+                        : snapshotReader.readDefinition(loadedBpmn, applicantTask.getTaskDefinitionKey()));
         if (sourceDefinition == null
                 || !round.deployId().equals(sourceDefinition.deployId())
                 || sourceDefinition.mode() != round.mode()
@@ -223,7 +246,8 @@ public class WorkflowMultiInstanceGroupTransitionService
         {
             throw dataError();
         }
-        WorkflowTaskBpmnSnapshot bpmn = bpmnReader.require(round.processDefinitionId());
+        WorkflowTaskBpmnSnapshot bpmn = loadedBpmn == null
+                ? bpmnReader.require(round.processDefinitionId()) : loadedBpmn;
         UserTask sourceNode = movementPolicy.requireMainProcessControlledReturnSource(
                 bpmn.model(), bpmn.definition().getKey(), round.activityId());
         if (!(bpmn.process().getFlowElement(
@@ -236,7 +260,7 @@ public class WorkflowMultiInstanceGroupTransitionService
                         bpmn.process(), targetNode, sourceNode);
         List<ControlledMultiInstanceReplaySnapshot> replaySnapshots =
                 loadReplaySnapshots(round, controlledPath,
-                        WorkflowMultiInstanceRoundStatus.RETURNED);
+                        WorkflowMultiInstanceRoundStatus.RETURNED, bpmn);
 
         ReturnedApplicationSnapshot.SourceKind sourceKind =
                 ReturnedApplicationSnapshot.SourceKind.ORDINARY_EXECUTION;
@@ -244,7 +268,7 @@ public class WorkflowMultiInstanceGroupTransitionService
         if (targetDefinition != null)
         {
             ActiveControlledMultiInstanceRootSnapshot temporary = roundData(() ->
-                    snapshotReader.readActiveRoots(Set.of(round.processInstanceId())))
+                    snapshotReader.readActiveRoots(instance, bpmn, activeTasks))
                     .values().stream().filter(root -> root.activeTasks().stream()
                             .anyMatch(task -> applicantTaskId.equals(task.taskId())))
                     .findFirst().orElseThrow(this::dataError);
@@ -274,7 +298,8 @@ public class WorkflowMultiInstanceGroupTransitionService
         }
         else
         {
-            sourceExecutionId = runtimeReader.requireOnlyActiveExecution(applicantTask);
+            sourceExecutionId = activeTasks == null ? runtimeReader.requireOnlyActiveExecution(applicantTask)
+                    : runtimeReader.requireOnlyActiveExecution(applicantTask, activeTasks);
             if (!sourceExecutionId.equals(applicantTask.getExecutionId()))
             {
                 throw transitionConflict("待修改任务执行状态已经发生变化");
@@ -438,7 +463,7 @@ public class WorkflowMultiInstanceGroupTransitionService
     private List<ControlledMultiInstanceReplaySnapshot> loadReplaySnapshots(
             MultiInstanceRoundSnapshot sourceRound,
             WorkflowTaskMovementPolicy.ControlledReturnPathPlan controlledPath,
-            WorkflowMultiInstanceRoundStatus expectedSourceStatus)
+            WorkflowMultiInstanceRoundStatus expectedSourceStatus, WorkflowTaskBpmnSnapshot bpmn)
     {
         if (sourceRound == null || controlledPath == null
                 || (expectedSourceStatus != WorkflowMultiInstanceRoundStatus.ACTIVE
@@ -499,15 +524,19 @@ public class WorkflowMultiInstanceGroupTransitionService
             }
             ControlledMultiInstanceDefinitionSnapshot definition = roundData(() ->
                     snapshotReader.readDefinition(
-                            sourceRound.processDefinitionId(), activityId));
+                            bpmn, activityId));
             if (definition == null)
             {
                 throw dataError();
             }
-            roundData(() -> snapshotReader.requirePersistedSnapshot(
-                    latest.processDefinitionId(), latest.processInstanceId(),
-                    latest.activityId(), latest.rootExecutionId(), latest.mode(),
-                    latest.members(), latest.revision()));
+            // ACTIVE 来源计划已由完整运行快照与 requireActiveRound 对账；上方再次核对了来源轮次身份。
+            // RETURNED 来源及其他路径节点没有本次运行快照，仍必须逐项读取持久变量。
+            if (!source || expectedSourceStatus != WorkflowMultiInstanceRoundStatus.ACTIVE)
+            {
+                roundData(() -> snapshotReader.requirePersistedSnapshot(
+                        definition, latest.processInstanceId(), latest.rootExecutionId(), latest.mode(),
+                        latest.members(), latest.revision()));
+            }
             snapshots.add(new ControlledMultiInstanceReplaySnapshot(
                     definition, latest));
         }

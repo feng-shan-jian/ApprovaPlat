@@ -185,6 +185,12 @@ public class WorkflowTaskRuntimeReader
     {
         List<Task> tasks = taskService.createTaskQuery()
                 .processInstanceId(expected.getProcessInstanceId()).active().list();
+        return requireOnlyActiveExecution(expected, tasks);
+    }
+
+    /** 详情与正式写入口共用唯一活动任务的校验规则。 */
+    public String requireOnlyActiveExecution(Task expected, List<Task> tasks)
+    {
         if (tasks == null || tasks.size() != 1 || tasks.get(0) == null
                 || !expected.getId().equals(tasks.get(0).getId())
                 || !StringUtils.hasText(tasks.get(0).getExecutionId())
@@ -213,7 +219,9 @@ public class WorkflowTaskRuntimeReader
         List<HistoricTaskInstance> tasks = historyService
                 .createHistoricTaskInstanceQuery()
                 .processInstanceId(processInstanceId)
-                .orderByHistoricTaskInstanceStartTime().asc().listPage(0, limit);
+                .includeIdentityLinks()
+                .orderByHistoricTaskInstanceStartTime().asc()
+                .orderByTaskId().asc().listPage(0, limit);
         if (tasks == null)
         {
             throw dataError();
@@ -233,6 +241,14 @@ public class WorkflowTaskRuntimeReader
                 .createHistoricActivityInstanceQuery()
                 .processInstanceId(processInstanceId).activityType("startEvent")
                 .orderByHistoricActivityInstanceStartTime().asc().listPage(0, 2);
+        return requireStartActivity(starts);
+    }
+
+    /** 详情历史已完成实例关系和数量门禁，仍按原规则要求唯一真实开始活动。 */
+    public HistoricActivityInstance requireStartActivity(List<HistoricActivityInstance> activities)
+    {
+        List<HistoricActivityInstance> starts = activities == null ? null : activities.stream()
+                .filter(activity -> "startEvent".equals(activity.getActivityType())).toList();
         if (starts == null || starts.size() != 1
                 || !StringUtils.hasText(starts.get(0).getActivityId()))
         {
