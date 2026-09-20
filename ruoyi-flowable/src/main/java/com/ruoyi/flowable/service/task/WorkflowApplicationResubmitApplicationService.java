@@ -105,33 +105,11 @@ public class WorkflowApplicationResubmitApplicationService
         });
     }
 
-    /**
-     * 判断当前正式用户能否对指定申请人待修改任务执行真实重提。
-     * @param taskId String，详情页真实任务主键
-     * @return boolean，全部正式写入前置条件满足时返回 true
-     */
-    public boolean isApplicationResubmitAllowed(String taskId)
-    {
-        return engineOperations.readAsCurrentUserWithServiceExceptionHandler(actor ->
-        {
-            requireResubmitPreparation(requestValidator.requireId(taskId), actor);
-            return true;
-        }, exception ->
-        {
-            if (RESUBMIT_INELIGIBLE_STATUS_CODES.contains(exception.getCode()))
-            {
-                return false;
-            }
-            // 数据损坏和未知服务异常必须暴露给调用方，禁止把系统错误伪装为无能力。
-            throw exception;
-        });
-    }
-
     /** 同次详情事务复用已读取对象，正式写入入口仍自行获取当前任务和实例。 */
     public boolean isApplicationResubmitAllowed(
             WorkflowReturnedTaskStateService.ReturnedApplicant applicant,
             WorkflowCurrentIdentity actor, WorkflowTaskBpmnSnapshot bpmn, List<Task> activeTasks,
-            List<WfDeployForm> forms, List<HistoricActivityInstance> activities)
+            Supplier<List<WfDeployForm>> forms, Supplier<List<HistoricActivityInstance>> activities)
     {
         if (applicant == null || applicant.task().isSuspended() || applicant.instance().isSuspended())
         {
@@ -144,7 +122,7 @@ public class WorkflowApplicationResubmitApplicationService
             runtimeReader.requireCurrentAssignee(task, actor);
             prepareResubmit(task, instance,
                     groupTransitionService.prepareGroupReopen(task, instance, actor.userId(), bpmn, activeTasks),
-                    () -> requireStartFormSnapshot(runtimeReader.requireStartActivity(activities), forms));
+                    () -> requireStartFormSnapshot(runtimeReader.requireStartActivity(activities.get()), forms.get()));
             return true;
         }, exception ->
         {

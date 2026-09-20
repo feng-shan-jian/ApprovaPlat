@@ -126,10 +126,12 @@ class WorkflowRuntimeFactReuseIntegrationTest
                             return new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
                         }
                     });
-            var details = new WorkflowProcessDetailService(operations, access, repository, tasks, deployments, artifacts,
-                    mock(WorkflowProcessVariableProjection.class), forms,
-                    new WorkflowProcessHistoryProjection(history, tasks, repository, names), mi, returns, resubmits,
-                    returnedState, identities, mock(WorkflowManualUrgeService.class), mock(WorkflowControlledLoopService.class));
+            var variables = mock(WorkflowProcessVariableProjection.class);
+            var projection = spy(new WorkflowProcessHistoryProjection(history, tasks, repository, names));
+            var details = spy(new WorkflowProcessDetailService(operations, access, repository, tasks, deployments, artifacts,
+                    variables, forms,
+                    projection, mi, returns, resubmits,
+                    returnedState, identities, mock(WorkflowManualUrgeService.class), mock(WorkflowControlledLoopService.class)));
 
             // 全部 fixture 与写动作处于独立事务；MySQL 使用已有结构并在测试后回滚全部部署、轮次和引擎数据。
             String key = "facts_" + UUID.randomUUID().toString().replace("-", "");
@@ -175,10 +177,40 @@ class WorkflowRuntimeFactReuseIntegrationTest
                         WorkflowMultiInstanceVariables.modeName("review"), WorkflowMultiInstanceVariables.revisionName("review")))
                     verify(runtime, times(1)).getVariable(instance.getId(), name);
 
+                when(access.requireReadableInstance(instance.getId(), identities.resolveCurrentIdentity())).thenReturn(authorized);
+                var observations = new WorkflowProcessObservationService(operations, details, waiting, access, identities);
+                clearInvocations(details, forms, variables, deployments, projection, artifacts, repository, tasks, history);
+                var light = observations.queryRuntime(new WorkflowProcessDetailQueryDto(instance.getId(), source.getId()));
+                assertThat(light.runtime()).usingRecursiveComparison().comparingOnlyFields(
+                        "processInstanceId", "processStatus", "currentTask", "nextUserAssignmentPolicy", "multiInstanceState",
+                        "completeAllowed", "rejectAllowed", "returnAllowed", "delegateAllowed", "transferAllowed",
+                        "resolveAllowed", "resubmitAllowed", "urgeAllowed").isEqualTo(read.detail());
+                assertThat(light.waiting().waits()).isEmpty();
+                verify(details, never()).buildDetail(any(), any(), any());
+                verifyNoInteractions(forms, variables, deployments, artifacts);
+                verify(projection, never()).loadHistory(any());
+                verify(projection, never()).loadProcessRelations(any(), any());
+                verify(repository, times(1)).getBpmnModel(instance.getProcessDefinitionId());
+                verify(repository, times(1)).getProcessDefinition(instance.getProcessDefinitionId());
+                verify(tasks, times(1)).createTaskQuery();
+                // 退回规则必须识别真实首审任务；轻量保留这一有界读取，省去活动、意见与正文。
+                verify(history, times(1)).createHistoricTaskInstanceQuery();
+                verify(history, never()).createHistoricActivityInstanceQuery();
+                assertThat(tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build()
+                        .valueToTree(light).get("runtime").has("model")).isFalse();
+
                 // 旧 capability 不是写授权；挂起后正式写必须重查并拒绝。
                 runtime.suspendProcessInstanceById(instance.getId());
                 assertThatThrownBy(() -> returns.returnTask(new WorkflowTaskReturnRequest(source.getId(), "suspended", List.of())))
                         .isInstanceOf(ServiceException.class);
+                var suspended = instanceSnapshot(runtime.createProcessInstanceQuery().processInstanceId(instance.getId()).singleResult(), repository, history);
+                clearInvocations(history, artifacts);
+                var suspendedState = operations.read(() -> details.readRuntime(suspended, source.getId(), identities.resolveCurrentIdentity()));
+                assertThat(suspendedState.processStatus()).isEqualTo("suspended");
+                assertThat(suspendedState.completeAllowed()).isFalse();
+                assertThat(suspendedState.returnAllowed()).isFalse();
+                verify(history, never()).createHistoricTaskInstanceQuery();
+                verifyNoInteractions(artifacts);
                 runtime.activateProcessInstanceById(instance.getId());
                 returns.returnTask(new WorkflowTaskReturnRequest(source.getId(), "return", List.of()));
                 assertThatThrownBy(() -> returns.returnTask(new WorkflowTaskReturnRequest(source.getId(), "stale", List.of())))
@@ -195,6 +227,13 @@ class WorkflowRuntimeFactReuseIntegrationTest
                 verify(tasks, times(1)).createTaskQuery();
                 verify(artifacts, times(1)).openRead(deployment.getId());
                 verify(snapshotReader, never()).readTask(any(), any(), any(), any());
+                clearInvocations(forms, variables, deployments, projection, artifacts);
+                var returnedLight = operations.read(() -> details.readRuntime(returnedAccess, null, identities.resolveCurrentIdentity()));
+                assertThat(returnedLight.resubmitAllowed()).isEqualTo(returnedRead.detail().resubmitAllowed());
+                assertThat(returnedLight.currentTask().taskId()).isEqualTo(returnedRead.detail().currentTask().taskId());
+                verifyNoInteractions(forms, variables, deployments);
+                verify(projection, never()).loadHistory(any());
+                verify(artifacts, times(1)).openRead(deployment.getId());
                 String applicantTask = returnedRead.detail().currentTask().taskId();
                 Object assignment = tasks.getVariableLocal(applicantTask, WorkflowReturnedApplicationProtocol.RETURN_ASSIGNMENT_VARIABLE);
                 tasks.removeVariableLocal(applicantTask, WorkflowReturnedApplicationProtocol.RETURN_ASSIGNMENT_VARIABLE);
@@ -217,6 +256,11 @@ class WorkflowRuntimeFactReuseIntegrationTest
                         .isInstanceOfSatisfying(ServiceException.class, failure ->
                                 assertThat(failure.getSubCode()).isEqualTo(WorkflowMultiInstanceService.REVISION_CONFLICT_SUB_CODE));
                 assertThat(mi.getState(reopened.getId()).members()).hasSize(3);
+                var revised = operations.read(() -> details.readRuntime(instanceSnapshot(
+                        runtime.createProcessInstanceQuery().processInstanceId(instance.getId()).singleResult(), repository, history),
+                        reopened.getId(), identities.resolveCurrentIdentity()));
+                assertThat(revised.multiInstanceState().revision()).isGreaterThan(before.revision());
+                assertThat(revised.multiInstanceState().members()).hasSize(3);
                 if (database.equals("mysql")) verifyUrgeTree(infra, operations, repository, runtime, tasks, identities, key);
             });
             assertThat(repository.createDeploymentQuery().deploymentName(key).count()).isZero();

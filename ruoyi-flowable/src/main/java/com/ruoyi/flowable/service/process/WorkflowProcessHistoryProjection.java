@@ -291,7 +291,7 @@ public class WorkflowProcessHistoryProjection
      * @param instance WorkflowProcessAccessSnapshot，已授权实例快照
      * @return List&lt;HistoricActivityInstance&gt;，按开始时间和活动主键稳定排序的历史活动
      */
-    private List<HistoricActivityInstance> loadActivities(WorkflowProcessAccessSnapshot instance)
+    List<HistoricActivityInstance> loadActivities(WorkflowProcessAccessSnapshot instance)
     {
         List<HistoricActivityInstance> rows = historyService.createHistoricActivityInstanceQuery()
                 .processInstanceId(instance.processInstanceId())
@@ -320,7 +320,7 @@ public class WorkflowProcessHistoryProjection
      * @param instance WorkflowProcessAccessSnapshot，已授权实例快照
      * @return List&lt;HistoricTaskInstance&gt;，按开始时间和任务主键稳定排序的历史任务
      */
-    private List<HistoricTaskInstance> loadTasks(WorkflowProcessAccessSnapshot instance)
+    List<HistoricTaskInstance> loadTasks(WorkflowProcessAccessSnapshot instance)
     {
         List<HistoricTaskInstance> rows = historyService.createHistoricTaskInstanceQuery()
                 .processInstanceId(instance.processInstanceId())

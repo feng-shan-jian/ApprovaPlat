@@ -113,30 +113,6 @@ public class WorkflowManualUrgeService
         });
     }
 
-    /**
-     * 判断当前正式用户能否催办指定根流程实例。
-     * @param processInstanceId String，详情页已经完成对象授权的流程实例主键
-     * @return boolean，权限、完整运行树、活动任务、接收人和数量门禁全部满足时返回 true
-     */
-    public boolean isUrgeAllowed(String processInstanceId)
-    {
-        String normalizedProcessInstanceId = normalized(processInstanceId, 64,
-                "流程实例主键不合法");
-        return engineOperations.readAsCurrentUserWithServiceExceptionHandler(actor ->
-        {
-            requireUrgePreparation(normalizedProcessInstanceId, actor, QueryMode.READ_ONLY);
-            return true;
-        }, exception ->
-        {
-            if (URGE_INELIGIBLE_STATUS_CODES.contains(exception.getCode()))
-            {
-                return false;
-            }
-            // 数据损坏和未知依赖异常必须保持 500，禁止伪装成无催办能力。
-            throw exception;
-        });
-    }
-
     /** 详情已取得根实例和当前身份，继续查询催办需要的执行树、任务和接收人。 */
     public boolean isUrgeAllowed(ProcessInstance instance, WorkflowCurrentIdentity actor)
     {

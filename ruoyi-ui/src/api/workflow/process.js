@@ -4,6 +4,10 @@ export function getProcessObservation(processInstanceId, taskId, quiet = false) 
   return request({ url: '/workflow/process/observation', params: { processInstanceId, taskId }, suppressErrorMessage: quiet })
 }
 
+export function getProcessRuntime(processInstanceId, taskId) {
+  return request({ url: '/workflow/process/observation/runtime', params: { processInstanceId, taskId }, suppressErrorMessage: true })
+}
+
 /**
  * 查询当前用户可发起的最新激活流程定义。
  * @param {object} query 定义过滤和分页参数。

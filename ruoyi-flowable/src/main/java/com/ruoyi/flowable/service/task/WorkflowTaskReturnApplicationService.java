@@ -90,32 +90,11 @@ public class WorkflowTaskReturnApplicationService
         });
     }
 
-    /**
-     * 判断当前用户能否对指定任务执行真实退回。
-     * @param taskId String，详情页真实任务主键
-     * @return boolean，全部正式前置条件满足时返回 true
-     */
-    public boolean isTaskReturnAllowed(String taskId)
-    {
-        return engineOperations.readAsCurrentUserWithServiceExceptionHandler(actor ->
-        {
-            requireReturnPreparation(requestValidator.requireId(taskId), actor);
-            return true;
-        }, exception ->
-        {
-            if (RETURN_INELIGIBLE_STATUS_CODES.contains(exception.getCode()))
-            {
-                return false;
-            }
-            throw exception;
-        });
-    }
-
     /** 同次详情事务复用已读取对象，正式写入入口仍自行获取当前任务和实例。 */
     public boolean isTaskReturnAllowed(Task task, ProcessInstance instance,
             WorkflowCurrentIdentity actor, WorkflowTaskBpmnSnapshot bpmn,
             WorkflowMultiInstanceService.MultiInstanceContext multiInstance,
-            Collection<HistoricTaskInstance> historicTasks, List<Task> activeTasks)
+            Supplier<Collection<HistoricTaskInstance>> historicTasks, List<Task> activeTasks)
     {
         if (task == null || instance == null || task.isSuspended() || instance.isSuspended())
         {
@@ -126,7 +105,7 @@ public class WorkflowTaskReturnApplicationService
             requireReturnIdentity(task, instance, actor);
             prepareReturn(task, instance,
                     groupTransitionService.prepareGroupReturn(multiInstance, instance, actor.userId()),
-                    bpmn, () -> historicTasks,
+                    bpmn, historicTasks,
                     () -> runtimeReader.requireOnlyActiveExecution(task, activeTasks));
             return true;
         }, exception ->

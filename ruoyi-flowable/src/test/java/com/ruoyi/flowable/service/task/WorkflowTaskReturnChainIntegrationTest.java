@@ -253,7 +253,11 @@ class WorkflowTaskReturnChainIntegrationTest
                 .filter(task -> firstHistoricNode.equals(task.getTaskDefinitionKey()))
                 .findFirst().orElseThrow();
 
-        assertThat(returnApplicationService.isTaskReturnAllowed(sourceTask.getId())).isFalse();
+        assertThat(returnApplicationService.isTaskReturnAllowed(sourceTask, instance,
+                new WorkflowCurrentIdentity(currentUserId.get(), Set.of()),
+                new WorkflowTaskBpmnReader(repositoryService).require(instance.getProcessDefinitionId()), null,
+                () -> new WorkflowTaskRuntimeReader(runtimeService, taskService, historyService)
+                        .readHistoricTasksAscending(instance.getId(), 501), beforeTasks)).isFalse();
         assertThatThrownBy(() -> returnApplicationService.returnTask(new WorkflowTaskReturnRequest(
                 sourceTask.getId(), "并行结构不允许退回", List.of())))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
@@ -388,7 +392,7 @@ class WorkflowTaskReturnChainIntegrationTest
             assertThat(returnApplicationService.isTaskReturnAllowed(scenario.secondTask(), scenario.instance(),
                     new WorkflowCurrentIdentity(SECOND_APPROVER_ID, Set.of()),
                     new WorkflowTaskBpmnReader(repositoryService).require(scenario.instance().getProcessDefinitionId()),
-                    null, projectedHistory, taskService.createTaskQuery().processInstanceId(scenario.instance().getId()).active().list()))
+                    null, () -> projectedHistory, taskService.createTaskQuery().processInstanceId(scenario.instance().getId()).active().list()))
                     .isTrue();
             returnApplicationService.returnTask(new WorkflowTaskReturnRequest(scenario.secondTask().getId(), "同毫秒退回", List.of()));
             assertThat(taskService.createTaskQuery().processInstanceId(scenario.instance().getId()).singleResult().getTaskDefinitionKey())

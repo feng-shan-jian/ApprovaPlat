@@ -41,7 +41,7 @@
     </el-descriptions>
 
     <el-alert v-if="observationError" :title="observationError" type="warning" :closable="false" />
-    <ProcessWaitingEvents v-if="ready" :process-instance-id="detail.processInstanceId" :snapshot="waitingSnapshot" :activity-instances="detail.flowViewer?.activityInstances || []" :loading="observationBusy" @refresh="refreshObservation" />
+    <ProcessWaitingEvents v-if="ready" :process-instance-id="detail.processInstanceId" :snapshot="waitingSnapshot" :activity-instances="detail.flowViewer?.activityInstances || []" :loading="observationBusy" @refresh="loadDetail(false, true)" />
 
     <section v-if="processRelations.length > 1" class="workflow-detail__relations" aria-labelledby="process-relations-title">
       <div class="workflow-detail__relations-heading">
@@ -123,7 +123,7 @@
       </article>
     </section>
 
-    <section v-if="multiInstanceState" class="workflow-detail__multi-instance" aria-labelledby="multi-instance-title">
+    <section v-if="ready && multiInstanceState" class="workflow-detail__multi-instance" aria-labelledby="multi-instance-title">
       <div class="workflow-detail__multi-instance-heading">
         <div>
           <div class="workflow-detail__multi-instance-title-row">
@@ -507,7 +507,7 @@
 </template>
 
 <script setup name="WorkflowProcessDetail">
-import { getProcessObservation } from '@/api/workflow/process'
+import { getProcessObservation, getProcessRuntime } from '@/api/workflow/process'
 import {
   adjustMultiInstance,
   completeTask,
@@ -545,6 +545,7 @@ const observationBusy = ref(false)
 const currentActivityNames = computed(() => [...new Set((detail.flowViewer?.activityInstances || [])
   .filter(activity => activity.state === 'WAITING').map(activity => activity.activityName || activity.activityId))].join('、'))
 let observationSequence = 0, observationTimer, observationFailures = 0, observationActive = true
+let observationRequest = null, observationStopped = false, lastFullObservationAt = 0
 const taskFormValues = ref({})
 // 申请表单和本节点表单必须保持独立语义；开始快照绝不进入历史节点列表。
 const applicationForm = ref(null)
@@ -849,115 +850,186 @@ function clearDetailState(preserveMultiInstanceDraft = false) {
   }
 }
 
-/**
- * 加载后端授权聚合详情，并在开放页面前完成全部附件安全元数据水合。
- * @param {boolean} preserveMultiInstanceDraft 409 后是否保留动态调整输入并按新状态复核。
- * @returns {Promise<void>} 详情及附件元数据均加载成功后将页面置为可用状态。
- */
-async function loadDetail(preserveMultiInstanceDraft = false) {
+/** 完整复核保留同一任务的未提交输入；动作完成和路由切换重新加载表单。 */
+async function loadDetail(preserveMultiInstanceDraft = false, background = false) {
+  if (background && observationBlocked()) { scheduleObservation(); return }
   observationSequence += 1
-  // 序号用于淘汰路由快速切换时晚到的旧响应，防止旧权限快照重新写回页面。
   const requestSequence = ++detailLoadSequence
+  window.clearTimeout(observationTimer)
+  observationStopped = false
   if (!validateRouteParams()) {
     clearDetailState()
     ready.value = false
     loading.value = false
+    observationStopped = true
     return
   }
-  const expectedProcessInstanceId = processInstanceId()
-  loading.value = true
-  ready.value = false
-  clearDetailState(preserveMultiInstanceDraft)
+  const expectedId = processInstanceId()
+  const expectedTaskId = routeTaskId()
+  if (!background) {
+    loading.value = true
+    ready.value = false
+    lastFullObservationAt = 0
+    clearDetailState(preserveMultiInstanceDraft)
+  }
+  let request
+  const current = () => requestSequence === detailLoadSequence && expectedId === processInstanceId()
+    && expectedTaskId === routeTaskId() && observationActive && !document.hidden
   try {
-    const response = await getProcessObservation(expectedProcessInstanceId, routeTaskId() || undefined)
-    if (requestSequence !== detailLoadSequence || processInstanceId() !== expectedProcessInstanceId) return
-    const payload = response.data?.detail || {}
-    if (String(payload.processInstanceId || '').trim() !== expectedProcessInstanceId) {
+    // 手动、动作、路由与周期刷新共用同一个在途槽位，不叠加 Observation 请求。
+    while (observationRequest) await observationRequest.catch(() => {})
+    if (!current()) return
+    request = getProcessObservation(expectedId, expectedTaskId || undefined, background)
+    observationRequest = request
+    const response = await request
+    if (!current() || (background && observationBlocked())) return
+    const payload = response.data?.detail
+    if (payload?.processInstanceId !== expectedId || response.data?.waiting?.processInstanceId !== expectedId) {
       throw new Error('流程详情实例关系不一致')
     }
+    const sameTask = background && detail.processInstanceId === expectedId
+      && detail.currentTask?.taskId === payload.currentTask?.taskId
+      && detail.currentTask?.active === payload.currentTask?.active
+      && detail.currentTask?.assignee === payload.currentTask?.assignee
     const formDetail = payload.formDetail
-    const hydratedApplicationValues = cloneJson(formDetail.applicationForm?.values || {})
-    const currentValues = formDetail.nodeTaskForm
-      ? cloneJson(formDetail.nodeTaskForm.values || {})
-      : formDetail.returnedApplication ? hydratedApplicationValues : {}
-    const hydratedHistory = formDetail.historyForms.map(form => ({
-      ...form,
-      hydratedValues: cloneJson(form.values || {})
-    }))
-    if (requestSequence !== detailLoadSequence || processInstanceId() !== expectedProcessInstanceId) return
+    const applicationValues = cloneJson(formDetail.applicationForm?.values || {})
+    if (!sameTask) {
+      clearDetailState(preserveMultiInstanceDraft)
+      taskFormValues.value = formDetail.nodeTaskForm
+        ? cloneJson(formDetail.nodeTaskForm.values || {})
+        : formDetail.returnedApplication ? applicationValues : {}
+      applicationFormValues.value = applicationValues
+      activeTab.value = formDetail.nodeTaskForm ? 'nodeTaskForm' : 'applicationForm'
+    }
     Object.assign(detail, payload)
     waitingSnapshot.value = response.data.waiting
-    observationError.value = ''
-    taskFormValues.value = currentValues
     applicationForm.value = formDetail.applicationForm
-    applicationFormValues.value = hydratedApplicationValues
     nodeTaskForm.value = formDetail.nodeTaskForm
-    historyForms.value = hydratedHistory
-    activeTab.value = formDetail.nodeTaskForm ? 'nodeTaskForm' : 'applicationForm'
+    historyForms.value = formDetail.historyForms.map(form => ({ ...form, hydratedValues: cloneJson(form.values || {}) }))
+    observationError.value = ''
+    observationFailures = 0
+    lastFullObservationAt = Date.now()
+    observationStopped = isTerminalStatus(payload.processStatus)
     ready.value = true
     if (preserveMultiInstanceDraft) reconcileMultiInstanceDraft()
   } catch (error) {
-    if (requestSequence === detailLoadSequence) {
-      clearDetailState()
-      showComponentError(error, '流程详情加载失败')
+    if (current()) {
+      observationFailed(error)
+      if (!background) showComponentError(error, '流程详情加载失败')
     }
   } finally {
+    // 在途请求始终串行；释放槽位后才能调度下一次。
+    if (observationRequest === request) observationRequest = null
     if (requestSequence === detailLoadSequence) loading.value = false
     scheduleObservation()
   }
 }
 
+function isTerminalStatus(status) {
+  return ['completed', 'canceled', 'rejected', 'terminated'].includes(status)
+}
+
+function observationBlocked() {
+  return actionBusy.value || multiInstanceBusy.value || multiInstanceRefreshing.value || urgeBusy.value
+    || actionDialog.visible || multiInstanceDialog.visible || urgeDialog.visible
+}
+
 function scheduleObservation() {
   window.clearTimeout(observationTimer)
-  if (observationActive && !document.hidden) {
-    observationTimer = window.setTimeout(refreshObservation, Math.min(3000 * (2 ** observationFailures), 30000))
+  if (observationActive && !document.hidden && !observationStopped && !observationRequest) {
+    const delay = Math.min(3000 * (2 ** observationFailures), 30000)
+    const reviewDue = Math.max(0, 30000 - (Date.now() - lastFullObservationAt))
+    observationTimer = window.setTimeout(refreshObservation,
+      observationFailures || loading.value || !lastFullObservationAt || observationBlocked() ? delay : Math.min(delay, reviewDue))
+  }
+}
+
+function observationFailed(error) {
+  observationFailures += 1
+  observationError.value = error?.message || '状态刷新失败，当前显示上次成功查询的结果，稍后重试'
+  if ([403, 404].includes(Number(error?.code))) {
+    observationSequence += 1
+    detailLoadSequence += 1
+    multiInstanceRefreshSequence += 1
+    multiInstanceRefreshing.value = false
+    clearDetailState()
+    waitingSnapshot.value = null
+    urgeDialog.visible = false
+    ready.value = false
+    loading.value = false
+    observationStopped = true
   }
 }
 
 async function refreshObservation() {
-  if (!observationActive || document.hidden) return
-  // 对话框的 CAS 修订取自开始填写时的状态；后台刷新不得重绑正在提交的动作。
-  if (!ready.value || loading.value || observationBusy.value || actionBusy.value || multiInstanceBusy.value
-    || urgeBusy.value || actionDialog.visible || multiInstanceDialog.visible || urgeDialog.visible) {
+  if (!observationActive || document.hidden || observationStopped) return
+  if (loading.value || observationRequest || observationBlocked()) {
     scheduleObservation(); return
+  }
+  if (!ready.value || isTerminalStatus(detail.processStatus) || Date.now() - lastFullObservationAt >= 30000) {
+    await loadDetail(false, true)
+    return
   }
   const sequence = ++observationSequence
   const detailSequence = detailLoadSequence
   const expectedId = processInstanceId()
+  const current = () => sequence === observationSequence && detailSequence === detailLoadSequence
+    && expectedId === processInstanceId() && observationActive && !document.hidden
   observationBusy.value = true
+  let fullReview = false
   try {
-    const response = await getProcessObservation(expectedId, routeTaskId() || undefined, true)
-    if (sequence !== observationSequence || detailSequence !== detailLoadSequence || expectedId !== processInstanceId()) return
-    const payload = response.data?.detail
-    if (payload?.processInstanceId !== expectedId || response.data?.waiting?.processInstanceId !== expectedId) throw new Error('运行状态响应不完整')
-    // 同一任务的输入值属于用户。更新服务端能力、轨迹和等待事实，保留表单输入及当前标签。
-    Object.assign(detail, payload)
-    waitingSnapshot.value = response.data.waiting
-    historyForms.value = payload.formDetail.historyForms.map(form => ({ ...form, hydratedValues: cloneJson(form.values || {}) }))
+    observationRequest = getProcessRuntime(expectedId, routeTaskId() || undefined)
+    const response = await observationRequest
+    if (!current() || observationBlocked()) return
+    const runtime = response.data?.runtime
+    if (runtime?.processInstanceId !== expectedId || response.data?.waiting?.processInstanceId !== expectedId) {
+      throw new Error('运行状态响应不完整')
+    }
+    // 不比较 observedAt；任务、状态、能力和修订的变化才触发详情复核。
+    fullReview = Object.keys(runtime).some(key => JSON.stringify(runtime[key]) !== JSON.stringify(detail[key]))
+      || JSON.stringify(response.data.waiting.waits) !== JSON.stringify(waitingSnapshot.value?.waits)
+    if (fullReview) {
+      // 新事实已使旧动作快照失效；全量失败期间也不能继续使用旧能力或旧任务表单。
+      ready.value = false
+    } else {
+      Object.assign(detail, runtime)
+      waitingSnapshot.value = response.data.waiting
+    }
     observationError.value = ''
     observationFailures = 0
   } catch (error) {
-    if (sequence === observationSequence) {
-      observationFailures += 1
-      observationError.value = error.message || '状态刷新失败，当前显示上次成功查询的结果，稍后重试'
-    }
+    if (current()) observationFailed(error)
   } finally {
+    observationRequest = null
     observationBusy.value = false
-    scheduleObservation()
+    if (fullReview && current() && !observationBlocked()) await loadDetail(false, true)
+    else scheduleObservation()
   }
 }
 
+function pauseObservation() {
+  observationSequence += 1
+  detailLoadSequence += 1
+  multiInstanceRefreshSequence += 1
+  multiInstanceRefreshing.value = false
+  ready.value = false
+  loading.value = false
+  actionDialog.visible = false
+  multiInstanceDialog.visible = false
+  urgeDialog.visible = false
+  window.clearTimeout(observationTimer)
+}
+
 function observationVisibilityChanged() {
-  if (document.hidden) { observationSequence += 1; window.clearTimeout(observationTimer) }
-  else refreshObservation()
+  if (document.hidden) pauseObservation()
+  else if (observationActive) loadDetail(false, true)
 }
 
 document.addEventListener('visibilitychange', observationVisibilityChanged)
-onDeactivated(() => { observationActive = false; observationSequence += 1; window.clearTimeout(observationTimer) })
+onDeactivated(() => { observationActive = false; pauseObservation() })
 onBeforeUnmount(() => {
   observationActive = false
-  observationSequence += 1
-  window.clearTimeout(observationTimer)
+  pauseObservation()
   document.removeEventListener('visibilitychange', observationVisibilityChanged)
 })
 
@@ -1051,45 +1123,37 @@ async function openMultiInstanceDialog(action, member = null) {
 }
 
 /**
- * 响应成员区手动刷新，按页面动作门禁查询当前动态多实例状态。
+ * 成员区手动刷新重新授权并复核完整详情，保留同任务输入。
  * @returns {Promise<void>} 查询成功后替换成员快照；失败时保留原快照并展示错误。
  */
 async function refreshMultiInstanceState() {
-  if (actionBusy.value
-    || multiInstanceRefreshing.value || multiInstanceBusy.value) return
-  const result = await requestMultiInstanceState(detail.currentTask.taskId, false)
-  if (result.state) return
-  multiInstanceError.value = requestErrorMessage(result.error, '会签成员状态刷新失败')
-  if (isConflictResponse(result.error)) await loadDetail(multiInstanceDialog.visible)
+  if (observationBlocked()) return
+  await loadDetail(false, true)
 }
 
 /**
- * 通过真实 API 查询指定任务的动态多实例状态；完成冲突可绕过页面 busy 门禁强制执行。
+ * 完成冲突后读取新修订；只返回仍绑定当前任务且未过期的快照。
  * @param {string} taskId 发生完成冲突的 Flowable 活动任务主键。
- * @param {boolean} force 是否忽略 actionBusy、普通刷新进行中等界面门禁并发起新查询。
  * @returns {Promise<{state: object|null, error: unknown|null}>} 成功返回规范化状态，失败返回原始请求错误。
  */
-async function requestMultiInstanceState(taskId, force) {
-  if (!force && (actionBusy.value || multiInstanceRefreshing.value || multiInstanceBusy.value)) {
-    return { state: null, error: null }
-  }
+async function requestMultiInstanceState(taskId) {
   const normalizedTaskId = String(taskId || '').trim()
   if (!normalizedTaskId || normalizedTaskId.length > 64) {
     return { state: null, error: new Error('当前任务主键不合法') }
   }
-  // 强制刷新会递增序号并淘汰先前手动刷新，避免晚到旧 revision 覆盖冲突后的新快照。
+  // 路由、隐藏和失权递增同一序号，旧修订不能恢复已失效的动作。
   const requestSequence = ++multiInstanceRefreshSequence
   multiInstanceRefreshing.value = true
-  if (!force) multiInstanceError.value = ''
   try {
     const response = await getMultiInstanceState(normalizedTaskId)
     const state = response.data
     if (requestSequence === multiInstanceRefreshSequence
       && String(detail.currentTask?.taskId || '') === normalizedTaskId) {
-      detail.multiInstanceState = state
+      return { state, error: null }
     }
-    return { state, error: null }
+    return { state: null, error: null }
   } catch (error) {
+    if (requestSequence === multiInstanceRefreshSequence && [403, 404].includes(Number(error?.code))) observationFailed(error)
     return { state: null, error }
   } finally {
     if (requestSequence === multiInstanceRefreshSequence) multiInstanceRefreshing.value = false
@@ -1102,7 +1166,8 @@ async function requestMultiInstanceState(taskId, force) {
  * @returns {Promise<void>} 状态仍活动时更新 revision 并等待显式重提；任务失效时关闭弹窗并刷新详情。
  */
 async function handleDynamicCompletionConflict(taskId) {
-  const result = await requestMultiInstanceState(taskId, true)
+  const result = await requestMultiInstanceState(taskId)
+  if ((!result.state && !result.error) || [403, 404].includes(Number(result.error?.code))) return
   if (result.state) {
     if (String(detail.currentTask?.taskId || '') === taskId) {
       // 只替换服务端成员快照和下一次 CAS 版本，不重建表单或弹窗，因而意见、附件及用户选择保持原值。
@@ -1763,7 +1828,7 @@ const initialDetailLoad = loadDetail().finally(() => {
 onActivated(async () => {
   observationActive = true
   if (!detailPageInitialized) return initialDetailLoad
-  await refreshObservation()
+  await loadDetail(false, true)
 })
 </script>
 

@@ -31,6 +31,21 @@ public class WorkflowProcessObservationService
 
     public record View(Instant observedAt, WorkflowProcessDetailView detail, WorkflowProcessWaitingService.View waiting) { }
 
+    public record RuntimeView(Instant observedAt, WorkflowProcessDetailService.RuntimeState runtime,
+            WorkflowProcessWaitingService.View waiting) { }
+
+    public RuntimeView queryRuntime(WorkflowProcessDetailQueryDto request)
+    {
+        String instanceId = details.requireInstanceId(request);
+        String taskId = details.requireTaskId(request);
+        return operations.read(() -> {
+            var actor = identities.resolveCurrentIdentity();
+            var instance = access.requireReadableInstance(instanceId, actor);
+            var runtime = details.readRuntime(instance, taskId, actor);
+            return new RuntimeView(Instant.now(), runtime, waiting.project(instance, runtime.model()));
+        });
+    }
+
     public View query(WorkflowProcessDetailQueryDto request)
     {
         String instanceId = details.requireInstanceId(request);

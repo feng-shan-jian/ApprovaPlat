@@ -18,6 +18,14 @@ public class WfProcessObservationController
     private final WorkflowProcessObservationService observations;
     public WfProcessObservationController(WorkflowProcessObservationService observations) { this.observations = observations; }
 
+    @GetMapping("/workflow/process/observation/runtime")
+    @PreAuthorize("@ss.hasPermi('workflow:process:query')")
+    public AjaxResult runtime(@RequestParam @NotBlank @Size(max = 255) String processInstanceId,
+            @RequestParam(required = false) @Size(max = 255) String taskId)
+    {
+        return AjaxResult.success(observations.queryRuntime(new WorkflowProcessDetailQueryDto(processInstanceId, taskId)));
+    }
+
     @GetMapping("/workflow/process/observation")
     @PreAuthorize("@ss.hasPermi('workflow:process:query')")
     public AjaxResult query(@RequestParam @NotBlank @Size(max = 255) String processInstanceId,
