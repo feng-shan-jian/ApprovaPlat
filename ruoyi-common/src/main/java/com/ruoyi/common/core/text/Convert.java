@@ -3,6 +3,7 @@ package com.ruoyi.common.core.text;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import com.ruoyi.common.utils.StringUtils;
 
 /**
@@ -438,7 +439,7 @@ public class Convert
      */
     public static String utf8Str(Object obj)
     {
-        return str(obj, CharsetKit.CHARSET_UTF_8);
+        return str(obj, StandardCharsets.UTF_8);
     }
 
     /**

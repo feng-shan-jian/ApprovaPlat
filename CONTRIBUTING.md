@@ -21,9 +21,14 @@ Windows 示例使用 PowerShell 7。Windows 与 WSL 分别安装依赖，避免�
 
 ## 验证
 
-测试仅保留六个入口：模型编译部署、流程发起、任务完成、退回重提、前端请求防重，以及申请草稿浏览器回归。后端使用真实 Flowable/H2 和 Spring 事务，保留幂等、revision 冲突、权限与回滚断言。
+现有测试按运行条件分为：
 
-测试通过仅证明保留场景，不代表全部功能或真实 MySQL/Redis 环境已经验证。修改其他功能时，按具体风险验证。
+- Flowable/H2 与 Spring 事务：模型编译部署、流程发起及详情、任务完成、退回重提和运行时事实复用，覆盖幂等、revision 冲突、权限与回滚。
+- 可选 MySQL：详情读取事务与运行时事实复用，使用已有隔离库并回滚测试写入。
+- 前端契约：请求防重，以及失败与取消后的重试。
+- 浏览器：申请草稿连接真实后端；流程观察使用真实页面和受控 HTTP 响应，验证刷新调度、输入保留与冲突恢复。
+
+测试通过仅证明实际执行的场景；H2 通过不代表 MySQL、Redis 或目标部署环境已经验证。修改其他功能时，按具体风险验证。
 
 在仓库根目录运行：
 
@@ -40,6 +45,10 @@ npm run test:contracts
 npm run build:prod
 ```
 
+### 可选 MySQL 验证
+
+提供 `WORKFLOW_MYSQL_TEST_URL`、`WORKFLOW_MYSQL_TEST_USERNAME` 和 `WORKFLOW_MYSQL_TEST_PASSWORD` 后，后端测试会执行 MySQL 场景；未提供 URL 时跳过。完整套件要求连接已初始化的 `approvaplat_it` 数据库，运行前确认连接及结构，不使用业务库。可在仓库根目录执行 `mvn -pl ruoyi-admin -am test`；结果需分别记录 H2、MySQL 的执行与跳过情况。
+
 ### 浏览器回归
 
 启动隔离的前后端，关闭该测试环境验证码，提供模型/部署/草稿/实例管理权限及至少一个启用分类。在 `ruoyi-ui` 下执行：
@@ -54,4 +63,4 @@ npm run test:e2e
 
 默认浏览器为已安装的 Playwright Chromium；Windows 可使用上述 Edge channel。申请草稿回归验证页面恢复、revision 冲突及两次 HTTP 提交只创建一个实例。测试精确删除自己的模型、部署和实例；草稿终态按正常保留策略处理，运行环境必须可销毁。
 
-缺少账号会失败；`test:contracts` 和 `playwright test --list` 不代表浏览器已通过。提交说明记录实际执行结果和未执行项，运行产物及临时数据在完成后清理。
+申请草稿回归缺少账号会失败；受控响应的浏览器用例不证明后端权限、持久化或真实引擎行为。`test:contracts` 和 `playwright test --list` 不代表浏览器已通过。提交说明记录实际执行结果和未执行项，运行产物及临时数据在完成后清理。

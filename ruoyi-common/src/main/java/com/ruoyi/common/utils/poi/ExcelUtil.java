@@ -201,11 +201,6 @@ public class ExcelUtil<T>
      */
     public String[] includeFields;
 
-    /**
-     * 需要排除列属性
-     */
-    public String[] excludeFields;
-
     public ExcelUtil(Class<T> clazz)
     {
         this.clazz = clazz;
@@ -219,16 +214,6 @@ public class ExcelUtil<T>
     public void showColumn(String... fields)
     {
         this.includeFields = fields;
-    }
-
-    /**
-     * 隐藏Excel中列属性
-     *
-     * @param fields 列属性名 示例[单个"name"/多个"id","name"]
-     */
-    public void hideColumn(String... fields)
-    {
-        this.excludeFields = fields;
     }
 
     public void init(List<T> list, String sheetName, String title, Type type)
@@ -1708,16 +1693,6 @@ public class ExcelUtil<T>
                 }
             }
         }
-        else if (StringUtils.isNotEmpty(excludeFields))
-        {
-            for (Field field : tempFields)
-            {
-                if (!ArrayUtils.contains(this.excludeFields, field.getName()))
-                {
-                    addField(fields, field);
-                }
-            }
-        }
         else
         {
             for (Field field : tempFields)
@@ -1768,8 +1743,7 @@ public class ExcelUtil<T>
                 }
                 else
                 {
-                    if (!ArrayUtils.contains(this.excludeFields, field.getName() + "." + attr.targetAttr())
-                            && (attr != null && (attr.type() == Type.ALL || attr.type() == type)))
+                    if (attr != null && (attr.type() == Type.ALL || attr.type() == type))
                     {
                         fields.add(new Object[] { field, attr });
                     }

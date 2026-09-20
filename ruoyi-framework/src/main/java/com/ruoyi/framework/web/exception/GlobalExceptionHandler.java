@@ -15,7 +15,6 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.text.Convert;
-import com.ruoyi.common.exception.DemoModeException;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.common.utils.html.EscapeUtil;
@@ -166,12 +165,4 @@ public class GlobalExceptionHandler
         return AjaxResult.error(message);
     }
 
-    /**
-     * 演示模式异常
-     */
-    @ExceptionHandler(DemoModeException.class)
-    public AjaxResult handleDemoModeException(DemoModeException e)
-    {
-        return AjaxResult.error("演示模式，不允许操作");
-    }
 }

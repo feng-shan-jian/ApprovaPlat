@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -27,7 +28,6 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.ruoyi.common.constant.Constants;
 import com.ruoyi.common.constant.GenConstants;
-import com.ruoyi.common.core.text.CharsetKit;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.generator.domain.GenTable;
@@ -275,7 +275,7 @@ public class GenTableServiceImpl implements IGenTableService
                 try
                 {
                     String path = getGenPath(table, template);
-                    FileUtils.writeStringToFile(new File(path), sw.toString(), CharsetKit.UTF_8);
+                    FileUtils.writeStringToFile(new File(path), sw.toString(), StandardCharsets.UTF_8);
                 }
                 catch (IOException e)
                 {

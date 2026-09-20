@@ -7,20 +7,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.WebDataBinder;
 import org.springframework.web.bind.annotation.InitBinder;
-import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.domain.model.LoginUser;
-import com.ruoyi.common.core.page.PageDomain;
 import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.core.page.TableDataInfo;
-import com.ruoyi.common.core.page.TableSupport;
 import com.ruoyi.common.utils.DateUtils;
 import com.ruoyi.common.utils.PageUtils;
 import com.ruoyi.common.utils.SecurityUtils;
-import com.ruoyi.common.utils.StringUtils;
-import com.ruoyi.common.utils.sql.SqlUtil;
 
 /**
  * web层通用数据处理
@@ -54,27 +49,6 @@ public class BaseController
     protected void startPage()
     {
         PageUtils.startPage();
-    }
-
-    /**
-     * 设置请求排序数据
-     */
-    protected void startOrderBy()
-    {
-        PageDomain pageDomain = TableSupport.buildPageRequest();
-        if (StringUtils.isNotEmpty(pageDomain.getOrderBy()))
-        {
-            String orderBy = SqlUtil.escapeOrderBySql(pageDomain.getOrderBy());
-            PageHelper.orderBy(orderBy);
-        }
-    }
-
-    /**
-     * 清理分页的线程变量
-     */
-    protected void clearPage()
-    {
-        PageUtils.clearPage();
     }
 
     /**
@@ -175,14 +149,6 @@ public class BaseController
     protected AjaxResult toAjax(boolean result)
     {
         return result ? success() : error();
-    }
-
-    /**
-     * 页面跳转
-     */
-    public String redirect(String url)
-    {
-        return StringUtils.format("redirect:{}", url);
     }
 
     /**

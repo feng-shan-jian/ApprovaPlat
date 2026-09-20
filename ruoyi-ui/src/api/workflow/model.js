@@ -44,18 +44,6 @@ export function getModel(modelId) {
 }
 
 /**
- * 查询经过后端安全校验的模型 BPMN XML。
- * @param {string} modelId Flowable 模型主键。
- * @returns {Promise<object>} data 为 BPMN XML 的响应。
- */
-export function getModelBpmnXml(modelId) {
-  return request({
-    url: `/workflow/model/bpmnXml/${encodeURIComponent(modelId)}`,
-    method: 'get'
-  })
-}
-
-/**
  * 新增未部署流程模型和最小 BPMN 资源。
  * @param {object} data 模型名称、标识、分类、描述和表单配置。
  * @returns {Promise<object>} data.modelId 为真实模型主键的响应。

@@ -168,7 +168,7 @@ npm run test:contracts
 npm run build:prod
 ```
 
-Tests retain core workflow chains, request deduplication, and browser coverage for application drafts. See [CONTRIBUTING](CONTRIBUTING.md#验证) for commands and coverage limits.
+Tests cover core workflow chains, runtime fact reuse, request contracts, and browser scenarios for drafts and workflow observation. See [CONTRIBUTING](CONTRIBUTING.md#验证) for H2, optional MySQL, and browser prerequisites and coverage limits.
 
 ## Technology
 

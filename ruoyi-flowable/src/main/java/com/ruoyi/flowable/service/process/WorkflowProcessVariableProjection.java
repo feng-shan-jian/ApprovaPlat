@@ -8,12 +8,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
-import java.time.ZonedDateTime;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -890,7 +885,7 @@ public class WorkflowProcessVariableProjection
     /**
      * 将已通过 Flowable 类型门禁的值递归转换为有深度和规模限制的 JSON 节点。
      *
-     * @param value Object，标量、时间、JsonNode、Map 或 Collection 值
+     * @param value Object，受控物理列标量、字符串或解析后的 JsonNode
      * @param depth int，当前递归深度
      * @param counter SafeJsonCounter，单个变量共享的 JSON 节点计数器
      * @return JsonNode，安全 JSON；不支持的运行时类型返回 null
@@ -914,16 +909,16 @@ public class WorkflowProcessVariableProjection
         {
             return sanitizeJsonNode(node, depth, counter);
         }
-        if (value instanceof CharSequence text)
+        if (value instanceof String text)
         {
-            requireSafeText(text.toString());
-            return StringNode.valueOf(text.toString());
+            requireSafeText(text);
+            return StringNode.valueOf(text);
         }
         if (value instanceof Boolean bool)
         {
             return BooleanNode.valueOf(bool);
         }
-        if (value instanceof Byte || value instanceof Short || value instanceof Integer
+        if (value instanceof Short || value instanceof Integer
                 || value instanceof Long)
         {
             return LongNode.valueOf(((Number) value).longValue());
@@ -936,9 +931,8 @@ public class WorkflowProcessVariableProjection
         {
             return DecimalNode.valueOf(decimal);
         }
-        if (value instanceof Float || value instanceof Double)
+        if (value instanceof Double number)
         {
-            double number = ((Number) value).doubleValue();
             if (!Double.isFinite(number))
             {
                 return null;
@@ -949,52 +943,9 @@ public class WorkflowProcessVariableProjection
         {
             return StringNode.valueOf(date.toInstant().toString());
         }
-        if (value instanceof Instant || value instanceof LocalDate
-                || value instanceof LocalDateTime || value instanceof OffsetDateTime
-                || value instanceof ZonedDateTime || value instanceof UUID)
+        if (value instanceof Instant || value instanceof UUID)
         {
             return StringNode.valueOf(value.toString());
-        }
-        if (value instanceof Map<?, ?> map)
-        {
-            if (map.size() > MAX_VARIABLE_CONTAINER_SIZE)
-            {
-                throw dataError("表单变量 JSON 对象成员过多");
-            }
-            ObjectNode object = JsonNodeFactory.instance.objectNode();
-            for (Map.Entry<?, ?> entry : map.entrySet())
-            {
-                if (!(entry.getKey() instanceof String key))
-                {
-                    return null;
-                }
-                requireSafeJsonKey(key);
-                JsonNode child = toSafeJson(entry.getValue(), depth + 1, counter);
-                if (child == null)
-                {
-                    return null;
-                }
-                object.set(key, child);
-            }
-            return object;
-        }
-        if (value instanceof Collection<?> collection)
-        {
-            if (collection.size() > MAX_VARIABLE_CONTAINER_SIZE)
-            {
-                throw dataError("表单变量 JSON 数组成员过多");
-            }
-            ArrayNode array = JsonNodeFactory.instance.arrayNode();
-            for (Object item : collection)
-            {
-                JsonNode child = toSafeJson(item, depth + 1, counter);
-                if (child == null)
-                {
-                    return null;
-                }
-                array.add(child);
-            }
-            return array;
         }
         return null;
     }
@@ -1084,7 +1035,7 @@ public class WorkflowProcessVariableProjection
     /**
      * 校验 JSON 对象键的大小并递归拒绝可改变前端对象原型语义的危险名称。
      *
-     * @param key String，Map 或 JsonNode 任意层级的对象键
+     * @param key String，JsonNode 任意层级的对象键
      * @return 无返回值，空键、超限键或原型污染键会拒绝整个详情
      */
     private void requireSafeJsonKey(String key)

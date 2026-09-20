@@ -25,11 +25,4 @@ public class PageUtils extends PageHelper
         PageHelper.startPage(pageNum, pageSize, orderBy).setReasonable(reasonable);
     }
 
-    /**
-     * 清理分页的线程变量
-     */
-    public static void clearPage()
-    {
-        PageHelper.clearPage();
-    }
 }

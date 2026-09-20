@@ -256,17 +256,6 @@ public class WorkflowDeploymentArtifactRepository
         }
     }
 
-    /**
-     * 查询父流程部署的全部条件分支快照。
-     *
-     * @param deploymentId String，父流程部署主键
-     * @return List&lt;WfDeployConditionRule&gt;，不可变条件快照
-     */
-    public List<WfDeployConditionRule> selectConditionRules(String deploymentId)
-    {
-        return readConditionRules(deploymentId, snapshot -> true);
-    }
-
     /** 按既有版本解码本次需要的分支；规则正文仅在实际路由时解释。 */
     private List<WfDeployConditionRule> readConditionRules(String deploymentId,
             Predicate<WfDeployConditionRule> selection)
