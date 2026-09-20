@@ -680,7 +680,7 @@ public class WorkflowProcessDefinitionQueryService
             throw dataError("流程开始节点缺少表单配置");
         }
         String formKey = resolveFormKey(startEvent);
-        List<WfDeployForm> snapshots = artifactRepository.selectForms(deploymentId);
+        List<WfDeployForm> snapshots = artifactRepository.openRead(deploymentId).forms();
         if (snapshots == null)
         {
             throw dataError("部署表单快照查询异常");

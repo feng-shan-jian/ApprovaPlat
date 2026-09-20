@@ -4,7 +4,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.TaskService;
@@ -25,6 +24,8 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentService;
+import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
+import com.ruoyi.flowable.service.process.WorkflowProcessHistoryProjection.ProcessRelations;
 import com.ruoyi.flowable.service.notification.WorkflowManualUrgeService;
 import com.ruoyi.flowable.service.process.WorkflowProcessFormDetailProjection.FormProjection;
 import com.ruoyi.flowable.service.process.WorkflowProcessFormDetailProjection.FormProjectionRequest;
@@ -63,6 +64,8 @@ public class WorkflowProcessDetailService
 
     private final WorkflowDeploymentService deploymentService;
 
+    private final WorkflowDeploymentArtifactRepository artifactRepository;
+
     /** 已授权详情的历史快照、活动变量和安全 JSON 直接投影组件。 */
     private final WorkflowProcessVariableProjection variableProjection;
 
@@ -96,6 +99,7 @@ public class WorkflowProcessDetailService
             WorkflowProcessAccessService processAccessService,
             RepositoryService repositoryService, TaskService taskService,
             WorkflowDeploymentService deploymentService,
+            WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowProcessVariableProjection variableProjection,
             WorkflowProcessFormDetailProjection formProjection,
             WorkflowProcessHistoryProjection historyProjection,
@@ -111,6 +115,7 @@ public class WorkflowProcessDetailService
         this.repositoryService = repositoryService;
         this.taskService = taskService;
         this.deploymentService = deploymentService;
+        this.artifactRepository = artifactRepository;
         this.variableProjection = variableProjection;
         this.formProjection = formProjection;
         this.historyProjection = historyProjection;
@@ -189,20 +194,20 @@ public class WorkflowProcessDetailService
                 "流程实例与部署关系不一致");
         BpmnProcessContext bpmn = requireBpmnProcess(definition);
 
-        // 继续保持部署表单、历史活动/任务/意见、祖先关系和变量快照的原有读取顺序。
-        FormSchemas schemas = formProjection.loadSchemas(instance.deploymentId());
+        // 表单与循环共享本次部署定位；关系一次核验同时提供祖先快照识别和最终展示。
+        var artifacts = artifactRepository.openRead(instance.deploymentId());
+        FormSchemas schemas = formProjection.loadSchemas(instance.deploymentId(), artifacts.forms());
         HistoryData history = historyProjection.loadHistory(instance);
-        Set<String> ancestorDeploymentIds = historyProjection
-                .loadAncestorDeploymentIds(instanceId);
+        ProcessRelations relations = historyProjection.loadProcessRelations(instance, definition);
         VariableStore variables = variableProjection.loadSubmissionSnapshots(instanceId,
-                instance.deploymentId(), ancestorDeploymentIds);
+                instance.deploymentId(), relations.ancestorDeploymentIds());
         String processStatus = normalizeProcessStatus(instance);
 
         // 只有活动任务才代表当前循环轮次；历史任务不能把详情投影成“下一轮”。
         String activeControlledLoopActivityId = requestedTask != null && requestedTask.active()
                 ? requestedTask.taskDefinitionKey() : null;
         List<com.ruoyi.flowable.domain.vo.WorkflowControlledLoopStateView> controlledLoopStates =
-                controlledLoopService.buildStates(definition.getDeploymentId(), definition.getKey(),
+                controlledLoopService.buildStates(artifacts.controlledLoops(definition.getKey()),
                         instance.processInstanceId(), activeControlledLoopActivityId);
         String currentTaskActivityId = requestedTask == null
                 ? null : requestedTask.taskDefinitionKey();
@@ -222,7 +227,7 @@ public class WorkflowProcessDetailService
                 WorkflowReturnedApplicationProtocol.RETURNED_STATUS.equals(processStatus));
         String bpmnXml = deploymentService.getBpmnXml(definition.getId());
         List<com.ruoyi.flowable.domain.vo.WorkflowProcessRelationView> processRelations =
-                historyProjection.buildProcessRelations(instance.processInstanceId());
+                relations.views();
 
         Instant startTime = instance.startTime();
         if (startTime == null)

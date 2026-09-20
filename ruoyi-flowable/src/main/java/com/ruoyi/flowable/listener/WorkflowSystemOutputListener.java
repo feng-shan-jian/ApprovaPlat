@@ -34,7 +34,7 @@ public class WorkflowSystemOutputListener implements ExecutionListener
         var process = repository.getBpmnModel(definition.getId()).getProcessById(definition.getKey());
         Set<String> targets = call.getOutParameters().stream().map(parameter -> parameter.getTarget()).collect(Collectors.toSet());
         boolean checked = false;
-        for (var form : artifacts.selectForms(definition.getDeploymentId()))
+        for (var form : artifacts.openRead(definition.getDeploymentId()).forms())
         {
             if (process.getFlowElement(form.getNodeKey(), true) == null) continue;
             var root = variables.parseTrustedSnapshot(form.getContent());

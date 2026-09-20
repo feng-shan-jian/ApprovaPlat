@@ -173,17 +173,22 @@ public class WorkflowProcessHistoryProjection
     /**
      * 从 Flowable 历史实例表构建并核对同一根执行树的父子流程关系。
      *
-     * @param requestedInstanceId String，已通过对象授权的详情实例主键
-     * @return List&lt;WorkflowProcessRelationView&gt;，按开始时间和实例主键稳定排序的关系节点
+     * @param instance WorkflowProcessAccessSnapshot，本次入口已授权的实例事实
+     * @param definition ProcessDefinition，详情已核验的实例定义
+     * @return ProcessRelations，稳定排序的关系节点与当前节点的祖先部署
      */
-    List<WorkflowProcessRelationView> buildProcessRelations(String requestedInstanceId)
+    ProcessRelations loadProcessRelations(WorkflowProcessAccessSnapshot instance,
+            ProcessDefinition definition)
     {
-        HistoricProcessInstance requested = historyService.createHistoricProcessInstanceQuery()
-                .processInstanceId(requestedInstanceId).singleResult();
-        if (requested == null || !StringUtils.hasText(requested.getId()))
+        String requestedInstanceId = instance.processInstanceId();
+        HistoricProcessInstance requested = instance.historicInstance();
+        if (requested == null || !requestedInstanceId.equals(requested.getId()))
         {
             throw dataError("流程实例关系记录不存在");
         }
+        Map<String, ProcessDefinition> definitions = new HashMap<>();
+        definitions.put(definition.getId(), definition);
+        Set<String> ancestorDeploymentIds = new LinkedHashSet<>();
         // 历史 API 不暴露 rootProcessInstanceId，先沿 superProcessInstanceId 向上追溯唯一根节点。
         HistoricProcessInstance root = requested;
         LinkedHashSet<String> ancestors = new LinkedHashSet<>();
@@ -201,6 +206,13 @@ public class WorkflowProcessHistoryProjection
             {
                 throw dataError("流程父实例关系记录不存在");
             }
+            ProcessDefinition parentDefinition = definitions.computeIfAbsent(
+                    root.getProcessDefinitionId(), this::requireDefinition);
+            if (!StringUtils.hasText(parentDefinition.getDeploymentId()))
+            {
+                throw dataError("流程父实例定义缺少部署关联");
+            }
+            ancestorDeploymentIds.add(parentDefinition.getDeploymentId().trim());
         }
         String rootInstanceId = root.getId().trim();
 
@@ -236,76 +248,41 @@ public class WorkflowProcessHistoryProjection
         }
 
         List<WorkflowProcessRelationView> result = new ArrayList<>();
-        for (HistoricProcessInstance instance : instancesById.values())
+        for (HistoricProcessInstance related : instancesById.values())
         {
-            String instanceId = instance.getId().trim();
-            String parentId = StringUtils.hasText(instance.getSuperProcessInstanceId())
-                    ? instance.getSuperProcessInstanceId().trim() : null;
+            String instanceId = related.getId().trim();
+            String parentId = StringUtils.hasText(related.getSuperProcessInstanceId())
+                    ? related.getSuperProcessInstanceId().trim() : null;
             boolean rootNode = rootInstanceId.equals(instanceId);
             if ((rootNode && parentId != null) || (!rootNode
                     && (parentId == null || !instancesById.containsKey(parentId))))
             {
                 throw dataError("流程父子实例关系不完整");
             }
-            ProcessDefinition relationDefinition = repositoryService.createProcessDefinitionQuery()
-                    .processDefinitionId(instance.getProcessDefinitionId()).singleResult();
+            ProcessDefinition relationDefinition = definitions.computeIfAbsent(
+                    related.getProcessDefinitionId(), id -> repositoryService.createProcessDefinitionQuery()
+                            .processDefinitionId(id).singleResult());
             if (relationDefinition == null)
             {
                 throw dataError("流程父子关系引用的定义不存在");
             }
             result.add(new WorkflowProcessRelationView(instanceId, parentId, rootInstanceId,
                     relationDefinition.getId(), relationDefinition.getKey(), relationDefinition.getName(),
-                    relationDefinition.getVersion(), instance.getBusinessKey(),
-                    WorkflowProcessStatusNormalizer.normalize(instance.getBusinessStatus(),
-                            instance.getState(), toInstant(instance.getEndTime()), instance.getDeleteReason()),
-                    toInstant(instance.getStartTime()), toInstant(instance.getEndTime()),
+                    relationDefinition.getVersion(), related.getBusinessKey(),
+                    WorkflowProcessStatusNormalizer.normalize(related.getBusinessStatus(),
+                            related.getState(), toInstant(related.getEndTime()), related.getDeleteReason()),
+                    toInstant(related.getStartTime()), toInstant(related.getEndTime()),
                     requestedInstanceId.equals(instanceId)));
         }
         result.sort(Comparator.comparing(WorkflowProcessRelationView::startTime,
                 Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(WorkflowProcessRelationView::processInstanceId));
-        return List.copyOf(result);
+        return new ProcessRelations(List.copyOf(result), Set.copyOf(ancestorDeploymentIds));
     }
 
-    /**
-     * 沿 Flowable 历史父子关系收集当前子流程的祖先部署，用于识别 inheritVariables 复制的内部快照。
-     *
-     * @param instanceId String，已经完成对象授权的当前流程实例主键
-     * @return Set&lt;String&gt;，从直接父实例到根实例的唯一部署主键；根实例返回空集合
-     */
-    Set<String> loadAncestorDeploymentIds(String instanceId)
+    /** 同一次关系核验的两个详情消费者共享结果。 */
+    record ProcessRelations(List<WorkflowProcessRelationView> views, Set<String> ancestorDeploymentIds)
     {
-        HistoricProcessInstance current = historyService.createHistoricProcessInstanceQuery()
-                .processInstanceId(instanceId).singleResult();
-        if (current == null || !instanceId.equals(current.getId()))
-        {
-            throw dataError("流程实例关系记录不存在");
-        }
-        LinkedHashSet<String> visitedInstanceIds = new LinkedHashSet<>();
-        LinkedHashSet<String> deploymentIds = new LinkedHashSet<>();
-        visitedInstanceIds.add(instanceId);
-        while (StringUtils.hasText(current.getSuperProcessInstanceId()))
-        {
-            String parentId = current.getSuperProcessInstanceId().trim();
-            if (!visitedInstanceIds.add(parentId)
-                    || visitedInstanceIds.size() > MAX_PROCESS_RELATION_ROWS)
-            {
-                throw dataError("流程父子关系存在循环或规模超过详情上限");
-            }
-            current = historyService.createHistoricProcessInstanceQuery()
-                    .processInstanceId(parentId).singleResult();
-            if (current == null || !parentId.equals(current.getId()))
-            {
-                throw dataError("流程父实例关系记录不存在");
-            }
-            ProcessDefinition definition = requireDefinition(current.getProcessDefinitionId());
-            if (!StringUtils.hasText(definition.getDeploymentId()))
-            {
-                throw dataError("流程父实例定义缺少部署关联");
-            }
-            deploymentIds.add(definition.getDeploymentId().trim());
-        }
-        return Set.copyOf(deploymentIds);
     }
 
     /**

@@ -350,7 +350,7 @@ public class WorkflowDeploymentService
         {
             throw new ServiceException("流程部署不存在或数据不完整", HttpStatus.CONFLICT);
         }
-        List<WfDeployForm> snapshots = artifactRepository.selectForms(definition.getDeploymentId());
+        List<WfDeployForm> snapshots = artifactRepository.openRead(definition.getDeploymentId()).forms();
         WfDeployForm primaryForm = snapshots.isEmpty() ? null : snapshots.get(0);
         String category = hasText(definition.getCategory())
                 ? definition.getCategory() : deployment.getCategory();

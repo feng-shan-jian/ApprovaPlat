@@ -164,7 +164,7 @@ class WorkflowModelCompilationIntegrationTest
                     verify(listeners, times(1)).compile(any());
                     assertThat(artifacts.selectParticipantRules(deployment)).extracting(WfDeployParticipantRule::getChecksum)
                             .contains("e2e6244c69c1748ebbc98e010b838efbbe624a5733ed866a5d9e8abb583a012a");
-                    var frozen = artifacts.selectForms(deployment).stream().collect(java.util.stream.Collectors.toMap(WfDeployForm::getNodeKey, WfDeployForm::getContent));
+                    var frozen = artifacts.openRead(deployment).forms().stream().collect(java.util.stream.Collectors.toMap(WfDeployForm::getNodeKey, WfDeployForm::getContent));
                     assertThat(variables.validateForStart(frozen.get("start"), Map.of("amount", BigDecimal.TEN)).variables()).containsKey("amount");
                     assertThatThrownBy(() -> variables.validateForStart(frozen.get("review"), Map.of("amount", BigDecimal.TEN)))
                             .isInstanceOf(com.ruoyi.common.exception.ServiceException.class);
@@ -199,7 +199,66 @@ class WorkflowModelCompilationIntegrationTest
                     assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(fallback.getId()).finished().count()).isOne();
                     assertResourceReadBoundaries(operations, engine.getRepositoryService(), dmn.getDmnRepositoryService(),
                             deployment, definition.getId(), decisionId, compiled);
+                    assertLazyDeploymentRead(engine.getRepositoryService(), deployment, definition.getKey());
                 });
+    }
+
+    /** 同次详情共享两种实际资源，独立入口和旧制品仍使用同一读取及版本边界。 */
+    private static void assertLazyDeploymentRead(org.flowable.engine.RepositoryService repository,
+            String deploymentId, String processKey)
+    {
+        var observed = spy(repository);
+        var artifacts = new WorkflowDeploymentArtifactRepository(observed);
+        String artifactId = repository.createDeploymentQuery().parentDeploymentId(deploymentId)
+                .deploymentCategory("APPROVAPLAT_WORKFLOW_ARTIFACTS").singleResult().getId();
+        var read = artifacts.openRead(deploymentId);
+        verifyNoInteractions(observed);
+        var forms = read.forms();
+        assertThat(read.forms()).isSameAs(forms);
+        verify(observed, times(1)).createDeploymentQuery();
+        verify(observed, times(1)).getResourceAsStream(artifactId, "approvaplat/manifest-v1.json");
+        verify(observed, times(1)).getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
+        verifyNoMoreInteractions(observed);
+        assertThat(read.controlledLoops(processKey)).isEqualTo(read.controlledLoops(processKey));
+        verify(observed, times(1)).getResourceAsStream(artifactId, "approvaplat/controlled-loops-v1.json");
+        verifyNoMoreInteractions(observed);
+        clearInvocations(observed);
+        assertResourceFailure(() -> artifacts.selectControlledLoop("", "", "activity"), "流程标识不能为空", 400);
+        verifyNoInteractions(observed);
+
+        String legacyParent = repository.createDeployment().addString("fixture.txt", "legacy").deploy().getId();
+        repository.createDeployment().parentDeploymentId(legacyParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
+                .addString("approvaplat/manifest-v1.json", "{\"schemaVersion\":1}")
+                .addString("approvaplat/forms-v1.json", "[]")
+                .addString("approvaplat/controlled-loops-v1.json", "[]")
+                .addString("approvaplat/conditions-v1.json", """
+                        [{"processKey":"legacy","gatewayId":"g","gatewayToken":"token","flowId":"f","celConfigJson":"legacy-only"}]
+                        """).deploy();
+        var legacy = artifacts.openRead(legacyParent);
+        assertThat(legacy.forms()).isEmpty();
+        assertThat(legacy.controlledLoops("legacy")).isEmpty();
+        assertThat(artifacts.selectRuntimeConditionRules(legacyParent, "legacy", "token"))
+                .extracting(WfDeployConditionRule::getFlowId).containsExactly("f");
+        assertThat(artifacts.selectRuntimeConditionRules(legacyParent, "unrelated", "token")).isEmpty();
+        assertThat(artifacts.openRead("absent-deployment").forms()).isEmpty();
+
+        String invalidParent = repository.createDeployment().addString("fixture.txt", "invalid").deploy().getId();
+        for (String manifest : List.of("{\"schemaVersion\":3}", "broken-json"))
+        {
+            String id = repository.createDeployment().parentDeploymentId(invalidParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
+                    .addString("approvaplat/manifest-v1.json", manifest).deploy().getId();
+            assertResourceFailure(() -> artifacts.openRead(invalidParent).forms(),
+                    manifest.contains(":3") ? "流程部署业务资源协议版本不受支持" : "流程部署业务资源清单无法解析", 500);
+            repository.deleteDeployment(id);
+        }
+        repository.createDeployment().parentDeploymentId(invalidParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
+                .addString("fixture.txt", "missing-manifest").deploy();
+        // 实际引擎的缺失资源抛 FlowableObjectNotFoundException；空流的 500 契约由前面的边界用例覆盖。
+        assertThatThrownBy(() -> artifacts.openRead(invalidParent).forms())
+                .isInstanceOf(org.flowable.common.engine.api.FlowableObjectNotFoundException.class);
+        repository.createDeployment().parentDeploymentId(invalidParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
+                .addString("fixture.txt", "duplicate").deploy();
+        assertResourceFailure(() -> artifacts.openRead(invalidParent).forms(), "流程部署业务资源数量异常", 500);
     }
 
     /** 在真实部署、DMN 来源和制品定位之后注入资源流故障，覆盖公开读取/编译入口的契约。 */
@@ -262,14 +321,14 @@ class WorkflowModelCompilationIntegrationTest
             if (size > 0) { bytes[0] = '['; bytes[1] = ']'; }
             doReturn(new java.io.ByteArrayInputStream(bytes)).when(resources)
                     .getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
-            if (size == artifactLimit) assertThat(artifacts.selectForms(deploymentId)).isEmpty();
-            else assertResourceFailure(() -> artifacts.selectForms(deploymentId), size == 0
+            if (size == artifactLimit) assertThat(artifacts.openRead(deploymentId).forms()).isEmpty();
+            else assertResourceFailure(() -> artifacts.openRead(deploymentId).forms(), size == 0
                     ? "流程部署业务资源无法解析" : "流程部署业务资源大小超过限制", 500);
         }
         doReturn(null).when(resources).getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
-        assertResourceFailure(() -> artifacts.selectForms(deploymentId), "流程部署业务资源缺失", 500);
+        assertResourceFailure(() -> artifacts.openRead(deploymentId).forms(), "流程部署业务资源缺失", 500);
         doReturn(failingResourceStream()).when(resources).getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
-        assertResourceFailure(() -> artifacts.selectForms(deploymentId), "流程部署业务资源读取失败", 500);
+        assertResourceFailure(() -> artifacts.openRead(deploymentId).forms(), "流程部署业务资源读取失败", 500);
     }
 
     private static java.io.InputStream failingResourceStream()

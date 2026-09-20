@@ -31,7 +31,6 @@ import com.ruoyi.flowable.domain.vo.WorkflowProcessFormDetailView;
 import com.ruoyi.flowable.domain.vo.WorkflowProcessFormSnapshotView;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
-import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
 import com.ruoyi.flowable.service.model.WorkflowFormSourceType;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec.SnapshotKind;
 import com.ruoyi.flowable.service.process.WorkflowFormSubmissionSnapshotCodec.SubmissionSnapshot;
@@ -57,8 +56,6 @@ public class WorkflowProcessFormDetailProjection
     /** 单个详情全部回显变量 JSON 最大字节数。 */
     static final int MAX_TOTAL_VARIABLE_BYTES = 1024 * 1024;
 
-    private final WorkflowDeploymentArtifactRepository artifactRepository;
-
     private final WorkflowFormTemplateValidator formTemplateValidator;
 
     private final WorkflowProcessVariableProjection variableProjection;
@@ -72,12 +69,10 @@ public class WorkflowProcessFormDetailProjection
      * 构造后由 Spring 管理该组件
      */
     public WorkflowProcessFormDetailProjection(
-            WorkflowDeploymentArtifactRepository artifactRepository,
             WorkflowFormTemplateValidator formTemplateValidator,
             WorkflowProcessVariableProjection variableProjection,
             WorkflowAttachmentService attachmentService)
     {
-        this.artifactRepository = artifactRepository;
         this.formTemplateValidator = formTemplateValidator;
         this.variableProjection = variableProjection;
         this.attachmentService = attachmentService;
@@ -88,11 +83,11 @@ public class WorkflowProcessFormDetailProjection
      * 每份快照只解析并全量校验一次，三种字段目录只读复用同一根节点。
      *
      * @param deploymentId String，实例所属真实部署主键
+     * @param rows List&lt;WfDeployForm&gt;，本次部署读取取得的表单快照
      * @return FormSchemas，不可变快照及字段白名单索引
      */
-    FormSchemas loadSchemas(String deploymentId)
+    FormSchemas loadSchemas(String deploymentId, List<WfDeployForm> rows)
     {
-        List<WfDeployForm> rows = artifactRepository.selectForms(deploymentId);
         if (rows == null || rows.size() > MAX_FORM_SNAPSHOTS)
         {
             throw dataError("部署表单快照数量异常");

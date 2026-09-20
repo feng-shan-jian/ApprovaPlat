@@ -252,8 +252,8 @@ public class WorkflowTaskCompletionApplicationService
             return new CompletionPreparation(context, userTask, Map.of(), Map.of(),
                     isTaskLocal(userTask), null, null);
         }
-        List<WfDeployForm> snapshots = artifactRepository.selectForms(
-                context.definition().getDeploymentId());
+        List<WfDeployForm> snapshots = artifactRepository.openRead(
+                context.definition().getDeploymentId()).forms();
         if (snapshots == null)
         {
             throw dataError();

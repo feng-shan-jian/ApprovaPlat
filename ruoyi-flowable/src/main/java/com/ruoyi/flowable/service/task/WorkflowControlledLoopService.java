@@ -141,17 +141,14 @@ public class WorkflowControlledLoopService
     /**
      * 为已完成对象授权的流程详情构建受控循环配置、当前轮次和逐轮审计。
      *
-     * @param deploymentId String，流程实例所属部署主键
-     * @param processKey String，流程定义 key
+     * @param configs List&lt;WfDeployControlledLoop&gt;，本次部署读取取得的当前流程循环快照
      * @param processInstanceId String，已完成访问控制的流程实例主键
      * @param activeActivityId String，请求绑定的活动任务节点；没有活动任务时为空
      * @return List&lt;WorkflowControlledLoopStateView&gt;，按节点标识稳定排序的循环状态
      */
-    public List<WorkflowControlledLoopStateView> buildStates(String deploymentId,
-            String processKey, String processInstanceId, String activeActivityId)
+    public List<WorkflowControlledLoopStateView> buildStates(List<WfDeployControlledLoop> configs,
+            String processInstanceId, String activeActivityId)
     {
-        List<WfDeployControlledLoop> configs = artifactRepository.selectControlledLoops(
-                deploymentId, processKey);
         List<WfControlledLoopExecution> executions = executionMapper
                 .selectByProcessInstanceId(processInstanceId);
         configs = configs == null ? List.of() : List.copyOf(configs);

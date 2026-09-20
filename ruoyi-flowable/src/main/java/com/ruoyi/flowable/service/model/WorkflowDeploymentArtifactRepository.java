@@ -171,17 +171,89 @@ public class WorkflowDeploymentArtifactRepository
         return 1;
     }
 
-    /**
-     * 查询父流程部署的全部表单快照。
-     *
-     * @param deploymentId String，父流程部署主键
-     * @return List&lt;WfDeployForm&gt;，业务资源子部署不存在时返回空列表并由正式调用方决定是否拒绝
-     */
-    public List<WfDeployForm> selectForms(String deploymentId)
+    /** 本次操作按需定位一次业务资源子部署；未请求的正文不读取。 */
+    public DeploymentRead openRead(String deploymentId)
     {
-        return sorted(readList(deploymentId, FORMS_RESOURCE, FORM_LIST),
-                Comparator.comparing(WfDeployForm::getNodeKey)
-                        .thenComparing(WfDeployForm::getFormKey));
+        return new DeploymentRead(deploymentId);
+    }
+
+    /** 仅限本次操作使用，不能跨请求保留；表单和循环详情共享定位及 manifest。 */
+    public final class DeploymentRead
+    {
+        private final String deploymentId;
+        private Deployment artifact;
+        private int version;
+        private boolean initialized;
+        private List<WfDeployForm> forms;
+        private List<WfDeployControlledLoop> controlledLoops;
+
+        private DeploymentRead(String deploymentId)
+        {
+            this.deploymentId = deploymentId;
+        }
+
+        private DeploymentRead(Deployment artifact)
+        {
+            this.deploymentId = null;
+            this.artifact = artifact;
+            this.version = artifact == null ? 0 : verifyManifest(artifact);
+            this.initialized = true;
+        }
+
+        private void initialize()
+        {
+            if (!initialized)
+            {
+                artifact = findArtifactDeployment(requireText(deploymentId, "流程部署主键不能为空"));
+                version = artifact == null ? 0 : verifyManifest(artifact);
+                initialized = true;
+            }
+        }
+
+        public List<WfDeployForm> forms()
+        {
+            if (forms == null)
+            {
+                forms = sorted(readList(FORMS_RESOURCE, FORM_LIST),
+                        Comparator.comparing(WfDeployForm::getNodeKey).thenComparing(WfDeployForm::getFormKey));
+            }
+            return forms;
+        }
+
+        public List<WfDeployControlledLoop> controlledLoops(String processKey)
+        {
+            String normalizedProcessKey = requireText(processKey, "流程标识不能为空");
+            if (controlledLoops == null)
+            {
+                controlledLoops = sorted(readList(LOOPS_RESOURCE, LOOP_LIST),
+                        Comparator.comparing(WfDeployControlledLoop::getProcessKey)
+                                .thenComparing(WfDeployControlledLoop::getActivityId));
+            }
+            return controlledLoops.stream()
+                    .filter(snapshot -> normalizedProcessKey.equals(snapshot.getProcessKey())).toList();
+        }
+
+        private <T> List<T> readList(String resourceName, TypeReference<List<T>> type)
+        {
+            initialize();
+            if (artifact == null) return List.of();
+            byte[] bytes = readResource(artifact.getId(), resourceName, true);
+            try
+            {
+                List<T> values = objectMapper.readValue(bytes, type);
+                if (values == null)
+                {
+                    throw new ServiceException("流程部署业务资源列表缺失", HttpStatus.ERROR);
+                }
+                return List.copyOf(values);
+            }
+            catch (JacksonException exception)
+            {
+                ServiceException failure = new ServiceException("流程部署业务资源无法解析", HttpStatus.ERROR);
+                failure.initCause(exception);
+                throw failure;
+            }
+        }
     }
 
     /**
@@ -199,10 +271,11 @@ public class WorkflowDeploymentArtifactRepository
     private List<WfDeployConditionRule> readConditionRules(String deploymentId,
             Predicate<WfDeployConditionRule> selection)
     {
-        Deployment artifact = findArtifactDeployment(requireText(deploymentId, "流程部署主键不能为空"));
-        if (artifact == null) return List.of();
-        int version = verifyManifest(artifact);
-        byte[] bytes = readResource(artifact.getId(), version == 1
+        DeploymentRead read = openRead(deploymentId);
+        read.initialize();
+        if (read.artifact == null) return List.of();
+        int version = read.version;
+        byte[] bytes = readResource(read.artifact.getId(), version == 1
                 ? LEGACY_CONDITIONS_RESOURCE : CONDITIONS_RESOURCE, true);
         List<WfDeployConditionRule> snapshots;
         try
@@ -259,35 +332,6 @@ public class WorkflowDeploymentArtifactRepository
     }
 
     /**
-     * 查询父流程部署的全部受控循环快照。
-     *
-     * @param deploymentId String，父流程部署主键
-     * @return List&lt;WfDeployControlledLoop&gt;，不可变循环快照
-     */
-    public List<WfDeployControlledLoop> selectControlledLoops(String deploymentId)
-    {
-        return sorted(readList(deploymentId, LOOPS_RESOURCE, LOOP_LIST),
-                Comparator.comparing(WfDeployControlledLoop::getProcessKey)
-                        .thenComparing(WfDeployControlledLoop::getActivityId));
-    }
-
-    /**
-     * 查询一个流程中的全部受控循环快照。
-     *
-     * @param deploymentId String，父流程部署主键
-     * @param processKey String，BPMN 可执行流程标识
-     * @return List&lt;WfDeployControlledLoop&gt;，按活动标识排序的循环快照
-     */
-    public List<WfDeployControlledLoop> selectControlledLoops(String deploymentId,
-            String processKey)
-    {
-        String normalizedProcessKey = requireText(processKey, "流程标识不能为空");
-        return selectControlledLoops(deploymentId).stream()
-                .filter(snapshot -> normalizedProcessKey.equals(snapshot.getProcessKey()))
-                .toList();
-    }
-
-    /**
      * 精确查询一个审批节点的受控循环快照。
      *
      * @param deploymentId String，父流程部署主键
@@ -299,7 +343,7 @@ public class WorkflowDeploymentArtifactRepository
             String activityId)
     {
         String normalizedActivityId = requireText(activityId, "循环活动标识不能为空");
-        return uniqueOrNull(selectControlledLoops(deploymentId, processKey).stream()
+        return uniqueOrNull(openRead(deploymentId).controlledLoops(processKey).stream()
                 .filter(snapshot -> normalizedActivityId.equals(snapshot.getActivityId()))
                 .toList(), "受控循环部署快照关系不唯一");
     }
@@ -312,7 +356,7 @@ public class WorkflowDeploymentArtifactRepository
      */
     public List<WfDeployParticipantRule> selectParticipantRules(String deploymentId)
     {
-        return sorted(readList(deploymentId, PARTICIPANTS_RESOURCE, PARTICIPANT_LIST),
+        return sorted(openRead(deploymentId).readList(PARTICIPANTS_RESOURCE, PARTICIPANT_LIST),
                 Comparator.comparing(WfDeployParticipantRule::getProcessKey)
                         .thenComparing(WfDeployParticipantRule::getRuleScope)
                         .thenComparing(WfDeployParticipantRule::getActivityId));
@@ -385,8 +429,7 @@ public class WorkflowDeploymentArtifactRepository
                 continue;
             }
             LinkedHashMap<String, WfDeployParticipantRule> startRules = new LinkedHashMap<>();
-            for (WfDeployParticipantRule rule : readListFromArtifact(
-                    artifact, PARTICIPANTS_RESOURCE, PARTICIPANT_LIST))
+            for (WfDeployParticipantRule rule : new DeploymentRead(artifact).readList(PARTICIPANTS_RESOURCE, PARTICIPANT_LIST))
             {
                 if (rule == null)
                 {
@@ -440,7 +483,7 @@ public class WorkflowDeploymentArtifactRepository
      */
     public List<WfDeployExtensionSnapshot> selectExtensionSnapshots(String deploymentId)
     {
-        return sorted(readList(deploymentId, EXTENSIONS_RESOURCE, EXTENSION_LIST),
+        return sorted(openRead(deploymentId).readList(EXTENSIONS_RESOURCE, EXTENSION_LIST),
                 Comparator.comparing(WfDeployExtensionSnapshot::getProcessKey)
                         .thenComparing(WfDeployExtensionSnapshot::getElementId));
     }
@@ -472,7 +515,7 @@ public class WorkflowDeploymentArtifactRepository
      */
     public List<WfDeployDmnSnapshot> selectDmnSnapshots(String deploymentId)
     {
-        return sorted(readList(deploymentId, DMN_RESOURCE, DMN_LIST),
+        return sorted(openRead(deploymentId).readList(DMN_RESOURCE, DMN_LIST),
                 Comparator.comparing(WfDeployDmnSnapshot::getProcessKey)
                         .thenComparing(WfDeployDmnSnapshot::getElementId));
     }
@@ -485,7 +528,7 @@ public class WorkflowDeploymentArtifactRepository
      */
     public List<WfDeployTaskSla> selectTaskSlaSnapshots(String deploymentId)
     {
-        return sorted(readList(deploymentId, SLA_RESOURCE, SLA_LIST),
+        return sorted(openRead(deploymentId).readList(SLA_RESOURCE, SLA_LIST),
                 Comparator.comparing(WfDeployTaskSla::getProcessKey)
                         .thenComparing(WfDeployTaskSla::getTaskDefinitionKey));
     }
@@ -525,7 +568,7 @@ public class WorkflowDeploymentArtifactRepository
         }
         for (Deployment artifact : listArtifactDeployments())
         {
-            if (readListFromArtifact(artifact, FORMS_RESOURCE, FORM_LIST).stream()
+            if (new DeploymentRead(artifact).readList(FORMS_RESOURCE, FORM_LIST).stream()
                     .map(WfDeployForm::getFormId).anyMatch(targets::contains))
             {
                 return true;
@@ -552,8 +595,7 @@ public class WorkflowDeploymentArtifactRepository
                     .listPage(offset, pageSize);
             for (Deployment artifact : page)
             {
-                List<WfDeployExtensionSnapshot> snapshots = readListFromArtifact(
-                        artifact, EXTENSIONS_RESOURCE, EXTENSION_LIST);
+                List<WfDeployExtensionSnapshot> snapshots = new DeploymentRead(artifact).readList(EXTENSIONS_RESOURCE, EXTENSION_LIST);
                 if (snapshots.stream().anyMatch(snapshot -> snapshot.getExtensionVersionId() == null
                         || snapshot.getExtensionVersionId() <= 0
                         || !StringUtils.hasText(snapshot.getExtensionKey())))
@@ -585,56 +627,10 @@ public class WorkflowDeploymentArtifactRepository
         long count = 0;
         for (Deployment artifact : listArtifactDeployments())
         {
-            count += readListFromArtifact(artifact, DMN_RESOURCE, DMN_LIST).stream()
+            count += new DeploymentRead(artifact).readList(DMN_RESOURCE, DMN_LIST).stream()
                     .filter(snapshot -> normalized.equals(snapshot.getSourceDeploymentId())).count();
         }
         return count;
-    }
-
-    /**
-     * 读取并校验一个父部署的指定 JSON 列表资源。
-     *
-     * @param deploymentId String，父流程部署主键
-     * @param resourceName String，受控资源名
-     * @param type TypeReference&lt;List&lt;T&gt;&gt;，严格反序列化目标类型
-     * @return List&lt;T&gt;，不存在资源时返回空列表
-     */
-    private <T> List<T> readList(String deploymentId, String resourceName,
-            TypeReference<List<T>> type)
-    {
-        Deployment artifact = findArtifactDeployment(requireText(deploymentId,
-                "流程部署主键不能为空"));
-        return artifact == null ? List.of() : readListFromArtifact(artifact, resourceName, type);
-    }
-
-    /**
-     * 从已经定位的业务资源子部署读取指定列表。
-     *
-     * @param artifact Deployment，业务资源子部署
-     * @param resourceName String，资源名
-     * @param type TypeReference&lt;List&lt;T&gt;&gt;，反序列化类型
-     * @return List&lt;T&gt;，不可为空的独立对象列表
-     */
-    private <T> List<T> readListFromArtifact(Deployment artifact, String resourceName,
-            TypeReference<List<T>> type)
-    {
-        verifyManifest(artifact);
-        byte[] bytes = readResource(artifact.getId(), resourceName, true);
-        try
-        {
-            List<T> values = objectMapper.readValue(bytes, type);
-            if (values == null)
-            {
-                throw new ServiceException("流程部署业务资源列表缺失", HttpStatus.ERROR);
-            }
-            return List.copyOf(values);
-        }
-        catch (JacksonException exception)
-        {
-            ServiceException failure = new ServiceException("流程部署业务资源无法解析", HttpStatus.ERROR);
-            failure.initCause(exception);
-            throw failure;
-        }
     }
 
     /**

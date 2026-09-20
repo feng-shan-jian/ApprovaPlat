@@ -1,11 +1,12 @@
 package com.ruoyi.flowable.authorization;
 
 import java.time.Instant;
+import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.runtime.ProcessInstance;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 /**
- * 流程实例对象授权结果；稳定输出字段与仅供本次读取使用的运行对象。
+ * 流程实例对象授权结果；稳定输出字段与仅供本次读取使用的引擎对象。
  *
  * @param processInstanceId String，Flowable 流程实例 ID
  * @param processDefinitionId String，流程定义 ID
@@ -18,6 +19,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
  * @param businessStatus String，迁移后强制存在的服务端业务状态
  * @param state String，可为空的 Flowable 实例状态；运行中实例使用实时 running/suspended，已结束实例使用历史状态
  * @param runtimeInstance ProcessInstance，同次读取的运行对象；仅内部投影使用，历史对象为空且不进入 JSON
+ * @param historicInstance HistoricProcessInstance，同次授权读取的历史对象；仅内部投影使用，不进入 JSON
  */
 public record WorkflowProcessAccessSnapshot(
         String processInstanceId,
@@ -30,6 +32,7 @@ public record WorkflowProcessAccessSnapshot(
         String deleteReason,
         String businessStatus,
         String state,
-        @JsonIgnore ProcessInstance runtimeInstance)
+        @JsonIgnore ProcessInstance runtimeInstance,
+        @JsonIgnore HistoricProcessInstance historicInstance)
 {
 }

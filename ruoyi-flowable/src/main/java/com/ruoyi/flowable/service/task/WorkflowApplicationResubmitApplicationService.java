@@ -308,8 +308,8 @@ public class WorkflowApplicationResubmitApplicationService
         {
             throw dataError();
         }
-        List<WfDeployForm> snapshots = artifactRepository.selectForms(
-                instance.getDeploymentId());
+        List<WfDeployForm> snapshots = artifactRepository.openRead(
+                instance.getDeploymentId()).forms();
         if (snapshots == null)
         {
             throw dataError();

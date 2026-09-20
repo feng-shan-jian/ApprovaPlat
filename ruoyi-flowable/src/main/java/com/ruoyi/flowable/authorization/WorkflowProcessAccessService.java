@@ -412,7 +412,7 @@ public class WorkflowProcessAccessService
     }
 
     /**
-     * 保留历史展示字段和同次运行实例；运行对象不会进入 HTTP JSON。
+     * 保留历史展示字段和同次引擎实例；引擎对象不会进入 HTTP JSON。
      *
      * @param processInstance HistoricProcessInstance，已完成授权校验的实例
      * @param runtimeInstance ProcessInstance，当前运行时实例；实例已结束时为空
@@ -441,7 +441,7 @@ public class WorkflowProcessAccessService
                 toInstant(processInstance.getEndTime()),
                 processInstance.getDeleteReason(),
                 processInstance.getBusinessStatus(),
-                engineState, runtimeInstance);
+                engineState, runtimeInstance, processInstance);
     }
 
     /**

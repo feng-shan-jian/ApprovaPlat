@@ -572,7 +572,7 @@ public class WorkflowCallActivityReferenceService
      */
     private TargetFieldCatalog targetFieldCatalog(ProcessDefinition definition)
     {
-        List<WfDeployForm> snapshots = artifactRepository.selectForms(definition.getDeploymentId());
+        List<WfDeployForm> snapshots = artifactRepository.openRead(definition.getDeploymentId()).forms();
         if (snapshots == null)
         {
             throw dataError("子流程部署表单快照查询异常");

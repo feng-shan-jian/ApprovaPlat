@@ -120,7 +120,7 @@ class WorkflowProcessStartChainIntegrationTest
         WorkflowProcessDraftSubmitView submitted = submitDraft(draft, Map.of());
         assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(submitted.processInstanceId()).count()).isOne();
         assertThat(runtimeService.getVariables(submitted.processInstanceId())).doesNotContainKeys("requester", "evidence");
-        assertThat(artifactRepository.selectForms(deployment.getId()).get(0).getContent()).isEqualTo(frozen);
+        assertThat(artifactRepository.openRead(deployment.getId()).forms().get(0).getContent()).isEqualTo(frozen);
         assertThat(draftMapper.selectOwnedById(draft.draftId(), OWNER_ID).draftStatus()).isEqualTo(WorkflowProcessDraftStatus.SUBMITTED);
     }
 
@@ -390,11 +390,11 @@ class WorkflowProcessStartChainIntegrationTest
         var variableProjection = new WorkflowProcessVariableProjection(WorkflowH2SchemaMapperSupport.createSpringMapper(
                 engineInfrastructure.dataSource(), "detail-variables", com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper.class,
                 "mapper/flowable/WorkflowHistoricVariableMapper.xml"));
-        var projection = new WorkflowProcessFormDetailProjection(artifactRepository, new WorkflowFormTemplateValidator(),
+        var projection = new WorkflowProcessFormDetailProjection(new WorkflowFormTemplateValidator(),
                 variableProjection, attachmentService);
         clearInvocations(processAccess, attachmentTarget, attachmentMapper);
         var projected = projection.project(new WorkflowProcessFormDetailProjection.FormProjectionRequest(
-                projection.loadSchemas(otherAccess.deploymentId()), history.loadHistory(otherAccess),
+                projection.loadSchemas(otherAccess.deploymentId(), artifactRepository.openRead(otherAccess.deploymentId()).forms()), history.loadHistory(otherAccess),
                 repositoryService.getBpmnModel(definition.getId()).getProcessById(definition.getKey()),
                 variableProjection.loadSubmissionSnapshots(other.processInstanceId(), otherAccess.deploymentId(), Set.of()),
                 otherAccess, null, false, false));
@@ -406,6 +406,218 @@ class WorkflowProcessStartChainIntegrationTest
         verify(processAccess, times(1)).requireReadableInstance(submitted.processInstanceId());
         currentIdentity.set(new WorkflowCurrentIdentity("200", Set.of()));
         assertServiceError(() -> attachmentService.getReadableMetadata(attachmentId), HttpStatus.FORBIDDEN, null);
+    }
+
+    @Test
+    void detailSharesDeepCallActivityRelationsAndKeepsAncestorSnapshotScope()
+    {
+        var listenerBeans = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+        listenerBeans.registerSingleton("definitions", queryService);
+        listenerBeans.registerSingleton("variables", variableValidator);
+        runtimeService.addEventListener(new WorkflowCallActivityStartListener(
+                listenerBeans.getBeanProvider(WorkflowProcessDefinitionQueryService.class),
+                listenerBeans.getBeanProvider(WorkflowStartVariableValidator.class)));
+        ProcessDefinition leafDefinition = deployRelationProcess("relationLeaf", """
+                <userTask id="hold" flowable:assignee="100"/><endEvent id="end"/>
+                <sequenceFlow sourceRef="start" targetRef="hold"/>
+                <sequenceFlow sourceRef="hold" targetRef="end"/>
+                """);
+        ProcessDefinition middleDefinition = deployRelationProcess("relationMiddle", """
+                <callActivity id="child" calledElement="relationLeaf" flowable:inheritVariables="true">
+                  <extensionElements><flowable:in source="requester" target="requester"/></extensionElements>
+                </callActivity><endEvent id="end"/>
+                <sequenceFlow sourceRef="start" targetRef="child"/><sequenceFlow sourceRef="child" targetRef="end"/>
+                """);
+        definition = deployRelationProcess("relationRoot", """
+                <parallelGateway id="split"/><parallelGateway id="join"/><endEvent id="end"/>
+                <callActivity id="left" calledElement="relationMiddle" flowable:inheritVariables="true">
+                  <extensionElements><flowable:in source="requester" target="requester"/></extensionElements>
+                </callActivity>
+                <callActivity id="right" calledElement="relationMiddle" flowable:inheritVariables="true">
+                  <extensionElements><flowable:in source="requester" target="requester"/></extensionElements>
+                </callActivity>
+                <sequenceFlow sourceRef="start" targetRef="split"/>
+                <sequenceFlow sourceRef="split" targetRef="left"/><sequenceFlow sourceRef="split" targetRef="right"/>
+                <sequenceFlow sourceRef="left" targetRef="join"/><sequenceFlow sourceRef="right" targetRef="join"/>
+                <sequenceFlow sourceRef="join" targetRef="end"/>
+                """);
+        var submitted = submitDraft(createDraft(VALID_VARIABLES), VALID_VARIABLES);
+        var children = runtimeService.createProcessInstanceQuery().superProcessInstanceId(submitted.processInstanceId()).list();
+        assertThat(children).hasSize(2);
+        var leaf = runtimeService.createProcessInstanceQuery().superProcessInstanceId(children.get(0).getId()).singleResult();
+        var access = processAccess.requireReadableInstance(leaf.getId());
+        var historyService = spy(processEngine.getHistoryService());
+        var history = new WorkflowProcessHistoryProjection(historyService, processEngine.getTaskService(),
+                repositoryService, mock(com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper.class));
+        clearInvocations(repositoryService);
+        var relations = history.loadProcessRelations(access, leafDefinition);
+        assertThat(relations.views()).hasSize(5).isSortedAccordingTo(java.util.Comparator
+                .comparing(com.ruoyi.flowable.domain.vo.WorkflowProcessRelationView::startTime)
+                .thenComparing(com.ruoyi.flowable.domain.vo.WorkflowProcessRelationView::processInstanceId));
+        assertThat(relations.views()).filteredOn(row -> row.current()).singleElement()
+                .satisfies(row -> assertThat(row.processInstanceId()).isEqualTo(leaf.getId()));
+        assertThat(relations.views()).extracting(row -> row.rootProcessInstanceId()).containsOnly(submitted.processInstanceId());
+        assertThat(relations.ancestorDeploymentIds()).containsExactlyInAnyOrder(
+                definition.getDeploymentId(), middleDefinition.getDeploymentId());
+        verify(historyService, times(7)).createHistoricProcessInstanceQuery(); // 2 ancestors + 5 BFS parents
+        verify(repositoryService, times(1)).getProcessDefinition(definition.getId());
+        verify(repositoryService, times(1)).getProcessDefinition(middleDefinition.getId());
+        verify(repositoryService, org.mockito.Mockito.never()).createProcessDefinitionQuery();
+
+        var mapper = WorkflowH2SchemaMapperSupport.createSpringMapper(engineInfrastructure.dataSource(),
+                "relation-variables", com.ruoyi.flowable.mapper.WorkflowHistoricVariableMapper.class,
+                "mapper/flowable/WorkflowHistoricVariableMapper.xml");
+        var variables = new WorkflowProcessVariableProjection(mapper);
+        assertThat(variables.loadSubmissionSnapshots(leaf.getId(), leafDefinition.getDeploymentId(),
+                relations.ancestorDeploymentIds())).isNotNull();
+        assertThatThrownBy(() -> variables.loadSubmissionSnapshots(leaf.getId(), leafDefinition.getDeploymentId(), Set.of()))
+                .isInstanceOf(ServiceException.class);
+
+        var rootAccess = processAccess.requireReadableInstance(submitted.processInstanceId());
+        clearInvocations(historyService, repositoryService);
+        assertThat(history.loadProcessRelations(rootAccess, definition).ancestorDeploymentIds()).isEmpty();
+        verify(historyService, times(5)).createHistoricProcessInstanceQuery();
+        verify(repositoryService, times(2)).createProcessDefinitionQuery(); // two distinct descendant definitions
+
+        var json = JsonMapper.shared().valueToTree(access);
+        assertThat(json.propertyNames()).containsExactlyInAnyOrder("processInstanceId", "processDefinitionId",
+                "deploymentId", "businessKey", "startUserId", "startTime", "endTime", "deleteReason", "businessStatus", "state");
+
+        for (String brokenParent : List.of("missing-parent", leaf.getId()))
+        {
+            engineInfrastructure.transactionTemplate().executeWithoutResult(status -> {
+                status.setRollbackOnly();
+                jdbcTemplate.update("update ACT_HI_PROCINST set SUPER_PROCESS_INSTANCE_ID_=? where ID_=?",
+                        brokenParent, children.get(0).getId());
+                assertThatThrownBy(() -> history.loadProcessRelations(access, leafDefinition))
+                        .hasMessageContaining("missing-parent".equals(brokenParent) ? "父实例关系记录不存在" : "循环或规模");
+            });
+        }
+        var corruptHistory = mock(org.flowable.engine.HistoryService.class);
+        var query = mock(org.flowable.engine.history.HistoricProcessInstanceQuery.class, org.mockito.Answers.RETURNS_SELF);
+        when(corruptHistory.createHistoricProcessInstanceQuery()).thenReturn(query);
+        var projection = new WorkflowProcessHistoryProjection(corruptHistory, processEngine.getTaskService(),
+                repositoryService, mock(com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper.class));
+        var child = processEngine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(children.get(0).getId()).singleResult();
+        var capacityRows = java.util.stream.IntStream.range(0, 199).mapToObj(index -> {
+            var row = spy(child);
+            doReturn("capacity-" + index).when(row).getId();
+            return row;
+        }).toList();
+        when(query.listPage(org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(capacityRows).thenReturn(List.of());
+        assertThat(projection.loadProcessRelations(rootAccess, definition).views()).hasSize(200);
+        when(query.listPage(org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(java.util.Collections.nCopies(200, child));
+        assertThatThrownBy(() -> projection.loadProcessRelations(rootAccess, definition)).hasMessageContaining("规模超过详情上限");
+        for (List<org.flowable.engine.history.HistoricProcessInstance> rows : java.util.Arrays.asList(
+                null, List.of(child, child), java.util.Arrays.asList((org.flowable.engine.history.HistoricProcessInstance) null),
+                List.of(access.historicInstance())))
+        {
+            when(query.listPage(org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(rows);
+            assertThatThrownBy(() -> projection.loadProcessRelations(rootAccess, definition)).isInstanceOf(ServiceException.class);
+        }
+        when(query.listPage(org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
+        when(query.singleResult()).thenReturn(rootAccess.historicInstance());
+        var middleAccess = processAccess.requireReadableInstance(children.get(0).getId());
+        assertThatThrownBy(() -> projection.loadProcessRelations(middleAccess, middleDefinition)).hasMessageContaining("不属于返回的父子执行树");
+
+        for (var task : processEngine.getTaskService().createTaskQuery().processDefinitionKey("relationLeaf").list())
+        {
+            processEngine.getTaskService().complete(task.getId());
+        }
+        var finished = processAccess.requireReadableInstance(leaf.getId());
+        assertThat(history.loadProcessRelations(finished, leafDefinition).views())
+                .extracting(row -> row.processStatus()).containsOnly("completed");
+    }
+
+    @Test
+    @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL", matches = ".+")
+    void mysqlDetailReadsStayInsideRepeatableReadAndLeaveNoFixtureAfterRollback()
+    {
+        String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
+        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
+        var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(url,
+                System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
+        var manager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
+        transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        var configuration = new org.flowable.spring.SpringProcessEngineConfiguration();
+        configuration.setDataSource(dataSource);
+        configuration.setTransactionManager(manager);
+        configuration.setDatabaseSchemaUpdate("false");
+        configuration.setHistory("full");
+        configuration.setDisableIdmEngine(true);
+        configuration.setDisableEventRegistry(true);
+        configuration.setAsyncExecutorActivate(false);
+        configuration.setIdGenerator(new org.flowable.common.engine.impl.persistence.StrongUuidGenerator());
+        var engine = configuration.buildProcessEngine();
+        String key = "section5_" + UUID.randomUUID().toString().replace("-", "");
+        AtomicReference<String> instanceId = new AtomicReference<>();
+        AtomicReference<String> deploymentId = new AtomicReference<>();
+        try
+        {
+            transaction.executeWithoutResult(status -> {
+                status.setRollbackOnly();
+                var repository = spy(engine.getRepositoryService());
+                var historyService = spy(engine.getHistoryService());
+                var deployment = repository.createDeployment().name(key)
+                        .addString(key + ".bpmn20.xml", BPMN.replace("startChain", key)).deploy();
+                deploymentId.set(deployment.getId());
+                var deployed = repository.createProcessDefinitionQuery().deploymentId(deployment.getId()).singleResult();
+                var artifacts = new WorkflowDeploymentArtifactRepository(repository);
+                var snapshots = deploymentArtifacts(deployment.getId());
+                snapshots.participantRules().get(0).setProcessKey(key);
+                artifacts.persist(deployment.getId(), snapshots);
+                var instance = engine.getRuntimeService().createProcessInstanceBuilder()
+                        .processDefinitionId(deployed.getId()).businessStatus("running").start();
+                instanceId.set(instance.getId());
+                var accessService = new WorkflowProcessAccessService(historyService, engine.getRuntimeService(),
+                        engine.getTaskService(), null, null, null, null,
+                        new com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy());
+                var access = accessService.requireReadableInstance(instance.getId(), new WorkflowCurrentIdentity("1", Set.of()));
+                var history = new WorkflowProcessHistoryProjection(historyService, engine.getTaskService(), repository,
+                        mock(com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper.class));
+                clearInvocations(repository, historyService);
+                var read = artifacts.openRead(deployment.getId());
+                assertThat(read.forms()).hasSize(1);
+                assertThat(read.forms()).isSameAs(read.forms());
+                assertThat(read.controlledLoops(key)).isEmpty();
+                assertThat(read.controlledLoops(key)).isEmpty();
+                assertThat(history.loadProcessRelations(access, deployed).views()).singleElement()
+                        .satisfies(row -> assertThat(row.processInstanceId()).isEqualTo(instance.getId()));
+                verify(repository, times(1)).createDeploymentQuery();
+                verify(repository, times(3)).getResourceAsStream(anyString(), anyString());
+                verify(repository, org.mockito.Mockito.never()).createProcessDefinitionQuery();
+                verify(historyService, times(1)).createHistoricProcessInstanceQuery();
+                assertThat(new JdbcTemplate(dataSource).execute(
+                        (org.springframework.jdbc.core.ConnectionCallback<Integer>) java.sql.Connection::getTransactionIsolation))
+                        .isEqualTo(java.sql.Connection.TRANSACTION_REPEATABLE_READ);
+            });
+            assertThat(engine.getRuntimeService().createProcessInstanceQuery().processInstanceId(instanceId.get()).count()).isZero();
+            assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(instanceId.get()).count()).isZero();
+            assertThat(engine.getRepositoryService().createDeploymentQuery().deploymentId(deploymentId.get()).count()).isZero();
+            assertThat(engine.getRepositoryService().createDeploymentQuery().parentDeploymentId(deploymentId.get()).count()).isZero();
+        }
+        finally
+        {
+            engine.close();
+        }
+    }
+
+    private ProcessDefinition deployRelationProcess(String key, String body)
+    {
+        var deployment = repositoryService.createDeployment().addString(key + ".bpmn20.xml", """
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="relations">
+                <process id="%s" isExecutable="true"><startEvent id="start" flowable:formKey="startForm"/>%s</process></definitions>
+                """.formatted(key, body)).deploy();
+        var deployed = repositoryService.createProcessDefinitionQuery().deploymentId(deployment.getId()).singleResult();
+        var artifacts = deploymentArtifacts(deployment.getId());
+        artifacts.participantRules().get(0).setProcessKey(key);
+        artifactRepository.persist(deployment.getId(), artifacts);
+        when(definitionLockMapper.selectLatestDefaultTenantDefinitionForUpdate(key))
+                .thenReturn(new WorkflowProcessDefinitionLockRow(deployed.getId(), deployment.getId(), 1));
+        return deployed;
     }
 
     @Test
