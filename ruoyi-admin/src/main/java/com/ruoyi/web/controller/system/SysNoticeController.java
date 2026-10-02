@@ -144,7 +144,6 @@ public class SysNoticeController extends BaseController
     @DeleteMapping("/{noticeIds}")
     public AjaxResult remove(@PathVariable Long[] noticeIds)
     {
-        noticeReadService.deleteByNoticeIds(noticeIds);
         return toAjax(noticeService.deleteNoticeByIds(noticeIds));
     }
 }

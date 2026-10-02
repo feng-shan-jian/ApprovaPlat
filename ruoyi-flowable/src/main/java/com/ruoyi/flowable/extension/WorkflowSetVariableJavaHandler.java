@@ -67,6 +67,20 @@ public class WorkflowSetVariableJavaHandler implements WorkflowJavaExtensionHand
     @Override
     public String validateAndNormalizeConfig(JsonNode config)
     {
+        ObjectNode normalized = validatedConfig(config);
+        try
+        {
+            return objectMapper.writeValueAsString(normalized);
+        }
+        catch (JacksonException exception)
+        {
+            throw new ServiceException("扩展配置序列化失败", HttpStatus.ERROR);
+        }
+    }
+
+    /** 校验直接执行和部署入口共用的配置，保留固定字段顺序。 */
+    private ObjectNode validatedConfig(JsonNode config)
+    {
         if (config == null || !config.isObject() || config.size() != 2
                 || !config.has("targetVariable") || !config.has("value"))
         {
@@ -93,14 +107,7 @@ public class WorkflowSetVariableJavaHandler implements WorkflowJavaExtensionHand
         ObjectNode normalized = objectMapper.createObjectNode();
         normalized.put("targetVariable", targetVariable);
         normalized.set("value", valueNode.deepCopy());
-        try
-        {
-            return objectMapper.writeValueAsString(normalized);
-        }
-        catch (JacksonException exception)
-        {
-            throw new ServiceException("扩展配置序列化失败", HttpStatus.ERROR);
-        }
+        return normalized;
     }
 
     /**
@@ -144,10 +151,9 @@ public class WorkflowSetVariableJavaHandler implements WorkflowJavaExtensionHand
      */
     private ConfiguredVariable readConfiguredVariable(JsonNode config)
     {
-        String normalized = validateAndNormalizeConfig(config);
+        JsonNode safeConfig = validatedConfig(config);
         try
         {
-            JsonNode safeConfig = objectMapper.readTree(normalized);
             JsonNode value = safeConfig.get("value");
             Object javaValue;
             if (value.isTextual())
@@ -164,12 +170,25 @@ public class WorkflowSetVariableJavaHandler implements WorkflowJavaExtensionHand
             }
             else
             {
-                javaValue = value.doubleValue();
+                // 保留 JSON 数字词法对应的标量类型和精度，不往返解析整个配置。
+                Number number = value.numberValue();
+                String numericText = number.toString();
+                if ((number instanceof Float || number instanceof Double) && !Double.isFinite(number.doubleValue()))
+                {
+                    javaValue = numericText;
+                }
+                else if (numericText.indexOf('.') < 0 && numericText.indexOf('e') < 0 && numericText.indexOf('E') < 0)
+                {
+                    javaValue = new java.math.BigInteger(numericText).longValueExact();
+                }
+                else
+                {
+                    javaValue = Double.parseDouble(numericText);
+                }
             }
-            return new ConfiguredVariable(
-                    safeConfig.get("targetVariable").textValue(), javaValue);
+            return new ConfiguredVariable(safeConfig.get("targetVariable").textValue(), javaValue);
         }
-        catch (JacksonException exception)
+        catch (JacksonException | ArithmeticException exception)
         {
             throw new ServiceException("扩展快照配置解析失败", HttpStatus.ERROR);
         }

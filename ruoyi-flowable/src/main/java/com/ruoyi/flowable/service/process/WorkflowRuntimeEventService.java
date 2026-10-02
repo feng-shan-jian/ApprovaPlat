@@ -97,7 +97,7 @@ public class WorkflowRuntimeEventService
         WfRuntimeEventRequest row = buildRow(normalized, credential.credentialId());
         try
         {
-            validateVariables(normalized.variables(), credential.allowedVariables());
+            requireAllowedVariables(normalized.variables(), credential.allowedVariables());
             return engineOperations.writeAsUser(credential.actorUserId(), () -> process(row,
                     normalized.variables()));
         }
@@ -355,12 +355,12 @@ public class WorkflowRuntimeEventService
     }
 
     /**
-     * 校验变量名必须在凭据白名单内，值只能是有界 JSON 标量。
+     * 校验已规范化变量的名称必须在凭据白名单内。
      * @param variables Map&lt;String,Object&gt;，规范变量映射
      * @param allowed Set&lt;String&gt;，凭据冻结变量白名单
      * @return void，非法变量在任何 Flowable 查询和写入之前失败
      */
-    private void validateVariables(Map<String, Object> variables, java.util.Set<String> allowed)
+    private void requireAllowedVariables(Map<String, Object> variables, java.util.Set<String> allowed)
     {
         for (Map.Entry<String, Object> entry : variables.entrySet())
         {
@@ -369,7 +369,6 @@ public class WorkflowRuntimeEventService
                 throw new ServiceException("运行事件包含未授权变量", HttpStatus.FORBIDDEN)
                         .setSubCode("RUNTIME_EVENT_VARIABLE_DENIED");
             }
-            scalarText(entry.getValue());
         }
     }
 

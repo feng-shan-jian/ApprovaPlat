@@ -208,16 +208,9 @@ public class WorkflowNotificationAdminService
         String code = row.get("lastErrorCode") == null ? null
                 : String.valueOf(row.get("lastErrorCode"));
         Object originalSummary = row.get("lastErrorSummary");
-        String summary = switch (code == null ? "" : code)
+        String smtpSummary = WorkflowMailFailureClassifier.safeSummary(code);
+        String summary = smtpSummary != null ? smtpSummary : switch (code == null ? "" : code)
         {
-            case "SMTP_NOT_CONFIGURED" -> "SMTP 邮件服务尚未配置";
-            case "MAIL_CREDENTIAL_DECRYPT_FAILED" -> "SMTP 授权码无法解密";
-            case "SMTP_CONNECT_FAILED" -> "SMTP 服务器无法连接";
-            case "SMTP_TIMEOUT" -> "SMTP 连接或发送超时";
-            case "SMTP_AUTH_FAILED" -> "SMTP 认证失败";
-            case "SMTP_TLS_FAILED" -> "SMTP TLS 或 SSL 协商失败";
-            case "SMTP_FROM_REJECTED" -> "SMTP 服务器拒绝发件邮箱";
-            case "SMTP_DELIVERY_FAILED" -> "SMTP 投递失败";
             case "RECIPIENT_INVALID" -> "通知接收人当前不可用";
             case "BUSINESS_OBJECT_COMPLETED" -> "关联审批业务已经结束";
             case "LEASE_EXPIRED_AFTER_FINAL_ATTEMPT" -> "最终投递租约过期";

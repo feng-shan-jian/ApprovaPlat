@@ -27,7 +27,6 @@ import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WorkflowMultiInstanceUserRow;
-import com.ruoyi.flowable.domain.WfMultiInstanceRound;
 import com.ruoyi.flowable.domain.dto.WorkflowMultiInstanceAdjustmentAction;
 import com.ruoyi.flowable.domain.dto.WorkflowMultiInstanceAdjustmentRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowMultiInstanceMemberView;
@@ -341,13 +340,12 @@ public class WorkflowMultiInstanceService
         }
         String taskId = requireId(request.taskId());
         String comment = requireComment(request.comment());
-        List<Long> rawUserIds = request.userIds();
-        if (rawUserIds != null && rawUserIds.stream().anyMatch(Objects::isNull))
+        List<Long> userIds = request.userIds();
+        if (userIds.stream().anyMatch(Objects::isNull))
         {
-            // 领域服务必须独立防御非 HTTP 调用，不能让 List.copyOf 的 NPE 泄漏为非稳定 500。
+            // DTO 保留非法元素供校验使用，非 HTTP 调用也应返回稳定参数错误。
             throw invalidArgument();
         }
-        List<Long> userIds = rawUserIds == null ? List.of() : List.copyOf(rawUserIds);
         if (request.action() == WorkflowMultiInstanceAdjustmentAction.ADD)
         {
             if (userIds.isEmpty() || request.targetTaskId() != null)

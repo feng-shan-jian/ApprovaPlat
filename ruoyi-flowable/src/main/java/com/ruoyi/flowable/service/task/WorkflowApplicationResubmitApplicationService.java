@@ -41,7 +41,6 @@ public class WorkflowApplicationResubmitApplicationService
             HttpStatus.NOT_FOUND, HttpStatus.CONFLICT);
 
     private final WorkflowEngineOperations engineOperations;
-    private final WorkflowTaskRequestValidator requestValidator;
     private final WorkflowTaskRuntimeReader runtimeReader;
     private final WorkflowReturnedTaskStateService returnedTaskStateService;
     private final WorkflowTaskActionAuditWriter auditWriter;
@@ -59,7 +58,6 @@ public class WorkflowApplicationResubmitApplicationService
      */
     public WorkflowApplicationResubmitApplicationService(
             WorkflowEngineOperations engineOperations,
-            WorkflowTaskRequestValidator requestValidator,
             WorkflowTaskRuntimeReader runtimeReader,
             WorkflowReturnedTaskStateService returnedTaskStateService,
             WorkflowTaskActionAuditWriter auditWriter,
@@ -72,7 +70,6 @@ public class WorkflowApplicationResubmitApplicationService
             RuntimeService runtimeService)
     {
         this.engineOperations = engineOperations;
-        this.requestValidator = requestValidator;
         this.runtimeReader = runtimeReader;
         this.returnedTaskStateService = returnedTaskStateService;
         this.auditWriter = auditWriter;

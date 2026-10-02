@@ -95,7 +95,7 @@ export function getWorkflowNotificationMailConfig() {
 /**
  * 以乐观锁保存平台 SMTP 单例配置。
  * @param {object} data 当前 SMTP 字段、可选新授权码和 expectedRevision。
- * @returns {Promise<object>} 保存结果；调用方成功后必须重新查询正式配置。
+ * @returns {Promise<object>} data 为写后脱敏配置、credentialConfigured 和最新 revision。
  */
 export function saveWorkflowNotificationMailConfig(data) {
   return request(notificationMailConfigSaveRequest(data))

@@ -34,35 +34,6 @@ public class FileUploadUtils
     public static final int DEFAULT_FILE_NAME_LENGTH = 100;
 
     /**
-     * 默认上传的地址
-     */
-    private static String defaultBaseDir = RuoYiConfig.getProfile();
-
-    public static String getDefaultBaseDir()
-    {
-        return defaultBaseDir;
-    }
-
-    /**
-     * 以默认配置进行文件上传
-     *
-     * @param file 上传的文件
-     * @return 文件名称
-     * @throws Exception
-     */
-    public static final String upload(MultipartFile file) throws IOException
-    {
-        try
-        {
-            return upload(getDefaultBaseDir(), file, MimeTypeUtils.DEFAULT_ALLOWED_EXTENSION);
-        }
-        catch (Exception e)
-        {
-            throw new IOException(e.getMessage(), e);
-        }
-    }
-
-    /**
      * 根据文件路径上传
      *
      * @param baseDir 相对应用的基目录

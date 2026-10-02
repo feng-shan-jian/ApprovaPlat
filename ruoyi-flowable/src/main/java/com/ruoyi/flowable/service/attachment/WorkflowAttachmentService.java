@@ -396,41 +396,16 @@ public class WorkflowAttachmentService
     {
         Long ownerUserId = requireNumericUserId(actorUserId);
         String normalizedDraftId = requireAttachmentId(draftId);
-        Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
-        Set<String> requestedIds = new LinkedHashSet<>(flattenUniqueIds(references));
+        CheckedReferences references = checkedReferences(attachmentIdsByField);
 
         // 草稿行已经由上层锁定；先锁当前关联，再锁请求引用，保证附件状态对账具有确定顺序。
         List<WfAttachment> currentRows = attachmentMapper.selectByDraftIdForUpdate(
                 normalizedDraftId, ownerUserId);
-        List<WfAttachment> requestedRows = requestedIds.isEmpty() ? List.of()
-                : attachmentMapper.selectByIdsForUpdate(requestedIds);
+        List<WfAttachment> requestedRows = references.ids().isEmpty() ? List.of()
+                : attachmentMapper.selectByIdsForUpdate(references.ids());
         Map<String, WfAttachment> requestedById = indexLockedRows(requestedRows);
-        LocalDateTime now = LocalDateTime.now();
-        for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
-        {
-            for (String attachmentId : fieldEntry.getValue())
-            {
-                WfAttachment attachment = requestedById.get(attachmentId);
-                assertDraftAttachmentReference(attachment, ownerUserId, normalizedDraftId,
-                        fieldEntry.getKey(), now);
-                verifyStoredAttachment(attachment);
-                if (attachment.status() == WorkflowAttachmentStatus.TEMP
-                        && attachmentMapper.bindDraftAttachment(attachmentId, ownerUserId,
-                                fieldEntry.getKey(), normalizedDraftId) != 1)
-                {
-                    throw stateConflict();
-                }
-            }
-        }
-        for (WfAttachment current : currentRows)
-        {
-            if (!requestedIds.contains(current.attachmentId())
-                    && attachmentMapper.markDraftAttachmentDeleted(current.attachmentId(),
-                            ownerUserId, normalizedDraftId) != 1)
-            {
-                throw stateConflict();
-            }
-        }
+        reconcileLockedDraftAttachments(ownerUserId, normalizedDraftId, references,
+                currentRows, requestedById);
     }
 
     /**
@@ -449,15 +424,14 @@ public class WorkflowAttachmentService
     {
         Long ownerUserId = requireNumericUserId(actorUserId);
         String normalizedDraftId = requireAttachmentId(draftId);
-        Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
-        LinkedHashSet<String> requestedIds = new LinkedHashSet<>(flattenUniqueIds(references));
+        CheckedReferences references = checkedReferences(attachmentIdsByField);
 
         // 先锁当前 DRAFT 集合，再只锁本次新增 UUID；同一附件不会被第二个批量查询重复取得。
         List<WfAttachment> currentRows = attachmentMapper.selectByDraftIdForUpdate(
                 normalizedDraftId, ownerUserId);
         Map<String, WfAttachment> lockedById = new LinkedHashMap<>(
                 indexLockedRows(currentRows));
-        LinkedHashSet<String> newIds = new LinkedHashSet<>(requestedIds);
+        LinkedHashSet<String> newIds = new LinkedHashSet<>(references.ids());
         newIds.removeAll(lockedById.keySet());
         if (!newIds.isEmpty())
         {
@@ -467,36 +441,51 @@ public class WorkflowAttachmentService
         }
 
         LinkedHashMap<String, Object> projected = new LinkedHashMap<>(normalizedVariables);
-        LocalDateTime now = LocalDateTime.now();
-        for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
+        reconcileLockedDraftAttachments(ownerUserId, normalizedDraftId, references,
+                currentRows, lockedById);
+        for (Map.Entry<String, List<String>> fieldEntry : references.byField().entrySet())
         {
             ArrayNode safeAttachments = objectMapper.createArrayNode();
             for (String attachmentId : fieldEntry.getValue())
             {
+                safeAttachments.add(toSafeVariableProjection(lockedById.get(attachmentId)));
+            }
+            projected.put(fieldEntry.getKey(), safeAttachments);
+        }
+        return Collections.unmodifiableMap(projected);
+    }
+
+    /** 复用各入口已按原顺序取得的锁定记录，统一草稿附件校验、绑定和移除。 */
+    private void reconcileLockedDraftAttachments(Long ownerUserId, String draftId,
+            CheckedReferences references, List<WfAttachment> currentRows,
+            Map<String, WfAttachment> lockedById)
+    {
+        LocalDateTime now = LocalDateTime.now();
+        for (Map.Entry<String, List<String>> fieldEntry : references.byField().entrySet())
+        {
+            for (String attachmentId : fieldEntry.getValue())
+            {
                 WfAttachment attachment = lockedById.get(attachmentId);
-                assertDraftAttachmentReference(attachment, ownerUserId, normalizedDraftId,
+                assertDraftAttachmentReference(attachment, ownerUserId, draftId,
                         fieldEntry.getKey(), now);
                 verifyStoredAttachment(attachment);
                 if (attachment.status() == WorkflowAttachmentStatus.TEMP
                         && attachmentMapper.bindDraftAttachment(attachmentId, ownerUserId,
-                                fieldEntry.getKey(), normalizedDraftId) != 1)
+                                fieldEntry.getKey(), draftId) != 1)
                 {
                     throw stateConflict();
                 }
-                safeAttachments.add(toSafeVariableProjection(attachment));
             }
-            projected.put(fieldEntry.getKey(), safeAttachments);
         }
         for (WfAttachment current : currentRows)
         {
-            if (!requestedIds.contains(current.attachmentId())
+            if (!references.ids().contains(current.attachmentId())
                     && attachmentMapper.markDraftAttachmentDeleted(current.attachmentId(),
-                            ownerUserId, normalizedDraftId) != 1)
+                            ownerUserId, draftId) != 1)
             {
                 throw stateConflict();
             }
         }
-        return Collections.unmodifiableMap(projected);
     }
 
     /**
@@ -518,8 +507,8 @@ public class WorkflowAttachmentService
         String normalizedDraftId = requireAttachmentId(draftId);
         String normalizedInstanceId = requireEngineId(processInstanceId);
         String normalizedNodeKey = requireNodeKey(nodeKey);
-        Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
-        for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
+        CheckedReferences references = checkedReferences(attachmentIdsByField);
+        for (Map.Entry<String, List<String>> fieldEntry : references.byField().entrySet())
         {
             for (String attachmentId : fieldEntry.getValue())
             {
@@ -576,17 +565,17 @@ public class WorkflowAttachmentService
         String normalizedInstanceId = requireEngineId(processInstanceId);
         String normalizedTaskId = requireTaskId(taskId);
         String normalizedNodeKey = requireNodeKey(nodeKey);
-        Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
-        if (references.isEmpty())
+        CheckedReferences references = checkedReferences(attachmentIdsByField);
+        if (references.byField().isEmpty())
         {
             return;
         }
 
         List<WfAttachment> lockedRows = attachmentMapper.selectByIdsForUpdate(
-                flattenUniqueIds(references));
+                references.ids());
         Map<String, WfAttachment> attachmentsById = indexLockedRows(lockedRows);
         LocalDateTime now = LocalDateTime.now();
-        for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
+        for (Map.Entry<String, List<String>> fieldEntry : references.byField().entrySet())
         {
             String fieldName = fieldEntry.getKey();
             for (String attachmentId : fieldEntry.getValue())
@@ -855,19 +844,19 @@ public class WorkflowAttachmentService
             String processInstanceId, Map<String, Object> normalizedVariables,
             Map<String, List<String>> attachmentIdsByField)
     {
-        Map<String, List<String>> references = checkedReferences(attachmentIdsByField);
-        if (references.isEmpty())
+        CheckedReferences references = checkedReferences(attachmentIdsByField);
+        if (references.byField().isEmpty())
         {
             return normalizedVariables;
         }
 
         List<WfAttachment> lockedRows = attachmentMapper.selectByIdsForUpdate(
-                flattenUniqueIds(references));
+                references.ids());
         Map<String, WfAttachment> attachmentsById = indexLockedRows(lockedRows);
         LocalDateTime now = LocalDateTime.now();
         LinkedHashMap<String, Object> projectedVariables = new LinkedHashMap<>(
                 normalizedVariables == null ? Map.of() : normalizedVariables);
-        for (Map.Entry<String, List<String>> fieldEntry : references.entrySet())
+        for (Map.Entry<String, List<String>> fieldEntry : references.byField().entrySet())
         {
             String fieldName = fieldEntry.getKey();
             ArrayNode safeAttachments = objectMapper.createArrayNode();
@@ -946,33 +935,18 @@ public class WorkflowAttachmentService
             assertBindableAttachment(attachment, ownerUserId, fieldName, now);
             return;
         }
-        assertPersistedDraftAttachment(attachment, ownerUserId, draftId, fieldName);
+        assertPersistedDraftAttachment(attachment, draftId);
     }
 
     /**
      * 校验附件已经完整绑定当前草稿且尚未产生流程对象副作用。
      *
-     * @param attachment WfAttachment，锁定附件或 null
-     * @param ownerUserId Long，草稿所有者
+     * @param attachment WfAttachment，已核验存在、所有者及字段的锁定附件
      * @param draftId String，当前草稿 UUID
-     * @param fieldName String，开始表单字段名
      * @return void，关联或状态异常时抛出稳定业务异常
      */
-    private void assertPersistedDraftAttachment(WfAttachment attachment, Long ownerUserId,
-            String draftId, String fieldName)
+    private void assertPersistedDraftAttachment(WfAttachment attachment, String draftId)
     {
-        if (attachment == null)
-        {
-            throw notFound();
-        }
-        if (!ownerUserId.equals(attachment.ownerUserId()))
-        {
-            throw forbidden();
-        }
-        if (!fieldName.equals(attachment.fieldName()))
-        {
-            throw new ServiceException("工作流附件所属表单字段不匹配", HttpStatus.BAD_REQUEST);
-        }
         if (attachment.status() != WorkflowAttachmentStatus.DRAFT
                 || !draftId.equals(attachment.draftId())
                 || attachment.expireTime() == null || attachment.processInstanceId() != null
@@ -1092,14 +1066,14 @@ public class WorkflowAttachmentService
      * 校验上传字段引用结构并返回不可修改副本。
      *
      * @param references Map&lt;String, List&lt;String&gt;&gt;，变量校验器提取的附件引用
-     * @return Map&lt;String, List&lt;String&gt;&gt;，字段和 UUID 均完成规范校验的副本
+     * @return CheckedReferences，字段引用和唯一 UUID 均完成校验的不可变结果
      */
-    private Map<String, List<String>> checkedReferences(
+    private CheckedReferences checkedReferences(
             Map<String, List<String>> references)
     {
         if (references == null || references.isEmpty())
         {
-            return Map.of();
+            return new CheckedReferences(Map.of(), Set.of());
         }
         LinkedHashMap<String, List<String>> checked = new LinkedHashMap<>();
         for (Map.Entry<String, List<String>> entry : references.entrySet())
@@ -1114,17 +1088,21 @@ public class WorkflowAttachmentService
                     .toList();
             checked.put(fieldName, List.copyOf(attachmentIds));
         }
-        flattenUniqueIds(checked);
-        return Collections.unmodifiableMap(checked);
+        return new CheckedReferences(Collections.unmodifiableMap(checked), flattenUniqueIds(checked));
+    }
+
+    /** 同一次引用校验产生的规范化字段映射与有序唯一 UUID。 */
+    private record CheckedReferences(Map<String, List<String>> byField, Set<String> ids)
+    {
     }
 
     /**
      * 按字段顺序展开附件 UUID 并拒绝跨字段重复引用及总量超限。
      *
      * @param references Map&lt;String, List&lt;String&gt;&gt;，已完成单值格式校验的引用
-     * @return List&lt;String&gt;，全局去重且顺序稳定的附件 UUID
+     * @return Set&lt;String&gt;，全局去重且顺序稳定的附件 UUID
      */
-    private List<String> flattenUniqueIds(Map<String, List<String>> references)
+    private Set<String> flattenUniqueIds(Map<String, List<String>> references)
     {
         Set<String> uniqueIds = new LinkedHashSet<>();
         for (List<String> fieldIds : references.values())
@@ -1142,7 +1120,7 @@ public class WorkflowAttachmentService
                 }
             }
         }
-        return List.copyOf(uniqueIds);
+        return Collections.unmodifiableSet(uniqueIds);
     }
 
     /**

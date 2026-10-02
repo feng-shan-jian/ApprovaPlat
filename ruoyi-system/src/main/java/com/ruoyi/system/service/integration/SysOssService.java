@@ -211,7 +211,7 @@ public class SysOssService
         ActiveOssConfig config = configById(configId);
         try
         {
-            S3Response response = execute(config, "HEAD", null, null, null, 0L);
+            S3Response response = execute(config, "HEAD", null, null, null, null);
             boolean success = response.statusCode() >= 200 && response.statusCode() < 300;
             if (response.body() != null)
             {
@@ -343,7 +343,7 @@ public class SysOssService
                 throw new ServiceException("上传文件大小校验失败", HttpStatus.BAD_REQUEST);
             }
             String sha256 = sha256(staged);
-            S3Response response = execute(config, "PUT", objectKey, contentType, staged, actualSize);
+            S3Response response = execute(config, "PUT", objectKey, contentType, staged, sha256);
             close(response.body());
             if (response.statusCode() < 200 || response.statusCode() >= 300)
             {
@@ -408,7 +408,7 @@ public class SysOssService
         ActiveOssConfig config = configById(object.configId());
         try
         {
-            S3Response response = execute(config, "GET", object.objectKey(), null, null, 0L);
+            S3Response response = execute(config, "GET", object.objectKey(), null, null, null);
             if (response.statusCode() < 200 || response.statusCode() >= 300 || response.body() == null)
             {
                 close(response.body());
@@ -449,7 +449,7 @@ public class SysOssService
         ActiveOssConfig config = configById(object.configId());
         try
         {
-            S3Response response = execute(config, "DELETE", object.objectKey(), null, null, 0L);
+            S3Response response = execute(config, "DELETE", object.objectKey(), null, null, null);
             close(response.body());
             if (!((response.statusCode() >= 200 && response.statusCode() < 300)
                     || response.statusCode() == 404))
@@ -585,7 +585,7 @@ public class SysOssService
     {
         try
         {
-            S3Response response = execute(config, "DELETE", objectKey, null, null, 0L);
+            S3Response response = execute(config, "DELETE", objectKey, null, null, null);
             close(response.body());
             if (response.statusCode() < 200 || response.statusCode() >= 300)
             {
@@ -606,18 +606,18 @@ public class SysOssService
      * @param objectKey String，可空对象键；空表示桶操作
      * @param contentType String，可空 MIME
      * @param body Path，可空上传文件
-     * @param contentLength long，上传字节数
+     * @param bodyHash String，已计算的上传文件摘要；空载荷时为空
      * @return S3Response，HTTP 状态与响应流
      * @throws Exception 签名、网络或文件读取失败
      */
     private S3Response execute(ActiveOssConfig config, String method, String objectKey,
-            String contentType, Path body, long contentLength) throws Exception
+            String contentType, Path body, String bodyHash) throws Exception
     {
         RequestTarget target = requestTarget(config, objectKey);
         Instant now = Instant.now();
         String amzDate = AMZ_DATE.format(now);
         String date = DATE_STAMP.format(now);
-        String payloadHash = body == null ? sha256(new byte[0]) : sha256(body);
+        String payloadHash = body == null ? sha256(new byte[0]) : bodyHash;
         LinkedHashMap<String, String> headers = new LinkedHashMap<>();
         String normalizedType = contentType == null ? null : contentType;
         if (normalizedType != null)

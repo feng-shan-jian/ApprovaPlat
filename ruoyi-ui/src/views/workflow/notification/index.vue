@@ -904,8 +904,8 @@ function openMailConfig() {
 }
 
 /**
- * SMTP 保存并回读成功后同步策略邮件可用状态并清理旧校验错误。
- * @param {{configured:boolean,revision:number}} result 邮件配置弹窗回读后的脱敏状态。
+ * SMTP 保存成功后同步策略邮件可用状态并清理旧校验错误。
+ * @param {{configured:boolean,revision:number}} result 邮件配置保存响应中的脱敏状态。
  * @returns {void} 只同步布尔可用状态，不接收任何凭据字段。
  */
 function handleMailConfigSaved(result) {

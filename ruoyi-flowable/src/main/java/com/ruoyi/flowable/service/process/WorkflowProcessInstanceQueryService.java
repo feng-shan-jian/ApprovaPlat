@@ -563,7 +563,7 @@ public class WorkflowProcessInstanceQueryService
         String engineState = runtimeSuspended == null ? instance.getState()
                 : runtimeSuspended ? "suspended" : "running";
         return WorkflowProcessStatusNormalizer.normalize(instance.getBusinessStatus(),
-                engineState, toInstant(instance.getEndTime()), instance.getDeleteReason());
+                engineState, toInstant(instance.getEndTime()));
     }
 
     /**

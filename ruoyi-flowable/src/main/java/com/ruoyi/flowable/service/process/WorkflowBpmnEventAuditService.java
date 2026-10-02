@@ -84,7 +84,6 @@ public class WorkflowBpmnEventAuditService
      * @param deploymentId String，部署主键
      * @param processInstanceId String，实例主键
      * @param processDefinitionId String，定义主键
-     * @param processDefinitionKey String，流程定义 key
      * @param executionId String，执行主键
      * @param sourceElementId String，产生节点
      * @param sourceType String，来源类型
@@ -100,7 +99,7 @@ public class WorkflowBpmnEventAuditService
      */
     public record RuntimeEvent(String idempotencyKey, String deploymentId,
             String processInstanceId, String processDefinitionId,
-            String processDefinitionKey, String executionId,
+            String executionId,
             String sourceElementId, String sourceType, String eventType, String eventCode,
             String eventName, String notificationPolicy, String matchStatus,
             String boundaryEventId, Boolean interrupting, String messageSummary,

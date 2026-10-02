@@ -37,7 +37,6 @@ import com.ruoyi.flowable.service.process.WorkflowValidatedStartVariables;
 public class WorkflowTaskCompletionApplicationService
 {
     private final WorkflowEngineOperations engineOperations;
-    private final WorkflowTaskRequestValidator requestValidator;
     private final WorkflowTaskRuntimeReader runtimeReader;
     private final WorkflowTaskBpmnReader bpmnReader;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
@@ -60,7 +59,6 @@ public class WorkflowTaskCompletionApplicationService
      */
     public WorkflowTaskCompletionApplicationService(
             WorkflowEngineOperations engineOperations,
-            WorkflowTaskRequestValidator requestValidator,
             WorkflowTaskRuntimeReader runtimeReader,
             WorkflowTaskBpmnReader bpmnReader,
             WorkflowDeploymentArtifactRepository artifactRepository,
@@ -76,7 +74,6 @@ public class WorkflowTaskCompletionApplicationService
             WorkflowIdentityResolver identityResolver)
     {
         this.engineOperations = engineOperations;
-        this.requestValidator = requestValidator;
         this.runtimeReader = runtimeReader;
         this.bpmnReader = bpmnReader;
         this.artifactRepository = artifactRepository;
@@ -243,15 +240,14 @@ public class WorkflowTaskCompletionApplicationService
         {
             throw dataError();
         }
-        Map<String, Object> variables = requestedVariables == null
-                ? Map.of() : requestedVariables;
+        Map<String, Object> variables = requestedVariables;
         String formKey = WorkflowUserTaskForm.formKey(userTask);
         var deploymentRead = artifactRepository.openRead(context.definition().getDeploymentId());
         if (formKey == null)
         {
             if (!variables.isEmpty())
             {
-                throw requestValidator.invalidArgument();
+                throw new ServiceException("工作流请求参数不合法", HttpStatus.BAD_REQUEST);
             }
             return new CompletionPreparation(context, deploymentRead, userTask, Map.of(), Map.of(),
                     WorkflowUserTaskForm.isTaskLocal(userTask), null, null);

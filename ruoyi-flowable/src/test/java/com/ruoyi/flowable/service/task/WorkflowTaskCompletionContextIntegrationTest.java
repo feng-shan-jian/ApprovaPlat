@@ -2,7 +2,6 @@ package com.ruoyi.flowable.service.task;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -282,7 +281,6 @@ class WorkflowTaskCompletionContextIntegrationTest
                         loopExecutionMapper);
 
         completionApplicationService = new WorkflowTaskCompletionApplicationService(engineOperations,
-                        new WorkflowTaskRequestValidator(),
                         new WorkflowTaskRuntimeReader(runtimeService, taskService,
                                 historyService),
                         new WorkflowTaskBpmnReader(repositoryService),

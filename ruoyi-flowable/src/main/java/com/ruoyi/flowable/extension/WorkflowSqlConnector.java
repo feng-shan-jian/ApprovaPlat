@@ -17,7 +17,6 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.domain.WfSqlDataSource;
 import com.ruoyi.flowable.runtime.WorkflowConnectorMetrics;
 import com.ruoyi.flowable.service.model.WorkflowSqlDataSourceService;
@@ -147,12 +146,10 @@ public class WorkflowSqlConnector
     /**
      * 复核并执行冻结 SQL；失败交回 Flowable Job 重试，外库写由业务唯一键契约消除重复副作用。
      * @param execution DelegateExecution，当前 Flowable 执行上下文
-     * @param snapshot WfDeployExtensionSnapshot，扩展部署快照
      * @param config JsonNode，冻结 SQL 配置
      * @return void，结果按受控 resultVariable 写回流程变量
      */
-    public void execute(DelegateExecution execution, WfDeployExtensionSnapshot snapshot,
-            JsonNode config)
+    public void execute(DelegateExecution execution, JsonNode config)
     {
         FrozenConfig frozen = parseFrozen(config);
         Map<String, Object> parameters = resolveParameters(execution, frozen);
@@ -314,7 +311,7 @@ public class WorkflowSqlConnector
         {
             throw new ServiceException("SQL 模板部署快照已漂移", HttpStatus.ERROR);
         }
-        return new FrozenConfig(author, operation, template.tables(), dataSource);
+        return new FrozenConfig(author, operation, dataSource);
     }
 
     /**
@@ -476,7 +473,7 @@ public class WorkflowSqlConnector
 
     private record AuthorConfig(String dataSourceKey, String sql, ObjectNode parameters,
             String resultVariable, String idempotencyColumn, int maxRows) { }
-    private record FrozenConfig(AuthorConfig author, String operation, List<String> tables,
+    private record FrozenConfig(AuthorConfig author, String operation,
             DataSourceSnapshot dataSource) { }
     private record DataSourceSnapshot(long dataSourceId, String dataSourceName,
             String connectionType, String jdbcUrlRef, String usernameRef, String passwordRef,

@@ -28,6 +28,16 @@ public class WorkflowMailFailureClassifier
 {
     private static final int MAX_CAUSES = 48;
 
+    /** 按稳定错误码返回可安全公开的运维摘要，未知错误由调用方处理。 */
+    public static String safeSummary(String code)
+    {
+        for (Classification classification : Classification.values())
+        {
+            if (classification.code().equals(code)) return classification.outboxSummary();
+        }
+        return null;
+    }
+
     /**
      * 将一次运行时邮件投递失败转换为 outbox 可保存的稳定结果。
      *

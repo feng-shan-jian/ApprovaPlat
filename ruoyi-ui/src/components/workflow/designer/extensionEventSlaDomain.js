@@ -95,12 +95,10 @@ export function createExtensionEventSlaDomain(context) {
   ))
   const connectorEndpoints = ref([])
   const sqlDataSources = ref([])
-  const extensionLoading = ref(false)
+  const resourceLoading = ref(false)
   const errorEventOptions = ref([])
   const escalationEventOptions = ref([])
-  const eventCodeLoading = ref(false)
   const slaCalendarOptions = ref([])
-  const slaLoading = ref(false)
   const {
     readSlaConfig, normalizeAndValidateSlaConfig, slaConfigToProperties
   } = createUserTaskSlaDomain()
@@ -321,7 +319,7 @@ export function createExtensionEventSlaDomain(context) {
    */
   async function loadExtensionOptions() {
     const request = ++resourceRequest
-    extensionLoading.value = eventCodeLoading.value = slaLoading.value = true
+    resourceLoading.value = true
     const resources = [
       ['Java 扩展', listJavaExtensionOptions, value => extensionKinds.set('JAVA', value)],
       ['CEL 扩展', listCelExtensionOptions, value => extensionKinds.set('CEL', value)],
@@ -348,7 +346,7 @@ export function createExtensionEventSlaDomain(context) {
         emit('error', error)
       }
     }))
-    if (request === resourceRequest) extensionLoading.value = eventCodeLoading.value = slaLoading.value = false
+    if (request === resourceRequest) resourceLoading.value = false
   }
 
   /**
@@ -741,13 +739,13 @@ export function createExtensionEventSlaDomain(context) {
     businessListenerOptions,
     connectorEndpoints,
     sqlDataSources,
-    extensionLoading,
+    extensionLoading: resourceLoading,
     resourceLoadErrors,
     errorEventOptions,
     escalationEventOptions,
-    eventCodeLoading,
+    eventCodeLoading: resourceLoading,
     slaCalendarOptions,
-    slaLoading,
+    slaLoading: resourceLoading,
     autoCopyTriggerOptions,
     autoCopyFormFieldOptions,
     updateControlledTask,

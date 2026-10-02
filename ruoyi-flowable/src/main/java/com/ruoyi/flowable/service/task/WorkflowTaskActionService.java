@@ -114,7 +114,7 @@ public class WorkflowTaskActionService
         engineOperations.writeAsCurrentUser(actor ->
         {
             Task task = requireActiveTask(taskId);
-            ProcessInstance processInstance = requireActiveProcessInstance(task);
+            requireActiveProcessInstance(task);
             if (!actor.userId().equals(task.getAssignee()))
             {
                 throw forbidden();
@@ -122,7 +122,7 @@ public class WorkflowTaskActionService
             String delegationState = task.getDelegationState() == null
                     ? null : task.getDelegationState().name();
             boolean unclaimAllowed = unclaimPolicy.isUnclaimAllowed(
-                    processInstance != null && !processInstance.isSuspended(),
+                    true,
                     true, task.isSuspended(), actor.userId(), task.getAssignee(),
                     task.getOwner(), delegationState, task.getClaimedBy(),
                     task.getClaimTime() != null);
@@ -146,7 +146,6 @@ public class WorkflowTaskActionService
         String opinion = request.comment().trim();
         String targetUserId = String.valueOf(request.userId());
         requireText(taskId);
-        requireText(targetUserId);
         String normalizedOpinion = requireAuditOpinion(opinion);
         engineOperations.writeAsCurrentUser(actor ->
         {
@@ -219,7 +218,6 @@ public class WorkflowTaskActionService
         String opinion = request.comment().trim();
         String targetUserId = String.valueOf(request.userId());
         requireText(taskId);
-        requireText(targetUserId);
         String normalizedOpinion = requireAuditOpinion(opinion);
         engineOperations.writeAsCurrentUser(actor ->
         {

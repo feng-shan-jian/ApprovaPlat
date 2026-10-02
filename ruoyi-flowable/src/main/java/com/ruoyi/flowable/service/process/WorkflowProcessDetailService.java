@@ -479,7 +479,7 @@ public class WorkflowProcessDetailService
     private String normalizeProcessStatus(WorkflowProcessAccessSnapshot instance)
     {
         return WorkflowProcessStatusNormalizer.normalize(instance.businessStatus(),
-                instance.state(), instance.endTime(), instance.deleteReason());
+                instance.state(), instance.endTime());
     }
 
     /**

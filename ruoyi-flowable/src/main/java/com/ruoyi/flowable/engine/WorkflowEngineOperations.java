@@ -106,7 +106,6 @@ public class WorkflowEngineOperations
     public <T> T writeAsCurrentUser(Supplier<T> action)
     {
         Objects.requireNonNull(action, "工作流引擎操作不能为空");
-        requireRepeatableReadWriteTransaction();
         return writeAsCurrentUser(identity -> action.get());
     }
 
@@ -138,7 +137,6 @@ public class WorkflowEngineOperations
     public void writeAsCurrentUser(Runnable action)
     {
         Objects.requireNonNull(action, "工作流引擎操作不能为空");
-        requireRepeatableReadWriteTransaction();
         writeAsCurrentUser(identity ->
         {
             action.run();
@@ -159,24 +157,6 @@ public class WorkflowEngineOperations
         Objects.requireNonNull(action, "工作流引擎操作不能为空");
         requireRepeatableReadWriteTransaction();
         return execute(() -> authenticationContext.runAs(actorUserId, action));
-    }
-
-    /**
-     * 使用指定有效用户在事务中执行无返回值的 Flowable 公共 API 写操作。
-     *
-     * @param actorUserId String，数字格式的若依操作人 ID
-     * @param action Runnable，需要记录操作人的引擎写操作
-     */
-    @Transactional(rollbackFor = Exception.class, isolation = Isolation.REPEATABLE_READ)
-    public void writeAsUser(String actorUserId, Runnable action)
-    {
-        Objects.requireNonNull(action, "工作流引擎操作不能为空");
-        requireRepeatableReadWriteTransaction();
-        execute(() ->
-        {
-            authenticationContext.runAs(actorUserId, action);
-            return null;
-        });
     }
 
     /**

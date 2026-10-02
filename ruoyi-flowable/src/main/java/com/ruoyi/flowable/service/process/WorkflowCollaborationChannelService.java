@@ -28,13 +28,9 @@ public class WorkflowCollaborationChannelService
      * 锁定或创建业务键通道并原子分配下一个出站序号。
      * @param targetProcessDefinitionKey String，接收流程定义 key
      * @param correlationKey String，接收实例业务键
+     * @param deliveryMode String，COLLABORATION 或 POINT_TO_POINT
      * @return Allocation，稳定通道键和连续序号
      */
-    public Allocation allocateOutbound(String targetProcessDefinitionKey, String correlationKey)
-    {
-        return allocateOutbound(targetProcessDefinitionKey, correlationKey, "COLLABORATION");
-    }
-
     public Allocation allocateOutbound(String targetProcessDefinitionKey, String correlationKey, String deliveryMode)
     {
         WfCollaborationChannel channel = lockOrCreate(targetProcessDefinitionKey,
@@ -53,14 +49,9 @@ public class WorkflowCollaborationChannelService
      * @param targetProcessDefinitionKey String，接收流程定义 key
      * @param correlationType String，BUSINESS_KEY 或 PROCESS_INSTANCE
      * @param correlationValue String，业务键或实例主键
+     * @param deliveryMode String，COLLABORATION 或 POINT_TO_POINT
      * @return WfCollaborationChannel，持有数据库行锁的当前游标
      */
-    public WfCollaborationChannel lockInbound(String targetProcessDefinitionKey,
-            String correlationType, String correlationValue)
-    {
-        return lockInbound(targetProcessDefinitionKey, correlationType, correlationValue, "COLLABORATION");
-    }
-
     public WfCollaborationChannel lockInbound(String targetProcessDefinitionKey,
             String correlationType, String correlationValue, String deliveryMode)
     {
@@ -114,19 +105,13 @@ public class WorkflowCollaborationChannelService
     }
 
     /**
-     * 计算不暴露业务关联值的稳定通道主键。
+     * 计算不暴露业务关联值的稳定通道主键；独立消息和跨池协作分别分区，历史跨池摘要保持不变。
      * @param targetProcessDefinitionKey String，接收流程定义 key
      * @param correlationType String，关联类型
      * @param correlationValue String，关联值
+     * @param deliveryMode String，COLLABORATION 或 POINT_TO_POINT
      * @return String，64 位小写 SHA-256
      */
-    public static String channelId(String targetProcessDefinitionKey,
-            String correlationType, String correlationValue)
-    {
-        return channelId(targetProcessDefinitionKey, correlationType, correlationValue, "COLLABORATION");
-    }
-
-    /** 独立消息和跨池协作使用各自顺序通道，历史跨池摘要保持不变。 */
     public static String channelId(String targetProcessDefinitionKey,
             String correlationType, String correlationValue, String deliveryMode)
     {

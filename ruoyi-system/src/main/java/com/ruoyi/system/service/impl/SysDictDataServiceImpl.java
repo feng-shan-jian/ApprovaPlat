@@ -57,14 +57,18 @@ public class SysDictDataServiceImpl implements ISysDictDataService
      * @param dictCodes 需要删除的字典数据ID
      */
     @Override
+    @Transactional
     public void deleteDictDataByIds(Long[] dictCodes)
     {
-        for (Long dictCode : dictCodes)
+        if (dictCodes.length == 0)
         {
-            SysDictData data = selectDictDataById(dictCode);
-            dictDataMapper.deleteDictDataById(dictCode);
-            List<SysDictData> dictDatas = dictDataMapper.selectDictDataByType(data.getDictType());
-            DictUtils.setDictCache(data.getDictType(), dictDatas);
+            return;
+        }
+        List<String> dictTypes = dictDataMapper.selectDictDataByIds(dictCodes).stream()
+                .map(SysDictData::getDictType).distinct().toList();
+        if (dictDataMapper.deleteDictDataByIds(dictCodes) > 0)
+        {
+            removeDictCacheAfterCommit(dictTypes);
         }
     }
 

@@ -8,7 +8,7 @@ const xml = `<?xml version="1.0" encoding="UTF-8"?>
 const user = (value, label) => ({ type: 'user', value: String(value), label })
 const template = JSON.stringify({ fields: [] })
 
-async function application(page, handler) {
+async function application(page, handler, noCache = false) {
   await page.context().addCookies([{ name: 'Admin-Token', value: 'synthetic-frontend-session', url: test.info().project.use.baseURL }])
   const calls = []
   await page.route('**/dev-api/**', async route => {
@@ -18,7 +18,11 @@ async function application(page, handler) {
     calls.push({ path, query: Object.fromEntries(url.searchParams), method: request.method(), body: request.postDataJSON() })
     const reply = data => route.fulfill({ json: { code: 200, ...data } })
     if (path === '/getInfo') return reply({ user: { userId: 1, userName: 'frontend-review' }, roles: ['admin'], permissions: ['*:*:*'] })
-    if (path === '/getRouters') return reply({ data: [{ path: '/workflow', component: 'Layout', children: [{ path: 'model', component: 'workflow/model/index', name: 'WorkflowModel', meta: { title: '流程模型' } }] }] })
+    if (path === '/getRouters') return reply({ data: [{ path: '/workflow', component: 'Layout', children: [
+      { path: 'model', component: 'workflow/model/index', name: 'WorkflowModel', meta: { title: '流程模型' } },
+      { path: 'form', component: 'workflow/form/index', name: 'WorkflowForm', meta: { title: '流程表单', noCache } },
+      { path: 'notification', component: 'workflow/notification/index', name: 'WorkflowNotification', meta: { title: '审批通知' } }
+    ] }] })
     if (await handler?.({ path, request, url, reply, route })) return
     if (path === '/workflow/category/listAll') return reply({ data: [{ code: 'test', categoryName: '验收分类' }] })
     if (path.startsWith('/workflow/process/bpmnXml/')) return reply({ data: xml })
@@ -26,6 +30,135 @@ async function application(page, handler) {
   })
   return calls
 }
+
+test('缓存表单页首次、回页和分页各请求一次，慢查询不覆盖新结果', async ({ page }) => {
+  let releaseSlow
+  const calls = await application(page, async ({ path, url, reply }) => {
+    if (path !== '/workflow/form/list' || url.searchParams.get('pageSize') !== '10') return false
+    const formName = url.searchParams.get('formName') || `第${url.searchParams.get('pageNum')}页`
+    if (formName === '旧查询') await new Promise(resolve => { releaseSlow = resolve })
+    await reply({ total: 21, rows: [{ formId: 1, formName }] })
+    return true
+  })
+  const listCalls = () => calls.filter(call => call.path === '/workflow/form/list' && call.query.pageSize === '10')
+  await page.goto('/workflow/form')
+  await expect(page.getByRole('cell', { name: '第1页', exact: true })).toBeVisible()
+  expect(listCalls()).toHaveLength(1)
+  await page.getByRole('menuitem', { name: '流程模型', exact: true }).click()
+  await expect(page).toHaveURL(/\/workflow\/model$/)
+  await page.getByRole('menuitem', { name: '流程表单', exact: true }).click()
+  await expect.poll(() => listCalls().length).toBe(2)
+  await page.getByRole('button', { name: '下一页', exact: true }).click()
+  await expect(page.getByRole('cell', { name: '第2页', exact: true })).toBeVisible()
+  expect(listCalls()).toHaveLength(3)
+  const input = page.getByPlaceholder('请输入表单名称')
+  await input.fill('旧查询')
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await expect.poll(() => Boolean(releaseSlow)).toBe(true)
+  await input.fill('新查询')
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await expect(page.getByRole('cell', { name: '新查询', exact: true })).toBeVisible()
+  const slowResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('formName') === '旧查询')
+  releaseSlow()
+  await (await slowResponse).finished()
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await expect(page.getByRole('cell', { name: '旧查询', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('cell', { name: '新查询', exact: true })).toBeVisible()
+})
+
+test('非缓存表单页首次仍然加载一次', async ({ page }) => {
+  const calls = await application(page, async ({ path, reply }) => {
+    if (path !== '/workflow/form/list') return false
+    await reply({ rows: [{ formId: 1, formName: '非缓存表单' }], total: 1 })
+    return true
+  }, true)
+  await page.goto('/workflow/form')
+  await expect(page.getByRole('cell', { name: '非缓存表单', exact: true })).toBeVisible()
+  expect(calls.filter(call => call.path === '/workflow/form/list')).toHaveLength(1)
+})
+
+async function mailDialog(page) {
+  const state = { readFailure: false, saveFailure: null, reads: 0, saves: [], tests: [] }
+  const config = { configured: true, credentialConfigured: true, revision: 4, smtpHost: 'smtp.example.com',
+    smtpPort: 587, encryptionMode: 'STARTTLS', username: 'notify@example.com', fromAddress: 'notify@example.com', senderName: '审批通知' }
+  await application(page, async ({ path, request, reply }) => {
+    if (path === '/workflow/notification/mail-config/test') {
+      state.tests.push(request.postDataJSON())
+      await reply({ data: { success: true } })
+    } else if (path === '/workflow/notification/mail-config') {
+      if (request.method() === 'GET') {
+        state.reads++
+        await reply(state.readFailure ? { code: 500, msg: '邮件配置暂时无法读取' } : { data: config })
+      } else {
+        state.saves.push(request.postDataJSON())
+        await reply(state.saveFailure || { data: { ...config, revision: 5 } })
+      }
+    } else return false
+    return true
+  })
+  await page.goto('/workflow/notification')
+  const dialog = page.getByRole('dialog', { name: '配置邮件服务' })
+  return { state, dialog, open: () => page.getByRole('button', { name: '邮件服务', exact: true }).click() }
+}
+
+test('邮件配置直接使用保存结果，测试未保存配置保持独立且关闭后清空凭据', async ({ page }) => {
+  const { state, dialog, open } = await mailDialog(page)
+  await open()
+  await expect(dialog.getByRole('textbox', { name: 'SMTP 服务器' })).toHaveValue('smtp.example.com')
+  await dialog.getByRole('textbox', { name: '发件人名称' }).fill('当前未保存配置')
+  const credential = dialog.locator('input[type="password"]')
+  await credential.fill('synthetic-mail-secret')
+  await dialog.getByPlaceholder('输入测试收件邮箱').fill('test@example.com')
+  await dialog.getByRole('button', { name: '发送测试邮件', exact: true }).click()
+  await expect(dialog.getByText('测试邮件发送成功，当前配置尚未保存', { exact: true })).toBeVisible()
+  await expect(credential).toHaveValue('synthetic-mail-secret')
+  expect(state.tests[0]).toMatchObject({ senderName: '当前未保存配置', expectedRevision: 4, credential: 'synthetic-mail-secret' })
+  expect(state.saves).toHaveLength(0)
+  state.readFailure = true
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByText('邮件服务配置已保存', { exact: true })).toBeVisible()
+  expect(state.reads).toBe(1)
+  expect(state.saves[0]).toMatchObject({ senderName: '当前未保存配置', expectedRevision: 4, credential: 'synthetic-mail-secret' })
+  await expect(page.getByRole('dialog', { name: '配置邮件服务', includeHidden: true }).locator('input[type="password"]')).toHaveValue('')
+})
+
+test('邮件配置真实修订冲突保留草稿并清空凭据，安全错误直接展示', async ({ page }) => {
+  const { state, dialog, open } = await mailDialog(page)
+  await open()
+  await expect(dialog.getByRole('textbox', { name: 'SMTP 服务器' })).toHaveValue('smtp.example.com')
+  await dialog.getByRole('textbox', { name: '发件人名称' }).fill('保留的草稿')
+  const credential = dialog.locator('input[type="password"]')
+  await credential.fill('synthetic-conflict-secret')
+  state.saveFailure = { code: 409, subCode: 'MAIL_CONFIG_REVISION_CONFLICT', msg: '邮件配置修订冲突' }
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click()
+  const confirmation = page.getByRole('dialog').filter({ hasText: '邮件配置已被其他管理员修改' })
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(dialog.getByRole('textbox', { name: '发件人名称' })).toHaveValue('保留的草稿')
+  await expect(credential).toHaveValue('')
+  expect(state.reads).toBe(1)
+  state.saveFailure = { code: 400, subCode: 'MAIL_CREDENTIAL_REENTRY_REQUIRED', msg: 'SMTP 认证连接已变更，请重新填写授权码或密码' }
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.getByText(state.saveFailure.msg, { exact: true })).toBeVisible()
+  await expect(dialog).toBeVisible()
+  expect(state.reads).toBe(1)
+  expect(state.saves[1].expectedRevision).toBe(4)
+})
+
+test('邮件首次加载失败提示一次，关闭重开可读取正式配置', async ({ page }) => {
+  const { state, dialog, open } = await mailDialog(page)
+  state.readFailure = true
+  await open()
+  await expect(page.getByText('邮件配置暂时无法读取', { exact: true })).toHaveCount(1)
+  await expect(dialog.getByRole('textbox', { name: 'SMTP 服务器' })).toHaveValue('')
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled()
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(dialog).toBeHidden()
+  state.readFailure = false
+  await open()
+  await expect(dialog.getByRole('textbox', { name: 'SMTP 服务器' })).toHaveValue('smtp.example.com')
+  expect(state.reads).toBe(2)
+})
 
 test('设计页与草稿比较使用同次模型的 XML 和 revision，冲突保留画布', async ({ page }) => {
   let revision = 7

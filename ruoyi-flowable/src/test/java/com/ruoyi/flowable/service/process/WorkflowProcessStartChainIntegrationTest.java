@@ -3,12 +3,16 @@ package com.ruoyi.flowable.service.process;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
@@ -359,6 +363,169 @@ class WorkflowProcessStartChainIntegrationTest
     }
 
     @Test
+    @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL", matches = ".+")
+    void mysqlTaskAttachmentLockDoesNotPreserveExpiryBetweenPreparationAndBinding() throws Exception
+    {
+        String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
+        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
+        var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(url,
+                System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
+        var manager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
+        transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        var mapper = WorkflowH2SchemaMapperSupport.createSpringMapper(dataSource, "attachment-expiry",
+                WfAttachmentMapper.class, "mapper/flowable/WfAttachmentMapper.xml");
+        var service = new WorkflowAttachmentService(mapper, attachmentStorage, attachmentProperties,
+                identityResolver, processAccess, null, manager);
+        var jdbc = new JdbcTemplate(dataSource);
+        String id = UUID.randomUUID().toString();
+        StoredAttachmentFile stored = attachmentStorage.store(new MockMultipartFile(
+                "file", "expiry.txt", "text/plain", "expiry".getBytes()));
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime expiry = now.plusSeconds(3);
+        var attachment = new WfAttachment(id, OWNER_ID, "evidence", stored.originalName(), stored.storageKey(),
+                stored.contentType(), stored.fileSize(), stored.sha256(), WorkflowAttachmentStatus.TEMP,
+                expiry, null, null, null, null, null, null, 0, null, null, null, null, now, now);
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        var waiting = new AtomicReference<java.util.concurrent.Future<List<WfAttachment>>>();
+        try
+        {
+            transaction.executeWithoutResult(status -> assertThat(mapper.insert(attachment)).isOne());
+            transaction.executeWithoutResult(status -> {
+                status.setRollbackOnly();
+                var references = Map.of("evidence", List.of(id));
+                assertThat(service.prepareTaskVariables(USER_ID, "instance", Map.of(), references)).containsKey("evidence");
+                var started = new java.util.concurrent.CompletableFuture<Void>();
+                waiting.set(executor.submit(() -> transaction.execute(other -> {
+                    started.complete(null);
+                    return mapper.selectByIdsForUpdate(List.of(id));
+                })));
+                started.orTimeout(2, java.util.concurrent.TimeUnit.SECONDS).join();
+                assertThatThrownBy(() -> waiting.get().get(150, java.util.concurrent.TimeUnit.MILLISECONDS))
+                        .isInstanceOf(java.util.concurrent.TimeoutException.class);
+                while (!LocalDateTime.now().isAfter(expiry.plusNanos(50_000_000)))
+                {
+                    java.util.concurrent.locks.LockSupport.parkNanos(10_000_000);
+                }
+                assertThat(waiting.get().isDone()).isFalse();
+                assertThatThrownBy(() -> service.bindTaskAttachments(USER_ID, "instance", "task", "review", references))
+                        .isInstanceOfSatisfying(ServiceException.class, failure -> {
+                            assertThat(failure.getCode()).isEqualTo(409);
+                            assertThat(failure.getSubCode()).isEqualTo("WORKFLOW_ATTACHMENT_STATE_CONFLICT");
+                        });
+            });
+            assertThat(waiting.get().get(5, java.util.concurrent.TimeUnit.SECONDS))
+                    .singleElement().satisfies(row -> assertThat(row.status()).isEqualTo(WorkflowAttachmentStatus.TEMP));
+        }
+        finally
+        {
+            executor.shutdownNow();
+            executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
+            jdbc.update("delete from wf_attachment where attachment_id = ?", id);
+        }
+        assertThat(jdbc.queryForObject("select count(*) from wf_attachment where attachment_id = ?", Long.class, id)).isZero();
+    }
+
+    @Test
+    void engineWriteOverloadsKeepTransactionGuardAndRestoreNestedIdentity()
+    {
+        var identityService = mock(org.flowable.engine.IdentityService.class);
+        var target = new WorkflowEngineOperations(new WorkflowAuthenticationContext(identityService,
+                new WorkflowIdentityCodec()), new WorkflowExceptionTranslator(), identityResolver);
+        var operations = engineInfrastructure.transactionalProxy(target);
+        java.util.function.Supplier<Integer> readIsolation = () -> jdbcTemplate.execute(
+                (org.springframework.jdbc.core.ConnectionCallback<Integer>) java.sql.Connection::getTransactionIsolation);
+        assertThat(operations.writeAsCurrentUser(readIsolation)).isEqualTo(java.sql.Connection.TRANSACTION_REPEATABLE_READ);
+        operations.writeAsCurrentUser((Runnable) () -> assertThat(readIsolation.get())
+                .isEqualTo(java.sql.Connection.TRANSACTION_REPEATABLE_READ));
+        clearInvocations(identityService);
+        operations.writeAsCurrentUser(() -> {
+            assertThat(operations.writeAsUser("200", () -> "nested")).isEqualTo("nested");
+            return "outer";
+        });
+        var order = inOrder(identityService);
+        order.verify(identityService).setAuthenticatedUserId(USER_ID);
+        order.verify(identityService).setAuthenticatedUserId("200");
+        order.verify(identityService).setAuthenticatedUserId(USER_ID);
+        order.verify(identityService).setAuthenticatedUserId(null);
+        clearInvocations(identityService, identityResolver);
+        assertThatThrownBy(() -> operations.writeAsCurrentUser((Runnable) () -> { throw new IllegalStateException("failed"); }))
+                .isInstanceOf(IllegalStateException.class);
+        verify(identityService).setAuthenticatedUserId(null);
+        clearInvocations(identityService, identityResolver);
+        var weakerTransaction = new org.springframework.transaction.support.TransactionTemplate(engineInfrastructure.transactionManager());
+        weakerTransaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+        assertThatThrownBy(() -> weakerTransaction.execute(status -> operations.writeAsCurrentUser(readIsolation)))
+                .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(500));
+        assertThatThrownBy(() -> target.writeAsCurrentUser((Runnable) () -> {}))
+                .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(500));
+        verifyNoInteractions(identityService, identityResolver);
+    }
+
+    @Test
+    void draftAttachmentSaveReusesRetainedRowsRemovesOldAndSubmitsLateUploads()
+    {
+        String retained = insertTemporaryAttachment();
+        String removed = insertTemporaryAttachment();
+        var draft = createDraft(Map.of("requester", "Alice", "evidence", List.of(retained, removed)));
+        String added = insertTemporaryAttachment();
+        clearInvocations(attachmentMapper);
+        var saved = draftService.save(draft.draftId(), new WorkflowProcessDraftSaveRequest(
+                draft.revisionNo(), null, Map.of("requester", "Alice", "evidence", List.of(retained, added)), Map.of()));
+        assertThat(attachmentMapper.selectById(retained).status()).isEqualTo(WorkflowAttachmentStatus.DRAFT);
+        assertThat(attachmentMapper.selectById(added).status()).isEqualTo(WorkflowAttachmentStatus.DRAFT);
+        assertThat(attachmentMapper.selectById(removed).status()).isEqualTo(WorkflowAttachmentStatus.DELETED);
+        var saveOrder = inOrder(attachmentMapper);
+        saveOrder.verify(attachmentMapper).selectByDraftIdForUpdate(draft.draftId(), OWNER_ID);
+        saveOrder.verify(attachmentMapper).selectByIdsForUpdate(argThat(ids -> ids.containsAll(List.of(retained, added))));
+        verify(attachmentMapper, never()).bindDraftAttachment(eq(retained), anyLong(), anyString(), anyString());
+
+        String lateUpload = insertTemporaryAttachment();
+        clearInvocations(attachmentMapper);
+        var submitted = submitDraft(saved, Map.of("requester", "Alice", "evidence", List.of(retained, added, lateUpload)));
+        var submitOrder = inOrder(attachmentMapper);
+        submitOrder.verify(attachmentMapper).selectByDraftIdForUpdate(draft.draftId(), OWNER_ID);
+        submitOrder.verify(attachmentMapper).selectByIdsForUpdate(argThat(ids -> ids.size() == 1 && ids.contains(lateUpload)));
+        for (String id : List.of(retained, added, lateUpload))
+        {
+            var row = attachmentMapper.selectById(id);
+            assertThat(row.status()).isEqualTo(WorkflowAttachmentStatus.BOUND);
+            assertThat(row.processInstanceId()).isEqualTo(submitted.processInstanceId());
+        }
+    }
+
+    @Test
+    void draftAttachmentCoordinationRejectsDuplicatesForeignOwnerFieldAndExpiredTemp()
+    {
+        var draft = createDraft(VALID_VARIABLES);
+        String attachment = insertTemporaryAttachment();
+        for (boolean submission : List.of(false, true))
+        {
+            java.util.function.Consumer<Map<String, List<String>>> coordinate = references -> {
+                if (submission) attachmentService.prepareDraftSubmissionVariables(USER_ID, draft.draftId(), VALID_VARIABLES, references);
+                else attachmentService.reconcileDraftAttachments(USER_ID, draft.draftId(), references);
+            };
+            assertThatThrownBy(() -> coordinate.accept(Map.of("evidence", List.of(attachment, attachment))))
+                    .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(400));
+            assertThatThrownBy(() -> coordinate.accept(Map.of("other", List.of(attachment))))
+                    .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(400));
+            jdbcTemplate.update("update wf_attachment set owner_user_id = ? where attachment_id = ?", OWNER_ID + 1, attachment);
+            assertThatThrownBy(() -> coordinate.accept(Map.of("evidence", List.of(attachment))))
+                    .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(403));
+            jdbcTemplate.update("update wf_attachment set owner_user_id = ?, expire_time = ? where attachment_id = ?",
+                    OWNER_ID, java.sql.Timestamp.valueOf(LocalDateTime.now().minusMinutes(1)), attachment);
+            assertThatThrownBy(() -> coordinate.accept(Map.of("evidence", List.of(attachment))))
+                    .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(409));
+            jdbcTemplate.update("update wf_attachment set expire_time = ? where attachment_id = ?",
+                    java.sql.Timestamp.valueOf(LocalDateTime.now().plusHours(1)), attachment);
+            assertThat(attachmentMapper.selectById(attachment).status()).isEqualTo(WorkflowAttachmentStatus.TEMP);
+        }
+        assertThatThrownBy(() -> attachmentService.bindDraftStartAttachments(USER_ID, draft.draftId(),
+                "instance", "start", Map.of("evidence", List.of(attachment, attachment))))
+                .isInstanceOfSatisfying(ServiceException.class, failure -> assertThat(failure.getCode()).isEqualTo(400));
+    }
+
+    @Test
     void detailReusesAuthorizedInstanceAndStillRejectsInvalidAttachmentRelations()
     {
         String attachmentId = insertTemporaryAttachment();
@@ -676,6 +843,9 @@ class WorkflowProcessStartChainIntegrationTest
         Map<String, Object> variables = Map.of(
                 "requester", "Rollback", "evidence", List.of(attachmentId));
         WorkflowProcessDraftView draft = createDraft(variables);
+        String lateUpload = insertTemporaryAttachment();
+        Map<String, Object> submissionVariables = Map.of(
+                "requester", "Rollback", "evidence", List.of(lateUpload));
         long before = runtimeService.createProcessInstanceQuery().count();
         doReturn(0).when(draftMapper).markSubmitted(eq(draft.draftId()), eq(OWNER_ID),
                 eq(draft.revisionNo()), anyString(), anyString(), anyString(),
@@ -683,7 +853,7 @@ class WorkflowProcessStartChainIntegrationTest
 
         assertThatThrownBy(() -> draftService.submit(draft.draftId(),
                 new WorkflowProcessDraftSubmitRequest(draft.revisionNo(), "ROLLBACK",
-                        variables, Map.of())))
+                        submissionVariables, Map.of())))
                 .isInstanceOfSatisfying(ServiceException.class, exception ->
                 {
                     assertThat(exception.getCode()).isEqualTo(HttpStatus.CONFLICT);
@@ -696,6 +866,8 @@ class WorkflowProcessStartChainIntegrationTest
         WfAttachment attachment = attachmentMapper.selectById(attachmentId);
         assertThat(attachment.status()).isEqualTo(WorkflowAttachmentStatus.DRAFT);
         assertThat(attachment.processInstanceId()).isNull();
+        assertThat(attachmentMapper.selectById(lateUpload).status()).isEqualTo(WorkflowAttachmentStatus.TEMP);
+        assertThat(attachmentMapper.selectById(lateUpload).draftId()).isNull();
     }
 
     /**

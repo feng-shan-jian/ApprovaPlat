@@ -29,7 +29,6 @@ import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfConnectorEndpoint;
-import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.runtime.WorkflowConnectorMetrics;
 import com.ruoyi.flowable.service.model.WorkflowConnectorEndpointService;
 import tools.jackson.core.JacksonException;
@@ -260,12 +259,10 @@ public class WorkflowHttpConnector
     /**
      * 复核运行快照并执行一次 HTTP 请求；异常直接交回 Flowable Job 重试和死信。
      * @param execution DelegateExecution，Flowable 当前执行上下文
-     * @param snapshot WfDeployExtensionSnapshot，已通过外层摘要校验的部署快照
      * @param config JsonNode，冻结节点配置
      * @return void，成功时可写入一个 HTTP 状态变量
      */
-    public void execute(DelegateExecution execution, WfDeployExtensionSnapshot snapshot,
-            JsonNode config)
+    public void execute(DelegateExecution execution, JsonNode config)
     {
         FrozenConfig frozen = parseFrozen(config);
         byte[] requestBody = requestBody(execution, frozen.author());
@@ -279,7 +276,7 @@ public class WorkflowHttpConnector
         {
             HttpResponse<InputStream> response = sendBytes(frozen, idempotencyKey, requestBody);
             responseStatus = response.statusCode();
-            byte[] responseBytes = readBounded(response.body(), MAX_BODY_BYTES);
+            readBounded(response.body(), MAX_BODY_BYTES);
             if (response.statusCode() < 200 || response.statusCode() >= 300)
             {
                 throw new ServiceException("HTTP 连接器返回非成功状态", HttpStatus.ERROR)

@@ -94,7 +94,6 @@ function handleEndpointChange() {
   if (!draft.path || !(prefix === '/' || draft.path === prefix || draft.path.startsWith(`${prefix}/`))) {
     draft.path = prefix
   }
-  if (!supportsBody.value) draft.bodyVariable = ''
   emitChange()
 }
 

@@ -35,11 +35,10 @@ final class WorkflowProcessStatusNormalizer
      * @param businessStatus String，服务端通过 Flowable businessStatus 写入的强制业务状态
      * @param engineState String，Flowable HistoricProcessInstance.state，允许为空
      * @param endTime Instant，流程结束时间，运行实例为空
-     * @param deleteReason String，历史删除或终止原因，允许为空
      * @return String，running、returned、suspended、completed、canceled、rejected 或 terminated
      */
     static String normalize(String businessStatus, String engineState,
-            Instant endTime, String deleteReason)
+            Instant endTime)
     {
         String normalizedBusinessStatus = normalizeText(businessStatus);
         String normalizedEngineState = normalizeText(engineState);

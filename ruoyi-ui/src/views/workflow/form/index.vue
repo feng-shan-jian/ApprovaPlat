@@ -53,19 +53,23 @@ const previewOpen = ref(false)
 const previewTitle = ref('表单预览')
 const previewContent = ref('')
 const queryParams = reactive({ pageNum: 1, pageSize: 10, formName: '' })
+let pageInitialized = false
+let listRequest = 0
 
 /**
  * 分页加载有效流程表单。
  * @returns {Promise<void>} 加载完成后更新列表。
  */
 async function loadList() {
+  const request = ++listRequest
   loading.value = true
   try {
     const response = await listForms(queryParams)
+    if (request !== listRequest) return
     rows.value = response.rows
     total.value = response.total
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
@@ -128,6 +132,6 @@ function exportForms() { proxy.download('/workflow/form/export', { ...queryParam
  */
 function showComponentError(error) { proxy.$modal.msgError(error?.message || '表单预览失败') }
 
-onActivated(loadList)
-loadList()
+const initialLoad = loadList().finally(() => { pageInitialized = true })
+onActivated(() => pageInitialized ? loadList() : initialLoad)
 </script>

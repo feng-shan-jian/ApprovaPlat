@@ -41,13 +41,8 @@ public interface SysDictDataMapper
     /** 在类型锁内当前读引用；返回类型 ID，沿用数据库字符串比较规则。 */
     public List<Long> selectReferencedDictTypeIdsForUpdate(Long[] dictIds);
 
-    /**
-     * 通过字典ID删除字典数据信息
-     * 
-     * @param dictCode 字典数据ID
-     * @return 结果
-     */
-    public int deleteDictDataById(Long dictCode);
+    /** 批量锁定待删除记录，读取所属类型供提交后失效缓存。 */
+    public List<SysDictData> selectDictDataByIds(Long[] dictCodes);
 
     /**
      * 批量删除字典数据信息

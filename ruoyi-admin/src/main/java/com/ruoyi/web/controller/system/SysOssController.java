@@ -70,7 +70,7 @@ public class SysOssController extends BaseController
      * @return AjaxResult，新配置主键
      */
     @PreAuthorize("@ss.hasPermi('system:oss:add')")
-    @Log(title = "OSS 配置", businessType = BusinessType.INSERT)
+    @Log(title = "OSS 配置", businessType = BusinessType.INSERT, isSaveRequestData = false)
     @PostMapping("/configs")
     public AjaxResult addConfig(@Valid @RequestBody OssConfigRequest request)
     {
@@ -84,7 +84,7 @@ public class SysOssController extends BaseController
      * @return AjaxResult，成功结果
      */
     @PreAuthorize("@ss.hasPermi('system:oss:edit')")
-    @Log(title = "OSS 配置", businessType = BusinessType.UPDATE)
+    @Log(title = "OSS 配置", businessType = BusinessType.UPDATE, isSaveRequestData = false)
     @PutMapping("/configs")
     public AjaxResult editConfig(@Valid @RequestBody OssConfigRequest request)
     {

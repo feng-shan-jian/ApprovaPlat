@@ -270,7 +270,7 @@
             </div>
             <ProcessFormRenderer
               :content="form.content"
-              :model-value="form.hydratedValues"
+              :model-value="form.values || {}"
               readonly
               @error="showComponentError"
             />
@@ -549,10 +549,10 @@ let observationSequence = 0, observationTimer, observationFailures = 0, observat
 let observationRequest = null, observationStopped = false, lastFullObservationAt = 0
 const taskFormValues = ref({})
 // 申请表单和本节点表单必须保持独立语义；开始快照绝不进入历史节点列表。
-const applicationForm = ref(null)
+const applicationForm = computed(() => detail.formDetail?.applicationForm || null)
 const applicationFormValues = ref({})
-const nodeTaskForm = ref(null)
-const historyForms = ref([])
+const nodeTaskForm = computed(() => detail.formDetail?.nodeTaskForm || null)
+const historyForms = computed(() => detail.formDetail?.historyForms || [])
 const taskFormRef = ref(null)
 const actionFormRef = ref(null)
 // 审批办理对象与普通抄送对象使用独立目录状态，禁止通用启用用户混入任务分配请求。
@@ -813,10 +813,7 @@ function validateRouteParams() {
 function clearDetailState(preserveMultiInstanceDraft = false) {
   Object.keys(detail).forEach(key => delete detail[key])
   taskFormValues.value = {}
-  applicationForm.value = null
   applicationFormValues.value = {}
-  nodeTaskForm.value = null
-  historyForms.value = []
   activeTab.value = 'applicationForm'
   actionDialog.visible = false
   resetActionDialog()
@@ -880,9 +877,6 @@ async function loadDetail(preserveMultiInstanceDraft = false, background = false
     }
     Object.assign(detail, payload)
     waitingSnapshot.value = response.data.waiting
-    applicationForm.value = formDetail.applicationForm
-    nodeTaskForm.value = formDetail.nodeTaskForm
-    historyForms.value = formDetail.historyForms.map(form => ({ ...form, hydratedValues: cloneJson(form.values || {}) }))
     observationError.value = ''
     observationFailures = 0
     lastFullObservationAt = Date.now()

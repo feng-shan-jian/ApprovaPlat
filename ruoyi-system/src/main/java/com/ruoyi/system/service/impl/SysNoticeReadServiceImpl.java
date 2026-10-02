@@ -63,12 +63,4 @@ public class SysNoticeReadServiceImpl implements ISysNoticeReadService
         return noticeReadMapper.selectReadUsersByNoticeId(noticeId, searchValue);
     }
 
-    /**
-     * 删除公告时清理对应已读记录
-     */
-    @Override
-    public void deleteByNoticeIds(Long[] noticeIds)
-    {
-        noticeReadMapper.deleteByNoticeIds(noticeIds);
-    }
 }

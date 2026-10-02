@@ -106,7 +106,7 @@ const testing = ref(false)
 const form = reactive(createEmptyMailConfigForm())
 const testForm = reactive({ testRecipient: '' })
 // meta 只保存服务端脱敏状态和 CAS 版本，不接收凭据、密文或密钥信息。
-const meta = reactive({ configured: false, credentialConfigured: false, revision: 0 })
+const meta = reactive({ credentialConfigured: false, revision: 0 })
 const testResult = reactive({ type: 'success', message: '' })
 const busy = computed(() => loading.value || saving.value || testing.value)
 const credentialPlaceholder = computed(() => {
@@ -185,17 +185,15 @@ function validateCredential(rule, value, callback) {
 
 /**
  * 从正式后端重新读取脱敏 SMTP 配置和最新 revision。
- * @param {{notifyFailure?:boolean}} options 是否由本函数展示唯一的加载失败提示。
- * @returns {Promise<{loaded:boolean,error?:unknown}>} 当前弹窗仍打开且回读成功时 loaded 为 true。
+ * @returns {Promise<void>} 当前弹窗仍打开时更新配置，失败时展示加载错误。
  */
-async function loadConfig(options = {}) {
-  const notifyFailure = options.notifyFailure !== false
+async function loadConfig() {
   const sequence = ++loadSequence
   loading.value = true
   testResult.message = ''
   try {
     const response = await getWorkflowNotificationMailConfig()
-    if (sequence !== loadSequence || !props.modelValue) return { loaded: false }
+    if (sequence !== loadSequence || !props.modelValue) return
     const config = response.data
     Object.assign(form, {
       smtpHost: config.smtpHost,
@@ -207,18 +205,15 @@ async function loadConfig(options = {}) {
       senderName: config.senderName
     })
     Object.assign(meta, {
-      configured: config.configured === true,
       credentialConfigured: config.credentialConfigured === true,
       revision: config.revision
     })
     await nextTick()
     formRef.value?.clearValidate()
-    return { loaded: true }
   } catch (error) {
-    if (sequence === loadSequence && props.modelValue && notifyFailure) {
-      proxy.$modal.msgError(mailConfigErrorMessage(error, '邮件服务配置加载失败'))
+    if (sequence === loadSequence && props.modelValue) {
+      proxy.$modal.msgError(requestErrorMessage(error, '邮件服务配置加载失败'))
     }
-    return { loaded: false, error }
   } finally {
     if (sequence === loadSequence) loading.value = false
   }
@@ -242,8 +237,8 @@ function buildConfigPayload() {
 }
 
 /**
- * 保存正式 SMTP 配置，成功后强制回读新 revision 再关闭弹窗。
- * @returns {Promise<void>} 写入冲突时保留草稿；写入成功但回读失败时明确要求重新加载。
+ * 保存正式 SMTP 配置，使用写后脱敏状态和 revision 关闭弹窗。
+ * @returns {Promise<void>} 写入冲突时保留非敏感草稿，所有保存结果均清空明文凭据。
  */
 async function saveConfig() {
   const valid = await formRef.value.validate().catch(() => false)
@@ -251,24 +246,15 @@ async function saveConfig() {
   saving.value = true
   testResult.message = ''
   try {
-    await saveWorkflowNotificationMailConfig(buildConfigPayload())
-    clearCredential()
-    const refreshResult = await loadConfig({ notifyFailure: false })
-    if (!refreshResult.loaded) {
-      // PUT 已经提交成功，后续 GET 失败不能再向管理员误报为“保存失败”。
-      emit('saved', { configured: true, revision: null, refreshRequired: true })
-      proxy.$modal.msgWarning('邮件服务配置已保存，但刷新最新配置失败，请重新打开邮件服务或刷新页面后确认')
-      emit('update:modelValue', false)
-      return
-    }
-    emit('saved', { configured: meta.configured, revision: meta.revision })
+    const { data } = await saveWorkflowNotificationMailConfig(buildConfigPayload())
+    emit('saved', { configured: data.configured === true, revision: data.revision })
     proxy.$modal.msgSuccess('邮件服务配置已保存')
     emit('update:modelValue', false)
   } catch (error) {
     if (isRevisionConflict(error)) {
       await promptReloadAfterConflict()
     } else {
-      proxy.$modal.msgError(mailConfigErrorMessage(error, '邮件服务配置保存失败'))
+      proxy.$modal.msgError(requestErrorMessage(error, '邮件服务配置保存失败'))
     }
   } finally {
     clearCredential()
@@ -302,7 +288,7 @@ async function sendTestMail() {
     testResult.message = '测试邮件发送成功，当前配置尚未保存'
   } catch (error) {
     testResult.type = isRevisionConflict(error) ? 'warning' : 'error'
-    testResult.message = mailConfigErrorMessage(error, '测试邮件发送失败')
+    testResult.message = requestErrorMessage(error, '测试邮件发送失败')
     if (isRevisionConflict(error)) await promptReloadAfterConflict()
   } finally {
     testing.value = false
@@ -316,19 +302,6 @@ async function sendTestMail() {
  */
 function isRevisionConflict(error) {
   return error?.code === 409 && error?.subCode === 'MAIL_CONFIG_REVISION_CONFLICT'
-}
-
-/**
- * 按稳定子码返回 SMTP 配置错误提示，认证身份变化时始终引导用户重新输入授权码。
- * @param {unknown} error BusinessError。
- * @param {string} fallback 无稳定错误文本时的兜底提示。
- * @returns {string} 不包含凭据或请求体的用户提示。
- */
-function mailConfigErrorMessage(error, fallback) {
-  if (error?.code === 409 && error?.subCode === 'MAIL_CREDENTIAL_REENTRY_REQUIRED') {
-    return 'SMTP 认证连接已变更，请重新填写授权码或密码'
-  }
-  return requestErrorMessage(error, fallback)
 }
 
 /**
@@ -407,7 +380,7 @@ function updateVisible(visible) {
 function resetDialogState() {
   loadSequence += 1
   Object.assign(form, createEmptyMailConfigForm())
-  Object.assign(meta, { configured: false, credentialConfigured: false, revision: 0 })
+  Object.assign(meta, { credentialConfigured: false, revision: 0 })
   testForm.testRecipient = ''
   testResult.type = 'success'
   testResult.message = ''

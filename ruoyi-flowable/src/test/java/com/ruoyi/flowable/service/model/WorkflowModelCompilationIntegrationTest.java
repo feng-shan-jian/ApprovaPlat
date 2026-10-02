@@ -49,6 +49,130 @@ import com.ruoyi.flowable.service.task.*;
 class WorkflowModelCompilationIntegrationTest
 {
     @Test
+    void referenceCheckerReadsCurrentTopLevelFormIdAndBlocksDamagedMetadata()
+    {
+        var repository = mock(org.flowable.engine.RepositoryService.class);
+        var models = mock(org.flowable.engine.repository.ModelQuery.class, RETURNS_SELF);
+        var definitions = mock(org.flowable.engine.repository.ProcessDefinitionQuery.class, RETURNS_SELF);
+        var model = mock(org.flowable.engine.repository.Model.class);
+        var artifacts = mock(WorkflowDeploymentArtifactRepository.class);
+        when(repository.createModelQuery()).thenReturn(models);
+        when(models.list()).thenReturn(List.of(model));
+        when(repository.createProcessDefinitionQuery()).thenReturn(definitions);
+        when(definitions.list()).thenReturn(List.of());
+        var checker = new com.ruoyi.flowable.service.impl.FlowableWorkflowReferenceChecker(repository, artifacts);
+        when(model.getMetaInfo()).thenReturn("{\"createUser\":\"100\",\"formType\":1,\"formId\":7}");
+        assertThat(checker.hasFormReference(List.of(7L))).isTrue();
+        assertThat(checker.hasFormReference(List.of(8L))).isFalse();
+        for (String metadata : List.of("{}", "{\"formId\":null}", "{\"nested\":{\"formId\":7}}",
+                "{\"FORMID\":7}", "{\"formKey\":\"key_7\"}"))
+        {
+            when(model.getMetaInfo()).thenReturn(metadata);
+            assertThat(checker.hasFormReference(List.of(7L))).as(metadata).isFalse();
+        }
+        for (String metadata : List.of("broken-json", "[]", "1", "{\"formId\":[7]}",
+                "{\"formId\":\"key_7\"}", "{\"formId\":0}", "{\"formId\":9223372036854775808}"))
+        {
+            when(model.getMetaInfo()).thenReturn(metadata);
+            assertThat(checker.hasFormReference(List.of(99L))).as(metadata).isTrue();
+        }
+        when(model.getMetaInfo()).thenReturn("{}");
+        var definition = mock(org.flowable.engine.repository.ProcessDefinition.class);
+        when(definition.getId()).thenReturn("definition");
+        when(definitions.list()).thenReturn(List.of(definition));
+        var bpmn = new org.flowable.bpmn.model.BpmnModel();
+        var process = new org.flowable.bpmn.model.Process(); process.setId("current");
+        var start = new org.flowable.bpmn.model.StartEvent(); start.setId("start"); start.setFormKey("key_7");
+        process.addFlowElement(start); bpmn.addProcess(process);
+        when(repository.getBpmnModel("definition")).thenReturn(bpmn);
+        assertThat(checker.hasFormReference(List.of(7L))).isTrue();
+        when(artifacts.hasFormReference(Set.of(8L))).thenReturn(true);
+        assertThat(checker.hasFormReference(List.of(8L))).isTrue();
+    }
+
+    @Test
+    void handlerNormalizationKeepsCanonicalOutputAndDirectExecutionValidation()
+    {
+        var json = JsonMapper.shared();
+        var set = new WorkflowSetVariableJavaHandler();
+        var execution = mock(org.flowable.engine.delegate.DelegateExecution.class);
+        var task = mock(org.flowable.task.service.delegate.DelegateTask.class);
+        var config = json.createObjectNode().put("value", 7).put("targetVariable", " result ");
+        assertThat(set.validateAndNormalizeConfig(config))
+                .isEqualTo("{\"targetVariable\":\"result\",\"value\":7}");
+        set.execute(execution, config);
+        set.executeTask(task, config);
+        verify(execution).setVariable("result", 7L);
+        verify(task).setVariable("result", 7L);
+        assertThat(config.get("targetVariable").textValue()).isEqualTo(" result ");
+        var floatConfig = json.createObjectNode().put("targetVariable", "floatResult").put("value", 0.1f);
+        set.execute(execution, floatConfig);
+        set.executeTask(task, floatConfig);
+        verify(execution).setVariable("floatResult", 0.1d);
+        verify(task).setVariable("floatResult", 0.1d);
+        var decimalConfig = json.createObjectNode().put("targetVariable", "decimalResult").put("value", new BigDecimal("1"));
+        set.execute(execution, decimalConfig);
+        set.executeTask(task, decimalConfig);
+        verify(execution).setVariable("decimalResult", 1L);
+        verify(task).setVariable("decimalResult", 1L);
+        var exponentConfig = json.createObjectNode().put("targetVariable", "exponentResult")
+                .put("value", new BigDecimal("1E+400"));
+        set.execute(execution, exponentConfig);
+        set.executeTask(task, exponentConfig);
+        verify(execution).setVariable("exponentResult", Double.POSITIVE_INFINITY);
+        verify(task).setVariable("exponentResult", Double.POSITIVE_INFINITY);
+        for (String overflow : List.of("9223372036854775808", "-9223372036854775809"))
+        {
+            for (var overflowConfig : List.of(
+                    json.createObjectNode().put("targetVariable", "result").put("value", new BigDecimal(overflow)),
+                    json.createObjectNode().put("targetVariable", "result").put("value", new java.math.BigInteger(overflow))))
+            {
+                assertResourceFailure(() -> set.execute(execution, overflowConfig), "扩展快照配置解析失败", 500);
+                assertResourceFailure(() -> set.executeTask(task, overflowConfig), "扩展快照配置解析失败", 500);
+            }
+        }
+        for (var invalid : List.of(json.createArrayNode(),
+                json.createObjectNode().put("targetVariable", "result").set("value", json.createObjectNode()),
+                json.createObjectNode().put("targetVariable", "initiator").put("value", true)))
+        {
+            assertThatThrownBy(() -> set.execute(execution, invalid))
+                    .isInstanceOf(com.ruoyi.common.exception.ServiceException.class);
+            assertThatThrownBy(() -> set.executeTask(task, invalid))
+                    .isInstanceOf(com.ruoyi.common.exception.ServiceException.class);
+        }
+
+        var codes = mock(WorkflowBpmnEventCodeService.class);
+        var runtime = mock(com.ruoyi.flowable.service.process.WorkflowBpmnEventRuntimeService.class);
+        var event = new WorkflowRaiseBpmnEventHandler(codes, runtime);
+        for (String type : List.of("ERROR", "ESCALATION"))
+        {
+            var code = new WfBpmnEventCode(); code.setEventName("已冻结事件"); code.setNotificationPolicy("NONE");
+            when(codes.requireEnabled(type, "TEST_EVENT")).thenReturn(code);
+            var author = json.createObjectNode().put("sourceType", "SERVICE_TASK")
+                    .put("eventCode", "TEST_EVENT").put("eventType", type);
+            String frozen = event.validateAndNormalizeConfig(author);
+            assertThat(frozen).isEqualTo("{\"eventType\":\"" + type
+                    + "\",\"eventCode\":\"TEST_EVENT\",\"eventName\":\"已冻结事件\","
+                    + "\"notificationPolicy\":\"NONE\",\"sourceType\":\"SERVICE_TASK\",\"operator\":\"ALWAYS\"}");
+            clearInvocations(codes, runtime);
+            event.execute(execution, json.readTree(frozen));
+            verifyNoInteractions(codes);
+            verify(runtime).raise(eq(execution), argThat(value -> type.equals(value.eventType())
+                    && "TEST_EVENT".equals(value.eventCode())));
+            for (String required : List.of("eventType", "eventCode", "sourceType"))
+            {
+                var missing = author.deepCopy(); missing.remove(required);
+                assertThatThrownBy(() -> event.execute(execution, missing))
+                        .isInstanceOf(com.ruoyi.common.exception.ServiceException.class);
+            }
+            assertThatThrownBy(() -> event.execute(execution, author.deepCopy().put("eventCode", 1)))
+                    .isInstanceOf(com.ruoyi.common.exception.ServiceException.class);
+            assertThatThrownBy(() -> event.execute(execution, json.createArrayNode()))
+                    .isInstanceOf(com.ruoyi.common.exception.ServiceException.class);
+        }
+    }
+
+    @Test
     void rejectsProtectedOutputsBeforeHttpAndSqlSideEffectsAndPreservesInputReads() throws Exception
     {
         var json = JsonMapper.shared();
@@ -120,9 +244,9 @@ class WorkflowModelCompilationIntegrationTest
                 assertThatThrownBy(() -> cel.validateAndNormalizeConfig(celConfig)).as(name).hasMessageContaining("保留变量");
                 assertThatThrownBy(() -> cel.execute(execution, celConfig)).as(name).hasMessageContaining("保留变量");
                 assertThatThrownBy(() -> http.freezeConfig(httpAuthor.deepCopy().put("statusVariable", name), true)).as(name).hasMessageContaining("保留变量");
-                assertThatThrownBy(() -> http.execute(execution, null, httpFrozen.deepCopy().put("statusVariable", name))).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> http.execute(execution, httpFrozen.deepCopy().put("statusVariable", name))).as(name).hasMessageContaining("保留变量");
                 assertThatThrownBy(() -> sql.freezeConfig(sqlAuthor.deepCopy().put("resultVariable", name), true)).as(name).hasMessageContaining("保留变量");
-                assertThatThrownBy(() -> sql.execute(execution, null, sqlFrozen.deepCopy().put("resultVariable", name))).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> sql.execute(execution, sqlFrozen.deepCopy().put("resultVariable", name))).as(name).hasMessageContaining("保留变量");
                 var property = new org.flowable.bpmn.model.FormProperty(); property.setId(name); property.setType("string");
                 assertThatThrownBy(() -> WorkflowEmbeddedFormConverter.convert(List.of(property))).as(name).hasMessageContaining("保留变量");
                 assertThatThrownBy(() -> validator.validateForStart(FORM.replace("amount", name), Map.of())).as(name).isInstanceOf(com.ruoyi.common.exception.ServiceException.class);
@@ -131,8 +255,8 @@ class WorkflowModelCompilationIntegrationTest
             assertThat(jdbc.queryForObject("select count(*) from effects", Integer.class)).isZero();
             assertThat(values).containsExactly(Map.entry("initiator", "100"));
             verify(task, never()).setVariable(anyString(), any());
-            http.execute(execution, null, httpFrozen);
-            sql.execute(execution, null, sqlFrozen);
+            http.execute(execution, httpFrozen);
+            sql.execute(execution, sqlFrozen);
             assertThat(requests).hasValue(1);
             assertThat(values).containsEntry("httpResult", 204L).containsEntry("sqlResult", 1).containsEntry("initiator", "100");
             assertThat(jdbc.queryForObject("select owner from effects", String.class)).isEqualTo("100");
@@ -327,13 +451,77 @@ class WorkflowModelCompilationIntegrationTest
                     verify(templates, times(2)).validate(anyString());
                     var fallback = operations.writeAsCurrentUser(actor -> runtime.startProcessInstanceByKey("compiledParent", Map.of("amount", BigDecimal.ZERO, "initiator", actor.userId())));
                     assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(fallback.getId()).finished().count()).isOne();
+                    assertDmnDeletionBoundaries(operations, dmn.getDmnRepositoryService(), artifacts,
+                            sourceId, deployment, tables.publish(decimalTable()));
+                    assertExtensionVersionBoundaries(operations);
                     assertResourceReadBoundaries(operations, engine.getRepositoryService(), dmn.getDmnRepositoryService(),
                             deployment, definition.getId(), decisionId, compiled);
                     assertLazyDeploymentRead(engine.getRepositoryService(), deployment, definition.getKey());
                 });
     }
 
-    /** 同次详情共享两种实际资源，独立入口和旧制品仍使用同一读取及版本边界。 */
+    private static void assertDmnDeletionBoundaries(WorkflowEngineOperations operations,
+            org.flowable.dmn.api.DmnRepositoryService repository,
+            WorkflowDeploymentArtifactRepository artifacts, String referencedSource,
+            String parentDeployment, String unreferencedSource)
+    {
+        var observed = spy(repository);
+        var service = new WorkflowDmnDecisionService(operations, observed, artifacts);
+        assertResourceFailure(() -> service.delete("missing-dmn"), "DMN 部署不存在", 404);
+        verify(observed, times(1)).createDeploymentQuery();
+        clearInvocations(observed);
+        service.delete(unreferencedSource);
+        verify(observed, times(1)).createDeploymentQuery();
+        assertThat(repository.createDeploymentQuery().deploymentId(unreferencedSource).count()).isZero();
+        assertResourceFailure(() -> service.delete(referencedSource), "DMN 部署已被流程版本冻结引用", 409);
+        String frozen = artifacts.selectDmnSnapshots(parentDeployment).get(0).getFrozenDeploymentId();
+        assertResourceFailure(() -> service.delete(frozen), "流程冻结 DMN 部署不允许独立删除", 409);
+        assertThat(repository.createDeploymentQuery().deploymentId(referencedSource).count()).isOne();
+        assertThat(repository.createDeploymentQuery().deploymentId(frozen).count()).isOne();
+    }
+
+    private static void assertExtensionVersionBoundaries(WorkflowEngineOperations operations)
+    {
+        var mapper = mock(WfBpmnExtensionMapper.class);
+        var javaHandler = new WorkflowSetVariableJavaHandler();
+        var http = mock(WorkflowHttpConnector.class);
+        var sql = mock(WorkflowSqlConnector.class);
+        when(http.configSchema()).thenReturn("{\"type\":\"object\"}");
+        when(sql.configSchema()).thenReturn("{\"type\":\"object\"}");
+        var service = new WorkflowExtensionRegistryService(operations, mapper, null,
+                new WorkflowJavaExtensionHandlerRegistry(List.of(javaHandler)), http, sql);
+        var inserted = new java.util.ArrayList<WfBpmnExtensionVersion>();
+        when(mapper.selectMaxVersionNo(1L)).thenReturn(4);
+        when(mapper.insertVersion(any())).thenAnswer(invocation -> {
+            WfBpmnExtensionVersion version = invocation.getArgument(0);
+            version.setVersionId(5L); inserted.add(version); return 1;
+        });
+        for (String type : List.of("JAVA", "CEL", "HTTP", "SQL", "FORM_FIELD"))
+        {
+            var extension = new WfBpmnExtension();
+            extension.setExtensionId(1L); extension.setExtensionKey("cleanup-test");
+            extension.setExtensionType(type);
+            when(mapper.selectByIdForUpdate(1L)).thenReturn(extension);
+            String key = "JAVA".equals(type) ? javaHandler.implementationKey() : null;
+            assertThat(service.createVersion(1L,
+                    new com.ruoyi.flowable.domain.dto.WorkflowExtensionVersionCreateRequest(key))).isEqualTo(5L);
+            var version = inserted.get(inserted.size() - 1);
+            assertThat(version.getVersionNo()).isEqualTo(5);
+            assertThat(version.getChecksum()).isEqualTo(WorkflowExtensionChecksum.sha256(
+                    "cleanup-test", type, "5", version.getImplementationKey(), version.getConfigSchema()));
+            int count = inserted.size();
+            if (!"JAVA".equals(type))
+            {
+                assertResourceFailure(() -> service.createVersion(1L,
+                        new com.ruoyi.flowable.domain.dto.WorkflowExtensionVersionCreateRequest("SET_VARIABLE")),
+                        "非 JAVA 扩展不得提交服务端实现键", 400);
+                assertThat(inserted).hasSize(count);
+            }
+        }
+        assertThat(inserted).hasSize(5);
+    }
+
+    /** 同次详情共享两种实际资源，独立入口仍使用当前协议及清单门禁。 */
     private static void assertLazyDeploymentRead(org.flowable.engine.RepositoryService repository,
             String deploymentId, String processKey)
     {
@@ -356,29 +544,29 @@ class WorkflowModelCompilationIntegrationTest
         assertResourceFailure(() -> artifacts.openRead("").controlledLoop("", "activity"), "流程标识不能为空", 400);
         verifyNoInteractions(observed);
 
-        String legacyParent = repository.createDeployment().addString("fixture.txt", "legacy").deploy().getId();
-        repository.createDeployment().parentDeploymentId(legacyParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
-                .addString("approvaplat/manifest-v1.json", "{\"schemaVersion\":1}")
+        String currentParent = repository.createDeployment().addString("fixture.txt", "current").deploy().getId();
+        repository.createDeployment().parentDeploymentId(currentParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
+                .addString("approvaplat/manifest-v1.json", "{\"schemaVersion\":2}")
                 .addString("approvaplat/forms-v1.json", "[]")
                 .addString("approvaplat/controlled-loops-v1.json", "[]")
-                .addString("approvaplat/conditions-v1.json", """
-                        [{"processKey":"legacy","gatewayId":"g","gatewayToken":"token","flowId":"f","celConfigJson":"legacy-only"}]
+                .addString("approvaplat/conditions-v2.json", """
+                        [{"processKey":"current","gatewayId":"g","gatewayToken":"token","flowId":"f"}]
                         """).deploy();
-        var legacy = artifacts.openRead(legacyParent);
-        assertThat(legacy.forms()).isEmpty();
-        assertThat(legacy.controlledLoops("legacy")).isEmpty();
-        assertThat(artifacts.selectRuntimeConditionRules(legacyParent, "legacy", "token"))
+        var current = artifacts.openRead(currentParent);
+        assertThat(current.forms()).isEmpty();
+        assertThat(current.controlledLoops("current")).isEmpty();
+        assertThat(artifacts.selectRuntimeConditionRules(currentParent, "current", "token"))
                 .extracting(WfDeployConditionRule::getFlowId).containsExactly("f");
-        assertThat(artifacts.selectRuntimeConditionRules(legacyParent, "unrelated", "token")).isEmpty();
+        assertThat(artifacts.selectRuntimeConditionRules(currentParent, "unrelated", "token")).isEmpty();
         assertThat(artifacts.openRead("absent-deployment").forms()).isEmpty();
 
         String invalidParent = repository.createDeployment().addString("fixture.txt", "invalid").deploy().getId();
-        for (String manifest : List.of("{\"schemaVersion\":3}", "broken-json"))
+        for (String manifest : List.of("{\"schemaVersion\":1}", "{\"schemaVersion\":3}", "broken-json"))
         {
             String id = repository.createDeployment().parentDeploymentId(invalidParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
                     .addString("approvaplat/manifest-v1.json", manifest).deploy().getId();
             assertResourceFailure(() -> artifacts.openRead(invalidParent).forms(),
-                    manifest.contains(":3") ? "流程部署业务资源协议版本不受支持" : "流程部署业务资源清单无法解析", 500);
+                    manifest.startsWith("{") ? "流程部署业务资源协议版本不受支持" : "流程部署业务资源清单无法解析", 500);
             repository.deleteDeployment(id);
         }
         repository.createDeployment().parentDeploymentId(invalidParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
@@ -400,7 +588,7 @@ class WorkflowModelCompilationIntegrationTest
         var resources = spy(repository);
         var decisions = spy(dmnRepository);
         var artifacts = new WorkflowDeploymentArtifactRepository(resources);
-        var deployments = new WorkflowDeploymentService(operations, resources, null, null,
+        var deployments = new WorkflowDeploymentService(operations, resources,
                 artifacts, null, null, null, null);
         var dmn = new WorkflowDmnDecisionService(operations, decisions, artifacts);
         assertThat(deployments.getBpmnXml(definitionId)).isEqualTo(compiled);

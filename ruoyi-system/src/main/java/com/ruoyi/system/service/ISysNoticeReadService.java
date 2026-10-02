@@ -45,10 +45,4 @@ public interface ISysNoticeReadService
      */
     public List<Map<String, Object>> selectReadUsersByNoticeId(Long noticeId, String searchValue);
 
-    /**
-     * 删除公告时清理对应已读记录
-     *
-     * @param noticeIds 公告ID数组
-     */
-    public void deleteByNoticeIds(Long[] noticeIds);
 }

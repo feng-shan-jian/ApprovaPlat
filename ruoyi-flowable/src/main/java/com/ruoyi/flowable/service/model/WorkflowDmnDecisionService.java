@@ -117,12 +117,12 @@ public class WorkflowDmnDecisionService
         String id = requireText(deploymentId, "DMN 部署主键不能为空");
         engineOperations.writeAsCurrentUser(identity ->
         {
-            if (dmnRepositoryService.createDeploymentQuery().deploymentId(id).singleResult() == null)
+            DmnDeployment deployment = dmnRepositoryService.createDeploymentQuery()
+                    .deploymentId(id).singleResult();
+            if (deployment == null)
             {
                 throw new ServiceException("DMN 部署不存在", HttpStatus.NOT_FOUND);
             }
-            DmnDeployment deployment = dmnRepositoryService.createDeploymentQuery()
-                    .deploymentId(id).singleResult();
             if (!isSourceDeployment(deployment))
             {
                 throw new ServiceException("流程冻结 DMN 部署不允许独立删除", HttpStatus.CONFLICT);

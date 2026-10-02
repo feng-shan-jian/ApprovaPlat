@@ -58,7 +58,7 @@ public class WfIntegrationCredentialController extends BaseController
      * @return AjaxResult，一次性 Token 和脱敏账号视图
      */
     @PreAuthorize("@ss.hasPermi('workflow:integrationCredential:add')")
-    @Log(title = "工作流集成账号", businessType = BusinessType.INSERT)
+    @Log(title = "工作流集成账号", businessType = BusinessType.INSERT, isSaveResponseData = false)
     @RepeatSubmit
     @PostMapping
     public AjaxResult create(@Valid @RequestBody WorkflowIntegrationCredentialCreateRequest request)
@@ -73,7 +73,7 @@ public class WfIntegrationCredentialController extends BaseController
      * @return AjaxResult，仅本次可见的新 Token
      */
     @PreAuthorize("@ss.hasPermi('workflow:integrationCredential:rotate')")
-    @Log(title = "工作流集成 Token 轮换", businessType = BusinessType.UPDATE)
+    @Log(title = "工作流集成 Token 轮换", businessType = BusinessType.UPDATE, isSaveResponseData = false)
     @RepeatSubmit
     @PutMapping("/{credentialId}/rotate")
     public AjaxResult rotate(@PathVariable @Positive Long credentialId,

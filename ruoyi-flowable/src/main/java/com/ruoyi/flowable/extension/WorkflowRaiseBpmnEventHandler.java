@@ -75,6 +75,20 @@ public class WorkflowRaiseBpmnEventHandler implements WorkflowJavaExtensionHandl
     @Override
     public String validateAndNormalizeConfig(JsonNode config)
     {
+        ObjectNode normalized = validatedConfig(config);
+        try
+        {
+            return objectMapper.writeValueAsString(normalized);
+        }
+        catch (JacksonException exception)
+        {
+            throw new ServiceException("BPMN 事件配置序列化失败", HttpStatus.ERROR);
+        }
+    }
+
+    /** 部署与直接执行共用字段校验和目录冻结结果。 */
+    private ObjectNode validatedConfig(JsonNode config)
+    {
         if (config == null || !config.isObject())
         {
             throw invalid("BPMN 事件处理器配置必须是对象");
@@ -135,14 +149,7 @@ public class WorkflowRaiseBpmnEventHandler implements WorkflowJavaExtensionHandl
         putOptional(normalized, "conditionVariable", conditionVariable);
         putOptional(normalized, "expectedValue", expectedValue);
         putOptional(normalized, "messageVariable", messageVariable);
-        try
-        {
-            return objectMapper.writeValueAsString(normalized);
-        }
-        catch (JacksonException exception)
-        {
-            throw new ServiceException("BPMN 事件配置序列化失败", HttpStatus.ERROR);
-        }
+        return normalized;
     }
 
     /**
@@ -154,15 +161,7 @@ public class WorkflowRaiseBpmnEventHandler implements WorkflowJavaExtensionHandl
     @Override
     public void execute(DelegateExecution execution, JsonNode config)
     {
-        JsonNode frozen;
-        try
-        {
-            frozen = objectMapper.readTree(validateAndNormalizeConfig(config));
-        }
-        catch (JacksonException exception)
-        {
-            throw new ServiceException("BPMN 事件快照配置解析失败", HttpStatus.ERROR);
-        }
+        JsonNode frozen = validatedConfig(config);
         String operator = frozen.get("operator").textValue();
         String variableName = optionalText(frozen, "conditionVariable");
         Object value = variableName == null ? null : execution.getVariable(variableName);

@@ -100,14 +100,14 @@ public class WorkflowExtensionDelegate implements JavaDelegate
                     && WorkflowHttpConnector.IMPLEMENTATION_KEY.equals(snapshot.getImplementationKey()))
             {
                 requireStableVersion(snapshot, httpConnector.configSchema());
-                httpConnector.execute(execution, snapshot, config);
+                httpConnector.execute(execution, config);
                 return;
             }
             if (WorkflowExtensionRegistryService.SQL_TYPE.equals(snapshot.getExtensionType())
                     && WorkflowSqlConnector.IMPLEMENTATION_KEY.equals(snapshot.getImplementationKey()))
             {
                 requireStableVersion(snapshot, sqlConnector.configSchema());
-                sqlConnector.execute(execution, snapshot, config);
+                sqlConnector.execute(execution, config);
                 return;
             }
             throw new ServiceException("扩展快照类型或实现不可执行", HttpStatus.ERROR);

@@ -268,18 +268,6 @@ public class WorkflowExtensionDeploymentService
     }
 
     /**
-     * 在 Flowable 部署成功后绑定 deploymentId、计算最终摘要并批量持久化快照。
-     * @param deploymentId String，Flowable 新部署主键
-     * @param prepared List<WfDeployExtensionSnapshot>，部署前编译结果
-     * @return void，无返回值；行数不一致时由外层事务整体回滚
-     */
-    public List<WfDeployExtensionSnapshot> snapshotsForDeployment(String deploymentId,
-            List<WfDeployExtensionSnapshot> prepared)
-    {
-        return snapshotsForDeployment(deploymentId, prepared, List.of());
-    }
-
-    /**
      * 在同一部署事务中合并服务任务和表单字段扩展快照并完成最终复核。
      * @param deploymentId String，Flowable 新部署主键
      * @param prepared List<WfDeployExtensionSnapshot>，服务任务部署前编译结果

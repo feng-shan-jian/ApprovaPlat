@@ -18,7 +18,6 @@ function readCatalogSource(source) {
 export function createDesignerFormFieldCatalog(context = {}) {
   const { forms = [], loadAuthorFields } = context
   const snapshot = ref(null)
-  const loading = ref(false)
   const error = ref('')
   let version = 0
   let requestedXml = ''
@@ -111,7 +110,6 @@ export function createDesignerFormFieldCatalog(context = {}) {
     requestedXml = ''
     snapshot.value = null
     error.value = ''
-    loading.value = false
   }
 
   async function refresh(xml) {
@@ -119,7 +117,6 @@ export function createDesignerFormFieldCatalog(context = {}) {
     invalidate()
     requestedXml = xml
     const requestVersion = version
-    loading.value = true
     pending = (async () => {
       try {
         const { data } = await loadAuthorFields(xml)
@@ -132,8 +129,6 @@ export function createDesignerFormFieldCatalog(context = {}) {
         if (requestVersion !== version) return
         error.value = failure?.message || '字段目录加载失败，请重新校验或编辑后重试'
         requestedXml = ''
-      } finally {
-        if (requestVersion === version) loading.value = false
       }
     })()
     return pending
@@ -149,7 +144,7 @@ export function createDesignerFormFieldCatalog(context = {}) {
   }
 
   return { resolveTemplateForm, readEmbeddedFormFields, readTemplateFieldDescriptors,
-    nodeFields, processFields, refresh, invalidate, loading, issueFor }
+    nodeFields, processFields, refresh, invalidate, issueFor }
 }
 
 /** 内嵌字段编辑保留受控类型拼写，不参与业务资格判断。 */

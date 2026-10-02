@@ -413,7 +413,7 @@ public class WorkflowProcessDefinitionQueryService
         long visibleTotal = 0;
         for (ProcessDefinition definition : definitions)
         {
-            if (!isDefinitionStartable(definition, actor, managedDecisions))
+            if (!isDefinitionStartable(definition, managedDecisions))
             {
                 continue;
             }
@@ -456,11 +456,10 @@ public class WorkflowProcessDefinitionQueryService
      * 使用整批部署快照判断定义权限，结果必须覆盖当前扫描的全部定义。
      *
      * @param definition ProcessDefinition，当前有界扫描中的流程定义
-     * @param actor WorkflowCurrentIdentity，当前有效用户及候选组
      * @param managedDecisions Map&lt;String, Boolean&gt;，受管定义的正式整批授权决定
      * @return boolean，正式部署快照给出的允许或拒绝决定
      */
-    private boolean isDefinitionStartable(ProcessDefinition definition, WorkflowCurrentIdentity actor,
+    private boolean isDefinitionStartable(ProcessDefinition definition,
             Map<String, Boolean> managedDecisions)
     {
         if (!managedDecisions.containsKey(definition.getId()))

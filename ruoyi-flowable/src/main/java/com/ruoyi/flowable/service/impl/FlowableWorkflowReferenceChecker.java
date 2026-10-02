@@ -3,9 +3,7 @@ package com.ruoyi.flowable.service.impl;
 import java.io.ByteArrayInputStream;
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.BpmnModel;
@@ -33,9 +31,6 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
 
     /** 模型元数据中的表单主键字段。 */
     private static final String FORM_ID_FIELD = "formId";
-
-    /** 模型元数据中的表单键字段。 */
-    private static final String FORM_KEY_FIELD = "formKey";
 
     /** 正式 BPMN 表单键固定前缀。 */
     private static final String FORM_KEY_PREFIX = "key_";
@@ -213,7 +208,7 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
     }
 
     /**
-     * 判断模型元数据中的 formId 或 formKey 是否引用目标表单。
+     * 按正式模型协议判断顶层 formId 是否引用目标表单。
      * @param metaInfo String，Flowable 模型元数据 JSON
      * @param targetFormIds Set&lt;Long&gt;，待检查表单主键集合
      * @return boolean，元数据引用目标表单时返回 true
@@ -227,117 +222,25 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
         try
         {
             JsonNode root = objectMapper.readTree(metaInfo);
-            if (root == null || (!root.isObject() && !root.isArray()))
+            if (root == null || !root.isObject())
             {
-                throw new IllegalArgumentException("模型元数据根节点必须是对象或数组");
+                throw new IllegalArgumentException("模型元数据根节点必须是对象");
             }
-            return metadataNodeReferencesForm(root, targetFormIds);
+            JsonNode formId = root.get(FORM_ID_FIELD);
+            if (formId == null || formId.isNull())
+            {
+                return false;
+            }
+            if (!formId.isIntegralNumber() || !formId.canConvertToLong() || formId.longValue() <= 0)
+            {
+                throw new IllegalArgumentException("模型元数据 formId 必须是正整数");
+            }
+            return targetFormIds.contains(formId.longValue());
         }
         catch (Exception exception)
         {
             throw new IllegalStateException("模型元数据无法解析", exception);
         }
-    }
-
-    /**
-     * 递归检查模型元数据节点，只将名为 formId/formKey 的字段解释为表单引用。
-     * @param node JsonNode，当前元数据节点
-     * @param targetFormIds Set&lt;Long&gt;，待检查表单主键集合
-     * @return boolean，当前节点或子节点包含目标表单引用时返回 true
-     */
-    private boolean metadataNodeReferencesForm(JsonNode node, Set<Long> targetFormIds)
-    {
-        if (node.isArray())
-        {
-            for (JsonNode child : node)
-            {
-                if (metadataNodeReferencesForm(child, targetFormIds))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-        if (!node.isObject())
-        {
-            return false;
-        }
-
-        Iterator<Map.Entry<String, JsonNode>> fields = node.properties().iterator();
-        while (fields.hasNext())
-        {
-            Map.Entry<String, JsonNode> field = fields.next();
-            String fieldName = field.getKey();
-            JsonNode value = field.getValue();
-            if (FORM_ID_FIELD.equalsIgnoreCase(fieldName)
-                    && jsonValueReferencesFormId(value, targetFormIds))
-            {
-                return true;
-            }
-            if (FORM_KEY_FIELD.equalsIgnoreCase(fieldName)
-                    && jsonValueReferencesFormKey(value, targetFormIds))
-            {
-                return true;
-            }
-            if ((value.isObject() || value.isArray())
-                    && metadataNodeReferencesForm(value, targetFormIds))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * 判断 JSON 值是否包含目标表单主键。
-     * @param value JsonNode，formId 字段值
-     * @param targetFormIds Set&lt;Long&gt;，待检查表单主键集合
-     * @return boolean，值可解析且命中目标表单时返回 true
-     */
-    private boolean jsonValueReferencesFormId(JsonNode value, Set<Long> targetFormIds)
-    {
-        if (value.isArray())
-        {
-            for (JsonNode child : value)
-            {
-                if (jsonValueReferencesFormId(child, targetFormIds))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-        if (value.isIntegralNumber())
-        {
-            return targetFormIds.contains(value.longValue());
-        }
-        if (value.isTextual())
-        {
-            return formKeyReferencesForm(value.textValue(), targetFormIds);
-        }
-        return false;
-    }
-
-    /**
-     * 判断 JSON 值是否包含目标表单键。
-     * @param value JsonNode，formKey 字段值
-     * @param targetFormIds Set&lt;Long&gt;，待检查表单主键集合
-     * @return boolean，值命中目标表单键时返回 true
-     */
-    private boolean jsonValueReferencesFormKey(JsonNode value, Set<Long> targetFormIds)
-    {
-        if (value.isArray())
-        {
-            for (JsonNode child : value)
-            {
-                if (jsonValueReferencesFormKey(child, targetFormIds))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-        return value.isTextual() && formKeyReferencesForm(value.textValue(), targetFormIds);
     }
 
     /**
@@ -370,7 +273,7 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
 
     /**
      * 判断正式 key_&lt;formId&gt; 表单键是否命中目标表单。
-     * @param formKey String，模型元数据或 BPMN 中的表单键
+     * @param formKey String，BPMN 中的表单键
      * @param targetFormIds Set&lt;Long&gt;，待检查表单主键集合
      * @return boolean，表单键命中任一目标表单时返回 true
      */

@@ -65,6 +65,8 @@
 </template>
 
 <script setup name="UserTaskSlaEditor">
+import { createDefaultSlaConfig } from './userTaskSlaDomain.js'
+
 const props = defineProps({
   /** 当前 UserTask 的结构化 SLA 作者配置。 */
   modelValue: { type: Object, required: true },
@@ -81,26 +83,9 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:modelValue', 'change', 'identity-search'])
-const draft = reactive(createDefaultSla())
+const draft = reactive(createDefaultSlaConfig())
 const canEnable = computed(() => props.calendars.length > 0
   && (props.escalationOptions.length > 0 || props.assigneeOptions.length > 0))
-
-/**
- * 创建字段完整的 SLA 默认值。
- * @returns {object} 可直接编辑且不共享引用的 SLA 配置。
- */
-function createDefaultSla() {
-  return {
-    enabled: false,
-    calendarKey: '',
-    reminderMinutes: 60,
-    reminderRepeatMinutes: 60,
-    maxReminders: 1,
-    escalationMinutes: 240,
-    escalationUserId: '',
-    escalationEventCode: ''
-  }
-}
 
 /**
  * 将父组件回读的 BPMN 配置同步到编辑态。
@@ -108,7 +93,7 @@ function createDefaultSla() {
  * @returns {void} 缺失字段使用受控默认值。
  */
 function syncDraft(value) {
-  Object.assign(draft, createDefaultSla(), value || {})
+  Object.assign(draft, createDefaultSlaConfig(), value || {})
 }
 
 watch(() => props.modelValue, syncDraft, { immediate: true, deep: true })

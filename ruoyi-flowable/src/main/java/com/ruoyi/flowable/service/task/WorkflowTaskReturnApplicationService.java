@@ -28,7 +28,6 @@ public class WorkflowTaskReturnApplicationService
             HttpStatus.NOT_FOUND, HttpStatus.CONFLICT);
 
     private final WorkflowEngineOperations engineOperations;
-    private final WorkflowTaskRequestValidator requestValidator;
     private final WorkflowTaskRuntimeReader runtimeReader;
     private final WorkflowTaskBpmnReader bpmnReader;
     private final WorkflowTaskMovementPolicy movementPolicy;
@@ -46,7 +45,6 @@ public class WorkflowTaskReturnApplicationService
      */
     public WorkflowTaskReturnApplicationService(
             WorkflowEngineOperations engineOperations,
-            WorkflowTaskRequestValidator requestValidator,
             WorkflowTaskRuntimeReader runtimeReader,
             WorkflowTaskBpmnReader bpmnReader,
             WorkflowTaskMovementPolicy movementPolicy,
@@ -59,7 +57,6 @@ public class WorkflowTaskReturnApplicationService
             RuntimeService runtimeService)
     {
         this.engineOperations = engineOperations;
-        this.requestValidator = requestValidator;
         this.runtimeReader = runtimeReader;
         this.bpmnReader = bpmnReader;
         this.movementPolicy = movementPolicy;

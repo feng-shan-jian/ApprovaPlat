@@ -11,9 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.flowable.common.engine.api.FlowableException;
-import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
-import org.flowable.engine.RuntimeService;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.Model;
 import org.flowable.engine.repository.ProcessDefinition;
@@ -46,10 +44,6 @@ public class WorkflowDeploymentService
 
     private final RepositoryService repositoryService;
 
-    private final RuntimeService runtimeService;
-
-    private final HistoryService historyService;
-
     /** 8 类部署业务资源的统一 Flowable 子部署仓库。 */
     private final WorkflowDeploymentArtifactRepository artifactRepository;
 
@@ -74,8 +68,7 @@ public class WorkflowDeploymentService
      * 构造后由 Spring 管理该服务
      */
     public WorkflowDeploymentService(WorkflowEngineOperations engineOperations,
-            RepositoryService repositoryService, RuntimeService runtimeService,
-            HistoryService historyService,
+            RepositoryService repositoryService,
             WorkflowDeploymentArtifactRepository artifactRepository,
             WfProcessDraftMapper processDraftMapper,
             WorkflowProcessDefinitionLockMapper processDefinitionLockMapper,
@@ -84,8 +77,6 @@ public class WorkflowDeploymentService
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
-        this.runtimeService = runtimeService;
-        this.historyService = historyService;
         this.artifactRepository = artifactRepository;
         this.processDraftMapper = processDraftMapper;
         this.processDefinitionLockMapper = processDefinitionLockMapper;
@@ -258,7 +249,7 @@ public class WorkflowDeploymentService
                 // ACTIVE 草稿仍可由用户正式提交，删除其部署会破坏草稿与引擎定义的一致性。
                 assertNoActiveDraftReferences(deploymentId);
                 assertNoInstanceReferences(deploymentId);
-                List<WfDeployDmnSnapshot> dmnSnapshots = safeDmnSnapshots(deploymentId);
+                List<WfDeployDmnSnapshot> dmnSnapshots = artifactRepository.selectDmnSnapshots(deploymentId);
                 List<Model> linkedModels = repositoryService.createModelQuery()
                         .deploymentId(deploymentId)
                         .list();
@@ -451,17 +442,6 @@ public class WorkflowDeploymentService
                 throw new ServiceException("流程部署不存在或已被删除", HttpStatus.NOT_FOUND);
             }
         }
-    }
-
-    /**
-     * 查询部署自有 DMN 冻结资源，供主部署删除后清理 DMN 子部署。
-     *
-     * @param deploymentId String，Flowable 流程部署主键
-     * @return List&lt;WfDeployDmnSnapshot&gt;，不可变 DMN 快照列表
-     */
-    private List<WfDeployDmnSnapshot> safeDmnSnapshots(String deploymentId)
-    {
-        return artifactRepository.selectDmnSnapshots(deploymentId);
     }
 
     /**

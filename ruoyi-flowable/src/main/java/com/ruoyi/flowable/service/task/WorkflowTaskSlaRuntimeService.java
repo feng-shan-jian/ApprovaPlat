@@ -316,7 +316,7 @@ public class WorkflowTaskSlaRuntimeService
                     ordinal, null, "审批 SLA 自动催办第 " + ordinal + " 次");
             String recipient = execution.getAssigneeUserId() == null
                     ? snapshot.getEscalationAssignee() : execution.getAssigneeUserId();
-            requireNotification(auditId, execution, definition.getKey(), recipient,
+            requireNotification(auditId, execution, recipient,
                     "REMINDER", "审批任务超时提醒",
                     "任务 " + execution.getTaskDefinitionKey() + " 已达到第 " + ordinal
                             + " 次 SLA 提醒时间");
@@ -325,10 +325,6 @@ public class WorkflowTaskSlaRuntimeService
         if (!"ESCALATE".equals(action) || ordinal != 0)
         {
             throw dataError("审批 SLA 定时动作异常");
-        }
-        if ("ESCALATED".equals(execution.getStatus()))
-        {
-            return;
         }
         if (slaMapper.markEscalated(execution.getSlaExecutionId(),
                 execution.getRevision()) != 1)
@@ -341,7 +337,7 @@ public class WorkflowTaskSlaRuntimeService
                 null, "审批 SLA 已超时升级" + eventDetail);
         String recipient = escalationRecipient == null
                 ? execution.getAssigneeUserId() : escalationRecipient;
-        requireNotification(auditId, execution, definition.getKey(), recipient,
+        requireNotification(auditId, execution, recipient,
                 "ESCALATE", "审批任务超时升级",
                 "任务 " + execution.getTaskDefinitionKey() + " 已进入超时升级处理");
     }
@@ -563,7 +559,6 @@ public class WorkflowTaskSlaRuntimeService
      *
      * @param auditId Long，已提交到当前事务的 SLA 审计主键
      * @param execution WfTaskSlaExecution，通知关联的 SLA 任务运行事实
-     * @param processDefinitionKey String，部署时冻结的流程定义 key
      * @param recipient String，接收人正式用户主键
      * @param action String，REMINDER 或 ESCALATE
      * @param title String，通知标题
@@ -571,7 +566,7 @@ public class WorkflowTaskSlaRuntimeService
      * @return void，必达站内信或审计任一未完整写入时抛出异常
      */
     private void requireNotification(Long auditId, WfTaskSlaExecution execution,
-            String processDefinitionKey, String recipient, String action,
+            String recipient, String action,
             String title, String content)
     {
         if (recipient == null || recipient.isBlank())

@@ -64,7 +64,7 @@ public class SysSmsController extends BaseController
      * @return AjaxResult，新配置主键
      */
     @PreAuthorize("@ss.hasPermi('system:sms:add')")
-    @Log(title = "短信配置", businessType = BusinessType.INSERT)
+    @Log(title = "短信配置", businessType = BusinessType.INSERT, isSaveRequestData = false)
     @PostMapping("/configs")
     public AjaxResult addConfig(@Valid @RequestBody SmsConfigRequest request)
     {
@@ -78,7 +78,7 @@ public class SysSmsController extends BaseController
      * @return AjaxResult，成功结果
      */
     @PreAuthorize("@ss.hasPermi('system:sms:edit')")
-    @Log(title = "短信配置", businessType = BusinessType.UPDATE)
+    @Log(title = "短信配置", businessType = BusinessType.UPDATE, isSaveRequestData = false)
     @PutMapping("/configs")
     public AjaxResult editConfig(@Valid @RequestBody SmsConfigRequest request)
     {

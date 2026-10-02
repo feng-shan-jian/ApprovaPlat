@@ -115,6 +115,34 @@ test('转办、退回新任务与MI修订触发全量，换办理人清除旧草
   await expect(note(page)).toHaveValue('会签办理草稿')
 })
 
+test('历史表单刷新直接展示最新值，附件保持可下载且不可上传删除', async ({ page }) => {
+  const state = await openDetail(page)
+  await page.clock.runFor(500)
+  state.detail.formDetail.historyForms = [{
+    formName: '附件历史',
+    content: JSON.stringify({ fields: [
+      { vModel: 'note', label: '历史备注', tag: 'el-input', workflowReadable: true, workflowWritable: true },
+      { vModel: 'files', label: '历史附件', tag: 'el-upload', workflowReadable: true, workflowWritable: true }
+    ] }),
+    values: { note: '原历史内容', files: [{ attachmentId: 'bound-file', originalName: '历史附件.pdf' }] }
+  }]
+  await page.getByRole('button', { name: '刷新状态', exact: true }).click()
+  await expect.poll(() => state.full).toBe(2)
+  await page.clock.runFor(500)
+  await page.getByRole('tab', { name: '历史表单 (1)' }).click()
+  const history = page.locator('.workflow-detail__history-form')
+  await expect(history.getByRole('textbox', { name: '历史备注' })).toHaveValue('原历史内容')
+  await expect(history.getByRole('textbox', { name: '历史备注' })).toBeDisabled()
+  await expect(history.getByRole('button', { name: '上传附件' })).toBeDisabled()
+  await expect(history.getByRole('button', { name: '下载附件 历史附件.pdf' })).toBeEnabled()
+  await expect(history.locator('input[type="file"]')).toHaveCount(0)
+  await expect(history.getByRole('button', { name: '删除' })).toHaveCount(0)
+  state.detail.formDetail.historyForms[0].values.note = '新历史内容'
+  await page.getByRole('button', { name: '刷新状态', exact: true }).click()
+  await expect(history.getByRole('textbox', { name: '历史备注' })).toHaveValue('新历史内容')
+  await expect(page.getByRole('tab', { name: '历史表单 (1)' })).toHaveAttribute('aria-selected', 'true')
+})
+
 test('挂起继续观察恢复；终态最终全量失败后重试，成功才停止', async ({ page }) => {
   const state = await openDetail(page)
   state.detail.processStatus = 'suspended'

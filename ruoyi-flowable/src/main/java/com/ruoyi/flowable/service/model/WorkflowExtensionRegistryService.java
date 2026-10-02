@@ -207,6 +207,11 @@ public class WorkflowExtensionRegistryService
             int versionNo = Math.addExact(currentMax == null ? 0 : currentMax, 1);
             String implementationKey;
             String configSchema;
+            if (!JAVA_TYPE.equals(extension.getExtensionType())
+                    && request.implementationKey() != null)
+            {
+                throw new ServiceException("非 JAVA 扩展不得提交服务端实现键", HttpStatus.BAD_REQUEST);
+            }
             if (JAVA_TYPE.equals(extension.getExtensionType()))
             {
                 if (request.implementationKey() == null || request.implementationKey().isBlank())
@@ -220,38 +225,21 @@ public class WorkflowExtensionRegistryService
             }
             else if (CEL_TYPE.equals(extension.getExtensionType()))
             {
-                if (request.implementationKey() != null)
-                {
-                    throw new ServiceException("非 JAVA 扩展不得提交服务端实现键", HttpStatus.BAD_REQUEST);
-                }
                 implementationKey = CEL_IMPLEMENTATION_KEY;
                 configSchema = celSandbox.configSchema();
             }
             else if (HTTP_TYPE.equals(extension.getExtensionType()))
             {
-                if (request.implementationKey() != null)
-                {
-                    throw new ServiceException("非 JAVA 扩展不得提交服务端实现键", HttpStatus.BAD_REQUEST);
-                }
                 implementationKey = WorkflowHttpConnector.IMPLEMENTATION_KEY;
                 configSchema = httpConnector.configSchema();
             }
             else if (SQL_TYPE.equals(extension.getExtensionType()))
             {
-                if (request.implementationKey() != null)
-                {
-                    throw new ServiceException("非 JAVA 扩展不得提交服务端实现键", HttpStatus.BAD_REQUEST);
-                }
                 implementationKey = WorkflowSqlConnector.IMPLEMENTATION_KEY;
                 configSchema = sqlConnector.configSchema();
             }
             else
             {
-                if (request.implementationKey() != null)
-                {
-                    throw new ServiceException("非 JAVA 扩展不得提交服务端实现键",
-                            HttpStatus.BAD_REQUEST);
-                }
                 implementationKey = WorkflowFormFieldExtension.TEXTAREA_IMPLEMENTATION_KEY;
                 configSchema = WorkflowFormFieldExtension.configSchema();
             }

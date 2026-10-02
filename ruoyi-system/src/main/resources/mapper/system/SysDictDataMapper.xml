@@ -66,9 +66,14 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         order by t.dict_id for update
     </select>
 	
-	<delete id="deleteDictDataById" parameterType="Long">
- 		delete from sys_dict_data where dict_code = #{dictCode}
- 	</delete>
+    <select id="selectDictDataByIds" resultMap="SysDictDataResult" useCache="false" flushCache="true">
+        <include refid="selectDictDataVo"/>
+        where dict_code in
+        <foreach collection="array" item="dictCode" open="(" separator="," close=")">
+            #{dictCode}
+        </foreach>
+        order by dict_code for update
+    </select>
  	
  	<delete id="deleteDictDataByIds" parameterType="Long">
  		delete from sys_dict_data where dict_code in

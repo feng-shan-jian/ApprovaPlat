@@ -143,7 +143,6 @@ class WorkflowTaskReturnChainIntegrationTest
                 mock(WorkflowMultiInstanceGroupTransitionService.class);
 
         returnApplicationService = new WorkflowTaskReturnApplicationService(engineOperations,
-                        new WorkflowTaskRequestValidator(),
                         new WorkflowTaskRuntimeReader(runtimeService, taskService,
                                 historyService),
                         new WorkflowTaskBpmnReader(repositoryService),
@@ -156,7 +155,6 @@ class WorkflowTaskReturnChainIntegrationTest
                         groupTransitionService, taskCopyService,
                         notificationService, runtimeService);
         resubmitApplicationService = new WorkflowApplicationResubmitApplicationService(engineOperations,
-                        new WorkflowTaskRequestValidator(),
                         new WorkflowTaskRuntimeReader(runtimeService, taskService,
                                 historyService),
                         new WorkflowReturnedTaskStateService(

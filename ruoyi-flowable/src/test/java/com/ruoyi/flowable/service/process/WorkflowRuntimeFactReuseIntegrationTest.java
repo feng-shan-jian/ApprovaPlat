@@ -104,19 +104,19 @@ class WorkflowRuntimeFactReuseIntegrationTest
             var notifications = mock(WorkflowNotificationService.class);
             var copies = mock(WorkflowTaskCopyService.class);
             when(copies.prepare(any(), any(), any(), anyList())).thenReturn(WorkflowTaskCopyService.CopyPlan.empty());
-            var returns = new WorkflowTaskReturnApplicationService(operations, new WorkflowTaskRequestValidator(), reader,
+            var returns = new WorkflowTaskReturnApplicationService(operations, reader,
                     bpmnReader, movement, returnedState, new WorkflowTaskActionAuditWriter(tasks),
                     new WorkflowTaskConcurrencyExecutor(), groups, copies, notifications, runtime);
             var artifacts = spy(new WorkflowDeploymentArtifactRepository(repository));
             var attachments = mock(WorkflowAttachmentService.class);
             when(attachments.prepareTaskVariables(anyString(), anyString(), anyMap(), anyMap()))
                     .thenAnswer(invocation -> invocation.getArgument(2));
-            var completions = new WorkflowTaskCompletionApplicationService(operations, new WorkflowTaskRequestValidator(),
+            var completions = new WorkflowTaskCompletionApplicationService(operations,
                     reader, bpmnReader, artifacts, new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator()),
                     attachments, copies, new WorkflowNextTaskAssignmentService(selection, tasks, runtime, snapshotReader), mi,
                     new WorkflowControlledLoopService(runtime, tasks, mock(com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper.class)),
                     new WorkflowTaskActionAuditWriter(tasks), new WorkflowTaskConcurrencyExecutor(), runtime, tasks, identities);
-            var resubmits = new WorkflowApplicationResubmitApplicationService(operations, new WorkflowTaskRequestValidator(),
+            var resubmits = new WorkflowApplicationResubmitApplicationService(operations,
                     reader, returnedState, new WorkflowTaskActionAuditWriter(tasks), new WorkflowTaskConcurrencyExecutor(),
                     groups, artifacts, new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator()),
                     attachments, notifications, runtime);

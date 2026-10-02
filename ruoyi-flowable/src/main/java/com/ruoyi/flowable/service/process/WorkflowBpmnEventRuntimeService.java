@@ -66,7 +66,7 @@ public class WorkflowBpmnEventRuntimeService
         String initiator = scalar(execution.getVariable("initiator"));
         auditService.record(new WorkflowBpmnEventAuditService.RuntimeEvent(
                 idempotencyKey, definition.getDeploymentId(), execution.getProcessInstanceId(),
-                execution.getProcessDefinitionId(), definition.getKey(), execution.getId(),
+                execution.getProcessDefinitionId(), execution.getId(),
                 execution.getCurrentActivityId(),
                 event.sourceType(), event.eventType(), event.eventCode(), event.eventName(),
                 event.notificationPolicy(), matchStatus, match == null ? null : match.eventId(),

@@ -270,7 +270,7 @@ public class WorkflowProcessHistoryProjection
                     relationDefinition.getId(), relationDefinition.getKey(), relationDefinition.getName(),
                     relationDefinition.getVersion(), related.getBusinessKey(),
                     WorkflowProcessStatusNormalizer.normalize(related.getBusinessStatus(),
-                            related.getState(), toInstant(related.getEndTime()), related.getDeleteReason()),
+                            related.getState(), toInstant(related.getEndTime())),
                     toInstant(related.getStartTime()), toInstant(related.getEndTime()),
                     requestedInstanceId.equals(instanceId)));
         }
