@@ -235,15 +235,7 @@ public class SysJobServiceImpl implements ISysJobService
      */
     public void updateSchedulerJob(SysJob job, String jobGroup) throws SchedulerException, TaskException
     {
-        Long jobId = job.getJobId();
-        // 判断是否存在
-        JobKey jobKey = ScheduleUtils.getJobKey(jobId, jobGroup);
-        if (scheduler.checkExists(jobKey))
-        {
-            // 防止创建时存在数据问题 先移除，然后在执行创建操作
-            scheduler.deleteJob(jobKey);
-        }
-        ScheduleUtils.createScheduleJob(scheduler, job);
+        ScheduleUtils.replaceScheduleJob(scheduler, job, jobGroup);
     }
 
 }

@@ -1,5 +1,8 @@
 package com.ruoyi.quartz.util;
 
+import java.util.Set;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import org.quartz.CronScheduleBuilder;
 import org.quartz.CronTrigger;
 import org.quartz.Job;
@@ -10,6 +13,7 @@ import org.quartz.Scheduler;
 import org.quartz.SchedulerException;
 import org.quartz.TriggerBuilder;
 import org.quartz.TriggerKey;
+import org.quartz.Trigger;
 import com.ruoyi.common.constant.ScheduleConstants;
 import com.ruoyi.common.exception.job.TaskException;
 import com.ruoyi.common.exception.job.TaskException.Code;
@@ -56,6 +60,13 @@ public class ScheduleUtils
      */
     public static void createScheduleJob(Scheduler scheduler, SysJob job) throws SchedulerException, TaskException
     {
+        replaceScheduleJob(scheduler, job, job.getJobGroup());
+    }
+
+    /** 完整构造和校验后替换定义；旧分组事实由数据库服务提供。 */
+    public static void replaceScheduleJob(Scheduler scheduler, SysJob job, String previousGroup)
+            throws SchedulerException, TaskException
+    {
         Class<? extends Job> jobClass = getQuartzJobClass(job);
         // 构建job信息
         Long jobId = job.getJobId();
@@ -73,26 +84,68 @@ public class ScheduleUtils
         // 放入参数，运行时的方法可以获取
         jobDetail.getJobDataMap().put(ScheduleConstants.TASK_PROPERTIES, job);
 
-        // 判断是否存在
-        if (scheduler.checkExists(getJobKey(jobId, jobGroup)))
-        {
-            // 防止创建时存在数据问题 先移除，然后在执行创建操作
-            scheduler.deleteJob(getJobKey(jobId, jobGroup));
-        }
+        boolean hasNextExecution = StringUtils.isNotNull(CronUtils.getNextExecution(job.getCronExpression()));
+        boolean paused = job.getStatus().equals(ScheduleConstants.Status.PAUSE.getValue());
+        JobKey currentKey = getJobKey(jobId, jobGroup);
+        JobKey previousKey = getJobKey(jobId, previousGroup);
 
-        // 判断任务是否过期
-        if (StringUtils.isNotNull(CronUtils.getNextExecution(job.getCronExpression())))
+        ScheduledDefinition currentBefore = readDefinition(scheduler, currentKey);
+        ScheduledDefinition previousBefore = previousKey.equals(currentKey) ? currentBefore
+                : readDefinition(scheduler, previousKey);
+        try
         {
-            // 执行调度任务
-            scheduler.scheduleJob(jobDetail, trigger);
+            if (hasNextExecution)
+            {
+                // 由 JobStore 替换同键定义，不在调度操作成功前删除原任务。
+                scheduler.scheduleJob(jobDetail, Set.of(trigger), true);
+                if (paused) scheduler.pauseJob(currentKey);
+            }
+            else
+            {
+                scheduler.deleteJob(currentKey);
+            }
+            if (!previousKey.equals(currentKey)) scheduler.deleteJob(previousKey);
         }
-
-        // 暂停任务
-        if (job.getStatus().equals(ScheduleConstants.Status.PAUSE.getValue()))
+        catch (SchedulerException | RuntimeException failure)
         {
-            scheduler.pauseJob(ScheduleUtils.getJobKey(jobId, jobGroup));
+            // Quartz 不参与数据库事务；明确恢复替换前的定义，恢复失败作为 suppressed 保留。
+            restoreDefinition(scheduler, currentKey, currentBefore, failure);
+            if (!previousKey.equals(currentKey)) restoreDefinition(scheduler, previousKey, previousBefore, failure);
+            throw failure;
         }
     }
+
+    private static ScheduledDefinition readDefinition(Scheduler scheduler, JobKey key) throws SchedulerException
+    {
+        JobDetail detail = scheduler.getJobDetail(key);
+        if (detail == null) return null;
+        Set<? extends Trigger> triggers = Set.copyOf(scheduler.getTriggersOfJob(key));
+        Map<TriggerKey, Trigger.TriggerState> states = new LinkedHashMap<>();
+        for (Trigger trigger : triggers) states.put(trigger.getKey(), scheduler.getTriggerState(trigger.getKey()));
+        return new ScheduledDefinition(detail, triggers, states);
+    }
+
+    private static void restoreDefinition(Scheduler scheduler, JobKey key, ScheduledDefinition before,
+            Exception failure)
+    {
+        try
+        {
+            if (before == null) scheduler.deleteJob(key);
+            else
+            {
+                scheduler.scheduleJob(before.detail(), before.triggers(), true);
+                for (var state : before.states().entrySet())
+                    if (state.getValue() == Trigger.TriggerState.PAUSED) scheduler.pauseTrigger(state.getKey());
+            }
+        }
+        catch (SchedulerException | RuntimeException recoveryFailure)
+        {
+            if (recoveryFailure != failure) failure.addSuppressed(recoveryFailure);
+        }
+    }
+
+    private record ScheduledDefinition(JobDetail detail, Set<? extends Trigger> triggers,
+            Map<TriggerKey, Trigger.TriggerState> states) { }
 
     /**
      * 设置定时任务策略
