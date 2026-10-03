@@ -1,18 +1,25 @@
 package com.ruoyi.framework.web.service;
 
 import java.util.HashSet;
+import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 import com.ruoyi.common.constant.Constants;
 import com.ruoyi.common.constant.UserConstants;
 import com.ruoyi.common.core.domain.entity.SysRole;
 import com.ruoyi.common.core.domain.entity.SysUser;
+import com.ruoyi.common.core.domain.model.LoginUser;
+import com.ruoyi.common.enums.UserStatus;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.system.service.ISysMenuService;
-import com.ruoyi.system.service.ISysRoleService;
+import com.ruoyi.system.service.ISysUserService;
 
 /**
  * 用户权限处理
@@ -23,10 +30,27 @@ import com.ruoyi.system.service.ISysRoleService;
 public class SysPermissionService
 {
     @Autowired
-    private ISysRoleService roleService;
+    private ISysUserService userService;
 
     @Autowired
     private ISysMenuService menuService;
+
+    /** 身份各字段和角色权限来自同一次数据库快照，不受操作者数据范围影响。 */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ, propagation = Propagation.REQUIRES_NEW)
+    public LoginUser loadIdentity(Long userId)
+    {
+        SysUser user = userService.selectUserById(userId);
+        if (user == null || !UserStatus.OK.getCode().equals(user.getStatus())
+                || !UserStatus.OK.getCode().equals(user.getDelFlag()))
+        {
+            return null;
+        }
+        if (user.getRoles() == null)
+        {
+            user.setRoles(new ArrayList<>());
+        }
+        return new LoginUser(user.getUserId(), user.getDeptId(), user, getMenuPermission(user));
+    }
 
     /**
      * 获取角色数据权限
@@ -44,7 +68,11 @@ public class SysPermissionService
         }
         else
         {
-            roles.addAll(roleService.selectRolePermissionByUserId(user.getUserId()));
+            if (user.getRoles() != null)
+            {
+                user.getRoles().stream().filter(role -> UserConstants.ROLE_NORMAL.equals(role.getStatus()))
+                        .forEach(role -> roles.addAll(Arrays.asList(role.getRoleKey().trim().split(","))));
+            }
         }
         return roles;
     }
@@ -71,6 +99,7 @@ public class SysPermissionService
                 // 多角色设置permissions属性，以便数据权限匹配权限
                 for (SysRole role : roles)
                 {
+                    role.setPermissions(new HashSet<>());
                     if (StringUtils.equals(role.getStatus(), UserConstants.ROLE_NORMAL) && !role.isAdmin())
                     {
                         Set<String> rolePerms = menuService.selectMenuPermsByRoleId(role.getRoleId());
@@ -78,10 +107,6 @@ public class SysPermissionService
                         perms.addAll(rolePerms);
                     }
                 }
-            }
-            else
-            {
-                perms.addAll(menuService.selectMenuPermsByUserId(user.getUserId()));
             }
         }
         return perms;

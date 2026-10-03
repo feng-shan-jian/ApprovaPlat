@@ -1,10 +1,13 @@
 package com.ruoyi.common.core.redis;
 
 import java.util.Collection;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.connection.ReturnType;
 import org.springframework.stereotype.Component;
 
 /**
@@ -16,6 +19,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class RedisCache
 {
+    private static final byte[] COMPARE_AND_SET = ("if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end "
+            + "if ARGV[2] == '' then redis.call('del', KEYS[1]) "
+            + "else redis.call('psetex', KEYS[1], ARGV[3], ARGV[2]) end return 1")
+            .getBytes(StandardCharsets.UTF_8);
+
     @Autowired
     public RedisTemplate redisTemplate;
 
@@ -100,6 +108,33 @@ public class RedisCache
     {
         ValueOperations<String, T> operation = redisTemplate.opsForValue();
         return operation.get(key);
+    }
+
+    /** 读取原始值作为条件写凭据，避免反序列化再序列化改变比较字节。 */
+    public byte[] getCacheObjectBytes(String key)
+    {
+        byte[] encodedKey = redisTemplate.getKeySerializer().serialize(key);
+        return (byte[]) redisTemplate.execute((RedisCallback<byte[]>) connection -> connection.get(encodedKey));
+    }
+
+    public <T> T deserializeCacheObject(byte[] value)
+    {
+        return (T) redisTemplate.getValueSerializer().deserialize(value);
+    }
+
+    /** 仅替换仍为 expected 的现存值；value 为 null 时条件删除，不恢复已过期/退出的会话。 */
+    public boolean compareAndSetCacheObject(String key, byte[] expected, Object value, long timeoutMillis)
+    {
+        if (expected == null)
+        {
+            return false;
+        }
+        byte[] encodedKey = redisTemplate.getKeySerializer().serialize(key);
+        byte[] encodedValue = value == null ? new byte[0] : redisTemplate.getValueSerializer().serialize(value);
+        byte[] timeout = Long.toString(timeoutMillis).getBytes(StandardCharsets.UTF_8);
+        Long result = (Long) redisTemplate.execute((RedisCallback<Long>) connection -> connection.eval(
+                COMPARE_AND_SET, ReturnType.INTEGER, 1, encodedKey, expected, encodedValue, timeout));
+        return Long.valueOf(1).equals(result);
     }
 
     /**

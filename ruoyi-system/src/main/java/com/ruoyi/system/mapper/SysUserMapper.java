@@ -57,6 +57,11 @@ public interface SysUserMapper
      */
     public SysUser selectUserById(Long userId);
 
+    /** 授权变更所影响的身份集合，不应用操作者数据范围。 */
+    List<Long> selectUserIdsByRoleIds(@Param("roleIds") Long[] roleIds);
+
+    List<Long> selectUserIdsByMenuId(Long menuId);
+
     /**
      * 新增用户信息
      * 
@@ -72,6 +77,9 @@ public interface SysUserMapper
      * @return 结果
      */
     public int updateUser(SysUser user);
+
+    /** 个人资料只更新昵称、邮箱、手机和性别，不能写回会话中的旧身份字段。 */
+    public int updateUserProfile(SysUser user);
 
     /**
      * 修改用户头像

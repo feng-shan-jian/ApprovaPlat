@@ -139,6 +139,18 @@ public class SysUserServiceImpl implements ISysUserService
     }
 
     @Override
+    public List<Long> selectUserIdsByRoleIds(Long[] roleIds)
+    {
+        return roleIds == null || roleIds.length == 0 ? List.of() : userMapper.selectUserIdsByRoleIds(roleIds);
+    }
+
+    @Override
+    public List<Long> selectUserIdsByMenuId(Long menuId)
+    {
+        return userMapper.selectUserIdsByMenuId(menuId);
+    }
+
+    @Override
     public SysUser selectUserByIdInScope(Long userId)
     {
         return SpringUtils.getAopProxy(this).selectUsersInScope(new SysUser(), new Long[] { userId }).get(0);
@@ -352,7 +364,7 @@ public class SysUserServiceImpl implements ISysUserService
     @Override
     public int updateUserProfile(SysUser user)
     {
-        return userMapper.updateUser(user);
+        return userMapper.updateUserProfile(user);
     }
 
     /**

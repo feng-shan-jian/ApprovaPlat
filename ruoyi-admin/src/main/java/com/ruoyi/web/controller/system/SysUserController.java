@@ -1,6 +1,7 @@
 package com.ruoyi.web.controller.system;
 
 import java.util.List;
+import java.util.Arrays;
 import java.util.stream.Collectors;
 import jakarta.servlet.http.HttpServletResponse;
 import org.apache.commons.lang3.ArrayUtils;
@@ -32,6 +33,7 @@ import com.ruoyi.system.service.ISysDeptService;
 import com.ruoyi.system.service.ISysPostService;
 import com.ruoyi.system.service.ISysRoleService;
 import com.ruoyi.system.service.ISysUserService;
+import com.ruoyi.framework.web.service.TokenService;
 
 /**
  * 用户信息
@@ -44,6 +46,9 @@ public class SysUserController extends BaseController
 {
     @Autowired
     private ISysUserService userService;
+
+    @Autowired
+    private TokenService tokenService;
 
     @Autowired
     private ISysRoleService roleService;
@@ -84,8 +89,16 @@ public class SysUserController extends BaseController
         ExcelUtil<SysUser> util = new ExcelUtil<SysUser>(SysUser.class);
         List<SysUser> userList = util.importExcel(file.getInputStream());
         String operName = getUsername();
-        String message = userService.importUser(userList, updateSupport, operName);
-        return success(message);
+        try
+        {
+            return success(userService.importUser(userList, updateSupport, operName));
+        }
+        finally
+        {
+            // 导入允许部分成功，异常返回时也要刷新已处理账号的状态。
+            tokenService.refreshUsersAfterCommit(userList.stream().map(SysUser::getUserId)
+                    .filter(java.util.Objects::nonNull).toList());
+        }
     }
 
     @PostMapping("/importTemplate")
@@ -174,7 +187,12 @@ public class SysUserController extends BaseController
             return error("修改用户'" + user.getUserName() + "'失败，邮箱账号已存在");
         }
         user.setUpdateBy(getUsername());
-        return toAjax(userService.updateUser(user));
+        int rows = userService.updateUser(user);
+        if (rows > 0)
+        {
+            tokenService.refreshUsersAfterCommit(List.of(user.getUserId()));
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -189,7 +207,12 @@ public class SysUserController extends BaseController
         {
             return error("当前用户不能删除");
         }
-        return toAjax(userService.deleteUserByIds(userIds));
+        int rows = userService.deleteUserByIds(userIds);
+        if (rows > 0)
+        {
+            tokenService.refreshUsersAfterCommit(Arrays.asList(userIds));
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -216,7 +239,12 @@ public class SysUserController extends BaseController
     {
         userService.checkUserAllowed(userService.selectUserByIdInScope(user.getUserId()));
         user.setUpdateBy(getUsername());
-        return toAjax(userService.updateUserStatus(user));
+        int rows = userService.updateUserStatus(user);
+        if (rows > 0)
+        {
+            tokenService.refreshUsersAfterCommit(List.of(user.getUserId()));
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -249,6 +277,7 @@ public class SysUserController extends BaseController
         Long[] assignedRoleIds = roleService.selectRolesInScope(new SysRole(), roleIds).stream()
                 .map(SysRole::getRoleId).toArray(Long[]::new);
         userService.insertUserAuth(user.getUserId(), assignedRoleIds);
+        tokenService.refreshUsersAfterCommit(List.of(user.getUserId()));
         return success();
     }
 

@@ -51,6 +51,11 @@ public interface ISysUserService
      */
     public SysUser selectUserById(Long userId);
 
+    /** 在线身份刷新使用的真实授权关系，不应用操作者数据范围。 */
+    List<Long> selectUserIdsByRoleIds(Long[] roleIds);
+
+    List<Long> selectUserIdsByMenuId(Long menuId);
+
     /** 管理入口使用的数据范围内完整详情。 */
     SysUser selectUserByIdInScope(Long userId);
 

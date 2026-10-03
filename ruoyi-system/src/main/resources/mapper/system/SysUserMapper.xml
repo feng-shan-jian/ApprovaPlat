@@ -54,7 +54,7 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         from sys_user u
 		    left join sys_dept d on u.dept_id = d.dept_id
 		    left join sys_user_role ur on u.user_id = ur.user_id
-		    left join sys_role r on r.role_id = ur.role_id
+		    left join sys_role r on r.role_id = ur.role_id and r.del_flag = '0'
     </sql>
     
     <select id="selectImportUsersInScope" resultMap="SysUserResult">
@@ -144,6 +144,16 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
 		<include refid="selectUserVo"/>
 		where u.user_id = #{userId}
 	</select>
+
+    <select id="selectUserIdsByRoleIds" resultType="Long">
+        select distinct user_id from sys_user_role where role_id in
+        <foreach collection="roleIds" item="roleId" open="(" separator="," close=")">#{roleId}</foreach>
+    </select>
+
+    <select id="selectUserIdsByMenuId" parameterType="Long" resultType="Long">
+        select distinct ur.user_id from sys_user_role ur
+        inner join sys_role_menu rm on rm.role_id = ur.role_id where rm.menu_id = #{menuId}
+    </select>
 	
 	<select id="selectActiveUserIdentityByName" parameterType="String" resultMap="SysUserResult">
 		select user_id, user_name from sys_user where user_name = #{userName} and del_flag = '0' limit 1
@@ -211,6 +221,18 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
  		where user_id = #{userId}
 	</update>
 	
+    <update id="updateUserProfile" parameterType="SysUser">
+        update sys_user
+        <set>
+            <if test="nickName != null and nickName != ''">nick_name = #{nickName},</if>
+            <if test="email != null">email = #{email},</if>
+            <if test="phonenumber != null">phonenumber = #{phonenumber},</if>
+            <if test="sex != null and sex != ''">sex = #{sex},</if>
+            update_time = sysdate()
+        </set>
+        where user_id = #{userId}
+    </update>
+
 	<update id="updateUserStatus" parameterType="SysUser">
  		update sys_user set status = #{status}, update_time = sysdate() where user_id = #{userId}
 	</update>

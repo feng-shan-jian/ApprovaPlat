@@ -1,6 +1,7 @@
 package com.ruoyi.web.controller.system;
 
 import java.util.List;
+import java.util.Arrays;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,7 +23,6 @@ import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.core.page.TableDataInfo;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.common.utils.poi.ExcelUtil;
-import com.ruoyi.framework.web.service.SysPermissionService;
 import com.ruoyi.framework.web.service.TokenService;
 import com.ruoyi.system.domain.SysUserRole;
 import com.ruoyi.system.service.ISysDeptService;
@@ -43,9 +43,6 @@ public class SysRoleController extends BaseController
 
     @Autowired
     private TokenService tokenService;
-
-    @Autowired
-    private SysPermissionService permissionService;
 
     @Autowired
     private ISysUserService userService;
@@ -124,8 +121,7 @@ public class SysRoleController extends BaseController
         
         if (roleService.updateRole(role) > 0)
         {
-            // 刷新所有持有该角色的在线用户权限
-            tokenService.refreshPermissionByRoleId(role.getRoleId(), permissionService);
+            refreshRoleUsers(role.getRoleId());
             return success();
         }
         return error("修改角色'" + role.getRoleName() + "'失败，请联系管理员");
@@ -140,7 +136,12 @@ public class SysRoleController extends BaseController
     public AjaxResult dataScope(@RequestBody SysRole role)
     {
         roleService.checkRoleAllowed(roleService.selectRoleById(role.getRoleId()));
-        return toAjax(roleService.authDataScope(role));
+        int rows = roleService.authDataScope(role);
+        if (rows > 0)
+        {
+            refreshRoleUsers(role.getRoleId());
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -153,7 +154,12 @@ public class SysRoleController extends BaseController
     {
         roleService.checkRoleAllowed(roleService.selectRoleById(role.getRoleId()));
         role.setUpdateBy(getUsername());
-        return toAjax(roleService.updateRoleStatus(role));
+        int rows = roleService.updateRoleStatus(role);
+        if (rows > 0)
+        {
+            refreshRoleUsers(role.getRoleId());
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -164,7 +170,13 @@ public class SysRoleController extends BaseController
     @DeleteMapping("/{roleIds}")
     public AjaxResult remove(@PathVariable Long[] roleIds)
     {
-        return toAjax(roleService.deleteRoleByIds(roleIds));
+        List<Long> affected = userService.selectUserIdsByRoleIds(roleIds);
+        int rows = roleService.deleteRoleByIds(roleIds);
+        if (rows > 0)
+        {
+            tokenService.refreshUsersAfterCommit(affected);
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -209,7 +221,12 @@ public class SysRoleController extends BaseController
     @PutMapping("/authUser/cancel")
     public AjaxResult cancelAuthUser(@RequestBody SysUserRole userRole)
     {
-        return toAjax(roleService.deleteAuthUser(userRole));
+        int rows = roleService.deleteAuthUser(userRole);
+        if (rows > 0)
+        {
+            tokenService.refreshUsersAfterCommit(List.of(userRole.getUserId()));
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -220,7 +237,12 @@ public class SysRoleController extends BaseController
     @PutMapping("/authUser/cancelAll")
     public AjaxResult cancelAuthUserAll(Long roleId, Long[] userIds)
     {
-        return toAjax(roleService.deleteAuthUsers(roleId, userIds));
+        int rows = roleService.deleteAuthUsers(roleId, userIds);
+        if (rows > 0)
+        {
+            tokenService.refreshUsersAfterCommit(Arrays.asList(userIds));
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -232,7 +254,17 @@ public class SysRoleController extends BaseController
     public AjaxResult selectAuthUserAll(Long roleId, Long[] userIds)
     {
         SysRole role = roleService.selectRoleById(roleId);
-        return toAjax(roleService.insertAuthUsers(role.getRoleId(), userIds));
+        int rows = roleService.insertAuthUsers(role.getRoleId(), userIds);
+        if (rows > 0)
+        {
+            tokenService.refreshUsersAfterCommit(Arrays.asList(userIds));
+        }
+        return toAjax(rows);
+    }
+
+    private void refreshRoleUsers(Long roleId)
+    {
+        tokenService.refreshUsersAfterCommit(userService.selectUserIdsByRoleIds(new Long[] { roleId }));
     }
 
     /**

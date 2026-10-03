@@ -6,6 +6,8 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import javax.crypto.Mac;
 import javax.crypto.SecretKey;
@@ -15,10 +17,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import com.ruoyi.common.constant.CacheConstants;
 import com.ruoyi.common.constant.Constants;
 import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.core.redis.RedisCache;
+import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.utils.ServletUtils;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.common.utils.http.UserAgentUtils;
@@ -90,6 +96,9 @@ public class TokenService
 
     @Autowired
     private RedisCache redisCache;
+
+    @Autowired
+    private SysPermissionService permissionService;
 
     /**
      * 在应用对外提供登录能力前解析显式配置或持久化密钥文件，并初始化 HS512 密钥。
@@ -220,7 +229,7 @@ public class TokenService
     {
         if (StringUtils.isNotNull(loginUser) && StringUtils.isNotEmpty(loginUser.getToken()))
         {
-            refreshToken(loginUser);
+            refreshIdentity(loginUser.getToken());
         }
     }
 
@@ -247,7 +256,23 @@ public class TokenService
         String token = IdUtils.fastUUID();
         loginUser.setToken(token);
         setUserAgent(loginUser);
-        refreshToken(loginUser);
+        renewTimes(loginUser);
+        // 先注册不可猜测的会话标识，再读取身份；并发授权刷新才能看见这个新会话。
+        redisCache.setCacheObject(getTokenKey(token), loginUser, expireTime, TimeUnit.MINUTES);
+        try
+        {
+            LoginUser current = refreshIdentity(token);
+            if (current == null)
+            {
+                throw new ServiceException("用户会话已失效，请重新登录", HttpStatus.UNAUTHORIZED);
+            }
+            loginUser = current;
+        }
+        catch (RuntimeException exception)
+        {
+            delLoginUser(token);
+            throw exception;
+        }
 
         Map<String, Object> claims = new HashMap<>();
         claims.put(Constants.LOGIN_USER_KEY, token);
@@ -278,11 +303,123 @@ public class TokenService
      */
     public void refreshToken(LoginUser loginUser)
     {
+        String userKey = getTokenKey(loginUser.getToken());
+        for (int attempt = 0; attempt < 4; attempt++)
+        {
+            byte[] expected = redisCache.getCacheObjectBytes(userKey);
+            LoginUser current = redisCache.deserializeCacheObject(expected);
+            if (current == null)
+            {
+                return;
+            }
+            // 续期只延长最新缓存的时间，绝不把旧请求携带的身份写回。
+            renewTimes(current);
+            if (redisCache.compareAndSetCacheObject(userKey, expected, current, expireTime * MILLIS_MINUTE))
+            {
+                return;
+            }
+        }
+        // 高频竞争时不改变当前身份；下一请求仍可继续尝试续期。
+        log.warn("会话续期遇到连续并发更新，本次未延长有效期");
+    }
+
+    private void renewTimes(LoginUser loginUser)
+    {
         loginUser.setLoginTime(System.currentTimeMillis());
         loginUser.setExpireTime(loginUser.getLoginTime() + expireTime * MILLIS_MINUTE);
-        // 根据uuid将loginUser缓存
-        String userKey = getTokenKey(loginUser.getToken());
-        redisCache.setCacheObject(userKey, loginUser, expireTime, TimeUnit.MINUTES);
+    }
+
+    /** 当前会话与批量授权刷新共用事实与条件写边界；返回 null 表示已失效。 */
+    public LoginUser refreshIdentity(String token)
+    {
+        String key = getTokenKey(token);
+        for (int attempt = 0; attempt < 4; attempt++)
+        {
+            byte[] expected = redisCache.getCacheObjectBytes(key);
+            LoginUser current = redisCache.deserializeCacheObject(expected);
+            if (current == null)
+            {
+                return null;
+            }
+            LoginUser identity = permissionService.loadIdentity(current.getUserId());
+            if (identity != null)
+            {
+                identity.setToken(current.getToken());
+                identity.setIpaddr(current.getIpaddr());
+                identity.setLoginLocation(current.getLoginLocation());
+                identity.setBrowser(current.getBrowser());
+                identity.setOs(current.getOs());
+                renewTimes(identity);
+            }
+            if (redisCache.compareAndSetCacheObject(key, expected, identity, expireTime * MILLIS_MINUTE))
+            {
+                return identity;
+            }
+        }
+        // 无法确认刷新成功时让该会话重新登录，不留下可能过期的授权快照。
+        redisCache.deleteObject(key);
+        throw new IllegalStateException("在线身份刷新连续竞争，会话已失效");
+    }
+
+    /**
+     * 数据库提交后刷新受影响用户的全部 Token。可使用同一入口重试；失败明确记录，
+     * 不把已提交的授权修改伪装成数据库回滚。
+     */
+    public void refreshUsersAfterCommit(Collection<Long> userIds)
+    {
+        Set<Long> affected = new HashSet<>(userIds);
+        affected.remove(null);
+        if (affected.isEmpty())
+        {
+            return;
+        }
+        if (TransactionSynchronizationManager.isActualTransactionActive())
+        {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization()
+            {
+                @Override
+                public void afterCommit()
+                {
+                    refreshOnlineUsers(affected);
+                }
+            });
+        }
+        else
+        {
+            refreshOnlineUsers(affected);
+        }
+    }
+
+    private void refreshOnlineUsers(Set<Long> userIds)
+    {
+        try
+        {
+            Collection<String> keys = redisCache.keys(CacheConstants.LOGIN_TOKEN_KEY + "*");
+            if (keys == null)
+            {
+                return;
+            }
+            for (String key : keys)
+            {
+                LoginUser cached = redisCache.getCacheObject(key);
+                if (cached != null && userIds.contains(cached.getUserId()))
+                {
+                    try
+                    {
+                        refreshIdentity(cached.getToken());
+                    }
+                    catch (RuntimeException exception)
+                    {
+                        log.error("授权已提交，但用户[{}]在线身份刷新失败；请重试 refreshUsersAfterCommit", cached.getUserId(), exception);
+                        redisCache.deleteObject(key);
+                    }
+                }
+            }
+        }
+        catch (RuntimeException exception)
+        {
+            log.error("授权已提交，但用户集合{}的在线会话刷新未完成；请重试 refreshUsersAfterCommit", userIds, exception);
+        }
     }
 
     /**
@@ -407,40 +544,4 @@ public class TokenService
         return CacheConstants.LOGIN_TOKEN_KEY + uuid;
     }
 
-    /**
-     * 角色权限变更后，刷新所有持有该角色的在线用户权限
-     *
-     * @param roleId            变更的角色ID
-     * @param permissionService 权限服务
-     */
-    public void refreshPermissionByRoleId(Long roleId, SysPermissionService permissionService)
-    {
-        // 扫描所有在线 token
-        String pattern = CacheConstants.LOGIN_TOKEN_KEY + "*";
-        Collection<String> keys = redisCache.keys(pattern);
-        if (keys == null || keys.isEmpty())
-        {
-            return;
-        }
-        for (String key : keys)
-        {
-            LoginUser loginUser = redisCache.getCacheObject(key);
-            if (loginUser == null || loginUser.getUser() == null || loginUser.getUser().isAdmin())
-            {
-                // 管理员拥有所有权限，跳过
-                continue;
-            }
-            // 判断该用户是否拥有此角色
-            boolean hasRole = loginUser.getUser().getRoles() != null
-                    && loginUser.getUser().getRoles().stream().anyMatch(r -> roleId.equals(r.getRoleId()));
-            if (!hasRole)
-            {
-                continue;
-            }
-            // 刷新权限缓存
-            loginUser.setPermissions(permissionService.getMenuPermission(loginUser.getUser()));
-            refreshToken(loginUser);
-            log.info("角色[{}]权限变更，已刷新在线用户[{}]的权限缓存", roleId, loginUser.getUsername());
-        }
-    }
 }
