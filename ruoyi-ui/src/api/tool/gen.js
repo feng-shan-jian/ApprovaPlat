@@ -1,16 +1,16 @@
 import request from '@/utils/request'
 
 // 查询生成表数据
-export function listTable(query) {
-  return request({
+export function listTable(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/tool/gen/list',
     method: 'get',
     params: query
   })
 }
 // 查询db数据库列表
-export function listDbTable(query) {
-  return request({
+export function listDbTable(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/tool/gen/db/list',
     method: 'get',
     params: query

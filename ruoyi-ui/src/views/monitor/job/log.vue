@@ -138,6 +138,8 @@
 </template>
 
 <script setup name="JobLog">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import JobDetail from './detail'
 import { getJob } from "@/api/monitor/job"
 import { listJobLog, delJobLog, cleanJobLog } from "@/api/monitor/jobLog"
@@ -169,13 +171,19 @@ const data = reactive({
 const { queryParams, form } = toRefs(data)
 
 /** 查询调度日志列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listJobLog(proxy.addDateRange(queryParams.value, dateRange.value)).then(response => {
+  try {
+    const response = await listJobLog(proxy.addDateRange({ ...queryParams.value }, [...dateRange.value]), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     jobLogList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 // 返回按钮

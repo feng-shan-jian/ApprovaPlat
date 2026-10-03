@@ -1,8 +1,8 @@
 import request from '@/utils/request'
 
 // 查询角色列表
-export function listRole(query) {
-  return request({
+export function listRole(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/role/list',
     method: 'get',
     params: query
@@ -66,8 +66,8 @@ export function delRole(roleId) {
 }
 
 // 查询角色已授权用户列表
-export function allocatedUserList(query) {
-  return request({
+export function allocatedUserList(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/role/authUser/allocatedList',
     method: 'get',
     params: query
@@ -75,8 +75,8 @@ export function allocatedUserList(query) {
 }
 
 // 查询角色未授权用户列表
-export function unallocatedUserList(query) {
-  return request({
+export function unallocatedUserList(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/role/authUser/unallocatedList',
     method: 'get',
     params: query

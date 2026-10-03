@@ -7,7 +7,7 @@
       </div>
       <div class="channel-page__actions">
         <el-tooltip content="刷新" placement="top">
-          <el-button circle text icon="Refresh" aria-label="刷新" :loading="loading" @click="loadActiveTab" />
+          <el-button circle text icon="Refresh" aria-label="刷新" :loading="loading[activeTab]" @click="loadActiveTab" />
         </el-tooltip>
         <el-button v-if="activeTab === 'configs'" v-hasPermi="['system:sms:add']" type="primary" icon="Plus" @click="openConfig()">新增配置</el-button>
         <el-button v-if="activeTab === 'logs'" v-hasPermi="['system:sms:send']" type="primary" icon="Promotion" @click="openSend">测试发送</el-button>
@@ -16,7 +16,7 @@
 
     <el-tabs v-model="activeTab" @tab-change="loadActiveTab">
       <el-tab-pane label="供应商配置" name="configs">
-        <el-table v-loading="loading" :data="configs" row-key="configId">
+        <el-table v-loading="loading.configs" :data="configs" row-key="configId">
           <el-table-column prop="configName" label="配置名称" min-width="150" />
           <el-table-column label="供应商" width="110">
             <template #default="{ row }"><el-tag effect="plain">{{ providerLabel(row.provider) }}</el-tag></template>
@@ -40,7 +40,7 @@
       </el-tab-pane>
 
       <el-tab-pane label="发送审计" name="logs">
-        <el-table v-loading="loading" :data="logs" row-key="logId">
+        <el-table v-loading="loading.logs" :data="logs" row-key="logId">
           <el-table-column prop="logId" label="ID" width="86" />
           <el-table-column prop="sourceType" label="来源" width="120" />
           <el-table-column prop="provider" label="供应商" width="100"><template #default="{ row }">{{ providerLabel(row.provider) }}</template></el-table-column>
@@ -98,11 +98,14 @@
 </template>
 
 <script setup name="SystemSms">
+import { useRequestSequence } from '@/utils/requestSequence'
+const configRequest = useRequestSequence()
+const logsRequest = useRequestSequence()
 import { activateSmsConfig, addSmsConfig, deleteSmsConfig, listSmsConfigs, listSmsLogs, sendSmsTest, updateSmsConfig } from '@/api/system/sms'
 
 const { proxy } = getCurrentInstance()
 const activeTab = ref('configs')
-const loading = ref(false)
+const loading = reactive({ configs: false, logs: false })
 const saving = ref(false)
 const sending = ref(false)
 const configs = ref([])
@@ -170,12 +173,21 @@ function validateTencentField(rule, value, callback) {
  * @returns {Promise<void>} 查询结束后更新页面数据并解除加载状态。
  */
 async function loadActiveTab() {
-  loading.value = true
+  if (activeTab.value === 'configs') return loadConfigs()
+  return loadLogs()
+}
+
+async function loadConfigs() {
+  const isCurrent = configRequest.begin()
+  loading.configs = true
   try {
-    if (activeTab.value === 'configs') configs.value = (await listSmsConfigs()).data || []
-    else await loadLogs()
+    const response = await listSmsConfigs({ isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    configs.value = response.data || []
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.configs = false
   }
 }
 
@@ -184,9 +196,18 @@ async function loadActiveTab() {
  * @returns {Promise<void>} 查询完成后更新日志列表和分页总数。
  */
 async function loadLogs() {
-  const response = await listSmsLogs(logQueryParams)
-  logs.value = response.rows || []
-  logTotal.value = response.total || 0
+  const isCurrent = logsRequest.begin()
+  loading.logs = true
+  try {
+    const response = await listSmsLogs({ ...logQueryParams }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    logs.value = response.rows || []
+    logTotal.value = response.total || 0
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.logs = false
+  }
 }
 
 /**

@@ -153,6 +153,8 @@
 </template>
 
 <script setup name="Operlog">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import OperlogDetail from './detail'
 import { list, delOperlog, cleanOperlog } from "@/api/monitor/operlog"
 
@@ -185,13 +187,19 @@ const data = reactive({
 const { queryParams } = toRefs(data)
 
 /** 查询登录日志 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  list(proxy.addDateRange(queryParams.value, dateRange.value)).then(response => {
+  try {
+    const response = await list(proxy.addDateRange({ ...queryParams.value }, [...dateRange.value]), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     operlogList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 搜索按钮操作 */

@@ -92,6 +92,8 @@
 </template>
 
 <script setup name="AuthUser">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import selectUser from "./selectUser"
 import { allocatedUserList, authUserCancel, authUserCancelAll } from "@/api/system/role"
 
@@ -115,13 +117,19 @@ const queryParams = reactive({
 })
 
 /** 查询授权用户列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  allocatedUserList(queryParams).then(response => {
+  try {
+    const response = await allocatedUserList({ ...queryParams }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     userList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 返回按钮 */

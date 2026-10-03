@@ -318,6 +318,8 @@
 </template>
 
 <script setup name="WorkflowNotification">
+import { useRequestSequence } from '@/utils/requestSequence'
+const outboxRequest = useRequestSequence()
 import {
   compensateWorkflowNotification,
   listWorkflowNotificationNodes,
@@ -588,6 +590,7 @@ function resetOutboxQuery() {
  */
 async function loadOutbox() {
   if (!canAuditOutbox.value) return
+  const isCurrent = outboxRequest.begin()
   outboxLoading.value = true
   try {
     const response = await listWorkflowNotificationOutbox({
@@ -597,11 +600,14 @@ async function loadOutbox() {
       status: outboxQuery.status || undefined,
       eventType: outboxQuery.eventType || undefined,
       channel: outboxQuery.channel || undefined
-    })
+    }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     outbox.value = Array.isArray(response.rows) ? response.rows : []
     outboxTotal.value = Number(response.total || 0)
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    outboxLoading.value = false
+    if (isCurrent()) outboxLoading.value = false
   }
 }
 

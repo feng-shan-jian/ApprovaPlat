@@ -1,8 +1,8 @@
 import request from '@/utils/request'
 
 // 查询登录日志列表
-export function list(query) {
-  return request({
+export function list(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/monitor/logininfor/list',
     method: 'get',
     params: query

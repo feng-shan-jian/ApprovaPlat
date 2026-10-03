@@ -161,6 +161,8 @@
 </template>
 
 <script setup name="Notice">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import NoticeDetailView from "@/layout/components/HeaderNotice/DetailView"
 import ReadUsersDialog from "./ReadUsers"
 import { listNotice, getNotice, delNotice, addNotice, updateNotice } from "@/api/system/notice"
@@ -196,13 +198,19 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询公告列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listNotice(queryParams.value).then(response => {
+  try {
+    const response = await listNotice({ ...queryParams.value }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     noticeList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 取消按钮 */

@@ -1,8 +1,8 @@
 import request from '@/utils/request'
 
 // 查询调度日志列表
-export function listJobLog(query) {
-  return request({
+export function listJobLog(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/monitor/jobLog/list',
     method: 'get',
     params: query

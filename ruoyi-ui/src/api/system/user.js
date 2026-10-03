@@ -2,8 +2,8 @@ import request from '@/utils/request'
 import { parseStrEmpty } from "@/utils/ruoyi";
 
 // 查询用户列表
-export function listUser(query) {
-  return request({
+export function listUser(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/user/list',
     method: 'get',
     params: query

@@ -12,8 +12,8 @@ export function evaluateDecisionTable(data) {
  * 查询全部 Flowable 官方 DMN 来源版本。
  * @returns {Promise<object>} AjaxResult.data 为按 key 和版本排序的决策版本数组。
  */
-export function listDmnDecisions() {
-  return request({ url: '/workflow/dmn/list', method: 'get' })
+export function listDmnDecisions(requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/dmn/list', method: 'get' })
 }
 
 /**

@@ -88,6 +88,7 @@ service.interceptors.response.use(res => {
     const code = res.data.code || 200
     // 局部业务流程会按稳定 subCode 输出更准确提示，统一层只负责构造安全错误对象。
     const suppressErrorMessage = res.config?.suppressErrorMessage === true
+      || res.config?.isCurrentRequest?.() === false
     // 获取错误信息
     const msg = errorCode[code] || res.data.msg || errorCode['default']
     // 二进制数据则直接返回
@@ -95,7 +96,7 @@ service.interceptors.response.use(res => {
       return res.data
     }
     if (code === 401) {
-      if (!isRelogin.show) {
+      if (!suppressErrorMessage && !isRelogin.show) {
         isRelogin.show = true
         ElMessageBox.confirm('登录状态已过期，您可以继续留在该页面，或者重新登录', '系统提示', { confirmButtonText: '重新登录', cancelButtonText: '取消', type: 'warning' }).then(() => {
           isRelogin.show = false
@@ -123,6 +124,7 @@ service.interceptors.response.use(res => {
   error => {
     const responseData = error?.response?.data
     const suppressErrorMessage = error?.suppressErrorMessage === true || error?.config?.suppressErrorMessage === true
+      || error?.config?.isCurrentRequest?.() === false
     const businessError = createHttpBusinessError(responseData, error?.response?.status, errorCode)
     if (businessError) {
       // 真实非 2xx 响应仍使用后端安全 AjaxResult，并丢弃可能携带请求体的 AxiosError。

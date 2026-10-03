@@ -1,8 +1,8 @@
 import request from '@/utils/request'
 
 /** @returns {Promise<object>} 全部 BPMN 错误与升级编码目录。 */
-export function listBpmnEventCodes() {
-  return request({ url: '/workflow/bpmn-event/codes', method: 'get' })
+export function listBpmnEventCodes(requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/bpmn-event/codes', method: 'get' })
 }
 
 /**
@@ -34,6 +34,6 @@ export function changeBpmnEventCodeStatus(eventCodeId, enabled) {
 }
 
 /** @param {object} query 分页、状态、类型、来源和时间筛选；@returns {Promise<object>} 若依 rows/total 分页结果。 */
-export function listBpmnEventAudit(query) {
-  return request({ url: '/workflow/bpmn-event/audit', method: 'get', params: query })
+export function listBpmnEventAudit(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/bpmn-event/audit', method: 'get', params: query })
 }

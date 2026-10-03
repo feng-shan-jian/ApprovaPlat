@@ -5,8 +5,8 @@ import request from '@/utils/request'
  * @param {object} query 流程名称、更新时间范围和分页条件。
  * @returns {Promise<object>} 若依分页响应，rows 仅包含当前用户草稿。
  */
-export function listProcessDrafts(query) {
-  return request({ url: '/workflow/process/draft/list', method: 'get', params: query })
+export function listProcessDrafts(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/process/draft/list', method: 'get', params: query })
 }
 
 /**

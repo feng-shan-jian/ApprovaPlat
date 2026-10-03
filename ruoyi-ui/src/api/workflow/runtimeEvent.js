@@ -6,8 +6,8 @@ import axios from 'axios'
  * @param {object} query 分页、状态、类型、来源和时间筛选。
  * @returns {Promise<object>} 若依 rows/total 分页结果。
  */
-export function listRuntimeEvents(query) {
-  return request({ url: '/workflow/runtime-event-audit/list', method: 'get', params: query })
+export function listRuntimeEvents(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/runtime-event-audit/list', method: 'get', params: query })
 }
 
 /** 外部凭据独立鉴权；不写请求缓存，也不把凭据错误解释为后台登录失效。 */

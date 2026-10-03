@@ -4,8 +4,8 @@ import request from '@/utils/request'
  * 查询全部脱敏集成账号。
  * @returns {Promise<object>} AjaxResult.data 为不含 Token 正文和哈希的账号数组。
  */
-export function listIntegrationCredentials() {
-  return request({ url: '/workflow/integration-credential/list', method: 'get' })
+export function listIntegrationCredentials(requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/integration-credential/list', method: 'get' })
 }
 
 /**

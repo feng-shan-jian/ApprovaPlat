@@ -306,6 +306,9 @@
 </template>
 
 <script setup name="Menu">
+import { useRequestSequence } from '@/utils/requestSequence'
+const treeRequest = useRequestSequence()
+const listRequest = useRequestSequence()
 import { addMenu, delMenu, getMenu, listMenu, updateMenu, updateMenuSort } from "@/api/system/menu"
 import SvgIcon from "@/components/SvgIcon"
 import IconSelect from "@/components/IconSelect"
@@ -340,23 +343,32 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询菜单列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listMenu(queryParams.value).then(response => {
+  try {
+    const response = await listMenu({ ...queryParams.value }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     menuList.value = proxy.handleTree(response.data, "menuId")
     recordOriginalOrders(menuList.value)
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 查询菜单下拉树结构 */
-function getTreeselect() {
+async function getTreeselect() {
+  const isCurrent = treeRequest.begin()
   menuOptions.value = []
-  listMenu().then(response => {
-    const menu = { menuId: 0, menuName: "主类目", children: [] }
-    menu.children = proxy.handleTree(response.data, "menuId")
-    menuOptions.value.push(menu)
-  })
+  try {
+    const response = await listMenu(undefined, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    menuOptions.value = [{ menuId: 0, menuName: "主类目", children: proxy.handleTree(response.data, "menuId") }]
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  }
 }
 
 /** 取消按钮 */
@@ -505,4 +517,5 @@ function handleDelete(row) {
 }
 
 getList()
+watch(open, value => { if (!value) treeRequest.invalidate() }, { flush: 'sync' })
 </script>

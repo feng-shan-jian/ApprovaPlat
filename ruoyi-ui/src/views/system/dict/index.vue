@@ -181,6 +181,8 @@
 </template>
 
 <script setup name="Dict">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 const originalDictType = ref('')
 import DictDataDrawer from './detail'
 import useDictStore from '@/store/modules/dict'
@@ -220,13 +222,19 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询字典类型列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listType(proxy.addDateRange(queryParams.value, dateRange.value)).then(response => {
+  try {
+    const response = await listType(proxy.addDateRange({ ...queryParams.value }, [...dateRange.value]), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     typeList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 取消按钮 */

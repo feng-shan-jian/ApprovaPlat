@@ -10,8 +10,8 @@ export function previewCron(cronExpression) {
 }
 
 // 查询定时任务调度列表
-export function listJob(query) {
-  return request({
+export function listJob(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/monitor/job/list',
     method: 'get',
     params: query

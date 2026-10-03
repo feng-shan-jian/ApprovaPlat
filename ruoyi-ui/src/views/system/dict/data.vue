@@ -176,6 +176,8 @@
 </template>
 
 <script setup name="Data">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 const originalDictType = ref('')
 import useDictStore from '@/store/modules/dict'
 import { optionselect as getDictOptionselect, getType } from "@/api/system/dict/type"
@@ -241,13 +243,19 @@ function getTypeList() {
 }
 
 /** 查询字典数据列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listData(queryParams.value).then(response => {
+  try {
+    const response = await listData({ ...queryParams.value }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     dataList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 取消按钮 */

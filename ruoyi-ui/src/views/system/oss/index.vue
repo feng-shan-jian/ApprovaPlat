@@ -3,7 +3,7 @@
     <header class="storage-page__header">
       <div><h2>对象存储</h2><span>S3 兼容配置与对象台账</span></div>
       <div class="storage-page__actions">
-        <el-tooltip content="刷新" placement="top"><el-button circle text icon="Refresh" aria-label="刷新" :loading="loading" @click="loadActiveTab" /></el-tooltip>
+        <el-tooltip content="刷新" placement="top"><el-button circle text icon="Refresh" aria-label="刷新" :loading="loading[activeTab]" @click="loadActiveTab" /></el-tooltip>
         <el-button v-if="activeTab === 'configs'" v-hasPermi="['system:oss:add']" type="primary" icon="Plus" @click="openConfig()">新增配置</el-button>
         <el-upload v-else v-hasPermi="['system:oss:upload']" :show-file-list="false" :http-request="uploadObject" :before-upload="beforeUpload" :disabled="uploading">
           <el-button type="primary" icon="Upload" :loading="uploading">上传对象</el-button>
@@ -13,7 +13,7 @@
 
     <el-tabs v-model="activeTab" @tab-change="loadActiveTab">
       <el-tab-pane label="存储配置" name="configs">
-        <el-table v-loading="loading" :data="configs" row-key="configId">
+        <el-table v-loading="loading.configs" :data="configs" row-key="configId">
           <el-table-column prop="configName" label="配置名称" min-width="140" />
           <el-table-column prop="endpoint" label="Endpoint" min-width="220" show-overflow-tooltip />
           <el-table-column prop="bucketName" label="Bucket" min-width="150" show-overflow-tooltip />
@@ -33,7 +33,7 @@
       </el-tab-pane>
 
       <el-tab-pane label="对象台账" name="objects">
-        <el-table v-loading="loading" :data="objects" row-key="objectId">
+        <el-table v-loading="loading.objects" :data="objects" row-key="objectId">
           <el-table-column prop="objectId" label="ID" width="86" />
           <el-table-column prop="originalName" label="文件名" min-width="210" show-overflow-tooltip />
           <el-table-column prop="contentType" label="类型" min-width="150" show-overflow-tooltip />
@@ -83,12 +83,15 @@
 </template>
 
 <script setup name="SystemOss">
+import { useRequestSequence } from '@/utils/requestSequence'
+const configRequest = useRequestSequence()
+const objectsRequest = useRequestSequence()
 import { saveAs } from 'file-saver'
 import { activateOssConfig, addOssConfig, deleteOssConfig, deleteOssObject, downloadOssObject, listOssConfigs, listOssObjects, testOssConfig, updateOssConfig, uploadOssObject } from '@/api/system/oss'
 
 const { proxy } = getCurrentInstance()
 const activeTab = ref('configs')
-const loading = ref(false)
+const loading = reactive({ configs: false, objects: false })
 const saving = ref(false)
 const uploading = ref(false)
 const configs = ref([])
@@ -146,12 +149,21 @@ function validateDomain(rule, value, callback) {
  * @returns {Promise<void>} 查询结束后更新页面数据并解除加载状态。
  */
 async function loadActiveTab() {
-  loading.value = true
+  if (activeTab.value === 'configs') return loadConfigs()
+  return loadObjects()
+}
+
+async function loadConfigs() {
+  const isCurrent = configRequest.begin()
+  loading.configs = true
   try {
-    if (activeTab.value === 'configs') configs.value = (await listOssConfigs()).data || []
-    else await loadObjects()
+    const response = await listOssConfigs({ isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    configs.value = response.data || []
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.configs = false
   }
 }
 
@@ -160,9 +172,18 @@ async function loadActiveTab() {
  * @returns {Promise<void>} 查询完成后更新对象列表和分页总数。
  */
 async function loadObjects() {
-  const response = await listOssObjects(objectQueryParams)
-  objects.value = response.rows || []
-  objectTotal.value = response.total || 0
+  const isCurrent = objectsRequest.begin()
+  loading.objects = true
+  try {
+    const response = await listOssObjects({ ...objectQueryParams }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    objects.value = response.rows || []
+    objectTotal.value = response.total || 0
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.objects = false
+  }
 }
 
 /**

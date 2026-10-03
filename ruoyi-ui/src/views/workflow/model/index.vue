@@ -135,6 +135,8 @@
 </template>
 
 <script setup name="WorkflowModel">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { listAllCategories } from '@/api/workflow/category'
 import { loadModelFormOptions } from './modelFormOptions'
 import {
@@ -216,13 +218,17 @@ function validateFormId(rule, value, callback) {
  * @returns {Promise<void>} 查询完成后更新模型列表和总数。
  */
 async function loadList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
   try {
-    const response = await listModels(queryParams)
+    const response = await listModels({ ...queryParams }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     rows.value = response.rows || []
     total.value = response.total || 0
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 

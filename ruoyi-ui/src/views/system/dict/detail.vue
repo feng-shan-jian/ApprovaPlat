@@ -73,6 +73,8 @@
 </template>
 
 <script setup>
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { listData } from '@/api/system/dict/data'
 
 const props = defineProps({
@@ -88,23 +90,27 @@ const dataList = ref([])
 const normalCount = computed(() => dataList.value.filter(r => r.status === '0').length)
 const disabledCount = computed(() => dataList.value.filter(r => r.status !== '0').length)
 
-watch(() => props.visible, (val) => {
-  if (val) {
-    loadData()
-  } else {
-    dataList.value = []
-  }
-})
-
-function loadData() {
-  if (!props.row?.dictType) return
-  loading.value = true
+watch(() => [props.visible, props.row?.dictType], () => {
+  listRequest.invalidate()
   dataList.value = []
-  listData({ dictType: props.row.dictType, pageSize: 100, pageNum: 1 }).then(response => {
+  loading.value = false
+  if (props.visible) loadData()
+}, { immediate: true, flush: 'sync' })
+
+async function loadData() {
+  const isCurrent = listRequest.begin()
+  if (!props.visible || !props.row?.dictType) return
+  dataList.value = []
+  loading.value = true
+  try {
+    const response = await listData({ dictType: props.row.dictType, pageSize: 100, pageNum: 1 }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     dataList.value = response.rows || []
-  }).catch(() => {}).finally(() => {
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 </script>
 

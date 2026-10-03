@@ -69,15 +69,15 @@
       <el-alert :closable="false" :type="credential.providerReady ? 'info' : 'warning'"
         :title="credential.providerReady ? '凭据加密保存，保存后不回显正文。配置检查不等于接收方已消费业务消息。' : '受管密钥存储的服务身份尚未就绪，请按部署说明配置主密钥。'" />
       <p>当前状态：{{ credential.status }} · 凭据修订 {{ credential.credentialRevision }}</p>
-      <el-form label-width="110px">
+      <el-form label-width="110px" :disabled="credentialLoading || credentialSaving">
         <el-form-item label="认证方式"><el-select v-model="credential.authType"><el-option label="Bearer 令牌" value="BEARER" /><el-option label="API Key" value="API_KEY" /></el-select></el-form-item>
         <el-form-item v-if="credential.authType === 'API_KEY'" label="认证请求头"><el-input v-model="credential.apiKeyHeader" maxlength="128" /></el-form-item>
         <el-form-item label="新凭据"><el-input v-model="credential.secret" type="password" show-password autocomplete="new-password" maxlength="8192" /></el-form-item>
       </el-form>
       <template #footer>
-        <el-button :disabled="credential.status !== 'ACTIVE'" :loading="credentialSaving" type="danger" plain @click="revokeCredential">撤销凭据</el-button>
+        <el-button :disabled="credentialLoading || credential.status !== 'ACTIVE'" :loading="credentialSaving" type="danger" plain @click="revokeCredential">撤销凭据</el-button>
         <el-button @click="credentialOpen = false">关闭</el-button>
-        <el-button type="primary" :disabled="!credential.providerReady || !credential.secret" :loading="credentialSaving" @click="saveCredential">绑定 / 轮换</el-button>
+        <el-button type="primary" :disabled="credentialLoading || !credential.providerReady || !credential.secret" :loading="credentialSaving" @click="saveCredential">绑定 / 轮换</el-button>
       </template>
     </el-dialog>
 
@@ -138,40 +138,71 @@
 </template>
 
 <script setup name="WorkflowConnector">
+import { useRequestSequence } from '@/utils/requestSequence'
+const credentialRequest = useRequestSequence()
+const listRequest = useRequestSequence()
 import { getConnectorCredential, bindConnectorCredential, revokeConnectorCredential } from '@/api/workflow/connector'
 const credentialOpen = ref(false)
 const credentialSaving = ref(false)
+const credentialLoading = ref(false)
 const credential = reactive({ endpointId: null, endpointRevision: 0, credentialRevision: 0, secret: '', authType: 'BEARER', apiKeyHeader: '', status: '', providerReady: false })
 
 async function openCredential(row) {
-  const response = await getConnectorCredential(row.endpointId)
-  Object.assign(credential, { endpointId: row.endpointId, endpointRevision: response.data.endpointRevision,
-    credentialRevision: response.data.credential.revision, status: response.data.credential.status,
-    providerReady: response.data.credential.providerReady, secret: '',
-    authType: row.authType === 'API_KEY' ? 'API_KEY' : 'BEARER', apiKeyHeader: row.apiKeyHeader || '' })
+  const isCurrent = credentialRequest.begin()
+  const { endpointId, authType, apiKeyHeader } = row
   credentialOpen.value = true
+  credentialLoading.value = true
+  credentialSaving.value = false
+  Object.assign(credential, { endpointId, endpointRevision: 0, credentialRevision: 0, secret: '', status: '', providerReady: false })
+  try {
+    const response = await getConnectorCredential(endpointId, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    Object.assign(credential, { endpointId, endpointRevision: response.data.endpointRevision,
+      credentialRevision: response.data.credential.revision, status: response.data.credential.status,
+      providerReady: response.data.credential.providerReady, secret: '',
+      authType: authType === 'API_KEY' ? 'API_KEY' : 'BEARER', apiKeyHeader: apiKeyHeader || '' })
+  } catch {
+    // Keep the selected target and let the current HTTP failure report once.
+  } finally {
+    if (isCurrent()) credentialLoading.value = false
+  }
 }
 
 async function saveCredential() {
+  if (credentialLoading.value || credentialSaving.value) return
+  const isCurrent = credentialRequest.begin()
+  const target = { ...credential }
   credentialSaving.value = true
   try {
-    await bindConnectorCredential(credential.endpointId, { endpointRevision: credential.endpointRevision,
-      credentialRevision: credential.credentialRevision, secret: credential.secret,
-      authType: credential.authType, apiKeyHeader: credential.apiKeyHeader || undefined })
+    await bindConnectorCredential(target.endpointId, { endpointRevision: target.endpointRevision,
+      credentialRevision: target.credentialRevision, secret: target.secret,
+      authType: target.authType, apiKeyHeader: target.apiKeyHeader || undefined }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     credential.secret = ''
+    credentialSaving.value = false
     credentialOpen.value = false
     await loadEndpoints()
-  } finally { credentialSaving.value = false }
+  } catch {
+    // The current request reports its safe error through the HTTP client.
+  } finally { if (isCurrent()) credentialSaving.value = false }
 }
 
 async function revokeCredential() {
+  if (credentialLoading.value || credentialSaving.value) return
+  const isCurrent = credentialRequest.begin()
+  const target = { ...credential }
   credentialSaving.value = true
   try {
-    await revokeConnectorCredential(credential.endpointId, { endpointRevision: credential.endpointRevision, credentialRevision: credential.credentialRevision })
+    await revokeConnectorCredential(target.endpointId, { endpointRevision: target.endpointRevision,
+      credentialRevision: target.credentialRevision }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     credential.secret = ''
+    credentialSaving.value = false
     credentialOpen.value = false
     await loadEndpoints()
-  } finally { credentialSaving.value = false }
+  } catch {
+    // The current request reports its safe error through the HTTP client.
+  } finally { if (isCurrent()) credentialSaving.value = false }
 }
 import {
   changeConnectorEndpointStatus,
@@ -241,12 +272,16 @@ function emptyForm() {
  * @returns {Promise<void>} 请求完成后刷新表格。
  */
 async function loadEndpoints() {
+  const isCurrent = listRequest.begin()
   loading.value = true
   try {
-    const response = await listConnectorEndpoints()
+    const response = await listConnectorEndpoints({ isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     rows.value = response.data || []
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 
@@ -353,6 +388,7 @@ onMounted(async () => {
 onActivated(() => {
   if (initialized) loadEndpoints()
 })
+watch(credentialOpen, value => { if (!value) { credentialRequest.invalidate(); credentialLoading.value = false; credential.secret = '' } }, { flush: 'sync' })
 </script>
 
 <style scoped>

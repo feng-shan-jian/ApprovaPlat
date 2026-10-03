@@ -84,6 +84,10 @@
 </template>
 
 <script setup name="WorkflowCollaboration">
+import { useRequestSequence } from '@/utils/requestSequence'
+const operationRequest = useRequestSequence()
+const auditRequest = useRequestSequence()
+const listRequest = useRequestSequence()
 import {
   cancelCollaborationOutbox,
   listCollaborationAudit,
@@ -109,14 +113,19 @@ const statusOptions = computed(() => activeDirection.value === 'OUTBOUND'
 
 /** @returns {Promise<void>} 按当前方向和筛选刷新真实分页台账。 */
 async function loadRows() {
+  operationRequest.invalidate()
+  const isCurrent = listRequest.begin()
+  const loader = activeDirection.value === 'OUTBOUND' ? listCollaborationOutbox : listCollaborationInbound
   loading.value = true
   try {
-    const loader = activeDirection.value === 'OUTBOUND' ? listCollaborationOutbox : listCollaborationInbound
-    const response = await loader(buildQuery())
+    const response = await loader(buildQuery(), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     rows.value = Array.isArray(response.rows) ? response.rows : []
     total.value = Number(response.total || 0)
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 
@@ -135,6 +144,11 @@ function buildQuery() {
 
 /** @returns {void} 切换方向后清空不兼容状态并从第一页读取。 */
 function changeDirection() {
+  operationRequest.invalidate()
+  auditRequest.invalidate()
+  auditOpen.value = false
+  rows.value = []
+  total.value = 0
   queryParams.pageNum = 1
   queryParams.status = ''
   loadRows()
@@ -164,24 +178,35 @@ function statusLabel(status) { return statusMeta(status).label }
 
 /** @param {object} row 消息行。 @returns {Promise<void>} 打开并加载逐次审计。 */
 async function openAudit(row) {
+  const isCurrent = auditRequest.begin()
+  const messageId = row.messageId
   auditOpen.value = true
-  auditLoading.value = true
   audits.value = []
+  auditLoading.value = true
   try {
-    const response = await listCollaborationAudit(row.messageId)
+    const response = await listCollaborationAudit(messageId, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     audits.value = Array.isArray(response.data) ? response.data : []
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    auditLoading.value = false
+    if (isCurrent()) auditLoading.value = false
   }
 }
 
 /** @param {object} row 消息行。 @returns {Promise<void>} 确认后执行受权限保护的人工补偿。 */
 async function retryRow(row) {
   if (row.retryAllowed !== true) return
-  await proxy.$modal.confirm(`确认重新投递消息“${row.messageName}”吗？`)
-  if (row.retryAllowed !== true) return
-  if (activeDirection.value === 'OUTBOUND') await retryCollaborationOutbox(row.messageId)
-  else await retryCollaborationInbound(row.messageId)
+  const isCurrent = operationRequest.begin()
+  const direction = activeDirection.value
+  const messageId = row.messageId
+  try { await proxy.$modal.confirm(`确认重新投递消息“${row.messageName}”吗？`) } catch { return }
+  if (!isCurrent() || activeDirection.value !== direction || row.messageId !== messageId || row.retryAllowed !== true) return
+  try {
+    if (direction === 'OUTBOUND') await retryCollaborationOutbox(messageId, { isCurrentRequest: isCurrent })
+    else await retryCollaborationInbound(messageId, { isCurrentRequest: isCurrent })
+  } catch { return }
+  if (!isCurrent()) return
   proxy.$modal.msgSuccess('消息已进入有界重试')
   await loadRows()
 }
@@ -189,15 +214,20 @@ async function retryRow(row) {
 /** @param {object} row 出站消息行。 @returns {Promise<void>} 确认后取消未送达消息。 */
 async function cancelRow(row) {
   if (row.cancelAllowed !== true) return
-  await proxy.$modal.confirm(`确认取消消息“${row.messageName}”吗？已送达消息不会提供该操作。`)
-  if (row.cancelAllowed !== true) return
-  await cancelCollaborationOutbox(row.messageId)
+  const isCurrent = operationRequest.begin()
+  const direction = activeDirection.value
+  const messageId = row.messageId
+  try { await proxy.$modal.confirm(`确认取消消息“${row.messageName}”吗？已送达消息不会提供该操作。`) } catch { return }
+  if (!isCurrent() || activeDirection.value !== direction || row.messageId !== messageId || row.cancelAllowed !== true) return
+  try { await cancelCollaborationOutbox(messageId, { isCurrentRequest: isCurrent }) } catch { return }
+  if (!isCurrent()) return
   proxy.$modal.msgSuccess('消息已取消')
   await loadRows()
 }
 
 onMounted(async () => { await loadRows(); initialized = true })
 onActivated(() => { if (initialized) loadRows() })
+watch(auditOpen, value => { if (!value) { auditRequest.invalidate(); auditLoading.value = false } }, { flush: 'sync' })
 </script>
 
 <style scoped>

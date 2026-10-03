@@ -13,8 +13,8 @@ export function getProcessRuntime(processInstanceId, taskId) {
  * @param {object} query 定义过滤和分页参数。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listStartableProcesses(query) {
-  return request({ url: '/workflow/process/list', method: 'get', params: query })
+export function listStartableProcesses(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/process/list', method: 'get', params: query })
 }
 
 /**
@@ -22,8 +22,8 @@ export function listStartableProcesses(query) {
  * @param {object} query 实例过滤、日期范围和分页参数。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listOwnedProcesses(query) {
-  return request({ url: '/workflow/process/ownList', method: 'get', params: query })
+export function listOwnedProcesses(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/process/ownList', method: 'get', params: query })
 }
 
 /**
@@ -31,8 +31,8 @@ export function listOwnedProcesses(query) {
  * @param {object} query 实例、定义、发起人、日期范围和分页参数。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listManagedProcesses(query) {
-  return request({ url: '/workflow/process/manageList', method: 'get', params: query })
+export function listManagedProcesses(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/process/manageList', method: 'get', params: query })
 }
 
 /**
@@ -40,8 +40,8 @@ export function listManagedProcesses(query) {
  * @param {object} query 任务过滤、日期范围和分页参数。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listAssignedTasks(query) {
-  return request({ url: '/workflow/process/todoList', method: 'get', params: query })
+export function listAssignedTasks(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/process/todoList', method: 'get', params: query })
 }
 
 /**
@@ -49,8 +49,8 @@ export function listAssignedTasks(query) {
  * @param {object} query 任务过滤、日期范围和分页参数。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listClaimableTasks(query) {
-  return request({ url: '/workflow/process/claimList', method: 'get', params: query })
+export function listClaimableTasks(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/process/claimList', method: 'get', params: query })
 }
 
 /**
@@ -58,8 +58,8 @@ export function listClaimableTasks(query) {
  * @param {object} query 任务过滤、日期范围和分页参数。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listCompletedTasks(query) {
-  return request({ url: '/workflow/process/finishedList', method: 'get', params: query })
+export function listCompletedTasks(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/process/finishedList', method: 'get', params: query })
 }
 
 /**
@@ -67,8 +67,8 @@ export function listCompletedTasks(query) {
  * @param {object} query 抄送记录过滤和分页参数，接收用户由后端固定。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listCopiedProcesses(query) {
-  return request({ url: '/workflow/process/copyList', method: 'get', params: query })
+export function listCopiedProcesses(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/process/copyList', method: 'get', params: query })
 }
 
 /**

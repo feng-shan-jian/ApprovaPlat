@@ -1,8 +1,8 @@
 import request from '@/utils/request'
 
 // 查询公告列表
-export function listNotice(query) {
-  return request({
+export function listNotice(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/notice/list',
     method: 'get',
     params: query
@@ -70,8 +70,8 @@ export function markNoticeReadAll(ids) {
 }
 
 // 查询公告已读用户列表
-export function listNoticeReadUsers(query) {
-  return request({
+export function listNoticeReadUsers(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/notice/readUsers/list',
     method: 'get',
     params: query

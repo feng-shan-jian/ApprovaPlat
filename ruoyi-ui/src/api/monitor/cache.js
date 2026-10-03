@@ -9,24 +9,24 @@ export function getCache() {
 }
 
 // 查询缓存名称列表
-export function listCacheName() {
-  return request({
+export function listCacheName(requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/monitor/cache/getNames',
     method: 'get'
   })
 }
 
 // 查询缓存键名列表
-export function listCacheKey(cacheName) {
-  return request({
+export function listCacheKey(cacheName, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/monitor/cache/getKeys/' + cacheName,
     method: 'get'
   })
 }
 
 // 查询缓存内容
-export function getCacheValue(cacheName, cacheKey) {
-  return request({
+export function getCacheValue(cacheName, cacheKey, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/monitor/cache/getValue/' + cacheName + '/' + cacheKey,
     method: 'get'
   })

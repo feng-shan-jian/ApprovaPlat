@@ -5,8 +5,8 @@ import request from '@/utils/request'
  * @param {object} query 定义名称、标识、分类、状态和分页参数。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listDeployments(query) {
-  return request({ url: '/workflow/deploy/list', method: 'get', params: query })
+export function listDeployments(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/deploy/list', method: 'get', params: query })
 }
 
 /**

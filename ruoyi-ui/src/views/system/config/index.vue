@@ -165,6 +165,8 @@
 </template>
 
 <script setup name="Config">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { listConfig, getConfig, delConfig, addConfig, updateConfig, refreshCache } from "@/api/system/config"
 
 const { proxy } = getCurrentInstance()
@@ -200,13 +202,19 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询参数列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listConfig(proxy.addDateRange(queryParams.value, dateRange.value)).then(response => {
+  try {
+    const response = await listConfig(proxy.addDateRange({ ...queryParams.value }, [...dateRange.value]), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     configList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 取消按钮 */

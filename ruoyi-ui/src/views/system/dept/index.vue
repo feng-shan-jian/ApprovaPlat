@@ -154,6 +154,8 @@
 </template>
 
 <script setup name="Dept">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { listDept, getDept, delDept, addDept, updateDept, updateDeptSort, listDeptExcludeChild } from "@/api/system/dept"
 
 const { proxy } = getCurrentInstance()
@@ -187,13 +189,19 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询部门列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listDept(queryParams.value).then(response => {
+  try {
+    const response = await listDept({ ...queryParams.value }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     deptList.value = proxy.handleTree(response.data, "deptId")
     recordOriginalOrders(deptList.value)
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 取消按钮 */

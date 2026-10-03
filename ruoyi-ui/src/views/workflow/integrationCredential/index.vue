@@ -69,7 +69,7 @@
     </el-table>
 
     <el-dialog v-model="createOpen" title="新增集成账号" width="620px" append-to-body>
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="108px">
+      <el-form ref="formRef" v-loading="createLoading" :model="form" :rules="rules" label-width="108px" :disabled="!createOptionsReady">
         <el-form-item label="账号名称" prop="credentialName"><el-input v-model="form.credentialName" maxlength="128" /></el-form-item>
         <el-form-item label="事件范围" prop="scopes">
           <el-checkbox-group v-model="form.scopes">
@@ -94,7 +94,7 @@
       </el-form>
       <template #footer>
         <el-button @click="createOpen = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitCreate">创建账号</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!createOptionsReady" @click="submitCreate">创建账号</el-button>
       </template>
     </el-dialog>
 
@@ -112,6 +112,9 @@
 </template>
 
 <script setup name="WorkflowIntegrationCredential">
+import { useRequestSequence } from '@/utils/requestSequence'
+const createRequest = useRequestSequence()
+const listRequest = useRequestSequence()
 import {
   createIntegrationCredential,
   listIntegrationCredentials,
@@ -127,6 +130,8 @@ const rows = ref([])
 const keyword = ref('')
 const statusFilter = ref('')
 const createOpen = ref(false)
+const createLoading = ref(false)
+const createOptionsReady = ref(false)
 const secretOpen = ref(false)
 const oneTimeToken = ref('')
 const endpoints = ref([])
@@ -163,12 +168,16 @@ function emptyForm() {
  * @returns {Promise<void>} 请求结束后刷新表格。
  */
 async function loadRows() {
+  const isCurrent = listRequest.begin()
   loading.value = true
   try {
-    const response = await listIntegrationCredentials()
+    const response = await listIntegrationCredentials({ isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     rows.value = response.data
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 
@@ -188,12 +197,26 @@ function statusMeta(status) {
  * @returns {void} 表单和校验恢复默认值。
  */
 async function openCreate() {
+  const isCurrent = createRequest.begin()
   Object.assign(form, emptyForm())
   bindEndpointId.value = null
   endpoints.value = []
-  if (canBindConnector.value) endpoints.value = (await listConnectorEndpoints()).data || []
+  createLoading.value = canBindConnector.value
+  createOptionsReady.value = !canBindConnector.value
   createOpen.value = true
   nextTick(() => formRef.value?.clearValidate())
+  if (!canBindConnector.value) return
+  try {
+    const response = await listConnectorEndpoints({ isCurrentRequest: isCurrent })
+    if (isCurrent()) {
+      endpoints.value = response.data || []
+      createOptionsReady.value = true
+    }
+  } catch {
+    // Current endpoint failures are displayed by the HTTP client.
+  } finally {
+    if (isCurrent()) createLoading.value = false
+  }
 }
 
 /**
@@ -226,6 +249,7 @@ function parseVariables(value) {
  * @returns {Promise<void>} 创建成功后刷新数据库清单。
  */
 async function submitCreate() {
+  if (!createOptionsReady.value) return
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
   saving.value = true
@@ -308,6 +332,13 @@ function disablePastDate(date) {
 
 onMounted(async () => { await loadRows(); initialized = true })
 onActivated(() => { if (initialized) loadRows() })
+watch(createOpen, value => {
+  if (!value) {
+    createRequest.invalidate()
+    createLoading.value = false
+    createOptionsReady.value = false
+  }
+}, { flush: 'sync' })
 </script>
 
 <style scoped>

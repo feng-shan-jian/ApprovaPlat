@@ -155,6 +155,10 @@
 </template>
 
 <script setup name="CacheList">
+import { useRequestSequence } from '@/utils/requestSequence'
+const namesRequest = useRequestSequence()
+const keysRequest = useRequestSequence()
+const valueRequest = useRequestSequence()
 import { listCacheName, listCacheKey, getCacheValue, clearCacheName, clearCacheKey, clearCacheAll } from "@/api/monitor/cache"
 
 const { proxy } = getCurrentInstance()
@@ -168,12 +172,18 @@ const nowCacheName = ref("")
 const tableHeight = ref(window.innerHeight - 200)
 
 /** 查询缓存名称列表 */
-function getCacheNames() {
+async function getCacheNames() {
+  const isCurrent = namesRequest.begin()
   loading.value = true
-  listCacheName().then(response => {
+  try {
+    const response = await listCacheName({ isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     cacheNames.value = response.data
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 刷新缓存名称列表 */
@@ -191,17 +201,24 @@ function handleClearCacheName(row) {
 }
 
 /** 查询缓存键名列表 */
-function getCacheKeys(row) {
+async function getCacheKeys(row) {
+  const isCurrent = keysRequest.begin()
   const cacheName = row !== undefined ? row.cacheName : nowCacheName.value
-  if (cacheName === "") {
-    return
-  }
+  valueRequest.invalidate()
+  cacheKeys.value = []
+  cacheForm.value = {}
+  nowCacheName.value = cacheName
+  if (!cacheName) { subLoading.value = false; return }
   subLoading.value = true
-  listCacheKey(cacheName).then(response => {
+  try {
+    const response = await listCacheKey(cacheName, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     cacheKeys.value = response.data
-    subLoading.value = false
-    nowCacheName.value = cacheName
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) subLoading.value = false
+  }
 }
 
 /** 刷新缓存键名列表 */
@@ -229,14 +246,26 @@ function keyFormatter(cacheKey) {
 }
 
 /** 查询缓存内容详细 */
-function handleCacheValue(cacheKey) {
-  getCacheValue(nowCacheName.value, cacheKey).then(response => {
+async function handleCacheValue(cacheKey) {
+  const isCurrent = valueRequest.begin()
+  const cacheName = nowCacheName.value
+  cacheForm.value = {}
+  try {
+    const response = await getCacheValue(cacheName, cacheKey, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     cacheForm.value = response.data
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  }
 }
 
 /** 清理全部缓存 */
 function handleClearCacheAll() {
+  keysRequest.invalidate()
+  valueRequest.invalidate()
+  subLoading.value = false
+  cacheKeys.value = []
+  cacheForm.value = {}
   clearCacheAll().then(() => {
     proxy.$modal.msgSuccess("清理全部缓存成功")
   })

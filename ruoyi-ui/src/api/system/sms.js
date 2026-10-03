@@ -4,8 +4,8 @@ import request from '@/utils/request'
  * 查询当前用户有权查看的脱敏短信配置列表。
  * @returns {Promise<object>} 包含脱敏短信配置列表的接口响应。
  */
-export function listSmsConfigs() {
-  return request({ url: '/system/sms/configs', method: 'get' })
+export function listSmsConfigs(requestOptions = {}) {
+  return request({ ...requestOptions, url: '/system/sms/configs', method: 'get' })
 }
 
 /**
@@ -58,6 +58,6 @@ export function sendSmsTest(data) {
  * @param {object} params pageNum 和 pageSize 分页参数。
  * @returns {Promise<object>} 包含短信发送审计列表的接口响应。
  */
-export function listSmsLogs(params) {
-  return request({ url: '/system/sms/logs', method: 'get', params })
+export function listSmsLogs(params, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/system/sms/logs', method: 'get', params })
 }

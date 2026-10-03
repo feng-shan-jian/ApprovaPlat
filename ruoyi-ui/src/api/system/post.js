@@ -1,8 +1,8 @@
 import request from '@/utils/request'
 
 // 查询岗位列表
-export function listPost(query) {
-  return request({
+export function listPost(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/post/list',
     method: 'get',
     params: query

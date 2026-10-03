@@ -10,22 +10,22 @@ export function createAndBindIntegrationCredential(endpointId, data) {
   return request({ url: `/workflow/connector/${endpointId}/integration-credential`, method: 'post', data })
 }
 
-export function getConnectorCredential(endpointId) {
-  return request({ url: `/workflow/connector/${endpointId}/credential`, method: 'get' })
+export function getConnectorCredential(endpointId, requestOptions = {}) {
+  return request({ ...requestOptions, url: `/workflow/connector/${endpointId}/credential`, method: 'get' })
 }
-export function bindConnectorCredential(endpointId, data) {
-  return request({ url: `/workflow/connector/${endpointId}/credential`, method: 'put', data, headers: { repeatSubmit: false } })
+export function bindConnectorCredential(endpointId, data, requestOptions = {}) {
+  return request({ ...requestOptions, url: `/workflow/connector/${endpointId}/credential`, method: 'put', data, headers: { repeatSubmit: false } })
 }
-export function revokeConnectorCredential(endpointId, params) {
-  return request({ url: `/workflow/connector/${endpointId}/credential`, method: 'delete', params })
+export function revokeConnectorCredential(endpointId, params, requestOptions = {}) {
+  return request({ ...requestOptions, url: `/workflow/connector/${endpointId}/credential`, method: 'delete', params })
 }
 
 /**
  * 查询连接器端点管理清单。
  * @returns {Promise<object>} AjaxResult.data 为真实端点修订数组。
  */
-export function listConnectorEndpoints() {
-  return request({ url: '/workflow/connector/list', method: 'get' })
+export function listConnectorEndpoints(requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/connector/list', method: 'get' })
 }
 
 /**

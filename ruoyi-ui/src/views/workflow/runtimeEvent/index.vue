@@ -52,6 +52,8 @@
 </template>
 
 <script setup name="WorkflowRuntimeEvent">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { listRuntimeEvents } from '@/api/workflow/runtimeEvent'
 import RuntimeEventConsole from '@/components/workflow/RuntimeEventConsole.vue'
 
@@ -68,13 +70,17 @@ let initialized = false
  * @returns {Promise<void>} 请求完成后同步替换 rows 和 total。
  */
 async function loadRows() {
+  const isCurrent = listRequest.begin()
   loading.value = true
   try {
-    const response = await listRuntimeEvents(buildQuery())
+    const response = await listRuntimeEvents(buildQuery(), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     rows.value = Array.isArray(response.rows) ? response.rows : []
     total.value = Number(response.total || 0)
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 

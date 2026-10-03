@@ -145,6 +145,8 @@
 </template>
 
 <script setup name="Post">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { listPost, addPost, delPost, getPost, updatePost } from "@/api/system/post"
 
 const { proxy } = getCurrentInstance()
@@ -179,13 +181,19 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询岗位列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listPost(queryParams.value).then(response => {
+  try {
+    const response = await listPost({ ...queryParams.value }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     postList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 取消按钮 */

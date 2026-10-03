@@ -242,6 +242,8 @@
 </template>
 
 <script setup name="Role">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { addRole, changeRoleStatus, dataScope, delRole, getRole, listRole, updateRole, deptTreeSelect } from "@/api/system/role"
 import { roleMenuTreeselect, treeselect as menuTreeselect } from "@/api/system/menu"
 
@@ -297,13 +299,19 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询角色列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listRole(proxy.addDateRange(queryParams.value, dateRange.value)).then(response => {
+  try {
+    const response = await listRole(proxy.addDateRange({ ...queryParams.value }, [...dateRange.value]), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     roleList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 搜索按钮操作 */

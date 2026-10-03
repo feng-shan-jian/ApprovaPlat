@@ -1,8 +1,8 @@
 import request from '@/utils/request'
 
 // 查询参数列表
-export function listConfig(query) {
-  return request({
+export function listConfig(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/config/list',
     method: 'get',
     params: query

@@ -4,8 +4,8 @@ import request from '@/utils/request'
  * 查询 SQL 数据源管理清单。
  * @returns {Promise<object>} AjaxResult.data 为不含凭据正文的数据源数组。
  */
-export function listSqlDataSources() {
-  return request({ url: '/workflow/sql-datasource/list', method: 'get' })
+export function listSqlDataSources(requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/sql-datasource/list', method: 'get' })
 }
 
 /**

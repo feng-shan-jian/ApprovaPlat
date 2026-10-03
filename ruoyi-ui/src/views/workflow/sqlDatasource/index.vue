@@ -83,6 +83,8 @@
 </template>
 
 <script setup name="WorkflowSqlDatasource">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { changeSqlDataSourceStatus, createSqlDataSource, listSqlDataSources, updateSqlDataSource } from '@/api/workflow/sqlDatasource'
 
 const { proxy } = getCurrentInstance()
@@ -116,12 +118,16 @@ function emptyForm() {
  * @returns {Promise<void>} 请求完成后更新表格。
  */
 async function loadRows() {
+  const isCurrent = listRequest.begin()
   loading.value = true
   try {
-    const response = await listSqlDataSources()
+    const response = await listSqlDataSources({ isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     rows.value = response.data || []
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 

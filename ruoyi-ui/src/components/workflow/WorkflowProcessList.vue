@@ -198,6 +198,8 @@
 </template>
 
 <script setup name="WorkflowProcessList">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { listAllCategories } from '@/api/workflow/category'
 import { listIdentityOptions } from '@/api/workflow/identity'
 import { changeProcessInstanceState, terminateProcessInstance } from '@/api/workflow/instance'
@@ -299,13 +301,17 @@ function buildQuery() {
  * @returns {Promise<void>} 查询结束后更新 rows 和 total。
  */
 async function loadList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
   try {
-    const response = await config.value.api(buildQuery())
+    const response = await config.value.api(buildQuery(), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     rows.value = response.rows || []
     total.value = response.total || 0
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 

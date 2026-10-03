@@ -200,6 +200,8 @@
 </template>
 
 <script setup name="WorkflowExtension">
+import { useRequestSequence } from '@/utils/requestSequence'
+const registryRequest = useRequestSequence()
 import {
   changeWorkflowExtensionStatus,
   checkWorkflowExtensionDeletion,
@@ -274,22 +276,25 @@ function createEmptyExtension() {
  * @returns {Promise<void>} 两个真实接口完成后更新页面状态。
  */
 async function loadRegistry() {
+  const isCurrent = registryRequest.begin()
   invalidateDeletion()
   loading.value = true
   registryError.value = ''
   handlerError.value = ''
   try {
     await Promise.allSettled([
-      listWorkflowExtensions().then(response => {
+      listWorkflowExtensions({ isCurrentRequest: isCurrent }).then(response => {
+        if (!isCurrent()) return
         rows.value = response.data || []
         applyFilters()
-      }).catch(() => { registryError.value = '扩展目录加载失败，请刷新重试' }),
-      listInstalledJavaHandlers().then(response => {
+      }).catch(() => { if (isCurrent()) registryError.value = '扩展目录加载失败，请刷新重试' }),
+      listInstalledJavaHandlers({ isCurrentRequest: isCurrent }).then(response => {
+        if (!isCurrent()) return
         handlers.value = response.data || []
-      }).catch(() => { handlerError.value = '已安装处理器加载失败，请刷新重试' })
+      }).catch(() => { if (isCurrent()) handlerError.value = '已安装处理器加载失败，请刷新重试' })
     ])
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 

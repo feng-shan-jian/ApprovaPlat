@@ -81,6 +81,23 @@ async function rejected(operation, expected = duplicateMessage) {
   return error
 }
 
+test('obsolete list business and network errors never display after a newer request owns the page', async t => {
+  const state = client(t)
+  let current = true
+  const staleBusiness = await state.send({ url: '/list', method: 'get', isCurrentRequest: () => current })
+  const staleNetwork = await state.send({ url: '/list', method: 'get', isCurrentRequest: () => current })
+  current = false
+  state.calls[0].resolve({ code: 500, msg: '过期查询失败' })
+  state.calls[1].reject(new axios.AxiosError('Network Error', undefined, state.calls[1].config))
+  assert.ok((await staleBusiness.result).error)
+  assert.ok((await staleNetwork.result).error)
+  assert.deepEqual(state.messages, [])
+  const latest = await state.send({ url: '/list', method: 'get', isCurrentRequest: () => true })
+  state.calls[2].resolve({ code: 500, msg: '当前查询失败' })
+  assert.ok((await latest.result).error)
+  assert.equal(state.messages.length, 1)
+})
+
 test('A/B/A 并发按各自 owner 防重，重复失败及 A 完成不能释放 B', async t => {
   const state = client(t)
   const a = { url: '/save', method: 'post', data: { password: secret } }

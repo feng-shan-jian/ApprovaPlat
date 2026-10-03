@@ -115,8 +115,8 @@ export function testWorkflowNotificationMailConfig(data) {
  * @param {{pageNum:number,pageSize:number,status?:string,sourceType?:string,eventType?:string,channel?:string,keyword?:string,beginTime?:string,endTime?:string}} query 分页和筛选条件。
  * @returns {Promise<object>} 若依标准 rows、total 分页响应。
  */
-export function listWorkflowNotificationOutbox(query) {
-  return request({ url: '/workflow/notification/outbox', method: 'get', params: query })
+export function listWorkflowNotificationOutbox(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/notification/outbox', method: 'get', params: query })
 }
 
 /** @param {number|string} outboxId 死信主键。 @returns {Promise<object>} 补偿结果。 */

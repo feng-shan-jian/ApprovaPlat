@@ -185,6 +185,8 @@
 </template>
 
 <script setup name="User">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import TreePanel from "@/components/TreePanel"
 import ExcelImportDialog from "@/components/ExcelImportDialog"
 import UserViewDrawer from "./view"
@@ -243,13 +245,19 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询用户列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listUser(proxy.addDateRange(queryParams.value, dateRange.value)).then(res => {
-    loading.value = false
-    userList.value = res.rows
-    total.value = res.total
-  })
+  try {
+    const response = await listUser(proxy.addDateRange({ ...queryParams.value }, [...dateRange.value]), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    userList.value = response.rows
+    total.value = response.total
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 查询部门下拉树结构 */

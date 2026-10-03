@@ -26,7 +26,7 @@
          </el-form-item>
       </el-form>
       <el-row>
-         <el-table @row-click="clickRow" ref="refTable" :data="userList" @selection-change="handleSelectionChange" height="260px">
+         <el-table v-loading="loading" @row-click="clickRow" ref="refTable" :data="userList" @selection-change="handleSelectionChange" height="260px">
             <el-table-column type="selection" width="55"></el-table-column>
             <el-table-column label="用户名称" prop="userName" :show-overflow-tooltip="true" />
             <el-table-column label="用户昵称" prop="nickName" :show-overflow-tooltip="true" />
@@ -61,6 +61,8 @@
 </template>
 
 <script setup name="SelectUser">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { authUserSelectAll, unallocatedUserList } from "@/api/system/role"
 
 const props = defineProps({
@@ -74,6 +76,7 @@ const { sys_normal_disable } = useDict("sys_normal_disable")
 
 const userList = ref([])
 const visible = ref(false)
+const loading = ref(false)
 const total = ref(0)
 const userIds = ref([])
 
@@ -103,11 +106,19 @@ function handleSelectionChange(selection) {
 }
 
 // 查询表数据
-function getList() {
-  unallocatedUserList(queryParams).then(res => {
-    userList.value = res.rows
-    total.value = res.total
-  })
+async function getList() {
+  const isCurrent = listRequest.begin()
+  loading.value = true
+  try {
+    const response = await unallocatedUserList({ ...queryParams }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    userList.value = response.rows
+    total.value = response.total
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 搜索按钮操作 */
@@ -141,4 +152,10 @@ function handleSelectUser() {
 defineExpose({
   show,
 })
+watch(visible, value => { if (!value) { listRequest.invalidate(); loading.value = false } }, { flush: 'sync' })
+watch(() => props.roleId, () => {
+  listRequest.invalidate()
+  userList.value = []
+  if (visible.value) { queryParams.roleId = props.roleId; getList() }
+}, { flush: 'sync' })
 </script>

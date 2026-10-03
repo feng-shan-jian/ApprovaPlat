@@ -4,8 +4,8 @@ import request from '@/utils/request'
  * 查询全部正式业务日历。
  * @returns {Promise<object>} 包含日历规则和日期覆盖的后端响应。
  */
-export function listSlaCalendars() {
-  return request({ url: '/workflow/sla/calendars', method: 'get' })
+export function listSlaCalendars(requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/sla/calendars', method: 'get' })
 }
 
 /**
@@ -54,8 +54,8 @@ export function changeSlaCalendarStatus(calendarId, enabled) {
  * @param {object} query 分页、状态、关键字和时间筛选。
  * @returns {Promise<object>} 当前权限范围内的 rows/total。
  */
-export function listSlaExecutions(query) {
-  return request({ url: '/workflow/sla/executions', method: 'get', params: query })
+export function listSlaExecutions(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/sla/executions', method: 'get', params: query })
 }
 
 /**
@@ -63,6 +63,6 @@ export function listSlaExecutions(query) {
  * @param {object} query 分页、动作、关键字和时间筛选。
  * @returns {Promise<object>} 创建、提醒、升级、暂停、恢复和完成审计 rows/total。
  */
-export function listSlaAudits(query) {
-  return request({ url: '/workflow/sla/audits', method: 'get', params: query })
+export function listSlaAudits(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/sla/audits', method: 'get', params: query })
 }

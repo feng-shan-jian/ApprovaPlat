@@ -44,16 +44,16 @@ export function listFormFieldExtensionOptions() {
  * 查询扩展管理清单，包含停用和尚未发布版本的目录。
  * @returns {Promise<object>} AjaxResult.data 为真实扩展目录数组。
  */
-export function listWorkflowExtensions() {
-  return request({ url: '/workflow/extension/list', method: 'get' })
+export function listWorkflowExtensions(requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/extension/list', method: 'get' })
 }
 
 /**
  * 查询服务端代码实际安装的 Java 处理器。
  * @returns {Promise<object>} 若依 AjaxResult，data 为已安装处理器清单。
  */
-export function listInstalledJavaHandlers() {
-  return request({ url: '/workflow/extension/installed-handlers/java', method: 'get' })
+export function listInstalledJavaHandlers(requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/extension/installed-handlers/java', method: 'get' })
 }
 
 /**

@@ -26,7 +26,7 @@
       </el-form-item>
     </el-form>
     <el-row>
-      <el-table @row-click="clickRow" ref="table" :data="dbTableList" @selection-change="handleSelectionChange" height="260px">
+      <el-table v-loading="loading" @row-click="clickRow" ref="table" :data="dbTableList" @selection-change="handleSelectionChange" height="260px">
         <el-table-column type="selection" width="55"></el-table-column>
         <el-table-column prop="tableName" label="表名称" :show-overflow-tooltip="true"></el-table-column>
         <el-table-column prop="tableComment" label="表描述" :show-overflow-tooltip="true"></el-table-column>
@@ -51,10 +51,13 @@
 </template>
 
 <script setup>
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { listDbTable, importTable } from "@/api/tool/gen"
 
 const total = ref(0)
 const visible = ref(false)
+const loading = ref(false)
 const tables = ref([])
 const dbTableList = ref([])
 const { proxy } = getCurrentInstance()
@@ -85,11 +88,19 @@ function handleSelectionChange(selection) {
 }
 
 /** 查询表数据 */
-function getList() {
-  listDbTable(queryParams).then(res => {
-    dbTableList.value = res.rows
-    total.value = res.total
-  })
+async function getList() {
+  const isCurrent = listRequest.begin()
+  loading.value = true
+  try {
+    const response = await listDbTable({ ...queryParams }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    dbTableList.value = response.rows
+    total.value = response.total
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 搜索按钮操作 */
@@ -123,4 +134,5 @@ function handleImportTable() {
 defineExpose({
   show,
 })
+watch(visible, value => { if (!value) { listRequest.invalidate(); loading.value = false } }, { flush: 'sync' })
 </script>

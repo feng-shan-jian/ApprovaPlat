@@ -46,6 +46,8 @@
 </template>
 
 <script setup name="ReadUsers">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { Search } from "@element-plus/icons-vue"
 import { listNoticeReadUsers } from "@/api/system/notice"
 
@@ -73,14 +75,19 @@ function open(row) {
   getList()
 }
 
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listNoticeReadUsers(queryParams).then(res => {
-    userList.value = res.rows
-    total.value = res.total
-  }).finally(() => {
-    loading.value = false
-  })
+  try {
+    const response = await listNoticeReadUsers({ ...queryParams }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    userList.value = response.rows
+    total.value = response.total
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 function handleQuery() {
@@ -94,6 +101,8 @@ function resetQuery() {
 }
 
 function handleClose() {
+  listRequest.invalidate()
+  loading.value = false
   userList.value = []
   total.value = 0
   queryParams.searchValue = undefined
@@ -102,6 +111,7 @@ function handleClose() {
 defineExpose({
   open
 })
+watch(visible, value => { if (!value) listRequest.invalidate() }, { flush: 'sync' })
 </script>
 
 <style scoped>

@@ -239,6 +239,8 @@
 </template>
 
 <script setup name="Job">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import Crontab from '@/components/Crontab'
 import JobDetail from './detail'
 import { listJob, getJob, delJob, addJob, updateJob, runJob, changeJobStatus } from "@/api/monitor/job"
@@ -279,13 +281,19 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询定时任务列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listJob(queryParams.value).then(response => {
+  try {
+    const response = await listJob({ ...queryParams.value }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     jobList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 取消按钮 */

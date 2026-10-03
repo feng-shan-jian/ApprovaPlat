@@ -180,6 +180,12 @@
 </template>
 
 <script setup name="WorkflowBpmnEvent">
+import { useRequestSequence } from '@/utils/requestSequence'
+const codesRequest = useRequestSequence()
+const auditRequest = useRequestSequence()
+const calendarsRequest = useRequestSequence()
+const slaExecutionsRequest = useRequestSequence()
+const slaAuditRequest = useRequestSequence()
 import {
   changeBpmnEventCodeStatus,
   createBpmnEventCode,
@@ -288,18 +294,33 @@ async function loadActiveTab() {
 
 /** @returns {Promise<void>} 加载正式编码目录。 */
 async function loadCodes() {
+  const isCurrent = codesRequest.begin()
   loading.codes = true
-  try { codes.value = (await listBpmnEventCodes()).data || [] } finally { loading.codes = false }
+  try {
+    const response = await listBpmnEventCodes({ isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    codes.value = response.data || []
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.codes = false
+  }
 }
 
 /** @returns {Promise<void>} 加载当前筛选页的专用运行审计。 */
 async function loadAudit() {
+  const isCurrent = auditRequest.begin()
   loading.audit = true
   try {
-    const response = await listBpmnEventAudit(buildPagedQuery(auditQuery))
+    const response = await listBpmnEventAudit(buildPagedQuery(auditQuery), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     auditRows.value = Array.isArray(response.rows) ? response.rows : []
     auditTotal.value = Number(response.total || 0)
-  } finally { loading.audit = false }
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.audit = false
+  }
 }
 
 
@@ -328,8 +349,17 @@ function resetAuditQuery() {
  * @returns {Promise<void>} 请求结束后解除页签加载状态。
  */
 async function loadCalendars() {
+  const isCurrent = calendarsRequest.begin()
   loading.calendars = true
-  try { calendars.value = (await listSlaCalendars()).data } finally { loading.calendars = false }
+  try {
+    const response = await listSlaCalendars({ isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
+    calendars.value = response.data
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.calendars = false
+  }
 }
 
 /**
@@ -337,12 +367,18 @@ async function loadCalendars() {
  * @returns {Promise<void>} 请求结束后解除页签加载状态。
  */
 async function loadSlaExecutions() {
+  const isCurrent = slaExecutionsRequest.begin()
   loading.slaExecutions = true
   try {
-    const response = await listSlaExecutions(buildPagedQuery(slaExecutionQuery))
+    const response = await listSlaExecutions(buildPagedQuery(slaExecutionQuery), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     slaExecutions.value = Array.isArray(response.rows) ? response.rows : []
     slaExecutionTotal.value = Number(response.total || 0)
-  } finally { loading.slaExecutions = false }
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.slaExecutions = false
+  }
 }
 
 /**
@@ -350,12 +386,18 @@ async function loadSlaExecutions() {
  * @returns {Promise<void>} 请求结束后解除页签加载状态。
  */
 async function loadSlaAudit() {
+  const isCurrent = slaAuditRequest.begin()
   loading.slaAudit = true
   try {
-    const response = await listSlaAudits(buildPagedQuery(slaAuditQuery))
+    const response = await listSlaAudits(buildPagedQuery(slaAuditQuery), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     slaAuditRows.value = Array.isArray(response.rows) ? response.rows : []
     slaAuditTotal.value = Number(response.total || 0)
-  } finally { loading.slaAudit = false }
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.slaAudit = false
+  }
 }
 
 /** @returns {void} SLA 执行回到第一页并查询。 */

@@ -18,8 +18,8 @@ export function discardModelDesignDraft(modelId, expectedRevision) {
  * @param {object} query 模型名称、标识、分类和分页参数。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listModels(query) {
-  return request({ url: '/workflow/model/list', method: 'get', params: query })
+export function listModels(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/model/list', method: 'get', params: query })
 }
 
 /**

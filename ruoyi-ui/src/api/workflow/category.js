@@ -5,8 +5,8 @@ import request from '@/utils/request'
  * @param {object} query 分类名称、编码和分页参数。
  * @returns {Promise<object>} 若依分页响应。
  */
-export function listCategories(query) {
-  return request({ url: '/workflow/category/list', method: 'get', params: query })
+export function listCategories(query, requestOptions = {}) {
+  return request({ ...requestOptions, url: '/workflow/category/list', method: 'get', params: query })
 }
 
 /**

@@ -146,6 +146,8 @@
 </template>
 
 <script setup name="Gen">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { listTable, previewTable, delTable, genCode, synchDb } from "@/api/tool/gen"
 import importTable from "./importTable"
 import createTable from "./createTable"
@@ -196,13 +198,19 @@ onActivated(() => {
 })
 
 /** 查询表集合 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  listTable(proxy.addDateRange(queryParams.value, dateRange.value)).then(response => {
+  try {
+    const response = await listTable(proxy.addDateRange({ ...queryParams.value }, [...dateRange.value]), { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     tableList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 搜索按钮操作 */

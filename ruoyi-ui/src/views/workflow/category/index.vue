@@ -51,6 +51,8 @@
 </template>
 
 <script setup name="WorkflowCategory">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { createCategory, deleteCategories, getCategory, listCategories, updateCategory } from '@/api/workflow/category'
 
 const { proxy } = getCurrentInstance()
@@ -85,13 +87,17 @@ function createEmptyForm() {
  * @returns {Promise<void>} 列表加载完成后更新 rows 和 total。
  */
 async function loadList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
   try {
-    const response = await listCategories(queryParams)
+    const response = await listCategories({ ...queryParams }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     rows.value = response.rows
     total.value = response.total
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 

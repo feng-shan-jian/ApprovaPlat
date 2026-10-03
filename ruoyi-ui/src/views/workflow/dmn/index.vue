@@ -71,6 +71,8 @@
 </template>
 
 <script setup name="WorkflowDmn">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { deployDmnDecision, listDmnDecisions, removeDmnDeployment } from '@/api/workflow/dmn'
 import DecisionTableEditor from '@/components/workflow/DecisionTableEditor.vue'
 
@@ -112,12 +114,16 @@ function emptyForm() {
  * @returns {Promise<void>} 请求结束后更新正式目录表格。
  */
 async function loadRows() {
+  const isCurrent = listRequest.begin()
   loading.value = true
   try {
-    const response = await listDmnDecisions()
+    const response = await listDmnDecisions({ isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     rows.value = Array.isArray(response.data) ? response.data : []
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 

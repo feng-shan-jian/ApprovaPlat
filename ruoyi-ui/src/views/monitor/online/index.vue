@@ -58,6 +58,8 @@
 </template>
 
 <script setup name="Online">
+import { useRequestSequence } from '@/utils/requestSequence'
+const listRequest = useRequestSequence()
 import { forceLogout, list as initData } from "@/api/monitor/online"
 
 const { proxy } = getCurrentInstance()
@@ -74,13 +76,19 @@ const queryParams = ref({
 })
 
 /** 查询登录日志列表 */
-function getList() {
+async function getList() {
+  const isCurrent = listRequest.begin()
   loading.value = true
-  initData(queryParams.value).then(response => {
+  try {
+    const response = await initData({ ...queryParams.value }, { isCurrentRequest: isCurrent })
+    if (!isCurrent()) return
     onlineList.value = response.rows
     total.value = response.total
-    loading.value = false
-  })
+  } catch {
+    // The HTTP client reports current failures; superseded requests cannot change this view.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 搜索按钮操作 */

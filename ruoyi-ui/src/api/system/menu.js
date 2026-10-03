@@ -1,8 +1,8 @@
 import request from '@/utils/request'
 
 // 查询菜单列表
-export function listMenu(query) {
-  return request({
+export function listMenu(query, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/menu/list',
     method: 'get',
     params: query
