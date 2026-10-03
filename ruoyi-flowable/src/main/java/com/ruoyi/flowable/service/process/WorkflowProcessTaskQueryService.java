@@ -45,7 +45,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowCompletedTaskView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
-import com.ruoyi.flowable.service.task.WorkflowTaskRevokeApplicationService;
+import com.ruoyi.flowable.service.task.WorkflowTaskRevokePreparation;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
 import com.ruoyi.flowable.mapper.WorkflowMultiInstanceUserMapper;
 
@@ -61,7 +61,7 @@ public class WorkflowProcessTaskQueryService
     private final TaskService taskService;
     private final WorkflowIdentityResolver identityResolver;
     private final WorkflowMultiInstanceUserMapper userMapper;
-    private final WorkflowTaskRevokeApplicationService revokeApplicationService;
+    private final WorkflowTaskRevokePreparation revokePreparation;
 
     /** 待办能力、详情快照与写入门禁共享的取消认领纯规则组件。 */
     private final WorkflowTaskUnclaimPolicy unclaimPolicy;
@@ -74,7 +74,7 @@ public class WorkflowProcessTaskQueryService
     public WorkflowProcessTaskQueryService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, HistoryService historyService,
             TaskService taskService, WorkflowIdentityResolver identityResolver,
-            WorkflowMultiInstanceUserMapper userMapper, WorkflowTaskRevokeApplicationService revokeApplicationService,
+            WorkflowMultiInstanceUserMapper userMapper, WorkflowTaskRevokePreparation revokePreparation,
             WorkflowTaskUnclaimPolicy unclaimPolicy)
     {
         this.engineOperations = engineOperations;
@@ -83,7 +83,7 @@ public class WorkflowProcessTaskQueryService
         this.taskService = taskService;
         this.identityResolver = identityResolver;
         this.userMapper = userMapper;
-        this.revokeApplicationService = revokeApplicationService;
+        this.revokePreparation = revokePreparation;
         this.unclaimPolicy = unclaimPolicy;
     }
 
@@ -201,7 +201,7 @@ public class WorkflowProcessTaskQueryService
             }
             List<WorkflowCompletedTaskView> rows = completedPage.tasks().stream()
                     .map(task -> toCompletedView(task,
-                            completedPage.contextsByTaskId().get(task.getId())))
+                            completedPage.contextsByTaskId().get(task.getId()), actor))
                     .toList();
             return new PageResult<>(rows, completedPage.total());
         });
@@ -455,14 +455,14 @@ public class WorkflowProcessTaskQueryService
      *
      * @param task HistoricTaskInstance，taskCompletedBy 已固定当前用户的历史任务
      * @param context TaskContext，当前页批量装载并完成关系核验的任务上下文
+     * @param actor WorkflowCurrentIdentity，本页已解析的当前用户身份
      * @return WorkflowCompletedTaskView，真实已办任务视图
      */
     private WorkflowCompletedTaskView toCompletedView(HistoricTaskInstance task,
-            TaskContext context)
+            TaskContext context, WorkflowCurrentIdentity actor)
     {
         // 能力字段调用正式撤回准备路径；页面快照只用于隐藏入口，提交时仍会再次加锁校验。
-        boolean revocable = revokeApplicationService.isProcessRevocable(
-                task.getProcessInstanceId(), task.getId());
+        boolean revocable = revokePreparation.isProcessRevocable(task, actor);
         return new WorkflowCompletedTaskView(task.getId(), task.getName(), task.getTaskDefinitionKey(),
                 task.getAssignee(), task.getCompletedBy(), context.definition().getId(),
                 context.definition().getKey(), context.definition().getName(),
