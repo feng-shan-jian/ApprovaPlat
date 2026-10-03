@@ -152,9 +152,6 @@ class AuthorityRefreshEntryPointTest
         ReflectionTestUtils.setField(controller, "menuService", menus);
         ReflectionTestUtils.setField(controller, "userService", users);
         ReflectionTestUtils.setField(controller, "tokenService", tokens);
-        SysMenu before = new SysMenu();
-        before.setPerms("system:user:edit");
-        before.setStatus("0");
         SysMenu after = new SysMenu();
         after.setMenuId(100L);
         after.setParentId(0L);
@@ -162,13 +159,31 @@ class AuthorityRefreshEntryPointTest
         after.setStatus("0");
         when(menus.checkMenuNameUnique(after)).thenReturn(true);
         when(menus.checkRouteConfigUnique(after)).thenReturn(true);
-        when(menus.selectMenuById(100L)).thenReturn(before);
         when(menus.updateMenu(after)).thenReturn(1);
         when(users.selectUserIdsByMenuId(100L)).thenReturn(List.of(42L));
         controller.edit(after);
         verify(tokens).refreshUsersAfterCommit(List.of(42L));
         clearInvocations(tokens);
         controller.updateSort(Map.of("menuIds", "100", "orderNums", "1"));
+        verifyNoInteractions(tokens);
+    }
+
+    @Test
+    void menuFailedOrEmptyWriteDoesNotRefresh()
+    {
+        ISysMenuService menus = mock(ISysMenuService.class);
+        SysMenuController controller = new SysMenuController();
+        ReflectionTestUtils.setField(controller, "menuService", menus);
+        ReflectionTestUtils.setField(controller, "userService", users);
+        ReflectionTestUtils.setField(controller, "tokenService", tokens);
+        SysMenu menu = new SysMenu();
+        menu.setMenuId(100L);
+        menu.setParentId(0L);
+        when(menus.checkMenuNameUnique(menu)).thenReturn(true);
+        when(menus.checkRouteConfigUnique(menu)).thenReturn(true);
+        controller.edit(menu);
+        when(menus.updateMenu(menu)).thenThrow(new IllegalStateException("controlled menu write failure"));
+        assertThrows(IllegalStateException.class, () -> controller.edit(menu));
         verifyNoInteractions(tokens);
     }
 }

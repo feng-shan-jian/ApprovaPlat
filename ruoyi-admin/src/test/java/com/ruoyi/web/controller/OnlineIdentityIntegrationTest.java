@@ -7,8 +7,12 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import com.ruoyi.common.constant.CacheConstants;
+import com.ruoyi.common.core.domain.AjaxResult;
+import com.ruoyi.common.core.domain.entity.SysMenu;
 import com.ruoyi.common.core.domain.entity.SysRole;
 import com.ruoyi.common.core.domain.entity.SysUser;
 import com.ruoyi.common.core.domain.model.LoginUser;
@@ -21,6 +25,7 @@ import com.ruoyi.system.mapper.SysRoleMapper;
 import com.ruoyi.system.mapper.SysUserMapper;
 import com.ruoyi.system.service.impl.SysMenuServiceImpl;
 import com.ruoyi.system.service.impl.SysUserServiceImpl;
+import com.ruoyi.web.controller.system.SysMenuController;
 import org.junit.jupiter.api.Test;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
@@ -33,6 +38,8 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
@@ -151,6 +158,51 @@ class OnlineIdentityIntegrationTest
         }
     }
 
+    @Test
+    void concurrentMenuEditRestoringItsOriginalPermissionRefreshesEverySession() throws Exception
+    {
+        try (Fixture f = new Fixture())
+        {
+            String first = f.login();
+            String second = f.login();
+            SysMenu restoreOriginal = f.menus.selectMenuById(f.menuId);
+            SysMenu changePermission = f.menus.selectMenuById(f.menuId);
+            changePermission.setPerms("b01:concurrent");
+            CountDownLatch oldReadCompleted = new CountDownLatch(1);
+            CountDownLatch concurrentEditCommitted = new CountDownLatch(1);
+            var executor = Executors.newSingleThreadExecutor();
+            doAnswer(invocation -> {
+                // 旧实现已读取 before=P，此处暂缓 B 的写入，允许 A 完成 Q 的写入和 Token 刷新。
+                oldReadCompleted.countDown();
+                assertTrue(concurrentEditCommitted.await(10, TimeUnit.SECONDS));
+                return invocation.callRealMethod();
+            }).when(f.menus).updateMenu(same(restoreOriginal));
+            try
+            {
+                var restoring = executor.submit(() -> f.editMenu(restoreOriginal));
+                assertTrue(oldReadCompleted.await(10, TimeUnit.SECONDS));
+                assertEquals(200, f.editMenu(changePermission).get("code"));
+                assertEquals("b01:concurrent", f.jdbc.queryForObject(
+                        "select perms from sys_menu where menu_id = ?", String.class, f.menuId));
+                assertEquals(Set.of("b01:concurrent"), f.request(first).getPermissions());
+                assertEquals(Set.of("b01:concurrent"), f.request(second).getPermissions());
+                concurrentEditCommitted.countDown();
+                assertEquals(200, restoring.get(10, TimeUnit.SECONDS).get("code"));
+
+                assertEquals("b01:before", f.jdbc.queryForObject(
+                        "select perms from sys_menu where menu_id = ?", String.class, f.menuId));
+                assertEquals(Set.of("b01:before"), f.request(first).getPermissions());
+                assertEquals(Set.of("b01:before"), f.request(second).getPermissions());
+            }
+            finally
+            {
+                concurrentEditCommitted.countDown();
+                executor.shutdown();
+                assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+            }
+        }
+    }
+
     private static final class Fixture implements AutoCloseable
     {
         final JdbcTemplate jdbc;
@@ -158,6 +210,7 @@ class OnlineIdentityIntegrationTest
         final SysUserMapper userMapper;
         final SysRoleMapper roles;
         final SysUserServiceImpl users;
+        final SysMenuServiceImpl menus;
         final SysPermissionService permissions;
         final RedisCache cache = new RedisCache();
         final TokenService tokens;
@@ -188,7 +241,7 @@ class OnlineIdentityIntegrationTest
             roles = sql.getMapper(SysRoleMapper.class);
             users = spy(new SysUserServiceImpl());
             ReflectionTestUtils.setField(users, "userMapper", userMapper);
-            SysMenuServiceImpl menus = new SysMenuServiceImpl();
+            menus = spy(new SysMenuServiceImpl());
             ReflectionTestUtils.setField(menus, "menuMapper", sql.getMapper(SysMenuMapper.class));
             SysPermissionService raw = new SysPermissionService();
             ReflectionTestUtils.setField(raw, "userService", users);
@@ -258,6 +311,27 @@ class OnlineIdentityIntegrationTest
             MockHttpServletRequest request = new MockHttpServletRequest();
             request.addHeader("Authorization", "Bearer " + jwt);
             return tokens.getLoginUser(request);
+        }
+
+        AjaxResult editMenu(SysMenu menu)
+        {
+            SysMenuController controller = new SysMenuController();
+            ReflectionTestUtils.setField(controller, "menuService", menus);
+            ReflectionTestUtils.setField(controller, "userService", users);
+            ReflectionTestUtils.setField(controller, "tokenService", tokens);
+            SysUser actor = new SysUser(1L);
+            actor.setUserName("admin");
+            LoginUser login = new LoginUser(1L, 100L, actor, Set.of("*:*:*"));
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(login, null, login.getAuthorities()));
+            try
+            {
+                return controller.edit(menu);
+            }
+            finally
+            {
+                SecurityContextHolder.clearContext();
+            }
         }
 
         @Override

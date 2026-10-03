@@ -2,7 +2,6 @@ package com.ruoyi.web.controller.system;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
@@ -136,10 +135,9 @@ public class SysMenuController extends BaseController
             return error("修改菜单'" + menu.getMenuName() + "'失败，路由名称或地址已存在");
         }
         menu.setUpdateBy(getUsername());
-        SysMenu before = menuService.selectMenuById(menu.getMenuId());
         int rows = menuService.updateMenu(menu);
-        if (rows > 0 && before != null && (!Objects.equals(before.getPerms(), menu.getPerms())
-                || !Objects.equals(before.getStatus(), menu.getStatus())))
+        // 并发编辑可覆盖此前读取的权限；成功写入后统一从已提交事实刷新关联用户。
+        if (rows > 0)
         {
             tokenService.refreshUsersAfterCommit(userService.selectUserIdsByMenuId(menu.getMenuId()));
         }
