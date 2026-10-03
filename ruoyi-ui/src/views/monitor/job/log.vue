@@ -244,16 +244,26 @@ function handleExport() {
   }, `job_log_${new Date().getTime()}.xlsx`)
 }
 
-(() => {
+async function loadInitialJob() {
   const jobId = route.params && route.params.jobId
   if (jobId !== undefined && jobId != 0) {
-    getJob(jobId).then(response => {
+    const isCurrent = listRequest.begin()
+    loading.value = true
+    try {
+      const response = await getJob(jobId, { isCurrentRequest: isCurrent })
+      if (!isCurrent()) return
       queryParams.value.jobName = response.data.jobName
       queryParams.value.jobGroup = response.data.jobGroup
-      getList()
-    })
+      await getList()
+    } catch {
+      // The HTTP client reports only failures belonging to the current query.
+    } finally {
+      if (isCurrent()) loading.value = false
+    }
   } else {
-    getList()
+    await getList()
   }
-})()
+}
+
+loadInitialJob()
 </script>

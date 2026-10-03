@@ -10,8 +10,8 @@ export function listType(query, requestOptions = {}) {
 }
 
 // 查询字典类型详细
-export function getType(dictId) {
-  return request({
+export function getType(dictId, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/system/dict/type/' + dictId,
     method: 'get'
   })

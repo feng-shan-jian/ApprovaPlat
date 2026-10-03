@@ -232,3 +232,59 @@ test('B18: designer validates missing fields early and preserves atomic undo, re
   expect(cleared).not.toContain('approva.autoCopyRules')
   expect(cleared).toContain('name="vendor.unknown" value="preserve"')
 })
+
+test('R5: dictionary initialization cannot replace a submitted user filter', async ({ page }) => {
+  let releaseInitial
+  const calls = await application(page, async ({ path, url, reply }) => {
+    if (path === '/system/dict/type/1') {
+      await new Promise(resolve => { releaseInitial = resolve })
+      await reply({ data: { dictId: 1, dictType: 'dict_A' } })
+    } else if (path === '/system/dict/type/optionselect') {
+      await reply({ data: ['A', 'B'].map((id, index) => ({ dictId: index + 1, dictName: `字典${id}`, dictType: `dict_${id}` })) })
+    } else if (path === '/system/dict/data/list') {
+      const type = url.searchParams.get('dictType')
+      await reply({ rows: [{ dictCode: 1, dictLabel: `条目_${type}`, dictValue: '1', dictSort: 1, status: '0' }], total: 1 })
+    } else return false
+    return true
+  })
+  await page.goto('/system/dict-data/index/1')
+  await expect.poll(() => Boolean(releaseInitial)).toBe(true)
+  await page.locator('.el-form-item').filter({ hasText: '字典名称' }).locator('.el-select').click()
+  await page.getByRole('option', { name: '字典B', exact: true }).click()
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await expect(page.getByRole('cell', { name: '条目_dict_B', exact: true })).toBeVisible()
+  const response = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/system/dict/type/1'))
+  releaseInitial()
+  await settled(page, response)
+  await expect(page.getByRole('cell', { name: '条目_dict_B', exact: true })).toBeVisible()
+  await expect(page.locator('.el-form-item').filter({ hasText: '字典名称' }).getByText('字典B', { exact: true })).toBeVisible()
+  expect(calls.filter(call => call.path === '/system/dict/data/list').map(call => call.query.dictType)).toEqual(['dict_B'])
+  await page.getByRole('button', { name: '重置', exact: true }).click()
+  await expect(page.getByRole('cell', { name: '条目_dict_A', exact: true })).toBeVisible()
+  expect(calls.filter(call => call.path === '/system/dict/data/list').map(call => call.query.dictType)).toEqual(['dict_B', 'dict_A'])
+})
+
+test('R5: scheduler log initialization cannot replace a submitted user query', async ({ page }) => {
+  let releaseInitial
+  const calls = await application(page, async ({ path, url, reply }) => {
+    if (path === '/monitor/job/1') {
+      await new Promise(resolve => { releaseInitial = resolve })
+      await reply({ data: { jobName: '初始任务A', jobGroup: 'DEFAULT' } })
+    } else if (path === '/monitor/jobLog/list') {
+      const name = url.searchParams.get('jobName')
+      await reply({ rows: [{ jobLogId: 1, jobName: name, jobGroup: 'DEFAULT', status: '0' }], total: 1 })
+    } else return false
+    return true
+  })
+  await page.goto('/monitor/job-log/index/1')
+  await expect.poll(() => Boolean(releaseInitial)).toBe(true)
+  await page.getByPlaceholder('请输入任务名称').fill('当前任务B')
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await expect(page.getByRole('cell', { name: '当前任务B', exact: true })).toBeVisible()
+  const response = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/monitor/job/1'))
+  releaseInitial()
+  await settled(page, response)
+  await expect(page.getByPlaceholder('请输入任务名称')).toHaveValue('当前任务B')
+  await expect(page.getByRole('cell', { name: '当前任务B', exact: true })).toBeVisible()
+  expect(calls.filter(call => call.path === '/monitor/jobLog/list').map(call => call.query.jobName)).toEqual(['当前任务B'])
+})

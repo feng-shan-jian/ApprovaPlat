@@ -19,8 +19,8 @@ export function listJob(query, requestOptions = {}) {
 }
 
 // 查询定时任务调度详细
-export function getJob(jobId) {
-  return request({
+export function getJob(jobId, requestOptions = {}) {
+  return request({ ...requestOptions,
     url: '/monitor/job/' + jobId,
     method: 'get'
   })

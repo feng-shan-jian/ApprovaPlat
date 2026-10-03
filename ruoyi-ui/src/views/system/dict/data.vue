@@ -178,6 +178,7 @@
 <script setup name="Data">
 import { useRequestSequence } from '@/utils/requestSequence'
 const listRequest = useRequestSequence()
+const defaultTypeRequest = useRequestSequence()
 const originalDictType = ref('')
 import useDictStore from '@/store/modules/dict'
 import { optionselect as getDictOptionselect, getType } from "@/api/system/dict/type"
@@ -227,12 +228,22 @@ const data = reactive({
 const { queryParams, form, rules } = toRefs(data)
 
 /** 查询字典类型详细 */
-function getTypes(dictId) {
-  getType(dictId).then(response => {
-    queryParams.value.dictType = response.data.dictType
+async function getTypes(dictId) {
+  const isCurrent = listRequest.begin()
+  const isDefaultCurrent = defaultTypeRequest.begin()
+  loading.value = true
+  try {
+    const response = await getType(dictId, { isCurrentRequest: isCurrent })
+    if (!isDefaultCurrent()) return
     defaultDictType.value = response.data.dictType
-    getList()
-  })
+    if (!isCurrent()) return
+    queryParams.value.dictType = response.data.dictType
+    await getList()
+  } catch {
+    // The HTTP client reports only failures belonging to the current query.
+  } finally {
+    if (isCurrent()) loading.value = false
+  }
 }
 
 /** 查询字典类型列表 */
