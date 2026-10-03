@@ -10,7 +10,6 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 import com.ruoyi.flowable.service.model.WorkflowDeploymentArtifactRepository;
-import com.ruoyi.flowable.service.model.WorkflowExtensionDeploymentService;
 import com.ruoyi.flowable.service.model.WorkflowExtensionRegistryService;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -69,7 +68,7 @@ public class WorkflowExtensionDelegate implements JavaDelegate
         {
             throw new ServiceException("扩展执行快照不存在", HttpStatus.ERROR);
         }
-        String expectedChecksum = WorkflowExtensionDeploymentService.snapshotChecksum(snapshot);
+        String expectedChecksum = WorkflowExtensionChecksum.snapshotChecksum(snapshot);
         if (!expectedChecksum.equals(snapshot.getSnapshotChecksum()))
         {
             throw new ServiceException("扩展执行快照校验和不一致", HttpStatus.ERROR);

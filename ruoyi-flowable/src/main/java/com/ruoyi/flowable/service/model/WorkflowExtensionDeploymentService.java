@@ -298,7 +298,7 @@ public class WorkflowExtensionDeploymentService
                 throw new ServiceException("部署扩展快照元素标识重复", HttpStatus.CONFLICT);
             }
             snapshot.setDeployId(deploymentId);
-            snapshot.setSnapshotChecksum(snapshotChecksum(snapshot));
+            snapshot.setSnapshotChecksum(WorkflowExtensionChecksum.snapshotChecksum(snapshot));
         }
         return List.copyOf(snapshots);
     }
@@ -569,21 +569,5 @@ public class WorkflowExtensionDeploymentService
         {
             throw new ServiceException("服务任务扩展配置不是合法 JSON", HttpStatus.BAD_REQUEST);
         }
-    }
-
-    /**
-     * 计算绑定部署后的完整执行快照摘要。
-     * @param snapshot WfDeployExtensionSnapshot，字段完整且已绑定 deploymentId 的快照
-     * @return String，快照 SHA-256
-     */
-    public static String snapshotChecksum(WfDeployExtensionSnapshot snapshot)
-    {
-        String canonicalConfig = WorkflowExtensionJsonCanonicalizer
-                .canonicalize(snapshot.getConfigJson());
-        return WorkflowExtensionChecksum.sha256(snapshot.getDeployId(), snapshot.getProcessKey(),
-                snapshot.getElementId(), snapshot.getExtensionKey(),
-                String.valueOf(snapshot.getExtensionVersionId()), String.valueOf(snapshot.getVersionNo()),
-                snapshot.getExtensionType(), snapshot.getImplementationKey(), canonicalConfig,
-                snapshot.getVersionChecksum());
     }
 }

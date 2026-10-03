@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
 
 /**
  * BPMN 扩展版本和部署快照的稳定 SHA-256 计算器。
@@ -38,5 +39,21 @@ public final class WorkflowExtensionChecksum
         {
             throw new IllegalStateException("当前 JDK 不支持 SHA-256", exception);
         }
+    }
+
+    /**
+     * 计算绑定部署后的完整执行快照摘要。
+     * @param snapshot WfDeployExtensionSnapshot，字段完整且已绑定 deploymentId 的快照
+     * @return String，快照 SHA-256
+     */
+    public static String snapshotChecksum(WfDeployExtensionSnapshot snapshot)
+    {
+        String canonicalConfig = WorkflowExtensionJsonCanonicalizer
+                .canonicalize(snapshot.getConfigJson());
+        return WorkflowExtensionChecksum.sha256(snapshot.getDeployId(), snapshot.getProcessKey(),
+                snapshot.getElementId(), snapshot.getExtensionKey(),
+                String.valueOf(snapshot.getExtensionVersionId()), String.valueOf(snapshot.getVersionNo()),
+                snapshot.getExtensionType(), snapshot.getImplementationKey(), canonicalConfig,
+                snapshot.getVersionChecksum());
     }
 }
