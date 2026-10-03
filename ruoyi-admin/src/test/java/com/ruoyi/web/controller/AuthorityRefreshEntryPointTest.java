@@ -186,4 +186,24 @@ class AuthorityRefreshEntryPointTest
         assertThrows(IllegalStateException.class, () -> controller.edit(menu));
         verifyNoInteractions(tokens);
     }
+
+    @Test
+    void successfulMenuDeletionRefreshesAffectedUsersAndFailureDoesNot()
+    {
+        ISysMenuService menus = mock(ISysMenuService.class);
+        SysMenuController controller = new SysMenuController();
+        ReflectionTestUtils.setField(controller, "menuService", menus);
+        ReflectionTestUtils.setField(controller, "userService", users);
+        ReflectionTestUtils.setField(controller, "tokenService", tokens);
+        when(users.selectUserIdsByMenuId(100L)).thenReturn(List.of(42L));
+        when(menus.deleteMenuById(100L)).thenReturn(1);
+        controller.remove(100L);
+        verify(tokens).refreshUsersAfterCommit(List.of(42L));
+        clearInvocations(tokens);
+        when(menus.deleteMenuById(100L)).thenReturn(0);
+        controller.remove(100L);
+        when(menus.deleteMenuById(100L)).thenThrow(new IllegalStateException("controlled deletion rollback"));
+        assertThrows(IllegalStateException.class, () -> controller.remove(100L));
+        verifyNoInteractions(tokens);
+    }
 }

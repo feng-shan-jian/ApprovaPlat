@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.annotation.DataScope;
 import com.ruoyi.common.constant.UserConstants;
+import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.domain.entity.SysRole;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.StringUtils;
@@ -19,6 +20,7 @@ import com.ruoyi.system.domain.SysRoleMenu;
 import com.ruoyi.system.domain.SysUserRole;
 import com.ruoyi.system.mapper.SysRoleDeptMapper;
 import com.ruoyi.system.mapper.SysRoleMapper;
+import com.ruoyi.system.mapper.SysMenuMapper;
 import com.ruoyi.system.mapper.SysRoleMenuMapper;
 import com.ruoyi.system.mapper.SysUserRoleMapper;
 import com.ruoyi.system.service.ISysRoleService;
@@ -42,6 +44,9 @@ public class SysRoleServiceImpl implements ISysRoleService
 
     @Autowired
     private SysRoleDeptMapper roleDeptMapper;
+
+    @Autowired
+    private SysMenuMapper menuMapper;
 
     /**
      * 根据条件分页查询角色数据
@@ -177,6 +182,7 @@ public class SysRoleServiceImpl implements ISysRoleService
     @Transactional
     public int insertRole(SysRole role)
     {
+        lockRoleMenus(role);
         // 新增角色信息
         roleMapper.insertRole(role);
         return insertRoleMenu(role);
@@ -192,6 +198,7 @@ public class SysRoleServiceImpl implements ISysRoleService
     @Transactional
     public int updateRole(SysRole role)
     {
+        lockRoleMenus(role);
         // 修改角色信息
         roleMapper.updateRole(role);
         // 删除角色与菜单关联
@@ -234,7 +241,7 @@ public class SysRoleServiceImpl implements ISysRoleService
      * 
      * @param role 角色对象
      */
-    public int insertRoleMenu(SysRole role)
+    private int insertRoleMenu(SysRole role)
     {
         int rows = 1;
         // 新增用户与角色管理
@@ -251,6 +258,17 @@ public class SysRoleServiceImpl implements ISysRoleService
             rows = roleMenuMapper.batchRoleMenu(list);
         }
         return rows;
+    }
+
+    /** 与菜单删除共用菜单行；先按主键持共享锁，再写角色及关联，避免先改关联后等待菜单。 */
+    private void lockRoleMenus(SysRole role)
+    {
+        Arrays.stream(role.getMenuIds()).distinct().sorted().forEach(menuId -> {
+            if (menuMapper.selectMenuIdForShare(menuId) == null)
+            {
+                throw new ServiceException("菜单不存在或已删除，请刷新后重试", HttpStatus.NOT_FOUND);
+            }
+        });
     }
 
     /**

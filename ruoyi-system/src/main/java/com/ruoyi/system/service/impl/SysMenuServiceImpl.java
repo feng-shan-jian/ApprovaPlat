@@ -8,13 +8,16 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import com.ruoyi.common.constant.Constants;
+import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.constant.UserConstants;
 import com.ruoyi.common.core.domain.TreeSelect;
 import com.ruoyi.common.core.domain.entity.SysMenu;
@@ -337,11 +340,17 @@ public class SysMenuServiceImpl implements ISysMenuService
     {
         try
         {
+            // 与授权多菜单锁序一致；重复主键保留请求中末次排序值。
+            Map<Long, Integer> orderByMenu = new TreeMap<>();
             for (int i = 0; i < menuIds.length; i++)
             {
+                orderByMenu.put(Convert.toLong(menuIds[i]), Convert.toInt(orderNums[i]));
+            }
+            for (var order : orderByMenu.entrySet())
+            {
                 SysMenu menu = new SysMenu();
-                menu.setMenuId(Convert.toLong(menuIds[i]));
-                menu.setOrderNum(Convert.toInt(orderNums[i]));
+                menu.setMenuId(order.getKey());
+                menu.setOrderNum(order.getValue());
                 menuMapper.updateMenuSort(menu);
             }
         }
@@ -358,8 +367,22 @@ public class SysMenuServiceImpl implements ISysMenuService
      * @return 结果
      */
     @Override
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public int deleteMenuById(Long menuId)
     {
+        if (menuMapper.selectMenuIdForUpdate(menuId) == null)
+        {
+            return 0;
+        }
+        // 授权在同一菜单行上持共享锁；获得排他锁后的 READ_COMMITTED 引用读取看见已完成授予。
+        if (menuMapper.hasChildByMenuId(menuId) > 0)
+        {
+            throw new ServiceException("存在子菜单,不允许删除", HttpStatus.WARN);
+        }
+        if (roleMenuMapper.checkMenuExistRole(menuId) > 0)
+        {
+            throw new ServiceException("菜单已分配,不允许删除", HttpStatus.WARN);
+        }
         return menuMapper.deleteMenuById(menuId);
     }
 

@@ -15,10 +15,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.constant.UserConstants;
+import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.domain.entity.SysMenu;
 import com.ruoyi.common.enums.BusinessType;
+import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.system.service.ISysMenuService;
 import com.ruoyi.system.service.ISysUserService;
@@ -166,14 +168,23 @@ public class SysMenuController extends BaseController
     @DeleteMapping("/{menuId}")
     public AjaxResult remove(@PathVariable("menuId") Long menuId)
     {
-        if (menuService.hasChildByMenuId(menuId))
+        List<Long> affected = userService.selectUserIdsByMenuId(menuId);
+        try
         {
-            return warn("存在子菜单,不允许删除");
+            int rows = menuService.deleteMenuById(menuId);
+            if (rows > 0)
+            {
+                tokenService.refreshUsersAfterCommit(affected);
+            }
+            return toAjax(rows);
         }
-        if (menuService.checkMenuExistRole(menuId))
+        catch (ServiceException exception)
         {
-            return warn("菜单已分配,不允许删除");
+            if (Integer.valueOf(HttpStatus.WARN).equals(exception.getCode()))
+            {
+                return warn(exception.getMessage());
+            }
+            throw exception;
         }
-        return toAjax(menuService.deleteMenuById(menuId));
     }
 }

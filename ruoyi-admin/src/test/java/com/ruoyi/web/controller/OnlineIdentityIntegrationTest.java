@@ -10,6 +10,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 import com.ruoyi.common.constant.CacheConstants;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.core.domain.entity.SysMenu;
@@ -23,10 +25,18 @@ import com.ruoyi.framework.web.service.TokenService;
 import com.ruoyi.system.mapper.SysMenuMapper;
 import com.ruoyi.system.mapper.SysRoleMapper;
 import com.ruoyi.system.mapper.SysUserMapper;
+import com.ruoyi.system.mapper.SysRoleMenuMapper;
+import com.ruoyi.system.mapper.SysUserRoleMapper;
+import com.ruoyi.system.service.ISysMenuService;
+import com.ruoyi.system.service.ISysRoleService;
 import com.ruoyi.system.service.impl.SysMenuServiceImpl;
+import com.ruoyi.system.service.impl.SysRoleServiceImpl;
 import com.ruoyi.system.service.impl.SysUserServiceImpl;
 import com.ruoyi.web.controller.system.SysMenuController;
+import com.ruoyi.web.controller.system.SysRoleController;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.aop.framework.ProxyFactory;
@@ -203,14 +213,228 @@ class OnlineIdentityIntegrationTest
         }
     }
 
+    @Test
+    void menuDeletionAndRoleEditThenBatchGrantCannotLeaveAnAuthorizedDeletedMenu() throws Exception
+    {
+        try (Fixture f = new Fixture())
+        {
+            f.jdbc.update("delete from sys_role_menu where role_id = ?", f.roleId);
+            f.jdbc.update("delete from sys_user_role where user_id = ?", f.userId);
+            String first = f.login();
+            String second = f.login();
+            CountDownLatch referencesRead = new CountDownLatch(1);
+            CountDownLatch resumeDeletion = new CountDownLatch(1);
+            var executor = Executors.newFixedThreadPool(2);
+            doAnswer(invocation -> {
+                Object result = invocation.callRealMethod();
+                assertEquals(0, result);
+                referencesRead.countDown();
+                assertTrue(resumeDeletion.await(10, TimeUnit.SECONDS));
+                return result;
+            }).when(f.roleMenus).checkMenuExistRole(f.menuId);
+            try
+            {
+                var deletion = executor.submit(f::removeMenu);
+                assertTrue(referencesRead.await(10, TimeUnit.SECONDS));
+                var grant = executor.submit(() -> {
+                    assertEquals(200, f.editRoleMenu().get("code"));
+                    return f.grantRole();
+                });
+                // 旧实现的授予会在删除前完成并刷新 Token；修复后应等待删除持有的菜单行锁。
+                try { grant.get(500, TimeUnit.MILLISECONDS); } catch (TimeoutException expectedLock) { }
+                resumeDeletion.countDown();
+                assertEquals(200, deletion.get(10, TimeUnit.SECONDS).get("code"));
+                try { grant.get(10, TimeUnit.SECONDS); }
+                catch (java.util.concurrent.ExecutionException rejected)
+                {
+                    assertEquals(404, assertInstanceOf(com.ruoyi.common.exception.ServiceException.class,
+                            rejected.getCause()).getCode());
+                }
+                assertNull(f.menus.selectMenuById(f.menuId));
+                assertTrue(f.request(first).getPermissions().isEmpty(), "已删除菜单不能保留在线授权");
+                assertTrue(f.request(second).getPermissions().isEmpty(), "全部 Token 必须与删除后的事实一致");
+                assertEquals(0, f.jdbc.queryForObject("select count(*) from sys_role_menu where menu_id = ?",
+                        Integer.class, f.menuId), "授予不能提交不存在菜单的引用");
+            }
+            finally
+            {
+                resumeDeletion.countDown(); executor.shutdownNow();
+                assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
+    void roleMenuGrantBeforeDeletionMakesDeletionWaitAndReject() throws Exception
+    {
+        try (Fixture f = new Fixture())
+        {
+            f.jdbc.update("delete from sys_role_menu where role_id = ?", f.roleId);
+            f.jdbc.update("delete from sys_user_role where user_id = ?", f.userId);
+            String first = f.login();
+            String second = f.login();
+            CountDownLatch associationWritten = new CountDownLatch(1);
+            CountDownLatch commitGrant = new CountDownLatch(1);
+            var executor = Executors.newFixedThreadPool(2);
+            doAnswer(invocation -> {
+                Object rows = invocation.callRealMethod();
+                associationWritten.countDown();
+                assertTrue(commitGrant.await(10, TimeUnit.SECONDS));
+                return rows;
+            }).when(f.roleMenus).batchRoleMenu(anyList());
+            try
+            {
+                var grant = executor.submit(() -> {
+                    assertEquals(200, f.editRoleMenu().get("code"));
+                    return f.grantRole();
+                });
+                assertTrue(associationWritten.await(10, TimeUnit.SECONDS));
+                var deletion = executor.submit(f::removeMenu);
+                try { deletion.get(500, TimeUnit.MILLISECONDS); } catch (TimeoutException expectedLock) { }
+                commitGrant.countDown();
+                assertEquals(200, grant.get(10, TimeUnit.SECONDS).get("code"));
+                assertEquals(601, deletion.get(10, TimeUnit.SECONDS).get("code"));
+                assertNotNull(f.menus.selectMenuById(f.menuId));
+                assertEquals(Set.of("b01:before"), f.request(first).getPermissions());
+                assertEquals(Set.of("b01:before"), f.request(second).getPermissions());
+            }
+            finally
+            {
+                commitGrant.countDown(); executor.shutdownNow();
+                assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void roleCreationAndEditRejectAlreadyDeletedMenusWithoutPartialWrites(boolean create) throws Exception
+    {
+        try (Fixture f = new Fixture())
+        {
+            f.jdbc.update("delete from sys_role_menu where role_id = ?", f.roleId);
+            assertEquals(200, f.removeMenu().get("code"));
+            SysRole update = f.roles.selectRoleById(f.roleId);
+            update.setMenuIds(new Long[] {f.menuId});
+            update.setRemark("must not commit");
+            if (create)
+            {
+                update.setRoleId(null);
+                update.setRoleName(update.getRoleName() + "_new");
+                update.setRoleKey(update.getRoleKey() + "_new");
+            }
+            try
+            {
+                var failure = assertThrows(com.ruoyi.common.exception.ServiceException.class,
+                        () -> f.asAdmin(() -> create ? f.roleController().add(update) : f.roleController().edit(update)));
+                assertEquals(404, failure.getCode());
+                assertEquals(0, f.jdbc.queryForObject("select count(*) from sys_role_menu where menu_id = ?",
+                        Integer.class, f.menuId));
+                if (create)
+                    assertEquals(0, f.jdbc.queryForObject("select count(*) from sys_role where role_key = ?",
+                            Integer.class, update.getRoleKey()));
+                else assertNotEquals("must not commit", f.roles.selectRoleById(f.roleId).getRemark());
+            }
+            finally
+            {
+                if (create && update.getRoleId() != null)
+                {
+                    f.jdbc.update("delete from sys_role_menu where role_id = ?", update.getRoleId());
+                    f.jdbc.update("delete from sys_role where role_id = ?", update.getRoleId());
+                }
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void emptyMenuArrayStillAllowsRoleCreationAndEdit(boolean create) throws Exception
+    {
+        try (Fixture f = new Fixture())
+        {
+            SysRole role = f.roles.selectRoleById(f.roleId);
+            role.setMenuIds(new Long[0]);
+            if (create)
+            {
+                role.setRoleId(null);
+                role.setRoleName(role.getRoleName() + "_empty");
+                role.setRoleKey(role.getRoleKey() + "_empty");
+            }
+            try
+            {
+                assertEquals(200, f.asAdmin(() -> create ? f.roleController().add(role)
+                        : f.roleController().edit(role)).get("code"));
+                assertNotNull(f.roles.selectRoleById(role.getRoleId()));
+                assertEquals(0, f.jdbc.queryForObject("select count(*) from sys_role_menu where role_id = ?",
+                        Integer.class, role.getRoleId()));
+            }
+            finally
+            {
+                if (create && role.getRoleId() != null)
+                    f.jdbc.update("delete from sys_role where role_id = ?", role.getRoleId());
+            }
+        }
+    }
+
+    @Test
+    void menuSortKeepsIdValuePairsAndLastValueForDuplicateIds() throws Exception
+    {
+        try (Fixture f = new Fixture())
+        {
+            Long second = f.insert("insert into sys_menu(menu_name,menu_type,status,parent_id,order_num) "
+                    + "values ('b01_sort','F','0',0,0)");
+            try
+            {
+                f.transactionalMenus.updateMenuSort(new String[] {second.toString(), f.menuId.toString(), second.toString()},
+                        new String[] {"9", "5", "2"});
+                assertEquals(5, f.menus.selectMenuById(f.menuId).getOrderNum());
+                assertEquals(2, f.menus.selectMenuById(second).getOrderNum());
+            }
+            finally
+            {
+                f.jdbc.update("delete from sys_menu where menu_id = ?", second);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void menuDeletionRefreshWaitsForCommitAndRollbackKeepsSessions(boolean rollback) throws Exception
+    {
+        try (Fixture f = new Fixture())
+        {
+            String first = f.login();
+            String second = f.login();
+            // Controller 已取受影响用户后，事务内先移除引用；删除后的刷新仍服从整体事务结果。
+            doAnswer(invocation -> {
+                f.jdbc.update("delete from sys_role_menu where role_id = ?", f.roleId);
+                return invocation.callRealMethod();
+            }).when(f.menus).deleteMenuById(f.menuId);
+            f.transaction.executeWithoutResult(status -> {
+                assertEquals(200, f.removeMenu().get("code"));
+                assertNull(f.menus.selectMenuById(f.menuId));
+                assertEquals(Set.of("b01:before"), f.request(first).getPermissions());
+                if (rollback) status.setRollbackOnly();
+            });
+            assertEquals(rollback, f.menus.selectMenuById(f.menuId) != null);
+            assertEquals(rollback ? 1 : 0, f.jdbc.queryForObject("select count(*) from sys_role_menu where role_id = ?",
+                    Integer.class, f.roleId));
+            assertEquals(rollback ? Set.of("b01:before") : Set.of(), f.request(first).getPermissions());
+            assertEquals(rollback ? Set.of("b01:before") : Set.of(), f.request(second).getPermissions());
+        }
+    }
+
     private static final class Fixture implements AutoCloseable
     {
         final JdbcTemplate jdbc;
         final TransactionTemplate transaction;
         final SysUserMapper userMapper;
         final SysRoleMapper roles;
+        final SysRoleMenuMapper roleMenus;
         final SysUserServiceImpl users;
         final SysMenuServiceImpl menus;
+        final ISysMenuService transactionalMenus;
+        final ISysRoleService roleService;
         final SysPermissionService permissions;
         final RedisCache cache = new RedisCache();
         final TokenService tokens;
@@ -233,16 +457,26 @@ class OnlineIdentityIntegrationTest
             transaction = new TransactionTemplate(manager);
             SqlSessionFactoryBean factory = new SqlSessionFactoryBean();
             factory.setDataSource(dataSource);
-            factory.setTypeAliasesPackage("com.ruoyi.common.core.domain.entity");
+            factory.setTypeAliasesPackage("com.ruoyi.common.core.domain.entity,com.ruoyi.system.domain");
             factory.setMapperLocations(new ClassPathResource("mapper/system/SysUserMapper.xml"),
-                    new ClassPathResource("mapper/system/SysMenuMapper.xml"), new ClassPathResource("mapper/system/SysRoleMapper.xml"));
+                    new ClassPathResource("mapper/system/SysMenuMapper.xml"), new ClassPathResource("mapper/system/SysRoleMapper.xml"),
+                    new ClassPathResource("mapper/system/SysRoleMenuMapper.xml"), new ClassPathResource("mapper/system/SysUserRoleMapper.xml"));
             SqlSessionTemplate sql = new SqlSessionTemplate(factory.getObject());
             userMapper = sql.getMapper(SysUserMapper.class);
             roles = sql.getMapper(SysRoleMapper.class);
+            roleMenus = spy(sql.getMapper(SysRoleMenuMapper.class));
             users = spy(new SysUserServiceImpl());
             ReflectionTestUtils.setField(users, "userMapper", userMapper);
             menus = spy(new SysMenuServiceImpl());
             ReflectionTestUtils.setField(menus, "menuMapper", sql.getMapper(SysMenuMapper.class));
+            ReflectionTestUtils.setField(menus, "roleMenuMapper", roleMenus);
+            transactionalMenus = transactional(menus, manager);
+            SysRoleServiceImpl roleTarget = new SysRoleServiceImpl();
+            ReflectionTestUtils.setField(roleTarget, "roleMapper", roles);
+            ReflectionTestUtils.setField(roleTarget, "menuMapper", sql.getMapper(SysMenuMapper.class));
+            ReflectionTestUtils.setField(roleTarget, "roleMenuMapper", roleMenus);
+            ReflectionTestUtils.setField(roleTarget, "userRoleMapper", sql.getMapper(SysUserRoleMapper.class));
+            roleService = transactional(roleTarget, manager);
             SysPermissionService raw = new SysPermissionService();
             ReflectionTestUtils.setField(raw, "userService", users);
             ReflectionTestUtils.setField(raw, "menuService", menus);
@@ -315,10 +549,55 @@ class OnlineIdentityIntegrationTest
 
         AjaxResult editMenu(SysMenu menu)
         {
-            SysMenuController controller = new SysMenuController();
-            ReflectionTestUtils.setField(controller, "menuService", menus);
+            return asAdmin(() -> menuController().edit(menu));
+        }
+
+        AjaxResult removeMenu()
+        {
+            return asAdmin(() -> menuController().remove(menuId));
+        }
+
+        private SysMenuController menuController()
+        {
+            var controller = new SysMenuController();
+            ReflectionTestUtils.setField(controller, "menuService", transactionalMenus);
             ReflectionTestUtils.setField(controller, "userService", users);
             ReflectionTestUtils.setField(controller, "tokenService", tokens);
+            return controller;
+        }
+
+        AjaxResult editRoleMenu()
+        {
+            SysRole update = roles.selectRoleById(roleId);
+            update.setMenuIds(new Long[] {menuId});
+            return asAdmin(() -> roleController().edit(update));
+        }
+
+        AjaxResult grantRole()
+        {
+            return asAdmin(() -> roleController().selectAuthUserAll(roleId, new Long[] {userId}));
+        }
+
+        private SysRoleController roleController()
+        {
+            var controller = new SysRoleController();
+            ReflectionTestUtils.setField(controller, "roleService", roleService);
+            ReflectionTestUtils.setField(controller, "userService", users);
+            ReflectionTestUtils.setField(controller, "tokenService", tokens);
+            return controller;
+        }
+
+        private <T> T transactional(T target, DataSourceTransactionManager manager)
+        {
+            ProxyFactory proxy = new ProxyFactory(target);
+            proxy.setProxyTargetClass(true);
+            proxy.setExposeProxy(true);
+            proxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+            return (T) proxy.getProxy();
+        }
+
+        private AjaxResult asAdmin(Supplier<AjaxResult> operation)
+        {
             SysUser actor = new SysUser(1L);
             actor.setUserName("admin");
             LoginUser login = new LoginUser(1L, 100L, actor, Set.of("*:*:*"));
@@ -326,7 +605,7 @@ class OnlineIdentityIntegrationTest
                     new UsernamePasswordAuthenticationToken(login, null, login.getAuthorities()));
             try
             {
-                return controller.edit(menu);
+                return operation.get();
             }
             finally
             {

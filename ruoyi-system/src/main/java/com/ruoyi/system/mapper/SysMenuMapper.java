@@ -75,6 +75,12 @@ public interface SysMenuMapper
      */
     public SysMenu selectMenuById(Long menuId);
 
+    /** 授予菜单引用前共享锁定真实菜单行，持有至授权事务提交。 */
+    public Long selectMenuIdForShare(Long menuId);
+
+    /** 删除菜单前排他锁定同一行，再复核引用。 */
+    public Long selectMenuIdForUpdate(Long menuId);
+
     /**
      * 是否存在菜单子节点
      *

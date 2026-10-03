@@ -121,6 +121,14 @@
 		<include refid="selectMenuVo"/>
 		where menu_id = #{menuId}
 	</select>
+
+    <select id="selectMenuIdForShare" parameterType="Long" resultType="Long" useCache="false" flushCache="true">
+        select menu_id from sys_menu where menu_id = #{menuId} lock in share mode
+    </select>
+
+    <select id="selectMenuIdForUpdate" parameterType="Long" resultType="Long" useCache="false" flushCache="true">
+        select menu_id from sys_menu where menu_id = #{menuId} for update
+    </select>
 	
 	<select id="hasChildByMenuId" resultType="Integer">
 	    select count(1) from sys_menu where parent_id = #{menuId}  
