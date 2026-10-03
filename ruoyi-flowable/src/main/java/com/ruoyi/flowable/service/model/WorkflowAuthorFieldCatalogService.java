@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.JsonNode;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
@@ -54,7 +55,9 @@ public class WorkflowAuthorFieldCatalogService
         {
             throw new ServiceException("表单主键不合法", HttpStatus.BAD_REQUEST);
         }
-        WfForm form = formMapper.selectById(formId);
+        WfForm form = TransactionSynchronizationManager.isActualTransactionActive()
+                && !TransactionSynchronizationManager.isCurrentTransactionReadOnly()
+                        ? formMapper.selectByIdForShare(formId) : formMapper.selectById(formId);
         if (form == null || !ACTIVE_DEL_FLAG.equals(form.getDelFlag()))
         {
             throw new ServiceException("流程表单不存在或已停用", HttpStatus.NOT_FOUND);
@@ -81,14 +84,18 @@ public class WorkflowAuthorFieldCatalogService
             Map<Long, FormTemplate> formsById)
     {
         List<FormSnapshotSource> sources = new ArrayList<>(references.size());
+        // 多个表单共享锁按主键排序，投影输出仍沿用 BPMN 节点顺序。
+        references.stream().filter(reference -> reference.sourceType() == WorkflowFormSourceType.TEMPLATE)
+                .map(WorkflowBpmnFormReference::formId).distinct().sorted().forEach(id ->
+                    formsById.computeIfAbsent(id, key -> {
+                        WfForm stored = requireActiveForm(key);
+                        return new FormTemplate(stored.getFormName(), formTemplateValidator.validateAuthorTemplate(stored.getContent()));
+                    }));
         for (WorkflowBpmnFormReference reference : references)
         {
             if (reference.sourceType() == WorkflowFormSourceType.TEMPLATE)
             {
-                FormTemplate form = formsById.computeIfAbsent(reference.formId(), id -> {
-                    WfForm stored = requireActiveForm(id);
-                    return new FormTemplate(stored.getFormName(), formTemplateValidator.validateAuthorTemplate(stored.getContent()));
-                });
+                FormTemplate form = formsById.get(reference.formId());
                 var permissionRoot = WorkflowNodeFormPermissionSnapshot.apply(form.root(), reference);
                 sources.add(new FormSnapshotSource(reference, form.name(), permissionRoot, List.of()));
             }

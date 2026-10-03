@@ -28,6 +28,16 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
           and del_flag = '0'
     </select>
 
+    <select id="selectByIdForShare" resultMap="WfFormResult">
+        select <include refid="formColumns"/> from wf_form
+        where form_id = #{formId} and del_flag = '0' lock in share mode
+    </select>
+
+    <select id="selectByIdForUpdate" resultMap="WfFormResult">
+        select <include refid="formColumns"/> from wf_form
+        where form_id = #{formId} and del_flag = '0' for update
+    </select>
+
     <select id="selectList" resultMap="WfFormResult">
         select <include refid="formColumns"/>
         from wf_form
@@ -87,22 +97,5 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             </otherwise>
         </choose>
     </update>
-
-    <select id="countActiveByIds" resultType="java.lang.Integer">
-        select count(*)
-        from wf_form
-        where del_flag = '0'
-        <choose>
-            <when test="formIds != null and formIds.size() > 0">
-                and form_id in
-                <foreach collection="formIds" item="formId" open="(" separator="," close=")">
-                    #{formId}
-                </foreach>
-            </when>
-            <otherwise>
-                and 1 = 0
-            </otherwise>
-        </choose>
-    </select>
 
 </mapper>

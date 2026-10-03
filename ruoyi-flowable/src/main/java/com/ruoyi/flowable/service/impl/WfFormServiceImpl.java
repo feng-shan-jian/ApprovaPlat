@@ -155,14 +155,15 @@ public class WfFormServiceImpl implements IWfFormService
      * @return int，实际逻辑删除行数
      */
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public int deleteWithValidByIds(Collection<Long> formIds, String updateBy)
     {
         Set<Long> normalizedIds = normalizeIds(formIds);
         String normalizedUpdateBy = validateAuditUser(updateBy);
-        if (formMapper.countActiveByIds(normalizedIds) != normalizedIds.size())
+        for (Long formId : normalizedIds.stream().sorted().toList())
         {
-            throw new ServiceException(NOT_FOUND_MESSAGE, HttpStatus.NOT_FOUND);
+            if (formMapper.selectByIdForUpdate(formId) == null)
+                throw new ServiceException(NOT_FOUND_MESSAGE, HttpStatus.NOT_FOUND);
         }
         if (referenceChecker.hasFormReference(normalizedIds))
         {

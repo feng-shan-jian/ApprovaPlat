@@ -17,6 +17,12 @@ public interface WfCategoryMapper
      */
     WfCategory selectById(@Param("categoryId") Long categoryId);
 
+    /** 删除事务在引用查询前锁定资源。 */
+    WfCategory selectByIdForUpdate(@Param("categoryId") Long categoryId);
+
+    /** 新建引用的写事务持有资源共享锁。 */
+    WfCategory selectByCodeForShare(@Param("code") String code);
+
     /**
      * 按可选条件查询有效分类列表。
      * @param filter WfCategory，分类名称和编码过滤条件
@@ -63,10 +69,4 @@ public interface WfCategoryMapper
     int logicalDelete(@Param("categoryIds") Collection<Long> categoryIds,
             @Param("updateBy") String updateBy);
 
-    /**
-     * 统计指定主键中仍有效的分类数量。
-     * @param categoryIds Collection&lt;Long&gt;，分类主键集合
-     * @return int，有效分类数量
-     */
-    int countActiveByIds(@Param("categoryIds") Collection<Long> categoryIds);
 }

@@ -30,7 +30,7 @@ class WorkflowModelVersionIntegrationTest
                     fixture.processEngine().getIdentityService(), new WorkflowIdentityCodec()), new WorkflowExceptionTranslator(), identities));
             var categories = mock(WfCategoryMapper.class);
             var category = new WfCategory(); category.setCode("test"); category.setDelFlag("0");
-            when(categories.selectByCode("test")).thenReturn(category);
+            when(categories.selectByCodeForShare("test")).thenReturn(category);
             var publication = mock(WorkflowPublicationArtifactsService.class);
             var authorFields = mock(WorkflowAuthorFieldCatalogService.class);
             var form = new com.ruoyi.flowable.domain.WfForm(); form.setFormId(7L); form.setFormName("Version form");

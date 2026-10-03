@@ -255,8 +255,8 @@ public class WorkflowModelService
 
         return engineOperations.writeAsCurrentUser(identity ->
         {
-            validateMetadataRequest(request);
             requireActiveCategory(category);
+            validateMetadataRequest(request);
             if (repositoryService.createModelQuery().modelKey(modelKey).count() > 0)
             {
                 throw new ServiceException("模型标识已存在", HttpStatus.CONFLICT);
@@ -295,7 +295,6 @@ public class WorkflowModelService
         String modelId = requireText(request.getModelId(), "模型主键不能为空");
         engineOperations.writeAsCurrentUser(identity ->
         {
-            validateMetadataRequest(request);
             Model model = requireModel(modelId);
             // 部署后的元数据属于已发布版本的不可变组成，任何变更都必须通过新模型版本完成。
             if (isDeployed(model))
@@ -309,6 +308,7 @@ public class WorkflowModelService
                 requireActiveCategory(category);
                 model.setCategory(category);
             }
+            validateMetadataRequest(request);
             if (hasText(request.getModelName()))
             {
                 model.setName(requireBoundedText(request.getModelName(), "模型名称不能为空",
@@ -358,9 +358,20 @@ public class WorkflowModelService
                 }
 
                 WorkflowBpmnDocument document = bpmnService.validateForSave(bpmnBytes);
+                Long metadataFormId = optionalLong(readMetadata(source), "formId");
+                if (metadataFormId != null && document.formReferences().stream().noneMatch(reference ->
+                        reference.sourceType() == WorkflowFormSourceType.TEMPLATE
+                                && metadataFormId.equals(reference.formId())))
+                {
+                    // XML 外的元数据引用也会被复制，须在目录读取前按完整并集顺序锁定。
+                    requireActiveModelReferences(source, document);
+                }
+                else
+                {
+                    // 元数据引用已包含在 XML 时，复用下方作者目录的单次锁定读取。
+                    requireActiveCategory(source.getCategory());
+                }
                 publicationArtifactsService.validateAuthorReferences(document, identity);
-
-                requireActiveCategory(source.getCategory());
                 Model latest = latestModel(source.getKey());
                 boolean createVersion = shouldCreateSaveVersion(source, latest);
 
@@ -527,7 +538,8 @@ public class WorkflowModelService
                 throw new ServiceException("当前版本已是最新版", HttpStatus.CONFLICT);
             }
             byte[] sourceBytes = requireModelSource(source.getId());
-            bpmnService.validate(sourceBytes);
+            WorkflowBpmnDocument document = bpmnService.validate(sourceBytes);
+            requireActiveModelReferences(source, document);
             Model promoted = copyAsNextVersion(source);
             repositoryService.saveModel(promoted);
             repositoryService.addModelEditorSource(promoted.getId(), sourceBytes);
@@ -836,12 +848,24 @@ public class WorkflowModelService
     private WfCategory requireActiveCategory(String categoryCode)
     {
         String normalizedCode = requireText(categoryCode, "流程分类不能为空");
-        WfCategory category = categoryMapper.selectByCode(normalizedCode);
+        WfCategory category = categoryMapper.selectByCodeForShare(normalizedCode);
         if (category == null || !ACTIVE_DEL_FLAG.equals(category.getDelFlag()))
         {
             throw new ServiceException("流程分类不存在或已停用", HttpStatus.NOT_FOUND);
         }
         return category;
+    }
+
+    /** 复制版本会保留元数据引用；先分类，再按表单主键锁定 XML 与元数据的并集。 */
+    private void requireActiveModelReferences(Model source, WorkflowBpmnDocument document)
+    {
+        requireActiveCategory(source.getCategory());
+        java.util.stream.Stream.concat(document.formReferences().stream()
+                        .filter(reference -> reference.sourceType() == WorkflowFormSourceType.TEMPLATE)
+                        .map(WorkflowBpmnFormReference::formId),
+                java.util.stream.Stream.of(optionalLong(readMetadata(source), "formId")))
+                .filter(java.util.Objects::nonNull).distinct().sorted()
+                .forEach(authorFieldCatalogService::requireActiveForm);
     }
 
     /**

@@ -152,22 +152,17 @@ public class WfCategoryServiceImpl implements IWfCategoryService
      * @return int，实际逻辑删除行数
      */
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public int deleteWithValidByIds(Collection<Long> categoryIds, String updateBy)
     {
         Set<Long> normalizedIds = normalizeIds(categoryIds);
         String normalizedUpdateBy = validateAuditUser(updateBy);
-        if (categoryMapper.countActiveByIds(normalizedIds) != normalizedIds.size())
+        for (Long categoryId : normalizedIds.stream().sorted().toList())
         {
-            throw new ServiceException(NOT_FOUND_MESSAGE, HttpStatus.NOT_FOUND);
-        }
-
-        for (Long categoryId : normalizedIds)
-        {
-            WfCategory category = categoryMapper.selectById(categoryId);
+            WfCategory category = categoryMapper.selectByIdForUpdate(categoryId);
             if (category == null)
             {
-                throw new ServiceException(CONCURRENT_CHANGE_MESSAGE, HttpStatus.CONFLICT);
+                throw new ServiceException(NOT_FOUND_MESSAGE, HttpStatus.NOT_FOUND);
             }
             if (referenceChecker.hasCategoryReference(category.getCode()))
             {

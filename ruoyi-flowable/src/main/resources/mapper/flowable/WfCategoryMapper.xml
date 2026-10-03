@@ -28,6 +28,16 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
           and del_flag = '0'
     </select>
 
+    <select id="selectByIdForUpdate" resultMap="WfCategoryResult">
+        select <include refid="categoryColumns"/> from wf_category
+        where category_id = #{categoryId} and del_flag = '0' for update
+    </select>
+
+    <select id="selectByCodeForShare" resultMap="WfCategoryResult">
+        select <include refid="categoryColumns"/> from wf_category
+        where code = #{code} and del_flag = '0' lock in share mode
+    </select>
+
     <select id="selectList" resultMap="WfCategoryResult">
         select <include refid="categoryColumns"/>
         from wf_category
@@ -99,22 +109,5 @@ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
             </otherwise>
         </choose>
     </update>
-
-    <select id="countActiveByIds" resultType="java.lang.Integer">
-        select count(*)
-        from wf_category
-        where del_flag = '0'
-        <choose>
-            <when test="categoryIds != null and categoryIds.size() > 0">
-                and category_id in
-                <foreach collection="categoryIds" item="categoryId" open="(" separator="," close=")">
-                    #{categoryId}
-                </foreach>
-            </when>
-            <otherwise>
-                and 1 = 0
-            </otherwise>
-        </choose>
-    </select>
 
 </mapper>

@@ -314,10 +314,11 @@ class WorkflowModelCompilationIntegrationTest
                     var operations = (WorkflowEngineOperations) proxy.getProxy();
                     var categories = mock(WfCategoryMapper.class);
                     var category = new WfCategory(); category.setCode("test"); category.setCategoryName("组合验收"); category.setDelFlag("0");
-                    when(categories.selectByCode("test")).thenReturn(category);
+                    when(categories.selectByCodeForShare("test")).thenReturn(category);
                     var forms = mock(WfFormMapper.class);
                     var template = new WfForm(); template.setFormId(7L); template.setFormName("共享表单"); template.setDelFlag("0"); template.setContent(FORM);
                     when(forms.selectById(7L)).thenReturn(template);
+                    when(forms.selectByIdForShare(7L)).thenReturn(template);
                     var identityMapper = mock(WorkflowIdentityMapper.class);
                     var templates = spy(new WorkflowFormTemplateValidator());
                     var variables = new WorkflowStartVariableValidator(templates);
@@ -388,7 +389,7 @@ class WorkflowModelCompilationIntegrationTest
                     assertThat(repository.getModel(forbidden).getDeploymentId()).isNull();
                     clearInvocations(templates, forms, decisions, conditions, calls, extensions, loops, participantRules, sla, listeners);
                     String model = save(service, repository, "compiledParent", author);
-                    verify(forms, times(1)).selectById(7L);
+                    verify(forms, times(1)).selectByIdForShare(7L);
                     verify(templates, times(1)).validateAuthorTemplate(FORM);
                     verify(decisions, never()).prepare(any());
                     verify(sla, never()).prepare(any(), anyString());
@@ -412,7 +413,7 @@ class WorkflowModelCompilationIntegrationTest
                     failure.set(false);
                     clearInvocations(templates, forms, decisions, conditions, calls, extensions, loops, participantRules, sla, listeners);
                     String deployment = service.deployModel(model);
-                    verify(forms, times(1)).selectById(7L);
+                    verify(forms, times(1)).selectByIdForShare(7L);
                     verify(templates, times(1)).validateAuthorTemplate(FORM);
                     verify(decisions, times(1)).prepare(any());
                     verify(conditions, times(1)).prepare(any(), any(), any(), eq("100"));

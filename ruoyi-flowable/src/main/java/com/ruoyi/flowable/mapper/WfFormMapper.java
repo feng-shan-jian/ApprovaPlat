@@ -17,6 +17,12 @@ public interface WfFormMapper
      */
     WfForm selectById(@Param("formId") Long formId);
 
+    /** 新建引用的写事务持有资源共享锁。 */
+    WfForm selectByIdForShare(@Param("formId") Long formId);
+
+    /** 删除事务在引用查询前锁定资源。 */
+    WfForm selectByIdForUpdate(@Param("formId") Long formId);
+
     /**
      * 按可选条件查询有效表单模板。
      * @param filter WfForm，表单名称过滤条件
@@ -56,10 +62,4 @@ public interface WfFormMapper
     int logicalDelete(@Param("formIds") Collection<Long> formIds,
             @Param("updateBy") String updateBy);
 
-    /**
-     * 统计指定主键中仍有效的表单数量。
-     * @param formIds Collection&lt;Long&gt;，表单主键集合
-     * @return int，有效表单数量
-     */
-    int countActiveByIds(@Param("formIds") Collection<Long> formIds);
 }
