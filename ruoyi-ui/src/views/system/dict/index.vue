@@ -181,6 +181,7 @@
 </template>
 
 <script setup name="Dict">
+const originalDictType = ref('')
 import DictDataDrawer from './detail'
 import useDictStore from '@/store/modules/dict'
 import { listType, getType, delType, addType, updateType, refreshCache } from "@/api/system/dict/type"
@@ -236,6 +237,7 @@ function cancel() {
 
 /** 表单重置 */
 function reset() {
+  originalDictType.value = ''
   form.value = {
     dictId: undefined,
     dictName: undefined,
@@ -289,6 +291,7 @@ function handleUpdate(row) {
   reset()
   const dictId = row.dictId || ids.value
   getType(dictId).then(response => {
+    originalDictType.value = response.data.dictType
     form.value = response.data
     open.value = true
     title.value = "修改字典类型"
@@ -299,14 +302,20 @@ function handleUpdate(row) {
 function submitForm() {
   proxy.$refs["dictRef"].validate(valid => {
     if (valid) {
+      const payload = { ...form.value }
+      const oldType = originalDictType.value
       if (form.value.dictId != undefined) {
-        updateType(form.value).then(() => {
+        updateType(payload).then(() => {
+          useDictStore().removeDict(oldType)
+          useDictStore().removeDict(payload.dictType)
           proxy.$modal.msgSuccess("修改成功")
           open.value = false
           getList()
         })
       } else {
-        addType(form.value).then(() => {
+        addType(payload).then(() => {
+          useDictStore().removeDict(oldType)
+          useDictStore().removeDict(payload.dictType)
           proxy.$modal.msgSuccess("新增成功")
           open.value = false
           getList()
@@ -318,10 +327,13 @@ function submitForm() {
 
 /** 删除按钮操作 */
 function handleDelete(row) {
-  const dictIds = row.dictId || ids.value
+  const dictIds = row.dictId || [...ids.value]
+  const selectedIds = new Set((Array.isArray(dictIds) ? dictIds : [dictIds]).map(String))
+  const removedTypes = typeList.value.filter(item => selectedIds.has(String(item.dictId))).map(item => item.dictType)
   proxy.$modal.confirm('是否确认删除字典编号为"' + dictIds + '"的数据项？').then(function() {
     return delType(dictIds)
   }).then(() => {
+    removedTypes.forEach(type => useDictStore().removeDict(type))
     getList()
     proxy.$modal.msgSuccess("删除成功")
   }).catch(() => {})

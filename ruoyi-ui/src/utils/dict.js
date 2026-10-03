@@ -1,24 +1,20 @@
 import useDictStore from '@/store/modules/dict'
-import { getDicts } from '@/api/system/dict/data'
 
 /**
  * 获取字典数据
  */
 export function useDict(...args) {
-  const res = ref({})
-  return (() => {
-    args.forEach((dictType) => {
-      res.value[dictType] = []
-      const dicts = useDictStore().getDict(dictType)
-      if (dicts) {
-        res.value[dictType] = dicts
-      } else {
-        getDicts(dictType).then(resp => {
-          res.value[dictType] = resp.data.map(p => ({ label: p.dictLabel, value: p.dictValue, elTagType: p.listClass, elTagClass: p.cssClass }))
-          useDictStore().setDict(dictType, res.value[dictType])
-        })
-      }
+  const result = ref({})
+  const store = useDictStore()
+  args.forEach(type => {
+    result.value[type] = store.getDict(type) || []
+    if (store.getDict(type)) return
+    store.loadDict(type).then(values => {
+      // Invalidation may occur between store completion and this consumer's continuation.
+      if (values && store.getDict(type) === values) result.value[type] = values
+    }, () => {
+      // The HTTP client reports the failure. Keep the empty display and permit the next load.
     })
-    return toRefs(res.value)
-  })()
+  })
+  return toRefs(result.value)
 }

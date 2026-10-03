@@ -176,6 +176,7 @@
 </template>
 
 <script setup name="Data">
+const originalDictType = ref('')
 import useDictStore from '@/store/modules/dict'
 import { optionselect as getDictOptionselect, getType } from "@/api/system/dict/type"
 import { listData, getData, delData, addData, updateData } from "@/api/system/dict/data"
@@ -257,6 +258,7 @@ function cancel() {
 
 /** 表单重置 */
 function reset() {
+  originalDictType.value = ''
   form.value = {
     dictCode: undefined,
     dictLabel: undefined,
@@ -309,6 +311,7 @@ function handleUpdate(row) {
   reset()
   const dictCode = row.dictCode || ids.value
   getData(dictCode).then(response => {
+    originalDictType.value = response.data.dictType
     form.value = response.data
     open.value = true
     title.value = "修改字典数据"
@@ -319,16 +322,20 @@ function handleUpdate(row) {
 function submitForm() {
   proxy.$refs["dataRef"].validate(valid => {
     if (valid) {
+      const payload = { ...form.value }
+      const oldType = originalDictType.value
       if (form.value.dictCode != undefined) {
-        updateData(form.value).then(() => {
-          useDictStore().removeDict(queryParams.value.dictType)
+        updateData(payload).then(() => {
+          useDictStore().removeDict(oldType)
+          useDictStore().removeDict(payload.dictType)
           proxy.$modal.msgSuccess("修改成功")
           open.value = false
           getList()
         })
       } else {
-        addData(form.value).then(() => {
-          useDictStore().removeDict(queryParams.value.dictType)
+        addData(payload).then(() => {
+          useDictStore().removeDict(oldType)
+          useDictStore().removeDict(payload.dictType)
           proxy.$modal.msgSuccess("新增成功")
           open.value = false
           getList()
@@ -340,13 +347,14 @@ function submitForm() {
 
 /** 删除按钮操作 */
 function handleDelete(row) {
-  const dictCodes = row.dictCode || ids.value
+  const dictCodes = row.dictCode || [...ids.value]
+  const dictType = queryParams.value.dictType
   proxy.$modal.confirm('是否确认删除字典编码为"' + dictCodes + '"的数据项？').then(function() {
     return delData(dictCodes)
   }).then(() => {
     getList()
     proxy.$modal.msgSuccess("删除成功")
-    useDictStore().removeDict(queryParams.value.dictType)
+    useDictStore().removeDict(dictType)
   }).catch(() => {})
 }
 
