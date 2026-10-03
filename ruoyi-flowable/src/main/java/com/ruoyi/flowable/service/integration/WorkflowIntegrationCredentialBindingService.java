@@ -1,4 +1,4 @@
-package com.ruoyi.flowable.service.model;
+package com.ruoyi.flowable.service.integration;
 
 import org.springframework.stereotype.Service;
 import com.ruoyi.flowable.domain.dto.WorkflowIntegrationCredentialCreateRequest;

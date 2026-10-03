@@ -1,5 +1,7 @@
 package com.ruoyi.flowable.extension;
 
+import com.ruoyi.flowable.service.integration.WorkflowConnectorEndpointService;
+import com.ruoyi.flowable.service.integration.WorkflowHttpExecution;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -42,18 +44,21 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
             + "\"correlationVariable\":{\"type\":\"string\"},\"variableNames\":{\"type\":\"array\",\"maxItems\":128,\"items\":{\"type\":\"string\"}},"
             + "\"maxAttempts\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":20}}}";
 
-    private final WorkflowHttpConnector httpConnector;
+    private final WorkflowConnectorEndpointService endpointService;
+    private final WorkflowHttpExecution httpExecution;
     private final WorkflowCollaborationOutboxService outboxService;
-    private final ObjectMapper objectMapper = JsonMapper.shared();
+    private static final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
      * 创建协作 outbox 处理器。
      * 构造后由 Spring 注册到固定 Java 处理器目录
      */
-    public WorkflowCollaborationOutboxHandler(WorkflowHttpConnector httpConnector,
+    public WorkflowCollaborationOutboxHandler(WorkflowConnectorEndpointService endpointService,
+            WorkflowHttpExecution httpExecution,
             WorkflowCollaborationOutboxService outboxService)
     {
-        this.httpConnector = httpConnector;
+        this.endpointService = endpointService;
+        this.httpExecution = httpExecution;
         this.outboxService = outboxService;
     }
 
@@ -88,7 +93,7 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
         CollaborationConfig author = parse(config, false);
         try
         {
-            JsonNode endpoint = objectMapper.readTree(httpConnector.freezePostEndpoint(
+            JsonNode endpoint = objectMapper.readTree(endpointService.freezePostEndpoint(
                     author.endpointKey(), author.path()));
             ObjectNode normalized = normalizedAuthor(author);
             normalized.set("httpEndpoint", endpoint);
@@ -111,7 +116,7 @@ public class WorkflowCollaborationOutboxHandler implements WorkflowJavaExtension
     {
         CollaborationConfig frozen = parse(config, true);
         JsonNode endpoint = config.get("httpEndpoint");
-        String normalizedEndpoint = httpConnector.validateFrozenConfig(endpoint);
+        String normalizedEndpoint = httpExecution.validateFrozenConfig(endpoint);
         try
         {
             ObjectNode normalized = normalizedAuthor(frozen);

@@ -1,5 +1,7 @@
 package com.ruoyi.flowable.service.model;
 
+import com.ruoyi.flowable.service.integration.WorkflowConnectorCheckService;
+import com.ruoyi.flowable.service.integration.WorkflowConnectorEndpointService;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -33,15 +35,14 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfConnectorEndpoint;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.engine.WorkflowExceptionTranslator;
-import com.ruoyi.flowable.extension.WorkflowConnectorSecretResolver;
-import com.ruoyi.flowable.extension.WorkflowHttpConnector;
-import com.ruoyi.flowable.extension.WorkflowManagedConnectorSecrets;
+import com.ruoyi.flowable.service.integration.WorkflowConnectorSecretResolver;
+import com.ruoyi.flowable.service.integration.WorkflowHttpExecution;
+import com.ruoyi.flowable.service.integration.WorkflowManagedConnectorSecrets;
 import com.ruoyi.flowable.identity.WorkflowAuthenticationContext;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityCodec;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfConnectorEndpointMapper;
-import com.ruoyi.flowable.runtime.WorkflowConnectorMetrics;
 import com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -52,7 +53,8 @@ class WorkflowConnectorCheckIntegrationTest
     private JdbcTemplate jdbc;
     private WorkflowEngineOperations operations;
     private WorkflowManagedConnectorSecrets secrets;
-    private WorkflowHttpConnector http;
+    private WorkflowHttpExecution http;
+    private WorkflowConnectorSecretResolver secretResolver;
     private WorkflowConnectorCheckService checks;
     private WorkflowConnectorEndpointService endpoints;
     private WfConnectorEndpoint endpoint;
@@ -84,10 +86,10 @@ class WorkflowConnectorCheckIntegrationTest
                 WfConnectorEndpointMapper.class, "mapper/flowable/WfConnectorEndpointMapper.xml");
         secrets = new WorkflowManagedConnectorSecrets(source, Base64.getEncoder().encodeToString(new byte[32]));
         secretRef = secrets.create("synthetic-original-token", "connector-check-test").reference();
-        var secretResolver = new WorkflowConnectorSecretResolver(secrets);
+        secretResolver = spy(new WorkflowConnectorSecretResolver(secrets, mapper));
         endpoints = spy(new WorkflowConnectorEndpointService(operations, mapper, secretResolver));
-        http = new WorkflowHttpConnector(endpoints, secretResolver, mock(WorkflowConnectorMetrics.class));
-        checks = new WorkflowConnectorCheckService(operations, mapper, http);
+        http = new WorkflowHttpExecution(secretResolver);
+        checks = new WorkflowConnectorCheckService(operations, mapper, http, endpoints);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/workflow/runtime-event/auth-check", exchange -> {
             requests.incrementAndGet();
@@ -172,7 +174,7 @@ class WorkflowConnectorCheckIntegrationTest
             checked.countDown();
             if (!sendGate.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("send gate timed out");
             return null;
-        }).when(endpoints).requireManagedRuntimeEndpoint(endpoint.getEndpointId(), secretRef);
+        }).when(secretResolver).requireManagedRuntimeEndpoint(endpoint.getEndpointId(), secretRef);
         var workers = Executors.newFixedThreadPool(2);
         try
         {
@@ -224,7 +226,7 @@ class WorkflowConnectorCheckIntegrationTest
     }
 
     @Test
-    void rotatedCredentialIsReadAtSendTime()
+    void rotatedCredentialIsReadAtSendTime() throws Exception
     {
         String frozen = freeze();
         secrets.rotate(secretRef, 1, "synthetic-rotated-token", "connector-check-test");
@@ -255,11 +257,11 @@ class WorkflowConnectorCheckIntegrationTest
 
     private String freeze()
     {
-        return operations.writeAsCurrentUser(actor -> http.freezePostEndpoint(endpoint.getEndpointKey(), "/workflow/runtime-event/auth-check"));
+        return operations.writeAsCurrentUser(actor -> endpoints.freezePostEndpoint(endpoint.getEndpointKey(), "/workflow/runtime-event/auth-check"));
     }
 
-    private void send(String frozen)
+    private void send(String frozen) throws Exception
     {
-        http.postFrozenJson(frozen, "synthetic-auth-check", "{\"nonce\":\"synthetic-nonce\"}".getBytes(StandardCharsets.UTF_8));
+        http.send(WorkflowHttpExecution.parseFrozen(JsonMapper.shared().readTree(frozen)), "synthetic-auth-check", "{\"nonce\":\"synthetic-nonce\"}".getBytes(StandardCharsets.UTF_8));
     }
 }

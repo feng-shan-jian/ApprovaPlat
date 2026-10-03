@@ -19,7 +19,7 @@ import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.flowable.domain.dto.WorkflowConnectorEndpointRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowConnectorEndpointStatusRequest;
-import com.ruoyi.flowable.service.model.WorkflowConnectorEndpointService;
+import com.ruoyi.flowable.service.integration.WorkflowConnectorEndpointService;
 
 /**
  * HTTP 连接器端点白名单和不可回退修订管理接口。

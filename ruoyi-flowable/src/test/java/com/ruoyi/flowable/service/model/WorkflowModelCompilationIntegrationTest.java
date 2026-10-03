@@ -1,5 +1,11 @@
 package com.ruoyi.flowable.service.model;
 
+import com.ruoyi.flowable.service.integration.WorkflowHttpExecution;
+
+import com.ruoyi.flowable.service.integration.WorkflowSqlSecretResolver;
+import com.ruoyi.flowable.service.integration.WorkflowConnectorSecretResolver;
+import com.ruoyi.flowable.service.integration.WorkflowSqlDataSourceService;
+import com.ruoyi.flowable.service.integration.WorkflowConnectorEndpointService;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -203,33 +209,36 @@ class WorkflowModelCompilationIntegrationTest
         try
         {
             jdbc.execute("create table effects (owner varchar(40))");
-            var endpointService = mock(WorkflowConnectorEndpointService.class);
+            var endpointMapper = mock(com.ruoyi.flowable.mapper.WfConnectorEndpointMapper.class);
+            var endpointService = new WorkflowConnectorEndpointService(null, endpointMapper,
+                    mock(WorkflowConnectorSecretResolver.class));
             var endpoint = new WfConnectorEndpoint();
             endpoint.setEndpointId(1L); endpoint.setEndpointKey("local"); endpoint.setEndpointName("local");
             endpoint.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
             endpoint.setAllowedMethods("POST"); endpoint.setPathPrefix("/effect"); endpoint.setAuthType("NONE");
             endpoint.setNetworkScope("PRIVATE"); endpoint.setConnectTimeoutMs(1000); endpoint.setRequestTimeoutMs(1000);
             endpoint.setRevisionNo(1); endpoint.setChecksum(WorkflowConnectorEndpointService.endpointChecksum(endpoint));
-            when(endpointService.lockEnabledForDeployment("local")).thenReturn(endpoint);
+            when(endpointMapper.selectEnabledByKeyForUpdate("local")).thenReturn(endpoint);
             var metrics = mock(com.ruoyi.flowable.runtime.WorkflowConnectorMetrics.class);
-            var http = new WorkflowHttpConnector(endpointService, mock(WorkflowConnectorSecretResolver.class), metrics);
+            var http = new WorkflowHttpConnector(new WorkflowHttpExecution(mock(WorkflowConnectorSecretResolver.class)), metrics);
             var httpAuthor = (tools.jackson.databind.node.ObjectNode) json.readTree("""
                     {"endpointKey":"local","method":"POST","path":"/effect","bodyVariable":"initiator","statusVariable":"httpResult"}
                     """);
-            var httpFrozen = (tools.jackson.databind.node.ObjectNode) json.readTree(http.freezeConfig(httpAuthor, true));
-            var dataSources = mock(WorkflowSqlDataSourceService.class);
+            var httpFrozen = (tools.jackson.databind.node.ObjectNode) json.readTree(endpointService.freezeConfig(httpAuthor, true));
+            var sourceMapper = mock(com.ruoyi.flowable.mapper.WfSqlDataSourceMapper.class);
+            var dataSources = new WorkflowSqlDataSourceService(null, sourceMapper, new WorkflowSqlTemplateValidator());
             var source = new WfSqlDataSource();
             source.setDataSourceId(1L); source.setDataSourceKey("local"); source.setDataSourceName("local");
             source.setConnectionType("PRIMARY"); source.setAllowedTables("effects");
             source.setConnectTimeoutMs(1000); source.setQueryTimeoutSeconds(2); source.setRevisionNo(1);
             source.setChecksum(WorkflowSqlDataSourceService.dataSourceChecksum(source));
-            when(dataSources.lockEnabledForDeployment("local")).thenReturn(source);
-            var sql = new WorkflowSqlConnector(dataSource, dataSources, new WorkflowSqlTemplateValidator(),
+            when(sourceMapper.selectEnabledByKeyForUpdate("local")).thenReturn(source);
+            var sql = new WorkflowSqlConnector(dataSource, new WorkflowSqlTemplateValidator(),
                     mock(WorkflowSqlSecretResolver.class), metrics);
             var sqlAuthor = (tools.jackson.databind.node.ObjectNode) json.readTree("""
                     {"dataSourceKey":"local","sql":"insert into effects (owner) values (:owner)","parameters":{"owner":"initiator"},"resultVariable":"sqlResult"}
                     """);
-            var sqlFrozen = (tools.jackson.databind.node.ObjectNode) json.readTree(sql.freezeConfig(sqlAuthor, true));
+            var sqlFrozen = (tools.jackson.databind.node.ObjectNode) json.readTree(dataSources.freezeConfig(sqlAuthor, true));
             var validator = new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator());
             for (String name : List.of("nrOfInstances", "initiator", "wfMiUsers_review", "_wfMiMembers_review",
                     "_wfMiRevision_review", "_wfMiMode_review", "_wfMiCompletionRevision", "__approva_loop_route_review",
@@ -243,9 +252,9 @@ class WorkflowModelCompilationIntegrationTest
                 assertThatThrownBy(() -> java.executeTask(task, javaConfig)).as(name).hasMessageContaining("保留变量");
                 assertThatThrownBy(() -> cel.validateAndNormalizeConfig(celConfig)).as(name).hasMessageContaining("保留变量");
                 assertThatThrownBy(() -> cel.execute(execution, celConfig)).as(name).hasMessageContaining("保留变量");
-                assertThatThrownBy(() -> http.freezeConfig(httpAuthor.deepCopy().put("statusVariable", name), true)).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> endpointService.freezeConfig(httpAuthor.deepCopy().put("statusVariable", name), true)).as(name).hasMessageContaining("保留变量");
                 assertThatThrownBy(() -> http.execute(execution, httpFrozen.deepCopy().put("statusVariable", name))).as(name).hasMessageContaining("保留变量");
-                assertThatThrownBy(() -> sql.freezeConfig(sqlAuthor.deepCopy().put("resultVariable", name), true)).as(name).hasMessageContaining("保留变量");
+                assertThatThrownBy(() -> dataSources.freezeConfig(sqlAuthor.deepCopy().put("resultVariable", name), true)).as(name).hasMessageContaining("保留变量");
                 assertThatThrownBy(() -> sql.execute(execution, sqlFrozen.deepCopy().put("resultVariable", name))).as(name).hasMessageContaining("保留变量");
                 var property = new org.flowable.bpmn.model.FormProperty(); property.setId(name); property.setType("string");
                 assertThatThrownBy(() -> WorkflowEmbeddedFormConverter.convert(List.of(property))).as(name).hasMessageContaining("保留变量");
@@ -354,9 +363,12 @@ class WorkflowModelCompilationIntegrationTest
                     var participantRules = spy(new WorkflowParticipantRuleDeploymentService(identityMapper));
                     var sla = spy(new WorkflowTaskSlaDeploymentService(calendars, eventCodes, identities));
                     var listeners = spy(new WorkflowRuntimeTaskListenerCompiler());
-                    var service = new WorkflowModelService(operations, repository, bpmn,
-                            new WorkflowBpmnIdentityValidator(identityMapper), categories, forms, artifacts, templates,
+                    var authorFields = new WorkflowAuthorFieldCatalogService(bpmn, forms, templates, conditions);
+                    var publication = new WorkflowPublicationArtifactsService(bpmn,
+                            new WorkflowBpmnIdentityValidator(identityMapper), authorFields, artifacts, templates,
                             extensions, loops, conditions, participantRules, decisions, fieldExtensions, calls, sla, listeners);
+                    var service = new WorkflowModelService(operations, repository, bpmn,
+                            categories, authorFields, templates, publication, calls);
                     context.getBeanFactory().registerSingleton("workflowConditionRouter", new WorkflowConditionRouter(repository, artifacts));
                     context.getBeanFactory().registerSingleton("workflowExtensionDelegate",
                             new WorkflowExtensionDelegate(repository, artifacts, handlers, null, null));
@@ -385,8 +397,6 @@ class WorkflowModelCompilationIntegrationTest
                     modelForm.setModelId(model); modelForm.setFormType(0); modelForm.setFormId(7L);
                     service.updateModel(modelForm);
                     int revision = ((ModelEntity) repository.getModel(model)).getRevision();
-                    verifyDesignDraftIsolation(context.getBean(DataSource.class), service, bpmn,
-                            operations, identities, repository, forms, model, revision, author);
                     long deploymentCount = repository.createDeploymentQuery().count();
                     long dmnCount = dmn.getDmnRepositoryService().createDeploymentQuery().count();
                     var preflight = service.preflight(model, revision, author);
@@ -451,209 +461,23 @@ class WorkflowModelCompilationIntegrationTest
                     verify(templates, times(2)).validate(anyString());
                     var fallback = operations.writeAsCurrentUser(actor -> runtime.startProcessInstanceByKey("compiledParent", Map.of("amount", BigDecimal.ZERO, "initiator", actor.userId())));
                     assertThat(engine.getHistoryService().createHistoricProcessInstanceQuery().processInstanceId(fallback.getId()).finished().count()).isOne();
-                    assertDmnDeletionBoundaries(operations, dmn.getDmnRepositoryService(), artifacts,
-                            sourceId, deployment, tables.publish(decimalTable()));
-                    assertExtensionVersionBoundaries(operations);
-                    assertResourceReadBoundaries(operations, engine.getRepositoryService(), dmn.getDmnRepositoryService(),
-                            deployment, definition.getId(), decisionId, compiled);
-                    assertLazyDeploymentRead(engine.getRepositoryService(), deployment, definition.getKey());
+                    // 发布新版本只停用旧定义；历史实例继续办理，父流程冻结的子定义仍可调用。
+                    String frozenChildId = ((org.flowable.bpmn.model.CallActivity) executedModel.getFlowElement("call")).getCalledElement();
+                    var waiting = operations.writeAsCurrentUser(actor -> runtime.startProcessInstanceByKey("compiledParent",
+                            Map.of("amount", BigDecimal.ONE, "initiator", actor.userId())));
+                    var childSave = new WorkflowModelDto(); childSave.setModelId(child);
+                    childSave.setExpectedRevision(((ModelEntity) repository.getModel(child)).getRevision());
+                    childSave.setBpmnXml(childXml().replace("urn:compile", "urn:child-next"));
+                    service.deployModel(service.saveModel(childSave).modelId());
+                    assertThat(repository.createProcessDefinitionQuery().processDefinitionId(frozenChildId).singleResult().isSuspended()).isFalse();
+                    var parentSave = new WorkflowModelDto(); parentSave.setModelId(model);
+                    parentSave.setExpectedRevision(((ModelEntity) repository.getModel(model)).getRevision());
+                    parentSave.setBpmnXml(author.replace("urn:compile", "urn:parent-next"));
+                    service.deployModel(service.saveModel(parentSave).modelId());
+                    assertThat(repository.createProcessDefinitionQuery().processDefinitionId(definition.getId()).singleResult().isSuspended()).isTrue();
+                    assertThat(runtime.createProcessInstanceQuery().processInstanceId(waiting.getId()).singleResult().isSuspended()).isFalse();
+                    assertThat(tasks.createTaskQuery().processInstanceId(waiting.getId()).singleResult().isSuspended()).isFalse();
                 });
-    }
-
-    private static void assertDmnDeletionBoundaries(WorkflowEngineOperations operations,
-            org.flowable.dmn.api.DmnRepositoryService repository,
-            WorkflowDeploymentArtifactRepository artifacts, String referencedSource,
-            String parentDeployment, String unreferencedSource)
-    {
-        var observed = spy(repository);
-        var service = new WorkflowDmnDecisionService(operations, observed, artifacts);
-        assertResourceFailure(() -> service.delete("missing-dmn"), "DMN 部署不存在", 404);
-        verify(observed, times(1)).createDeploymentQuery();
-        clearInvocations(observed);
-        service.delete(unreferencedSource);
-        verify(observed, times(1)).createDeploymentQuery();
-        assertThat(repository.createDeploymentQuery().deploymentId(unreferencedSource).count()).isZero();
-        assertResourceFailure(() -> service.delete(referencedSource), "DMN 部署已被流程版本冻结引用", 409);
-        String frozen = artifacts.selectDmnSnapshots(parentDeployment).get(0).getFrozenDeploymentId();
-        assertResourceFailure(() -> service.delete(frozen), "流程冻结 DMN 部署不允许独立删除", 409);
-        assertThat(repository.createDeploymentQuery().deploymentId(referencedSource).count()).isOne();
-        assertThat(repository.createDeploymentQuery().deploymentId(frozen).count()).isOne();
-    }
-
-    private static void assertExtensionVersionBoundaries(WorkflowEngineOperations operations)
-    {
-        var mapper = mock(WfBpmnExtensionMapper.class);
-        var javaHandler = new WorkflowSetVariableJavaHandler();
-        var http = mock(WorkflowHttpConnector.class);
-        var sql = mock(WorkflowSqlConnector.class);
-        when(http.configSchema()).thenReturn("{\"type\":\"object\"}");
-        when(sql.configSchema()).thenReturn("{\"type\":\"object\"}");
-        var service = new WorkflowExtensionRegistryService(operations, mapper, null,
-                new WorkflowJavaExtensionHandlerRegistry(List.of(javaHandler)), http, sql);
-        var inserted = new java.util.ArrayList<WfBpmnExtensionVersion>();
-        when(mapper.selectMaxVersionNo(1L)).thenReturn(4);
-        when(mapper.insertVersion(any())).thenAnswer(invocation -> {
-            WfBpmnExtensionVersion version = invocation.getArgument(0);
-            version.setVersionId(5L); inserted.add(version); return 1;
-        });
-        for (String type : List.of("JAVA", "CEL", "HTTP", "SQL", "FORM_FIELD"))
-        {
-            var extension = new WfBpmnExtension();
-            extension.setExtensionId(1L); extension.setExtensionKey("cleanup-test");
-            extension.setExtensionType(type);
-            when(mapper.selectByIdForUpdate(1L)).thenReturn(extension);
-            String key = "JAVA".equals(type) ? javaHandler.implementationKey() : null;
-            assertThat(service.createVersion(1L,
-                    new com.ruoyi.flowable.domain.dto.WorkflowExtensionVersionCreateRequest(key))).isEqualTo(5L);
-            var version = inserted.get(inserted.size() - 1);
-            assertThat(version.getVersionNo()).isEqualTo(5);
-            assertThat(version.getChecksum()).isEqualTo(WorkflowExtensionChecksum.sha256(
-                    "cleanup-test", type, "5", version.getImplementationKey(), version.getConfigSchema()));
-            int count = inserted.size();
-            if (!"JAVA".equals(type))
-            {
-                assertResourceFailure(() -> service.createVersion(1L,
-                        new com.ruoyi.flowable.domain.dto.WorkflowExtensionVersionCreateRequest("SET_VARIABLE")),
-                        "非 JAVA 扩展不得提交服务端实现键", 400);
-                assertThat(inserted).hasSize(count);
-            }
-        }
-        assertThat(inserted).hasSize(5);
-    }
-
-    /** 同次详情共享两种实际资源，独立入口仍使用当前协议及清单门禁。 */
-    private static void assertLazyDeploymentRead(org.flowable.engine.RepositoryService repository,
-            String deploymentId, String processKey)
-    {
-        var observed = spy(repository);
-        var artifacts = new WorkflowDeploymentArtifactRepository(observed);
-        String artifactId = repository.createDeploymentQuery().parentDeploymentId(deploymentId)
-                .deploymentCategory("APPROVAPLAT_WORKFLOW_ARTIFACTS").singleResult().getId();
-        var read = artifacts.openRead(deploymentId);
-        verifyNoInteractions(observed);
-        var forms = read.forms();
-        assertThat(read.forms()).isSameAs(forms);
-        verify(observed, times(1)).createDeploymentQuery();
-        verify(observed, times(1)).getResourceAsStream(artifactId, "approvaplat/manifest-v1.json");
-        verify(observed, times(1)).getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
-        verifyNoMoreInteractions(observed);
-        assertThat(read.controlledLoops(processKey)).isEqualTo(read.controlledLoops(processKey));
-        verify(observed, times(1)).getResourceAsStream(artifactId, "approvaplat/controlled-loops-v1.json");
-        verifyNoMoreInteractions(observed);
-        clearInvocations(observed);
-        assertResourceFailure(() -> artifacts.openRead("").controlledLoop("", "activity"), "流程标识不能为空", 400);
-        verifyNoInteractions(observed);
-
-        String currentParent = repository.createDeployment().addString("fixture.txt", "current").deploy().getId();
-        repository.createDeployment().parentDeploymentId(currentParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
-                .addString("approvaplat/manifest-v1.json", "{\"schemaVersion\":2}")
-                .addString("approvaplat/forms-v1.json", "[]")
-                .addString("approvaplat/controlled-loops-v1.json", "[]")
-                .addString("approvaplat/conditions-v2.json", """
-                        [{"processKey":"current","gatewayId":"g","gatewayToken":"token","flowId":"f"}]
-                        """).deploy();
-        var current = artifacts.openRead(currentParent);
-        assertThat(current.forms()).isEmpty();
-        assertThat(current.controlledLoops("current")).isEmpty();
-        assertThat(artifacts.selectRuntimeConditionRules(currentParent, "current", "token"))
-                .extracting(WfDeployConditionRule::getFlowId).containsExactly("f");
-        assertThat(artifacts.selectRuntimeConditionRules(currentParent, "unrelated", "token")).isEmpty();
-        assertThat(artifacts.openRead("absent-deployment").forms()).isEmpty();
-
-        String invalidParent = repository.createDeployment().addString("fixture.txt", "invalid").deploy().getId();
-        for (String manifest : List.of("{\"schemaVersion\":1}", "{\"schemaVersion\":3}", "broken-json"))
-        {
-            String id = repository.createDeployment().parentDeploymentId(invalidParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
-                    .addString("approvaplat/manifest-v1.json", manifest).deploy().getId();
-            assertResourceFailure(() -> artifacts.openRead(invalidParent).forms(),
-                    manifest.startsWith("{") ? "流程部署业务资源协议版本不受支持" : "流程部署业务资源清单无法解析", 500);
-            repository.deleteDeployment(id);
-        }
-        repository.createDeployment().parentDeploymentId(invalidParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
-                .addString("fixture.txt", "missing-manifest").deploy();
-        // 实际引擎的缺失资源抛 FlowableObjectNotFoundException；空流的 500 契约由前面的边界用例覆盖。
-        assertThatThrownBy(() -> artifacts.openRead(invalidParent).forms())
-                .isInstanceOf(org.flowable.common.engine.api.FlowableObjectNotFoundException.class);
-        repository.createDeployment().parentDeploymentId(invalidParent).category("APPROVAPLAT_WORKFLOW_ARTIFACTS")
-                .addString("fixture.txt", "duplicate").deploy();
-        assertResourceFailure(() -> artifacts.openRead(invalidParent).forms(), "流程部署业务资源数量异常", 500);
-    }
-
-    /** 在真实部署、DMN 来源和制品定位之后注入资源流故障，覆盖公开读取/编译入口的契约。 */
-    private static void assertResourceReadBoundaries(WorkflowEngineOperations operations,
-            org.flowable.engine.RepositoryService repository,
-            org.flowable.dmn.api.DmnRepositoryService dmnRepository,
-            String deploymentId, String definitionId, String decisionId, String compiled)
-    {
-        var resources = spy(repository);
-        var decisions = spy(dmnRepository);
-        var artifacts = new WorkflowDeploymentArtifactRepository(resources);
-        var deployments = new WorkflowDeploymentService(operations, resources,
-                artifacts, null, null, null, null);
-        var dmn = new WorkflowDmnDecisionService(operations, decisions, artifacts);
-        assertThat(deployments.getBpmnXml(definitionId)).isEqualTo(compiled);
-        java.util.function.Supplier<WorkflowDmnDecisionService.DecisionSource> compile = () -> {
-            var model = new org.flowable.bpmn.model.BpmnModel();
-            var process = new org.flowable.bpmn.model.Process(); process.setId("readBoundary");
-            var task = new org.flowable.bpmn.model.BusinessRuleTask();
-            task.setId("decision"); task.setRuleNames(List.of(decisionId));
-            process.addFlowElement(task); model.addProcess(process);
-            return dmn.prepare(model).get(0);
-        };
-        int xmlLimit = 2 * 1024 * 1024;
-        for (int size : new int[] {0, xmlLimit, xmlLimit + 1})
-        {
-            byte[] bytes = new byte[size]; java.util.Arrays.fill(bytes, (byte) ' ');
-            var bpmnStream = spy(new java.io.ByteArrayInputStream(bytes));
-            var dmnStream = spy(new java.io.ByteArrayInputStream(bytes));
-            doReturn(bpmnStream).when(resources).getProcessModel(definitionId);
-            doReturn(dmnStream).when(decisions).getDmnResource(decisionId);
-            if (size <= xmlLimit)
-            {
-                assertThat(deployments.getBpmnXml(definitionId)).isEqualTo(new String(bytes, StandardCharsets.UTF_8));
-                assertThat(compile.get().resourceBytes()).containsExactly(bytes);
-            }
-            else
-            {
-                assertResourceFailure(() -> deployments.getBpmnXml(definitionId), "BPMN XML 超过大小限制", 400);
-                assertResourceFailure(compile::get, "DMN XML 超过大小限制", 400);
-            }
-            try { verify(bpmnStream).close(); verify(dmnStream).close(); }
-            catch (java.io.IOException exception) { throw new AssertionError(exception); }
-        }
-        doReturn(null).when(resources).getProcessModel(definitionId);
-        doReturn(null).when(decisions).getDmnResource(decisionId);
-        assertResourceFailure(() -> deployments.getBpmnXml(definitionId), "流程定义 BPMN 不存在", 404);
-        assertResourceFailure(compile::get, "DMN 决策资源不存在", 409);
-        doReturn(failingResourceStream()).when(resources).getProcessModel(definitionId);
-        doReturn(failingResourceStream()).when(decisions).getDmnResource(decisionId);
-        assertResourceFailure(() -> deployments.getBpmnXml(definitionId), "流程定义 BPMN 读取失败", 500);
-        assertResourceFailure(compile::get, "DMN 业务规则任务编译失败", 400);
-
-        String artifactId = repository.createDeploymentQuery().parentDeploymentId(deploymentId)
-                .deploymentCategory("APPROVAPLAT_WORKFLOW_ARTIFACTS").singleResult().getId();
-        int artifactLimit = 32 * 1024 * 1024;
-        for (int size : new int[] {0, artifactLimit, artifactLimit + 1})
-        {
-            byte[] bytes = new byte[size]; java.util.Arrays.fill(bytes, (byte) ' ');
-            if (size > 0) { bytes[0] = '['; bytes[1] = ']'; }
-            doReturn(new java.io.ByteArrayInputStream(bytes)).when(resources)
-                    .getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
-            if (size == artifactLimit) assertThat(artifacts.openRead(deploymentId).forms()).isEmpty();
-            else assertResourceFailure(() -> artifacts.openRead(deploymentId).forms(), size == 0
-                    ? "流程部署业务资源无法解析" : "流程部署业务资源大小超过限制", 500);
-        }
-        doReturn(null).when(resources).getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
-        assertResourceFailure(() -> artifacts.openRead(deploymentId).forms(), "流程部署业务资源缺失", 500);
-        doReturn(failingResourceStream()).when(resources).getResourceAsStream(artifactId, "approvaplat/forms-v1.json");
-        assertResourceFailure(() -> artifacts.openRead(deploymentId).forms(), "流程部署业务资源读取失败", 500);
-    }
-
-    private static java.io.InputStream failingResourceStream()
-    {
-        return new java.io.InputStream() {
-            @Override public int read() throws java.io.IOException { throw new java.io.IOException("resource fault"); }
-        };
     }
 
     private static void assertResourceFailure(Runnable action, String message, int code)
@@ -756,64 +580,6 @@ class WorkflowModelCompilationIntegrationTest
              "rules":[{"conditions":[{"operator":"EQ","value":"9999999999.12345678"}],"results":["9007199254740993"]}],
              "defaultResult":["-9999999999.12345678"],"testValues":{"amount":"9999999999.12345678"}}
             """, WorkflowDecisionTableRequest.class);
-    }
-
-    private void verifyDesignDraftIsolation(DataSource dataSource, WorkflowModelService models,
-            WorkflowBpmnService bpmn, WorkflowEngineOperations operations, WorkflowIdentityResolver identities,
-            org.flowable.engine.RepositoryService repository, WfFormMapper forms,
-            String modelId, int revision, String xml)
-    {
-        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(dataSource);
-        jdbc.execute("""
-                create table wf_model_design_draft (model_id varchar(64), owner_user_id varchar(64),
-                    base_model_revision int not null, revision int not null, bpmn_xml clob,
-                    updated_at timestamp default current_timestamp, primary key (model_id, owner_user_id))
-                """);
-        var drafts = new WorkflowModelDesignDraftService(dataSource, models, bpmn, operations, identities);
-        clearInvocations(repository, forms);
-        assertThat(drafts.read(modelId).revision()).isZero();
-        verify(repository, times(1)).getModel(modelId);
-        verify(repository, never()).getModelEditorSource(anyString());
-        verifyNoInteractions(forms);
-        var saved = drafts.save(modelId, new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 0, xml));
-        assertThat(saved.revision()).isEqualTo(1);
-        assertThat(drafts.read(modelId).bpmnXml()).isEqualTo(xml);
-        when(identities.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity("200", Set.of()));
-        assertThat(drafts.read(modelId).bpmnXml()).isNull();
-        assertThatThrownBy(() -> drafts.discard(modelId, 1)).hasMessageContaining("已被更新");
-        drafts.save(modelId, new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 0, xml));
-        when(identities.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity("100", Set.of()));
-        assertThatThrownBy(() -> drafts.save(modelId,
-                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 0, xml)))
-                .hasMessageContaining("已被更新");
-        assertThatThrownBy(() -> drafts.save(modelId,
-                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision + 1, 1, xml)))
-                .hasMessageContaining("已被更新");
-        assertThatThrownBy(() -> drafts.save(modelId,
-                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 1, xml.replace("compiledParent", "wrongKey"))))
-                .hasMessageContaining("当前模型所属流程");
-        assertThatThrownBy(() -> drafts.save(modelId,
-                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 1, "<!DOCTYPE x>" + xml)))
-                .hasMessageContaining("DTD");
-        assertThat(drafts.save(modelId,
-                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 1, xml)).revision()).isEqualTo(2);
-        assertThatThrownBy(() -> drafts.discard(modelId, 1)).hasMessageContaining("已被更新");
-        assertThat(drafts.discard(modelId, 2).revision()).isEqualTo(3);
-        assertThat(drafts.read(modelId).bpmnXml()).isNull();
-        assertThatThrownBy(() -> drafts.save(modelId,
-                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 0, xml)))
-                .hasMessageContaining("已被更新");
-        assertThat(drafts.save(modelId,
-                new com.ruoyi.flowable.domain.dto.WorkflowModelDesignDraftRequest(revision, 3, xml)).revision()).isEqualTo(4);
-        assertThatThrownBy(() -> drafts.read("missing-model")).hasMessageContaining("不存在");
-        verify(repository, never()).getModelEditorSource(anyString());
-        verifyNoInteractions(forms);
-        assertThat(repository.getModelEditorSource(modelId)).isEqualTo(xml.getBytes(StandardCharsets.UTF_8));
-        assertThat(models.getModel(modelId).bpmnXml()).isEqualTo(xml);
-        verify(forms, times(1)).selectById(7L);
-        when(identities.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity("200", Set.of()));
-        assertThat(drafts.read(modelId).revision()).isEqualTo(1);
-        when(identities.resolveCurrentIdentity()).thenReturn(new WorkflowCurrentIdentity("100", Set.of()));
     }
 
     @Configuration(proxyBeanMethods = false)

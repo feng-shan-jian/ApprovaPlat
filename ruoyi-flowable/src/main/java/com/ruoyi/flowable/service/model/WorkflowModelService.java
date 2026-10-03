@@ -1,18 +1,12 @@
 package com.ruoyi.flowable.service.model;
 
 import java.nio.charset.StandardCharsets;
-import org.springframework.transaction.annotation.Transactional;
-import com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView;
-import com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView.Option;
-import com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView.Scalar;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 import tools.jackson.core.JacksonException;
@@ -42,10 +36,6 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfCategory;
-import com.ruoyi.flowable.domain.WfDeployCallActivitySnapshot;
-import com.ruoyi.flowable.domain.WfDeployDmnSnapshot;
-import com.ruoyi.flowable.domain.WfDeployExtensionSnapshot;
-import com.ruoyi.flowable.domain.WfDeployForm;
 import com.ruoyi.flowable.domain.WfForm;
 import com.ruoyi.flowable.domain.dto.WorkflowModelDto;
 import com.ruoyi.flowable.domain.vo.WorkflowBpmnValidationIssue;
@@ -55,12 +45,10 @@ import com.ruoyi.flowable.domain.vo.WorkflowModelSaveResult;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.mapper.WfCategoryMapper;
-import com.ruoyi.flowable.mapper.WfFormMapper;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
-import com.ruoyi.flowable.service.process.WorkflowStartVariableValidator;
 
 /**
- * 流程模型版本、BPMN 设计和部署快照的业务服务。
+ * 流程模型元数据、版本命令和部署生命周期的业务服务。
  */
 @Service
 public class WorkflowModelService
@@ -109,43 +97,12 @@ public class WorkflowModelService
 
     private final WorkflowBpmnService bpmnService;
 
-    private final WorkflowBpmnIdentityValidator bpmnIdentityValidator;
-
     private final WfCategoryMapper categoryMapper;
-
-    private final WfFormMapper formMapper;
-
-    /** 8 类不可变部署资源统一通过 Flowable 子部署持久化。 */
-    private final WorkflowDeploymentArtifactRepository artifactRepository;
-
+    private final WorkflowAuthorFieldCatalogService authorFieldCatalogService;
     private final WorkflowFormTemplateValidator formTemplateValidator;
-
-    private final WorkflowStartVariableValidator startVariableValidator;
-
-    private final WorkflowExtensionDeploymentService extensionDeploymentService;
-
-    /** 受控重复审批循环的执行模型编译和部署快照服务。 */
-    private final WorkflowControlledLoopDeploymentService controlledLoopDeploymentService;
-
-    /** 排他和包容网关的受控条件编译及部署快照服务。 */
-    private final WorkflowConditionDeploymentService conditionDeploymentService;
-
-    private final WorkflowDmnDecisionService dmnDecisionService;
-
-    /** 部署时锁定自定义表单字段精确版本。 */
-    private final WorkflowFormFieldExtensionService formFieldExtensionService;
-
-    /** 部署时把调用活动编译为精确定义引用。 */
+    private final WorkflowPublicationArtifactsService publicationArtifactsService;
+    /** 旧定义停用前保留精确冻结引用的生命周期门禁。 */
     private final WorkflowCallActivityReferenceService callActivityReferenceService;
-
-    /** 审批 SLA 真实边界定时器编译和部署快照服务。 */
-    private final WorkflowTaskSlaDeploymentService taskSlaDeploymentService;
-
-    /** 所有任务生成完成后的唯一固定运行时监听器编译器。 */
-    private final WorkflowRuntimeTaskListenerCompiler runtimeTaskListenerCompiler;
-
-    /** 发起范围和单实例任务参与者规则编译及部署快照服务。 */
-    private final WorkflowParticipantRuleDeploymentService participantRuleDeploymentService;
 
     /** Flowable 模型 metaInfo 的 Jackson 3 结构化读写器。 */
     private final ObjectMapper metadataMapper = JsonMapper.shared();
@@ -157,38 +114,19 @@ public class WorkflowModelService
      */
     public WorkflowModelService(WorkflowEngineOperations engineOperations,
             RepositoryService repositoryService, WorkflowBpmnService bpmnService,
-            WorkflowBpmnIdentityValidator bpmnIdentityValidator,
-            WfCategoryMapper categoryMapper, WfFormMapper formMapper,
-            WorkflowDeploymentArtifactRepository artifactRepository,
+            WfCategoryMapper categoryMapper, WorkflowAuthorFieldCatalogService authorFieldCatalogService,
             WorkflowFormTemplateValidator formTemplateValidator,
-            WorkflowExtensionDeploymentService extensionDeploymentService,
-            WorkflowControlledLoopDeploymentService controlledLoopDeploymentService,
-            WorkflowConditionDeploymentService conditionDeploymentService,
-            WorkflowParticipantRuleDeploymentService participantRuleDeploymentService,
-            WorkflowDmnDecisionService dmnDecisionService,
-             WorkflowFormFieldExtensionService formFieldExtensionService,
-             WorkflowCallActivityReferenceService callActivityReferenceService,
-             WorkflowTaskSlaDeploymentService taskSlaDeploymentService,
-             WorkflowRuntimeTaskListenerCompiler runtimeTaskListenerCompiler)
+            WorkflowPublicationArtifactsService publicationArtifactsService,
+            WorkflowCallActivityReferenceService callActivityReferenceService)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
         this.bpmnService = bpmnService;
-        this.bpmnIdentityValidator = bpmnIdentityValidator;
         this.categoryMapper = categoryMapper;
-        this.formMapper = formMapper;
-        this.artifactRepository = artifactRepository;
+        this.authorFieldCatalogService = authorFieldCatalogService;
         this.formTemplateValidator = formTemplateValidator;
-        this.startVariableValidator = new WorkflowStartVariableValidator(formTemplateValidator);
-        this.extensionDeploymentService = extensionDeploymentService;
-        this.controlledLoopDeploymentService = controlledLoopDeploymentService;
-        this.conditionDeploymentService = conditionDeploymentService;
-        this.participantRuleDeploymentService = participantRuleDeploymentService;
-        this.dmnDecisionService = dmnDecisionService;
-        this.formFieldExtensionService = formFieldExtensionService;
+        this.publicationArtifactsService = publicationArtifactsService;
         this.callActivityReferenceService = callActivityReferenceService;
-        this.taskSlaDeploymentService = taskSlaDeploymentService;
-        this.runtimeTaskListenerCompiler = runtimeTaskListenerCompiler;
     }
 
     /**
@@ -268,7 +206,7 @@ public class WorkflowModelService
             Long formId = optionalLong(metadata, "formId");
             if (Integer.valueOf(PROCESS_FORM_TYPE).equals(formType) && formId != null)
             {
-                WfForm form = requireActiveForm(formId);
+                WfForm form = authorFieldCatalogService.requireActiveForm(formId);
                 content = form.getContent();
             }
             return toView(model, bpmnXml, content);
@@ -331,7 +269,7 @@ public class WorkflowModelService
 
             // 初始 BPMN 在任何数据库写入前完成草稿安全校验，避免保存无法被设计器读取的半成品模型。
             WfForm initialForm = request.getFormId() == null ? null
-                    : requireActiveForm(request.getFormId());
+                    : authorFieldCatalogService.requireActiveForm(request.getFormId());
             byte[] initialBpmn = createInitialBpmn(modelKey, modelName, initialForm);
             bpmnService.validateDraft(initialBpmn);
             repositoryService.saveModel(model);
@@ -420,7 +358,7 @@ public class WorkflowModelService
                 }
 
                 WorkflowBpmnDocument document = bpmnService.validateForSave(bpmnBytes);
-                validateSaveReferences(document, identity);
+                publicationArtifactsService.validateAuthorReferences(document, identity);
 
                 requireActiveCategory(source.getCategory());
                 Model latest = latestModel(source.getKey());
@@ -504,7 +442,7 @@ public class WorkflowModelService
             {
                 WorkflowBpmnDocument document = bpmnService.validateForSave(
                         source.getBytes(StandardCharsets.UTF_8));
-                validateSaveReferences(document, null);
+                publicationArtifactsService.validateAuthorReferences(document, null);
                 List<WorkflowBpmnValidationIssue> issues = bpmnService.authorValidationIssues(document);
                 return new WorkflowBpmnValidationReport(
                         issues.stream().noneMatch(issue -> "ERROR".equals(issue.severity())), issues);
@@ -641,15 +579,7 @@ public class WorkflowModelService
             requireActiveCategory(model.getCategory());
             byte[] bpmnBytes = requireModelSource(normalizedId);
             WorkflowBpmnDocument document = validateAuthorDeploymentCompatibility(bpmnBytes);
-            PreparedDeployment prepared = prepareDeployment(document, identity);
-            List<FormSnapshotSource> snapshotSources = prepared.forms();
-            var extensionDeployment = prepared.extensions();
-            var conditionDeployment = prepared.conditions();
-            var controlledLoopDeployment = prepared.loops();
-            var participantDeployment = prepared.participants();
-            var dmnDeployment = prepared.dmn();
-            var callActivityDeployment = prepared.calls();
-            var slaDeployment = prepared.sla();
+            var prepared = publicationArtifactsService.prepare(document, identity);
             byte[] executableBpmn = prepared.executableBpmn();
             Map<String, List<ProcessDefinition>> activeHistoryByKey =
                     loadActiveDefinitionsByProcessKey(document);
@@ -680,26 +610,7 @@ public class WorkflowModelService
                 repositoryService.setProcessDefinitionCategory(definition.getId(), model.getCategory());
             }
 
-            List<WfDeployForm> snapshots = buildSnapshots(deployment.getId(), snapshotSources, identity);
-            // 表单字段与服务任务共享部署扩展台账，版本引用保护和删除门禁必须覆盖两类来源。
-            List<WfDeployExtensionSnapshot> formFieldSnapshots = snapshotSources.stream()
-                    .flatMap(source -> source.extensionSnapshots().stream())
-                    .peek(snapshot -> snapshot.setCreateBy(identity.userId()))
-                    .toList();
-            List<WfDeployExtensionSnapshot> extensionSnapshots = extensionDeploymentService
-                    .snapshotsForDeployment(deployment.getId(), extensionDeployment,
-                            formFieldSnapshots);
-            List<WfDeployDmnSnapshot> dmnSnapshots = dmnDecisionService.freezeSnapshots(
-                    deployment.getId(), dmnDeployment, identity.userId());
-            List<WfDeployCallActivitySnapshot> callActivitySnapshots =
-                    callActivityReferenceService.snapshotsForDeployment(
-                            deployment.getId(), callActivityDeployment, identity.userId());
-
-            // 8 类不可变快照作为一个 Flowable 资源子部署原子提交，禁止出现部分表已写、部分表缺失。
-            artifactRepository.persist(deployment.getId(), new WorkflowDeploymentArtifacts(
-                    snapshots, conditionDeployment, controlledLoopDeployment,
-                    participantDeployment, extensionSnapshots, dmnSnapshots,
-                    callActivitySnapshots, slaDeployment));
+            publicationArtifactsService.freezeArtifacts(deployment.getId(), prepared, identity);
 
             // 记录最近一次部署关系，后续模型编辑和安全删除据此执行状态门禁。
             model.setDeploymentId(deployment.getId());
@@ -738,46 +649,6 @@ public class WorkflowModelService
         return document;
     }
 
-    /**
-     * 使用本次表单解释和独占执行模型按领域依赖顺序产生实际部署制品。
-     * @param document WorkflowBpmnDocument，事务内取得的作者输入
-     * @param identity WorkflowCurrentIdentity，本次命令的正式操作人
-     * @return PreparedDeployment，截止于持久化之前的执行资源和快照
-     */
-    private PreparedDeployment prepareDeployment(WorkflowBpmnDocument document, WorkflowCurrentIdentity identity)
-    {
-        bpmnIdentityValidator.validate(document);
-        List<FormSnapshotSource> sources = loadSnapshotSources(document.formReferences());
-        // 只有部署/完整预检需要锁定字段扩展版本；普通保存直接使用作者解释。
-        sources = sources.stream().map(source -> source.reference().sourceType() == WorkflowFormSourceType.EMBEDDED
-                ? new FormSnapshotSource(source.reference(), source.formName(), source.root(),
-                        formFieldExtensionService.freezeEmbeddedContentWithSnapshots(source.root(),
-                                source.reference().processKey(), source.reference().nodeKey())) : source).toList();
-        var schemas = buildControlledLoopFormSchemas(sources);
-        var fields = buildAuthorFormFieldCatalog(sources);
-        WorkflowAutoCopyRuleContract.validateFormUserFields(document.bpmnModel(), fields);
-        var executableModel = bpmnService.executionModel(document);
-        var extensions = extensionDeploymentService.prepare(document, executableModel, identity.userId());
-        var conditions = conditionDeploymentService.prepare(document, executableModel, schemas, identity.userId());
-        var loops = controlledLoopDeploymentService.prepare(document, executableModel, schemas, identity.userId());
-        var participants = participantRuleDeploymentService.prepare(document, executableModel, fields, identity.userId());
-        var dmn = dmnDecisionService.prepare(executableModel);
-        var calls = callActivityReferenceService.prepare(executableModel, document, identity, callActivityForms(sources));
-        var sla = taskSlaDeploymentService.prepare(executableModel, identity.userId());
-        runtimeTaskListenerCompiler.compile(executableModel);
-        byte[] executable = WorkflowBpmnXmlPreserver.write(executableModel, document.bpmnXml());
-        return new PreparedDeployment(sources, extensions, conditions, loops, participants, dmn, calls, sla, executable);
-    }
-
-    private record PreparedDeployment(List<FormSnapshotSource> forms,
-            List<com.ruoyi.flowable.domain.WfDeployExtensionSnapshot> extensions,
-            List<com.ruoyi.flowable.domain.WfDeployConditionRule> conditions,
-            List<com.ruoyi.flowable.domain.WfDeployControlledLoop> loops,
-            List<com.ruoyi.flowable.domain.WfDeployParticipantRule> participants,
-            List<WorkflowDmnDecisionService.DecisionSource> dmn,
-            List<com.ruoyi.flowable.domain.WfDeployCallActivitySnapshot> calls,
-            List<com.ruoyi.flowable.domain.WfDeployTaskSla> sla, byte[] executableBpmn) { }
-
     /** 完整执行编译但不部署、不冻结资源、不修改模型。资源行锁随事务释放，报告不能替代正式部署重验。 */
     public com.ruoyi.flowable.domain.vo.WorkflowModelPreflightView preflight(String modelId, int expectedRevision, String xml)
     {
@@ -793,7 +664,7 @@ public class WorkflowModelService
                 var document = validateAuthorDeploymentCompatibility(source.getBytes(StandardCharsets.UTF_8));
                 if (document.bpmnModel().getProcessById(model.getKey()) == null)
                     throw new ServiceException("作者内容不属于当前模型", HttpStatus.BAD_REQUEST);
-                var prepared = prepareDeployment(document, identity);
+                var prepared = publicationArtifactsService.prepare(document, identity);
                 var issues = bpmnService.executionValidationIssues(prepared.executableBpmn());
                 return new com.ruoyi.flowable.domain.vo.WorkflowModelPreflightView(digest, expectedRevision,
                         sha256((sha256(prepared.executableBpmn()) + prepared.forms().stream()
@@ -974,209 +845,6 @@ public class WorkflowModelService
     }
 
     /**
-     * 查询并校验有效表单模板。
-     *
-     * @param formId Long，表单模板主键
-     * @return WfForm，未逻辑删除且内容完整的表单模板
-     */
-    private WfForm requireActiveForm(Long formId)
-    {
-        if (formId == null || formId <= 0)
-        {
-            throw new ServiceException("表单主键不合法", HttpStatus.BAD_REQUEST);
-        }
-        WfForm form = formMapper.selectById(formId);
-        if (form == null || !ACTIVE_DEL_FLAG.equals(form.getDelFlag()))
-        {
-            throw new ServiceException("流程表单不存在或已停用", HttpStatus.NOT_FOUND);
-        }
-        if (!hasText(form.getFormName()) || !hasText(form.getContent()))
-        {
-            throw new ServiceException("流程表单模板不完整", HttpStatus.CONFLICT);
-        }
-        return form;
-    }
-
-    /**
-     * 批量加载 BPMN 节点引用的表单模板，并在部署前固定读取结果。
-     *
-     * @param references List&lt;WorkflowBpmnFormReference&gt;，BPMN 中按节点顺序解析出的表单引用
-     * @return List&lt;FormSnapshotSource&gt;，用于部署后生成不可变快照的来源数据
-     */
-    private List<FormSnapshotSource> loadSnapshotSources(List<WorkflowBpmnFormReference> references)
-    {
-        return loadSnapshotSources(references, new LinkedHashMap<>());
-    }
-
-    private List<FormSnapshotSource> loadSnapshotSources(List<WorkflowBpmnFormReference> references,
-            Map<Long, FormTemplate> formsById)
-    {
-        List<FormSnapshotSource> sources = new ArrayList<>(references.size());
-        for (WorkflowBpmnFormReference reference : references)
-        {
-            if (reference.sourceType() == WorkflowFormSourceType.TEMPLATE)
-            {
-                FormTemplate form = formsById.computeIfAbsent(reference.formId(), id -> {
-                    WfForm stored = requireActiveForm(id);
-                    return new FormTemplate(stored.getFormName(), formTemplateValidator.validate(stored.getContent()));
-                });
-                var permissionRoot = WorkflowNodeFormPermissionSnapshot.apply(form.root(), reference);
-                sources.add(new FormSnapshotSource(reference, form.name(), permissionRoot, List.of()));
-            }
-            else
-            {
-                String formName = hasText(reference.nodeName())
-                        ? reference.nodeName() + "内嵌表单" : reference.nodeKey() + "内嵌表单";
-                sources.add(new FormSnapshotSource(reference, formName, reference.embeddedContent(), List.of()));
-            }
-        }
-        return List.copyOf(sources);
-    }
-
-    /** 为尚未完成的作者图投影有效字段，不写模型、不校验无关业务配置。 */
-    @Transactional(readOnly = true)
-    public WorkflowAuthorFieldCatalogView authorFieldCatalog(String bpmnXml)
-    {
-        var author = bpmnService.readAuthorForms(bpmnXml.getBytes(StandardCharsets.UTF_8));
-        var document = author.document();
-        var issues = new ArrayList<>(author.issues());
-        Map<Long, FormTemplate> forms = new LinkedHashMap<>();
-        List<FormSnapshotSource> sources = new ArrayList<>();
-        var userBuilder = WorkflowAuthorFormFieldCatalog.builder();
-        List<WorkflowControlledLoopFormSchema> schemas = new ArrayList<>();
-        List<WorkflowAuthorFieldCatalogView.Node> nodes = new ArrayList<>();
-        Map<String, Map<String, String>> labelsByProcess = new LinkedHashMap<>();
-        Map<String, Map<String, Map<String, String>>> valuesByProcess = new LinkedHashMap<>();
-        for (var reference : document.formReferences())
-        {
-            try
-            {
-                // 内嵌自定义类型已由作者解析使用 resolveForAuthor 固定元数据；目录读取不抢部署锁。
-                var source = reference.sourceType() == WorkflowFormSourceType.EMBEDDED
-                        ? new FormSnapshotSource(reference, reference.nodeName(), reference.embeddedContent(), List.of())
-                        : loadSnapshotSources(List.of(reference), forms).get(0);
-                JsonNode root = source.root();
-                Map<String, String> labels = new LinkedHashMap<>();
-                Map<String, Map<String, String>> values = new LinkedHashMap<>();
-                formTemplateValidator.visitFields(root, (field, permission) -> {
-                    String name = field.path("vModel").asText("");
-                    if (!name.isEmpty())
-                    {
-                        labels.put(name, field.path("label").asText(name));
-                        Map<String, String> optionLabels = new LinkedHashMap<>();
-                        field.path("options").forEach(option -> {
-                            String value = option.path("value").asText("");
-                            optionLabels.put(value, option.path("label").asText(value));
-                        });
-                        values.put(name, optionLabels);
-                    }
-                });
-                var userFields = formTemplateValidator.extractUserIdSourceFieldSignatures(root);
-                var loopFields = startVariableValidator.describeControlledLoopFields(source.root());
-                userBuilder.add(reference.processKey(), reference.nodeKey(), userFields,
-                        formTemplateValidator.extractVariableNames(root));
-                schemas.add(new WorkflowControlledLoopFormSchema(reference.processKey(), reference.nodeKey(), loopFields));
-                nodes.add(new WorkflowAuthorFieldCatalogView.Node(reference.processKey(), reference.nodeKey(),
-                        fieldOptions(userFields.keySet(), labels), scalarOptions(loopFields, labels, values)));
-                labelsByProcess.computeIfAbsent(reference.processKey(), key -> new LinkedHashMap<>()).putAll(labels);
-                valuesByProcess.computeIfAbsent(reference.processKey(), key -> new LinkedHashMap<>()).putAll(values);
-                sources.add(source);
-            }
-            catch (ServiceException exception)
-            {
-                issues.add(new WorkflowAuthorFieldCatalogView.Issue(reference.processKey(), reference.nodeKey(),
-                        exception.getMessage()));
-            }
-        }
-        var users = userBuilder.build();
-        List<WorkflowAuthorFieldCatalogView.Process> processes = new ArrayList<>();
-        for (var process : document.bpmnModel().getProcesses())
-        {
-            if (!process.isExecutable() || issues.stream().anyMatch(issue -> process.getId().equals(issue.processKey())))
-                continue;
-            var processSources = sources.stream().filter(source -> source.reference().processKey().equals(process.getId())).toList();
-            Map<String, String> labels = labelsByProcess.getOrDefault(process.getId(), Map.of());
-            try
-            {
-                var processDocument = new WorkflowBpmnDocument(document.bpmnModel(), document.bpmnXml(),
-                        processSources.stream().map(FormSnapshotSource::reference).toList());
-                var contents = processSources.stream().collect(java.util.stream.Collectors.toMap(
-                        source -> source.reference().nodeKey(), FormSnapshotSource::root));
-                var conditions = conditionDeploymentService.buildProcessFieldIndex(schemas.stream()
-                        .filter(schema -> schema.processKey().equals(process.getId())).toList());
-                var calls = callActivityReferenceService.describeParentFields(processDocument, contents);
-                processes.add(new WorkflowAuthorFieldCatalogView.Process(process.getId(),
-                        fieldOptions(labels.keySet().stream().filter(name -> users.containsProcessField(process.getId(), name)).toList(), labels),
-                        scalarOptions(conditions.getOrDefault(process.getId(), Map.of()), labels,
-                                valuesByProcess.getOrDefault(process.getId(), Map.of())),
-                        calls.getOrDefault(process.getId(), List.of())));
-            }
-            catch (ServiceException exception)
-            {
-                issues.add(new WorkflowAuthorFieldCatalogView.Issue(process.getId(), "", exception.getMessage()));
-            }
-        }
-        return new WorkflowAuthorFieldCatalogView(List.copyOf(nodes), List.copyOf(processes), List.copyOf(issues));
-    }
-
-    private List<Option> fieldOptions(java.util.Collection<String> fields, Map<String, String> labels)
-    {
-        return fields.stream().sorted().map(name -> new Option(name, fieldLabel(name, labels))).toList();
-    }
-
-    private String fieldLabel(String name, Map<String, String> labels)
-    {
-        String label = labels.getOrDefault(name, name);
-        return name.equals(label) || !hasText(label) ? name : label + "（" + name + "）";
-    }
-
-    private List<Scalar> scalarOptions(Map<String, WorkflowControlledLoopFormField> fields,
-            Map<String, String> labels, Map<String, Map<String, String>> optionLabels)
-    {
-        return fields.values().stream().sorted(java.util.Comparator.comparing(WorkflowControlledLoopFormField::name))
-                .map(field -> new Scalar(field.name(), fieldLabel(field.name(), labels), field.kind().name(),
-                        field.kind() == WorkflowControlledLoopFormField.Kind.BOOLEAN
-                                ? List.of(new Option("true", "是"), new Option("false", "否"))
-                                : (field.enumValues().isEmpty() ? optionLabels.getOrDefault(field.name(), Map.of()).keySet()
-                                        : field.enumValues()).stream().sorted().map(value -> new Option(value,
-                                        optionLabels.getOrDefault(field.name(), Map.of()).getOrDefault(value, value))).toList(),
-                        field.kind() == WorkflowControlledLoopFormField.Kind.BOOLEAN || !field.enumValues().isEmpty()))
-                .toList();
-    }
-
-    /**
-     * 保存时核验作者输入、正式引用和表单规则，不生成部署执行模型。
-     *
-     * @param document WorkflowBpmnDocument，已通过 XML、安全和 Flowable 结构校验的文档
-     * @param identity WorkflowCurrentIdentity，当前操作者；内部入口允许为空
-     */
-    private void validateSaveReferences(WorkflowBpmnDocument document, WorkflowCurrentIdentity identity)
-    {
-        // 身份主数据可能在设计期间停用，每次保存、校验和部署都必须从正式表重新核验。
-        bpmnIdentityValidator.validate(document);
-        dmnDecisionService.validateReferences(document);
-        List<FormSnapshotSource> sources = loadSnapshotSources(document.formReferences());
-        List<WorkflowControlledLoopFormSchema> schemas = buildControlledLoopFormSchemas(sources);
-        // 保存、校验和部署共用冻结表单字段门禁，不能只在最终 deploy 才发现非法规则。
-        conditionDeploymentService.validate(document, schemas);
-        WorkflowAuthorFormFieldCatalog formFieldCatalog =
-                buildAuthorFormFieldCatalog(sources);
-        // 自动抄送和动态参与者必须消费同一次冻结的权限化表单目录，避免三个入口语义漂移。
-        WorkflowAutoCopyRuleContract.validateFormUserFields(
-                document.bpmnModel(), formFieldCatalog);
-        participantRuleDeploymentService.validateAuthorRules(document, formFieldCatalog);
-        taskSlaDeploymentService.validateAuthorRules(document.bpmnModel());
-        if (identity == null) callActivityReferenceService.validateAuthorReferences(document, callActivityForms(sources));
-        else callActivityReferenceService.validateAuthorReferences(document, identity, callActivityForms(sources));
-    }
-
-    private Map<String, JsonNode> callActivityForms(List<FormSnapshotSource> sources)
-    {
-        return sources.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
-                source -> source.reference().nodeKey(), FormSnapshotSource::root));
-    }
-
-    /**
      * 把服务端业务校验异常归类为客户端稳定诊断编码，不暴露内部异常类型。
      *
      * @param exception ServiceException，BPMN、身份或表单共同门禁产生的预期业务异常
@@ -1205,80 +873,6 @@ public class WorkflowModelService
             return "BPMN_XML_INVALID";
         }
         return "BPMN_CONTRACT_INVALID";
-    }
-
-    /**
-     * 使用部署主键和可信操作人生成完整表单快照集合。
-     *
-     * @param deploymentId String，刚创建的 Flowable 部署主键
-     * @param sources List&lt;FormSnapshotSource&gt;，部署前读取的节点和表单模板
-     * @param identity WorkflowCurrentIdentity，事务内重新核验的当前用户身份
-     * @return List&lt;WfDeployForm&gt;，待批量持久化的不可变部署快照
-     */
-    private List<WfDeployForm> buildSnapshots(String deploymentId, List<FormSnapshotSource> sources,
-            WorkflowCurrentIdentity identity)
-    {
-        Date now = new Date();
-        List<WfDeployForm> snapshots = new ArrayList<>(sources.size());
-        for (FormSnapshotSource source : sources)
-        {
-            WfDeployForm snapshot = new WfDeployForm();
-            snapshot.setDeployId(deploymentId);
-            snapshot.setSourceType(source.reference().sourceType().name());
-            snapshot.setFormId(source.reference().formId());
-            snapshot.setFormKey(source.reference().formKey());
-            snapshot.setNodeKey(source.reference().nodeKey());
-            snapshot.setNodeName(source.reference().nodeName());
-            snapshot.setFormName(source.formName());
-            snapshot.setContent(source.content());
-            snapshot.setDelFlag(ACTIVE_DEL_FLAG);
-            snapshot.setCreateBy(identity.userId());
-            snapshot.setCreateTime(now);
-            snapshots.add(snapshot);
-        }
-        return snapshots;
-    }
-
-    /**
-     * 从本次部署已经冻结的节点表单来源提取受控循环判断字段白名单。
-     *
-     * @param sources List&lt;FormSnapshotSource&gt;，部署事务内固定读取的节点表单来源
-     * @return List&lt;WorkflowControlledLoopFormSchema&gt;，按节点顺序返回的不可变字段白名单
-     */
-    private List<WorkflowControlledLoopFormSchema> buildControlledLoopFormSchemas(
-            List<FormSnapshotSource> sources)
-    {
-        List<WorkflowControlledLoopFormSchema> schemas = new ArrayList<>(sources.size());
-        for (FormSnapshotSource source : sources)
-        {
-            WorkflowBpmnFormReference reference = source.reference();
-            schemas.add(new WorkflowControlledLoopFormSchema(reference.processKey(),
-                    reference.nodeKey(), startVariableValidator
-                            .describeControlledLoopFields(source.root())));
-        }
-        return List.copyOf(schemas);
-    }
-
-    /**
-     * 从权限化表单快照构建自动抄送和参与者规则共用的正式用户主键字段目录。
-     * 每个来源只解析并全量校验一次，用户主键签名和全部变量名只读复用同一根节点。
-     * @param sources List&lt;FormSnapshotSource&gt;，部署事务内固定读取的表单来源
-     * @return WorkflowAuthorFormFieldCatalog，按流程和节点隔离的不可变正式字段目录
-     */
-    private WorkflowAuthorFormFieldCatalog buildAuthorFormFieldCatalog(
-            List<FormSnapshotSource> sources)
-    {
-        WorkflowAuthorFormFieldCatalog.Builder builder =
-                WorkflowAuthorFormFieldCatalog.builder();
-        for (FormSnapshotSource source : sources)
-        {
-            WorkflowBpmnFormReference reference = source.reference();
-            JsonNode root = source.root();
-            builder.add(reference.processKey(), reference.nodeKey(),
-                    formTemplateValidator.extractUserIdSourceFieldSignatures(root),
-                    formTemplateValidator.extractVariableNames(root));
-        }
-        return builder.build();
     }
 
     /**
@@ -1743,7 +1337,7 @@ public class WorkflowModelService
         Long formId = request.getFormId();
         if (formId != null)
         {
-            requireActiveForm(formId);
+            authorFieldCatalogService.requireActiveForm(formId);
         }
         if (Integer.valueOf(PROCESS_FORM_TYPE).equals(formType) && formId == null)
         {
@@ -1866,21 +1460,4 @@ public class WorkflowModelService
     {
     }
 
-    /** 当次不同模板的原始解释；多个节点从此各自派生权限。 */
-    private record FormTemplate(String name, JsonNode root) { }
-
-    /**
-     * 部署快照的节点引用和表单模板固定读取结果。
-     *
-     * @param reference WorkflowBpmnFormReference，BPMN 节点表单引用
-     * @param formName String，部署时固化的表单名称
-     * @param content String，部署时固化的正式表单 JSON
-     * @param extensionSnapshots List&lt;WfDeployExtensionSnapshot&gt;，内嵌自定义字段的精确版本快照
-     */
-    private record FormSnapshotSource(WorkflowBpmnFormReference reference,
-            String formName, JsonNode root,
-            List<WfDeployExtensionSnapshot> extensionSnapshots)
-    {
-        private String content() { return root.toString(); }
-    }
 }

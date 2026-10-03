@@ -1,5 +1,7 @@
 package com.ruoyi.flowable.service.model;
 
+import com.ruoyi.flowable.service.integration.WorkflowConnectorEndpointService;
+import com.ruoyi.flowable.service.integration.WorkflowSqlDataSourceService;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -46,8 +48,8 @@ public class WorkflowExtensionDeploymentService
     private static final int MAX_CONFIG_BYTES = 16 * 1024;
     private final WorkflowExtensionRegistryService registryService;
     private final WorkflowJavaExtensionHandlerRegistry handlerRegistry;
-    private final WorkflowHttpConnector httpConnector;
-    private final WorkflowSqlConnector sqlConnector;
+    private final WorkflowConnectorEndpointService httpConnector;
+    private final WorkflowSqlDataSourceService sqlConnector;
     private final ObjectMapper objectMapper = JsonMapper.shared();
     /** CEL 配置在部署和运行时复用同一纯代码沙箱。 */
     private final WorkflowCelSandbox celSandbox = new WorkflowCelSandbox();
@@ -58,8 +60,8 @@ public class WorkflowExtensionDeploymentService
      */
     public WorkflowExtensionDeploymentService(WorkflowExtensionRegistryService registryService,
             WorkflowJavaExtensionHandlerRegistry handlerRegistry,
-            WorkflowHttpConnector httpConnector,
-            WorkflowSqlConnector sqlConnector)
+            WorkflowConnectorEndpointService httpConnector,
+            WorkflowSqlDataSourceService sqlConnector)
     {
         this.registryService = registryService;
         this.handlerRegistry = handlerRegistry;

@@ -24,7 +24,7 @@ import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.runtime.WorkflowNotificationMetrics;
 import com.ruoyi.flowable.runtime.WorkflowRedisAtomicOperations;
-import com.ruoyi.framework.web.service.PermissionService;
+import com.ruoyi.system.service.SysPermissionEvaluator;
 
 /**
  * 人工催办业务服务，唯一负责只读能力投影以及正式写入的权限、运行状态、任务、接收人和冷却编排。
@@ -43,7 +43,7 @@ public class WorkflowManualUrgeService
 
     private final JdbcTemplate jdbcTemplate;
     private final WorkflowEngineOperations engineOperations;
-    private final PermissionService permissionService;
+    private final SysPermissionEvaluator permissionService;
     private final WorkflowNotificationService notificationService;
     private final WorkflowRedisAtomicOperations redisAtomicOperations;
     private final WorkflowNotificationProperties properties;
@@ -54,7 +54,7 @@ public class WorkflowManualUrgeService
      * 构造后由 Spring 管理
      */
     public WorkflowManualUrgeService(JdbcTemplate jdbcTemplate,
-            WorkflowEngineOperations engineOperations, PermissionService permissionService,
+            WorkflowEngineOperations engineOperations, SysPermissionEvaluator permissionService,
             WorkflowNotificationService notificationService,
             WorkflowRedisAtomicOperations redisAtomicOperations,
             WorkflowNotificationProperties properties, WorkflowNotificationMetrics metrics)

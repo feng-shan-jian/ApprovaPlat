@@ -9,23 +9,18 @@ import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
-import com.ruoyi.framework.web.service.TokenService;
 
 /**
  * 使用 RuoYi Token 根密钥派生的用途子密钥执行 SMTP 授权码 AES-256-GCM 加解密。
  */
-@Service
 public class WorkflowMailCredentialCipher
 {
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
     private static final int IV_BYTES = 12;
     private static final int TAG_BITS = 128;
-    private static final String KEY_PURPOSE = "approvaplat-mail-credential";
     private static final byte[] AUTHENTICATED_CONTEXT =
             "approvaplat-mail-credential:v1".getBytes(StandardCharsets.UTF_8);
 
@@ -33,23 +28,11 @@ public class WorkflowMailCredentialCipher
     private final SecureRandom secureRandom;
 
     /**
-     * 使用 RuoYi 既有 Token 密钥体系创建正式授权码加密服务。
-     *
-     * 构造后由 Spring 管理
-     */
-    @Autowired
-    public WorkflowMailCredentialCipher(TokenService tokenService)
-    {
-        this(requireTokenService(tokenService).deriveAes256Key(KEY_PURPOSE),
-                new SecureRandom());
-    }
-
-    /**
-     * 创建可注入派生子密钥和安全随机源的授权码加密服务，供基础设施测试复用。
+     * 创建可注入派生子密钥和安全随机源的授权码加密服务，由应用装配层提供。
      *
      * 完成依赖保存
      */
-    WorkflowMailCredentialCipher(SecretKey credentialKey,
+    public WorkflowMailCredentialCipher(SecretKey credentialKey,
             SecureRandom secureRandom)
     {
         byte[] encodedKey = credentialKey == null ? null : credentialKey.getEncoded();
@@ -170,18 +153,4 @@ public class WorkflowMailCredentialCipher
         }
     }
 
-    /**
-     * 校验生产构造器必须取得已经初始化的 RuoYi Token 服务。
-     *
-     * @param tokenService TokenService，可空 Spring 注入值
-     * @return TokenService，非空既有 Token 服务
-     */
-    private static TokenService requireTokenService(TokenService tokenService)
-    {
-        if (tokenService == null)
-        {
-            throw new IllegalArgumentException("RuoYi Token 密钥服务不能为空");
-        }
-        return tokenService;
-    }
 }

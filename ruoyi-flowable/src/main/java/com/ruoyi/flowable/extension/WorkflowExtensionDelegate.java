@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.extension;
 
+import com.ruoyi.flowable.service.integration.WorkflowHttpExecution;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.engine.delegate.JavaDelegate;
@@ -99,14 +100,14 @@ public class WorkflowExtensionDelegate implements JavaDelegate
             if (WorkflowExtensionRegistryService.HTTP_TYPE.equals(snapshot.getExtensionType())
                     && WorkflowHttpConnector.IMPLEMENTATION_KEY.equals(snapshot.getImplementationKey()))
             {
-                requireStableVersion(snapshot, httpConnector.configSchema());
+                requireStableVersion(snapshot, WorkflowHttpExecution.configSchema());
                 httpConnector.execute(execution, config);
                 return;
             }
             if (WorkflowExtensionRegistryService.SQL_TYPE.equals(snapshot.getExtensionType())
                     && WorkflowSqlConnector.IMPLEMENTATION_KEY.equals(snapshot.getImplementationKey()))
             {
-                requireStableVersion(snapshot, sqlConnector.configSchema());
+                requireStableVersion(snapshot, WorkflowSqlTemplateValidator.configSchema());
                 sqlConnector.execute(execution, config);
                 return;
             }

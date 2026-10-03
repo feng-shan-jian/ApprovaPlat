@@ -41,7 +41,7 @@ import com.ruoyi.flowable.mapper.WfMultiInstanceRoundMapper;
 import com.ruoyi.flowable.service.task.MultiInstanceRoundTerminationPlan;
 import com.ruoyi.flowable.service.task.WorkflowMultiInstanceRoundTerminationService;
 import com.ruoyi.flowable.service.task.WorkflowTaskSlaRuntimeService;
-import com.ruoyi.framework.web.service.PermissionService;
+import com.ruoyi.system.service.SysPermissionEvaluator;
 import com.ruoyi.flowable.service.notification.WorkflowNotificationService;
 
 /**
@@ -110,7 +110,7 @@ public class WorkflowProcessInstanceService
     private final WorkflowMultiInstanceRoundTerminationService
             multiInstanceRoundTerminationService;
 
-    private final PermissionService permissionService;
+    private final SysPermissionEvaluator permissionService;
 
     /** SLA 时钟冻结和 Flowable timer job 重排服务。 */
     private final WorkflowTaskSlaRuntimeService taskSlaRuntimeService;
@@ -131,7 +131,7 @@ public class WorkflowProcessInstanceService
             WfMultiInstanceRoundMapper multiInstanceRoundMapper,
             WorkflowMultiInstanceRoundTerminationService
                     multiInstanceRoundTerminationService,
-            PermissionService permissionService,
+            SysPermissionEvaluator permissionService,
             WorkflowTaskSlaRuntimeService taskSlaRuntimeService,
             WorkflowNotificationService notificationService)
     {

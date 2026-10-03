@@ -1,12 +1,12 @@
 package com.ruoyi.flowable.service.model;
 
 import java.nio.charset.StandardCharsets;
+import com.ruoyi.flowable.service.model.WorkflowCallActivityFields.FieldSpec;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -72,6 +72,7 @@ public class WorkflowCallActivityReferenceService
     private final WorkflowParticipantRuleRuntimeService participantRuleRuntimeService;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WorkflowFormTemplateValidator formTemplateValidator;
+    private final WorkflowCallActivityFields callActivityFields;
     private final ObjectMapper objectMapper = JsonMapper.shared();
 
     /**
@@ -91,6 +92,7 @@ public class WorkflowCallActivityReferenceService
         this.participantRuleRuntimeService = participantRuleRuntimeService;
         this.artifactRepository = artifactRepository;
         this.formTemplateValidator = formTemplateValidator;
+        this.callActivityFields = new WorkflowCallActivityFields(formTemplateValidator);
     }
 
     /**
@@ -169,7 +171,7 @@ public class WorkflowCallActivityReferenceService
     public void validateAuthorReferences(WorkflowBpmnDocument document,
             WorkflowCurrentIdentity actor, Map<String, JsonNode> nodeFormContents)
     {
-        var parentFields = parentFieldCatalogs(document, nodeFormContents);
+        var parentFields = callActivityFields.parentFieldCatalogs(document, nodeFormContents);
         var localProcessKeys = executableProcessKeys(document.bpmnModel());
         Map<String, TargetFieldCatalog> targetCatalogs = new LinkedHashMap<>();
         for (Process process : document.bpmnModel().getProcesses())
@@ -205,7 +207,7 @@ public class WorkflowCallActivityReferenceService
             WorkflowBpmnDocument authorDocument, WorkflowCurrentIdentity actor,
             Map<String, JsonNode> nodeFormContents)
     {
-        var parentFields = parentFieldCatalogs(authorDocument, nodeFormContents);
+        var parentFields = callActivityFields.parentFieldCatalogs(authorDocument, nodeFormContents);
         Map<String, TargetFieldCatalog> targetCatalogs = new LinkedHashMap<>();
         Set<String> localProcessKeys = executableProcessKeys(authorDocument.bpmnModel());
         List<WfDeployCallActivitySnapshot> snapshots = new ArrayList<>();
@@ -533,39 +535,6 @@ public class WorkflowCallActivityReferenceService
     }
 
     /**
-     * 从作者文档的正式模板或内嵌表单构建各父流程字段目录。
-     * @param document WorkflowBpmnDocument，已解析作者文档
-     * @return Map&lt;String, Map&lt;String, FieldSpec&gt;&gt;，按父流程 key 分组的字段目录
-     */
-    /** 作者目录与最终映射门禁复用同一合并、权限交集和类型冲突规则。 */
-    Map<String, List<WorkflowCallActivityVariableView>> describeParentFields(WorkflowBpmnDocument document,
-            Map<String, JsonNode> nodeFormContents)
-    {
-        Map<String, List<WorkflowCallActivityVariableView>> result = new LinkedHashMap<>();
-        parentFieldCatalogs(document, nodeFormContents).forEach((key, fields) -> result.put(key, toVariableViews(fields)));
-        return Map.copyOf(result);
-    }
-
-    private Map<String, Map<String, FieldSpec>> parentFieldCatalogs(WorkflowBpmnDocument document,
-            Map<String, JsonNode> nodeFormContents)
-    {
-        Map<String, Map<String, FieldSpec>> catalogs = new LinkedHashMap<>();
-        for (WorkflowBpmnFormReference reference : document.formReferences())
-        {
-            Process process = document.bpmnModel().getProcessById(reference.processKey());
-            if (process == null || process.getFlowElement(reference.nodeKey(), true) == null
-                    || !nodeFormContents.containsKey(reference.nodeKey()))
-            {
-                throw dataError("调用活动父表单不属于当前流程节点");
-            }
-            mergeFields(catalogs.computeIfAbsent(reference.processKey(), key -> new LinkedHashMap<>()),
-                    extractFieldSpecs(nodeFormContents.get(reference.nodeKey())), "父流程表单字段类型冲突");
-        }
-        return catalogs.entrySet().stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
-                Map.Entry::getKey, entry -> Map.copyOf(entry.getValue())));
-    }
-
-    /**
      * 从子流程不可变部署表单快照提取开始输入字段和全部可读输出字段。
      * @param definition ProcessDefinition，目标已发布定义
      * @return TargetFieldCatalog，输入和输出字段目录
@@ -603,66 +572,15 @@ public class WorkflowCallActivityReferenceService
             {
                 throw dataError("子流程部署表单快照结构异常");
             }
-            Map<String, FieldSpec> fields = extractFieldSpecs(formTemplateValidator.validate(snapshot.getContent()));
-            mergeFields(outputs, fields, "子流程输出字段类型冲突");
+            Map<String, FieldSpec> fields = callActivityFields.extractFieldSpecs(formTemplateValidator.validate(snapshot.getContent()));
+            callActivityFields.mergeFields(outputs, fields, "子流程输出字段类型冲突");
             if (startNodeId.equals(snapshot.getNodeKey()))
             {
-                mergeFields(inputs, fields, "子流程输入字段类型冲突");
+                callActivityFields.mergeFields(inputs, fields, "子流程输入字段类型冲突");
             }
         }
         return new TargetFieldCatalog(Map.copyOf(inputs), Map.copyOf(outputs),
-                toVariableViews(inputs), toVariableViews(outputs));
-    }
-
-    /**
-     * 从已校验表单 JSON 提取可安全映射的标量字段。
-     * @param content String，正式模板或部署快照 JSON
-     * @return Map&lt;String, FieldSpec&gt;，按表单顺序去重的标量字段
-     */
-    private Map<String, FieldSpec> extractFieldSpecs(JsonNode root)
-    {
-        Map<String, FieldSpec> fields = new LinkedHashMap<>();
-        collectFieldSpecs(root, fields);
-        return Map.copyOf(fields);
-    }
-
-    /**
-     * 递归收集表单字段，只开放单值文本、数值、布尔和受控标量。
-     * @param root JsonNode，已经验证的完整表单
-     * @param fields Map&lt;String, FieldSpec&gt;，调用方维护的字段目录
-     * @return void，集合、附件、表格和范围字段不会进入映射目录
-     */
-    private void collectFieldSpecs(JsonNode root, Map<String, FieldSpec> fields)
-    {
-        formTemplateValidator.visitFields(root, (field, permission) ->
-        {
-            String name = text(field, "vModel");
-            WorkflowFormTemplateValidator.FieldType fieldType;
-            try
-            {
-                fieldType = formTemplateValidator.resolveFieldType(field);
-            }
-            catch (ServiceException exception)
-            {
-                throw dataError(exception.getMessage());
-            }
-            String type = fieldType == null ? null : fieldType.scalarType();
-            if (hasText(name) && VARIABLE_PATTERN.matcher(name).matches() && type != null)
-            {
-                String label = firstText(text(field, "label"), name);
-                boolean required = booleanValue(field, "required", false) && permission.writable();
-                boolean readable = permission.readable();
-                boolean writable = permission.writable()
-                        && !booleanValue(field, "disabled", false);
-                boolean systemWritable = booleanValue(field, "workflowSystemWritable", false);
-                FieldSpec candidate = new FieldSpec(name, label, type, required, readable, writable, systemWritable);
-                FieldSpec previous = fields.putIfAbsent(name, candidate);
-                if (previous != null && !previous.type().equals(candidate.type()))
-                {
-                    throw dataError("流程表单包含同名异构字段");
-                }
-            }
-        });
+                callActivityFields.toVariableViews(inputs), callActivityFields.toVariableViews(outputs));
     }
 
     /**
@@ -767,47 +685,6 @@ public class WorkflowCallActivityReferenceService
                 .map(String::trim).collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
-    /**
-     * 合并字段目录并阻止同名异构字段静默覆盖。
-     * @param target Map&lt;String, FieldSpec&gt;，目标目录
-     * @param source Map&lt;String, FieldSpec&gt;，来源目录
-     * @param conflictMessage String，类型冲突提示
-     * @return void，类型一致时保留首次字段业务名称
-     */
-    private void mergeFields(Map<String, FieldSpec> target, Map<String, FieldSpec> source,
-            String conflictMessage)
-    {
-        source.forEach((name, field) ->
-        {
-            FieldSpec previous = target.putIfAbsent(name, field);
-            if (previous != null && !previous.type().equals(field.type()))
-            {
-                throw new ServiceException(conflictMessage + ": " + name + " (" + previous.type() + " / " + field.type() + ")", HttpStatus.CONFLICT);
-            }
-            if (previous != null)
-            {
-                // 一个流程变量贯穿多个表单节点；权限取交集，必填约束取并集。
-                target.put(name, new FieldSpec(name, previous.label(), previous.type(),
-                        previous.required() || field.required(),
-                        previous.readable() && field.readable(),
-                        previous.writable() && field.writable(), previous.systemWritable() && field.systemWritable()));
-            }
-        });
-    }
-
-    /**
-     * 将内部字段规则转换为不泄露表单正文的目录视图。
-     * @param fields Map&lt;String, FieldSpec&gt;，字段规则
-     * @return List&lt;WorkflowCallActivityVariableView&gt;，按变量名稳定排序的视图
-     */
-    private List<WorkflowCallActivityVariableView> toVariableViews(Map<String, FieldSpec> fields)
-    {
-        return fields.values().stream().sorted(Comparator.comparing(FieldSpec::name))
-                .map(field -> new WorkflowCallActivityVariableView(field.name(), field.label(),
-                        field.type(), field.required(), field.readable(), field.writable(), field.systemWritable()))
-                .toList();
-    }
-
     /** @param left String，来源字段类型。@param right String，目标字段类型。@return boolean，同型或 SCALAR 兼容时返回 true。 */
     private boolean compatibleTypes(String left, String right)
     {
@@ -859,20 +736,6 @@ public class WorkflowCallActivityReferenceService
         return new ServiceException(message, HttpStatus.ERROR).setSubCode("CALL_ACTIVITY_CATALOG_DATA_INVALID");
     }
 
-    /** @param node JsonNode，可空对象。@param field String，字段名。@return String，文本值或空串。 */
-    private String text(JsonNode node, String field)
-    {
-        JsonNode value = node == null ? null : node.get(field);
-        return value != null && value.isTextual() ? value.asText() : "";
-    }
-
-    /** @param node JsonNode，可空对象。@param field String，字段名。@param fallback boolean，默认值。@return boolean，布尔值。 */
-    private boolean booleanValue(JsonNode node, String field, boolean fallback)
-    {
-        JsonNode value = node == null ? null : node.get(field);
-        return value != null && value.isBoolean() ? value.asBoolean() : fallback;
-    }
-
     /** @param preferred String，优先值。@param fallback String，后备值。@return String，第一个非空文本。 */
     private String firstText(String preferred, String fallback)
     {
@@ -890,10 +753,6 @@ public class WorkflowCallActivityReferenceService
     {
         return value != null && !value.isBlank();
     }
-
-    /** 调用活动映射可使用的表单字段规则。 */
-    private record FieldSpec(String name, String label, String type, boolean required,
-            boolean readable, boolean writable, boolean systemWritable) { }
 
     /** 子流程输入和输出字段的内部目录与对外视图。 */
     private record TargetFieldCatalog(Map<String, FieldSpec> inputFieldMap,

@@ -7,7 +7,7 @@ const form = () => ({ formName: '办理表单', content, values: { note: '服务
 const runtimeKeys = ['processInstanceId', 'processStatus', 'currentTask', 'nextUserAssignmentPolicy', 'multiInstanceState',
   'completeAllowed', 'rejectAllowed', 'returnAllowed', 'delegateAllowed', 'transferAllowed', 'resolveAllowed', 'resubmitAllowed', 'urgeAllowed']
 
-async function openDetail(page) {
+async function openDetail(page, cached = false) {
   const state = {
     detail: {
       processInstanceId: 'instance-a', processName: '观察验收', processStatus: 'running', version: 1,
@@ -20,22 +20,32 @@ async function openDetail(page) {
     },
     waiting: { processInstanceId: 'instance-a', localTimerExecutionReady: true, truncated: false,
       waits: [{ type: 'RECEIVE', nodeId: 'wait', eventName: '收件', executionId: 'execution-a', state: 'running' }] },
-    full: 0, light: 0, inFlight: 0, maxInFlight: 0, fullFailure: 0, lightFailure: 0, hold: null, miFailure: 0, completions: []
+    full: 0, light: 0, inFlight: 0, maxInFlight: 0, fullFailure: 0, lightFailure: 0, hold: null, miFailure: 0,
+    completionFailure: 409, completions: [], adjustments: [], adjustFailure: 409, observedTasks: []
   }
   await page.context().addCookies([{ name: 'Admin-Token', value: 'observation-frontend-only', url: test.info().project.use.baseURL }])
   await page.route('**/dev-api/**', async route => {
     const path = new URL(route.request().url()).pathname.replace('/dev-api', '')
     const reply = data => route.fulfill({ json: { code: 200, ...data } })
     if (path === '/getInfo') return reply({ user: { userId: 1, userName: '观察测试' }, roles: ['admin'], permissions: ['*:*:*'] })
-    if (path === '/getRouters') return reply({ data: [] })
+    if (path === '/getRouters') return reply({ data: cached ? [{ path: '/workflow', component: 'Layout', children: [
+      { path: 'process-detail/:instanceId', name: 'WorkflowProcessDetail', component: 'workflow/work/detail', hidden: true, meta: { title: '观察详情' } },
+      { path: 'form', name: 'WorkflowForm', component: 'workflow/form/index', meta: { title: '流程表单' } }
+    ] }] : [] })
     if (path === '/workflow/task/complete') {
       state.completions.push(route.request().postDataJSON())
-      return reply({ code: 409, subCode: 'WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT', msg: '成员修订冲突' })
+      return reply(state.completionFailure ? { code: state.completionFailure, subCode: 'WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT', msg: '成员修订冲突' } : {})
     }
+    if (path === '/workflow/task/multiInstance/adjust') {
+      state.adjustments.push(route.request().postDataJSON())
+      return reply(state.adjustFailure ? { code: state.adjustFailure, subCode: 'WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT', msg: '成员修订冲突' } : {})
+    }
+    if (path === '/workflow/identity/options') return reply({ rows: [{ type: 'user', value: '2', label: '新增成员' }] })
     if (path.startsWith('/workflow/task/multiInstance/')) return reply(state.miFailure
       ? { code: state.miFailure, msg: '会签任务失权' } : { data: state.detail.multiInstanceState })
     if (path !== endpoint && path !== `${endpoint}/runtime`) return reply({ data: [], rows: [], total: 0 })
     const full = path === endpoint
+    state.observedTasks.push(new URL(route.request().url()).searchParams.get('taskId'))
     state[full ? 'full' : 'light']++
     state.inFlight++
     state.maxInFlight = Math.max(state.maxInFlight, state.inFlight)
@@ -257,4 +267,89 @@ test('完成修订冲突只更新成员版本并保留意见；冲突后失权�
   expect(state.completions[1].expectedRevision).toBe(2)
   await page.clock.runFor(30000)
   expect(state.full).toBe(fullBefore)
+})
+
+test('办理成功在actionBusy尚未释放时完成强制详情刷新', async ({ page }) => {
+  const state = await openDetail(page)
+  await page.clock.runFor(1000)
+  state.completionFailure = 0
+  await page.getByRole('button', { name: '通过', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '通过任务' })
+  await dialog.getByPlaceholder('请输入审批意见').fill('通过后刷新')
+  state.detail.processName = '动作后的授权详情'
+  await dialog.getByRole('button', { name: '确认', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '动作后的授权详情' })).toBeVisible()
+  expect(state.full).toBe(2)
+  expect(state.completions).toHaveLength(1)
+  expect(state.maxInFlight).toBe(1)
+})
+
+test('MI加签冲突在busy期间全量复核仍保留弹窗意见和选择，重试使用新revision', async ({ page }) => {
+  const state = await openDetail(page)
+  state.detail.multiInstanceState = { mode: 'ALL', activityId: 'review', revision: 1, adjustmentAllowed: true, addAllowed: true, remainingCapacity: 4, members: [] }
+  await tick(page, state, true)
+  await page.locator('.workflow-detail__actions').getByRole('button', { name: '加签', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '增加会签成员' })
+  await dialog.getByPlaceholder('请输入加签原因').fill('保留加签意见')
+  await dialog.getByRole('combobox').click()
+  await page.clock.runFor(300)
+  await page.getByRole('option', { name: '新增成员', exact: true }).click()
+  await page.keyboard.press('Escape')
+  state.detail.multiInstanceState.revision = 2
+  const before = state.full
+  await dialog.getByRole('button', { name: '确认', exact: true }).click()
+  await expect.poll(() => state.full).toBe(before + 1)
+  await expect(dialog.getByPlaceholder('请输入加签原因')).toHaveValue('保留加签意见')
+  await expect(dialog.getByText('新增成员', { exact: true }).last()).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '确认', exact: true })).toBeEnabled()
+  state.adjustFailure = 0
+  await dialog.getByRole('button', { name: '确认', exact: true }).click()
+  await expect.poll(() => state.full).toBe(before + 2)
+  expect(state.adjustments.map(request => request.expectedRevision)).toEqual([1, 2])
+  expect(state.adjustments[1]).toMatchObject({ comment: '保留加签意见', userIds: [2] })
+  expect(state.maxInFlight).toBe(1)
+})
+
+test('同页切任务时旧响应不能提交，最新任务请求等旧请求结束后发出', async ({ page }) => {
+  const state = await openDetail(page)
+  await note(page).fill('旧任务输入')
+  state.hold = 'light'
+  await page.clock.runFor(3001)
+  await expect.poll(() => Boolean(state.release)).toBe(true)
+  state.detail.currentTask.taskId = 'task-b'
+  state.detail.processName = '新任务详情'
+  // 浏览器历史导航触发真实 Vue Router 的同页复用，不重新装载整个文档。
+  await page.evaluate(() => {
+    window.history.pushState({}, '', '/workflow/process-detail/instance-a?taskId=task-b')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+  await expect(page).toHaveURL(/taskId=task-b/)
+  await expect(page.locator('.workflow-detail__actions')).toHaveCount(0)
+  expect(state.full).toBe(1)
+  state.release()
+  await expect(page.getByRole('heading', { name: '新任务详情' })).toBeVisible()
+  await expect(note(page)).toHaveValue('服务端原值')
+  expect(state.observedTasks.at(-1)).toBe('task-b')
+  expect(state.maxInFlight).toBe(1)
+})
+
+test('详情缓存首次只加载一次，离开暂停并在回页重授权后保留同任务输入', async ({ page }) => {
+  const state = await openDetail(page, true)
+  await page.clock.runFor(300)
+  expect(state.full).toBe(1)
+  await note(page).fill('缓存中的草稿')
+  await page.getByRole('menuitem', { name: '流程表单', exact: true }).click()
+  await expect(page).toHaveURL(/\/workflow\/form$/)
+  await page.clock.runFor(500)
+  await expect(page.getByRole('textbox', { name: '表单名称', exact: true })).toBeVisible()
+  await page.clock.runFor(60000)
+  const before = [state.full, state.light]
+  expect(before).toEqual([1, 0])
+  state.detail.processName = '缓存回页重新授权'
+  await page.goBack()
+  await page.clock.runFor(500)
+  await expect(page.getByRole('heading', { name: '缓存回页重新授权' })).toBeVisible()
+  await expect(note(page)).toHaveValue('缓存中的草稿')
+  expect([state.full, state.light]).toEqual([before[0] + 1, before[1]])
+  expect(state.maxInFlight).toBe(1)
 })

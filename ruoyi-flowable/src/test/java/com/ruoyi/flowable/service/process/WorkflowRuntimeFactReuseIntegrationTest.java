@@ -104,8 +104,10 @@ class WorkflowRuntimeFactReuseIntegrationTest
             var notifications = mock(WorkflowNotificationService.class);
             var copies = mock(WorkflowTaskCopyService.class);
             when(copies.prepare(any(), any(), any(), anyList())).thenReturn(WorkflowTaskCopyService.CopyPlan.empty());
-            var returns = new WorkflowTaskReturnApplicationService(operations, reader,
-                    bpmnReader, movement, returnedState, new WorkflowTaskActionAuditWriter(tasks),
+            var returnPreparation = new WorkflowTaskReturnPreparation(operations, reader,
+                    bpmnReader, movement, returnedState, groups);
+            var returns = new WorkflowTaskReturnApplicationService(operations, returnPreparation, reader,
+                    returnedState, new WorkflowTaskActionAuditWriter(tasks),
                     new WorkflowTaskConcurrencyExecutor(), groups, copies, notifications, runtime);
             var artifacts = spy(new WorkflowDeploymentArtifactRepository(repository));
             var attachments = mock(WorkflowAttachmentService.class);
@@ -116,9 +118,11 @@ class WorkflowRuntimeFactReuseIntegrationTest
                     attachments, copies, new WorkflowNextTaskAssignmentService(selection, tasks, runtime, snapshotReader), mi,
                     new WorkflowControlledLoopService(runtime, tasks, mock(com.ruoyi.flowable.mapper.WfControlledLoopExecutionMapper.class)),
                     new WorkflowTaskActionAuditWriter(tasks), new WorkflowTaskConcurrencyExecutor(), runtime, tasks, identities);
-            var resubmits = new WorkflowApplicationResubmitApplicationService(operations,
+            var resubmitPreparation = new WorkflowApplicationResubmitPreparation(operations,
+                    reader, returnedState, groups, artifacts, runtime);
+            var resubmits = new WorkflowApplicationResubmitApplicationService(operations, resubmitPreparation,
                     reader, returnedState, new WorkflowTaskActionAuditWriter(tasks), new WorkflowTaskConcurrencyExecutor(),
-                    groups, artifacts, new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator()),
+                    groups, new WorkflowStartVariableValidator(new WorkflowFormTemplateValidator()),
                     attachments, notifications, runtime);
             var access = mock(WorkflowProcessAccessService.class);
             when(access.requireReadableTask(anyString(), any(), any())).thenAnswer(invocation -> taskSnapshot(
@@ -140,7 +144,7 @@ class WorkflowRuntimeFactReuseIntegrationTest
             var projection = spy(new WorkflowProcessHistoryProjection(history, tasks, repository, names));
             var details = spy(new WorkflowProcessDetailService(operations, access, repository, tasks, deployments, artifacts,
                     variables, forms,
-                    projection, mi, returns, resubmits,
+                    projection, mi, returnPreparation, resubmitPreparation,
                     returnedState, identities, mock(WorkflowManualUrgeService.class), mock(WorkflowControlledLoopService.class)));
 
             // 全部 fixture 与写动作处于独立事务；MySQL 使用已有结构并在测试后回滚全部部署、轮次和引擎数据。
@@ -388,7 +392,7 @@ class WorkflowRuntimeFactReuseIntegrationTest
                 """.formatted(key, recipient, recipient, key, key, recipient)).deploy();
         ProcessInstance root = operations.writeAsCurrentUser(actor -> runtime.createProcessInstanceBuilder()
                 .processDefinitionKey(key).businessStatus("running").start());
-        var permission = mock(com.ruoyi.framework.web.service.PermissionService.class);
+        var permission = mock(com.ruoyi.system.service.SysPermissionEvaluator.class);
         when(permission.hasPermi(anyString())).thenReturn(true);
         var notifications = mock(WorkflowNotificationService.class);
         when(notifications.registerManualUrge(any())).thenAnswer(invocation ->

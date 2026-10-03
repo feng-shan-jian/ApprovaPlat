@@ -137,7 +137,9 @@ import {
 } from '@/api/workflow/draft'
 import { getProcessBpmnXml, getProcessForm } from '@/api/workflow/process'
 import { listApprovalUserOptions } from '@/api/workflow/identity'
+import { getWorkflowAttachment } from '@/api/workflow/attachment'
 import { useWorkflowUserOptions } from '@/components/workflow/useWorkflowUserOptions.js'
+import { flattenFormFields, normalizeFormTemplate } from '@/components/workflow/form/formTemplate'
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import ProcessViewer from '@/components/workflow/ProcessViewer.vue'
 
@@ -292,10 +294,27 @@ async function applyDraft(draft, replaceValues) {
   replaceFormSnapshot(snapshot)
   if (replaceValues) {
     businessKey.value = draft.businessKey || ''
-    formValues.value = JSON.parse(JSON.stringify(draft.variables || {}))
+    formValues.value = await restoreDraftAttachments(draft.variables)
     replaceMultiInstanceSelections(draft.multiInstanceUserIds)
     if (startAssignments.value.length) await searchApprovalUsers('')
   }
+}
+
+/**
+ * 草稿保留 UUID 存储合同，仅对部署快照中可展示的附件字段恢复授权元数据。
+ * @param {object} values 草稿变量值。
+ * @returns {Promise<object>} 可交给表单组件展示和操作的独立变量副本。
+ */
+async function restoreDraftAttachments(values) {
+  const restored = JSON.parse(JSON.stringify(values || {}))
+  const fields = flattenFormFields(normalizeFormTemplate(formSnapshot.content).fields)
+    .filter(field => field.tag === 'el-upload' && !field.hidden && field.readable)
+  await Promise.all(fields.map(async field => {
+    if (!Array.isArray(restored[field.variable])) return
+    restored[field.variable] = await Promise.all(restored[field.variable].map(async attachment =>
+      typeof attachment === 'string' ? (await getWorkflowAttachment(attachment)).data : attachment))
+  }))
+  return restored
 }
 
 /**

@@ -82,6 +82,7 @@ class WorkflowTaskReturnChainIntegrationTest
     private TaskService taskService;
     private HistoryService historyService;
     private WorkflowTaskReturnApplicationService returnApplicationService;
+    private WorkflowTaskReturnPreparation returnPreparation;
     private WorkflowApplicationResubmitApplicationService resubmitApplicationService;
     private WorkflowTaskCopyService taskCopyService;
     private WorkflowNotificationService notificationService;
@@ -142,27 +143,25 @@ class WorkflowTaskReturnChainIntegrationTest
         WorkflowMultiInstanceGroupTransitionService groupTransitionService =
                 mock(WorkflowMultiInstanceGroupTransitionService.class);
 
+        var reader = new WorkflowTaskRuntimeReader(runtimeService, taskService, historyService);
+        var returnedState = new WorkflowReturnedTaskStateService(new WorkflowReturnedAssignmentCodec(),
+                runtimeService, taskService, identityResolver);
+        returnPreparation = new WorkflowTaskReturnPreparation(engineOperations, reader,
+                new WorkflowTaskBpmnReader(repositoryService), new WorkflowTaskMovementPolicy(),
+                returnedState, groupTransitionService);
+        var resubmitPreparation = new WorkflowApplicationResubmitPreparation(engineOperations, reader,
+                returnedState, groupTransitionService, artifactRepository, runtimeService);
         returnApplicationService = new WorkflowTaskReturnApplicationService(engineOperations,
-                        new WorkflowTaskRuntimeReader(runtimeService, taskService,
-                                historyService),
-                        new WorkflowTaskBpmnReader(repositoryService),
-                        new WorkflowTaskMovementPolicy(),
-                        new WorkflowReturnedTaskStateService(
-                                new WorkflowReturnedAssignmentCodec(),
-                                runtimeService, taskService, identityResolver),
+                        returnPreparation, reader, returnedState,
                         new WorkflowTaskActionAuditWriter(taskService),
                         new WorkflowTaskConcurrencyExecutor(),
                         groupTransitionService, taskCopyService,
                         notificationService, runtimeService);
         resubmitApplicationService = new WorkflowApplicationResubmitApplicationService(engineOperations,
-                        new WorkflowTaskRuntimeReader(runtimeService, taskService,
-                                historyService),
-                        new WorkflowReturnedTaskStateService(
-                                new WorkflowReturnedAssignmentCodec(),
-                                runtimeService, taskService, identityResolver),
+                        resubmitPreparation, reader, returnedState,
                         new WorkflowTaskActionAuditWriter(taskService),
                         new WorkflowTaskConcurrencyExecutor(),
-                        groupTransitionService, artifactRepository,
+                        groupTransitionService,
                         new WorkflowStartVariableValidator(
                                 new WorkflowFormTemplateValidator()),
                         attachmentService, notificationService, runtimeService);
@@ -251,7 +250,7 @@ class WorkflowTaskReturnChainIntegrationTest
                 .filter(task -> firstHistoricNode.equals(task.getTaskDefinitionKey()))
                 .findFirst().orElseThrow();
 
-        assertThat(returnApplicationService.isTaskReturnAllowed(sourceTask, instance,
+        assertThat(returnPreparation.isTaskReturnAllowed(sourceTask, instance,
                 new WorkflowCurrentIdentity(currentUserId.get(), Set.of()),
                 new WorkflowTaskBpmnReader(repositoryService).require(instance.getProcessDefinitionId()), null,
                 () -> new WorkflowTaskRuntimeReader(runtimeService, taskService, historyService)
@@ -387,7 +386,7 @@ class WorkflowTaskReturnChainIntegrationTest
             assertThat(reader.readHistoricTasksAscending(scenario.instance().getId(), 501))
                     .extracting(org.flowable.task.api.history.HistoricTaskInstance::getId)
                     .containsExactlyElementsOf(projectedHistory.stream().map(org.flowable.task.api.history.HistoricTaskInstance::getId).toList());
-            assertThat(returnApplicationService.isTaskReturnAllowed(scenario.secondTask(), scenario.instance(),
+            assertThat(returnPreparation.isTaskReturnAllowed(scenario.secondTask(), scenario.instance(),
                     new WorkflowCurrentIdentity(SECOND_APPROVER_ID, Set.of()),
                     new WorkflowTaskBpmnReader(repositoryService).require(scenario.instance().getProcessDefinitionId()),
                     null, () -> projectedHistory, taskService.createTaskQuery().processInstanceId(scenario.instance().getId()).active().list()))

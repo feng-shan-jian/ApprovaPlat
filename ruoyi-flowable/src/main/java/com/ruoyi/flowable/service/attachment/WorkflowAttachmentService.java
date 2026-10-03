@@ -38,7 +38,7 @@ import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfAttachmentMapper;
 
 /**
- * 工作流附件领域服务，统一处理临时归属、对象授权、流程绑定和可重试物理清理。
+ * 工作流附件领域服务，处理临时归属、对象授权、流程绑定及逻辑删除。
  */
 @Service
 public class WorkflowAttachmentService
@@ -54,10 +54,6 @@ public class WorkflowAttachmentService
     private static final Pattern ATTACHMENT_ID_PATTERN = Pattern.compile(
             "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}");
 
-    /** 物理文件或清理元数据处理失败时落库的固定脱敏错误码。 */
-    private static final String CLEANUP_FAILURE_ERROR_CODE =
-            "attachment_storage_cleanup_failed";
-
     /** 用户临时附件数量或字节配额超限时返回的稳定机器子码。 */
     private static final String QUOTA_EXCEEDED_SUB_CODE =
             "WORKFLOW_ATTACHMENT_QUOTA_EXCEEDED";
@@ -69,6 +65,7 @@ public class WorkflowAttachmentService
     private final WfAttachmentMapper attachmentMapper;
     private final WorkflowAttachmentStorage storage;
     private final WorkflowAttachmentUploadJournal uploadJournal;
+    private final WorkflowAttachmentCleanupCoordinator cleanupCoordinator;
     private final TransactionTemplate uploadTransaction;
     private final WorkflowAttachmentProperties properties;
     private final WorkflowIdentityResolver identityResolver;
@@ -85,16 +82,16 @@ public class WorkflowAttachmentService
             WorkflowIdentityResolver identityResolver,
             WorkflowProcessAccessService processAccessService,
             WorkflowAttachmentUploadJournal uploadJournal,
+            WorkflowAttachmentCleanupCoordinator cleanupCoordinator,
             PlatformTransactionManager transactionManager)
     {
         this.attachmentMapper = attachmentMapper;
         this.storage = storage;
         this.uploadJournal = uploadJournal;
+        this.cleanupCoordinator = cleanupCoordinator;
         this.uploadTransaction = new TransactionTemplate(transactionManager);
         this.uploadTransaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         this.properties = properties;
-        // 配置绑定在依赖 Bean 创建前完成，此处拒绝跨字段关系非法的退避参数。
-        this.properties.validateCleanupRetryBackoff();
         this.identityResolver = identityResolver;
         this.processAccessService = processAccessService;
         this.objectMapper = JsonMapper.shared();
@@ -306,7 +303,7 @@ public class WorkflowAttachmentService
         }
         if (attachment.status() == WorkflowAttachmentStatus.DELETED)
         {
-            cleanupOwnedDeletedAttachment(normalizedId);
+            cleanupCoordinator.cleanupOwnedDeletedAttachment(normalizedId);
             return;
         }
         if (attachment.status() != WorkflowAttachmentStatus.TEMP)
@@ -319,47 +316,7 @@ public class WorkflowAttachmentService
         {
             throw stateConflict();
         }
-        cleanupOwnedDeletedAttachment(normalizedId);
-    }
-
-    /**
-     * 为已逻辑删除的本人附件领取单行租约，并在事务外完成对象删除和按令牌回写。
-     * 其他节点已经持有有效租约时直接返回，逻辑删除结果仍保持成功且由调度器继续处理。
-     *
-     * @param attachmentId String，已迁移为 DELETED 的附件 UUID
-     * @return void，物理删除失败时已持久化重试并继续抛出存储异常
-     */
-    private void cleanupOwnedDeletedAttachment(String attachmentId)
-    {
-        String claimToken = UUID.randomUUID().toString();
-        if (attachmentMapper.claimDeletedAttachment(attachmentId, claimToken,
-                cleanupLeaseSeconds()) != 1)
-        {
-            return;
-        }
-        WfAttachment claimed = attachmentMapper.selectById(attachmentId);
-        if (claimed == null || !claimToken.equals(claimed.cleanupClaimToken())
-                || claimed.status() != WorkflowAttachmentStatus.DELETED)
-        {
-            throw new ServiceException("工作流附件清理领取结果异常", HttpStatus.ERROR);
-        }
-        try
-        {
-            deleteClaimedStorage(claimed);
-            completeClaimedCleanup(claimed);
-        }
-        catch (WorkflowAttachmentStorageOperationException failure)
-        {
-            try
-            {
-                persistCleanupRetry(claimed);
-            }
-            catch (RuntimeException retryFailure)
-            {
-                failure.addSuppressed(retryFailure);
-            }
-            throw failure;
-        }
+        cleanupCoordinator.cleanupOwnedDeletedAttachment(normalizedId);
     }
 
     /**
@@ -608,177 +565,6 @@ public class WorkflowAttachmentService
     private void verifyStoredAttachment(WfAttachment attachment)
     {
         storage.verify(attachment.storageKey(), attachment.fileSize(), attachment.sha256());
-    }
-
-    /**
-     * 在短事务中锁定并领取一批到期附件；到期 TEMP 会在同一更新中迁移为 EXPIRED。
-     * 候选查询使用 SKIP LOCKED，其他节点已锁定或仍持有有效租约的行不会阻塞本批次。
-     *
-     * @param claimToken String，协调器生成的规范 UUID 批次令牌
-     * @return List&lt;WfAttachment&gt;，已写入相同 token/lease 的正式候选快照
-     */
-    List<WfAttachment> claimCleanupBatch(String claimToken)
-    {
-        String normalizedToken = requireCleanupClaimToken(claimToken);
-        List<WfAttachment> candidates = attachmentMapper
-                .selectCleanupCandidatesForUpdate(properties.getCleanupBatchSize());
-        if (candidates == null || candidates.isEmpty())
-        {
-            return List.of();
-        }
-        List<String> attachmentIds = candidates.stream()
-                .map(WfAttachment::attachmentId)
-                .toList();
-        if (attachmentMapper.claimCleanupCandidates(attachmentIds, normalizedToken,
-                cleanupLeaseSeconds()) != attachmentIds.size())
-        {
-            throw new ServiceException("工作流附件清理批次领取失败", HttpStatus.ERROR);
-        }
-        List<WfAttachment> claimed = attachmentMapper.selectClaimedByToken(normalizedToken);
-        if (claimed == null || claimed.size() != attachmentIds.size()
-                || claimed.stream().anyMatch(item ->
-                        !normalizedToken.equals(item.cleanupClaimToken())
-                        || item.cleanupLeaseUntil() == null
-                        || (item.status() != WorkflowAttachmentStatus.EXPIRED
-                            && item.status() != WorkflowAttachmentStatus.DELETED)))
-        {
-            throw new ServiceException("工作流附件清理批次领取结果异常", HttpStatus.ERROR);
-        }
-        return List.copyOf(claimed);
-    }
-
-    /**
-     * 在数据库事务外幂等删除已领取附件的私有对象。
-     *
-     * @param attachment WfAttachment，带有当前批次 token/lease 的领取快照
-     * @return void，存储依赖失败时抛出 WorkflowAttachmentStorageOperationException
-     */
-    void deleteClaimedStorage(WfAttachment attachment)
-    {
-        requireClaimedCleanupAttachment(attachment);
-        storage.delete(attachment.storageKey());
-    }
-
-    /**
-     * 以候选快照中的重试版本原子调度下一次清理，并兼容手工删除的并发完成结果。
-     *
-     * @param attachment WfAttachment，本轮清理失败的候选快照
-     * @return boolean，仍存在待重试记录时为 true，并发方已完成物理清理时为 false
-     */
-    boolean persistCleanupRetry(WfAttachment attachment)
-    {
-        requireClaimedCleanupAttachment(attachment);
-        int expectedRetryCount = attachment.cleanupRetryCount();
-        if (expectedRetryCount < 0)
-        {
-            throw new ServiceException("工作流附件清理重试状态数据异常", HttpStatus.ERROR);
-        }
-        LocalDateTime nextRetryTime = LocalDateTime.now().plus(
-                properties.cleanupRetryDelay(expectedRetryCount));
-        if (attachmentMapper.scheduleCleanupRetry(attachment.attachmentId(),
-                attachment.cleanupClaimToken(), expectedRetryCount, nextRetryTime,
-                CLEANUP_FAILURE_ERROR_CODE) == 1)
-        {
-            return true;
-        }
-
-        // 0 行可能是租约过期后被重领或其他节点已完成，旧令牌不得覆盖新所有者状态。
-        WfAttachment latest = attachmentMapper.selectById(attachment.attachmentId());
-        if (latest != null && latest.storageDeletedTime() != null
-                && (latest.status() == WorkflowAttachmentStatus.EXPIRED
-                    || latest.status() == WorkflowAttachmentStatus.DELETED))
-        {
-            return false;
-        }
-        if (latest != null && !attachment.cleanupClaimToken()
-                .equals(latest.cleanupClaimToken()))
-        {
-            return false;
-        }
-        throw new ServiceException("工作流附件清理重试状态写入失败", HttpStatus.ERROR);
-    }
-
-    /**
-     * 在短事务中仅按领取令牌记录对象删除完成并清空租约和重试状态。
-     *
-     * @param attachment WfAttachment，已在事务外完成对象删除的领取快照
-     * @return boolean，本令牌首次完成返回 true；租约被重领或其他节点已完成返回 false
-     */
-    boolean completeClaimedCleanup(WfAttachment attachment)
-    {
-        requireClaimedCleanupAttachment(attachment);
-        if (attachmentMapper.markStorageDeleted(attachment.attachmentId(),
-                attachment.cleanupClaimToken()) == 1)
-        {
-            return true;
-        }
-
-        // token 不再匹配表示租约已过期并被其他节点重领，旧执行者只能放弃回写。
-        WfAttachment latest = attachmentMapper.selectById(attachment.attachmentId());
-        if (latest != null && latest.storageDeletedTime() != null
-                && (latest.status() == WorkflowAttachmentStatus.EXPIRED
-                    || latest.status() == WorkflowAttachmentStatus.DELETED))
-        {
-            return false;
-        }
-        if (latest != null && !attachment.cleanupClaimToken()
-                .equals(latest.cleanupClaimToken()))
-        {
-            return false;
-        }
-        throw new ServiceException("工作流附件清理状态写入失败", HttpStatus.ERROR);
-    }
-
-    /**
-     * 校验清理候选携带完整且合法的领取状态，禁止无令牌对象删除或状态回写。
-     *
-     * @param attachment WfAttachment，协调器处理的领取快照
-     * @return void，领取状态不完整时抛出稳定服务异常
-     */
-    private void requireClaimedCleanupAttachment(WfAttachment attachment)
-    {
-        if (attachment == null
-                || !ATTACHMENT_ID_PATTERN.matcher(attachment.attachmentId()).matches()
-                || !ATTACHMENT_ID_PATTERN.matcher(
-                        String.valueOf(attachment.cleanupClaimToken())).matches()
-                || attachment.cleanupLeaseUntil() == null
-                || (attachment.status() != WorkflowAttachmentStatus.EXPIRED
-                    && attachment.status() != WorkflowAttachmentStatus.DELETED)
-                || attachment.storageDeletedTime() != null)
-        {
-            throw new ServiceException("工作流附件清理领取状态异常", HttpStatus.ERROR);
-        }
-    }
-
-    /**
-     * 校验协调器生成的领取令牌为规范 UUID。
-     *
-     * @param claimToken String，待持久化的清理批次令牌
-     * @return String，原样返回的规范令牌
-     */
-    private String requireCleanupClaimToken(String claimToken)
-    {
-        if (!StringUtils.hasText(claimToken)
-                || !ATTACHMENT_ID_PATTERN.matcher(claimToken).matches())
-        {
-            throw new ServiceException("工作流附件清理令牌格式非法", HttpStatus.ERROR);
-        }
-        return claimToken;
-    }
-
-    /**
-     * 将已校验的清理租约转换为 MySQL TIMESTAMPADD 使用的正数秒数。
-     *
-     * @return long，至少一秒且不超过一天的租约秒数
-     */
-    private long cleanupLeaseSeconds()
-    {
-        long leaseSeconds = properties.getCleanupLeaseDuration().toSeconds();
-        if (leaseSeconds <= 0L)
-        {
-            throw new ServiceException("工作流附件清理租约配置异常", HttpStatus.ERROR);
-        }
-        return leaseSeconds;
     }
 
     /**

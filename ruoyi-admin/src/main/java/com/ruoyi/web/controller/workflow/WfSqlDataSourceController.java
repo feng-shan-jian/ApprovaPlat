@@ -19,7 +19,7 @@ import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.enums.BusinessType;
 import com.ruoyi.flowable.domain.dto.WorkflowSqlDataSourceRequest;
 import com.ruoyi.flowable.domain.dto.WorkflowSqlDataSourceStatusRequest;
-import com.ruoyi.flowable.service.model.WorkflowSqlDataSourceService;
+import com.ruoyi.flowable.service.integration.WorkflowSqlDataSourceService;
 
 /**
  * SQL 连接器受控数据源目录与不可回退修订管理接口。

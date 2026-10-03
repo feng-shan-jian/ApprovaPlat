@@ -44,6 +44,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowModelSaveResult;
 import com.ruoyi.flowable.domain.vo.WorkflowModelView;
 import com.ruoyi.flowable.service.IWfCategoryService;
 import com.ruoyi.flowable.service.model.WorkflowModelService;
+import com.ruoyi.flowable.service.model.WorkflowAuthorFieldCatalogService;
 
 /**
  * Flowable 8 流程模型管理接口。
@@ -60,6 +61,7 @@ public class WfModelController extends BaseController
     private static final int MAX_EXPORT_ROWS = 5000;
 
     private final WorkflowModelService modelService;
+    private final WorkflowAuthorFieldCatalogService authorFieldCatalogService;
     private final com.ruoyi.flowable.service.model.WorkflowModelDesignDraftService designDraftService;
 
     private final IWfCategoryService categoryService;
@@ -71,9 +73,11 @@ public class WfModelController extends BaseController
      */
     public WfModelController(WorkflowModelService modelService,
             IWfCategoryService categoryService,
-            com.ruoyi.flowable.service.model.WorkflowModelDesignDraftService designDraftService)
+            com.ruoyi.flowable.service.model.WorkflowModelDesignDraftService designDraftService,
+            WorkflowAuthorFieldCatalogService authorFieldCatalogService)
     {
         this.modelService = modelService;
+        this.authorFieldCatalogService = authorFieldCatalogService;
         this.categoryService = categoryService;
         this.designDraftService = designDraftService;
     }
@@ -216,7 +220,7 @@ public class WfModelController extends BaseController
     @PostMapping("/author-field-catalog")
     public AjaxResult authorFieldCatalog(@Valid @RequestBody WorkflowBpmnValidationRequest request)
     {
-        return success(modelService.authorFieldCatalog(request.bpmnXml()));
+        return success(authorFieldCatalogService.catalog(request.bpmnXml()));
     }
 
     /**

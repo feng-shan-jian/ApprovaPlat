@@ -1,6 +1,5 @@
 package com.ruoyi.framework.web.service;
 
-import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -10,7 +9,7 @@ import com.ruoyi.common.core.domain.model.LoginUser;
 import com.ruoyi.common.utils.SecurityUtils;
 import com.ruoyi.common.utils.StringUtils;
 import com.ruoyi.framework.security.context.PermissionContextHolder;
-import com.ruoyi.system.service.ISysMenuService;
+import com.ruoyi.system.service.SysPermissionEvaluator;
 
 /**
  * RuoYi首创 自定义权限实现，ss取自SpringSecurity首字母
@@ -20,19 +19,16 @@ import com.ruoyi.system.service.ISysMenuService;
 @Service("ss")
 public class PermissionService
 {
-    /** 需要按正式主数据实时复核的工作流权限前缀。 */
-    private static final String WORKFLOW_PERMISSION_PREFIX = "workflow:";
-
-    private final ISysMenuService menuService;
+    private final SysPermissionEvaluator permissionEvaluator;
 
     /**
      * 创建权限校验服务。
      *
      * 构造后由 Spring 以 ss 名称管理
      */
-    public PermissionService(ISysMenuService menuService)
+    public PermissionService(SysPermissionEvaluator permissionEvaluator)
     {
-        this.menuService = menuService;
+        this.permissionEvaluator = permissionEvaluator;
     }
 
     /**
@@ -53,9 +49,7 @@ public class PermissionService
             return false;
         }
         bindPermissionContext(permission);
-        // Token 是登录时快照；工作流权限还必须通过当前数据库授权，撤权才能立即生效。
-        return hasPermissions(loginUser.getPermissions(), permission)
-                && hasCurrentWorkflowPermission(loginUser, permission);
+        return permissionEvaluator.hasPermi(loginUser, permission);
     }
 
     /**
@@ -76,16 +70,7 @@ public class PermissionService
             return false;
         }
         bindPermissionContext(permissions);
-        Set<String> authorities = loginUser.getPermissions();
-        for (String permission : permissions.split(Constants.PERMISSION_DELIMITER))
-        {
-            if (permission != null && hasPermissions(authorities, permission)
-                    && hasCurrentWorkflowPermission(loginUser, permission))
-            {
-                return true;
-            }
-        }
-        return false;
+        return permissionEvaluator.hasAnyPermi(loginUser, permissions);
     }
 
     /**
@@ -117,18 +102,6 @@ public class PermissionService
     }
 
     /**
-     * 判断是否包含权限
-     * 
-     * @param permissions 权限列表
-     * @param permission 权限字符串
-     * @return 用户是否具备某权限
-     */
-    private boolean hasPermissions(Set<String> permissions, String permission)
-    {
-        return permissions.contains(Constants.ALL_PERMISSION) || permissions.contains(StringUtils.trim(permission));
-    }
-
-    /**
      * 在真实 HTTP 请求中记录数据权限表达式，领域线程和调度线程则跳过请求级副作用。
      *
      * @param permission String，当前正在判定的单个或多个权限表达式
@@ -136,40 +109,11 @@ public class PermissionService
      */
     private void bindPermissionContext(String permission)
     {
-        // 工作流领域服务可在受控并发线程中复用本服务，不能强制依赖 DispatcherServlet 绑定。
+        // 非 HTTP 的表达式求值没有请求级数据权限上下文。
         if (RequestContextHolder.getRequestAttributes() != null)
         {
             PermissionContextHolder.setContext(permission);
         }
     }
 
-    /**
-     * 对工作流权限实时复核当前用户与有效角色、菜单的正式关系。
-     *
-     * @param loginUser LoginUser，当前认证 Token 中的用户快照
-     * @param permission String，待复核的单个权限字符串
-     * @return boolean，非工作流权限或超级管理员返回 true；普通用户仅在数据库仍授权时返回 true
-     */
-    private boolean hasCurrentWorkflowPermission(LoginUser loginUser,
-            String permission)
-    {
-        String normalizedPermission = StringUtils.trim(permission);
-        if (!normalizedPermission.startsWith(WORKFLOW_PERMISSION_PREFIX))
-        {
-            return true;
-        }
-        Long userId = loginUser.getUserId();
-        if (userId == null)
-        {
-            return false;
-        }
-        if (SecurityUtils.isAdmin(userId))
-        {
-            return true;
-        }
-
-        Set<String> currentPermissions = menuService.selectMenuPermsByUserId(userId);
-        return !CollectionUtils.isEmpty(currentPermissions)
-                && hasPermissions(currentPermissions, normalizedPermission);
-    }
 }

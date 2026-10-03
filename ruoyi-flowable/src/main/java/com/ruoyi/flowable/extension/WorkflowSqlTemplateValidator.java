@@ -1,5 +1,8 @@
 package com.ruoyi.flowable.extension;
 
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -29,6 +32,23 @@ import com.ruoyi.common.exception.ServiceException;
 @Component
 public class WorkflowSqlTemplateValidator
 {
+    public static final Set<String> AUTHOR_FIELDS = Set.of(
+            "dataSourceKey", "sql", "parameters", "resultVariable", "maxRows",
+            "idempotencyColumn");
+    public static final Set<String> FROZEN_FIELDS = Set.of(
+            "dataSourceKey", "sql", "parameters", "resultVariable", "maxRows",
+            "idempotencyColumn", "operation", "tables", "dataSourceSnapshot");
+    private static final String CONFIG_SCHEMA = """
+            {"type":"object","additionalProperties":false,
+             "required":["dataSourceKey","sql","parameters"],
+             "properties":{"dataSourceKey":{"type":"string","pattern":"^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
+             "sql":{"type":"string","minLength":1,"maxLength":8192},
+             "parameters":{"type":"object","additionalProperties":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$"}},
+             "resultVariable":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
+             "idempotencyColumn":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_$]{0,127}$"},
+             "maxRows":{"type":"integer","minimum":1,"maximum":1000}}}
+            """;
+
     /** 单个 SQL 模板 UTF-8 字符上限，避免解析和日志资源失控。 */
     private static final int MAX_SQL_LENGTH = 8192;
     /** 流程变量和 SQL 命名参数共同使用的稳定标识格式。 */
@@ -330,4 +350,145 @@ public class WorkflowSqlTemplateValidator
             return positionalParameterSeen;
         }
     }
+    /**
+     * 返回固定作者配置 Schema。
+     * @return String，规范 JSON Schema
+     */
+    public static String configSchema()
+    {
+        return WorkflowExtensionJsonCanonicalizer.canonicalize(CONFIG_SCHEMA);
+    }
+
+    /**
+     * 解析作者字段并拒绝附加配置、空模板和非法变量名。
+     * @param config JsonNode，作者配置
+     * @param allowed Set&lt;String&gt;，允许字段集合
+     * @return AuthorConfig，规范作者配置
+     */
+    public static AuthorConfig parseAuthor(JsonNode config, Set<String> allowed)
+    {
+        if (config == null || !config.isObject())
+        {
+            throw new ServiceException("SQL 连接器配置必须是对象", HttpStatus.BAD_REQUEST);
+        }
+        config.propertyStream().forEach(entry ->
+        {
+            if (!allowed.contains(entry.getKey()))
+            {
+                throw new ServiceException("SQL 连接器包含未授权配置", HttpStatus.BAD_REQUEST);
+            }
+        });
+        String key = requiredText(config, "dataSourceKey", 128);
+        String sql = requiredText(config, "sql", 8192);
+        JsonNode mappings = config.get("parameters");
+        if (mappings == null || !mappings.isObject() || mappings.size() > 128)
+        {
+            throw new ServiceException("SQL 参数映射必须是有界对象", HttpStatus.BAD_REQUEST);
+        }
+        mappings.propertyStream().forEach(entry ->
+        {
+            if (!entry.getValue().isTextual()
+                    || !WorkflowVariableNames.isIdentifier(entry.getValue().asText()))
+            {
+                throw new ServiceException("SQL 参数只能映射到受控流程变量", HttpStatus.BAD_REQUEST);
+            }
+        });
+        String result = optionalVariable(config, "resultVariable");
+        String idempotencyColumn = optionalText(config, "idempotencyColumn");
+        if (idempotencyColumn != null
+                && !idempotencyColumn.matches("[A-Za-z_][A-Za-z0-9_$]{0,127}"))
+        {
+            throw new ServiceException("SQL 幂等唯一列格式不合法", HttpStatus.BAD_REQUEST);
+        }
+        int maxRows = config.has("maxRows") ? config.get("maxRows").asInt(-1) : 100;
+        if (maxRows < 1 || maxRows > 1000)
+        {
+            throw new ServiceException("SQL 查询行数上限不合法", HttpStatus.BAD_REQUEST);
+        }
+        return new AuthorConfig(key, sql, (ObjectNode) mappings, result,
+                idempotencyColumn, maxRows);
+    }
+
+    /**
+     * 要求模板每个参数都有唯一变量映射；系统幂等键由运行时注入。
+     * @param author AuthorConfig，作者参数映射
+     * @param template WorkflowSqlTemplate，AST 参数清单
+     * @return void，缺失或多余映射时拒绝
+     */
+    public static void requireParameterMapping(AuthorConfig author, WorkflowSqlTemplate template)
+    {
+        Set<String> expected = new java.util.TreeSet<>(template.parameterNames());
+        expected.remove("idempotencyKey");
+        Set<String> actual = new java.util.TreeSet<>();
+        author.parameters().propertyStream().forEach(entry -> actual.add(entry.getKey()));
+        if (!expected.equals(actual))
+        {
+            throw new ServiceException("SQL 参数映射与模板命名参数不一致", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    /**
+     * 读取必填短文本。
+     * @param node JsonNode，来源对象
+     * @param field String，字段名
+     * @param max int，最大长度
+     * @return String，去空白文本
+     */
+    public static String requiredText(JsonNode node, String field, int max)
+    {
+        JsonNode value = node.get(field);
+        String text = value != null && value.isTextual() ? value.asText().trim() : "";
+        if (text.isEmpty() || text.length() > max)
+        {
+            throw new ServiceException("SQL 连接器字段 " + field + " 不合法", HttpStatus.BAD_REQUEST);
+        }
+        return text;
+    }
+
+    /**
+     * 读取可选流程变量名。
+     * @param node JsonNode，来源对象
+     * @param field String，字段名
+     * @return String，合法变量名或 null
+     */
+    public static String optionalVariable(JsonNode node, String field)
+    {
+        String value = optionalText(node, field);
+        if (value != null && !WorkflowVariableNames.isBusinessVariable(value))
+        {
+            throw new ServiceException("SQL 结果变量名不合法或属于保留变量", HttpStatus.BAD_REQUEST);
+        }
+        return value;
+    }
+
+    /**
+     * 读取可选文本。
+     * @param node JsonNode，来源对象
+     * @param field String，字段名
+     * @return String，空值转为 null
+     */
+    public static String optionalText(JsonNode node, String field)
+    {
+        JsonNode value = node.get(field);
+        return value != null && value.isTextual() && !value.asText().isBlank()
+                ? value.asText().trim() : null;
+    }
+
+    /**
+     * 向 JSON 写入可选文本。
+     * @param node ObjectNode，目标对象
+     * @param field String，字段名
+     * @param value String，可空值
+     * @return void，空值不写入
+     */
+    public static void putOptional(ObjectNode node, String field, String value)
+    {
+        if (value != null)
+        {
+            node.put(field, value);
+        }
+    }
+
+    public record AuthorConfig(String dataSourceKey, String sql, ObjectNode parameters,
+            String resultVariable, String idempotencyColumn, int maxRows) { }
 }

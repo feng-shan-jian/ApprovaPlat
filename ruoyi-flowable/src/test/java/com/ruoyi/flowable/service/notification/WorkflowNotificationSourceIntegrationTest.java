@@ -3,6 +3,8 @@ package com.ruoyi.flowable.service.notification;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.RETURNS_SELF;
 
 import java.util.List;
 import java.util.Set;
@@ -77,6 +79,54 @@ class WorkflowNotificationSourceIntegrationTest
             writer.writeRequiredInbox(required("invalid source"));
         })).isInstanceOf(ServiceException.class).hasMessage("通知来源标识不合法");
         assertThat(countRows()).isZero();
+    }
+
+    @Test
+    void withdrawalCancellationRunsBeforeCommitAndRollsBackWithTheBusinessAction()
+    {
+        var outbox = new WorkflowNotificationOutboxService(jdbc,
+                new com.ruoyi.flowable.config.WorkflowNotificationProperties(),
+                mock(com.ruoyi.flowable.runtime.WorkflowNotificationMetrics.class),
+                mock(com.ruoyi.flowable.identity.WorkflowIdentityResolver.class));
+        var actualWriter = new WorkflowNotificationWriter(jdbc, outbox);
+        var taskService = mock(org.flowable.engine.TaskService.class);
+        var query = mock(org.flowable.task.api.TaskQuery.class, RETURNS_SELF);
+        var task = mock(org.flowable.task.api.Task.class);
+        when(taskService.createTaskQuery()).thenReturn(query);
+        when(query.singleResult()).thenReturn(task);
+        when(task.getProcessInstanceId()).thenReturn(prefix);
+        var service = new WorkflowNotificationService(jdbc, null, null, taskService, null, null,
+                new WorkflowNotificationPlanner(jdbc), actualWriter, outbox, null);
+        var notification = new NotificationPlan.Notification("APPROVAL", prefix,
+                "MANUAL_URGE", recipient, "reuse", prefix, prefix, null, recipient,
+                "催办", "beforeCommit 合同", null, "/workflow/work/detail", Set.of("EMAIL"), 3);
+        try
+        {
+            transaction.executeWithoutResult(status -> actualWriter.write(new NotificationPlan(List.of(notification))));
+            assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
+                service.onTasksWithdrawn(prefix, List.of(prefix));
+                assertThat(outboxStatus()).isEqualTo("PENDING");
+                throw new ServiceException("业务失败", 409);
+            })).isInstanceOf(ServiceException.class);
+            assertThat(outboxStatus()).isEqualTo("PENDING");
+            transaction.executeWithoutResult(status -> {
+                service.onTasksWithdrawn(prefix, List.of(prefix));
+                assertThat(outboxStatus()).isEqualTo("PENDING");
+            });
+            assertThat(outboxStatus()).isEqualTo("CANCELLED");
+        }
+        finally
+        {
+            jdbc.update("delete from wf_notification_outbox where process_instance_id=? and source_id=?", prefix, prefix);
+        }
+        assertThat(jdbc.queryForObject("select count(*) from wf_notification_outbox where process_instance_id=?",
+                Integer.class, prefix)).isZero();
+    }
+
+    private String outboxStatus()
+    {
+        return jdbc.queryForObject("select status from wf_notification_outbox where process_instance_id=? and source_id=?",
+                String.class, prefix, prefix);
     }
 
     private WorkflowInboxNotification required(String source)

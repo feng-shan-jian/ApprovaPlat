@@ -1,5 +1,12 @@
 package com.ruoyi.flowable.service.notification;
 
+import org.flowable.common.engine.impl.identity.Authentication;
+import org.flowable.engine.HistoryService;
+import org.flowable.engine.history.HistoricProcessInstance;
+import org.flowable.engine.runtime.ProcessInstance;
+import org.flowable.identitylink.api.IdentityLink;
+import org.flowable.identitylink.api.IdentityLinkType;
+import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -34,6 +41,9 @@ public class WorkflowNotificationService
     private final RepositoryService repositoryService;
     private final RuntimeService runtimeService;
     private final TaskService taskService;
+    private final HistoryService historyService;
+    private final WorkflowIdentityResolver identityResolver;
+    private static final int MAX_RECIPIENTS_PER_EVENT = 2_000;
     private final WorkflowNotificationPlanner planner;
     private final WorkflowNotificationWriter writer;
     private final WorkflowNotificationOutboxService outboxService;
@@ -45,7 +55,8 @@ public class WorkflowNotificationService
      */
     public WorkflowNotificationService(JdbcTemplate jdbcTemplate,
             RepositoryService repositoryService, RuntimeService runtimeService,
-            TaskService taskService, WorkflowNotificationPlanner planner,
+            TaskService taskService, HistoryService historyService, WorkflowIdentityResolver identityResolver,
+            WorkflowNotificationPlanner planner,
             WorkflowNotificationWriter writer,
             WorkflowNotificationOutboxService outboxService, WfCopyMapper copyMapper)
     {
@@ -53,6 +64,8 @@ public class WorkflowNotificationService
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
         this.taskService = taskService;
+        this.historyService = historyService;
+        this.identityResolver = identityResolver;
         this.planner = planner;
         this.writer = writer;
         this.outboxService = outboxService;
@@ -112,9 +125,9 @@ public class WorkflowNotificationService
         WorkflowNotificationPlanner.NotificationRequest request =
                 WorkflowNotificationPlanner.NotificationRequest.taskEvent(eventType,
                         sourceEventKey, definition, processInstanceId, taskId,
-                        taskDefinitionKey, taskName, task, fallbackRecipients,
+                        taskDefinitionKey, taskName, fallbackRecipients, null, null,
                         route(processInstanceId, taskId));
-        return writer.write(planner.plan(request)).channelRecordCount();
+        return writer.write(planEvent(request, task)).channelRecordCount();
     }
 
     /**
@@ -136,9 +149,9 @@ public class WorkflowNotificationService
                 WorkflowNotificationPlanner.NotificationRequest.taskEvent(eventType,
                         "TASK:" + stableTask.getId() + ":" + eventType, definition,
                         stableTask.getProcessInstanceId(), stableTask.getId(),
-                        stableTask.getTaskDefinitionKey(), stableTask.getName(), stableTask,
-                        Set.of(), route(stableTask.getProcessInstanceId(), stableTask.getId()));
-        return writer.write(planner.plan(request)).channelRecordCount();
+                        stableTask.getTaskDefinitionKey(), stableTask.getName(),
+                        Set.of(), null, null, route(stableTask.getProcessInstanceId(), stableTask.getId()));
+        return writer.write(planEvent(request, stableTask)).channelRecordCount();
     }
 
     /**
@@ -208,9 +221,9 @@ public class WorkflowNotificationService
                 WorkflowNotificationPlanner.NotificationRequest.taskEvent(eventType,
                         "TASK:" + stableTask.getId() + ":" + eventType + ":r" + revision,
                         definition, stableTask.getProcessInstanceId(), stableTask.getId(),
-                        stableTask.getTaskDefinitionKey(), stableTask.getName(), stableTask,
-                        Set.of(), route(stableTask.getProcessInstanceId(), stableTask.getId()));
-        return writer.write(planner.plan(request)).channelRecordCount();
+                        stableTask.getTaskDefinitionKey(), stableTask.getName(),
+                        Set.of(), null, null, route(stableTask.getProcessInstanceId(), stableTask.getId()));
+        return writer.write(planEvent(request, stableTask)).channelRecordCount();
     }
 
     /**
@@ -271,8 +284,8 @@ public class WorkflowNotificationService
         WorkflowNotificationPlanner.NotificationRequest request =
                 WorkflowNotificationPlanner.NotificationRequest.processResult(eventType,
                         "PROCESS:" + processInstanceId + ":" + eventType, definition,
-                        processInstanceId, route(processInstanceId, null));
-        return writer.write(planner.plan(request)).channelRecordCount();
+                        processInstanceId, null, null, route(processInstanceId, null));
+        return writer.write(planEvent(request, null)).channelRecordCount();
     }
 
     /**
@@ -301,6 +314,73 @@ public class WorkflowNotificationService
                         "\n催办原因：" + reason);
         WorkflowNotificationWriter.WriteResult result = writer.write(planner.plan(request));
         return result.recipientUserIds();
+    }
+
+    /** 先选策略，再按需读取事实；审计 actor 与 ACTOR 接收规则独立。 */
+    private NotificationPlan planEvent(WorkflowNotificationPlanner.NotificationRequest request, Task task)
+    {
+        var selected = planner.selectPolicies(List.of(request));
+        var frozen = new LinkedHashMap<WorkflowNotificationPlanner.NotificationRequest, WorkflowNotificationPlanner.Policy>();
+        for (var entry : selected.entrySet())
+        {
+            var validated = entry.getKey();
+            var rules = entry.getValue().recipientRules();
+            Set<String> recipients = rules.contains("TASK_RECIPIENT") && task != null
+                    ? resolveTaskRecipients(task) : validated.taskRecipientUserIds();
+            String initiator = rules.contains("INITIATOR") ? processInitiator(validated.processInstanceId()) : null;
+            frozen.put(validated.withFacts(recipients, Authentication.getAuthenticatedUserId(), initiator), entry.getValue());
+        }
+        return planner.plan(frozen);
+    }
+
+    /**
+     * 解析任务办理人或候选用户、候选组，并保留审批认领权限约束。
+     * @param task Task，当前真实 Flowable 任务
+     * @return Set&lt;String&gt;，有效办理人或具备认领权限的候选用户
+     */
+    private Set<String> resolveTaskRecipients(Task task)
+    {
+        if (StringUtils.hasText(task.getAssignee()))
+        {
+            return identityResolver.resolveActiveUserIds(List.of(task.getAssignee()), List.of());
+        }
+        List<IdentityLink> links = taskService.getIdentityLinksForTask(task.getId());
+        LinkedHashSet<String> users = new LinkedHashSet<>();
+        LinkedHashSet<String> groups = new LinkedHashSet<>();
+        if (links != null)
+        {
+            for (IdentityLink link : links)
+            {
+                if (link == null || !IdentityLinkType.CANDIDATE.equals(link.getType())) continue;
+                if (StringUtils.hasText(link.getUserId())) users.add(link.getUserId());
+                if (StringUtils.hasText(link.getGroupId())) groups.add(link.getGroupId());
+            }
+        }
+        Set<String> active = identityResolver.resolveActiveUserIds(users, groups);
+        Set<String> eligible = identityResolver.resolveClaimEligibleUserIds(active);
+        if (eligible.size() > MAX_RECIPIENTS_PER_EVENT)
+        {
+            throw new ServiceException("通知接收人数超过单事件上限", HttpStatus.CONFLICT);
+        }
+        return eligible;
+    }
+
+    /**
+     * 从运行实例或历史实例解析流程发起人。
+     * @param processInstanceId String，流程实例主键
+     * @return String，发起用户主键；运行和历史均无事实时为 null
+     */
+    private String processInitiator(String processInstanceId)
+    {
+        ProcessInstance runtime = runtimeService.createProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult();
+        if (runtime != null && StringUtils.hasText(runtime.getStartUserId()))
+        {
+            return runtime.getStartUserId();
+        }
+        HistoricProcessInstance historic = historyService.createHistoricProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult();
+        return historic == null ? null : historic.getStartUserId();
     }
 
     /**

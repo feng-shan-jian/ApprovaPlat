@@ -1,4 +1,4 @@
-package com.ruoyi.flowable.service.model;
+package com.ruoyi.flowable.service.integration;
 
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -6,7 +6,6 @@ import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfConnectorEndpoint;
 import com.ruoyi.flowable.domain.dto.WorkflowConnectorEndpointRequest;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
-import com.ruoyi.flowable.extension.WorkflowManagedConnectorSecrets;
 import com.ruoyi.flowable.mapper.WfConnectorEndpointMapper;
 
 @Service

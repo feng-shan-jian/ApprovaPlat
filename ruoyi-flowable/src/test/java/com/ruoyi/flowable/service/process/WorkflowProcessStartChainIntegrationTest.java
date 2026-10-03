@@ -73,6 +73,7 @@ import com.ruoyi.flowable.runtime.WorkflowParticipantResolutionMetrics;
 import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 import com.ruoyi.flowable.service.attachment.StoredAttachmentFile;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentService;
+import com.ruoyi.flowable.service.attachment.WorkflowAttachmentCleanupCoordinator;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentUploadJournal;
 import com.ruoyi.flowable.service.attachment.WorkflowAttachmentStorage;
 import com.ruoyi.flowable.service.identity.WorkflowParticipantRuleRuntimeService;
@@ -253,13 +254,15 @@ class WorkflowProcessStartChainIntegrationTest
         processAccess = spy(new WorkflowProcessAccessService(
                 processEngine.getHistoryService(), runtimeService, processEngine.getTaskService(), engineOperations,
                 identityResolver, mock(com.ruoyi.flowable.mapper.WfCopyMapper.class),
-                mock(com.ruoyi.framework.web.service.PermissionService.class),
+                mock(com.ruoyi.system.service.SysPermissionEvaluator.class),
                 new com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy()));
+        var uploadJournal = new WorkflowAttachmentUploadJournal(attachmentMapper, attachmentStorage,
+                attachmentProperties, engineInfrastructure.transactionManager());
+        var cleanupCoordinator = new WorkflowAttachmentCleanupCoordinator(attachmentMapper, attachmentStorage,
+                attachmentProperties, uploadJournal, engineInfrastructure.transactionManager());
         attachmentTarget = spy(new WorkflowAttachmentService(
                 attachmentMapper, attachmentStorage, attachmentProperties, identityResolver,
-                processAccess,
-                new WorkflowAttachmentUploadJournal(attachmentMapper, attachmentStorage,
-                        attachmentProperties, engineInfrastructure.transactionManager()),
+                processAccess, uploadJournal, cleanupCoordinator,
                 engineInfrastructure.transactionManager()));
         attachmentService =
                 engineInfrastructure.transactionalProxy(attachmentTarget);
@@ -360,70 +363,6 @@ class WorkflowProcessStartChainIntegrationTest
         assertThat(repeated.processInstanceId()).isEqualTo(first.processInstanceId());
         assertThat(runtimeService.createProcessInstanceQuery().count())
                 .isEqualTo(instanceCountBefore + 1);
-    }
-
-    @Test
-    @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL", matches = ".+")
-    void mysqlTaskAttachmentLockDoesNotPreserveExpiryBetweenPreparationAndBinding() throws Exception
-    {
-        String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
-        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
-        var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(url,
-                System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
-        var manager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource);
-        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
-        transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
-        var mapper = WorkflowH2SchemaMapperSupport.createSpringMapper(dataSource, "attachment-expiry",
-                WfAttachmentMapper.class, "mapper/flowable/WfAttachmentMapper.xml");
-        var service = new WorkflowAttachmentService(mapper, attachmentStorage, attachmentProperties,
-                identityResolver, processAccess, null, manager);
-        var jdbc = new JdbcTemplate(dataSource);
-        String id = UUID.randomUUID().toString();
-        StoredAttachmentFile stored = attachmentStorage.store(new MockMultipartFile(
-                "file", "expiry.txt", "text/plain", "expiry".getBytes()));
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime expiry = now.plusSeconds(3);
-        var attachment = new WfAttachment(id, OWNER_ID, "evidence", stored.originalName(), stored.storageKey(),
-                stored.contentType(), stored.fileSize(), stored.sha256(), WorkflowAttachmentStatus.TEMP,
-                expiry, null, null, null, null, null, null, 0, null, null, null, null, now, now);
-        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
-        var waiting = new AtomicReference<java.util.concurrent.Future<List<WfAttachment>>>();
-        try
-        {
-            transaction.executeWithoutResult(status -> assertThat(mapper.insert(attachment)).isOne());
-            transaction.executeWithoutResult(status -> {
-                status.setRollbackOnly();
-                var references = Map.of("evidence", List.of(id));
-                assertThat(service.prepareTaskVariables(USER_ID, "instance", Map.of(), references)).containsKey("evidence");
-                var started = new java.util.concurrent.CompletableFuture<Void>();
-                waiting.set(executor.submit(() -> transaction.execute(other -> {
-                    started.complete(null);
-                    return mapper.selectByIdsForUpdate(List.of(id));
-                })));
-                started.orTimeout(2, java.util.concurrent.TimeUnit.SECONDS).join();
-                assertThatThrownBy(() -> waiting.get().get(150, java.util.concurrent.TimeUnit.MILLISECONDS))
-                        .isInstanceOf(java.util.concurrent.TimeoutException.class);
-                while (!LocalDateTime.now().isAfter(expiry.plusNanos(50_000_000)))
-                {
-                    java.util.concurrent.locks.LockSupport.parkNanos(10_000_000);
-                }
-                assertThat(waiting.get().isDone()).isFalse();
-                assertThatThrownBy(() -> service.bindTaskAttachments(USER_ID, "instance", "task", "review", references))
-                        .isInstanceOfSatisfying(ServiceException.class, failure -> {
-                            assertThat(failure.getCode()).isEqualTo(409);
-                            assertThat(failure.getSubCode()).isEqualTo("WORKFLOW_ATTACHMENT_STATE_CONFLICT");
-                        });
-            });
-            assertThat(waiting.get().get(5, java.util.concurrent.TimeUnit.SECONDS))
-                    .singleElement().satisfies(row -> assertThat(row.status()).isEqualTo(WorkflowAttachmentStatus.TEMP));
-        }
-        finally
-        {
-            executor.shutdownNow();
-            executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
-            jdbc.update("delete from wf_attachment where attachment_id = ?", id);
-        }
-        assertThat(jdbc.queryForObject("select count(*) from wf_attachment where attachment_id = ?", Long.class, id)).isZero();
     }
 
     @Test

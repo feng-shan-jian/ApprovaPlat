@@ -23,7 +23,7 @@ import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
 import com.ruoyi.flowable.identity.WorkflowIdentityResolver;
 import com.ruoyi.flowable.mapper.WfCopyMapper;
 import com.ruoyi.flowable.service.task.WorkflowTaskUnclaimPolicy;
-import com.ruoyi.framework.web.service.PermissionService;
+import com.ruoyi.system.service.SysPermissionEvaluator;
 
 /**
  * 工作流实例与任务的对象级读取授权服务。
@@ -58,7 +58,7 @@ public class WorkflowProcessAccessService
 
     private final WfCopyMapper copyMapper;
 
-    private final PermissionService permissionService;
+    private final SysPermissionEvaluator permissionService;
 
     /** 详情任务能力与取消认领写入共享的纯规则组件。 */
     private final WorkflowTaskUnclaimPolicy unclaimPolicy;
@@ -71,7 +71,7 @@ public class WorkflowProcessAccessService
     public WorkflowProcessAccessService(HistoryService historyService,
             RuntimeService runtimeService, TaskService taskService,
             WorkflowEngineOperations engineOperations, WorkflowIdentityResolver identityResolver,
-            WfCopyMapper copyMapper, PermissionService permissionService,
+            WfCopyMapper copyMapper, SysPermissionEvaluator permissionService,
             WorkflowTaskUnclaimPolicy unclaimPolicy)
     {
         this.historyService = historyService;

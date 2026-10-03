@@ -1,5 +1,6 @@
-package com.ruoyi.flowable.extension;
+package com.ruoyi.flowable.service.integration;
 
+import com.ruoyi.flowable.mapper.WfConnectorEndpointMapper;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 import com.ruoyi.common.constant.HttpStatus;
@@ -8,13 +9,18 @@ import com.ruoyi.common.exception.ServiceException;
 /**
  * HTTP 连接器外部密钥引用解析器。
  *
- * 当前实现只允许从固定环境变量命名空间读取，数据库、BPMN、日志和调用台账均不保存密钥正文。
+ * 支持固定环境变量命名空间和受管凭据引用；BPMN、日志和调用台账均不保存密钥正文。
  */
 @Component
 public class WorkflowConnectorSecretResolver
 {
     private final WorkflowManagedConnectorSecrets managed;
-    public WorkflowConnectorSecretResolver(WorkflowManagedConnectorSecrets managed) { this.managed = managed; }
+    private final WfConnectorEndpointMapper endpointMapper;
+    public WorkflowConnectorSecretResolver(WorkflowManagedConnectorSecrets managed, WfConnectorEndpointMapper endpointMapper)
+    {
+        this.managed = managed;
+        this.endpointMapper = endpointMapper;
+    }
     /** 连接器密钥环境变量命名空间。 */
     private static final Pattern SECRET_REF = Pattern.compile("WORKFLOW_CONNECTOR_SECRET_[A-Z0-9_]{1,96}");
 
@@ -38,4 +44,13 @@ public class WorkflowConnectorSecretResolver
         }
         return secret;
     }
+    /** 新受管 provider 每次投递核对当前端点状态；旧 ENV 冻结行为保持原合同。 */
+    public void requireManagedRuntimeEndpoint(long endpointId, String reference)
+    {
+        if (reference == null || !reference.matches(WorkflowManagedConnectorSecrets.REF_PATTERN)) return;
+        var endpoint = endpointMapper.selectByIdForUpdate(endpointId);
+        if (endpoint == null || !"ENABLED".equals(endpoint.getStatus()) || !reference.equals(endpoint.getSecretRef()))
+            throw new ServiceException("受管凭据端点已停用或绑定已变更", 409);
+    }
+
 }

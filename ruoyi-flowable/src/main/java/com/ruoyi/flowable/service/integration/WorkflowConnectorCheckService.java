@@ -1,11 +1,11 @@
-package com.ruoyi.flowable.service.model;
+package com.ruoyi.flowable.service.integration;
 
+import tools.jackson.core.JacksonException;
 import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
-import com.ruoyi.flowable.extension.WorkflowHttpConnector;
 import com.ruoyi.flowable.mapper.WfConnectorEndpointMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -14,18 +14,19 @@ public class WorkflowConnectorCheckService
 {
     private final WorkflowEngineOperations operations;
     private final WfConnectorEndpointMapper endpoints;
-    private final WorkflowHttpConnector http;
+    private final WorkflowHttpExecution http;
+    private final WorkflowConnectorEndpointService catalog;
     public record Result(boolean configurationReady, boolean networkAuthenticated, String message) { }
     public WorkflowConnectorCheckService(WorkflowEngineOperations operations, WfConnectorEndpointMapper endpoints,
-            WorkflowHttpConnector http)
-    { this.operations = operations; this.endpoints = endpoints; this.http = http; }
+            WorkflowHttpExecution http, WorkflowConnectorEndpointService catalog)
+    { this.operations = operations; this.endpoints = endpoints; this.http = http; this.catalog = catalog; }
 
     public Result check(long endpointId)
     {
         return operations.writeAsCurrentUser(actor -> {
             var endpoint = endpoints.selectByIdForUpdate(endpointId);
             if (endpoint == null) throw new ServiceException("端点不存在", 404);
-            String frozen = http.freezePostEndpoint(endpoint.getEndpointKey(), "/workflow/runtime-event/auth-check");
+            String frozen = catalog.freezePostEndpoint(endpoint.getEndpointKey(), "/workflow/runtime-event/auth-check");
             String nonce = UUID.randomUUID().toString();
             var response = http.postFrozenJson(frozen, "auth-check-" + nonce,
                     ("{\"nonce\":\"" + nonce + "\"}").getBytes(StandardCharsets.UTF_8));
@@ -37,7 +38,7 @@ public class WorkflowConnectorCheckService
                         || !"APPROVA_MESSAGE_AUTH_V1".equals(body.path("data").path("protocol").asText())
                         || !nonce.equals(body.path("data").path("nonce").asText())) throw failedCheck();
             }
-            catch (tools.jackson.core.JacksonException exception) { throw failedCheck(); }
+            catch (JacksonException exception) { throw failedCheck(); }
             return new Result(true, true, "配置与消息认证检查通过；尚未投递业务消息，请用隔离流程验证收发结果");
         });
     }

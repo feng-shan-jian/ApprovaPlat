@@ -1,6 +1,18 @@
 import request from '@/utils/request'
 
 /**
+ * 查询当前用户可读的附件安全元数据，供草稿 UUID 恢复展示和操作状态。
+ * @param {string} attachmentId 服务端生成的附件 UUID。
+ * @returns {Promise<object>} data 为经过对象授权的附件安全元数据。
+ */
+export function getWorkflowAttachment(attachmentId) {
+  return request({
+    url: `/workflow/attachment/${encodeURIComponent(attachmentId)}`,
+    method: 'get'
+  })
+}
+
+/**
  * 上传当前用户所有的工作流临时附件。
  * @param {string} fieldName 部署表单中的 el-upload 变量名。
  * @param {File} file 浏览器选择的真实文件。

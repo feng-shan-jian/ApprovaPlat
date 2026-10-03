@@ -14,7 +14,7 @@ import org.springframework.util.StringUtils;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
-import com.ruoyi.framework.web.service.PermissionService;
+import com.ruoyi.system.service.SysPermissionEvaluator;
 
 /**
  * 审批通知流程与节点目录服务。
@@ -32,7 +32,7 @@ public class WorkflowNotificationCatalogService
 
     private final RepositoryService repositoryService;
     private final WorkflowEngineOperations engineOperations;
-    private final PermissionService permissionService;
+    private final SysPermissionEvaluator permissionService;
 
     /**
      * 创建审批通知流程与节点目录服务。
@@ -40,7 +40,7 @@ public class WorkflowNotificationCatalogService
      * 构造后由 Spring 管理该服务
      */
     public WorkflowNotificationCatalogService(RepositoryService repositoryService,
-            WorkflowEngineOperations engineOperations, PermissionService permissionService)
+            WorkflowEngineOperations engineOperations, SysPermissionEvaluator permissionService)
     {
         this.repositoryService = repositoryService;
         this.engineOperations = engineOperations;

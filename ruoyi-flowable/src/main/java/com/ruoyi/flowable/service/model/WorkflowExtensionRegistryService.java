@@ -1,5 +1,7 @@
 package com.ruoyi.flowable.service.model;
 
+import com.ruoyi.flowable.service.integration.WorkflowHttpExecution;
+import com.ruoyi.flowable.extension.WorkflowSqlTemplateValidator;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import com.ruoyi.common.constant.HttpStatus;
@@ -56,8 +58,6 @@ public class WorkflowExtensionRegistryService
     private final WfBpmnExtensionMapper extensionMapper;
     private final WorkflowDeploymentArtifactRepository artifactRepository;
     private final WorkflowJavaExtensionHandlerRegistry handlerRegistry;
-    private final WorkflowHttpConnector httpConnector;
-    private final WorkflowSqlConnector sqlConnector;
     /** CEL 沙箱使用固定代码契约，不允许由数据库替换实现。 */
     private final WorkflowCelSandbox celSandbox = new WorkflowCelSandbox();
 
@@ -68,16 +68,12 @@ public class WorkflowExtensionRegistryService
     public WorkflowExtensionRegistryService(WorkflowEngineOperations engineOperations,
             WfBpmnExtensionMapper extensionMapper,
             WorkflowDeploymentArtifactRepository artifactRepository,
-            WorkflowJavaExtensionHandlerRegistry handlerRegistry,
-            WorkflowHttpConnector httpConnector,
-            WorkflowSqlConnector sqlConnector)
+            WorkflowJavaExtensionHandlerRegistry handlerRegistry)
     {
         this.engineOperations = engineOperations;
         this.extensionMapper = extensionMapper;
         this.artifactRepository = artifactRepository;
         this.handlerRegistry = handlerRegistry;
-        this.httpConnector = httpConnector;
-        this.sqlConnector = sqlConnector;
     }
 
     /**
@@ -231,12 +227,12 @@ public class WorkflowExtensionRegistryService
             else if (HTTP_TYPE.equals(extension.getExtensionType()))
             {
                 implementationKey = WorkflowHttpConnector.IMPLEMENTATION_KEY;
-                configSchema = httpConnector.configSchema();
+                configSchema = WorkflowHttpExecution.configSchema();
             }
             else if (SQL_TYPE.equals(extension.getExtensionType()))
             {
                 implementationKey = WorkflowSqlConnector.IMPLEMENTATION_KEY;
-                configSchema = sqlConnector.configSchema();
+                configSchema = WorkflowSqlTemplateValidator.configSchema();
             }
             else
             {
@@ -431,7 +427,7 @@ public class WorkflowExtensionRegistryService
             {
                 throw new ServiceException("HTTP 扩展实现版本不受控", HttpStatus.CONFLICT);
             }
-            installedSchema = httpConnector.configSchema();
+            installedSchema = WorkflowHttpExecution.configSchema();
         }
         else if (SQL_TYPE.equals(option.extensionType()))
         {
@@ -439,7 +435,7 @@ public class WorkflowExtensionRegistryService
             {
                 throw new ServiceException("SQL 扩展实现版本不受控", HttpStatus.CONFLICT);
             }
-            installedSchema = sqlConnector.configSchema();
+            installedSchema = WorkflowSqlTemplateValidator.configSchema();
         }
         else
         {

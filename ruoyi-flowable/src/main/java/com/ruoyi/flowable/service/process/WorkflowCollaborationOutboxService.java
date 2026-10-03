@@ -1,5 +1,6 @@
 package com.ruoyi.flowable.service.process;
 
+import com.ruoyi.flowable.service.integration.WorkflowHttpExecution.WorkflowHttpDeliveryResult;
 import java.nio.charset.StandardCharsets;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -24,8 +25,7 @@ import com.ruoyi.flowable.domain.vo.WorkflowCollaborationOutboxView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.extension.WorkflowExtensionChecksum;
 import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
-import com.ruoyi.flowable.extension.WorkflowHttpConnector;
-import com.ruoyi.flowable.extension.WorkflowHttpConnector.WorkflowHttpDeliveryResult;
+import com.ruoyi.flowable.service.integration.WorkflowHttpExecution;
 import com.ruoyi.flowable.mapper.WfCollaborationOutboxMapper;
 import com.ruoyi.flowable.service.support.WorkflowPageSupport;
 import com.ruoyi.flowable.runtime.WorkflowCollaborationMetrics;
@@ -42,7 +42,7 @@ public class WorkflowCollaborationOutboxService
     private final WfCollaborationOutboxMapper mapper;
     private final WorkflowCollaborationChannelService channelService;
     private final WorkflowCollaborationAuditService auditService;
-    private final WorkflowHttpConnector httpConnector;
+    private final WorkflowHttpExecution httpExecution;
     private final RepositoryService repositoryService;
     private final HistoryService historyService;
     private final WorkflowEngineOperations engineOperations;
@@ -57,7 +57,7 @@ public class WorkflowCollaborationOutboxService
     public WorkflowCollaborationOutboxService(WfCollaborationOutboxMapper mapper,
             WorkflowCollaborationChannelService channelService,
             WorkflowCollaborationAuditService auditService,
-            WorkflowHttpConnector httpConnector, RepositoryService repositoryService,
+            WorkflowHttpExecution httpExecution, RepositoryService repositoryService,
             HistoryService historyService,
             WorkflowEngineOperations engineOperations, WorkflowCollaborationProperties properties,
             WorkflowCollaborationMetrics metrics)
@@ -65,7 +65,7 @@ public class WorkflowCollaborationOutboxService
         this.mapper = mapper;
         this.channelService = channelService;
         this.auditService = auditService;
-        this.httpConnector = httpConnector;
+        this.httpExecution = httpExecution;
         this.repositoryService = repositoryService;
         this.historyService = historyService;
         this.engineOperations = engineOperations;
@@ -228,7 +228,7 @@ public class WorkflowCollaborationOutboxService
         byte[] body = requestBody(row);
         try
         {
-            WorkflowHttpDeliveryResult result = httpConnector.postFrozenJson(
+            WorkflowHttpDeliveryResult result = httpExecution.postFrozenJson(
                     row.getDeliveryConfigJson(), row.getMessageId(), body);
             if (result.statusCode() < 200 || result.statusCode() >= 300)
             {

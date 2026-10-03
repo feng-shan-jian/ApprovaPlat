@@ -45,8 +45,8 @@ import com.ruoyi.flowable.service.task.WorkflowReturnedTaskStateService;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract;
 import com.ruoyi.flowable.service.task.WorkflowNextTaskAssignmentContract.NextUserAssignmentPolicy;
 import com.ruoyi.flowable.service.task.WorkflowReturnedApplicationProtocol;
-import com.ruoyi.flowable.service.task.WorkflowTaskReturnApplicationService;
-import com.ruoyi.flowable.service.task.WorkflowApplicationResubmitApplicationService;
+import com.ruoyi.flowable.service.task.WorkflowTaskReturnPreparation;
+import com.ruoyi.flowable.service.task.WorkflowApplicationResubmitPreparation;
 
 /**
  * 流程实例完整只读详情编排服务。
@@ -84,9 +84,9 @@ public class WorkflowProcessDetailService
 
     private final WorkflowMultiInstanceService multiInstanceService;
 
-    private final WorkflowTaskReturnApplicationService returnApplicationService;
+    private final WorkflowTaskReturnPreparation returnPreparation;
 
-    private final WorkflowApplicationResubmitApplicationService resubmitApplicationService;
+    private final WorkflowApplicationResubmitPreparation resubmitPreparation;
     private final WorkflowReturnedTaskStateService returnedTaskStateService;
 
     /** 当前用户正式身份解析器，用于生成任务动作能力快照。 */
@@ -112,8 +112,8 @@ public class WorkflowProcessDetailService
             WorkflowProcessFormDetailProjection formProjection,
             WorkflowProcessHistoryProjection historyProjection,
             WorkflowMultiInstanceService multiInstanceService,
-            WorkflowTaskReturnApplicationService returnApplicationService,
-            WorkflowApplicationResubmitApplicationService resubmitApplicationService,
+            WorkflowTaskReturnPreparation returnPreparation,
+            WorkflowApplicationResubmitPreparation resubmitPreparation,
             WorkflowReturnedTaskStateService returnedTaskStateService,
             WorkflowIdentityResolver identityResolver,
             WorkflowManualUrgeService manualUrgeService,
@@ -129,8 +129,8 @@ public class WorkflowProcessDetailService
         this.formProjection = formProjection;
         this.historyProjection = historyProjection;
         this.multiInstanceService = multiInstanceService;
-        this.returnApplicationService = returnApplicationService;
-        this.resubmitApplicationService = resubmitApplicationService;
+        this.returnPreparation = returnPreparation;
+        this.resubmitPreparation = resubmitPreparation;
         this.returnedTaskStateService = returnedTaskStateService;
         this.identityResolver = identityResolver;
         this.manualUrgeService = manualUrgeService;
@@ -306,7 +306,7 @@ public class WorkflowProcessDetailService
         var multiInstanceState = multiInstanceService.buildState(multiInstance);
         // 普通与整组退回均由各自的正式动作准备链决定，复用事实不扩大或收窄业务能力。
         boolean returnAllowed = requestedTask != null && requestedTask.active()
-                && returnApplicationService.isTaskReturnAllowed(requestedTask.runtimeTask(),
+                && returnPreparation.isTaskReturnAllowed(requestedTask.runtimeTask(),
                         instance.runtimeInstance(), actor, bpmn, multiInstance,
                         historicTasks, activeTasks);
         WorkflowTaskCapabilities taskCapabilities = projectTaskCapabilities(
@@ -314,7 +314,7 @@ public class WorkflowProcessDetailService
                 multiInstanceState, returnAllowed);
         // 先用详情已识别的申请人待修改任务收窄调用，再由正式重提准备链完成全部权威重验。
         boolean resubmitAllowed = returnedApplicant != null
-                && resubmitApplicationService.isApplicationResubmitAllowed(returnedApplicant,
+                && resubmitPreparation.isApplicationResubmitAllowed(returnedApplicant,
                         actor, bpmn, activeTasks, forms, activities);
         // 终态、挂起态和 CallActivity 子流程固定失败关闭；只有已授权的活动根流程进入正式准备链。
         boolean urgeAllowed = isUrgeProjectionCandidate(instance, processStatus)

@@ -528,25 +528,20 @@ import ProcessWaitingEvents from '@/components/workflow/ProcessWaitingEvents.vue
 import { useWorkflowUserOptions } from '@/components/workflow/useWorkflowUserOptions.js'
 import { processStatusMeta } from '@/components/workflow/workflowProcessStatus'
 import { useWindowSize } from '@vueuse/core'
+import { useWorkflowDetailObservation } from './useWorkflowDetailObservation.js'
 
 const route = useRoute()
 const router = useRouter()
 const { proxy } = getCurrentInstance()
 const { width: viewportWidth } = useWindowSize()
-const loading = ref(false)
-const ready = ref(false)
 const actionBusy = ref(false)
 // 催办只记录通知与独立审计，不复用任务办理锁或伪装成审批状态动作。
 const urgeBusy = ref(false)
 const activeTab = ref('applicationForm')
 const detail = reactive({})
 const waitingSnapshot = ref(null)
-const observationError = ref('')
-const observationBusy = ref(false)
 const currentActivityNames = computed(() => [...new Set((detail.flowViewer?.activityInstances || [])
   .filter(activity => activity.state === 'WAITING').map(activity => activity.activityName || activity.activityId))].join('、'))
-let observationSequence = 0, observationTimer, observationFailures = 0, observationActive = true
-let observationRequest = null, observationStopped = false, lastFullObservationAt = 0
 const taskFormValues = ref({})
 // 申请表单和本节点表单必须保持独立语义；开始快照绝不进入历史节点列表。
 const applicationForm = computed(() => detail.formDetail?.applicationForm || null)
@@ -562,9 +557,6 @@ const multiInstanceRefreshing = ref(false)
 const multiInstanceError = ref('')
 // 关闭期锁覆盖 Element Plus leave 至 closed 的完整区间，禁止旧弹窗回调清空下一轮真实业务草稿。
 const multiInstanceDialogClosing = ref(false)
-let detailLoadSequence = 0
-// 详情页由页签缓存；首次请求完成后，重新进入同一路由也必须重新读取运行时轨迹。
-let detailPageInitialized = false
 let multiInstanceRefreshSequence = 0
 // 只有该机器子码表示 expectedRevision 失配；其他 409 可能是任务、权限或执行树变化。
 const MULTI_INSTANCE_REVISION_CONFLICT_SUBCODE = 'WORKFLOW_MULTI_INSTANCE_REVISION_CONFLICT'
@@ -744,7 +736,7 @@ function freezeCurrentTaskContext() {
   return Object.freeze({
     processInstanceId: currentProcessInstanceId,
     taskId: currentTaskId,
-    detailSequence: detailLoadSequence
+    detailSequence: observation.detailSequence
   })
 }
 
@@ -754,7 +746,7 @@ function freezeCurrentTaskContext() {
  * @returns {boolean} 路由、详情、活动任务和加载序号仍完全一致时返回 true。
  */
 function isCurrentTaskContext(context) {
-  if (!context || context.detailSequence !== detailLoadSequence || !ready.value || loading.value) return false
+  if (!context || context.detailSequence !== observation.detailSequence || !ready.value || loading.value) return false
   const currentRouteTaskId = routeTaskId()
   return processInstanceId() === context.processInstanceId
     && String(detail.processInstanceId || '').trim() === context.processInstanceId
@@ -788,24 +780,6 @@ function currentActionDialogTaskContext() {
 }
 
 /**
- * 校验详情路由主键的必填和长度边界，避免向后端发送明显非法请求。
- * @returns {boolean} 参数满足接口边界时返回 true。
- */
-function validateRouteParams() {
-  const instanceId = processInstanceId()
-  const taskId = routeTaskId()
-  if (!instanceId || instanceId.length > 64) {
-    proxy.$modal.msgError('流程实例主键不合法')
-    return false
-  }
-  if (taskId.length > 64) {
-    proxy.$modal.msgError('任务主键不合法')
-    return false
-  }
-  return true
-}
-
-/**
  * 清空当前详情及其临时动作状态；并发刷新可暂存动态调整草稿，但不会保留旧权限结论。
  * @param {boolean} preserveMultiInstanceDraft 是否暂存动态调整输入等待新详情重新校验。
  * @returns {void} 无返回值。
@@ -824,184 +798,65 @@ function clearDetailState(preserveMultiInstanceDraft = false) {
   }
 }
 
-/** 完整复核保留同一任务的未提交输入；动作完成和路由切换重新加载表单。 */
-async function loadDetail(preserveMultiInstanceDraft = false, background = false) {
-  if (background && observationBlocked()) { scheduleObservation(); return }
-  observationSequence += 1
-  const requestSequence = ++detailLoadSequence
-  window.clearTimeout(observationTimer)
-  observationStopped = false
-  if (!validateRouteParams()) {
-    clearDetailState()
-    ready.value = false
-    loading.value = false
-    observationStopped = true
-    return
-  }
-  const expectedId = processInstanceId()
-  const expectedTaskId = routeTaskId()
-  if (!background) {
-    loading.value = true
-    ready.value = false
-    lastFullObservationAt = 0
+/** 完整事实仅重建已切换任务的表单；同任务背景复核保留输入与页签。 */
+function commitObservedDetail({ detail: payload, waiting }, { background, preserveMultiInstanceDraft }) {
+  const sameTask = background && detail.processInstanceId === payload.processInstanceId
+    && detail.currentTask?.taskId === payload.currentTask?.taskId
+    && detail.currentTask?.active === payload.currentTask?.active
+    && detail.currentTask?.assignee === payload.currentTask?.assignee
+  const formDetail = payload.formDetail
+  const applicationValues = cloneJson(formDetail.applicationForm?.values || {})
+  if (!sameTask) {
     clearDetailState(preserveMultiInstanceDraft)
+    taskFormValues.value = formDetail.nodeTaskForm
+      ? cloneJson(formDetail.nodeTaskForm.values || {})
+      : formDetail.returnedApplication ? applicationValues : {}
+    applicationFormValues.value = applicationValues
+    activeTab.value = formDetail.nodeTaskForm ? 'nodeTaskForm' : 'applicationForm'
   }
-  let request
-  const current = () => requestSequence === detailLoadSequence && expectedId === processInstanceId()
-    && expectedTaskId === routeTaskId() && observationActive && !document.hidden
-  try {
-    // 手动、动作、路由与周期刷新共用同一个在途槽位，不叠加 Observation 请求。
-    while (observationRequest) await observationRequest.catch(() => {})
-    if (!current()) return
-    request = getProcessObservation(expectedId, expectedTaskId || undefined, background)
-    observationRequest = request
-    const response = await request
-    if (!current() || (background && observationBlocked())) return
-    const payload = response.data?.detail
-    if (payload?.processInstanceId !== expectedId || response.data?.waiting?.processInstanceId !== expectedId) {
-      throw new Error('流程详情实例关系不一致')
-    }
-    const sameTask = background && detail.processInstanceId === expectedId
-      && detail.currentTask?.taskId === payload.currentTask?.taskId
-      && detail.currentTask?.active === payload.currentTask?.active
-      && detail.currentTask?.assignee === payload.currentTask?.assignee
-    const formDetail = payload.formDetail
-    const applicationValues = cloneJson(formDetail.applicationForm?.values || {})
-    if (!sameTask) {
-      clearDetailState(preserveMultiInstanceDraft)
-      taskFormValues.value = formDetail.nodeTaskForm
-        ? cloneJson(formDetail.nodeTaskForm.values || {})
-        : formDetail.returnedApplication ? applicationValues : {}
-      applicationFormValues.value = applicationValues
-      activeTab.value = formDetail.nodeTaskForm ? 'nodeTaskForm' : 'applicationForm'
-    }
-    Object.assign(detail, payload)
-    waitingSnapshot.value = response.data.waiting
-    observationError.value = ''
-    observationFailures = 0
-    lastFullObservationAt = Date.now()
-    observationStopped = isTerminalStatus(payload.processStatus)
-    ready.value = true
-    if (preserveMultiInstanceDraft) reconcileMultiInstanceDraft()
-  } catch (error) {
-    if (current()) {
-      observationFailed(error)
-      if (!background) showComponentError(error, '流程详情加载失败')
-    }
-  } finally {
-    // 在途请求始终串行；释放槽位后才能调度下一次。
-    if (observationRequest === request) observationRequest = null
-    if (requestSequence === detailLoadSequence) loading.value = false
-    scheduleObservation()
-  }
+  Object.assign(detail, payload)
+  waitingSnapshot.value = waiting
+  if (preserveMultiInstanceDraft) reconcileMultiInstanceDraft()
 }
 
-function isTerminalStatus(status) {
-  return ['completed', 'canceled', 'rejected', 'terminated'].includes(status)
-}
-
-function observationBlocked() {
-  return actionBusy.value || multiInstanceBusy.value || multiInstanceRefreshing.value || urgeBusy.value
-    || actionDialog.visible || multiInstanceDialog.visible || urgeDialog.visible
-}
-
-function scheduleObservation() {
-  window.clearTimeout(observationTimer)
-  if (observationActive && !document.hidden && !observationStopped && !observationRequest) {
-    const delay = Math.min(3000 * (2 ** observationFailures), 30000)
-    const reviewDue = Math.max(0, 30000 - (Date.now() - lastFullObservationAt))
-    observationTimer = window.setTimeout(refreshObservation,
-      observationFailures || loading.value || !lastFullObservationAt || observationBlocked() ? delay : Math.min(delay, reviewDue))
-  }
-}
-
-function observationFailed(error) {
-  observationFailures += 1
-  observationError.value = error?.message || '状态刷新失败，当前显示上次成功查询的结果，稍后重试'
-  if ([403, 404].includes(Number(error?.code))) {
-    observationSequence += 1
-    detailLoadSequence += 1
-    multiInstanceRefreshSequence += 1
-    multiInstanceRefreshing.value = false
-    clearDetailState()
-    waitingSnapshot.value = null
-    urgeDialog.visible = false
-    ready.value = false
-    loading.value = false
-    observationStopped = true
-  }
-}
-
-async function refreshObservation() {
-  if (!observationActive || document.hidden || observationStopped) return
-  if (loading.value || observationRequest || observationBlocked()) {
-    scheduleObservation(); return
-  }
-  if (!ready.value || isTerminalStatus(detail.processStatus) || Date.now() - lastFullObservationAt >= 30000) {
-    await loadDetail(false, true)
+/** 观察失效同步淘汰动作恢复的旧结果；MI revision 读取保留独立动作序号。 */
+function invalidateObservedDetail(reason, preserveMultiInstanceDraft = false) {
+  if (reason === 'reload') {
+    clearDetailState(preserveMultiInstanceDraft)
     return
   }
-  const sequence = ++observationSequence
-  const detailSequence = detailLoadSequence
-  const expectedId = processInstanceId()
-  const current = () => sequence === observationSequence && detailSequence === detailLoadSequence
-    && expectedId === processInstanceId() && observationActive && !document.hidden
-  observationBusy.value = true
-  let fullReview = false
-  try {
-    observationRequest = getProcessRuntime(expectedId, routeTaskId() || undefined)
-    const response = await observationRequest
-    if (!current() || observationBlocked()) return
-    const runtime = response.data?.runtime
-    if (runtime?.processInstanceId !== expectedId || response.data?.waiting?.processInstanceId !== expectedId) {
-      throw new Error('运行状态响应不完整')
-    }
-    // 不比较 observedAt；任务、状态、能力和修订的变化才触发详情复核。
-    fullReview = Object.keys(runtime).some(key => JSON.stringify(runtime[key]) !== JSON.stringify(detail[key]))
-      || JSON.stringify(response.data.waiting.waits) !== JSON.stringify(waitingSnapshot.value?.waits)
-    if (fullReview) {
-      // 新事实已使旧动作快照失效；全量失败期间也不能继续使用旧能力或旧任务表单。
-      ready.value = false
-    } else {
-      Object.assign(detail, runtime)
-      waitingSnapshot.value = response.data.waiting
-    }
-    observationError.value = ''
-    observationFailures = 0
-  } catch (error) {
-    if (current()) observationFailed(error)
-  } finally {
-    observationRequest = null
-    observationBusy.value = false
-    if (fullReview && current() && !observationBlocked()) await loadDetail(false, true)
-    else scheduleObservation()
-  }
-}
-
-function pauseObservation() {
-  observationSequence += 1
-  detailLoadSequence += 1
   multiInstanceRefreshSequence += 1
   multiInstanceRefreshing.value = false
-  ready.value = false
-  loading.value = false
+  if (reason === 'denied') {
+    clearDetailState()
+    waitingSnapshot.value = null
+  }
   actionDialog.visible = false
   multiInstanceDialog.visible = false
   urgeDialog.visible = false
-  window.clearTimeout(observationTimer)
 }
 
-function observationVisibilityChanged() {
-  if (document.hidden) pauseObservation()
-  else if (observationActive) loadDetail(false, true)
-}
+const observation = useWorkflowDetailObservation({
+  identity: () => ({ processInstanceId: processInstanceId(), taskId: routeTaskId() }),
+  blocked: () => actionBusy.value || multiInstanceBusy.value || multiInstanceRefreshing.value || urgeBusy.value
+    || actionDialog.visible || multiInstanceDialog.visible || urgeDialog.visible,
+  requests: { detail: getProcessObservation, runtime: getProcessRuntime },
+  facts: () => ({ detail, waiting: waitingSnapshot.value }),
+  commitDetail: commitObservedDetail,
+  commitRuntime: ({ runtime, waiting }) => {
+    Object.assign(detail, runtime)
+    waitingSnapshot.value = waiting
+  },
+  invalidate: invalidateObservedDetail,
+  reportError: showComponentError
+})
+const { loading, ready, observationError, observationBusy, loadDetail } = observation
 
-document.addEventListener('visibilitychange', observationVisibilityChanged)
-onDeactivated(() => { observationActive = false; pauseObservation() })
+document.addEventListener('visibilitychange', observation.visibilityChanged)
+onDeactivated(observation.deactivate)
 onBeforeUnmount(() => {
-  observationActive = false
-  pauseObservation()
-  document.removeEventListener('visibilitychange', observationVisibilityChanged)
+  observation.deactivate()
+  document.removeEventListener('visibilitychange', observation.visibilityChanged)
 })
 
 /**
@@ -1098,7 +953,6 @@ async function openMultiInstanceDialog(action, member = null) {
  * @returns {Promise<void>} 查询成功后替换成员快照；失败时保留原快照并展示错误。
  */
 async function refreshMultiInstanceState() {
-  if (observationBlocked()) return
   await loadDetail(false, true)
 }
 
@@ -1124,7 +978,7 @@ async function requestMultiInstanceState(taskId) {
     }
     return { state: null, error: null }
   } catch (error) {
-    if (requestSequence === multiInstanceRefreshSequence && [403, 404].includes(Number(error?.code))) observationFailed(error)
+    if (requestSequence === multiInstanceRefreshSequence && [403, 404].includes(Number(error?.code))) observation.failed(error)
     return { state: null, error }
   } finally {
     if (requestSequence === multiInstanceRefreshSequence) multiInstanceRefreshing.value = false
@@ -1787,20 +1641,11 @@ async function closePage() {
   else await router.replace(sourcePath || '/office/own')
 }
 
-watch(() => route.fullPath, () => loadDetail())
-const initialDetailLoad = loadDetail().finally(() => {
-  detailPageInitialized = true
+watch(() => route.fullPath, () => {
+  if (route.name === 'WorkflowProcessDetail') observation.routeChanged()
 })
-
-/**
- * 页签重新激活时重新查询实例详情，使退回、重提和审批后的流程图状态立即一致。
- * @returns {Promise<void>} 首次加载后从真实详情接口刷新页面状态。
- */
-onActivated(async () => {
-  observationActive = true
-  if (!detailPageInitialized) return initialDetailLoad
-  await loadDetail(false, true)
-})
+observation.start()
+onActivated(observation.activate)
 </script>
 
 <style scoped lang="scss">

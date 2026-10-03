@@ -1,5 +1,15 @@
-package com.ruoyi.flowable.service.model;
+package com.ruoyi.flowable.service.integration;
 
+import java.util.Set;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
+import tools.jackson.core.JacksonException;
+import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
+import com.ruoyi.flowable.extension.WorkflowSqlTemplateValidator;
+import com.ruoyi.flowable.extension.WorkflowSqlTemplate;
+import static com.ruoyi.flowable.extension.WorkflowSqlTemplateValidator.*;
 import java.util.List;
 import java.util.Locale;
 import java.util.TreeSet;
@@ -37,6 +47,8 @@ public class WorkflowSqlDataSourceService
     private static final String ENABLED = "ENABLED";
     private static final String DISABLED = "DISABLED";
 
+    private final ObjectMapper objectMapper = JsonMapper.shared();
+    private final WorkflowSqlTemplateValidator templateValidator;
     private final WorkflowEngineOperations engineOperations;
     private final WfSqlDataSourceMapper dataSourceMapper;
 
@@ -45,10 +57,11 @@ public class WorkflowSqlDataSourceService
      * 构造后由 Spring 管理
      */
     public WorkflowSqlDataSourceService(WorkflowEngineOperations engineOperations,
-            WfSqlDataSourceMapper dataSourceMapper)
+            WfSqlDataSourceMapper dataSourceMapper, WorkflowSqlTemplateValidator templateValidator)
     {
         this.engineOperations = engineOperations;
         this.dataSourceMapper = dataSourceMapper;
+        this.templateValidator = templateValidator;
     }
 
     /**
@@ -337,4 +350,63 @@ public class WorkflowSqlDataSourceService
     {
         return value == null ? "" : value.trim();
     }
+    /**
+     * 校验作者配置、锁定数据源并生成不含凭据正文的部署快照。
+     * @param config JsonNode，作者节点配置
+     * @param asynchronous boolean，节点是否启用进入前异步
+     * @return String，规范冻结配置
+     */
+    public String freezeConfig(JsonNode config, boolean asynchronous)
+    {
+        if (!asynchronous)
+        {
+            throw new ServiceException("SQL 连接器必须启用进入前异步以承载 Flowable Job 重试",
+                    HttpStatus.BAD_REQUEST);
+        }
+        AuthorConfig author = parseAuthor(config, AUTHOR_FIELDS);
+        WfSqlDataSource dataSource = lockEnabledForDeployment(
+                author.dataSourceKey());
+        WorkflowSqlTemplate template = templateValidator.validate(author.sql(),
+                Set.of(dataSource.getAllowedTables().split(",")),
+                "EXTERNAL".equals(dataSource.getConnectionType()), author.idempotencyColumn());
+        requireParameterMapping(author, template);
+        boolean externalWrite = "EXTERNAL".equals(dataSource.getConnectionType())
+                && !"SELECT".equals(template.operation());
+        if (externalWrite && author.resultVariable() != null)
+        {
+            throw new ServiceException("SQL 外库写入不允许依赖不可重放的影响行数",
+                    HttpStatus.BAD_REQUEST);
+        }
+        try
+        {
+            ObjectNode frozen = objectMapper.createObjectNode();
+            frozen.put("dataSourceKey", author.dataSourceKey());
+            frozen.put("sql", template.sql());
+            frozen.set("parameters", author.parameters().deepCopy());
+            putOptional(frozen, "resultVariable", author.resultVariable());
+            putOptional(frozen, "idempotencyColumn", author.idempotencyColumn());
+            frozen.put("maxRows", author.maxRows());
+            frozen.put("operation", template.operation());
+            frozen.set("tables", objectMapper.valueToTree(template.tables()));
+            ObjectNode source = frozen.putObject("dataSourceSnapshot");
+            source.put("dataSourceId", dataSource.getDataSourceId());
+            source.put("dataSourceName", dataSource.getDataSourceName());
+            source.put("connectionType", dataSource.getConnectionType());
+            putOptional(source, "jdbcUrlRef", dataSource.getJdbcUrlRef());
+            putOptional(source, "usernameRef", dataSource.getUsernameRef());
+            putOptional(source, "passwordRef", dataSource.getPasswordRef());
+            source.put("allowedTables", dataSource.getAllowedTables());
+            source.put("connectTimeoutMs", dataSource.getConnectTimeoutMs());
+            source.put("queryTimeoutSeconds", dataSource.getQueryTimeoutSeconds());
+            source.put("revisionNo", dataSource.getRevisionNo());
+            source.put("checksum", dataSource.getChecksum());
+            return WorkflowExtensionJsonCanonicalizer.canonicalize(
+                    objectMapper.writeValueAsString(frozen));
+        }
+        catch (JacksonException exception)
+        {
+            throw new ServiceException("SQL 连接器冻结配置无法序列化", HttpStatus.ERROR);
+        }
+    }
+
 }

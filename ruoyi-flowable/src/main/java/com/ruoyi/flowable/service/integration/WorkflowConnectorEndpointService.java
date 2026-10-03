@@ -1,10 +1,17 @@
-package com.ruoyi.flowable.service.model;
+package com.ruoyi.flowable.service.integration;
 
+import java.util.Set;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
+import com.ruoyi.flowable.extension.WorkflowExtensionJsonCanonicalizer;
+import static com.ruoyi.flowable.service.integration.WorkflowHttpExecution.*;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
@@ -27,7 +34,7 @@ public class WorkflowConnectorEndpointService
     /** 端点稳定键格式。 */
     private static final Pattern ENDPOINT_KEY = Pattern.compile("[A-Za-z][A-Za-z0-9_.-]{0,127}");
     /** Secret 只允许引用受控环境变量命名空间。 */
-    private static final Pattern SECRET_REF = Pattern.compile("(?:WORKFLOW_CONNECTOR_SECRET_[A-Z0-9_]{1,96}|" + com.ruoyi.flowable.extension.WorkflowManagedConnectorSecrets.REF_PATTERN + ")");
+    private static final Pattern SECRET_REF = Pattern.compile("(?:WORKFLOW_CONNECTOR_SECRET_[A-Z0-9_]{1,96}|" + com.ruoyi.flowable.service.integration.WorkflowManagedConnectorSecrets.REF_PATTERN + ")");
     /** API Key 请求头必须是标准 HTTP token。 */
     private static final Pattern HEADER_NAME = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}");
     /** 当前允许的出站 HTTP 方法。 */
@@ -36,16 +43,17 @@ public class WorkflowConnectorEndpointService
     private static final String ENABLED = "ENABLED";
     private static final String DISABLED = "DISABLED";
 
+    private static final ObjectMapper objectMapper = JsonMapper.shared();
     private final WorkflowEngineOperations engineOperations;
     private final WfConnectorEndpointMapper endpointMapper;
-    private final com.ruoyi.flowable.extension.WorkflowConnectorSecretResolver secrets;
+    private final com.ruoyi.flowable.service.integration.WorkflowConnectorSecretResolver secrets;
 
     /**
      * 创建端点领域服务。
      * 构造后由 Spring 管理
      */
     public WorkflowConnectorEndpointService(WorkflowEngineOperations engineOperations,
-            WfConnectorEndpointMapper endpointMapper, com.ruoyi.flowable.extension.WorkflowConnectorSecretResolver secrets)
+            WfConnectorEndpointMapper endpointMapper, com.ruoyi.flowable.service.integration.WorkflowConnectorSecretResolver secrets)
     {
         this.engineOperations = engineOperations;
         this.endpointMapper = endpointMapper;
@@ -76,15 +84,6 @@ public class WorkflowConnectorEndpointService
             }
             catch (ServiceException exception) { return endpoint.withReadiness(false, "认证未就绪，请由集成管理员检查凭据和服务身份配置"); }
         }).toList());
-    }
-
-    /** 新受管 provider 每次投递核对当前端点状态；旧 ENV 冻结行为保持原合同。 */
-    public void requireManagedRuntimeEndpoint(long endpointId, String reference)
-    {
-        if (reference == null || !reference.matches(com.ruoyi.flowable.extension.WorkflowManagedConnectorSecrets.REF_PATTERN)) return;
-        var endpoint = endpointMapper.selectByIdForUpdate(endpointId);
-        if (endpoint == null || !ENABLED.equals(endpoint.getStatus()) || !reference.equals(endpoint.getSecretRef()))
-            throw new ServiceException("受管凭据端点已停用或绑定已变更", 409);
     }
 
     /**
@@ -401,4 +400,75 @@ public class WorkflowConnectorEndpointService
     {
         return value == null ? "" : value.trim();
     }
+    /**
+     * 校验作者配置并冻结当前启用端点修订。
+     * @param config JsonNode，作者 BPMN 中的节点配置
+     * @param asynchronous boolean，ServiceTask 是否已启用进入前异步
+     * @return String，含端点不可变快照的规范 JSON
+     */
+    public String freezeConfig(JsonNode config, boolean asynchronous)
+    {
+        if (!asynchronous)
+        {
+            throw new ServiceException("HTTP 连接器必须启用进入前异步以承载重试", HttpStatus.BAD_REQUEST);
+        }
+        ParsedConfig parsed = parseAuthor(config, AUTHOR_FIELDS);
+        WfConnectorEndpoint endpoint = lockEnabledForDeployment(parsed.endpointKey());
+        if (!"NONE".equals(endpoint.getAuthType())) secrets.requireSecret(endpoint.getSecretRef());
+        if (!Set.of(endpoint.getAllowedMethods().split(",")).contains(parsed.method()))
+        {
+            throw new ServiceException("HTTP 方法不在端点白名单中", HttpStatus.BAD_REQUEST);
+        }
+        requirePathWithinPrefix(parsed.path(), endpoint.getPathPrefix());
+        if (!"https".equals(URI.create(endpoint.getBaseUrl()).getScheme())
+                && !isLoopbackHost(URI.create(endpoint.getBaseUrl()).getHost()))
+        {
+            throw new ServiceException("非本机 HTTP 端点必须使用 HTTPS", HttpStatus.BAD_REQUEST);
+        }
+        try
+        {
+            ObjectNode frozen = normalizedAuthor(parsed);
+            ObjectNode endpointNode = frozen.putObject("endpointSnapshot");
+            endpointNode.put("endpointId", endpoint.getEndpointId());
+            endpointNode.put("endpointName", endpoint.getEndpointName());
+            endpointNode.put("revisionNo", endpoint.getRevisionNo());
+            endpointNode.put("baseUrl", endpoint.getBaseUrl());
+            endpointNode.put("allowedMethods", endpoint.getAllowedMethods());
+            endpointNode.put("pathPrefix", endpoint.getPathPrefix());
+            endpointNode.put("authType", endpoint.getAuthType());
+            putOptional(endpointNode, "secretRef", endpoint.getSecretRef());
+            putOptional(endpointNode, "apiKeyHeader", endpoint.getApiKeyHeader());
+            endpointNode.put("connectTimeoutMs", endpoint.getConnectTimeoutMs());
+            endpointNode.put("requestTimeoutMs", endpoint.getRequestTimeoutMs());
+            endpointNode.put("networkScope", endpoint.getNetworkScope());
+            endpointNode.put("checksum", endpoint.getChecksum());
+            return WorkflowExtensionJsonCanonicalizer.canonicalize(
+                    objectMapper.writeValueAsString(frozen));
+        }
+        catch (JacksonException exception)
+        {
+            throw new ServiceException("HTTP 连接器冻结配置无法序列化", HttpStatus.ERROR);
+        }
+    }
+
+    /**
+     * 为协作 outbox 冻结一个只允许 POST 的正式端点快照。
+     * @param endpointKey String，端点目录稳定键
+     * @param path String，协作消息接收路径
+     * @return String，不含密钥正文的规范冻结配置
+     */
+    public String freezePostEndpoint(String endpointKey, String path)
+    {
+        ObjectNode author = objectMapper.createObjectNode();
+        author.put("endpointKey", endpointKey);
+        author.put("method", "POST");
+        author.put("path", path);
+        // 协作 outbox 自己持久化重试，因此这里只复用端点冻结和认证能力。
+        String frozenConfig = freezeConfig(author, true);
+        var frozen = objectMapper.readTree(frozenConfig);
+        WorkflowHttpExecution.parseFrozen(frozen);
+        WorkflowHttpExecution.requireCollaborationAuthentication(frozen);
+        return frozenConfig;
+    }
+
 }

@@ -1,6 +1,9 @@
 package com.ruoyi.flowable.extension;
 
-import com.ruoyi.flowable.domain.WorkflowVariableNames;
+import com.ruoyi.flowable.service.integration.WorkflowSqlSecretResolver;
+
+import static com.ruoyi.flowable.extension.WorkflowSqlTemplateValidator.*;
+import com.ruoyi.flowable.extension.WorkflowSqlTemplateValidator.AuthorConfig;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,12 +22,11 @@ import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
 import com.ruoyi.flowable.domain.WfSqlDataSource;
 import com.ruoyi.flowable.runtime.WorkflowConnectorMetrics;
-import com.ruoyi.flowable.service.model.WorkflowSqlDataSourceService;
+import com.ruoyi.flowable.service.integration.WorkflowSqlDataSourceService;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
-import tools.jackson.databind.node.ObjectNode;
 
 /**
  * 受控 SQL 连接器：部署时冻结数据源修订，运行时只执行 AST 校验过的命名参数模板。
@@ -34,25 +36,7 @@ public class WorkflowSqlConnector
 {
     private static final Logger log = LoggerFactory.getLogger(WorkflowSqlConnector.class);
     public static final String IMPLEMENTATION_KEY = "SQL_CONNECTOR_V1";
-    private static final Set<String> AUTHOR_FIELDS = Set.of(
-            "dataSourceKey", "sql", "parameters", "resultVariable", "maxRows",
-            "idempotencyColumn");
-    private static final Set<String> FROZEN_FIELDS = Set.of(
-            "dataSourceKey", "sql", "parameters", "resultVariable", "maxRows",
-            "idempotencyColumn", "operation", "tables", "dataSourceSnapshot");
-    private static final String CONFIG_SCHEMA = """
-            {"type":"object","additionalProperties":false,
-             "required":["dataSourceKey","sql","parameters"],
-             "properties":{"dataSourceKey":{"type":"string","pattern":"^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
-             "sql":{"type":"string","minLength":1,"maxLength":8192},
-             "parameters":{"type":"object","additionalProperties":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$"}},
-             "resultVariable":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
-             "idempotencyColumn":{"type":"string","pattern":"^[A-Za-z_][A-Za-z0-9_$]{0,127}$"},
-             "maxRows":{"type":"integer","minimum":1,"maximum":1000}}}
-            """;
-
     private final DataSource primaryDataSource;
-    private final WorkflowSqlDataSourceService dataSourceService;
     private final WorkflowSqlTemplateValidator templateValidator;
     private final WorkflowSqlSecretResolver secretResolver;
     private final WorkflowConnectorMetrics connectorMetrics;
@@ -63,84 +47,14 @@ public class WorkflowSqlConnector
      * 构造后由 Spring 管理
      */
     public WorkflowSqlConnector(DataSource primaryDataSource,
-            WorkflowSqlDataSourceService dataSourceService,
             WorkflowSqlTemplateValidator templateValidator,
             WorkflowSqlSecretResolver secretResolver,
             WorkflowConnectorMetrics connectorMetrics)
     {
         this.primaryDataSource = primaryDataSource;
-        this.dataSourceService = dataSourceService;
         this.templateValidator = templateValidator;
         this.secretResolver = secretResolver;
         this.connectorMetrics = connectorMetrics;
-    }
-
-    /**
-     * 返回固定作者配置 Schema。
-     * @return String，规范 JSON Schema
-     */
-    public String configSchema()
-    {
-        return WorkflowExtensionJsonCanonicalizer.canonicalize(CONFIG_SCHEMA);
-    }
-
-    /**
-     * 校验作者配置、锁定数据源并生成不含凭据正文的部署快照。
-     * @param config JsonNode，作者节点配置
-     * @param asynchronous boolean，节点是否启用进入前异步
-     * @return String，规范冻结配置
-     */
-    public String freezeConfig(JsonNode config, boolean asynchronous)
-    {
-        if (!asynchronous)
-        {
-            throw new ServiceException("SQL 连接器必须启用进入前异步以承载 Flowable Job 重试",
-                    HttpStatus.BAD_REQUEST);
-        }
-        AuthorConfig author = parseAuthor(config, AUTHOR_FIELDS);
-        WfSqlDataSource dataSource = dataSourceService.lockEnabledForDeployment(
-                author.dataSourceKey());
-        WorkflowSqlTemplate template = templateValidator.validate(author.sql(),
-                Set.of(dataSource.getAllowedTables().split(",")),
-                "EXTERNAL".equals(dataSource.getConnectionType()), author.idempotencyColumn());
-        requireParameterMapping(author, template);
-        boolean externalWrite = "EXTERNAL".equals(dataSource.getConnectionType())
-                && !"SELECT".equals(template.operation());
-        if (externalWrite && author.resultVariable() != null)
-        {
-            throw new ServiceException("SQL 外库写入不允许依赖不可重放的影响行数",
-                    HttpStatus.BAD_REQUEST);
-        }
-        try
-        {
-            ObjectNode frozen = objectMapper.createObjectNode();
-            frozen.put("dataSourceKey", author.dataSourceKey());
-            frozen.put("sql", template.sql());
-            frozen.set("parameters", author.parameters().deepCopy());
-            putOptional(frozen, "resultVariable", author.resultVariable());
-            putOptional(frozen, "idempotencyColumn", author.idempotencyColumn());
-            frozen.put("maxRows", author.maxRows());
-            frozen.put("operation", template.operation());
-            frozen.set("tables", objectMapper.valueToTree(template.tables()));
-            ObjectNode source = frozen.putObject("dataSourceSnapshot");
-            source.put("dataSourceId", dataSource.getDataSourceId());
-            source.put("dataSourceName", dataSource.getDataSourceName());
-            source.put("connectionType", dataSource.getConnectionType());
-            putOptional(source, "jdbcUrlRef", dataSource.getJdbcUrlRef());
-            putOptional(source, "usernameRef", dataSource.getUsernameRef());
-            putOptional(source, "passwordRef", dataSource.getPasswordRef());
-            source.put("allowedTables", dataSource.getAllowedTables());
-            source.put("connectTimeoutMs", dataSource.getConnectTimeoutMs());
-            source.put("queryTimeoutSeconds", dataSource.getQueryTimeoutSeconds());
-            source.put("revisionNo", dataSource.getRevisionNo());
-            source.put("checksum", dataSource.getChecksum());
-            return WorkflowExtensionJsonCanonicalizer.canonicalize(
-                    objectMapper.writeValueAsString(frozen));
-        }
-        catch (JacksonException exception)
-        {
-            throw new ServiceException("SQL 连接器冻结配置无法序列化", HttpStatus.ERROR);
-        }
     }
 
     /**
@@ -226,56 +140,6 @@ public class WorkflowSqlConnector
     }
 
     /**
-     * 解析作者字段并拒绝附加配置、空模板和非法变量名。
-     * @param config JsonNode，作者配置
-     * @param allowed Set&lt;String&gt;，允许字段集合
-     * @return AuthorConfig，规范作者配置
-     */
-    private AuthorConfig parseAuthor(JsonNode config, Set<String> allowed)
-    {
-        if (config == null || !config.isObject())
-        {
-            throw new ServiceException("SQL 连接器配置必须是对象", HttpStatus.BAD_REQUEST);
-        }
-        config.propertyStream().forEach(entry ->
-        {
-            if (!allowed.contains(entry.getKey()))
-            {
-                throw new ServiceException("SQL 连接器包含未授权配置", HttpStatus.BAD_REQUEST);
-            }
-        });
-        String key = requiredText(config, "dataSourceKey", 128);
-        String sql = requiredText(config, "sql", 8192);
-        JsonNode mappings = config.get("parameters");
-        if (mappings == null || !mappings.isObject() || mappings.size() > 128)
-        {
-            throw new ServiceException("SQL 参数映射必须是有界对象", HttpStatus.BAD_REQUEST);
-        }
-        mappings.propertyStream().forEach(entry ->
-        {
-            if (!entry.getValue().isTextual()
-                    || !WorkflowVariableNames.isIdentifier(entry.getValue().asText()))
-            {
-                throw new ServiceException("SQL 参数只能映射到受控流程变量", HttpStatus.BAD_REQUEST);
-            }
-        });
-        String result = optionalVariable(config, "resultVariable");
-        String idempotencyColumn = optionalText(config, "idempotencyColumn");
-        if (idempotencyColumn != null
-                && !idempotencyColumn.matches("[A-Za-z_][A-Za-z0-9_$]{0,127}"))
-        {
-            throw new ServiceException("SQL 幂等唯一列格式不合法", HttpStatus.BAD_REQUEST);
-        }
-        int maxRows = config.has("maxRows") ? config.get("maxRows").asInt(-1) : 100;
-        if (maxRows < 1 || maxRows > 1000)
-        {
-            throw new ServiceException("SQL 查询行数上限不合法", HttpStatus.BAD_REQUEST);
-        }
-        return new AuthorConfig(key, sql, (ObjectNode) mappings, result,
-                idempotencyColumn, maxRows);
-    }
-
-    /**
      * 解析并复核冻结数据源摘要、SQL AST、参数、操作和访问表。
      * @param config JsonNode，部署快照配置
      * @return FrozenConfig，运行时结构化配置
@@ -312,24 +176,6 @@ public class WorkflowSqlConnector
             throw new ServiceException("SQL 模板部署快照已漂移", HttpStatus.ERROR);
         }
         return new FrozenConfig(author, operation, dataSource);
-    }
-
-    /**
-     * 要求模板每个参数都有唯一变量映射；系统幂等键由运行时注入。
-     * @param author AuthorConfig，作者参数映射
-     * @param template WorkflowSqlTemplate，AST 参数清单
-     * @return void，缺失或多余映射时拒绝
-     */
-    private void requireParameterMapping(AuthorConfig author, WorkflowSqlTemplate template)
-    {
-        Set<String> expected = new java.util.TreeSet<>(template.parameterNames());
-        expected.remove("idempotencyKey");
-        Set<String> actual = new java.util.TreeSet<>();
-        author.parameters().propertyStream().forEach(entry -> actual.add(entry.getKey()));
-        if (!expected.equals(actual))
-        {
-            throw new ServiceException("SQL 参数映射与模板命名参数不一致", HttpStatus.BAD_REQUEST);
-        }
     }
 
     /**
@@ -409,70 +255,6 @@ public class WorkflowSqlConnector
         return Math.max(0L, (System.nanoTime() - started) / 1_000_000L);
     }
 
-    /**
-     * 读取必填短文本。
-     * @param node JsonNode，来源对象
-     * @param field String，字段名
-     * @param max int，最大长度
-     * @return String，去空白文本
-     */
-    private String requiredText(JsonNode node, String field, int max)
-    {
-        JsonNode value = node.get(field);
-        String text = value != null && value.isTextual() ? value.asText().trim() : "";
-        if (text.isEmpty() || text.length() > max)
-        {
-            throw new ServiceException("SQL 连接器字段 " + field + " 不合法", HttpStatus.BAD_REQUEST);
-        }
-        return text;
-    }
-
-    /**
-     * 读取可选流程变量名。
-     * @param node JsonNode，来源对象
-     * @param field String，字段名
-     * @return String，合法变量名或 null
-     */
-    private String optionalVariable(JsonNode node, String field)
-    {
-        String value = optionalText(node, field);
-        if (value != null && !WorkflowVariableNames.isBusinessVariable(value))
-        {
-            throw new ServiceException("SQL 结果变量名不合法或属于保留变量", HttpStatus.BAD_REQUEST);
-        }
-        return value;
-    }
-
-    /**
-     * 读取可选文本。
-     * @param node JsonNode，来源对象
-     * @param field String，字段名
-     * @return String，空值转为 null
-     */
-    private String optionalText(JsonNode node, String field)
-    {
-        JsonNode value = node.get(field);
-        return value != null && value.isTextual() && !value.asText().isBlank()
-                ? value.asText().trim() : null;
-    }
-
-    /**
-     * 向 JSON 写入可选文本。
-     * @param node ObjectNode，目标对象
-     * @param field String，字段名
-     * @param value String，可空值
-     * @return void，空值不写入
-     */
-    private void putOptional(ObjectNode node, String field, String value)
-    {
-        if (value != null)
-        {
-            node.put(field, value);
-        }
-    }
-
-    private record AuthorConfig(String dataSourceKey, String sql, ObjectNode parameters,
-            String resultVariable, String idempotencyColumn, int maxRows) { }
     private record FrozenConfig(AuthorConfig author, String operation,
             DataSourceSnapshot dataSource) { }
     private record DataSourceSnapshot(long dataSourceId, String dataSourceName,
