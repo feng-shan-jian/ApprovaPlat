@@ -1,3 +1,4 @@
+import { AUTO_COPY_VARIABLE_PATTERN, normalizeAutoCopyRules } from './autoCopyRules.js'
 import { isJavaOutputVariable } from './workflowVariableNames.js'
 import { computed, ref } from 'vue'
 import { createDefaultSlaConfig, createUserTaskSlaDomain, isUserTaskSlaProperty } from './userTaskSlaDomain.js'
@@ -18,13 +19,6 @@ const CEL_DEFAULT_CONFIG = Object.freeze({
 })
 const AUTO_COPY_PROPERTY_NAME = 'approva.autoCopyRules'
 const AUTO_COPY_MAX_PROPERTY_LENGTH = 8192
-const AUTO_COPY_MAX_RULES = 10
-const AUTO_COPY_MAX_SOURCES = 20
-const AUTO_COPY_MAX_VALUES = 100
-const AUTO_COPY_RULE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/
-const AUTO_COPY_USER_ID_PATTERN = /^[1-9]\d{0,18}$/
-const AUTO_COPY_GROUP_ID_PATTERN = /^(?:ROLE|DEPT)[1-9]\d{0,18}$/
-const AUTO_COPY_VARIABLE_PATTERN = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/
 export function createExtensionEventSlaState() {
   return {
     sla: createDefaultSlaConfig(),
@@ -136,7 +130,8 @@ export function createExtensionEventSlaDomain(context) {
       }
       return normalizeAndValidateAutoCopyRules(document.rules, {
         validatePlacement: false,
-        validateFormFields: false
+        validateFormFields: false,
+        validateLength: false
       })
     } catch (error) {
       if (strict) throw error
@@ -414,62 +409,11 @@ export function createExtensionEventSlaDomain(context) {
    * @returns {Array<object>} 字段类型稳定、可直接序列化为后端契约的规则副本。
    */
   function normalizeAndValidateAutoCopyRules(rules, options = {}) {
-    if (!Array.isArray(rules) || !rules.length || rules.length > AUTO_COPY_MAX_RULES) {
-      throw new Error(`自动抄送规则数量必须为 1 至 ${AUTO_COPY_MAX_RULES}`)
-    }
-    const validatePlacement = options.validatePlacement !== false
-    const validateFormFields = options.validateFormFields !== false
-    const allowedTriggers = new Set(options.allowedTriggers || autoCopyTriggerOptions.value.map(item => item.value))
-    const allowedFormFields = new Set(options.allowedFormFields || autoCopyFormFieldOptions.value.map(item => item.value))
-    const ruleIds = new Set()
-    return rules.map(rule => {
-      const id = String(rule?.id || '')
-      const trigger = String(rule?.trigger || '')
-      if (!AUTO_COPY_RULE_ID_PATTERN.test(id) || ruleIds.has(id)) {
-        throw new Error('自动抄送规则主键不合法或重复')
-      }
-      ruleIds.add(id)
-      if (!['NODE_ARRIVED', 'NODE_COMPLETED', 'PROCESS_COMPLETED'].includes(trigger)
-        || (validatePlacement && !allowedTriggers.has(trigger))) {
-        throw new Error('自动抄送触发时机与当前元素不匹配')
-      }
-      if (!Array.isArray(rule?.recipients)
-        || !rule.recipients.length
-        || rule.recipients.length > AUTO_COPY_MAX_SOURCES) {
-        throw new Error(`自动抄送接收人来源数量必须为 1 至 ${AUTO_COPY_MAX_SOURCES}`)
-      }
-      const sourceKeys = new Set()
-      const recipients = rule.recipients.map(source => {
-        const type = String(source?.type || '')
-        if (!['USER', 'GROUP', 'INITIATOR', 'FORM_USER_FIELD'].includes(type)) {
-          throw new Error('自动抄送接收人来源不受支持')
-        }
-        if (!Array.isArray(source?.values) || source.values.length > AUTO_COPY_MAX_VALUES) {
-          throw new Error('自动抄送来源值必须为有界数组')
-        }
-        const values = source.values.map(value => String(value))
-        const valuePattern = {
-          USER: AUTO_COPY_USER_ID_PATTERN,
-          GROUP: AUTO_COPY_GROUP_ID_PATTERN,
-          FORM_USER_FIELD: AUTO_COPY_VARIABLE_PATTERN
-        }[type]
-        if (type === 'INITIATOR') {
-          if (values.length) throw new Error('流程发起人来源不能携带额外值')
-        } else if (!values.length
-          || new Set(values).size !== values.length
-          || values.some(value => !valuePattern.test(value))) {
-          throw new Error('自动抄送来源值格式不合法、为空或重复')
-        }
-        if (type === 'FORM_USER_FIELD' && validateFormFields
-          && values.some(value => !allowedFormFields.has(value))) {
-          throw new Error('自动抄送表单用户字段必须来自当前元素可见的正式标量字段')
-        }
-        const sourceKey = `${type}:${values.join(',')}`
-        if (sourceKeys.has(sourceKey)) throw new Error('同一自动抄送规则不能重复配置接收人来源')
-        sourceKeys.add(sourceKey)
-        return { type, values }
-      })
-      return { id, trigger, recipients }
+    return normalizeAutoCopyRules(rules, {
+      allowEmpty: false,
+      allowedTriggers: options.allowedTriggers || autoCopyTriggerOptions.value.map(item => item.value),
+      allowedFormFields: options.allowedFormFields || autoCopyFormFieldOptions.value.map(item => item.value),
+      ...options
     })
   }
 
@@ -486,9 +430,6 @@ export function createExtensionEventSlaDomain(context) {
         ? normalizeAndValidateAutoCopyRules(rules)
         : []
       const document = normalized.length ? JSON.stringify({ version: 1, rules: normalized }) : ''
-      if (document.length > AUTO_COPY_MAX_PROPERTY_LENGTH) {
-        throw new Error(`自动抄送规则不能超过 ${AUTO_COPY_MAX_PROPERTY_LENGTH} 个字符`)
-      }
       propertyState.autoCopyRules = normalized
       // 自动抄送只替换自身协议字段，其余平台与普通扩展属性以当前 BPMN 为权威原样保留。
       const platformProperties = readAllFlowableProperties(selectedBusinessObject.value)

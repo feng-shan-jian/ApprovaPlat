@@ -115,6 +115,7 @@
 
 <script setup name="AutoCopyRuleEditor">
 import { Delete, Plus } from '@element-plus/icons-vue'
+import { normalizeAutoCopyRules } from './autoCopyRules.js'
 
 const props = defineProps({
   /** 已写入当前 BPMN 元素的自动抄送规则。 */
@@ -272,46 +273,23 @@ function searchGroups(keyword) {
  * 校验草稿的数量、触发时机、来源类型、固定值格式和重复来源。
  * @returns {string} 首个稳定错误提示；空串表示草稿可安全提交给父设计器。
  */
+function normalizeDraft() {
+  return normalizeAutoCopyRules(draft.value, {
+    allowedTriggers: props.triggerOptions.map(option => option.value),
+    allowedFormFields: props.formFieldOptions.map(option => option.value),
+    maxRules: props.maxRules,
+    maxSources: props.maxSources,
+    maxValues: props.maxValues
+  })
+}
+
 function validateDraft() {
-  if (draft.value.length > props.maxRules) return `单个元素最多允许 ${props.maxRules} 条自动抄送规则`
-  const allowedTriggers = new Set(props.triggerOptions.map(option => option.value))
-  const ruleIds = new Set()
-  for (const rule of draft.value) {
-    if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(rule.id) || ruleIds.has(rule.id)) {
-      return '自动抄送规则主键不合法或重复'
-    }
-    ruleIds.add(rule.id)
-    if (!allowedTriggers.has(rule.trigger)) return '自动抄送触发时机与当前元素不匹配'
-    if (!rule.recipients.length || rule.recipients.length > props.maxSources) {
-      return `每条规则必须配置 1 至 ${props.maxSources} 个接收人来源`
-    }
-    const sourceKeys = new Set()
-    for (const recipient of rule.recipients) {
-      if (!recipientTypeOptions.some(option => option.value === recipient.type)) {
-        return '自动抄送接收人来源不受支持'
-      }
-      const values = recipient.values.map(String)
-      if (recipient.type === 'INITIATOR') {
-        if (values.length) return '流程发起人来源不能携带额外值'
-      } else if (!values.length || values.length > props.maxValues) {
-        return `每个接收人来源必须选择 1 至 ${props.maxValues} 个值`
-      }
-      if (new Set(values).size !== values.length) return '同一接收人来源不能包含重复值'
-      if (recipient.type === 'USER' && values.some(value => !/^[1-9]\d{0,18}$/.test(value))) {
-        return '固定用户来源包含非法用户主键'
-      }
-      if (recipient.type === 'GROUP' && values.some(value => !/^(?:ROLE|DEPT)[1-9]\d{0,18}$/.test(value))) {
-        return '角色或部门来源包含非法身份编码'
-      }
-      if (recipient.type === 'FORM_USER_FIELD' && values.some(value => !/^[A-Za-z][A-Za-z0-9_.]{0,63}$/.test(value))) {
-        return '表单用户字段来源包含非法变量名'
-      }
-      const sourceKey = `${recipient.type}:${values.join(',')}`
-      if (sourceKeys.has(sourceKey)) return '同一规则不能重复配置相同接收人来源'
-      sourceKeys.add(sourceKey)
-    }
+  try {
+    normalizeDraft()
+    return ''
+  } catch (error) {
+    return error.message
   }
-  return ''
 }
 
 /**
@@ -320,14 +298,7 @@ function validateDraft() {
  */
 function applyRules() {
   if (validationMessage.value) return
-  const rules = draft.value.map(rule => ({
-    id: rule.id,
-    trigger: rule.trigger,
-    recipients: rule.recipients.map(recipient => ({
-      type: recipient.type,
-      values: recipient.values.map(String)
-    }))
-  }))
+  const rules = normalizeDraft()
   emit('update:modelValue', rules)
   emit('change', rules)
   dirty.value = false
