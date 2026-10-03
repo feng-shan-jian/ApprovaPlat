@@ -78,6 +78,87 @@ class WorkflowAttachmentCleanupCoordinatorTest
     }
 
     @Test
+    void uploadIntegrityFailureIsNotConvertedToStorageRetry()
+    {
+        String key = insertUpload();
+        var failure = new IllegalStateException("not a regular file");
+        doThrow(failure).when(storage).deleteUncommittedUpload(key);
+        assertThatThrownBy(journal::cleanupBatch).isSameAs(failure);
+        assertThat(jdbc.queryForObject("select claim_token from wf_attachment_upload where storage_key=?",
+                String.class, key)).isNotBlank();
+    }
+
+    @Test
+    void uploadDirectoryAtFilePathFailsIntegrityWithoutSchedulingRetry() throws Exception
+    {
+        String key = insertUpload();
+        Path path = root.resolve(WorkflowAttachmentStorage.PRIVATE_DIRECTORY_NAME).resolve(key);
+        java.nio.file.Files.createDirectories(path);
+        assertThatThrownBy(journal::cleanupBatch).isInstanceOf(ServiceException.class)
+                .isNotInstanceOf(WorkflowAttachmentStorageOperationException.class);
+        assertThat(path).isDirectory();
+        assertThat(jdbc.queryForObject("select claim_token from wf_attachment_upload where storage_key=?",
+                String.class, key)).isNotBlank();
+    }
+
+    @Test
+    void uploadRetryFailurePreservesTheOriginalStorageFailure()
+    {
+        String key = insertUpload();
+        var failure = new WorkflowAttachmentStorageOperationException("storage unavailable", null);
+        var databaseFailure = new IllegalStateException("retry database failure");
+        doThrow(failure).when(storage).deleteUncommittedUpload(key);
+        doThrow(databaseFailure).when(mapper).retryUploadCleanup(anyString(), anyString(), any());
+        assertThatThrownBy(journal::cleanupBatch).isSameAs(failure)
+                .satisfies(thrown -> assertThat(thrown.getSuppressed()).containsExactly(databaseFailure));
+    }
+
+    @Test
+    void uploadStorageFailureCommitsRetryOutsideStorageIo()
+    {
+        String key = insertUpload();
+        doAnswer(invocation -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            throw new WorkflowAttachmentStorageOperationException("storage unavailable", null);
+        }).when(storage).deleteUncommittedUpload(key);
+        assertThat(journal.cleanupBatch()).isEqualTo(new WorkflowAttachmentCleanupResult(0, 1, 0));
+        assertThat(jdbc.queryForObject("select claim_token from wf_attachment_upload where storage_key=?",
+                String.class, key)).isNull();
+    }
+
+    @Test
+    void uploadCompletionFailureDoesNotBecomeStorageRetry()
+    {
+        String key = insertUpload();
+        var failure = new IllegalStateException("completion database failure");
+        doThrow(failure).when(mapper).completeUploadCleanup(anyString(), anyString());
+        assertThatThrownBy(journal::cleanupBatch).isSameAs(failure);
+        assertThat(jdbc.queryForObject("select claim_token from wf_attachment_upload where storage_key=?",
+                String.class, key)).isNotBlank();
+    }
+
+    @Test
+    void uploadLeaseDriftIsCountedWithoutCompletingAnotherWorkersClaim()
+    {
+        String key = insertUpload();
+        doAnswer(invocation -> {
+            jdbc.update("update wf_attachment_upload set claim_token='replacement' where storage_key=?", key);
+            return invocation.callRealMethod();
+        }).when(storage).deleteUncommittedUpload(key);
+        assertThat(journal.cleanupBatch()).isEqualTo(new WorkflowAttachmentCleanupResult(0, 0, 1));
+        assertThat(jdbc.queryForObject("select claim_token from wf_attachment_upload where storage_key=?",
+                String.class, key)).isEqualTo("replacement");
+    }
+
+    private String insertUpload()
+    {
+        String key = journal.reserve(new MockMultipartFile("file", "test.txt", "text/plain", "upload".getBytes()));
+        jdbc.update("update wf_attachment_upload set next_retry_time=? where storage_key=?",
+                LocalDateTime.now().minusHours(1), key);
+        return key;
+    }
+
+    @Test
     void manualDeleteCommitsOutsideCallerTransactionAndRepeatedDeleteSucceeds()
     {
         WorkflowAttachmentService service = manualService();

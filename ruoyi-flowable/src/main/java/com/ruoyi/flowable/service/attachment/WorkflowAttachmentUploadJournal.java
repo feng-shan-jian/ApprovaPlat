@@ -103,14 +103,22 @@ public class WorkflowAttachmentUploadJournal
                 {
                     storage.deleteUncommittedUpload(upload.storageKey());
                 }
-                catch (RuntimeException failure)
+                catch (WorkflowAttachmentStorageOperationException failure)
                 {
-                    LocalDateTime nextRetry = LocalDateTime.now().plus(
-                            properties.cleanupRetryDelay(upload.claimCount()));
-                    int updated = shortTransaction.execute(status -> mapper.retryUploadCleanup(
-                            upload.storageKey(), token, nextRetry));
-                    failures += updated;
-                    leaseLost += 1 - updated;
+                    try
+                    {
+                        LocalDateTime nextRetry = LocalDateTime.now().plus(
+                                properties.cleanupRetryDelay(upload.claimCount()));
+                        int updated = shortTransaction.execute(status -> mapper.retryUploadCleanup(
+                                upload.storageKey(), token, nextRetry));
+                        failures += updated;
+                        leaseLost += 1 - updated;
+                    }
+                    catch (RuntimeException retryFailure)
+                    {
+                        failure.addSuppressed(retryFailure);
+                        throw failure;
+                    }
                     log.error("工作流附件未提交文件清理失败，errorCode=attachment_storage_cleanup_failed，failureType={}",
                             failure.getClass().getSimpleName());
                     continue;
