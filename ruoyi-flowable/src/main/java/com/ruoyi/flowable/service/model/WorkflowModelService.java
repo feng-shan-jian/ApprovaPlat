@@ -32,6 +32,10 @@ import org.flowable.engine.repository.ModelQuery;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.core.page.PageResult;
 import com.ruoyi.common.exception.ServiceException;
@@ -53,6 +57,8 @@ import com.ruoyi.flowable.service.WorkflowFormTemplateValidator;
 @Service
 public class WorkflowModelService
 {
+    private static final Logger LOG = LoggerFactory.getLogger(WorkflowModelService.class);
+
     /** 单页允许返回的最大记录数，防止无界查询拖垮引擎数据库。 */
     static final int MAX_PAGE_SIZE = 200;
 
@@ -856,8 +862,8 @@ public class WorkflowModelService
         return category;
     }
 
-    /** 部署恢复整批模型前锁定其引用；分类按主键、随后表单并集按主键，均持锁至提交。 */
-    void lockRestoredModelReferences(List<Model> models)
+    /** 恢复前按全局顺序锁定引用；只修复历史遗留的失效且未被 XML 引用的元数据表单。 */
+    void prepareRestoredModelReferences(List<Model> models)
     {
         models.stream().map(Model::getCategory).distinct().map(code -> {
             WfCategory category = categoryMapper.selectByCode(requireText(code, "流程分类不能为空"));
@@ -869,14 +875,52 @@ public class WorkflowModelService
                 .forEach(category -> requireActiveCategory(category.getCode()));
 
         Set<Long> formIds = new java.util.TreeSet<>();
+        Set<Long> xmlFormIds = new LinkedHashSet<>();
+        Map<Model, ObjectNode> metadataByModel = new LinkedHashMap<>();
         for (Model model : models)
         {
-            Long metadataFormId = optionalLong(readMetadata(model), "formId");
+            ObjectNode metadata = readMetadata(model);
+            metadataByModel.put(model, metadata);
+            Long metadataFormId = optionalLong(metadata, "formId");
             if (metadataFormId != null) formIds.add(metadataFormId);
             if (model.hasEditorSource())
-                formIds.addAll(bpmnService.readTemplateReferenceIds(repositoryService.getModelEditorSource(model.getId())));
+                xmlFormIds.addAll(bpmnService.readTemplateReferenceIds(repositoryService.getModelEditorSource(model.getId())));
         }
-        formIds.forEach(authorFieldCatalogService::requireActiveForm);
+        formIds.addAll(xmlFormIds);
+        Set<Long> missingMetadataForms = new LinkedHashSet<>();
+        for (Long formId : formIds)
+        {
+            try
+            {
+                authorFieldCatalogService.requireActiveForm(formId);
+            }
+            catch (ServiceException exception)
+            {
+                if (!Integer.valueOf(HttpStatus.NOT_FOUND).equals(exception.getCode()) || xmlFormIds.contains(formId))
+                    throw exception;
+                missingMetadataForms.add(formId);
+            }
+        }
+        for (var entry : metadataByModel.entrySet())
+        {
+            ObjectNode metadata = entry.getValue();
+            Long formId = optionalLong(metadata, "formId");
+            if (!missingMetadataForms.contains(formId)) continue;
+            metadata.remove("formId");
+            if (Integer.valueOf(PROCESS_FORM_TYPE).equals(optionalInt(metadata, "formType")))
+                metadata.put("formType", 2); // 现有节点独立表单模式继续使用未改变的 XML。
+            Model model = entry.getKey();
+            model.setMetaInfo(writeMetadata(metadata));
+            String modelId = model.getId();
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization()
+            {
+                @Override
+                public void afterCommit()
+                {
+                    LOG.warn("删除部署恢复模型[{}]时已清除失效且未被 XML 引用的元数据表单[{}]", modelId, formId);
+                }
+            });
+        }
     }
 
     /** 复制版本会保留元数据引用；先分类，再按表单主键锁定 XML 与元数据的并集。 */

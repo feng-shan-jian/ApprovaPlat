@@ -89,7 +89,7 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
     }
 
     /**
-     * 判断任一表单是否被部署快照、未部署模型或已部署流程定义引用。
+     * 判断任一表单是否被部署快照、任意模型或已部署流程定义引用。
      * @param formIds Collection&lt;Long&gt;，待检查表单主键集合
      * @return boolean，存在引用或任一资源无法可靠解析时返回 true
      */
@@ -109,7 +109,7 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
             {
                 return true;
             }
-            if (hasUndeployedModelReference(targetFormIds))
+            if (hasModelReference(targetFormIds))
             {
                 return true;
             }
@@ -147,13 +147,13 @@ public class FlowableWorkflowReferenceChecker implements WorkflowReferenceChecke
     }
 
     /**
-     * 检查未部署模型的元数据和 BPMN 编辑器资源。
+     * 检查所有模型的元数据和 BPMN 编辑器资源，部署状态不改变作者引用。
      * @param targetFormIds Set&lt;Long&gt;，待检查表单主键集合
      * @return boolean，任一模型引用目标表单时返回 true
      */
-    private boolean hasUndeployedModelReference(Set<Long> targetFormIds)
+    private boolean hasModelReference(Set<Long> targetFormIds)
     {
-        List<Model> models = repositoryService.createModelQuery().notDeployed().list();
+        List<Model> models = repositoryService.createModelQuery().list();
         for (Model model : models)
         {
             if (metadataReferencesForm(model.getMetaInfo(), targetFormIds))

@@ -262,7 +262,7 @@ public class WorkflowDeploymentService
             }
 
             // 恢复未部署模型会重新发布作者引用；整批先锁分类，再锁 XML/元数据表单并集。
-            modelService.lockRestoredModelReferences(plans.stream()
+            modelService.prepareRestoredModelReferences(plans.stream()
                     .flatMap(plan -> plan.linkedModels().stream()).toList());
 
             for (DeploymentDeletionPlan plan : plans)
