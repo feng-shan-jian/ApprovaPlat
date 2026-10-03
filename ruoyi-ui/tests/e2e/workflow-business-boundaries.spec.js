@@ -248,6 +248,8 @@ async function startThroughDraft(page, model, suffix) {
   const draft = await responseFor(page, '/workflow/process/draft', () => page.getByRole('button', { name: '保存草稿', exact: true }).click())
   drafts.push(draft.draftId)
   Object.assign(model, { draftId: draft.draftId, attachmentIds: [uploaded.attachmentId] })
+  await expect(page).toHaveURL(url => url.pathname === `/workflow/process-draft/${draft.draftId}`)
+  await expect(page.getByText('草稿保存成功', { exact: true })).toBeVisible()
   await page.reload()
   await expect(page.getByRole('textbox', { name: '申请标题', exact: true })).toHaveValue(`${runKey}_${suffix}`)
   await expect(page.getByText(`${runKey}_${suffix}.txt`, { exact: true })).toBeVisible()
