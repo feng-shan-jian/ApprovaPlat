@@ -169,6 +169,7 @@ public class WorkflowSqlConnector
                 Set.of(dataSource.allowedTables().split(",")),
                 "EXTERNAL".equals(dataSource.connectionType()), author.idempotencyColumn());
         requireParameterMapping(author, template);
+        requireReplayableResult(author, template, "EXTERNAL".equals(dataSource.connectionType()));
         String operation = requiredText(config, "operation", 16);
         if (!operation.equals(template.operation()) || !config.path("tables").isArray()
                 || !config.path("tables").equals(objectMapper.valueToTree(template.tables())))

@@ -427,6 +427,15 @@ public class WorkflowSqlTemplateValidator
         }
     }
 
+    /** 外库写入重放的影响行数不稳定，作者冻结和运行复核均不得暴露为流程结果。 */
+    public static void requireReplayableResult(AuthorConfig author, WorkflowSqlTemplate template, boolean external)
+    {
+        if (external && !"SELECT".equals(template.operation()) && author.resultVariable() != null)
+        {
+            throw new ServiceException("SQL 外库写入不允许依赖不可重放的影响行数", HttpStatus.BAD_REQUEST);
+        }
+    }
+
     /**
      * 读取必填短文本。
      * @param node JsonNode，来源对象

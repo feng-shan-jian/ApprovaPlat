@@ -370,13 +370,7 @@ public class WorkflowSqlDataSourceService
                 Set.of(dataSource.getAllowedTables().split(",")),
                 "EXTERNAL".equals(dataSource.getConnectionType()), author.idempotencyColumn());
         requireParameterMapping(author, template);
-        boolean externalWrite = "EXTERNAL".equals(dataSource.getConnectionType())
-                && !"SELECT".equals(template.operation());
-        if (externalWrite && author.resultVariable() != null)
-        {
-            throw new ServiceException("SQL 外库写入不允许依赖不可重放的影响行数",
-                    HttpStatus.BAD_REQUEST);
-        }
+        requireReplayableResult(author, template, "EXTERNAL".equals(dataSource.getConnectionType()));
         try
         {
             ObjectNode frozen = objectMapper.createObjectNode();
