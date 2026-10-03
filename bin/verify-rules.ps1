@@ -84,7 +84,7 @@ try {
                 $specs = @('workflow-business-boundaries.spec.js', 'workflow-rule-authority.spec.js')
                 $report.notExecuted = @('External mail vendor; target deployment endurance')
             } else {
-                $specs = @('workflow-page-reuse.spec.js', 'workflow-observation.spec.js', 'workflow-draft-attachments.spec.js', 'request-ownership.spec.js')
+                $specs = @('workflow-page-reuse.spec.js', 'workflow-observation.spec.js', 'workflow-draft-attachments.spec.js', 'request-ownership.spec.js', 'integration-credential-ownership.spec.js')
                 $report.notExecuted = @('Real backend business behavior')
             }
             $browserResult = Join-Path $reportDirectory "$Mode-playwright.json"

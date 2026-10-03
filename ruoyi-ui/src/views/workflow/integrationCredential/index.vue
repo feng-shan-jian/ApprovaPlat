@@ -5,7 +5,7 @@
         <h2>集成账号</h2>
         <p>管理运行事件 Token 的范围、变量白名单、到期与限流</p>
       </div>
-      <el-button type="primary" icon="Plus" v-hasPermi="['workflow:integrationCredential:add']" @click="openCreate">
+      <el-button type="primary" icon="Plus" :disabled="tokenBlocked" v-hasPermi="['workflow:integrationCredential:add']" @click="openCreate">
         新增账号
       </el-button>
     </header>
@@ -59,17 +59,17 @@
       <el-table-column label="操作" width="116" fixed="right" align="center">
         <template #default="scope">
           <el-tooltip content="轮换 Token">
-            <el-button link type="primary" icon="RefreshRight" aria-label="轮换 Token" :disabled="scope.row.rotateAllowed !== true" v-hasPermi="['workflow:integrationCredential:rotate']" @click="rotateToken(scope.row)" />
+            <el-button link type="primary" icon="RefreshRight" aria-label="轮换 Token" :disabled="tokenBlocked || scope.row.rotateAllowed !== true" v-hasPermi="['workflow:integrationCredential:rotate']" @click="rotateToken(scope.row)" />
           </el-tooltip>
           <el-tooltip content="吊销账号">
-            <el-button link type="danger" icon="CircleClose" aria-label="吊销账号" :disabled="scope.row.revokeAllowed !== true" v-hasPermi="['workflow:integrationCredential:revoke']" @click="revokeToken(scope.row)" />
+            <el-button link type="danger" icon="CircleClose" aria-label="吊销账号" :disabled="tokenBlocked || scope.row.revokeAllowed !== true" v-hasPermi="['workflow:integrationCredential:revoke']" @click="revokeToken(scope.row)" />
           </el-tooltip>
         </template>
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="createOpen" title="新增集成账号" width="620px" append-to-body>
-      <el-form ref="formRef" v-loading="createLoading" :model="form" :rules="rules" label-width="108px" :disabled="!createOptionsReady">
+    <el-dialog v-model="createOpen" title="新增集成账号" width="620px" append-to-body :close-on-click-modal="!tokenWriting" :close-on-press-escape="!tokenWriting" :show-close="!tokenWriting">
+      <el-form ref="formRef" v-loading="createLoading" :model="form" :rules="rules" label-width="108px" :disabled="!createOptionsReady || tokenBlocked">
         <el-form-item label="账号名称" prop="credentialName"><el-input v-model="form.credentialName" maxlength="128" /></el-form-item>
         <el-form-item label="事件范围" prop="scopes">
           <el-checkbox-group v-model="form.scopes">
@@ -93,20 +93,21 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="createOpen = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="!createOptionsReady" @click="submitCreate">创建账号</el-button>
+        <el-button :disabled="tokenWriting" @click="createOpen = false">取消</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!createOptionsReady || tokenBlocked" @click="submitCreate">创建账号</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="secretOpen" title="保存集成 Token" width="640px" append-to-body :close-on-click-modal="false">
+    <el-dialog v-model="secretOpen" title="保存集成 Token" width="640px" append-to-body :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false">
       <el-alert title="Token 仅显示这一次，关闭后无法再次查看" type="warning" :closable="false" show-icon />
+      <p>账号：{{ tokenAccount.credentialName }}（ID：{{ tokenAccount.credentialId }}）</p>
       <div class="secret-value">
         <code>{{ oneTimeToken }}</code>
         <el-tooltip content="复制 Token">
           <el-button icon="CopyDocument" aria-label="复制 Token" @click="copyToken" />
         </el-tooltip>
       </div>
-      <template #footer><el-button type="primary" @click="secretOpen = false">我已保存</el-button></template>
+      <template #footer><el-button type="primary" @click="acknowledgeToken">我已保存</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -114,6 +115,8 @@
 <script setup name="WorkflowIntegrationCredential">
 import { useRequestSequence } from '@/utils/requestSequence'
 const createRequest = useRequestSequence()
+const createSubmissionRequest = useRequestSequence()
+const rotationRequest = useRequestSequence()
 const listRequest = useRequestSequence()
 import {
   createIntegrationCredential,
@@ -134,6 +137,10 @@ const createLoading = ref(false)
 const createOptionsReady = ref(false)
 const secretOpen = ref(false)
 const oneTimeToken = ref('')
+const tokenAccount = ref({ credentialId: '', credentialName: '' })
+const tokenBusy = ref(false)
+const tokenWriting = ref(false)
+const tokenBlocked = computed(() => tokenBusy.value || secretOpen.value)
 const endpoints = ref([])
 const bindEndpointId = ref(null)
 const canBindConnector = computed(() => proxy.$auth.hasPermi('workflow:connector:edit') && proxy.$auth.hasPermi('workflow:connector:list'))
@@ -249,32 +256,39 @@ function parseVariables(value) {
  * @returns {Promise<void>} 创建成功后刷新数据库清单。
  */
 async function submitCreate() {
-  if (!createOptionsReady.value) return
-  const valid = await formRef.value.validate().catch(() => false)
-  if (!valid) return
+  if (!createOpen.value || !createOptionsReady.value || tokenBlocked.value) return
+  const isCurrent = createSubmissionRequest.begin()
+  const endpointId = bindEndpointId.value
+  const credential = {
+    credentialName: form.credentialName.trim(),
+    scopes: [...form.scopes],
+    allowedVariables: parseVariables(form.allowedVariablesText),
+    rateLimitPerMinute: form.rateLimitPerMinute,
+    expiresAt: form.expiresAt ? form.expiresAt.toISOString() : null
+  }
+  tokenBusy.value = true
   saving.value = true
   try {
-    const credential = {
-      credentialName: form.credentialName.trim(),
-      scopes: [...form.scopes],
-      allowedVariables: parseVariables(form.allowedVariablesText),
-      rateLimitPerMinute: form.rateLimitPerMinute,
-      expiresAt: form.expiresAt ? form.expiresAt.toISOString() : null
-    }
-    if (bindEndpointId.value) {
-      const state = (await getConnectorCredential(bindEndpointId.value)).data
-      await createAndBindIntegrationCredential(bindEndpointId.value, {
+    const valid = await formRef.value.validate().catch(() => false)
+    if (!valid || !isCurrent()) return
+    if (endpointId) {
+      const state = (await getConnectorCredential(endpointId, { isCurrentRequest: isCurrent })).data
+      if (!isCurrent()) return
+      tokenWriting.value = true
+      await createAndBindIntegrationCredential(endpointId, {
         endpointRevision: state.endpointRevision, credentialRevision: state.credential.revision, credential
       })
       proxy.$modal.msgSuccess('集成账号已创建，令牌已绑定到连接端点')
     } else {
+      tokenWriting.value = true
       const response = await createIntegrationCredential(credential)
-      oneTimeToken.value = response.data.token
-      secretOpen.value = true
+      showToken(response.data, credential)
     }
-    createOpen.value = false
+    if (isCurrent()) createOpen.value = false
     await loadRows()
   } finally {
+    tokenWriting.value = false
+    tokenBusy.value = false
     saving.value = false
   }
 }
@@ -285,13 +299,35 @@ async function submitCreate() {
  * @returns {Promise<void>} 轮换成功后刷新修订号和时间。
  */
 async function rotateToken(row) {
-  if (row.rotateAllowed !== true) return
-  await proxy.$modal.confirm(`确认轮换“${row.credentialName}”的 Token 吗？旧 Token 将立即失效。`)
-  if (row.rotateAllowed !== true) return
-  const response = await rotateIntegrationCredential(row.credentialId, { expiresAt: null })
-  oneTimeToken.value = response.data.token
+  if (row.rotateAllowed !== true || tokenBlocked.value) return
+  const target = { credentialId: row.credentialId, credentialName: row.credentialName }
+  const isCurrent = rotationRequest.begin()
+  tokenBusy.value = true
+  try {
+    try {
+      await proxy.$modal.confirm(`确认轮换“${target.credentialName}”的 Token 吗？旧 Token 将立即失效。`)
+    } catch { return }
+    if (!isCurrent() || row.rotateAllowed !== true) return
+    tokenWriting.value = true
+    const response = await rotateIntegrationCredential(target.credentialId, { expiresAt: null })
+    showToken(response.data, target)
+    await loadRows()
+  } finally {
+    tokenWriting.value = false
+    tokenBusy.value = false
+  }
+}
+
+function showToken(result, target) {
+  tokenAccount.value = { credentialId: result.credentialId, credentialName: result.credential?.credentialName || target.credentialName }
+  oneTimeToken.value = result.token
   secretOpen.value = true
-  await loadRows()
+}
+
+function acknowledgeToken() {
+  oneTimeToken.value = ''
+  tokenAccount.value = { credentialId: '', credentialName: '' }
+  secretOpen.value = false
 }
 
 /**
@@ -300,9 +336,9 @@ async function rotateToken(row) {
  * @returns {Promise<void>} 吊销成功后刷新正式状态。
  */
 async function revokeToken(row) {
-  if (row.revokeAllowed !== true) return
+  if (row.revokeAllowed !== true || tokenBlocked.value) return
   await proxy.$modal.confirm(`确认永久吊销“${row.credentialName}”吗？该操作不能撤销。`)
-  if (row.revokeAllowed !== true) return
+  if (row.revokeAllowed !== true || tokenBlocked.value) return
   await revokeIntegrationCredential(row.credentialId)
   proxy.$modal.msgSuccess('集成账号已吊销')
   await loadRows()
@@ -330,6 +366,25 @@ function disablePastDate(date) {
   return date.getTime() < new Date().setHours(0, 0, 0, 0)
 }
 
+function warnBeforeUnload(event) {
+  if (!tokenWriting.value && !secretOpen.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onBeforeRouteLeave(() => {
+  if (tokenWriting.value || secretOpen.value) {
+    proxy.$modal.msgWarning('请先等待 Token 操作完成并保存 Token，再离开此页面')
+    return false
+  }
+  createSubmissionRequest.invalidate()
+  rotationRequest.invalidate()
+  return true
+})
+
+onMounted(() => window.addEventListener('beforeunload', warnBeforeUnload))
+onBeforeUnmount(() => window.removeEventListener('beforeunload', warnBeforeUnload))
+
 onMounted(async () => { await loadRows(); initialized = true })
 onActivated(() => { if (initialized) loadRows() })
 watch(createOpen, value => {
@@ -339,6 +394,7 @@ watch(createOpen, value => {
     createOptionsReady.value = false
   }
 }, { flush: 'sync' })
+watch([createOpen, bindEndpointId], () => createSubmissionRequest.invalidate(), { flush: 'sync' })
 </script>
 
 <style scoped>
