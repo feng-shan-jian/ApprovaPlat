@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import com.ruoyi.flowable.domain.WfCollaborationChannel;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.runtime.ProcessInstance;
@@ -197,6 +198,7 @@ public class WorkflowCollaborationMessageService
     private WorkflowCollaborationMessageView deliver(WfCollaborationMessage row,
             Map<String, Object> variables)
     {
+        WfCollaborationChannel channel;
         WfCollaborationMessage existing = mapper.selectByIdForUpdate(row.getMessageId());
         if (existing != null)
         {
@@ -210,11 +212,13 @@ public class WorkflowCollaborationMessageService
             }
             if ("DEAD_LETTER".equals(existing.getStatus())) return toView(existing);
             row = existing;
+            channel = channelService.lockInbound(row.getTargetProcessDefinitionKey(),
+                    correlationType(row), correlationValue(row), row.getDeliveryMode());
         }
         else
         {
             // 先创建并锁定通道，唯一序号和消息登记从第一笔写入起就在同一事务内受约束。
-            channelService.lockInbound(row.getTargetProcessDefinitionKey(),
+            channel = channelService.lockInbound(row.getTargetProcessDefinitionKey(),
                     correlationType(row), correlationValue(row), row.getDeliveryMode());
             if (mapper.insertReceived(row) != 1)
             {
@@ -225,8 +229,6 @@ public class WorkflowCollaborationMessageService
                     "接收端已持久化消息");
             metrics.record("inbound_received");
         }
-        var channel = channelService.lockInbound(row.getTargetProcessDefinitionKey(),
-                correlationType(row), correlationValue(row), row.getDeliveryMode());
         long expectedSequence = Math.addExact(channel.getInboundSequence(), 1L);
         if (row.getSequenceNo() > expectedSequence)
         {
