@@ -54,6 +54,49 @@ test('Vue component unmount invalidates pending ownership and result sets stay i
   assert.equal(independent(), false)
 })
 
+test('Vue unmount permanently revokes WorkflowProcessList mutation refreshes, including failed refreshes', async () => {
+  const renderer = createRenderer({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
+    insert() {}, remove() {}, setText() {}, setElementText() {}, parentNode() {}, nextSibling() {}, patchProp() {} })
+  for (const refreshFails of [false, true]) {
+    let listRequest
+    const app = renderer.createApp({ setup() { listRequest = useRequestSequence(); return () => h('div') } })
+    app.mount({})
+    const old = listRequest.begin()
+    listRequest.invalidate()
+    const current = listRequest.begin()
+    assert.equal(old(), false)
+    assert.equal(current(), true, 'ordinary invalidation allows a mounted component to load again')
+
+    const write = deferred(), refresh = deferred(), requests = [], errors = []
+    const rows = { value: ['before unmount'] }, total = { value: 1 }, loading = { value: false }
+    const { runListMutation } = componentFunctions('components/workflow/WorkflowProcessList.vue', ['runListMutation', 'loadList'], {
+      listRequest, rows, total, loading,
+      config: { value: { api: (query, options) => { requests.push({ query, options }); return refresh.promise } } },
+      buildQuery: () => ({ pageNum: 1 }),
+      proxy: { $modal: { msgSuccess() {}, msgError: error => errors.push(error) } },
+      refreshListAfterActionConflict: () => assert.fail('the controlled write must succeed')
+    })
+    const continuation = runListMutation(() => write.promise, '写入成功')
+    assert.equal(requests.length, 0, 'the production mutation helper must wait for the write before refreshing')
+    app.unmount()
+    assert.equal(current(), false)
+    write.resolve()
+    await Promise.resolve()
+    assert.equal(requests.length, 1)
+    assert.deepEqual(requests[0].query, { pageNum: 1 })
+    assert.equal(requests[0].options.isCurrentRequest(), false, 'post-unmount begin must not acquire HTTP or view ownership')
+    if (refreshFails) refresh.reject(new Error('obsolete refresh failure'))
+    else refresh.resolve({ rows: ['late result'], total: 2 })
+    assert.equal(await continuation, true, 'an obsolete refresh failure must not escape as a current mutation failure')
+    assert.deepEqual(errors, [])
+    assert.deepEqual(rows.value, ['before unmount'])
+    assert.equal(total.value, 1)
+    assert.equal(loading.value, true, 'the obsolete completion must not submit loading state')
+    listRequest.invalidate()
+    assert.equal(listRequest.begin()(), false, 'invalidation cannot reactivate an unmounted owner')
+  }
+})
+
 test('extension directory settles current errors independently and late failures cannot replace current results', async () => {
   const requests = [], rows = { value: [] }, handlers = { value: [] }, loading = { value: false }
   const registryError = { value: '' }, handlerError = { value: '' }

@@ -27,6 +27,7 @@ function storage() {
 function client(t) {
   const sessionStorage = storage()
   const messages = []
+  const confirmations = []
   const logs = []
   const dependencies = {
     axios, errorCode, tansParams, sessionStorage,
@@ -34,7 +35,7 @@ function client(t) {
     getToken: () => 'synthetic-token',
     ElMessage: Object.assign(value => messages.push(value), { error: value => messages.push(value) }),
     ElNotification: { error: value => messages.push(value) },
-    ElMessageBox: { confirm: () => Promise.reject(new Error('dismiss')) },
+    ElMessageBox: { confirm: (...args) => { confirmations.push(args); return Promise.reject(new Error('dismiss')) } },
     useUserStore: () => ({ logOut: () => Promise.resolve() }),
     console: { warn: (...args) => logs.push(args), error: (...args) => logs.push(args) }
   }
@@ -67,7 +68,7 @@ function client(t) {
     await setImmediate()
     return { result }
   }
-  return { service, calls, send, sessionStorage, messages, logs }
+  return { service, calls, send, sessionStorage, messages, confirmations, logs }
 }
 
 async function rejected(operation, expected = duplicateMessage) {
@@ -96,6 +97,32 @@ test('obsolete list business and network errors never display after a newer requ
   state.calls[2].resolve({ code: 500, msg: '当前查询失败' })
   assert.ok((await latest.result).error)
   assert.equal(state.messages.length, 1)
+})
+
+test('current session expiry prompts even for silent business requests, while obsolete expiry stays silent', async t => {
+  for (const current of [undefined, true, false]) {
+    for (const suppressErrorMessage of [true, false]) {
+      const state = client(t)
+      const operation = await state.send({ url: '/session', method: 'get', suppressErrorMessage,
+        ...(current === undefined ? {} : { isCurrentRequest: () => current }) })
+      state.calls[0].resolve({ code: 401 })
+      assert.match((await operation.result).error, /会话已过期/)
+      assert.equal(state.confirmations.length, current === false ? 0 : 1,
+        `current=${current}, suppressErrorMessage=${suppressErrorMessage}`)
+      assert.deepEqual(state.messages, [])
+    }
+  }
+})
+
+test('business silence still suppresses current non-authentication errors', async t => {
+  for (const code of [500, 601, 403]) {
+    const state = client(t)
+    const operation = await state.send({ url: '/business', method: 'get', suppressErrorMessage: true, isCurrentRequest: () => true })
+    state.calls[0].resolve({ code, msg: '页面负责展示' })
+    assert.ok((await operation.result).error)
+    assert.deepEqual(state.messages, [])
+    assert.deepEqual(state.confirmations, [])
+  }
 })
 
 test('A/B/A 并发按各自 owner 防重，重复失败及 A 完成不能释放 B', async t => {
