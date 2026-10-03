@@ -119,7 +119,7 @@ public class WfCategoryServiceImpl implements IWfCategoryService
     }
 
     /**
-     * 校验资源存在及编码唯一性后修改分类。
+     * 校验资源存在及编码不可变规则后修改分类。
      * @param category WfCategory，分类主键、修改内容及更新审计信息
      * @return int，实际修改行数
      */
@@ -128,27 +128,21 @@ public class WfCategoryServiceImpl implements IWfCategoryService
     public int updateCategory(WfCategory category)
     {
         validateAndNormalizeCategory(category, true);
-        if (categoryMapper.selectById(category.getCategoryId()) == null)
+        WfCategory existing = categoryMapper.selectById(category.getCategoryId());
+        if (existing == null)
         {
             throw new ServiceException(NOT_FOUND_MESSAGE, HttpStatus.NOT_FOUND);
         }
-        if (!checkCategoryCodeUnique(category))
+        if (!Objects.equals(existing.getCode(), category.getCode()))
         {
-            throw new ServiceException(DUPLICATE_CODE_MESSAGE, HttpStatus.CONFLICT);
+            throw new ServiceException("流程分类编码不能修改", HttpStatus.CONFLICT);
         }
-        try
+        int affectedRows = categoryMapper.update(category);
+        if (affectedRows != 1)
         {
-            int affectedRows = categoryMapper.update(category);
-            if (affectedRows != 1)
-            {
-                throw new ServiceException(CONCURRENT_CHANGE_MESSAGE, HttpStatus.CONFLICT);
-            }
-            return affectedRows;
+            throw new ServiceException(CONCURRENT_CHANGE_MESSAGE, HttpStatus.CONFLICT);
         }
-        catch (DuplicateKeyException exception)
-        {
-            throw duplicateCodeException(exception);
-        }
+        return affectedRows;
     }
 
     /**
