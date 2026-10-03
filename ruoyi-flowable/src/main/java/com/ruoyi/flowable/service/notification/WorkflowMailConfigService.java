@@ -222,23 +222,29 @@ public class WorkflowMailConfigService
             {
                 throw notConfigured();
             }
-            MailSenderSnapshot cached = cachedSender;
-            if (cached != null && cached.revision() == current.revision())
-            {
-                return cached;
-            }
-            String credential = credentialCipher.decrypt(current.credentialCiphertext(),
-                    current.credentialIv());
-            ValidatedMailSettings settings = validateSettings(new RawMailSettings(
-                    current.smtpHost(), current.smtpPort(), current.encryptionMode(),
-                    current.username(), current.fromAddress(), current.senderName()));
-            MailSenderSnapshot replacement = new MailSenderSnapshot(
-                    buildSender(settings, credential), settings.fromAddress(),
-                    settings.senderName(), current.revision());
-            // 只有完整解密和构建成功后才替换旧快照；失败时保持旧对象但本次调用直接失败。
-            cachedSender = replacement;
-            return replacement;
+            return senderFor(current);
         }
+    }
+
+    /** 在 senderMonitor 内使用已经读取的同一 revision 事实。 */
+    private MailSenderSnapshot senderFor(MailConfigRow current)
+    {
+        MailSenderSnapshot cached = cachedSender;
+        if (cached != null && cached.revision() == current.revision())
+        {
+            return cached;
+        }
+        String credential = credentialCipher.decrypt(current.credentialCiphertext(),
+                current.credentialIv());
+        ValidatedMailSettings settings = validateSettings(new RawMailSettings(
+                current.smtpHost(), current.smtpPort(), current.encryptionMode(),
+                current.username(), current.fromAddress(), current.senderName()));
+        MailSenderSnapshot replacement = new MailSenderSnapshot(
+                buildSender(settings, credential), settings.fromAddress(),
+                settings.senderName(), current.revision());
+        // 只有完整解密和构建成功后才替换旧快照；失败时保持旧对象但本次调用直接失败。
+        cachedSender = replacement;
+        return replacement;
     }
 
     /**
@@ -248,9 +254,13 @@ public class WorkflowMailConfigService
      */
     public boolean mailChannelAvailable()
     {
-        if (findConfiguration() == null) return false;
-        currentSender();
-        return true;
+        synchronized (senderMonitor)
+        {
+            MailConfigRow current = findConfiguration();
+            if (current == null) return false;
+            senderFor(current);
+            return true;
+        }
     }
 
     /**

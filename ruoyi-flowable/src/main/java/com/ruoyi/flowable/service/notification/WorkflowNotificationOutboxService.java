@@ -286,9 +286,9 @@ public class WorkflowNotificationOutboxService
     /**
      * 收敛一条已耗尽次数的到期或过期租约为死信。
      * @param workerId String，执行收敛的当前 worker 标识
-     * @return boolean，存在并成功收敛一条记录时为 true
+     * @return void，存在耗尽记录时完成一次死信收敛
      */
-    private boolean deadLetterOneExhausted(String workerId)
+    private void deadLetterOneExhausted(String workerId)
     {
         List<ExhaustedOutbox> rows = jdbcTemplate.query(
                 "select outbox_id,status,attempt_count,revision from wf_notification_outbox where " +
@@ -298,7 +298,7 @@ public class WorkflowNotificationOutboxService
                 (result, rowNum) -> new ExhaustedOutbox(result.getLong("outbox_id"),
                         result.getString("status"), result.getInt("attempt_count"),
                         result.getInt("revision")));
-        if (rows.isEmpty()) return false;
+        if (rows.isEmpty()) return;
         ExhaustedOutbox row = rows.get(0);
         int updated = jdbcTemplate.update("update wf_notification_outbox set status='DEAD_LETTER'," +
                 "lease_owner=null,lease_expires_at=null,processed_time=current_timestamp(3)," +
@@ -313,7 +313,6 @@ public class WorkflowNotificationOutboxService
         recordTransition(row.outboxId(), "DEAD_LETTER", row.attemptCount(), row.status(),
                 "DEAD_LETTER", "SYSTEM", workerId, "LEASE_EXPIRED_AFTER_FINAL_ATTEMPT",
                 "最终投递租约过期，原子转入死信");
-        return true;
     }
 
     /**
