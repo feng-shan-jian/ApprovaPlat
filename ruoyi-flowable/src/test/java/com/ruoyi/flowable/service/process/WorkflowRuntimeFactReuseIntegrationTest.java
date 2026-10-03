@@ -399,7 +399,10 @@ class WorkflowRuntimeFactReuseIntegrationTest
                 ((WorkflowManualUrgeRegistration) invocation.getArgument(0)).recipientUserIds());
         var redis = mock(com.ruoyi.flowable.runtime.WorkflowRedisAtomicOperations.class);
         when(redis.setIfAbsent(anyString(), any())).thenReturn(new com.ruoyi.flowable.runtime.WorkflowRedisAtomicOperations.ExpiringSetResult(true, 0));
-        var urges = new WorkflowManualUrgeService(jdbc, operations, permission, notifications, redis,
+        var identityMapper = spy(WorkflowH2SchemaMapperSupport.createSpringMapper(infra.dataSource(),
+                "urge-identities", com.ruoyi.flowable.mapper.WorkflowIdentityMapper.class,
+                "mapper/flowable/WorkflowIdentityMapper.xml"));
+        var urges = new WorkflowManualUrgeService(jdbc, identityMapper, operations, permission, notifications, redis,
                 new com.ruoyi.flowable.config.WorkflowNotificationProperties(), mock(com.ruoyi.flowable.runtime.WorkflowNotificationMetrics.class));
         clearInvocations(jdbc);
         assertThat(urges.isUrgeAllowed(root, identities.resolveCurrentIdentity())).isTrue();
@@ -418,9 +421,7 @@ class WorkflowRuntimeFactReuseIntegrationTest
         }
         clearInvocations(jdbc);
         assertThat(urges.isUrgeAllowed(root, identities.resolveCurrentIdentity())).isTrue();
-        assertThat(mockingDetails(jdbc).getInvocations().stream()
-                .filter(call -> call.getMethod().getName().equals("queryForList")
-                        && call.getArgument(0).toString().contains("ACT_RU_IDENTITYLINK"))).hasSize(2);
+        verify(identityMapper, times(2)).selectClaimEligibleTaskCandidates(anyString(), eq(false));
         when(permission.hasPermi(anyString())).thenReturn(false);
         runtime.suspendProcessInstanceById(root.getId());
         assertThatThrownBy(() -> urges.urge(new WorkflowManualUrgeRequest(root.getId(), "precedence")))
@@ -440,7 +441,7 @@ class WorkflowRuntimeFactReuseIntegrationTest
         if (database.equals("h2")) return WorkflowFlowableEngineTestSupport.start("runtime-facts", beans);
         String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
         Assumptions.assumeTrue(url != null && !url.isBlank(), "isolated MySQL fixture required");
-        assertThat(url).matches("jdbc:mysql://[^/]+/approvaplat_it(?:\\?.*)?");
+        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
         return WorkflowFlowableEngineTestSupport.start(new DriverManagerDataSource(url,
                 System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD")), beans);
     }

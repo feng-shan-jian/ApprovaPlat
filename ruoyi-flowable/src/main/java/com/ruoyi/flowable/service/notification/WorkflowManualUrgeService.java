@@ -22,6 +22,7 @@ import com.ruoyi.flowable.domain.dto.WorkflowManualUrgeRequest;
 import com.ruoyi.flowable.domain.vo.WorkflowManualUrgeView;
 import com.ruoyi.flowable.engine.WorkflowEngineOperations;
 import com.ruoyi.flowable.identity.WorkflowCurrentIdentity;
+import com.ruoyi.flowable.mapper.WorkflowIdentityMapper;
 import com.ruoyi.flowable.runtime.WorkflowNotificationMetrics;
 import com.ruoyi.flowable.runtime.WorkflowRedisAtomicOperations;
 import com.ruoyi.system.service.SysPermissionEvaluator;
@@ -42,6 +43,7 @@ public class WorkflowManualUrgeService
             HttpStatus.FORBIDDEN, HttpStatus.CONFLICT);
 
     private final JdbcTemplate jdbcTemplate;
+    private final WorkflowIdentityMapper identityMapper;
     private final WorkflowEngineOperations engineOperations;
     private final SysPermissionEvaluator permissionService;
     private final WorkflowNotificationService notificationService;
@@ -53,13 +55,14 @@ public class WorkflowManualUrgeService
      * 创建人工催办业务服务。
      * 构造后由 Spring 管理
      */
-    public WorkflowManualUrgeService(JdbcTemplate jdbcTemplate,
+    public WorkflowManualUrgeService(JdbcTemplate jdbcTemplate, WorkflowIdentityMapper identityMapper,
             WorkflowEngineOperations engineOperations, SysPermissionEvaluator permissionService,
             WorkflowNotificationService notificationService,
             WorkflowRedisAtomicOperations redisAtomicOperations,
             WorkflowNotificationProperties properties, WorkflowNotificationMetrics metrics)
     {
         this.jdbcTemplate = jdbcTemplate;
+        this.identityMapper = identityMapper;
         this.engineOperations = engineOperations;
         this.permissionService = permissionService;
         this.notificationService = notificationService;
@@ -377,24 +380,8 @@ public class WorkflowManualUrgeService
                     "and status='0' and del_flag='0'" + queryMode.sharedLockClause(), String.class,
                     userId)));
         }
-        List<String> candidates = jdbcTemplate.queryForList(
-                "select cast(u.user_id as char) from sys_user u where u.status='0' and u.del_flag='0' " +
-                "and (exists (select 1 from ACT_RU_IDENTITYLINK il where il.TASK_ID_=? " +
-                "and il.TYPE_='candidate' and il.USER_ID_ regexp '^[1-9][0-9]{0,18}$' " +
-                "and cast(il.USER_ID_ as unsigned)=u.user_id) " +
-                "or exists (select 1 from ACT_RU_IDENTITYLINK il join sys_user_role ur on ur.user_id=u.user_id " +
-                "join sys_role r on r.role_id=ur.role_id where il.TASK_ID_=? and il.TYPE_='candidate' " +
-                "and il.GROUP_ID_=concat('ROLE',ur.role_id) and r.status='0' and r.del_flag='0') " +
-                "or exists (select 1 from ACT_RU_IDENTITYLINK il join sys_dept d on d.dept_id=u.dept_id " +
-                "where il.TASK_ID_=? and il.TYPE_='candidate' and il.GROUP_ID_=concat('DEPT',u.dept_id) " +
-                "and d.status='0' and d.del_flag='0')) and (u.user_id=1 or 5=(select count(distinct m.perms) " +
-                "from sys_user_role pur join sys_role pr on pr.role_id=pur.role_id " +
-                "join sys_role_menu prm on prm.role_id=pr.role_id join sys_menu m on m.menu_id=prm.menu_id " +
-                "where pur.user_id=u.user_id and pr.status='0' and pr.del_flag='0' and pr.role_id<>1 " +
-                "and m.status='0' and m.perms in ('workflow:process:claimList','workflow:process:claim'," +
-                "'workflow:process:todoList','workflow:process:query','workflow:process:approval'))) " +
-                "order by u.user_id limit 2001" + queryMode.sharedLockClause(), String.class,
-                task.taskId(), task.taskId(), task.taskId());
+        List<String> candidates = identityMapper.selectClaimEligibleTaskCandidates(
+                task.taskId(), queryMode == QueryMode.LOCKING);
         if (candidates.size() > MAX_RECIPIENTS_PER_EVENT)
         {
             throw new ServiceException("通知接收人数超过单事件上限", HttpStatus.CONFLICT);

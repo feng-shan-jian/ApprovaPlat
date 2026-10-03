@@ -10,6 +10,10 @@ import com.ruoyi.flowable.domain.vo.WorkflowIdentitySelectionView;
  */
 public interface WorkflowIdentityMapper
 {
+    /** 人工催办候选人复用认领资格；正式催办在任务排他锁之后共享锁定身份。 */
+    List<String> selectClaimEligibleTaskCandidates(@Param("taskId") String taskId,
+            @Param("locking") boolean locking);
+
     /**
      * 统计指定类型的有效身份选项。
      *
