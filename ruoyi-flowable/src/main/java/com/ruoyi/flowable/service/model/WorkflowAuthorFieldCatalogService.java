@@ -87,7 +87,7 @@ public class WorkflowAuthorFieldCatalogService
             {
                 FormTemplate form = formsById.computeIfAbsent(reference.formId(), id -> {
                     WfForm stored = requireActiveForm(id);
-                    return new FormTemplate(stored.getFormName(), formTemplateValidator.validate(stored.getContent()));
+                    return new FormTemplate(stored.getFormName(), formTemplateValidator.validateAuthorTemplate(stored.getContent()));
                 });
                 var permissionRoot = WorkflowNodeFormPermissionSnapshot.apply(form.root(), reference);
                 sources.add(new FormSnapshotSource(reference, form.name(), permissionRoot, List.of()));

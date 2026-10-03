@@ -22,6 +22,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import com.ruoyi.common.constant.HttpStatus;
 import com.ruoyi.common.exception.ServiceException;
+import com.ruoyi.flowable.domain.WorkflowVariableNames;
 
 /**
  * 工作流正式平面表单 Schema 的服务端结构和安全白名单验证器。
@@ -71,11 +72,22 @@ public class WorkflowFormTemplateValidator
      */
     public JsonNode validate(String content)
     {
+        return validate(content, null);
+    }
+
+    /** 作者保存、字段目录及发布使用此入口；不追溯修改部署快照的命名协议。 */
+    public JsonNode validateAuthorTemplate(String content)
+    {
+        return validate(content, new LinkedHashSet<>());
+    }
+
+    private JsonNode validate(String content, Set<String> authorVariables)
+    {
         JsonNode root = decode(content);
         // 作者输入仍需完整安全与组件校验；持久化读取只复用解码边界。
         validateStaticContent(root);
         ComponentCounter counter = new ComponentCounter();
-        validateComponents(root.get(FIELDS_FIELD), 1, counter);
+        validateComponents(root.get(FIELDS_FIELD), 1, counter, authorVariables);
         return root;
     }
 
@@ -385,7 +397,8 @@ public class WorkflowFormTemplateValidator
      * @param counter ComponentCounter，全表单共享组件计数器
      * @return void，组件结构不合法时抛出业务异常
      */
-    private void validateComponents(JsonNode components, int depth, ComponentCounter counter)
+    private void validateComponents(JsonNode components, int depth, ComponentCounter counter,
+            Set<String> authorVariables)
     {
         if (depth > MAX_COMPONENT_DEPTH)
         {
@@ -419,6 +432,19 @@ public class WorkflowFormTemplateValidator
 
             JsonNode children = component.get(CHILDREN_FIELD);
             validatePermissionMetadata(component);
+            if (authorVariables != null)
+            {
+                JsonNode variable = component.get(VARIABLE_FIELD);
+                if (variable != null || resolveFieldType(component) != null)
+                {
+                    if (variable == null || !variable.isTextual()
+                            || !WorkflowVariableNames.isBusinessVariable(variable.textValue()))
+                        throw invalid("表单组件变量名不合法或为系统保留名: "
+                                + component.path("label").asText("组件#" + counter.value()));
+                    if (!authorVariables.add(variable.textValue()))
+                        throw invalid("流程表单变量名重复: " + variable.textValue());
+                }
+            }
             if (children != null && !children.isNull())
             {
                 if (!children.isArray())
@@ -427,7 +453,7 @@ public class WorkflowFormTemplateValidator
                 }
                 if (!children.isEmpty())
                 {
-                    validateComponents(children, depth + 1, counter);
+                    validateComponents(children, depth + 1, counter, authorVariables);
                 }
             }
         }

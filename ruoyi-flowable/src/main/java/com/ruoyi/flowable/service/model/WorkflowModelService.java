@@ -1079,7 +1079,7 @@ public class WorkflowModelService
         List<FormProperty> properties = new ArrayList<>();
         properties.add(formPermission("approva_permission_default", null));
         int index = 0;
-        for (String variable : formTemplateValidator.extractVariableNames(formTemplateValidator.validate(content)))
+        for (String variable : formTemplateValidator.extractVariableNames(formTemplateValidator.validateAuthorTemplate(content)))
         {
             properties.add(formPermission("approva_permission_field_" + index++, variable));
         }

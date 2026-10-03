@@ -59,4 +59,67 @@ class WorkflowAuthorRulesTest
         finally { WorkflowH2SchemaMapperSupport.shutdown(ds); }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"\"initiator\"", "\"processStatus\"", "\"_wfMiMembers_review\"", "\"constructor\"",
+            "\" hasSpace\"", "\"trailing \"", "\"a-b\"", "42", "null", "\"\""})
+    void rejectsInvalidAuthorVariablesBeforePersistence(String variable)
+    {
+        var mapper = mock(WfFormMapper.class);
+        when(mapper.insert(any())).thenReturn(1);
+        var service = new WfFormServiceImpl(mapper, mock(WorkflowReferenceChecker.class), validator);
+        var form = form("{\"fields\":[" + field(variable) + "]}");
+        assertEquals(400, assertThrows(ServiceException.class, () -> service.insertForm(form)).getCode());
+        verify(mapper, never()).insert(any());
+    }
+
+    @Test
+    void rejectsNestedDuplicatesAndReportsStoredProblemsWithoutRewritingHistory()
+    {
+        String content = "{\"fields\":[" + field("\"amount\"") + ","
+                + "{\"layout\":\"rowFormItem\",\"workflowHidden\":false,\"workflowReadable\":true,"
+                + "\"workflowWritable\":true,\"children\":[" + field("\"amount\"") + "]}]}";
+        var mapper = mock(WfFormMapper.class);
+        when(mapper.insert(any())).thenReturn(1);
+        var service = new WfFormServiceImpl(mapper, mock(WorkflowReferenceChecker.class), validator);
+        var form = form(content);
+        assertEquals(400, assertThrows(ServiceException.class, () -> service.insertForm(form)).getCode());
+        when(mapper.selectById(7L)).thenReturn(form);
+        assertFalse(service.queryById(7L).getProtocolValid());
+        assertEquals(content, form.getContent());
+        // 已冻结正文继续通过原结构校验与解码，不重新施加作者命名规则。
+        assertDoesNotThrow(() -> validator.validate(content));
+        assertDoesNotThrow(() -> WorkflowFormTemplateValidator.decode(content));
+    }
+
+    @Test
+    void acceptsIndependentTemplatesAndMaximumLengthButRejectsMissingOrLongNames()
+    {
+        var mapper = mock(WfFormMapper.class);
+        when(mapper.insert(any())).thenReturn(1);
+        var service = new WfFormServiceImpl(mapper, mock(WorkflowReferenceChecker.class), validator);
+        String content = "{\"fields\":[" + field("\"" + "a".repeat(128) + "\"") + "]}";
+        assertEquals(1, service.insertForm(form(content)));
+        assertEquals(1, service.insertForm(form(content)));
+        String longContent = "{\"fields\":[" + field("\"" + "a".repeat(129) + "\"") + "]}";
+        assertEquals(400, assertThrows(ServiceException.class, () -> service.insertForm(form(longContent))).getCode());
+        String missing = "{\"fields\":[" + field("null").replace("\"vModel\":null,", "") + "]}";
+        assertEquals(400, assertThrows(ServiceException.class, () -> service.insertForm(form(missing))).getCode());
+        String button = "{\"fields\":[{\"tag\":\"el-button\",\"layout\":\"raw\","
+                + "\"workflowHidden\":false,\"workflowReadable\":true,\"workflowWritable\":true}]}";
+        assertEquals(1, service.insertForm(form(button)));
+    }
+
+    private static WfForm form(String content)
+    {
+        var form = new WfForm();
+        form.setFormName("Author rules");
+        form.setContent(content);
+        return form;
+    }
+
+    private static String field(String name)
+    {
+        return "{\"tag\":\"el-input\",\"layout\":\"colFormItem\",\"vModel\":" + name
+                + ",\"workflowHidden\":false,\"workflowReadable\":true,\"workflowWritable\":true}";
+    }
 }

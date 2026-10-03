@@ -172,6 +172,7 @@ import { onMounted, watch } from 'vue'
 import { createForm as createWorkflowForm, getForm as getWorkflowForm, updateForm as updateWorkflowForm } from '@/api/workflow/form'
 import ProcessFormRenderer from '@/components/workflow/ProcessFormRenderer.vue'
 import { completeWorkflowFieldPermissions } from '@/components/workflow/form/formTemplate.js'
+import { isBusinessVariable } from '@/components/workflow/designer/workflowVariableNames.js'
 
 initDrawingDefaultValue()
 
@@ -390,8 +391,8 @@ function serializeWorkflowTemplate() {
 function validateWorkflowFields(fields, variables = new Set()) {
   fields.forEach(field => {
     if (field.vModel !== undefined) {
-      const variable = String(field.vModel || '').trim()
-      if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(variable)) {
+      const variable = field.vModel
+      if (!isBusinessVariable(variable)) {
         throw new Error(`字段“${field.label || '未命名'}”的变量名不合法`)
       }
       if (variables.has(variable)) throw new Error(`流程表单变量名重复: ${variable}`)

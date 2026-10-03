@@ -81,7 +81,7 @@ public class WfFormServiceImpl implements IWfFormService
         if (form == null) return;
         try
         {
-            templateValidator.validate(form.getContent());
+            templateValidator.validateAuthorTemplate(form.getContent());
             form.setProtocolValid(true);
             form.setProtocolIssue(null);
         }
@@ -198,7 +198,7 @@ public class WfFormServiceImpl implements IWfFormService
         {
             throw new ServiceException("流程表单备注长度不能超过255个字符", HttpStatus.BAD_REQUEST);
         }
-        templateValidator.validate(form.getContent());
+        templateValidator.validateAuthorTemplate(form.getContent());
         form.setFormName(formName);
     }
 

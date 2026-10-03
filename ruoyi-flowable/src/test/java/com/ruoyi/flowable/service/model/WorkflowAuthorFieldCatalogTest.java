@@ -38,7 +38,7 @@ class WorkflowAuthorFieldCatalogTest
         assertThat(call.writable()).isFalse();
         assertThat(call.required()).isTrue();
         verify(forms, times(1)).selectById(7L);
-        verify(templates, times(1)).validate(content);
+        verify(templates, times(1)).validateAuthorTemplate(content);
     }
 
     @Test

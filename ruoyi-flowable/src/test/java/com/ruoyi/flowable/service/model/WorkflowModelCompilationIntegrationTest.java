@@ -389,7 +389,7 @@ class WorkflowModelCompilationIntegrationTest
                     clearInvocations(templates, forms, decisions, conditions, calls, extensions, loops, participantRules, sla, listeners);
                     String model = save(service, repository, "compiledParent", author);
                     verify(forms, times(1)).selectById(7L);
-                    verify(templates, times(1)).validate(FORM);
+                    verify(templates, times(1)).validateAuthorTemplate(FORM);
                     verify(decisions, never()).prepare(any());
                     verify(sla, never()).prepare(any(), anyString());
                     verify(listeners, never()).compile(any());
@@ -413,7 +413,7 @@ class WorkflowModelCompilationIntegrationTest
                     clearInvocations(templates, forms, decisions, conditions, calls, extensions, loops, participantRules, sla, listeners);
                     String deployment = service.deployModel(model);
                     verify(forms, times(1)).selectById(7L);
-                    verify(templates, times(1)).validate(FORM);
+                    verify(templates, times(1)).validateAuthorTemplate(FORM);
                     verify(decisions, times(1)).prepare(any());
                     verify(conditions, times(1)).prepare(any(), any(), any(), eq("100"));
                     verify(calls, times(1)).prepare(any(), any(), any(), any());
