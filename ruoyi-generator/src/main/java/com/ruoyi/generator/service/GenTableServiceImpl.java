@@ -210,23 +210,10 @@ public class GenTableServiceImpl implements IGenTableService
         Map<String, String> dataMap = new LinkedHashMap<>();
         // 查询表信息
         GenTable table = genTableMapper.selectGenTableById(tableId);
-        // 设置主子表信息
-        setSubTable(table);
-        // 设置主键列信息
-        setPkColumn(table);
-        VelocityInitializer.initVelocity();
-
-        VelocityContext context = VelocityUtils.prepareContext(table);
-
-        // 获取模板列表
-        List<String> templates = VelocityUtils.getTemplateList(table);
-        for (String template : templates)
+        PreparedTemplates prepared = prepareTemplates(table);
+        for (String template : prepared.templates())
         {
-            // 渲染模板
-            StringWriter sw = new StringWriter();
-            Template tpl = Velocity.getTemplate(template, Constants.UTF8);
-            tpl.merge(context, sw);
-            dataMap.put(template, sw.toString());
+            dataMap.put(template, renderTemplate(template, prepared.context()));
         }
         return dataMap;
     }
@@ -253,29 +240,16 @@ public class GenTableServiceImpl implements IGenTableService
     {
         // 查询表信息
         GenTable table = genTableMapper.selectGenTableByName(tableName);
-        // 设置主子表信息
-        setSubTable(table);
-        // 设置主键列信息
-        setPkColumn(table);
-
-        VelocityInitializer.initVelocity();
-
-        VelocityContext context = VelocityUtils.prepareContext(table);
-
-        // 获取模板列表
-        List<String> templates = VelocityUtils.getTemplateList(table);
-        for (String template : templates)
+        PreparedTemplates prepared = prepareTemplates(table);
+        for (String template : prepared.templates())
         {
             if (!StringUtils.containsAny(template, "sql.vm", "api.js.vm", "api.ts.vm", "type.ts.vm", "index.ts.vm", "index.vue.vm", "index-tree.vue.vm", "view.vue.vm"))
             {
-                // 渲染模板
-                StringWriter sw = new StringWriter();
-                Template tpl = Velocity.getTemplate(template, Constants.UTF8);
-                tpl.merge(context, sw);
+                String content = renderTemplate(template, prepared.context());
                 try
                 {
                     String path = getGenPath(table, template);
-                    FileUtils.writeStringToFile(new File(path), sw.toString(), StandardCharsets.UTF_8);
+                    FileUtils.writeStringToFile(new File(path), content, StandardCharsets.UTF_8);
                 }
                 catch (IOException e)
                 {
@@ -371,43 +345,48 @@ public class GenTableServiceImpl implements IGenTableService
     {
         // 查询表信息
         GenTable table = genTableMapper.selectGenTableByName(tableName);
-        // 设置主子表信息
-        setSubTable(table);
-        // 设置主键列信息
-        setPkColumn(table);
-
-        VelocityInitializer.initVelocity();
-
-        VelocityContext context = VelocityUtils.prepareContext(table);
-
-        // 获取模板列表
-        List<String> templates = VelocityUtils.getTemplateList(table);
-        for (String template : templates)
+        PreparedTemplates prepared = prepareTemplates(table);
+        for (String template : prepared.templates())
         {
-            // 渲染模板
-            StringWriter sw = new StringWriter();
-            Template tpl = Velocity.getTemplate(template, Constants.UTF8);
-            tpl.merge(context, sw);
+            String content = renderTemplate(template, prepared.context());
             String fileName = VelocityUtils.getFileName(template, table);
             // index-bak.ts 模版，追加内容
             if (fileName.contains("index-bak.ts"))
             {
                 if (!typeFiles.containsKey(fileName))
                 {
-                    typeFiles.put(fileName, new StringBuffer(sw.toString()));
+                    typeFiles.put(fileName, new StringBuffer(content));
                 }
                 else
                 {
-                    Arrays.stream(sw.toString().split("\n")).filter(line -> line.startsWith("export * from")).forEach(line -> typeFiles.get(fileName).append("\n").append(line));
+                    Arrays.stream(content.split("\n")).filter(line -> line.startsWith("export * from")).forEach(line -> typeFiles.get(fileName).append("\n").append(line));
                 }
             }
             else
             {
                 // 其他文件正常添加
-                writeToZip(zip, fileName, sw.toString());
+                writeToZip(zip, fileName, content);
             }
         }
     }
+
+    private PreparedTemplates prepareTemplates(GenTable table)
+    {
+        setSubTable(table);
+        setPkColumn(table);
+        VelocityInitializer.initVelocity();
+        return new PreparedTemplates(VelocityUtils.prepareContext(table), VelocityUtils.getTemplateList(table));
+    }
+
+    private String renderTemplate(String template, VelocityContext context)
+    {
+        StringWriter output = new StringWriter();
+        Template source = Velocity.getTemplate(template, Constants.UTF8);
+        source.merge(context, output);
+        return output.toString();
+    }
+
+    private record PreparedTemplates(VelocityContext context, List<String> templates) { }
 
     /**
      * 将字符串内容写入ZIP输出流
