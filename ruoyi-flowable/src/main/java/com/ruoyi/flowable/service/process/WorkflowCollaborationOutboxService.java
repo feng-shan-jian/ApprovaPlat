@@ -192,6 +192,15 @@ public class WorkflowCollaborationOutboxService
             metrics.record("cancelled");
             return null;
         }
+        if ("DELIVERING".equals(candidate.getStatus())
+                && candidate.getAttemptCount() >= candidate.getMaxAttempts())
+        {
+            // 已锁定的到期最终租约只能收敛，不能再次递增到超过数据库次数约束。
+            // 外部结果未知，因此保留幂等消息并进入可人工补偿的死信。
+            failClaim(candidate, candidate.getLeaseOwner(), workerId, null,
+                    "COLLAB_OUTBOX_LEASE_EXPIRED", "最终投递租约过期，接收端结果未确认");
+            return null;
+        }
         int leaseSeconds = Math.toIntExact(properties.getLeaseDuration().toSeconds());
         if (mapper.claim(candidate.getMessageId(), candidate.getRevisionNo(), workerId,
                 leaseSeconds) != 1)
@@ -288,7 +297,7 @@ public class WorkflowCollaborationOutboxService
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public void completeFailure(WfCollaborationOutbox row, String workerId, DeliveryOutcome outcome)
     {
-        failClaim(row, workerId, outcome.httpStatus(), outcome.errorCode(), outcome.summary());
+        failClaim(row, workerId, workerId, outcome.httpStatus(), outcome.errorCode(), outcome.summary());
     }
 
     /**
@@ -364,19 +373,20 @@ public class WorkflowCollaborationOutboxService
     /**
      * 提交一次失败并根据当前次数选择 RETRYING 或 DEAD_LETTER。
      * @param row WfCollaborationOutbox，领取时快照
-     * @param workerId String，租约持有者
+     * @param leaseOwner String，待提交快照的租约持有者
+     * @param workerId String，执行投递完成或过期恢复的当前 worker
      * @param httpStatus Integer，可空 HTTP 状态
      * @param errorCode String，稳定失败编码
      * @param summary String，脱敏摘要
      * @return void，更新失败时回滚审计
      */
-    private void failClaim(WfCollaborationOutbox row, String workerId, Integer httpStatus,
+    private void failClaim(WfCollaborationOutbox row, String leaseOwner, String workerId, Integer httpStatus,
             String errorCode, String summary)
     {
         boolean exhausted = row.getAttemptCount() >= row.getMaxAttempts();
         String target = exhausted ? "DEAD_LETTER" : "RETRYING";
         long delay = exhausted ? 0L : retryDelaySeconds(row.getAttemptCount());
-        if (mapper.markFailed(row.getMessageId(), workerId, row.getRevisionNo(), target, delay,
+        if (mapper.markFailed(row.getMessageId(), leaseOwner, row.getRevisionNo(), target, delay,
                 httpStatus, truncate(errorCode, 64), truncate(summary, 512)) != 1)
         {
             throw new ServiceException("协作 outbox 失败状态提交冲突", HttpStatus.CONFLICT)

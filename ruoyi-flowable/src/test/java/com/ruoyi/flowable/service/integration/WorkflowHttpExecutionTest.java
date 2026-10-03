@@ -17,6 +17,7 @@ import org.flowable.engine.delegate.DelegateExecution;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import com.ruoyi.common.exception.ServiceException;
@@ -44,6 +45,7 @@ class WorkflowHttpExecutionTest
     private final AtomicReference<String> key = new AtomicReference<>();
     private final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
     private final AtomicReference<String> responseBody = new AtomicReference<>("{\"code\":200}");
+    private final AtomicInteger responseDelay = new AtomicInteger();
     private WfConnectorEndpoint endpoint;
     private WfConnectorEndpointMapper endpoints;
     private WorkflowConnectorEndpointService catalog;
@@ -59,6 +61,11 @@ class WorkflowHttpExecutionTest
             auth.set(exchange.getRequestHeaders().getFirst("X-Integration-Token"));
             key.set(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
             receivedBody.set(exchange.getRequestBody().readAllBytes());
+            if (responseDelay.get() > 0)
+            {
+                try { Thread.sleep(responseDelay.get()); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            }
             byte[] body = responseBody.get().getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(status.get(), body.length);
             try (var output = exchange.getResponseBody()) { output.write(body); }
@@ -155,6 +162,31 @@ class WorkflowHttpExecutionTest
     }
 
     @Test
+    void collaborationOversizedResponseUsesItsFailureStateMachine()
+    {
+        JsonNode frozen = freeze("POST", true);
+        responseBody.set("private-response".repeat(5000));
+        var mapper = mock(WfCollaborationOutboxMapper.class);
+        when(mapper.markFailed(anyString(), anyString(), anyInt(), anyString(), anyLong(), any(), anyString(), anyString())).thenReturn(1);
+        var outbox = new WorkflowCollaborationOutboxService(mapper, null,
+                mock(WorkflowCollaborationAuditService.class), execution, null, null, null,
+                new WorkflowCollaborationProperties(), mock(WorkflowCollaborationMetrics.class));
+        WfCollaborationOutbox row = row(frozen);
+        var outcome = outbox.deliver(row);
+        assertThat(outcome.success()).isFalse();
+        assertThat(outcome.errorCode()).isEqualTo("COLLAB_OUTBOX_RESPONSE_TOO_LARGE");
+        assertThat(outcome.summary()).doesNotContain("private-response");
+        outbox.completeFailure(row, "worker", outcome);
+        verify(mapper).markFailed(eq(row.getMessageId()), eq("worker"), eq(1), eq("RETRYING"), eq(2L),
+                isNull(), eq("COLLAB_OUTBOX_RESPONSE_TOO_LARGE"), anyString());
+        row.setAttemptCount(3);
+        outbox.completeFailure(row, "worker", outcome);
+        verify(mapper).markFailed(eq(row.getMessageId()), eq("worker"), eq(1), eq("DEAD_LETTER"), anyLong(),
+                isNull(), eq("COLLAB_OUTBOX_RESPONSE_TOO_LARGE"), anyString());
+        assertThat(requests).hasValue(1);
+    }
+
+    @Test
     void requestAndResponseBoundsRemain64KiB() throws Exception
     {
         JsonNode frozen = freeze("POST", false);
@@ -167,6 +199,142 @@ class WorkflowHttpExecutionTest
                 .isInstanceOf(WorkflowHttpExecution.ResponseTooLargeException.class);
         assertThat(receivedBody.get()).hasSize(65536);
         assertThat(requests).hasValue(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"RESPONSE_TOO_LARGE", "RESPONSE_INVALID", "HTTP_STATUS", "TIMEOUT"})
+    @EnabledIfEnvironmentVariable(named = "WORKFLOW_MYSQL_TEST_URL", matches = ".+")
+    void mysqlWorkerCommitsKnownFailuresAndRecoversExpiredWorkers(String failure) throws Exception
+    {
+        String url = System.getenv("WORKFLOW_MYSQL_TEST_URL");
+        assertThat(url).matches("jdbc:mysql://[^/]+/[A-Za-z0-9_]*_it(?:\\?.*)?");
+        var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(url,
+                System.getenv("WORKFLOW_MYSQL_TEST_USERNAME"), System.getenv("WORKFLOW_MYSQL_TEST_PASSWORD"));
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(source);
+        var manager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(source);
+        var mapper = com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport.createSpringMapper(source,
+                "outbox", WfCollaborationOutboxMapper.class, "mapper/flowable/WfCollaborationOutboxMapper.xml");
+        var channelMapper = com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport.createSpringMapper(source,
+                "outbox-channel", com.ruoyi.flowable.mapper.WfCollaborationChannelMapper.class,
+                "mapper/flowable/WfCollaborationChannelMapper.xml");
+        var endpointMapper = com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport.createSpringMapper(source,
+                "outbox-endpoint", WfConnectorEndpointMapper.class, "mapper/flowable/WfConnectorEndpointMapper.xml");
+        var auditMapper = com.ruoyi.flowable.testsupport.WorkflowH2SchemaMapperSupport.createSpringMapper(source,
+                "outbox-audit", com.ruoyi.flowable.mapper.WfCollaborationMessageAuditMapper.class,
+                "mapper/flowable/WfCollaborationMessageAuditMapper.xml");
+        var identities = mock(com.ruoyi.flowable.identity.WorkflowIdentityResolver.class);
+        when(identities.resolveCurrentIdentity()).thenReturn(new com.ruoyi.flowable.identity.WorkflowCurrentIdentity("1", java.util.Set.of()));
+        var operations = proxy(new com.ruoyi.flowable.engine.WorkflowEngineOperations(
+                new com.ruoyi.flowable.identity.WorkflowAuthenticationContext(mock(org.flowable.engine.IdentityService.class),
+                        new com.ruoyi.flowable.identity.WorkflowIdentityCodec()),
+                new com.ruoyi.flowable.engine.WorkflowExceptionTranslator(), identities), manager);
+        var history = mock(org.flowable.engine.HistoryService.class, RETURNS_DEEP_STUBS);
+        when(history.createHistoricProcessInstanceQuery().processInstanceId(anyString()).singleResult()).thenReturn(null);
+        var properties = new WorkflowCollaborationProperties(); properties.setBatchSize(1);
+        var metrics = mock(WorkflowCollaborationMetrics.class);
+        var outbox = proxy(new WorkflowCollaborationOutboxService(mapper, null,
+                new WorkflowCollaborationAuditService(auditMapper), execution, null, history, operations, properties, metrics), manager);
+        var scheduler = new com.ruoyi.flowable.service.process.WorkflowCollaborationDeliveryScheduler(outbox,
+                mock(com.ruoyi.flowable.service.process.WorkflowCollaborationMessageService.class), properties, metrics);
+        endpoint.setRequestTimeoutMs(500);
+        endpoint.setEndpointKey("rule" + UUID.randomUUID().toString().replace("-", ""));
+        endpoint.setCreateBy("1");
+        when(endpoints.selectEnabledByKeyForUpdate(endpoint.getEndpointKey())).thenReturn(endpoint);
+        freeze("POST", true);
+        assertThat(endpointMapper.insert(endpoint)).isOne();
+        endpoint.setChecksum(WorkflowConnectorEndpointService.endpointChecksum(endpoint));
+        WfCollaborationOutbox row = row(freeze("POST", true));
+        row.setCorrelationKey(UUID.randomUUID().toString());
+        var channel = new com.ruoyi.flowable.domain.WfCollaborationChannel();
+        channel.setChannelId(com.ruoyi.flowable.service.process.WorkflowCollaborationChannelService.channelId(
+                "target", "BUSINESS_KEY", row.getCorrelationKey(), "COLLABORATION"));
+        channel.setTargetProcessDefinitionKey("target"); channel.setCorrelationType("BUSINESS_KEY");
+        channel.setCorrelationValue(row.getCorrelationKey()); channel.setDeliveryMode("COLLABORATION");
+        row.setChannelId(channel.getChannelId());
+        row.setSourceProcessInstanceId(UUID.randomUUID().toString());
+        row.setSourceExecutionId(UUID.randomUUID().toString()); row.setSourceElementId("send");
+        row.setEndpointId(endpoint.getEndpointId()); row.setEndpointRevision(1); row.setRequestPath("/send");
+        row.setPayloadSha256("a".repeat(64)); row.setMaxAttempts(2);
+        String followerId = UUID.randomUUID().toString();
+        try
+        {
+            assertThat(channelMapper.insertIfAbsent(channel)).isOne();
+            assertThat(mapper.insert(row)).isOne();
+            switch (failure)
+            {
+                case "RESPONSE_TOO_LARGE" -> responseBody.set("secret".repeat(12000));
+                case "RESPONSE_INVALID" -> responseBody.set("{");
+                case "HTTP_STATUS" -> status.set(503);
+                case "TIMEOUT" -> responseDelay.set(800);
+                default -> throw new AssertionError(failure);
+            }
+            scheduler.deliverDueMessages();
+            WfCollaborationOutbox retry = mapper.selectById(row.getMessageId());
+            assertThat(retry.getStatus()).isEqualTo("RETRYING");
+            assertThat(retry.getAttemptCount()).isOne();
+            assertThat(retry.getRevisionNo()).isEqualTo(2);
+            assertThat(retry.getLeaseOwner()).isNull(); assertThat(retry.getLeaseUntil()).isNull();
+            assertThat(retry.getLastErrorCode()).isEqualTo("COLLAB_OUTBOX_" + failure);
+            assertThat(retry.getLastErrorSummary()).doesNotContain("secret");
+            jdbc.update("update wf_collaboration_outbox set next_attempt_time=date_sub(current_timestamp(3), interval 1 second) where message_id=?", row.getMessageId());
+            scheduler.deliverDueMessages();
+            var dead = mapper.selectById(row.getMessageId());
+            assertThat(dead.getStatus()).isEqualTo("DEAD_LETTER");
+            assertThat(dead.getAttemptCount()).isEqualTo(2); assertThat(dead.getRevisionNo()).isEqualTo(4);
+            assertThat(dead.getCompleteTime()).isNotNull();
+            verify(metrics, never()).record("scheduler_failure");
+            assertThat(auditMapper.selectByMessageId(row.getMessageId())).hasSize(4);
+            jdbc.update("insert into wf_collaboration_outbox(message_id,channel_id,sequence_no,source_process_definition_key,"
+                    + "source_process_instance_id,source_execution_id,source_element_id,message_name,target_process_definition_key,"
+                    + "correlation_key,endpoint_id,endpoint_revision,request_path,delivery_config_json,variables_json,payload_sha256,max_attempts,status) "
+                    + "select ?,channel_id,sequence_no+1,source_process_definition_key,source_process_instance_id,concat(source_execution_id,'-next'),"
+                    + "source_element_id,message_name,target_process_definition_key,correlation_key,endpoint_id,endpoint_revision,"
+                    + "request_path,delivery_config_json,variables_json,payload_sha256,max_attempts,'PENDING' from wf_collaboration_outbox where message_id=?",
+                    followerId, row.getMessageId());
+            assertThat(outbox.claimNext("blocked-follower")).isNull();
+
+            outbox.compensate(row.getMessageId());
+            WfCollaborationOutbox abandoned = outbox.claimNext("abandoned-worker");
+            assertThat(abandoned.getAttemptCount()).isOne();
+            jdbc.update("update wf_collaboration_outbox set lease_until=date_sub(current_timestamp(3), interval 1 second) where message_id=?", row.getMessageId());
+            WfCollaborationOutbox recovered = outbox.claimNext("replacement-worker");
+            assertThat(recovered.getAttemptCount()).isEqualTo(2);
+            var knownFailure = WorkflowCollaborationOutboxService.DeliveryOutcome.failure(null, "COLLAB_OUTBOX_TIMEOUT", "timeout");
+            assertThatThrownBy(() -> outbox.completeFailure(abandoned, "abandoned-worker", knownFailure))
+                    .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getSubCode()).isEqualTo("COLLAB_OUTBOX_LEASE_CONFLICT"));
+            jdbc.update("update wf_collaboration_outbox set lease_until=date_sub(current_timestamp(3), interval 1 second) where message_id=?", row.getMessageId());
+            assertThat(outbox.claimNext("final-recovery-worker")).isNull();
+            assertThat(mapper.selectById(row.getMessageId()).getStatus()).isEqualTo("DEAD_LETTER");
+            assertThat(mapper.selectById(row.getMessageId()).getLastErrorCode()).isEqualTo("COLLAB_OUTBOX_LEASE_EXPIRED");
+            assertThat(mapper.selectById(row.getMessageId()).getAttemptCount()).isEqualTo(2);
+            assertThatThrownBy(() -> outbox.completeFailure(recovered, "replacement-worker", knownFailure))
+                    .isInstanceOfSatisfying(ServiceException.class, error -> assertThat(error.getSubCode()).isEqualTo("COLLAB_OUTBOX_LEASE_CONFLICT"));
+            outbox.cancel(row.getMessageId());
+            assertThat(mapper.selectById(row.getMessageId()).getStatus()).isEqualTo("CANCELLED");
+            var follower = outbox.claimNext("after-cancel");
+            assertThat(follower.getMessageId()).isEqualTo(followerId);
+            outbox.completeSuccess(follower, "after-cancel", WorkflowCollaborationOutboxService.DeliveryOutcome.success(200));
+            assertThat(mapper.selectById(followerId).getStatus()).isEqualTo("PROCESSED");
+        }
+        finally
+        {
+            jdbc.update("delete from wf_collaboration_message_audit where message_id=? and direction='OUTBOUND'", row.getMessageId());
+            jdbc.update("delete from wf_collaboration_message_audit where message_id=? and direction='OUTBOUND'", followerId);
+            jdbc.update("delete from wf_collaboration_outbox where message_id=?", followerId);
+            jdbc.update("delete from wf_collaboration_outbox where message_id=?", row.getMessageId());
+            jdbc.update("delete from wf_collaboration_channel where channel_id=?", row.getChannelId());
+            jdbc.update("delete from wf_connector_endpoint where endpoint_id=?", endpoint.getEndpointId());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T proxy(T target, org.springframework.transaction.PlatformTransactionManager manager)
+    {
+        var factory = new org.springframework.aop.framework.ProxyFactory(target);
+        factory.setProxyTargetClass(true);
+        factory.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(manager,
+                new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+        return (T) factory.getProxy();
     }
 
     @ParameterizedTest
@@ -253,7 +421,7 @@ class WorkflowHttpExecutionTest
         endpoint.setSecretRef(environment ? "WORKFLOW_CONNECTOR_SECRET_N08" : null);
         endpoint.setApiKeyHeader(environment ? "X-Integration-Token" : null);
         endpoint.setChecksum(WorkflowConnectorEndpointService.endpointChecksum(endpoint));
-        var author = JsonMapper.shared().createObjectNode().put("endpointKey", "local")
+        var author = JsonMapper.shared().createObjectNode().put("endpointKey", endpoint.getEndpointKey())
                 .put("method", method).put("path", "/send");
         return JsonMapper.shared().readTree(catalog.freezeConfig(author, true));
     }

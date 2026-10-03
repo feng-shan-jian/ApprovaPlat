@@ -93,6 +93,11 @@ public class WorkflowHttpExecution
             requireCollaborationAuthentication(config);
             return send(frozen, idempotencyKey, body);
         }
+        catch (ResponseTooLargeException exception)
+        {
+            throw new ServiceException("协作消息 HTTP 响应正文超过大小限制", HttpStatus.ERROR)
+                    .setSubCode("COLLAB_OUTBOX_RESPONSE_TOO_LARGE");
+        }
         catch (HttpTimeoutException exception)
         {
             throw new ServiceException("协作消息 HTTP 投递超时", HttpStatus.ERROR)
