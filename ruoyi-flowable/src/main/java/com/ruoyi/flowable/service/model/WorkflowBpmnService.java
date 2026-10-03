@@ -247,6 +247,24 @@ public class WorkflowBpmnService
     public record AuthorForms(WorkflowBpmnDocument document,
             List<com.ruoyi.flowable.domain.vo.WorkflowAuthorFieldCatalogView.Issue> issues) { }
 
+    /** 恢复历史模型只提取资源引用，不重新执行作者校验或解释内嵌表单内容。 */
+    Set<Long> readTemplateReferenceIds(byte[] bytes)
+    {
+        var model = parseSecurely(readDesignXml(bytes));
+        Set<Long> formIds = new java.util.TreeSet<>();
+        for (var process : model.getProcesses())
+        {
+            java.util.stream.Stream.concat(
+                    process.findFlowElementsOfType(StartEvent.class, true).stream().map(StartEvent::getFormKey),
+                    process.findFlowElementsOfType(UserTask.class, true).stream().map(UserTask::getFormKey))
+                    .filter(WorkflowBpmnService::hasText).forEach(key -> {
+                        Matcher matcher = FORM_KEY_PATTERN.matcher(key.trim());
+                        if (matcher.matches()) formIds.add(Long.parseLong(matcher.group(1)));
+                    });
+        }
+        return formIds;
+    }
+
     /** 只在作者与执行资源边界创建独占模型；各编译器在此模型上直接工作。 */
     public org.flowable.bpmn.model.BpmnModel executionModel(WorkflowBpmnDocument author)
     {

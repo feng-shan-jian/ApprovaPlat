@@ -189,7 +189,7 @@ class WorkflowDeploymentResourceContractTest
         var decisions = dmnRepository;
         var artifacts = new WorkflowDeploymentArtifactRepository(resources);
         var deployments = new WorkflowDeploymentService(operations, resources,
-                artifacts, null, null, null, null);
+                artifacts, null, null, null, null, null);
         var dmn = new WorkflowDmnDecisionService(operations, decisions, artifacts);
         assertThat(deployments.getBpmnXml(definitionId)).isEqualTo(compiled);
         java.util.function.Supplier<WorkflowDmnDecisionService.DecisionSource> compile = () -> {

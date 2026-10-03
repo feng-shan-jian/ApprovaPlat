@@ -62,6 +62,9 @@ public class WorkflowDeploymentService
     /** 删除部署前保护被调用活动精确引用的流程定义。 */
     private final WorkflowCallActivityReferenceService callActivityReferenceService;
 
+    /** 部署撤销恢复模型时复用模型资源引用锁，避免引用在删除检查的两次读取之间转移。 */
+    private final WorkflowModelService modelService;
+
     /**
      * 创建流程部署服务。
      *
@@ -73,7 +76,8 @@ public class WorkflowDeploymentService
             WfProcessDraftMapper processDraftMapper,
             WorkflowProcessDefinitionLockMapper processDefinitionLockMapper,
             WorkflowDmnDecisionService dmnDecisionService,
-            WorkflowCallActivityReferenceService callActivityReferenceService)
+            WorkflowCallActivityReferenceService callActivityReferenceService,
+            WorkflowModelService modelService)
     {
         this.engineOperations = engineOperations;
         this.repositoryService = repositoryService;
@@ -82,6 +86,7 @@ public class WorkflowDeploymentService
         this.processDefinitionLockMapper = processDefinitionLockMapper;
         this.dmnDecisionService = dmnDecisionService;
         this.callActivityReferenceService = callActivityReferenceService;
+        this.modelService = modelService;
     }
 
     /**
@@ -255,6 +260,10 @@ public class WorkflowDeploymentService
                         .list();
                 plans.add(new DeploymentDeletionPlan(deployment, dmnSnapshots, linkedModels));
             }
+
+            // 恢复未部署模型会重新发布作者引用；整批先锁分类，再锁 XML/元数据表单并集。
+            modelService.lockRestoredModelReferences(plans.stream()
+                    .flatMap(plan -> plan.linkedModels().stream()).toList());
 
             for (DeploymentDeletionPlan plan : plans)
             {

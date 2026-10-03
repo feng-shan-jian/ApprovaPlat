@@ -856,6 +856,29 @@ public class WorkflowModelService
         return category;
     }
 
+    /** 部署恢复整批模型前锁定其引用；分类按主键、随后表单并集按主键，均持锁至提交。 */
+    void lockRestoredModelReferences(List<Model> models)
+    {
+        models.stream().map(Model::getCategory).distinct().map(code -> {
+            WfCategory category = categoryMapper.selectByCode(requireText(code, "流程分类不能为空"));
+            if (category == null)
+                throw new ServiceException("流程分类不存在或已停用", HttpStatus.NOT_FOUND);
+            return category;
+        }).sorted(java.util.Comparator.comparing(WfCategory::getCategoryId))
+                // code 不可变；普通读只确定锁序，共享锁定读再确认当前有效性。
+                .forEach(category -> requireActiveCategory(category.getCode()));
+
+        Set<Long> formIds = new java.util.TreeSet<>();
+        for (Model model : models)
+        {
+            Long metadataFormId = optionalLong(readMetadata(model), "formId");
+            if (metadataFormId != null) formIds.add(metadataFormId);
+            if (model.hasEditorSource())
+                formIds.addAll(bpmnService.readTemplateReferenceIds(repositoryService.getModelEditorSource(model.getId())));
+        }
+        formIds.forEach(authorFieldCatalogService::requireActiveForm);
+    }
+
     /** 复制版本会保留元数据引用；先分类，再按表单主键锁定 XML 与元数据的并集。 */
     private void requireActiveModelReferences(Model source, WorkflowBpmnDocument document)
     {
