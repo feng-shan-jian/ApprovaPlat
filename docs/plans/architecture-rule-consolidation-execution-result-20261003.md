@@ -1,6 +1,6 @@
 # 业务规则归一与职责收口执行结果
 
-2026-10-03。执行基线为 `main@70b2c0a1357c56ab1c7e645ef1410046c5a303c4`，最终生产提交为 `ae0e3f5`，真实浏览器验收提交为 `edd5147`。B00—B18 和 C01 已实施；最终验收与环境清理结果见下文。提交留在本地，没有推送。
+2026-10-03。执行基线为 `main@70b2c0a1357c56ab1c7e645ef1410046c5a303c4`，首次实施的生产提交为 `ae0e3f5`，首次真实浏览器验收提交为 `edd5147`。B00—B18 和 C01 已实施；`49c963d` 审查后的 4 项 P2 补修与重新验收记录见文末。提交留在本地，没有推送。
 
 ## 范围与基线
 
@@ -43,7 +43,7 @@
 - Quartz 先构造再修改 scheduler；后续调用失败会尝试恢复旧定义/触发器/暂停状态，恢复错误保留为 suppressed。内存 scheduler 不参与数据库事务；若 scheduler 连恢复操作也不可用，需要恢复服务并按持久化定义初始化，不能撤销已经触发的任务。
 - C01 创建先持锁时，删除等待后以 409 拒绝；删除先提交时，新引用创建以 404 拒绝。模型先分类、再按表单 ID 升序锁定，删除各自只锁本类资源。无数据库字段迁移和全局锁。
 
-## 最终验证
+## 首次实施验证
 
 后端最终验收的 HEAD 为 `ae0e3f5`；此前 240 项全仓验收已通过，随后新增旧版本另存竞争用例，并重新执行为 241 项。前端静态和受控浏览器在最终前端工作树上运行，当时 HEAD 仍为基线，相关内容随后原样分包提交。真实浏览器最终在 `edd5147` 运行，后端使用前述 clean verify 的新 JAR，SHA256 为 `AD6C7C019332B684021A1DA05CFD1C029987D5E7A7D3977E93ACC6BD919799EB`。
 
@@ -64,7 +64,7 @@
 
 真实浏览器首轮为 1 失败、2 未执行、2 通过，入口如实报告 failed。trace 显示草稿响应中的标题/附件正确，但测试收到 HTTP 响应后立即 reload，实际刷新仍访问旧的新建路由。`edd5147` 仅增加准确草稿地址和保存成功提示的等待，原标题/附件恢复断言不变；重跑全套 5 项通过，没有调整产品逻辑或通过重试隐藏失败。
 
-## 变更统计与清理
+## 首次实施统计与清理
 
 以下为 `git diff --numstat 70b2c0a edd5147`；B16 本文与计划状态更新另计。新增/删除是物理差异，迁移行不会被解释为净删冗余收益。
 
@@ -81,3 +81,32 @@
 清理已完成。停止并核对本任务后端 PID 127140、Vite PID 127920、Redis PID 129560，端口 8080/1024/16379 均无监听；删除专用数据库 `approvaplat_rules_20261003_it` 及本次授予该库的权限，原 `approvaplat_it` 仍存在。MySQL84 保持 Running、Memurai 服务保持 Stopped，与执行前一致。
 
 各正式测试通过 finally/afterAll 按主键清理数据并恢复验证码等单键配置；随后销毁专用库和隔离 Redis，移除任务私有附件目录。已删除 `.task/rule-consolidation`、`output/verification`、Playwright/Surefire 报告、本次 Vite 日志和确认本次新建的三个应用日志。正式回归测试、最终执行报告和常规构建产物保留。清理没有删除已有账号、凭据文件、其他数据库或用户进程。
+
+## 审查补修：`49c963d` 之后
+
+审查指出的 4 项 P2 均按原场景复现后修复，补丁生产与正式测试固定为 `009fb5d`。没有数据库结构迁移或 HTTP 协议变更。
+
+| 审查项 | 修复与正式证据 | 提交 |
+|---|---|---|
+| 菜单并发编辑漏刷新 | [SysMenuController](D:/ruoyiflowable/ruoyi-admin/src/main/java/com/ruoyi/web/controller/system/SysMenuController.java) 删除未加锁的 before 比较，成功写入即刷新关联用户。真实 MySQL/Redis 复现 B 读 P、A 写 Q 并刷新、B 写回 P 后两个 Token 仍 Q；修复后两个 Token 均为 P。写 0 行、写失败、独立排序入口保持不刷新。 | `a7f3107` |
+| 部署删除与分类删除读偏斜 | [WorkflowDeploymentService](D:/ruoyiflowable/ruoyi-flowable/src/main/java/com/ruoyi/flowable/service/model/WorkflowDeploymentService.java) 在任何删除副作用前，经 ModelService 对整批恢复模型先锁分类、再锁 XML/元数据表单并集，各自按数值主键排序。分类与元数据独有表单的两条真实交错先失败；[DeploymentResourceRaceMysqlTest](D:/ruoyiflowable/ruoyi-flowable/src/test/java/com/ruoyi/flowable/service/model/WorkflowDeploymentResourceRaceMysqlTest.java) 最终覆盖 5 个真实交错和 1 个历史/安全解析合同。 | `009fb5d` |
+| 当前业务静默请求屏蔽 401 | [request.js](D:/ruoyiflowable/ruoyi-ui/src/utils/request.js) 将请求过期与业务静默分开。当前 401 保留重新登录提示，只有过期请求抑制该提示；其他业务/网络错误的静默范围不变。真实 Axios 生产拦截器回归先失败，再验证当前/无代次/过期请求与静默开关组合。 | `63155fd` |
+| 卸载后异步续链恢复资格 | [requestSequence.js](D:/ruoyiflowable/ruoyi-ui/src/utils/requestSequence.js) 增加终态 dispose，Vue 卸载后 begin 永远无提交资格；普通 invalidate 仍允许重新加载。正式测试使用真实 Vue mount/unmount 和生产 `WorkflowProcessList.runListMutation → loadList`，覆盖挂起写请求完成后刷新成功/失败，结果不回填。 | `63155fd` |
+
+部署恢复的新失败边界：分类删除先持锁时仍看得到流程定义，删除返回 409，部署恢复随后可成功；元数据独有表单若先完成删除，恢复返回 404，父部署、冻结制品、模型部署关联全部回滚保留。恢复先持锁时，分类、元数据表单和 XML 表单的删除等待后返回 409。历史 XML 仅安全提取引用，不重新执行作者变量或内嵌表单规则，DTD 仍拒绝。
+
+补修使用新库 `approvaplat_review_20261003_it`，按同一 14 份正式基线初始化 103 张表，测试账号通过实际 CREATE/DROP 权限探针；旧测试库不作结构修改。Redis 使用独立端口 16379。菜单专项 33 项、部署相关 22 项均通过且无跳过。
+
+补丁统一验收全部通过，失败和跳过均为 0：
+
+| 验证 | 本轮结果 |
+|---|---|
+| `verify-rules.ps1 -Mode MySQL` | `009fb5d`，249 项；18:32:05—18:33:35，完整 7 模块 clean verify 成功 |
+| 前端 lint / contracts / build:prod | lint、构建通过，48 项契约通过 |
+| `verify-rules.ps1 -Mode BrowserControlled` | 31 项；使用最终前端工作树运行，随后原样提交为 `63155fd` |
+| `verify-rules.ps1 -Mode BrowserReal` | `009fb5d`，5 项；18:34:38—18:36:14，原真实三链和权限/作者场景全部执行 |
+| 补丁只读终检 / diff 检查 | `49c963d..009fb5d` 共 12 文件，未发现新的可确认问题；diff 检查通过 |
+
+真实浏览器使用本轮 clean verify 的新 JAR，SHA256 为 `E2744BF8B1C220AC3DB23B7C61805762CA9B606476A344BF4C9971D63978AA85`。本轮无测试重试，也没有将审查时旧库的字段/权限错误计为通过；新隔离库的完整 MySQL 验收已执行。
+
+补修环境已清理：停止后端 PID 135744、Vite PID 125240、Redis PID 135496，确认端口 8080/1024/16379 无监听；删除 `approvaplat_review_20261003_it` 与该库授权、隔离 Redis 数据、私有上传目录、`.task/rule-review-20261003`、运行日志和本轮临时测试报告。旧 `approvaplat_it` 仍存在，MySQL84 保持 Running，Memurai 服务保持 Stopped。正式测试、构建产物和本文保留；四项 P2 关闭，本阶段重新确认完成。补修提交均留在本地，未推送。
